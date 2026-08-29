@@ -56,6 +56,60 @@ func TestCreateViaDaemonRoundTrip(t *testing.T) {
 	awaitDaemonServer(t, serverDone)
 }
 
+func TestListViaDaemonRoundTrip(t *testing.T) {
+	createdAt := time.Date(2026, time.August, 29, 20, 0, 0, 0, time.UTC)
+	want := []protocol.SessionInfo{{
+		ID:        "7K3D",
+		HostID:    "host-id",
+		Command:   []string{"sh", "-c", "printf ready"},
+		Cwd:       "/tmp/project",
+		State:     "running",
+		CreatedAt: createdAt,
+	}}
+	socketPath, serverDone := startDaemonCreateServer(t, func(conn transport.Conn, request protocol.Control) error {
+		if request.Type != protocol.TypeList {
+			return fmt.Errorf("request type = %q, want %q", request.Type, protocol.TypeList)
+		}
+		return writeDaemonControl(conn, protocol.Control{
+			Type:      protocol.TypeListed,
+			RequestID: request.RequestID,
+			Sessions:  want,
+		})
+	})
+
+	got, err := ListViaDaemon(context.Background(), socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.EqualFunc(got, want, func(a, b protocol.SessionInfo) bool {
+		return a.ID == b.ID && a.HostID == b.HostID && slices.Equal(a.Command, b.Command) && a.Cwd == b.Cwd && a.State == b.State && a.CreatedAt.Equal(b.CreatedAt)
+	}) {
+		t.Fatalf("sessions = %#v, want %#v", got, want)
+	}
+	awaitDaemonServer(t, serverDone)
+}
+
+func TestListViaDaemonRejectsInvalidCatalogEntry(t *testing.T) {
+	socketPath, serverDone := startDaemonCreateServer(t, func(conn transport.Conn, request protocol.Control) error {
+		return writeDaemonControl(conn, protocol.Control{
+			Type:      protocol.TypeListed,
+			RequestID: request.RequestID,
+			Sessions: []protocol.SessionInfo{{
+				ID:        "7k3d",
+				HostID:    "host-id",
+				Command:   []string{"sh"},
+				State:     "running",
+				CreatedAt: time.Now(),
+			}},
+		})
+	})
+
+	if _, err := ListViaDaemon(context.Background(), socketPath); err == nil {
+		t.Fatal("invalid catalog entry was accepted")
+	}
+	awaitDaemonServer(t, serverDone)
+}
+
 func TestCreateViaDaemonRejectsInvalidOptionsBeforeDial(t *testing.T) {
 	missingSocket := filepath.Join(t.TempDir(), "missing.sock")
 	tests := []struct {

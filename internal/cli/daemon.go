@@ -12,6 +12,7 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -48,19 +49,57 @@ func CreateViaDaemon(ctx context.Context, opts DaemonCreateOptions) (string, err
 		Cols:      opts.Cols,
 		Rows:      opts.Rows,
 	}
+	response, err := daemonControlRequest(ctx, opts.SocketPath, request)
+	if err != nil {
+		return "", err
+	}
+	return validateDaemonCreateResponse(response)
+}
+
+// ListViaDaemon returns the sessions in the daemon's durable local catalog.
+func ListViaDaemon(ctx context.Context, socketPath string) ([]protocol.SessionInfo, error) {
+	if err := validateDaemonBoundary(ctx, socketPath, "list"); err != nil {
+		return nil, err
+	}
+	requestID, err := newDaemonRequestID()
+	if err != nil {
+		return nil, err
+	}
+	response, err := daemonControlRequest(ctx, socketPath, protocol.Control{
+		Type:      protocol.TypeList,
+		RequestID: requestID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	switch response.Type {
+	case protocol.TypeListed:
+		for _, listed := range response.Sessions {
+			if err := validateDaemonSession(listed); err != nil {
+				return nil, err
+			}
+		}
+		return response.Sessions, nil
+	case protocol.TypeError:
+		return nil, daemonResponseError("session list", response.Message)
+	default:
+		return nil, fmt.Errorf("cli: list response has type %q, want %q or %q", response.Type, protocol.TypeListed, protocol.TypeError)
+	}
+}
+
+func daemonControlRequest(ctx context.Context, socketPath string, request protocol.Control) (protocol.Control, error) {
 	payload, err := request.Encode()
 	if err != nil {
-		return "", fmt.Errorf("cli: encode %s request: %w", protocol.TypeCreate, err)
+		return protocol.Control{}, fmt.Errorf("cli: encode %s request: %w", request.Type, err)
 	}
-
-	stream, err := (&net.Dialer{}).DialContext(ctx, "unix", opts.SocketPath)
+	stream, err := (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 	if err != nil {
-		return "", daemonDialError(opts.SocketPath, err)
+		return protocol.Control{}, daemonDialError(socketPath, err)
 	}
 	conn, err := transport.NewStreamConn(stream)
 	if err != nil {
 		_ = stream.Close()
-		return "", fmt.Errorf("cli: adapt daemon connection: %w", err)
+		return protocol.Control{}, fmt.Errorf("cli: adapt daemon connection: %w", err)
 	}
 	stopCancellation := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer func() {
@@ -69,21 +108,28 @@ func CreateViaDaemon(ctx context.Context, opts DaemonCreateOptions) (string, err
 	}()
 
 	if err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload}); err != nil {
-		return "", daemonOperationError(ctx, "write create request", err)
+		return protocol.Control{}, daemonOperationError(ctx, "write "+request.Type+" request", err)
 	}
 	frame, err := conn.ReadFrame()
 	if err != nil {
-		return "", daemonOperationError(ctx, "read create response", err)
+		return protocol.Control{}, daemonOperationError(ctx, "read "+request.Type+" response", err)
 	}
-	return validateDaemonCreateResponse(requestID, frame)
+	if frame.Kind != protocol.KindControl {
+		return protocol.Control{}, fmt.Errorf("cli: %s response has frame kind %d, want control", request.Type, frame.Kind)
+	}
+	response, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("cli: decode %s response: %w", request.Type, err)
+	}
+	if response.RequestID != request.RequestID {
+		return protocol.Control{}, fmt.Errorf("cli: %s response request ID %q does not match %q", request.Type, response.RequestID, request.RequestID)
+	}
+	return response, nil
 }
 
 func validateDaemonCreateOptions(ctx context.Context, opts DaemonCreateOptions) error {
-	if ctx == nil {
-		return errors.New("cli: create via daemon with nil context")
-	}
-	if strings.TrimSpace(opts.SocketPath) == "" {
-		return errors.New("cli: create via daemon with empty socket path")
+	if err := validateDaemonBoundary(ctx, opts.SocketPath, "create"); err != nil {
+		return err
 	}
 	if len(opts.Command) == 0 || opts.Command[0] == "" {
 		return errors.New("cli: create via daemon with no command")
@@ -91,8 +137,18 @@ func validateDaemonCreateOptions(ctx context.Context, opts DaemonCreateOptions) 
 	if opts.Cols < 0 || opts.Rows < 0 {
 		return fmt.Errorf("cli: create via daemon with negative terminal size %dx%d", opts.Cols, opts.Rows)
 	}
+	return nil
+}
+
+func validateDaemonBoundary(ctx context.Context, socketPath, operation string) error {
+	if ctx == nil {
+		return fmt.Errorf("cli: %s via daemon with nil context", operation)
+	}
+	if strings.TrimSpace(socketPath) == "" {
+		return fmt.Errorf("cli: %s via daemon with empty socket path", operation)
+	}
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("cli: create via daemon: %w", err)
+		return fmt.Errorf("cli: %s via daemon: %w", operation, err)
 	}
 	return nil
 }
@@ -119,18 +175,7 @@ func daemonOperationError(ctx context.Context, operation string, err error) erro
 	return fmt.Errorf("cli: %s: %w", operation, err)
 }
 
-func validateDaemonCreateResponse(requestID string, frame protocol.Frame) (string, error) {
-	if frame.Kind != protocol.KindControl {
-		return "", fmt.Errorf("cli: create response has frame kind %d, want control", frame.Kind)
-	}
-	response, err := protocol.DecodeControl(frame.Payload)
-	if err != nil {
-		return "", fmt.Errorf("cli: decode create response: %w", err)
-	}
-	if response.RequestID != requestID {
-		return "", fmt.Errorf("cli: create response request ID %q does not match %q", response.RequestID, requestID)
-	}
-
+func validateDaemonCreateResponse(response protocol.Control) (string, error) {
 	switch response.Type {
 	case protocol.TypeCreated:
 		id, err := session.ParseID(response.SessionID)
@@ -139,11 +184,44 @@ func validateDaemonCreateResponse(requestID string, frame protocol.Frame) (strin
 		}
 		return id, nil
 	case protocol.TypeError:
-		if response.Message == "" {
-			return "", errors.New("cli: daemon rejected session creation")
-		}
-		return "", fmt.Errorf("cli: daemon rejected session creation: %s", response.Message)
+		return "", daemonResponseError("session creation", response.Message)
 	default:
 		return "", fmt.Errorf("cli: create response has type %q, want %q or %q", response.Type, protocol.TypeCreated, protocol.TypeError)
 	}
+}
+
+func daemonResponseError(operation, message string) error {
+	if message == "" {
+		return fmt.Errorf("cli: daemon rejected %s", operation)
+	}
+	return fmt.Errorf("cli: daemon rejected %s: %s", operation, message)
+}
+
+func validateDaemonSession(listed protocol.SessionInfo) error {
+	id, err := session.ParseID(listed.ID)
+	if err != nil || id != listed.ID {
+		return fmt.Errorf("cli: daemon listed invalid session ID %q", listed.ID)
+	}
+	if strings.TrimSpace(listed.HostID) == "" {
+		return fmt.Errorf("cli: daemon listed session %s without a host ID", listed.ID)
+	}
+	if len(listed.Command) == 0 || listed.Command[0] == "" {
+		return fmt.Errorf("cli: daemon listed session %s without a command", listed.ID)
+	}
+	if listed.CreatedAt.IsZero() || listed.CreatedAt.UnixMilli() < 0 {
+		return fmt.Errorf("cli: daemon listed session %s with invalid creation time", listed.ID)
+	}
+	switch storage.SessionState(listed.State) {
+	case storage.StateRunning, storage.StateDetached, storage.StateInterrupted:
+		if listed.ExitCode != nil {
+			return fmt.Errorf("cli: daemon listed %s session %s with an exit code", listed.State, listed.ID)
+		}
+	case storage.StateExited:
+		if listed.ExitCode == nil {
+			return fmt.Errorf("cli: daemon listed exited session %s without an exit code", listed.ID)
+		}
+	default:
+		return fmt.Errorf("cli: daemon listed session %s with invalid state %q", listed.ID, listed.State)
+	}
+	return nil
 }

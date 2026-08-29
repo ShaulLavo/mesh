@@ -2,58 +2,54 @@
 
 Updated 2026-08-29.
 
-## Done — step 1, the heart
+## Done
 
-Commit `774a641` established the local session core. T02 now hardens its output
-path. A detached worker owns one PTY and outlives every client.
+Steps 1 and 2 of the build order, plus the daemon.
 
-- `internal/protocol` — framing + control messages, shared by all transports
-- `internal/session` — byte-offset replay ring (randomized tests), session IDs
+- `internal/protocol` — framing + control messages, shared by every transport
+- `internal/session` — byte-offset replay ring, session IDs
 - `internal/worker` — PTY ownership, Unix socket, attach/steal, bounded outbound
   queues, resize, signals, kill escalation, `meta.json` lifecycle record
-- `internal/cli` — attach client, raw mode, SIGWINCH, detach key, spawn, discovery
-- `cmd/mesh` — `local`, `attach`, `ls`, `logs`, `kill`, `sig`, `session-worker`
+- `internal/terminal` — rendered screen snapshots for clean reattachment (T01)
+- `internal/storage` — SQLite session and host store (T03)
+- `internal/daemon` — worker discovery, reconciliation, relay, lifecycle (T04)
+- `internal/transport` — WebSocket transport with resume (T05)
+- `internal/identity`, `internal/tailnet` — host keys, Tailscale discovery (T06)
+- `internal/cli`, `cmd/mesh` — `daemon`, `local`, `attach`, `ls`, `logs`, `kill`,
+  `sig`, `session-worker`
 
-Verified: `go test -race ./...`, plus the three scripts in `integration/`, each
-run repeatedly.
+Verified 2026-08-29: `gofmt`, `go vet ./...`, `go test -race ./...`, and all six
+scripts in `integration/` passing.
 
-## Known gaps in what exists
+## Complete tasks
 
-The remaining gap is written up as a task.
+T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websocket
+transport · T06 host identity.
 
-- Reattach replays raw bytes, not a rendered screen. Inside a full-screen program
-  you get garbage. → `docs/tasks/T01-vt-snapshot.md`
-
-## Delegation map
+## Next
 
 ```
-T01 vt snapshot ─────→ finish step 1
-T02 outbound queue ✓
-T03 storage ─────────→ T04 daemon ──→ T07 CLI surface ──→ T09 picker
-T05 websocket ─────────→ T04           T08 ssh bootstrap
-T06 host identity ─────→ T04 ──→ T11 serving core ──→ T12 public edge ──→ T13 m serve
+T07 CLI surface ──→ T09 picker TUI
+             └───→ T10 packaging
+T08 ssh bootstrap
+T11 serving core ──→ T12 public edge ──→ T13 m serve
 ```
 
-Safe to run in parallel right now: **T01, T03, T05, T06.** They own disjoint
-files. T04 needs T03 and T06 landed; T07 needs T04. T02 is complete.
+T07 and T08 are unblocked and own disjoint files, so they can run in parallel.
+T11 is unblocked by T04 and owns a new package, so it can run alongside both.
+T09, T10, T12 and T13 wait on those.
 
 | Task | Owns | Blocked by |
 |---|---|---|
-| T01 vt snapshot | `internal/terminal/`, `worker/serve.go` | — |
-| T02 outbound queue (complete) | `worker/worker.go`, `worker/serve.go`, `cmd/mesh/main.go` | — |
-| T03 storage | `db/`, `internal/storage/` | — |
-| T05 websocket transport | `internal/transport/` | — |
-| T06 host identity | `internal/identity/`, `internal/tailnet/` | — |
-| T04 daemon | `internal/daemon/` | T03, T06 |
-| T07 CLI surface | `cmd/mesh/`, `internal/cli/cmd*` | T04 |
-| T08 ssh bootstrap | `internal/bootstrap/`, `scripts/install/` | T04, T06 |
+| T07 CLI surface | `cmd/mesh/`, `internal/cli/` | — |
+| T08 ssh bootstrap | `internal/bootstrap/`, `scripts/install/` | — |
+| T11 serving core | `internal/serve/` | — |
 | T09 picker TUI | `internal/tui/` | T07 |
 | T10 packaging | `.github/`, `.goreleaser.yaml` | T07 |
-| T11 serving core | `internal/serve/` | T04 |
-| T12 public edge | `internal/edge/` | T11, T06 |
+| T12 public edge | `internal/edge/` | T11 |
 | T13 `m serve` | `internal/cli/` | T11, T12, T07 |
 
-T01 can now build on T02's ordered attachment queue.
+T07 and T13 both own `internal/cli/`. Land T07 first.
 
 ## Rules for anyone picking up a task
 

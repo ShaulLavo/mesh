@@ -1,6 +1,6 @@
 # T04 — `mesh daemon`
 
-**Status:** not started · **Blocked by:** T03, T06 · **Owns:** `internal/daemon/`
+**Status:** complete · **Blocked by:** T03, T06 · **Owns:** `internal/daemon/`
 
 ## Goal
 
