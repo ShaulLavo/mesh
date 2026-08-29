@@ -43,14 +43,15 @@ func (w *Worker) serve(conn net.Conn) {
 	}
 	if err != nil || msg.Type != protocol.TypeAttach {
 		_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
-			Type:    protocol.TypeError,
-			Message: "expected " + protocol.TypeAttach,
+			Type:      protocol.TypeError,
+			SessionID: w.cfg.ID,
+			Message:   "expected " + protocol.TypeAttach,
 		})
 		return
 	}
 	if msg.Cols != 0 || msg.Rows != 0 {
 		if err := validateTerminalSize(msg.Cols, msg.Rows); err != nil {
-			writeAttachError(conn, fmt.Sprintf("invalid terminal size: %v", err))
+			w.writeAttachError(conn, fmt.Sprintf("invalid terminal size: %v", err))
 			return
 		}
 	}
@@ -66,7 +67,7 @@ func (w *Worker) serve(conn net.Conn) {
 	if msg.Cols > 0 && msg.Rows > 0 {
 		if err := w.resizeLocked(msg.Cols, msg.Rows); err != nil {
 			w.mu.Unlock()
-			writeAttachError(conn, fmt.Sprintf("resize terminal: %v", err))
+			w.writeAttachError(conn, fmt.Sprintf("resize terminal: %v", err))
 			return
 		}
 	}
@@ -95,14 +96,14 @@ func (w *Worker) serve(conn net.Conn) {
 		capture := w.screen.Snapshot()
 		if !capture.Restorable {
 			w.mu.Unlock()
-			writeAttachError(conn, "terminal state is between escape-sequence boundaries; retry attachment")
+			w.writeAttachError(conn, "terminal state is between escape-sequence boundaries; retry attachment")
 			return
 		}
 		snapshot = capture.Bytes
 	}
 	if len(snapshot) > maxSnapshotPayload {
 		w.mu.Unlock()
-		writeAttachError(conn, fmt.Sprintf("terminal snapshot is %d bytes; maximum is %d", len(snapshot), maxSnapshotPayload))
+		w.writeAttachError(conn, fmt.Sprintf("terminal snapshot is %d bytes; maximum is %d", len(snapshot), maxSnapshotPayload))
 		return
 	}
 
@@ -113,7 +114,7 @@ func (w *Worker) serve(conn net.Conn) {
 		Snapshot:  isSnapshot,
 	}, false) || (isSnapshot && !c.enqueueSnapshot(snapshot)) || !c.enqueueDataChunks(want, replay) {
 		w.mu.Unlock()
-		writeAttachError(conn, "unable to queue terminal state; retry attachment")
+		w.writeAttachError(conn, "unable to queue terminal state; retry attachment")
 		return
 	}
 	if prev := w.client; prev != nil {
@@ -174,8 +175,9 @@ func (w *Worker) serve(conn net.Conn) {
 				}
 				if err != nil {
 					_ = c.enqueueControl(protocol.Control{
-						Type:    protocol.TypeError,
-						Message: fmt.Sprintf("resize terminal: %v", err),
+						Type:      protocol.TypeError,
+						SessionID: w.cfg.ID,
+						Message:   fmt.Sprintf("resize terminal: %v", err),
 					}, false)
 				}
 			case protocol.TypeSignal:
@@ -189,12 +191,13 @@ func (w *Worker) serve(conn net.Conn) {
 	}
 }
 
-func writeAttachError(conn net.Conn, message string) {
+func (w *Worker) writeAttachError(conn net.Conn, message string) {
 	_ = conn.SetWriteDeadline(time.Now().Add(attachmentWriteTimeout))
 	defer conn.SetWriteDeadline(time.Time{}) //nolint:errcheck // connection may be closed by the peer
 	_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
-		Type:    protocol.TypeError,
-		Message: message,
+		Type:      protocol.TypeError,
+		SessionID: w.cfg.ID,
+		Message:   message,
 	})
 }
 

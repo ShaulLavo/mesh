@@ -210,7 +210,7 @@ func TestRejectedSnapshotDoesNotDisplaceActiveClient(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError {
+			if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError || msg.SessionID != sid.String() {
 				t.Fatalf("rejection = kind %v, message %+v", frame.Kind, msg)
 			}
 
@@ -276,7 +276,7 @@ func TestInvalidAttachSizeDoesNotResizeOrDisplaceActiveClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError {
+	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError || msg.SessionID != sid.String() {
 		t.Fatalf("rejection = kind %v, message %+v", frame.Kind, msg)
 	}
 
@@ -343,7 +343,7 @@ func TestPTYResizeFailureDoesNotDisplaceActiveClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError {
+	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError || msg.SessionID != sid.String() {
 		t.Fatalf("rejection = kind %v, message %+v", frame.Kind, msg)
 	}
 
@@ -409,7 +409,7 @@ func TestReplayQueueFailureDoesNotDisplaceActiveClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError {
+	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError || msg.SessionID != sid.String() {
 		t.Fatalf("rejection = kind %v, message %+v", frame.Kind, msg)
 	}
 
@@ -477,7 +477,7 @@ func TestRuntimeResizeFailureReportsErrorAndKeepsScreenInSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError {
+	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError || msg.SessionID != sid.String() {
 		t.Fatalf("resize response = kind %v, message %+v", frame.Kind, msg)
 	}
 	cols, rows, err := pty.Size()
