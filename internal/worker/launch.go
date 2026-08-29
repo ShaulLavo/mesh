@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -73,6 +74,12 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 	if err != nil {
 		return Launched{}, err
 	}
+	cleanupReserved := true
+	defer func() {
+		if cleanupReserved {
+			cleanupReservedSession(dir)
+		}
+	}()
 	logPath := paths.Log(dir)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -99,11 +106,15 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 	if err := cmd.Start(); err != nil {
 		return Launched{}, fmt.Errorf("launch worker %s: start: %w", id, err)
 	}
+	// From this point the worker may own a live command. Never remove its state;
+	// the launching marker keeps incomplete state out of catalog scans, and the
+	// worker removes it only after metadata and the socket are both ready.
+	cleanupReserved = false
 	// Waiting would make the daemon the worker's supervisor. Release instead so
 	// daemon death cannot propagate to the session process.
 	_ = cmd.Process.Release()
 
-	if err := waitForWorker(paths.Socket(dir), workerReadyTimeout); err != nil {
+	if err := waitForWorker(paths.Socket(dir), paths.Launching(dir), workerReadyTimeout); err != nil {
 		return Launched{}, fmt.Errorf("launch worker %s: readiness (see %s): %w", id, logPath, err)
 	}
 	meta, err := ReadMeta(dir)
@@ -121,6 +132,10 @@ func reserveSessionDir(root string) (string, string, error) {
 		}
 		dir := filepath.Join(root, id)
 		if err := os.Mkdir(dir, 0o700); err == nil {
+			if err := os.WriteFile(paths.Launching(dir), nil, 0o600); err != nil {
+				_ = os.Remove(dir)
+				return "", "", fmt.Errorf("launch worker %s: mark reserved session directory: %w", id, err)
+			}
 			return id, dir, nil
 		} else if !os.IsExist(err) {
 			return "", "", fmt.Errorf("launch worker %s: create session directory: %w", id, err)
@@ -129,17 +144,29 @@ func reserveSessionDir(root string) (string, string, error) {
 	return "", "", fmt.Errorf("launch worker: could not reserve a session ID after %d attempts", sessionIDAttempts)
 }
 
-func waitForWorker(socketPath string, timeout time.Duration) error {
+func waitForWorker(socketPath, launchingPath string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		conn, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			return nil
+		_, markerErr := os.Lstat(launchingPath)
+		if errors.Is(markerErr, os.ErrNotExist) {
+			conn, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond)
+			if err == nil {
+				_ = conn.Close()
+				return nil
+			}
+			markerErr = err
+		} else if markerErr == nil {
+			markerErr = fmt.Errorf("worker is still publishing state")
 		}
 		if time.Now().After(deadline) {
-			return err
+			return markerErr
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+func cleanupReservedSession(dir string) {
+	_ = os.Remove(paths.Launching(dir))
+	_ = os.Remove(paths.Log(dir))
+	_ = os.Remove(dir)
 }

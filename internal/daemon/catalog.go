@@ -121,6 +121,11 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 		}
 
 		dir := filepath.Join(c.sessionsDir, entry.Name())
+		if _, err := os.Lstat(paths.Launching(dir)); err == nil {
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("daemon: inspect launching session %s: %w", entry.Name(), err)
+		}
 		meta, err := worker.ReadMeta(dir)
 		if err != nil {
 			return nil, fmt.Errorf("daemon: read session %s metadata: %w", entry.Name(), err)

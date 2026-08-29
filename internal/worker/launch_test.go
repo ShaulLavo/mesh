@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/shaul/mesh/internal/paths"
 )
 
 func TestLaunchDetachedRejectsInvalidConfigBeforeCreatingState(t *testing.T) {
@@ -51,5 +53,31 @@ func TestReserveSessionDirCreatesDistinctPrivateDirectories(t *testing.T) {
 		if mode := info.Mode().Perm(); mode != 0o700 {
 			t.Fatalf("session directory %s mode = %o, want 700", dir, mode)
 		}
+		marker, err := os.Stat(paths.Launching(dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := marker.Mode().Perm(); mode != 0o600 {
+			t.Fatalf("launch marker %s mode = %o, want 600", marker.Name(), mode)
+		}
+	}
+}
+
+func TestLaunchDetachedCleansReservationWhenProcessCannotStart(t *testing.T) {
+	root := t.TempDir()
+	_, err := LaunchDetached(LaunchConfig{
+		SessionsDir: root,
+		Executable:  filepath.Join(t.TempDir(), "missing-mesh"),
+		Command:     []string{"sh"},
+	})
+	if err == nil {
+		t.Fatal("LaunchDetached with missing executable succeeded")
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("failed launch left state entries: %v", entries)
 	}
 }

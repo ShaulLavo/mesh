@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -627,5 +628,29 @@ func TestCatalogGetRejectsWireInvalidID(t *testing.T) {
 	_, err := catalog.Get(context.Background(), storage.SessionID(strings.Repeat("x", 9)))
 	if err == nil {
 		t.Fatal("Get(overlong ID) error = nil")
+	}
+}
+
+func TestCatalogReconcileIgnoresWorkerStillPublishingState(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "7K3D")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Launching(dir), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &catalogStoreStub{}
+	probeCalls := 0
+	catalog := newCatalogForTest(t, root, store, probeFunc(func(context.Context, string) error {
+		probeCalls++
+		return nil
+	}), func() string { return "boot-a" })
+
+	if err := catalog.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if probeCalls != 0 || len(store.observed) != 0 {
+		t.Fatalf("publishing worker was probed %d times and observed as %#v", probeCalls, store.observed)
 	}
 }

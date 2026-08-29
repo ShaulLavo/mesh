@@ -59,3 +59,6 @@ func Meta(sessionDir string) string { return filepath.Join(sessionDir, "meta.jso
 
 // Log returns the worker log path for a session directory.
 func Log(sessionDir string) string { return filepath.Join(sessionDir, "worker.log") }
+
+// Launching marks a reserved session directory that is not yet authoritative.
+func Launching(sessionDir string) string { return filepath.Join(sessionDir, ".launching") }

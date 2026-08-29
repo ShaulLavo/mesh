@@ -357,6 +357,9 @@ func Run(cfg Config) (int, error) {
 		_ = ln.Close()
 		_ = os.Remove(sockPath)
 	}()
+	if err := os.Remove(paths.Launching(cfg.Dir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("worker: publish session %s: %w", cfg.ID, err)
+	}
 
 	go w.acceptLoop(ln)
 	go w.pump()
