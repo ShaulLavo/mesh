@@ -129,7 +129,7 @@ func TestServeReplacesProvenStaleUnixSocket(t *testing.T) {
 	}
 }
 
-func TestSecondDaemonDoesNotUnlinkLiveSocket(t *testing.T) {
+func TestServeEnforcesSingleOwnerWithoutUnlinkingLiveSocket(t *testing.T) {
 	t.Parallel()
 
 	stateDir := t.TempDir()
@@ -471,6 +471,50 @@ func TestUnixAcceptLoopReturnsUnexpectedFailure(t *testing.T) {
 	}
 }
 
+func TestServeBoundListenersCancelsSharedContextBeforeWaitingForHandlers(t *testing.T) {
+	t.Parallel()
+
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	want := errors.New("accept exploded")
+	listener := &acceptThenFailListener{
+		first: make(chan net.Conn, 1),
+		fail:  make(chan struct{}, 1),
+		err:   want,
+	}
+	listener.first <- serverConn
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	handlerStarted := make(chan struct{})
+	handlerCancelled := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- serveBoundListeners(
+			runCtx,
+			cancel,
+			listenerConfig{reporter: newErrorReporter(nil)},
+			func(ctx context.Context, _ transport.Conn) error {
+				close(handlerStarted)
+				<-ctx.Done()
+				close(handlerCancelled)
+				return ctx.Err()
+			},
+			listener,
+			nil,
+		)
+	}()
+
+	waitSignal(t, handlerStarted, "handler startup")
+	listener.fail <- struct{}{}
+	waitSignal(t, handlerCancelled, "shared daemon cancellation")
+	if err := waitRuntime(t, done); !errors.Is(err, want) {
+		t.Fatalf("listener core error = %v, want %v", err, want)
+	}
+	if !errors.Is(runCtx.Err(), context.Canceled) {
+		t.Fatalf("shared daemon context error = %v, want context.Canceled", runCtx.Err())
+	}
+}
+
 type failingListener struct {
 	err error
 }
@@ -478,6 +522,34 @@ type failingListener struct {
 func (l failingListener) Accept() (net.Conn, error) { return nil, l.err }
 func (failingListener) Close() error                { return nil }
 func (failingListener) Addr() net.Addr              { return &net.UnixAddr{Name: "fake", Net: "unix"} }
+
+type acceptThenFailListener struct {
+	first chan net.Conn
+	fail  chan struct{}
+	err   error
+}
+
+func (l *acceptThenFailListener) Accept() (net.Conn, error) {
+	select {
+	case conn := <-l.first:
+		return conn, nil
+	default:
+	}
+	<-l.fail
+	return nil, l.err
+}
+
+func (l *acceptThenFailListener) Close() error {
+	select {
+	case l.fail <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (*acceptThenFailListener) Addr() net.Addr {
+	return &net.UnixAddr{Name: "fake", Net: "unix"}
+}
 
 func echoOneFrame(_ context.Context, conn transport.Conn) error {
 	frame, err := conn.ReadFrame()

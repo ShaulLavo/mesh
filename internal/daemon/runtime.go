@@ -73,6 +73,20 @@ func Serve(ctx context.Context, cfg ListenerConfig, handler transport.Handler) e
 	}
 	defer lock.release() //nolint:errcheck // a held lock is released by Close even if unlock reports an error
 
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	return serveListeners(runCtx, cancel, normalized, handler)
+}
+
+// serveListeners runs without acquiring daemon.lock. Its caller must hold that
+// lock for the full call. cancel must cancel ctx and every daemon component that
+// shares its lifetime, such as catalog polling and lifecycle publication.
+func serveListeners(ctx context.Context, cancel context.CancelFunc, normalized listenerConfig, handler transport.Handler) error {
+	defer cancel()
+	if ctx.Err() != nil {
+		return nil
+	}
+
 	unixListener, err := listenDaemonUnix(filepath.Join(normalized.stateDir, daemonSocketName))
 	if err != nil {
 		return err
@@ -86,15 +100,24 @@ func Serve(ctx context.Context, cfg ListenerConfig, handler transport.Handler) e
 	for _, bindErr := range bindErrors {
 		normalized.reporter.report(bindErr)
 	}
+	return serveBoundListeners(ctx, cancel, normalized, handler, unixListener, tailnetListeners)
+}
 
-	runCtx, cancel := context.WithCancel(ctx)
+func serveBoundListeners(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	normalized listenerConfig,
+	handler transport.Handler,
+	unixListener net.Listener,
+	tailnetListeners []net.Listener,
+) error {
 	connections := newConnectionGroup(handler)
-	server := newWebSocketServer(runCtx, normalized, connections)
+	server := newWebSocketServer(ctx, normalized, connections)
 	var listenerWG sync.WaitGroup
 	fatal := make(chan error, 1)
 
 	listenerWG.Go(func() {
-		if acceptErr := serveUnixConnections(runCtx, unixListener, connections); acceptErr != nil {
+		if acceptErr := serveUnixConnections(ctx, unixListener, connections); acceptErr != nil {
 			select {
 			case fatal <- acceptErr:
 			default:
@@ -105,7 +128,7 @@ func Serve(ctx context.Context, cfg ListenerConfig, handler transport.Handler) e
 		listener := listener
 		listenerWG.Go(func() {
 			serveErr := server.Serve(listener)
-			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) && runCtx.Err() == nil {
+			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) && ctx.Err() == nil {
 				normalized.reporter.report(fmt.Errorf("daemon: serve WebSocket on %s: %w", listener.Addr(), serveErr))
 			}
 		})
@@ -116,6 +139,9 @@ func Serve(ctx context.Context, cfg ListenerConfig, handler transport.Handler) e
 	case <-ctx.Done():
 	case runErr = <-fatal:
 	}
+	// Fatal listener failure is also daemon shutdown. Cancel the shared lifetime
+	// before closing sockets or waiting, so handlers blocked in publication can
+	// observe it and return.
 	cancel()
 
 	closeErr := unixListener.Close()
