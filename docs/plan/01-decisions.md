@@ -112,51 +112,37 @@ then the worker closes the PTY regardless.
 **Cost:** output written by a descendant more than 250ms after the leader exits
 is lost. That is the right trade: the alternative is a session that never ends.
 
-## D13 — Screen snapshots are their own frame kind
+## D13 — Two names: `mesh.shaul.dev` is private, `shaul.dev` is public
 
-`KindSnapshot` carries a session ID and rendered terminal bytes. It has no
-sequence offset. The preceding `session.attached` control reports the PTY output
-offset where live data resumes. The complete repaint travels in one bounded
-frame; the client commits that resume offset only after receiving the whole
-frame.
+`mesh.shaul.dev` resolves to tailnet addresses and is reachable only from the
+tailnet. Public services are published under `shaul.dev` through the VPS edge,
+and only when explicitly named.
 
-**Why:** snapshot bytes repaint terminal state, but the PTY never emitted them.
-Treating a snapshot as `KindData` would advance the client's resume offset by a
-made-up byte count and cause a gap after the next reconnect.
+Certificates work on both. DNS-01 validates by TXT record and never connects to
+the host, so the private name gets a real publicly-trusted certificate despite
+pointing at unroutable addresses.
 
-**Cost:** relays must accept one more additive frame kind. They still forward the
-frame unchanged. A rendered screen must fit within one protocol payload (just
-under 4 MiB); an attachment is rejected if it does not.
+**Cost:** tailnet addresses appear in public DNS. They are unroutable from
+outside and Tailscale's security does not rest on them being secret, but it is
+information published deliberately. Split DNS is the alternative, at the cost of
+configuring every client.
 
-## D13 — The VPS is the public edge, and only for serving
+## D14 — The VPS is the public edge, and only for serving
 
-Step 8 publishes services at `mesh.shaul.dev/<name>` through the VPS, which
-terminates TLS and reverse-proxies to origins over Tailscale. Origin machines
-never open a port to the internet.
+Origin machines never open a port to the internet. Public web traffic crosses the
+VPS; that is a scoped exception to "traffic goes directly to the destination
+machine", which protects terminal sessions.
 
-This is a scoped exception to "traffic goes directly to the destination machine".
-That invariant protects terminal sessions, where a proxy would be a liability and
-a single point of failure. Public web traffic crosses a public edge by
-definition.
+**Terminal traffic still never transits the VPS**, and T13's acceptance criteria
+assert it. The private side has no proxy at all: `pc.mesh.shaul.dev` points
+straight at that machine.
 
-**The exception does not extend to terminal traffic**, and T12's acceptance
-criteria assert that. Anyone reading this later: the invariant is intact.
+## D15 — Nothing is public unless you named it
 
-## D14 — Path routing by default, subdomains as the escape hatch
+Served services are tailnet-only by default. `--public` takes the hostname
+explicitly rather than deriving one, is confirmed interactively, and is refused
+when the served root contains anything credential-shaped. Mesh never binds the
+`shaul.dev` apex unless a service names it.
 
-`mesh.shaul.dev/blog` is the default shape. Root-relative URLs break under a path
-prefix, so `--subdomain` publishes at `blog.mesh.shaul.dev` instead. Mesh
-generates the HTML for `static` and `files` and handles its own prefixes; only
-`proxy` needs the hatch.
-
-**Cost:** the certificate has to cover the apex and the wildcard, which needs a
-DNS-01 challenge rather than HTTP-01. Paid once, at the start, deliberately.
-
-## D15 — Nothing is public unless you said so
-
-Served services are tailnet-only by default. `--public` is always explicit,
-always confirmed interactively, and refused outright when the served root
-contains anything credential-shaped.
-
-**Why:** serving a directory is one keystroke from publishing your home folder.
-The dangerous thing should never be the short path.
+**Why:** serving a directory is one keystroke from publishing your home folder,
+and a derived name is a name nobody read before it went live.

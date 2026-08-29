@@ -32,7 +32,8 @@ transport · T06 host identity.
 T07 CLI surface ──→ T09 picker TUI
              └───→ T10 packaging
 T08 ssh bootstrap
-T11 serving core ──→ T12 public edge ──→ T13 m serve
+T11 serving core ──┬─→ T12 private names ──→ T13 public edge ──→ T14 m serve
+                   └─────────────────────────────┘
 ```
 
 T07 and T08 are unblocked and own disjoint files, so they can run in parallel.
@@ -46,10 +47,11 @@ T09, T10, T12 and T13 wait on those.
 | T11 serving core | `internal/serve/` | — |
 | T09 picker TUI | `internal/tui/` | T07 |
 | T10 packaging | `.github/`, `.goreleaser.yaml` | T07 |
-| T12 public edge | `internal/edge/` | T11 |
-| T13 `m serve` | `internal/cli/` | T11, T12, T07 |
+| T12 private names | `internal/dnsname/` | T11 |
+| T13 public edge | `internal/edge/` | T11, T12 |
+| T14 `m serve` | `internal/cli/` | T11, T12, T13, T07 |
 
-T07 and T13 both own `internal/cli/`. Land T07 first.
+T07 and T14 both own `internal/cli/`. Land T07 first.
 
 ## Rules for anyone picking up a task
 

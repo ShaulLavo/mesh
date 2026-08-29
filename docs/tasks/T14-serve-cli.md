@@ -1,20 +1,22 @@
-# T13 — `m serve`
+# T14 — `m serve`
 
-**Status:** not started · **Blocked by:** T11, T12, T07 · **Owns:** `internal/cli/`
+**Status:** not started · **Blocked by:** T11, T12, T13, T07 · **Owns:** `internal/cli/`
 
 ## Goal
 
 ```bash
-m serve pc ./site --at /blog             # tailnet only
-m serve pc ./site --at /blog --public    # also at mesh.shaul.dev/blog
-m serve pc 3000 --at /api --public       # proxy a local port
+m serve pc ./site --at /blog                # pc.mesh.shaul.dev/blog, tailnet only
+m serve pc 3000 --at /api                   # proxy a local port, tailnet only
 m serve pi /mnt/data --at /files --files
+m serve pc ./site --at /blog --public blog.shaul.dev
 m serve ls
 m unserve /blog
 ```
 
 Infer the type where it is obvious: a number is a port and therefore a proxy, a
-directory is static unless `--files` says otherwise. Never guess `--public`.
+directory is static unless `--files` says otherwise. Never guess `--public`, and
+never guess a public name: `--public` takes the hostname explicitly so nobody
+publishes to an address they did not type.
 
 `m serve ls` shows name, host, kind, target, public or tailnet, and health, and
 prints the actual URL for each so nobody has to assemble it by hand.

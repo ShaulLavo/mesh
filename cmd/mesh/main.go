@@ -18,6 +18,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/charmbracelet/x/term"
+
 	"github.com/shaul/mesh/internal/cli"
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/paths"
@@ -27,10 +29,11 @@ import (
 const usage = `mesh - resumable terminal sessions
 
 usage:
-  mesh daemon [--tailnet-port PORT]     run this host's coordinator
-  mesh local [-r] [--] [command...]   start a session, or resume the latest with -r
-  mesh attach <id>                    attach to a session by id
-  mesh ls                             list sessions on this host
+  mesh daemon [--tailnet-port PORT]   run this host's coordinator
+  mesh local [-r] [--daemon] [--] [command...]
+                                      start or resume a session
+  mesh attach [--daemon] <id>         attach to a session by id
+  mesh ls [--daemon]                  list sessions on this host
   mesh logs <id>                      print a session's recent output
   mesh kill <id>                      terminate a session
   mesh sig <id> <signal>              send a signal (int, term, quit, hup, kill, usr1, usr2)
@@ -55,7 +58,7 @@ func main() {
 	case "attach":
 		err = runAttach(os.Args[2:])
 	case "ls", "list":
-		err = runList()
+		err = runList(os.Args[2:])
 	case "logs":
 		err = runLogs(os.Args[2:])
 	case "kill":
@@ -140,6 +143,7 @@ func runLocal(args []string) error {
 	fs := flag.NewFlagSet("local", flag.ExitOnError)
 	resume := fs.Bool("r", false, "resume the latest live session instead of starting a new one")
 	fs.BoolVar(resume, "resume", false, "resume the latest live session instead of starting a new one")
+	requireDaemon := fs.Bool("daemon", false, "require the daemon for creation and attachment")
 	detachKey := fs.String("detach-key", "", "key that detaches, e.g. ctrl+] or none")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -155,6 +159,13 @@ func runLocal(args []string) error {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "resuming %s\n", s.ID)
+		if *requireDaemon {
+			stateDir, stateErr := paths.StateDir()
+			if stateErr != nil {
+				return stateErr
+			}
+			socketPath = meshdaemon.SocketPath(stateDir)
+		}
 	} else {
 		command := fs.Args()
 		if len(command) == 0 {
@@ -165,18 +176,22 @@ func runLocal(args []string) error {
 		if stateErr != nil {
 			return stateErr
 		}
+		cols, rows := terminalSize(os.Stdout)
 		id, createErr := cli.CreateViaDaemon(context.Background(), cli.DaemonCreateOptions{
 			SocketPath: meshdaemon.SocketPath(stateDir),
 			Command:    command,
 			Cwd:        cwd,
-			Cols:       80,
-			Rows:       24,
+			Cols:       cols,
+			Rows:       rows,
 		})
 		switch {
 		case createErr == nil:
 			s = cli.Session{Meta: worker.Meta{ID: id}, Alive: true}
 			socketPath = meshdaemon.SocketPath(stateDir)
 		case errors.Is(createErr, cli.ErrDaemonUnavailable):
+			if *requireDaemon {
+				return createErr
+			}
 			s, err = cli.Spawn(command, cwd)
 			if err != nil {
 				return err
@@ -200,6 +215,7 @@ func runLocal(args []string) error {
 func runAttach(args []string) error {
 	fs := flag.NewFlagSet("attach", flag.ExitOnError)
 	detachKey := fs.String("detach-key", "", "key that detaches, e.g. ctrl+] or none")
+	viaDaemon := fs.Bool("daemon", false, "attach through the daemon")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -212,6 +228,13 @@ func runAttach(args []string) error {
 	}
 	if !s.Alive {
 		return fmt.Errorf("session %s is %s", s.ID, s.State())
+	}
+	if *viaDaemon {
+		stateDir, err := paths.StateDir()
+		if err != nil {
+			return err
+		}
+		return attachAt(s, meshdaemon.SocketPath(stateDir), *detachKey, nil)
 	}
 	return attach(s, *detachKey, nil)
 }
@@ -249,7 +272,36 @@ func attachAt(s cli.Session, socketPath, detachKey string, lastSeq *uint64) erro
 	return nil
 }
 
-func runList() error {
+func runList(args []string) error {
+	fs := flag.NewFlagSet("ls", flag.ContinueOnError)
+	viaDaemon := fs.Bool("daemon", false, "read the daemon's durable catalog")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: mesh ls [--daemon]")
+	}
+	if *viaDaemon {
+		stateDir, err := paths.StateDir()
+		if err != nil {
+			return err
+		}
+		sessions, err := cli.ListViaDaemon(context.Background(), meshdaemon.SocketPath(stateDir))
+		if err != nil {
+			return err
+		}
+		if len(sessions) == 0 {
+			fmt.Println("no sessions on this host")
+			return nil
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "ID\tSTATE\tAGE\tCOMMAND")
+		for _, s := range sessions {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.ID, s.State, age(s.CreatedAt), strings.Join(s.Command, " "))
+		}
+		return w.Flush()
+	}
+
 	sessions, err := cli.List()
 	if err != nil {
 		return err
@@ -265,6 +317,13 @@ func runList() error {
 			s.ID, s.State(), age(s.CreatedAt), strings.Join(s.Command, " "))
 	}
 	return w.Flush()
+}
+
+func terminalSize(output *os.File) (int, int) {
+	if width, height, err := term.GetSize(output.Fd()); err == nil && width > 0 && height > 0 {
+		return width, height
+	}
+	return 80, 24
 }
 
 func runLogs(args []string) error {

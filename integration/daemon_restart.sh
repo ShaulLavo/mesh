@@ -39,7 +39,9 @@ wait_for_daemon() {
   local pid=$1
   for _ in $(seq 120); do
     kill -0 "$pid" 2>/dev/null || return 1
-    [ -S "$MESH_STATE_DIR/daemon.sock" ] && return 0
+    if [ -S "$MESH_STATE_DIR/daemon.sock" ] && "$MESH" ls --daemon >/dev/null 2>&1; then
+      return 0
+    fi
     sleep 0.05
   done
   return 1
@@ -61,7 +63,7 @@ mkfifo "$T/in1" "$T/in2"
 DAEMON1=$!
 wait_for_daemon "$DAEMON1" || fail "first daemon did not start: $(cat "$T/daemon1.log")"
 
-"$MESH" local -- bash --noprofile --norc <"$T/in1" >"$T/out1" 2>"$T/client1.err" &
+"$MESH" local --daemon -- bash --noprofile --norc <"$T/in1" >"$T/out1" 2>"$T/client1.err" &
 CLIENT1=$!
 exec 3>"$T/in1"
 for _ in $(seq 120); do
@@ -100,7 +102,7 @@ done
 SESSION_AFTER=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$MESH_STATE_DIR/s/$SID/meta.json")
 [ "$SESSION_AFTER" = "$SESSION_PID" ] || fail "session PID changed across daemon restart ($SESSION_PID to $SESSION_AFTER)"
 
-"$MESH" attach "$SID" <"$T/in2" >"$T/out2" 2>"$T/client2.err" &
+"$MESH" attach --daemon "$SID" <"$T/in2" >"$T/out2" 2>"$T/client2.err" &
 CLIENT2=$!
 exec 4>"$T/in2"
 echo "echo \$\$ > $T/shell_pid_after; echo AFTER_RESTART" >&4

@@ -1,18 +1,23 @@
-# T12 — Public edge on the VPS
+# T13 — Public edge on the VPS
 
-**Status:** not started · **Blocked by:** T11, T06 · **Owns:** `internal/edge/`
+**Status:** not started · **Blocked by:** T11, T12 · **Owns:** `internal/edge/`
 
 ## Goal
 
-`mesh daemon --edge` on the VPS: the one machine that faces the internet, holding
-TLS for `mesh.shaul.dev` and routing to origins over Tailscale.
+`mesh daemon --edge` on the VPS: the one machine that faces the internet. It
+holds TLS for the public names under `shaul.dev` and routes to origins over
+Tailscale.
+
+`mesh.shaul.dev` is the *private* name and never touches this edge. See
+`docs/plan/03-serving.md` for the split, and T12 for the private side.
 
 ## Responsibilities
 
-1. **TLS.** Let's Encrypt via DNS-01, covering `mesh.shaul.dev` and
-   `*.mesh.shaul.dev`. Do the wildcard from day one; retrofitting it later means
-   redoing the challenge plumbing. Certificates renew unattended and survive a
-   restart.
+1. **TLS.** Let's Encrypt for each public name Mesh was explicitly told to bind
+   under `shaul.dev`. Reuse the DNS-01 plumbing T12 builds. Certificates renew
+   unattended and survive a restart.
+   **Mesh never binds the `shaul.dev` apex** unless a service names it. If the
+   apex already hosts a personal site, the edge coexists with it.
 2. **Routing.** Longest-prefix match on path, plus subdomain lookup for services
    that asked for one. Unknown route returns 404 without revealing what else
    exists.
@@ -39,8 +44,8 @@ hides behind Tailscale. Treat it accordingly:
 
 ## Acceptance
 
-- End to end against a real domain: request to `mesh.shaul.dev/blog` reaches a
-  static service on another machine over Tailscale, with a valid certificate.
+- End to end against a real domain: a request to the public name reaches a static
+  service on another machine over Tailscale, with a valid certificate.
 - Certificate renewal tested against the Let's Encrypt staging endpoint.
 - Origin killed mid-request: edge returns 502 promptly, does not hang, does not
   leak the origin's address.
@@ -49,5 +54,5 @@ hides behind Tailscale. Treat it accordingly:
 
 ## Out of scope
 
-Per-service authentication, multi-user access, and any domain other than
-`mesh.shaul.dev`.
+Per-service authentication, multi-user access, the private `mesh.shaul.dev` side
+(T12), and claiming any name the user did not explicitly ask for.

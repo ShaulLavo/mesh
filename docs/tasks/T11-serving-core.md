@@ -1,6 +1,6 @@
 # T11 — Serving core
 
-**Status:** not started · **Blocked by:** T04 · **Owns:** `internal/serve/`
+**Status:** not started · **Blocked by:** nothing (T04 landed) · **Owns:** `internal/serve/`
 
 ## Goal
 

@@ -29,7 +29,9 @@ wait_for_daemon() {
   local pid=$1
   for _ in $(seq 120); do
     kill -0 "$pid" 2>/dev/null || return 1
-    [ -S "$MESH_STATE_DIR/daemon.sock" ] && return 0
+    if [ -S "$MESH_STATE_DIR/daemon.sock" ] && "$MESH" ls --daemon >/dev/null 2>&1; then
+      return 0
+    fi
     sleep 0.05
   done
   return 1
@@ -51,7 +53,7 @@ mkfifo "$T/in"
 DAEMON1=$!
 wait_for_daemon "$DAEMON1" || fail "first daemon did not start: $(cat "$T/daemon1.log")"
 
-"$MESH" local -- bash --noprofile --norc <"$T/in" >"$T/out" 2>"$T/client.err" &
+"$MESH" local --daemon -- bash --noprofile --norc <"$T/in" >"$T/out" 2>"$T/client.err" &
 CLIENT=$!
 exec 3>"$T/in"
 for _ in $(seq 120); do
@@ -114,6 +116,6 @@ for _ in $(seq 120); do
 done
 [ "$(database_state)" = interrupted ] || fail "old-boot session was not recorded as interrupted"
 kill -0 "$WORKER_PID" 2>/dev/null && fail "daemon resurrected worker $WORKER_PID"
-"$MESH" ls | grep -q "$SID.*interrupted" || fail "CLI did not report $SID as interrupted"
+"$MESH" ls --daemon | grep -q "$SID.*interrupted" || fail "daemon did not report $SID as interrupted"
 
 echo "PASS: simulated reboot left session $SID interrupted and did not resurrect worker $WORKER_PID"

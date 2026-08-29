@@ -128,9 +128,9 @@ interfaces so API churn stays contained.
 6. **Pi power control** — `m wake pc`, wake-then-connect flow, sleep inhibitors.
 7. **Packaging** — systemd, launchd, GoReleaser, Actions, Homebrew Cask, installer,
    VHS demos, race tests, protocol fuzzing, govulncheck, golangci-lint v2.
-8. **Serving** — static sites, file browsers and local-port proxies, published on
-   the tailnet by default and optionally on the public internet at
-   `mesh.shaul.dev/<name>` through the VPS. See `docs/plan/03-serving.md`.
+8. **Serving** — static sites, file browsers and local-port proxies. Private on
+   the tailnet at `<host>.mesh.shaul.dev`, and optionally public under
+   `shaul.dev` through the VPS edge. See `docs/plan/03-serving.md`.
 
 ## Explicitly later
 
