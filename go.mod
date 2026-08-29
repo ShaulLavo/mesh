@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/charmbracelet/x/xpty v0.1.4
+	github.com/coder/websocket v1.8.15
 	github.com/pressly/goose/v3 v3.27.3
 	modernc.org/sqlite v1.57.0
 )
