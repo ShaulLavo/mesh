@@ -245,3 +245,10 @@ var signals = map[string]syscall.Signal{
 	"usr1": syscall.SIGUSR1,
 	"usr2": syscall.SIGUSR2,
 }
+
+// SupportsSignal reports whether a control request names a supported process
+// group signal.
+func SupportsSignal(name string) bool {
+	_, ok := signals[name]
+	return ok
+}
