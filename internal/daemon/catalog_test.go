@@ -74,7 +74,7 @@ func TestCatalogReconcileMapsWorkerState(t *testing.T) {
 	}{
 		{
 			name:        "responsive running worker",
-			meta:        catalogTestMeta("LIVE", worker.StateRunning, "boot-a"),
+			meta:        catalogTestMeta("11VE", worker.StateRunning, "boot-a"),
 			currentBoot: "boot-a",
 			wantState:   storage.StateRunning,
 			wantProbes:  1,
@@ -89,7 +89,7 @@ func TestCatalogReconcileMapsWorkerState(t *testing.T) {
 		},
 		{
 			name:        "worker from an earlier boot",
-			meta:        catalogTestMeta("REBOOT", worker.StateRunning, "boot-a"),
+			meta:        catalogTestMeta("RB07", worker.StateRunning, "boot-a"),
 			currentBoot: "boot-b",
 			wantState:   storage.StateInterrupted,
 			wantProbes:  0,
@@ -97,7 +97,7 @@ func TestCatalogReconcileMapsWorkerState(t *testing.T) {
 		{
 			name: "exited worker",
 			meta: func() worker.Meta {
-				meta := catalogTestMeta("EXITED", worker.StateExited, "boot-a")
+				meta := catalogTestMeta("EX17", worker.StateExited, "boot-a")
 				meta.ExitedAt = &exitedAt
 				meta.ExitCode = &exitCode
 				return meta
@@ -108,7 +108,7 @@ func TestCatalogReconcileMapsWorkerState(t *testing.T) {
 		},
 		{
 			name:        "boot identity unavailable",
-			meta:        catalogTestMeta("NOBID", worker.StateRunning, ""),
+			meta:        catalogTestMeta("N0B1", worker.StateRunning, ""),
 			currentBoot: "boot-a",
 			wantState:   storage.StateRunning,
 			wantProbes:  1,
@@ -210,21 +210,21 @@ func TestCatalogReconcileRejectsIncompleteScanBeforeMutation(t *testing.T) {
 			name: "unsupported worker state",
 			setup: func(t *testing.T, root string) {
 				t.Helper()
-				writeCatalogMeta(t, root, "UNKNOWN", catalogTestMeta("UNKNOWN", "detached", "boot-a"))
+				writeCatalogMeta(t, root, "4N0W", catalogTestMeta("4N0W", "detached", "boot-a"))
 			},
 		},
 		{
 			name: "worker-derived interrupted state",
 			setup: func(t *testing.T, root string) {
 				t.Helper()
-				writeCatalogMeta(t, root, "INTR", catalogTestMeta("INTR", worker.StateInterrupted, "boot-a"))
+				writeCatalogMeta(t, root, "1N7R", catalogTestMeta("1N7R", worker.StateInterrupted, "boot-a"))
 			},
 		},
 		{
 			name: "empty command",
 			setup: func(t *testing.T, root string) {
 				t.Helper()
-				meta := catalogTestMeta("NOCMD", worker.StateRunning, "boot-a")
+				meta := catalogTestMeta("C0D0", worker.StateRunning, "boot-a")
 				meta.Command = nil
 				writeCatalogMeta(t, root, meta.ID, meta)
 			},
@@ -233,7 +233,7 @@ func TestCatalogReconcileRejectsIncompleteScanBeforeMutation(t *testing.T) {
 			name: "zero PID",
 			setup: func(t *testing.T, root string) {
 				t.Helper()
-				meta := catalogTestMeta("NOPID", worker.StateRunning, "boot-a")
+				meta := catalogTestMeta("P1D0", worker.StateRunning, "boot-a")
 				meta.PID = 0
 				writeCatalogMeta(t, root, meta.ID, meta)
 			},
@@ -242,7 +242,7 @@ func TestCatalogReconcileRejectsIncompleteScanBeforeMutation(t *testing.T) {
 			name: "zero creation time",
 			setup: func(t *testing.T, root string) {
 				t.Helper()
-				meta := catalogTestMeta("NOTIME", worker.StateRunning, "boot-a")
+				meta := catalogTestMeta("71ME", worker.StateRunning, "boot-a")
 				meta.CreatedAt = time.Time{}
 				writeCatalogMeta(t, root, meta.ID, meta)
 			},
@@ -251,7 +251,7 @@ func TestCatalogReconcileRejectsIncompleteScanBeforeMutation(t *testing.T) {
 			name: "running worker with exit fields",
 			setup: func(t *testing.T, root string) {
 				t.Helper()
-				meta := catalogTestMeta("RUNEXIT", worker.StateRunning, "boot-a")
+				meta := catalogTestMeta("R4NE", worker.StateRunning, "boot-a")
 				meta.ExitedAt = &exitedAt
 				meta.ExitCode = &exitCode
 				writeCatalogMeta(t, root, meta.ID, meta)
@@ -261,7 +261,7 @@ func TestCatalogReconcileRejectsIncompleteScanBeforeMutation(t *testing.T) {
 			name: "exited worker without exit fields",
 			setup: func(t *testing.T, root string) {
 				t.Helper()
-				writeCatalogMeta(t, root, "NOEXIT", catalogTestMeta("NOEXIT", worker.StateExited, "boot-a"))
+				writeCatalogMeta(t, root, "N0EX", catalogTestMeta("N0EX", worker.StateExited, "boot-a"))
 			},
 		},
 		{
@@ -269,6 +269,13 @@ func TestCatalogReconcileRejectsIncompleteScanBeforeMutation(t *testing.T) {
 			setup: func(t *testing.T, root string) {
 				t.Helper()
 				writeCatalogMeta(t, root, "NINECHARS", catalogTestMeta("NINECHARS", worker.StateRunning, "boot-a"))
+			},
+		},
+		{
+			name: "session ID is not canonical Crockford base32",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				writeCatalogMeta(t, root, "7k3d", catalogTestMeta("7k3d", worker.StateRunning, "boot-a"))
 			},
 		},
 		{
@@ -299,9 +306,9 @@ func TestCatalogReconcileRejectsIncompleteScanBeforeMutation(t *testing.T) {
 
 func TestCatalogReconcileSortsObservations(t *testing.T) {
 	sessionsDir := t.TempDir()
-	writeCatalogMeta(t, sessionsDir, "ZED", catalogTestMeta("ZED", worker.StateRunning, "boot-a"))
-	writeCatalogMeta(t, sessionsDir, "ALPHA", catalogTestMeta("ALPHA", worker.StateRunning, "boot-a"))
-	writeCatalogMeta(t, sessionsDir, "MIDDLE", catalogTestMeta("MIDDLE", worker.StateRunning, "boot-a"))
+	writeCatalogMeta(t, sessionsDir, "Z9D9", catalogTestMeta("Z9D9", worker.StateRunning, "boot-a"))
+	writeCatalogMeta(t, sessionsDir, "A1FA", catalogTestMeta("A1FA", worker.StateRunning, "boot-a"))
+	writeCatalogMeta(t, sessionsDir, "M1D5", catalogTestMeta("M1D5", worker.StateRunning, "boot-a"))
 
 	store := &catalogStoreStub{}
 	catalog := newCatalogForTest(t, sessionsDir, store, probeFunc(func(context.Context, string) error { return nil }), func() string { return "boot-a" })
@@ -313,7 +320,7 @@ func TestCatalogReconcileSortsObservations(t *testing.T) {
 	for i := range store.observed {
 		got[i] = store.observed[i].ID
 	}
-	want := []storage.SessionID{"ALPHA", "MIDDLE", "ZED"}
+	want := []storage.SessionID{"A1FA", "M1D5", "Z9D9"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("observation order = %v, want %v", got, want)
 	}
@@ -321,7 +328,7 @@ func TestCatalogReconcileSortsObservations(t *testing.T) {
 
 func TestCatalogReconcileCancellationDuringProbeDoesNotWrite(t *testing.T) {
 	sessionsDir := t.TempDir()
-	writeCatalogMeta(t, sessionsDir, "CANCEL", catalogTestMeta("CANCEL", worker.StateRunning, "boot-a"))
+	writeCatalogMeta(t, sessionsDir, "CA2C", catalogTestMeta("CA2C", worker.StateRunning, "boot-a"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &catalogStoreStub{}
@@ -376,8 +383,8 @@ func TestCatalogReconcileConvergesInSQLite(t *testing.T) {
 		}
 	})
 
-	liveMeta := catalogTestMeta("LIVE", worker.StateRunning, "boot-a")
-	missingMeta := catalogTestMeta("MISSING", worker.StateRunning, "boot-a")
+	liveMeta := catalogTestMeta("11VE", worker.StateRunning, "boot-a")
+	missingMeta := catalogTestMeta("M155", worker.StateRunning, "boot-a")
 	writeCatalogMeta(t, sessionsDir, liveMeta.ID, liveMeta)
 	writeCatalogMeta(t, sessionsDir, missingMeta.ID, missingMeta)
 	catalog := newCatalogForTest(t, sessionsDir, store, probeFunc(func(context.Context, string) error { return nil }), func() string { return "boot-a" })
@@ -626,9 +633,10 @@ func TestCatalogConstructorCopiesHostStrings(t *testing.T) {
 
 func TestCatalogGetRejectsWireInvalidID(t *testing.T) {
 	catalog := newCatalogForTest(t, t.TempDir(), &catalogStoreStub{}, probeFunc(func(context.Context, string) error { return nil }), func() string { return "boot-a" })
-	_, err := catalog.Get(context.Background(), storage.SessionID(strings.Repeat("x", 9)))
-	if err == nil {
-		t.Fatal("Get(overlong ID) error = nil")
+	for _, id := range []storage.SessionID{storage.SessionID(strings.Repeat("x", 9)), "7k3d", "ABID"} {
+		if _, err := catalog.Get(context.Background(), id); err == nil {
+			t.Errorf("Get(%q) error = nil", id)
+		}
 	}
 }
 

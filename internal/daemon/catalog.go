@@ -11,7 +11,7 @@ import (
 	"syscall"
 
 	"github.com/shaul/mesh/internal/paths"
-	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -95,8 +95,12 @@ func (c *Catalog) Get(ctx context.Context, id storage.SessionID) (storage.Sessio
 	if strings.TrimSpace(string(id)) == "" {
 		return storage.Session{}, errors.New("daemon: get session: empty session ID")
 	}
-	if _, err := protocol.NewSessionID(string(id)); err != nil {
+	parsed, err := session.ParseID(string(id))
+	if err != nil {
 		return storage.Session{}, fmt.Errorf("daemon: get session %s/%s: %w", c.host.ID, id, err)
+	}
+	if parsed != string(id) {
+		return storage.Session{}, fmt.Errorf("daemon: get session %s/%s: session ID is not canonical", c.host.ID, id)
 	}
 	session, err := c.store.GetSession(ctx, c.host.ID, id)
 	if err != nil {
@@ -190,8 +194,12 @@ func sessionFromMeta(hostID storage.HostID, directory string, meta worker.Meta) 
 	if strings.TrimSpace(meta.ID) == "" {
 		return storage.Session{}, false, fmt.Errorf("daemon: session directory %q has an empty ID", directory)
 	}
-	if _, err := protocol.NewSessionID(meta.ID); err != nil {
+	parsed, err := session.ParseID(meta.ID)
+	if err != nil {
 		return storage.Session{}, false, fmt.Errorf("daemon: invalid session %s ID: %w", directory, err)
+	}
+	if parsed != meta.ID {
+		return storage.Session{}, false, fmt.Errorf("daemon: invalid session %s ID %q is not canonical", directory, meta.ID)
 	}
 	if meta.PID <= 0 {
 		return storage.Session{}, false, fmt.Errorf("daemon: session %s has invalid PID %d", meta.ID, meta.PID)
