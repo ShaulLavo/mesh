@@ -1,6 +1,6 @@
 # T03 — SQLite session store
 
-**Status:** not started · **Blocked by:** nothing · **Owns:** `db/`, `internal/storage/`
+**Status:** complete · **Blocked by:** nothing · **Owns:** `db/`, `internal/storage/`
 
 ## Goal
 
@@ -29,6 +29,32 @@ hosts:    id, alias, mesh_identity, tailscale_name, last_seen_at
 last *observed*; liveness is derived at read time by the daemon, never trusted
 from the row alone.
 
+## Implementation
+
+`storage.Open(ctx, databasePath)` accepts an explicit database file, enables WAL
+and foreign keys on every connection, and applies embedded Goose migrations.
+The schema uses `(host_id, id)` as the session key because session IDs are unique
+only within one host. Commands are JSON arrays, and timestamps are Unix
+milliseconds.
+
+The public package exposes Mesh types rather than generated SQL types. Host IDs
+and session IDs have distinct Go types. Session states are constants, and the
+store rejects invalid state and exit-code combinations before a query runs.
+
+`Store.ReconcileHost` is the startup boundary for T04. The caller must provide a
+complete, authoritative scan for one host. In one transaction, the method marks
+stored `running` and `detached` rows that are missing from the scan as
+`interrupted`, then upserts the observed rows. It preserves exited history and
+never decreases `last_output_sequence`. T04 must upsert the host before it
+reconciles that host's sessions.
+
+Goose is pinned at v3.27.3 in `go.mod`. `db/generate.go` pins sqlc v1.31.1 and
+regenerates `internal/storage/sqlc`:
+
+```bash
+go generate ./...
+```
+
 ## Acceptance
 
 - `go generate ./...` (or a documented make target) regenerates sqlc output.
@@ -44,5 +70,4 @@ Define the store and its queries; leave the caller to T04.
 
 ## Notes
 
-Add the tool versions (goose, sqlc) to a `tools.go` or the README so the next
-person regenerates with the same versions.
+The sqlc output is committed. Do not edit `internal/storage/sqlc` by hand.
