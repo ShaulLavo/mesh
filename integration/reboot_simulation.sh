@@ -27,9 +27,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 wait_for_daemon() {
   local pid=$1
-  for _ in $(seq 120); do
+  for _ in $(seq 40); do
     kill -0 "$pid" 2>/dev/null || return 1
-    if [ -S "$MESH_STATE_DIR/daemon.sock" ] && "$MESH" ls --daemon >/dev/null 2>&1; then
+    if [ -S "$MESH_STATE_DIR/daemon.sock" ] && timeout --kill-after=1s 1s "$MESH" ls --daemon >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.05
@@ -78,17 +78,14 @@ PY
 kill -9 "$DAEMON1" 2>/dev/null
 wait "$DAEMON1" 2>/dev/null
 DAEMON1=""
-kill -9 "$CLIENT" 2>/dev/null || true
+for _ in $(seq 120); do
+  kill -0 "$CLIENT" 2>/dev/null || break
+  sleep 0.05
+done
+kill -0 "$CLIENT" 2>/dev/null && fail "attached client did not observe daemon death"
 wait "$CLIENT" 2>/dev/null
 CLIENT=""
 exec 3>&-
-kill -9 "$WORKER_PID" 2>/dev/null
-for _ in $(seq 120); do
-  kill -0 "$WORKER_PID" 2>/dev/null || break
-  sleep 0.05
-done
-kill -0 "$WORKER_PID" 2>/dev/null && fail "worker did not stop for reboot simulation"
-kill -9 "$SESSION_PID" 2>/dev/null || true
 
 python3 - "$MESH_STATE_DIR/s/$SID/meta.json" <<'PY'
 import json
@@ -115,7 +112,12 @@ for _ in $(seq 120); do
   sleep 0.05
 done
 [ "$(database_state)" = interrupted ] || fail "old-boot session was not recorded as interrupted"
-kill -0 "$WORKER_PID" 2>/dev/null && fail "daemon resurrected worker $WORKER_PID"
+kill -0 "$WORKER_PID" 2>/dev/null || fail "boot mismatch test worker died before classification"
+kill -0 "$SESSION_PID" 2>/dev/null || fail "boot mismatch test session died before classification"
 "$MESH" ls --daemon | grep -q "$SID.*interrupted" || fail "daemon did not report $SID as interrupted"
+if timeout --kill-after=1s 3s "$MESH" attach --daemon "$SID" </dev/null >"$T/resurrect.out" 2>&1; then
+  fail "daemon attached to interrupted session $SID"
+fi
+grep -q interrupted "$T/resurrect.out" || fail "daemon rejected interrupted session without explaining its state"
 
-echo "PASS: simulated reboot left session $SID interrupted and did not resurrect worker $WORKER_PID"
+echo "PASS: simulated reboot classified reachable session $SID as interrupted and refused resurrection"

@@ -37,9 +37,9 @@ wait_for_file() {
 
 wait_for_daemon() {
   local pid=$1
-  for _ in $(seq 120); do
+  for _ in $(seq 40); do
     kill -0 "$pid" 2>/dev/null || return 1
-    if [ -S "$MESH_STATE_DIR/daemon.sock" ] && "$MESH" ls --daemon >/dev/null 2>&1; then
+    if [ -S "$MESH_STATE_DIR/daemon.sock" ] && timeout --kill-after=1s 1s "$MESH" ls --daemon >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.05
@@ -82,12 +82,18 @@ SESSION_PID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["p
 kill -9 "$DAEMON1" 2>/dev/null
 wait "$DAEMON1" 2>/dev/null
 DAEMON1=""
-sleep 0.2
-kill -9 "$CLIENT1" 2>/dev/null || true
+for _ in $(seq 120); do
+  kill -0 "$CLIENT1" 2>/dev/null || break
+  sleep 0.05
+done
+kill -0 "$CLIENT1" 2>/dev/null && fail "attached client did not observe daemon death"
 wait "$CLIENT1" 2>/dev/null
 CLIENT1=""
 exec 3>&-
 
+# A lifecycle kill is delayed by five seconds. Wait beyond that boundary so a
+# stray delayed action cannot make this test pass transiently.
+sleep 5.2
 kill -0 "$SESSION_PID" 2>/dev/null || fail "session process $SESSION_PID died with daemon"
 kill -0 "$SHELL_PID" 2>/dev/null || fail "session process $SHELL_PID died with daemon"
 
