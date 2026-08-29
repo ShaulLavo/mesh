@@ -118,6 +118,8 @@ func (c *BatchingConn) Flush() error {
 	return c.writeFrames([]protocol.Frame{frame})
 }
 
+// Close cancels queued output and interrupts active operations. Call Flush
+// first when queued output must be delivered before shutdown.
 func (c *BatchingConn) Close() error {
 	c.closeOnce.Do(func() {
 		c.stateMu.Lock()

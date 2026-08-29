@@ -275,9 +275,13 @@ func ServeWithOptions(w http.ResponseWriter, r *http.Request, opts ServeOptions,
 	}()
 
 	handlerErr := h(ctx, batched)
+	flushErr := batched.Flush()
 	closeErr := batched.Close()
 	if handlerErr != nil {
 		return handlerErr
+	}
+	if flushErr != nil {
+		return flushErr
 	}
 	return closeErr
 }

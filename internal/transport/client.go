@@ -16,10 +16,29 @@ import (
 )
 
 type resumeState struct {
-	attach   protocol.Control
-	next     uint64
-	haveNext bool
+	attach          protocol.Control
+	next            uint64
+	haveNext        bool
+	pendingSnapshot *snapshotCheckpoint
 }
+
+type snapshotCheckpoint struct {
+	generation uint64
+	next       uint64
+}
+
+type linkConn interface {
+	Conn
+	fail(error)
+	stopped() bool
+}
+
+type connectionRef struct {
+	link       linkConn
+	generation uint64
+}
+
+type linkDialer func(context.Context, string, websocket.DialOptions, KeepAlive) (linkConn, error)
 
 type reconnectingConn struct {
 	url       string
@@ -28,12 +47,17 @@ type reconnectingConn struct {
 	backoff   Backoff
 	ctx       context.Context
 	cancel    context.CancelFunc
+	dial      linkDialer
 
-	readMu      sync.Mutex
-	writeMu     sync.Mutex
+	readMu  sync.Mutex
+	writeMu sync.Mutex
+	// reconnectMu linearizes socket replacement with every event that can
+	// change resume state. It is never held across a blocking ReadFrame.
 	reconnectMu sync.Mutex
 	stateMu     sync.Mutex
-	current     *socketConn
+	current     connectionRef
+	connecting  linkConn
+	generation  uint64
 	closed      bool
 	resumes     map[string]resumeState
 }
@@ -57,15 +81,21 @@ func Dial(ctx context.Context, url string, opts DialOptions) (Conn, error) {
 	}
 	lifetime, cancel := context.WithCancel(context.Background())
 	return &reconnectingConn{
-		url:       url,
-		dialOpts:  dialOpts,
-		keepAlive: normalized.keepAlive,
-		backoff:   normalized.backoff,
-		ctx:       lifetime,
-		cancel:    cancel,
-		current:   initial,
-		resumes:   make(map[string]resumeState),
+		url:        url,
+		dialOpts:   dialOpts,
+		keepAlive:  normalized.keepAlive,
+		backoff:    normalized.backoff,
+		ctx:        lifetime,
+		cancel:     cancel,
+		dial:       dialLink,
+		current:    connectionRef{link: initial, generation: 1},
+		generation: 1,
+		resumes:    make(map[string]resumeState),
 	}, nil
+}
+
+func dialLink(ctx context.Context, url string, opts websocket.DialOptions, keepAlive KeepAlive) (linkConn, error) {
+	return dialSocket(ctx, url, opts, keepAlive)
 }
 
 func dialSocket(ctx context.Context, url string, opts websocket.DialOptions, keepAlive KeepAlive) (*socketConn, error) {
@@ -84,25 +114,23 @@ func (c *reconnectingConn) ReadFrame() (protocol.Frame, error) {
 	defer c.readMu.Unlock()
 
 	for {
-		conn, err := c.connection(nil)
+		ref, err := c.connection(connectionRef{})
 		if err != nil {
 			return protocol.Frame{}, err
 		}
-		frame, err := conn.ReadFrame()
+		frame, err := ref.link.ReadFrame()
 		if err != nil {
-			c.invalidate(conn)
 			if !retryableReadError(err) {
+				c.retire(ref)
 				return protocol.Frame{}, err
 			}
-			if _, reconnectErr := c.connection(conn); reconnectErr != nil {
+			if _, reconnectErr := c.connection(ref); reconnectErr != nil {
 				return protocol.Frame{}, reconnectErr
 			}
 			continue
 		}
-		frame, drop, err := c.observeFrame(frame)
+		frame, drop, err := c.observeFrame(ref, frame)
 		if err != nil {
-			conn.fail(err)
-			c.invalidate(conn)
 			return protocol.Frame{}, err
 		}
 		if drop {
@@ -115,23 +143,31 @@ func (c *reconnectingConn) ReadFrame() (protocol.Frame, error) {
 func (c *reconnectingConn) WriteFrame(frame protocol.Frame) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
 
-	conn, err := c.connection(nil)
+	ref, err := c.connectionLocked(connectionRef{})
 	if err != nil {
 		return err
 	}
-	if conn.stopped() {
-		c.invalidate(conn)
-		conn, err = c.connection(conn)
+	if ref.link.stopped() {
+		c.retireLocked(ref)
+		ref, err = c.connectionLocked(ref)
 		if err != nil {
 			return err
 		}
 	}
-	if err := conn.WriteFrame(frame); err != nil {
-		c.invalidate(conn)
+	if err := ref.link.WriteFrame(frame); err != nil {
+		c.retireLocked(ref)
 		return err
 	}
-	c.observeWrite(frame)
+
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.closed || !c.isCurrentLocked(ref) {
+		return ErrClosed
+	}
+	c.observeWriteLocked(frame)
 	return nil
 }
 
@@ -142,59 +178,84 @@ func (c *reconnectingConn) Close() error {
 		return nil
 	}
 	c.closed = true
-	conn := c.current
-	c.current = nil
+	ref := c.current
+	connecting := c.connecting
+	c.current = connectionRef{}
+	c.connecting = nil
 	c.stateMu.Unlock()
 	c.cancel()
 
 	var err error
-	if conn != nil {
-		err = conn.Close()
+	if ref.link != nil {
+		err = ref.link.Close()
+	}
+	if connecting != nil {
+		err = errors.Join(err, connecting.Close())
 	}
 	// A concurrent reconnect observes the cancelled context and exits before
 	// Close returns.
 	c.reconnectMu.Lock()
 	c.reconnectMu.Unlock()
+	c.writeMu.Lock()
+	c.writeMu.Unlock()
 	return err
 }
 
-func (c *reconnectingConn) connection(failed *socketConn) (*socketConn, error) {
+func (c *reconnectingConn) connection(failed connectionRef) (connectionRef, error) {
 	c.reconnectMu.Lock()
 	defer c.reconnectMu.Unlock()
+	return c.connectionLocked(failed)
+}
 
+func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef, error) {
 	c.stateMu.Lock()
 	if c.closed {
 		c.stateMu.Unlock()
-		return nil, ErrClosed
+		return connectionRef{}, ErrClosed
 	}
-	if c.current != nil && c.current != failed {
-		conn := c.current
-		c.stateMu.Unlock()
-		return conn, nil
-	}
-	if c.current == failed {
-		c.current = nil
+	if c.current.link != nil {
+		if failed.generation != 0 && c.isCurrentLocked(failed) {
+			c.current = connectionRef{}
+		} else {
+			ref := c.current
+			c.stateMu.Unlock()
+			return ref, nil
+		}
 	}
 	c.stateMu.Unlock()
 
 	for attempt := 0; ; attempt++ {
-		conn, err := dialSocket(c.ctx, c.url, c.dialOpts, c.keepAlive)
+		link, err := c.dial(c.ctx, c.url, c.dialOpts, c.keepAlive)
 		if err == nil {
-			err = c.sendResumes(conn)
+			c.stateMu.Lock()
+			if c.closed {
+				c.stateMu.Unlock()
+				_ = link.Close()
+				return connectionRef{}, ErrClosed
+			}
+			c.connecting = link
+			c.stateMu.Unlock()
+
+			err = c.sendResumes(link)
+			c.stateMu.Lock()
+			c.connecting = nil
+			c.stateMu.Unlock()
 		}
 		if err == nil {
 			c.stateMu.Lock()
 			if c.closed {
 				c.stateMu.Unlock()
-				_ = conn.Close()
-				return nil, ErrClosed
+				_ = link.Close()
+				return connectionRef{}, ErrClosed
 			}
-			c.current = conn
+			c.generation++
+			ref := connectionRef{link: link, generation: c.generation}
+			c.current = ref
 			c.stateMu.Unlock()
-			return conn, nil
+			return ref, nil
 		}
-		if conn != nil {
-			_ = conn.Close()
+		if link != nil {
+			_ = link.Close()
 		}
 
 		delay := backoffDelay(attempt, c.backoff, rand.Float64())
@@ -208,20 +269,31 @@ func (c *reconnectingConn) connection(failed *socketConn) (*socketConn, error) {
 				default:
 				}
 			}
-			return nil, ErrClosed
+			return connectionRef{}, ErrClosed
 		}
 	}
 }
 
-func (c *reconnectingConn) invalidate(conn *socketConn) {
+func (c *reconnectingConn) retire(ref connectionRef) {
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+	c.retireLocked(ref)
+}
+
+func (c *reconnectingConn) retireLocked(ref connectionRef) {
 	c.stateMu.Lock()
-	if c.current == conn {
-		c.current = nil
+	if c.isCurrentLocked(ref) {
+		c.current = connectionRef{}
 	}
 	c.stateMu.Unlock()
 }
 
-func (c *reconnectingConn) observeWrite(frame protocol.Frame) {
+func (c *reconnectingConn) isCurrentLocked(ref connectionRef) bool {
+	return ref.link != nil && c.current.link != nil && ref.generation != 0 &&
+		c.current.generation == ref.generation
+}
+
+func (c *reconnectingConn) observeWriteLocked(frame protocol.Frame) {
 	if frame.Kind != protocol.KindControl {
 		return
 	}
@@ -236,60 +308,100 @@ func (c *reconnectingConn) observeWrite(frame protocol.Frame) {
 			state.next = *msg.LastSeq
 			state.haveNext = true
 		}
-		c.stateMu.Lock()
 		c.resumes[msg.SessionID] = state
-		c.stateMu.Unlock()
 	case protocol.TypeDetach:
-		c.stateMu.Lock()
 		delete(c.resumes, msg.SessionID)
-		c.stateMu.Unlock()
 	}
 }
 
-func (c *reconnectingConn) observeFrame(frame protocol.Frame) (protocol.Frame, bool, error) {
+func (c *reconnectingConn) observeFrame(ref connectionRef, frame protocol.Frame) (protocol.Frame, bool, error) {
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+
+	c.stateMu.Lock()
+	if !c.isCurrentLocked(ref) {
+		c.stateMu.Unlock()
+		return protocol.Frame{}, true, nil
+	}
+	frame, drop, err := c.observeFrameLocked(ref.generation, frame)
+	if err != nil {
+		c.current = connectionRef{}
+	}
+	c.stateMu.Unlock()
+	if err != nil {
+		ref.link.fail(err)
+	}
+	return frame, drop, err
+}
+
+func (c *reconnectingConn) observeFrameLocked(generation uint64, frame protocol.Frame) (protocol.Frame, bool, error) {
 	switch frame.Kind {
 	case protocol.KindControl:
 		msg, err := protocol.DecodeControl(frame.Payload)
 		if err != nil || msg.SessionID == "" {
 			return frame, false, nil
 		}
-		c.stateMu.Lock()
 		state, tracked := c.resumes[msg.SessionID]
 		switch msg.Type {
 		case protocol.TypeAttached:
 			if tracked {
-				if state.haveNext && msg.Seq > state.next && !msg.Snapshot {
-					c.stateMu.Unlock()
+				if msg.Snapshot {
+					if state.haveNext && msg.Seq < state.next {
+						return protocol.Frame{}, false, fmt.Errorf(
+							"transport: session %s snapshot at sequence %d, behind %d",
+							msg.SessionID, msg.Seq, state.next,
+						)
+					}
+					state.pendingSnapshot = &snapshotCheckpoint{
+						generation: generation,
+						next:       msg.Seq,
+					}
+				} else if state.haveNext && msg.Seq > state.next {
 					return protocol.Frame{}, false, fmt.Errorf(
 						"transport: session %s resumed at sequence %d, want %d",
 						msg.SessionID, msg.Seq, state.next,
 					)
-				}
-				if !state.haveNext || msg.Seq > state.next {
+				} else if !state.haveNext {
 					state.next = msg.Seq
 					state.haveNext = true
+				}
+				if !msg.Snapshot {
+					state.pendingSnapshot = nil
 				}
 				c.resumes[msg.SessionID] = state
 			}
 		case protocol.TypeDetach, protocol.TypeExit:
 			delete(c.resumes, msg.SessionID)
 		}
-		c.stateMu.Unlock()
+		return frame, false, nil
+	case protocol.KindSnapshot:
+		key := frame.Session.String()
+		state, tracked := c.resumes[key]
+		if !tracked || state.pendingSnapshot == nil || state.pendingSnapshot.generation != generation {
+			return frame, false, nil
+		}
+		state.next = state.pendingSnapshot.next
+		state.haveNext = true
+		state.pendingSnapshot = nil
+		c.resumes[key] = state
 		return frame, false, nil
 	case protocol.KindData:
 		key := frame.Session.String()
-		c.stateMu.Lock()
 		state, tracked := c.resumes[key]
 		if !tracked {
-			c.stateMu.Unlock()
 			return frame, false, nil
+		}
+		if state.pendingSnapshot != nil && state.pendingSnapshot.generation == generation {
+			return protocol.Frame{}, false, fmt.Errorf(
+				"transport: session %s received data before its announced snapshot",
+				key,
+			)
 		}
 		if !state.haveNext {
 			state.next = frame.Seq
 			state.haveNext = true
 		}
 		if frame.Seq > state.next {
-			c.stateMu.Unlock()
 			return protocol.Frame{}, false, fmt.Errorf(
 				"transport: session %s output gap: got sequence %d, want %d",
 				key, frame.Seq, state.next,
@@ -297,11 +409,9 @@ func (c *reconnectingConn) observeFrame(frame protocol.Frame) (protocol.Frame, b
 		}
 		end := frame.Seq + uint64(len(frame.Payload))
 		if end < frame.Seq {
-			c.stateMu.Unlock()
 			return protocol.Frame{}, false, fmt.Errorf("transport: session %s output sequence overflow", key)
 		}
 		if end <= state.next {
-			c.stateMu.Unlock()
 			return protocol.Frame{}, true, nil
 		}
 		if frame.Seq < state.next {
@@ -311,14 +421,13 @@ func (c *reconnectingConn) observeFrame(frame protocol.Frame) (protocol.Frame, b
 		}
 		state.next = frame.Seq + uint64(len(frame.Payload))
 		c.resumes[key] = state
-		c.stateMu.Unlock()
 		return frame, false, nil
 	default:
 		return frame, false, nil
 	}
 }
 
-func (c *reconnectingConn) sendResumes(conn *socketConn) error {
+func (c *reconnectingConn) sendResumes(conn linkConn) error {
 	frames, err := c.resumeFrames()
 	if err != nil {
 		return err

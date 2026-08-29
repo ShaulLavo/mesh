@@ -31,7 +31,8 @@ var (
 )
 
 // Conn carries complete Mesh protocol frames. A Conn permits one concurrent
-// reader and any number of concurrent writers.
+// reader and any number of concurrent writers. Close is idempotent and must
+// unblock active reads and writes.
 type Conn interface {
 	ReadFrame() (protocol.Frame, error)
 	WriteFrame(protocol.Frame) error

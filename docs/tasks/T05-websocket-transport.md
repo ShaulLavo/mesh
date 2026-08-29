@@ -55,14 +55,24 @@ pong within 5 seconds.
 
 `Serve` batches contiguous output for the same session up to 32 KiB or 2 ms.
 Control and input frames flush pending output first. `BatchingConn` copies every
-buffered payload because PTY readers reuse their buffers.
+buffered payload because PTY readers reuse their buffers. Handler completion
+flushes queued output before closing the WebSocket. Direct `BatchingConn`
+callers use `Flush` when they need graceful delivery; `Close` cancels queued
+output so it can interrupt a blocked destination write.
 
 `Dial` reconnects until `Close` cancels it. The delay starts at 100 ms, doubles,
 adds 20 percent jitter, and never exceeds 5 seconds. It tracks the next byte
 returned by `ReadFrame` for each attached session. A new WebSocket sends one
 `session.attach` per session with that exact offset. Overlapping replay is
-trimmed, while a gap closes the connection and returns an error. A snapshot may
-advance the offset when `session.attached` has `snapshot: true`.
+trimmed, while a gap closes the connection and returns an error. A snapshot
+announcement leaves the prior offset committed until its complete
+`KindSnapshot` frame is returned. If the link drops between those frames, the
+next attach uses the prior offset.
+
+Each installed socket has a generation. Inbound frames mutate resume state only
+while their generation is current. The reconnect transition also spans an
+outbound control write and its state update, so a concurrent reconnect cannot
+omit a successful attach or replay a successful detach.
 
 The transport never retries a failed `WriteFrame`. Retrying terminal input after
 an uncertain write could duplicate keystrokes. The next operation reconnects,
@@ -74,7 +84,8 @@ the authority for which inbound kinds are valid.
 
 ## Acceptance
 
-- Round-trip tests over `httptest` covering control + data + input frames.
+- Round-trip tests over `httptest` covering control, data, input, and snapshot
+  frames.
 - A test that severs the connection mid-stream and asserts the client reconnects
   and resumes at the correct `seq` with no gap and no duplication. This is the
   single most important test in the package.
@@ -83,10 +94,11 @@ the authority for which inbound kinds are valid.
 - Fuzz target for frame decoding (`protocol.Reader`) — cheap, and step 7 asks for
   protocol fuzzing anyway.
 
-Implemented in `internal/transport` with tests for all three frame classes,
-two-session reconnect, exact resume without gaps or duplicates, dead-peer
-detection, compression-off handshakes, output coalescing, and additive frame
-encoding. Run the focused checks with:
+Implemented in `internal/transport` with tests for control, data, input, and
+snapshot frames, two-session reconnect, exact resume without gaps or
+duplicates, dead-peer detection, compression-off handshakes, output coalescing,
+snapshot checkpoints, generation retirement, reconnect/control-write races,
+and additive frame encoding. Run the focused checks with:
 
 ```bash
 go test -race -count=100 ./internal/transport
