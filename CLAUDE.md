@@ -27,16 +27,16 @@ machines. Read `docs/plan/00-overview.md` before changing anything structural, a
 ## Testing
 
 ```bash
+go mod tidy -diff
 go test -race ./...
-go build -o mesh ./cmd/mesh
-./integration/survives_client_death.sh    # the contract, end to end
-./integration/detach_and_steal.sh
-./integration/flushes_on_exit.sh
+go vet ./...
+./scripts/verify.sh
 ```
 
-Integration scripts set `MESH_STATE_DIR` to a temp dir. Any change to session
-lifecycle, attach, or kill must keep all scripts passing, and behaviour worth
-protecting gets a new script rather than a comment saying it works.
+`scripts/verify.sh` builds one temporary binary and runs all integration scripts
+concurrently. Each script uses a separate state directory. Any change to session
+lifecycle, attach, or kill must keep all scripts passing. Add a script for new
+behavior that needs protection.
 
 ## Layout
 
