@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"sort"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/x/term"
@@ -109,77 +107,25 @@ func alive(dir string) bool {
 // Spawn starts a detached worker for command and returns the new session once
 // its socket is accepting connections.
 func Spawn(command []string, cwd string) (Session, error) {
-	if len(command) == 0 {
-		return Session{}, fmt.Errorf("spawn: no command")
-	}
-	id, err := session.NewID()
+	sessionsDir, err := paths.SessionsDir()
 	if err != nil {
 		return Session{}, err
 	}
-	dir, err := paths.SessionDir(id)
-	if err != nil {
-		return Session{}, err
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return Session{}, fmt.Errorf("create session dir: %w", err)
-	}
-
-	exe, err := os.Executable()
-	if err != nil {
-		return Session{}, fmt.Errorf("locate mesh binary: %w", err)
-	}
-	logf, err := os.OpenFile(paths.Log(dir), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return Session{}, fmt.Errorf("open worker log: %w", err)
-	}
-	defer logf.Close() //nolint:errcheck // the child holds its own descriptor
 
 	cols, rows := 80, 24
 	if w, h, err := term.GetSize(os.Stdout.Fd()); err == nil && w > 0 {
 		cols, rows = w, h
 	}
-
-	args := []string{"session-worker", "--id", id, "--dir", dir,
-		"--cols", fmt.Sprint(cols), "--rows", fmt.Sprint(rows), "--"}
-	args = append(args, command...)
-
-	cmd := exec.Command(exe, args...)
-	cmd.Dir = cwd
-	cmd.Env = os.Environ()
-	cmd.Stdin = nil
-	cmd.Stdout = logf
-	cmd.Stderr = logf
-	// Setsid is the whole point: the worker leaves our session and loses our
-	// controlling terminal, so closing the CLI cannot take it down.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
-		return Session{}, fmt.Errorf("start worker: %w", err)
-	}
-	// We never Wait: the worker is not ours to supervise. Releasing lets it be
-	// reparented to init when this process exits.
-	_ = cmd.Process.Release()
-
-	if err := waitForSocket(paths.Socket(dir), 5*time.Second); err != nil {
-		return Session{}, fmt.Errorf("session %s never came up (see %s): %w", id, paths.Log(dir), err)
-	}
-	meta, err := worker.ReadMeta(dir)
+	launched, err := worker.LaunchDetached(worker.LaunchConfig{
+		SessionsDir: sessionsDir,
+		Command:     command,
+		Cwd:         cwd,
+		Env:         os.Environ(),
+		Cols:        cols,
+		Rows:        rows,
+	})
 	if err != nil {
-		return Session{}, fmt.Errorf("read session %s: %w", id, err)
+		return Session{}, err
 	}
-	return Session{Meta: meta, Dir: dir, Alive: true}, nil
-}
-
-func waitForSocket(path string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		conn, err := net.DialTimeout("unix", path, 200*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return err
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	return Session{Meta: launched.Meta, Dir: launched.Dir, Alive: true}, nil
 }
