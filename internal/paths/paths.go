@@ -23,6 +23,11 @@ func StateDir() (string, error) {
 			base = filepath.Join(home, ".local", "state", "mesh")
 		}
 	}
+	absolute, err := filepath.Abs(base)
+	if err != nil {
+		return "", fmt.Errorf("resolve state dir %s: %w", base, err)
+	}
+	base = absolute
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return "", fmt.Errorf("create state dir: %w", err)
 	}
