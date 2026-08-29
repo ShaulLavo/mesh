@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
@@ -21,23 +23,54 @@ type lifecycleCatalog interface {
 type launchWorker func(worker.LaunchConfig) (worker.Launched, error)
 
 type lifecycleConfig struct {
-	Catalog     lifecycleCatalog
-	Connector   WorkerConnector
-	Host        storage.Host
-	SessionsDir string
-	Executable  string
-	Env         []string
-	Launch      launchWorker
+	Context        context.Context
+	Catalog        lifecycleCatalog
+	Connector      WorkerConnector
+	Host           storage.Host
+	SessionsDir    string
+	Executable     string
+	Env            []string
+	Launch         launchWorker
+	PublishTimeout time.Duration
 }
 
 type lifecycle struct {
-	catalog     lifecycleCatalog
-	connector   WorkerConnector
-	host        storage.Host
-	sessionsDir string
-	executable  string
-	env         []string
-	launch      launchWorker
+	context        context.Context
+	catalog        lifecycleCatalog
+	connector      WorkerConnector
+	host           storage.Host
+	sessionsDir    string
+	executable     string
+	env            []string
+	launch         launchWorker
+	publishTimeout time.Duration
+
+	creationsMu sync.Mutex
+	creations   map[string]*creation
+}
+
+const defaultPublishTimeout = 30 * time.Second
+
+type creationRequest struct {
+	command []string
+	cwd     string
+	cols    int
+	rows    int
+}
+
+func (r creationRequest) equal(other creationRequest) bool {
+	return slices.Equal(r.command, other.command) && r.cwd == other.cwd && r.cols == other.cols && r.rows == other.rows
+}
+
+type creation struct {
+	request creationRequest
+	done    chan struct{}
+
+	launched  worker.Launched
+	launchErr error
+
+	publishGate chan struct{}
+	published   bool
 }
 
 func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
@@ -56,16 +89,28 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 	if cfg.Launch == nil {
 		cfg.Launch = worker.LaunchDetached
 	}
+	if cfg.Context == nil {
+		cfg.Context = context.Background()
+	}
+	if cfg.PublishTimeout < 0 {
+		return nil, fmt.Errorf("daemon: negative lifecycle publication timeout")
+	}
+	if cfg.PublishTimeout == 0 {
+		cfg.PublishTimeout = defaultPublishTimeout
+	}
 	cfg.Host.Alias = cloneLifecycleString(cfg.Host.Alias)
 	cfg.Host.TailscaleName = cloneLifecycleString(cfg.Host.TailscaleName)
 	return &lifecycle{
-		catalog:     cfg.Catalog,
-		connector:   cfg.Connector,
-		host:        cfg.Host,
-		sessionsDir: cfg.SessionsDir,
-		executable:  cfg.Executable,
-		env:         append([]string(nil), cfg.Env...),
-		launch:      cfg.Launch,
+		context:        cfg.Context,
+		catalog:        cfg.Catalog,
+		connector:      cfg.Connector,
+		host:           cfg.Host,
+		sessionsDir:    cfg.SessionsDir,
+		executable:     cfg.Executable,
+		env:            append([]string(nil), cfg.Env...),
+		launch:         cfg.Launch,
+		publishTimeout: cfg.PublishTimeout,
+		creations:      make(map[string]*creation),
 	}, nil
 }
 
@@ -112,32 +157,86 @@ func (l *lifecycle) create(ctx context.Context, request protocol.Control) (proto
 	if err := ctx.Err(); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
-	launched, err := l.launch(worker.LaunchConfig{
-		SessionsDir: l.sessionsDir,
-		Executable:  l.executable,
-		Command:     append([]string(nil), request.Command...),
-		Cwd:         request.Cwd,
-		Env:         append([]string(nil), l.env...),
-		Cols:        request.Cols,
-		Rows:        request.Rows,
-	})
+	created, owner, err := l.creation(request)
 	if err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+		return protocol.Control{}, err
 	}
-	parsedID, err := session.ParseID(launched.Meta.ID)
-	if err != nil || parsedID != launched.Meta.ID {
-		return protocol.Control{}, fmt.Errorf("daemon: launcher returned invalid session ID %q", launched.Meta.ID)
+	if owner {
+		created.launched, created.launchErr = l.launch(worker.LaunchConfig{
+			SessionsDir: l.sessionsDir,
+			Executable:  l.executable,
+			Command:     append([]string(nil), created.request.command...),
+			Cwd:         created.request.cwd,
+			Env:         append([]string(nil), l.env...),
+			Cols:        created.request.cols,
+			Rows:        created.request.rows,
+		})
+		close(created.done)
+	} else {
+		select {
+		case <-created.done:
+		case <-ctx.Done():
+			return protocol.Control{}, fmt.Errorf("daemon: wait for %s request %s: %w", request.Type, request.RequestID, ctx.Err())
+		}
 	}
-	// The worker now exists independently of this client. Finish publishing it
-	// even if the request connection disappeared while launch was in progress.
-	if err := l.catalog.Reconcile(context.WithoutCancel(ctx)); err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: publish session %s: %w", launched.Meta.ID, err)
+	if created.launchErr != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, created.launchErr)
+	}
+	parsedID, err := session.ParseID(created.launched.Meta.ID)
+	if err != nil || parsedID != created.launched.Meta.ID {
+		return protocol.Control{}, fmt.Errorf("daemon: launcher returned invalid session ID %q", created.launched.Meta.ID)
+	}
+	waitCtx := ctx
+	if owner {
+		waitCtx = l.context
+	}
+	select {
+	case <-created.publishGate:
+		defer func() { created.publishGate <- struct{}{} }()
+	case <-waitCtx.Done():
+		return protocol.Control{}, fmt.Errorf("daemon: wait to publish session %s: %w", created.launched.Meta.ID, waitCtx.Err())
+	}
+	if !created.published {
+		// Publication belongs to the daemon, not the disposable client, but must
+		// still stop promptly with daemon shutdown and has its own upper bound.
+		publishCtx, cancel := context.WithTimeout(l.context, l.publishTimeout)
+		err = l.catalog.Reconcile(publishCtx)
+		cancel()
+		if err != nil {
+			return protocol.Control{}, fmt.Errorf("daemon: publish session %s: %w", created.launched.Meta.ID, err)
+		}
+		created.published = true
 	}
 	return protocol.Control{
 		Type:      protocol.TypeCreated,
 		RequestID: request.RequestID,
-		SessionID: launched.Meta.ID,
+		SessionID: created.launched.Meta.ID,
 	}, nil
+}
+
+func (l *lifecycle) creation(request protocol.Control) (*creation, bool, error) {
+	wanted := creationRequest{
+		command: append([]string(nil), request.Command...),
+		cwd:     request.Cwd,
+		cols:    request.Cols,
+		rows:    request.Rows,
+	}
+	l.creationsMu.Lock()
+	defer l.creationsMu.Unlock()
+	if existing := l.creations[request.RequestID]; existing != nil {
+		if !existing.request.equal(wanted) {
+			return nil, false, fmt.Errorf("daemon: request ID %q was already used for a different session creation", request.RequestID)
+		}
+		return existing, false, nil
+	}
+	created := &creation{
+		request:     wanted,
+		done:        make(chan struct{}),
+		publishGate: make(chan struct{}, 1),
+	}
+	created.publishGate <- struct{}{}
+	l.creations[request.RequestID] = created
+	return created, true, nil
 }
 
 func (l *lifecycle) list(ctx context.Context, request protocol.Control) (protocol.Control, error) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,14 +16,29 @@ import (
 )
 
 type lifecycleTestCatalog struct {
+	mu             sync.Mutex
 	sessions       []storage.Session
 	reconcileErr   error
+	reconcileHook  func(context.Context) error
 	reconcileCalls int
 }
 
-func (c *lifecycleTestCatalog) Reconcile(context.Context) error {
+func (c *lifecycleTestCatalog) Reconcile(ctx context.Context) error {
+	c.mu.Lock()
 	c.reconcileCalls++
-	return c.reconcileErr
+	hook := c.reconcileHook
+	err := c.reconcileErr
+	c.mu.Unlock()
+	if hook != nil {
+		return hook(ctx)
+	}
+	return err
+}
+
+func (c *lifecycleTestCatalog) reconciliationCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.reconcileCalls
 }
 
 func (c *lifecycleTestCatalog) List(context.Context) ([]storage.Session, error) {
@@ -91,8 +108,8 @@ func TestLifecycleCreatesAndPublishesDetachedWorker(t *testing.T) {
 	if !reflect.DeepEqual(launched, wantLaunch) {
 		t.Fatalf("launch config = %#v, want %#v", launched, wantLaunch)
 	}
-	if catalog.reconcileCalls != 1 {
-		t.Fatalf("reconciliations = %d, want 1", catalog.reconcileCalls)
+	if got := catalog.reconciliationCount(); got != 1 {
+		t.Fatalf("reconciliations = %d, want 1", got)
 	}
 }
 
@@ -188,6 +205,138 @@ func TestLifecycleForwardsOneShotControls(t *testing.T) {
 				t.Fatalf("forwarded control = %+v", forwarded)
 			}
 		})
+	}
+}
+
+func TestLifecycleRetriesPublicationWithoutLaunchingDuplicate(t *testing.T) {
+	wantPublishErr := errors.New("temporary catalog failure")
+	var publishAttempts atomic.Int32
+	catalog := &lifecycleTestCatalog{reconcileHook: func(context.Context) error {
+		if publishAttempts.Add(1) == 1 {
+			return wantPublishErr
+		}
+		return nil
+	}}
+	var launchCalls atomic.Int32
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog:     catalog,
+		Connector:   failingLifecycleConnector(),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
+		SessionsDir: "/state/s",
+		Launch: func(worker.LaunchConfig) (worker.Launched, error) {
+			launchCalls.Add(1)
+			return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+		},
+	})
+	request := protocol.Control{
+		Type:      protocol.TypeCreate,
+		RequestID: "stable-create-request",
+		Command:   []string{"sh", "-lc", "do-once"},
+		Cwd:       "/work",
+	}
+
+	if _, _, err := lifecycle.HandleControl(context.Background(), request); !errors.Is(err, wantPublishErr) {
+		t.Fatalf("first create error = %v, want publication failure", err)
+	}
+	response, handled, err := lifecycle.HandleControl(context.Background(), request)
+	if err != nil || !handled {
+		t.Fatalf("retried create handled = %v, error = %v", handled, err)
+	}
+	if response.Type != protocol.TypeCreated || response.SessionID != "7K3D" {
+		t.Fatalf("retried response = %+v", response)
+	}
+	if got := launchCalls.Load(); got != 1 {
+		t.Fatalf("worker launches = %d, want 1", got)
+	}
+	if got := publishAttempts.Load(); got != 2 {
+		t.Fatalf("publication attempts = %d, want 2", got)
+	}
+
+	changed := request
+	changed.Command = []string{"sh", "-lc", "different-side-effect"}
+	if _, handled, err := lifecycle.HandleControl(context.Background(), changed); !handled || err == nil {
+		t.Fatalf("reused request ID handled = %v, error = %v; want handled error", handled, err)
+	}
+	if got := launchCalls.Load(); got != 1 {
+		t.Fatalf("worker launches after conflicting retry = %d, want 1", got)
+	}
+}
+
+func TestLifecycleCoalescesConcurrentCreateRequest(t *testing.T) {
+	catalog := &lifecycleTestCatalog{}
+	launchStarted := make(chan struct{})
+	releaseLaunch := make(chan struct{})
+	var startedOnce sync.Once
+	var launchCalls atomic.Int32
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog:     catalog,
+		Connector:   failingLifecycleConnector(),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
+		SessionsDir: "/state/s",
+		Launch: func(worker.LaunchConfig) (worker.Launched, error) {
+			launchCalls.Add(1)
+			startedOnce.Do(func() { close(launchStarted) })
+			<-releaseLaunch
+			return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+		},
+	})
+	request := protocol.Control{Type: protocol.TypeCreate, RequestID: "same-request", Command: []string{"sh"}}
+	type result struct {
+		response protocol.Control
+		err      error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			response, _, err := lifecycle.HandleControl(context.Background(), request)
+			results <- result{response: response, err: err}
+		}()
+	}
+	select {
+	case <-launchStarted:
+	case <-time.After(time.Second):
+		t.Fatal("worker launch did not start")
+	}
+	close(releaseLaunch)
+	for range 2 {
+		got := <-results
+		if got.err != nil || got.response.SessionID != "7K3D" {
+			t.Fatalf("concurrent create = %+v, %v", got.response, got.err)
+		}
+	}
+	if got := launchCalls.Load(); got != 1 {
+		t.Fatalf("concurrent worker launches = %d, want 1", got)
+	}
+	if got := catalog.reconciliationCount(); got != 1 {
+		t.Fatalf("concurrent reconciliations = %d, want 1", got)
+	}
+}
+
+func TestLifecycleBoundsPublicationByDaemonContext(t *testing.T) {
+	catalog := &lifecycleTestCatalog{reconcileHook: func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Context:        context.Background(),
+		Catalog:        catalog,
+		Connector:      failingLifecycleConnector(),
+		Host:           storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
+		SessionsDir:    "/state/s",
+		PublishTimeout: 20 * time.Millisecond,
+		Launch: func(worker.LaunchConfig) (worker.Launched, error) {
+			return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+		},
+	})
+	started := time.Now()
+	_, _, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeCreate, RequestID: "bounded-publish", Command: []string{"sh"},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("publication error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("bounded publication took %v", elapsed)
 	}
 }
 
