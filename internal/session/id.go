@@ -3,6 +3,7 @@ package session
 import (
 	"crypto/rand"
 	"fmt"
+	"strings"
 )
 
 // idAlphabet is Crockford base32: no I, L, O or U, so session IDs survive
@@ -36,4 +37,19 @@ func NormalizeID(s string) string {
 		}
 	}
 	return string(out)
+}
+
+// ParseID normalizes a user-supplied session ID and verifies its complete
+// Crockford base32 representation.
+func ParseID(s string) (string, error) {
+	id := NormalizeID(s)
+	if len(id) != IDLen {
+		return "", fmt.Errorf("session: ID %q must be %d characters", s, IDLen)
+	}
+	for i := range len(id) {
+		if !strings.ContainsRune(idAlphabet, rune(id[i])) {
+			return "", fmt.Errorf("session: ID %q contains invalid character %q", s, id[i])
+		}
+	}
+	return id, nil
 }
