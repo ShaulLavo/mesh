@@ -11,8 +11,7 @@ import (
 
 // CatalogStore is the durable boundary used while rediscovering local workers.
 type CatalogStore interface {
-	UpsertHost(context.Context, storage.Host) (storage.Host, error)
-	ReconcileHost(context.Context, storage.HostID, []storage.Session) error
+	ReconcileHost(context.Context, storage.Host, []storage.Session) error
 	ListHostSessions(context.Context, storage.HostID) ([]storage.Session, error)
 	GetSession(context.Context, storage.HostID, storage.SessionID) (storage.Session, error)
 }

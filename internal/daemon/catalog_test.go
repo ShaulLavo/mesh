@@ -134,8 +134,8 @@ func TestCatalogReconcileMapsWorkerState(t *testing.T) {
 			if store.upsertCalls != 1 || store.reconcileCalls != 1 {
 				t.Fatalf("store calls = upsert %d, reconcile %d; want 1, 1", store.upsertCalls, store.reconcileCalls)
 			}
-			if got := store.events; !reflect.DeepEqual(got, []string{"upsert", "reconcile"}) {
-				t.Fatalf("store call order = %v, want [upsert reconcile]", got)
+			if got := store.events; !reflect.DeepEqual(got, []string{"reconcile-host"}) {
+				t.Fatalf("store calls = %v, want one atomic reconciliation", got)
 			}
 			if len(store.observed) != 1 {
 				t.Fatalf("observed sessions = %d, want 1", len(store.observed))
@@ -532,15 +532,10 @@ type catalogStoreStub struct {
 	observed       []storage.Session
 }
 
-func (s *catalogStoreStub) UpsertHost(_ context.Context, host storage.Host) (storage.Host, error) {
+func (s *catalogStoreStub) ReconcileHost(_ context.Context, _ storage.Host, observed []storage.Session) error {
 	s.upsertCalls++
-	s.events = append(s.events, "upsert")
-	return host, nil
-}
-
-func (s *catalogStoreStub) ReconcileHost(_ context.Context, _ storage.HostID, observed []storage.Session) error {
 	s.reconcileCalls++
-	s.events = append(s.events, "reconcile")
+	s.events = append(s.events, "reconcile-host")
 	s.observed = append([]storage.Session(nil), observed...)
 	return nil
 }

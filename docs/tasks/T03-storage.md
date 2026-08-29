@@ -45,8 +45,8 @@ store rejects invalid state and exit-code combinations before a query runs.
 complete, authoritative scan for one host. In one transaction, the method marks
 stored `running` and `detached` rows that are missing from the scan as
 `interrupted`, then upserts the observed rows. It preserves exited history and
-never decreases `last_output_sequence`. T04 must upsert the host before it
-reconciles that host's sessions.
+never decreases `last_output_sequence`. The host observation and its session
+view commit in the same transaction, so a failed reconciliation changes neither.
 
 Goose is pinned at v3.27.3 in `go.mod`. `db/generate.go` pins sqlc v1.31.1 and
 regenerates `internal/storage/sqlc`:

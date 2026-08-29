@@ -162,7 +162,7 @@ func TestReconcileHostInterruptsMissingActiveSessions(t *testing.T) {
 	observedLive.State = StateRunning
 	observedLive.LastOutputSequence = 25
 	observed := []Session{observedLive, exited}
-	if err := store.ReconcileHost(ctx, hostA.ID, observed); err != nil {
+	if err := store.ReconcileHost(ctx, hostA, observed); err != nil {
 		t.Fatal(err)
 	}
 	assertSessionState(t, store, hostA.ID, missing.ID, StateInterrupted)
@@ -174,7 +174,7 @@ func TestReconcileHostInterruptsMissingActiveSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ReconcileHost(ctx, hostA.ID, observed); err != nil {
+	if err := store.ReconcileHost(ctx, hostA, observed); err != nil {
 		t.Fatalf("repeat reconciliation: %v", err)
 	}
 	after, err := store.ListHostSessions(ctx, hostA.ID)
@@ -220,7 +220,7 @@ func TestReconcileHostKeepsLatestAttachmentTime(t *testing.T) {
 			observed := persisted
 			observed.State = StateRunning
 			observed.LastAttachedAt = tc.observed
-			if err := store.ReconcileHost(ctx, host.ID, []Session{observed}); err != nil {
+			if err := store.ReconcileHost(ctx, host, []Session{observed}); err != nil {
 				t.Fatal(err)
 			}
 
@@ -248,17 +248,53 @@ func TestReconcileHostRejectsNonAuthoritativeInputBeforeWriting(t *testing.T) {
 	}
 
 	duplicate := testSession(host.ID, "DUP", StateRunning, 2)
-	if err := store.ReconcileHost(ctx, host.ID, []Session{duplicate, duplicate}); err == nil {
+	if err := store.ReconcileHost(ctx, host, []Session{duplicate, duplicate}); err == nil {
 		t.Fatal("duplicate reconciliation input succeeded")
 	}
 	assertSessionState(t, store, host.ID, existing.ID, StateRunning)
 
 	wrongHost := duplicate
 	wrongHost.HostID = "host-b"
-	if err := store.ReconcileHost(ctx, host.ID, []Session{wrongHost}); err == nil {
+	if err := store.ReconcileHost(ctx, host, []Session{wrongHost}); err == nil {
 		t.Fatal("cross-host reconciliation input succeeded")
 	}
 	assertSessionState(t, store, host.ID, existing.ID, StateRunning)
+}
+
+func TestReconcileHostRollsBackHostWhenSessionUpdateFails(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	original := testHost("host-a")
+	if _, err := store.UpsertHost(ctx, original); err != nil {
+		t.Fatal(err)
+	}
+	running := testSession(original.ID, "LIVE", StateRunning, 1)
+	if _, err := store.UpsertSession(ctx, running); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		CREATE TRIGGER reject_session_update
+		BEFORE UPDATE OF state ON sessions
+		BEGIN
+			SELECT RAISE(ABORT, 'injected session update failure');
+		END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	updated := original
+	updated.LastSeenAt = original.LastSeenAt.Add(time.Hour)
+	if err := store.ReconcileHost(ctx, updated, nil); err == nil {
+		t.Fatal("reconciliation with injected failure succeeded")
+	}
+	persisted, err := store.GetHost(ctx, original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !persisted.LastSeenAt.Equal(original.LastSeenAt) {
+		t.Fatalf("host timestamp committed despite session rollback: got %v, want %v", persisted.LastSeenAt, original.LastSeenAt)
+	}
+	assertSessionState(t, store, original.ID, running.ID, StateRunning)
 }
 
 func TestStoreRejectsInvalidBoundaryValues(t *testing.T) {

@@ -206,13 +206,15 @@ func (s *Store) SetSessionState(ctx context.Context, hostID HostID, sessionID Se
 	return persisted, nil
 }
 
-// ReconcileHost atomically replaces one host's active observations. Existing
-// running or detached rows missing from observed become interrupted. Exited and
-// already interrupted history remains intact.
-func (s *Store) ReconcileHost(ctx context.Context, hostID HostID, observed []Session) error {
-	if err := validateHostID(hostID); err != nil {
+// ReconcileHost atomically records a host and replaces its active session
+// observations. Existing running or detached rows missing from observed become
+// interrupted. Exited and already interrupted history remains intact.
+func (s *Store) ReconcileHost(ctx context.Context, host Host, observed []Session) error {
+	hostValues, err := hostParams(host)
+	if err != nil {
 		return err
 	}
+	hostID := host.ID
 	params := make([]dbsqlc.UpsertSessionParams, 0, len(observed))
 	seen := make(map[SessionID]struct{}, len(observed))
 	for _, session := range observed {
@@ -236,6 +238,9 @@ func (s *Store) ReconcileHost(ctx context.Context, hostID HostID, observed []Ses
 	}
 	defer tx.Rollback() //nolint:errcheck // commit decides the transaction outcome
 	queries := s.queries.WithTx(tx)
+	if _, err := queries.UpsertHost(ctx, hostValues); err != nil {
+		return fmt.Errorf("storage: reconcile host %s: upsert host: %w", hostID, err)
+	}
 	if err := queries.InterruptActiveSessionsForHost(ctx, string(hostID)); err != nil {
 		return fmt.Errorf("storage: reconcile host %s: interrupt missing sessions: %w", hostID, err)
 	}

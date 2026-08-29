@@ -63,13 +63,7 @@ func (c *Catalog) Reconcile(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("daemon: reconcile host %s: %w", c.host.ID, err)
 	}
-	if _, err := c.store.UpsertHost(ctx, c.host); err != nil {
-		return fmt.Errorf("daemon: reconcile host %s: %w", c.host.ID, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("daemon: reconcile host %s: %w", c.host.ID, err)
-	}
-	if err := c.store.ReconcileHost(ctx, c.host.ID, observed); err != nil {
+	if err := c.store.ReconcileHost(ctx, c.host, observed); err != nil {
 		return fmt.Errorf("daemon: reconcile host %s sessions: %w", c.host.ID, err)
 	}
 	return nil
