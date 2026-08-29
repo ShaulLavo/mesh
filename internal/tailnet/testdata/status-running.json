@@ -1,0 +1,46 @@
+{
+  "Version": "1.90.4-t1a2b3c4d5-g012345678",
+  "TUN": true,
+  "BackendState": "Running",
+  "HaveNodeKey": true,
+  "AuthURL": "",
+  "TailscaleIPs": [
+    "100.101.102.103",
+    "fd7a:115c:a1e0::1"
+  ],
+  "Self": {
+    "ID": "n123456CNTRL",
+    "PublicKey": "nodekey:0123456789012345678901234567890123456789012345678901234567890123",
+    "HostName": "desktop",
+    "DNSName": "desktop.example.ts.net.",
+    "OS": "linux",
+    "TailscaleIPs": [
+      "100.101.102.103",
+      "fd7a:115c:a1e0::1"
+    ],
+    "Online": true
+  },
+  "Health": [],
+  "MagicDNSSuffix": "example.ts.net",
+  "Peer": {
+    "nodekey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
+      "ID": "n456789CNTRL",
+      "HostName": "pi",
+      "DNSName": "pi.example.ts.net.",
+      "OS": "linux",
+      "TailscaleIPs": ["100.64.0.9"],
+      "Online": false
+    },
+    "nodekey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+      "ID": "n789012CNTRL",
+      "HostName": "laptop",
+      "DNSName": "laptop.example.ts.net.",
+      "OS": "macOS",
+      "TailscaleIPs": [
+        "100.88.77.66",
+        "fd7a:115c:a1e0::2"
+      ],
+      "Online": true
+    }
+  }
+}

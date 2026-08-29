@@ -1,6 +1,6 @@
 # T06 — Host identity and Tailscale discovery
 
-**Status:** not started · **Blocked by:** nothing · **Owns:** `internal/identity/`,
+**Status:** complete · **Blocked by:** nothing · **Owns:** `internal/identity/`,
 `internal/tailnet/`
 
 ## Goal
@@ -42,9 +42,34 @@ func Self(ctx context.Context) (Peer, error)
 func Peers(ctx context.Context) ([]Peer, error)
 ```
 
-Both must fail *informatively* when Tailscale is not installed, not running, or
-logged out — those are the three states a user will actually hit, and "connection
-refused" is not an acceptable answer for any of them.
+## Implementation
+
+`identity.LoadOrCreate(stateDir)` stores `identity.key` in the supplied state
+directory. The file contains an Ed25519 private key as PKCS#8 PEM and has mode
+`0600`. The host ID is the public key encoded with unpadded URL-safe base64.
+Concurrent creators publish with a hard link, so they cannot replace a key that
+another process published first.
+
+`tailnet.Self` and `tailnet.Peers` run `tailscale status --json`. `NewClient`
+accepts a `CommandRunner` for daemon tests and fixture-driven tests. The runner
+keeps stdout separate from stderr, so a diagnostic cannot corrupt valid status
+JSON. The parser uses `Self` and `Peer` from the status document, trims the
+trailing dot from MagicDNS names, validates each address, and sorts peers by
+name.
+
+Callers can use `errors.Is` with these errors:
+
+- `tailnet.ErrNotInstalled`
+- `tailnet.ErrNotRunning`
+- `tailnet.ErrNotLoggedIn`
+
+Each error also tells the user how to recover. The fixtures preserve the fields
+and value shapes emitted by `tailscale status --json`; host keys, names, and
+addresses are sanitized.
+
+Both discovery calls must fail *informatively* when Tailscale is not installed,
+not running, or logged out. Those are the three states a user will actually hit,
+and "connection refused" is not an acceptable answer for any of them.
 
 ## Acceptance
 
@@ -54,10 +79,20 @@ refused" is not an acceptable answer for any of them.
   the problem and the fix.
 - Works on a machine with no Tailscale at all: `mesh local` must not degrade.
 
+Verified with:
+
+```bash
+go test -race -shuffle=on -count=50 ./internal/identity ./internal/tailnet
+go test -race ./...
+go vet ./...
+./scripts/verify.sh
+```
+
 ## Notes
 
-Tailscale is **not installed** on the dev desktop as of 2026-08-29. Fixture-driven
-tests are therefore mandatory, not optional.
+Tailscale is **not installed** on the dev desktop as of 2026-08-29. Tests clear
+`PATH` before exercising the default runner, so that case stays deterministic
+even on a machine that installs Tailscale later.
 
 ## Out of scope
 

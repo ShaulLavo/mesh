@@ -1,0 +1,11 @@
+{
+  "Version": "1.90.4-t1a2b3c4d5-g012345678",
+  "TUN": true,
+  "BackendState": "NeedsLogin",
+  "HaveNodeKey": false,
+  "AuthURL": "https://login.tailscale.com/a/example",
+  "TailscaleIPs": null,
+  "Self": null,
+  "Health": [],
+  "Peer": null
+}
