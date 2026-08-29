@@ -116,11 +116,14 @@ is lost. That is the right trade: the alternative is a session that never ends.
 
 `KindSnapshot` carries a session ID and rendered terminal bytes. It has no
 sequence offset. The preceding `session.attached` control reports the PTY output
-offset where live data resumes.
+offset where live data resumes. The complete repaint travels in one bounded
+frame; the client commits that resume offset only after receiving the whole
+frame.
 
 **Why:** snapshot bytes repaint terminal state, but the PTY never emitted them.
 Treating a snapshot as `KindData` would advance the client's resume offset by a
 made-up byte count and cause a gap after the next reconnect.
 
 **Cost:** relays must accept one more additive frame kind. They still forward the
-frame unchanged.
+frame unchanged. A rendered screen must fit within one protocol payload (just
+under 4 MiB); an attachment is rejected if it does not.

@@ -22,15 +22,11 @@ import (
 // the key is configurable and --raw turns interception off entirely.
 const DefaultDetachKey = 0x1d
 
-// defaultTail is how much recent output a fresh attach asks to be repainted
-// with when it has no sequence number to resume from.
-const defaultTail = 64 << 10
-
 // AttachOptions configures a client attachment.
 type AttachOptions struct {
 	SocketPath string
 	SessionID  string
-	// LastSeq resumes at an exact offset. Nil asks for a bounded tail instead.
+	// LastSeq resumes at an exact offset. Nil asks for a rendered snapshot.
 	LastSeq *uint64
 	// DetachKey is the byte that detaches. Zero means DefaultDetachKey.
 	DetachKey byte
@@ -54,6 +50,9 @@ type AttachResult struct {
 // implies anything about whether the remote process is still alive.
 func Attach(opts AttachOptions) (AttachResult, error) {
 	var res AttachResult
+	if opts.LastSeq != nil {
+		res.LastSeq = *opts.LastSeq
+	}
 
 	if opts.In == nil {
 		opts.In = os.Stdin
@@ -95,9 +94,6 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 		LastSeq:   opts.LastSeq,
 		Cols:      cols,
 		Rows:      rows,
-	}
-	if opts.LastSeq == nil {
-		attach.Tail = defaultTail
 	}
 	if err := send(func(w *protocol.Writer) error { return w.WriteControlMsg(attach) }); err != nil {
 		return res, fmt.Errorf("attach %s: %w", opts.SessionID, err)
@@ -155,6 +151,10 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 	// Output loop owns the return value: it is the only thing that knows
 	// whether the process exited or we merely walked away.
 	r := protocol.NewReader(conn)
+	var (
+		pendingSnapshot bool
+		snapshotSeq     uint64
+	)
 	for {
 		f, err := r.ReadFrame()
 		if err != nil {
@@ -171,10 +171,22 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 		}
 		switch f.Kind {
 		case protocol.KindData:
+			if pendingSnapshot {
+				return res, fmt.Errorf("session %s: received live output before announced snapshot", opts.SessionID)
+			}
 			if _, err := opts.Out.Write(f.Payload); err != nil {
 				return res, err
 			}
 			res.LastSeq = f.Seq + uint64(len(f.Payload))
+		case protocol.KindSnapshot:
+			if !pendingSnapshot {
+				return res, fmt.Errorf("session %s: received an unannounced snapshot", opts.SessionID)
+			}
+			if _, err := opts.Out.Write(f.Payload); err != nil {
+				return res, err
+			}
+			res.LastSeq = snapshotSeq
+			pendingSnapshot = false
 		case protocol.KindControl:
 			msg, err := protocol.DecodeControl(f.Payload)
 			if err != nil {
@@ -182,7 +194,12 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 			}
 			switch msg.Type {
 			case protocol.TypeAttached:
-				res.LastSeq = msg.Seq
+				if msg.Snapshot {
+					pendingSnapshot = true
+					snapshotSeq = msg.Seq
+				} else {
+					res.LastSeq = msg.Seq
+				}
 			case protocol.TypeExit:
 				res.Exited = true
 				if msg.ExitCode != nil {

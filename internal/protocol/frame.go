@@ -80,7 +80,7 @@ type Frame struct {
 	Kind    Kind
 	Session SessionID
 	Seq     uint64 // meaningful for KindData only
-	Payload []byte // control JSON, or PTY bytes for data/input
+	Payload []byte // control JSON, PTY bytes, input, or rendered snapshot bytes
 }
 
 // Writer serializes frames onto a stream.
@@ -172,9 +172,15 @@ func (fr *Reader) ReadFrame() (Frame, error) {
 		copy(f.Session[:], body[:sessionLen])
 		f.Seq = binary.BigEndian.Uint64(body[sessionLen : sessionLen+seqLen])
 		f.Payload = body[sessionLen+seqLen:]
-	case KindInput, KindSnapshot:
+	case KindInput:
 		if len(body) < sessionLen {
 			return f, errors.New("protocol: short input frame")
+		}
+		copy(f.Session[:], body[:sessionLen])
+		f.Payload = body[sessionLen:]
+	case KindSnapshot:
+		if len(body) < sessionLen {
+			return f, errors.New("protocol: short snapshot frame")
 		}
 		copy(f.Session[:], body[:sessionLen])
 		f.Payload = body[sessionLen:]

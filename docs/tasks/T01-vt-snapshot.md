@@ -1,7 +1,8 @@
 # T01 — Rendered screen snapshot on reattach
 
-**Status:** not started · **Blocked by:** nothing · **Owns:** `internal/terminal/`,
-`internal/worker/serve.go`
+**Status:** complete · **Blocked by:** nothing · **Owns:** `internal/terminal/`,
+`internal/worker/{worker,serve}.go`, `internal/cli/attach.go`,
+`integration/reattach_snapshot.sh`
 
 ## Goal
 
@@ -44,7 +45,7 @@ In `internal/worker`:
   output join up exactly — do not move the write outside it);
 - `Worker.Resize` forwards to the screen;
 - in `serve.go`, when `ring.Since(want)` returns `ok == false`, send
-  `Snapshot()` as the data payload and set `Control.Snapshot = true`;
+  `Snapshot()` as a `KindSnapshot` frame and set `Control.Snapshot = true`;
 - when a client attaches with no `LastSeq`, prefer the snapshot over the current
   bounded-tail behaviour. The `Tail` field stays for `mesh logs`-style uses.
 
@@ -68,3 +69,20 @@ between detach and reattach. Note whatever you skip at the bottom of this file.
 Pin `x/vt` to an exact version in `go.mod`. If `x/vt` cannot report enough state
 to rebuild the screen, say so here rather than working around it silently — the
 fallback is to keep raw replay and mark the gap explicitly to the user.
+
+Implemented with `github.com/charmbracelet/x/vt` pinned to
+`v0.0.0-20260828171018-3c30eef5e73e`. The wrapper restores the active screen,
+cell contents and attributes, cursor position/style/visibility, and alternate
+screen state. Snapshot bytes have their own protocol kind, so repainting does
+not invent PTY sequence offsets. Each snapshot is one bounded frame, and the
+client commits its announced resume offset only after receiving that frame in
+full.
+
+Verified with terminal equivalence tests, worker ordering and resume tests, a
+truncated-snapshot client test, the race detector, and
+`integration/reattach_snapshot.sh` alongside all existing integrations.
+
+Still out of scope: scrollback history, mouse and other private terminal modes,
+palette/default-color restoration, and semantic reflow after resize. A snapshot
+must also fit in one protocol payload (4 MiB including its session header);
+oversized terminal dimensions can therefore make an attachment fail.

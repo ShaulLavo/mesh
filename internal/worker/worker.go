@@ -16,6 +16,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
+	terminalstate "github.com/shaul/mesh/internal/terminal"
 )
 
 // ringSize is how much recent output a session keeps for replay. Past this,
@@ -63,11 +64,12 @@ type Config struct {
 
 // Worker owns one PTY and serves clients over a Unix socket.
 type Worker struct {
-	cfg  Config
-	sid  protocol.SessionID
-	pty  xpty.Pty
-	cmd  *exec.Cmd
-	ring *session.Ring
+	cfg    Config
+	sid    protocol.SessionID
+	pty    xpty.Pty
+	cmd    *exec.Cmd
+	ring   *session.Ring
+	screen terminalstate.Screen
 
 	// mu orders ring delivery, attachment ownership, and shutdown. A client
 	// attaching mid-write cannot miss bytes, and finish cannot race a new writer
@@ -94,11 +96,11 @@ type attachment struct {
 	queue chan outboundFrame
 	done  chan struct{}
 
-	queueMu    sync.Mutex
-	dataFrames int
-	dataBytes  int
-	closed     bool
-	closeOnce  sync.Once
+	queueMu       sync.Mutex
+	payloadFrames int
+	payloadBytes  int
+	closed        bool
+	closeOnce     sync.Once
 }
 
 type outboundFrame struct {
@@ -133,29 +135,39 @@ func (a *attachment) startLocked(w *Worker) {
 // enqueueData takes its own copy because the PTY pump reuses its read buffer.
 // It never waits for the socket or for queue capacity.
 func (a *attachment) enqueueData(seq uint64, payload []byte) bool {
-	if len(payload) == 0 {
+	return a.enqueuePayload(protocol.KindData, seq, payload, outboundDataFrameSize, false)
+}
+
+func (a *attachment) enqueuePayload(kind protocol.Kind, seq uint64, payload []byte, maxFrameSize int, allowEmpty bool) bool {
+	if len(payload) == 0 && !allowEmpty {
 		return true
 	}
 
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
-	if a.closed || len(payload) > outboundDataFrameSize || a.dataFrames >= outboundQueueFrameLimit || len(payload) > outboundQueueByteLimit-a.dataBytes {
+	if a.closed || len(payload) > maxFrameSize || a.payloadFrames >= outboundQueueFrameLimit || len(payload) > outboundQueueByteLimit-a.payloadBytes {
 		return false
 	}
 
 	f := outboundFrame{
-		kind:    protocol.KindData,
+		kind:    kind,
 		seq:     seq,
 		payload: bytes.Clone(payload),
 	}
 	select {
 	case a.queue <- f:
-		a.dataFrames++
-		a.dataBytes += len(payload)
+		a.payloadFrames++
+		a.payloadBytes += len(payload)
 		return true
 	default:
 		return false
 	}
+}
+
+func (a *attachment) enqueueSnapshot(payload []byte) bool {
+	// A snapshot is one frame so a client commits its resume sequence only
+	// after Reader has received the complete repaint.
+	return a.enqueuePayload(protocol.KindSnapshot, 0, payload, protocol.MaxPayload-len(a.sid), true)
 }
 
 func (a *attachment) enqueueDataChunks(seq uint64, payload []byte) bool {
@@ -206,7 +218,7 @@ func (a *attachment) writeLoop(w *Worker) {
 		select {
 		case f := <-a.queue:
 			err := a.write(f)
-			a.releaseData(f)
+			a.releasePayload(f)
 			if err != nil || f.closeAfter {
 				return
 			}
@@ -216,13 +228,13 @@ func (a *attachment) writeLoop(w *Worker) {
 	}
 }
 
-func (a *attachment) releaseData(f outboundFrame) {
-	if f.kind != protocol.KindData {
+func (a *attachment) releasePayload(f outboundFrame) {
+	if f.kind != protocol.KindData && f.kind != protocol.KindSnapshot {
 		return
 	}
 	a.queueMu.Lock()
-	a.dataFrames--
-	a.dataBytes -= len(f.payload)
+	a.payloadFrames--
+	a.payloadBytes -= len(f.payload)
 	a.queueMu.Unlock()
 }
 
@@ -235,6 +247,8 @@ func (a *attachment) write(f outboundFrame) error {
 		return a.w.WriteControlMsg(f.control)
 	case protocol.KindData:
 		return a.w.WriteData(a.sid, f.seq, f.payload)
+	case protocol.KindSnapshot:
+		return a.w.WriteSnapshot(a.sid, f.payload)
 	default:
 		return fmt.Errorf("worker: unsupported outbound frame kind %d", f.kind)
 	}
@@ -291,6 +305,7 @@ func Run(cfg Config) (int, error) {
 		pty:      pty,
 		cmd:      cmd,
 		ring:     session.NewRing(ringSize),
+		screen:   terminalstate.NewScreen(cfg.Cols, cfg.Rows),
 		exited:   make(chan struct{}),
 		pumpDone: make(chan struct{}),
 		attached: make(chan struct{}),
@@ -385,6 +400,7 @@ func (w *Worker) pump() {
 				return
 			}
 			seq := w.ring.Head()
+			_, _ = w.screen.Write(buf[:n])
 			_, _ = w.ring.Write(buf[:n])
 			if c := w.client; c != nil {
 				if !c.enqueueData(seq, buf[:n]) {
@@ -397,6 +413,19 @@ func (w *Worker) pump() {
 			return
 		}
 	}
+}
+
+func (w *Worker) resize(cols, rows int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.resizeLocked(cols, rows)
+}
+
+// resizeLocked keeps the PTY and rendered screen at the same dimensions.
+// w.mu must be held so resize stays ordered with PTY output.
+func (w *Worker) resizeLocked(cols, rows int) {
+	_ = w.pty.Resize(cols, rows)
+	w.screen.Resize(cols, rows)
 }
 
 // finish records the exit code once and tells the attached client.

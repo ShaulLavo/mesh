@@ -49,10 +49,6 @@ func (w *Worker) serve(conn net.Conn) {
 	}
 	c := newAttachment(conn, w.sid)
 
-	if msg.Cols > 0 && msg.Rows > 0 {
-		_ = w.pty.Resize(msg.Cols, msg.Rows)
-	}
-
 	// Attach under the same lock the PTY pump uses, so the replay we compute
 	// and the live stream that follows it join up exactly.
 	w.mu.Lock()
@@ -60,37 +56,43 @@ func (w *Worker) serve(conn net.Conn) {
 		w.mu.Unlock()
 		return
 	}
+	if msg.Cols > 0 && msg.Rows > 0 {
+		w.resizeLocked(msg.Cols, msg.Rows)
+	}
 	if prev := w.client; prev != nil {
 		w.dropLocked(prev, protocol.ReasonStolen)
 	}
 
-	// A client that knows where it left off resumes exactly; one attaching
-	// fresh asks for a bounded tail so reattaching does not dump megabytes of
-	// scrollback into the terminal.
-	var want uint64
+	// A client that knows where it left off resumes exactly. A fresh attach or
+	// an expired replay position gets a rendered screen followed by live output
+	// at the current head.
+	var (
+		want       uint64
+		replay     []byte
+		snapshot   []byte
+		isSnapshot bool
+	)
 	if msg.LastSeq != nil {
 		want = *msg.LastSeq
-	} else {
-		head := w.ring.Head()
-		if tail := uint64(max(msg.Tail, 0)); tail < head {
-			want = head - tail
+		var ok bool
+		replay, _, ok = w.ring.Since(want)
+		if !ok {
+			want = w.ring.Head()
+			snapshot = w.screen.Snapshot()
+			isSnapshot = true
 		}
-	}
-	replay, _, ok := w.ring.Since(want)
-	if !ok {
-		// The client's position has fallen out of the replay window. Send the
-		// whole window and say so; a vt-rendered screen snapshot replaces this
-		// once terminal state tracking lands.
-		want = w.ring.Tail()
-		replay, _, _ = w.ring.Since(want)
+	} else {
+		want = w.ring.Head()
+		snapshot = w.screen.Snapshot()
+		isSnapshot = true
 	}
 
 	if !c.enqueueControl(protocol.Control{
 		Type:      protocol.TypeAttached,
 		SessionID: w.cfg.ID,
 		Seq:       want,
-		Snapshot:  !ok,
-	}, false) || !c.enqueueDataChunks(want, replay) {
+		Snapshot:  isSnapshot,
+	}, false) || (isSnapshot && !c.enqueueSnapshot(snapshot)) || !c.enqueueDataChunks(want, replay) {
 		w.mu.Unlock()
 		c.close()
 		return
@@ -145,7 +147,7 @@ func (w *Worker) serve(conn net.Conn) {
 			switch msg.Type {
 			case protocol.TypeResize:
 				if msg.Cols > 0 && msg.Rows > 0 {
-					_ = w.pty.Resize(msg.Cols, msg.Rows)
+					w.resize(msg.Cols, msg.Rows)
 				}
 			case protocol.TypeSignal:
 				w.signal(msg.Signal)

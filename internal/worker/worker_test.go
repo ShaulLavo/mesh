@@ -15,7 +15,193 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
+	terminalstate "github.com/shaul/mesh/internal/terminal"
 )
+
+func TestFreshAttachReceivesSnapshotThenLiveSequence(t *testing.T) {
+	sid, err := protocol.NewSessionID("SNAP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pty := newPipePTY()
+	defer pty.Close()
+	screen := terminalstate.NewScreen(20, 6)
+	output := []byte("history\r\n\x1b[?1049h\x1b[2J\x1b[3;4H\x1b[31mNOW\x1b[0m")
+	if _, err := screen.Write(output); err != nil {
+		t.Fatal(err)
+	}
+	ring := session.NewRing(ringSize)
+	_, _ = ring.Write(output)
+	w := &Worker{
+		cfg:      Config{ID: sid.String()},
+		sid:      sid,
+		pty:      pty,
+		ring:     ring,
+		screen:   screen,
+		exited:   make(chan struct{}),
+		attached: make(chan struct{}),
+	}
+
+	client, server := net.Pipe()
+	defer client.Close()
+	go w.serve(server)
+	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
+		Type:      protocol.TypeAttach,
+		SessionID: sid.String(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := protocol.NewReader(client)
+	f, err := r.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attached, err := protocol.DecodeControl(f.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := uint64(len(output))
+	if f.Kind != protocol.KindControl || attached.Type != protocol.TypeAttached || !attached.Snapshot || attached.Seq != head {
+		t.Fatalf("attach response = kind %v, message %+v", f.Kind, attached)
+	}
+
+	wantSnapshot := screen.Snapshot()
+	f, err = r.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Kind != protocol.KindSnapshot || f.Session != sid {
+		t.Fatalf("snapshot frame = %+v", f)
+	}
+	if !bytes.Equal(f.Payload, wantSnapshot) {
+		t.Fatalf("snapshot = %q, want %q", f.Payload, wantSnapshot)
+	}
+
+	live := []byte("!")
+	w.mu.Lock()
+	_, _ = w.ring.Write(live)
+	_, _ = w.screen.Write(live)
+	if !w.client.enqueueData(head, live) {
+		w.mu.Unlock()
+		t.Fatal("queue live output")
+	}
+	w.mu.Unlock()
+
+	f, err = r.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Kind != protocol.KindData || f.Seq != head || !bytes.Equal(f.Payload, live) {
+		t.Fatalf("live frame = %+v", f)
+	}
+}
+
+func TestExpiredAttachReceivesSnapshotAtCurrentHead(t *testing.T) {
+	sid, err := protocol.NewSessionID("GAP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pty := newPipePTY()
+	defer pty.Close()
+	ring := session.NewRing(ringSize)
+	output := make([]byte, ringSize+1)
+	_, _ = ring.Write(output)
+	screen := &recordingScreen{output: []byte("current screen")}
+	w := &Worker{
+		cfg:      Config{ID: sid.String()},
+		sid:      sid,
+		pty:      pty,
+		ring:     ring,
+		screen:   screen,
+		exited:   make(chan struct{}),
+		attached: make(chan struct{}),
+	}
+
+	client, server := net.Pipe()
+	defer client.Close()
+	go w.serve(server)
+	lastSeq := uint64(0)
+	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
+		Type:      protocol.TypeAttach,
+		SessionID: sid.String(),
+		LastSeq:   &lastSeq,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := protocol.NewReader(client)
+	f, err := r.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attached, err := protocol.DecodeControl(f.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !attached.Snapshot || attached.Seq != uint64(len(output)) {
+		t.Fatalf("attach response = %+v", attached)
+	}
+	f, err = r.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Kind != protocol.KindSnapshot || !bytes.Equal(f.Payload, screen.output) {
+		t.Fatalf("snapshot frame = %+v", f)
+	}
+}
+
+func TestResizeUpdatesPTYAndRenderedScreen(t *testing.T) {
+	pty := newPipePTY()
+	defer pty.Close()
+	screen := &recordingScreen{}
+	w := &Worker{pty: pty, screen: screen}
+
+	w.resize(132, 43)
+
+	cols, rows, err := pty.Size()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cols != 132 || rows != 43 {
+		t.Fatalf("PTY size = %dx%d, want 132x43", cols, rows)
+	}
+	if screen.cols != 132 || screen.rows != 43 {
+		t.Fatalf("screen size = %dx%d, want 132x43", screen.cols, screen.rows)
+	}
+}
+
+func TestPumpFeedsRenderedScreenAndReplayRing(t *testing.T) {
+	pty := newPipePTY()
+	defer pty.Close()
+	screen := &recordingScreen{}
+	w := &Worker{
+		pty:      pty,
+		ring:     session.NewRing(ringSize),
+		screen:   screen,
+		pumpDone: make(chan struct{}),
+	}
+	go w.pump()
+
+	output := []byte("render me")
+	if _, err := pty.emit(output); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return bytes.Equal(screen.output, output)
+	})
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !bytes.Equal(screen.output, output) {
+		t.Fatalf("screen output = %q, want %q", screen.output, output)
+	}
+	replay, _, ok := w.ring.Since(0)
+	if !ok || !bytes.Equal(replay, output) {
+		t.Fatalf("ring replay = %q, ok %v", replay, ok)
+	}
+}
 
 func TestPumpDisownsSlowClientWithoutBlockingPTY(t *testing.T) {
 	const slowClientQueueBudget = 4 << 20
@@ -32,6 +218,7 @@ func TestPumpDisownsSlowClientWithoutBlockingPTY(t *testing.T) {
 		sid:      sid,
 		pty:      pty,
 		ring:     session.NewRing(ringSize),
+		screen:   discardScreen{},
 		exited:   make(chan struct{}),
 		pumpDone: make(chan struct{}),
 		attached: make(chan struct{}),
@@ -200,6 +387,27 @@ func TestAttachmentReservesLiveFrameAfterFullReplay(t *testing.T) {
 	}
 	if !a.enqueueControl(protocol.Control{Type: protocol.TypeExit}, true) {
 		t.Fatal("control frame rejected at byte limit")
+	}
+}
+
+func TestAttachmentKeepsSnapshotInOneBoundedFrame(t *testing.T) {
+	sid, err := protocol.NewSessionID("SNAP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	maxSnapshot := protocol.MaxPayload - len(sid)
+	a := newAttachment(server, sid)
+	if !a.enqueueSnapshot(make([]byte, maxSnapshot)) {
+		t.Fatal("maximum-size snapshot was rejected")
+	}
+
+	oversized := newAttachment(server, sid)
+	if oversized.enqueueSnapshot(make([]byte, maxSnapshot+1)) {
+		t.Fatal("snapshot larger than one protocol payload was accepted")
 	}
 }
 
@@ -427,6 +635,9 @@ func waitFor(t *testing.T, condition func() bool) {
 type pipePTY struct {
 	r *io.PipeReader
 	w *io.PipeWriter
+
+	mu            sync.Mutex
+	width, height int
 }
 
 func newPipePTY() *pipePTY {
@@ -442,17 +653,44 @@ func (p *pipePTY) Close() error {
 	_ = p.w.Close()
 	return err
 }
-func (p *pipePTY) Fd() uintptr                          { return 0 }
-func (p *pipePTY) Resize(width, height int) error       { return nil }
-func (p *pipePTY) Size() (width, height int, err error) { return 80, 24, nil }
-func (p *pipePTY) Name() string                         { return "pipe" }
-func (p *pipePTY) Start(*exec.Cmd) error                { return nil }
+func (p *pipePTY) Fd() uintptr { return 0 }
+func (p *pipePTY) Resize(width, height int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.width, p.height = width, height
+	return nil
+}
+func (p *pipePTY) Size() (width, height int, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.width, p.height, nil
+}
+func (p *pipePTY) Name() string          { return "pipe" }
+func (p *pipePTY) Start(*exec.Cmd) error { return nil }
 
 type writeNotifyConn struct {
 	net.Conn
 	entered chan struct{}
 	once    sync.Once
 }
+
+type discardScreen struct{}
+
+func (discardScreen) Write(p []byte) (int, error) { return len(p), nil }
+func (discardScreen) Resize(int, int)             {}
+func (discardScreen) Snapshot() []byte            { return nil }
+
+type recordingScreen struct {
+	output     []byte
+	cols, rows int
+}
+
+func (s *recordingScreen) Write(p []byte) (int, error) {
+	s.output = append(s.output, p...)
+	return len(p), nil
+}
+func (s *recordingScreen) Resize(cols, rows int) { s.cols, s.rows = cols, rows }
+func (s *recordingScreen) Snapshot() []byte      { return bytes.Clone(s.output) }
 
 func (c *writeNotifyConn) Write(p []byte) (int, error) {
 	c.once.Do(func() { close(c.entered) })

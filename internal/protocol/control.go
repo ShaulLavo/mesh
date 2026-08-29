@@ -33,14 +33,14 @@ type Control struct {
 	SessionID string `json:"sessionId,omitempty"`
 
 	// Attach
-	LastSeq *uint64 `json:"lastSeq,omitempty"` // exact resume point
-	Tail    int     `json:"tail,omitempty"`    // if LastSeq is nil, trailing bytes wanted
+	LastSeq *uint64 `json:"lastSeq,omitempty"` // exact resume point; nil requests a screen snapshot
+	Tail    int     `json:"tail,omitempty"`    // trailing bytes wanted by non-attach consumers
 	Cols    int     `json:"cols,omitempty"`
 	Rows    int     `json:"rows,omitempty"`
 
 	// Attached
 	Seq      uint64 `json:"seq,omitempty"`      // next byte offset the client will receive
-	Snapshot bool   `json:"snapshot,omitempty"` // replay window expired; screen was repainted
+	Snapshot bool   `json:"snapshot,omitempty"` // one rendered screen frame follows before live data
 
 	// Exit / detach
 	ExitCode *int   `json:"exitCode,omitempty"`
