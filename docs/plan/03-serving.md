@@ -140,9 +140,25 @@ speaks plain HTTP on localhost. The DNS-01 plumbing does not disappear, because
 the private `*.mesh.shaulavo.dev` wildcard still needs it (T12), but T13 gets
 noticeably smaller.
 
-One thing worth settling before T13: if the site ends up hosted somewhere else
-entirely rather than on the VPS, there is no port conflict and the edge can hold
-443 after all. Same code either way, different deployment.
+Where the site will live is undecided as of 2026-08-29. The candidates map onto
+the two arrangements cleanly, so T13 is not blocked on choosing:
+
+| Host | Where the site runs | What the Mesh edge does |
+|---|---|---|
+| Coolify | on the VPS | plain HTTP behind Coolify's Traefik, which owns 443 |
+| Cloudflare Workers | off the VPS | edge can own 443 |
+| Vercel | off the VPS | edge can own 443 |
+
+One practical note if it turns out to be Coolify: it brings Docker, Postgres,
+Redis and Traefik onto the same VPS that runs the Mesh daemon and whatever
+terminal sessions are attached to it. Check the box has headroom before
+committing, because a session dying under memory pressure is exactly the failure
+Mesh exists to prevent.
+
+If it turns out to be Cloudflare, the public Mesh routes could sit behind
+Cloudflare too, which hides the VPS address and absorbs abuse. The tradeoff is
+that Cloudflare terminates TLS and therefore sees that traffic. Worth deciding
+deliberately rather than by default.
 
 ## Tasks
 
