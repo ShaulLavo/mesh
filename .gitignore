@@ -1,0 +1,5 @@
+/mesh
+/dist/
+*.db
+*.db-wal
+*.db-shm
