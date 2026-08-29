@@ -1,0 +1,87 @@
+# Decision log
+
+Decisions that are settled. Each says what we chose and what it costs, so nobody
+has to rediscover the tradeoff. Reopen one only with a reason the "cost" line does
+not already cover.
+
+## D1 — Sequence numbers are absolute byte offsets
+
+`seq` is the count of PTY bytes emitted since the session started. Resume is a
+slice index into the replay ring; "I have everything before N" is the entire
+client-side resume state.
+
+**Cost:** output cannot be rebatched retroactively per-chunk, which we never want.
+**Alternative rejected:** per-chunk counters, which freeze the original batching
+into the protocol forever.
+
+## D2 — One wire format for every transport
+
+`internal/protocol` is transport agnostic: `kind:1 | len:4 | payload`, where data
+and input payloads carry `session:8` (and data carries `seq:8`). The Unix socket
+and the future WebSocket carry identical frames.
+
+**Why:** it makes the daemon a relay instead of a translator, so step 2 really is
+plumbing rather than a rewrite in a plumbing costume.
+**Cost:** 8 bytes of session header on every local frame. Irrelevant.
+
+## D3 — Single attacher, steal on attach
+
+A second client attaching evicts the first, which is told `reason: stolen`.
+
+**Cost:** no mirrored terminals, no pair debugging. Revisit when someone actually
+wants it; multi-attach forces a resize policy we do not need yet.
+
+## D4 — ctrl+] detaches, and it is configurable
+
+Default `0x1d`, the telnet escape. `--detach-key` accepts `ctrl+]`, `^a`, `none`.
+`none` (`--raw`) passes every byte through untouched.
+
+**Why not ctrl+\\:** it is SIGQUIT, i.e. the dump-all-goroutine-stacks button, which
+is exactly what you want on a wedged Go daemon.
+**Cost:** vim's tag jump inside a Mesh session needs the key rebound, or `none`.
+
+## D5 — Signals travel out of band
+
+`mesh sig <id> <signal>` opens a one-shot control connection that does not attach
+and does not disturb the current attacher. Delivered to the process group.
+
+**Why:** it means intercepting any key locally costs the session nothing.
+
+## D6 — `mesh kill` means hangup, then insist
+
+SIGHUP to the process group, 5s grace, close the PTY master, SIGKILL.
+
+**Why not SIGTERM:** interactive shells ignore it, so `kill` would silently do
+nothing. Killing a session must always mean the session is gone.
+
+## D7 — The worker records its own death
+
+Each session directory holds `meta.json` with state, exit code, and the kernel
+boot ID. The worker writes it; the daemon reconciles it into SQLite on startup.
+
+**Why:** a session's fate must survive the daemon being down, and one SQLite
+writer avoids lock contention between many workers.
+**Consequence:** state is derived, not stored. Socket answering means `running`;
+socket gone with no recorded exit means `interrupted`; boot ID mismatch means the
+machine rebooted underneath it.
+
+## D8 — Detachment is `Setsid`, not systemd
+
+The worker is spawned with `SysProcAttr{Setsid: true}`, writes its socket into its
+own state dir, and is found again by scanning that directory.
+
+**Why not `systemd-run --user --scope`:** macOS needs the same mechanism, and a
+directory scan is one code path for both.
+
+## D9 — No daemon in commit 1
+
+`mesh local` spawns and finds workers directly. The daemon arrives as a
+coordinator over a mechanism that already works.
+
+**Why:** it proves invariant 3 by construction. Survival cannot depend on the
+daemon if there is no daemon.
+
+## D10 — Cobra and Fang wait for step 3
+
+Commit 1 uses a hand-rolled dispatcher. The real CLI surface is where Cobra earns
+its keep; four subcommands do not need a framework.
