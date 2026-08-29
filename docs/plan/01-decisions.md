@@ -85,3 +85,29 @@ daemon if there is no daemon.
 
 Commit 1 uses a hand-rolled dispatcher. The real CLI surface is where Cobra earns
 its keep; four subcommands do not need a framework.
+
+## D11 — Attach position depends on how you got there
+
+Landed with T02. A brand new session attaches from sequence zero, because a fast
+command can finish before the spawn readiness probe returns and its output would
+otherwise be lost. Resume and explicit attach keep the bounded tail.
+
+**Cost:** a worker whose command exits before anyone attaches lingers up to 5s
+waiting for that first client, then exits on a timer. Scripting many fast
+commands leaves short-lived workers behind for a few seconds each.
+
+**Consequence for T01:** the snapshot path replaces the bounded tail, not the
+sequence-zero path. A new session has no screen to snapshot.
+
+## D12 — The worker closes its own copy of the PTY slave
+
+`xpty` keeps the parent's slave descriptor open after `Start`. The worker closes
+it, so the master reports EOF when the child closes its descriptors.
+
+**Why:** without this, a backgrounded descendant that inherited the slave keeps
+the worker alive after the session leader exits, and the session never reports
+`exited`. After the leader exits the pump gets 250ms to drain buffered output,
+then the worker closes the PTY regardless.
+
+**Cost:** output written by a descendant more than 250ms after the leader exits
+is lost. That is the right trade: the alternative is a session that never ends.
