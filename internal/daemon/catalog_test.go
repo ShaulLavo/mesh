@@ -529,13 +529,15 @@ type catalogStoreStub struct {
 	listCalls      int
 	getCalls       int
 	events         []string
+	host           storage.Host
 	observed       []storage.Session
 }
 
-func (s *catalogStoreStub) ReconcileHost(_ context.Context, _ storage.Host, observed []storage.Session) error {
+func (s *catalogStoreStub) ReconcileHost(_ context.Context, host storage.Host, observed []storage.Session) error {
 	s.upsertCalls++
 	s.reconcileCalls++
 	s.events = append(s.events, "reconcile-host")
+	s.host = cloneHost(host)
 	s.observed = append([]storage.Session(nil), observed...)
 	return nil
 }
@@ -558,11 +560,35 @@ func newCatalogForTest(t *testing.T, sessionsDir string, store CatalogStore, pro
 		Store:       store,
 		Probe:       probe,
 		BootID:      bootID,
+		Now:         func() time.Time { return catalogTestTime },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return catalog
+}
+
+func TestCatalogReconcileRefreshesHostObservationTime(t *testing.T) {
+	store := &catalogStoreStub{}
+	want := catalogTestTime.Add(90 * time.Minute)
+	catalog, err := NewCatalog(CatalogConfig{
+		SessionsDir: t.TempDir(),
+		Host:        catalogTestHost(catalogTestTime),
+		Store:       store,
+		Probe:       probeFunc(func(context.Context, string) error { return nil }),
+		BootID:      func() string { return "boot-a" },
+		Now:         func() time.Time { return want },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := catalog.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !store.host.LastSeenAt.Equal(want) {
+		t.Fatalf("last seen time = %v, want %v", store.host.LastSeenAt, want)
+	}
 }
 
 func catalogTestHost(lastSeenAt time.Time) storage.Host {

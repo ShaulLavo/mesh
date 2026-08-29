@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/session"
@@ -24,12 +25,16 @@ type Catalog struct {
 	store       CatalogStore
 	probe       WorkerProbe
 	bootID      func() string
+	now         func() time.Time
 
 	reconcileGate chan struct{}
 }
 
 // NewCatalog validates and retains the boundaries used by a local catalog.
 func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
 	if err := validateCatalogConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -39,6 +44,7 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		store:         cfg.Store,
 		probe:         cfg.Probe,
 		bootID:        cfg.BootID,
+		now:           cfg.Now,
 		reconcileGate: make(chan struct{}, 1),
 	}, nil
 }
@@ -63,7 +69,12 @@ func (c *Catalog) Reconcile(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("daemon: reconcile host %s: %w", c.host.ID, err)
 	}
-	if err := c.store.ReconcileHost(ctx, c.host, observed); err != nil {
+	host := cloneHost(c.host)
+	host.LastSeenAt = c.now().UTC()
+	if host.LastSeenAt.IsZero() || host.LastSeenAt.UnixMilli() < 0 {
+		return fmt.Errorf("daemon: reconcile host %s: clock returned invalid observation time", host.ID)
+	}
+	if err := c.store.ReconcileHost(ctx, host, observed); err != nil {
 		return fmt.Errorf("daemon: reconcile host %s sessions: %w", c.host.ID, err)
 	}
 	return nil

@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/storage"
@@ -28,6 +29,7 @@ type CatalogConfig struct {
 	Store       CatalogStore
 	Probe       WorkerProbe
 	BootID      func() string
+	Now         func() time.Time
 }
 
 // WorkerConnector resolves and opens one worker without exposing filesystem
