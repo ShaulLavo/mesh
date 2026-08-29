@@ -41,6 +41,11 @@ usage:
 inside a session, ctrl+] detaches and leaves everything running.
 `
 
+const (
+	daemonCreateTimeout = 40 * time.Second
+	daemonQueryTimeout  = 500 * time.Millisecond
+)
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
@@ -177,13 +182,15 @@ func runLocal(args []string) error {
 			return stateErr
 		}
 		cols, rows := terminalSize(os.Stdout)
-		id, createErr := cli.CreateViaDaemon(context.Background(), cli.DaemonCreateOptions{
+		createCtx, cancelCreate := context.WithTimeout(context.Background(), daemonCreateTimeout)
+		id, createErr := cli.CreateViaDaemon(createCtx, cli.DaemonCreateOptions{
 			SocketPath: meshdaemon.SocketPath(stateDir),
 			Command:    command,
 			Cwd:        cwd,
 			Cols:       cols,
 			Rows:       rows,
 		})
+		cancelCreate()
 		switch {
 		case createErr == nil:
 			s = cli.Session{Meta: worker.Meta{ID: id}, Alive: true}
@@ -286,7 +293,9 @@ func runList(args []string) error {
 		if err != nil {
 			return err
 		}
-		sessions, err := cli.ListViaDaemon(context.Background(), meshdaemon.SocketPath(stateDir))
+		listCtx, cancelList := context.WithTimeout(context.Background(), daemonQueryTimeout)
+		sessions, err := cli.ListViaDaemon(listCtx, meshdaemon.SocketPath(stateDir))
+		cancelList()
 		if err != nil {
 			return err
 		}
