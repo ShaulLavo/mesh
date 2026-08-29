@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // Control message type names.
@@ -14,7 +15,15 @@ const (
 	TypeResize   = "terminal.resize"
 	TypeSignal   = "session.signal"
 	TypeKill     = "session.kill"
-	TypeError    = "error"
+	TypeCreate   = "session.create"
+	TypeCreated  = "session.created"
+	TypeList     = "session.list"
+	TypeListed   = "session.listed"
+	TypeHostInfo = "host.info"
+
+	TypeHostInfoResult = "host.info.result"
+	TypeOK             = "ok"
+	TypeError          = "error"
 )
 
 // Reasons a worker ends an attachment.
@@ -25,6 +34,26 @@ const (
 	ReasonKilled = "killed" // the session was ended on request
 )
 
+// SessionInfo is the transport representation of durable session metadata.
+type SessionInfo struct {
+	ID                 string     `json:"id"`
+	HostID             string     `json:"hostId"`
+	Command            []string   `json:"command"`
+	Cwd                string     `json:"cwd"`
+	State              string     `json:"state"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	LastAttachedAt     *time.Time `json:"lastAttachedAt,omitempty"`
+	ExitCode           *int       `json:"exitCode,omitempty"`
+	LastOutputSequence uint64     `json:"lastOutputSequence"`
+}
+
+// HostInfo is the transport representation of one daemon's identity.
+type HostInfo struct {
+	ID            string `json:"id"`
+	MeshIdentity  string `json:"meshIdentity"`
+	TailscaleName string `json:"tailscaleName,omitempty"`
+}
+
 // Control is the envelope for every JSON control message. Unused fields are
 // omitted so messages stay readable on the wire during debugging.
 type Control struct {
@@ -32,11 +61,13 @@ type Control struct {
 	RequestID string `json:"requestId,omitempty"`
 	SessionID string `json:"sessionId,omitempty"`
 
-	// Attach
-	LastSeq *uint64 `json:"lastSeq,omitempty"` // exact resume point; nil requests a screen snapshot
-	Tail    int     `json:"tail,omitempty"`    // trailing bytes wanted by non-attach consumers
-	Cols    int     `json:"cols,omitempty"`
-	Rows    int     `json:"rows,omitempty"`
+	// Attach / create
+	LastSeq *uint64  `json:"lastSeq,omitempty"` // exact resume point; nil requests a screen snapshot
+	Tail    int      `json:"tail,omitempty"`    // trailing bytes wanted by non-attach consumers
+	Cols    int      `json:"cols,omitempty"`
+	Rows    int      `json:"rows,omitempty"`
+	Command []string `json:"command,omitempty"`
+	Cwd     string   `json:"cwd,omitempty"`
 
 	// Attached
 	Seq      uint64 `json:"seq,omitempty"`      // next byte offset the client will receive
@@ -48,6 +79,10 @@ type Control struct {
 
 	// Signal
 	Signal string `json:"signal,omitempty"`
+
+	// List / host info
+	Sessions []SessionInfo `json:"sessions,omitempty"`
+	Host     *HostInfo     `json:"host,omitempty"`
 
 	// Error
 	Message string `json:"message,omitempty"`
