@@ -31,10 +31,11 @@ go test -race ./...
 go build -o mesh ./cmd/mesh
 ./integration/survives_client_death.sh    # the contract, end to end
 ./integration/detach_and_steal.sh
+./integration/flushes_on_exit.sh
 ```
 
 Integration scripts set `MESH_STATE_DIR` to a temp dir. Any change to session
-lifecycle, attach, or kill must keep both scripts passing, and behaviour worth
+lifecycle, attach, or kill must keep all scripts passing, and behaviour worth
 protecting gets a new script rather than a comment saying it works.
 
 ## Layout

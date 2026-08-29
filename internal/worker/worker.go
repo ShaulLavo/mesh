@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -21,20 +22,43 @@ import (
 // a reattaching client gets a gap instead of a seamless continuation.
 const ringSize = 4 << 20
 
-// clientWriteTimeout bounds how long the PTY reader will wait on a stuck
-// client before disowning it. Terminal output must never be held hostage by
-// one wedged socket.
-const clientWriteTimeout = 5 * time.Second
+const (
+	// A full PTY read is 32 KiB, so the byte limit normally wins after 128
+	// frames. The frame limit also bounds queues made of tiny writes. Control
+	// frames use reserved slots and never compete with terminal data.
+	outboundQueueFrameLimit = 256
+	outboundControlReserve  = 8
+	outboundDataFrameSize   = 32 << 10
+	// A full replay consumes ringSize. One extra PTY frame lets live output join
+	// that replay before the first queued frame finishes writing.
+	outboundQueueByteLimit = ringSize + outboundDataFrameSize
+
+	// Only the attachment writer waits on the socket, so this deadline cannot
+	// delay PTY reads.
+	attachmentWriteTimeout = 5 * time.Second
+	// A per-frame deadline alone lets many slow writes extend shutdown for
+	// minutes. Bound the complete flush too.
+	finalFlushTimeout = 5 * time.Second
+	// A command can exit before Spawn's readiness probe becomes the real attach.
+	// Keep the completed worker available long enough for that second dial.
+	firstAttachTimeout = 5 * time.Second
+
+	// After the session leader exits, the pump gets a short window to consume
+	// bytes already buffered by the PTY. A descendant that inherited the slave
+	// cannot keep the worker alive beyond this window.
+	ptyDrainTimeout = 250 * time.Millisecond
+)
 
 // Config describes the session a worker should host.
 type Config struct {
-	ID      string
-	Dir     string
-	Command []string
-	Cwd     string
-	Env     []string
-	Cols    int
-	Rows    int
+	ID                 string
+	Dir                string
+	Command            []string
+	Cwd                string
+	Env                []string
+	Cols               int
+	Rows               int
+	AwaitInitialAttach bool
 }
 
 // Worker owns one PTY and serves clients over a Unix socket.
@@ -45,30 +69,185 @@ type Worker struct {
 	cmd  *exec.Cmd
 	ring *session.Ring
 
-	// mu guards ring writes together with delivery to the attached client, so
-	// that a client attaching mid-write cannot miss bytes or receive them
-	// twice.
-	mu     sync.Mutex
-	client *attachment
+	// mu orders ring delivery, attachment ownership, and shutdown. A client
+	// attaching mid-write cannot miss bytes, and finish cannot race a new writer
+	// or terminal output queued after session.exit.
+	mu          sync.Mutex
+	client      *attachment
+	attachments map[*attachment]struct{}
+	finished    bool
+	pumpStopped bool
+	writers     sync.WaitGroup
+	attachOnce  sync.Once
+	attached    chan struct{}
 
 	exitOnce sync.Once
 	exited   chan struct{}
+	pumpDone chan struct{}
 	exitCode int
 }
 
 type attachment struct {
-	conn net.Conn
-	w    *protocol.Writer
-	mu   sync.Mutex // serializes frame writes to conn
+	conn  net.Conn
+	w     *protocol.Writer
+	sid   protocol.SessionID
+	queue chan outboundFrame
+	done  chan struct{}
+
+	queueMu    sync.Mutex
+	dataFrames int
+	dataBytes  int
+	closed     bool
+	closeOnce  sync.Once
 }
 
-func (a *attachment) send(fn func(*protocol.Writer) error) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	_ = a.conn.SetWriteDeadline(time.Now().Add(clientWriteTimeout))
-	err := fn(a.w)
-	_ = a.conn.SetWriteDeadline(time.Time{})
-	return err
+type outboundFrame struct {
+	kind       protocol.Kind
+	seq        uint64
+	payload    []byte
+	control    protocol.Control
+	closeAfter bool
+}
+
+func newAttachment(conn net.Conn, sid protocol.SessionID) *attachment {
+	return &attachment{
+		conn:  conn,
+		w:     protocol.NewWriter(conn),
+		sid:   sid,
+		queue: make(chan outboundFrame, outboundQueueFrameLimit+outboundControlReserve),
+		done:  make(chan struct{}),
+	}
+}
+
+// startLocked registers the writer before it starts. w.mu must be held so
+// finish can prevent new writers before waiting for the existing set.
+func (a *attachment) startLocked(w *Worker) {
+	if w.attachments == nil {
+		w.attachments = make(map[*attachment]struct{})
+	}
+	w.attachments[a] = struct{}{}
+	w.writers.Add(1)
+	go a.writeLoop(w)
+}
+
+// enqueueData takes its own copy because the PTY pump reuses its read buffer.
+// It never waits for the socket or for queue capacity.
+func (a *attachment) enqueueData(seq uint64, payload []byte) bool {
+	if len(payload) == 0 {
+		return true
+	}
+
+	a.queueMu.Lock()
+	defer a.queueMu.Unlock()
+	if a.closed || len(payload) > outboundDataFrameSize || a.dataFrames >= outboundQueueFrameLimit || len(payload) > outboundQueueByteLimit-a.dataBytes {
+		return false
+	}
+
+	f := outboundFrame{
+		kind:    protocol.KindData,
+		seq:     seq,
+		payload: bytes.Clone(payload),
+	}
+	select {
+	case a.queue <- f:
+		a.dataFrames++
+		a.dataBytes += len(payload)
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *attachment) enqueueDataChunks(seq uint64, payload []byte) bool {
+	for len(payload) > 0 {
+		n := min(len(payload), outboundDataFrameSize)
+		if !a.enqueueData(seq, payload[:n]) {
+			return false
+		}
+		seq += uint64(n)
+		payload = payload[n:]
+	}
+	return true
+}
+
+// enqueueControl uses capacity reserved from data frames. Controls retain FIFO
+// order with already accepted output, including when the data queue is full.
+func (a *attachment) enqueueControl(msg protocol.Control, closeAfter bool) bool {
+	a.queueMu.Lock()
+	defer a.queueMu.Unlock()
+	if a.closed {
+		return false
+	}
+	select {
+	case a.queue <- outboundFrame{
+		kind:       protocol.KindControl,
+		control:    msg,
+		closeAfter: closeAfter,
+	}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *attachment) writeLoop(w *Worker) {
+	defer func() {
+		a.close()
+		w.mu.Lock()
+		delete(w.attachments, a)
+		if w.client == a {
+			w.client = nil
+		}
+		w.mu.Unlock()
+		w.writers.Done()
+	}()
+
+	for {
+		select {
+		case f := <-a.queue:
+			err := a.write(f)
+			a.releaseData(f)
+			if err != nil || f.closeAfter {
+				return
+			}
+		case <-a.done:
+			return
+		}
+	}
+}
+
+func (a *attachment) releaseData(f outboundFrame) {
+	if f.kind != protocol.KindData {
+		return
+	}
+	a.queueMu.Lock()
+	a.dataFrames--
+	a.dataBytes -= len(f.payload)
+	a.queueMu.Unlock()
+}
+
+func (a *attachment) write(f outboundFrame) error {
+	_ = a.conn.SetWriteDeadline(time.Now().Add(attachmentWriteTimeout))
+	defer a.conn.SetWriteDeadline(time.Time{}) //nolint:errcheck // connection may already be closed
+
+	switch f.kind {
+	case protocol.KindControl:
+		return a.w.WriteControlMsg(f.control)
+	case protocol.KindData:
+		return a.w.WriteData(a.sid, f.seq, f.payload)
+	default:
+		return fmt.Errorf("worker: unsupported outbound frame kind %d", f.kind)
+	}
+}
+
+func (a *attachment) close() {
+	a.closeOnce.Do(func() {
+		a.queueMu.Lock()
+		a.closed = true
+		close(a.done)
+		a.queueMu.Unlock()
+		_ = a.conn.Close()
+	})
 }
 
 // Run hosts the session until its process exits. It returns the process exit
@@ -100,14 +279,21 @@ func Run(cfg Config) (int, error) {
 	if err := pty.Start(cmd); err != nil {
 		return 0, fmt.Errorf("worker: start %s: %w", cfg.Command[0], err)
 	}
+	// xpty retains the parent's slave descriptor after Start. Closing that copy
+	// lets the master report EOF when the child closes its descriptors.
+	if p, ok := pty.(interface{ Slave() *os.File }); ok {
+		_ = p.Slave().Close()
+	}
 
 	w := &Worker{
-		cfg:    cfg,
-		sid:    sid,
-		pty:    pty,
-		cmd:    cmd,
-		ring:   session.NewRing(ringSize),
-		exited: make(chan struct{}),
+		cfg:      cfg,
+		sid:      sid,
+		pty:      pty,
+		cmd:      cmd,
+		ring:     session.NewRing(ringSize),
+		exited:   make(chan struct{}),
+		pumpDone: make(chan struct{}),
+		attached: make(chan struct{}),
 	}
 
 	meta := Meta{
@@ -144,6 +330,10 @@ func Run(cfg Config) (int, error) {
 	} else if waitErr != nil {
 		code = -1
 	}
+	w.drainPTY()
+	if cfg.AwaitInitialAttach {
+		w.waitForFirstAttachment()
+	}
 	w.finish(code)
 
 	now := time.Now()
@@ -156,20 +346,48 @@ func Run(cfg Config) (int, error) {
 	return code, nil
 }
 
+func (w *Worker) waitForFirstAttachment() {
+	timer := time.NewTimer(firstAttachTimeout)
+	defer timer.Stop()
+	select {
+	case <-w.attached:
+	case <-timer.C:
+	}
+}
+
+func (w *Worker) drainPTY() {
+	timer := time.NewTimer(ptyDrainTimeout)
+	defer timer.Stop()
+	select {
+	case <-w.pumpDone:
+		return
+	case <-timer.C:
+		// This lock orders the cutoff against a chunk that has returned from
+		// Read. Either pump commits the chunk first, or it sees pumpStopped and
+		// discards it. No data can enter the queue behind session.exit.
+		w.mu.Lock()
+		w.pumpStopped = true
+		w.mu.Unlock()
+		_ = w.pty.Close()
+	}
+}
+
 // pump moves PTY output into the ring and out to the attached client.
 func (w *Worker) pump() {
+	defer close(w.pumpDone)
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := w.pty.Read(buf)
 		if n > 0 {
 			w.mu.Lock()
+			if w.pumpStopped {
+				w.mu.Unlock()
+				return
+			}
 			seq := w.ring.Head()
 			_, _ = w.ring.Write(buf[:n])
 			if c := w.client; c != nil {
-				chunk := buf[:n]
-				if sendErr := c.send(func(fw *protocol.Writer) error {
-					return fw.WriteData(w.sid, seq, chunk)
-				}); sendErr != nil {
+				if !c.enqueueData(seq, buf[:n]) {
 					w.dropLocked(c, "")
 				}
 			}
@@ -184,27 +402,51 @@ func (w *Worker) pump() {
 // finish records the exit code once and tells the attached client.
 func (w *Worker) finish(code int) {
 	w.exitOnce.Do(func() {
+		w.mu.Lock()
+		w.finished = true
 		w.exitCode = code
 		close(w.exited)
-
-		w.mu.Lock()
 		c := w.client
-		w.mu.Unlock()
 		if c != nil {
-			_ = c.send(func(fw *protocol.Writer) error {
-				return fw.WriteControlMsg(protocol.Control{
-					Type:      protocol.TypeExit,
-					SessionID: w.cfg.ID,
-					ExitCode:  &code,
-					Reason:    protocol.ReasonExited,
-				})
-			})
-			// Give the client a moment to flush the final screen before its
-			// socket disappears.
-			time.Sleep(50 * time.Millisecond)
-			_ = c.conn.Close()
+			if !c.enqueueControl(protocol.Control{
+				Type:      protocol.TypeExit,
+				SessionID: w.cfg.ID,
+				ExitCode:  &code,
+				Reason:    protocol.ReasonExited,
+			}, true) {
+				w.dropLocked(c, "")
+			}
 		}
+		w.mu.Unlock()
+		w.waitForWriters()
 	})
+}
+
+func (w *Worker) waitForWriters() {
+	done := make(chan struct{})
+	go func() {
+		w.writers.Wait()
+		close(done)
+	}()
+
+	timer := time.NewTimer(finalFlushTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return
+	case <-timer.C:
+	}
+
+	w.mu.Lock()
+	attachments := make([]*attachment, 0, len(w.attachments))
+	for a := range w.attachments {
+		attachments = append(attachments, a)
+	}
+	w.mu.Unlock()
+	for _, a := range attachments {
+		a.close()
+	}
+	<-done
 }
 
 func (w *Worker) acceptLoop(ln net.Listener) {
@@ -224,13 +466,16 @@ func (w *Worker) dropLocked(c *attachment, reason string) {
 	}
 	w.client = nil
 	if reason != "" {
-		_ = c.send(func(fw *protocol.Writer) error {
-			return fw.WriteControlMsg(protocol.Control{
-				Type:      protocol.TypeDetach,
-				SessionID: w.cfg.ID,
-				Reason:    reason,
-			})
-		})
+		if c.enqueueControl(protocol.Control{
+			Type:      protocol.TypeDetach,
+			SessionID: w.cfg.ID,
+			Reason:    reason,
+		}, true) {
+			// Stop accepting input from the old owner while its writer flushes
+			// the detach notice and closes the connection.
+			_ = c.conn.SetReadDeadline(time.Now())
+			return
+		}
 	}
-	_ = c.conn.Close()
+	c.close()
 }

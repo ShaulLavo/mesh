@@ -13,10 +13,14 @@ import (
 // serve handles one client connection: attach, replay, then relay input until
 // either side goes away. Disconnecting a client never affects the process.
 func (w *Worker) serve(conn net.Conn) {
-	defer conn.Close() //nolint:errcheck // client is going away regardless
+	writerOwnsConn := false
+	defer func() {
+		if !writerOwnsConn {
+			_ = conn.Close()
+		}
+	}()
 
 	r := protocol.NewReader(conn)
-	c := &attachment{conn: conn, w: protocol.NewWriter(conn)}
 
 	first, err := r.ReadFrame()
 	if err != nil {
@@ -37,14 +41,13 @@ func (w *Worker) serve(conn net.Conn) {
 		return
 	}
 	if err != nil || msg.Type != protocol.TypeAttach {
-		_ = c.send(func(fw *protocol.Writer) error {
-			return fw.WriteControlMsg(protocol.Control{
-				Type:    protocol.TypeError,
-				Message: "expected " + protocol.TypeAttach,
-			})
+		_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
+			Type:    protocol.TypeError,
+			Message: "expected " + protocol.TypeAttach,
 		})
 		return
 	}
+	c := newAttachment(conn, w.sid)
 
 	if msg.Cols > 0 && msg.Rows > 0 {
 		_ = w.pty.Resize(msg.Cols, msg.Rows)
@@ -53,6 +56,10 @@ func (w *Worker) serve(conn net.Conn) {
 	// Attach under the same lock the PTY pump uses, so the replay we compute
 	// and the live stream that follows it join up exactly.
 	w.mu.Lock()
+	if w.finished {
+		w.mu.Unlock()
+		return
+	}
 	if prev := w.client; prev != nil {
 		w.dropLocked(prev, protocol.ReasonStolen)
 	}
@@ -78,25 +85,20 @@ func (w *Worker) serve(conn net.Conn) {
 		replay, _, _ = w.ring.Since(want)
 	}
 
-	err = c.send(func(fw *protocol.Writer) error {
-		if e := fw.WriteControlMsg(protocol.Control{
-			Type:      protocol.TypeAttached,
-			SessionID: w.cfg.ID,
-			Seq:       want,
-			Snapshot:  !ok,
-		}); e != nil {
-			return e
-		}
-		if len(replay) > 0 {
-			return fw.WriteData(w.sid, want, replay)
-		}
-		return nil
-	})
-	if err != nil {
+	if !c.enqueueControl(protocol.Control{
+		Type:      protocol.TypeAttached,
+		SessionID: w.cfg.ID,
+		Seq:       want,
+		Snapshot:  !ok,
+	}, false) || !c.enqueueDataChunks(want, replay) {
 		w.mu.Unlock()
+		c.close()
 		return
 	}
 	w.client = c
+	writerOwnsConn = true
+	c.startLocked(w)
+	w.attachOnce.Do(func() { close(w.attached) })
 	w.mu.Unlock()
 
 	defer func() {
@@ -110,14 +112,14 @@ func (w *Worker) serve(conn net.Conn) {
 	select {
 	case <-w.exited:
 		code := w.exitCode
-		_ = c.send(func(fw *protocol.Writer) error {
-			return fw.WriteControlMsg(protocol.Control{
-				Type:      protocol.TypeExit,
-				SessionID: w.cfg.ID,
-				ExitCode:  &code,
-				Reason:    protocol.ReasonExited,
-			})
-		})
+		if c.enqueueControl(protocol.Control{
+			Type:      protocol.TypeExit,
+			SessionID: w.cfg.ID,
+			ExitCode:  &code,
+			Reason:    protocol.ReasonExited,
+		}, true) {
+			<-c.done
+		}
 		return
 	default:
 	}

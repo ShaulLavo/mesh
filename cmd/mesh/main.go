@@ -83,13 +83,14 @@ func runWorker(args []string) error {
 	cwd, _ := os.Getwd()
 
 	code, err := worker.Run(worker.Config{
-		ID:      *id,
-		Dir:     *dir,
-		Command: fs.Args(),
-		Cwd:     cwd,
-		Env:     os.Environ(),
-		Cols:    *cols,
-		Rows:    *rows,
+		ID:                 *id,
+		Dir:                *dir,
+		Command:            fs.Args(),
+		Cwd:                cwd,
+		Env:                os.Environ(),
+		Cols:               *cols,
+		Rows:               *rows,
+		AwaitInitialAttach: true,
 	})
 	if err != nil {
 		return err
@@ -108,6 +109,7 @@ func runLocal(args []string) error {
 	}
 
 	var s cli.Session
+	var lastSeq *uint64
 	var err error
 	if *resume {
 		s, err = cli.Latest()
@@ -125,9 +127,14 @@ func runLocal(args []string) error {
 		if err != nil {
 			return err
 		}
+		// A newly spawned command may have produced all its output before the
+		// readiness probe completes. Its first real attachment must start at
+		// zero rather than asking for the normal bounded reattach tail.
+		initialSeq := uint64(0)
+		lastSeq = &initialSeq
 		fmt.Fprintf(os.Stderr, "session %s\n", s.ID)
 	}
-	return attach(s, *detachKey)
+	return attach(s, *detachKey, lastSeq)
 }
 
 func runAttach(args []string) error {
@@ -146,10 +153,10 @@ func runAttach(args []string) error {
 	if !s.Alive {
 		return fmt.Errorf("session %s is %s", s.ID, s.State())
 	}
-	return attach(s, *detachKey)
+	return attach(s, *detachKey, nil)
 }
 
-func attach(s cli.Session, detachKey string) error {
+func attach(s cli.Session, detachKey string, lastSeq *uint64) error {
 	key, raw, err := cli.ParseDetachKey(detachKey)
 	if err != nil {
 		return err
@@ -157,6 +164,7 @@ func attach(s cli.Session, detachKey string) error {
 	res, err := cli.Attach(cli.AttachOptions{
 		SocketPath: paths.Socket(s.Dir),
 		SessionID:  s.ID,
+		LastSeq:    lastSeq,
 		DetachKey:  key,
 		Raw:        raw,
 	})
