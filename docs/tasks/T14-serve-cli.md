@@ -5,10 +5,10 @@
 ## Goal
 
 ```bash
-m serve pc ./site --at /blog                # pc.mesh.shaul.dev/blog, tailnet only
+m serve pc ./site --at /blog                # pc.mesh.shaulavo.dev/blog, tailnet only
 m serve pc 3000 --at /api                   # proxy a local port, tailnet only
 m serve pi /mnt/data --at /files --files
-m serve pc ./site --at /blog --public blog.shaul.dev
+m serve pc ./site --at /blog --public blog.shaulavo.dev
 m serve ls
 m unserve /blog
 ```

@@ -9,19 +9,19 @@ doors.
 
 ## Two names, two audiences
 
-| | `mesh.shaul.dev` | `shaul.dev` |
+| | `mesh.shaulavo.dev` | `shaulavo.dev` |
 |---|---|---|
 | Audience | tailnet only | the internet |
 | Resolves to | tailnet `100.x` addresses | the VPS public IP |
 | Reached by | direct, host to host | through the VPS edge |
 | Default | yes | needs `--public` |
 
-`mesh.shaul.dev` is private. Its DNS records point at tailnet addresses, so it
+`mesh.shaulavo.dev` is private. Its DNS records point at tailnet addresses, so it
 only resolves to anything reachable if you are on the tailnet. Everyone else gets
 an address they cannot route to.
 
 Certificates work anyway. Let's Encrypt DNS-01 validates by publishing a TXT
-record, never by connecting to the host, so `mesh.shaul.dev` gets a real
+record, never by connecting to the host, so `mesh.shaulavo.dev` gets a real
 publicly-trusted certificate despite pointing at unroutable addresses. No custom
 CA, no browser warnings, no per-device trust store surgery.
 
@@ -37,7 +37,7 @@ CA, no browser warnings, no per-device trust store surgery.
 Tailnet                                    Internet
    │                                          │
    ▼                                          ▼
-mesh.shaul.dev              shaul.dev / blog.shaul.dev
+mesh.shaulavo.dev              shaulavo.dev / blog.shaulavo.dev
 (A → tailnet addresses)     (A → VPS public IP)
    │                                          │
    │  direct, no proxy                        ▼
@@ -54,15 +54,15 @@ mesh.shaul.dev              shaul.dev / blog.shaul.dev
 
 ## Reaching the private name
 
-Two ways to make `mesh.shaul.dev` resolve, and they can coexist:
+Two ways to make `mesh.shaulavo.dev` resolve, and they can coexist:
 
-**Per-host, direct.** `pc.mesh.shaul.dev` and `pi.mesh.shaul.dev` are A records
+**Per-host, direct.** `pc.mesh.shaulavo.dev` and `pi.mesh.shaulavo.dev` are A records
 holding each machine's tailnet address. Services appear at
-`pc.mesh.shaul.dev/blog`. Nothing proxies, nothing is a single point of failure,
+`pc.mesh.shaulavo.dev/blog`. Nothing proxies, nothing is a single point of failure,
 and this keeps the "traffic goes directly to the destination machine" invariant
 completely intact. This is the default.
 
-**Tidy alias.** `mesh.shaul.dev/blog` with no machine in the URL requires
+**Tidy alias.** `mesh.shaulavo.dev/blog` with no machine in the URL requires
 something always-on to route by path, which means the Pi. That makes the Pi a
 tailnet web router, and if the Pi is down every tidy URL is down while every
 per-host URL keeps working.
@@ -74,10 +74,10 @@ you, which it might not.
 ## The CLI
 
 ```bash
-m serve pc ./site --at /blog                # pc.mesh.shaul.dev/blog
+m serve pc ./site --at /blog                # pc.mesh.shaulavo.dev/blog
 m serve pc 3000 --at /api                   # proxy a local port, tailnet only
 m serve pi /mnt/data --at /files --files
-m serve pc ./site --at /blog --public blog.shaul.dev
+m serve pc ./site --at /blog --public blog.shaulavo.dev
 m serve ls
 m unserve /blog
 ```
@@ -95,14 +95,14 @@ That invariant protects terminal sessions, where a proxy would be a liability.
 Public web traffic crosses a public edge by definition. Terminal traffic still
 never transits the VPS.
 
-**Mesh never claims the `shaul.dev` apex.** That is your site, not Mesh's. Every
+**Mesh never claims the `shaulavo.dev` apex.** That is your site, not Mesh's. Every
 public route is named explicitly per service. Mesh will refuse to bind a public
 name it was not told to bind.
 
 **Tailnet-only by default.** Serving a directory is one keystroke from publishing
 your home folder.
 
-**Wildcard certificates from day one.** `*.mesh.shaul.dev` needs DNS-01 regardless,
+**Wildcard certificates from day one.** `*.mesh.shaulavo.dev` needs DNS-01 regardless,
 so build the DNS-01 plumbing first rather than starting with HTTP-01 and
 retrofitting. One provider credential, stored like any other secret.
 
@@ -114,23 +114,23 @@ the payoff for having already built waking.
 ## Tasks
 
 - `T11-serving-core.md` — service types, registry, origin-side serving
-- `T12-private-names.md` — DNS and TLS for `mesh.shaul.dev`, per-host routing
-- `T13-public-edge.md` — VPS edge mode, public routes on `shaul.dev`
+- `T12-private-names.md` — DNS and TLS for `mesh.shaulavo.dev`, per-host routing
+- `T13-public-edge.md` — VPS edge mode, public routes on `shaulavo.dev`
 - `T14-serve-cli.md` — `m serve`, `m unserve`, `m serve ls`
 
 ## Explicitly not in step 8
 
 Arbitrary TCP tunnels, per-service authentication beyond public or tailnet,
-multi-user access control, the tidy `mesh.shaul.dev/<name>` alias, and anything
+multi-user access control, the tidy `mesh.shaulavo.dev/<name>` alias, and anything
 resembling a build or deploy pipeline.
 
 ## The apex
 
-`shaul.dev` serves nothing today, but it will. When the personal site arrives,
+`shaulavo.dev` serves nothing today, but it will. When the personal site arrives,
 the simplest thing is for it to be a Mesh service like any other:
 
 ```bash
-m serve vps ./site --public shaul.dev
+m serve vps ./site --public shaulavo.dev
 ```
 
 One TLS terminator, one routing table, and the site gets the same restart and

@@ -129,8 +129,8 @@ interfaces so API churn stays contained.
 7. **Packaging** — systemd, launchd, GoReleaser, Actions, Homebrew Cask, installer,
    VHS demos, race tests, protocol fuzzing, govulncheck, golangci-lint v2.
 8. **Serving** — static sites, file browsers and local-port proxies. Private on
-   the tailnet at `<host>.mesh.shaul.dev`, and optionally public under
-   `shaul.dev` through the VPS edge. See `docs/plan/03-serving.md`.
+   the tailnet at `<host>.mesh.shaulavo.dev`, and optionally public under
+   `shaulavo.dev` through the VPS edge. See `docs/plan/03-serving.md`.
 
 ## Explicitly later
 

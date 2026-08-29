@@ -1,16 +1,16 @@
-# T12 — Private names and certificates for `mesh.shaul.dev`
+# T12 — Private names and certificates for `mesh.shaulavo.dev`
 
 **Status:** not started · **Blocked by:** T11, T06 · **Owns:** `internal/dnsname/`
 
 ## Goal
 
-`https://pc.mesh.shaul.dev/blog` works from any device on the tailnet, with a
+`https://pc.mesh.shaulavo.dev/blog` works from any device on the tailnet, with a
 valid certificate and no browser warning, and resolves to nothing routable for
 anyone else.
 
 ## Why this is possible
 
-`mesh.shaul.dev` records hold tailnet `100.x` addresses. They are published in
+`mesh.shaulavo.dev` records hold tailnet `100.x` addresses. They are published in
 ordinary public DNS, so every resolver answers, but the answer is only reachable
 from the tailnet.
 
@@ -21,11 +21,11 @@ is why no custom CA or per-device trust configuration is needed.
 
 ## Responsibilities
 
-1. **DNS records.** Maintain an A record per host: `pc.mesh.shaul.dev`,
-   `pi.mesh.shaul.dev`, and so on, pointing at each machine's current tailnet
+1. **DNS records.** Maintain an A record per host: `pc.mesh.shaulavo.dev`,
+   `pi.mesh.shaulavo.dev`, and so on, pointing at each machine's current tailnet
    address. Tailnet addresses are stable in practice but not guaranteed, so
    reconcile them rather than setting them once by hand.
-2. **Certificates.** A wildcard for `*.mesh.shaul.dev` via DNS-01, renewed
+2. **Certificates.** A wildcard for `*.mesh.shaulavo.dev` via DNS-01, renewed
    unattended, distributed to each host's daemon. Decide and document where the
    private key lives and which machine performs renewal.
 3. **Serving.** Each origin daemon terminates TLS for its own name and serves its
@@ -34,7 +34,7 @@ is why no custom CA or per-device trust configuration is needed.
 ## Decisions to make and record
 
 - **Which DNS provider and credential.** DNS-01 needs an API token that can write
-  TXT records for `shaul.dev`. That token is the most sensitive thing in this
+  TXT records for `shaulavo.dev`. That token is the most sensitive thing in this
   task. Scope it to the zone, store it on one machine, and say which.
 - **Who renews.** One machine renewing and distributing is simpler than every
   machine holding the zone credential. The Pi is the obvious candidate since it
@@ -52,7 +52,7 @@ Write down which you chose and why.
 
 ## Acceptance
 
-- From a tailnet device: `https://pc.mesh.shaul.dev/blog` loads with a valid
+- From a tailnet device: `https://pc.mesh.shaulavo.dev/blog` loads with a valid
   certificate and no warning.
 - From outside the tailnet: the name resolves and the connection times out. It
   must not reach anything, and it must not reveal anything beyond the address.
@@ -63,5 +63,5 @@ Write down which you chose and why.
 
 ## Out of scope
 
-The public `shaul.dev` side (T13), and the tidy `mesh.shaul.dev/<name>` alias
+The public `shaulavo.dev` side (T13), and the tidy `mesh.shaulavo.dev/<name>` alias
 that would need the Pi to route by path. Per-host names first.

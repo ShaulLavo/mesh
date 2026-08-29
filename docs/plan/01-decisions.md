@@ -112,10 +112,10 @@ then the worker closes the PTY regardless.
 **Cost:** output written by a descendant more than 250ms after the leader exits
 is lost. That is the right trade: the alternative is a session that never ends.
 
-## D13 — Two names: `mesh.shaul.dev` is private, `shaul.dev` is public
+## D13 — Two names: `mesh.shaulavo.dev` is private, `shaulavo.dev` is public
 
-`mesh.shaul.dev` resolves to tailnet addresses and is reachable only from the
-tailnet. Public services are published under `shaul.dev` through the VPS edge,
+`mesh.shaulavo.dev` resolves to tailnet addresses and is reachable only from the
+tailnet. Public services are published under `shaulavo.dev` through the VPS edge,
 and only when explicitly named.
 
 Certificates work on both. DNS-01 validates by TXT record and never connects to
@@ -134,7 +134,7 @@ VPS; that is a scoped exception to "traffic goes directly to the destination
 machine", which protects terminal sessions.
 
 **Terminal traffic still never transits the VPS**, and T13's acceptance criteria
-assert it. The private side has no proxy at all: `pc.mesh.shaul.dev` points
+assert it. The private side has no proxy at all: `pc.mesh.shaulavo.dev` points
 straight at that machine.
 
 ## D15 — Nothing is public unless you named it
@@ -142,7 +142,7 @@ straight at that machine.
 Served services are tailnet-only by default. `--public` takes the hostname
 explicitly rather than deriving one, is confirmed interactively, and is refused
 when the served root contains anything credential-shaped. Mesh never binds the
-`shaul.dev` apex unless a service names it.
+`shaulavo.dev` apex unless a service names it.
 
 **Why:** serving a directory is one keystroke from publishing your home folder,
 and a derived name is a name nobody read before it went live.

@@ -5,18 +5,18 @@
 ## Goal
 
 `mesh daemon --edge` on the VPS: the one machine that faces the internet. It
-holds TLS for the public names under `shaul.dev` and routes to origins over
+holds TLS for the public names under `shaulavo.dev` and routes to origins over
 Tailscale.
 
-`mesh.shaul.dev` is the *private* name and never touches this edge. See
+`mesh.shaulavo.dev` is the *private* name and never touches this edge. See
 `docs/plan/03-serving.md` for the split, and T12 for the private side.
 
 ## Responsibilities
 
 1. **TLS.** Let's Encrypt for each public name Mesh was explicitly told to bind
-   under `shaul.dev`. Reuse the DNS-01 plumbing T12 builds. Certificates renew
+   under `shaulavo.dev`. Reuse the DNS-01 plumbing T12 builds. Certificates renew
    unattended and survive a restart.
-   **Mesh never binds the `shaul.dev` apex** unless a service names it. The apex
+   **Mesh never binds the `shaulavo.dev` apex** unless a service names it. The apex
    is unused as of 2026-08-29 and is expected to host a personal site later, so
    the edge must support two arrangements: owning port 443 directly, and running
    on another port behind a proxy that terminates TLS for it. A flag, not a
@@ -59,5 +59,5 @@ hides behind Tailscale. Treat it accordingly:
 
 ## Out of scope
 
-Per-service authentication, multi-user access, the private `mesh.shaul.dev` side
+Per-service authentication, multi-user access, the private `mesh.shaulavo.dev` side
 (T12), and claiming any name the user did not explicitly ask for.
