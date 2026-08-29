@@ -12,7 +12,8 @@
 // can share one connection:
 //
 //	data:  session:8 | seq:8 | pty bytes
-//	input: session:8 | key bytes
+//	input:    session:8 | key bytes
+//	snapshot: session:8 | rendered terminal bytes
 //
 // Control payloads are JSON and name their session in the message body.
 package protocol
@@ -28,9 +29,10 @@ import (
 type Kind byte
 
 const (
-	KindControl Kind = 0x01 // JSON control message
-	KindData    Kind = 0x02 // PTY output, worker to client
-	KindInput   Kind = 0x03 // PTY input, client to worker
+	KindControl  Kind = 0x01 // JSON control message
+	KindData     Kind = 0x02 // PTY output, worker to client
+	KindInput    Kind = 0x03 // PTY input, client to worker
+	KindSnapshot Kind = 0x04 // rendered screen, worker to client
 )
 
 const (
@@ -104,6 +106,12 @@ func (fw *Writer) WriteData(id SessionID, seq uint64, b []byte) error {
 	return fw.write(KindData, hdr, b)
 }
 
+// WriteSnapshot sends rendered terminal state. Snapshot bytes do not belong to
+// the PTY output stream and therefore carry no sequence offset.
+func (fw *Writer) WriteSnapshot(id SessionID, b []byte) error {
+	return fw.write(KindSnapshot, id[:], b)
+}
+
 // WriteInput sends keystrokes for a session.
 func (fw *Writer) WriteInput(id SessionID, b []byte) error {
 	return fw.write(KindInput, id[:], b)
@@ -164,7 +172,7 @@ func (fr *Reader) ReadFrame() (Frame, error) {
 		copy(f.Session[:], body[:sessionLen])
 		f.Seq = binary.BigEndian.Uint64(body[sessionLen : sessionLen+seqLen])
 		f.Payload = body[sessionLen+seqLen:]
-	case KindInput:
+	case KindInput, KindSnapshot:
 		if len(body) < sessionLen {
 			return f, errors.New("protocol: short input frame")
 		}

@@ -20,6 +20,9 @@ func TestFrameRoundTrip(t *testing.T) {
 	if err := w.WriteData(id, 4096, []byte("hello\x1b[0m")); err != nil {
 		t.Fatal(err)
 	}
+	if err := w.WriteSnapshot(id, []byte("\x1b[2Jpaint")); err != nil {
+		t.Fatal(err)
+	}
 	if err := w.WriteInput(id, []byte{0x03}); err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +44,14 @@ func TestFrameRoundTrip(t *testing.T) {
 	}
 	if f.Kind != KindData || f.Seq != 4096 || f.Session.String() != "7K3D" || string(f.Payload) != "hello\x1b[0m" {
 		t.Fatalf("data frame = %+v", f)
+	}
+
+	f, err = r.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Kind != KindSnapshot || f.Session.String() != "7K3D" || string(f.Payload) != "\x1b[2Jpaint" {
+		t.Fatalf("snapshot frame = %+v", f)
 	}
 
 	f, err = r.ReadFrame()
@@ -72,6 +83,11 @@ func TestReaderRejectsOversizedAndUnknownFrames(t *testing.T) {
 	short := []byte{byte(KindData), 0, 0, 0, 2, 'a', 'b'}
 	if _, err := NewReader(bytes.NewReader(short)).ReadFrame(); err == nil {
 		t.Fatal("truncated data frame accepted")
+	}
+
+	short = []byte{byte(KindSnapshot), 0, 0, 0, 2, 'a', 'b'}
+	if _, err := NewReader(bytes.NewReader(short)).ReadFrame(); err == nil {
+		t.Fatal("truncated snapshot frame accepted")
 	}
 }
 

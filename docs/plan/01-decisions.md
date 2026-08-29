@@ -111,3 +111,16 @@ then the worker closes the PTY regardless.
 
 **Cost:** output written by a descendant more than 250ms after the leader exits
 is lost. That is the right trade: the alternative is a session that never ends.
+
+## D13 — Screen snapshots are their own frame kind
+
+`KindSnapshot` carries a session ID and rendered terminal bytes. It has no
+sequence offset. The preceding `session.attached` control reports the PTY output
+offset where live data resumes.
+
+**Why:** snapshot bytes repaint terminal state, but the PTY never emitted them.
+Treating a snapshot as `KindData` would advance the client's resume offset by a
+made-up byte count and cause a gap after the next reconnect.
+
+**Cost:** relays must accept one more additive frame kind. They still forward the
+frame unchanged.
