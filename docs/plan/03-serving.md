@@ -124,8 +124,23 @@ Arbitrary TCP tunnels, per-service authentication beyond public or tailnet,
 multi-user access control, the tidy `mesh.shaul.dev/<name>` alias, and anything
 resembling a build or deploy pipeline.
 
-## Open question
+## The apex
 
-Does `shaul.dev` already serve something? If the apex hosts a personal site
-today, the VPS edge has to coexist with it rather than replace it, which changes
-whether Mesh owns that web server or sits behind it.
+`shaul.dev` serves nothing today, but it will. When the personal site arrives,
+the simplest thing is for it to be a Mesh service like any other:
+
+```bash
+m serve vps ./site --public shaul.dev
+```
+
+One TLS terminator, one routing table, and the site gets the same restart and
+health behaviour as everything else. No coexistence problem, because there is
+nothing to coexist with.
+
+The alternative is running Caddy or nginx on the VPS and putting the Mesh edge
+behind it. That is a real option if the site outgrows static files, so the edge
+must be able to run on a port other than 443 and behind a proxy that terminates
+TLS for it. Support that from the start. It costs a configuration flag now and a
+rewrite later.
+
+What the edge must never do is assume it owns port 443 by right.

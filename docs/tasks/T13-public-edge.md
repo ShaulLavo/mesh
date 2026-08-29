@@ -16,8 +16,11 @@ Tailscale.
 1. **TLS.** Let's Encrypt for each public name Mesh was explicitly told to bind
    under `shaul.dev`. Reuse the DNS-01 plumbing T12 builds. Certificates renew
    unattended and survive a restart.
-   **Mesh never binds the `shaul.dev` apex** unless a service names it. If the
-   apex already hosts a personal site, the edge coexists with it.
+   **Mesh never binds the `shaul.dev` apex** unless a service names it. The apex
+   is unused as of 2026-08-29 and is expected to host a personal site later, so
+   the edge must support two arrangements: owning port 443 directly, and running
+   on another port behind a proxy that terminates TLS for it. A flag, not a
+   rewrite.
 2. **Routing.** Longest-prefix match on path, plus subdomain lookup for services
    that asked for one. Unknown route returns 404 without revealing what else
    exists.
@@ -50,6 +53,8 @@ hides behind Tailscale. Treat it accordingly:
 - Origin killed mid-request: edge returns 502 promptly, does not hang, does not
   leak the origin's address.
 - Route collision between two hosts is refused with a clear error to the second.
+- The edge runs correctly behind a TLS-terminating proxy on a non-443 port, with
+  `X-Forwarded-Proto` respected so generated links stay `https`.
 - The terminal session path still never transits the edge. Assert it.
 
 ## Out of scope
