@@ -2,6 +2,7 @@ package worker
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"syscall"
@@ -47,6 +48,12 @@ func (w *Worker) serve(conn net.Conn) {
 		})
 		return
 	}
+	if msg.Cols != 0 || msg.Rows != 0 {
+		if err := validateTerminalSize(msg.Cols, msg.Rows); err != nil {
+			writeAttachError(conn, fmt.Sprintf("invalid terminal size: %v", err))
+			return
+		}
+	}
 	c := newAttachment(conn, w.sid)
 
 	// Attach under the same lock the PTY pump uses, so the replay we compute
@@ -57,12 +64,12 @@ func (w *Worker) serve(conn net.Conn) {
 		return
 	}
 	if msg.Cols > 0 && msg.Rows > 0 {
-		w.resizeLocked(msg.Cols, msg.Rows)
+		if err := w.resizeLocked(msg.Cols, msg.Rows); err != nil {
+			w.mu.Unlock()
+			writeAttachError(conn, fmt.Sprintf("resize terminal: %v", err))
+			return
+		}
 	}
-	if prev := w.client; prev != nil {
-		w.dropLocked(prev, protocol.ReasonStolen)
-	}
-
 	// A client that knows where it left off resumes exactly. A fresh attach or
 	// an expired replay position gets a rendered screen followed by live output
 	// at the current head.
@@ -78,13 +85,25 @@ func (w *Worker) serve(conn net.Conn) {
 		replay, _, ok = w.ring.Since(want)
 		if !ok {
 			want = w.ring.Head()
-			snapshot = w.screen.Snapshot()
 			isSnapshot = true
 		}
 	} else {
 		want = w.ring.Head()
-		snapshot = w.screen.Snapshot()
 		isSnapshot = true
+	}
+	if isSnapshot {
+		capture := w.screen.Snapshot()
+		if !capture.Restorable {
+			w.mu.Unlock()
+			writeAttachError(conn, "terminal state is between escape-sequence boundaries; retry attachment")
+			return
+		}
+		snapshot = capture.Bytes
+	}
+	if len(snapshot) > maxSnapshotPayload {
+		w.mu.Unlock()
+		writeAttachError(conn, fmt.Sprintf("terminal snapshot is %d bytes; maximum is %d", len(snapshot), maxSnapshotPayload))
+		return
 	}
 
 	if !c.enqueueControl(protocol.Control{
@@ -94,8 +113,11 @@ func (w *Worker) serve(conn net.Conn) {
 		Snapshot:  isSnapshot,
 	}, false) || (isSnapshot && !c.enqueueSnapshot(snapshot)) || !c.enqueueDataChunks(want, replay) {
 		w.mu.Unlock()
-		c.close()
+		writeAttachError(conn, "unable to queue terminal state; retry attachment")
 		return
+	}
+	if prev := w.client; prev != nil {
+		w.dropLocked(prev, protocol.ReasonStolen)
 	}
 	w.client = c
 	writerOwnsConn = true
@@ -146,8 +168,15 @@ func (w *Worker) serve(conn net.Conn) {
 			}
 			switch msg.Type {
 			case protocol.TypeResize:
-				if msg.Cols > 0 && msg.Rows > 0 {
-					w.resize(msg.Cols, msg.Rows)
+				err := validateTerminalSize(msg.Cols, msg.Rows)
+				if err == nil {
+					err = w.resize(msg.Cols, msg.Rows)
+				}
+				if err != nil {
+					_ = c.enqueueControl(protocol.Control{
+						Type:    protocol.TypeError,
+						Message: fmt.Sprintf("resize terminal: %v", err),
+					}, false)
 				}
 			case protocol.TypeSignal:
 				w.signal(msg.Signal)
@@ -158,6 +187,15 @@ func (w *Worker) serve(conn net.Conn) {
 			}
 		}
 	}
+}
+
+func writeAttachError(conn net.Conn, message string) {
+	_ = conn.SetWriteDeadline(time.Now().Add(attachmentWriteTimeout))
+	defer conn.SetWriteDeadline(time.Time{}) //nolint:errcheck // connection may be closed by the peer
+	_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
+		Type:    protocol.TypeError,
+		Message: message,
+	})
 }
 
 // signal delivers sig to the session's process group. Signals travel out of

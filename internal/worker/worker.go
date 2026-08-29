@@ -24,6 +24,13 @@ import (
 const ringSize = 4 << 20
 
 const (
+	// Bound both emulator allocation and the rendered snapshot a peer can ask
+	// us to create. The cell limit permits conventional large terminals while
+	// keeping a single resize from consuming unbounded memory.
+	maxTerminalDimension = 2048
+	maxTerminalCells     = 256 << 10
+	maxSnapshotPayload   = protocol.MaxPayload - len(protocol.SessionID{})
+
 	// A full PTY read is 32 KiB, so the byte limit normally wins after 128
 	// frames. The frame limit also bounds queues made of tiny writes. Control
 	// frames use reserved slots and never compete with terminal data.
@@ -49,6 +56,19 @@ const (
 	// cannot keep the worker alive beyond this window.
 	ptyDrainTimeout = 250 * time.Millisecond
 )
+
+func validateTerminalSize(cols, rows int) error {
+	if cols <= 0 || rows <= 0 {
+		return fmt.Errorf("dimensions must be positive, got %dx%d", cols, rows)
+	}
+	if cols > maxTerminalDimension || rows > maxTerminalDimension {
+		return fmt.Errorf("dimensions %dx%d exceed the per-axis limit of %d", cols, rows, maxTerminalDimension)
+	}
+	if cols > maxTerminalCells/rows {
+		return fmt.Errorf("dimensions %dx%d exceed the cell limit of %d", cols, rows, maxTerminalCells)
+	}
+	return nil
+}
 
 // Config describes the session a worker should host.
 type Config struct {
@@ -167,7 +187,7 @@ func (a *attachment) enqueuePayload(kind protocol.Kind, seq uint64, payload []by
 func (a *attachment) enqueueSnapshot(payload []byte) bool {
 	// A snapshot is one frame so a client commits its resume sequence only
 	// after Reader has received the complete repaint.
-	return a.enqueuePayload(protocol.KindSnapshot, 0, payload, protocol.MaxPayload-len(a.sid), true)
+	return a.enqueuePayload(protocol.KindSnapshot, 0, payload, maxSnapshotPayload, true)
 }
 
 func (a *attachment) enqueueDataChunks(seq uint64, payload []byte) bool {
@@ -279,6 +299,9 @@ func Run(cfg Config) (int, error) {
 	}
 	if cfg.Rows <= 0 {
 		cfg.Rows = 24
+	}
+	if err := validateTerminalSize(cfg.Cols, cfg.Rows); err != nil {
+		return 0, fmt.Errorf("worker: invalid terminal size: %w", err)
 	}
 
 	pty, err := xpty.NewPty(cfg.Cols, cfg.Rows)
@@ -415,17 +438,20 @@ func (w *Worker) pump() {
 	}
 }
 
-func (w *Worker) resize(cols, rows int) {
+func (w *Worker) resize(cols, rows int) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.resizeLocked(cols, rows)
+	return w.resizeLocked(cols, rows)
 }
 
 // resizeLocked keeps the PTY and rendered screen at the same dimensions.
 // w.mu must be held so resize stays ordered with PTY output.
-func (w *Worker) resizeLocked(cols, rows int) {
-	_ = w.pty.Resize(cols, rows)
+func (w *Worker) resizeLocked(cols, rows int) error {
+	if err := w.pty.Resize(cols, rows); err != nil {
+		return fmt.Errorf("resize PTY: %w", err)
+	}
 	w.screen.Resize(cols, rows)
+	return nil
 }
 
 // finish records the exit code once and tells the attached client.

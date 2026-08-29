@@ -25,14 +25,19 @@ interface so its API churn stays contained (see `CLAUDE.md`).
 ```go
 package terminal
 
+type Capture struct {
+    Bytes      []byte
+    Restorable bool
+}
+
 // Screen tracks terminal state by consuming PTY output.
 type Screen interface {
-    io.Writer                  // fed every byte the PTY emits
+    io.Writer // fed every byte the PTY emits
     Resize(cols, rows int)
     // Snapshot renders the current screen as the escape sequences needed to
     // reproduce it on a fresh terminal: clear, cursor position, attributes,
-    // alternate-screen state.
-    Snapshot() []byte
+    // alternate-screen state, and any safe incremental-parser tail.
+    Snapshot() Capture
 }
 
 func NewScreen(cols, rows int) Screen
@@ -72,17 +77,33 @@ fallback is to keep raw replay and mark the gap explicitly to the user.
 
 Implemented with `github.com/charmbracelet/x/vt` pinned to
 `v0.0.0-20260828171018-3c30eef5e73e`. The wrapper restores the active screen,
-cell contents and attributes, cursor position/style/visibility, and alternate
-screen state. Snapshot bytes have their own protocol kind, so repainting does
-not invent PTY sequence offsets. Each snapshot is one bounded frame, and the
-client commits its announced resume offset only after receiving that frame in
-full.
+cell contents and attributes, cursor position/style/visibility, current text
+style and hyperlink, and alternate-screen state. It also preserves incomplete
+CSI, OSC, and UTF-8 parser input across a PTY read boundary. A parser boundary
+that cannot be replayed without duplicating a control effect is marked
+unrestorable, and the worker asks the client to retry instead of committing an
+incorrect resume offset.
 
-Verified with terminal equivalence tests, worker ordering and resume tests, a
-truncated-snapshot client test, the race detector, and
+Snapshot bytes have their own protocol kind, so repainting does not invent PTY
+sequence offsets. Each snapshot is one bounded frame, and the client commits
+its announced resume offset only after receiving that frame in full. Attach and
+resize dimensions are limited to 2,048 positions per axis and 262,144 cells total.
+Invalid sizes, PTY resize failures, unrestorable captures, oversized captures,
+and queue-admission failures reject only the candidate connection; they do not
+evict the active client.
+
+Verified with terminal equivalence and split-parser tests, worker ownership and
+resume tests, a truncated-snapshot client test, the race detector, and
 `integration/reattach_snapshot.sh` alongside all existing integrations.
 
-Still out of scope: scrollback history, mouse and other private terminal modes,
-palette/default-color restoration, and semantic reflow after resize. A snapshot
-must also fit in one protocol payload (4 MiB including its session header);
-oversized terminal dimensions can therefore make an attachment fail.
+This is an active-screen reconstruction, not a complete x/vt checkpoint. Saved
+cursor positions and attributes, inactive-screen contents, pending autowrap,
+scrollback history, mouse and other private terminal modes, palette and default
+colors, and semantic reflow after resize remain out of scope. Consequently,
+output that later restores an old saved cursor or leaves an alternate screen can
+diverge from an uninterrupted emulator even though the attached view is correct.
+
+A snapshot must fit in one protocol payload (4 MiB including its session
+header). A valid requested resize is applied before capture so the snapshot
+matches the new client dimensions; if that later capture is too large, the
+active client remains attached but the session keeps the requested size.

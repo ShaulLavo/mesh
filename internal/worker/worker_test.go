@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -66,7 +67,7 @@ func TestFreshAttachReceivesSnapshotThenLiveSequence(t *testing.T) {
 		t.Fatalf("attach response = kind %v, message %+v", f.Kind, attached)
 	}
 
-	wantSnapshot := screen.Snapshot()
+	wantSnapshot := screen.Snapshot().Bytes
 	f, err = r.ReadFrame()
 	if err != nil {
 		t.Fatal(err)
@@ -151,13 +152,352 @@ func TestExpiredAttachReceivesSnapshotAtCurrentHead(t *testing.T) {
 	}
 }
 
+func TestRejectedSnapshotDoesNotDisplaceActiveClient(t *testing.T) {
+	tests := []struct {
+		name   string
+		screen terminalstate.Screen
+	}{
+		{
+			name:   "unrestorable parser boundary",
+			screen: &recordingScreen{unrestorable: true},
+		},
+		{
+			name:   "snapshot exceeds one frame",
+			screen: &recordingScreen{output: make([]byte, maxSnapshotPayload+1)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sid, err := protocol.NewSessionID("ACTIVE")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pty := newPipePTY()
+			defer pty.Close()
+			w := &Worker{
+				cfg:      Config{ID: sid.String()},
+				sid:      sid,
+				pty:      pty,
+				ring:     session.NewRing(ringSize),
+				screen:   tt.screen,
+				exited:   make(chan struct{}),
+				attached: make(chan struct{}),
+			}
+
+			oldClient, oldServer := net.Pipe()
+			defer oldClient.Close()
+			old := newAttachment(oldServer, sid)
+			defer old.close()
+			w.client = old
+
+			client, server := net.Pipe()
+			defer client.Close()
+			go w.serve(server)
+			if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
+				Type:      protocol.TypeAttach,
+				SessionID: sid.String(),
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			_ = client.SetReadDeadline(time.Now().Add(time.Second))
+			frame, err := protocol.NewReader(client).ReadFrame()
+			if err != nil {
+				t.Fatalf("read rejection: %v", err)
+			}
+			msg, err := protocol.DecodeControl(frame.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError {
+				t.Fatalf("rejection = kind %v, message %+v", frame.Kind, msg)
+			}
+
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			if w.client != old {
+				t.Fatalf("active client = %p, want original %p", w.client, old)
+			}
+			old.queueMu.Lock()
+			defer old.queueMu.Unlock()
+			if old.closed || len(old.queue) != 0 {
+				t.Fatalf("original client closed %v with %d queued frames", old.closed, len(old.queue))
+			}
+		})
+	}
+}
+
+func TestInvalidAttachSizeDoesNotResizeOrDisplaceActiveClient(t *testing.T) {
+	sid, err := protocol.NewSessionID("SIZE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pty := newPipePTY()
+	defer pty.Close()
+	if err := pty.Resize(80, 24); err != nil {
+		t.Fatal(err)
+	}
+	screen := &recordingScreen{cols: 80, rows: 24}
+	w := &Worker{
+		cfg:      Config{ID: sid.String()},
+		sid:      sid,
+		pty:      pty,
+		ring:     session.NewRing(ringSize),
+		screen:   screen,
+		exited:   make(chan struct{}),
+		attached: make(chan struct{}),
+	}
+
+	oldClient, oldServer := net.Pipe()
+	defer oldClient.Close()
+	old := newAttachment(oldServer, sid)
+	defer old.close()
+	w.client = old
+
+	client, server := net.Pipe()
+	defer client.Close()
+	go w.serve(server)
+	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
+		Type:      protocol.TypeAttach,
+		SessionID: sid.String(),
+		Cols:      maxTerminalDimension + 1,
+		Rows:      24,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	frame, err := protocol.NewReader(client).ReadFrame()
+	if err != nil {
+		t.Fatalf("read rejection: %v", err)
+	}
+	msg, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError {
+		t.Fatalf("rejection = kind %v, message %+v", frame.Kind, msg)
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.client != old {
+		t.Fatalf("active client = %p, want original %p", w.client, old)
+	}
+	cols, rows, err := pty.Size()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cols != 80 || rows != 24 || screen.cols != 80 || screen.rows != 24 {
+		t.Fatalf("terminal resized to PTY %dx%d screen %dx%d", cols, rows, screen.cols, screen.rows)
+	}
+}
+
+func TestPTYResizeFailureDoesNotDisplaceActiveClient(t *testing.T) {
+	sid, err := protocol.NewSessionID("RSZFAIL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	basePTY := newPipePTY()
+	defer basePTY.Close()
+	if err := basePTY.Resize(80, 24); err != nil {
+		t.Fatal(err)
+	}
+	pty := &resizeErrorPTY{pipePTY: basePTY}
+	screen := &recordingScreen{cols: 80, rows: 24}
+	w := &Worker{
+		cfg:      Config{ID: sid.String()},
+		sid:      sid,
+		pty:      pty,
+		ring:     session.NewRing(ringSize),
+		screen:   screen,
+		exited:   make(chan struct{}),
+		attached: make(chan struct{}),
+	}
+
+	oldClient, oldServer := net.Pipe()
+	defer oldClient.Close()
+	old := newAttachment(oldServer, sid)
+	defer old.close()
+	w.client = old
+
+	client, server := net.Pipe()
+	defer client.Close()
+	go w.serve(server)
+	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
+		Type:      protocol.TypeAttach,
+		SessionID: sid.String(),
+		Cols:      100,
+		Rows:      30,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	frame, err := protocol.NewReader(client).ReadFrame()
+	if err != nil {
+		t.Fatalf("read rejection: %v", err)
+	}
+	msg, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError {
+		t.Fatalf("rejection = kind %v, message %+v", frame.Kind, msg)
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.client != old {
+		t.Fatalf("active client = %p, want original %p", w.client, old)
+	}
+	cols, rows, err := pty.Size()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cols != 80 || rows != 24 || screen.cols != 80 || screen.rows != 24 {
+		t.Fatalf("terminal resized to PTY %dx%d screen %dx%d", cols, rows, screen.cols, screen.rows)
+	}
+}
+
+func TestReplayQueueFailureDoesNotDisplaceActiveClient(t *testing.T) {
+	sid, err := protocol.NewSessionID("QUEUE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pty := newPipePTY()
+	defer pty.Close()
+	ring := session.NewRing(outboundQueueByteLimit + 1)
+	if _, err := ring.Write(make([]byte, outboundQueueByteLimit+1)); err != nil {
+		t.Fatal(err)
+	}
+	w := &Worker{
+		cfg:      Config{ID: sid.String()},
+		sid:      sid,
+		pty:      pty,
+		ring:     ring,
+		screen:   discardScreen{},
+		exited:   make(chan struct{}),
+		attached: make(chan struct{}),
+	}
+
+	oldClient, oldServer := net.Pipe()
+	defer oldClient.Close()
+	old := newAttachment(oldServer, sid)
+	defer old.close()
+	w.client = old
+
+	client, server := net.Pipe()
+	defer client.Close()
+	go w.serve(server)
+	lastSeq := uint64(0)
+	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
+		Type:      protocol.TypeAttach,
+		SessionID: sid.String(),
+		LastSeq:   &lastSeq,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	frame, err := protocol.NewReader(client).ReadFrame()
+	if err != nil {
+		t.Fatalf("read rejection: %v", err)
+	}
+	msg, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError {
+		t.Fatalf("rejection = kind %v, message %+v", frame.Kind, msg)
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.client != old {
+		t.Fatalf("active client = %p, want original %p", w.client, old)
+	}
+	old.queueMu.Lock()
+	defer old.queueMu.Unlock()
+	if old.closed || len(old.queue) != 0 {
+		t.Fatalf("original client closed %v with %d queued frames", old.closed, len(old.queue))
+	}
+	select {
+	case <-w.attached:
+		t.Fatal("rejected candidate marked the worker attached")
+	default:
+	}
+}
+
+func TestRuntimeResizeFailureReportsErrorAndKeepsScreenInSync(t *testing.T) {
+	sid, err := protocol.NewSessionID("LIVE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	basePTY := newPipePTY()
+	defer basePTY.Close()
+	if err := basePTY.Resize(80, 24); err != nil {
+		t.Fatal(err)
+	}
+	pty := &resizeErrorPTY{pipePTY: basePTY}
+	screen := &recordingScreen{cols: 80, rows: 24}
+	w := &Worker{
+		cfg:      Config{ID: sid.String()},
+		sid:      sid,
+		pty:      pty,
+		ring:     session.NewRing(ringSize),
+		screen:   screen,
+		exited:   make(chan struct{}),
+		attached: make(chan struct{}),
+	}
+
+	client, server := net.Pipe()
+	defer client.Close()
+	go w.serve(server)
+	writer := protocol.NewWriter(client)
+	if err := writer.WriteControlMsg(protocol.Control{Type: protocol.TypeAttach, SessionID: sid.String()}); err != nil {
+		t.Fatal(err)
+	}
+	reader := protocol.NewReader(client)
+	for range 2 {
+		if _, err := reader.ReadFrame(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.WriteControlMsg(protocol.Control{Type: protocol.TypeResize, Cols: 100, Rows: 30}); err != nil {
+		t.Fatal(err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	frame, err := reader.ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Kind != protocol.KindControl || msg.Type != protocol.TypeError {
+		t.Fatalf("resize response = kind %v, message %+v", frame.Kind, msg)
+	}
+	cols, rows, err := pty.Size()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cols != 80 || rows != 24 || screen.cols != 80 || screen.rows != 24 {
+		t.Fatalf("terminal resized to PTY %dx%d screen %dx%d", cols, rows, screen.cols, screen.rows)
+	}
+}
+
 func TestResizeUpdatesPTYAndRenderedScreen(t *testing.T) {
 	pty := newPipePTY()
 	defer pty.Close()
 	screen := &recordingScreen{}
 	w := &Worker{pty: pty, screen: screen}
 
-	w.resize(132, 43)
+	if err := w.resize(132, 43); err != nil {
+		t.Fatal(err)
+	}
 
 	cols, rows, err := pty.Size()
 	if err != nil {
@@ -168,6 +508,30 @@ func TestResizeUpdatesPTYAndRenderedScreen(t *testing.T) {
 	}
 	if screen.cols != 132 || screen.rows != 43 {
 		t.Fatalf("screen size = %dx%d, want 132x43", screen.cols, screen.rows)
+	}
+}
+
+func TestValidateTerminalSize(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		cols, rows int
+		wantError  bool
+	}{
+		{name: "ordinary", cols: 80, rows: 24},
+		{name: "largest cell budget", cols: maxTerminalDimension, rows: maxTerminalCells / maxTerminalDimension},
+		{name: "negative column", cols: -1, rows: 24, wantError: true},
+		{name: "negative row", cols: 80, rows: -1, wantError: true},
+		{name: "missing column", cols: 0, rows: 24, wantError: true},
+		{name: "missing row", cols: 80, rows: 0, wantError: true},
+		{name: "dimension limit", cols: maxTerminalDimension + 1, rows: 1, wantError: true},
+		{name: "cell limit", cols: maxTerminalDimension, rows: maxTerminalCells/maxTerminalDimension + 1, wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTerminalSize(tt.cols, tt.rows)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("validateTerminalSize(%d, %d) error = %v, want error %v", tt.cols, tt.rows, err, tt.wantError)
+			}
+		})
 	}
 }
 
@@ -668,6 +1032,14 @@ func (p *pipePTY) Size() (width, height int, err error) {
 func (p *pipePTY) Name() string          { return "pipe" }
 func (p *pipePTY) Start(*exec.Cmd) error { return nil }
 
+type resizeErrorPTY struct {
+	*pipePTY
+}
+
+func (p *resizeErrorPTY) Resize(int, int) error {
+	return errors.New("resize failed")
+}
+
 type writeNotifyConn struct {
 	net.Conn
 	entered chan struct{}
@@ -678,11 +1050,14 @@ type discardScreen struct{}
 
 func (discardScreen) Write(p []byte) (int, error) { return len(p), nil }
 func (discardScreen) Resize(int, int)             {}
-func (discardScreen) Snapshot() []byte            { return nil }
+func (discardScreen) Snapshot() terminalstate.Capture {
+	return terminalstate.Capture{Restorable: true}
+}
 
 type recordingScreen struct {
-	output     []byte
-	cols, rows int
+	output       []byte
+	cols, rows   int
+	unrestorable bool
 }
 
 func (s *recordingScreen) Write(p []byte) (int, error) {
@@ -690,7 +1065,9 @@ func (s *recordingScreen) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func (s *recordingScreen) Resize(cols, rows int) { s.cols, s.rows = cols, rows }
-func (s *recordingScreen) Snapshot() []byte      { return bytes.Clone(s.output) }
+func (s *recordingScreen) Snapshot() terminalstate.Capture {
+	return terminalstate.Capture{Bytes: bytes.Clone(s.output), Restorable: !s.unrestorable}
+}
 
 func (c *writeNotifyConn) Write(p []byte) (int, error) {
 	c.once.Do(func() { close(c.entered) })

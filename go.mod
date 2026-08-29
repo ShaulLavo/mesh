@@ -3,6 +3,8 @@ module github.com/shaul/mesh
 go 1.27.0
 
 require (
+	github.com/charmbracelet/ultraviolet v0.0.0-20260303162955-0b88c25f3fff
+	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/charmbracelet/x/vt v0.0.0-20260828171018-3c30eef5e73e
 	github.com/charmbracelet/x/xpty v0.1.4
@@ -13,8 +15,6 @@ require (
 
 require (
 	github.com/charmbracelet/colorprofile v0.4.2 // indirect
-	github.com/charmbracelet/ultraviolet v0.0.0-20260303162955-0b88c25f3fff // indirect
-	github.com/charmbracelet/x/ansi v0.11.7 // indirect
 	github.com/charmbracelet/x/conpty v0.2.0 // indirect
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
