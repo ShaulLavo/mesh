@@ -25,14 +25,17 @@ type BatchOptions struct {
 // BatchingConn coalesces adjacent data frames for one session. Control and
 // input frames flush pending output first, so wire ordering does not change.
 type BatchingConn struct {
-	dst      Conn
-	opts     BatchOptions
-	mu       sync.Mutex
-	pending  *protocol.Frame
-	timer    *time.Timer
-	writeErr error
-	closed   bool
-	closeErr error
+	dst       Conn
+	opts      BatchOptions
+	stateMu   sync.Mutex
+	writeMu   sync.Mutex
+	pending   *protocol.Frame
+	timer     *time.Timer
+	timerGen  uint64
+	writeErr  error
+	closed    bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // NewBatchingConn wraps dst with bounded, timer-driven data coalescing.
@@ -74,32 +77,79 @@ func (c *BatchingConn) ReadFrame() (protocol.Frame, error) {
 // WriteFrame copies buffered data before returning. A later Flush, control
 // write, or Close reports an asynchronous data-write failure.
 func (c *BatchingConn) WriteFrame(frame protocol.Frame) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 
+	c.stateMu.Lock()
 	if c.closed {
+		c.stateMu.Unlock()
 		return ErrClosed
 	}
 	if c.writeErr != nil {
-		return c.writeErr
+		err := c.writeErr
+		c.stateMu.Unlock()
+		return err
 	}
-	if frame.Kind != protocol.KindData || len(frame.Payload) == 0 {
-		if err := c.flushLocked(); err != nil {
-			return err
-		}
-		return c.writeLocked(frame)
+	frames := c.queueLocked(frame)
+	c.stateMu.Unlock()
+	return c.writeFrames(frames)
+}
+
+// Flush writes pending output now.
+func (c *BatchingConn) Flush() error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	c.stateMu.Lock()
+	if c.closed {
+		c.stateMu.Unlock()
+		return ErrClosed
 	}
-	if len(frame.Payload) >= c.opts.MaxBytes {
-		if err := c.flushLocked(); err != nil {
-			return err
-		}
-		return c.writeLocked(frame)
+	if c.writeErr != nil {
+		err := c.writeErr
+		c.stateMu.Unlock()
+		return err
+	}
+	frame, ok := c.takePendingLocked()
+	c.stateMu.Unlock()
+	if !ok {
+		return nil
+	}
+	return c.writeFrames([]protocol.Frame{frame})
+}
+
+func (c *BatchingConn) Close() error {
+	c.closeOnce.Do(func() {
+		c.stateMu.Lock()
+		c.closed = true
+		c.cancelTimerLocked()
+		c.pending = nil
+		c.stateMu.Unlock()
+
+		// Conn.Close must interrupt an in-flight WriteFrame. Do not wait for
+		// writeMu before giving the destination that cancellation signal.
+		destinationErr := c.dst.Close()
+		c.writeMu.Lock()
+		c.writeMu.Unlock()
+
+		c.stateMu.Lock()
+		c.closeErr = errors.Join(c.writeErr, destinationErr)
+		c.stateMu.Unlock()
+	})
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	return c.closeErr
+}
+
+func (c *BatchingConn) queueLocked(frame protocol.Frame) []protocol.Frame {
+	if frame.Kind != protocol.KindData || len(frame.Payload) == 0 || len(frame.Payload) >= c.opts.MaxBytes {
+		frames := c.takePendingFramesLocked()
+		return append(frames, frame)
 	}
 
+	var frames []protocol.Frame
 	if c.pending != nil && !contiguous(*c.pending, frame, c.opts.MaxBytes) {
-		if err := c.flushLocked(); err != nil {
-			return err
-		}
+		frames = c.takePendingFramesLocked()
 	}
 	if c.pending == nil {
 		copy := frame
@@ -110,58 +160,39 @@ func (c *BatchingConn) WriteFrame(frame protocol.Frame) error {
 		c.pending.Payload = append(c.pending.Payload, frame.Payload...)
 	}
 	if len(c.pending.Payload) >= c.opts.MaxBytes {
-		return c.flushLocked()
+		frames = append(frames, c.takePendingFramesLocked()...)
 	}
-	return nil
+	return frames
 }
 
-// Flush writes pending output now.
-func (c *BatchingConn) Flush() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return c.closeErr
-	}
-	return c.flushLocked()
-}
-
-func (c *BatchingConn) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return c.closeErr
-	}
-	c.closed = true
-	if c.timer != nil {
-		c.timer.Stop()
-		c.timer = nil
-	}
-	flushErr := c.flushLocked()
-	closeErr := c.dst.Close()
-	c.closeErr = errors.Join(flushErr, closeErr)
-	return c.closeErr
-}
-
-func (c *BatchingConn) flushLocked() error {
-	if c.timer != nil {
-		c.timer.Stop()
-		c.timer = nil
-	}
-	if c.writeErr != nil {
-		return c.writeErr
-	}
-	if c.pending == nil {
+func (c *BatchingConn) takePendingFramesLocked() []protocol.Frame {
+	frame, ok := c.takePendingLocked()
+	if !ok {
 		return nil
+	}
+	return []protocol.Frame{frame}
+}
+
+func (c *BatchingConn) takePendingLocked() (protocol.Frame, bool) {
+	c.cancelTimerLocked()
+	if c.pending == nil {
+		return protocol.Frame{}, false
 	}
 	frame := *c.pending
 	c.pending = nil
-	return c.writeLocked(frame)
+	return frame, true
 }
 
-func (c *BatchingConn) writeLocked(frame protocol.Frame) error {
-	if err := c.dst.WriteFrame(frame); err != nil {
-		c.writeErr = err
-		return err
+func (c *BatchingConn) writeFrames(frames []protocol.Frame) error {
+	for _, frame := range frames {
+		if err := c.dst.WriteFrame(frame); err != nil {
+			c.stateMu.Lock()
+			if c.writeErr == nil {
+				c.writeErr = err
+			}
+			c.stateMu.Unlock()
+			return err
+		}
 	}
 	return nil
 }
@@ -170,15 +201,39 @@ func (c *BatchingConn) scheduleFlushLocked() {
 	if c.opts.FlushInterval == 0 {
 		return
 	}
+	c.timerGen++
+	generation := c.timerGen
 	c.timer = time.AfterFunc(c.opts.FlushInterval, func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		c.timer = nil
-		if c.closed || c.writeErr != nil {
-			return
-		}
-		_ = c.flushLocked()
+		c.flushTimer(generation)
 	})
+}
+
+func (c *BatchingConn) flushTimer(generation uint64) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	c.stateMu.Lock()
+	if generation != c.timerGen {
+		c.stateMu.Unlock()
+		return
+	}
+	c.timer = nil
+	if c.closed || c.writeErr != nil || c.pending == nil {
+		c.stateMu.Unlock()
+		return
+	}
+	frame := *c.pending
+	c.pending = nil
+	c.stateMu.Unlock()
+	_ = c.writeFrames([]protocol.Frame{frame})
+}
+
+func (c *BatchingConn) cancelTimerLocked() {
+	c.timerGen++
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
 }
 
 func contiguous(left, right protocol.Frame, maxBytes int) bool {

@@ -2,8 +2,10 @@ package transport
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,6 +85,95 @@ func TestBatchingConnFlushesAtSizeAndOnTimer(t *testing.T) {
 	}
 }
 
+func TestBatchingConnCloseInterruptsBlockedWrite(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		startWrite func(*testing.T, *BatchingConn) <-chan error
+	}{
+		{
+			name: "caller",
+			startWrite: func(t *testing.T, conn *BatchingConn) <-chan error {
+				t.Helper()
+				done := make(chan error, 1)
+				go func() {
+					done <- conn.WriteFrame(protocol.Frame{
+						Kind:    protocol.KindControl,
+						Payload: []byte(`{"type":"barrier"}`),
+					})
+				}()
+				return done
+			},
+		},
+		{
+			name: "timer",
+			startWrite: func(t *testing.T, conn *BatchingConn) <-chan error {
+				t.Helper()
+				sid, err := protocol.NewSessionID("7K3D")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := conn.WriteFrame(protocol.Frame{
+					Kind:    protocol.KindData,
+					Session: sid,
+					Payload: []byte("x"),
+				}); err != nil {
+					t.Fatal(err)
+				}
+				return nil
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dst := newCloseUnblocksConn()
+			conn, err := NewBatchingConn(dst, BatchOptions{
+				MaxBytes:      32,
+				FlushInterval: time.Millisecond,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeDone := test.startWrite(t, conn)
+			select {
+			case <-dst.writeStarted:
+			case <-time.After(250 * time.Millisecond):
+				t.Fatal("destination write did not start")
+			}
+
+			closeDone := make(chan error, 1)
+			go func() { closeDone <- conn.Close() }()
+			var closeErr error
+			select {
+			case closeErr = <-closeDone:
+			case <-time.After(250 * time.Millisecond):
+				// Release the old implementation's lock cycle before failing so
+				// this regression never leaves a stuck goroutine behind.
+				_ = dst.Close()
+				<-closeDone
+				if writeDone != nil {
+					<-writeDone
+				}
+				t.Fatal("Close blocked behind destination WriteFrame")
+			}
+			if !errors.Is(closeErr, errBlockedWriteClosed) {
+				t.Fatalf("Close error = %v, want blocked write error", closeErr)
+			}
+			if writeDone != nil {
+				if err := <-writeDone; !errors.Is(err, errBlockedWriteClosed) {
+					t.Fatalf("WriteFrame error = %v, want blocked write error", err)
+				}
+			}
+			if err := conn.Close(); !errors.Is(err, errBlockedWriteClosed) {
+				t.Fatalf("second Close error = %v, want first Close result", err)
+			}
+			if calls := dst.closeCalls.Load(); calls != 1 {
+				t.Fatalf("destination Close calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
 func waitForWrite(t *testing.T, wrote <-chan struct{}) {
 	t.Helper()
 	select {
@@ -119,4 +210,37 @@ func (c *recordingConn) snapshot() []protocol.Frame {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]protocol.Frame(nil), c.writes...)
+}
+
+var errBlockedWriteClosed = errors.New("blocked write interrupted by close")
+
+type closeUnblocksConn struct {
+	writeStarted chan struct{}
+	closed       chan struct{}
+	startOnce    sync.Once
+	closeOnce    sync.Once
+	closeCalls   atomic.Int32
+}
+
+func newCloseUnblocksConn() *closeUnblocksConn {
+	return &closeUnblocksConn{
+		writeStarted: make(chan struct{}),
+		closed:       make(chan struct{}),
+	}
+}
+
+func (c *closeUnblocksConn) ReadFrame() (protocol.Frame, error) {
+	return protocol.Frame{}, io.EOF
+}
+
+func (c *closeUnblocksConn) WriteFrame(protocol.Frame) error {
+	c.startOnce.Do(func() { close(c.writeStarted) })
+	<-c.closed
+	return errBlockedWriteClosed
+}
+
+func (c *closeUnblocksConn) Close() error {
+	c.closeCalls.Add(1)
+	c.closeOnce.Do(func() { close(c.closed) })
+	return nil
 }
