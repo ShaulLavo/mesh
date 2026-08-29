@@ -186,6 +186,55 @@ func TestReconcileHostInterruptsMissingActiveSessions(t *testing.T) {
 	}
 }
 
+func TestReconcileHostKeepsLatestAttachmentTime(t *testing.T) {
+	older := testTime(time.Hour)
+	latest := testTime(2 * time.Hour)
+	newer := testTime(3 * time.Hour)
+	testCases := []struct {
+		name     string
+		stored   *time.Time
+		observed *time.Time
+		want     time.Time
+	}{
+		{name: "missing observation", stored: &latest, observed: nil, want: latest},
+		{name: "older observation", stored: &latest, observed: &older, want: latest},
+		{name: "newer observation", stored: &latest, observed: &newer, want: newer},
+		{name: "first observation", stored: nil, observed: &latest, want: latest},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := openTestStore(t)
+			host := testHost("host-a")
+			if _, err := store.UpsertHost(ctx, host); err != nil {
+				t.Fatal(err)
+			}
+
+			persisted := testSession(host.ID, "LIVE", StateDetached, 20)
+			persisted.LastAttachedAt = tc.stored
+			if _, err := store.UpsertSession(ctx, persisted); err != nil {
+				t.Fatal(err)
+			}
+
+			observed := persisted
+			observed.State = StateRunning
+			observed.LastAttachedAt = tc.observed
+			if err := store.ReconcileHost(ctx, host.ID, []Session{observed}); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := store.GetSession(ctx, host.ID, persisted.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.LastAttachedAt == nil || !got.LastAttachedAt.Equal(tc.want) {
+				t.Fatalf("last attachment time = %v, want %v", got.LastAttachedAt, tc.want)
+			}
+		})
+	}
+}
+
 func TestReconcileHostRejectsNonAuthoritativeInputBeforeWriting(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t)

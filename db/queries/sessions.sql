@@ -15,7 +15,11 @@ ON CONFLICT (host_id, id) DO UPDATE SET
     cwd = excluded.cwd,
     state = excluded.state,
     created_at = excluded.created_at,
-    last_attached_at = excluded.last_attached_at,
+    last_attached_at = CASE
+        WHEN excluded.last_attached_at IS NULL THEN sessions.last_attached_at
+        WHEN sessions.last_attached_at IS NULL THEN excluded.last_attached_at
+        ELSE MAX(sessions.last_attached_at, excluded.last_attached_at)
+    END,
     exit_code = excluded.exit_code,
     last_output_sequence = MAX(sessions.last_output_sequence, excluded.last_output_sequence)
 RETURNING id, host_id, command, cwd, state, created_at, last_attached_at, exit_code, last_output_sequence;
