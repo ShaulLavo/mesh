@@ -13,14 +13,14 @@ Tailscale.
 
 ## Responsibilities
 
-1. **TLS.** Let's Encrypt for each public name Mesh was explicitly told to bind
-   under `shaulavo.dev`. Reuse the DNS-01 plumbing T12 builds. Certificates renew
-   unattended and survive a restart.
-   **Mesh never binds the `shaulavo.dev` apex** unless a service names it. The apex
-   is unused as of 2026-08-29 and is expected to host a personal site later, so
-   the edge must support two arrangements: owning port 443 directly, and running
-   on another port behind a proxy that terminates TLS for it. A flag, not a
-   rewrite.
+1. **TLS, conditionally.** The default arrangement is that something else owns
+   port 443 on the VPS, terminates TLS, and reverse-proxies Mesh routes to the
+   edge on a local port. In that arrangement the edge speaks plain HTTP and
+   holds no certificates at all.
+   Support owning 443 directly as the other arrangement, for a deployment where
+   the site lives elsewhere. Reuse T12's DNS-01 plumbing there rather than
+   writing a second ACME path.
+   **Mesh never serves the `shaulavo.dev` site.** That is explicitly not its job.
 2. **Routing.** Longest-prefix match on path, plus subdomain lookup for services
    that asked for one. Unknown route returns 404 without revealing what else
    exists.

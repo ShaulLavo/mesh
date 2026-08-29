@@ -146,3 +146,17 @@ when the served root contains anything credential-shaped. Mesh never binds the
 
 **Why:** serving a directory is one keystroke from publishing your home folder,
 and a derived name is a name nobody read before it went live.
+
+## D16 — Mesh does not serve the personal site
+
+When `shaulavo.dev` gets a site it will be served by something else. The Mesh
+edge sits behind that front door: it does not assume port 443, and in the default
+arrangement it holds no public certificates, speaking plain HTTP to a proxy that
+terminates TLS and sets `X-Forwarded-Proto`.
+
+**Why it matters even though the site does not exist yet:** an edge written
+assuming it owns 443 needs restructuring to give it up. Written the other way
+round, owning 443 is a configuration choice.
+
+The private side is unaffected. `*.mesh.shaulavo.dev` still needs its own
+wildcard certificate via DNS-01, which T12 owns.

@@ -124,6 +124,39 @@ Arbitrary TCP tunnels, per-service authentication beyond public or tailnet,
 multi-user access control, the tidy `mesh.shaulavo.dev/<name>` alias, and anything
 resembling a build or deploy pipeline.
 
+## The apex is not Mesh's
+
+`shaulavo.dev` serves nothing today. When the site arrives it will not be served
+by Mesh, so the edge is designed to sit behind the front door rather than be it.
+
+The practical consequence: **the Mesh edge must not assume it owns port 443.**
+Whatever serves the site owns it, terminates TLS, and reverse-proxies the Mesh
+routes to the edge on a local port. The edge respects `X-Forwarded-Proto` so
+generated links stay `https`.
+
+That also means TLS for public names may not be Mesh's job at all. If Caddy or
+nginx fronts the VPS, it already holds those certificates and the edge just
+speaks plain HTTP on localhost. The DNS-01 plumbing does not disappear, because
+the private `*.mesh.shaulavo.dev` wildcard still needs it (T12), but T13 gets
+noticeably smaller.
+
+One thing worth settling before T13: if the site ends up hosted somewhere else
+entirely rather than on the VPS, there is no port conflict and the edge can hold
+443 after all. Same code either way, different deployment.
+
+## Tasks
+
+- `T11-serving-core.md` — service types, registry, origin-side serving
+- `T12-private-names.md` — DNS and TLS for `mesh.shaulavo.dev`, per-host routing
+- `T13-public-edge.md` — VPS edge mode, public routes on `shaulavo.dev`
+- `T14-serve-cli.md` — `m serve`, `m unserve`, `m serve ls`
+
+## Explicitly not in step 8
+
+Arbitrary TCP tunnels, per-service authentication beyond public or tailnet,
+multi-user access control, the tidy `mesh.shaulavo.dev/<name>` alias, and anything
+resembling a build or deploy pipeline.
+
 ## The apex
 
 `shaulavo.dev` serves nothing today, but it will. When the personal site arrives,
