@@ -128,12 +128,18 @@ interfaces so API churn stays contained.
 6. **Pi power control** — `m wake pc`, wake-then-connect flow, sleep inhibitors.
 7. **Packaging** — systemd, launchd, GoReleaser, Actions, Homebrew Cask, installer,
    VHS demos, race tests, protocol fuzzing, govulncheck, golangci-lint v2.
+8. **Serving** — static sites, file browsers and local-port proxies, published on
+   the tailnet by default and optionally on the public internet at
+   `mesh.shaul.dev/<name>` through the VPS. See `docs/plan/03-serving.md`.
 
 ## Explicitly later
 
 MCP/tools · coding-agent knowledge · job scheduling · deployment orchestration ·
 personal assistant · iPhone app · GUI editor · collaborative writers · sharing
 meshes with other users · replacing Tailscale · arbitrary proxying through the Pi.
+
+Serving (step 8) is deliberately scoped proxying through the VPS, not the general
+case. It does not open the door to arbitrary tunnels.
 
 The extension point is the daemon protocol. Anything built later calls Mesh
 exactly like the CLI does.

@@ -127,3 +127,36 @@ made-up byte count and cause a gap after the next reconnect.
 **Cost:** relays must accept one more additive frame kind. They still forward the
 frame unchanged. A rendered screen must fit within one protocol payload (just
 under 4 MiB); an attachment is rejected if it does not.
+
+## D13 — The VPS is the public edge, and only for serving
+
+Step 8 publishes services at `mesh.shaul.dev/<name>` through the VPS, which
+terminates TLS and reverse-proxies to origins over Tailscale. Origin machines
+never open a port to the internet.
+
+This is a scoped exception to "traffic goes directly to the destination machine".
+That invariant protects terminal sessions, where a proxy would be a liability and
+a single point of failure. Public web traffic crosses a public edge by
+definition.
+
+**The exception does not extend to terminal traffic**, and T12's acceptance
+criteria assert that. Anyone reading this later: the invariant is intact.
+
+## D14 — Path routing by default, subdomains as the escape hatch
+
+`mesh.shaul.dev/blog` is the default shape. Root-relative URLs break under a path
+prefix, so `--subdomain` publishes at `blog.mesh.shaul.dev` instead. Mesh
+generates the HTML for `static` and `files` and handles its own prefixes; only
+`proxy` needs the hatch.
+
+**Cost:** the certificate has to cover the apex and the wildcard, which needs a
+DNS-01 challenge rather than HTTP-01. Paid once, at the start, deliberately.
+
+## D15 — Nothing is public unless you said so
+
+Served services are tailnet-only by default. `--public` is always explicit,
+always confirmed interactively, and refused outright when the served root
+contains anything credential-shaped.
+
+**Why:** serving a directory is one keystroke from publishing your home folder.
+The dangerous thing should never be the short path.

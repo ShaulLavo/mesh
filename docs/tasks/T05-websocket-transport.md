@@ -105,6 +105,12 @@ go test -race -count=100 ./internal/transport
 go test ./internal/transport -run '^$' -fuzz '^FuzzProtocolReader$' -fuzztime=5s
 ```
 
+## Note for later
+
+The daemon's HTTP listener will host more than this WebSocket endpoint: step 8
+mounts served sites and file browsers on it (T11). Reserve a path prefix for the
+Mesh protocol now rather than assuming the listener is yours alone.
+
 ## Out of scope
 
 Tailscale address discovery (T06), authentication beyond "we are on the tailnet"

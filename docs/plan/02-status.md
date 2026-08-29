@@ -31,7 +31,7 @@ T01 vt snapshot ─────→ finish step 1
 T02 outbound queue ✓
 T03 storage ─────────→ T04 daemon ──→ T07 CLI surface ──→ T09 picker
 T05 websocket ─────────→ T04           T08 ssh bootstrap
-T06 host identity ─────→ T04
+T06 host identity ─────→ T04 ──→ T11 serving core ──→ T12 public edge ──→ T13 m serve
 ```
 
 Safe to run in parallel right now: **T01, T03, T05, T06.** They own disjoint
@@ -49,6 +49,9 @@ files. T04 needs T03 and T06 landed; T07 needs T04. T02 is complete.
 | T08 ssh bootstrap | `internal/bootstrap/`, `scripts/install/` | T04, T06 |
 | T09 picker TUI | `internal/tui/` | T07 |
 | T10 packaging | `.github/`, `.goreleaser.yaml` | T07 |
+| T11 serving core | `internal/serve/` | T04 |
+| T12 public edge | `internal/edge/` | T11, T06 |
+| T13 `m serve` | `internal/cli/` | T11, T12, T07 |
 
 T01 can now build on T02's ordered attachment queue.
 

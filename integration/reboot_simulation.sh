@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# A running record from another boot is historical evidence, not a process the
+# new daemon may resurrect.
+set -uo pipefail
+
+MESH=${MESH:-$PWD/mesh}
+T=$(mktemp -d)
+export MESH_STATE_DIR="$T/state"
+DAEMON1=""
+DAEMON2=""
+CLIENT=""
+SID=""
+SHELL_PID=""
+WORKER_PID=""
+
+cleanup() {
+  [ -z "$CLIENT" ] || kill -9 "$CLIENT" 2>/dev/null || true
+  [ -z "$DAEMON1" ] || kill -9 "$DAEMON1" 2>/dev/null || true
+  [ -z "$DAEMON2" ] || kill -9 "$DAEMON2" 2>/dev/null || true
+  [ -z "$WORKER_PID" ] || kill -9 "$WORKER_PID" 2>/dev/null || true
+  [ -z "$SHELL_PID" ] || kill -9 "$SHELL_PID" 2>/dev/null || true
+  rm -rf "$T"
+}
+trap cleanup EXIT
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+wait_for_daemon() {
+  local pid=$1
+  for _ in $(seq 120); do
+    kill -0 "$pid" 2>/dev/null || return 1
+    [ -S "$MESH_STATE_DIR/daemon.sock" ] && return 0
+    sleep 0.05
+  done
+  return 1
+}
+
+database_state() {
+  python3 - "$MESH_STATE_DIR/mesh.db" "$SID" <<'PY'
+import sqlite3
+import sys
+
+with sqlite3.connect(sys.argv[1]) as database:
+    row = database.execute("SELECT state FROM sessions WHERE id = ?", (sys.argv[2],)).fetchone()
+print("" if row is None else row[0])
+PY
+}
+
+mkfifo "$T/in"
+"$MESH" daemon >"$T/daemon1.log" 2>&1 &
+DAEMON1=$!
+wait_for_daemon "$DAEMON1" || fail "first daemon did not start: $(cat "$T/daemon1.log")"
+
+"$MESH" local -- bash --noprofile --norc <"$T/in" >"$T/out" 2>"$T/client.err" &
+CLIENT=$!
+exec 3>"$T/in"
+for _ in $(seq 120); do
+  SID=$(sed -n 's/^session \([0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\)$/\1/p' "$T/client.err" | head -n1)
+  [ -n "$SID" ] && break
+  sleep 0.05
+done
+[ -n "$SID" ] || fail "client did not create a session: $(cat "$T/client.err")"
+echo "echo \$\$ > $T/shell_pid" >&3
+for _ in $(seq 120); do [ -s "$T/shell_pid" ] && break; sleep 0.05; done
+[ -s "$T/shell_pid" ] || fail "session shell did not start"
+SHELL_PID=$(cat "$T/shell_pid")
+SESSION_PID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$MESH_STATE_DIR/s/$SID/meta.json") || fail "could not read session PID"
+WORKER_PID=$(python3 - "$SESSION_PID" <<'PY'
+import sys
+
+with open(f"/proc/{sys.argv[1]}/stat", encoding="utf-8") as status:
+    print(status.read().split()[3])
+PY
+) || fail "could not identify session worker"
+
+kill -9 "$DAEMON1" 2>/dev/null
+wait "$DAEMON1" 2>/dev/null
+DAEMON1=""
+kill -9 "$CLIENT" 2>/dev/null || true
+wait "$CLIENT" 2>/dev/null
+CLIENT=""
+exec 3>&-
+kill -9 "$WORKER_PID" 2>/dev/null
+for _ in $(seq 120); do
+  kill -0 "$WORKER_PID" 2>/dev/null || break
+  sleep 0.05
+done
+kill -0 "$WORKER_PID" 2>/dev/null && fail "worker did not stop for reboot simulation"
+kill -9 "$SESSION_PID" 2>/dev/null || true
+
+python3 - "$MESH_STATE_DIR/s/$SID/meta.json" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    metadata = json.load(source)
+metadata["bootId"] = "simulated-previous-boot"
+temporary = path + ".reboot"
+with open(temporary, "w", encoding="utf-8") as destination:
+    json.dump(metadata, destination)
+    destination.flush()
+    os.fsync(destination.fileno())
+os.replace(temporary, path)
+PY
+
+"$MESH" daemon >"$T/daemon2.log" 2>&1 &
+DAEMON2=$!
+wait_for_daemon "$DAEMON2" || fail "replacement daemon did not start: $(cat "$T/daemon2.log")"
+for _ in $(seq 120); do
+  [ "$(database_state)" = interrupted ] && break
+  sleep 0.05
+done
+[ "$(database_state)" = interrupted ] || fail "old-boot session was not recorded as interrupted"
+kill -0 "$WORKER_PID" 2>/dev/null && fail "daemon resurrected worker $WORKER_PID"
+"$MESH" ls | grep -q "$SID.*interrupted" || fail "CLI did not report $SID as interrupted"
+
+echo "PASS: simulated reboot left session $SID interrupted and did not resurrect worker $WORKER_PID"

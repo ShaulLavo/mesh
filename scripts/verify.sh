@@ -45,9 +45,9 @@ for i in "${!pids[@]}"; do
   if wait "${pids[$i]}"; then
     printf 'PASS: %s\n' "${names[$i]}"
     continue
+  else
+    status=$?
   fi
-
-  status=$?
   failed=1
   printf 'FAIL: %s (exit %d)\n' "${names[$i]}" "$status" >&2
   sed 's/^/  /' "${logs[$i]}" >&2

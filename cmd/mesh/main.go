@@ -6,15 +6,20 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
 	"github.com/shaul/mesh/internal/cli"
+	meshdaemon "github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -22,6 +27,7 @@ import (
 const usage = `mesh - resumable terminal sessions
 
 usage:
+  mesh daemon [--tailnet-port PORT]     run this host's coordinator
   mesh local [-r] [--] [command...]   start a session, or resume the latest with -r
   mesh attach <id>                    attach to a session by id
   mesh ls                             list sessions on this host
@@ -42,6 +48,8 @@ func main() {
 	switch os.Args[1] {
 	case "session-worker":
 		err = runWorker(os.Args[2:])
+	case "daemon":
+		err = runDaemon(os.Args[2:])
 	case "local":
 		err = runLocal(os.Args[2:])
 	case "attach":
@@ -66,6 +74,35 @@ func main() {
 		fmt.Fprintf(os.Stderr, "mesh: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runDaemon(args []string) error {
+	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
+	tailnetPort := fs.Uint("tailnet-port", 0, "Tailnet WebSocket port (zero disables remote listening)")
+	webSocketPath := fs.String("websocket-path", "/mesh", "Tailnet WebSocket path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: mesh daemon [--tailnet-port PORT]")
+	}
+	if *tailnetPort > 65535 {
+		return fmt.Errorf("tailnet port %d is out of range", *tailnetPort)
+	}
+	stateDir, err := paths.StateDir()
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return meshdaemon.Run(ctx, meshdaemon.Config{
+		StateDir:      stateDir,
+		TailnetPort:   uint16(*tailnetPort),
+		WebSocketPath: *webSocketPath,
+		ReportError: func(err error) {
+			fmt.Fprintf(os.Stderr, "mesh daemon: %v\n", err)
+		},
+	})
 }
 
 func runWorker(args []string) error {
@@ -109,6 +146,7 @@ func runLocal(args []string) error {
 	}
 
 	var s cli.Session
+	var socketPath string
 	var lastSeq *uint64
 	var err error
 	if *resume {
@@ -123,9 +161,28 @@ func runLocal(args []string) error {
 			command = []string{defaultShell()}
 		}
 		cwd, _ := os.Getwd()
-		s, err = cli.Spawn(command, cwd)
-		if err != nil {
-			return err
+		stateDir, stateErr := paths.StateDir()
+		if stateErr != nil {
+			return stateErr
+		}
+		id, createErr := cli.CreateViaDaemon(context.Background(), cli.DaemonCreateOptions{
+			SocketPath: meshdaemon.SocketPath(stateDir),
+			Command:    command,
+			Cwd:        cwd,
+			Cols:       80,
+			Rows:       24,
+		})
+		switch {
+		case createErr == nil:
+			s = cli.Session{Meta: worker.Meta{ID: id}, Alive: true}
+			socketPath = meshdaemon.SocketPath(stateDir)
+		case errors.Is(createErr, cli.ErrDaemonUnavailable):
+			s, err = cli.Spawn(command, cwd)
+			if err != nil {
+				return err
+			}
+		default:
+			return createErr
 		}
 		// A newly spawned command may have produced all its output before the
 		// readiness probe completes. Its first real attachment must start at
@@ -134,7 +191,10 @@ func runLocal(args []string) error {
 		lastSeq = &initialSeq
 		fmt.Fprintf(os.Stderr, "session %s\n", s.ID)
 	}
-	return attach(s, *detachKey, lastSeq)
+	if socketPath == "" {
+		return attach(s, *detachKey, lastSeq)
+	}
+	return attachAt(s, socketPath, *detachKey, lastSeq)
 }
 
 func runAttach(args []string) error {
@@ -157,12 +217,16 @@ func runAttach(args []string) error {
 }
 
 func attach(s cli.Session, detachKey string, lastSeq *uint64) error {
+	return attachAt(s, paths.Socket(s.Dir), detachKey, lastSeq)
+}
+
+func attachAt(s cli.Session, socketPath, detachKey string, lastSeq *uint64) error {
 	key, raw, err := cli.ParseDetachKey(detachKey)
 	if err != nil {
 		return err
 	}
 	res, err := cli.Attach(cli.AttachOptions{
-		SocketPath: paths.Socket(s.Dir),
+		SocketPath: socketPath,
 		SessionID:  s.ID,
 		LastSeq:    lastSeq,
 		DetachKey:  key,
