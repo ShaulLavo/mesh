@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ func TestNewCatalogValidatesConfig(t *testing.T) {
 }
 
 func TestCatalogReconcileMapsWorkerState(t *testing.T) {
-	dead := errors.New("connection refused")
+	dead := syscall.ECONNREFUSED
 	exitCode := 7
 	exitedAt := catalogTestTime.Add(time.Minute)
 
@@ -652,5 +653,48 @@ func TestCatalogReconcileIgnoresWorkerStillPublishingState(t *testing.T) {
 	}
 	if probeCalls != 0 || len(store.observed) != 0 {
 		t.Fatalf("publishing worker was probed %d times and observed as %#v", probeCalls, store.observed)
+	}
+}
+
+func TestCatalogRereadsExitedMetadataAfterWorkerBecomesUnavailable(t *testing.T) {
+	root := t.TempDir()
+	meta := catalogTestMeta("7K3D", worker.StateRunning, "boot-a")
+	writeCatalogMeta(t, root, meta.ID, meta)
+	exitCode := 7
+	exitedAt := meta.CreatedAt.Add(time.Second)
+	store := &catalogStoreStub{}
+	catalog := newCatalogForTest(t, root, store, probeFunc(func(context.Context, string) error {
+		meta.State = worker.StateExited
+		meta.ExitCode = &exitCode
+		meta.ExitedAt = &exitedAt
+		if err := worker.WriteMeta(filepath.Join(root, meta.ID), meta); err != nil {
+			t.Fatal(err)
+		}
+		return syscall.ECONNREFUSED
+	}), func() string { return "boot-a" })
+
+	if err := catalog.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.observed) != 1 || store.observed[0].State != storage.StateExited || store.observed[0].ExitCode == nil || *store.observed[0].ExitCode != exitCode {
+		t.Fatalf("clean exit observation = %#v", store.observed)
+	}
+}
+
+func TestCatalogRejectsInconclusiveProbeBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	meta := catalogTestMeta("9M2Q", worker.StateRunning, "boot-a")
+	writeCatalogMeta(t, root, meta.ID, meta)
+	store := &catalogStoreStub{}
+	catalog := newCatalogForTest(t, root, store, probeFunc(func(context.Context, string) error {
+		return syscall.EACCES
+	}), func() string { return "boot-a" })
+
+	err := catalog.Reconcile(context.Background())
+	if !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("Reconcile error = %v, want EACCES", err)
+	}
+	if store.upsertCalls != 0 || store.reconcileCalls != 0 {
+		t.Fatalf("inconclusive probe mutated store: upsert %d reconcile %d", store.upsertCalls, store.reconcileCalls)
 	}
 }

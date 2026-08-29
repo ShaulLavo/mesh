@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
@@ -145,7 +146,28 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 				return nil, fmt.Errorf("daemon: probe session %s: %w", meta.ID, err)
 			}
 			if probeErr != nil {
-				session.State = storage.StateInterrupted
+				if !workerDefinitelyUnavailable(probeErr) {
+					return nil, fmt.Errorf("daemon: probe session %s inconclusive: %w", meta.ID, probeErr)
+				}
+				// A clean worker records exited metadata before removing its socket.
+				// Reread after a definitive dial failure so stale running metadata
+				// cannot turn a normal exit into an interruption.
+				refreshed, err := worker.ReadMeta(dir)
+				if err != nil {
+					return nil, fmt.Errorf("daemon: reread unavailable session %s metadata: %w", meta.ID, err)
+				}
+				refreshedSession, stillRunning, err := sessionFromMeta(c.host.ID, entry.Name(), refreshed)
+				if err != nil {
+					return nil, err
+				}
+				if stillRunning && refreshed.BootID != "" && currentBootID != "" && refreshed.BootID != currentBootID {
+					refreshedSession.State = storage.StateInterrupted
+					stillRunning = false
+				}
+				if stillRunning {
+					refreshedSession.State = storage.StateInterrupted
+				}
+				session = refreshedSession
 			}
 		}
 		observed = append(observed, session)
@@ -155,6 +177,10 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 		return observed[i].ID < observed[j].ID
 	})
 	return observed, nil
+}
+
+func workerDefinitelyUnavailable(err error) bool {
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 func sessionFromMeta(hostID storage.HostID, directory string, meta worker.Meta) (storage.Session, bool, error) {
