@@ -30,8 +30,12 @@ type socketConn struct {
 	ws     *websocket.Conn
 	ctx    context.Context
 	cancel context.CancelFunc
-	frames chan inboundFrame
-	done   chan struct{}
+	// The close handshake still needs the reader, so writes have their own
+	// cancellation path.
+	writeCtx    context.Context
+	cancelWrite context.CancelFunc
+	frames      chan inboundFrame
+	done        chan struct{}
 
 	causeOnce  sync.Once
 	causeMu    sync.Mutex
@@ -42,12 +46,15 @@ type socketConn struct {
 
 func newSocketConn(ws *websocket.Conn, keepAlive KeepAlive) *socketConn {
 	ctx, cancel := context.WithCancel(context.Background())
+	writeCtx, cancelWrite := context.WithCancel(ctx)
 	c := &socketConn{
-		ws:     ws,
-		ctx:    ctx,
-		cancel: cancel,
-		frames: make(chan inboundFrame, inboundQueueCapacity),
-		done:   make(chan struct{}),
+		ws:          ws,
+		ctx:         ctx,
+		cancel:      cancel,
+		writeCtx:    writeCtx,
+		cancelWrite: cancelWrite,
+		frames:      make(chan inboundFrame, inboundQueueCapacity),
+		done:        make(chan struct{}),
 	}
 	// A WebSocket message contains the five-byte Mesh header plus a payload
 	// already bounded by protocol.MaxPayload.
@@ -73,7 +80,7 @@ func (c *socketConn) WriteFrame(frame protocol.Frame) error {
 	if err != nil {
 		return err
 	}
-	if err := c.ws.Write(c.ctx, websocket.MessageBinary, payload); err != nil {
+	if err := c.ws.Write(c.writeCtx, websocket.MessageBinary, payload); err != nil {
 		wrapped := fmt.Errorf("transport: write WebSocket frame: %w", err)
 		c.fail(wrapped)
 		return wrapped
@@ -88,6 +95,7 @@ func (c *socketConn) Close() error {
 		return nil
 	}
 
+	c.cancelWrite()
 	err := c.ws.Close(websocket.StatusNormalClosure, "")
 	c.cancel()
 	<-c.done

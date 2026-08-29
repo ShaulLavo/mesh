@@ -442,6 +442,87 @@ func TestKeepAliveClosesPeerThatWithholdsPong(t *testing.T) {
 	}
 }
 
+func TestSocketConnCloseInterruptsBlockedWrite(t *testing.T) {
+	t.Parallel()
+
+	serverRelease := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			CompressionMode: websocket.CompressionDisabled,
+		})
+		if err != nil {
+			return
+		}
+		defer ws.CloseNow() //nolint:errcheck // test cleanup closes the peer immediately
+		<-serverRelease
+	}))
+	var releaseOnce sync.Once
+	releaseServer := func() { releaseOnce.Do(func() { close(serverRelease) }) }
+	defer func() {
+		releaseServer()
+		server.Close()
+	}()
+
+	gated := make(chan *blockingWriteConn, 1)
+	httpTransport := &http.Transport{
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			wrapped := newBlockingWriteConn(conn)
+			gated <- wrapped
+			return wrapped, nil
+		},
+	}
+	defer httpTransport.CloseIdleConnections()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := dialSocket(ctx, server.URL, websocket.DialOptions{
+		HTTPClient:      &http.Client{Transport: httpTransport},
+		CompressionMode: websocket.CompressionDisabled,
+	}, KeepAlive{Interval: time.Hour, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkConn := <-gated
+	defer networkConn.Close() //nolint:errcheck // test cleanup after an assertion failure
+	networkConn.blockWrites()
+
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- conn.WriteFrame(protocol.Frame{
+			Kind:    protocol.KindControl,
+			Payload: []byte(`{"type":"barrier"}`),
+		})
+	}()
+	select {
+	case <-networkConn.writeStarted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("WebSocket write did not reach the blocked network connection")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- conn.Close() }()
+	var closeErr error
+	select {
+	case closeErr = <-closeDone:
+	case <-time.After(250 * time.Millisecond):
+		_ = networkConn.Close()
+		<-closeDone
+		<-writeDone
+		t.Fatal("socket Close waited for the WebSocket close-frame timeout")
+	}
+	if err := <-writeDone; err == nil {
+		t.Fatal("blocked WebSocket write succeeded after Close")
+	}
+	if closeErr != nil {
+		t.Fatalf("Close error = %v, want nil", closeErr)
+	}
+	releaseServer()
+}
+
 func TestOlderGenerationCannotMoveResumePositionBackward(t *testing.T) {
 	t.Parallel()
 
@@ -811,6 +892,52 @@ type testLink struct {
 	startOnce    sync.Once
 	releaseOnce  sync.Once
 	stoppedLink  bool
+}
+
+type blockingWriteConn struct {
+	net.Conn
+
+	mu           sync.Mutex
+	blocked      bool
+	writeStarted chan struct{}
+	releaseWrite chan struct{}
+	writeOnce    sync.Once
+	closeOnce    sync.Once
+	closeErr     error
+}
+
+func newBlockingWriteConn(conn net.Conn) *blockingWriteConn {
+	return &blockingWriteConn{
+		Conn:         conn,
+		writeStarted: make(chan struct{}),
+		releaseWrite: make(chan struct{}),
+	}
+}
+
+func (c *blockingWriteConn) blockWrites() {
+	c.mu.Lock()
+	c.blocked = true
+	c.mu.Unlock()
+}
+
+func (c *blockingWriteConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	blocked := c.blocked
+	c.mu.Unlock()
+	if !blocked {
+		return c.Conn.Write(p)
+	}
+	c.writeOnce.Do(func() { close(c.writeStarted) })
+	<-c.releaseWrite
+	return 0, net.ErrClosed
+}
+
+func (c *blockingWriteConn) Close() error {
+	c.closeOnce.Do(func() {
+		close(c.releaseWrite)
+		c.closeErr = c.Conn.Close()
+	})
+	return c.closeErr
 }
 
 func newTestLink(blockWrites bool) *testLink {
