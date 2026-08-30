@@ -43,6 +43,14 @@ unhealthy rather than crashing the daemon.
 The daemon serves them on its existing HTTP listener (the one T05 builds for the
 WebSocket) under a reserved prefix, so serving costs no extra port.
 
+## Build the root resolver so someone else can call it
+
+T16 serves these same roots over SFTP (D19), and it must not write a second path
+resolver. Export the "resolve this request path inside this root, or fail"
+function rather than burying it in an `http.Handler` closure. A filesystem API
+leaks a whole tree where an HTTP handler leaks one file, so the shared one is the
+one that gets the attention.
+
 ## The part that needs care
 
 Path traversal on `static` and `files`. A request for `/files/../../etc/passwd`,

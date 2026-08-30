@@ -160,3 +160,63 @@ round, owning 443 is a configuration choice.
 
 The private side is unaffected. `*.mesh.shaulavo.dev` still needs its own
 wildcard certificate via DNS-01, which T12 owns.
+
+## D17 — SSH is a front door for people, not a transport for daemons
+
+Hosts keep talking to each other over `internal/transport`. The SSH server exists
+because `ssh` is installed on every machine you will ever sit at and Mesh is not.
+
+**What it buys:** a work laptop you cannot install on, a phone, someone else's
+desktop. All of them reach a session with the client they already have.
+**Cost:** a second listening server per host, and a second authentication surface
+to keep correct.
+**Alternative rejected:** SSH as the inter-host transport. T05 already resumes by
+sequence number, which is the whole point, and SSH channels would cost that to buy
+authentication we already have.
+
+## D18 — One host identity, used by both protocols
+
+The SSH host key is the existing `internal/identity` ed25519 key, exported in
+OpenSSH format. Mesh does not generate a second keypair.
+
+**Why:** two keys means two things to trust, two to rotate, and two answers to
+"is this really my Pi". Authentication is public key only, and `mesh add` writes
+the authorized set during bootstrap, so the machine that adopted a host is the
+machine that can reach it.
+
+## D19 — SFTP is the real file server
+
+A browsable HTML listing exists for people holding a browser and nothing else.
+SFTP mounts in Finder, Nautilus and Files on Android, with keys already on the
+machine.
+
+Both doors serve the roots T11 declared. One declaration, two front doors, no
+second notion of what is shared. HTTP is not being replaced; it is being demoted
+to the browser case.
+
+**Cost:** SFTP is not a Wish middleware. Wish ships `scp`; SFTP is `pkg/sftp`
+wired as a subsystem, which T16 has to build.
+
+## D20 — Reverse tunnels are named and claimed, never arbitrary
+
+`ssh -R` publishes a local port through the VPS edge. This does not reopen
+"arbitrary tunnels", which the overview rules out and which stays ruled out.
+
+A forward must be authenticated by an authorized key, bound to a route the user
+named explicitly under D15, refused when another host holds that name, and
+unpublished the moment the connection drops.
+
+**Why this is worth the exception:** it is the one thing Tailscale cannot do,
+because it needs a publicly routable machine, and step 8 already put one there.
+**D14 is unaffected.** Tunnelled HTTP is not terminal traffic. Terminal sessions
+still go direct.
+
+## D21 — The phone story is SSH, not an app
+
+A phone with the Tailscale app and any SSH client is a complete Mesh client.
+Packaging ships nothing for it.
+
+**Why:** an iPhone app was already in "explicitly later" and would have to
+reimplement attach, replay, resize and steal against a protocol that changes.
+Termius over `ssh` gets all of that by definition. If a native app ever happens
+it is a nicety, not the only way in.

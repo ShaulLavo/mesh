@@ -105,9 +105,14 @@ summaries later; it never owns another machine's sessions.
 Core: Go 1.27 · Cobra · Fang · `coder/websocket` · `modernc.org/sqlite` · sqlc ·
 Goose · `golang.org/x/crypto/ssh`.
 
-Charm: Bubble Tea v2 · Bubbles v2 · Lip Gloss v2 · Huh v2 · Glamour v2 ·
-Charm Log v2 · Wish v2 · Harmonica · `x/xpty` · `x/vt` · `x/ansi` · `x/term` ·
-`x/input` · `x/sshkey` · `x/teatest` · `x/golden` · `x/vcr`.
+Charm, with the versions that actually resolve as of 2026-08-30: Bubble Tea
+v2.0.9 · Bubbles v2.2.1 · Lip Gloss v2.0.6 · Huh v2.0.3 · Fang v1.0.0 · Charm Log
+v1.0.0 · Wish v1.4.7 · `ultraviolet` · `x/xpty` · `x/vt` · `x/ansi` · `x/term` ·
+`x/exp/golden`.
+
+The v2 line is not a preference. `internal/terminal` already builds on
+`ultraviolet`, and Lip Gloss v1 would put a second colour and rendering stack in
+the same binary. Wish is still v1; there is no v2 to pin.
 
 Pin the experimental packages to exact versions and hide them behind internal
 interfaces so API churn stays contained.
@@ -131,15 +136,28 @@ interfaces so API churn stays contained.
 8. **Serving** — static sites, file browsers and local-port proxies. Private on
    the tailnet at `<host>.mesh.shaulavo.dev`, and optionally public under
    `shaulavo.dev` through the VPS edge. See `docs/plan/03-serving.md`.
+9. **SSH front door** — a Wish server per host so any machine with `ssh` reaches
+   a session, mounts served roots over SFTP, or publishes a port through the edge
+   with `ssh -R`. Not a transport; the client that already exists everywhere.
+   See `docs/plan/04-ssh.md`.
 
 ## Explicitly later
 
 MCP/tools · coding-agent knowledge · job scheduling · deployment orchestration ·
-personal assistant · iPhone app · GUI editor · collaborative writers · sharing
-meshes with other users · replacing Tailscale · arbitrary proxying through the Pi.
+personal assistant · native mobile app · GUI editor · collaborative writers ·
+sharing meshes with other users · replacing Tailscale · arbitrary proxying
+through the Pi.
 
 Serving (step 8) is deliberately scoped proxying through the VPS, not the general
-case. It does not open the door to arbitrary tunnels.
+case.
+
+Step 9 adds `ssh -R` on top of that, which is a *named* forward: authenticated,
+bound to a route the user claimed, refused if another host holds the name, and
+gone on disconnect (D20). Arbitrary tunnels stay out.
+
+A native mobile app moved further down the list rather than closer. A phone with
+the Tailscale app and any SSH client is already a complete client once step 9
+lands (D21).
 
 The extension point is the daemon protocol. Anything built later calls Mesh
 exactly like the CLI does.

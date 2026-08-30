@@ -193,3 +193,14 @@ TLS for it. Support that from the start. It costs a configuration flag now and a
 rewrite later.
 
 What the edge must never do is assume it owns port 443 by right.
+
+## The browser is not the only file client
+
+`files` services render HTML listings, which exist for people holding a browser
+and nothing else. Step 9 mounts the same declared roots over SFTP, where they
+open in Finder, Nautilus and Files on Android with keys already on the machine
+(D19).
+
+One declaration, two front doors. Nothing here changes: T11 still owns what is
+served and to whom, and T16 reuses its root resolver rather than inventing a
+second answer. See `docs/plan/04-ssh.md`.
