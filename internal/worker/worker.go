@@ -526,8 +526,11 @@ func (w *Worker) pump() {
 				return
 			}
 			seq := w.ring.Head()
-			_, _ = w.screen.Write(buf[:n])
+			// Ring first: replay and the attached client must not depend on the
+			// terminal emulator having digested the chunk. The emulator is a
+			// snapshot aid; the ring is the session's record of what happened.
 			_, _ = w.ring.Write(buf[:n])
+			_, _ = w.screen.Write(buf[:n])
 			if c := w.client; c != nil {
 				if !c.enqueueData(seq, buf[:n]) {
 					w.dropLocked(c, "")

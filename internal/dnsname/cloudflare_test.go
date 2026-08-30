@@ -28,7 +28,7 @@ func TestCloudflareUsesCurrentRecordEndpointsAndBearerToken(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch request.Method {
 		case http.MethodGet:
-			_, _ = w.Write([]byte(`{"success":true,"result":[],"result_info":{"page":1,"total_pages":1}}`))
+			_, _ = w.Write([]byte(`{"success":true,"result":[],"result_info":{"page":1,"total_pages":0,"count":0,"total_count":0}}`))
 		case http.MethodPost, http.MethodPatch:
 			logged.Body.Content = `"challenge"`
 			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "result": map[string]any{
@@ -367,4 +367,30 @@ func contains(value, part string) bool {
 		}
 	}
 	return false
+}
+
+// Cloudflare answers an exact-name query with no matches using total_pages 0.
+// That is the ordinary shape of every read-before-write for a record Mesh has
+// not created yet, so rejecting it as malformed made record creation and
+// therefore DNS-01 issuance impossible against a real zone.
+func TestListRecordsAcceptsEmptyCloudflareListing(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"result":[],"result_info":{"page":1,"per_page":100,"count":0,"total_count":0,"total_pages":0}}`))
+	}))
+	defer server.Close()
+
+	provider, err := NewCloudflare(CloudflareConfig{ZoneID: "zone-id", APIToken: "secret-token", BaseURL: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := provider.ListRecords(context.Background(), "pc.mesh.shaulavo.dev", RecordA)
+	if err != nil {
+		t.Fatalf("empty listing rejected: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("got %d records from an empty listing, want 0", len(records))
+	}
 }

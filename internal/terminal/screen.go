@@ -72,8 +72,22 @@ type cursorScreen struct {
 // NewScreen returns an isolated wrapper around x/vt. Keeping x/vt behind this
 // interface contains its experimental API within this package.
 func NewScreen(cols, rows int) Screen {
+	emulator := vt.NewEmulator(cols, rows)
+	// x/vt answers DSR, DA, DECRQM and in-band resize by writing to an internal
+	// io.Pipe, which blocks until someone reads it. This screen is a passive
+	// shadow renderer for reattachment snapshots, and the attached client's real
+	// terminal is what answers those queries, so nobody ever reads that pipe.
+	// Closing the writer makes every reply fail instantly with ErrClosedPipe,
+	// which x/vt discards, instead of blocking Write forever.
+	//
+	// Draining it in a goroutine would be the obvious alternative, but Emulator
+	// has no mutex and Read, Write and Close all touch its closed flag, so a
+	// concurrent drainer races with the pump.
+	if pipe, ok := emulator.InputPipe().(io.Closer); ok {
+		_ = pipe.Close()
+	}
 	s := &emulatorScreen{
-		emulator: vt.NewEmulator(cols, rows),
+		emulator: emulator,
 		parser:   ansi.NewParser(),
 	}
 	s.resetCursorState()

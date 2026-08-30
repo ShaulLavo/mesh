@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -375,5 +376,40 @@ func assertEquivalentActiveState(t *testing.T, got, want *emulatorScreen) {
 				t.Fatalf("cell (%d,%d) = %#v, want %#v", x, y, got.emulator.CellAt(x, y), want.emulator.CellAt(x, y))
 			}
 		}
+	}
+}
+
+// x/vt replies to cursor-position and device-attribute queries by writing to an
+// internal pipe. Nothing in Mesh reads it, so an unclosed pipe blocks Write
+// forever — and the worker holds its mutex across that call, wedging the whole
+// session with meta.json still reading "running".
+func TestScreenWriteDoesNotBlockOnEmulatorReplies(t *testing.T) {
+	t.Parallel()
+
+	queries := map[string]string{
+		"DSR cursor position":         "\x1b[6n",
+		"DECXCPR extended position":   "\x1b[?6n",
+		"primary device attributes":   "\x1b[c",
+		"secondary device attributes": "\x1b[>c",
+		"DSR operating status":        "\x1b[5n",
+	}
+	for name, query := range queries {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			screen := NewScreen(80, 24)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_, _ = screen.Write([]byte("before" + query + "after"))
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("Screen.Write blocked on the emulator reply to %q", query)
+			}
+			if got := screen.Snapshot(); len(got.Bytes) == 0 {
+				t.Fatal("snapshot is empty after a write that included a query")
+			}
+		})
 	}
 }

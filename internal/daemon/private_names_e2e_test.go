@@ -221,8 +221,15 @@ func (a *composedCloudflareAPI) serveHTTP(w http.ResponseWriter, request *http.R
 			}
 		}
 		sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
+		// Cloudflare reports an empty listing as total_pages 0, not 1. Mirroring
+		// that here keeps the read-before-write path honest; a mock that always
+		// says 1 hides the case every first-run request actually hits.
+		totalPages := 1
+		if len(records) == 0 {
+			totalPages = 0
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"success": true, "result": records, "result_info": map[string]int{"page": 1, "total_pages": 1},
+			"success": true, "result": records, "result_info": map[string]int{"page": 1, "total_pages": totalPages},
 		})
 	case http.MethodPost, http.MethodPatch:
 		var record composedCloudflareRecord

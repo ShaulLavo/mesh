@@ -110,8 +110,16 @@ func DialOnce(ctx context.Context, url string, opts DialOptions) (Conn, error) {
 	return dialSocket(ctx, url, dialOpts, normalized.keepAlive)
 }
 
+// dialLink adapts dialSocket to the linkDialer signature. The nil check is
+// load-bearing: returning dialSocket's (*socketConn)(nil) directly would box a
+// typed nil into a non-nil linkConn, and connectionLocked's `link != nil` guard
+// would then call Close on it.
 func dialLink(ctx context.Context, url string, opts websocket.DialOptions, keepAlive KeepAlive) (linkConn, error) {
-	return dialSocket(ctx, url, opts, keepAlive)
+	link, err := dialSocket(ctx, url, opts, keepAlive)
+	if err != nil {
+		return nil, err
+	}
+	return link, nil
 }
 
 func dialSocket(ctx context.Context, url string, opts websocket.DialOptions, keepAlive KeepAlive) (*socketConn, error) {

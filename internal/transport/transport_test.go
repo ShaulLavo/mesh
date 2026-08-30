@@ -993,3 +993,28 @@ func (c *testLink) snapshot() []protocol.Frame {
 	defer c.mu.Unlock()
 	return append([]protocol.Frame(nil), c.writes...)
 }
+
+// A redial against a listener that is gone must surface the dial error and let
+// the backoff loop retry. dialLink previously returned dialSocket's typed-nil
+// *socketConn as a non-nil linkConn, so connectionLocked's `link != nil` guard
+// called Close on a nil receiver and panicked the whole client process.
+func TestRedialAgainstClosedListenerRetriesInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := "ws://" + listener.Addr().String() + "/mesh"
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	link, err := dialLink(context.Background(), url, websocket.DialOptions{}, KeepAlive{})
+	if err == nil {
+		t.Fatal("dialLink succeeded against a closed listener")
+	}
+	if link != nil {
+		t.Fatalf("dialLink returned a non-nil linkConn (%T) alongside an error; a typed nil here panics connectionLocked", link)
+	}
+}

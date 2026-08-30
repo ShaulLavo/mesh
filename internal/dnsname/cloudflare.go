@@ -127,6 +127,13 @@ func (c *Cloudflare) ListRecords(ctx context.Context, name string, recordType Re
 		if err := c.request(ctx, http.MethodGet, "", query, nil, &response); err != nil {
 			return nil, err
 		}
+		// Cloudflare reports a listing with no matches as total_pages 0, which
+		// is the ordinary answer to an exact-name query for a record Mesh has
+		// not created yet. Every read-before-write starts there, so treating it
+		// as malformed would make record creation and DNS-01 impossible.
+		if page == 1 && response.ResultInfo.TotalPages == 0 && len(response.Result) == 0 {
+			return nil, nil
+		}
 		if response.ResultInfo.Page != page || response.ResultInfo.TotalPages < page || response.ResultInfo.TotalPages > cloudflareMaximumPages || len(response.Result) > cloudflarePageSize {
 			return nil, fmt.Errorf("dnsname: Cloudflare returned invalid pagination for record page %d", page)
 		}
