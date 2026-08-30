@@ -223,7 +223,7 @@ func TestServeDoesNotRemoveAReplacementAtTheDaemonSocketPath(t *testing.T) {
 	if err := waitRuntime(t, done); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(socketPath)
+	got, err := os.ReadFile(socketPath) //nolint:gosec // test reads its own temporary replacement fixture
 	if err != nil {
 		t.Fatalf("replacement path was removed: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestServeHTTPSUsesLoopbackServicesOnlyAndHotReloads(t *testing.T) {
 	services := http.NewServeMux()
 	service := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		w.Header().Set("X-Mesh-Route", "service")
-		_, _ = io.WriteString(w, request.URL.EscapedPath())
+		_, _ = io.WriteString(w, request.URL.EscapedPath()) //nolint:gosec // test response deliberately echoes a URL path
 	})
 	services.Handle("/mesh", service)
 	services.Handle("/service", service)
@@ -382,7 +382,7 @@ func TestServeHTTPSUsesLoopbackServicesOnlyAndHotReloads(t *testing.T) {
 	}
 	dialer := &net.Dialer{Timeout: time.Second}
 	if connection, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort("127.0.0.1", fmt.Sprint(port)), &tls.Config{ //nolint:gosec // the missing-certificate handshake is the assertion
-		InsecureSkipVerify: true,
+		InsecureSkipVerify: true, //nolint:gosec // the local self-signed certificate is not yet installed
 	}); err == nil {
 		_ = connection.Close()
 		t.Fatal("TLS handshake succeeded without an installed certificate")
@@ -412,8 +412,8 @@ func TestServeFailsWhenHTTPSPortCannotBind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer blocked.Close() //nolint:errcheck // test cleanup
-	port := uint16(blocked.Addr().(*net.TCPAddr).Port)
+	defer blocked.Close()                              //nolint:errcheck // test cleanup
+	port := uint16(blocked.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
 	stateDir := t.TempDir()
 	err = Serve(context.Background(), ListenerConfig{
 		StateDir: stateDir, HTTPSPort: port, WebSocketPath: "/mesh", HTTPHandler: http.NotFoundHandler(),
@@ -436,8 +436,8 @@ func TestServeReportsPartialTailnetBindFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer blocked.Close() //nolint:errcheck // test cleanup
-	port := uint16(blocked.Addr().(*net.TCPAddr).Port)
+	defer blocked.Close()                              //nolint:errcheck // test cleanup
+	port := uint16(blocked.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
 	reports := make(chan error, 4)
 	stateDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -472,8 +472,8 @@ func TestServeFailsWhenNoTailnetAddressCanBind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer blocked.Close() //nolint:errcheck // test cleanup
-	port := uint16(blocked.Addr().(*net.TCPAddr).Port)
+	defer blocked.Close()                              //nolint:errcheck // test cleanup
+	port := uint16(blocked.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
 	stateDir := t.TempDir()
 	err = Serve(context.Background(), ListenerConfig{
 		StateDir:      stateDir,
@@ -533,7 +533,10 @@ func TestServeRejectsInvalidBoundaryConfiguration(t *testing.T) {
 			return ListenerConfig{StateDir: dir, HTTPSPort: 8443, WebSocketPath: "/mesh", HTTPHandler: http.NotFoundHandler(), TLSConfig: &tls.Config{}}
 		}, want: "GetCertificate"},
 		{name: "old TLS version", cfg: func(dir string) ListenerConfig {
-			return ListenerConfig{StateDir: dir, HTTPSPort: 8443, WebSocketPath: "/mesh", HTTPHandler: http.NotFoundHandler(), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS11, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, nil }}}
+			return ListenerConfig{StateDir: dir, HTTPSPort: 8443, WebSocketPath: "/mesh", HTTPHandler: http.NotFoundHandler(), TLSConfig: &tls.Config{ //nolint:gosec // invalid-version fixture exercises the TLS 1.2 boundary
+				MinVersion:     tls.VersionTLS11,
+				GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, nil },
+			}}
 		}, want: "TLS 1.2"},
 		{name: "HTTPS without reserved path", cfg: func(dir string) ListenerConfig {
 			return ListenerConfig{StateDir: dir, HTTPSPort: 8443, HTTPHandler: http.NotFoundHandler(), TLSConfig: &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, nil }}}
@@ -587,7 +590,7 @@ func TestServeDoesNotTouchWorkerArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gotMeta, err := os.ReadFile(metaPath)
+	gotMeta, err := os.ReadFile(metaPath) //nolint:gosec // test reads its own temporary worker metadata fixture
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -812,7 +815,7 @@ func TestPublicServerClosesHijackedWebSocketOnShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.CloseNow()
+	defer connection.CloseNow() //nolint:errcheck // test connection cleanup
 	clientReadDone := make(chan error, 1)
 	go func() {
 		_, _, readErr := connection.Read(ctx)
@@ -1230,7 +1233,7 @@ func reserveTCPPort(t *testing.T, address string) uint16 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := uint16(listener.Addr().(*net.TCPAddr).Port)
+	port := uint16(listener.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}

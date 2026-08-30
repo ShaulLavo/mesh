@@ -248,8 +248,14 @@ func TestClientRateStateStaysBounded(t *testing.T) {
 	}
 	limiter = newClientRateLimiter(4, 2, time.Minute)
 	address := netip.MustParseAddr("198.51.100.1")
-	if !limiter.Allow(address, now) || !limiter.Allow(address, now) || limiter.Allow(address, now) {
-		t.Fatal("per-client limit was not enforced")
+	if !limiter.Allow(address, now) {
+		t.Fatal("first per-client request was rejected")
+	}
+	if !limiter.Allow(address, now) {
+		t.Fatal("second per-client request was rejected")
+	}
+	if limiter.Allow(address, now) {
+		t.Fatal("third per-client request was admitted")
 	}
 	for round := 1; round <= 10; round++ {
 		if !limiter.Allow(address, now.Add(time.Duration(round)*time.Minute)) {
@@ -434,7 +440,7 @@ func TestRegistryProxiesWebSocketUpgrade(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer connection.CloseNow()
+		defer connection.CloseNow() //nolint:errcheck // test peer cleanup
 		messageType, payload, err := connection.Read(request.Context())
 		if err == nil {
 			_ = connection.Write(request.Context(), messageType, payload)
@@ -466,14 +472,14 @@ func TestRegistryProxiesWebSocketUpgrade(t *testing.T) {
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	connection, response, err := websocket.Dial(ctx, "wss://app.shaulavo.dev:"+edgePort+"/app/socket", &websocket.DialOptions{HTTPClient: httpClient})
+	connection, response, err := websocket.Dial(ctx, "wss://app.shaulavo.dev:"+edgePort+"/app/socket", &websocket.DialOptions{HTTPClient: httpClient}) //nolint:bodyclose // websocket.Dial owns and closes its HTTP response body
 	if response != nil && response.Body != nil {
 		defer response.Body.Close() //nolint:errcheck // test cleanup
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.CloseNow()
+	defer connection.CloseNow() //nolint:errcheck // test cleanup
 	payload := []byte{0, 1, 2, 255}
 	if err := connection.Write(ctx, websocket.MessageBinary, payload); err != nil {
 		t.Fatal(err)

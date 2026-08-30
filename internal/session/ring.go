@@ -36,12 +36,12 @@ func (r *Ring) Write(p []byte) (int, error) {
 	if total > cap {
 		// Everything but the final cap bytes is discarded on arrival, but it
 		// still advances the offset: the bytes existed.
-		r.head += uint64(total - cap)
+		r.head += uint64(total - cap) //nolint:gosec // both operands are nonnegative slice lengths
 		p = p[total-cap:]
 	}
 	// Writing at head%cap keeps the invariant that byte at offset o lives at
 	// index o%cap, which is what makes Since a pair of copies.
-	off := int(r.head % uint64(cap))
+	off := int(r.head % uint64(cap)) //nolint:gosec // modulo by an int-sized buffer capacity fits in int
 	n := copy(r.buf[off:], p)
 	if n < len(p) {
 		copy(r.buf, p[n:])
@@ -79,11 +79,11 @@ func (r *Ring) Last(size int) []byte {
 		available = uint64(size)
 	}
 	start := r.head - available
-	out := make([]byte, int(available))
+	out := make([]byte, int(available)) //nolint:gosec // available is bounded by the int-sized buffer length
 	if len(out) == 0 {
 		return out
 	}
-	offset := int(start % uint64(len(r.buf)))
+	offset := int(start % uint64(len(r.buf))) //nolint:gosec // modulo by an int-sized buffer length fits in int
 	copied := copy(out, r.buf[offset:])
 	if copied < len(out) {
 		copy(out[copied:], r.buf)
@@ -109,10 +109,10 @@ func (r *Ring) Since(seq uint64) (b []byte, head uint64, ok bool) {
 	if seq > r.head || seq < r.tail() {
 		return nil, r.head, false
 	}
-	n := int(r.head - seq)
+	n := int(r.head - seq) //nolint:gosec // a valid replay range is bounded by the int-sized buffer length
 	out := make([]byte, n)
 	if n > 0 {
-		off := int(seq % uint64(len(r.buf)))
+		off := int(seq % uint64(len(r.buf))) //nolint:gosec // modulo by an int-sized buffer length fits in int
 		c := copy(out, r.buf[off:])
 		if c < n {
 			copy(out[c:], r.buf)

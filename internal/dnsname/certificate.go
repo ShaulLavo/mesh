@@ -89,7 +89,7 @@ func (s *BundleStore) Install(certificatePEM, privateKeyPEM []byte) (Bundle, err
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		return Bundle{}, fmt.Errorf("dnsname: create certificate store %s: %w", s.root, err)
 	}
-	if err := os.Chmod(s.root, 0o700); err != nil {
+	if err := os.Chmod(s.root, 0o700); err != nil { //nolint:gosec // private directories require owner execute permission
 		return Bundle{}, fmt.Errorf("dnsname: secure certificate store %s: %w", s.root, err)
 	}
 	versionDir := filepath.Join(s.root, bundle.Fingerprint)
@@ -159,8 +159,8 @@ func (s *BundleStore) writeVersion(versionDir string, bundle Bundle) error {
 	if err != nil {
 		return fmt.Errorf("dnsname: create certificate staging directory: %w", err)
 	}
-	defer os.RemoveAll(temporary)
-	if err := os.Chmod(temporary, 0o700); err != nil {
+	defer os.RemoveAll(temporary)                      //nolint:errcheck // best-effort cleanup after atomic publication
+	if err := os.Chmod(temporary, 0o700); err != nil { //nolint:gosec // private directories require owner execute permission
 		return fmt.Errorf("dnsname: secure certificate staging directory: %w", err)
 	}
 	if err := writeNewFile(filepath.Join(temporary, certificateFile), bundle.CertificatePEM, 0o600); err != nil {
@@ -372,7 +372,7 @@ func marshalPrivateKey(key *ecdsa.PrivateKey) ([]byte, error) {
 }
 
 func readSecureFile(path string, maximum int64) ([]byte, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0) //nolint:gosec // path is confined to the private certificate store and opened without following symlinks
 	if err != nil {
 		return nil, err
 	}
@@ -414,17 +414,17 @@ func publishExclusiveFile(path string, contents []byte, mode os.FileMode) error 
 		return fmt.Errorf("dnsname: create temporary key: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer os.Remove(temporaryPath) //nolint:errcheck // best-effort cleanup after atomic publication
 	if err := temporary.Chmod(mode); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("dnsname: secure temporary key: %w", err)
 	}
 	if _, err := temporary.Write(contents); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("dnsname: write temporary key: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("dnsname: sync temporary key: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
@@ -446,17 +446,17 @@ func writeAtomicFile(path string, contents []byte, mode os.FileMode) error {
 		return err
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer os.Remove(temporaryPath) //nolint:errcheck // best-effort cleanup after atomic replacement
 	if err := temporary.Chmod(mode); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return err
 	}
 	if _, err := temporary.Write(contents); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return err
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return err
 	}
 	if err := temporary.Close(); err != nil {
@@ -469,16 +469,16 @@ func writeAtomicFile(path string, contents []byte, mode os.FileMode) error {
 }
 
 func writeNewFile(path string, contents []byte, mode os.FileMode) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode) //nolint:gosec // path is a fixed certificate-store filename and exclusive creation prevents replacement
 	if err != nil {
 		return fmt.Errorf("dnsname: create secure file %s: %w", path, err)
 	}
 	if _, err := file.Write(contents); err != nil {
-		file.Close()
+		_ = file.Close()
 		return fmt.Errorf("dnsname: write secure file %s: %w", path, err)
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return fmt.Errorf("dnsname: sync secure file %s: %w", path, err)
 	}
 	if err := file.Close(); err != nil {
@@ -488,7 +488,7 @@ func writeNewFile(path string, contents []byte, mode os.FileMode) error {
 }
 
 func syncDirectory(path string) error {
-	directory, err := os.Open(path)
+	directory, err := os.Open(path) //nolint:gosec // path is a private certificate-store directory selected by internal publication code
 	if err != nil {
 		return fmt.Errorf("dnsname: open directory %s for sync: %w", path, err)
 	}

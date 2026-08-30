@@ -66,7 +66,7 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 				ConfirmHostKey: hostKeyPrompt(ui),
 			},
 			Progress: func(event bootstrap.Event) {
-				fmt.Fprintf(ui.output, "bootstrap %-8s %s\n", event.Step, event.Detail)
+				_, _ = fmt.Fprintf(ui.output, "bootstrap %-8s %s\n", event.Step, event.Detail)
 			},
 		})
 		if err != nil {

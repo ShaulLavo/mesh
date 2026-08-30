@@ -68,8 +68,8 @@ that slot; an empty later install preserves the last DNS-proven name. A
 different nonempty name is rejected to prevent replay from renaming an adopted
 identity. Intentional renames require an explicit state reset and re-adoption.
 The daemon exposes the persisted name only after a valid live certificate was
-installed or restored and Tailscale Serve successfully configured tailnet port
-443. An expired persisted certificate triggers a new order. If renewal fails
+installed or restored and an exact raw Tailscale Serve forward on port 443 was
+verified. An expired persisted certificate triggers a new order. If renewal fails
 while the current certificate remains valid, reconciliation reports the failure
 and still redistributes that usable bundle to origins that were previously
 offline.
@@ -97,6 +97,11 @@ for the configured terminal WebSocket path before dispatching to any service
 handler. It never exposes terminal transport. Shutdown is bounded; a stuck
 service request cannot prevent daemon exit.
 
+D23 keeps the direct Tailnet listener deliberately plaintext for both terminal
+WebSockets and HTTP service routes. The private-name path does not retrofit TLS
+onto that listener: raw TCP/443 preserves TLS through Tailscale Serve until the
+separate loopback listener terminates it.
+
 `--tailscale-serve` operationalizes the selected forwarding layer after the
 local Unix, control, and HTTPS listeners are ready. On every daemon start it
 runs this bounded, idempotent command:
@@ -111,6 +116,17 @@ reboot and a Tailscale restart. A failed or timed-out command fails daemon
 startup with the command diagnostic instead of leaving a published DNS name
 without a route. The direct Mesh control listener must use a nonzero port other
 than 443; the production value is 7337.
+
+Every private-HTTPS startup then runs a separate bounded, read-only `tailscale
+serve status --json` check. It requires TCP/443 to be an unmodified raw forward
+to the configured `127.0.0.1:<https-port>` target. It rejects HTTP or HTTPS
+handling, TLS termination, PROXY protocol handling, enabled Funnel exposure,
+and foreground sessions that shadow TCP/443. This verifies the postcondition
+after `--tailscale-serve` and also accepts an exact operator-managed route when
+that flag is absent. A missing or wrong persistent route reports the exact setup
+command. Funnel and foreground conflicts identify the configuration that must
+be removed. The daemon does not publish its private name through `host.info`
+until this verification succeeds.
 
 Serve-mode startup bounds Tailscale discovery to 15 seconds. Every discovered
 control address must be in Tailscale's `100.64.0.0/10` IPv4 range or
@@ -350,7 +366,8 @@ environment, and profile tampering, cross-profile rejection, rollback,
 concurrency bounds, manager retry scheduling, partial
 discovery, bounded Tailscale output, hot TLS reload, listener shutdown,
 address-change restart/rebind, and exact Tailscale Serve command ordering and
-failure behavior.
+status verification, including missing, mismatched, TLS-terminated,
+PROXY-protocol, Funnel, and foreground routes.
 
 `TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution` is the
 credential-free composed acceptance test. It runs the real manager, issuer,
@@ -362,8 +379,10 @@ isolation.
 
 `integration/private_tls_distribution.sh` starts the compiled daemon, creates a
 real T11 static service, installs identity-signed staging and live bundles over
-the daemon protocol, verifies staging remains non-serving, verifies live HTTPS
-hot-rotation, and confirms the terminal WebSocket path returns service-only 404.
+the daemon protocol, proves a missing Tailscale Serve route fails with the exact
+remediation, verifies staging remains non-serving, verifies live HTTPS
+hot-rotation after an exact route is observed, and confirms the terminal
+WebSocket path returns service-only 404.
 
 The development machine has no Cloudflare token, no `tailscale` or `dig`
 executable, and no configured Mesh origin address book. A real Cloudflare

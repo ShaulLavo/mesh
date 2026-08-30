@@ -130,7 +130,7 @@ func TestPrivateNamesRuntimeRequiresSecureTokenAndSeparatesEnvironments(t *testi
 		t.Fatal("omitted public edge constructed a public certificate manager")
 	}
 
-	if err := os.Chmod(tokenPath, 0o644); err != nil {
+	if err := os.Chmod(tokenPath, 0o644); err != nil { //nolint:gosec // deliberately loose permissions are the rejection fixture
 		t.Fatal(err)
 	}
 	if _, err := NewPrivateNamesRuntime(configPath, PrivateNamesRuntimeOptions{StateDir: stateDir}); err == nil || !strings.Contains(err.Error(), "0600") {
@@ -170,7 +170,7 @@ func writePrivateNamesConfig(t *testing.T, directory, contents string) string {
 
 func readTestFile(t *testing.T, path string) string {
 	t.Helper()
-	contents, err := os.ReadFile(path)
+	contents, err := os.ReadFile(path) //nolint:gosec // test reads its own temporary configuration fixture
 	if err != nil {
 		t.Fatal(err)
 	}

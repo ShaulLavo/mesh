@@ -22,7 +22,7 @@ func ReadLogTail(sessionDir string, limit int) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("worker: log %s is not a regular file", path)
 	}
-	file, err := os.Open(path)
+	file, err := os.Open(path) //nolint:gosec // path comes from the fixed worker log location selected by the local catalog
 	if err != nil {
 		return nil, fmt.Errorf("worker: open log %s: %w", path, err)
 	}

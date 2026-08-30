@@ -31,7 +31,7 @@ func TestWorkerConnectorResolvesCatalogSessionAndCarriesFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer listener.Close() //nolint:errcheck // test listener cleanup
 
 	connector, err := newWorkerConnector(root, lookupFunc(func(_ context.Context, id storage.SessionID) (storage.Session, error) {
 		if id != "7K3D" {
@@ -60,7 +60,7 @@ func TestWorkerConnectorResolvesCatalogSessionAndCarriesFrames(t *testing.T) {
 			serverErr <- err
 			return
 		}
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck // test server connection cleanup
 		frame, err := conn.ReadFrame()
 		if err == nil {
 			serverFrames <- frame
@@ -72,7 +72,7 @@ func TestWorkerConnectorResolvesCatalogSessionAndCarriesFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // test client connection cleanup
 	want := protocol.Frame{Kind: protocol.KindInput, Session: sid, Payload: []byte("input")}
 	if err := conn.WriteFrame(want); err != nil {
 		t.Fatal(err)

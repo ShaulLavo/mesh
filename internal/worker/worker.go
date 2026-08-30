@@ -408,7 +408,7 @@ func Run(cfg Config) (int, error) {
 	}
 	defer pty.Close() //nolint:errcheck // best effort on shutdown
 
-	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...)
+	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...) //nolint:gosec // running the user's explicit session command is this worker's purpose; no shell is used
 	cmd.Dir = cfg.Cwd
 	cmd.Env = cfg.Env
 	if err := pty.Start(cmd); err != nil {

@@ -141,9 +141,10 @@ func TestServeDoesNotNegotiateCompression(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ws, response, err := websocket.Dial(ctx, server.URL, &websocket.DialOptions{
+	dialOptions := &websocket.DialOptions{
 		CompressionMode: websocket.CompressionContextTakeover,
-	})
+	}
+	ws, response, err := websocket.Dial(ctx, server.URL, dialOptions) //nolint:bodyclose // websocket.Dial owns and closes its HTTP response body
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,9 +421,10 @@ func TestKeepAliveClosesPeerThatWithholdsPong(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ws, _, err := websocket.Dial(ctx, server.URL, &websocket.DialOptions{
+	dialOptions := &websocket.DialOptions{
 		CompressionMode: websocket.CompressionDisabled,
-	})
+	}
+	ws, _, err := websocket.Dial(ctx, server.URL, dialOptions) //nolint:bodyclose // websocket.Dial owns and closes its HTTP response body
 	if err != nil {
 		t.Fatal(err)
 	}

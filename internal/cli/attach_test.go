@@ -21,7 +21,7 @@ func TestAttachStopsReadingInputBeforeReturning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer listener.Close() //nolint:errcheck // test resource cleanup
 
 	detach := make(chan struct{})
 	serverErr := make(chan error, 1)
@@ -31,7 +31,7 @@ func TestAttachStopsReadingInputBeforeReturning(t *testing.T) {
 			serverErr <- err
 			return
 		}
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck // test resource cleanup
 		if _, err := protocol.NewReader(conn).ReadFrame(); err != nil {
 			serverErr <- err
 			return
@@ -47,13 +47,13 @@ func TestAttachStopsReadingInputBeforeReturning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
-	defer input.Close()
+	defer in.Close()    //nolint:errcheck // test resource cleanup
+	defer input.Close() //nolint:errcheck // test resource cleanup
 	out, err := os.CreateTemp(t.TempDir(), "output")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer out.Close()
+	defer out.Close() //nolint:errcheck // test resource cleanup
 
 	baseline := goroutinesWithStack("internal/cli.relayInput")
 	attached := make(chan error, 1)
@@ -99,12 +99,12 @@ func TestAttachTransportErrorsAreBoundedAndPreserveCause(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer input.Close()
+			defer input.Close() //nolint:errcheck // test resource cleanup
 			output, err := os.CreateTemp(t.TempDir(), "output")
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer output.Close()
+			defer output.Close() //nolint:errcheck // test resource cleanup
 			_, err = Attach(AttachOptions{SessionID: "7K3D", Conn: test.conn, In: input, Out: output})
 			if err == nil || !errors.Is(err, cause) || strings.ContainsAny(err.Error(), "\r\n\x1b") || strings.ContainsRune(err.Error(), '\u202e') || len(err.Error()) > maximumRemoteErrorBytes+100 {
 				t.Fatalf("bounded attach error = %q (%d bytes), errors.Is = %v", err, len(err.Error()), errors.Is(err, cause))
@@ -154,7 +154,7 @@ func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer listener.Close() //nolint:errcheck // test resource cleanup
 
 	sid, err := protocol.NewSessionID("SNAP")
 	if err != nil {
@@ -167,7 +167,7 @@ func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 			serverErr <- err
 			return
 		}
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck // test resource cleanup
 		if _, err := protocol.NewReader(conn).ReadFrame(); err != nil {
 			serverErr <- err
 			return
@@ -201,12 +201,12 @@ func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer in.Close() //nolint:errcheck // test resource cleanup
 	out, err := os.CreateTemp(t.TempDir(), "output")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer out.Close()
+	defer out.Close() //nolint:errcheck // test resource cleanup
 
 	initialSeq := uint64(0)
 	result, err := Attach(AttachOptions{
@@ -246,7 +246,7 @@ func TestAttachDoesNotCommitAnIncompleteSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer listener.Close() //nolint:errcheck // test resource cleanup
 
 	serverErr := make(chan error, 1)
 	go func() {
@@ -283,12 +283,12 @@ func TestAttachDoesNotCommitAnIncompleteSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer in.Close() //nolint:errcheck // test resource cleanup
 	out, err := os.CreateTemp(t.TempDir(), "output")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer out.Close()
+	defer out.Close() //nolint:errcheck // test resource cleanup
 
 	lastSeq := uint64(7)
 	result, err := Attach(AttachOptions{

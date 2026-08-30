@@ -60,7 +60,7 @@ func handlerForNormalizedService(service Service, prefix string, trustForwardedH
 	case Proxy:
 		return proxyHandler(service.Target, prefix, trustForwardedHeaders), nil
 	default:
-		panic("validated service has an unknown kind")
+		return nil, fmt.Errorf("serve: service %q has unsupported kind %q", service.Name, service.Kind)
 	}
 }
 
@@ -205,11 +205,14 @@ func serveOpenedFile(w http.ResponseWriter, request *http.Request, file *os.File
 }
 
 func redirectDirectory(w http.ResponseWriter, request *http.Request) {
-	target := request.URL.EscapedPath() + "/"
+	target := "/" + strings.TrimLeft(request.URL.EscapedPath(), "/")
+	if !strings.HasSuffix(target, "/") {
+		target += "/"
+	}
 	if request.URL.RawQuery != "" {
 		target += "?" + request.URL.RawQuery
 	}
-	http.Redirect(w, request, target, http.StatusPermanentRedirect)
+	http.Redirect(w, request, target, http.StatusPermanentRedirect) //nolint:gosec // target is forced to one leading slash; the scheme-relative regression is tested
 }
 
 func mountedURL(prefix, logicalPath string, directory bool) string {

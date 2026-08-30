@@ -228,5 +228,5 @@ func writeUint64(writer hash.Hash, value uint64) {
 }
 
 func writeInt64(writer hash.Hash, value int64) {
-	writeUint64(writer, uint64(value))
+	writeUint64(writer, uint64(value)) //nolint:gosec // canonical hashing preserves the signed value's two's-complement bits
 }

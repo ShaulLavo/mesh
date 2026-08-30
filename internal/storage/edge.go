@@ -22,12 +22,20 @@ func (s *Store) EdgeSnapshotVersion(ctx context.Context, originID string) (edge.
 	if err != nil {
 		return edge.SnapshotVersion{}, fmt.Errorf("storage: get edge snapshot version: %w", err)
 	}
-	return edge.SnapshotVersion{Sequence: uint64(row.Sequence), Digest: row.Digest}, nil
+	sequence, err := edgeSequenceFromSQLite(row.Sequence)
+	if err != nil {
+		return edge.SnapshotVersion{}, fmt.Errorf("storage: decode edge snapshot version: %w", err)
+	}
+	return edge.SnapshotVersion{Sequence: sequence, Digest: row.Digest}, nil
 }
 
 // ApplyEdgeSnapshot atomically replaces one origin's complete claims. It
 // rechecks sequence and collisions inside the write transaction.
 func (s *Store) ApplyEdgeSnapshot(ctx context.Context, snapshot edge.Snapshot, digest string, receivedAt time.Time) error {
+	sequence, err := edgeSequenceToSQLite(snapshot.Sequence)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return fmt.Errorf("storage: begin edge snapshot transaction: %w", err)
@@ -36,14 +44,20 @@ func (s *Store) ApplyEdgeSnapshot(ctx context.Context, snapshot edge.Snapshot, d
 	queries := s.queries.WithTx(tx)
 
 	current, err := queries.GetEdgeSnapshot(ctx, snapshot.OriginID)
-	switch {
-	case err == nil && uint64(current.Sequence) > snapshot.Sequence:
-		return edge.ErrStaleSequence
-	case err == nil && uint64(current.Sequence) == snapshot.Sequence && current.Digest != digest:
-		return edge.ErrSequenceConflict
-	case err == nil && uint64(current.Sequence) == snapshot.Sequence:
-		return nil
-	case err != nil && !errors.Is(err, sql.ErrNoRows):
+	if err == nil {
+		currentSequence, conversionErr := edgeSequenceFromSQLite(current.Sequence)
+		if conversionErr != nil {
+			return fmt.Errorf("storage: inspect edge snapshot: %w", conversionErr)
+		}
+		switch {
+		case currentSequence > snapshot.Sequence:
+			return edge.ErrStaleSequence
+		case currentSequence == snapshot.Sequence && current.Digest != digest:
+			return edge.ErrSequenceConflict
+		case currentSequence == snapshot.Sequence:
+			return nil
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("storage: inspect edge snapshot: %w", err)
 	}
 
@@ -57,7 +71,7 @@ func (s *Store) ApplyEdgeSnapshot(ctx context.Context, snapshot edge.Snapshot, d
 		}
 	}
 	if err := queries.UpsertEdgeSnapshot(ctx, dbsqlc.UpsertEdgeSnapshotParams{
-		OriginID: snapshot.OriginID, TargetID: snapshot.TargetID, Sequence: int64(snapshot.Sequence), Digest: digest,
+		OriginID: snapshot.OriginID, TargetID: snapshot.TargetID, Sequence: sequence, Digest: digest,
 		IssuedAt: snapshot.IssuedAt.UTC().UnixNano(), ExpiresAt: snapshot.ExpiresAt.UTC().UnixNano(),
 		LastSeenAt: receivedAt.UTC().UnixNano(), Signature: append([]byte(nil), snapshot.Signature...),
 	}); err != nil {
@@ -102,9 +116,13 @@ func (s *Store) LoadEdgeState(ctx context.Context) ([]edge.StoredOrigin, error) 
 	}
 	result := make([]edge.StoredOrigin, 0, len(snapshots))
 	for _, row := range snapshots {
+		sequence, err := edgeSequenceFromSQLite(row.Sequence)
+		if err != nil {
+			return nil, fmt.Errorf("storage: decode edge snapshot: %w", err)
+		}
 		result = append(result, edge.StoredOrigin{
 			Snapshot: edge.Snapshot{
-				TargetID: row.TargetID, OriginID: row.OriginID, Sequence: uint64(row.Sequence),
+				TargetID: row.TargetID, OriginID: row.OriginID, Sequence: sequence,
 				IssuedAt: time.Unix(0, row.IssuedAt).UTC(), ExpiresAt: time.Unix(0, row.ExpiresAt).UTC(),
 				Routes: byOrigin[row.OriginID], Signature: append([]byte(nil), row.Signature...),
 			},
@@ -136,6 +154,10 @@ func (s *Store) LoadEdgeOutbox(ctx context.Context, targetID string) (edge.Outbo
 	if len(row.SnapshotJson) == 0 || len(row.SnapshotJson) > edge.MaximumOutboxBytes {
 		return edge.OutboxRecord{}, fmt.Errorf("storage: edge outbox changed to size %d after validation", len(row.SnapshotJson))
 	}
+	sequence, err := edgeSequenceFromSQLite(row.Sequence)
+	if err != nil {
+		return edge.OutboxRecord{}, fmt.Errorf("storage: decode edge outbox: %w", err)
+	}
 	var snapshot edge.Snapshot
 	if err := json.Unmarshal(row.SnapshotJson, &snapshot); err != nil {
 		return edge.OutboxRecord{}, fmt.Errorf("storage: decode edge outbox: %w", err)
@@ -144,7 +166,7 @@ func (s *Store) LoadEdgeOutbox(ctx context.Context, targetID string) (edge.Outbo
 	if err != nil {
 		return edge.OutboxRecord{}, fmt.Errorf("storage: verify edge outbox: %w", err)
 	}
-	if row.TargetID != targetID || row.Sequence <= 0 || uint64(row.Sequence) != snapshot.Sequence || row.Digest != digest {
+	if row.TargetID != targetID || sequence != snapshot.Sequence || row.Digest != digest {
 		return edge.OutboxRecord{}, errors.New("storage: edge outbox metadata does not match its signed snapshot")
 	}
 	acknowledged, err := sqliteBool("acknowledged", row.Acknowledged)
@@ -156,8 +178,12 @@ func (s *Store) LoadEdgeOutbox(ctx context.Context, targetID string) (edge.Outbo
 
 // SaveEdgeOutbox durably consumes a new sequence before it can be sent.
 func (s *Store) SaveEdgeOutbox(ctx context.Context, record edge.OutboxRecord) error {
-	if record.Snapshot.Sequence == 0 || record.Snapshot.Sequence > math.MaxInt64 || record.Acknowledged {
+	if record.Acknowledged {
 		return errors.New("storage: invalid new edge outbox record")
+	}
+	sequence, err := edgeSequenceToSQLite(record.Snapshot.Sequence)
+	if err != nil {
+		return err
 	}
 	digest, err := edge.VerifySnapshot(record.Snapshot, record.Snapshot.TargetID, record.Snapshot.OriginID)
 	if err != nil || digest != record.Digest {
@@ -171,7 +197,7 @@ func (s *Store) SaveEdgeOutbox(ctx context.Context, record edge.OutboxRecord) er
 		return fmt.Errorf("storage: encoded edge outbox exceeds %d bytes", edge.MaximumOutboxBytes)
 	}
 	updated, err := s.queries.UpsertEdgeOutbox(ctx, dbsqlc.UpsertEdgeOutboxParams{
-		TargetID: record.Snapshot.TargetID, Sequence: int64(record.Snapshot.Sequence), Digest: record.Digest,
+		TargetID: record.Snapshot.TargetID, Sequence: sequence, Digest: record.Digest,
 		SnapshotJson: encoded, Acknowledged: 0,
 	})
 	if err != nil {
@@ -185,7 +211,11 @@ func (s *Store) SaveEdgeOutbox(ctx context.Context, record edge.OutboxRecord) er
 
 // AcknowledgeEdgeOutbox marks only the exact sequence and digest acknowledged.
 func (s *Store) AcknowledgeEdgeOutbox(ctx context.Context, targetID string, sequence uint64, digest string) error {
-	updated, err := s.queries.AcknowledgeEdgeOutbox(ctx, dbsqlc.AcknowledgeEdgeOutboxParams{TargetID: targetID, Sequence: int64(sequence), Digest: digest})
+	persistedSequence, err := edgeSequenceToSQLite(sequence)
+	if err != nil {
+		return err
+	}
+	updated, err := s.queries.AcknowledgeEdgeOutbox(ctx, dbsqlc.AcknowledgeEdgeOutboxParams{TargetID: targetID, Sequence: persistedSequence, Digest: digest})
 	if err != nil {
 		return fmt.Errorf("storage: acknowledge edge outbox: %w", err)
 	}
@@ -193,4 +223,18 @@ func (s *Store) AcknowledgeEdgeOutbox(ctx context.Context, targetID string, sequ
 		return errors.New("storage: edge acknowledgement does not match pending snapshot")
 	}
 	return nil
+}
+
+func edgeSequenceToSQLite(sequence uint64) (int64, error) {
+	if sequence == 0 || sequence > math.MaxInt64 {
+		return 0, fmt.Errorf("storage: edge sequence %d is outside 1..MaxInt64", sequence)
+	}
+	return int64(sequence), nil
+}
+
+func edgeSequenceFromSQLite(sequence int64) (uint64, error) {
+	if sequence <= 0 {
+		return 0, fmt.Errorf("storage: persisted edge sequence %d is outside 1..MaxInt64", sequence)
+	}
+	return uint64(sequence), nil
 }

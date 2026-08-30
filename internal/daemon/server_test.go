@@ -269,7 +269,7 @@ func TestNewClientServerRejectsNilDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.Handle(nil, newServerTestConn()); err == nil {
+	if err := server.Handle(nil, newServerTestConn()); err == nil { //nolint:staticcheck // boundary test intentionally passes a nil context
 		t.Fatal("nil client context accepted")
 	}
 	if err := server.Handle(context.Background(), nil); err == nil {

@@ -19,7 +19,7 @@ func acquireRenewalLock(ctx context.Context, path string) (*renewalLock, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("dnsname: wait for renewal lock: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // path is a fixed private-state lock and the opened descriptor is verified below
 	if err != nil {
 		return nil, fmt.Errorf("dnsname: open renewal lock: %w", err)
 	}

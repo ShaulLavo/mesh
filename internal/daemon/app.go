@@ -56,6 +56,7 @@ type runOptions struct {
 	tailnetPollInterval     time.Duration
 	tailnetDiscoveryTimeout time.Duration
 	runCommand              externalCommand
+	verifyServeForward      serveForwardVerifier
 	tailscaleTimeout        time.Duration
 }
 
@@ -70,6 +71,7 @@ func defaultRunOptions() runOptions {
 		tailnetPollInterval:     defaultTailnetAddressPollInterval,
 		tailnetDiscoveryTimeout: defaultTailnetDiscoveryTimeout,
 		runCommand:              runExternalCommand,
+		verifyServeForward:      tailnet.VerifyServeForward,
 		tailscaleTimeout:        defaultTailscaleServeTimeout,
 	}
 }
@@ -101,6 +103,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if opts.reconcileInterval <= 0 {
 		return errors.New("daemon: reconciliation interval must be positive")
 	}
+	if cfg.HTTPSPort != 0 && (opts.verifyServeForward == nil || opts.tailscaleTimeout <= 0) {
+		return errors.New("daemon: incomplete private HTTPS forwarding dependencies")
+	}
 	if cfg.TailscaleServe {
 		if cfg.HTTPSPort == 0 {
 			return errors.New("daemon: Tailscale Serve requires a non-zero HTTPS port")
@@ -111,7 +116,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		if cfg.TailnetPort == 443 {
 			return errors.New("daemon: Tailscale Serve TCP/443 conflicts with the direct Tailnet listener on port 443")
 		}
-		if opts.runCommand == nil || opts.tailscaleTimeout <= 0 || opts.validateServeAddresses == nil || opts.tailnetPollInterval <= 0 || opts.tailnetDiscoveryTimeout <= 0 {
+		if opts.runCommand == nil || opts.validateServeAddresses == nil || opts.tailnetPollInterval <= 0 || opts.tailnetDiscoveryTimeout <= 0 {
 			return errors.New("daemon: incomplete Tailscale Serve runtime dependencies")
 		}
 	}
@@ -394,6 +399,11 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	listener.ready = func(readyCtx context.Context) error {
 		if cfg.TailscaleServe {
 			if err := configureTailscaleServe(readyCtx, cfg.HTTPSPort, opts.tailscaleTimeout, opts.runCommand); err != nil {
+				return err
+			}
+		}
+		if cfg.HTTPSPort != 0 {
+			if err := verifyTailscaleServeForward(readyCtx, cfg.HTTPSPort, opts.tailscaleTimeout, opts.verifyServeForward); err != nil {
 				return err
 			}
 			if certificateRuntime.PrivateNameReady != nil {

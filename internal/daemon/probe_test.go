@@ -15,7 +15,7 @@ func TestUnixWorkerProbeConnectsAndCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer listener.Close() //nolint:errcheck // test listener cleanup
 
 	accepted := make(chan net.Conn, 1)
 	acceptErr := make(chan error, 1)
@@ -35,7 +35,7 @@ func TestUnixWorkerProbeConnectsAndCloses(t *testing.T) {
 	case err := <-acceptErr:
 		t.Fatal(err)
 	case conn := <-accepted:
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck // test accepted connection cleanup
 		if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 			t.Fatal(err)
 		}
@@ -50,7 +50,7 @@ func TestUnixWorkerProbeConnectsAndCloses(t *testing.T) {
 
 func TestUnixWorkerProbeValidatesBoundaryAndCancellation(t *testing.T) {
 	probe := newUnixWorkerProbe()
-	if err := probe.Probe(nil, "/tmp/worker.sock"); err == nil {
+	if err := probe.Probe(nil, "/tmp/worker.sock"); err == nil { //nolint:staticcheck // boundary test intentionally passes a nil context
 		t.Fatal("nil context accepted")
 	}
 	if err := probe.Probe(context.Background(), ""); err == nil {

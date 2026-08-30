@@ -138,7 +138,7 @@ func loadAuthMethods(ctx context.Context, remoteTarget target, opts SSHOptions) 
 }
 
 func loadSigner(ctx context.Context, identityFile string, prompt func(context.Context, string) ([]byte, error)) (ssh.Signer, error) {
-	contents, err := os.ReadFile(identityFile)
+	contents, err := os.ReadFile(identityFile) //nolint:gosec // reading the user's explicitly selected SSH identity is the operation requested
 	if err != nil {
 		return nil, fmt.Errorf("read SSH identity %s: %w", identityFile, err)
 	}
@@ -220,7 +220,7 @@ func appendKnownHost(knownHostsPath, hostname string, key ssh.PublicKey) error {
 	if err := os.MkdirAll(filepath.Dir(knownHostsPath), 0o700); err != nil {
 		return fmt.Errorf("create known hosts directory: %w", err)
 	}
-	file, err := os.OpenFile(knownHostsPath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	file, err := os.OpenFile(knownHostsPath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600) //nolint:gosec // writing the caller-selected SSH known-hosts file is this operation's purpose
 	if err != nil {
 		return fmt.Errorf("open known hosts %s: %w", knownHostsPath, err)
 	}
@@ -256,7 +256,7 @@ func (r *sshRemote) Run(ctx context.Context, command string, stdin io.Reader) ([
 	if err != nil {
 		return nil, nil, fmt.Errorf("open SSH session: %w", err)
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // session.Run or context cancellation determines the request result
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	session.Stdout = &stdout

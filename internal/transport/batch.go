@@ -132,7 +132,7 @@ func (c *BatchingConn) Close() error {
 		// writeMu before giving the destination that cancellation signal.
 		destinationErr := c.dst.Close()
 		c.writeMu.Lock()
-		c.writeMu.Unlock()
+		c.writeMu.Unlock() //nolint:staticcheck // lock and unlock form a completion barrier for an in-flight write
 
 		c.stateMu.Lock()
 		c.closeErr = errors.Join(c.writeErr, destinationErr)

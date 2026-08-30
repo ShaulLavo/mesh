@@ -508,7 +508,7 @@ func TestCatalogListAndGetValidateContextAndID(t *testing.T) {
 	store := &catalogStoreStub{}
 	catalog := newCatalogForTest(t, t.TempDir(), store, probeFunc(func(context.Context, string) error { return nil }), func() string { return "boot-a" })
 
-	if _, err := catalog.List(nil); err == nil {
+	if _, err := catalog.List(nil); err == nil { //nolint:staticcheck // boundary test intentionally passes a nil context
 		t.Fatal("List(nil) error = nil")
 	}
 	if _, err := catalog.Get(context.Background(), " "); err == nil {

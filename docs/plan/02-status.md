@@ -18,9 +18,11 @@ edge are complete.
   signed certificate installation, service-only TLS, a bounded public request
   read deadline, and supervised origin/edge roles (T04, T12, T13)
 - `internal/transport` — WebSocket transport with resume (T05)
-- `internal/identity`, `internal/tailnet` — host keys, Tailscale discovery (T06)
+- `internal/identity`, `internal/tailnet` — host keys, Tailscale discovery, and
+  persistent raw TCP/443 forwarding verification (T06, T12)
 - `internal/bootstrap`, `scripts/install` — SSH adoption, release selection,
-  identity verification, and idempotent systemd/launchd installers (T08)
+  development-build version safety, identity verification, and idempotent
+  systemd/launchd installers (T08)
 - `internal/cli`, `cmd/mesh` — Cobra + Fang product surface, versioned host
   address book, concurrent live/cached host catalogs, remote create, attach,
   logs, kill, signals, the T09 picker boundary, and service preview,
@@ -29,7 +31,8 @@ edge are complete.
   new, resume, attach, and terminal-safe raw-mode handoff (T09)
 - `.github`, `.goreleaser.yaml`, `scripts/install` — reproducible release
   archives, checksum-gated installers, systemd/launchd services, Homebrew Cask,
-  immutable CI actions, and retained packaging checks (T10)
+  immutable CI actions, seven-linter boundary checks, and retained packaging
+  checks (T10)
 - `internal/serve` — durable static, files, and loopback-proxy services; fuzzed
   shared root resolution; `os.Root`-backed file access; bounded public-directory
   inspection; live service controls and restart restoration (T11, T14)
@@ -42,10 +45,10 @@ edge are complete.
   proxy/direct-TLS front doors, and origin publication with exact
   acknowledgement (T13)
 
-Verified 2026-08-30: clean formatting and module/generation diffs,
-`go vet ./...`, `go test -race ./...`, both retained parser fuzz targets, all
-seventeen scripts in `integration/`, and CGO-disabled Linux amd64/arm64 and
-Darwin arm64 builds passing.
+Verified 2026-08-30: clean formatting and module/generation diffs, the unlimited
+seven-linter policy, `go vet ./...`, `go test -race ./...`, all three retained
+parser fuzz targets, all seventeen scripts in `integration/`, and CGO-disabled
+Linux amd64/arm64 and Darwin arm64 builds passing.
 
 Private origin names and wildcard certificates are operational, including
 staging isolation and hot live rotation. The public edge is operational in both
@@ -111,9 +114,10 @@ A later public-boundary review closed four more findings:
    addresses evict live entries. IPv6 clients now share `/64` quotas, saturation
    preserves live entries, and the docs identify global and per-origin
    concurrency as the real protection against address rotation.
-8. The public server bounded header time but not body time. It now has a fixed
-   two-minute request-read deadline, returns 408 for an inbound body timeout,
-   and deliberately leaves writes unbounded for streaming and WebSockets.
+8. The public server bounded header time but not body time. It now has a fixed,
+   generous 10-minute request-read deadline, returns 408 for an inbound body
+   timeout, and deliberately leaves writes unbounded for streaming and
+   WebSockets.
 9. Static serving and directory scans resolved paths, called `Stat`, and then
    reopened them by name. Actual access now goes through an anchored `os.Root`
    and the same opened descriptor, with a regression that retargets a directory
@@ -122,6 +126,31 @@ A later public-boundary review closed four more findings:
     accompanying parser boundary tests found an encoding-depth off-by-one, and
     the Host fuzz seeds found an accepted empty Host and a rewritten bracketed
     DNS Host; all three are closed.
+
+A final operational and lint review closed six more findings:
+
+11. The explicit lint allowlist omitted `errcheck`, `gosec`, and `bodyclose`,
+    while global Staticcheck exclusions hid deprecation and boundary mistakes.
+    All three linters and SA1012, SA1019, and SA2001 are active. The packaging
+    contract locks that policy, and intentional exceptions are line-scoped.
+12. Handler construction contained a panic-only default for an unknown service
+    kind. It now returns an error. The same boundary sweep found and closed a
+    scheme-relative directory redirect.
+13. An unversioned development build could silently download `latest` during a
+    cross-platform `mesh add`. It now reuses an exact local executable or sibling
+    artifact and otherwise refuses to guess a release version.
+14. Direct terminal WebSockets and Tailnet-only HTTP services intentionally rely
+    on Tailscale WireGuard and ACLs instead of a second TLS layer. D23 records
+    that security boundary and its exposure cost.
+15. The Tailscale Serve setup command already ran when requested, but startup did
+    not verify operator-managed state. Every private-HTTPS start now requires an
+    exact persistent raw TCP/443 forward and rejects TLS/HTTP handling, PROXY
+    protocol, Funnel exposure, and foreground shadows before publishing the
+    private name.
+16. SQLite stores signed 64-bit integers, but edge and session code crossed into
+    unsigned sequence types without checking corrupt negative rows. Storage now
+    validates every signed/unsigned sequence boundary and rejects values that
+    cannot round-trip.
 
 Cosmetic, nobody has bothered and nobody should make a task of it: `cli/attach.go`
 hand-rolls `indexByte` where `bytes.IndexByte` exists; `cli/sessions.go` builds

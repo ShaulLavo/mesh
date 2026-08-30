@@ -81,7 +81,7 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 		}
 	}()
 	logPath := paths.Log(dir)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // path is the fixed log file in a newly reserved private session directory
 	if err != nil {
 		return Launched{}, fmt.Errorf("launch worker %s: open log %s: %w", id, logPath, err)
 	}
@@ -96,7 +96,7 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 		"--",
 	}
 	args = append(args, cfg.Command...)
-	cmd := exec.Command(cfg.Executable, args...)
+	cmd := exec.Command(cfg.Executable, args...) //nolint:gosec // executable is the running Mesh binary or an explicit internal test override; no shell is used
 	cmd.Dir = cfg.Cwd
 	cmd.Env = append([]string(nil), cfg.Env...)
 	cmd.Stdin = nil

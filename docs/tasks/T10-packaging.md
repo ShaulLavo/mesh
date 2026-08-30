@@ -88,6 +88,13 @@ write release contents. CI runs `go test -race ./...`, every
 `integration/*.sh`, `go vet`, golangci-lint v2, govulncheck, a GoReleaser
 snapshot, and the packaging contract.
 
+The lint configuration keeps `default: none` so the policy is explicit, but its
+allowlist covers correctness and public-boundary failures: `bodyclose`,
+`errcheck`, `gosec`, `govet`, `ineffassign`, `staticcheck`, and `unused`.
+Deprecation (`SA1019`), nil-context (`SA1012`), and empty critical-section
+(`SA2001`) checks remain enabled globally. Intentional cases use a justified
+line-level suppression instead of weakening the repository policy.
+
 `scripts/check-packaging.sh` is the retained contract checker. Without release
 credentials it:
 
@@ -96,6 +103,8 @@ credentials it:
 - checks the tagged workflow validates a candidate before publishing;
 - checks service restart and boot enablement semantics;
 - checks T08 embeds the canonical service assets;
+- checks the lint allowlist includes the boundary linters and does not disable
+  the restored Staticcheck rules;
 - checks all demo commands are real and exit successfully; and
 - when given `dist/`, verifies the three exact archive names, executable
   one-file archive contents, target metadata, every checksum, and that the

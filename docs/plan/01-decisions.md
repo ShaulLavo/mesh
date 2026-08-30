@@ -244,3 +244,21 @@ outside the tailnet. It is not a way to hand a build to somebody.
 
 **Naming follows from this.** The verb stays `serve`, never `deploy`. `mesh
 deploy` would invite exactly the pipeline the previous paragraph rules out.
+
+## D23 — Tailnet transport security belongs to Tailscale
+
+The direct terminal WebSocket and the HTTP service routes on the shared Tailnet
+listener are intentionally plaintext. Mesh binds them only to current Tailscale
+addresses. Tailscale's WireGuard tunnel supplies confidentiality and integrity,
+and Tailnet ACLs supply admission. Mesh destination-identity pinning detects the
+wrong daemon, but it is not transport encryption or client authentication.
+
+Canonical private HTTPS is separate. Tailscale Serve forwards raw TCP/443 to the
+loopback TLS listener, so Mesh terminates TLS without changing the direct
+terminal protocol.
+
+**Cost:** there is no second cryptographic or authorization layer on the direct
+listener. A routing or ACL policy that exposes its control port also exposes the
+terminal protocol and Tailnet-only HTTP services to those newly admitted
+clients. Operators must treat Tailscale routing and ACLs as part of Mesh's
+security boundary.

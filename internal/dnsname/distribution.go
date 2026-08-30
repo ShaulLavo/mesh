@@ -472,7 +472,7 @@ func (d *Distributor) distributeOne(ctx context.Context, bundle Bundle, target O
 		}
 		return errors.New("open pinned certificate control connection failed")
 	}
-	defer connection.Close()
+	defer connection.Close() //nolint:errcheck // the certificate exchange result is authoritative
 
 	hostRequestID, err := d.requestID()
 	if err != nil {

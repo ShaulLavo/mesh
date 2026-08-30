@@ -19,6 +19,25 @@ import (
 	"github.com/coder/websocket"
 )
 
+func TestHandlerForNormalizedServiceRejectsUnknownKind(t *testing.T) {
+	_, err := handlerForNormalizedService(Service{Name: "broken", Kind: Kind("unknown"), Target: "3000"}, "/broken", nil)
+	if err == nil || !strings.Contains(err.Error(), "unsupported kind") {
+		t.Fatalf("unknown service kind error = %v", err)
+	}
+}
+
+func TestDirectoryRedirectCannotBecomeSchemeRelative(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://mesh.invalid//attacker.example/files?download=1", nil)
+	response := httptest.NewRecorder()
+
+	redirectDirectory(response, request)
+
+	location := response.Header().Get("Location")
+	if location != "/attacker.example/files/?download=1" {
+		t.Fatalf("directory redirect = %q, want a local absolute path", location)
+	}
+}
+
 func TestStaticHandlerServesFilesAndIndexesUnderPrefix(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("home"), 0o600); err != nil {
@@ -219,7 +238,7 @@ func TestProxyForwardsPathHeadersAndStreams(t *testing.T) {
 	proxy := httptest.NewServer(handler)
 	defer proxy.Close()
 
-	response, err := http.Get(proxy.URL + "/api/events?value=one")
+	response, err := http.Get(proxy.URL + "/api/events?value=one") //nolint:bodyclose // the body is deferred below and read by the streaming probe goroutine
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +353,7 @@ func TestProxyPassesWebSocketUpgrade(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	wsURL := "ws" + strings.TrimPrefix(proxy.URL, "http") + "/api/socket"
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := websocket.Dial(ctx, wsURL, nil) //nolint:bodyclose // websocket.Dial owns and closes its HTTP response body
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,7 +29,7 @@ const (
 
 	staleSocketProbeTimeout  = 200 * time.Millisecond
 	httpReadHeaderTimeout    = 5 * time.Second
-	publicReadTimeout        = 2 * time.Minute
+	publicReadTimeout        = 10 * time.Minute
 	httpShutdownTimeout      = 2 * time.Second
 	maximumPublicConnections = 512
 	maximumPublicHeaderBytes = 64 << 10
@@ -678,7 +678,7 @@ type daemonLock struct {
 }
 
 func acquireDaemonLock(path string) (*daemonLock, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // path is the fixed daemon lock filename under the validated local state directory
 	if err != nil {
 		return nil, fmt.Errorf("daemon: open lock %s: %w", path, err)
 	}

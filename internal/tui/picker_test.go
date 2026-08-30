@@ -115,14 +115,14 @@ func TestNonTerminalPickerReturnsWithoutStartingTea(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer input.Close()
-	defer inputWriter.Close()
+	defer input.Close()       //nolint:errcheck // test resource cleanup
+	defer inputWriter.Close() //nolint:errcheck // test resource cleanup
 	output, outputWriter, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer output.Close()
-	defer outputWriter.Close()
+	defer output.Close()       //nolint:errcheck // test resource cleanup
+	defer outputWriter.Close() //nolint:errcheck // test resource cleanup
 
 	pick := NewCLIPicker(input, outputWriter)
 	started := time.Now()

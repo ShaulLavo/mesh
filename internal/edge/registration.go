@@ -497,7 +497,7 @@ func ControlPinner(dial func(context.Context, string) (transport.Conn, error)) P
 		if err != nil {
 			return err
 		}
-		defer connection.Close()
+		defer connection.Close() //nolint:errcheck // the registration exchange result is authoritative
 		requestID, err := registrationRequestID()
 		if err != nil {
 			return err

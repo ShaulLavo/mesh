@@ -161,7 +161,7 @@ func TestConnectSSHConfirmsAndRecordsUnknownHost(t *testing.T) {
 	if prompted.Fingerprint != ssh.FingerprintSHA256(server.hostKey) || prompted.Algorithm != server.hostKey.Type() {
 		t.Fatalf("prompted host key = %#v", prompted)
 	}
-	contents, err := os.ReadFile(knownHostsPath)
+	contents, err := os.ReadFile(knownHostsPath) //nolint:gosec // test reads its own temporary known-hosts fixture
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,12 +224,12 @@ func (s *sshTestServer) accept(config *ssh.ServerConfig) {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			defer connection.Close()
+			defer connection.Close() //nolint:errcheck // test connection cleanup
 			serverConnection, channels, requests, err := ssh.NewServerConn(connection, config)
 			if err != nil {
 				return
 			}
-			defer serverConnection.Close()
+			defer serverConnection.Close() //nolint:errcheck // test SSH connection cleanup
 			go ssh.DiscardRequests(requests)
 			for channelRequest := range channels {
 				if channelRequest.ChannelType() != "session" {
@@ -247,7 +247,7 @@ func (s *sshTestServer) accept(config *ssh.ServerConfig) {
 }
 
 func serveSSHTestSession(channel ssh.Channel, requests <-chan *ssh.Request) {
-	defer channel.Close()
+	defer channel.Close() //nolint:errcheck // test channel cleanup
 	for request := range requests {
 		if request.Type != "exec" {
 			_ = request.Reply(false, nil)

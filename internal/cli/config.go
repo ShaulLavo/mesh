@@ -97,7 +97,7 @@ func LoadHosts() ([]HostRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	contents, err := os.ReadFile(path)
+	contents, err := os.ReadFile(path) //nolint:gosec // path is Mesh's fixed per-user host configuration file
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -222,17 +222,17 @@ func writeHostConfig(config hostConfig) error {
 		return fmt.Errorf("create temporary host config: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer os.Remove(temporaryPath) //nolint:errcheck // best-effort cleanup after atomic replacement
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("secure temporary host config: %w", err)
 	}
 	if _, err := temporary.Write(contents); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("write temporary host config: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return fmt.Errorf("sync temporary host config: %w", err)
 	}
 	if err := temporary.Close(); err != nil {

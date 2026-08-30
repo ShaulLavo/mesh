@@ -55,7 +55,7 @@ func WriteMeta(dir string, m Meta) error {
 // ReadMeta loads the metadata file from dir.
 func ReadMeta(dir string) (Meta, error) {
 	var m Meta
-	b, err := os.ReadFile(filepath.Join(dir, "meta.json"))
+	b, err := os.ReadFile(filepath.Join(dir, "meta.json")) //nolint:gosec // metadata uses a fixed filename under a locally selected session directory
 	if err != nil {
 		return m, err
 	}

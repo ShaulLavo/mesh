@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Signed private-name bundles bind the name to the certificate transcript.
-# Staging stays non-serving, and host.info withholds the name without ingress.
+# Staging stays non-serving, and host.info exposes the name only after Mesh
+# verifies the raw Tailscale Serve ingress route.
 set -uo pipefail
 
 if [ -z "${MESH:-}" ]; then
@@ -241,10 +242,33 @@ with socket.socket() as listener:
     print(listener.getsockname()[1])
 PY
 )
+TAILSCALE_STATUS="$TEST_ROOT/tailscale-serve.json"
+mkdir -p "$TEST_ROOT/bin"
+cat >"$TEST_ROOT/bin/tailscale" <<'SH'
+#!/bin/sh
+if [ "$*" != "serve status --json" ]; then
+  echo "unexpected tailscale arguments: $*" >&2
+  exit 2
+fi
+exec /bin/cat "$MESH_TEST_TAILSCALE_STATUS"
+SH
+chmod 0700 "$TEST_ROOT/bin/tailscale"
+export MESH_TEST_TAILSCALE_STATUS="$TAILSCALE_STATUS"
+export PATH="$TEST_ROOT/bin:$PATH"
 SITE_ROOT="$TEST_ROOT/site"
 mkdir -p "$SITE_ROOT"
 printf PRIVATE_TLS_MARKER >"$SITE_ROOT/index.html"
 
+printf '{}\n' >"$TAILSCALE_STATUS"
+if "$MESH" daemon --https-port "$HTTPS_PORT" --certificate-renewer-id "$RENEWER_ID" >"$TEST_ROOT/missing-forward.log" 2>&1; then
+  fail "daemon accepted private HTTPS without a Tailscale Serve forward"
+fi
+REMEDIATION="tailscale serve --bg --yes --tcp=443 tcp://127.0.0.1:$HTTPS_PORT"
+MISSING_FORWARD_DIAGNOSTIC=$(tr '\n' ' ' <"$TEST_ROOT/missing-forward.log" | tr -s ' ')
+grep -F "$REMEDIATION" <<<"$MISSING_FORWARD_DIAGNOSTIC" >/dev/null ||
+  fail "missing-forward diagnostic omitted $REMEDIATION: $(<"$TEST_ROOT/missing-forward.log")"
+
+printf '{"TCP":{"443":{"TCPForward":"127.0.0.1:%s"}}}\n' "$HTTPS_PORT" >"$TAILSCALE_STATUS"
 "$MESH" daemon --https-port "$HTTPS_PORT" --certificate-renewer-id "$RENEWER_ID" >"$TEST_ROOT/daemon.log" 2>&1 &
 DAEMON_PID=$!
 wait_for_socket || fail "daemon did not start: $(<"$TEST_ROOT/daemon.log")"
@@ -265,7 +289,7 @@ install_bundle live "$TEST_ROOT/live-one.crt" "$TEST_ROOT/live-one.key" || fail 
 EXPECTED_ONE=$(openssl x509 -in "$TEST_ROOT/live-one.crt" -noout -fingerprint -sha256)
 [ "$(served_fingerprint)" = "$EXPECTED_ONE" ] || fail "first live certificate was not served"
 LIVE_PRIVATE_NAME=$(host_private_name) || fail "query host.info after live distribution"
-[ -z "$LIVE_PRIVATE_NAME" ] || fail "private name was exposed without Tailscale Serve ingress"
+[ "$LIVE_PRIVATE_NAME" = "$PRIVATE_NAME" ] || fail "verified private name was $LIVE_PRIVATE_NAME"
 BODY=$(curl --noproxy '*' --fail --silent --max-time 2 --cacert "$TEST_ROOT/live-one.crt" \
   --resolve "$PRIVATE_NAME:$HTTPS_PORT:127.0.0.1" "https://$PRIVATE_NAME:$HTTPS_PORT/site/") || fail "HTTPS service request"
 [ "$BODY" = PRIVATE_TLS_MARKER ] || fail "HTTPS service body was $BODY"
@@ -282,4 +306,4 @@ EXPECTED_TWO=$(openssl x509 -in "$TEST_ROOT/live-two.crt" -noout -fingerprint -s
 [ "$(served_fingerprint)" = "$EXPECTED_TWO" ] || fail "live certificate did not hot-rotate"
 kill -0 "$DAEMON_PID" 2>/dev/null || fail "daemon restarted or exited during certificate rotation"
 
-echo "PASS: v3 bound the private name, withheld it without ingress, and hot-rotated live TLS"
+echo "PASS: v3 verified private ingress, bound the private name, and hot-rotated live TLS"

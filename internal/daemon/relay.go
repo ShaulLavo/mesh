@@ -292,7 +292,7 @@ func (r *clientRelay) publishCandidate(candidate *relayCandidate, id protocol.Se
 	// every output frame. sendMu orders it after accepted incumbent output and
 	// before the new generation can enqueue anything.
 	if err := r.enqueueOutput(attached); err != nil {
-		go r.Close()
+		go func() { _ = r.Close() }()
 		return nil, fmt.Errorf("daemon: queue session %s attach response: %w", id.String(), err)
 	}
 
@@ -340,7 +340,7 @@ func (r *clientRelay) forwardCandidate(frame protocol.Frame) error {
 		return errRelayClosed
 	}
 	if err := r.enqueueOutput(frame); err != nil {
-		go r.Close()
+		go func() { _ = r.Close() }()
 		return fmt.Errorf("daemon: queue rejected attach response: %w", err)
 	}
 	return nil
@@ -453,7 +453,7 @@ func (l *relayLane) readLoop() {
 			}
 			l.relay.retire(l)
 			if !errors.Is(err, errRelayGenerationStale) && !errors.Is(err, errRelayClosed) {
-				go l.relay.Close() // Close cannot wait on the reader that invoked it.
+				go func() { _ = l.relay.Close() }() // Close cannot wait on the reader that invoked it.
 			}
 			return
 		}
@@ -533,7 +533,7 @@ func (r *clientRelay) writeClientLoop() {
 			err := r.client.WriteFrame(frame)
 			r.releaseOutput(frame)
 			if err != nil {
-				go r.Close()
+				go func() { _ = r.Close() }()
 				return
 			}
 		case <-r.lifetime.Done():

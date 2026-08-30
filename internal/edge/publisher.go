@@ -203,7 +203,7 @@ func (p *Publisher) sendSnapshot(ctx context.Context, record OutboxRecord) error
 	if err != nil {
 		return err
 	}
-	defer connection.Close()
+	defer connection.Close() //nolint:errcheck // the authenticated exchange result is authoritative
 	requestID, err := registrationRequestID()
 	if err != nil {
 		return err
@@ -295,7 +295,7 @@ func (p *Publisher) ListPage(ctx context.Context, cursor string, limit int) ([]p
 	if err != nil {
 		return nil, "", err
 	}
-	defer connection.Close()
+	defer connection.Close() //nolint:errcheck // the authenticated exchange result is authoritative
 	requestID, err := registrationRequestID()
 	if err != nil {
 		return nil, "", err

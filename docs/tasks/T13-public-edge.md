@@ -52,6 +52,9 @@ is retried exactly; changed desired state advances to a new sequence. Service
 writes and publication share one gate, so a heartbeat cannot publish stale state
 over a newer mutation. A public upsert that the edge does not acknowledge rolls
 back locally. A delete stays deleted and continues retrying publication for T14.
+SQLite stores signed 64-bit integers, so the storage boundary accepts only edge
+sequences in `1..math.MaxInt64`. It rejects larger inbound values and corrupt
+nonpositive rows instead of wrapping them across the signed/unsigned boundary.
 
 The edge verifies the signature and both identity pins before one SQLite
 transaction replaces the origin's snapshot and claims. A lower sequence is
@@ -93,9 +96,9 @@ hides behind Tailscale. Treat it accordingly:
   percent-encoding. Terminal controls are handled only by the tailnet or local
   control listeners.
 - Request bodies, response headers, total upstream work, and per-origin upstream
-  work are bounded. The public server has a hard two-minute deadline for reading
-  a complete request, including its body. Dial and response-header waits also
-  have deadlines. There is no write deadline: HTTP responses and WebSocket
+  work are bounded. The public server has a generous hard 10-minute deadline for
+  reading a complete request, including its body. Dial and response-header waits
+  also have deadlines. There is no write deadline: HTTP responses and WebSocket
   upgrades continue to stream.
 - Stable-address quotas aggregate IPv4 addresses individually and IPv6 clients
   by `/64`. They shed simple repeated floods; they are not the defense against

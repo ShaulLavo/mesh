@@ -57,7 +57,7 @@ func TestBundleStoreRejectsLoosePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, currentBundleFile), []byte("bad\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, currentBundleFile), []byte("bad\n"), 0o644); err != nil { //nolint:gosec // deliberately loose permissions are the rejection fixture
 		t.Fatal(err)
 	}
 	if _, err := store.Load(); err == nil {

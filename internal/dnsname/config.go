@@ -63,7 +63,7 @@ func LoadPrivateNamesConfig(configPath string) (PrivateNamesConfig, error) {
 	if strings.TrimSpace(configPath) == "" {
 		return PrivateNamesConfig{}, errors.New("dnsname: private-names config path is empty")
 	}
-	file, err := os.Open(configPath)
+	file, err := os.Open(configPath) //nolint:gosec // opening the operator-selected private-names configuration is this boundary's purpose
 	if err != nil {
 		return PrivateNamesConfig{}, fmt.Errorf("dnsname: open private-names config %s: %w", configPath, err)
 	}

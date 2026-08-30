@@ -60,14 +60,14 @@ func publishPrivateKey(stateDir, keyPath string, candidate ed25519.PrivateKey) (
 		return Host{}, nil, fmt.Errorf("create temporary identity key: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer os.Remove(temporaryPath) //nolint:errcheck // best-effort cleanup after atomic publication
 
 	if _, err := temporary.Write(contents); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return Host{}, nil, fmt.Errorf("write temporary identity key: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return Host{}, nil, fmt.Errorf("sync temporary identity key: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
@@ -102,7 +102,7 @@ func loadPrivateKey(path string) (ed25519.PrivateKey, error) {
 		return nil, fmt.Errorf("identity key %s has permissions %04o, want 0600", path, permissions)
 	}
 
-	contents, err := os.ReadFile(path)
+	contents, err := os.ReadFile(path) //nolint:gosec // path is the fixed identity filename under the caller-selected local state directory
 	if err != nil {
 		return nil, fmt.Errorf("read identity key %s: %w", path, err)
 	}

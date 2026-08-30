@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -129,7 +130,7 @@ func (p *memoryProvider) CreateRecord(_ context.Context, input RecordInput) (Rec
 	}
 	p.creates++
 	p.nextID++
-	record := recordFromInput("created-"+string(rune('0'+p.nextID)), input)
+	record := recordFromInput("created-"+strconv.Itoa(p.nextID), input)
 	p.records = append(p.records, record)
 	return cloneRecord(record), nil
 }

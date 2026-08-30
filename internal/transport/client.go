@@ -115,7 +115,7 @@ func dialLink(ctx context.Context, url string, opts websocket.DialOptions, keepA
 }
 
 func dialSocket(ctx context.Context, url string, opts websocket.DialOptions, keepAlive KeepAlive) (*socketConn, error) {
-	ws, response, err := websocket.Dial(ctx, url, &opts)
+	ws, response, err := websocket.Dial(ctx, url, &opts) //nolint:bodyclose // websocket.Dial owns and closes its HTTP response body
 	if err != nil {
 		if response != nil {
 			return nil, fmt.Errorf("transport: dial %s: HTTP %s: %w", url, response.Status, err)
@@ -211,9 +211,9 @@ func (c *reconnectingConn) Close() error {
 	// A concurrent reconnect observes the cancelled context and exits before
 	// Close returns.
 	c.reconnectMu.Lock()
-	c.reconnectMu.Unlock()
+	c.reconnectMu.Unlock() //nolint:staticcheck // lock and unlock form a completion barrier for reconnect
 	c.writeMu.Lock()
-	c.writeMu.Unlock()
+	c.writeMu.Unlock() //nolint:staticcheck // lock and unlock form a completion barrier for writes
 	return err
 }
 
@@ -274,7 +274,7 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 			_ = link.Close()
 		}
 
-		delay := backoffDelay(attempt, c.backoff, rand.Float64())
+		delay := backoffDelay(attempt, c.backoff, rand.Float64()) //nolint:gosec // retry jitter is not a security decision
 		timer := time.NewTimer(delay)
 		select {
 		case <-timer.C:

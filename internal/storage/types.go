@@ -192,6 +192,9 @@ func sessionFromRow(row dbsqlc.Session) (Session, error) {
 	if err != nil {
 		return Session{}, fmt.Errorf("storage: decode session %s exit code: %w", row.ID, err)
 	}
+	if row.LastOutputSequence < 0 {
+		return Session{}, fmt.Errorf("storage: decode session %s: negative persisted output sequence %d", row.ID, row.LastOutputSequence)
+	}
 	s := Session{
 		ID:                 SessionID(row.ID),
 		HostID:             HostID(row.HostID),

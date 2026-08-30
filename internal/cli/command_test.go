@@ -400,8 +400,8 @@ func TestTerminalPublicConfirmationCancelsWithoutLeakingARead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer master.Close()
-	defer terminal.Close()
+	defer master.Close()   //nolint:errcheck // test resource cleanup
+	defer terminal.Close() //nolint:errcheck // test resource cleanup
 	confirmation := PublicConfirmation{Host: HostRecord{Alias: "pc"}, Service: protocol.ServiceInfo{Kind: "proxy", Target: "3000"}, URL: "https://app.shaulavo.dev/api"}
 	for iteration := 0; iteration < 8; iteration++ {
 		output := newPromptTestWriter()
@@ -716,9 +716,9 @@ func executeCommand(t *testing.T, dependencies Dependencies, args ...string) (st
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stdin.Close()
-	defer stdout.Close()
-	defer stderr.Close()
+	defer stdin.Close()  //nolint:errcheck // test resource cleanup
+	defer stdout.Close() //nolint:errcheck // test resource cleanup
+	defer stderr.Close() //nolint:errcheck // test resource cleanup
 	dependencies.Stdin = stdin
 	dependencies.Stdout = stdout
 	dependencies.Stderr = stderr

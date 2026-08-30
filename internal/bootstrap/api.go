@@ -72,7 +72,8 @@ type Event struct {
 }
 
 // ReleaseOptions controls cross-platform binary selection. Empty values use a
-// sibling release artifact first, then the latest official GitHub release.
+// sibling release artifact first, then the running release's exact version.
+// An unversioned development build must have a matching local binary.
 type ReleaseOptions struct {
 	ArtifactDir string
 	BaseURL     string

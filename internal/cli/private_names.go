@@ -103,8 +103,8 @@ func (a *application) privateNamesReconcileCommand() *cobra.Command {
 			}); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "reconciled private names (%s)\n", environment)
-			return nil
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "reconciled private names (%s)\n", environment)
+			return err
 		},
 	}
 	command.Flags().StringVar(&configPath, "config", "", "private-name JSON config file")

@@ -135,7 +135,9 @@ func (a *application) runServe(cmd *cobra.Command, hostAlias, target string, fla
 			URL: serviceAddress, CredentialsOverride: flags.allowCredentials,
 		}
 		if flags.allowCredentials {
-			fmt.Fprintln(cmd.ErrOrStderr(), "warning: credential-like entries are explicitly allowed for this publication")
+			if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "warning: credential-like entries are explicitly allowed for this publication"); err != nil {
+				return err
+			}
 		}
 		if !flags.yes {
 			confirmed, err := a.dependencies.ConfirmPublic(cmd.Context(), confirmation)
@@ -143,8 +145,8 @@ func (a *application) runServe(cmd *cobra.Command, hostAlias, target string, fla
 				return err
 			}
 			if !confirmed {
-				fmt.Fprintln(cmd.OutOrStdout(), "publication cancelled")
-				return nil
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), "publication cancelled")
+				return err
 			}
 		}
 	}
@@ -154,8 +156,8 @@ func (a *application) runServe(cmd *cobra.Command, hostAlias, target string, fla
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "serving %s on %s (%s -> %s)\n", serviceURL(host, currentPrivateName, persisted), host.Alias, persisted.Kind, safeTableCell(persisted.Target))
-	return nil
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "serving %s on %s (%s -> %s)\n", serviceURL(host, currentPrivateName, persisted), host.Alias, persisted.Kind, safeTableCell(persisted.Target))
+	return err
 }
 
 func (a *application) serveListCommand() *cobra.Command {
@@ -196,13 +198,19 @@ func (a *application) runServeList(cmd *cobra.Command, timeout time.Duration) er
 	if err != nil {
 		return err
 	}
-	writeServiceDiagnostics(cmd.ErrOrStderr(), diagnostics)
+	if err := writeServiceDiagnostics(cmd.ErrOrStderr(), diagnostics); err != nil {
+		return err
+	}
 	writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "ROUTE\tHOST\tKIND\tTARGET\tSCOPE\tHEALTH\tURL")
+	if _, err := fmt.Fprintln(writer, "ROUTE\tHOST\tKIND\tTARGET\tSCOPE\tHEALTH\tURL"); err != nil {
+		return err
+	}
 	for _, row := range rows {
-		fmt.Fprintf(writer, "/%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(writer, "/%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			safeTableCell(row.Service.Name), safeTableCell(row.Host.Alias), safeTableCell(row.Service.Kind), safeTableCell(row.Service.Target),
-			safeTableCell(row.Scope()), safeTableCell(row.Health()), safeTableCell(row.URL()))
+			safeTableCell(row.Scope()), safeTableCell(row.Health()), safeTableCell(row.URL())); err != nil {
+			return err
+		}
 	}
 	return writer.Flush()
 }
@@ -304,10 +312,12 @@ func (a *application) runUnserve(cmd *cobra.Command, route, hostAlias string, ti
 	cacheErr := cache.SaveServices(cacheCtx, selected.Host, selected.PrivateName, remaining)
 	cancelCache()
 	if cacheErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: service was deleted but the local cache was not updated (%s)\n", safeRemoteText(cacheErr.Error()))
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: service was deleted but the local cache was not updated (%s)\n", safeRemoteText(cacheErr.Error())); err != nil {
+			return err
+		}
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "unserved /%s on %s\n", name, selected.Host.Alias)
-	return nil
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "unserved /%s on %s\n", name, selected.Host.Alias)
+	return err
 }
 
 func livePrivateName(rows []ServiceCatalogRow, hostID string) string {
@@ -401,17 +411,29 @@ func terminalPublicConfirmation(input *os.File, output io.Writer) ConfirmPublicF
 		if input == nil || !term.IsTerminal(input.Fd()) {
 			return false, errors.New("public publication needs an interactive terminal or --yes")
 		}
-		fmt.Fprintf(output, "Publish this service to the internet?\n  Host: %s\n", confirmation.Host.Alias)
+		if _, err := fmt.Fprintf(output, "Publish this service to the internet?\n  Host: %s\n", confirmation.Host.Alias); err != nil {
+			return false, err
+		}
 		if confirmation.Service.Kind == string(meshserve.Proxy) {
-			fmt.Fprintf(output, "  Target: port %s\n", safeTableCell(confirmation.Service.Target))
+			if _, err := fmt.Fprintf(output, "  Target: port %s\n", safeTableCell(confirmation.Service.Target)); err != nil {
+				return false, err
+			}
 		} else {
-			fmt.Fprintf(output, "  Resolved path: %s\n  Files: %d\n", safeTableCell(confirmation.Service.Target), confirmation.FileCount)
+			if _, err := fmt.Fprintf(output, "  Resolved path: %s\n  Files: %d\n", safeTableCell(confirmation.Service.Target), confirmation.FileCount); err != nil {
+				return false, err
+			}
 		}
-		fmt.Fprintf(output, "  URL: %s\n", confirmation.URL)
+		if _, err := fmt.Fprintf(output, "  URL: %s\n", confirmation.URL); err != nil {
+			return false, err
+		}
 		if confirmation.CredentialsOverride {
-			fmt.Fprintln(output, "  Credential check: explicitly overridden")
+			if _, err := fmt.Fprintln(output, "  Credential check: explicitly overridden"); err != nil {
+				return false, err
+			}
 		}
-		fmt.Fprint(output, "Continue? [y/N] ")
+		if _, err := fmt.Fprint(output, "Continue? [y/N] "); err != nil {
+			return false, err
+		}
 		reader, err := cancelreader.NewReader(input)
 		if err != nil {
 			return false, fmt.Errorf("prepare public confirmation: %w", err)
@@ -434,7 +456,7 @@ func terminalPublicConfirmation(input *os.File, output io.Writer) ConfirmPublicF
 	}
 }
 
-func writeServiceDiagnostics(output io.Writer, diagnostics map[string]error) {
+func writeServiceDiagnostics(output io.Writer, diagnostics map[string]error) error {
 	aliases := make([]string, 0, len(diagnostics))
 	for alias := range diagnostics {
 		aliases = append(aliases, alias)
@@ -443,9 +465,14 @@ func writeServiceDiagnostics(output io.Writer, diagnostics map[string]error) {
 	for _, alias := range aliases {
 		var warning catalogCacheWarning
 		if errors.As(diagnostics[alias], &warning) {
-			fmt.Fprintf(output, "%s: warning (%s)\n", alias, safeRemoteText(warning.Error()))
+			if _, err := fmt.Fprintf(output, "%s: warning (%s)\n", alias, safeRemoteText(warning.Error())); err != nil {
+				return err
+			}
 			continue
 		}
-		fmt.Fprintf(output, "%s: unavailable (%s)\n", alias, safeRemoteText(diagnostics[alias].Error()))
+		if _, err := fmt.Fprintf(output, "%s: unavailable (%s)\n", alias, safeRemoteText(diagnostics[alias].Error())); err != nil {
+			return err
+		}
 	}
+	return nil
 }

@@ -155,7 +155,7 @@ func TestInstallRemoteMapsInstallerFailures(t *testing.T) {
 func writeTestBinary(t *testing.T, contents []byte) string {
 	t.Helper()
 	path := t.TempDir() + "/mesh"
-	if err := os.WriteFile(path, contents, 0o700); err != nil {
+	if err := os.WriteFile(path, contents, 0o700); err != nil { //nolint:gosec // executable fixture requires owner execute permission
 		t.Fatal(err)
 	}
 	return path

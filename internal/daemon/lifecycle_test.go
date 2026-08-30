@@ -445,7 +445,7 @@ func TestLifecycleRejectsMalformedRequestsBeforeSideEffects(t *testing.T) {
 	if _, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{Type: protocol.TypeAttach}); handled || err != nil {
 		t.Fatalf("attach handled = %v, error = %v; want relay-owned", handled, err)
 	}
-	if _, handled, err := lifecycle.HandleControl(nil, protocol.Control{Type: protocol.TypeList, RequestID: "request-4"}); !handled || err == nil {
+	if _, handled, err := lifecycle.HandleControl(nil, protocol.Control{Type: protocol.TypeList, RequestID: "request-4"}); !handled || err == nil { //nolint:staticcheck // boundary test intentionally passes a nil context
 		t.Fatalf("nil-context list handled = %v, error = %v; want handled error", handled, err)
 	}
 }

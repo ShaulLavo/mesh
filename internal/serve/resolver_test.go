@@ -65,7 +65,7 @@ func TestResolveRootConfinesPathsAfterDecodingAndSymlinkResolution(t *testing.T)
 		t.Run("rejects "+requestPath, func(t *testing.T) {
 			resolved, err := ResolveRoot(root, requestPath)
 			if err == nil {
-				contents, readErr := os.ReadFile(resolved)
+				contents, readErr := os.ReadFile(resolved) //nolint:gosec // the test inspects only the resolver result inside its temporary fixture
 				t.Fatalf("attack resolved to %q (contents %q, read error %v)", resolved, contents, readErr)
 			}
 		})

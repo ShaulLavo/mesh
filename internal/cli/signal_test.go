@@ -17,7 +17,7 @@ func TestKillWaitsForWorkerAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer listener.Close() //nolint:errcheck // test resource cleanup
 
 	received := make(chan protocol.Control, 1)
 	release := make(chan struct{})
@@ -28,7 +28,7 @@ func TestKillWaitsForWorkerAcknowledgement(t *testing.T) {
 			serverErr <- err
 			return
 		}
-		defer conn.Close()
+		defer conn.Close() //nolint:errcheck // test resource cleanup
 		frame, err := protocol.NewReader(conn).ReadFrame()
 		if err != nil {
 			serverErr <- err

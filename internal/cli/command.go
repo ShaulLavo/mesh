@@ -243,7 +243,9 @@ func (a *application) runPicker(cmd *cobra.Command, hosts []HostRecord, detachKe
 			if err := a.dependencies.Wake(cmd.Context(), host); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "woke %s; refreshing hosts\n", host.Alias)
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "woke %s; refreshing hosts\n", host.Alias); err != nil {
+				return err
+			}
 			continue
 		}
 		return a.runHost(cmd, host, !selection.New, nil, detachKey, raw)
@@ -288,7 +290,9 @@ func (a *application) runHost(cmd *cobra.Command, host HostRecord, resume bool, 
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "session %s on %s\n", id, host.Alias)
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "session %s on %s\n", id, host.Alias); err != nil {
+		return err
+	}
 	initial := uint64(0)
 	return a.attachResolved(cmd, resolvedSession{host: &host, remote: protocol.SessionInfo{ID: id, HostID: host.ID, State: string(storage.StateRunning)}}, detachKey, raw, &initial)
 }
@@ -391,16 +395,18 @@ func (a *application) attachResolved(cmd *cobra.Command, resolved resolvedSessio
 	}
 	switch {
 	case result.Exited:
-		fmt.Fprintf(cmd.ErrOrStderr(), "\r\nsession %s exited (%d)\r\n", display, result.ExitCode)
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "\r\nsession %s exited (%d)\r\n", display, result.ExitCode); err != nil {
+			return err
+		}
 		if result.ExitCode != 0 {
 			return statusError{code: result.ExitCode}
 		}
 	case result.Detached:
-		fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndetached from %s, still running\r\n", display)
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndetached from %s, still running\r\n", display)
 	default:
-		fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndisconnected from %s\r\n", display)
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndisconnected from %s\r\n", display)
 	}
-	return nil
+	return err
 }
 
 func (a *application) queryHost(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
@@ -436,11 +442,11 @@ func (a *application) addCommand() *cobra.Command {
 			}
 			path, _ := ConfigPath()
 			if result.AlreadyConfigured {
-				fmt.Fprintf(cmd.OutOrStdout(), "already configured %s (%s)\nhost config: %s\n", selected, record.ID, path)
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "already configured %s (%s)\nhost config: %s\n", selected, record.ID, path)
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "added %s (%s)\nhost config: %s\n", selected, record.ID, path)
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "added %s (%s)\nhost config: %s\n", selected, record.ID, path)
 			}
-			return nil
+			return err
 		},
 	}
 	command.Flags().StringVar(&alias, "alias", "", "local name for the host")
@@ -467,8 +473,8 @@ func (a *application) wakeCommand() *cobra.Command {
 			if err := a.dependencies.Wake(cmd.Context(), host); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "woke %s\n", host.Alias)
-			return nil
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "woke %s\n", host.Alias)
+			return err
 		},
 	}
 }
@@ -558,9 +564,13 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	}
 	for _, result := range results {
 		if result.Err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %s; cached rows are stale\n", result.Host.Alias, safeRemoteText(result.Err.Error()))
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %s; cached rows are stale\n", result.Host.Alias, safeRemoteText(result.Err.Error())); err != nil {
+				return err
+			}
 		} else if result.CacheErr != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "%s: live results could not be cached: %s\n", result.Host.Alias, safeRemoteText(result.CacheErr.Error()))
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: live results could not be cached: %s\n", result.Host.Alias, safeRemoteText(result.CacheErr.Error())); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -572,9 +582,13 @@ func writeLocalSessions(output io.Writer, now time.Time, sessions []Session) err
 		return err
 	}
 	table := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "ID\tSTATE\tAGE\tCOMMAND")
+	if _, err := fmt.Fprintln(table, "ID\tSTATE\tAGE\tCOMMAND"); err != nil {
+		return err
+	}
 	for _, current := range sessions {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", current.ID, current.State(), ageAt(now, current.CreatedAt), SafeTerminalText(strings.Join(current.Command, " ")))
+		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", current.ID, current.State(), ageAt(now, current.CreatedAt), SafeTerminalText(strings.Join(current.Command, " "))); err != nil {
+			return err
+		}
 	}
 	return table.Flush()
 }
@@ -605,13 +619,17 @@ func writeProtocolSessions(output io.Writer, now time.Time, hosts []HostSessions
 		return rows[i].session.ID < rows[j].session.ID
 	})
 	table := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "HOST\tID\tSTATE\tAGE\tCOMMAND\tCACHE")
+	if _, err := fmt.Fprintln(table, "HOST\tID\tSTATE\tAGE\tCOMMAND\tCACHE"); err != nil {
+		return err
+	}
 	for _, current := range rows {
 		cache := "-"
 		if current.stale {
 			cache = "stale"
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n", current.host, current.session.ID, current.session.State, ageAt(now, current.session.CreatedAt), SafeTerminalText(strings.Join(current.session.Command, " ")), cache)
+		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n", current.host, current.session.ID, current.session.State, ageAt(now, current.session.CreatedAt), SafeTerminalText(strings.Join(current.session.Command, " ")), cache); err != nil {
+			return err
+		}
 	}
 	return table.Flush()
 }
@@ -653,7 +671,9 @@ func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.ErrOrStderr(), "resuming %s\n", current.ID)
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "resuming %s\n", current.ID); err != nil {
+			return err
+		}
 		if requireDaemon {
 			stateDir, err := paths.StateDir()
 			if err != nil {
@@ -693,7 +713,9 @@ func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool
 		}
 		initial := uint64(0)
 		lastSeq = &initial
-		fmt.Fprintf(cmd.ErrOrStderr(), "session %s\n", current.ID)
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "session %s\n", current.ID); err != nil {
+			return err
+		}
 	}
 	if socketPath == "" {
 		socketPath = paths.Socket(current.Dir)
@@ -721,14 +743,18 @@ func reportAttachment(cmd *cobra.Command, resolved resolvedSession, result Attac
 	id := resolved.local.ID
 	switch {
 	case result.Exited:
-		fmt.Fprintf(cmd.ErrOrStderr(), "\r\nsession %s exited (%d)\r\n", id, result.ExitCode)
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "\r\nsession %s exited (%d)\r\n", id, result.ExitCode); err != nil {
+			return err
+		}
 		if result.ExitCode != 0 {
 			return statusError{code: result.ExitCode}
 		}
 	case result.Detached:
-		fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndetached from %s, still running\r\n", id)
+		_, err := fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndetached from %s, still running\r\n", id)
+		return err
 	default:
-		fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndisconnected from %s\r\n", id)
+		_, err := fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndisconnected from %s\r\n", id)
+		return err
 	}
 	return nil
 }
@@ -873,11 +899,11 @@ func (a *application) runSessionControl(cmd *cobra.Command, id, controlType, sig
 		return err
 	}
 	if controlType == protocol.TypeKill {
-		fmt.Fprintf(cmd.OutOrStdout(), "killed %s\n", strings.ToUpper(id))
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "killed %s\n", strings.ToUpper(id))
 	} else {
-		fmt.Fprintf(cmd.OutOrStdout(), "sent %s to %s\n", signal, strings.ToUpper(id))
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "sent %s to %s\n", signal, strings.ToUpper(id))
 	}
-	return nil
+	return err
 }
 
 func (a *application) daemonCommand() *cobra.Command {
@@ -911,7 +937,7 @@ func (a *application) daemonCommand() *cobra.Command {
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
 				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget,
 				TailscaleServe: tailscaleServe,
-				ReportError:    func(err error) { fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %v\n", err) },
+				ReportError:    func(err error) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %v\n", err) },
 			})
 		},
 	}

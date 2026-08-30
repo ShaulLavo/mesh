@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -132,6 +133,31 @@ func TestUpsertSessionKeepsOutputSequenceMonotonic(t *testing.T) {
 	}
 	if persisted.LastOutputSequence != 900 {
 		t.Fatalf("last output sequence = %d, want 900", persisted.LastOutputSequence)
+	}
+}
+
+func TestStoreRejectsNegativePersistedOutputSequence(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	host := testHost("host-a")
+	if _, err := store.UpsertHost(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	session := testSession(host.ID, "7K3D", StateRunning, 1)
+	if _, err := store.UpsertSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	store.db.SetMaxOpenConns(1)
+	if _, err := store.db.ExecContext(ctx, "PRAGMA ignore_check_constraints = ON"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, "UPDATE sessions SET last_output_sequence = -1 WHERE id = ?", session.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.GetSession(ctx, host.ID, session.ID)
+	if err == nil || !strings.Contains(err.Error(), "negative persisted output sequence") {
+		t.Fatalf("negative output sequence error = %v", err)
 	}
 }
 

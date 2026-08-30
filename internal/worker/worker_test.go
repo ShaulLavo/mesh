@@ -25,7 +25,7 @@ func TestFreshAttachReceivesSnapshotThenLiveSequence(t *testing.T) {
 		t.Fatal(err)
 	}
 	pty := newPipePTY()
-	defer pty.Close()
+	defer pty.Close() //nolint:errcheck // test resource cleanup
 	screen := terminalstate.NewScreen(20, 6)
 	output := []byte("history\r\n\x1b[?1049h\x1b[2J\x1b[3;4H\x1b[31mNOW\x1b[0m")
 	if _, err := screen.Write(output); err != nil {
@@ -44,7 +44,7 @@ func TestFreshAttachReceivesSnapshotThenLiveSequence(t *testing.T) {
 	}
 
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server)
 	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
 		Type:      protocol.TypeAttach,
@@ -114,7 +114,7 @@ func TestLogsReturnsBoundedOutputWithoutStealingAttacher(t *testing.T) {
 	}
 
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server)
 	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
 		Type:      protocol.TypeLogs,
@@ -148,7 +148,7 @@ func TestExpiredAttachReceivesSnapshotAtCurrentHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	pty := newPipePTY()
-	defer pty.Close()
+	defer pty.Close() //nolint:errcheck // test resource cleanup
 	ring := session.NewRing(ringSize)
 	output := make([]byte, ringSize+1)
 	_, _ = ring.Write(output)
@@ -164,7 +164,7 @@ func TestExpiredAttachReceivesSnapshotAtCurrentHead(t *testing.T) {
 	}
 
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server)
 	lastSeq := uint64(0)
 	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
@@ -218,7 +218,7 @@ func TestRejectedSnapshotDoesNotDisplaceActiveClient(t *testing.T) {
 				t.Fatal(err)
 			}
 			pty := newPipePTY()
-			defer pty.Close()
+			defer pty.Close() //nolint:errcheck // test resource cleanup
 			w := &Worker{
 				cfg:      Config{ID: sid.String()},
 				sid:      sid,
@@ -230,13 +230,13 @@ func TestRejectedSnapshotDoesNotDisplaceActiveClient(t *testing.T) {
 			}
 
 			oldClient, oldServer := net.Pipe()
-			defer oldClient.Close()
+			defer oldClient.Close() //nolint:errcheck // test resource cleanup
 			old := newAttachment(oldServer, sid)
 			defer old.close()
 			w.client = old
 
 			client, server := net.Pipe()
-			defer client.Close()
+			defer client.Close() //nolint:errcheck // test resource cleanup
 			go w.serve(server)
 			if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
 				Type:      protocol.TypeAttach,
@@ -278,7 +278,7 @@ func TestInvalidAttachSizeDoesNotResizeOrDisplaceActiveClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	pty := newPipePTY()
-	defer pty.Close()
+	defer pty.Close() //nolint:errcheck // test resource cleanup
 	if err := pty.Resize(80, 24); err != nil {
 		t.Fatal(err)
 	}
@@ -294,13 +294,13 @@ func TestInvalidAttachSizeDoesNotResizeOrDisplaceActiveClient(t *testing.T) {
 	}
 
 	oldClient, oldServer := net.Pipe()
-	defer oldClient.Close()
+	defer oldClient.Close() //nolint:errcheck // test resource cleanup
 	old := newAttachment(oldServer, sid)
 	defer old.close()
 	w.client = old
 
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server)
 	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
 		Type:      protocol.TypeAttach,
@@ -344,7 +344,7 @@ func TestPTYResizeFailureDoesNotDisplaceActiveClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	basePTY := newPipePTY()
-	defer basePTY.Close()
+	defer basePTY.Close() //nolint:errcheck // test resource cleanup
 	if err := basePTY.Resize(80, 24); err != nil {
 		t.Fatal(err)
 	}
@@ -361,13 +361,13 @@ func TestPTYResizeFailureDoesNotDisplaceActiveClient(t *testing.T) {
 	}
 
 	oldClient, oldServer := net.Pipe()
-	defer oldClient.Close()
+	defer oldClient.Close() //nolint:errcheck // test resource cleanup
 	old := newAttachment(oldServer, sid)
 	defer old.close()
 	w.client = old
 
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server)
 	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
 		Type:      protocol.TypeAttach,
@@ -411,7 +411,7 @@ func TestReplayQueueFailureDoesNotDisplaceActiveClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	pty := newPipePTY()
-	defer pty.Close()
+	defer pty.Close() //nolint:errcheck // test resource cleanup
 	ring := session.NewRing(outboundQueueByteLimit + 1)
 	if _, err := ring.Write(make([]byte, outboundQueueByteLimit+1)); err != nil {
 		t.Fatal(err)
@@ -427,13 +427,13 @@ func TestReplayQueueFailureDoesNotDisplaceActiveClient(t *testing.T) {
 	}
 
 	oldClient, oldServer := net.Pipe()
-	defer oldClient.Close()
+	defer oldClient.Close() //nolint:errcheck // test resource cleanup
 	old := newAttachment(oldServer, sid)
 	defer old.close()
 	w.client = old
 
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server)
 	lastSeq := uint64(0)
 	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
@@ -480,7 +480,7 @@ func TestRuntimeResizeFailureReportsErrorAndKeepsScreenInSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	basePTY := newPipePTY()
-	defer basePTY.Close()
+	defer basePTY.Close() //nolint:errcheck // test resource cleanup
 	if err := basePTY.Resize(80, 24); err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +497,7 @@ func TestRuntimeResizeFailureReportsErrorAndKeepsScreenInSync(t *testing.T) {
 	}
 
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server)
 	writer := protocol.NewWriter(client)
 	if err := writer.WriteControlMsg(protocol.Control{Type: protocol.TypeAttach, SessionID: sid.String()}); err != nil {
@@ -554,7 +554,7 @@ func TestBlockedPTYInputDoesNotBlockDetach(t *testing.T) {
 	})
 
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server)
 	writer := protocol.NewWriter(client)
 	if err := writer.WriteControlMsg(protocol.Control{
@@ -596,7 +596,7 @@ func TestBlockedPTYInputDoesNotBlockDetach(t *testing.T) {
 func TestWorkerInputQueueIsBounded(t *testing.T) {
 	pty := newBlockingWritePTY()
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	owner := newAttachment(server, protocol.SessionID{})
 	w := &Worker{pty: pty, client: owner}
 	t.Cleanup(func() {
@@ -631,7 +631,7 @@ func TestKillRequestAcknowledgesOnlyAfterSessionExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	pty := newPipePTY()
-	defer pty.Close()
+	defer pty.Close() //nolint:errcheck // test resource cleanup
 	w := &Worker{
 		cfg:    Config{ID: sid.String()},
 		sid:    sid,
@@ -641,7 +641,7 @@ func TestKillRequestAcknowledgesOnlyAfterSessionExit(t *testing.T) {
 	}
 
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server)
 	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
 		Type:      protocol.TypeKill,
@@ -686,7 +686,7 @@ func TestKillRequestAcknowledgesOnlyAfterSessionExit(t *testing.T) {
 
 func TestResizeUpdatesPTYAndRenderedScreen(t *testing.T) {
 	pty := newPipePTY()
-	defer pty.Close()
+	defer pty.Close() //nolint:errcheck // test resource cleanup
 	screen := &recordingScreen{}
 	w := &Worker{pty: pty, screen: screen}
 
@@ -732,7 +732,7 @@ func TestValidateTerminalSize(t *testing.T) {
 
 func TestPumpFeedsRenderedScreenAndReplayRing(t *testing.T) {
 	pty := newPipePTY()
-	defer pty.Close()
+	defer pty.Close() //nolint:errcheck // test resource cleanup
 	screen := &recordingScreen{}
 	w := &Worker{
 		pty:      pty,
@@ -766,7 +766,7 @@ func TestPumpDisownsSlowClientWithoutBlockingPTY(t *testing.T) {
 	const slowClientQueueBudget = 4 << 20
 
 	pty := newPipePTY()
-	defer pty.Close()
+	defer pty.Close() //nolint:errcheck // test resource cleanup
 
 	sid, err := protocol.NewSessionID("SLOW")
 	if err != nil {
@@ -785,7 +785,7 @@ func TestPumpDisownsSlowClientWithoutBlockingPTY(t *testing.T) {
 	go w.pump()
 
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server)
 	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
 		Type:      protocol.TypeAttach,
@@ -825,7 +825,7 @@ func TestPumpDisownsSlowClientWithoutBlockingPTY(t *testing.T) {
 	// full ring, split into writable protocol frames, without a gap.
 	lastSeq := w.ring.Tail()
 	client2, server2 := net.Pipe()
-	defer client2.Close()
+	defer client2.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server2)
 	if err := protocol.NewWriter(client2).WriteControlMsg(protocol.Control{
 		Type:      protocol.TypeAttach,
@@ -872,7 +872,7 @@ func TestAttachmentCopiesDataAndReservesControlCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	a := newAttachment(server, sid)
 
 	payload := []byte{0}
@@ -928,7 +928,7 @@ func TestAttachmentReservesLiveFrameAfterFullReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	a := newAttachment(server, sid)
 	defer a.close()
 
@@ -955,8 +955,8 @@ func TestAttachmentKeepsSnapshotInOneBoundedFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
+	defer server.Close() //nolint:errcheck // test resource cleanup
 
 	maxSnapshot := protocol.MaxPayload - len(sid)
 	a := newAttachment(server, sid)
@@ -976,7 +976,7 @@ func TestFinishWaitsForQueuedOutputAndExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	notifyingServer := &writeNotifyConn{Conn: server, entered: make(chan struct{})}
 	a := newAttachment(notifyingServer, sid)
 	defer a.close()
@@ -1036,7 +1036,7 @@ func TestRunDoesNotWaitForDescendantHoldingPTY(t *testing.T) {
 	dir := t.TempDir()
 	pidPath := filepath.Join(dir, "descendant.pid")
 	t.Cleanup(func() {
-		b, err := os.ReadFile(pidPath)
+		b, err := os.ReadFile(pidPath) //nolint:gosec // test reads its own temporary PID fixture
 		if err != nil {
 			return
 		}
@@ -1088,7 +1088,7 @@ func TestFinishedWorkerDoesNotInstallNewAttachment(t *testing.T) {
 	w.finish(7)
 
 	client, server := net.Pipe()
-	defer client.Close()
+	defer client.Close() //nolint:errcheck // test resource cleanup
 	go w.serve(server)
 	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
 		Type:      protocol.TypeAttach,
@@ -1114,7 +1114,7 @@ func TestFinishWaitsForDisplacedAttachmentWriters(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldClient, oldServer := net.Pipe()
-	defer oldClient.Close()
+	defer oldClient.Close() //nolint:errcheck // test resource cleanup
 	oldConn := &writeNotifyConn{Conn: oldServer, entered: make(chan struct{})}
 	old := newAttachment(oldConn, sid)
 	defer old.close()
@@ -1126,7 +1126,7 @@ func TestFinishWaitsForDisplacedAttachmentWriters(t *testing.T) {
 	}
 
 	activeClient, activeServer := net.Pipe()
-	defer activeClient.Close()
+	defer activeClient.Close() //nolint:errcheck // test resource cleanup
 	activeConn := &writeNotifyConn{Conn: activeServer, entered: make(chan struct{})}
 	active := newAttachment(activeConn, sid)
 	defer active.close()

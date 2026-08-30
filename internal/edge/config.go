@@ -103,7 +103,7 @@ func decodeConfigFile(path string, destination any) error {
 	if strings.TrimSpace(path) == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return errors.New("edge: config path must be clean and absolute")
 	}
-	file, err := os.Open(path)
+	file, err := os.Open(path) //nolint:gosec // reading the operator-selected edge configuration is the operation requested
 	if err != nil {
 		return fmt.Errorf("edge: open config %s: %w", path, err)
 	}

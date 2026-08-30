@@ -38,7 +38,10 @@ T10 must publish `mesh_<os>_<arch>.tar.gz` and `checksums.txt`. Each
 archive contains one regular file named `mesh`. Release builds set
 `github.com/shaul/mesh/internal/bootstrap.releaseVersion` with the Go linker
 `-X` flag, so a Mac fetches the matching Linux or Pi release. Development
-builds use the latest release when no sibling artifact matches.
+builds never guess `latest`: when neither the running executable nor a sibling
+artifact matches, bootstrap refuses the automatic download with `wrong_arch`.
+Run `mesh add` from a tagged release or place the matching artifact beside the
+development executable.
 
 `scripts/install/linux.sh` installs `~/.local/bin/mesh`, writes a
 systemd user unit, enables the unit, and starts it. The script refuses a Linux
@@ -78,7 +81,7 @@ command.
 | SSH is unreachable | `ssh_connect` | Run `ssh user@host` and check the host, port, and route. |
 | SSH rejects every credential | `ssh_auth` | Load a working key into the SSH agent or enter the SSH password. |
 | The host key is unknown or changed | `ssh_host_key` | Verify the fingerprint. Confirm a new key or fix `known_hosts`; never accept a changed key automatically. |
-| No matching release binary exists | `wrong_arch` | Publish or place the reported `os/arch` artifact and retry. |
+| No matching release binary exists, or an unversioned build would have to guess a release | `wrong_arch` | Use a tagged Mesh release, or build and place the reported `os/arch` artifact beside the executable. |
 | Linux has no user systemd | `no_systemd` | Install user-systemd support and run `systemctl --user status`. |
 | The user stops when SSH exits | `no_user_lingering` | On the remote host, run `sudo loginctl enable-linger $USER`. |
 | Tailscale is missing or stopped | `tailscale_unavailable` | Install or start Tailscale on the remote host. |
@@ -89,6 +92,7 @@ command.
 
 The focused tests cover every listed code. `TestConnectSSHNamesAuthenticationFailure`
 uses a real in-process SSH server. `TestCheckBinaryPlatformNamesWrongArchitecture`,
+`TestResolvePlatformBinaryRefusesImplicitReleaseFromDevelopmentBuild`,
 `TestInstallRemoteMapsInstallerFailures`,
 `TestDiscoverTailnetNamesLoggedOutState`,
 `TestVerifyWebSocketNamesBlockedPort`, and

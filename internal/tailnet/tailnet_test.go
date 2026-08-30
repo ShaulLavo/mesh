@@ -58,6 +58,71 @@ func TestClientParsesTailscaleStatus(t *testing.T) {
 	}
 }
 
+func TestClientVerifiesRawTailscaleServeForward(t *testing.T) {
+	runner := runFunc(func(_ context.Context, command string, args ...string) ([]byte, []byte, error) {
+		if command != "tailscale" {
+			t.Fatalf("command = %q, want tailscale", command)
+		}
+		if !slices.Equal(args, []string{"serve", "status", "--json"}) {
+			t.Fatalf("arguments = %q, want serve status --json", args)
+		}
+		return []byte(`{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{"box.example.ts.net:443":false,"box.example.ts.net:8443":true},"Foreground":{"other":{"TCP":{"8443":{"TCPForward":"127.0.0.1:9000"}}}},"FutureField":{"ignored":true}}`), []byte("harmless diagnostic\n"), nil
+	})
+
+	if err := NewClient(runner).VerifyServeForward(context.Background(), 8443); err != nil {
+		t.Fatalf("VerifyServeForward: %v", err)
+	}
+}
+
+func TestClientRejectsWrongTailscaleServeForward(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+		want   string
+	}{
+		{name: "malformed JSON", status: `{`, want: "parse tailscale serve status"},
+		{name: "missing TCP map", status: `{}`, want: "TCP/443 is not configured"},
+		{name: "missing port", status: `{"TCP":{"80":{"TCPForward":"127.0.0.1:8443"}}}`, want: "TCP/443 is not configured"},
+		{name: "null handler", status: `{"TCP":{"443":null}}`, want: "TCP/443 is not configured"},
+		{name: "wrong target", status: `{"TCP":{"443":{"TCPForward":"127.0.0.1:9443"}}}`, want: `forwards to "127.0.0.1:9443"`},
+		{name: "HTTPS termination", status: `{"TCP":{"443":{"HTTPS":true,"TCPForward":"127.0.0.1:8443"}}}`, want: "terminates HTTP or TLS"},
+		{name: "HTTP termination", status: `{"TCP":{"443":{"HTTP":true,"TCPForward":"127.0.0.1:8443"}}}`, want: "terminates HTTP or TLS"},
+		{name: "TLS terminated TCP", status: `{"TCP":{"443":{"TCPForward":"127.0.0.1:8443","TerminateTLS":"box.example.ts.net"}}}`, want: "terminates HTTP or TLS"},
+		{name: "proxy protocol", status: `{"TCP":{"443":{"TCPForward":"127.0.0.1:8443","ProxyProtocol":2}}}`, want: "PROXY protocol"},
+		{name: "public Funnel", status: `{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}},"AllowFunnel":{"box.example.ts.net:443":true}}`, want: "Funnel"},
+		{name: "foreground shadow", status: `{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}},"Foreground":{"session":{"TCP":{"443":{"TCPForward":"127.0.0.1:9443"}}}}}`, want: "foreground"},
+		{name: "foreground Funnel", status: `{"TCP":{"443":{"TCPForward":"127.0.0.1:8443"}},"Foreground":{"session":{"AllowFunnel":{"box.example.ts.net:443":true}}}}`, want: "foreground"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := NewClient(runFunc(func(context.Context, string, ...string) ([]byte, []byte, error) {
+				return []byte(test.status), nil, nil
+			}))
+			err := client.VerifyServeForward(context.Background(), 8443)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("VerifyServeForward error = %v, want text %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestClientBoundsTailscaleServeStatus(t *testing.T) {
+	client := NewClient(runFunc(func(context.Context, string, ...string) ([]byte, []byte, error) {
+		return make([]byte, statusOutputMaximum+1), nil, nil
+	}))
+	if err := client.VerifyServeForward(context.Background(), 8443); !errors.Is(err, ErrCommandOutputTooLarge) {
+		t.Fatalf("oversized serve status error = %v", err)
+	}
+
+	client = NewClient(runFunc(func(context.Context, string, ...string) ([]byte, []byte, error) {
+		return nil, make([]byte, statusErrorMaximum+1), errors.New("exit status 1")
+	}))
+	if err := client.VerifyServeForward(context.Background(), 8443); !errors.Is(err, ErrCommandOutputTooLarge) {
+		t.Fatalf("oversized serve diagnostic error = %v", err)
+	}
+}
+
 func TestClientExplainsTailscaleFailures(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -228,7 +293,7 @@ func TestClientRejectsOversizedInjectedStatus(t *testing.T) {
 
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name))
+	data, err := os.ReadFile(filepath.Join("testdata", name)) //nolint:gosec // test callers select fixed repository fixtures
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", name, err)
 	}

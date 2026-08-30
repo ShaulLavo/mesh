@@ -40,7 +40,9 @@ back automatically. A service whose directory has vanished registers but reports
 unhealthy rather than crashing the daemon.
 
 The daemon serves them on its existing HTTP listener (the one T05 builds for the
-WebSocket) under a reserved prefix, so serving costs no extra port.
+WebSocket) under a reserved prefix, so serving costs no extra port. This Tailnet
+route is plaintext by D23; Tailscale WireGuard and ACLs are its transport and
+admission boundary.
 
 ## Build the root resolver so someone else can call it
 
@@ -71,8 +73,10 @@ tailnet, "it is private anyway" is not an argument for being sloppy here.
 
 ## Out of scope
 
-TLS, public exposure, the edge, and the CLI. This task ends at "the origin daemon
-answers HTTP on the tailnet".
+TLS on the direct Tailnet listener, public exposure, the edge, and the CLI. This
+task ends at "the origin daemon answers HTTP on the tailnet." D23 explicitly
+accepts plaintext there; T12 adds a separate HTTPS route for canonical private
+names.
 
 ## Implementation
 
@@ -103,7 +107,10 @@ layers.
 `serve.Handler` implements static sites, generated file listings, and loopback
 reverse proxies. File links retain their mount prefix at both `/` and nested
 routes. The reverse proxy strips the service prefix, sets `X-Forwarded-*`, flushes
-streamed responses, and passes WebSocket upgrades.
+streamed responses, and passes WebSocket upgrades. Handler construction returns
+an error for every unsupported service kind instead of leaving a silent public
+panic path. Directory redirects collapse repeated leading slashes so an
+attacker-controlled request path cannot produce a scheme-relative redirect.
 
 `serve.Registry` publishes complete route snapshots atomically and dispatches by
 longest prefix. It rejects any route that overlaps the configured daemon

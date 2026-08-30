@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"math"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -128,6 +130,61 @@ func TestEdgeOutboxConsumesSequencesAndMatchesExactAcknowledgement(t *testing.T)
 	record, err = store.LoadEdgeOutbox(ctx, edgeID)
 	if err != nil || !record.Acknowledged {
 		t.Fatalf("acknowledged outbox = %#v, error = %v", record, err)
+	}
+}
+
+func TestEdgeWritesRejectSequencesOutsideSQLiteInteger(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	sequence := uint64(math.MaxInt64) + 1
+
+	err := store.ApplyEdgeSnapshot(ctx, edge.Snapshot{Sequence: sequence}, "", time.Time{})
+	assertEdgeSequenceRangeError(t, err)
+
+	err = store.AcknowledgeEdgeOutbox(ctx, "target", sequence, "digest")
+	assertEdgeSequenceRangeError(t, err)
+}
+
+func TestEdgeReadsRejectNegativeSQLiteSequences(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	edgeID, _ := storageEdgeIdentity(t)
+	originID, key := storageEdgeIdentity(t)
+	snapshot := storageSignedSnapshot(t, edgeID, originID, key, 1, now, nil)
+	digest := storageSnapshotDigest(t, snapshot, edgeID, originID)
+	if err := store.ApplyEdgeSnapshot(ctx, snapshot, digest, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveEdgeOutbox(ctx, edge.OutboxRecord{Snapshot: snapshot, Digest: digest}); err != nil {
+		t.Fatal(err)
+	}
+
+	store.db.SetMaxOpenConns(1)
+	if _, err := store.db.ExecContext(ctx, "PRAGMA ignore_check_constraints = ON"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, "UPDATE edge_snapshots SET sequence = -1 WHERE origin_id = ?", originID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, "UPDATE edge_outbox SET sequence = -1 WHERE target_id = ?", edgeID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.EdgeSnapshotVersion(ctx, originID)
+	assertEdgeSequenceRangeError(t, err)
+	_, err = store.LoadEdgeState(ctx)
+	assertEdgeSequenceRangeError(t, err)
+	err = store.ApplyEdgeSnapshot(ctx, snapshot, digest, now)
+	assertEdgeSequenceRangeError(t, err)
+	_, err = store.LoadEdgeOutbox(ctx, edgeID)
+	assertEdgeSequenceRangeError(t, err)
+}
+
+func assertEdgeSequenceRangeError(t *testing.T, err error) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "edge sequence") || !strings.Contains(err.Error(), "1..MaxInt64") {
+		t.Fatalf("edge sequence error = %v", err)
 	}
 }
 

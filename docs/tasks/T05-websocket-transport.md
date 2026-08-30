@@ -113,5 +113,7 @@ Mesh protocol now rather than assuming the listener is yours alone.
 
 ## Out of scope
 
-Tailscale address discovery (T06), authentication beyond "we are on the tailnet"
-(the daemon binds to the Tailscale interface; document the assumption).
+Tailscale address discovery (T06) and authentication beyond "we are on the
+tailnet." D23 records the resulting security boundary: this listener is
+plaintext, and its confidentiality, integrity, and admission come from
+Tailscale.

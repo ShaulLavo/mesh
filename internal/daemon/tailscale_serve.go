@@ -18,6 +18,7 @@ const (
 )
 
 type externalCommand func(context.Context, string, ...string) ([]byte, error)
+type serveForwardVerifier func(context.Context, uint16) error
 
 func configureTailscaleServe(ctx context.Context, httpsPort uint16, timeout time.Duration, run externalCommand) error {
 	if ctx == nil {
@@ -38,8 +39,7 @@ func configureTailscaleServe(ctx context.Context, httpsPort uint16, timeout time
 
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	target := "tcp://127.0.0.1:" + strconv.Itoa(int(httpsPort))
-	output, err := run(commandCtx, "tailscale", "serve", "--bg", "--yes", "--tcp=443", target)
+	output, err := run(commandCtx, "tailscale", tailscaleServeArguments(httpsPort)...)
 	if err == nil {
 		return nil
 	}
@@ -53,8 +53,45 @@ func configureTailscaleServe(ctx context.Context, httpsPort uint16, timeout time
 	return fmt.Errorf("daemon: configure Tailscale Serve: %w: %s", err, detail)
 }
 
+func verifyTailscaleServeForward(ctx context.Context, httpsPort uint16, timeout time.Duration, verify serveForwardVerifier) error {
+	if ctx == nil {
+		return errors.New("daemon: verify Tailscale Serve with nil context")
+	}
+	if httpsPort == 0 {
+		return errors.New("daemon: verify Tailscale Serve with zero HTTPS port")
+	}
+	if timeout <= 0 {
+		return errors.New("daemon: verify Tailscale Serve with non-positive timeout")
+	}
+	if verify == nil {
+		return errors.New("daemon: verify Tailscale Serve with nil verifier")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("daemon: verify Tailscale Serve: %w", err)
+	}
+
+	verifyCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := verify(verifyCtx, httpsPort); err != nil {
+		if verifyCtx.Err() != nil {
+			return fmt.Errorf("daemon: verify Tailscale Serve: %w", verifyCtx.Err())
+		}
+		return fmt.Errorf("daemon: verify Tailscale Serve: %w; expected persistent setup: %q", err, tailscaleServeCommand(httpsPort))
+	}
+	return nil
+}
+
+func tailscaleServeArguments(httpsPort uint16) []string {
+	target := "tcp://127.0.0.1:" + strconv.Itoa(int(httpsPort))
+	return []string{"serve", "--bg", "--yes", "--tcp=443", target}
+}
+
+func tailscaleServeCommand(httpsPort uint16) string {
+	return "tailscale " + strings.Join(tailscaleServeArguments(httpsPort), " ")
+}
+
 func runExternalCommand(ctx context.Context, name string, arguments ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, name, arguments...)
+	command := exec.CommandContext(ctx, name, arguments...) //nolint:gosec // production fixes the command to Tailscale; tests inject bounded cancellation fixtures
 	output := &boundedCommandOutput{}
 	command.Stdout = output
 	command.Stderr = output

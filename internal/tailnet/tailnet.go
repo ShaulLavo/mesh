@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -25,7 +27,7 @@ var (
 	ErrNotRunning   = errors.New("tailscale is not running")
 	ErrNotLoggedIn  = errors.New("tailscale is logged out")
 	// ErrCommandOutputTooLarge reports a tailscale process whose output crossed
-	// the fixed discovery boundary.
+	// the fixed status boundary.
 	ErrCommandOutputTooLarge = errors.New("tailscale command output is too large")
 )
 
@@ -41,7 +43,7 @@ type CommandRunner interface {
 	Run(ctx context.Context, command string, args ...string) (stdout, stderr []byte, err error)
 }
 
-// Client reads Tailscale status through an injected command runner.
+// Client reads Tailscale node and Serve status through an injected command runner.
 type Client struct {
 	runner CommandRunner
 }
@@ -59,6 +61,12 @@ func Self(ctx context.Context) (Peer, error) {
 // Peers returns the other peers using the installed CLI.
 func Peers(ctx context.Context) ([]Peer, error) {
 	return NewClient(execRunner{}).Peers(ctx)
+}
+
+// VerifyServeForward checks that persistent raw Tailnet TCP/443 traffic reaches
+// the given loopback port without HTTP, TLS, or PROXY protocol handling.
+func VerifyServeForward(ctx context.Context, localPort uint16) error {
+	return NewClient(execRunner{}).VerifyServeForward(ctx, localPort)
 }
 
 // Self returns the local Tailscale peer.
@@ -104,6 +112,47 @@ func (c *Client) Peers(ctx context.Context) ([]Peer, error) {
 	return peers, nil
 }
 
+// VerifyServeForward checks the installed Tailscale Serve configuration.
+func (c *Client) VerifyServeForward(ctx context.Context, localPort uint16) error {
+	if ctx == nil {
+		return errors.New("tailnet: verify Tailscale Serve with nil context")
+	}
+	if localPort == 0 {
+		return errors.New("tailnet: verify Tailscale Serve with zero local port")
+	}
+
+	contents, stderr, err := c.runner.Run(ctx, "tailscale", "serve", "status", "--json")
+	if len(contents) > statusOutputMaximum || len(stderr) > statusErrorMaximum {
+		return ErrCommandOutputTooLarge
+	}
+	if err != nil {
+		return explainCommandError("tailscale serve status --json", err, contents, stderr)
+	}
+
+	var status rawServeStatus
+	if err := json.Unmarshal(contents, &status); err != nil {
+		return fmt.Errorf("parse tailscale serve status: %w", err)
+	}
+	if err := validatePrivateServeExposure(status); err != nil {
+		return err
+	}
+	handler := status.TCP["443"]
+	if handler == nil {
+		return errors.New("tailscale serve TCP/443 is not configured")
+	}
+	if handler.HTTP || handler.HTTPS || handler.TerminateTLS != "" {
+		return errors.New("tailscale serve TCP/443 terminates HTTP or TLS; Mesh requires a raw TCP forward")
+	}
+	if handler.ProxyProtocol != 0 {
+		return fmt.Errorf("tailscale serve TCP/443 enables PROXY protocol version %d; Mesh requires an unmodified raw TCP forward", handler.ProxyProtocol)
+	}
+	wantTarget := fmt.Sprintf("127.0.0.1:%d", localPort)
+	if handler.TCPForward != wantTarget {
+		return fmt.Errorf("tailscale serve TCP/443 forwards to %q, want %q", handler.TCPForward, wantTarget)
+	}
+	return nil
+}
+
 type rawStatus struct {
 	BackendState string              `json:"BackendState"`
 	Self         *rawPeer            `json:"Self"`
@@ -117,13 +166,69 @@ type rawPeer struct {
 	Online       bool     `json:"Online"`
 }
 
+type rawServeStatus struct {
+	TCP         map[string]*rawServeTCPHandler `json:"TCP"`
+	AllowFunnel map[string]bool                `json:"AllowFunnel"`
+	Foreground  map[string]*rawServeStatus     `json:"Foreground"`
+}
+
+type rawServeTCPHandler struct {
+	HTTP          bool   `json:"HTTP"`
+	HTTPS         bool   `json:"HTTPS"`
+	TCPForward    string `json:"TCPForward"`
+	TerminateTLS  string `json:"TerminateTLS"`
+	ProxyProtocol int    `json:"ProxyProtocol"`
+}
+
+func validatePrivateServeExposure(status rawServeStatus) error {
+	if endpoint, err := enabledFunnel443(status.AllowFunnel); err != nil {
+		return err
+	} else if endpoint != "" {
+		return fmt.Errorf("tailscale Funnel exposes TCP/443 through %q; Mesh private HTTPS must remain Tailnet-only", endpoint)
+	}
+	for session, foreground := range status.Foreground {
+		if foreground == nil {
+			continue
+		}
+		if foreground.TCP["443"] != nil {
+			return fmt.Errorf("tailscale foreground session %q shadows the persistent TCP/443 forward", session)
+		}
+		if endpoint, err := enabledFunnel443(foreground.AllowFunnel); err != nil {
+			return fmt.Errorf("tailscale foreground session %q: %w", session, err)
+		} else if endpoint != "" {
+			return fmt.Errorf("tailscale foreground session %q exposes TCP/443 through Funnel endpoint %q", session, endpoint)
+		}
+	}
+	return nil
+}
+
+func enabledFunnel443(entries map[string]bool) (string, error) {
+	for endpoint, enabled := range entries {
+		if !enabled {
+			continue
+		}
+		_, portText, err := net.SplitHostPort(endpoint)
+		if err != nil {
+			return "", fmt.Errorf("enabled Tailscale Funnel endpoint %q is invalid: %w", endpoint, err)
+		}
+		port, err := strconv.ParseUint(portText, 10, 16)
+		if err != nil {
+			return "", fmt.Errorf("enabled Tailscale Funnel endpoint %q has an invalid port: %w", endpoint, err)
+		}
+		if port == 443 {
+			return endpoint, nil
+		}
+	}
+	return "", nil
+}
+
 func (c *Client) status(ctx context.Context) (rawStatus, error) {
 	contents, stderr, err := c.runner.Run(ctx, "tailscale", "status", "--json")
 	if len(contents) > statusOutputMaximum || len(stderr) > statusErrorMaximum {
 		return rawStatus{}, ErrCommandOutputTooLarge
 	}
 	if err != nil {
-		return rawStatus{}, explainCommandError(err, contents, stderr)
+		return rawStatus{}, explainCommandError("tailscale status --json", err, contents, stderr)
 	}
 
 	var status rawStatus
@@ -148,12 +253,12 @@ func (c *Client) status(ctx context.Context) (rawStatus, error) {
 	}
 }
 
-func explainCommandError(runErr error, stdout, stderr []byte) error {
+func explainCommandError(command string, runErr error, stdout, stderr []byte) error {
 	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
-		return fmt.Errorf("run tailscale status --json: %w", runErr)
+		return fmt.Errorf("run %s: %w", command, runErr)
 	}
 	if errors.Is(runErr, ErrCommandOutputTooLarge) {
-		return fmt.Errorf("run tailscale status --json: %w", ErrCommandOutputTooLarge)
+		return fmt.Errorf("run %s: %w", command, ErrCommandOutputTooLarge)
 	}
 
 	var missing *exec.Error
@@ -176,9 +281,9 @@ func explainCommandError(runErr error, stdout, stderr []byte) error {
 		return fmt.Errorf("%w; start Tailscale and try again", ErrNotRunning)
 	}
 	if detail == "" {
-		return fmt.Errorf("run tailscale status --json: %w", runErr)
+		return fmt.Errorf("run %s: %w", command, runErr)
 	}
-	return fmt.Errorf("run tailscale status --json: %w: %s", runErr, detail)
+	return fmt.Errorf("run %s: %w: %s", command, runErr, detail)
 }
 
 func parsePeer(source string, raw *rawPeer) (Peer, error) {
@@ -204,7 +309,7 @@ func parsePeer(source string, raw *rawPeer) (Peer, error) {
 type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, command string, args ...string) ([]byte, []byte, error) {
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.CommandContext(ctx, command, args...) //nolint:gosec // production callers fix the command to Tailscale; tests inject bounded runner fixtures
 	stdout := newCappedBuffer(statusOutputMaximum)
 	stderr := newCappedBuffer(statusErrorMaximum)
 	cmd.Stdout = stdout

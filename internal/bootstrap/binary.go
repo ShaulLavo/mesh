@@ -39,7 +39,7 @@ func checkBinaryPlatform(binaryPath string, want Platform) error {
 func binaryPlatforms(binaryPath string) ([]Platform, error) {
 	elfFile, elfErr := elf.Open(binaryPath)
 	if elfErr == nil {
-		defer elfFile.Close()
+		defer elfFile.Close() //nolint:errcheck // inspection result takes precedence over read-only cleanup
 		if elfFile.OSABI != elf.ELFOSABI_NONE && elfFile.OSABI != elf.ELFOSABI_LINUX {
 			return nil, fmt.Errorf("unsupported ELF operating-system ABI %s", elfFile.OSABI)
 		}
@@ -52,7 +52,7 @@ func binaryPlatforms(binaryPath string) ([]Platform, error) {
 
 	machFile, machErr := macho.Open(binaryPath)
 	if machErr == nil {
-		defer machFile.Close()
+		defer machFile.Close() //nolint:errcheck // inspection result takes precedence over read-only cleanup
 		arch, err := archForMachO(machFile.Cpu)
 		if err != nil {
 			return nil, err
@@ -62,7 +62,7 @@ func binaryPlatforms(binaryPath string) ([]Platform, error) {
 
 	fatFile, fatErr := macho.OpenFat(binaryPath)
 	if fatErr == nil {
-		defer fatFile.Close()
+		defer fatFile.Close() //nolint:errcheck // inspection result takes precedence over read-only cleanup
 		platforms := make([]Platform, 0, len(fatFile.Arches))
 		for _, file := range fatFile.Arches {
 			arch, err := archForMachO(file.Cpu)

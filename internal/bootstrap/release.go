@@ -94,7 +94,10 @@ func resolvePlatformBinary(ctx context.Context, selection binarySelection, platf
 		}
 	}
 
-	release := normalizeReleaseOptions(selection)
+	release, err := normalizeReleaseOptions(selection)
+	if err != nil {
+		return resolvedBinary{}, diagnostic(DiagnosticWrongArch, fmt.Errorf("select %s/%s Mesh release: %w", platform.OS, platform.Arch, err))
+	}
 	binaryPath, cleanup, err := fetchReleaseBinary(ctx, platform, release)
 	if err != nil {
 		return resolvedBinary{}, diagnostic(DiagnosticWrongArch, fmt.Errorf("fetch %s/%s Mesh release: %w", platform.OS, platform.Arch, err))
@@ -106,31 +109,35 @@ func resolvePlatformBinary(ctx context.Context, selection binarySelection, platf
 	return resolvedBinary{path: binaryPath, cleanup: cleanup}, nil
 }
 
-func normalizeReleaseOptions(selection binarySelection) releaseOptions {
+func normalizeReleaseOptions(selection binarySelection) (releaseOptions, error) {
 	baseURL := strings.TrimRight(selection.baseURL, "/")
 	if baseURL == "" {
 		baseURL = officialReleaseBaseURL
 	}
 	version := selection.version
 	if version == "" {
-		version = runningVersion()
+		var err error
+		version, err = runningVersion()
+		if err != nil {
+			return releaseOptions{}, err
+		}
 	}
 	client := selection.httpClient
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	return releaseOptions{baseURL: baseURL, version: version, httpClient: client}
+	return releaseOptions{baseURL: baseURL, version: version, httpClient: client}, nil
 }
 
-func runningVersion() string {
+func runningVersion() (string, error) {
 	if releaseVersion != "" {
-		return releaseVersion
+		return releaseVersion, nil
 	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
-		return "latest"
+		return "", errors.New("automatic release download is unsafe from an unversioned development build; place a matching release artifact beside the executable or run mesh add from a tagged release")
 	}
-	return info.Main.Version
+	return info.Main.Version, nil
 }
 
 func fetchReleaseBinary(ctx context.Context, platform Platform, opts releaseOptions) (string, func(), error) {
@@ -177,7 +184,7 @@ func fetchReleaseBinary(ctx context.Context, platform Platform, opts releaseOpti
 }
 
 func extractLocalReleaseBinary(archivePath, manifestPath, assetName string) (string, func(), error) {
-	manifest, err := os.ReadFile(manifestPath)
+	manifest, err := os.ReadFile(manifestPath) //nolint:gosec // path is the fixed checksum filename beside a caller-selected local release artifact
 	if err != nil {
 		return "", func() {}, fmt.Errorf("read release checksums %s: %w", manifestPath, err)
 	}
@@ -188,7 +195,7 @@ func extractLocalReleaseBinary(archivePath, manifestPath, assetName string) (str
 	if err != nil {
 		return "", func() {}, err
 	}
-	archive, err := os.Open(archivePath)
+	archive, err := os.Open(archivePath) //nolint:gosec // path is a caller-selected local release artifact
 	if err != nil {
 		return "", func() {}, fmt.Errorf("open release archive %s: %w", archivePath, err)
 	}
@@ -233,7 +240,7 @@ func downloadBytes(ctx context.Context, client *http.Client, address string, max
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer response.Body.Close() //nolint:errcheck // the read result is authoritative
 	contents, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", address, err)
@@ -249,7 +256,7 @@ func downloadFile(ctx context.Context, client *http.Client, address string, dest
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer response.Body.Close() //nolint:errcheck // the copy result is authoritative
 	written, err := io.Copy(io.MultiWriter(destination, checksum), io.LimitReader(response.Body, maximum+1))
 	if err != nil {
 		return fmt.Errorf("read %s: %w", address, err)
@@ -271,12 +278,12 @@ func releaseResponse(ctx context.Context, client *http.Client, address string) (
 		return nil, err
 	}
 	if response.Request == nil || response.Request.URL.Scheme != "https" {
-		response.Body.Close()
+		_ = response.Body.Close()
 		return nil, fmt.Errorf("release request ended at a non-HTTPS URL")
 	}
 	if response.StatusCode != http.StatusOK {
 		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		response.Body.Close()
+		_ = response.Body.Close()
 		return nil, fmt.Errorf("GET %s: %s: %s", address, response.Status, strings.TrimSpace(string(detail)))
 	}
 	return response, nil
@@ -309,16 +316,16 @@ func checksumForAsset(manifest []byte, assetName string) ([]byte, error) {
 }
 
 func extractReleaseArchive(archivePath string) (string, func(), error) {
-	archive, err := os.Open(archivePath)
+	archive, err := os.Open(archivePath) //nolint:gosec // path is a verified local or freshly downloaded release archive
 	if err != nil {
 		return "", func() {}, err
 	}
-	defer archive.Close()
+	defer archive.Close() //nolint:errcheck // extraction result takes precedence over read-only cleanup
 	gzipReader, err := gzip.NewReader(archive)
 	if err != nil {
 		return "", func() {}, err
 	}
-	defer gzipReader.Close()
+	defer gzipReader.Close() //nolint:errcheck // the gzip reader has no pending writes to flush
 	tarReader := tar.NewReader(gzipReader)
 
 	var binaryPath string
@@ -339,7 +346,7 @@ func extractReleaseArchive(archivePath string) (string, func(), error) {
 		if header.Typeflag == tar.TypeDir {
 			continue
 		}
-		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+		if header.Typeflag != tar.TypeReg {
 			cleanup()
 			return "", func() {}, fmt.Errorf("archive member %q is not a regular file", header.Name)
 		}

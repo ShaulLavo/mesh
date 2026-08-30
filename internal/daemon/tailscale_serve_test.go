@@ -76,6 +76,33 @@ func TestConfigureTailscaleServePropagatesTimeoutCancellationAndFailure(t *testi
 	})
 }
 
+func TestVerifyTailscaleServeForwardBoundsTheCheckAndReportsRemediation(t *testing.T) {
+	var gotPort uint16
+	err := verifyTailscaleServeForward(context.Background(), 8443, time.Second, func(ctx context.Context, port uint16) error {
+		gotPort = port
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > time.Second {
+			return errors.New("verification context is not bounded")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPort != 8443 {
+		t.Fatalf("verified port = %d, want 8443", gotPort)
+	}
+
+	cause := errors.New("TCP/443 is not configured")
+	err = verifyTailscaleServeForward(context.Background(), 8443, time.Second, func(context.Context, uint16) error {
+		return cause
+	})
+	wantCommand := "tailscale serve --bg --yes --tcp=443 tcp://127.0.0.1:8443"
+	if !errors.Is(err, cause) || !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("verification failure = %v, want cause and %q", err, wantCommand)
+	}
+}
+
 func TestRunExternalCommandBoundsCancellationWithInheritedPipes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -101,6 +128,7 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 		return tailnet.Peer{Name: "origin.example.ts.net", Addrs: []string{"127.0.0.1"}}, nil
 	}
 	options.validateServeAddresses = func([]string) error { return nil }
+	options.verifyServeForward = func(context.Context, uint16) error { return nil }
 	options.runCommand = func(_ context.Context, name string, arguments ...string) ([]byte, error) {
 		if name != "tailscale" || !reflect.DeepEqual(arguments, []string{"serve", "--bg", "--yes", "--tcp=443", fmt.Sprintf("tcp://127.0.0.1:%d", httpsPort)}) {
 			return nil, fmt.Errorf("unexpected command %s %#v", name, arguments)
@@ -169,6 +197,43 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 	}
 }
 
+func TestRunFailsWhenTailscaleServeVerificationFails(t *testing.T) {
+	stateDir := t.TempDir()
+	httpsPort := reserveTCPPort(t, "127.0.0.1")
+	controlPort := reserveTCPPort(t, "127.0.0.1")
+	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
+	verifyErr := errors.New("TCP/443 is not configured")
+	options := defaultRunOptions()
+	options.reconcileInterval = time.Hour
+	options.discoverSelf = func(context.Context) (tailnet.Peer, error) {
+		return tailnet.Peer{Name: "origin.example.ts.net", Addrs: []string{"127.0.0.1"}}, nil
+	}
+	options.validateServeAddresses = func([]string) error { return nil }
+	options.runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	options.verifyServeForward = func(context.Context, uint16) error {
+		probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		privateName, err := probeWebSocketPrivateName(probeCtx, controlPort)
+		cancel()
+		if err != nil {
+			return err
+		}
+		if privateName != "" {
+			return fmt.Errorf("private name %q was exposed before forwarding was verified", privateName)
+		}
+		return verifyErr
+	}
+	err := run(context.Background(), Config{
+		StateDir: stateDir, TailnetPort: controlPort, HTTPSPort: httpsPort, CertificateRenewerID: signerID, TailscaleServe: true,
+	}, options)
+	wantCommand := fmt.Sprintf("tailscale serve --bg --yes --tcp=443 tcp://127.0.0.1:%d", httpsPort)
+	if !errors.Is(err, verifyErr) || !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("daemon Tailscale Serve verification failure = %v", err)
+	}
+	if _, statErr := os.Lstat(SocketPath(stateDir)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("daemon socket after Tailscale Serve verification failure: %v", statErr)
+	}
+}
+
 func TestRunFailsWhenTailscaleServeConfigurationFails(t *testing.T) {
 	stateDir := t.TempDir()
 	httpsPort := reserveTCPPort(t, "127.0.0.1")
@@ -203,12 +268,23 @@ func TestRunFailsWhenTailscaleServeConfigurationFails(t *testing.T) {
 	}
 }
 
-func TestRunWithoutTailscaleServeDoesNotExposePersistedPrivateName(t *testing.T) {
+func TestRunAcceptsVerifiedOperatorManagedTailscaleServeForward(t *testing.T) {
 	stateDir := t.TempDir()
 	httpsPort := reserveTCPPort(t, "127.0.0.1")
 	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
 	options := defaultRunOptions()
 	options.reconcileInterval = time.Hour
+	var verified atomic.Bool
+	options.verifyServeForward = func(_ context.Context, port uint16) error {
+		verified.Store(true)
+		if port != httpsPort {
+			return fmt.Errorf("verified port %d, want %d", port, httpsPort)
+		}
+		return nil
+	}
+	options.runCommand = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("configuration command must not run for an operator-managed route")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
@@ -220,8 +296,8 @@ func TestRunWithoutTailscaleServeDoesNotExposePersistedPrivateName(t *testing.T)
 		privateName, err := probeUnixPrivateName(probeCtx, SocketPath(stateDir))
 		probeCancel()
 		if err == nil {
-			if privateName != "" {
-				t.Fatalf("private name without Tailscale Serve = %q", privateName)
+			if privateName != "pc.mesh.shaulavo.dev" {
+				t.Fatalf("private name with verified operator route = %q", privateName)
 			}
 			break
 		}
@@ -229,6 +305,9 @@ func TestRunWithoutTailscaleServeDoesNotExposePersistedPrivateName(t *testing.T)
 			t.Fatalf("probe daemon without Tailscale Serve: %v", err)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	if !verified.Load() {
+		t.Fatal("operator-managed Tailscale Serve route was not verified")
 	}
 	cancel()
 	if err := waitRuntime(t, done); err != nil {
@@ -320,8 +399,8 @@ func TestRunTailscaleServeRequiresEveryControlAddressToBind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer blocked.Close() //nolint:errcheck // test cleanup
-	controlPort := uint16(blocked.Addr().(*net.TCPAddr).Port)
+	defer blocked.Close()                                     //nolint:errcheck // test cleanup
+	controlPort := uint16(blocked.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
 	signerID, _ := composedIdentity(t)
 	called := false
 	options := defaultRunOptions()
@@ -329,6 +408,7 @@ func TestRunTailscaleServeRequiresEveryControlAddressToBind(t *testing.T) {
 		return tailnet.Peer{Addrs: []string{"127.0.0.1", "127.0.0.2"}}, nil
 	}
 	options.validateServeAddresses = func([]string) error { return nil }
+	options.verifyServeForward = func(context.Context, uint16) error { return nil }
 	options.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		called = true
 		return nil, nil
@@ -355,6 +435,7 @@ func TestRunAllowsEqualHTTPSAndControlPortsOnSeparateAddresses(t *testing.T) {
 		return tailnet.Peer{Addrs: []string{"127.0.0.2"}}, nil
 	}
 	options.validateServeAddresses = func([]string) error { return nil }
+	options.verifyServeForward = func(context.Context, uint16) error { return nil }
 	options.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		ready <- struct{}{}
 		return nil, nil
@@ -393,7 +474,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 		t.Fatal(err)
 	}
 	metaPath := filepath.Join(sessionDir, "meta.json")
-	before, err := os.ReadFile(metaPath)
+	before, err := os.ReadFile(metaPath) //nolint:gosec // test reads its own temporary worker metadata fixture
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,6 +491,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	firstOptions.reconcileInterval = time.Hour
 	firstOptions.tailnetPollInterval = 10 * time.Millisecond
 	firstOptions.validateServeAddresses = func([]string) error { return nil }
+	firstOptions.verifyServeForward = func(context.Context, uint16) error { return nil }
 	firstOptions.discoverSelf = func(context.Context) (tailnet.Peer, error) {
 		if discoveryCalls.Add(1) == 1 {
 			return tailnet.Peer{Addrs: []string{"127.0.0.1"}}, nil
@@ -433,6 +515,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	secondOptions.reconcileInterval = time.Hour
 	secondOptions.tailnetPollInterval = 10 * time.Millisecond
 	secondOptions.validateServeAddresses = func([]string) error { return nil }
+	secondOptions.verifyServeForward = func(context.Context, uint16) error { return nil }
 	secondOptions.discoverSelf = func(context.Context) (tailnet.Peer, error) {
 		return tailnet.Peer{Addrs: []string{"127.0.0.2"}}, nil
 	}
@@ -457,7 +540,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	if err := waitRuntime(t, secondDone); err != nil {
 		t.Fatal(err)
 	}
-	after, err := os.ReadFile(metaPath)
+	after, err := os.ReadFile(metaPath) //nolint:gosec // test reads its own temporary worker metadata fixture
 	if err != nil {
 		t.Fatal(err)
 	}

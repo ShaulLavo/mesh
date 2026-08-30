@@ -257,7 +257,7 @@ func (i *Issuer) Renew(ctx context.Context, force bool) (bundle Bundle, renewed 
 	if err := os.MkdirAll(i.config.StateDir, 0o700); err != nil {
 		return Bundle{}, false, fmt.Errorf("dnsname: create ACME state directory: %w", err)
 	}
-	if err := os.Chmod(i.config.StateDir, 0o700); err != nil {
+	if err := os.Chmod(i.config.StateDir, 0o700); err != nil { //nolint:gosec // private directories require owner execute permission
 		return Bundle{}, false, fmt.Errorf("dnsname: secure ACME state directory: %w", err)
 	}
 	lock, err := acquireRenewalLock(ctx, filepath.Join(i.config.StateDir, "renew.lock"))

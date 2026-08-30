@@ -95,6 +95,12 @@ check_source_contract() {
   contains .github/workflows/ci.yml 'govulncheck@v1.7.0'
   contains .github/workflows/ci.yml 'golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0'
   contains .github/workflows/ci.yml 'version: v2.13.2'
+  for linter in bodyclose errcheck gosec govet ineffassign staticcheck unused; do
+    contains .golangci.yml "    - $linter"
+  done
+  does_not_contain .golangci.yml '-SA1012'
+  does_not_contain .golangci.yml '-SA1019'
+  does_not_contain .golangci.yml '-SA2001'
   contains .github/workflows/ci.yml 'goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3'
   contains .github/workflows/ci.yml 'version: v2.18.0'
   contains .github/workflows/release.yml 'tags:'
