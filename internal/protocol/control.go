@@ -19,11 +19,20 @@ const (
 	TypeCreated  = "session.created"
 	TypeList     = "session.list"
 	TypeListed   = "session.listed"
+	TypeLogs     = "session.logs"
+	TypeLogged   = "session.logged"
 	TypeHostInfo = "host.info"
 
 	TypeHostInfoResult = "host.info.result"
 	TypeOK             = "ok"
 	TypeError          = "error"
+)
+
+// Log request limits keep one JSON control response below MaxPayload after
+// base64 encoding.
+const (
+	DefaultLogTail = 64 << 10
+	MaxLogTail     = 1 << 20
 )
 
 // Reasons a worker ends an attachment.
@@ -83,6 +92,9 @@ type Control struct {
 	// List / host info
 	Sessions []SessionInfo `json:"sessions,omitempty"`
 	Host     *HostInfo     `json:"host,omitempty"`
+
+	// Logs
+	Output []byte `json:"output,omitempty"`
 
 	// Error
 	Message string `json:"message,omitempty"`

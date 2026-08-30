@@ -10,11 +10,13 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/term"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/transport"
 )
 
 // DefaultDetachKey is ctrl+] (ASCII GS), the same escape telnet has used for
@@ -26,7 +28,10 @@ const DefaultDetachKey = 0x1d
 // AttachOptions configures a client attachment.
 type AttachOptions struct {
 	SocketPath string
-	SessionID  string
+	// Conn supplies an already connected local or remote daemon transport.
+	// It is closed when Attach returns. SocketPath and Conn are exclusive.
+	Conn      transport.Conn
+	SessionID string
 	// LastSeq resumes at an exact offset. Nil asks for a rendered snapshot.
 	LastSeq *uint64
 	// DetachKey is the byte that detaches. Zero means DefaultDetachKey.
@@ -70,9 +75,20 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 		return res, err
 	}
 
-	conn, err := net.Dial("unix", opts.SocketPath)
-	if err != nil {
-		return res, fmt.Errorf("attach %s: %w", opts.SessionID, err)
+	conn := opts.Conn
+	if conn != nil && opts.SocketPath != "" {
+		return res, fmt.Errorf("attach %s: both connection and socket path supplied", opts.SessionID)
+	}
+	if conn == nil {
+		stream, err := net.DialTimeout("unix", opts.SocketPath, 2*time.Second)
+		if err != nil {
+			return res, fmt.Errorf("attach %s: %w", opts.SessionID, err)
+		}
+		conn, err = transport.NewStreamConn(stream)
+		if err != nil {
+			_ = stream.Close()
+			return res, fmt.Errorf("attach %s: %w", opts.SessionID, err)
+		}
 	}
 	defer conn.Close() //nolint:errcheck // closing on the way out
 
@@ -82,11 +98,10 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 	}
 
 	var writeMu sync.Mutex
-	fw := protocol.NewWriter(conn)
-	send := func(fn func(*protocol.Writer) error) error {
+	send := func(frame protocol.Frame) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
-		return fn(fw)
+		return conn.WriteFrame(frame)
 	}
 
 	attach := protocol.Control{
@@ -96,7 +111,7 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 		Cols:      cols,
 		Rows:      rows,
 	}
-	if err := send(func(w *protocol.Writer) error { return w.WriteControlMsg(attach) }); err != nil {
+	if err := send(controlFrame(attach)); err != nil {
 		return res, fmt.Errorf("attach %s: %w", opts.SessionID, err)
 	}
 
@@ -139,14 +154,13 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 			if err != nil || w <= 0 {
 				return
 			}
-			_ = send(func(fw *protocol.Writer) error {
-				return fw.WriteControlMsg(protocol.Control{
-					Type:      protocol.TypeResize,
-					SessionID: opts.SessionID,
-					Cols:      w,
-					Rows:      h,
-				})
+			frame := controlFrame(protocol.Control{
+				Type:      protocol.TypeResize,
+				SessionID: opts.SessionID,
+				Cols:      w,
+				Rows:      h,
 			})
+			_ = send(frame)
 		})
 	}()
 	defer func() {
@@ -162,13 +176,11 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 	var detachOnce sync.Once
 	detach := func() {
 		detachOnce.Do(func() {
-			_ = send(func(fw *protocol.Writer) error {
-				return fw.WriteControlMsg(protocol.Control{
-					Type:      protocol.TypeDetach,
-					SessionID: opts.SessionID,
-					Reason:    protocol.ReasonClient,
-				})
-			})
+			_ = send(controlFrame(protocol.Control{
+				Type:      protocol.TypeDetach,
+				SessionID: opts.SessionID,
+				Reason:    protocol.ReasonClient,
+			}))
 			close(detached)
 			_ = conn.Close()
 		})
@@ -182,13 +194,12 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 
 	// Output loop owns the return value: it is the only thing that knows
 	// whether the process exited or we merely walked away.
-	r := protocol.NewReader(conn)
 	var (
 		pendingSnapshot bool
 		snapshotSeq     uint64
 	)
 	for {
-		f, err := r.ReadFrame()
+		f, err := conn.ReadFrame()
 		if err != nil {
 			select {
 			case <-detached:
@@ -249,7 +260,7 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 }
 
 // relayInput forwards keystrokes, watching for the detach key.
-func relayInput(opts AttachOptions, input io.Reader, sid protocol.SessionID, send func(func(*protocol.Writer) error) error, detach func()) {
+func relayInput(opts AttachOptions, input io.Reader, sid protocol.SessionID, send func(protocol.Frame) error, detach func()) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := input.Read(buf)
@@ -258,13 +269,13 @@ func relayInput(opts AttachOptions, input io.Reader, sid protocol.SessionID, sen
 			if !opts.Raw {
 				if i := indexByte(b, opts.DetachKey); i >= 0 {
 					if i > 0 {
-						_ = send(func(fw *protocol.Writer) error { return fw.WriteInput(sid, b[:i]) })
+						_ = send(protocol.Frame{Kind: protocol.KindInput, Session: sid, Payload: append([]byte(nil), b[:i]...)})
 					}
 					detach()
 					return
 				}
 			}
-			if err := send(func(fw *protocol.Writer) error { return fw.WriteInput(sid, b) }); err != nil {
+			if err := send(protocol.Frame{Kind: protocol.KindInput, Session: sid, Payload: append([]byte(nil), b...)}); err != nil {
 				return
 			}
 		}
@@ -272,6 +283,11 @@ func relayInput(opts AttachOptions, input io.Reader, sid protocol.SessionID, sen
 			return
 		}
 	}
+}
+
+func controlFrame(message protocol.Control) protocol.Frame {
+	payload, _ := message.Encode()
+	return protocol.Frame{Kind: protocol.KindControl, Payload: payload}
 }
 
 func relayResizes(done <-chan struct{}, winch <-chan os.Signal, resize func()) {

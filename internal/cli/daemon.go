@@ -88,10 +88,6 @@ func ListViaDaemon(ctx context.Context, socketPath string) ([]protocol.SessionIn
 }
 
 func daemonControlRequest(ctx context.Context, socketPath string, request protocol.Control) (protocol.Control, error) {
-	payload, err := request.Encode()
-	if err != nil {
-		return protocol.Control{}, fmt.Errorf("cli: encode %s request: %w", request.Type, err)
-	}
 	stream, err := (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return protocol.Control{}, daemonDialError(socketPath, err)
@@ -101,11 +97,19 @@ func daemonControlRequest(ctx context.Context, socketPath string, request protoc
 		_ = stream.Close()
 		return protocol.Control{}, fmt.Errorf("cli: adapt daemon connection: %w", err)
 	}
-	stopCancellation := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer func() {
-		stopCancellation()
 		_ = conn.Close()
 	}()
+	return controlRequest(ctx, conn, request)
+}
+
+func controlRequest(ctx context.Context, conn transport.Conn, request protocol.Control) (protocol.Control, error) {
+	payload, err := request.Encode()
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("cli: encode %s request: %w", request.Type, err)
+	}
+	stopCancellation := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancellation()
 
 	if err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload}); err != nil {
 		return protocol.Control{}, daemonOperationError(ctx, "write "+request.Type+" request", err)

@@ -1,8 +1,11 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -163,7 +166,7 @@ func TestLifecycleListsSessionsAndHostIdentity(t *testing.T) {
 }
 
 func TestLifecycleForwardsOneShotControls(t *testing.T) {
-	for _, controlType := range []string{protocol.TypeSignal, protocol.TypeKill} {
+	for _, controlType := range []string{protocol.TypeSignal, protocol.TypeKill, protocol.TypeLogs} {
 		t.Run(controlType, func(t *testing.T) {
 			workerConn := &lifecycleRecordingConn{}
 			if controlType == protocol.TypeKill {
@@ -172,9 +175,20 @@ func TestLifecycleForwardsOneShotControls(t *testing.T) {
 					RequestID: "control-1",
 					SessionID: "7K3D",
 				})
+			} else if controlType == protocol.TypeLogs {
+				workerConn.readFrame = controlFrame(t, protocol.Control{
+					Type:      protocol.TypeLogged,
+					RequestID: "control-1",
+					SessionID: "7K3D",
+					Output:    []byte("recent output"),
+				})
+			}
+			catalog := &lifecycleTestCatalog{}
+			if controlType == protocol.TypeLogs {
+				catalog.sessions = []storage.Session{{ID: "7K3D", State: storage.StateRunning}}
 			}
 			lifecycle := mustLifecycle(t, lifecycleConfig{
-				Catalog: &lifecycleTestCatalog{},
+				Catalog: catalog,
 				Connector: lifecycleConnectorFunc(func(_ context.Context, id protocol.SessionID) (transport.Conn, error) {
 					if id.String() != "7K3D" {
 						t.Fatalf("worker ID = %q", id.String())
@@ -190,18 +204,26 @@ func TestLifecycleForwardsOneShotControls(t *testing.T) {
 				RequestID: "control-1",
 				SessionID: "7K3D",
 				Signal:    "term",
+				Tail:      4096,
 			})
 			if err != nil || !handled {
 				t.Fatalf("control handled = %v, error = %v", handled, err)
 			}
-			if response.Type != protocol.TypeOK || response.RequestID != "control-1" || response.SessionID != "7K3D" {
+			wantType := protocol.TypeOK
+			if controlType == protocol.TypeLogs {
+				wantType = protocol.TypeLogged
+			}
+			if response.Type != wantType || response.RequestID != "control-1" || response.SessionID != "7K3D" {
 				t.Fatalf("control response = %+v", response)
+			}
+			if controlType == protocol.TypeLogs && !bytes.Equal(response.Output, []byte("recent output")) {
+				t.Fatalf("logs output = %q", response.Output)
 			}
 			if !workerConn.closed || len(workerConn.frames) != 1 {
 				t.Fatalf("worker connection closed = %v, frames = %d", workerConn.closed, len(workerConn.frames))
 			}
-			if controlType == protocol.TypeKill && !workerConn.read {
-				t.Fatal("kill completed without reading the worker acknowledgement")
+			if (controlType == protocol.TypeKill || controlType == protocol.TypeLogs) && !workerConn.read {
+				t.Fatalf("%s completed without reading the worker response", controlType)
 			}
 			forwarded, err := protocol.DecodeControl(workerConn.frames[0].Payload)
 			if err != nil {
@@ -211,10 +233,48 @@ func TestLifecycleForwardsOneShotControls(t *testing.T) {
 			if controlType == protocol.TypeSignal {
 				wantSignal = "term"
 			}
-			if forwarded.Type != controlType || forwarded.SessionID != "7K3D" || forwarded.Signal != wantSignal {
+			wantTail := 0
+			if controlType == protocol.TypeLogs {
+				wantTail = 4096
+			}
+			if forwarded.Type != controlType || forwarded.SessionID != "7K3D" || forwarded.Signal != wantSignal || forwarded.Tail != wantTail {
 				t.Fatalf("forwarded control = %+v", forwarded)
 			}
 		})
+	}
+}
+
+func TestLifecycleReadsExitedSessionLogsWithoutConnectingWorker(t *testing.T) {
+	sessionsDir := t.TempDir()
+	sessionDir := filepath.Join(sessionsDir, "7K3D")
+	if err := os.Mkdir(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "worker.log"), []byte("old diagnostic\nlast line\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connectCalls := 0
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{sessions: []storage.Session{{ID: "7K3D", State: storage.StateExited}}},
+		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+			connectCalls++
+			return nil, errors.New("exited worker must not be contacted")
+		}),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
+		SessionsDir: sessionsDir,
+	})
+
+	response, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeLogs, RequestID: "logs-exited", SessionID: "7K3D", Tail: 10,
+	})
+	if err != nil || !handled {
+		t.Fatalf("logs handled = %v, error = %v", handled, err)
+	}
+	if response.Type != protocol.TypeLogged || string(response.Output) != "last line\n" {
+		t.Fatalf("logs response = %+v", response)
+	}
+	if connectCalls != 0 {
+		t.Fatalf("worker connection calls = %d, want 0", connectCalls)
 	}
 }
 
@@ -371,6 +431,7 @@ func TestLifecycleRejectsMalformedRequestsBeforeSideEffects(t *testing.T) {
 		{Type: protocol.TypeCreate, RequestID: "request-1"},
 		{Type: protocol.TypeSignal, RequestID: "request-2", SessionID: "7K3D", Signal: "bogus"},
 		{Type: protocol.TypeKill, RequestID: "request-3", SessionID: "../X"},
+		{Type: protocol.TypeLogs, RequestID: "request-4", SessionID: "7K3D", Tail: protocol.MaxLogTail + 1},
 		{Type: protocol.TypeList},
 	}
 	for _, request := range requests {

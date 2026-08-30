@@ -65,6 +65,32 @@ func (r *Ring) Tail() uint64 {
 	return r.tail()
 }
 
+// Last returns a copy of at most size trailing bytes from one consistent ring
+// state. It never returns bytes older than the replay window.
+func (r *Ring) Last(size int) []byte {
+	if size <= 0 {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	available := r.head - r.tail()
+	if uint64(size) < available {
+		available = uint64(size)
+	}
+	start := r.head - available
+	out := make([]byte, int(available))
+	if len(out) == 0 {
+		return out
+	}
+	offset := int(start % uint64(len(r.buf)))
+	copied := copy(out, r.buf[offset:])
+	if copied < len(out) {
+		copy(out[copied:], r.buf)
+	}
+	return out
+}
+
 func (r *Ring) tail() uint64 {
 	if c := uint64(len(r.buf)); r.head > c {
 		return r.head - c

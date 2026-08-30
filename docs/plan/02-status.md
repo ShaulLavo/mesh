@@ -15,10 +15,11 @@ Steps 1 and 2 of the build order, plus the daemon.
 - `internal/daemon` — worker discovery, reconciliation, relay, lifecycle (T04)
 - `internal/transport` — WebSocket transport with resume (T05)
 - `internal/identity`, `internal/tailnet` — host keys, Tailscale discovery (T06)
-- `internal/cli`, `cmd/mesh` — `daemon`, `local`, `attach`, `ls`, `logs`, `kill`,
-  `sig`, `session-worker`
+- `internal/cli`, `cmd/mesh` — Cobra + Fang product surface, versioned host
+  address book, concurrent live/cached host catalogs, remote create, attach,
+  logs, kill, signals, and the T09 picker boundary (T07)
 
-Verified 2026-08-30: `gofmt`, `go vet ./...`, `go test -race ./...`, and all eight
+Verified 2026-08-30: `gofmt`, `go vet ./...`, `go test -race ./...`, and all ten
 scripts in `integration/` passing.
 
 Nothing is served under any name yet. Steps 8 and 9 are entirely unwritten, and
@@ -27,7 +28,7 @@ no DNS or certificate has been configured for `mesh.shaulavo.dev`.
 ## Complete tasks
 
 T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websocket
-transport · T06 host identity.
+transport · T06 host identity · T07 CLI surface.
 
 ## Next
 
@@ -43,17 +44,15 @@ T11 serving core ──┬─→ T12 private names ──→ T13 public edge ─
                    └──────────→ T16                     └────────→ T18
 ```
 
-T07, T08, T11 and T15 are unblocked and own disjoint files. They can run in
-parallel. Everything else waits on one of them.
+T08, T09, T10, T11 and T15 are unblocked. Everything else waits on one of them.
 
 | Task | Owns | Blocked by |
 |---|---|---|
-| T07 CLI surface | `cmd/mesh/`, `internal/cli/` | — |
 | T08 ssh bootstrap | `internal/bootstrap/`, `scripts/install/` | — |
 | T11 serving core | `internal/serve/` | — |
 | T15 ssh front door | `internal/sshd/` | T06 |
-| T09 picker TUI | `internal/tui/` | T07 |
-| T10 packaging | `.github/`, `.goreleaser.yaml` | T07 |
+| T09 picker TUI | `internal/tui/` | — |
+| T10 packaging | `.github/`, `.goreleaser.yaml` | — |
 | T12 private names | `internal/dnsname/` | T11 |
 | T13 public edge | `internal/edge/` | T11, T12 |
 | T14 `m serve` | `internal/cli/` | T11, T12, T13, T07 |
@@ -90,15 +89,12 @@ rediscovers the tradeoff.
 
 Cosmetic, nobody has bothered and nobody should make a task of it: `cli/attach.go`
 hand-rolls `indexByte` where `bytes.IndexByte` exists; `cli/sessions.go` builds
-paths by string concatenation where `launch.go` uses `filepath.Join`;
-`session/ring.go` shadows the builtin `cap`; `cli.Attach` dials without a timeout
-next to an `alive()` that uses one; `runLogs` reads a whole file for a command
-documented as printing recent output.
+paths by string concatenation where `launch.go` uses `filepath.Join`; and
+`session/ring.go` shadows the builtin `cap`.
 
-Coverage as of the review: daemon 83.8 · terminal 92.6 · protocol 89.9 · session
-87.7 · transport 81.1 · tailnet 79.2 · identity 76.5 · worker 75.0 · storage 71.5
-· cli 55.9 · paths 23.3 · `cmd/mesh` none. `internal/cli` is the thin spot, and
-T07 is about to rewrite it.
+The review's earlier coverage figures predate T07. T07 replaced the command
+dispatcher and added command-level coverage for host/session routing, stale
+catalogs, picker actions, and remote controls.
 
 ## Rules for anyone picking up a task
 

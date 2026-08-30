@@ -31,6 +31,10 @@ func (w *Worker) serve(conn net.Conn) {
 		return
 	}
 	msg, err := protocol.DecodeControl(first.Payload)
+	if err == nil && msg.Type == protocol.TypeLogs {
+		w.writeLogs(conn, msg)
+		return
+	}
 	if err == nil && msg.Type == protocol.TypeKill {
 		w.kill()
 		_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
@@ -195,6 +199,23 @@ func (w *Worker) serve(conn net.Conn) {
 			}
 		}
 	}
+}
+
+func (w *Worker) writeLogs(conn net.Conn, request protocol.Control) {
+	response := protocol.Control{
+		Type:      protocol.TypeLogged,
+		RequestID: request.RequestID,
+		SessionID: w.cfg.ID,
+	}
+	if request.Tail <= 0 || request.Tail > protocol.MaxLogTail {
+		response.Type = protocol.TypeError
+		response.Message = fmt.Sprintf("log tail must be between 1 and %d bytes", protocol.MaxLogTail)
+	} else {
+		response.Output = w.ring.Last(request.Tail)
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(attachmentWriteTimeout))
+	defer conn.SetWriteDeadline(time.Time{}) //nolint:errcheck // one-shot connection closes next
+	_ = protocol.NewWriter(conn).WriteControlMsg(response)
 }
 
 func (w *Worker) writeAttachError(conn net.Conn, message string) {

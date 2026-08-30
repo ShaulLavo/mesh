@@ -62,3 +62,25 @@ func TestHostInfoControlRoundTrip(t *testing.T) {
 		t.Fatalf("decoded control = %#v, want %#v", got, want)
 	}
 }
+
+func TestLogsControlRoundTrip(t *testing.T) {
+	want := Control{
+		Type:      TypeLogged,
+		RequestID: "logs-1",
+		SessionID: "7K3D",
+		Tail:      4096,
+		Output:    []byte("prompt> printf ready\r\nready\r\n"),
+	}
+
+	payload, err := want.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeControl(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("decoded control = %#v, want %#v", got, want)
+	}
+}

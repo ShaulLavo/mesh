@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -136,6 +137,12 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 		}
 		response, err := l.hostInfo(request)
 		return response, true, err
+	case protocol.TypeLogs:
+		if ctx == nil {
+			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
+		}
+		response, err := l.logs(ctx, request)
+		return response, true, err
 	case protocol.TypeSignal, protocol.TypeKill:
 		if ctx == nil {
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
@@ -145,6 +152,33 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 	default:
 		return protocol.Control{}, false, nil
 	}
+}
+
+func (l *lifecycle) logs(ctx context.Context, request protocol.Control) (protocol.Control, error) {
+	if err := validateRequestID(request); err != nil {
+		return protocol.Control{}, err
+	}
+	if request.Tail <= 0 || request.Tail > protocol.MaxLogTail {
+		return protocol.Control{}, fmt.Errorf("daemon: log tail must be between 1 and %d bytes", protocol.MaxLogTail)
+	}
+	id, err := session.ParseID(request.SessionID)
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+	}
+	stored, err := l.catalog.Get(ctx, storage.SessionID(id))
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+	}
+	if stored.State == storage.StateRunning || stored.State == storage.StateDetached {
+		return l.forwardOneShot(ctx, request)
+	}
+	output, err := worker.ReadLogTail(filepath.Join(l.sessionsDir, id), request.Tail)
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: logs for session %s: %w", id, err)
+	}
+	return protocol.Control{
+		Type: protocol.TypeLogged, RequestID: request.RequestID, SessionID: id, Output: output,
+	}, nil
 }
 
 func (l *lifecycle) create(ctx context.Context, request protocol.Control) (protocol.Control, error) {
@@ -284,6 +318,9 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	if request.Type == protocol.TypeSignal && !worker.SupportsSignal(request.Signal) {
 		return protocol.Control{}, fmt.Errorf("daemon: unsupported signal %q", request.Signal)
 	}
+	if request.Type == protocol.TypeLogs && (request.Tail <= 0 || request.Tail > protocol.MaxLogTail) {
+		return protocol.Control{}, fmt.Errorf("daemon: log tail must be between 1 and %d bytes", protocol.MaxLogTail)
+	}
 	sid, err := protocol.NewSessionID(id)
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: encode session ID %s: %w", id, err)
@@ -301,16 +338,25 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	}
 	if request.Type == protocol.TypeSignal {
 		forwarded.Signal = request.Signal
+	} else if request.Type == protocol.TypeLogs {
+		forwarded.Tail = request.Tail
 	}
 	payload, err := forwarded.Encode()
 	if err == nil {
 		err = conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload})
 	}
-	if err == nil && request.Type == protocol.TypeKill {
+	response := protocol.Control{
+		Type:      protocol.TypeOK,
+		RequestID: request.RequestID,
+		SessionID: id,
+	}
+	if err == nil && (request.Type == protocol.TypeKill || request.Type == protocol.TypeLogs) {
 		var frame protocol.Frame
 		frame, err = conn.ReadFrame()
-		if err == nil {
+		if err == nil && request.Type == protocol.TypeKill {
 			err = validateKillAcknowledgement(id, request.RequestID, frame)
+		} else if err == nil {
+			response, err = validateLogsResponse(id, request.RequestID, request.Tail, frame)
 		}
 	}
 	closeErr := conn.Close()
@@ -320,11 +366,7 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	if closeErr != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: close session %s control connection: %w", id, closeErr)
 	}
-	return protocol.Control{
-		Type:      protocol.TypeOK,
-		RequestID: request.RequestID,
-		SessionID: id,
-	}, nil
+	return response, nil
 }
 
 func validateKillAcknowledgement(id, requestID string, frame protocol.Frame) error {
@@ -339,6 +381,23 @@ func validateKillAcknowledgement(id, requestID string, frame protocol.Frame) err
 		return fmt.Errorf("daemon: session %s invalid kill acknowledgement", id)
 	}
 	return nil
+}
+
+func validateLogsResponse(id, requestID string, tail int, frame protocol.Frame) (protocol.Control, error) {
+	if frame.Kind != protocol.KindControl {
+		return protocol.Control{}, fmt.Errorf("daemon: session %s logs response has kind %d", id, frame.Kind)
+	}
+	message, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: session %s logs response: %w", id, err)
+	}
+	if message.Type != protocol.TypeLogged || message.RequestID != requestID || message.SessionID != id {
+		return protocol.Control{}, fmt.Errorf("daemon: session %s invalid logs response", id)
+	}
+	if len(message.Output) > tail {
+		return protocol.Control{}, fmt.Errorf("daemon: session %s returned %d log bytes, want at most %d", id, len(message.Output), tail)
+	}
+	return message, nil
 }
 
 func validateRequestID(request protocol.Control) error {

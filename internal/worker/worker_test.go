@@ -98,6 +98,50 @@ func TestFreshAttachReceivesSnapshotThenLiveSequence(t *testing.T) {
 	}
 }
 
+func TestLogsReturnsBoundedOutputWithoutStealingAttacher(t *testing.T) {
+	sid, err := protocol.NewSessionID("7K3D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring := session.NewRing(32)
+	_, _ = ring.Write([]byte("before\r\nprompt> printf ready\r\nready\r\n"))
+	active := &attachment{}
+	w := &Worker{
+		cfg:    Config{ID: sid.String()},
+		sid:    sid,
+		ring:   ring,
+		client: active,
+	}
+
+	client, server := net.Pipe()
+	defer client.Close()
+	go w.serve(server)
+	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
+		Type:      protocol.TypeLogs,
+		RequestID: "logs-1",
+		SessionID: sid.String(),
+		Tail:      12,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := protocol.NewReader(client).ReadFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Type != protocol.TypeLogged || response.RequestID != "logs-1" || response.SessionID != sid.String() || !bytes.Equal(response.Output, []byte("ady\r\nready\r\n")) {
+		t.Fatalf("logs response = %+v", response)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.client != active {
+		t.Fatal("logs request replaced the active attacher")
+	}
+}
+
 func TestExpiredAttachReceivesSnapshotAtCurrentHead(t *testing.T) {
 	sid, err := protocol.NewSessionID("GAP")
 	if err != nil {

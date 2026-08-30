@@ -17,50 +17,81 @@ func Kill(s Session) error {
 	if err != nil {
 		return err
 	}
-	return controlAndWait(s, protocol.Control{
+	response, err := controlAndWait(s, protocol.Control{
 		Type:      protocol.TypeKill,
 		RequestID: requestID,
 		SessionID: s.ID,
 	})
+	if err != nil {
+		return err
+	}
+	if response.Type != protocol.TypeOK {
+		return fmt.Errorf("kill %s: unexpected completion %q", s.ID, response.Type)
+	}
+	return nil
 }
 
-func controlAndWait(s Session, msg protocol.Control) error {
+// Logs returns bounded recent terminal output without attaching to the session.
+func Logs(s Session, tail int) ([]byte, error) {
+	requestID, err := newDaemonRequestID()
+	if err != nil {
+		return nil, err
+	}
+	response, err := controlAndWait(s, protocol.Control{
+		Type:      protocol.TypeLogs,
+		RequestID: requestID,
+		SessionID: s.ID,
+		Tail:      tail,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if response.Type != protocol.TypeLogged {
+		return nil, fmt.Errorf("logs %s: unexpected completion %q", s.ID, response.Type)
+	}
+	if len(response.Output) > tail {
+		return nil, fmt.Errorf("logs %s: worker returned %d bytes, want at most %d", s.ID, len(response.Output), tail)
+	}
+	return append([]byte(nil), response.Output...), nil
+}
+
+func controlAndWait(s Session, msg protocol.Control) (protocol.Control, error) {
 	conn, err := net.DialTimeout("unix", paths.Socket(s.Dir), 2*time.Second)
 	if err != nil {
-		return fmt.Errorf("%s %s: %w", msg.Type, s.ID, err)
+		return protocol.Control{}, fmt.Errorf("%s %s: %w", msg.Type, s.ID, err)
 	}
 	defer conn.Close() //nolint:errcheck // one-shot connection
 	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return fmt.Errorf("%s %s: set completion deadline: %w", msg.Type, s.ID, err)
+		return protocol.Control{}, fmt.Errorf("%s %s: set completion deadline: %w", msg.Type, s.ID, err)
 	}
 
 	if err := protocol.NewWriter(conn).WriteControlMsg(msg); err != nil {
-		return fmt.Errorf("%s %s: %w", msg.Type, s.ID, err)
+		return protocol.Control{}, fmt.Errorf("%s %s: %w", msg.Type, s.ID, err)
 	}
 	frame, err := protocol.NewReader(conn).ReadFrame()
 	if err != nil {
 		if err == io.EOF {
-			return fmt.Errorf("%s %s: worker closed without confirming completion", msg.Type, s.ID)
+			return protocol.Control{}, fmt.Errorf("%s %s: worker closed without confirming completion", msg.Type, s.ID)
 		}
-		return fmt.Errorf("%s %s: read completion: %w", msg.Type, s.ID, err)
+		return protocol.Control{}, fmt.Errorf("%s %s: read completion: %w", msg.Type, s.ID, err)
 	}
 	if frame.Kind != protocol.KindControl {
-		return fmt.Errorf("%s %s: completion frame has kind %d", msg.Type, s.ID, frame.Kind)
+		return protocol.Control{}, fmt.Errorf("%s %s: completion frame has kind %d", msg.Type, s.ID, frame.Kind)
 	}
 	response, err := protocol.DecodeControl(frame.Payload)
 	if err != nil {
-		return fmt.Errorf("%s %s: decode completion: %w", msg.Type, s.ID, err)
+		return protocol.Control{}, fmt.Errorf("%s %s: decode completion: %w", msg.Type, s.ID, err)
 	}
 	if response.RequestID != msg.RequestID || response.SessionID != s.ID {
-		return fmt.Errorf("%s %s: mismatched completion", msg.Type, s.ID)
+		return protocol.Control{}, fmt.Errorf("%s %s: mismatched completion", msg.Type, s.ID)
 	}
 	switch response.Type {
-	case protocol.TypeOK:
-		return nil
+	case protocol.TypeOK, protocol.TypeLogged:
+		return response, nil
 	case protocol.TypeError:
-		return fmt.Errorf("%s %s: %s", msg.Type, s.ID, response.Message)
+		return protocol.Control{}, fmt.Errorf("%s %s: %s", msg.Type, s.ID, response.Message)
 	default:
-		return fmt.Errorf("%s %s: unexpected completion %q", msg.Type, s.ID, response.Type)
+		return protocol.Control{}, fmt.Errorf("%s %s: unexpected completion %q", msg.Type, s.ID, response.Type)
 	}
 }
 
