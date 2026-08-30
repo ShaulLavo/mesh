@@ -3,6 +3,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,10 +14,73 @@ import (
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
+	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/worker"
 )
+
+func TestRunRestoresPersistedServicesOnRestart(t *testing.T) {
+	stateDir := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("survived restart"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(context.Background(), filepath.Join(stateDir, databaseName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertService(context.Background(), meshserve.Service{Name: "site", Kind: meshserve.Static, Target: root}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	port := reserveTCPPort(t, "127.0.0.1")
+	url := fmt.Sprintf("http://127.0.0.1:%d/site/", port)
+	options := runOptions{
+		now:               func() time.Time { return catalogTestTime },
+		bootID:            func() string { return "boot-a" },
+		discoverSelf:      func(context.Context) (tailnet.Peer, error) { return tailnet.Peer{Addrs: []string{"127.0.0.1"}}, nil },
+		reconcileInterval: time.Hour,
+	}
+	for restart := 0; restart < 2; restart++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			done <- run(ctx, Config{StateDir: stateDir, TailnetPort: port}, options)
+		}()
+		body := waitForHTTPBody(t, url, http.StatusOK)
+		if body != "survived restart" {
+			t.Fatalf("restart %d body = %q", restart, body)
+		}
+		cancel()
+		if err := waitRuntime(t, done); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func waitForHTTPBody(t *testing.T, url string, wantStatus int) string {
+	t.Helper()
+	client := &http.Client{Timeout: 200 * time.Millisecond}
+	deadline := time.Now().Add(runtimeTestTimeout)
+	for {
+		response, err := client.Get(url)
+		if err == nil {
+			body, readErr := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if readErr == nil && response.StatusCode == wantStatus {
+				return string(body)
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET %s did not return %d: %v", url, wantStatus, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
 func TestRunServesLocalClientsWhenTailnetDiscoveryFails(t *testing.T) {
 	stateDir := t.TempDir()

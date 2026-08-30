@@ -8,24 +8,30 @@ import (
 
 // Control message type names.
 const (
-	TypeAttach   = "session.attach"
-	TypeAttached = "session.attached"
-	TypeDetach   = "session.detach"
-	TypeExit     = "session.exit"
-	TypeResize   = "terminal.resize"
-	TypeSignal   = "session.signal"
-	TypeKill     = "session.kill"
-	TypeCreate   = "session.create"
-	TypeCreated  = "session.created"
-	TypeList     = "session.list"
-	TypeListed   = "session.listed"
-	TypeLogs     = "session.logs"
-	TypeLogged   = "session.logged"
-	TypeHostInfo = "host.info"
+	TypeAttach        = "session.attach"
+	TypeAttached      = "session.attached"
+	TypeDetach        = "session.detach"
+	TypeExit          = "session.exit"
+	TypeResize        = "terminal.resize"
+	TypeSignal        = "session.signal"
+	TypeKill          = "session.kill"
+	TypeCreate        = "session.create"
+	TypeCreated       = "session.created"
+	TypeList          = "session.list"
+	TypeListed        = "session.listed"
+	TypeLogs          = "session.logs"
+	TypeLogged        = "session.logged"
+	TypeHostInfo      = "host.info"
+	TypeServiceUpsert = "service.upsert"
+	TypeServiceList   = "service.list"
+	TypeServiceDelete = "service.delete"
 
-	TypeHostInfoResult = "host.info.result"
-	TypeOK             = "ok"
-	TypeError          = "error"
+	TypeHostInfoResult  = "host.info.result"
+	TypeServiceUpserted = "service.upserted"
+	TypeServiceListed   = "service.listed"
+	TypeServiceDeleted  = "service.deleted"
+	TypeOK              = "ok"
+	TypeError           = "error"
 )
 
 // Log request limits keep one JSON control response below MaxPayload after
@@ -63,6 +69,18 @@ type HostInfo struct {
 	TailscaleName string `json:"tailscaleName,omitempty"`
 }
 
+// ServiceInfo is the transport representation of one origin service and its
+// current health. The daemon ignores Healthy and Problem in client definitions.
+type ServiceInfo struct {
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	Target        string `json:"target"`
+	PublicName    string `json:"publicName,omitempty"`
+	WakeOnRequest bool   `json:"wakeOnRequest,omitempty"`
+	Healthy       bool   `json:"healthy"`
+	Problem       string `json:"problem,omitempty"`
+}
+
 // Control is the envelope for every JSON control message. Unused fields are
 // omitted so messages stay readable on the wire during debugging.
 type Control struct {
@@ -95,6 +113,11 @@ type Control struct {
 
 	// Logs
 	Output []byte `json:"output,omitempty"`
+
+	// Services
+	ServiceName string        `json:"serviceName,omitempty"`
+	Service     *ServiceInfo  `json:"service,omitempty"`
+	Services    []ServiceInfo `json:"services,omitempty"`
 
 	// Error
 	Message string `json:"message,omitempty"`

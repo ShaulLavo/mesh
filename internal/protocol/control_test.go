@@ -84,3 +84,38 @@ func TestLogsControlRoundTrip(t *testing.T) {
 		t.Fatalf("decoded control = %#v, want %#v", got, want)
 	}
 }
+
+func TestServiceControlRoundTrip(t *testing.T) {
+	want := Control{
+		Type:        TypeServiceListed,
+		RequestID:   "service-list-1",
+		ServiceName: "blog",
+		Service: &ServiceInfo{
+			Name:       "blog",
+			Kind:       "static",
+			Target:     "/srv/blog",
+			PublicName: "blog.shaulavo.dev",
+			Healthy:    true,
+		},
+		Services: []ServiceInfo{{
+			Name:          "files",
+			Kind:          "files",
+			Target:        "/srv/files",
+			WakeOnRequest: true,
+			Healthy:       false,
+			Problem:       "root unavailable",
+		}},
+	}
+
+	payload, err := want.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeControl(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("decoded control = %#v, want %#v", got, want)
+	}
+}

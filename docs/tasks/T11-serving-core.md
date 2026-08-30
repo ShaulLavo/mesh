@@ -1,6 +1,6 @@
 # T11 — Serving core
 
-**Status:** not started · **Blocked by:** nothing (T04 landed) · **Owns:** `internal/serve/`
+**Status:** complete · **Blocked by:** nothing (T04 landed) · **Owns:** `internal/serve/`
 
 ## Goal
 
@@ -21,11 +21,10 @@ package serve
 type Kind string // "static", "files", "proxy"
 
 type Service struct {
-    Name     string // route name, e.g. "blog"
-    Kind     Kind
-    Target   string // directory path, or port for proxy
-    Public   bool
-    Subdomain bool
+    Name          string // route name, e.g. "blog"
+    Kind          Kind
+    Target        string // directory path, or port for proxy
+    PublicName    string // empty for tailnet-only; otherwise the exact public hostname
     WakeOnRequest bool
 }
 
@@ -74,3 +73,45 @@ tailnet, "it is private anyway" is not an argument for being sloppy here.
 
 TLS, public exposure, the edge, and the CLI. This task ends at "the origin daemon
 answers HTTP on the tailnet".
+
+## Implementation
+
+`internal/serve.ResolveRoot` is the shared HTTP and SFTP path resolver. It bounds
+repeated URL decoding, rejects null bytes and parent traversal, resolves symlinks,
+and verifies the canonical result remains below the canonical root. A missing root
+returns `ErrRootUnavailable` without preventing registration or daemon startup.
+
+`serve.Handler` implements static sites, generated file listings, and loopback
+reverse proxies. File links retain their mount prefix at both `/` and nested
+routes. The reverse proxy strips the service prefix, sets `X-Forwarded-*`, flushes
+streamed responses, and passes WebSocket upgrades.
+
+`serve.Registry` publishes complete route snapshots atomically and dispatches by
+longest prefix. It rejects any route that overlaps the configured daemon
+`WebSocketPath`, including an ancestor or descendant. `service.upsert`,
+`service.list`, and `service.delete` are additive daemon controls for T14. Writes
+commit to SQLite before the live registry changes, and delete retries converge on
+the same state. List responses include live health.
+
+Migration `00002_services.sql` stores each service in the existing `mesh.db`.
+`PublicName` is the single source of truth for D15: empty means tailnet-only, and a
+nonempty value retains the exact validated `shaulavo.dev` hostname. Both the apex
+and proper subdomains are valid. Wildcards, trailing dots, malformed labels, and
+names outside the zone are rejected. The daemon restores all rows on startup.
+
+No dependency was added. Static and file serving use `net/http`; proxying uses
+`net/http/httputil`.
+
+`integration/serving_survives_restart.sh` creates a service through the daemon
+control socket, kills and restarts the daemon, checks the restored HTTP response,
+then removes the root and checks for HTTP 503 while the daemon remains alive.
+
+Verified with:
+
+```bash
+go generate ./...
+go mod tidy -diff
+go vet ./...
+go test -race ./...
+./scripts/verify.sh
+```

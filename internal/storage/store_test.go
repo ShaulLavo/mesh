@@ -19,7 +19,7 @@ func TestOpenAppliesMigrationsIdempotently(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSQLiteSettings(t, first)
-	assertMigrationVersion(t, first, 1)
+	assertMigrationVersion(t, first, 2)
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestOpenAppliesMigrationsIdempotently(t *testing.T) {
 		t.Fatalf("reopen migrated database: %v", err)
 	}
 	t.Cleanup(func() { _ = second.Close() })
-	assertMigrationVersion(t, second, 1)
+	assertMigrationVersion(t, second, 2)
 	var applied int
 	if err := second.db.QueryRowContext(ctx, `
 		SELECT count(*)

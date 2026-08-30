@@ -12,6 +12,14 @@ type Host struct {
 	LastSeenAt    int64
 }
 
+type Service struct {
+	Name          string
+	Kind          string
+	Target        string
+	PublicName    string
+	WakeOnRequest int64
+}
+
 type Session struct {
 	ID                 string
 	HostID             string

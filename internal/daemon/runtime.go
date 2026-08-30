@@ -38,12 +38,14 @@ var ErrDaemonAlreadyRunning = errors.New("daemon: already running")
 
 // ListenerConfig identifies the local daemon socket and optional Tailnet HTTP
 // listeners. TailnetPort and WebSocketPath are required when TailnetAddrs is
-// non-empty. ReportError receives non-fatal listener errors and may be nil.
+// non-empty. HTTPHandler receives requests outside WebSocketPath. ReportError
+// receives non-fatal listener errors and may be nil.
 type ListenerConfig struct {
 	StateDir      string
 	TailnetAddrs  []string
 	TailnetPort   uint16
 	WebSocketPath string
+	HTTPHandler   http.Handler
 	ReportError   func(error)
 }
 
@@ -52,6 +54,7 @@ type listenerConfig struct {
 	tailnetAddrs  []netip.Addr
 	tailnetPort   uint16
 	webSocketPath string
+	httpHandler   http.Handler
 	reporter      *errorReporter
 }
 
@@ -177,6 +180,7 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		stateDir:      filepath.Clean(cfg.StateDir),
 		tailnetPort:   cfg.TailnetPort,
 		webSocketPath: cfg.WebSocketPath,
+		httpHandler:   cfg.HTTPHandler,
 		reporter:      newErrorReporter(cfg.ReportError),
 	}
 	if len(cfg.TailnetAddrs) == 0 {
@@ -250,7 +254,11 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 		server.handlers.Add(1)
 		defer server.handlers.Done()
 		if r.URL.EscapedPath() != cfg.webSocketPath {
-			http.NotFound(w, r)
+			if cfg.httpHandler == nil {
+				http.NotFound(w, r)
+				return
+			}
+			cfg.httpHandler.ServeHTTP(w, r)
 			return
 		}
 		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{}, func(connectionCtx context.Context, conn transport.Conn) error {

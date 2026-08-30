@@ -1,0 +1,270 @@
+package serve
+
+import (
+	"errors"
+	"fmt"
+	"html/template"
+	"io/fs"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"path"
+	"strings"
+)
+
+var directoryTemplate = template.Must(template.New("directory").Parse(`<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>{{.Title}}</title></head>
+<body><h1>{{.Title}}</h1><ul>{{range .Entries}}
+<li><a href="{{.Href}}">{{.Name}}</a></li>{{end}}
+</ul></body>
+</html>
+`))
+
+type directoryPage struct {
+	Title   string
+	Entries []directoryEntry
+}
+
+type directoryEntry struct {
+	Name string
+	Href string
+}
+
+// Handler returns the HTTP handler for service mounted at prefix.
+func Handler(service Service, prefix string) (http.Handler, error) {
+	normalized, err := normalizeService(service)
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePrefix(prefix); err != nil {
+		return nil, err
+	}
+	return handlerForNormalizedService(normalized, prefix)
+}
+
+func handlerForNormalizedService(service Service, prefix string) (http.Handler, error) {
+	switch service.Kind {
+	case Static:
+		return mountedHandler(prefix, func(w http.ResponseWriter, request *http.Request, relative string) {
+			serveStatic(w, request, service.Target, relative)
+		}), nil
+	case Files:
+		return mountedHandler(prefix, func(w http.ResponseWriter, request *http.Request, relative string) {
+			serveFiles(w, request, service.Target, prefix, relative)
+		}), nil
+	case Proxy:
+		return proxyHandler(service.Target, prefix), nil
+	default:
+		panic("validated service has an unknown kind")
+	}
+}
+
+func validatePrefix(prefix string) error {
+	if prefix == "" || !strings.HasPrefix(prefix, "/") || path.Clean(prefix) != prefix || prefix != "/" && strings.HasSuffix(prefix, "/") {
+		return fmt.Errorf("serve: mount prefix %q must be a clean absolute path", prefix)
+	}
+	if strings.ContainsAny(prefix, "%?#\\") || strings.IndexByte(prefix, 0) >= 0 {
+		return fmt.Errorf("serve: mount prefix %q contains unsupported characters", prefix)
+	}
+	return nil
+}
+
+func mountedHandler(prefix string, serve func(http.ResponseWriter, *http.Request, string)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		relative, ok := relativeRequestPath(request.URL.EscapedPath(), prefix)
+		if !ok {
+			http.NotFound(w, request)
+			return
+		}
+		if request.Method != http.MethodGet && request.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		serve(w, request, relative)
+	})
+}
+
+func relativeRequestPath(escapedPath, prefix string) (string, bool) {
+	if prefix == "/" {
+		return escapedPath, true
+	}
+	if escapedPath == prefix {
+		return "/", true
+	}
+	if !strings.HasPrefix(escapedPath, prefix+"/") {
+		return "", false
+	}
+	return strings.TrimPrefix(escapedPath, prefix), true
+}
+
+func serveStatic(w http.ResponseWriter, request *http.Request, root, relative string) {
+	resolved, info, ok := resolveForHTTP(w, request, root, relative)
+	if !ok {
+		return
+	}
+	if info.IsDir() {
+		if !strings.HasSuffix(request.URL.Path, "/") {
+			redirectDirectory(w, request)
+			return
+		}
+		indexRelative := strings.TrimSuffix(relative, "/") + "/index.html"
+		resolved, info, ok = resolveForHTTP(w, request, root, indexRelative)
+		if !ok || info.IsDir() {
+			if ok {
+				http.NotFound(w, request)
+			}
+			return
+		}
+	}
+	serveResolvedFile(w, request, resolved, info)
+}
+
+func serveFiles(w http.ResponseWriter, request *http.Request, root, prefix, relative string) {
+	resolved, info, ok := resolveForHTTP(w, request, root, relative)
+	if !ok {
+		return
+	}
+	if !info.IsDir() {
+		serveResolvedFile(w, request, resolved, info)
+		return
+	}
+	if !strings.HasSuffix(request.URL.Path, "/") {
+		redirectDirectory(w, request)
+		return
+	}
+	entries, err := os.ReadDir(resolved)
+	if err != nil {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	decoded, err := decodeRequestPath(relative)
+	if err != nil {
+		http.Error(w, "bad path", http.StatusBadRequest)
+		return
+	}
+	page := directoryPage{Title: request.URL.Path, Entries: make([]directoryEntry, 0, len(entries)+1)}
+	logicalDirectory := strings.Trim(decoded, "/")
+	if logicalDirectory != "" {
+		parent := path.Dir(logicalDirectory)
+		if parent == "." {
+			parent = ""
+		}
+		page.Entries = append(page.Entries, directoryEntry{Name: "../", Href: mountedURL(prefix, parent, true)})
+	}
+	for _, entry := range entries {
+		isDirectory := entry.IsDir()
+		name := entry.Name()
+		if isDirectory {
+			name += "/"
+		}
+		page.Entries = append(page.Entries, directoryEntry{
+			Name: name,
+			Href: mountedURL(prefix, path.Join(logicalDirectory, entry.Name()), isDirectory),
+		})
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if request.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err := directoryTemplate.Execute(w, page); err != nil {
+		return
+	}
+}
+
+func resolveForHTTP(w http.ResponseWriter, request *http.Request, root, relative string) (string, fs.FileInfo, bool) {
+	resolved, err := ResolveRoot(root, relative)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrRootUnavailable):
+			http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		case errors.Is(err, ErrInvalidPath):
+			http.Error(w, "bad path", http.StatusBadRequest)
+		default:
+			http.NotFound(w, request)
+		}
+		return "", nil, false
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		http.NotFound(w, request)
+		return "", nil, false
+	}
+	return resolved, info, true
+}
+
+func serveResolvedFile(w http.ResponseWriter, request *http.Request, resolved string, info fs.FileInfo) {
+	file, err := os.Open(resolved)
+	if err != nil {
+		http.NotFound(w, request)
+		return
+	}
+	defer file.Close() //nolint:errcheck // the response owns any read failure
+	http.ServeContent(w, request, info.Name(), info.ModTime(), file)
+}
+
+func redirectDirectory(w http.ResponseWriter, request *http.Request) {
+	target := request.URL.EscapedPath() + "/"
+	if request.URL.RawQuery != "" {
+		target += "?" + request.URL.RawQuery
+	}
+	http.Redirect(w, request, target, http.StatusPermanentRedirect)
+}
+
+func mountedURL(prefix, logicalPath string, directory bool) string {
+	parts := strings.Split(strings.Trim(logicalPath, "/"), "/")
+	escaped := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			escaped = append(escaped, url.PathEscape(part))
+		}
+	}
+	result := prefix
+	if result != "/" {
+		result += "/"
+	}
+	result += strings.Join(escaped, "/")
+	if directory && !strings.HasSuffix(result, "/") {
+		result += "/"
+	}
+	if result == "" {
+		return "/"
+	}
+	return result
+}
+
+func proxyHandler(port, prefix string) http.Handler {
+	target := &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", port)}
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(request *httputil.ProxyRequest) {
+			request.SetURL(target)
+			request.Out.Host = request.In.Host
+			request.SetXForwarded()
+			request.Out.Header.Set("X-Forwarded-Prefix", prefix)
+		},
+		FlushInterval: -1,
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+		},
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		relative, ok := relativeRequestPath(request.URL.EscapedPath(), prefix)
+		if !ok {
+			http.NotFound(w, request)
+			return
+		}
+		decoded, err := url.PathUnescape(relative)
+		if err != nil || strings.IndexByte(decoded, 0) >= 0 {
+			http.Error(w, "bad path", http.StatusBadRequest)
+			return
+		}
+		proxied := request.Clone(request.Context())
+		proxied.URL.Path = decoded
+		proxied.URL.RawPath = relative
+		proxy.ServeHTTP(w, proxied)
+	})
+}

@@ -19,16 +19,24 @@ import (
 type clientServer struct {
 	lifecycle *lifecycle
 	workers   WorkerConnector
+	services  serviceControlHandler
 }
 
-func newClientServer(lifecycle *lifecycle, workers WorkerConnector) (*clientServer, error) {
+type serviceControlHandler interface {
+	HandleControl(context.Context, protocol.Control) (protocol.Control, bool, error)
+}
+
+func newClientServer(lifecycle *lifecycle, workers WorkerConnector, services serviceControlHandler) (*clientServer, error) {
 	if lifecycle == nil {
 		return nil, fmt.Errorf("daemon: nil client lifecycle")
 	}
 	if workers == nil {
 		return nil, fmt.Errorf("daemon: nil client worker connector")
 	}
-	return &clientServer{lifecycle: lifecycle, workers: workers}, nil
+	if services == nil {
+		return nil, fmt.Errorf("daemon: nil service controller")
+	}
+	return &clientServer{lifecycle: lifecycle, workers: workers, services: services}, nil
 }
 
 // Handle serves one client until it disconnects or ctx is cancelled. This is
@@ -80,6 +88,9 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		}
 
 		response, lifecycleHandled, requestErr := s.lifecycle.HandleControl(ctx, request)
+		if !lifecycleHandled {
+			response, lifecycleHandled, requestErr = s.services.HandleControl(ctx, request)
+		}
 		if requestErr != nil {
 			if err := writeClientRequestError(client, request, requestErr); err != nil {
 				return clientOperationError(ctx, fmt.Sprintf("report %s error %v", request.Type, requestErr), err)

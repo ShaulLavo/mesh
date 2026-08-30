@@ -26,7 +26,7 @@ func TestClientServerDispatchesRelayAndLifecycleFrames(t *testing.T) {
 	controlWorker := newServerTestConn()
 	workers := newServerTestConnector(worker)
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, newServerTestConnector(controlWorker))
-	server, err := newClientServer(lifecycle, workers)
+	server, err := newClientServer(lifecycle, workers, noServiceControl{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestClientServerDispatchesRelayAndLifecycleFrames(t *testing.T) {
 func TestClientServerReturnsCorrelatedRequestErrorsAndContinues(t *testing.T) {
 	client := newServerTestConn()
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector())
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestClientServerSerializesLifecycleAndRelayWrites(t *testing.T) {
 	workers := newServerTestConnector(worker)
 	listCalled := make(chan struct{}, 1)
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{listCalled: listCalled}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, workers)
+	server, err := newClientServer(lifecycle, workers, noServiceControl{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestClientServerSerializesLifecycleAndRelayWrites(t *testing.T) {
 
 func TestClientServerTreatsClientTerminationAsNormal(t *testing.T) {
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector())
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestClientServerTreatsClientTerminationAsNormal(t *testing.T) {
 
 func TestClientServerContextCancellationClosesBlockedClient(t *testing.T) {
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector())
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,13 +250,16 @@ func TestClientServerContextCancellationClosesBlockedClient(t *testing.T) {
 
 func TestNewClientServerRejectsNilDependencies(t *testing.T) {
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	if _, err := newClientServer(nil, failingServerTestConnector()); err == nil {
+	if _, err := newClientServer(nil, failingServerTestConnector(), noServiceControl{}); err == nil {
 		t.Fatal("nil lifecycle accepted")
 	}
-	if _, err := newClientServer(lifecycle, nil); err == nil {
+	if _, err := newClientServer(lifecycle, nil, noServiceControl{}); err == nil {
 		t.Fatal("nil worker connector accepted")
 	}
-	server, err := newClientServer(lifecycle, failingServerTestConnector())
+	if _, err := newClientServer(lifecycle, failingServerTestConnector(), nil); err == nil {
+		t.Fatal("nil service controller accepted")
+	}
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,6 +315,12 @@ func newServerTestConnector(conns ...transport.Conn) *serverTestConnector {
 }
 
 func failingServerTestConnector() WorkerConnector { return newServerTestConnector() }
+
+type noServiceControl struct{}
+
+func (noServiceControl) HandleControl(context.Context, protocol.Control) (protocol.Control, bool, error) {
+	return protocol.Control{}, false, nil
+}
 
 func (c *serverTestConnector) ConnectWorker(ctx context.Context, _ protocol.SessionID) (transport.Conn, error) {
 	select {

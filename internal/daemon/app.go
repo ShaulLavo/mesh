@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/identity"
+	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/worker"
@@ -73,13 +74,11 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if opts.reconcileInterval <= 0 {
 		return errors.New("daemon: reconciliation interval must be positive")
 	}
-	if cfg.TailnetPort != 0 {
-		if cfg.WebSocketPath == "" {
-			cfg.WebSocketPath = defaultWebSocketPath
-		}
-		if err := validateWebSocketPath(cfg.WebSocketPath); err != nil {
-			return err
-		}
+	if cfg.WebSocketPath == "" {
+		cfg.WebSocketPath = defaultWebSocketPath
+	}
+	if err := validateWebSocketPath(cfg.WebSocketPath); err != nil {
+		return err
 	}
 
 	stateDir, err := filepath.Abs(cfg.StateDir)
@@ -140,6 +139,18 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	defer func() {
 		runErr = errors.Join(runErr, store.Close())
 	}()
+	services, err := store.ListServices(daemonCtx)
+	if err != nil {
+		return fmt.Errorf("daemon: restore services: %w", err)
+	}
+	serviceRegistry, err := meshserve.NewRegistryWithReservedPrefix(services, cfg.WebSocketPath)
+	if err != nil {
+		return fmt.Errorf("daemon: restore services: %w", err)
+	}
+	serviceControl, err := newServiceController(store, serviceRegistry)
+	if err != nil {
+		return err
+	}
 
 	catalog, err := NewCatalog(CatalogConfig{
 		SessionsDir: sessionsDir,
@@ -169,7 +180,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
-	server, err := newClientServer(lifecycle, connector)
+	server, err := newClientServer(lifecycle, connector, serviceControl)
 	if err != nil {
 		return err
 	}
@@ -179,6 +190,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		TailnetAddrs:  tailnetAddrs,
 		TailnetPort:   cfg.TailnetPort,
 		WebSocketPath: cfg.WebSocketPath,
+		HTTPHandler:   serviceRegistry,
 		ReportError:   reporter.report,
 	}, server.Handle)
 	if err != nil {
