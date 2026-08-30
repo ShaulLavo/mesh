@@ -12,6 +12,11 @@ Publishing here is rarer than it sounds. The common case is a directory or a
 local port you want to reach from your phone on the tailnet. Reaching the public
 internet at all is the exception, which is why D15 makes you name it.
 
+Public exposure stays in the plan. It is worth having for the occasional app on
+the desktop that someone outside the tailnet needs to hit, and DNS-01 is already
+built for the private side, so the marginal cost is the edge itself. Being rare
+is an argument for keeping that edge small, not for dropping it.
+
 ## Two names, two audiences
 
 | | `<host>.mesh.shaulavo.dev` | `<name>.shaulavo.dev` |
