@@ -3,11 +3,14 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
 	"strings"
 	"testing"
+
+	installscript "github.com/shaul/mesh/scripts/install"
 )
 
 func TestInstallRemoteStreamsBinaryAndReportsUnchanged(t *testing.T) {
@@ -34,7 +37,15 @@ func TestInstallRemoteStreamsBinaryAndReportsUnchanged(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Contains(script, []byte("systemctl --user")) || !strings.Contains(command, "7337") {
+			service, err := installscript.RenderService("linux", installscript.ServiceOptions{
+				DaemonPort:    7337,
+				WebSocketPath: "/mesh",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			encodedService := base64.StdEncoding.EncodeToString([]byte(service))
+			if !bytes.Contains(script, []byte("systemctl --user")) || !strings.Contains(command, "'"+encodedService+"'") {
 				t.Fatalf("installer command = %q", command)
 			}
 			return []byte("MESH_INSTALL_RESULT=unchanged\n"), nil, nil
@@ -56,6 +67,55 @@ func TestInstallRemoteStreamsBinaryAndReportsUnchanged(t *testing.T) {
 		WebSocketPath: "/mesh",
 	})
 	if err != nil || !unchanged {
+		t.Fatalf("installRemote() unchanged = %v, error = %v", unchanged, err)
+	}
+}
+
+func TestInstallRemoteStreamsCanonicalLaunchdService(t *testing.T) {
+	t.Parallel()
+
+	binaryPath := writeTestBinary(t, []byte("darwin binary"))
+	service, err := installscript.RenderService("darwin", installscript.ServiceOptions{
+		DaemonPort:    7337,
+		WebSocketPath: "/mesh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedService := base64.StdEncoding.EncodeToString([]byte(service))
+	call := 0
+	remote := &stubRemote{run: func(command string, stdin io.Reader) ([]byte, []byte, error) {
+		call++
+		switch call {
+		case 1:
+			return []byte("/tmp/mesh-bootstrap.DARWIN\n"), nil, nil
+		case 2:
+			_, err := io.Copy(io.Discard, stdin)
+			return nil, nil, err
+		case 3:
+			script, err := io.ReadAll(stdin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(script, []byte("launchctl bootstrap")) || !strings.Contains(command, "'"+encodedService+"'") {
+				t.Fatalf("installer command = %q", command)
+			}
+			return []byte("MESH_INSTALL_RESULT=configured\n"), nil, nil
+		case 4:
+			return nil, nil, nil
+		default:
+			t.Fatalf("unexpected call %d: %q", call, command)
+			return nil, nil, nil
+		}
+	}}
+	unchanged, err := installRemote(context.Background(), remote, installRequest{
+		Platform:      Platform{OS: Darwin, Arch: ARM64},
+		BinaryPath:    binaryPath,
+		AuthorizedKey: "ssh-ed25519 adopter",
+		DaemonPort:    7337,
+		WebSocketPath: "/mesh",
+	})
+	if err != nil || unchanged {
 		t.Fatalf("installRemote() unchanged = %v, error = %v", unchanged, err)
 	}
 }

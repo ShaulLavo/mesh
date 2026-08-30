@@ -4,7 +4,8 @@ Updated 2026-08-30.
 
 ## Done
 
-Steps 1 and 2 of the build order, plus the daemon.
+The session and transport core, product CLI, SSH bootstrap, packaging, and
+origin serving core are complete.
 
 - `internal/protocol` — framing + control messages, shared by every transport
 - `internal/session` — byte-offset replay ring, session IDs
@@ -22,10 +23,13 @@ Steps 1 and 2 of the build order, plus the daemon.
   logs, kill, signals, and the T09 picker boundary (T07)
 - `internal/tui` — Bubble Tea host/session picker with live/stale state, wake,
   new, resume, attach, and terminal-safe raw-mode handoff (T09)
+- `.github`, `.goreleaser.yaml`, `scripts/install` — reproducible release
+  archives, checksum-gated installers, systemd/launchd services, Homebrew Cask,
+  immutable CI actions, and retained packaging checks (T10)
 - `internal/serve` — durable static, files, and loopback-proxy services; hardened
   shared root resolution; live service controls and restart restoration (T11)
 
-Verified 2026-08-30: `gofmt`, `go vet ./...`, `go test -race ./...`, and all thirteen
+Verified 2026-08-30: `gofmt`, `go vet ./...`, `go test -race ./...`, and all fourteen
 scripts in `integration/` passing.
 
 Origins can now serve on their tailnet HTTP listener, but no DNS or certificate
@@ -36,7 +40,7 @@ entirely unwritten.
 
 T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websocket
 transport · T06 host identity · T07 CLI surface · T08 ssh bootstrap · T09 picker
-TUI · T11 serving core.
+TUI · T10 packaging · T11 serving core.
 
 ## Next
 
@@ -51,12 +55,11 @@ T11 serving core ──┬─→ T12 private names ──→ T13 public edge ─
                    └──────────→ T16                     └────────→ T18
 ```
 
-T10, T12 and T15 are unblocked. Everything else waits on one of them.
+T12 and T15 are unblocked. Everything else waits on one of them.
 
 | Task | Owns | Blocked by |
 |---|---|---|
 | T15 ssh front door | `internal/sshd/` | T06 |
-| T10 packaging | `.github/`, `.goreleaser.yaml` | — |
 | T12 private names | `internal/dnsname/` | — |
 | T13 public edge | `internal/edge/` | T11, T12 |
 | T14 `m serve` | `internal/cli/` | T11, T12, T13, T07 |

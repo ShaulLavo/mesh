@@ -27,6 +27,13 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 	if !ok {
 		return false, diagnostic(DiagnosticWrongArch, fmt.Errorf("no installer for %s", request.Platform.OS))
 	}
+	service, err := installscript.RenderService(request.Platform.OS.String(), installscript.ServiceOptions{
+		DaemonPort:    request.DaemonPort,
+		WebSocketPath: request.WebSocketPath,
+	})
+	if err != nil {
+		return false, diagnostic(DiagnosticServiceInstall, fmt.Errorf("render remote Mesh service: %w", err))
+	}
 	stdout, stderr, err := remote.Run(ctx, `umask 077; mktemp "${TMPDIR:-/tmp}/mesh-bootstrap.XXXXXX"`, nil)
 	if err != nil {
 		return false, diagnostic(DiagnosticServiceInstall, remoteCommandError("create remote upload file", err, stdout, stderr))
@@ -51,12 +58,14 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 	}
 
 	authorizedKey := base64.StdEncoding.EncodeToString([]byte(request.AuthorizedKey))
+	serviceAsset := base64.StdEncoding.EncodeToString([]byte(service))
 	command := strings.Join([]string{
 		"/bin/sh -s --",
 		shellQuote(remoteBinary),
 		shellQuote(strconv.Itoa(int(request.DaemonPort))),
 		shellQuote(request.WebSocketPath),
 		shellQuote(authorizedKey),
+		shellQuote(serviceAsset),
 	}, " ")
 	stdout, stderr, err = remote.Run(ctx, command, strings.NewReader(script))
 	combined := string(stdout) + "\n" + string(stderr)

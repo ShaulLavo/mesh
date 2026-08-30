@@ -1,0 +1,91 @@
+version: 2
+
+project_name: mesh
+
+builds:
+  - id: mesh-linux
+    main: ./cmd/mesh
+    binary: mesh
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w -buildid=
+        -X github.com/shaul/mesh/internal/bootstrap.releaseVersion={{ .Tag }}
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: mesh-darwin
+    main: ./cmd/mesh
+    binary: mesh
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w -buildid=
+        -X github.com/shaul/mesh/internal/bootstrap.releaseVersion={{ .Tag }}
+    goos:
+      - darwin
+    goarch:
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: mesh-linux
+    ids:
+      - mesh-linux
+    formats:
+      - tar.gz
+    name_template: "mesh_{{ .Os }}_{{ .Arch }}"
+    files:
+      - none*
+
+  - id: mesh-darwin
+    ids:
+      - mesh-darwin
+    formats:
+      - tar.gz
+    name_template: "mesh_{{ .Os }}_{{ .Arch }}"
+    files:
+      - none*
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+homebrew_casks:
+  - name: mesh
+    ids:
+      - mesh-darwin
+    repository:
+      owner: shaul
+      name: mesh
+      branch: master
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/shaul/mesh
+    description: Direct, resumable terminal sessions over Tailscale
+    url:
+      template: "https://github.com/shaul/mesh/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+      verified: github.com/shaul/mesh/
+    binaries:
+      - mesh
+
+release:
+  github:
+    owner: shaul
+    name: mesh

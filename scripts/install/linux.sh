@@ -6,14 +6,15 @@ fail() {
 	exit 1
 }
 
-if [ "$#" -ne 4 ]; then
-	fail service_install "linux installer requires binary, port, WebSocket path, and authorized key"
+if [ "$#" -ne 5 ]; then
+	fail service_install "linux installer requires binary, port, WebSocket path, authorized key, and service asset"
 fi
 
 source_binary=$1
 daemon_port=$2
 websocket_path=$3
 authorized_key_b64=$4
+service_b64=$5
 
 trap 'rm -f -- "$source_binary"' EXIT HUP INT TERM
 
@@ -33,15 +34,29 @@ unit_dir=$HOME/.config/systemd/user
 binary_path=$binary_dir/mesh
 unit_path=$unit_dir/mesh.service
 authorized_keys=$state_dir/authorized_keys
+activation_pending=$state_dir/activation.pending
 
 umask 077
 mkdir -p "$state_dir" "$binary_dir" "$unit_dir"
 chmod 0700 "$state_dir" "$binary_dir" "$unit_dir"
 
-changed=0
+if [ -f "$activation_pending" ]; then
+	activation_required=1
+	changed=1
+else
+	activation_required=0
+	changed=0
+fi
+mark_activation_pending() {
+	if [ "$activation_required" -eq 0 ]; then
+		: >"$activation_pending" || fail service_install "cannot mark the service activation pending"
+		activation_required=1
+	fi
+}
 if [ ! -f "$binary_path" ] || ! cmp -s "$source_binary" "$binary_path"; then
 	binary_tmp=$binary_dir/.mesh.$$
 	install -m 0755 "$source_binary" "$binary_tmp" || fail service_install "cannot install $binary_path"
+	mark_activation_pending
 	mv -f "$binary_tmp" "$binary_path" || fail service_install "cannot publish $binary_path"
 	changed=1
 fi
@@ -59,6 +74,7 @@ if ! grep -Fqx -- "$authorized_key" "$auth_tmp"; then
 fi
 chmod 0600 "$auth_tmp"
 if [ ! -f "$authorized_keys" ] || ! cmp -s "$auth_tmp" "$authorized_keys"; then
+	mark_activation_pending
 	mv -f "$auth_tmp" "$authorized_keys"
 	changed=1
 else
@@ -66,30 +82,19 @@ else
 fi
 
 unit_tmp=$unit_dir/.mesh.service.$$
-cat >"$unit_tmp" <<EOF
-[Unit]
-Description=Mesh daemon
-After=network-online.target tailscaled.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=%h/.local/bin/mesh daemon --tailnet-port=$daemon_port --websocket-path=$websocket_path
-Restart=on-failure
-RestartSec=2
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-
-[Install]
-WantedBy=default.target
-EOF
+printf '%s' "$service_b64" | base64 -d >"$unit_tmp" 2>/dev/null ||
+	fail service_install "cannot decode the systemd service asset"
+grep -Fqx "ExecStart=%h/.local/bin/mesh daemon --tailnet-port=$daemon_port --websocket-path=$websocket_path" "$unit_tmp" ||
+	fail service_install "systemd service does not match the requested daemon endpoint"
+grep -Fqx 'KillMode=process' "$unit_tmp" ||
+	fail service_install "systemd service would stop detached session workers"
 chmod 0644 "$unit_tmp"
 if [ ! -f "$unit_path" ] || ! cmp -s "$unit_tmp" "$unit_path"; then
+	mark_activation_pending
 	mv -f "$unit_tmp" "$unit_path"
 	changed=1
-	unit_changed=1
 else
 	rm -f "$unit_tmp"
-	unit_changed=0
 fi
 
 if [ -d "/run/user/$remote_uid" ]; then
@@ -97,7 +102,7 @@ if [ -d "/run/user/$remote_uid" ]; then
 	export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}
 fi
 
-if [ "$unit_changed" -eq 1 ]; then
+if [ "$activation_required" -eq 1 ]; then
 	systemctl --user daemon-reload >/dev/null 2>&1 || fail service_install "systemctl --user daemon-reload failed"
 fi
 if systemctl --user is-enabled --quiet mesh.service >/dev/null 2>&1; then
@@ -114,12 +119,13 @@ systemctl --user enable mesh.service >/dev/null 2>&1 || fail service_install "sy
 if [ "$was_enabled" -eq 0 ] || [ "$was_active" -eq 0 ]; then
 	changed=1
 fi
-if [ "$changed" -eq 1 ]; then
+if [ "$activation_required" -eq 1 ]; then
 	systemctl --user restart mesh.service >/dev/null 2>&1 || fail service_install "systemctl --user restart mesh.service failed"
 else
 	systemctl --user start mesh.service >/dev/null 2>&1 || fail service_install "systemctl --user start mesh.service failed"
 fi
 systemctl --user is-active --quiet mesh.service || fail service_install "mesh.service is not active"
+rm -f "$activation_pending" || fail service_install "cannot clear the service activation marker"
 
 if [ "$changed" -eq 1 ]; then
 	printf 'MESH_INSTALL_RESULT=configured\n'

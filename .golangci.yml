@@ -1,0 +1,23 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    staticcheck:
+      checks:
+        - all
+        - -QF1001
+        - -QF1003
+        - -SA1012
+        - -SA1019
+        - -SA2001
+        - -ST1005
+
+formatters:
+  enable:
+    - gofmt

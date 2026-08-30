@@ -1,0 +1,15 @@
+[Unit]
+Description=Mesh daemon
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@MESH_BINARY@ daemon --tailnet-port=@MESH_PORT@ --websocket-path=@MESH_WEBSOCKET_PATH@
+Restart=on-failure
+RestartSec=2
+KillMode=process
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

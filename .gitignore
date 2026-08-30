@@ -1,5 +1,6 @@
 /mesh
 /dist/
+/docs/demos/*.gif
 *.db
 *.db-wal
 *.db-shm
