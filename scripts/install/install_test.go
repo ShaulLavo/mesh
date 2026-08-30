@@ -19,6 +19,7 @@ func TestRenderServicePreservesDetachedWorkers(t *testing.T) {
 		t.Run(tt.goos, func(t *testing.T) {
 			service, err := RenderService(tt.goos, ServiceOptions{
 				DaemonPort:    7337,
+				SSHPort:       2222,
 				WebSocketPath: "/mesh",
 			})
 			if err != nil {
@@ -39,6 +40,7 @@ func TestRenderServiceRejectsInjectedLine(t *testing.T) {
 
 	_, err := RenderService("linux", ServiceOptions{
 		DaemonPort:    7337,
+		SSHPort:       2222,
 		WebSocketPath: "/mesh\nExecStart=/bin/false",
 	})
 	if err == nil {
@@ -49,7 +51,7 @@ func TestRenderServiceRejectsInjectedLine(t *testing.T) {
 func TestLaunchdNativePathsDoNotContainShellVariables(t *testing.T) {
 	t.Parallel()
 
-	service, err := RenderService("darwin", ServiceOptions{DaemonPort: 7337, WebSocketPath: "/mesh"})
+	service, err := RenderService("darwin", ServiceOptions{DaemonPort: 7337, SSHPort: 2222, WebSocketPath: "/mesh"})
 	if err != nil {
 		t.Fatal(err)
 	}

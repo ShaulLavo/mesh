@@ -9,6 +9,7 @@
 mesh_identity="${MESH_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/mesh}/identity.key"
 mesh serve claim vps blog.shaulavo.dev
 ssh -N -o ExitOnForwardFailure=yes -o IdentitiesOnly=yes -i "$mesh_identity" \
+  -p 2222 \
   -R blog.shaulavo.dev:80:localhost:3000 vps.mesh.shaulavo.dev
 ```
 
@@ -67,7 +68,8 @@ T18 adds `mesh serve claim EDGE FULLNAME [--yes]`. `FULLNAME` must be one
 complete, one-label `*.shaulavo.dev` hostname. The command prints that hostname
 and uses the same public confirmation as T14. It loads the local Mesh identity
 from the state directory. The exact stock SSH command uses that same private key
-with `-i` and `IdentitiesOnly`; a default SSH key is not the same principal.
+with `-p 2222`, `-i`, and `IdentitiesOnly`; a default SSH key is not the same
+principal.
 
 Create and release use one canonical `mesh/tunnel-claim/v1` transcript. Hash an
 eight-byte big-endian length and the bytes of the domain, action (`create` or

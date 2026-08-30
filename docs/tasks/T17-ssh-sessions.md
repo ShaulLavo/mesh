@@ -10,6 +10,8 @@ ssh pc.mesh.shaulavo.dev -t 7K3D      # straight into one session
 ssh pc.mesh.shaulavo.dev ls           # one-shot, scriptable, no PTY
 ```
 
+These commands assume the D24 client configuration sets `Port 2222`.
+
 A phone with the Tailscale app and Termius becomes a complete Mesh client (D21).
 The examples assume the client selected an explicitly authorized key. T15
 documents the stock OpenSSH form; other clients import the same credential.
@@ -53,7 +55,8 @@ goroutine is still running.
   with an integration script, not a unit test.
 - Steal works across doors: attach locally, attach again over SSH, the local one
   is told `stolen`.
-- `ssh host ls` returns the session list and exit code 0 with no PTY allocated.
+- `ssh -p 2222 host ls` returns the session list and exit code 0 with no PTY
+  allocated.
 - No goroutine leak across 100 connect/disconnect cycles.
 
 ## Out of scope

@@ -1,30 +1,35 @@
 # mesh
 
-Direct, resumable terminal sessions across your Tailscale-connected machines.
+Mesh keeps terminal sessions running on their host while clients disconnect
+and reattach. It connects your machines over Tailscale.
 
-Sessions belong to the host, not to your connection. Close the laptop, lose wifi,
-kill the client — the command keeps running, and you reattach to it.
-
-## Status
-
-Step 1 of 7 is done: **persistent local sessions**. Remote access over Tailscale
-is next. See `docs/plan/02-status.md`.
+## Run it
 
 ```bash
 go build -o mesh ./cmd/mesh
 
-./mesh local            # start a session
-                        # ctrl+] detaches; so does killing the terminal
-./mesh ls               # what is running here
-./mesh local -r         # reattach to the latest
-./mesh kill 7K3D
-./mesh sig 7K3D quit    # signals, out of band
+./mesh local          # start a session
+./mesh ls             # list local sessions
+./mesh local -r       # reattach to the latest session
+./mesh add user@host  # install Mesh on another machine
 ```
 
-## Docs
+Press `ctrl+]` to detach without stopping the command.
 
-- `docs/plan/00-overview.md` — what Mesh is and the seven-step build order
-- `docs/plan/01-decisions.md` — settled design decisions and what each one costs
-- `docs/plan/02-status.md` — what is built, what is next, what can run in parallel
-- `docs/tasks/` — self-contained briefs, one per unit of work
-- `CLAUDE.md` — invariants, conventions, how to test
+## Remote access
+
+Installed hosts expose public-key-only SSH on Tailnet port 2222. The current
+front door confirms authentication and exits:
+
+```bash
+ssh -p 2222 -o IdentitiesOnly=yes \
+  -i ~/.local/state/mesh/identity.key host.mesh.shaulavo.dev hello
+```
+
+SFTP, remote SSH sessions, and named reverse tunnels are the next tasks.
+
+## Development
+
+Run `./scripts/verify.sh` for the integration suite. See the
+[implementation status](docs/plan/02-status.md) and [task briefs](docs/tasks/)
+for the design and build order.

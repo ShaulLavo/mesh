@@ -85,7 +85,7 @@ grep -Fq 'installed at' <<<"$first"
 cmp -s "$MESH" "$install_bin/mesh"
 test "$(stat -c '%a' "$install_bin")" = 755
 unit=$install_home/.config/systemd/user/mesh.service
-grep -Fqx "ExecStart=$install_bin/mesh daemon --tailnet-port=7337 --websocket-path=/mesh" "$unit"
+grep -Fqx "ExecStart=$install_bin/mesh daemon --tailnet-port=7337 --ssh-port=2222 --websocket-path=/mesh" "$unit"
 grep -Fqx 'KillMode=process' "$unit"
 
 : >"$systemctl_log"

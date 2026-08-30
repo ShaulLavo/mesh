@@ -22,6 +22,7 @@ var (
 // ServiceOptions provides the configurable values in a service asset.
 type ServiceOptions struct {
 	DaemonPort    uint16
+	SSHPort       uint16
 	WebSocketPath string
 }
 
@@ -57,6 +58,9 @@ func RenderService(goos string, opts ServiceOptions) (string, error) {
 	if opts.DaemonPort == 0 {
 		return "", fmt.Errorf("service port must be positive")
 	}
+	if opts.SSHPort == 0 {
+		return "", fmt.Errorf("service SSH port must be positive")
+	}
 	if opts.WebSocketPath == "" || opts.WebSocketPath[0] != '/' {
 		return "", fmt.Errorf("service WebSocket path must be absolute")
 	}
@@ -76,6 +80,7 @@ func RenderService(goos string, opts ServiceOptions) (string, error) {
 	asset = strings.NewReplacer(
 		"@MESH_BINARY@", binaryPath,
 		"@MESH_PORT@", strconv.Itoa(int(opts.DaemonPort)),
+		"@MESH_SSH_PORT@", strconv.Itoa(int(opts.SSHPort)),
 		"@MESH_WEBSOCKET_PATH@", opts.WebSocketPath,
 		"@MESH_STDOUT@", standardOut,
 		"@MESH_STDERR@", standardErr,

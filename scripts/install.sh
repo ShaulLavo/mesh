@@ -107,12 +107,14 @@ render_service() {
 		sed \
 			-e "s|@MESH_BINARY@|$binary_path|g" \
 			-e 's|@MESH_PORT@|7337|g' \
+			-e 's|@MESH_SSH_PORT@|2222|g' \
 			-e 's|@MESH_WEBSOCKET_PATH@|/mesh|g' \
 			"$asset" >"$destination"
 	else
 		sed \
 			-e "s|@MESH_BINARY@|$binary_path|g" \
 			-e 's|@MESH_PORT@|7337|g' \
+			-e 's|@MESH_SSH_PORT@|2222|g' \
 			-e 's|@MESH_WEBSOCKET_PATH@|/mesh|g' \
 			-e 's|@MESH_STDOUT@|${HOME}/.local/state/mesh/daemon.log|g' \
 			-e 's|@MESH_STDERR@|${HOME}/.local/state/mesh/daemon.err.log|g' \

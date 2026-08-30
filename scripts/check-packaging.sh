@@ -52,8 +52,8 @@ check_source_contract() {
   does_not_contain scripts/install/assets/dev.shaulavo.mesh.plist '<key>StandardErrorPath</key>'
   contains scripts/install/install.go '//go:embed assets/mesh.service'
   contains scripts/install/install.go '//go:embed assets/dev.shaulavo.mesh.plist'
-  contains scripts/install/linux.sh 'service_b64=$5'
-  contains scripts/install/darwin.sh 'service_b64=$5'
+  contains scripts/install/linux.sh 'service_b64=$6'
+  contains scripts/install/darwin.sh 'service_b64=$6'
   does_not_contain scripts/install/linux.sh '[Unit]'
   does_not_contain scripts/install/darwin.sh '<!DOCTYPE plist'
 

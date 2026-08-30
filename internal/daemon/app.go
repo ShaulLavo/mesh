@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/identity"
 	meshserve "github.com/shaul/mesh/internal/serve"
+	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/worker"
@@ -31,11 +34,12 @@ const (
 	sessionsDirectoryName             = "s"
 )
 
-// Config identifies the state and optional Tailnet listener owned by a daemon.
-// A zero TailnetPort serves local Unix-socket clients only.
+// Config identifies the state and optional listeners owned by a daemon. Zero
+// TailnetPort and SSHPort values disable their corresponding listeners.
 type Config struct {
 	StateDir             string
 	TailnetPort          uint16
+	SSHPort              uint16
 	WebSocketPath        string
 	HTTPSPort            uint16
 	CertificateRenewerID string
@@ -58,6 +62,7 @@ type runOptions struct {
 	runCommand              externalCommand
 	verifyServeForward      serveForwardVerifier
 	tailscaleTimeout        time.Duration
+	serveSSH                func(context.Context, sshd.Config) error
 }
 
 func defaultRunOptions() runOptions {
@@ -73,6 +78,7 @@ func defaultRunOptions() runOptions {
 		runCommand:              runExternalCommand,
 		verifyServeForward:      tailnet.VerifyServeForward,
 		tailscaleTimeout:        defaultTailscaleServeTimeout,
+		serveSSH:                func(ctx context.Context, cfg sshd.Config) error { return sshd.Serve(ctx, cfg) },
 	}
 }
 
@@ -105,6 +111,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	if cfg.HTTPSPort != 0 && (opts.verifyServeForward == nil || opts.tailscaleTimeout <= 0) {
 		return errors.New("daemon: incomplete private HTTPS forwarding dependencies")
+	}
+	if cfg.SSHPort != 0 && opts.serveSSH == nil {
+		return errors.New("daemon: incomplete SSH runtime dependencies")
 	}
 	if cfg.TailscaleServe {
 		if cfg.HTTPSPort == 0 {
@@ -206,7 +215,14 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	var tailnetAddrs []string
 	var tailscaleName *string
-	if cfg.TailnetPort != 0 {
+	if cfg.TailnetPort != 0 || cfg.SSHPort != 0 {
+		disabledListeners := "Tailnet control listener"
+		if cfg.SSHPort != 0 {
+			disabledListeners = "SSH listener"
+			if cfg.TailnetPort != 0 {
+				disabledListeners = "Tailnet control and SSH listeners"
+			}
+		}
 		discoveryCtx := daemonCtx
 		cancelDiscovery := func() {}
 		if requiresStableTailnetControl {
@@ -221,7 +237,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			if requiresStableTailnetControl {
 				return fmt.Errorf("daemon: discover Tailscale addresses required by configured public networking: %w", discoverErr)
 			}
-			reporter.report(fmt.Errorf("daemon: Tailnet listener disabled: %w", discoverErr))
+			reporter.report(fmt.Errorf("daemon: %s disabled: %w", disabledListeners, discoverErr))
 		} else {
 			tailnetAddrs, err = normalizeTailnetAddresses(peer.Addrs)
 			if err != nil {
@@ -235,7 +251,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 				if requiresStableTailnetControl {
 					return errors.New("daemon: configured public networking requires at least one discovered Tailscale address")
 				}
-				reporter.report(errors.New("daemon: Tailnet listener disabled: this host has no Tailscale addresses"))
+				reporter.report(fmt.Errorf("daemon: %s disabled: this host has no Tailscale addresses", disabledListeners))
 			}
 			if cfg.TailscaleServe {
 				if err := opts.validateServeAddresses(tailnetAddrs); err != nil {
@@ -246,6 +262,13 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 					return err
 				}
 			}
+		}
+	}
+	sshAddrs := tailnetAddrs
+	if cfg.SSHPort != 0 && len(sshAddrs) > 0 {
+		if err := validateTailscaleControlAddresses(sshAddrs); err != nil {
+			reporter.report(fmt.Errorf("daemon: SSH listener disabled: %w", err))
+			sshAddrs = nil
 		}
 	}
 
@@ -378,9 +401,13 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return err
 	}
 
+	controlAddrs := tailnetAddrs
+	if cfg.TailnetPort == 0 {
+		controlAddrs = nil
+	}
 	listener, err := validateListenerConfig(daemonCtx, ListenerConfig{
 		StateDir:                   stateDir,
-		TailnetAddrs:               tailnetAddrs,
+		TailnetAddrs:               controlAddrs,
 		TailnetPort:                cfg.TailnetPort,
 		WebSocketPath:              cfg.WebSocketPath,
 		HTTPHandler:                serviceRegistry,
@@ -394,6 +421,16 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}, server.Handle)
 	if err != nil {
 		return err
+	}
+	if cfg.SSHPort != 0 {
+		for _, address := range sshAddrs {
+			listener.sshConfigs = append(listener.sshConfigs, sshd.Config{
+				HostKey:        meshPrivateKey,
+				AuthorizedKeys: filepath.Join(stateDir, "authorized_keys"),
+				Addr:           net.JoinHostPort(address, strconv.Itoa(int(cfg.SSHPort))),
+			})
+		}
+		listener.serveSSH = opts.serveSSH
 	}
 	listenersReady := make(chan struct{})
 	listener.ready = func(readyCtx context.Context) error {

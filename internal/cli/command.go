@@ -909,6 +909,7 @@ func (a *application) runSessionControl(cmd *cobra.Command, id, controlType, sig
 func (a *application) daemonCommand() *cobra.Command {
 	var (
 		port               uint
+		sshPort            uint
 		path               string
 		httpsPort          uint
 		certificateRenewer string
@@ -925,6 +926,9 @@ func (a *application) daemonCommand() *cobra.Command {
 			if port > 65535 {
 				return fmt.Errorf("tailnet port %d is out of range", port)
 			}
+			if sshPort > 65535 {
+				return fmt.Errorf("SSH port %d is out of range", sshPort)
+			}
 			if httpsPort > 65535 {
 				return fmt.Errorf("HTTPS port %d is out of range", httpsPort)
 			}
@@ -933,7 +937,7 @@ func (a *application) daemonCommand() *cobra.Command {
 				return err
 			}
 			return meshdaemon.Run(cmd.Context(), meshdaemon.Config{
-				StateDir: stateDir, TailnetPort: uint16(port), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
+				StateDir: stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
 				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget,
 				TailscaleServe: tailscaleServe,
@@ -942,6 +946,7 @@ func (a *application) daemonCommand() *cobra.Command {
 		},
 	}
 	command.Flags().UintVar(&port, "tailnet-port", 0, "Tailnet WebSocket port; zero disables remote listening")
+	command.Flags().UintVar(&sshPort, "ssh-port", 0, "Tailnet SSH port; zero disables SSH")
 	command.Flags().StringVar(&path, "websocket-path", "/mesh", "Tailnet WebSocket path")
 	command.Flags().UintVar(&httpsPort, "https-port", 0, "loopback HTTPS service port; zero disables HTTPS")
 	command.Flags().StringVar(&certificateRenewer, "certificate-renewer-id", "", "pinned Mesh identity allowed to install certificates")

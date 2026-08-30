@@ -80,11 +80,13 @@ authorized_key_b64=$(printf '%s' "$authorized_key" | base64 | tr -d '\n')
 linux_service_b64=$(sed \
   -e 's|@MESH_BINARY@|%h/.local/bin/mesh|g' \
   -e 's|@MESH_PORT@|7337|g' \
+  -e 's|@MESH_SSH_PORT@|2222|g' \
   -e 's|@MESH_WEBSOCKET_PATH@|/mesh|g' \
   scripts/install/assets/mesh.service | base64 | tr -d '\n')
 darwin_service_b64=$(sed \
   -e 's|@MESH_BINARY@|${HOME}/.local/bin/mesh|g' \
   -e 's|@MESH_PORT@|7337|g' \
+  -e 's|@MESH_SSH_PORT@|2222|g' \
   -e 's|@MESH_WEBSOCKET_PATH@|/mesh|g' \
   -e 's|@MESH_STDOUT@|${HOME}/.local/state/mesh/daemon.log|g' \
   -e 's|@MESH_STDERR@|${HOME}/.local/state/mesh/daemon.err.log|g' \
@@ -95,16 +97,16 @@ mkdir -p "$linux_home"
 linux_source=$run_root/mesh-linux-first
 cp "$MESH" "$linux_source"
 linux_first=$(env HOME="$linux_home" PATH="$fake_bin:$PATH" \
-  sh scripts/install/linux.sh "$linux_source" 7337 /mesh "$authorized_key_b64" "$linux_service_b64")
+  sh scripts/install/linux.sh "$linux_source" 7337 2222 /mesh "$authorized_key_b64" "$linux_service_b64")
 grep -Fxq 'MESH_INSTALL_RESULT=configured' <<<"$linux_first"
 
 linux_source=$run_root/mesh-linux-second
 cp "$MESH" "$linux_source"
 linux_second=$(env HOME="$linux_home" PATH="$fake_bin:$PATH" \
-  sh scripts/install/linux.sh "$linux_source" 7337 /mesh "$authorized_key_b64" "$linux_service_b64")
+  sh scripts/install/linux.sh "$linux_source" 7337 2222 /mesh "$authorized_key_b64" "$linux_service_b64")
 grep -Fxq 'MESH_INSTALL_RESULT=unchanged' <<<"$linux_second"
 cmp -s "$MESH" "$linux_home/.local/bin/mesh"
-grep -Fqx 'ExecStart=%h/.local/bin/mesh daemon --tailnet-port=7337 --websocket-path=/mesh' \
+grep -Fqx 'ExecStart=%h/.local/bin/mesh daemon --tailnet-port=7337 --ssh-port=2222 --websocket-path=/mesh' \
   "$linux_home/.config/systemd/user/mesh.service"
 grep -Fqx 'KillMode=process' "$linux_home/.config/systemd/user/mesh.service"
 test "$(grep -Fxc "$authorized_key" "$linux_home/.local/state/mesh/authorized_keys")" -eq 1
@@ -117,7 +119,7 @@ linux_source=$run_root/mesh-linux-retry-first
 cp "$MESH" "$linux_source"
 if linux_retry_output=$(env HOME="$linux_retry_home" PATH="$fake_bin:$PATH" \
     FAKE_SYSTEMCTL_FAIL_FILE="$linux_fail_file" \
-    sh scripts/install/linux.sh "$linux_source" 7337 /mesh "$authorized_key_b64" "$linux_service_b64" 2>&1); then
+    sh scripts/install/linux.sh "$linux_source" 7337 2222 /mesh "$authorized_key_b64" "$linux_service_b64" 2>&1); then
   echo 'FAIL: Linux installer ignored a failed daemon restart' >&2
   exit 1
 fi
@@ -128,7 +130,7 @@ linux_source=$run_root/mesh-linux-retry-second
 cp "$MESH" "$linux_source"
 linux_retry=$(env HOME="$linux_retry_home" PATH="$fake_bin:$PATH" \
   FAKE_SYSTEMCTL_FAIL_FILE="$linux_fail_file" \
-  sh scripts/install/linux.sh "$linux_source" 7337 /mesh "$authorized_key_b64" "$linux_service_b64")
+  sh scripts/install/linux.sh "$linux_source" 7337 2222 /mesh "$authorized_key_b64" "$linux_service_b64")
 grep -Fxq 'MESH_INSTALL_RESULT=configured' <<<"$linux_retry"
 test ! -e "$linux_retry_home/.local/state/mesh/activation.pending"
 
@@ -136,7 +138,7 @@ linux_source=$run_root/mesh-linux-retry-third
 cp "$MESH" "$linux_source"
 linux_retry=$(env HOME="$linux_retry_home" PATH="$fake_bin:$PATH" \
   FAKE_SYSTEMCTL_FAIL_FILE="$linux_fail_file" \
-  sh scripts/install/linux.sh "$linux_source" 7337 /mesh "$authorized_key_b64" "$linux_service_b64")
+  sh scripts/install/linux.sh "$linux_source" 7337 2222 /mesh "$authorized_key_b64" "$linux_service_b64")
 grep -Fxq 'MESH_INSTALL_RESULT=unchanged' <<<"$linux_retry"
 
 no_systemd_bin=$run_root/no-systemd-bin
@@ -145,7 +147,7 @@ ln -s "$(command -v rm)" "$no_systemd_bin/rm"
 no_systemd_source=$run_root/mesh-no-systemd
 cp "$MESH" "$no_systemd_source"
 if no_systemd_output=$(env HOME="$run_root/no-systemd-home" PATH="$no_systemd_bin" \
-  /bin/sh scripts/install/linux.sh "$no_systemd_source" 7337 /mesh "$authorized_key_b64" "$linux_service_b64" 2>&1); then
+  /bin/sh scripts/install/linux.sh "$no_systemd_source" 7337 2222 /mesh "$authorized_key_b64" "$linux_service_b64" 2>&1); then
   echo "FAIL: Linux installer accepted a host without systemd" >&2
   exit 1
 fi
@@ -162,7 +164,7 @@ chmod 0755 "$no_linger_bin/loginctl"
 no_linger_source=$run_root/mesh-no-linger
 cp "$MESH" "$no_linger_source"
 if no_linger_output=$(env HOME="$run_root/no-linger-home" PATH="$no_linger_bin:$PATH" \
-  sh scripts/install/linux.sh "$no_linger_source" 7337 /mesh "$authorized_key_b64" "$linux_service_b64" 2>&1); then
+  sh scripts/install/linux.sh "$no_linger_source" 7337 2222 /mesh "$authorized_key_b64" "$linux_service_b64" 2>&1); then
   echo "FAIL: Linux installer accepted a user without lingering" >&2
   exit 1
 fi
@@ -174,16 +176,16 @@ launch_state=$run_root/launchd-loaded
 darwin_source=$run_root/mesh-darwin-first
 cp "$MESH" "$darwin_source"
 darwin_first=$(env HOME="$darwin_home" PATH="$fake_bin:$PATH" FAKE_LAUNCH_STATE="$launch_state" \
-  sh scripts/install/darwin.sh "$darwin_source" 7337 /mesh "$authorized_key_b64" "$darwin_service_b64")
+  sh scripts/install/darwin.sh "$darwin_source" 7337 2222 /mesh "$authorized_key_b64" "$darwin_service_b64")
 grep -Fxq 'MESH_INSTALL_RESULT=configured' <<<"$darwin_first"
 
 darwin_source=$run_root/mesh-darwin-second
 cp "$MESH" "$darwin_source"
 darwin_second=$(env HOME="$darwin_home" PATH="$fake_bin:$PATH" FAKE_LAUNCH_STATE="$launch_state" \
-  sh scripts/install/darwin.sh "$darwin_source" 7337 /mesh "$authorized_key_b64" "$darwin_service_b64")
+  sh scripts/install/darwin.sh "$darwin_source" 7337 2222 /mesh "$authorized_key_b64" "$darwin_service_b64")
 grep -Fxq 'MESH_INSTALL_RESULT=unchanged' <<<"$darwin_second"
 cmp -s "$MESH" "$darwin_home/.local/bin/mesh"
-grep -Fq -- '--tailnet-port=7337' \
+grep -Fq -- '--tailnet-port=7337 --ssh-port=2222' \
   "$darwin_home/Library/LaunchAgents/dev.shaulavo.mesh.plist"
 grep -Fq '<key>AbandonProcessGroup</key>' \
   "$darwin_home/Library/LaunchAgents/dev.shaulavo.mesh.plist"
@@ -200,7 +202,7 @@ cp "$MESH" "$darwin_source"
 if darwin_retry_output=$(env HOME="$darwin_retry_home" PATH="$fake_bin:$PATH" \
     FAKE_LAUNCH_STATE="$darwin_retry_state" FAKE_LAUNCH_FAIL_ON=bootout \
     FAKE_LAUNCH_FAIL_FILE="$darwin_fail_file" \
-    sh scripts/install/darwin.sh "$darwin_source" 7337 /mesh "$authorized_key_b64" "$darwin_service_b64" 2>&1); then
+    sh scripts/install/darwin.sh "$darwin_source" 7337 2222 /mesh "$authorized_key_b64" "$darwin_service_b64" 2>&1); then
   echo 'FAIL: macOS installer ignored a failed launchd replacement' >&2
   exit 1
 fi
@@ -212,7 +214,7 @@ cp "$MESH" "$darwin_source"
 darwin_retry=$(env HOME="$darwin_retry_home" PATH="$fake_bin:$PATH" \
   FAKE_LAUNCH_STATE="$darwin_retry_state" FAKE_LAUNCH_FAIL_ON=bootout \
   FAKE_LAUNCH_FAIL_FILE="$darwin_fail_file" \
-  sh scripts/install/darwin.sh "$darwin_source" 7337 /mesh "$authorized_key_b64" "$darwin_service_b64")
+  sh scripts/install/darwin.sh "$darwin_source" 7337 2222 /mesh "$authorized_key_b64" "$darwin_service_b64")
 grep -Fxq 'MESH_INSTALL_RESULT=configured' <<<"$darwin_retry"
 test ! -e "$darwin_retry_home/.local/state/mesh/activation.pending"
 
@@ -223,7 +225,7 @@ darwin_source=$run_root/mesh-darwin-transition-user
 cp "$MESH" "$darwin_source"
 env HOME="$transition_home" PATH="$fake_bin:$PATH" FAKE_LAUNCH_STATE="$transition_state" \
   FAKE_GUI_AVAILABLE=0 \
-  sh scripts/install/darwin.sh "$darwin_source" 7337 /mesh "$authorized_key_b64" "$darwin_service_b64" >/dev/null
+  sh scripts/install/darwin.sh "$darwin_source" 7337 2222 /mesh "$authorized_key_b64" "$darwin_service_b64" >/dev/null
 test -f "$transition_state.user"
 test ! -e "$transition_state.gui"
 
@@ -231,7 +233,7 @@ darwin_source=$run_root/mesh-darwin-transition-gui
 cp "$MESH" "$darwin_source"
 transition_result=$(env HOME="$transition_home" PATH="$fake_bin:$PATH" \
   FAKE_LAUNCH_STATE="$transition_state" FAKE_GUI_AVAILABLE=1 \
-  sh scripts/install/darwin.sh "$darwin_source" 7337 /mesh "$authorized_key_b64" "$darwin_service_b64")
+  sh scripts/install/darwin.sh "$darwin_source" 7337 2222 /mesh "$authorized_key_b64" "$darwin_service_b64")
 grep -Fxq 'MESH_INSTALL_RESULT=configured' <<<"$transition_result"
 test -f "$transition_state.gui"
 test ! -e "$transition_state.user"

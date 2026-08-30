@@ -4,8 +4,9 @@
 
 ## Goal
 
-`sftp pi.mesh.shaulavo.dev` mounts that machine's served roots in Finder,
-Nautilus, or Files on Android. `scp` works against the same roots.
+`sftp -P 2222 pi.mesh.shaulavo.dev` mounts that machine's served roots in
+Finder, Nautilus, or Files on Android. `scp` works against the same roots. An
+SSH configuration that sets D24's port removes the need for `-P 2222`.
 
 ## What is served
 

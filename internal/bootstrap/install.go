@@ -19,6 +19,7 @@ type installRequest struct {
 	BinaryPath    string
 	AuthorizedKey string
 	DaemonPort    uint16
+	SSHPort       uint16
 	WebSocketPath string
 }
 
@@ -29,6 +30,7 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 	}
 	service, err := installscript.RenderService(request.Platform.OS.String(), installscript.ServiceOptions{
 		DaemonPort:    request.DaemonPort,
+		SSHPort:       request.SSHPort,
 		WebSocketPath: request.WebSocketPath,
 	})
 	if err != nil {
@@ -63,6 +65,7 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 		"/bin/sh -s --",
 		shellQuote(remoteBinary),
 		shellQuote(strconv.Itoa(int(request.DaemonPort))),
+		shellQuote(strconv.Itoa(int(request.SSHPort))),
 		shellQuote(request.WebSocketPath),
 		shellQuote(authorizedKey),
 		shellQuote(serviceAsset),

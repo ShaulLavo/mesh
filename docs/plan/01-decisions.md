@@ -262,3 +262,16 @@ listener. A routing or ACL policy that exposes its control port also exposes the
 terminal protocol and Tailnet-only HTTP services to those newly admitted
 clients. Operators must treat Tailscale routing and ACLs as part of Mesh's
 security boundary.
+
+## D24 — Mesh SSH uses port 2222
+
+The operating system's SSH server keeps port 22 for bootstrap and recovery.
+Mesh listens on port 2222 at each discovered Tailnet address. The installers
+pass `--ssh-port=2222` to the user-owned Mesh service.
+
+**Why:** the system SSH server usually owns wildcard port 22, and a user service
+cannot bind a privileged port on a standard Linux host. Replacing the system
+server would remove the recovery path that `mesh add` uses.
+
+**Cost:** a stock client needs `-p 2222`. A matching `~/.ssh/config` entry can set the
+port, identity file, and `IdentitiesOnly` once.

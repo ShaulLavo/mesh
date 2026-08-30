@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -81,6 +82,8 @@ type listenerConfig struct {
 	shutdownTimeout            time.Duration
 	reporter                   *errorReporter
 	ready                      func(context.Context) error
+	sshConfigs                 []sshd.Config
+	serveSSH                   func(context.Context, sshd.Config) error
 }
 
 // Serve runs the daemon's Unix and optional WebSocket listeners until ctx is
@@ -244,6 +247,22 @@ func serveBoundListeners(
 				case fatal <- fmt.Errorf("daemon: serve public edge on %s: %w", publicListener.Addr(), serveErr):
 				default:
 				}
+			}
+		})
+	}
+	for _, sshConfig := range normalized.sshConfigs {
+		sshConfig := sshConfig
+		listenerWG.Go(func() {
+			serveErr := normalized.serveSSH(ctx, sshConfig)
+			if ctx.Err() != nil {
+				return
+			}
+			if serveErr == nil {
+				serveErr = errors.New("SSH server stopped unexpectedly")
+			}
+			select {
+			case fatal <- fmt.Errorf("daemon: serve SSH on %s: %w", sshConfig.Addr, serveErr):
+			default:
 			}
 		})
 	}

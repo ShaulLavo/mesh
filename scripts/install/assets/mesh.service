@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=@MESH_BINARY@ daemon --tailnet-port=@MESH_PORT@ --websocket-path=@MESH_WEBSOCKET_PATH@
+ExecStart=@MESH_BINARY@ daemon --tailnet-port=@MESH_PORT@ --ssh-port=@MESH_SSH_PORT@ --websocket-path=@MESH_WEBSOCKET_PATH@
 Restart=on-failure
 RestartSec=2
 KillMode=process

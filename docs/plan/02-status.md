@@ -5,8 +5,8 @@ Updated 2026-08-30.
 ## Done
 
 The session and transport core, product CLI, SSH bootstrap, packaging, origin
-serving core and service catalog, private DNS/TLS path, and authenticated public
-edge are complete.
+serving core and service catalog, private DNS/TLS path, authenticated public
+edge, and the locked SSH front door are complete.
 
 - `internal/protocol` — framing + control messages, shared by every transport
 - `internal/session` — byte-offset replay ring, session IDs
@@ -44,10 +44,13 @@ edge are complete.
   liveness, authenticated status pages, fuzzed Host parsing, bounded
   proxy/direct-TLS front doors, and origin publication with exact
   acknowledgement (T13)
+- `internal/sshd` — Wish-based key-only SSH on discovered Tailnet addresses,
+  the shared Mesh host key, live `authorized_keys` revocation, and daemon-owned
+  shutdown (T15)
 
 Verified 2026-08-30: clean formatting and module/generation diffs, the unlimited
 seven-linter policy, `go vet ./...`, `go test -race ./...`, all three retained
-parser fuzz targets, all seventeen scripts in `integration/`, and CGO-disabled
+parser fuzz targets, all eighteen scripts in `integration/`, and CGO-disabled
 Linux amd64/arm64 and Darwin arm64 builds passing.
 
 Private origin names and wildcard certificates are operational, including
@@ -55,34 +58,27 @@ staging isolation and hot live rotation. The public edge is operational in both
 loopback proxy and direct-TLS modes, including restart/offline ownership and
 profile-isolated certificates. Real Cloudflare, Let's Encrypt, domain, tailnet,
 and outside-tailnet acceptance remains an operator check because this
-development machine has none of those credentials or peers. Step 9's design is
-written; T15 implementation has not started.
+development machine has none of those credentials or peers. Step 9's shared
+front door is complete. Its session, file, and tunnel handlers remain.
 
 ## Complete tasks
 
 T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websocket
 transport · T06 host identity · T07 CLI surface · T08 ssh bootstrap · T09 picker
 TUI · T10 packaging · T11 serving core · T12 private names · T13 public edge ·
-T14 `mesh serve`.
+T14 `mesh serve` · T15 SSH front door.
 
 ## Next
 
-```
-T15 SSH front door ──┬──→ T16 SFTP and SCP
-                     ├──→ T17 sessions over SSH
-                     └──→ T18 reverse tunnels
-```
-
-T15 is unblocked. T16, T17, and T18 wait on it.
+T16, T17, and T18 are independent and unblocked.
 
 | Task | Owns | Blocked by |
 |---|---|---|
-| T15 SSH front door | `internal/sshd/` | — |
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
 | T17 sessions over SSH | `internal/sshd/session.go` | T09, T15 |
 | T18 reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
 
-T15 is the foundation for T16, T17 and T18. Land it before any of them.
+Pick one of T16, T17, or T18 next.
 
 ## Known defects
 

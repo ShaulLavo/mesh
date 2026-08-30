@@ -66,7 +66,7 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 	if result.ID != hostID || result.Endpoint != "ws://100.64.0.8:7337/mesh" || !result.AlreadyConfigured {
 		t.Fatalf("result = %#v", result)
 	}
-	if gotInstall.BinaryPath != "/tmp/mesh-linux-arm64" || gotInstall.AuthorizedKey != "ssh-ed25519 adopter" || gotInstall.DaemonPort != DefaultPort {
+	if gotInstall.BinaryPath != "/tmp/mesh-linux-arm64" || gotInstall.AuthorizedKey != "ssh-ed25519 adopter" || gotInstall.DaemonPort != DefaultPort || gotInstall.SSHPort != DefaultSSHPort {
 		t.Fatalf("install request = %#v", gotInstall)
 	}
 	wantSteps := []Step{StepConnect, StepDetect, StepTransfer, StepInstall, StepDiscover, StepVerify}

@@ -77,12 +77,15 @@ func TestDaemonExposesPrivateHTTPSOperationalFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"https-port", "certificate-renewer-id", "private-names-config", "tailscale-serve", "tailnet-port", "websocket-path", "edge", "public-edge-target"} {
+	for _, name := range []string{"https-port", "certificate-renewer-id", "private-names-config", "tailscale-serve", "tailnet-port", "ssh-port", "websocket-path", "edge", "public-edge-target"} {
 		if daemonCommand.Flags().Lookup(name) == nil {
 			t.Fatalf("daemon flag --%s is missing", name)
 		}
 	}
 	if _, _, err := executeCommand(t, Dependencies{}, "daemon", "--https-port", "65536"); err == nil || !strings.Contains(err.Error(), "out of range") {
 		t.Fatalf("HTTPS port boundary error = %v", err)
+	}
+	if _, _, err := executeCommand(t, Dependencies{}, "daemon", "--ssh-port", "65536"); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("SSH port boundary error = %v", err)
 	}
 }

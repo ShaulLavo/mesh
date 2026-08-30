@@ -10,6 +10,7 @@ import (
 
 const (
 	DefaultPort          uint16 = 7337
+	DefaultSSHPort       uint16 = 2222
 	DefaultWebSocketPath        = "/mesh"
 )
 
@@ -92,6 +93,7 @@ type Options struct {
 	ExpectedIdentity string
 	SSH              SSHOptions
 	DaemonPort       uint16
+	SSHPort          uint16
 	WebSocketPath    string
 	VerifyTimeout    time.Duration
 	Progress         func(Event)

@@ -39,6 +39,7 @@ func TestInstallRemoteStreamsBinaryAndReportsUnchanged(t *testing.T) {
 			}
 			service, err := installscript.RenderService("linux", installscript.ServiceOptions{
 				DaemonPort:    7337,
+				SSHPort:       2222,
 				WebSocketPath: "/mesh",
 			})
 			if err != nil {
@@ -64,6 +65,7 @@ func TestInstallRemoteStreamsBinaryAndReportsUnchanged(t *testing.T) {
 		BinaryPath:    binaryPath,
 		AuthorizedKey: "ssh-ed25519 adopter",
 		DaemonPort:    7337,
+		SSHPort:       2222,
 		WebSocketPath: "/mesh",
 	})
 	if err != nil || !unchanged {
@@ -77,6 +79,7 @@ func TestInstallRemoteStreamsCanonicalLaunchdService(t *testing.T) {
 	binaryPath := writeTestBinary(t, []byte("darwin binary"))
 	service, err := installscript.RenderService("darwin", installscript.ServiceOptions{
 		DaemonPort:    7337,
+		SSHPort:       2222,
 		WebSocketPath: "/mesh",
 	})
 	if err != nil {
@@ -113,6 +116,7 @@ func TestInstallRemoteStreamsCanonicalLaunchdService(t *testing.T) {
 		BinaryPath:    binaryPath,
 		AuthorizedKey: "ssh-ed25519 adopter",
 		DaemonPort:    7337,
+		SSHPort:       2222,
 		WebSocketPath: "/mesh",
 	})
 	if err != nil || unchanged {
@@ -145,6 +149,7 @@ func TestInstallRemoteMapsInstallerFailures(t *testing.T) {
 				BinaryPath:    binaryPath,
 				AuthorizedKey: "ssh-ed25519 adopter",
 				DaemonPort:    7337,
+				SSHPort:       2222,
 				WebSocketPath: "/mesh",
 			})
 			assertDiagnosticCode(t, err, code)

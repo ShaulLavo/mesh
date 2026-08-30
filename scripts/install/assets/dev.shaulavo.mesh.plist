@@ -8,7 +8,7 @@
 	<array>
 		<string>/bin/sh</string>
 		<string>-c</string>
-		<string>exec &quot;@MESH_BINARY@&quot; daemon --tailnet-port=@MESH_PORT@ --websocket-path=@MESH_WEBSOCKET_PATH@ &gt;&gt;&quot;@MESH_STDOUT@&quot; 2&gt;&gt;&quot;@MESH_STDERR@&quot;</string>
+		<string>exec &quot;@MESH_BINARY@&quot; daemon --tailnet-port=@MESH_PORT@ --ssh-port=@MESH_SSH_PORT@ --websocket-path=@MESH_WEBSOCKET_PATH@ &gt;&gt;&quot;@MESH_STDOUT@&quot; 2&gt;&gt;&quot;@MESH_STDERR@&quot;</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>

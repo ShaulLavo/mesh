@@ -6,15 +6,16 @@ fail() {
 	exit 1
 }
 
-if [ "$#" -ne 5 ]; then
-	fail service_install "linux installer requires binary, port, WebSocket path, authorized key, and service asset"
+if [ "$#" -ne 6 ]; then
+	fail service_install "linux installer requires binary, control port, SSH port, WebSocket path, authorized key, and service asset"
 fi
 
 source_binary=$1
 daemon_port=$2
-websocket_path=$3
-authorized_key_b64=$4
-service_b64=$5
+ssh_port=$3
+websocket_path=$4
+authorized_key_b64=$5
+service_b64=$6
 
 trap 'rm -f -- "$source_binary"' EXIT HUP INT TERM
 
@@ -84,7 +85,7 @@ fi
 unit_tmp=$unit_dir/.mesh.service.$$
 printf '%s' "$service_b64" | base64 -d >"$unit_tmp" 2>/dev/null ||
 	fail service_install "cannot decode the systemd service asset"
-grep -Fqx "ExecStart=%h/.local/bin/mesh daemon --tailnet-port=$daemon_port --websocket-path=$websocket_path" "$unit_tmp" ||
+grep -Fqx "ExecStart=%h/.local/bin/mesh daemon --tailnet-port=$daemon_port --ssh-port=$ssh_port --websocket-path=$websocket_path" "$unit_tmp" ||
 	fail service_install "systemd service does not match the requested daemon endpoint"
 grep -Fqx 'KillMode=process' "$unit_tmp" ||
 	fail service_install "systemd service would stop detached session workers"

@@ -58,6 +58,7 @@ type normalizedOptions struct {
 	expectedIdentity string
 	ssh              SSHOptions
 	daemonPort       uint16
+	sshPort          uint16
 	webSocketPath    string
 	verifyTimeout    time.Duration
 	progress         func(Event)
@@ -112,6 +113,7 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		BinaryPath:    binary.path,
 		AuthorizedKey: authorizedKey,
 		DaemonPort:    normalized.daemonPort,
+		SSHPort:       normalized.sshPort,
 		WebSocketPath: normalized.webSocketPath,
 	})
 	if err != nil {
@@ -175,6 +177,10 @@ func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, err
 	if port == 0 {
 		port = DefaultPort
 	}
+	sshPort := opts.SSHPort
+	if sshPort == 0 {
+		sshPort = DefaultSSHPort
+	}
 	webSocketPath := opts.WebSocketPath
 	if webSocketPath == "" {
 		webSocketPath = DefaultWebSocketPath
@@ -212,6 +218,7 @@ func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, err
 		expectedIdentity: opts.ExpectedIdentity,
 		ssh:              opts.SSH,
 		daemonPort:       port,
+		sshPort:          sshPort,
 		webSocketPath:    webSocketPath,
 		verifyTimeout:    verifyTimeout,
 		progress:         progress,

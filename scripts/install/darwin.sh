@@ -6,15 +6,16 @@ fail() {
 	exit 1
 }
 
-if [ "$#" -ne 5 ]; then
-	fail service_install "macOS installer requires binary, port, WebSocket path, authorized key, and service asset"
+if [ "$#" -ne 6 ]; then
+	fail service_install "macOS installer requires binary, control port, SSH port, WebSocket path, authorized key, and service asset"
 fi
 
 source_binary=$1
 daemon_port=$2
-websocket_path=$3
-authorized_key_b64=$4
-service_b64=$5
+ssh_port=$3
+websocket_path=$4
+authorized_key_b64=$5
+service_b64=$6
 
 trap 'rm -f -- "$source_binary"' EXIT HUP INT TERM
 
@@ -88,7 +89,7 @@ elif printf '%s' "$service_b64" | base64 -D >"$plist_tmp" 2>/dev/null; then
 else
 	fail service_install "cannot decode the launchd service asset"
 fi
-grep -Fq -- "--tailnet-port=$daemon_port --websocket-path=$websocket_path" "$plist_tmp" ||
+grep -Fq -- "--tailnet-port=$daemon_port --ssh-port=$ssh_port --websocket-path=$websocket_path" "$plist_tmp" ||
 	fail service_install "launchd service does not match the requested daemon endpoint"
 grep -Fq '<key>AbandonProcessGroup</key>' "$plist_tmp" ||
 	fail service_install "launchd service would stop detached session workers"

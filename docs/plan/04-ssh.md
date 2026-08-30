@@ -21,6 +21,15 @@ ssh pc.mesh.shaulavo.dev -t 7K3D      # straight into one session
 ssh pc.mesh.shaulavo.dev ls           # one-shot, scriptable, no PTY
 ```
 
+These short commands assume this client configuration:
+
+```sshconfig
+Host *.mesh.shaulavo.dev
+    Port 2222
+    IdentityFile ~/.local/state/mesh/identity.key
+    IdentitiesOnly yes
+```
+
 The session handler is the same picker T09 builds, rendered through Wish's
 Bubble Tea middleware instead of a local terminal. Detach, steal, replay and
 resize behave identically, because underneath it is the same attachment against
@@ -33,9 +42,9 @@ we chose not to need.
 
 ### Files
 
-`sftp pi.mesh.shaulavo.dev` mounts a machine's served roots in Finder, Nautilus,
-Files on Android, and every file manager anyone actually uses, authenticated with
-keys already on the machine.
+`sftp -P 2222 pi.mesh.shaulavo.dev` mounts a machine's served roots in Finder,
+Nautilus, or Files on Android. The client configuration above removes the need
+for `-P 2222`.
 
 The important part is that this is not a second feature. T11 decides which roots
 are served and to whom. SFTP is a second front door onto exactly those roots:
@@ -58,6 +67,7 @@ a port from wherever you are through the VPS edge:
 mesh_identity="${MESH_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/mesh}/identity.key"
 mesh serve claim vps blog.shaulavo.dev
 ssh -N -o ExitOnForwardFailure=yes -o IdentitiesOnly=yes -i "$mesh_identity" \
+  -p 2222 \
   -R blog.shaulavo.dev:80:localhost:3000 vps.mesh.shaulavo.dev
 # a thing running on this machine, reachable from outside, gone on disconnect
 ```
@@ -87,16 +97,18 @@ that adopted a host is the machine that can reach it.
 
 T08 authorizes the adopter's Mesh identity, not whichever key OpenSSH happens to
 choose from `~/.ssh/id_*`. Stock OpenSSH therefore selects the state-directory
-`identity.key` with `-i` and `IdentitiesOnly`, as the tunnel example shows. The
-short session examples assume the equivalent `IdentityFile` entry exists in
-`~/.ssh/config`. A phone or another client must import an explicitly authorized
-key; possessing a Tailscale identity alone is not SSH authorization.
+`identity.key` with `-p 2222 -i STATE_DIR/identity.key -o IdentitiesOnly=yes`.
+The short session examples assume the equivalent `Port`, `IdentityFile`, and
+`IdentitiesOnly` entries exist in `~/.ssh/config`. A phone or another client
+must import an explicitly authorized key. A Tailscale identity alone does not
+grant SSH access.
 
 ## Where it listens
 
-The tailnet interface, and nothing else. Every door above is reachable only from
-the tailnet. The VPS is the sole exception and only for the tunnel endpoint, which
-is what it is for.
+Mesh listens on port 2222 at each address returned by Tailscale discovery. It
+does not bind a wildcard address, loopback, or the system SSH port. Every door
+above is reachable only from the tailnet. The VPS is the sole exception, and
+only for the tunnel endpoint.
 
 Wish ships the middleware this needs and we should use all of it rather than
 reinvent any of it: `accesscontrol`, `activeterm`, `ratelimiter`, `recover`,
@@ -125,13 +137,12 @@ nobody asked for, and anything reachable without an authorized key.
 
 | Task | Owns | Blocked by |
 |---|---|---|
-| T15 SSH front door | `internal/sshd/` | — |
+| T15 SSH front door (complete) | `internal/sshd/` | — |
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
 | T17 Sessions over SSH | `internal/sshd/session.go` | T09, T15 |
 | T18 Reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
 
-T15 is the shared foundation and lands first. The other three are independent of
-each other after it.
+T15 is complete. The other three tasks are independent.
 
 ## What we verified before planning this
 
