@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/x/xpty"
@@ -106,9 +107,13 @@ type Worker struct {
 	input       *inputRelay
 	finished    bool
 	pumpStopped bool
-	writers     sync.WaitGroup
-	attachOnce  sync.Once
-	attached    chan struct{}
+	// reaped is set once Process.Wait has returned. After that the PID is the
+	// kernel's to reuse, so signalling it — or its negation, now that the child
+	// is a real process group leader — can land on an unrelated process.
+	reaped     bool
+	writers    sync.WaitGroup
+	attachOnce sync.Once
+	attached   chan struct{}
 
 	exitOnce sync.Once
 	exited   chan struct{}
@@ -411,6 +416,13 @@ func Run(cfg Config) (int, error) {
 	cmd := exec.Command(cfg.Command[0], cfg.Command[1:]...) //nolint:gosec // running the user's explicit session command is this worker's purpose; no shell is used
 	cmd.Dir = cfg.Cwd
 	cmd.Env = cfg.Env
+	// Give the child its own session with the PTY slave as its controlling
+	// terminal. Without this the line discipline has no foreground process
+	// group to signal, so ctrl+c, ctrl+z and ctrl+\ are inert bytes and an
+	// interactive shell reports that it cannot set the terminal process group.
+	// xpty assigns the slave to the child's stdin, so Ctty 0 names it, and
+	// Setctty requires Setsid because only a session leader may acquire one.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	if err := pty.Start(cmd); err != nil {
 		return 0, fmt.Errorf("worker: start %s: %w", cfg.Command[0], err)
 	}
@@ -463,6 +475,11 @@ func Run(cfg Config) (int, error) {
 	go w.pump()
 
 	state, waitErr := cmd.Process.Wait()
+	// Retire the PID before anything else can act on it. kill's grace timer can
+	// fire after the child is already reaped, and the PID is reusable from here.
+	w.mu.Lock()
+	w.reaped = true
+	w.mu.Unlock()
 	code := 0
 	if state != nil {
 		code = state.ExitCode()

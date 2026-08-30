@@ -235,8 +235,17 @@ func (w *Worker) signal(name string) {
 	if !ok || w.cmd.Process == nil {
 		return
 	}
-	// The PTY gave the child its own session and process group, so negating
-	// the PID targets the whole job, matching what the terminal driver does.
+	// Once the child has been reaped its PID belongs to the kernel again, and
+	// the negated form would target whatever process group later claims it.
+	w.mu.Lock()
+	reaped := w.reaped
+	w.mu.Unlock()
+	if reaped {
+		return
+	}
+	// The child was started with Setsid and Setctty, so it leads its own
+	// process group and negating the PID targets the whole job, matching what
+	// the terminal driver does.
 	if err := syscall.Kill(-w.cmd.Process.Pid, sig); err != nil {
 		_ = w.cmd.Process.Signal(sig)
 	}

@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	charmssh "github.com/charmbracelet/ssh"
@@ -29,7 +30,74 @@ const (
 	authorizedKeysMaximum = 1 << 20
 	helloCommand          = "hello"
 	helloMessage          = "mesh ssh ready\n"
+
+	// maximumConnections caps concurrent SSH connections, the way
+	// maximumPublicConnections caps the public HTTP edge. The daemon shares one
+	// descriptor table across the Unix socket, SQLite, HTTPS and the edge, so an
+	// unbounded SSH listener is a way to starve all of them.
+	maximumConnections = 256
 )
+
+// loginGrace bounds how long an unauthenticated connection may hold a goroutine
+// and a descriptor, the way OpenSSH's LoginGraceTime does. It is cleared the
+// moment a key is accepted, because sessions are long-lived and a server-wide
+// MaxTimeout would cut them off mid-work. A variable so tests need not wait it
+// out in real time.
+var loginGrace = 30 * time.Second
+
+// gracedConnKey addresses the wrapped connection inside the SSH context.
+type gracedConnKey struct{}
+
+// gracedConn carries the pre-authentication deadline set by ConnCallback so the
+// public key handler can lift it once the client proves who it is.
+type gracedConn struct {
+	net.Conn
+	once sync.Once
+}
+
+func (c *gracedConn) authenticated() {
+	c.once.Do(func() { _ = c.SetDeadline(time.Time{}) })
+}
+
+// boundedListener refuses to hold more than maximum live connections. Accepting
+// and immediately closing keeps the listener backlog draining rather than
+// letting the kernel queue grow behind a server that will never catch up.
+type boundedListener struct {
+	net.Listener
+	slots chan struct{}
+}
+
+type boundedConn struct {
+	net.Conn
+	release func()
+}
+
+func newBoundedListener(listener net.Listener, maximum int) *boundedListener {
+	return &boundedListener{Listener: listener, slots: make(chan struct{}, maximum)}
+}
+
+func (l *boundedListener) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err //nolint:wrapcheck // the caller reports listener failures with its own context
+		}
+		select {
+		case l.slots <- struct{}{}:
+			var once sync.Once
+			return &boundedConn{Conn: conn, release: func() {
+				once.Do(func() { <-l.slots })
+			}}, nil
+		default:
+			_ = conn.Close()
+		}
+	}
+}
+
+func (c *boundedConn) Close() error {
+	defer c.release()
+	return c.Conn.Close() //nolint:wrapcheck // the caller only needs to know the close failed
+}
 
 // Config identifies one concrete SSH listener and its authentication state.
 // Addr must include both the discovered Tailnet address and the SSH port.
@@ -73,11 +141,12 @@ func Serve(ctx context.Context, cfg Config, opts ...charmssh.Option) error {
 		return fmt.Errorf("sshd: listen on %s: %w", normalized.addr, err)
 	}
 
+	bounded := newBoundedListener(listener, maximumConnections)
 	stopShutdown := context.AfterFunc(ctx, func() {
 		_ = listener.Close()
 		_ = server.Close()
 	})
-	serveErr := server.Serve(listener)
+	serveErr := server.Serve(bounded)
 	stopShutdown()
 	closeErr := errors.Join(normalCloseError(listener.Close()), normalCloseError(server.Close()))
 	if ctx.Err() != nil {
@@ -137,9 +206,25 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 	server.ServerConfigCallback = nil
 	server.PasswordHandler = nil
 	server.KeyboardInteractiveHandler = nil
-	server.PublicKeyHandler = func(_ charmssh.Context, key charmssh.PublicKey) bool {
-		return isAuthorized(cfg.authorizedKeys, key)
+	server.ConnCallback = func(ctx charmssh.Context, conn net.Conn) net.Conn {
+		_ = conn.SetDeadline(time.Now().Add(loginGrace))
+		graced := &gracedConn{Conn: conn}
+		ctx.SetValue(gracedConnKey{}, graced)
+		return graced
 	}
+	server.PublicKeyHandler = func(ctx charmssh.Context, key charmssh.PublicKey) bool {
+		if !isAuthorized(cfg.authorizedKeys, key) {
+			return false
+		}
+		// Only a proven client gets to hold the connection indefinitely.
+		if graced, ok := ctx.Value(gracedConnKey{}).(*gracedConn); ok {
+			graced.authenticated()
+		}
+		return true
+	}
+	// T17 has no session handler yet, and accepting a pty-req without consuming
+	// window-change requests wedges the channel's request loop permanently.
+	server.PtyCallback = func(charmssh.Context, charmssh.Pty) bool { return false }
 	handler := server.Handler
 	if handler == nil {
 		handler = helloHandler

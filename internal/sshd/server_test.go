@@ -7,9 +7,11 @@ import (
 	"crypto/rand"
 	"errors"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -408,3 +410,179 @@ func TestMarshalHostKeyUsesOpenSSHFormat(t *testing.T) {
 		t.Fatal("exported host key differs from source identity")
 	}
 }
+
+// An unauthenticated connection must not be able to hold a descriptor and a
+// goroutine indefinitely. The session ratelimiter middleware runs only after
+// authentication, so before this the authorized_keys file offered no protection
+// at all against a peer that simply connects and says nothing.
+func TestSilentConnectionsAreDroppedAfterTheLoginGrace(t *testing.T) {
+	previous := loginGrace
+	loginGrace = 100 * time.Millisecond
+	t.Cleanup(func() { loginGrace = previous })
+
+	server, err := newServer(normalizedConfig{
+		hostKey:        generatePrivateKey(t),
+		authorizedKeys: writeAuthorizedKeys(t, generatePrivateKey(t), 0o600),
+		addr:           mustAddrPort(t, "127.0.0.1:2222"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.ConnCallback == nil {
+		t.Fatal("no ConnCallback: an unauthenticated connection has no deadline")
+	}
+
+	client, peer := net.Pipe()
+	defer client.Close() //nolint:errcheck // test cleanup
+	defer peer.Close()   //nolint:errcheck // test cleanup
+
+	wrapped := server.ConnCallback(newTestContext(), peer)
+	graced, ok := wrapped.(*gracedConn)
+	if !ok {
+		t.Fatalf("ConnCallback returned %T, want a deadline-carrying wrapper", wrapped)
+	}
+
+	// The deadline is armed: a read that nobody feeds must time out rather than
+	// block for the life of the process.
+	if _, err := wrapped.Read(make([]byte, 1)); err == nil {
+		t.Fatal("read on an unauthenticated connection did not fail")
+	}
+
+	// Authenticating clears it, because a session may legitimately idle for days.
+	graced.authenticated()
+	if err := peer.SetDeadline(time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Accepting a pty-req while no handler consumes window-change requests wedges
+// that channel's request loop forever and retains its goroutine. T17 will
+// supply the handler; until then the request must be refused.
+func TestPtyRequestsAreRefusedUntilASessionHandlerExists(t *testing.T) {
+	server, err := newServer(normalizedConfig{
+		hostKey:        generatePrivateKey(t),
+		authorizedKeys: writeAuthorizedKeys(t, generatePrivateKey(t), 0o600),
+		addr:           mustAddrPort(t, "127.0.0.1:2222"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.PtyCallback == nil {
+		t.Fatal("no PtyCallback: pty-req is accepted with nothing draining window-change")
+	}
+	if server.PtyCallback(newTestContext(), charmssh.Pty{}) {
+		t.Fatal("PtyCallback accepted a pty-req while no session handler consumes window changes")
+	}
+}
+
+// The listener must refuse to hold unbounded connections; the daemon shares one
+// descriptor table across SQLite, the Unix socket, HTTPS and the public edge.
+func TestBoundedListenerCapsConcurrentConnections(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inner.Close() //nolint:errcheck // test cleanup
+
+	bounded := newBoundedListener(inner, 1)
+	accepted := make(chan net.Conn, 2)
+	go func() {
+		for {
+			conn, err := bounded.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- conn
+		}
+	}()
+
+	first, err := net.Dial("tcp", inner.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close() //nolint:errcheck // test cleanup
+	held := <-accepted
+
+	// The second connection is accepted and closed immediately rather than
+	// queued, so the backlog keeps draining.
+	second, err := net.Dial("tcp", inner.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close() //nolint:errcheck // test cleanup
+	if err := second.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a connection past the cap was held instead of refused")
+	}
+	select {
+	case extra := <-accepted:
+		_ = extra.Close()
+		t.Fatal("Accept surfaced a connection past the cap")
+	default:
+	}
+
+	// Closing the held connection returns its slot.
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	third, err := net.Dial("tcp", inner.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close() //nolint:errcheck // test cleanup
+	select {
+	case conn := <-accepted:
+		_ = conn.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("the slot was not released when the connection closed")
+	}
+}
+
+func mustAddrPort(t *testing.T, value string) netip.AddrPort {
+	t.Helper()
+	addr, err := netip.ParseAddrPort(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+// fakeContext is the smallest charmssh.Context that satisfies the interface.
+// charmssh does not export a constructor, and only SetValue and Value matter
+// to the callbacks under test.
+type fakeContext struct {
+	context.Context
+	sync.Mutex
+	values map[any]any
+}
+
+func newTestContext() *fakeContext {
+	return &fakeContext{Context: context.Background(), values: map[any]any{}}
+}
+
+func (c *fakeContext) SetValue(key, value any) {
+	c.Lock()
+	defer c.Unlock()
+	c.values[key] = value
+}
+
+func (c *fakeContext) Value(key any) any {
+	c.Lock()
+	defer c.Unlock()
+	if value, ok := c.values[key]; ok {
+		return value
+	}
+	return c.Context.Value(key)
+}
+
+func (c *fakeContext) User() string                       { return "" }
+func (c *fakeContext) SessionID() string                  { return "" }
+func (c *fakeContext) ClientVersion() string              { return "" }
+func (c *fakeContext) ServerVersion() string              { return "" }
+func (c *fakeContext) RemoteAddr() net.Addr               { return nil }
+func (c *fakeContext) LocalAddr() net.Addr                { return nil }
+func (c *fakeContext) Permissions() *charmssh.Permissions { return nil }
+
+var _ charmssh.Context = (*fakeContext)(nil)
