@@ -164,7 +164,7 @@ func (w *Worker) serve(conn net.Conn) {
 		}
 		switch f.Kind {
 		case protocol.KindInput:
-			if _, err := w.pty.Write(f.Payload); err != nil {
+			if !w.enqueueInput(c, f.Payload) {
 				return
 			}
 		case protocol.KindControl:

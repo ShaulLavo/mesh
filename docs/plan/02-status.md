@@ -66,14 +66,8 @@ T15 is the foundation for T16, T17 and T18. Land it before any of them.
 
 ## Known defects
 
-Found in review on 2026-08-30. Five of the six are closed; the entry stays so
-nobody rediscovers the tradeoff.
-
-**Open.** A blocked PTY write wedges the serve loop. `internal/worker/serve.go`
-`w.pty.Write` has no deadline, so a child that stops reading stdin plus enough
-pasted input blocks that goroutine until the worker exits and closes the PTY.
-This is the input-side dual of the problem T02 fixed on the output side. Much
-less likely to fire, same shape, still unbounded.
+Found in review on 2026-08-30. All six are closed; the entry stays so nobody
+rediscovers the tradeoff.
 
 **Closed 2026-08-30.**
 
@@ -90,6 +84,9 @@ less likely to fire, same shape, still unbounded.
    and acknowledged now, per D6. Covered by `integration/kill_waits.sh`.
 5. `protocol.Reader.ReadFrame`'s doc claimed the payload was valid only until
    the next call. It allocates fresh every call, and the doc says so now.
+6. A child that stopped reading stdin could block its connection goroutine in a
+   PTY write. Worker input now crosses a bounded queue, so detach and control
+   frames remain responsive.
 
 Cosmetic, nobody has bothered and nobody should make a task of it: `cli/attach.go`
 hand-rolls `indexByte` where `bytes.IndexByte` exists; `cli/sessions.go` builds

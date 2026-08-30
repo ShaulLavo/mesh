@@ -55,6 +55,12 @@ const (
 	// bytes already buffered by the PTY. A descendant that inherited the slave
 	// cannot keep the worker alive beyond this window.
 	ptyDrainTimeout = 250 * time.Millisecond
+
+	// Input is normally tiny, but a paste can fill the kernel's PTY buffer when
+	// the child stops reading. Bound what remains in user space so the session
+	// can still process detach and control frames.
+	inputQueueFrameLimit = 256
+	inputQueueByteLimit  = 8 << 20
 )
 
 func validateTerminalSize(cols, rows int) error {
@@ -97,6 +103,7 @@ type Worker struct {
 	mu          sync.Mutex
 	client      *attachment
 	attachments map[*attachment]struct{}
+	input       *inputRelay
 	finished    bool
 	pumpStopped bool
 	writers     sync.WaitGroup
@@ -129,6 +136,97 @@ type outboundFrame struct {
 	payload    []byte
 	control    protocol.Control
 	closeAfter bool
+}
+
+type inputRelay struct {
+	worker *Worker
+	queue  chan inputFrame
+	done   chan struct{}
+
+	queueMu      sync.Mutex
+	queuedFrames int
+	queuedBytes  int
+	closed       bool
+	stopOnce     sync.Once
+	wg           sync.WaitGroup
+}
+
+type inputFrame struct {
+	owner   *attachment
+	payload []byte
+}
+
+func newInputRelay(worker *Worker) *inputRelay {
+	relay := &inputRelay{
+		worker: worker,
+		queue:  make(chan inputFrame, inputQueueFrameLimit),
+		done:   make(chan struct{}),
+	}
+	relay.wg.Add(1)
+	go relay.writeLoop()
+	return relay
+}
+
+func (r *inputRelay) enqueue(owner *attachment, payload []byte) bool {
+	frame := inputFrame{owner: owner, payload: bytes.Clone(payload)}
+	r.queueMu.Lock()
+	defer r.queueMu.Unlock()
+	if r.closed || r.queuedFrames >= inputQueueFrameLimit || len(frame.payload) > inputQueueByteLimit-r.queuedBytes {
+		return false
+	}
+	select {
+	case r.queue <- frame:
+		r.queuedFrames++
+		r.queuedBytes += len(frame.payload)
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *inputRelay) release(frame inputFrame) {
+	r.queueMu.Lock()
+	r.queuedFrames--
+	r.queuedBytes -= len(frame.payload)
+	r.queueMu.Unlock()
+}
+
+func (r *inputRelay) writeLoop() {
+	defer r.wg.Done()
+	for {
+		select {
+		case frame := <-r.queue:
+			if !r.worker.ownsAttachment(frame.owner) {
+				r.release(frame)
+				continue
+			}
+			_, err := r.worker.pty.Write(frame.payload)
+			r.release(frame)
+			if err != nil {
+				r.worker.mu.Lock()
+				r.worker.dropLocked(frame.owner, "")
+				r.worker.mu.Unlock()
+				r.stop()
+				return
+			}
+		case <-r.done:
+			return
+		}
+	}
+}
+
+func (r *inputRelay) stop() {
+	r.stopOnce.Do(func() {
+		r.queueMu.Lock()
+		r.closed = true
+		close(r.done)
+		r.queueMu.Unlock()
+	})
+}
+
+func (r *inputRelay) close() {
+	r.stop()
+	r.wg.Wait()
 }
 
 func newAttachment(conn net.Conn, sid protocol.SessionID) *attachment {
@@ -384,6 +482,8 @@ func Run(cfg Config) (int, error) {
 	if err := WriteMeta(cfg.Dir, meta); err != nil {
 		log.Printf("worker: record exit: %v", err)
 	}
+	_ = w.pty.Close()
+	w.closeInput()
 	return code, nil
 }
 
@@ -445,6 +545,35 @@ func (w *Worker) resize(cols, rows int) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.resizeLocked(cols, rows)
+}
+
+func (w *Worker) enqueueInput(owner *attachment, payload []byte) bool {
+	w.mu.Lock()
+	if w.finished || w.client != owner {
+		w.mu.Unlock()
+		return false
+	}
+	if w.input == nil {
+		w.input = newInputRelay(w)
+	}
+	relay := w.input
+	w.mu.Unlock()
+	return relay.enqueue(owner, payload)
+}
+
+func (w *Worker) ownsAttachment(owner *attachment) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return !w.finished && w.client == owner
+}
+
+func (w *Worker) closeInput() {
+	w.mu.Lock()
+	relay := w.input
+	w.mu.Unlock()
+	if relay != nil {
+		relay.close()
+	}
 }
 
 // resizeLocked keeps the PTY and rendered screen at the same dimensions.

@@ -489,6 +489,98 @@ func TestRuntimeResizeFailureReportsErrorAndKeepsScreenInSync(t *testing.T) {
 	}
 }
 
+func TestBlockedPTYInputDoesNotBlockDetach(t *testing.T) {
+	sid, err := protocol.NewSessionID("INPUT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pty := newBlockingWritePTY()
+	w := &Worker{
+		cfg:      Config{ID: sid.String()},
+		sid:      sid,
+		pty:      pty,
+		ring:     session.NewRing(ringSize),
+		screen:   discardScreen{},
+		exited:   make(chan struct{}),
+		attached: make(chan struct{}),
+	}
+	t.Cleanup(func() {
+		_ = pty.Close()
+		w.closeInput()
+	})
+
+	client, server := net.Pipe()
+	defer client.Close()
+	go w.serve(server)
+	writer := protocol.NewWriter(client)
+	if err := writer.WriteControlMsg(protocol.Control{
+		Type:      protocol.TypeAttach,
+		SessionID: sid.String(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reader := protocol.NewReader(client)
+	for range 2 {
+		if _, err := reader.ReadFrame(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.WriteInput(sid, []byte("blocked")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-pty.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("PTY write did not start")
+	}
+	if err := client.SetDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteControlMsg(protocol.Control{
+		Type:      protocol.TypeDetach,
+		SessionID: sid.String(),
+	}); err != nil {
+		t.Fatalf("detach write was blocked behind the PTY write: %v", err)
+	}
+	if _, err := reader.ReadFrame(); err == nil {
+		t.Fatal("attachment stayed open after detach")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("detach was blocked behind the PTY write")
+	}
+}
+
+func TestWorkerInputQueueIsBounded(t *testing.T) {
+	pty := newBlockingWritePTY()
+	client, server := net.Pipe()
+	defer client.Close()
+	owner := newAttachment(server, protocol.SessionID{})
+	w := &Worker{pty: pty, client: owner}
+	t.Cleanup(func() {
+		owner.close()
+		_ = pty.Close()
+		w.closeInput()
+	})
+
+	payload := []byte{0}
+	if !w.enqueueInput(owner, payload) {
+		t.Fatal("first input frame was rejected")
+	}
+	select {
+	case <-pty.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("PTY writer did not block")
+	}
+	for i := 1; i < inputQueueFrameLimit; i++ {
+		payload[0] = byte(i)
+		if !w.enqueueInput(owner, payload) {
+			t.Fatalf("input frame %d was rejected before the limit", i)
+		}
+	}
+	if w.enqueueInput(owner, payload) {
+		t.Fatal("input frame was accepted beyond the limit")
+	}
+}
+
 func TestKillRequestAcknowledgesOnlyAfterSessionExit(t *testing.T) {
 	sid, err := protocol.NewSessionID("KILL")
 	if err != nil {
@@ -1097,6 +1189,33 @@ type resizeErrorPTY struct {
 
 func (p *resizeErrorPTY) Resize(int, int) error {
 	return errors.New("resize failed")
+}
+
+type blockingWritePTY struct {
+	*pipePTY
+	writeStarted chan struct{}
+	releaseWrite chan struct{}
+	writeOnce    sync.Once
+	releaseOnce  sync.Once
+}
+
+func newBlockingWritePTY() *blockingWritePTY {
+	return &blockingWritePTY{
+		pipePTY:      newPipePTY(),
+		writeStarted: make(chan struct{}),
+		releaseWrite: make(chan struct{}),
+	}
+}
+
+func (p *blockingWritePTY) Write(b []byte) (int, error) {
+	p.writeOnce.Do(func() { close(p.writeStarted) })
+	<-p.releaseWrite
+	return len(b), nil
+}
+
+func (p *blockingWritePTY) Close() error {
+	p.releaseOnce.Do(func() { close(p.releaseWrite) })
+	return p.pipePTY.Close()
 }
 
 type writeNotifyConn struct {
