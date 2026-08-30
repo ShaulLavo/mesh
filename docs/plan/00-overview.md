@@ -14,7 +14,7 @@ flowchart TD
 
     PC --> PW["Persistent PTY workers"]
     PI --> WOL["Wake desktop"]
-    VPS --> DP["Deployment shell"]
+    VPS --> EX["Expose a local app"]
 
     SSH["SSH"] -. "Install / recovery" .-> PC
 ```
@@ -143,10 +143,15 @@ interfaces so API churn stays contained.
 
 ## Explicitly later
 
-MCP/tools · coding-agent knowledge · job scheduling · deployment orchestration ·
-personal assistant · native mobile app · GUI editor · collaborative writers ·
-sharing meshes with other users · replacing Tailscale · arbitrary proxying
-through the Pi.
+MCP/tools · coding-agent knowledge · job scheduling · personal assistant ·
+native mobile app · GUI editor · collaborative writers · sharing meshes with
+other users · replacing Tailscale · arbitrary proxying through the Pi.
+
+Deployment is not on that list, because it is not a later Mesh feature at all. A
+separate product handles sharing work with other people: dev builds, preview
+links, sending someone what you are working on. Mesh serving publishes something
+that already runs on a machine you own, for you to reach from outside. See D22
+for where the line falls and how to tell which side a request is on.
 
 Serving (step 8) is deliberately scoped proxying through the VPS, not the general
 case.

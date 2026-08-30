@@ -8,9 +8,16 @@
 ssh -R blog:80:localhost:3000 vps.mesh.shaulavo.dev
 ```
 
-A dev server on the laptop in front of you, answering at a public name, gone the
-moment you disconnect. The one capability Tailscale cannot provide, because it
-needs a publicly routable machine and step 8 already put one there.
+Something running on the machine in front of you, reachable from outside the
+tailnet, gone the moment you disconnect. The one capability Tailscale cannot
+provide, because it needs a publicly routable machine and step 8 already put one
+there.
+
+**Read D22 before adding anything to this.** Sharing work with other people is a
+separate product. This exists so you can reach your own machine, and every
+feature that only makes sense because somebody else is looking at the result
+belongs somewhere else: preview URLs per build, share links, expiring access,
+anything that turns a route into an artifact with a lifecycle.
 
 ## The rule this must not break
 

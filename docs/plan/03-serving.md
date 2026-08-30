@@ -4,8 +4,13 @@ Mesh already knows which of your machines are up and how to reach them. Serving
 adds one verb: publish something from a machine, privately on the tailnet or
 publicly on the internet.
 
-Not a deployment system. Not a tunnel product. Three service types, two front
-doors.
+Not a deployment system. Not a tunnel product. Not a way to share work with
+other people, which is a different product entirely (D22). Three service types,
+two front doors.
+
+Publishing here is rarer than it sounds. The common case is a directory or a
+local port you want to reach from your phone on the tailnet. Reaching the public
+internet at all is the exception, which is why D15 makes you name it.
 
 ## Two names, two audiences
 

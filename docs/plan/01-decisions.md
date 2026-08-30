@@ -220,3 +220,27 @@ Packaging ships nothing for it.
 reimplement attach, replay, resize and steal against a protocol that changes.
 Termius over `ssh` gets all of that by definition. If a native app ever happens
 it is a nicety, not the only way in.
+
+## D22 — Serving is exposure, not deployment or sharing
+
+A separate product will handle sharing work with other people: quick dev builds,
+preview links, sending someone the thing you are working on. That is not this,
+and Mesh will not grow toward it.
+
+Mesh serving answers a narrower and rarer question: *something already runs on
+one of my machines and I want to reach it from outside.* An app on the desktop, a
+directory on the Pi, a local port. It publishes what exists. It does not build,
+version, promote, or hand anything to anyone.
+
+**The test.** If a feature makes sense only because someone else is going to look
+at the result, it belongs in the other product. Preview URLs per build, share
+links, expiring access, "send this to a colleague", anything that turns a route
+into an artifact with a lifecycle.
+
+**Why this matters now rather than later:** T18's reverse tunnel is one command
+away from being a sharing tool, and every feature request after it would pull the
+same direction. The tunnel exists so *you* can reach your own machine from
+outside the tailnet. It is not a way to hand a build to somebody.
+
+**Naming follows from this.** The verb stays `serve`, never `deploy`. `mesh
+deploy` would invite exactly the pipeline the previous paragraph rules out.

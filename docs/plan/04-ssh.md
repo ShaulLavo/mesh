@@ -55,11 +55,16 @@ time.
 
 ```
 ssh -R blog:80:localhost:3000 vps.mesh.shaulavo.dev
-# dev server on this laptop, now answering at a public name, gone on disconnect
+# a thing running on this machine, reachable from outside, gone on disconnect
 ```
 
 This is the one capability Tailscale genuinely cannot give you, because it needs
 a publicly routable machine, and the VPS is already that machine for step 8.
+
+It is for reaching your own machine from outside the tailnet, in the rare case
+where that is what you need. It is not a way to hand a build to someone else;
+that is a different product (D22). The distinction is not pedantry: it decides
+every feature request that arrives after this ships.
 
 Note what this is not: tunnelled HTTP through the VPS is not terminal traffic, so
 D14 survives untouched. The invariant protects terminal sessions, and terminal
