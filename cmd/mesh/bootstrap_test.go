@@ -58,6 +58,13 @@ func TestBootstrapFuncPinsExistingIdentityAndMapsResult(t *testing.T) {
 	}
 }
 
+func TestCommandDependenciesWireBootstrapAndPicker(t *testing.T) {
+	dependencies := commandDependencies()
+	if dependencies.Bootstrap == nil || dependencies.Picker == nil {
+		t.Fatalf("command dependencies = %#v, want bootstrap and picker", dependencies)
+	}
+}
+
 func TestTargetWithUserPreservesExplicitUser(t *testing.T) {
 	called := false
 	got, err := targetWithUser("bob@[fd7a::1]:2222", func() (string, error) {

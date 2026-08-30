@@ -20,6 +20,7 @@ var commandTestTime = time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
 type commandTestHost struct {
 	host         HostRecord
 	sessionState string
+	attachStart  func()
 	mu           sync.Mutex
 	events       []string
 }
@@ -86,6 +87,9 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 		response.Type = protocol.TypeCreated
 		response.SessionID = "7K3D"
 	case protocol.TypeAttach:
+		if c.host.attachStart != nil {
+			c.host.attachStart()
+		}
 		response.Type = protocol.TypeAttached
 		response.Seq = 0
 		c.responses <- mustCommandControlFrame(response)
@@ -307,6 +311,29 @@ func TestPickerWakeRefreshesAndRejectsImpossibleSelections(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "woke pc; refreshing hosts") {
 		t.Fatalf("picker stderr = %q", stderr)
+	}
+}
+
+func TestPickerReturnsBeforeRawAttachStarts(t *testing.T) {
+	host := setupCommandTestHost(t)
+	pickerReturned := false
+	host.attachStart = func() {
+		if !pickerReturned {
+			t.Fatal("raw attach started before the picker returned")
+		}
+	}
+	_, _, err := executeCommand(t, Dependencies{
+		DialHost: host.dial,
+		Picker: func(context.Context, PickerInput) (PickerSelection, error) {
+			pickerReturned = true
+			return PickerSelection{HostAlias: "pc", SessionID: "7K3D"}, nil
+		},
+	}, "--raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pickerReturned || !slices.Contains(host.recorded(), protocol.TypeAttach) {
+		t.Fatalf("picker returned = %t, events = %v", pickerReturned, host.recorded())
 	}
 }
 

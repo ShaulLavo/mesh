@@ -13,6 +13,7 @@ import (
 	"github.com/shaul/mesh/internal/bootstrap"
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/tui"
 )
 
 type bootstrapRunner func(context.Context, bootstrap.Options) (bootstrap.Result, error)
@@ -24,17 +25,20 @@ type bootstrapUI struct {
 }
 
 func commandDependencies() cli.Dependencies {
-	return cli.Dependencies{Bootstrap: newBootstrapFunc(bootstrap.Run, bootstrapUI{
-		input:  os.Stdin,
-		output: os.Stderr,
-		username: func() (string, error) {
-			current, err := user.Current()
-			if err != nil {
-				return "", err
-			}
-			return current.Username, nil
-		},
-	})}
+	return cli.Dependencies{
+		Bootstrap: newBootstrapFunc(bootstrap.Run, bootstrapUI{
+			input:  os.Stdin,
+			output: os.Stderr,
+			username: func() (string, error) {
+				current, err := user.Current()
+				if err != nil {
+					return "", err
+				}
+				return current.Username, nil
+			},
+		}),
+		Picker: tui.NewCLIPicker(os.Stdin, os.Stdout),
+	}
 }
 
 func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
