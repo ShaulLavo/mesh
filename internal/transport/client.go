@@ -521,9 +521,14 @@ func cloneHeader(header http.Header) http.Header {
 	return header.Clone()
 }
 
+// retryableReadError distinguishes a peer that is speaking the protocol wrongly,
+// where reconnecting would only repeat the failure, from a link that is merely
+// gone. ErrInboundQueueFull is deliberately absent: it is local backpressure
+// from a slow stdout, not a peer fault, and the resume offset is exact at that
+// moment, so one redial resumes or snapshots cleanly. Reconnection is lazy and
+// consumer-driven, so a consumer that is still stalled cannot spin on it.
 func retryableReadError(err error) bool {
 	return !errors.Is(err, ErrInvalidFrame) &&
-		!errors.Is(err, ErrInboundQueueFull) &&
 		!errors.Is(err, websocket.ErrMessageTooBig)
 }
 

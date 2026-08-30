@@ -83,24 +83,41 @@ check_source_contract() {
   (( archive_verify_line < publish_line && service_verify_line < publish_line )) ||
     fail 'the installer publishes before all fetched artifacts are verified'
 
-  for workflow in .github/workflows/ci.yml .github/workflows/release.yml; do
-    contains "$workflow" 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1'
-    contains "$workflow" 'actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0'
+  # Every workflow is SHA-pinned, not just the two we happen to know about: a
+  # new one using @main would otherwise pass this contract untouched.
+  local workflows=(.github/workflows/*.yml)
+  (( ${#workflows[@]} > 0 )) && [[ -e ${workflows[0]} ]] ||
+    fail 'no workflows found under .github/workflows'
+  for workflow in "${workflows[@]}"; do
     if grep -E 'uses: .+@' "$workflow" | grep -Ev '@[0-9a-f]{40}([[:space:]]+# .+)?$'; then
       fail "$workflow contains an action reference that is not a full commit SHA"
     fi
+  done
+  for workflow in .github/workflows/ci.yml .github/workflows/release.yml; do
+    contains "$workflow" 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1'
+    contains "$workflow" 'actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0'
   done
   contains .github/workflows/ci.yml 'go test -race ./...'
   contains .github/workflows/ci.yml './scripts/verify.sh'
   contains .github/workflows/ci.yml 'govulncheck@v1.7.0'
   contains .github/workflows/ci.yml 'golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0'
   contains .github/workflows/ci.yml 'version: v2.13.2'
+  # The linters must be enabled AND still doing their job. Grepping for names
+  # under `enable:` misses the settings that decide what they actually check: a
+  # staticcheck.checks list without `all`, or an exclusions rule covering
+  # internal/, turns them off while every name is still present.
   for linter in bodyclose errcheck gosec govet ineffassign staticcheck unused; do
     contains .golangci.yml "    - $linter"
   done
   does_not_contain .golangci.yml '-SA1012'
   does_not_contain .golangci.yml '-SA1019'
   does_not_contain .golangci.yml '-SA2001'
+  contains .golangci.yml '        - all'
+  does_not_contain .golangci.yml 'exclusions:'
+  does_not_contain .golangci.yml 'exclude-rules:'
+  does_not_contain .golangci.yml 'exclude-dirs:'
+  does_not_contain .golangci.yml 'exclude-files:'
+  contains .golangci.yml '  default: none'
   contains .github/workflows/ci.yml 'goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3'
   contains .github/workflows/ci.yml 'version: v2.18.0'
   contains .github/workflows/release.yml 'tags:'
@@ -117,7 +134,10 @@ check_source_contract() {
   [[ -x integration/reboot_simulation.sh ]] || fail 'reboot_simulation.sh is not executable'
   contains scripts/verify.sh 'integration/*.sh'
 
-  if rg -n 'example\.com|OWNER/REPO|CHANGEME|TODO_URL' \
+  # grep, not rg: rg is undeclared everywhere and exits 127 when missing, which
+  # as an `if` condition is simply false, so this gate silently passed on any
+  # machine without ripgrep.
+  if grep -rEn 'example\.com|OWNER/REPO|CHANGEME|TODO_URL' \
       .goreleaser.yaml .github scripts/install.sh scripts/install/assets; then
     fail 'packaging contains a placeholder URL or repository'
   fi

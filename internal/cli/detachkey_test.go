@@ -37,3 +37,26 @@ func TestParseDetachKey(t *testing.T) {
 		}
 	}
 }
+
+// ctrl+@ is NUL, and byte 0 is the attach path's sentinel for "no detach key".
+// Accepting it silently reinstated ctrl+], the key the user was freeing.
+func TestParseDetachKeyRejectsNul(t *testing.T) {
+	for _, spelling := range []string{"ctrl+@", "^@", "C-@"} {
+		if _, _, err := ParseDetachKey(spelling); err == nil {
+			t.Fatalf("ParseDetachKey(%q) was accepted; NUL is indistinguishable from no key", spelling)
+		}
+	}
+	// The neighbouring control characters must still parse.
+	for spelling, want := range map[string]byte{"ctrl+]": 0x1d, "ctrl+a": 0x01, "ctrl+_": 0x1f} {
+		got, raw, err := ParseDetachKey(spelling)
+		if err != nil {
+			t.Fatalf("ParseDetachKey(%q) error = %v", spelling, err)
+		}
+		if raw {
+			t.Fatalf("ParseDetachKey(%q) reported raw mode", spelling)
+		}
+		if got != want {
+			t.Fatalf("ParseDetachKey(%q) = %#x, want %#x", spelling, got, want)
+		}
+	}
+}
