@@ -76,10 +76,29 @@ answers HTTP on the tailnet".
 
 ## Implementation
 
-`internal/serve.ResolveRoot` is the shared HTTP and SFTP path resolver. It bounds
-repeated URL decoding, rejects null bytes and parent traversal, resolves symlinks,
-and verifies the canonical result remains below the canonical root. A missing root
-returns `ErrRootUnavailable` without preventing registration or daemon startup.
+`internal/serve.ResolveRoot` is the shared canonical-path parser for previews
+and Realpath-style results. `OpenRootEntry` is the shared HTTP and SFTP access
+boundary. They bound repeated URL decoding, reject null bytes and parent
+traversal, resolve symlinks, and verify the canonical result remains below the
+canonical root. A missing root returns `ErrRootUnavailable` without preventing
+registration or daemon startup.
+
+Canonical resolution remains separate from file access because previews expose
+the canonical target and Mesh supports absolute symlinks whose targets stay
+inside the root. Go's `os.Root` deliberately rejects every absolute symlink.
+Static and files handlers therefore resolve first, convert the canonical target
+back to a confined relative path, and open it through an anchored `os.Root`.
+They inspect, list, and serve from that same descriptor. A symlink or directory
+swap between resolution and open can make the request fail, but cannot redirect
+the open outside the root. Nonblocking opens also prevent a regular-file-to-FIFO
+swap from hanging a handler. Public-directory scans use the same rooted open
+boundary while retaining canonical paths for cycle and alias detection.
+
+`FuzzResolveRootConfinement` exercises valid, malformed, repeatedly encoded,
+and symlinked paths against both a real root and a symlink alias, then checks
+the rooted descriptor against the resolved entry. A focused boundary test
+exposed and closed the previous off-by-one rejection at exactly eight decoding
+layers.
 
 `serve.Handler` implements static sites, generated file listings, and loopback
 reverse proxies. File links retain their mount prefix at both `/` and nested
@@ -115,5 +134,6 @@ go generate ./...
 go mod tidy -diff
 go vet ./...
 go test -race ./...
+go test ./internal/serve -run=^$ -fuzz=FuzzResolveRootConfinement -fuzztime=10s
 ./scripts/verify.sh
 ```

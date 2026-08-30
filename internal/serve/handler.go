@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"sort"
 	"strings"
 )
 
@@ -103,45 +104,51 @@ func relativeRequestPath(escapedPath, prefix string) (string, bool) {
 }
 
 func serveStatic(w http.ResponseWriter, request *http.Request, root, relative string) {
-	resolved, info, ok := resolveForHTTP(w, request, root, relative)
+	file, info, ok := openForHTTP(w, request, root, relative)
 	if !ok {
 		return
 	}
 	if info.IsDir() {
 		if !strings.HasSuffix(request.URL.Path, "/") {
+			_ = file.Close()
 			redirectDirectory(w, request)
 			return
 		}
+		_ = file.Close()
 		indexRelative := strings.TrimSuffix(relative, "/") + "/index.html"
-		resolved, info, ok = resolveForHTTP(w, request, root, indexRelative)
+		file, info, ok = openForHTTP(w, request, root, indexRelative)
 		if !ok || info.IsDir() {
 			if ok {
+				_ = file.Close()
 				http.NotFound(w, request)
 			}
 			return
 		}
 	}
-	serveResolvedFile(w, request, resolved, info)
+	defer file.Close() //nolint:errcheck // the response owns any read failure
+	serveOpenedFile(w, request, file, info)
 }
 
 func serveFiles(w http.ResponseWriter, request *http.Request, root, prefix, relative string) {
-	resolved, info, ok := resolveForHTTP(w, request, root, relative)
+	file, info, ok := openForHTTP(w, request, root, relative)
 	if !ok {
 		return
 	}
+	defer file.Close() //nolint:errcheck // the response owns any read failure
 	if !info.IsDir() {
-		serveResolvedFile(w, request, resolved, info)
+		serveOpenedFile(w, request, file, info)
 		return
 	}
 	if !strings.HasSuffix(request.URL.Path, "/") {
 		redirectDirectory(w, request)
 		return
 	}
-	entries, err := os.ReadDir(resolved)
+	entries, err := file.ReadDir(-1)
 	if err != nil {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	decoded, err := decodeRequestPath(relative)
 	if err != nil {
 		http.Error(w, "bad path", http.StatusBadRequest)
@@ -177,8 +184,8 @@ func serveFiles(w http.ResponseWriter, request *http.Request, root, prefix, rela
 	}
 }
 
-func resolveForHTTP(w http.ResponseWriter, request *http.Request, root, relative string) (string, fs.FileInfo, bool) {
-	resolved, err := ResolveRoot(root, relative)
+func openForHTTP(w http.ResponseWriter, request *http.Request, root, relative string) (*os.File, fs.FileInfo, bool) {
+	file, info, err := OpenRootEntry(root, relative)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrRootUnavailable):
@@ -188,23 +195,12 @@ func resolveForHTTP(w http.ResponseWriter, request *http.Request, root, relative
 		default:
 			http.NotFound(w, request)
 		}
-		return "", nil, false
+		return nil, nil, false
 	}
-	info, err := os.Stat(resolved)
-	if err != nil {
-		http.NotFound(w, request)
-		return "", nil, false
-	}
-	return resolved, info, true
+	return file, info, true
 }
 
-func serveResolvedFile(w http.ResponseWriter, request *http.Request, resolved string, info fs.FileInfo) {
-	file, err := os.Open(resolved)
-	if err != nil {
-		http.NotFound(w, request)
-		return
-	}
-	defer file.Close() //nolint:errcheck // the response owns any read failure
+func serveOpenedFile(w http.ResponseWriter, request *http.Request, file *os.File, info fs.FileInfo) {
 	http.ServeContent(w, request, info.Name(), info.ModTime(), file)
 }
 

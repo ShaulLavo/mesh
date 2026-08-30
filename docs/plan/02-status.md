@@ -15,8 +15,8 @@ edge are complete.
 - `internal/terminal` — rendered screen snapshots for clean reattachment (T01)
 - `internal/storage` — SQLite session, host, and cached-service store (T03, T14)
 - `internal/daemon` — worker discovery, reconciliation, relay, lifecycle,
-  signed certificate installation, service-only TLS, and supervised origin/edge
-  roles (T04, T12, T13)
+  signed certificate installation, service-only TLS, a bounded public request
+  read deadline, and supervised origin/edge roles (T04, T12, T13)
 - `internal/transport` — WebSocket transport with resume (T05)
 - `internal/identity`, `internal/tailnet` — host keys, Tailscale discovery (T06)
 - `internal/bootstrap`, `scripts/install` — SSH adoption, release selection,
@@ -30,19 +30,22 @@ edge are complete.
 - `.github`, `.goreleaser.yaml`, `scripts/install` — reproducible release
   archives, checksum-gated installers, systemd/launchd services, Homebrew Cask,
   immutable CI actions, and retained packaging checks (T10)
-- `internal/serve` — durable static, files, and loopback-proxy services; hardened
-  shared root resolution; bounded public-directory inspection; live service
-  controls and restart restoration (T11, T14)
+- `internal/serve` — durable static, files, and loopback-proxy services; fuzzed
+  shared root resolution; `os.Root`-backed file access; bounded public-directory
+  inspection; live service controls and restart restoration (T11, T14)
 - `internal/dnsname` — Cloudflare-owned private A/TXT reconciliation, bounded
   RFC 8555 DNS-01 issuance, atomic live/staging wildcard state, signed origin
   and private-name distribution, public-edge certificate isolation, and
   supervised Tailscale address rebinding (T12, T13, T14)
 - `internal/edge` — signed complete route snapshots, durable ownership and
-  liveness, authenticated status pages, bounded proxy/direct-TLS front doors,
-  and origin publication with exact acknowledgement (T13)
+  liveness, authenticated status pages, fuzzed Host parsing, bounded
+  proxy/direct-TLS front doors, and origin publication with exact
+  acknowledgement (T13)
 
-Verified 2026-08-30: `gofmt`, `go vet ./...`, `go test -race ./...`, and all seventeen
-scripts in `integration/` passing.
+Verified 2026-08-30: clean formatting and module/generation diffs,
+`go vet ./...`, `go test -race ./...`, both retained parser fuzz targets, all
+seventeen scripts in `integration/`, and CGO-disabled Linux amd64/arm64 and
+Darwin arm64 builds passing.
 
 Private origin names and wildcard certificates are operational, including
 staging isolation and hot live rotation. The public edge is operational in both
@@ -101,6 +104,24 @@ rediscovers the tradeoff.
 6. A child that stopped reading stdin could block its connection goroutine in a
    PTY write. Worker input now crosses a bounded queue, so detach and control
    frames remain responsive.
+
+A later public-boundary review closed four more findings:
+
+7. The stable-address limiter was described too strongly and its FIFO let new
+   addresses evict live entries. IPv6 clients now share `/64` quotas, saturation
+   preserves live entries, and the docs identify global and per-origin
+   concurrency as the real protection against address rotation.
+8. The public server bounded header time but not body time. It now has a fixed
+   two-minute request-read deadline, returns 408 for an inbound body timeout,
+   and deliberately leaves writes unbounded for streaming and WebSockets.
+9. Static serving and directory scans resolved paths, called `Stat`, and then
+   reopened them by name. Actual access now goes through an anchored `os.Root`
+   and the same opened descriptor, with a regression that retargets a directory
+   outside the root between check and open.
+10. `ResolveRoot` and `canonicalPublicHost` now have retained fuzz targets. The
+    accompanying parser boundary tests found an encoding-depth off-by-one, and
+    the Host fuzz seeds found an accepted empty Host and a rewritten bracketed
+    DNS Host; all three are closed.
 
 Cosmetic, nobody has bothered and nobody should make a task of it: `cli/attach.go`
 hand-rolls `indexByte` where `bytes.IndexByte` exists; `cli/sessions.go` builds

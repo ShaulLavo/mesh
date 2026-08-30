@@ -29,6 +29,7 @@ const (
 
 	staleSocketProbeTimeout  = 200 * time.Millisecond
 	httpReadHeaderTimeout    = 5 * time.Second
+	publicReadTimeout        = 2 * time.Minute
 	httpShutdownTimeout      = 2 * time.Second
 	maximumPublicConnections = 512
 	maximumPublicHeaderBytes = 64 << 10
@@ -75,6 +76,7 @@ type listenerConfig struct {
 	publicListenAddress        string
 	publicHTTPHandler          http.Handler
 	publicTLSConfig            *tls.Config
+	publicReadTimeout          time.Duration
 	requireAllTailnetListeners bool
 	shutdownTimeout            time.Duration
 	reporter                   *errorReporter
@@ -187,9 +189,13 @@ func serveBoundListeners(
 	}
 	var publicServer *http.Server
 	if publicListener != nil {
+		readTimeout := normalized.publicReadTimeout
+		if readTimeout == 0 {
+			readTimeout = publicReadTimeout
+		}
 		publicServer = &http.Server{
 			Handler: normalized.publicHTTPHandler, ReadHeaderTimeout: httpReadHeaderTimeout,
-			IdleTimeout: 30 * time.Second, MaxHeaderBytes: maximumPublicHeaderBytes,
+			ReadTimeout: readTimeout, IdleTimeout: 30 * time.Second, MaxHeaderBytes: maximumPublicHeaderBytes,
 			BaseContext: func(net.Listener) context.Context { return ctx }, TLSConfig: normalized.publicTLSConfig,
 			ErrorLog: log.New(io.Discard, "", 0),
 		}
@@ -393,6 +399,7 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		httpsPort:                  cfg.HTTPSPort,
 		publicListenAddress:        cfg.PublicListenAddress,
 		publicHTTPHandler:          cfg.PublicHTTPHandler,
+		publicReadTimeout:          publicReadTimeout,
 		requireAllTailnetListeners: cfg.RequireAllTailnetListeners,
 		shutdownTimeout:            httpShutdownTimeout,
 		reporter:                   newErrorReporter(cfg.ReportError),

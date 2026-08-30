@@ -23,8 +23,10 @@ and nobody has asked for them.
    the `sftp` subsystem handler on the T15 server. Wish's `scp` middleware
    handles the `scp` side.
 2. **Root confinement.** Every path resolves inside a declared root or fails.
-   Reuse T11's resolver rather than writing a second one; if T11's is not
-   reusable, that is a bug in T11 worth fixing here.
+   Reuse T11's resolver rather than writing a second one. Use `OpenRootEntry`
+   for operations that access an entry; `ResolveRoot` returns canonical names
+   for Realpath-style results and must not be reopened by name. If these APIs
+   are not reusable, that is a bug in T11 worth fixing here.
 3. **A synthetic top level.** With more than one service the SFTP root is a
    directory listing the service names. It is generated, not a real directory,
    and it must not be escapable with `..`.

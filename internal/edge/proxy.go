@@ -43,6 +43,8 @@ const (
 	wakeTimeout                = 5 * time.Second
 )
 
+var errInboundRequestBodyTimeout = errors.New("edge: inbound request body timed out")
+
 // Mode selects the public listener trust boundary.
 type Mode string
 
@@ -488,8 +490,26 @@ func (route *proxyRoute) serve(response http.ResponseWriter, request *http.Reque
 		writeOffline(response, route.origin)
 		return
 	}
-	request.Body = http.MaxBytesReader(response, request.Body, registry.requestBodyLimit)
+	request.Body = &inboundRequestBody{ReadCloser: http.MaxBytesReader(response, request.Body, registry.requestBodyLimit)}
 	route.proxy.ServeHTTP(response, request)
+}
+
+type inboundRequestBody struct {
+	io.ReadCloser
+	timedOut atomic.Bool
+}
+
+func (b *inboundRequestBody) Read(buffer []byte) (int, error) {
+	read, err := b.ReadCloser.Read(buffer)
+	var timeout interface {
+		error
+		Timeout() bool
+	}
+	if err != nil && errors.As(err, &timeout) && timeout.Timeout() {
+		b.timedOut.Store(true)
+		return read, errInboundRequestBodyTimeout
+	}
+	return read, err
 }
 
 func (r *Registry) reverseProxy(route *proxyRoute) *httputil.ReverseProxy {
@@ -507,7 +527,13 @@ func (r *Registry) reverseProxy(route *proxyRoute) *httputil.ReverseProxy {
 			}
 		},
 		ErrorLog: log.New(io.Discard, "", 0),
-		ErrorHandler: func(response http.ResponseWriter, _ *http.Request, proxyErr error) {
+		ErrorHandler: func(response http.ResponseWriter, request *http.Request, proxyErr error) {
+			body, _ := request.Body.(*inboundRequestBody)
+			bodyTimedOut := body != nil && body.timedOut.Load()
+			if bodyTimedOut || errors.Is(proxyErr, errInboundRequestBodyTimeout) {
+				http.Error(response, "request body timed out", http.StatusRequestTimeout)
+				return
+			}
 			var tooLarge *http.MaxBytesError
 			if errors.As(proxyErr, &tooLarge) {
 				http.Error(response, "request body too large", http.StatusRequestEntityTooLarge)
@@ -585,13 +611,16 @@ func canonicalPublicHost(value string) (string, string, error) {
 	if strings.Contains(value, ":") {
 		var err error
 		host, port, err = net.SplitHostPort(value)
-		if err != nil || port == "" {
+		if err != nil || host == "" || port == "" || net.JoinHostPort(host, port) != value {
 			return "", "", errors.New("invalid public host port")
 		}
 		parsedPort, parseErr := strconv.ParseUint(port, 10, 16)
 		if parseErr != nil || parsedPort == 0 || strconv.FormatUint(parsedPort, 10) != port {
 			return "", "", errors.New("public host port is not canonical")
 		}
+	}
+	if host == "" {
+		return "", "", errors.New("invalid public host")
 	}
 	lowerHost := strings.ToLower(host)
 	if host != lowerHost {
@@ -650,6 +679,9 @@ func validateDisplayAlias(alias string) error {
 	return nil
 }
 
+// clientRateLimiter sheds repeated requests from stable IPv4 addresses and
+// IPv6 /64s. The global and per-origin concurrency channels are the hard work
+// bounds; this bounded table is deliberately not an admission-control boundary.
 type clientRateLimiter struct {
 	mu      sync.Mutex
 	entries map[netip.Addr]rateEntry
@@ -673,6 +705,7 @@ func newClientRateLimiter(maximum, limit int, window time.Duration) *clientRateL
 }
 
 func (l *clientRateLimiter) Allow(address netip.Addr, now time.Time) bool {
+	address = clientQuotaKey(address)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	entry, exists := l.entries[address]
@@ -682,7 +715,14 @@ func (l *clientRateLimiter) Allow(address netip.Addr, now time.Time) bool {
 	}
 	if !exists {
 		if len(l.entries) >= l.maximum {
-			delete(l.entries, l.ring[l.next])
+			candidate := l.ring[l.next]
+			if now.Sub(l.entries[candidate].start) < l.window {
+				// Admit without tracking. Rotating addresses must not evict a live
+				// entry and erase the limit already applied to a stable client.
+				l.next = (l.next + 1) % l.maximum
+				return true
+			}
+			delete(l.entries, candidate)
 		}
 		l.ring[l.next] = address
 		l.next = (l.next + 1) % l.maximum
@@ -712,7 +752,11 @@ func newClientConcurrencyLimiter(maximum int) *clientConcurrencyLimiter {
 func (l *clientConcurrencyLimiter) Acquire(address netip.Addr) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if !address.IsValid() || l.active[address] >= l.maximum {
+	if !address.IsValid() {
+		return false
+	}
+	address = clientQuotaKey(address)
+	if l.active[address] >= l.maximum {
 		return false
 	}
 	l.active[address]++
@@ -720,6 +764,7 @@ func (l *clientConcurrencyLimiter) Acquire(address netip.Addr) bool {
 }
 
 func (l *clientConcurrencyLimiter) Release(address netip.Addr) {
+	address = clientQuotaKey(address)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.active[address] <= 1 {
@@ -727,6 +772,15 @@ func (l *clientConcurrencyLimiter) Release(address netip.Addr) {
 		return
 	}
 	l.active[address]--
+}
+
+func clientQuotaKey(address netip.Addr) netip.Addr {
+	address = address.Unmap()
+	bits := 32
+	if address.Is6() {
+		bits = 64
+	}
+	return netip.PrefixFrom(address, bits).Masked().Addr()
 }
 
 func (r *Registry) currentGeneration() (uint64, <-chan struct{}) {

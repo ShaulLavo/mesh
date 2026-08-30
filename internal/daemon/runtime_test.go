@@ -16,6 +16,8 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +27,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/shaul/mesh/internal/dnsname"
+	"github.com/shaul/mesh/internal/edge"
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 )
@@ -777,12 +781,14 @@ func TestPublicServerClosesHijackedWebSocketOnShutdown(t *testing.T) {
 	hijacked := make(chan struct{})
 	handlerDone := make(chan struct{})
 	runCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
 		done <- serveBoundListeners(
 			runCtx, cancel,
 			listenerConfig{
 				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: time.Second,
+				publicReadTimeout: 200 * time.Millisecond,
 				publicHTTPHandler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 					connection, acceptErr := websocket.Accept(response, request, nil)
 					if acceptErr != nil {
@@ -807,7 +813,20 @@ func TestPublicServerClosesHijackedWebSocketOnShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.CloseNow()
+	clientReadDone := make(chan error, 1)
+	go func() {
+		_, _, readErr := connection.Read(ctx)
+		clientReadDone <- readErr
+	}()
 	waitSignal(t, hijacked, "public WebSocket upgrade")
+	select {
+	case <-time.After(250 * time.Millisecond):
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := connection.Ping(ctx); err != nil {
+		t.Fatalf("public WebSocket stopped after the HTTP read timeout: %v", err)
+	}
 	cancel()
 	if err := waitRuntime(t, done); err != nil {
 		t.Fatal(err)
@@ -817,8 +836,139 @@ func TestPublicServerClosesHijackedWebSocketOnShutdown(t *testing.T) {
 	case <-time.After(runtimeTestTimeout):
 		t.Fatal("hijacked public WebSocket handler did not unblock")
 	}
-	if _, _, err := connection.Read(ctx); err == nil {
-		t.Fatal("public WebSocket remained open after daemon shutdown")
+	select {
+	case readErr := <-clientReadDone:
+		if readErr == nil {
+			t.Fatal("public WebSocket remained open after daemon shutdown")
+		}
+	case <-time.After(runtimeTestTimeout):
+		t.Fatal("public WebSocket client did not observe daemon shutdown")
+	}
+}
+
+func TestPublicServerTimesOutIncompleteProxiedBody(t *testing.T) {
+	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		_ = unixListener.Close()
+		t.Fatal(err)
+	}
+	backend := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		_, _ = io.Copy(io.Discard, request.Body)
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	origin, _, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := edge.NewRegistry(edge.HandlerConfig{Mode: edge.ModeProxy, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	if err := registry.Replace([]edge.PublishedRoute{{
+		Route: edge.Route{PublicName: "app.shaulavo.dev", ServiceName: "app"},
+		Origin: edge.ResolvedOrigin{
+			Identity: origin.ID, DisplayAlias: "Desktop", Endpoint: netip.MustParseAddrPort(strings.TrimPrefix(backend.URL, "http://")),
+			LastSeenAt: now, OnlineUntil: now.Add(time.Hour), Online: true,
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() {
+		done <- serveBoundListeners(
+			runCtx, cancel,
+			listenerConfig{
+				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: time.Second,
+				publicReadTimeout: 100 * time.Millisecond,
+				publicHTTPHandler: registry,
+			},
+			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, publicListener,
+		)
+	}()
+	connection, err := net.DialTimeout("tcp4", publicListener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close() //nolint:errcheck // test cleanup
+	_ = connection.SetDeadline(time.Now().Add(runtimeTestTimeout))
+	if _, err := io.WriteString(connection, "POST /app HTTP/1.1\r\nHost: app.shaulavo.dev\r\nContent-Length: 10\r\nX-Forwarded-For: 198.51.100.1\r\nX-Forwarded-Proto: https\r\n\r\na"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := bufio.NewReader(connection).ReadString('\n')
+	if err != nil || !strings.Contains(status, " 408 ") {
+		t.Fatalf("incomplete-body response = %q, %v", status, err)
+	}
+	cancel()
+	if err := waitRuntime(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublicReadTimeoutDoesNotStopStreamingResponse(t *testing.T) {
+	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		_ = unixListener.Close()
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseResponse := func() { releaseOnce.Do(func() { close(release) }) }
+	runCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		releaseResponse()
+		cancel()
+	})
+	done := make(chan error, 1)
+	go func() {
+		done <- serveBoundListeners(
+			runCtx, cancel,
+			listenerConfig{
+				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: time.Second,
+				publicReadTimeout: 100 * time.Millisecond,
+				publicHTTPHandler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+					_, _ = io.WriteString(response, "first\n")
+					response.(http.Flusher).Flush()
+					<-release
+					_, _ = io.WriteString(response, "second\n")
+				}),
+			},
+			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, publicListener,
+		)
+	}()
+	response, err := (&http.Client{Timeout: runtimeTestTimeout}).Get("http://" + publicListener.Addr().String() + "/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close() //nolint:errcheck // test cleanup
+	reader := bufio.NewReader(response.Body)
+	if first, err := reader.ReadString('\n'); err != nil || first != "first\n" {
+		t.Fatalf("first streamed chunk = %q, %v", first, err)
+	}
+	select {
+	case <-time.After(150 * time.Millisecond):
+	case <-runCtx.Done():
+		t.Fatal(runCtx.Err())
+	}
+	releaseResponse()
+	if second, err := reader.ReadString('\n'); err != nil || second != "second\n" {
+		t.Fatalf("second streamed chunk = %q, %v", second, err)
+	}
+	cancel()
+	if err := waitRuntime(t, done); err != nil {
+		t.Fatal(err)
 	}
 }
 

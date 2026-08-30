@@ -50,8 +50,9 @@ The daemon repeats resolution and scanning while it holds the service mutation
 gate. The upsert includes the prior preview, so a changed canonical target or
 file count is rejected before persistence. Public directory traversal is
 bounded, follows only symlinks that remain inside the resolved root, detects
-cycles, verifies regular files can be opened, and fails closed on I/O errors,
-special files, broken or escaping symlinks, depth, entry count, or cancellation.
+cycles, and opens every checked entry through an anchored `os.Root`. It fails
+closed on I/O errors, special files, broken or escaping symlinks, depth, entry
+count, or cancellation.
 
 The scan refuses `.env`, `.env.*`, `.git`, `.ssh`, `id_*`, and `*.pem` names,
 including names reached through safe in-root symlinks. Only the explicit

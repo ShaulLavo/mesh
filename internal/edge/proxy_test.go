@@ -40,6 +40,7 @@ func TestRegistryRoutesLongestPrefixAndPreservesEscapedRequest(t *testing.T) {
 	}
 
 	request := publicRequest(http.MethodGet, "app.shaulavo.dev", "/app/admin/a%2Fb?q=secret%2Fvalue")
+	request.RemoteAddr = "[2001:db8:1:2::1234]:4321"
 	request.Header.Set("Forwarded", "for=attacker")
 	request.Header.Set("X-Forwarded-For", "203.0.113.8")
 	request.Header.Set("X-Forwarded-Proto", "https")
@@ -52,7 +53,7 @@ func TestRegistryRoutesLongestPrefixAndPreservesEscapedRequest(t *testing.T) {
 		t.Fatalf("origin RequestURI = %q", got)
 	}
 	gotHeaders := <-headers
-	if gotHeaders.Get("Forwarded") != "" || gotHeaders.Get("X-Forwarded-For") != "192.0.2.1" {
+	if gotHeaders.Get("Forwarded") != "" || gotHeaders.Get("X-Forwarded-For") != "2001:db8:1:2::1234" {
 		t.Fatalf("untrusted forwarding headers survived: %#v", gotHeaders)
 	}
 	if gotHeaders.Get("X-Forwarded-Proto") != "https" || gotHeaders.Get("X-Forwarded-Host") != "app.shaulavo.dev" {
@@ -245,6 +246,7 @@ func TestClientRateStateStaysBounded(t *testing.T) {
 	if len(limiter.entries) != 4 {
 		t.Fatalf("rate entries = %d, want 4", len(limiter.entries))
 	}
+	limiter = newClientRateLimiter(4, 2, time.Minute)
 	address := netip.MustParseAddr("198.51.100.1")
 	if !limiter.Allow(address, now) || !limiter.Allow(address, now) || limiter.Allow(address, now) {
 		t.Fatal("per-client limit was not enforced")
@@ -259,6 +261,84 @@ func TestClientRateStateStaysBounded(t *testing.T) {
 				t.Fatalf("rate entries grew to %d", len(limiter.entries))
 			}
 		}
+	}
+}
+
+func TestClientRateLimiterPreservesLiveEntriesAtCapacity(t *testing.T) {
+	limiter := newClientRateLimiter(2, 1, time.Minute)
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	first := netip.MustParseAddr("192.0.2.1")
+	second := netip.MustParseAddr("192.0.2.2")
+	if !limiter.Allow(first, now) || !limiter.Allow(second, now) || limiter.Allow(first, now) {
+		t.Fatal("initial stable-address limits were not enforced")
+	}
+	for index := 1; index <= 20; index++ {
+		if !limiter.Allow(netip.MustParseAddr(fmt.Sprintf("198.51.100.%d", index)), now) {
+			t.Fatal("an untracked rotating address was rejected")
+		}
+	}
+	if limiter.Allow(first, now) {
+		t.Fatal("address rotation evicted a live limited client")
+	}
+	if len(limiter.entries) != 2 {
+		t.Fatalf("rate entries = %d, want 2", len(limiter.entries))
+	}
+	if !limiter.Allow(netip.MustParseAddr("203.0.113.1"), now.Add(time.Minute)) {
+		t.Fatal("an expired slot was not reused")
+	}
+}
+
+func TestClientRateLimiterReclaimsExpiredSlotsBehindLiveEntries(t *testing.T) {
+	limiter := newClientRateLimiter(2, 10, time.Minute)
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	first := netip.MustParseAddr("192.0.2.1")
+	second := netip.MustParseAddr("192.0.2.2")
+	if !limiter.Allow(first, now) || !limiter.Allow(second, now) || !limiter.Allow(first, now.Add(time.Minute)) {
+		t.Fatal("failed to prepare live and expired entries")
+	}
+	if !limiter.Allow(netip.MustParseAddr("198.51.100.1"), now.Add(time.Minute)) {
+		t.Fatal("untracked address was rejected behind a live entry")
+	}
+	replacement := netip.MustParseAddr("198.51.100.2")
+	if !limiter.Allow(replacement, now.Add(time.Minute)) {
+		t.Fatal("expired slot was not reusable")
+	}
+	if _, exists := limiter.entries[clientQuotaKey(second)]; exists {
+		t.Fatal("expired entry remained after its slot was probed")
+	}
+	if _, exists := limiter.entries[clientQuotaKey(replacement)]; !exists {
+		t.Fatal("replacement address was not tracked")
+	}
+}
+
+func TestIPv6ClientQuotasShareOnePrefix(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	rate := newClientRateLimiter(4, 2, time.Minute)
+	for index, want := range []bool{true, true, false} {
+		address := netip.MustParseAddr(fmt.Sprintf("2001:db8:1:2::%d", index+1))
+		if got := rate.Allow(address, now); got != want {
+			t.Fatalf("rate request %d = %t, want %t", index+1, got, want)
+		}
+	}
+	if !rate.Allow(netip.MustParseAddr("2001:db8:1:3::1"), now) {
+		t.Fatal("a different IPv6 /64 shared the rate quota")
+	}
+
+	concurrency := newClientConcurrencyLimiter(2)
+	first := netip.MustParseAddr("2001:db8:4:5::1")
+	second := netip.MustParseAddr("2001:db8:4:5::2")
+	third := netip.MustParseAddr("2001:db8:4:5::3")
+	if !concurrency.Acquire(first) || !concurrency.Acquire(second) || concurrency.Acquire(third) {
+		t.Fatal("rotating addresses bypassed the IPv6 /64 concurrency quota")
+	}
+	concurrency.Release(first)
+	concurrency.Release(second)
+	if !concurrency.Acquire(third) {
+		t.Fatal("released IPv6 /64 quota was not reusable")
+	}
+	concurrency.Release(third)
+	if !concurrency.Acquire(netip.MustParseAddr("2001:db8:4:6::1")) {
+		t.Fatal("a different IPv6 /64 shared the concurrency quota")
 	}
 }
 
@@ -311,6 +391,42 @@ func TestRegistryRequestBodyBoundsDoNotChangeOriginLiveness(t *testing.T) {
 		t.Fatalf("healthy request after overflow = %d %q", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestRegistryReturnsRequestTimeoutForInboundBodyDeadline(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		_, _ = io.Copy(io.Discard, request.Body)
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	originID, _ := testIdentity(t)
+	registry := testRegistry(t, ModeDirectTLS, now)
+	defer registry.Close()
+	if err := registry.Replace([]PublishedRoute{{
+		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app"},
+		Origin: testResolvedOrigin(originID, testHTTPServerEndpoint(t, backend), now),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	request := publicRequest(http.MethodPost, "app.shaulavo.dev", "/app")
+	request.Body = timeoutReadCloser{}
+	request.ContentLength = -1
+	response := httptest.NewRecorder()
+	registry.ServeHTTP(response, request)
+	if response.Code != http.StatusRequestTimeout {
+		t.Fatalf("body timeout response = %d %q, want 408", response.Code, response.Body.String())
+	}
+}
+
+type timeoutReadCloser struct{}
+
+func (timeoutReadCloser) Read([]byte) (int, error) { return 0, timeoutError{} }
+func (timeoutReadCloser) Close() error             { return nil }
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string { return "read deadline exceeded" }
+func (timeoutError) Timeout() bool { return true }
 
 func TestRegistryProxiesWebSocketUpgrade(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -449,7 +565,10 @@ func TestCanonicalPublicHostAndForwardedIP(t *testing.T) {
 	if err != nil || host != "app.shaulavo.dev" || forwarded != "app.shaulavo.dev:443" {
 		t.Fatalf("canonical host = %q %q, %v", host, forwarded, err)
 	}
-	for _, invalid := range []string{"APP.shaulavo.dev", "app.shaulavo.dev:0", "app.shaulavo.dev:0443", "app.shaulavo.dev:65536", "user@app.shaulavo.dev"} {
+	for _, invalid := range []string{
+		"APP.shaulavo.dev", "app.shaulavo.dev:0", "app.shaulavo.dev:0443", "app.shaulavo.dev:65536",
+		"user@app.shaulavo.dev", ":443", "[app.shaulavo.dev]:443",
+	} {
 		if _, _, err := canonicalPublicHost(invalid); err == nil {
 			t.Fatalf("invalid host %q accepted", invalid)
 		}

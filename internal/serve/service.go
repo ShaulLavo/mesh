@@ -138,7 +138,11 @@ func (r *Registry) Status() []ServiceStatus {
 	for _, service := range services {
 		status := ServiceStatus{Service: service, Healthy: true}
 		if service.Kind == Static || service.Kind == Files {
-			if _, err := ResolveRoot(service.Target, "/"); err != nil {
+			file, _, err := OpenRootEntry(service.Target, "/")
+			if err == nil {
+				_ = file.Close()
+			}
+			if err != nil {
 				status.Healthy = false
 				status.Problem = err.Error()
 			}

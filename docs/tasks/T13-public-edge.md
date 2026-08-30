@@ -92,9 +92,16 @@ hides behind Tailscale. Treat it accordingly:
 - Both modes hard-return 404 for the terminal control path, including repeated
   percent-encoding. Terminal controls are handled only by the tailnet or local
   control listeners.
-- Request bodies, response headers, total upstream work, per-origin upstream
-  work, and per-client request rate are bounded. Dial and response-header waits
-  have deadlines. HTTP and WebSocket bodies stream instead of being buffered.
+- Request bodies, response headers, total upstream work, and per-origin upstream
+  work are bounded. The public server has a hard two-minute deadline for reading
+  a complete request, including its body. Dial and response-header waits also
+  have deadlines. There is no write deadline: HTTP responses and WebSocket
+  upgrades continue to stream.
+- Stable-address quotas aggregate IPv4 addresses individually and IPv6 clients
+  by `/64`. They shed simple repeated floods; they are not the defense against
+  address rotation. The global and per-origin concurrency channels are the hard
+  work bounds. A full rate table admits new addresses without tracking them
+  rather than letting address cycling evict a live limited entry.
 - Public errors expose only the configured display alias and last-seen time.
   Logs contain event metadata, never request bodies, credentials, origin
   addresses, or untrusted error text.
@@ -206,17 +213,22 @@ without operator action.
 
 The component and daemon runtime wiring is complete. Verification included a
 clean formatting, generation, module-tidiness, and vet pass; the full race test
-suite; all 16 integration scripts; Darwin arm64 compilation for the command,
-daemon, DNS, edge, serving, and transport packages; and a Darwin arm64 Mesh
-binary build.
+suite; the retained Host fuzzer; all 17 integration scripts; Darwin arm64
+compilation for the command, daemon, DNS, edge, serving, and transport packages;
+and a Darwin arm64 Mesh binary build.
 
 - `internal/edge/snapshot.go`, `registration.go`, and `publisher.go` implement
   signed snapshots, identity-pinned registration, authenticated status pages,
   and the durable origin outbox.
 - `internal/edge/proxy.go` owns the immutable route table, longest-path routing,
   offline behavior, the bounded wake interface, trust-mode checks, streaming
-  reverse proxy, and public resource budgets. Production wiring rejects wake
-  routes because the Pi power-control API does not exist yet.
+  reverse proxy, and public resource budgets. Inbound body deadlines return a
+  fixed 408 rather than being misreported as an offline origin. Production
+  wiring rejects wake routes because the Pi power-control API does not exist
+  yet.
+- `FuzzCanonicalPublicHost` exercises the public Host parser's canonicalization
+  and round-trip invariants. It exposed and closed acceptance of an empty host
+  with a port and bracketed DNS names.
 - `internal/edge/config.go` strictly parses bounded edge and target JSON files.
   Proxy mode defaults to `127.0.0.1:8080`; direct-TLS mode defaults to `:443`.
   Proxy mode requires loopback. Direct-TLS mode accepts only an unspecified

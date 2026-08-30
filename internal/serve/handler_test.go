@@ -53,6 +53,52 @@ func TestStaticHandlerServesFilesAndIndexesUnderPrefix(t *testing.T) {
 	}
 }
 
+func TestDirectoryHandlersServeAbsoluteInRootSymlinks(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "directory")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(file, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "index.html"), []byte("index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(file, filepath.Join(root, "file-link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(directory, filepath.Join(root, "directory-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	static, err := Handler(Service{Name: "site", Kind: Static, Target: root}, "/site")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ path, body string }{
+		{path: "/site/file-link", body: "file"},
+		{path: "/site/directory-link/", body: "index"},
+	} {
+		response := httptest.NewRecorder()
+		static.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if response.Code != http.StatusOK || response.Body.String() != test.body {
+			t.Fatalf("GET %s = %d %q, want 200 %q", test.path, response.Code, response.Body.String(), test.body)
+		}
+	}
+
+	files, err := Handler(Service{Name: "files", Kind: Files, Target: root}, "/files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	files.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/files/directory-link/", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "index.html") {
+		t.Fatalf("linked directory listing = %d %q", response.Code, response.Body.String())
+	}
+}
+
 func TestDirectoryHandlersFailClosedForTraversal(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "root")

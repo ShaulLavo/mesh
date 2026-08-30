@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -151,17 +150,11 @@ func scanPublicDirectory(ctx context.Context, root string, maxEntries, maxDepth 
 	if maxEntries <= 0 || maxDepth < 0 {
 		return directoryScan{}, ErrDirectoryLimit
 	}
-	canonicalRoot, err := ResolveRoot(root, "/")
+	rootHandle, canonicalRoot, err := openAnchoredRoot(root)
 	if err != nil {
 		return directoryScan{}, err
 	}
-	rootInfo, err := os.Stat(canonicalRoot)
-	if err != nil {
-		return directoryScan{}, fmt.Errorf("serve: inspect public directory: %w", err)
-	}
-	if !rootInfo.IsDir() {
-		return directoryScan{}, fmt.Errorf("%w: public root is not a directory", ErrRootUnavailable)
-	}
+	defer rootHandle.Close() //nolint:errcheck // scan errors take precedence over cleanup
 
 	result := directoryScan{}
 	if credential := credentialAncestor(canonicalRoot); credential != "" {
@@ -181,9 +174,17 @@ func scanPublicDirectory(ctx context.Context, root string, maxEntries, maxDepth 
 		if directory.depth > maxDepth {
 			return directoryScan{}, fmt.Errorf("%w: directory depth exceeds %d", ErrDirectoryLimit, maxDepth)
 		}
-		file, err := os.Open(directory.path)
+		directoryRelative, err := filepath.Rel(canonicalRoot, directory.path)
+		if err != nil {
+			return directoryScan{}, fmt.Errorf("%w: compare public directory: %v", ErrOutsideRoot, err)
+		}
+		file, directoryInfo, err := openRootedPath(rootHandle, directoryRelative, directory.path)
 		if err != nil {
 			return directoryScan{}, fmt.Errorf("serve: open public directory: %w", err)
+		}
+		if !directoryInfo.IsDir() {
+			_ = file.Close()
+			return directoryScan{}, fmt.Errorf("serve: public entry %q is not a directory", relativeDisplayPath(canonicalRoot, directory.path))
 		}
 		for {
 			if err := ctx.Err(); err != nil {
@@ -207,13 +208,22 @@ func scanPublicDirectory(ctx context.Context, root string, maxEntries, maxDepth 
 					_ = file.Close()
 					return directoryScan{}, fmt.Errorf("%w: %q", ErrOutsideRoot, relativeDisplayPath(canonicalRoot, candidate))
 				}
-				info, statErr := os.Stat(resolved)
-				if statErr != nil {
+				resolvedRelative, relativeErr := filepath.Rel(canonicalRoot, resolved)
+				if relativeErr != nil {
 					_ = file.Close()
-					return directoryScan{}, fmt.Errorf("serve: inspect public entry %q: %w", relativeDisplayPath(canonicalRoot, candidate), statErr)
+					return directoryScan{}, fmt.Errorf("%w: compare public entry %q: %v", ErrOutsideRoot, relativeDisplayPath(canonicalRoot, candidate), relativeErr)
+				}
+				entryFile, info, openErr := openRootedPath(rootHandle, resolvedRelative, resolved)
+				if openErr != nil {
+					_ = file.Close()
+					return directoryScan{}, fmt.Errorf("serve: open public entry %q: %w", relativeDisplayPath(canonicalRoot, candidate), openErr)
 				}
 				switch {
 				case info.IsDir():
+					if closeErr := entryFile.Close(); closeErr != nil {
+						_ = file.Close()
+						return directoryScan{}, fmt.Errorf("serve: close public entry %q: %w", relativeDisplayPath(canonicalRoot, candidate), closeErr)
+					}
 					if credentialLike(entry.Name()) && result.credentialRel == "" {
 						result.credentialRel = relativeDisplayPath(canonicalRoot, candidate)
 					}
@@ -222,11 +232,6 @@ func scanPublicDirectory(ctx context.Context, root string, maxEntries, maxDepth 
 						stack = append(stack, scanDirectory{path: resolved, depth: directory.depth + 1})
 					}
 				case info.Mode().IsRegular():
-					entryFile, openErr := os.Open(resolved)
-					if openErr != nil {
-						_ = file.Close()
-						return directoryScan{}, fmt.Errorf("serve: open public entry %q: %w", relativeDisplayPath(canonicalRoot, candidate), openErr)
-					}
 					if closeErr := entryFile.Close(); closeErr != nil {
 						_ = file.Close()
 						return directoryScan{}, fmt.Errorf("serve: close public entry %q: %w", relativeDisplayPath(canonicalRoot, candidate), closeErr)
@@ -239,6 +244,7 @@ func scanPublicDirectory(ctx context.Context, root string, maxEntries, maxDepth 
 						result.credentialRel = relativeDisplayPath(canonicalRoot, candidate)
 					}
 				default:
+					_ = entryFile.Close()
 					_ = file.Close()
 					return directoryScan{}, fmt.Errorf("serve: public entry %q is not a regular file or directory", relativeDisplayPath(canonicalRoot, candidate))
 				}

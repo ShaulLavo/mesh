@@ -54,8 +54,9 @@ still go direct to the origin.
    pointing at a dead channel is the failure mode that makes this feature
    untrustworthy.
 4. **Bound it.** Cap concurrent forwards per key and bytes in flight per forward.
-   The edge already rate limits by IP (T13); this is the second half, limiting
-   the authenticated side.
+   T13's stable-address quota sheds simple floods, while its global concurrency
+   channel is the hard public work bound. This task must also bound the
+   authenticated side.
 
 ## The part that needs care
 
