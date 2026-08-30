@@ -292,6 +292,8 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	if err != nil {
 		return protocol.Control{}, err
 	}
+	stopCancellation := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancellation()
 	forwarded := protocol.Control{
 		Type:      request.Type,
 		RequestID: request.RequestID,
@@ -303,6 +305,13 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	payload, err := forwarded.Encode()
 	if err == nil {
 		err = conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload})
+	}
+	if err == nil && request.Type == protocol.TypeKill {
+		var frame protocol.Frame
+		frame, err = conn.ReadFrame()
+		if err == nil {
+			err = validateKillAcknowledgement(id, request.RequestID, frame)
+		}
 	}
 	closeErr := conn.Close()
 	if err != nil {
@@ -316,6 +325,20 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		RequestID: request.RequestID,
 		SessionID: id,
 	}, nil
+}
+
+func validateKillAcknowledgement(id, requestID string, frame protocol.Frame) error {
+	if frame.Kind != protocol.KindControl {
+		return fmt.Errorf("daemon: session %s kill acknowledgement has kind %d", id, frame.Kind)
+	}
+	message, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return fmt.Errorf("daemon: session %s kill acknowledgement: %w", id, err)
+	}
+	if message.Type != protocol.TypeOK || message.RequestID != requestID || message.SessionID != id {
+		return fmt.Errorf("daemon: session %s invalid kill acknowledgement", id)
+	}
+	return nil
 }
 
 func validateRequestID(request protocol.Control) error {

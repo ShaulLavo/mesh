@@ -145,8 +145,8 @@ type Reader struct {
 // NewReader returns a Reader that decodes frames from r.
 func NewReader(r io.Reader) *Reader { return &Reader{r: r} }
 
-// ReadFrame returns the next frame. The returned Payload is only valid until
-// the next call to ReadFrame.
+// ReadFrame returns the next frame. The caller owns the returned Payload;
+// later calls do not modify it.
 func (fr *Reader) ReadFrame() (Frame, error) {
 	var f Frame
 	if _, err := io.ReadFull(fr.r, fr.header[:]); err != nil {

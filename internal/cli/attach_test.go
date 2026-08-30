@@ -5,10 +5,118 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
 )
+
+func TestAttachStopsReadingInputBeforeReturning(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "worker.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	detach := make(chan struct{})
+	serverErr := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		if _, err := protocol.NewReader(conn).ReadFrame(); err != nil {
+			serverErr <- err
+			return
+		}
+		<-detach
+		serverErr <- protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
+			Type:      protocol.TypeDetach,
+			SessionID: "STOP",
+		})
+	}()
+
+	in, input, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	defer input.Close()
+	out, err := os.CreateTemp(t.TempDir(), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+
+	baseline := goroutinesWithStack("internal/cli.relayInput")
+	attached := make(chan error, 1)
+	go func() {
+		_, err := Attach(AttachOptions{
+			SocketPath: socketPath,
+			SessionID:  "STOP",
+			In:         in,
+			Out:        out,
+		})
+		attached <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for goroutinesWithStack("internal/cli.relayInput") <= baseline {
+		if time.Now().After(deadline) {
+			t.Fatal("input relay did not block on input")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(detach)
+	if err := <-attached; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+	if got := goroutinesWithStack("internal/cli.relayInput"); got != baseline {
+		t.Fatalf("blocked input relays after Attach = %d, want baseline %d", got, baseline)
+	}
+}
+
+func TestResizeRelayStopsWithoutClosingSignalChannel(t *testing.T) {
+	winch := make(chan os.Signal)
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		relayResizes(done, winch, func() {})
+		close(exited)
+	}()
+	close(done)
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("resize relay did not stop")
+	}
+}
+
+func goroutinesWithStack(markers ...string) int {
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	count := 0
+	for _, stack := range strings.Split(string(buf[:n]), "\n\n") {
+		matches := true
+		for _, marker := range markers {
+			if !strings.Contains(stack, marker) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			count++
+		}
+	}
+	return count
+}
 
 func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "worker.sock")

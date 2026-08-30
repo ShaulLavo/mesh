@@ -62,7 +62,6 @@ SID=$("$MESH" ls | awk 'NR==2 {print $1}')
 "$MESH" kill "$SID" >/dev/null
 exec 4>&-
 kill -9 "$CLIENT2" 2>/dev/null; wait "$CLIENT2" 2>/dev/null
-for _ in $(seq 60); do kill -0 "$PID1" 2>/dev/null || break; sleep 0.05; done
 kill -0 "$PID1" 2>/dev/null && fail "mesh kill did not stop the session"
 
 echo "PASS: session $SID survived client death (pid $PID1), replayed scrollback, and died on request"

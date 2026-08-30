@@ -489,6 +489,65 @@ func TestRuntimeResizeFailureReportsErrorAndKeepsScreenInSync(t *testing.T) {
 	}
 }
 
+func TestKillRequestAcknowledgesOnlyAfterSessionExit(t *testing.T) {
+	sid, err := protocol.NewSessionID("KILL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pty := newPipePTY()
+	defer pty.Close()
+	w := &Worker{
+		cfg:    Config{ID: sid.String()},
+		sid:    sid,
+		pty:    pty,
+		cmd:    &exec.Cmd{},
+		exited: make(chan struct{}),
+	}
+
+	client, server := net.Pipe()
+	defer client.Close()
+	go w.serve(server)
+	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
+		Type:      protocol.TypeKill,
+		RequestID: "kill-1",
+		SessionID: sid.String(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	type readResult struct {
+		frame protocol.Frame
+		err   error
+	}
+	read := make(chan readResult, 1)
+	go func() {
+		frame, err := protocol.NewReader(client).ReadFrame()
+		read <- readResult{frame: frame, err: err}
+	}()
+	select {
+	case result := <-read:
+		t.Fatalf("kill request completed before exit: frame %+v, error %v", result.frame, result.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(w.exited)
+	select {
+	case result := <-read:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		message, err := protocol.DecodeControl(result.frame.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.frame.Kind != protocol.KindControl || message.Type != protocol.TypeOK || message.RequestID != "kill-1" || message.SessionID != sid.String() {
+			t.Fatalf("kill acknowledgement = kind %v, message %+v", result.frame.Kind, message)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("kill request was not acknowledged after exit")
+	}
+}
+
 func TestResizeUpdatesPTYAndRenderedScreen(t *testing.T) {
 	pty := newPipePTY()
 	defer pty.Close()

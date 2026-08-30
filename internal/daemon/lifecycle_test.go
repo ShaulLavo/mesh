@@ -166,6 +166,13 @@ func TestLifecycleForwardsOneShotControls(t *testing.T) {
 	for _, controlType := range []string{protocol.TypeSignal, protocol.TypeKill} {
 		t.Run(controlType, func(t *testing.T) {
 			workerConn := &lifecycleRecordingConn{}
+			if controlType == protocol.TypeKill {
+				workerConn.readFrame = controlFrame(t, protocol.Control{
+					Type:      protocol.TypeOK,
+					RequestID: "control-1",
+					SessionID: "7K3D",
+				})
+			}
 			lifecycle := mustLifecycle(t, lifecycleConfig{
 				Catalog: &lifecycleTestCatalog{},
 				Connector: lifecycleConnectorFunc(func(_ context.Context, id protocol.SessionID) (transport.Conn, error) {
@@ -192,6 +199,9 @@ func TestLifecycleForwardsOneShotControls(t *testing.T) {
 			}
 			if !workerConn.closed || len(workerConn.frames) != 1 {
 				t.Fatalf("worker connection closed = %v, frames = %d", workerConn.closed, len(workerConn.frames))
+			}
+			if controlType == protocol.TypeKill && !workerConn.read {
+				t.Fatal("kill completed without reading the worker acknowledgement")
 			}
 			forwarded, err := protocol.DecodeControl(workerConn.frames[0].Payload)
 			if err != nil {
@@ -395,12 +405,18 @@ func failingLifecycleConnector() WorkerConnector {
 }
 
 type lifecycleRecordingConn struct {
-	frames []protocol.Frame
-	closed bool
+	readFrame protocol.Frame
+	read      bool
+	frames    []protocol.Frame
+	closed    bool
 }
 
-func (*lifecycleRecordingConn) ReadFrame() (protocol.Frame, error) {
-	return protocol.Frame{}, errors.New("unexpected read")
+func (c *lifecycleRecordingConn) ReadFrame() (protocol.Frame, error) {
+	c.read = true
+	if c.readFrame.Kind == 0 {
+		return protocol.Frame{}, errors.New("unexpected read")
+	}
+	return c.readFrame, nil
 }
 
 func (c *lifecycleRecordingConn) WriteFrame(frame protocol.Frame) error {

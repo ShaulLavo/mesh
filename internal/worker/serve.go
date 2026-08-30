@@ -32,7 +32,12 @@ func (w *Worker) serve(conn net.Conn) {
 	}
 	msg, err := protocol.DecodeControl(first.Payload)
 	if err == nil && msg.Type == protocol.TypeKill {
-		go w.kill()
+		w.kill()
+		_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
+			Type:      protocol.TypeOK,
+			RequestID: msg.RequestID,
+			SessionID: w.cfg.ID,
+		})
 		return
 	}
 	if err == nil && msg.Type == protocol.TypeSignal {
@@ -183,7 +188,8 @@ func (w *Worker) serve(conn net.Conn) {
 			case protocol.TypeSignal:
 				w.signal(msg.Signal)
 			case protocol.TypeKill:
-				go w.kill()
+				w.kill()
+				return
 			case protocol.TypeDetach:
 				return
 			}
@@ -234,6 +240,7 @@ func (w *Worker) kill() {
 	// survived the hangup loses its terminal as well.
 	_ = w.pty.Close()
 	w.signal("kill")
+	<-w.exited
 }
 
 var signals = map[string]syscall.Signal{

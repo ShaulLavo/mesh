@@ -110,9 +110,9 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 	// the launching marker keeps incomplete state out of catalog scans, and the
 	// worker removes it only after metadata and the socket are both ready.
 	cleanupReserved = false
-	// Waiting would make the daemon the worker's supervisor. Release instead so
-	// daemon death cannot propagate to the session process.
-	_ = cmd.Process.Release()
+	// Waiting only reaps the worker. Setsid keeps the session independent when
+	// the launcher exits, and meta.json remains authoritative for its outcome.
+	go func() { _ = cmd.Wait() }()
 
 	if err := waitForWorker(paths.Socket(dir), paths.Launching(dir), workerReadyTimeout); err != nil {
 		return Launched{}, fmt.Errorf("launch worker %s: readiness (see %s): %w", id, logPath, err)

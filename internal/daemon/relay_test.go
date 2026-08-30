@@ -124,6 +124,69 @@ func TestClientRelayBlockedSessionDoesNotBlockAnother(t *testing.T) {
 	})
 }
 
+func TestClientRelaySlowClientDoesNotStopWorkerReaders(t *testing.T) {
+	client := newRelayTestConn()
+	workerA := newRelayTestConn()
+	workerB := newRelayTestConn()
+	connector := newRelayTestConnector(
+		connectResult{conn: workerA},
+		connectResult{conn: workerB},
+	)
+	relay := newClientRelay(client, connector)
+	t.Cleanup(func() { _ = relay.Close() })
+
+	idA := mustRelaySessionID(t, "AAAA")
+	idB := mustRelaySessionID(t, "BBBB")
+	attachRelaySession(t, relay, client, workerA, idA)
+	attachRelaySession(t, relay, client, workerB, idB)
+
+	entered, release := client.blockWrites()
+	defer release()
+	workerA.pushRead(protocol.Frame{Kind: protocol.KindData, Session: idA, Payload: []byte("blocked")})
+	waitRelaySignal(t, entered, "blocked client writer")
+
+	first := workerB.pushReadObserved(protocol.Frame{Kind: protocol.KindData, Session: idB, Payload: []byte("one")})
+	waitRelaySignal(t, first, "first independent worker frame")
+	second := workerB.pushReadObserved(protocol.Frame{Kind: protocol.KindData, Session: idB, Payload: []byte("two")})
+	waitRelaySignal(t, second, "second independent worker frame")
+}
+
+func TestClientRelayOutputQueueIsBoundedAndReservesControls(t *testing.T) {
+	lifetime, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	relay := &clientRelay{
+		lifetime: lifetime,
+		output:   make(chan protocol.Frame, relayOutputQueueFrameLimit+relayOutputControlReserve),
+	}
+
+	payload := []byte{0}
+	for i := range relayOutputQueueFrameLimit {
+		payload[0] = byte(i)
+		if err := relay.enqueueOutput(protocol.Frame{Kind: protocol.KindData, Payload: payload}); err != nil {
+			t.Fatalf("queue data frame %d: %v", i, err)
+		}
+	}
+	payload[0] = 0xff
+	if err := relay.enqueueOutput(protocol.Frame{Kind: protocol.KindData, Payload: payload}); !errors.Is(err, errRelayOutputQueueFull) {
+		t.Fatalf("data overflow error = %v, want %v", err, errRelayOutputQueueFull)
+	}
+	first := <-relay.output
+	if len(first.Payload) != 1 || first.Payload[0] != 0 {
+		t.Fatalf("queued data was not copied: %v", first.Payload)
+	}
+	relay.output <- first
+
+	control := controlFrame(t, protocol.Control{Type: protocol.TypeExit, SessionID: "FULL"})
+	for i := range relayOutputControlReserve {
+		if err := relay.enqueueOutput(control); err != nil {
+			t.Fatalf("queue reserved control %d: %v", i, err)
+		}
+	}
+	if err := relay.enqueueOutput(control); !errors.Is(err, errRelayOutputQueueFull) {
+		t.Fatalf("control overflow error = %v, want %v", err, errRelayOutputQueueFull)
+	}
+}
+
 func TestClientRelayFailedReplacementPreservesIncumbent(t *testing.T) {
 	client := newRelayTestConn()
 	incumbent := newRelayTestConn()
@@ -301,18 +364,13 @@ func TestClientRelayOrdersGenerationReplacementWithOutboundFrames(t *testing.T) 
 	assertRelayFrame(t, newWorker.nextWrite(t), replacement)
 	newAttached := controlFrame(t, protocol.Control{Type: protocol.TypeAttached, SessionID: id.String(), Seq: 4})
 	newWorker.pushRead(newAttached)
-	select {
-	case err := <-replaced:
-		t.Fatalf("replacement crossed blocked old output: %v", err)
-	case <-time.After(25 * time.Millisecond):
+	if err := waitRelayError(t, replaced, "queued generation replacement"); err != nil {
+		t.Fatal(err)
 	}
 
 	release()
 	assertRelayFrame(t, client.nextWrite(t), oldData)
 	assertRelayFrame(t, client.nextWrite(t), newAttached)
-	if err := waitRelayError(t, replaced, "generation replacement"); err != nil {
-		t.Fatal(err)
-	}
 	oldWorker.waitClosed(t)
 
 	newData := protocol.Frame{Kind: protocol.KindData, Session: id, Seq: 4, Payload: []byte("new")}

@@ -12,14 +12,18 @@ import (
 )
 
 const (
-	relayInputQueueFrameLimit = 256
-	relayInputQueueByteLimit  = 8 << 20
+	relayInputQueueFrameLimit  = 256
+	relayInputQueueByteLimit   = 8 << 20
+	relayOutputQueueFrameLimit = 256
+	relayOutputControlReserve  = 8
+	relayOutputQueueByteLimit  = 8 << 20
 )
 
 var (
 	errRelayClosed          = errors.New("daemon: relay closed")
 	errRelayGenerationStale = errors.New("daemon: stale relay generation")
 	errRelayInputQueueFull  = errors.New("daemon: relay input queue full")
+	errRelayOutputQueueFull = errors.New("daemon: relay output queue full")
 )
 
 // clientRelay owns the worker connections attached through one multiplexed
@@ -41,6 +45,11 @@ type clientRelay struct {
 	lanes   map[protocol.SessionID]*relayLane
 	all     map[*relayLane]struct{}
 	pending map[*relayCandidate]struct{}
+	output  chan protocol.Frame
+
+	outputMu     sync.Mutex
+	outputFrames int
+	outputBytes  int
 
 	ops sync.WaitGroup
 	wg  sync.WaitGroup
@@ -88,7 +97,7 @@ func (candidate *relayCandidate) close() error {
 
 func newClientRelay(client transport.Conn, workers WorkerConnector) *clientRelay {
 	lifetime, cancel := context.WithCancel(context.Background())
-	return &clientRelay{
+	relay := &clientRelay{
 		client:   client,
 		workers:  workers,
 		lifetime: lifetime,
@@ -96,7 +105,11 @@ func newClientRelay(client transport.Conn, workers WorkerConnector) *clientRelay
 		lanes:    make(map[protocol.SessionID]*relayLane),
 		all:      make(map[*relayLane]struct{}),
 		pending:  make(map[*relayCandidate]struct{}),
+		output:   make(chan protocol.Frame, relayOutputQueueFrameLimit+relayOutputControlReserve),
 	}
+	relay.wg.Add(1)
+	go relay.writeClientLoop()
+	return relay
 }
 
 // HandleFrame routes one client frame. False means the frame belongs to the
@@ -275,11 +288,12 @@ func (r *clientRelay) publishCandidate(candidate *relayCandidate, id protocol.Se
 	}
 	r.mu.Unlock()
 
-	// The first response belongs to the candidate but must precede every
-	// snapshot or data frame its reader can observe. Holding sendMu also lets
-	// any in-flight incumbent output finish before this generation commits.
-	if err := r.client.WriteFrame(attached); err != nil {
-		return nil, fmt.Errorf("daemon: write session %s attach response: %w", id.String(), err)
+	// The first response belongs to the candidate and enters the same FIFO as
+	// every output frame. sendMu orders it after accepted incumbent output and
+	// before the new generation can enqueue anything.
+	if err := r.enqueueOutput(attached); err != nil {
+		go r.Close()
+		return nil, fmt.Errorf("daemon: queue session %s attach response: %w", id.String(), err)
 	}
 
 	r.mu.Lock()
@@ -325,8 +339,9 @@ func (r *clientRelay) forwardCandidate(frame protocol.Frame) error {
 	if closed {
 		return errRelayClosed
 	}
-	if err := r.client.WriteFrame(frame); err != nil {
-		return fmt.Errorf("daemon: write rejected attach response: %w", err)
+	if err := r.enqueueOutput(frame); err != nil {
+		go r.Close()
+		return fmt.Errorf("daemon: queue rejected attach response: %w", err)
 	}
 	return nil
 }
@@ -467,10 +482,64 @@ func (r *clientRelay) forward(lane *relayLane, frame protocol.Frame) error {
 	if !current {
 		return errRelayGenerationStale
 	}
-	if err := r.client.WriteFrame(frame); err != nil {
-		return fmt.Errorf("daemon: write session %s output: %w", lane.id.String(), err)
+	if err := r.enqueueOutput(frame); err != nil {
+		return fmt.Errorf("daemon: queue session %s output: %w", lane.id.String(), err)
 	}
 	return nil
+}
+
+func (r *clientRelay) enqueueOutput(frame protocol.Frame) error {
+	queued := cloneFrame(frame)
+	payload := queued.Kind == protocol.KindData || queued.Kind == protocol.KindSnapshot
+	bytes := len(queued.Payload)
+
+	r.outputMu.Lock()
+	defer r.outputMu.Unlock()
+	select {
+	case <-r.lifetime.Done():
+		return errRelayClosed
+	default:
+	}
+	if payload && (r.outputFrames >= relayOutputQueueFrameLimit || bytes > relayOutputQueueByteLimit-r.outputBytes) {
+		return errRelayOutputQueueFull
+	}
+	select {
+	case r.output <- queued:
+		if payload {
+			r.outputFrames++
+			r.outputBytes += bytes
+		}
+		return nil
+	default:
+		return errRelayOutputQueueFull
+	}
+}
+
+func (r *clientRelay) releaseOutput(frame protocol.Frame) {
+	if frame.Kind != protocol.KindData && frame.Kind != protocol.KindSnapshot {
+		return
+	}
+	r.outputMu.Lock()
+	r.outputFrames--
+	r.outputBytes -= len(frame.Payload)
+	r.outputMu.Unlock()
+}
+
+func (r *clientRelay) writeClientLoop() {
+	defer r.wg.Done()
+	for {
+		select {
+		case frame := <-r.output:
+			err := r.client.WriteFrame(frame)
+			r.releaseOutput(frame)
+			if err != nil {
+				go r.Close()
+				return
+			}
+		case <-r.lifetime.Done():
+			return
+		}
+	}
 }
 
 func (r *clientRelay) unpublish(lane *relayLane) {
