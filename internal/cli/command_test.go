@@ -209,6 +209,44 @@ func TestKillAndLogsRouteToTheResolvedRemoteHost(t *testing.T) {
 	}
 }
 
+func TestAddSavesVerifiedHostAndReportsConvergedRerun(t *testing.T) {
+	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+	bootstrapCalls := 0
+	bootstrapHost := HostRecord{
+		ID: "host-id", MeshIdentity: "mesh-identity", TailscaleName: "pc.example.ts.net",
+		Addresses: []string{"100.64.0.2"}, Endpoint: "ws://100.64.0.2:7337/mesh",
+	}
+	bootstrap := func(_ context.Context, request AddRequest) (BootstrapResult, error) {
+		bootstrapCalls++
+		if request.Target != "alice@pc.example.ts.net" || request.Alias != "pc" {
+			t.Fatalf("add request = %#v", request)
+		}
+		return BootstrapResult{Host: bootstrapHost, AlreadyConfigured: bootstrapCalls > 1}, nil
+	}
+
+	stdout, _, err := executeCommand(t, Dependencies{Bootstrap: bootstrap}, "add", "alice@pc.example.ts.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "added pc (host-id)") {
+		t.Fatalf("first add output = %q", stdout)
+	}
+	stdout, _, err = executeCommand(t, Dependencies{Bootstrap: bootstrap}, "add", "alice@pc.example.ts.net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "already configured pc (host-id)") {
+		t.Fatalf("second add output = %q", stdout)
+	}
+	hosts, err := LoadHosts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hosts) != 1 || hosts[0].Alias != "pc" || hosts[0].Endpoint != bootstrapHost.Endpoint {
+		t.Fatalf("saved hosts = %#v", hosts)
+	}
+}
+
 func TestLogsRoutesCatalogedExitedSessionToRemoteFallback(t *testing.T) {
 	host := setupCommandTestHost(t)
 	host.sessionState = "exited"

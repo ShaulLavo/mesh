@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	root := cli.NewCommand(cli.Dependencies{})
+	root := cli.NewCommand(commandDependencies())
 	err := fang.Execute(
 		context.Background(),
 		root,

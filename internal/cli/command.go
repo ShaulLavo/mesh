@@ -35,8 +35,15 @@ type AddRequest struct {
 	Alias  string
 }
 
+// BootstrapResult separates the durable address-book entry from metadata about
+// the bootstrap operation that produced it.
+type BootstrapResult struct {
+	Host              HostRecord
+	AlreadyConfigured bool
+}
+
 // BootstrapFunc installs a host and returns its verified address-book record.
-type BootstrapFunc func(context.Context, AddRequest) (HostRecord, error)
+type BootstrapFunc func(context.Context, AddRequest) (BootstrapResult, error)
 
 // WakeFunc wakes one adopted host through a configured power controller.
 type WakeFunc func(context.Context, HostRecord) error
@@ -403,16 +410,21 @@ func (a *application) addCommand() *cobra.Command {
 			if a.dependencies.Bootstrap == nil {
 				return errors.New("SSH bootstrap support is unavailable in this build")
 			}
-			record, err := a.dependencies.Bootstrap(cmd.Context(), AddRequest{Target: args[0], Alias: selected})
+			result, err := a.dependencies.Bootstrap(cmd.Context(), AddRequest{Target: args[0], Alias: selected})
 			if err != nil {
 				return err
 			}
+			record := result.Host
 			record.Alias = selected
 			if err := SaveHost(record); err != nil {
 				return fmt.Errorf("save host %s: %w", selected, err)
 			}
 			path, _ := ConfigPath()
-			fmt.Fprintf(cmd.OutOrStdout(), "added %s (%s)\nhost config: %s\n", selected, record.ID, path)
+			if result.AlreadyConfigured {
+				fmt.Fprintf(cmd.OutOrStdout(), "already configured %s (%s)\nhost config: %s\n", selected, record.ID, path)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "added %s (%s)\nhost config: %s\n", selected, record.ID, path)
+			}
 			return nil
 		},
 	}

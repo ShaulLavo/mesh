@@ -15,13 +15,15 @@ Steps 1 and 2 of the build order, plus the daemon.
 - `internal/daemon` — worker discovery, reconciliation, relay, lifecycle (T04)
 - `internal/transport` — WebSocket transport with resume (T05)
 - `internal/identity`, `internal/tailnet` — host keys, Tailscale discovery (T06)
+- `internal/bootstrap`, `scripts/install` — SSH adoption, release selection,
+  identity verification, and idempotent systemd/launchd installers (T08)
 - `internal/cli`, `cmd/mesh` — Cobra + Fang product surface, versioned host
   address book, concurrent live/cached host catalogs, remote create, attach,
   logs, kill, signals, and the T09 picker boundary (T07)
 - `internal/serve` — durable static, files, and loopback-proxy services; hardened
   shared root resolution; live service controls and restart restoration (T11)
 
-Verified 2026-08-30: `gofmt`, `go vet ./...`, `go test -race ./...`, and all eleven
+Verified 2026-08-30: `gofmt`, `go vet ./...`, `go test -race ./...`, and all twelve
 scripts in `integration/` passing.
 
 Origins can now serve on their tailnet HTTP listener, but no DNS or certificate
@@ -31,14 +33,14 @@ entirely unwritten.
 ## Complete tasks
 
 T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websocket
-transport · T06 host identity · T07 CLI surface · T11 serving core.
+transport · T06 host identity · T07 CLI surface · T08 ssh bootstrap · T11 serving
+core.
 
 ## Next
 
 ```
 T07 CLI surface ──→ T09 picker TUI ──────────────→ T17 sessions over SSH
              └───→ T10 packaging                        ↑
-T08 ssh bootstrap                                       │
 T15 ssh front door ─────────────────────────────────────┤
              ├──────────────────────────→ T16 SFTP and SCP
              └──────────────────────────→ T18 reverse tunnels
@@ -47,11 +49,10 @@ T11 serving core ──┬─→ T12 private names ──→ T13 public edge ─
                    └──────────→ T16                     └────────→ T18
 ```
 
-T08, T09, T10, T12 and T15 are unblocked. Everything else waits on one of them.
+T09, T10, T12 and T15 are unblocked. Everything else waits on one of them.
 
 | Task | Owns | Blocked by |
 |---|---|---|
-| T08 ssh bootstrap | `internal/bootstrap/`, `scripts/install/` | — |
 | T15 ssh front door | `internal/sshd/` | T06 |
 | T09 picker TUI | `internal/tui/` | — |
 | T10 packaging | `.github/`, `.goreleaser.yaml` | — |
