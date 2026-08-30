@@ -19,6 +19,14 @@ const (
 	ReservedPrefix = "/mesh"
 	// PublicDomain is the only public DNS zone Mesh routes may name.
 	PublicDomain = "shaulavo.dev"
+	// MaximumServices bounds one origin snapshot and its service.list frame.
+	MaximumServices = 256
+	// MaximumServiceNameBytes bounds a canonical route name.
+	MaximumServiceNameBytes = 512
+	// MaximumServiceTargetBytes bounds a directory path carried over control.
+	MaximumServiceTargetBytes = 2_048
+	// MaximumServiceProblemBytes bounds one cached health diagnostic.
+	MaximumServiceProblemBytes = 256
 )
 
 // Kind identifies what an origin service exposes.
@@ -158,6 +166,9 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 }
 
 func buildRegistrySnapshot(services []Service, reservedPrefix string, trustForwardedHeaders func(netip.Addr) bool) (*registrySnapshot, error) {
+	if len(services) > MaximumServices {
+		return nil, fmt.Errorf("serve: service count %d exceeds %d", len(services), MaximumServices)
+	}
 	seen := make(map[string]struct{}, len(services))
 	snapshot := &registrySnapshot{
 		services: make([]Service, 0, len(services)),
@@ -202,6 +213,9 @@ func normalizeService(service Service) (Service, error) {
 	if err := validatePublicName(service.PublicName); err != nil {
 		return Service{}, fmt.Errorf("serve: service %q: %w", service.Name, err)
 	}
+	if len(service.Target) > MaximumServiceTargetBytes {
+		return Service{}, fmt.Errorf("serve: service %q target exceeds %d bytes", service.Name, MaximumServiceTargetBytes)
+	}
 	switch service.Kind {
 	case Static, Files:
 		if service.Target == "" {
@@ -212,6 +226,9 @@ func normalizeService(service Service) (Service, error) {
 			return Service{}, fmt.Errorf("serve: resolve service %q target %s: %w", service.Name, service.Target, err)
 		}
 		service.Target = filepath.Clean(target)
+		if len(service.Target) > MaximumServiceTargetBytes {
+			return Service{}, fmt.Errorf("serve: service %q resolved target exceeds %d bytes", service.Name, MaximumServiceTargetBytes)
+		}
 	case Proxy:
 		port, err := strconv.ParseUint(service.Target, 10, 16)
 		if err != nil || port == 0 {
@@ -258,6 +275,9 @@ func validatePublicName(name string) error {
 }
 
 func validateRouteName(name string) error {
+	if len(name) > MaximumServiceNameBytes {
+		return fmt.Errorf("serve: service route exceeds %d bytes", MaximumServiceNameBytes)
+	}
 	if name == "" || path.Clean(name) != name || strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") {
 		return fmt.Errorf("serve: service route %q must be a clean relative path", name)
 	}

@@ -19,7 +19,7 @@ func TestCertificateControllerInstallsAndAcknowledgesBundle(t *testing.T) {
 	want := dnsname.SignedBundle{
 		Profile:     dnsname.ProfilePrivateOrigin,
 		Environment: dnsname.EnvironmentStaging,
-		TargetID:    "origin", SignerID: "renewer", CertificatePEM: []byte("certificate"),
+		TargetID:    "origin", SignerID: "renewer", PrivateName: "pc.mesh.shaulavo.dev", CertificatePEM: []byte("certificate"),
 		PrivateKeyPEM: []byte("private-key"), Signature: []byte("signature"),
 	}
 	installer := &certificateInstallerStub{bundle: dnsname.Bundle{Fingerprint: "fingerprint"}}
@@ -32,14 +32,14 @@ func TestCertificateControllerInstallsAndAcknowledgesBundle(t *testing.T) {
 		Certificate: &protocol.CertificateInstall{
 			Profile:     string(want.Profile),
 			Environment: string(want.Environment),
-			TargetID:    want.TargetID, SignerID: want.SignerID, CertificatePEM: want.CertificatePEM,
+			TargetID:    want.TargetID, SignerID: want.SignerID, PrivateName: want.PrivateName, CertificatePEM: want.CertificatePEM,
 			PrivateKeyPEM: want.PrivateKeyPEM, Signature: want.Signature,
 		},
 	})
 	if err != nil || !handled {
 		t.Fatalf("handled = %v, error = %v", handled, err)
 	}
-	if response.Type != protocol.TypeCertificateInstalled || response.RequestID != "certificate-1" || response.CertificateFingerprint != "fingerprint" || response.CertificateEnvironment != "staging" || response.CertificateProfile != "private-origin" {
+	if response.Type != protocol.TypeCertificateInstalled || response.RequestID != "certificate-1" || response.CertificateFingerprint != "fingerprint" || response.CertificateEnvironment != "staging" || response.CertificateProfile != "private-origin" || response.CertificatePrivateName != "pc.mesh.shaulavo.dev" {
 		t.Fatalf("response = %#v", response)
 	}
 	if !reflect.DeepEqual(installer.got, want) {
@@ -146,7 +146,7 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicStaging, err := dnsname.SignBundle(publicBundle, target.ID, dnsname.ProfilePublicEdge, dnsname.EnvironmentStaging, publicSigner)
+	publicStaging, err := dnsname.SignBundle(publicBundle, target.ID, dnsname.ProfilePublicEdge, dnsname.EnvironmentStaging, "", publicSigner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 	if _, err := runtime.PublicTLS.GetCertificate(nil); !errors.Is(err, dnsname.ErrNoCertificate) {
 		t.Fatalf("public staging certificate entered live TLS source: %v", err)
 	}
-	publicLive, err := dnsname.SignBundle(publicBundle, target.ID, dnsname.ProfilePublicEdge, dnsname.EnvironmentLive, publicSigner)
+	publicLive, err := dnsname.SignBundle(publicBundle, target.ID, dnsname.ProfilePublicEdge, dnsname.EnvironmentLive, "", publicSigner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateLive, err := dnsname.SignBundle(privateBundle, target.ID, dnsname.ProfilePrivateOrigin, dnsname.EnvironmentLive, privateSigner)
+	privateLive, err := dnsname.SignBundle(privateBundle, target.ID, dnsname.ProfilePrivateOrigin, dnsname.EnvironmentLive, "pc.mesh.shaulavo.dev", privateSigner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +185,28 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 	}
 	if _, err := runtime.OriginTLS.GetCertificate(nil); err != nil {
 		t.Fatalf("private live certificate was not hot-published: %v", err)
+	}
+	if got := runtime.PrivateName(); got != "" {
+		t.Fatalf("private name was exposed before ingress readiness: %q", got)
+	}
+	runtime.PrivateNameReady()
+	if got := runtime.PrivateName(); got != "pc.mesh.shaulavo.dev" {
+		t.Fatalf("private name after ingress readiness = %q", got)
+	}
+	restarted, err := configureCertificates(certificateRuntimeConfig{
+		StateDir: stateDir, TargetID: target.ID,
+		OriginHTTPSPort: 8443, OriginRenewerID: privateRenewer.ID,
+		PublicMode: edge.ModeProxy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := restarted.PrivateName(); got != "" {
+		t.Fatalf("restarted private name was exposed before ingress readiness: %q", got)
+	}
+	restarted.PrivateNameReady()
+	if got := restarted.PrivateName(); got != "pc.mesh.shaulavo.dev" {
+		t.Fatalf("restarted private name after ingress readiness = %q", got)
 	}
 	for _, path := range []string{
 		filepath.Join(stateDir, privateTLSDirectoryName, string(dnsname.EnvironmentLive)),

@@ -83,7 +83,7 @@ func ListViaDaemon(ctx context.Context, socketPath string) ([]protocol.SessionIn
 	case protocol.TypeError:
 		return nil, daemonResponseError("session list", response.Message)
 	default:
-		return nil, fmt.Errorf("cli: list response has type %q, want %q or %q", response.Type, protocol.TypeListed, protocol.TypeError)
+		return nil, errors.New("cli: daemon returned an unexpected session-list response")
 	}
 }
 
@@ -123,10 +123,10 @@ func controlRequest(ctx context.Context, conn transport.Conn, request protocol.C
 	}
 	response, err := protocol.DecodeControl(frame.Payload)
 	if err != nil {
-		return protocol.Control{}, fmt.Errorf("cli: decode %s response: %w", request.Type, err)
+		return protocol.Control{}, presentError("cli: decode "+request.Type+" response", err)
 	}
 	if response.RequestID != request.RequestID {
-		return protocol.Control{}, fmt.Errorf("cli: %s response request ID %q does not match %q", request.Type, response.RequestID, request.RequestID)
+		return protocol.Control{}, fmt.Errorf("cli: %s response has a mismatched request ID", request.Type)
 	}
 	return response, nil
 }
@@ -176,7 +176,7 @@ func daemonOperationError(ctx context.Context, operation string, err error) erro
 	if contextErr := ctx.Err(); contextErr != nil {
 		err = contextErr
 	}
-	return fmt.Errorf("cli: %s: %w", operation, err)
+	return presentError("cli: "+operation, err)
 }
 
 func validateDaemonCreateResponse(response protocol.Control) (string, error) {
@@ -184,17 +184,18 @@ func validateDaemonCreateResponse(response protocol.Control) (string, error) {
 	case protocol.TypeCreated:
 		id, err := session.ParseID(response.SessionID)
 		if err != nil || id != response.SessionID {
-			return "", fmt.Errorf("cli: daemon returned invalid session ID %q", response.SessionID)
+			return "", errors.New("cli: daemon returned an invalid session ID")
 		}
 		return id, nil
 	case protocol.TypeError:
 		return "", daemonResponseError("session creation", response.Message)
 	default:
-		return "", fmt.Errorf("cli: create response has type %q, want %q or %q", response.Type, protocol.TypeCreated, protocol.TypeError)
+		return "", errors.New("cli: daemon returned an unexpected session-create response")
 	}
 }
 
 func daemonResponseError(operation, message string) error {
+	message = safeRemoteText(message)
 	if message == "" {
 		return fmt.Errorf("cli: daemon rejected %s", operation)
 	}
@@ -204,28 +205,28 @@ func daemonResponseError(operation, message string) error {
 func validateDaemonSession(listed protocol.SessionInfo) error {
 	id, err := session.ParseID(listed.ID)
 	if err != nil || id != listed.ID {
-		return fmt.Errorf("cli: daemon listed invalid session ID %q", listed.ID)
+		return errors.New("cli: daemon listed an invalid session ID")
 	}
 	if strings.TrimSpace(listed.HostID) == "" {
-		return fmt.Errorf("cli: daemon listed session %s without a host ID", listed.ID)
+		return errors.New("cli: daemon listed a session without a host ID")
 	}
 	if len(listed.Command) == 0 || listed.Command[0] == "" {
-		return fmt.Errorf("cli: daemon listed session %s without a command", listed.ID)
+		return errors.New("cli: daemon listed a session without a command")
 	}
 	if listed.CreatedAt.IsZero() || listed.CreatedAt.UnixMilli() < 0 {
-		return fmt.Errorf("cli: daemon listed session %s with invalid creation time", listed.ID)
+		return errors.New("cli: daemon listed a session with an invalid creation time")
 	}
 	switch storage.SessionState(listed.State) {
 	case storage.StateRunning, storage.StateDetached, storage.StateInterrupted:
 		if listed.ExitCode != nil {
-			return fmt.Errorf("cli: daemon listed %s session %s with an exit code", listed.State, listed.ID)
+			return errors.New("cli: daemon listed an active session with an exit code")
 		}
 	case storage.StateExited:
 		if listed.ExitCode == nil {
-			return fmt.Errorf("cli: daemon listed exited session %s without an exit code", listed.ID)
+			return errors.New("cli: daemon listed an exited session without an exit code")
 		}
 	default:
-		return fmt.Errorf("cli: daemon listed session %s with invalid state %q", listed.ID, listed.State)
+		return errors.New("cli: daemon listed a session with an invalid state")
 	}
 	return nil
 }

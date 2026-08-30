@@ -13,7 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/dnsname"
+	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/tailnet"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -89,7 +93,7 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 	stateDir := t.TempDir()
 	httpsPort := reserveTCPPort(t, "127.0.0.1")
 	controlPort := reserveTCPPort(t, "127.0.0.1")
-	signerID, _ := composedIdentity(t)
+	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
 	configured := make(chan error, 1)
 	options := defaultRunOptions()
 	options.reconcileInterval = time.Hour
@@ -117,6 +121,16 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 				err = fmt.Errorf("Tailnet control listener was not ready: %w", controlErr)
 			}
 		}
+		if err == nil {
+			probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort)
+			cancel()
+			if probeErr != nil {
+				err = probeErr
+			} else if privateName != "" {
+				err = fmt.Errorf("private name %q was exposed before Tailscale Serve succeeded", privateName)
+			}
+		}
 		configured <- err
 		return nil, err
 	}
@@ -136,6 +150,19 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 	case <-time.After(runtimeTestTimeout):
 		t.Fatal("Tailscale Serve was not configured")
 	}
+	deadline := time.Now().Add(runtimeTestTimeout)
+	for {
+		probeCtx, probeCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort)
+		probeCancel()
+		if probeErr == nil && privateName == "pc.mesh.shaulavo.dev" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("private name was not exposed after Tailscale Serve readiness: name %q, error %v", privateName, probeErr)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	cancel()
 	if err := waitRuntime(t, done); err != nil {
 		t.Fatal(err)
@@ -146,7 +173,7 @@ func TestRunFailsWhenTailscaleServeConfigurationFails(t *testing.T) {
 	stateDir := t.TempDir()
 	httpsPort := reserveTCPPort(t, "127.0.0.1")
 	controlPort := reserveTCPPort(t, "127.0.0.1")
-	signerID, _ := composedIdentity(t)
+	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
 	options := defaultRunOptions()
 	options.reconcileInterval = time.Hour
 	options.discoverSelf = func(context.Context) (tailnet.Peer, error) {
@@ -154,6 +181,15 @@ func TestRunFailsWhenTailscaleServeConfigurationFails(t *testing.T) {
 	}
 	options.validateServeAddresses = func([]string) error { return nil }
 	options.runCommand = func(context.Context, string, ...string) ([]byte, error) {
+		probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		privateName, err := probeWebSocketPrivateName(probeCtx, controlPort)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		if privateName != "" {
+			return nil, fmt.Errorf("private name %q was exposed before failed Tailscale Serve configuration", privateName)
+		}
 		return []byte("run tailscale set --operator first"), errors.New("exit status 1")
 	}
 	err := run(context.Background(), Config{
@@ -164,6 +200,39 @@ func TestRunFailsWhenTailscaleServeConfigurationFails(t *testing.T) {
 	}
 	if _, statErr := os.Lstat(SocketPath(stateDir)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("daemon socket after Tailscale Serve failure: %v", statErr)
+	}
+}
+
+func TestRunWithoutTailscaleServeDoesNotExposePersistedPrivateName(t *testing.T) {
+	stateDir := t.TempDir()
+	httpsPort := reserveTCPPort(t, "127.0.0.1")
+	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
+	options := defaultRunOptions()
+	options.reconcileInterval = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, Config{StateDir: stateDir, HTTPSPort: httpsPort, CertificateRenewerID: signerID}, options)
+	}()
+	deadline := time.Now().Add(runtimeTestTimeout)
+	for {
+		probeCtx, probeCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		privateName, err := probeUnixPrivateName(probeCtx, SocketPath(stateDir))
+		probeCancel()
+		if err == nil {
+			if privateName != "" {
+				t.Fatalf("private name without Tailscale Serve = %q", privateName)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("probe daemon without Tailscale Serve: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	if err := waitRuntime(t, done); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -395,4 +464,85 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	if !reflect.DeepEqual(after, before) {
 		t.Fatal("daemon address restart mutated detached worker metadata")
 	}
+}
+
+func installRunTestPrivateName(t *testing.T, stateDir string, httpsPort uint16) string {
+	t.Helper()
+	target, _, err := identity.LoadOrCreate(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signerID, signer := composedIdentity(t)
+	runtime, err := configureCertificates(certificateRuntimeConfig{
+		StateDir: stateDir, TargetID: target.ID, OriginHTTPSPort: httpsPort, OriginRenewerID: signerID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, ok := runtime.Controller.(*certificateController)
+	if !ok {
+		t.Fatalf("certificate controller = %T", runtime.Controller)
+	}
+	now := time.Now().UTC()
+	certificate, privateKey := daemonTestCertificate(t, 991, now)
+	bundle, err := dnsname.ValidateBundle(certificate, privateKey, dnsname.WildcardName, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := dnsname.SignBundle(bundle, target.ID, dnsname.ProfilePrivateOrigin, dnsname.EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := controller.installers[dnsname.ProfilePrivateOrigin].Install(signed); err != nil {
+		t.Fatal(err)
+	}
+	return signerID
+}
+
+func probeWebSocketPrivateName(ctx context.Context, port uint16) (string, error) {
+	conn, err := transport.DialOnce(ctx, fmt.Sprintf("ws://127.0.0.1:%d/mesh", port), transport.DialOptions{})
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close() //nolint:errcheck // probe result is authoritative
+	return probePrivateName(ctx, conn)
+}
+
+func probeUnixPrivateName(ctx context.Context, socketPath string) (string, error) {
+	stream, err := (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		return "", err
+	}
+	conn, err := transport.NewStreamConn(stream)
+	if err != nil {
+		_ = stream.Close()
+		return "", err
+	}
+	defer conn.Close() //nolint:errcheck // probe result is authoritative
+	return probePrivateName(ctx, conn)
+}
+
+func probePrivateName(ctx context.Context, conn transport.Conn) (string, error) {
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	request := protocol.Control{Type: protocol.TypeHostInfo, RequestID: "private-name-probe"}
+	payload, err := request.Encode()
+	if err != nil {
+		return "", err
+	}
+	if err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload}); err != nil {
+		return "", err
+	}
+	frame, err := conn.ReadFrame()
+	if err != nil {
+		return "", err
+	}
+	response, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return "", err
+	}
+	if response.Type != protocol.TypeHostInfoResult || response.RequestID != request.RequestID || response.Host == nil {
+		return "", errors.New("invalid host-info probe response")
+	}
+	return response.Host.PrivateName, nil
 }

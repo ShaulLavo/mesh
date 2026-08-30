@@ -4,6 +4,19 @@
 
 package sqlc
 
+type CachedService struct {
+	HostID        string
+	PrivateName   string
+	Name          string
+	Kind          string
+	Target        string
+	PublicName    string
+	WakeOnRequest int64
+	Healthy       int64
+	Problem       string
+	ObservedAt    int64
+}
+
 type EdgeOutbox struct {
 	TargetID     string
 	Sequence     int64

@@ -101,12 +101,14 @@ hides behind Tailscale. Treat it accordingly:
 
 ## Certificate separation
 
-T12's signed certificate protocol uses a profile-bound v2 transcript. The
-private wildcard remains in `private-tls/{live,staging}` for upgrade continuity.
-Direct-TLS edge certificates use the separate `public-edge` profile,
-`*.shaulavo.dev` name, and `certificates/public-edge/{live,staging}` store. An
-installer rejects a bundle for the other profile. The renewer also isolates its
-public ACME account and certificate state under `public-edge/{live,staging}`.
+T12's signed certificate protocol now uses a profile-bound v3 transcript. Its
+length-prefixed private-name field is canonical for `private-origin` and empty
+for `public-edge`. The private wildcard remains in
+`private-tls/{live,staging}` for upgrade continuity. Direct-TLS edge
+certificates use the separate `public-edge` profile, `*.shaulavo.dev` name, and
+`certificates/public-edge/{live,staging}` store. An installer rejects a bundle
+for the other profile. The renewer also isolates its public ACME account and
+certificate state under `public-edge/{live,staging}`.
 
 Proxy mode constructs neither the public certificate installer nor its TLS
 source. Its runtime configuration rejects a certificate-renewer identity. DNS

@@ -14,6 +14,7 @@ import (
 	teatest "github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/shaul/mesh/internal/cli"
+	"github.com/shaul/mesh/internal/protocol"
 )
 
 var pickerTestNow = time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
@@ -70,6 +71,25 @@ func TestPickerFlows(t *testing.T) {
 			assertFits(t, view, 80, 24)
 			golden.RequireEqual(t, cleanSnapshot(view))
 		})
+	}
+}
+
+func TestPickerEscapesAndBoundsRemoteCommandAndWorkingDirectory(t *testing.T) {
+	malicious := "ATTACKER\tFAKE\nROW\x1b[31m\u202e" + strings.Repeat("x", 10_000)
+	hosts := hostCatalog(cli.PickerInput{Hosts: []cli.HostSessions{{
+		Host: cli.HostRecord{Alias: "pc"}, Sessions: []protocol.SessionInfo{{
+			ID: "7K3D", State: "running", Command: []string{malicious}, Cwd: malicious,
+		}},
+	}}})
+	filter := (sessionItem{session: hosts[0].sessions[0]}).FilterValue()
+	if strings.ContainsAny(filter, "\t\n\r\x1b") || strings.ContainsRune(filter, '\u202e') || len(filter) > 1200 {
+		t.Fatalf("unsafe picker filter = %q (%d bytes)", filter, len(filter))
+	}
+	current := newModel(hosts, pickerTestNow)
+	current.showSessions()
+	view := ansi.Strip(current.View().Content)
+	if strings.ContainsRune(view, '\u202e') || strings.Contains(view, "\nROW") || len(view) > 10_000 {
+		t.Fatalf("unsafe picker view = %q (%d bytes)", view, len(view))
 	}
 }
 

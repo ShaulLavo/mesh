@@ -26,7 +26,7 @@ func Kill(s Session) error {
 		return err
 	}
 	if response.Type != protocol.TypeOK {
-		return fmt.Errorf("kill %s: unexpected completion %q", s.ID, response.Type)
+		return fmt.Errorf("kill %s: unexpected completion", s.ID)
 	}
 	return nil
 }
@@ -47,7 +47,7 @@ func Logs(s Session, tail int) ([]byte, error) {
 		return nil, err
 	}
 	if response.Type != protocol.TypeLogged {
-		return nil, fmt.Errorf("logs %s: unexpected completion %q", s.ID, response.Type)
+		return nil, fmt.Errorf("logs %s: unexpected completion", s.ID)
 	}
 	if len(response.Output) > tail {
 		return nil, fmt.Errorf("logs %s: worker returned %d bytes, want at most %d", s.ID, len(response.Output), tail)
@@ -80,7 +80,7 @@ func controlAndWait(s Session, msg protocol.Control) (protocol.Control, error) {
 	}
 	response, err := protocol.DecodeControl(frame.Payload)
 	if err != nil {
-		return protocol.Control{}, fmt.Errorf("%s %s: decode completion: %w", msg.Type, s.ID, err)
+		return protocol.Control{}, presentError(msg.Type+" "+s.ID+": decode completion", err)
 	}
 	if response.RequestID != msg.RequestID || response.SessionID != s.ID {
 		return protocol.Control{}, fmt.Errorf("%s %s: mismatched completion", msg.Type, s.ID)
@@ -89,9 +89,9 @@ func controlAndWait(s Session, msg protocol.Control) (protocol.Control, error) {
 	case protocol.TypeOK, protocol.TypeLogged:
 		return response, nil
 	case protocol.TypeError:
-		return protocol.Control{}, fmt.Errorf("%s %s: %s", msg.Type, s.ID, response.Message)
+		return protocol.Control{}, daemonResponseError(msg.Type+" "+s.ID, response.Message)
 	default:
-		return protocol.Control{}, fmt.Errorf("%s %s: unexpected completion %q", msg.Type, s.ID, response.Type)
+		return protocol.Control{}, fmt.Errorf("%s %s: unexpected completion", msg.Type, s.ID)
 	}
 }
 

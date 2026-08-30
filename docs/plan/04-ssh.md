@@ -51,10 +51,14 @@ time.
 
 ### Tunnels
 
-`ssh -R` publishes a port from wherever you are through the VPS edge:
+An explicit inactive claim reserves the public hostname; `ssh -R` then publishes
+a port from wherever you are through the VPS edge:
 
-```
-ssh -R blog:80:localhost:3000 vps.mesh.shaulavo.dev
+```bash
+mesh_identity="${MESH_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/mesh}/identity.key"
+mesh serve claim vps blog.shaulavo.dev
+ssh -N -o ExitOnForwardFailure=yes -o IdentitiesOnly=yes -i "$mesh_identity" \
+  -R blog.shaulavo.dev:80:localhost:3000 vps.mesh.shaulavo.dev
 # a thing running on this machine, reachable from outside, gone on disconnect
 ```
 
@@ -81,6 +85,13 @@ Authentication is public key only. No passwords, no keyboard-interactive. The
 authorized set is written by `mesh add` (T08) during bootstrap, so the machine
 that adopted a host is the machine that can reach it.
 
+T08 authorizes the adopter's Mesh identity, not whichever key OpenSSH happens to
+choose from `~/.ssh/id_*`. Stock OpenSSH therefore selects the state-directory
+`identity.key` with `-i` and `IdentitiesOnly`, as the tunnel example shows. The
+short session examples assume the equivalent `IdentityFile` entry exists in
+`~/.ssh/config`. A phone or another client must import an explicitly authorized
+key; possessing a Tailscale identity alone is not SSH authorization.
+
 ## Where it listens
 
 The tailnet interface, and nothing else. Every door above is reachable only from
@@ -97,10 +108,15 @@ The overview says step 8 "does not open the door to arbitrary tunnels" and that
 line stays true. A remote forward here is:
 
 - authenticated as a known Mesh host identity or an authorized key;
-- bound to a **named** route the user claimed explicitly, like any other public
-  service under D15;
+- bound to a complete public hostname the user claimed explicitly, with the same
+  confirmation as any other public service under D15;
 - refused if that name belongs to another host;
 - alive only while the SSH connection is, and unpublished on disconnect.
+
+The claim itself is durable but inactive: it reserves the whole hostname for the
+claiming key and serves nothing. The edge returns 404 before the forward, after
+disconnect, and whenever the authenticated key does not match. T18 owns this
+claim seam; a T14 service is never used as a dummy reservation.
 
 What is still refused: forwarding to an arbitrary destination, claiming a name
 nobody asked for, and anything reachable without an authorized key.
@@ -109,10 +125,10 @@ nobody asked for, and anything reachable without an authorized key.
 
 | Task | Owns | Blocked by |
 |---|---|---|
-| T15 SSH front door | `internal/sshd/` | T06 |
+| T15 SSH front door | `internal/sshd/` | — |
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
 | T17 Sessions over SSH | `internal/sshd/session.go` | T09, T15 |
-| T18 Reverse tunnels | `internal/tunnel/` | T13, T15 |
+| T18 Reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
 
 T15 is the shared foundation and lands first. The other three are independent of
 each other after it.

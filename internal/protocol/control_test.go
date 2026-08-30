@@ -1,7 +1,10 @@
 package protocol
 
 import (
+	"bytes"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,6 +50,7 @@ func TestHostInfoControlRoundTrip(t *testing.T) {
 			ID:            "host-public-key",
 			MeshIdentity:  "host-public-key",
 			TailscaleName: "desktop.example.ts.net",
+			PrivateName:   "desktop.mesh.shaulavo.dev",
 		},
 	}
 
@@ -87,9 +91,10 @@ func TestLogsControlRoundTrip(t *testing.T) {
 
 func TestServiceControlRoundTrip(t *testing.T) {
 	want := Control{
-		Type:        TypeServiceListed,
-		RequestID:   "service-list-1",
-		ServiceName: "blog",
+		Type:             TypeServicePreviewed,
+		RequestID:        "service-list-1",
+		ServiceName:      "blog",
+		AllowCredentials: true,
 		Service: &ServiceInfo{
 			Name:       "blog",
 			Kind:       "static",
@@ -105,6 +110,10 @@ func TestServiceControlRoundTrip(t *testing.T) {
 			Healthy:       false,
 			Problem:       "root unavailable",
 		}},
+		ServicePreview: &ServicePreview{
+			Service:   ServiceInfo{Name: "blog", Kind: "static", Target: "/home/me/site", PublicName: "blog.shaulavo.dev"},
+			FileCount: 42,
+		},
 	}
 
 	payload, err := want.Encode()
@@ -120,6 +129,29 @@ func TestServiceControlRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMaximalServiceListFitsOneBoundedFrame(t *testing.T) {
+	services := make([]ServiceInfo, 256)
+	for index := range services {
+		services[index] = ServiceInfo{
+			Name: fmt.Sprintf("%03d%s", index, strings.Repeat("a", 509)), Kind: "static",
+			Target: "/" + strings.Repeat("x", 2047), PublicName: "service.shaulavo.dev",
+			Problem: strings.Repeat("p", 256),
+		}
+	}
+	message := Control{Type: TypeServiceListed, RequestID: strings.Repeat("r", 64), Services: services}
+	payload, err := message.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) > MaxPayload {
+		t.Fatalf("maximal service.list payload = %d, max %d", len(payload), MaxPayload)
+	}
+	var output bytes.Buffer
+	if err := NewWriter(&output).WriteControlMsg(message); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCertificateControlRoundTrip(t *testing.T) {
 	want := Control{
 		Type:      TypeCertificateInstall,
@@ -129,6 +161,7 @@ func TestCertificateControlRoundTrip(t *testing.T) {
 			Environment:    "staging",
 			TargetID:       "origin-key",
 			SignerID:       "renewer-key",
+			PrivateName:    "desktop.mesh.shaulavo.dev",
 			CertificatePEM: []byte("certificate"),
 			PrivateKeyPEM:  []byte("private-key"),
 			Signature:      []byte("signature"),
@@ -136,6 +169,7 @@ func TestCertificateControlRoundTrip(t *testing.T) {
 		CertificateFingerprint: "sha256-fingerprint",
 		CertificateEnvironment: "staging",
 		CertificateProfile:     "private-origin",
+		CertificatePrivateName: "desktop.mesh.shaulavo.dev",
 	}
 
 	payload, err := want.Encode()

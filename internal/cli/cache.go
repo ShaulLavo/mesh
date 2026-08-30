@@ -8,6 +8,7 @@ import (
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/storage"
 )
 
@@ -60,16 +61,10 @@ func (c *SQLiteCatalogCache) Load(ctx context.Context, host HostRecord) ([]proto
 
 // Save replaces the cached active catalog after one authoritative query.
 func (c *SQLiteCatalogCache) Save(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) error {
-	alias := host.Alias
-	var tailscaleName *string
-	if host.TailscaleName != "" {
-		name := host.TailscaleName
-		tailscaleName = &name
-	}
 	observed := make([]storage.Session, len(rows))
 	for i, row := range rows {
 		if row.HostID != host.ID {
-			return fmt.Errorf("host %s listed session %s for host %s", host.Alias, row.ID, row.HostID)
+			return fmt.Errorf("host %s listed a session for a different host", host.Alias)
 		}
 		observed[i] = storage.Session{
 			ID:                 storage.SessionID(row.ID),
@@ -83,13 +78,55 @@ func (c *SQLiteCatalogCache) Save(ctx context.Context, host HostRecord, rows []p
 			LastOutputSequence: row.LastOutputSequence,
 		}
 	}
-	return c.store.ReconcileHost(ctx, storage.Host{
-		ID:            storage.HostID(host.ID),
-		Alias:         &alias,
-		MeshIdentity:  host.MeshIdentity,
-		TailscaleName: tailscaleName,
-		LastSeenAt:    c.now().UTC(),
-	}, observed)
+	return c.store.ReconcileHost(ctx, cachedHost(host, c.now().UTC()), observed)
+}
+
+// LoadAllServices returns the bounded cached service snapshot keyed by host ID.
+func (c *SQLiteCatalogCache) LoadAllServices(ctx context.Context) (map[string][]storage.CachedService, error) {
+	rows, err := c.store.ListAllCachedServices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string][]storage.CachedService)
+	for _, row := range rows {
+		key := string(row.HostID)
+		result[key] = append(result[key], row)
+	}
+	return result, nil
+}
+
+// SaveServices atomically replaces the cached list after a live service.list.
+func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, privateName string, rows []protocol.ServiceInfo) error {
+	now := c.now().UTC()
+	services := make([]storage.CachedService, len(rows))
+	for index, row := range rows {
+		validated, err := validateRemoteService(row)
+		if err != nil {
+			return fmt.Errorf("cache host %s service: %w", host.Alias, err)
+		}
+		services[index] = storage.CachedService{
+			HostID: storage.HostID(host.ID), PrivateName: privateName,
+			Service: meshserve.Service{
+				Name: validated.Name, Kind: meshserve.Kind(validated.Kind), Target: validated.Target,
+				PublicName: validated.PublicName, WakeOnRequest: validated.WakeOnRequest,
+			},
+			Healthy: validated.Healthy, Problem: validated.Problem, ObservedAt: now,
+		}
+	}
+	return c.store.ReplaceCachedServices(ctx, cachedHost(host, now), services)
+}
+
+func cachedHost(host HostRecord, observedAt time.Time) storage.Host {
+	alias := host.Alias
+	var tailscaleName *string
+	if host.TailscaleName != "" {
+		name := host.TailscaleName
+		tailscaleName = &name
+	}
+	return storage.Host{
+		ID: storage.HostID(host.ID), Alias: &alias, MeshIdentity: host.MeshIdentity,
+		TailscaleName: tailscaleName, LastSeenAt: observedAt,
+	}
 }
 
 func cloneTime(value *time.Time) *time.Time {

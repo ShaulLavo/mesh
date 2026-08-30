@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Real tagged daemons exercise public registration, proxy and direct-TLS
 # listeners, streaming WebSockets, durable offline claims, collision refusal,
-# deletion acknowledgement, and profile-separated certificate installation.
+# deletion acknowledgement, and v3 certificates with no private name.
 set -uo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 
@@ -188,11 +188,12 @@ import sys
 
 profile, environment, target_id, signer_id, certificate_path, key_path, output_path = sys.argv[1:]
 fields = [
-    b"mesh/certificate-bundle/v2",
+    b"mesh/certificate-bundle/v3",
     profile.encode(),
     environment.encode(),
     target_id.encode(),
     signer_id.encode(),
+    b"",
     open(certificate_path, "rb").read(),
     open(key_path, "rb").read(),
 ]

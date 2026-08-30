@@ -17,14 +17,15 @@ import (
 )
 
 const (
-	hostConfigVersion = 1
-	hostConfigName    = "hosts.json"
+	hostConfigVersion      = 1
+	hostConfigName         = "hosts.json"
+	maximumConfiguredHosts = 256
 )
 
 var reservedAliases = map[string]struct{}{
 	"add": {}, "attach": {}, "completion": {}, "daemon": {}, "help": {},
-	"kill": {}, "list": {}, "local": {}, "logs": {}, "man": {},
-	"private-names": {}, "session-worker": {}, "sig": {}, "signal": {}, "wake": {},
+	"kill": {}, "list": {}, "local": {}, "logs": {}, "ls": {}, "man": {},
+	"private-names": {}, "serve": {}, "session-worker": {}, "sig": {}, "signal": {}, "unserve": {}, "wake": {},
 }
 
 // HostRecord is the local address book entry for one adopted Mesh host.
@@ -118,6 +119,9 @@ func LoadHosts() ([]HostRecord, error) {
 	if config.Version != hostConfigVersion {
 		return nil, fmt.Errorf("parse host config %s: version %d is unsupported", path, config.Version)
 	}
+	if len(config.Hosts) > maximumConfiguredHosts {
+		return nil, fmt.Errorf("parse host config %s: host count %d exceeds %d", path, len(config.Hosts), maximumConfiguredHosts)
+	}
 	aliases := make(map[string]string, len(config.Hosts))
 	identities := make(map[string]string, len(config.Hosts))
 	for i := range config.Hosts {
@@ -197,6 +201,9 @@ func validateHostRecord(record HostRecord) (HostRecord, error) {
 }
 
 func writeHostConfig(config hostConfig) error {
+	if len(config.Hosts) > maximumConfiguredHosts {
+		return fmt.Errorf("host count %d exceeds %d", len(config.Hosts), maximumConfiguredHosts)
+	}
 	path, err := ConfigPath()
 	if err != nil {
 		return err

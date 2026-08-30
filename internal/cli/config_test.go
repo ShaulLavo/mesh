@@ -14,9 +14,11 @@ func TestValidateHostAliasRejectsSessionIDs(t *testing.T) {
 	}
 }
 
-func TestValidateHostAliasRejectsPrivateNamesCommand(t *testing.T) {
-	if _, err := ValidateHostAlias("private-names"); err == nil || !strings.Contains(err.Error(), "Mesh command") {
-		t.Fatalf("private-names alias error = %v", err)
+func TestValidateHostAliasRejectsReservedCommands(t *testing.T) {
+	for _, alias := range []string{"private-names", "serve", "unserve"} {
+		if _, err := ValidateHostAlias(alias); err == nil || !strings.Contains(err.Error(), "Mesh command") {
+			t.Fatalf("%s alias error = %v", alias, err)
+		}
 	}
 }
 

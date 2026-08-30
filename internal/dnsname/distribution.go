@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	certificateSignatureDomain = "mesh/certificate-bundle/v2"
+	certificateSignatureDomain = "mesh/certificate-bundle/v3"
 	defaultDistributionLimit   = 4
 	maximumDistributionLimit   = 16
 	defaultDistributionTimeout = 10 * time.Second
@@ -57,6 +57,7 @@ type SignedBundle struct {
 	Environment    RenewalEnvironment
 	TargetID       string
 	SignerID       string
+	PrivateName    string
 	CertificatePEM []byte
 	PrivateKeyPEM  []byte
 	Signature      []byte
@@ -64,7 +65,7 @@ type SignedBundle struct {
 
 // SignBundle signs bundle for one exact target with the renewer's Mesh
 // identity key.
-func SignBundle(bundle Bundle, targetID string, profile CertificateProfile, environment RenewalEnvironment, signer ed25519.PrivateKey) (SignedBundle, error) {
+func SignBundle(bundle Bundle, targetID string, profile CertificateProfile, environment RenewalEnvironment, privateName string, signer ed25519.PrivateKey) (SignedBundle, error) {
 	if len(signer) != ed25519.PrivateKeySize {
 		return SignedBundle{}, errors.New("dnsname: certificate signer is not an Ed25519 private key")
 	}
@@ -77,8 +78,11 @@ func SignBundle(bundle Bundle, targetID string, profile CertificateProfile, envi
 	if _, err := certificateNameForProfile(profile); err != nil {
 		return SignedBundle{}, err
 	}
+	if err := validateCertificatePrivateName(profile, privateName); err != nil {
+		return SignedBundle{}, err
+	}
 	signerID := base64.RawURLEncoding.EncodeToString(signer.Public().(ed25519.PublicKey))
-	digest, err := certificateDigest(profile, environment, targetID, signerID, bundle.CertificatePEM, bundle.PrivateKeyPEM)
+	digest, err := certificateDigest(profile, environment, targetID, signerID, privateName, bundle.CertificatePEM, bundle.PrivateKeyPEM)
 	if err != nil {
 		return SignedBundle{}, err
 	}
@@ -87,6 +91,7 @@ func SignBundle(bundle Bundle, targetID string, profile CertificateProfile, envi
 		Environment:    environment,
 		TargetID:       targetID,
 		SignerID:       signerID,
+		PrivateName:    privateName,
 		CertificatePEM: append([]byte(nil), bundle.CertificatePEM...),
 		PrivateKeyPEM:  append([]byte(nil), bundle.PrivateKeyPEM...),
 		Signature:      ed25519.Sign(signer, digest[:]),
@@ -112,6 +117,9 @@ func VerifySignedBundle(signed SignedBundle, targetID, signerID string, now time
 	if err != nil {
 		return Bundle{}, err
 	}
+	if err := validateCertificatePrivateName(signed.Profile, signed.PrivateName); err != nil {
+		return Bundle{}, err
+	}
 	if signed.TargetID != targetID {
 		return Bundle{}, fmt.Errorf("dnsname: certificate targets identity %q, want %q", signed.TargetID, targetID)
 	}
@@ -125,7 +133,7 @@ func VerifySignedBundle(signed SignedBundle, targetID, signerID string, now time
 	if err != nil {
 		return Bundle{}, err
 	}
-	digest, err := certificateDigest(signed.Profile, signed.Environment, signed.TargetID, signed.SignerID, signed.CertificatePEM, signed.PrivateKeyPEM)
+	digest, err := certificateDigest(signed.Profile, signed.Environment, signed.TargetID, signed.SignerID, signed.PrivateName, signed.CertificatePEM, signed.PrivateKeyPEM)
 	if err != nil {
 		return Bundle{}, err
 	}
@@ -135,8 +143,11 @@ func VerifySignedBundle(signed SignedBundle, targetID, signerID string, now time
 	return ValidateBundle(signed.CertificatePEM, signed.PrivateKeyPEM, expectedName, now)
 }
 
-func certificateDigest(profile CertificateProfile, environment RenewalEnvironment, targetID, signerID string, certificatePEM, privateKeyPEM []byte) ([sha256.Size]byte, error) {
+func certificateDigest(profile CertificateProfile, environment RenewalEnvironment, targetID, signerID, privateName string, certificatePEM, privateKeyPEM []byte) ([sha256.Size]byte, error) {
 	if _, err := certificateNameForProfile(profile); err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	if err := validateCertificatePrivateName(profile, privateName); err != nil {
 		return [sha256.Size]byte{}, err
 	}
 	if len(certificatePEM) == 0 || len(certificatePEM) > maximumCertificatePEM {
@@ -151,6 +162,7 @@ func certificateDigest(profile CertificateProfile, environment RenewalEnvironmen
 	writeDigestField(hash, []byte(environment))
 	writeDigestField(hash, []byte(targetID))
 	writeDigestField(hash, []byte(signerID))
+	writeDigestField(hash, []byte(privateName))
 	writeDigestField(hash, certificatePEM)
 	writeDigestField(hash, privateKeyPEM)
 	var digest [sha256.Size]byte
@@ -185,6 +197,7 @@ type InstallerConfig struct {
 	Profile      CertificateProfile
 	LiveSource   *CertificateSource
 	StagingStore *BundleStore
+	PrivateName  *PrivateNameSource
 	TargetID     string
 	SignerID     string
 	Now          func() time.Time
@@ -194,6 +207,7 @@ type InstallerConfig struct {
 type Installer struct {
 	liveSource   *CertificateSource
 	stagingStore *BundleStore
+	privateName  *PrivateNameSource
 	profile      CertificateProfile
 	targetID     string
 	signerID     string
@@ -218,11 +232,22 @@ func NewInstaller(config InstallerConfig) (*Installer, error) {
 	if _, err := certificateNameForProfile(config.Profile); err != nil {
 		return nil, err
 	}
+	switch config.Profile {
+	case ProfilePrivateOrigin:
+		if config.PrivateName == nil {
+			return nil, errors.New("dnsname: private-origin installer requires a private-name source")
+		}
+	case ProfilePublicEdge:
+		if config.PrivateName != nil {
+			return nil, errors.New("dnsname: public-edge installer must not configure a private-name source")
+		}
+	}
 	if config.Now == nil {
 		config.Now = time.Now
 	}
 	return &Installer{
-		liveSource: config.LiveSource, stagingStore: config.StagingStore, profile: config.Profile, targetID: config.TargetID, signerID: config.SignerID,
+		liveSource: config.LiveSource, stagingStore: config.StagingStore, privateName: config.PrivateName,
+		profile: config.Profile, targetID: config.TargetID, signerID: config.SignerID,
 		now: config.Now,
 	}, nil
 }
@@ -263,24 +288,39 @@ func (i *Installer) Install(signed SignedBundle) (Bundle, bool, error) {
 	default:
 		return Bundle{}, false, fmt.Errorf("dnsname: unsupported certificate environment %q", signed.Environment)
 	}
-	if currentFingerprint == bundle.Fingerprint {
+	certificateChanged := currentFingerprint != bundle.Fingerprint
+	nameChanged := signed.Environment == EnvironmentLive && signed.PrivateName != "" && i.privateName != nil && i.privateName.installed() != signed.PrivateName
+	if !certificateChanged && !nameChanged {
 		return bundle, false, nil
 	}
 	if !currentNotAfter.IsZero() && bundle.NotAfter.Before(currentNotAfter) {
 		return Bundle{}, false, fmt.Errorf("dnsname: distributed certificate expires at %s before current %s certificate at %s", bundle.NotAfter.Format(time.RFC3339), signed.Environment, currentNotAfter.Format(time.RFC3339))
 	}
-	installed, err := install(bundle.CertificatePEM, bundle.PrivateKeyPEM)
-	if err != nil {
-		return Bundle{}, false, err
+	installed := bundle
+	if certificateChanged {
+		installed, err = install(bundle.CertificatePEM, bundle.PrivateKeyPEM)
+		if err != nil {
+			return Bundle{}, false, err
+		}
+	}
+	if signed.Environment == EnvironmentLive && signed.PrivateName != "" {
+		if err := i.privateName.Install(signed.PrivateName); err != nil {
+			return Bundle{}, false, err
+		}
+	} else if signed.Environment == EnvironmentLive && i.privateName != nil && certificateChanged {
+		if err := i.privateName.Refresh(); err != nil {
+			return Bundle{}, false, err
+		}
 	}
 	return installed, true, nil
 }
 
 // OriginTarget is one configured and identity-pinned origin daemon.
 type OriginTarget struct {
-	Name     string
-	Endpoint string
-	Identity string
+	Name        string
+	PrivateName string
+	Endpoint    string
+	Identity    string
 }
 
 // OriginDial opens one direct Mesh control connection.
@@ -371,6 +411,9 @@ func (d *Distributor) Distribute(ctx context.Context, bundle Bundle, targets []O
 		if err := validateOriginTarget(target); err != nil {
 			return fmt.Errorf("dnsname: certificate target %d: %w", index, err)
 		}
+		if err := validateCertificatePrivateName(d.profile, target.PrivateName); err != nil {
+			return fmt.Errorf("dnsname: certificate target %d: %w", index, err)
+		}
 		if _, exists := seenIdentities[target.Identity]; exists {
 			return fmt.Errorf("dnsname: certificate target %d duplicates an identity", index)
 		}
@@ -446,7 +489,7 @@ func (d *Distributor) distributeOne(ctx context.Context, bundle Bundle, target O
 		return errors.New("origin host.info identity does not match its pin")
 	}
 
-	signed, err := SignBundle(bundle, target.Identity, d.profile, d.environment, d.signer)
+	signed, err := SignBundle(bundle, target.Identity, d.profile, d.environment, target.PrivateName, d.signer)
 	if err != nil {
 		return err
 	}
@@ -460,6 +503,7 @@ func (d *Distributor) distributeOne(ctx context.Context, bundle Bundle, target O
 			Profile:     string(signed.Profile),
 			Environment: string(signed.Environment),
 			TargetID:    signed.TargetID, SignerID: signed.SignerID,
+			PrivateName:    signed.PrivateName,
 			CertificatePEM: signed.CertificatePEM, PrivateKeyPEM: signed.PrivateKeyPEM, Signature: signed.Signature,
 		},
 	})
@@ -477,6 +521,9 @@ func (d *Distributor) distributeOne(ctx context.Context, bundle Bundle, target O
 	}
 	if installResponse.CertificateProfile != string(d.profile) {
 		return errors.New("origin certificate.install profile does not match")
+	}
+	if installResponse.CertificatePrivateName != target.PrivateName {
+		return errors.New("origin certificate.install private name does not match")
 	}
 	return nil
 }

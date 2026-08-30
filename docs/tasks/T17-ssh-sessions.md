@@ -11,6 +11,8 @@ ssh pc.mesh.shaulavo.dev ls           # one-shot, scriptable, no PTY
 ```
 
 A phone with the Tailscale app and Termius becomes a complete Mesh client (D21).
+The examples assume the client selected an explicitly authorized key. T15
+documents the stock OpenSSH form; other clients import the same credential.
 
 ## Responsibilities
 
@@ -31,14 +33,16 @@ A phone with the Tailscale app and Termius becomes a complete Mesh client (D21).
 
 ## The part that needs care
 
-**`cli.Attach` currently leaks.** Its SIGWINCH goroutine ranges over a channel
-nobody closes, and `relayInput` keeps reading stdin after `Attach` returns. In a
-one-shot CLI process that does not matter. Here the process is a long-lived
-daemon serving many connections, and every attach leaks a goroutine holding a
-reader. Fix that before this task, not during it.
+`cli.Attach` now stops SIGWINCH delivery, cancels its input reader, closes the
+transport, and waits for both relay goroutines before it returns. Keep that
+return barrier when adapting it for SSH.
 
-Also: an SSH session's stdin is not `os.Stdin`. Anything in the attach path that
-reaches for the process's own terminal has to be parameterised first.
+An SSH session does not use `os.Stdin`, `os.Stdout`, or process SIGWINCH.
+Parameterize the attach path with its input, output, initial terminal size,
+window-change channel, and an input-cancel function. The local CLI adapter keeps
+the existing terminal behavior. The SSH adapter must unblock its reader when
+the connection closes. Neither adapter may return while an input or resize
+goroutine is still running.
 
 ## Acceptance
 

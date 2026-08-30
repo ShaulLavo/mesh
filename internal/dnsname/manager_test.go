@@ -53,8 +53,8 @@ func TestPrivateNamesManagerReconcilesSelfAndPeersAndAlwaysDistributes(t *testin
 		}
 	}
 	wantTargets := []OriginTarget{
-		{Name: "pi", Endpoint: "ws://100.64.0.9:7337/mesh", Identity: piID},
-		{Name: "desktop", Endpoint: "ws://100.80.0.2:7447/control/ws", Identity: desktopID},
+		{Name: "pi", PrivateName: "pi.mesh.shaulavo.dev", Endpoint: "ws://100.64.0.9:7337/mesh", Identity: piID},
+		{Name: "desktop", PrivateName: "desktop.mesh.shaulavo.dev", Endpoint: "ws://100.80.0.2:7447/control/ws", Identity: desktopID},
 	}
 	if len(distributor.calls) != 1 || !reflect.DeepEqual(distributor.calls[0], wantTargets) {
 		t.Fatalf("distribution calls = %#v, want %#v", distributor.calls, wantTargets)
@@ -109,6 +109,33 @@ func TestPrivateNamesManagerContinuesAvailableOriginsAndReportsMissingPeer(t *te
 	}
 }
 
+func TestPrivateNamesManagerDoesNotAssertPrivateNameWhenDNSReconcileFails(t *testing.T) {
+	id := testIdentityID(t)
+	provider := &memoryProvider{fail: errors.New("DNS unavailable")}
+	distributor := &managerTestDistributor{}
+	manager, err := NewPrivateNamesManager(PrivateNamesManagerConfig{
+		Provider: provider, Renewer: &managerTestRenewer{bundle: Bundle{Fingerprint: "current"}}, Distributor: distributor,
+		Origins: []PrivateOrigin{{Name: "pc", TailscaleName: "pc.example.ts.net", Identity: id, ControlPort: 7337, WebSocketPath: "/mesh"}},
+		DiscoverSelf: func(context.Context) (tailnet.Peer, error) {
+			return tailnet.Peer{Name: "pc.example.ts.net", Addrs: []string{"100.64.0.9"}}, nil
+		},
+		DiscoverPeers: func(context.Context) ([]tailnet.Peer, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = manager.RunOnce(context.Background(), false)
+	if err == nil || !strings.Contains(err.Error(), "DNS unavailable") {
+		t.Fatalf("DNS reconciliation error = %v", err)
+	}
+	want := [][]OriginTarget{{{
+		Name: "pc", Endpoint: "ws://100.64.0.9:7337/mesh", Identity: id,
+	}}}
+	if !reflect.DeepEqual(distributor.calls, want) {
+		t.Fatalf("distribution after DNS failure = %#v, want %#v", distributor.calls, want)
+	}
+}
+
 func TestPrivateNamesManagerRenewsWhenDiscoveryFails(t *testing.T) {
 	provider := &memoryProvider{}
 	renewer := &managerTestRenewer{}
@@ -159,7 +186,7 @@ func TestPrivateNamesManagerUsesPeerTargetsWhenSelfDiscoveryFails(t *testing.T) 
 	if renewer.calls != 1 || provider.creates != 1 {
 		t.Fatalf("renew calls = %d, provider creates = %d", renewer.calls, provider.creates)
 	}
-	want := [][]OriginTarget{{{Name: "desktop", Endpoint: "ws://100.80.0.2:7447/control/ws", Identity: desktopID}}}
+	want := [][]OriginTarget{{{Name: "desktop", PrivateName: "desktop.mesh.shaulavo.dev", Endpoint: "ws://100.80.0.2:7447/control/ws", Identity: desktopID}}}
 	if !reflect.DeepEqual(distributor.calls, want) {
 		t.Fatalf("partial discovery distributions = %#v, want %#v", distributor.calls, want)
 	}

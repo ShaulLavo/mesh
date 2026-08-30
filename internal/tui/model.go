@@ -11,6 +11,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/shaul/mesh/internal/cli"
 )
 
 type screen uint8
@@ -309,7 +311,7 @@ func hostItems(hosts []host) []list.Item {
 type sessionItem struct{ session session }
 
 func (item sessionItem) FilterValue() string {
-	return strings.Join([]string{item.session.id, item.session.state, strings.Join(item.session.command, " "), item.session.cwd}, " ")
+	return strings.Join([]string{item.session.id, item.session.state, cli.SafeTerminalText(strings.Join(item.session.command, " ")), cli.SafeTerminalText(item.session.cwd)}, " ")
 }
 
 func sessionItems(sessions []session) []list.Item {
@@ -374,11 +376,11 @@ func (delegate sessionDelegate) Render(output io.Writer, browser list.Model, ind
 		source = "cached-stale"
 	}
 	first := fmt.Sprintf("%s%s  %-11s  %4s  %s", prefix, delegate.styles.item(selected).Render(item.session.id), item.session.state, age(delegate.now, item.session.createdAt), delegate.styles.status(delegate.stale).Render(source))
-	command := strings.Join(item.session.command, " ")
+	command := cli.SafeTerminalText(strings.Join(item.session.command, " "))
 	if command == "" {
 		command = "command unknown"
 	}
-	cwd := item.session.cwd
+	cwd := cli.SafeTerminalText(item.session.cwd)
 	if cwd == "" {
 		cwd = "cwd unknown"
 	}

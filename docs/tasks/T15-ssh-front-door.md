@@ -1,6 +1,6 @@
 # T15 — SSH front door
 
-**Status:** not started · **Blocked by:** T06 · **Owns:** `internal/sshd/`
+**Status:** not started · **Blocked by:** nothing · **Owns:** `internal/sshd/`
 
 ## Goal
 
@@ -17,17 +17,22 @@ T16, T17 and T18 hang their handlers off this. Land it first and land it small.
    Do not generate a second keypair. The fingerprint a user sees on first connect
    must correspond to the same identity `mesh ls` shows for that host.
 2. **Public key authentication only.** No passwords, no keyboard-interactive.
-   Read the authorized set from the state directory. T08 writes it during
-   bootstrap; until T08 lands, populating it by hand is fine and the tests should
-   do exactly that.
-3. **Listener scope.** Bind the tailnet interface, not `0.0.0.0`. Reuse T06's
+   Read `authorized_keys` from the daemon state directory. T08's Linux and macOS
+   installers already create and update that file idempotently with mode `0600`.
+   Consume that file directly; do not add another key store.
+3. **Stock OpenSSH selects the same identity.** T08 authorizes the adopter's Mesh
+   identity, which OpenSSH does not find in its default `~/.ssh/id_*` search.
+   Document and test `-o IdentitiesOnly=yes -i STATE_DIR/identity.key`. A user may
+   put the same path in `~/.ssh/config`; do not assume an agent loaded it. Another
+   client device must receive an explicitly authorized key before it can enter.
+4. **Listener scope.** Bind the tailnet interface, not `0.0.0.0`. Reuse T06's
    address discovery. A host with no tailnet address does not start an SSH
    listener and says so in the log rather than falling back to every interface.
-4. **Middleware.** Use what Wish ships rather than reinventing it:
+5. **Middleware.** Use what Wish ships rather than reinventing it:
    `recover` outermost, then `logging`, `ratelimiter`, `accesscontrol`, and
    `activeterm` only on the handlers that need a PTY. One-shot exec must work
    without a PTY, so `activeterm` cannot be global.
-5. **Lifecycle.** The SSH server starts and stops with the daemon and shares its
+6. **Lifecycle.** The SSH server starts and stops with the daemon and shares its
    shutdown context. Killing the daemon must not kill sessions, same as always:
    an SSH connection is a client, and clients are disposable.
 
@@ -62,6 +67,8 @@ key file you have to get right.
 - Go tests using Wish's `testsession`: authorized key connects, unauthorized key
   is refused, no key is refused.
 - Missing authorized_keys refuses rather than permits. Same for an unreadable one.
+- Stock OpenSSH authenticates with the state identity only when the exact `-i`
+  and `IdentitiesOnly` form above selects it; an unrelated default key is refused.
 - The host key fingerprint matches the host identity reported by the daemon.
 - The listener binds the tailnet address only. Assert it is not on loopback or
   `0.0.0.0`.

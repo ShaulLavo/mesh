@@ -71,6 +71,8 @@ type Dependencies struct {
 	Picker                PickerFunc
 	ReconcilePrivateNames PrivateNamesFunc
 	DialHost              HostDialer
+	DialControl           HostDialer
+	ConfirmPublic         ConfirmPublicFunc
 	Now                   func() time.Time
 	Stdin                 *os.File
 	Stdout                *os.File
@@ -87,6 +89,9 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	if dependencies.DialHost == nil {
 		dependencies.DialHost = dialHost
 	}
+	if dependencies.DialControl == nil {
+		dependencies.DialControl = dialControlHost
+	}
 	if dependencies.Now == nil {
 		dependencies.Now = time.Now
 	}
@@ -101,6 +106,9 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	}
 	if dependencies.Stderr == nil {
 		dependencies.Stderr = os.Stderr
+	}
+	if dependencies.ConfirmPublic == nil {
+		dependencies.ConfirmPublic = terminalPublicConfirmation(dependencies.Stdin, dependencies.Stderr)
 	}
 	app := &application{dependencies: dependencies}
 
@@ -136,6 +144,8 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 		app.logsCommand(),
 		app.privateNamesCommand(),
 		app.signalCommand(),
+		app.serveCommand(),
+		app.unserveCommand(),
 		app.wakeCommand(),
 		app.workerCommand(),
 	)
@@ -548,9 +558,9 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	}
 	for _, result := range results {
 		if result.Err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %v; cached rows are stale\n", result.Host.Alias, result.Err)
+			fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %s; cached rows are stale\n", result.Host.Alias, safeRemoteText(result.Err.Error()))
 		} else if result.CacheErr != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "%s: live results could not be cached: %v\n", result.Host.Alias, result.CacheErr)
+			fmt.Fprintf(cmd.ErrOrStderr(), "%s: live results could not be cached: %s\n", result.Host.Alias, safeRemoteText(result.CacheErr.Error()))
 		}
 	}
 	return nil
@@ -564,7 +574,7 @@ func writeLocalSessions(output io.Writer, now time.Time, sessions []Session) err
 	table := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(table, "ID\tSTATE\tAGE\tCOMMAND")
 	for _, current := range sessions {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", current.ID, current.State(), ageAt(now, current.CreatedAt), strings.Join(current.Command, " "))
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", current.ID, current.State(), ageAt(now, current.CreatedAt), SafeTerminalText(strings.Join(current.Command, " ")))
 	}
 	return table.Flush()
 }
@@ -601,7 +611,7 @@ func writeProtocolSessions(output io.Writer, now time.Time, hosts []HostSessions
 		if current.stale {
 			cache = "stale"
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n", current.host, current.session.ID, current.session.State, ageAt(now, current.session.CreatedAt), strings.Join(current.session.Command, " "), cache)
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n", current.host, current.session.ID, current.session.State, ageAt(now, current.session.CreatedAt), SafeTerminalText(strings.Join(current.session.Command, " ")), cache)
 	}
 	return table.Flush()
 }

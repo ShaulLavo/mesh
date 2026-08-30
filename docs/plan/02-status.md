@@ -5,14 +5,15 @@ Updated 2026-08-30.
 ## Done
 
 The session and transport core, product CLI, SSH bootstrap, packaging, origin
-serving core, private DNS/TLS path, and authenticated public edge are complete.
+serving core and service catalog, private DNS/TLS path, and authenticated public
+edge are complete.
 
 - `internal/protocol` — framing + control messages, shared by every transport
 - `internal/session` — byte-offset replay ring, session IDs
 - `internal/worker` — PTY ownership, Unix socket, attach/steal, bounded outbound
   queues, resize, signals, kill escalation, `meta.json` lifecycle record
 - `internal/terminal` — rendered screen snapshots for clean reattachment (T01)
-- `internal/storage` — SQLite session and host store (T03)
+- `internal/storage` — SQLite session, host, and cached-service store (T03, T14)
 - `internal/daemon` — worker discovery, reconciliation, relay, lifecycle,
   signed certificate installation, service-only TLS, and supervised origin/edge
   roles (T04, T12, T13)
@@ -22,23 +23,25 @@ serving core, private DNS/TLS path, and authenticated public edge are complete.
   identity verification, and idempotent systemd/launchd installers (T08)
 - `internal/cli`, `cmd/mesh` — Cobra + Fang product surface, versioned host
   address book, concurrent live/cached host catalogs, remote create, attach,
-  logs, kill, signals, and the T09 picker boundary (T07)
+  logs, kill, signals, the T09 picker boundary, and service preview,
+  publication, listing, caching, and removal (T07, T14)
 - `internal/tui` — Bubble Tea host/session picker with live/stale state, wake,
   new, resume, attach, and terminal-safe raw-mode handoff (T09)
 - `.github`, `.goreleaser.yaml`, `scripts/install` — reproducible release
   archives, checksum-gated installers, systemd/launchd services, Homebrew Cask,
   immutable CI actions, and retained packaging checks (T10)
 - `internal/serve` — durable static, files, and loopback-proxy services; hardened
-  shared root resolution; live service controls and restart restoration (T11)
+  shared root resolution; bounded public-directory inspection; live service
+  controls and restart restoration (T11, T14)
 - `internal/dnsname` — Cloudflare-owned private A/TXT reconciliation, bounded
   RFC 8555 DNS-01 issuance, atomic live/staging wildcard state, signed origin
-  distribution, public-edge certificate isolation, and supervised Tailscale
-  address rebinding (T12, T13)
+  and private-name distribution, public-edge certificate isolation, and
+  supervised Tailscale address rebinding (T12, T13, T14)
 - `internal/edge` — signed complete route snapshots, durable ownership and
   liveness, authenticated status pages, bounded proxy/direct-TLS front doors,
   and origin publication with exact acknowledgement (T13)
 
-Verified 2026-08-30: `gofmt`, `go vet ./...`, `go test -race ./...`, and all sixteen
+Verified 2026-08-30: `gofmt`, `go vet ./...`, `go test -race ./...`, and all seventeen
 scripts in `integration/` passing.
 
 Private origin names and wildcard certificates are operational, including
@@ -46,37 +49,32 @@ staging isolation and hot live rotation. The public edge is operational in both
 loopback proxy and direct-TLS modes, including restart/offline ownership and
 profile-isolated certificates. Real Cloudflare, Let's Encrypt, domain, tailnet,
 and outside-tailnet acceptance remains an operator check because this
-development machine has none of those credentials or peers. Step 9 is entirely
-unwritten.
+development machine has none of those credentials or peers. Step 9's design is
+written; T15 implementation has not started.
 
 ## Complete tasks
 
 T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websocket
 transport · T06 host identity · T07 CLI surface · T08 ssh bootstrap · T09 picker
-TUI · T10 packaging · T11 serving core · T12 private names · T13 public edge.
+TUI · T10 packaging · T11 serving core · T12 private names · T13 public edge ·
+T14 `mesh serve`.
 
 ## Next
 
 ```
-T07 CLI surface ──→ T09 picker TUI ──────────────→ T17 sessions over SSH
-             └───→ T10 packaging                        ↑
-T15 ssh front door ─────────────────────────────────────┤
-             ├──────────────────────────→ T16 SFTP and SCP
-             └──────────────────────────→ T18 reverse tunnels
-                                                   ↑
-T11 serving core ──┬─→ T12 private names ──→ T13 public edge ──→ T14 m serve
-                   └──────────→ T16                     └────────→ T18
+T15 SSH front door ──┬──→ T16 SFTP and SCP
+                     ├──→ T17 sessions over SSH
+                     └──→ T18 reverse tunnels
 ```
 
-T14 and T15 are unblocked. Everything else waits on one of them.
+T15 is unblocked. T16, T17, and T18 wait on it.
 
 | Task | Owns | Blocked by |
 |---|---|---|
-| T15 ssh front door | `internal/sshd/` | T06 |
-| T14 `m serve` | `internal/cli/` | — |
+| T15 SSH front door | `internal/sshd/` | — |
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
 | T17 sessions over SSH | `internal/sshd/session.go` | T09, T15 |
-| T18 reverse tunnels | `internal/tunnel/` | T13, T15 |
+| T18 reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
 
 T15 is the foundation for T16, T17 and T18. Land it before any of them.
 

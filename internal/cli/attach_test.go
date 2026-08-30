@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -80,6 +82,34 @@ func TestAttachStopsReadingInputBeforeReturning(t *testing.T) {
 	}
 	if got := goroutinesWithStack("internal/cli.relayInput"); got != baseline {
 		t.Fatalf("blocked input relays after Attach = %d, want baseline %d", got, baseline)
+	}
+}
+
+func TestAttachTransportErrorsAreBoundedAndPreserveCause(t *testing.T) {
+	cause := errors.New("ATTACKER\r\n\u202e" + strings.Repeat("x", 10_000))
+	for _, test := range []struct {
+		name string
+		conn *failingCLIConn
+	}{
+		{name: "write", conn: &failingCLIConn{writeErr: fmt.Errorf("peer write: %w", cause)}},
+		{name: "read", conn: &failingCLIConn{readErr: fmt.Errorf("peer close: %w", cause)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input, err := os.CreateTemp(t.TempDir(), "input")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer input.Close()
+			output, err := os.CreateTemp(t.TempDir(), "output")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer output.Close()
+			_, err = Attach(AttachOptions{SessionID: "7K3D", Conn: test.conn, In: input, Out: output})
+			if err == nil || !errors.Is(err, cause) || strings.ContainsAny(err.Error(), "\r\n\x1b") || strings.ContainsRune(err.Error(), '\u202e') || len(err.Error()) > maximumRemoteErrorBytes+100 {
+				t.Fatalf("bounded attach error = %q (%d bytes), errors.Is = %v", err, len(err.Error()), errors.Is(err, cause))
+			}
+		})
 	}
 }
 

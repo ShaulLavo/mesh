@@ -176,11 +176,14 @@ func (m *PrivateNamesManager) RunOnce(ctx context.Context, forceRenewal bool) er
 			passErrors = append(passErrors, fmt.Errorf("dnsname: origin %s: %w", origin.Name, err))
 			continue
 		}
+		privateName := ""
 		if _, err := ReconcileHostA(ctx, m.provider, HostAddress{Name: origin.Name, Address: address}); err != nil {
 			passErrors = append(passErrors, fmt.Errorf("dnsname: origin %s: %w", origin.Name, err))
+		} else {
+			privateName, _ = privateHostName(origin.Name)
 		}
 		targets = append(targets, OriginTarget{
-			Name: origin.Name, Identity: origin.Identity,
+			Name: origin.Name, PrivateName: privateName, Identity: origin.Identity,
 			Endpoint: "ws://" + netip.AddrPortFrom(address, origin.ControlPort).String() + origin.WebSocketPath,
 		})
 	}

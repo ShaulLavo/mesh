@@ -22,6 +22,8 @@ const (
 	TypeLogs               = "session.logs"
 	TypeLogged             = "session.logged"
 	TypeHostInfo           = "host.info"
+	TypeServicePreview     = "service.preview"
+	TypeServicePreviewed   = "service.previewed"
 	TypeServiceUpsert      = "service.upsert"
 	TypeServiceList        = "service.list"
 	TypeServiceDelete      = "service.delete"
@@ -47,6 +49,7 @@ const (
 	ErrorCodeEdgeStaleSequence   = "edge.stale_sequence"
 	ErrorCodeEdgeConflict        = "edge.sequence_conflict"
 	ErrorCodeEdgeWakeUnavailable = "edge.wake_unavailable"
+	ErrorCodeCredentialsFound    = "service.credentials_found"
 )
 
 // Log request limits keep one JSON control response below MaxPayload after
@@ -82,6 +85,7 @@ type HostInfo struct {
 	ID            string `json:"id"`
 	MeshIdentity  string `json:"meshIdentity"`
 	TailscaleName string `json:"tailscaleName,omitempty"`
+	PrivateName   string `json:"privateName,omitempty"`
 }
 
 // ServiceInfo is the transport representation of one origin service and its
@@ -96,6 +100,13 @@ type ServiceInfo struct {
 	Problem       string `json:"problem,omitempty"`
 }
 
+// ServicePreview is the origin-authoritative interpretation of a requested
+// service before mutation. FileCount is populated for public directories.
+type ServicePreview struct {
+	Service   ServiceInfo `json:"service"`
+	FileCount uint64      `json:"fileCount"`
+}
+
 // CertificateInstall is a certificate bundle signed by the configured
 // renewer for one exact origin identity.
 type CertificateInstall struct {
@@ -103,6 +114,7 @@ type CertificateInstall struct {
 	Environment    string `json:"environment"`
 	TargetID       string `json:"targetId"`
 	SignerID       string `json:"signerId"`
+	PrivateName    string `json:"privateName,omitempty"`
 	CertificatePEM []byte `json:"certificatePem"`
 	PrivateKeyPEM  []byte `json:"privateKeyPem"`
 	Signature      []byte `json:"signature"`
@@ -180,15 +192,18 @@ type Control struct {
 	Output []byte `json:"output,omitempty"`
 
 	// Services
-	ServiceName string        `json:"serviceName,omitempty"`
-	Service     *ServiceInfo  `json:"service,omitempty"`
-	Services    []ServiceInfo `json:"services,omitempty"`
+	ServiceName      string          `json:"serviceName,omitempty"`
+	Service          *ServiceInfo    `json:"service,omitempty"`
+	Services         []ServiceInfo   `json:"services,omitempty"`
+	ServicePreview   *ServicePreview `json:"servicePreview,omitempty"`
+	AllowCredentials bool            `json:"allowCredentials,omitempty"`
 
 	// Certificate distribution
 	Certificate            *CertificateInstall `json:"certificate,omitempty"`
 	CertificateFingerprint string              `json:"certificateFingerprint,omitempty"`
 	CertificateEnvironment string              `json:"certificateEnvironment,omitempty"`
 	CertificateProfile     string              `json:"certificateProfile,omitempty"`
+	CertificatePrivateName string              `json:"certificatePrivateName,omitempty"`
 
 	// Public edge registration and safe status.
 	EdgeSnapshot   *EdgeSnapshot   `json:"edgeSnapshot,omitempty"`

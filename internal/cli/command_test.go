@@ -1,15 +1,21 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
@@ -23,6 +29,10 @@ type commandTestHost struct {
 	attachStart  func()
 	mu           sync.Mutex
 	events       []string
+	services     []protocol.ServiceInfo
+	previewRoot  string
+	previewFiles uint64
+	edgeRoutes   []protocol.EdgeRouteInfo
 }
 
 func (h *commandTestHost) dial(context.Context, HostRecord) (transport.Conn, error) {
@@ -67,7 +77,10 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 	switch request.Type {
 	case protocol.TypeHostInfo:
 		response.Type = protocol.TypeHostInfoResult
-		response.Host = &protocol.HostInfo{ID: c.host.host.ID, MeshIdentity: c.host.host.MeshIdentity, TailscaleName: c.host.host.TailscaleName}
+		response.Host = &protocol.HostInfo{
+			ID: c.host.host.ID, MeshIdentity: c.host.host.MeshIdentity, TailscaleName: c.host.host.TailscaleName,
+			PrivateName: "pc.mesh.shaulavo.dev",
+		}
 	case protocol.TypeList:
 		response.Type = protocol.TypeListed
 		state := c.host.sessionState
@@ -101,6 +114,67 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 	case protocol.TypeLogs:
 		response.Type = protocol.TypeLogged
 		response.Output = []byte("recent remote output\r\n")
+	case protocol.TypeServicePreview:
+		preview := *request.Service
+		if numericCLIServiceTarget(preview.Target) && preview.Kind == "" {
+			preview.Kind = "proxy"
+			port, _ := strconv.ParseUint(preview.Target, 10, 16)
+			preview.Target = strconv.FormatUint(port, 10)
+		} else {
+			if preview.Kind == "" {
+				preview.Kind = "static"
+			}
+			if c.host.previewRoot != "" {
+				preview.Target = c.host.previewRoot
+			} else if !filepath.IsAbs(preview.Target) {
+				preview.Target = filepath.Join("/home/test", preview.Target)
+			}
+		}
+		response.Type = protocol.TypeServicePreviewed
+		response.ServicePreview = &protocol.ServicePreview{Service: preview, FileCount: c.host.previewFiles}
+	case protocol.TypeServiceUpsert:
+		if request.ServicePreview == nil {
+			return errors.New("service upsert omitted preview")
+		}
+		service := request.ServicePreview.Service
+		service.Healthy = true
+		c.host.mu.Lock()
+		replaced := false
+		for index := range c.host.services {
+			if c.host.services[index].Name == service.Name {
+				c.host.services[index] = service
+				replaced = true
+			}
+		}
+		if !replaced {
+			c.host.services = append(c.host.services, service)
+		}
+		sort.Slice(c.host.services, func(i, j int) bool { return c.host.services[i].Name < c.host.services[j].Name })
+		c.host.mu.Unlock()
+		response.Type = protocol.TypeServiceUpserted
+		response.Service = &service
+	case protocol.TypeServiceList:
+		c.host.mu.Lock()
+		response.Services = append([]protocol.ServiceInfo(nil), c.host.services...)
+		c.host.mu.Unlock()
+		response.Type = protocol.TypeServiceListed
+	case protocol.TypeServiceDelete:
+		c.host.mu.Lock()
+		remaining := c.host.services[:0]
+		for _, service := range c.host.services {
+			if service.Name != request.ServiceName {
+				remaining = append(remaining, service)
+			}
+		}
+		c.host.services = remaining
+		c.host.mu.Unlock()
+		response.Type = protocol.TypeServiceDeleted
+		response.ServiceName = request.ServiceName
+	case protocol.TypeEdgeList:
+		c.host.mu.Lock()
+		response.EdgeRoutes = append([]protocol.EdgeRouteInfo(nil), c.host.edgeRoutes...)
+		c.host.mu.Unlock()
+		response.Type = protocol.TypeEdgeListed
 	default:
 		return errors.New("unexpected command test control " + request.Type)
 	}
@@ -210,6 +284,283 @@ func TestKillAndLogsRouteToTheResolvedRemoteHost(t *testing.T) {
 	events := host.recorded()
 	if !slices.Contains(events, protocol.TypeKill) || !slices.Contains(events, protocol.TypeLogs) {
 		t.Fatalf("control events = %v, want kill and logs", events)
+	}
+}
+
+func TestServeCommandPreviewsThenPublishesCanonicalService(t *testing.T) {
+	host := setupCommandTestHost(t)
+	stdout, _, err := executeCommand(t, Dependencies{DialControl: host.dial}, "serve", "pc", "03000", "--at", "/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "serving https://pc.mesh.shaulavo.dev/api on pc (proxy -> 3000)") {
+		t.Fatalf("serve output = %q", stdout)
+	}
+	if got := host.recorded(); !slices.Equal(got, []string{
+		protocol.TypeHostInfo, protocol.TypeServicePreview,
+		protocol.TypeHostInfo, protocol.TypeServiceUpsert,
+	}) {
+		t.Fatalf("serve events = %v", got)
+	}
+}
+
+func TestPublicServeConfirmationUsesRemoteFactsAndYesOnlySkipsPrompt(t *testing.T) {
+	host := setupCommandTestHost(t)
+	host.previewRoot = "/home/alice/site"
+	host.previewFiles = 17
+	confirmations := 0
+	confirm := func(_ context.Context, confirmation PublicConfirmation) (bool, error) {
+		confirmations++
+		if confirmation.Host.Alias != "pc" || confirmation.Service.Target != "/home/alice/site" || confirmation.FileCount != 17 || confirmation.URL != "https://blog.shaulavo.dev/blog" {
+			t.Fatalf("confirmation = %#v", confirmation)
+		}
+		return true, nil
+	}
+	stdout, _, err := executeCommand(t, Dependencies{DialControl: host.dial, ConfirmPublic: confirm},
+		"serve", "pc", "./site", "--at", "/blog", "--public", "blog.shaulavo.dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmations != 1 || !strings.Contains(stdout, "https://blog.shaulavo.dev/blog") {
+		t.Fatalf("confirmations = %d, output %q", confirmations, stdout)
+	}
+	_, _, err = executeCommand(t, Dependencies{
+		DialControl: host.dial,
+		ConfirmPublic: func(context.Context, PublicConfirmation) (bool, error) {
+			t.Fatal("--yes called confirmation adapter")
+			return false, nil
+		},
+	}, "serve", "pc", "./site", "--at", "/blog", "--public", "blog.shaulavo.dev", "--yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServeCommandRejectsMeaninglessFlagsBeforeDial(t *testing.T) {
+	host := setupCommandTestHost(t)
+	for _, args := range [][]string{
+		{"serve", "pc", "3000", "--at", "/files", "--files"},
+		{"serve", "pc", "./site", "--at", "/site", "--allow-credentials"},
+		{"serve", "pc", "./site", "--at", "/site", "--wake-on-request"},
+		{"serve", "pc", "./site", "--at", "/site", "--yes"},
+	} {
+		if _, _, err := executeCommand(t, Dependencies{DialControl: host.dial}, args...); err == nil {
+			t.Fatalf("arguments %v were accepted", args)
+		}
+	}
+	if events := host.recorded(); len(events) != 0 {
+		t.Fatalf("invalid forms dialed host: %v", events)
+	}
+}
+
+func TestServiceTableCellCannotInjectTerminalControls(t *testing.T) {
+	got := safeTableCell("/srv/site\tFAKE\nROW\x1b[31m\u202ereversed")
+	if strings.ContainsAny(got, "\t\n\r\x1b") || strings.ContainsRune(got, '\u202e') || !strings.Contains(got, `\tFAKE\nROW\x1b`) || !strings.Contains(got, `\u202e`) {
+		t.Fatalf("safe table cell = %q", got)
+	}
+	if long := SafeTerminalText(strings.Repeat("x", 10_000)); len(long) > maximumTerminalTextBytes || !strings.HasSuffix(long, "...") {
+		t.Fatalf("bounded terminal text has %d bytes: %q", len(long), long)
+	}
+}
+
+func TestProtocolSessionTableEscapesAndBoundsRemoteCommand(t *testing.T) {
+	var output bytes.Buffer
+	malicious := "ATTACKER\tFAKE\nROW\x1b[31m\u202e" + strings.Repeat("x", 10_000)
+	err := writeProtocolSessions(&output, commandTestTime, []HostSessions{{
+		Host: HostRecord{Alias: "pc"}, Sessions: []protocol.SessionInfo{{
+			ID: "7K3D", HostID: "host-id", Command: []string{malicious}, State: "running", CreatedAt: commandTestTime,
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	if strings.ContainsAny(got, "\x1b\r") || strings.ContainsRune(got, '\u202e') || strings.Count(got, "\n") != 2 || len(got) > 1500 {
+		t.Fatalf("unsafe session table output = %q (%d bytes)", got, len(got))
+	}
+}
+
+func TestSessionListDiagnosticsCannotInjectTerminalControls(t *testing.T) {
+	setupCommandTestHost(t)
+	cause := errors.New("ATTACKER\r\n\u202e" + strings.Repeat("x", 10_000))
+	_, stderr, err := executeCommand(t, Dependencies{DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
+		return nil, cause
+	}}, "ls", "--timeout", "100ms")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(stderr, "\r\x1b") || strings.ContainsRune(stderr, '\u202e') || strings.Count(stderr, "\n") != 1 || len(stderr) > maximumRemoteErrorBytes+200 {
+		t.Fatalf("unsafe list diagnostic = %q (%d bytes)", stderr, len(stderr))
+	}
+}
+
+func TestTerminalPublicConfirmationCancelsWithoutLeakingARead(t *testing.T) {
+	t.Setenv("TERM", "dumb")
+	master, terminal, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer terminal.Close()
+	confirmation := PublicConfirmation{Host: HostRecord{Alias: "pc"}, Service: protocol.ServiceInfo{Kind: "proxy", Target: "3000"}, URL: "https://app.shaulavo.dev/api"}
+	for iteration := 0; iteration < 8; iteration++ {
+		output := newPromptTestWriter()
+		confirm := terminalPublicConfirmation(terminal, output)
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() {
+			_, confirmErr := confirm(ctx, confirmation)
+			result <- confirmErr
+		}()
+		output.wait(t)
+		cancel()
+		select {
+		case confirmErr := <-result:
+			if !errors.Is(confirmErr, context.Canceled) {
+				t.Fatalf("cancelled confirmation %d error = %v", iteration, confirmErr)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("cancelled confirmation %d remained blocked", iteration)
+		}
+	}
+
+	output := newPromptTestWriter()
+	result := make(chan struct {
+		confirmed bool
+		err       error
+	}, 1)
+	go func() {
+		confirmed, confirmErr := terminalPublicConfirmation(terminal, output)(context.Background(), confirmation)
+		result <- struct {
+			confirmed bool
+			err       error
+		}{confirmed: confirmed, err: confirmErr}
+	}()
+	output.wait(t)
+	if _, err := master.Write([]byte("yes\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-result:
+		if got.err != nil || !got.confirmed {
+			t.Fatalf("confirmation after cancellations = %v, %v", got.confirmed, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("confirmation read was consumed by a leaked prompt")
+	}
+}
+
+func TestServeListPrintsActualPrivateAndPublicURLs(t *testing.T) {
+	host := setupCommandTestHost(t)
+	host.services = []protocol.ServiceInfo{
+		{Name: "api", Kind: "proxy", Target: "3000", Healthy: true},
+		{Name: "blog", Kind: "static", Target: "/home/alice/site", PublicName: "blog.shaulavo.dev", Healthy: true},
+	}
+	host.edgeRoutes = []protocol.EdgeRouteInfo{{
+		PublicName: "blog.shaulavo.dev", ServiceName: "blog", DisplayAlias: "pc", LastSeenAt: commandTestTime, Online: true,
+	}}
+	for _, listCommand := range []string{"ls", "list"} {
+		t.Run(listCommand, func(t *testing.T) {
+			stdout, _, err := executeCommand(t, Dependencies{DialControl: host.dial, Now: func() time.Time { return commandTestTime }}, "serve", listCommand)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{
+				"ROUTE", "HOST", "KIND", "TARGET", "SCOPE", "HEALTH", "URL",
+				"https://pc.mesh.shaulavo.dev/api", "https://blog.shaulavo.dev/blog", "tailnet", "public", "healthy",
+			} {
+				if !strings.Contains(stdout, want) {
+					t.Fatalf("serve %s output %q does not contain %q", listCommand, stdout, want)
+				}
+			}
+		})
+	}
+}
+
+func TestUnserveRefusesAmbiguityAndHostFlagSelectsLiveOwner(t *testing.T) {
+	pc := setupCommandTestHost(t)
+	pc.services = []protocol.ServiceInfo{{Name: "blog", Kind: "proxy", Target: "3000", Healthy: true}}
+	pi := &commandTestHost{host: HostRecord{
+		Alias: "pi", ID: "pi-id", MeshIdentity: "pi-key", TailscaleName: "pi.example.ts.net",
+		Addresses: []string{"100.64.0.3"}, Endpoint: "ws://100.64.0.3:7777/mesh",
+	}, services: []protocol.ServiceInfo{{Name: "blog", Kind: "proxy", Target: "4000", Healthy: true}}}
+	if err := SaveHost(pi.host); err != nil {
+		t.Fatal(err)
+	}
+	dial := func(ctx context.Context, host HostRecord) (transport.Conn, error) {
+		if host.ID == pc.host.ID {
+			return pc.dial(ctx, host)
+		}
+		return pi.dial(ctx, host)
+	}
+	if _, _, err := executeCommand(t, Dependencies{DialControl: dial}, "unserve", "/blog"); err == nil || !strings.Contains(err.Error(), "multiple hosts") {
+		t.Fatalf("ambiguous unserve error = %v", err)
+	}
+	stdout, _, err := executeCommand(t, Dependencies{DialControl: dial}, "unserve", "/blog", "--host", "pc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "unserved /blog on pc") || len(pc.services) != 0 || len(pi.services) != 1 {
+		t.Fatalf("unserve output %q, pc %#v, pi %#v", stdout, pc.services, pi.services)
+	}
+}
+
+func TestUnserveRequiresHostWhenAnotherOwnerCannotBeQueried(t *testing.T) {
+	pc := setupCommandTestHost(t)
+	pc.services = []protocol.ServiceInfo{{Name: "blog", Kind: "proxy", Target: "3000", Healthy: true}}
+	pi := HostRecord{
+		Alias: "pi", ID: "pi-id", MeshIdentity: "pi-key", TailscaleName: "pi.example.ts.net",
+		Addresses: []string{"100.64.0.3"}, Endpoint: "ws://100.64.0.3:7777/mesh",
+	}
+	if err := SaveHost(pi); err != nil {
+		t.Fatal(err)
+	}
+	dial := func(ctx context.Context, host HostRecord) (transport.Conn, error) {
+		if host.ID == pc.host.ID {
+			return pc.dial(ctx, host)
+		}
+		return nil, errors.New("offline")
+	}
+	if _, _, err := executeCommand(t, Dependencies{DialControl: dial}, "unserve", "/blog", "--timeout", "30ms"); err == nil || !strings.Contains(err.Error(), "could not prove") {
+		t.Fatalf("incomplete ownership error = %v", err)
+	}
+	if len(pc.services) != 1 {
+		t.Fatalf("route changed after incomplete discovery: %#v", pc.services)
+	}
+	if _, _, err := executeCommand(t, Dependencies{DialControl: dial}, "unserve", "/blog", "--host", "pc"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnserveDoesNotClaimExplicitOfflineHostLacksRoute(t *testing.T) {
+	setupCommandTestHost(t)
+	_, _, err := executeCommand(t, Dependencies{DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+		return nil, errors.New("offline")
+	}}, "unserve", "/blog", "--host", "pc", "--timeout", "20ms")
+	if err == nil || !strings.Contains(err.Error(), "host pc is unavailable") {
+		t.Fatalf("explicit offline host error = %v", err)
+	}
+}
+
+func TestUnserveExplicitAbsentRetryPreservesAuthenticatedPrivateName(t *testing.T) {
+	host := setupCommandTestHost(t)
+	host.services = []protocol.ServiceInfo{{Name: "api", Kind: "proxy", Target: "3000", Healthy: true}}
+
+	if _, _, err := executeCommand(t, Dependencies{DialControl: host.dial}, "unserve", "/missing", "--host", "pc"); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := OpenCatalogCache(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close() //nolint:errcheck // test cleanup
+	rows, err := cache.LoadAllServices(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rows[host.host.ID]
+	if len(got) != 1 || got[0].Service.Name != "api" || got[0].PrivateName != "pc.mesh.shaulavo.dev" {
+		t.Fatalf("cached services after absent retry = %#v", got)
 	}
 }
 
@@ -375,6 +726,34 @@ func executeCommand(t *testing.T, dependencies Dependencies, args ...string) (st
 	command.SetArgs(args)
 	err = command.ExecuteContext(context.Background())
 	return readCommandFile(t, stdout), readCommandFile(t, stderr), err
+}
+
+type promptTestWriter struct {
+	mu    sync.Mutex
+	text  bytes.Buffer
+	ready chan struct{}
+	once  sync.Once
+}
+
+func newPromptTestWriter() *promptTestWriter { return &promptTestWriter{ready: make(chan struct{})} }
+
+func (w *promptTestWriter) Write(contents []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	written, err := w.text.Write(contents)
+	if strings.Contains(w.text.String(), "Continue? [y/N]") {
+		w.once.Do(func() { close(w.ready) })
+	}
+	return written, err
+}
+
+func (w *promptTestWriter) wait(t *testing.T) {
+	t.Helper()
+	select {
+	case <-w.ready:
+	case <-time.After(time.Second):
+		t.Fatal("confirmation prompt was not written")
+	}
 }
 
 func readCommandFile(t *testing.T, file *os.File) string {

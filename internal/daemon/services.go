@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
@@ -42,14 +45,17 @@ const (
 // live routing snapshot. SQLite commits first, so a crash between the two steps
 // converges when the next daemon restores the registry.
 type serviceController struct {
-	lifetime  context.Context
-	store     serviceStore
-	registry  *meshserve.Registry
-	publisher servicePublisher
-	gate      chan struct{}
+	lifetime       context.Context
+	home           string
+	store          serviceStore
+	registry       *meshserve.Registry
+	publisher      servicePublisher
+	gate           chan struct{}
+	unsynced       bool
+	catalogUnknown bool
 }
 
-func newServiceController(ctx context.Context, store serviceStore, registry *meshserve.Registry, publisher servicePublisher) (*serviceController, error) {
+func newServiceController(ctx context.Context, home string, store serviceStore, registry *meshserve.Registry, publisher servicePublisher) (*serviceController, error) {
 	if ctx == nil {
 		return nil, errors.New("daemon: nil service controller context")
 	}
@@ -62,6 +68,9 @@ func newServiceController(ctx context.Context, store serviceStore, registry *mes
 	if publisher == nil {
 		return nil, errors.New("daemon: nil public service publisher")
 	}
+	if !filepath.IsAbs(home) || filepath.Clean(home) != home {
+		return nil, errors.New("daemon: service home must be a clean absolute path")
+	}
 	if !publisher.Enabled() {
 		for _, service := range registry.Services() {
 			if service.PublicName != "" {
@@ -69,11 +78,17 @@ func newServiceController(ctx context.Context, store serviceStore, registry *mes
 			}
 		}
 	}
-	return &serviceController{lifetime: ctx, store: store, registry: registry, publisher: publisher, gate: make(chan struct{}, 1)}, nil
+	return &serviceController{lifetime: ctx, home: home, store: store, registry: registry, publisher: publisher, gate: make(chan struct{}, 1)}, nil
 }
 
 func (c *serviceController) HandleControl(ctx context.Context, request protocol.Control) (protocol.Control, bool, error) {
 	switch request.Type {
+	case protocol.TypeServicePreview:
+		if ctx == nil {
+			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
+		}
+		response, err := c.preview(ctx, request)
+		return response, true, err
 	case protocol.TypeServiceUpsert:
 		if ctx == nil {
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
@@ -106,16 +121,31 @@ func (c *serviceController) HandleControl(ctx context.Context, request protocol.
 	}
 }
 
-func (c *serviceController) upsert(ctx context.Context, request protocol.Control) (protocol.Control, error) {
+func (c *serviceController) preview(ctx context.Context, request protocol.Control) (protocol.Control, error) {
 	if err := validateRequestID(request); err != nil {
 		return protocol.Control{}, err
 	}
 	if request.Service == nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request has no service", request.Type)
 	}
-	service, err := meshserve.Normalize(serviceFromInfo(*request.Service))
+	preview, err := meshserve.InspectService(ctx, c.home, serviceFromInfo(*request.Service), request.AllowCredentials)
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+	}
+	return protocol.Control{
+		Type: protocol.TypeServicePreviewed, RequestID: request.RequestID,
+		ServicePreview: &protocol.ServicePreview{
+			Service: serviceDefinitionInfo(preview.Service), FileCount: preview.FileCount,
+		},
+	}, nil
+}
+
+func (c *serviceController) upsert(ctx context.Context, request protocol.Control) (protocol.Control, error) {
+	if err := validateRequestID(request); err != nil {
+		return protocol.Control{}, err
+	}
+	if request.Service == nil {
+		return protocol.Control{}, fmt.Errorf("daemon: %s request has no service", request.Type)
 	}
 	if err := ctx.Err(); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
@@ -125,8 +155,22 @@ func (c *serviceController) upsert(ctx context.Context, request protocol.Control
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
 	defer c.release()
+	if err := c.ensureSynchronized("service upsert"); err != nil {
+		return protocol.Control{}, err
+	}
+	preview, err := meshserve.InspectService(ctx, c.home, serviceFromInfo(*request.Service), request.AllowCredentials)
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+	}
+	if request.ServicePreview != nil && !sameServicePreview(preview, *request.ServicePreview) {
+		return protocol.Control{}, errors.New("daemon: service changed after preview; preview it again")
+	}
+	service := preview.Service
 	priorServices := c.registry.Services()
 	prior, hadPrior := findService(priorServices, service.Name)
+	if hadPrior && prior.PublicName != "" && prior.PublicName != service.PublicName {
+		return protocol.Control{}, errors.New("daemon: changing or removing a public name requires unserve first")
+	}
 	publicMutation := service.PublicName != "" || hadPrior && prior.PublicName != ""
 	if publicMutation && !c.publisher.Enabled() {
 		return protocol.Control{}, errors.New("daemon: public service requires a configured public edge")
@@ -142,7 +186,8 @@ func (c *serviceController) upsert(ctx context.Context, request protocol.Control
 	}
 	services = upsertService(services, persisted)
 	if err := c.registry.Replace(services); err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: publish service %s: %w", persisted.Name, err)
+		reconcileErr := c.reconcileDurable("service registry publication")
+		return protocol.Control{}, errors.Join(fmt.Errorf("daemon: publish service %s: %w", persisted.Name, err), reconcileErr)
 	}
 	if publicMutation {
 		if publishErr := c.publisher.Converge(ctx, services); publishErr != nil {
@@ -154,7 +199,7 @@ func (c *serviceController) upsert(ctx context.Context, request protocol.Control
 	for _, status := range c.registry.Status() {
 		if status.Service.Name == persisted.Name {
 			info.Healthy = status.Healthy
-			info.Problem = status.Problem
+			info.Problem = boundedServiceProblem(status.Problem)
 			break
 		}
 	}
@@ -172,12 +217,22 @@ func (c *serviceController) list(ctx context.Context, request protocol.Control) 
 	if err := ctx.Err(); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
+	if err := c.acquire(ctx); err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
+	}
+	defer c.release()
+	if c.catalogUnknown {
+		reconcileErr := c.reconcileDurable("service list")
+		if c.catalogUnknown {
+			return protocol.Control{}, fmt.Errorf("daemon: service catalog is unavailable: %w", reconcileErr)
+		}
+	}
 	statuses := c.registry.Status()
 	services := make([]protocol.ServiceInfo, 0, len(statuses))
 	for _, status := range statuses {
 		info := serviceDefinitionInfo(status.Service)
 		info.Healthy = status.Healthy
-		info.Problem = status.Problem
+		info.Problem = boundedServiceProblem(status.Problem)
 		services = append(services, info)
 	}
 	return protocol.Control{
@@ -202,16 +257,21 @@ func (c *serviceController) delete(ctx context.Context, request protocol.Control
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
 	defer c.release()
+	if err := c.ensureSynchronized("service deletion"); err != nil {
+		return protocol.Control{}, err
+	}
 	if err := c.store.DeleteService(ctx, request.ServiceName); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		reconcileErr := c.reconcileDurable("delete error")
 		return protocol.Control{}, errors.Join(fmt.Errorf("daemon: %s: %w", request.Type, err), reconcileErr)
 	}
 	services := deleteService(c.registry.Services(), request.ServiceName)
 	if err := c.registry.Replace(services); err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: unpublish service %s: %w", request.ServiceName, err)
+		reconcileErr := c.reconcileDurable("service deletion registry publication")
+		return protocol.Control{}, errors.Join(fmt.Errorf("daemon: unpublish service %s: %w", request.ServiceName, err), reconcileErr)
 	}
 	if c.publisher.Enabled() {
 		if err := c.publisher.Converge(ctx, services); err != nil {
+			c.unsynced = true
 			return protocol.Control{}, fmt.Errorf("daemon: public edge did not acknowledge service deletion: %w", err)
 		}
 	}
@@ -247,7 +307,14 @@ func (c *serviceController) SyncPublic(ctx context.Context) error {
 		return err
 	}
 	defer c.release()
-	return c.publisher.Converge(ctx, c.registry.Services())
+	if c.unsynced {
+		return c.reconcileDurable("pending public synchronization")
+	}
+	if err := c.publisher.Converge(ctx, c.registry.Services()); err != nil {
+		c.unsynced = true
+		return err
+	}
+	return nil
 }
 
 func (c *serviceController) RunPublicHeartbeat(ctx context.Context, report func(error)) {
@@ -276,6 +343,7 @@ func (c *serviceController) RunPublicHeartbeat(ctx context.Context, report func(
 }
 
 func (c *serviceController) rollbackUpsert(priorServices []meshserve.Service, prior meshserve.Service, hadPrior bool, changedName string) error {
+	c.unsynced = true
 	rollbackContext, cancel := context.WithTimeout(c.lifetime, publicServiceRollbackTimeout)
 	defer cancel()
 	var rollbackErr error
@@ -291,12 +359,16 @@ func (c *serviceController) rollbackUpsert(priorServices []meshserve.Service, pr
 		return errors.Join(fmt.Errorf("daemon: restore prior durable service: %w", rollbackErr), c.reconcileDurable("ambiguous rollback"))
 	}
 	if err := c.registry.Replace(priorServices); err != nil {
-		rollbackErr = errors.Join(rollbackErr, fmt.Errorf("daemon: restore prior service registry: %w", err))
+		return errors.Join(rollbackErr, fmt.Errorf("daemon: restore prior service registry: %w", err), c.reconcileDurable("rollback registry publication"))
 	}
 	if c.publisher.Enabled() {
 		if err := c.publisher.Converge(rollbackContext, priorServices); err != nil {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("daemon: publish public service rollback: %w", err))
+		} else {
+			c.unsynced = false
 		}
+	} else {
+		c.unsynced = false
 	}
 	return rollbackErr
 }
@@ -304,21 +376,36 @@ func (c *serviceController) rollbackUpsert(priorServices []meshserve.Service, pr
 // reconcileDurable reloads the only authoritative service state after a
 // potentially post-commit SQLite error. The caller holds c.gate.
 func (c *serviceController) reconcileDurable(operation string) error {
+	c.unsynced = true
 	ctx, cancel := context.WithTimeout(c.lifetime, publicServiceRollbackTimeout)
 	defer cancel()
 	services, err := c.store.ListServices(ctx)
 	if err != nil {
+		c.catalogUnknown = true
 		clearErr := c.registry.Replace(nil)
 		return errors.Join(fmt.Errorf("daemon: reload services after %s: %w", operation, err), clearErr)
 	}
 	if err := c.registry.Replace(services); err != nil {
+		c.catalogUnknown = true
 		clearErr := c.registry.Replace(nil)
 		return errors.Join(fmt.Errorf("daemon: publish durable services after %s: %w", operation, err), clearErr)
 	}
+	c.catalogUnknown = false
 	if c.publisher.Enabled() {
 		if err := c.publisher.Converge(ctx, services); err != nil {
 			return fmt.Errorf("daemon: publish durable public services after %s: %w", operation, err)
 		}
+	}
+	c.unsynced = false
+	return nil
+}
+
+func (c *serviceController) ensureSynchronized(operation string) error {
+	if !c.unsynced {
+		return nil
+	}
+	if err := c.reconcileDurable(operation); err != nil {
+		return fmt.Errorf("daemon: service state is not synchronized: %w", err)
 	}
 	return nil
 }
@@ -382,4 +469,20 @@ func serviceDefinitionInfo(service meshserve.Service) protocol.ServiceInfo {
 		PublicName:    service.PublicName,
 		WakeOnRequest: service.WakeOnRequest,
 	}
+}
+
+func sameServicePreview(actual meshserve.Preview, expected protocol.ServicePreview) bool {
+	return actual.Service == serviceFromInfo(expected.Service) && actual.FileCount == expected.FileCount
+}
+
+func boundedServiceProblem(problem string) string {
+	problem = strings.ToValidUTF8(problem, "?")
+	if len(problem) <= meshserve.MaximumServiceProblemBytes {
+		return problem
+	}
+	limit := meshserve.MaximumServiceProblemBytes - len("…")
+	for limit > 0 && !utf8.ValidString(problem[:limit]) {
+		limit--
+	}
+	return problem[:limit] + "…"
 }

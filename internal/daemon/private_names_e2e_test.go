@@ -46,12 +46,17 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	privateName, err := dnsname.NewPrivateNameSource(liveStore)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stagingStore, err := dnsname.NewBundleStore(filepath.Join(originState, "staging"), dnsname.WildcardName)
 	if err != nil {
 		t.Fatal(err)
 	}
 	installer, err := dnsname.NewInstaller(dnsname.InstallerConfig{
-		Profile: dnsname.ProfilePrivateOrigin, LiveSource: liveSource, StagingStore: stagingStore, TargetID: targetID, SignerID: signerID,
+		Profile: dnsname.ProfilePrivateOrigin, LiveSource: liveSource, StagingStore: stagingStore, PrivateName: privateName,
+		TargetID: targetID, SignerID: signerID,
 		Now: func() time.Time { return now },
 	})
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	meshserve "github.com/shaul/mesh/internal/serve"
 	dbsqlc "github.com/shaul/mesh/internal/storage/sqlc"
 )
 
@@ -47,6 +48,17 @@ type Session struct {
 	LastAttachedAt     *time.Time
 	ExitCode           *int
 	LastOutputSequence uint64
+}
+
+// CachedService is the last service status observed from one adopted host.
+// It is advisory state for offline CLI listing, never daemon routing state.
+type CachedService struct {
+	HostID      HostID
+	PrivateName string
+	Service     meshserve.Service
+	Healthy     bool
+	Problem     string
+	ObservedAt  time.Time
 }
 
 func validateHostID(id HostID) error {

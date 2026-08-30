@@ -112,7 +112,7 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 		Rows:      rows,
 	}
 	if err := send(controlFrame(attach)); err != nil {
-		return res, fmt.Errorf("attach %s: %w", opts.SessionID, err)
+		return res, presentError("attach "+opts.SessionID, err)
 	}
 
 	inputIsTerminal := term.IsTerminal(opts.In.Fd())
@@ -210,7 +210,7 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				return res, nil
 			}
-			return res, fmt.Errorf("session %s: %w", opts.SessionID, err)
+			return res, presentError("session "+opts.SessionID, err)
 		}
 		switch f.Kind {
 		case protocol.KindData:
@@ -253,7 +253,7 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 				res.Detached = true
 				return res, nil
 			case protocol.TypeError:
-				return res, fmt.Errorf("session %s: %s", opts.SessionID, msg.Message)
+				return res, daemonResponseError("session "+opts.SessionID, msg.Message)
 			}
 		}
 	}

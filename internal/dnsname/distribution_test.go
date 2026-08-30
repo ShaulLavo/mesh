@@ -27,7 +27,7 @@ func TestSignedBundleBindsTargetSignerCertificateAndKey(t *testing.T) {
 	signerID, signer := testEd25519Identity(t)
 	targetID, _ := testEd25519Identity(t)
 	bundle := testBundle(t, 1, now, now.Add(90*24*time.Hour))
-	signed, err := SignBundle(bundle, targetID, ProfilePrivateOrigin, EnvironmentLive, signer)
+	signed, err := SignBundle(bundle, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,15 +118,20 @@ func TestInstallerIsIdempotentRejectsRollbackAndAllowsEqualExpiryRotation(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	privateName, err := NewPrivateNameSource(store)
+	if err != nil {
+		t.Fatal(err)
+	}
 	installer, err := NewInstaller(InstallerConfig{
-		Profile: ProfilePrivateOrigin, LiveSource: source, StagingStore: stagingStore, TargetID: targetID, SignerID: signerID, Now: func() time.Time { return now },
+		Profile: ProfilePrivateOrigin, LiveSource: source, StagingStore: stagingStore, PrivateName: privateName,
+		TargetID: targetID, SignerID: signerID, Now: func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	first := testBundle(t, 1, now, now.Add(90*24*time.Hour))
-	firstSigned, err := SignBundle(first, targetID, ProfilePrivateOrigin, EnvironmentLive, signer)
+	firstSigned, err := SignBundle(first, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +143,7 @@ func TestInstallerIsIdempotentRejectsRollbackAndAllowsEqualExpiryRotation(t *tes
 	}
 
 	earlier := testBundle(t, 2, now, now.Add(60*24*time.Hour))
-	earlierSigned, err := SignBundle(earlier, targetID, ProfilePrivateOrigin, EnvironmentLive, signer)
+	earlierSigned, err := SignBundle(earlier, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +152,7 @@ func TestInstallerIsIdempotentRejectsRollbackAndAllowsEqualExpiryRotation(t *tes
 	}
 
 	rotation := testBundle(t, 3, now, first.NotAfter)
-	rotationSigned, err := SignBundle(rotation, targetID, ProfilePrivateOrigin, EnvironmentLive, signer)
+	rotationSigned, err := SignBundle(rotation, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,8 +188,13 @@ func TestInstallerPersistsStagingWithoutChangingLiveCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	privateName, err := NewPrivateNameSource(liveStore)
+	if err != nil {
+		t.Fatal(err)
+	}
 	installer, err := NewInstaller(InstallerConfig{
-		Profile: ProfilePrivateOrigin, LiveSource: source, StagingStore: stagingStore, TargetID: targetID, SignerID: signerID,
+		Profile: ProfilePrivateOrigin, LiveSource: source, StagingStore: stagingStore, PrivateName: privateName,
+		TargetID: targetID, SignerID: signerID,
 		Now: func() time.Time { return now },
 	})
 	if err != nil {
@@ -192,7 +202,7 @@ func TestInstallerPersistsStagingWithoutChangingLiveCertificate(t *testing.T) {
 	}
 
 	live := testBundle(t, 10, now, now.Add(90*24*time.Hour))
-	liveSigned, err := SignBundle(live, targetID, ProfilePrivateOrigin, EnvironmentLive, signer)
+	liveSigned, err := SignBundle(live, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +210,7 @@ func TestInstallerPersistsStagingWithoutChangingLiveCertificate(t *testing.T) {
 		t.Fatalf("live install changed = %v, error = %v", changed, err)
 	}
 	staging := testBundle(t, 20, now, now.Add(91*24*time.Hour))
-	stagingSigned, err := SignBundle(staging, targetID, ProfilePrivateOrigin, EnvironmentStaging, signer)
+	stagingSigned, err := SignBundle(staging, targetID, ProfilePrivateOrigin, EnvironmentStaging, "pc.mesh.shaulavo.dev", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,8 +262,12 @@ func TestInstallerRejectsCorrectlySignedBundleForAnotherProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	privateName, err := NewPrivateNameSource(liveStore)
+	if err != nil {
+		t.Fatal(err)
+	}
 	installer, err := NewInstaller(InstallerConfig{
-		Profile: ProfilePrivateOrigin, LiveSource: liveSource, StagingStore: stagingStore,
+		Profile: ProfilePrivateOrigin, LiveSource: liveSource, StagingStore: stagingStore, PrivateName: privateName,
 		TargetID: targetID, SignerID: signerID, Now: func() time.Time { return now },
 	})
 	if err != nil {
@@ -264,7 +278,7 @@ func TestInstallerRejectsCorrectlySignedBundleForAnotherProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := SignBundle(publicBundle, targetID, ProfilePublicEdge, EnvironmentLive, signer)
+	signed, err := SignBundle(publicBundle, targetID, ProfilePublicEdge, EnvironmentLive, "", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,8 +313,8 @@ func TestDistributorPinsOriginIdentityAndSignedInstall(t *testing.T) {
 		},
 	})
 	targets := []OriginTarget{
-		{Name: "desktop", Endpoint: "ws://100.64.0.1:7337/mesh", Identity: firstID},
-		{Name: "laptop", Endpoint: "ws://100.64.0.2:7337/mesh", Identity: secondID},
+		{Name: "desktop", PrivateName: "desktop.mesh.shaulavo.dev", Endpoint: "ws://100.64.0.1:7337/mesh", Identity: firstID},
+		{Name: "laptop", PrivateName: "laptop.mesh.shaulavo.dev", Endpoint: "ws://100.64.0.2:7337/mesh", Identity: secondID},
 	}
 	callerBundle := bundle
 	callerBundle.Fingerprint = "stale-caller-fingerprint"
@@ -625,7 +639,7 @@ func (c *distributionTestConn) WriteFrame(frame protocol.Frame) error {
 		}
 		bundle, err := VerifySignedBundle(SignedBundle{
 			Profile: CertificateProfile(request.Certificate.Profile), Environment: RenewalEnvironment(request.Certificate.Environment),
-			TargetID: request.Certificate.TargetID, SignerID: request.Certificate.SignerID,
+			TargetID: request.Certificate.TargetID, SignerID: request.Certificate.SignerID, PrivateName: request.Certificate.PrivateName,
 			CertificatePEM: request.Certificate.CertificatePEM, PrivateKeyPEM: request.Certificate.PrivateKeyPEM,
 			Signature: request.Certificate.Signature,
 		}, c.identity, c.signerID, c.now)
@@ -637,6 +651,7 @@ func (c *distributionTestConn) WriteFrame(frame protocol.Frame) error {
 			response.CertificateFingerprint = bundle.Fingerprint
 			response.CertificateEnvironment = request.Certificate.Environment
 			response.CertificateProfile = request.Certificate.Profile
+			response.CertificatePrivateName = request.Certificate.PrivateName
 			if response.CertificateFingerprint != c.fingerprint {
 				return fmt.Errorf("test installed fingerprint %s, want %s", response.CertificateFingerprint, c.fingerprint)
 			}

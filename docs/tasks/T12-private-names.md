@@ -48,28 +48,38 @@ corrupt the current pointer.
 
 Each origin pins the Pi's Mesh Ed25519 identity. Distribution first calls
 `host.info` over the origin's direct WebSocket and verifies the origin identity.
-The Pi then signs the v2 domain-separated digest over the `private-origin`
-profile, environment, target identity, signer identity, certificate bytes, and
-private-key bytes. The origin bounds all fields before cryptographic work,
-verifies both identity pins, checks the key and `*.mesh.shaulavo.dev` SAN, and
-rejects a bundle with a strictly earlier expiry. An installer accepts only its
-configured profile, so a `public-edge` bundle cannot enter a private-origin
-slot. Profile-less v1 bundles are not accepted. An exact replay is a no-op. A
-different certificate with the same expiry remains valid for emergency key
-rotation.
+The Pi then signs the v3 domain-separated transcript over length-prefixed
+profile, environment, target identity, signer identity, private name,
+certificate bytes, and private-key bytes. A `private-origin` private name is
+either empty or exactly one canonical label below `mesh.shaulavo.dev`; the Pi
+sets it only after the corresponding A-record reconciliation succeeds. A
+`public-edge` bundle must carry an empty private name. The origin bounds all
+fields before cryptographic work, verifies both identity pins, checks the key
+and `*.mesh.shaulavo.dev` SAN, and rejects a bundle with a strictly earlier
+expiry. An installer accepts only its configured profile, so a `public-edge`
+bundle cannot enter a private-origin slot. Legacy v1 and v2 transcripts are not
+accepted. An exact replay is a no-op. A different certificate with the same
+expiry remains valid for emergency key rotation.
 
-Staging bundles install into a persisted non-serving slot. Live bundles install
-atomically and hot-swap the TLS certificate without restarting the daemon. An
-expired persisted certificate triggers a new order. If renewal fails while the
-current certificate remains valid, reconciliation reports the failure and still
-redistributes that usable bundle to origins that were previously offline.
+Staging bundles install into a persisted non-serving slot and never publish a
+private name. Live bundles install atomically and hot-swap the TLS certificate
+without restarting the daemon. A nonempty live private name is persisted beside
+that slot; an empty later install preserves the last DNS-proven name. A
+different nonempty name is rejected to prevent replay from renaming an adopted
+identity. Intentional renames require an explicit state reset and re-adoption.
+The daemon exposes the persisted name only after a valid live certificate was
+installed or restored and Tailscale Serve successfully configured tailnet port
+443. An expired persisted certificate triggers a new order. If renewal fails
+while the current certificate remains valid, reconciliation reports the failure
+and still redistributes that usable bundle to origins that were previously
+offline.
 
 Certificate distribution uses the additive `certificate.install` and
-`certificate.installed` controls. The request carries the signed profile and
-environment. The acknowledgement returns the profile, environment, and
-fingerprint. The default fan-out is four concurrent origins with a 10-second
-per-origin deadline. Every successful reconciliation redistributes the current
-bundle, even when no renewal occurred.
+`certificate.installed` controls. The request carries the signed profile,
+environment, and private name. The acknowledgement returns the profile,
+environment, private name, and fingerprint. The default fan-out is four
+concurrent origins with a 10-second per-origin deadline. Every successful
+reconciliation redistributes the current bundle, even when no renewal occurred.
 
 ## HTTPS listener choice
 
@@ -334,7 +344,8 @@ Unit tests cover Cloudflare REST payloads and comments, ownership collisions,
 token redaction, malformed and repeated provider responses, authoritative
 propagation, cleanup, current ACME order calls, bounded ACME responses, expired
 renewal, issuance deadlines, cross-process locking, descriptor-safe 0600 stores,
-live and staging separation, signed profile-v2 distribution, identity,
+live and staging separation, signed profile-v3 distribution and private-name
+lifecycle, identity,
 environment, and profile tampering, cross-profile rejection, rollback,
 concurrency bounds, manager retry scheduling, partial
 discovery, bounded Tailscale output, hot TLS reload, listener shutdown,

@@ -155,6 +155,14 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("daemon: resolve state directory %s: %w", cfg.StateDir, err)
 	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("daemon: resolve service home: %w", err)
+	}
+	homeDir, err = filepath.Abs(homeDir)
+	if err != nil {
+		return fmt.Errorf("daemon: resolve service home %s: %w", homeDir, err)
+	}
 	sessionsDir := filepath.Join(stateDir, sessionsDirectoryName)
 	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
 		return fmt.Errorf("daemon: create sessions directory %s: %w", sessionsDir, err)
@@ -309,7 +317,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		}
 		publication = publisher
 	}
-	serviceControl, err := newServiceController(daemonCtx, store, serviceRegistry, publication)
+	serviceControl, err := newServiceController(daemonCtx, homeDir, store, serviceRegistry, publication)
 	if err != nil {
 		return err
 	}
@@ -354,6 +362,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		Catalog:     catalog,
 		Connector:   connector,
 		Host:        host,
+		PrivateName: certificateRuntime.PrivateName,
 		SessionsDir: sessionsDir,
 	})
 	if err != nil {
@@ -386,6 +395,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		if cfg.TailscaleServe {
 			if err := configureTailscaleServe(readyCtx, cfg.HTTPSPort, opts.tailscaleTimeout, opts.runCommand); err != nil {
 				return err
+			}
+			if certificateRuntime.PrivateNameReady != nil {
+				certificateRuntime.PrivateNameReady()
 			}
 		}
 		close(listenersReady)

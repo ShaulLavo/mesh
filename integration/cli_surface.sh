@@ -82,4 +82,15 @@ grep -q '__mesh' "$T/completion" || fail "Bash completion was not generated"
 "$MESH" man >"$T/man"
 grep -q '^\.TH MESH 1' "$T/man" || fail "manpage was not generated"
 
+NO_COLOR=1 "$MESH" serve --help >"$T/serve-help"
+grep -q 'mesh serve HOST TARGET --at ROUTE' "$T/serve-help" ||
+  fail "serve help omitted the mutation form: $(cat "$T/serve-help")"
+grep -q 'mesh serve ls' "$T/serve-help" ||
+  fail "serve help omitted the list form: $(cat "$T/serve-help")"
+grep -q 'mesh serve list' "$T/serve-help" ||
+  fail "serve help omitted the list alias: $(cat "$T/serve-help")"
+if grep -q 'HOST TARGET --at ROUTE \[command\]' "$T/serve-help"; then
+  fail "serve help combined mutually exclusive forms: $(cat "$T/serve-help")"
+fi
+
 echo "PASS: offline catalogs stay visible and the Cobra/Fang CLI artifacts work"

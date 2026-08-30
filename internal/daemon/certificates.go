@@ -63,6 +63,7 @@ func (c *certificateController) HandleControl(_ context.Context, request protoco
 		Environment:    dnsname.RenewalEnvironment(request.Certificate.Environment),
 		TargetID:       request.Certificate.TargetID,
 		SignerID:       request.Certificate.SignerID,
+		PrivateName:    request.Certificate.PrivateName,
 		CertificatePEM: request.Certificate.CertificatePEM,
 		PrivateKeyPEM:  request.Certificate.PrivateKeyPEM,
 		Signature:      request.Certificate.Signature,
@@ -73,7 +74,8 @@ func (c *certificateController) HandleControl(_ context.Context, request protoco
 	return protocol.Control{
 		Type: protocol.TypeCertificateInstalled, RequestID: request.RequestID,
 		CertificateFingerprint: installed.Fingerprint, CertificateEnvironment: request.Certificate.Environment,
-		CertificateProfile: request.Certificate.Profile,
+		CertificateProfile:     request.Certificate.Profile,
+		CertificatePrivateName: request.Certificate.PrivateName,
 	}, true, nil
 }
 
@@ -93,9 +95,11 @@ type certificateRuntimeConfig struct {
 }
 
 type certificateRuntime struct {
-	Controller controlHandler
-	OriginTLS  *tls.Config
-	PublicTLS  *tls.Config
+	Controller       controlHandler
+	OriginTLS        *tls.Config
+	PublicTLS        *tls.Config
+	PrivateName      func() string
+	PrivateNameReady func()
 }
 
 func configureCertificates(config certificateRuntimeConfig) (certificateRuntime, error) {
@@ -125,7 +129,7 @@ func configureCertificates(config certificateRuntimeConfig) (certificateRuntime,
 	installers := make(map[dnsname.CertificateProfile]certificateInstaller, 2)
 	runtime := certificateRuntime{}
 	if config.OriginHTTPSPort != 0 {
-		installer, tlsConfig, err := configureCertificateProfile(
+		installer, tlsConfig, privateName, privateNameReady, err := configureCertificateProfile(
 			filepath.Join(config.StateDir, privateTLSDirectoryName), dnsname.WildcardName,
 			dnsname.ProfilePrivateOrigin, config.TargetID, config.OriginRenewerID,
 		)
@@ -134,9 +138,11 @@ func configureCertificates(config certificateRuntimeConfig) (certificateRuntime,
 		}
 		installers[dnsname.ProfilePrivateOrigin] = installer
 		runtime.OriginTLS = tlsConfig
+		runtime.PrivateName = privateName
+		runtime.PrivateNameReady = privateNameReady
 	}
 	if config.PublicMode == edge.ModeDirectTLS {
-		installer, tlsConfig, err := configureCertificateProfile(
+		installer, tlsConfig, _, _, err := configureCertificateProfile(
 			filepath.Join(config.StateDir, certificateDirectoryName, string(dnsname.ProfilePublicEdge)), dnsname.PublicWildcardName,
 			dnsname.ProfilePublicEdge, config.TargetID, config.PublicCertificatePin,
 		)
@@ -158,24 +164,38 @@ func configureCertificates(config certificateRuntimeConfig) (certificateRuntime,
 	return runtime, nil
 }
 
-func configureCertificateProfile(root, name string, profile dnsname.CertificateProfile, targetID, signerID string) (certificateInstaller, *tls.Config, error) {
+func configureCertificateProfile(root, name string, profile dnsname.CertificateProfile, targetID, signerID string) (certificateInstaller, *tls.Config, func() string, func(), error) {
 	liveStore, err := dnsname.NewBundleStore(filepath.Join(root, string(dnsname.EnvironmentLive)), name)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	stagingStore, err := dnsname.NewBundleStore(filepath.Join(root, string(dnsname.EnvironmentStaging)), name)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	source, err := dnsname.NewCertificateSource(liveStore)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
+	}
+	var privateName *dnsname.PrivateNameSource
+	if profile == dnsname.ProfilePrivateOrigin {
+		privateName, err = dnsname.NewPrivateNameSource(liveStore)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
 	}
 	installer, err := dnsname.NewInstaller(dnsname.InstallerConfig{
-		Profile: profile, LiveSource: source, StagingStore: stagingStore, TargetID: targetID, SignerID: signerID,
+		Profile: profile, LiveSource: source, StagingStore: stagingStore, PrivateName: privateName,
+		TargetID: targetID, SignerID: signerID,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return installer, &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: source.GetCertificate}, nil
+	var currentPrivateName func() string
+	var markPrivateNameReady func()
+	if privateName != nil {
+		currentPrivateName = privateName.Current
+		markPrivateNameReady = privateName.MarkIngressReady
+	}
+	return installer, &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: source.GetCertificate}, currentPrivateName, markPrivateNameReady, nil
 }

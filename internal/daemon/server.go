@@ -12,6 +12,7 @@ import (
 
 	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/protocol"
+	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -187,6 +188,8 @@ func clientErrorCode(err error) string {
 		return protocol.ErrorCodeEdgeConflict
 	case errors.Is(err, edge.ErrWakeUnavailable):
 		return protocol.ErrorCodeEdgeWakeUnavailable
+	case errors.Is(err, meshserve.ErrCredentialsFound):
+		return protocol.ErrorCodeCredentialsFound
 	default:
 		return ""
 	}

@@ -290,6 +290,26 @@ func TestCreateViaDaemonRejectsInvalidResponses(t *testing.T) {
 	}
 }
 
+func TestControlRequestDoesNotEchoOversizedMismatchedRequestID(t *testing.T) {
+	socketPath, serverDone := startDaemonCreateServer(t, func(conn transport.Conn, request protocol.Control) error {
+		return writeDaemonControl(conn, protocol.Control{
+			Type: protocol.TypeCreated, RequestID: strings.Repeat("ATTACKER\r\n", 50_000), SessionID: "7K3D",
+		})
+	})
+	_, err := CreateViaDaemon(context.Background(), DaemonCreateOptions{SocketPath: socketPath, Command: []string{"sh"}})
+	if err == nil || strings.Contains(err.Error(), "ATTACKER") || len(err.Error()) > 1024 {
+		t.Fatalf("mismatched request ID error = %q (%d bytes)", err, len(err.Error()))
+	}
+	awaitDaemonServer(t, serverDone)
+}
+
+func TestDaemonResponseErrorIsBoundedAndCannotInjectTerminalControls(t *testing.T) {
+	err := daemonResponseError("session list", "ATTACKER\r\n\u202e"+strings.Repeat("x", 10_000))
+	if strings.ContainsAny(err.Error(), "\r\n\x1b") || strings.ContainsRune(err.Error(), '\u202e') || len(err.Error()) > maximumRemoteErrorBytes+100 {
+		t.Fatalf("unsafe daemon error = %q (%d bytes)", err, len(err.Error()))
+	}
+}
+
 func TestCreateViaDaemonCancellationUnblocksRead(t *testing.T) {
 	requestRead := make(chan struct{})
 	socketPath, serverDone := startDaemonCreateServer(t, func(conn transport.Conn, _ protocol.Control) error {

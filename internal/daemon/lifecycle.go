@@ -28,6 +28,7 @@ type lifecycleConfig struct {
 	Catalog        lifecycleCatalog
 	Connector      WorkerConnector
 	Host           storage.Host
+	PrivateName    func() string
 	SessionsDir    string
 	Executable     string
 	Env            []string
@@ -40,6 +41,7 @@ type lifecycle struct {
 	catalog        lifecycleCatalog
 	connector      WorkerConnector
 	host           storage.Host
+	privateName    func() string
 	sessionsDir    string
 	executable     string
 	env            []string
@@ -93,6 +95,9 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 	if cfg.Context == nil {
 		cfg.Context = context.Background()
 	}
+	if cfg.PrivateName == nil {
+		cfg.PrivateName = func() string { return "" }
+	}
 	if cfg.PublishTimeout < 0 {
 		return nil, fmt.Errorf("daemon: negative lifecycle publication timeout")
 	}
@@ -106,6 +111,7 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 		catalog:        cfg.Catalog,
 		connector:      cfg.Connector,
 		host:           cfg.Host,
+		privateName:    cfg.PrivateName,
 		sessionsDir:    cfg.SessionsDir,
 		executable:     cfg.Executable,
 		env:            append([]string(nil), cfg.Env...),
@@ -303,6 +309,7 @@ func (l *lifecycle) hostInfo(request protocol.Control) (protocol.Control, error)
 			ID:            string(l.host.ID),
 			MeshIdentity:  l.host.MeshIdentity,
 			TailscaleName: name,
+			PrivateName:   l.privateName(),
 		},
 	}, nil
 }
