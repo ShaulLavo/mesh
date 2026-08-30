@@ -4,9 +4,11 @@ package worker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -43,11 +45,46 @@ func WriteMeta(dir string, m Meta) error {
 	}
 	b = append(b, '\n')
 	tmp := filepath.Join(dir, "meta.json.tmp")
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	// This record is how a session's fate survives the daemon being down, so it
+	// has to survive power loss too. Without the file sync a rename can land
+	// ahead of the bytes and leave a zero-length meta.json, which the daemon's
+	// startup scan then reads as a fatal decode error on every boot.
+	temporary, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // a fixed filename under the caller's own session directory
+	if err != nil {
 		return fmt.Errorf("worker: write meta: %w", err)
+	}
+	if _, err := temporary.Write(b); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("worker: write meta: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("worker: sync meta: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("worker: close meta: %w", err)
 	}
 	if err := os.Rename(tmp, filepath.Join(dir, "meta.json")); err != nil {
 		return fmt.Errorf("worker: commit meta: %w", err)
+	}
+	// The rename itself needs a directory sync to be durable.
+	if err := syncDirectory(dir); err != nil {
+		return fmt.Errorf("worker: sync session directory: %w", err)
+	}
+	return nil
+}
+
+// syncDirectory flushes a directory entry so a completed rename survives a
+// crash. Not every platform permits opening a directory for sync; a rejection
+// there is not a write failure.
+func syncDirectory(path string) error {
+	directory, err := os.Open(path) //nolint:gosec // the caller supplies its own session directory
+	if err != nil {
+		return err //nolint:wrapcheck // the caller names the operation
+	}
+	defer directory.Close() //nolint:errcheck // the sync below is what has to succeed
+	if err := directory.Sync(); err != nil && !errors.Is(err, os.ErrInvalid) && !errors.Is(err, syscall.EINVAL) {
+		return err //nolint:wrapcheck // the caller names the operation
 	}
 	return nil
 }

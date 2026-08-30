@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -138,8 +139,31 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 		}
 		meta, err := worker.ReadMeta(dir)
 		if err != nil {
-			return nil, fmt.Errorf("daemon: read session %s metadata: %w", entry.Name(), err)
+			// A directory with no metadata at all is a reservation whose marker
+			// has not landed yet. It belongs to a create still in flight, so it
+			// is not this scan's to report on.
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			// Anything else is a damaged record, most likely a torn write from
+			// power loss. Quarantine it: one unreadable directory must not take
+			// down a daemon that has healthy sessions to coordinate, and this
+			// runs before the Unix socket exists, so failing here would leave no
+			// way in to repair it. It is reported as interrupted rather than
+			// dropped, because omitting it entirely would let ReconcileHost
+			// declare live sessions dead.
+			quarantined, ok := quarantinedSession(c.host.ID, entry.Name(), c.now())
+			if !ok {
+				log.Printf("daemon: ignoring session directory %s with unreadable metadata: %v", entry.Name(), err)
+				continue
+			}
+			log.Printf("daemon: session %s has unreadable metadata, recording it as interrupted: %v", entry.Name(), err)
+			observed = append(observed, quarantined)
+			continue
 		}
+		// A record that decodes but contradicts itself is not a torn write; it
+		// means something wrote a session directory Mesh does not understand.
+		// That stays fatal, so the scan never mutates on a view it cannot trust.
 		session, probe, err := sessionFromMeta(c.host.ID, entry.Name(), meta)
 		if err != nil {
 			return nil, err
@@ -296,4 +320,26 @@ func cloneCatalogString(value *string) *string {
 	}
 	cloned := *value
 	return &cloned
+}
+
+// quarantinedSession is the record kept for a session directory whose metadata
+// cannot be trusted. The session is real — the directory exists and something
+// created it — but its command, PID and creation time are unknowable, so it is
+// reported as interrupted, which is exactly what "we cannot account for this
+// process any more" means everywhere else in Mesh.
+//
+// It returns false when the directory name is not a session ID at all, in which
+// case there is nothing to record and the caller skips it.
+func quarantinedSession(hostID storage.HostID, directory string, now time.Time) (storage.Session, bool) {
+	parsed, err := session.ParseID(directory)
+	if err != nil || parsed != directory {
+		return storage.Session{}, false
+	}
+	return storage.Session{
+		ID:        storage.SessionID(directory),
+		HostID:    hostID,
+		Command:   []string{"unknown"},
+		State:     storage.StateInterrupted,
+		CreatedAt: now,
+	}, true
 }

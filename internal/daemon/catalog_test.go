@@ -178,28 +178,6 @@ func TestCatalogReconcileRejectsIncompleteScanBeforeMutation(t *testing.T) {
 		setup func(*testing.T, string)
 	}{
 		{
-			name: "missing metadata",
-			setup: func(t *testing.T, root string) {
-				t.Helper()
-				if err := os.Mkdir(filepath.Join(root, "MISSING"), 0o700); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "malformed metadata",
-			setup: func(t *testing.T, root string) {
-				t.Helper()
-				dir := filepath.Join(root, "BROKEN")
-				if err := os.Mkdir(dir, 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte("{"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
 			name: "directory and metadata IDs differ",
 			setup: func(t *testing.T, root string) {
 				t.Helper()
@@ -440,12 +418,16 @@ func TestCatalogReconcileConvergesInSQLite(t *testing.T) {
 	}
 }
 
+// A scan the daemon cannot trust must leave SQLite exactly as it found it,
+// rather than committing a partial view that would mark live sessions dead.
+// The trigger here is a record that decodes but contradicts itself: unlike a
+// torn write, which is quarantined, that means something wrote a session
+// directory Mesh does not understand, and guessing is not safe.
 func TestCatalogBrokenScanPreservesSQLiteState(t *testing.T) {
 	ctx := context.Background()
 	sessionsDir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(sessionsDir, "BROKEN"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	contradictory := catalogTestMeta("BR0K", worker.StateExited, "boot-a")
+	writeCatalogMeta(t, sessionsDir, contradictory.ID, contradictory)
 	store, err := storage.Open(ctx, filepath.Join(t.TempDir(), "mesh.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -725,5 +707,73 @@ func TestCatalogRejectsInconclusiveProbeBeforeMutation(t *testing.T) {
 	}
 	if store.upsertCalls != 0 || store.reconcileCalls != 0 {
 		t.Fatalf("inconclusive probe mutated store: upsert %d reconcile %d", store.upsertCalls, store.reconcileCalls)
+	}
+}
+
+// A directory holding neither a launching marker nor metadata belongs to a
+// create still in flight: LaunchDetached makes the directory before it writes
+// the marker, so a concurrent reconcile sees that gap. Treating it as fatal
+// failed the racing client's publish and left it an unnamed live session.
+func TestCatalogSkipsDirectoryReservedButNotYetMarked(t *testing.T) {
+	sessionsDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(sessionsDir, "MISSING"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeCatalogMeta(t, sessionsDir, "H3TY", catalogTestMeta("H3TY", worker.StateRunning, "boot-a"))
+
+	store := &catalogStoreStub{}
+	catalog := newCatalogForTest(t, sessionsDir, store, probeFunc(func(context.Context, string) error { return nil }), func() string { return "boot-a" })
+	if err := catalog.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile() error = %v; a half-reserved directory must not fail the scan", err)
+	}
+	if store.reconcileCalls != 1 {
+		t.Fatalf("reconcile calls = %d, want 1", store.reconcileCalls)
+	}
+	if len(store.observed) != 1 || store.observed[0].ID != "H3TY" {
+		t.Fatalf("observed sessions = %+v; want only the published session", store.observed)
+	}
+}
+
+// A torn meta.json is what power loss during a worker's exit record looks like.
+// The daemon's startup Reconcile runs before the Unix socket, the tailnet
+// listener and the SSH listener exist, so failing here bricked the whole host
+// on every boot with no way in to repair it. Quarantine the one damaged session
+// as interrupted instead, and keep coordinating the healthy ones.
+func TestCatalogQuarantinesTornMetadataInsteadOfFailingStartup(t *testing.T) {
+	sessionsDir := t.TempDir()
+	broken := filepath.Join(sessionsDir, "BR0K")
+	if err := os.Mkdir(broken, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A zero-length file is precisely what a rename without a preceding sync
+	// leaves behind.
+	if err := os.WriteFile(filepath.Join(broken, "meta.json"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeCatalogMeta(t, sessionsDir, "H3TY", catalogTestMeta("H3TY", worker.StateRunning, "boot-a"))
+
+	store := &catalogStoreStub{}
+	catalog := newCatalogForTest(t, sessionsDir, store, probeFunc(func(context.Context, string) error { return nil }), func() string { return "boot-a" })
+	if err := catalog.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile() error = %v; one torn record must not stop the daemon", err)
+	}
+
+	var quarantined, healthy bool
+	for _, got := range store.observed {
+		switch got.ID {
+		case "BR0K":
+			quarantined = true
+			if got.State != storage.StateInterrupted {
+				t.Fatalf("quarantined session state = %q, want %q", got.State, storage.StateInterrupted)
+			}
+		case "H3TY":
+			healthy = true
+		}
+	}
+	if !quarantined {
+		t.Fatal("the damaged session was dropped; ReconcileHost would then declare live sessions dead")
+	}
+	if !healthy {
+		t.Fatal("the healthy session was not reported")
 	}
 }
