@@ -2,7 +2,6 @@
 package tailnet
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +10,13 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
+)
+
+const (
+	statusOutputMaximum = 2 << 20
+	statusErrorMaximum  = 64 << 10
+	commandWaitDelay    = time.Second
 )
 
 var (
@@ -18,6 +24,9 @@ var (
 	ErrNotInstalled = errors.New("tailscale is not installed")
 	ErrNotRunning   = errors.New("tailscale is not running")
 	ErrNotLoggedIn  = errors.New("tailscale is logged out")
+	// ErrCommandOutputTooLarge reports a tailscale process whose output crossed
+	// the fixed discovery boundary.
+	ErrCommandOutputTooLarge = errors.New("tailscale command output is too large")
 )
 
 // Peer is one machine visible on the current tailnet.
@@ -110,6 +119,9 @@ type rawPeer struct {
 
 func (c *Client) status(ctx context.Context) (rawStatus, error) {
 	contents, stderr, err := c.runner.Run(ctx, "tailscale", "status", "--json")
+	if len(contents) > statusOutputMaximum || len(stderr) > statusErrorMaximum {
+		return rawStatus{}, ErrCommandOutputTooLarge
+	}
 	if err != nil {
 		return rawStatus{}, explainCommandError(err, contents, stderr)
 	}
@@ -139,6 +151,9 @@ func (c *Client) status(ctx context.Context) (rawStatus, error) {
 func explainCommandError(runErr error, stdout, stderr []byte) error {
 	if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 		return fmt.Errorf("run tailscale status --json: %w", runErr)
+	}
+	if errors.Is(runErr, ErrCommandOutputTooLarge) {
+		return fmt.Errorf("run tailscale status --json: %w", ErrCommandOutputTooLarge)
 	}
 
 	var missing *exec.Error
@@ -190,11 +205,41 @@ type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, command string, args ...string) ([]byte, []byte, error) {
 	cmd := exec.CommandContext(ctx, command, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	stdout, err := cmd.Output()
+	stdout := newCappedBuffer(statusOutputMaximum)
+	stderr := newCappedBuffer(statusErrorMaximum)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.WaitDelay = commandWaitDelay
+	err := cmd.Run()
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		err = ctxErr
+	} else if stdout.truncated || stderr.truncated {
+		err = ErrCommandOutputTooLarge
 	}
-	return stdout, stderr.Bytes(), err
+	return stdout.bytes(), stderr.bytes(), err
+}
+
+type cappedBuffer struct {
+	contents  []byte
+	maximum   int
+	truncated bool
+}
+
+func newCappedBuffer(maximum int) *cappedBuffer {
+	return &cappedBuffer{maximum: maximum}
+}
+
+func (b *cappedBuffer) Write(contents []byte) (int, error) {
+	written := len(contents)
+	remaining := b.maximum - len(b.contents)
+	if remaining < len(contents) {
+		b.truncated = true
+		contents = contents[:max(remaining, 0)]
+	}
+	b.contents = append(b.contents, contents...)
+	return written, nil
+}
+
+func (b *cappedBuffer) bytes() []byte {
+	return b.contents
 }

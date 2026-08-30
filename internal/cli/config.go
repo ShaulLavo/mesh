@@ -24,7 +24,7 @@ const (
 var reservedAliases = map[string]struct{}{
 	"add": {}, "attach": {}, "completion": {}, "daemon": {}, "help": {},
 	"kill": {}, "list": {}, "local": {}, "logs": {}, "man": {},
-	"session-worker": {}, "sig": {}, "signal": {}, "wake": {},
+	"private-names": {}, "session-worker": {}, "sig": {}, "signal": {}, "wake": {},
 }
 
 // HostRecord is the local address book entry for one adopted Mesh host.

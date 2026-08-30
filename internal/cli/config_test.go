@@ -14,6 +14,12 @@ func TestValidateHostAliasRejectsSessionIDs(t *testing.T) {
 	}
 }
 
+func TestValidateHostAliasRejectsPrivateNamesCommand(t *testing.T) {
+	if _, err := ValidateHostAlias("private-names"); err == nil || !strings.Contains(err.Error(), "Mesh command") {
+		t.Fatalf("private-names alias error = %v", err)
+	}
+}
+
 func TestHostConfigRoundTripReplacesSameHostAtomically(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("MESH_CONFIG_DIR", configDir)

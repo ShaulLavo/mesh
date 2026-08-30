@@ -66,14 +66,15 @@ type PickerFunc func(context.Context, PickerInput) (PickerSelection, error)
 
 // Dependencies are the replaceable product edges used by later tasks and tests.
 type Dependencies struct {
-	Bootstrap BootstrapFunc
-	Wake      WakeFunc
-	Picker    PickerFunc
-	DialHost  HostDialer
-	Now       func() time.Time
-	Stdin     *os.File
-	Stdout    *os.File
-	Stderr    *os.File
+	Bootstrap             BootstrapFunc
+	Wake                  WakeFunc
+	Picker                PickerFunc
+	ReconcilePrivateNames PrivateNamesFunc
+	DialHost              HostDialer
+	Now                   func() time.Time
+	Stdin                 *os.File
+	Stdout                *os.File
+	Stderr                *os.File
 }
 
 type application struct {
@@ -88,6 +89,9 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	}
 	if dependencies.Now == nil {
 		dependencies.Now = time.Now
+	}
+	if dependencies.ReconcilePrivateNames == nil {
+		dependencies.ReconcilePrivateNames = reconcilePrivateNames
 	}
 	if dependencies.Stdin == nil {
 		dependencies.Stdin = os.Stdin
@@ -130,6 +134,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 		app.listCommand(),
 		app.localCommand(),
 		app.logsCommand(),
+		app.privateNamesCommand(),
 		app.signalCommand(),
 		app.wakeCommand(),
 		app.workerCommand(),
@@ -867,8 +872,12 @@ func (a *application) runSessionControl(cmd *cobra.Command, id, controlType, sig
 
 func (a *application) daemonCommand() *cobra.Command {
 	var (
-		port uint
-		path string
+		port               uint
+		path               string
+		httpsPort          uint
+		certificateRenewer string
+		privateNamesConfig string
+		tailscaleServe     bool
 	)
 	command := &cobra.Command{
 		Use:   "daemon",
@@ -878,18 +887,27 @@ func (a *application) daemonCommand() *cobra.Command {
 			if port > 65535 {
 				return fmt.Errorf("tailnet port %d is out of range", port)
 			}
+			if httpsPort > 65535 {
+				return fmt.Errorf("HTTPS port %d is out of range", httpsPort)
+			}
 			stateDir, err := paths.StateDir()
 			if err != nil {
 				return err
 			}
 			return meshdaemon.Run(cmd.Context(), meshdaemon.Config{
-				StateDir: stateDir, TailnetPort: uint16(port), WebSocketPath: path,
-				ReportError: func(err error) { fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %v\n", err) },
+				StateDir: stateDir, TailnetPort: uint16(port), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
+				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
+				TailscaleServe: tailscaleServe,
+				ReportError:    func(err error) { fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %v\n", err) },
 			})
 		},
 	}
 	command.Flags().UintVar(&port, "tailnet-port", 0, "Tailnet WebSocket port; zero disables remote listening")
 	command.Flags().StringVar(&path, "websocket-path", "/mesh", "Tailnet WebSocket path")
+	command.Flags().UintVar(&httpsPort, "https-port", 0, "loopback HTTPS service port; zero disables HTTPS")
+	command.Flags().StringVar(&certificateRenewer, "certificate-renewer-id", "", "pinned Mesh identity allowed to install certificates")
+	command.Flags().StringVar(&privateNamesConfig, "private-names-config", "", "Pi private-name reconciliation config file")
+	command.Flags().BoolVar(&tailscaleServe, "tailscale-serve", false, "persist raw Tailscale TCP/443 forwarding to the HTTPS port")
 	return command
 }
 

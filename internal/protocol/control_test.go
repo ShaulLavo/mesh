@@ -119,3 +119,32 @@ func TestServiceControlRoundTrip(t *testing.T) {
 		t.Fatalf("decoded control = %#v, want %#v", got, want)
 	}
 }
+
+func TestCertificateControlRoundTrip(t *testing.T) {
+	want := Control{
+		Type:      TypeCertificateInstall,
+		RequestID: "certificate-1",
+		Certificate: &CertificateInstall{
+			Environment:    "staging",
+			TargetID:       "origin-key",
+			SignerID:       "renewer-key",
+			CertificatePEM: []byte("certificate"),
+			PrivateKeyPEM:  []byte("private-key"),
+			Signature:      []byte("signature"),
+		},
+		CertificateFingerprint: "sha256-fingerprint",
+		CertificateEnvironment: "staging",
+	}
+
+	payload, err := want.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeControl(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("decoded control = %#v, want %#v", got, want)
+	}
+}

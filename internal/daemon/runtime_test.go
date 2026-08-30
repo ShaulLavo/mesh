@@ -2,8 +2,17 @@ package daemon
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -12,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 )
@@ -311,6 +321,86 @@ func TestServeWebSocketUsesExactAddressAndPath(t *testing.T) {
 	}
 }
 
+func TestServeHTTPSUsesLoopbackServicesOnlyAndHotReloads(t *testing.T) {
+	port := reserveTCPPort(t, "127.0.0.1")
+	store, err := dnsname.NewBundleStore(filepath.Join(t.TempDir(), "tls"), dnsname.WildcardName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := dnsname.NewCertificateSource(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	services := http.NewServeMux()
+	service := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("X-Mesh-Route", "service")
+		_, _ = io.WriteString(w, request.URL.EscapedPath())
+	})
+	services.Handle("/mesh", service)
+	services.Handle("/service", service)
+	done := runRuntime(t, ctx, ListenerConfig{
+		StateDir: stateDir, HTTPSPort: port, WebSocketPath: "/mesh",
+		TLSConfig:   &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: source.GetCertificate},
+		HTTPHandler: services,
+	}, func(context.Context, transport.Conn) error {
+		return errors.New("terminal handler reached from HTTPS")
+	})
+	waitForTCPRuntime(t, net.JoinHostPort("127.0.0.1", fmt.Sprint(port)))
+	if connection, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.2", fmt.Sprint(port)), 100*time.Millisecond); err == nil {
+		_ = connection.Close()
+		t.Fatal("HTTPS listener accepted a non-configured loopback address")
+	}
+	dialer := &net.Dialer{Timeout: time.Second}
+	if connection, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort("127.0.0.1", fmt.Sprint(port)), &tls.Config{ //nolint:gosec // the missing-certificate handshake is the assertion
+		InsecureSkipVerify: true,
+	}); err == nil {
+		_ = connection.Close()
+		t.Fatal("TLS handshake succeeded without an installed certificate")
+	}
+
+	now := time.Now().UTC()
+	firstCertificate, firstKey := daemonTestCertificate(t, 1, now)
+	if _, err := source.Install(firstCertificate, firstKey); err != nil {
+		t.Fatal(err)
+	}
+	assertHTTPSCertificateAndRoute(t, port, firstCertificate, 1)
+
+	secondCertificate, secondKey := daemonTestCertificate(t, 2, now)
+	if _, err := source.Install(secondCertificate, secondKey); err != nil {
+		t.Fatal(err)
+	}
+	assertHTTPSCertificateAndRoute(t, port, secondCertificate, 2)
+
+	cancel()
+	if err := waitRuntime(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServeFailsWhenHTTPSPortCannotBind(t *testing.T) {
+	blocked, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocked.Close() //nolint:errcheck // test cleanup
+	port := uint16(blocked.Addr().(*net.TCPAddr).Port)
+	stateDir := t.TempDir()
+	err = Serve(context.Background(), ListenerConfig{
+		StateDir: stateDir, HTTPSPort: port, WebSocketPath: "/mesh", HTTPHandler: http.NotFoundHandler(),
+		TLSConfig: &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return nil, dnsname.ErrNoCertificate
+		}},
+	}, echoOneFrame)
+	if err == nil || !strings.Contains(err.Error(), "bind HTTPS") {
+		t.Fatalf("Serve error = %v, want HTTPS bind failure", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(stateDir, daemonSocketName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("daemon socket after failed HTTPS startup: %v", statErr)
+	}
+}
+
 func TestServeReportsPartialTailnetBindFailure(t *testing.T) {
 	t.Parallel()
 
@@ -395,6 +485,21 @@ func TestServeRejectsInvalidBoundaryConfiguration(t *testing.T) {
 		}, want: "WebSocket path"},
 		{name: "unclean WebSocket path", cfg: func(dir string) ListenerConfig {
 			return ListenerConfig{StateDir: dir, TailnetAddrs: []string{"127.0.0.1"}, TailnetPort: 1, WebSocketPath: "/a/../mesh"}
+		}, want: "WebSocket path"},
+		{name: "TLS config without HTTPS port", cfg: func(dir string) ListenerConfig {
+			return ListenerConfig{StateDir: dir, TLSConfig: &tls.Config{}}
+		}, want: "HTTPS port"},
+		{name: "HTTPS without service handler", cfg: func(dir string) ListenerConfig {
+			return ListenerConfig{StateDir: dir, HTTPSPort: 8443, WebSocketPath: "/mesh", TLSConfig: &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, nil }}}
+		}, want: "service handler"},
+		{name: "HTTPS without certificate source", cfg: func(dir string) ListenerConfig {
+			return ListenerConfig{StateDir: dir, HTTPSPort: 8443, WebSocketPath: "/mesh", HTTPHandler: http.NotFoundHandler(), TLSConfig: &tls.Config{}}
+		}, want: "GetCertificate"},
+		{name: "old TLS version", cfg: func(dir string) ListenerConfig {
+			return ListenerConfig{StateDir: dir, HTTPSPort: 8443, WebSocketPath: "/mesh", HTTPHandler: http.NotFoundHandler(), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS11, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, nil }}}
+		}, want: "TLS 1.2"},
+		{name: "HTTPS without reserved path", cfg: func(dir string) ListenerConfig {
+			return ListenerConfig{StateDir: dir, HTTPSPort: 8443, HTTPHandler: http.NotFoundHandler(), TLSConfig: &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, nil }}}
 		}, want: "WebSocket path"},
 	}
 
@@ -501,6 +606,7 @@ func TestServeBoundListenersCancelsSharedContextBeforeWaitingForHandlers(t *test
 			},
 			listener,
 			nil,
+			nil,
 		)
 	}()
 
@@ -512,6 +618,59 @@ func TestServeBoundListenersCancelsSharedContextBeforeWaitingForHandlers(t *test
 	}
 	if !errors.Is(runCtx.Err(), context.Canceled) {
 		t.Fatalf("shared daemon context error = %v, want context.Canceled", runCtx.Err())
+	}
+}
+
+func TestServeBoundListenersForcesStuckServiceRequestClosed(t *testing.T) {
+	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		_ = unixListener.Close()
+		t.Fatal(err)
+	}
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	requestDone := make(chan error, 1)
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- serveBoundListeners(
+			runCtx,
+			cancel,
+			listenerConfig{
+				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: 25 * time.Millisecond,
+				httpHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+					close(requestStarted)
+					<-releaseRequest
+				}),
+			},
+			func(context.Context, transport.Conn) error { return nil },
+			unixListener,
+			[]net.Listener{httpListener},
+			nil,
+		)
+	}()
+	go func() {
+		response, err := (&http.Client{Timeout: runtimeTestTimeout}).Get("http://" + httpListener.Addr().String() + "/stuck")
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		requestDone <- err
+	}()
+	waitSignal(t, requestStarted, "stuck service request")
+	cancel()
+	serveErr := waitRuntime(t, done)
+	if !errors.Is(serveErr, context.DeadlineExceeded) {
+		t.Fatalf("forced shutdown error = %v, want deadline exceeded", serveErr)
+	}
+	close(releaseRequest)
+	select {
+	case <-requestDone:
+	case <-time.After(runtimeTestTimeout):
+		t.Fatal("stuck client request did not unblock after forced close")
 	}
 }
 
@@ -651,6 +810,107 @@ func waitForHTTPStatus(t *testing.T, url string, want int) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func waitForTCPRuntime(t *testing.T, address string) {
+	t.Helper()
+	deadline := time.Now().Add(runtimeTestTimeout)
+	for {
+		connection, err := net.DialTimeout("tcp4", address, 100*time.Millisecond)
+		if err == nil {
+			_ = connection.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("TCP listener %s did not start: %v", address, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func assertHTTPSCertificateAndRoute(t *testing.T, port uint16, certificatePEM []byte, serial int64) {
+	t.Helper()
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(certificatePEM) {
+		t.Fatal("append HTTPS test root")
+	}
+	address := net.JoinHostPort("127.0.0.1", fmt.Sprint(port))
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: "probe.mesh.shaulavo.dev"}
+	connection, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", address, tlsConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := connection.ConnectionState().PeerCertificates[0].SerialNumber; got.Cmp(big.NewInt(serial)) != 0 {
+		_ = connection.Close()
+		t.Fatalf("HTTPS certificate serial = %s, want %d", got, serial)
+	}
+	_ = connection.Close()
+
+	transport := &http.Transport{
+		TLSClientConfig: tlsConfig.Clone(),
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+		},
+	}
+	client := &http.Client{Transport: transport, Timeout: time.Second}
+	response, err := client.Get(fmt.Sprintf("https://probe.mesh.shaulavo.dev:%d/service", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || response.Header.Get("X-Mesh-Route") != "service" {
+		t.Fatalf("HTTPS /service status = %d, route = %q", response.StatusCode, response.Header.Get("X-Mesh-Route"))
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "/service" {
+		t.Fatalf("HTTPS /service body = %q, want service path", body)
+	}
+	_ = response.Body.Close()
+
+	response, err = client.Get(fmt.Sprintf("https://probe.mesh.shaulavo.dev:%d/mesh", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusNotFound || response.Header.Get("X-Mesh-Route") != "" {
+		_ = response.Body.Close()
+		t.Fatalf("HTTPS reserved /mesh status = %d, route = %q", response.StatusCode, response.Header.Get("X-Mesh-Route"))
+	}
+	_ = response.Body.Close()
+
+	response, err = client.Get(fmt.Sprintf("https://probe.mesh.shaulavo.dev:%d/m%%65sh", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusNotFound || response.Header.Get("X-Mesh-Route") != "" {
+		_ = response.Body.Close()
+		t.Fatalf("HTTPS encoded reserved path status = %d, route = %q", response.StatusCode, response.Header.Get("X-Mesh-Route"))
+	}
+	_ = response.Body.Close()
+	transport.CloseIdleConnections()
+}
+
+func daemonTestCertificate(t *testing.T, serial int64, now time.Time) ([]byte, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: dnsname.WildcardName}, DNSNames: []string{dnsname.WildcardName},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(90 * 24 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 }
 
 func assertRuntimeFrame(t *testing.T, got, want protocol.Frame) {

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -26,6 +27,7 @@ const (
 
 	staleSocketProbeTimeout = 200 * time.Millisecond
 	httpReadHeaderTimeout   = 5 * time.Second
+	httpShutdownTimeout     = 2 * time.Second
 )
 
 // A replacement entry gets the current time, even if the filesystem reuses the
@@ -38,24 +40,35 @@ var ErrDaemonAlreadyRunning = errors.New("daemon: already running")
 
 // ListenerConfig identifies the local daemon socket and optional Tailnet HTTP
 // listeners. TailnetPort and WebSocketPath are required when TailnetAddrs is
-// non-empty. HTTPHandler receives requests outside WebSocketPath. ReportError
-// receives non-fatal listener errors and may be nil.
+// non-empty. HTTPSPort binds a service-only TLS listener to loopback and
+// requires TLSConfig.GetCertificate. HTTPHandler receives HTTPS requests and
+// Tailnet HTTP requests outside WebSocketPath. ReportError receives non-fatal
+// listener errors and may be nil. RequireAllTailnetListeners turns any
+// discovered-address bind failure into a startup failure.
 type ListenerConfig struct {
-	StateDir      string
-	TailnetAddrs  []string
-	TailnetPort   uint16
-	WebSocketPath string
-	HTTPHandler   http.Handler
-	ReportError   func(error)
+	StateDir                   string
+	TailnetAddrs               []string
+	TailnetPort                uint16
+	WebSocketPath              string
+	HTTPHandler                http.Handler
+	HTTPSPort                  uint16
+	TLSConfig                  *tls.Config
+	RequireAllTailnetListeners bool
+	ReportError                func(error)
 }
 
 type listenerConfig struct {
-	stateDir      string
-	tailnetAddrs  []netip.Addr
-	tailnetPort   uint16
-	webSocketPath string
-	httpHandler   http.Handler
-	reporter      *errorReporter
+	stateDir                   string
+	tailnetAddrs               []netip.Addr
+	tailnetPort                uint16
+	webSocketPath              string
+	httpHandler                http.Handler
+	httpsPort                  uint16
+	tlsConfig                  *tls.Config
+	requireAllTailnetListeners bool
+	shutdownTimeout            time.Duration
+	reporter                   *errorReporter
+	ready                      func(context.Context) error
 }
 
 // Serve runs the daemon's Unix and optional WebSocket listeners until ctx is
@@ -96,14 +109,28 @@ func serveListeners(ctx context.Context, cancel context.CancelFunc, normalized l
 	}
 
 	tailnetListeners, bindErrors := listenTailnet(normalized.tailnetAddrs, normalized.tailnetPort)
-	if len(normalized.tailnetAddrs) > 0 && len(tailnetListeners) == 0 {
+	if len(normalized.tailnetAddrs) > 0 && (len(tailnetListeners) == 0 || normalized.requireAllTailnetListeners && len(bindErrors) > 0) {
 		closeErr := unixListener.Close()
+		for _, listener := range tailnetListeners {
+			closeErr = errors.Join(closeErr, listener.Close())
+		}
 		return errors.Join(fmt.Errorf("daemon: bind tailnet listeners: %w", errors.Join(bindErrors...)), closeErr)
 	}
 	for _, bindErr := range bindErrors {
 		normalized.reporter.report(bindErr)
 	}
-	return serveBoundListeners(ctx, cancel, normalized, handler, unixListener, tailnetListeners)
+	var httpsListener net.Listener
+	if normalized.httpsPort != 0 {
+		httpsListener, err = net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(normalized.httpsPort))))
+		if err != nil {
+			closeErrors := []error{unixListener.Close()}
+			for _, listener := range tailnetListeners {
+				closeErrors = append(closeErrors, listener.Close())
+			}
+			return errors.Join(fmt.Errorf("daemon: bind HTTPS loopback listener: %w", err), errors.Join(closeErrors...))
+		}
+	}
+	return serveBoundListeners(ctx, cancel, normalized, handler, unixListener, tailnetListeners, httpsListener)
 }
 
 func serveBoundListeners(
@@ -113,9 +140,19 @@ func serveBoundListeners(
 	handler transport.Handler,
 	unixListener net.Listener,
 	tailnetListeners []net.Listener,
+	httpsListener net.Listener,
 ) error {
 	connections := newConnectionGroup(handler)
 	server := newWebSocketServer(ctx, normalized, connections)
+	var httpsServer *http.Server
+	if httpsListener != nil {
+		httpsServer = &http.Server{
+			Handler:           serviceOnlyHTTPSHandler(normalized.webSocketPath, normalized.httpHandler),
+			ReadHeaderTimeout: httpReadHeaderTimeout,
+			BaseContext:       func(net.Listener) context.Context { return ctx },
+			TLSConfig:         normalized.tlsConfig,
+		}
+	}
 	var listenerWG sync.WaitGroup
 	fatal := make(chan error, 1)
 
@@ -136,11 +173,28 @@ func serveBoundListeners(
 			}
 		})
 	}
-
+	if httpsServer != nil {
+		listenerWG.Go(func() {
+			serveErr := httpsServer.ServeTLS(httpsListener, "", "")
+			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) && ctx.Err() == nil {
+				select {
+				case fatal <- fmt.Errorf("daemon: serve HTTPS on %s: %w", httpsListener.Addr(), serveErr):
+				default:
+				}
+			}
+		})
+	}
 	var runErr error
-	select {
-	case <-ctx.Done():
-	case runErr = <-fatal:
+	if normalized.ready != nil {
+		if err := normalized.ready(ctx); err != nil && ctx.Err() == nil {
+			runErr = err
+		}
+	}
+	if runErr == nil {
+		select {
+		case <-ctx.Done():
+		case runErr = <-fatal:
+		}
 	}
 	// Fatal listener failure is also daemon shutdown. Cancel the shared lifetime
 	// before closing sockets or waiting, so handlers blocked in publication can
@@ -149,11 +203,15 @@ func serveBoundListeners(
 
 	closeErr := unixListener.Close()
 	closeErr = errors.Join(closeErr, connections.closeAll())
-	if err := server.Shutdown(context.Background()); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := shutdownHTTPServer(server.Server, normalized.shutdownTimeout); err != nil {
 		closeErr = errors.Join(closeErr, fmt.Errorf("daemon: close WebSocket server: %w", err))
 	}
+	if httpsServer != nil {
+		if err := shutdownHTTPServer(httpsServer, normalized.shutdownTimeout); err != nil {
+			closeErr = errors.Join(closeErr, fmt.Errorf("daemon: close HTTPS server: %w", err))
+		}
+	}
 	listenerWG.Wait()
-	server.wait()
 	connections.wait()
 	return errors.Join(runErr, closeErr)
 }
@@ -177,11 +235,35 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 	}
 
 	normalized := listenerConfig{
-		stateDir:      filepath.Clean(cfg.StateDir),
-		tailnetPort:   cfg.TailnetPort,
-		webSocketPath: cfg.WebSocketPath,
-		httpHandler:   cfg.HTTPHandler,
-		reporter:      newErrorReporter(cfg.ReportError),
+		stateDir:                   filepath.Clean(cfg.StateDir),
+		tailnetPort:                cfg.TailnetPort,
+		webSocketPath:              cfg.WebSocketPath,
+		httpHandler:                cfg.HTTPHandler,
+		httpsPort:                  cfg.HTTPSPort,
+		requireAllTailnetListeners: cfg.RequireAllTailnetListeners,
+		shutdownTimeout:            httpShutdownTimeout,
+		reporter:                   newErrorReporter(cfg.ReportError),
+	}
+	if cfg.HTTPSPort == 0 && cfg.TLSConfig != nil {
+		return listenerConfig{}, errors.New("daemon: TLS config requires a non-zero HTTPS port")
+	}
+	if cfg.HTTPSPort != 0 {
+		if cfg.HTTPHandler == nil {
+			return listenerConfig{}, errors.New("daemon: HTTPS listener requires an HTTP service handler")
+		}
+		if cfg.TLSConfig == nil || cfg.TLSConfig.GetCertificate == nil {
+			return listenerConfig{}, errors.New("daemon: HTTPS listener requires TLS GetCertificate")
+		}
+		normalized.tlsConfig = cfg.TLSConfig.Clone()
+		if normalized.tlsConfig.MinVersion == 0 {
+			normalized.tlsConfig.MinVersion = tls.VersionTLS12
+		}
+		if normalized.tlsConfig.MinVersion < tls.VersionTLS12 {
+			return listenerConfig{}, errors.New("daemon: HTTPS listener requires TLS 1.2 or newer")
+		}
+		if err := validateWebSocketPath(cfg.WebSocketPath); err != nil {
+			return listenerConfig{}, err
+		}
 	}
 	if len(cfg.TailnetAddrs) == 0 {
 		return normalized, nil
@@ -210,6 +292,16 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		normalized.tailnetAddrs = append(normalized.tailnetAddrs, addr)
 	}
 	return normalized, nil
+}
+
+func serviceOnlyHTTPSHandler(webSocketPath string, services http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() == webSocketPath || r.URL.Path == webSocketPath {
+			http.NotFound(w, r)
+			return
+		}
+		services.ServeHTTP(w, r)
+	})
 }
 
 func validateWebSocketPath(value string) error {
@@ -245,14 +337,11 @@ func listenTailnet(addrs []netip.Addr, port uint16) ([]net.Listener, []error) {
 
 type webSocketServer struct {
 	*http.Server
-	handlers sync.WaitGroup
 }
 
 func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *connectionGroup) *webSocketServer {
 	server := &webSocketServer{}
 	serveHTTP := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		server.handlers.Add(1)
-		defer server.handlers.Done()
 		if r.URL.EscapedPath() != cfg.webSocketPath {
 			if cfg.httpHandler == nil {
 				http.NotFound(w, r)
@@ -279,8 +368,20 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 	return server
 }
 
-func (s *webSocketServer) wait() {
-	s.handlers.Wait()
+func shutdownHTTPServer(server *http.Server, timeout time.Duration) error {
+	if server == nil {
+		return nil
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		closeErr := server.Close()
+		if errors.Is(closeErr, http.ErrServerClosed) {
+			closeErr = nil
+		}
+		return errors.Join(err, closeErr)
+	}
+	return nil
 }
 
 func serveUnixConnections(ctx context.Context, listener net.Listener, connections *connectionGroup) error {
@@ -431,29 +532,56 @@ func listenDaemonUnix(socketPath string) (*ownedUnixListener, error) {
 	if err := removeStaleUnixSocket(socketPath); err != nil {
 		return nil, err
 	}
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
+	temporary, err := reserveTemporarySocketPath(socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("daemon: listen on Unix socket %s: %w", socketPath, err)
+		return nil, err
+	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: temporary, Net: "unix"})
+	if err != nil {
+		return nil, fmt.Errorf("daemon: listen on temporary Unix socket %s: %w", temporary, err)
 	}
 	listener.SetUnlinkOnClose(false)
-	if err := os.Chmod(socketPath, 0o600); err != nil {
+	cleanupTemporary := func() {
 		_ = listener.Close()
-		_ = os.Remove(socketPath)
+		_ = os.Remove(temporary)
+	}
+	if err := os.Chmod(temporary, 0o600); err != nil {
+		cleanupTemporary()
 		return nil, fmt.Errorf("daemon: secure Unix socket %s: %w", socketPath, err)
 	}
 	// A replacement filesystem entry can reuse the unlinked socket's inode.
 	// Stamp this entry so cleanup can distinguish that replacement even then.
-	if err := os.Chtimes(socketPath, unixSocketOwnershipTime, unixSocketOwnershipTime); err != nil {
-		_ = listener.Close()
-		_ = os.Remove(socketPath)
+	if err := os.Chtimes(temporary, unixSocketOwnershipTime, unixSocketOwnershipTime); err != nil {
+		cleanupTemporary()
 		return nil, fmt.Errorf("daemon: mark Unix socket %s: %w", socketPath, err)
 	}
-	info, err := os.Lstat(socketPath)
+	info, err := os.Lstat(temporary)
 	if err != nil {
-		_ = listener.Close()
+		cleanupTemporary()
 		return nil, fmt.Errorf("daemon: inspect Unix socket %s: %w", socketPath, err)
 	}
+	// Publish only after permissions and ownership metadata are complete. The
+	// platform no-replace rename preserves an entry created after the stale
+	// socket check and avoids exposing a half-initialized listener pathname.
+	if err := publishUnixSocket(temporary, socketPath); err != nil {
+		cleanupTemporary()
+		return nil, fmt.Errorf("daemon: publish Unix socket %s: %w", socketPath, err)
+	}
 	return &ownedUnixListener{UnixListener: listener, path: socketPath, boundInfo: info}, nil
+}
+
+func reserveTemporarySocketPath(socketPath string) (string, error) {
+	file, err := os.CreateTemp(filepath.Dir(socketPath), ".d-")
+	if err != nil {
+		return "", fmt.Errorf("daemon: reserve temporary Unix socket path: %w", err)
+	}
+	path := file.Name()
+	closeErr := file.Close()
+	removeErr := os.Remove(path)
+	if err := errors.Join(closeErr, removeErr); err != nil {
+		return "", fmt.Errorf("daemon: prepare temporary Unix socket path %s: %w", path, err)
+	}
+	return path, nil
 }
 
 func removeStaleUnixSocket(socketPath string) error {

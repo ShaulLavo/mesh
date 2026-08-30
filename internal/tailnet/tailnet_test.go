@@ -184,6 +184,48 @@ func TestExecRunnerPreservesContextDeadline(t *testing.T) {
 	}
 }
 
+func TestExecRunnerBoundsCommandOutput(t *testing.T) {
+	if os.Getenv("MESH_TAILNET_OUTPUT_HELPER") == "1" {
+		_, _ = os.Stdout.Write(make([]byte, statusOutputMaximum+1))
+		return
+	}
+	t.Setenv("MESH_TAILNET_OUTPUT_HELPER", "1")
+	stdout, _, err := (execRunner{}).Run(context.Background(), os.Args[0], "-test.run=^TestExecRunnerBoundsCommandOutput$")
+	if !errors.Is(err, ErrCommandOutputTooLarge) {
+		t.Fatalf("exec runner error = %v, want output bound", err)
+	}
+	if len(stdout) != statusOutputMaximum {
+		t.Fatalf("captured stdout = %d bytes, want %d", len(stdout), statusOutputMaximum)
+	}
+}
+
+func TestClientRejectsOversizedInjectedStatus(t *testing.T) {
+	client := NewClient(runFunc(func(context.Context, string, ...string) ([]byte, []byte, error) {
+		return make([]byte, statusOutputMaximum+1), nil, nil
+	}))
+	_, err := client.Self(context.Background())
+	if !errors.Is(err, ErrCommandOutputTooLarge) {
+		t.Fatalf("oversized status error = %v", err)
+	}
+
+	client = NewClient(runFunc(func(context.Context, string, ...string) ([]byte, []byte, error) {
+		return nil, make([]byte, statusErrorMaximum+1), errors.New("exit status 1")
+	}))
+	_, err = client.Self(context.Background())
+	if !errors.Is(err, ErrCommandOutputTooLarge) {
+		t.Fatalf("oversized diagnostic error = %v", err)
+	}
+
+	marker := "never-echo-this-provider-output"
+	client = NewClient(runFunc(func(context.Context, string, ...string) ([]byte, []byte, error) {
+		return []byte(strings.Repeat(marker, (statusOutputMaximum+len(marker)-1)/len(marker)))[:statusOutputMaximum], nil, ErrCommandOutputTooLarge
+	}))
+	_, err = client.Self(context.Background())
+	if !errors.Is(err, ErrCommandOutputTooLarge) || strings.Contains(err.Error(), marker) || len(err.Error()) > 200 {
+		t.Fatalf("bounded runner diagnostic error = %q", err)
+	}
+}
+
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name))

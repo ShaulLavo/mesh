@@ -127,7 +127,7 @@ func TestClientServerHandlesServiceRequestAndResponse(t *testing.T) {
 	root := t.TempDir()
 	client := newServerTestConn()
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), controller)
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), controller, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}

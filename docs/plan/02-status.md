@@ -4,8 +4,8 @@ Updated 2026-08-30.
 
 ## Done
 
-The session and transport core, product CLI, SSH bootstrap, packaging, and
-origin serving core are complete.
+The session and transport core, product CLI, SSH bootstrap, packaging, origin
+serving core, and private DNS/TLS path are complete.
 
 - `internal/protocol` — framing + control messages, shared by every transport
 - `internal/session` — byte-offset replay ring, session IDs
@@ -13,7 +13,8 @@ origin serving core are complete.
   queues, resize, signals, kill escalation, `meta.json` lifecycle record
 - `internal/terminal` — rendered screen snapshots for clean reattachment (T01)
 - `internal/storage` — SQLite session and host store (T03)
-- `internal/daemon` — worker discovery, reconciliation, relay, lifecycle (T04)
+- `internal/daemon` — worker discovery, reconciliation, relay, lifecycle,
+  signed certificate installation, and service-only TLS (T04, T12)
 - `internal/transport` — WebSocket transport with resume (T05)
 - `internal/identity`, `internal/tailnet` — host keys, Tailscale discovery (T06)
 - `internal/bootstrap`, `scripts/install` — SSH adoption, release selection,
@@ -28,19 +29,24 @@ origin serving core are complete.
   immutable CI actions, and retained packaging checks (T10)
 - `internal/serve` — durable static, files, and loopback-proxy services; hardened
   shared root resolution; live service controls and restart restoration (T11)
+- `internal/dnsname` — Cloudflare-owned private A/TXT reconciliation, bounded
+  RFC 8555 DNS-01 issuance, atomic live/staging wildcard state, signed origin
+  distribution, and supervised Tailscale address rebinding (T12)
 
-Verified 2026-08-30: `gofmt`, `go vet ./...`, `go test -race ./...`, and all fourteen
+Verified 2026-08-30: `gofmt`, `go vet ./...`, `go test -race ./...`, and all fifteen
 scripts in `integration/` passing.
 
-Origins can now serve on their tailnet HTTP listener, but no DNS or certificate
-has been configured for `mesh.shaulavo.dev` and no public edge exists. Step 9 is
-entirely unwritten.
+Private origin names and wildcard certificates are operational, including
+staging isolation and hot live rotation. Real Cloudflare, Let's Encrypt,
+tailnet, and outside-tailnet acceptance remains an operator check because this
+development machine has none of those credentials or peers. No public edge
+exists. Step 9 is entirely unwritten.
 
 ## Complete tasks
 
 T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websocket
 transport · T06 host identity · T07 CLI surface · T08 ssh bootstrap · T09 picker
-TUI · T10 packaging · T11 serving core.
+TUI · T10 packaging · T11 serving core · T12 private names.
 
 ## Next
 
@@ -55,19 +61,17 @@ T11 serving core ──┬─→ T12 private names ──→ T13 public edge ─
                    └──────────→ T16                     └────────→ T18
 ```
 
-T12 and T15 are unblocked. Everything else waits on one of them.
+T13 and T15 are unblocked. Everything else waits on one of them.
 
 | Task | Owns | Blocked by |
 |---|---|---|
 | T15 ssh front door | `internal/sshd/` | T06 |
-| T12 private names | `internal/dnsname/` | — |
-| T13 public edge | `internal/edge/` | T11, T12 |
-| T14 `m serve` | `internal/cli/` | T11, T12, T13, T07 |
+| T13 public edge | `internal/edge/` | — |
+| T14 `m serve` | `internal/cli/` | T13 |
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
 | T17 sessions over SSH | `internal/sshd/session.go` | T09, T15 |
 | T18 reverse tunnels | `internal/tunnel/` | T13, T15 |
 
-T07 and T14 both own `internal/cli/`. Land T07 first.
 T15 is the foundation for T16, T17 and T18. Land it before any of them.
 
 ## Known defects

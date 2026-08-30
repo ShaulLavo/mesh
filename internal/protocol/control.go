@@ -8,30 +8,32 @@ import (
 
 // Control message type names.
 const (
-	TypeAttach        = "session.attach"
-	TypeAttached      = "session.attached"
-	TypeDetach        = "session.detach"
-	TypeExit          = "session.exit"
-	TypeResize        = "terminal.resize"
-	TypeSignal        = "session.signal"
-	TypeKill          = "session.kill"
-	TypeCreate        = "session.create"
-	TypeCreated       = "session.created"
-	TypeList          = "session.list"
-	TypeListed        = "session.listed"
-	TypeLogs          = "session.logs"
-	TypeLogged        = "session.logged"
-	TypeHostInfo      = "host.info"
-	TypeServiceUpsert = "service.upsert"
-	TypeServiceList   = "service.list"
-	TypeServiceDelete = "service.delete"
+	TypeAttach             = "session.attach"
+	TypeAttached           = "session.attached"
+	TypeDetach             = "session.detach"
+	TypeExit               = "session.exit"
+	TypeResize             = "terminal.resize"
+	TypeSignal             = "session.signal"
+	TypeKill               = "session.kill"
+	TypeCreate             = "session.create"
+	TypeCreated            = "session.created"
+	TypeList               = "session.list"
+	TypeListed             = "session.listed"
+	TypeLogs               = "session.logs"
+	TypeLogged             = "session.logged"
+	TypeHostInfo           = "host.info"
+	TypeServiceUpsert      = "service.upsert"
+	TypeServiceList        = "service.list"
+	TypeServiceDelete      = "service.delete"
+	TypeCertificateInstall = "certificate.install"
 
-	TypeHostInfoResult  = "host.info.result"
-	TypeServiceUpserted = "service.upserted"
-	TypeServiceListed   = "service.listed"
-	TypeServiceDeleted  = "service.deleted"
-	TypeOK              = "ok"
-	TypeError           = "error"
+	TypeHostInfoResult       = "host.info.result"
+	TypeServiceUpserted      = "service.upserted"
+	TypeServiceListed        = "service.listed"
+	TypeServiceDeleted       = "service.deleted"
+	TypeCertificateInstalled = "certificate.installed"
+	TypeOK                   = "ok"
+	TypeError                = "error"
 )
 
 // Log request limits keep one JSON control response below MaxPayload after
@@ -81,6 +83,17 @@ type ServiceInfo struct {
 	Problem       string `json:"problem,omitempty"`
 }
 
+// CertificateInstall is a certificate bundle signed by the configured
+// renewer for one exact origin identity.
+type CertificateInstall struct {
+	Environment    string `json:"environment"`
+	TargetID       string `json:"targetId"`
+	SignerID       string `json:"signerId"`
+	CertificatePEM []byte `json:"certificatePem"`
+	PrivateKeyPEM  []byte `json:"privateKeyPem"`
+	Signature      []byte `json:"signature"`
+}
+
 // Control is the envelope for every JSON control message. Unused fields are
 // omitted so messages stay readable on the wire during debugging.
 type Control struct {
@@ -118,6 +131,11 @@ type Control struct {
 	ServiceName string        `json:"serviceName,omitempty"`
 	Service     *ServiceInfo  `json:"service,omitempty"`
 	Services    []ServiceInfo `json:"services,omitempty"`
+
+	// Certificate distribution
+	Certificate            *CertificateInstall `json:"certificate,omitempty"`
+	CertificateFingerprint string              `json:"certificateFingerprint,omitempty"`
+	CertificateEnvironment string              `json:"certificateEnvironment,omitempty"`
 
 	// Error
 	Message string `json:"message,omitempty"`

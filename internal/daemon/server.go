@@ -17,16 +17,17 @@ import (
 // clientServer dispatches frames for each disposable client connection. Its
 // lifecycle and worker dependencies are safe to share across clients.
 type clientServer struct {
-	lifecycle *lifecycle
-	workers   WorkerConnector
-	services  serviceControlHandler
+	lifecycle    *lifecycle
+	workers      WorkerConnector
+	services     controlHandler
+	certificates controlHandler
 }
 
-type serviceControlHandler interface {
+type controlHandler interface {
 	HandleControl(context.Context, protocol.Control) (protocol.Control, bool, error)
 }
 
-func newClientServer(lifecycle *lifecycle, workers WorkerConnector, services serviceControlHandler) (*clientServer, error) {
+func newClientServer(lifecycle *lifecycle, workers WorkerConnector, services, certificates controlHandler) (*clientServer, error) {
 	if lifecycle == nil {
 		return nil, fmt.Errorf("daemon: nil client lifecycle")
 	}
@@ -36,7 +37,10 @@ func newClientServer(lifecycle *lifecycle, workers WorkerConnector, services ser
 	if services == nil {
 		return nil, fmt.Errorf("daemon: nil service controller")
 	}
-	return &clientServer{lifecycle: lifecycle, workers: workers, services: services}, nil
+	if certificates == nil {
+		return nil, fmt.Errorf("daemon: nil certificate controller")
+	}
+	return &clientServer{lifecycle: lifecycle, workers: workers, services: services, certificates: certificates}, nil
 }
 
 // Handle serves one client until it disconnects or ctx is cancelled. This is
@@ -90,6 +94,9 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		response, lifecycleHandled, requestErr := s.lifecycle.HandleControl(ctx, request)
 		if !lifecycleHandled {
 			response, lifecycleHandled, requestErr = s.services.HandleControl(ctx, request)
+		}
+		if !lifecycleHandled {
+			response, lifecycleHandled, requestErr = s.certificates.HandleControl(ctx, request)
 		}
 		if requestErr != nil {
 			if err := writeClientRequestError(client, request, requestErr); err != nil {
