@@ -40,7 +40,20 @@ func reconcilePrivateNames(ctx context.Context, request PrivateNamesRequest) err
 	if err != nil {
 		return err
 	}
-	return runtime.Manager.RunOnce(ctx, request.Force)
+	operations := 1
+	if runtime.PublicManager != nil {
+		operations++
+	}
+	results := make(chan error, operations)
+	go func() { results <- runtime.Manager.RunOnce(ctx, request.Force) }()
+	if runtime.PublicManager != nil {
+		go func() { results <- runtime.PublicManager.RunOnce(ctx, request.Force) }()
+	}
+	var result error
+	for range operations {
+		result = errors.Join(result, <-results)
+	}
+	return result
 }
 
 func (a *application) privateNamesCommand() *cobra.Command {

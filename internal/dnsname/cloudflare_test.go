@@ -94,7 +94,9 @@ func TestCloudflareBoundsAndRedactsFailures(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(status)
-				_, _ = w.Write([]byte(`{"success":false,"errors":[{"code":9109,"message":"token never-print-this is invalid"}]}`))
+				_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "errors": []map[string]any{{
+					"code": 9109, "message": "ATTACKER\r\nnever-print-this other-secret 100.64.0.8" + strings.Repeat("x", 4096),
+				}}})
 			}))
 			defer server.Close()
 			provider, err := NewCloudflare(CloudflareConfig{ZoneID: "zone", APIToken: "never-print-this", BaseURL: server.URL, HTTPClient: server.Client()})
@@ -102,10 +104,42 @@ func TestCloudflareBoundsAndRedactsFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err = provider.ListRecords(context.Background(), "pc.mesh.shaulavo.dev", RecordA)
-			if err == nil || contains(err.Error(), "never-print-this") || !contains(err.Error(), "9109 token [redacted] is invalid") {
+			if err == nil || !contains(err.Error(), "request failed") {
 				t.Fatalf("failure = %v", err)
 			}
+			for _, secret := range []string{"ATTACKER", "never-print-this", "other-secret", "100.64.0.8"} {
+				if contains(err.Error(), secret) {
+					t.Fatalf("Cloudflare failure leaked %q: %v", secret, err)
+				}
+			}
 		})
+	}
+}
+
+func TestCloudflareNeverLeaksMalformedRecordFields(t *testing.T) {
+	marker := "ATTACKER\r\nother-secret 100.64.0.8"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"result": []cloudflareRecord{{
+				ID: marker + strings.Repeat("x", 512), Type: "A", Name: "pc.mesh.shaulavo.dev", Content: "100.64.0.8",
+			}},
+			"result_info": map[string]int{"page": 1, "total_pages": 1},
+		})
+	}))
+	defer server.Close()
+	provider, err := NewCloudflare(CloudflareConfig{ZoneID: "zone", APIToken: "secret-token", BaseURL: server.URL, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.ListRecords(context.Background(), "pc.mesh.shaulavo.dev", RecordA)
+	if err == nil {
+		t.Fatal("malformed record response succeeded")
+	}
+	for _, secret := range []string{"ATTACKER", "other-secret", "100.64.0.8", "secret-token"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("malformed record error leaked %q: %v", secret, err)
+		}
 	}
 }
 

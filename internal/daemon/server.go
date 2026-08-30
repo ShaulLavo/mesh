@@ -10,6 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 )
@@ -19,6 +20,7 @@ import (
 type clientServer struct {
 	lifecycle    *lifecycle
 	workers      WorkerConnector
+	edge         controlHandler
 	services     controlHandler
 	certificates controlHandler
 }
@@ -27,12 +29,21 @@ type controlHandler interface {
 	HandleControl(context.Context, protocol.Control) (protocol.Control, bool, error)
 }
 
-func newClientServer(lifecycle *lifecycle, workers WorkerConnector, services, certificates controlHandler) (*clientServer, error) {
+type disabledEdgeController struct{}
+
+func (disabledEdgeController) HandleControl(context.Context, protocol.Control) (protocol.Control, bool, error) {
+	return protocol.Control{}, false, nil
+}
+
+func newClientServer(lifecycle *lifecycle, workers WorkerConnector, edge, services, certificates controlHandler) (*clientServer, error) {
 	if lifecycle == nil {
 		return nil, fmt.Errorf("daemon: nil client lifecycle")
 	}
 	if workers == nil {
 		return nil, fmt.Errorf("daemon: nil client worker connector")
+	}
+	if edge == nil {
+		return nil, fmt.Errorf("daemon: nil public edge controller")
 	}
 	if services == nil {
 		return nil, fmt.Errorf("daemon: nil service controller")
@@ -40,7 +51,7 @@ func newClientServer(lifecycle *lifecycle, workers WorkerConnector, services, ce
 	if certificates == nil {
 		return nil, fmt.Errorf("daemon: nil certificate controller")
 	}
-	return &clientServer{lifecycle: lifecycle, workers: workers, services: services, certificates: certificates}, nil
+	return &clientServer{lifecycle: lifecycle, workers: workers, edge: edge, services: services, certificates: certificates}, nil
 }
 
 // Handle serves one client until it disconnects or ctx is cancelled. This is
@@ -92,6 +103,9 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		}
 
 		response, lifecycleHandled, requestErr := s.lifecycle.HandleControl(ctx, request)
+		if !lifecycleHandled {
+			response, lifecycleHandled, requestErr = s.edge.HandleControl(ctx, request)
+		}
 		if !lifecycleHandled {
 			response, lifecycleHandled, requestErr = s.services.HandleControl(ctx, request)
 		}
@@ -151,6 +165,7 @@ func writeClientRequestError(client transport.Conn, request protocol.Control, re
 		Type:      protocol.TypeError,
 		RequestID: request.RequestID,
 		SessionID: request.SessionID,
+		ErrorCode: clientErrorCode(requestErr),
 		Message:   requestErr.Error(),
 	})
 	if err != nil {
@@ -160,6 +175,21 @@ func writeClientRequestError(client transport.Conn, request protocol.Control, re
 		return fmt.Errorf("daemon: write client error response: %w", err)
 	}
 	return nil
+}
+
+func clientErrorCode(err error) string {
+	switch {
+	case errors.Is(err, edge.ErrRouteCollision):
+		return protocol.ErrorCodeEdgeRouteCollision
+	case errors.Is(err, edge.ErrStaleSequence):
+		return protocol.ErrorCodeEdgeStaleSequence
+	case errors.Is(err, edge.ErrSequenceConflict):
+		return protocol.ErrorCodeEdgeConflict
+	case errors.Is(err, edge.ErrWakeUnavailable):
+		return protocol.ErrorCodeEdgeWakeUnavailable
+	default:
+		return ""
+	}
 }
 
 func encodeClientControl(message protocol.Control) (protocol.Frame, error) {

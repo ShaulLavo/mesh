@@ -95,9 +95,11 @@ the same state. List responses include live health.
 
 Migration `00002_services.sql` stores each service in the existing `mesh.db`.
 `PublicName` is the single source of truth for D15: empty means tailnet-only, and a
-nonempty value retains the exact validated `shaulavo.dev` hostname. Both the apex
-and proper subdomains are valid. Wildcards, trailing dots, malformed labels, and
-names outside the zone are rejected. The daemon restores all rows on startup.
+nonempty value retains one exact label below `shaulavo.dev`. The apex,
+`mesh.shaulavo.dev`, nested names, wildcards, trailing dots, malformed labels,
+and names outside the zone are rejected. D16 narrows D15 here: explicit naming
+is still required for every eligible public name, but it can never authorize
+the apex. The daemon restores all rows on startup.
 
 No dependency was added. Static and file serving use `net/http`; proxying uses
 `net/http/httputil`.

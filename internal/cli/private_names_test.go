@@ -77,7 +77,7 @@ func TestDaemonExposesPrivateHTTPSOperationalFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"https-port", "certificate-renewer-id", "private-names-config", "tailscale-serve", "tailnet-port", "websocket-path"} {
+	for _, name := range []string{"https-port", "certificate-renewer-id", "private-names-config", "tailscale-serve", "tailnet-port", "websocket-path", "edge", "public-edge-target"} {
 		if daemonCommand.Flags().Lookup(name) == nil {
 			t.Fatalf("daemon flag --%s is missing", name)
 		}

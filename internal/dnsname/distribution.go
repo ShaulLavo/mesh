@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	certificateSignatureDomain = "mesh/certificate-bundle/v1"
+	certificateSignatureDomain = "mesh/certificate-bundle/v2"
 	defaultDistributionLimit   = 4
 	maximumDistributionLimit   = 16
 	defaultDistributionTimeout = 10 * time.Second
@@ -28,9 +28,32 @@ const (
 	maximumDistributionTargets = 256
 )
 
+// CertificateProfile identifies the only two certificate purposes Mesh may
+// distribute. A profile is part of the signed transcript and selects both the
+// expected DNS name and the install slot.
+type CertificateProfile string
+
+const (
+	ProfilePrivateOrigin CertificateProfile = "private-origin"
+	ProfilePublicEdge    CertificateProfile = "public-edge"
+	PublicWildcardName                      = "*.shaulavo.dev"
+)
+
+func certificateNameForProfile(profile CertificateProfile) (string, error) {
+	switch profile {
+	case ProfilePrivateOrigin:
+		return WildcardName, nil
+	case ProfilePublicEdge:
+		return PublicWildcardName, nil
+	default:
+		return "", fmt.Errorf("dnsname: unsupported certificate profile %q", profile)
+	}
+}
+
 // SignedBundle binds one certificate and key to an exact origin identity and
 // renewer identity. The signature covers a domain-separated canonical digest.
 type SignedBundle struct {
+	Profile        CertificateProfile
 	Environment    RenewalEnvironment
 	TargetID       string
 	SignerID       string
@@ -41,7 +64,7 @@ type SignedBundle struct {
 
 // SignBundle signs bundle for one exact target with the renewer's Mesh
 // identity key.
-func SignBundle(bundle Bundle, targetID string, environment RenewalEnvironment, signer ed25519.PrivateKey) (SignedBundle, error) {
+func SignBundle(bundle Bundle, targetID string, profile CertificateProfile, environment RenewalEnvironment, signer ed25519.PrivateKey) (SignedBundle, error) {
 	if len(signer) != ed25519.PrivateKeySize {
 		return SignedBundle{}, errors.New("dnsname: certificate signer is not an Ed25519 private key")
 	}
@@ -51,12 +74,16 @@ func SignBundle(bundle Bundle, targetID string, environment RenewalEnvironment, 
 	if err := validateRenewalEnvironment(environment); err != nil {
 		return SignedBundle{}, err
 	}
+	if _, err := certificateNameForProfile(profile); err != nil {
+		return SignedBundle{}, err
+	}
 	signerID := base64.RawURLEncoding.EncodeToString(signer.Public().(ed25519.PublicKey))
-	digest, err := certificateDigest(environment, targetID, signerID, bundle.CertificatePEM, bundle.PrivateKeyPEM)
+	digest, err := certificateDigest(profile, environment, targetID, signerID, bundle.CertificatePEM, bundle.PrivateKeyPEM)
 	if err != nil {
 		return SignedBundle{}, err
 	}
 	return SignedBundle{
+		Profile:        profile,
 		Environment:    environment,
 		TargetID:       targetID,
 		SignerID:       signerID,
@@ -68,7 +95,7 @@ func SignBundle(bundle Bundle, targetID string, environment RenewalEnvironment, 
 
 // VerifySignedBundle verifies the exact target and renewer pins before
 // parsing and validating the certificate bundle.
-func VerifySignedBundle(signed SignedBundle, targetID, signerID, expectedName string, now time.Time) (Bundle, error) {
+func VerifySignedBundle(signed SignedBundle, targetID, signerID string, now time.Time) (Bundle, error) {
 	if len(signed.CertificatePEM) == 0 || len(signed.CertificatePEM) > maximumCertificatePEM {
 		return Bundle{}, fmt.Errorf("dnsname: distributed certificate PEM size %d is outside 1..%d", len(signed.CertificatePEM), maximumCertificatePEM)
 	}
@@ -79,6 +106,10 @@ func VerifySignedBundle(signed SignedBundle, targetID, signerID, expectedName st
 		return Bundle{}, fmt.Errorf("dnsname: distributed signature size %d, want %d", len(signed.Signature), ed25519.SignatureSize)
 	}
 	if err := validateRenewalEnvironment(signed.Environment); err != nil {
+		return Bundle{}, err
+	}
+	expectedName, err := certificateNameForProfile(signed.Profile)
+	if err != nil {
 		return Bundle{}, err
 	}
 	if signed.TargetID != targetID {
@@ -94,7 +125,7 @@ func VerifySignedBundle(signed SignedBundle, targetID, signerID, expectedName st
 	if err != nil {
 		return Bundle{}, err
 	}
-	digest, err := certificateDigest(signed.Environment, signed.TargetID, signed.SignerID, signed.CertificatePEM, signed.PrivateKeyPEM)
+	digest, err := certificateDigest(signed.Profile, signed.Environment, signed.TargetID, signed.SignerID, signed.CertificatePEM, signed.PrivateKeyPEM)
 	if err != nil {
 		return Bundle{}, err
 	}
@@ -104,7 +135,10 @@ func VerifySignedBundle(signed SignedBundle, targetID, signerID, expectedName st
 	return ValidateBundle(signed.CertificatePEM, signed.PrivateKeyPEM, expectedName, now)
 }
 
-func certificateDigest(environment RenewalEnvironment, targetID, signerID string, certificatePEM, privateKeyPEM []byte) ([sha256.Size]byte, error) {
+func certificateDigest(profile CertificateProfile, environment RenewalEnvironment, targetID, signerID string, certificatePEM, privateKeyPEM []byte) ([sha256.Size]byte, error) {
+	if _, err := certificateNameForProfile(profile); err != nil {
+		return [sha256.Size]byte{}, err
+	}
 	if len(certificatePEM) == 0 || len(certificatePEM) > maximumCertificatePEM {
 		return [sha256.Size]byte{}, fmt.Errorf("dnsname: certificate PEM size %d is outside 1..%d", len(certificatePEM), maximumCertificatePEM)
 	}
@@ -113,6 +147,7 @@ func certificateDigest(environment RenewalEnvironment, targetID, signerID string
 	}
 	hash := sha256.New()
 	writeDigestField(hash, []byte(certificateSignatureDomain))
+	writeDigestField(hash, []byte(profile))
 	writeDigestField(hash, []byte(environment))
 	writeDigestField(hash, []byte(targetID))
 	writeDigestField(hash, []byte(signerID))
@@ -147,11 +182,11 @@ func decodeIdentity(label, value string) (ed25519.PublicKey, error) {
 
 // InstallerConfig pins the only renewer and target accepted by one origin.
 type InstallerConfig struct {
+	Profile      CertificateProfile
 	LiveSource   *CertificateSource
 	StagingStore *BundleStore
 	TargetID     string
 	SignerID     string
-	ExpectedName string
 	Now          func() time.Time
 }
 
@@ -159,9 +194,9 @@ type InstallerConfig struct {
 type Installer struct {
 	liveSource   *CertificateSource
 	stagingStore *BundleStore
+	profile      CertificateProfile
 	targetID     string
 	signerID     string
-	expectedName string
 	now          func() time.Time
 	mu           sync.Mutex
 }
@@ -180,15 +215,15 @@ func NewInstaller(config InstallerConfig) (*Installer, error) {
 	if _, err := decodeIdentity("certificate renewer", config.SignerID); err != nil {
 		return nil, err
 	}
-	if _, err := certificateProbeName(config.ExpectedName); err != nil {
+	if _, err := certificateNameForProfile(config.Profile); err != nil {
 		return nil, err
 	}
 	if config.Now == nil {
 		config.Now = time.Now
 	}
 	return &Installer{
-		liveSource: config.LiveSource, stagingStore: config.StagingStore, targetID: config.TargetID, signerID: config.SignerID,
-		expectedName: config.ExpectedName, now: config.Now,
+		liveSource: config.LiveSource, stagingStore: config.StagingStore, profile: config.Profile, targetID: config.TargetID, signerID: config.SignerID,
+		now: config.Now,
 	}, nil
 }
 
@@ -198,7 +233,10 @@ func (i *Installer) Install(signed SignedBundle) (Bundle, bool, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	bundle, err := VerifySignedBundle(signed, i.targetID, i.signerID, i.expectedName, i.now().UTC())
+	if signed.Profile != i.profile {
+		return Bundle{}, false, fmt.Errorf("dnsname: certificate profile %q does not match installer profile %q", signed.Profile, i.profile)
+	}
+	bundle, err := VerifySignedBundle(signed, i.targetID, i.signerID, i.now().UTC())
 	if err != nil {
 		return Bundle{}, false, err
 	}
@@ -250,19 +288,20 @@ type OriginDial func(context.Context, string) (transport.Conn, error)
 
 // DistributorConfig bounds certificate fan-out from the renewer.
 type DistributorConfig struct {
-	Signer       ed25519.PrivateKey
-	Environment  RenewalEnvironment
-	ExpectedName string
-	Dial         OriginDial
-	Concurrency  int
-	Timeout      time.Duration
-	Now          func() time.Time
-	RequestID    func() (string, error)
+	Profile     CertificateProfile
+	Signer      ed25519.PrivateKey
+	Environment RenewalEnvironment
+	Dial        OriginDial
+	Concurrency int
+	Timeout     time.Duration
+	Now         func() time.Time
+	RequestID   func() (string, error)
 }
 
 // Distributor sends one validated bundle to configured origin daemons.
 type Distributor struct {
 	signer       ed25519.PrivateKey
+	profile      CertificateProfile
 	environment  RenewalEnvironment
 	expectedName string
 	dial         OriginDial
@@ -280,12 +319,13 @@ func NewDistributor(config DistributorConfig) (*Distributor, error) {
 	if err := validateRenewalEnvironment(config.Environment); err != nil {
 		return nil, err
 	}
-	if _, err := certificateProbeName(config.ExpectedName); err != nil {
+	expectedName, err := certificateNameForProfile(config.Profile)
+	if err != nil {
 		return nil, err
 	}
 	if config.Dial == nil {
 		config.Dial = func(ctx context.Context, endpoint string) (transport.Conn, error) {
-			return transport.Dial(ctx, endpoint, transport.DialOptions{})
+			return transport.DialOnce(ctx, endpoint, transport.DialOptions{})
 		}
 	}
 	if config.Concurrency == 0 {
@@ -307,7 +347,7 @@ func NewDistributor(config DistributorConfig) (*Distributor, error) {
 		config.RequestID = randomRequestID
 	}
 	return &Distributor{
-		signer: append(ed25519.PrivateKey(nil), config.Signer...), environment: config.Environment, expectedName: config.ExpectedName,
+		signer: append(ed25519.PrivateKey(nil), config.Signer...), profile: config.Profile, environment: config.Environment, expectedName: expectedName,
 		dial: config.Dial, concurrency: config.Concurrency, timeout: config.Timeout, now: config.Now, requestID: config.RequestID,
 	}, nil
 }
@@ -332,10 +372,10 @@ func (d *Distributor) Distribute(ctx context.Context, bundle Bundle, targets []O
 			return fmt.Errorf("dnsname: certificate target %d: %w", index, err)
 		}
 		if _, exists := seenIdentities[target.Identity]; exists {
-			return fmt.Errorf("dnsname: certificate target %d duplicates identity %q", index, target.Identity)
+			return fmt.Errorf("dnsname: certificate target %d duplicates an identity", index)
 		}
 		if _, exists := seenEndpoints[target.Endpoint]; exists {
-			return fmt.Errorf("dnsname: certificate target %d duplicates endpoint %q", index, target.Endpoint)
+			return fmt.Errorf("dnsname: certificate target %d duplicates an endpoint", index)
 		}
 		seenIdentities[target.Identity] = struct{}{}
 		seenEndpoints[target.Endpoint] = struct{}{}
@@ -384,7 +424,10 @@ func validateOriginTarget(target OriginTarget) error {
 func (d *Distributor) distributeOne(ctx context.Context, bundle Bundle, target OriginTarget) error {
 	connection, err := d.dial(ctx, target.Endpoint)
 	if err != nil {
-		return fmt.Errorf("dial control endpoint: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.New("open pinned certificate control connection failed")
 	}
 	defer connection.Close()
 
@@ -397,13 +440,13 @@ func (d *Distributor) distributeOne(ctx context.Context, bundle Bundle, target O
 		return err
 	}
 	if hostResponse.Type != protocol.TypeHostInfoResult || hostResponse.Host == nil {
-		return fmt.Errorf("host-info response has type %q or no host", hostResponse.Type)
+		return errors.New("origin host.info response is invalid")
 	}
 	if hostResponse.Host.ID != target.Identity || hostResponse.Host.MeshIdentity != target.Identity {
-		return fmt.Errorf("origin identity changed: expected %q, received %q / %q", target.Identity, hostResponse.Host.ID, hostResponse.Host.MeshIdentity)
+		return errors.New("origin host.info identity does not match its pin")
 	}
 
-	signed, err := SignBundle(bundle, target.Identity, d.environment, d.signer)
+	signed, err := SignBundle(bundle, target.Identity, d.profile, d.environment, d.signer)
 	if err != nil {
 		return err
 	}
@@ -414,6 +457,7 @@ func (d *Distributor) distributeOne(ctx context.Context, bundle Bundle, target O
 	installResponse, err := controlRoundTrip(ctx, connection, protocol.Control{
 		Type: protocol.TypeCertificateInstall, RequestID: installRequestID,
 		Certificate: &protocol.CertificateInstall{
+			Profile:     string(signed.Profile),
 			Environment: string(signed.Environment),
 			TargetID:    signed.TargetID, SignerID: signed.SignerID,
 			CertificatePEM: signed.CertificatePEM, PrivateKeyPEM: signed.PrivateKeyPEM, Signature: signed.Signature,
@@ -423,13 +467,16 @@ func (d *Distributor) distributeOne(ctx context.Context, bundle Bundle, target O
 		return err
 	}
 	if installResponse.Type != protocol.TypeCertificateInstalled {
-		return fmt.Errorf("certificate-install response has type %q", installResponse.Type)
+		return errors.New("origin certificate.install response is invalid")
 	}
 	if installResponse.CertificateFingerprint != bundle.Fingerprint {
-		return fmt.Errorf("origin installed certificate fingerprint %q, want %q", installResponse.CertificateFingerprint, bundle.Fingerprint)
+		return errors.New("origin certificate.install fingerprint does not match")
 	}
 	if installResponse.CertificateEnvironment != string(d.environment) {
-		return fmt.Errorf("origin installed certificate environment %q, want %q", installResponse.CertificateEnvironment, d.environment)
+		return errors.New("origin certificate.install environment does not match")
+	}
+	if installResponse.CertificateProfile != string(d.profile) {
+		return errors.New("origin certificate.install profile does not match")
 	}
 	return nil
 }
@@ -445,27 +492,30 @@ func controlRoundTrip(ctx context.Context, connection transport.Conn, request pr
 	stopCancellation := context.AfterFunc(ctx, func() { _ = connection.Close() })
 	defer stopCancellation()
 	if err := connection.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload}); err != nil {
-		return protocol.Control{}, fmt.Errorf("dnsname: write %s request: %w", request.Type, err)
+		if ctx.Err() != nil {
+			return protocol.Control{}, ctx.Err()
+		}
+		return protocol.Control{}, fmt.Errorf("dnsname: write %s request failed", request.Type)
 	}
 	frame, err := connection.ReadFrame()
 	if err != nil {
 		if ctx.Err() != nil {
 			return protocol.Control{}, ctx.Err()
 		}
-		return protocol.Control{}, fmt.Errorf("dnsname: read %s response: %w", request.Type, err)
+		return protocol.Control{}, fmt.Errorf("dnsname: read %s response failed", request.Type)
 	}
 	if frame.Kind != protocol.KindControl {
 		return protocol.Control{}, fmt.Errorf("dnsname: %s response is not a control frame", request.Type)
 	}
 	response, err := protocol.DecodeControl(frame.Payload)
 	if err != nil {
-		return protocol.Control{}, fmt.Errorf("dnsname: decode %s response: %w", request.Type, err)
+		return protocol.Control{}, fmt.Errorf("dnsname: decode %s response failed", request.Type)
 	}
 	if response.RequestID != request.RequestID {
-		return protocol.Control{}, fmt.Errorf("dnsname: %s response request ID %q, want %q", request.Type, response.RequestID, request.RequestID)
+		return protocol.Control{}, fmt.Errorf("dnsname: %s response request ID does not match", request.Type)
 	}
 	if response.Type == protocol.TypeError {
-		return protocol.Control{}, fmt.Errorf("dnsname: origin rejected %s: %s", request.Type, response.Message)
+		return protocol.Control{}, fmt.Errorf("dnsname: origin rejected %s", request.Type)
 	}
 	return response, nil
 }

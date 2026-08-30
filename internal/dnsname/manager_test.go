@@ -283,9 +283,10 @@ func (r *managerTestRenewer) Renew(_ context.Context, force bool) (Bundle, bool,
 
 type managerTestDistributor struct {
 	calls [][]OriginTarget
+	err   error
 }
 
 func (d *managerTestDistributor) Distribute(_ context.Context, _ Bundle, targets []OriginTarget) error {
 	d.calls = append(d.calls, append([]OriginTarget(nil), targets...))
-	return nil
+	return d.err
 }

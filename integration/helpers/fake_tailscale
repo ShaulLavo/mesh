@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "$#" -ne 2 ] || [ "$1" != status ] || [ "$2" != --json ]; then
+  echo "fake tailscale only supports: tailscale status --json" >&2
+  exit 2
+fi
+if [ -z "${MESH_FAKE_TAILSCALE_STATUS:-}" ]; then
+  echo "MESH_FAKE_TAILSCALE_STATUS is not set" >&2
+  exit 2
+fi
+exec /bin/cat "$MESH_FAKE_TAILSCALE_STATUS"

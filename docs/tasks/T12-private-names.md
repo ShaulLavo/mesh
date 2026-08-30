@@ -48,12 +48,15 @@ corrupt the current pointer.
 
 Each origin pins the Pi's Mesh Ed25519 identity. Distribution first calls
 `host.info` over the origin's direct WebSocket and verifies the origin identity.
-The Pi then signs a domain-separated digest over the environment, target
-identity, signer identity, certificate bytes, and private-key bytes. The origin
-bounds all fields before cryptographic work, verifies both identity pins, checks
-the key and wildcard SAN, and rejects a bundle with a strictly earlier expiry.
-An exact replay is a no-op. A different certificate with the same expiry remains
-valid for emergency key rotation.
+The Pi then signs the v2 domain-separated digest over the `private-origin`
+profile, environment, target identity, signer identity, certificate bytes, and
+private-key bytes. The origin bounds all fields before cryptographic work,
+verifies both identity pins, checks the key and `*.mesh.shaulavo.dev` SAN, and
+rejects a bundle with a strictly earlier expiry. An installer accepts only its
+configured profile, so a `public-edge` bundle cannot enter a private-origin
+slot. Profile-less v1 bundles are not accepted. An exact replay is a no-op. A
+different certificate with the same expiry remains valid for emergency key
+rotation.
 
 Staging bundles install into a persisted non-serving slot. Live bundles install
 atomically and hot-swap the TLS certificate without restarting the daemon. An
@@ -61,11 +64,12 @@ expired persisted certificate triggers a new order. If renewal fails while the
 current certificate remains valid, reconciliation reports the failure and still
 redistributes that usable bundle to origins that were previously offline.
 
-Certificate distribution is additive protocol surface:
-`certificate.install` and `certificate.installed`, including the signed
-environment and returned fingerprint. The default fan-out is four concurrent
-origins with a 10-second per-origin deadline. Every successful reconciliation
-redistributes the current bundle, even when no renewal occurred.
+Certificate distribution uses the additive `certificate.install` and
+`certificate.installed` controls. The request carries the signed profile and
+environment. The acknowledgement returns the profile, environment, and
+fingerprint. The default fan-out is four concurrent origins with a 10-second
+per-origin deadline. Every successful reconciliation redistributes the current
+bundle, even when no renewal occurred.
 
 ## HTTPS listener choice
 
@@ -259,7 +263,8 @@ mesh private-names reconcile --config /home/shaul/.config/mesh/private-names-liv
 
 Confirm every configured origin received staging state under
 `~/.local/state/mesh/private-tls/staging/`. A staging bundle must not change the
-certificate returned by the HTTPS listener.
+certificate returned by the HTTPS listener, which reads only
+`private-tls/live/`.
 
 After staging succeeds, issue and distribute production:
 
@@ -329,8 +334,9 @@ Unit tests cover Cloudflare REST payloads and comments, ownership collisions,
 token redaction, malformed and repeated provider responses, authoritative
 propagation, cleanup, current ACME order calls, bounded ACME responses, expired
 renewal, issuance deadlines, cross-process locking, descriptor-safe 0600 stores,
-live and staging separation, signed distribution, identity and environment
-tampering, rollback, concurrency bounds, manager retry scheduling, partial
+live and staging separation, signed profile-v2 distribution, identity,
+environment, and profile tampering, cross-profile rejection, rollback,
+concurrency bounds, manager retry scheduling, partial
 discovery, bounded Tailscale output, hot TLS reload, listener shutdown,
 address-change restart/rebind, and exact Tailscale Serve command ordering and
 failure behavior.

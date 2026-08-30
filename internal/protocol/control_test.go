@@ -125,6 +125,7 @@ func TestCertificateControlRoundTrip(t *testing.T) {
 		Type:      TypeCertificateInstall,
 		RequestID: "certificate-1",
 		Certificate: &CertificateInstall{
+			Profile:        "private-origin",
 			Environment:    "staging",
 			TargetID:       "origin-key",
 			SignerID:       "renewer-key",
@@ -134,8 +135,33 @@ func TestCertificateControlRoundTrip(t *testing.T) {
 		},
 		CertificateFingerprint: "sha256-fingerprint",
 		CertificateEnvironment: "staging",
+		CertificateProfile:     "private-origin",
 	}
 
+	payload, err := want.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeControl(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("decoded control = %#v, want %#v", got, want)
+	}
+}
+
+func TestEdgeRegistrationControlRoundTrip(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	want := Control{
+		Type: TypeEdgeRegister, RequestID: "edge-1",
+		EdgeSnapshot: &EdgeSnapshot{
+			TargetID: "edge", OriginID: "origin", Sequence: 9, IssuedAt: now, ExpiresAt: now.Add(5 * time.Minute),
+			Routes: []EdgeRoute{{PublicName: "app.shaulavo.dev", ServiceName: "app", WakeOnRequest: true}}, Signature: []byte("signature"),
+		},
+		EdgeSequence: 9, EdgeDigest: "digest",
+		EdgeRoutes: []EdgeRouteInfo{{PublicName: "app.shaulavo.dev", ServiceName: "app", DisplayAlias: "Desktop", LastSeenAt: now, Online: true}},
+	}
 	payload, err := want.Encode()
 	if err != nil {
 		t.Fatal(err)

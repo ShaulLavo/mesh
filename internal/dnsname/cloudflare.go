@@ -141,10 +141,10 @@ func (c *Cloudflare) ListRecords(ctx context.Context, name string, recordType Re
 				return nil, err
 			}
 			if converted.Name != canonicalName || converted.Type != recordType {
-				return nil, fmt.Errorf("dnsname: Cloudflare returned %s record %q for exact %s record %q", converted.Type, converted.Name, recordType, canonicalName)
+				return nil, errors.New("dnsname: Cloudflare returned a record outside the exact query")
 			}
 			if _, duplicate := seenIDs[converted.ID]; duplicate {
-				return nil, fmt.Errorf("dnsname: Cloudflare returned duplicate record ID %q", converted.ID)
+				return nil, errors.New("dnsname: Cloudflare returned a duplicate record ID")
 			}
 			seenIDs[converted.ID] = struct{}{}
 			records = append(records, converted)
@@ -209,10 +209,10 @@ func (c *Cloudflare) DeleteRecord(ctx context.Context, id string) error {
 		return err
 	}
 	if err := validateCloudflareRecordID(response.Result.ID); err != nil {
-		return fmt.Errorf("dnsname: Cloudflare delete response: %w", err)
+		return errors.New("dnsname: Cloudflare delete response has an invalid record ID")
 	}
 	if response.Result.ID != id {
-		return fmt.Errorf("dnsname: Cloudflare delete response ID %q does not match record %q", response.Result.ID, id)
+		return errors.New("dnsname: Cloudflare delete response record ID does not match")
 	}
 	return nil
 }
@@ -243,43 +243,37 @@ func (c *Cloudflare) request(ctx context.Context, method, suffix string, query u
 	}
 	response, err := c.client.Do(request)
 	if err != nil {
-		return fmt.Errorf("dnsname: call Cloudflare %s %s: %w", method, endpoint.Path, err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.New("dnsname: Cloudflare request failed")
 	}
 	defer response.Body.Close() //nolint:errcheck // request result is already decided
 	limited := io.LimitReader(response.Body, cloudflareResponseMax+1)
 	contents, err := io.ReadAll(limited)
 	if err != nil {
-		return fmt.Errorf("dnsname: read Cloudflare response: %w", err)
+		return errors.New("dnsname: read Cloudflare response failed")
 	}
 	if len(contents) > cloudflareResponseMax {
 		return fmt.Errorf("dnsname: Cloudflare response exceeds %d bytes", cloudflareResponseMax)
 	}
 	if err := json.Unmarshal(contents, output); err != nil {
-		return fmt.Errorf("dnsname: decode Cloudflare HTTP %d response: %w", response.StatusCode, err)
+		return fmt.Errorf("dnsname: Cloudflare HTTP %d response is invalid", response.StatusCode)
 	}
-	success, failures := cloudflareResult(output, c.token)
+	success := cloudflareResult(output)
 	if response.StatusCode < 200 || response.StatusCode >= 300 || !success {
-		return fmt.Errorf("dnsname: Cloudflare HTTP %d: %s", response.StatusCode, failures)
+		return fmt.Errorf("dnsname: Cloudflare HTTP %d request failed", response.StatusCode)
 	}
 	return nil
 }
 
-func cloudflareResult(value any, token string) (bool, string) {
+func cloudflareResult(value any) bool {
 	encoded, _ := json.Marshal(value)
 	var envelope struct {
-		Success bool              `json:"success"`
-		Errors  []cloudflareError `json:"errors"`
+		Success bool `json:"success"`
 	}
 	_ = json.Unmarshal(encoded, &envelope)
-	parts := make([]string, 0, len(envelope.Errors))
-	for _, failure := range envelope.Errors {
-		message := strings.ReplaceAll(failure.Message, token, "[redacted]")
-		parts = append(parts, fmt.Sprintf("%d %s", failure.Code, message))
-	}
-	if len(parts) == 0 {
-		return envelope.Success, "request failed without an API error"
-	}
-	return envelope.Success, strings.Join(parts, "; ")
+	return envelope.Success
 }
 
 func cloudflareBody(input RecordInput) cloudflareRecordBody {
@@ -295,21 +289,21 @@ func cloudflareBody(input RecordInput) cloudflareRecordBody {
 
 func recordFromCloudflare(record cloudflareRecord) (Record, error) {
 	if err := validateCloudflareRecordID(record.ID); err != nil {
-		return Record{}, fmt.Errorf("dnsname: Cloudflare record: %w", err)
+		return Record{}, errors.New("dnsname: Cloudflare response record ID is invalid")
 	}
 	recordType := RecordType(record.Type)
 	if err := validateCloudflareRecordType(recordType); err != nil {
-		return Record{}, err
+		return Record{}, errors.New("dnsname: Cloudflare response record type is invalid")
 	}
 	canonicalName, err := canonicalDNSName(record.Name)
 	if err != nil || canonicalName != record.Name {
-		return Record{}, fmt.Errorf("dnsname: Cloudflare record %q has non-canonical name %q", record.ID, record.Name)
+		return Record{}, errors.New("dnsname: Cloudflare response record name is invalid")
 	}
 	content := record.Content
 	if recordType == RecordTXT && strings.HasPrefix(content, "\"") {
 		decoded, err := strconv.Unquote(content)
 		if err != nil {
-			return Record{}, fmt.Errorf("dnsname: decode Cloudflare TXT record %s: %w", record.ID, err)
+			return Record{}, errors.New("dnsname: Cloudflare response TXT record is invalid")
 		}
 		content = decoded
 	}

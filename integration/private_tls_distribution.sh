@@ -59,16 +59,18 @@ install_bundle() {
   local environment=$1
   local certificate=$2
   local private_key=$3
+  local profile=private-origin
   local digest="$TEST_ROOT/$environment.digest"
   local signature="$TEST_ROOT/$environment.signature"
-  python3 - "$environment" "$ORIGIN_ID" "$RENEWER_ID" "$certificate" "$private_key" "$digest" <<'PY'
+  python3 - "$profile" "$environment" "$ORIGIN_ID" "$RENEWER_ID" "$certificate" "$private_key" "$digest" <<'PY'
 import hashlib
 import struct
 import sys
 
-environment, target_id, signer_id, certificate_path, key_path, output_path = sys.argv[1:]
+profile, environment, target_id, signer_id, certificate_path, key_path, output_path = sys.argv[1:]
 fields = [
-    b"mesh/certificate-bundle/v1",
+    b"mesh/certificate-bundle/v2",
+    profile.encode(),
     environment.encode(),
     target_id.encode(),
     signer_id.encode(),
@@ -82,18 +84,19 @@ for field in fields:
 open(output_path, "wb").write(digest.digest())
 PY
   openssl pkeyutl -sign -rawin -inkey "$RENEWER_KEY" -in "$digest" -out "$signature" >/dev/null 2>&1 || fail "sign $environment bundle"
-  python3 - "$MESH_STATE_DIR/daemon.sock" "$environment" "$ORIGIN_ID" "$RENEWER_ID" "$certificate" "$private_key" "$signature" <<'PY'
+  python3 - "$MESH_STATE_DIR/daemon.sock" "$profile" "$environment" "$ORIGIN_ID" "$RENEWER_ID" "$certificate" "$private_key" "$signature" <<'PY'
 import base64
 import json
 import socket
 import struct
 import sys
 
-socket_path, environment, target_id, signer_id, certificate_path, key_path, signature_path = sys.argv[1:]
+socket_path, profile, environment, target_id, signer_id, certificate_path, key_path, signature_path = sys.argv[1:]
 request = json.dumps({
     "type": "certificate.install",
     "requestId": f"integration-{environment}",
     "certificate": {
+        "profile": profile,
         "environment": environment,
         "targetId": target_id,
         "signerId": signer_id,
@@ -119,7 +122,7 @@ with socket.socket(socket.AF_UNIX) as connection:
     if header[0] != 1:
         raise SystemExit(f"unexpected response kind {header[0]}")
     response = json.loads(receive(connection, struct.unpack(">I", header[1:])[0]))
-if response.get("type") != "certificate.installed" or response.get("certificateEnvironment") != environment or not response.get("certificateFingerprint"):
+if response.get("type") != "certificate.installed" or response.get("certificateProfile") != profile or response.get("certificateEnvironment") != environment or not response.get("certificateFingerprint"):
     raise SystemExit(f"certificate install failed: {response!r}")
 PY
 }

@@ -4,6 +4,32 @@
 
 package sqlc
 
+type EdgeOutbox struct {
+	TargetID     string
+	Sequence     int64
+	Digest       string
+	SnapshotJson []byte
+	Acknowledged int64
+}
+
+type EdgeRoute struct {
+	OriginID      string
+	PublicName    string
+	ServiceName   string
+	WakeOnRequest int64
+}
+
+type EdgeSnapshot struct {
+	OriginID   string
+	TargetID   string
+	Sequence   int64
+	Digest     string
+	IssuedAt   int64
+	ExpiresAt  int64
+	LastSeenAt int64
+	Signature  []byte
+}
+
 type Host struct {
 	ID            string
 	Alias         *string

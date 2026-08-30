@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -18,15 +19,38 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 )
 
 const runtimeTestTimeout = 3 * time.Second
+
+func TestErrorReporterWorkerStopsAfterHealthySink(t *testing.T) {
+	reported := make(chan error, 1)
+	reporter := newErrorReporter(func(err error) { reported <- err })
+	want := errors.New("report")
+	reporter.report(want)
+	select {
+	case got := <-reported:
+		if !errors.Is(got, want) {
+			t.Fatalf("reported = %v, want %v", got, want)
+		}
+	case <-time.After(runtimeTestTimeout):
+		t.Fatal("healthy report sink was not called")
+	}
+	reporter.shutdown()
+	select {
+	case <-reporter.stop:
+	case <-time.After(runtimeTestTimeout):
+		t.Fatal("healthy reporter worker did not stop")
+	}
+}
 
 func TestServeCarriesUnixFramesAndCancellationUnblocksHandler(t *testing.T) {
 	t.Parallel()
@@ -486,6 +510,15 @@ func TestServeRejectsInvalidBoundaryConfiguration(t *testing.T) {
 		{name: "unclean WebSocket path", cfg: func(dir string) ListenerConfig {
 			return ListenerConfig{StateDir: dir, TailnetAddrs: []string{"127.0.0.1"}, TailnetPort: 1, WebSocketPath: "/a/../mesh"}
 		}, want: "WebSocket path"},
+		{name: "escaped WebSocket path", cfg: func(dir string) ListenerConfig {
+			return ListenerConfig{StateDir: dir, TailnetAddrs: []string{"127.0.0.1"}, TailnetPort: 1, WebSocketPath: "/m%65sh"}
+		}, want: "WebSocket path"},
+		{name: "backslash WebSocket path", cfg: func(dir string) ListenerConfig {
+			return ListenerConfig{StateDir: dir, TailnetAddrs: []string{"127.0.0.1"}, TailnetPort: 1, WebSocketPath: `/mesh\child`}
+		}, want: "WebSocket path"},
+		{name: "force-query WebSocket path", cfg: func(dir string) ListenerConfig {
+			return ListenerConfig{StateDir: dir, TailnetAddrs: []string{"127.0.0.1"}, TailnetPort: 1, WebSocketPath: "/mesh?"}
+		}, want: "WebSocket path"},
 		{name: "TLS config without HTTPS port", cfg: func(dir string) ListenerConfig {
 			return ListenerConfig{StateDir: dir, TLSConfig: &tls.Config{}}
 		}, want: "HTTPS port"},
@@ -607,6 +640,7 @@ func TestServeBoundListenersCancelsSharedContextBeforeWaitingForHandlers(t *test
 			listener,
 			nil,
 			nil,
+			nil,
 		)
 	}()
 
@@ -651,6 +685,7 @@ func TestServeBoundListenersForcesStuckServiceRequestClosed(t *testing.T) {
 			unixListener,
 			[]net.Listener{httpListener},
 			nil,
+			nil,
 		)
 	}()
 	go func() {
@@ -673,6 +708,265 @@ func TestServeBoundListenersForcesStuckServiceRequestClosed(t *testing.T) {
 		t.Fatal("stuck client request did not unblock after forced close")
 	}
 }
+
+func TestPublicServerGivesInFlightRequestShutdownGrace(t *testing.T) {
+	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		_ = unixListener.Close()
+		t.Fatal(err)
+	}
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	clientDone := make(chan error, 1)
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- serveBoundListeners(
+			runCtx, cancel,
+			listenerConfig{
+				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: time.Second,
+				publicHTTPHandler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+					close(requestStarted)
+					<-releaseRequest
+					response.WriteHeader(http.StatusNoContent)
+				}),
+			},
+			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, publicListener,
+		)
+	}()
+	go func() {
+		response, err := (&http.Client{Timeout: runtimeTestTimeout}).Get("http://" + publicListener.Addr().String() + "/stream")
+		if response != nil {
+			if response.StatusCode != http.StatusNoContent && err == nil {
+				err = fmt.Errorf("status %d", response.StatusCode)
+			}
+			_ = response.Body.Close()
+		}
+		clientDone <- err
+	}()
+	waitSignal(t, requestStarted, "public request startup")
+	cancel()
+	select {
+	case err := <-done:
+		t.Fatalf("public server returned before the request completed: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseRequest)
+	if err := <-clientDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := waitRuntime(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublicServerClosesHijackedWebSocketOnShutdown(t *testing.T) {
+	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		_ = unixListener.Close()
+		t.Fatal(err)
+	}
+	hijacked := make(chan struct{})
+	handlerDone := make(chan struct{})
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- serveBoundListeners(
+			runCtx, cancel,
+			listenerConfig{
+				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: time.Second,
+				publicHTTPHandler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+					connection, acceptErr := websocket.Accept(response, request, nil)
+					if acceptErr != nil {
+						close(handlerDone)
+						return
+					}
+					close(hijacked)
+					_, _, _ = connection.Read(context.Background())
+					close(handlerDone)
+				}),
+			},
+			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, publicListener,
+		)
+	}()
+	ctx, stop := context.WithTimeout(context.Background(), runtimeTestTimeout)
+	defer stop()
+	connection, response, err := websocket.Dial(ctx, "ws://"+publicListener.Addr().String()+"/socket", nil)
+	if response != nil && response.Body != nil {
+		defer response.Body.Close() //nolint:errcheck // test cleanup
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.CloseNow()
+	waitSignal(t, hijacked, "public WebSocket upgrade")
+	cancel()
+	if err := waitRuntime(t, done); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(runtimeTestTimeout):
+		t.Fatal("hijacked public WebSocket handler did not unblock")
+	}
+	if _, _, err := connection.Read(ctx); err == nil {
+		t.Fatal("public WebSocket remained open after daemon shutdown")
+	}
+}
+
+func TestPublicServerRejectsOversizedHeadersBeforeHandler(t *testing.T) {
+	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		_ = unixListener.Close()
+		t.Fatal(err)
+	}
+	handlerCalled := make(chan struct{}, 1)
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- serveBoundListeners(
+			runCtx, cancel,
+			listenerConfig{
+				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: time.Second,
+				publicHTTPHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { handlerCalled <- struct{}{} }),
+			},
+			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, publicListener,
+		)
+	}()
+	connection, err := net.DialTimeout("tcp4", publicListener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close() //nolint:errcheck // test cleanup
+	_ = connection.SetDeadline(time.Now().Add(runtimeTestTimeout))
+	request := "GET / HTTP/1.1\r\nHost: app.shaulavo.dev\r\nX-Oversized: " + strings.Repeat("a", maximumPublicHeaderBytes+(8<<10)) + "\r\n\r\n"
+	if _, err := io.WriteString(connection, request); err != nil {
+		t.Fatal(err)
+	}
+	status, err := bufio.NewReader(connection).ReadString('\n')
+	if err != nil || !strings.Contains(status, " 431 ") {
+		t.Fatalf("oversized-header response = %q, %v", status, err)
+	}
+	select {
+	case <-handlerCalled:
+		t.Fatal("oversized header reached the public handler")
+	default:
+	}
+	cancel()
+	if err := waitRuntime(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBoundedPublicListenerCapsAndUnblocksAccepts(t *testing.T) {
+	base := &queuedPublicListener{
+		connections: make(chan net.Conn, 3), accepted: make(chan struct{}, 3), closed: make(chan struct{}),
+	}
+	peers := make([]net.Conn, 0, 3)
+	for range 3 {
+		server, peer := net.Pipe()
+		base.connections <- server
+		peers = append(peers, peer)
+	}
+	defer func() {
+		for _, peer := range peers {
+			_ = peer.Close()
+		}
+	}()
+	listener := newBoundedPublicListener(base, 2)
+	first, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		<-base.accepted
+	}
+	thirdResult := make(chan net.Conn, 1)
+	thirdError := make(chan error, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		thirdResult <- connection
+		thirdError <- acceptErr
+	}()
+	select {
+	case <-base.accepted:
+		t.Fatal("listener accepted beyond its connection cap")
+	case <-time.After(25 * time.Millisecond):
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-base.accepted:
+	case <-time.After(time.Second):
+		t.Fatal("closing one connection did not admit one waiter")
+	}
+	third := <-thirdResult
+	if err := <-thirdError; err != nil {
+		t.Fatal(err)
+	}
+	fourthError := make(chan error, 1)
+	go func() {
+		_, acceptErr := listener.Accept()
+		fourthError <- acceptErr
+	}()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-fourthError:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("blocked Accept error = %v, want net.ErrClosed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("listener shutdown did not unblock a capped Accept")
+	}
+	_ = second.Close()
+	_ = third.Close()
+	if err := listener.closeActive(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type queuedPublicListener struct {
+	connections chan net.Conn
+	accepted    chan struct{}
+	closed      chan struct{}
+	closeOnce   sync.Once
+}
+
+func (l *queuedPublicListener) Accept() (net.Conn, error) {
+	l.accepted <- struct{}{}
+	select {
+	case connection := <-l.connections:
+		return connection, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *queuedPublicListener) Close() error {
+	l.closeOnce.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (*queuedPublicListener) Addr() net.Addr { return &net.TCPAddr{} }
 
 type failingListener struct {
 	err error
@@ -892,13 +1186,17 @@ func assertHTTPSCertificateAndRoute(t *testing.T, port uint16, certificatePEM []
 }
 
 func daemonTestCertificate(t *testing.T, serial int64, now time.Time) ([]byte, []byte) {
+	return daemonTestNamedCertificate(t, serial, now, dnsname.WildcardName)
+}
+
+func daemonTestNamedCertificate(t *testing.T, serial int64, now time.Time, name string) ([]byte, []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: dnsname.WildcardName}, DNSNames: []string{dnsname.WildcardName},
+		SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, DNSNames: []string{name},
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(90 * 24 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true,
 	}

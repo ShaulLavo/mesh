@@ -4,6 +4,7 @@ package serve
 import (
 	"fmt"
 	"net/http"
+	"net/netip"
 	"path"
 	"path/filepath"
 	"sort"
@@ -48,8 +49,9 @@ type ServiceStatus struct {
 // Registry routes requests to a complete service snapshot. Replace publishes a
 // new snapshot atomically, so in-flight requests keep using the old handlers.
 type Registry struct {
-	reservedPrefix string
-	snapshot       atomic.Pointer[registrySnapshot]
+	reservedPrefix        string
+	trustForwardedHeaders func(netip.Addr) bool
+	snapshot              atomic.Pointer[registrySnapshot]
 }
 
 type registrySnapshot struct {
@@ -72,6 +74,12 @@ func ValidateName(name string) error {
 	return validateRouteName(name)
 }
 
+// ValidatePublicName checks that name is empty or exactly one canonical DNS
+// label below the public Mesh zone.
+func ValidatePublicName(name string) error {
+	return validatePublicName(name)
+}
+
 // ReservedPrefix returns the protocol path this registry keeps free of services.
 func (r *Registry) ReservedPrefix() string {
 	return r.reservedPrefix
@@ -79,16 +87,17 @@ func (r *Registry) ReservedPrefix() string {
 
 // NewRegistry builds a registry from one complete service list.
 func NewRegistry(services []Service) (*Registry, error) {
-	return NewRegistryWithReservedPrefix(services, ReservedPrefix)
+	return NewRegistryWithReservedPrefix(services, ReservedPrefix, nil)
 }
 
 // NewRegistryWithReservedPrefix builds a registry that refuses any service
-// route overlapping the daemon protocol path.
-func NewRegistryWithReservedPrefix(services []Service, reservedPrefix string) (*Registry, error) {
+// route overlapping the daemon protocol path. trustForwardedHeaders may trust
+// canonical forwarding metadata only from a separately authenticated peer.
+func NewRegistryWithReservedPrefix(services []Service, reservedPrefix string, trustForwardedHeaders func(netip.Addr) bool) (*Registry, error) {
 	if err := validatePrefix(reservedPrefix); err != nil {
 		return nil, fmt.Errorf("serve: invalid reserved prefix: %w", err)
 	}
-	registry := &Registry{reservedPrefix: reservedPrefix}
+	registry := &Registry{reservedPrefix: reservedPrefix, trustForwardedHeaders: trustForwardedHeaders}
 	if err := registry.Replace(services); err != nil {
 		return nil, err
 	}
@@ -97,7 +106,7 @@ func NewRegistryWithReservedPrefix(services []Service, reservedPrefix string) (*
 
 // Replace validates and atomically publishes a complete service list.
 func (r *Registry) Replace(services []Service) error {
-	snapshot, err := buildRegistrySnapshot(services, r.reservedPrefix)
+	snapshot, err := buildRegistrySnapshot(services, r.reservedPrefix, r.trustForwardedHeaders)
 	if err != nil {
 		return err
 	}
@@ -148,7 +157,7 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	http.NotFound(w, request)
 }
 
-func buildRegistrySnapshot(services []Service, reservedPrefix string) (*registrySnapshot, error) {
+func buildRegistrySnapshot(services []Service, reservedPrefix string, trustForwardedHeaders func(netip.Addr) bool) (*registrySnapshot, error) {
 	seen := make(map[string]struct{}, len(services))
 	snapshot := &registrySnapshot{
 		services: make([]Service, 0, len(services)),
@@ -167,7 +176,7 @@ func buildRegistrySnapshot(services []Service, reservedPrefix string) (*registry
 		if prefixesOverlap(prefix, reservedPrefix) {
 			return nil, fmt.Errorf("serve: service route %q overlaps reserved prefix %s", normalized.Name, reservedPrefix)
 		}
-		handler, err := handlerForNormalizedService(normalized, prefix)
+		handler, err := handlerForNormalizedService(normalized, prefix, trustForwardedHeaders)
 		if err != nil {
 			return nil, err
 		}
@@ -222,8 +231,16 @@ func validatePublicName(name string) error {
 	if len(name) > 253 || name != strings.ToLower(name) || strings.HasSuffix(name, ".") {
 		return fmt.Errorf("public name %q is not a canonical hostname", name)
 	}
-	if name != PublicDomain && !strings.HasSuffix(name, "."+PublicDomain) {
-		return fmt.Errorf("public name %q is outside %s", name, PublicDomain)
+	suffix := "." + PublicDomain
+	if !strings.HasSuffix(name, suffix) {
+		return fmt.Errorf("public name %q is not one label below %s", name, PublicDomain)
+	}
+	label := strings.TrimSuffix(name, suffix)
+	if label == "" || strings.Contains(label, ".") {
+		return fmt.Errorf("public name %q is not one label below %s", name, PublicDomain)
+	}
+	if label == "mesh" {
+		return fmt.Errorf("public name %q is reserved for private naming", name)
 	}
 	for _, label := range strings.Split(name, ".") {
 		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {

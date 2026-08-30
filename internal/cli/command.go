@@ -877,6 +877,8 @@ func (a *application) daemonCommand() *cobra.Command {
 		httpsPort          uint
 		certificateRenewer string
 		privateNamesConfig string
+		edgeConfig         string
+		publicEdgeTarget   string
 		tailscaleServe     bool
 	)
 	command := &cobra.Command{
@@ -897,6 +899,7 @@ func (a *application) daemonCommand() *cobra.Command {
 			return meshdaemon.Run(cmd.Context(), meshdaemon.Config{
 				StateDir: stateDir, TailnetPort: uint16(port), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
+				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget,
 				TailscaleServe: tailscaleServe,
 				ReportError:    func(err error) { fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %v\n", err) },
 			})
@@ -907,6 +910,8 @@ func (a *application) daemonCommand() *cobra.Command {
 	command.Flags().UintVar(&httpsPort, "https-port", 0, "loopback HTTPS service port; zero disables HTTPS")
 	command.Flags().StringVar(&certificateRenewer, "certificate-renewer-id", "", "pinned Mesh identity allowed to install certificates")
 	command.Flags().StringVar(&privateNamesConfig, "private-names-config", "", "Pi private-name reconciliation config file")
+	command.Flags().StringVar(&edgeConfig, "edge", "", "public-edge runtime and origin allowlist config file")
+	command.Flags().StringVar(&publicEdgeTarget, "public-edge-target", "", "pinned public-edge target config file")
 	command.Flags().BoolVar(&tailscaleServe, "tailscale-serve", false, "persist raw Tailscale TCP/443 forwarding to the HTTPS port")
 	return command
 }

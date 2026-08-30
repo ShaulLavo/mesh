@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -193,6 +194,73 @@ func TestProxyForwardsPathHeadersAndStreams(t *testing.T) {
 	close(release)
 }
 
+func TestProxyPreservesForwardingMetadataOnlyFromPinnedPeer(t *testing.T) {
+	observed := make(chan http.Header, 3)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		observed <- request.Header.Clone()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+	parsed, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned := netip.MustParseAddr("100.64.0.2")
+	registry, err := NewRegistryWithReservedPrefix(
+		[]Service{{Name: "api", Kind: Proxy, Target: port}},
+		ReservedPrefix,
+		func(address netip.Addr) bool { return address == pinned },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://app.shaulavo.dev/api/value", nil)
+	request.RemoteAddr = "100.64.0.2:43120"
+	request.Header.Set("X-Forwarded-For", "203.0.113.77")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	response := httptest.NewRecorder()
+	registry.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("trusted edge response = %d", response.Code)
+	}
+	trusted := <-observed
+	if trusted.Get("X-Forwarded-For") != "203.0.113.77" || trusted.Get("X-Forwarded-Proto") != "https" ||
+		trusted.Get("X-Forwarded-Host") != "app.shaulavo.dev" || trusted.Get("X-Forwarded-Prefix") != "/api" {
+		t.Fatalf("trusted forwarding metadata = %#v", trusted)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://app.shaulavo.dev/api/value", nil)
+	request.RemoteAddr = "100.64.0.3:43120"
+	request.Header.Set("Forwarded", "for=attacker")
+	request.Header.Set("X-Forwarded-For", "198.51.100.8")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	request.Header.Set("X-Real-IP", "198.51.100.8")
+	response = httptest.NewRecorder()
+	registry.ServeHTTP(response, request)
+	untrusted := <-observed
+	if untrusted.Get("X-Forwarded-For") != "100.64.0.3" || untrusted.Get("X-Forwarded-Proto") != "http" ||
+		untrusted.Get("Forwarded") != "" || untrusted.Get("X-Real-IP") != "" {
+		t.Fatalf("untrusted forwarding metadata = %#v", untrusted)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://app.shaulavo.dev/api/value", nil)
+	request.RemoteAddr = "100.64.0.2:43120"
+	request.Header.Add("X-Forwarded-For", "203.0.113.77")
+	request.Header.Add("X-Forwarded-For", "198.51.100.8")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	response = httptest.NewRecorder()
+	registry.ServeHTTP(response, request)
+	malformed := <-observed
+	if malformed.Get("X-Forwarded-For") != "100.64.0.2" || malformed.Get("X-Forwarded-Proto") != "http" {
+		t.Fatalf("malformed trusted metadata was preserved: %#v", malformed)
+	}
+}
+
 func TestProxyPassesWebSocketUpgrade(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/socket" {
@@ -262,7 +330,7 @@ func TestRegistryUsesLongestRouteAndReservesProtocolPrefix(t *testing.T) {
 	if _, err := NewRegistry([]Service{{Name: "mesh/site", Kind: Static, Target: outer}}); err == nil {
 		t.Fatal("service under the reserved protocol prefix succeeded")
 	}
-	custom, err := NewRegistryWithReservedPrefix([]Service{{Name: "mesh/site", Kind: Static, Target: outer}}, "/control/ws")
+	custom, err := NewRegistryWithReservedPrefix([]Service{{Name: "mesh/site", Kind: Static, Target: outer}}, "/control/ws", nil)
 	if err != nil {
 		t.Fatalf("service outside the configured protocol prefix: %v", err)
 	}

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -25,11 +27,11 @@ func TestSignedBundleBindsTargetSignerCertificateAndKey(t *testing.T) {
 	signerID, signer := testEd25519Identity(t)
 	targetID, _ := testEd25519Identity(t)
 	bundle := testBundle(t, 1, now, now.Add(90*24*time.Hour))
-	signed, err := SignBundle(bundle, targetID, EnvironmentLive, signer)
+	signed, err := SignBundle(bundle, targetID, ProfilePrivateOrigin, EnvironmentLive, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	verified, err := VerifySignedBundle(signed, targetID, signerID, WildcardName, now)
+	verified, err := VerifySignedBundle(signed, targetID, signerID, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +42,10 @@ func TestSignedBundleBindsTargetSignerCertificateAndKey(t *testing.T) {
 	otherTarget, _ := testEd25519Identity(t)
 	otherSigner, _ := testEd25519Identity(t)
 	for name, mutate := range map[string]func(*SignedBundle) (string, string){
+		"profile": func(candidate *SignedBundle) (string, string) {
+			candidate.Profile = ProfilePublicEdge
+			return targetID, signerID
+		},
 		"environment": func(candidate *SignedBundle) (string, string) {
 			candidate.Environment = EnvironmentStaging
 			return targetID, signerID
@@ -64,7 +70,7 @@ func TestSignedBundleBindsTargetSignerCertificateAndKey(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			candidate := cloneSignedBundle(signed)
 			wantTarget, wantSigner := mutate(&candidate)
-			if _, err := VerifySignedBundle(candidate, wantTarget, wantSigner, WildcardName, now); err == nil {
+			if _, err := VerifySignedBundle(candidate, wantTarget, wantSigner, now); err == nil {
 				t.Fatal("tampered bundle verified")
 			}
 		})
@@ -75,20 +81,20 @@ func TestVerifySignedBundleBoundsPayloadBeforeCrypto(t *testing.T) {
 	targetID, _ := testEd25519Identity(t)
 	signerID, _ := testEd25519Identity(t)
 	signed := SignedBundle{
-		TargetID: targetID, SignerID: signerID,
+		Profile: ProfilePrivateOrigin, Environment: EnvironmentLive, TargetID: targetID, SignerID: signerID,
 		CertificatePEM: make([]byte, maximumCertificatePEM+1), PrivateKeyPEM: []byte("key"), Signature: make([]byte, ed25519.SignatureSize),
 	}
-	if _, err := VerifySignedBundle(signed, targetID, signerID, WildcardName, time.Now()); err == nil || !strings.Contains(err.Error(), "size") {
+	if _, err := VerifySignedBundle(signed, targetID, signerID, time.Now()); err == nil || !strings.Contains(err.Error(), "size") {
 		t.Fatalf("oversized certificate error = %v", err)
 	}
 	signed.CertificatePEM = []byte("certificate")
 	signed.PrivateKeyPEM = make([]byte, maximumPrivateKeyPEM+1)
-	if _, err := VerifySignedBundle(signed, targetID, signerID, WildcardName, time.Now()); err == nil || !strings.Contains(err.Error(), "size") {
+	if _, err := VerifySignedBundle(signed, targetID, signerID, time.Now()); err == nil || !strings.Contains(err.Error(), "size") {
 		t.Fatalf("oversized private key error = %v", err)
 	}
 	signed.PrivateKeyPEM = []byte("key")
 	signed.Signature = make([]byte, ed25519.SignatureSize+1)
-	if _, err := VerifySignedBundle(signed, targetID, signerID, WildcardName, time.Now()); err == nil || !strings.Contains(err.Error(), "signature size") {
+	if _, err := VerifySignedBundle(signed, targetID, signerID, time.Now()); err == nil || !strings.Contains(err.Error(), "signature size") {
 		t.Fatalf("oversized signature error = %v", err)
 	}
 }
@@ -113,14 +119,14 @@ func TestInstallerIsIdempotentRejectsRollbackAndAllowsEqualExpiryRotation(t *tes
 		t.Fatal(err)
 	}
 	installer, err := NewInstaller(InstallerConfig{
-		LiveSource: source, StagingStore: stagingStore, TargetID: targetID, SignerID: signerID, ExpectedName: WildcardName, Now: func() time.Time { return now },
+		Profile: ProfilePrivateOrigin, LiveSource: source, StagingStore: stagingStore, TargetID: targetID, SignerID: signerID, Now: func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	first := testBundle(t, 1, now, now.Add(90*24*time.Hour))
-	firstSigned, err := SignBundle(first, targetID, EnvironmentLive, signer)
+	firstSigned, err := SignBundle(first, targetID, ProfilePrivateOrigin, EnvironmentLive, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +138,7 @@ func TestInstallerIsIdempotentRejectsRollbackAndAllowsEqualExpiryRotation(t *tes
 	}
 
 	earlier := testBundle(t, 2, now, now.Add(60*24*time.Hour))
-	earlierSigned, err := SignBundle(earlier, targetID, EnvironmentLive, signer)
+	earlierSigned, err := SignBundle(earlier, targetID, ProfilePrivateOrigin, EnvironmentLive, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +147,7 @@ func TestInstallerIsIdempotentRejectsRollbackAndAllowsEqualExpiryRotation(t *tes
 	}
 
 	rotation := testBundle(t, 3, now, first.NotAfter)
-	rotationSigned, err := SignBundle(rotation, targetID, EnvironmentLive, signer)
+	rotationSigned, err := SignBundle(rotation, targetID, ProfilePrivateOrigin, EnvironmentLive, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,15 +184,15 @@ func TestInstallerPersistsStagingWithoutChangingLiveCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	installer, err := NewInstaller(InstallerConfig{
-		LiveSource: source, StagingStore: stagingStore, TargetID: targetID, SignerID: signerID,
-		ExpectedName: WildcardName, Now: func() time.Time { return now },
+		Profile: ProfilePrivateOrigin, LiveSource: source, StagingStore: stagingStore, TargetID: targetID, SignerID: signerID,
+		Now: func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	live := testBundle(t, 10, now, now.Add(90*24*time.Hour))
-	liveSigned, err := SignBundle(live, targetID, EnvironmentLive, signer)
+	liveSigned, err := SignBundle(live, targetID, ProfilePrivateOrigin, EnvironmentLive, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +200,7 @@ func TestInstallerPersistsStagingWithoutChangingLiveCertificate(t *testing.T) {
 		t.Fatalf("live install changed = %v, error = %v", changed, err)
 	}
 	staging := testBundle(t, 20, now, now.Add(91*24*time.Hour))
-	stagingSigned, err := SignBundle(staging, targetID, EnvironmentStaging, signer)
+	stagingSigned, err := SignBundle(staging, targetID, ProfilePrivateOrigin, EnvironmentStaging, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +233,52 @@ func TestInstallerPersistsStagingWithoutChangingLiveCertificate(t *testing.T) {
 	}
 }
 
+func TestInstallerRejectsCorrectlySignedBundleForAnotherProfile(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	signerID, signer := testEd25519Identity(t)
+	targetID, _ := testEd25519Identity(t)
+	root := t.TempDir()
+	liveStore, err := NewBundleStore(filepath.Join(root, "live"), WildcardName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveStore.now = func() time.Time { return now }
+	stagingStore, err := NewBundleStore(filepath.Join(root, "staging"), WildcardName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingStore.now = func() time.Time { return now }
+	liveSource, err := NewCertificateSource(liveStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installer, err := NewInstaller(InstallerConfig{
+		Profile: ProfilePrivateOrigin, LiveSource: liveSource, StagingStore: stagingStore,
+		TargetID: targetID, SignerID: signerID, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificatePEM, keyPEM := testCertificate(t, 99, PublicWildcardName, now.Add(-time.Hour), now.Add(90*24*time.Hour))
+	publicBundle, err := ValidateBundle(certificatePEM, keyPEM, PublicWildcardName, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := SignBundle(publicBundle, targetID, ProfilePublicEdge, EnvironmentLive, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := installer.Install(signed); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("cross-profile install error = %v", err)
+	}
+	if _, err := liveStore.Load(); !errors.Is(err, ErrNoCertificate) {
+		t.Fatalf("private live slot changed: %v", err)
+	}
+	if _, err := stagingStore.Load(); !errors.Is(err, ErrNoCertificate) {
+		t.Fatalf("private staging slot changed: %v", err)
+	}
+}
+
 func TestDistributorPinsOriginIdentityAndSignedInstall(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	signerID, signer := testEd25519Identity(t)
@@ -239,7 +291,7 @@ func TestDistributorPinsOriginIdentityAndSignedInstall(t *testing.T) {
 	}
 	var dials atomic.Int64
 	distributor := mustTestDistributor(t, DistributorConfig{
-		Signer: signer, Environment: EnvironmentLive, ExpectedName: WildcardName, Now: func() time.Time { return now },
+		Profile: ProfilePrivateOrigin, Signer: signer, Environment: EnvironmentLive, Now: func() time.Time { return now },
 		Dial: func(_ context.Context, endpoint string) (transport.Conn, error) {
 			dials.Add(1)
 			identity := identities[endpoint]
@@ -261,7 +313,7 @@ func TestDistributorPinsOriginIdentityAndSignedInstall(t *testing.T) {
 
 	wrong := append([]OriginTarget(nil), targets[:1]...)
 	wrong[0].Identity = secondID
-	if err := distributor.Distribute(context.Background(), callerBundle, wrong); err == nil || !strings.Contains(err.Error(), "identity changed") {
+	if err := distributor.Distribute(context.Background(), callerBundle, wrong); err == nil || !strings.Contains(err.Error(), "identity does not match") {
 		t.Fatalf("identity mismatch error = %v", err)
 	}
 
@@ -275,6 +327,128 @@ func TestDistributorPinsOriginIdentityAndSignedInstall(t *testing.T) {
 	}
 }
 
+func TestDistributorNeverLeaksPeerOrTransportResponseData(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	_, signer := testEd25519Identity(t)
+	targetID := testIdentityID(t)
+	bundle := testBundle(t, 1, now, now.Add(90*24*time.Hour))
+	marker := "ATTACKER\r\n100.64.0.8"
+	target := OriginTarget{Name: "desktop", Endpoint: "ws://100.64.0.8:7337/mesh", Identity: targetID}
+	cases := map[string]struct {
+		dialErr   error
+		responses []protocol.Control
+		readErr   error
+	}{
+		"dial":         {dialErr: errors.New(marker)},
+		"read":         {readErr: errors.New(marker)},
+		"remote error": {responses: []protocol.Control{{Type: protocol.TypeError, Message: marker + strings.Repeat("x", 4096)}}},
+		"wrong identity": {responses: []protocol.Control{{
+			Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: marker, MeshIdentity: marker},
+		}}},
+		"wrong acknowledgement": {responses: []protocol.Control{
+			{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: targetID, MeshIdentity: targetID}},
+			{Type: protocol.TypeCertificateInstalled, CertificateFingerprint: marker, CertificateEnvironment: marker, CertificateProfile: marker},
+		}},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			distributor := mustTestDistributor(t, DistributorConfig{
+				Profile: ProfilePrivateOrigin, Signer: signer, Environment: EnvironmentLive, Now: func() time.Time { return now },
+				Dial: func(context.Context, string) (transport.Conn, error) {
+					if testCase.dialErr != nil {
+						return nil, testCase.dialErr
+					}
+					return &scriptedDistributionConn{responses: append([]protocol.Control(nil), testCase.responses...), readErr: testCase.readErr}, nil
+				},
+			})
+			err := distributor.Distribute(context.Background(), bundle, []OriginTarget{target})
+			if err == nil {
+				t.Fatal("malformed peer response succeeded")
+			}
+			for _, secret := range []string{"ATTACKER", "100.64.0.8", targetID} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("distribution error leaked %q: %v", secret, err)
+				}
+			}
+		})
+	}
+}
+
+func TestDistributorDefaultDialNeverCrossesHostPinGeneration(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	_, signer := testEd25519Identity(t)
+	targetID := testIdentityID(t)
+	bundle := testBundle(t, 1, now, now.Add(90*24*time.Hour))
+	firstClosed := make(chan struct{})
+	certificateReceived := make(chan struct{}, 1)
+	var connections atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		generation := connections.Add(1)
+		serveErr := transport.ServeWithOptions(response, request, transport.ServeOptions{}, func(_ context.Context, connection transport.Conn) error {
+			frame, err := connection.ReadFrame()
+			if err != nil {
+				return err
+			}
+			control, err := protocol.DecodeControl(frame.Payload)
+			if err != nil {
+				return err
+			}
+			if generation != 1 {
+				if control.Type == protocol.TypeCertificateInstall {
+					certificateReceived <- struct{}{}
+				}
+				return nil
+			}
+			if control.Type != protocol.TypeHostInfo {
+				return errors.New("first generation did not receive host.info")
+			}
+			payload, err := (protocol.Control{
+				Type: protocol.TypeHostInfoResult, RequestID: control.RequestID,
+				Host: &protocol.HostInfo{ID: targetID, MeshIdentity: targetID},
+			}).Encode()
+			if err != nil {
+				return err
+			}
+			return connection.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload})
+		})
+		if generation == 1 {
+			close(firstClosed)
+		}
+		_ = serveErr
+	}))
+	defer server.Close()
+	var requestCount atomic.Uint64
+	distributor := mustTestDistributor(t, DistributorConfig{
+		Profile: ProfilePrivateOrigin, Signer: signer, Environment: EnvironmentLive, Now: func() time.Time { return now },
+		RequestID: func() (string, error) {
+			call := requestCount.Add(1)
+			if call == 2 {
+				select {
+				case <-firstClosed:
+				case <-time.After(time.Second):
+					return "", errors.New("first generation did not close")
+				}
+			}
+			return fmt.Sprintf("request-%d", call), nil
+		},
+	})
+	err := distributor.Distribute(context.Background(), bundle, []OriginTarget{{
+		Name: "desktop", Endpoint: "ws" + strings.TrimPrefix(server.URL, "http") + "/mesh", Identity: targetID,
+	}})
+	if err == nil {
+		t.Fatal("certificate install unexpectedly survived the pinned link closing")
+	}
+	time.Sleep(25 * time.Millisecond)
+	if got := connections.Load(); got != 1 {
+		t.Fatalf("default distributor opened %d peer generations, want 1", got)
+	}
+	select {
+	case <-certificateReceived:
+		t.Fatal("certificate crossed onto an unpinned replacement connection")
+	default:
+	}
+}
+
 func TestDistributorBoundsConcurrentOrigins(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	_, signer := testEd25519Identity(t)
@@ -284,7 +458,7 @@ func TestDistributorBoundsConcurrentOrigins(t *testing.T) {
 	var active atomic.Int64
 	var maximum atomic.Int64
 	distributor := mustTestDistributor(t, DistributorConfig{
-		Signer: signer, Environment: EnvironmentLive, ExpectedName: WildcardName, Concurrency: 2, Timeout: time.Second, Now: func() time.Time { return now },
+		Profile: ProfilePrivateOrigin, Signer: signer, Environment: EnvironmentLive, Concurrency: 2, Timeout: time.Second, Now: func() time.Time { return now },
 		Dial: func(ctx context.Context, _ string) (transport.Conn, error) {
 			current := active.Add(1)
 			defer active.Add(-1)
@@ -329,8 +503,10 @@ func TestDistributorBoundsConcurrentOrigins(t *testing.T) {
 
 func mustTestDistributor(t *testing.T, config DistributorConfig) *Distributor {
 	t.Helper()
-	var sequence atomic.Uint64
-	config.RequestID = func() (string, error) { return fmt.Sprintf("request-%d", sequence.Add(1)), nil }
+	if config.RequestID == nil {
+		var sequence atomic.Uint64
+		config.RequestID = func() (string, error) { return fmt.Sprintf("request-%d", sequence.Add(1)), nil }
+	}
 	distributor, err := NewDistributor(config)
 	if err != nil {
 		t.Fatal(err)
@@ -381,6 +557,45 @@ type distributionTestConn struct {
 	closed      bool
 }
 
+type scriptedDistributionConn struct {
+	responses []protocol.Control
+	response  protocol.Frame
+	readErr   error
+}
+
+func (c *scriptedDistributionConn) WriteFrame(frame protocol.Frame) error {
+	request, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return err
+	}
+	if len(c.responses) == 0 {
+		return nil
+	}
+	response := c.responses[0]
+	c.responses = c.responses[1:]
+	response.RequestID = request.RequestID
+	payload, err := response.Encode()
+	if err != nil {
+		return err
+	}
+	c.response = protocol.Frame{Kind: protocol.KindControl, Payload: payload}
+	return nil
+}
+
+func (c *scriptedDistributionConn) ReadFrame() (protocol.Frame, error) {
+	if c.readErr != nil {
+		return protocol.Frame{}, c.readErr
+	}
+	if c.response.Payload == nil {
+		return protocol.Frame{}, io.ErrUnexpectedEOF
+	}
+	response := c.response
+	c.response = protocol.Frame{}
+	return response, nil
+}
+
+func (*scriptedDistributionConn) Close() error { return nil }
+
 func newDistributionTestConn(t *testing.T, identity, signerID, fingerprint string, now time.Time) *distributionTestConn {
 	t.Helper()
 	return &distributionTestConn{t: t, identity: identity, signerID: signerID, fingerprint: fingerprint, now: now}
@@ -409,11 +624,11 @@ func (c *distributionTestConn) WriteFrame(frame protocol.Frame) error {
 			return errors.New("test connection received nil certificate")
 		}
 		bundle, err := VerifySignedBundle(SignedBundle{
-			Environment: RenewalEnvironment(request.Certificate.Environment),
-			TargetID:    request.Certificate.TargetID, SignerID: request.Certificate.SignerID,
+			Profile: CertificateProfile(request.Certificate.Profile), Environment: RenewalEnvironment(request.Certificate.Environment),
+			TargetID: request.Certificate.TargetID, SignerID: request.Certificate.SignerID,
 			CertificatePEM: request.Certificate.CertificatePEM, PrivateKeyPEM: request.Certificate.PrivateKeyPEM,
 			Signature: request.Certificate.Signature,
-		}, c.identity, c.signerID, WildcardName, c.now)
+		}, c.identity, c.signerID, c.now)
 		if err != nil {
 			response.Type = protocol.TypeError
 			response.Message = err.Error()
@@ -421,6 +636,7 @@ func (c *distributionTestConn) WriteFrame(frame protocol.Frame) error {
 			response.Type = protocol.TypeCertificateInstalled
 			response.CertificateFingerprint = bundle.Fingerprint
 			response.CertificateEnvironment = request.Certificate.Environment
+			response.CertificateProfile = request.Certificate.Profile
 			if response.CertificateFingerprint != c.fingerprint {
 				return fmt.Errorf("test installed fingerprint %s, want %s", response.CertificateFingerprint, c.fingerprint)
 			}

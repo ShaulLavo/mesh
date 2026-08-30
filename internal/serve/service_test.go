@@ -6,7 +6,7 @@ import (
 )
 
 func TestNormalizeRetainsExplicitPublicName(t *testing.T) {
-	for _, name := range []string{"", "shaulavo.dev", "blog.shaulavo.dev", "my-blog.shaulavo.dev", "api.blog.shaulavo.dev"} {
+	for _, name := range []string{"", "blog.shaulavo.dev", "my-blog.shaulavo.dev"} {
 		t.Run(name, func(t *testing.T) {
 			service, err := Normalize(Service{Name: "site", Kind: Proxy, Target: "3000", PublicName: name})
 			if err != nil {
@@ -21,6 +21,9 @@ func TestNormalizeRetainsExplicitPublicName(t *testing.T) {
 
 func TestNormalizeRejectsInvalidPublicName(t *testing.T) {
 	invalid := []string{
+		"shaulavo.dev",
+		"api.blog.shaulavo.dev",
+		"mesh.shaulavo.dev",
 		"*.shaulavo.dev",
 		"BLOG.shaulavo.dev",
 		"blog.shaulavo.dev.",

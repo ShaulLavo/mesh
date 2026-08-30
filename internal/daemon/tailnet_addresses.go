@@ -67,6 +67,23 @@ func validateTailscaleServeAddresses(addresses []string) error {
 	return errors.New("daemon: Tailscale Serve requires a discovered IPv4 address in 100.64.0.0/10")
 }
 
+func validateTailscaleControlAddresses(addresses []string) error {
+	if len(addresses) == 0 {
+		return errors.New("daemon: Tailnet control requires at least one Tailscale address")
+	}
+	for _, value := range addresses {
+		address, err := netip.ParseAddr(value)
+		if err != nil {
+			return fmt.Errorf("daemon: validate Tailnet control address %q: %w", value, err)
+		}
+		address = address.Unmap()
+		if !tailscaleIPv4Prefix.Contains(address) && !tailscaleIPv6Prefix.Contains(address) {
+			return fmt.Errorf("daemon: Tailnet control address %s is outside the Tailscale IPv4 and IPv6 ranges", address)
+		}
+	}
+	return nil
+}
+
 func monitorTailnetAddresses(
 	ctx context.Context,
 	interval time.Duration,

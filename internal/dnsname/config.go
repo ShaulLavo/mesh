@@ -43,16 +43,18 @@ type PrivateNamesConfig struct {
 	AcceptTerms  bool
 	Interval     time.Duration
 	Origins      []PrivateOrigin
+	PublicEdge   *PublicEdgeTarget
 }
 
 type privateNamesConfigFile struct {
-	ZoneID       string          `json:"zoneId"`
-	TokenFile    string          `json:"tokenFile"`
-	ACMEEmail    string          `json:"acmeEmail"`
-	DirectoryURL string          `json:"directoryUrl"`
-	AcceptTerms  bool            `json:"acceptTerms"`
-	Interval     string          `json:"interval"`
-	Origins      []PrivateOrigin `json:"origins"`
+	ZoneID       string            `json:"zoneId"`
+	TokenFile    string            `json:"tokenFile"`
+	ACMEEmail    string            `json:"acmeEmail"`
+	DirectoryURL string            `json:"directoryUrl"`
+	AcceptTerms  bool              `json:"acceptTerms"`
+	Interval     string            `json:"interval"`
+	Origins      []PrivateOrigin   `json:"origins"`
+	PublicEdge   *PublicEdgeTarget `json:"publicEdge"`
 }
 
 // LoadPrivateNamesConfig strictly parses one Pi configuration file without
@@ -120,9 +122,19 @@ func LoadPrivateNamesConfig(configPath string) (PrivateNamesConfig, error) {
 			return PrivateNamesConfig{}, fmt.Errorf("dnsname: private origin %d: %w", index, err)
 		}
 	}
+	if raw.PublicEdge != nil {
+		if err := validatePublicEdgeTarget(*raw.PublicEdge); err != nil {
+			return PrivateNamesConfig{}, fmt.Errorf("dnsname: public edge: %w", err)
+		}
+	}
+	var publicEdge *PublicEdgeTarget
+	if raw.PublicEdge != nil {
+		copyTarget := *raw.PublicEdge
+		publicEdge = &copyTarget
+	}
 	return PrivateNamesConfig{
 		ZoneID: raw.ZoneID, TokenFile: raw.TokenFile, ACMEEmail: raw.ACMEEmail, DirectoryURL: raw.DirectoryURL, Environment: environment,
-		AcceptTerms: raw.AcceptTerms, Interval: interval, Origins: append([]PrivateOrigin(nil), raw.Origins...),
+		AcceptTerms: raw.AcceptTerms, Interval: interval, Origins: append([]PrivateOrigin(nil), raw.Origins...), PublicEdge: publicEdge,
 	}, nil
 }
 
@@ -182,9 +194,10 @@ type PrivateNamesRuntimeOptions struct {
 
 // PrivateNamesRuntime is one fully wired operational reconciliation loop.
 type PrivateNamesRuntime struct {
-	Manager     *PrivateNamesManager
-	Environment RenewalEnvironment
-	Interval    time.Duration
+	Manager       *PrivateNamesManager
+	PublicManager *PublicCertificateManager
+	Environment   RenewalEnvironment
+	Interval      time.Duration
 }
 
 // NewPrivateNamesRuntime wires Cloudflare, authoritative DNS observation,
@@ -228,7 +241,7 @@ func NewPrivateNamesRuntime(configPath string, options PrivateNamesRuntimeOption
 	}
 	var distributor CertificateDistributor
 	if options.Distribute {
-		distributor, err = NewDistributor(DistributorConfig{Signer: options.Signer, Environment: environment, ExpectedName: WildcardName})
+		distributor, err = NewDistributor(DistributorConfig{Profile: ProfilePrivateOrigin, Signer: options.Signer, Environment: environment})
 		if err != nil {
 			return nil, err
 		}
@@ -248,5 +261,31 @@ func NewPrivateNamesRuntime(configPath string, options PrivateNamesRuntimeOption
 	if err != nil {
 		return nil, err
 	}
-	return &PrivateNamesRuntime{Manager: manager, Environment: environment, Interval: config.Interval}, nil
+	var publicManager *PublicCertificateManager
+	if config.PublicEdge != nil {
+		publicState := filepath.Join(stateDir, "public-edge", string(environment))
+		publicIssuer, err := NewIssuer(IssuerConfig{
+			DirectoryURL: directoryURL, Email: config.ACMEEmail, StateDir: publicState, Name: PublicWildcardName,
+			AcceptTerms: config.AcceptTerms || options.AcceptTerms,
+			Solver:      DNS01Solver{Provider: provider, Observer: AuthoritativeObserver{}, Zone: Zone},
+		})
+		if err != nil {
+			return nil, err
+		}
+		var publicDistributor CertificateDistributor
+		if options.Distribute {
+			publicDistributor, err = NewDistributor(DistributorConfig{Profile: ProfilePublicEdge, Signer: options.Signer, Environment: environment})
+			if err != nil {
+				return nil, err
+			}
+		}
+		publicManager, err = NewPublicCertificateManager(PublicCertificateManagerConfig{
+			Renewer: publicIssuer, Distributor: publicDistributor, Target: *config.PublicEdge,
+			DiscoverSelf: discoverSelf, DiscoverPeers: discoverPeers,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &PrivateNamesRuntime{Manager: manager, PublicManager: publicManager, Environment: environment, Interval: config.Interval}, nil
 }

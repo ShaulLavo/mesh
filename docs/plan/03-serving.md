@@ -9,21 +9,22 @@ doors.
 
 ## Two names, two audiences
 
-| | `mesh.shaulavo.dev` | `shaulavo.dev` |
+| | `<host>.mesh.shaulavo.dev` | `<name>.shaulavo.dev` |
 |---|---|---|
 | Audience | tailnet only | the internet |
 | Resolves to | tailnet `100.x` addresses | the VPS public IP |
 | Reached by | direct, host to host | through the VPS edge |
 | Default | yes | needs `--public` |
 
-`mesh.shaulavo.dev` is private. Its DNS records point at tailnet addresses, so it
-only resolves to anything reachable if you are on the tailnet. Everyone else gets
-an address they cannot route to.
+`mesh.shaulavo.dev` is the private namespace. Its per-host DNS records point at
+tailnet addresses, so they resolve to something reachable only from the
+tailnet. Everyone else gets an address they cannot route to.
 
 Certificates work anyway. Let's Encrypt DNS-01 validates by publishing a TXT
-record, never by connecting to the host, so `mesh.shaulavo.dev` gets a real
-publicly-trusted certificate despite pointing at unroutable addresses. No custom
-CA, no browser warnings, no per-device trust store surgery.
+record, never by connecting to the host, so `*.mesh.shaulavo.dev` gets a real
+publicly trusted certificate despite the per-host records pointing at
+unroutable addresses. No custom CA, no browser warnings, no per-device trust
+store surgery.
 
 ## What you can serve
 
@@ -37,13 +38,13 @@ CA, no browser warnings, no per-device trust store surgery.
 Tailnet                                    Internet
    │                                          │
    ▼                                          ▼
-mesh.shaulavo.dev              shaulavo.dev / blog.shaulavo.dev
+pc.mesh.shaulavo.dev                 blog.shaulavo.dev
 (A → tailnet addresses)     (A → VPS public IP)
    │                                          │
    │  direct, no proxy                        ▼
-   │                              VPS · mesh daemon, edge mode
-   │                                · terminates TLS
-   │                                · routes to origins
+   │                              VPS · TLS front door
+   │                                  · mesh daemon, edge mode
+   │                                  · routes to origins
    │                                          │
    └──────────────┬───────────────────────────┘
                   ▼
@@ -97,19 +98,20 @@ never transits the VPS.
 
 **Mesh never claims the `shaulavo.dev` apex.** That is your site, not Mesh's. Every
 public route is named explicitly per service. Mesh will refuse to bind a public
-name it was not told to bind.
+name it was not told to bind. D16 narrows D15's explicit-name rule: typing the
+apex does not authorize Mesh to serve it.
 
 **Tailnet-only by default.** Serving a directory is one keystroke from publishing
 your home folder.
 
-**Wildcard certificates from day one.** `*.mesh.shaulavo.dev` needs DNS-01 regardless,
-so build the DNS-01 plumbing first rather than starting with HTTP-01 and
-retrofitting. One provider credential, stored like any other secret.
+**Wildcard certificates from day one.** `*.mesh.shaulavo.dev` needs DNS-01
+regardless. The optional direct-TLS edge also uses DNS-01 for
+`*.shaulavo.dev`. The two certificate profiles use separate state and cannot
+install into each other's serving slot.
 
-**An offline origin returns 502, honestly.** No silent staleness. A public service
-backed by the desktop can opt into `--wake-on-request`, which uses the Pi's
-wake-on-LAN from step 6 and holds the request with a bounded deadline. That is
-the payoff for having already built waking.
+**An offline origin returns 502, honestly.** No silent staleness. T13 keeps
+`--wake-on-request` behind a bounded interface, but rejects a public wake route
+until the Pi exposes a power-control API that the edge can call.
 
 ## Tasks
 
@@ -159,40 +161,6 @@ If it turns out to be Cloudflare, the public Mesh routes could sit behind
 Cloudflare too, which hides the VPS address and absorbs abuse. The tradeoff is
 that Cloudflare terminates TLS and therefore sees that traffic. Worth deciding
 deliberately rather than by default.
-
-## Tasks
-
-- `T11-serving-core.md` — service types, registry, origin-side serving
-- `T12-private-names.md` — DNS and TLS for `mesh.shaulavo.dev`, per-host routing
-- `T13-public-edge.md` — VPS edge mode, public routes on `shaulavo.dev`
-- `T14-serve-cli.md` — `m serve`, `m unserve`, `m serve ls`
-
-## Explicitly not in step 8
-
-Arbitrary TCP tunnels, per-service authentication beyond public or tailnet,
-multi-user access control, the tidy `mesh.shaulavo.dev/<name>` alias, and anything
-resembling a build or deploy pipeline.
-
-## The apex
-
-`shaulavo.dev` serves nothing today, but it will. When the personal site arrives,
-the simplest thing is for it to be a Mesh service like any other:
-
-```bash
-m serve vps ./site --public shaulavo.dev
-```
-
-One TLS terminator, one routing table, and the site gets the same restart and
-health behaviour as everything else. No coexistence problem, because there is
-nothing to coexist with.
-
-The alternative is running Caddy or nginx on the VPS and putting the Mesh edge
-behind it. That is a real option if the site outgrows static files, so the edge
-must be able to run on a port other than 443 and behind a proxy that terminates
-TLS for it. Support that from the start. It costs a configuration flag now and a
-rewrite later.
-
-What the edge must never do is assume it owns port 443 by right.
 
 ## The browser is not the only file client
 

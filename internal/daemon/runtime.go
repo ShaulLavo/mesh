@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -25,9 +27,11 @@ const (
 	daemonSocketName = "daemon.sock"
 	daemonLockName   = "daemon.lock"
 
-	staleSocketProbeTimeout = 200 * time.Millisecond
-	httpReadHeaderTimeout   = 5 * time.Second
-	httpShutdownTimeout     = 2 * time.Second
+	staleSocketProbeTimeout  = 200 * time.Millisecond
+	httpReadHeaderTimeout    = 5 * time.Second
+	httpShutdownTimeout      = 2 * time.Second
+	maximumPublicConnections = 512
+	maximumPublicHeaderBytes = 64 << 10
 )
 
 // A replacement entry gets the current time, even if the filesystem reuses the
@@ -53,6 +57,9 @@ type ListenerConfig struct {
 	HTTPHandler                http.Handler
 	HTTPSPort                  uint16
 	TLSConfig                  *tls.Config
+	PublicListenAddress        string
+	PublicHTTPHandler          http.Handler
+	PublicTLSConfig            *tls.Config
 	RequireAllTailnetListeners bool
 	ReportError                func(error)
 }
@@ -65,6 +72,9 @@ type listenerConfig struct {
 	httpHandler                http.Handler
 	httpsPort                  uint16
 	tlsConfig                  *tls.Config
+	publicListenAddress        string
+	publicHTTPHandler          http.Handler
+	publicTLSConfig            *tls.Config
 	requireAllTailnetListeners bool
 	shutdownTimeout            time.Duration
 	reporter                   *errorReporter
@@ -99,6 +109,7 @@ func Serve(ctx context.Context, cfg ListenerConfig, handler transport.Handler) e
 // shares its lifetime, such as catalog polling and lifecycle publication.
 func serveListeners(ctx context.Context, cancel context.CancelFunc, normalized listenerConfig, handler transport.Handler) error {
 	defer cancel()
+	defer normalized.reporter.shutdown()
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -130,7 +141,21 @@ func serveListeners(ctx context.Context, cancel context.CancelFunc, normalized l
 			return errors.Join(fmt.Errorf("daemon: bind HTTPS loopback listener: %w", err), errors.Join(closeErrors...))
 		}
 	}
-	return serveBoundListeners(ctx, cancel, normalized, handler, unixListener, tailnetListeners, httpsListener)
+	var publicListener net.Listener
+	if normalized.publicListenAddress != "" {
+		publicListener, err = net.Listen("tcp", normalized.publicListenAddress)
+		if err != nil {
+			closeErrors := []error{unixListener.Close()}
+			for _, listener := range tailnetListeners {
+				closeErrors = append(closeErrors, listener.Close())
+			}
+			if httpsListener != nil {
+				closeErrors = append(closeErrors, httpsListener.Close())
+			}
+			return errors.Join(fmt.Errorf("daemon: bind public edge listener: %w", err), errors.Join(closeErrors...))
+		}
+	}
+	return serveBoundListeners(ctx, cancel, normalized, handler, unixListener, tailnetListeners, httpsListener, publicListener)
 }
 
 func serveBoundListeners(
@@ -141,7 +166,14 @@ func serveBoundListeners(
 	unixListener net.Listener,
 	tailnetListeners []net.Listener,
 	httpsListener net.Listener,
+	publicListener net.Listener,
 ) error {
+	defer normalized.reporter.shutdown()
+	var boundedPublic *boundedPublicListener
+	if publicListener != nil {
+		boundedPublic = newBoundedPublicListener(publicListener, maximumPublicConnections)
+		publicListener = boundedPublic
+	}
 	connections := newConnectionGroup(handler)
 	server := newWebSocketServer(ctx, normalized, connections)
 	var httpsServer *http.Server
@@ -151,6 +183,15 @@ func serveBoundListeners(
 			ReadHeaderTimeout: httpReadHeaderTimeout,
 			BaseContext:       func(net.Listener) context.Context { return ctx },
 			TLSConfig:         normalized.tlsConfig,
+		}
+	}
+	var publicServer *http.Server
+	if publicListener != nil {
+		publicServer = &http.Server{
+			Handler: normalized.publicHTTPHandler, ReadHeaderTimeout: httpReadHeaderTimeout,
+			IdleTimeout: 30 * time.Second, MaxHeaderBytes: maximumPublicHeaderBytes,
+			BaseContext: func(net.Listener) context.Context { return ctx }, TLSConfig: normalized.publicTLSConfig,
+			ErrorLog: log.New(io.Discard, "", 0),
 		}
 	}
 	var listenerWG sync.WaitGroup
@@ -184,6 +225,22 @@ func serveBoundListeners(
 			}
 		})
 	}
+	if publicServer != nil {
+		listenerWG.Go(func() {
+			var serveErr error
+			if normalized.publicTLSConfig != nil {
+				serveErr = publicServer.ServeTLS(publicListener, "", "")
+			} else {
+				serveErr = publicServer.Serve(publicListener)
+			}
+			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) && ctx.Err() == nil {
+				select {
+				case fatal <- fmt.Errorf("daemon: serve public edge on %s: %w", publicListener.Addr(), serveErr):
+				default:
+				}
+			}
+		})
+	}
 	var runErr error
 	if normalized.ready != nil {
 		if err := normalized.ready(ctx); err != nil && ctx.Err() == nil {
@@ -211,9 +268,103 @@ func serveBoundListeners(
 			closeErr = errors.Join(closeErr, fmt.Errorf("daemon: close HTTPS server: %w", err))
 		}
 	}
+	if publicServer != nil {
+		if err := shutdownHTTPServer(publicServer, normalized.shutdownTimeout); err != nil {
+			closeErr = errors.Join(closeErr, fmt.Errorf("daemon: close public edge server: %w", err))
+		}
+		closeErr = errors.Join(closeErr, boundedPublic.closeActive())
+	}
 	listenerWG.Wait()
 	connections.wait()
 	return errors.Join(runErr, closeErr)
+}
+
+type boundedPublicListener struct {
+	net.Listener
+	maximum   chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
+	mu        sync.Mutex
+	closed    bool
+	active    map[*boundedPublicConn]struct{}
+}
+
+type boundedPublicConn struct {
+	net.Conn
+	owner *boundedPublicListener
+	once  sync.Once
+}
+
+func newBoundedPublicListener(listener net.Listener, maximum int) *boundedPublicListener {
+	return &boundedPublicListener{
+		Listener: listener, maximum: make(chan struct{}, maximum), done: make(chan struct{}),
+		active: make(map[*boundedPublicConn]struct{}),
+	}
+}
+
+func (l *boundedPublicListener) Accept() (net.Conn, error) {
+	select {
+	case l.maximum <- struct{}{}:
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
+	connection, err := l.Listener.Accept()
+	if err != nil {
+		<-l.maximum
+		return nil, err
+	}
+	tracked := &boundedPublicConn{Conn: connection, owner: l}
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		_ = connection.Close()
+		<-l.maximum
+		return nil, net.ErrClosed
+	}
+	l.active[tracked] = struct{}{}
+	l.mu.Unlock()
+	return tracked, nil
+}
+
+func (l *boundedPublicListener) Close() error {
+	var result error
+	l.closeOnce.Do(func() {
+		close(l.done)
+		result = l.Listener.Close()
+		l.mu.Lock()
+		l.closed = true
+		l.mu.Unlock()
+	})
+	return result
+}
+
+func (l *boundedPublicListener) closeActive() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	connections := make([]*boundedPublicConn, 0, len(l.active))
+	for connection := range l.active {
+		connections = append(connections, connection)
+	}
+	l.mu.Unlock()
+	var result error
+	for _, connection := range connections {
+		result = errors.Join(result, connection.Close())
+	}
+	return result
+}
+
+func (c *boundedPublicConn) Close() error {
+	var result error
+	c.once.Do(func() {
+		result = c.Conn.Close()
+		c.owner.mu.Lock()
+		delete(c.owner.active, c)
+		c.owner.mu.Unlock()
+		<-c.owner.maximum
+	})
+	return result
 }
 
 func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler transport.Handler) (listenerConfig, error) {
@@ -240,12 +391,35 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		webSocketPath:              cfg.WebSocketPath,
 		httpHandler:                cfg.HTTPHandler,
 		httpsPort:                  cfg.HTTPSPort,
+		publicListenAddress:        cfg.PublicListenAddress,
+		publicHTTPHandler:          cfg.PublicHTTPHandler,
 		requireAllTailnetListeners: cfg.RequireAllTailnetListeners,
 		shutdownTimeout:            httpShutdownTimeout,
 		reporter:                   newErrorReporter(cfg.ReportError),
 	}
 	if cfg.HTTPSPort == 0 && cfg.TLSConfig != nil {
 		return listenerConfig{}, errors.New("daemon: TLS config requires a non-zero HTTPS port")
+	}
+	if cfg.PublicListenAddress == "" {
+		if cfg.PublicHTTPHandler != nil || cfg.PublicTLSConfig != nil {
+			return listenerConfig{}, errors.New("daemon: public edge handler or TLS config requires a listen address")
+		}
+	} else {
+		if cfg.PublicHTTPHandler == nil {
+			return listenerConfig{}, errors.New("daemon: public edge listener requires an HTTP handler")
+		}
+		if cfg.PublicTLSConfig != nil {
+			if cfg.PublicTLSConfig.GetCertificate == nil {
+				return listenerConfig{}, errors.New("daemon: public TLS listener requires GetCertificate")
+			}
+			normalized.publicTLSConfig = cfg.PublicTLSConfig.Clone()
+			if normalized.publicTLSConfig.MinVersion == 0 {
+				normalized.publicTLSConfig.MinVersion = tls.VersionTLS12
+			}
+			if normalized.publicTLSConfig.MinVersion < tls.VersionTLS12 {
+				return listenerConfig{}, errors.New("daemon: public TLS listener requires TLS 1.2 or newer")
+			}
+		}
 	}
 	if cfg.HTTPSPort != 0 {
 		if cfg.HTTPHandler == nil {
@@ -305,8 +479,9 @@ func serviceOnlyHTTPSHandler(webSocketPath string, services http.Handler) http.H
 }
 
 func validateWebSocketPath(value string) error {
-	parsed, err := url.ParseRequestURI(value)
-	if err != nil || value == "" || value[0] != '/' || parsed.IsAbs() || parsed.Host != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+	parsed, err := url.Parse(value)
+	if err != nil || value == "" || value[0] != '/' || strings.Contains(value, "\\") || parsed.IsAbs() || parsed.Host != "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" || parsed.Opaque != "" || parsed.ForceQuery || parsed.EscapedPath() != value {
 		return fmt.Errorf("daemon: WebSocket path %q must be an absolute path without a query or fragment", value)
 	}
 	if cleaned := path.Clean(value); cleaned != value {
@@ -645,19 +820,53 @@ func (l *ownedUnixListener) Close() error {
 }
 
 type errorReporter struct {
-	mu sync.Mutex
-	fn func(error)
+	fn    func(error)
+	queue chan error
+	done  chan struct{}
+	stop  chan struct{}
+	start sync.Once
+	close sync.Once
 }
 
 func newErrorReporter(report func(error)) *errorReporter {
 	if report == nil {
 		report = func(err error) { log.Printf("%v", err) }
 	}
-	return &errorReporter{fn: report}
+	return &errorReporter{fn: report, queue: make(chan error, 64), done: make(chan struct{}), stop: make(chan struct{})}
 }
 
 func (r *errorReporter) report(err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.fn(err)
+	if r == nil || err == nil {
+		return
+	}
+	select {
+	case <-r.done:
+		return
+	default:
+	}
+	r.start.Do(func() {
+		go func() {
+			defer close(r.stop)
+			for {
+				select {
+				case <-r.done:
+					return
+				case queued := <-r.queue:
+					r.fn(queued)
+				}
+			}
+		}()
+	})
+	select {
+	case r.queue <- err:
+	case <-r.done:
+	default:
+	}
+}
+
+func (r *errorReporter) shutdown() {
+	if r == nil {
+		return
+	}
+	r.close.Do(func() { close(r.done) })
 }

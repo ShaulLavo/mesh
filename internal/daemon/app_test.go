@@ -243,3 +243,59 @@ func TestRunLosingDaemonCannotMutateCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRunRejectsPiCredentialsInPublicEdgeRole(t *testing.T) {
+	originHost, _, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "edge.json")
+	contents := fmt.Sprintf(`{"mode":"proxy","origins":[{"identity":%q,"displayAlias":"origin","tailscaleName":"origin.example.ts.net","controlPort":7337,"websocketPath":"/mesh"}]}`, originHost.ID)
+	if err := os.WriteFile(configPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = run(context.Background(), Config{
+		StateDir: t.TempDir(), EdgeConfig: configPath, PrivateNamesConfig: filepath.Join(t.TempDir(), "must-not-be-read.json"),
+	}, runOptions{
+		now: func() time.Time { return catalogTestTime }, bootID: func() string { return "boot" },
+		discoverSelf: func(context.Context) (tailnet.Peer, error) { return tailnet.Peer{}, nil }, reconcileInterval: time.Hour,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Pi-only") {
+		t.Fatalf("Run error = %v, want role-boundary rejection", err)
+	}
+}
+
+func TestRunShutdownDoesNotWaitForBlockedErrorSink(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	reportStarted := make(chan struct{})
+	releaseReport := make(chan struct{})
+	defer close(releaseReport)
+	stateDir := t.TempDir()
+	go func() {
+		done <- run(ctx, Config{
+			StateDir: stateDir, TailnetPort: 7337,
+			ReportError: func(error) {
+				close(reportStarted)
+				<-releaseReport
+			},
+		}, runOptions{
+			now: func() time.Time { return catalogTestTime }, bootID: func() string { return "boot" },
+			discoverSelf: func(context.Context) (tailnet.Peer, error) {
+				return tailnet.Peer{}, errors.New("tailscale unavailable")
+			},
+			reconcileInterval: time.Hour,
+		})
+	}()
+	client := dialUnixRuntime(t, SocketPath(stateDir))
+	_ = client.Close()
+	select {
+	case <-reportStarted:
+	case <-time.After(runtimeTestTimeout):
+		t.Fatal("error callback did not start")
+	}
+	cancel()
+	if err := waitRuntime(t, done); err != nil {
+		t.Fatal(err)
+	}
+}

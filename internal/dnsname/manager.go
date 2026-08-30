@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/shaul/mesh/internal/tailnet"
@@ -24,6 +25,16 @@ const (
 // current Tailscale peer and direct control listener.
 type PrivateOrigin struct {
 	Name          string `json:"name"`
+	TailscaleName string `json:"tailscaleName"`
+	Identity      string `json:"identity"`
+	ControlPort   uint16 `json:"controlPort"`
+	WebSocketPath string `json:"websocketPath"`
+}
+
+// PublicEdgeTarget is the one identity-pinned VPS certificate recipient. It
+// deliberately carries no DNS record name; public A records remain outside
+// Mesh ownership.
+type PublicEdgeTarget struct {
 	TailscaleName string `json:"tailscaleName"`
 	Identity      string `json:"identity"`
 	ControlPort   uint16 `json:"controlPort"`
@@ -247,20 +258,28 @@ func validatePrivateOrigin(origin PrivateOrigin) error {
 	if _, err := privateHostName(origin.Name); err != nil {
 		return err
 	}
-	if canonical, err := canonicalDNSName(origin.TailscaleName); err != nil || canonical != origin.TailscaleName {
-		return fmt.Errorf("invalid canonical Tailscale name %q", origin.TailscaleName)
+	return validateCertificateTarget(origin.TailscaleName, origin.Identity, origin.ControlPort, origin.WebSocketPath)
+}
+
+func validatePublicEdgeTarget(target PublicEdgeTarget) error {
+	return validateCertificateTarget(target.TailscaleName, target.Identity, target.ControlPort, target.WebSocketPath)
+}
+
+func validateCertificateTarget(tailscaleName, identity string, controlPort uint16, webSocketPath string) error {
+	if canonical, err := canonicalDNSName(tailscaleName); err != nil || canonical != tailscaleName {
+		return fmt.Errorf("invalid canonical Tailscale name %q", tailscaleName)
 	}
-	if _, err := decodeIdentity("origin", origin.Identity); err != nil {
+	if _, err := decodeIdentity("certificate target", identity); err != nil {
 		return err
 	}
-	if origin.ControlPort == 0 {
+	if controlPort == 0 {
 		return errors.New("control port must be non-zero")
 	}
-	parsed, err := url.ParseRequestURI(origin.WebSocketPath)
-	if err != nil || origin.WebSocketPath == "" || origin.WebSocketPath[0] != '/' || parsed.IsAbs() || parsed.Host != "" ||
+	parsed, err := url.Parse(webSocketPath)
+	if err != nil || webSocketPath == "" || webSocketPath[0] != '/' || strings.Contains(webSocketPath, "\\") || parsed.IsAbs() || parsed.Host != "" || parsed.User != nil ||
 		parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" || parsed.Opaque != "" || parsed.ForceQuery ||
-		path.Clean(origin.WebSocketPath) != origin.WebSocketPath {
-		return fmt.Errorf("WebSocket path %q must be a clean absolute path without query or fragment", origin.WebSocketPath)
+		parsed.EscapedPath() != webSocketPath || path.Clean(webSocketPath) != webSocketPath {
+		return fmt.Errorf("WebSocket path %q must be a clean absolute path without query or fragment", webSocketPath)
 	}
 	return nil
 }

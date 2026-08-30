@@ -26,7 +26,7 @@ func TestClientServerDispatchesRelayAndLifecycleFrames(t *testing.T) {
 	controlWorker := newServerTestConn()
 	workers := newServerTestConnector(worker)
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, newServerTestConnector(controlWorker))
-	server, err := newClientServer(lifecycle, workers, noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, workers, disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestClientServerDispatchesRelayAndLifecycleFrames(t *testing.T) {
 func TestClientServerReturnsCorrelatedRequestErrorsAndContinues(t *testing.T) {
 	client := newServerTestConn()
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestClientServerSerializesLifecycleAndRelayWrites(t *testing.T) {
 	workers := newServerTestConnector(worker)
 	listCalled := make(chan struct{}, 1)
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{listCalled: listCalled}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, workers, noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, workers, disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestClientServerSerializesLifecycleAndRelayWrites(t *testing.T) {
 
 func TestClientServerTreatsClientTerminationAsNormal(t *testing.T) {
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestClientServerTreatsClientTerminationAsNormal(t *testing.T) {
 
 func TestClientServerContextCancellationClosesBlockedClient(t *testing.T) {
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,19 +250,22 @@ func TestClientServerContextCancellationClosesBlockedClient(t *testing.T) {
 
 func TestNewClientServerRejectsNilDependencies(t *testing.T) {
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	if _, err := newClientServer(nil, failingServerTestConnector(), noServiceControl{}, disabledCertificateController{}); err == nil {
+	if _, err := newClientServer(nil, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{}); err == nil {
 		t.Fatal("nil lifecycle accepted")
 	}
-	if _, err := newClientServer(lifecycle, nil, noServiceControl{}, disabledCertificateController{}); err == nil {
+	if _, err := newClientServer(lifecycle, nil, disabledEdgeController{}, noServiceControl{}, disabledCertificateController{}); err == nil {
 		t.Fatal("nil worker connector accepted")
 	}
-	if _, err := newClientServer(lifecycle, failingServerTestConnector(), nil, disabledCertificateController{}); err == nil {
+	if _, err := newClientServer(lifecycle, failingServerTestConnector(), nil, noServiceControl{}, disabledCertificateController{}); err == nil {
+		t.Fatal("nil edge controller accepted")
+	}
+	if _, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, nil, disabledCertificateController{}); err == nil {
 		t.Fatal("nil service controller accepted")
 	}
-	if _, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, nil); err == nil {
+	if _, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, nil); err == nil {
 		t.Fatal("nil certificate controller accepted")
 	}
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -94,6 +94,22 @@ func Dial(ctx context.Context, url string, opts DialOptions) (Conn, error) {
 	}, nil
 }
 
+// DialOnce opens one WebSocket link and never reconnects it. Use this for
+// authenticated request sequences whose trust pin applies to one exact peer
+// generation.
+func DialOnce(ctx context.Context, url string, opts DialOptions) (Conn, error) {
+	normalized, err := normalizeDialOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	dialOpts := websocket.DialOptions{
+		HTTPClient:      opts.HTTPClient,
+		HTTPHeader:      cloneHeader(opts.HTTPHeader),
+		CompressionMode: websocket.CompressionDisabled,
+	}
+	return dialSocket(ctx, url, dialOpts, normalized.keepAlive)
+}
+
 func dialLink(ctx context.Context, url string, opts websocket.DialOptions, keepAlive KeepAlive) (linkConn, error) {
 	return dialSocket(ctx, url, opts, keepAlive)
 }

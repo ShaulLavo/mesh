@@ -60,7 +60,7 @@ func TestStoreServiceLifecycleSurvivesReopen(t *testing.T) {
 
 	updated := want
 	updated.Kind = meshserve.Static
-	updated.PublicName = "shaulavo.dev"
+	updated.PublicName = "site.shaulavo.dev"
 	updated.WakeOnRequest = false
 	if _, err := store.UpsertService(ctx, updated); err != nil {
 		t.Fatal(err)

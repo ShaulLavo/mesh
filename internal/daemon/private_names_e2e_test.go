@@ -51,13 +51,13 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 		t.Fatal(err)
 	}
 	installer, err := dnsname.NewInstaller(dnsname.InstallerConfig{
-		LiveSource: liveSource, StagingStore: stagingStore, TargetID: targetID, SignerID: signerID,
-		ExpectedName: dnsname.WildcardName, Now: func() time.Time { return now },
+		Profile: dnsname.ProfilePrivateOrigin, LiveSource: liveSource, StagingStore: stagingStore, TargetID: targetID, SignerID: signerID,
+		Now: func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	certificateControl, err := newCertificateController(installer)
+	certificateControl, err := newCertificateController(map[dnsname.CertificateProfile]certificateInstaller{dnsname.ProfilePrivateOrigin: installer})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientServer, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, certificateControl)
+	clientServer, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, certificateControl)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 	}
 	requestNumber := 0
 	distributor, err := dnsname.NewDistributor(dnsname.DistributorConfig{
-		Signer: signer, Environment: dnsname.EnvironmentStaging, ExpectedName: dnsname.WildcardName,
+		Profile: dnsname.ProfilePrivateOrigin, Signer: signer, Environment: dnsname.EnvironmentStaging,
 		Now: func() time.Time { return now },
 		RequestID: func() (string, error) {
 			requestNumber++
