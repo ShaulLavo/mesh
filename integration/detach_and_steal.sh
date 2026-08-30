@@ -4,7 +4,12 @@
 # first (single attacher, steal on attach).
 set -uo pipefail
 
-MESH=${MESH:-$PWD/mesh}
+# Build unless the caller pointed at a binary of their own. A stale ./mesh
+# fails these scripts for reasons that have nothing to do with the code.
+if [ -z "${MESH:-}" ]; then
+  MESH=$PWD/mesh
+  go build -o "$MESH" ./cmd/mesh || { echo "FAIL: build" >&2; exit 1; }
+fi
 T=$(mktemp -d)
 export MESH_STATE_DIR="$T/state"
 trap 'rm -rf "$T"' EXIT
