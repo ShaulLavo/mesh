@@ -41,6 +41,10 @@ WHERE public_name = ? AND service_name = ?;
 DELETE FROM edge_routes
 WHERE origin_id = ?;
 
+-- name: DeleteEdgeSnapshot :exec
+DELETE FROM edge_snapshots
+WHERE origin_id = ?;
+
 -- name: InsertEdgeRoute :exec
 INSERT INTO edge_routes (origin_id, public_name, service_name, wake_on_request)
 VALUES (?, ?, ?, ?);

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -64,6 +65,11 @@ func List() ([]Session, error) {
 	return out, nil
 }
 
+// ErrNoLocalSession reports that an ID names no session on this host. It is
+// distinct from a failure to read the session directory: the caller falls back
+// to the remote catalog on the former and must never swallow the latter.
+var ErrNoLocalSession = errors.New("session not found on this host")
+
 // Find returns the session with the given ID.
 func Find(id string) (Session, error) {
 	id = session.NormalizeID(id)
@@ -76,7 +82,7 @@ func Find(id string) (Session, error) {
 			return s, nil
 		}
 	}
-	return Session{}, fmt.Errorf("no session %s on this host", id)
+	return Session{}, fmt.Errorf("no session %s on this host: %w", id, ErrNoLocalSession)
 }
 
 // Latest returns the most recent session that is still answering.

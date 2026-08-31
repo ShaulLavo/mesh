@@ -39,6 +39,16 @@ func (q *Queries) DeleteEdgeRoutesForOrigin(ctx context.Context, originID string
 	return err
 }
 
+const deleteEdgeSnapshot = `-- name: DeleteEdgeSnapshot :exec
+DELETE FROM edge_snapshots
+WHERE origin_id = ?
+`
+
+func (q *Queries) DeleteEdgeSnapshot(ctx context.Context, originID string) error {
+	_, err := q.db.ExecContext(ctx, deleteEdgeSnapshot, originID)
+	return err
+}
+
 const getEdgeOutbox = `-- name: GetEdgeOutbox :one
 SELECT target_id, sequence, digest, snapshot_json, acknowledged
 FROM edge_outbox

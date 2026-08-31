@@ -314,6 +314,7 @@ type memoryStateStore struct {
 	failAtApplyCount int
 	applyCount       int
 	commitThenError  bool
+	deleted          []string
 }
 
 func newMemoryStateStore() *memoryStateStore {
@@ -366,4 +367,66 @@ func (s *memoryStateStore) LoadEdgeState(context.Context) ([]StoredOrigin, error
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Snapshot.OriginID < result[j].Snapshot.OriginID })
 	return result, nil
+}
+
+func (s *memoryStateStore) DeleteEdgeOrigin(_ context.Context, originID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.origins, originID)
+	s.deleted = append(s.deleted, originID)
+	return nil
+}
+
+// Removing a machine from the allowlist is how an operator revokes it. The edge
+// used to refuse to start while that machine's snapshot was still persisted,
+// which took down sessions, tailnet listeners, private names and SSH on the VPS
+// and crash-looped — so the only way back was re-adding the machine you were
+// revoking. Its claims must be dropped instead.
+func TestRevokedOriginIsDroppedInsteadOfFailingTheEdge(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	edgeID, _ := testIdentity(t)
+	keptID, keptKey := testIdentity(t)
+	revokedID, revokedKey := testIdentity(t)
+
+	state := newMemoryStateStore()
+	for _, origin := range []struct {
+		id   string
+		key  ed25519.PrivateKey
+		name string
+	}{{keptID, keptKey, "kept.shaulavo.dev"}, {revokedID, revokedKey, "revoked.shaulavo.dev"}} {
+		snapshot := signedRegistrationSnapshot(t, edgeID, origin.id, origin.key, 1, now, []Route{{PublicName: origin.name, ServiceName: "app"}})
+		digest, err := VerifySnapshot(snapshot, edgeID, origin.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.origins[origin.id] = StoredOrigin{Snapshot: snapshot, Digest: digest, LastSeenAt: now}
+	}
+
+	// Only the kept origin remains in the allowlist; the other has been revoked.
+	registry := testRegistry(t, ModeDirectTLS, now)
+	controller := testController(t, now, edgeID, []OriginConfig{testOriginConfig(keptID)}, state, registry,
+		func(context.Context, OriginConfig) (netip.AddrPort, error) {
+			return netip.AddrPort{}, errors.New("must not resolve at restore")
+		},
+		func(context.Context, netip.AddrPort, OriginConfig) error {
+			return errors.New("must not pin at restore")
+		},
+	)
+	if controller == nil {
+		t.Fatal("the edge refused to start with a revoked origin still persisted")
+	}
+	if len(state.deleted) != 1 || state.deleted[0] != revokedID {
+		t.Fatalf("deleted origins = %v, want just the revoked one", state.deleted)
+	}
+	if _, present := state.origins[revokedID]; present {
+		t.Fatal("the revoked origin's claims are still persisted")
+	}
+
+	status := registry.Status()
+	if len(status) != 1 {
+		t.Fatalf("published routes = %#v, want only the kept origin", status)
+	}
+	if status[0].PublicName != "kept.shaulavo.dev" {
+		t.Fatalf("published route = %q, want kept.shaulavo.dev", status[0].PublicName)
+	}
 }

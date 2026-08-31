@@ -126,6 +126,11 @@ func serveStatic(w http.ResponseWriter, request *http.Request, root, relative st
 		}
 	}
 	defer file.Close() //nolint:errcheck // the response owns any read failure
+	// A static service is a real website, so it gets no sandbox and no
+	// connect-src restriction, either of which would break ordinary pages. What
+	// stops a page here from reaching the control socket is the Origin refusal
+	// in internal/transport, not a header on this response.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	serveOpenedFile(w, request, file, info)
 }
 
@@ -136,6 +141,12 @@ func serveFiles(w http.ResponseWriter, request *http.Request, root, prefix, rela
 	}
 	defer file.Close() //nolint:errcheck // the response owns any read failure
 	if !info.IsDir() {
+		// A files root is a file server, not a site. Anything in it is handed
+		// over as a download rather than rendered in this origin, because a
+		// served .html would otherwise run with the origin of the host itself.
+		w.Header().Set("Content-Disposition", "attachment")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "sandbox")
 		serveOpenedFile(w, request, file, info)
 		return
 	}

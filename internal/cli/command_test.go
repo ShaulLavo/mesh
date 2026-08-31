@@ -17,8 +17,10 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
+	"github.com/shaul/mesh/internal/worker"
 )
 
 var commandTestTime = time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
@@ -766,4 +768,71 @@ func readCommandFile(t *testing.T, file *os.File) string {
 		t.Fatal(err)
 	}
 	return string(contents)
+}
+
+// writeLocalSessionDir plants a session on this machine the way a worker does,
+// so the CLI's local lookup has something real to find.
+func writeLocalSessionDir(t *testing.T, id string, state string) {
+	t.Helper()
+	root, err := paths.SessionsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	meta := worker.Meta{
+		ID:        id,
+		PID:       4321,
+		Command:   []string{"sh", "-c", "sleep 300"},
+		Cwd:       "/work",
+		State:     state,
+		CreatedAt: commandTestTime,
+	}
+	if state == worker.StateExited {
+		exited := commandTestTime.Add(time.Second)
+		code := 0
+		meta.ExitedAt = &exited
+		meta.ExitCode = &code
+	}
+	if err := worker.WriteMeta(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "worker.log"), []byte("local output\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// This host is never in its own address book, so a lookup gated on an empty
+// address book made every local session vanish from ls, logs, kill and sig the
+// moment the first remote host was adopted — while the worker kept running and
+// there was no other way to reach it.
+func TestLocalSessionsStayReachableAfterAdoptingAHost(t *testing.T) {
+	setupCommandTestHost(t)
+	writeLocalSessionDir(t, "L0CL", worker.StateExited)
+
+	stdout, _, err := executeCommand(t, Dependencies{
+		DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host is offline")
+		},
+		Now: func() time.Time { return commandTestTime.Add(time.Minute) },
+	}, "ls", "--timeout", "20ms")
+	if err != nil {
+		t.Fatalf("ls returned an error: %v", err)
+	}
+	if !strings.Contains(stdout, "L0CL") {
+		t.Fatalf("ls output = %q, want the local session listed alongside adopted hosts", stdout)
+	}
+
+	// The same session must remain addressable by ID for the commands that act
+	// on one: logs is the read-only one, so it is the safe probe.
+	if _, _, err := executeCommand(t, Dependencies{
+		DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host is offline")
+		},
+		Now: func() time.Time { return commandTestTime.Add(time.Minute) },
+	}, "logs", "L0CL"); err != nil {
+		t.Fatalf("logs on a local session after adoption: %v", err)
+	}
 }

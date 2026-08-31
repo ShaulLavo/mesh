@@ -436,3 +436,52 @@ func joinURLPrefix(prefix, name string) string {
 	}
 	return fmt.Sprintf("%s/%s", prefix, name)
 }
+
+// A files root is a file server, not a site. Without these headers a served
+// .html renders in the host's own origin, where its script satisfies the
+// control socket's same-origin check and can create a session.
+func TestFilesServiceHandsFilesOverAsDownloads(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "invoice.html"), []byte("<script>x</script>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/files/invoice.html", nil)
+	serveFiles(recorder, request, root, "/files", "/invoice.html")
+
+	response := recorder.Result()
+	defer response.Body.Close() //nolint:errcheck // test cleanup
+	if got := response.Header.Get("Content-Disposition"); got != "attachment" {
+		t.Fatalf("Content-Disposition = %q, want attachment", got)
+	}
+	if got := response.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := response.Header.Get("Content-Security-Policy"); got != "sandbox" {
+		t.Fatalf("Content-Security-Policy = %q, want sandbox", got)
+	}
+}
+
+// A static service is a real website, so it must keep working: no sandbox and
+// no connect-src restriction, only the sniffing guard.
+func TestStaticServiceKeepsWorkingAndSetsNosniff(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<h1>site</h1>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/site/index.html", nil)
+	serveStatic(recorder, request, root, "/index.html")
+
+	response := recorder.Result()
+	defer response.Body.Close() //nolint:errcheck // test cleanup
+	if got := response.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := response.Header.Get("Content-Security-Policy"); got != "" {
+		t.Fatalf("static service set a CSP (%q); that breaks ordinary sites", got)
+	}
+	if got := response.Header.Get("Content-Disposition"); got != "" {
+		t.Fatalf("static service set Content-Disposition (%q); a site must render", got)
+	}
+}

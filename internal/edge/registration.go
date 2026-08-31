@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/netip"
 	"net/url"
 	"path"
@@ -355,7 +356,16 @@ func (c *Controller) publishLocked(ctx context.Context) error {
 	for _, stored := range state {
 		origin, allowed := c.origins[stored.Snapshot.OriginID]
 		if !allowed {
-			return errors.New("edge: persisted snapshot belongs to an origin outside the allowlist")
+			// Removing a machine from the allowlist is how an operator revokes
+			// it, and that is exactly when the edge must not refuse to start:
+			// failing here took down sessions, tailnet listeners, private names
+			// and SSH on the VPS, and crash-looped, leaving re-adding the
+			// revoked machine as the only way back. Drop its claims instead.
+			log.Printf("edge: dropping persisted claims for origin %s, which is no longer allowlisted", stored.Snapshot.OriginID)
+			if err := c.state.DeleteEdgeOrigin(ctx, stored.Snapshot.OriginID); err != nil {
+				return fmt.Errorf("edge: drop revoked origin %s: %w", stored.Snapshot.OriginID, err)
+			}
+			continue
 		}
 		digest, err := VerifySnapshot(stored.Snapshot, c.targetID, origin.Identity)
 		if err != nil {

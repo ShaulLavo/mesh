@@ -263,6 +263,17 @@ func ServeWithOptions(w http.ResponseWriter, r *http.Request, opts ServeOptions,
 	if err != nil {
 		return err
 	}
+	// A Mesh protocol client is never a browser, so an Origin header means a
+	// page is dialling the control socket. The default same-origin check is no
+	// defence here: served services share this host and port, so a file out of
+	// a `mesh serve files` root satisfies it and can open a session. Refuse the
+	// whole class rather than enumerating origins. Non-browser clients send no
+	// Origin and are unaffected, and OriginPatterns still governs any caller
+	// that deliberately opts a browser origin in.
+	if len(opts.OriginPatterns) == 0 && r.Header.Get("Origin") != "" {
+		http.Error(w, "browser origins cannot open a Mesh control connection", http.StatusForbidden)
+		return fmt.Errorf("transport: refused WebSocket from browser origin %q", r.Header.Get("Origin"))
+	}
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		CompressionMode: websocket.CompressionDisabled,
 		OriginPatterns:  append([]string(nil), opts.OriginPatterns...),

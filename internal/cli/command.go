@@ -304,14 +304,30 @@ type resolvedSession struct {
 	stale  bool
 }
 
+// resolveSession looks for a session on this machine and across the address
+// book. This host is never in its own address book, so gating the local lookup
+// on an empty one made every local session invisible to logs, kill and sig the
+// moment the first remote host was adopted — while the worker kept running.
 func (a *application) resolveSession(ctx context.Context, hosts []HostRecord, id string) (resolvedSession, error) {
+	local, localErr := Find(id)
+	switch {
+	case localErr == nil:
+	case errors.Is(localErr, ErrNoLocalSession):
+		local = Session{}
+	default:
+		// Reading the local session directory failed for a reason that is not
+		// "absent". Surfacing it beats reporting the session missing.
+		return resolvedSession{}, localErr
+	}
+	foundLocally := localErr == nil
+
 	if len(hosts) == 0 {
-		local, err := Find(id)
-		if err != nil {
-			return resolvedSession{}, err
+		if !foundLocally {
+			return resolvedSession{}, localErr
 		}
 		return resolvedSession{local: &local}, nil
 	}
+
 	cache, err := OpenCatalogCache(ctx)
 	if err != nil {
 		return resolvedSession{}, err
@@ -321,7 +337,15 @@ func (a *application) resolveSession(ctx context.Context, hosts []HostRecord, id
 	if err != nil {
 		return resolvedSession{}, err
 	}
-	return findCatalogSession(catalog, id, "")
+	remote, remoteErr := findCatalogSession(catalog, id, "")
+	switch {
+	case foundLocally && remoteErr == nil:
+		return resolvedSession{}, fmt.Errorf("session %s is both on this host and on %s; name the host to choose", strings.ToUpper(id), remote.host.Alias)
+	case foundLocally:
+		return resolvedSession{local: &local}, nil
+	default:
+		return remote, remoteErr
+	}
 }
 
 func findCatalogSession(catalog []HostSessions, id, hostAlias string) (resolvedSession, error) {
@@ -558,6 +582,16 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	results, err := CollectHostSessions(cmd.Context(), hosts, timeout, a.queryHost, cache)
 	if err != nil {
 		return err
+	}
+	// This host is never in its own address book, so its sessions have to be
+	// added deliberately. Without this, adopting one remote host hid every
+	// local session from `mesh ls` while its worker kept running.
+	if localRows, err := localSessionRows(); err != nil {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "this host: local sessions unavailable: %s\n", safeRemoteText(err.Error())); err != nil {
+			return err
+		}
+	} else if len(localRows) > 0 {
+		results = append([]HostSessions{{Host: HostRecord{Alias: localHostAlias}, Sessions: localRows}}, results...)
 	}
 	if err := writeProtocolSessions(cmd.OutOrStdout(), a.dependencies.Now(), results); err != nil {
 		return err
@@ -1025,4 +1059,33 @@ func ageAt(now, created time.Time) string {
 	default:
 		return fmt.Sprintf("%dd", int(duration.Hours()/24))
 	}
+}
+
+// localHostAlias labels this machine's own sessions in a merged listing. It is
+// not an address-book entry: a host never adopts itself.
+const localHostAlias = "this host"
+
+// localSessionRows renders this machine's sessions in the same shape the remote
+// fan-out returns, so one listing can carry both.
+func localSessionRows() ([]protocol.SessionInfo, error) {
+	sessions, err := List()
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]protocol.SessionInfo, 0, len(sessions))
+	for _, current := range sessions {
+		row := protocol.SessionInfo{
+			ID:        current.ID,
+			Command:   append([]string(nil), current.Command...),
+			Cwd:       current.Cwd,
+			State:     current.State(),
+			CreatedAt: current.CreatedAt,
+		}
+		if current.ExitCode != nil {
+			code := *current.ExitCode
+			row.ExitCode = &code
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }

@@ -35,6 +35,10 @@ type StateStore interface {
 	EdgeSnapshotVersion(context.Context, string) (SnapshotVersion, error)
 	ApplyEdgeSnapshot(context.Context, Snapshot, string, time.Time) error
 	LoadEdgeState(context.Context) ([]StoredOrigin, error)
+	// DeleteEdgeOrigin drops one origin's snapshot and routes. Revoking a
+	// machine means removing it from the allowlist, and its persisted claims
+	// have to be removable without hand-editing SQLite.
+	DeleteEdgeOrigin(context.Context, string) error
 }
 
 // OutboxRecord is the origin's exact durable registration attempt.

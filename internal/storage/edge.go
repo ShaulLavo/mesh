@@ -238,3 +238,27 @@ func edgeSequenceFromSQLite(sequence int64) (uint64, error) {
 	}
 	return uint64(sequence), nil
 }
+
+// DeleteEdgeOrigin removes one origin's persisted claims entirely: its routes
+// and the snapshot that authorised them. Revoking a machine by dropping it from
+// the allowlist previously left its snapshot behind with nothing able to remove
+// it, and the edge refused to start while it was there.
+func (s *Store) DeleteEdgeOrigin(ctx context.Context, originID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("storage: begin edge origin deletion: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // commit decides the outcome
+	queries := s.queries.WithTx(tx)
+
+	if err := queries.DeleteEdgeRoutesForOrigin(ctx, originID); err != nil {
+		return fmt.Errorf("storage: delete edge routes for origin %s: %w", originID, err)
+	}
+	if err := queries.DeleteEdgeSnapshot(ctx, originID); err != nil {
+		return fmt.Errorf("storage: delete edge snapshot for origin %s: %w", originID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("storage: commit edge origin deletion: %w", err)
+	}
+	return nil
+}

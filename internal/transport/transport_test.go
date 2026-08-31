@@ -1018,3 +1018,41 @@ func TestRedialAgainstClosedListenerRetriesInsteadOfPanicking(t *testing.T) {
 		t.Fatalf("dialLink returned a non-nil linkConn (%T) alongside an error; a typed nil here panics connectionLocked", link)
 	}
 }
+
+// Served HTTP services and the control socket share one origin on the tailnet
+// listener, so the default same-origin check is satisfied by a file the user
+// merely served. A page must never be able to open a Mesh control connection
+// and issue session.create; a non-browser client, which sends no Origin at
+// all, must be unaffected.
+func TestServeRefusesBrowserOriginsOnTheControlSocket(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = ServeWithOptions(w, r, ServeOptions{}, func(context.Context, Conn) error { return nil })
+	}))
+	defer server.Close()
+
+	url := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	// A browser dialling from the served origin is refused.
+	refused, response, err := websocket.Dial(context.Background(), url, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": []string{server.URL}},
+	})
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err == nil {
+		_ = refused.CloseNow()
+		t.Fatal("a browser origin opened a Mesh control connection")
+	}
+
+	// A Mesh client sends no Origin and still connects.
+	conn, accepted, err := websocket.Dial(context.Background(), url, &websocket.DialOptions{})
+	if accepted != nil && accepted.Body != nil {
+		_ = accepted.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("a non-browser client was refused: %v", err)
+	}
+	_ = conn.CloseNow()
+}
