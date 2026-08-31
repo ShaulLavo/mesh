@@ -7,7 +7,39 @@ package sqlc
 
 import (
 	"context"
+	"strings"
 )
+
+const deleteRetiredHostSessions = `-- name: DeleteRetiredHostSessions :execrows
+DELETE FROM sessions
+WHERE host_id = ?
+  AND state IN ('exited', 'interrupted')
+  AND id IN (/*SLICE:retired*/?)
+`
+
+type DeleteRetiredHostSessionsParams struct {
+	HostID  string
+	Retired []string
+}
+
+func (q *Queries) DeleteRetiredHostSessions(ctx context.Context, arg DeleteRetiredHostSessionsParams) (int64, error) {
+	query := deleteRetiredHostSessions
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.HostID)
+	if len(arg.Retired) > 0 {
+		for _, v := range arg.Retired {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:retired*/?", strings.Repeat(",?", len(arg.Retired))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:retired*/?", "NULL", 1)
+	}
+	result, err := q.db.ExecContext(ctx, query, queryParams...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
 
 const getSession = `-- name: GetSession :one
 SELECT id, host_id, command, cwd, state, created_at, last_attached_at, exit_code, last_output_sequence

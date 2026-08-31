@@ -295,3 +295,28 @@ func sqliteDSN(databasePath string) (string, error) {
 	u.RawQuery = query.Encode()
 	return u.String(), nil
 }
+
+// RetireSessions deletes the given finished sessions for one host. The caller
+// decides what to retire; this refuses to touch a running session, so a
+// mistaken ID cannot remove a live record.
+//
+// Nothing deleted a session row before, so the reconciler re-read and
+// re-upserted the whole history every tick and session.listed eventually
+// outgrew the 4 MiB frame cap, at which point mesh ls failed permanently.
+func (s *Store) RetireSessions(ctx context.Context, hostID HostID, retired []SessionID) (int64, error) {
+	if len(retired) == 0 {
+		return 0, nil
+	}
+	ids := make([]string, 0, len(retired))
+	for _, id := range retired {
+		ids = append(ids, string(id))
+	}
+	deleted, err := s.queries.DeleteRetiredHostSessions(ctx, dbsqlc.DeleteRetiredHostSessionsParams{
+		HostID:  string(hostID),
+		Retired: ids,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("storage: retire sessions for host %s: %w", hostID, err)
+	}
+	return deleted, nil
+}

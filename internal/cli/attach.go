@@ -176,12 +176,27 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 	var detachOnce sync.Once
 	detach := func() {
 		detachOnce.Do(func() {
-			_ = send(controlFrame(protocol.Control{
-				Type:      protocol.TypeDetach,
-				SessionID: opts.SessionID,
-				Reason:    protocol.ReasonClient,
-			}))
+			// Tear down first, tell the host second. send takes the write lock
+			// and then the reconnect lock, both of which the read loop holds
+			// while it is redialling, so leading with the courtesy frame meant
+			// ctrl+] never returned during a link failure — the terminal stayed
+			// in raw mode and the only way out was killing mesh elsewhere.
+			// The worker treats a dropped connection as a detach anyway, so the
+			// frame is a nicety, not the mechanism.
 			close(detached)
+			notified := make(chan struct{})
+			go func() {
+				defer close(notified)
+				_ = send(controlFrame(protocol.Control{
+					Type:      protocol.TypeDetach,
+					SessionID: opts.SessionID,
+					Reason:    protocol.ReasonClient,
+				}))
+			}()
+			select {
+			case <-notified:
+			case <-time.After(detachNotifyTimeout):
+			}
 			_ = conn.Close()
 		})
 	}
@@ -275,9 +290,14 @@ func relayInput(opts AttachOptions, input io.Reader, sid protocol.SessionID, sen
 					return
 				}
 			}
-			if err := send(protocol.Frame{Kind: protocol.KindInput, Session: sid, Payload: append([]byte(nil), b...)}); err != nil {
-				return
-			}
+			// A failed write is how the transport reports a dead link: it
+			// deliberately does not retry, because a repeated keystroke is
+			// worse than a lost one, and the next operation reconnects.
+			// Returning here retired the keyboard for the rest of the session
+			// while output kept painting, so the session looked alive and
+			// ignored every key including the detach key. Drop the keystroke
+			// and keep relaying.
+			_ = send(protocol.Frame{Kind: protocol.KindInput, Session: sid, Payload: append([]byte(nil), b...)})
 		}
 		if err != nil {
 			return
@@ -317,3 +337,8 @@ func makeRaw(f *os.File) (func(), error) {
 	}
 	return func() { _ = term.Restore(f.Fd(), state) }, nil
 }
+
+// detachNotifyTimeout bounds the courtesy detach frame. The worker treats a
+// dropped connection as a detach, so a link that is already gone must not delay
+// the user's exit.
+const detachNotifyTimeout = 2 * time.Second

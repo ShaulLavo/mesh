@@ -15,6 +15,10 @@ type CatalogStore interface {
 	ReconcileHost(context.Context, storage.Host, []storage.Session) error
 	ListHostSessions(context.Context, storage.HostID) ([]storage.Session, error)
 	GetSession(context.Context, storage.HostID, storage.SessionID) (storage.Session, error)
+	// RetireSessions deletes finished sessions the catalog has pruned from
+	// disk. Retirement is always an explicit set: a session merely absent from
+	// an observation is interrupted, not retired.
+	RetireSessions(context.Context, storage.HostID, []storage.SessionID) (int64, error)
 }
 
 // WorkerProbe reports whether a worker socket accepts a connection.

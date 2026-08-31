@@ -32,7 +32,17 @@ for _ in $(seq 100); do
 done
 [ -s "$T/pid" ] || fail "session did not start: $(cat "$T/client.err")"
 SESSION_PID=$(cat "$T/pid")
-SID=$("$MESH" ls | awk 'NR == 2 { print $1 }')
+
+# The child writing its PID says the command is running, not that the worker has
+# published the session: metadata and the socket both land afterwards. Wait for
+# the session to actually appear rather than assuming the two coincide.
+SID=""
+for _ in $(seq 100); do
+  SID=$("$MESH" ls | awk 'NR == 2 { print $1 }')
+  [ -n "$SID" ] && [ "$SID" != "no" ] && break
+  SID=""
+  sleep 0.05
+done
 [ -n "$SID" ] || fail "session was not listed"
 
 "$MESH" kill "$SID" >"$T/kill.out" || fail "kill command failed"

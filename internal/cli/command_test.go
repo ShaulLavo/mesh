@@ -836,3 +836,42 @@ func TestLocalSessionsStayReachableAfterAdoptingAHost(t *testing.T) {
 		t.Fatalf("logs on a local session after adoption: %v", err)
 	}
 }
+
+// Alive is a 500ms socket dial. On a loaded machine it can miss a perfectly
+// healthy session, and kill then refused with "already interrupted" — exactly
+// when kill matters most. Only a state the worker actually recorded may refuse
+// the operation.
+func TestKillDoesNotRefuseOnAMissedLivenessProbe(t *testing.T) {
+	setupCommandTestHost(t)
+	// A session whose meta says running but whose socket does not answer: the
+	// same shape a loaded machine produces for a live session.
+	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
+
+	_, _, err := executeCommand(t, Dependencies{
+		DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host is offline")
+		},
+		Now: func() time.Time { return commandTestTime },
+	}, "kill", "PR0B")
+	if err == nil {
+		t.Fatal("kill reported success against an unreachable worker")
+	}
+	// It must have attempted the kill and reported the session's real state,
+	// not refused up front on the probe.
+	if !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("kill error = %v, want the session reported as interrupted", err)
+	}
+
+	// A session the worker recorded as exited is still refused up front, since
+	// that record is definitive rather than inferred.
+	writeLocalSessionDir(t, "3X1T", worker.StateExited)
+	_, _, err = executeCommand(t, Dependencies{
+		DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host is offline")
+		},
+		Now: func() time.Time { return commandTestTime },
+	}, "kill", "3X1T")
+	if err == nil || !strings.Contains(err.Error(), "already exited") {
+		t.Fatalf("kill on an exited session = %v, want refusal", err)
+	}
+}

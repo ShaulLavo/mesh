@@ -51,3 +51,9 @@ RETURNING id, host_id, command, cwd, state, created_at, last_attached_at, exit_c
 UPDATE sessions
 SET state = 'interrupted', exit_code = NULL
 WHERE host_id = ? AND state IN ('running', 'detached');
+
+-- name: DeleteRetiredHostSessions :execrows
+DELETE FROM sessions
+WHERE host_id = ?
+  AND state IN ('exited', 'interrupted')
+  AND id IN (sqlc.slice('retired'));

@@ -913,13 +913,22 @@ func (a *application) runSessionControl(cmd *cobra.Command, id, controlType, sig
 		return err
 	}
 	if resolved.local != nil {
-		if !resolved.local.Alive {
-			return fmt.Errorf("session %s is already %s", resolved.local.ID, resolved.local.State())
+		// Refuse only on a state the worker actually recorded. Alive is a
+		// 500ms socket dial, and a loaded machine can miss it for a perfectly
+		// healthy session — which is exactly when kill and sig matter most.
+		// Attempt the operation and let the worker's own answer decide.
+		if resolved.local.Meta.State == worker.StateExited {
+			return fmt.Errorf("session %s is already exited", resolved.local.ID)
 		}
 		if controlType == protocol.TypeKill {
 			err = Kill(*resolved.local)
 		} else {
 			err = Signal(*resolved.local, signal)
+		}
+		if err != nil && !resolved.local.Alive {
+			// The worker really is unreachable, so the probe was right after
+			// all: report the session's state rather than a dial failure.
+			return fmt.Errorf("session %s is already interrupted", resolved.local.ID)
 		}
 	} else {
 		if resolved.remote.State != string(storage.StateRunning) && resolved.remote.State != string(storage.StateDetached) {

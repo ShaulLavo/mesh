@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -54,7 +55,14 @@ func List() ([]Session, error) {
 		if !e.IsDir() {
 			continue
 		}
-		dir := root + string(os.PathSeparator) + e.Name()
+		dir := filepath.Join(root, e.Name())
+		// A directory still carrying the launching marker has not published
+		// itself: its metadata may be written but its socket is not accepting
+		// yet, so listing it reports a live session as interrupted. The
+		// daemon's catalog already skips these; this is the same rule.
+		if _, err := os.Lstat(paths.Launching(dir)); err == nil {
+			continue
+		}
 		meta, err := worker.ReadMeta(dir)
 		if err != nil {
 			continue // half-created or hand-deleted; not our problem to report

@@ -75,8 +75,17 @@ func (c *Catalog) Reconcile(ctx context.Context) error {
 	if host.LastSeenAt.IsZero() || host.LastSeenAt.UnixMilli() < 0 {
 		return fmt.Errorf("daemon: reconcile host %s: clock returned invalid observation time", host.ID)
 	}
+	observed, retired := c.retireFinishedSessions(observed)
 	if err := c.store.ReconcileHost(ctx, host, observed); err != nil {
 		return fmt.Errorf("daemon: reconcile host %s sessions: %w", c.host.ID, err)
+	}
+	if len(retired) > 0 {
+		if _, err := c.store.RetireSessions(ctx, c.host.ID, retired); err != nil {
+			// The directories are already gone, so the next reconcile will not
+			// re-observe these. Report and continue rather than failing a scan
+			// that otherwise succeeded.
+			log.Printf("daemon: retire session rows for host %s: %v", c.host.ID, err)
+		}
 	}
 	return nil
 }
@@ -342,4 +351,71 @@ func quarantinedSession(hostID storage.HostID, directory string, now time.Time) 
 		State:     storage.StateInterrupted,
 		CreatedAt: now,
 	}, true
+}
+
+const (
+	// sessionRetention is how long a finished session's record and its output
+	// stay on disk. Nothing pruned these before, so an always-on host grew
+	// without bound: the 1 Hz reconciler re-read and re-upserted every row it
+	// had ever seen, and past roughly fifteen thousand a reconcile no longer
+	// fit in its tick, holding the write lock continuously.
+	sessionRetention = 7 * 24 * time.Hour
+	// maxRetainedTerminalSessions bounds the same growth by count, for a host
+	// that churns through sessions faster than the age cap retires them.
+	maxRetainedTerminalSessions = 500
+)
+
+// retireFinishedSessions removes finished sessions past the retention limits and
+// returns the set to keep. Running and interrupted-but-recent sessions are never
+// touched: this only retires records whose process is already gone.
+//
+// It prunes the directory as well as the row, because worker.log is the bulk of
+// what a finished session occupies.
+func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.Session, []storage.SessionID) {
+	now := c.now()
+	type candidate struct {
+		index    int
+		retireAt time.Time
+	}
+	var finished []candidate
+	for i, current := range observed {
+		if current.State == storage.StateRunning {
+			continue
+		}
+		finished = append(finished, candidate{index: i, retireAt: current.CreatedAt})
+	}
+	// Oldest first, so a count cap retires the least useful history.
+	sort.Slice(finished, func(i, j int) bool { return finished[i].retireAt.Before(finished[j].retireAt) })
+
+	retire := make(map[int]struct{})
+	excess := len(finished) - maxRetainedTerminalSessions
+	for rank, current := range finished {
+		agedOut := !current.retireAt.IsZero() && now.Sub(current.retireAt) > sessionRetention
+		overCap := rank < excess
+		if agedOut || overCap {
+			retire[current.index] = struct{}{}
+		}
+	}
+	if len(retire) == 0 {
+		return observed, nil
+	}
+
+	kept := make([]storage.Session, 0, len(observed)-len(retire))
+	retired := make([]storage.SessionID, 0, len(retire))
+	for i, current := range observed {
+		if _, dropping := retire[i]; !dropping {
+			kept = append(kept, current)
+			continue
+		}
+		dir := filepath.Join(c.sessionsDir, string(current.ID))
+		if err := os.RemoveAll(dir); err != nil {
+			// Keep the record if its directory survives, so the next pass
+			// retries rather than orphaning the files.
+			log.Printf("daemon: retire session %s: %v", current.ID, err)
+			kept = append(kept, current)
+			continue
+		}
+		retired = append(retired, current.ID)
+	}
+	return kept, retired
 }

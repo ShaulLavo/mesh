@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -513,6 +514,7 @@ type catalogStoreStub struct {
 	events         []string
 	host           storage.Host
 	observed       []storage.Session
+	retired        []storage.SessionID
 }
 
 func (s *catalogStoreStub) ReconcileHost(_ context.Context, host storage.Host, observed []storage.Session) error {
@@ -775,5 +777,78 @@ func TestCatalogQuarantinesTornMetadataInsteadOfFailingStartup(t *testing.T) {
 	}
 	if !healthy {
 		t.Fatal("the healthy session was not reported")
+	}
+}
+
+func (s *catalogStoreStub) RetireSessions(_ context.Context, _ storage.HostID, retired []storage.SessionID) (int64, error) {
+	s.retired = append(s.retired, retired...)
+	s.events = append(s.events, "retire-sessions")
+	return int64(len(retired)), nil
+}
+
+// Nothing pruned finished sessions before, so an always-on host grew without
+// bound: the 1 Hz reconciler re-read and re-upserted every row it had ever
+// seen, and past roughly fifteen thousand a reconcile no longer fit in its
+// tick. Retention retires finished sessions by age and by count, and takes
+// their directories with them, since worker.log is the bulk of the cost.
+func TestCatalogRetiresFinishedSessionsByAge(t *testing.T) {
+	sessionsDir := t.TempDir()
+	now := catalogTestTime.Add(30 * 24 * time.Hour)
+
+	// One finished session well past the retention window, one just inside it,
+	// and one still running.
+	old := catalogTestMeta("0RDD", worker.StateExited, "boot-a")
+	old.CreatedAt = now.Add(-8 * 24 * time.Hour)
+	exitedAt := old.CreatedAt.Add(time.Second)
+	code := 0
+	old.ExitedAt = &exitedAt
+	old.ExitCode = &code
+	writeCatalogMeta(t, sessionsDir, old.ID, old)
+
+	recent := catalogTestMeta("N3WW", worker.StateExited, "boot-a")
+	recent.CreatedAt = now.Add(-time.Hour)
+	recentExit := recent.CreatedAt.Add(time.Second)
+	recent.ExitedAt = &recentExit
+	recent.ExitCode = &code
+	writeCatalogMeta(t, sessionsDir, recent.ID, recent)
+
+	running := catalogTestMeta("RVNN", worker.StateRunning, "boot-a")
+	running.CreatedAt = now.Add(-90 * 24 * time.Hour) // old, but still alive
+	writeCatalogMeta(t, sessionsDir, running.ID, running)
+
+	store := &catalogStoreStub{}
+	catalog, err := NewCatalog(CatalogConfig{
+		SessionsDir: sessionsDir,
+		Host:        catalogTestHost(catalogTestTime),
+		Store:       store,
+		Probe:       probeFunc(func(context.Context, string) error { return nil }),
+		BootID:      func() string { return "boot-a" },
+		Now:         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(store.retired) != 1 || store.retired[0] != "0RDD" {
+		t.Fatalf("retired = %v, want just the aged-out session", store.retired)
+	}
+	if _, err := os.Stat(filepath.Join(sessionsDir, "0RDD")); !os.IsNotExist(err) {
+		t.Fatalf("the retired session's directory survived: %v", err)
+	}
+	for _, keep := range []string{"N3WW", "RVNN"} {
+		if _, err := os.Stat(filepath.Join(sessionsDir, keep)); err != nil {
+			t.Fatalf("session %s was retired but should have been kept: %v", keep, err)
+		}
+	}
+	var observedIDs []string
+	for _, got := range store.observed {
+		observedIDs = append(observedIDs, string(got.ID))
+	}
+	sort.Strings(observedIDs)
+	if len(observedIDs) != 2 || observedIDs[0] != "N3WW" || observedIDs[1] != "RVNN" {
+		t.Fatalf("observed = %v, want the two kept sessions", observedIDs)
 	}
 }

@@ -223,9 +223,13 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 				disabledListeners = "Tailnet control and SSH listeners"
 			}
 		}
+		// Bound discovery always, not only for the public-networking roles. A
+		// wedged tailscale binary here blocks after the daemon lock is held and
+		// before the Unix socket exists, so the host looks started, refuses a
+		// second daemon, and answers nothing.
 		discoveryCtx := daemonCtx
 		cancelDiscovery := func() {}
-		if requiresStableTailnetControl {
+		if opts.tailnetDiscoveryTimeout > 0 {
 			discoveryCtx, cancelDiscovery = context.WithTimeout(daemonCtx, opts.tailnetDiscoveryTimeout)
 		}
 		peer, discoverErr := opts.discoverSelf(discoveryCtx)
@@ -506,8 +510,19 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		})
 	}()
 	tailnetMonitorDone := make(chan error, 1)
+	// Watch Tailnet addresses whenever a listener depends on them, not only for
+	// the public-networking roles. Startup discovery is one shot: if tailscaled
+	// was not up yet, the tailnet control and SSH listeners were never created
+	// for the life of the process, while the daemon kept serving the Unix
+	// socket and so looked healthy to both systemd and launchd. The shipped
+	// unit is a user unit, so its After=tailscaled.service cannot order against
+	// a system unit and this is the ordinary boot race, not an edge case. The
+	// monitor's existing address-changed path already restarts the daemon;
+	// starting from the addresses we actually have makes it cover "none yet"
+	// as well as "changed since".
+	watchTailnetAddresses := requiresStableTailnetControl || cfg.TailnetPort != 0 || cfg.SSHPort != 0
 	go func() {
-		if !requiresStableTailnetControl {
+		if !watchTailnetAddresses || opts.tailnetPollInterval <= 0 || opts.tailnetDiscoveryTimeout <= 0 {
 			tailnetMonitorDone <- nil
 			return
 		}
