@@ -28,6 +28,16 @@ trap cleanup EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+pkcs8_identity_id() {
+  openssl pkey -in "$1" -pubout -outform DER 2>/dev/null | python3 -c '
+import base64, sys
+public_der = sys.stdin.buffer.read()
+if len(public_der) < 32:
+    raise SystemExit("short Ed25519 public key")
+print(base64.urlsafe_b64encode(public_der[-32:]).decode().rstrip("="))
+'
+}
+
 identity_id() {
   ssh-keygen -y -f "$1" 2>/dev/null | python3 -c '
 import base64, sys
@@ -93,7 +103,7 @@ for field in fields:
     digest.update(field)
 open(output_path, "wb").write(digest.digest())
 PY
-  openssl pkeyutl -sign -rawin -inkey "$RENEWER_SIGNING_KEY" -in "$digest" -out "$signature" >/dev/null 2>&1 || fail "sign $environment bundle"
+  openssl pkeyutl -sign -rawin -inkey "$RENEWER_KEY" -in "$digest" -out "$signature" >/dev/null 2>&1 || fail "sign $environment bundle"
   python3 - "$MESH_STATE_DIR/daemon.sock" "$profile" "$environment" "$ORIGIN_ID" "$RENEWER_ID" \
     "$PRIVATE_NAME" "$certificate" "$private_key" "$signature" <<'PY'
 import base64
@@ -235,17 +245,12 @@ ssh-keygen -q -t ed25519 -N "" -C "" -f "$MESH_STATE_DIR/identity.key" >/dev/nul
 rm -f "$MESH_STATE_DIR/identity.key.pub"
 chmod 0600 "$MESH_STATE_DIR/identity.key"
 RENEWER_KEY="$TEST_ROOT/renewer.key"
-ssh-keygen -q -t ed25519 -N "" -C "" -f "$RENEWER_KEY" >/dev/null 2>&1 || fail "generate renewer identity"
-rm -f "$RENEWER_KEY.pub"
+# The renewer is an external signer that Mesh never loads, and openssl signs
+# with it directly, so it stays PKCS#8 rather than following the daemon keys.
+openssl genpkey -algorithm ED25519 -out "$RENEWER_KEY" >/dev/null 2>&1 || fail "generate renewer identity"
 chmod 0600 "$RENEWER_KEY"
-# The renewer signs with openssl, which cannot read OpenSSH format. Mesh never
-# loads this file, so a PKCS#8 copy for signing keeps one identity per test.
-RENEWER_SIGNING_KEY="$TEST_ROOT/renewer.pkcs8"
-cp "$RENEWER_KEY" "$RENEWER_SIGNING_KEY"
-chmod 0600 "$RENEWER_SIGNING_KEY"
-ssh-keygen -p -q -N "" -m PKCS8 -f "$RENEWER_SIGNING_KEY" >/dev/null 2>&1 || fail "convert renewer identity"
 ORIGIN_ID=$(identity_id "$MESH_STATE_DIR/identity.key") || fail "derive origin identity"
-RENEWER_ID=$(identity_id "$RENEWER_KEY") || fail "derive renewer identity"
+RENEWER_ID=$(pkcs8_identity_id "$RENEWER_KEY") || fail "derive renewer identity"
 HTTPS_PORT=$(python3 - <<'PY'
 import socket
 with socket.socket() as listener:
