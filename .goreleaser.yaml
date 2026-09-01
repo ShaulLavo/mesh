@@ -74,14 +74,14 @@ homebrew_casks:
     repository:
       owner: ShaulLavo
       name: mesh
-      branch: master
+      branch: main
       token: "{{ .Env.GITHUB_TOKEN }}"
     directory: Casks
     homepage: https://github.com/ShaulLavo/mesh
     description: Direct, resumable terminal sessions over Tailscale
     url:
       template: "https://github.com/ShaulLavo/mesh/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
-      verified: github.com/shaul/mesh/
+      verified: github.com/ShaulLavo/mesh/
     binaries:
       - mesh
 
