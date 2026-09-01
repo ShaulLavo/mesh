@@ -43,12 +43,15 @@ process_alive() {
 }
 
 identity_id() {
-  openssl pkey -in "$1" -pubout -outform DER 2>/dev/null | python3 -c '
+  ssh-keygen -y -f "$1" 2>/dev/null | python3 -c '
 import base64, sys
-public_der = sys.stdin.buffer.read()
-if len(public_der) < 32:
+parts = sys.stdin.read().split()
+if len(parts) < 2:
+    raise SystemExit("no Ed25519 public key")
+blob = base64.b64decode(parts[1])
+if len(blob) < 32:
     raise SystemExit("short Ed25519 public key")
-print(base64.urlsafe_b64encode(public_der[-32:]).decode().rstrip("="))
+print(base64.urlsafe_b64encode(blob[-32:]).decode().rstrip("="))
 '
 }
 
@@ -166,7 +169,8 @@ printf 'DO_NOT_PUBLISH' >"$TEST_ROOT/secret/.env"
   fail "build tagged Mesh binary"
 
 for state in "$EDGE_STATE" "$ORIGIN_STATE"; do
-  openssl genpkey -algorithm ED25519 -out "$state/identity.key" >/dev/null 2>&1 || fail "generate daemon identity"
+  ssh-keygen -q -t ed25519 -N "" -C "" -f "$state/identity.key" >/dev/null 2>&1 || fail "generate daemon identity"
+  rm -f "$state/identity.key.pub"
   chmod 0600 "$state/identity.key"
 done
 EDGE_ID=$(identity_id "$EDGE_STATE/identity.key") || fail "derive edge identity"

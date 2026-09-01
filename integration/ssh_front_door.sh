@@ -79,7 +79,8 @@ done
 mkdir -p "$server_state" "$client_state" "$unrelated_state" "$test_root/bin"
 ln -s "$repo_root/integration/helpers/fake_tailscale" "$test_root/bin/tailscale"
 for key in "$server_state/identity.key" "$client_state/identity.key" "$unrelated_state/identity.key"; do
-  openssl genpkey -algorithm ED25519 -out "$key" >/dev/null 2>&1 || fail "generate $key"
+  ssh-keygen -q -t ed25519 -N "" -C "" -f "$key" <<<y >/dev/null 2>&1 || fail "generate $key"
+  rm -f "$key.pub"
   chmod 0600 "$key"
 done
 ssh-keygen -y -f "$client_state/identity.key" >"$server_state/authorized_keys" || fail 'export authorized client key'

@@ -6,6 +6,10 @@ set -uo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 run_root=$(mktemp -d "${TMPDIR:-/tmp}/mesh-verify.XXXXXX")
 test_timeout=${MESH_INTEGRATION_TIMEOUT:-30s}
+# packaging_contract.sh builds real release archives, so its cost tracks the
+# runner rather than the code and it cannot share a session-test budget.
+slow_test_timeout=${MESH_INTEGRATION_SLOW_TIMEOUT:-600s}
+slow_tests=" packaging_contract.sh "
 
 cleanup() {
   rm -rf -- "$run_root"
@@ -35,7 +39,11 @@ for test_path in "${tests[@]}"; do
   logs+=("$log")
   (
     cd "$repo_root" || exit 1
-    timeout --kill-after=5s "$test_timeout" env MESH="$binary" bash "$test_path"
+    this_timeout=$test_timeout
+    case "$slow_tests" in
+      *" $name "*) this_timeout=$slow_test_timeout ;;
+    esac
+    timeout --kill-after=5s "$this_timeout" env MESH="$binary" bash "$test_path"
   ) >"$log" 2>&1 &
   pids+=("$!")
 done

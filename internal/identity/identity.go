@@ -5,13 +5,14 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/crypto/ssh"
 )
 
 const privateKeyName = "identity.key"
@@ -49,11 +50,14 @@ func LoadOrCreate(stateDir string) (Host, ed25519.PrivateKey, error) {
 }
 
 func publishPrivateKey(stateDir, keyPath string, candidate ed25519.PrivateKey) (Host, ed25519.PrivateKey, error) {
-	encoded, err := x509.MarshalPKCS8PrivateKey(candidate)
+	// OpenSSH format, not PKCS#8: the T15 front door hands this exact file to a
+	// stock ssh client with -i, and OpenSSH before 10.0 cannot read a PKCS#8
+	// Ed25519 key.
+	block, err := ssh.MarshalPrivateKey(candidate, "")
 	if err != nil {
 		return Host{}, nil, fmt.Errorf("encode identity key: %w", err)
 	}
-	contents := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})
+	contents := pem.EncodeToMemory(block)
 
 	temporary, err := os.CreateTemp(stateDir, ".identity-key-*")
 	if err != nil {
@@ -107,18 +111,18 @@ func loadPrivateKey(path string) (ed25519.PrivateKey, error) {
 		return nil, fmt.Errorf("read identity key %s: %w", path, err)
 	}
 	block, rest := pem.Decode(contents)
-	if block == nil || block.Type != "PRIVATE KEY" || len(bytes.TrimSpace(rest)) != 0 {
-		return nil, fmt.Errorf("parse identity key %s: invalid PKCS#8 PEM", path)
+	if block == nil || block.Type != "OPENSSH PRIVATE KEY" || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("parse identity key %s: not an OpenSSH private key; delete it and Mesh will mint a new identity", path)
 	}
-	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	parsed, err := ssh.ParseRawPrivateKey(contents)
 	if err != nil {
 		return nil, fmt.Errorf("parse identity key %s: %w", path, err)
 	}
-	private, ok := parsed.(ed25519.PrivateKey)
+	private, ok := parsed.(*ed25519.PrivateKey)
 	if !ok {
 		return nil, fmt.Errorf("parse identity key %s: key is not Ed25519", path)
 	}
-	return private, nil
+	return *private, nil
 }
 
 func hostFor(private ed25519.PrivateKey) Host {
