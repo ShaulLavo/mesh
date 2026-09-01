@@ -36,8 +36,8 @@ check_source_contract() {
   contains .goreleaser.yaml 'version: 2'
   contains .goreleaser.yaml 'name_template: "mesh_{{ .Os }}_{{ .Arch }}"'
   contains .goreleaser.yaml '-X github.com/shaul/mesh/internal/bootstrap.releaseVersion={{ .Tag }}'
-  contains .goreleaser.yaml 'https://github.com/shaul/mesh/releases/download/{{ .Tag }}/{{ .ArtifactName }}'
-  contains .goreleaser.yaml 'owner: shaul'
+  contains .goreleaser.yaml 'https://github.com/ShaulLavo/mesh/releases/download/{{ .Tag }}/{{ .ArtifactName }}'
+  contains .goreleaser.yaml 'owner: ShaulLavo'
   contains .goreleaser.yaml 'name: mesh'
   contains .goreleaser.yaml 'directory: Casks'
   does_not_contain .goreleaser.yaml '.Version'
@@ -64,8 +64,8 @@ check_source_contract() {
     [[ $actual == "$checksum" ]] || fail "service checksum for $name is $checksum, want $actual"
   done <scripts/install/assets/checksums.txt
 
-  contains scripts/install.sh 'https://github.com/shaul/mesh'
-  contains scripts/install.sh 'https://raw.githubusercontent.com/shaul/mesh/$version/scripts/install/assets'
+  contains scripts/install.sh 'https://github.com/ShaulLavo/mesh'
+  contains scripts/install.sh 'https://raw.githubusercontent.com/ShaulLavo/mesh/$version/scripts/install/assets'
   contains scripts/install.sh "--proto-redir '=https'"
   contains scripts/install.sh 'gum confirm'
   contains scripts/install.sh 'gum spin'
@@ -74,7 +74,7 @@ check_source_contract() {
   contains scripts/install.sh 'MESH_BIN_DIR'
   contains scripts/install.sh 'if [ ! -d "$binary_dir" ]'
   contains scripts/install.sh "'s|@MESH_STDOUT@|\${HOME}/.local/state/mesh/daemon.log|g'"
-  does_not_contain scripts/install.sh 'raw.githubusercontent.com/shaul/mesh/master/'
+  does_not_contain scripts/install.sh 'raw.githubusercontent.com/ShaulLavo/mesh/master/'
 
   local archive_verify_line service_verify_line publish_line
   archive_verify_line=$(grep -nF 'verify_checksum "$archive"' scripts/install.sh | cut -d: -f1)
@@ -199,7 +199,7 @@ check_release_dist() {
   [[ $actual == "$expected" ]] || fail "release archives are:\n$actual\nwant:\n$expected"
   manifest_names=$(awk '{print $2}' "$dist/checksums.txt" | sort)
   [[ $manifest_names == "$expected" ]] || fail "checksums.txt names:\n$manifest_names\nwant:\n$expected"
-  contains "$dist/homebrew/Casks/mesh.rb" 'https://github.com/shaul/mesh/releases/download/'
+  contains "$dist/homebrew/Casks/mesh.rb" 'https://github.com/ShaulLavo/mesh/releases/download/'
   contains "$dist/homebrew/Casks/mesh.rb" 'mesh_darwin_arm64.tar.gz'
   does_not_contain "$dist/homebrew/Casks/mesh.rb" 'mesh_linux_amd64.tar.gz'
   does_not_contain "$dist/homebrew/Casks/mesh.rb" 'mesh_linux_arm64.tar.gz'
