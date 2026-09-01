@@ -25,9 +25,9 @@ command -v loginctl >/dev/null 2>&1 || fail no_systemd "loginctl is not installe
 
 remote_user=$(id -un) || fail no_systemd "cannot determine the remote user"
 remote_uid=$(id -u) || fail no_systemd "cannot determine the remote user ID"
-linger=$(loginctl show-user "$remote_user" --property=Linger --value 2>/dev/null) ||
+linger=$(loginctl show-user "$remote_user" --property=Linger 2>/dev/null) ||
 	fail no_systemd "loginctl cannot query user $remote_user"
-[ "$linger" = yes ] || fail no_user_lingering "user $remote_user does not linger after logout"
+[ "$linger" = Linger=yes ] || fail no_user_lingering "user $remote_user does not linger after logout"
 
 state_dir=$HOME/.local/state/mesh
 binary_dir=$HOME/.local/bin

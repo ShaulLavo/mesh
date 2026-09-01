@@ -61,3 +61,15 @@ func TestLaunchdNativePathsDoNotContainShellVariables(t *testing.T) {
 		}
 	}
 }
+
+func TestLinuxInstallerVerifiesFullLingeringProperty(t *testing.T) {
+	t.Parallel()
+
+	script, ok := Script("linux")
+	if !ok {
+		t.Fatal("Linux installer is missing")
+	}
+	if !strings.Contains(script, `loginctl show-user "$remote_user" --property=Linger`) || !strings.Contains(script, `[ "$linger" = Linger=yes ]`) || strings.Contains(script, "--property=Linger --value") {
+		t.Fatalf("Linux installer does not verify Linger=yes:\n%s", script)
+	}
+}

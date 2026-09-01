@@ -31,8 +31,10 @@ const (
 
 // AddRequest is the CLI-owned input to the SSH bootstrap adapter.
 type AddRequest struct {
-	Target string
-	Alias  string
+	Target               string
+	Alias                string
+	TailscaleAuthKeyFile string
+	Yes                  bool
 }
 
 // BootstrapResult separates the durable address-book entry from metadata about
@@ -438,7 +440,11 @@ func (a *application) queryHost(ctx context.Context, host HostRecord) ([]protoco
 }
 
 func (a *application) addCommand() *cobra.Command {
-	var alias string
+	var (
+		alias                string
+		tailscaleAuthKeyFile string
+		yes                  bool
+	)
 	command := &cobra.Command{
 		Use:   "add [user@]host",
 		Short: "Install Mesh on an SSH-reachable host",
@@ -455,7 +461,11 @@ func (a *application) addCommand() *cobra.Command {
 			if a.dependencies.Bootstrap == nil {
 				return errors.New("SSH bootstrap support is unavailable in this build")
 			}
-			result, err := a.dependencies.Bootstrap(cmd.Context(), AddRequest{Target: args[0], Alias: selected})
+			result, err := a.dependencies.Bootstrap(cmd.Context(), AddRequest{
+				Target: args[0], Alias: selected,
+				TailscaleAuthKeyFile: tailscaleAuthKeyFile,
+				Yes:                  yes,
+			})
 			if err != nil {
 				return err
 			}
@@ -474,6 +484,8 @@ func (a *application) addCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&alias, "alias", "", "local name for the host")
+	command.Flags().StringVar(&tailscaleAuthKeyFile, "tailscale-auth-key-file", "", "read a Tailscale auth key from this local file")
+	command.Flags().BoolVar(&yes, "yes", false, "approve remote Tailscale installation and user lingering changes")
 	return command
 }
 

@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -17,13 +18,15 @@ import (
 )
 
 const (
-	defaultConnectTimeout = 10 * time.Second
-	defaultVerifyTimeout  = 10 * time.Second
-	maximumClockSkew      = 5 * time.Minute
+	defaultConnectTimeout        = 10 * time.Second
+	defaultVerifyTimeout         = 10 * time.Second
+	maximumClockSkew             = 5 * time.Minute
+	maximumAuthKeyBytes          = 64 << 10
+	maximumRemoteDiagnosticBytes = 4 << 10
 )
 
 type remoteHost interface {
-	Run(context.Context, string, io.Reader) ([]byte, []byte, error)
+	Run(context.Context, string, io.Reader, ...remoteOutputLimits) ([]byte, []byte, error)
 	Close() error
 }
 
@@ -31,7 +34,8 @@ type dependencies struct {
 	connect       func(context.Context, target, SSHOptions) (remoteHost, error)
 	resolveBinary func(context.Context, binarySelection, Platform) (resolvedBinary, error)
 	install       func(context.Context, remoteHost, installRequest) (bool, error)
-	discover      func(context.Context, remoteHost) (tailnetObservation, error)
+	discover      func(context.Context, remoteHost) (tailscaleObservation, error)
+	provision     func(context.Context, remoteHost, provisionRequest) (provisionResult, error)
 	checkClock    func(context.Context, remoteHost, time.Time) error
 	verify        func(context.Context, []string, uint16, string) (verifiedHost, string, error)
 	authorizedKey func(string) (string, error)
@@ -44,6 +48,7 @@ func defaultDependencies() dependencies {
 		resolveBinary: resolvePlatformBinary,
 		install:       installRemote,
 		discover:      discoverTailnet,
+		provision:     provisionRemote,
 		checkClock:    checkRemoteClock,
 		verify:        verifyWebSocket,
 		authorizedKey: adopterAuthorizedKey,
@@ -56,6 +61,9 @@ type normalizedOptions struct {
 	binary           binarySelection
 	stateDir         string
 	expectedIdentity string
+	tailscaleAuthKey []byte
+	confirmProvision ConfirmProvisionFunc
+	sudoPassword     SudoPasswordFunc
 	ssh              SSHOptions
 	daemonPort       uint16
 	sshPort          uint16
@@ -65,10 +73,19 @@ type normalizedOptions struct {
 }
 
 func run(ctx context.Context, opts Options, deps dependencies) (result Result, resultErr error) {
+	authKeyForRedaction := bytes.TrimSpace(opts.TailscaleAuthKey)
+	defer func() {
+		if resultContainsAuthKey(result, authKeyForRedaction) {
+			result = Result{}
+			resultErr = diagnostic(DiagnosticTailscaleUnavailable, errors.New("remote response contained the supplied Tailscale auth key; result was discarded"))
+		}
+		resultErr = redactAuthKey(resultErr, authKeyForRedaction)
+	}()
 	normalized, err := normalizeOptions(ctx, opts)
 	if err != nil {
 		return Result{}, err
 	}
+	defer clear(normalized.tailscaleAuthKey)
 	if err := validateDependencies(deps); err != nil {
 		return Result{}, err
 	}
@@ -93,6 +110,35 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 	if err != nil {
 		return Result{}, err
 	}
+
+	normalized.progress(Event{Step: StepDiscover, Detail: "Tailscale status and address"})
+	tailscale, err := deps.discover(ctx, remote)
+	if err != nil {
+		return Result{}, err
+	}
+	if detail := tailscale.Variant.detail(); detail != "" && tailscale.State != tailscaleMissing {
+		normalized.progress(Event{Step: StepDiscover, Detail: "found " + detail})
+	}
+	provisioned, err := deps.provision(ctx, remote, provisionRequest{
+		Platform:     platform,
+		Target:       normalized.target.display(),
+		Observation:  tailscale,
+		AuthKey:      normalized.tailscaleAuthKey,
+		Confirm:      normalized.confirmProvision,
+		SudoPassword: normalized.sudoPassword,
+		Progress:     normalized.progress,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	tailnet := provisioned.Tailnet
+	if stringsContainAuthKey(append([]string{tailnet.Name}, tailnet.Addresses...), normalized.tailscaleAuthKey) {
+		return Result{}, diagnostic(DiagnosticTailscaleUnavailable, errors.New("remote Tailscale status contained the supplied auth key; Mesh was not installed"))
+	}
+	if len(tailnet.Addresses) == 0 {
+		return Result{}, diagnostic(DiagnosticTailscaleUnavailable, errors.New("remote host has no Tailscale addresses"))
+	}
+
 	normalized.progress(Event{Step: StepTransfer, Detail: platform.OS.String() + "/" + platform.Arch.String() + " binary"})
 	binary, err := deps.resolveBinary(ctx, normalized.binary, platform)
 	if err != nil {
@@ -120,15 +166,6 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		return Result{}, err
 	}
 
-	normalized.progress(Event{Step: StepDiscover, Detail: "Tailscale address"})
-	tailnet, err := deps.discover(ctx, remote)
-	if err != nil {
-		return Result{}, err
-	}
-	if len(tailnet.Addresses) == 0 {
-		return Result{}, diagnostic(DiagnosticTailscaleUnavailable, errors.New("remote host has no Tailscale addresses"))
-	}
-
 	verifyCtx, cancelVerify := context.WithTimeout(ctx, normalized.verifyTimeout)
 	defer cancelVerify()
 	normalized.progress(Event{Step: StepVerify, Detail: "direct WebSocket connection"})
@@ -149,8 +186,60 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		TailscaleAddresses: append([]string(nil), tailnet.Addresses...),
 		Endpoint:           endpoint,
 		Platform:           platform,
-		AlreadyConfigured:  unchanged,
+		AlreadyConfigured:  unchanged && !provisioned.Changed,
 	}, nil
+}
+
+func redactAuthKey(err error, authKey []byte) error {
+	return redactSecret(err, authKey)
+}
+
+func redactSecret(err error, secret []byte) error {
+	if err == nil || len(secret) == 0 || !strings.Contains(err.Error(), string(secret)) {
+		return err
+	}
+	if diagnosticError, ok := err.(*DiagnosticError); ok {
+		redactedCause := redactSecret(diagnosticError.Err, secret)
+		if redactedCause == nil {
+			redactedCause = errors.New("[redacted]")
+		}
+		return &DiagnosticError{
+			Code:       diagnosticError.Code,
+			Suggestion: diagnosticError.Suggestion,
+			Err:        redactedCause,
+		}
+	}
+	type multiUnwrapper interface {
+		Unwrap() []error
+	}
+	if joined, ok := err.(multiUnwrapper); ok {
+		causes := joined.Unwrap()
+		redacted := make([]error, len(causes))
+		for index, cause := range causes {
+			redacted[index] = redactSecret(cause, secret)
+		}
+		return errors.Join(redacted...)
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), string(secret), "[redacted]"))
+}
+
+func resultContainsAuthKey(result Result, authKey []byte) bool {
+	values := []string{result.ID, result.MeshIdentity, result.TailscaleName, result.Endpoint}
+	values = append(values, result.TailscaleAddresses...)
+	return stringsContainAuthKey(values, authKey)
+}
+
+func stringsContainAuthKey(values []string, authKey []byte) bool {
+	if len(authKey) == 0 {
+		return false
+	}
+	secret := string(authKey)
+	for _, value := range values {
+		if strings.Contains(value, secret) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, error) {
@@ -201,6 +290,13 @@ func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, err
 	if opts.SSH.ConnectTimeout < 0 {
 		return normalizedOptions{}, fmt.Errorf("bootstrap: SSH connect timeout must be positive")
 	}
+	authKey := bytes.TrimSpace(opts.TailscaleAuthKey)
+	if len(authKey) > maximumAuthKeyBytes {
+		return normalizedOptions{}, errors.New("bootstrap: Tailscale auth key file is too large")
+	}
+	if len(authKey) != 0 {
+		authKey = append([]byte(nil), authKey...)
+	}
 	progress := opts.Progress
 	if progress == nil {
 		progress = func(Event) {}
@@ -216,6 +312,9 @@ func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, err
 		},
 		stateDir:         opts.StateDir,
 		expectedIdentity: opts.ExpectedIdentity,
+		tailscaleAuthKey: authKey,
+		confirmProvision: opts.ConfirmProvision,
+		sudoPassword:     opts.SudoPassword,
 		ssh:              opts.SSH,
 		daemonPort:       port,
 		sshPort:          sshPort,
@@ -226,7 +325,7 @@ func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, err
 }
 
 func validateDependencies(deps dependencies) error {
-	if deps.connect == nil || deps.resolveBinary == nil || deps.install == nil || deps.discover == nil || deps.checkClock == nil || deps.verify == nil || deps.authorizedKey == nil || deps.now == nil {
+	if deps.connect == nil || deps.resolveBinary == nil || deps.install == nil || deps.discover == nil || deps.provision == nil || deps.checkClock == nil || deps.verify == nil || deps.authorizedKey == nil || deps.now == nil {
 		return errors.New("bootstrap: incomplete dependencies")
 	}
 	return nil
@@ -278,14 +377,27 @@ func validateVerifiedHost(host verifiedHost, discoveredName string) error {
 }
 
 func remoteCommandError(operation string, runErr error, stdout, stderr []byte) error {
-	detail := strings.TrimSpace(string(stderr))
+	detail := boundedRemoteOutput(stderr)
 	if detail == "" {
-		detail = strings.TrimSpace(string(stdout))
+		detail = boundedRemoteOutput(stdout)
 	}
 	if detail == "" {
 		return fmt.Errorf("%s: %w", operation, runErr)
 	}
 	return fmt.Errorf("%s: %w: %s", operation, runErr, detail)
+}
+
+func boundedRemoteOutput(output []byte) string {
+	output = bytes.TrimSpace(output)
+	truncated := len(output) > maximumRemoteDiagnosticBytes
+	if truncated {
+		output = output[:maximumRemoteDiagnosticBytes]
+	}
+	detail := strings.ToValidUTF8(string(output), "�")
+	if truncated {
+		detail += " … [truncated]"
+	}
+	return detail
 }
 
 func (o OS) String() string   { return string(o) }

@@ -1,12 +1,12 @@
 # Status
 
-Updated 2026-08-30.
+Updated 2026-09-01.
 
 ## Done
 
-The session and transport core, product CLI, SSH bootstrap, packaging, origin
-serving core and service catalog, private DNS/TLS path, authenticated public
-edge, and the locked SSH front door are complete.
+The session and transport core, product CLI, Tailscale-provisioning SSH
+bootstrap, packaging, origin serving core and service catalog, private DNS/TLS
+path, authenticated public edge, and the locked SSH front door are complete.
 
 - `internal/protocol` — framing + control messages, shared by every transport
 - `internal/session` — byte-offset replay ring, session IDs
@@ -21,8 +21,9 @@ edge, and the locked SSH front door are complete.
 - `internal/identity`, `internal/tailnet` — host keys, Tailscale discovery, and
   persistent raw TCP/443 forwarding verification (T06, T12)
 - `internal/bootstrap`, `scripts/install` — SSH adoption, release selection,
-  development-build version safety, identity verification, and idempotent
-  systemd/launchd installers (T08)
+  Tailscale provisioning, separate stdin-only auth-key and sudo-password paths,
+  bounded remote output, identity verification, development-build version
+  safety, and idempotent systemd/launchd installers (T08, T20)
 - `internal/cli`, `cmd/mesh` — Cobra + Fang product surface, versioned host
   address book, concurrent live/cached host catalogs, remote create, attach,
   logs, kill, signals, the T09 picker boundary, and service preview,
@@ -53,6 +54,11 @@ seven-linter policy, `go vet ./...`, `go test -race ./...`, all three retained
 parser fuzz targets, all eighteen scripts in `integration/`, and CGO-disabled
 Linux amd64/arm64 and Darwin arm64 builds passing.
 
+Verified 2026-09-01 after T20: clean module and formatting diffs, the full
+seven-linter policy, `go vet ./...`, `go test -race ./...`, and all twenty
+scripts in `integration/`. `scripts/check-t20.sh` also verifies the focused
+provisioning contract and the installer harness.
+
 Private origin names and wildcard certificates are operational, including
 staging isolation and hot live rotation. The public edge is operational in both
 loopback proxy and direct-TLS modes, including restart/offline ownership and
@@ -66,19 +72,43 @@ front door is complete. Its session, file, and tunnel handlers remain.
 T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websocket
 transport · T06 host identity · T07 CLI surface · T08 ssh bootstrap · T09 picker
 TUI · T10 packaging · T11 serving core · T12 private names · T13 public edge ·
-T14 `mesh serve` · T15 SSH front door.
+T14 `mesh serve` · T15 SSH front door · T20 Tailscale provisioning.
+
+## Build order coverage
+
+Tasks are the unit of work; the nine build-order steps in `00-overview.md` are
+the unit of completeness. Track both. A step with no task is invisible to a
+task list, which is how step 6 stayed unbuilt while every task was green.
+
+| Step | Tasks | State |
+|---|---|---|
+| 1 Local persistent session | T01, T02, T03, T04 | complete |
+| 2 Remote session over Tailscale | T05, T06 | complete |
+| 3 Product CLI | T07, T09 | complete |
+| 4 SSH bootstrap | T08, T20 | complete |
+| 5 Crash and restart recovery | folded into T04 | complete |
+| 6 Pi power control | **T19** | **not started** |
+| 7 Packaging | T10 | complete |
+| 8 Serving | T11, T12, T13, T14 | complete |
+| 9 SSH front door | T15, T16, T17, T18 | T15 complete |
 
 ## Next
 
-T16, T17, and T18 are independent and unblocked.
+T16, T17, T18, and T19 are independent and unblocked.
 
 | Task | Owns | Blocked by |
 |---|---|---|
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
 | T17 sessions over SSH | `internal/sshd/session.go` | T09, T15 |
 | T18 reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
+| T19 Pi power control | `internal/wake/`, `internal/inhibit/` | T06, T07, T08, T09 |
 
-Pick one of T16, T17, or T18 next.
+T19 closes the only skipped build step. Its seams already exist in the CLI,
+the picker, the edge, the protocol, and the services table; every one of them
+currently reaches a nil dependency or `noWaker`. It carries two open decisions
+(D25 inhibitor mechanism, D26 witness transport) to resolve before implementing.
+
+Pick one of T16, T17, T18, or T19 next.
 
 ## Known defects
 

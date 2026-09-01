@@ -604,6 +604,29 @@ func TestAddSavesVerifiedHostAndReportsConvergedRerun(t *testing.T) {
 	}
 }
 
+func TestAddPassesTailscaleProvisioningFlagsToBootstrap(t *testing.T) {
+	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+	called := false
+	bootstrap := func(_ context.Context, request AddRequest) (BootstrapResult, error) {
+		called = true
+		if request.Target != "alice@pi" || request.Alias != "garden" || request.TailscaleAuthKeyFile != "./tailnet.key" || !request.Yes {
+			t.Fatalf("add request = %#v", request)
+		}
+		return BootstrapResult{Host: HostRecord{
+			ID: "host-id", MeshIdentity: "mesh-identity", TailscaleName: "pi.example.ts.net",
+			Addresses: []string{"100.64.0.8"}, Endpoint: "ws://100.64.0.8:7337/mesh",
+		}}, nil
+	}
+	_, _, err := executeCommand(t, Dependencies{Bootstrap: bootstrap},
+		"add", "alice@pi", "--alias", "garden", "--tailscale-auth-key-file", "./tailnet.key", "--yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("bootstrap was not called")
+	}
+}
+
 func TestLogsRoutesCatalogedExitedSessionToRemoteFallback(t *testing.T) {
 	host := setupCommandTestHost(t)
 	host.sessionState = "exited"

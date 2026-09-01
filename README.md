@@ -3,6 +3,11 @@
 Mesh keeps terminal sessions running on their host while clients disconnect
 and reattach. It connects your machines over Tailscale.
 
+[**How it is used**](https://excalidraw.com/#json=KGCNqa1YJB7z8KCBx5_RE,ZNE_9E61xji2A2eFRbM2mg)
+— start a session, walk away, pick it up somewhere else. The source lives at
+[`docs/diagrams/usage.excalidraw`](docs/diagrams/usage.excalidraw), so the link
+can be regenerated if it ever goes stale.
+
 ## Run it
 
 ```bash
@@ -13,6 +18,10 @@ go build -o mesh ./cmd/mesh
 ./mesh local -r       # reattach to the latest session
 ./mesh add user@host  # install Mesh on another machine
 ```
+
+If the remote host lacks Tailscale, `mesh add` shows the package-manager
+commands and asks before it runs them. For an unattended adoption, pass
+`--yes --tailscale-auth-key-file ./key`.
 
 Press `ctrl+]` to detach without stopping the command.
 

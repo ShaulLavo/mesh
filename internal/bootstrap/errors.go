@@ -17,6 +17,8 @@ const (
 	DiagnosticServiceInstall       DiagnosticCode = "service_install"
 	DiagnosticTailscaleUnavailable DiagnosticCode = "tailscale_unavailable"
 	DiagnosticTailscaleLoggedOut   DiagnosticCode = "tailscale_logged_out"
+	DiagnosticTailscaleMachineAuth DiagnosticCode = "tailscale_machine_auth"
+	DiagnosticSudoAuth             DiagnosticCode = "sudo_auth"
 	DiagnosticPortBlocked          DiagnosticCode = "port_blocked"
 	DiagnosticClockSkew            DiagnosticCode = "clock_skew"
 	DiagnosticIdentity             DiagnosticCode = "identity_verification"
@@ -60,7 +62,11 @@ func diagnosticSuggestion(code DiagnosticCode) string {
 	case DiagnosticTailscaleUnavailable:
 		return "install and start Tailscale on the remote host"
 	case DiagnosticTailscaleLoggedOut:
-		return "run tailscale up on the remote host"
+		return "retry with --tailscale-auth-key-file pointing to a Tailscale auth key"
+	case DiagnosticTailscaleMachineAuth:
+		return "approve the machine in the Tailscale admin console at https://login.tailscale.com/admin/machines"
+	case DiagnosticSudoAuth:
+		return "enter the remote sudo password interactively, connect as root, or configure passwordless sudo"
 	case DiagnosticPortBlocked:
 		return "run tailscale ping for the host, then allow the Mesh TCP port in the tailnet ACL and host firewall"
 	case DiagnosticClockSkew:

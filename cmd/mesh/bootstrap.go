@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +12,8 @@ import (
 	"strings"
 
 	"charm.land/huh/v2"
+	"github.com/charmbracelet/x/term"
+	"github.com/muesli/cancelreader"
 
 	"github.com/shaul/mesh/internal/bootstrap"
 	"github.com/shaul/mesh/internal/cli"
@@ -22,13 +27,19 @@ type bootstrapUI struct {
 	input    io.Reader
 	output   io.Writer
 	username func() (string, error)
+	terminal func() bool
 }
+
+const maximumTailscaleAuthKeyFileBytes = 64 << 10
 
 func commandDependencies() cli.Dependencies {
 	return cli.Dependencies{
 		Bootstrap: newBootstrapFunc(bootstrap.Run, bootstrapUI{
 			input:  os.Stdin,
 			output: os.Stderr,
+			terminal: func() bool {
+				return term.IsTerminal(os.Stdin.Fd())
+			},
 			username: func() (string, error) {
 				current, err := user.Current()
 				if err != nil {
@@ -55,18 +66,32 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 		if err != nil {
 			return cli.BootstrapResult{}, err
 		}
+		authKey, err := readTailscaleAuthKey(request.TailscaleAuthKeyFile)
+		if err != nil {
+			return cli.BootstrapResult{}, err
+		}
+		defer clear(authKey)
+		confirmProvision := provisionPrompt(ui)
+		if request.Yes {
+			confirmProvision = func(context.Context, bootstrap.ProvisionConfirmation) (bool, error) {
+				return true, nil
+			}
+		}
 
 		result, err := run(ctx, bootstrap.Options{
 			Target:           target,
 			StateDir:         stateDir,
 			ExpectedIdentity: identityForAlias(hosts, request.Alias),
+			TailscaleAuthKey: authKey,
+			ConfirmProvision: confirmProvision,
+			SudoPassword:     sudoPasswordPrompt(ui),
 			SSH: bootstrap.SSHOptions{
 				Password:       passwordPrompt(ui),
 				Passphrase:     passphrasePrompt(ui),
 				ConfirmHostKey: hostKeyPrompt(ui),
 			},
 			Progress: func(event bootstrap.Event) {
-				_, _ = fmt.Fprintf(ui.output, "bootstrap %-8s %s\n", event.Step, event.Detail)
+				_, _ = fmt.Fprintf(ui.output, "bootstrap %-9s %s\n", event.Step, event.Detail)
 			},
 		})
 		if err != nil {
@@ -82,6 +107,101 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 			},
 			AlreadyConfigured: result.AlreadyConfigured,
 		}, nil
+	}
+}
+
+func sudoPasswordPrompt(ui bootstrapUI) bootstrap.SudoPasswordFunc {
+	return func(ctx context.Context, target string) ([]byte, error) {
+		if ui.terminal == nil || !ui.terminal() {
+			return nil, errors.New("sudo authentication needs an interactive terminal, a root SSH login, or passwordless sudo")
+		}
+		password, err := promptSecret(ctx, ui, "sudo password", "Password for "+target)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(password), nil
+	}
+}
+
+func readTailscaleAuthKey(path string) ([]byte, error) {
+	if path == "" {
+		return nil, nil
+	}
+	file, err := os.Open(path) //nolint:gosec // the CLI flag explicitly selects the local secret file
+	if err != nil {
+		return nil, fmt.Errorf("open Tailscale auth key file %s: %w", path, err)
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(file, maximumTailscaleAuthKeyFileBytes+1))
+	defer clear(contents)
+	closeErr := file.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read Tailscale auth key file %s: %w", path, readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close Tailscale auth key file %s: %w", path, closeErr)
+	}
+	if len(contents) > maximumTailscaleAuthKeyFileBytes {
+		return nil, fmt.Errorf("Tailscale auth key file %s is larger than %d bytes", path, maximumTailscaleAuthKeyFileBytes)
+	}
+	key := bytes.TrimSpace(contents)
+	if len(key) == 0 {
+		return nil, fmt.Errorf("Tailscale auth key file %s is empty", path)
+	}
+	result := append([]byte(nil), key...)
+	return result, nil
+}
+
+func provisionPrompt(ui bootstrapUI) bootstrap.ConfirmProvisionFunc {
+	return func(ctx context.Context, confirmation bootstrap.ProvisionConfirmation) (bool, error) {
+		if ctx == nil {
+			return false, errors.New("nil Tailscale provisioning confirmation context")
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if ui.terminal == nil || !ui.terminal() {
+			return false, errors.New("Tailscale provisioning needs an interactive terminal or --yes")
+		}
+		if _, err := fmt.Fprintf(ui.output, "%s\n  Package manager: %s\n  Commands:\n", cli.SafeTerminalText(confirmation.Summary), cli.SafeTerminalText(confirmation.PackageManager)); err != nil {
+			return false, err
+		}
+		for _, command := range confirmation.Commands {
+			if _, err := fmt.Fprintf(ui.output, "    %s\n", cli.SafeTerminalText(command)); err != nil {
+				return false, err
+			}
+		}
+		if len(confirmation.Checks) > 0 {
+			if _, err := fmt.Fprintln(ui.output, "  Checks:"); err != nil {
+				return false, err
+			}
+			for _, check := range confirmation.Checks {
+				if _, err := fmt.Fprintf(ui.output, "    %s\n", cli.SafeTerminalText(check)); err != nil {
+					return false, err
+				}
+			}
+		}
+		if _, err := fmt.Fprint(ui.output, "Continue? [y/N] "); err != nil {
+			return false, err
+		}
+		reader, err := cancelreader.NewReader(ui.input)
+		if err != nil {
+			return false, fmt.Errorf("prepare Tailscale provisioning confirmation: %w", err)
+		}
+		defer reader.Close() //nolint:errcheck // prompt result is authoritative
+		stopCancellation := context.AfterFunc(ctx, func() { reader.Cancel() })
+		answer, err := bufio.NewReader(reader).ReadString('\n')
+		stopCancellation()
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		if errors.Is(err, cancelreader.ErrCanceled) {
+			return false, context.Canceled
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			return false, fmt.Errorf("read Tailscale provisioning confirmation: %w", err)
+		}
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		return answer == "y" || answer == "yes", nil
 	}
 }
 

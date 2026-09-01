@@ -58,12 +58,13 @@ type SSHOptions struct {
 type Step string
 
 const (
-	StepConnect  Step = "connect"
-	StepDetect   Step = "detect"
-	StepTransfer Step = "transfer"
-	StepInstall  Step = "install"
-	StepDiscover Step = "discover"
-	StepVerify   Step = "verify"
+	StepConnect   Step = "connect"
+	StepDetect    Step = "detect"
+	StepProvision Step = "provision"
+	StepTransfer  Step = "transfer"
+	StepInstall   Step = "install"
+	StepDiscover  Step = "discover"
+	StepVerify    Step = "verify"
 )
 
 // Event reports the operation that is about to run.
@@ -71,6 +72,24 @@ type Event struct {
 	Step   Step
 	Detail string
 }
+
+// ProvisionConfirmation describes the remote mutations that need explicit
+// operator consent. Commands never contain an authentication key.
+type ProvisionConfirmation struct {
+	Summary        string
+	PackageManager string
+	Commands       []string
+	Checks         []string
+}
+
+// ConfirmProvisionFunc approves package installation or a system-level user
+// service change on the remote host.
+type ConfirmProvisionFunc func(context.Context, ProvisionConfirmation) (bool, error)
+
+// SudoPasswordFunc returns a sudo password for the named remote target.
+// Bootstrap takes ownership of the returned bytes and clears them before Run
+// returns.
+type SudoPasswordFunc func(context.Context, string) ([]byte, error)
 
 // ReleaseOptions controls cross-platform binary selection. Empty values use a
 // sibling release artifact first, then the running release's exact version.
@@ -91,6 +110,9 @@ type Options struct {
 	Release          ReleaseOptions
 	StateDir         string
 	ExpectedIdentity string
+	TailscaleAuthKey []byte
+	ConfirmProvision ConfirmProvisionFunc
+	SudoPassword     SudoPasswordFunc
 	SSH              SSHOptions
 	DaemonPort       uint16
 	SSHPort          uint16

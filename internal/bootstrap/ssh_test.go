@@ -51,6 +51,43 @@ func TestConnectSSHAuthenticatesAndRunsCommands(t *testing.T) {
 	}
 }
 
+func TestSSHRemoteEnforcesRequestedOutputLimit(t *testing.T) {
+	t.Parallel()
+
+	clientPrivate, clientPublic := generateSSHKey(t)
+	server := startSSHTestServer(t, clientPublic)
+	remoteTarget, err := parseTarget("shaul@" + server.address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := connectSSH(context.Background(), remoteTarget, SSHOptions{
+		KnownHostsPath: writeKnownHost(t, server.address, server.hostKey),
+		IdentityFiles:  []string{writeSSHIdentity(t, clientPrivate)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer remote.Close() //nolint:errcheck // the output-limit result is authoritative
+	stdout, _, err := remote.Run(context.Background(), "large-output", nil, remoteOutputLimits{Stdout: 4})
+	var limitError *remoteOutputLimitError
+	if !errors.As(err, &limitError) || limitError.Stream != "stdout" || string(stdout) != "xxxx" {
+		t.Fatalf("Run() stdout = %q, error = %v", stdout, err)
+	}
+}
+
+func TestLimitedBufferCapsStoredRemoteOutput(t *testing.T) {
+	t.Parallel()
+
+	buffer := limitedBuffer{limit: 4}
+	written, err := buffer.Write([]byte("abcdef"))
+	if err != nil || written != 6 {
+		t.Fatalf("Write() = %d, %v", written, err)
+	}
+	if got := string(buffer.Bytes()); got != "abcd" || !buffer.Overflowed() {
+		t.Fatalf("limited output = %q, overflowed %t", got, buffer.Overflowed())
+	}
+}
+
 func TestConnectSSHNamesAuthenticationFailure(t *testing.T) {
 	t.Parallel()
 
@@ -259,7 +296,11 @@ func serveSSHTestSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 			return
 		}
 		_ = request.Reply(true, nil)
-		_, _ = fmt.Fprintf(channel, "ran:%s", payload.Command)
+		if payload.Command == "large-output" {
+			_, _ = fmt.Fprint(channel, "xxxxxxxx")
+		} else {
+			_, _ = fmt.Fprintf(channel, "ran:%s", payload.Command)
+		}
 		_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: 0}))
 		return
 	}

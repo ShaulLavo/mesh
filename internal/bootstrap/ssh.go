@@ -1,7 +1,6 @@
 package bootstrap
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +18,46 @@ import (
 
 type sshRemote struct {
 	client *ssh.Client
+}
+
+const maximumRemoteOutputBytes = 8 << 20
+
+type remoteOutputLimits struct {
+	Stdout int
+	Stderr int
+}
+
+type limitedBuffer struct {
+	data     []byte
+	limit    int
+	overflow bool
+}
+
+func (b *limitedBuffer) Write(contents []byte) (int, error) {
+	remaining := b.limit - len(b.data)
+	if remaining > len(contents) {
+		remaining = len(contents)
+	}
+	if remaining > 0 {
+		b.data = append(b.data, contents[:remaining]...)
+	}
+	if remaining < len(contents) {
+		b.overflow = true
+	}
+	return len(contents), nil
+}
+
+func (b *limitedBuffer) Bytes() []byte { return b.data }
+
+func (b *limitedBuffer) Overflowed() bool { return b.overflow }
+
+type remoteOutputLimitError struct {
+	Stream string
+	Limit  int
+}
+
+func (e *remoteOutputLimitError) Error() string {
+	return fmt.Sprintf("remote %s exceeded %d bytes", e.Stream, e.Limit)
 }
 
 func connectSSH(ctx context.Context, remoteTarget target, opts SSHOptions) (remoteHost, error) {
@@ -248,17 +287,26 @@ func classifySSHHandshake(remoteTarget target, err error) error {
 	return diagnostic(DiagnosticSSHAuth, fmt.Errorf("authenticate SSH host %s: %w", remoteTarget.display(), err))
 }
 
-func (r *sshRemote) Run(ctx context.Context, command string, stdin io.Reader) ([]byte, []byte, error) {
+func (r *sshRemote) Run(ctx context.Context, command string, stdin io.Reader, requested ...remoteOutputLimits) ([]byte, []byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
+	}
+	limits := remoteOutputLimits{Stdout: maximumRemoteOutputBytes, Stderr: maximumRemoteOutputBytes}
+	if len(requested) > 0 {
+		if requested[0].Stdout > 0 {
+			limits.Stdout = requested[0].Stdout
+		}
+		if requested[0].Stderr > 0 {
+			limits.Stderr = requested[0].Stderr
+		}
 	}
 	session, err := r.client.NewSession()
 	if err != nil {
 		return nil, nil, fmt.Errorf("open SSH session: %w", err)
 	}
 	defer session.Close() //nolint:errcheck // session.Run or context cancellation determines the request result
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
+	stdout := limitedBuffer{limit: limits.Stdout}
+	stderr := limitedBuffer{limit: limits.Stderr}
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 	session.Stdin = stdin
@@ -266,6 +314,12 @@ func (r *sshRemote) Run(ctx context.Context, command string, stdin io.Reader) ([
 	go func() { done <- session.Run(command) }()
 	select {
 	case err := <-done:
+		if stdout.Overflowed() {
+			err = errors.Join(err, &remoteOutputLimitError{Stream: "stdout", Limit: limits.Stdout})
+		}
+		if stderr.Overflowed() {
+			err = errors.Join(err, &remoteOutputLimitError{Stream: "stderr", Limit: limits.Stderr})
+		}
 		return stdout.Bytes(), stderr.Bytes(), err
 	case <-ctx.Done():
 		_ = session.Close()

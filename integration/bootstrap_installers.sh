@@ -31,7 +31,7 @@ exit 0
 EOF
 cat >"$fake_bin/loginctl" <<'EOF'
 #!/bin/sh
-printf 'yes\n'
+printf 'Linger=yes\n'
 EOF
 cat >"$fake_bin/launchctl" <<'EOF'
 #!/bin/sh
@@ -158,7 +158,7 @@ mkdir -p "$no_linger_bin"
 cp "$fake_bin/systemctl" "$no_linger_bin/systemctl"
 cat >"$no_linger_bin/loginctl" <<'EOF'
 #!/bin/sh
-printf 'no\n'
+printf 'Linger=no\n'
 EOF
 chmod 0755 "$no_linger_bin/loginctl"
 no_linger_source=$run_root/mesh-no-linger

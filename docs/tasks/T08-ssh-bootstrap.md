@@ -44,17 +44,19 @@ Run `mesh add` from a tagged release or place the matching artifact beside the
 development executable.
 
 `scripts/install/linux.sh` installs `~/.local/bin/mesh`, writes a
-systemd user unit, enables the unit, and starts it. The script refuses a Linux
-host without systemd or user lingering. `scripts/install/darwin.sh` writes a
-LaunchAgent and loads it into the available user domain. Both scripts install
-the adopter's Mesh identity in `authorized_keys`. They compare file contents
-before replacement and report `unchanged` on a converged rerun.
+systemd user unit, enables the unit, and starts it. T20 enables user lingering
+under the provisioning confirmation. The script verifies `Linger=yes` before it
+writes the service. `scripts/install/darwin.sh` writes a LaunchAgent and loads it
+into the available user domain. Both scripts install the adopter's Mesh identity
+in `authorized_keys`. They compare file contents before replacement and report
+`unchanged` on a converged rerun.
 
-After installation, bootstrap reads `tailscale status --json`, checks the
-remote clock, and tries every reported Tailscale address until the verification
-deadline. Verification sends `host.info` over the direct WebSocket. It
-checks that the daemon ID is a valid Ed25519 identity and matches any identity
-the CLI already pinned.
+After platform detection, bootstrap reads `tailscale status --json` and runs the
+T20 provisioner before it selects or installs a Mesh binary. After installation,
+bootstrap checks the remote clock and tries every reported Tailscale address
+until the verification deadline. Verification sends `host.info` over the direct
+WebSocket. It checks that the daemon ID is a valid Ed25519 identity and matches
+any identity the CLI already pinned.
 
 T07 owns alias policy and `hosts.json`. The command adapter pins a saved
 identity before bootstrap and atomically saves the verified host record only
@@ -83,9 +85,11 @@ command.
 | The host key is unknown or changed | `ssh_host_key` | Verify the fingerprint. Confirm a new key or fix `known_hosts`; never accept a changed key automatically. |
 | No matching release binary exists, or an unversioned build would have to guess a release | `wrong_arch` | Use a tagged Mesh release, or build and place the reported `os/arch` artifact beside the executable. |
 | Linux has no user systemd | `no_systemd` | Install user-systemd support and run `systemctl --user status`. |
-| The user stops when SSH exits | `no_user_lingering` | On the remote host, run `sudo loginctl enable-linger $USER`. |
+| User lingering cannot be enabled or verified | `no_user_lingering` | Enter the remote sudo password when prompted, grant passwordless access to `loginctl enable-linger`, or enable lingering before adoption. |
 | Tailscale is missing or stopped | `tailscale_unavailable` | Install or start Tailscale on the remote host. |
-| Tailscale is logged out | `tailscale_logged_out` | Run `tailscale up` on the remote host. |
+| Tailscale is logged out | `tailscale_logged_out` | Retry with `--tailscale-auth-key-file`. |
+| Tailscale needs machine approval | `tailscale_machine_auth` | Approve the machine in the Tailscale admin console. |
+| Sudo is unavailable or rejects authentication | `sudo_auth` | Enter the remote sudo password, connect as root, or configure passwordless sudo. |
 | The daemon port cannot be reached | `port_blocked` | Run `tailscale ping`, then allow TCP 7337 in the ACL and host firewall. |
 | The clocks differ by more than five minutes | `clock_skew` | Enable network time with `timedatectl set-ntp true` or `sudo sntp -sS time.apple.com`. |
 | The daemon reports a changed identity | `identity_verification` | Inspect the remote state. Do not replace `identity.key` to silence the error. |
@@ -94,7 +98,7 @@ The focused tests cover every listed code. `TestConnectSSHNamesAuthenticationFai
 uses a real in-process SSH server. `TestCheckBinaryPlatformNamesWrongArchitecture`,
 `TestResolvePlatformBinaryRefusesImplicitReleaseFromDevelopmentBuild`,
 `TestInstallRemoteMapsInstallerFailures`,
-`TestDiscoverTailnetNamesLoggedOutState`,
+`TestProvisionLoggedOutStatesRequireAuthKeyBeforeMutation`,
 `TestVerifyWebSocketNamesBlockedPort`, and
 `TestCheckRemoteClockNamesSkew` cover the remaining named boundaries.
 
@@ -109,8 +113,8 @@ paths.
 The development machine cannot run a real user-systemd VM or a macOS launchd
 domain. Reproduce those service-manager boundaries before a release:
 
-1. On a Linux VM, run `sudo loginctl enable-linger $USER`, then run
-   `mesh add user@vm` from a tailnet peer.
+1. On a Linux VM without lingering, run `mesh add user@vm` from a tailnet peer
+   and approve the `loginctl enable-linger` command.
 2. Disconnect SSH. Confirm
    `ssh user@vm systemctl --user is-active mesh.service` prints `active`.
 3. Run `mesh add user@vm` again. Confirm that it reports the existing

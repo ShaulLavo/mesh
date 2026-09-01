@@ -93,6 +93,8 @@ func TestEveryRequiredDiagnosticIsTypedAndActionable(t *testing.T) {
 		DiagnosticNoSystemd,
 		DiagnosticNoUserLingering,
 		DiagnosticTailscaleLoggedOut,
+		DiagnosticTailscaleMachineAuth,
+		DiagnosticSudoAuth,
 		DiagnosticPortBlocked,
 		DiagnosticClockSkew,
 	} {
