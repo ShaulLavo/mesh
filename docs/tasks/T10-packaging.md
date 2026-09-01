@@ -39,8 +39,8 @@ GoReleaser also writes `Casks/mesh.rb` to the Mesh repository. Use it as a
 custom Homebrew tap:
 
 ```bash
-brew tap shaul/mesh https://github.com/shaul/mesh
-brew install --cask shaul/mesh/mesh
+brew tap ShaulLavo/mesh https://github.com/ShaulLavo/mesh
+brew install --cask ShaulLavo/mesh/mesh
 ```
 
 The release workflow first runs race and integration tests, builds a snapshot
@@ -54,7 +54,7 @@ downloads the matching release archive and `checksums.txt`, verifies SHA-256,
 checks the archive shape, and publishes the binary atomically:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shaul/mesh/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ShaulLavo/mesh/master/scripts/install.sh | sh
 ```
 
 Service assets have one canonical source in `scripts/install/assets/`.

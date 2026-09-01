@@ -72,20 +72,20 @@ homebrew_casks:
     ids:
       - mesh-darwin
     repository:
-      owner: shaul
+      owner: ShaulLavo
       name: mesh
       branch: master
       token: "{{ .Env.GITHUB_TOKEN }}"
     directory: Casks
-    homepage: https://github.com/shaul/mesh
+    homepage: https://github.com/ShaulLavo/mesh
     description: Direct, resumable terminal sessions over Tailscale
     url:
-      template: "https://github.com/shaul/mesh/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+      template: "https://github.com/ShaulLavo/mesh/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
       verified: github.com/shaul/mesh/
     binaries:
       - mesh
 
 release:
   github:
-    owner: shaul
+    owner: ShaulLavo
     name: mesh

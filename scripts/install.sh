@@ -2,7 +2,7 @@
 # Install a checksum-verified Mesh release and its per-user daemon service.
 set -eu
 
-repository_url=https://github.com/shaul/mesh
+repository_url=https://github.com/ShaulLavo/mesh
 
 fail() {
 	printf 'mesh installer: %s\n' "$1" >&2
@@ -95,7 +95,7 @@ fetch_service_assets() {
 		cp "$MESH_SERVICE_ASSET_DIR/checksums.txt" "$manifest_destination"
 		return
 	fi
-	asset_root=https://raw.githubusercontent.com/shaul/mesh/$version/scripts/install/assets
+	asset_root=https://raw.githubusercontent.com/ShaulLavo/mesh/$version/scripts/install/assets
 	download "$asset_root/checksums.txt" "$manifest_destination" "Downloading service checksums"
 	download "$asset_root/$asset_name" "$asset_destination" "Downloading $asset_name"
 }

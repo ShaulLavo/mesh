@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	officialReleaseBaseURL = "https://github.com/shaul/mesh/releases"
+	officialReleaseBaseURL = "https://github.com/ShaulLavo/mesh/releases"
 	maximumManifestSize    = 1 << 20
 	maximumArchiveSize     = 128 << 20
 	maximumBinarySize      = 128 << 20
