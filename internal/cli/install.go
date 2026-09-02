@@ -209,45 +209,67 @@ func daemonWithInstall(app *application) *cobra.Command {
 	return daemon
 }
 
-// addTargetUsage answers "which host?" with the machines on this tailnet, since
-// a target has to be on it anyway. Hosts already adopted are named so the list
-// does not invite adopting the same machine twice.
+// addTargetUsage answers "which host?" with machines this one can actually
+// reach: the Host aliases in ~/.ssh/config, which adoption resolves directly,
+// and the tailnet peers, which a target has to be on anyway. Hosts already
+// adopted are named so the list does not invite adopting one twice.
 func (a *application) addTargetUsage(cmd *cobra.Command) error {
 	usage := &usageError{
 		problem: cmd.CommandPath() + " needs an SSH target",
 		example: "mesh add user@host",
 	}
-	ctx, cancel := context.WithTimeout(cmd.Context(), defaultCatalogTimeout)
-	defer cancel()
-	peers, err := tailnet.Peers(ctx)
-	if err != nil || len(peers) == 0 {
-		// No tailnet, no list. The generic advice is still correct.
-		return usage
-	}
 	hosts, _ := LoadHosts()
-	adopted := make(map[string]string, len(hosts))
+	adopted := make(map[string]string, len(hosts)*2)
 	for _, host := range hosts {
+		adopted[host.Alias] = host.Alias
 		for _, address := range host.Addresses {
 			adopted[address] = host.Alias
 		}
 	}
 
-	usage.details = append(usage.details, "on your tailnet:")
-	for _, peer := range peers {
-		if len(peer.Addrs) == 0 {
-			continue
-		}
-		name := peer.Name
-		if index := strings.Index(name, "."); index > 0 {
-			name = name[:index]
-		}
-		line := fmt.Sprintf("  %-22s %s", SafeTerminalText(name), peer.Addrs[0])
-		if alias, ok := adopted[peer.Addrs[0]]; ok {
+	var first string
+	for _, entry := range sshConfigHosts() {
+		line := fmt.Sprintf("  %-20s %s", SafeTerminalText(entry.Alias), SafeTerminalText(entry.HostName))
+		if alias, ok := adopted[entry.Alias]; ok {
 			line += "   already added as " + SafeTerminalText(alias)
-		} else if !peer.Online {
-			line += "   offline"
+		} else if first == "" {
+			first = entry.Alias
+		}
+		if len(usage.details) == 0 {
+			usage.details = append(usage.details, "from ~/.ssh/config:")
 		}
 		usage.details = append(usage.details, line)
+	}
+
+	ctx, cancel := context.WithTimeout(cmd.Context(), defaultCatalogTimeout)
+	defer cancel()
+	if peers, err := tailnet.Peers(ctx); err == nil {
+		var tailnetLines []string
+		for _, peer := range peers {
+			if len(peer.Addrs) == 0 {
+				continue
+			}
+			name := peer.Name
+			if index := strings.Index(name, "."); index > 0 {
+				name = name[:index]
+			}
+			line := fmt.Sprintf("  %-20s %s", SafeTerminalText(name), peer.Addrs[0])
+			if alias, ok := adopted[peer.Addrs[0]]; ok {
+				line += "   already added as " + SafeTerminalText(alias)
+			} else if !peer.Online {
+				line += "   offline"
+			}
+			tailnetLines = append(tailnetLines, line)
+		}
+		if len(tailnetLines) > 0 {
+			usage.details = append(usage.details, "on your tailnet:")
+			usage.details = append(usage.details, tailnetLines...)
+		}
+	}
+
+	// Suggest something real when there is one, rather than a placeholder.
+	if first != "" {
+		usage.example = "mesh add " + first
 	}
 	return usage
 }
