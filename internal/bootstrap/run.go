@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/tailnet"
 )
 
 const (
@@ -32,6 +33,7 @@ type remoteHost interface {
 
 type dependencies struct {
 	connect       func(context.Context, target, SSHOptions) (remoteHost, error)
+	localTailnet  func(context.Context) error
 	resolveBinary func(context.Context, binarySelection, Platform) (resolvedBinary, error)
 	install       func(context.Context, remoteHost, installRequest) (bool, error)
 	discover      func(context.Context, remoteHost) (tailscaleObservation, error)
@@ -45,6 +47,7 @@ type dependencies struct {
 func defaultDependencies() dependencies {
 	return dependencies{
 		connect:       connectSSH,
+		localTailnet:  checkLocalTailnet,
 		resolveBinary: resolvePlatformBinary,
 		install:       installRemote,
 		discover:      discoverTailnet,
@@ -100,6 +103,13 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 	defer clear(normalized.tailscaleAuthKey)
 	if err := validateDependencies(deps); err != nil {
 		return Result{}, err
+	}
+	// Adoption ends by dialling the host over the tailnet from here, so a local
+	// machine that is not on it cannot finish no matter what happens remotely.
+	// Checking last meant installing and starting Tailscale on someone else's
+	// computer and only then discovering this one could never reach it.
+	if err := deps.localTailnet(ctx); err != nil {
+		return Result{}, diagnostic(DiagnosticLocalTailscale, err)
 	}
 
 	normalized.progress(Event{Step: StepConnect, Detail: normalized.target.display()})
@@ -343,8 +353,20 @@ func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, err
 	}, nil
 }
 
+// checkLocalTailnet reports whether this machine can reach the tailnet at all.
+func checkLocalTailnet(ctx context.Context) error {
+	self, err := tailnet.Self(ctx)
+	if err != nil {
+		return err
+	}
+	if len(self.Addrs) == 0 {
+		return errors.New("this machine has no Tailscale address")
+	}
+	return nil
+}
+
 func validateDependencies(deps dependencies) error {
-	if deps.connect == nil || deps.resolveBinary == nil || deps.install == nil || deps.discover == nil || deps.provision == nil || deps.checkClock == nil || deps.verify == nil || deps.authorizedKey == nil || deps.now == nil {
+	if deps.connect == nil || deps.localTailnet == nil || deps.resolveBinary == nil || deps.install == nil || deps.discover == nil || deps.provision == nil || deps.checkClock == nil || deps.verify == nil || deps.authorizedKey == nil || deps.now == nil {
 		return errors.New("bootstrap: incomplete dependencies")
 	}
 	return nil

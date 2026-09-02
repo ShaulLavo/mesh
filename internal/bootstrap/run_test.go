@@ -26,6 +26,7 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 	var steps []Step
 	foundVariant := ""
 	deps := dependencies{
+		localTailnet: func(context.Context) error { return nil },
 		connect: func(_ context.Context, got target, _ SSHOptions) (remoteHost, error) {
 			if got.display() != "shaul@pi" {
 				t.Fatalf("target = %s", got.display())
@@ -106,7 +107,8 @@ func TestRunRefusesChangedPinnedIdentity(t *testing.T) {
 	pinnedKey[0] = 1
 	pinnedID := base64.RawURLEncoding.EncodeToString(pinnedKey)
 	deps := dependencies{
-		connect: func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
+		localTailnet: func(context.Context) error { return nil },
+		connect:      func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
 		resolveBinary: func(context.Context, binarySelection, Platform) (resolvedBinary, error) {
 			return resolvedBinary{path: "/tmp/mesh", cleanup: func() {}}, nil
 		},
@@ -143,7 +145,8 @@ func TestRunProvisionFailurePrecedesBinaryTransferAndMeshInstall(t *testing.T) {
 	}}
 	provisionFailure := diagnostic(DiagnosticTailscaleUnavailable, errors.New("fixture provision failure"))
 	deps := dependencies{
-		connect: func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
+		localTailnet: func(context.Context) error { return nil },
+		connect:      func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
 		resolveBinary: func(context.Context, binarySelection, Platform) (resolvedBinary, error) {
 			t.Fatal("binary resolution ran before Tailscale provisioning succeeded")
 			return resolvedBinary{}, nil
@@ -189,6 +192,7 @@ func TestRunRedactsAuthKeyFromAnyReturnedDiagnostic(t *testing.T) {
 		return []byte("Linux\nx86_64\n"), nil, nil
 	}}
 	deps := dependencies{
+		localTailnet:  func(context.Context) error { return nil },
 		connect:       func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
 		resolveBinary: func(context.Context, binarySelection, Platform) (resolvedBinary, error) { return resolvedBinary{}, nil },
 		install:       func(context.Context, remoteHost, installRequest) (bool, error) { return false, nil },
@@ -236,7 +240,8 @@ func TestRunDiscardsResultContainingAuthKey(t *testing.T) {
 	}}
 	hostID := base64.RawURLEncoding.EncodeToString(make([]byte, ed25519.PublicKeySize))
 	deps := dependencies{
-		connect: func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
+		localTailnet: func(context.Context) error { return nil },
+		connect:      func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
 		resolveBinary: func(context.Context, binarySelection, Platform) (resolvedBinary, error) {
 			return resolvedBinary{path: "/tmp/mesh", cleanup: func() {}}, nil
 		},
@@ -272,7 +277,8 @@ func TestRunRejectsAuthKeyInTailnetStatusBeforeMeshWrite(t *testing.T) {
 		return []byte("Linux\nx86_64\n"), nil, nil
 	}}
 	deps := dependencies{
-		connect: func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
+		localTailnet: func(context.Context) error { return nil },
+		connect:      func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
 		discover: func(context.Context, remoteHost) (tailscaleObservation, error) {
 			return tailscaleObservation{State: tailscaleRunning, Tailnet: tailnetObservation{Name: secret, Addresses: []string{"100.64.0.8"}}}, nil
 		},
@@ -327,4 +333,40 @@ func (r *stubRemote) Run(_ context.Context, command string, stdin io.Reader, lim
 func (r *stubRemote) Close() error {
 	r.closed++
 	return nil
+}
+
+func TestRunChecksThisMachineBeforeTouchingTheRemote(t *testing.T) {
+	t.Parallel()
+
+	// Adoption dials the host over the tailnet from here, so a machine that is
+	// not on it can never finish. Discovering that after installing Tailscale on
+	// someone else's computer is the failure this guards.
+	connected := false
+	_, err := run(context.Background(), Options{
+		Target: "alice@pi", StateDir: t.TempDir(),
+	}, dependencies{
+		localTailnet: func(context.Context) error { return errors.New("tailscale is not installed") },
+		connect: func(context.Context, target, SSHOptions) (remoteHost, error) {
+			connected = true
+			return nil, errors.New("must not connect")
+		},
+		resolveBinary: func(context.Context, binarySelection, Platform) (resolvedBinary, error) {
+			return resolvedBinary{}, nil
+		},
+		install:  func(context.Context, remoteHost, installRequest) (bool, error) { return false, nil },
+		discover: func(context.Context, remoteHost) (tailscaleObservation, error) { return tailscaleObservation{}, nil },
+		provision: func(context.Context, remoteHost, provisionRequest) (provisionResult, error) {
+			return provisionResult{}, nil
+		},
+		checkClock: func(context.Context, remoteHost, time.Time) error { return nil },
+		verify: func(context.Context, []string, uint16, string) (verifiedHost, string, error) {
+			return verifiedHost{}, "", nil
+		},
+		authorizedKey: func(string) (string, error) { return "ssh-ed25519 AAAA", nil },
+		now:           time.Now,
+	})
+	assertDiagnosticCode(t, err, DiagnosticLocalTailscale)
+	if connected {
+		t.Fatal("connected to the remote host before checking this machine")
+	}
 }

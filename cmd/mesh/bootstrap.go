@@ -24,6 +24,7 @@ import (
 type bootstrapRunner func(context.Context, bootstrap.Options) (bootstrap.Result, error)
 
 type bootstrapUI struct {
+	steps    *cli.StepPrinter
 	input    io.Reader
 	output   io.Writer
 	username func() (string, error)
@@ -66,6 +67,9 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 		if err != nil {
 			return cli.BootstrapResult{}, err
 		}
+		steps := cli.NewStepPrinter(ui.output, "BOOTSTRAP")
+		defer steps.Done()
+		ui.steps = steps
 		authKey, err := readTailscaleAuthKey(request.TailscaleAuthKeyFile)
 		if err != nil {
 			return cli.BootstrapResult{}, err
@@ -92,7 +96,7 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 				ConfirmHostKey: hostKeyPrompt(ui),
 			},
 			Progress: func(event bootstrap.Event) {
-				cli.RenderStep(ui.output, "BOOTSTRAP", string(event.Step), event.Detail)
+				steps.Step(string(event.Step), event.Detail)
 			},
 		})
 		if err != nil {
@@ -183,6 +187,7 @@ func provisionPrompt(ui bootstrapUI) bootstrap.ConfirmProvisionFunc {
 		if ui.terminal == nil || !ui.terminal() {
 			return false, errors.New("Tailscale provisioning needs an interactive terminal or --yes")
 		}
+		ui.pauseSteps()
 		if _, err := fmt.Fprintf(ui.output, "\n%s\n\n", cli.SafeTerminalText(confirmation.Summary)); err != nil {
 			return false, err
 		}
@@ -259,6 +264,7 @@ func passphrasePrompt(ui bootstrapUI) func(context.Context, string) ([]byte, err
 }
 
 func promptSecret(ctx context.Context, ui bootstrapUI, title, description string) (string, error) {
+	ui.pauseSteps()
 	var value string
 	form := huh.NewForm(huh.NewGroup(
 		huh.NewInput().
@@ -275,6 +281,7 @@ func promptSecret(ctx context.Context, ui bootstrapUI, title, description string
 
 func hostKeyPrompt(ui bootstrapUI) func(context.Context, bootstrap.HostKey) (bool, error) {
 	return func(ctx context.Context, key bootstrap.HostKey) (bool, error) {
+		ui.pauseSteps()
 		var accepted bool
 		form := huh.NewForm(huh.NewGroup(
 			huh.NewConfirm().
@@ -288,5 +295,12 @@ func hostKeyPrompt(ui bootstrapUI) func(context.Context, bootstrap.HostKey) (boo
 			return false, err
 		}
 		return accepted, nil
+	}
+}
+
+// pauseSteps stops the live step line before a prompt takes the terminal.
+func (u bootstrapUI) pauseSteps() {
+	if u.steps != nil {
+		u.steps.Pause()
 	}
 }

@@ -19,6 +19,7 @@ const (
 	DiagnosticTailscaleLoggedOut   DiagnosticCode = "tailscale_logged_out"
 	DiagnosticTailscaleMachineAuth DiagnosticCode = "tailscale_machine_auth"
 	DiagnosticSudoAuth             DiagnosticCode = "sudo_auth"
+	DiagnosticLocalTailscale       DiagnosticCode = "local_tailscale"
 	DiagnosticPortBlocked          DiagnosticCode = "port_blocked"
 	DiagnosticClockSkew            DiagnosticCode = "clock_skew"
 	DiagnosticIdentity             DiagnosticCode = "identity_verification"
@@ -65,6 +66,8 @@ func diagnosticSuggestion(code DiagnosticCode) string {
 		return "create a reusable auth key at https://login.tailscale.com/admin/settings/keys, then retry with --tailscale-auth-key-file"
 	case DiagnosticTailscaleMachineAuth:
 		return "approve the machine in the Tailscale admin console at https://login.tailscale.com/admin/machines"
+	case DiagnosticLocalTailscale:
+		return "install Tailscale here and run tailscale up; adoption verifies the connection from this machine"
 	case DiagnosticSudoAuth:
 		return "enter the remote sudo password interactively, connect as root, or configure passwordless sudo"
 	case DiagnosticPortBlocked:
