@@ -145,6 +145,8 @@ func TestCLISelectionMapping(t *testing.T) {
 		{input: newSelection{hostAlias: "pc"}, want: cli.PickerSelection{HostAlias: "pc", New: true}},
 		{input: resumeSelection{hostAlias: "pc"}, want: cli.PickerSelection{HostAlias: "pc"}},
 		{input: wakeSelection{hostAlias: "pi"}, want: cli.PickerSelection{HostAlias: "pi", Wake: true}},
+		{input: killSelection{hostAlias: "pc", sessionID: "7K3D"}, want: cli.PickerSelection{HostAlias: "pc", SessionID: "7K3D", Kill: true}},
+		{input: removeSelection{hostAlias: "pc", sessionID: "7K3D"}, want: cli.PickerSelection{HostAlias: "pc", SessionID: "7K3D", Remove: true}},
 	}
 	for _, test := range tests {
 		if got := cliSelection(test.input); got != test.want {
@@ -207,4 +209,34 @@ func cleanSnapshot(view string) string {
 		lines[index] = strings.TrimRight(lines[index], " ")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func TestPickerRefusesTheWrongActionForAState(t *testing.T) {
+	t.Parallel()
+
+	// Removing a live session would delete work someone means to come back to,
+	// and killing a finished one has nothing to end. Both say so and stay put
+	// rather than quitting the picker with a selection the CLI must reject.
+	for _, row := range []struct {
+		name  string
+		key   string
+		state string
+	}{
+		{"remove refuses a live session", "x", "running"},
+		{"remove refuses a detached session", "x", "detached"},
+		{"kill refuses a finished session", "k", "exited"},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			m := newModel([]host{{alias: "pc", sessions: []session{{id: "7K3D", state: row.state}}}}, time.Now())
+			m = updateModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+			m = updateModel(t, m, key(tea.KeyEnter))
+			m = updateModel(t, m, key(rune(row.key[0])))
+			if m.selection != nil {
+				t.Fatalf("%s produced selection %#v, want none", row.key, m.selection)
+			}
+			if m.notice == "" {
+				t.Fatalf("%s on a %s session said nothing", row.key, row.state)
+			}
+		})
+	}
 }

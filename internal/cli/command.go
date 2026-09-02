@@ -61,6 +61,10 @@ type PickerSelection struct {
 	SessionID string
 	New       bool
 	Wake      bool
+	// Kill and Remove act on the named session and return to the picker, so
+	// tidying up does not mean leaving and coming back.
+	Kill   bool
+	Remove bool
 }
 
 // PickerFunc owns only selection UI. The CLI still owns create and attach.
@@ -245,6 +249,14 @@ func (a *application) runPicker(cmd *cobra.Command, hosts []HostRecord, detachKe
 		if err := validatePickerSelection(selection); err != nil {
 			return err
 		}
+		if selection.SessionID != "" && (selection.Kill || selection.Remove) {
+			if err := a.pickerSessionAction(cmd, hosts, selection); err != nil {
+				if _, printErr := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", SafeTerminalText(err.Error())); printErr != nil {
+					return printErr
+				}
+			}
+			continue
+		}
 		if selection.SessionID != "" {
 			resolved, err := findCatalogSession(catalog, selection.SessionID, selection.HostAlias)
 			if err != nil {
@@ -276,6 +288,12 @@ func (a *application) runPicker(cmd *cobra.Command, hosts []HostRecord, detachKe
 }
 
 func validatePickerSelection(selection PickerSelection) error {
+	if selection.Kill && selection.Remove {
+		return errors.New("picker selection cannot combine kill and remove")
+	}
+	if (selection.Kill || selection.Remove) && selection.SessionID == "" {
+		return errors.New("picker kill and remove selections require a session")
+	}
 	if selection.SessionID != "" && (selection.New || selection.Wake) {
 		return errors.New("picker selection cannot combine a session with new or wake")
 	}
@@ -1197,4 +1215,14 @@ func inGroup(id string, commands ...*cobra.Command) []*cobra.Command {
 		command.GroupID = id
 	}
 	return commands
+}
+
+// pickerSessionAction runs a kill or a remove chosen in the picker. Failures are
+// reported and the picker reopens, because one refused session is not a reason
+// to throw away the browsing session around it.
+func (a *application) pickerSessionAction(cmd *cobra.Command, hosts []HostRecord, selection PickerSelection) error {
+	if selection.Kill {
+		return a.runSessionControl(cmd, selection.SessionID, protocol.TypeKill, "")
+	}
+	return a.removeSession(cmd, hosts, selection.SessionID)
 }

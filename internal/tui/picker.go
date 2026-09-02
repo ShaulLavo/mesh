@@ -79,6 +79,10 @@ func cliSelection(selected selection) cli.PickerSelection {
 		return cli.PickerSelection{HostAlias: selected.hostAlias}
 	case wakeSelection:
 		return cli.PickerSelection{HostAlias: selected.hostAlias, Wake: true}
+	case killSelection:
+		return cli.PickerSelection{HostAlias: selected.hostAlias, SessionID: selected.sessionID, Kill: true}
+	case removeSelection:
+		return cli.PickerSelection{HostAlias: selected.hostAlias, SessionID: selected.sessionID, Remove: true}
 	default:
 		panic(fmt.Sprintf("tui: unknown picker selection %T", selected))
 	}

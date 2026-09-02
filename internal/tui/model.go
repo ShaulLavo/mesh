@@ -59,6 +59,16 @@ func (resumeSelection) pickerSelection() {}
 
 type wakeSelection struct{ hostAlias string }
 
+type killSelection struct {
+	hostAlias string
+	sessionID string
+}
+
+type removeSelection struct {
+	hostAlias string
+	sessionID string
+}
+
 func (wakeSelection) pickerSelection() {}
 
 type model struct {
@@ -187,6 +197,32 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 			}
 			return nil
 		}
+	case "k":
+		if m.screen == sessionScreen {
+			current, session, ok := m.currentSession()
+			if !ok {
+				return nil
+			}
+			if session.state != "running" && session.state != "detached" {
+				m.notice = session.id + " is already " + session.state
+				return nil
+			}
+			m.selection = killSelection{hostAlias: current.alias, sessionID: session.id}
+			return tea.Quit
+		}
+	case "x":
+		if m.screen == sessionScreen {
+			current, session, ok := m.currentSession()
+			if !ok {
+				return nil
+			}
+			if session.state == "running" || session.state == "detached" {
+				m.notice = session.id + " is still " + session.state + "; kill it first"
+				return nil
+			}
+			m.selection = removeSelection{hostAlias: current.alias, sessionID: session.id}
+			return tea.Quit
+		}
 	case "w":
 		if m.screen == sessionScreen {
 			current := m.currentHost()
@@ -272,7 +308,7 @@ func (m model) chrome() (string, string, string) {
 	if m.notice != "" {
 		subtitle = m.notice
 	}
-	footer := "↑/↓ move  enter attach  n new  r resume  esc hosts"
+	footer := "↑/↓ move  enter attach  n new  r resume  k kill  x remove  esc hosts"
 	if current.stale {
 		footer = "↑/↓ move  enter try attach  w wake  esc hosts"
 	}
@@ -436,4 +472,17 @@ func (styles pickerStyles) status(stale bool) lipgloss.Style {
 		return styles.warning
 	}
 	return styles.muted
+}
+
+func (killSelection) pickerSelection()   {}
+func (removeSelection) pickerSelection() {}
+
+// currentSession is the highlighted session and the host showing it.
+func (m *model) currentSession() (host, session, bool) {
+	current := m.currentHost()
+	item, ok := m.list.SelectedItem().(sessionItem)
+	if !ok {
+		return current, session{}, false
+	}
+	return current, item.session, true
 }
