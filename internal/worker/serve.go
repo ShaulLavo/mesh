@@ -134,11 +134,16 @@ func (w *Worker) serve(conn net.Conn) {
 	c.startLocked(w)
 	w.attachOnce.Do(func() { close(w.attached) })
 	w.mu.Unlock()
+	w.recordAttachment(true)
 
 	defer func() {
 		w.mu.Lock()
 		w.dropLocked(c, "")
+		remaining := len(w.attachments)
 		w.mu.Unlock()
+		if remaining == 0 {
+			w.recordAttachment(false)
+		}
 	}()
 
 	// If the process already exited, tell this client immediately rather than

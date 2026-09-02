@@ -714,3 +714,30 @@ func (w *Worker) flushScrollback(dir string) error {
 	}
 	return file.Close()
 }
+
+// recordAttachment keeps meta.json honest about whether anyone is watching, so
+// a session someone walked away from is distinguishable from one in use.
+//
+// It never moves a session that has already recorded its outcome: the exit path
+// writes meta too, and resurrecting an exited session as detached would be far
+// worse than a stale label.
+func (w *Worker) recordAttachment(attached bool) {
+	meta, err := ReadMeta(w.cfg.Dir)
+	if err != nil {
+		return
+	}
+	if meta.State != StateRunning && meta.State != StateDetached {
+		return
+	}
+	want := StateDetached
+	if attached {
+		want = StateRunning
+	}
+	if meta.State == want {
+		return
+	}
+	meta.State = want
+	if err := WriteMeta(w.cfg.Dir, meta); err != nil {
+		log.Printf("worker: record attachment: %v", err)
+	}
+}

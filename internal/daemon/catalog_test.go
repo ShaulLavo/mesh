@@ -189,7 +189,7 @@ func TestCatalogReconcileRejectsIncompleteScanBeforeMutation(t *testing.T) {
 			name: "unsupported worker state",
 			setup: func(t *testing.T, root string) {
 				t.Helper()
-				writeCatalogMeta(t, root, "4N0W", catalogTestMeta("4N0W", "detached", "boot-a"))
+				writeCatalogMeta(t, root, "4N0W", catalogTestMeta("4N0W", "paused", "boot-a"))
 			},
 		},
 		{
@@ -850,5 +850,37 @@ func TestCatalogRetiresFinishedSessionsByAge(t *testing.T) {
 	sort.Strings(observedIDs)
 	if len(observedIDs) != 2 || observedIDs[0] != "N3WW" || observedIDs[1] != "RVNN" {
 		t.Fatalf("observed = %v, want the two kept sessions", observedIDs)
+	}
+}
+
+func TestDetachedSessionIsAliveAndProbed(t *testing.T) {
+	t.Parallel()
+
+	// Detached means alive with nobody watching. Mapping it to anything
+	// finished would let reconciliation retire a session someone fully
+	// intends to come back to.
+	meta := catalogTestMeta("7K3D", worker.StateDetached, "boot-a")
+	session, probe, err := sessionFromMeta("host-a", "7K3D", meta)
+	if err != nil {
+		t.Fatalf("sessionFromMeta() error = %v", err)
+	}
+	if session.State != storage.StateDetached {
+		t.Fatalf("state = %q, want detached", session.State)
+	}
+	if !probe {
+		t.Fatal("a detached session must still be probed; its worker is live")
+	}
+}
+
+func TestDetachedSessionRejectsExitFields(t *testing.T) {
+	t.Parallel()
+
+	// The same guard running has: a live session carrying an exit code is
+	// torn metadata, not a state to trust.
+	meta := catalogTestMeta("7K3D", worker.StateDetached, "boot-a")
+	code := 0
+	meta.ExitCode = &code
+	if _, _, err := sessionFromMeta("host-a", "7K3D", meta); err == nil {
+		t.Fatal("a detached session with exit fields was accepted")
 	}
 }

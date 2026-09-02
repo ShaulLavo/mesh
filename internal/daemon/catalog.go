@@ -178,7 +178,7 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 			return nil, err
 		}
 
-		if session.State == storage.StateRunning && meta.BootID != "" && currentBootID != "" && meta.BootID != currentBootID {
+		if (session.State == storage.StateRunning || session.State == storage.StateDetached) && meta.BootID != "" && currentBootID != "" && meta.BootID != currentBootID {
 			session.State = storage.StateInterrupted
 			probe = false
 		}
@@ -257,11 +257,16 @@ func sessionFromMeta(hostID storage.HostID, directory string, meta worker.Meta) 
 		CreatedAt: meta.CreatedAt,
 	}
 	switch meta.State {
-	case worker.StateRunning:
+	case worker.StateRunning, worker.StateDetached:
 		if meta.ExitedAt != nil || meta.ExitCode != nil {
-			return storage.Session{}, false, fmt.Errorf("daemon: running session %s has exit fields", meta.ID)
+			return storage.Session{}, false, fmt.Errorf("daemon: live session %s has exit fields", meta.ID)
 		}
+		// Both are alive and both are probed; they differ only in whether a
+		// client is currently watching.
 		session.State = storage.StateRunning
+		if meta.State == worker.StateDetached {
+			session.State = storage.StateDetached
+		}
 		return session, true, nil
 	case worker.StateExited:
 		if meta.ExitedAt == nil || meta.ExitCode == nil {
@@ -379,7 +384,9 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 	}
 	var finished []candidate
 	for i, current := range observed {
-		if current.State == storage.StateRunning {
+		// Detached is alive. Retiring it would delete a session someone walked
+		// away from and fully intends to come back to.
+		if current.State == storage.StateRunning || current.State == storage.StateDetached {
 			continue
 		}
 		finished = append(finished, candidate{index: i, retireAt: current.CreatedAt})

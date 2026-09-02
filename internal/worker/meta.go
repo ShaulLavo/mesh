@@ -12,10 +12,16 @@ import (
 	"time"
 )
 
-// Session states. A worker only ever reports running or exited; the daemon
-// infers detached and interrupted by looking at sockets and reboots.
+// Session states. The worker reports running while a client is attached,
+// detached once the last one leaves, and exited when the command ends. The
+// daemon still infers interrupted, which only a reboot can produce.
+//
+// The worker owns detached because only it knows whether anyone is watching.
+// While nothing wrote this, every live session read as running, so a session
+// left running in the background looked exactly like the one in front of you.
 const (
 	StateRunning     = "running"
+	StateDetached    = "detached"
 	StateExited      = "exited"
 	StateInterrupted = "interrupted"
 )

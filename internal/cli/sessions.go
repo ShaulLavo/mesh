@@ -29,6 +29,9 @@ type Session struct {
 // with what is actually true now.
 func (s Session) State() string {
 	switch {
+	case s.Alive && s.Meta.State == worker.StateDetached:
+		// Alive, but nobody is watching it.
+		return worker.StateDetached
 	case s.Alive:
 		return worker.StateRunning
 	case s.Meta.State == worker.StateExited:
