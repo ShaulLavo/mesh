@@ -282,9 +282,9 @@ func (a *application) runHost(cmd *cobra.Command, host HostRecord, resume bool, 
 		}
 		return fmt.Errorf("host %s has no active sessions", host.Alias)
 	}
-	if len(command) == 0 {
-		command = []string{defaultShell()}
-	}
+	// No command means the host's own shell. Sending defaultShell() here would
+	// name a path on this machine: /bin/zsh on a Mac does not exist on an Arch
+	// host, whose shell is /usr/bin/bash.
 	cols, rows := terminalSize(a.dependencies.Stdout)
 	ctx, cancel := context.WithTimeout(cmd.Context(), remoteCreateTimeout)
 	id, err := createRemoteSession(ctx, host, a.dependencies.DialHost, command, cols, rows)

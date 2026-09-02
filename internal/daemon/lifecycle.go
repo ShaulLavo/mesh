@@ -3,8 +3,11 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -191,8 +194,11 @@ func (l *lifecycle) create(ctx context.Context, request protocol.Control) (proto
 	if err := validateRequestID(request); err != nil {
 		return protocol.Control{}, err
 	}
-	if len(request.Command) == 0 || request.Command[0] == "" {
-		return protocol.Control{}, fmt.Errorf("daemon: %s request has no command", request.Type)
+	if len(request.Command) == 0 {
+		request.Command = []string{hostShell()}
+	}
+	if request.Command[0] == "" {
+		return protocol.Control{}, fmt.Errorf("daemon: %s request has an empty command", request.Type)
 	}
 	if err := ctx.Err(); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
@@ -450,4 +456,40 @@ func cloneLifecycleInt(value *int) *int {
 	}
 	cloned := *value
 	return &cloned
+}
+
+// hostShell is the shell a session gets when the client names no command. A
+// remote client cannot choose this: its own $SHELL is a path on its own
+// machine, which may be absent here or a different program entirely.
+func hostShell() string {
+	if shell := strings.TrimSpace(os.Getenv("SHELL")); shell != "" {
+		return shell
+	}
+	if shell := passwdShell(); shell != "" {
+		return shell
+	}
+	if path, err := exec.LookPath("bash"); err == nil {
+		return path
+	}
+	return "/bin/sh"
+}
+
+// passwdShell reads the login shell for this uid. macOS keeps users in a
+// directory service rather than /etc/passwd, so a miss here is ordinary.
+func passwdShell() string {
+	contents, err := os.ReadFile("/etc/passwd")
+	if err != nil {
+		return ""
+	}
+	uid := strconv.Itoa(os.Getuid())
+	for _, line := range strings.Split(string(contents), "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) < 7 || fields[2] != uid {
+			continue
+		}
+		if shell := strings.TrimSpace(fields[6]); shell != "" {
+			return shell
+		}
+	}
+	return ""
 }

@@ -428,7 +428,7 @@ func TestLifecycleRejectsMalformedRequestsBeforeSideEffects(t *testing.T) {
 	})
 
 	requests := []protocol.Control{
-		{Type: protocol.TypeCreate, RequestID: "request-1"},
+		{Type: protocol.TypeCreate, RequestID: "request-1", Command: []string{""}},
 		{Type: protocol.TypeSignal, RequestID: "request-2", SessionID: "7K3D", Signal: "bogus"},
 		{Type: protocol.TypeKill, RequestID: "request-3", SessionID: "../X"},
 		{Type: protocol.TypeLogs, RequestID: "request-4", SessionID: "7K3D", Tail: protocol.MaxLogTail + 1},
@@ -489,4 +489,32 @@ func (c *lifecycleRecordingConn) WriteFrame(frame protocol.Frame) error {
 func (c *lifecycleRecordingConn) Close() error {
 	c.closed = true
 	return nil
+}
+
+func TestCreateWithoutACommandUsesTheHostShell(t *testing.T) {
+	var launched worker.LaunchConfig
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{},
+		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+			return nil, errors.New("unexpected connect")
+		}),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
+		SessionsDir: "/state/s",
+		Launch: func(config worker.LaunchConfig) (worker.Launched, error) {
+			launched = config
+			return worker.Launched{}, errors.New("stop after the command is chosen")
+		},
+	})
+
+	// A client on a Mac sends no command rather than /bin/zsh, which names a
+	// path that need not exist on this host.
+	_, _, _ = lifecycle.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeCreate, RequestID: "request-shell", Cols: 80, Rows: 24,
+	})
+	if len(launched.Command) == 0 {
+		t.Fatal("no command reached the worker")
+	}
+	if launched.Command[0] != hostShell() {
+		t.Fatalf("command = %q, want the host shell %q", launched.Command, hostShell())
+	}
 }
