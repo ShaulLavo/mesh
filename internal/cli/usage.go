@@ -71,3 +71,16 @@ func RenderError(output io.Writer, styles fang.Styles, err error) {
 	}
 	_, _ = fmt.Fprintln(output)
 }
+
+// minimumArgs enforces a floor and explains the fix when it is not met.
+func minimumArgs(count int, needs, example string) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if len(args) >= count {
+			return nil
+		}
+		return &usageError{
+			problem: fmt.Sprintf("%s needs %s", cmd.CommandPath(), needs),
+			example: example,
+		}
+	}
+}

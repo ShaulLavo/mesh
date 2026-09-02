@@ -419,3 +419,15 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 	}
 	return kept, retired
 }
+
+// Retire deletes finished sessions for this host. The store refuses a running
+// one in SQL, so a mistaken ID cannot remove live work.
+func (c *Catalog) Retire(ctx context.Context, ids []storage.SessionID) (int64, error) {
+	if err := validContext(ctx); err != nil {
+		return 0, fmt.Errorf("daemon: retire sessions for %s: %w", c.host.ID, err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	return c.store.RetireSessions(ctx, c.host.ID, ids)
+}

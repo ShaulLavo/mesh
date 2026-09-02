@@ -529,3 +529,7 @@ func waitServerResult(t *testing.T, result <-chan error, name string) error {
 }
 
 var _ transport.Conn = (*serverTestConn)(nil)
+
+func (*serverTestCatalog) Retire(_ context.Context, ids []storage.SessionID) (int64, error) {
+	return int64(len(ids)), nil
+}

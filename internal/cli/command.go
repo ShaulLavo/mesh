@@ -141,6 +141,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 		app.attachCommand(),
 		app.daemonCommand(),
 		app.killCommand(),
+		app.removeCommand(),
 		app.listCommand(),
 		app.localCommand(),
 		app.logsCommand(),
@@ -913,6 +914,53 @@ func (a *application) signalCommand() *cobra.Command {
 			return a.runSessionControl(cmd, args[0], protocol.TypeSignal, args[1])
 		},
 	}
+}
+
+func (a *application) removeCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:     "rm session...",
+		Aliases: []string{"remove"},
+		Short:   "Forget finished sessions and delete what they left behind",
+		Args:    minimumArgs(1, "at least one session id", "mesh rm 7K3D        (mesh ls lists your sessions)"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			hosts, err := LoadHosts()
+			if err != nil {
+				return err
+			}
+			// Keep going after a failure so one bad ID does not strand the rest,
+			// and report every outcome rather than the first.
+			var failures []error
+			for _, id := range args {
+				if err := a.removeSession(cmd, hosts, id); err != nil {
+					failures = append(failures, err)
+					continue
+				}
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", strings.ToUpper(id)); err != nil {
+					return err
+				}
+			}
+			return errors.Join(failures...)
+		},
+	}
+}
+
+func (a *application) removeSession(cmd *cobra.Command, hosts []HostRecord, id string) error {
+	resolved, err := a.resolveSession(cmd.Context(), hosts, id)
+	if err != nil {
+		return err
+	}
+	if resolved.local != nil {
+		if resolved.local.Meta.State != worker.StateExited && resolved.local.Alive {
+			return fmt.Errorf("session %s is still running; kill it before removing it", resolved.local.ID)
+		}
+		return RemoveLocal(*resolved.local)
+	}
+	if resolved.remote.State == string(storage.StateRunning) || resolved.remote.State == string(storage.StateDetached) {
+		return fmt.Errorf("session %s on %s is still %s; kill it before removing it", resolved.remote.ID, resolved.host.Alias, resolved.remote.State)
+	}
+	ctx, cancel := context.WithTimeout(cmd.Context(), 12*time.Second)
+	defer cancel()
+	return controlRemoteSession(ctx, *resolved.host, a.dependencies.DialHost, resolved.remote.ID, protocol.TypeRemove, "")
 }
 
 func (a *application) runSessionControl(cmd *cobra.Command, id, controlType, signal string) error {

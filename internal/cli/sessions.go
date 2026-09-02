@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/x/term"
@@ -142,4 +143,25 @@ func Spawn(command []string, cwd string) (Session, error) {
 		return Session{}, err
 	}
 	return Session{Meta: launched.Meta, Dir: launched.Dir, Alive: true}, nil
+}
+
+// RemoveLocal deletes what a finished local session left on disk. The caller
+// establishes that it is finished; a live worker's directory holds its socket
+// and metadata and removing it would orphan the process.
+func RemoveLocal(s Session) error {
+	if strings.TrimSpace(s.Dir) == "" {
+		return fmt.Errorf("session %s has no directory", s.ID)
+	}
+	root, err := paths.SessionsDir()
+	if err != nil {
+		return err
+	}
+	// Only ever a session directory directly under the sessions root.
+	if filepath.Dir(filepath.Clean(s.Dir)) != filepath.Clean(root) {
+		return fmt.Errorf("session %s directory %s is outside %s", s.ID, s.Dir, root)
+	}
+	if err := os.RemoveAll(s.Dir); err != nil {
+		return fmt.Errorf("remove session %s: %w", s.ID, err)
+	}
+	return nil
 }

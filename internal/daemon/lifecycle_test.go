@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -26,6 +27,7 @@ type lifecycleTestCatalog struct {
 	reconcileErr   error
 	reconcileHook  func(context.Context) error
 	reconcileCalls int
+	retired        int
 }
 
 func (c *lifecycleTestCatalog) Reconcile(ctx context.Context) error {
@@ -573,5 +575,67 @@ func TestLogsStillReportsARealForwardingFailure(t *testing.T) {
 		Type: protocol.TypeLogs, RequestID: "logs-2", SessionID: "7K3D", Tail: 4096,
 	}); err == nil {
 		t.Fatal("a real forwarding failure was swallowed")
+	}
+}
+
+func (c *lifecycleTestCatalog) Retire(_ context.Context, ids []storage.SessionID) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.retired += len(ids)
+	return int64(len(ids)), nil
+}
+
+func TestRemoveRefusesARunningSession(t *testing.T) {
+	t.Parallel()
+
+	// Ending someone's work is a separate decision from tidying up after it,
+	// and mesh kill already makes it.
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{sessions: []storage.Session{{ID: "7K3D", State: storage.StateRunning}}},
+		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+			return nil, errors.New("unexpected connect")
+		}),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
+		SessionsDir: t.TempDir(),
+	})
+	_, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeRemove, RequestID: "rm-1", SessionID: "7K3D",
+	})
+	if !handled || err == nil || !strings.Contains(err.Error(), "kill it before removing it") {
+		t.Fatalf("remove of a running session = %v", err)
+	}
+}
+
+func TestRemoveDeletesTheRecordAndItsDirectory(t *testing.T) {
+	t.Parallel()
+
+	sessionsDir := t.TempDir()
+	dir := filepath.Join(sessionsDir, "7K3D")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &lifecycleTestCatalog{sessions: []storage.Session{{ID: "7K3D", State: storage.StateExited}}}
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog: catalog,
+		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+			return nil, errors.New("unexpected connect")
+		}),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
+		SessionsDir: sessionsDir,
+	})
+
+	response, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeRemove, RequestID: "rm-2", SessionID: "7K3D",
+	})
+	if err != nil || !handled || response.Type != protocol.TypeRemoved {
+		t.Fatalf("remove = %+v, handled = %v, error = %v", response, handled, err)
+	}
+	// A directory left behind would be re-adopted by the next reconciliation
+	// and the session would come back.
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("session directory survived removal: %v", err)
+	}
+	if catalog.retired != 1 {
+		t.Fatalf("catalog retired %d sessions, want 1", catalog.retired)
 	}
 }
