@@ -85,7 +85,7 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 | 1 Local persistent session | T01, T02, T03, T04 | complete |
 | 2 Remote session over Tailscale | T05, T06 | complete |
 | 3 Product CLI | T07, T09 | complete |
-| 4 SSH bootstrap | T08, T20 | complete |
+| 4 SSH bootstrap | T08, T20, T21 | complete |
 | 5 Crash and restart recovery | folded into T04 | complete |
 | 6 Pi power control | **T19** | **not started** |
 | 7 Packaging | T10 | complete |

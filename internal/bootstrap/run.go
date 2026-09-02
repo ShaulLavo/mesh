@@ -253,6 +253,12 @@ func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, err
 	if err != nil {
 		return normalizedOptions{}, err
 	}
+	// Mesh dials the address itself, so a Host alias only ssh knows about would
+	// otherwise fail as a DNS lookup for the alias.
+	remoteTarget = applySSHConfig(remoteTarget, userSSHConfig())
+	if remoteTarget.user == "" {
+		return normalizedOptions{}, diagnostic(DiagnosticInvalidTarget, fmt.Errorf("target %q names no user and ~/.ssh/config sets none for %q; use user@host", opts.Target, remoteTarget.alias))
+	}
 	if strings.TrimSpace(opts.StateDir) == "" {
 		return normalizedOptions{}, diagnostic(DiagnosticIdentity, errors.New("local state directory is empty"))
 	}

@@ -19,6 +19,7 @@ require (
 	github.com/charmbracelet/x/xpty v0.1.4
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
+	github.com/kevinburke/ssh_config v1.6.0
 	github.com/muesli/cancelreader v0.2.2
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/spf13/cobra v1.9.1

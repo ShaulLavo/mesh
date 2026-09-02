@@ -15,9 +15,12 @@ func TestParseTarget(t *testing.T) {
 		input string
 		want  target
 	}{
-		{input: "shaul@pc", want: target{user: "shaul", host: "pc", port: 22}},
-		{input: "shaul@pc:2222", want: target{user: "shaul", host: "pc", port: 2222}},
-		{input: "shaul@[fd7a:115c:a1e0::1]:2200", want: target{user: "shaul", host: "fd7a:115c:a1e0::1", port: 2200}},
+		{input: "shaul@pc", want: target{user: "shaul", host: "pc", port: 22, alias: "pc", explicitUser: true}},
+		{input: "shaul@pc:2222", want: target{user: "shaul", host: "pc", port: 2222, alias: "pc", explicitUser: true, explicitPort: true}},
+		{input: "shaul@[fd7a:115c:a1e0::1]:2200", want: target{user: "shaul", host: "fd7a:115c:a1e0::1", port: 2200, alias: "fd7a:115c:a1e0::1", explicitUser: true, explicitPort: true}},
+		// A bare host is valid because ~/.ssh/config may name the user, the
+		// way `ssh pc` does. run.go rejects one that still has none after.
+		{input: "pc", want: target{host: "pc", port: 22, alias: "pc"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -50,7 +53,7 @@ func TestCheckBinaryPlatformNamesWrongArchitecture(t *testing.T) {
 func TestParseTargetRejectsAmbiguousInput(t *testing.T) {
 	t.Parallel()
 
-	for _, input := range []string{"", "pc", "@pc", "shaul@", "shaul:secret@pc", "shaul@pc:70000", "shaul@pc/path"} {
+	for _, input := range []string{"", "@pc", "shaul@", "shaul:secret@pc", "shaul@pc:70000", "shaul@pc/path"} {
 		t.Run(input, func(t *testing.T) {
 			if _, err := parseTarget(input); err == nil {
 				t.Fatalf("parseTarget(%q) succeeded", input)

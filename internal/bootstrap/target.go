@@ -12,6 +12,13 @@ type target struct {
 	user string
 	host string
 	port uint16
+
+	// alias is the host exactly as typed, before ~/.ssh/config is applied.
+	// The explicit flags record what the caller supplied, because a command
+	// line always beats the config file.
+	alias        string
+	explicitUser bool
+	explicitPort bool
 }
 
 func (t target) address() string {
@@ -37,18 +44,33 @@ func parseTarget(raw string) (target, error) {
 	if err != nil {
 		return target{}, diagnostic(DiagnosticInvalidTarget, fmt.Errorf("parse target %q: %w", raw, err))
 	}
-	if parsed.Scheme != "ssh" || parsed.User == nil || parsed.User.Username() == "" || parsed.Hostname() == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return target{}, diagnostic(DiagnosticInvalidTarget, fmt.Errorf("target %q must be user@host or user@host:port", raw))
+	if parsed.Scheme != "ssh" || parsed.Hostname() == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return target{}, diagnostic(DiagnosticInvalidTarget, fmt.Errorf("target %q must be host, user@host, or user@host:port", raw))
 	}
-	if _, hasPassword := parsed.User.Password(); hasPassword {
-		return target{}, diagnostic(DiagnosticInvalidTarget, fmt.Errorf("target %q contains a password", raw))
+	user := ""
+	if parsed.User != nil {
+		if parsed.User.Username() == "" {
+			return target{}, diagnostic(DiagnosticInvalidTarget, fmt.Errorf("target %q has an empty user before @", raw))
+		}
+		if _, hasPassword := parsed.User.Password(); hasPassword {
+			return target{}, diagnostic(DiagnosticInvalidTarget, fmt.Errorf("target %q contains a password", raw))
+		}
+		user = parsed.User.Username()
 	}
 	port := uint64(22)
-	if text := parsed.Port(); text != "" {
-		port, err = strconv.ParseUint(text, 10, 16)
+	explicitPort := parsed.Port() != ""
+	if explicitPort {
+		port, err = strconv.ParseUint(parsed.Port(), 10, 16)
 		if err != nil || port == 0 {
 			return target{}, diagnostic(DiagnosticInvalidTarget, fmt.Errorf("target %q has an invalid SSH port", raw))
 		}
 	}
-	return target{user: parsed.User.Username(), host: parsed.Hostname(), port: uint16(port)}, nil
+	return target{
+		user:         user,
+		host:         parsed.Hostname(),
+		port:         uint16(port),
+		alias:        parsed.Hostname(),
+		explicitUser: user != "",
+		explicitPort: explicitPort,
+	}, nil
 }
