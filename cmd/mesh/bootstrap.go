@@ -79,12 +79,13 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 		}
 
 		result, err := run(ctx, bootstrap.Options{
-			Target:           target,
-			StateDir:         stateDir,
-			ExpectedIdentity: identityForAlias(hosts, request.Alias),
-			TailscaleAuthKey: authKey,
-			ConfirmProvision: confirmProvision,
-			SudoPassword:     sudoPasswordPrompt(ui),
+			Target:                 target,
+			StateDir:               stateDir,
+			ExpectedIdentity:       identityForAlias(hosts, request.Alias),
+			TailscaleAuthKey:       authKey,
+			TailscaleAuthKeyPrompt: authKeyPrompt(ui),
+			ConfirmProvision:       confirmProvision,
+			SudoPassword:           sudoPasswordPrompt(ui),
 			SSH: bootstrap.SSHOptions{
 				Password:       passwordPrompt(ui),
 				Passphrase:     passphrasePrompt(ui),
@@ -120,6 +121,26 @@ func sudoPasswordPrompt(ui bootstrapUI) bootstrap.SudoPasswordFunc {
 			return nil, err
 		}
 		return []byte(password), nil
+	}
+}
+
+// authKeyPrompt asks for a Tailscale auth key at the moment the remote host
+// turns out to need one, so an interactive adoption never has to fail and be
+// started again. Without a terminal it says what to pass instead.
+func authKeyPrompt(ui bootstrapUI) bootstrap.AuthKeyFunc {
+	return func(ctx context.Context, target string) ([]byte, error) {
+		if ui.terminal == nil || !ui.terminal() {
+			return nil, errors.New("Tailscale needs an auth key; pass --tailscale-auth-key-file, or run mesh add from a terminal to paste one")
+		}
+		description := target + " has Tailscale but is not logged in.\n\n" +
+			"  1. open https://login.tailscale.com/admin/settings/keys\n" +
+			"  2. Generate auth key, and turn on Reusable\n" +
+			"  3. paste it below"
+		key, err := promptSecret(ctx, ui, "Tailscale auth key", description)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(key), nil
 	}
 }
 

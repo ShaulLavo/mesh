@@ -196,3 +196,34 @@ func TestTargetWithUserNamesLookupFailure(t *testing.T) {
 		t.Fatalf("targetWithUser() error = %v", err)
 	}
 }
+
+func TestPromptedAuthKeyIsRedactedLikeAFileKey(t *testing.T) {
+	const secret = "tskey-pasted-not-from-a-file"
+	identity := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	var output bytes.Buffer
+	bootstrapFunc := newBootstrapFunc(func(ctx context.Context, opts bootstrap.Options) (bootstrap.Result, error) {
+		if len(opts.TailscaleAuthKey) != 0 {
+			t.Fatalf("static auth key = %q, want none", opts.TailscaleAuthKey)
+		}
+		if opts.TailscaleAuthKeyPrompt == nil {
+			t.Fatal("no auth key prompt was wired")
+		}
+		// Without a terminal the prompt must name the flag rather than hang.
+		if _, err := opts.TailscaleAuthKeyPrompt(ctx, "pi"); err == nil ||
+			!strings.Contains(err.Error(), "--tailscale-auth-key-file") {
+			t.Fatalf("non-terminal prompt error = %v", err)
+		}
+		opts.Progress(bootstrap.Event{Step: bootstrap.StepProvision, Detail: secret})
+		return bootstrap.Result{
+			ID: identity, MeshIdentity: identity, TailscaleName: "pi.example.ts.net",
+			TailscaleAddresses: []string{"100.64.0.8"}, Endpoint: "ws://100.64.0.8:7337/mesh",
+		}, nil
+	}, bootstrapUI{
+		input: strings.NewReader(""), output: &output,
+		username: func() (string, error) { return "alice", nil },
+		terminal: func() bool { return false },
+	})
+	if _, err := bootstrapFunc(context.Background(), cli.AddRequest{Target: "pi", Alias: "pi", Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+}

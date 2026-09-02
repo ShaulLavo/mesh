@@ -74,6 +74,18 @@ type normalizedOptions struct {
 
 func run(ctx context.Context, opts Options, deps dependencies) (result Result, resultErr error) {
 	authKeyForRedaction := bytes.TrimSpace(opts.TailscaleAuthKey)
+	// A key typed at the prompt has to be redacted exactly like one read from a
+	// file, and it does not exist yet when the deferred redaction is installed.
+	var promptedAuthKey AuthKeyFunc
+	if opts.TailscaleAuthKeyPrompt != nil {
+		promptedAuthKey = func(ctx context.Context, target string) ([]byte, error) {
+			key, err := opts.TailscaleAuthKeyPrompt(ctx, target)
+			if trimmed := bytes.TrimSpace(key); len(trimmed) > 0 {
+				authKeyForRedaction = trimmed
+			}
+			return key, err
+		}
+	}
 	defer func() {
 		if resultContainsAuthKey(result, authKeyForRedaction) {
 			result = Result{}
@@ -120,13 +132,14 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		normalized.progress(Event{Step: StepDiscover, Detail: "found " + detail})
 	}
 	provisioned, err := deps.provision(ctx, remote, provisionRequest{
-		Platform:     platform,
-		Target:       normalized.target.display(),
-		Observation:  tailscale,
-		AuthKey:      normalized.tailscaleAuthKey,
-		Confirm:      normalized.confirmProvision,
-		SudoPassword: normalized.sudoPassword,
-		Progress:     normalized.progress,
+		Platform:      platform,
+		Target:        normalized.target.display(),
+		Observation:   tailscale,
+		AuthKey:       normalized.tailscaleAuthKey,
+		AuthKeyPrompt: promptedAuthKey,
+		Confirm:       normalized.confirmProvision,
+		SudoPassword:  normalized.sudoPassword,
+		Progress:      normalized.progress,
 	})
 	if err != nil {
 		return Result{}, err

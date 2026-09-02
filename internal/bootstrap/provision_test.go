@@ -1013,3 +1013,50 @@ func noninteractiveSudoSpec() privilegeSpec {
 func noninteractiveSudoCommand(command string) string {
 	return noninteractiveSudoSpec().command(command)
 }
+
+func TestRequestAuthKeyAsksInsteadOfFailing(t *testing.T) {
+	t.Parallel()
+
+	asked := 0
+	request := provisionRequest{
+		Target: "pc (shaul@10.0.0.4)",
+		AuthKeyPrompt: func(_ context.Context, target string) ([]byte, error) {
+			asked++
+			if target != "pc (shaul@10.0.0.4)" {
+				t.Errorf("prompt target = %q", target)
+			}
+			return []byte("  tskey-auth-example  \n"), nil
+		},
+	}
+	key, err := requestAuthKey(context.Background(), &request, tailscaleNeedsLogin)
+	if err != nil {
+		t.Fatalf("requestAuthKey() error = %v", err)
+	}
+	if string(key) != "tskey-auth-example" {
+		t.Fatalf("key = %q, want the pasted key trimmed", key)
+	}
+	if asked != 1 {
+		t.Fatalf("prompt asked %d times, want 1", asked)
+	}
+}
+
+func TestRequestAuthKeyWithoutAPromptStillDiagnoses(t *testing.T) {
+	t.Parallel()
+
+	// An unattended run has nobody to ask, and must keep naming the flag.
+	request := provisionRequest{Target: "pc"}
+	_, err := requestAuthKey(context.Background(), &request, tailscaleNeedsLogin)
+	assertDiagnosticCode(t, err, DiagnosticTailscaleLoggedOut)
+}
+
+func TestRequestAuthKeyRejectsAnEmptyPaste(t *testing.T) {
+	t.Parallel()
+
+	// Enter on an empty prompt must not be read as a key.
+	request := provisionRequest{
+		Target:        "pc",
+		AuthKeyPrompt: func(context.Context, string) ([]byte, error) { return []byte("   \n"), nil },
+	}
+	_, err := requestAuthKey(context.Background(), &request, tailscaleNeedsLogin)
+	assertDiagnosticCode(t, err, DiagnosticTailscaleLoggedOut)
+}

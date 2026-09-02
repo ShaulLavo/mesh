@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -95,13 +96,14 @@ else
 fi`
 
 type provisionRequest struct {
-	Platform     Platform
-	Target       string
-	Observation  tailscaleObservation
-	AuthKey      []byte
-	Confirm      ConfirmProvisionFunc
-	SudoPassword SudoPasswordFunc
-	Progress     func(Event)
+	Platform      Platform
+	Target        string
+	Observation   tailscaleObservation
+	AuthKey       []byte
+	AuthKeyPrompt AuthKeyFunc
+	Confirm       ConfirmProvisionFunc
+	SudoPassword  SudoPasswordFunc
+	Progress      func(Event)
 }
 
 type provisionResult struct {
@@ -285,7 +287,11 @@ func provisionRemote(ctx context.Context, remote remoteHost, request provisionRe
 		return provisionResult{}, machineAuthDiagnostic()
 	case tailscaleNeedsLogin, tailscaleNoState:
 		if len(request.AuthKey) == 0 {
-			return provisionResult{}, missingAuthKeyDiagnostic(current.State)
+			key, err := requestAuthKey(ctx, &request, current.State)
+			if err != nil {
+				return provisionResult{}, err
+			}
+			request.AuthKey = key
 		}
 	}
 
@@ -495,7 +501,11 @@ func convergeTailscale(ctx context.Context, remote remoteHost, request provision
 				return tailscaleObservation{}, false, diagnostic(DiagnosticTailscaleLoggedOut, fmt.Errorf("Tailscale authentication completed, but the backend state remained %s; the auth key was not retained", current.State))
 			}
 			if len(request.AuthKey) == 0 {
-				return tailscaleObservation{}, false, missingAuthKeyDiagnostic(current.State)
+				key, err := requestAuthKey(ctx, &request, current.State)
+				if err != nil {
+					return tailscaleObservation{}, false, err
+				}
+				request.AuthKey = key
 			}
 			request.Progress(Event{Step: StepProvision, Detail: "authenticate Tailscale from standard input"})
 			if err := runTailscaleUp(ctx, remote, request.Platform, current, access, request.AuthKey); err != nil {
@@ -871,6 +881,24 @@ func darwinApplicationInstalled(ctx context.Context, remote remoteHost) (bool, e
 	default:
 		return false, diagnostic(DiagnosticTailscaleUnavailable, fmt.Errorf("Tailscale application probe returned %q", boundedRemoteOutput(stdout)))
 	}
+}
+
+// requestAuthKey asks for a key at the moment it is needed. Failing here and
+// telling the operator to fetch a key and run the whole adoption again is the
+// worst version of this: the remote host has already changed by then.
+func requestAuthKey(ctx context.Context, request *provisionRequest, state tailscaleState) ([]byte, error) {
+	if request.AuthKeyPrompt == nil {
+		return nil, missingAuthKeyDiagnostic(state)
+	}
+	key, err := request.AuthKeyPrompt(ctx, request.Target)
+	if err != nil {
+		return nil, diagnostic(DiagnosticTailscaleLoggedOut, err)
+	}
+	key = bytes.TrimSpace(key)
+	if len(key) == 0 {
+		return nil, missingAuthKeyDiagnostic(state)
+	}
+	return key, nil
 }
 
 func missingAuthKeyDiagnostic(state tailscaleState) error {
