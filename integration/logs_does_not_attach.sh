@@ -51,6 +51,15 @@ done
 [ -s "$T/pid-after" ] || fail "attached shell did not answer after logs"
 [ "$(cat "$T/pid-before")" = "$(cat "$T/pid-after")" ] || fail "logs reached a different shell"
 
+# Printed by the real session so the exited-log check below proves the output
+# survived the worker, rather than reading a fixture the test wrote itself.
+echo 'echo RETAINED_AFTER_EXIT' >&3
+for _ in $(seq 100); do
+  grep -q RETAINED_AFTER_EXIT "$T/client.out" 2>/dev/null && break
+  sleep 0.05
+done
+grep -q RETAINED_AFTER_EXIT "$T/client.out" || fail "session did not echo the retention marker"
+
 "$MESH" kill "$SID" >/dev/null || fail "could not clean up session"
 exec 3>&-
 wait "$CLIENT" 2>/dev/null || true
@@ -59,9 +68,11 @@ for _ in $(seq 100); do
   [ ! -S "$MESH_STATE_DIR/s/$SID/sock" ] && break
   sleep 0.02
 done
-printf 'old diagnostic\nEXITED_LOG\n' >>"$MESH_STATE_DIR/s/$SID/worker.log"
-"$MESH" logs --tail 11 "$SID" >"$T/exited-logs.out" || fail "exited logs command failed"
-[ "$(cat "$T/exited-logs.out")" = EXITED_LOG ] || fail "exited log tail was not bounded correctly"
+"$MESH" logs --tail 4096 "$SID" >"$T/exited-logs.out" || fail "exited logs command failed"
+grep -q RETAINED_AFTER_EXIT "$T/exited-logs.out" ||
+  fail "a real session's output did not survive exiting: $(cat "$T/exited-logs.out")"
+"$MESH" logs --tail 11 "$SID" >"$T/exited-tail.out" || fail "exited logs tail failed"
+[ "$(wc -c <"$T/exited-tail.out")" -le 11 ] || fail "exited log tail was not bounded"
 SID=""
 
 echo "PASS: live logs do not attach, and exited logs use the bounded durable tail"

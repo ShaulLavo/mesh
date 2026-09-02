@@ -496,6 +496,12 @@ func Run(cfg Config) (int, error) {
 	meta.State = StateExited
 	meta.ExitCode = &code
 	meta.ExitedAt = &now
+	// The ring is memory. Without this, `mesh logs` on an exited session finds
+	// only the worker's own diagnostics and returns nothing, which reads as
+	// "the command printed nothing" rather than "the output is gone".
+	if err := w.flushScrollback(cfg.Dir); err != nil {
+		log.Printf("worker: retain scrollback: %v", err)
+	}
 	if err := WriteMeta(cfg.Dir, meta); err != nil {
 		log.Printf("worker: record exit: %v", err)
 	}
@@ -685,4 +691,26 @@ func (w *Worker) dropLocked(c *attachment, reason string) {
 		}
 	}
 	c.close()
+}
+
+// flushScrollback writes what the ring still holds to the session log, so the
+// output survives the process that produced it. Bounded by ringSize, matching
+// the replay window a live client would have been given.
+//
+// A host reboot or a killed worker still loses it: invariant 5 already says
+// Mesh does not pretend to resurrect RAM.
+func (w *Worker) flushScrollback(dir string) error {
+	scrollback := w.ring.Last(ringSize)
+	if len(scrollback) == 0 {
+		return nil
+	}
+	file, err := os.OpenFile(paths.Log(dir), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("open log: %w", err)
+	}
+	if _, err := file.Write(scrollback); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write scrollback: %w", err)
+	}
+	return file.Close()
 }
