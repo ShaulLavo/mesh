@@ -176,16 +176,32 @@ done
 EDGE_ID=$(identity_id "$EDGE_STATE/identity.key") || fail "derive edge identity"
 ORIGIN_ID=$(identity_id "$ORIGIN_STATE/identity.key") || fail "derive origin identity"
 
-mapfile -t PORTS < <(python3 - <<'PY'
-import socket
-sockets = []
-for _ in range(2):
+mapfile -t PORTS < <(python3 - "$$" "2" <<'PY'
+import os, socket, sys
+
+# Each concurrent script searches its own band, so sibling tests cannot pick the
+# same port. Binding still confirms the port is free of anything else.
+wanted = int(sys.argv[2])
+base = 20000 + (int(sys.argv[1]) % 900) * 16
+found, held = [], []
+for offset in range(16 * 900):
+    port = 20000 + (base - 20000 + offset) % (16 * 900)
     listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    sockets.append(listener)
-for listener in sockets:
-    print(listener.getsockname()[1])
-for listener in sockets:
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind(("127.0.0.1", port))
+    except OSError:
+        listener.close()
+        continue
+    held.append(listener)
+    found.append(port)
+    if len(found) == wanted:
+        break
+if len(found) != wanted:
+    raise SystemExit("no free ports in this band")
+for port in found:
+    print(port)
+for listener in held:
     listener.close()
 PY
 )

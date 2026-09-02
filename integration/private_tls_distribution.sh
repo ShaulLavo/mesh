@@ -251,11 +251,26 @@ openssl genpkey -algorithm ED25519 -out "$RENEWER_KEY" >/dev/null 2>&1 || fail "
 chmod 0600 "$RENEWER_KEY"
 ORIGIN_ID=$(identity_id "$MESH_STATE_DIR/identity.key") || fail "derive origin identity"
 RENEWER_ID=$(pkcs8_identity_id "$RENEWER_KEY") || fail "derive renewer identity"
-HTTPS_PORT=$(python3 - <<'PY'
-import socket
-with socket.socket() as listener:
-    listener.bind(("127.0.0.1", 0))
-    print(listener.getsockname()[1])
+HTTPS_PORT=$(python3 - "$$" <<'PY'
+import socket, sys
+
+# Own band per concurrent script; bind-then-close alone hands the port back
+# before the daemon claims it.
+base = 20000 + (int(sys.argv[1]) % 900) * 16
+for offset in range(16 * 900):
+    port = 20000 + (base - 20000 + offset) % (16 * 900)
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind(("127.0.0.1", port))
+    except OSError:
+        listener.close()
+        continue
+    print(port)
+    listener.close()
+    break
+else:
+    raise SystemExit("no free port in this band")
 PY
 )
 TAILSCALE_STATUS="$TEST_ROOT/tailscale-serve.json"

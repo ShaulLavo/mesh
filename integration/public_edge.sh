@@ -253,16 +253,32 @@ ORIGIN_ONE_ID=$(identity_id "$ORIGIN_ONE_STATE/identity.key") || fail "derive fi
 ORIGIN_TWO_ID=$(identity_id "$ORIGIN_TWO_STATE/identity.key") || fail "derive second origin identity"
 RENEWER_ID=$(pkcs8_identity_id "$RENEWER_KEY") || fail "derive renewer identity"
 
-mapfile -t PORTS < <(python3 - <<'PY'
-import socket
-sockets = []
-for _ in range(3):
+mapfile -t PORTS < <(python3 - "$$" "3" <<'PY'
+import os, socket, sys
+
+# Each concurrent script searches its own band, so sibling tests cannot pick the
+# same port. Binding still confirms the port is free of anything else.
+wanted = int(sys.argv[2])
+base = 20000 + (int(sys.argv[1]) % 900) * 16
+found, held = [], []
+for offset in range(16 * 900):
+    port = 20000 + (base - 20000 + offset) % (16 * 900)
     listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    sockets.append(listener)
-for listener in sockets:
-    print(listener.getsockname()[1])
-for listener in sockets:
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind(("127.0.0.1", port))
+    except OSError:
+        listener.close()
+        continue
+    held.append(listener)
+    found.append(port)
+    if len(found) == wanted:
+        break
+if len(found) != wanted:
+    raise SystemExit("no free ports in this band")
+for port in found:
+    print(port)
+for listener in held:
     listener.close()
 PY
 )

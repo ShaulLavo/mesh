@@ -48,12 +48,26 @@ cat >"$T/bin/tailscale" <<'TAILSCALE'
 printf '%s\n' '{"BackendState":"Running","Self":{"HostName":"test","TailscaleIPs":["127.0.0.1"]}}'
 TAILSCALE
 chmod +x "$T/bin/tailscale"
-PORT=$(python3 - <<'PY'
-import socket
+PORT=$(python3 - "$$" <<'PY'
+import socket, sys
 
-with socket.socket() as listener:
-    listener.bind(("127.0.0.1", 0))
-    print(listener.getsockname()[1])
+# Own band per concurrent script; bind-then-close alone hands the port back
+# before the daemon claims it.
+base = 20000 + (int(sys.argv[1]) % 900) * 16
+for offset in range(16 * 900):
+    port = 20000 + (base - 20000 + offset) % (16 * 900)
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind(("127.0.0.1", port))
+    except OSError:
+        listener.close()
+        continue
+    print(port)
+    listener.close()
+    break
+else:
+    raise SystemExit("no free port in this band")
 PY
 )
 
