@@ -180,7 +180,7 @@ exec 3>"$test_root/session-input"
 wait_for_file "$test_root/session.pid" || fail "session did not start: $(cat "$test_root/session.err")"
 session_pid=$(cat "$test_root/session.pid")
 for _ in $(seq 100); do
-  session_id=$(sed -n 's/^session \([0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\)$/\1/p' "$test_root/session.err" | head -n1)
+  session_id=$(sed -n 's/^new session \([0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\)$/\1/p' "$test_root/session.err" | head -n1)
   [[ -n $session_id ]] && break
   sleep 0.02
 done

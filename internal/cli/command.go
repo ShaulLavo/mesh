@@ -293,7 +293,9 @@ func (a *application) runHost(cmd *cobra.Command, host HostRecord, resume bool, 
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "session %s on %s\n", id, host.Alias); err != nil {
+	// "session X on pc" reads like one was found. `mesh pc` always creates,
+	// and `mesh pc -r` is the one that attaches to an existing session.
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "new session %s on %s\n", id, host.Alias); err != nil {
 		return err
 	}
 	initial := uint64(0)
@@ -760,7 +762,7 @@ func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool
 		}
 		initial := uint64(0)
 		lastSeq = &initial
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "session %s\n", current.ID); err != nil {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "new session %s\n", current.ID); err != nil {
 			return err
 		}
 	}

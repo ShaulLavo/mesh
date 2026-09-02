@@ -72,7 +72,7 @@ wait_for_daemon "$DAEMON1" || fail "first daemon did not start: $(cat "$T/daemon
 CLIENT1=$!
 exec 3>"$T/in1"
 for _ in $(seq 120); do
-  SID=$(sed -n 's/^session \([0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\)$/\1/p' "$T/client1.err" | head -n1)
+  SID=$(sed -n 's/^new session \([0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\)$/\1/p' "$T/client1.err" | head -n1)
   [ -n "$SID" ] && break
   sleep 0.05
 done
