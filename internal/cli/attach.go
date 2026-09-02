@@ -115,6 +115,7 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 		return res, presentError("attach "+opts.SessionID, err)
 	}
 
+	var altScreen altScreenTracker
 	inputIsTerminal := term.IsTerminal(opts.In.Fd())
 	if inputIsTerminal {
 		restore, err := makeRaw(opts.In)
@@ -122,6 +123,17 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 			return res, err
 		}
 		defer restore()
+		// Detaching leaves the remote program running, so it never emits the
+		// sequences that would put this terminal back: a full-screen app stays
+		// in the alternate buffer with its last frame stranded on screen. ssh
+		// has no detach, so its programs always exit and clean up after
+		// themselves.
+		defer func() {
+			if altScreen.Active() {
+				_, _ = opts.Out.Write([]byte(leaveAltScreenSequence))
+			}
+			_, _ = opts.Out.Write([]byte(restoreTerminalState))
+		}()
 	}
 
 	input := io.Reader(opts.In)
@@ -232,6 +244,7 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 			if pendingSnapshot {
 				return res, fmt.Errorf("session %s: received live output before announced snapshot", opts.SessionID)
 			}
+			altScreen.Observe(f.Payload)
 			if _, err := opts.Out.Write(f.Payload); err != nil {
 				return res, err
 			}
@@ -240,6 +253,7 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 			if !pendingSnapshot {
 				return res, fmt.Errorf("session %s: received an unannounced snapshot", opts.SessionID)
 			}
+			altScreen.Observe(f.Payload)
 			if _, err := opts.Out.Write(f.Payload); err != nil {
 				return res, err
 			}
@@ -329,6 +343,15 @@ func indexByte(b []byte, c byte) int {
 	}
 	return -1
 }
+
+// restoreTerminalState returns the local terminal to something usable after a
+// detach. Each mode is one a full-screen program routinely turns on and would
+// have turned off on its way out.
+const restoreTerminalState = "\x1b[?25h" + // show the cursor
+	"\x1b[?7h" + // restore autowrap
+	"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" + // stop mouse reporting
+	"\x1b[?2004l" + // stop bracketed paste
+	"\x1b[0m" // reset colours and attributes
 
 func makeRaw(f *os.File) (func(), error) {
 	state, err := term.MakeRaw(f.Fd())
