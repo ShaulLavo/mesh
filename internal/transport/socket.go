@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -99,10 +100,18 @@ func (c *socketConn) Close() error {
 	err := c.ws.Close(websocket.StatusNormalClosure, "")
 	c.cancel()
 	<-c.done
-	if err != nil && !errors.Is(err, context.Canceled) {
+	if !closeCompleted(err) {
 		return fmt.Errorf("transport: close WebSocket: %w", err)
 	}
 	return nil
+}
+
+// closeCompleted reports whether a close error means the connection is already
+// gone rather than that closing failed. A peer that closed first has torn the
+// transport down, so our own close lands on a dead socket and returns
+// net.ErrClosed; the connection is closed either way.
+func closeCompleted(err error) bool {
+	return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed)
 }
 
 func (c *socketConn) readLoop() {

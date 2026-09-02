@@ -160,6 +160,29 @@ func TestServeDoesNotNegotiateCompression(t *testing.T) {
 	}
 }
 
+func TestCloseCompletedAcceptsAnAlreadyClosedConnection(t *testing.T) {
+	t.Parallel()
+
+	// The exact chain coder/websocket produces when the peer closed first:
+	// its errd.Wrap uses %w, so net.ErrClosed survives to the caller.
+	peerClosedFirst := fmt.Errorf("failed to close WebSocket: %w", net.ErrClosed)
+
+	for _, row := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, true},
+		{"context canceled", context.Canceled, true},
+		{"peer closed first", peerClosedFirst, true},
+		{"genuine failure", errors.New("write: broken pipe"), false},
+	} {
+		if got := closeCompleted(row.err); got != row.want {
+			t.Errorf("closeCompleted(%s) = %v, want %v", row.name, got, row.want)
+		}
+	}
+}
+
 func TestReconnectResumesEverySessionAtItsNextByte(t *testing.T) {
 	t.Parallel()
 
