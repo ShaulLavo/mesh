@@ -448,7 +448,7 @@ func (a *application) addCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "add [user@]host",
 		Short: "Install Mesh on an SSH-reachable host",
-		Args:  cobra.ExactArgs(1),
+		Args:  exactArgs(1, "an SSH target", "mesh add shaul@pc"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			selected := alias
 			if selected == "" {
@@ -493,7 +493,7 @@ func (a *application) wakeCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "wake host",
 		Short: "Wake a configured host",
-		Args:  cobra.ExactArgs(1),
+		Args:  exactArgs(1, "the name of a host you have added", "mesh wake pc        (mesh ls lists your hosts)"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			hosts, err := LoadHosts()
 			if err != nil {
@@ -814,7 +814,7 @@ func (a *application) attachCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "attach session",
 		Short: "Attach to a session on this host",
-		Args:  cobra.ExactArgs(1),
+		Args:  exactArgs(1, "a session id", "mesh attach 7K3D    (mesh ls lists your sessions)"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			current, err := Find(args[0])
 			if err != nil {
@@ -856,7 +856,7 @@ func (a *application) logsCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "logs session",
 		Short: "Print recent terminal output without attaching",
-		Args:  cobra.ExactArgs(1),
+		Args:  exactArgs(1, "a session id", "mesh logs 7K3D      (mesh ls lists your sessions)"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if tail <= 0 || tail > protocol.MaxLogTail {
 				return fmt.Errorf("--tail must be between 1 and %d bytes", protocol.MaxLogTail)
@@ -896,7 +896,7 @@ func (a *application) killCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "kill session",
 		Short: "End a session and wait until it is gone",
-		Args:  cobra.ExactArgs(1),
+		Args:  exactArgs(1, "a session id", "mesh kill 7K3D      (mesh ls lists your sessions)"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runSessionControl(cmd, args[0], protocol.TypeKill, "")
 		},
@@ -908,7 +908,7 @@ func (a *application) signalCommand() *cobra.Command {
 		Use:     "sig session signal",
 		Aliases: []string{"signal"},
 		Short:   "Send a signal to a session process group",
-		Args:    cobra.ExactArgs(2),
+		Args:    exactArgs(2, "a session id and a signal", "mesh sig 7K3D TERM"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runSessionControl(cmd, args[0], protocol.TypeSignal, args[1])
 		},

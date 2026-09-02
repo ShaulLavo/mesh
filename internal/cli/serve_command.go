@@ -55,7 +55,7 @@ func (a *application) serveCommand() *cobra.Command {
 		Example: `  mesh serve HOST TARGET --at ROUTE
   mesh serve ls
   mesh serve list`,
-		Args: cobra.ExactArgs(2),
+		Args: exactArgs(2, "a host and something to serve", "mesh serve pc ./site --at blog.shaulavo.dev"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runServe(cmd, args[0], args[1], serveFlags{
 				route: route, files: files, publicName: publicName,
@@ -223,7 +223,7 @@ func (a *application) unserveCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "unserve ROUTE",
 		Short: "Remove one service and wait for public withdrawal",
-		Args:  cobra.ExactArgs(1),
+		Args:  exactArgs(1, "the route to remove", "mesh unserve blog.shaulavo.dev"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if timeout <= 0 || timeout > maximumServiceListTimeout {
 				return fmt.Errorf("--timeout must be between 1ns and %s", maximumServiceListTimeout)

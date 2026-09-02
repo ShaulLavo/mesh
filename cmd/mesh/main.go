@@ -21,7 +21,7 @@ func main() {
 			if _, ok := cli.StatusCode(err); ok {
 				return
 			}
-			fang.DefaultErrorHandler(output, styles, err)
+			cli.RenderError(output, styles, err)
 		}),
 	}
 	// Without this a tagged build reports itself as built from source.
