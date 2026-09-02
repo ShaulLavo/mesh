@@ -129,15 +129,25 @@ func normalizeReleaseOptions(selection binarySelection) (releaseOptions, error) 
 	return releaseOptions{baseURL: baseURL, version: version, httpClient: client}, nil
 }
 
-func runningVersion() (string, error) {
+// Version reports the release this binary was built as, or an empty string for
+// an untagged development build. Release builds set releaseVersion through the
+// linker; a `go install` of a tagged module carries it in the build info.
+func Version() string {
 	if releaseVersion != "" {
-		return releaseVersion, nil
+		return releaseVersion
 	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
-		return "", errors.New("automatic release download is unsafe from an unversioned development build; place a matching release artifact beside the executable or run mesh add from a tagged release")
+		return ""
 	}
-	return info.Main.Version, nil
+	return info.Main.Version
+}
+
+func runningVersion() (string, error) {
+	if version := Version(); version != "" {
+		return version, nil
+	}
+	return "", errors.New("automatic release download is unsafe from an unversioned development build; place a matching release artifact beside the executable or run mesh add from a tagged release")
 }
 
 func fetchReleaseBinary(ctx context.Context, platform Platform, opts releaseOptions) (string, func(), error) {

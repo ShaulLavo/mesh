@@ -8,6 +8,32 @@ and reattach. It connects your machines over Tailscale.
 [`docs/diagrams/usage.excalidraw`](docs/diagrams/usage.excalidraw), so the link
 can be regenerated if it ever goes stale.
 
+## Install
+
+macOS:
+
+```bash
+brew tap ShaulLavo/mesh https://github.com/ShaulLavo/mesh
+brew install --cask --no-quarantine ShaulLavo/mesh/mesh
+```
+
+`--no-quarantine` is required, not a preference. Releases are ad-hoc signed by
+the Go linker rather than with an Apple Developer ID, so Gatekeeper refuses to
+open the binary and offers only to move it to the trash. If you already
+installed without the flag, clear the attribute instead of reinstalling:
+
+```bash
+xattr -d com.apple.quarantine "$(brew --prefix)"/Caskroom/mesh/*/mesh
+```
+
+Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ShaulLavo/mesh/main/scripts/install.sh | sh
+```
+
+The installer verifies the release checksum before it publishes the binary.
+
 ## Run it
 
 ```bash

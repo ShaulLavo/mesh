@@ -54,7 +54,7 @@ downloads the matching release archive and `checksums.txt`, verifies SHA-256,
 checks the archive shape, and publishes the binary atomically:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ShaulLavo/mesh/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ShaulLavo/mesh/main/scripts/install.sh | sh
 ```
 
 Service assets have one canonical source in `scripts/install/assets/`.

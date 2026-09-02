@@ -75,6 +75,7 @@ check_source_contract() {
   contains scripts/install.sh 'if [ ! -d "$binary_dir" ]'
   contains scripts/install.sh "'s|@MESH_STDOUT@|\${HOME}/.local/state/mesh/daemon.log|g'"
   does_not_contain scripts/install.sh 'raw.githubusercontent.com/ShaulLavo/mesh/master/'
+  does_not_contain scripts/install.sh 'raw.githubusercontent.com/ShaulLavo/mesh/main/'
 
   local archive_verify_line service_verify_line publish_line
   archive_verify_line=$(grep -nF 'verify_checksum "$archive"' scripts/install.sh | cut -d: -f1)
