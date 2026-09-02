@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
@@ -180,7 +182,17 @@ func (l *lifecycle) logs(ctx context.Context, request protocol.Control) (protoco
 		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
 	}
 	if stored.State == storage.StateRunning || stored.State == storage.StateDetached {
-		return l.forwardOneShot(ctx, request)
+		response, err := l.forwardOneShot(ctx, request)
+		if err == nil {
+			return response, nil
+		}
+		// The catalog is a hint. A session that exited moments ago still reads
+		// as running until reconciliation notices, and its socket is already
+		// gone, so fall through to the durable tail rather than reporting a
+		// dial failure for output that is sitting on disk.
+		if !errors.Is(err, syscall.ENOENT) && !errors.Is(err, syscall.ECONNREFUSED) {
+			return protocol.Control{}, err
+		}
 	}
 	output, err := worker.ReadLogTail(filepath.Join(l.sessionsDir, id), request.Tail)
 	if err != nil {

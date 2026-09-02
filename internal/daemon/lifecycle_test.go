@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -516,5 +518,60 @@ func TestCreateWithoutACommandUsesTheHostShell(t *testing.T) {
 	}
 	if launched.Command[0] != hostShell() {
 		t.Fatalf("command = %q, want the host shell %q", launched.Command, hostShell())
+	}
+}
+
+func TestLogsFallsBackWhenTheWorkerIsAlreadyGone(t *testing.T) {
+	t.Parallel()
+
+	// A session that exited moments ago still reads as running until
+	// reconciliation notices, and its socket is already gone. Its output is on
+	// disk, so logs must serve that rather than report a dial failure.
+	sessionsDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sessionsDir, "7K3D"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsDir, "7K3D", "worker.log"), []byte("output on disk\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{sessions: []storage.Session{{ID: "7K3D", State: storage.StateRunning}}},
+		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+			return nil, fmt.Errorf("dial unix worker sock: %w", syscall.ENOENT)
+		}),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
+		SessionsDir: sessionsDir,
+	})
+
+	response, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeLogs, RequestID: "logs-1", SessionID: "7K3D", Tail: 4096,
+	})
+	if err != nil || !handled {
+		t.Fatalf("logs handled = %v, error = %v", handled, err)
+	}
+	if !bytes.Contains(response.Output, []byte("output on disk")) {
+		t.Fatalf("logs output = %q, want the durable tail", response.Output)
+	}
+}
+
+func TestLogsStillReportsARealForwardingFailure(t *testing.T) {
+	t.Parallel()
+
+	// Only a missing worker falls through. A live worker that fails for another
+	// reason must not be papered over with a stale log.
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{sessions: []storage.Session{{ID: "7K3D", State: storage.StateRunning}}},
+		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+			return nil, errors.New("worker refused the control frame")
+		}),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
+		SessionsDir: t.TempDir(),
+	})
+
+	if _, _, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeLogs, RequestID: "logs-2", SessionID: "7K3D", Tail: 4096,
+	}); err == nil {
+		t.Fatal("a real forwarding failure was swallowed")
 	}
 }
