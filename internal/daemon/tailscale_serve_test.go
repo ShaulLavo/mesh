@@ -295,14 +295,17 @@ func TestRunAcceptsVerifiedOperatorManagedTailscaleServeForward(t *testing.T) {
 		probeCtx, probeCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		privateName, err := probeUnixPrivateName(probeCtx, SocketPath(stateDir))
 		probeCancel()
-		if err == nil {
-			if privateName != "pc.mesh.shaulavo.dev" {
-				t.Fatalf("private name with verified operator route = %q", privateName)
-			}
+		// The socket answers before the private name is published, so a probe
+		// that merely succeeds is not the condition to wait for. Waiting on the
+		// wrong one made this fail on a loaded runner and never here.
+		if err == nil && privateName == "pc.mesh.shaulavo.dev" {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("probe daemon without Tailscale Serve: %v", err)
+			if err != nil {
+				t.Fatalf("probe daemon without Tailscale Serve: %v", err)
+			}
+			t.Fatalf("private name with verified operator route = %q", privateName)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
