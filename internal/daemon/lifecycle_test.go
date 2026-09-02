@@ -627,7 +627,7 @@ func TestRemoveDeletesTheRecordAndItsDirectory(t *testing.T) {
 	response, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeRemove, RequestID: "rm-2", SessionID: "7K3D",
 	})
-	if err != nil || !handled || response.Type != protocol.TypeRemoved {
+	if err != nil || !handled || response.Type != protocol.TypeOK {
 		t.Fatalf("remove = %+v, handled = %v, error = %v", response, handled, err)
 	}
 	// A directory left behind would be re-adopted by the next reconciliation

@@ -546,5 +546,8 @@ func (l *lifecycle) remove(ctx context.Context, request protocol.Control) (proto
 	if err := os.RemoveAll(filepath.Join(l.sessionsDir, id)); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: remove session directory %s: %w", id, err)
 	}
-	return protocol.Control{Type: protocol.TypeRemoved, RequestID: request.RequestID, SessionID: id}, nil
+	// TypeOK, like kill and signal: remove travels through the same client
+	// helper, and a result type of its own would make that helper special-case
+	// one control.
+	return protocol.Control{Type: protocol.TypeOK, RequestID: request.RequestID, SessionID: id}, nil
 }

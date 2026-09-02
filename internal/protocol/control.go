@@ -22,7 +22,6 @@ const (
 	TypeLogs               = "session.logs"
 	TypeRemove             = "session.remove"
 	TypeLogged             = "session.logged"
-	TypeRemoved            = "session.removed"
 	TypeHostInfo           = "host.info"
 	TypeServicePreview     = "service.preview"
 	TypeServicePreviewed   = "service.previewed"
