@@ -39,8 +39,9 @@ wait "$CLIENT1" 2>/dev/null
 sleep 0.3
 kill -0 "$PID1" 2>/dev/null || fail "shell $PID1 died with its client"
 
-# 3. The session must still report itself as running.
-"$MESH" ls | grep -q running || fail "mesh ls does not show a running session: $("$MESH" ls)"
+# 3. The session must still report itself as alive. With no client attached it
+# is detached, which is alive with nobody watching.
+"$MESH" ls | grep -qE 'running|detached' || fail "mesh ls does not show a live session: $("$MESH" ls)"
 
 # 4. Reattach and prove it is the same process, still holding its state.
 "$MESH" local -r < "$T/in2" > "$T/out2" 2>&1 &

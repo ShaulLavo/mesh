@@ -82,7 +82,7 @@ echo "echo \$\$ > $T/shell_pid; echo BEFORE_RESTART" >&3
 wait_for_file "$T/shell_pid" || fail "session shell did not answer before restart"
 SHELL_PID=$(cat "$T/shell_pid")
 SESSION_PID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$MESH_STATE_DIR/s/$SID/meta.json") || fail "could not read session PID"
-[ "$(database_state)" = running ] || fail "daemon did not publish running session $SID"
+case "$(database_state)" in running|detached) ;; *) fail "daemon did not publish live session $SID" ;; esac
 
 kill -9 "$DAEMON1" 2>/dev/null
 wait "$DAEMON1" 2>/dev/null
@@ -106,10 +106,10 @@ kill -0 "$SHELL_PID" 2>/dev/null || fail "session process $SHELL_PID died with d
 DAEMON2=$!
 wait_for_daemon "$DAEMON2" || fail "replacement daemon did not start: $(cat "$T/daemon2.log")"
 for _ in $(seq 120); do
-  [ "$(database_state)" = running ] && break
+  case "$(database_state)" in running|detached) break ;; esac
   sleep 0.05
 done
-[ "$(database_state)" = running ] || fail "replacement daemon did not rediscover $SID as running"
+case "$(database_state)" in running|detached) ;; *) fail "replacement daemon did not rediscover $SID as live" ;; esac
 SESSION_AFTER=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$MESH_STATE_DIR/s/$SID/meta.json")
 [ "$SESSION_AFTER" = "$SESSION_PID" ] || fail "session PID changed across daemon restart ($SESSION_PID to $SESSION_AFTER)"
 
