@@ -333,7 +333,13 @@ func (a *attachment) writeLoop(w *Worker) {
 		if w.client == a {
 			w.client = nil
 		}
+		remaining := len(w.attachments)
 		w.mu.Unlock()
+		// Counted under the same lock that removed it, and written outside so
+		// file IO never runs under the lock that orders ring delivery.
+		if remaining == 0 {
+			w.recordAttachment(false)
+		}
 		w.writers.Done()
 	}()
 

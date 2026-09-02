@@ -139,11 +139,7 @@ func (w *Worker) serve(conn net.Conn) {
 	defer func() {
 		w.mu.Lock()
 		w.dropLocked(c, "")
-		remaining := len(w.attachments)
 		w.mu.Unlock()
-		if remaining == 0 {
-			w.recordAttachment(false)
-		}
 	}()
 
 	// If the process already exited, tell this client immediately rather than
