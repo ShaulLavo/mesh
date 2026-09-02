@@ -84,6 +84,17 @@ homebrew_casks:
       verified: github.com/ShaulLavo/mesh/
     binaries:
       - mesh
+    # Releases are ad-hoc signed by the Go linker, not with an Apple Developer
+    # ID, so Gatekeeper quarantines them and offers only to trash the binary.
+    # Homebrew dropped --no-quarantine, so the cask clears it on install.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/mesh"],
+                           sudo: false
+          end
 
 release:
   github:

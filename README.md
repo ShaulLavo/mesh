@@ -14,16 +14,16 @@ macOS:
 
 ```bash
 brew tap ShaulLavo/mesh https://github.com/ShaulLavo/mesh
-brew install --cask --no-quarantine ShaulLavo/mesh/mesh
+brew install --cask ShaulLavo/mesh/mesh
 ```
 
-`--no-quarantine` is required, not a preference. Releases are ad-hoc signed by
-the Go linker rather than with an Apple Developer ID, so Gatekeeper refuses to
-open the binary and offers only to move it to the trash. If you already
-installed without the flag, clear the attribute instead of reinstalling:
+Releases are ad-hoc signed by the Go linker rather than with an Apple Developer
+ID, so macOS quarantines the binary and Gatekeeper offers only to move it to
+the trash. The cask clears that attribute on install. Homebrew removed
+`--no-quarantine`, so a binary downloaded by hand needs it cleared by hand:
 
 ```bash
-xattr -d com.apple.quarantine "$(brew --prefix)"/Caskroom/mesh/*/mesh
+xattr -d com.apple.quarantine ./mesh
 ```
 
 Linux:

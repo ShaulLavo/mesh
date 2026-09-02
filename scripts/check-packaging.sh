@@ -205,6 +205,9 @@ check_release_dist() {
   does_not_contain "$dist/homebrew/Casks/mesh.rb" 'mesh_linux_amd64.tar.gz'
   does_not_contain "$dist/homebrew/Casks/mesh.rb" 'mesh_linux_arm64.tar.gz'
   does_not_contain "$dist/homebrew/Casks/mesh.rb" 'example.com'
+  # Unsigned binaries are quarantined on download and Homebrew dropped
+  # --no-quarantine, so the cask has to clear it or every install is a dead end.
+  contains "$dist/homebrew/Casks/mesh.rb" 'com.apple.quarantine'
   [[ $(grep -Fc 'binary "mesh"' "$dist/homebrew/Casks/mesh.rb") -eq 1 ]] ||
     fail "Homebrew Cask must install exactly one mesh binary"
   darwin_checksum=$(awk '$2 == "mesh_darwin_arm64.tar.gz" { print $1 }' "$dist/checksums.txt")
