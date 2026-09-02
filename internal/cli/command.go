@@ -120,8 +120,28 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 		raw       bool
 	)
 	root := &cobra.Command{
-		Use:           "mesh [host|session] [-- command...]",
-		Short:         "Direct, resumable terminal sessions across your machines",
+		Use:   "mesh [host|session] [-- command...]",
+		Short: "Direct, resumable terminal sessions across your machines",
+		Long: "Sessions live on the host that runs them, not on the connection.\n" +
+			"Close your laptop, lose wifi, or quit mesh, and the command keeps\n" +
+			"running. Reattach from anywhere on your tailnet.\n\n" +
+			"A bare name is a host or a session, so the commands you use most are\n" +
+			"not subcommands at all.",
+		// The everyday forms are the root command itself, so nothing below
+		// lists them. Without this a reader never learns `mesh pc` exists.
+		// Fang parses each line as a command and annotates with "# " comments,
+		// so prose trailing a command is swallowed rather than printed.
+		Example: "# Pick a host and session\n" +
+			"mesh\n" +
+			"# Start a new session on pc\n" +
+			"mesh pc\n" +
+			"# Reattach to the newest session on pc\n" +
+			"mesh pc -r\n" +
+			"# Attach to a session by its id\n" +
+			"mesh 7K3D\n" +
+			"# Run one command there, then come back\n" +
+			"mesh pc -- htop\n" +
+			"# Detach and leave it running: ctrl+]",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.ArbitraryArgs,
@@ -136,22 +156,22 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	root.Flags().StringVar(&detachKey, "detach-key", "", "key that detaches, such as ctrl+] or none")
 	root.Flags().BoolVar(&raw, "raw", false, "pass every input byte through without a detach key")
 
-	root.AddCommand(
-		app.addCommand(),
-		app.attachCommand(),
-		daemonWithInstall(app),
-		app.killCommand(),
-		app.removeCommand(),
-		app.listCommand(),
-		app.localCommand(),
-		app.logsCommand(),
-		app.privateNamesCommand(),
-		app.signalCommand(),
-		app.serveCommand(),
-		app.unserveCommand(),
-		app.wakeCommand(),
-		app.workerCommand(),
+	// Grouped so the commands used daily are not sorted in among the ones
+	// touched once per machine.
+	root.AddGroup(
+		&cobra.Group{ID: groupSessions, Title: "Sessions"},
+		&cobra.Group{ID: groupHosts, Title: "Hosts"},
+		&cobra.Group{ID: groupServing, Title: "Serving"},
+		&cobra.Group{ID: groupSetup, Title: "Setup"},
 	)
+	root.AddCommand(
+		inGroup(groupSessions, app.listCommand(), app.attachCommand(), app.localCommand(),
+			app.logsCommand(), app.killCommand(), app.signalCommand(), app.removeCommand())...,
+	)
+	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.wakeCommand())...)
+	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand())...)
+	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand())...)
+	root.AddCommand(app.workerCommand())
 	return root
 }
 
@@ -1162,4 +1182,19 @@ func localSessionRows() ([]protocol.SessionInfo, error) {
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+// Command groups for the help listing.
+const (
+	groupSessions = "sessions"
+	groupHosts    = "hosts"
+	groupServing  = "serving"
+	groupSetup    = "setup"
+)
+
+func inGroup(id string, commands ...*cobra.Command) []*cobra.Command {
+	for _, command := range commands {
+		command.GroupID = id
+	}
+	return commands
 }
