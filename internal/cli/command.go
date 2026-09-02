@@ -139,7 +139,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	root.AddCommand(
 		app.addCommand(),
 		app.attachCommand(),
-		app.daemonCommand(),
+		daemonWithInstall(app),
 		app.killCommand(),
 		app.removeCommand(),
 		app.listCommand(),
@@ -451,8 +451,11 @@ func (a *application) addCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "add [user@]host",
 		Short: "Install Mesh on an SSH-reachable host",
-		Args:  exactArgs(1, "an SSH target", "mesh add user@host"),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return a.addTargetUsage(cmd)
+			}
 			selected := alias
 			if selected == "" {
 				selected = aliasFromTarget(args[0])

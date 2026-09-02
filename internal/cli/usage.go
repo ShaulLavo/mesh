@@ -18,6 +18,7 @@ import (
 type usageError struct {
 	problem string
 	example string
+	details []string
 }
 
 func (e *usageError) Error() string {
@@ -49,9 +50,10 @@ func RenderError(output io.Writer, styles fang.Styles, err error) {
 	}
 
 	problem, example := err.Error(), ""
+	var details []string
 	var usage *usageError
 	if errors.As(err, &usage) {
-		problem, example = usage.problem, usage.example
+		problem, example, details = usage.problem, usage.example, usage.details
 	}
 
 	// The badge carries Margin(1), which paints blank rows above and below it
@@ -66,6 +68,9 @@ func RenderError(output io.Writer, styles fang.Styles, err error) {
 		badge.String(),
 		text.Render(" "+problem),
 	))
+	for _, detail := range details {
+		_, _ = fmt.Fprintln(output, text.Render(indent+" "+detail))
+	}
 	if example != "" {
 		_, _ = fmt.Fprintln(output, text.Render(indent+" try:  "+example))
 	}
