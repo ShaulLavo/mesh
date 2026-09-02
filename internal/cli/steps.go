@@ -35,7 +35,7 @@ func NewStepPrinter(output io.Writer, label string) *StepPrinter {
 // Step finishes the previous line and begins one for step.
 func (p *StepPrinter) Step(step, detail string) {
 	p.finish()
-	line := fmt.Sprintf("%s %-9s %s", tag(p.output, p.label), SafeTerminalText(step), SafeTerminalText(detail))
+	line := fmt.Sprintf("%s %-9s %s", Tag(p.output, p.label), SafeTerminalText(step), SafeTerminalText(detail))
 	if !p.live {
 		_, _ = fmt.Fprintln(p.output, line)
 		return

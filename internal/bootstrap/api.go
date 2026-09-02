@@ -96,6 +96,11 @@ type ProvisionAction struct {
 // service change on the remote host.
 type ConfirmProvisionFunc func(context.Context, ProvisionConfirmation) (bool, error)
 
+// LocalSetupFunc installs and starts Tailscale on the machine running mesh add,
+// after adoption finds it cannot reach the tailnet from here. It is given the
+// reason so it can tell the operator what it is fixing.
+type LocalSetupFunc func(context.Context, error) error
+
 // AuthKeyFunc supplies a Tailscale auth key for the named remote target, asked
 // for only when the host turns out to need one. Bootstrap takes ownership of
 // the returned bytes and clears them before Run returns.
@@ -130,14 +135,18 @@ type Options struct {
 	// one and TailscaleAuthKey is empty, so an interactive run never has to
 	// fail, send the operator away for a key, and start over.
 	TailscaleAuthKeyPrompt AuthKeyFunc
-	ConfirmProvision       ConfirmProvisionFunc
-	SudoPassword           SudoPasswordFunc
-	SSH                    SSHOptions
-	DaemonPort             uint16
-	SSHPort                uint16
-	WebSocketPath          string
-	VerifyTimeout          time.Duration
-	Progress               func(Event)
+	// LocalTailscaleSetup offers to fix this machine rather than refusing.
+	// Mesh already installs Tailscale on the host being adopted; declining to
+	// do the same here is an arbitrary place to stop.
+	LocalTailscaleSetup LocalSetupFunc
+	ConfirmProvision    ConfirmProvisionFunc
+	SudoPassword        SudoPasswordFunc
+	SSH                 SSHOptions
+	DaemonPort          uint16
+	SSHPort             uint16
+	WebSocketPath       string
+	VerifyTimeout       time.Duration
+	Progress            func(Event)
 }
 
 // Result is the host observation proved by the remote daemon itself.

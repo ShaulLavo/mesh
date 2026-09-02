@@ -109,7 +109,15 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 	// Checking last meant installing and starting Tailscale on someone else's
 	// computer and only then discovering this one could never reach it.
 	if err := deps.localTailnet(ctx); err != nil {
-		return Result{}, diagnostic(DiagnosticLocalTailscale, err)
+		if opts.LocalTailscaleSetup == nil {
+			return Result{}, diagnostic(DiagnosticLocalTailscale, err)
+		}
+		if setupErr := opts.LocalTailscaleSetup(ctx, err); setupErr != nil {
+			return Result{}, diagnostic(DiagnosticLocalTailscale, setupErr)
+		}
+		if err := deps.localTailnet(ctx); err != nil {
+			return Result{}, diagnostic(DiagnosticLocalTailscale, err)
+		}
 	}
 
 	normalized.progress(Event{Step: StepConnect, Detail: normalized.target.display()})

@@ -88,6 +88,7 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 			ExpectedIdentity:       identityForAlias(hosts, request.Alias),
 			TailscaleAuthKey:       authKey,
 			TailscaleAuthKeyPrompt: authKeyPrompt(ui),
+			LocalTailscaleSetup:    localTailscaleSetup(ui),
 			ConfirmProvision:       confirmProvision,
 			SudoPassword:           sudoPasswordPrompt(ui),
 			SSH: bootstrap.SSHOptions{
