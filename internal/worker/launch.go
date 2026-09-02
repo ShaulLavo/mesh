@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +30,7 @@ type LaunchConfig struct {
 	Env         []string
 	Cols        int
 	Rows        int
+	Term        string
 }
 
 // Launched is a worker that has published its metadata and is accepting local
@@ -66,6 +68,7 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 	if cfg.Env == nil {
 		cfg.Env = os.Environ()
 	}
+	cfg.Env = withTerm(cfg.Env, cfg.Term)
 	if err := os.MkdirAll(cfg.SessionsDir, 0o700); err != nil {
 		return Launched{}, fmt.Errorf("launch worker: create sessions directory: %w", err)
 	}
@@ -169,4 +172,21 @@ func cleanupReservedSession(dir string) {
 	_ = os.Remove(paths.Launching(dir))
 	_ = os.Remove(paths.Log(dir))
 	_ = os.Remove(dir)
+}
+
+// withTerm sets TERM for the session. The daemon runs as a service and has no
+// TERM, so without this the shell starts with none and startup code that
+// branches on the terminal type takes the wrong path silently: on Arch, the
+// prompt falls back to the /etc/bash.bashrc default.
+func withTerm(env []string, term string) []string {
+	if term == "" {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "TERM=") {
+			out = append(out, entry)
+		}
+	}
+	return append(out, "TERM="+term)
 }

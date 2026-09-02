@@ -3,6 +3,7 @@ package worker
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/shaul/mesh/internal/paths"
@@ -79,5 +80,24 @@ func TestLaunchDetachedCleansReservationWhenProcessCannotStart(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("failed launch left state entries: %v", entries)
+	}
+}
+
+func TestWithTermReplacesTheServiceEnvironment(t *testing.T) {
+	t.Parallel()
+
+	// The daemon is a service with no TERM, so a session inherited none and
+	// shell startup that branches on the terminal type took the wrong path.
+	got := withTerm([]string{"HOME=/home/x", "TERM=dumb", "PATH=/usr/bin"}, "xterm-256color")
+	want := []string{"HOME=/home/x", "PATH=/usr/bin", "TERM=xterm-256color"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("withTerm() = %q, want %q", got, want)
+	}
+	if only := withTerm([]string{"HOME=/home/x"}, "screen"); !slices.Equal(only, []string{"HOME=/home/x", "TERM=screen"}) {
+		t.Fatalf("withTerm() on an env without TERM = %q", only)
+	}
+	// An empty term must not add a bare TERM= that overrides a real one later.
+	if unchanged := withTerm([]string{"TERM=vt100"}, ""); !slices.Equal(unchanged, []string{"TERM=vt100"}) {
+		t.Fatalf("withTerm() with no term = %q", unchanged)
 	}
 }

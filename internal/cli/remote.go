@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/protocol"
@@ -108,6 +110,7 @@ func createRemoteSession(ctx context.Context, host HostRecord, dial HostDialer, 
 	response, err := controlRequest(ctx, conn, protocol.Control{
 		Type:      protocol.TypeCreate,
 		RequestID: requestID,
+		Term:      clientTerm(),
 		Command:   append([]string(nil), command...),
 		Cols:      cols,
 		Rows:      rows,
@@ -183,4 +186,14 @@ func logsRemoteSession(ctx context.Context, host HostRecord, dial HostDialer, se
 	default:
 		return nil, fmt.Errorf("host %s returned an unexpected logs response", host.Alias)
 	}
+}
+
+// clientTerm reports the terminal type to run the remote session under. The
+// daemon is a service and has no TERM of its own, so a session inherits none
+// and shell startup that branches on it silently takes the wrong path.
+func clientTerm() string {
+	if term := strings.TrimSpace(os.Getenv("TERM")); term != "" && term != "dumb" {
+		return term
+	}
+	return "xterm-256color"
 }
