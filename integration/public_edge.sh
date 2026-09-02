@@ -490,13 +490,13 @@ LIVE_KEY="$TEST_ROOT/public-live.key"
 LIVE_SIGNATURE="$TEST_ROOT/public-live.signature"
 create_certificate 401 '*.shaulavo.dev' "$STAGING_CERT" "$STAGING_KEY"
 sign_bundle public-edge staging "$STAGING_CERT" "$STAGING_KEY" "$STAGING_SIGNATURE"
-for named in EDGE_ID RENEWER_ID STAGING_CERT STAGING_KEY STAGING_SIGNATURE; do
-  [ -n "${!named}" ] || fail "$named is empty before installing the staging certificate"
-done
-[ -s "$STAGING_SIGNATURE" ] || fail "staging signature file is empty: $STAGING_SIGNATURE"
-python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install "$EDGE_STATE/daemon.sock" public-edge staging \
-  "$EDGE_ID" "$RENEWER_ID" "$STAGING_CERT" "$STAGING_KEY" "$STAGING_SIGNATURE" >/dev/null ||
-  fail "install staging public certificate"
+# Built as an array so a failure can report the exact vector. This request has
+# failed several release runs with argparse naming the last positional, which is
+# what it says when an earlier one is absent, and no amount of checking the
+# variables beforehand has explained which. Print what was actually passed.
+install_args=("$EDGE_STATE/daemon.sock" public-edge staging "$EDGE_ID" "$RENEWER_ID" "$STAGING_CERT" "$STAGING_KEY" "$STAGING_SIGNATURE")
+python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install "${install_args[@]}" >/dev/null ||
+  fail "install staging public certificate (${#install_args[@]} args: $(printf '[%s]' "${install_args[@]}"))"
 [ -f "$EDGE_STATE/certificates/public-edge/staging/current" ] ||
   fail "staging public certificate was not persisted"
 [ ! -e "$EDGE_STATE/certificates/public-edge/live/current" ] ||
