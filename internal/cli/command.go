@@ -448,7 +448,7 @@ func (a *application) addCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "add [user@]host",
 		Short: "Install Mesh on an SSH-reachable host",
-		Args:  exactArgs(1, "an SSH target", "mesh add shaul@pc"),
+		Args:  exactArgs(1, "an SSH target", "mesh add user@host"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			selected := alias
 			if selected == "" {
