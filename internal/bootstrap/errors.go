@@ -44,7 +44,7 @@ func diagnostic(code DiagnosticCode, err error) error {
 func diagnosticSuggestion(code DiagnosticCode) string {
 	switch code {
 	case DiagnosticInvalidTarget:
-		return "use user@host or user@host:port"
+		return "use host, user@host, or user@host:port; a Host alias from ~/.ssh/config works"
 	case DiagnosticSSHConnect:
 		return "run ssh user@host and check the host name, SSH port, and network route"
 	case DiagnosticSSHAuth:
@@ -60,9 +60,9 @@ func diagnosticSuggestion(code DiagnosticCode) string {
 	case DiagnosticServiceInstall:
 		return "inspect the remote mesh service with systemctl --user status mesh or launchctl print gui/$(id -u)/dev.shaulavo.mesh"
 	case DiagnosticTailscaleUnavailable:
-		return "install and start Tailscale on the remote host"
+		return "let mesh add install it with --yes, or install it yourself from https://tailscale.com/download"
 	case DiagnosticTailscaleLoggedOut:
-		return "retry with --tailscale-auth-key-file pointing to a Tailscale auth key"
+		return "create a reusable auth key at https://login.tailscale.com/admin/settings/keys, then retry with --tailscale-auth-key-file"
 	case DiagnosticTailscaleMachineAuth:
 		return "approve the machine in the Tailscale admin console at https://login.tailscale.com/admin/machines"
 	case DiagnosticSudoAuth:
