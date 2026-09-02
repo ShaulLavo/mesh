@@ -252,6 +252,9 @@ EDGE_ID=$(identity_id "$EDGE_STATE/identity.key") || fail "derive edge identity"
 ORIGIN_ONE_ID=$(identity_id "$ORIGIN_ONE_STATE/identity.key") || fail "derive first origin identity"
 ORIGIN_TWO_ID=$(identity_id "$ORIGIN_TWO_STATE/identity.key") || fail "derive second origin identity"
 RENEWER_ID=$(pkcs8_identity_id "$RENEWER_KEY") || fail "derive renewer identity"
+for named in EDGE_ID ORIGIN_ONE_ID ORIGIN_TWO_ID RENEWER_ID; do
+  [ -n "${!named}" ] || fail "$named is empty; every later control request would lose an argument"
+done
 
 mapfile -t PORTS < <(python3 - "$$" "3" <<'PY'
 import os, socket, sys
@@ -487,6 +490,10 @@ LIVE_KEY="$TEST_ROOT/public-live.key"
 LIVE_SIGNATURE="$TEST_ROOT/public-live.signature"
 create_certificate 401 '*.shaulavo.dev' "$STAGING_CERT" "$STAGING_KEY"
 sign_bundle public-edge staging "$STAGING_CERT" "$STAGING_KEY" "$STAGING_SIGNATURE"
+for named in EDGE_ID RENEWER_ID STAGING_CERT STAGING_KEY STAGING_SIGNATURE; do
+  [ -n "${!named}" ] || fail "$named is empty before installing the staging certificate"
+done
+[ -s "$STAGING_SIGNATURE" ] || fail "staging signature file is empty: $STAGING_SIGNATURE"
 python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install "$EDGE_STATE/daemon.sock" public-edge staging \
   "$EDGE_ID" "$RENEWER_ID" "$STAGING_CERT" "$STAGING_KEY" "$STAGING_SIGNATURE" >/dev/null ||
   fail "install staging public certificate"
