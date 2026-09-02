@@ -284,7 +284,11 @@ func classifySSHHandshake(remoteTarget target, err error) error {
 	if strings.Contains(lower, "host key") || strings.Contains(lower, "knownhosts") {
 		return diagnostic(DiagnosticSSHHostKey, fmt.Errorf("verify SSH host %s: %w", remoteTarget.display(), err))
 	}
-	return diagnostic(DiagnosticSSHAuth, fmt.Errorf("authenticate SSH host %s: %w", remoteTarget.display(), err))
+	authErr := fmt.Errorf("authenticate SSH host %s: %w", remoteTarget.display(), err)
+	if hint := configuredUserHint(remoteTarget); hint != "" {
+		authErr = fmt.Errorf("%w; %s", authErr, hint)
+	}
+	return diagnostic(DiagnosticSSHAuth, authErr)
 }
 
 func (r *sshRemote) Run(ctx context.Context, command string, stdin io.Reader, requested ...remoteOutputLimits) ([]byte, []byte, error) {

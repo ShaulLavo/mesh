@@ -45,7 +45,7 @@ func TestBootstrapFuncPinsExistingIdentityAndMapsResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if captured.Target != "alice@pc" || captured.StateDir != stateDir || captured.ExpectedIdentity != identity {
+	if captured.Target != "pc" || captured.StateDir != stateDir || captured.ExpectedIdentity != identity {
 		t.Fatalf("bootstrap options = %#v", captured)
 	}
 	if captured.SSH.Password == nil || captured.SSH.Passphrase == nil || captured.SSH.ConfirmHostKey == nil || captured.ConfirmProvision == nil || captured.SudoPassword == nil {
@@ -176,27 +176,6 @@ func TestCommandDependenciesWireBootstrapAndPicker(t *testing.T) {
 	}
 }
 
-func TestTargetWithUserPreservesExplicitUser(t *testing.T) {
-	called := false
-	got, err := targetWithUser("bob@[fd7a::1]:2222", func() (string, error) {
-		called = true
-		return "", errors.New("must not be called")
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "bob@[fd7a::1]:2222" || called {
-		t.Fatalf("targetWithUser() = %q, lookup called = %t", got, called)
-	}
-}
-
-func TestTargetWithUserNamesLookupFailure(t *testing.T) {
-	_, err := targetWithUser("pc", func() (string, error) { return "", errors.New("not found") })
-	if err == nil || !strings.Contains(err.Error(), "local SSH user") {
-		t.Fatalf("targetWithUser() error = %v", err)
-	}
-}
-
 func TestPromptedAuthKeyIsRedactedLikeAFileKey(t *testing.T) {
 	const secret = "tskey-pasted-not-from-a-file"
 	identity := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
@@ -225,5 +204,24 @@ func TestPromptedAuthKeyIsRedactedLikeAFileKey(t *testing.T) {
 	})
 	if _, err := bootstrapFunc(context.Background(), cli.AddRequest{Target: "pi", Alias: "pi", Yes: true}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBootstrapPassesTheTargetThroughUntouched(t *testing.T) {
+	// The user must be decided after ~/.ssh/config is read. Prepending the
+	// local username here made `mesh add pi` connect as whoever was typing,
+	// beating a `User pi` the config already had right.
+	var captured bootstrap.Options
+	bootstrapFunc := newBootstrapFunc(func(_ context.Context, opts bootstrap.Options) (bootstrap.Result, error) {
+		captured = opts
+		return bootstrap.Result{}, errors.New("stop after the target is set")
+	}, bootstrapUI{
+		input: strings.NewReader(""), output: io.Discard,
+		username: func() (string, error) { return "whoever", nil },
+		terminal: func() bool { return false },
+	})
+	_, _ = bootstrapFunc(context.Background(), cli.AddRequest{Target: "pi", Alias: "pi"})
+	if captured.Target != "pi" {
+		t.Fatalf("target = %q, want it passed through untouched", captured.Target)
 	}
 }

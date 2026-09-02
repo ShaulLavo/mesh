@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os/user"
 	"path"
 	"strings"
 	"time"
@@ -287,8 +288,14 @@ func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, err
 	// Mesh dials the address itself, so a Host alias only ssh knows about would
 	// otherwise fail as a DNS lookup for the alias.
 	remoteTarget = applySSHConfig(remoteTarget, userSSHConfig())
+	// Last, so it cannot beat a User the ssh config named. `mesh add pi` on a
+	// config with `User pi` must connect as pi, not as whoever is typing.
 	if remoteTarget.user == "" {
-		return normalizedOptions{}, diagnostic(DiagnosticInvalidTarget, fmt.Errorf("target %q names no user and ~/.ssh/config sets none for %q; use user@host", opts.Target, remoteTarget.alias))
+		current, err := user.Current()
+		if err != nil || strings.TrimSpace(current.Username) == "" {
+			return normalizedOptions{}, diagnostic(DiagnosticInvalidTarget, fmt.Errorf("target %q names no user, ~/.ssh/config sets none for %q, and this machine has no username; use user@host", opts.Target, remoteTarget.alias))
+		}
+		remoteTarget.user = strings.TrimSpace(current.Username)
 	}
 	if strings.TrimSpace(opts.StateDir) == "" {
 		return normalizedOptions{}, diagnostic(DiagnosticIdentity, errors.New("local state directory is empty"))

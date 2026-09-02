@@ -55,10 +55,6 @@ func commandDependencies() cli.Dependencies {
 
 func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 	return func(ctx context.Context, request cli.AddRequest) (cli.BootstrapResult, error) {
-		target, err := targetWithUser(request.Target, ui.username)
-		if err != nil {
-			return cli.BootstrapResult{}, err
-		}
 		stateDir, err := paths.StateDir()
 		if err != nil {
 			return cli.BootstrapResult{}, err
@@ -83,7 +79,7 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 		}
 
 		result, err := run(ctx, bootstrap.Options{
-			Target:                 target,
+			Target:                 request.Target,
 			StateDir:               stateDir,
 			ExpectedIdentity:       identityForAlias(hosts, request.Alias),
 			TailscaleAuthKey:       authKey,
@@ -225,21 +221,6 @@ func provisionPrompt(ui bootstrapUI) bootstrap.ConfirmProvisionFunc {
 		answer = strings.ToLower(strings.TrimSpace(answer))
 		return answer == "y" || answer == "yes", nil
 	}
-}
-
-func targetWithUser(target string, username func() (string, error)) (string, error) {
-	if strings.Contains(target, "@") {
-		return target, nil
-	}
-	name, err := username()
-	if err != nil {
-		return "", fmt.Errorf("resolve local SSH user: %w", err)
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", fmt.Errorf("resolve local SSH user: username is empty")
-	}
-	return name + "@" + target, nil
 }
 
 func identityForAlias(hosts []cli.HostRecord, alias string) string {

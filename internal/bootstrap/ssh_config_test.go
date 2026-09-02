@@ -58,3 +58,51 @@ func TestApplySSHConfigWithoutAConfigChangesNothing(t *testing.T) {
 		t.Fatalf("nil resolver changed the target: %s@%s:%d", got.user, got.host, got.port)
 	}
 }
+
+func TestUserPrecedenceMatchesSSH(t *testing.T) {
+	t.Parallel()
+
+	// Command line beats config beats local user, the same order ssh uses.
+	resolve := resolverFrom(map[string]string{
+		"pi/HostName": "10.0.0.9",
+		"pi/User":     "pi",
+	})
+	for _, row := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"the config names the user for a bare alias", "pi", "pi"},
+		{"an explicit user still wins", "root@pi", "root"},
+	} {
+		parsed, err := parseTarget(row.raw)
+		if err != nil {
+			t.Fatalf("%s: %v", row.name, err)
+		}
+		if got := applySSHConfig(parsed, resolve).user; got != row.want {
+			t.Errorf("%s: user = %q, want %q", row.name, got, row.want)
+		}
+	}
+
+	// A host the config says nothing about is left for the local-user fallback.
+	parsed, err := parseTarget("unknown-host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := applySSHConfig(parsed, resolve).user; got != "" {
+		t.Fatalf("user = %q, want it left empty for the caller's fallback", got)
+	}
+}
+
+func TestConfiguredUserHintExplainsAnOverride(t *testing.T) {
+	t.Parallel()
+
+	// Only when a user was typed and the config disagrees.
+	quiet, err := parseTarget("pi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hint := configuredUserHint(quiet); hint != "" {
+		t.Fatalf("hint for a bare alias = %q, want none", hint)
+	}
+}

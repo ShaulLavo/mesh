@@ -1,9 +1,11 @@
 package bootstrap
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/kevinburke/ssh_config"
 )
@@ -69,4 +71,24 @@ func applySSHConfig(t target, resolve sshConfigResolver) target {
 	}
 	t.port = uint16(port)
 	return t
+}
+
+// configuredUserHint explains an authentication failure caused by naming a user
+// the ssh config would have chosen differently. Writing `mesh add me@pi` out of
+// habit overrides a `User pi` the config already had right, and the resulting
+// failure otherwise says only that no key worked.
+func configuredUserHint(t target) string {
+	if !t.explicitUser || t.alias == "" {
+		return ""
+	}
+	resolve := userSSHConfig()
+	if resolve == nil {
+		return ""
+	}
+	configured := strings.TrimSpace(resolve(t.alias, "User"))
+	if configured == "" || configured == t.user {
+		return ""
+	}
+	return fmt.Sprintf("~/.ssh/config sets User %s for %s, and %s overrode it; try mesh add %s",
+		configured, t.alias, t.user, t.alias)
 }
