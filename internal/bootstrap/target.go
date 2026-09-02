@@ -30,10 +30,16 @@ func (t target) display() string {
 	if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
-	if t.port == 22 {
-		return t.user + "@" + host
+	address := t.user + "@" + host
+	if t.port != 22 {
+		address = fmt.Sprintf("%s@%s:%d", t.user, host, t.port)
 	}
-	return fmt.Sprintf("%s@%s:%d", t.user, host, t.port)
+	// After ~/.ssh/config resolves an alias the address is not what was typed,
+	// and an operator approving remote changes has to recognise the machine.
+	if t.alias != "" && t.alias != t.host {
+		return t.alias + " (" + address + ")"
+	}
+	return address
 }
 
 func parseTarget(raw string) (target, error) {

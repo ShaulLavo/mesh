@@ -37,10 +37,11 @@ const linuxInstallMethodCommand = `
 if [ -r /etc/os-release ]; then
 	. /etc/os-release
 	distro_ids=" ${ID:-} ${ID_LIKE:-} "
+	distro_name=${PRETTY_NAME:-${NAME:-${ID:-}}}
 	case "$distro_ids" in
 		*" arch "*|*" manjaro "*|*" endeavouros "*|*" garuda "*)
 			if command -v pacman >/dev/null 2>&1; then
-				printf 'MESH_INSTALL_METHOD=pacman\n'
+				printf 'MESH_INSTALL_METHOD=pacman\nMESH_DISTRO=%s\n' "$distro_name"
 				exit 0
 			fi
 			;;
@@ -80,7 +81,7 @@ if [ -r /etc/os-release ]; then
 			;;
 	esac
 	if command -v apt-get >/dev/null 2>&1 && [ -n "$repo_os" ] && [ -n "$repo_version" ] && [ -n "$downloader" ]; then
-		printf 'MESH_INSTALL_METHOD=apt\nMESH_REPO_OS=%s\nMESH_REPO_VERSION=%s\nMESH_DOWNLOADER=%s\n' "$repo_os" "$repo_version" "$downloader"
+		printf 'MESH_INSTALL_METHOD=apt\nMESH_REPO_OS=%s\nMESH_REPO_VERSION=%s\nMESH_DOWNLOADER=%s\nMESH_DISTRO=%s\n' "$repo_os" "$repo_version" "$downloader" "$distro_name"
 		exit 0
 	fi
 fi
@@ -120,6 +121,7 @@ const (
 
 type installPlan struct {
 	Kind            installKind
+	Distro          string
 	RepoOS          string
 	Codename        string
 	Downloader      string
@@ -220,6 +222,19 @@ func (p installPlan) renderedCommands(privilege privilegeSpec) []string {
 		commands = append(commands, command)
 	}
 	return commands
+}
+
+func (p installPlan) actions(privilege privilegeSpec) []ProvisionAction {
+	steps := p.steps()
+	actions := make([]ProvisionAction, 0, len(steps))
+	for _, step := range steps {
+		command := step.Command
+		if step.Privileged {
+			command = privilege.displayCommand(command)
+		}
+		actions = append(actions, ProvisionAction{Description: step.Operation, Command: command})
+	}
+	return actions
 }
 
 func (p installPlan) checks() []string {
@@ -375,6 +390,7 @@ func provisionRemote(ctx context.Context, remote remoteHost, request provisionRe
 }
 
 func buildProvisionConfirmation(request provisionRequest, install installPlan, service *linuxUserService, privilege privilegeSpec) ProvisionConfirmation {
+	actions := install.actions(privilege)
 	commands := install.renderedCommands(privilege)
 	checks := install.checks()
 	if privilege.Mode == privilegeSudoPassword {
@@ -383,7 +399,11 @@ func buildProvisionConfirmation(request provisionRequest, install installPlan, s
 	manager := install.packageManager()
 	summary := "Change remote system settings?"
 	if install.Kind != installNone {
-		summary = fmt.Sprintf("%s has no Tailscale. Install it with %s?", request.Target, manager)
+		if install.Distro != "" {
+			summary = fmt.Sprintf("%s is running %s and has no Tailscale. Install it with %s?", request.Target, install.Distro, manager)
+		} else {
+			summary = fmt.Sprintf("%s has no Tailscale. Install it with %s?", request.Target, manager)
+		}
 	} else {
 		manager = "loginctl"
 		if service != nil {
@@ -391,12 +411,21 @@ func buildProvisionConfirmation(request provisionRequest, install installPlan, s
 		}
 	}
 	if service != nil && !service.Lingering {
+		actions = append(actions, ProvisionAction{
+			Description: "keep " + service.User + "'s services running after logout",
+			Command:     privilege.displayCommand("loginctl enable-linger " + shellQuote(service.User)),
+		})
+		actions = append(actions, ProvisionAction{
+			Description: "confirm lingering is on",
+			Command:     "loginctl show-user " + shellQuote(service.User) + " --property=Linger",
+		})
 		commands = append(commands, privilege.command("loginctl enable-linger "+shellQuote(service.User)))
 		commands = append(commands, "loginctl show-user "+shellQuote(service.User)+" --property=Linger")
 	}
 	return ProvisionConfirmation{
 		Summary:        summary,
 		PackageManager: manager,
+		Actions:        append([]ProvisionAction(nil), actions...),
 		Commands:       append([]string(nil), commands...),
 		Checks:         append([]string(nil), checks...),
 	}
@@ -593,13 +622,13 @@ func detectLinuxInstallPlan(ctx context.Context, remote remoteHost) (installPlan
 	values := markerValues(stdout)
 	switch values["MESH_INSTALL_METHOD"] {
 	case "pacman":
-		return installPlan{Kind: installPacman}, nil
+		return installPlan{Kind: installPacman, Distro: displayDistro(values["MESH_DISTRO"])}, nil
 	case "apt":
 		repoOS := values["MESH_REPO_OS"]
 		codename := values["MESH_REPO_VERSION"]
 		downloader := values["MESH_DOWNLOADER"]
 		if validRepositoryToken(repoOS) && validRepositoryToken(codename) && (downloader == "curl" || downloader == "wget") {
-			return installPlan{Kind: installAPT, RepoOS: repoOS, Codename: codename, Downloader: downloader}, nil
+			return installPlan{Kind: installAPT, RepoOS: repoOS, Codename: codename, Downloader: downloader, Distro: displayDistro(values["MESH_DISTRO"])}, nil
 		}
 	case "script":
 		downloader := values["MESH_DOWNLOADER"]
@@ -610,6 +639,22 @@ func detectLinuxInstallPlan(ctx context.Context, remote remoteHost) (installPlan
 		return installPlan{}, diagnostic(DiagnosticTailscaleUnavailable, errors.New("remote host has no supported package manager, curl, or wget"))
 	}
 	return installPlan{}, diagnostic(DiagnosticTailscaleUnavailable, fmt.Errorf("unsupported package-manager probe result %q", boundedRemoteOutput(stdout)))
+}
+
+// displayDistro keeps a PRETTY_NAME short enough to sit in one prompt line and
+// drops anything that is not plain printable text, since it comes off a remote
+// host and lands in a terminal.
+func displayDistro(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 40 {
+		value = value[:40]
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return value
 }
 
 func validRemoteExecutablePath(value string) bool {

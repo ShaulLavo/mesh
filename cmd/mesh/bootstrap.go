@@ -91,7 +91,7 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 				ConfirmHostKey: hostKeyPrompt(ui),
 			},
 			Progress: func(event bootstrap.Event) {
-				_, _ = fmt.Fprintf(ui.output, "bootstrap %-9s %s\n", event.Step, event.Detail)
+				cli.RenderStep(ui.output, "BOOTSTRAP", string(event.Step), event.Detail)
 			},
 		})
 		if err != nil {
@@ -162,25 +162,20 @@ func provisionPrompt(ui bootstrapUI) bootstrap.ConfirmProvisionFunc {
 		if ui.terminal == nil || !ui.terminal() {
 			return false, errors.New("Tailscale provisioning needs an interactive terminal or --yes")
 		}
-		if _, err := fmt.Fprintf(ui.output, "%s\n  Package manager: %s\n  Commands:\n", cli.SafeTerminalText(confirmation.Summary), cli.SafeTerminalText(confirmation.PackageManager)); err != nil {
+		if _, err := fmt.Fprintf(ui.output, "\n%s\n\n", cli.SafeTerminalText(confirmation.Summary)); err != nil {
 			return false, err
 		}
-		for _, command := range confirmation.Commands {
-			if _, err := fmt.Fprintf(ui.output, "    %s\n", cli.SafeTerminalText(command)); err != nil {
+		for i, action := range confirmation.Actions {
+			if _, err := fmt.Fprintf(ui.output, "  %d. %s\n     %s\n", i+1, cli.SafeTerminalText(action.Description), cli.SafeTerminalText(action.Command)); err != nil {
 				return false, err
 			}
 		}
-		if len(confirmation.Checks) > 0 {
-			if _, err := fmt.Fprintln(ui.output, "  Checks:"); err != nil {
+		for _, check := range confirmation.Checks {
+			if _, err := fmt.Fprintf(ui.output, "\n  first: %s\n", cli.SafeTerminalText(check)); err != nil {
 				return false, err
 			}
-			for _, check := range confirmation.Checks {
-				if _, err := fmt.Fprintf(ui.output, "    %s\n", cli.SafeTerminalText(check)); err != nil {
-					return false, err
-				}
-			}
 		}
-		if _, err := fmt.Fprint(ui.output, "Continue? [y/N] "); err != nil {
+		if _, err := fmt.Fprint(ui.output, "\nContinue? [y/N] "); err != nil {
 			return false, err
 		}
 		reader, err := cancelreader.NewReader(ui.input)

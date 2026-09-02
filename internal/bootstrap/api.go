@@ -78,8 +78,18 @@ type Event struct {
 type ProvisionConfirmation struct {
 	Summary        string
 	PackageManager string
-	Commands       []string
-	Checks         []string
+	// Actions is what an operator reads. Commands is exactly what will run,
+	// kept so a test can prove the prompt does not misrepresent it.
+	Actions  []ProvisionAction
+	Commands []string
+	Checks   []string
+}
+
+// ProvisionAction is one remote change, described plainly, with the command a
+// person would type to perform it.
+type ProvisionAction struct {
+	Description string
+	Command     string
 }
 
 // ConfirmProvisionFunc approves package installation or a system-level user

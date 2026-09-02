@@ -97,6 +97,20 @@ func (s privilegeSpec) acquire(ctx context.Context, remote remoteHost, target st
 	return result, nil
 }
 
+// displayCommand renders a command the way a person would type it. The
+// password plumbing in command() is how a sudo password reaches sudo, not part
+// of the change an operator is being asked to approve.
+func (s privilegeSpec) displayCommand(command string) string {
+	switch s.Mode {
+	case privilegeRoot:
+		return command
+	case privilegeSudoNonInteractive, privilegeSudoPassword:
+		return "sudo " + command
+	default:
+		return command
+	}
+}
+
 func (s privilegeSpec) command(command string) string {
 	switch s.Mode {
 	case privilegeRoot:

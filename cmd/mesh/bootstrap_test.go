@@ -54,7 +54,7 @@ func TestBootstrapFuncPinsExistingIdentityAndMapsResult(t *testing.T) {
 	if result.Host.ID != identity || result.Host.TailscaleName != "pc.example.ts.net" || result.Host.Endpoint != "ws://100.64.0.2:7337/mesh" || !result.AlreadyConfigured {
 		t.Fatalf("bootstrap result = %#v", result)
 	}
-	if got, want := progress.String(), "bootstrap connect   alice@pc\n"; got != want {
+	if got, want := progress.String(), "BOOTSTRAP connect   alice@pc\n"; got != want {
 		t.Fatalf("progress = %q, want %q", got, want)
 	}
 }
@@ -106,24 +106,39 @@ func TestBootstrapFuncReadsAuthKeyAndYesApprovesWithoutPrompt(t *testing.T) {
 	}
 }
 
-func TestProvisionPromptNamesManagerAndExactCommands(t *testing.T) {
+func TestProvisionPromptNumbersPlainActions(t *testing.T) {
 	var output bytes.Buffer
 	confirmed, err := provisionPrompt(bootstrapUI{
 		input: strings.NewReader("yes\n"), output: &output,
 		terminal: func() bool { return true },
 	})(context.Background(), bootstrap.ProvisionConfirmation{
-		Summary: "alice@pi has no Tailscale. Install it with pacman?", PackageManager: "pacman",
-		Commands: []string{"sudo -n pacman -S --needed --noconfirm tailscale", "sudo -n systemctl enable --now tailscaled"},
-		Checks:   []string{"sudo password must authenticate before any remote change"},
+		Summary: "pi (alice@10.0.0.9) has no Tailscale. Install it with pacman?", PackageManager: "pacman",
+		Actions: []bootstrap.ProvisionAction{
+			{Description: "install Tailscale with pacman", Command: "sudo pacman -S --needed --noconfirm tailscale"},
+			{Description: "start Tailscale now and at boot", Command: "sudo systemctl enable --now tailscaled"},
+		},
+		Checks: []string{"sudo password must authenticate before any remote change"},
 	})
 	if err != nil || !confirmed {
 		t.Fatalf("provisionPrompt() = %t, %v", confirmed, err)
 	}
 	got := output.String()
-	for _, want := range []string{"alice@pi has no Tailscale", "Package manager: pacman", "sudo -n pacman -S --needed --noconfirm tailscale", "Checks:", "sudo password must authenticate before any remote change", "Continue? [y/N]"} {
+	for _, want := range []string{
+		"pi (alice@10.0.0.9) has no Tailscale",
+		"1. install Tailscale with pacman",
+		"sudo pacman -S --needed --noconfirm tailscale",
+		"2. start Tailscale now and at boot",
+		"first: sudo password must authenticate",
+		"Continue? [y/N]",
+	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt = %q, want %q", got, want)
 		}
+	}
+	// The password plumbing that delivers a sudo password is not a change an
+	// operator approves, and must never reach the prompt.
+	if strings.Contains(got, "mesh_sudo_password") {
+		t.Fatalf("prompt leaked the password wrapper: %q", got)
 	}
 }
 
