@@ -147,16 +147,10 @@ func authKeyPrompt(ui bootstrapUI) bootstrap.AuthKeyFunc {
 		// A freshly installed Tailscale is not logged in yet, so this is the
 		// next step rather than a fault to report. Wording it as a diagnosis
 		// makes an ordinary install read like something went wrong.
-		// Mesh never stores the key: a reusable one can add machines to the
-		// tailnet, so keeping it would leave a credential on every adopting
-		// machine. Adopting several hosts should not mean retyping it, so say
-		// how to hand it over once.
 		description := "Joining " + target + " to your tailnet.\n\n" +
 			"  1. open https://login.tailscale.com/admin/settings/keys\n" +
 			"  2. Generate auth key, and turn on Reusable\n" +
-			"  3. paste it below\n\n" +
-			"Adopting more hosts? Save it to a file and pass\n" +
-			"--tailscale-auth-key-file to skip this each time."
+			"  3. paste it below"
 		key, err := promptSecret(ctx, ui, "Tailscale auth key", description)
 		if err != nil {
 			return nil, err
