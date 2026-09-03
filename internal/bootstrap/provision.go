@@ -409,9 +409,9 @@ func buildProvisionConfirmation(request provisionRequest, install installPlan, s
 	summary := "Change remote system settings?"
 	if install.Kind != installNone {
 		if install.Distro != "" {
-			summary = fmt.Sprintf("%s is running %s and has no Tailscale. Install it with %s?", request.Target, install.Distro, manager)
+			summary = fmt.Sprintf("%s is running %s. Install Tailscale with %s?", request.Target, install.Distro, manager)
 		} else {
-			summary = fmt.Sprintf("%s has no Tailscale. Install it with %s?", request.Target, manager)
+			summary = fmt.Sprintf("Install Tailscale on %s with %s?", request.Target, manager)
 		}
 	} else {
 		manager = "loginctl"

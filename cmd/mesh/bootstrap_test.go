@@ -112,7 +112,7 @@ func TestProvisionPromptNumbersPlainActions(t *testing.T) {
 		input: strings.NewReader("yes\n"), output: &output,
 		terminal: func() bool { return true },
 	})(context.Background(), bootstrap.ProvisionConfirmation{
-		Summary: "pi (alice@10.0.0.9) has no Tailscale. Install it with pacman?", PackageManager: "pacman",
+		Summary: "pi (alice@10.0.0.9) is running Debian. Install Tailscale with pacman?", PackageManager: "pacman",
 		Actions: []bootstrap.ProvisionAction{
 			{Description: "install Tailscale with pacman", Command: "sudo pacman -S --needed --noconfirm tailscale"},
 			{Description: "start Tailscale now and at boot", Command: "sudo systemctl enable --now tailscaled"},
@@ -124,7 +124,7 @@ func TestProvisionPromptNumbersPlainActions(t *testing.T) {
 	}
 	got := output.String()
 	for _, want := range []string{
-		"pi (alice@10.0.0.9) has no Tailscale",
+		"pi (alice@10.0.0.9) is running Debian",
 		"1. install Tailscale with pacman",
 		"sudo pacman -S --needed --noconfirm tailscale",
 		"2. start Tailscale now and at boot",

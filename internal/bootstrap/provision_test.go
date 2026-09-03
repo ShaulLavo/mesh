@@ -39,7 +39,7 @@ func TestProvisionMissingPacmanRequiresConsentBeforeMutation(t *testing.T) {
 		Observation: tailscaleObservation{State: tailscaleMissing},
 		Confirm: func(_ context.Context, confirmation ProvisionConfirmation) (bool, error) {
 			confirmations++
-			if confirmation.PackageManager != "pacman" || !strings.Contains(confirmation.Summary, "alice@pi has no Tailscale") {
+			if confirmation.PackageManager != "pacman" || !strings.Contains(confirmation.Summary, "Install Tailscale on alice@pi") {
 				t.Fatalf("confirmation = %#v", confirmation)
 			}
 			joined := strings.Join(confirmation.Commands, "\n")
