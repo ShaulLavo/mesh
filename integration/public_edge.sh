@@ -246,12 +246,23 @@ done
 RENEWER_KEY="$TEST_ROOT/renewer.key"
 # The renewer is an external signer that Mesh never loads, and openssl signs
 # with it directly, so it stays PKCS#8 rather than following the daemon keys.
-openssl genpkey -algorithm ED25519 -out "$RENEWER_KEY" >/dev/null 2>&1 || fail "generate renewer identity"
+# Its identity is forced to begin with a dash. Identities are base64url, so
+# 1.66% of them start with one, and a positional that does was read as an option
+# flag until the calls below gained "--". Forcing it makes every run cover the
+# case that used to flake instead of one run in sixty.
+for _ in $(seq 500); do
+  openssl genpkey -algorithm ED25519 -out "$RENEWER_KEY" >/dev/null 2>&1 || fail "generate renewer identity"
+  RENEWER_ID=$(pkcs8_identity_id "$RENEWER_KEY") || fail "derive renewer identity"
+  case $RENEWER_ID in -*) break ;; esac
+done
+case $RENEWER_ID in
+  -*) ;;
+  *) fail "no renewer identity beginning with a dash in 500 tries" ;;
+esac
 chmod 0600 "$RENEWER_KEY"
 EDGE_ID=$(identity_id "$EDGE_STATE/identity.key") || fail "derive edge identity"
 ORIGIN_ONE_ID=$(identity_id "$ORIGIN_ONE_STATE/identity.key") || fail "derive first origin identity"
 ORIGIN_TWO_ID=$(identity_id "$ORIGIN_TWO_STATE/identity.key") || fail "derive second origin identity"
-RENEWER_ID=$(pkcs8_identity_id "$RENEWER_KEY") || fail "derive renewer identity"
 for named in EDGE_ID ORIGIN_ONE_ID ORIGIN_TWO_ID RENEWER_ID; do
   [ -n "${!named}" ] || fail "$named is empty; every later control request would lose an argument"
 done
@@ -397,14 +408,14 @@ wait_for_tcp "$EDGE_PID" 127.0.0.1 "$PROXY_PORT" || fail "proxy listener did not
 start_origin_one "$TEST_ROOT/origin-one.log"
 start_origin_two "$TEST_ROOT/origin-two.log"
 
-python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert "$ORIGIN_ONE_STATE/daemon.sock" site static \
+python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert -- "$ORIGIN_ONE_STATE/daemon.sock" site static \
   "$TEST_ROOT/origin-one-site" app.shaulavo.dev >/dev/null || fail "publish static service"
-python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert "$ORIGIN_ONE_STATE/daemon.sock" bridge proxy \
+python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert -- "$ORIGIN_ONE_STATE/daemon.sock" bridge proxy \
   "$BACKEND_PORT" app.shaulavo.dev >/dev/null || fail "publish proxy service"
 wait_for_proxy_marker || fail "proxy edge did not reach the first origin: $(cat "$TEST_ROOT/edge-proxy.log")"
 
-python3 "$CONTROL_FIXTURE" --expect-type error --expect-code edge.wake_unavailable upsert \
-  "$ORIGIN_ONE_STATE/daemon.sock" wake static "$TEST_ROOT/origin-one-site" wake.shaulavo.dev --wake >/dev/null ||
+python3 "$CONTROL_FIXTURE" --expect-type error --expect-code edge.wake_unavailable upsert --wake -- \
+  "$ORIGIN_ONE_STATE/daemon.sock" wake static "$TEST_ROOT/origin-one-site" wake.shaulavo.dev >/dev/null ||
   fail "refuse unavailable public wake route"
 WAKE_STATUS=$(curl --noproxy '*' --silent --max-time 2 --output /dev/null --write-out '%{http_code}' \
   --header 'Host: wake.shaulavo.dev' --header 'X-Forwarded-For: 203.0.113.77' \
@@ -434,7 +445,7 @@ TERMINAL_STATUS=$(proxy_curl --output /dev/null --write-out '%{http_code}' \
   "http://127.0.0.1:$PROXY_PORT/%256d%2565%2573%2568") || fail "encoded terminal isolation request"
 [ "$TERMINAL_STATUS" = 404 ] || fail "encoded terminal path returned $TERMINAL_STATUS, want 404"
 
-python3 "$CONTROL_FIXTURE" --expect-type error --expect-code edge.route_collision upsert \
+python3 "$CONTROL_FIXTURE" --expect-type error --expect-code edge.route_collision upsert -- \
   "$ORIGIN_TWO_STATE/daemon.sock" site static "$TEST_ROOT/origin-two-site" app.shaulavo.dev >/dev/null ||
   fail "refuse route collision"
 [ "$(proxy_curl "http://127.0.0.1:$PROXY_PORT/site/")" = PUBLIC_EDGE_ORIGIN_ONE ] ||
@@ -461,14 +472,14 @@ fi
 start_origin_one "$TEST_ROOT/origin-one-restarted.log"
 wait_for_proxy_marker || fail "fresh origin heartbeat did not restore liveness"
 
-python3 "$CONTROL_FIXTURE" --expect-type service.deleted delete "$ORIGIN_ONE_STATE/daemon.sock" site >/dev/null ||
+python3 "$CONTROL_FIXTURE" --expect-type service.deleted delete -- "$ORIGIN_ONE_STATE/daemon.sock" site >/dev/null ||
   fail "delete public service"
 DELETE_STATUS=$(proxy_curl --output /dev/null --write-out '%{http_code}' \
   "http://127.0.0.1:$PROXY_PORT/site/") || fail "deleted route request"
 [ "$DELETE_STATUS" = 404 ] || fail "acknowledged delete left route at edge with status $DELETE_STATUS"
-python3 "$CONTROL_FIXTURE" --expect-type service.deleted delete "$ORIGIN_ONE_STATE/daemon.sock" site >/dev/null ||
+python3 "$CONTROL_FIXTURE" --expect-type service.deleted delete -- "$ORIGIN_ONE_STATE/daemon.sock" site >/dev/null ||
   fail "repeat absent service delete"
-python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert "$ORIGIN_ONE_STATE/daemon.sock" site static \
+python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert -- "$ORIGIN_ONE_STATE/daemon.sock" site static \
   "$TEST_ROOT/origin-one-site" app.shaulavo.dev >/dev/null || fail "restore static service for direct TLS"
 wait_for_proxy_marker || fail "restored service did not republish"
 
@@ -490,13 +501,9 @@ LIVE_KEY="$TEST_ROOT/public-live.key"
 LIVE_SIGNATURE="$TEST_ROOT/public-live.signature"
 create_certificate 401 '*.shaulavo.dev' "$STAGING_CERT" "$STAGING_KEY"
 sign_bundle public-edge staging "$STAGING_CERT" "$STAGING_KEY" "$STAGING_SIGNATURE"
-# Built as an array so a failure can report the exact vector. This request has
-# failed several release runs with argparse naming the last positional, which is
-# what it says when an earlier one is absent, and no amount of checking the
-# variables beforehand has explained which. Print what was actually passed.
-install_args=("$EDGE_STATE/daemon.sock" public-edge staging "$EDGE_ID" "$RENEWER_ID" "$STAGING_CERT" "$STAGING_KEY" "$STAGING_SIGNATURE")
-python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install "${install_args[@]}" >/dev/null ||
-  fail "install staging public certificate (${#install_args[@]} args: $(printf '[%s]' "${install_args[@]}"))"
+python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install -- "$EDGE_STATE/daemon.sock" \
+  public-edge staging "$EDGE_ID" "$RENEWER_ID" "$STAGING_CERT" "$STAGING_KEY" "$STAGING_SIGNATURE" >/dev/null ||
+  fail "install staging public certificate"
 [ -f "$EDGE_STATE/certificates/public-edge/staging/current" ] ||
   fail "staging public certificate was not persisted"
 [ ! -e "$EDGE_STATE/certificates/public-edge/live/current" ] ||
@@ -505,7 +512,7 @@ python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install "${instal
 
 create_certificate 402 '*.shaulavo.dev' "$LIVE_CERT" "$LIVE_KEY"
 sign_bundle public-edge live "$LIVE_CERT" "$LIVE_KEY" "$LIVE_SIGNATURE"
-python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install "$EDGE_STATE/daemon.sock" public-edge live \
+python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install -- "$EDGE_STATE/daemon.sock" public-edge live \
   "$EDGE_ID" "$RENEWER_ID" "$LIVE_CERT" "$LIVE_KEY" "$LIVE_SIGNATURE" >/dev/null ||
   fail "install live public certificate"
 EXPECTED_FINGERPRINT=$(openssl x509 -in "$LIVE_CERT" -noout -fingerprint -sha256)
@@ -517,7 +524,7 @@ STAGING_TWO_KEY="$TEST_ROOT/public-staging-two.key"
 STAGING_TWO_SIGNATURE="$TEST_ROOT/public-staging-two.signature"
 create_certificate 403 '*.shaulavo.dev' "$STAGING_TWO_CERT" "$STAGING_TWO_KEY"
 sign_bundle public-edge staging "$STAGING_TWO_CERT" "$STAGING_TWO_KEY" "$STAGING_TWO_SIGNATURE"
-python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install "$EDGE_STATE/daemon.sock" public-edge staging \
+python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install -- "$EDGE_STATE/daemon.sock" public-edge staging \
   "$EDGE_ID" "$RENEWER_ID" "$STAGING_TWO_CERT" "$STAGING_TWO_KEY" "$STAGING_TWO_SIGNATURE" >/dev/null ||
   fail "rotate staging public certificate"
 [ "$(served_fingerprint)" = "$EXPECTED_FINGERPRINT" ] ||
@@ -528,7 +535,7 @@ PRIVATE_KEY="$TEST_ROOT/private.key"
 PRIVATE_SIGNATURE="$TEST_ROOT/private.signature"
 create_certificate 404 '*.mesh.shaulavo.dev' "$PRIVATE_CERT" "$PRIVATE_KEY"
 sign_bundle private-origin live "$PRIVATE_CERT" "$PRIVATE_KEY" "$PRIVATE_SIGNATURE"
-python3 "$CONTROL_FIXTURE" --expect-type error install "$EDGE_STATE/daemon.sock" private-origin live \
+python3 "$CONTROL_FIXTURE" --expect-type error install -- "$EDGE_STATE/daemon.sock" private-origin live \
   "$EDGE_ID" "$RENEWER_ID" "$PRIVATE_CERT" "$PRIVATE_KEY" "$PRIVATE_SIGNATURE" >/dev/null ||
   fail "reject private certificate profile at public edge"
 [ ! -e "$EDGE_STATE/private-tls" ] ||
