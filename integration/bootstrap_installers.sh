@@ -112,6 +112,24 @@ grep -Fqx 'KillMode=process' "$linux_home/.config/systemd/user/mesh.service"
 test "$(grep -Fxc "$authorized_key" "$linux_home/.local/state/mesh/authorized_keys")" -eq 1
 test "$(stat -c '%a' "$linux_home/.local/state/mesh/authorized_keys")" = 600
 
+# An empty source binary means the adopter found the host already running these
+# bytes and skipped the upload. The service and the keys must still reconcile.
+rm -f "$linux_home/.local/state/mesh/authorized_keys"
+linux_skipped=$(env HOME="$linux_home" PATH="$fake_bin:$PATH" \
+  sh scripts/install/linux.sh "" 7337 2222 /mesh "$authorized_key_b64" "$linux_service_b64")
+grep -Fxq 'MESH_INSTALL_RESULT=configured' <<<"$linux_skipped"
+cmp -s "$MESH" "$linux_home/.local/bin/mesh"
+test "$(grep -Fxc "$authorized_key" "$linux_home/.local/state/mesh/authorized_keys")" -eq 1
+
+# Skipping the upload must never publish a service with no binary behind it.
+if missing_output=$(env HOME="$run_root/linux-missing-home" PATH="$fake_bin:$PATH" \
+    sh scripts/install/linux.sh "" 7337 2222 /mesh "$authorized_key_b64" "$linux_service_b64" 2>&1); then
+  echo 'FAIL: Linux installer accepted a skipped upload with no installed binary' >&2
+  exit 1
+fi
+grep -Fq 'MESH_BOOTSTRAP_ERROR=service_install' <<<"$missing_output"
+test ! -e "$run_root/linux-missing-home/.config/systemd/user/mesh.service"
+
 linux_retry_home=$run_root/linux-retry-home
 linux_fail_file=$run_root/linux-restart-failed
 mkdir -p "$linux_retry_home"
@@ -184,6 +202,20 @@ cp "$MESH" "$darwin_source"
 darwin_second=$(env HOME="$darwin_home" PATH="$fake_bin:$PATH" FAKE_LAUNCH_STATE="$launch_state" \
   sh scripts/install/darwin.sh "$darwin_source" 7337 2222 /mesh "$authorized_key_b64" "$darwin_service_b64")
 grep -Fxq 'MESH_INSTALL_RESULT=unchanged' <<<"$darwin_second"
+
+rm -f "$darwin_home/.local/state/mesh/authorized_keys"
+darwin_skipped=$(env HOME="$darwin_home" PATH="$fake_bin:$PATH" \
+  sh scripts/install/darwin.sh "" 7337 2222 /mesh "$authorized_key_b64" "$darwin_service_b64")
+grep -Fxq 'MESH_INSTALL_RESULT=configured' <<<"$darwin_skipped"
+cmp -s "$MESH" "$darwin_home/.local/bin/mesh"
+test "$(grep -Fxc "$authorized_key" "$darwin_home/.local/state/mesh/authorized_keys")" -eq 1
+
+if darwin_missing=$(env HOME="$run_root/darwin-missing-home" PATH="$fake_bin:$PATH" \
+    sh scripts/install/darwin.sh "" 7337 2222 /mesh "$authorized_key_b64" "$darwin_service_b64" 2>&1); then
+  echo 'FAIL: macOS installer accepted a skipped upload with no installed binary' >&2
+  exit 1
+fi
+grep -Fq 'MESH_BOOTSTRAP_ERROR=service_install' <<<"$darwin_missing"
 cmp -s "$MESH" "$darwin_home/.local/bin/mesh"
 grep -Fq -- '--tailnet-port=7337 --ssh-port=2222' \
   "$darwin_home/Library/LaunchAgents/dev.shaulavo.mesh.plist"

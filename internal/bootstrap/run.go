@@ -206,6 +206,7 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		DaemonPort:    normalized.daemonPort,
 		SSHPort:       normalized.sshPort,
 		WebSocketPath: normalized.webSocketPath,
+		Progress:      normalized.progress,
 	})
 	if err != nil {
 		return Result{}, err

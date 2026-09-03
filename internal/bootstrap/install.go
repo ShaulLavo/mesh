@@ -2,7 +2,9 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +23,14 @@ type installRequest struct {
 	DaemonPort    uint16
 	SSHPort       uint16
 	WebSocketPath string
+	Progress      func(Event)
+}
+
+func (r installRequest) progress(event Event) {
+	if r.Progress == nil {
+		return
+	}
+	r.Progress(event)
 }
 
 func installRemote(ctx context.Context, remote remoteHost, request installRequest) (bool, error) {
@@ -36,28 +46,11 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 	if err != nil {
 		return false, diagnostic(DiagnosticServiceInstall, fmt.Errorf("render remote Mesh service: %w", err))
 	}
-	stdout, stderr, err := remote.Run(ctx, `umask 077; mktemp "${TMPDIR:-/tmp}/mesh-bootstrap.XXXXXX"`, nil)
+	remoteBinary, cleanup, err := stageBinary(ctx, remote, request)
 	if err != nil {
-		return false, diagnostic(DiagnosticServiceInstall, remoteCommandError("create remote upload file", err, stdout, stderr))
+		return false, err
 	}
-	remoteBinary := strings.TrimSpace(string(stdout))
-	if err := validateRemoteTemporaryPath(remoteBinary); err != nil {
-		return false, diagnostic(DiagnosticServiceInstall, err)
-	}
-	defer cleanupRemoteTemporary(remote, remoteBinary)
-
-	binary, err := os.Open(request.BinaryPath)
-	if err != nil {
-		return false, diagnostic(DiagnosticWrongArch, fmt.Errorf("open Mesh binary %s: %w", request.BinaryPath, err))
-	}
-	uploadErr := uploadBinary(ctx, remote, remoteBinary, binary)
-	closeErr := binary.Close()
-	if uploadErr != nil {
-		return false, uploadErr
-	}
-	if closeErr != nil {
-		return false, diagnostic(DiagnosticServiceInstall, fmt.Errorf("close Mesh binary %s: %w", request.BinaryPath, closeErr))
-	}
+	defer cleanup()
 
 	authorizedKey := base64.StdEncoding.EncodeToString([]byte(request.AuthorizedKey))
 	serviceAsset := base64.StdEncoding.EncodeToString([]byte(service))
@@ -70,7 +63,7 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 		shellQuote(authorizedKey),
 		shellQuote(serviceAsset),
 	}, " ")
-	stdout, stderr, err = remote.Run(ctx, command, strings.NewReader(script))
+	stdout, stderr, err := remote.Run(ctx, command, strings.NewReader(script))
 	combined := string(stdout) + "\n" + string(stderr)
 	if err != nil {
 		if code, ok := installerDiagnostic(combined); ok {
@@ -86,6 +79,82 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 	default:
 		return false, diagnostic(DiagnosticServiceInstall, fmt.Errorf("installer returned no result marker: %s", strings.TrimSpace(combined)))
 	}
+}
+
+// stageBinary uploads the binary unless the host already runs exactly these
+// bytes. It returns the empty path when it skipped, which tells the installer
+// to keep the binary it has and reconcile only the service and the keys.
+func stageBinary(ctx context.Context, remote remoteHost, request installRequest) (string, func(), error) {
+	if remoteBinaryIsCurrent(ctx, remote, request.BinaryPath) {
+		request.progress(Event{Step: StepTransfer, Detail: "host already runs this build"})
+		return "", func() {}, nil
+	}
+	stdout, stderr, err := remote.Run(ctx, `umask 077; mktemp "${TMPDIR:-/tmp}/mesh-bootstrap.XXXXXX"`, nil)
+	if err != nil {
+		return "", nil, diagnostic(DiagnosticServiceInstall, remoteCommandError("create remote upload file", err, stdout, stderr))
+	}
+	remoteBinary := strings.TrimSpace(string(stdout))
+	if err := validateRemoteTemporaryPath(remoteBinary); err != nil {
+		return "", nil, diagnostic(DiagnosticServiceInstall, err)
+	}
+	cleanup := func() { cleanupRemoteTemporary(remote, remoteBinary) }
+
+	binary, err := os.Open(request.BinaryPath)
+	if err != nil {
+		cleanup()
+		return "", nil, diagnostic(DiagnosticWrongArch, fmt.Errorf("open Mesh binary %s: %w", request.BinaryPath, err))
+	}
+	uploadErr := uploadBinary(ctx, remote, remoteBinary, binary)
+	closeErr := binary.Close()
+	if uploadErr != nil {
+		cleanup()
+		return "", nil, uploadErr
+	}
+	if closeErr != nil {
+		cleanup()
+		return "", nil, diagnostic(DiagnosticServiceInstall, fmt.Errorf("close Mesh binary %s: %w", request.BinaryPath, closeErr))
+	}
+	return remoteBinary, cleanup, nil
+}
+
+// installedBinaryProbe prints the digest of the binary the service runs. It
+// prints nothing when there is no binary or no hasher, and silence means
+// upload: an unknown digest must never be read as a match.
+const installedBinaryProbe = `binary="$HOME/.local/bin/mesh"
+[ -x "$binary" ] || exit 0
+if command -v sha256sum >/dev/null 2>&1; then
+	sha256sum -- "$binary" | cut -d " " -f 1
+elif command -v shasum >/dev/null 2>&1; then
+	shasum -a 256 -- "$binary" | cut -d " " -f 1
+fi`
+
+func remoteBinaryIsCurrent(ctx context.Context, remote remoteHost, localPath string) bool {
+	stdout, _, err := remote.Run(ctx, installedBinaryProbe, nil)
+	if err != nil {
+		return false
+	}
+	installed := strings.TrimSpace(string(stdout))
+	if len(installed) != hex.EncodedLen(sha256.Size) {
+		return false
+	}
+	staged, err := fileDigest(localPath)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(installed, staged)
+}
+
+func fileDigest(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	digest := sha256.New()
+	if _, err := io.Copy(digest, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func uploadBinary(ctx context.Context, remote remoteHost, remotePath string, binary io.Reader) error {

@@ -17,7 +17,11 @@ websocket_path=$4
 authorized_key_b64=$5
 service_b64=$6
 
-trap 'rm -f -- "$source_binary"' EXIT HUP INT TERM
+# An empty source binary means the adopter checked the digest and skipped the
+# upload; there is nothing staged to clean up.
+if [ -n "$source_binary" ]; then
+	trap 'rm -f -- "$source_binary"' EXIT HUP INT TERM
+fi
 
 [ -n "${HOME:-}" ] || fail service_install "HOME is not set"
 command -v launchctl >/dev/null 2>&1 || fail service_install "launchctl is not installed"
@@ -48,7 +52,10 @@ mark_activation_pending() {
 		activation_required=1
 	fi
 }
-if [ ! -f "$binary_path" ] || ! cmp -s "$source_binary" "$binary_path"; then
+if [ -z "$source_binary" ]; then
+	[ -x "$binary_path" ] ||
+		fail service_install "the upload was skipped but $binary_path is missing"
+elif [ ! -f "$binary_path" ] || ! cmp -s "$source_binary" "$binary_path"; then
 	binary_tmp=$binary_dir/.mesh.$$
 	install -m 0755 "$source_binary" "$binary_tmp" || fail service_install "cannot install $binary_path"
 	mark_activation_pending
