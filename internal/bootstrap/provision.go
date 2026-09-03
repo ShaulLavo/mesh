@@ -255,11 +255,14 @@ func (p installPlan) downloadCommand() string {
 	return p.downloadURLCommand(p.InstallerURL)
 }
 
+// downloadURLCommand retries. Provisioning runs on whatever network the remote
+// host happens to have, and one transient resolver failure used to end the
+// whole adoption with advice to go install Tailscale by hand.
 func (p installPlan) downloadURLCommand(url string) string {
 	if p.Downloader == "wget" {
-		return "wget -qO- " + shellQuote(url)
+		return "wget -q --tries=4 --waitretry=2 --timeout=30 -O- " + shellQuote(url)
 	}
-	return "curl -fsSL " + shellQuote(url)
+	return "curl -fsSL --retry 4 --retry-delay 2 --retry-connrefused --connect-timeout 30 " + shellQuote(url)
 }
 
 type linuxUserService struct {

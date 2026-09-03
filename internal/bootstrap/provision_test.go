@@ -677,7 +677,7 @@ func TestApplyPinnedInstallerSucceedsAfterChecksumWithBoundedDownload(t *testing
 		commands++
 		switch commands {
 		case 1:
-			if command != "wget -qO- 'https://example.invalid/installer.sh'" || stdin != nil {
+			if command != "wget -q --tries=4 --waitretry=2 --timeout=30 -O- 'https://example.invalid/installer.sh'" || stdin != nil {
 				t.Fatalf("download command = %q, stdin = %v", command, stdin)
 			}
 			assertOutputLimits(t, limits, maximumInstallerBytes+1)

@@ -61,7 +61,7 @@ func diagnosticSuggestion(code DiagnosticCode) string {
 	case DiagnosticServiceInstall:
 		return "inspect the remote mesh service with systemctl --user status mesh or launchctl print gui/$(id -u)/dev.shaulavo.mesh"
 	case DiagnosticTailscaleUnavailable:
-		return "let mesh add install it with --yes, or install it yourself from https://tailscale.com/download"
+		return "check the remote host's network if the cause above is a download, otherwise let mesh add install it with --yes, or install it from https://tailscale.com/download"
 	case DiagnosticTailscaleLoggedOut:
 		return "create a reusable auth key at https://login.tailscale.com/admin/settings/keys, then retry with --tailscale-auth-key-file"
 	case DiagnosticTailscaleMachineAuth:
