@@ -592,7 +592,7 @@ func TestAddSavesVerifiedHostAndReportsConvergedRerun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "already configured pc (host-id)") {
+	if !strings.Contains(stdout, "pc was already up to date (host-id)") {
 		t.Fatalf("second add output = %q", stdout)
 	}
 	hosts, err := LoadHosts()

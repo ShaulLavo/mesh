@@ -175,7 +175,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 		inGroup(groupSessions, app.listCommand(), app.attachCommand(), app.localCommand(),
 			app.logsCommand(), app.killCommand(), app.signalCommand(), app.removeCommand())...,
 	)
-	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.wakeCommand())...)
+	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.renameCommand(), app.wakeCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand())...)
 	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand())...)
 	root.AddCommand(app.workerCommand())
@@ -519,12 +519,25 @@ func (a *application) addCommand() *cobra.Command {
 			}
 			record := result.Host
 			record.Alias = selected
+			if current := existingAliasFor(record.ID, selected); current != "" {
+				rename, err := a.confirmRename(cmd, current, selected)
+				if err != nil {
+					return err
+				}
+				if !rename {
+					record.Alias = current
+					selected = current
+				}
+			}
 			if err := SaveHost(record); err != nil {
 				return fmt.Errorf("save host %s: %w", selected, err)
 			}
 			path, _ := ConfigPath()
+			// AlreadyConfigured means nothing on the remote changed, not that
+			// the host was in the address book. "already configured" read as
+			// the second and left people wondering what the run had just done.
 			if result.AlreadyConfigured {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "already configured %s (%s)\nhost config: %s\n", selected, record.ID, path)
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s was already up to date (%s)\nhost config: %s\n", selected, record.ID, path)
 			} else {
 				_, err = fmt.Fprintf(cmd.OutOrStdout(), "added %s (%s)\nhost config: %s\n", selected, record.ID, path)
 			}

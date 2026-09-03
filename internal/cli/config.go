@@ -24,7 +24,7 @@ const (
 
 var reservedAliases = map[string]struct{}{
 	"add": {}, "attach": {}, "completion": {}, "daemon": {}, "help": {},
-	"kill": {}, "rm": {}, "remove": {}, "list": {}, "local": {}, "logs": {}, "ls": {}, "man": {},
+	"kill": {}, "rm": {}, "remove": {}, "rename": {}, "mv": {}, "list": {}, "local": {}, "logs": {}, "ls": {}, "man": {},
 	"private-names": {}, "serve": {}, "session-worker": {}, "sig": {}, "signal": {}, "unserve": {}, "wake": {},
 }
 
