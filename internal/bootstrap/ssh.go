@@ -139,14 +139,7 @@ func loadAuthMethods(ctx context.Context, remoteTarget target, opts SSHOptions, 
 	identityFiles := append([]string(nil), opts.IdentityFiles...)
 	explicitIdentityFiles := len(identityFiles) > 0
 	if !explicitIdentityFiles {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			identityFiles = []string{
-				filepath.Join(home, ".ssh", "id_ed25519"),
-				filepath.Join(home, ".ssh", "id_ecdsa"),
-				filepath.Join(home, ".ssh", "id_rsa"),
-			}
-		}
+		identityFiles = defaultIdentityFiles()
 	}
 	for _, identityFile := range identityFiles {
 		signer, err := loadSigner(ctx, identityFile, opts.Passphrase)
@@ -381,4 +374,57 @@ func (p *handshakePauser) hostKeyCallback(callback ssh.HostKeyCallback) ssh.Host
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		return p.wait(func() error { return callback(hostname, remote, key) })
 	}
+}
+
+// maximumOfferedKeys bounds how many keys adoption offers. sshd's MaxAuthTries
+// defaults to six, and being disconnected for trying too many is a worse
+// failure than not reaching the last key.
+const maximumOfferedKeys = 5
+
+// defaultIdentityFiles lists the keys to offer when nothing names one: the
+// conventional names first, then any other key in ~/.ssh.
+//
+// The conventional names alone are not enough. A machine whose keys are named
+// per peer, id_ed25519_pc and the like, has none of them, so adoption offered
+// no key at all and failed against a host whose key was sitting right there.
+func defaultIdentityFiles() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	dir := filepath.Join(home, ".ssh")
+	files := []string{
+		filepath.Join(dir, "id_ed25519"),
+		filepath.Join(dir, "id_ecdsa"),
+		filepath.Join(dir, "id_rsa"),
+	}
+	seen := map[string]bool{}
+	for _, file := range files {
+		seen[file] = true
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return files
+	}
+	// A private key is the file a .pub sits beside. That avoids offering
+	// config, known_hosts, or anything else living here.
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasSuffix(entry.Name(), ".pub") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if seen[path] {
+			continue
+		}
+		if _, err := os.Stat(path + ".pub"); err != nil {
+			continue
+		}
+		files = append(files, path)
+		seen[path] = true
+	}
+	if len(files) > maximumOfferedKeys {
+		files = files[:maximumOfferedKeys]
+	}
+	return files
 }

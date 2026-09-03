@@ -413,3 +413,74 @@ func TestHandshakePauserWithoutAConnectionStillAsks(t *testing.T) {
 		t.Fatal("the prompt was skipped when there was no connection yet")
 	}
 }
+
+func TestAsksForAUserOnlyWhenItGuessedAndAuthFailed(t *testing.T) {
+	t.Parallel()
+
+	ask := func(context.Context, string, string) (string, error) { return "shaul", nil }
+	authFailure := diagnostic(DiagnosticSSHAuth, errors.New("refused"))
+
+	for _, row := range []struct {
+		name string
+		tgt  target
+		opts SSHOptions
+		err  error
+		want bool
+	}{
+		{"a guessed user refused is worth asking about", target{guessedUser: true}, SSHOptions{AskUser: ask}, authFailure, true},
+		{"a user someone chose is not a guess", target{explicitUser: true}, SSHOptions{AskUser: ask}, authFailure, false},
+		{"an unreachable host is not an account problem", target{guessedUser: true}, SSHOptions{AskUser: ask},
+			diagnostic(DiagnosticSSHConnect, errors.New("no route")), false},
+		{"a refused host key is not an account problem", target{guessedUser: true}, SSHOptions{AskUser: ask},
+			diagnostic(DiagnosticSSHHostKey, errors.New("changed")), false},
+		{"nobody to ask", target{guessedUser: true}, SSHOptions{}, authFailure, false},
+	} {
+		if got := shouldAskForUser(row.tgt, row.opts, row.err); got != row.want {
+			t.Errorf("%s: shouldAskForUser = %v, want %v", row.name, got, row.want)
+		}
+	}
+}
+
+func TestDefaultIdentityFilesOffersKeysThatAreNotNamedConventionally(t *testing.T) {
+	// No t.Parallel: this sets HOME for the process.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A machine whose keys are named per peer has none of the conventional
+	// names, and used to offer no key at all.
+	for _, name := range []string{"id_ed25519_pc", "id_ed25519_mac"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("key"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+".pub"), []byte("pub"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Not keys, and never offered as one.
+	for _, name := range []string{"config", "known_hosts"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files := defaultIdentityFiles()
+	joined := strings.Join(files, " ")
+	for _, want := range []string{"id_ed25519_pc", "id_ed25519_mac"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("keys = %v, want it to offer %s", files, want)
+		}
+	}
+	for _, unwanted := range []string{"known_hosts", "config"} {
+		if strings.Contains(joined, unwanted) {
+			t.Errorf("keys = %v, must not offer %s", files, unwanted)
+		}
+	}
+	// sshd's MaxAuthTries is six; being disconnected for trying too many is
+	// worse than not reaching the last key.
+	if len(files) > maximumOfferedKeys {
+		t.Fatalf("offered %d keys, more than the %d cap", len(files), maximumOfferedKeys)
+	}
+}

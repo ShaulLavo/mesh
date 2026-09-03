@@ -123,6 +123,19 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 
 	normalized.progress(Event{Step: StepConnect, Detail: normalized.target.display()})
 	remote, err := deps.connect(ctx, normalized.target, normalized.ssh)
+	if err != nil && shouldAskForUser(normalized.target, normalized.ssh, err) {
+		// The name came from this machine's own account because nothing named
+		// one. Asking beats failing with advice: the operator knows the account
+		// and is standing right here.
+		name, askErr := normalized.ssh.AskUser(ctx, normalized.target.alias, normalized.target.user)
+		if askErr == nil && strings.TrimSpace(name) != "" {
+			normalized.target.user = strings.TrimSpace(name)
+			normalized.target.guessedUser = false
+			normalized.target.explicitUser = true
+			normalized.progress(Event{Step: StepConnect, Detail: normalized.target.display()})
+			remote, err = deps.connect(ctx, normalized.target, normalized.ssh)
+		}
+	}
 	if err != nil {
 		return Result{}, err
 	}
@@ -467,3 +480,15 @@ func boundedRemoteOutput(output []byte) string {
 
 func (o OS) String() string   { return string(o) }
 func (a Arch) String() string { return string(a) }
+
+// shouldAskForUser reports whether a failed connection is worth one more try
+// under a name the operator supplies. Only an authentication failure against a
+// user nobody chose qualifies: a refused host key or an unreachable host is not
+// fixed by a different account.
+func shouldAskForUser(t target, opts SSHOptions, err error) bool {
+	if !t.guessedUser || opts.AskUser == nil {
+		return false
+	}
+	var diagnostic *DiagnosticError
+	return errors.As(err, &diagnostic) && diagnostic.Code == DiagnosticSSHAuth
+}

@@ -103,6 +103,7 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 				Password:       passwordPrompt(ui),
 				Passphrase:     passphrasePrompt(ui),
 				ConfirmHostKey: hostKeyPrompt(ui),
+				AskUser:        userPrompt(ui),
 			},
 			Progress: func(event bootstrap.Event) {
 				steps.Step(string(event.Step), event.Detail)
@@ -351,4 +352,28 @@ func identityFiles(path string) []string {
 		return nil
 	}
 	return []string{path}
+}
+
+// userPrompt asks which account to use after the assumed one was refused. The
+// operator knows it and is standing right here, so asking beats failing with
+// advice about a command to retype.
+func userPrompt(ui bootstrapUI) func(context.Context, string, string) (string, error) {
+	return func(ctx context.Context, target, assumed string) (string, error) {
+		if ui.terminal == nil || !ui.terminal() {
+			return "", nil
+		}
+		ui.pauseSteps()
+		var name string
+		form := huh.NewForm(huh.NewGroup(
+			huh.NewInput().
+				Title("Which account on " + target + "?").
+				Description("There is no " + assumed + " there, which is this machine's own name.").
+				Placeholder(assumed).
+				Value(&name),
+		)).WithInput(ui.input).WithOutput(ui.output)
+		if err := form.RunWithContext(ctx); err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(name), nil
+	}
 }

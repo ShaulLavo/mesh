@@ -51,6 +51,9 @@ type SSHOptions struct {
 	Password       func(context.Context, string) (string, error)
 	Passphrase     func(context.Context, string) ([]byte, error)
 	ConfirmHostKey func(context.Context, HostKey) (bool, error)
+	// AskUser is called when nothing named a user, the assumed one was refused,
+	// and there is someone to ask. Returning an empty name declines.
+	AskUser        func(ctx context.Context, target, assumed string) (string, error)
 	ConnectTimeout time.Duration
 }
 
