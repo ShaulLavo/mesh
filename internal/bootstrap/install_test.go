@@ -218,8 +218,8 @@ func TestInstallRemoteSkipsUploadWhenHostRunsThisBuild(t *testing.T) {
 	if !strings.Contains(commands[1], "/bin/sh -s -- '' ") {
 		t.Fatalf("installer was not told the upload was skipped: %q", commands[1])
 	}
-	if len(reported) != 1 || reported[0].Step != StepTransfer {
-		t.Fatalf("progress = %+v, want one transfer event saying the upload was skipped", reported)
+	if len(reported) != 1 || reported[0].Step != StepInstall {
+		t.Fatalf("progress = %+v, want one install event saying the upload was skipped", reported)
 	}
 }
 

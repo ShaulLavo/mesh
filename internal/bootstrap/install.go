@@ -86,7 +86,7 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 // to keep the binary it has and reconcile only the service and the keys.
 func stageBinary(ctx context.Context, remote remoteHost, request installRequest) (string, func(), error) {
 	if remoteBinaryIsCurrent(ctx, remote, request.BinaryPath) {
-		request.progress(Event{Step: StepTransfer, Detail: "host already runs this build"})
+		request.progress(Event{Step: StepInstall, Detail: "binary already current"})
 		return "", func() {}, nil
 	}
 	stdout, stderr, err := remote.Run(ctx, `umask 077; mktemp "${TMPDIR:-/tmp}/mesh-bootstrap.XXXXXX"`, nil)
