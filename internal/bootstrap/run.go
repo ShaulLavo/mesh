@@ -121,6 +121,10 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		}
 	}
 
+	// Checked before the connection is attempted, not after it fails: the
+	// host-key prompt cancels the context on its way out.
+	running, alreadyServing := probeRunningDaemon(ctx, normalized, deps)
+
 	normalized.progress(Event{Step: StepConnect, Detail: normalized.target.display()})
 	remote, err := deps.connect(ctx, normalized.target, normalized.ssh)
 	if err != nil && shouldAskForUser(normalized.target, normalized.ssh, err) {
@@ -137,6 +141,15 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		}
 	}
 	if err != nil {
+		// A machine that refuses SSH may still be serving Mesh already, and then
+		// there is nothing to install and no reason to need SSH at all. Falling
+		// back only here keeps SSH the way a bare machine is adopted. The SSH
+		// failure is the one reported if this finds nothing, because a host that
+		// is not running Mesh needed that connection.
+		if alreadyServing {
+			normalized.progress(Event{Step: StepVerify, Detail: "already serving Mesh, adopted over the tailnet"})
+			return running, nil
+		}
 		return Result{}, err
 	}
 	defer func() {
