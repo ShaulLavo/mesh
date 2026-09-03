@@ -304,6 +304,7 @@ func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, err
 			return normalizedOptions{}, diagnostic(DiagnosticInvalidTarget, fmt.Errorf("target %q names no user, ~/.ssh/config sets none for %q, and this machine has no username; use user@host", opts.Target, remoteTarget.alias))
 		}
 		remoteTarget.user = strings.TrimSpace(current.Username)
+		remoteTarget.guessedUser = true
 	}
 	if strings.TrimSpace(opts.StateDir) == "" {
 		return normalizedOptions{}, diagnostic(DiagnosticIdentity, errors.New("local state directory is empty"))

@@ -299,8 +299,10 @@ func classifySSHHandshake(remoteTarget target, err error) error {
 		return diagnostic(DiagnosticSSHHostKey, fmt.Errorf("verify SSH host %s: %w", remoteTarget.display(), err))
 	}
 	authErr := fmt.Errorf("authenticate SSH host %s: %w", remoteTarget.display(), err)
-	if hint := configuredUserHint(remoteTarget); hint != "" {
-		authErr = fmt.Errorf("%w; %s", authErr, hint)
+	for _, hint := range []string{configuredUserHint(remoteTarget), guessedUserHint(remoteTarget), noIdentityHint(err)} {
+		if hint != "" {
+			authErr = fmt.Errorf("%w; %s", authErr, hint)
+		}
 	}
 	return diagnostic(DiagnosticSSHAuth, authErr)
 }

@@ -19,6 +19,10 @@ type target struct {
 	alias        string
 	explicitUser bool
 	explicitPort bool
+	// guessedUser records that nothing named a user and this machine's own
+	// username was used. A failure then knows the difference between a user
+	// someone chose and one Mesh assumed.
+	guessedUser bool
 }
 
 func (t target) address() string {

@@ -97,6 +97,28 @@ func applySSHConfig(t target, resolve sshConfigResolver) target {
 // the ssh config would have chosen differently. Writing `mesh add me@pi` out of
 // habit overrides a `User pi` the config already had right, and the resulting
 // failure otherwise says only that no key worked.
+// guessedUserHint explains an authentication failure against a user nobody
+// chose. `mesh add omarchy` on a machine whose own account is pi tries
+// pi@omarchy, and the generic advice to add a key to the agent sends the reader
+// after the wrong thing entirely.
+func guessedUserHint(t target) string {
+	if !t.guessedUser {
+		return ""
+	}
+	return fmt.Sprintf("nothing named a user for %s, so Mesh used this machine's own account %q; if the account there differs, use mesh add user@%s",
+		t.alias, t.user, t.alias)
+}
+
+// noIdentityHint fires when no key was offered at all, which is what happens
+// for a host the ssh config says nothing about and whose key is not one of the
+// default names.
+func noIdentityHint(err error) string {
+	if !strings.Contains(err.Error(), "[none password]") {
+		return ""
+	}
+	return "no SSH key was offered; name one with --identity-file, or add an IdentityFile for this host to ~/.ssh/config"
+}
+
 func configuredUserHint(t target) string {
 	if !t.explicitUser || t.alias == "" {
 		return ""

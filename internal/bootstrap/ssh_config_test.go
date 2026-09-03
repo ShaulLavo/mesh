@@ -1,8 +1,10 @@
 package bootstrap
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -136,5 +138,43 @@ func TestSSHConfigIdentityFileIsUsed(t *testing.T) {
 	}
 	if got := sshConfigIdentityFile("pc", nil); got != "" {
 		t.Fatalf("identity with no config = %q, want none", got)
+	}
+}
+
+func TestGuessedUserHintNamesTheAssumption(t *testing.T) {
+	t.Parallel()
+
+	// `mesh add omarchy` on a machine whose own account is pi tries pi@omarchy.
+	// Telling the reader to add a key to the agent sends them after the wrong
+	// thing; the account is what is wrong.
+	guessed := target{user: "pi", host: "omarchy", alias: "omarchy", guessedUser: true}
+	hint := guessedUserHint(guessed)
+	for _, want := range []string{"nothing named a user", `"pi"`, "mesh add user@omarchy"} {
+		if !strings.Contains(hint, want) {
+			t.Fatalf("hint = %q, want it to mention %q", hint, want)
+		}
+	}
+
+	// A user someone chose is not an assumption, and needs no explaining.
+	chosen := target{user: "shaul", host: "omarchy", alias: "omarchy", explicitUser: true}
+	if hint := guessedUserHint(chosen); hint != "" {
+		t.Fatalf("hint for an explicit user = %q, want none", hint)
+	}
+}
+
+func TestNoIdentityHintOnlyWhenNoKeyWasOffered(t *testing.T) {
+	t.Parallel()
+
+	// The server lists what it was offered. Nothing but password means no key
+	// reached it, which --identity-file fixes and an agent key would not.
+	offered := errors.New("ssh: unable to authenticate, attempted methods [none password], no supported methods remain")
+	if hint := noIdentityHint(offered); !strings.Contains(hint, "--identity-file") {
+		t.Fatalf("hint = %q, want it to name the flag", hint)
+	}
+
+	// A key was offered and refused: naming a different key is not the answer.
+	refused := errors.New("ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain")
+	if hint := noIdentityHint(refused); hint != "" {
+		t.Fatalf("hint when a key was offered = %q, want none", hint)
 	}
 }
