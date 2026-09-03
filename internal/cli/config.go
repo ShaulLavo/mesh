@@ -66,6 +66,17 @@ func ConfigPath() (string, error) {
 	return filepath.Join(abs, hostConfigName), nil
 }
 
+// TailscaleAuthKeyPath is where mesh looks for an auth key when none is named.
+// It sits beside hosts.json, which every mesh add already prints, rather than
+// as a loose dotfile in the home directory.
+func TailscaleAuthKeyPath() (string, error) {
+	config, err := ConfigPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(config), "tailscale-auth-key"), nil
+}
+
 // ValidateHostAlias normalizes a host alias and rejects names the CLI cannot
 // distinguish from a command or a session ID.
 func ValidateHostAlias(value string) (string, error) {

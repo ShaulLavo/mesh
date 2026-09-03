@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -223,5 +224,32 @@ func TestBootstrapPassesTheTargetThroughUntouched(t *testing.T) {
 	_, _ = bootstrapFunc(context.Background(), cli.AddRequest{Target: "pi", Alias: "pi"})
 	if captured.Target != "pi" {
 		t.Fatalf("target = %q, want it passed through untouched", captured.Target)
+	}
+}
+
+func TestAuthKeyFileRefusesLoosePermissions(t *testing.T) {
+	t.Parallel()
+
+	// A key readable by other users is a credential handed to them. Reading it
+	// silently would be the wrong kind of convenient.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tailscale-auth-key")
+	if err := os.WriteFile(path, []byte("tskey-secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readTailscaleAuthKey(path)
+	if err == nil || !strings.Contains(err.Error(), "readable by other users") {
+		t.Fatalf("readTailscaleAuthKey() error = %v, want a permissions refusal", err)
+	}
+
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := readTailscaleAuthKey(path)
+	if err != nil {
+		t.Fatalf("readTailscaleAuthKey() after chmod = %v", err)
+	}
+	if string(key) != "tskey-secret" {
+		t.Fatalf("key = %q", key)
 	}
 }

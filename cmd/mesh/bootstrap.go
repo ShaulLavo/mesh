@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
 
 	"charm.land/huh/v2"
@@ -66,7 +67,17 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 		steps := cli.NewStepPrinter(ui.output, "BOOTSTRAP")
 		defer steps.Done()
 		ui.steps = steps
-		authKey, err := readTailscaleAuthKey(request.TailscaleAuthKeyFile)
+		keyFile := request.TailscaleAuthKeyFile
+		if keyFile == "" {
+			// Fall back to the well-known path so adopting several hosts does
+			// not mean handing over the same key again each time.
+			if fallback, pathErr := cli.TailscaleAuthKeyPath(); pathErr == nil {
+				if info, statErr := os.Stat(fallback); statErr == nil && info.Mode().IsRegular() {
+					keyFile = fallback
+				}
+			}
+		}
+		authKey, err := readTailscaleAuthKey(keyFile)
 		if err != nil {
 			return cli.BootstrapResult{}, err
 		}
@@ -150,6 +161,7 @@ func authKeyPrompt(ui bootstrapUI) bootstrap.AuthKeyFunc {
 		if err != nil {
 			return nil, err
 		}
+		offerToKeepAuthKey(ctx, ui, key)
 		return []byte(key), nil
 	}
 }
@@ -161,6 +173,11 @@ func readTailscaleAuthKey(path string) ([]byte, error) {
 	file, err := os.Open(path) //nolint:gosec // the CLI flag explicitly selects the local secret file
 	if err != nil {
 		return nil, fmt.Errorf("open Tailscale auth key file %s: %w", path, err)
+	}
+	if info, statErr := file.Stat(); statErr == nil && info.Mode().Perm()&0o077 != 0 {
+		_ = file.Close()
+		return nil, fmt.Errorf("Tailscale auth key file %s is readable by other users (%04o); run chmod 600 %s",
+			path, info.Mode().Perm(), path)
 	}
 	contents, readErr := io.ReadAll(io.LimitReader(file, maximumTailscaleAuthKeyFileBytes+1))
 	defer clear(contents)
@@ -293,5 +310,40 @@ func hostKeyPrompt(ui bootstrapUI) func(context.Context, bootstrap.HostKey) (boo
 func (u bootstrapUI) pauseSteps() {
 	if u.steps != nil {
 		u.steps.Pause()
+	}
+}
+
+// offerToKeepAuthKey asks whether to save the pasted key where mesh looks for
+// one by default, so adopting the next host needs nothing. Storing a credential
+// is the operator's decision, so it is asked rather than assumed, and a refusal
+// or any failure leaves the adoption alone: the key already did its job.
+func offerToKeepAuthKey(ctx context.Context, ui bootstrapUI, key string) {
+	if strings.TrimSpace(key) == "" {
+		return
+	}
+	path, err := cli.TailscaleAuthKeyPath()
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	var save bool
+	form := huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().
+			Title("Remember this key for the next host?").
+			Description("Saved to " + path + ", readable only by you.").
+			Affirmative("Save").
+			Negative("Don't save").
+			Value(&save),
+	)).WithInput(ui.input).WithOutput(ui.output)
+	if err := form.RunWithContext(ctx); err != nil || !save {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return
+	}
+	if err := os.WriteFile(path, []byte(strings.TrimSpace(key)+"\n"), 0o600); err != nil {
+		_, _ = fmt.Fprintf(ui.output, "could not save the auth key: %v\n", err)
 	}
 }
