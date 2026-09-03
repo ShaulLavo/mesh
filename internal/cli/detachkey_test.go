@@ -60,3 +60,60 @@ func TestParseDetachKeyRejectsNul(t *testing.T) {
 		}
 	}
 }
+
+func TestDetachKeyPerNestingLevel(t *testing.T) {
+	// The outermost client reads every keystroke first, so each level must
+	// listen for a different key: the levels above forward one that is not
+	// theirs, and only the level that owns it detaches.
+	keys := map[int]byte{}
+	for depth := 0; depth < 3; depth++ {
+		keys[depth] = DetachKeyForDepth(depth)
+	}
+	if keys[0] != DefaultDetachKey {
+		t.Fatalf("depth 0 = %#x, want the documented ctrl+]", keys[0])
+	}
+	if keys[0] == keys[1] || keys[1] == keys[2] {
+		t.Fatalf("levels share a key: %#x %#x %#x", keys[0], keys[1], keys[2])
+	}
+	// Nesting past the table shares the last key rather than listening for
+	// nothing.
+	if DetachKeyForDepth(9) != keys[2] {
+		t.Fatalf("deep nesting = %#x, want the last key %#x", DetachKeyForDepth(9), keys[2])
+	}
+	if DetachKeyForDepth(-1) != keys[0] {
+		t.Fatalf("negative depth = %#x, want the outermost key", DetachKeyForDepth(-1))
+	}
+}
+
+func TestFlaglessDetachKeyFollowsDepth(t *testing.T) {
+	t.Setenv("MESH_DEPTH", "1")
+	key, raw, err := ParseDetachKey("")
+	if err != nil || raw {
+		t.Fatalf("ParseDetachKey() = %#x, raw %v, %v", key, raw, err)
+	}
+	if key != DetachKeyForDepth(1) {
+		t.Fatalf("key = %#x, want the depth-1 key %#x", key, DetachKeyForDepth(1))
+	}
+
+	// An explicit choice still wins at any depth.
+	chosen, _, err := ParseDetachKey("ctrl+]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chosen != DefaultDetachKey {
+		t.Fatalf("explicit key = %#x", chosen)
+	}
+}
+
+func TestSessionDepthIgnoresNonsense(t *testing.T) {
+	for _, value := range []string{"", "not-a-number", "-3"} {
+		t.Setenv("MESH_DEPTH", value)
+		if got := SessionDepth(); got != 0 {
+			t.Fatalf("SessionDepth() with %q = %d, want 0", value, got)
+		}
+	}
+	t.Setenv("MESH_DEPTH", "2")
+	if got := SessionDepth(); got != 2 {
+		t.Fatalf("SessionDepth() = %d, want 2", got)
+	}
+}

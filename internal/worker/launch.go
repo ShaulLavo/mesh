@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,6 +32,7 @@ type LaunchConfig struct {
 	Cols        int
 	Rows        int
 	Term        string
+	Depth       int
 }
 
 // Launched is a worker that has published its metadata and is accepting local
@@ -69,6 +71,7 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 		cfg.Env = os.Environ()
 	}
 	cfg.Env = withTerm(cfg.Env, cfg.Term)
+	cfg.Env = withDepth(cfg.Env, cfg.Depth)
 	if err := os.MkdirAll(cfg.SessionsDir, 0o700); err != nil {
 		return Launched{}, fmt.Errorf("launch worker: create sessions directory: %w", err)
 	}
@@ -189,4 +192,23 @@ func withTerm(env []string, term string) []string {
 		}
 	}
 	return append(out, "TERM="+term)
+}
+
+// MeshDepthVariable tells a Mesh client started inside a session how deep it
+// is. Without it a nested client cannot know that something upstream is already
+// reading its keystrokes.
+const MeshDepthVariable = "MESH_DEPTH"
+
+func withDepth(env []string, depth int) []string {
+	if depth <= 0 {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	prefix := MeshDepthVariable + "="
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			out = append(out, entry)
+		}
+	}
+	return append(out, prefix+strconv.Itoa(depth))
 }

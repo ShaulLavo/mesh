@@ -336,7 +336,7 @@ func (a *application) runHost(cmd *cobra.Command, host HostRecord, resume bool, 
 	}
 	// "session X on pc" reads like one was found. `mesh pc` always creates,
 	// and `mesh pc -r` is the one that attaches to an existing session.
-	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "new session %s on %s\n", id, host.Alias); err != nil {
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "new session %s on %s%s\n", id, host.Alias, nestedDetachHint()); err != nil {
 		return err
 	}
 	initial := uint64(0)
@@ -1243,4 +1243,15 @@ func (a *application) pickerSessionAction(cmd *cobra.Command, hosts []HostRecord
 		return a.runSessionControl(cmd, selection.SessionID, protocol.TypeKill, "")
 	}
 	return a.removeSession(cmd, hosts, selection.SessionID)
+}
+
+// nestedDetachHint names the key that leaves this session when it is not the
+// only one. Each level listens for a different key so the clients above forward
+// it, and a key nobody is told about is no better than no key at all.
+func nestedDetachHint() string {
+	depth := SessionDepth()
+	if depth == 0 {
+		return ""
+	}
+	return fmt.Sprintf("  (%s detaches this one, ctrl+] leaves them all)", DetachKeyName(DetachKeyForDepth(depth)))
 }

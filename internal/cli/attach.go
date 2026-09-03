@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -24,6 +26,53 @@ import (
 // the session no signal; the one real casualty is vim's tag jump, which is why
 // the key is configurable and --raw turns interception off entirely.
 const DefaultDetachKey = 0x1d
+
+// detachKeysByDepth gives each nesting level its own key. The outermost client
+// reads every keystroke first, so a single key would always detach the outermost
+// session and drop the operator past every session in between. With one key per
+// level, the outer clients forward a key that is not theirs and the level that
+// owns it detaches, leaving the ones above it attached.
+//
+// ctrl+] then ctrl+^ then ctrl+_ : GS, RS, US, adjacent in ASCII and unused by
+// anything a terminal sends.
+var detachKeysByDepth = []byte{0x1d, 0x1e, 0x1f}
+
+// DetachKeyForDepth is the key a client at this nesting depth listens for.
+// Depths past the table share the last key: at that point the operator has
+// nested further than the scheme can separate, and detaching the innermost two
+// together is better than a key nothing listens for.
+func DetachKeyForDepth(depth int) byte {
+	if depth < 0 {
+		depth = 0
+	}
+	if depth >= len(detachKeysByDepth) {
+		depth = len(detachKeysByDepth) - 1
+	}
+	return detachKeysByDepth[depth]
+}
+
+// DetachKeyName renders a key the way the operator would type it.
+func DetachKeyName(key byte) string {
+	switch key {
+	case 0x1d:
+		return "ctrl+]"
+	case 0x1e:
+		return "ctrl+^"
+	case 0x1f:
+		return "ctrl+_"
+	default:
+		return fmt.Sprintf("0x%02x", key)
+	}
+}
+
+// SessionDepth is how many Mesh sessions this process is already inside.
+func SessionDepth() int {
+	depth, err := strconv.Atoi(strings.TrimSpace(os.Getenv("MESH_DEPTH")))
+	if err != nil || depth < 0 {
+		return 0
+	}
+	return depth
+}
 
 // AttachOptions configures a client attachment.
 type AttachOptions struct {

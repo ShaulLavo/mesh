@@ -12,7 +12,10 @@ func ParseDetachKey(s string) (key byte, raw bool, err error) {
 	s = strings.TrimSpace(strings.ToLower(s))
 	switch s {
 	case "":
-		return DefaultDetachKey, false, nil
+		// Not DefaultDetachKey: a client running inside a session must listen
+		// for a key the clients above it will forward rather than one they
+		// intercept.
+		return DetachKeyForDepth(SessionDepth()), false, nil
 	case "none", "off":
 		return 0, true, nil
 	}

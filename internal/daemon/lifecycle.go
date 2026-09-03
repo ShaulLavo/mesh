@@ -66,6 +66,7 @@ type creationRequest struct {
 	cols    int
 	rows    int
 	term    string
+	depth   int
 }
 
 func (r creationRequest) equal(other creationRequest) bool {
@@ -237,6 +238,7 @@ func (l *lifecycle) create(ctx context.Context, request protocol.Control) (proto
 			Cols:        created.request.cols,
 			Rows:        created.request.rows,
 			Term:        created.request.term,
+			Depth:       created.request.depth,
 		})
 		close(created.done)
 	} else {
@@ -288,6 +290,7 @@ func (l *lifecycle) creation(request protocol.Control) (*creation, bool, error) 
 		cols:    request.Cols,
 		rows:    request.Rows,
 		term:    request.Term,
+		depth:   request.Depth,
 	}
 	l.creationsMu.Lock()
 	defer l.creationsMu.Unlock()

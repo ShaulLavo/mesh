@@ -173,7 +173,8 @@ type Control struct {
 	Rows    int      `json:"rows,omitempty"`
 	Command []string `json:"command,omitempty"`
 	Cwd     string   `json:"cwd,omitempty"`
-	Term    string   `json:"term,omitempty"` // client's TERM; a session without one is not a terminal
+	Term    string   `json:"term,omitempty"`  // client's TERM; a session without one is not a terminal
+	Depth   int      `json:"depth,omitempty"` // nesting level of the session being created
 
 	// Attached
 	Seq      uint64 `json:"seq,omitempty"`      // next byte offset the client will receive
