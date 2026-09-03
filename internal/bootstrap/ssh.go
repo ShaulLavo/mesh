@@ -61,7 +61,8 @@ func (e *remoteOutputLimitError) Error() string {
 }
 
 func connectSSH(ctx context.Context, remoteTarget target, opts SSHOptions) (remoteHost, error) {
-	authMethods, closeAuth, err := loadAuthMethods(ctx, remoteTarget, opts)
+	pauser := &handshakePauser{}
+	authMethods, closeAuth, err := loadAuthMethods(ctx, remoteTarget, opts, pauser)
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +75,7 @@ func connectSSH(ctx context.Context, remoteTarget target, opts SSHOptions) (remo
 	if timeout == 0 {
 		timeout = defaultConnectTimeout
 	}
+	pauser.timeout = timeout
 
 	dialer := net.Dialer{Timeout: timeout}
 	networkConnection, err := dialer.DialContext(ctx, "tcp", remoteTarget.address())
@@ -86,11 +88,17 @@ func connectSSH(ctx context.Context, remoteTarget target, opts SSHOptions) (remo
 		_ = networkConnection.Close()
 		return nil, diagnostic(DiagnosticSSHConnect, fmt.Errorf("deadline SSH handshake with %s: %w", remoteTarget.address(), err))
 	}
+	// The handshake runs the host key and password prompts, so this deadline
+	// was counting how long someone took to read a fingerprint and type a
+	// password. Ten seconds for both is a deadline no person meets. It bounds
+	// network progress between prompts instead: the clock stops while a human
+	// is answering and restarts on their answer.
+	pauser.conn = networkConnection
 
 	clientConnection, channels, requests, err := ssh.NewClientConn(networkConnection, remoteTarget.address(), &ssh.ClientConfig{
 		User:            remoteTarget.user,
 		Auth:            authMethods,
-		HostKeyCallback: hostKeyCallback,
+		HostKeyCallback: pauser.hostKeyCallback(hostKeyCallback),
 	})
 	if err != nil {
 		_ = networkConnection.Close()
@@ -103,7 +111,7 @@ func connectSSH(ctx context.Context, remoteTarget target, opts SSHOptions) (remo
 	return &sshRemote{client: ssh.NewClient(clientConnection, channels, requests)}, nil
 }
 
-func loadAuthMethods(ctx context.Context, remoteTarget target, opts SSHOptions) ([]ssh.AuthMethod, func(), error) {
+func loadAuthMethods(ctx context.Context, remoteTarget target, opts SSHOptions, pauser *handshakePauser) ([]ssh.AuthMethod, func(), error) {
 	var signers []ssh.Signer
 	var agentConnection net.Conn
 	var loadErrors []error
@@ -157,7 +165,13 @@ func loadAuthMethods(ctx context.Context, remoteTarget target, opts SSHOptions) 
 	}
 	if opts.Password != nil {
 		methods = append(methods, ssh.PasswordCallback(func() (string, error) {
-			return opts.Password(ctx, remoteTarget.display())
+			var password string
+			err := pauser.wait(func() error {
+				var askErr error
+				password, askErr = opts.Password(ctx, remoteTarget.display())
+				return askErr
+			})
+			return password, err
 		}))
 	}
 	closeAuth := func() {
@@ -334,4 +348,35 @@ func (r *sshRemote) Run(ctx context.Context, command string, stdin io.Reader, re
 
 func (r *sshRemote) Close() error {
 	return r.client.Close()
+}
+
+// handshakePauser stops the handshake deadline while a prompt waits on a
+// person. The prompts run inside the handshake, and the password prompt is
+// built before the connection exists, so both share this and it learns the
+// connection once there is one.
+type handshakePauser struct {
+	conn    net.Conn
+	timeout time.Duration
+}
+
+// wait runs ask with no deadline, then restores one. A prompt that blocks
+// forever is the operator's business; a network that stalls between prompts is
+// not.
+func (p *handshakePauser) wait(ask func() error) error {
+	if p == nil || p.conn == nil {
+		return ask()
+	}
+	_ = p.conn.SetDeadline(time.Time{})
+	err := ask()
+	_ = p.conn.SetDeadline(time.Now().Add(p.timeout))
+	return err
+}
+
+func (p *handshakePauser) hostKeyCallback(callback ssh.HostKeyCallback) ssh.HostKeyCallback {
+	if callback == nil {
+		return nil
+	}
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		return p.wait(func() error { return callback(hostname, remote, key) })
+	}
 }

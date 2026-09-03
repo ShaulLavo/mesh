@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -341,4 +342,74 @@ func writeKnownHost(t *testing.T, address string, key ssh.PublicKey) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestHandshakePauserStopsTheClockForAPrompt(t *testing.T) {
+	t.Parallel()
+
+	const deadline = 50 * time.Millisecond
+	const human = 200 * time.Millisecond
+
+	// Control: this is the bug. The prompts run inside the handshake, so a
+	// deadline set before it counts the time someone spends reading a
+	// fingerprint and typing a password, and the next read fails.
+	bare, bareRemote := net.Pipe()
+	defer bare.Close()       //nolint:errcheck // test cleanup
+	defer bareRemote.Close() //nolint:errcheck // test cleanup
+	if err := bare.SetDeadline(time.Now().Add(deadline)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(human)
+	go bareRemote.Write([]byte("x")) //nolint:errcheck // the read is the assertion
+	if _, err := bare.Read(make([]byte, 1)); err == nil {
+		t.Fatal("control: a read after a slow prompt succeeded; this test proves nothing")
+	}
+
+	// With the pause, the same wait leaves the connection usable.
+	left, right := net.Pipe()
+	defer left.Close()  //nolint:errcheck // test cleanup
+	defer right.Close() //nolint:errcheck // test cleanup
+	if err := left.SetDeadline(time.Now().Add(deadline)); err != nil {
+		t.Fatal(err)
+	}
+	pauser := &handshakePauser{conn: left, timeout: time.Second}
+	if err := pauser.wait(func() error {
+		time.Sleep(human)
+		return nil
+	}); err != nil {
+		t.Fatalf("wait() = %v", err)
+	}
+	go right.Write([]byte("x")) //nolint:errcheck // the read is the assertion
+	if _, err := left.Read(make([]byte, 1)); err != nil {
+		t.Fatalf("read after a paused prompt = %v; the deadline still counted the human", err)
+	}
+}
+
+func TestHandshakePauserPassesAlongThePromptError(t *testing.T) {
+	t.Parallel()
+
+	// Declining a host key must still fail the handshake.
+	left, right := net.Pipe()
+	defer left.Close()  //nolint:errcheck // test cleanup
+	defer right.Close() //nolint:errcheck // test cleanup
+
+	pauser := &handshakePauser{conn: left, timeout: time.Second}
+	want := errors.New("host key rejected")
+	if err := pauser.wait(func() error { return want }); !errors.Is(err, want) {
+		t.Fatalf("wait() = %v, want the prompt's error", err)
+	}
+}
+
+func TestHandshakePauserWithoutAConnectionStillAsks(t *testing.T) {
+	t.Parallel()
+
+	// loadAuthMethods builds the password prompt before the connection exists.
+	var pauser handshakePauser
+	asked := false
+	if err := pauser.wait(func() error { asked = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !asked {
+		t.Fatal("the prompt was skipped when there was no connection yet")
+	}
 }
