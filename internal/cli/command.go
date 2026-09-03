@@ -34,7 +34,10 @@ type AddRequest struct {
 	Target               string
 	Alias                string
 	TailscaleAuthKeyFile string
-	Yes                  bool
+	// IdentityFile names the key to adopt with, for a host the ssh config
+	// says nothing about.
+	IdentityFile string
+	Yes          bool
 }
 
 // BootstrapResult separates the durable address-book entry from metadata about
@@ -485,6 +488,7 @@ func (a *application) addCommand() *cobra.Command {
 		alias                string
 		tailscaleAuthKeyFile string
 		yes                  bool
+		identityFile         string
 	)
 	command := &cobra.Command{
 		Use:   "add [user@]host",
@@ -506,7 +510,7 @@ func (a *application) addCommand() *cobra.Command {
 				return errors.New("SSH bootstrap support is unavailable in this build")
 			}
 			result, err := a.dependencies.Bootstrap(cmd.Context(), AddRequest{
-				Target: args[0], Alias: selected,
+				Target: args[0], Alias: selected, IdentityFile: identityFile,
 				TailscaleAuthKeyFile: tailscaleAuthKeyFile,
 				Yes:                  yes,
 			})
@@ -530,6 +534,7 @@ func (a *application) addCommand() *cobra.Command {
 	command.Flags().StringVar(&alias, "alias", "", "local name for the host")
 	command.Flags().StringVar(&tailscaleAuthKeyFile, "tailscale-auth-key-file", "", "read a Tailscale auth key from this local file")
 	command.Flags().BoolVar(&yes, "yes", false, "approve remote Tailscale installation and user lingering changes")
+	command.Flags().StringVar(&identityFile, "identity-file", "", "SSH private key to adopt with, when ~/.ssh/config names none")
 	return command
 }
 

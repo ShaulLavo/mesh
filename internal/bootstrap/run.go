@@ -287,7 +287,15 @@ func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, err
 	}
 	// Mesh dials the address itself, so a Host alias only ssh knows about would
 	// otherwise fail as a DNS lookup for the alias.
-	remoteTarget = applySSHConfig(remoteTarget, userSSHConfig())
+	sshConfig := userSSHConfig()
+	remoteTarget = applySSHConfig(remoteTarget, sshConfig)
+	// An explicitly named identity wins; otherwise take the one the config
+	// names for this alias, the way ssh would.
+	if len(opts.SSH.IdentityFiles) == 0 {
+		if identity := sshConfigIdentityFile(remoteTarget.alias, sshConfig); identity != "" {
+			opts.SSH.IdentityFiles = []string{identity}
+		}
+	}
 	// Last, so it cannot beat a User the ssh config named. `mesh add pi` on a
 	// config with `User pi` must connect as pi, not as whoever is typing.
 	if remoteTarget.user == "" {

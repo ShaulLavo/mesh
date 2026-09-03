@@ -39,6 +39,26 @@ func userSSHConfig() sshConfigResolver {
 	}
 }
 
+// sshConfigIdentityFile is the key the ssh config names for an alias, expanded
+// from ~ because ssh accepts it there and os.Open does not.
+func sshConfigIdentityFile(alias string, resolve sshConfigResolver) string {
+	if resolve == nil || alias == "" {
+		return ""
+	}
+	identity := strings.TrimSpace(resolve(alias, "IdentityFile"))
+	if identity == "" {
+		return ""
+	}
+	if identity == "~" || strings.HasPrefix(identity, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		identity = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(identity, "~"), "/"))
+	}
+	return identity
+}
+
 // applySSHConfig fills a target from the user's ssh config. Mesh dials the
 // address itself rather than shelling out to ssh, so without this a Host alias
 // that `ssh` resolves fails here as a DNS lookup for the alias itself, on a

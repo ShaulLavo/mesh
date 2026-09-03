@@ -1,6 +1,10 @@
 package bootstrap
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func resolverFrom(pairs map[string]string) sshConfigResolver {
 	return func(alias, key string) string { return pairs[alias+"/"+key] }
@@ -104,5 +108,33 @@ func TestConfiguredUserHintExplainsAnOverride(t *testing.T) {
 	}
 	if hint := configuredUserHint(quiet); hint != "" {
 		t.Fatalf("hint for a bare alias = %q, want none", hint)
+	}
+}
+
+func TestSSHConfigIdentityFileIsUsed(t *testing.T) {
+	t.Parallel()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	resolve := resolverFrom(map[string]string{
+		"pc/IdentityFile":       "~/.ssh/id_ed25519_pc",
+		"absolute/IdentityFile": "/keys/absolute",
+	})
+
+	// ssh accepts ~ in IdentityFile; os.Open does not.
+	if got := sshConfigIdentityFile("pc", resolve); got != filepath.Join(home, ".ssh", "id_ed25519_pc") {
+		t.Fatalf("identity = %q, want the expanded home path", got)
+	}
+	if got := sshConfigIdentityFile("absolute", resolve); got != "/keys/absolute" {
+		t.Fatalf("identity = %q, want it untouched", got)
+	}
+	// A host the config says nothing about leaves the default key names alone.
+	if got := sshConfigIdentityFile("unknown", resolve); got != "" {
+		t.Fatalf("identity = %q, want none", got)
+	}
+	if got := sshConfigIdentityFile("pc", nil); got != "" {
+		t.Fatalf("identity with no config = %q, want none", got)
 	}
 }

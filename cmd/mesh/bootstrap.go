@@ -99,6 +99,7 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 			ConfirmProvision:       confirmProvision,
 			SudoPassword:           sudoPasswordPrompt(ui),
 			SSH: bootstrap.SSHOptions{
+				IdentityFiles:  identityFiles(request.IdentityFile),
 				Password:       passwordPrompt(ui),
 				Passphrase:     passphrasePrompt(ui),
 				ConfirmHostKey: hostKeyPrompt(ui),
@@ -340,4 +341,14 @@ func offerToKeepAuthKey(ctx context.Context, ui bootstrapUI, key string) {
 	if err := os.WriteFile(path, []byte(strings.TrimSpace(key)+"\n"), 0o600); err != nil {
 		_, _ = fmt.Fprintf(ui.output, "could not save the auth key: %v\n", err)
 	}
+}
+
+// identityFiles turns the optional --identity-file into the explicit list
+// SSHOptions expects. Empty means fall back to ~/.ssh/config and the default
+// key names, which is what most adoptions want.
+func identityFiles(path string) []string {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	return []string{path}
 }
