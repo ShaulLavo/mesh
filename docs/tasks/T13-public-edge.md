@@ -36,8 +36,7 @@ optional direct-TLS mode lets Mesh own a public listener and the
    one slow origin cannot exhaust the edge.
 5. **Offline origins.** Return 502 with a page that says which machine is down
    and when it was last seen. Keep the wake operation behind a bounded interface,
-   but reject a public `--wake-on-request` route with a typed error until the Pi
-   exposes a power-control API that the edge can call.
+   and support a public `--wake-on-request` route once the target allows waking.
 
 ## Authenticated complete snapshots
 
@@ -227,8 +226,7 @@ and a Darwin arm64 Mesh binary build.
   offline behavior, the bounded wake interface, trust-mode checks, streaming
   reverse proxy, and public resource budgets. Inbound body deadlines return a
   fixed 408 rather than being misreported as an offline origin. Production
-  wiring rejects wake routes because the Pi power-control API does not exist
-  yet.
+  wiring uses T19's target-authorized wake client and LAN sender selection.
 - `FuzzCanonicalPublicHost` exercises the public Host parser's canonicalization
   and round-trip invariants. It exposed and closed acceptance of an empty host
   with a port and bracketed DNS names.
@@ -268,8 +266,8 @@ token, or ACME account. It additionally proves:
   single trusted `X-Forwarded-Proto` value upstream.
 - A daemon restart restores signed claims as offline. A later authenticated
   snapshot restores liveness without releasing ownership during the gap.
-- A wake-enabled public route is refused with a typed error. The bounded wake
-  seam remains unit-tested until a production Pi API exists.
+- T19 supplies the bounded production wake client. A wake-enabled route waits
+  for the authorized target and a fresh publication before forwarding.
 - Public service upsert and delete controls do not return success before the
   edge acknowledges the exact resulting snapshot. T14 relies on this seam.
 - A running binary, not only the handler, returns 404 for the terminal path on

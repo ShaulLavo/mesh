@@ -12,6 +12,7 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
+	"github.com/shaul/mesh/internal/wake"
 )
 
 type verificationResult struct {
@@ -131,7 +132,16 @@ func verifyOne(ctx context.Context, endpoint string) (verifiedHost, bool, error)
 	if response.Type != protocol.TypeHostInfoResult || response.Host == nil {
 		return verifiedHost{}, true, fmt.Errorf("host-info response has type %q and host %v", response.Type, response.Host != nil)
 	}
+	if response.Host.Wake != nil {
+		if response.Host.Wake.TargetID != response.Host.ID {
+			return verifiedHost{}, true, errors.New("wake permission belongs to another host")
+		}
+		if err := wake.ValidateGrant(*response.Host.Wake, time.Now()); err != nil {
+			return verifiedHost{}, true, err
+		}
+	}
 	return verifiedHost{
+		Wake:          response.Host.Wake,
 		ID:            response.Host.ID,
 		MeshIdentity:  response.Host.MeshIdentity,
 		TailscaleName: response.Host.TailscaleName,

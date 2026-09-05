@@ -710,7 +710,7 @@ func testRegistry(t *testing.T, mode Mode, now time.Time) *Registry {
 func testResolvedOrigin(identity string, endpoint netip.AddrPort, now time.Time) ResolvedOrigin {
 	return ResolvedOrigin{
 		Identity: identity, DisplayAlias: "Desktop", Endpoint: endpoint,
-		LastSeenAt: now, OnlineUntil: now.Add(5 * time.Minute), Online: true,
+		SnapshotSequence: 1, LastSeenAt: now, OnlineUntil: now.Add(5 * time.Minute), Online: true,
 	}
 }
 

@@ -25,6 +25,9 @@ type AttachTerminal struct {
 	Size        terminal.Size
 	Resizes     <-chan terminal.Size
 	CancelInput func()
+	// ResetInput discards pending input and restarts a canceled reader. It is
+	// required when Conn can reconnect; local and SSH streams do not need it.
+	ResetInput func() error
 }
 
 // AttachWithTerminal uses an explicit terminal without discovering process
@@ -65,6 +68,7 @@ func localAttachTerminal(input, output *os.File) (AttachTerminal, func(), bool, 
 	}
 	terminal.Input = cancelReader.reader
 	terminal.CancelInput = cancelReader.cancel
+	terminal.ResetInput = cancelReader.reset
 	resizes, stopResizes := localTerminalResizes(output)
 	terminal.Resizes = resizes
 	closeTerminal := func() {
@@ -79,6 +83,7 @@ type attachmentInput struct {
 	reader io.Reader
 	cancel func()
 	close  func() error
+	reset  func() error
 }
 
 func localAttachInput(input *os.File, inputIsTerminal bool) (attachmentInput, error) {
@@ -87,13 +92,17 @@ func localAttachInput(input *os.File, inputIsTerminal bool) (attachmentInput, er
 		return attachmentInput{}, fmt.Errorf("inspect terminal input: %w", err)
 	}
 	if !inputIsTerminal && info.Mode()&(os.ModeNamedPipe|os.ModeSocket) == 0 {
-		return attachmentInput{reader: input, cancel: func() {}, close: func() error { return nil }}, nil
+		return attachmentInput{reader: input, cancel: func() {}, close: func() error { return nil }, reset: func() error {
+			_, err := input.Seek(0, io.SeekEnd)
+			return err
+		}}, nil
 	}
 	reader, err := uv.NewCancelReader(input)
 	if err != nil {
 		return attachmentInput{}, fmt.Errorf("make terminal input cancelable: %w", err)
 	}
-	return attachmentInput{reader: reader, cancel: func() { reader.Cancel() }, close: reader.Close}, nil
+	restartable := &restartableAttachmentInput{file: input, current: reader}
+	return attachmentInput{reader: restartable, cancel: restartable.cancel, close: restartable.close, reset: restartable.reset}, nil
 }
 
 func localTerminalSize(output *os.File) terminal.Size {

@@ -383,7 +383,8 @@ func (c *Controller) publishLocked(ctx context.Context) error {
 		}
 		resolved := ResolvedOrigin{
 			Identity: origin.Identity, DisplayAlias: origin.DisplayAlias, LastSeenAt: stored.LastSeenAt,
-			OnlineUntil: stored.LastSeenAt.Add(stored.Snapshot.ExpiresAt.Sub(stored.Snapshot.IssuedAt)),
+			SnapshotSequence: stored.Snapshot.Sequence,
+			OnlineUntil:      stored.LastSeenAt.Add(stored.Snapshot.ExpiresAt.Sub(stored.Snapshot.IssuedAt)),
 		}
 		if live, exists := c.live[origin.Identity]; exists && live.sequence == stored.Snapshot.Sequence {
 			resolved.Endpoint = live.endpoint
@@ -487,7 +488,15 @@ func snapshotToProtocol(snapshot Snapshot) protocol.EdgeSnapshot {
 // non-Tailscale addresses before returning a numeric endpoint.
 func TailscaleResolver(peers func(context.Context) ([]tailnet.Peer, error)) ResolveOrigin {
 	return func(ctx context.Context, origin OriginConfig) (netip.AddrPort, error) {
-		return resolveTailscalePeer(ctx, peers, origin.TailscaleName, origin.ControlPort)
+		return resolveTailscalePeer(ctx, peers, origin.TailscaleName, origin.ControlPort, true)
+	}
+}
+
+// TailscaleWakeResolver retains the exact allowlisted peer's cached addresses
+// while it sleeps. Readiness and identity are verified after the wake.
+func TailscaleWakeResolver(peers func(context.Context) ([]tailnet.Peer, error)) ResolveOrigin {
+	return func(ctx context.Context, origin OriginConfig) (netip.AddrPort, error) {
+		return resolveTailscalePeer(ctx, peers, origin.TailscaleName, origin.ControlPort, false)
 	}
 }
 

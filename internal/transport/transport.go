@@ -62,6 +62,9 @@ type DialOptions struct {
 	HTTPHeader http.Header
 	KeepAlive  KeepAlive
 	Backoff    Backoff
+	// Recover runs after repeated failures while resuming sessions. Failed
+	// recovery can retry after 30 seconds; success ends recovery for that outage.
+	Recover func(context.Context) error
 }
 
 // ServeOptions configures an accepted connection.

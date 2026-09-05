@@ -1,0 +1,11 @@
+# Checkpoint design
+
+The worker calls `recovery.NewWriter(dir, report)`, captures terminal cells and its recovery fields, and submits the resulting `Record`. Shell and command updates wait for the returned acknowledgement after releasing the PTY lock. The writer keeps one pending snapshot, replaces older pending data, and acknowledges all superseded updates after the newest snapshot reaches disk. A two second worker timer captures changed output. The content digest excludes checkpoint time, so an idle session does not write repeatedly.
+
+`Record` owns recovery data only: version, host/session identities, checkpoint time, shell and its directory source, launch argv, an optional explicit restart command, optional exact remote target, title, activity, and plain rendered text. `Meta` retains lifecycle ownership. `internal/recovery/record.go` validates bounds and atomically replaces recovery.json with file and directory synchronization. `internal/recovery/writer.go` owns background writes. `internal/worker/recovery.go` captures state and handles acknowledged local updates. `internal/terminal/recovery.go` snapshots bounded cells from x/vt's scrollback and active screen, then renders outside the worker lock.
+
+The transaction API remains in the recovery package and receives host operations through callbacks, because worker already imports recovery. Launch intent and stopped-worker recipe overrides are separate files. This prevents a restart caller from competing with the live checkpoint writer. The alternative daemon-owned snapshot design would lose checkpoints whenever the daemon was unavailable and was rejected.
+
+The pinned x/vt version exposes actual rendered scrollback, so no raw ANSI parser or heuristic line reconstruction is necessary. Completed main-screen rows plus the current screen are capped at 256 lines and 128 KiB. ANSI controls and concealed cells never enter saved text. The interactive shell's explicit prompt report takes precedence over observing the process leader's cwd. The foreground job's cwd cannot replace it.
+
+The accepted tradeoff is bounded cell copying while the worker lock is held, with rendering and filesystem work outside it. A crash can lose output since the last complete checkpoint; its durable timestamp states the actual age. Shell history append is managed by the shell integration rather than this writer.

@@ -544,10 +544,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 		}
 		if selection.Wake {
 			openHostAlias = selection.HostAlias
-			if a.dependencies.Wake == nil {
-				return fmt.Errorf("host %s has no wake controller configured", host.Alias)
-			}
-			if err := a.dependencies.Wake(cmd.Context(), host); err != nil {
+			if err := a.wakeHost(cmd.Context(), host, cmd.ErrOrStderr()); err != nil {
 				return err
 			}
 			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "woke %s; refreshing hosts\n", host.Alias); err != nil {
@@ -700,8 +697,8 @@ func (a *application) runHostWithContainment(
 	containment ContainmentFunc,
 ) error {
 	if resume {
-		ctx, cancel := context.WithTimeout(cmd.Context(), defaultCatalogTimeout)
-		rows, err := a.queryHost(ctx, host)
+		ctx, cancel := context.WithTimeout(cmd.Context(), wakeIntentTimeout)
+		rows, err := listRemoteHost(ctx, host, a.intentDialer(cmd.ErrOrStderr()))
 		cancel()
 		if err != nil {
 			return err
@@ -725,8 +722,8 @@ func (a *application) runHostWithContainment(
 	// name a path on this machine: /bin/zsh on a Mac does not exist on an Arch
 	// host, whose shell is /usr/bin/bash.
 	cols, rows := terminalSize(a.dependencies.Stdout)
-	ctx, cancel := context.WithTimeout(cmd.Context(), remoteCreateTimeout)
-	id, err := createRemoteSession(ctx, host, a.dependencies.DialHost, command, cols, rows)
+	ctx, cancel := context.WithTimeout(cmd.Context(), remoteCreateTimeout+wakeIntentTimeout)
+	id, err := createRemoteSession(ctx, host, a.intentDialer(cmd.ErrOrStderr()), command, cols, rows)
 	cancel()
 	if err != nil {
 		return err
@@ -875,8 +872,8 @@ func (a *application) attachResolvedWithContainment(
 		if resolved.remote.State != string(storage.StateRunning) && resolved.remote.State != string(storage.StateDetached) {
 			return fmt.Errorf("session %s on %s is %s", resolved.remote.ID, resolved.host.Alias, resolved.remote.State)
 		}
-		ctx, cancel := context.WithTimeout(cmd.Context(), remoteConnectTimeout)
-		conn, err := openVerifiedHost(ctx, *resolved.host, a.dependencies.DialHost)
+		ctx, cancel := context.WithTimeout(cmd.Context(), wakeIntentTimeout)
+		conn, err := openVerifiedHost(ctx, *resolved.host, a.intentDialer(cmd.ErrOrStderr()))
 		cancel()
 		if err != nil {
 			return err
@@ -979,7 +976,7 @@ func (a *application) addCommand() *cobra.Command {
 }
 
 func (a *application) wakeCommand() *cobra.Command {
-	return &cobra.Command{
+	command := &cobra.Command{
 		Use:   "wake host",
 		Short: "Wake a configured host",
 		Args:  exactArgs(1, "the name of a host you have added", "mesh wake pc        (mesh ls lists your hosts)"),
@@ -992,16 +989,15 @@ func (a *application) wakeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if a.dependencies.Wake == nil {
-				return fmt.Errorf("host %s has no wake controller configured", host.Alias)
-			}
-			if err := a.dependencies.Wake(cmd.Context(), host); err != nil {
+			if err := a.wakeHost(cmd.Context(), host, cmd.ErrOrStderr()); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "woke %s\n", host.Alias)
 			return err
 		},
 	}
+	command.AddCommand(a.configureWakeCommand(true), a.configureWakeCommand(false))
+	return command
 }
 
 func hostWithAlias(hosts []HostRecord, alias string) (HostRecord, error) {

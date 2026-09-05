@@ -30,6 +30,7 @@ const (
 	maximumResponseHeaderBytes = 1 << 20
 	maximumConcurrentPerOrigin = 32
 	maximumConcurrentUpstreams = 128
+	maximumConcurrentWakeWaits = 32
 	maximumConcurrentPerClient = 8
 	maximumRateClients         = 4096
 	maximumRequestsPerMinute   = 120
@@ -40,7 +41,7 @@ const (
 	proxyDialTimeout           = 2 * time.Second
 	proxyResponseHeaderTimeout = 3 * time.Second
 	proxyIdleConnectionTimeout = 30 * time.Second
-	wakeTimeout                = 5 * time.Second
+	wakeTimeout                = 90 * time.Second
 )
 
 var errInboundRequestBodyTimeout = errors.New("edge: inbound request body timed out")
@@ -82,12 +83,13 @@ type HandlerConfig struct {
 // ResolvedOrigin combines durable safe display state with an edge-resolved
 // numeric endpoint. Endpoint is never derived from a signed route.
 type ResolvedOrigin struct {
-	Identity     string
-	DisplayAlias string
-	Endpoint     netip.AddrPort
-	LastSeenAt   time.Time
-	OnlineUntil  time.Time
-	Online       bool
+	Identity         string
+	DisplayAlias     string
+	Endpoint         netip.AddrPort
+	SnapshotSequence uint64
+	LastSeenAt       time.Time
+	OnlineUntil      time.Time
+	Online           bool
 }
 
 // PublishedRoute is one proxy claim joined to its pinned runtime origin.
@@ -119,6 +121,7 @@ type Registry struct {
 	budgetsMu        sync.Mutex
 	budgets          map[string]chan struct{}
 	global           chan struct{}
+	wakeWaiters      chan struct{}
 	changeMu         sync.Mutex
 	change           chan struct{}
 	generation       uint64
@@ -146,6 +149,7 @@ type originRuntime struct {
 	identity     string
 	displayAlias string
 	endpoint     netip.AddrPort
+	sequence     uint64
 	lastSeenAt   time.Time
 	onlineUntil  time.Time
 	online       atomic.Bool
@@ -197,6 +201,7 @@ func NewRegistry(config HandlerConfig) (*Registry, error) {
 		rate:    newClientRateLimiter(maximumRateClients, maximumRequestsPerMinute, time.Minute),
 		clients: newClientConcurrencyLimiter(maximumConcurrentPerClient),
 		budgets: make(map[string]chan struct{}), global: make(chan struct{}, maximumConcurrentUpstreams), change: make(chan struct{}),
+		wakeWaiters:      make(chan struct{}, maximumConcurrentWakeWaits),
 		requestBodyLimit: config.RequestBodyLimit,
 		wakeTimeout:      config.WakeTimeout,
 		logger:           newEventLogger(config.Logger, config.Now),
@@ -254,6 +259,7 @@ func (r *Registry) Replace(routes []PublishedRoute) error {
 			runtime = &originRuntime{
 				identity: published.Origin.Identity, displayAlias: published.Origin.DisplayAlias,
 				endpoint: published.Origin.Endpoint, lastSeenAt: published.Origin.LastSeenAt.UTC(),
+				sequence:    published.Origin.SnapshotSequence,
 				onlineUntil: published.Origin.OnlineUntil.UTC(), budget: budget,
 			}
 			runtime.online.Store(published.Origin.Online)
@@ -452,6 +458,10 @@ func (route *proxyRoute) serve(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	defer registry.clients.Release(clientIP)
+	route = route.ready(response, request, registry, generation)
+	if route == nil {
+		return
+	}
 	select {
 	case registry.global <- struct{}{}:
 		defer func() { <-registry.global }()
@@ -466,32 +476,74 @@ func (route *proxyRoute) serve(response http.ResponseWriter, request *http.Reque
 		http.Error(response, "service temporarily unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	now := registry.now().UTC()
-	online := route.origin.online.Load() && now.Before(route.origin.onlineUntil)
-	if !online && route.wake {
-		wokenOriginID := route.origin.identity
-		originalRoute := route
-		wakeContext, cancel := context.WithTimeout(request.Context(), registry.wakeTimeout)
-		err := registry.waker.Wake(wakeContext, wokenOriginID)
-		if err == nil {
-			freshRoute, waitErr := registry.waitForFreshRoute(wakeContext, route.publicName, route.prefix, wokenOriginID, generation)
-			if waitErr == nil {
-				route = freshRoute
-			}
-			err = waitErr
-		}
-		cancel()
-		online = err == nil
-		if !online {
-			route = originalRoute
-		}
-	}
-	if !online {
-		writeOffline(response, route.origin)
-		return
-	}
 	request.Body = &inboundRequestBody{ReadCloser: http.MaxBytesReader(response, request.Body, registry.requestBodyLimit)}
 	route.proxy.ServeHTTP(response, request)
+}
+
+func (route *proxyRoute) ready(response http.ResponseWriter, request *http.Request, registry *Registry, generation uint64) *proxyRoute {
+	online := route.origin.online.Load() && registry.now().UTC().Before(route.origin.onlineUntil)
+	if online && route.wake {
+		var admitted bool
+		online, admitted = registry.probeOrigin(request.Context(), route.origin)
+		if !admitted {
+			http.Error(response, "service temporarily unavailable", http.StatusServiceUnavailable)
+			return nil
+		}
+	}
+	if online {
+		return route
+	}
+	if !route.wake || request.Context().Err() != nil {
+		writeOffline(response, route.origin)
+		return nil
+	}
+	select {
+	case registry.wakeWaiters <- struct{}{}:
+		defer func() { <-registry.wakeWaiters }()
+	default:
+		http.Error(response, "service temporarily unavailable", http.StatusServiceUnavailable)
+		return nil
+	}
+	fresh, err := registry.wakeRoute(request.Context(), route, generation)
+	if err != nil {
+		writeOffline(response, route.origin)
+		return nil
+	}
+	return fresh
+}
+
+func (r *Registry) probeOrigin(ctx context.Context, origin *originRuntime) (online, admitted bool) {
+	select {
+	case r.global <- struct{}{}:
+		defer func() { <-r.global }()
+	default:
+		return false, false
+	}
+	select {
+	case origin.budget <- struct{}{}:
+		defer func() { <-origin.budget }()
+	default:
+		return false, false
+	}
+	probe, cancel := context.WithTimeout(ctx, proxyDialTimeout)
+	defer cancel()
+	// A TCP preflight avoids consuming HTTP bodies before an asleep origin is
+	// woken. Retrying a failed HTTP request could repeat an accepted mutation.
+	conn, err := r.transport.DialContext(probe, "tcp", origin.endpoint.String())
+	if err != nil {
+		return false, true
+	}
+	_ = conn.Close()
+	return true, true
+}
+
+func (r *Registry) wakeRoute(ctx context.Context, route *proxyRoute, generation uint64) (*proxyRoute, error) {
+	wakeContext, cancel := context.WithTimeout(ctx, r.wakeTimeout)
+	defer cancel()
+	if err := r.waker.Wake(wakeContext, route.origin.identity); err != nil {
+		return nil, err
+	}
+	return r.waitForFreshRoute(wakeContext, route, generation)
 }
 
 type inboundRequestBody struct {
@@ -789,19 +841,11 @@ func (r *Registry) currentGeneration() (uint64, <-chan struct{}) {
 	return r.generation, r.change
 }
 
-func (r *Registry) waitForFreshRoute(ctx context.Context, publicName, prefix, originID string, generation uint64) (*proxyRoute, error) {
+func (r *Registry) waitForFreshRoute(ctx context.Context, original *proxyRoute, generation uint64) (*proxyRoute, error) {
 	for {
-		nextGeneration, changed := r.currentGeneration()
-		if nextGeneration > generation {
-			now := r.now().UTC()
-			snapshot := r.snapshot.Load()
-			for index := range snapshot.routes {
-				route := &snapshot.routes[index]
-				if route.publicName == publicName && route.prefix == prefix && route.origin.identity == originID && route.origin.online.Load() && now.Before(route.origin.onlineUntil) {
-					return route, nil
-				}
-			}
-			generation = nextGeneration
+		_, changed := r.currentGeneration()
+		if route := r.freshRoute(original, generation); route != nil {
+			return route, nil
 		}
 		select {
 		case <-changed:
@@ -809,4 +853,25 @@ func (r *Registry) waitForFreshRoute(ctx context.Context, publicName, prefix, or
 			return nil, ctx.Err()
 		}
 	}
+}
+
+func (r *Registry) freshRoute(original *proxyRoute, generation uint64) *proxyRoute {
+	snapshot := r.snapshot.Load()
+	if snapshot.generation <= generation {
+		return nil
+	}
+	now := r.now().UTC()
+	for index := range snapshot.routes {
+		route := &snapshot.routes[index]
+		if route.publicName != original.publicName || route.prefix != original.prefix || route.origin.identity != original.origin.identity {
+			continue
+		}
+		// Other origins rebuild the registry too; only this target's signed
+		// publication can authorize dispatch after its wake.
+		if route.origin.sequence <= original.origin.sequence || !route.origin.online.Load() || !now.Before(route.origin.onlineUntil) {
+			continue
+		}
+		return route
+	}
+	return nil
 }

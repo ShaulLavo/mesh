@@ -414,14 +414,16 @@ python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert -- "$ORIGIN_ONE
   "$BACKEND_PORT" app.shaulavo.dev >/dev/null || fail "publish proxy service"
 wait_for_proxy_marker || fail "proxy edge did not reach the first origin: $(cat "$TEST_ROOT/edge-proxy.log")"
 
-python3 "$CONTROL_FIXTURE" --expect-type error --expect-code edge.wake_unavailable upsert --wake -- \
+python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert --wake -- \
   "$ORIGIN_ONE_STATE/daemon.sock" wake static "$TEST_ROOT/origin-one-site" wake.shaulavo.dev >/dev/null ||
-  fail "refuse unavailable public wake route"
+  fail "publish wake-enabled public route"
 WAKE_STATUS=$(curl --noproxy '*' --silent --max-time 2 --output /dev/null --write-out '%{http_code}' \
   --header 'Host: wake.shaulavo.dev' --header 'X-Forwarded-For: 203.0.113.77' \
   --header 'X-Forwarded-Proto: https' "http://127.0.0.1:$PROXY_PORT/wake/") ||
-  fail "wake rollback request"
-[ "$WAKE_STATUS" = 404 ] || fail "rejected wake route remained published with status $WAKE_STATUS"
+  fail "wake-enabled route request"
+[ "$WAKE_STATUS" = 200 ] || fail "online wake-enabled route returned status $WAKE_STATUS"
+python3 "$CONTROL_FIXTURE" --expect-type service.deleted delete -- "$ORIGIN_ONE_STATE/daemon.sock" wake >/dev/null ||
+  fail "remove wake-enabled public route"
 
 HEADER_BODY=$(proxy_curl "http://127.0.0.1:$PROXY_PORT/bridge/headers") || fail "proxy header request"
 printf '%s\n' "$HEADER_BODY" | grep -q '^xfp=https$' ||

@@ -17,6 +17,7 @@ import (
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/tailnet"
+	"github.com/shaul/mesh/internal/wake"
 )
 
 const (
@@ -239,6 +240,7 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		return Result{}, diagnostic(DiagnosticIdentity, fmt.Errorf("daemon identity %q does not match the pinned identity %q", host.MeshIdentity, normalized.expectedIdentity))
 	}
 	return Result{
+		Wake:               host.Wake,
 		ID:                 host.ID,
 		MeshIdentity:       host.MeshIdentity,
 		TailscaleName:      tailnet.Name,
@@ -449,6 +451,7 @@ func adopterAuthorizedKey(stateDir string) (string, error) {
 }
 
 type verifiedHost struct {
+	Wake          *wake.Grant
 	ID            string
 	MeshIdentity  string
 	TailscaleName string

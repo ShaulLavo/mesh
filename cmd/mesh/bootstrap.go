@@ -21,6 +21,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/tui"
+	"github.com/shaul/mesh/internal/wake"
 )
 
 type bootstrapRunner func(context.Context, bootstrap.Options) (bootstrap.Result, error)
@@ -116,6 +117,15 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 		})
 		if err != nil {
 			return cli.BootstrapResult{}, err
+		}
+		if result.Wake != nil {
+			cache, cacheErr := wake.NewCache(stateDir)
+			if cacheErr == nil {
+				cacheErr = cache.Put(*result.Wake)
+			}
+			if cacheErr != nil {
+				steps.Step("wake", "Could not cache wake permission: "+cacheErr.Error())
+			}
 		}
 		return cli.BootstrapResult{
 			Host: cli.HostRecord{

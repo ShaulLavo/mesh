@@ -24,6 +24,7 @@ type clientServer struct {
 	edge         controlHandler
 	services     controlHandler
 	certificates controlHandler
+	wake         *wakeController
 }
 
 type controlHandler interface {
@@ -112,6 +113,12 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		}
 		if !lifecycleHandled {
 			response, lifecycleHandled, requestErr = s.certificates.HandleControl(ctx, request)
+		}
+		if !lifecycleHandled && s.wake != nil {
+			response, lifecycleHandled, requestErr = s.wake.HandleControl(ctx, request)
+		}
+		if response.Host != nil && s.wake != nil {
+			response.Host.Wake = s.wake.info()
 		}
 		if requestErr != nil {
 			if err := writeClientRequestError(relay, request, requestErr); err != nil {

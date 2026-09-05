@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/recovery"
+	"github.com/shaul/mesh/internal/wake"
 )
 
 // Control message type names.
@@ -97,11 +98,12 @@ type SessionInfo struct {
 
 // HostInfo is the transport representation of one daemon's identity.
 type HostInfo struct {
-	RecoverySupported bool   `json:"recoverySupported,omitempty"`
-	ID                string `json:"id"`
-	MeshIdentity      string `json:"meshIdentity"`
-	TailscaleName     string `json:"tailscaleName,omitempty"`
-	PrivateName       string `json:"privateName,omitempty"`
+	RecoverySupported bool        `json:"recoverySupported,omitempty"`
+	ID                string      `json:"id"`
+	MeshIdentity      string      `json:"meshIdentity"`
+	TailscaleName     string      `json:"tailscaleName,omitempty"`
+	PrivateName       string      `json:"privateName,omitempty"`
+	Wake              *wake.Grant `json:"wake,omitempty"`
 }
 
 // ServiceInfo is the transport representation of one origin service and its
@@ -190,6 +192,12 @@ type Control struct {
 	Type                 string            `json:"type"`
 	RequestID            string            `json:"requestId,omitempty"`
 	SessionID            string            `json:"sessionId,omitempty"`
+
+	WakeGrant   *wake.Grant `json:"wakeGrant,omitempty"`
+	WakeAllowed *bool       `json:"wakeAllowed,omitempty"`
+	WakeCanSend bool        `json:"wakeCanSend,omitempty"`
+	WakeState   wake.State  `json:"wakeState,omitempty"`
+	WakeSender  string      `json:"wakeSender,omitempty"`
 
 	// Attach / create / inspect / containment
 	LastSeq     *uint64  `json:"lastSeq,omitempty"` // exact resume point; nil requests a screen snapshot

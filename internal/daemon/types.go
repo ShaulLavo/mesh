@@ -34,6 +34,7 @@ type CatalogConfig struct {
 	Probe       WorkerProbe
 	BootID      func() string
 	Now         func() time.Time
+	OnReconcile func([]storage.Session)
 }
 
 // WorkerConnector resolves and opens one worker without exposing filesystem

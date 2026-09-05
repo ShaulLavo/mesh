@@ -18,6 +18,7 @@ import (
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/inhibit"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/storage"
@@ -198,6 +199,10 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	reporter := newErrorReporter(cfg.ReportError)
 	defer reporter.shutdown()
+	power, err := newWakeController(daemonCtx, stateDir, meshPrivateKey, opts.discoverPeers)
+	if err != nil {
+		return fmt.Errorf("daemon: configure waking: %w", err)
+	}
 	discoverAllPeers := func(discoveryCtx context.Context) ([]tailnet.Peer, error) {
 		self, selfErr := opts.discoverSelf(discoveryCtx)
 		peers, peersErr := opts.discoverPeers(discoveryCtx)
@@ -314,8 +319,10 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	var publicMode edge.Mode
 	var publicCertificatePin string
 	if publicEdgeConfig != nil {
+		waker := &edgeWakeAdapter{client: power.client, origins: publicEdgeConfig.Origins, resolve: edge.TailscaleWakeResolver(discoverAllPeers)}
 		edgeRegistry, err = edge.NewRegistry(edge.HandlerConfig{
 			Mode: publicEdgeConfig.Mode, ReservedPath: cfg.WebSocketPath,
+			Waker:  waker,
 			Logger: log.New(edgeReportWriter{reporter: reporter}, "", 0),
 		})
 		if err != nil {
@@ -324,7 +331,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		defer edgeRegistry.Close()
 		controller, err := edge.NewController(daemonCtx, edge.ControllerConfig{
 			TargetID: meshHost.ID, Origins: publicEdgeConfig.Origins, State: store, Registry: edgeRegistry,
-			Resolve: edge.TailscaleResolver(discoverAllPeers), Pin: edge.ControlPinner(nil), Now: opts.now,
+			Resolve: edge.TailscaleResolver(discoverAllPeers), Pin: waker.pin, Now: opts.now,
 		})
 		if err != nil {
 			return fmt.Errorf("daemon: configure public edge registration: %w", err)
@@ -372,7 +379,10 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		}
 	}
 
+	inhibitor := inhibit.New(reporter.report)
+	defer func() { runErr = errors.Join(runErr, inhibitor.Close()) }()
 	catalog, err := NewCatalog(CatalogConfig{
+		OnReconcile: syncSleepInhibitor(inhibitor.Update),
 		SessionsDir: sessionsDir,
 		Host:        host,
 		Store:       store,
@@ -405,6 +415,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
+	server.wake = power
 
 	controlAddrs := tailnetAddrs
 	if cfg.TailnetPort == 0 {
@@ -461,6 +472,11 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return nil
 	}
 
+	powerDone := make(chan struct{})
+	go func() {
+		defer close(powerDone)
+		power.run(daemonCtx, listenersReady, cfg.TailnetPort != 0)
+	}()
 	reconciled := make(chan struct{})
 	go func() {
 		defer close(reconciled)
@@ -558,6 +574,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}()
 	serveErr := serveListeners(daemonCtx, cancelDaemon, listener, server.Handle)
 	cancelDaemon()
+	<-powerDone
 	<-reconciled
 	<-privateNamesDone
 	<-publicCertificateDone

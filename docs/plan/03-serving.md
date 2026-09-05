@@ -121,8 +121,9 @@ regardless. The optional direct-TLS edge also uses DNS-01 for
 install into each other's serving slot.
 
 **An offline origin returns 502, honestly.** No silent staleness. T13 keeps
-`--wake-on-request` behind a bounded interface, but rejects a public wake route
-until the Pi exposes a power-control API that the edge can call.
+`--wake-on-request` behind a bounded interface. T19 supplies the wake client:
+the target must allow wake, and a sender must be awake on its LAN. The edge
+waits up to 90 seconds for the target and a fresh service publication.
 
 ## Tasks
 

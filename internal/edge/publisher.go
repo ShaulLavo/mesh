@@ -428,11 +428,11 @@ func validateListedRoute(route protocol.EdgeRouteInfo) error {
 // TailscaleTargetResolver resolves one exact public edge peer.
 func TailscaleTargetResolver(peers func(context.Context) ([]tailnet.Peer, error)) ResolveTarget {
 	return func(ctx context.Context, target TargetConfig) (netip.AddrPort, error) {
-		return resolveTailscalePeer(ctx, peers, target.TailscaleName, target.ControlPort)
+		return resolveTailscalePeer(ctx, peers, target.TailscaleName, target.ControlPort, true)
 	}
 }
 
-func resolveTailscalePeer(ctx context.Context, peers func(context.Context) ([]tailnet.Peer, error), name string, port uint16) (netip.AddrPort, error) {
+func resolveTailscalePeer(ctx context.Context, peers func(context.Context) ([]tailnet.Peer, error), name string, port uint16, requireOnline bool) (netip.AddrPort, error) {
 	if peers == nil {
 		return netip.AddrPort{}, errors.New("edge: nil Tailscale peer discovery")
 	}
@@ -454,7 +454,7 @@ func resolveTailscalePeer(ctx context.Context, peers func(context.Context) ([]ta
 	if matched == nil {
 		return netip.AddrPort{}, errors.New("edge: allowlisted Tailscale peer was not found")
 	}
-	if !matched.Online {
+	if requireOnline && !matched.Online {
 		return netip.AddrPort{}, errors.New("edge: allowlisted peer is offline in Tailscale")
 	}
 	addresses := make([]netip.Addr, 0, len(matched.Addrs))

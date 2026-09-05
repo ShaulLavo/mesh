@@ -225,15 +225,15 @@ func attachWithTerminal(ctx context.Context, opts AttachOptions, terminal Attach
 	}
 	defer conn.Close() //nolint:errcheck // attachment owns the connection
 
-	var writeMu sync.Mutex
-	send := func(frame protocol.Frame) error {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		return conn.WriteFrame(frame)
-	}
+	send := conn.WriteFrame
 	state := attachmentOutput{opts: opts, terminal: terminal, keys: keys, result: res}
 	if restoreModes {
 		defer state.restoreTerminal()
+	}
+	done := make(chan struct{})
+	inputRelay := &attachmentInputRelay{terminal: terminal, done: done}
+	if reconnecting, ok := conn.(interface{ SetResumeInputBarrier(func() error) }); ok {
+		reconnecting.SetResumeInputBarrier(inputRelay.reset)
 	}
 	stopContext := closeAttachmentOnCancel(ctx, conn)
 	defer stopContext()
@@ -246,7 +246,6 @@ func attachWithTerminal(ctx context.Context, opts AttachOptions, terminal Attach
 		return res, presentError("attach "+opts.SessionID, err)
 	}
 
-	done := make(chan struct{})
 	detached := make(chan struct{})
 	var relays sync.WaitGroup
 	defer func() {
@@ -257,7 +256,7 @@ func attachWithTerminal(ctx context.Context, opts AttachOptions, terminal Attach
 	}()
 	relays.Go(func() { relayTerminalResizes(done, terminal.Resizes, opts.SessionID, send) })
 	relays.Go(func() {
-		relayInput(keys, terminal.Input, sid, send, func() { detachAttachment(conn, opts.SessionID, send, detached) })
+		relayInput(inputRelay, keys, sid, send, func() { detachAttachment(conn, opts.SessionID, send, detached) })
 	})
 	return state.read(ctx, conn, detached)
 }
@@ -498,18 +497,7 @@ func (s *attachmentOutput) responseError(message protocol.Control) error {
 	return daemonResponseError("session "+s.opts.SessionID, message.Message)
 }
 
-// relayInput forwards keystrokes, watching for the detach key.
-func relayInput(keys *attachmentKeys, input io.Reader, sid protocol.SessionID, send func(protocol.Frame) error, detach func()) {
-	buf := make([]byte, 4096)
-	for {
-		n, err := input.Read(buf)
-		if relayInputBytes(keys, buf[:n], sid, send, detach) || err != nil {
-			return
-		}
-	}
-}
-
-func relayInputBytes(keys *attachmentKeys, input []byte, sid protocol.SessionID, send func(protocol.Frame) error, detach func()) bool {
+func relayInputBytes(keys *attachmentKeys, input []byte, sid protocol.SessionID, send func(protocol.Frame) error) bool {
 	if len(input) == 0 {
 		return false
 	}
@@ -517,7 +505,6 @@ func relayInputBytes(keys *attachmentKeys, input []byte, sid protocol.SessionID,
 		if index > 0 {
 			_ = send(protocol.Frame{Kind: protocol.KindInput, Session: sid, Payload: append([]byte(nil), input[:index]...)})
 		}
-		detach()
 		return true
 	}
 	// Failed writes drop one keystroke batch. Retiring the reader would leave

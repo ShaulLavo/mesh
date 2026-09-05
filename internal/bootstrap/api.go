@@ -6,6 +6,8 @@ import (
 	"context"
 	"net/http"
 	"time"
+
+	"github.com/shaul/mesh/internal/wake"
 )
 
 const (
@@ -154,6 +156,7 @@ type Options struct {
 
 // Result is the host observation proved by the remote daemon itself.
 type Result struct {
+	Wake               *wake.Grant
 	ID                 string
 	MeshIdentity       string
 	TailscaleName      string

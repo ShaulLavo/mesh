@@ -599,7 +599,7 @@ func serveUnixConnections(ctx context.Context, listener net.Listener, connection
 			_ = stream.Close()
 			continue
 		}
-		connections.start(ctx, conn)
+		connections.start(context.WithValue(ctx, localClientKey{}, true), conn)
 	}
 }
 

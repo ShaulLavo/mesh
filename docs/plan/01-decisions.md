@@ -276,6 +276,39 @@ server would remove the recovery path that `mesh add` uses.
 **Cost:** a stock client needs `-p 2222`. A matching `~/.ssh/config` entry can set the
 port, identity file, and `IdentitiesOnly` once.
 
+## D25: Child processes hold sleep inhibitors
+
+The daemon runs `systemd-inhibit` on Linux and `caffeinate -i` on macOS while
+the catalog contains running or detached workers. Both wrap `/bin/cat` reading
+a pipe held by the daemon, so abrupt daemon death releases the inhibitor.
+Missing mechanisms report once and leave session startup available.
+
+**Cost:** extra utility processes while sessions are live, and OS authorization
+for Linux inhibition. While the daemon is down, preserved workers lack idle
+sleep protection. No logind D-Bus dependency is added.
+
+## D26: Targets permit waking; senders are selected on their LAN
+
+`mesh wake allow` is local target consent for all Mesh machines admitted by
+the existing Tailnet boundary. The target signs its NIC, subnet, gateway MAC,
+permission, revision, and expiry with its existing identity. Clients carry that
+grant to an awake sender, including themselves when on the same LAN.
+
+Match subnet and gateway MAC because different sites can use the same private
+subnet. Store grants in separate bounded caches; `hosts.json` stays unchanged.
+Explicit wake controls extend the daemon protocol. The old T19 instruction
+forbidding protocol changes is superseded.
+
+Explicit connection intent may wake without a witness. Reconnect recovery needs
+an independent remote LAN observation. Catalog reads never wake. Replacement
+connections discard old buffered input and await the session acknowledgment.
+
+**Cost:** cached permission remains usable for up to 30 days by peers that missed
+revocation. Peers retain the highest revision they have seen. Gateway changes
+and expiry need rediscovery while the target is awake. ICMP establishes
+reachability, not a definitive sleep state. Each sender deduplicates 90-second
+attempts; independent senders do not guarantee exactly-once broadcast delivery.
+
 ## D27 — ctrl+] belongs to the innermost session; ctrl+^ leaves them all
 
 The outermost client reads every keystroke first, so which client owns a key

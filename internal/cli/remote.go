@@ -13,13 +13,16 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/transport"
+	"github.com/shaul/mesh/internal/wake"
 )
 
 // HostDialer opens one protocol connection to an adopted host.
 type HostDialer func(context.Context, HostRecord) (transport.Conn, error)
 
 func dialHost(ctx context.Context, host HostRecord) (transport.Conn, error) {
-	return transport.Dial(ctx, host.Endpoint, transport.DialOptions{})
+	return transport.Dial(ctx, host.Endpoint, transport.DialOptions{
+		Recover: func(ctx context.Context) error { return recoverHost(ctx, host) },
+	})
 }
 
 func openVerifiedHost(ctx context.Context, host HostRecord, dial HostDialer) (transport.Conn, error) {
@@ -37,7 +40,9 @@ func openVerifiedHostInfo(ctx context.Context, host HostRecord, dial HostDialer)
 		_ = conn.Close()
 		return nil, protocol.HostInfo{}, err
 	}
-	response, err := controlRequest(ctx, conn, protocol.Control{Type: protocol.TypeHostInfo, RequestID: requestID})
+	verifyCtx, cancelVerify := context.WithTimeout(ctx, remoteConnectTimeout)
+	defer cancelVerify()
+	response, err := controlRequest(verifyCtx, conn, protocol.Control{Type: protocol.TypeHostInfo, RequestID: requestID})
 	if err != nil {
 		_ = conn.Close()
 		return nil, protocol.HostInfo{}, fmt.Errorf("verify host %s: %w", host.Alias, err)
@@ -54,6 +59,7 @@ func openVerifiedHostInfo(ctx context.Context, host HostRecord, dial HostDialer)
 		_ = conn.Close()
 		return nil, protocol.HostInfo{}, err
 	}
+	rememberWakeGrant(ctx, response.Host.Wake)
 	return conn, *response.Host, nil
 }
 
@@ -61,12 +67,24 @@ func validateHostInfo(expected HostRecord, actual protocol.HostInfo) error {
 	if actual.ID != expected.ID || actual.MeshIdentity != expected.MeshIdentity {
 		return fmt.Errorf("host %s identity changed", expected.Alias)
 	}
+	if actual.Wake != nil {
+		if err := validateHostWake(actual); err != nil {
+			return fmt.Errorf("host %s returned invalid wake permission: %w", expected.Alias, err)
+		}
+	}
 	if actual.PrivateName != "" {
 		if err := dnsname.ValidatePrivateName(actual.PrivateName); err != nil {
 			return fmt.Errorf("host %s returned an invalid private name", expected.Alias)
 		}
 	}
 	return nil
+}
+
+func validateHostWake(host protocol.HostInfo) error {
+	if host.Wake.TargetID != host.ID {
+		return fmt.Errorf("permission names another target")
+	}
+	return wake.ValidateGrant(*host.Wake, time.Now())
 }
 
 func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer) ([]protocol.SessionInfo, error) {
@@ -79,7 +97,9 @@ func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer) ([]pr
 	if err != nil {
 		return nil, err
 	}
-	response, err := controlRequest(ctx, conn, protocol.Control{Type: protocol.TypeList, RequestID: requestID})
+	queryCtx, cancelQuery := context.WithTimeout(ctx, remoteConnectTimeout)
+	defer cancelQuery()
+	response, err := controlRequest(queryCtx, conn, protocol.Control{Type: protocol.TypeList, RequestID: requestID})
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +135,9 @@ func createRemoteSessionInDirectory(ctx context.Context, host HostRecord, dial H
 	if err != nil {
 		return "", err
 	}
-	response, err := controlRequest(ctx, conn, protocol.Control{
+	createCtx, cancelCreate := context.WithTimeout(ctx, remoteCreateTimeout)
+	defer cancelCreate()
+	response, err := controlRequest(createCtx, conn, protocol.Control{
 		Type:      protocol.TypeCreate,
 		RequestID: requestID,
 		Term:      clientTerm(),

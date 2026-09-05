@@ -270,7 +270,7 @@ boundary remains additional stress coverage. These checks are separate from the
 unrun VM power-loss acceptance.
 
 Verified 2026-09-05: `go test -race ./...`, `go vet ./...`,
-`go mod tidy -diff`, formatting, all 33 integration scripts, and
+`go mod tidy -diff`, formatting, all 34 integration scripts, and
 `scripts/check-t24.sh` with Bash and Zsh 5.9.2. The focused checker also builds
 CGO-disabled Linux amd64/arm64 and Darwin arm64 binaries. Full unlimited lint
 reports the same eleven existing findings in bootstrap, installer, and tag code,

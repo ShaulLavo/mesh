@@ -29,6 +29,7 @@ type Catalog struct {
 	probe       WorkerProbe
 	bootID      func() string
 	now         func() time.Time
+	onReconcile func([]storage.Session)
 
 	reconcileGate chan struct{}
 }
@@ -48,6 +49,7 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		probe:         cfg.Probe,
 		bootID:        cfg.BootID,
 		now:           cfg.Now,
+		onReconcile:   cfg.OnReconcile,
 		reconcileGate: make(chan struct{}, 1),
 	}, nil
 }
@@ -80,6 +82,9 @@ func (c *Catalog) Reconcile(ctx context.Context) error {
 	observed, retired := c.retireFinishedSessions(observed)
 	if err := c.store.ReconcileHost(ctx, host, observed); err != nil {
 		return fmt.Errorf("daemon: reconcile host %s sessions: %w", c.host.ID, err)
+	}
+	if c.onReconcile != nil {
+		c.onReconcile(observed)
 	}
 	if len(retired) > 0 {
 		if _, err := c.store.RetireSessions(ctx, c.host.ID, retired); err != nil {

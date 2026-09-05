@@ -7,8 +7,9 @@ Updated 2026-09-05.
 The session and transport core, live session inspector, terminal-window entry, product CLI,
 Tailscale-provisioning SSH bootstrap, packaging, origin serving core and service
 catalog, private DNS/TLS path, authenticated public edge, and the locked SSH
-front door and sessions over SSH are complete. Workspace crash recovery is also
-implemented. Physical power-loss acceptance remains an operator check.
+front door and sessions over SSH are complete. Target-authorized wake, automatic
+LAN sender selection, Linux/macOS sleep inhibition, and workspace crash recovery
+are also implemented. Physical power-loss acceptance remains an operator check.
 
 - `internal/protocol` — framing, control messages, bounded structured preview
   styles, and exact host/session containment paths shared by every transport
@@ -65,6 +66,9 @@ implemented. Physical power-loss acceptance remains an operator check.
 - `internal/recovery` — worker-owned rendered checkpoints, shell directory and
   history hooks, durable restart reservations, retained attempts, exact remote
   continuation, explicit command recipes, and previous-output access (T24)
+- `internal/wake`, `internal/wakeclient`, `internal/inhibit` — signed target
+  permission, automatic LAN sender selection, conservative reconnect recovery,
+  public-service wake, and child-process sleep inhibition (T19)
 
 Verified 2026-08-30: clean formatting and module/generation diffs, the unlimited
 seven-linter policy, `go vet ./...`, `go test -race ./...`, all three retained
@@ -152,14 +156,23 @@ before returning, so process shutdown cannot discard a successful kill response.
 
 ## Complete tasks
 
+Verified 2026-09-05 after T19: `go test -race ./...`, `go vet ./...`, clean module
+and formatting checks, all 28 integration scripts, and CGO-disabled Linux
+amd64/arm64 plus Darwin arm64 builds. `scripts/check-t19.sh` retains the focused
+contract. Full lint reports only the same eleven findings in unchanged
+bootstrap, installer, and tag files; changed and new code introduces none.
+Real WebSocket tests cover permission and revocation; real process tests prove
+inhibitor release after daemon SIGKILL. Physical wake/suspend and macOS power
+assertions remain checks on the actual machines described in `docs/power.md`.
+
 T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websocket
 transport · T06 host identity · T07 CLI surface · T08 ssh bootstrap · T09 picker
 TUI · T10 packaging · T11 serving core · T12 private names · T13 public edge ·
-T14 `mesh serve` · T15 SSH front door · T17 sessions over SSH · T20 Tailscale provisioning · T22 live
+T14 `mesh serve` · T15 SSH front door · T17 sessions over SSH · T19 wake and sleep inhibition · T20 Tailscale provisioning · T22 live
 session inspector · T23 Mesh as your terminal · T24 workspace crash recovery.
 
 Verified 2026-09-05 after T24: `go test -race ./...`, `go vet ./...`, clean module
-and formatting checks, all 33 integration scripts, and CGO-disabled Linux
+and formatting checks, all 34 integration scripts, and CGO-disabled Linux
 amd64/arm64 plus Darwin arm64 builds. `scripts/check-t24.sh` retains the focused
 contract and real Bash/Zsh, WebSocket, and OpenSSH recovery scenarios. A daemon
 response-ordering regression also covers attachment rejection followed by resize.
@@ -180,7 +193,7 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 | 3 Product CLI | T07, T09, T22 | complete |
 | 4 SSH bootstrap | T08, T20, T21 | complete |
 | 5 Crash and restart recovery | T04, T24, T25 | daemon and workspace recovery implemented; agent recovery planned |
-| 6 Pi power control | **T19** | **not started** |
+| 6 Wake and sleep inhibition | T19 | complete |
 | 7 Packaging | T10 | complete |
 | 8 Serving | T11, T12, T13, T14 | complete |
 | 9 SSH front door | T15, T16, T17, T18 | T15, T17 complete |
@@ -188,7 +201,7 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 
 ## Next
 
-T16, T18, and T19 remain independent and unblocked. T24 provides the checkpoint and
+T16 and T18 remain independent and unblocked. T24 provides the checkpoint and
 restart operation needed by T25. The offline provider probe is implemented; live
 invocation association and exact native resume still need verification.
 
@@ -196,7 +209,6 @@ invocation association and exact native resume still need verification.
 |---|---|---|
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
 | T18 reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
-| T19 Pi power control | `internal/wake/`, `internal/inhibit/` | T06, T07, T08, T09 |
 | [T25 Codex and Claude recovery](../tasks/T25-agent-recovery.md) | `internal/agentresume/`, exact conversation registration, native resume | live provider association and exact-resume verification |
 
 T24 recovers a shell in its last saved directory, retains previous output and
@@ -205,15 +217,14 @@ on its connected host. `mesh logs SESSION --previous` reads retained output.
 T25 adds no runtime behavior yet; its offline probe does not establish automatic
 conversation association. See [recovery instructions](../recovery.md).
 
-T19 closes the only skipped build step. Its seams already exist in the CLI,
-the picker, the edge, the protocol, and the services table; every one of them
-currently reaches a nil dependency or `noWaker`. It carries two open decisions
-(D25 inhibitor mechanism, D26 witness transport) to resolve before implementing.
+T19 closes the skipped power-control step. D25 and D26 record child inhibitors,
+target-owned permission, automatic LAN sender selection, and the additive wake
+protocol. The CLI, picker, and public edge now use the wake implementation.
 
 Next for agent recovery, prove invocation association and exact native resume
 with authenticated disposable Codex and Claude conversations. Then add T25
-registration and provider launch on T24's shared restart operation. T16, T18,
-and T19 can proceed independently.
+registration and provider launch on T24's shared restart operation. T16 and T18
+can proceed independently.
 
 ## Known defects
 

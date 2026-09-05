@@ -57,6 +57,10 @@ To keep every terminal window's shell running, follow
 To recover saved directories and previous output after a host crash, follow
 [Recover a workspace](docs/recovery.md).
 
+To wake a sleeping PC automatically when connecting, follow
+[Wake a machine](docs/power.md). The target grants permission with
+`mesh wake allow`; Mesh chooses an awake sender on its LAN.
+
 ## Remote access
 
 Installed hosts expose Mesh sessions through public-key-only SSH on Tailnet

@@ -1,0 +1,13 @@
+# Recovery transaction design
+
+The direct CLI and daemon call `recovery.Recover(ctx, Config, Request)` and attach the returned exact session through the existing detached-only or takeover operation. SSH sends `session.recover` to the daemon. A remote target result carries an exact host and session identity for the client to query after selection.
+
+`recovery` owns checkpoint formats, the source file lock, the durable intent, launch selection, and previous-attempt links. `worker.RecoveryRuntime` supplies process facts and starts a reserved worker. This keeps the worker's checkpoint import from forming a cycle with the transaction engine. `protocol` contains wire envelopes; `daemon/recovery.go` validates and adapts them and keeps catalog publication daemon-owned.
+
+Each source owns a separate `recovery-intent.json` and `recovery.lock`. A new replacement directory has the existing `.launching` reservation before its ID and launch arguments enter the source intent. The source intent moves through reserved, dispatched, and complete. The worker's metadata owns `recoveredFrom`; the old record's replacement ID is derived from its intent. Recipe changes for dead workers live in a separate file, and live changes go to the worker socket.
+
+The conservative crash boundary is deliberate. After dispatch, a missing socket cannot prove that the child was never started: `worker.Run` starts its PTY child before metadata and socket publication. Recovery therefore retains an uncertain attempt and only reconciles that exact ID. A proven `exec.Start` failure may retry the same reservation. A dropped success reply resolves published metadata without spawning again. A different nonempty kernel boot identity proves that an unpublished worker cannot have survived, so that reservation can start again after reboot. Linux reads its kernel boot UUID; Darwin reads the kernel boot-session UUID. The operation never infers identity or liveness from a PID.
+
+Compared with a daemon-owned coordinator, this design hides concurrency and durable retry bookkeeping from all three clients and works when the daemon is absent. Compared with a worker-only recovery implementation, it keeps checkpoint formats and launch selection independent of PTY mechanics. It accepts conservative uncertain launches in exchange for preventing duplicate execution without adding a second worker supervision protocol.
+
+Checks cover concurrent callers, dropped creation acknowledgements, uncertain dispatch, proven spawn failure, explicit argv recipes, missing directories, and cancelled source locks. Full power-loss durability still requires a disposable VM hard-power-off acceptance run.

@@ -17,6 +17,7 @@ import (
 
 type resumeState struct {
 	attach          protocol.Control
+	inputGeneration uint64
 	next            uint64
 	haveNext        bool
 	pendingSnapshot *snapshotCheckpoint
@@ -40,26 +41,32 @@ type connectionRef struct {
 
 type linkDialer func(context.Context, string, websocket.DialOptions, KeepAlive) (linkConn, error)
 
-type reconnectingConn struct {
-	url       string
-	dialOpts  websocket.DialOptions
-	keepAlive KeepAlive
-	backoff   Backoff
-	ctx       context.Context
-	cancel    context.CancelFunc
-	dial      linkDialer
+const recoveryRetryInterval = 30 * time.Second
 
-	readMu  sync.Mutex
-	writeMu sync.Mutex
+type reconnectingConn struct {
+	url         string
+	dialOpts    websocket.DialOptions
+	keepAlive   KeepAlive
+	backoff     Backoff
+	ctx         context.Context
+	cancel      context.CancelFunc
+	dial        linkDialer
+	recover     func(context.Context) error
+	recoveryNow func() time.Time
+
+	readMu sync.Mutex
 	// reconnectMu linearizes socket replacement with every event that can
 	// change resume state. It is never held across a blocking ReadFrame.
-	reconnectMu sync.Mutex
-	stateMu     sync.Mutex
-	current     connectionRef
-	connecting  linkConn
-	generation  uint64
-	closed      bool
-	resumes     map[string]resumeState
+	reconnectMu            connectionGate
+	stateMu                sync.Mutex
+	current                connectionRef
+	connecting             linkConn
+	generation             uint64
+	closed                 bool
+	resumes                map[string]resumeState
+	inputDone              chan struct{}
+	inputBarrier           func() error
+	inputBarrierGeneration uint64
 }
 
 // Dial opens a reconnecting WebSocket connection. After a link failure, the
@@ -88,6 +95,7 @@ func Dial(ctx context.Context, url string, opts DialOptions) (Conn, error) {
 		ctx:        lifetime,
 		cancel:     cancel,
 		dial:       dialLink,
+		recover:    opts.Recover,
 		current:    connectionRef{link: initial, generation: 1},
 		generation: 1,
 		resumes:    make(map[string]resumeState),
@@ -165,8 +173,9 @@ func (c *reconnectingConn) ReadFrame() (protocol.Frame, error) {
 }
 
 func (c *reconnectingConn) WriteFrame(frame protocol.Frame) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
+	if frame.Kind == protocol.KindInput {
+		return c.writeInput(frame)
+	}
 	c.reconnectMu.Lock()
 	defer c.reconnectMu.Unlock()
 
@@ -195,6 +204,73 @@ func (c *reconnectingConn) WriteFrame(frame protocol.Frame) error {
 	return nil
 }
 
+func (c *reconnectingConn) inputReadyLocked(sessionID string) bool {
+	if c.current.link == nil || c.current.link.stopped() {
+		return false
+	}
+	if c.current.generation == 1 {
+		return true
+	}
+	if c.inputBarrier != nil && c.inputBarrierGeneration != c.current.generation {
+		return false
+	}
+	state, tracked := c.resumes[sessionID]
+	return tracked && state.inputGeneration == c.current.generation
+}
+
+func (c *reconnectingConn) writeInput(frame protocol.Frame) error {
+	ref, done, err := c.inputConnection(frame.Session.String())
+	if err != nil || ref.link == nil {
+		return err
+	}
+	if !c.reconnectMu.LockUntil(done) {
+		return nil
+	}
+	defer c.reconnectMu.Unlock()
+	c.stateMu.Lock()
+	ready := c.isCurrentLocked(ref) && c.inputReadyLocked(frame.Session.String())
+	c.stateMu.Unlock()
+	if !ready {
+		return nil
+	}
+	if err := ref.link.WriteFrame(frame); err != nil {
+		c.retireLocked(ref)
+		return err
+	}
+	return nil
+}
+
+func (c *reconnectingConn) inputConnection(sessionID string) (connectionRef, <-chan struct{}, error) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.closed {
+		return connectionRef{}, nil, ErrClosed
+	}
+	if !c.inputReadyLocked(sessionID) {
+		return connectionRef{}, nil, nil
+	}
+	if c.inputDone == nil {
+		c.inputDone = make(chan struct{})
+	}
+	return c.current, c.inputDone, nil
+}
+
+// SetResumeInputBarrier installs the terminal's pending-input reset. It runs
+// before a replacement connection accepts input and must not write controls.
+func (c *reconnectingConn) SetResumeInputBarrier(reset func() error) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.inputBarrier = reset
+}
+
+func (c *reconnectingConn) invalidateCurrentLocked() {
+	c.current = connectionRef{}
+	if c.inputDone != nil {
+		close(c.inputDone)
+		c.inputDone = nil
+	}
+}
+
 func (c *reconnectingConn) Close() error {
 	c.stateMu.Lock()
 	if c.closed {
@@ -204,7 +280,7 @@ func (c *reconnectingConn) Close() error {
 	c.closed = true
 	ref := c.current
 	connecting := c.connecting
-	c.current = connectionRef{}
+	c.invalidateCurrentLocked()
 	c.connecting = nil
 	c.stateMu.Unlock()
 	c.cancel()
@@ -220,8 +296,6 @@ func (c *reconnectingConn) Close() error {
 	// Close returns.
 	c.reconnectMu.Lock()
 	c.reconnectMu.Unlock() //nolint:staticcheck // lock and unlock form a completion barrier for reconnect
-	c.writeMu.Lock()
-	c.writeMu.Unlock() //nolint:staticcheck // lock and unlock form a completion barrier for writes
 	return err
 }
 
@@ -239,7 +313,7 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 	}
 	if c.current.link != nil {
 		if failed.generation != 0 && c.isCurrentLocked(failed) {
-			c.current = connectionRef{}
+			c.invalidateCurrentLocked()
 		} else {
 			ref := c.current
 			c.stateMu.Unlock()
@@ -248,6 +322,12 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 	}
 	c.stateMu.Unlock()
 
+	now := c.recoveryNow
+	if now == nil {
+		now = time.Now
+	}
+	recovered := false
+	var nextRecovery time.Time
 	for attempt := 0; ; attempt++ {
 		link, err := c.dial(c.ctx, c.url, c.dialOpts, c.keepAlive)
 		if err == nil {
@@ -281,6 +361,10 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 		if link != nil {
 			_ = link.Close()
 		}
+		if !recovered && attempt >= 2 && !now().Before(nextRecovery) {
+			recovered = c.recoverSessions()
+			nextRecovery = now().Add(recoveryRetryInterval)
+		}
 
 		delay := backoffDelay(attempt, c.backoff, rand.Float64()) //nolint:gosec // retry jitter is not a security decision
 		timer := time.NewTimer(delay)
@@ -298,6 +382,21 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 	}
 }
 
+func (c *reconnectingConn) recoverSessions() bool {
+	if c.recover == nil {
+		return true
+	}
+	c.stateMu.Lock()
+	attached := len(c.resumes) > 0
+	c.stateMu.Unlock()
+	if !attached {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, 90*time.Second)
+	defer cancel()
+	return c.recover(ctx) == nil
+}
+
 func (c *reconnectingConn) retire(ref connectionRef) {
 	c.reconnectMu.Lock()
 	defer c.reconnectMu.Unlock()
@@ -307,7 +406,7 @@ func (c *reconnectingConn) retire(ref connectionRef) {
 func (c *reconnectingConn) retireLocked(ref connectionRef) {
 	c.stateMu.Lock()
 	if c.isCurrentLocked(ref) {
-		c.current = connectionRef{}
+		c.invalidateCurrentLocked()
 	}
 	c.stateMu.Unlock()
 }
@@ -327,7 +426,7 @@ func (c *reconnectingConn) observeWriteLocked(frame protocol.Frame) {
 	}
 	switch msg.Type {
 	case protocol.TypeAttach, protocol.TypeAttachDetached:
-		state := resumeState{attach: msg}
+		state := resumeState{attach: msg, inputGeneration: c.current.generation}
 		if msg.LastSeq != nil {
 			state.next = *msg.LastSeq
 			state.haveNext = true
@@ -342,6 +441,11 @@ func (c *reconnectingConn) observeFrame(ref connectionRef, frame protocol.Frame)
 	c.reconnectMu.Lock()
 	defer c.reconnectMu.Unlock()
 
+	if err := c.resetResumeInput(ref, frame); err != nil {
+		c.retireLocked(ref)
+		ref.link.fail(err)
+		return protocol.Frame{}, false, err
+	}
 	c.stateMu.Lock()
 	if !c.isCurrentLocked(ref) {
 		c.stateMu.Unlock()
@@ -349,13 +453,38 @@ func (c *reconnectingConn) observeFrame(ref connectionRef, frame protocol.Frame)
 	}
 	frame, drop, err := c.observeFrameLocked(ref.generation, frame)
 	if err != nil {
-		c.current = connectionRef{}
+		c.invalidateCurrentLocked()
 	}
 	c.stateMu.Unlock()
 	if err != nil {
 		ref.link.fail(err)
 	}
 	return frame, drop, err
+}
+
+func (c *reconnectingConn) resetResumeInput(ref connectionRef, frame protocol.Frame) error {
+	if ref.generation == 1 || frame.Kind != protocol.KindControl {
+		return nil
+	}
+	msg, err := protocol.DecodeControl(frame.Payload)
+	if err != nil || msg.Type != protocol.TypeAttached {
+		return nil
+	}
+	c.stateMu.Lock()
+	_, tracked := c.resumes[msg.SessionID]
+	needed := tracked && c.isCurrentLocked(ref) && c.inputBarrierGeneration != ref.generation
+	reset := c.inputBarrier
+	c.stateMu.Unlock()
+	if !needed || reset == nil {
+		return nil
+	}
+	if err := reset(); err != nil {
+		return fmt.Errorf("transport: reset input before resuming session %s: %w", msg.SessionID, err)
+	}
+	c.stateMu.Lock()
+	c.inputBarrierGeneration = ref.generation
+	c.stateMu.Unlock()
+	return nil
 }
 
 func (c *reconnectingConn) observeFrameLocked(generation uint64, frame protocol.Frame) (protocol.Frame, bool, error) {
@@ -369,6 +498,7 @@ func (c *reconnectingConn) observeFrameLocked(generation uint64, frame protocol.
 		switch msg.Type {
 		case protocol.TypeAttached:
 			if tracked {
+				state.inputGeneration = generation
 				if msg.Snapshot {
 					if state.haveNext && msg.Seq < state.next {
 						return protocol.Frame{}, false, fmt.Errorf(
@@ -397,10 +527,9 @@ func (c *reconnectingConn) observeFrameLocked(generation uint64, frame protocol.
 		case protocol.TypeDetach, protocol.TypeExit:
 			delete(c.resumes, msg.SessionID)
 		case protocol.TypeError:
-			if tracked && state.attach.Type == protocol.TypeAttachDetached {
-				// A refused claim must not become a delayed attach after the
-				// next link loss. Keep the original conditional request while
-				// resuming, so reconnecting cannot evict another window either.
+			if tracked {
+				// A refused resume, including an interrupted session after a
+				// cold boot, cannot accept pending input or attach later.
 				delete(c.resumes, msg.SessionID)
 			}
 		}
