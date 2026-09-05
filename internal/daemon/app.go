@@ -37,6 +37,7 @@ const (
 // Config identifies the state and optional listeners owned by a daemon. Zero
 // TailnetPort and SSHPort values disable their corresponding listeners.
 type Config struct {
+	SSHSessionHandler    sshd.SessionHandlerFactory
 	StateDir             string
 	TailnetPort          uint16
 	SSHPort              uint16
@@ -427,8 +428,13 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return err
 	}
 	if cfg.SSHPort != 0 {
+		var sessionHandler sshd.SessionHandler
+		if cfg.SSHSessionHandler != nil {
+			sessionHandler = cfg.SSHSessionHandler(stateDir)
+		}
 		for _, address := range sshAddrs {
 			listener.sshConfigs = append(listener.sshConfigs, sshd.Config{
+				Handler:        sessionHandler,
 				HostKey:        meshPrivateKey,
 				AuthorizedKeys: filepath.Join(stateDir, "authorized_keys"),
 				Addr:           net.JoinHostPort(address, strconv.Itoa(int(cfg.SSHPort))),

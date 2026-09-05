@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +46,29 @@ func TestLoadOrCreateIsStableAndSecure(t *testing.T) {
 	}
 	if !bytes.Equal(private2, private1) {
 		t.Fatal("private key changed between loads")
+	}
+}
+
+func TestLoadReadsAnExistingIdentityWithoutCreatingOne(t *testing.T) {
+	stateDir := t.TempDir()
+	want, _, err := LoadOrCreate(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != want.ID || !bytes.Equal(got.PublicKey, want.PublicKey) {
+		t.Fatalf("loaded host = %#v, want %#v", got, want)
+	}
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := Load(missing); err == nil {
+		t.Fatal("Load accepted a missing identity")
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Load changed missing state directory: %v", err)
 	}
 }
 

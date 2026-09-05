@@ -1,0 +1,24 @@
+[1;38;2;196;167;255mmesh[m[2m › [m[1;38;2;232;222;255mpc[m[2m  pc.tail.example[m                                  [1;38;2;255;184;108m▲ offline  ·  cached[m
+[2mCached sessions may be stale. Wake the host before starting work.[m
+
+[1;38;2;157;124;255m› [m[1;38;2;157;124;255m○[m [1;38;2;232;222;255mmesh · claude[m                                 [2mdetached[m  [2mstarted 4m ago[m  [2m7K3D[m
+  [38;2;166;227;161m●[m site · npm                                    [2min use[m    [2mstarted 8m ago[m  [2m91AZ[m
+
+[2m┌─ [m[1;38;2;232;222;255mmesh · claude  ·  7K3D[m[2m ─────────────────────────────────────────────────────┐[m
+[2m│[m [2mstarted in  [m /home/shaul/src/mesh                                            [2m│[m
+[2m│[m [2mforeground  [m [2munavailable[m                                                     [2m│[m
+[2m│[m [2mlaunched    [m claude --dangerously-skip-permissions                           [2m│[m
+[2m│[m [2mactivity    [m catalog detached  ·  last output unavailable  ·  started 4m ago [2m│[m
+[2m├─ [m[1;38;2;255;184;108mlive view unavailable[m[2m ──────────────────────────────────────────────────────┤[m
+[2m│[m [38;2;216;222;233mLive view unavailable while the host is offline.[m                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m└──────────────────────────────────────────────────────────────────────────────┘[m
+[1;38;2;196;167;255m↑/↓[m  [1;38;2;196;167;255menter[m [2mtry attach[m  [1;38;2;196;167;255mspace[m [2mscreen[m  [1;38;2;196;167;255mw[m [2mwake[m  [1;38;2;196;167;255mesc[m [2mhosts[m

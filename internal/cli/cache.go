@@ -95,6 +95,12 @@ func (c *SQLiteCatalogCache) LoadAllServices(ctx context.Context) (map[string][]
 	return result, nil
 }
 
+// LoadServices returns only the selected host's cached service snapshot. The
+// picker uses this path on its hot refresh loop instead of scanning all hosts.
+func (c *SQLiteCatalogCache) LoadServices(ctx context.Context, host HostRecord) ([]storage.CachedService, error) {
+	return c.store.ListCachedServices(ctx, storage.HostID(host.ID))
+}
+
 // SaveServices atomically replaces the cached list after a live service.list.
 func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, privateName string, rows []protocol.ServiceInfo) error {
 	now := c.now().UTC()
@@ -108,7 +114,7 @@ func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, 
 			HostID: storage.HostID(host.ID), PrivateName: privateName,
 			Service: meshserve.Service{
 				Name: validated.Name, Kind: meshserve.Kind(validated.Kind), Target: validated.Target,
-				PublicName: validated.PublicName, WakeOnRequest: validated.WakeOnRequest,
+				PublicName: validated.PublicName, WakeOnRequest: validated.WakeOnRequest, Isolate: validated.Isolate,
 			},
 			Healthy: validated.Healthy, Problem: validated.Problem, ObservedAt: now,
 		}

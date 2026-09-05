@@ -19,6 +19,7 @@ import (
 	"github.com/shaul/mesh/internal/bootstrap"
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/tui"
 )
 
@@ -36,6 +37,9 @@ const maximumTailscaleAuthKeyFileBytes = 64 << 10
 
 func commandDependencies() cli.Dependencies {
 	return cli.Dependencies{
+		SSHSessionHandler: func(stateDir string) sshd.SessionHandler {
+			return cli.NewSSHSessionHandler(stateDir, tui.NewTerminalPicker)
+		},
 		Bootstrap: newBootstrapFunc(bootstrap.Run, bootstrapUI{
 			input:  os.Stdin,
 			output: os.Stderr,
@@ -50,7 +54,8 @@ func commandDependencies() cli.Dependencies {
 				return current.Username, nil
 			},
 		}),
-		Picker: tui.NewCLIPicker(os.Stdin, os.Stdout),
+		Picker:       tui.NewCLIPicker(os.Stdin, os.Stdout),
+		WindowPicker: tui.NewCLIWindowPicker(os.Stdin, os.Stdout),
 	}
 }
 

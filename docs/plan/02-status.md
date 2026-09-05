@@ -1,18 +1,23 @@
 # Status
 
-Updated 2026-09-01.
+Updated 2026-09-05.
 
 ## Done
 
-The session and transport core, product CLI, Tailscale-provisioning SSH
-bootstrap, packaging, origin serving core and service catalog, private DNS/TLS
-path, authenticated public edge, and the locked SSH front door are complete.
+The session and transport core, live session inspector, terminal-window entry, product CLI,
+Tailscale-provisioning SSH bootstrap, packaging, origin serving core and service
+catalog, private DNS/TLS path, authenticated public edge, and the locked SSH
+front door and sessions over SSH are complete.
 
-- `internal/protocol` — framing + control messages, shared by every transport
+- `internal/protocol` — framing, control messages, bounded structured preview
+  styles, and exact host/session containment paths shared by every transport
 - `internal/session` — byte-offset replay ring, session IDs
 - `internal/worker` — PTY ownership, Unix socket, attach/steal, bounded outbound
-  queues, resize, signals, kill escalation, `meta.json` lifecycle record
-- `internal/terminal` — rendered screen snapshots for clean reattachment (T01)
+  queues, resize, signals, kill escalation, live process inspection, validated
+  attachment-containment state, and `meta.json` lifecycle records
+- `internal/terminal` — rendered screen snapshots for clean reattachment and
+  bounded previews with structured terminal styles and OSC title/directory
+  metadata (T01, T22)
 - `internal/storage` — SQLite session, host, and cached-service store (T03, T14)
 - `internal/daemon` — worker discovery, reconciliation, relay, lifecycle,
   signed certificate installation, service-only TLS, a bounded public request
@@ -26,10 +31,18 @@ path, authenticated public edge, and the locked SSH front door are complete.
   safety, and idempotent systemd/launchd installers (T08, T20)
 - `internal/cli`, `cmd/mesh` — Cobra + Fang product surface, versioned host
   address book, concurrent live/cached host catalogs, remote create, attach,
-  logs, kill, signals, the T09 picker boundary, and service preview,
-  publication, listing, caching, and removal (T07, T14)
+  logs, kill, signals, live session inspection, launch-directory listing, the
+  picker boundary, exact nested-containment discovery and pre-picker capture,
+  and service preview, publication, listing, caching, and removal (T07, T09,
+  T14, T22)
 - `internal/tui` — Bubble Tea host/session picker with live/stale state, wake,
-  new, resume, attach, and terminal-safe raw-mode handoff (T09)
+  new, resume, attach, selected-session details, current-screen preview, and
+  frozen pre-picker previews for every known containing session, plus
+  terminal-safe raw-mode handoff (T09, T22)
+- Terminal entry — silent `mesh --window`, detached-only `--take`, compact
+  resume prompt, local-first asynchronous picker, live nested detach ownership,
+  interrupted-session relaunch and durable forgetting, and terminal setup
+  instructions (T23)
 - `.github`, `.goreleaser.yaml`, `scripts/install` — reproducible release
   archives, checksum-gated installers, systemd/launchd services, Homebrew Cask,
   immutable CI actions, seven-linter boundary checks, and retained packaging
@@ -47,7 +60,7 @@ path, authenticated public edge, and the locked SSH front door are complete.
   acknowledgement (T13)
 - `internal/sshd` — Wish-based key-only SSH on discovered Tailnet addresses,
   the shared Mesh host key, live `authorized_keys` revocation, and daemon-owned
-  shutdown (T15)
+  shutdown, with local sessions, the shared picker, and scriptable `ls` (T15, T17)
 
 Verified 2026-08-30: clean formatting and module/generation diffs, the unlimited
 seven-linter policy, `go vet ./...`, `go test -race ./...`, all three retained
@@ -59,24 +72,91 @@ seven-linter policy, `go vet ./...`, `go test -race ./...`, and all twenty
 scripts in `integration/`. `scripts/check-t20.sh` also verifies the focused
 provisioning contract and the installer harness.
 
+Verified 2026-09-05 after T22: clean module and formatting diffs, the focused
+T22 contract and Linux/Darwin cross-builds, change-scoped seven-linter checks,
+`go vet ./...`, `go test -race ./...`, and all twenty-one scripts in
+`integration/`. The retained session-inspection regression crosses a real
+WebSocket, daemon lifecycle, Unix worker, process observer, and terminal
+emulator without attaching or resizing the session. The integration runner
+also isolates host configuration and Mesh nesting identity for each script, so
+running it from inside a session cannot change detach keys or catalog output.
+
+T22's current contract also carries the immediate-to-outer attachment path
+through every attach, obtains that path from the containing worker, captures
+each known containing screen before the picker renders, and preserves terminal
+presentation as validated structured runs rather than raw ANSI. Focused tests
+cover path bounds and cycles, rejection before attachment takeover, legacy
+single-session fallback, frozen containing-session previews, plain-preview
+fallback, and style isolation at the panel boundary.
+
+Verified 2026-09-05 after T23: clean module and formatting diffs,
+`go vet ./...`, `go test -race ./...`, all twenty-six scripts in
+`integration/`, and CGO-disabled Linux amd64/arm64 and Darwin arm64 builds.
+`scripts/check-t23.sh` retains the focused checks and five real-PTY scenarios,
+including loopback WebSocket nesting, concurrent window claims, terminal crash
+recovery, and interrupted-session relaunch with online and offline retirement.
+Ghostty 1.3.1 validated the documented terminal command. Change-scoped checks
+pass all seven linters; the full lint run reports eleven existing findings in
+unchanged bootstrap, installer, and tag files.
+
+T23 narrows pre-picker containment capture to local screens so local rendering
+never waits for a remote host. Remote containing identities retain unavailable
+frozen previews for that picker instance; ordinary remote inspections still
+load on selection. Legacy detach hints go to stderr and leave terminal output
+byte-for-byte intact.
+
+Runtime feature availability normally follows the worker process version, not
+only the installed binary version. The Linux and Darwin service definitions
+preserve session workers when an installer restarts the daemon. For an older
+worker that returns a plain inspection, the new daemon replays only that
+worker's bounded raw ANSI stream at its observed PTY size and uses recovered
+styles only when every row matches the authoritative inspection. No guessed
+highlighting is applied, and the client never receives raw controls. A failed
+match falls back to escaped plain text. A worker or daemon that predates
+inspection yields an unavailable live view. A mixed-version containment path
+supplies only the exact prefix available from chain-aware workers and the proven
+immediate-session fallback; none of these cases attaches to or mutates the
+inspected session.
+
 Private origin names and wildcard certificates are operational, including
 staging isolation and hot live rotation. The public edge is operational in both
 loopback proxy and direct-TLS modes, including restart/offline ownership and
 profile-isolated certificates. Real Cloudflare, Let's Encrypt, domain, tailnet,
 and outside-tailnet acceptance remains an operator check because this
 development machine has none of those credentials or peers. Step 9's shared
-front door is complete. Its session, file, and tunnel handlers remain.
+front door and session handler are complete. Its file and tunnel handlers remain.
+
+Verified 2026-09-05 after T17: `go mod tidy -diff`, formatting checks,
+`go vet ./...`, `go test -race ./...`, all 27 integration scripts, and
+CGO-disabled Linux amd64/arm64 and Darwin arm64 builds. The stock OpenSSH
+scenario verifies picker/attach handoff, resize, takeover across local and SSH
+clients, shell survival after killing SSH, new sessions, and exit statuses.
+SSH tests retain a 100-cycle goroutine check, independent channel cancellation,
+and input EOF while output is blocked by an unread SSH channel.
+All seven linters pass on changed lines. Full lint still reports eleven existing
+findings in unchanged bootstrap, installer, and tag files.
+
+The final review also preserves `--isolate` in cached service catalogs through
+database migration 6 and a close/reopen regression. Client-side containment
+checks protect preserved legacy workers from self-attachment. Nesting capability
+propagates through the full attachment chain, and workers reject takeovers that
+would break existing nested detach keys.
+
+The integration run also exposed an exit race in one-shot kill requests. Workers
+now wait for admitted kill responders to send their bounded acknowledgements
+before returning, so process shutdown cannot discard a successful kill response.
 
 ## Complete tasks
 
 T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websocket
 transport · T06 host identity · T07 CLI surface · T08 ssh bootstrap · T09 picker
 TUI · T10 packaging · T11 serving core · T12 private names · T13 public edge ·
-T14 `mesh serve` · T15 SSH front door · T20 Tailscale provisioning.
+T14 `mesh serve` · T15 SSH front door · T17 sessions over SSH · T20 Tailscale provisioning · T22 live
+session inspector · T23 Mesh as your terminal.
 
 ## Build order coverage
 
-Tasks are the unit of work; the nine build-order steps in `00-overview.md` are
+Tasks are the unit of work; the ten build-order steps in `00-overview.md` are
 the unit of completeness. Track both. A step with no task is invisible to a
 task list, which is how step 6 stayed unbuilt while every task was green.
 
@@ -84,22 +164,22 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 |---|---|---|
 | 1 Local persistent session | T01, T02, T03, T04 | complete |
 | 2 Remote session over Tailscale | T05, T06 | complete |
-| 3 Product CLI | T07, T09 | complete |
+| 3 Product CLI | T07, T09, T22 | complete |
 | 4 SSH bootstrap | T08, T20, T21 | complete |
 | 5 Crash and restart recovery | folded into T04 | complete |
 | 6 Pi power control | **T19** | **not started** |
 | 7 Packaging | T10 | complete |
 | 8 Serving | T11, T12, T13, T14 | complete |
-| 9 SSH front door | T15, T16, T17, T18 | T15 complete |
+| 9 SSH front door | T15, T16, T17, T18 | T15, T17 complete |
+| 10 Mesh as your terminal | T23 | complete |
 
 ## Next
 
-T16, T17, T18, and T19 are independent and unblocked.
+T16, T18, and T19 are independent and unblocked.
 
 | Task | Owns | Blocked by |
 |---|---|---|
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
-| T17 sessions over SSH | `internal/sshd/session.go` | T09, T15 |
 | T18 reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
 | T19 Pi power control | `internal/wake/`, `internal/inhibit/` | T06, T07, T08, T09 |
 
@@ -108,7 +188,8 @@ the picker, the edge, the protocol, and the services table; every one of them
 currently reaches a nil dependency or `noWaker`. It carries two open decisions
 (D25 inhibitor mechanism, D26 witness transport) to resolve before implementing.
 
-Pick one of T16, T17, T18, or T19 next.
+Pick T19 next to complete Pi wake and sleep inhibition. T16 and T18 can proceed
+independently.
 
 ## Known defects
 

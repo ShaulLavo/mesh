@@ -17,7 +17,7 @@ So the SSH server is a *front door for people*, never a transport for daemons.
 
 ```
 ssh pc.mesh.shaulavo.dev              # picker, then attach
-ssh pc.mesh.shaulavo.dev -t 7K3D      # straight into one session
+ssh -t pc.mesh.shaulavo.dev 7K3D      # straight into one session
 ssh pc.mesh.shaulavo.dev ls           # one-shot, scriptable, no PTY
 ```
 
@@ -30,8 +30,9 @@ Host *.mesh.shaulavo.dev
     IdentitiesOnly yes
 ```
 
-The session handler is the same picker T09 builds, rendered through Wish's
-Bubble Tea middleware instead of a local terminal. Detach, steal, replay and
+The session handler uses T09's picker through a terminal adapter inside Wish.
+The adapter keeps the existing Bubble Tea v2 model, which the pinned Wish v1
+middleware cannot accept. Detach, steal, replay and
 resize behave identically, because underneath it is the same attachment against
 the same worker.
 
@@ -139,10 +140,10 @@ nobody asked for, and anything reachable without an authorized key.
 |---|---|---|
 | T15 SSH front door (complete) | `internal/sshd/` | — |
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
-| T17 Sessions over SSH | `internal/sshd/session.go` | T09, T15 |
+| T17 Sessions over SSH (complete) | `internal/sshd/session.go` | T09, T15 |
 | T18 Reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
 
-T15 is complete. The other three tasks are independent.
+T15 and T17 are complete. T16 and T18 are independent.
 
 ## What we verified before planning this
 

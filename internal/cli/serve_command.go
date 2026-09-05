@@ -46,6 +46,7 @@ func (a *application) serveCommand() *cobra.Command {
 		files            bool
 		publicName       string
 		wakeOnRequest    bool
+		isolate          bool
 		yes              bool
 		allowCredentials bool
 	)
@@ -59,7 +60,7 @@ func (a *application) serveCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runServe(cmd, args[0], args[1], serveFlags{
 				route: route, files: files, publicName: publicName,
-				wakeOnRequest: wakeOnRequest, yes: yes, allowCredentials: allowCredentials,
+				wakeOnRequest: wakeOnRequest, isolate: isolate, yes: yes, allowCredentials: allowCredentials,
 			})
 		},
 	}
@@ -67,6 +68,7 @@ func (a *application) serveCommand() *cobra.Command {
 	command.Flags().BoolVar(&files, "files", false, "enable directory listings")
 	command.Flags().StringVar(&publicName, "public", "", "exact public hostname under shaulavo.dev")
 	command.Flags().BoolVar(&wakeOnRequest, "wake-on-request", false, "ask the public edge to wake this origin")
+	command.Flags().BoolVar(&isolate, "isolate", false, "send cross-origin isolation headers so the page can use SharedArrayBuffer")
 	command.Flags().BoolVar(&yes, "yes", false, "skip the public confirmation prompt")
 	command.Flags().BoolVar(&allowCredentials, "allow-credentials", false, "allow credential-like names in a public directory")
 	command.AddCommand(a.serveListCommand())
@@ -78,6 +80,7 @@ type serveFlags struct {
 	files            bool
 	publicName       string
 	wakeOnRequest    bool
+	isolate          bool
 	yes              bool
 	allowCredentials bool
 }
@@ -121,6 +124,7 @@ func (a *application) runServe(cmd *cobra.Command, hostAlias, target string, fla
 	}
 	requested := protocol.ServiceInfo{
 		Name: name, Kind: kind, Target: target, PublicName: flags.publicName, WakeOnRequest: flags.wakeOnRequest,
+		Isolate: flags.isolate,
 	}
 	previewCtx, cancelPreview := context.WithTimeout(cmd.Context(), serviceMutationTimeout)
 	preview, privateName, err := previewRemoteService(previewCtx, host, a.dependencies.DialControl, requested, flags.allowCredentials)

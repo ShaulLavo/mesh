@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/worker"
@@ -60,6 +61,9 @@ func List() ([]Session, error) {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
+		if _, err := os.Lstat(paths.Forgotten(dir)); err == nil {
+			continue
+		}
 		// A directory still carrying the launching marker has not published
 		// itself: its metadata may be written but its socket is not accepting
 		// yet, so listing it reports a live session as interrupted. The
@@ -125,6 +129,14 @@ func alive(dir string) bool {
 // Spawn starts a detached worker for command and returns the new session once
 // its socket is accepting connections.
 func Spawn(command []string, cwd string) (Session, error) {
+	stateDir, err := paths.StateDir()
+	if err != nil {
+		return Session{}, err
+	}
+	host, _, err := identity.LoadOrCreate(stateDir)
+	if err != nil {
+		return Session{}, fmt.Errorf("load local host identity: %w", err)
+	}
 	sessionsDir, err := paths.SessionsDir()
 	if err != nil {
 		return Session{}, err
@@ -136,9 +148,12 @@ func Spawn(command []string, cwd string) (Session, error) {
 	}
 	launched, err := worker.LaunchDetached(worker.LaunchConfig{
 		SessionsDir: sessionsDir,
+		HostID:      host.ID,
 		Command:     command,
 		Cwd:         cwd,
 		Env:         os.Environ(),
+		Term:        clientTerm(),
+		Depth:       SessionDepth() + 1,
 		Cols:        cols,
 		Rows:        rows,
 	})

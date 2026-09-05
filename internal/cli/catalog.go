@@ -13,6 +13,7 @@ import (
 
 // HostSessions is one host's live catalog or its last cached catalog.
 type HostSessions struct {
+	Local    bool
 	Host     HostRecord
 	Sessions []protocol.SessionInfo
 	Stale    bool

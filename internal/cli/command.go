@@ -18,6 +18,8 @@ import (
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -53,10 +55,109 @@ type BootstrapFunc func(context.Context, AddRequest) (BootstrapResult, error)
 // WakeFunc wakes one adopted host through a configured power controller.
 type WakeFunc func(context.Context, HostRecord) error
 
-// PickerInput is the complete live-or-cached catalog shown by T09.
+// ContainmentFunc returns the exact immediate-to-outer Mesh sessions whose
+// terminal screens receive this process's output.
+type ContainmentFunc func(context.Context) []protocol.SessionIdentity
+
+// PickerInput contains the catalog and the optional live readers used by the
+// interactive picker.
 type PickerInput struct {
-	Hosts []HostSessions
+	Hosts     []HostSessions
+	LoadHosts func(context.Context) ([]HostSessions, error)
+	Inspect   PickerInspectFunc
+	Refresh   PickerRefreshFunc
+	Action    PickerSessionActionFunc
+	// ContainingSessions are the exact terminal screens that receive this
+	// picker's output. Each available snapshot was captured before the picker
+	// wrote its first frame.
+	ContainingSessions []PickerContainingSession
+	// OpenHostAlias keeps the session browser on this host after waking it and
+	// refreshing the catalog. An empty alias opens the host list.
+	OpenHostAlias string
 }
+
+// PickerContainingSession pairs one exact mirrored terminal with the last
+// screen observed before the picker opened. A nil Snapshot means that Mesh
+// proved the identity but could not capture that screen safely.
+type PickerContainingSession struct {
+	Identity   protocol.SessionIdentity
+	Snapshot   *SessionInspection
+	ReceivedAt time.Time
+}
+
+// PickerHostSnapshot is the current data rendered for one open host. A nil
+// Services value keeps the picker’s last service rows but marks that view stale
+// when that side of the refresh could not be read.
+type PickerHostSnapshot struct {
+	Sessions HostSessions
+	Services *PickerServiceCatalog
+}
+
+// PickerServiceCatalog is one host’s live or cached served websites.
+type PickerServiceCatalog struct {
+	Rows  []ServiceCatalogRow
+	Stale bool
+}
+
+// PickerRefreshFunc reads the current data for one open host.
+type PickerRefreshFunc func(context.Context, string) (PickerHostSnapshot, error)
+
+// PickerSessionAction identifies an in-panel mutation of one remote session.
+type PickerSessionAction uint8
+
+const (
+	PickerKillSession PickerSessionAction = iota + 1
+	PickerRemoveSession
+)
+
+// PickerSessionActionRequest names one session mutation without exposing host
+// connection details to the picker.
+type PickerSessionActionRequest struct {
+	HostAlias string
+	SessionID string
+	Action    PickerSessionAction
+}
+
+// PickerSessionActionFunc performs a mutation while the picker stays open.
+type PickerSessionActionFunc func(context.Context, PickerSessionActionRequest) error
+
+// PickerInspectRequest identifies one highlighted session and bounds the
+// preview it may return. The host alias is resolved against the same catalog
+// that the picker displays, so the UI never handles connection details.
+type PickerInspectRequest struct {
+	HostAlias   string
+	SessionID   string
+	PreviewCols int
+	PreviewRows int
+}
+
+// SessionDirectorySource says how the host observed a live working directory.
+type SessionDirectorySource uint8
+
+const (
+	SessionDirectoryUnknown SessionDirectorySource = iota
+	SessionDirectoryProcess
+	SessionDirectoryTerminal
+)
+
+// SessionInspection is the live, non-durable view of one selected session.
+// Launch command and directory stay in SessionInfo because they describe a
+// different fact and remain useful while a host is offline.
+type SessionInspection struct {
+	ObservedAt        time.Time
+	CurrentDirectory  string
+	DirectorySource   SessionDirectorySource
+	ForegroundCommand string
+	TerminalTitle     string
+	LastOutputAt      *time.Time
+	Attached          bool
+	Preview           []string
+	StyledPreview     []protocol.PreviewLine
+	Nested            []protocol.SessionIdentity
+}
+
+// PickerInspectFunc reads one live session without attaching to it.
+type PickerInspectFunc func(context.Context, PickerInspectRequest) (SessionInspection, error)
 
 // PickerSelection tells the CLI which normal action to run after T09 exits.
 type PickerSelection struct {
@@ -64,24 +165,44 @@ type PickerSelection struct {
 	SessionID string
 	New       bool
 	Wake      bool
-	// Kill and Remove act on the named session and return to the picker, so
-	// tidying up does not mean leaving and coming back.
-	Kill   bool
-	Remove bool
+	Relaunch  bool
+	TakeOver  bool
 }
+
+// WindowInput is the local catalog available before any network discovery.
+type WindowInput struct {
+	Sessions    []protocol.SessionInfo
+	Inspect     PickerInspectFunc
+	Action      PickerSessionActionFunc
+	HostAlias   string
+	HostID      string
+	HostAliases map[string]string
+}
+
+type WindowSelection struct {
+	SessionID  string
+	New        bool
+	FullPicker bool
+	Relaunch   bool
+}
+
+type WindowPickerFunc func(context.Context, WindowInput) (WindowSelection, error)
 
 // PickerFunc owns only selection UI. The CLI still owns create and attach.
 type PickerFunc func(context.Context, PickerInput) (PickerSelection, error)
 
 // Dependencies are the replaceable product edges used by later tasks and tests.
 type Dependencies struct {
+	SSHSessionHandler     sshd.SessionHandlerFactory
 	Bootstrap             BootstrapFunc
 	Wake                  WakeFunc
 	Picker                PickerFunc
+	WindowPicker          WindowPickerFunc
 	ReconcilePrivateNames PrivateNamesFunc
 	DialHost              HostDialer
 	DialControl           HostDialer
 	ConfirmPublic         ConfirmPublicFunc
+	Containment           ContainmentFunc
 	Now                   func() time.Time
 	Stdin                 *os.File
 	Stdout                *os.File
@@ -104,6 +225,9 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	if dependencies.Now == nil {
 		dependencies.Now = time.Now
 	}
+	if dependencies.Containment == nil {
+		dependencies.Containment = discoverContainingSessions
+	}
 	if dependencies.ReconcilePrivateNames == nil {
 		dependencies.ReconcilePrivateNames = reconcilePrivateNames
 	}
@@ -125,6 +249,8 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 		resume    bool
 		detachKey string
 		raw       bool
+		window    bool
+		take      bool
 	)
 	root := &cobra.Command{
 		Use:   "mesh [host|session] [-- command...]",
@@ -153,6 +279,15 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if window {
+				if len(args) != 0 || resume {
+					return errors.New("--window cannot be combined with a host, session, command, or --resume")
+				}
+				return app.runWindow(cmd, take, detachKey, raw)
+			}
+			if take {
+				return errors.New("--take requires --window")
+			}
 			return app.runRoot(cmd, args, resume, detachKey, raw)
 		},
 	}
@@ -162,6 +297,9 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	root.Flags().BoolVarP(&resume, "resume", "r", false, "resume the newest active session on the host")
 	root.Flags().StringVar(&detachKey, "detach-key", "", "key that detaches, such as ctrl+] or none")
 	root.Flags().BoolVar(&raw, "raw", false, "pass every input byte through without a detach key")
+	root.Flags().BoolVar(&window, "window", false, "open a terminal window with a local persistent session")
+	root.Flags().BoolVar(&take, "take", false, "resume the newest detached session without a prompt; requires --window")
+	root.PersistentFlags().String("leave-key", "ctrl+^", "key that leaves all nested sessions, or none")
 
 	// Grouped so the commands used daily are not sorted in among the ones
 	// touched once per machine.
@@ -232,6 +370,10 @@ func (a *application) runRoot(cmd *cobra.Command, args []string, resume bool, de
 }
 
 func (a *application) runPicker(cmd *cobra.Command, hosts []HostRecord, detachKey string, raw bool) error {
+	return a.runPickerOpen(cmd, hosts, detachKey, raw, "")
+}
+
+func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, detachKey string, raw bool, openHostAlias string) error {
 	if a.dependencies.Picker == nil {
 		return errors.New("the interactive picker is not installed yet; run mesh <host> or mesh <session-id>")
 	}
@@ -240,41 +382,165 @@ func (a *application) runPicker(cmd *cobra.Command, hosts []HostRecord, detachKe
 		return err
 	}
 	defer cache.Close() //nolint:errcheck // command result takes precedence
+	refreshSessions := func(ctx context.Context, alias string) (HostSessions, error) {
+		if alias == localHostAlias {
+			return localPickerCatalog()
+		}
+		host, err := hostWithAlias(hosts, alias)
+		if err != nil {
+			return HostSessions{}, err
+		}
+		return a.refreshPickerSessions(ctx, host, cache)
+	}
+	refreshHost := func(ctx context.Context, alias string) (PickerHostSnapshot, error) {
+		if alias == localHostAlias {
+			local, err := localPickerCatalog()
+			return PickerHostSnapshot{Sessions: local}, err
+		}
+		host, err := hostWithAlias(hosts, alias)
+		if err != nil {
+			return PickerHostSnapshot{}, err
+		}
+		return a.refreshPickerHost(ctx, host, cache)
+	}
+	containingIdentities := a.dependencies.Containment(cmd.Context())
+	if err := protocol.ValidateContainingSessions(containingIdentities); err != nil {
+		return fmt.Errorf("read terminal containment: %w", err)
+	}
+	containingIdentities = protocol.CloneSessionIdentities(containingIdentities)
+	var containingSessions []PickerContainingSession
+	containmentCaptured := false
 	for {
-		catalog, err := CollectHostSessions(cmd.Context(), hosts, defaultCatalogTimeout, a.queryHost, cache)
+		local, err := localPickerCatalog()
 		if err != nil {
 			return err
 		}
-		selection, err := a.dependencies.Picker(cmd.Context(), PickerInput{Hosts: catalog})
+		catalog := []HostSessions{local}
+		for _, host := range hosts {
+			cached, cacheErr := cache.Load(cmd.Context(), host)
+			catalog = append(catalog, HostSessions{Host: host, Sessions: cached, Stale: true, CacheErr: cacheErr})
+		}
+		if !containmentCaptured {
+			containmentCaptured = true
+			containingSessions = a.capturePickerContainingSessions(cmd.Context(), catalog, containingIdentities)
+		}
+		pickerContext, cancelPicker := context.WithCancel(cmd.Context())
+		pickerOperations := newPickerOperationGate()
+		selection, err := a.dependencies.Picker(pickerContext, PickerInput{
+			Hosts: catalog,
+			LoadHosts: func(ctx context.Context) ([]HostSessions, error) {
+				if !pickerOperations.begin(ctx) {
+					return nil, context.Canceled
+				}
+				defer pickerOperations.done()
+				return CollectHostSessions(ctx, hosts, defaultCatalogTimeout, a.queryHost, cache)
+			},
+			OpenHostAlias:      openHostAlias,
+			ContainingSessions: clonePickerContainingSessions(containingSessions),
+			Refresh: func(ctx context.Context, alias string) (PickerHostSnapshot, error) {
+				if !pickerOperations.begin(ctx) {
+					return PickerHostSnapshot{}, context.Canceled
+				}
+				defer pickerOperations.done()
+				return refreshHost(ctx, alias)
+			},
+			Action: func(ctx context.Context, request PickerSessionActionRequest) error {
+				if !pickerOperations.begin(ctx) {
+					return context.Canceled
+				}
+				defer pickerOperations.done()
+				return a.pickerSessionAction(ctx, hosts, request)
+			},
+			Inspect: func(ctx context.Context, request PickerInspectRequest) (SessionInspection, error) {
+				if !pickerOperations.begin(ctx) {
+					return SessionInspection{}, context.Canceled
+				}
+				defer pickerOperations.done()
+				if request.HostAlias == localHostAlias {
+					return inspectLocalSession(ctx, request)
+				}
+				host, err := hostWithAlias(hosts, request.HostAlias)
+				if err != nil {
+					return SessionInspection{}, err
+				}
+				return inspectRemoteSession(ctx, host, a.dependencies.DialControl, request.SessionID, request.PreviewCols, request.PreviewRows)
+			},
+		})
+		cancelPicker()
+		pickerOperations.stopAndWait()
 		if err != nil {
 			return err
 		}
 		if err := validatePickerSelection(selection); err != nil {
 			return err
 		}
-		if selection.SessionID != "" && (selection.Kill || selection.Remove) {
-			if err := a.pickerSessionAction(cmd, hosts, selection); err != nil {
-				if _, printErr := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", SafeTerminalText(err.Error())); printErr != nil {
-					return printErr
-				}
-			}
-			continue
-		}
 		if selection.SessionID != "" {
-			resolved, err := findCatalogSession(catalog, selection.SessionID, selection.HostAlias)
+			if selection.HostAlias == localHostAlias {
+				current, err := Find(selection.SessionID)
+				if err != nil {
+					return err
+				}
+				if selection.Relaunch {
+					return a.relaunchSession(cmd, resolvedSession{local: &current}, detachKey, raw, false)
+				}
+				return a.attachPickerSession(cmd, resolvedSession{local: &current}, selection.TakeOver, detachKey, raw, containingIdentities)
+			}
+			selectionCatalog := catalog
+			if selection.HostAlias != "" {
+				refreshContext, cancel := context.WithTimeout(cmd.Context(), 2*defaultCatalogTimeout)
+				refreshed, refreshErr := refreshSessions(refreshContext, selection.HostAlias)
+				cancel()
+				if refreshErr != nil {
+					return refreshErr
+				}
+				selectionCatalog = []HostSessions{refreshed}
+			}
+			resolved, err := findCatalogSession(selectionCatalog, selection.SessionID, selection.HostAlias)
 			if err != nil {
 				return err
 			}
-			return a.attachResolved(cmd, resolved, detachKey, raw, nil)
+			if selection.Relaunch {
+				return a.relaunchSession(cmd, resolved, detachKey, raw, false)
+			}
+			return a.attachPickerSession(cmd, resolved, selection.TakeOver, detachKey, raw, containingIdentities)
 		}
 		if selection.HostAlias == "" {
 			return nil
+		}
+		if !selection.New && !selection.Wake {
+			refreshed, err := refreshSessions(cmd.Context(), selection.HostAlias)
+			if err != nil {
+				return err
+			}
+			for _, row := range windowSessionRows(refreshed.Sessions) {
+				if row.State != worker.StateDetached {
+					continue
+				}
+				resolved := resolvedSession{host: &refreshed.Host, remote: row}
+				if refreshed.Local {
+					current, err := Find(row.ID)
+					if err != nil {
+						return err
+					}
+					resolved = resolvedSession{local: &current}
+				}
+				err := a.attachPickerSession(cmd, resolved, false, detachKey, raw, containingIdentities)
+				if errors.Is(err, ErrSessionAttached) || errors.Is(err, ErrSessionUnavailable) {
+					continue
+				}
+				return err
+			}
+			return fmt.Errorf("%s has no detached sessions; select an in-use session to take over", selection.HostAlias)
+		}
+		if selection.HostAlias == localHostAlias {
+			return a.startWindowSession(cmd, detachKey, raw)
 		}
 		host, err := hostWithAlias(hosts, selection.HostAlias)
 		if err != nil {
 			return err
 		}
 		if selection.Wake {
+			openHostAlias = selection.HostAlias
 			if a.dependencies.Wake == nil {
 				return fmt.Errorf("host %s has no wake controller configured", host.Alias)
 			}
@@ -286,17 +552,117 @@ func (a *application) runPicker(cmd *cobra.Command, hosts []HostRecord, detachKe
 			}
 			continue
 		}
-		return a.runHost(cmd, host, !selection.New, nil, detachKey, raw)
+		return a.runHostWithContainment(
+			cmd,
+			host,
+			!selection.New,
+			nil,
+			detachKey,
+			raw,
+			func(context.Context) []protocol.SessionIdentity {
+				return protocol.CloneSessionIdentities(containingIdentities)
+			},
+		)
 	}
 }
 
+const pickerContainingSessionCaptureTimeout = 1500 * time.Millisecond
+
+func (a *application) capturePickerContainingSessions(
+	parent context.Context,
+	catalog []HostSessions,
+	identities []protocol.SessionIdentity,
+) []PickerContainingSession {
+	captured := make([]PickerContainingSession, len(identities))
+	for index, identity := range identities {
+		captured[index].Identity = identity
+	}
+	if len(identities) == 0 {
+		return captured
+	}
+
+	hosts := make(map[string]HostRecord, len(catalog))
+	for _, current := range catalog {
+		if !current.Local {
+			continue
+		}
+		hosts[current.Host.ID] = current.Host
+	}
+	type captureResult struct {
+		index int
+		value SessionInspection
+		err   error
+	}
+	results := make(chan captureResult, len(identities))
+	ctx, cancel := context.WithTimeout(parent, pickerContainingSessionCaptureTimeout)
+	defer cancel()
+	pending := 0
+	for index, identity := range identities {
+		host, exists := hosts[identity.HostID]
+		if !exists {
+			continue
+		}
+		pending++
+		go func() {
+			value, err := inspectLocalSession(ctx, PickerInspectRequest{
+				HostAlias: host.Alias, SessionID: identity.SessionID,
+				PreviewCols: protocol.MaxInspectionPreviewCols, PreviewRows: protocol.MaxInspectionPreviewRows,
+			})
+			results <- captureResult{index: index, value: value, err: err}
+		}()
+	}
+	for range pending {
+		select {
+		case result := <-results:
+			if result.err != nil {
+				continue
+			}
+			value := copySessionInspection(result.value)
+			captured[result.index].Snapshot = &value
+			captured[result.index].ReceivedAt = a.dependencies.Now()
+		case <-ctx.Done():
+			return captured
+		}
+	}
+	return captured
+}
+
+func clonePickerContainingSessions(source []PickerContainingSession) []PickerContainingSession {
+	cloned := make([]PickerContainingSession, len(source))
+	for index, current := range source {
+		cloned[index] = current
+		if current.Snapshot != nil {
+			value := copySessionInspection(*current.Snapshot)
+			cloned[index].Snapshot = &value
+		}
+	}
+	return cloned
+}
+
+func copySessionInspection(source SessionInspection) SessionInspection {
+	copy := source
+	copy.Nested = protocol.CloneSessionIdentities(source.Nested)
+	copy.Preview = append([]string(nil), source.Preview...)
+	copy.StyledPreview = copyPreviewLines(source.StyledPreview)
+	if source.LastOutputAt != nil {
+		lastOutputAt := *source.LastOutputAt
+		copy.LastOutputAt = &lastOutputAt
+	}
+	return copy
+}
+
+func copyPreviewLines(source []protocol.PreviewLine) []protocol.PreviewLine {
+	if source == nil {
+		return nil
+	}
+	copy := make([]protocol.PreviewLine, len(source))
+	for row, line := range source {
+		copy[row].Runs = append([]protocol.PreviewRun(nil), line.Runs...)
+	}
+	return copy
+}
+
 func validatePickerSelection(selection PickerSelection) error {
-	if selection.Kill && selection.Remove {
-		return errors.New("picker selection cannot combine kill and remove")
-	}
-	if (selection.Kill || selection.Remove) && selection.SessionID == "" {
-		return errors.New("picker kill and remove selections require a session")
-	}
 	if selection.SessionID != "" && (selection.New || selection.Wake) {
 		return errors.New("picker selection cannot combine a session with new or wake")
 	}
@@ -310,6 +676,26 @@ func validatePickerSelection(selection PickerSelection) error {
 }
 
 func (a *application) runHost(cmd *cobra.Command, host HostRecord, resume bool, command []string, detachKey string, raw bool) error {
+	return a.runHostWithContainment(
+		cmd,
+		host,
+		resume,
+		command,
+		detachKey,
+		raw,
+		a.dependencies.Containment,
+	)
+}
+
+func (a *application) runHostWithContainment(
+	cmd *cobra.Command,
+	host HostRecord,
+	resume bool,
+	command []string,
+	detachKey string,
+	raw bool,
+	containment ContainmentFunc,
+) error {
 	if resume {
 		ctx, cancel := context.WithTimeout(cmd.Context(), defaultCatalogTimeout)
 		rows, err := a.queryHost(ctx, host)
@@ -319,7 +705,15 @@ func (a *application) runHost(cmd *cobra.Command, host HostRecord, resume bool, 
 		}
 		for _, row := range rows {
 			if row.State == string(storage.StateRunning) || row.State == string(storage.StateDetached) {
-				return a.attachResolved(cmd, resolvedSession{host: &host, remote: row}, detachKey, raw, nil)
+				containingSessions := containment(cmd.Context())
+				return a.attachResolvedWithContainment(
+					cmd,
+					resolvedSession{host: &host, remote: row},
+					detachKey,
+					raw,
+					nil,
+					containingSessions,
+				)
 			}
 		}
 		return fmt.Errorf("host %s has no active sessions", host.Alias)
@@ -336,18 +730,27 @@ func (a *application) runHost(cmd *cobra.Command, host HostRecord, resume bool, 
 	}
 	// "session X on pc" reads like one was found. `mesh pc` always creates,
 	// and `mesh pc -r` is the one that attaches to an existing session.
-	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "new session %s on %s%s\n", id, host.Alias, nestedDetachHint()); err != nil {
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "new session %s on %s\n", id, host.Alias); err != nil {
 		return err
 	}
 	initial := uint64(0)
-	return a.attachResolved(cmd, resolvedSession{host: &host, remote: protocol.SessionInfo{ID: id, HostID: host.ID, State: string(storage.StateRunning)}}, detachKey, raw, &initial)
+	containingSessions := containment(cmd.Context())
+	return a.attachResolvedWithContainment(
+		cmd,
+		resolvedSession{host: &host, remote: protocol.SessionInfo{ID: id, HostID: host.ID, State: string(storage.StateRunning)}},
+		detachKey,
+		raw,
+		&initial,
+		containingSessions,
+	)
 }
 
 type resolvedSession struct {
-	host   *HostRecord
-	remote protocol.SessionInfo
-	local  *Session
-	stale  bool
+	host       *HostRecord
+	remote     protocol.SessionInfo
+	local      *Session
+	stale      bool
+	ifDetached bool
 }
 
 // resolveSession looks for a session on this machine and across the address
@@ -423,20 +826,40 @@ func findCatalogSession(catalog []HostSessions, id, hostAlias string) (resolvedS
 }
 
 func (a *application) attachResolved(cmd *cobra.Command, resolved resolvedSession, detachKey string, raw bool, lastSeq *uint64) error {
-	key, parsedRaw, err := ParseDetachKey(detachKey)
+	return a.attachResolvedWithContainment(
+		cmd,
+		resolved,
+		detachKey,
+		raw,
+		lastSeq,
+		a.dependencies.Containment(cmd.Context()),
+	)
+}
+
+func (a *application) attachResolvedWithContainment(
+	cmd *cobra.Command,
+	resolved resolvedSession,
+	detachKey string,
+	raw bool,
+	lastSeq *uint64,
+	containingSessions []protocol.SessionIdentity,
+) error {
+	if len(containingSessions) > 0 {
+		target, err := resolvedTargetIdentity(resolved)
+		if err != nil {
+			return fmt.Errorf("resolve attach target containment: %w", err)
+		}
+		if err := rejectContainingTarget(target, containingSessions); err != nil {
+			return err
+		}
+	}
+	options, err := a.attachmentOptions(cmd, detachKey, raw)
 	if err != nil {
 		return err
 	}
-	if raw {
-		parsedRaw = true
-	}
-	options := AttachOptions{
-		LastSeq:   lastSeq,
-		DetachKey: key,
-		Raw:       parsedRaw,
-		In:        a.dependencies.Stdin,
-		Out:       a.dependencies.Stdout,
-	}
+	options.LastSeq = lastSeq
+	options.ContainingSessions = containingSessions
+	options.IfDetached = resolved.ifDetached
 	var display string
 	if resolved.local != nil {
 		if !resolved.local.Alive {
@@ -456,6 +879,7 @@ func (a *application) attachResolved(cmd *cobra.Command, resolved resolvedSessio
 			return err
 		}
 		options.Conn = conn
+		options.HostID = resolved.host.ID
 		options.SessionID = resolved.remote.ID
 		display = resolved.remote.ID + " on " + resolved.host.Alias
 	}
@@ -690,11 +1114,19 @@ func writeLocalSessions(output io.Writer, now time.Time, sessions []Session) err
 		return err
 	}
 	table := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "ID\tSTATE\tAGE\tCOMMAND"); err != nil {
+	if _, err := fmt.Fprintln(table, "ID\tSTATE\tAGE\tSTARTED IN\tCOMMAND"); err != nil {
 		return err
 	}
 	for _, current := range sessions {
-		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", current.ID, current.State(), ageAt(now, current.CreatedAt), SafeTerminalText(strings.Join(current.Command, " "))); err != nil {
+		if _, err := fmt.Fprintf(
+			table,
+			"%s\t%s\t%s\t%s\t%s\n",
+			current.ID,
+			current.State(),
+			ageAt(now, current.CreatedAt),
+			sessionLaunchDirectory(current.Cwd),
+			SafeTerminalText(strings.Join(current.Command, " ")),
+		); err != nil {
 			return err
 		}
 	}
@@ -727,7 +1159,7 @@ func writeProtocolSessions(output io.Writer, now time.Time, hosts []HostSessions
 		return rows[i].session.ID < rows[j].session.ID
 	})
 	table := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "HOST\tID\tSTATE\tAGE\tCOMMAND\tCACHE"); err != nil {
+	if _, err := fmt.Fprintln(table, "HOST\tID\tSTATE\tAGE\tSTARTED IN\tCOMMAND\tCACHE"); err != nil {
 		return err
 	}
 	for _, current := range rows {
@@ -735,11 +1167,28 @@ func writeProtocolSessions(output io.Writer, now time.Time, hosts []HostSessions
 		if current.stale {
 			cache = "stale"
 		}
-		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n", current.host, current.session.ID, current.session.State, ageAt(now, current.session.CreatedAt), SafeTerminalText(strings.Join(current.session.Command, " ")), cache); err != nil {
+		if _, err := fmt.Fprintf(
+			table,
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			current.host,
+			current.session.ID,
+			current.session.State,
+			ageAt(now, current.session.CreatedAt),
+			sessionLaunchDirectory(current.session.Cwd),
+			SafeTerminalText(strings.Join(current.session.Command, " ")),
+			cache,
+		); err != nil {
 			return err
 		}
 	}
 	return table.Flush()
+}
+
+func sessionLaunchDirectory(cwd string) string {
+	if cwd == "" {
+		return "-"
+	}
+	return SafeTerminalText(cwd)
 }
 
 func (a *application) localCommand() *cobra.Command {
@@ -793,31 +1242,13 @@ func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool
 		if len(command) == 0 {
 			command = []string{defaultShell()}
 		}
-		cwd, _ := os.Getwd()
-		stateDir, stateErr := paths.StateDir()
-		if stateErr != nil {
-			return stateErr
+		cwd, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			return cwdErr
 		}
-		cols, rows := terminalSize(a.dependencies.Stdout)
-		createCtx, cancel := context.WithTimeout(cmd.Context(), remoteCreateTimeout)
-		id, createErr := CreateViaDaemon(createCtx, DaemonCreateOptions{
-			SocketPath: meshdaemon.SocketPath(stateDir), Command: command, Cwd: cwd, Cols: cols, Rows: rows,
-		})
-		cancel()
-		switch {
-		case createErr == nil:
-			current = Session{Meta: worker.Meta{ID: id}, Alive: true}
-			socketPath = meshdaemon.SocketPath(stateDir)
-		case errors.Is(createErr, ErrDaemonUnavailable):
-			if requireDaemon {
-				return createErr
-			}
-			current, err = Spawn(command, cwd)
-			if err != nil {
-				return err
-			}
-		default:
-			return createErr
+		current, socketPath, err = a.createLocalSession(cmd, command, cwd, requireDaemon)
+		if err != nil {
+			return err
 		}
 		initial := uint64(0)
 		lastSeq = &initial
@@ -830,17 +1261,20 @@ func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool
 	}
 	copy := current
 	resolved := resolvedSession{local: &copy}
-	key, parsedRaw, err := ParseDetachKey(detachKey)
+	opts, err := a.attachmentOptions(cmd, detachKey, raw)
 	if err != nil {
 		return err
 	}
-	if raw {
-		parsedRaw = true
+	opts.SocketPath, opts.SessionID, opts.LastSeq = socketPath, current.ID, lastSeq
+	opts.ContainingSessions = a.dependencies.Containment(cmd.Context())
+	if len(opts.ContainingSessions) > 0 {
+		target, err := resolvedTargetIdentity(resolved)
+		if err != nil {
+			return err
+		}
+		opts.HostID = target.HostID
 	}
-	result, err := Attach(AttachOptions{
-		SocketPath: socketPath, SessionID: current.ID, LastSeq: lastSeq,
-		DetachKey: key, Raw: parsedRaw, In: a.dependencies.Stdin, Out: a.dependencies.Stdout,
-	})
+	result, err := Attach(opts)
 	if err != nil {
 		return err
 	}
@@ -885,12 +1319,9 @@ func (a *application) attachCommand() *cobra.Command {
 			if !current.Alive {
 				return fmt.Errorf("session %s is %s", current.ID, current.State())
 			}
-			key, parsedRaw, err := ParseDetachKey(detachKey)
+			opts, err := a.attachmentOptions(cmd, detachKey, raw)
 			if err != nil {
 				return err
-			}
-			if raw {
-				parsedRaw = true
 			}
 			socketPath := paths.Socket(current.Dir)
 			if viaDaemon {
@@ -900,7 +1331,16 @@ func (a *application) attachCommand() *cobra.Command {
 				}
 				socketPath = meshdaemon.SocketPath(stateDir)
 			}
-			result, err := Attach(AttachOptions{SocketPath: socketPath, SessionID: current.ID, DetachKey: key, Raw: parsedRaw, In: a.dependencies.Stdin, Out: a.dependencies.Stdout})
+			opts.SocketPath, opts.SessionID = socketPath, current.ID
+			opts.ContainingSessions = a.dependencies.Containment(cmd.Context())
+			if len(opts.ContainingSessions) > 0 {
+				target, err := resolvedTargetIdentity(resolvedSession{local: &current})
+				if err != nil {
+					return err
+				}
+				opts.HostID = target.HostID
+			}
+			result, err := Attach(opts)
 			if err != nil {
 				return err
 			}
@@ -1101,7 +1541,8 @@ func (a *application) daemonCommand() *cobra.Command {
 				return err
 			}
 			return meshdaemon.Run(cmd.Context(), meshdaemon.Config{
-				StateDir: stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
+				SSHSessionHandler: a.dependencies.SSHSessionHandler,
+				StateDir:          stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
 				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget,
 				TailscaleServe: tailscaleServe,
@@ -1235,23 +1676,34 @@ func inGroup(id string, commands ...*cobra.Command) []*cobra.Command {
 	return commands
 }
 
-// pickerSessionAction runs a kill or a remove chosen in the picker. Failures are
-// reported and the picker reopens, because one refused session is not a reason
-// to throw away the browsing session around it.
-func (a *application) pickerSessionAction(cmd *cobra.Command, hosts []HostRecord, selection PickerSelection) error {
-	if selection.Kill {
-		return a.runSessionControl(cmd, selection.SessionID, protocol.TypeKill, "")
+// pickerSessionAction targets the exact host already open in the picker. It is
+// deliberately separate from standalone kill/rm, which resolve global or local
+// IDs and print command output that would corrupt the picker's alternate screen.
+func (a *application) pickerSessionAction(ctx context.Context, hosts []HostRecord, request PickerSessionActionRequest) error {
+	if ctx == nil {
+		return errors.New("picker session action with nil context")
 	}
-	return a.removeSession(cmd, hosts, selection.SessionID)
-}
-
-// nestedDetachHint names the key that leaves this session when it is not the
-// only one. Each level listens for a different key so the clients above forward
-// it, and a key nobody is told about is no better than no key at all.
-func nestedDetachHint() string {
-	depth := SessionDepth()
-	if depth == 0 {
-		return ""
+	if request.HostAlias == localHostAlias {
+		return a.localPickerSessionAction(ctx, request)
 	}
-	return fmt.Sprintf("  (%s detaches this one, ctrl+] leaves them all)", DetachKeyName(DetachKeyForDepth(depth)))
+	host, err := hostWithAlias(hosts, request.HostAlias)
+	if err != nil {
+		return err
+	}
+	id, err := session.ParseID(request.SessionID)
+	if err != nil {
+		return fmt.Errorf("picker session action: %w", err)
+	}
+	var controlType string
+	switch request.Action {
+	case PickerKillSession:
+		controlType = protocol.TypeKill
+	case PickerRemoveSession:
+		controlType = protocol.TypeRemove
+	default:
+		return fmt.Errorf("unknown picker session action %d", request.Action)
+	}
+	actionContext, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	return controlRemoteSession(actionContext, host, a.dependencies.DialControl, id, controlType, "")
 }

@@ -3,6 +3,7 @@ package cli
 import "testing"
 
 func TestParseDetachKey(t *testing.T) {
+	t.Setenv("MESH_DEPTH", "")
 	cases := []struct {
 		in   string
 		key  byte

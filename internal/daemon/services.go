@@ -458,6 +458,7 @@ func serviceFromInfo(info protocol.ServiceInfo) meshserve.Service {
 		Target:        info.Target,
 		PublicName:    info.PublicName,
 		WakeOnRequest: info.WakeOnRequest,
+		Isolate:       info.Isolate,
 	}
 }
 
@@ -468,6 +469,7 @@ func serviceDefinitionInfo(service meshserve.Service) protocol.ServiceInfo {
 		Target:        service.Target,
 		PublicName:    service.PublicName,
 		WakeOnRequest: service.WakeOnRequest,
+		Isolate:       service.Isolate,
 	}
 }
 

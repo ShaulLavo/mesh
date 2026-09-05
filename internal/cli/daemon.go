@@ -45,6 +45,8 @@ func CreateViaDaemon(ctx context.Context, opts DaemonCreateOptions) (string, err
 		Type:      protocol.TypeCreate,
 		RequestID: requestID,
 		Command:   append([]string(nil), opts.Command...),
+		Term:      clientTerm(),
+		Depth:     SessionDepth() + 1,
 		Cwd:       opts.Cwd,
 		Cols:      opts.Cols,
 		Rows:      opts.Rows,

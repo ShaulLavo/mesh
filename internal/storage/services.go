@@ -21,6 +21,7 @@ func (s *Store) UpsertService(ctx context.Context, service meshserve.Service) (m
 		Target:        normalized.Target,
 		PublicName:    normalized.PublicName,
 		WakeOnRequest: boolInt64(normalized.WakeOnRequest),
+		Isolate:       boolInt64(normalized.Isolate),
 	})
 	if err != nil {
 		return meshserve.Service{}, fmt.Errorf("storage: upsert service %s: %w", normalized.Name, err)
@@ -77,12 +78,17 @@ func serviceFromRow(row dbsqlc.Service) (meshserve.Service, error) {
 	if err != nil {
 		return meshserve.Service{}, fmt.Errorf("storage: decode service %s: %w", row.Name, err)
 	}
+	isolate, err := sqliteBool("isolate", row.Isolate)
+	if err != nil {
+		return meshserve.Service{}, fmt.Errorf("storage: decode service %s: %w", row.Name, err)
+	}
 	service, err := meshserve.Normalize(meshserve.Service{
 		Name:          row.Name,
 		Kind:          meshserve.Kind(row.Kind),
 		Target:        row.Target,
 		PublicName:    row.PublicName,
 		WakeOnRequest: wakeOnRequest,
+		Isolate:       isolate,
 	})
 	if err != nil {
 		return meshserve.Service{}, fmt.Errorf("storage: decode service %s: %w", row.Name, err)

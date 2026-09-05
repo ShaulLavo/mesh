@@ -87,6 +87,7 @@ you, which it might not.
 ```bash
 m serve pc ./site --at /blog                # pc.mesh.shaulavo.dev/blog
 m serve pc 3000 --at /api                   # proxy a local port, tailnet only
+m serve pc ./app --at /app --isolate        # add COOP/COEP so the page gets SharedArrayBuffer
 m serve pi /mnt/data --at /files --files
 m serve pc ./site --at /blog --public blog.shaulavo.dev
 m serve ls

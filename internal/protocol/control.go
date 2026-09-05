@@ -9,6 +9,7 @@ import (
 // Control message type names.
 const (
 	TypeAttach             = "session.attach"
+	TypeAttachDetached     = "session.attach-detached"
 	TypeAttached           = "session.attached"
 	TypeDetach             = "session.detach"
 	TypeExit               = "session.exit"
@@ -19,6 +20,12 @@ const (
 	TypeCreated            = "session.created"
 	TypeList               = "session.list"
 	TypeListed             = "session.listed"
+	TypeInspect            = "session.inspect"
+	TypeInspected          = "session.inspected"
+	TypeContainment        = "session.containment"
+	TypeContained          = "session.contained"
+	TypeNest               = "session.nest"
+	TypeNesting            = "session.nesting"
 	TypeLogs               = "session.logs"
 	TypeRemove             = "session.remove"
 	TypeLogged             = "session.logged"
@@ -62,10 +69,11 @@ const (
 
 // Reasons a worker ends an attachment.
 const (
-	ReasonStolen = "stolen" // another client attached
-	ReasonClient = "client" // client asked to detach
-	ReasonExited = "exited" // the session's process ended
-	ReasonKilled = "killed" // the session was ended on request
+	ReasonStolen   = "stolen"   // another client attached
+	ReasonAttached = "attached" // detached-only attachment found an existing client
+	ReasonClient   = "client"   // client asked to detach
+	ReasonExited   = "exited"   // the session's process ended
+	ReasonKilled   = "killed"   // the session was ended on request
 )
 
 // SessionInfo is the transport representation of durable session metadata.
@@ -97,6 +105,7 @@ type ServiceInfo struct {
 	Target        string `json:"target"`
 	PublicName    string `json:"publicName,omitempty"`
 	WakeOnRequest bool   `json:"wakeOnRequest,omitempty"`
+	Isolate       bool   `json:"isolate,omitempty"`
 	Healthy       bool   `json:"healthy"`
 	Problem       string `json:"problem,omitempty"`
 }
@@ -166,15 +175,26 @@ type Control struct {
 	RequestID string `json:"requestId,omitempty"`
 	SessionID string `json:"sessionId,omitempty"`
 
-	// Attach / create
-	LastSeq *uint64  `json:"lastSeq,omitempty"` // exact resume point; nil requests a screen snapshot
-	Tail    int      `json:"tail,omitempty"`    // trailing bytes wanted by non-attach consumers
-	Cols    int      `json:"cols,omitempty"`
-	Rows    int      `json:"rows,omitempty"`
-	Command []string `json:"command,omitempty"`
-	Cwd     string   `json:"cwd,omitempty"`
-	Term    string   `json:"term,omitempty"`  // client's TERM; a session without one is not a terminal
-	Depth   int      `json:"depth,omitempty"` // nesting level of the session being created
+	// Attach / create / inspect / containment
+	LastSeq     *uint64  `json:"lastSeq,omitempty"` // exact resume point; nil requests a screen snapshot
+	Tail        int      `json:"tail,omitempty"`    // trailing bytes wanted by non-attach consumers
+	Cols        int      `json:"cols,omitempty"`
+	Rows        int      `json:"rows,omitempty"`
+	PreviewCols int      `json:"previewCols,omitempty"`
+	PreviewRows int      `json:"previewRows,omitempty"`
+	Command     []string `json:"command,omitempty"`
+	Cwd         string   `json:"cwd,omitempty"`
+	Term        string   `json:"term,omitempty"`  // client's TERM; a session without one is not a terminal
+	Depth       int      `json:"depth,omitempty"` // nesting level of the session being created
+	// ContainingSessions is ordered from the client process's immediate Mesh
+	// session outward. Attach carries the upstream path; a containment response
+	// prepends the worker that answered it.
+	ContainingSessions []SessionIdentity `json:"containingSessions,omitempty"`
+	NestedSession      *SessionIdentity  `json:"nestedSession,omitempty"`
+	Nested             []SessionIdentity `json:"nested,omitempty"`
+	// Attach requests promise dynamic detach keys across the full upstream path.
+	// Responses distinguish supported nesting from a legacy worker or attacher.
+	NestingSupported bool `json:"nestingSupported,omitempty"`
 
 	// Attached
 	Seq      uint64 `json:"seq,omitempty"`      // next byte offset the client will receive
@@ -190,6 +210,9 @@ type Control struct {
 	// List / host info
 	Sessions []SessionInfo `json:"sessions,omitempty"`
 	Host     *HostInfo     `json:"host,omitempty"`
+
+	// Inspect
+	Inspection *SessionInspection `json:"inspection,omitempty"`
 
 	// Logs
 	Output []byte `json:"output,omitempty"`

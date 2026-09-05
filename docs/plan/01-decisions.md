@@ -275,3 +275,62 @@ server would remove the recovery path that `mesh add` uses.
 
 **Cost:** a stock client needs `-p 2222`. A matching `~/.ssh/config` entry can set the
 port, identity file, and `IdentitiesOnly` once.
+
+## D27 — ctrl+] belongs to the innermost session; ctrl+^ leaves them all
+
+The outermost client reads every keystroke first, so which client owns a key
+is a decision, not an accident. ctrl+] detaches the innermost session. ctrl+^
+is consumed by the outermost client and, because every inner client lives
+inside that PTY, ends the window with everything inside still attached.
+
+For the outer client to pass ctrl+] through, it has to know an inner client
+exists. It learns that live: the inner client holds one extra connection open
+to its containing worker for the life of its attachment (`session.nest`), and
+the worker tells its attacher when the set changes. A closed connection, for
+any reason, means not nested.
+
+**Why not the fixed depth table:** it made ctrl+^ the everyday "leave pc" key
+once every window is a session, and ctrl+] just closed the window. Fingers
+expect the reverse.
+**Cost:** one extra Unix connection per nested client, and a window the length
+of one attach round trip in which ctrl+] still reaches the outer client. The
+depth table remains as the fallback for workers that predate registration
+and for every client nested through that fallback. Attachment requests carry
+the shared-key capability of the complete upstream chain. While registrations
+exist, a worker rejects an incompatible takeover before changing its attachment
+or terminal size; otherwise that takeover would strand the inner clients' keys.
+Leave-all is active only while a nested client is registered. Without that
+condition, a new outer client would consume a legacy inner client's ctrl+^.
+**Changeable:** the leave-all key. ctrl+^ is ctrl+6 on a US layout. It is a
+flag, and it was chosen with a shrug.
+
+## D28 — A window is a session, and opening one never steals
+
+Each terminal window attaches exactly one session. Opening a window offers
+only detached sessions; attached ones are listed last, never preselected, and
+need the picker's explicit take-over. Resuming several sessions means opening
+several windows, each of which offers what is still detached.
+
+**Why:** a second window silently yanking the session out of the first is the
+one thing that would make people turn the feature off. Hyprland is the
+multiplexer; Mesh does not lay out windows.
+**Cost:** no mirroring, which D3 already ruled out. A keybind that restores
+three sessions spawns three windows with `--take`.
+Workers enforce detached-only claims atomically through
+`session.attach-detached`, including fresh-window attachment. Old workers reject
+that request; `--take` skips them instead of risking a silent takeover.
+
+## D29 — This host comes first and never waits for the network
+
+The picker's first section is this machine, read from session directories and
+Unix sockets before any remote query starts. The window prompt is that section
+in a compact layout, and it never touches the daemon socket or a remote host.
+`l` opens the full picker, which does.
+
+**Why:** a terminal window has to open in the time a shell takes to print its
+prompt. Anything that can wait on wifi is not allowed on that path.
+**Cost:** this host stays a special case. It is not in its own address book and
+will not be added, so `mesh ls` and the picker each splice it in deliberately.
+Pre-picker containment capture is local only. Remote containing identities keep
+an unavailable frozen preview, because waiting for their screen delays startup
+and capturing it after rendering can record the picker itself.

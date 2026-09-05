@@ -48,7 +48,7 @@ func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer,
 	if preview.Service.Kind == string(meshserve.Proxy) && preview.FileCount != 0 {
 		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned files for a proxy preview", host.Alias)
 	}
-	if preview.Service.Name != service.Name || preview.Service.PublicName != service.PublicName || preview.Service.WakeOnRequest != service.WakeOnRequest || service.Kind != "" && preview.Service.Kind != service.Kind {
+	if preview.Service.Name != service.Name || preview.Service.PublicName != service.PublicName || preview.Service.WakeOnRequest != service.WakeOnRequest || preview.Service.Isolate != service.Isolate || service.Kind != "" && preview.Service.Kind != service.Kind {
 		return protocol.ServicePreview{}, "", fmt.Errorf("host %s changed service semantics in its preview", host.Alias)
 	}
 	if err := validatePreviewInference(service, preview.Service); err != nil {
@@ -219,7 +219,7 @@ func remoteServiceRequest(ctx context.Context, host HostRecord, dial HostDialer,
 func validateRemoteService(info protocol.ServiceInfo) (protocol.ServiceInfo, error) {
 	service, err := meshserve.Normalize(meshserve.Service{
 		Name: info.Name, Kind: meshserve.Kind(info.Kind), Target: info.Target,
-		PublicName: info.PublicName, WakeOnRequest: info.WakeOnRequest,
+		PublicName: info.PublicName, WakeOnRequest: info.WakeOnRequest, Isolate: info.Isolate,
 	})
 	if err != nil {
 		return protocol.ServiceInfo{}, errors.New("service definition is invalid")
@@ -235,7 +235,8 @@ func validateRemoteService(info protocol.ServiceInfo) (protocol.ServiceInfo, err
 
 func sameServiceDefinition(left, right protocol.ServiceInfo) bool {
 	return left.Name == right.Name && left.Kind == right.Kind && left.Target == right.Target &&
-		left.PublicName == right.PublicName && left.WakeOnRequest == right.WakeOnRequest
+		left.PublicName == right.PublicName && left.WakeOnRequest == right.WakeOnRequest &&
+		left.Isolate == right.Isolate
 }
 
 func validatePreviewInference(requested, preview protocol.ServiceInfo) error {

@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -98,6 +102,10 @@ func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer) ([]pr
 }
 
 func createRemoteSession(ctx context.Context, host HostRecord, dial HostDialer, command []string, cols, rows int) (string, error) {
+	return createRemoteSessionInDirectory(ctx, host, dial, command, "", cols, rows)
+}
+
+func createRemoteSessionInDirectory(ctx context.Context, host HostRecord, dial HostDialer, command []string, cwd string, cols, rows int) (string, error) {
 	conn, err := openVerifiedHost(ctx, host, dial)
 	if err != nil {
 		return "", err
@@ -113,6 +121,7 @@ func createRemoteSession(ctx context.Context, host HostRecord, dial HostDialer, 
 		Term:      clientTerm(),
 		Depth:     SessionDepth() + 1,
 		Command:   append([]string(nil), command...),
+		Cwd:       cwd,
 		Cols:      cols,
 		Rows:      rows,
 	})
@@ -186,6 +195,97 @@ func logsRemoteSession(ctx context.Context, host HostRecord, dial HostDialer, se
 		return nil, daemonResponseError("logs "+sessionID, response.Message)
 	default:
 		return nil, fmt.Errorf("host %s returned an unexpected logs response", host.Alias)
+	}
+}
+
+func inspectRemoteSession(ctx context.Context, host HostRecord, dial HostDialer, sessionID string, previewCols, previewRows int) (SessionInspection, error) {
+	if ctx == nil {
+		return SessionInspection{}, fmt.Errorf("inspect session on host %s with nil context", host.Alias)
+	}
+	if err := ctx.Err(); err != nil {
+		return SessionInspection{}, err
+	}
+	id, err := session.ParseID(sessionID)
+	if err != nil || id != sessionID {
+		return SessionInspection{}, fmt.Errorf("inspect invalid session ID %q", sessionID)
+	}
+	if err := protocol.ValidateInspectDimensions(previewCols, previewRows); err != nil {
+		return SessionInspection{}, err
+	}
+	conn, err := openVerifiedHost(ctx, host, dial)
+	if err != nil {
+		return SessionInspection{}, err
+	}
+	defer conn.Close() //nolint:errcheck // one inspect request
+	requestID, err := newDaemonRequestID()
+	if err != nil {
+		return SessionInspection{}, err
+	}
+	response, err := controlRequest(ctx, conn, protocol.Control{
+		Type:        protocol.TypeInspect,
+		RequestID:   requestID,
+		SessionID:   sessionID,
+		PreviewCols: previewCols,
+		PreviewRows: previewRows,
+	})
+	if err != nil {
+		return SessionInspection{}, err
+	}
+	return validateInspectionResponse(host, sessionID, previewCols, previewRows, response)
+}
+
+func validateInspectionResponse(host HostRecord, sessionID string, previewCols, previewRows int, response protocol.Control) (SessionInspection, error) {
+	switch response.Type {
+	case protocol.TypeInspected:
+		if response.SessionID != sessionID {
+			return SessionInspection{}, fmt.Errorf("host %s inspected a different session", host.Alias)
+		}
+		if response.Inspection == nil {
+			return SessionInspection{}, fmt.Errorf("host %s returned no inspection for session %s", host.Alias, sessionID)
+		}
+		if err := protocol.ValidateSessionInspection(*response.Inspection); err != nil {
+			return SessionInspection{}, fmt.Errorf("host %s returned an invalid inspection for session %s: %w", host.Alias, sessionID, err)
+		}
+		if len(response.Inspection.Preview) > previewRows {
+			return SessionInspection{}, fmt.Errorf("host %s returned %d preview rows for session %s, want at most %d", host.Alias, len(response.Inspection.Preview), sessionID, previewRows)
+		}
+		for row, line := range response.Inspection.Preview {
+			if width := ansi.StringWidth(line); width > previewCols {
+				return SessionInspection{}, fmt.Errorf("host %s returned preview row %d with width %d for session %s, want at most %d", host.Alias, row, width, sessionID, previewCols)
+			}
+		}
+		return inspectionFromProtocol(*response.Inspection), nil
+	case protocol.TypeError:
+		return SessionInspection{}, daemonResponseError("inspect "+sessionID, response.Message)
+	default:
+		return SessionInspection{}, fmt.Errorf("host %s returned an unexpected inspect response", host.Alias)
+	}
+}
+
+func inspectionFromProtocol(source protocol.SessionInspection) SessionInspection {
+	directorySource := SessionDirectoryUnknown
+	switch source.DirectorySource {
+	case protocol.DirectorySourceProcess:
+		directorySource = SessionDirectoryProcess
+	case protocol.DirectorySourceTerminal:
+		directorySource = SessionDirectoryTerminal
+	}
+	var lastOutputAt *time.Time
+	if source.LastOutputAt != nil {
+		copy := *source.LastOutputAt
+		lastOutputAt = &copy
+	}
+	return SessionInspection{
+		ObservedAt:        source.ObservedAt,
+		CurrentDirectory:  source.CurrentDirectory,
+		DirectorySource:   directorySource,
+		ForegroundCommand: source.ForegroundCommand,
+		TerminalTitle:     source.TerminalTitle,
+		LastOutputAt:      lastOutputAt,
+		Attached:          source.Attached,
+		Preview:           append([]string(nil), source.Preview...),
+		StyledPreview:     copyPreviewLines(source.StyledPreview),
+		Nested:            protocol.CloneSessionIdentities(source.Nested),
 	}
 }
 

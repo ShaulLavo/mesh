@@ -153,9 +153,9 @@ hello=$(ssh "${ssh_options[@]}" -i "$client_state/identity.key" mesh@127.0.0.2 h
   fail "authorized OpenSSH client was refused: $(cat "$test_root/daemon.log")"
 [[ $hello == 'mesh ssh ready' ]] || fail "SSH hello was $hello"
 
-interactive=$(ssh "${ssh_options[@]}" -i "$client_state/identity.key" mesh@127.0.0.2) ||
-  fail 'authorized shell request was refused'
-[[ $interactive == 'mesh ssh ready' ]] || fail "interactive SSH hello was $interactive"
+if ssh "${ssh_options[@]}" -i "$client_state/identity.key" mesh@127.0.0.2 >"$test_root/no-pty.out" 2>&1; then
+  fail 'interactive shell was accepted without a PTY'
+fi
 
 if ssh "${ssh_options[@]}" -i "$unrelated_state/identity.key" mesh@127.0.0.2 hello >/dev/null 2>&1; then
   fail 'unrelated identity authenticated'

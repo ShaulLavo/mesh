@@ -23,7 +23,7 @@ func (q *Queries) DeleteService(ctx context.Context, name string) (int64, error)
 }
 
 const getService = `-- name: GetService :one
-SELECT name, kind, target, public_name, wake_on_request
+SELECT name, kind, target, public_name, wake_on_request, isolate
 FROM services
 WHERE name = ?
 `
@@ -37,12 +37,13 @@ func (q *Queries) GetService(ctx context.Context, name string) (Service, error) 
 		&i.Target,
 		&i.PublicName,
 		&i.WakeOnRequest,
+		&i.Isolate,
 	)
 	return i, err
 }
 
 const listServices = `-- name: ListServices :many
-SELECT name, kind, target, public_name, wake_on_request
+SELECT name, kind, target, public_name, wake_on_request, isolate
 FROM services
 ORDER BY name
 `
@@ -62,6 +63,7 @@ func (q *Queries) ListServices(ctx context.Context) ([]Service, error) {
 			&i.Target,
 			&i.PublicName,
 			&i.WakeOnRequest,
+			&i.Isolate,
 		); err != nil {
 			return nil, err
 		}
@@ -82,14 +84,16 @@ INSERT INTO services (
     kind,
     target,
     public_name,
-    wake_on_request
-) VALUES (?, ?, ?, ?, ?)
+    wake_on_request,
+    isolate
+) VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT (name) DO UPDATE SET
     kind = excluded.kind,
     target = excluded.target,
     public_name = excluded.public_name,
-    wake_on_request = excluded.wake_on_request
-RETURNING name, kind, target, public_name, wake_on_request
+    wake_on_request = excluded.wake_on_request,
+    isolate = excluded.isolate
+RETURNING name, kind, target, public_name, wake_on_request, isolate
 `
 
 type UpsertServiceParams struct {
@@ -98,6 +102,7 @@ type UpsertServiceParams struct {
 	Target        string
 	PublicName    string
 	WakeOnRequest int64
+	Isolate       int64
 }
 
 func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) (Service, error) {
@@ -107,6 +112,7 @@ func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) (S
 		arg.Target,
 		arg.PublicName,
 		arg.WakeOnRequest,
+		arg.Isolate,
 	)
 	var i Service
 	err := row.Scan(
@@ -115,6 +121,7 @@ func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) (S
 		&i.Target,
 		&i.PublicName,
 		&i.WakeOnRequest,
+		&i.Isolate,
 	)
 	return i, err
 }

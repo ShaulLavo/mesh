@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -815,6 +817,9 @@ func TestCatalogRetiresFinishedSessionsByAge(t *testing.T) {
 	running := catalogTestMeta("RVNN", worker.StateRunning, "boot-a")
 	running.CreatedAt = now.Add(-90 * 24 * time.Hour) // old, but still alive
 	writeCatalogMeta(t, sessionsDir, running.ID, running)
+	interrupted := catalogTestMeta("7K3D", worker.StateRunning, "previous-boot")
+	interrupted.CreatedAt = now.Add(-90 * 24 * time.Hour)
+	writeCatalogMeta(t, sessionsDir, interrupted.ID, interrupted)
 
 	store := &catalogStoreStub{}
 	catalog, err := NewCatalog(CatalogConfig{
@@ -838,7 +843,7 @@ func TestCatalogRetiresFinishedSessionsByAge(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(sessionsDir, "0RDD")); !os.IsNotExist(err) {
 		t.Fatalf("the retired session's directory survived: %v", err)
 	}
-	for _, keep := range []string{"N3WW", "RVNN"} {
+	for _, keep := range []string{"7K3D", "N3WW", "RVNN"} {
 		if _, err := os.Stat(filepath.Join(sessionsDir, keep)); err != nil {
 			t.Fatalf("session %s was retired but should have been kept: %v", keep, err)
 		}
@@ -848,9 +853,171 @@ func TestCatalogRetiresFinishedSessionsByAge(t *testing.T) {
 		observedIDs = append(observedIDs, string(got.ID))
 	}
 	sort.Strings(observedIDs)
-	if len(observedIDs) != 2 || observedIDs[0] != "N3WW" || observedIDs[1] != "RVNN" {
-		t.Fatalf("observed = %v, want the two kept sessions", observedIDs)
+	if !reflect.DeepEqual(observedIDs, []string{"7K3D", "N3WW", "RVNN"}) {
+		t.Fatalf("observed = %v, want all active, interrupted, and recent exited sessions", observedIDs)
 	}
+}
+
+func TestCatalogRetentionCountExcludesInterruptedSessions(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		interrupted int
+		exited      int
+		retired     int
+	}{
+		{name: "interrupted above cap", interrupted: maxRetainedTerminalSessions + 2},
+		{name: "interrupted do not evict exited", interrupted: maxRetainedTerminalSessions + 2, exited: 2},
+		{name: "exited still capped", interrupted: 2, exited: maxRetainedTerminalSessions + 2, retired: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			catalog := &Catalog{sessionsDir: root, now: func() time.Time { return catalogTestTime }}
+			observed := make([]storage.Session, 0, test.interrupted+test.exited)
+			for index := range test.interrupted + test.exited {
+				state := storage.StateInterrupted
+				createdAt := catalogTestTime.Add(-90 * 24 * time.Hour)
+				if index >= test.interrupted {
+					state = storage.StateExited
+					createdAt = catalogTestTime.Add(-time.Duration(test.interrupted+test.exited-index) * time.Minute)
+				}
+				id := fmt.Sprintf("%04d", index)
+				if err := os.Mkdir(filepath.Join(root, id), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				observed = append(observed, storage.Session{ID: storage.SessionID(id), State: state, CreatedAt: createdAt})
+			}
+			kept, retired := catalog.retireFinishedSessions(observed)
+			if len(retired) != test.retired || len(kept) != len(observed)-test.retired {
+				t.Fatalf("kept %d, retired %d, want %d retired", len(kept), len(retired), test.retired)
+			}
+			for _, current := range kept {
+				if _, err := os.Stat(filepath.Join(root, string(current.ID))); err != nil {
+					t.Fatalf("kept session %s directory missing: %v", current.ID, err)
+				}
+			}
+			for index, id := range retired {
+				if want := storage.SessionID(fmt.Sprintf("%04d", test.interrupted+index)); id != want {
+					t.Fatalf("retired %s, want oldest exited session %s", id, want)
+				}
+				if _, err := os.Stat(filepath.Join(root, string(id))); err != nil {
+					t.Fatalf("retirement removed session %s before writing its database row: %v", id, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCatalogReconcileRetiresForgottenFinishedSessionsOnly(t *testing.T) {
+	root := t.TempDir()
+	for _, test := range []struct {
+		id, state, boot string
+	}{
+		{id: "7K3D", state: worker.StateRunning, boot: "previous-boot"},
+		{id: "91AZ", state: worker.StateExited, boot: "boot-a"},
+		{id: "Q8ME", state: worker.StateRunning, boot: "boot-a"},
+		{id: "BC45", state: worker.StateDetached, boot: "boot-a"},
+	} {
+		meta := catalogTestMeta(test.id, test.state, test.boot)
+		if test.state == worker.StateExited {
+			exitedAt, code := meta.CreatedAt.Add(time.Second), 0
+			meta.ExitedAt, meta.ExitCode = &exitedAt, &code
+		}
+		writeCatalogMeta(t, root, test.id, meta)
+		if err := os.WriteFile(paths.Forgotten(filepath.Join(root, test.id)), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &catalogStoreStub{}
+	catalog := newCatalogForTest(t, root, store, probeFunc(func(context.Context, string) error { return nil }), func() string { return "boot-a" })
+	if err := catalog.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := []storage.SessionID{"7K3D", "91AZ"}; !reflect.DeepEqual(store.retired, want) {
+		t.Fatalf("retired store rows = %v, want %v", store.retired, want)
+	}
+	for _, id := range store.retired {
+		if _, err := os.Stat(filepath.Join(root, string(id))); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("forgotten session %s directory survived: %v", id, err)
+		}
+	}
+	if len(store.observed) != 2 {
+		t.Fatalf("observed sessions = %#v, want both live sessions", store.observed)
+	}
+	for _, current := range store.observed {
+		if current.State != storage.StateRunning && current.State != storage.StateDetached {
+			t.Fatalf("retained non-live row = %#v", current)
+		}
+		if _, err := os.Stat(filepath.Join(root, string(current.ID))); err != nil {
+			t.Fatalf("live session %s was removed: %v", current.ID, err)
+		}
+	}
+}
+
+func TestForgottenSessionRetirementRetriesDatabaseFailureAndInterruptedCleanup(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := storage.Open(ctx, filepath.Join(t.TempDir(), "mesh.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	meta := catalogTestMeta("7K3D", worker.StateRunning, "previous-boot")
+	writeCatalogMeta(t, root, meta.ID, meta)
+	failingStore := &retirementFailureStore{CatalogStore: store}
+	catalog := newCatalogForTest(t, root, failingStore, probeFunc(func(context.Context, string) error { return nil }), func() string { return "boot-a" })
+	if err := catalog.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, meta.ID)
+	marker := paths.Forgotten(dir)
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failingStore.failure = errors.New("database write failed")
+	if err := catalog.Reconcile(ctx); !errors.Is(err, failingStore.failure) {
+		t.Fatalf("retirement failure = %v", err)
+	}
+	for _, path := range []string{paths.Meta(dir), marker} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("failed retirement removed %s: %v", path, err)
+		}
+	}
+	if _, err := store.GetSession(ctx, catalog.host.ID, storage.SessionID(meta.ID)); err != nil {
+		t.Fatalf("failed retirement unexpectedly removed database row: %v", err)
+	}
+	failingStore.failure = nil
+	if _, err := store.RetireSessions(ctx, catalog.host.ID, []storage.SessionID{storage.SessionID(meta.ID)}); err != nil {
+		t.Fatal(err)
+	}
+	// A daemon crash after committing SQL and removing metadata must still
+	// leave enough intent to finish cleanup on the next reconciliation.
+	if err := os.Remove(paths.Meta(dir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.Reconcile(ctx); err != nil {
+		t.Fatalf("retry retirement: %v", err)
+	}
+	if _, err := store.GetSession(ctx, catalog.host.ID, storage.SessionID(meta.ID)); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("forgotten row survived retry: %v", err)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("forgotten directory survived retry: %v", err)
+	}
+	if err := catalog.Reconcile(ctx); err != nil {
+		t.Fatalf("repeat completed retirement: %v", err)
+	}
+}
+
+type retirementFailureStore struct {
+	CatalogStore
+	failure error
+}
+
+func (s *retirementFailureStore) RetireSessions(ctx context.Context, host storage.HostID, ids []storage.SessionID) (int64, error) {
+	if s.failure != nil {
+		return 0, s.failure
+	}
+	return s.CatalogStore.RetireSessions(ctx, host, ids)
 }
 
 func TestDetachedSessionIsAliveAndProbed(t *testing.T) {

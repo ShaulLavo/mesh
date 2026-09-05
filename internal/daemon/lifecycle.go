@@ -14,9 +14,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
+	inspectionwire "github.com/shaul/mesh/internal/inspection"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
+	terminalstate "github.com/shaul/mesh/internal/terminal"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -53,6 +57,9 @@ type lifecycle struct {
 	env            []string
 	launch         launchWorker
 	publishTimeout time.Duration
+	// observeTerminalSize is a read-only compatibility boundary for workers
+	// whose inspection protocol predates structured terminal styles.
+	observeTerminalSize func(int) (int, int, bool)
 
 	creationsMu sync.Mutex
 	creations   map[string]*creation
@@ -115,17 +122,18 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 	cfg.Host.Alias = cloneLifecycleString(cfg.Host.Alias)
 	cfg.Host.TailscaleName = cloneLifecycleString(cfg.Host.TailscaleName)
 	return &lifecycle{
-		context:        cfg.Context,
-		catalog:        cfg.Catalog,
-		connector:      cfg.Connector,
-		host:           cfg.Host,
-		privateName:    cfg.PrivateName,
-		sessionsDir:    cfg.SessionsDir,
-		executable:     cfg.Executable,
-		env:            append([]string(nil), cfg.Env...),
-		launch:         cfg.Launch,
-		publishTimeout: cfg.PublishTimeout,
-		creations:      make(map[string]*creation),
+		context:             cfg.Context,
+		catalog:             cfg.Catalog,
+		connector:           cfg.Connector,
+		host:                cfg.Host,
+		privateName:         cfg.PrivateName,
+		sessionsDir:         cfg.SessionsDir,
+		executable:          cfg.Executable,
+		env:                 append([]string(nil), cfg.Env...),
+		launch:              cfg.Launch,
+		publishTimeout:      cfg.PublishTimeout,
+		observeTerminalSize: worker.ReadSessionLeaderTerminalSize,
+		creations:           make(map[string]*creation),
 	}, nil
 }
 
@@ -163,7 +171,7 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 		}
 		response, err := l.remove(ctx, request)
 		return response, true, err
-	case protocol.TypeSignal, protocol.TypeKill:
+	case protocol.TypeSignal, protocol.TypeKill, protocol.TypeInspect:
 		if ctx == nil {
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
 		}
@@ -231,6 +239,7 @@ func (l *lifecycle) create(ctx context.Context, request protocol.Control) (proto
 	if owner {
 		created.launched, created.launchErr = l.launch(worker.LaunchConfig{
 			SessionsDir: l.sessionsDir,
+			HostID:      string(l.host.ID),
 			Executable:  l.executable,
 			Command:     append([]string(nil), created.request.command...),
 			Cwd:         created.request.cwd,
@@ -359,6 +368,11 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	if request.Type == protocol.TypeLogs && (request.Tail <= 0 || request.Tail > protocol.MaxLogTail) {
 		return protocol.Control{}, fmt.Errorf("daemon: log tail must be between 1 and %d bytes", protocol.MaxLogTail)
 	}
+	if request.Type == protocol.TypeInspect {
+		if err := protocol.ValidateInspectDimensions(request.PreviewCols, request.PreviewRows); err != nil {
+			return protocol.Control{}, fmt.Errorf("daemon: inspect session %s: %w", request.SessionID, err)
+		}
+	}
 	sid, err := protocol.NewSessionID(id)
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: encode session ID %s: %w", id, err)
@@ -378,6 +392,9 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		forwarded.Signal = request.Signal
 	} else if request.Type == protocol.TypeLogs {
 		forwarded.Tail = request.Tail
+	} else if request.Type == protocol.TypeInspect {
+		forwarded.PreviewCols = request.PreviewCols
+		forwarded.PreviewRows = request.PreviewRows
 	}
 	payload, err := forwarded.Encode()
 	if err == nil {
@@ -388,13 +405,18 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		RequestID: request.RequestID,
 		SessionID: id,
 	}
-	if err == nil && (request.Type == protocol.TypeKill || request.Type == protocol.TypeLogs) {
+	if err == nil && (request.Type == protocol.TypeKill || request.Type == protocol.TypeLogs || request.Type == protocol.TypeInspect) {
 		var frame protocol.Frame
 		frame, err = conn.ReadFrame()
-		if err == nil && request.Type == protocol.TypeKill {
-			err = validateKillAcknowledgement(id, request.RequestID, frame)
-		} else if err == nil {
-			response, err = validateLogsResponse(id, request.RequestID, request.Tail, frame)
+		if err == nil {
+			switch request.Type {
+			case protocol.TypeKill:
+				err = validateKillAcknowledgement(id, request.RequestID, frame)
+			case protocol.TypeLogs:
+				response, err = validateLogsResponse(id, request.RequestID, request.Tail, frame)
+			case protocol.TypeInspect:
+				response, err = validateInspectionResponse(id, request.RequestID, request.PreviewCols, request.PreviewRows, frame)
+			}
 		}
 	}
 	closeErr := conn.Close()
@@ -404,7 +426,63 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	if closeErr != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: close session %s control connection: %w", id, closeErr)
 	}
+	if request.Type == protocol.TypeInspect {
+		l.enrichLegacyInspection(ctx, id, request, &response)
+	}
 	return response, nil
+}
+
+// enrichLegacyInspection recovers presentation from the exact raw ANSI bytes
+// exposed by an older worker. The old worker's plain inspection remains the
+// authority: unless the replay reproduces every row, no recovered style is
+// used. Any compatibility failure leaves the valid plain response untouched.
+func (l *lifecycle) enrichLegacyInspection(ctx context.Context, id string, request protocol.Control, response *protocol.Control) {
+	if response == nil || response.Inspection == nil || len(response.Inspection.Preview) == 0 ||
+		len(response.Inspection.StyledPreview) != 0 || request.PreviewCols == 1 && request.PreviewRows == 1 ||
+		l.observeTerminalSize == nil {
+		return
+	}
+	meta, err := worker.ReadMeta(filepath.Join(l.sessionsDir, id))
+	if err != nil || meta.ID != id || meta.PID <= 0 {
+		return
+	}
+	screenCols, screenRows, ok := l.observeTerminalSize(meta.PID)
+	if !ok {
+		return
+	}
+	logs, err := l.forwardOneShot(ctx, protocol.Control{
+		Type: protocol.TypeLogs, RequestID: request.RequestID, SessionID: id, Tail: protocol.MaxLogTail,
+	})
+	if err != nil || logs.Type != protocol.TypeLogged {
+		return
+	}
+	replayed, err := terminalstate.PreviewANSIOutputAtSize(
+		logs.Output,
+		screenCols,
+		screenRows,
+		request.PreviewCols,
+		request.PreviewRows,
+	)
+	if err != nil {
+		return
+	}
+	styles, ok := terminalstate.MatchPreviewStyles(replayed, response.Inspection.Preview)
+	if !ok {
+		return
+	}
+	styled := inspectionwire.StyledPreview(terminalstate.Preview{
+		Lines:       response.Inspection.Preview,
+		StyledLines: styles,
+	})
+	if len(styled) == 0 {
+		return
+	}
+	candidate := *response.Inspection
+	candidate.StyledPreview = styled
+	if err := protocol.ValidateSessionInspection(candidate); err != nil {
+		return
+	}
+	response.Inspection = &candidate
 }
 
 func validateKillAcknowledgement(id, requestID string, frame protocol.Frame) error {
@@ -434,6 +512,31 @@ func validateLogsResponse(id, requestID string, tail int, frame protocol.Frame) 
 	}
 	if len(message.Output) > tail {
 		return protocol.Control{}, fmt.Errorf("daemon: session %s returned %d log bytes, want at most %d", id, len(message.Output), tail)
+	}
+	return message, nil
+}
+
+func validateInspectionResponse(id, requestID string, cols, rows int, frame protocol.Frame) (protocol.Control, error) {
+	if frame.Kind != protocol.KindControl {
+		return protocol.Control{}, fmt.Errorf("daemon: session %s inspection response has kind %d", id, frame.Kind)
+	}
+	message, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: session %s inspection response: %w", id, err)
+	}
+	if message.Type != protocol.TypeInspected || message.RequestID != requestID || message.SessionID != id || message.Inspection == nil {
+		return protocol.Control{}, fmt.Errorf("daemon: session %s invalid inspection response", id)
+	}
+	if err := protocol.ValidateSessionInspection(*message.Inspection); err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: session %s invalid inspection response: %w", id, err)
+	}
+	if len(message.Inspection.Preview) > rows {
+		return protocol.Control{}, fmt.Errorf("daemon: session %s returned %d preview rows, want at most %d", id, len(message.Inspection.Preview), rows)
+	}
+	for row, line := range message.Inspection.Preview {
+		if width := ansi.StringWidth(line); width > cols {
+			return protocol.Control{}, fmt.Errorf("daemon: session %s returned preview row %d with width %d, want at most %d", id, row, width, cols)
+		}
 	}
 	return message, nil
 }
@@ -529,6 +632,9 @@ func (l *lifecycle) remove(ctx context.Context, request protocol.Control) (proto
 	id, err := session.ParseID(request.SessionID)
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+	}
+	if err := l.catalog.Reconcile(ctx); err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: reconcile before removing session %s: %w", id, err)
 	}
 	stored, err := l.catalog.Get(ctx, storage.SessionID(id))
 	if err != nil {

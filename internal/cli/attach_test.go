@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -161,6 +162,7 @@ func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 		t.Fatal(err)
 	}
 	serverErr := make(chan error, 1)
+	wantContaining := []protocol.SessionIdentity{{HostID: "host-a", SessionID: "7K3D"}}
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -168,8 +170,18 @@ func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 			return
 		}
 		defer conn.Close() //nolint:errcheck // test resource cleanup
-		if _, err := protocol.NewReader(conn).ReadFrame(); err != nil {
+		frame, err := protocol.NewReader(conn).ReadFrame()
+		if err != nil {
 			serverErr <- err
+			return
+		}
+		request, err := protocol.DecodeControl(frame.Payload)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		if !slices.Equal(request.ContainingSessions, wantContaining) {
+			serverErr <- fmt.Errorf("containing sessions = %#v, want %#v", request.ContainingSessions, wantContaining)
 			return
 		}
 
@@ -210,11 +222,12 @@ func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 
 	initialSeq := uint64(0)
 	result, err := Attach(AttachOptions{
-		SocketPath: socketPath,
-		SessionID:  sid.String(),
-		LastSeq:    &initialSeq,
-		In:         in,
-		Out:        out,
+		SocketPath:         socketPath,
+		SessionID:          sid.String(),
+		ContainingSessions: wantContaining,
+		LastSeq:            &initialSeq,
+		In:                 in,
+		Out:                out,
 	})
 	if err != nil {
 		t.Fatal(err)

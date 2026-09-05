@@ -15,6 +15,7 @@ type CachedService struct {
 	Healthy       int64
 	Problem       string
 	ObservedAt    int64
+	Isolate       int64
 }
 
 type EdgeOutbox struct {
@@ -57,6 +58,7 @@ type Service struct {
 	Target        string
 	PublicName    string
 	WakeOnRequest int64
+	Isolate       int64
 }
 
 type Session struct {

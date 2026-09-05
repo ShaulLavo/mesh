@@ -1,0 +1,24 @@
+[1;38;2;196;167;255mmesh[m[2m › [m[1;38;2;232;222;255mpc[m[2m  pc.tail.example[m                                 [38;2;166;227;161m●[m[2m online[m[2m  ·  [m[2m2 active[m
+[2mChoose a session, or start another one.[m
+
+[1;38;2;157;124;255m› [m[1;38;2;157;124;255m○[m [1;38;2;232;222;255mmesh · claude[m                                 [2mdetached[m  [2mstarted 4m ago[m  [2m7K3D[m
+  [38;2;166;227;161m●[m site · npm                                    [2min use[m    [2mstarted 8m ago[m  [2m91AZ[m
+
+[2m┌─ [m[1;38;2;232;222;255mmesh · claude  ·  7K3D[m[2m ─────────────────────────────────────────────────────┐[m
+[2m│[m [2mstarted in  [m /home/shaul/src/mesh                                            [2m│[m
+[2m│[m [2mforeground  [m [2munavailable[m                                                     [2m│[m
+[2m│[m [2mlaunched    [m claude --dangerously-skip-permissions                           [2m│[m
+[2m│[m [2mactivity    [m catalog detached  ·  last output unavailable  ·  started 4m ago [2m│[m
+[2m├─ [m[1;38;2;255;184;108minspect failed, retrying[m[2m ───────────────────────────────────────────────────┤[m
+[2m│[m [38;2;216;222;233mInspect failed: worker did not answer[m                                        [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
+[2m└──────────────────────────────────────────────────────────────────────────────┘[m
+[1;38;2;196;167;255m↑/↓[m  [1;38;2;196;167;255menter[m [2mattach[m  [1;38;2;196;167;255mspace[m [2mscreen[m  [1;38;2;196;167;255mn[m [2mnew[m  [1;38;2;196;167;255mr[m [2mresume[m  [1;38;2;196;167;255mk[m [2mkill[m  [1;38;2;196;167;255mx[m [2mrm[m  [1;38;2;196;167;255mesc[m [2mhosts[m

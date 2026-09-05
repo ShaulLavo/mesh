@@ -45,6 +45,11 @@ type Service struct {
 	Target        string
 	PublicName    string
 	WakeOnRequest bool
+	// Isolate sends the cross-origin isolation headers with every response,
+	// which is what browsers require before they enable SharedArrayBuffer.
+	// Off by default because the embedder policy also blocks cross-origin
+	// subresources that do not opt in.
+	Isolate bool
 }
 
 // ServiceStatus reports whether the service target is available now.

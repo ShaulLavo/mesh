@@ -1,0 +1,24 @@
+[1;38;2;196;167;255mmesh[m[2m › [m[1;38;2;232;222;255mpc[m[2m  pc.tail.example[m                                 [38;2;166;227;161m●[m[2m online[m[2m  ·  [m[2m2 active[m
+[2mChoose a session, or start another one.[m
+
+[1;38;2;157;124;255m› [m[38;2;166;227;161m●[m [1;38;2;232;222;255mmesh tests[m  [2mworker · go[m                         [2min use[m  [2moutput 12s ago[m  [2m7K3D[m
+  [38;2;166;227;161m●[m site · npm                                      [2min use[m  [2mstarted 8m ago[m  [2m91AZ[m
+
+[2m┌─ [m[1;38;2;232;222;255mmesh tests  ·  worker · go  ·  7K3D[m[2m ────────────────────────────────────────┐[m
+[2m│[m [2mcurrent path[m /home/shaul/src/mesh/internal/worker  ·  process                [2m│[m
+[2m│[m [2mforeground  [m go test ./...                                                   [2m│[m
+[2m│[m [2mlaunched    [m claude --dangerously-skip-permissions                           [2m│[m
+[2m│[m [2mactivity    [m attached  ·  output 12s ago  ·  started 4m ago                  [2m│[m
+[2m├─ [m[1;38;2;255;184;108mlast live view · refresh failed: refresh timed out[m[2m ─────────────────────────┤[m
+[2m│[m [38;2;216;222;233mscreen row 15[m                                                                [2m│[m
+[2m│[m [38;2;216;222;233mscreen row 16[m                                                                [2m│[m
+[2m│[m [38;2;216;222;233mscreen row 17[m                                                                [2m│[m
+[2m│[m [38;2;216;222;233mscreen row 18[m                                                                [2m│[m
+[2m│[m [38;2;216;222;233mscreen row 19[m                                                                [2m│[m
+[2m│[m [38;2;216;222;233mscreen row 20[m                                                                [2m│[m
+[2m│[m [38;2;216;222;233mscreen row 21[m                                                                [2m│[m
+[2m│[m [38;2;216;222;233mscreen row 22[m                                                                [2m│[m
+[2m│[m [38;2;216;222;233mscreen row 23[m                                                                [2m│[m
+[2m│[m [38;2;216;222;233mscreen row 24[m                                                                [2m│[m
+[2m└──────────────────────────────────────────────────────────────────────────────┘[m
+[1;38;2;196;167;255m↑/↓[m  [1;38;2;196;167;255menter[m [2mtake over[m  [1;38;2;196;167;255mspace[m [2mscreen[m  [1;38;2;196;167;255mn[m [2mnew[m  [1;38;2;196;167;255mr[m [2mresume[m  [1;38;2;196;167;255mk[m [2mkill[m  [1;38;2;196;167;255mx[m [2mrm[m  [1;38;2;196;167;255mesc[m [2mhosts[m

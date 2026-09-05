@@ -51,17 +51,30 @@ commands and asks before it runs them. For an unattended adoption, pass
 
 Press `ctrl+]` to detach without stopping the command.
 
+To keep every terminal window's shell running, follow
+[Use Mesh for every terminal window](docs/terminals.md).
+
 ## Remote access
 
-Installed hosts expose public-key-only SSH on Tailnet port 2222. The current
-front door confirms authentication and exits:
+Installed hosts expose Mesh sessions through public-key-only SSH on Tailnet
+port 2222. Add the port and your authorized Mesh key to `~/.ssh/config`:
 
-```bash
-ssh -p 2222 -o IdentitiesOnly=yes \
-  -i ~/.local/state/mesh/identity.key host.mesh.shaulavo.dev hello
+```sshconfig
+Host *.mesh.shaulavo.dev
+    Port 2222
+    IdentityFile ~/.local/state/mesh/identity.key
+    IdentitiesOnly yes
 ```
 
-SFTP, remote SSH sessions, and named reverse tunnels are the next tasks.
+```bash
+ssh pc.mesh.shaulavo.dev          # picker on this host
+ssh -t pc.mesh.shaulavo.dev 7K3D  # attach a specific session
+ssh pc.mesh.shaulavo.dev ls       # list sessions without a terminal
+```
+
+Press `ctrl+]` to return to the picker. Closing SSH leaves the session running.
+A phone with Tailscale and an SSH client can use the same commands after you
+import an authorized key. SFTP and named reverse tunnels remain planned.
 
 ## Development
 

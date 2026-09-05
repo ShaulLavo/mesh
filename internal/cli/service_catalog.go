@@ -116,18 +116,8 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 	rowsByHost := make(map[string][]ServiceCatalogRow, len(hosts))
 	rowCount := 0
 	for _, host := range hosts {
-		for _, row := range cached[host.ID] {
-			rowsByHost[host.ID] = append(rowsByHost[host.ID], ServiceCatalogRow{
-				Host: host, PrivateName: row.PrivateName,
-				Service: protocol.ServiceInfo{
-					Name: row.Service.Name, Kind: string(row.Service.Kind), Target: row.Service.Target,
-					PublicName: row.Service.PublicName, WakeOnRequest: row.Service.WakeOnRequest,
-					Healthy: row.Healthy, Problem: row.Problem,
-				},
-				Stale: true, ObservedAt: row.ObservedAt,
-			})
-			rowCount++
-		}
+		rowsByHost[host.ID] = cachedServiceCatalogRows(host, cached[host.ID])
+		rowCount += len(rowsByHost[host.ID])
 	}
 
 	serviceResults := make(chan serviceQueryResult, len(hosts))
@@ -186,10 +176,7 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 			if newCount > storage.MaximumCachedServices {
 				return nil, nil, fmt.Errorf("service catalog exceeds %d rows", storage.MaximumCachedServices)
 			}
-			live := make([]ServiceCatalogRow, len(result.snapshot.Services))
-			for index, service := range result.snapshot.Services {
-				live[index] = ServiceCatalogRow{Host: result.host, PrivateName: result.snapshot.PrivateName, Service: service, Live: true}
-			}
+			live := liveServiceCatalogRows(result.host, result.snapshot)
 			rowsByHost[result.host.ID] = live
 			rowCount = newCount
 			wantCacheWrites++
@@ -252,6 +239,30 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 		return rows[i].Service.Name < rows[j].Service.Name
 	})
 	return rows, diagnostics, nil
+}
+
+func cachedServiceCatalogRows(host HostRecord, cached []storage.CachedService) []ServiceCatalogRow {
+	rows := make([]ServiceCatalogRow, len(cached))
+	for index, row := range cached {
+		rows[index] = ServiceCatalogRow{
+			Host: host, PrivateName: row.PrivateName,
+			Service: protocol.ServiceInfo{
+				Name: row.Service.Name, Kind: string(row.Service.Kind), Target: row.Service.Target,
+				PublicName: row.Service.PublicName, WakeOnRequest: row.Service.WakeOnRequest, Isolate: row.Service.Isolate,
+				Healthy: row.Healthy, Problem: row.Problem,
+			},
+			Stale: true, ObservedAt: row.ObservedAt,
+		}
+	}
+	return rows
+}
+
+func liveServiceCatalogRows(host HostRecord, snapshot remoteServiceSnapshot) []ServiceCatalogRow {
+	rows := make([]ServiceCatalogRow, len(snapshot.Services))
+	for index, service := range snapshot.Services {
+		rows[index] = ServiceCatalogRow{Host: host, PrivateName: snapshot.PrivateName, Service: service, Live: true}
+	}
+	return rows
 }
 
 func acquireQuery(ctx context.Context, semaphore chan struct{}) bool {

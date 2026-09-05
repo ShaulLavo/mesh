@@ -326,7 +326,7 @@ func (c *reconnectingConn) observeWriteLocked(frame protocol.Frame) {
 		return
 	}
 	switch msg.Type {
-	case protocol.TypeAttach:
+	case protocol.TypeAttach, protocol.TypeAttachDetached:
 		state := resumeState{attach: msg}
 		if msg.LastSeq != nil {
 			state.next = *msg.LastSeq
@@ -396,6 +396,13 @@ func (c *reconnectingConn) observeFrameLocked(generation uint64, frame protocol.
 			}
 		case protocol.TypeDetach, protocol.TypeExit:
 			delete(c.resumes, msg.SessionID)
+		case protocol.TypeError:
+			if tracked && state.attach.Type == protocol.TypeAttachDetached {
+				// A refused claim must not become a delayed attach after the
+				// next link loss. Keep the original conditional request while
+				// resuming, so reconnecting cannot evict another window either.
+				delete(c.resumes, msg.SessionID)
+			}
 		}
 		return frame, false, nil
 	case protocol.KindSnapshot:

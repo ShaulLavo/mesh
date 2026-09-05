@@ -18,7 +18,6 @@ import (
 
 	charmssh "github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
-	"github.com/charmbracelet/wish/accesscontrol"
 	"github.com/charmbracelet/wish/logging"
 	"github.com/charmbracelet/wish/ratelimiter"
 	"github.com/charmbracelet/wish/recover"
@@ -105,12 +104,14 @@ type Config struct {
 	HostKey        ed25519.PrivateKey
 	AuthorizedKeys string
 	Addr           string
+	Handler        SessionHandler
 }
 
 type normalizedConfig struct {
 	hostKey        ed25519.PrivateKey
 	authorizedKeys string
 	addr           netip.AddrPort
+	handler        SessionHandler
 }
 
 // Serve runs one locked SSH listener until ctx is done. Options may register
@@ -184,7 +185,7 @@ func validateConfig(ctx context.Context, cfg Config) (normalizedConfig, error) {
 	if addr.Port() == 0 || addr.Addr().IsUnspecified() || addr.Addr().IsMulticast() {
 		return normalizedConfig{}, fmt.Errorf("sshd: listen address %q is not a concrete IP endpoint", cfg.Addr)
 	}
-	return normalizedConfig{hostKey: hostKey, authorizedKeys: authorizedKeys, addr: addr}, nil
+	return normalizedConfig{hostKey: hostKey, authorizedKeys: authorizedKeys, addr: addr, handler: cfg.Handler}, nil
 }
 
 func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server, error) {
@@ -222,14 +223,11 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 		}
 		return true
 	}
-	// T17 has no session handler yet, and accepting a pty-req without consuming
-	// window-change requests wedges the channel's request loop permanently.
-	server.PtyCallback = func(charmssh.Context, charmssh.Pty) bool { return false }
 	handler := server.Handler
 	if handler == nil {
 		handler = helloHandler
 	}
-	server.Handler = secureMiddleware(handler)
+	configureSessions(server, cfg.handler, handler)
 	return server, nil
 }
 
@@ -251,7 +249,6 @@ func secureMiddleware(handler charmssh.Handler) charmssh.Handler {
 	noOp := func(charmssh.Session) {}
 	return recover.Middleware(
 		fixedHandler(handler),
-		accesscontrol.Middleware(helloCommand),
 		ratelimiter.Middleware(limiter),
 		logging.Middleware(),
 	)(noOp)

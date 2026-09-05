@@ -25,6 +25,7 @@ const (
 // daemon tests and recovery-mode clients can use the same launcher safely.
 type LaunchConfig struct {
 	SessionsDir string
+	HostID      string
 	Executable  string
 	Command     []string
 	Cwd         string
@@ -80,6 +81,7 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 	if err != nil {
 		return Launched{}, err
 	}
+	cfg.Env = withSessionIdentity(cfg.Env, cfg.HostID, id)
 	cleanupReserved := true
 	defer func() {
 		if cleanupReserved {
@@ -199,6 +201,11 @@ func withTerm(env []string, term string) []string {
 // reading its keystrokes.
 const MeshDepthVariable = "MESH_DEPTH"
 
+const (
+	MeshHostIDVariable    = "MESH_HOST_ID"
+	MeshSessionIDVariable = "MESH_SESSION_ID"
+)
+
 func withDepth(env []string, depth int) []string {
 	if depth <= 0 {
 		return env
@@ -211,4 +218,19 @@ func withDepth(env []string, depth int) []string {
 		}
 	}
 	return append(out, prefix+strconv.Itoa(depth))
+}
+
+func withSessionIdentity(env []string, hostID, sessionID string) []string {
+	hostPrefix := MeshHostIDVariable + "="
+	sessionPrefix := MeshSessionIDVariable + "="
+	out := make([]string, 0, len(env)+2)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, hostPrefix) && !strings.HasPrefix(entry, sessionPrefix) {
+			out = append(out, entry)
+		}
+	}
+	if hostID != "" {
+		out = append(out, hostPrefix+hostID)
+	}
+	return append(out, sessionPrefix+sessionID)
 }

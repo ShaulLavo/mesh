@@ -10,6 +10,9 @@ remain separate tasks.
 
 T16, T17 and T18 hang their handlers off this. Land it first and land it small.
 
+T17 now supplies the session handler. Bare interactive SSH opens the picker,
+and the explicit `hello` command retains this task's authentication check.
+
 ## Responsibilities
 
 1. **Host key from the Mesh identity.** Export the existing `internal/identity`
@@ -64,9 +67,9 @@ refuses a missing file, a non-regular file, a changed file, a file with no read
 bits, a group-writable file, a world-writable file, and a file larger than 1
 MiB. Re-reading the file makes key removal effective for the next connection.
 
-The Wish handler runs `recover`, `logging`, `ratelimiter`, and `accesscontrol`
-in that order. The temporary `hello` exec command works without a PTY.
-`activeterm` remains scoped to the PTY handlers that T17 adds.
+The Wish handler runs `recover`, `logging`, and `ratelimiter`. T17 replaces
+the original hello-only `accesscontrol` with exact command parsing and requires
+a PTY for interactive commands. `hello` and `ls` work without a PTY.
 
 Wish 1.4.7 brings the Bubble Tea v1 dependency tree. Mesh keeps its product TUI
 on Bubble Tea v2. `github.com/charmbracelet/x/cellbuf` v0.0.15 is the minimum

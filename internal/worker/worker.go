@@ -80,6 +80,7 @@ func validateTerminalSize(cols, rows int) error {
 // Config describes the session a worker should host.
 type Config struct {
 	ID                 string
+	HostID             string
 	Dir                string
 	Command            []string
 	Cwd                string
@@ -97,23 +98,30 @@ type Worker struct {
 	cmd    *exec.Cmd
 	ring   *session.Ring
 	screen terminalstate.Screen
+	now    func() time.Time
+
+	observeProcess processObserver
 
 	// mu orders ring delivery, attachment ownership, and shutdown. A client
 	// attaching mid-write cannot miss bytes, and finish cannot race a new writer
 	// or terminal output queued after session.exit.
-	mu          sync.Mutex
-	client      *attachment
-	attachments map[*attachment]struct{}
-	input       *inputRelay
-	finished    bool
-	pumpStopped bool
+	mu           sync.Mutex
+	client       *attachment
+	attachments  map[*attachment]struct{}
+	nesting      map[net.Conn]protocol.SessionIdentity
+	nestReaders  sync.WaitGroup
+	input        *inputRelay
+	finished     bool
+	pumpStopped  bool
+	lastOutputAt time.Time
 	// reaped is set once Process.Wait has returned. After that the PID is the
 	// kernel's to reuse, so signalling it — or its negation, now that the child
 	// is a real process group leader — can land on an unrelated process.
-	reaped     bool
-	writers    sync.WaitGroup
-	attachOnce sync.Once
-	attached   chan struct{}
+	reaped         bool
+	writers        sync.WaitGroup
+	killResponders sync.WaitGroup
+	attachOnce     sync.Once
+	attached       chan struct{}
 
 	exitOnce sync.Once
 	exited   chan struct{}
@@ -122,11 +130,13 @@ type Worker struct {
 }
 
 type attachment struct {
-	conn  net.Conn
-	w     *protocol.Writer
-	sid   protocol.SessionID
-	queue chan outboundFrame
-	done  chan struct{}
+	conn               net.Conn
+	w                  *protocol.Writer
+	sid                protocol.SessionID
+	containingSessions []protocol.SessionIdentity
+	nestingSupported   bool
+	queue              chan outboundFrame
+	done               chan struct{}
 
 	queueMu       sync.Mutex
 	payloadFrames int
@@ -409,6 +419,20 @@ func Run(cfg Config) (int, error) {
 	if cfg.Rows <= 0 {
 		cfg.Rows = 24
 	}
+	if cfg.Env == nil {
+		cfg.Env = os.Environ()
+	}
+	hostID, err := workerHostID(cfg)
+	if err != nil {
+		return 0, err
+	}
+	cfg.HostID = hostID
+	cfg.Env = withSessionIdentity(cfg.Env, hostID, sid.String())
+	// An empty exec.Cmd.Dir inherits the worker's directory. Resolve that same
+	// value now so durable metadata can report where the session actually began.
+	if cfg.Cwd == "" {
+		cfg.Cwd, _ = os.Getwd()
+	}
 	if err := validateTerminalSize(cfg.Cols, cfg.Rows); err != nil {
 		return 0, fmt.Errorf("worker: invalid terminal size: %w", err)
 	}
@@ -439,15 +463,17 @@ func Run(cfg Config) (int, error) {
 	}
 
 	w := &Worker{
-		cfg:      cfg,
-		sid:      sid,
-		pty:      pty,
-		cmd:      cmd,
-		ring:     session.NewRing(ringSize),
-		screen:   terminalstate.NewScreen(cfg.Cols, cfg.Rows),
-		exited:   make(chan struct{}),
-		pumpDone: make(chan struct{}),
-		attached: make(chan struct{}),
+		cfg:            cfg,
+		sid:            sid,
+		pty:            pty,
+		cmd:            cmd,
+		ring:           session.NewRing(ringSize),
+		screen:         terminalstate.NewScreen(cfg.Cols, cfg.Rows),
+		now:            time.Now,
+		observeProcess: defaultProcessObserver,
+		exited:         make(chan struct{}),
+		pumpDone:       make(chan struct{}),
+		attached:       make(chan struct{}),
 	}
 
 	meta := Meta{
@@ -560,6 +586,7 @@ func (w *Worker) pump() {
 			// snapshot aid; the ring is the session's record of what happened.
 			_, _ = w.ring.Write(buf[:n])
 			_, _ = w.screen.Write(buf[:n])
+			w.lastOutputAt = w.currentTime()
 			if c := w.client; c != nil {
 				if !c.enqueueData(seq, buf[:n]) {
 					w.dropLocked(c, "")
@@ -637,7 +664,9 @@ func (w *Worker) finish(code int) {
 			}
 		}
 		w.mu.Unlock()
+		w.closeNesting()
 		w.waitForWriters()
+		w.killResponders.Wait()
 	})
 }
 

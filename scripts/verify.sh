@@ -35,6 +35,8 @@ declare -a pids=()
 for test_path in "${tests[@]}"; do
   name=$(basename "$test_path")
   log="$run_root/$name.log"
+  config_dir="$run_root/config/$name"
+  mkdir -p "$config_dir"
   names+=("$name")
   logs+=("$log")
   (
@@ -43,7 +45,12 @@ for test_path in "${tests[@]}"; do
     case "$slow_tests" in
       *" $name "*) this_timeout=$slow_test_timeout ;;
     esac
-    timeout --kill-after=5s "$this_timeout" env MESH="$binary" bash "$test_path"
+    # Integration tests create their own state. Give each one an equally
+    # isolated address book and no inherited nesting identity, so running this
+    # verifier from inside Mesh cannot change its detach key or catalog shape.
+    timeout --kill-after=5s "$this_timeout" \
+      env -u MESH_DEPTH -u MESH_HOST_ID -u MESH_SESSION_ID \
+      MESH="$binary" MESH_CONFIG_DIR="$config_dir" bash "$test_path"
   ) >"$log" 2>&1 &
   pids+=("$!")
 done

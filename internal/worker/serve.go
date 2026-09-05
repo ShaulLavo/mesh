@@ -35,13 +35,20 @@ func (w *Worker) serve(conn net.Conn) {
 		w.writeLogs(conn, msg)
 		return
 	}
+	if err == nil && msg.Type == protocol.TypeInspect {
+		w.writeInspection(conn, msg)
+		return
+	}
+	if err == nil && msg.Type == protocol.TypeContainment {
+		w.writeContainment(conn, msg)
+		return
+	}
+	if err == nil && msg.Type == protocol.TypeNest {
+		w.serveNesting(conn, msg)
+		return
+	}
 	if err == nil && msg.Type == protocol.TypeKill {
-		w.kill()
-		_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
-			Type:      protocol.TypeOK,
-			RequestID: msg.RequestID,
-			SessionID: w.cfg.ID,
-		})
+		w.killAndAcknowledge(conn, msg)
 		return
 	}
 	if err == nil && msg.Type == protocol.TypeSignal {
@@ -50,12 +57,17 @@ func (w *Worker) serve(conn net.Conn) {
 		w.signal(msg.Signal)
 		return
 	}
-	if err != nil || msg.Type != protocol.TypeAttach {
+	if err != nil || (msg.Type != protocol.TypeAttach && msg.Type != protocol.TypeAttachDetached) {
 		_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
 			Type:      protocol.TypeError,
 			SessionID: w.cfg.ID,
 			Message:   "expected " + protocol.TypeAttach,
 		})
+		return
+	}
+	containingSessions, err := w.validateAttachmentContainment(msg.ContainingSessions)
+	if err != nil {
+		w.writeAttachError(conn, fmt.Sprintf("invalid terminal containment: %v", err))
 		return
 	}
 	if msg.Cols != 0 || msg.Rows != 0 {
@@ -65,12 +77,33 @@ func (w *Worker) serve(conn net.Conn) {
 		}
 	}
 	c := newAttachment(conn, w.sid)
+	c.containingSessions = containingSessions
+	c.nestingSupported = msg.NestingSupported
 
 	// Attach under the same lock the PTY pump uses, so the replay we compute
 	// and the live stream that follows it join up exactly.
 	w.mu.Lock()
 	if w.finished {
 		w.mu.Unlock()
+		return
+	}
+	if msg.Type == protocol.TypeAttachDetached && w.client != nil {
+		w.mu.Unlock()
+		_ = conn.SetWriteDeadline(time.Now().Add(attachmentWriteTimeout))
+		_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
+			Type: protocol.TypeError, RequestID: msg.RequestID, SessionID: w.cfg.ID,
+			Reason: protocol.ReasonAttached, Message: "session is already attached",
+		})
+		return
+	}
+	if len(w.nesting) > 0 && !msg.NestingSupported {
+		w.mu.Unlock()
+		w.writeAttachError(conn, "nested sessions require an attachment that supports nested detach keys")
+		return
+	}
+	if err := w.validateNestingContainmentLocked(containingSessions); err != nil {
+		w.mu.Unlock()
+		w.writeAttachError(conn, fmt.Sprintf("invalid terminal containment: %v", err))
 		return
 	}
 	if msg.Cols > 0 && msg.Rows > 0 {
@@ -117,10 +150,12 @@ func (w *Worker) serve(conn net.Conn) {
 	}
 
 	if !c.enqueueControl(protocol.Control{
-		Type:      protocol.TypeAttached,
-		SessionID: w.cfg.ID,
-		Seq:       want,
-		Snapshot:  isSnapshot,
+		Type:             protocol.TypeAttached,
+		SessionID:        w.cfg.ID,
+		Seq:              want,
+		Snapshot:         isSnapshot,
+		Nested:           w.nestedLocked(),
+		NestingSupported: true,
 	}, false) || (isSnapshot && !c.enqueueSnapshot(snapshot)) || !c.enqueueDataChunks(want, replay) {
 		w.mu.Unlock()
 		w.writeAttachError(conn, "unable to queue terminal state; retry attachment")
@@ -200,6 +235,22 @@ func (w *Worker) serve(conn net.Conn) {
 			}
 		}
 	}
+}
+
+func (w *Worker) killAndAcknowledge(conn net.Conn, request protocol.Control) {
+	w.mu.Lock()
+	if w.finished {
+		w.mu.Unlock()
+		return
+	}
+	w.killResponders.Add(1)
+	w.mu.Unlock()
+	defer w.killResponders.Done()
+	w.kill()
+	_ = conn.SetWriteDeadline(time.Now().Add(attachmentWriteTimeout))
+	_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
+		Type: protocol.TypeOK, RequestID: request.RequestID, SessionID: w.cfg.ID,
+	})
 }
 
 func (w *Worker) writeLogs(conn net.Conn, request protocol.Control) {

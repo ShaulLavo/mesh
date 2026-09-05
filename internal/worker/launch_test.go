@@ -101,3 +101,21 @@ func TestWithTermReplacesTheServiceEnvironment(t *testing.T) {
 		t.Fatalf("withTerm() with no term = %q", unchanged)
 	}
 }
+
+func TestWithSessionIdentityReplacesTheParentSession(t *testing.T) {
+	t.Parallel()
+
+	got := withSessionIdentity([]string{
+		"PATH=/usr/bin",
+		MeshHostIDVariable + "=parent-host",
+		MeshSessionIDVariable + "=OLD1",
+	}, "current-host", "7K3D")
+	want := []string{
+		"PATH=/usr/bin",
+		MeshHostIDVariable + "=current-host",
+		MeshSessionIDVariable + "=7K3D",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("session environment = %q, want %q", got, want)
+	}
+}

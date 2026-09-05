@@ -2,8 +2,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/shaul/mesh/internal/cli"
+	"github.com/shaul/mesh/internal/protocol"
 )
 
 type screen uint8
@@ -23,9 +26,21 @@ const (
 )
 
 type host struct {
-	alias    string
-	stale    bool
-	sessions []session
+	id          string
+	alias       string
+	route       string
+	stale       bool
+	local       bool
+	sessions    []session
+	served      []servedWebsite
+	servedKnown bool
+	servedStale bool
+}
+
+type servedWebsite struct {
+	url    string
+	health string
+	stale  bool
 }
 
 type session struct {
@@ -45,6 +60,8 @@ func (cancelSelection) pickerSelection() {}
 type attachSelection struct {
 	hostAlias string
 	sessionID string
+	relaunch  bool
+	takeOver  bool
 }
 
 func (attachSelection) pickerSelection() {}
@@ -59,29 +76,42 @@ func (resumeSelection) pickerSelection() {}
 
 type wakeSelection struct{ hostAlias string }
 
-type killSelection struct {
-	hostAlias string
-	sessionID string
-}
-
-type removeSelection struct {
-	hostAlias string
-	sessionID string
-}
+type initialSessionRefreshMsg struct{}
 
 func (wakeSelection) pickerSelection() {}
 
 type model struct {
-	hosts        []host
-	screen       screen
-	selectedHost int
-	list         list.Model
-	selection    selection
-	now          time.Time
-	width        int
-	height       int
-	notice       string
-	styles       pickerStyles
+	hosts              []host
+	screen             screen
+	selectedHost       int
+	list               list.Model
+	selection          selection
+	now                time.Time
+	width              int
+	height             int
+	notice             string
+	styles             pickerStyles
+	ctx                context.Context
+	inspect            cli.PickerInspectFunc
+	refresh            cli.PickerRefreshFunc
+	act                cli.PickerSessionActionFunc
+	inspection         inspectionState
+	summaries          map[inspectionTarget]sessionLiveSummary
+	sessionAction      sessionActionState
+	inspectSeq         uint64
+	summarySeq         uint64
+	actionSeq          uint64
+	refreshEpoch       uint64
+	catalogEpoch       uint64
+	fullPreview        bool
+	containingSessions map[containingSessionKey]containingSessionState
+	cancelInspect      context.CancelFunc
+	cancelSummary      context.CancelFunc
+	cancelRefresh      context.CancelFunc
+	cancelAction       context.CancelFunc
+	refreshOnInit      bool
+	loadHosts          func(context.Context) ([]cli.HostSessions, error)
+	containingPath     []protocol.SessionIdentity
 }
 
 const (
@@ -91,18 +121,29 @@ const (
 )
 
 func newModel(hosts []host, now time.Time) model {
+	return newInspectingModel(context.Background(), hosts, nil, now)
+}
+
+func newInspectingModel(ctx context.Context, hosts []host, inspect cli.PickerInspectFunc, now time.Time) model {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	styles := newPickerStyles()
 	items := hostItems(hosts)
 	browser := list.New(items, hostDelegate{styles: styles}, defaultWidth, defaultHeight-frameRows)
 	configureList(&browser)
 	browser.SetStatusBarItemName("host", "hosts")
 	return model{
-		hosts:  cloneHosts(hosts),
-		list:   browser,
-		now:    now,
-		width:  defaultWidth,
-		height: defaultHeight,
-		styles: styles,
+		hosts:              cloneHosts(hosts),
+		list:               browser,
+		now:                now,
+		width:              defaultWidth,
+		height:             defaultHeight,
+		styles:             styles,
+		ctx:                ctx,
+		inspect:            inspect,
+		summaries:          make(map[inspectionTarget]sessionLiveSummary),
+		containingSessions: make(map[containingSessionKey]containingSessionState),
 	}
 }
 
@@ -114,12 +155,14 @@ func configureList(browser *list.Model) {
 	browser.SetShowPagination(false)
 	browser.SetShowHelp(false)
 	browser.DisableQuitKeybindings()
+	browser.InfiniteScrolling = true
 }
 
 func cloneHosts(hosts []host) []host {
 	cloned := make([]host, len(hosts))
 	for index, current := range hosts {
 		current.sessions = append([]session(nil), current.sessions...)
+		current.served = append([]servedWebsite(nil), current.served...)
 		for sessionIndex := range current.sessions {
 			current.sessions[sessionIndex].command = append([]string(nil), current.sessions[sessionIndex].command...)
 		}
@@ -128,63 +171,148 @@ func cloneHosts(hosts []host) []host {
 	return cloned
 }
 
-func (m model) Init() tea.Cmd { return nil }
+func (m model) Init() tea.Cmd {
+	var refresh tea.Cmd
+	if m.refreshOnInit {
+		refresh = func() tea.Msg { return initialSessionRefreshMsg{} }
+	}
+	return tea.Batch(refresh, m.loadHostCatalog())
+}
 
 func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width = max(1, message.Width)
 		m.height = max(1, message.Height)
-		m.list.SetSize(m.width, max(1, m.height-frameRows))
+		m.resizeList()
+		if m.screen == sessionScreen {
+			startCatalog := m.refreshOnInit
+			m.refreshOnInit = false
+			if startCatalog {
+				return m, m.restartSessionScreenLoops()
+			}
+			return m, m.restartInspectionLoop()
+		}
 		return m, nil
+	case initialSessionRefreshMsg:
+		if !m.refreshOnInit || m.screen != sessionScreen {
+			return m, nil
+		}
+		m.refreshOnInit = false
+		return m, m.restartSessionScreenLoops()
 	case tea.KeyPressMsg:
-		if command := m.handleKey(message); command != nil {
+		if handled, command := m.handleKey(message); handled {
+			if m.selection != nil && command == nil {
+				command = tea.Quit
+			}
+			if m.selection != nil {
+				m.invalidateSessionScreenLoops()
+			}
 			return m, command
 		}
-		if m.selection != nil {
-			return m, tea.Quit
+	case inspectionResultMsg:
+		return m.applyInspection(message), nil
+	case sessionSummariesResultMsg:
+		return m.applySessionSummaries(message), nil
+	case catalogRefreshResultMsg:
+		return m.applyCatalogRefresh(message)
+	case hostCatalogLoadedMsg:
+		return m.applyLoadedHosts(message)
+	case sessionActionResultMsg:
+		return m.applySessionAction(message)
+	case catalogRefreshTickMsg:
+		if m.screen != sessionScreen || message.epoch != m.catalogEpoch {
+			return m, nil
 		}
+		m.now = message.at
+		m.refreshSessionDelegate()
+		return m, m.refreshSelectedHost(message.epoch)
+	case inspectionTickMsg:
+		if m.screen != sessionScreen || message.epoch != m.refreshEpoch {
+			return m, nil
+		}
+		m.now = message.at
+		m.refreshSessionDelegate()
+		inspect := m.inspectSelected()
+		summaries := m.inspectVisibleSessionSummaries()
+		return m, tea.Batch(inspect, summaries, m.scheduleInspectionTick(message.epoch))
 	}
 
+	before := m.selectedSessionID()
 	updated, command := m.list.Update(message)
 	m.list = updated
+	if m.screen == sessionScreen && m.selectedSessionID() != before {
+		if !sessionActionBusy(m.sessionAction) {
+			m.notice = ""
+			if m.sessionAction.phase == sessionActionFailed {
+				m.sessionAction = sessionActionState{}
+			}
+		}
+		m.fullPreview = false
+		command = tea.Batch(command, m.restartInspectionLoop())
+	}
 	return m, command
 }
 
-func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
+func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
+	if sessionActionBusy(m.sessionAction) {
+		switch key.String() {
+		case "enter", "n", "r", "k", "x", "w":
+			if m.notice == "" {
+				m.notice = sessionActionNotice(m.sessionAction)
+			}
+			return true, nil
+		}
+	}
 	switch key.String() {
 	case "ctrl+c", "q":
 		m.selection = cancelSelection{}
-		return tea.Quit
+		return true, tea.Quit
 	case "esc":
 		if m.screen == sessionScreen {
+			if m.fullPreview {
+				m.fullPreview = false
+				return true, nil
+			}
 			m.showHosts()
-			return nil
+			return true, nil
 		}
 		m.selection = cancelSelection{}
-		return tea.Quit
+		return true, tea.Quit
 	case "enter":
 		if m.screen == hostScreen {
-			m.showSessions()
-			return nil
+			return true, m.showSessions()
 		}
 		m.attachSelected()
 		if m.selection != nil {
-			return tea.Quit
+			return true, tea.Quit
 		}
-		return nil
+		return true, nil
+	case "space":
+		if m.screen == sessionScreen {
+			if _, _, ok := m.currentSession(); ok {
+				m.fullPreview = !m.fullPreview
+			}
+			return true, nil
+		}
 	case "n":
 		if m.screen == sessionScreen {
+			if m.fullPreview {
+				return true, nil
+			}
 			current := m.currentHost()
 			if current.stale {
 				m.notice = current.alias + " is offline; wake it first"
-				return nil
+				return true, nil
 			}
 			m.selection = newSelection{hostAlias: current.alias}
-			return tea.Quit
+			return true, tea.Quit
 		}
 	case "r":
 		if m.screen == sessionScreen {
+			if m.fullPreview {
+				return true, nil
+			}
 			current := m.currentHost()
 			switch {
 			case current.stale:
@@ -193,71 +321,120 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 				m.notice = current.alias + " has no active sessions"
 			default:
 				m.selection = resumeSelection{hostAlias: current.alias}
-				return tea.Quit
+				return true, tea.Quit
 			}
-			return nil
+			return true, nil
 		}
 	case "k":
 		if m.screen == sessionScreen {
+			if m.fullPreview {
+				return true, nil
+			}
 			current, session, ok := m.currentSession()
 			if !ok {
-				return nil
+				return true, nil
+			}
+			if current.stale {
+				m.notice = current.alias + " is offline; wake it first"
+				return true, nil
 			}
 			if session.state != "running" && session.state != "detached" {
 				m.notice = session.id + " is already " + session.state
-				return nil
+				return true, nil
 			}
-			m.selection = killSelection{hostAlias: current.alias, sessionID: session.id}
-			return tea.Quit
+			return true, m.startSessionAction(cli.PickerKillSession)
 		}
 	case "x":
 		if m.screen == sessionScreen {
+			if m.fullPreview {
+				return true, nil
+			}
 			current, session, ok := m.currentSession()
 			if !ok {
-				return nil
+				return true, nil
+			}
+			if current.stale {
+				m.notice = current.alias + " is offline; wake it first"
+				return true, nil
 			}
 			if session.state == "running" || session.state == "detached" {
 				m.notice = session.id + " is still " + session.state + "; kill it first"
-				return nil
+				return true, nil
 			}
-			m.selection = removeSelection{hostAlias: current.alias, sessionID: session.id}
-			return tea.Quit
+			return true, m.startSessionAction(cli.PickerRemoveSession)
 		}
 	case "w":
 		if m.screen == sessionScreen {
+			if m.fullPreview {
+				return true, nil
+			}
 			current := m.currentHost()
 			if current.stale {
 				m.selection = wakeSelection{hostAlias: current.alias}
-				return tea.Quit
+				return true, tea.Quit
 			}
 			m.notice = current.alias + " is already online"
-			return nil
+			return true, nil
 		}
 	}
-	return nil
+	if m.screen == sessionScreen && m.fullPreview {
+		return true, nil
+	}
+	return false, nil
 }
 
-func (m *model) showSessions() {
+func (m *model) showSessions() tea.Cmd {
 	selected, ok := m.list.SelectedItem().(hostItem)
 	if !ok {
-		return
+		return nil
 	}
-	m.selectedHost = selected.index
+	m.refreshOnInit = false
+	m.enterSessions(selected.index)
+	return m.restartSessionScreenLoops()
+}
+
+func (m *model) enterSessions(hostIndex int) {
+	m.selectedHost = hostIndex
 	m.screen = sessionScreen
 	m.notice = ""
-	m.list.SetDelegate(sessionDelegate{styles: m.styles, now: m.now, stale: m.currentHost().stale})
+	m.list.SetDelegate(sessionDelegate{styles: m.styles, now: m.now})
 	m.list.SetStatusBarItemName("session", "sessions")
 	_ = m.list.SetItems(sessionItems(m.currentHost().sessions))
 	m.list.ResetSelected()
+	m.fullPreview = false
+	m.resizeList()
+	if len(m.currentHost().sessions) > 0 {
+		m.inspection = inspectionState{kind: inspectionLoading}
+	} else {
+		m.inspection = inspectionState{kind: inspectionUnavailable, problem: "No session is selected."}
+	}
+}
+
+func (m *model) openHostSessions(alias string) bool {
+	for index := range m.hosts {
+		if m.hosts[index].alias != alias {
+			continue
+		}
+		m.list.Select(index)
+		m.enterSessions(index)
+		m.refreshOnInit = true
+		return true
+	}
+	return false
 }
 
 func (m *model) showHosts() {
+	m.invalidateSessionScreenLoops()
+	m.refreshOnInit = false
 	m.screen = hostScreen
 	m.notice = ""
+	m.fullPreview = false
+	m.inspection = inspectionState{}
 	m.list.SetDelegate(hostDelegate{styles: m.styles})
 	m.list.SetStatusBarItemName("host", "hosts")
 	_ = m.list.SetItems(hostItems(m.hosts))
 	m.list.Select(m.selectedHost)
+	m.resizeList()
 }
 
 func (m *model) attachSelected() {
@@ -265,11 +442,14 @@ func (m *model) attachSelected() {
 	if !ok {
 		return
 	}
-	if selected.session.state != "running" && selected.session.state != "detached" {
+	if selected.session.state != "running" && selected.session.state != "detached" && selected.session.state != "interrupted" {
 		m.notice = fmt.Sprintf("%s is %s; use mesh logs %s", selected.session.id, selected.session.state, selected.session.id)
 		return
 	}
-	m.selection = attachSelection{hostAlias: m.currentHost().alias, sessionID: selected.session.id}
+	m.selection = attachSelection{
+		hostAlias: m.currentHost().alias, sessionID: selected.session.id,
+		relaunch: selected.session.state == "interrupted", takeOver: m.selectedSessionAttached(),
+	}
 }
 
 func (m model) currentHost() host {
@@ -277,6 +457,9 @@ func (m model) currentHost() host {
 }
 
 func (m model) View() tea.View {
+	if m.screen == sessionScreen {
+		return m.sessionView()
+	}
 	header, subtitle, footer := m.chrome()
 	content := header + "\n" + subtitle + "\n\n" + m.list.View() + "\n" + footer
 	view := tea.NewView(content)
@@ -287,46 +470,114 @@ func (m model) View() tea.View {
 
 func (m model) chrome() (string, string, string) {
 	if m.screen == hostScreen {
-		header := m.styles.title.Render("mesh")
+		header := justify(m.styles.title.Render("mesh"), m.styles.muted.Render(count(len(m.hosts), "host")), m.width)
 		subtitle := "Choose a host."
 		if len(m.hosts) == 0 {
 			subtitle = "No hosts yet. Add one with mesh add [user@]host."
 		}
-		return truncate(header, m.width), truncate(m.styles.muted.Render(subtitle), m.width), truncate("↑/↓ move  enter sessions  esc cancel", m.width)
+		footer := m.styles.hints(hint{"↑/↓", "move"}, hint{"enter", "sessions"}, hint{"esc", "cancel"})
+		return truncate(header, m.width), truncate(m.styles.muted.Render(subtitle), m.width), truncate(footer, m.width)
 	}
 
 	current := m.currentHost()
-	status := fmt.Sprintf("online  %d active", activeSessions(current.sessions))
-	if current.stale {
-		status = "offline  cached-stale"
+	breadcrumb := m.styles.title.Render("mesh") + m.styles.muted.Render(" › ") + m.styles.accent.Render(safeText(current.alias))
+	if route := safeText(current.route); route != "" && route != safeText(current.alias) {
+		breadcrumb += m.styles.muted.Render("  " + route)
 	}
-	header := m.styles.title.Render("mesh / "+current.alias) + "  " + m.styles.status(current.stale).Render(status)
-	subtitle := "Choose a session, or start another one."
+	header := justify(breadcrumb, m.hostStatus(current), m.width)
+	subtitle := m.styles.muted.Render("Choose a session, or start another one.")
 	if current.stale {
-		subtitle = "Cached sessions may be stale. Wake the host before starting work."
+		subtitle = m.styles.muted.Render("Cached sessions may be stale. Wake the host before starting work.")
 	}
 	if m.notice != "" {
-		subtitle = m.notice
+		subtitle = m.styles.warning.Render(safeText(m.notice))
 	}
-	footer := "↑/↓ move  enter attach  n new  r resume  k kill  x remove  esc hosts"
+	return truncate(header, m.width), truncate(subtitle, m.width), truncate(m.footer(current), m.width)
+}
+
+// hostStatus is the right-aligned half of the session header: liveness first,
+// then how much is going on, so a glance says whether attaching will work.
+func (m model) hostStatus(current host) string {
+	parts := []string{m.styles.live.Render("●") + m.styles.muted.Render(" online"), m.styles.muted.Render(fmt.Sprintf("%d active", activeSessions(current.sessions)))}
 	if current.stale {
-		footer = "↑/↓ move  enter try attach  w wake  esc hosts"
+		parts = []string{m.styles.warning.Render("▲ offline  ·  cached")}
 	}
-	return truncate(header, m.width), truncate(m.styles.muted.Render(subtitle), m.width), truncate(footer, m.width)
+	if m.refresh != nil {
+		parts = append(parts, m.styles.muted.Render(servedSummary(current)))
+	}
+	return strings.Join(parts, m.styles.muted.Render("  ·  "))
+}
+
+func (m model) footer(current host) string {
+	action := "attach"
+	if _, selected, ok := m.currentSession(); ok {
+		if m.selectedSessionAttached() {
+			action = "take over"
+		}
+		if selected.state == "interrupted" {
+			action = "relaunch"
+		}
+	}
+	if current.stale {
+		action = "try attach"
+	}
+	busy := sessionActionBusy(m.sessionAction)
+	if m.fullPreview {
+		hints := []hint{{"space", "details"}, {"enter", action}, {"esc", "details"}}
+		if busy {
+			hints = []hint{{"space", "details"}, {"", "session update in progress"}, {"esc", "details"}}
+		}
+		return m.styles.hints(hints...)
+	}
+	if busy {
+		return m.styles.hints(hint{"↑/↓", "browse"}, hint{"space", "screen"}, hint{"", "session update in progress"}, hint{"esc", "cancel"})
+	}
+	if current.stale {
+		return m.styles.hints(hint{"↑/↓", ""}, hint{"enter", action}, hint{"space", "screen"}, hint{"w", "wake"}, hint{"esc", "hosts"})
+	}
+	return m.styles.hints(
+		hint{"↑/↓", ""}, hint{"enter", action}, hint{"space", "screen"},
+		hint{"n", "new"}, hint{"r", "resume"}, hint{"k", "kill"}, hint{"x", "rm"}, hint{"esc", "hosts"},
+	)
 }
 
 func truncate(value string, width int) string {
 	return ansi.Truncate(value, max(1, width), "…")
 }
 
+// cell fits text into a fixed column so rows line up regardless of how long
+// each value is. Styled text is fine: widths ignore escape sequences.
+func cell(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	text = ansi.Truncate(text, width, "…")
+	return text + strings.Repeat(" ", max(0, width-ansi.StringWidth(text)))
+}
+
+func justify(left, right string, width int) string {
+	gap := width - ansi.StringWidth(left) - ansi.StringWidth(right)
+	if gap < 2 {
+		return truncate(left+"  "+right, width)
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func count(quantity int, noun string) string {
+	if quantity == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", quantity, noun)
+}
+
 func activeSessions(sessions []session) int {
-	count := 0
+	total := 0
 	for _, current := range sessions {
 		if current.state == "running" || current.state == "detached" {
-			count++
+			total++
 		}
 	}
-	return count
+	return total
 }
 
 type hostItem struct {
@@ -360,8 +611,8 @@ func sessionItems(sessions []session) []list.Item {
 
 type hostDelegate struct{ styles pickerStyles }
 
-func (delegate hostDelegate) Height() int  { return 2 }
-func (delegate hostDelegate) Spacing() int { return 1 }
+func (delegate hostDelegate) Height() int  { return 1 }
+func (delegate hostDelegate) Spacing() int { return 0 }
 func (delegate hostDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
 	return nil
 }
@@ -371,57 +622,265 @@ func (delegate hostDelegate) Render(output io.Writer, browser list.Model, index 
 	if !ok {
 		return
 	}
+	aliasWidth, routeWidth := 0, 0
+	for _, entry := range browser.Items() {
+		other, ok := entry.(hostItem)
+		if !ok {
+			continue
+		}
+		aliasWidth = max(aliasWidth, ansi.StringWidth(safeText(other.host.alias)))
+		routeWidth = max(routeWidth, ansi.StringWidth(safeText(other.host.route)))
+	}
+	aliasWidth = min(aliasWidth, 24)
+	routeWidth = min(routeWidth, 32)
+
 	selected := index == browser.Index()
-	prefix := "  "
+	cursor := "  "
 	if selected {
-		prefix = delegate.styles.cursor.Render("› ")
+		cursor = delegate.styles.cursor.Render("› ")
 	}
-	status := "online"
+	glyph := delegate.styles.live.Render("●")
+	status := delegate.styles.muted.Render(fmt.Sprintf("%d active  ·  %s", activeSessions(item.host.sessions), count(len(item.host.sessions), "session")))
 	if item.host.stale {
-		status = "offline  cached-stale"
+		glyph = delegate.styles.warning.Render("▲")
+		status = delegate.styles.warning.Render("offline  ·  cached") + delegate.styles.muted.Render("  ·  "+count(len(item.host.sessions), "session"))
 	}
-	first := fmt.Sprintf("%s%s  %s", prefix, delegate.styles.item(selected).Render(item.host.alias), delegate.styles.status(item.host.stale).Render(status))
-	second := fmt.Sprintf("  %d active  %d sessions", activeSessions(item.host.sessions), len(item.host.sessions))
-	_, _ = fmt.Fprintf(output, "%s\n%s", truncate(first, browser.Width()), truncate(delegate.styles.muted.Render(second), browser.Width()))
+	row := cursor + glyph + " " + cell(delegate.styles.item(selected).Render(safeText(item.host.alias)), aliasWidth)
+	if routeWidth > 0 {
+		row += "  " + cell(delegate.styles.muted.Render(safeText(item.host.route)), routeWidth)
+	}
+	row += "  " + status
+	_, _ = fmt.Fprint(output, truncate(row, browser.Width()))
 }
 
 type sessionDelegate struct {
-	styles pickerStyles
-	now    time.Time
-	stale  bool
+	styles     pickerStyles
+	now        time.Time
+	hostAlias  string
+	inspection inspectionState
+	summaries  map[inspectionTarget]sessionLiveSummary
+	hostNames  map[string]string
+	via        map[string]string
 }
 
-func (delegate sessionDelegate) Height() int  { return 3 }
-func (delegate sessionDelegate) Spacing() int { return 1 }
+func (delegate sessionDelegate) Height() int  { return 1 }
+func (delegate sessionDelegate) Spacing() int { return 0 }
 func (delegate sessionDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
 	return nil
 }
+
+// sessionRow is one list line before layout. The terminal title leads when the
+// host reports one, because that is what the program itself calls the work;
+// the project label then becomes a quieter hint about where it runs.
+type sessionRow struct {
+	primary    string
+	secondary  string
+	context    string
+	glyphState string
+	state      string
+	activity   string
+	id         string
+}
+
+type sessionColumns struct{ state, activity, id int }
+
+const minimumHeadlineColumns = 16
 
 func (delegate sessionDelegate) Render(output io.Writer, browser list.Model, index int, value list.Item) {
 	item, ok := value.(sessionItem)
 	if !ok {
 		return
 	}
-	selected := index == browser.Index()
-	prefix := "  "
-	if selected {
-		prefix = delegate.styles.cursor.Render("› ")
-	}
-	source := "live"
-	if delegate.stale {
-		source = "cached-stale"
-	}
-	first := fmt.Sprintf("%s%s  %-11s  %4s  %s", prefix, delegate.styles.item(selected).Render(item.session.id), item.session.state, age(delegate.now, item.session.createdAt), delegate.styles.status(delegate.stale).Render(source))
-	command := cli.SafeTerminalText(strings.Join(item.session.command, " "))
-	if command == "" {
-		command = "command unknown"
-	}
-	cwd := cli.SafeTerminalText(item.session.cwd)
-	if cwd == "" {
-		cwd = "cwd unknown"
-	}
-	_, _ = fmt.Fprintf(output, "%s\n%s\n%s", truncate(first, browser.Width()), truncate(delegate.styles.command.Render("  "+command), browser.Width()), truncate(delegate.styles.muted.Render("  "+cwd), browser.Width()))
+	delegate.renderRow(output, browser, item.session, index == browser.Index())
 }
+
+func (delegate sessionDelegate) renderRow(output io.Writer, browser list.Model, current session, selected bool) {
+	row := delegate.row(current, selected)
+	columns := delegate.columns(browser)
+	width := browser.Width()
+
+	showState, showActivity := true, true
+	headline := width - 4 - columns.id - 2 - columns.state - 2 - columns.activity - 2
+	if headline < minimumHeadlineColumns {
+		showActivity = false
+		headline += columns.activity + 2
+	}
+	if headline < minimumHeadlineColumns {
+		showState = false
+		headline += columns.state + 2
+	}
+
+	cursor := "  "
+	if selected {
+		cursor = delegate.styles.cursor.Render("› ")
+	}
+	title := delegate.styles.item(selected).Render(row.primary)
+	if row.secondary != "" {
+		title += "  " + delegate.styles.muted.Render(row.secondary)
+	}
+	var line strings.Builder
+	line.WriteString(cursor)
+	line.WriteString(delegate.styles.stateGlyph(row.glyphState))
+	line.WriteString(" ")
+	if row.context == "" {
+		line.WriteString(cell(title, max(1, headline)))
+	} else {
+		context := ansi.Truncate(row.context, max(1, headline-10), "…")
+		line.WriteString(cell(title, max(1, headline-2-ansi.StringWidth(context))))
+		line.WriteString("  " + delegate.styles.muted.Render(context))
+	}
+	if showState {
+		line.WriteString("  " + cell(delegate.styles.stateText(row.state), columns.state))
+	}
+	if showActivity {
+		line.WriteString("  " + cell(delegate.styles.muted.Render(row.activity), columns.activity))
+	}
+	line.WriteString("  " + delegate.styles.muted.Render(row.id))
+	_, _ = fmt.Fprint(output, truncate(line.String(), width))
+}
+
+func (delegate sessionDelegate) columns(browser list.Model) sessionColumns {
+	var columns sessionColumns
+	for index, entry := range browser.Items() {
+		item, ok := entry.(sessionItem)
+		if !ok {
+			continue
+		}
+		row := delegate.row(item.session, index == browser.Index())
+		columns.state = max(columns.state, ansi.StringWidth(row.state))
+		columns.activity = max(columns.activity, ansi.StringWidth(row.activity))
+		columns.id = max(columns.id, ansi.StringWidth(row.id))
+	}
+	return columns
+}
+
+func (delegate sessionDelegate) row(current session, selected bool) sessionRow {
+	row := sessionRow{
+		primary:    sessionLabel(current),
+		glyphState: current.state,
+		state:      catalogSessionState(current.state),
+		activity:   startedAge(delegate.now, current.createdAt),
+		id:         safeText(current.id),
+	}
+	target := inspectionTarget{hostAlias: delegate.hostAlias, sessionID: current.id}
+	if summary, ok := delegate.summaries[target]; ok {
+		row.primary, row.secondary = sessionHeadline(summarizedSessionLabel(current, summary), summary.terminalTitle)
+		row.context = nestedSessionLabel(summary.nested, delegate.hostNames)
+		row.activity = rowActivity(delegate.now, summary.observedAt, summary.receivedAt, summary.lastOutputAt, current.createdAt)
+	}
+	if selected && delegate.inspection.kind == inspectionReady && delegate.inspection.target == target {
+		value := delegate.inspection.value
+		row.primary, row.secondary = sessionHeadline(inspectedSessionLabel(current, value), value.TerminalTitle)
+		row.context = nestedSessionLabel(value.Nested, delegate.hostNames)
+		if !delegate.inspection.beforePicker {
+			row.glyphState, row.state = "detached", "detached"
+			if value.Attached {
+				row.glyphState, row.state = "running", "in use"
+			}
+		}
+		row.activity = rowActivity(delegate.now, value.ObservedAt, delegate.inspection.receivedAt, value.LastOutputAt, current.createdAt)
+	}
+	row.context = appendRowLabel(row.context, delegate.via[current.id])
+	return row
+}
+
+func sessionHeadline(label, title string) (primary, secondary string) {
+	title = strings.TrimSpace(safeText(title))
+	if title == "" || title == label {
+		return label, ""
+	}
+	return title, label
+}
+
+func startedAge(now, createdAt time.Time) string {
+	return "started " + age(now, createdAt) + " ago"
+}
+
+// rowActivity prefers the last output the host observed, shifted by the time
+// since that observation arrived. A session that has not printed yet falls
+// back to its age so the column never reads as an error.
+func rowActivity(now, observedAt, receivedAt time.Time, lastOutputAt *time.Time, createdAt time.Time) string {
+	if lastOutputAt == nil {
+		return startedAge(now, createdAt)
+	}
+	if observedAt.IsZero() {
+		observedAt = now
+	}
+	if !receivedAt.IsZero() && now.After(receivedAt) {
+		observedAt = observedAt.Add(now.Sub(receivedAt))
+	}
+	return outputAge(observedAt, lastOutputAt)
+}
+
+func catalogSessionState(state string) string {
+	if state == "running" {
+		return "in use"
+	}
+	return safeText(state)
+}
+
+func sessionLabel(current session) string {
+	process := ""
+	if len(current.command) > 0 {
+		process = current.command[0]
+	}
+	return sessionLabelParts(current.cwd, process)
+}
+
+func inspectedSessionLabel(current session, inspection cli.SessionInspection) string {
+	return summarizedSessionLabel(current, sessionLiveSummary{
+		currentDirectory:  inspection.CurrentDirectory,
+		foregroundCommand: inspection.ForegroundCommand,
+	})
+}
+
+func summarizedSessionLabel(current session, summary sessionLiveSummary) string {
+	directory := summary.currentDirectory
+	if directory == "" {
+		directory = current.cwd
+	}
+	process := firstCommandWord(summary.foregroundCommand)
+	if process == "" && len(current.command) > 0 {
+		process = current.command[0]
+	}
+	return sessionLabelParts(directory, process)
+}
+
+func sessionLabelParts(directory, process string) string {
+	project := ""
+	if cwd := strings.TrimRight(safeText(directory), "/"); cwd != "" {
+		project = path.Base(cwd)
+		if project == "." || project == "/" {
+			project = ""
+		}
+	}
+	if process = safeText(process); process != "" {
+		process = path.Base(process)
+		if process == "." || process == "/" {
+			process = ""
+		}
+	}
+	switch {
+	case project != "" && process != "":
+		return project + " · " + process
+	case project != "":
+		return project
+	case process != "":
+		return process
+	default:
+		return "untitled session"
+	}
+}
+
+func firstCommandWord(command string) string {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+func safeText(value string) string { return cli.SafeTerminalText(value) }
 
 func age(now, created time.Time) string {
 	duration := now.Sub(created).Round(time.Second)
@@ -447,6 +906,9 @@ type pickerStyles struct {
 	warning lipgloss.Style
 	muted   lipgloss.Style
 	command lipgloss.Style
+	key     lipgloss.Style
+	live    lipgloss.Style
+	border  lipgloss.Style
 }
 
 func newPickerStyles() pickerStyles {
@@ -457,6 +919,9 @@ func newPickerStyles() pickerStyles {
 		warning: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFB86C")),
 		muted:   lipgloss.NewStyle().Faint(true),
 		command: lipgloss.NewStyle().Foreground(lipgloss.Color("#D8DEE9")),
+		key:     lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#C4A7FF")),
+		live:    lipgloss.NewStyle().Foreground(lipgloss.Color("#A6E3A1")),
+		border:  lipgloss.NewStyle().Faint(true),
 	}
 }
 
@@ -467,15 +932,45 @@ func (styles pickerStyles) item(selected bool) lipgloss.Style {
 	return lipgloss.NewStyle()
 }
 
-func (styles pickerStyles) status(stale bool) lipgloss.Style {
-	if stale {
-		return styles.warning
+// stateGlyph varies shape as well as color so the column still reads on a
+// monochrome terminal: filled for in use, hollow for waiting, a point for done.
+func (styles pickerStyles) stateGlyph(state string) string {
+	switch state {
+	case "running":
+		return styles.live.Render("●")
+	case "detached":
+		return styles.cursor.Render("○")
+	case "interrupted":
+		return styles.warning.Render("▲")
+	default:
+		return styles.muted.Render("·")
 	}
-	return styles.muted
 }
 
-func (killSelection) pickerSelection()   {}
-func (removeSelection) pickerSelection() {}
+func (styles pickerStyles) stateText(state string) string {
+	if state == "interrupted" {
+		return styles.warning.Render(state)
+	}
+	return styles.muted.Render(state)
+}
+
+// hint is one footer entry. An empty key renders a plain status phrase.
+type hint struct{ key, label string }
+
+func (styles pickerStyles) hints(hints ...hint) string {
+	parts := make([]string, 0, len(hints))
+	for _, current := range hints {
+		switch {
+		case current.key == "":
+			parts = append(parts, styles.muted.Render(current.label))
+		case current.label == "":
+			parts = append(parts, styles.key.Render(current.key))
+		default:
+			parts = append(parts, styles.key.Render(current.key)+" "+styles.muted.Render(current.label))
+		}
+	}
+	return strings.Join(parts, "  ")
+}
 
 // currentSession is the highlighted session and the host showing it.
 func (m *model) currentSession() (host, session, bool) {

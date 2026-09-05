@@ -105,6 +105,7 @@ func TestLifecycleCreatesAndPublishesDetachedWorker(t *testing.T) {
 	}
 	wantLaunch := worker.LaunchConfig{
 		SessionsDir: "/state/s",
+		HostID:      "host-a",
 		Executable:  "/opt/mesh",
 		Command:     []string{"sh", "-lc", "printf ready"},
 		Cwd:         "/work",
@@ -170,7 +171,7 @@ func TestLifecycleListsSessionsAndHostIdentity(t *testing.T) {
 }
 
 func TestLifecycleForwardsOneShotControls(t *testing.T) {
-	for _, controlType := range []string{protocol.TypeSignal, protocol.TypeKill, protocol.TypeLogs} {
+	for _, controlType := range []string{protocol.TypeSignal, protocol.TypeKill, protocol.TypeLogs, protocol.TypeInspect} {
 		t.Run(controlType, func(t *testing.T) {
 			workerConn := &lifecycleRecordingConn{}
 			if controlType == protocol.TypeKill {
@@ -185,6 +186,23 @@ func TestLifecycleForwardsOneShotControls(t *testing.T) {
 					RequestID: "control-1",
 					SessionID: "7K3D",
 					Output:    []byte("recent output"),
+				})
+			} else if controlType == protocol.TypeInspect {
+				observedAt := time.Date(2026, time.September, 4, 9, 0, 0, 0, time.UTC)
+				lastOutputAt := observedAt.Add(-time.Second)
+				workerConn.readFrame = controlFrame(t, protocol.Control{
+					Type:      protocol.TypeInspected,
+					RequestID: "control-1",
+					SessionID: "7K3D",
+					Inspection: &protocol.SessionInspection{
+						ObservedAt:        observedAt,
+						CurrentDirectory:  "/work/mesh",
+						DirectorySource:   protocol.DirectorySourceProcess,
+						ForegroundCommand: "go test ./...",
+						LastOutputAt:      &lastOutputAt,
+						Attached:          true,
+						Preview:           []string{"$ go test ./...", "ok"},
+					},
 				})
 			}
 			catalog := &lifecycleTestCatalog{}
@@ -204,11 +222,13 @@ func TestLifecycleForwardsOneShotControls(t *testing.T) {
 			})
 
 			response, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
-				Type:      controlType,
-				RequestID: "control-1",
-				SessionID: "7K3D",
-				Signal:    "term",
-				Tail:      4096,
+				Type:        controlType,
+				RequestID:   "control-1",
+				SessionID:   "7K3D",
+				Signal:      "term",
+				Tail:        4096,
+				PreviewCols: 80,
+				PreviewRows: 6,
 			})
 			if err != nil || !handled {
 				t.Fatalf("control handled = %v, error = %v", handled, err)
@@ -216,6 +236,8 @@ func TestLifecycleForwardsOneShotControls(t *testing.T) {
 			wantType := protocol.TypeOK
 			if controlType == protocol.TypeLogs {
 				wantType = protocol.TypeLogged
+			} else if controlType == protocol.TypeInspect {
+				wantType = protocol.TypeInspected
 			}
 			if response.Type != wantType || response.RequestID != "control-1" || response.SessionID != "7K3D" {
 				t.Fatalf("control response = %+v", response)
@@ -223,10 +245,13 @@ func TestLifecycleForwardsOneShotControls(t *testing.T) {
 			if controlType == protocol.TypeLogs && !bytes.Equal(response.Output, []byte("recent output")) {
 				t.Fatalf("logs output = %q", response.Output)
 			}
+			if controlType == protocol.TypeInspect && (response.Inspection == nil || response.Inspection.CurrentDirectory != "/work/mesh" || !response.Inspection.Attached) {
+				t.Fatalf("inspection = %+v", response.Inspection)
+			}
 			if !workerConn.closed || len(workerConn.frames) != 1 {
 				t.Fatalf("worker connection closed = %v, frames = %d", workerConn.closed, len(workerConn.frames))
 			}
-			if (controlType == protocol.TypeKill || controlType == protocol.TypeLogs) && !workerConn.read {
+			if (controlType == protocol.TypeKill || controlType == protocol.TypeLogs || controlType == protocol.TypeInspect) && !workerConn.read {
 				t.Fatalf("%s completed without reading the worker response", controlType)
 			}
 			forwarded, err := protocol.DecodeControl(workerConn.frames[0].Payload)
@@ -241,8 +266,52 @@ func TestLifecycleForwardsOneShotControls(t *testing.T) {
 			if controlType == protocol.TypeLogs {
 				wantTail = 4096
 			}
-			if forwarded.Type != controlType || forwarded.SessionID != "7K3D" || forwarded.Signal != wantSignal || forwarded.Tail != wantTail {
+			wantCols, wantRows := 0, 0
+			if controlType == protocol.TypeInspect {
+				wantCols, wantRows = 80, 6
+			}
+			if forwarded.Type != controlType || forwarded.SessionID != "7K3D" || forwarded.Signal != wantSignal || forwarded.Tail != wantTail || forwarded.PreviewCols != wantCols || forwarded.PreviewRows != wantRows {
 				t.Fatalf("forwarded control = %+v", forwarded)
+			}
+		})
+	}
+}
+
+func TestValidateInspectionResponseRejectsWorkerBoundaryViolations(t *testing.T) {
+	t.Parallel()
+	observedAt := time.Date(2026, time.September, 4, 9, 0, 0, 0, time.UTC)
+	valid := protocol.SessionInspection{ObservedAt: observedAt, Preview: []string{"ready"}}
+	response := func(sessionID string, inspection *protocol.SessionInspection) protocol.Frame {
+		return controlFrame(t, protocol.Control{
+			Type:       protocol.TypeInspected,
+			RequestID:  "inspect-1",
+			SessionID:  sessionID,
+			Inspection: inspection,
+		})
+	}
+	tooManyRows := valid
+	tooManyRows.Preview = []string{"one", "two"}
+	tooWide := valid
+	tooWide.Preview = []string{"123456"}
+	invalidDirectory := valid
+	invalidDirectory.CurrentDirectory = "relative/path"
+	invalidDirectory.DirectorySource = protocol.DirectorySourceProcess
+
+	tests := []struct {
+		name  string
+		frame protocol.Frame
+	}{
+		{name: "non-control frame", frame: protocol.Frame{Kind: protocol.KindInput}},
+		{name: "wrong session", frame: response("91AZ", &valid)},
+		{name: "missing inspection", frame: response("7K3D", nil)},
+		{name: "more rows than requested", frame: response("7K3D", &tooManyRows)},
+		{name: "wider than requested", frame: response("7K3D", &tooWide)},
+		{name: "invalid inspection", frame: response("7K3D", &invalidDirectory)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := validateInspectionResponse("7K3D", "inspect-1", 5, 1, test.frame); err == nil {
+				t.Fatal("validateInspectionResponse() error = nil, want boundary rejection")
 			}
 		})
 	}
@@ -436,6 +505,7 @@ func TestLifecycleRejectsMalformedRequestsBeforeSideEffects(t *testing.T) {
 		{Type: protocol.TypeSignal, RequestID: "request-2", SessionID: "7K3D", Signal: "bogus"},
 		{Type: protocol.TypeKill, RequestID: "request-3", SessionID: "../X"},
 		{Type: protocol.TypeLogs, RequestID: "request-4", SessionID: "7K3D", Tail: protocol.MaxLogTail + 1},
+		{Type: protocol.TypeInspect, RequestID: "request-5", SessionID: "7K3D", PreviewCols: protocol.MaxInspectionPreviewCols + 1, PreviewRows: 1},
 		{Type: protocol.TypeList},
 	}
 	for _, request := range requests {

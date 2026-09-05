@@ -1074,6 +1074,32 @@ func TestRunDoesNotWaitForDescendantHoldingPTY(t *testing.T) {
 	}
 }
 
+func TestRunRecordsItsInheritedLaunchDirectory(t *testing.T) {
+	expected, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	code, err := Run(Config{
+		ID:      "CWD1",
+		Dir:     dir,
+		Command: []string{"/bin/sh", "-c", "exit 0"},
+		Env:     os.Environ(),
+		Cols:    80,
+		Rows:    24,
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("Run = code %d, error %v", code, err)
+	}
+	meta, err := ReadMeta(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Cwd != expected {
+		t.Fatalf("recorded launch directory = %q, want inherited %q", meta.Cwd, expected)
+	}
+}
+
 func TestFinishedWorkerDoesNotInstallNewAttachment(t *testing.T) {
 	sid, err := protocol.NewSessionID("DONE")
 	if err != nil {
@@ -1275,11 +1301,17 @@ func (discardScreen) Resize(int, int)             {}
 func (discardScreen) Snapshot() terminalstate.Capture {
 	return terminalstate.Capture{Restorable: true}
 }
+func (discardScreen) Preview(int, int) terminalstate.Preview { return terminalstate.Preview{} }
 
 type recordingScreen struct {
 	output       []byte
 	cols, rows   int
 	unrestorable bool
+	preview      terminalstate.Preview
+	previewCols  int
+	previewRows  int
+	previewCalls int
+	onPreview    func()
 }
 
 func (s *recordingScreen) Write(p []byte) (int, error) {
@@ -1289,6 +1321,24 @@ func (s *recordingScreen) Write(p []byte) (int, error) {
 func (s *recordingScreen) Resize(cols, rows int) { s.cols, s.rows = cols, rows }
 func (s *recordingScreen) Snapshot() terminalstate.Capture {
 	return terminalstate.Capture{Bytes: bytes.Clone(s.output), Restorable: !s.unrestorable}
+}
+func (s *recordingScreen) Preview(cols, rows int) terminalstate.Preview {
+	s.previewCols = cols
+	s.previewRows = rows
+	s.previewCalls++
+	if s.onPreview != nil {
+		s.onPreview()
+	}
+	preview := terminalstate.Preview{
+		Lines:       append([]string(nil), s.preview.Lines...),
+		StyledLines: make([]terminalstate.PreviewLine, len(s.preview.StyledLines)),
+		Title:       s.preview.Title,
+		Directory:   s.preview.Directory,
+	}
+	for row, line := range s.preview.StyledLines {
+		preview.StyledLines[row].Runs = append([]terminalstate.PreviewRun(nil), line.Runs...)
+	}
+	return preview
 }
 
 func (c *writeNotifyConn) Write(p []byte) (int, error) {

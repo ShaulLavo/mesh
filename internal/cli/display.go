@@ -4,18 +4,24 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const maximumTerminalTextBytes = 512
 
-// SafeTerminalText escapes untrusted text and bounds one terminal cell. It is
-// exported for the picker, which renders the same remote catalog as the CLI.
+// SafeTerminalText escapes untrusted text and bounds one terminal cell. Unicode
+// join controls remain intact because terminals need them to shape graphemes.
+// It is exported for the picker, which renders the same remote catalog as the
+// CLI.
 func SafeTerminalText(value string) string {
 	value = strings.ToValidUTF8(value, "?")
 	var output strings.Builder
 	for _, character := range value {
-		quoted := strconv.QuoteToGraphic(string(character))
-		encoded := quoted[1 : len(quoted)-1]
+		encoded := string(character)
+		if !unicode.Is(unicode.Join_Control, character) {
+			quoted := strconv.QuoteToGraphic(encoded)
+			encoded = quoted[1 : len(quoted)-1]
+		}
 		if output.Len()+len(encoded) > maximumTerminalTextBytes-len("...") {
 			output.WriteString("...")
 			break

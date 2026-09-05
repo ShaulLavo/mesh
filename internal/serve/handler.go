@@ -48,20 +48,39 @@ func Handler(service Service, prefix string) (http.Handler, error) {
 }
 
 func handlerForNormalizedService(service Service, prefix string, trustForwardedHeaders func(netip.Addr) bool) (http.Handler, error) {
+	var handler http.Handler
 	switch service.Kind {
 	case Static:
-		return mountedHandler(prefix, func(w http.ResponseWriter, request *http.Request, relative string) {
+		handler = mountedHandler(prefix, func(w http.ResponseWriter, request *http.Request, relative string) {
 			serveStatic(w, request, service.Target, relative)
-		}), nil
+		})
 	case Files:
-		return mountedHandler(prefix, func(w http.ResponseWriter, request *http.Request, relative string) {
+		handler = mountedHandler(prefix, func(w http.ResponseWriter, request *http.Request, relative string) {
 			serveFiles(w, request, service.Target, prefix, relative)
-		}), nil
+		})
 	case Proxy:
-		return proxyHandler(service.Target, prefix, trustForwardedHeaders), nil
+		handler = proxyHandler(service.Target, prefix, trustForwardedHeaders, service.Isolate)
 	default:
 		return nil, fmt.Errorf("serve: service %q has unsupported kind %q", service.Name, service.Kind)
 	}
+	if service.Isolate && service.Kind != Proxy {
+		// The proxy sets these on the way back instead, so a backend cannot
+		// weaken them by sending its own.
+		inner := handler
+		handler = http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			setIsolationHeaders(w.Header())
+			inner.ServeHTTP(w, request)
+		})
+	}
+	return handler, nil
+}
+
+// setIsolationHeaders makes the response a cross-origin isolated context.
+// Both values are the strict ones every browser accepts; the gentler
+// "credentialless" embedder policy is not implemented by Safari.
+func setIsolationHeaders(header http.Header) {
+	header.Set("Cross-Origin-Opener-Policy", "same-origin")
+	header.Set("Cross-Origin-Embedder-Policy", "require-corp")
 }
 
 func validatePrefix(prefix string) error {
@@ -248,9 +267,17 @@ func mountedURL(prefix, logicalPath string, directory bool) string {
 	return result
 }
 
-func proxyHandler(port, prefix string, trustForwardedHeaders func(netip.Addr) bool) http.Handler {
+func proxyHandler(port, prefix string, trustForwardedHeaders func(netip.Addr) bool, isolate bool) http.Handler {
 	target := &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", port)}
+	var modifyResponse func(*http.Response) error
+	if isolate {
+		modifyResponse = func(response *http.Response) error {
+			setIsolationHeaders(response.Header)
+			return nil
+		}
+	}
 	proxy := &httputil.ReverseProxy{
+		ModifyResponse: modifyResponse,
 		Rewrite: func(request *httputil.ProxyRequest) {
 			forwardedFor, forwardedProto, trusted := trustedForwardingMetadata(request.In, trustForwardedHeaders)
 			request.SetURL(target)
@@ -271,6 +298,14 @@ func proxyHandler(port, prefix string, trustForwardedHeaders func(netip.Addr) bo
 		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		// A request for the bare mount point gets the trailing slash first,
+		// exactly as a static directory does. Otherwise the backend answers a
+		// page whose relative URLs resolve one level above the mount, and
+		// every app would need to learn the prefix to survive that.
+		if prefix != "/" && request.URL.EscapedPath() == prefix {
+			redirectDirectory(w, request)
+			return
+		}
 		relative, ok := relativeRequestPath(request.URL.EscapedPath(), prefix)
 		if !ok {
 			http.NotFound(w, request)

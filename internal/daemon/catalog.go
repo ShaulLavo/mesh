@@ -81,10 +81,12 @@ func (c *Catalog) Reconcile(ctx context.Context) error {
 	}
 	if len(retired) > 0 {
 		if _, err := c.store.RetireSessions(ctx, c.host.ID, retired); err != nil {
-			// The directories are already gone, so the next reconcile will not
-			// re-observe these. Report and continue rather than failing a scan
-			// that otherwise succeeded.
-			log.Printf("daemon: retire session rows for host %s: %v", c.host.ID, err)
+			return fmt.Errorf("daemon: retire session rows for host %s: %w", c.host.ID, err)
+		}
+		for _, id := range retired {
+			if err := removeRetiredSession(filepath.Join(c.sessionsDir, string(id))); err != nil {
+				log.Printf("daemon: retire session %s directory: %v", id, err)
+			}
 		}
 	}
 	return nil
@@ -152,6 +154,13 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 			// has not landed yet. It belongs to a create still in flight, so it
 			// is not this scan's to report on.
 			if errors.Is(err, os.ErrNotExist) {
+				// Forgotten metadata may already be gone after an interrupted
+				// retirement. Keep its intent in the scan until cleanup finishes.
+				if _, markerErr := os.Lstat(paths.Forgotten(dir)); markerErr == nil {
+					if forgotten, ok := quarantinedSession(c.host.ID, entry.Name(), c.now()); ok {
+						observed = append(observed, forgotten)
+					}
+				}
 				continue
 			}
 			// Anything else is a damaged record, most likely a torn write from
@@ -359,7 +368,7 @@ func quarantinedSession(hostID storage.HostID, directory string, now time.Time) 
 }
 
 const (
-	// sessionRetention is how long a finished session's record and its output
+	// sessionRetention is how long an exited session's record and its output
 	// stay on disk. Nothing pruned these before, so an always-on host grew
 	// without bound: the 1 Hz reconciler re-read and re-upserted every row it
 	// had ever seen, and past roughly fifteen thousand a reconcile no longer
@@ -370,12 +379,9 @@ const (
 	maxRetainedTerminalSessions = 500
 )
 
-// retireFinishedSessions removes finished sessions past the retention limits and
-// returns the set to keep. Running and interrupted-but-recent sessions are never
-// touched: this only retires records whose process is already gone.
-//
-// It prunes the directory as well as the row, because worker.log is the bulk of
-// what a finished session occupies.
+// retireFinishedSessions selects exited sessions past the retention limits.
+// Interrupted sessions remain available for relaunch until explicitly removed.
+// Directories remain until the database has durably retired their rows.
 func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.Session, []storage.SessionID) {
 	now := c.now()
 	type candidate struct {
@@ -383,10 +389,16 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 		retireAt time.Time
 	}
 	var finished []candidate
+	retire := make(map[int]struct{})
 	for i, current := range observed {
-		// Detached is alive. Retiring it would delete a session someone walked
-		// away from and fully intends to come back to.
-		if current.State == storage.StateRunning || current.State == storage.StateDetached {
+		if current.State != storage.StateExited && current.State != storage.StateInterrupted {
+			continue
+		}
+		if _, err := os.Lstat(paths.Forgotten(filepath.Join(c.sessionsDir, string(current.ID)))); err == nil {
+			retire[i] = struct{}{}
+			continue
+		}
+		if current.State != storage.StateExited {
 			continue
 		}
 		finished = append(finished, candidate{index: i, retireAt: current.CreatedAt})
@@ -394,7 +406,6 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 	// Oldest first, so a count cap retires the least useful history.
 	sort.Slice(finished, func(i, j int) bool { return finished[i].retireAt.Before(finished[j].retireAt) })
 
-	retire := make(map[int]struct{})
 	excess := len(finished) - maxRetainedTerminalSessions
 	for rank, current := range finished {
 		agedOut := !current.retireAt.IsZero() && now.Sub(current.retireAt) > sessionRetention
@@ -414,17 +425,35 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 			kept = append(kept, current)
 			continue
 		}
-		dir := filepath.Join(c.sessionsDir, string(current.ID))
-		if err := os.RemoveAll(dir); err != nil {
-			// Keep the record if its directory survives, so the next pass
-			// retries rather than orphaning the files.
-			log.Printf("daemon: retire session %s: %v", current.ID, err)
-			kept = append(kept, current)
-			continue
-		}
 		retired = append(retired, current.ID)
 	}
 	return kept, retired
+}
+
+func removeRetiredSession(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	marker := paths.Forgotten(dir)
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if path == marker {
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+	// Remove the durable intent only after metadata is gone. A crash during
+	// cleanup can then never turn a forgotten session back into a visible row.
+	if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.Remove(dir)
 }
 
 // Retire deletes finished sessions for this host. The store refuses a running

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ func TestPickerFlows(t *testing.T) {
 		{
 			name: "navigate and attach",
 			keys: []tea.KeyPressMsg{key(tea.KeyEnter), key(tea.KeyDown), key(tea.KeyEnter)},
-			want: attachSelection{hostAlias: "pc", sessionID: "91AZ"},
+			want: attachSelection{hostAlias: "pc", sessionID: "91AZ", takeOver: true},
 		},
 		{
 			name: "new session",
@@ -104,10 +105,108 @@ func TestPickerResizeAndEmptyStates(t *testing.T) {
 	withoutSessions = updateModel(t, withoutSessions, key(tea.KeyEnter))
 	withoutSessions = updateModel(t, withoutSessions, tea.WindowSizeMsg{Width: 52, Height: 16})
 	view := withoutSessions.View().Content
-	if !strings.Contains(view, "No sessions") || !strings.Contains(view, "n new") {
-		t.Fatalf("empty session view lacks actions:\n%s", view)
+	if plain := ansi.Strip(view); !strings.Contains(plain, "No sessions") || !strings.Contains(plain, "n new") {
+		t.Fatalf("empty session view lacks actions:\n%s", plain)
 	}
 	assertFits(t, view, 52, 16)
+}
+
+func TestPickerListsWrapAtTheirEnds(t *testing.T) {
+	t.Run("hosts", func(t *testing.T) {
+		current := newModel(pickerFixture(), pickerTestNow)
+		current = updateModel(t, current, key(tea.KeyUp))
+		if got := current.list.SelectedItem().(hostItem).host.alias; got != "pi" {
+			t.Fatalf("up from first host selected %q, want last host pi", got)
+		}
+		current = updateModel(t, current, key(tea.KeyDown))
+		if got := current.list.SelectedItem().(hostItem).host.alias; got != "pc" {
+			t.Fatalf("down from last host selected %q, want first host pc", got)
+		}
+	})
+
+	t.Run("sessions across pages", func(t *testing.T) {
+		sessions := make([]session, 10)
+		for index := range sessions {
+			sessions[index] = session{
+				id:        fmt.Sprintf("S%03d", index),
+				state:     "detached",
+				createdAt: pickerTestNow,
+			}
+		}
+		current := newModel([]host{{alias: "pc", sessions: sessions}}, pickerTestNow)
+		current = updateModel(t, current, key(tea.KeyEnter))
+		current = updateModel(t, current, key(tea.KeyUp))
+		if got := current.selectedSessionID(); got != "S009" || current.list.Paginator.Page == 0 {
+			t.Fatalf("up from first session selected %q on page %d, want S009 on last page", got, current.list.Paginator.Page)
+		}
+		current = updateModel(t, current, key(tea.KeyDown))
+		if got := current.selectedSessionID(); got != "S000" || current.list.Paginator.Page != 0 {
+			t.Fatalf("down from last session selected %q on page %d, want S000 on first page", got, current.list.Paginator.Page)
+		}
+	})
+}
+
+func TestPickerOpensRequestedHostsSessionView(t *testing.T) {
+	input := cli.PickerInput{
+		Hosts: []cli.HostSessions{
+			{Host: cli.HostRecord{Alias: "mac"}},
+			{Host: cli.HostRecord{Alias: "pc"}, Sessions: []protocol.SessionInfo{{ID: "7K3D", State: "detached"}}},
+		},
+		OpenHostAlias: "pc",
+		Inspect: func(context.Context, cli.PickerInspectRequest) (cli.SessionInspection, error) {
+			return cli.SessionInspection{ObservedAt: pickerTestNow}, nil
+		},
+	}
+
+	current := newPickerModel(context.Background(), input, pickerTestNow)
+	if current.screen != sessionScreen || current.currentHost().alias != "pc" {
+		t.Fatalf("picker opened screen %d on host %q, want pc session screen", current.screen, current.currentHost().alias)
+	}
+	command := current.Init()
+	if command == nil {
+		t.Fatal("restored session view has no startup command")
+	}
+	updated, inspect := current.Update(command())
+	started, ok := updated.(model)
+	if !ok || inspect == nil || started.inspection.target.sessionID != "7K3D" {
+		t.Fatalf("restored startup = model %T, inspect nil %t, target %q", updated, inspect == nil, started.inspection.target.sessionID)
+	}
+}
+
+func TestRequestedHostStartsCatalogRefreshWhenWindowSizeArrivesBeforeInit(t *testing.T) {
+	host := cli.HostRecord{Alias: "pc", ID: "pc-id"}
+	refreshCalls := 0
+	current := newPickerModel(context.Background(), cli.PickerInput{
+		Hosts:         []cli.HostSessions{{Host: host}},
+		OpenHostAlias: "pc",
+		Refresh: func(context.Context, string) (cli.PickerHostSnapshot, error) {
+			refreshCalls++
+			return cli.PickerHostSnapshot{Sessions: cli.HostSessions{
+				Host:     host,
+				Sessions: []protocol.SessionInfo{{ID: "91AZ", HostID: host.ID, State: "detached", CreatedAt: pickerTestNow}},
+			}}, nil
+		},
+	}, pickerTestNow)
+	delayedInit := current.Init()
+	if delayedInit == nil {
+		t.Fatal("preopened host returned no init command")
+	}
+
+	updated, windowCommand := current.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	started := updated.(model)
+	if windowCommand == nil {
+		t.Fatal("window-size startup returned no refresh command")
+	}
+	updated, _ = started.Update(catalogRefreshMessage(t, windowCommand))
+	refreshed := updated.(model)
+	if refreshCalls != 1 || refreshed.selectedSessionID() != "91AZ" {
+		t.Fatalf("startup refresh calls = %d, selected session = %q", refreshCalls, refreshed.selectedSessionID())
+	}
+
+	updated, command := refreshed.Update(delayedInit())
+	if command != nil || refreshCalls != 1 || updated.(model).selectedSessionID() != "91AZ" {
+		t.Fatalf("late init restarted refresh: calls %d, command nil %t", refreshCalls, command == nil)
+	}
 }
 
 func TestNonTerminalPickerReturnsWithoutStartingTea(t *testing.T) {
@@ -145,8 +244,6 @@ func TestCLISelectionMapping(t *testing.T) {
 		{input: newSelection{hostAlias: "pc"}, want: cli.PickerSelection{HostAlias: "pc", New: true}},
 		{input: resumeSelection{hostAlias: "pc"}, want: cli.PickerSelection{HostAlias: "pc"}},
 		{input: wakeSelection{hostAlias: "pi"}, want: cli.PickerSelection{HostAlias: "pi", Wake: true}},
-		{input: killSelection{hostAlias: "pc", sessionID: "7K3D"}, want: cli.PickerSelection{HostAlias: "pc", SessionID: "7K3D", Kill: true}},
-		{input: removeSelection{hostAlias: "pc", sessionID: "7K3D"}, want: cli.PickerSelection{HostAlias: "pc", SessionID: "7K3D", Remove: true}},
 	}
 	for _, test := range tests {
 		if got := cliSelection(test.input); got != test.want {
@@ -159,6 +256,7 @@ func pickerFixture() []host {
 	return []host{
 		{
 			alias: "pc",
+			route: "pc.tail.example",
 			sessions: []session{
 				{id: "7K3D", state: "detached", command: []string{"claude", "--dangerously-skip-permissions"}, cwd: "/home/shaul/src/mesh", createdAt: pickerTestNow.Add(-4 * time.Minute)},
 				{id: "91AZ", state: "running", command: []string{"npm", "run", "dev"}, cwd: "/home/shaul/src/site", createdAt: pickerTestNow.Add(-8 * time.Minute)},
@@ -166,6 +264,7 @@ func pickerFixture() []host {
 		},
 		{
 			alias: "pi",
+			route: "100.64.0.8:7337",
 			stale: true,
 			sessions: []session{
 				{id: "Q8ME", state: "detached", command: []string{"python", "sensor.py"}, cwd: "/srv/sensors", createdAt: pickerTestNow.Add(-2 * time.Hour)},

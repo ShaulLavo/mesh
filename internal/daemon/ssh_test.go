@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/netip"
 	"path/filepath"
 	"strings"
@@ -38,9 +39,15 @@ func TestRunStartsSSHOnlyOnDiscoveredTailnetAddresses(t *testing.T) {
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, Config{StateDir: stateDir, SSHPort: 2222}, options)
+		done <- run(ctx, Config{
+			StateDir: stateDir, SSHPort: 2222,
+			SSHSessionHandler: func(actualStateDir string) sshd.SessionHandler {
+				return sshHandlerForDirectory(stateDir, actualStateDir)
+			},
+		}, options)
 	}()
 
 	configs := []sshd.Config{waitForSSHConfig(t, started), waitForSSHConfig(t, started)}
@@ -50,6 +57,12 @@ func TestRunStartsSSHOnlyOnDiscoveredTailnetAddresses(t *testing.T) {
 	}
 	var identityID string
 	for _, cfg := range configs {
+		if cfg.Handler == nil {
+			t.Fatal("SSH listener lost the application handler")
+		}
+		if status, err := cfg.Handler(ctx, sshd.Session{}); err != nil || status != 17 {
+			t.Fatalf("SSH handler = %d, %v", status, err)
+		}
 		endpoint, err := netip.ParseAddrPort(cfg.Addr)
 		if err != nil {
 			t.Fatalf("SSH endpoint %q: %v", cfg.Addr, err)
@@ -80,6 +93,15 @@ func TestRunStartsSSHOnlyOnDiscoveredTailnetAddresses(t *testing.T) {
 	cancel()
 	if err := waitRuntime(t, done); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func sshHandlerForDirectory(expected, actual string) sshd.SessionHandler {
+	return func(context.Context, sshd.Session) (int, error) {
+		if actual != expected {
+			return 1, fmt.Errorf("SSH state directory = %q, want %q", actual, expected)
+		}
+		return 17, nil
 	}
 }
 

@@ -48,6 +48,8 @@ m kill 7K3D
 m wake pc
 
 mesh add shaul@pc    # SSH bootstrap, once per machine
+
+mesh --window        # the terminal's command: resume a detached session or start fresh
 ```
 
 `mesh add` uses SSH to install and start Mesh, records the stable Mesh identity,
@@ -140,6 +142,10 @@ interfaces so API churn stays contained.
    a session, mounts served roots over SFTP, or publishes a port through the edge
    with `ssh -R`. Not a transport; the client that already exists everywhere.
    See `docs/plan/04-ssh.md`.
+10. **Mesh as your terminal** — every window is a session, local or not.
+    `mesh --window` as the terminal's command, this host first in the picker,
+    ctrl+] for the innermost session and ctrl+^ to leave them all. See
+    `docs/tasks/T23-terminal-entry.md`.
 
 ## Explicitly later
 

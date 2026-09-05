@@ -127,7 +127,7 @@ func (r *clientRelay) HandleFrame(ctx context.Context, frame protocol.Frame) (bo
 			return true, fmt.Errorf("daemon: decode client control: %w", err)
 		}
 		switch message.Type {
-		case protocol.TypeAttach:
+		case protocol.TypeAttach, protocol.TypeAttachDetached:
 			id, err := relayControlSessionID(message)
 			if err != nil {
 				return true, err
@@ -155,7 +155,7 @@ func (r *clientRelay) HandleFrame(ctx context.Context, frame protocol.Frame) (bo
 			// its writer preserves FIFO order through the detach itself.
 			r.unpublish(lane)
 			return true, nil
-		case protocol.TypeAttached, protocol.TypeExit, protocol.TypeError:
+		case protocol.TypeAttached, protocol.TypeNesting, protocol.TypeExit, protocol.TypeError:
 			return true, fmt.Errorf("daemon: client sent worker response %q", message.Type)
 		default:
 			// Signals, kills, and daemon-level requests use one-shot lifecycle
@@ -662,7 +662,7 @@ func validateWorkerFrame(id protocol.SessionID, frame protocol.Frame) error {
 			return fmt.Errorf("daemon: session %s worker sent control for %q", id.String(), message.SessionID)
 		}
 		switch message.Type {
-		case protocol.TypeAttached, protocol.TypeDetach, protocol.TypeExit, protocol.TypeError:
+		case protocol.TypeAttached, protocol.TypeNesting, protocol.TypeDetach, protocol.TypeExit, protocol.TypeError:
 			return nil
 		default:
 			return fmt.Errorf("daemon: session %s worker sent invalid control %q", id.String(), message.Type)

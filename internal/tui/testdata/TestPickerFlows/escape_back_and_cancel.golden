@@ -1,11 +1,8 @@
-[1;38;2;196;167;255mmesh[m
+[1;38;2;196;167;255mmesh[m                                                                     [2m2 hosts[m
 [2mChoose a host.[m
 
-[1;38;2;157;124;255m› [m[1;38;2;232;222;255mpc[m  [2monline[m
-[2m  2 active  2 sessions[m
-
-  pi  [1;38;2;255;184;108moffline  cached-stale[m
-[2m  1 active  1 sessions[m
+[1;38;2;157;124;255m› [m[38;2;166;227;161m●[m [1;38;2;232;222;255mpc[m  [2mpc.tail.example[m  [2m2 active  ·  2 sessions[m
+  [1;38;2;255;184;108m▲[m pi  [2m100.64.0.8:7337[m  [1;38;2;255;184;108moffline  ·  cached[m[2m  ·  1 session[m
 
 
 
@@ -20,4 +17,7 @@
 
 
 
-↑/↓ move  enter sessions  esc cancel
+
+
+
+[1;38;2;196;167;255m↑/↓[m [2mmove[m  [1;38;2;196;167;255menter[m [2msessions[m  [1;38;2;196;167;255mesc[m [2mcancel[m

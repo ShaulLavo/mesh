@@ -2,22 +2,21 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
-	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/term"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/terminal"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -26,6 +25,21 @@ import (
 // the session no signal; the one real casualty is vim's tag jump, which is why
 // the key is configurable and --raw turns interception off entirely.
 const DefaultDetachKey = 0x1d
+
+// DefaultLeaveKey is ctrl+^, consumed by the outermost registered attachment.
+const DefaultLeaveKey = 0x1e
+
+// ErrSessionAttached means an attachment restricted to detached sessions lost
+// the race to another client. Retrying another session cannot steal that client.
+var ErrSessionAttached = errors.New("session is already attached")
+
+// ErrSessionUnavailable means a detached candidate disappeared before the
+// worker acknowledged the claim.
+var ErrSessionUnavailable = errors.New("session ended before attachment")
+
+// ErrAttachDetachedUnsupported identifies workers that cannot make an atomic
+// claim. A caller may choose a fresh session, but must not retry a stealing attach.
+var ErrAttachDetachedUnsupported = errors.New("worker cannot resume without taking over; start a new session, or explicitly use mesh attach ID locally or mesh ID remotely")
 
 // detachKeysByDepth gives each nesting level its own key. The outermost client
 // reads every keystroke first, so a single key would always detach the outermost
@@ -81,14 +95,31 @@ type AttachOptions struct {
 	// It is closed when Attach returns. SocketPath and Conn are exclusive.
 	Conn      transport.Conn
 	SessionID string
+	// HostID identifies the destination host. Remote connections must supply it
+	// to register their exact identity with the containing local worker.
+	HostID string
+	// IfDetached claims a session atomically without evicting another client.
+	IfDetached bool
+	// ContainingSessions is the immediate-to-outer path whose terminal screens
+	// will mirror this attachment's output.
+	ContainingSessions []protocol.SessionIdentity
 	// LastSeq resumes at an exact offset. Nil asks for a rendered snapshot.
 	LastSeq *uint64
-	// DetachKey is the byte that detaches. Zero means DefaultDetachKey.
+	// DetachKey is the byte that detaches. Zero selects the default for nesting.
 	DetachKey byte
+	// DetachKeyExplicit preserves a requested key even when nesting changes.
+	DetachKeyExplicit bool
+	// LeaveKey detaches the outermost attachment while registered inner clients
+	// keep running. Zero means DefaultLeaveKey.
+	LeaveKey        byte
+	DisableLeaveKey bool
 	// Raw disables the detach key so the session receives every byte verbatim.
 	Raw bool
 	In  *os.File
 	Out *os.File
+	// Stderr receives client hints without changing the session's byte stream.
+	// Nil uses os.Stderr.
+	Stderr io.Writer
 }
 
 // AttachResult reports how an attachment ended.
@@ -104,47 +135,95 @@ type AttachResult struct {
 // until the client detaches or the remote process exits. Returning never
 // implies anything about whether the remote process is still alive.
 func Attach(opts AttachOptions) (AttachResult, error) {
-	var res AttachResult
-	if opts.LastSeq != nil {
-		res.LastSeq = *opts.LastSeq
+	res := initialAttachResult(opts)
+	if opts.Conn != nil {
+		defer opts.Conn.Close() //nolint:errcheck // release even if local terminal setup fails
 	}
-
 	if opts.In == nil {
 		opts.In = os.Stdin
 	}
 	if opts.Out == nil {
 		opts.Out = os.Stdout
 	}
-	if opts.DetachKey == 0 {
-		opts.DetachKey = DefaultDetachKey
+	if opts.Stderr == nil {
+		opts.Stderr = os.Stderr
 	}
-
-	sid, err := protocol.NewSessionID(opts.SessionID)
+	if _, err := validateAttachOptions(opts); err != nil {
+		return res, err
+	}
+	registration, inside, err := registerAttachmentNesting(opts)
+	if err != nil {
+		return res, fmt.Errorf("attach %s nesting: %w", opts.SessionID, err)
+	}
+	if registration != nil {
+		defer registration.Close() //nolint:errcheck // lifetime ends with attachment
+	}
+	keys := newAttachmentKeys(opts, SessionDepth(), inside, registration != nil)
+	if inside && registration == nil && !keys.explicit && !opts.Raw {
+		_, _ = fmt.Fprintf(opts.Stderr, "  (%s detaches this one, ctrl+] leaves them all)\r\n", DetachKeyName(keys.detachKey))
+	}
+	terminal, closeTerminal, inputIsTerminal, err := localAttachTerminal(opts.In, opts.Out)
 	if err != nil {
 		return res, err
 	}
+	defer closeTerminal()
+	return attachWithTerminal(context.Background(), opts, terminal, keys, inputIsTerminal)
+}
 
-	conn := opts.Conn
-	if conn != nil && opts.SocketPath != "" {
-		return res, fmt.Errorf("attach %s: both connection and socket path supplied", opts.SessionID)
+func initialAttachResult(opts AttachOptions) AttachResult {
+	if opts.LastSeq != nil {
+		return AttachResult{LastSeq: *opts.LastSeq}
 	}
-	if conn == nil {
-		stream, err := net.DialTimeout("unix", opts.SocketPath, 2*time.Second)
-		if err != nil {
-			return res, fmt.Errorf("attach %s: %w", opts.SessionID, err)
-		}
-		conn, err = transport.NewStreamConn(stream)
-		if err != nil {
-			_ = stream.Close()
-			return res, fmt.Errorf("attach %s: %w", opts.SessionID, err)
-		}
-	}
-	defer conn.Close() //nolint:errcheck // closing on the way out
+	return AttachResult{}
+}
 
-	cols, rows := 80, 24
-	if w, h, err := term.GetSize(opts.Out.Fd()); err == nil && w > 0 {
-		cols, rows = w, h
+func validateAttachOptions(opts AttachOptions) (protocol.SessionID, error) {
+	sid, err := protocol.NewSessionID(opts.SessionID)
+	if err != nil {
+		return sid, err
 	}
+	if err := protocol.ValidateContainingSessions(opts.ContainingSessions); err != nil {
+		return sid, fmt.Errorf("attach %s containment: %w", opts.SessionID, err)
+	}
+	if opts.Conn != nil && opts.SocketPath != "" {
+		return sid, fmt.Errorf("attach %s: both connection and socket path supplied", opts.SessionID)
+	}
+	if opts.HostID != "" {
+		err = protocol.ValidateSessionIdentity(protocol.SessionIdentity{HostID: opts.HostID, SessionID: opts.SessionID})
+	}
+	if err != nil || len(opts.ContainingSessions) == 0 {
+		return sid, err
+	}
+	target, err := attachmentTargetIdentity(opts)
+	if err != nil {
+		// Embedded callers without a destination identity cannot prove a match.
+		return sid, nil
+	}
+	return sid, rejectContainingTarget(target, opts.ContainingSessions)
+}
+
+func attachWithTerminal(ctx context.Context, opts AttachOptions, terminal AttachTerminal, keys *attachmentKeys, restoreModes bool) (AttachResult, error) {
+	res := initialAttachResult(opts)
+	var cancelOnce sync.Once
+	cancelInput := func() { cancelOnce.Do(terminal.CancelInput) }
+	if terminal.CancelInput != nil {
+		defer cancelInput()
+	}
+	if opts.Conn != nil {
+		defer opts.Conn.Close() //nolint:errcheck // attachment owns the connection
+	}
+	if err := validateAttachTerminal(ctx, terminal); err != nil {
+		return res, err
+	}
+	sid, err := validateAttachOptions(opts)
+	if err != nil {
+		return res, err
+	}
+	conn, err := openAttachment(ctx, opts)
+	if err != nil {
+		return res, err
+	}
+	defer conn.Close() //nolint:errcheck // attachment owns the connection
 
 	var writeMu sync.Mutex
 	send := func(frame protocol.Frame) error {
@@ -152,220 +231,299 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 		defer writeMu.Unlock()
 		return conn.WriteFrame(frame)
 	}
-
-	attach := protocol.Control{
-		Type:      protocol.TypeAttach,
-		SessionID: opts.SessionID,
-		LastSeq:   opts.LastSeq,
-		Cols:      cols,
-		Rows:      rows,
+	state := attachmentOutput{opts: opts, terminal: terminal, keys: keys, result: res}
+	if restoreModes {
+		defer state.restoreTerminal()
 	}
-	if err := send(controlFrame(attach)); err != nil {
+	stopContext := closeAttachmentOnCancel(ctx, conn)
+	defer stopContext()
+	request := attachmentRequest(opts, terminal.Size)
+	request.NestingSupported = keys.dynamic
+	if err := send(controlFrame(request)); err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		return res, presentError("attach "+opts.SessionID, err)
 	}
 
-	var altScreen altScreenTracker
-	inputIsTerminal := term.IsTerminal(opts.In.Fd())
-	if inputIsTerminal {
-		restore, err := makeRaw(opts.In)
-		if err != nil {
-			return res, err
-		}
-		defer restore()
-		// Detaching leaves the remote program running, so it never emits the
-		// sequences that would put this terminal back: a full-screen app stays
-		// in the alternate buffer with its last frame stranded on screen. ssh
-		// has no detach, so its programs always exit and clean up after
-		// themselves.
-		defer func() {
-			if altScreen.Active() {
-				_, _ = opts.Out.Write([]byte(leaveAltScreenSequence))
-			}
-			_, _ = opts.Out.Write([]byte(restoreTerminalState))
-		}()
-	}
-
-	input := io.Reader(opts.In)
-	cancelInput := func() {}
-	closeInput := func() error { return nil }
-	info, err := opts.In.Stat()
-	if err != nil {
-		return res, fmt.Errorf("inspect terminal input: %w", err)
-	}
-	if inputIsTerminal || info.Mode()&(os.ModeNamedPipe|os.ModeSocket) != 0 {
-		reader, err := uv.NewCancelReader(opts.In)
-		if err != nil {
-			return res, fmt.Errorf("make terminal input cancelable: %w", err)
-		}
-		input = reader
-		cancelInput = func() { reader.Cancel() }
-		closeInput = reader.Close
-	}
-
-	// Resizes are pushed as they happen; the worker owns the PTY dimensions.
-	winch := make(chan os.Signal, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
-	resizeDone := make(chan struct{})
+	done := make(chan struct{})
+	detached := make(chan struct{})
 	var relays sync.WaitGroup
-	relays.Add(1)
-	go func() {
-		defer relays.Done()
-		relayResizes(resizeDone, winch, func() {
-			w, h, err := term.GetSize(opts.Out.Fd())
-			if err != nil || w <= 0 {
-				return
-			}
-			frame := controlFrame(protocol.Control{
-				Type:      protocol.TypeResize,
-				SessionID: opts.SessionID,
-				Cols:      w,
-				Rows:      h,
-			})
-			_ = send(frame)
-		})
-	}()
 	defer func() {
-		signal.Stop(winch)
-		close(resizeDone)
+		close(done)
 		cancelInput()
 		_ = conn.Close()
 		relays.Wait()
-		_ = closeInput()
 	}()
+	relays.Go(func() { relayTerminalResizes(done, terminal.Resizes, opts.SessionID, send) })
+	relays.Go(func() {
+		relayInput(keys, terminal.Input, sid, send, func() { detachAttachment(conn, opts.SessionID, send, detached) })
+	})
+	return state.read(ctx, conn, detached)
+}
 
-	detached := make(chan struct{})
-	var detachOnce sync.Once
-	detach := func() {
-		detachOnce.Do(func() {
-			// Tear down first, tell the host second. send takes the write lock
-			// and then the reconnect lock, both of which the read loop holds
-			// while it is redialling, so leading with the courtesy frame meant
-			// ctrl+] never returned during a link failure — the terminal stayed
-			// in raw mode and the only way out was killing mesh elsewhere.
-			// The worker treats a dropped connection as a detach anyway, so the
-			// frame is a nicety, not the mechanism.
-			close(detached)
-			notified := make(chan struct{})
-			go func() {
-				defer close(notified)
-				_ = send(controlFrame(protocol.Control{
-					Type:      protocol.TypeDetach,
-					SessionID: opts.SessionID,
-					Reason:    protocol.ReasonClient,
-				}))
-			}()
-			select {
-			case <-notified:
-			case <-time.After(detachNotifyTimeout):
-			}
-			_ = conn.Close()
-		})
+func openAttachment(ctx context.Context, opts AttachOptions) (transport.Conn, error) {
+	if opts.Conn != nil {
+		return opts.Conn, nil
 	}
+	dialer := net.Dialer{Timeout: 2 * time.Second}
+	stream, err := dialer.DialContext(ctx, "unix", opts.SocketPath)
+	if err != nil {
+		return nil, fmt.Errorf("attach %s: %w", opts.SessionID, err)
+	}
+	conn, err := transport.NewStreamConn(stream)
+	if err != nil {
+		_ = stream.Close()
+		return nil, fmt.Errorf("attach %s: %w", opts.SessionID, err)
+	}
+	return conn, nil
+}
 
-	relays.Add(1)
-	go func() {
-		defer relays.Done()
-		relayInput(opts, input, sid, send, detach)
-	}()
+func attachmentRequest(opts AttachOptions, size terminal.Size) protocol.Control {
+	request := protocol.Control{
+		Type: protocol.TypeAttach, SessionID: opts.SessionID, LastSeq: opts.LastSeq,
+		Cols: size.Cols, Rows: size.Rows,
+		ContainingSessions: protocol.CloneSessionIdentities(opts.ContainingSessions),
+	}
+	if opts.IfDetached {
+		request.Type = protocol.TypeAttachDetached
+	}
+	return request
+}
 
-	// Output loop owns the return value: it is the only thing that knows
-	// whether the process exited or we merely walked away.
-	var (
-		pendingSnapshot bool
-		snapshotSeq     uint64
-	)
-	for {
-		f, err := conn.ReadFrame()
-		if err != nil {
-			select {
-			case <-detached:
-				res.Detached = true
-				return res, nil
-			default:
-			}
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				return res, nil
-			}
-			return res, presentError("session "+opts.SessionID, err)
-		}
-		switch f.Kind {
-		case protocol.KindData:
-			if pendingSnapshot {
-				return res, fmt.Errorf("session %s: received live output before announced snapshot", opts.SessionID)
-			}
-			altScreen.Observe(f.Payload)
-			if _, err := opts.Out.Write(f.Payload); err != nil {
-				return res, err
-			}
-			res.LastSeq = f.Seq + uint64(len(f.Payload))
-		case protocol.KindSnapshot:
-			if !pendingSnapshot {
-				return res, fmt.Errorf("session %s: received an unannounced snapshot", opts.SessionID)
-			}
-			altScreen.Observe(f.Payload)
-			if _, err := opts.Out.Write(f.Payload); err != nil {
-				return res, err
-			}
-			res.LastSeq = snapshotSeq
-			pendingSnapshot = false
-		case protocol.KindControl:
-			msg, err := protocol.DecodeControl(f.Payload)
-			if err != nil {
-				continue
-			}
-			switch msg.Type {
-			case protocol.TypeAttached:
-				if msg.Snapshot {
-					pendingSnapshot = true
-					snapshotSeq = msg.Seq
-				} else {
-					res.LastSeq = msg.Seq
-				}
-			case protocol.TypeExit:
-				res.Exited = true
-				if msg.ExitCode != nil {
-					res.ExitCode = *msg.ExitCode
-				}
-				return res, nil
-			case protocol.TypeDetach:
-				res.Detached = true
-				return res, nil
-			case protocol.TypeError:
-				return res, daemonResponseError("session "+opts.SessionID, msg.Message)
-			}
+func closeAttachmentOnCancel(ctx context.Context, conn transport.Conn) func() {
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(done)
+		_ = conn.Close()
+	})
+	return func() {
+		if !stop() {
+			<-done
 		}
 	}
 }
 
+func relayTerminalResizes(done <-chan struct{}, resizes <-chan terminal.Size, sessionID string, send func(protocol.Frame) error) {
+	for {
+		size, ok := nextTerminalResize(done, resizes)
+		if !ok {
+			return
+		}
+		forwardTerminalResize(size, sessionID, send)
+	}
+}
+
+func nextTerminalResize(done <-chan struct{}, resizes <-chan terminal.Size) (terminal.Size, bool) {
+	select {
+	case <-done:
+		return terminal.Size{}, false
+	case size, ok := <-resizes:
+		return size, ok
+	}
+}
+
+func forwardTerminalResize(size terminal.Size, sessionID string, send func(protocol.Frame) error) {
+	if size.Cols <= 0 || size.Rows <= 0 {
+		return
+	}
+	_ = send(controlFrame(protocol.Control{
+		Type: protocol.TypeResize, SessionID: sessionID, Cols: size.Cols, Rows: size.Rows,
+	}))
+}
+
+func detachAttachment(conn transport.Conn, sessionID string, send func(protocol.Frame) error, detached chan<- struct{}) {
+	close(detached)
+	notified := make(chan struct{})
+	go func() {
+		defer close(notified)
+		_ = send(controlFrame(protocol.Control{Type: protocol.TypeDetach, SessionID: sessionID, Reason: protocol.ReasonClient}))
+	}()
+	select {
+	case <-notified:
+	case <-time.After(detachNotifyTimeout):
+	}
+	_ = conn.Close()
+	// Close unblocks the courtesy write even when another writer held its lock.
+	<-notified
+}
+
+type attachmentOutput struct {
+	opts            AttachOptions
+	terminal        AttachTerminal
+	keys            *attachmentKeys
+	result          AttachResult
+	altScreen       altScreenTracker
+	pendingSnapshot bool
+	snapshotSeq     uint64
+	acknowledged    bool
+}
+
+func (s *attachmentOutput) restoreTerminal() {
+	if s.altScreen.Active() {
+		_, _ = io.WriteString(s.terminal.Output, leaveAltScreenSequence)
+	}
+	_, _ = io.WriteString(s.terminal.Output, restoreTerminalState)
+}
+
+func (s *attachmentOutput) read(ctx context.Context, conn transport.Conn, detached <-chan struct{}) (AttachResult, error) {
+	for {
+		frame, err := conn.ReadFrame()
+		if err != nil {
+			err = s.readError(ctx, err, detached)
+			return s.result, err
+		}
+		done, err := s.accept(frame)
+		if done || err != nil {
+			return s.result, err
+		}
+	}
+}
+
+func (s *attachmentOutput) readError(ctx context.Context, err error, detached <-chan struct{}) error {
+	select {
+	case <-detached:
+		s.result.Detached = true
+		return nil
+	default:
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+		return presentError("session "+s.opts.SessionID, err)
+	}
+	if s.opts.IfDetached && !s.acknowledged {
+		return fmt.Errorf("session %s: %w", s.opts.SessionID, ErrSessionUnavailable)
+	}
+	return nil
+}
+
+func (s *attachmentOutput) accept(frame protocol.Frame) (bool, error) {
+	switch frame.Kind {
+	case protocol.KindData:
+		return false, s.data(frame)
+	case protocol.KindSnapshot:
+		return false, s.snapshot(frame)
+	case protocol.KindControl:
+		message, err := protocol.DecodeControl(frame.Payload)
+		if err != nil {
+			return false, nil
+		}
+		return s.control(message)
+	default:
+		return false, nil
+	}
+}
+
+func (s *attachmentOutput) data(frame protocol.Frame) error {
+	if s.pendingSnapshot {
+		return fmt.Errorf("session %s: received live output before announced snapshot", s.opts.SessionID)
+	}
+	s.altScreen.Observe(frame.Payload)
+	if _, err := s.terminal.Output.Write(frame.Payload); err != nil {
+		return err
+	}
+	s.result.LastSeq = frame.Seq + uint64(len(frame.Payload))
+	return nil
+}
+
+func (s *attachmentOutput) snapshot(frame protocol.Frame) error {
+	if !s.pendingSnapshot {
+		return fmt.Errorf("session %s: received an unannounced snapshot", s.opts.SessionID)
+	}
+	s.altScreen.Observe(frame.Payload)
+	if _, err := s.terminal.Output.Write(frame.Payload); err != nil {
+		return err
+	}
+	s.result.LastSeq = s.snapshotSeq
+	s.pendingSnapshot = false
+	return nil
+}
+
+func (s *attachmentOutput) control(message protocol.Control) (bool, error) {
+	switch message.Type {
+	case protocol.TypeAttached:
+		return false, s.attached(message)
+	case protocol.TypeNesting:
+		if message.SessionID == s.opts.SessionID {
+			return false, s.updateKeys(message)
+		}
+	case protocol.TypeExit:
+		s.result.Exited = true
+		if message.ExitCode != nil {
+			s.result.ExitCode = *message.ExitCode
+		}
+		return true, nil
+	case protocol.TypeDetach:
+		s.result.Detached = true
+		return true, nil
+	case protocol.TypeError:
+		return false, s.responseError(message)
+	}
+	return false, nil
+}
+
+func (s *attachmentOutput) attached(message protocol.Control) error {
+	s.acknowledged = true
+	if err := s.updateKeys(message); err != nil {
+		return err
+	}
+	if message.Snapshot {
+		s.pendingSnapshot = true
+		s.snapshotSeq = message.Seq
+		return nil
+	}
+	s.result.LastSeq = message.Seq
+	return nil
+}
+
+func (s *attachmentOutput) updateKeys(message protocol.Control) error {
+	if err := s.keys.update(message); err != nil {
+		return fmt.Errorf("session %s nesting: %w", s.opts.SessionID, err)
+	}
+	return nil
+}
+
+func (s *attachmentOutput) responseError(message protocol.Control) error {
+	if message.Reason == protocol.ReasonAttached {
+		return fmt.Errorf("session %s: %w", s.opts.SessionID, ErrSessionAttached)
+	}
+	// Legacy workers identify unsupported atomic claims only by their text.
+	legacyUnsupported := message.Message == "expected "+protocol.TypeAttach ||
+		message.Message == fmt.Sprintf("daemon: unknown control %q", protocol.TypeAttachDetached)
+	if s.opts.IfDetached && legacyUnsupported {
+		return fmt.Errorf("session %s: %w", s.opts.SessionID, ErrAttachDetachedUnsupported)
+	}
+	return daemonResponseError("session "+s.opts.SessionID, message.Message)
+}
+
 // relayInput forwards keystrokes, watching for the detach key.
-func relayInput(opts AttachOptions, input io.Reader, sid protocol.SessionID, send func(protocol.Frame) error, detach func()) {
+func relayInput(keys *attachmentKeys, input io.Reader, sid protocol.SessionID, send func(protocol.Frame) error, detach func()) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := input.Read(buf)
-		if n > 0 {
-			b := buf[:n]
-			if !opts.Raw {
-				if i := indexByte(b, opts.DetachKey); i >= 0 {
-					if i > 0 {
-						_ = send(protocol.Frame{Kind: protocol.KindInput, Session: sid, Payload: append([]byte(nil), b[:i]...)})
-					}
-					detach()
-					return
-				}
-			}
-			// A failed write is how the transport reports a dead link: it
-			// deliberately does not retry, because a repeated keystroke is
-			// worse than a lost one, and the next operation reconnects.
-			// Returning here retired the keyboard for the rest of the session
-			// while output kept painting, so the session looked alive and
-			// ignored every key including the detach key. Drop the keystroke
-			// and keep relaying.
-			_ = send(protocol.Frame{Kind: protocol.KindInput, Session: sid, Payload: append([]byte(nil), b...)})
-		}
-		if err != nil {
+		if relayInputBytes(keys, buf[:n], sid, send, detach) || err != nil {
 			return
 		}
 	}
+}
+
+func relayInputBytes(keys *attachmentKeys, input []byte, sid protocol.SessionID, send func(protocol.Frame) error, detach func()) bool {
+	if len(input) == 0 {
+		return false
+	}
+	if index := keys.detachIndex(input); index >= 0 {
+		if index > 0 {
+			_ = send(protocol.Frame{Kind: protocol.KindInput, Session: sid, Payload: append([]byte(nil), input[:index]...)})
+		}
+		detach()
+		return true
+	}
+	// Failed writes drop one keystroke batch. Retiring the reader would leave
+	// a reconnecting session painting output with no keyboard or detach key.
+	_ = send(protocol.Frame{Kind: protocol.KindInput, Session: sid, Payload: append([]byte(nil), input...)})
+	return false
 }
 
 func controlFrame(message protocol.Control) protocol.Frame {
@@ -382,15 +540,6 @@ func relayResizes(done <-chan struct{}, winch <-chan os.Signal, resize func()) {
 			resize()
 		}
 	}
-}
-
-func indexByte(b []byte, c byte) int {
-	for i, v := range b {
-		if v == c {
-			return i
-		}
-	}
-	return -1
 }
 
 // restoreTerminalState returns the local terminal to something usable after a

@@ -3,10 +3,15 @@ package terminal
 
 import (
 	"bytes"
+	"image/color"
 	"io"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
@@ -24,7 +29,9 @@ const (
 
 	// x/vt bounds its own string-sequence data at 4 MiB. Match that limit so a
 	// peer cannot make the restorable parser tail grow without bound.
-	maxParserTail = 4 << 20
+	maxParserTail       = 4 << 20
+	maxOSCMetadataBytes = 4 << 10
+	maxPreviewTextBytes = 32 << 10
 )
 
 // Capture is a rendered screen plus any incomplete terminal sequence needed
@@ -34,12 +41,77 @@ type Capture struct {
 	Restorable bool
 }
 
+// Preview is a bounded view of the active screen and the latest metadata
+// reported by the terminal session. StyledLines has the same length as Lines,
+// and concatenating each styled line's run text reproduces its plain line.
+type Preview struct {
+	Lines       []string
+	StyledLines []PreviewLine
+	Title       string
+	Directory   string
+}
+
+// PreviewLine contains adjacent terminal cells coalesced by presentation.
+type PreviewLine struct {
+	Runs []PreviewRun
+}
+
+// PreviewRun is control-free text with one terminal presentation.
+type PreviewRun struct {
+	Text  string
+	Style PreviewStyle
+}
+
+// PreviewStyle is the non-animated presentation retained for a preview.
+// Hyperlinks, blinking, and concealed contents are intentionally omitted.
+type PreviewStyle struct {
+	Foreground     PreviewColor
+	Background     PreviewColor
+	UnderlineColor PreviewColor
+	Bold           bool
+	Faint          bool
+	Italic         bool
+	Reverse        bool
+	Strikethrough  bool
+	Underline      PreviewUnderline
+}
+
+// PreviewColor is either the default terminal color or a basic, indexed, or
+// RGB color. RGB values are packed as 0xRRGGBB.
+type PreviewColor struct {
+	Kind  PreviewColorKind
+	Value uint32
+}
+
+// PreviewColorKind identifies how a terminal color should be interpreted.
+type PreviewColorKind uint8
+
+const (
+	PreviewColorDefault PreviewColorKind = iota
+	PreviewColorBasic
+	PreviewColorIndexed
+	PreviewColorRGB
+)
+
+// PreviewUnderline identifies the underline presentation of a cell.
+type PreviewUnderline uint8
+
+const (
+	PreviewUnderlineNone PreviewUnderline = iota
+	PreviewUnderlineSingle
+	PreviewUnderlineDouble
+	PreviewUnderlineCurly
+	PreviewUnderlineDotted
+	PreviewUnderlineDashed
+)
+
 // Screen consumes PTY output and can render the current terminal state for a
 // newly attached client.
 type Screen interface {
 	io.Writer
 	Resize(cols, rows int)
 	Snapshot() Capture
+	Preview(cols, rows int) Preview
 }
 
 type emulatorScreen struct {
@@ -54,6 +126,8 @@ type emulatorScreen struct {
 	cursors        [2]cursorScreen
 	activeScreen   int
 	leftRightMode  bool
+	title          string
+	directory      string
 }
 
 type cursorPresentation struct {
@@ -135,6 +209,9 @@ func (s *emulatorScreen) Snapshot() Capture {
 	}
 	snapshot.WriteString(resetStyle)
 	snapshot.WriteString(ansi.ResetHyperlink())
+	if s.title != "" {
+		snapshot.WriteString(ansi.SetWindowTitle(s.title))
+	}
 	snapshot.WriteString(hideCursor)
 	snapshot.WriteString(clearScreen)
 	// ultraviolet separates physical rows with LF. LNM is reset by default, so
@@ -164,6 +241,226 @@ func (s *emulatorScreen) Snapshot() Capture {
 	contents := []byte(snapshot.String())
 	contents = append(contents, s.parserTail...)
 	return Capture{Bytes: contents, Restorable: !s.tailOverflow && !s.tailHasExecute && s.linkKnown}
+}
+
+// Preview returns a plain-text crop of the active screen. The crop ends at
+// whichever is lower: the cursor or the last row containing visible text.
+func (s *emulatorScreen) Preview(cols, rows int) Preview {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	preview := Preview{
+		Title:     strings.Clone(s.title),
+		Directory: strings.Clone(s.directory),
+	}
+	width := min(cols, s.emulator.Width())
+	height := s.emulator.Height()
+	if width <= 0 || rows <= 0 || height <= 0 {
+		return preview
+	}
+
+	lastNonblank := -1
+	for y := range height {
+		if s.rowHasText(y) {
+			lastNonblank = y
+		}
+	}
+	cursorRow := min(max(s.emulator.CursorPosition().Y, 0), height-1)
+	end := max(cursorRow, lastNonblank)
+	start := max(0, end-min(rows, end+1)+1)
+
+	preview.Lines = make([]string, 0, end-start+1)
+	preview.StyledLines = make([]PreviewLine, 0, end-start+1)
+	remainingBytes := maxPreviewTextBytes
+	for y := start; y <= end; y++ {
+		line, styledLine, exhausted := s.previewRow(y, width, remainingBytes)
+		preview.Lines = append(preview.Lines, line)
+		preview.StyledLines = append(preview.StyledLines, styledLine)
+		remainingBytes -= len(line)
+		if exhausted || remainingBytes == 0 {
+			break
+		}
+	}
+	return preview
+}
+
+func (s *emulatorScreen) rowHasText(y int) bool {
+	for x := range s.emulator.Width() {
+		cell := s.emulator.CellAt(x, y)
+		if cell == nil {
+			continue
+		}
+		style := previewStyle(cell.Style)
+		visibleContent := cell.Style.Attrs&uv.AttrConceal == 0 && cell.Content != "" && cell.Content != " "
+		if visibleContent || style != (PreviewStyle{}) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *emulatorScreen) previewRow(y, width, byteBudget int) (string, PreviewLine, bool) {
+	var line strings.Builder
+	line.Grow(min(width, byteBudget))
+	styledLine := PreviewLine{}
+	var pendingSpaces []PreviewRun
+	used := 0
+	pendingBytes := 0
+	retainedPendingBytes := 0
+	for x := 0; x < s.emulator.Width() && used < width; x++ {
+		cell := s.emulator.CellAt(x, y)
+		if cell == nil || cell.Width <= 0 {
+			continue
+		}
+		if cell.Width > width-used {
+			break
+		}
+		used += cell.Width
+		style := previewStyle(cell.Style)
+		concealed := cell.Style.Attrs&uv.AttrConceal != 0
+		if cell.Content == " " || concealed {
+			spaces := cell.Width
+			appendPreviewRun(&pendingSpaces, strings.Repeat(" ", spaces), style)
+			pendingBytes += spaces
+			if concealed || style != (PreviewStyle{}) {
+				retainedPendingBytes = pendingBytes
+			}
+			continue
+		}
+
+		available := byteBudget - line.Len() - pendingBytes
+		prefixBytes := validUTF8PrefixBytes(cell.Content, available)
+		if prefixBytes < len(cell.Content) {
+			if prefixBytes > 0 {
+				flushPreviewRuns(&line, &styledLine, pendingSpaces)
+				appendPreviewText(&line, &styledLine, cell.Content[:prefixBytes], style)
+			} else {
+				flushPreviewRunPrefix(&line, &styledLine, pendingSpaces, retainedPendingBytes, byteBudget)
+			}
+			return line.String(), styledLine, true
+		}
+		flushPreviewRuns(&line, &styledLine, pendingSpaces)
+		pendingSpaces = pendingSpaces[:0]
+		pendingBytes = 0
+		retainedPendingBytes = 0
+		appendPreviewText(&line, &styledLine, cell.Content, style)
+		if line.Len() == byteBudget {
+			return line.String(), styledLine, true
+		}
+	}
+	exhausted := flushPreviewRunPrefix(&line, &styledLine, pendingSpaces, retainedPendingBytes, byteBudget)
+	return line.String(), styledLine, exhausted
+}
+
+func flushPreviewRuns(line *strings.Builder, styledLine *PreviewLine, runs []PreviewRun) {
+	for _, run := range runs {
+		appendPreviewText(line, styledLine, run.Text, run.Style)
+	}
+}
+
+func flushPreviewRunPrefix(
+	line *strings.Builder,
+	styledLine *PreviewLine,
+	runs []PreviewRun,
+	prefixBytes int,
+	byteBudget int,
+) bool {
+	for _, run := range runs {
+		if prefixBytes == 0 {
+			break
+		}
+		textBytes := min(len(run.Text), prefixBytes, max(0, byteBudget-line.Len()))
+		appendPreviewText(line, styledLine, run.Text[:textBytes], run.Style)
+		prefixBytes -= textBytes
+		if line.Len() == byteBudget {
+			return true
+		}
+	}
+	return false
+}
+
+func appendPreviewText(line *strings.Builder, styledLine *PreviewLine, text string, style PreviewStyle) {
+	line.WriteString(text)
+	appendPreviewRun(&styledLine.Runs, text, style)
+}
+
+func appendPreviewRun(runs *[]PreviewRun, text string, style PreviewStyle) {
+	if text == "" {
+		return
+	}
+	if len(*runs) > 0 && (*runs)[len(*runs)-1].Style == style {
+		(*runs)[len(*runs)-1].Text += text
+		return
+	}
+	*runs = append(*runs, PreviewRun{Text: text, Style: style})
+}
+
+func previewStyle(style uv.Style) PreviewStyle {
+	return PreviewStyle{
+		Foreground:     previewColor(style.Fg),
+		Background:     previewColor(style.Bg),
+		UnderlineColor: previewColor(style.UnderlineColor),
+		Bold:           style.Attrs&uv.AttrBold != 0,
+		Faint:          style.Attrs&uv.AttrFaint != 0,
+		Italic:         style.Attrs&uv.AttrItalic != 0,
+		Reverse:        style.Attrs&uv.AttrReverse != 0,
+		Strikethrough:  style.Attrs&uv.AttrStrikethrough != 0,
+		Underline:      previewUnderline(style.Underline),
+	}
+}
+
+func previewColor(value color.Color) PreviewColor {
+	switch value := value.(type) {
+	case nil:
+		return PreviewColor{}
+	case ansi.BasicColor:
+		return PreviewColor{Kind: PreviewColorBasic, Value: uint32(value)}
+	case ansi.IndexedColor:
+		return PreviewColor{Kind: PreviewColorIndexed, Value: uint32(value)}
+	case ansi.RGBColor:
+		return PreviewColor{
+			Kind:  PreviewColorRGB,
+			Value: uint32(value.R)<<16 | uint32(value.G)<<8 | uint32(value.B),
+		}
+	default:
+		r, g, b, _ := value.RGBA()
+		return PreviewColor{
+			Kind: PreviewColorRGB,
+			Value: ((r>>8)&0xff)<<16 |
+				((g>>8)&0xff)<<8 |
+				((b >> 8) & 0xff),
+		}
+	}
+}
+
+func previewUnderline(value uv.Underline) PreviewUnderline {
+	switch value {
+	case uv.UnderlineSingle:
+		return PreviewUnderlineSingle
+	case uv.UnderlineDouble:
+		return PreviewUnderlineDouble
+	case uv.UnderlineCurly:
+		return PreviewUnderlineCurly
+	case uv.UnderlineDotted:
+		return PreviewUnderlineDotted
+	case uv.UnderlineDashed:
+		return PreviewUnderlineDashed
+	default:
+		return PreviewUnderlineNone
+	}
+}
+
+func validUTF8PrefixBytes(value string, maxBytes int) int {
+	limit := min(len(value), max(maxBytes, 0))
+	prefixBytes := 0
+	for prefixBytes < limit {
+		r, size := utf8.DecodeRuneInString(value[prefixBytes:])
+		if r == utf8.RuneError && size == 1 || size > limit-prefixBytes {
+			break
+		}
+		prefixBytes += size
+	}
+	return prefixBytes
 }
 
 func (s *emulatorScreen) advanceParser(b byte) {
@@ -293,6 +590,22 @@ func (s *emulatorScreen) handleOSC(_ int, _ []byte) {
 	default:
 		return
 	}
+
+	if commandData, payload, ok := bytes.Cut(data, []byte{';'}); ok {
+		if command, valid := parseExactOSCCommand(commandData); valid {
+			switch command {
+			case 0, 2:
+				if validOSCMetadata(payload) {
+					s.title = string(payload)
+				}
+			case 7:
+				if directory, valid := parseOSC7Directory(payload); valid {
+					s.directory = directory
+				}
+			}
+		}
+	}
+
 	parts := bytes.Split(data, []byte{';'})
 	if len(parts) != 3 {
 		return
@@ -304,6 +617,49 @@ func (s *emulatorScreen) handleOSC(_ int, _ []byte) {
 	cursor.link.Params = string(parts[1])
 	cursor.link.URL = string(parts[2])
 	s.linkKnown = true
+}
+
+func parseExactOSCCommand(data []byte) (int, bool) {
+	if len(data) == 0 || len(data) > 19 {
+		return 0, false
+	}
+	command := 0
+	for _, b := range data {
+		if b < '0' || b > '9' {
+			return 0, false
+		}
+		digit := int(b - '0')
+		if command > (int(^uint(0)>>1)-digit)/10 {
+			return 0, false
+		}
+		command = command*10 + digit
+	}
+	return command, true
+}
+
+func validOSCMetadata(data []byte) bool {
+	if len(data) > maxOSCMetadataBytes || !utf8.Valid(data) {
+		return false
+	}
+	for _, r := range string(data) {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func parseOSC7Directory(data []byte) (string, bool) {
+	if !validOSCMetadata(data) {
+		return "", false
+	}
+	location, err := url.Parse(string(data))
+	if err != nil || !strings.EqualFold(location.Scheme, "file") || location.Opaque != "" ||
+		location.User != nil || location.RawQuery != "" || location.ForceQuery || location.Fragment != "" ||
+		!path.IsAbs(location.Path) || !validOSCMetadata([]byte(location.Path)) {
+		return "", false
+	}
+	return strings.Clone(location.Path), true
 }
 
 func parseOSCCommand(data []byte) int {
