@@ -45,9 +45,12 @@ daemon's session list or a remote host.
 - Press `enter` to resume the selected session, or `1` through `9` to pick a row.
 - Press `n` to start a fresh shell.
 - Press `l` to open the full picker, with this machine first and remote hosts below.
-- Select an interrupted session and press `enter` to start its recorded command
-	in its original working directory. Mesh removes the old record after the new
-	session starts. Press `x` to forget an interrupted session instead.
+- Select an interrupted session and press `enter` to recover a shell in its saved
+	directory, or reconnect to its exact saved remote target. Saved previews read
+	**Previous output** with the checkpoint time. Press `s` to request a local
+	shell instead of the remote target. Press `x` to forget an interrupted session.
+- Press `l` for the full picker. Press `c` there to explicitly restart the recorded
+	command. Exited sessions and previous attempts remain in the full picker.
 
 Attached sessions appear last and are never selected automatically. To use one,
 open the full picker and choose its explicit `take over` action.
@@ -60,9 +63,37 @@ mesh --window --take
 
 Each window claims a detached session without taking it from another window.
 If none is available, Mesh starts a fresh shell. `--take` skips old workers that
-cannot claim sessions safely. To attach to a legacy local session explicitly,
+cannot claim sessions safely. It does not restart interrupted or exited work,
+or follow saved remote targets. To attach to a legacy local session explicitly,
 run `mesh attach ID`. For a remote session, run `mesh ID`. These explicit
 commands can take the session from an existing client.
+
+## Save shell directories and history
+
+For Bash, add this line to `~/.bashrc`:
+
+```bash
+source <(mesh shell-init bash)
+```
+
+For Zsh, add this line to `~/.zshrc`:
+
+```zsh
+source <(mesh shell-init zsh)
+```
+
+The opt-in hook reports the interactive shell's directory after each prompt and
+appends completed commands through the shell's normal history mechanism. It
+preserves existing prompt hooks and history exclusions. Repeated sourcing does
+not duplicate the hook. Outside Mesh, the helper stays silent.
+
+Without the hook, recovery uses the last observed directory, then the launch
+directory. The picker labels these fallbacks. An unsubmitted command line is not
+saved. History appends and periodic checkpoints do not guarantee that the final
+commands survive a power cut.
+
+For recovery commands, saved restart recipes, and retained attempts, see
+[workspace recovery](recovery.md).
 
 ## Leave a session running
 

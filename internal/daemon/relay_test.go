@@ -187,6 +187,29 @@ func TestClientRelayOutputQueueIsBoundedAndReservesControls(t *testing.T) {
 	}
 }
 
+func TestClientRelayBoundsQueuedControlResponseBytes(t *testing.T) {
+	lifetime, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	relay := &clientRelay{lifetime: lifetime, output: make(chan protocol.Frame, 4)}
+	large := protocol.Frame{Kind: protocol.KindControl, Payload: make([]byte, protocol.MaxPayload)}
+	for range 2 {
+		if err := relay.enqueueOutput(large); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reserved := protocol.Frame{Kind: protocol.KindControl, Payload: make([]byte, relayOutputControlByteReserve)}
+	if err := relay.enqueueOutput(reserved); err != nil {
+		t.Fatal(err)
+	}
+	if err := relay.enqueueOutput(protocol.Frame{Kind: protocol.KindControl, Payload: []byte{1}}); !errors.Is(err, errRelayOutputQueueFull) {
+		t.Fatalf("control bytes overflow = %v", err)
+	}
+	relay.releaseOutput(<-relay.output)
+	if err := relay.enqueueOutput(large); err != nil {
+		t.Fatalf("completed control response did not release byte budget: %v", err)
+	}
+}
+
 func TestClientRelayFailedReplacementPreservesIncumbent(t *testing.T) {
 	client := newRelayTestConn()
 	incumbent := newRelayTestConn()

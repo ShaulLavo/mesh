@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 )
 
 func (w *Worker) serveNesting(conn net.Conn, request protocol.Control) {
@@ -32,6 +33,9 @@ func (w *Worker) serveNesting(conn net.Conn, request protocol.Control) {
 		w.nesting = make(map[net.Conn]protocol.SessionIdentity)
 	}
 	w.nesting[conn] = *request.NestedSession
+	if request.NestedSession.HostID != w.cfg.HostID {
+		w.recoveryState.Remote = &recovery.Target{HostID: request.NestedSession.HostID, SessionID: request.NestedSession.SessionID}
+	}
 	w.nestReaders.Add(1)
 	response.Nested = w.nestedLocked()
 	w.pushNestingLocked(response.Nested)

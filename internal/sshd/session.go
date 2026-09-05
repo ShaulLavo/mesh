@@ -15,6 +15,7 @@ import (
 	charmssh "github.com/charmbracelet/ssh"
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/shaul/mesh/internal/recovery"
 	meshsession "github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/terminal"
 )
@@ -31,11 +32,13 @@ const (
 	CommandBrowse CommandKind = iota
 	CommandAttach
 	CommandList
+	CommandRecover
 )
 
 type Command struct {
-	Kind      CommandKind
-	SessionID string
+	Kind           CommandKind
+	SessionID      string
+	RecoveryAction recovery.Action
 }
 
 type Session struct {
@@ -228,11 +231,41 @@ func parseCommand(raw string, hasPTY, installed bool) (Command, error) {
 	if raw == "" {
 		return Command{Kind: CommandBrowse}, nil
 	}
+	if strings.HasPrefix(raw, "recover ") {
+		return parseRecoverCommand(raw)
+	}
 	id, err := meshsession.ParseID(raw)
 	if err != nil {
-		return Command{}, errors.New("unsupported SSH command; use a session ID or ls")
+		return Command{}, errors.New("unsupported SSH command; use a session ID, recover SESSION [--shell|--command], or ls")
 	}
 	return Command{Kind: CommandAttach, SessionID: id}, nil
+}
+
+func parseRecoverCommand(raw string) (Command, error) {
+	if len(raw) > 64 {
+		return Command{}, errors.New("SSH recovery command exceeds 64 bytes")
+	}
+	arguments := strings.Fields(raw)
+	if len(arguments) < 2 || len(arguments) > 3 {
+		return Command{}, errors.New("use recover SESSION [--shell|--command]")
+	}
+	id, err := meshsession.ParseID(arguments[1])
+	if err != nil {
+		return Command{}, fmt.Errorf("SSH recovery session: %w", err)
+	}
+	command := Command{Kind: CommandRecover, SessionID: id}
+	if len(arguments) == 2 {
+		return command, nil
+	}
+	switch arguments[2] {
+	case "--shell":
+		command.RecoveryAction = recovery.ActionShell
+	case "--command":
+		command.RecoveryAction = recovery.ActionCommand
+	default:
+		return Command{}, errors.New("SSH recovery accepts only --shell or --command")
+	}
+	return command, nil
 }
 
 func runSession(channel charmssh.Session, application SessionHandler, command Command, state *windowState) {

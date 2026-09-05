@@ -7,7 +7,8 @@ Updated 2026-09-05.
 The session and transport core, live session inspector, terminal-window entry, product CLI,
 Tailscale-provisioning SSH bootstrap, packaging, origin serving core and service
 catalog, private DNS/TLS path, authenticated public edge, and the locked SSH
-front door and sessions over SSH are complete.
+front door and sessions over SSH are complete. Workspace crash recovery is also
+implemented. Physical power-loss acceptance remains an operator check.
 
 - `internal/protocol` — framing, control messages, bounded structured preview
   styles, and exact host/session containment paths shared by every transport
@@ -61,6 +62,9 @@ front door and sessions over SSH are complete.
 - `internal/sshd` — Wish-based key-only SSH on discovered Tailnet addresses,
   the shared Mesh host key, live `authorized_keys` revocation, and daemon-owned
   shutdown, with local sessions, the shared picker, and scriptable `ls` (T15, T17)
+- `internal/recovery` — worker-owned rendered checkpoints, shell directory and
+  history hooks, durable restart reservations, retained attempts, exact remote
+  continuation, explicit command recipes, and previous-output access (T24)
 
 Verified 2026-08-30: clean formatting and module/generation diffs, the unlimited
 seven-linter policy, `go vet ./...`, `go test -race ./...`, all three retained
@@ -152,7 +156,16 @@ T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websoc
 transport · T06 host identity · T07 CLI surface · T08 ssh bootstrap · T09 picker
 TUI · T10 packaging · T11 serving core · T12 private names · T13 public edge ·
 T14 `mesh serve` · T15 SSH front door · T17 sessions over SSH · T20 Tailscale provisioning · T22 live
-session inspector · T23 Mesh as your terminal.
+session inspector · T23 Mesh as your terminal · T24 workspace crash recovery.
+
+Verified 2026-09-05 after T24: `go test -race ./...`, `go vet ./...`, clean module
+and formatting checks, all 33 integration scripts, and CGO-disabled Linux
+amd64/arm64 plus Darwin arm64 builds. `scripts/check-t24.sh` retains the focused
+contract and real Bash/Zsh, WebSocket, and OpenSSH recovery scenarios. A daemon
+response-ordering regression also covers attachment rejection followed by resize.
+Full unlimited lint reports only the same eleven pre-existing findings.
+Physical power-loss acceptance and a wider real-process crash-boundary matrix
+remain [documented validation limits](../tasks/T24-crash-recovery.md#delivery-notes).
 
 ## Build order coverage
 
@@ -166,7 +179,7 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 | 2 Remote session over Tailscale | T05, T06 | complete |
 | 3 Product CLI | T07, T09, T22 | complete |
 | 4 SSH bootstrap | T08, T20, T21 | complete |
-| 5 Crash and restart recovery | folded into T04 | complete |
+| 5 Crash and restart recovery | T04, T24, T25 | daemon and workspace recovery implemented; agent recovery planned |
 | 6 Pi power control | **T19** | **not started** |
 | 7 Packaging | T10 | complete |
 | 8 Serving | T11, T12, T13, T14 | complete |
@@ -175,21 +188,32 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 
 ## Next
 
-T16, T18, and T19 are independent and unblocked.
+T16, T18, and T19 remain independent and unblocked. T24 provides the checkpoint and
+restart operation needed by T25. The offline provider probe is implemented; live
+invocation association and exact native resume still need verification.
 
 | Task | Owns | Blocked by |
 |---|---|---|
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
 | T18 reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
 | T19 Pi power control | `internal/wake/`, `internal/inhibit/` | T06, T07, T08, T09 |
+| [T25 Codex and Claude recovery](../tasks/T25-agent-recovery.md) | `internal/agentresume/`, exact conversation registration, native resume | live provider association and exact-resume verification |
+
+T24 recovers a shell in its last saved directory, retains previous output and
+attempts, and resolves exact remote targets from the Mesh CLI. SSH recovery stays
+on its connected host. `mesh logs SESSION --previous` reads retained output.
+T25 adds no runtime behavior yet; its offline probe does not establish automatic
+conversation association. See [recovery instructions](../recovery.md).
 
 T19 closes the only skipped build step. Its seams already exist in the CLI,
 the picker, the edge, the protocol, and the services table; every one of them
 currently reaches a nil dependency or `noWaker`. It carries two open decisions
 (D25 inhibitor mechanism, D26 witness transport) to resolve before implementing.
 
-Pick T19 next to complete Pi wake and sleep inhibition. T16 and T18 can proceed
-independently.
+Next for agent recovery, prove invocation association and exact native resume
+with authenticated disposable Codex and Claude conversations. Then add T25
+registration and provider launch on T24's shared restart operation. T16, T18,
+and T19 can proceed independently.
 
 ## Known defects
 

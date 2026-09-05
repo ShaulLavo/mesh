@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/shaul/mesh/internal/recovery"
 )
 
 // Control message type names.
@@ -78,23 +80,28 @@ const (
 
 // SessionInfo is the transport representation of durable session metadata.
 type SessionInfo struct {
-	ID                 string     `json:"id"`
-	HostID             string     `json:"hostId"`
-	Command            []string   `json:"command"`
-	Cwd                string     `json:"cwd"`
-	State              string     `json:"state"`
-	CreatedAt          time.Time  `json:"createdAt"`
-	LastAttachedAt     *time.Time `json:"lastAttachedAt,omitempty"`
-	ExitCode           *int       `json:"exitCode,omitempty"`
-	LastOutputSequence uint64     `json:"lastOutputSequence"`
+	Recovery           *recovery.Record `json:"recovery,omitempty"`
+	RecoveryError      string           `json:"recoveryError,omitempty"`
+	ReplacementID      string           `json:"replacementId,omitempty"`
+	RecoveredFrom      string           `json:"recoveredFrom,omitempty"`
+	ID                 string           `json:"id"`
+	HostID             string           `json:"hostId"`
+	Command            []string         `json:"command"`
+	Cwd                string           `json:"cwd"`
+	State              string           `json:"state"`
+	CreatedAt          time.Time        `json:"createdAt"`
+	LastAttachedAt     *time.Time       `json:"lastAttachedAt,omitempty"`
+	ExitCode           *int             `json:"exitCode,omitempty"`
+	LastOutputSequence uint64           `json:"lastOutputSequence"`
 }
 
 // HostInfo is the transport representation of one daemon's identity.
 type HostInfo struct {
-	ID            string `json:"id"`
-	MeshIdentity  string `json:"meshIdentity"`
-	TailscaleName string `json:"tailscaleName,omitempty"`
-	PrivateName   string `json:"privateName,omitempty"`
+	RecoverySupported bool   `json:"recoverySupported,omitempty"`
+	ID                string `json:"id"`
+	MeshIdentity      string `json:"meshIdentity"`
+	TailscaleName     string `json:"tailscaleName,omitempty"`
+	PrivateName       string `json:"privateName,omitempty"`
 }
 
 // ServiceInfo is the transport representation of one origin service and its
@@ -171,9 +178,18 @@ type EdgeListProof struct {
 // Control is the envelope for every JSON control message. Unused fields are
 // omitted so messages stay readable on the wire during debugging.
 type Control struct {
-	Type      string `json:"type"`
-	RequestID string `json:"requestId,omitempty"`
-	SessionID string `json:"sessionId,omitempty"`
+	RecoveryAction       string            `json:"recoveryAction,omitempty"`
+	Recovery             *recovery.Record  `json:"recovery,omitempty"`
+	RecoveryResult       *recovery.Result  `json:"recoveryResult,omitempty"`
+	RecoverySupported    bool              `json:"recoverySupported,omitempty"`
+	RecoveryCommand      *recovery.Command `json:"recoveryCommand,omitempty"`
+	ClearRecoveryCommand bool              `json:"clearRecoveryCommand,omitempty"`
+	ShellPID             int               `json:"shellPid,omitempty"`
+	ShellDirectory       string            `json:"shellDirectory,omitempty"`
+	ShellExecutable      string            `json:"shellExecutable,omitempty"`
+	Type                 string            `json:"type"`
+	RequestID            string            `json:"requestId,omitempty"`
+	SessionID            string            `json:"sessionId,omitempty"`
 
 	// Attach / create / inspect / containment
 	LastSeq     *uint64  `json:"lastSeq,omitempty"` // exact resume point; nil requests a screen snapshot

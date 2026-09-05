@@ -54,6 +54,9 @@ Press `ctrl+]` to detach without stopping the command.
 To keep every terminal window's shell running, follow
 [Use Mesh for every terminal window](docs/terminals.md).
 
+To recover saved directories and previous output after a host crash, follow
+[Recover a workspace](docs/recovery.md).
+
 ## Remote access
 
 Installed hosts expose Mesh sessions through public-key-only SSH on Tailnet

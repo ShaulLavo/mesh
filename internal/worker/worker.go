@@ -16,6 +16,7 @@ import (
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/session"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
 )
@@ -88,6 +89,7 @@ type Config struct {
 	Cols               int
 	Rows               int
 	AwaitInitialAttach bool
+	RecoveredFrom      string
 }
 
 // Worker owns one PTY and serves clients over a Unix socket.
@@ -100,7 +102,12 @@ type Worker struct {
 	screen terminalstate.Screen
 	now    func() time.Time
 
-	observeProcess processObserver
+	observeProcess   processObserver
+	checkpointMu     sync.Mutex
+	checkpointWriter *recovery.Writer
+	checkpointStop   chan struct{}
+	checkpointDone   chan struct{}
+	recoveryState    recovery.Record
 
 	// mu orders ring delivery, attachment ownership, and shutdown. A client
 	// attaching mid-write cannot miss bytes, and finish cannot race a new writer
@@ -477,13 +484,14 @@ func Run(cfg Config) (int, error) {
 	}
 
 	meta := Meta{
-		ID:        cfg.ID,
-		PID:       cmd.Process.Pid,
-		Command:   cfg.Command,
-		Cwd:       cfg.Cwd,
-		State:     StateRunning,
-		CreatedAt: time.Now(),
-		BootID:    BootID(),
+		ID:            cfg.ID,
+		PID:           cmd.Process.Pid,
+		Command:       cfg.Command,
+		Cwd:           cfg.Cwd,
+		State:         StateRunning,
+		CreatedAt:     time.Now(),
+		BootID:        BootID(),
+		RecoveredFrom: cfg.RecoveredFrom,
 	}
 	if err := WriteMeta(cfg.Dir, meta); err != nil {
 		return 0, err
@@ -503,8 +511,9 @@ func Run(cfg Config) (int, error) {
 		return 0, fmt.Errorf("worker: publish session %s: %w", cfg.ID, err)
 	}
 
-	go w.acceptLoop(ln)
 	go w.pump()
+	w.startRecovery()
+	go w.acceptLoop(ln)
 
 	state, waitErr := cmd.Process.Wait()
 	// Retire the PID before anything else can act on it. kill's grace timer can
@@ -523,6 +532,7 @@ func Run(cfg Config) (int, error) {
 		w.waitForFirstAttachment()
 	}
 	w.finish(code)
+	w.stopRecovery()
 
 	now := time.Now()
 	meta.State = StateExited

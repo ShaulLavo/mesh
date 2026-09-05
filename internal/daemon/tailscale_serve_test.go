@@ -491,6 +491,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	}
 	var discoveryCalls atomic.Int32
 	firstOptions := defaultRunOptions()
+	firstOptions.now = func() time.Time { return exitedAt }
 	firstOptions.reconcileInterval = time.Hour
 	firstOptions.tailnetPollInterval = 10 * time.Millisecond
 	firstOptions.validateServeAddresses = func([]string) error { return nil }
@@ -515,6 +516,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 
 	secondReady := make(chan struct{}, 1)
 	secondOptions := defaultRunOptions()
+	secondOptions.now = func() time.Time { return exitedAt }
 	secondOptions.reconcileInterval = time.Hour
 	secondOptions.tailnetPollInterval = 10 * time.Millisecond
 	secondOptions.validateServeAddresses = func([]string) error { return nil }

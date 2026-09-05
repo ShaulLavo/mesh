@@ -15,6 +15,7 @@ import (
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -94,7 +95,7 @@ func (a *application) runWindow(cmd *cobra.Command, take bool, detachKey string,
 				return err
 			}
 			if selection.Relaunch {
-				return a.relaunchSession(cmd, resolvedSession{local: &current}, detachKey, raw, true)
+				return a.relaunchSession(cmd, resolvedSession{local: &current}, detachKey, raw, selection.RecoveryAction)
 			}
 			err = a.attachWindowSession(cmd, current.ID, detachKey, raw)
 			if errors.Is(err, ErrSessionAttached) || errors.Is(err, ErrSessionUnavailable) {
@@ -112,34 +113,15 @@ func (a *application) attachPickerSession(cmd *cobra.Command, resolved resolvedS
 	return a.attachResolvedWithContainment(cmd, resolved, detachKey, raw, nil, containing)
 }
 
-// Relaunch retains the old record until creation has published an answering
-// worker. Both entry points use the recorded launch directory, not the client's.
-func (a *application) relaunchSession(cmd *cobra.Command, resolved resolvedSession, detachKey string, raw bool, window bool) error {
-	if resolved.local != nil {
-		old, err := Find(resolved.local.ID)
-		if err != nil {
-			return err
-		}
-		if old.State() != worker.StateInterrupted {
-			return fmt.Errorf("session %s is %s, not interrupted", old.ID, old.State())
-		}
-		current, socket, err := a.createLocalSession(cmd, old.Command, old.Cwd, false)
-		if err != nil {
-			return err
-		}
-		if err := forgetLocalSession(cmd.Context(), old); err != nil {
-			return fmt.Errorf("new session %s is running; forget old session %s: %w", current.ID, old.ID, err)
-		}
-		initial := uint64(0)
-		if window {
-			err := a.attachWindow(cmd, current, socket, &initial, true, detachKey, raw)
-			if errors.Is(err, ErrSessionAttached) || errors.Is(err, ErrSessionUnavailable) {
-				return a.startWindowSession(cmd, detachKey, raw)
-			}
-			return err
-		}
-		return a.attachResolved(cmd, resolvedSession{local: &current, ifDetached: true}, detachKey, raw, &initial)
+func (a *application) relaunchSession(cmd *cobra.Command, resolved resolvedSession, detachKey string, raw bool, action recovery.Action) error {
+	err := a.recoverSession(cmd, resolved, action, detachKey, raw, false)
+	if errors.Is(err, errRecoveryUnsupported) && action == recovery.ActionCommand {
+		return a.legacyRelaunchSession(cmd, resolved, detachKey, raw)
 	}
+	return err
+}
+
+func (a *application) legacyRelaunchSession(cmd *cobra.Command, resolved resolvedSession, detachKey string, raw bool) error {
 	ctx, cancel := context.WithTimeout(cmd.Context(), remoteCreateTimeout)
 	defer cancel()
 	rows, err := a.queryHost(ctx, *resolved.host)

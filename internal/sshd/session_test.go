@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/wish/testsession"
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/terminal"
 )
 
@@ -41,6 +42,15 @@ func TestSessionCommandGrammar(t *testing.T) {
 		{raw: "7k3d", pty: true, installed: true, want: Command{Kind: CommandAttach, SessionID: "7K3D"}},
 		{raw: "ls", installed: true, want: Command{Kind: CommandList}},
 		{raw: "ls", pty: true, installed: true, want: Command{Kind: CommandList}},
+		{raw: "recover 7k3d", pty: true, installed: true, want: Command{Kind: CommandRecover, SessionID: "7K3D"}},
+		{raw: "recover 7K3D --shell", pty: true, installed: true, want: Command{Kind: CommandRecover, SessionID: "7K3D", RecoveryAction: recovery.ActionShell}},
+		{raw: "recover 7K3D --command", pty: true, installed: true, want: Command{Kind: CommandRecover, SessionID: "7K3D", RecoveryAction: recovery.ActionCommand}},
+		{raw: "recover 7K3D", installed: true, invalid: true},
+		{raw: "recover", pty: true, installed: true, invalid: true},
+		{raw: "recover 7K3D --shell --command", pty: true, installed: true, invalid: true},
+		{raw: "recover 7K3D --takeover", pty: true, installed: true, invalid: true},
+		{raw: "recover 7K3D; id", pty: true, installed: true, invalid: true},
+		{raw: "recover 7K3D --command sh -c id", pty: true, installed: true, invalid: true},
 		{raw: "", installed: true, invalid: true},
 		{raw: "7K3D", installed: true, invalid: true},
 		{raw: "ls", invalid: true},

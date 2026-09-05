@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 
 	"github.com/coder/websocket"
 
 	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/transport"
 )
@@ -65,7 +65,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		return fmt.Errorf("daemon: nil client connection")
 	}
 
-	client := &serializedClientConn{Conn: conn}
+	client := conn
 	relay := newClientRelay(client, s.workers)
 	stopCancellation := context.AfterFunc(ctx, func() { _ = client.Close() })
 	defer func() {
@@ -89,7 +89,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			if requestErr == nil {
 				continue
 			}
-			if err := writeClientRequestError(client, requestMetadata(frame), requestErr); err != nil {
+			if err := writeClientRequestError(relay, requestMetadata(frame), requestErr); err != nil {
 				return clientOperationError(ctx, fmt.Sprintf("report client request error %v", requestErr), err)
 			}
 			continue
@@ -97,7 +97,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 
 		request, err := protocol.DecodeControl(frame.Payload)
 		if err != nil {
-			if err := writeClientRequestError(client, request, fmt.Errorf("daemon: decode lifecycle control: %w", err)); err != nil {
+			if err := writeClientRequestError(relay, request, fmt.Errorf("daemon: decode lifecycle control: %w", err)); err != nil {
 				return clientOperationError(ctx, "report lifecycle decode error", err)
 			}
 			continue
@@ -114,14 +114,14 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			response, lifecycleHandled, requestErr = s.certificates.HandleControl(ctx, request)
 		}
 		if requestErr != nil {
-			if err := writeClientRequestError(client, request, requestErr); err != nil {
+			if err := writeClientRequestError(relay, request, requestErr); err != nil {
 				return clientOperationError(ctx, fmt.Sprintf("report %s error %v", request.Type, requestErr), err)
 			}
 			continue
 		}
 		if !lifecycleHandled {
 			requestErr = fmt.Errorf("daemon: unknown control %q", request.Type)
-			if err := writeClientRequestError(client, request, requestErr); err != nil {
+			if err := writeClientRequestError(relay, request, requestErr); err != nil {
 				return clientOperationError(ctx, fmt.Sprintf("report unknown control %q", request.Type), err)
 			}
 			continue
@@ -129,28 +129,15 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 
 		responseFrame, err := encodeClientControl(response)
 		if err != nil {
-			if err := writeClientRequestError(client, request, err); err != nil {
+			if err := writeClientRequestError(relay, request, err); err != nil {
 				return clientOperationError(ctx, fmt.Sprintf("report %s encoding error", request.Type), err)
 			}
 			continue
 		}
-		if err := client.WriteFrame(responseFrame); err != nil {
+		if err := relay.enqueueResponse(responseFrame); err != nil {
 			return clientOperationError(ctx, fmt.Sprintf("write %s response", request.Type), err)
 		}
 	}
-}
-
-// serializedClientConn makes the single shared client writer explicit. Close
-// bypasses writeMu because it is the cancellation signal for a blocked write.
-type serializedClientConn struct {
-	transport.Conn
-	writeMu sync.Mutex
-}
-
-func (c *serializedClientConn) WriteFrame(frame protocol.Frame) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return c.Conn.WriteFrame(frame)
 }
 
 func requestMetadata(frame protocol.Frame) protocol.Control {
@@ -161,7 +148,7 @@ func requestMetadata(frame protocol.Frame) protocol.Control {
 	return protocol.Control{SessionID: frame.Session.String()}
 }
 
-func writeClientRequestError(client transport.Conn, request protocol.Control, requestErr error) error {
+func writeClientRequestError(relay *clientRelay, request protocol.Control, requestErr error) error {
 	frame, err := encodeClientControl(protocol.Control{
 		Type:      protocol.TypeError,
 		RequestID: request.RequestID,
@@ -172,13 +159,16 @@ func writeClientRequestError(client transport.Conn, request protocol.Control, re
 	if err != nil {
 		return fmt.Errorf("daemon: encode client error response: %w", err)
 	}
-	if err := client.WriteFrame(frame); err != nil {
+	if err := relay.enqueueResponse(frame); err != nil {
 		return fmt.Errorf("daemon: write client error response: %w", err)
 	}
 	return nil
 }
 
 func clientErrorCode(err error) string {
+	if errors.Is(err, recovery.ErrUncertain) {
+		return protocol.ErrorCodeRecoveryUncertain
+	}
 	switch {
 	case errors.Is(err, edge.ErrRouteCollision):
 		return protocol.ErrorCodeEdgeRouteCollision

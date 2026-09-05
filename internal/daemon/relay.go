@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	relayInputQueueFrameLimit  = 256
-	relayInputQueueByteLimit   = 8 << 20
-	relayOutputQueueFrameLimit = 256
-	relayOutputControlReserve  = 8
-	relayOutputQueueByteLimit  = 8 << 20
+	relayInputQueueFrameLimit     = 256
+	relayInputQueueByteLimit      = 8 << 20
+	relayOutputQueueFrameLimit    = 256
+	relayOutputControlReserve     = 8
+	relayOutputQueueByteLimit     = 8 << 20
+	relayOutputControlByteReserve = 64 << 10
 )
 
 var (
@@ -239,7 +240,7 @@ func (r *clientRelay) attach(ctx context.Context, id protocol.SessionID, frame p
 	}
 
 	if response.Type == protocol.TypeError {
-		if err := r.forwardCandidate(first); err != nil {
+		if err := r.enqueueResponse(first); err != nil {
 			return err
 		}
 		return nil
@@ -329,7 +330,9 @@ func (r *clientRelay) publishCandidate(candidate *relayCandidate, id protocol.Se
 	return old, nil
 }
 
-func (r *clientRelay) forwardCandidate(frame protocol.Frame) error {
+// enqueueResponse orders daemon replies behind any worker response already
+// queued, including a rejected attach followed immediately by a resize.
+func (r *clientRelay) enqueueResponse(frame protocol.Frame) error {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
 
@@ -341,7 +344,7 @@ func (r *clientRelay) forwardCandidate(frame protocol.Frame) error {
 	}
 	if err := r.enqueueOutput(frame); err != nil {
 		go func() { _ = r.Close() }()
-		return fmt.Errorf("daemon: queue rejected attach response: %w", err)
+		return fmt.Errorf("daemon: queue client response: %w", err)
 	}
 	return nil
 }
@@ -500,14 +503,21 @@ func (r *clientRelay) enqueueOutput(frame protocol.Frame) error {
 		return errRelayClosed
 	default:
 	}
-	if payload && (r.outputFrames >= relayOutputQueueFrameLimit || bytes > relayOutputQueueByteLimit-r.outputBytes) {
+	if payload && r.outputFrames >= relayOutputQueueFrameLimit {
+		return errRelayOutputQueueFull
+	}
+	byteLimit := relayOutputQueueByteLimit
+	if !payload {
+		byteLimit += relayOutputControlByteReserve
+	}
+	if bytes > byteLimit-r.outputBytes {
 		return errRelayOutputQueueFull
 	}
 	select {
 	case r.output <- queued:
+		r.outputBytes += bytes
 		if payload {
 			r.outputFrames++
-			r.outputBytes += bytes
 		}
 		return nil
 	default:
@@ -516,11 +526,10 @@ func (r *clientRelay) enqueueOutput(frame protocol.Frame) error {
 }
 
 func (r *clientRelay) releaseOutput(frame protocol.Frame) {
-	if frame.Kind != protocol.KindData && frame.Kind != protocol.KindSnapshot {
-		return
-	}
 	r.outputMu.Lock()
-	r.outputFrames--
+	if frame.Kind == protocol.KindData || frame.Kind == protocol.KindSnapshot {
+		r.outputFrames--
+	}
 	r.outputBytes -= len(frame.Payload)
 	r.outputMu.Unlock()
 }

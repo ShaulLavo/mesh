@@ -18,6 +18,7 @@ import (
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/storage"
@@ -161,12 +162,13 @@ type PickerInspectFunc func(context.Context, PickerInspectRequest) (SessionInspe
 
 // PickerSelection tells the CLI which normal action to run after T09 exits.
 type PickerSelection struct {
-	HostAlias string
-	SessionID string
-	New       bool
-	Wake      bool
-	Relaunch  bool
-	TakeOver  bool
+	HostAlias      string
+	SessionID      string
+	New            bool
+	Wake           bool
+	Relaunch       bool
+	RecoveryAction recovery.Action
+	TakeOver       bool
 }
 
 // WindowInput is the local catalog available before any network discovery.
@@ -180,10 +182,11 @@ type WindowInput struct {
 }
 
 type WindowSelection struct {
-	SessionID  string
-	New        bool
-	FullPicker bool
-	Relaunch   bool
+	SessionID      string
+	New            bool
+	FullPicker     bool
+	Relaunch       bool
+	RecoveryAction recovery.Action
 }
 
 type WindowPickerFunc func(context.Context, WindowInput) (WindowSelection, error)
@@ -311,12 +314,12 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	)
 	root.AddCommand(
 		inGroup(groupSessions, app.listCommand(), app.attachCommand(), app.localCommand(),
-			app.logsCommand(), app.killCommand(), app.signalCommand(), app.removeCommand())...,
+			app.logsCommand(), app.killCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand())...,
 	)
 	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.renameCommand(), app.wakeCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand())...)
-	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand())...)
-	root.AddCommand(app.workerCommand())
+	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand())...)
+	root.AddCommand(app.workerCommand(), app.shellUpdateCommand())
 	return root
 }
 
@@ -481,7 +484,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 					return err
 				}
 				if selection.Relaunch {
-					return a.relaunchSession(cmd, resolvedSession{local: &current}, detachKey, raw, false)
+					return a.relaunchSession(cmd, resolvedSession{local: &current}, detachKey, raw, selection.RecoveryAction)
 				}
 				return a.attachPickerSession(cmd, resolvedSession{local: &current}, selection.TakeOver, detachKey, raw, containingIdentities)
 			}
@@ -500,7 +503,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 				return err
 			}
 			if selection.Relaunch {
-				return a.relaunchSession(cmd, resolved, detachKey, raw, false)
+				return a.relaunchSession(cmd, resolved, detachKey, raw, selection.RecoveryAction)
 			}
 			return a.attachPickerSession(cmd, resolved, selection.TakeOver, detachKey, raw, containingIdentities)
 		}
@@ -1355,6 +1358,7 @@ func (a *application) attachCommand() *cobra.Command {
 
 func (a *application) logsCommand() *cobra.Command {
 	var tail int
+	var previous bool
 	command := &cobra.Command{
 		Use:   "logs session",
 		Short: "Print recent terminal output without attaching",
@@ -1362,6 +1366,9 @@ func (a *application) logsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if tail <= 0 || tail > protocol.MaxLogTail {
 				return fmt.Errorf("--tail must be between 1 and %d bytes", protocol.MaxLogTail)
+			}
+			if previous {
+				return a.previousOutput(cmd, args[0], tail)
 			}
 			hosts, err := LoadHosts()
 			if err != nil {
@@ -1391,6 +1398,7 @@ func (a *application) logsCommand() *cobra.Command {
 		},
 	}
 	command.Flags().IntVar(&tail, "tail", protocol.DefaultLogTail, "maximum trailing bytes to print")
+	command.Flags().BoolVar(&previous, "previous", false, "print the saved rendered checkpoint with its timestamp")
 	return command
 }
 
@@ -1563,6 +1571,7 @@ func (a *application) daemonCommand() *cobra.Command {
 }
 
 func (a *application) workerCommand() *cobra.Command {
+	var recoveredFrom string
 	var (
 		id   string
 		dir  string
@@ -1580,7 +1589,7 @@ func (a *application) workerCommand() *cobra.Command {
 			cwd, _ := os.Getwd()
 			code, err := worker.Run(worker.Config{
 				ID: id, Dir: dir, Command: command, Cwd: cwd, Env: os.Environ(),
-				Cols: cols, Rows: rows, AwaitInitialAttach: true,
+				Cols: cols, Rows: rows, AwaitInitialAttach: true, RecoveredFrom: recoveredFrom,
 			})
 			if err != nil {
 				return err
@@ -1591,6 +1600,7 @@ func (a *application) workerCommand() *cobra.Command {
 			return nil
 		},
 	}
+	command.Flags().StringVar(&recoveredFrom, "recovered-from", "", "previous recovery attempt")
 	command.Flags().StringVar(&id, "id", "", "session ID")
 	command.Flags().StringVar(&dir, "dir", "", "session state directory")
 	command.Flags().IntVar(&cols, "cols", 80, "initial terminal width")
@@ -1643,6 +1653,10 @@ func localSessionRows() ([]protocol.SessionInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	config, err := localRecoveryConfig()
+	if err != nil {
+		return nil, err
+	}
 	rows := make([]protocol.SessionInfo, 0, len(sessions))
 	for _, current := range sessions {
 		row := protocol.SessionInfo{
@@ -1656,6 +1670,7 @@ func localSessionRows() ([]protocol.SessionInfo, error) {
 			code := *current.ExitCode
 			row.ExitCode = &code
 		}
+		addLocalRecoveryInfo(&row, current, config.HostID)
 		rows = append(rows, row)
 	}
 	return rows, nil

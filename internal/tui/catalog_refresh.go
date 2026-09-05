@@ -107,9 +107,6 @@ func (m model) applyCatalogRefresh(message catalogRefreshResultMsg) (model, tea.
 	newState, _ := sessionState(refreshedHost.sessions, newSelectedID)
 	selectionChanged := newSelectedID != selectedID
 	inspectionFactsChanged := previousHost.stale != refreshedHost.stale || previousState != newState
-	if m.fullPreview && newState != "running" && newState != "detached" {
-		m.fullPreview = false
-	}
 	if !selectionChanged && !inspectionFactsChanged {
 		return m, tea.Batch(listCommand, nextRefresh)
 	}

@@ -31,6 +31,14 @@ func (w *Worker) serve(conn net.Conn) {
 		return
 	}
 	msg, err := protocol.DecodeControl(first.Payload)
+	if err == nil && msg.Type == protocol.TypeShellUpdate {
+		w.writeShellUpdate(conn, msg)
+		return
+	}
+	if err == nil && msg.Type == protocol.TypeRecoveryCommand {
+		w.writeRecoveryCommand(conn, msg)
+		return
+	}
 	if err == nil && msg.Type == protocol.TypeLogs {
 		w.writeLogs(conn, msg)
 		return

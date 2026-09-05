@@ -15,6 +15,7 @@ import (
 
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 )
 
 func NewCLIWindowPicker(input, output *os.File) cli.WindowPickerFunc {
@@ -48,7 +49,14 @@ type windowModel struct {
 
 func newWindowModel(ctx context.Context, input cli.WindowInput, now time.Time) windowModel {
 	rows := make([]protocol.SessionInfo, 0, len(input.Sessions))
+	known := make(map[string]bool, len(input.Sessions))
 	for _, current := range input.Sessions {
+		known[current.ID] = true
+	}
+	for _, current := range input.Sessions {
+		if current.ReplacementID != "" && known[current.ReplacementID] && current.State == "interrupted" {
+			continue
+		}
 		if current.State == "detached" || current.State == "interrupted" || current.State == "running" {
 			rows = append(rows, current)
 		}
@@ -99,6 +107,11 @@ func (m windowModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.selection = &cli.WindowSelection{FullPicker: true}
 		case "enter":
 			m.choose()
+		case "s":
+			_, current, ok := m.picker.currentSession()
+			if m.selected && ok && endedSession(current) && !sessionActionBusy(m.picker.sessionAction) {
+				m.selection = &cli.WindowSelection{SessionID: current.id, Relaunch: true, RecoveryAction: recovery.ActionShell}
+			}
 		case "x":
 			if m.selected && !sessionActionBusy(m.picker.sessionAction) {
 				_, current, ok := m.picker.currentSession()
@@ -212,10 +225,12 @@ func (m windowModel) View() tea.View {
 	lines = append(lines, "")
 	if m.selected {
 		_, current, ok := picker.currentSession()
-		if ok && current.state == "interrupted" {
-			lines = append(lines, picker.styles.muted.Render("Interrupted. Enter starts the recorded command in "+safeText(current.cwd)+"."))
-		} else if ok {
+		if ok {
 			details := picker.detailsFor(current)
+			if endedSession(current) {
+				lines = append(lines, picker.styles.muted.Render(recoveryActionLabel(current)+" in "+details.directory+". Press l for Restart command."))
+				lines = append(lines, picker.styles.muted.Render(details.screenStatus))
+			}
 			preview := details.preview
 			preview = preview[max(0, len(preview)-3):]
 			for _, line := range preview {
@@ -231,12 +246,12 @@ func (m windowModel) View() tea.View {
 		action = "new"
 	} else if _, current, ok := picker.currentSession(); ok {
 		if current.state == "interrupted" {
-			action = "relaunch"
+			action = recoveryActionLabel(current)
 		} else if current.state == "running" || picker.selectedSessionAttached() {
 			action = "open picker"
 		}
 	}
-	footer := picker.styles.hints(hint{"enter", action}, hint{"1-9", "pick"}, hint{"n", "new"}, hint{"l", "list"}, hint{"x", "forget"}, hint{"esc", "cancel"})
+	footer := picker.styles.hints(hint{"enter", action}, hint{"1-9", "pick"}, hint{"s", "shell"}, hint{"n", "new"}, hint{"l", "list"}, hint{"x", "forget"}, hint{"esc", "cancel"})
 	lines = append(lines[:min(len(lines), max(0, picker.height-1))], footer)
 	for index := range lines {
 		lines[index] = truncate(lines[index], picker.width)

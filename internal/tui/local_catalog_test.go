@@ -69,7 +69,7 @@ func TestPickerRelaunchAndExplicitTakeoverSelection(t *testing.T) {
 		takeOver bool
 		footer   string
 	}{
-		{state: "interrupted", relaunch: true, footer: "enter relaunch"},
+		{state: "interrupted", relaunch: true, footer: "enter Open shell"},
 		{state: "running", takeOver: true, footer: "enter take over"},
 		{state: "detached", footer: "enter attach"},
 	} {

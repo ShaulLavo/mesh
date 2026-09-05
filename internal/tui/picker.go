@@ -104,6 +104,8 @@ func hostCatalog(input cli.PickerInput) []host {
 				command:   append([]string(nil), current.Command...),
 				cwd:       current.Cwd,
 				createdAt: current.CreatedAt,
+				recovery:  cloneRecovery(current.Recovery), recoveryError: current.RecoveryError,
+				replacementID: current.ReplacementID, recoveredFrom: current.RecoveredFrom,
 			}
 		}
 		route := catalog.Host.TailscaleName
@@ -113,7 +115,7 @@ func hostCatalog(input cli.PickerInput) []host {
 		if catalog.Local {
 			route = "this host"
 		}
-		hosts[index] = host{id: catalog.Host.ID, alias: catalog.Host.Alias, route: route, stale: catalog.Stale, local: catalog.Local, sessions: sessions}
+		hosts[index] = host{id: catalog.Host.ID, alias: catalog.Host.Alias, route: route, stale: catalog.Stale, local: catalog.Local, sessions: groupRecoveryAttempts(sessions)}
 	}
 	sort.SliceStable(hosts, func(i, j int) bool { return hosts[i].local && !hosts[j].local })
 	return hosts
@@ -132,7 +134,7 @@ func cliSelection(selected selection) cli.PickerSelection {
 	case cancelSelection:
 		return cli.PickerSelection{}
 	case attachSelection:
-		return cli.PickerSelection{HostAlias: selected.hostAlias, SessionID: selected.sessionID, Relaunch: selected.relaunch, TakeOver: selected.takeOver}
+		return cli.PickerSelection{HostAlias: selected.hostAlias, SessionID: selected.sessionID, Relaunch: selected.relaunch, TakeOver: selected.takeOver, RecoveryAction: selected.recoveryAction}
 	case newSelection:
 		return cli.PickerSelection{HostAlias: selected.hostAlias, New: true}
 	case resumeSelection:

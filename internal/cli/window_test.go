@@ -10,6 +10,7 @@ import (
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -81,7 +82,7 @@ func TestPickerResumeNeverTakesAnAttachedSession(t *testing.T) {
 	}
 }
 
-func TestPickerRelaunchUsesRecordedCommandAndDirectory(t *testing.T) {
+func TestLegacyPickerExplicitRestartUsesRecordedCommandAndDirectory(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(map[bool]string{false: "success", true: "failed creation keeps old record"}[fail], func(t *testing.T) {
 			host := setupCommandTestHost(t)
@@ -91,7 +92,7 @@ func TestPickerRelaunchUsesRecordedCommandAndDirectory(t *testing.T) {
 			}
 			_, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial,
 				Picker: func(context.Context, PickerInput) (PickerSelection, error) {
-					return PickerSelection{HostAlias: "pc", SessionID: "7K3D", Relaunch: true}, nil
+					return PickerSelection{HostAlias: "pc", SessionID: "7K3D", Relaunch: true, RecoveryAction: recovery.ActionCommand}, nil
 				},
 			}, "--raw")
 			if fail {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 )
 
 type screen uint8
@@ -44,11 +45,16 @@ type servedWebsite struct {
 }
 
 type session struct {
-	id        string
-	state     string
-	command   []string
-	cwd       string
-	createdAt time.Time
+	id              string
+	state           string
+	command         []string
+	cwd             string
+	createdAt       time.Time
+	recovery        *recovery.Record
+	recoveryError   string
+	replacementID   string
+	recoveredFrom   string
+	previousAttempt bool
 }
 
 type selection interface{ pickerSelection() }
@@ -58,10 +64,11 @@ type cancelSelection struct{}
 func (cancelSelection) pickerSelection() {}
 
 type attachSelection struct {
-	hostAlias string
-	sessionID string
-	relaunch  bool
-	takeOver  bool
+	hostAlias      string
+	sessionID      string
+	relaunch       bool
+	takeOver       bool
+	recoveryAction recovery.Action
 }
 
 func (attachSelection) pickerSelection() {}
@@ -165,6 +172,7 @@ func cloneHosts(hosts []host) []host {
 		current.served = append([]servedWebsite(nil), current.served...)
 		for sessionIndex := range current.sessions {
 			current.sessions[sessionIndex].command = append([]string(nil), current.sessions[sessionIndex].command...)
+			current.sessions[sessionIndex].recovery = cloneRecovery(current.sessions[sessionIndex].recovery)
 		}
 		cloned[index] = current
 	}
@@ -257,7 +265,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 	if sessionActionBusy(m.sessionAction) {
 		switch key.String() {
-		case "enter", "n", "r", "k", "x", "w":
+		case "enter", "n", "r", "k", "x", "w", "s", "c":
 			if m.notice == "" {
 				m.notice = sessionActionNotice(m.sessionAction)
 			}
@@ -265,6 +273,8 @@ func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 	}
 	switch key.String() {
+	case "s", "c":
+		return m.selectRecoveryAction(key.String())
 	case "ctrl+c", "q":
 		m.selection = cancelSelection{}
 		return true, tea.Quit
@@ -442,13 +452,13 @@ func (m *model) attachSelected() {
 	if !ok {
 		return
 	}
-	if selected.session.state != "running" && selected.session.state != "detached" && selected.session.state != "interrupted" {
+	if selected.session.state != "running" && selected.session.state != "detached" && !endedSession(selected.session) {
 		m.notice = fmt.Sprintf("%s is %s; use mesh logs %s", selected.session.id, selected.session.state, selected.session.id)
 		return
 	}
 	m.selection = attachSelection{
 		hostAlias: m.currentHost().alias, sessionID: selected.session.id,
-		relaunch: selected.session.state == "interrupted", takeOver: m.selectedSessionAttached(),
+		relaunch: endedSession(selected.session), takeOver: m.selectedSessionAttached(),
 	}
 }
 
@@ -514,8 +524,8 @@ func (m model) footer(current host) string {
 		if m.selectedSessionAttached() {
 			action = "take over"
 		}
-		if selected.state == "interrupted" {
-			action = "relaunch"
+		if endedSession(selected) {
+			action = recoveryActionLabel(selected)
 		}
 	}
 	if current.stale {
@@ -534,6 +544,9 @@ func (m model) footer(current host) string {
 	}
 	if current.stale {
 		return m.styles.hints(hint{"↑/↓", ""}, hint{"enter", action}, hint{"space", "screen"}, hint{"w", "wake"}, hint{"esc", "hosts"})
+	}
+	if _, selected, ok := m.currentSession(); ok && endedSession(selected) {
+		return m.styles.hints(hint{"enter", action}, hint{"s", "Open shell"}, hint{"c", "Restart command"}, hint{"space", "output"}, hint{"x", "forget"}, hint{"esc", "hosts"})
 	}
 	return m.styles.hints(
 		hint{"↑/↓", ""}, hint{"enter", action}, hint{"space", "screen"},
@@ -762,13 +775,23 @@ func (delegate sessionDelegate) row(current session, selected bool) sessionRow {
 		activity:   startedAge(delegate.now, current.createdAt),
 		id:         safeText(current.id),
 	}
+	if current.recovery != nil {
+		row.primary, row.secondary = sessionHeadline(sessionLabel(current), current.recovery.Title)
+		if endedSession(current) && !current.recovery.CheckpointAt.IsZero() {
+			row.activity = "saved " + age(delegate.now, current.recovery.CheckpointAt)
+		}
+	}
+	if current.previousAttempt {
+		row.primary = "↳ " + row.primary
+		row.context = "previous attempt"
+	}
 	target := inspectionTarget{hostAlias: delegate.hostAlias, sessionID: current.id}
-	if summary, ok := delegate.summaries[target]; ok {
+	if summary, ok := delegate.summaries[target]; ok && !endedSession(current) {
 		row.primary, row.secondary = sessionHeadline(summarizedSessionLabel(current, summary), summary.terminalTitle)
 		row.context = nestedSessionLabel(summary.nested, delegate.hostNames)
 		row.activity = rowActivity(delegate.now, summary.observedAt, summary.receivedAt, summary.lastOutputAt, current.createdAt)
 	}
-	if selected && delegate.inspection.kind == inspectionReady && delegate.inspection.target == target {
+	if selected && !endedSession(current) && delegate.inspection.kind == inspectionReady && delegate.inspection.target == target {
 		value := delegate.inspection.value
 		row.primary, row.secondary = sessionHeadline(inspectedSessionLabel(current, value), value.TerminalTitle)
 		row.context = nestedSessionLabel(value.Nested, delegate.hostNames)
@@ -824,7 +847,11 @@ func sessionLabel(current session) string {
 	if len(current.command) > 0 {
 		process = current.command[0]
 	}
-	return sessionLabelParts(current.cwd, process)
+	directory := current.cwd
+	if current.recovery != nil && current.recovery.ShellDirectory != "" {
+		directory = current.recovery.ShellDirectory
+	}
+	return sessionLabelParts(directory, process)
 }
 
 func inspectedSessionLabel(current session, inspection cli.SessionInspection) string {

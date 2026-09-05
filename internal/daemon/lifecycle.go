@@ -141,6 +141,9 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 // left to clientRelay, and unknown controls are left to the caller to reject.
 func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control) (protocol.Control, bool, error) {
 	switch request.Type {
+	case protocol.TypeRecover, protocol.TypeRecoveryRead, protocol.TypeRecoveryCommand:
+		response, err := l.recoveryControl(ctx, request)
+		return response, true, err
 	case protocol.TypeCreate:
 		if ctx == nil {
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
@@ -330,6 +333,7 @@ func (l *lifecycle) list(ctx context.Context, request protocol.Control) (protoco
 	items := make([]protocol.SessionInfo, len(sessions))
 	for i, stored := range sessions {
 		items[i] = sessionInfo(stored)
+		l.addRecoveryInfo(&items[i])
 	}
 	return protocol.Control{Type: protocol.TypeListed, RequestID: request.RequestID, Sessions: items}, nil
 }
@@ -346,10 +350,11 @@ func (l *lifecycle) hostInfo(request protocol.Control) (protocol.Control, error)
 		Type:      protocol.TypeHostInfoResult,
 		RequestID: request.RequestID,
 		Host: &protocol.HostInfo{
-			ID:            string(l.host.ID),
-			MeshIdentity:  l.host.MeshIdentity,
-			TailscaleName: name,
-			PrivateName:   l.privateName(),
+			RecoverySupported: true,
+			ID:                string(l.host.ID),
+			MeshIdentity:      l.host.MeshIdentity,
+			TailscaleName:     name,
+			PrivateName:       l.privateName(),
 		},
 	}, nil
 }

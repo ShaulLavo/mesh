@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/session"
 )
 
@@ -24,16 +25,18 @@ const (
 // LaunchConfig describes a detached worker process. SessionsDir is explicit so
 // daemon tests and recovery-mode clients can use the same launcher safely.
 type LaunchConfig struct {
-	SessionsDir string
-	HostID      string
-	Executable  string
-	Command     []string
-	Cwd         string
-	Env         []string
-	Cols        int
-	Rows        int
-	Term        string
-	Depth       int
+	ReservedID    string
+	RecoveredFrom string
+	SessionsDir   string
+	HostID        string
+	Executable    string
+	Command       []string
+	Cwd           string
+	Env           []string
+	Cols          int
+	Rows          int
+	Term          string
+	Depth         int
 }
 
 // Launched is a worker that has published its metadata and is accepting local
@@ -45,7 +48,13 @@ type Launched struct {
 
 // LaunchDetached starts a worker in its own process session and waits only for
 // readiness. The worker is deliberately not supervised by the caller.
-func LaunchDetached(cfg LaunchConfig) (Launched, error) {
+func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
+	started := false
+	defer func() {
+		if cfg.ReservedID != "" && !started && launchErr != nil {
+			launchErr = &recovery.LaunchFailure{Err: launchErr}
+		}
+	}()
 	if cfg.SessionsDir == "" {
 		return Launched{}, fmt.Errorf("launch worker: empty sessions directory")
 	}
@@ -77,12 +86,12 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 		return Launched{}, fmt.Errorf("launch worker: create sessions directory: %w", err)
 	}
 
-	id, dir, err := reserveSessionDir(cfg.SessionsDir)
+	id, dir, err := launchSessionDir(cfg)
 	if err != nil {
 		return Launched{}, err
 	}
 	cfg.Env = withSessionIdentity(cfg.Env, cfg.HostID, id)
-	cleanupReserved := true
+	cleanupReserved := cfg.ReservedID == ""
 	defer func() {
 		if cleanupReserved {
 			cleanupReservedSession(dir)
@@ -101,8 +110,11 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 		"--dir", dir,
 		"--cols", fmt.Sprint(cfg.Cols),
 		"--rows", fmt.Sprint(cfg.Rows),
-		"--",
 	}
+	if cfg.RecoveredFrom != "" {
+		args = append(args, "--recovered-from", cfg.RecoveredFrom)
+	}
+	args = append(args, "--")
 	args = append(args, cfg.Command...)
 	cmd := exec.Command(cfg.Executable, args...) //nolint:gosec // executable is the running Mesh binary or an explicit internal test override; no shell is used
 	cmd.Dir = cfg.Cwd
@@ -114,6 +126,7 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 	if err := cmd.Start(); err != nil {
 		return Launched{}, fmt.Errorf("launch worker %s: start: %w", id, err)
 	}
+	started = true
 	// From this point the worker may own a live command. Never remove its state;
 	// the launching marker keeps incomplete state out of catalog scans, and the
 	// worker removes it only after metadata and the socket are both ready.
@@ -130,6 +143,39 @@ func LaunchDetached(cfg LaunchConfig) (Launched, error) {
 		return Launched{}, fmt.Errorf("launch worker %s: read metadata: %w", id, err)
 	}
 	return Launched{Meta: meta, Dir: dir}, nil
+}
+
+func launchSessionDir(cfg LaunchConfig) (string, string, error) {
+	if cfg.ReservedID == "" {
+		return reserveSessionDir(cfg.SessionsDir)
+	}
+	id, err := session.ParseID(cfg.ReservedID)
+	if err != nil || id != cfg.ReservedID {
+		return "", "", fmt.Errorf("launch worker: invalid reserved session ID %q", cfg.ReservedID)
+	}
+	dir := filepath.Join(cfg.SessionsDir, id)
+	if _, err := os.Lstat(paths.Launching(dir)); err != nil {
+		return "", "", fmt.Errorf("launch worker %s: read reservation: %w", id, err)
+	}
+	if err := validateReservedMetadata(dir, id); err != nil {
+		return "", "", err
+	}
+	return id, dir, nil
+}
+
+func validateReservedMetadata(dir, id string) error {
+	meta, err := ReadMeta(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("launch worker %s: read reserved metadata: %w", id, err)
+	}
+	boot := BootID()
+	if meta.ID == id && meta.BootID != "" && boot != "" && meta.BootID != boot {
+		return nil
+	}
+	return fmt.Errorf("launch worker %s: reserved directory already contains current metadata", id)
 }
 
 func reserveSessionDir(root string) (string, string, error) {

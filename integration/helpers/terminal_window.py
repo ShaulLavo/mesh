@@ -405,12 +405,13 @@ def relaunch_interrupted(fixture, old_id, old_metadata):
     session_id, shell_pid = fixture.shell_identity(terminal)
     require(session_id != old_id and shell_pid != old_metadata["pid"], "relaunch reused an interrupted session identity or process")
     metadata = fixture.metadata(session_id)
-    require(metadata["command"] == old_metadata["command"], f"relaunch changed recorded command: {metadata}")
+    require(metadata["command"] == [fixture.environment["SHELL"]], f"recovery did not open the configured shell: {metadata}")
+    require(metadata.get("recoveredFrom") == old_id, f"replacement lost its previous attempt: {metadata}")
     require(metadata["cwd"] == old_metadata["cwd"], f"relaunch changed recorded directory: {metadata}")
     start = len(terminal.drain())
     terminal.send("printf '__DIRECTORY__%s__END__\\n' \"$PWD\"\n")
     terminal.expect("__DIRECTORY__" + old_metadata["cwd"] + "__END__", since=start)
-    require(old_id not in fixture.local_listing(), "relaunch left the old record in local listings")
+    require(old_id in fixture.local_listing(), "recovery discarded the previous attempt")
     return terminal, session_id, shell_pid
 
 
@@ -424,9 +425,9 @@ def window_relaunch(fixture):
     eventually(lambda: original_id in fixture.daemon_listing(), "daemon did not import the original local session")
     fixture.crash_worker(original, original_id, original_pid)
     replacement, replacement_id, replacement_pid = relaunch_interrupted(fixture, original_id, recorded)
-    eventually(lambda: original_id not in fixture.daemon_listing() and replacement_id in fixture.daemon_listing(),
-               "online relaunch did not replace the daemon catalog record")
-    require(not (fixture.local / "s" / original_id).exists(), "online relaunch left the old session directory")
+    eventually(lambda: original_id in fixture.daemon_listing() and replacement_id in fixture.daemon_listing(),
+               "online recovery did not retain both daemon catalog records")
+    require((fixture.local / "s" / original_id).exists(), "online recovery removed the previous session directory")
 
     fixture.stop_daemon()
     require(not (fixture.local / "daemon.sock").exists(), "daemon socket survived shutdown")
@@ -434,18 +435,16 @@ def window_relaunch(fixture):
     fixture.crash_worker(replacement, replacement_id, replacement_pid)
     restored, restored_id, restored_pid = relaunch_interrupted(fixture, replacement_id, replacement_record)
     fixture.start_local_daemon()
-    eventually(lambda: replacement_id not in fixture.daemon_listing() and restored_id in fixture.daemon_listing(),
-               "daemon restart resurrected an offline-forgotten session")
-    require(not (fixture.local / "s" / replacement_id).exists(), "daemon did not retire the offline-forgotten directory")
+    eventually(lambda: replacement_id in fixture.daemon_listing() and restored_id in fixture.daemon_listing(),
+               "daemon restart lost a retained recovery attempt")
+    require((fixture.local / "s" / replacement_id).exists(), "daemon removed a retained previous attempt")
 
     # A failed create must leave the only durable launch recipe available.
     restored_record = fixture.metadata(restored_id)
     fixture.crash_worker(restored, restored_id, restored_pid)
     project.rmdir()
-    failed = fixture.window()
-    failed.expect("interrupted")
-    failed.expect(restored_id)
-    failed.send(b"\r")
+    failed = Terminal([fixture.binary, "recover", restored_id, "--command"], fixture.environment, fixture.root)
+    fixture.terminals.append(failed)
     failed.expect_exit()
     require(failed.status != 0, "relaunch from a missing working directory succeeded")
     require(fixture.metadata(restored_id) == restored_record, "failed relaunch changed the interrupted metadata")
@@ -502,7 +501,7 @@ def run():
         return 1
 
 
-def run_outside_containing_session():
+def run_outside_containing_session(runner=run):
     # The verification command can itself run inside Mesh. Reparent the test
     # coordinator so its fresh PTYs do not inherit that unrelated worker path.
     read_end, write_end = os.pipe()
@@ -520,7 +519,7 @@ def run_outside_containing_session():
     while os.getppid() == intermediate_pid:
         time.sleep(0.001)
     os.setsid()
-    code = run()
+    code = runner() or 0
     sys.stdout.flush()
     sys.stderr.flush()
     os.write(write_end, str(code).encode())

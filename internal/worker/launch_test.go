@@ -1,12 +1,14 @@
 package worker
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/recovery"
 )
 
 func TestLaunchDetachedRejectsInvalidConfigBeforeCreatingState(t *testing.T) {
@@ -117,5 +119,56 @@ func TestWithSessionIdentityReplacesTheParentSession(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("session environment = %q, want %q", got, want)
+	}
+}
+
+func TestRecoveryLaunchFailureRetainsItsReservation(t *testing.T) {
+	root := t.TempDir()
+	id, dir, err := reserveSessionDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = LaunchDetached(LaunchConfig{SessionsDir: root, ReservedID: id, RecoveredFrom: "7K3D", Executable: filepath.Join(root, "missing-mesh"), Command: []string{"sh"}})
+	var failed *recovery.LaunchFailure
+	if !errors.As(err, &failed) {
+		t.Fatalf("pre-start error is not a proven launch failure: %v", err)
+	}
+	if _, err := os.Stat(paths.Launching(dir)); err != nil {
+		t.Fatalf("lost recovery reservation: %v", err)
+	}
+}
+
+func TestReservedMetadataFromCurrentBootCannotLaunchAgain(t *testing.T) {
+	root := t.TempDir()
+	id, dir, err := reserveSessionDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteMeta(dir, Meta{ID: id, BootID: BootID()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := launchSessionDir(LaunchConfig{SessionsDir: root, ReservedID: id}); err == nil {
+		t.Fatal("current-boot metadata allowed another launch")
+	}
+}
+
+func TestUnpublishedReservationFromPreviousBootCanLaunch(t *testing.T) {
+	if BootID() == "" {
+		t.Skip("platform has no boot identity")
+	}
+	root := t.TempDir()
+	id, dir, err := reserveSessionDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteMeta(dir, Meta{ID: id, BootID: "previous-boot"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := launchSessionDir(LaunchConfig{SessionsDir: root, ReservedID: id}); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := ReadMeta(dir)
+	if err != nil || meta.BootID != "previous-boot" {
+		t.Fatalf("reservation check removed prior metadata: %+v %v", meta, err)
 	}
 }

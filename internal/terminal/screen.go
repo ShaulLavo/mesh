@@ -112,6 +112,7 @@ type Screen interface {
 	Resize(cols, rows int)
 	Snapshot() Capture
 	Preview(cols, rows int) Preview
+	SaveText(maxLines, maxBytes int) TextSnapshot
 }
 
 type emulatorScreen struct {
@@ -147,6 +148,7 @@ type cursorScreen struct {
 // interface contains its experimental API within this package.
 func NewScreen(cols, rows int) Screen {
 	emulator := vt.NewEmulator(cols, rows)
+	emulator.SetScrollbackSize(256)
 	// x/vt answers DSR, DA, DECRQM and in-band resize by writing to an internal
 	// io.Pipe, which blocks until someone reads it. This screen is a passive
 	// shadow renderer for reattachment snapshots, and the attached client's real

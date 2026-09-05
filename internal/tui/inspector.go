@@ -345,6 +345,9 @@ type inspectionDetails struct {
 }
 
 func (m model) detailsFor(current session) inspectionDetails {
+	if endedSession(current) {
+		return savedRecoveryDetails(current)
+	}
 	details := inspectionDetails{
 		directoryLabel: "started in",
 		directory:      safeText(current.cwd),
@@ -507,7 +510,9 @@ func (m model) fullPreviewPanel(rows int) []string {
 	}
 	details := m.detailsFor(current)
 	screenTitle := "session screen"
-	if m.inspection.beforePicker {
+	if endedSession(current) {
+		screenTitle = details.screenStatus
+	} else if m.inspection.beforePicker {
 		screenTitle = "screen before picker"
 	} else if m.inspection.hasValue && m.inspection.problem != "" {
 		screenTitle = "last screen · refresh failed"
@@ -548,6 +553,9 @@ func (m model) previewSubtitle() string {
 }
 
 func (m model) bestSessionLabel(current session) string {
+	if endedSession(current) {
+		return sessionLabel(current)
+	}
 	if summary, ok := m.summaries[inspectionTarget{hostAlias: m.currentHost().alias, sessionID: current.id}]; ok {
 		return summarizedSessionLabel(current, summary)
 	}
@@ -561,6 +569,13 @@ func (m model) bestSessionLabel(current session) string {
 // project label when the host has not reported one.
 func (m model) sessionHeadline(current session) string {
 	title := ""
+	if current.recovery != nil {
+		title = current.recovery.Title
+	}
+	if endedSession(current) {
+		primary, _ := sessionHeadline(m.bestSessionLabel(current), title)
+		return primary
+	}
 	if summary, ok := m.summaries[inspectionTarget{hostAlias: m.currentHost().alias, sessionID: current.id}]; ok {
 		title = summary.terminalTitle
 	}

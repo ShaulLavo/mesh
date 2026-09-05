@@ -1302,6 +1302,9 @@ func (discardScreen) Snapshot() terminalstate.Capture {
 	return terminalstate.Capture{Restorable: true}
 }
 func (discardScreen) Preview(int, int) terminalstate.Preview { return terminalstate.Preview{} }
+func (discardScreen) SaveText(int, int) terminalstate.TextSnapshot {
+	return terminalstate.TextSnapshot{}
+}
 
 type recordingScreen struct {
 	output       []byte
@@ -1312,6 +1315,10 @@ type recordingScreen struct {
 	previewRows  int
 	previewCalls int
 	onPreview    func()
+}
+
+func (*recordingScreen) SaveText(int, int) terminalstate.TextSnapshot {
+	return terminalstate.TextSnapshot{}
 }
 
 func (s *recordingScreen) Write(p []byte) (int, error) {

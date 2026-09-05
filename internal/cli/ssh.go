@@ -12,6 +12,7 @@ import (
 
 	"github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/terminal"
@@ -52,6 +53,13 @@ func (a sshApplication) run(ctx context.Context, client sshd.Session) (int, erro
 	var target *sshAttachment
 	if client.Command.Kind == sshd.CommandAttach {
 		target = &sshAttachment{id: client.Command.SessionID}
+	}
+	if client.Command.Kind == sshd.CommandRecover {
+		var err error
+		target, err = a.relaunch(ctx, client, client.Command.SessionID, client.Command.RecoveryAction)
+		if err != nil {
+			return 1, err
+		}
 	}
 	picker := a.picker(client.In, client.Out, client.Terminal, client.Size, client.WindowChanges)
 	for ctx.Err() == nil {
@@ -106,7 +114,7 @@ func (a sshApplication) nextAttachment(ctx context.Context, client sshd.Session,
 		return a.create(ctx, client, []string{defaultShell()}, cwd)
 	}
 	if selected.Relaunch {
-		return a.relaunch(ctx, client, selected.SessionID)
+		return a.relaunch(ctx, client, selected.SessionID, selected.RecoveryAction)
 	}
 	if selected.SessionID != "" {
 		id, err := session.ParseID(selected.SessionID)
@@ -252,32 +260,33 @@ func (a sshApplication) create(ctx context.Context, client sshd.Session, command
 	return &sshAttachment{id: id, ifDetached: true, lastSeq: &initial}, nil
 }
 
-func (a sshApplication) relaunch(ctx context.Context, client sshd.Session, id string) (*sshAttachment, error) {
-	catalog, err := a.catalog(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, current := range catalog.Sessions {
-		if current.ID != id {
+func (a sshApplication) relaunch(ctx context.Context, client sshd.Session, id string, action recovery.Action) (*sshAttachment, error) {
+	for range protocol.MaxContainingSessions + 1 {
+		size := client.Size()
+		response, err := a.request(ctx, remoteCreateTimeout, protocol.Control{
+			Type: protocol.TypeRecover, SessionID: id, RecoveryAction: string(action),
+			Cols: size.Cols, Rows: size.Rows, Term: client.Terminal, Depth: 1,
+		})
+		if err != nil {
+			return nil, err
+		}
+		result, err := recoveredResponse(response)
+		if err != nil {
+			return nil, err
+		}
+		if result.Existing && result.State == worker.StateInterrupted {
+			id = result.SessionID
 			continue
 		}
-		return a.relaunchInterrupted(ctx, client, current)
+		if result.Remote != nil {
+			return nil, fmt.Errorf("saved target %s/%s is on another host; connect directly to that host or select Open shell", result.Remote.HostID, result.Remote.SessionID)
+		}
+		if result.OriginalCwd != "" && result.OriginalCwd != result.Cwd {
+			_, _ = fmt.Fprintf(client.Err, "Saved directory %q is unavailable; opening shell in %q.\n", result.OriginalCwd, result.Cwd)
+		}
+		return &sshAttachment{id: result.SessionID, ifDetached: true}, nil
 	}
-	return nil, fmt.Errorf("session %s is no longer available", id)
-}
-
-func (a sshApplication) relaunchInterrupted(ctx context.Context, client sshd.Session, current protocol.SessionInfo) (*sshAttachment, error) {
-	if current.State != worker.StateInterrupted {
-		return nil, fmt.Errorf("session %s is %s; only interrupted sessions can be relaunched", current.ID, current.State)
-	}
-	target, err := a.create(ctx, client, current.Command, current.Cwd)
-	if err != nil {
-		return nil, err
-	}
-	if err := a.control(ctx, current.ID, protocol.TypeRemove); err != nil {
-		return nil, fmt.Errorf("new session %s is running; forget old session %s: %w", target.id, current.ID, err)
-	}
-	return target, nil
+	return nil, errors.New("saved recovery attempt chain is too long")
 }
 
 func (a sshApplication) attach(ctx context.Context, client sshd.Session, target sshAttachment) (AttachResult, error) {

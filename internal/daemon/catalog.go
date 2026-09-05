@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
@@ -84,7 +86,7 @@ func (c *Catalog) Reconcile(ctx context.Context) error {
 			return fmt.Errorf("daemon: retire session rows for host %s: %w", c.host.ID, err)
 		}
 		for _, id := range retired {
-			if err := removeRetiredSession(filepath.Join(c.sessionsDir, string(id))); err != nil {
+			if err := removeUnclaimedRetiredSession(filepath.Join(c.sessionsDir, string(id))); err != nil {
 				log.Printf("daemon: retire session %s directory: %v", id, err)
 			}
 		}
@@ -368,11 +370,8 @@ func quarantinedSession(hostID storage.HostID, directory string, now time.Time) 
 }
 
 const (
-	// sessionRetention is how long an exited session's record and its output
-	// stay on disk. Nothing pruned these before, so an always-on host grew
-	// without bound: the 1 Hz reconciler re-read and re-upserted every row it
-	// had ever seen, and past roughly fifteen thousand a reconcile no longer
-	// fit in its tick, holding the write lock continuously.
+	// Legacy exited history is bounded; saved recovery data requires an
+	// explicit forget so background reconciliation cannot erase prior work.
 	sessionRetention = 7 * 24 * time.Hour
 	// maxRetainedTerminalSessions bounds the same growth by count, for a host
 	// that churns through sessions faster than the age cap retires them.
@@ -380,7 +379,7 @@ const (
 )
 
 // retireFinishedSessions selects exited sessions past the retention limits.
-// Interrupted sessions remain available for relaunch until explicitly removed.
+// Interrupted sessions and saved recovery attempts require explicit removal.
 // Directories remain until the database has durably retired their rows.
 func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.Session, []storage.SessionID) {
 	now := c.now()
@@ -398,7 +397,7 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 			retire[i] = struct{}{}
 			continue
 		}
-		if current.State != storage.StateExited {
+		if current.State != storage.StateExited || hasRecoveryHistory(filepath.Join(c.sessionsDir, string(current.ID))) {
 			continue
 		}
 		finished = append(finished, candidate{index: i, retireAt: current.CreatedAt})
@@ -428,6 +427,56 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 		retired = append(retired, current.ID)
 	}
 	return kept, retired
+}
+
+func hasRecoveryHistory(dir string) bool {
+	if _, err := os.Lstat(filepath.Join(dir, "recovery.lock")); !errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	return hasSavedRecovery(dir)
+}
+
+func hasSavedRecovery(dir string) bool {
+	// Presence protects damaged and unsupported records too. A failed lookup
+	// cannot establish that a session has no recovery data worth retaining.
+	for _, name := range []string{"recovery.json", "recovery-intent.json", "recovery-command.json"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	meta, err := worker.ReadMeta(dir)
+	if err != nil {
+		return !errors.Is(err, os.ErrNotExist)
+	}
+	return meta.RecoveredFrom != ""
+}
+
+func removeUnclaimedRetiredSession(dir string) error {
+	if _, err := os.Lstat(paths.Forgotten(dir)); err == nil {
+		return removeRetiredSession(dir)
+	}
+	// Recovery may have started after pruning selected this legacy session.
+	// Claim the same lock exclusively; an existing lock belongs to that request.
+	file, err := os.OpenFile(filepath.Join(dir, "recovery.lock"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600) //nolint:gosec // fixed lock name in a catalog-observed session directory
+	if errors.Is(err, os.ErrExist) || errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("claim automatic cleanup: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lock automatic cleanup: %w", err)
+	}
+	defer func() { _ = unix.Flock(int(file.Fd()), unix.LOCK_UN) }()
+	if hasSavedRecovery(dir) {
+		return nil
+	}
+	return removeRetiredSession(dir)
 }
 
 func removeRetiredSession(dir string) error {

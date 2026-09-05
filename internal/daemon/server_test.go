@@ -194,6 +194,53 @@ func TestClientServerSerializesLifecycleAndRelayWrites(t *testing.T) {
 	}
 }
 
+func TestClientServerKeepsAttachRejectionBeforePipelinedResizeError(t *testing.T) {
+	client := newServerTestConn()
+	incumbent := newServerTestConn()
+	candidate := newServerTestConn()
+	workers := newServerTestConnector(incumbent, candidate)
+	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
+	hostRead := make(chan struct{}, 1)
+	lifecycle.privateName = func() string { hostRead <- struct{}{}; return "" }
+	server, err := newClientServer(lifecycle, workers, disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.Handle(ctx, client) }()
+
+	incumbent.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeAttached, SessionID: "DATA"}))
+	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeAttach, SessionID: "DATA"}))
+	_ = client.nextWrite(t)
+	entered, release := client.blockNextWrite()
+	defer release()
+	data := protocol.Frame{Kind: protocol.KindData, Session: mustServerSessionID(t, "DATA"), Payload: []byte("blocked output")}
+	incumbent.pushRead(data)
+	waitServerSignal(t, entered, "blocked client output")
+
+	rejection := serverControlFrame(t, protocol.Control{Type: protocol.TypeError, SessionID: "BUSY", Reason: protocol.ReasonAttached, Message: "session is already attached"})
+	candidate.pushRead(rejection)
+	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeAttachDetached, SessionID: "BUSY"}))
+	candidate.waitClosed(t)
+	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeResize, SessionID: "BUSY", Cols: 80, Rows: 24}))
+	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeHostInfo, RequestID: "after-resize"}))
+	waitServerSignal(t, hostRead, "request processing while rejection and resize responses are queued")
+
+	release()
+	assertServerFrame(t, client.nextWrite(t), data)
+	assertServerFrame(t, client.nextWrite(t), rejection)
+	assertServerError(t, client.nextWrite(t), "", "BUSY", "not attached")
+	if response := decodeServerControl(t, client.nextWrite(t)); response.Type != protocol.TypeHostInfoResult || response.RequestID != "after-resize" {
+		t.Fatalf("last response = %+v", response)
+	}
+	client.pushReadError(io.EOF)
+	if err := waitServerResult(t, done, "ordered rejection responses"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClientServerTreatsClientTerminationAsNormal(t *testing.T) {
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
 	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
