@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/shaul/mesh/internal/agentresume"
 	"github.com/shaul/mesh/internal/recovery"
 )
 
@@ -17,6 +18,12 @@ func endedSession(current session) bool {
 func recoveryActionLabel(current session) string {
 	if current.recovery != nil && current.recovery.Remote != nil {
 		return "Reconnect to target"
+	}
+	if hasPendingAgent(current) {
+		return "Resume conversation"
+	}
+	if current.recovery != nil && current.recovery.Agent != nil && current.recovery.Agent.Lifecycle != agentresume.Closed {
+		return "Resume " + string(current.recovery.Agent.Provider)
 	}
 	if len(current.command) == 0 {
 		return "Open shell"
@@ -46,12 +53,22 @@ func (m *model) selectRecoveryAction(key string) (bool, tea.Cmd) {
 		return false, nil
 	}
 	_, current, ok := m.currentSession()
-	if !ok || !endedSession(current) {
+	if !ok {
+		return true, nil
+	}
+	if key == "a" && !canResumeAgent(current) || key != "a" && !endedSession(current) {
+		return true, nil
+	}
+	if m.currentHost().stale {
+		m.notice = m.currentHost().alias + " is offline; wake it first"
 		return true, nil
 	}
 	action := recovery.ActionShell
 	if key == "c" {
 		action = recovery.ActionCommand
+	}
+	if key == "a" {
+		action = recovery.ActionAgent
 	}
 	m.selection = attachSelection{hostAlias: m.currentHost().alias, sessionID: current.id, relaunch: true, recoveryAction: action}
 	return true, tea.Quit
@@ -98,7 +115,31 @@ func savedRecoveryDetails(current session) inspectionDetails {
 	if saved.Remote != nil {
 		details.foreground = "Target: " + safeText(saved.Remote.HostID) + "/" + safeText(saved.Remote.SessionID)
 	}
+	if saved.Agent != nil && saved.Remote == nil {
+		details.foreground = string(saved.Agent.Provider) + " conversation: " + safeText(saved.Agent.ConversationID) + " · " + string(saved.Agent.Lifecycle)
+	}
+	if current.agentStatus != "" {
+		details.output = "conversation " + safeText(current.agentStatus) + " · " + details.output
+	}
 	return details
+}
+
+func canResumeAgent(current session) bool {
+	if endedSession(current) && hasPendingAgent(current) {
+		return true
+	}
+	return current.recovery != nil && current.recovery.Agent != nil && (endedSession(current) || current.recovery.Agent.Lifecycle != agentresume.Active)
+}
+
+func hasPendingAgent(current session) bool {
+	return current.recovery != nil && current.recovery.Agent == nil && current.recovery.Remote == nil && current.agentStatus == "unverified"
+}
+
+func (m model) recoveryHints(current session, action string) string {
+	if canResumeAgent(current) {
+		return m.styles.hints(hint{"enter", action}, hint{"a", "Resume conversation"}, hint{"s", "Open shell"}, hint{"space", "output"}, hint{"esc", "hosts"})
+	}
+	return m.styles.hints(hint{"enter", action}, hint{"s", "Open shell"}, hint{"c", "Restart command"}, hint{"space", "output"}, hint{"x", "forget"}, hint{"esc", "hosts"})
 }
 
 func cloneRecovery(source *recovery.Record) *recovery.Record {
@@ -108,6 +149,15 @@ func cloneRecovery(source *recovery.Record) *recovery.Record {
 	cloned := *source
 	cloned.Lines = append([]string(nil), source.Lines...)
 	cloned.Command = append([]string(nil), source.Command...)
+	if source.Agent != nil {
+		agent := *source.Agent
+		agent.Options = append([]string(nil), source.Agent.Options...)
+		cloned.Agent = &agent
+	}
+	if source.AgentResume != nil {
+		receipt := *source.AgentResume
+		cloned.AgentResume = &receipt
+	}
 	if source.Restart != nil {
 		restart := *source.Restart
 		restart.Argv = append([]string(nil), source.Restart.Argv...)

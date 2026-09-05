@@ -45,6 +45,7 @@ func TestSessionCommandGrammar(t *testing.T) {
 		{raw: "recover 7k3d", pty: true, installed: true, want: Command{Kind: CommandRecover, SessionID: "7K3D"}},
 		{raw: "recover 7K3D --shell", pty: true, installed: true, want: Command{Kind: CommandRecover, SessionID: "7K3D", RecoveryAction: recovery.ActionShell}},
 		{raw: "recover 7K3D --command", pty: true, installed: true, want: Command{Kind: CommandRecover, SessionID: "7K3D", RecoveryAction: recovery.ActionCommand}},
+		{raw: "recover 7K3D --agent", pty: true, installed: true, want: Command{Kind: CommandRecover, SessionID: "7K3D", RecoveryAction: recovery.ActionAgent}},
 		{raw: "recover 7K3D", installed: true, invalid: true},
 		{raw: "recover", pty: true, installed: true, invalid: true},
 		{raw: "recover 7K3D --shell --command", pty: true, installed: true, invalid: true},

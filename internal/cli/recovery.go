@@ -20,7 +20,7 @@ import (
 var errRecoveryUnsupported = errors.New("this host does not support saved recovery; update Mesh on the host")
 
 func (a *application) recoverCommand() *cobra.Command {
-	var shell, command, raw, takeover bool
+	var shell, command, agent, raw, takeover bool
 	var detachKey string
 	cmd := &cobra.Command{
 		Use: "recover SESSION", Short: "Recover a saved session and retain its previous output",
@@ -37,12 +37,16 @@ func (a *application) recoverCommand() *cobra.Command {
 			if command {
 				action = recovery.ActionCommand
 			}
+			if agent {
+				action = recovery.ActionAgent
+			}
 			return a.recoverSession(cmd, resolved, action, detachKey, raw, takeover)
 		},
 	}
 	cmd.Flags().BoolVar(&shell, "shell", false, "open a shell in the saved directory")
 	cmd.Flags().BoolVar(&command, "command", false, "explicitly restart the saved command")
-	cmd.MarkFlagsMutuallyExclusive("shell", "command")
+	cmd.Flags().BoolVar(&agent, "agent", false, "resume the exact saved agent conversation")
+	cmd.MarkFlagsMutuallyExclusive("shell", "command", "agent")
 	cmd.Flags().BoolVar(&raw, "raw", false, "attach without changing terminal mode")
 	cmd.Flags().BoolVar(&takeover, "takeover", false, "take over if the recovered session is already attached")
 	cmd.Flags().StringVar(&detachKey, "detach-key", "ctrl+]", "key that detaches from the session")
@@ -112,6 +116,7 @@ func (a *application) recoverSession(cmd *cobra.Command, resolved resolvedSessio
 		if result.OriginalCwd != "" && result.OriginalCwd != result.Cwd {
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Saved directory %q is unavailable; opening shell in %q.\n", result.OriginalCwd, result.Cwd)
 		}
+		reportAgentRecoveryStatus(cmd.ErrOrStderr(), result)
 		resolved, err = recoveredSession(resolved, result)
 		if err != nil {
 			return err

@@ -225,6 +225,10 @@ class Fixture:
     def attached(self, state, session_id):
         return self.inspect(state, session_id)["attached"]
 
+    def wait_local_detached(self, session_id, message):
+        eventually(lambda: not self.attached(self.local, session_id)
+                   and self.metadata(session_id).get("state") == "detached", message)
+
     def shell_identity(self, terminal):
         self.identity_requests += 1
         marker = f"__SESSION_{self.identity_requests}__"
@@ -346,7 +350,7 @@ def window_death(fixture):
     terminal.send("printf 'REMOTE_SURVIVAL_MARKER\\n'\n")
     terminal.expect(b"\rREMOTE_SURVIVAL_MARKER\r\n")
     terminal.crash()
-    eventually(lambda: not fixture.attached(fixture.local, outer_id), "crashed window is still attached")
+    fixture.wait_local_detached(outer_id, "crashed window detach was not published")
     require(fixture.attached(fixture.remote, inner_id), "window death detached the remote client")
     os.kill(outer_pid, 0)
     os.kill(inner_pid, 0)
@@ -369,7 +373,7 @@ def window_entry(fixture):
     first_identity = fixture.shell_identity(first)
     first.send(b"\x1d")
     first.expect_exit()
-    eventually(lambda: not fixture.attached(fixture.local, first_identity[0]), "first window did not detach")
+    fixture.wait_local_detached(first_identity[0], "first window detach was not published")
 
     # Two terminals race the same detached session. Exactly one resumes it;
     # the other starts fresh, and neither loses its attachment.

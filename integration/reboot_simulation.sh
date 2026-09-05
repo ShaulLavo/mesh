@@ -92,14 +92,22 @@ wait "$CLIENT" 2>/dev/null
 CLIENT=""
 exec 3>&-
 
-python3 - "$MESH_STATE_DIR/s/$SID/meta.json" <<'PY'
+python3 - "$MESH_STATE_DIR/s/$SID/meta.json" <<'PY' || fail "could not prepare previous-boot metadata"
 import json
 import os
 import sys
+import time
 
 path = sys.argv[1]
-with open(path, encoding="utf-8") as source:
-    metadata = json.load(source)
+deadline = time.monotonic() + 4
+while True:
+    with open(path, encoding="utf-8") as source:
+        metadata = json.load(source)
+    if metadata.get("state") == "detached":
+        break
+    if time.monotonic() >= deadline:
+        raise RuntimeError("worker did not publish detached metadata after daemon death")
+    time.sleep(0.01)
 metadata["bootId"] = "simulated-previous-boot"
 temporary = path + ".reboot"
 with open(temporary, "w", encoding="utf-8") as destination:

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ ${1:-} == --native ]]; then
+  shift
+  exec python3 "$(dirname "$0")/probe-agent-recovery-native.py" "$@"
+fi
 if [[ ${1:-} == --help ]]; then
-  printf 'Usage: %s [OUTPUT_PARENT]\nOffline CLI help, schema, and synthetic event probe. No provider sessions are started.\n' "$0"
+  printf 'Usage: %s [OUTPUT_PARENT]\nOffline CLI help, schema, and synthetic event probe. No provider sessions are started.\n\nUse --native --help for the separate interactive native probe.\n' "$0"
   exit 0
 fi
 if (( $# > 1 )); then

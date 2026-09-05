@@ -133,16 +133,16 @@ interfaces so API churn stays contained.
 5. **Crash and restart recovery** — every disconnection mode, worker rediscovery,
    `interrupted` marking. Those foundations and
    [workspace recovery](../tasks/T24-crash-recovery.md) for saved directories,
-   history, output, and restart actions are implemented. Next is
+   history, output, and restart actions are implemented, along with
    [Codex and Claude recovery](../tasks/T25-agent-recovery.md) for exact saved
-   conversations.
+   conversations in tested native installations.
 6. **Pi power control** — `m wake pc`, wake-then-connect flow, sleep inhibitors.
 7. **Packaging** — systemd, launchd, GoReleaser, Actions, Homebrew Cask, installer,
    VHS demos, race tests, protocol fuzzing, govulncheck, golangci-lint v2.
 8. **Serving** — static sites, file browsers and local-port proxies. Private on
    the tailnet at `<host>.mesh.shaulavo.dev`, and optionally public under
    `shaulavo.dev` through the VPS edge. See `docs/plan/03-serving.md`.
-9. **SSH front door** — a Wish server per host so any machine with `ssh` reaches
+9. **SSH front door** — a Charm SSH server per host so any machine with `ssh` reaches
    a session, mounts served roots over SFTP, or publishes a port through the edge
    with `ssh -R`. Not a transport; the client that already exists everywhere.
    See `docs/plan/04-ssh.md`.
@@ -157,7 +157,7 @@ MCP/tools · coding-agent knowledge · job scheduling · personal assistant ·
 native mobile app · GUI editor · collaborative writers · sharing meshes with
 other users · replacing Tailscale · arbitrary proxying through the Pi.
 
-T25's planned use of native agent resume commands is narrower than coding-agent
+T25's use of native agent resume commands is narrower than coding-agent
 knowledge: providers still own their conversations, tools, and authentication.
 
 Deployment is not on that list, because it is not a later Mesh feature at all. A

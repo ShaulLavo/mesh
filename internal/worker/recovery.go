@@ -25,6 +25,7 @@ func (w *Worker) startRecovery() {
 		DirectorySource: recovery.DirectoryLaunch, Command: slices.Clone(w.cfg.Command),
 	}
 	w.inheritRecoveryLabel()
+	w.loadExpectedAgent()
 	w.checkpointWriter = recovery.NewWriter(w.cfg.Dir, func(err error) {
 		log.Printf("worker: checkpoint session %s: %v", w.cfg.ID, err)
 	})

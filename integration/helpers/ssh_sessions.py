@@ -115,11 +115,14 @@ def exercise(fixture):
     resumed.send("exit 7\n")
     resumed.expect_exit()
     require(resumed.status == 7, f"SSH lost process exit status: {resumed.status}")
+    eventually(lambda: fixture.daemon_listing()[session_id]["state"] == "exited",
+               "daemon did not publish the resumed shell exit")
 
     fresh = fixture.ssh_terminal()
     fresh.expect(b"start", since=0)
     fresh.send("n")
-    fresh.expect(PROMPT)
+    picker_end = fresh.expect(b"\x1b[?1049l").rindex(b"\x1b[?1049l")
+    fresh.expect(PROMPT, since=picker_end)
     new_id, _ = fixture.shell_identity(fresh)
     require(new_id != session_id, "new reused the exited session")
     start = len(fresh.drain())

@@ -15,7 +15,8 @@ import (
 )
 
 func (a *application) shellInitCommand() *cobra.Command {
-	return &cobra.Command{
+	var agents bool
+	command := &cobra.Command{
 		Use: "shell-init bash|zsh", Short: "Print opt-in directory and history recovery hooks",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -27,11 +28,45 @@ func (a *application) shellInitCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if agents {
+				snippet += agentShellInit(args[0], executable)
+			}
 			_, err = fmt.Fprint(cmd.OutOrStdout(), snippet)
 			return err
 		},
 	}
+	command.Flags().BoolVar(&agents, "agents", false, "also wrap native codex and claude commands for conversation recovery")
+	return command
 }
+
+func agentShellInit(shell, executable string) string {
+	helper := "'" + strings.ReplaceAll(executable, "'", "'\\''") + "'"
+	fragment := bashAgentFunctions
+	if shell == "zsh" {
+		fragment = zshAgentFunctions
+	}
+	return strings.ReplaceAll(fragment, "@MESH@", helper)
+}
+
+const bashAgentFunctions = `if [[ $- == *i* ]]; then
+  if ! declare -F codex >/dev/null && ! alias codex >/dev/null 2>&1; then
+    function codex { @MESH@ agent codex -- "$@"; }
+  fi
+  if ! declare -F claude >/dev/null && ! alias claude >/dev/null 2>&1; then
+    function claude { @MESH@ agent claude -- "$@"; }
+  fi
+fi
+`
+
+const zshAgentFunctions = `if [[ -o interactive ]]; then
+  if (( ! $+functions[codex] && ! $+aliases[codex] )); then
+    function codex { @MESH@ agent codex -- "$@"; }
+  fi
+  if (( ! $+functions[claude] && ! $+aliases[claude] )); then
+    function claude { @MESH@ agent claude -- "$@"; }
+  fi
+fi
+`
 
 func shellInit(shell, executable string) (string, error) {
 	helper := "'" + strings.ReplaceAll(executable, "'", "'\\''") + "'"

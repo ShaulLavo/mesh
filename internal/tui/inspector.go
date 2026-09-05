@@ -430,6 +430,9 @@ func (m model) detailsFor(current session) inspectionDetails {
 			details.previewStyled = false
 		}
 	}
+	if current.agentStatus != "" {
+		details.output = "conversation " + safeText(current.agentStatus) + " · " + details.output
+	}
 	return details
 }
 

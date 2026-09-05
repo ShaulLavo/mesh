@@ -52,6 +52,7 @@ type session struct {
 	createdAt       time.Time
 	recovery        *recovery.Record
 	recoveryError   string
+	agentStatus     string
 	replacementID   string
 	recoveredFrom   string
 	previousAttempt bool
@@ -265,7 +266,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 	if sessionActionBusy(m.sessionAction) {
 		switch key.String() {
-		case "enter", "n", "r", "k", "x", "w", "s", "c":
+		case "enter", "n", "r", "k", "x", "w", "s", "c", "a":
 			if m.notice == "" {
 				m.notice = sessionActionNotice(m.sessionAction)
 			}
@@ -273,7 +274,7 @@ func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 	}
 	switch key.String() {
-	case "s", "c":
+	case "s", "c", "a":
 		return m.selectRecoveryAction(key.String())
 	case "ctrl+c", "q":
 		m.selection = cancelSelection{}
@@ -546,7 +547,10 @@ func (m model) footer(current host) string {
 		return m.styles.hints(hint{"↑/↓", ""}, hint{"enter", action}, hint{"space", "screen"}, hint{"w", "wake"}, hint{"esc", "hosts"})
 	}
 	if _, selected, ok := m.currentSession(); ok && endedSession(selected) {
-		return m.styles.hints(hint{"enter", action}, hint{"s", "Open shell"}, hint{"c", "Restart command"}, hint{"space", "output"}, hint{"x", "forget"}, hint{"esc", "hosts"})
+		return m.recoveryHints(selected, action)
+	}
+	if _, selected, ok := m.currentSession(); ok && canResumeAgent(selected) {
+		return m.styles.hints(hint{"enter", action}, hint{"a", "Resume conversation"}, hint{"space", "screen"}, hint{"n", "new"}, hint{"esc", "hosts"})
 	}
 	return m.styles.hints(
 		hint{"↑/↓", ""}, hint{"enter", action}, hint{"space", "screen"},
@@ -850,6 +854,10 @@ func sessionLabel(current session) string {
 	directory := current.cwd
 	if current.recovery != nil && current.recovery.ShellDirectory != "" {
 		directory = current.recovery.ShellDirectory
+	}
+	if current.recovery != nil && current.recovery.Agent != nil && current.recovery.Remote == nil && endedSession(current) {
+		process = string(current.recovery.Agent.Provider)
+		directory = current.recovery.Agent.Directory
 	}
 	return sessionLabelParts(directory, process)
 }

@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/shaul/mesh/internal/agentresume"
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
@@ -20,6 +21,66 @@ func savedPickerSession() protocol.SessionInfo {
 		CheckpointAt: pickerTestNow.Add(-time.Minute), Title: "Project tests", ShellDirectory: "/work/project", DirectorySource: recovery.DirectoryShell,
 		Lines: []string{"earlier output", "tests completed"},
 	}}
+}
+
+func TestAgentRecoveryKeepsLiveShellAsDefault(t *testing.T) {
+	row := savedPickerSession()
+	row.State = "detached"
+	row.Recovery.Agent = &agentresume.Recipe{Launch: agentresume.Launch{Provider: agentresume.Claude, Directory: "/work/project"}, ConversationID: "saved-conversation", Lifecycle: agentresume.Closed}
+	current := recoveryPicker(row)
+	current = updateModel(t, current, key(tea.KeyEnter))
+	if selected := cliSelection(current.selection); selected.Relaunch || selected.SessionID != row.ID {
+		t.Fatalf("Enter did not attach the surviving shell: %#v", selected)
+	}
+	current = recoveryPicker(row)
+	if view := ansi.Strip(current.View().Content); !strings.Contains(view, "Resume conversation") {
+		t.Fatalf("missing explicit conversation action:\n%s", view)
+	}
+	current = updateModel(t, current, runeKey('a'))
+	if selected := cliSelection(current.selection); !selected.Relaunch || selected.RecoveryAction != recovery.ActionAgent || selected.SessionID != row.ID {
+		t.Fatalf("explicit conversation selection = %#v", selected)
+	}
+}
+
+func TestAgentRecoveryLabelsAndUnverifiedStatus(t *testing.T) {
+	row := savedPickerSession()
+	row.AgentStatus = "unverified"
+	row.Recovery.Agent = &agentresume.Recipe{Launch: agentresume.Launch{Provider: agentresume.Codex, Directory: "/work/project"}, ConversationID: "exact-id", Lifecycle: agentresume.Active}
+	current := recoveryPicker(row)
+	view := ansi.Strip(current.View().Content)
+	for _, expected := range []string{"Resume codex", "exact-id", "unverified"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("missing %q in agent recovery:\n%s", expected, view)
+		}
+	}
+	current = updateModel(t, current, runeKey('a'))
+	if selected := cliSelection(current.selection); selected.RecoveryAction != recovery.ActionAgent {
+		t.Fatalf("agent recovery selection = %#v", selected)
+	}
+}
+
+func TestAgentRecoveryCloneDoesNotShareOptions(t *testing.T) {
+	original := &recovery.Record{Agent: &agentresume.Recipe{Launch: agentresume.Launch{Options: []string{"--model", "original"}}}, AgentResume: &agentresume.Receipt{ConversationID: "original"}}
+	cloned := cloneRecovery(original)
+	cloned.Agent.Options[1] = "changed"
+	cloned.AgentResume.ConversationID = "changed"
+	if original.Agent.Options[1] != "original" || original.AgentResume.ConversationID != "original" {
+		t.Fatal("picker clone mutated the catalog agent recipe")
+	}
+}
+
+func TestInterruptedUnverifiedConversationKeepsItsRecoveryActions(t *testing.T) {
+	row := savedPickerSession()
+	row.AgentStatus = "unverified"
+	row.Command = []string{"/mesh", "agent-resume"}
+	current := recoveryPicker(row)
+	if view := ansi.Strip(current.View().Content); !strings.Contains(view, "Resume conversation") {
+		t.Fatalf("pending conversation was mislabeled as shell recovery:\n%s", view)
+	}
+	current = updateModel(t, current, runeKey('a'))
+	if selected := cliSelection(current.selection); !selected.Relaunch || selected.RecoveryAction != recovery.ActionAgent || selected.SessionID != row.ID {
+		t.Fatalf("pending conversation action = %#v", selected)
+	}
 }
 
 func recoveryPicker(current protocol.SessionInfo) model {
@@ -93,6 +154,21 @@ func TestSavedRemoteRecoveryHasExplicitShellAlternative(t *testing.T) {
 	current = updateModel(t, current, runeKey('s'))
 	if got := cliSelection(current.selection); got.RecoveryAction != recovery.ActionShell {
 		t.Fatalf("shell alternative = %#v", got)
+	}
+}
+
+func TestSavedRemoteTargetRemainsVisibleAfterAnEarlierAgent(t *testing.T) {
+	row := savedPickerSession()
+	row.Recovery.Remote = &recovery.Target{HostID: "remote-host", SessionID: "91AZ"}
+	row.Recovery.Agent = &agentresume.Recipe{Launch: agentresume.Launch{Provider: agentresume.Claude, Directory: "/old-agent-project"}, ConversationID: "old-conversation", Lifecycle: agentresume.Closed}
+	current := recoveryPicker(row)
+	view := ansi.Strip(current.View().Content)
+	if !strings.Contains(view, "remote-host/91AZ") {
+		t.Fatalf("earlier agent hides the default remote recovery target:\n%s", view)
+	}
+	_, selected, ok := current.currentSession()
+	if !ok || strings.Contains(sessionLabel(selected), "old-agent-project") {
+		t.Fatalf("remote task is labeled with the earlier agent directory: %s", sessionLabel(selected))
 	}
 }
 

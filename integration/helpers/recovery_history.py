@@ -18,15 +18,19 @@ def run(fixture, *args, cwd=None):
     return result
 
 
+def completed_metadata(path):
+    metadata = json.loads(path.read_text())
+    return metadata if metadata.get("state") == "exited" else None
+
+
 def exercise(fixture):
     project = fixture.root / "deleted project"
     project.mkdir()
     run(fixture, "local", "--raw", "--", "/bin/sh", "-c", "printf 'completed-output\\n'", cwd=project)
     paths = list((fixture.local / "s").glob("*/meta.json"))
     require(len(paths) == 1, "fixture did not create exactly one completed session")
-    source = json.loads(paths[0].read_text())
+    source = eventually(lambda: completed_metadata(paths[0]), "completed program was not recorded as exited")
     session_id = source["id"]
-    require(source["state"] == "exited", "completed program was not recorded as exited")
     # A completed command is never resumed by a window's detached-only claim.
     window = fixture.window(take=True)
     window.expect(PROMPT)
@@ -41,7 +45,8 @@ def exercise(fixture):
     require(not (project / "should-not-exist").exists(), "recipe was reconstructed through a shell")
     link = json.loads((fixture.local / "s" / session_id / "recovery-intent.json").read_text())
     replacement_id = link["launch"]["ID"]
-    replacement = fixture.metadata(replacement_id)
+    replacement = eventually(lambda: completed_metadata(fixture.local / "s" / replacement_id / "meta.json"),
+                             "completed replacement was not recorded as exited")
     require(replacement.get("recoveredFrom") == session_id, "recipe replacement lost its source")
     require((fixture.local / "s" / session_id).exists(), "recipe deleted the previous attempt")
     run(fixture, "recovery-command", replacement_id, "--", "/bin/echo", "must-not-run", cwd=project)

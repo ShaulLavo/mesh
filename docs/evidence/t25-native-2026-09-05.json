@@ -1,0 +1,193 @@
+{
+  "evidence": "observed_native_CLI_smoke_sessions",
+  "recorded_date": "2026-09-05",
+  "isolated_project": "/work/tmp/mesh-t25/native/project",
+  "normal_hook_trust_ui": true,
+  "provider_data": "isolated roots; exact credential-file symlinks; no transcript inspection",
+  "claude": {
+    "startup_version": "2.1.258",
+    "initial_resume_version": "2.1.261",
+    "same_version_roundtrip": "2.1.261",
+    "two_distinct_conversations_same_directory": true,
+    "provider_sigkill_before_resume": true,
+    "exact_visible_conversations_restored_without_prompt": true,
+    "resume_hook_original_id_and_new_invocation_token": true,
+    "fork_new_id_and_source": "fork",
+    "clear_new_id_and_source": "clear"
+  },
+  "codex": {
+    "version": "0.153.4",
+    "shared_server_started_before_clients": true,
+    "shared_server_client_token_routing": false,
+    "shared_server_hook_token": "daemon-before-clients",
+    "normal_direct_TUI_invocation_token_routing": true,
+    "direct_exact_visible_conversations_restored_without_prompt": true,
+    "direct_idle_resume_hook_delivered": false,
+    "exact_read_only_thread_lookup_id_and_cwd_matched": true,
+    "managed_daemon_command": "unavailable because installed mise layout has no standalone/current/codex"
+  },
+  "unverified": [
+    "pending work on resume",
+    "native compaction",
+    "native subagent events",
+    "native worktree relocation",
+    "managed standalone daemon"
+  ],
+  "events": [
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "claude",
+      "source": "startup",
+      "session_id": "8701eaf2-2dde-4e8e-8350-e0692c0051b4",
+      "token": "claude-one"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "claude",
+      "source": "startup",
+      "session_id": "684f9376-147e-43b9-b91d-e5fcd8b7946f",
+      "token": "claude-two"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "codex",
+      "source": "startup",
+      "session_id": "01a071f1-4d4f-7bf0-b3ff-766d3d636d49",
+      "token": "daemon-before-clients"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "codex",
+      "source": "startup",
+      "session_id": "01a071f1-e863-7f90-9234-0388dce548f2",
+      "token": "daemon-before-clients"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "claude",
+      "source": "resume",
+      "session_id": "8701eaf2-2dde-4e8e-8350-e0692c0051b4",
+      "token": "claude-resume-one"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "claude",
+      "source": "resume",
+      "session_id": "684f9376-147e-43b9-b91d-e5fcd8b7946f",
+      "token": "claude-resume-two"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "codex",
+      "source": "startup",
+      "session_id": "01a071f4-3bdd-7193-9b97-d123fe2e4d9d",
+      "token": "codex-direct"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "claude",
+      "source": "startup",
+      "session_id": "859eceda-c89d-4dce-a76f-c2c11e5cd4b9",
+      "token": "claude-current-one"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "codex",
+      "source": "startup",
+      "session_id": "01a071f6-c060-7333-8694-58344600b2b9",
+      "token": "codex-direct-two"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "claude",
+      "source": "resume",
+      "session_id": "859eceda-c89d-4dce-a76f-c2c11e5cd4b9",
+      "token": "claude-current-resume"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "claude",
+      "source": "resume",
+      "session_id": "859eceda-c89d-4dce-a76f-c2c11e5cd4b9",
+      "token": "claude-helper-resume"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "claude",
+      "source": "fork",
+      "session_id": "4b16e1af-8e5c-43a0-81a5-21285457a5e5",
+      "token": "claude-native-fork"
+    },
+    {
+      "hook_event_name": "SessionEnd",
+      "provider": "claude",
+      "session_id": "859eceda-c89d-4dce-a76f-c2c11e5cd4b9",
+      "token": "claude-helper-resume"
+    },
+    {
+      "hook_event_name": "SessionStart",
+      "provider": "claude",
+      "source": "clear",
+      "session_id": "b9997fd2-715a-4ced-90e9-de3b9a50f0a4",
+      "token": "claude-helper-resume"
+    }
+  ],
+  "all_event_cwds_match_isolated_project": true,
+  "mesh_end_to_end": {
+    "binary": "/work/tmp/mesh-t25/mesh-cli-debug",
+    "cases": [
+      {
+        "provider": "claude",
+        "conversation_id": "859eceda-c89d-4dce-a76f-c2c11e5cd4b9",
+        "source_session": "D6MJ",
+        "replacement_session": "3EFD",
+        "native_provider_version": "2.1.261 (Claude Code)",
+        "binding": "explicit",
+        "source_recipe_durable": true,
+        "worker_sigkill": true,
+        "recovery_entry": "compact_picker_a",
+        "expected_native_conversation_visible": true,
+        "native_argv": [
+          "/home/shaul/.local/share/mise/installs/claude/2.1.261/claude",
+          "--resume=859eceda-c89d-4dce-a76f-c2c11e5cd4b9"
+        ],
+        "source_record_retained": true,
+        "resume_receipt_matches": true,
+        "invocation_token_changed": true,
+        "new_prompt_sent": false,
+        "root": "/work/tmp/mesh-t25/mn-claude-urnm8w5w",
+        "receipt_status": "verified"
+      },
+      {
+        "provider": "codex",
+        "conversation_id": "01a071f4-3bdd-7193-9b97-d123fe2e4d9d",
+        "source_session": "ZJ21",
+        "replacement_session": "CD68",
+        "native_provider_version": "codex-cli 0.153.4",
+        "binding": "explicit",
+        "source_recipe_durable": true,
+        "worker_sigkill": true,
+        "recovery_entry": "recover_--agent",
+        "expected_native_conversation_visible": true,
+        "native_argv": [
+          "/home/shaul/.local/share/mise/installs/codex/0.153.4/bin/codex",
+          "resume",
+          "--cd",
+          "/work/tmp/mesh-t25/native/project",
+          "--",
+          "01a071f4-3bdd-7193-9b97-d123fe2e4d9d"
+        ],
+        "source_record_retained": true,
+        "resume_receipt_matches": false,
+        "invocation_token_changed": null,
+        "new_prompt_sent": false,
+        "root": "/work/tmp/mesh-t25/mn-codex-r3g_6ana",
+        "receipt_status": "unverified",
+        "normal_isolated_hook_trust": true
+      }
+    ],
+    "no_new_model_prompt": true,
+    "scope": "local native provider binding, worker SIGKILL, exact native resume via compact picker and CLI",
+    "full_vm_power_loss": "not_run"
+  }
+}

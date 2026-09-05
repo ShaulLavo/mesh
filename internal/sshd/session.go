@@ -236,7 +236,7 @@ func parseCommand(raw string, hasPTY, installed bool) (Command, error) {
 	}
 	id, err := meshsession.ParseID(raw)
 	if err != nil {
-		return Command{}, errors.New("unsupported SSH command; use a session ID, recover SESSION [--shell|--command], or ls")
+		return Command{}, errors.New("unsupported SSH command; use a session ID, recover SESSION [--shell|--command|--agent], or ls")
 	}
 	return Command{Kind: CommandAttach, SessionID: id}, nil
 }
@@ -247,7 +247,7 @@ func parseRecoverCommand(raw string) (Command, error) {
 	}
 	arguments := strings.Fields(raw)
 	if len(arguments) < 2 || len(arguments) > 3 {
-		return Command{}, errors.New("use recover SESSION [--shell|--command]")
+		return Command{}, errors.New("use recover SESSION [--shell|--command|--agent]")
 	}
 	id, err := meshsession.ParseID(arguments[1])
 	if err != nil {
@@ -262,8 +262,10 @@ func parseRecoverCommand(raw string) (Command, error) {
 		command.RecoveryAction = recovery.ActionShell
 	case "--command":
 		command.RecoveryAction = recovery.ActionCommand
+	case "--agent":
+		command.RecoveryAction = recovery.ActionAgent
 	default:
-		return Command{}, errors.New("SSH recovery accepts only --shell or --command")
+		return Command{}, errors.New("SSH recovery accepts only --shell, --command, or --agent")
 	}
 	return command, nil
 }

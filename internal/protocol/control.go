@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/shaul/mesh/internal/agentresume"
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/wake"
 )
@@ -81,6 +82,7 @@ const (
 
 // SessionInfo is the transport representation of durable session metadata.
 type SessionInfo struct {
+	AgentStatus        string           `json:"agentStatus,omitempty"`
 	Recovery           *recovery.Record `json:"recovery,omitempty"`
 	RecoveryError      string           `json:"recoveryError,omitempty"`
 	ReplacementID      string           `json:"replacementId,omitempty"`
@@ -180,18 +182,28 @@ type EdgeListProof struct {
 // Control is the envelope for every JSON control message. Unused fields are
 // omitted so messages stay readable on the wire during debugging.
 type Control struct {
-	RecoveryAction       string            `json:"recoveryAction,omitempty"`
-	Recovery             *recovery.Record  `json:"recovery,omitempty"`
-	RecoveryResult       *recovery.Result  `json:"recoveryResult,omitempty"`
-	RecoverySupported    bool              `json:"recoverySupported,omitempty"`
-	RecoveryCommand      *recovery.Command `json:"recoveryCommand,omitempty"`
-	ClearRecoveryCommand bool              `json:"clearRecoveryCommand,omitempty"`
-	ShellPID             int               `json:"shellPid,omitempty"`
-	ShellDirectory       string            `json:"shellDirectory,omitempty"`
-	ShellExecutable      string            `json:"shellExecutable,omitempty"`
-	Type                 string            `json:"type"`
-	RequestID            string            `json:"requestId,omitempty"`
-	SessionID            string            `json:"sessionId,omitempty"`
+	AgentLaunch          *agentresume.Launch  `json:"agentLaunch,omitempty"`
+	AgentEvent           *agentresume.Event   `json:"agentEvent,omitempty"`
+	AgentPID             int                  `json:"agentPid,omitempty"`
+	AgentToken           string               `json:"agentToken,omitempty"`
+	AgentHostID          string               `json:"agentHostId,omitempty"`
+	AgentExpectedID      string               `json:"agentExpectedId,omitempty"`
+	AgentExplicit        bool                 `json:"agentExplicit,omitempty"`
+	AgentLookupOnly      bool                 `json:"agentLookupOnly,omitempty"`
+	AgentVerified        bool                 `json:"agentVerified,omitempty"`
+	AgentProvider        agentresume.Provider `json:"agentProvider,omitempty"`
+	RecoveryAction       string               `json:"recoveryAction,omitempty"`
+	Recovery             *recovery.Record     `json:"recovery,omitempty"`
+	RecoveryResult       *recovery.Result     `json:"recoveryResult,omitempty"`
+	RecoverySupported    bool                 `json:"recoverySupported,omitempty"`
+	RecoveryCommand      *recovery.Command    `json:"recoveryCommand,omitempty"`
+	ClearRecoveryCommand bool                 `json:"clearRecoveryCommand,omitempty"`
+	ShellPID             int                  `json:"shellPid,omitempty"`
+	ShellDirectory       string               `json:"shellDirectory,omitempty"`
+	ShellExecutable      string               `json:"shellExecutable,omitempty"`
+	Type                 string               `json:"type"`
+	RequestID            string               `json:"requestId,omitempty"`
+	SessionID            string               `json:"sessionId,omitempty"`
 
 	WakeGrant   *wake.Grant `json:"wakeGrant,omitempty"`
 	WakeAllowed *bool       `json:"wakeAllowed,omitempty"`

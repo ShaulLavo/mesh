@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/shaul/mesh/internal/agentresume"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/session"
 )
@@ -22,6 +23,7 @@ const (
 	ActionDefault Action = ""
 	ActionShell   Action = "shell"
 	ActionCommand Action = "command"
+	ActionAgent   Action = "agent"
 )
 
 var ErrUncertain = errors.New("recovery: replacement launch is uncertain; retry to reconcile its reserved session")
@@ -29,6 +31,7 @@ var ErrUncertain = errors.New("recovery: replacement launch is uncertain; retry 
 // Source contains process facts supplied by the worker adapter, never inferred
 // from a PID that another process could have reused.
 type Source struct {
+	AgentResume                                  *agentresume.Receipt
 	ID, State, Cwd, BootID, RecoveredFrom, Shell string
 	Command                                      []string
 	Published                                    bool
@@ -56,6 +59,7 @@ type Request struct {
 }
 
 type Launch struct {
+	Agent        *agentresume.Recipe `json:"agent,omitempty"`
 	ID, SourceID string
 	Command      []string
 	Cwd          string
@@ -65,6 +69,7 @@ type Launch struct {
 }
 
 type Result struct {
+	AgentStatus   string  `json:"agentStatus,omitempty"`
 	SessionID     string  `json:"sessionId,omitempty"`
 	RecoveredFrom string  `json:"recoveredFrom,omitempty"`
 	Cwd           string  `json:"cwd,omitempty"`
@@ -98,7 +103,7 @@ func Recover(ctx context.Context, cfg Config, request Request) (Result, error) {
 	if err := validateOperation(cfg, request.SessionID); err != nil {
 		return Result{}, err
 	}
-	if request.Action != ActionDefault && request.Action != ActionShell && request.Action != ActionCommand {
+	if request.Action != ActionDefault && request.Action != ActionShell && request.Action != ActionCommand && request.Action != ActionAgent {
 		return Result{}, fmt.Errorf("recovery: invalid action %q", request.Action)
 	}
 	if !validField(request.Term) {
@@ -110,29 +115,33 @@ func Recover(ctx context.Context, cfg Config, request Request) (Result, error) {
 		return Result{}, err
 	}
 	defer unlock()
-	previous, err := readIntent(dir, cfg.HostID, request.SessionID)
+	source, err := cfg.Runtime.Inspect(ctx, request.SessionID)
+	if err != nil {
+		return Result{}, err
+	}
+	if (source.State == "running" || source.State == "detached") && request.Action != ActionAgent {
+		return Result{SessionID: source.ID, Cwd: source.Cwd, Existing: true, State: source.State}, nil
+	}
+	record, err := recoveryRecord(cfg, dir, source, request.Action)
+	if err != nil {
+		return Result{}, err
+	}
+	if request.Action == ActionAgent && record.Agent != nil && record.Agent.Lifecycle != agentresume.Closed && (source.State == "running" || source.State == "detached") {
+		return Result{SessionID: source.ID, Cwd: source.Cwd, Existing: true, State: source.State}, nil
+	}
+	claim, err := recoveryClaim(dir, cfg.HostID, request.SessionID, record, request.Action)
+	if err != nil {
+		return Result{}, err
+	}
+	previous, err := readIntentNamed(dir, cfg.HostID, request.SessionID, claim)
 	if err == nil {
 		return resumeIntent(ctx, cfg, dir, previous)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return Result{}, err
 	}
-	source, err := cfg.Runtime.Inspect(ctx, request.SessionID)
-	if err != nil {
-		return Result{}, err
-	}
-	if source.State == "running" || source.State == "detached" {
-		return Result{SessionID: source.ID, Cwd: source.Cwd, Existing: true, State: source.State}, nil
-	}
 	if !source.Published {
 		return Result{}, fmt.Errorf("session %s: %w", request.SessionID, ErrUncertain)
-	}
-	record, err := ReadSaved(dir, cfg.HostID, request.SessionID, fallbackRecord(cfg.HostID, source))
-	if err != nil && request.Action == ActionShell {
-		record, err = fallbackRecord(cfg.HostID, source), nil
-	}
-	if err != nil {
-		return Result{}, err
 	}
 	if record.Remote != nil && request.Action == ActionDefault {
 		return Result{RecoveredFrom: source.ID, Remote: record.Remote}, nil
@@ -147,10 +156,36 @@ func Recover(ctx context.Context, cfg Config, request Request) (Result, error) {
 	}
 	launch.ID = id
 	next := intent{Version: 1, HostID: cfg.HostID, SourceID: source.ID, Action: request.Action, Phase: "reserved", Launch: launch, OriginalCwd: originalCwd}
-	if err := writeTransaction(dir, "recovery-intent.json", next); err != nil {
+	if err := writeAgentReference(cfg.SessionsDir, next); err != nil {
+		return Result{}, err
+	}
+	if err := writeTransaction(dir, intentName(next), next); err != nil {
 		return Result{}, err
 	}
 	return resumeIntent(ctx, cfg, dir, next)
+}
+
+func recoveryRecord(cfg Config, dir string, source Source, action Action) (Record, error) {
+	record, err := ReadSaved(dir, cfg.HostID, source.ID, fallbackRecord(cfg.HostID, source))
+	if err != nil && action == ActionShell {
+		return fallbackRecord(cfg.HostID, source), nil
+	}
+	if err != nil {
+		return Record{}, err
+	}
+	if record.Agent == nil && record.Remote == nil && source.RecoveredFrom != "" && (action == ActionDefault || action == ActionAgent) {
+		pending, err := readAgentIntent(cfg.SessionsDir, cfg.HostID, source.RecoveredFrom, source.ID)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Record{}, err
+		}
+		if err == nil {
+			record.Agent = pendingLaunchRecipe(pending)
+		}
+	}
+	if action == ActionAgent && record.Agent == nil {
+		return Record{}, fmt.Errorf("recovery: no registered agent conversation was saved")
+	}
+	return record, nil
 }
 
 func resumeIntent(ctx context.Context, cfg Config, dir string, saved intent) (Result, error) {
@@ -159,7 +194,7 @@ func resumeIntent(ctx context.Context, cfg Config, dir string, saved intent) (Re
 		if replacement.RecoveredFrom != saved.SourceID {
 			return Result{}, fmt.Errorf("recovery: replacement %s belongs to a different source", saved.Launch.ID)
 		}
-		return completeIntent(dir, saved, true, replacement.State)
+		return reconcileReplacement(dir, saved, true, replacement)
 	}
 	if inspectErr != nil && !errors.Is(inspectErr, os.ErrNotExist) {
 		return Result{}, inspectErr
@@ -175,7 +210,7 @@ func resumeIntent(ctx context.Context, cfg Config, dir string, saved intent) (Re
 	}
 	saved.Phase = "dispatched"
 	saved.DispatchBootID = cfg.BootID
-	if err := writeTransaction(dir, "recovery-intent.json", saved); err != nil {
+	if err := writeTransaction(dir, intentName(saved), saved); err != nil {
 		return Result{}, err
 	}
 	if err := cfg.Runtime.Launch(ctx, saved.Launch); err != nil {
@@ -185,7 +220,28 @@ func resumeIntent(ctx context.Context, cfg Config, dir string, saved intent) (Re
 	if err != nil || !replacement.Published || replacement.RecoveredFrom != saved.SourceID {
 		return Result{}, fmt.Errorf("session %s reserved replacement %s: %w", saved.SourceID, saved.Launch.ID, ErrUncertain)
 	}
-	return completeIntent(dir, saved, false, replacement.State)
+	return reconcileReplacement(dir, saved, false, replacement)
+}
+
+func reconcileReplacement(dir string, saved intent, existing bool, replacement Source) (Result, error) {
+	if saved.Launch.Agent == nil {
+		return completeIntent(dir, saved, existing, replacement.State)
+	}
+	if saved.Phase == "complete" || matchesAgentReceipt(saved, replacement.AgentResume) {
+		result, err := completeIntent(dir, saved, existing, replacement.State)
+		result.AgentStatus = "verified"
+		return result, err
+	}
+	return Result{SessionID: saved.Launch.ID, RecoveredFrom: saved.SourceID, Cwd: saved.Launch.Cwd,
+		Existing: existing, State: replacement.State, AgentStatus: "unverified"}, nil
+}
+
+func matchesAgentReceipt(saved intent, receipt *agentresume.Receipt) bool {
+	if receipt == nil || agentresume.ValidateReceipt(*receipt) != nil {
+		return false
+	}
+	expected := saved.Launch.Agent
+	return receipt.SourceSessionID == saved.SourceID && receipt.Provider == expected.Provider && receipt.ConversationID == expected.ConversationID
 }
 
 func retainLaunchFailure(dir string, saved intent, err error) error {
@@ -194,7 +250,7 @@ func retainLaunchFailure(dir string, saved intent, err error) error {
 		return fmt.Errorf("session %s replacement %s: %w: %v", saved.SourceID, saved.Launch.ID, ErrUncertain, err)
 	}
 	saved.Phase = "reserved"
-	if writeErr := writeTransaction(dir, "recovery-intent.json", saved); writeErr != nil {
+	if writeErr := writeTransaction(dir, intentName(saved), saved); writeErr != nil {
 		return errors.Join(err, writeErr)
 	}
 	return fmt.Errorf("session %s replacement %s: %w", saved.SourceID, saved.Launch.ID, err)
@@ -203,7 +259,7 @@ func retainLaunchFailure(dir string, saved intent, err error) error {
 func completeIntent(dir string, saved intent, existing bool, state string) (Result, error) {
 	if saved.Phase != "complete" {
 		saved.Phase = "complete"
-		if err := writeTransaction(dir, "recovery-intent.json", saved); err != nil {
+		if err := writeTransaction(dir, intentName(saved), saved); err != nil {
 			return Result{}, err
 		}
 	}
@@ -212,6 +268,9 @@ func completeIntent(dir string, saved intent, existing bool, state string) (Resu
 
 func chooseLaunch(source Source, record Record, request Request) (Launch, string, error) {
 	launch := Launch{SourceID: source.ID, Cols: request.Cols, Rows: request.Rows, Term: request.Term, Depth: request.Depth}
+	if request.Action == ActionAgent || request.Action == ActionDefault && record.Agent != nil && record.Agent.Lifecycle != "closed" {
+		return chooseAgentLaunch(launch, record.Agent)
+	}
 	if request.Action == ActionCommand {
 		command := Command{Argv: source.Command, Cwd: source.Cwd}
 		if record.Restart != nil {
@@ -347,7 +406,32 @@ func ConfigureCommand(ctx context.Context, cfg Config, id string, command *Comma
 }
 
 func ReplacementID(dir, hostID, id string) (string, error) {
-	saved, err := readIntent(dir, hostID, id)
+	standard, standardErr := replacementForClaim(dir, hostID, id, "recovery-intent.json")
+	record, err := Read(dir)
+	if err != nil || record.HostID != hostID || record.SessionID != id {
+		return standard, standardErr
+	}
+	if record.Agent == nil && record.Remote == nil {
+		record.Agent, err = pendingReplacementRecipe(dir, hostID, id)
+		if err != nil {
+			return "", err
+		}
+	}
+	if record.Agent == nil {
+		return standard, standardErr
+	}
+	if record.Agent.Lifecycle == agentresume.Closed && (standard != "" || standardErr != nil) {
+		return standard, standardErr
+	}
+	agent, err := replacementForClaim(dir, hostID, id, agentIntentName(record.Agent.InvocationToken))
+	if err != nil || agent != "" {
+		return agent, err
+	}
+	return standard, standardErr
+}
+
+func replacementForClaim(dir, hostID, id, claim string) (string, error) {
+	saved, err := readIntentNamed(dir, hostID, id, claim)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
@@ -369,8 +453,12 @@ func validateOperation(cfg Config, id string) error {
 }
 
 func readIntent(dir, hostID, id string) (intent, error) {
+	return readIntentNamed(dir, hostID, id, "recovery-intent.json")
+}
+
+func readIntentNamed(dir, hostID, id, name string) (intent, error) {
 	var saved intent
-	if err := readTransaction(filepath.Join(dir, "recovery-intent.json"), &saved); err != nil {
+	if err := readTransaction(filepath.Join(dir, name), &saved); err != nil {
 		return intent{}, err
 	}
 	if saved.Version != 1 || saved.HostID != hostID || saved.SourceID != id || saved.Launch.SourceID != id {
@@ -385,6 +473,14 @@ func readIntent(dir, hostID, id string) (intent, error) {
 	}
 	if err := ValidateCommand(&Command{Argv: saved.Launch.Command, Cwd: saved.Launch.Cwd}); err != nil {
 		return intent{}, err
+	}
+	if saved.Launch.Agent != nil {
+		if err := agentresume.ValidateRecipe(*saved.Launch.Agent); err != nil {
+			return intent{}, fmt.Errorf("recovery: invalid saved agent launch: %w", err)
+		}
+	}
+	if name != intentName(saved) {
+		return intent{}, fmt.Errorf("recovery: intent claim does not match the saved invocation")
 	}
 	return saved, nil
 }

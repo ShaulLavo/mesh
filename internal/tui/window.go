@@ -112,6 +112,11 @@ func (m windowModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if m.selected && ok && endedSession(current) && !sessionActionBusy(m.picker.sessionAction) {
 				m.selection = &cli.WindowSelection{SessionID: current.id, Relaunch: true, RecoveryAction: recovery.ActionShell}
 			}
+		case "a":
+			_, current, ok := m.picker.currentSession()
+			if m.selected && ok && canResumeAgent(current) && !sessionActionBusy(m.picker.sessionAction) {
+				m.selection = &cli.WindowSelection{SessionID: current.id, Relaunch: true, RecoveryAction: recovery.ActionAgent}
+			}
 		case "x":
 			if m.selected && !sessionActionBusy(m.picker.sessionAction) {
 				_, current, ok := m.picker.currentSession()
@@ -252,6 +257,9 @@ func (m windowModel) View() tea.View {
 		}
 	}
 	footer := picker.styles.hints(hint{"enter", action}, hint{"1-9", "pick"}, hint{"s", "shell"}, hint{"n", "new"}, hint{"l", "list"}, hint{"x", "forget"}, hint{"esc", "cancel"})
+	if _, current, ok := picker.currentSession(); m.selected && ok && canResumeAgent(current) {
+		footer = picker.styles.hints(hint{"enter", action}, hint{"a", "conversation"}, hint{"s", "shell"}, hint{"n", "new"}, hint{"l", "list"}, hint{"esc", "cancel"})
+	}
 	lines = append(lines[:min(len(lines), max(0, picker.height-1))], footer)
 	for index := range lines {
 		lines[index] = truncate(lines[index], picker.width)

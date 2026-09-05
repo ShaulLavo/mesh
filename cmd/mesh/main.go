@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"syscall"
@@ -15,6 +16,10 @@ import (
 
 func main() {
 	root := cli.NewCommand(commandDependencies())
+	if plainAgentCommand(os.Args[1:]) {
+		finishAgentCommand(os.Args[1], root.ExecuteContext(context.Background()))
+		return
+	}
 	options := []fang.Option{
 		fang.WithNotifySignal(os.Interrupt, syscall.SIGTERM),
 		fang.WithErrorHandler(func(output io.Writer, styles fang.Styles, err error) {
@@ -35,5 +40,28 @@ func main() {
 	if status, ok := cli.StatusCode(err); ok {
 		os.Exit(status)
 	}
+	os.Exit(1)
+}
+
+func plainAgentCommand(arguments []string) bool {
+	if len(arguments) == 0 {
+		return false
+	}
+	switch arguments[0] {
+	case "agent", "agent-hook", "agent-resume":
+		return true
+	default:
+		return false
+	}
+}
+
+func finishAgentCommand(name string, err error) {
+	if err == nil || name == "agent-hook" {
+		return
+	}
+	if status, ok := cli.StatusCode(err); ok {
+		os.Exit(status)
+	}
+	_, _ = fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
 }

@@ -1,12 +1,70 @@
 # T25 — Recover exact Codex and Claude conversations
 
-**Status:** planned, not implemented · **Prerequisites:** T24's checkpoint and
+**Status:** implemented, with native compatibility limits · **Prerequisites:** T24's checkpoint and
 recovery transaction milestones · **Providers:** Codex CLI and Claude Code
 
-The offline compatibility probe is implemented in
-`scripts/probe-agent-recovery.sh`; see [observed versions and remaining live
-checks](../agent-recovery-compatibility.md). Runtime agent recovery remains
-planned. The probe does not prove invocation association or exact live resume.
+Delivered on 2026-09-05. See [setup and recovery](../agent-recovery.md),
+[native compatibility evidence](../agent-recovery-compatibility.md), and the
+delivery notes below. The original design and acceptance brief follows those notes.
+
+## Delivery notes
+
+`internal/agentresume` owns bounded identity fields, provider event decoding,
+supported launch options, exact resume argv, and read-only Codex ID lookup.
+`mesh agent`, opt-in Bash and Zsh wrappers, stable provider hooks, and idempotent
+setup commands preserve the native terminal interface. The worker validates each
+foreground invocation and acknowledges registration only after its record is durable.
+
+CLI and picker conversation actions, WebSocket recovery, and stock OpenSSH all
+use the same per-invocation recovery claim. A matching native start event stores
+an immutable receipt. An unconfirmed replacement stays usable and unverified,
+and retries return that replacement. Closed agents can resume in a new worker
+while the original shell remains available. Native resume failure offers a shell
+in the saved directory and retains the original record.
+
+Authenticated native tests restored two distinct Codex and Claude histories in
+the same project without an added prompt. Separate Mesh worker crash tests
+restored a Claude conversation through the compact picker and a Codex conversation
+through `recover --agent`. Claude Code 2.1.261 supplied the matching resume hook.
+Codex CLI 0.153.4 direct TUI displayed the saved history but supplied no idle
+resume hook, so Mesh correctly retained an unverified status.
+
+A pre-existing Codex app-server delivered its own token to hooks instead of the
+client's token. Automatic capture is therefore disabled for `--remote` clients.
+`mesh agent bind codex ID` validates an exact native ID and directory with bounded
+`thread/read` lookup. That lookup cannot confirm a running replacement.
+
+The native hooks exposed a production startup delay in legacy Bubble Tea package
+initialization, imported through Wish. The SSH listener now uses the same
+underlying Charm SSH server with logging, panic recovery, and bounded per-IP rate
+limiting. Production startup no longer waits for terminal color queries before
+the silent hook helper runs. A dependency check prevents that import path returning.
+
+`scripts/check-t25.sh` retains the account-free contract checks, including real
+worker death after durable registration, fake native processes, delayed hooks,
+concurrent Unix/WebSocket/SSH recovery, missing conversations, and cross-builds.
+The [native probe](../agent-recovery-compatibility.md#probe-commands) records actual
+provider behavior separately from fixture results.
+
+Final checks passed: `go test -race ./...`, `go vet ./...`, `go mod tidy -diff`,
+formatting, all 35 integration scripts, and `scripts/check-t25.sh` including
+CGO-disabled Linux amd64/arm64 and Darwin arm64 builds. Unlimited lint reports
+the same eleven pre-existing findings. History, window, reboot, and SSH fixtures
+now await published exit or detach metadata before dependent actions. The SSH
+fixture also waits for the picker to release the terminal before accepting a
+live shell prompt, so saved preview text cannot satisfy that check.
+
+A subsequent [review](../../.audit/t25/review.md) added regressions and fixes for
+repeated crashes before confirmation, new capture from the fallback shell,
+unrecorded backend routing, symlinked settings, hook diagnostics, and picker
+target labels. Pending plans remain separate from acknowledged identities.
+
+No VM power-loss check was run for T25. Native pending work, compaction, subagent
+events, relocated worktrees, other provider versions, and the managed standalone
+Codex daemon remain outside the verified native matrix. Deterministic tests cover
+identity changes and subagent rejection, but do not prove those native lifecycles.
+Mesh prevents duplicate recovery within its own source claims. It does not detect
+the same conversation running independently outside Mesh.
 
 ## Outcome
 
@@ -19,7 +77,7 @@ Reopening `codex` or `claude` without the provider ID is not conversation recove
 
 This plan covers local provider histories on the host where the tool ran. It does
 not transfer conversations to another computer or add a cloud-agent control plane.
-All new Mesh commands, modules, and fields below are proposed.
+The sections below retain the implementation's design and acceptance requirements.
 
 ## Depend on T24 without expanding its shell model
 
@@ -245,7 +303,7 @@ Separately run authenticated smoke sessions for both installed CLIs: create two
 distinct conversations, record IDs, terminate their test workers, and recover each
 through the picker without a new prompt. Verify the visible conversation and ID.
 Record failures as unsupported combinations, not fake-provider successes. The
-implementation's T24 VM check covers power loss after registration is durable.
+T24 VM power-loss check remains a separate acceptance step and was not run here.
 
 ## Effort boundary
 

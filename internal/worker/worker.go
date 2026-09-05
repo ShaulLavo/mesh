@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/xpty"
+	"github.com/shaul/mesh/internal/agentresume"
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
@@ -108,6 +109,11 @@ type Worker struct {
 	checkpointStop   chan struct{}
 	checkpointDone   chan struct{}
 	recoveryState    recovery.Record
+	agentMu          sync.Mutex
+	agentInvocation  *agentInvocation
+	agentExpected    *agentresume.Recipe
+	agentReaders     sync.WaitGroup
+	agentCaller      func(net.Conn, int) error
 
 	// mu orders ring delivery, attachment ownership, and shutdown. A client
 	// attaching mid-write cannot miss bytes, and finish cannot race a new writer
@@ -675,6 +681,7 @@ func (w *Worker) finish(code int) {
 		}
 		w.mu.Unlock()
 		w.closeNesting()
+		w.closeAgents()
 		w.waitForWriters()
 		w.killResponders.Wait()
 	})

@@ -96,4 +96,7 @@ func (l *lifecycle) addRecoveryInfo(info *protocol.SessionInfo) {
 	// authenticated request so a host with many sessions stays listable.
 	record = protocol.RecoveryPreview(record)
 	info.Recovery = &record
+	if info.RecoveredFrom != "" {
+		info.AgentStatus = recovery.AgentStatus(l.sessionsDir, string(l.host.ID), info.RecoveredFrom, info.ID, record.AgentResume)
+	}
 }

@@ -14,6 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/shaul/mesh/internal/agentresume"
 	"github.com/shaul/mesh/internal/session"
 )
 
@@ -46,19 +47,21 @@ type Target struct {
 }
 
 type Record struct {
-	Version         int             `json:"version"`
-	HostID          string          `json:"hostId"`
-	SessionID       string          `json:"sessionId"`
-	CheckpointAt    time.Time       `json:"checkpointAt"`
-	Shell           string          `json:"shell"`
-	ShellDirectory  string          `json:"shellDirectory"`
-	DirectorySource DirectorySource `json:"directorySource"`
-	Title           string          `json:"title,omitempty"`
-	LastOutputAt    time.Time       `json:"lastOutputAt,omitempty"`
-	Lines           []string        `json:"lines,omitempty"`
-	Command         []string        `json:"command"`
-	Restart         *Command        `json:"restart,omitempty"`
-	Remote          *Target         `json:"remote,omitempty"`
+	Agent           *agentresume.Recipe  `json:"agent,omitempty"`
+	AgentResume     *agentresume.Receipt `json:"agentResume,omitempty"`
+	Version         int                  `json:"version"`
+	HostID          string               `json:"hostId"`
+	SessionID       string               `json:"sessionId"`
+	CheckpointAt    time.Time            `json:"checkpointAt"`
+	Shell           string               `json:"shell"`
+	ShellDirectory  string               `json:"shellDirectory"`
+	DirectorySource DirectorySource      `json:"directorySource"`
+	Title           string               `json:"title,omitempty"`
+	LastOutputAt    time.Time            `json:"lastOutputAt,omitempty"`
+	Lines           []string             `json:"lines,omitempty"`
+	Command         []string             `json:"command"`
+	Restart         *Command             `json:"restart,omitempty"`
+	Remote          *Target              `json:"remote,omitempty"`
 }
 
 func Validate(record Record) error {
@@ -88,12 +91,29 @@ func Validate(record Record) error {
 	if err := ValidateCommand(record.Restart); err != nil {
 		return err
 	}
+	if err := validateAgentFields(record); err != nil {
+		return err
+	}
 	if record.Remote != nil {
 		if err := validateTarget(*record.Remote); err != nil {
 			return fmt.Errorf("recovery: remote target: %w", err)
 		}
 	}
 	return validateLines(record.Lines)
+}
+
+func validateAgentFields(record Record) error {
+	if record.Agent != nil {
+		if err := agentresume.ValidateRecipe(*record.Agent); err != nil {
+			return fmt.Errorf("recovery: agent recipe: %w", err)
+		}
+	}
+	if record.AgentResume != nil {
+		if err := agentresume.ValidateReceipt(*record.AgentResume); err != nil {
+			return fmt.Errorf("recovery: agent resume receipt: %w", err)
+		}
+	}
+	return nil
 }
 
 func ValidateOwner(record Record, hostID, sessionID string) error {

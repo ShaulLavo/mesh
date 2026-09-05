@@ -17,12 +17,7 @@ import (
 	"time"
 
 	charmssh "github.com/charmbracelet/ssh"
-	"github.com/charmbracelet/wish"
-	"github.com/charmbracelet/wish/logging"
-	"github.com/charmbracelet/wish/ratelimiter"
-	"github.com/charmbracelet/wish/recover"
 	gossh "golang.org/x/crypto/ssh"
-	"golang.org/x/time/rate"
 )
 
 const (
@@ -189,15 +184,15 @@ func validateConfig(ctx context.Context, cfg Config) (normalizedConfig, error) {
 }
 
 func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server, error) {
-	hostKeyPEM, signer, err := marshalHostKey(cfg.hostKey)
+	_, signer, err := marshalHostKey(cfg.hostKey)
 	if err != nil {
 		return nil, err
 	}
-	serverOptions := append([]charmssh.Option(nil), opts...)
-	serverOptions = append(serverOptions, wish.WithHostKeyPEM(hostKeyPEM))
-	server, err := wish.NewServer(serverOptions...)
-	if err != nil {
-		return nil, fmt.Errorf("sshd: configure Wish server: %w", err)
+	server := &charmssh.Server{}
+	for _, option := range opts {
+		if err := server.SetOption(option); err != nil {
+			return nil, fmt.Errorf("sshd: configure SSH server: %w", err)
+		}
 	}
 
 	// Extension options are trusted to add handlers, not to weaken the public
@@ -242,20 +237,6 @@ func marshalHostKey(private ed25519.PrivateKey) ([]byte, gossh.Signer, error) {
 		return nil, nil, fmt.Errorf("sshd: parse exported host key: %w", err)
 	}
 	return encoded, signer, nil
-}
-
-func secureMiddleware(handler charmssh.Handler) charmssh.Handler {
-	limiter := ratelimiter.NewRateLimiter(rate.Every(100*time.Millisecond), 20, 1024)
-	noOp := func(charmssh.Session) {}
-	return recover.Middleware(
-		fixedHandler(handler),
-		ratelimiter.Middleware(limiter),
-		logging.Middleware(),
-	)(noOp)
-}
-
-func fixedHandler(handler charmssh.Handler) wish.Middleware {
-	return func(charmssh.Handler) charmssh.Handler { return handler }
 }
 
 func helloHandler(session charmssh.Session) {

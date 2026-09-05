@@ -284,6 +284,7 @@ func (a sshApplication) relaunch(ctx context.Context, client sshd.Session, id st
 		if result.OriginalCwd != "" && result.OriginalCwd != result.Cwd {
 			_, _ = fmt.Fprintf(client.Err, "Saved directory %q is unavailable; opening shell in %q.\n", result.OriginalCwd, result.Cwd)
 		}
+		reportAgentRecoveryStatus(client.Err, result)
 		return &sshAttachment{id: result.SessionID, ifDetached: true}, nil
 	}
 	return nil, errors.New("saved recovery attempt chain is too long")

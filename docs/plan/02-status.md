@@ -60,12 +60,15 @@ are also implemented. Physical power-loss acceptance remains an operator check.
   liveness, authenticated status pages, fuzzed Host parsing, bounded
   proxy/direct-TLS front doors, and origin publication with exact
   acknowledgement (T13)
-- `internal/sshd` — Wish-based key-only SSH on discovered Tailnet addresses,
+- `internal/sshd` — Charm SSH key-only access on discovered Tailnet addresses,
   the shared Mesh host key, live `authorized_keys` revocation, and daemon-owned
   shutdown, with local sessions, the shared picker, and scriptable `ls` (T15, T17)
 - `internal/recovery` — worker-owned rendered checkpoints, shell directory and
   history hooks, durable restart reservations, retained attempts, exact remote
   continuation, explicit command recipes, and previous-output access (T24)
+- `internal/agentresume` — exact Codex and Claude identity capture, native launch
+  and resume, provider hook setup, explicit binding, and verified recovery receipts
+  shared by the CLI, pickers, WebSocket, and SSH (T25)
 - `internal/wake`, `internal/wakeclient`, `internal/inhibit` — signed target
   permission, automatic LAN sender selection, conservative reconnect recovery,
   public-service wake, and child-process sleep inhibition (T19)
@@ -169,7 +172,8 @@ T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websoc
 transport · T06 host identity · T07 CLI surface · T08 ssh bootstrap · T09 picker
 TUI · T10 packaging · T11 serving core · T12 private names · T13 public edge ·
 T14 `mesh serve` · T15 SSH front door · T17 sessions over SSH · T19 wake and sleep inhibition · T20 Tailscale provisioning · T22 live
-session inspector · T23 Mesh as your terminal · T24 workspace crash recovery.
+session inspector · T23 Mesh as your terminal · T24 workspace crash recovery ·
+T25 exact Codex and Claude conversation recovery.
 
 Verified 2026-09-05 after T24: `go test -race ./...`, `go vet ./...`, clean module
 and formatting checks, all 34 integration scripts, and CGO-disabled Linux
@@ -179,6 +183,13 @@ response-ordering regression also covers attachment rejection followed by resize
 Full unlimited lint reports only the same eleven pre-existing findings.
 Physical power-loss acceptance and a wider real-process crash-boundary matrix
 remain [documented validation limits](../tasks/T24-crash-recovery.md#delivery-notes).
+
+Verified 2026-09-05 after T25: `go test -race ./...`, `go vet ./...`, clean module
+and formatting checks, all 35 integration scripts, and CGO-disabled Linux
+amd64/arm64 plus Darwin arm64 builds. `scripts/check-t25.sh` passes its focused
+contract. Full lint still reports only the eleven existing findings. Authenticated
+native recovery passed for both providers with the
+[recorded confirmation limits](../agent-recovery-compatibility.md).
 
 ## Build order coverage
 
@@ -192,7 +203,7 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 | 2 Remote session over Tailscale | T05, T06 | complete |
 | 3 Product CLI | T07, T09, T22 | complete |
 | 4 SSH bootstrap | T08, T20, T21 | complete |
-| 5 Crash and restart recovery | T04, T24, T25 | daemon and workspace recovery implemented; agent recovery planned |
+| 5 Crash and restart recovery | T04, T24, T25 | implemented, with native agent compatibility limits |
 | 6 Wake and sleep inhibition | T19 | complete |
 | 7 Packaging | T10 | complete |
 | 8 Serving | T11, T12, T13, T14 | complete |
@@ -201,30 +212,30 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 
 ## Next
 
-T16 and T18 remain independent and unblocked. T24 provides the checkpoint and
-restart operation needed by T25. The offline provider probe is implemented; live
-invocation association and exact native resume still need verification.
+T16 and T18 remain independent and unblocked. T25 now captures and resumes exact
+native conversations on the owning host. Claude Code 2.1.261 confirms resume
+through its hook. Codex CLI 0.153.4 direct TUI restores history but remains
+unverified until a matching hook arrives. Shared Codex app-server clients require
+explicit binding because hooks inherit the server's invocation environment.
 
 | Task | Owns | Blocked by |
 |---|---|---|
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
 | T18 reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
-| [T25 Codex and Claude recovery](../tasks/T25-agent-recovery.md) | `internal/agentresume/`, exact conversation registration, native resume | live provider association and exact-resume verification |
 
 T24 recovers a shell in its last saved directory, retains previous output and
 attempts, and resolves exact remote targets from the Mesh CLI. SSH recovery stays
 on its connected host. `mesh logs SESSION --previous` reads retained output.
-T25 adds no runtime behavior yet; its offline probe does not establish automatic
-conversation association. See [recovery instructions](../recovery.md).
+See [workspace recovery](../recovery.md), [agent setup and recovery](../agent-recovery.md),
+and the [native compatibility evidence](../agent-recovery-compatibility.md).
 
 T19 closes the skipped power-control step. D25 and D26 record child inhibitors,
 target-owned permission, automatic LAN sender selection, and the additive wake
 protocol. The CLI, picker, and public edge now use the wake implementation.
 
-Next for agent recovery, prove invocation association and exact native resume
-with authenticated disposable Codex and Claude conversations. Then add T25
-registration and provider launch on T24's shared restart operation. T16 and T18
-can proceed independently.
+Future agent compatibility work includes other provider versions, pending native
+work, and a managed standalone Codex daemon. These are outside the tested support
+matrix. T16 and T18 can proceed independently.
 
 ## Known defects
 

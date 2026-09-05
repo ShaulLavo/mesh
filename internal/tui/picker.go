@@ -104,7 +104,7 @@ func hostCatalog(input cli.PickerInput) []host {
 				command:   append([]string(nil), current.Command...),
 				cwd:       current.Cwd,
 				createdAt: current.CreatedAt,
-				recovery:  cloneRecovery(current.Recovery), recoveryError: current.RecoveryError,
+				recovery:  cloneRecovery(current.Recovery), recoveryError: current.RecoveryError, agentStatus: current.AgentStatus,
 				replacementID: current.ReplacementID, recoveredFrom: current.RecoveredFrom,
 			}
 		}

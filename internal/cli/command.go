@@ -314,12 +314,12 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	)
 	root.AddCommand(
 		inGroup(groupSessions, app.listCommand(), app.attachCommand(), app.localCommand(),
-			app.logsCommand(), app.killCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand())...,
+			app.logsCommand(), app.killCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand(), app.agentCommand())...,
 	)
 	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.renameCommand(), app.wakeCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand())...)
 	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand())...)
-	root.AddCommand(app.workerCommand(), app.shellUpdateCommand())
+	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand())
 	return root
 }
 

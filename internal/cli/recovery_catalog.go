@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
@@ -25,4 +26,5 @@ func addLocalRecoveryInfo(row *protocol.SessionInfo, current Session, hostID str
 	}
 	preview := protocol.RecoveryPreview(record)
 	row.Recovery = &preview
+	row.AgentStatus = recovery.AgentStatus(filepath.Dir(current.Dir), hostID, current.RecoveredFrom, current.ID, record.AgentResume)
 }

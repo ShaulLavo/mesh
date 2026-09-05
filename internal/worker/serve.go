@@ -31,6 +31,14 @@ func (w *Worker) serve(conn net.Conn) {
 		return
 	}
 	msg, err := protocol.DecodeControl(first.Payload)
+	if err == nil && msg.Type == protocol.TypeAgentBegin {
+		w.serveAgent(conn, msg)
+		return
+	}
+	if err == nil && msg.Type == protocol.TypeAgentEvent {
+		w.writeAgentEvent(conn, msg)
+		return
+	}
 	if err == nil && msg.Type == protocol.TypeShellUpdate {
 		w.writeShellUpdate(conn, msg)
 		return
