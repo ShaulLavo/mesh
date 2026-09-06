@@ -36,7 +36,7 @@ func (s *Store) ApplyEdgeSnapshot(ctx context.Context, snapshot edge.Snapshot, d
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, err := s.beginTunnelWrite(ctx)
 	if err != nil {
 		return fmt.Errorf("storage: begin edge snapshot transaction: %w", err)
 	}
@@ -61,6 +61,9 @@ func (s *Store) ApplyEdgeSnapshot(ctx context.Context, snapshot edge.Snapshot, d
 		return fmt.Errorf("storage: inspect edge snapshot: %w", err)
 	}
 
+	if err := checkEdgeTunnelCollisions(ctx, tx, snapshot); err != nil {
+		return err
+	}
 	for _, route := range snapshot.Routes {
 		owner, routeErr := queries.GetEdgeRoute(ctx, dbsqlc.GetEdgeRouteParams{PublicName: route.PublicName, ServiceName: route.ServiceName})
 		if routeErr == nil && owner.OriginID != snapshot.OriginID {

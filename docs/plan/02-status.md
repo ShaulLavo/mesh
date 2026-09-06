@@ -1,13 +1,13 @@
 # Status
 
-Updated 2026-09-05.
+Updated 2026-09-06.
 
 ## Done
 
 The session and transport core, live session inspector, terminal-window entry, product CLI,
 Tailscale-provisioning SSH bootstrap, packaging, origin serving core and service
 catalog, private DNS/TLS path, authenticated public edge, and the locked SSH
-front door and sessions over SSH are complete. Target-authorized wake, automatic
+front door, sessions over SSH, and named reverse tunnels are complete. Target-authorized wake, automatic
 LAN sender selection, Linux/macOS sleep inhibition, and workspace crash recovery
 are also implemented. Physical power-loss acceptance remains an operator check.
 
@@ -63,6 +63,9 @@ are also implemented. Physical power-loss acceptance remains an operator check.
 - `internal/sshd` — Charm SSH key-only access on discovered Tailnet addresses,
   the shared Mesh host key, live `authorized_keys` revocation, and daemon-owned
   shutdown, with local sessions, the shared picker, and scriptable `ls` (T15, T17)
+- `internal/tunnel` — signed durable hostname claims, transactional cross-process
+  outbox retries, bounded SSH reverse forwarding, and token-bound disconnect
+  cleanup through the existing public edge (T18)
 - `internal/recovery` — worker-owned rendered checkpoints, shell directory and
   history hooks, durable restart reservations, retained attempts, exact remote
   continuation, explicit command recipes, and previous-output access (T24)
@@ -171,7 +174,7 @@ assertions remain checks on the actual machines described in `docs/power.md`.
 T01 vt snapshot · T02 outbound queue · T03 storage · T04 daemon · T05 websocket
 transport · T06 host identity · T07 CLI surface · T08 ssh bootstrap · T09 picker
 TUI · T10 packaging · T11 serving core · T12 private names · T13 public edge ·
-T14 `mesh serve` · T15 SSH front door · T17 sessions over SSH · T19 wake and sleep inhibition · T20 Tailscale provisioning · T22 live
+T14 `mesh serve` · T15 SSH front door · T17 sessions over SSH · T18 reverse tunnels · T19 wake and sleep inhibition · T20 Tailscale provisioning · T22 live
 session inspector · T23 Mesh as your terminal · T24 workspace crash recovery ·
 T25 exact Codex and Claude conversation recovery.
 
@@ -207,12 +210,12 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 | 6 Wake and sleep inhibition | T19 | complete |
 | 7 Packaging | T10 | complete |
 | 8 Serving | T11, T12, T13, T14 | complete |
-| 9 SSH front door | T15, T16, T17, T18 | T15, T17 complete |
+| 9 SSH front door | T15, T16, T17, T18 | T15, T17, T18 complete |
 | 10 Mesh as your terminal | T23 | complete |
 
 ## Next
 
-T16 and T18 remain independent and unblocked. T25 now captures and resumes exact
+T18 is complete. T16 remains unblocked. T25 now captures and resumes exact
 native conversations on the owning host. Claude Code 2.1.261 confirms resume
 through its hook. Codex CLI 0.153.4 direct TUI restores history but remains
 unverified until a matching hook arrives. Shared Codex app-server clients require
@@ -221,7 +224,6 @@ explicit binding because hooks inherit the server's invocation environment.
 | Task | Owns | Blocked by |
 |---|---|---|
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
-| T18 reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
 
 T24 recovers a shell in its last saved directory, retains previous output and
 attempts, and resolves exact remote targets from the Mesh CLI. SSH recovery stays
@@ -235,7 +237,7 @@ protocol. The CLI, picker, and public edge now use the wake implementation.
 
 Future agent compatibility work includes other provider versions, pending native
 work, and a managed standalone Codex daemon. These are outside the tested support
-matrix. T16 and T18 can proceed independently.
+matrix. T16 remains the unfinished SSH front door task.
 
 ## Known defects
 

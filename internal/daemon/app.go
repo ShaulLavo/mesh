@@ -23,6 +23,7 @@ import (
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/tailnet"
+	"github.com/shaul/mesh/internal/tunnel"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -313,6 +314,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return fmt.Errorf("daemon: restore services: %w", err)
 	}
 	var edgeRegistry *edge.Registry
+	var tunnelForwarder tunnel.Activator
 	var edgeControl controlHandler = disabledEdgeController{}
 	var publicListenAddress string
 	var publicHTTPHandler http.Handler
@@ -330,6 +332,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		}
 		defer edgeRegistry.Close()
 		controller, err := edge.NewController(daemonCtx, edge.ControllerConfig{
+			TunnelState: store, AuthorizeTunnel: sshd.Authorizer(filepath.Join(stateDir, "authorized_keys")),
 			TargetID: meshHost.ID, Origins: publicEdgeConfig.Origins, State: store, Registry: edgeRegistry,
 			Resolve: edge.TailscaleResolver(discoverAllPeers), Pin: waker.pin, Now: opts.now,
 		})
@@ -337,6 +340,10 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			return fmt.Errorf("daemon: configure public edge registration: %w", err)
 		}
 		edgeControl = controller
+		tunnelForwarder = controller
+		defer controller.CloseTunnels()
+		stopTunnelShutdown := context.AfterFunc(daemonCtx, controller.CloseTunnels)
+		defer stopTunnelShutdown()
 		publicListenAddress = publicEdgeConfig.ListenAddress
 		publicHTTPHandler = edgeRegistry
 		publicMode = publicEdgeConfig.Mode
@@ -445,6 +452,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		}
 		for _, address := range sshAddrs {
 			listener.sshConfigs = append(listener.sshConfigs, sshd.Config{
+				Tunnels:        tunnelForwarder,
 				Handler:        sessionHandler,
 				HostKey:        meshPrivateKey,
 				AuthorizedKeys: filepath.Join(stateDir, "authorized_keys"),

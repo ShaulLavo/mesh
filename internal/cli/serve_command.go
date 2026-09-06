@@ -30,6 +30,7 @@ const (
 // PublicConfirmation contains the exact origin-authoritative facts shown
 // before a public mutation.
 type PublicConfirmation struct {
+	TunnelClaim         bool
 	Host                HostRecord
 	Service             protocol.ServiceInfo
 	FileCount           uint64
@@ -71,7 +72,7 @@ func (a *application) serveCommand() *cobra.Command {
 	command.Flags().BoolVar(&isolate, "isolate", false, "send cross-origin isolation headers so the page can use SharedArrayBuffer")
 	command.Flags().BoolVar(&yes, "yes", false, "skip the public confirmation prompt")
 	command.Flags().BoolVar(&allowCredentials, "allow-credentials", false, "allow credential-like names in a public directory")
-	command.AddCommand(a.serveListCommand())
+	command.AddCommand(a.serveListCommand(), a.serveClaimCommand())
 	return command
 }
 
@@ -222,6 +223,7 @@ func (a *application) runServeList(cmd *cobra.Command, timeout time.Duration) er
 func (a *application) unserveCommand() *cobra.Command {
 	var (
 		hostAlias string
+		localEdge bool
 		timeout   time.Duration
 	)
 	command := &cobra.Command{
@@ -229,6 +231,12 @@ func (a *application) unserveCommand() *cobra.Command {
 		Short: "Remove one service and wait for public withdrawal",
 		Args:  exactArgs(1, "the route to remove", "mesh unserve blog.shaulavo.dev"),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if localEdge {
+				return a.runLocalTunnelRelease(cmd, args[0], hostAlias)
+			}
+			if !strings.HasPrefix(args[0], "/") {
+				return a.runTunnelRelease(cmd, args[0], hostAlias)
+			}
 			if timeout <= 0 || timeout > maximumServiceListTimeout {
 				return fmt.Errorf("--timeout must be between 1ns and %s", maximumServiceListTimeout)
 			}
@@ -236,6 +244,7 @@ func (a *application) unserveCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&hostAlias, "host", "", "host alias when more than one host owns ROUTE")
+	command.Flags().BoolVar(&localEdge, "local-edge", false, "release a tunnel reservation through this edge's local daemon socket")
 	command.Flags().DurationVar(&timeout, "timeout", defaultServiceListTimeout, "hard deadline for ownership discovery")
 	return command
 }
@@ -415,10 +424,18 @@ func terminalPublicConfirmation(input *os.File, output io.Writer) ConfirmPublicF
 		if input == nil || !term.IsTerminal(input.Fd()) {
 			return false, errors.New("public publication needs an interactive terminal or --yes")
 		}
-		if _, err := fmt.Fprintf(output, "Publish this service to the internet?\n  Host: %s\n", confirmation.Host.Alias); err != nil {
+		question := "Publish this service to the internet?"
+		if confirmation.TunnelClaim {
+			question = "Reserve this hostname for an internet tunnel?"
+		}
+		if _, err := fmt.Fprintf(output, "%s\n  Host: %s\n", question, confirmation.Host.Alias); err != nil {
 			return false, err
 		}
-		if confirmation.Service.Kind == string(meshserve.Proxy) {
+		if confirmation.TunnelClaim {
+			if _, err := fmt.Fprintln(output, "  Exposure: public while your SSH forward is connected"); err != nil {
+				return false, err
+			}
+		} else if confirmation.Service.Kind == string(meshserve.Proxy) {
 			if _, err := fmt.Fprintf(output, "  Target: port %s\n", safeTableCell(confirmation.Service.Target)); err != nil {
 				return false, err
 			}

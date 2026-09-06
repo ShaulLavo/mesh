@@ -1,0 +1,13 @@
+# Shared implementation contracts
+
+`tunnel.Mutation{Action Action, TargetID string, ClaimantID string, Sequence uint64, PublicName string, Signature []byte}`. Action constants Create and Release. `Sign(key ed25519.PrivateKey, targetID string, action Action, publicName string, sequence uint64) (Mutation,error)`, `Canonical(Mutation) ([]byte,error)`, `Verify(Mutation,targetID string) (string,error)` returning hex digest. `KeyID(ed25519.PublicKey) string`.
+
+`tunnel.Ack{Sequence uint64, Digest string, Error string}`. Error is an exact definitive-refusal receipt, not a success. Only a receipt matching sequence and digest clears outbox; transport/storage ambiguity has no receipt and retains exact bytes. Local stream sequence remains consumed even after a refusal.
+
+`tunnel.Claim{PublicName, ClaimantID string}`. `tunnel.StateStore` has `TunnelVersion(ctx, claimantID) (Ack,error)`, `TunnelClaim(ctx, publicName) (Claim,error)`, `ApplyTunnelMutation(ctx, Mutation,digest string) error`, `DeleteTunnelClaim(ctx, publicName) error`. Sentinels ErrNotFound, ErrCollision, ErrStaleSequence, ErrSequenceConflict, ErrCapacity, ErrActive, ErrUnauthorized, ErrRateLimited. Constants MaximumClaimsPerKey=32, MaximumClaimants=4096, MaximumRateEntries=4096, MaximumFrameBytes=4096, MaximumForwardsPerKey=8.
+
+Storage: `(*Store).DeliverTunnelMutation(ctx,targetID string,key ed25519.PrivateKey,action tunnel.Action,publicName string,send func(context.Context,tunnel.Mutation)(tunnel.Ack,error)) (tunnel.Ack,error)`. Cross-process stream file lock through send and ack; SQLite writer reservation before allocation, commit exact transcript/digest/signature before send; exact conditional ack clears payload but retains sequence. Existing pending attempt delivered before successor; same action/name pending satisfies rerun. Store tracks DB path for stream lock path. Keep stream lock files in state dir, safe regular 0600 files. Never hold database write transaction over network.
+
+Protocol fields `TunnelMutation *tunnel.Mutation`, `TunnelAck *tunnel.Ack`, `TunnelName string`; types TypeTunnelClaim="tunnel.claim", TypeTunnelClaimed="tunnel.claimed", TypeTunnelRecover="tunnel.recover", TypeTunnelRecovered="tunnel.recovered". Controller handles signed mutation; daemon alone gates recover by localClientKey.
+
+Edge Controller owns claim mutation, activation, deactivation under existing commitGate. Optional `ControllerConfig.TunnelState tunnel.StateStore` + `AuthorizeTunnel func(string) bool` allow current T13 fakes unchanged; daemon supplies store and sshd authorization callback. Registry has a separate bounded active tunnel map. Both public paths retain shared ingress validation and global/client quotas; terminal reserved paths remain 404.

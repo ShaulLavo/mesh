@@ -84,7 +84,12 @@ ssh pc.mesh.shaulavo.dev ls       # list sessions without a terminal
 
 Press `ctrl+]` to return to the picker. Closing SSH leaves the session running.
 A phone with Tailscale and an SSH client can use the same commands after you
-import an authorized key. SFTP and named reverse tunnels remain planned.
+import an authorized key. SFTP remains planned.
+
+To reach an app on your current machine from outside the tailnet, reserve a
+hostname with `mesh serve claim vps blog.shaulavo.dev`, then connect a named
+SSH reverse forward. See [Reach a local app through the public edge](docs/reverse-tunnels.md)
+for the exact identity and SSH command. Disconnecting returns the hostname to 404.
 
 ## Development
 

@@ -17,6 +17,7 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/transport"
+	"github.com/shaul/mesh/internal/tunnel"
 )
 
 const (
@@ -49,28 +50,34 @@ type PinOrigin func(context.Context, netip.AddrPort, OriginConfig) error
 
 // ControllerConfig fixes every registration trust anchor at startup.
 type ControllerConfig struct {
-	TargetID       string
-	Origins        []OriginConfig
-	State          StateStore
-	Registry       *Registry
-	Resolve        ResolveOrigin
-	Pin            PinOrigin
-	Now            func() time.Time
-	RequestTimeout time.Duration
+	TunnelState     tunnel.StateStore
+	AuthorizeTunnel func(string) bool
+	TargetID        string
+	Origins         []OriginConfig
+	State           StateStore
+	Registry        *Registry
+	Resolve         ResolveOrigin
+	Pin             PinOrigin
+	Now             func() time.Time
+	RequestTimeout  time.Duration
 }
 
 // Controller authenticates, persists, and publishes complete origin state.
 type Controller struct {
-	targetID       string
-	origins        map[string]OriginConfig
-	state          StateStore
-	registry       *Registry
-	resolve        ResolveOrigin
-	pin            PinOrigin
-	now            func() time.Time
-	timeout        time.Duration
-	wakerAvailable bool
-	lifetime       context.Context
+	tunnelState     tunnel.StateStore
+	authorizeTunnel func(string) bool
+	activeTunnels   map[string]*tunnelRoute
+	tunnelRates     map[string]*tunnelRateEntry
+	targetID        string
+	origins         map[string]OriginConfig
+	state           StateStore
+	registry        *Registry
+	resolve         ResolveOrigin
+	pin             PinOrigin
+	now             func() time.Time
+	timeout         time.Duration
+	wakerAvailable  bool
+	lifetime        context.Context
 
 	commitGate  chan struct{}
 	live        map[string]liveOrigin
@@ -123,6 +130,8 @@ func NewController(ctx context.Context, config ControllerConfig) (*Controller, e
 		return nil, fmt.Errorf("edge: registration timeout %s is outside (0,%s]", config.RequestTimeout, maximumRegisterTimeout)
 	}
 	controller := &Controller{
+		tunnelState: config.TunnelState, authorizeTunnel: config.AuthorizeTunnel,
+		activeTunnels: make(map[string]*tunnelRoute), tunnelRates: make(map[string]*tunnelRateEntry),
 		targetID: config.TargetID, origins: origins, state: config.State, registry: config.Registry,
 		resolve: config.Resolve, pin: config.Pin, now: config.Now, timeout: config.RequestTimeout,
 		wakerAvailable: config.Registry.WakeAvailable(),
@@ -146,6 +155,8 @@ func (c *Controller) HandleControl(ctx context.Context, request protocol.Control
 		return protocol.Control{}, false, errors.New("edge: nil control context")
 	}
 	switch request.Type {
+	case protocol.TypeTunnelClaim:
+		return c.handleTunnelClaim(ctx, request)
 	case protocol.TypeEdgeRegister:
 		if err := validateEdgeRequestID(request.RequestID); err != nil {
 			return protocol.Control{}, true, err

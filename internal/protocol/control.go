@@ -7,6 +7,7 @@ import (
 
 	"github.com/shaul/mesh/internal/agentresume"
 	"github.com/shaul/mesh/internal/recovery"
+	"github.com/shaul/mesh/internal/tunnel"
 	"github.com/shaul/mesh/internal/wake"
 )
 
@@ -44,6 +45,10 @@ const (
 	TypeEdgeRegistered     = "edge.registered"
 	TypeEdgeList           = "edge.list"
 	TypeEdgeListed         = "edge.listed"
+	TypeTunnelClaim        = "tunnel.claim"
+	TypeTunnelClaimed      = "tunnel.claimed"
+	TypeTunnelRecover      = "tunnel.recover"
+	TypeTunnelRecovered    = "tunnel.recovered"
 
 	TypeHostInfoResult       = "host.info.result"
 	TypeServiceUpserted      = "service.upserted"
@@ -268,14 +273,17 @@ type Control struct {
 	CertificatePrivateName string              `json:"certificatePrivateName,omitempty"`
 
 	// Public edge registration and safe status.
-	EdgeSnapshot   *EdgeSnapshot   `json:"edgeSnapshot,omitempty"`
-	EdgeSequence   uint64          `json:"edgeSequence,omitempty"`
-	EdgeDigest     string          `json:"edgeDigest,omitempty"`
-	EdgeRoutes     []EdgeRouteInfo `json:"edgeRoutes,omitempty"`
-	EdgeCursor     string          `json:"edgeCursor,omitempty"`
-	EdgeNextCursor string          `json:"edgeNextCursor,omitempty"`
-	EdgeLimit      int             `json:"edgeLimit,omitempty"`
-	EdgeListProof  *EdgeListProof  `json:"edgeListProof,omitempty"`
+	EdgeSnapshot   *EdgeSnapshot    `json:"edgeSnapshot,omitempty"`
+	EdgeSequence   uint64           `json:"edgeSequence,omitempty"`
+	EdgeDigest     string           `json:"edgeDigest,omitempty"`
+	EdgeRoutes     []EdgeRouteInfo  `json:"edgeRoutes,omitempty"`
+	EdgeCursor     string           `json:"edgeCursor,omitempty"`
+	EdgeNextCursor string           `json:"edgeNextCursor,omitempty"`
+	EdgeLimit      int              `json:"edgeLimit,omitempty"`
+	EdgeListProof  *EdgeListProof   `json:"edgeListProof,omitempty"`
+	TunnelMutation *tunnel.Mutation `json:"tunnelMutation,omitempty"`
+	TunnelAck      *tunnel.Ack      `json:"tunnelAck,omitempty"`
+	TunnelName     string           `json:"tunnelName,omitempty"`
 
 	// Error
 	ErrorCode string `json:"errorCode,omitempty"`

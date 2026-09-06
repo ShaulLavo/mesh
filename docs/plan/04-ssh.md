@@ -108,8 +108,8 @@ grant SSH access.
 
 Mesh listens on port 2222 at each address returned by Tailscale discovery. It
 does not bind a wildcard address, loopback, or the system SSH port. Every door
-above is reachable only from the tailnet. The VPS is the sole exception, and
-only for the tunnel endpoint.
+above is reachable only from the tailnet. Tunnelled HTTP enters through the
+VPS public HTTP edge; its SSH connection still uses the tailnet.
 
 Wish ships the middleware this needs and we should use all of it rather than
 reinvent any of it: `accesscontrol`, `activeterm`, `ratelimiter`, `recover`,
@@ -141,9 +141,10 @@ nobody asked for, and anything reachable without an authorized key.
 | T15 SSH front door (complete) | `internal/sshd/` | — |
 | T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
 | T17 Sessions over SSH (complete) | `internal/sshd/session.go` | T09, T15 |
-| T18 Reverse tunnels | `internal/tunnel/`, claim adapters | T13, T15 |
+| T18 Reverse tunnels (complete) | `internal/tunnel/`, claim adapters | T13, T15 |
 
-T15 and T17 are complete. T16 and T18 are independent.
+T15, T17, and T18 are complete. T16 remains unblocked.
+See [reverse tunnels](../reverse-tunnels.md) for claims, reconnects, and recovery.
 
 ## What we verified before planning this
 

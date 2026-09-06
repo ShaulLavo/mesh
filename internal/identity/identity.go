@@ -25,14 +25,20 @@ type Host struct {
 
 // Load reads the existing host identity without creating one.
 func Load(stateDir string) (Host, error) {
+	host, _, err := LoadPrivate(stateDir)
+	return host, err
+}
+
+// LoadPrivate reads the existing identity and signing key without creating one.
+func LoadPrivate(stateDir string) (Host, ed25519.PrivateKey, error) {
 	if stateDir == "" {
-		return Host{}, errors.New("identity state directory is empty")
+		return Host{}, nil, errors.New("identity state directory is empty")
 	}
 	private, err := loadPrivateKey(filepath.Join(stateDir, privateKeyName))
 	if err != nil {
-		return Host{}, err
+		return Host{}, nil, err
 	}
-	return hostFor(private), nil
+	return hostFor(private), private, nil
 }
 
 // LoadOrCreate loads the host identity from stateDir or creates it atomically.

@@ -26,6 +26,7 @@ const (
 type Store struct {
 	db      *sql.DB
 	queries *dbsqlc.Queries
+	path    string
 
 	closeOnce sync.Once
 	closeErr  error
@@ -52,7 +53,7 @@ func Open(ctx context.Context, databasePath string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("storage: migrate %s: %w", databasePath, err)
 	}
-	return &Store{db: db, queries: dbsqlc.New(db)}, nil
+	return &Store{db: db, queries: dbsqlc.New(db), path: databasePath}, nil
 }
 
 // Close releases every database handle. It is safe to call more than once.

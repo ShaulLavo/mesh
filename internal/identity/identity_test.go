@@ -72,6 +72,31 @@ func TestLoadReadsAnExistingIdentityWithoutCreatingOne(t *testing.T) {
 	}
 }
 
+func TestLoadPrivateReadsExistingKeyAndNeverCreates(t *testing.T) {
+	stateDir := t.TempDir()
+	wantHost, wantKey, err := LoadOrCreate(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, key, err := LoadPrivate(stateDir)
+	if err != nil || host.ID != wantHost.ID || !bytes.Equal(key, wantKey) {
+		t.Fatalf("loaded identity differs: host=%#v error=%v", host, err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, _, err := LoadPrivate(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing identity error=%v", err)
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("LoadPrivate created a directory: %v", err)
+	}
+	if err := os.Chmod(filepath.Join(stateDir, "identity.key"), 0o644); err != nil { //nolint:gosec // deliberately insecure identity mode must be rejected
+		t.Fatal(err)
+	}
+	if _, _, err := LoadPrivate(stateDir); err == nil {
+		t.Fatal("LoadPrivate accepted an insecure key")
+	}
+}
+
 func TestLoadOrCreatePublishesOneIdentityConcurrently(t *testing.T) {
 	const callers = 24
 

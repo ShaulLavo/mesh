@@ -1,6 +1,6 @@
 # T18 — Reverse tunnels through the edge
 
-**Status:** not started · **Blocked by:** T13, T15 · **Owns:**
+**Status:** done · **Blocked by:** nothing · **Owns:**
 `internal/tunnel/`, `internal/cli/serve_claim.go`, `internal/edge/tunnel_claim.go`
 
 ## Goal
@@ -201,3 +201,34 @@ state.
 
 Local forwarding (`ssh -L`), which Tailscale already does better. UDP. Anything
 that forwards to a destination other than the connecting client's own machine.
+
+
+## Implementation and verification
+
+Run `./scripts/check-t18.sh` for the focused contract checks. The usage guide is
+[Reach a local app through the public edge](../reverse-tunnels.md).
+
+- `internal/tunnel` implements the golden canonical transcript and constrained
+  SSH request/channel flow. Eight forwards per key share four channels per
+  forward, with a 48 MiB stream allowance that includes SSH windows, queued channel
+  requests, and HTTP headers. A 15-second keepalive cadence starts cleanup after three unanswered
+  intervals. Only one reply-required probe can remain outstanding.
+- `internal/storage/tunnel*` persists claims, one high-water row per claimant,
+  and exact signed outbox attempts. Each stream holds a process-released file
+  lock across delivery. Short SQLite write transactions allocate sequences and
+  store the transcript before sending; no database write lock spans the network.
+- A conclusive refusal repeats the attempt's sequence and digest, clears that
+  exact pending attempt, and retains its consumed local sequence. Ambiguous
+  results retain the attempt. This lets a refused create yield to a later release.
+- The edge applies claims and T13 publications through the same mutation gate
+  and checks whole-hostname collisions and combined capacity in SQLite.
+  Activated routes use token-bound cleanup and the existing public request
+  limits. Terminal paths remain excluded after decoding and normalization.
+- Tests cover the durable and ingress caps, replay and revocation, publication
+  races, two-process outbox delivery and kill-after-send recovery, live HTTP
+  streaming, stale cleanup, SSH keepalive expiry, channel backpressure, and the
+  daemon's Unix-only recovery boundary.
+- `integration/reverse_tunnels.sh` runs the tagged daemon, stock CLI, and stock
+  OpenSSH. It checks inactive 404, HTTP forwarding, invalid forwards, cancellation,
+  disconnect/reconnect, restart, owner release after revocation, and recovery
+  after key loss.

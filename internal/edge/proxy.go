@@ -13,6 +13,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -110,6 +111,8 @@ type RouteStatus struct {
 
 // Registry atomically publishes a complete public route table.
 type Registry struct {
+	tunnelsMu        sync.RWMutex
+	tunnels          map[string]*tunnelRoute
 	mode             Mode
 	waker            Waker
 	wakerConfigured  bool
@@ -197,7 +200,8 @@ func NewRegistry(config HandlerConfig) (*Registry, error) {
 		MaxResponseHeaderBytes: maximumResponseHeaderBytes,
 	}
 	registry := &Registry{
-		mode: config.Mode, waker: config.Waker, wakerConfigured: wakerConfigured, now: config.Now, transport: transport,
+		tunnels: make(map[string]*tunnelRoute),
+		mode:    config.Mode, waker: config.Waker, wakerConfigured: wakerConfigured, now: config.Now, transport: transport,
 		rate:    newClientRateLimiter(maximumRateClients, maximumRequestsPerMinute, time.Minute),
 		clients: newClientConcurrencyLimiter(maximumConcurrentPerClient),
 		budgets: make(map[string]chan struct{}), global: make(chan struct{}, maximumConcurrentUpstreams), change: make(chan struct{}),
@@ -432,6 +436,10 @@ func (r *Registry) ServeHTTP(response http.ResponseWriter, request *http.Request
 	}
 	request = request.WithContext(context.WithValue(request.Context(), proxyClientIPKey{}, clientIP))
 	request.Host = forwardedHost
+	if route := r.findTunnel(publicName); route != nil {
+		route.serve(response, request, r)
+		return
+	}
 
 	requestPath := request.URL.EscapedPath()
 	snapshot := r.snapshot.Load()
@@ -632,7 +640,8 @@ func removeForwarded(header http.Header) {
 func reservedTerminalPath(parsed *url.URL, configured string) bool {
 	value := parsed.Path
 	for range 5 {
-		if pathWithin(value, "/mesh") || pathWithin(value, configured) {
+		cleaned := path.Clean(strings.ReplaceAll(value, "\\", "/"))
+		if pathWithin(value, "/mesh") || pathWithin(value, configured) || pathWithin(cleaned, "/mesh") || pathWithin(cleaned, configured) {
 			return true
 		}
 		decoded, err := url.PathUnescape(value)

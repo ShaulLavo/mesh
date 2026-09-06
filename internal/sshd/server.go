@@ -18,6 +18,8 @@ import (
 
 	charmssh "github.com/charmbracelet/ssh"
 	gossh "golang.org/x/crypto/ssh"
+
+	"github.com/shaul/mesh/internal/tunnel"
 )
 
 const (
@@ -96,6 +98,7 @@ func (c *boundedConn) Close() error {
 // Config identifies one concrete SSH listener and its authentication state.
 // Addr must include both the discovered Tailnet address and the SSH port.
 type Config struct {
+	Tunnels        tunnel.Activator
 	HostKey        ed25519.PrivateKey
 	AuthorizedKeys string
 	Addr           string
@@ -103,6 +106,7 @@ type Config struct {
 }
 
 type normalizedConfig struct {
+	tunnels        tunnel.Activator
 	hostKey        ed25519.PrivateKey
 	authorizedKeys string
 	addr           netip.AddrPort
@@ -180,7 +184,7 @@ func validateConfig(ctx context.Context, cfg Config) (normalizedConfig, error) {
 	if addr.Port() == 0 || addr.Addr().IsUnspecified() || addr.Addr().IsMulticast() {
 		return normalizedConfig{}, fmt.Errorf("sshd: listen address %q is not a concrete IP endpoint", cfg.Addr)
 	}
-	return normalizedConfig{hostKey: hostKey, authorizedKeys: authorizedKeys, addr: addr, handler: cfg.Handler}, nil
+	return normalizedConfig{hostKey: hostKey, authorizedKeys: authorizedKeys, addr: addr, handler: cfg.Handler, tunnels: cfg.Tunnels}, nil
 }
 
 func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server, error) {
@@ -223,7 +227,24 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 		handler = helloHandler
 	}
 	configureSessions(server, cfg.handler, handler)
+	if cfg.tunnels != nil {
+		if err := server.SetOption(tunnel.SSHOption(cfg.tunnels)); err != nil {
+			return nil, fmt.Errorf("sshd: configure reverse tunnels: %w", err)
+		}
+	}
 	return server, nil
+}
+
+// Authorizer checks the current managed file on every reservation or activation.
+func Authorizer(path string) func(string) bool {
+	return func(id string) bool {
+		key, err := tunnel.PublicKey(id)
+		if err != nil {
+			return false
+		}
+		public, err := gossh.NewPublicKey(key)
+		return err == nil && isAuthorized(path, public)
+	}
 }
 
 func marshalHostKey(private ed25519.PrivateKey) ([]byte, gossh.Signer, error) {

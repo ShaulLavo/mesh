@@ -14,6 +14,7 @@ import (
 	"github.com/shaul/mesh/internal/recovery"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/transport"
+	"github.com/shaul/mesh/internal/tunnel"
 )
 
 // clientServer dispatches frames for each disposable client connection. Its
@@ -103,8 +104,18 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			}
 			continue
 		}
+		if request.Type == protocol.TypeTunnelClaim && len(frame.Payload) > tunnel.MaximumFrameBytes {
+			if err := writeClientRequestError(relay, request, errors.New("tunnel: claim frame exceeds 4 KiB")); err != nil {
+				return err
+			}
+			continue
+		}
 
 		response, lifecycleHandled, requestErr := s.lifecycle.HandleControl(ctx, request)
+		if !lifecycleHandled && request.Type == protocol.TypeTunnelRecover {
+			response, requestErr = s.recoverTunnel(ctx, request)
+			lifecycleHandled = true
+		}
 		if !lifecycleHandled {
 			response, lifecycleHandled, requestErr = s.edge.HandleControl(ctx, request)
 		}
