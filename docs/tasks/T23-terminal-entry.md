@@ -108,12 +108,13 @@ is the part that needs a script.
      terminal.
    - One or more detached sessions: the compact prompt. Each row is the picker
      row: project label, ID, `on pc/B` when something is nested inside, last
-     output age. The newest is preselected and a few preview lines show under
+     output age. The most recently attached is preselected, falling back to
+     creation time when unavailable, and a few preview lines show under
      it. `enter` resumes, a digit picks another, `n` starts fresh, `l` opens
      the full picker, `x` forgets an interrupted session. Attached sessions are
      listed last, are never preselected, and need the picker's existing
      "take over" path (D28).
-   - `--take` resumes the newest detached session without the prompt, and
+   - `--take` resumes the most recently used detached session without the prompt, and
      starts fresh when there is none. A Hyprland keybind that spawns three
      windows with `--take` restores three sessions.
    - Interrupted sessions appear below detached ones and `enter` on one starts

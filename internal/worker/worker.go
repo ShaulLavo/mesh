@@ -102,6 +102,7 @@ type Worker struct {
 	ring   *session.Ring
 	screen terminalstate.Screen
 	now    func() time.Time
+	metaMu sync.Mutex
 
 	observeProcess   processObserver
 	checkpointMu     sync.Mutex
@@ -118,15 +119,16 @@ type Worker struct {
 	// mu orders ring delivery, attachment ownership, and shutdown. A client
 	// attaching mid-write cannot miss bytes, and finish cannot race a new writer
 	// or terminal output queued after session.exit.
-	mu           sync.Mutex
-	client       *attachment
-	attachments  map[*attachment]struct{}
-	nesting      map[net.Conn]protocol.SessionIdentity
-	nestReaders  sync.WaitGroup
-	input        *inputRelay
-	finished     bool
-	pumpStopped  bool
-	lastOutputAt time.Time
+	mu             sync.Mutex
+	client         *attachment
+	attachments    map[*attachment]struct{}
+	nesting        map[net.Conn]protocol.SessionIdentity
+	nestReaders    sync.WaitGroup
+	input          *inputRelay
+	finished       bool
+	pumpStopped    bool
+	lastOutputAt   time.Time
+	lastAttachedAt time.Time
 	// reaped is set once Process.Wait has returned. After that the PID is the
 	// kernel's to reuse, so signalling it — or its negation, now that the child
 	// is a real process group leader — can land on an unrelated process.
@@ -356,13 +358,8 @@ func (a *attachment) writeLoop(w *Worker) {
 		if w.client == a {
 			w.client = nil
 		}
-		remaining := len(w.attachments)
 		w.mu.Unlock()
-		// Counted under the same lock that removed it, and written outside so
-		// file IO never runs under the lock that orders ring delivery.
-		if remaining == 0 {
-			w.recordAttachment(false)
-		}
+		w.recordAttachment()
 		w.writers.Done()
 	}()
 
@@ -550,7 +547,7 @@ func Run(cfg Config) (int, error) {
 	if err := w.flushScrollback(cfg.Dir); err != nil {
 		log.Printf("worker: retain scrollback: %v", err)
 	}
-	if err := WriteMeta(cfg.Dir, meta); err != nil {
+	if err := w.recordExit(meta); err != nil {
 		log.Printf("worker: record exit: %v", err)
 	}
 	_ = w.pty.Close()
@@ -773,7 +770,9 @@ func (w *Worker) flushScrollback(dir string) error {
 // It never moves a session that has already recorded its outcome: the exit path
 // writes meta too, and resurrecting an exited session as detached would be far
 // worse than a stale label.
-func (w *Worker) recordAttachment(attached bool) {
+func (w *Worker) recordAttachment() {
+	w.metaMu.Lock()
+	defer w.metaMu.Unlock()
 	meta, err := ReadMeta(w.cfg.Dir)
 	if err != nil {
 		return
@@ -781,15 +780,33 @@ func (w *Worker) recordAttachment(attached bool) {
 	if meta.State != StateRunning && meta.State != StateDetached {
 		return
 	}
+	w.mu.Lock()
+	attached, lastAttachedAt := w.client != nil, w.lastAttachedAt
+	w.mu.Unlock()
 	want := StateDetached
 	if attached {
 		want = StateRunning
 	}
-	if meta.State == want {
+	if meta.State == want && (lastAttachedAt.IsZero() || meta.LastAttachedAt != nil && meta.LastAttachedAt.Equal(lastAttachedAt)) {
 		return
 	}
 	meta.State = want
+	if !lastAttachedAt.IsZero() {
+		meta.LastAttachedAt = &lastAttachedAt
+	}
 	if err := WriteMeta(w.cfg.Dir, meta); err != nil {
 		log.Printf("worker: record attachment: %v", err)
 	}
+}
+
+func (w *Worker) recordExit(meta Meta) error {
+	w.metaMu.Lock()
+	defer w.metaMu.Unlock()
+	w.mu.Lock()
+	lastAttachedAt := w.lastAttachedAt
+	w.mu.Unlock()
+	if !lastAttachedAt.IsZero() {
+		meta.LastAttachedAt = &lastAttachedAt
+	}
+	return WriteMeta(w.cfg.Dir, meta)
 }

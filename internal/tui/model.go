@@ -50,6 +50,7 @@ type session struct {
 	command         []string
 	cwd             string
 	createdAt       time.Time
+	lastActiveAt    time.Time
 	recovery        *recovery.Record
 	recoveryError   string
 	agentStatus     string
@@ -406,6 +407,7 @@ func (m *model) showSessions() tea.Cmd {
 
 func (m *model) enterSessions(hostIndex int) {
 	m.selectedHost = hostIndex
+	m.hosts[hostIndex].sessions = orderSessionsByActivity(m.hosts[hostIndex].sessions)
 	m.screen = sessionScreen
 	m.notice = ""
 	m.list.SetDelegate(sessionDelegate{styles: m.styles, now: m.now})

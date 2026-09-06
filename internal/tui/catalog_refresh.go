@@ -79,6 +79,7 @@ func (m model) applyCatalogRefresh(message catalogRefreshResultMsg) (model, tea.
 	previousHost := m.currentHost()
 	previousState, _ := sessionState(previousHost.sessions, selectedID)
 	refreshedHost := hostCatalog(cli.PickerInput{Hosts: []cli.HostSessions{message.snapshot.Sessions}})[0]
+	refreshedHost.sessions = preserveSessionOrder(previousHost.sessions, refreshedHost.sessions)
 	actionConfirmed := m.reconcileSessionAction(refreshedHost)
 	if actionConfirmed || sessionCatalogChanged(previousHost, refreshedHost) && m.sessionAction.phase == sessionActionIdle {
 		m.notice = ""
@@ -114,6 +115,28 @@ func (m model) applyCatalogRefresh(message catalogRefreshResultMsg) (model, tea.
 		m.fullPreview = false
 	}
 	return m, tea.Batch(listCommand, m.restartInspectionLoop(), nextRefresh)
+}
+
+// Refresh row contents in place. New sessions appear at the end until the user
+// reopens the host, when activity determines the order again.
+func preserveSessionOrder(previous, refreshed []session) []session {
+	byID := make(map[string]session, len(refreshed))
+	for _, current := range refreshed {
+		byID[current.id] = current
+	}
+	ordered := make([]session, 0, len(refreshed))
+	for _, current := range previous {
+		if updated, exists := byID[current.id]; exists {
+			ordered = append(ordered, updated)
+			delete(byID, current.id)
+		}
+	}
+	for _, current := range orderSessionsByActivity(refreshed) {
+		if _, exists := byID[current.id]; exists {
+			ordered = append(ordered, current)
+		}
+	}
+	return groupRecoveryAttempts(ordered)
 }
 
 func sessionCatalogChanged(previous, refreshed host) bool {

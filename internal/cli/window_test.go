@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
@@ -139,6 +140,30 @@ func TestOfflineForgetLeavesDurableMarkerAndHidesLocalRecord(t *testing.T) {
 	rows, err := List()
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("forgotten session remains visible: %#v, %v", rows, err)
+	}
+}
+
+func TestLocalPickerPreservesAttachmentActivity(t *testing.T) {
+	setupCommandTestHost(t)
+	dir, err := paths.SessionDir("7K3D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	attached := commandTestTime.Add(time.Hour)
+	meta := worker.Meta{ID: "7K3D", State: worker.StateDetached, Command: []string{"bash"}, Cwd: "/work", CreatedAt: commandTestTime, LastAttachedAt: &attached}
+	if err := worker.WriteMeta(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := localSessionRows()
+	if err != nil || len(rows) != 1 || rows[0].LastAttachedAt == nil || !rows[0].LastAttachedAt.Equal(attached) {
+		t.Fatalf("local picker activity = %+v, %v", rows, err)
+	}
+	rows = windowSessionRows(append(rows, protocol.SessionInfo{ID: "NEW", State: rows[0].State, CreatedAt: attached.Add(-time.Minute)}))
+	if rows[0].ID != "7K3D" {
+		t.Fatalf("window resume order = %+v", rows)
 	}
 }
 

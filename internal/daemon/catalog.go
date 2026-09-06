@@ -266,11 +266,12 @@ func sessionFromMeta(hostID storage.HostID, directory string, meta worker.Meta) 
 	}
 
 	session := storage.Session{
-		ID:        storage.SessionID(meta.ID),
-		HostID:    hostID,
-		Command:   append([]string(nil), meta.Command...),
-		Cwd:       meta.Cwd,
-		CreatedAt: meta.CreatedAt,
+		ID:             storage.SessionID(meta.ID),
+		HostID:         hostID,
+		Command:        append([]string(nil), meta.Command...),
+		Cwd:            meta.Cwd,
+		CreatedAt:      meta.CreatedAt,
+		LastAttachedAt: cloneLifecycleTime(meta.LastAttachedAt),
 	}
 	switch meta.State {
 	case worker.StateRunning, worker.StateDetached:

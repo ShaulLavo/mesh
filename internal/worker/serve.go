@@ -181,11 +181,14 @@ func (w *Worker) serve(conn net.Conn) {
 		w.dropLocked(prev, protocol.ReasonStolen)
 	}
 	w.client = c
+	if now := w.currentTime().UTC(); now.After(w.lastAttachedAt) {
+		w.lastAttachedAt = now
+	}
 	writerOwnsConn = true
 	c.startLocked(w)
 	w.attachOnce.Do(func() { close(w.attached) })
 	w.mu.Unlock()
-	w.recordAttachment(true)
+	w.recordAttachment()
 
 	defer func() {
 		w.mu.Lock()

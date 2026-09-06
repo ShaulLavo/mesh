@@ -125,7 +125,7 @@ func TestPickerRefreshKeepsANewlyListedContainingSessionOnItsPrePickerSnapshot(t
 		}},
 	})
 	current = refreshed
-	current.list.Select(1)
+	current.list.Select(preservedSessionIndex(current.currentHost().sessions, outer.ID, 0))
 	if got := current.selectedSessionID(); got != outer.ID {
 		t.Fatalf("selected refreshed session = %q, want %s", got, outer.ID)
 	}

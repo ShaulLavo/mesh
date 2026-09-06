@@ -45,6 +45,17 @@ uses `n` for a new session, `r` to resume the latest active session, and `w` to
 wake an offline host. Esc returns to the host page, then cancels. Session rows
 show ID, state, age, command, cwd, and either `live` or `cached-stale`.
 
+Opening a host orders sessions by their latest successful attachment, newest
+first. Sessions without attachment history use their creation time. Background
+output does not affect this order. Refreshes update row contents without moving
+existing rows; newly discovered sessions appear at the end. Reopening the host
+sorts the current catalog again. Previous recovery attempts stay beneath their
+replacement session.
+
+Workers persist attachment times through detach, takeover, and exit. The daemon
+and local picker read the same metadata, and cached remote catalogs retain it.
+Workers started before this field existed fall back to creation time.
+
 The TUI represents attach, new, resume, wake, and cancel as separate internal
 types. `NewCLIPicker` converts the finished action to `cli.PickerSelection` only
 after Bubble Tea returns. `cmd/mesh` adds the picker to `commandDependencies()`

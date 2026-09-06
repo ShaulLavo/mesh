@@ -61,13 +61,6 @@ func newWindowModel(ctx context.Context, input cli.WindowInput, now time.Time) w
 			rows = append(rows, current)
 		}
 	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		left, right := windowSessionOrder(rows[i].State), windowSessionOrder(rows[j].State)
-		if left != right {
-			return left < right
-		}
-		return rows[i].CreatedAt.After(rows[j].CreatedAt)
-	})
 	picker := newPickerModel(ctx, cli.PickerInput{
 		Hosts:   []cli.HostSessions{{Host: cli.HostRecord{ID: input.HostID, Alias: input.HostAlias}, Sessions: rows, Local: true}},
 		Inspect: input.Inspect, Action: input.Action, OpenHostAlias: input.HostAlias,
@@ -78,7 +71,14 @@ func newWindowModel(ctx context.Context, input cli.WindowInput, now time.Time) w
 		picker.enterSessions(0)
 		picker.refreshOnInit = true
 	}
-	current := windowModel{picker: picker, selected: len(rows) > 0 && rows[0].State != "running", hostNames: input.HostAliases}
+	// The compact resume prompt keeps available sessions ahead of ones already
+	// in use, preserving the activity order within each state.
+	sessions := picker.hosts[0].sessions
+	sort.SliceStable(sessions, func(i, j int) bool {
+		return windowSessionOrder(sessions[i].state) < windowSessionOrder(sessions[j].state)
+	})
+	_ = picker.list.SetItems(sessionItems(sessions))
+	current := windowModel{picker: picker, selected: len(sessions) > 0 && sessions[0].state != "running", hostNames: input.HostAliases}
 	current.resize()
 	return current
 }

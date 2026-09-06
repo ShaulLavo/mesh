@@ -1656,11 +1656,12 @@ func localSessionRows() ([]protocol.SessionInfo, error) {
 	rows := make([]protocol.SessionInfo, 0, len(sessions))
 	for _, current := range sessions {
 		row := protocol.SessionInfo{
-			ID:        current.ID,
-			Command:   append([]string(nil), current.Command...),
-			Cwd:       current.Cwd,
-			State:     current.State(),
-			CreatedAt: current.CreatedAt,
+			ID:             current.ID,
+			Command:        append([]string(nil), current.Command...),
+			Cwd:            current.Cwd,
+			State:          current.State(),
+			CreatedAt:      current.CreatedAt,
+			LastAttachedAt: cloneTime(current.LastAttachedAt),
 		}
 		if current.ExitCode != nil {
 			code := *current.ExitCode

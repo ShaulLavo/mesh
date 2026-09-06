@@ -99,12 +99,13 @@ func hostCatalog(input cli.PickerInput) []host {
 		sessions := make([]session, len(catalog.Sessions))
 		for sessionIndex, current := range catalog.Sessions {
 			sessions[sessionIndex] = session{
-				id:        current.ID,
-				state:     current.State,
-				command:   append([]string(nil), current.Command...),
-				cwd:       current.Cwd,
-				createdAt: current.CreatedAt,
-				recovery:  cloneRecovery(current.Recovery), recoveryError: current.RecoveryError, agentStatus: current.AgentStatus,
+				id:           current.ID,
+				state:        current.State,
+				command:      append([]string(nil), current.Command...),
+				cwd:          current.Cwd,
+				createdAt:    current.CreatedAt,
+				lastActiveAt: current.LastActiveAt(),
+				recovery:     cloneRecovery(current.Recovery), recoveryError: current.RecoveryError, agentStatus: current.AgentStatus,
 				replacementID: current.ReplacementID, recoveredFrom: current.RecoveredFrom,
 			}
 		}
@@ -119,6 +120,14 @@ func hostCatalog(input cli.PickerInput) []host {
 	}
 	sort.SliceStable(hosts, func(i, j int) bool { return hosts[i].local && !hosts[j].local })
 	return hosts
+}
+
+func orderSessionsByActivity(sessions []session) []session {
+	ordered := append([]session(nil), sessions...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].lastActiveAt.After(ordered[j].lastActiveAt)
+	})
+	return groupRecoveryAttempts(ordered)
 }
 
 func endpointRoute(endpoint string) string {

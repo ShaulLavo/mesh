@@ -174,7 +174,7 @@ func windowSessionRows(source []protocol.SessionInfo) []protocol.SessionInfo {
 		if rank(rows[i].State) != rank(rows[j].State) {
 			return rank(rows[i].State) < rank(rows[j].State)
 		}
-		return rows[i].CreatedAt.After(rows[j].CreatedAt)
+		return rows[i].LastActiveAt().After(rows[j].LastActiveAt())
 	})
 	return rows
 }

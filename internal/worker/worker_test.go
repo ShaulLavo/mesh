@@ -33,8 +33,14 @@ func TestFreshAttachReceivesSnapshotThenLiveSequence(t *testing.T) {
 	}
 	ring := session.NewRing(ringSize)
 	_, _ = ring.Write(output)
+	dir := t.TempDir()
+	attachedAt := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	if err := WriteMeta(dir, Meta{ID: sid.String(), State: StateDetached}); err != nil {
+		t.Fatal(err)
+	}
 	w := &Worker{
-		cfg:      Config{ID: sid.String()},
+		cfg:      Config{ID: sid.String(), Dir: dir},
+		now:      func() time.Time { return attachedAt },
 		sid:      sid,
 		pty:      pty,
 		ring:     ring,
@@ -45,6 +51,7 @@ func TestFreshAttachReceivesSnapshotThenLiveSequence(t *testing.T) {
 
 	client, server := net.Pipe()
 	defer client.Close() //nolint:errcheck // test resource cleanup
+	t.Cleanup(func() { _ = client.Close(); w.writers.Wait() })
 	go w.serve(server)
 	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{
 		Type:      protocol.TypeAttach,
@@ -65,6 +72,17 @@ func TestFreshAttachReceivesSnapshotThenLiveSequence(t *testing.T) {
 	head := uint64(len(output))
 	if f.Kind != protocol.KindControl || attached.Type != protocol.TypeAttached || !attached.Snapshot || attached.Seq != head {
 		t.Fatalf("attach response = kind %v, message %+v", f.Kind, attached)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		meta, err := ReadMeta(dir)
+		if err == nil && meta.LastAttachedAt != nil && meta.LastAttachedAt.Equal(attachedAt) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("accepted attachment did not persist activity: %+v, %v", meta, err)
+		}
+		time.Sleep(time.Millisecond)
 	}
 
 	wantSnapshot := screen.Snapshot().Bytes

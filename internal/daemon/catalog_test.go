@@ -21,6 +21,23 @@ import (
 
 var catalogTestTime = time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
 
+func TestCatalogRetainsWorkerAttachmentActivity(t *testing.T) {
+	root := t.TempDir()
+	meta := catalogTestMeta("7K3D", worker.StateDetached, "boot-a")
+	attached := meta.CreatedAt.Add(time.Hour)
+	meta.LastAttachedAt = &attached
+	writeCatalogMeta(t, root, meta.ID, meta)
+	store := &catalogStoreStub{}
+	catalog := newCatalogForTest(t, root, store, probeFunc(func(context.Context, string) error { return nil }), func() string { return "boot-a" })
+	if err := catalog.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	info := sessionInfo(store.observed[0])
+	if info.LastAttachedAt == nil || !info.LastAttachedAt.Equal(attached) {
+		t.Fatalf("listed attachment activity = %v, want %v", info.LastAttachedAt, attached)
+	}
+}
+
 func TestNewCatalogValidatesConfig(t *testing.T) {
 	empty := ""
 	valid := CatalogConfig{
