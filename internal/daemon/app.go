@@ -454,6 +454,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			listener.sshConfigs = append(listener.sshConfigs, sshd.Config{
 				Tunnels:        tunnelForwarder,
 				Handler:        sessionHandler,
+				Services:       serviceRegistry,
 				HostKey:        meshPrivateKey,
 				AuthorizedKeys: filepath.Join(stateDir, "authorized_keys"),
 				Addr:           net.JoinHostPort(address, strconv.Itoa(int(cfg.SSHPort))),

@@ -12,11 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	charmssh "github.com/charmbracelet/ssh"
+	charmssh "charm.land/ssh"
 	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/shaul/mesh/internal/recovery"
 	meshsession "github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/sshfs"
 	"github.com/shaul/mesh/internal/terminal"
 )
 
@@ -90,7 +91,7 @@ func (c sessionChannel) Accept() (gossh.Channel, <-chan *gossh.Request, error) {
 	return channel, requests, err //nolint:wrapcheck // preserve the channel acceptance result
 }
 
-func configureSessions(server *charmssh.Server, application SessionHandler, health charmssh.Handler) {
+func configureSessions(server *charmssh.Server, application SessionHandler, health charmssh.Handler, files *sshfs.Filesystem) {
 	server.ChannelHandlers = maps.Clone(server.ChannelHandlers)
 	if server.ChannelHandlers == nil {
 		server.ChannelHandlers = make(map[string]charmssh.ChannelHandler)
@@ -104,9 +105,19 @@ func configureSessions(server *charmssh.Server, application SessionHandler, heal
 	server.PtyHandler = func(ctx charmssh.Context, session charmssh.Session, pty charmssh.Pty) (func() error, error) {
 		return prepareTerminal(ctx, session, pty, emulate)
 	}
-	middleware := secureMiddleware(func(session charmssh.Session) {
+	handler := charmssh.Handler(func(session charmssh.Session) {
 		handleSession(session, application, health)
 	})
+	if files != nil {
+		handler = files.Middleware(handler)
+		server.SubsystemHandlers = maps.Clone(server.SubsystemHandlers)
+		if server.SubsystemHandlers == nil {
+			server.SubsystemHandlers = make(map[string]charmssh.SubsystemHandler)
+		}
+		subsystem := secureMiddleware(charmssh.Handler(files.Subsystem))
+		server.SubsystemHandlers["sftp"] = func(session charmssh.Session) { subsystem(terminalSession{Session: session}) }
+	}
+	middleware := secureMiddleware(handler)
 	server.Handler = func(session charmssh.Session) { middleware(terminalSession{Session: session}) }
 }
 

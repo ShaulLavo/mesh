@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	charmssh "github.com/charmbracelet/ssh"
+	charmssh "charm.land/ssh"
 	"golang.org/x/time/rate"
 )
 
@@ -26,8 +26,6 @@ type sshRateLimiter struct {
 	order   list.List
 }
 
-// Keep terminal discovery out of daemon and hook startup. Wish's middleware
-// imports Bubble Tea v1, which queries a controlling terminal during package init.
 func secureMiddleware(handler charmssh.Handler) charmssh.Handler {
 	limiter := &sshRateLimiter{entries: make(map[string]*list.Element)}
 	return func(current charmssh.Session) {

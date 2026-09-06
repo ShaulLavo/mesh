@@ -34,6 +34,21 @@ func ResolveRoot(root, requestPath string) (string, error) {
 	return resolved.path, nil
 }
 
+// LiteralRootPath names a root entry without interpreting URL escapes. Its
+// operations apply the same confinement as HTTP paths after URL decoding.
+type LiteralRootPath string
+
+// ResolveRelative returns the canonical slash-separated name relative to root,
+// or "." for the root itself. It never exposes the host's absolute root path.
+// Use Open to access the entry without reopening this unanchored preview path.
+func (requestPath LiteralRootPath) ResolveRelative(root string) (string, error) {
+	resolved, err := requestPath.resolve(root)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(resolved.relative), nil
+}
+
 type resolvedRootPath struct {
 	root     string
 	path     string
@@ -41,7 +56,15 @@ type resolvedRootPath struct {
 }
 
 func resolveRootPath(root, requestPath string) (resolvedRootPath, error) {
-	relative, err := requestRelativePath(requestPath)
+	decoded, err := decodeRequestPath(requestPath)
+	if err != nil {
+		return resolvedRootPath{}, err
+	}
+	return LiteralRootPath(decoded).resolve(root)
+}
+
+func (requestPath LiteralRootPath) resolve(root string) (resolvedRootPath, error) {
+	relative, err := confinedRelativePath(string(requestPath))
 	if err != nil {
 		return resolvedRootPath{}, err
 	}
@@ -49,15 +72,7 @@ func resolveRootPath(root, requestPath string) (resolvedRootPath, error) {
 	if err != nil {
 		return resolvedRootPath{}, err
 	}
-	return resolveWithinRoot(rootPath, relative, requestPath)
-}
-
-func requestRelativePath(requestPath string) (string, error) {
-	decoded, err := decodeRequestPath(requestPath)
-	if err != nil {
-		return "", err
-	}
-	return confinedRelativePath(decoded)
+	return resolveWithinRoot(rootPath, relative, string(requestPath))
 }
 
 func canonicalRootPath(root string) (string, fs.FileInfo, error) {
@@ -102,7 +117,17 @@ func resolveWithinRoot(rootPath, relative, requestPath string) (resolvedRootPath
 // returned metadata describes the returned file descriptor. The caller must
 // close the file.
 func OpenRootEntry(root, requestPath string) (*os.File, fs.FileInfo, error) {
-	relative, err := requestRelativePath(requestPath)
+	decoded, err := decodeRequestPath(requestPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return LiteralRootPath(decoded).Open(root)
+}
+
+// Open returns a file and its descriptor's metadata through an anchored root.
+// The caller must close the file.
+func (requestPath LiteralRootPath) Open(root string) (*os.File, fs.FileInfo, error) {
+	relative, err := confinedRelativePath(string(requestPath))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -110,7 +135,7 @@ func OpenRootEntry(root, requestPath string) (*os.File, fs.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	resolved, resolveErr := resolveWithinRoot(rootPath, relative, requestPath)
+	resolved, resolveErr := resolveWithinRoot(rootPath, relative, string(requestPath))
 	if resolveErr != nil {
 		_ = rootHandle.Close()
 		return nil, nil, resolveErr
@@ -125,6 +150,64 @@ func OpenRootEntry(root, requestPath string) (*os.File, fs.FileInfo, error) {
 		return nil, nil, fmt.Errorf("serve: close root %s: %w", resolved.root, closeErr)
 	}
 	return file, info, nil
+}
+
+// Lstat preserves the final symlink's metadata only when its target is in root.
+func (requestPath LiteralRootPath) Lstat(root string) (fs.FileInfo, error) {
+	rootHandle, rootPath, relative, err := openLiteralRootEntryParent(root, string(requestPath))
+	if err != nil {
+		return nil, err
+	}
+	info, inspectErr := rootHandle.Lstat(relative)
+	if inspectErr == nil && info.Mode()&fs.ModeSymlink != 0 {
+		_, inspectErr = readRootLink(rootHandle, rootPath, relative, string(requestPath))
+	}
+	if err := errors.Join(inspectErr, rootHandle.Close()); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+// Readlink returns the canonical target relative to root. The symlink and its
+// existing target must both be inside root.
+func (requestPath LiteralRootPath) Readlink(root string) (string, error) {
+	rootHandle, rootPath, relative, err := openLiteralRootEntryParent(root, string(requestPath))
+	if err != nil {
+		return "", err
+	}
+	target, readErr := readRootLink(rootHandle, rootPath, relative, string(requestPath))
+	return target, errors.Join(readErr, rootHandle.Close())
+}
+
+func openLiteralRootEntryParent(root, requestPath string) (*os.Root, string, string, error) {
+	relative, err := confinedRelativePath(requestPath)
+	if err != nil {
+		return nil, "", "", err
+	}
+	rootHandle, rootPath, err := openAnchoredRoot(root)
+	if err != nil {
+		return nil, "", "", err
+	}
+	parent, err := resolveWithinRoot(rootPath, filepath.Dir(relative), requestPath)
+	if err != nil {
+		_ = rootHandle.Close()
+		return nil, "", "", err
+	}
+	return rootHandle, rootPath, filepath.Join(parent.relative, filepath.Base(relative)), nil
+}
+
+func readRootLink(root *os.Root, rootPath, relative, requestPath string) (string, error) {
+	if _, err := root.Readlink(relative); err != nil {
+		return "", err
+	}
+	resolved, err := resolveWithinRoot(rootPath, relative, requestPath)
+	if err != nil {
+		return "", err
+	}
+	if _, err := root.Stat(resolved.relative); err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(resolved.relative), nil
 }
 
 func openAnchoredRoot(root string) (*os.Root, string, error) {

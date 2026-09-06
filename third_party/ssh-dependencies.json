@@ -1,0 +1,16 @@
+[
+  {
+    "module": "charm.land/wish/v2",
+    "version": "v2.0.3",
+    "sum": "h1:Xkgw31lEH9AJkPfgXYYvsgrskfDIY9ffHTxFRV4UT+4=",
+    "directory": "wish",
+    "patch": "patches/wish.patch"
+  },
+  {
+    "module": "github.com/pkg/sftp",
+    "version": "v1.13.11",
+    "sum": "h1:0N92SLTB8JqASJB14ZLHHzFnBV8mG9zw4K7jghEFWuE=",
+    "directory": "sftp",
+    "patch": "patches/sftp.patch"
+  }
+]

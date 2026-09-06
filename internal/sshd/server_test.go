@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	charmssh "github.com/charmbracelet/ssh"
-	"github.com/charmbracelet/wish"
-	"github.com/charmbracelet/wish/testsession"
+	charmssh "charm.land/ssh"
+	"charm.land/wish/v2"
+	"charm.land/wish/v2/testsession"
 	"github.com/shaul/mesh/internal/identity"
 	gossh "golang.org/x/crypto/ssh"
 )

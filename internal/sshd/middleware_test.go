@@ -8,7 +8,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/charmbracelet/wish/testsession"
+	"charm.land/wish/v2/testsession"
 )
 
 func TestSSHRateLimitSharesBudgetAcrossSourcePorts(t *testing.T) {

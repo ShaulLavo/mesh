@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	charmssh "github.com/charmbracelet/ssh"
+	charmssh "charm.land/ssh"
+	"charm.land/wish/v2/testsession"
 	uv "github.com/charmbracelet/ultraviolet"
-	"github.com/charmbracelet/wish/testsession"
 	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/shaul/mesh/internal/recovery"

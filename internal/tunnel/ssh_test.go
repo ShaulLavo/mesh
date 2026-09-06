@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	charmssh "github.com/charmbracelet/ssh"
+	charmssh "charm.land/ssh"
 	gossh "golang.org/x/crypto/ssh"
 )
 

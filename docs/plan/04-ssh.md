@@ -30,11 +30,9 @@ Host *.mesh.shaulavo.dev
     IdentitiesOnly yes
 ```
 
-The session handler uses T09's picker through a terminal adapter inside Wish.
-The adapter keeps the existing Bubble Tea v2 model, which the pinned Wish v1
-middleware cannot accept. Detach, steal, replay and
-resize behave identically, because underneath it is the same attachment against
-the same worker.
+The session handler uses T09's picker through a terminal adapter on the Charm SSH
+server. The adapter keeps the existing Bubble Tea v2 model. Detach, steal,
+replay, and resize use the same attachment against the same worker.
 
 **This is also the phone answer.** A phone running the Tailscale app plus any SSH
 client is a complete Mesh client today. No iOS build, no Android build, nothing
@@ -43,9 +41,9 @@ we chose not to need.
 
 ### Files
 
-`sftp -P 2222 pi.mesh.shaulavo.dev` mounts a machine's served roots in Finder,
-Nautilus, or Files on Android. The client configuration above removes the need
-for `-P 2222`.
+`sftp -P 2222 pi.mesh.shaulavo.dev` browses a machine's served roots. An
+SFTP-capable file manager can connect with the same host, port, and authorized
+key. The client configuration above removes the need for `-P 2222`.
 
 The important part is that this is not a second feature. T11 decides which roots
 are served and to whom. SFTP is a second front door onto exactly those roots:
@@ -55,9 +53,19 @@ one declaration  ->  HTTP   for browsers      (T11)
                  ->  SFTP   for file managers (T16)
 ```
 
-A browsable HTML listing is the worst version of a file server. It exists for
-people holding a browser and nothing else. SFTP is what you want the rest of the
-time.
+Static and files routes appear at their declared paths, such as `/blog` and
+`/files`. The SFTP root lists those services; nested route names create
+intermediate directories. Proxy services are omitted. Registry changes take
+effect without restarting SSH.
+
+All file access is read-only and confined to the selected service root. Raw
+parent traversal, symlinks outside that root, and writes are refused. Modern SCP
+uses the SFTP subsystem; `-O` selects Wish's legacy SCP handler:
+
+```bash
+scp -P 2222 pi.mesh.shaulavo.dev:/blog/index.html .
+scp -O -P 2222 -r pi.mesh.shaulavo.dev:/blog ./blog-copy
+```
 
 ### Tunnels
 
@@ -111,9 +119,10 @@ does not bind a wildcard address, loopback, or the system SSH port. Every door
 above is reachable only from the tailnet. Tunnelled HTTP enters through the
 VPS public HTTP edge; its SSH connection still uses the tailnet.
 
-Wish ships the middleware this needs and we should use all of it rather than
-reinvent any of it: `accesscontrol`, `activeterm`, `ratelimiter`, `recover`,
-`logging`. `scp` too, which gets `scp` support for free alongside SFTP.
+Mesh owns key admission, bounded rate limiting, logging, and panic recovery on
+the Charm SSH server. Wish v2 supplies SCP middleware; `pkg/sftp` supplies the
+SFTP subsystem. Wish v2 and `charm.land/ssh` keep legacy Bubble Tea terminal
+queries out of process initialization, preserving silent hook startup.
 
 ## Scoping the tunnel exception
 
@@ -139,12 +148,12 @@ nobody asked for, and anything reachable without an authorized key.
 | Task | Owns | Blocked by |
 |---|---|---|
 | T15 SSH front door (complete) | `internal/sshd/` | — |
-| T16 SFTP and SCP | `internal/sshfs/` | T11, T15 |
+| T16 SFTP and SCP (complete) | `internal/sshfs/` | T11, T15 |
 | T17 Sessions over SSH (complete) | `internal/sshd/session.go` | T09, T15 |
 | T18 Reverse tunnels (complete) | `internal/tunnel/`, claim adapters | T13, T15 |
 
-T15, T17, and T18 are complete. T16 remains unblocked.
-See [reverse tunnels](../reverse-tunnels.md) for claims, reconnects, and recovery.
+T15, T16, T17, and T18 are complete. See [reverse tunnels](../reverse-tunnels.md)
+for claims, reconnects, owner releases, and edge-local recovery.
 
 ## What we verified before planning this
 
@@ -156,7 +165,7 @@ See [reverse tunnels](../reverse-tunnels.md) for claims, reconnects, and recover
 Two corrections to earlier assumptions, recorded so nobody repeats them:
 
 - **SFTP is not a Wish middleware.** Wish ships `scp`. SFTP is `pkg/sftp` wired
-  as a subsystem handler on the underlying server. Budget for that in T16.
+  as a subsystem handler on the underlying server, implemented by T16.
 - **Wish does not help `mesh add`.** Wish is a server. T08 is the client side of
   SSH and stays on `golang.org/x/crypto/ssh`.
 

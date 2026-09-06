@@ -1,0 +1,4 @@
+# Keep the dependency copies and patch context byte-for-byte reproducible.
+third_party/wish/** linguist-vendored -whitespace
+third_party/sftp/** linguist-vendored -whitespace
+third_party/patches/*.patch -whitespace

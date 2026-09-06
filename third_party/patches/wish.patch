@@ -1,0 +1,620 @@
+--- /dev/null
++++ b/scp/append_test.go
+@@ -0,0 +1,56 @@
++package scp
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++func TestRootAppendPreservesDirectoryBoundaries(t *testing.T) {
++	root := &RootEntry{}
++	assertAppendDirectoryBoundaries(t, root)
++}
++
++func TestDirAppendPreservesDirectoryBoundaries(t *testing.T) {
++	root := &DirEntry{Filepath: "tree"}
++	assertAppendDirectoryBoundaries(t, root)
++}
++
++func assertAppendDirectoryBoundaries(t *testing.T, root AppendableEntry) {
++	t.Helper()
++	a := &DirEntry{Filepath: filepath.Join("tree", "a")}
++	ab := &DirEntry{Filepath: filepath.Join("tree", "ab")}
++	abc := &DirEntry{Filepath: filepath.Join("tree", "abc")}
++	nested := &DirEntry{Filepath: filepath.Join("tree", "ab", "nested")}
++	for _, entry := range []*DirEntry{a, ab, nested, abc} {
++		root.Append(entry)
++	}
++	for _, directory := range []*DirEntry{a, ab, nested, abc} {
++		root.Append(&FileEntry{Filepath: filepath.Join(directory.Filepath, "value.txt")})
++	}
++	if len(a.Children) != 1 || len(ab.Children) != 2 || len(nested.Children) != 1 || len(abc.Children) != 1 {
++		t.Fatalf("child counts: a=%d, ab=%d, nested=%d, abc=%d", len(a.Children), len(ab.Children), len(nested.Children), len(abc.Children))
++	}
++	if ab.Children[0] != nested {
++		t.Fatalf("ab's first child = %v; want nested directory", ab.Children[0])
++	}
++	for _, directory := range []*DirEntry{a, ab, nested, abc} {
++		last := directory.Children[len(directory.Children)-1]
++		if last.path() != filepath.Join(directory.Filepath, "value.txt") {
++			t.Fatalf("%q's file = %q", directory.Filepath, last.path())
++		}
++	}
++}
++
++func TestRootAppendKeepsDescendantsUnderFilesystemRoot(t *testing.T) {
++	root := &RootEntry{}
++	directory := &DirEntry{Filepath: filepath.VolumeName(os.TempDir()) + string(filepath.Separator)}
++	child := &DirEntry{Filepath: filepath.Join(directory.Filepath, "a")}
++	nested := &DirEntry{Filepath: filepath.Join(child.Filepath, "nested")}
++	for _, entry := range []*DirEntry{directory, child, nested} {
++		root.Append(entry)
++	}
++	if len(*root) != 1 || len(directory.Children) != 1 || len(child.Children) != 1 || child.Children[0] != nested {
++		t.Fatalf("filesystem root descendants were misplaced: root=%v, children=%v, nested=%v", *root, directory.Children, child.Children)
++	}
++}
+--- a/scp/copy_to_client.go
++++ b/scp/copy_to_client.go
+@@ -1,7 +1,9 @@
+ package scp
+ 
+ import (
++	"bufio"
+ 	"fmt"
++	"io"
+ 	"io/fs"
+ 
+ 	"charm.land/ssh"
+@@ -59,7 +61,18 @@
+ 		}
+ 	}
+ 
+-	return rootEntry.Write(s)
++	connection, ok := s.Context().Value(ssh.ContextKeyConn).(io.Closer)
++	if !ok {
++		return fmt.Errorf("SCP SSH transport is unavailable")
++	}
++	writer := &clientWriter{
++		Session: s, responses: bufio.NewReader(s), timeout: clientResponseTimeout,
++		connection: connection,
++	}
++	if err := writer.awaitResponse(); err != nil {
++		return err
++	}
++	return rootEntry.Write(writer)
+ }
+ 
+ func closeAll(closers []func() error) {
+--- a/scp/filesystem_test.go
++++ b/scp/filesystem_test.go
+@@ -27,7 +27,7 @@
+ 			is.NoErr(os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a text file"), 0o644))
+ 			chtimesTree(t, dir, atime, mtime)
+ 
+-			session := setup(t, h, nil)
++			session := setupAcknowledgedSource(t, h)
+ 			bts, err := session.CombinedOutput("scp -f a.txt")
+ 			is.NoErr(err)
+ 			requireEqualGolden(t, bts)
+@@ -42,7 +42,7 @@
+ 			is.NoErr(os.WriteFile(filepath.Join(dir, "b.txt"), []byte("another text file"), 0o644))
+ 			chtimesTree(t, dir, atime, mtime)
+ 
+-			session := setup(t, h, nil)
++			session := setupAcknowledgedSource(t, h)
+ 			bts, err := session.CombinedOutput("scp -f *.txt")
+ 			is.NoErr(err)
+ 			requireEqualGolden(t, bts)
+@@ -54,7 +54,7 @@
+ 			dir := t.TempDir()
+ 			h := NewFileSystemHandler(dir)
+ 
+-			session := setup(t, h, nil)
++			session := setupAcknowledgedSource(t, h)
+ 			_, err := session.CombinedOutput("scp -f a.txt")
+ 			is.True(err != nil)
+ 		})
+@@ -70,7 +70,7 @@
+ 			is.NoErr(os.WriteFile(filepath.Join(dir, "a/b/c/d/e/e.txt"), []byte("e text file"), 0o644))
+ 			chtimesTree(t, dir, atime, mtime)
+ 
+-			session := setup(t, h, nil)
++			session := setupAcknowledgedSource(t, h)
+ 			bts, err := session.CombinedOutput("scp -r -f a")
+ 			is.NoErr(err)
+ 			requireEqualGolden(t, bts)
+@@ -87,7 +87,7 @@
+ 			is.NoErr(os.WriteFile(filepath.Join(dir, "a/b/c/d/e/e.txt"), []byte("e text file"), 0o644))
+ 			chtimesTree(t, dir, atime, mtime)
+ 
+-			session := setup(t, h, nil)
++			session := setupAcknowledgedSource(t, h)
+ 			bts, err := session.CombinedOutput("scp -r -f a/*")
+ 			is.NoErr(err)
+ 			requireEqualGolden(t, bts)
+@@ -99,7 +99,7 @@
+ 			dir := t.TempDir()
+ 			h := NewFileSystemHandler(dir)
+ 
+-			session := setup(t, h, nil)
++			session := setupAcknowledgedSource(t, h)
+ 			_, err := session.CombinedOutput("scp -r -f a")
+ 			is.True(err != nil)
+ 		})
+@@ -115,7 +115,7 @@
+ 			is.NoErr(os.WriteFile(filepath.Join(dir, "a/b/c/d/e/e.txt"), []byte("e text file"), 0o644))
+ 			chtimesTree(t, dir, atime, mtime)
+ 
+-			session := setup(t, h, nil)
++			session := setupAcknowledgedSource(t, h)
+ 			bts, err := session.CombinedOutput("scp -r -f /")
+ 			is.NoErr(err)
+ 			requireEqualGolden(t, bts)
+@@ -372,7 +372,7 @@
+ 		is.NoErr(os.WriteFile(filepath.Join(secret, "secret.txt"), []byte("super-secret"), 0o644))
+ 		h := NewFileSystemHandler(root)
+ 
+-		session := setup(t, h, nil)
++		session := setupAcknowledgedSource(t, h)
+ 		_, err := session.CombinedOutput("scp -f ../" + filepath.Base(secret) + "/secret.txt")
+ 		is.True(err != nil)
+ 	})
+@@ -384,7 +384,7 @@
+ 		is.NoErr(os.WriteFile(filepath.Join(secret, "secret.txt"), []byte("super-secret"), 0o644))
+ 		h := NewFileSystemHandler(root)
+ 
+-		session := setup(t, h, nil)
++		session := setupAcknowledgedSource(t, h)
+ 		_, err := session.CombinedOutput("scp -f ../" + filepath.Base(secret) + "/secret*")
+ 		is.True(err != nil)
+ 	})
+--- a/scp/fs_test.go
++++ b/scp/fs_test.go
+@@ -22,7 +22,7 @@
+ 		is.NoErr(os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a text file"), 0o644))
+ 		chtimesTree(t, dir, atime, mtime)
+ 
+-		session := setup(t, h, nil)
++		session := setupAcknowledgedSource(t, h)
+ 		bts, err := session.CombinedOutput("scp -f a.txt")
+ 		is.NoErr(err)
+ 		requireEqualGolden(t, bts)
+@@ -37,7 +37,7 @@
+ 		is.NoErr(os.WriteFile(filepath.Join(dir, "b.txt"), []byte("another text file"), 0o644))
+ 		chtimesTree(t, dir, atime, mtime)
+ 
+-		session := setup(t, h, nil)
++		session := setupAcknowledgedSource(t, h)
+ 		bts, err := session.CombinedOutput("scp -f *.txt")
+ 		is.NoErr(err)
+ 		requireEqualGolden(t, bts)
+@@ -49,7 +49,7 @@
+ 		dir := t.TempDir()
+ 		h := NewFSReadHandler(os.DirFS(dir))
+ 
+-		session := setup(t, h, nil)
++		session := setupAcknowledgedSource(t, h)
+ 		_, err := session.CombinedOutput("scp -f a.txt")
+ 		is.True(err != nil)
+ 	})
+@@ -65,7 +65,7 @@
+ 		is.NoErr(os.WriteFile(filepath.Join(dir, "a/b/c/d/e/e.txt"), []byte("e text file"), 0o644))
+ 		chtimesTree(t, dir, atime, mtime)
+ 
+-		session := setup(t, h, nil)
++		session := setupAcknowledgedSource(t, h)
+ 		bts, err := session.CombinedOutput("scp -r -f a")
+ 		is.NoErr(err)
+ 		requireEqualGolden(t, bts)
+@@ -82,7 +82,7 @@
+ 		is.NoErr(os.WriteFile(filepath.Join(dir, "a/b/c/d/e/e.txt"), []byte("e text file"), 0o644))
+ 		chtimesTree(t, dir, atime, mtime)
+ 
+-		session := setup(t, h, nil)
++		session := setupAcknowledgedSource(t, h)
+ 		bts, err := session.CombinedOutput("scp -r -f a/*")
+ 		is.NoErr(err)
+ 		requireEqualGolden(t, bts)
+@@ -99,7 +99,7 @@
+ 		is.NoErr(os.WriteFile(filepath.Join(dir, "a/b/c/d/e/e.txt"), []byte("e text file"), 0o644))
+ 		chtimesTree(t, dir, atime, mtime)
+ 
+-		session := setup(t, h, nil)
++		session := setupAcknowledgedSource(t, h)
+ 		bts, err := session.CombinedOutput("scp -r -f /")
+ 		is.NoErr(err)
+ 		requireEqualGolden(t, bts)
+@@ -111,7 +111,7 @@
+ 		dir := t.TempDir()
+ 		h := NewFSReadHandler(os.DirFS(dir))
+ 
+-		session := setup(t, h, nil)
++		session := setupAcknowledgedSource(t, h)
+ 		_, err := session.CombinedOutput("scp -r -f a")
+ 		is.True(err != nil)
+ 	})
+--- /dev/null
++++ b/scp/response.go
+@@ -0,0 +1,55 @@
++package scp
++
++import (
++	"bufio"
++	"fmt"
++	"io"
++	"time"
++
++	"charm.land/ssh"
++)
++
++const clientResponseTimeout = 30 * time.Second
++
++type clientWriter struct {
++	ssh.Session
++	responses  *bufio.Reader
++	connection io.Closer
++	timeout    time.Duration
++}
++
++func (w *clientWriter) awaitResponse() error {
++	// Closing a channel does not release its Read until the peer acknowledges
++	// the close. Only the transport can bound a wait against a silent peer.
++	timer := time.AfterFunc(w.timeout, func() { _ = w.connection.Close() })
++	defer timer.Stop()
++	code, err := w.responses.ReadByte()
++	if err != nil {
++		return fmt.Errorf("read SCP client acknowledgement: %w", err)
++	}
++	if code == 0 {
++		return nil
++	}
++	if code != 1 && code != 2 {
++		return fmt.Errorf("invalid SCP client acknowledgement: %d", code)
++	}
++	message, err := w.responses.ReadSlice('\n')
++	if err != nil {
++		return fmt.Errorf("read SCP client refusal: %w", err)
++	}
++	return fmt.Errorf("SCP client refused transfer: %s", message[:len(message)-1])
++}
++
++func writeRecord(w io.Writer, format string, arguments ...any) error {
++	if _, err := fmt.Fprintf(w, format, arguments...); err != nil {
++		return err
++	}
++	return awaitResponse(w)
++}
++
++func awaitResponse(w io.Writer) error {
++	if client, ok := w.(*clientWriter); ok {
++		return client.awaitResponse()
++	}
++	return nil
++}
+--- /dev/null
++++ b/scp/response_test.go
+@@ -0,0 +1,254 @@
++package scp
++
++import (
++	"bufio"
++	"bytes"
++	"io"
++	"net"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"charm.land/ssh"
++	"charm.land/wish/v2/testsession"
++	gossh "golang.org/x/crypto/ssh"
++)
++
++func TestCopyToClientWaitsForFinalAcknowledgement(t *testing.T) {
++	root := t.TempDir()
++	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("contents"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	session := setup(t, NewFSReadHandler(os.DirFS(root)), nil)
++	input, err := session.StdinPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	output, err := session.StdoutPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := session.Start("scp -f file.txt"); err != nil {
++		t.Fatal(err)
++	}
++	reader := bufio.NewReader(output)
++	acknowledge := func() {
++		t.Helper()
++		if _, err := input.Write(NULL); err != nil {
++			t.Fatal(err)
++		}
++	}
++	acknowledge()
++	header, err := reader.ReadString('\n')
++	if err != nil {
++		t.Fatal(err)
++	}
++	if strings.HasPrefix(header, "T") {
++		acknowledge()
++		header, err = reader.ReadString('\n')
++		if err != nil {
++			t.Fatal(err)
++		}
++	}
++	if !strings.HasPrefix(header, "C") || !strings.HasSuffix(header, " 8 file.txt\n") {
++		t.Fatalf("file header = %q", header)
++	}
++	acknowledge()
++	body := make([]byte, 9)
++	if _, err := io.ReadFull(reader, body); err != nil {
++		t.Fatal(err)
++	}
++	if string(body) != "contents\x00" {
++		t.Fatalf("body = %q", body)
++	}
++	exited := make(chan error, 1)
++	go func() { exited <- session.Wait() }()
++	select {
++	case err := <-exited:
++		t.Fatalf("sender exited before the final client acknowledgement: %v", err)
++	case <-time.After(50 * time.Millisecond):
++	}
++	acknowledge()
++	select {
++	case err := <-exited:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("sender did not finish after the final acknowledgement")
++	}
++}
++
++func setupAcknowledgedSource(tb testing.TB, handler CopyToClientHandler) *gossh.Session {
++	tb.Helper()
++	session := setup(tb, handler, nil)
++	session.Stdin = bytes.NewReader(make([]byte, 128))
++	return session
++}
++
++func TestFileAndDirectoryWritesWaitAtEveryRecord(t *testing.T) {
++	file := &FileEntry{Name: "file", Filepath: "file", Mode: 0600, Size: 4,
++		Reader: strings.NewReader("data"), Mtime: 20, Atime: 10}
++	directory := &DirEntry{Name: "dir", Filepath: "dir", Mode: 0700, Mtime: 40,
++		Atime: 30, Children: []Entry{file}}
++	var output bytes.Buffer
++	script := &responseScript{t: t, output: &output, records: []string{
++		"T40 0 30 0\n", "D0700 0 dir\n", "T20 0 10 0\n", "C0600 4 file\n", "data\x00", "E\n",
++	}}
++	writer := &clientWriter{Session: &responseSession{writer: &output}, responses: bufio.NewReader(script), timeout: time.Second, connection: io.NopCloser(strings.NewReader(""))}
++	if err := directory.Write(writer); err != nil {
++		t.Fatal(err)
++	}
++	if script.offset != len(script.records) {
++		t.Fatalf("acknowledged %d of %d records", script.offset, len(script.records))
++	}
++}
++
++type responseScript struct {
++	t       *testing.T
++	output  *bytes.Buffer
++	records []string
++	offset  int
++}
++
++func (r *responseScript) Read(buffer []byte) (int, error) {
++	r.t.Helper()
++	if r.offset >= len(r.records) {
++		r.t.Fatal("sender requested an extra acknowledgement")
++	}
++	if actual := r.output.String(); actual != r.records[r.offset] {
++		r.t.Fatalf("output before acknowledgement %d = %q, want %q", r.offset, actual, r.records[r.offset])
++	}
++	r.output.Reset()
++	r.offset++
++	buffer[0] = 0
++	return 1, nil
++}
++
++func TestClientRefusesTransfer(t *testing.T) {
++	for _, response := range []string{"\x01disk full\n", "\x02cannot create file\n", "\x03", "", "\x01" + strings.Repeat("x", 5000)} {
++		t.Run(fmtResponseName(response), func(t *testing.T) {
++			writer := &clientWriter{responses: bufio.NewReader(strings.NewReader(response)), timeout: time.Second, connection: io.NopCloser(strings.NewReader(""))}
++			if err := writer.awaitResponse(); err == nil {
++				t.Fatal("accepted a missing, invalid, or refused acknowledgement")
++			}
++		})
++	}
++}
++
++func fmtResponseName(response string) string {
++	if len(response) > 30 {
++		return "oversized refusal"
++	}
++	if response == "" {
++		return "disconnect"
++	}
++	return response
++}
++
++func TestClientResponseTimeoutClosesTransportWithoutChannelHandshake(t *testing.T) {
++	completed := make(chan error, 1)
++	start := make(chan struct{})
++	server := &ssh.Server{Handler: func(s ssh.Session) {
++		<-start
++		writer := &clientWriter{Session: s, responses: bufio.NewReader(s),
++			connection: s.Context().Value(ssh.ContextKeyConn).(io.Closer), timeout: 20 * time.Millisecond}
++		completed <- writer.awaitResponse()
++	}}
++	session, peer := newDroppingPeer(t, server)
++	input, err := session.StdinPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer input.Close()
++	if err := session.Start("scp -f file"); err != nil {
++		t.Fatal(err)
++	}
++	peer.discard.Store(true)
++	close(start)
++	select {
++	case err := <-completed:
++		if err == nil {
++			t.Fatal("missing acknowledgement succeeded")
++		}
++	case <-time.After(time.Second):
++		t.Fatal("transport remained open while the peer withheld acknowledgements and EOF")
++	}
++	if err := session.Wait(); err == nil {
++		t.Fatal("timed-out transfer succeeded")
++	}
++}
++
++func newDroppingPeer(t *testing.T, server *ssh.Server) (*gossh.Session, *droppingConn) {
++	t.Helper()
++	address := testsession.Listen(t, server)
++	connection, err := net.Dial("tcp", address)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = connection.Close() })
++	peer := &droppingConn{Conn: connection}
++	transport, channels, requests, err := gossh.NewClientConn(peer, address, &gossh.ClientConfig{
++		User: "testuser", HostKeyCallback: gossh.InsecureIgnoreHostKey(),
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	client := gossh.NewClient(transport, channels, requests)
++	t.Cleanup(func() { _ = client.Close() })
++	session, err := client.NewSession()
++	if err != nil {
++		t.Fatal(err)
++	}
++	return session, peer
++}
++
++type droppingConn struct {
++	net.Conn
++	discard atomic.Bool
++}
++
++func (c *droppingConn) Write(buffer []byte) (int, error) {
++	if c.discard.Load() {
++		return len(buffer), nil
++	}
++	return c.Conn.Write(buffer)
++}
++
++type responseSession struct {
++	ssh.Session
++	writer io.Writer
++}
++
++func (s *responseSession) Write(buffer []byte) (int, error) { return s.writer.Write(buffer) }
++
++func TestCopyToClientStopsAtInitialRefusal(t *testing.T) {
++	root := t.TempDir()
++	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("contents"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	session := setup(t, NewFSReadHandler(os.DirFS(root)), nil)
++	session.Stdin = strings.NewReader("\x02cannot create destination\n")
++	output, err := session.Output("scp -f file.txt")
++	if err == nil {
++		t.Fatal("client refusal did not fail the transfer")
++	}
++	if len(output) != 0 {
++		t.Fatalf("sent records after initial refusal: %q", output)
++	}
++}
++
++func TestFileWriteStopsAtHeaderRefusal(t *testing.T) {
++	var output bytes.Buffer
++	file := &FileEntry{Name: "file", Filepath: "file", Mode: 0600, Size: 4, Reader: strings.NewReader("data")}
++	writer := &clientWriter{Session: &responseSession{writer: &output}, responses: bufio.NewReader(strings.NewReader("\x01disk full\n")), timeout: time.Second, connection: io.NopCloser(strings.NewReader(""))}
++	if err := file.Write(writer); err == nil {
++		t.Fatal("client refusal did not fail the file transfer")
++	}
++	if actual := output.String(); actual != "C0600 4 file\n" {
++		t.Fatalf("sent data beyond refused header: %q", actual)
++	}
++}
+--- a/scp/scp.go
++++ b/scp/scp.go
+@@ -127,11 +127,11 @@
+ // Write a file to the given writer.
+ func (e *FileEntry) Write(w io.Writer) error {
+ 	if e.Mtime > 0 && e.Atime > 0 {
+-		if _, err := fmt.Fprintf(w, "T%d 0 %d 0\n", e.Mtime, e.Atime); err != nil {
++		if err := writeRecord(w, "T%d 0 %d 0\n", e.Mtime, e.Atime); err != nil {
+ 			return fmt.Errorf("failed to write file: %q: %w", e.Filepath, err)
+ 		}
+ 	}
+-	if _, err := fmt.Fprintf(w, "C%s %d %s\n", octalPerms(e.Mode), e.Size, e.Name); err != nil {
++	if err := writeRecord(w, "C%s %d %s\n", octalPerms(e.Mode), e.Size, e.Name); err != nil {
+ 		return fmt.Errorf("failed to write file: %q: %w", e.Filepath, err)
+ 	}
+ 
+@@ -142,7 +142,7 @@
+ 	if _, err := w.Write(NULL); err != nil {
+ 		return fmt.Errorf("failed to write file: %q: %w", e.Filepath, err)
+ 	}
+-	return nil
++	return awaitResponse(w)
+ }
+ 
+ // RootEntry is a root entry that can only have children.
+@@ -160,7 +160,7 @@
+ 				dir.Children = append(dir.Children, entry)
+ 				return
+ 			}
+-			if strings.HasPrefix(parent, normalizePath(dir.Filepath)) {
++			if strings.HasPrefix(parent, strings.TrimSuffix(normalizePath(dir.Filepath), "/")+"/") {
+ 				dir.Append(entry)
+ 				return
+ 			}
+@@ -199,11 +199,11 @@
+ // dir closing to the given writer.
+ func (e *DirEntry) Write(w io.Writer) error {
+ 	if e.Mtime > 0 && e.Atime > 0 {
+-		if _, err := fmt.Fprintf(w, "T%d 0 %d 0\n", e.Mtime, e.Atime); err != nil {
++		if err := writeRecord(w, "T%d 0 %d 0\n", e.Mtime, e.Atime); err != nil {
+ 			return fmt.Errorf("failed to write dir: %q: %w", e.Filepath, err)
+ 		}
+ 	}
+-	if _, err := fmt.Fprintf(w, "D%s 0 %s\n", octalPerms(e.Mode), e.Name); err != nil {
++	if err := writeRecord(w, "D%s 0 %s\n", octalPerms(e.Mode), e.Name); err != nil {
+ 		return fmt.Errorf("failed to write dir: %q: %w", e.Filepath, err)
+ 	}
+ 
+@@ -213,7 +213,7 @@
+ 		}
+ 	}
+ 
+-	if _, err := fmt.Fprint(w, "E\n"); err != nil {
++	if err := writeRecord(w, "E\n"); err != nil {
+ 		return fmt.Errorf("failed to write dir: %q: %w", e.Filepath, err)
+ 	}
+ 	return nil
+@@ -230,7 +230,7 @@
+ 				dir.Children = append(dir.Children, entry)
+ 				return
+ 			}
+-			if strings.HasPrefix(parent, normalizePath(dir.path())) {
++			if strings.HasPrefix(parent, strings.TrimSuffix(normalizePath(dir.path()), "/")+"/") {
+ 				dir.Append(entry)
+ 				return
+ 			}

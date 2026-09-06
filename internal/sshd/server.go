@@ -16,9 +16,11 @@ import (
 	"sync"
 	"time"
 
-	charmssh "github.com/charmbracelet/ssh"
+	charmssh "charm.land/ssh"
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/shaul/mesh/internal/serve"
+	"github.com/shaul/mesh/internal/sshfs"
 	"github.com/shaul/mesh/internal/tunnel"
 )
 
@@ -103,6 +105,7 @@ type Config struct {
 	AuthorizedKeys string
 	Addr           string
 	Handler        SessionHandler
+	Services       *serve.Registry
 }
 
 type normalizedConfig struct {
@@ -111,6 +114,7 @@ type normalizedConfig struct {
 	authorizedKeys string
 	addr           netip.AddrPort
 	handler        SessionHandler
+	services       *serve.Registry
 }
 
 // Serve runs one locked SSH listener until ctx is done. Options may register
@@ -184,7 +188,7 @@ func validateConfig(ctx context.Context, cfg Config) (normalizedConfig, error) {
 	if addr.Port() == 0 || addr.Addr().IsUnspecified() || addr.Addr().IsMulticast() {
 		return normalizedConfig{}, fmt.Errorf("sshd: listen address %q is not a concrete IP endpoint", cfg.Addr)
 	}
-	return normalizedConfig{hostKey: hostKey, authorizedKeys: authorizedKeys, addr: addr, handler: cfg.Handler, tunnels: cfg.Tunnels}, nil
+	return normalizedConfig{hostKey: hostKey, authorizedKeys: authorizedKeys, addr: addr, handler: cfg.Handler, services: cfg.Services, tunnels: cfg.Tunnels}, nil
 }
 
 func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server, error) {
@@ -226,7 +230,11 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 	if handler == nil {
 		handler = helloHandler
 	}
-	configureSessions(server, cfg.handler, handler)
+	var files *sshfs.Filesystem
+	if cfg.services != nil {
+		files = sshfs.New(cfg.services)
+	}
+	configureSessions(server, cfg.handler, handler, files)
 	if cfg.tunnels != nil {
 		if err := server.SetOption(tunnel.SSHOption(cfg.tunnels)); err != nil {
 			return nil, fmt.Errorf("sshd: configure reverse tunnels: %w", err)
