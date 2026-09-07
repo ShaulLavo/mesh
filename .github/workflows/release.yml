@@ -130,8 +130,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.reserve.outputs.source }}
-      - name: Set up Go for Darwin mapped-executable verification
-        if: matrix.platform == 'darwin/arm64'
+      - name: Set up Go for retained-worker verification
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -163,6 +162,11 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: |
           while IFS= read -r retained; do
+            probe_output="$RUNNER_TEMP/retained-worker-probe.log"
+            MESH_LEGACY_BINARY="$retained" go test -count=1 \
+              -run '^TestLegacyWorkerProcessProtocolAndVersion$' \
+              -v ./internal/updatebootstrap | tee "$probe_output"
+            grep -Fq -- '--- PASS: TestLegacyWorkerProcessProtocolAndVersion' "$probe_output"
             scripts/prove-release-transition.sh \
               "$retained" "$RUNNER_TEMP/candidate/mesh" \
               "$PLATFORM" "$RUNNER_TEMP/proofs"

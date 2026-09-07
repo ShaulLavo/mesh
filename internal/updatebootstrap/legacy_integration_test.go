@@ -1,17 +1,19 @@
 package updatebootstrap
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
+	workerstate "github.com/shaul/mesh/internal/worker"
 )
 
 func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
@@ -19,7 +21,7 @@ func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
 	if binary == "" {
 		t.Skip("set MESH_LEGACY_BINARY to the retained pre-updater Mesh executable")
 	}
-	state, err := os.MkdirTemp("/work/tmp/mesh-t26", "legacy-probe-")
+	state, err := os.MkdirTemp("/tmp", "mesh-legacy-probe-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +38,15 @@ func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
 	}
 	defer func() { _ = command.Process.Kill(); _ = command.Wait() }()
 	awaitWorkerSocket(t, filepath.Join(dir, "sock"))
+	metaBefore, err := os.ReadFile(filepath.Join(dir, "meta.json")) //nolint:gosec // fixed metadata name under the isolated test worker directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := workerstate.ReadMeta(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = syscall.Kill(meta.PID, syscall.SIGKILL) }()
 	listener, err := net.Listen("unix", filepath.Join(state, "daemon.sock"))
 	if err != nil {
 		t.Fatal(err)
@@ -58,11 +69,28 @@ func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
 	if len(observed.Health.Workers) != 1 {
 		t.Fatalf("workers = %+v", observed.Health.Workers)
 	}
-	worker := observed.Health.Workers[0]
-	if worker.PID != command.Process.Pid || worker.Protocol != 1 || worker.Build == nil || !strings.HasPrefix(worker.Build.Version, "v0.1.38") {
-		t.Fatalf("legacy worker = %+v", worker)
+	observedWorker := observed.Health.Workers[0]
+	wantDigest, err := imageDigest(binary)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("verified actual legacy worker PID=%d version=%s digest=%s protocol=%d", worker.PID, worker.Build.Version, worker.Build.Digest, worker.Protocol)
+	if observedWorker.PID != command.Process.Pid || observedWorker.ShellPID != meta.PID || observedWorker.Protocol != 1 || observedWorker.Build == nil || observedWorker.Build.Digest != wantDigest {
+		t.Fatalf("legacy worker = %+v", observedWorker)
+	}
+	if _, err = release.CompareVersions(observedWorker.Build.Version, "v0.0.0"); err != nil {
+		t.Fatalf("legacy worker version = %q: %v", observedWorker.Build.Version, err)
+	}
+	if err = syscall.Kill(command.Process.Pid, 0); err != nil {
+		t.Fatalf("legacy worker did not survive read-only probe: %v", err)
+	}
+	if err = syscall.Kill(meta.PID, 0); err != nil {
+		t.Fatalf("legacy shell did not survive read-only probe: %v", err)
+	}
+	metaAfter, err := os.ReadFile(filepath.Join(dir, "meta.json")) //nolint:gosec // the same isolated metadata file is compared for read-only behavior
+	if err != nil || !bytes.Equal(metaAfter, metaBefore) {
+		t.Fatalf("read-only probe changed worker metadata: %v", err)
+	}
+	t.Logf("verified actual legacy worker PID=%d shellPID=%d version=%s digest=%s protocol=%d", observedWorker.PID, observedWorker.ShellPID, observedWorker.Build.Version, observedWorker.Build.Digest, observedWorker.Protocol)
 }
 
 func awaitWorkerSocket(t *testing.T, path string) {

@@ -232,7 +232,7 @@ func inspectWorker(ctx context.Context, dir string, stateVersion int) (*updatein
 	if err != nil {
 		return nil, err
 	}
-	if response.Type != protocol.TypeInspected || response.Inspection == nil || response.SessionID != meta.ID || response.RequestID != "bootstrap-worker" {
+	if !validWorkerProbe(response, meta) {
 		return nil, errors.New("worker cannot answer a read-only session inspection")
 	}
 	build, err := observedBuild(image.Path, meta.Build, stateVersion)
@@ -243,6 +243,17 @@ func inspectWorker(ctx context.Context, dir string, stateVersion int) (*updatein
 		build.WorkerProtocol = 1
 	}
 	return &updateinstall.Worker{ID: meta.ID, PID: image.PID, ShellPID: meta.PID, Protocol: build.WorkerProtocol, Build: &build}, nil
+}
+
+func validWorkerProbe(response protocol.Control, meta worker.Meta) bool {
+	if response.Type == protocol.TypeInspected {
+		return response.Inspection != nil && response.SessionID == meta.ID && response.RequestID == "bootstrap-worker"
+	}
+	// Workers before session.inspect reject the unknown request before the
+	// attachment path. This exact framed response is their read-only liveness
+	// acknowledgement; peerImage has already bound it to the executable and PID.
+	return meta.Build == nil && response.Type == protocol.TypeError && response.Inspection == nil &&
+		response.SessionID == meta.ID && response.RequestID == "" && response.Message == "expected "+protocol.TypeAttach
 }
 
 func dial(ctx context.Context, path string) (net.Conn, error) {

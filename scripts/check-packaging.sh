@@ -135,6 +135,9 @@ check_source_contract() {
   contains .github/workflows/release.yml 'SOURCE_SHA: ${{ inputs.source_sha }}'
   does_not_contain .github/workflows/release.yml "run: scripts/reserve-release.sh '\${{ inputs.source_sha }}'"
   contains .github/workflows/release.yml 'scripts/prove-release-transition.sh'
+  contains .github/workflows/release.yml 'MESH_LEGACY_BINARY="$retained" go test -count=1'
+  contains .github/workflows/release.yml "-run '^TestLegacyWorkerProcessProtocolAndVersion$'"
+  contains .github/workflows/release.yml "grep -Fq -- '--- PASS: TestLegacyWorkerProcessProtocolAndVersion'"
   contains .github/workflows/release.yml "go test -count=1 -run '^TestDarwinMappedExecutableSurvivesAtomicReplacement$' -v ./internal/updatebootstrap"
   contains .github/workflows/release.yml "grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement'"
   contains .github/workflows/release.yml 'scripts/prepare-release-baselines.sh'
