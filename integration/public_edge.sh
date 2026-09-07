@@ -9,7 +9,7 @@ REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 CONTROL_FIXTURE="$REPO_ROOT/integration/helpers/mesh_control.py"
 HTTP_FIXTURE="$REPO_ROOT/integration/helpers/public_http_fixture.py"
 TEST_ROOT=$(mktemp -d)
-MESH_INTEGRATION="$TEST_ROOT/mesh-integration"
+MESH_INTEGRATION=${MESH_INTEGRATION_BINARY:-$TEST_ROOT/mesh-integration}
 EDGE_STATE="$TEST_ROOT/edge-state"
 ORIGIN_ONE_STATE="$TEST_ROOT/origin-one-state"
 ORIGIN_TWO_STATE="$TEST_ROOT/origin-two-state"
@@ -235,8 +235,10 @@ ln -s "$REPO_ROOT/integration/helpers/fake_tailscale" "$TEST_ROOT/bin/tailscale"
 printf PUBLIC_EDGE_ORIGIN_ONE >"$TEST_ROOT/origin-one-site/index.html"
 printf PUBLIC_EDGE_ORIGIN_TWO >"$TEST_ROOT/origin-two-site/index.html"
 
-(cd "$REPO_ROOT" && go build -tags mesh_integration -o "$MESH_INTEGRATION" ./cmd/mesh) ||
-  fail "build tagged Mesh binary"
+if [[ -z ${MESH_INTEGRATION_BINARY:-} ]]; then
+  (cd "$REPO_ROOT" && go build -tags mesh_integration -o "$MESH_INTEGRATION" ./cmd/mesh) ||
+    fail "build tagged Mesh binary"
+fi
 
 for state in "$EDGE_STATE" "$ORIGIN_ONE_STATE" "$ORIGIN_TWO_STATE"; do
   ssh-keygen -q -t ed25519 -N "" -C "" -f "$state/identity.key" >/dev/null 2>&1 || fail "generate daemon identity"

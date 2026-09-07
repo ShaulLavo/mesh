@@ -5,7 +5,7 @@ set -uo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/mesh-ssh.XXXXXX")
-MESH=$test_root/mesh-integration
+MESH=${MESH_INTEGRATION_BINARY:-$test_root/mesh-integration}
 server_state=$test_root/server-state
 client_state=$test_root/client-state
 unrelated_state=$test_root/unrelated-state
@@ -74,7 +74,9 @@ for tool in openssl python3 ssh ssh-keygen ssh-keyscan; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 
-(cd "$repo_root" && go build -tags mesh_integration -o "$MESH" ./cmd/mesh) || fail 'build integration binary'
+if [[ -z ${MESH_INTEGRATION_BINARY:-} ]]; then
+  (cd "$repo_root" && go build -tags mesh_integration -o "$MESH" ./cmd/mesh) || fail 'build integration binary'
+fi
 
 mkdir -p "$server_state" "$client_state" "$unrelated_state" "$test_root/bin"
 ln -s "$repo_root/integration/helpers/fake_tailscale" "$test_root/bin/tailscale"

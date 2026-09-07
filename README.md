@@ -111,6 +111,8 @@ for the exact identity and SSH command. Disconnecting returns the hostname to 40
 
 ## Development
 
-Run `./scripts/verify.sh` for the integration suite. See the
+Run `./scripts/verify.sh` for the integration suite. It builds both test binaries
+once and runs up to four tests concurrently, limited by available CPUs. Set
+`MESH_INTEGRATION_JOBS` to choose a different concurrency limit. See the
 [implementation status](docs/plan/02-status.md) and [task briefs](docs/tasks/)
 for the design and build order.

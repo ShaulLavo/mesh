@@ -10,7 +10,7 @@ REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 HTTP_FIXTURE="$REPO_ROOT/integration/helpers/public_http_fixture.py"
 CONFIRM_FIXTURE="$REPO_ROOT/integration/helpers/confirm_public_serve.py"
 TEST_ROOT=$(mktemp -d)
-MESH_INTEGRATION="$TEST_ROOT/mesh-integration"
+MESH_INTEGRATION=${MESH_INTEGRATION_BINARY:-$TEST_ROOT/mesh-integration}
 EDGE_STATE="$TEST_ROOT/edge-state"
 ORIGIN_STATE="$TEST_ROOT/origin-state"
 ORIGIN_HOME="$TEST_ROOT/origin-home"
@@ -165,8 +165,10 @@ printf 'DOWNLOAD_MARKER' >"$TEST_ROOT/files/download.txt"
 printf 'SECRET_PUBLIC_MARKER' >"$TEST_ROOT/secret/index.html"
 printf 'DO_NOT_PUBLISH' >"$TEST_ROOT/secret/.env"
 
-(cd "$REPO_ROOT" && go build -tags mesh_integration -o "$MESH_INTEGRATION" ./cmd/mesh) ||
-  fail "build tagged Mesh binary"
+if [[ -z ${MESH_INTEGRATION_BINARY:-} ]]; then
+  (cd "$REPO_ROOT" && go build -tags mesh_integration -o "$MESH_INTEGRATION" ./cmd/mesh) ||
+    fail "build tagged Mesh binary"
+fi
 
 for state in "$EDGE_STATE" "$ORIGIN_STATE"; do
   ssh-keygen -q -t ed25519 -N "" -C "" -f "$state/identity.key" >/dev/null 2>&1 || fail "generate daemon identity"

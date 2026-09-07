@@ -8,5 +8,8 @@ if [[ -z ${MESH:-} ]]; then
   (cd "$repo_root" && go build -o "$MESH" ./cmd/mesh)
 fi
 # The SSH fixture uses the existing loopback-only integration transport.
-(cd "$repo_root" && go build -tags mesh_integration -o "$build_root/mesh-ssh" ./cmd/mesh)
-python3 "$repo_root/integration/helpers/agent_recovery.py" "$MESH" "$build_root/mesh-ssh"
+mesh_ssh=${MESH_INTEGRATION_BINARY:-$build_root/mesh-ssh}
+if [[ -z ${MESH_INTEGRATION_BINARY:-} ]]; then
+  (cd "$repo_root" && go build -tags mesh_integration -o "$mesh_ssh" ./cmd/mesh)
+fi
+python3 "$repo_root/integration/helpers/agent_recovery.py" "$MESH" "$mesh_ssh"

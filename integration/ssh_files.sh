@@ -4,7 +4,7 @@ set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/mesh-ssh-files.XXXXXX")
-mesh=$test_root/mesh
+mesh=${MESH_INTEGRATION_BINARY:-$test_root/mesh}
 state=$test_root/state
 daemon_pid=
 
@@ -22,10 +22,12 @@ fail() {
   exit 1
 }
 
-for tool in go python3 ssh-keygen sftp scp; do
+for tool in python3 ssh-keygen sftp scp; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
-(cd "$repo_root" && go build -tags mesh_integration -o "$mesh" ./cmd/mesh)
+if [[ -z ${MESH_INTEGRATION_BINARY:-} ]]; then
+  (cd "$repo_root" && go build -tags mesh_integration -o "$mesh" ./cmd/mesh)
+fi
 mkdir -p "$state" "$test_root/bin" "$test_root/files/nested" "$test_root/site"
 ln -s "$repo_root/integration/helpers/fake_tailscale" "$test_root/bin/tailscale"
 ssh-keygen -q -t ed25519 -N "" -f "$test_root/client-key"

@@ -5,7 +5,7 @@ export PYTHONDONTWRITEBYTECODE=1
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/mesh-tunnel.XXXXXX")
-mesh=$test_root/mesh-integration
+mesh=${MESH_INTEGRATION_BINARY:-$test_root/mesh-integration}
 edge_state=$test_root/edge
 client_state=$test_root/client
 other_state=$test_root/other
@@ -124,7 +124,9 @@ done
 mkdir -p "$edge_state" "$client_state" "$other_state" "$config_dir" "$test_root/bin" "$test_root/site"
 chmod 0700 "$edge_state" "$client_state" "$other_state"
 ln -s "$repo_root/integration/helpers/fake_tailscale" "$test_root/bin/tailscale"
-(cd "$repo_root" && go build -tags mesh_integration -o "$mesh" ./cmd/mesh) || fail 'build tagged Mesh binary'
+if [[ -z ${MESH_INTEGRATION_BINARY:-} ]]; then
+  (cd "$repo_root" && go build -tags mesh_integration -o "$mesh" ./cmd/mesh) || fail 'build tagged Mesh binary'
+fi
 
 for key in "$edge_state/identity.key" "$client_state/identity.key" "$other_state/identity.key" "$test_root/unauthorized.key"; do
   ssh-keygen -q -t ed25519 -N '' -C '' -f "$key" || fail 'generate fixture identity'
