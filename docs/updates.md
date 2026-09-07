@@ -155,8 +155,9 @@ publisher. Publication reserves an exact source commit and version, builds the
 final artifacts, runs native transition checks for each supported platform,
 and publishes only after the manifest and checksums are complete. An older
 queued commit cannot replace a newer published release. A retry retains its
-reserved commit and version. Updating the Homebrew cask does not start another
-release.
+reserved commit and version. If an earlier candidate failed publication, a new
+source commit receives the next unreserved version; it never moves the failed
+candidate's tag. Updating the Homebrew cask does not start another release.
 
 For a custom installed build, a maintainer can attach its executable to the
 reserved draft before publication starts. Name it

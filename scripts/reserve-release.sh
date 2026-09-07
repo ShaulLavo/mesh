@@ -95,6 +95,43 @@ gate_count=$(gh api \
   exit 1
 }
 
+if [[ -z $explicit_version ]]; then
+  gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+    --jq '.[] | select(.draft == true) | [.tag_name, .target_commitish] | @tsv' >"$temporary/drafts.tsv"
+  git for-each-ref --format='%(refname:short)%09%(*objectname)%09%(objectname)' refs/tags >"$temporary/tags.tsv"
+  version=$(python3 - "$source_sha" "$latest_tag" "$temporary" <<'PY'
+import pathlib
+import re
+import sys
+
+source, latest, directory = sys.argv[1:]
+stable = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+
+def parts(tag):
+    match = stable.fullmatch(tag)
+    return tuple(map(int, match.groups())) if match else None
+
+baseline = parts(latest)
+if baseline is None:
+    raise SystemExit("release reservation: latest version is not stable semver")
+reservations = {}
+for line in (pathlib.Path(directory) / "drafts.tsv").read_text().splitlines():
+    tag, target = line.split("\t", 1)
+    if parts(tag) is not None:
+        reservations[parts(tag)] = target
+for line in (pathlib.Path(directory) / "tags.tsv").read_text().splitlines():
+    tag, peeled, direct = line.split("\t")
+    if parts(tag) is not None:
+        reservations[parts(tag)] = peeled or direct
+owned = [tag for tag, target in reservations.items() if tag > baseline and target == source]
+candidate = min(owned) if owned else (baseline[0], baseline[1], baseline[2] + 1)
+while candidate in reservations and reservations[candidate] != source:
+    candidate = (candidate[0], candidate[1], candidate[2] + 1)
+print("v%d.%d.%d" % candidate)
+PY
+)
+fi
+
 tag_exists=false
 if git show-ref --verify --quiet "refs/tags/$version"; then
   tag_exists=true

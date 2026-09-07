@@ -48,6 +48,12 @@ activation grant. Tests cover damaged artifacts, missing mounts, insufficient
 space, managed installation paths, service definitions that would kill workers,
 candidate health failure, actual database compatibility, and verified rollback.
 
+The transaction retains the original executable inode through activation and
+rollback. This matters on macOS: copying an old executable preserves its bytes
+but does not preserve the mapped inode needed to verify a retained worker.
+Native tests exercise replacement at the installed path and check the loaded
+image, rather than only running old and new binaries at separate paths.
+
 Coordinator tests cover signed requests, replay, target identity changes,
 concurrent coordinators, shared installation receipts, dependency order, an
 offline host returning to a pinned release, canary failure, lost acknowledgments,

@@ -134,6 +134,9 @@ func (e *Engine) switchCandidate(status Status) error {
 	if digest != status.Request.Current.Digest {
 		return ErrInstallationChanged
 	}
+	if err = durableLink(e.cfg.Executable, status.Previous, status.Request.Current.Digest); err != nil {
+		return err
+	}
 	if err = verifyFile(status.Previous, status.Request.Current.Digest); err != nil {
 		return err
 	}
@@ -211,7 +214,7 @@ func (e *Engine) restore(ctx context.Context, status Status) (Health, error) {
 	if err := e.stop(ctx); err != nil {
 		return Health{}, err
 	}
-	if err := durableCopy(status.Previous, e.cfg.Executable, status.Request.Current.Digest); err != nil {
+	if err := durableLink(status.Previous, e.cfg.Executable, status.Request.Current.Digest); err != nil {
 		return Health{}, err
 	}
 	if err := e.start(ctx); err != nil {

@@ -213,6 +213,51 @@ func durableCopy(source, destination, expected string) error {
 	return syncDirectory(filepath.Dir(destination))
 }
 
+// A retained worker can keep this inode mapped after the install path changes.
+// Copying the bytes cannot preserve that identity on systems without /proc/exe.
+func durableLink(source, destination, expected string) error {
+	file, err := os.CreateTemp(filepath.Dir(destination), ".mesh-link-*")
+	if err != nil {
+		return err
+	}
+	temporary := file.Name()
+	defer func() { _ = os.Remove(temporary) }()
+	if err = file.Close(); err != nil {
+		return err
+	}
+	if err = os.Remove(temporary); err != nil {
+		return err
+	}
+	if err = os.Link(source, temporary); err != nil {
+		return fmt.Errorf("retain executable inode: %w", err)
+	}
+	info, err := os.Lstat(temporary)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("retained executable must be a regular file")
+	}
+	if err = verifyFile(temporary, expected); err != nil {
+		return err
+	}
+	linked, err := os.Open(temporary) //nolint:gosec // newly created hard link to the approved installation image
+	if err != nil {
+		return err
+	}
+	if err = linked.Sync(); err != nil {
+		_ = linked.Close()
+		return err
+	}
+	if err = linked.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(temporary, destination); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(destination))
+}
+
 func checkMount(path string) error {
 	if path == "" {
 		return nil

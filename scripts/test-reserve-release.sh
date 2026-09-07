@@ -23,10 +23,14 @@ set -euo pipefail
 case " $* " in
   *'/releases/latest '*) printf '%s\n' "${GH_LATEST_TAG:-v0.1.38}" ;;
   *'/check-runs '*) printf '%s\n' "${GH_GATE_COUNT:-1}" ;;
+  *'/releases?per_page=100 '*)
+    [[ -f $GH_LOG ]] || exit 0
+    awk '$1 == "release" && $2 == "create" {for(i=4;i<=NF;i++) if($i == "--target") print $3 "\t" $(i+1)}' "$GH_LOG" ;;
   *' release download '*) exit 1 ;;
   *' release view '*" --json assets "*) printf '\n' ;;
-  *' release view '*" --json targetCommitish "*) printf '%s\n' "${GH_DRAFT_TARGET:-}" ;;
-  *' release view '*) [[ -s $GH_LOG ]] ;;
+  *' release view '*" --json targetCommitish "*)
+    awk -v tag="$3" '$1 == "release" && $2 == "create" && $3 == tag {for(i=4;i<=NF;i++) if($i == "--target") print $(i+1)}' "$GH_LOG" ;;
+  *' release view '*) [[ -f $GH_LOG ]] && awk -v tag="$3" '$1 == "release" && $2 == "create" && $3 == tag {found=1} END {exit !found}' "$GH_LOG" ;;
   *' release create '*) printf '%s\n' "$*" >>"$GH_LOG" ;;
   *) printf 'unexpected gh invocation: %s\n' "$*" >&2; exit 1 ;;
 esac
@@ -85,4 +89,29 @@ if GH_GATE_COUNT=0 run_reserve "$untested" >/dev/null 2>&1; then
   exit 1
 fi
 
-echo 'PASS: release reservation skips Cask-only commits and requires monotonic tested source'
+result=$(run_reserve "$untested")
+grep -Fqx 'version=v0.1.40' <<<"$result"
+[[ $(git --git-dir="$remote" rev-list -n 1 v0.1.39) == "$source_sha" ]]
+[[ $(git --git-dir="$remote" rev-list -n 1 v0.1.40) == "$untested" ]]
+result=$(run_reserve "$untested")
+grep -Fqx 'version=v0.1.40' <<<"$result"
+[[ $(grep -c 'release create v0.1.40 ' "$test_root/gh.log") -eq 1 ]]
+if run_reserve "$untested" v0.1.39 >/dev/null 2>&1; then
+  echo 'reserve reused another source explicit reservation' >&2
+  exit 1
+fi
+
+printf 'draft-only source\n' >>"$checkout/source"
+git -C "$checkout" commit -qam draft-only
+draft_source=$(git -C "$checkout" rev-parse HEAD)
+printf 'release create v0.1.41 --draft --target %s\n' "$draft_source" >>"$test_root/gh.log"
+printf 'newer source\n' >>"$checkout/source"
+git -C "$checkout" commit -qam newer
+newer_source=$(git -C "$checkout" rev-parse HEAD)
+git -C "$checkout" push -q origin main
+result=$(run_reserve "$newer_source")
+grep -Fqx 'version=v0.1.42' <<<"$result"
+result=$(run_reserve "$draft_source")
+grep -Fqx 'version=v0.1.41' <<<"$result"
+
+echo 'PASS: release reservation requires tested source, preserves retries, and advances past failed reservations'

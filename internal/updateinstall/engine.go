@@ -212,7 +212,7 @@ func (e *Engine) stage(ctx context.Context, status Status) (Status, error) {
 	if err = durableCopy(path, status.Candidate, artifact.BinarySHA256); err != nil {
 		return status, err
 	}
-	if err = durableCopy(e.cfg.Executable, status.Previous, status.Request.Current.Digest); err != nil {
+	if err = durableLink(e.cfg.Executable, status.Previous, status.Request.Current.Digest); err != nil {
 		return status, err
 	}
 	status.Phase = Staged

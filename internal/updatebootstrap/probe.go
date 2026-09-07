@@ -54,6 +54,7 @@ func Inspect(ctx context.Context, stateDir string) (Observation, error) {
 	if err != nil {
 		return Observation{}, err
 	}
+	image.Installed = activeInstallationPath(stateDir, image)
 	response, err := exchange(conn, protocol.Control{Type: protocol.TypeHostInfo, RequestID: "bootstrap-host-info"})
 	if err != nil {
 		return Observation{}, err
