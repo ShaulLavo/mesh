@@ -31,6 +31,7 @@ shell_pid=''
 worker_pid=''
 
 cleanup() {
+  discover_owned_session_processes
   [[ -z $client ]] || kill -9 "$client" 2>/dev/null || true
   [[ -z $candidate_daemon ]] || kill -9 "$candidate_daemon" 2>/dev/null || true
   [[ -z $old_daemon ]] || kill -9 "$old_daemon" 2>/dev/null || true
@@ -40,8 +41,38 @@ cleanup() {
 }
 trap cleanup EXIT
 
+discover_owned_session_processes() {
+  local pid ppid command
+  while read -r pid ppid command; do
+    case $command in
+      *session-worker*"$state/s/"*) worker_pid=$pid ;;
+    esac
+  done < <(ps -axo pid=,ppid=,command= 2>/dev/null || true)
+  [[ -n $worker_pid && -z $shell_pid ]] || return 0
+  while read -r pid ppid command; do
+    if [[ $ppid == "$worker_pid" ]]; then
+      shell_pid=$pid
+      return 0
+    fi
+  done < <(ps -axo pid=,ppid=,command= 2>/dev/null || true)
+}
+
+dump_diagnostics() {
+  local path
+  for path in "$test_root/client.err" "$test_root/client.out" "$test_root/old-first.log" \
+    "$test_root/candidate.err" "$test_root/candidate.out" "$test_root/candidate.log" \
+    "$test_root/rollback.err" "$test_root/rollback.out" "$test_root/old-rollback.log" \
+    "$state"/s/*/worker.log; do
+    [[ -s $path ]] || continue
+    printf '%s (last 4096 bytes):\n' "$path" >&2
+    tail -c 4096 "$path" | sed 's/^/  /' >&2
+    printf '\n' >&2
+  done
+}
+
 fail() {
   echo "transition proof: $*" >&2
+  dump_diagnostics
   exit 1
 }
 
@@ -115,6 +146,18 @@ wait_for_exit() {
   return 1
 }
 
+send_shell_command() {
+  local fd=$1
+  local command=$2
+  printf '%s\n' "$command" >&"$fd"
+}
+
+send_token() {
+  local fd=$1
+  local token=$2
+  send_shell_command "$fd" "printf '\\n%s\\n' '$token'"
+}
+
 assert_session_processes() {
   kill -0 "$shell_pid" 2>/dev/null || fail 'retained shell is not alive'
   kill -0 "$worker_pid" 2>/dev/null || fail 'retained worker server is not alive'
@@ -159,13 +202,13 @@ for _ in $(seq 120); do
   sleep 0.05
 done
 [[ -n $session ]] || fail "retained daemon did not create a session: $(cat "$test_root/client.err")"
-printf 'stty -echo\n' >&3
-sleep 0.1
-printf "printf '%%s\\n' 'RETAINED_INITIAL_%s'\n" "$session" >&3
-wait_for_token "$test_root/client.out" "RETAINED_INITIAL_$session" || fail 'retained worker did not answer'
-shell_pid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$state/s/$session/meta.json")
-worker_pid=$(ps -o ppid= -p "$shell_pid" | tr -d '[:space:]')
+shell_pid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$state/s/$session/meta.json") ||
+  fail 'could not identify retained shell'
+worker_pid=$(ps -o ppid= -p "$shell_pid" | tr -d '[:space:]') || fail 'could not identify retained worker server'
 [[ $worker_pid =~ ^[1-9][0-9]*$ ]] || fail 'could not identify retained worker server'
+send_shell_command 3 'PS1= PS2=; stty -echo'
+send_token 3 "RETAINED_INITIAL_$session"
+wait_for_token "$test_root/client.out" "RETAINED_INITIAL_$session" || fail 'retained worker did not answer'
 assert_session_processes
 printf '\035' >&3
 wait_for_exit "$client" || fail 'initial client did not detach'
@@ -219,7 +262,7 @@ mkfifo "$test_root/candidate-input"
 mesh "$candidate_binary" attach "$session" --daemon --detach-key=ctrl+] <"$test_root/candidate-input" >"$test_root/candidate.out" 2>"$test_root/candidate.err" &
 client=$!
 exec 4>"$test_root/candidate-input"
-printf "printf '%%s\\n' 'CANDIDATE_REATTACH_%s'\n" "$session" >&4
+send_token 4 "CANDIDATE_REATTACH_$session"
 wait_for_token "$test_root/candidate.out" "CANDIDATE_REATTACH_$session" || fail 'candidate could not exchange data with retained worker'
 assert_session_processes
 printf '\035' >&4
@@ -240,7 +283,7 @@ mkfifo "$test_root/rollback-input"
 mesh "$old_binary" attach "$session" --daemon --detach-key=ctrl+] <"$test_root/rollback-input" >"$test_root/rollback.out" 2>"$test_root/rollback.err" &
 client=$!
 exec 5>"$test_root/rollback-input"
-printf "printf '%%s\\n' 'RETAINED_ROLLBACK_%s'\n" "$session" >&5
+send_token 5 "RETAINED_ROLLBACK_$session"
 wait_for_token "$test_root/rollback.out" "RETAINED_ROLLBACK_$session" || fail 'retained daemon could not exchange data after rollback'
 assert_session_processes
 recovery_after=$(sha256sum "$state/s/$session/recovery.json" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$state/s/$session/recovery.json" | awk '{print $1}')
