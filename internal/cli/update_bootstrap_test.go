@@ -32,10 +32,10 @@ func TestBootstrapCommandRemainsUntilExactInstallationFinishes(t *testing.T) {
 	done := make(chan result, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	go func() {
-		finished, err := waitBootstrapInstallation(ctx, stateDir, status)
+	go func(initial updateinstall.Status) {
+		finished, err := waitBootstrapInstallation(ctx, stateDir, initial)
 		done <- result{status: finished, err: err}
-	}()
+	}(status)
 	select {
 	case result := <-done:
 		t.Fatalf("bootstrap worker exited while activation remained granted: %+v", result)
