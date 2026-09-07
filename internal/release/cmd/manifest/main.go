@@ -159,40 +159,51 @@ func verifyProofs(directory string, compatibility release.Compatibility) error {
 	if directory == "" {
 		return errors.New("manifest: -proofs is required when compatibility declares transitions")
 	}
+	stateReadMin := compatibility.StateReadMax
+	workerMin := compatibility.WorkerMax
 	for _, transition := range transitions {
-		if err := verifyProof(directory, transition, compatibility); err != nil {
+		proof, err := verifyProof(directory, transition, compatibility)
+		if err != nil {
 			return err
 		}
+		stateReadMin = min(stateReadMin, proof.StateReadMin)
+		workerMin = min(workerMin, proof.WorkerMin)
+	}
+	if stateReadMin != compatibility.StateReadMin {
+		return errors.New("manifest: transition proofs do not establish the declared state minimum")
+	}
+	if workerMin != compatibility.WorkerMin {
+		return errors.New("manifest: transition proofs do not establish the declared worker minimum")
 	}
 	return nil
 }
 
-func verifyProof(directory string, transition release.Transition, compatibility release.Compatibility) error {
+func verifyProof(directory string, transition release.Transition, compatibility release.Compatibility) (receipt, error) {
 	path := filepath.Join(directory, transition.Proof+".json")
 	digest, err := hashFile(path)
 	if err != nil {
-		return fmt.Errorf("manifest: read transition proof %s: %w", transition.Proof, err)
+		return receipt{}, fmt.Errorf("manifest: read transition proof %s: %w", transition.Proof, err)
 	}
 	if digest != transition.Proof {
-		return fmt.Errorf("manifest: transition proof file hashes to %s, want %s", digest, transition.Proof)
+		return receipt{}, fmt.Errorf("manifest: transition proof file hashes to %s, want %s", digest, transition.Proof)
 	}
 	var proof receipt
 	if err := decodeFile(path, &proof); err != nil {
-		return fmt.Errorf("manifest: decode transition proof: %w", err)
+		return receipt{}, fmt.Errorf("manifest: decode transition proof: %w", err)
 	}
 	if proof.Schema != 1 || proof.Platform != transition.Platform || proof.FromDigest != transition.FromDigest || proof.ToDigest != transition.ToDigest {
-		return errors.New("manifest: transition proof identity does not match its transition")
+		return receipt{}, errors.New("manifest: transition proof identity does not match its transition")
 	}
-	if proof.StateReadMin != compatibility.StateReadMin || proof.StateReadMax != compatibility.StateReadMax || proof.StateWrite != compatibility.StateWrite {
-		return errors.New("manifest: transition proof state evidence differs from declared compatibility")
+	if proof.StateReadMin <= 0 || proof.StateReadMin > compatibility.StateReadMax || proof.StateReadMax != compatibility.StateReadMax || proof.StateWrite != compatibility.StateWrite {
+		return receipt{}, errors.New("manifest: transition proof state evidence differs from declared compatibility")
 	}
-	if proof.WorkerMin != compatibility.WorkerMin || proof.WorkerMax != compatibility.WorkerMax || proof.WorkerWrite != compatibility.WorkerWrite || proof.JournalVersion != compatibility.JournalVersion {
-		return errors.New("manifest: transition proof protocol evidence differs from declared compatibility")
+	if proof.WorkerMin <= 0 || proof.WorkerMin > compatibility.WorkerMax || proof.WorkerMax != compatibility.WorkerMax || proof.WorkerWrite != compatibility.WorkerWrite || proof.JournalVersion != compatibility.JournalVersion {
+		return receipt{}, errors.New("manifest: transition proof protocol evidence differs from declared compatibility")
 	}
 	if !proof.RetainedOpenedCandidateState || !proof.SessionsPreserved || !proof.RecoveryRecordsPreserved {
-		return errors.New("manifest: transition proof did not pass every rollback check")
+		return receipt{}, errors.New("manifest: transition proof did not pass every rollback check")
 	}
-	return nil
+	return proof, nil
 }
 
 func decodeFile(path string, destination any) error {

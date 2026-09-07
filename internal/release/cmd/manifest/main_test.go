@@ -97,6 +97,112 @@ func TestGenerateRequiresContentAddressedPassingTransitionProof(t *testing.T) {
 	}
 }
 
+func TestGenerateDerivesCompatibilityMinimaFromHeterogeneousProofs(t *testing.T) {
+	root := t.TempDir()
+	dist := filepath.Join(root, "dist")
+	proofs := filepath.Join(root, "proofs")
+	if err := os.MkdirAll(dist, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(proofs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestArchives(t, dist)
+	platform := release.Platform{OS: "linux", Arch: "amd64"}
+	to := digest([]byte(platform.String()))
+	compatibility := release.Compatibility{
+		StateReadMin: 4, StateReadMax: 7, StateWrite: 7,
+		WorkerMin: 2, WorkerMax: 3, WorkerWrite: 3, JournalVersion: 1,
+	}
+	for index, evidence := range []struct {
+		state  int
+		worker int
+	}{{state: 4, worker: 2}, {state: 7, worker: 3}} {
+		proof := receipt{
+			Schema: 1, Platform: platform,
+			FromDigest: strings.Repeat(string(rune('b'+index)), 64), ToDigest: to,
+			StateReadMin: evidence.state, StateReadMax: 7, StateWrite: 7,
+			WorkerMin: evidence.worker, WorkerMax: 3, WorkerWrite: 3, JournalVersion: 1,
+			RetainedOpenedCandidateState: true, SessionsPreserved: true, RecoveryRecordsPreserved: true,
+		}
+		proofContents, err := json.Marshal(proof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proofDigest := digest(proofContents)
+		if err := os.WriteFile(filepath.Join(proofs, proofDigest+".json"), proofContents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		compatibility.Transitions = append(compatibility.Transitions, release.Transition{
+			FromDigest: proof.FromDigest, ToDigest: to, Platform: platform, Proof: proofDigest,
+		})
+	}
+	compatibilityPath := filepath.Join(root, "compatibility.json")
+	config := options{
+		dist: dist, version: "v0.2.0", commit: strings.Repeat("a", 40),
+		compatibility: compatibilityPath, proofs: proofs, output: filepath.Join(root, "manifest.json"),
+	}
+	writeJSON(t, compatibilityPath, compatibility)
+	if err := generate(config); err != nil {
+		t.Fatalf("generate() rejected heterogeneous proof minima: %v", err)
+	}
+
+	for name, alter := range map[string]func(*release.Compatibility){
+		"fabricated state minimum":  func(value *release.Compatibility) { value.StateReadMin = 3 },
+		"clipped state minimum":     func(value *release.Compatibility) { value.StateReadMin = 5 },
+		"fabricated worker minimum": func(value *release.Compatibility) { value.WorkerMin = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := compatibility
+			alter(&changed)
+			writeJSON(t, compatibilityPath, changed)
+			if err := generate(config); err == nil {
+				t.Fatal("generate() accepted a compatibility minimum not established by its proofs")
+			}
+		})
+	}
+}
+
+func TestVerifyProofRejectsEvidenceOutsideCandidateEnvelope(t *testing.T) {
+	valid := receipt{
+		Schema: 1, Platform: release.Platform{OS: "linux", Arch: "amd64"},
+		FromDigest: strings.Repeat("b", 64), ToDigest: strings.Repeat("c", 64),
+		StateReadMin: 4, StateReadMax: 7, StateWrite: 7,
+		WorkerMin: 1, WorkerMax: 3, WorkerWrite: 3, JournalVersion: 1,
+		RetainedOpenedCandidateState: true, SessionsPreserved: true, RecoveryRecordsPreserved: true,
+	}
+	compatibility := release.Compatibility{
+		StateReadMin: 4, StateReadMax: 7, StateWrite: 7,
+		WorkerMin: 1, WorkerMax: 3, WorkerWrite: 3, JournalVersion: 1,
+	}
+	tests := map[string]func(*receipt){
+		"state minimum above maximum": func(value *receipt) { value.StateReadMin = 8 },
+		"state maximum disagreement":  func(value *receipt) { value.StateReadMax = 8 },
+		"state write disagreement":    func(value *receipt) { value.StateWrite = 6 },
+		"worker minimum above maximum": func(value *receipt) {
+			value.WorkerMin = 4
+		},
+		"worker maximum disagreement": func(value *receipt) { value.WorkerMax = 4 },
+		"worker write disagreement":   func(value *receipt) { value.WorkerWrite = 2 },
+		"journal disagreement":        func(value *receipt) { value.JournalVersion = 2 },
+	}
+	for name, alter := range tests {
+		t.Run(name, func(t *testing.T) {
+			proof := valid
+			alter(&proof)
+			proofs := t.TempDir()
+			proofDigest := writeReceipt(t, proofs, proof)
+			changed := compatibility
+			changed.Transitions = []release.Transition{{
+				FromDigest: proof.FromDigest, ToDigest: proof.ToDigest, Platform: proof.Platform, Proof: proofDigest,
+			}}
+			if err := verifyProofs(proofs, changed); err == nil {
+				t.Fatal("verifyProofs() accepted receipt evidence outside the candidate envelope")
+			}
+		})
+	}
+}
+
 func writeTestArchives(t *testing.T, directory string) {
 	t.Helper()
 	for _, platform := range []release.Platform{{OS: "darwin", Arch: "arm64"}, {OS: "linux", Arch: "amd64"}, {OS: "linux", Arch: "arm64"}} {
@@ -136,6 +242,19 @@ func writeJSON(t *testing.T, path string, value any) {
 	if err := os.WriteFile(path, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeReceipt(t *testing.T, directory string, proof receipt) string {
+	t.Helper()
+	contents, err := json.Marshal(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofDigest := digest(contents)
+	if err := os.WriteFile(filepath.Join(directory, proofDigest+".json"), contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return proofDigest
 }
 
 func readJSON(t *testing.T, path string, value any) {
