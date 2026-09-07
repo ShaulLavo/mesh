@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
 
 permissions:
@@ -73,5 +73,35 @@ jobs:
         with:
           version: v2.18.0
           args: release --snapshot --clean
+      - name: Require main as the repository default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: test "$(gh api 'repos/${{ github.repository }}' --jq .default_branch)" = main
       - name: Verify release and installer contracts
         run: ./scripts/check-packaging.sh dist
+
+  gate:
+    name: Complete CI gate
+    if: always()
+    needs: [test, lint, vulnerability, packaging]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every CI job
+        env:
+          TEST: ${{ needs.test.result }}
+          LINT: ${{ needs.lint.result }}
+          VULNERABILITY: ${{ needs.vulnerability.result }}
+          PACKAGING: ${{ needs.packaging.result }}
+        run: |
+          [[ $TEST == success && $LINT == success && $VULNERABILITY == success && $PACKAGING == success ]]
+
+  publish:
+    name: Publish tested main commit
+    needs: gate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      checks: read
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      source_sha: ${{ github.sha }}

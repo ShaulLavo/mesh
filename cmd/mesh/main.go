@@ -10,8 +10,8 @@ import (
 
 	"github.com/charmbracelet/fang"
 
-	"github.com/shaul/mesh/internal/bootstrap"
 	"github.com/shaul/mesh/internal/cli"
+	"github.com/shaul/mesh/internal/release"
 )
 
 func main() {
@@ -30,7 +30,7 @@ func main() {
 		}),
 	}
 	// Without this a tagged build reports itself as built from source.
-	if version := bootstrap.Version(); version != "" {
+	if version := release.Current().Version; version != "" {
 		options = append(options, fang.WithVersion(version))
 	}
 	err := fang.Execute(context.Background(), root, options...)
@@ -48,7 +48,7 @@ func plainAgentCommand(arguments []string) bool {
 		return false
 	}
 	switch arguments[0] {
-	case "agent", "agent-hook", "agent-resume":
+	case "agent", "agent-hook", "agent-resume", "version", "update", "update-helper", "update-notice-check", "update-bootstrap", "update-bootstrap-status":
 		return true
 	default:
 		return false

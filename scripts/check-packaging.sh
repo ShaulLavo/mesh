@@ -35,12 +35,12 @@ sha256_file() {
 check_source_contract() {
   contains .goreleaser.yaml 'version: 2'
   contains .goreleaser.yaml 'name_template: "mesh_{{ .Os }}_{{ .Arch }}"'
-  contains .goreleaser.yaml '-X github.com/shaul/mesh/internal/bootstrap.releaseVersion={{ .Tag }}'
+  contains .goreleaser.yaml '-X github.com/shaul/mesh/internal/release.Version={{ .Tag }}'
   contains .goreleaser.yaml 'https://github.com/ShaulLavo/mesh/releases/download/{{ .Tag }}/{{ .ArtifactName }}'
   contains .goreleaser.yaml 'owner: ShaulLavo'
   contains .goreleaser.yaml 'name: mesh'
   contains .goreleaser.yaml 'directory: Casks'
-  does_not_contain .goreleaser.yaml '.Version'
+  does_not_contain .goreleaser.yaml 'internal/bootstrap.Version'
 
   contains scripts/install/assets/mesh.service 'Restart=on-failure'
   contains scripts/install/assets/mesh.service 'KillMode=process'
@@ -121,16 +121,34 @@ check_source_contract() {
   contains .golangci.yml '  default: none'
   contains .github/workflows/ci.yml 'goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3'
   contains .github/workflows/ci.yml 'version: v2.18.0'
-  contains .github/workflows/release.yml 'tags:'
-  contains .github/workflows/release.yml 'contents: read'
-  contains .github/workflows/release.yml 'needs: validate'
+  contains .github/workflows/ci.yml 'Complete CI gate'
+  contains .github/workflows/ci.yml 'uses: ./.github/workflows/release.yml'
+  contains .github/workflows/ci.yml 'default_branch'
+  contains .github/workflows/ci.yml 'refs/heads/main'
+  does_not_contain .github/workflows/ci.yml '      - master'
+  contains .github/workflows/release.yml 'workflow_call:'
+  contains .github/workflows/release.yml 'queue: max'
+  contains .github/workflows/release.yml 'checks: read'
   contains .github/workflows/release.yml 'contents: write'
-  contains .github/workflows/release.yml './scripts/check-packaging.sh dist'
-  contains .github/workflows/release.yml 'args: release --clean'
-  local candidate_check_line publish_release_line
-  candidate_check_line=$(grep -nF './scripts/check-packaging.sh dist' .github/workflows/release.yml | cut -d: -f1)
-  publish_release_line=$(grep -nF 'Publish GitHub release and Homebrew Cask' .github/workflows/release.yml | cut -d: -f1)
-  (( candidate_check_line < publish_release_line )) || fail 'tagged release publishes before its dist contract passes'
+  contains .github/workflows/release.yml 'args: release --clean --skip=publish'
+  contains .github/workflows/release.yml 'scripts/reserve-release.sh'
+  contains .github/workflows/release.yml 'SOURCE_SHA: ${{ inputs.source_sha }}'
+  does_not_contain .github/workflows/release.yml "run: scripts/reserve-release.sh '\${{ inputs.source_sha }}'"
+  contains .github/workflows/release.yml 'scripts/prove-release-transition.sh'
+  contains .github/workflows/release.yml 'scripts/prepare-release-baselines.sh'
+  contains .github/workflows/release.yml 'scripts/generate-release-manifest.sh'
+  contains .github/workflows/release.yml 'scripts/finalize-release.sh'
+  contains .github/workflows/release.yml 'Reconcile published Cask'
+  contains scripts/finalize-release.sh 'gh release edit "$version" --draft=false --latest'
+  contains scripts/reserve-release.sh 'scripts/plan-release.sh'
+  contains scripts/reserve-release.sh 'Complete CI gate'
+  contains scripts/finalize-release.sh 'git merge-base --is-ancestor'
+  [[ -x scripts/generate-release-manifest.sh && -x scripts/prove-release-transition.sh && -x scripts/prepare-release-baselines.sh && -x scripts/plan-release.sh && -x scripts/test-reserve-release.sh && -x scripts/test-prepare-release-baselines.sh ]] ||
+    fail 'release scripts are not executable'
+
+  scripts/test-plan-release.sh
+  scripts/test-reserve-release.sh
+  scripts/test-prepare-release-baselines.sh
 
   [[ -x integration/reboot_simulation.sh ]] || fail 'reboot_simulation.sh is not executable'
   contains scripts/verify.sh 'integration/*.sh'
@@ -159,7 +177,7 @@ check_cross_builds() (
     binary=$build_root/mesh_${goos}_${goarch}
     env CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
       go build -trimpath \
-        -ldflags '-X github.com/shaul/mesh/internal/bootstrap.releaseVersion=v0.0.0-contract' \
+        -ldflags '-X github.com/shaul/mesh/internal/release.Version=v0.0.0-contract' \
         -o "$binary" ./cmd/mesh
     metadata=$(go version -m "$binary")
     grep -Fq "GOOS=$goos" <<<"$metadata" || fail "$binary was not built for $goos"

@@ -1,59 +1,212 @@
-name: Release
+name: Publish tested release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact main commit whose complete CI gate passed
+        required: true
+        type: string
+      version:
+        description: Optional explicit stable version for a non-patch release
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact tested commit on main
+        required: true
+        type: string
+      version:
+        description: Optional explicit stable version
+        required: false
+        type: string
+
+concurrency:
+  group: mesh-stable-publication
+  queue: max
 
 permissions:
-  contents: read
+  checks: read
+  contents: write
 
 jobs:
-  validate:
-    name: Test release candidate
+  reserve:
+    name: Reserve source and version
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    outputs:
+      action: ${{ steps.reserve.outputs.action }}
+      source: ${{ steps.reserve.outputs.source }}
+      version: ${{ steps.reserve.outputs.version }}
+      previous_tag: ${{ steps.reserve.outputs.previous_tag }}
+      baseline_assets: ${{ steps.reserve.outputs.baseline_assets }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: ${{ inputs.source_sha }}
+      - id: reserve
+        name: Reserve a monotonic release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EXPLICIT_VERSION: ${{ inputs.version }}
+        run: scripts/reserve-release.sh "$SOURCE_SHA" "$EXPLICIT_VERSION" | tee -a "$GITHUB_OUTPUT"
+
+  build:
+    name: Build final artifacts
+    needs: reserve
+    if: needs.reserve.outputs.action == 'publish'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.reserve.outputs.source }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
-      - name: Race tests
-        run: go test -race ./...
-      - name: Integration tests
-        env:
-          MESH_INTEGRATION_TIMEOUT: 60s
-        run: ./scripts/verify.sh
-      - name: Build release candidate
+      - name: Build without publishing
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.18.0
-          args: release --snapshot --clean
-      - name: Verify release candidate
+          args: release --clean --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Verify final archives
         run: ./scripts/check-packaging.sh dist
+      - name: Store final artifacts in the reserved draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+        run: |
+          gh release upload "$VERSION" --clobber \
+            dist/mesh_darwin_arm64.tar.gz \
+            dist/mesh_linux_amd64.tar.gz \
+            dist/mesh_linux_arm64.tar.gz \
+            dist/checksums.txt \
+            dist/homebrew/Casks/mesh.rb
+
+  reconcile-cask:
+    name: Reconcile published Cask
+    needs: reserve
+    if: needs.reserve.outputs.action == 'reconcile'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.reserve.outputs.source }}
+      - name: Recover the published Cask and finish an interrupted publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+          SOURCE: ${{ needs.reserve.outputs.source }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/cask"
+          gh release download "$VERSION" --pattern mesh.rb --dir "$RUNNER_TEMP/cask"
+          scripts/finalize-release.sh "$VERSION" "$SOURCE" "$VERSION" "$RUNNER_TEMP/cask/mesh.rb"
+
+  prove-transition:
+    name: Prove rollback compatibility (${{ matrix.platform }})
+    needs: [reserve, build]
+    if: needs.reserve.outputs.action == 'publish'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            archive: mesh_linux_amd64.tar.gz
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            archive: mesh_linux_arm64.tar.gz
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            archive: mesh_darwin_arm64.tar.gz
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.reserve.outputs.source }}
+      - name: Download retained and candidate artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_TAG: ${{ needs.reserve.outputs.previous_tag }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+          ARCHIVE: ${{ matrix.archive }}
+          PLATFORM: ${{ matrix.platform }}
+          BASELINE_ASSETS: ${{ needs.reserve.outputs.baseline_assets }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/retained" "$RUNNER_TEMP/candidate"
+          gh release download "$VERSION" --pattern "$ARCHIVE" --dir "$RUNNER_TEMP/candidate"
+          tar -xzf "$RUNNER_TEMP/candidate/$ARCHIVE" -C "$RUNNER_TEMP/candidate"
+          chmod 0755 "$RUNNER_TEMP/candidate/mesh"
+          scripts/prepare-release-baselines.sh \
+            "$VERSION" "$PREVIOUS_TAG" "$PLATFORM" "$BASELINE_ASSETS" \
+            "$RUNNER_TEMP/retained" "$RUNNER_TEMP/retained.list"
+      - name: Exercise candidate state and retained rollback
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          while IFS= read -r retained; do
+            scripts/prove-release-transition.sh \
+              "$retained" "$RUNNER_TEMP/candidate/mesh" \
+              "$PLATFORM" "$RUNNER_TEMP/proofs"
+          done <"$RUNNER_TEMP/retained.list"
+      - name: Store proof in the reserved draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+        run: gh release upload "$VERSION" --clobber "$RUNNER_TEMP"/proofs/*.json
 
   publish:
-    name: Publish release
-    needs: validate
+    name: Publish complete release
+    needs: [reserve, build, prove-transition]
+    if: needs.reserve.outputs.action == 'publish'
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          persist-credentials: false
+          ref: ${{ needs.reserve.outputs.source }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
-      - name: Publish GitHub release and Homebrew Cask
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with:
-          version: v2.18.0
-          args: release --clean
+      - name: Recover draft artifacts and proofs
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+        run: |
+          mkdir -p dist/homebrew/Casks proofs "$RUNNER_TEMP/release-json"
+          gh release download "$VERSION" --pattern 'mesh_*.tar.gz' --dir dist
+          gh release download "$VERSION" --pattern checksums.txt --dir dist
+          gh release download "$VERSION" --pattern mesh.rb --dir dist/homebrew/Casks
+          gh release download "$VERSION" --pattern '*.json' --dir "$RUNNER_TEMP/release-json"
+          for asset in "$RUNNER_TEMP"/release-json/*.json; do
+            name=${asset##*/}
+            [[ $name =~ ^[0-9a-f]{64}\.json$ ]] || continue
+            cp "$asset" "proofs/$name"
+          done
+          compgen -G 'proofs/*.json' >/dev/null
+      - name: Build immutable release manifest
+        env:
+          VERSION: ${{ needs.reserve.outputs.version }}
+          SOURCE: ${{ needs.reserve.outputs.source }}
+        run: |
+          scripts/assemble-release-compatibility.py proofs "$RUNNER_TEMP/compatibility.json"
+          scripts/generate-release-manifest.sh \
+            -dist dist -version "$VERSION" -commit "$SOURCE" \
+            -compatibility "$RUNNER_TEMP/compatibility.json" -proofs proofs \
+            -output dist/mesh-release.json
+      - name: Upload and publish after ancestry recheck
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+          SOURCE: ${{ needs.reserve.outputs.source }}
+          PREVIOUS_TAG: ${{ needs.reserve.outputs.previous_tag }}
+        run: |
+          gh release upload "$VERSION" --clobber dist/mesh-release.json
+          scripts/finalize-release.sh "$VERSION" "$SOURCE" "$PREVIOUS_TAG" dist/homebrew/Casks/mesh.rb

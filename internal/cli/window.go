@@ -75,7 +75,8 @@ func (a *application) runWindow(cmd *cobra.Command, take bool, detachKey string,
 			aliases[host.ID] = host.Alias
 		}
 		selection, err := a.dependencies.WindowPicker(cmd.Context(), WindowInput{
-			Sessions: rows, HostAlias: localHostAlias, HostID: local.Host.ID, HostAliases: aliases,
+			UpdateNotice: a.pickerUpdateNotice(),
+			Sessions:     rows, HostAlias: localHostAlias, HostID: local.Host.ID, HostAliases: aliases,
 			Inspect: inspectLocalSession,
 			Action: func(ctx context.Context, request PickerSessionActionRequest) error {
 				return a.localPickerSessionAction(ctx, request)
@@ -85,6 +86,8 @@ func (a *application) runWindow(cmd *cobra.Command, take bool, detachKey string,
 			return err
 		}
 		switch {
+		case selection.ReviewUpdate:
+			return a.runUpdatePreview(cmd.Context())
 		case selection.FullPicker:
 			return a.runPickerOpen(cmd, hosts, detachKey, raw, localHostAlias)
 		case selection.New:
@@ -240,6 +243,7 @@ func (a *application) attachWindow(cmd *cobra.Command, current Session, socket s
 }
 
 func (a *application) attachmentOptions(cmd *cobra.Command, detachKey string, raw bool) (AttachOptions, error) {
+	a.noticeBeforeAttachment(cmd)
 	key, parsedRaw, err := ParseDetachKey(detachKey)
 	if err != nil {
 		return AttachOptions{}, err

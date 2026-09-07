@@ -232,10 +232,10 @@ func (m *model) refreshSessionDelegate() {
 
 func (m *model) resizeList() {
 	if m.screen == hostScreen {
-		m.list.SetSize(m.width, max(1, m.height-frameRows))
+		m.list.SetSize(m.width, max(1, m.height-frameRows-len(m.updateNoticeLines())))
 		return
 	}
-	listRows, _, _ := m.sessionLayout(max(0, m.height-4))
+	listRows, _, _ := m.sessionLayout(max(0, m.height-4-len(m.updateNoticeLines())))
 	m.list.SetSize(m.width, max(1, listRows))
 }
 
@@ -265,8 +265,11 @@ func (m model) sessionView() tea.View {
 	case 3:
 		lines = append(lines, header, subtitle, footer)
 	default:
-		bodyRows := m.height - 4
-		lines = append(lines, header, subtitle, "")
+		updateLines := m.updateNoticeLines()
+		bodyRows := max(0, m.height-4-len(updateLines))
+		lines = append(lines, header, subtitle)
+		lines = append(lines, updateLines...)
+		lines = append(lines, "")
 		if m.fullPreview {
 			lines = append(lines, m.fullPreviewPanel(bodyRows)...)
 		} else {

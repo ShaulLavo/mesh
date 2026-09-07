@@ -178,7 +178,7 @@ func TestCommandDependenciesWireBootstrapAndPicker(t *testing.T) {
 }
 
 func TestPromptedAuthKeyIsRedactedLikeAFileKey(t *testing.T) {
-	const secret = "tskey-pasted-not-from-a-file"
+	const secret = "tskey-pasted-not-from-a-file" //nolint:gosec // inert sentinel verifies output redaction
 	identity := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	var output bytes.Buffer
 	bootstrapFunc := newBootstrapFunc(func(ctx context.Context, opts bootstrap.Options) (bootstrap.Result, error) {
@@ -234,7 +234,7 @@ func TestAuthKeyFileRefusesLoosePermissions(t *testing.T) {
 	// silently would be the wrong kind of convenient.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tailscale-auth-key")
-	if err := os.WriteFile(path, []byte("tskey-secret\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("tskey-secret\n"), 0o644); err != nil { //nolint:gosec // deliberately loose mode exercises rejection
 		t.Fatal(err)
 	}
 	_, err := readTailscaleAuthKey(path)

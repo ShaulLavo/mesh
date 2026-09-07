@@ -9,25 +9,20 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
-	"time"
+
+	meshrelease "github.com/shaul/mesh/internal/release"
 )
 
 const (
-	officialReleaseBaseURL = "https://github.com/ShaulLavo/mesh/releases"
-	maximumManifestSize    = 1 << 20
-	maximumArchiveSize     = 128 << 20
-	maximumBinarySize      = 128 << 20
+	maximumManifestSize = 1 << 20
+	maximumArchiveSize  = 128 << 20
+	maximumBinarySize   = 128 << 20
 )
-
-var releaseVersion string
 
 type binarySelection struct {
 	explicitPath string
@@ -112,7 +107,7 @@ func resolvePlatformBinary(ctx context.Context, selection binarySelection, platf
 func normalizeReleaseOptions(selection binarySelection) (releaseOptions, error) {
 	baseURL := strings.TrimRight(selection.baseURL, "/")
 	if baseURL == "" {
-		baseURL = officialReleaseBaseURL
+		baseURL = meshrelease.OfficialBaseURL
 	}
 	version := selection.version
 	if version == "" {
@@ -122,75 +117,32 @@ func normalizeReleaseOptions(selection binarySelection) (releaseOptions, error) 
 			return releaseOptions{}, err
 		}
 	}
-	client := selection.httpClient
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
-	}
-	return releaseOptions{baseURL: baseURL, version: version, httpClient: client}, nil
-}
-
-// Version reports the release this binary was built as, or an empty string for
-// an untagged development build. Release builds set releaseVersion through the
-// linker; a `go install` of a tagged module carries it in the build info.
-func Version() string {
-	if releaseVersion != "" {
-		return releaseVersion
-	}
-	info, ok := debug.ReadBuildInfo()
-	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
-		return ""
-	}
-	return info.Main.Version
+	return releaseOptions{baseURL: baseURL, version: version, httpClient: selection.httpClient}, nil
 }
 
 func runningVersion() (string, error) {
-	if version := Version(); version != "" {
+	if version := meshrelease.Current().Version; version != "" {
 		return version, nil
 	}
 	return "", errors.New("automatic release download is unsafe from an unversioned development build; place a matching release artifact beside the executable or run mesh add from a tagged release")
 }
 
 func fetchReleaseBinary(ctx context.Context, platform Platform, opts releaseOptions) (string, func(), error) {
-	assetName := releaseAssetName(platform)
-	releaseURL, err := releaseDownloadURL(opts.baseURL, opts.version)
+	client := meshrelease.Client{BaseURL: opts.baseURL, HTTPClient: opts.httpClient}
+	manifest, err := client.Manifest(ctx, opts.version)
 	if err != nil {
 		return "", func() {}, err
 	}
-	manifest, err := downloadBytes(ctx, opts.httpClient, releaseURL+"/checksums.txt", maximumManifestSize)
+	cache, err := os.MkdirTemp("", "mesh-bootstrap-release-*")
 	if err != nil {
-		return "", func() {}, fmt.Errorf("download checksums.txt: %w", err)
+		return "", func() {}, fmt.Errorf("create release cache: %w", err)
 	}
-	wantChecksum, err := checksumForAsset(manifest, assetName)
+	binaryPath, err := client.Download(ctx, manifest, meshrelease.Platform{OS: platform.OS.String(), Arch: platform.Arch.String()}, cache)
 	if err != nil {
+		_ = os.RemoveAll(cache)
 		return "", func() {}, err
 	}
-	archive, err := os.CreateTemp("", "mesh-release-*.tar.gz")
-	if err != nil {
-		return "", func() {}, fmt.Errorf("create release archive: %w", err)
-	}
-	archivePath := archive.Name()
-	cleanupArchive := func() { _ = os.Remove(archivePath) }
-	checksum := sha256.New()
-	if err := downloadFile(ctx, opts.httpClient, releaseURL+"/"+assetName, archive, checksum, maximumArchiveSize); err != nil {
-		_ = archive.Close()
-		cleanupArchive()
-		return "", func() {}, fmt.Errorf("download %s: %w", assetName, err)
-	}
-	if err := archive.Close(); err != nil {
-		cleanupArchive()
-		return "", func() {}, fmt.Errorf("close release archive: %w", err)
-	}
-	gotChecksum := checksum.Sum(nil)
-	if !equalChecksum(gotChecksum, wantChecksum) {
-		cleanupArchive()
-		return "", func() {}, fmt.Errorf("checksum for %s is %x, want %x", assetName, gotChecksum, wantChecksum)
-	}
-	binaryPath, cleanupBinary, err := extractReleaseArchive(archivePath)
-	cleanupArchive()
-	if err != nil {
-		return "", func() {}, fmt.Errorf("extract %s: %w", assetName, err)
-	}
-	return binaryPath, cleanupBinary, nil
+	return binaryPath, func() { _ = os.RemoveAll(cache) }, nil
 }
 
 func extractLocalReleaseBinary(archivePath, manifestPath, assetName string) (string, func(), error) {
@@ -218,8 +170,8 @@ func extractLocalReleaseBinary(archivePath, manifestPath, assetName string) (str
 	if closeErr != nil {
 		return "", func() {}, fmt.Errorf("close release archive %s: %w", archivePath, closeErr)
 	}
-	if written > maximumArchiveSize {
-		return "", func() {}, fmt.Errorf("release archive %s exceeds %d bytes", archivePath, maximumArchiveSize)
+	if written > maximumBinarySize {
+		return "", func() {}, fmt.Errorf("release archive %s exceeds %d bytes", archivePath, maximumBinarySize)
 	}
 	if got := checksum.Sum(nil); !equalChecksum(got, wantChecksum) {
 		return "", func() {}, fmt.Errorf("checksum for %s is %x, want %x", assetName, got, wantChecksum)
@@ -227,76 +179,8 @@ func extractLocalReleaseBinary(archivePath, manifestPath, assetName string) (str
 	return extractReleaseArchive(archivePath)
 }
 
-func releaseDownloadURL(baseURL, version string) (string, error) {
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", fmt.Errorf("release base URL %q must be an HTTPS URL without credentials, a query, or a fragment", baseURL)
-	}
-	if version == "latest" {
-		return strings.TrimRight(baseURL, "/") + "/latest/download", nil
-	}
-	if version == "" || strings.ContainsAny(version, "/\\?#") {
-		return "", fmt.Errorf("release version %q is invalid", version)
-	}
-	return strings.TrimRight(baseURL, "/") + "/download/" + url.PathEscape(version), nil
-}
-
 func releaseAssetName(platform Platform) string {
 	return fmt.Sprintf("mesh_%s_%s.tar.gz", platform.OS, platform.Arch)
-}
-
-func downloadBytes(ctx context.Context, client *http.Client, address string, maximum int64) ([]byte, error) {
-	response, err := releaseResponse(ctx, client, address)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close() //nolint:errcheck // the read result is authoritative
-	contents, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", address, err)
-	}
-	if int64(len(contents)) > maximum {
-		return nil, fmt.Errorf("%s exceeds %d bytes", address, maximum)
-	}
-	return contents, nil
-}
-
-func downloadFile(ctx context.Context, client *http.Client, address string, destination io.Writer, checksum hash.Hash, maximum int64) error {
-	response, err := releaseResponse(ctx, client, address)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close() //nolint:errcheck // the copy result is authoritative
-	written, err := io.Copy(io.MultiWriter(destination, checksum), io.LimitReader(response.Body, maximum+1))
-	if err != nil {
-		return fmt.Errorf("read %s: %w", address, err)
-	}
-	if written > maximum {
-		return fmt.Errorf("%s exceeds %d bytes", address, maximum)
-	}
-	return nil
-}
-
-func releaseResponse(ctx context.Context, client *http.Client, address string) (*http.Response, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create release request: %w", err)
-	}
-	request.Header.Set("User-Agent", "mesh-bootstrap")
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	if response.Request == nil || response.Request.URL.Scheme != "https" {
-		_ = response.Body.Close()
-		return nil, fmt.Errorf("release request ended at a non-HTTPS URL")
-	}
-	if response.StatusCode != http.StatusOK {
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		_ = response.Body.Close()
-		return nil, fmt.Errorf("GET %s: %s: %s", address, response.Status, strings.TrimSpace(string(detail)))
-	}
-	return response, nil
 }
 
 func checksumForAsset(manifest []byte, assetName string) ([]byte, error) {

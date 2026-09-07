@@ -145,14 +145,18 @@ func remoteBinaryIsCurrent(ctx context.Context, remote remoteHost, localPath str
 }
 
 func fileDigest(path string) (string, error) {
-	file, err := os.Open(path)
+	file, err := os.Open(path) //nolint:gosec // caller supplies the already selected local Mesh executable
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
 	digest := sha256.New()
-	if _, err := io.Copy(digest, file); err != nil {
-		return "", err
+	_, copyErr := io.Copy(digest, file)
+	closeErr := file.Close()
+	if copyErr != nil {
+		return "", copyErr
+	}
+	if closeErr != nil {
+		return "", closeErr
 	}
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }

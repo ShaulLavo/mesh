@@ -18,8 +18,11 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/session"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
+	"github.com/shaul/mesh/internal/updategate"
+	"path/filepath"
 )
 
 // ringSize is how much recent output a session keeps for replay. Past this,
@@ -415,7 +418,12 @@ func (a *attachment) close() {
 
 // Run hosts the session until its process exits. It returns the process exit
 // code.
+func buildPointer() *release.Build { build := release.Current(); return &build }
+
 func Run(cfg Config) (int, error) {
+	if err := updategate.Check(filepath.Dir(filepath.Dir(cfg.Dir))); err != nil {
+		return 0, err
+	}
 	if len(cfg.Command) == 0 {
 		return 0, errors.New("worker: no command")
 	}
@@ -487,6 +495,7 @@ func Run(cfg Config) (int, error) {
 	}
 
 	meta := Meta{
+		Build:         buildPointer(),
 		ID:            cfg.ID,
 		PID:           cmd.Process.Pid,
 		Command:       cfg.Command,

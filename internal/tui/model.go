@@ -99,6 +99,7 @@ type model struct {
 	width              int
 	height             int
 	notice             string
+	updateNotice       updateNoticeState
 	styles             pickerStyles
 	ctx                context.Context
 	inspect            cli.PickerInspectFunc
@@ -186,11 +187,15 @@ func (m model) Init() tea.Cmd {
 	if m.refreshOnInit {
 		refresh = func() tea.Msg { return initialSessionRefreshMsg{} }
 	}
-	return tea.Batch(refresh, m.loadHostCatalog())
+	return tea.Batch(refresh, m.loadHostCatalog(), m.refreshUpdateNotice())
 }
 
 func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
+	case updateNoticeResultMsg:
+		return m.applyUpdateNotice(message), nil
+	case updateNoticeDismissedMsg:
+		return m.applyUpdateNoticeDismissal(message), nil
 	case tea.WindowSizeMsg:
 		m.width = max(1, message.Width)
 		m.height = max(1, message.Height)
@@ -265,6 +270,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
+	if handled, command := m.handleUpdateNoticeKey(key); handled {
+		return true, command
+	}
 	if sessionActionBusy(m.sessionAction) {
 		switch key.String() {
 		case "enter", "n", "r", "k", "x", "w", "s", "c", "a":
@@ -474,7 +482,9 @@ func (m model) View() tea.View {
 		return m.sessionView()
 	}
 	header, subtitle, footer := m.chrome()
-	content := header + "\n" + subtitle + "\n\n" + m.list.View() + "\n" + footer
+	lines := append([]string{header, subtitle}, m.updateNoticeLines()...)
+	lines = append(lines, "", m.list.View(), footer)
+	content := strings.Join(lines, "\n")
 	view := tea.NewView(content)
 	view.AltScreen = true
 	view.WindowTitle = "Mesh"

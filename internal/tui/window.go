@@ -64,6 +64,7 @@ func newWindowModel(ctx context.Context, input cli.WindowInput, now time.Time) w
 	picker := newPickerModel(ctx, cli.PickerInput{
 		Hosts:   []cli.HostSessions{{Host: cli.HostRecord{ID: input.HostID, Alias: input.HostAlias}, Sessions: rows, Local: true}},
 		Inspect: input.Inspect, Action: input.Action, OpenHostAlias: input.HostAlias,
+		UpdateNotice: input.UpdateNotice,
 	}, now)
 	// Empty aliases are valid in isolated callers, but the compact view always
 	// opens this machine directly.
@@ -98,6 +99,13 @@ func (m windowModel) Init() tea.Cmd { return m.picker.Init() }
 
 func (m windowModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if key, ok := message.(tea.KeyPressMsg); ok {
+		if handled, command := m.picker.handleUpdateNoticeKey(key); handled {
+			if _, review := m.picker.selection.(updateSelection); review {
+				m.selection = &cli.WindowSelection{ReviewUpdate: true}
+			}
+			m.resize()
+			return m, command
+		}
 		switch key.String() {
 		case "ctrl+c", "esc", "q":
 			m.selection = &cli.WindowSelection{}
@@ -214,7 +222,7 @@ func (m windowModel) applyForget(result sessionActionResultMsg) (tea.Model, tea.
 }
 
 func (m *windowModel) resize() {
-	rows := min(9, max(1, len(m.picker.currentHost().sessions)), max(1, m.picker.height-9))
+	rows := min(9, max(1, len(m.picker.currentHost().sessions)), max(1, m.picker.height-9-len(m.picker.updateNoticeLines())))
 	m.picker.list.SetSize(m.picker.width, rows)
 	m.picker.list.SetDelegate(windowDelegate{sessionDelegate: sessionDelegate{
 		styles: m.picker.styles, now: m.picker.now, hostAlias: m.picker.currentHost().alias,
@@ -225,7 +233,8 @@ func (m *windowModel) resize() {
 func (m windowModel) View() tea.View {
 	picker := m.picker
 	header := picker.styles.title.Render("mesh") + picker.styles.muted.Render("  Resume on "+safeText(picker.currentHost().alias))
-	lines := []string{header, ""}
+	lines := append([]string{header}, picker.updateNoticeLines()...)
+	lines = append(lines, "")
 	lines = append(lines, picker.listViewRows(picker.list.Height())...)
 	lines = append(lines, "")
 	if m.selected {

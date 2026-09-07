@@ -423,6 +423,11 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return err
 	}
 	server.wake = power
+	updates, err := newUpdateController(stateDir, meshHost.ID, meshPrivateKey)
+	if err != nil {
+		return err
+	}
+	server.updates = updates
 
 	controlAddrs := tailnetAddrs
 	if cfg.TailnetPort == 0 {
@@ -463,6 +468,16 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		listener.serveSSH = opts.serveSSH
 	}
 	listenersReady := make(chan struct{})
+	updatesDone := make(chan struct{})
+	go func() {
+		defer close(updatesDone)
+		select {
+		case <-listenersReady:
+		case <-daemonCtx.Done():
+			return
+		}
+		updates.coordinator.Run(daemonCtx, reporter.report)
+	}()
 	listener.ready = func(readyCtx context.Context) error {
 		if cfg.TailscaleServe {
 			if err := configureTailscaleServe(readyCtx, cfg.HTTPSPort, opts.tailscaleTimeout, opts.runCommand); err != nil {
@@ -583,6 +598,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}()
 	serveErr := serveListeners(daemonCtx, cancelDaemon, listener, server.Handle)
 	cancelDaemon()
+	<-updatesDone
 	<-powerDone
 	<-reconciled
 	<-privateNamesDone

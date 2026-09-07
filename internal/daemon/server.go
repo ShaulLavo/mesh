@@ -15,6 +15,7 @@ import (
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/tunnel"
+	"github.com/shaul/mesh/internal/updategate"
 )
 
 // clientServer dispatches frames for each disposable client connection. Its
@@ -26,6 +27,7 @@ type clientServer struct {
 	services     controlHandler
 	certificates controlHandler
 	wake         *wakeController
+	updates      controlHandler
 }
 
 type controlHandler interface {
@@ -128,6 +130,9 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		if !lifecycleHandled && s.wake != nil {
 			response, lifecycleHandled, requestErr = s.wake.HandleControl(ctx, request)
 		}
+		if !lifecycleHandled && s.updates != nil {
+			response, lifecycleHandled, requestErr = s.updates.HandleControl(ctx, request)
+		}
 		if response.Host != nil && s.wake != nil {
 			response.Host.Wake = s.wake.info()
 		}
@@ -184,6 +189,9 @@ func writeClientRequestError(relay *clientRelay, request protocol.Control, reque
 }
 
 func clientErrorCode(err error) string {
+	if errors.Is(err, updategate.ErrUpdating) {
+		return "update.in_progress"
+	}
 	if errors.Is(err, recovery.ErrUncertain) {
 		return protocol.ErrorCodeRecoveryUncertain
 	}

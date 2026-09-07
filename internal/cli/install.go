@@ -32,9 +32,9 @@ import (
 func (a *application) daemonInstallCommand() *cobra.Command {
 	var (
 		yes           bool
-		daemonPort    uint16 = bootstrap.DefaultPort
-		sshPort       uint16 = bootstrap.DefaultSSHPort
-		webSocketPath        = bootstrap.DefaultWebSocketPath
+		daemonPort    = bootstrap.DefaultPort
+		sshPort       = bootstrap.DefaultSSHPort
+		webSocketPath = bootstrap.DefaultWebSocketPath
 	)
 	command := &cobra.Command{
 		Use:   "install",
@@ -94,7 +94,7 @@ func (a *application) installLocalDaemon(cmd *cobra.Command, yes bool, daemonPor
 	}
 	defer os.Remove(staged) //nolint:errcheck // the installer removes it on success
 
-	run := exec.CommandContext(cmd.Context(), "/bin/sh", "-s", "--",
+	run := exec.CommandContext(cmd.Context(), "/bin/sh", "-s", "--", //nolint:gosec // embedded installer script; variable values are positional arguments
 		staged,
 		strconv.Itoa(int(daemonPort)),
 		strconv.Itoa(int(sshPort)),
@@ -119,7 +119,7 @@ func stageOwnBinary() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("locate the running Mesh binary: %w", err)
 	}
-	source, err := os.Open(executable)
+	source, err := os.Open(executable) //nolint:gosec // executable is this running Mesh process, discovered by os.Executable
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", executable, err)
 	}

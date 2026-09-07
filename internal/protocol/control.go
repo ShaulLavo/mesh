@@ -7,6 +7,7 @@ import (
 
 	"github.com/shaul/mesh/internal/agentresume"
 	"github.com/shaul/mesh/internal/recovery"
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/tunnel"
 	"github.com/shaul/mesh/internal/wake"
 )
@@ -114,12 +115,14 @@ func (s SessionInfo) LastActiveAt() time.Time {
 
 // HostInfo is the transport representation of one daemon's identity.
 type HostInfo struct {
-	RecoverySupported bool        `json:"recoverySupported,omitempty"`
-	ID                string      `json:"id"`
-	MeshIdentity      string      `json:"meshIdentity"`
-	TailscaleName     string      `json:"tailscaleName,omitempty"`
-	PrivateName       string      `json:"privateName,omitempty"`
-	Wake              *wake.Grant `json:"wake,omitempty"`
+	Build             *release.Build `json:"build,omitempty"`
+	UpdateSupported   bool           `json:"updateSupported,omitempty"`
+	RecoverySupported bool           `json:"recoverySupported,omitempty"`
+	ID                string         `json:"id"`
+	MeshIdentity      string         `json:"meshIdentity"`
+	TailscaleName     string         `json:"tailscaleName,omitempty"`
+	PrivateName       string         `json:"privateName,omitempty"`
+	Wake              *wake.Grant    `json:"wake,omitempty"`
 }
 
 // ServiceInfo is the transport representation of one origin service and its
@@ -196,6 +199,7 @@ type EdgeListProof struct {
 // Control is the envelope for every JSON control message. Unused fields are
 // omitted so messages stay readable on the wire during debugging.
 type Control struct {
+	Update               json.RawMessage      `json:"update,omitempty"`
 	AgentLaunch          *agentresume.Launch  `json:"agentLaunch,omitempty"`
 	AgentEvent           *agentresume.Event   `json:"agentEvent,omitempty"`
 	AgentPID             int                  `json:"agentPid,omitempty"`

@@ -21,6 +21,7 @@ import (
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
+	"github.com/shaul/mesh/internal/updategate"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -140,6 +141,11 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 // HandleControl handles daemon-owned control requests. Attachment controls are
 // left to clientRelay, and unknown controls are left to the caller to reject.
 func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control) (protocol.Control, bool, error) {
+	if request.Type == protocol.TypeCreate || request.Type == protocol.TypeRecover {
+		if err := updategate.Check(filepath.Dir(l.sessionsDir)); err != nil {
+			return protocol.Control{}, true, err
+		}
+	}
 	switch request.Type {
 	case protocol.TypeRecover, protocol.TypeRecoveryRead, protocol.TypeRecoveryCommand:
 		response, err := l.recoveryControl(ctx, request)
@@ -350,6 +356,8 @@ func (l *lifecycle) hostInfo(request protocol.Control) (protocol.Control, error)
 		Type:      protocol.TypeHostInfoResult,
 		RequestID: request.RequestID,
 		Host: &protocol.HostInfo{
+			Build:             executingBuild(),
+			UpdateSupported:   true,
 			RecoverySupported: true,
 			ID:                string(l.host.ID),
 			MeshIdentity:      l.host.MeshIdentity,

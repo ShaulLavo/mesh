@@ -455,7 +455,7 @@ func TestDefaultIdentityFilesOffersKeysThatAreNotNamedConventionally(t *testing.
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("key"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, name+".pub"), []byte("pub"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name+".pub"), []byte("pub"), 0o644); err != nil { //nolint:gosec // public-key fixtures are intentionally world-readable
 			t.Fatal(err)
 		}
 	}

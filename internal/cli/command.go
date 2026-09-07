@@ -19,9 +19,13 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/update"
+	"github.com/shaul/mesh/internal/updatebootstrap"
+	"github.com/shaul/mesh/internal/updateinstall"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -63,11 +67,12 @@ type ContainmentFunc func(context.Context) []protocol.SessionIdentity
 // PickerInput contains the catalog and the optional live readers used by the
 // interactive picker.
 type PickerInput struct {
-	Hosts     []HostSessions
-	LoadHosts func(context.Context) ([]HostSessions, error)
-	Inspect   PickerInspectFunc
-	Refresh   PickerRefreshFunc
-	Action    PickerSessionActionFunc
+	UpdateNotice UpdateNoticeCallbacks
+	Hosts        []HostSessions
+	LoadHosts    func(context.Context) ([]HostSessions, error)
+	Inspect      PickerInspectFunc
+	Refresh      PickerRefreshFunc
+	Action       PickerSessionActionFunc
 	// ContainingSessions are the exact terminal screens that receive this
 	// picker's output. Each available snapshot was captured before the picker
 	// wrote its first frame.
@@ -162,6 +167,7 @@ type PickerInspectFunc func(context.Context, PickerInspectRequest) (SessionInspe
 
 // PickerSelection tells the CLI which normal action to run after T09 exits.
 type PickerSelection struct {
+	ReviewUpdate   bool
 	HostAlias      string
 	SessionID      string
 	New            bool
@@ -173,15 +179,17 @@ type PickerSelection struct {
 
 // WindowInput is the local catalog available before any network discovery.
 type WindowInput struct {
-	Sessions    []protocol.SessionInfo
-	Inspect     PickerInspectFunc
-	Action      PickerSessionActionFunc
-	HostAlias   string
-	HostID      string
-	HostAliases map[string]string
+	UpdateNotice UpdateNoticeCallbacks
+	Sessions     []protocol.SessionInfo
+	Inspect      PickerInspectFunc
+	Action       PickerSessionActionFunc
+	HostAlias    string
+	HostID       string
+	HostAliases  map[string]string
 }
 
 type WindowSelection struct {
+	ReviewUpdate   bool
 	SessionID      string
 	New            bool
 	FullPicker     bool
@@ -196,24 +204,29 @@ type PickerFunc func(context.Context, PickerInput) (PickerSelection, error)
 
 // Dependencies are the replaceable product edges used by later tasks and tests.
 type Dependencies struct {
-	SSHSessionHandler     sshd.SessionHandlerFactory
-	Bootstrap             BootstrapFunc
-	Wake                  WakeFunc
-	Picker                PickerFunc
-	WindowPicker          WindowPickerFunc
-	ReconcilePrivateNames PrivateNamesFunc
-	DialHost              HostDialer
-	DialControl           HostDialer
-	ConfirmPublic         ConfirmPublicFunc
-	Containment           ContainmentFunc
-	Now                   func() time.Time
-	Stdin                 *os.File
-	Stdout                *os.File
-	Stderr                *os.File
+	UpdateCoordinatorSetup func(context.Context, string) error
+	UpdateBootstrap        func(context.Context, updatebootstrap.Request, updatebootstrap.Config) (updateinstall.Status, error)
+	UpdateRelease          release.Client
+	UpdateCaller           update.Caller
+	SSHSessionHandler      sshd.SessionHandlerFactory
+	Bootstrap              BootstrapFunc
+	Wake                   WakeFunc
+	Picker                 PickerFunc
+	WindowPicker           WindowPickerFunc
+	ReconcilePrivateNames  PrivateNamesFunc
+	DialHost               HostDialer
+	DialControl            HostDialer
+	ConfirmPublic          ConfirmPublicFunc
+	Containment            ContainmentFunc
+	Now                    func() time.Time
+	Stdin                  *os.File
+	Stdout                 *os.File
+	Stderr                 *os.File
 }
 
 type application struct {
-	dependencies Dependencies
+	dependencies          Dependencies
+	updateNoticeScheduled bool
 }
 
 // NewCommand builds the complete non-picker CLI. Fang decorates and executes
@@ -318,8 +331,8 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	)
 	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.renameCommand(), app.wakeCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand())...)
-	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand())...)
-	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand())
+	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), versionCommand())...)
+	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand())
 	return root
 }
 
@@ -430,7 +443,8 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 		pickerContext, cancelPicker := context.WithCancel(cmd.Context())
 		pickerOperations := newPickerOperationGate()
 		selection, err := a.dependencies.Picker(pickerContext, PickerInput{
-			Hosts: catalog,
+			UpdateNotice: a.pickerUpdateNotice(),
+			Hosts:        catalog,
 			LoadHosts: func(ctx context.Context) ([]HostSessions, error) {
 				if !pickerOperations.begin(ctx) {
 					return nil, context.Canceled
@@ -476,6 +490,9 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 		}
 		if err := validatePickerSelection(selection); err != nil {
 			return err
+		}
+		if selection.ReviewUpdate {
+			return a.runUpdatePreview(cmd.Context())
 		}
 		if selection.SessionID != "" {
 			if selection.HostAlias == localHostAlias {
@@ -663,6 +680,9 @@ func copyPreviewLines(source []protocol.PreviewLine) []protocol.PreviewLine {
 }
 
 func validatePickerSelection(selection PickerSelection) error {
+	if selection.ReviewUpdate && (selection.SessionID != "" || selection.New || selection.Wake || selection.HostAlias != "" || selection.Relaunch || selection.TakeOver || selection.RecoveryAction != "") {
+		return errors.New("picker update selection cannot be combined with a session action")
+	}
 	if selection.SessionID != "" && (selection.New || selection.Wake) {
 		return errors.New("picker selection cannot combine a session with new or wake")
 	}
@@ -753,10 +773,8 @@ type resolvedSession struct {
 	ifDetached bool
 }
 
-// resolveSession looks for a session on this machine and across the address
-// book. This host is never in its own address book, so gating the local lookup
-// on an empty one made every local session invisible to logs, kill and sig the
-// moment the first remote host was adopted — while the worker kept running.
+// resolveSession looks locally and on distinct adopted hosts. A pinned alias
+// for this machine must not turn its own session into an ambiguous match.
 func (a *application) resolveSession(ctx context.Context, hosts []HostRecord, id string) (resolvedSession, error) {
 	local, localErr := Find(id)
 	switch {
@@ -769,6 +787,9 @@ func (a *application) resolveSession(ctx context.Context, hosts []HostRecord, id
 		return resolvedSession{}, localErr
 	}
 	foundLocally := localErr == nil
+	if foundLocally {
+		hosts = withoutKnownSelfHost(hosts, local.Dir)
+	}
 
 	if len(hosts) == 0 {
 		if !foundLocally {
@@ -1544,6 +1565,8 @@ func (a *application) daemonCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			stopUpdateNotices := startUpdateNoticeChecks(cmd.Context(), stateDir)
+			defer stopUpdateNotices()
 			return meshdaemon.Run(cmd.Context(), meshdaemon.Config{
 				SSHSessionHandler: a.dependencies.SSHSessionHandler,
 				StateDir:          stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),

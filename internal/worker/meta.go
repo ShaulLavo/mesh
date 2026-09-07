@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/shaul/mesh/internal/release"
 )
 
 // Session states. The worker reports running while a client is attached,
@@ -30,16 +32,17 @@ const (
 // fate survives the daemon being down: the worker can record its own death
 // without anyone listening.
 type Meta struct {
-	RecoveredFrom  string     `json:"recoveredFrom,omitempty"`
-	ID             string     `json:"id"`
-	PID            int        `json:"pid"`
-	Command        []string   `json:"command"`
-	Cwd            string     `json:"cwd"`
-	State          string     `json:"state"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	LastAttachedAt *time.Time `json:"lastAttachedAt,omitempty"`
-	ExitedAt       *time.Time `json:"exitedAt,omitempty"`
-	ExitCode       *int       `json:"exitCode,omitempty"`
+	Build          *release.Build `json:"build,omitempty"`
+	RecoveredFrom  string         `json:"recoveredFrom,omitempty"`
+	ID             string         `json:"id"`
+	PID            int            `json:"pid"`
+	Command        []string       `json:"command"`
+	Cwd            string         `json:"cwd"`
+	State          string         `json:"state"`
+	CreatedAt      time.Time      `json:"createdAt"`
+	LastAttachedAt *time.Time     `json:"lastAttachedAt,omitempty"`
+	ExitedAt       *time.Time     `json:"exitedAt,omitempty"`
+	ExitCode       *int           `json:"exitCode,omitempty"`
 	// BootID ties a running session to the kernel boot that hosted it. After a
 	// reboot the PID is meaningless, so a mismatch means interrupted, not alive.
 	BootID string `json:"bootId,omitempty"`

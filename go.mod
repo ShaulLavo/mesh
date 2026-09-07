@@ -28,7 +28,7 @@ require (
 	github.com/pkg/sftp v1.13.11
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/spf13/cobra v1.9.1
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/time v0.15.0
 	modernc.org/sqlite v1.57.0

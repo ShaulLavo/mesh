@@ -34,6 +34,10 @@ curl -fsSL https://raw.githubusercontent.com/ShaulLavo/mesh/main/scripts/install
 
 The installer verifies the release checksum before it publishes the binary.
 
+Run `mesh update` to review one release for your saved fleet. Offline machines
+remain pending and retry when they return. The picker shows update reminders.
+See [Update Mesh](docs/updates.md) for fleet membership, progress, and retries.
+
 ## Run it
 
 ```bash

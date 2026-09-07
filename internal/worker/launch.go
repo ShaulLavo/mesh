@@ -15,6 +15,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/updategate"
 )
 
 const (
@@ -49,6 +50,9 @@ type Launched struct {
 // LaunchDetached starts a worker in its own process session and waits only for
 // readiness. The worker is deliberately not supervised by the caller.
 func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
+	if err := updategate.Check(filepath.Dir(cfg.SessionsDir)); err != nil {
+		return Launched{}, err
+	}
 	started := false
 	defer func() {
 		if cfg.ReservedID != "" && !started && launchErr != nil {

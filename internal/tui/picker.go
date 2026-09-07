@@ -47,6 +47,7 @@ func newPickerModel(ctx context.Context, catalog cli.PickerInput, now time.Time)
 	current.refresh = catalog.Refresh
 	current.act = catalog.Action
 	current.loadHosts = catalog.LoadHosts
+	current.configureUpdateNotice(catalog.UpdateNotice)
 	for _, containing := range catalog.ContainingSessions {
 		current.containingPath = append(current.containingPath, containing.Identity)
 		state := containingSessionState{receivedAt: containing.ReceivedAt}
@@ -140,6 +141,8 @@ func endpointRoute(endpoint string) string {
 
 func cliSelection(selected selection) cli.PickerSelection {
 	switch selected := selected.(type) {
+	case updateSelection:
+		return cli.PickerSelection{ReviewUpdate: true}
 	case cancelSelection:
 		return cli.PickerSelection{}
 	case attachSelection:

@@ -6,20 +6,22 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	meshrelease "github.com/shaul/mesh/internal/release"
 )
 
 func TestResolvePlatformBinaryRefusesImplicitReleaseFromDevelopmentBuild(t *testing.T) {
-	if releaseVersion != "" {
+	if meshrelease.Version != "" {
 		t.Skip("test requires an unstamped development build")
 	}
 
@@ -91,10 +93,14 @@ func TestFetchReleaseBinaryVerifiesChecksumBeforeExtraction(t *testing.T) {
 
 	archive := releaseArchive(t, []byte("mesh-binary"))
 	assetName := "mesh_linux_arm64.tar.gz"
-	checksum := sha256.Sum256(archive)
+	manifest := bootstrapTestManifest([]byte("mesh-binary"), archive, meshrelease.Platform{OS: "linux", Arch: "arm64"})
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/releases/download/v1.2.3/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprintf(w, "%x  %s\n", checksum, assetName)
+	mux.HandleFunc("/releases/download/v1.2.3/"+meshrelease.ManifestAssetName, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(manifestJSON)
 	})
 	mux.HandleFunc("/releases/download/v1.2.3/"+assetName, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(archive)
@@ -131,22 +137,28 @@ func TestFetchReleaseBinaryRejectsChecksumMismatch(t *testing.T) {
 	t.Parallel()
 
 	archive := releaseArchive(t, []byte("mesh-binary"))
+	manifest := bootstrapTestManifest([]byte("mesh-binary"), archive, meshrelease.Platform{OS: "linux", Arch: "amd64"})
+	manifest.Artifacts[1].SHA256 = strings.Repeat("0", 64)
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/releases/latest/download/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprintf(w, "%064x  mesh_linux_amd64.tar.gz\n", 1)
+	mux.HandleFunc("/releases/latest/download/"+meshrelease.ManifestAssetName, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(manifestJSON)
 	})
-	mux.HandleFunc("/releases/latest/download/mesh_linux_amd64.tar.gz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/releases/download/v1.2.3/mesh_linux_amd64.tar.gz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(archive)
 	})
 	server := httptest.NewTLSServer(mux)
 	t.Cleanup(server.Close)
 
-	_, _, err := fetchReleaseBinary(context.Background(), Platform{OS: Linux, Arch: AMD64}, releaseOptions{
+	_, _, err = fetchReleaseBinary(context.Background(), Platform{OS: Linux, Arch: AMD64}, releaseOptions{
 		baseURL:    server.URL + "/releases",
 		version:    "latest",
 		httpClient: server.Client(),
 	})
-	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("checksum")) {
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("SHA-256")) {
 		t.Fatalf("fetchReleaseBinary() error = %v", err)
 	}
 }
@@ -156,7 +168,7 @@ func releaseArchive(t *testing.T, binary []byte) []byte {
 	var output bytes.Buffer
 	gzipWriter := gzip.NewWriter(&output)
 	tarWriter := tar.NewWriter(gzipWriter)
-	if err := tarWriter.WriteHeader(&tar.Header{Name: filepath.Join("mesh", "mesh"), Mode: 0o755, Size: int64(len(binary)), Typeflag: tar.TypeReg}); err != nil {
+	if err := tarWriter.WriteHeader(&tar.Header{Name: "mesh", Mode: 0o755, Size: int64(len(binary)), Typeflag: tar.TypeReg}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := io.Copy(tarWriter, bytes.NewReader(binary)); err != nil {
@@ -169,4 +181,33 @@ func releaseArchive(t *testing.T, binary []byte) []byte {
 		t.Fatal(err)
 	}
 	return output.Bytes()
+}
+
+func bootstrapTestManifest(binary, archive []byte, selected meshrelease.Platform) meshrelease.Manifest {
+	platforms := []meshrelease.Platform{{OS: "darwin", Arch: "arm64"}, {OS: "linux", Arch: "amd64"}, {OS: "linux", Arch: "arm64"}}
+	artifacts := make([]meshrelease.Artifact, len(platforms))
+	for index, platform := range platforms {
+		archiveDigest := strings.Repeat(string(rune('1'+index)), 64)
+		binaryDigest := strings.Repeat(string(rune('4'+index)), 64)
+		if platform == selected {
+			archiveDigest = digestHex(archive)
+			binaryDigest = digestHex(binary)
+		}
+		artifacts[index] = meshrelease.Artifact{
+			Platform: platform, Archive: "mesh_" + platform.OS + "_" + platform.Arch + ".tar.gz",
+			SHA256: archiveDigest, BinarySHA256: binaryDigest,
+		}
+	}
+	return meshrelease.Manifest{
+		Schema: meshrelease.ManifestSchema, Version: "v1.2.3", Commit: strings.Repeat("a", 40), Artifacts: artifacts,
+		Compatibility: meshrelease.Compatibility{
+			StateReadMin: 7, StateReadMax: 7, StateWrite: 7,
+			WorkerMin: 1, WorkerMax: 1, WorkerWrite: 1, JournalVersion: 1,
+		},
+	}
+}
+
+func digestHex(contents []byte) string {
+	digest := sha256.Sum256(contents)
+	return hex.EncodeToString(digest[:])
 }

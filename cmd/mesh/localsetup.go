@@ -71,7 +71,7 @@ func localTailscaleSetup(ui bootstrapUI) bootstrap.LocalSetupFunc {
 			if _, err := fmt.Fprintf(ui.output, "\n%s %s\n", cli.Tag(ui.output, "LOCAL"), step.description); err != nil {
 				return err
 			}
-			command := exec.CommandContext(ctx, step.name, step.args...)
+			command := exec.CommandContext(ctx, step.name, step.args...) //nolint:gosec // step names and arguments come from the fixed platform setup plan
 			// sudo needs the real terminal for its password, and tailscale up
 			// prints a login URL and waits. Both want stdio, not a buffer.
 			command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
