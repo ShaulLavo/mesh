@@ -43,18 +43,20 @@ trap cleanup EXIT
 
 discover_owned_session_processes() {
   local pid ppid command
+  worker_pid=''
+  shell_pid=''
   while read -r pid ppid command; do
     case $command in
       *session-worker*"$state/s/"*) worker_pid=$pid ;;
     esac
-  done < <(ps -axo pid=,ppid=,command= 2>/dev/null || true)
+  done < <(ps -axww -o pid=,ppid=,command= 2>/dev/null || true)
   [[ -n $worker_pid && -z $shell_pid ]] || return 0
   while read -r pid ppid command; do
     if [[ $ppid == "$worker_pid" ]]; then
       shell_pid=$pid
       return 0
     fi
-  done < <(ps -axo pid=,ppid=,command= 2>/dev/null || true)
+  done < <(ps -axww -o pid=,ppid=,command= 2>/dev/null || true)
 }
 
 dump_diagnostics() {
