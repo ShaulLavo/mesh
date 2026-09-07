@@ -14,6 +14,10 @@ sys.dont_write_bytecode = True
 from terminal_window import run_outside_containing_session, Fixture, Terminal, eventually, require
 
 
+# Real shell startup and prompt hooks share CPU with every parallel integration.
+SHELL_PROMPT_TIMEOUT = 15
+
+
 def checkpoint(fixture, session_id):
     path = fixture.local / "s" / session_id / "recovery.json"
     if not path.exists():
@@ -49,7 +53,7 @@ def run_shell(fixture, shell, mode):
     fixture.environment.update({"HOME": str(fixture.root), "ZDOTDIR": str(fixture.root), "SHELL": shell,
                                 "PATH": str(Path(shell).parent) + os.pathsep + fixture.environment["PATH"]})
     argv = [shell, "-d", "-i"] if mode == "zsh" else [shell, "--noprofile", "--rcfile", str(rc), "-i"]
-    terminal = Terminal([fixture.binary, "local", "--"] + argv, fixture.environment, fixture.root)
+    terminal = Terminal([fixture.binary, "local", "--"] + argv, fixture.environment, fixture.root, timeout=SHELL_PROMPT_TIMEOUT)
     fixture.terminals.append(terminal)
     terminal.expect("RECOVERY_PROMPT> ")
     session_id, shell_pid = fixture.shell_identity(terminal)
@@ -89,7 +93,7 @@ def run_shell(fixture, shell, mode):
     fixture.crash_worker(terminal, session_id, shell_pid)
     previous = subprocess.check_output([fixture.binary, "logs", session_id, "--previous"], env=fixture.environment)
     require(b"Previous output" in previous and b"retained-work-output" in previous, "full saved output is inaccessible after worker crash")
-    restored = Terminal([fixture.binary, "recover", session_id], fixture.environment, fixture.root)
+    restored = Terminal([fixture.binary, "recover", session_id], fixture.environment, fixture.root, timeout=SHELL_PROMPT_TIMEOUT)
     fixture.terminals.append(restored)
     restored.expect("RECOVERY_PROMPT> ")
     replacement_id, _ = fixture.shell_identity(restored)

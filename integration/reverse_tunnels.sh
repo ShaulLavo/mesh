@@ -4,7 +4,7 @@ set -uo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-test_root=$(mktemp -d /work/tmp/mesh-tunnel.XXXXXX)
+test_root=$(mktemp -d "${TMPDIR:-/tmp}/mesh-tunnel.XXXXXX")
 mesh=$test_root/mesh-integration
 edge_state=$test_root/edge
 client_state=$test_root/client

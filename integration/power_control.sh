@@ -33,7 +33,7 @@ if [[ ! -S "$MESH_STATE_DIR/daemon.sock" ]]; then
   exit 1
 fi
 "$mesh_binary" wake deny >"$state_root/permission.log"
-rg -q 'Wake permission disabled' "$state_root/permission.log"
+grep -q 'Wake permission disabled' "$state_root/permission.log"
 "$mesh_binary" ls >"$state_root/list.log"
 kill "$daemon_pid"
 wait "$daemon_pid"

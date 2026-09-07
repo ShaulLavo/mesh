@@ -42,7 +42,7 @@ sleep 0.4
 "$MESH" attach "$SID" < "$T/in2" > "$T/out_b" 2>&1 &
 CB=$!
 exec 4>"$T/in2"
-sleep 0.5
+for _ in $(seq 100); do kill -0 "$CA" 2>/dev/null || break; sleep 0.05; done
 
 kill -0 "$CA" 2>/dev/null && fail "first client was not evicted by the second"
 

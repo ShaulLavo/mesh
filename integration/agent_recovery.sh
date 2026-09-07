@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-build_root=$(mktemp -d "${TMPDIR:-/work/tmp}/mesh-t25.XXXXXX")
+build_root=$(mktemp -d "${TMPDIR:-/tmp}/mesh-t25.XXXXXX")
 trap 'rm -rf -- "$build_root"' EXIT
 if [[ -z ${MESH:-} ]]; then
   MESH="$build_root/mesh"

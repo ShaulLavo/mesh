@@ -43,7 +43,7 @@ def eventually(check, message, timeout=4):
 
 
 class Terminal:
-    def __init__(self, command, environment, cwd):
+    def __init__(self, command, environment, cwd, timeout=4):
         self.pid, self.master = pty.fork()
         if self.pid == 0:
             os.chdir(cwd)
@@ -51,6 +51,7 @@ class Terminal:
             os.execvpe(command[0], command, environment)
         self.output = bytearray()
         self.status = None
+        self.timeout = timeout
 
     def drain(self):
         while select.select([self.master], [], [], 0)[0]:
@@ -85,8 +86,16 @@ class Terminal:
     def expect(self, marker, since=0):
         if isinstance(marker, str):
             marker = marker.encode()
+        def printed():
+            if marker in self.drain()[since:]:
+                return True
+            status = self.poll()
+            if status is not None and marker in self.drain()[since:]:
+                return True
+            require(status is None, f"terminal client exited with status {status} before printing {marker!r}")
+            return False
         try:
-            eventually(lambda: marker in self.drain()[since:], f"terminal did not print {marker!r}")
+            eventually(printed, f"terminal did not print {marker!r} within {self.timeout}s", timeout=self.timeout)
         except RuntimeError as error:
             raise RuntimeError(f"{error}; output={bytes(self.output[-3000:])!r}") from error
         return bytes(self.output)
