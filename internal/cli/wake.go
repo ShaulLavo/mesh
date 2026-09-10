@@ -120,12 +120,12 @@ func (a *application) configureWakeCommand(allowed bool) *cobra.Command {
 	return &cobra.Command{
 		Use: verb, Short: short, Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return configureWake(cmd, allowed)
+			return a.configureWake(cmd, allowed)
 		},
 	}
 }
 
-func configureWake(cmd *cobra.Command, allowed bool) error {
+func (a *application) configureWake(cmd *cobra.Command, allowed bool) error {
 	stateDir, err := paths.StateDir()
 	if err != nil {
 		return err
@@ -133,6 +133,15 @@ func configureWake(cmd *cobra.Command, allowed bool) error {
 	requestID, err := newDaemonRequestID()
 	if err != nil {
 		return err
+	}
+	// Configure the hardware before the grant exists. A grant is a promise that
+	// this host wakes, so it must never outrun the NIC that has to honour it.
+	var armed wake.ArmState
+	var wired bool
+	if allowed {
+		if armed, wired, err = a.dependencies.ArmWake(cmd.Context(), cmd.ErrOrStderr(), true); err != nil {
+			return err
+		}
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 	defer cancel()
@@ -150,13 +159,21 @@ func configureWake(cmd *cobra.Command, allowed bool) error {
 	}
 	rememberWakeGrant(ctx, response.WakeGrant)
 	if !allowed {
+		// Permission is already revoked; leaving the NIC armed is untidy but
+		// never unsafe, so a failure here must not fail the command.
+		if _, _, disarmErr := a.dependencies.ArmWake(cmd.Context(), cmd.ErrOrStderr(), false); disarmErr != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Warning: wake permission is revoked, but the NIC stayed armed: %v\n", disarmErr)
+		}
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), "Wake permission disabled on this host")
 		return err
 	}
-	if response.WakeGrant == nil || !response.WakeGrant.Enabled || response.WakeGrant.NIC == nil {
+	if !wired || response.WakeGrant == nil || !response.WakeGrant.Enabled || response.WakeGrant.NIC == nil {
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), "Wake permission saved; waking is unavailable until a wired network is discovered")
 		return err
 	}
-	_, err = fmt.Fprintln(cmd.OutOrStdout(), "Mesh machines may now wake this host")
+	if err := describeWakeState(cmd.ErrOrStderr(), armed); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Mesh machines may now wake this host on %s\n", armed.Device)
 	return err
 }

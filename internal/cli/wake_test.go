@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
+	"github.com/shaul/mesh/internal/wake"
 )
 
 func TestExplicitSessionIntentWakesAnUnavailableHost(t *testing.T) {
@@ -147,10 +149,18 @@ func testWakePermissionCommand(t *testing.T, allowed bool) {
 		done <- result{request, err}
 	}()
 	verb := map[bool]string{false: "deny", true: "allow"}[allowed]
+	armed := 0
 	stdout, _, err := executeCommand(t, Dependencies{
 		DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
 			t.Error("wake permission command dialed a remote host")
 			return nil, errors.New("unexpected remote dial")
+		},
+		ArmWake: func(_ context.Context, _ io.Writer, arm bool) (wake.ArmState, bool, error) {
+			if arm != allowed {
+				t.Errorf("armed=%t, want %t", arm, allowed)
+			}
+			armed++
+			return wake.ArmState{}, false, nil
 		},
 	}, "wake", verb)
 	if err != nil {
@@ -169,6 +179,44 @@ func testWakePermissionCommand(t *testing.T, allowed bool) {
 	}
 	if !strings.Contains(stdout, want) {
 		t.Fatalf("wake %s output = %q, want %q", verb, stdout, want)
+	}
+	if armed != 1 {
+		t.Fatalf("NIC configured %d times, want 1", armed)
+	}
+}
+
+// A grant is a promise that the host wakes. When the NIC cannot be armed there
+// is nothing to promise, so the daemon must never be asked for one.
+func TestWakeAllowDoesNotGrantWhenTheNICCannotBeArmed(t *testing.T) {
+	stateDir, err := os.MkdirTemp("", "mesh-wake-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(stateDir) //nolint:errcheck // test resource cleanup
+	t.Setenv("MESH_STATE_DIR", stateDir)
+	listener, err := net.Listen("unix", meshdaemon.SocketPath(stateDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close() //nolint:errcheck // test resource cleanup
+	granted := make(chan struct{}, 1)
+	go func() {
+		if _, err := serveWakePermissionRequest(listener); err == nil {
+			granted <- struct{}{}
+		}
+	}()
+	_, _, err = executeCommand(t, Dependencies{
+		ArmWake: func(context.Context, io.Writer, bool) (wake.ArmState, bool, error) {
+			return wake.ArmState{}, true, errors.New("no magic packet support")
+		},
+	}, "wake", "allow")
+	if err == nil || !strings.Contains(err.Error(), "no magic packet support") {
+		t.Fatalf("wake allow error = %v, want the arming failure", err)
+	}
+	select {
+	case <-granted:
+		t.Fatal("wake allow asked the daemon for a grant after arming failed")
+	default:
 	}
 }
 

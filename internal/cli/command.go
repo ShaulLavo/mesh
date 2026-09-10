@@ -26,6 +26,7 @@ import (
 	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
+	"github.com/shaul/mesh/internal/wake"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -59,6 +60,11 @@ type BootstrapFunc func(context.Context, AddRequest) (BootstrapResult, error)
 
 // WakeFunc wakes one adopted host through a configured power controller.
 type WakeFunc func(context.Context, HostRecord) error
+
+// ArmWakeFunc prepares this host's own NIC to wake, reporting whether a wired
+// interface was found at all. Wake permission is only granted for hardware it
+// has armed.
+type ArmWakeFunc func(context.Context, io.Writer, bool) (wake.ArmState, bool, error)
 
 // ContainmentFunc returns the exact immediate-to-outer Mesh sessions whose
 // terminal screens receive this process's output.
@@ -211,6 +217,7 @@ type Dependencies struct {
 	SSHSessionHandler      sshd.SessionHandlerFactory
 	Bootstrap              BootstrapFunc
 	Wake                   WakeFunc
+	ArmWake                ArmWakeFunc
 	Picker                 PickerFunc
 	WindowPicker           WindowPickerFunc
 	ReconcilePrivateNames  PrivateNamesFunc
@@ -234,6 +241,9 @@ type application struct {
 func NewCommand(dependencies Dependencies) *cobra.Command {
 	if dependencies.DialHost == nil {
 		dependencies.DialHost = dialHost
+	}
+	if dependencies.ArmWake == nil {
+		dependencies.ArmWake = armWake
 	}
 	if dependencies.DialControl == nil {
 		dependencies.DialControl = dialControlHost
@@ -1017,7 +1027,7 @@ func (a *application) wakeCommand() *cobra.Command {
 			return err
 		},
 	}
-	command.AddCommand(a.configureWakeCommand(true), a.configureWakeCommand(false))
+	command.AddCommand(a.configureWakeCommand(true), a.configureWakeCommand(false), armWakeCommand(true), armWakeCommand(false))
 	return command
 }
 
