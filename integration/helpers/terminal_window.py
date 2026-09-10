@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Exercise terminal windows through real PTYs, workers and a WebSocket daemon."""
 
+import base64
 import errno
+import hashlib
 import fcntl
 import json
 import os
@@ -237,6 +239,41 @@ class Fixture:
     def wait_local_detached(self, session_id, message):
         eventually(lambda: not self.attached(self.local, session_id)
                    and self.metadata(session_id).get("state") == "detached", message)
+
+    def tab(self, terminal_id, command=None):
+        """Open a session from a terminal that names itself, the way a terminal
+        emulator exports a per-tab identifier."""
+        environment = dict(self.environment, MESH_TERMINAL_ID=terminal_id)
+        argv = command or [self.binary, "local", "--", str(self.helpers / "window_shell.sh"), "retained-argument"]
+        terminal = Terminal(argv, environment, self.root)
+        self.terminals.append(terminal)
+        return terminal
+
+    def binding_path(self, terminal_id):
+        """Bindings are filed under a hash of the terminal identity, so the
+        state directory never carries a terminal's own identifier as a
+        filename. Deriving it here pins that on-disk contract."""
+        digest = hashlib.sha256(b"mesh-terminal-v1\x00mesh\x00MESH_TERMINAL_ID=" + terminal_id.encode()).digest()
+        return self.local / "terminals" / (base64.urlsafe_b64encode(digest).rstrip(b"=").decode() + ".json")
+
+    def bound_session(self, terminal_id):
+        path = self.binding_path(terminal_id)
+        try:
+            return json.loads(path.read_text()).get("sessionId")
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def back(self, terminal_id):
+        environment = dict(self.environment, MESH_TERMINAL_ID=terminal_id)
+        terminal = Terminal([self.binary, "back"], environment, self.root)
+        self.terminals.append(terminal)
+        return terminal
+
+    def back_output(self, terminal_id):
+        environment = dict(self.environment, MESH_TERMINAL_ID=terminal_id)
+        result = subprocess.run([self.binary, "back"], env=environment, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=5)
+        return result.stdout.decode()
 
     def shell_identity(self, terminal):
         self.identity_requests += 1
@@ -475,12 +512,57 @@ def window_relaunch(fixture):
     forgotten.expect_exit()
 
 
+def tab_bindings(fixture):
+    # Two terminals, two sessions. The point of the binding is that each tab
+    # returns to its own session, not to whichever one was most recent.
+    first = fixture.tab("tab-one")
+    first.expect(PROMPT)
+    first_id, first_pid = fixture.shell_identity(first)
+    second = fixture.tab("tab-two")
+    second.expect(PROMPT)
+    second_id, second_pid = fixture.shell_identity(second)
+    require(first_id != second_id, f"both terminals opened the same session {first_id}")
+
+    eventually(lambda: fixture.bound_session("tab-one") == first_id,
+               f"tab-one was not bound to {first_id}")
+    eventually(lambda: fixture.bound_session("tab-two") == second_id,
+               f"tab-two was not bound to {second_id}")
+
+    # The host dies under both of them.
+    fixture.crash_worker(first, first_id, first_pid)
+    fixture.crash_worker(second, second_id, second_pid)
+
+    # tab-one returns to its own session. Recovery mints a new id, and the
+    # binding has to follow it or the next crash recovers the wrong thing.
+    returned = fixture.back("tab-one")
+    returned.expect(PROMPT)
+    recovered_id, _ = fixture.shell_identity(returned)
+    require(recovered_id != first_id, f"recovery reused the interrupted id {first_id}")
+    require(fixture.metadata(recovered_id).get("recoveredFrom") == first_id,
+            f"session {recovered_id} was not recovered from {first_id}")
+    eventually(lambda: fixture.bound_session("tab-one") == recovered_id,
+               f"tab-one still points at {first_id} instead of its replacement {recovered_id}")
+
+    # tab-two is untouched by what tab-one did.
+    require(fixture.bound_session("tab-two") == second_id,
+            "recovering tab-one moved tab-two's binding")
+
+    # A terminal that has opened nothing explains itself instead of guessing.
+    unbound = fixture.back_output("tab-three")
+    require("has not opened a Mesh session yet" in unbound,
+            f"an unbound terminal did not explain itself: {unbound!r}")
+
+    returned.send(b"exit\n")
+    returned.expect_exit()
+
+
 SCENARIOS = {
     "nested-detach": nested_detach,
     "nested-resize": nested_resize,
     "window-death": window_death,
     "window-entry": window_entry,
     "window-relaunch": window_relaunch,
+    "tab-bindings": tab_bindings,
 }
 
 

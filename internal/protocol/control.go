@@ -104,13 +104,21 @@ type SessionInfo struct {
 	LastOutputSequence uint64           `json:"lastOutputSequence"`
 }
 
-// LastActiveAt uses attachment activity, so unattended output does not promote
-// a background session over one the user recently opened.
+// LastActiveAt includes durable output and checkpoint changes as well as use.
 func (s SessionInfo) LastActiveAt() time.Time {
-	if s.LastAttachedAt != nil && s.LastAttachedAt.After(s.CreatedAt) {
-		return *s.LastAttachedAt
+	latest := s.CreatedAt
+	if s.LastAttachedAt != nil && s.LastAttachedAt.After(latest) {
+		latest = *s.LastAttachedAt
 	}
-	return s.CreatedAt
+	if s.Recovery == nil {
+		return latest
+	}
+	for _, updated := range []time.Time{s.Recovery.CheckpointAt, s.Recovery.LastOutputAt} {
+		if updated.After(latest) {
+			latest = updated
+		}
+	}
+	return latest
 }
 
 // HostInfo is the transport representation of one daemon's identity.

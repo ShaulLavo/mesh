@@ -79,6 +79,7 @@ func TestPickerRefreshAddsSessionsWithoutMovingTheSelection(t *testing.T) {
 	if len(refreshed.currentHost().sessions) != 2 || len(refreshed.list.Items()) != 2 {
 		t.Fatalf("refreshed session counts = host %d, list %d; want 2", len(refreshed.currentHost().sessions), len(refreshed.list.Items()))
 	}
+	assertSessionOrder(t, refreshed, "91AZ", "7K3D")
 	if view := ansi.Strip(refreshed.View().Content); !strings.Contains(view, "91AZ") {
 		t.Fatalf("refreshed picker does not show 91AZ:\n%s", view)
 	}

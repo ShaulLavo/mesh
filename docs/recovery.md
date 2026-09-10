@@ -74,10 +74,11 @@ mesh recovery-command 7K3D --clear
 
 ## Inspect previous attempts
 
-Recovery creates a fresh session ID. The full picker groups older attempts below
-their replacement and keeps their saved output. Retrying recovery of the source
-finds the same replacement. Interrupted replacement chains resolve to the latest
-attempt. An exited replacement stays finished until you explicitly select that
+Recovery creates a fresh session ID. The full picker labels older attempts and
+keeps their saved output. All attempts sort by their own latest update time.
+Retrying recovery of the source finds the same replacement. Interrupted
+replacement chains resolve to the latest attempt. An exited replacement stays
+finished until you explicitly select that
 attempt for recovery.
 
 If a launcher disappears before the worker answers, Mesh may report an uncertain

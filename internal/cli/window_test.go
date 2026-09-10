@@ -167,6 +167,28 @@ func TestLocalPickerPreservesAttachmentActivity(t *testing.T) {
 	}
 }
 
+func TestWindowSessionRowsOrdersByUpdateAcrossStates(t *testing.T) {
+	source := []protocol.SessionInfo{
+		{ID: "DETACHED", State: worker.StateDetached, CreatedAt: commandTestTime},
+		{ID: "INTERRUPTED", State: worker.StateInterrupted, CreatedAt: commandTestTime.Add(-time.Hour),
+			Recovery: &recovery.Record{CheckpointAt: commandTestTime.Add(time.Minute)}},
+		{ID: "RUNNING", State: worker.StateRunning, CreatedAt: commandTestTime.Add(-2 * time.Hour),
+			Recovery: &recovery.Record{CheckpointAt: commandTestTime.Add(2 * time.Minute)}},
+		{ID: "EXITED", State: worker.StateExited, CreatedAt: commandTestTime.Add(3 * time.Minute)},
+	}
+	rows := windowSessionRows(source)
+	var ids []string
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	if !slices.Equal(ids, []string{"RUNNING", "INTERRUPTED", "DETACHED"}) {
+		t.Fatalf("window rows = %v", ids)
+	}
+	if source[0].ID != "DETACHED" {
+		t.Fatal("window ordering mutated the source catalog")
+	}
+}
+
 func TestLeaveKeyCannotShadowDefaultInnerDetach(t *testing.T) {
 	command := NewCommand(Dependencies{})
 	if err := command.PersistentFlags().Set("leave-key", "ctrl+]"); err != nil {

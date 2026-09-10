@@ -254,6 +254,10 @@ const MeshDepthVariable = "MESH_DEPTH"
 const (
 	MeshHostIDVariable    = "MESH_HOST_ID"
 	MeshSessionIDVariable = "MESH_SESSION_ID"
+	// MeshTerminalIDVariable names the terminal tab a Mesh client runs in. It
+	// is stripped here, never set: a client inside a session must not inherit
+	// the outer tab's identity and rebind it to a nested session.
+	MeshTerminalIDVariable = "MESH_TERMINAL_ID"
 )
 
 func withDepth(env []string, depth int) []string {
@@ -273,9 +277,10 @@ func withDepth(env []string, depth int) []string {
 func withSessionIdentity(env []string, hostID, sessionID string) []string {
 	hostPrefix := MeshHostIDVariable + "="
 	sessionPrefix := MeshSessionIDVariable + "="
+	terminalPrefix := MeshTerminalIDVariable + "="
 	out := make([]string, 0, len(env)+2)
 	for _, entry := range env {
-		if !strings.HasPrefix(entry, hostPrefix) && !strings.HasPrefix(entry, sessionPrefix) {
+		if !strings.HasPrefix(entry, hostPrefix) && !strings.HasPrefix(entry, sessionPrefix) && !strings.HasPrefix(entry, terminalPrefix) {
 			out = append(out, entry)
 		}
 	}

@@ -23,7 +23,7 @@ const (
 )
 
 var reservedAliases = map[string]struct{}{
-	"add": {}, "attach": {}, "completion": {}, "daemon": {}, "help": {},
+	"add": {}, "attach": {}, "back": {}, "completion": {}, "daemon": {}, "help": {},
 	"kill": {}, "rm": {}, "remove": {}, "rename": {}, "mv": {}, "list": {}, "local": {}, "logs": {}, "ls": {}, "man": {},
 	"recover": {}, "recovery-command": {}, "shell-init": {}, "shell-update": {}, "agent": {}, "agent-hook": {}, "agent-resume": {}, "private-names": {}, "serve": {}, "session-worker": {}, "sig": {}, "signal": {}, "unserve": {}, "wake": {},
 	"update": {}, "version": {}, "update-helper": {}, "update-notice-check": {}, "update-bootstrap": {},

@@ -61,6 +61,11 @@ type BootstrapFunc func(context.Context, AddRequest) (BootstrapResult, error)
 // WakeFunc wakes one adopted host through a configured power controller.
 type WakeFunc func(context.Context, HostRecord) error
 
+// TerminalFunc identifies the terminal tab this client runs in, reporting false
+// when nothing names it well enough to bind a session to. It is replaceable
+// because the command tests are handed plain files, never a tty.
+type TerminalFunc func() (TerminalIdentity, bool)
+
 // ArmWakeFunc prepares this host's own NIC to wake, reporting whether a wired
 // interface was found at all. Wake permission is only granted for hardware it
 // has armed.
@@ -218,6 +223,7 @@ type Dependencies struct {
 	Bootstrap              BootstrapFunc
 	Wake                   WakeFunc
 	ArmWake                ArmWakeFunc
+	Terminal               TerminalFunc
 	Picker                 PickerFunc
 	WindowPicker           WindowPickerFunc
 	ReconcilePrivateNames  PrivateNamesFunc
@@ -244,6 +250,9 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	}
 	if dependencies.ArmWake == nil {
 		dependencies.ArmWake = armWake
+	}
+	if dependencies.Terminal == nil {
+		dependencies.Terminal = DiscoverTerminal
 	}
 	if dependencies.DialControl == nil {
 		dependencies.DialControl = dialControlHost
@@ -337,7 +346,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	)
 	root.AddCommand(
 		inGroup(groupSessions, app.listCommand(), app.attachCommand(), app.localCommand(),
-			app.logsCommand(), app.killCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand(), app.agentCommand())...,
+			app.logsCommand(), app.killCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand(), app.agentCommand(), app.backCommand())...,
 	)
 	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.renameCommand(), app.wakeCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand())...)
@@ -369,6 +378,7 @@ func (a *application) runRoot(cmd *cobra.Command, args []string, resume bool, de
 		if resume {
 			return errors.New("--resume needs a host alias")
 		}
+		a.noteTerminalBinding(cmd, hosts)
 		return a.runPicker(cmd, hosts, detachKey, raw)
 	}
 	target, err := ResolveArgument(args[0], hosts)
@@ -914,8 +924,12 @@ func (a *application) attachResolvedWithContainment(
 		options.SessionID = resolved.remote.ID
 		display = resolved.remote.ID + " on " + resolved.host.Alias
 	}
+	restore := a.bindTerminal(bindingFor(resolved))
 	result, err := Attach(options)
 	if err != nil {
+		if claimFailed(err) {
+			restore()
+		}
 		return err
 	}
 	switch {
@@ -1180,8 +1194,8 @@ func writeProtocolSessions(output io.Writer, now time.Time, hosts []HostSessions
 		return err
 	}
 	sort.Slice(rows, func(i, j int) bool {
-		if !rows[i].session.CreatedAt.Equal(rows[j].session.CreatedAt) {
-			return rows[i].session.CreatedAt.After(rows[j].session.CreatedAt)
+		if left, right := rows[i].session.LastActiveAt(), rows[j].session.LastActiveAt(); !left.Equal(right) {
+			return left.After(right)
 		}
 		if rows[i].host != rows[j].host {
 			return rows[i].host < rows[j].host
@@ -1304,8 +1318,12 @@ func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool
 		}
 		opts.HostID = target.HostID
 	}
+	restore := a.bindTerminal(bindingFor(resolved))
 	result, err := Attach(opts)
 	if err != nil {
+		if claimFailed(err) {
+			restore()
+		}
 		return err
 	}
 	return reportAttachment(cmd, resolved, result)

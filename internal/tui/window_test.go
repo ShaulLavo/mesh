@@ -25,14 +25,14 @@ func windowFixture() cli.WindowInput {
 	}}
 }
 
-func TestWindowPromptOrdersAndPreselectsDetachedSessions(t *testing.T) {
+func TestWindowPromptOrdersByRecencyAndPreselectsAvailableSession(t *testing.T) {
 	input := windowFixture()
 	current := newWindowModel(context.Background(), input, pickerTestNow)
 	var ids []string
 	for _, row := range current.picker.currentHost().sessions {
 		ids = append(ids, row.id)
 	}
-	if want := []string{"BC45", "7K3D", "Q8ME", "91AZ"}; !reflect.DeepEqual(ids, want) {
+	if want := []string{"91AZ", "BC45", "7K3D", "Q8ME"}; !reflect.DeepEqual(ids, want) {
 		t.Fatalf("session order = %v, want %v", ids, want)
 	}
 	if current.picker.selectedSessionID() != "BC45" || !current.selected || input.Sessions[0].ID != "91AZ" {
@@ -54,9 +54,9 @@ func TestWindowPromptChoices(t *testing.T) {
 		want cli.WindowSelection
 	}{
 		{name: "resume", key: key(tea.KeyEnter), want: cli.WindowSelection{SessionID: "BC45"}},
-		{name: "digit", key: runeKey('2'), want: cli.WindowSelection{SessionID: "7K3D"}},
-		{name: "relaunch", key: runeKey('3'), want: cli.WindowSelection{SessionID: "Q8ME", Relaunch: true}},
-		{name: "take over needs full picker", key: runeKey('4'), want: cli.WindowSelection{SessionID: "91AZ", FullPicker: true}},
+		{name: "digit", key: runeKey('3'), want: cli.WindowSelection{SessionID: "7K3D"}},
+		{name: "relaunch", key: runeKey('4'), want: cli.WindowSelection{SessionID: "Q8ME", Relaunch: true}},
+		{name: "take over needs full picker", key: runeKey('1'), want: cli.WindowSelection{SessionID: "91AZ", FullPicker: true}},
 		{name: "fresh", key: runeKey('n'), want: cli.WindowSelection{New: true}},
 		{name: "full picker", key: runeKey('l'), want: cli.WindowSelection{FullPicker: true}},
 		{name: "cancel", key: key(tea.KeyEscape)},
@@ -142,7 +142,7 @@ func TestWindowPromptForgetsOnlyInterruptedSession(t *testing.T) {
 		if command != nil || calls != 0 {
 			t.Fatal("forget acted on a detached session")
 		}
-		current.picker.list.Select(2)
+		current.picker.list.Select(3)
 		updated, command := current.Update(runeKey('x'))
 		current = updated.(windowModel)
 		if command == nil || current.picker.sessionAction.phase != sessionActionRunning {

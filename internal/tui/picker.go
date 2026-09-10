@@ -117,18 +117,18 @@ func hostCatalog(input cli.PickerInput) []host {
 		if catalog.Local {
 			route = "this host"
 		}
-		hosts[index] = host{id: catalog.Host.ID, alias: catalog.Host.Alias, route: route, stale: catalog.Stale, local: catalog.Local, sessions: groupRecoveryAttempts(sessions)}
+		hosts[index] = host{id: catalog.Host.ID, alias: catalog.Host.Alias, route: route, stale: catalog.Stale, local: catalog.Local, sessions: orderSessionsByActivity(sessions)}
 	}
 	sort.SliceStable(hosts, func(i, j int) bool { return hosts[i].local && !hosts[j].local })
 	return hosts
 }
 
 func orderSessionsByActivity(sessions []session) []session {
-	ordered := append([]session(nil), sessions...)
+	ordered := groupRecoveryAttempts(sessions)
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return ordered[i].lastActiveAt.After(ordered[j].lastActiveAt)
 	})
-	return groupRecoveryAttempts(ordered)
+	return ordered
 }
 
 func endpointRoute(endpoint string) string {

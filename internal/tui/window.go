@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -72,27 +71,19 @@ func newWindowModel(ctx context.Context, input cli.WindowInput, now time.Time) w
 		picker.enterSessions(0)
 		picker.refreshOnInit = true
 	}
-	// The compact resume prompt keeps available sessions ahead of ones already
-	// in use, preserving the activity order within each state.
 	sessions := picker.hosts[0].sessions
-	sort.SliceStable(sessions, func(i, j int) bool {
-		return windowSessionOrder(sessions[i].state) < windowSessionOrder(sessions[j].state)
-	})
-	_ = picker.list.SetItems(sessionItems(sessions))
-	current := windowModel{picker: picker, selected: len(sessions) > 0 && sessions[0].state != "running", hostNames: input.HostAliases}
+	selected := false
+	for index, current := range sessions {
+		if current.state == "running" {
+			continue
+		}
+		picker.list.Select(index)
+		selected = true
+		break
+	}
+	current := windowModel{picker: picker, selected: selected, hostNames: input.HostAliases}
 	current.resize()
 	return current
-}
-
-func windowSessionOrder(state string) int {
-	switch state {
-	case "detached":
-		return 0
-	case "interrupted":
-		return 1
-	default:
-		return 2
-	}
 }
 
 func (m windowModel) Init() tea.Cmd { return m.picker.Init() }

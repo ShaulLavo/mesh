@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 
 	"github.com/charmbracelet/x/term"
@@ -60,7 +61,9 @@ func (a *application) runWindow(cmd *cobra.Command, take bool, detachKey string,
 			}
 			return a.startWindowSession(cmd, detachKey, raw)
 		}
-		if len(rows) == 0 || (rows[0].State != worker.StateDetached && rows[0].State != worker.StateInterrupted) {
+		if !slices.ContainsFunc(rows, func(row protocol.SessionInfo) bool {
+			return row.State == worker.StateDetached || row.State == worker.StateInterrupted
+		}) {
 			return a.startWindowSession(cmd, detachKey, raw)
 		}
 		if a.dependencies.WindowPicker == nil {
@@ -163,20 +166,7 @@ func windowSessionRows(source []protocol.SessionInfo) []protocol.SessionInfo {
 			rows = append(rows, row)
 		}
 	}
-	rank := func(state string) int {
-		switch state {
-		case worker.StateDetached:
-			return 0
-		case worker.StateInterrupted:
-			return 1
-		default:
-			return 2
-		}
-	}
 	sort.SliceStable(rows, func(i, j int) bool {
-		if rank(rows[i].State) != rank(rows[j].State) {
-			return rank(rows[i].State) < rank(rows[j].State)
-		}
 		return rows[i].LastActiveAt().After(rows[j].LastActiveAt())
 	})
 	return rows

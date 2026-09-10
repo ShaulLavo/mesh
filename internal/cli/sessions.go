@@ -14,6 +14,8 @@ import (
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -44,7 +46,7 @@ func (s Session) State() string {
 	}
 }
 
-// List returns every session this host knows about, newest first.
+// List returns every session this host knows about, most recently updated first.
 func List() ([]Session, error) {
 	root, err := paths.SessionsDir()
 	if err != nil {
@@ -56,6 +58,7 @@ func List() ([]Session, error) {
 	}
 
 	var out []Session
+	activity := make(map[string]time.Time, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -76,8 +79,13 @@ func List() ([]Session, error) {
 			continue // half-created or hand-deleted; not our problem to report
 		}
 		out = append(out, Session{Meta: meta, Dir: dir, Alive: alive(dir)})
+		row := protocol.SessionInfo{CreatedAt: meta.CreatedAt, LastAttachedAt: meta.LastAttachedAt}
+		if saved, err := recovery.Read(dir); err == nil && saved.SessionID == meta.ID {
+			row.Recovery = &saved
+		}
+		activity[meta.ID] = row.LastActiveAt()
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	sort.SliceStable(out, func(i, j int) bool { return activity[out[i].ID].After(activity[out[j].ID]) })
 	return out, nil
 }
 
