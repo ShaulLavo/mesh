@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"time"
 
@@ -64,15 +63,6 @@ func bindingFor(resolved resolvedSession) TerminalBinding {
 		binding.CreatedAt = time.Time{}
 	}
 	return binding
-}
-
-// claimFailed reports the errors that mean the attachment never took hold, so
-// the terminal keeps pointing at whatever it was on before.
-func claimFailed(err error) bool {
-	return errors.Is(err, ErrSessionAttached) ||
-		errors.Is(err, ErrSessionUnavailable) ||
-		errors.Is(err, ErrSessionHibernating) ||
-		errors.Is(err, ErrAttachDetachedUnsupported)
 }
 
 // noteTerminalBinding points a returning tab at its own session. The picker

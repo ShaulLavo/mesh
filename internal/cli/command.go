@@ -931,9 +931,7 @@ func (a *application) attachResolvedWithContainment(
 	restore := a.bindTerminal(bindingFor(resolved))
 	result, err := Attach(options)
 	if err != nil {
-		if claimFailed(err) {
-			restore()
-		}
+		restore()
 		return err
 	}
 	switch {
@@ -1331,9 +1329,7 @@ func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool
 	restore := a.bindTerminal(bindingFor(resolved))
 	result, err := Attach(opts)
 	if err != nil {
-		if claimFailed(err) {
-			restore()
-		}
+		restore()
 		return err
 	}
 	return reportAttachment(cmd, resolved, result)
@@ -1398,11 +1394,14 @@ func (a *application) attachCommand() *cobra.Command {
 				}
 				opts.HostID = target.HostID
 			}
+			attached := resolvedSession{local: &current}
+			restore := a.bindTerminal(bindingFor(attached))
 			result, err := Attach(opts)
 			if err != nil {
+				restore()
 				return err
 			}
-			return reportAttachment(cmd, resolvedSession{local: &current}, result)
+			return reportAttachment(cmd, attached, result)
 		},
 	}
 	command.Flags().BoolVar(&viaDaemon, "daemon", false, "attach through the local daemon")

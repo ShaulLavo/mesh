@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/shaul/mesh/internal/paths"
@@ -153,6 +154,13 @@ func saveTerminalBinding(key string, binding TerminalBinding) error {
 	return syncBindingDir(filepath.Dir(path))
 }
 
+func unsupportedSync(err error) bool {
+	return errors.Is(err, os.ErrInvalid) ||
+		errors.Is(err, syscall.EINVAL) ||
+		errors.Is(err, syscall.ENOTSUP) ||
+		errors.Is(err, syscall.EBADF)
+}
+
 func forgetTerminalBinding(key string) error {
 	path, err := bindingPath(key)
 	if err != nil {
@@ -172,7 +180,9 @@ func syncBindingDir(dir string) error {
 		return fmt.Errorf("open terminal binding directory: %w", err)
 	}
 	defer func() { _ = handle.Close() }()
-	if err := handle.Sync(); err != nil && !errors.Is(err, os.ErrInvalid) {
+	// Not every filesystem implements directory fsync; the rename has already
+	// landed, so refusing to record the binding over it would be worse.
+	if err := handle.Sync(); err != nil && !unsupportedSync(err) {
 		return fmt.Errorf("sync terminal binding directory: %w", err)
 	}
 	return nil

@@ -78,11 +78,24 @@ func fakeTerminal(key string) TerminalFunc {
 // to a session that belongs to a different one.
 func TestBackExplainsAnUnidentifiableTerminal(t *testing.T) {
 	setupCommandTestHost(t)
+	clearTerminalEnvironment(t)
 	_, _, err := executeCommand(t, Dependencies{
 		Terminal: func() (TerminalIdentity, bool) { return TerminalIdentity{}, false },
 	}, "back")
 	if err == nil || !strings.Contains(err.Error(), "cannot identify this terminal") {
 		t.Fatalf("back error = %v, want the unidentified-terminal explanation", err)
+	}
+}
+
+func TestBackInsideASessionPointsAtTheOuterTerminal(t *testing.T) {
+	setupCommandTestHost(t)
+	clearTerminalEnvironment(t)
+	insideSessionProcess = func() bool { return true }
+	_, _, err := executeCommand(t, Dependencies{
+		Terminal: func() (TerminalIdentity, bool) { return TerminalIdentity{}, false },
+	}, "back")
+	if !errors.Is(err, errTerminalInsideSession) {
+		t.Fatalf("back error = %v, want the inside-a-session explanation", err)
 	}
 }
 
@@ -137,8 +150,8 @@ func TestBareMeshPointsAReturningTerminalAtItsOwnSession(t *testing.T) {
 	if opened != 1 {
 		t.Fatalf("picker opened %d times, want exactly 1 — bare mesh must still open it", opened)
 	}
-	if !strings.Contains(stderr, "7K3D") || !strings.Contains(stderr, "mesh back") {
-		t.Fatalf("bare mesh stderr = %q, want it to name 7K3D and mesh back", stderr)
+	if !strings.Contains(stderr, "7K3D on pc") || !strings.Contains(stderr, "mesh back") {
+		t.Fatalf("bare mesh stderr = %q, want it to name 7K3D on pc and mesh back", stderr)
 	}
 }
 
@@ -156,5 +169,109 @@ func TestBareMeshSaysNothingExtraForAnUnboundTerminal(t *testing.T) {
 	}
 	if strings.Contains(stderr, "mesh back") {
 		t.Fatalf("an unbound terminal was told about mesh back: %q", stderr)
+	}
+}
+
+// The binding has to survive the outage it exists for. A host that is down
+// answers no query, and a session created by `mesh <host>` was never written to
+// the local catalog cache, so a failed lookup is indistinguishable from a dead
+// session. Discarding the record there would erase the tab's memory during
+// exactly the crash it is meant to carry it through.
+func TestBackKeepsTheBindingWhenTheSessionCannotBeReached(t *testing.T) {
+	host := setupCommandTestHost(t)
+	binding := TerminalBinding{SessionID: "7K3D", HostID: host.host.ID, BoundAt: time.Now()}
+	if err := saveTerminalBinding("bound-tab", binding); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := executeCommand(t, Dependencies{
+		Terminal: fakeTerminal("bound-tab"),
+		DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host unavailable")
+		},
+	}, "back")
+	if err == nil {
+		t.Fatal("back succeeded against an unreachable host")
+	}
+	if !strings.Contains(err.Error(), "binding retained") {
+		t.Fatalf("back error = %v, want it to say the binding is retained", err)
+	}
+	kept, found := loadTerminalBinding("bound-tab")
+	if !found {
+		t.Fatal("an unreachable host erased this terminal's binding")
+	}
+	if kept.SessionID != "7K3D" || kept.HostID != host.host.ID {
+		t.Fatalf("binding = %#v, want it unchanged", kept)
+	}
+}
+
+// A session reusing a retired id is the one case where forgetting is right: the
+// terminal is demonstrably pointed at somebody else's session.
+func TestBackForgetsABindingWhoseSessionWasReplacedByAnother(t *testing.T) {
+	setupCommandTestHost(t)
+	created := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	identity := TerminalIdentity{Key: "bound-tab", Source: "test"}
+	binding := TerminalBinding{SessionID: "7K3D", CreatedAt: created, BoundAt: created}
+	if err := saveTerminalBinding(identity.Key, binding); err != nil {
+		t.Fatal(err)
+	}
+	later := resolvedSession{local: &Session{}}
+	later.local.ID, later.local.CreatedAt = "7K3D", created.Add(time.Hour)
+	if err := bindingStillDescribes(binding, later); err == nil {
+		t.Fatal("a session reusing the id was accepted")
+	}
+	// resolveBinding is what actually drops it; prove the two agree.
+	if _, err := (&application{dependencies: Dependencies{}}).resolveBinding(context.Background(), identity, binding); err == nil {
+		t.Fatal("resolveBinding accepted a session it could not resolve without error")
+	}
+}
+
+// A session is bound the moment it is created, before the host has reported
+// anything about it, so the guard against a recycled id starts blank. It has to
+// be filled in by the first lookup that can supply one, or it never guards.
+func TestBackRemembersACreationTimeItCouldNotKnowAtBindTime(t *testing.T) {
+	setupCommandTestHost(t)
+	created := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	identity := TerminalIdentity{Key: "bound-tab", Source: "test"}
+	binding := TerminalBinding{SessionID: "7K3D", BoundAt: created}
+	if err := saveTerminalBinding(identity.Key, binding); err != nil {
+		t.Fatal(err)
+	}
+	resolved := resolvedSession{local: &Session{}}
+	resolved.local.ID, resolved.local.CreatedAt = "7K3D", created
+	rememberCreation(identity, binding, resolved)
+	upgraded, found := loadTerminalBinding(identity.Key)
+	if !found || !upgraded.CreatedAt.Equal(created) {
+		t.Fatalf("binding = %#v found=%t, want createdAt %s", upgraded, found, created)
+	}
+	// A stale catalog row's timestamps came out of the cache and must not be
+	// promoted into the guard.
+	stale := resolvedSession{remote: sessionInfoFor("9XYZ", created.Add(time.Hour)), stale: true}
+	blank := TerminalBinding{SessionID: "9XYZ", BoundAt: created}
+	if err := saveTerminalBinding("stale-tab", blank); err != nil {
+		t.Fatal(err)
+	}
+	rememberCreation(TerminalIdentity{Key: "stale-tab"}, blank, stale)
+	unchanged, _ := loadTerminalBinding("stale-tab")
+	if !unchanged.CreatedAt.IsZero() {
+		t.Fatalf("a stale row supplied a creation time of %s", unchanged.CreatedAt)
+	}
+}
+
+// Telling someone to export a variable is useless advice when the refusal
+// happened before any variable was read.
+func TestBackInsideASessionNamesNestingRatherThanBlamingTheEnvironment(t *testing.T) {
+	setupCommandTestHost(t)
+	t.Setenv(worker.MeshSessionIDVariable, "7K3D")
+	_, _, err := executeCommand(t, Dependencies{
+		Terminal: func() (TerminalIdentity, bool) { return TerminalIdentity{}, false },
+	}, "back")
+	if err == nil {
+		t.Fatal("back succeeded inside a Mesh session")
+	}
+	if strings.Contains(err.Error(), "MESH_TERMINAL_ID") {
+		t.Fatalf("back blamed the environment inside a session: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Mesh session") {
+		t.Fatalf("back error = %v, want it to name nesting as the cause", err)
 	}
 }

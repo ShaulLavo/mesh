@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/x/term"
 	"golang.org/x/sys/unix"
 
 	"github.com/shaul/mesh/internal/worker"
@@ -29,6 +30,11 @@ type TerminalIdentity struct {
 // terminalProbes are consulted in order, most durable first. A terminal that
 // persists its own pane identifier still names the same pane after the
 // application restarts; a tty device only names the same pane until it closes.
+//
+// Every variable listed for a probe must be present for it to fire. Several
+// terminals number their windows from one per instance, so the counter alone
+// collides across two windows of the same application; the companion variable
+// is what separates them.
 var terminalProbes = []struct {
 	source    string
 	variables []string
@@ -42,11 +48,29 @@ var terminalProbes = []struct {
 	{"iterm", []string{"ITERM_SESSION_ID"}},
 	{"apple-terminal", []string{"TERM_SESSION_ID"}},
 	{"wezterm", []string{"WEZTERM_PANE", "WEZTERM_UNIX_SOCKET"}},
-	{"kitty", []string{"KITTY_WINDOW_ID"}},
-	{"alacritty", []string{"ALACRITTY_WINDOW_ID"}},
+	{"kitty", []string{"KITTY_WINDOW_ID", "KITTY_PID"}},
+	{"alacritty", []string{"ALACRITTY_WINDOW_ID", "ALACRITTY_SOCKET"}},
 	// Ghostty ranks last among terminals: GHOSTTY_SURFACE_ID is a hex address,
 	// so a closed surface's value can come back on an unrelated one.
 	{"ghostty", []string{"GHOSTTY_SURFACE_ID"}},
+}
+
+// InsideMeshSession reports whether this client is running inside a session
+// rather than in a terminal of its own. Three signals, because none is
+// sufficient alone: a session started by an older Mesh may not export the
+// variables, and only the process walk proves it.
+func InsideMeshSession() bool {
+	if os.Getenv(worker.MeshSessionIDVariable) != "" || os.Getenv(worker.MeshDepthVariable) != "" {
+		return true
+	}
+	return insideSessionProcess()
+}
+
+// insideSessionProcess walks the real process tree; tests replace it so their
+// verdict does not depend on whether the test runner sits inside a session.
+var insideSessionProcess = func() bool {
+	_, inside := worker.ContainingSessionWorker()
+	return inside
 }
 
 // DiscoverTerminal identifies the calling terminal. It reports false when
@@ -54,20 +78,21 @@ var terminalProbes = []struct {
 // keep their previous behaviour rather than guessing: a wrong binding sends a
 // tab to somebody else's session, which is worse than no binding at all.
 func DiscoverTerminal() (TerminalIdentity, bool) {
-	// A client running inside a session must never claim the outer tab. The
-	// worker strips MESH_TERMINAL_ID for that reason, but an older worker does
-	// not, so refuse on the session marker rather than trusting the strip.
-	if os.Getenv(worker.MeshSessionIDVariable) != "" {
+	// A client inside a session must never claim the outer tab, or attaching
+	// from within a session would rebind the tab the user is sitting in.
+	if InsideMeshSession() {
 		return TerminalIdentity{}, false
 	}
 	for _, probe := range terminalProbes {
 		values := make([]string, 0, len(probe.variables))
 		for _, name := range probe.variables {
-			if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-				values = append(values, name+"="+value)
+			value := strings.TrimSpace(os.Getenv(name))
+			if value == "" {
+				break
 			}
+			values = append(values, name+"="+value)
 		}
-		if len(values) == 0 {
+		if len(values) != len(probe.variables) {
 			continue
 		}
 		return TerminalIdentity{Key: terminalKey(probe.source, values), Source: probe.source}, true
@@ -85,11 +110,13 @@ func terminalDeviceIdentity() (TerminalIdentity, bool) {
 	if boot == "" {
 		return TerminalIdentity{}, false
 	}
-	var status unix.Stat_t
-	if err := unix.Fstat(int(os.Stdin.Fd()), &status); err != nil {
+	// A character device is not enough: /dev/null is one, and every client
+	// redirected from it would share a key and steal each other's bindings.
+	if !term.IsTerminal(os.Stdin.Fd()) {
 		return TerminalIdentity{}, false
 	}
-	if status.Mode&unix.S_IFMT != unix.S_IFCHR {
+	var status unix.Stat_t
+	if err := unix.Fstat(int(os.Stdin.Fd()), &status); err != nil {
 		return TerminalIdentity{}, false
 	}
 	values := []string{

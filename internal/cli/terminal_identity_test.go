@@ -13,6 +13,11 @@ func clearTerminalEnvironment(t *testing.T) {
 	t.Helper()
 	t.Setenv(worker.MeshSessionIDVariable, "")
 	_ = os.Unsetenv(worker.MeshSessionIDVariable)
+	t.Setenv(worker.MeshDepthVariable, "")
+	_ = os.Unsetenv(worker.MeshDepthVariable)
+	previous := insideSessionProcess
+	insideSessionProcess = func() bool { return false }
+	t.Cleanup(func() { insideSessionProcess = previous })
 	for _, probe := range terminalProbes {
 		for _, name := range probe.variables {
 			t.Setenv(name, "")

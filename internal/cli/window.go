@@ -222,8 +222,10 @@ func (a *application) attachWindow(cmd *cobra.Command, current Session, socket s
 		}
 		opts.HostID = target.HostID
 	}
+	restore := a.bindTerminal(bindingFor(resolvedSession{local: &current}))
 	result, err := Attach(opts)
 	if err != nil {
+		restore()
 		return err
 	}
 	if result.Exited && result.ExitCode != 0 {
