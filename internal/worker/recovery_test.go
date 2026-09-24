@@ -17,7 +17,15 @@ import (
 
 func recoveryTestWorker(t *testing.T) *Worker {
 	t.Helper()
+	return recoveryTestWorkerAt(t, nil)
+}
+
+// recoveryTestWorkerAt installs the clock before the checkpoint loop starts
+// reading it.
+func recoveryTestWorkerAt(t *testing.T, now func() time.Time) *Worker {
+	t.Helper()
 	w := &Worker{
+		now:    now,
 		cfg:    Config{ID: "7K3D", HostID: "host-one", Dir: t.TempDir(), Cwd: "/launch", Command: []string{"/bin/bash"}},
 		cmd:    &exec.Cmd{Process: &os.Process{Pid: 4321}},
 		screen: terminalstate.NewScreen(80, 5), ring: session.NewRing(ringSize),

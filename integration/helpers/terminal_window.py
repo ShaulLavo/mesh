@@ -141,6 +141,7 @@ class Fixture:
         self.terminals = []
         self.daemon = None
         self.daemon_log = None
+        self.daemon_args = []
         self.identity_requests = 0
         self.environment = os.environ.copy()
         for key in ("MESH_SESSION_ID", "MESH_HOST_ID", "MESH_DEPTH", "BASH_ENV", "ENV"):
@@ -186,7 +187,7 @@ class Fixture:
         require(self.daemon is None, "fixture daemon is already running")
         self.daemon_log = open(self.root / "daemon.log", "ab")
         self.daemon = subprocess.Popen(
-            [self.binary, "daemon", "--tailnet-port", "0", "--ssh-port", "0"],
+            [self.binary, "daemon", "--tailnet-port", "0", "--ssh-port", "0", *self.daemon_args],
             env=self.environment, stdin=subprocess.DEVNULL, stdout=self.daemon_log, stderr=subprocess.STDOUT,
         )
         eventually(lambda: (self.local / "daemon.sock").exists(), "local daemon did not create its socket")
@@ -305,7 +306,7 @@ class Fixture:
         }
         self.daemon_log = open(self.root / "daemon.log", "wb")
         self.daemon = subprocess.Popen(
-            [self.binary, "daemon", "--tailnet-port", str(port), "--ssh-port", "0"],
+            [self.binary, "daemon", "--tailnet-port", str(port), "--ssh-port", "0", *self.daemon_args],
             env=environment, stdin=subprocess.DEVNULL, stdout=self.daemon_log, stderr=subprocess.STDOUT,
         )
         eventually(lambda: (self.remote / "daemon.sock").exists(), "remote daemon did not create its socket")

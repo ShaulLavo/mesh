@@ -44,6 +44,10 @@ func (w *Worker) hibernate(request protocol.Control) error {
 	}
 	w.killResponders.Add(1)
 	defer w.killResponders.Done()
+	if w.stopForHibernation != nil {
+		w.stopForHibernation()
+		return nil
+	}
 	w.kill()
 	return nil
 }

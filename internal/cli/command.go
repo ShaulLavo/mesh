@@ -1574,6 +1574,7 @@ func (a *application) daemonCommand() *cobra.Command {
 		edgeConfig         string
 		publicEdgeTarget   string
 		tailscaleServe     bool
+		hibernateIdle      time.Duration
 	)
 	command := &cobra.Command{
 		Use:   "daemon",
@@ -1589,6 +1590,9 @@ func (a *application) daemonCommand() *cobra.Command {
 			if httpsPort > 65535 {
 				return fmt.Errorf("HTTPS port %d is out of range", httpsPort)
 			}
+			if hibernateIdle < 0 {
+				return fmt.Errorf("--hibernate-idle %s is negative", hibernateIdle)
+			}
 			stateDir, err := paths.StateDir()
 			if err != nil {
 				return err
@@ -1600,8 +1604,8 @@ func (a *application) daemonCommand() *cobra.Command {
 				StateDir:          stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
 				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget,
-				TailscaleServe: tailscaleServe,
-				ReportError:    func(err error) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %v\n", err) },
+				TailscaleServe: tailscaleServe, HibernateIdle: hibernateIdle,
+				ReportError: func(err error) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %v\n", err) },
 			})
 		},
 	}
@@ -1614,6 +1618,7 @@ func (a *application) daemonCommand() *cobra.Command {
 	command.Flags().StringVar(&edgeConfig, "edge", "", "public-edge runtime and origin allowlist config file")
 	command.Flags().StringVar(&publicEdgeTarget, "public-edge-target", "", "pinned public-edge target config file")
 	command.Flags().BoolVar(&tailscaleServe, "tailscale-serve", false, "persist raw Tailscale TCP/443 forwarding to the HTTPS port")
+	command.Flags().DurationVar(&hibernateIdle, "hibernate-idle", 0, "stop a Codex or Claude conversation after its session is detached and quiet this long, resuming it on attach; zero disables")
 	return command
 }
 

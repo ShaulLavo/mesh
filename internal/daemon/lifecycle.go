@@ -64,6 +64,8 @@ type lifecycle struct {
 
 	creationsMu sync.Mutex
 	creations   map[string]*creation
+
+	memory memorySampler
 }
 
 const defaultPublishTimeout = 30 * time.Second
@@ -337,8 +339,10 @@ func (l *lifecycle) list(ctx context.Context, request protocol.Control) (protoco
 		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
 	}
 	items := make([]protocol.SessionInfo, len(sessions))
+	sizes := l.memory.sizesFor(l.sessionsDir, sessions, time.Now())
 	for i, stored := range sessions {
 		items[i] = sessionInfo(stored)
+		items[i].MemoryBytes = sizes[items[i].ID]
 		l.addRecoveryInfo(&items[i])
 	}
 	return protocol.Control{Type: protocol.TypeListed, RequestID: request.RequestID, Sessions: items}, nil

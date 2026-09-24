@@ -509,6 +509,15 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		defer close(reconciled)
 		reconcilePeriodically(daemonCtx, catalog, opts.reconcileInterval, reporter)
 	}()
+	hibernated := make(chan struct{})
+	go func() {
+		defer close(hibernated)
+		if cfg.HibernateIdle <= 0 {
+			return
+		}
+		idle := &hibernator{lifecycle: lifecycle, idle: cfg.HibernateIdle, now: opts.now, refused: map[storage.SessionID]string{}}
+		idle.run(daemonCtx, hibernationInterval(cfg.HibernateIdle))
+	}()
 	privateNamesDone := make(chan struct{})
 	go func() {
 		defer close(privateNamesDone)
@@ -604,6 +613,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	<-updatesDone
 	<-powerDone
 	<-reconciled
+	<-hibernated
 	<-privateNamesDone
 	<-publicCertificateDone
 	<-publicHeartbeatDone

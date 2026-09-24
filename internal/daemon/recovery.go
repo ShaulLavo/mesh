@@ -78,14 +78,16 @@ func (l *lifecycle) readRecovery(ctx context.Context, request protocol.Control) 
 
 func (l *lifecycle) addRecoveryInfo(info *protocol.SessionInfo) {
 	dir := filepath.Join(l.sessionsDir, info.ID)
-	meta, err := worker.ReadMeta(dir)
-	if err == nil {
+	meta, metaErr := worker.ReadMeta(dir)
+	if metaErr == nil {
 		info.RecoveredFrom = meta.RecoveredFrom
 	}
+	var err error
 	info.ReplacementID, err = recovery.ReplacementID(dir, string(l.host.ID), info.ID)
 	if err != nil {
 		info.RecoveryError = err.Error()
 	}
+	addHibernationInfo(dir, meta, metaErr, info)
 	fallback := recovery.Record{Version: recovery.Version, HostID: string(l.host.ID), SessionID: info.ID, Shell: hostShell(), ShellDirectory: info.Cwd, DirectorySource: recovery.DirectoryLaunch, Command: info.Command}
 	record, err := recovery.ReadSaved(dir, string(l.host.ID), info.ID, fallback)
 	if err != nil {

@@ -131,10 +131,13 @@ type Worker struct {
 	finished    bool
 	// hibernating keeps the agent recipe active through the stop, and turns
 	// away attachments that would otherwise land on a session mid-shutdown.
-	hibernating    bool
-	pumpStopped    bool
-	lastOutputAt   time.Time
-	lastAttachedAt time.Time
+	hibernating bool
+	// stopForHibernation replaces kill in tests, whose fake PIDs must never
+	// receive a real signal.
+	stopForHibernation func()
+	pumpStopped        bool
+	lastOutputAt       time.Time
+	lastAttachedAt     time.Time
 	// reaped is set once Process.Wait has returned. After that the PID is the
 	// kernel's to reuse, so signalling it — or its negation, now that the child
 	// is a real process group leader — can land on an unrelated process.
@@ -543,7 +546,12 @@ func Run(cfg Config) (int, error) {
 		code = -1
 	}
 	w.drainPTY()
-	if cfg.AwaitInitialAttach {
+	w.mu.Lock()
+	hibernating := w.hibernating
+	w.mu.Unlock()
+	// A hibernated session's screen is already in its checkpoint, and holding
+	// the exit for a first viewer would stall the stop that asked for it.
+	if cfg.AwaitInitialAttach && !hibernating {
 		w.waitForFirstAttachment()
 	}
 	w.finish(code)
