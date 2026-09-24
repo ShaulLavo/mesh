@@ -183,3 +183,14 @@ func TestDetachRecordsWhenTheLastClientLeft(t *testing.T) {
 		t.Fatalf("reattached meta = %+v, %v", meta, err)
 	}
 }
+
+func TestIdleHibernationRefusesASessionAttachedSinceItsRecordedDetach(t *testing.T) {
+	detachedAt := time.Date(2026, 9, 24, 8, 0, 0, 0, time.UTC)
+	w, _, _, stops := hibernationTestWorker(t, detachedAt)
+	w.mu.Lock()
+	w.lastAttachedAt = w.now().Add(-time.Minute)
+	w.mu.Unlock()
+	if response := hibernateRequest(t, w, 6*time.Hour); response.Type != protocol.TypeError || !strings.Contains(response.Message, "attached since") || *stops != 0 {
+		t.Fatalf("hibernate after a fresh attachment = %+v after %d stops", response, *stops)
+	}
+}

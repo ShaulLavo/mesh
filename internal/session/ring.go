@@ -129,7 +129,7 @@ func (r *Ring) Last(size int) []byte {
 }
 
 func (r *Ring) tail() uint64 {
-	if c := uint64(r.size); r.head > c {
+	if c := uint64(r.size); r.head > c { //nolint:gosec // the window size is a positive int set at construction
 		return r.head - c
 	}
 	return 0

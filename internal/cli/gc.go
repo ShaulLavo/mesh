@@ -78,8 +78,10 @@ func (a *application) gcCommand() *cobra.Command {
 			"mesh gc --shells --yes",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if idle <= 0 {
-				return errors.New("--idle must be a positive duration, such as 6h")
+			// The wire carries whole milliseconds, and zero there means an
+			// unconditional request, so a sub-second idle time is refused.
+			if idle < time.Second {
+				return errors.New("--idle must be at least 1s, such as 6h")
 			}
 			return a.runGC(cmd, idle, shells, yes)
 		},

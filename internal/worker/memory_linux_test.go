@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/xpty"
+
+	"github.com/shaul/mesh/internal/procmem"
 )
 
 func TestSessionCommandKeepsSystemHugePagePolicy(t *testing.T) {
@@ -46,7 +48,7 @@ func TestSessionCommandKeepsSystemHugePagePolicy(t *testing.T) {
 
 func thpEnabled(t *testing.T, path string) string {
 	t.Helper()
-	status, err := os.ReadFile(path)
+	status, err := os.ReadFile(path) //nolint:gosec // callers pass fixed procfs paths
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,4 +58,15 @@ func thpEnabled(t *testing.T, path string) string {
 		}
 	}
 	return ""
+}
+
+func TestSessionMemoryClimbsOnlyToItsOwnWorker(t *testing.T) {
+	table := procmem.Snapshot()
+	self := os.Getpid()
+	if root := sessionRoot(table, "7K3D", self); root != self {
+		t.Fatalf("root = %d, want the child %d when its parent is not the session worker", root, self)
+	}
+	if SessionMemory(table, "7K3D", self) == 0 {
+		t.Fatal("measured nothing for a live process")
+	}
 }

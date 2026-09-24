@@ -66,7 +66,7 @@ func TestCheckServiceReportsUnreachableProxyUpstream(t *testing.T) {
 			service := Service{Name: "app", Kind: Proxy, Target: port, PublicName: "app.shaulavo.dev", WakeOnRequest: wake}
 
 			status := CheckService(t.Context(), service)
-			want := "upstream 127.0.0.1:" + port + " unreachable"
+			want := "upstream 127.0.0.1:" + port + " unreachable: connect: connection refused"
 			if status.Healthy || status.Problem != want {
 				t.Fatalf("status without listener = %#v, want unhealthy with %q", status, want)
 			}

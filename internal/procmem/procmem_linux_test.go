@@ -30,13 +30,9 @@ func TestTreeIncludesChildrenOfTheRoot(t *testing.T) {
 	}
 }
 
-func TestSessionRootOnlyClimbsToTheNamedWorker(t *testing.T) {
+func TestCommandReadsTheArgumentVector(t *testing.T) {
 	table := Snapshot()
-	self := os.Getpid()
-	if root := table.SessionRoot(self, "7K3D"); root != self {
-		t.Fatalf("root = %d, want the child itself %d when the parent is not a session worker", root, self)
-	}
-	if root := table.SessionRoot(0, "7K3D"); root != 0 {
-		t.Fatalf("root of pid 0 = %d", root)
+	if args := table.Command(os.Getpid()); len(args) == 0 || args[0] != os.Args[0] {
+		t.Fatalf("own command = %q, want it to start with %q", args, os.Args[0])
 	}
 }

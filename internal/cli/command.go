@@ -747,14 +747,9 @@ func (a *application) runHostWithContainment(
 		for _, row := range rows {
 			if row.State == string(storage.StateRunning) || row.State == string(storage.StateDetached) {
 				containingSessions := containment(cmd.Context())
-				return a.attachResolvedWithContainment(
-					cmd,
-					resolvedSession{host: &host, remote: row},
-					detachKey,
-					raw,
-					nil,
-					containingSessions,
-				)
+				resolved := resolvedSession{host: &host, remote: row}
+				err := a.attachResolvedWithContainment(cmd, resolved, detachKey, raw, nil, containingSessions)
+				return a.wakeIfHibernating(cmd, resolved, err, detachKey, raw)
 			}
 		}
 		// A live session always wins: it costs nothing to reattach, while a
@@ -1605,8 +1600,10 @@ func (a *application) daemonCommand() *cobra.Command {
 			if httpsPort > 65535 {
 				return fmt.Errorf("HTTPS port %d is out of range", httpsPort)
 			}
-			if hibernateIdle < 0 {
-				return fmt.Errorf("--hibernate-idle %s is negative", hibernateIdle)
+			// Zero disables; anything shorter than a second would round to the
+			// wire's zero, which the worker treats as an unconditional request.
+			if hibernateIdle != 0 && hibernateIdle < time.Second {
+				return fmt.Errorf("--hibernate-idle %s must be zero or at least 1s", hibernateIdle)
 			}
 			stateDir, err := paths.StateDir()
 			if err != nil {
@@ -1750,7 +1747,7 @@ func localSessionRowsMeasured(memory procmem.Table) ([]protocol.SessionInfo, err
 		addLocalRecoveryInfo(&row, current, config.HostID)
 		row.Hibernated = localHibernation(current, row.ReplacementID)
 		if current.Alive {
-			row.MemoryBytes = memory.Tree(memory.SessionRoot(current.PID, current.ID))
+			row.MemoryBytes = worker.SessionMemory(memory, current.ID, current.PID)
 		}
 		rows = append(rows, row)
 	}

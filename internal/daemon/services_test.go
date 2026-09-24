@@ -551,7 +551,7 @@ func TestServiceControllerPublishesProxyWhoseUpstreamIsDown(t *testing.T) {
 	response, _, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeServiceUpsert, RequestID: "upsert", Service: &service,
 	})
-	want := "upstream " + address + " unreachable"
+	want := "upstream " + address + " unreachable: connect: connection refused"
 	if err != nil || response.Service == nil || response.Service.Healthy || response.Service.Problem != want {
 		t.Fatalf("upsert response = %#v, error = %v, want unhealthy with %q", response, err, want)
 	}

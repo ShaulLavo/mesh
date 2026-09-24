@@ -444,6 +444,10 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		}
 	}
 	closeErr := conn.Close()
+	var refused workerRefusal
+	if errors.As(err, &refused) {
+		return protocol.Control{}, refused
+	}
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: forward %s to session %s: %w", request.Type, id, err)
 	}
@@ -523,8 +527,15 @@ func validateKillAcknowledgement(id, requestID string, frame protocol.Frame) err
 	return nil
 }
 
-// validateHibernateAcknowledgement passes a worker's refusal through as the
-// reason, because "not detached long enough" is an answer, not a fault.
+// workerRefusal is a worker's own answer to a request it declined. The daemon
+// returns it unwrapped: "not detached long enough" is an answer, not a fault.
+type workerRefusal struct{ message string }
+
+func (r workerRefusal) Error() string { return r.message }
+
+// validateHibernateAcknowledgement accepts a refusal without the request ID
+// because a worker that predates hibernation answers every unknown request
+// with an ID-less "expected session.attach", which the client explains.
 func validateHibernateAcknowledgement(id, requestID string, frame protocol.Frame) error {
 	if frame.Kind != protocol.KindControl {
 		return fmt.Errorf("daemon: session %s hibernation acknowledgement has kind %d", id, frame.Kind)
@@ -533,14 +544,14 @@ func validateHibernateAcknowledgement(id, requestID string, frame protocol.Frame
 	if err != nil {
 		return fmt.Errorf("daemon: session %s hibernation acknowledgement: %w", id, err)
 	}
-	if message.RequestID != requestID || message.SessionID != id {
+	if message.SessionID != id {
 		return fmt.Errorf("daemon: session %s invalid hibernation acknowledgement", id)
 	}
-	switch message.Type {
-	case protocol.TypeOK:
+	switch {
+	case message.Type == protocol.TypeError:
+		return workerRefusal{message: message.Message}
+	case message.Type == protocol.TypeOK && message.RequestID == requestID:
 		return nil
-	case protocol.TypeError:
-		return errors.New(message.Message)
 	default:
 		return fmt.Errorf("daemon: session %s invalid hibernation acknowledgement", id)
 	}

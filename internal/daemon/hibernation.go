@@ -146,7 +146,7 @@ func (m *memorySampler) sizesFor(sessionsDir string, sessions []storage.Session,
 		if err != nil || meta.PID <= 0 {
 			continue
 		}
-		sizes[meta.ID] = table.Tree(table.SessionRoot(meta.PID, meta.ID))
+		sizes[meta.ID] = worker.SessionMemory(table, meta.ID, meta.PID)
 	}
 	m.sizes, m.sampled = sizes, now
 	return sizes

@@ -261,7 +261,12 @@ func (a *application) attachOrWake(cmd *cobra.Command, resolved resolvedSession,
 		}
 		return a.recoverSession(cmd, resolved, recovery.ActionDefault, detachKey, raw, false)
 	}
-	err := a.attachResolved(cmd, resolved, detachKey, raw, nil)
+	return a.wakeIfHibernating(cmd, resolved, a.attachResolved(cmd, resolved, detachKey, raw, nil), detachKey, raw)
+}
+
+// wakeIfHibernating turns an attachment that raced a stopping worker into a
+// wake, and passes every other attach result through.
+func (a *application) wakeIfHibernating(cmd *cobra.Command, resolved resolvedSession, err error, detachKey string, raw bool) error {
 	if !errors.Is(err, ErrSessionHibernating) {
 		return err
 	}

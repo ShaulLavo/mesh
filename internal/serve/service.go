@@ -3,6 +3,7 @@ package serve
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -188,8 +189,13 @@ func checkUpstream(ctx context.Context, address string) error {
 	defer cancel()
 	var dialer net.Dialer
 	connection, err := dialer.DialContext(ctx, "tcp", address)
+	var operation *net.OpError
+	if errors.As(err, &operation) && operation.Err != nil {
+		// The dial error repeats the address; keep only why it failed.
+		return fmt.Errorf("upstream %s unreachable: %w", address, operation.Err)
+	}
 	if err != nil {
-		return fmt.Errorf("upstream %s unreachable", address)
+		return fmt.Errorf("upstream %s unreachable: %w", address, err)
 	}
 	_ = connection.Close()
 	return nil

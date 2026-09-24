@@ -28,7 +28,7 @@ func Snapshot() Table {
 		children[parent] = append(children[parent], pid)
 		parents[pid] = parent
 	}
-	return Table{parents: parents, children: children, sample: linuxProportional}
+	return Table{parents: parents, children: children, sample: linuxProportional, command: commandLine}
 }
 
 func linuxParent(pid int) (int, bool) {

@@ -74,7 +74,7 @@ func containingSessionIDFromAncestors(pid int, read ancestorProcessReader) strin
 		if !ok {
 			return ""
 		}
-		if id := sessionIDFromWorkerArgs(process.args); id != "" {
+		if id := SessionIDFromWorkerArgs(process.args); id != "" {
 			return id
 		}
 		pid = process.parentID
@@ -82,7 +82,9 @@ func containingSessionIDFromAncestors(pid int, read ancestorProcessReader) strin
 	return ""
 }
 
-func sessionIDFromWorkerArgs(args []string) string {
+// SessionIDFromWorkerArgs recognises the exact `mesh session-worker --id ID`
+// argv, returning "" for anything else.
+func SessionIDFromWorkerArgs(args []string) string {
 	if len(args) < 4 || args[1] != "session-worker" {
 		return ""
 	}
@@ -98,7 +100,7 @@ func sessionIDFromWorkerArgs(args []string) string {
 }
 
 func sessionWorkerLocationFromArgs(args []string) (SessionWorkerLocation, bool) {
-	id := sessionIDFromWorkerArgs(args)
+	id := SessionIDFromWorkerArgs(args)
 	if id == "" {
 		return SessionWorkerLocation{}, false
 	}

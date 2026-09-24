@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -94,5 +96,39 @@ func TestListReportsDetachTimeAndUnwokenHibernation(t *testing.T) {
 	addHibernationInfo(dir, meta, err, &woken)
 	if woken.Hibernated != nil {
 		t.Fatal("a session already woken into a replacement still reads as hibernated")
+	}
+}
+
+func TestHibernateForwardsTheWorkersOwnAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reply protocol.Control
+		want  string
+	}{
+		{"acknowledged", protocol.Control{Type: protocol.TypeOK, RequestID: "control-1", SessionID: "7K3D"}, ""},
+		{"refused", protocol.Control{Type: protocol.TypeError, RequestID: "control-1", SessionID: "7K3D",
+			Message: "worker: session 7K3D: session is attached; detach it first"}, "worker: session 7K3D: session is attached; detach it first"},
+		{"worker predating hibernation", protocol.Control{Type: protocol.TypeError, SessionID: "7K3D",
+			Message: "expected " + protocol.TypeAttach}, "expected " + protocol.TypeAttach},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workerConn := &lifecycleRecordingConn{readFrame: controlFrame(t, tc.reply)}
+			lifecycle := mustLifecycle(t, lifecycleConfig{
+				Catalog: &lifecycleTestCatalog{},
+				Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+					return workerConn, nil
+				}),
+				Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
+				SessionsDir: "/state/s",
+			})
+			_, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+				Type: protocol.TypeHibernate, RequestID: "control-1", SessionID: "7K3D", HibernateIdleMillis: 1000})
+			if !handled {
+				t.Fatal("hibernate was not handled")
+			}
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || err.Error() != tc.want) {
+				t.Fatalf("hibernate error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }

@@ -60,7 +60,7 @@ func TestContainingSessionIDRejectsLookalikesAndParentLoops(t *testing.T) {
 		{"mesh", "session-worker", "--", "echo", "--id", "7K3D"},
 		{"mesh", "session-worker", "--id", "NOPE"},
 	} {
-		if got := sessionIDFromWorkerArgs(args); got != "" {
+		if got := SessionIDFromWorkerArgs(args); got != "" {
 			t.Errorf("worker args %#v produced session %q", args, got)
 		}
 	}
