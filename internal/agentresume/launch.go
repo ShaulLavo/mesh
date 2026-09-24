@@ -95,6 +95,7 @@ func ParseLaunch(provider Provider, executable, version, cwd string, env, argv [
 		return launch, err
 	}
 	launch.DataRoot = root
+	launch.DataRootExplicit = envValue(env, dataRootKey(provider)) != ""
 	if err := parseArguments(&launch, argv); err != nil {
 		return launch, err
 	}
@@ -213,14 +214,26 @@ func resolveDirectory(base, value string) string {
 	return filepath.Join(base, value)
 }
 
-func dataRoot(provider Provider, env []string) (string, error) {
-	key, fallback := "CODEX_HOME", ".codex"
+func dataRootKey(provider Provider) string {
 	if provider == Claude {
-		key, fallback = "CLAUDE_CONFIG_DIR", ".claude"
+		return "CLAUDE_CONFIG_DIR"
 	}
+	return "CODEX_HOME"
+}
+
+func defaultDataRoot(provider Provider, env []string) string {
+	fallback := ".codex"
+	if provider == Claude {
+		fallback = ".claude"
+	}
+	return filepath.Join(envValue(env, "HOME"), fallback)
+}
+
+func dataRoot(provider Provider, env []string) (string, error) {
+	key := dataRootKey(provider)
 	root := envValue(env, key)
 	if root == "" {
-		root = filepath.Join(envValue(env, "HOME"), fallback)
+		root = defaultDataRoot(provider, env)
 	}
 	if !absoluteField(root) {
 		return "", fmt.Errorf("agent recovery: %s must resolve to an absolute data root", key)
@@ -255,13 +268,16 @@ func ResumeEnv(recipe Recipe, inherited []string) ([]string, error) {
 	if err := validateResume(recipe); err != nil {
 		return nil, err
 	}
-	key := "CODEX_HOME"
-	if recipe.Provider == Claude {
-		key = "CLAUDE_CONFIG_DIR"
-	}
+	key := dataRootKey(recipe.Provider)
 	env := slices.DeleteFunc(slices.Clone(inherited), func(entry string) bool {
 		return strings.HasPrefix(entry, key+"=") || strings.HasPrefix(entry, "MESH_AGENT_")
 	})
+	// A default data root is reproduced by leaving the variable unset. Setting
+	// it to the same path moves Claude's settings file, and the resumed
+	// provider then starts first-run onboarding instead of the conversation.
+	if !recipe.DataRootExplicit && recipe.DataRoot == filepath.Clean(defaultDataRoot(recipe.Provider, env)) {
+		return env, nil
+	}
 	return append(env, key+"="+recipe.DataRoot), nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -213,5 +214,28 @@ func TestStableHookDefinitionHasNoInvocationData(t *testing.T) {
 		if string(first) != string(second) || strings.Contains(string(first), "MESH_AGENT_TOKEN") || !json.Valid(first) {
 			t.Errorf("unstable or invalid hooks: %s", first)
 		}
+	}
+}
+
+func TestResumeLeavesADefaultClaudeDataRootUnset(t *testing.T) {
+	launch, err := ParseLaunch(Claude, "/bin/claude", "2.1.281 (Claude Code)", "/project", []string{"HOME=/home/test"}, nil)
+	if err != nil || launch.DataRootExplicit || launch.DataRoot != "/home/test/.claude" {
+		t.Fatalf("default launch = %+v, %v", launch, err)
+	}
+	recipe := fixtureRecipe(Claude)
+	recipe.Launch = launch
+	resumed, err := ResumeEnv(recipe, []string{"HOME=/home/test", "CLAUDE_CONFIG_DIR=/leaked", "PATH=/bin"})
+	if err != nil || slices.ContainsFunc(resumed, func(entry string) bool { return strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") }) {
+		t.Fatalf("default data root resumed as %v, %v; Claude would read another settings file", resumed, err)
+	}
+
+	explicit, err := ParseLaunch(Claude, "/bin/claude", "2.1.281 (Claude Code)", "/project", []string{"HOME=/home/test", "CLAUDE_CONFIG_DIR=/home/test/.claude"}, nil)
+	if err != nil || !explicit.DataRootExplicit {
+		t.Fatalf("explicit launch = %+v, %v", explicit, err)
+	}
+	recipe.Launch = explicit
+	resumed, err = ResumeEnv(recipe, []string{"HOME=/home/test"})
+	if err != nil || envValue(resumed, "CLAUDE_CONFIG_DIR") != "/home/test/.claude" {
+		t.Fatalf("explicit data root resumed as %v, %v", resumed, err)
 	}
 }

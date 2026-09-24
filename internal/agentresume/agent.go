@@ -41,7 +41,11 @@ type Launch struct {
 	ProviderVersion string   `json:"providerVersion"`
 	Directory       string   `json:"directory"`
 	DataRoot        string   `json:"dataRoot"`
-	Options         []string `json:"options,omitempty"`
+	// DataRootExplicit records that the launch named its data root in the
+	// environment. Claude reads its settings file from a different place when
+	// CLAUDE_CONFIG_DIR is set at all, so resume must not set it on its own.
+	DataRootExplicit bool     `json:"dataRootExplicit,omitempty"`
+	Options          []string `json:"options,omitempty"`
 }
 
 type Recipe struct {
