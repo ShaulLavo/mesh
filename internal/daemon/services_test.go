@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -517,6 +518,57 @@ func TestServiceControllerBlocksPublicTransitionWhileDurableCatalogIsUnknown(t *
 	calls := publisher.snapshot()
 	if len(calls) != 1 || len(calls[0]) != 1 || calls[0][0].PublicName != first.PublicName {
 		t.Fatalf("edge recovery snapshots = %#v", calls)
+	}
+}
+
+func TestServiceControllerPublishesProxyWhoseUpstreamIsDown(t *testing.T) {
+	store, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "mesh.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck // test cleanup
+	registry, err := meshserve.NewRegistry(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := &recordingServicePublisher{}
+	controller, err := newServiceController(context.Background(), t.TempDir(), store, registry, publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_, port, _ := net.SplitHostPort(address)
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	service := protocol.ServiceInfo{Name: "app", Kind: "proxy", Target: port, PublicName: "app.shaulavo.dev", WakeOnRequest: true}
+
+	// Health is display-only: a down upstream must not keep the route off the edge.
+	response, _, err := controller.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeServiceUpsert, RequestID: "upsert", Service: &service,
+	})
+	want := "upstream " + address + " unreachable"
+	if err != nil || response.Service == nil || response.Service.Healthy || response.Service.Problem != want {
+		t.Fatalf("upsert response = %#v, error = %v, want unhealthy with %q", response, err, want)
+	}
+	if calls := publisher.snapshot(); len(calls) != 1 || len(calls[0]) != 1 || calls[0][0].Name != "app" {
+		t.Fatalf("edge convergence calls = %#v, want the route published", calls)
+	}
+
+	listener, err = net.Listen("tcp", address)
+	if err != nil {
+		t.Skipf("port %s was taken before the upstream could reclaim it: %v", port, err)
+	}
+	defer listener.Close() //nolint:errcheck // test cleanup
+	response, _, err = controller.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeServiceList, RequestID: "list",
+	})
+	if err != nil || len(response.Services) != 1 || !response.Services[0].Healthy || response.Services[0].Problem != "" {
+		t.Fatalf("list with upstream = %#v, error = %v, want healthy", response, err)
 	}
 }
 

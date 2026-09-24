@@ -167,7 +167,7 @@ func TestMissingDirectoryIsRegisteredAsUnhealthy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	statuses := registry.Status()
+	statuses := CheckServices(t.Context(), registry.Services())
 	if len(statuses) != 1 || statuses[0].Healthy || !strings.Contains(statuses[0].Problem, "unavailable") {
 		t.Fatalf("status = %#v, want one unhealthy service", statuses)
 	}
