@@ -416,6 +416,21 @@ func (c *Coordinator) recordError(id string, index int, problem error) error {
 	return c.record(id, index, func(t *Target) {
 		t.State = Offline
 		t.Problem = problem.Error()
-		t.RetryAt = time.Now().Add(30 * time.Second)
+		t.RetryAt = time.Now().Add(offlineRetryDelay(*t))
 	})
+}
+
+const (
+	offlineRetry = 30 * time.Second
+	// restartRetry polls a target that is authorized to activate: its daemon
+	// restarting onto the new build is the expected cause of the lost call,
+	// and a 30-second wait turned every successful update into "offline".
+	restartRetry = 2 * time.Second
+)
+
+func offlineRetryDelay(target Target) time.Duration {
+	if target.Grant {
+		return restartRetry
+	}
+	return offlineRetry
 }

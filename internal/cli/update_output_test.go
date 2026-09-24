@@ -21,3 +21,14 @@ func TestUpdateOutputSeparatesRebootInterruptedSessions(t *testing.T) {
 		t.Fatalf("reboot interruption misreported: %s", &output)
 	}
 }
+
+func TestUpdateObservationWaitsThroughAnAuthorizedTargetsRestart(t *testing.T) {
+	restarting := update.Run{Targets: []update.Target{{State: update.Offline, Grant: true}}}
+	if updateObservationSettled(restarting) {
+		t.Fatal("stopped watching while the authorized target restarted onto the release")
+	}
+	unreachable := update.Run{Targets: []update.Target{{State: update.Offline}}}
+	if !updateObservationSettled(unreachable) {
+		t.Fatal("kept waiting on a target that was offline before it was authorized")
+	}
+}

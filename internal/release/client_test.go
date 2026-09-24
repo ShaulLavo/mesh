@@ -146,3 +146,42 @@ func testArchive(t *testing.T, binary []byte) []byte {
 	}
 	return output.Bytes()
 }
+
+// GitHub's latest-download redirect lags a publish; the API names the new
+// release at once, so latest must follow the API when it answers.
+func TestClientLatestFollowsTheAPIOverAStaleRedirect(t *testing.T) {
+	binary := []byte("mesh-test-binary")
+	current := testManifestForArchive(binary, testArchive(t, binary))
+	stale := current
+	stale.Version = "v0.1.9"
+	currentJSON, _ := json.Marshal(current)
+	staleJSON, _ := json.Marshal(stale)
+	var apiDown atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/latest", func(writer http.ResponseWriter, _ *http.Request) {
+		if apiDown.Load() {
+			http.Error(writer, "rate limited", http.StatusForbidden)
+			return
+		}
+		_, _ = writer.Write([]byte(`{"tag_name":"` + current.Version + `","name":"Mesh"}`))
+	})
+	mux.HandleFunc("/releases/latest/download/"+ManifestAssetName, func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write(staleJSON)
+	})
+	mux.HandleFunc("/releases/download/"+current.Version+"/"+ManifestAssetName, func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write(currentJSON)
+	})
+	server := httptest.NewTLSServer(mux)
+	t.Cleanup(server.Close)
+	client := Client{BaseURL: server.URL + "/releases", LatestAPI: server.URL + "/api/latest", HTTPClient: server.Client()}
+
+	resolved, err := client.Manifest(context.Background(), "latest")
+	if err != nil || resolved.Version != current.Version {
+		t.Fatalf("latest = %q, %v; want the API's %q, not the stale redirect", resolved.Version, err, current.Version)
+	}
+	apiDown.Store(true)
+	resolved, err = client.Manifest(context.Background(), "latest")
+	if err != nil || resolved.Version != stale.Version {
+		t.Fatalf("latest with the API down = %q, %v; want the redirect's answer", resolved.Version, err)
+	}
+}

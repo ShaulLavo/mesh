@@ -19,7 +19,12 @@ import (
 )
 
 const (
-	OfficialBaseURL    = "https://github.com/ShaulLavo/mesh/releases"
+	OfficialBaseURL = "https://github.com/ShaulLavo/mesh/releases"
+	// OfficialLatestAPI names the latest published release. GitHub's
+	// /releases/latest download redirect kept serving the previous release for
+	// at least half a minute after a publish, while this answered at once.
+	OfficialLatestAPI  = "https://api.github.com/repos/ShaulLavo/mesh/releases/latest"
+	maximumLatestReply = 256 << 10
 	ManifestAssetName  = "mesh-release.json"
 	maximumManifest    = 1 << 20
 	maximumArchive     = 128 << 20
@@ -29,7 +34,11 @@ const (
 
 // Client reads immutable release metadata and artifacts from a release origin.
 type Client struct {
-	BaseURL    string
+	BaseURL string
+	// LatestAPI resolves "latest" to an exact tag before any download. Empty
+	// uses OfficialLatestAPI for the official origin and the download redirect
+	// for any other origin.
+	LatestAPI  string
 	HTTPClient *http.Client
 }
 
@@ -38,6 +47,14 @@ func (c Client) Manifest(ctx context.Context, selector string) (Manifest, error)
 	baseURL, client, err := c.normalized()
 	if err != nil {
 		return Manifest{}, err
+	}
+	requested := selector
+	if selector == "latest" {
+		// A failed lookup keeps the redirect path, which is only ever stale,
+		// so an API outage or rate limit never blocks an update.
+		if tag, ok := c.latestTag(ctx, client, baseURL); ok {
+			selector = tag
+		}
 	}
 	releaseURL, err := releaseURL(baseURL, selector)
 	if err != nil {
@@ -52,9 +69,33 @@ func (c Client) Manifest(ctx context.Context, selector string) (Manifest, error)
 		return Manifest{}, err
 	}
 	if selector != "latest" && manifest.Version != selector {
-		return Manifest{}, fmt.Errorf("release: manifest version %q does not match requested %q", manifest.Version, selector)
+		return Manifest{}, fmt.Errorf("release: manifest version %q does not match requested %q", manifest.Version, requested)
 	}
 	return manifest, nil
+}
+
+func (c Client) latestTag(ctx context.Context, client *http.Client, baseURL string) (string, bool) {
+	address := c.LatestAPI
+	if address == "" && baseURL == OfficialBaseURL {
+		address = OfficialLatestAPI
+	}
+	if address == "" {
+		return "", false
+	}
+	contents, err := downloadBytes(ctx, client, address, maximumLatestReply)
+	if err != nil {
+		return "", false
+	}
+	var latest struct {
+		TagName string `json:"tag_name"`
+	}
+	if json.Unmarshal(contents, &latest) != nil {
+		return "", false
+	}
+	if _, err := parseVersion(latest.TagName); err != nil {
+		return "", false
+	}
+	return latest.TagName, true
 }
 
 // Download stores a verified executable in a content-addressed cache directory.

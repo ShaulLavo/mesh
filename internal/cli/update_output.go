@@ -173,6 +173,11 @@ func updateObservationSettled(run update.Run) bool {
 		if target.State == update.Pending || target.State == update.Staged || target.State == update.Granted {
 			return false
 		}
+		// An authorized target drops off while it restarts onto the release;
+		// that is progress, not a verdict worth returning on.
+		if target.State == update.Offline && target.Grant {
+			return false
+		}
 	}
 	return true
 }
