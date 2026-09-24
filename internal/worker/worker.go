@@ -122,13 +122,16 @@ type Worker struct {
 	// mu orders ring delivery, attachment ownership, and shutdown. A client
 	// attaching mid-write cannot miss bytes, and finish cannot race a new writer
 	// or terminal output queued after session.exit.
-	mu             sync.Mutex
-	client         *attachment
-	attachments    map[*attachment]struct{}
-	nesting        map[net.Conn]protocol.SessionIdentity
-	nestReaders    sync.WaitGroup
-	input          *inputRelay
-	finished       bool
+	mu          sync.Mutex
+	client      *attachment
+	attachments map[*attachment]struct{}
+	nesting     map[net.Conn]protocol.SessionIdentity
+	nestReaders sync.WaitGroup
+	input       *inputRelay
+	finished    bool
+	// hibernating keeps the agent recipe active through the stop, and turns
+	// away attachments that would otherwise land on a session mid-shutdown.
+	hibernating    bool
 	pumpStopped    bool
 	lastOutputAt   time.Time
 	lastAttachedAt time.Time
@@ -798,6 +801,13 @@ func (w *Worker) recordAttachment() {
 	}
 	if meta.State == want && (lastAttachedAt.IsZero() || meta.LastAttachedAt != nil && meta.LastAttachedAt.Equal(lastAttachedAt)) {
 		return
+	}
+	if want == StateDetached && meta.State != StateDetached {
+		detachedAt := w.currentTime().UTC().Round(0)
+		meta.DetachedAt = &detachedAt
+	}
+	if want == StateRunning {
+		meta.DetachedAt = nil
 	}
 	meta.State = want
 	if !lastAttachedAt.IsZero() {

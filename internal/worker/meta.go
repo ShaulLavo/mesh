@@ -41,8 +41,12 @@ type Meta struct {
 	State          string         `json:"state"`
 	CreatedAt      time.Time      `json:"createdAt"`
 	LastAttachedAt *time.Time     `json:"lastAttachedAt,omitempty"`
-	ExitedAt       *time.Time     `json:"exitedAt,omitempty"`
-	ExitCode       *int           `json:"exitCode,omitempty"`
+	// DetachedAt is when the last client left. Idle policy measures from it;
+	// LastAttachedAt marks when an attachment began, which can be days before
+	// it ended.
+	DetachedAt *time.Time `json:"detachedAt,omitempty"`
+	ExitedAt   *time.Time `json:"exitedAt,omitempty"`
+	ExitCode   *int       `json:"exitCode,omitempty"`
 	// BootID ties a running session to the kernel boot that hosted it. After a
 	// reboot the PID is meaningless, so a mismatch means interrupted, not alive.
 	BootID string `json:"bootId,omitempty"`

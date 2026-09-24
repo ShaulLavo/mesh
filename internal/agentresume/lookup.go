@@ -18,7 +18,7 @@ func LookupConversation(parent context.Context, recipe Recipe, inherited []strin
 	if err := CheckAvailable(recipe); err != nil {
 		return Event{}, err
 	}
-	if recipe.Provider != Codex || recipe.ProviderVersion != "codex-cli 0.153.4" {
+	if recipe.Provider != Codex || !verifiedVersion(Codex, recipe.ProviderVersion) {
 		return Event{}, fmt.Errorf("agent recovery: native ID lookup is not verified for this provider version")
 	}
 	env, err := ResumeEnv(recipe, inherited)

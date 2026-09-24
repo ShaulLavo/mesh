@@ -102,6 +102,17 @@ type SessionInfo struct {
 	LastAttachedAt     *time.Time       `json:"lastAttachedAt,omitempty"`
 	ExitCode           *int             `json:"exitCode,omitempty"`
 	LastOutputSequence uint64           `json:"lastOutputSequence"`
+	// DetachedAt is when the last client left a live session. Idle policy
+	// measures from here, not from LastAttachedAt, which marks the start of
+	// an attachment that may have lasted days.
+	DetachedAt *time.Time `json:"detachedAt,omitempty"`
+	// Hibernated is set on an exited session whose agent was stopped to free
+	// memory and resumes on the next attach. Its State stays exited so older
+	// clients, which reject unknown states, still list the host.
+	Hibernated *recovery.Hibernation `json:"hibernated,omitempty"`
+	// MemoryBytes is the proportional memory of the session's process tree,
+	// zero when the host cannot measure it.
+	MemoryBytes uint64 `json:"memoryBytes,omitempty"`
 }
 
 // LastActiveAt includes durable output and checkpoint changes as well as use.
@@ -224,6 +235,7 @@ type Control struct {
 	RecoverySupported    bool                 `json:"recoverySupported,omitempty"`
 	RecoveryCommand      *recovery.Command    `json:"recoveryCommand,omitempty"`
 	ClearRecoveryCommand bool                 `json:"clearRecoveryCommand,omitempty"`
+	HibernateIdleMillis  int64                `json:"hibernateIdleMs,omitempty"`
 	ShellPID             int                  `json:"shellPid,omitempty"`
 	ShellDirectory       string               `json:"shellDirectory,omitempty"`
 	ShellExecutable      string               `json:"shellExecutable,omitempty"`

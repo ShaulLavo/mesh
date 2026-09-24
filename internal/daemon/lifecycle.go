@@ -180,7 +180,7 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 		}
 		response, err := l.remove(ctx, request)
 		return response, true, err
-	case protocol.TypeSignal, protocol.TypeKill, protocol.TypeInspect:
+	case protocol.TypeSignal, protocol.TypeKill, protocol.TypeInspect, protocol.TypeHibernate:
 		if ctx == nil {
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
 		}
@@ -408,6 +408,11 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	} else if request.Type == protocol.TypeInspect {
 		forwarded.PreviewCols = request.PreviewCols
 		forwarded.PreviewRows = request.PreviewRows
+	} else if request.Type == protocol.TypeHibernate {
+		if request.HibernateIdleMillis < 0 {
+			return protocol.Control{}, fmt.Errorf("daemon: hibernate session %s: negative idle time", id)
+		}
+		forwarded.HibernateIdleMillis = request.HibernateIdleMillis
 	}
 	payload, err := forwarded.Encode()
 	if err == nil {
@@ -418,13 +423,15 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		RequestID: request.RequestID,
 		SessionID: id,
 	}
-	if err == nil && (request.Type == protocol.TypeKill || request.Type == protocol.TypeLogs || request.Type == protocol.TypeInspect) {
+	if err == nil && (request.Type == protocol.TypeKill || request.Type == protocol.TypeLogs || request.Type == protocol.TypeInspect || request.Type == protocol.TypeHibernate) {
 		var frame protocol.Frame
 		frame, err = conn.ReadFrame()
 		if err == nil {
 			switch request.Type {
 			case protocol.TypeKill:
 				err = validateKillAcknowledgement(id, request.RequestID, frame)
+			case protocol.TypeHibernate:
+				err = validateHibernateAcknowledgement(id, request.RequestID, frame)
 			case protocol.TypeLogs:
 				response, err = validateLogsResponse(id, request.RequestID, request.Tail, frame)
 			case protocol.TypeInspect:
@@ -510,6 +517,29 @@ func validateKillAcknowledgement(id, requestID string, frame protocol.Frame) err
 		return fmt.Errorf("daemon: session %s invalid kill acknowledgement", id)
 	}
 	return nil
+}
+
+// validateHibernateAcknowledgement passes a worker's refusal through as the
+// reason, because "not detached long enough" is an answer, not a fault.
+func validateHibernateAcknowledgement(id, requestID string, frame protocol.Frame) error {
+	if frame.Kind != protocol.KindControl {
+		return fmt.Errorf("daemon: session %s hibernation acknowledgement has kind %d", id, frame.Kind)
+	}
+	message, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return fmt.Errorf("daemon: session %s hibernation acknowledgement: %w", id, err)
+	}
+	if message.RequestID != requestID || message.SessionID != id {
+		return fmt.Errorf("daemon: session %s invalid hibernation acknowledgement", id)
+	}
+	switch message.Type {
+	case protocol.TypeOK:
+		return nil
+	case protocol.TypeError:
+		return errors.New(message.Message)
+	default:
+		return fmt.Errorf("daemon: session %s invalid hibernation acknowledgement", id)
+	}
 }
 
 func validateLogsResponse(id, requestID string, tail int, frame protocol.Frame) (protocol.Control, error) {

@@ -63,6 +63,10 @@ func (w *Worker) serve(conn net.Conn) {
 		w.serveNesting(conn, msg)
 		return
 	}
+	if err == nil && msg.Type == protocol.TypeHibernate {
+		w.hibernateAndAcknowledge(conn, msg)
+		return
+	}
 	if err == nil && msg.Type == protocol.TypeKill {
 		w.killAndAcknowledge(conn, msg)
 		return
@@ -101,6 +105,11 @@ func (w *Worker) serve(conn net.Conn) {
 	w.mu.Lock()
 	if w.finished {
 		w.mu.Unlock()
+		return
+	}
+	if w.hibernating {
+		w.mu.Unlock()
+		w.writeAttachError(conn, "session is hibernating; attach again to resume it")
 		return
 	}
 	if msg.Type == protocol.TypeAttachDetached && w.client != nil {

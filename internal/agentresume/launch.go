@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -289,15 +290,65 @@ func validateResume(recipe Recipe) error {
 }
 
 // Compatibility reports native evidence separately from schema validation.
+// Providers ship weekly, so an exact pin would switch capture off for every
+// real installation within days. A version at or past the last natively
+// verified one, within the same major line, is accepted; resume still waits
+// for the provider's own hook before recovery counts as verified.
 func Compatibility(launch Launch) string {
 	if err := ValidateLaunch(launch); err != nil {
 		return err.Error()
 	}
-	if launch.Provider == Claude && launch.ProviderVersion == "2.1.261 (Claude Code)" {
-		return ""
-	}
-	if launch.Provider == Codex && launch.ProviderVersion == "codex-cli 0.153.4" {
+	if verifiedVersion(launch.Provider, launch.ProviderVersion) {
 		return ""
 	}
 	return "native invocation association and exact resume have not been verified for this provider version; use explicit binding"
+}
+
+// verifiedFloor is the oldest natively probed version for each provider.
+var verifiedFloor = map[Provider][3]int{
+	Claude: {2, 1, 261},
+	Codex:  {0, 153, 4},
+}
+
+func verifiedVersion(provider Provider, reported string) bool {
+	floor, ok := verifiedFloor[provider]
+	if !ok {
+		return false
+	}
+	version, ok := parseProviderVersion(provider, reported)
+	if !ok || version[0] != floor[0] {
+		return false
+	}
+	for index := range version {
+		if version[index] != floor[index] {
+			return version[index] > floor[index]
+		}
+	}
+	return true
+}
+
+// parseProviderVersion reads the exact `--version` shapes the probe recorded:
+// "2.1.261 (Claude Code)" and "codex-cli 0.153.4". Anything else, including
+// pre-release suffixes, is not a version this check can vouch for.
+func parseProviderVersion(provider Provider, reported string) ([3]int, bool) {
+	text, ok := strings.CutSuffix(reported, " (Claude Code)")
+	if provider == Codex {
+		text, ok = strings.CutPrefix(reported, "codex-cli ")
+	}
+	if !ok {
+		return [3]int{}, false
+	}
+	parts := strings.Split(text, ".")
+	if len(parts) != 3 {
+		return [3]int{}, false
+	}
+	var version [3]int
+	for index, part := range parts {
+		number, err := strconv.Atoi(part)
+		if err != nil || number < 0 || strconv.Itoa(number) != part {
+			return [3]int{}, false
+		}
+		version[index] = number
+	}
+	return version, true
 }

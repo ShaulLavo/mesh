@@ -209,7 +209,9 @@ func (w *Worker) finishAgent(invocation *agentInvocation, request protocol.Contr
 	}
 	w.mu.Lock()
 	recipe := w.recoveryState.Agent
-	if recipe == nil || recipe.InvocationToken != invocation.token {
+	// A hibernating provider exits because Mesh stopped it, not because the
+	// user closed it, so the recipe stays active for resume on attach.
+	if recipe == nil || recipe.InvocationToken != invocation.token || w.hibernating {
 		w.mu.Unlock()
 		return invocation.registered, nil
 	}
