@@ -240,3 +240,37 @@ func TestWindowKeepsPreviousAttemptsInFullPicker(t *testing.T) {
 		t.Fatalf("window restarted prior attempt: %#v", selection)
 	}
 }
+
+func TestHibernatedSessionReadsAsHibernatedAndEnterResumesItsConversation(t *testing.T) {
+	row := savedPickerSession()
+	row.State = "exited"
+	exitCode := 0
+	row.ExitCode = &exitCode
+	row.Recovery.Agent = &agentresume.Recipe{Launch: agentresume.Launch{Provider: agentresume.Claude, Directory: "/work/project"}, ConversationID: "asleep", Lifecycle: agentresume.Active}
+	row.Hibernated = &recovery.Hibernation{Version: 1, At: pickerTestNow.Add(-time.Hour), Reason: recovery.HibernateIdle, Provider: agentresume.Claude, ConversationID: "asleep"}
+	current := recoveryPicker(row)
+	view := ansi.Strip(current.View().Content)
+	for _, expected := range []string{"hibernated · claude", "Resume claude"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("missing %q for a hibernated session:\n%s", expected, view)
+		}
+	}
+	if strings.Contains(view, "exited") {
+		t.Fatalf("hibernated session still reads as exited:\n%s", view)
+	}
+	current = updateModel(t, current, key(tea.KeyEnter))
+	selected := cliSelection(current.selection)
+	if !selected.Relaunch || selected.RecoveryAction != recovery.ActionDefault || selected.SessionID != row.ID {
+		t.Fatalf("Enter on a hibernated session = %#v, want the default recovery that resumes its conversation", selected)
+	}
+}
+
+func TestResumedHibernationReadsAsAnOrdinaryExit(t *testing.T) {
+	row := savedPickerSession()
+	row.State = "exited"
+	row.ReplacementID = "9ABC"
+	row.Hibernated = &recovery.Hibernation{Version: 1, At: pickerTestNow.Add(-time.Hour), Reason: recovery.HibernateIdle, Provider: agentresume.Claude, ConversationID: "asleep"}
+	if view := ansi.Strip(recoveryPicker(row).View().Content); strings.Contains(view, "hibernated") {
+		t.Fatalf("a session that already woke still reads as hibernated:\n%s", view)
+	}
+}

@@ -77,7 +77,7 @@ func (m *model) selectRecoveryAction(key string) (bool, tea.Cmd) {
 func savedRecoveryDetails(current session) inspectionDetails {
 	details := inspectionDetails{
 		directoryLabel: "saved path", directory: safeText(current.cwd),
-		foreground: "ended", title: "unavailable", attachment: safeText(current.state),
+		foreground: "ended", title: "unavailable", attachment: sessionStateLabel(current),
 		output: "checkpoint unavailable", screenStatus: "Previous output unavailable",
 		preview: []string{"No checkpoint was saved. Recovery uses the launch directory."},
 	}

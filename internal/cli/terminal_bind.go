@@ -71,6 +71,7 @@ func bindingFor(resolved resolvedSession) TerminalBinding {
 func claimFailed(err error) bool {
 	return errors.Is(err, ErrSessionAttached) ||
 		errors.Is(err, ErrSessionUnavailable) ||
+		errors.Is(err, ErrSessionHibernating) ||
 		errors.Is(err, ErrAttachDetachedUnsupported)
 }
 

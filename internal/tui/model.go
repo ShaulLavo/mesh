@@ -57,6 +57,8 @@ type session struct {
 	replacementID   string
 	recoveredFrom   string
 	previousAttempt bool
+	// hibernation marks an exited agent session that resumes on selection.
+	hibernation *recovery.Hibernation
 }
 
 type selection interface{ pickerSelection() }
@@ -787,7 +789,7 @@ func (delegate sessionDelegate) row(current session, selected bool) sessionRow {
 	row := sessionRow{
 		primary:    sessionLabel(current),
 		glyphState: current.state,
-		state:      catalogSessionState(current.state),
+		state:      sessionStateLabel(current),
 		activity:   startedAge(delegate.now, current.createdAt),
 		id:         safeText(current.id),
 	}
@@ -849,6 +851,15 @@ func rowActivity(now, observedAt, receivedAt time.Time, lastOutputAt *time.Time,
 		observedAt = observedAt.Add(now.Sub(receivedAt))
 	}
 	return outputAge(observedAt, lastOutputAt)
+}
+
+// sessionStateLabel names a hibernated session for what it is. On the wire it
+// stays exited, which is also what keeps Enter on the conversation resume.
+func sessionStateLabel(current session) string {
+	if current.hibernation != nil {
+		return "hibernated · " + safeText(string(current.hibernation.Provider))
+	}
+	return catalogSessionState(current.state)
 }
 
 func catalogSessionState(state string) string {
