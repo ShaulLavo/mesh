@@ -35,3 +35,14 @@ func TestSavedTextKeepsNewestBoundedLinesAndValidUTF8(t *testing.T) {
 		t.Fatalf("bounded text = %q (%d bytes)", text, len(text))
 	}
 }
+
+func BenchmarkSaveTextFullScreen(b *testing.B) {
+	screen := NewScreen(200, 50)
+	for index := range 400 {
+		_, _ = fmt.Fprintf(screen, "line-%03d %s\r\n", index, strings.Repeat("x", 150))
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = screen.SaveText(256, 128<<10).Render()
+	}
+}
