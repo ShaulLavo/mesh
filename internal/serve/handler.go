@@ -268,7 +268,7 @@ func mountedURL(prefix, logicalPath string, directory bool) string {
 }
 
 func proxyHandler(port, prefix string, trustForwardedHeaders func(netip.Addr) bool, isolate bool) http.Handler {
-	target := &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", port)}
+	target := &url.URL{Scheme: "http", Host: upstreamAddress(port)}
 	var modifyResponse func(*http.Response) error
 	if isolate {
 		modifyResponse = func(response *http.Response) error {

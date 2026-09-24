@@ -150,64 +150,69 @@ func (c *serviceController) upsert(ctx context.Context, request protocol.Control
 	if err := ctx.Err(); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
-
-	if err := c.acquire(ctx); err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
-	}
-	defer c.release()
-	if err := c.ensureSynchronized("service upsert"); err != nil {
+	persisted, err := c.commitUpsert(ctx, request)
+	if err != nil {
 		return protocol.Control{}, err
 	}
-	preview, err := meshserve.InspectService(ctx, c.home, serviceFromInfo(*request.Service), request.AllowCredentials)
-	if err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
-	}
-	if request.ServicePreview != nil && !sameServicePreview(preview, *request.ServicePreview) {
-		return protocol.Control{}, errors.New("daemon: service changed after preview; preview it again")
-	}
-	service := preview.Service
-	priorServices := c.registry.Services()
-	prior, hadPrior := findService(priorServices, service.Name)
-	if hadPrior && prior.PublicName != "" && prior.PublicName != service.PublicName {
-		return protocol.Control{}, errors.New("daemon: changing or removing a public name requires unserve first")
-	}
-	publicMutation := service.PublicName != "" || hadPrior && prior.PublicName != ""
-	if publicMutation && !c.publisher.Enabled() {
-		return protocol.Control{}, errors.New("daemon: public service requires a configured public edge")
-	}
-	services := upsertService(priorServices, service)
-	if _, err := meshserve.NewRegistryWithReservedPrefix(services, c.registry.ReservedPrefix(), nil); err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
-	}
-	persisted, err := c.store.UpsertService(ctx, service)
-	if err != nil {
-		reconcileErr := c.reconcileDurable("upsert error")
-		return protocol.Control{}, errors.Join(fmt.Errorf("daemon: %s: %w", request.Type, err), reconcileErr)
-	}
-	services = upsertService(services, persisted)
-	if err := c.registry.Replace(services); err != nil {
-		reconcileErr := c.reconcileDurable("service registry publication")
-		return protocol.Control{}, errors.Join(fmt.Errorf("daemon: publish service %s: %w", persisted.Name, err), reconcileErr)
-	}
-	if publicMutation {
-		if publishErr := c.publisher.Converge(ctx, services); publishErr != nil {
-			rollbackErr := c.rollbackUpsert(priorServices, prior, hadPrior, persisted.Name)
-			return protocol.Control{}, errors.Join(fmt.Errorf("daemon: public edge did not acknowledge service %s: %w", persisted.Name, publishErr), rollbackErr)
-		}
-	}
+	// The health probe runs after the gate is released: a proxy dial may take
+	// its full timeout, and no other mutation should queue behind it.
+	status := meshserve.CheckService(ctx, persisted)
 	info := serviceDefinitionInfo(persisted)
-	for _, status := range c.registry.Status() {
-		if status.Service.Name == persisted.Name {
-			info.Healthy = status.Healthy
-			info.Problem = boundedServiceProblem(status.Problem)
-			break
-		}
-	}
+	info.Healthy = status.Healthy
+	info.Problem = boundedServiceProblem(status.Problem)
 	return protocol.Control{
 		Type:      protocol.TypeServiceUpserted,
 		RequestID: request.RequestID,
 		Service:   &info,
 	}, nil
+}
+
+func (c *serviceController) commitUpsert(ctx context.Context, request protocol.Control) (meshserve.Service, error) {
+	if err := c.acquire(ctx); err != nil {
+		return meshserve.Service{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
+	}
+	defer c.release()
+	if err := c.ensureSynchronized("service upsert"); err != nil {
+		return meshserve.Service{}, err
+	}
+	preview, err := meshserve.InspectService(ctx, c.home, serviceFromInfo(*request.Service), request.AllowCredentials)
+	if err != nil {
+		return meshserve.Service{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+	}
+	if request.ServicePreview != nil && !sameServicePreview(preview, *request.ServicePreview) {
+		return meshserve.Service{}, errors.New("daemon: service changed after preview; preview it again")
+	}
+	service := preview.Service
+	priorServices := c.registry.Services()
+	prior, hadPrior := findService(priorServices, service.Name)
+	if hadPrior && prior.PublicName != "" && prior.PublicName != service.PublicName {
+		return meshserve.Service{}, errors.New("daemon: changing or removing a public name requires unserve first")
+	}
+	publicMutation := service.PublicName != "" || hadPrior && prior.PublicName != ""
+	if publicMutation && !c.publisher.Enabled() {
+		return meshserve.Service{}, errors.New("daemon: public service requires a configured public edge")
+	}
+	services := upsertService(priorServices, service)
+	if _, err := meshserve.NewRegistryWithReservedPrefix(services, c.registry.ReservedPrefix(), nil); err != nil {
+		return meshserve.Service{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+	}
+	persisted, err := c.store.UpsertService(ctx, service)
+	if err != nil {
+		reconcileErr := c.reconcileDurable("upsert error")
+		return meshserve.Service{}, errors.Join(fmt.Errorf("daemon: %s: %w", request.Type, err), reconcileErr)
+	}
+	services = upsertService(services, persisted)
+	if err := c.registry.Replace(services); err != nil {
+		reconcileErr := c.reconcileDurable("service registry publication")
+		return meshserve.Service{}, errors.Join(fmt.Errorf("daemon: publish service %s: %w", persisted.Name, err), reconcileErr)
+	}
+	if publicMutation {
+		if publishErr := c.publisher.Converge(ctx, services); publishErr != nil {
+			rollbackErr := c.rollbackUpsert(priorServices, prior, hadPrior, persisted.Name)
+			return meshserve.Service{}, errors.Join(fmt.Errorf("daemon: public edge did not acknowledge service %s: %w", persisted.Name, publishErr), rollbackErr)
+		}
+	}
+	return persisted, nil
 }
 
 func (c *serviceController) list(ctx context.Context, request protocol.Control) (protocol.Control, error) {
@@ -217,17 +222,13 @@ func (c *serviceController) list(ctx context.Context, request protocol.Control) 
 	if err := ctx.Err(); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
-	if err := c.acquire(ctx); err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
+	registered, err := c.catalog(ctx, request)
+	if err != nil {
+		return protocol.Control{}, err
 	}
-	defer c.release()
-	if c.catalogUnknown {
-		reconcileErr := c.reconcileDurable("service list")
-		if c.catalogUnknown {
-			return protocol.Control{}, fmt.Errorf("daemon: service catalog is unavailable: %w", reconcileErr)
-		}
-	}
-	statuses := c.registry.Status()
+	// Probing after the gate is released keeps up to MaximumServices proxy
+	// dials from stalling every upsert and delete behind a listing.
+	statuses := meshserve.CheckServices(ctx, registered)
 	services := make([]protocol.ServiceInfo, 0, len(statuses))
 	for _, status := range statuses {
 		info := serviceDefinitionInfo(status.Service)
@@ -240,6 +241,22 @@ func (c *serviceController) list(ctx context.Context, request protocol.Control) 
 		RequestID: request.RequestID,
 		Services:  services,
 	}, nil
+}
+
+// catalog returns the registered services once the durable catalog is known
+// to match them.
+func (c *serviceController) catalog(ctx context.Context, request protocol.Control) ([]meshserve.Service, error) {
+	if err := c.acquire(ctx); err != nil {
+		return nil, fmt.Errorf("daemon: %s request: %w", request.Type, err)
+	}
+	defer c.release()
+	if c.catalogUnknown {
+		reconcileErr := c.reconcileDurable("service list")
+		if c.catalogUnknown {
+			return nil, fmt.Errorf("daemon: service catalog is unavailable: %w", reconcileErr)
+		}
+	}
+	return c.registry.Services(), nil
 }
 
 func (c *serviceController) delete(ctx context.Context, request protocol.Control) (protocol.Control, error) {

@@ -23,6 +23,12 @@ one-label `*.shaulavo.dev` name.
 the SQLite cache only after a complete live response, and uses cached rows as
 `offline/stale` when an origin cannot be reached. It also requests bounded,
 paginated edge status when an origin has a configured public-edge publisher.
+A live row is `unhealthy` when a directory root cannot be opened or a proxy
+upstream does not accept a TCP connection on `127.0.0.1:<port>` within 300 ms; the
+origin probes all routes concurrently, outside its mutation lock. Health is
+display-only and never withholds a route from the public edge. A
+`--wake-on-request` route gets no exemption, because wake applies to the host
+and a live row means the host is already awake.
 
 The preferred private URL uses the canonical private name authenticated through
 T12, for example `https://pc.mesh.shaulavo.dev/blog`. The Pi adds that name to

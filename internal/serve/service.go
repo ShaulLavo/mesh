@@ -2,7 +2,9 @@
 package serve
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"path"
@@ -10,7 +12,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -27,6 +31,10 @@ const (
 	MaximumServiceTargetBytes = 2_048
 	// MaximumServiceProblemBytes bounds one cached health diagnostic.
 	MaximumServiceProblemBytes = 256
+
+	// upstreamProbeTimeout bounds one proxy health dial. Loopback refuses or
+	// accepts at once, so only a wedged listener ever reaches it.
+	upstreamProbeTimeout = 300 * time.Millisecond
 )
 
 // Kind identifies what an origin service exposes.
@@ -136,25 +144,61 @@ func (r *Registry) Services() []Service {
 	return append([]Service(nil), snapshot.services...)
 }
 
-// Status returns live health for every registered service.
-func (r *Registry) Status() []ServiceStatus {
-	services := r.Services()
-	statuses := make([]ServiceStatus, 0, len(services))
-	for _, service := range services {
-		status := ServiceStatus{Service: service, Healthy: true}
-		if service.Kind == Static || service.Kind == Files {
-			file, _, err := OpenRootEntry(service.Target, "/")
-			if err == nil {
-				_ = file.Close()
-			}
-			if err != nil {
-				status.Healthy = false
-				status.Problem = err.Error()
-			}
-		}
-		statuses = append(statuses, status)
+// CheckServices probes every service concurrently and returns statuses in
+// input order. Callers hold no lock across it: a proxy probe may take up to
+// upstreamProbeTimeout, and MaximumServices bounds the fan-out.
+func CheckServices(ctx context.Context, services []Service) []ServiceStatus {
+	statuses := make([]ServiceStatus, len(services))
+	var group sync.WaitGroup
+	for index, service := range services {
+		group.Go(func() { statuses[index] = CheckService(ctx, service) })
 	}
+	group.Wait()
 	return statuses
+}
+
+// CheckService reports whether a request routed to service could be answered
+// now: a directory root must open, and a proxy upstream must accept a
+// connection on the address its handler forwards to.
+func CheckService(ctx context.Context, service Service) ServiceStatus {
+	var err error
+	switch service.Kind {
+	case Static, Files:
+		err = checkRoot(service.Target)
+	case Proxy:
+		err = checkUpstream(ctx, upstreamAddress(service.Target))
+	}
+	if err != nil {
+		return ServiceStatus{Service: service, Problem: err.Error()}
+	}
+	return ServiceStatus{Service: service, Healthy: true}
+}
+
+func checkRoot(target string) error {
+	file, _, err := OpenRootEntry(target, "/")
+	if err != nil {
+		return err
+	}
+	_ = file.Close()
+	return nil
+}
+
+func checkUpstream(ctx context.Context, address string) error {
+	ctx, cancel := context.WithTimeout(ctx, upstreamProbeTimeout)
+	defer cancel()
+	var dialer net.Dialer
+	connection, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return fmt.Errorf("upstream %s unreachable", address)
+	}
+	_ = connection.Close()
+	return nil
+}
+
+// upstreamAddress is the one place a proxy port becomes a dial address, so the
+// health probe cannot drift from where proxyHandler actually forwards.
+func upstreamAddress(port string) string {
+	return net.JoinHostPort("127.0.0.1", port)
 }
 
 // ServeHTTP dispatches by longest path prefix and returns 404 for unknown paths.
