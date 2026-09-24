@@ -80,3 +80,11 @@ func linuxProportional(pid int) (uint64, bool) {
 	}
 	return total, found
 }
+
+func commandLine(pid int) []string {
+	contents, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+	if err != nil || len(contents) == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(string(contents), "\x00"), "\x00")
+}

@@ -40,3 +40,15 @@ func Snapshot() Table {
 		return bytes, ok
 	}}
 }
+
+// commandLine splits on spaces, which is exact for the fixed worker argv this
+// is used to recognise and merely conservative for anything else.
+func commandLine(pid int) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "/bin/ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return nil
+	}
+	return strings.Fields(string(output))
+}
