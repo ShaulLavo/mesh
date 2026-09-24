@@ -20,11 +20,6 @@ import (
 	"github.com/shaul/mesh/internal/worker"
 )
 
-// hibernatingAttachMessage is the worker's attach refusal while it is
-// stopping its agent (internal/worker/serve.go). Matched by text because the
-// refusal carries no reason code.
-const hibernatingAttachMessage = "session is hibernating"
-
 // ErrSessionHibernating means an attachment reached a worker that is stopping
 // its agent. The session resumes through recovery once the worker is gone.
 var ErrSessionHibernating = errors.New("session is hibernating")

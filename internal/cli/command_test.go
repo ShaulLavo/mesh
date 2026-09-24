@@ -51,8 +51,8 @@ type commandTestHost struct {
 	// host advertise recovery support.
 	recoverTo string
 	recovered protocol.Control
-	// attachError refuses an attachment with the returned message.
-	attachError    func(id string) string
+	// attachError refuses an attachment with the returned reason and message.
+	attachError    func(id string) (reason, message string)
 	hibernateError string
 }
 
@@ -173,8 +173,8 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 		c.host.attach = request
 		c.host.mu.Unlock()
 		if c.host.attachError != nil {
-			if message := c.host.attachError(request.SessionID); message != "" {
-				c.responses <- mustCommandControlFrame(protocol.Control{Type: protocol.TypeError, SessionID: request.SessionID, Message: message})
+			if reason, message := c.host.attachError(request.SessionID); message != "" {
+				c.responses <- mustCommandControlFrame(protocol.Control{Type: protocol.TypeError, SessionID: request.SessionID, Reason: reason, Message: message})
 				return nil
 			}
 		}

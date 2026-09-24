@@ -84,6 +84,9 @@ const (
 	ReasonClient   = "client"   // client asked to detach
 	ReasonExited   = "exited"   // the session's process ended
 	ReasonKilled   = "killed"   // the session was ended on request
+	// ReasonHibernating refuses an attachment while the worker stops its
+	// agent; the session resumes through recovery once the worker is gone.
+	ReasonHibernating = "hibernating"
 )
 
 // SessionInfo is the transport representation of durable session metadata.

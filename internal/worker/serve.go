@@ -109,7 +109,11 @@ func (w *Worker) serve(conn net.Conn) {
 	}
 	if w.hibernating {
 		w.mu.Unlock()
-		w.writeAttachError(conn, "session is hibernating; attach again to resume it")
+		_ = conn.SetWriteDeadline(time.Now().Add(attachmentWriteTimeout))
+		_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
+			Type: protocol.TypeError, RequestID: msg.RequestID, SessionID: w.cfg.ID,
+			Reason: protocol.ReasonHibernating, Message: "session is hibernating; attach again to resume it",
+		})
 		return
 	}
 	if msg.Type == protocol.TypeAttachDetached && w.client != nil {

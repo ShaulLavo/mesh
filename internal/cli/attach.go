@@ -488,7 +488,7 @@ func (s *attachmentOutput) responseError(message protocol.Control) error {
 	if message.Reason == protocol.ReasonAttached {
 		return fmt.Errorf("session %s: %w", s.opts.SessionID, ErrSessionAttached)
 	}
-	if strings.Contains(message.Message, hibernatingAttachMessage) {
+	if message.Reason == protocol.ReasonHibernating {
 		return fmt.Errorf("session %s: %w", s.opts.SessionID, ErrSessionHibernating)
 	}
 	// Legacy workers identify unsupported atomic claims only by their text.

@@ -217,12 +217,12 @@ func TestAttachRacingHibernationRetriesThroughRecovery(t *testing.T) {
 		return []protocol.SessionInfo{{ID: "7K3D", HostID: host.host.ID, Command: []string{"claude"}, Cwd: "/work",
 			State: worker.StateDetached, CreatedAt: commandTestTime}}
 	}
-	host.attachError = func(id string) string {
+	host.attachError = func(id string) (string, string) {
 		if id != "7K3D" {
-			return ""
+			return "", ""
 		}
 		stopped.Store(true)
-		return "session is hibernating; attach again to resume it"
+		return protocol.ReasonHibernating, "session is hibernating; attach again to resume it"
 	}
 	_, stderr, err := executeCommand(t, Dependencies{DialHost: host.dial, Now: func() time.Time { return commandTestTime }}, "7K3D")
 	if err != nil {
