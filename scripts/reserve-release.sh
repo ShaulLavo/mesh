@@ -162,7 +162,9 @@ if [[ $tag_exists == false ]]; then
 fi
 
 if [[ $release_exists == false ]]; then
-  gh release create "$version" --draft --verify-tag --target "$source_sha" --title "Mesh $version" --notes "Automated release reserved for source $source_sha."
+  # gh prints the draft's URL on stdout, which the workflow appends to
+  # GITHUB_OUTPUT; a bare URL there fails the step after the draft exists.
+  gh release create "$version" --draft --verify-tag --target "$source_sha" --title "Mesh $version" --notes "Automated release reserved for source $source_sha." >&2
 fi
 baseline_assets=$(gh release view "$version" --json assets --jq \
   '[.assets[].name | select(test("^baseline_(linux_amd64|linux_arm64|darwin_arm64)_[0-9a-f]{64}\\.bin$"))] | sort | join(",")')

@@ -31,7 +31,9 @@ case " $* " in
   *' release view '*" --json targetCommitish "*)
     awk -v tag="$3" '$1 == "release" && $2 == "create" && $3 == tag {for(i=4;i<=NF;i++) if($i == "--target") print $(i+1)}' "$GH_LOG" ;;
   *' release view '*) [[ -f $GH_LOG ]] && awk -v tag="$3" '$1 == "release" && $2 == "create" && $3 == tag {found=1} END {exit !found}' "$GH_LOG" ;;
-  *' release create '*) printf '%s\n' "$*" >>"$GH_LOG" ;;
+  *' release create '*)
+    printf '%s\n' "$*" >>"$GH_LOG"
+    printf 'https://github.com/ShaulLavo/mesh/releases/tag/untagged-0123\n' ;;
   *) printf 'unexpected gh invocation: %s\n' "$*" >&2; exit 1 ;;
 esac
 GH
@@ -66,6 +68,12 @@ git -C "$checkout" commit -qam code
 source_sha=$(git -C "$checkout" rev-parse HEAD)
 git -C "$checkout" push -q origin main
 result=$(run_reserve "$source_sha")
+# The workflow appends this output to GITHUB_OUTPUT, which accepts only
+# key=value lines.
+if grep -vqE '^[a-z_]+=' <<<"$result"; then
+  printf 'FAIL: reservation output is not GITHUB_OUTPUT-safe:\n%s\n' "$result" >&2
+  exit 1
+fi
 grep -Fqx 'action=publish' <<<"$result"
 grep -Fqx 'version=v0.1.39' <<<"$result"
 [[ $(git --git-dir="$remote" rev-list -n 1 v0.1.39) == "$source_sha" ]]
