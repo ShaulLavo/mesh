@@ -5,9 +5,12 @@ ID. After a crash, select **Resume conversation** in the picker or run
 `mesh recover SESSION --agent`. Mesh opens the provider's native terminal interface
 in the recorded project directory with its exact saved ID.
 
-The tested versions are Claude Code 2.1.261 and Codex CLI 0.153.4 with its direct
-TUI. Check the [compatibility report](agent-recovery-compatibility.md) for observed
-behavior and limits. Provider histories and authentication must remain available
+Mesh accepts Claude Code 2.1.261 and Codex CLI 0.153.4, the natively probed
+versions, and later releases in the same major line. Codex is supported with its
+direct TUI. Check the [compatibility report](agent-recovery-compatibility.md) for
+observed behavior and limits. A resumed conversation still counts as verified
+only when the provider's own hook reports the saved ID, so a later release that
+changed its hooks shows as unverified rather than silently succeeding. Provider histories and authentication must remain available
 on the original host.
 
 ## Install the provider hooks
@@ -38,7 +41,8 @@ mesh agent doctor claude
 mesh agent doctor codex
 ```
 
-The diagnostic checks provider version and hook configuration. Codex's own hook
+The diagnostic checks provider version and hook configuration.
+To stop idle agents and resume them on attach, see [hibernation](hibernation.md). Codex's own hook
 screen remains the authority for trust. Hook configuration alone does not prove
 that the containing Mesh worker acknowledged an identity.
 

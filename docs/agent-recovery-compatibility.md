@@ -1,8 +1,12 @@
 # Agent recovery compatibility
 
 Native probes on 2026-09-05 established exact conversation resume for the installed
-Codex and Claude CLIs, with different hook behavior. These are exact tested
-versions and launch modes, not a minimum version or a supported version range.
+Codex and Claude CLIs, with different hook behavior. Mesh treats these versions as
+a floor: later releases in the same major line are accepted, because providers
+ship weekly and an exact pin disabled capture for every real installation within
+days. Recovery of a newer release is still reported as verified only when the
+provider's hook confirms the saved ID. Re-run the native probe after a major
+release or a change in hook behavior.
 
 | Check | Codex CLI 0.153.4, direct TUI | Codex CLI 0.153.4, pre-existing app-server | Claude Code 2.1.261 |
 | --- | --- | --- | --- |
