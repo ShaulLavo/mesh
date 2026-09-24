@@ -38,3 +38,21 @@ func (t Table) Tree(root int) uint64 {
 
 // Parent returns pid's parent, or zero when unknown.
 func (t Table) Parent(pid int) int { return t.parents[pid] }
+
+// SessionRoot returns the `mesh session-worker` that owns a session's child
+// process, so the worker's own memory is counted with the session. It falls
+// back to the child when the parent is anything else, which also stops a
+// reparented child from being measured with its adoptive parent's whole tree.
+func (t Table) SessionRoot(childPID int, sessionID string) int {
+	parent := t.Parent(childPID)
+	if parent <= 1 {
+		return childPID
+	}
+	arguments := commandLine(parent)
+	for index := 0; index+2 < len(arguments); index++ {
+		if arguments[index] == "session-worker" && arguments[index+1] == "--id" && arguments[index+2] == sessionID {
+			return parent
+		}
+	}
+	return childPID
+}
