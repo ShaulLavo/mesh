@@ -50,7 +50,10 @@ type Config struct {
 	EdgeConfig           string
 	PublicEdgeTarget     string
 	TailscaleServe       bool
-	ReportError          func(error)
+	// HibernateIdle stops a registered agent once its session has been
+	// detached and quiet this long. Zero leaves every session running.
+	HibernateIdle time.Duration
+	ReportError   func(error)
 }
 
 type runOptions struct {
