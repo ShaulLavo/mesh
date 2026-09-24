@@ -17,6 +17,7 @@ import (
 
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/procmem"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/release"
@@ -329,7 +330,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	root.SetIn(dependencies.Stdin)
 	root.SetOut(dependencies.Stdout)
 	root.SetErr(dependencies.Stderr)
-	root.Flags().BoolVarP(&resume, "resume", "r", false, "resume the newest active session on the host")
+	root.Flags().BoolVarP(&resume, "resume", "r", false, "resume the newest active session on the host, or wake a hibernated one when none is live")
 	root.Flags().StringVar(&detachKey, "detach-key", "", "key that detaches, such as ctrl+] or none")
 	root.Flags().BoolVar(&raw, "raw", false, "pass every input byte through without a detach key")
 	root.Flags().BoolVar(&window, "window", false, "open a terminal window with a local persistent session")
@@ -346,7 +347,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	)
 	root.AddCommand(
 		inGroup(groupSessions, app.listCommand(), app.attachCommand(), app.localCommand(),
-			app.logsCommand(), app.killCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand(), app.agentCommand(), app.backCommand())...,
+			app.logsCommand(), app.killCommand(), app.hibernateCommand(), app.gcCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand(), app.agentCommand(), app.backCommand())...,
 	)
 	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.renameCommand(), app.wakeCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand())...)
@@ -402,7 +403,7 @@ func (a *application) runRoot(cmd *cobra.Command, args []string, resume bool, de
 	if err != nil {
 		return err
 	}
-	return a.attachResolved(cmd, resolved, detachKey, raw, nil)
+	return a.attachOrWake(cmd, resolved, detachKey, raw)
 }
 
 func (a *application) runPicker(cmd *cobra.Command, hosts []HostRecord, detachKey string, raw bool) error {
@@ -755,6 +756,14 @@ func (a *application) runHostWithContainment(
 					containingSessions,
 				)
 			}
+		}
+		// A live session always wins: it costs nothing to reattach, while a
+		// wake starts the agent again. Only an otherwise empty host wakes.
+		if row, ok := latestHibernated(rows); ok {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "resuming hibernated %s conversation %s on %s…\n", row.Hibernated.Provider, row.ID, host.Alias); err != nil {
+				return err
+			}
+			return a.recoverSession(cmd, resolvedSession{host: &host, remote: row}, recovery.ActionDefault, detachKey, raw, false)
 		}
 		return fmt.Errorf("host %s has no active sessions", host.Alias)
 	}
@@ -1109,8 +1118,10 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	if err != nil {
 		return err
 	}
+	// One process scan per listing: every row's MEM comes from it.
+	memory := procmem.Snapshot()
 	if len(hosts) == 0 {
-		rows, err := List()
+		rows, err := localSessionRowsMeasured(memory)
 		if err != nil {
 			return err
 		}
@@ -1128,7 +1139,7 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	// This host is never in its own address book, so its sessions have to be
 	// added deliberately. Without this, adopting one remote host hid every
 	// local session from `mesh ls` while its worker kept running.
-	if localRows, err := localSessionRows(); err != nil {
+	if localRows, err := localSessionRowsMeasured(memory); err != nil {
 		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "this host: local sessions unavailable: %s\n", safeRemoteText(err.Error())); err != nil {
 			return err
 		}
@@ -1152,22 +1163,24 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	return nil
 }
 
-func writeLocalSessions(output io.Writer, now time.Time, sessions []Session) error {
+func writeLocalSessions(output io.Writer, now time.Time, sessions []protocol.SessionInfo) error {
 	if len(sessions) == 0 {
 		_, err := fmt.Fprintln(output, "no sessions on this host")
 		return err
 	}
 	table := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "ID\tSTATE\tAGE\tSTARTED IN\tCOMMAND"); err != nil {
+	if _, err := fmt.Fprintln(table, "ID\tSTATE\tAGE\tIDLE\tMEM\tSTARTED IN\tCOMMAND"); err != nil {
 		return err
 	}
 	for _, current := range sessions {
 		if _, err := fmt.Fprintf(
 			table,
-			"%s\t%s\t%s\t%s\t%s\n",
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			current.ID,
-			current.State(),
+			displayState(current),
 			ageAt(now, current.CreatedAt),
+			sessionIdle(now, current),
+			sessionMemory(current),
 			sessionLaunchDirectory(current.Cwd),
 			SafeTerminalText(strings.Join(current.Command, " ")),
 		); err != nil {
@@ -1203,7 +1216,7 @@ func writeProtocolSessions(output io.Writer, now time.Time, hosts []HostSessions
 		return rows[i].session.ID < rows[j].session.ID
 	})
 	table := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "HOST\tID\tSTATE\tAGE\tSTARTED IN\tCOMMAND\tCACHE"); err != nil {
+	if _, err := fmt.Fprintln(table, "HOST\tID\tSTATE\tAGE\tIDLE\tMEM\tSTARTED IN\tCOMMAND\tCACHE"); err != nil {
 		return err
 	}
 	for _, current := range rows {
@@ -1213,11 +1226,13 @@ func writeProtocolSessions(output io.Writer, now time.Time, hosts []HostSessions
 		}
 		if _, err := fmt.Fprintf(
 			table,
-			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			current.host,
 			current.session.ID,
-			current.session.State,
+			displayState(current.session),
 			ageAt(now, current.session.CreatedAt),
+			sessionIdle(now, current.session),
+			sessionMemory(current.session),
 			sessionLaunchDirectory(current.session.Cwd),
 			SafeTerminalText(strings.Join(current.session.Command, " ")),
 			cache,
@@ -1696,6 +1711,12 @@ const localHostAlias = "this host"
 // localSessionRows renders this machine's sessions in the same shape the remote
 // fan-out returns, so one listing can carry both.
 func localSessionRows() ([]protocol.SessionInfo, error) {
+	return localSessionRowsMeasured(procmem.Table{})
+}
+
+// localSessionRowsMeasured also fills MemoryBytes from one process snapshot.
+// An empty Table measures nothing, which keeps the picker's refresh cheap.
+func localSessionRowsMeasured(memory procmem.Table) ([]protocol.SessionInfo, error) {
 	sessions, err := List()
 	if err != nil {
 		return nil, err
@@ -1713,12 +1734,17 @@ func localSessionRows() ([]protocol.SessionInfo, error) {
 			State:          current.State(),
 			CreatedAt:      current.CreatedAt,
 			LastAttachedAt: cloneTime(current.LastAttachedAt),
+			DetachedAt:     cloneTime(current.DetachedAt),
 		}
 		if current.ExitCode != nil {
 			code := *current.ExitCode
 			row.ExitCode = &code
 		}
 		addLocalRecoveryInfo(&row, current, config.HostID)
+		row.Hibernated = localHibernation(current, row.ReplacementID)
+		if current.Alive {
+			row.MemoryBytes = memory.Tree(memory.SessionRoot(current.PID, current.ID))
+		}
 		rows = append(rows, row)
 	}
 	return rows, nil

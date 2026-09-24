@@ -109,6 +109,10 @@ func hostCatalog(input cli.PickerInput) []host {
 				recovery:     cloneRecovery(current.Recovery), recoveryError: current.RecoveryError, agentStatus: current.AgentStatus,
 				replacementID: current.ReplacementID, recoveredFrom: current.RecoveredFrom,
 			}
+			if marker := cli.Hibernation(current); marker != nil {
+				copied := *marker
+				sessions[sessionIndex].hibernation = &copied
+			}
 		}
 		route := catalog.Host.TailscaleName
 		if route == "" {

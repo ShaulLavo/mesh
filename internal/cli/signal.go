@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"time"
 
@@ -56,34 +55,9 @@ func Logs(s Session, tail int) ([]byte, error) {
 }
 
 func controlAndWait(s Session, msg protocol.Control) (protocol.Control, error) {
-	conn, err := net.DialTimeout("unix", paths.Socket(s.Dir), 2*time.Second)
+	response, err := exchangeWorkerControl(s, msg)
 	if err != nil {
-		return protocol.Control{}, fmt.Errorf("%s %s: %w", msg.Type, s.ID, err)
-	}
-	defer conn.Close() //nolint:errcheck // one-shot connection
-	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return protocol.Control{}, fmt.Errorf("%s %s: set completion deadline: %w", msg.Type, s.ID, err)
-	}
-
-	if err := protocol.NewWriter(conn).WriteControlMsg(msg); err != nil {
-		return protocol.Control{}, fmt.Errorf("%s %s: %w", msg.Type, s.ID, err)
-	}
-	frame, err := protocol.NewReader(conn).ReadFrame()
-	if err != nil {
-		if err == io.EOF {
-			return protocol.Control{}, fmt.Errorf("%s %s: worker closed without confirming completion", msg.Type, s.ID)
-		}
-		return protocol.Control{}, fmt.Errorf("%s %s: read completion: %w", msg.Type, s.ID, err)
-	}
-	if frame.Kind != protocol.KindControl {
-		return protocol.Control{}, fmt.Errorf("%s %s: completion frame has kind %d", msg.Type, s.ID, frame.Kind)
-	}
-	response, err := protocol.DecodeControl(frame.Payload)
-	if err != nil {
-		return protocol.Control{}, presentError(msg.Type+" "+s.ID+": decode completion", err)
-	}
-	if response.RequestID != msg.RequestID || response.SessionID != s.ID {
-		return protocol.Control{}, fmt.Errorf("%s %s: mismatched completion", msg.Type, s.ID)
+		return protocol.Control{}, err
 	}
 	switch response.Type {
 	case protocol.TypeOK, protocol.TypeLogged:

@@ -154,21 +154,7 @@ func createRemoteSessionInDirectory(ctx context.Context, host HostRecord, dial H
 }
 
 func controlRemoteSession(ctx context.Context, host HostRecord, dial HostDialer, sessionID, controlType, signal string) error {
-	conn, err := openVerifiedHost(ctx, host, dial)
-	if err != nil {
-		return err
-	}
-	defer conn.Close() //nolint:errcheck // one control request
-	requestID, err := newDaemonRequestID()
-	if err != nil {
-		return err
-	}
-	response, err := controlRequest(ctx, conn, protocol.Control{
-		Type:      controlType,
-		RequestID: requestID,
-		SessionID: sessionID,
-		Signal:    signal,
-	})
+	response, err := remoteSessionControl(ctx, host, dial, protocol.Control{Type: controlType, SessionID: sessionID, Signal: signal})
 	if err != nil {
 		return err
 	}
@@ -183,6 +169,21 @@ func controlRemoteSession(ctx context.Context, host HostRecord, dial HostDialer,
 	default:
 		return fmt.Errorf("host %s returned an unexpected %s response", host.Alias, controlType)
 	}
+}
+
+// remoteSessionControl sends one session request to a verified host and
+// returns the reply unjudged. It fills in the request ID.
+func remoteSessionControl(ctx context.Context, host HostRecord, dial HostDialer, request protocol.Control) (protocol.Control, error) {
+	conn, err := openVerifiedHost(ctx, host, dial)
+	if err != nil {
+		return protocol.Control{}, err
+	}
+	defer conn.Close() //nolint:errcheck // one control request
+	request.RequestID, err = newDaemonRequestID()
+	if err != nil {
+		return protocol.Control{}, err
+	}
+	return controlRequest(ctx, conn, request)
 }
 
 func logsRemoteSession(ctx context.Context, host HostRecord, dial HostDialer, sessionID string, tail int) ([]byte, error) {

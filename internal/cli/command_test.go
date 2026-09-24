@@ -21,6 +21,7 @@ import (
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -44,6 +45,15 @@ type commandTestHost struct {
 	previewRoot  string
 	previewFiles uint64
 	edgeRoutes   []protocol.EdgeRouteInfo
+	// listRows replaces the single default row when set.
+	listRows func() []protocol.SessionInfo
+	// recoverTo answers session.recover with this replacement and makes the
+	// host advertise recovery support.
+	recoverTo string
+	recovered protocol.Control
+	// attachError refuses an attachment with the returned message.
+	attachError    func(id string) string
+	hibernateError string
 }
 
 func (h *commandTestHost) dial(context.Context, HostRecord) (transport.Conn, error) {
@@ -120,10 +130,14 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 		response.Type = protocol.TypeHostInfoResult
 		response.Host = &protocol.HostInfo{
 			ID: c.host.host.ID, MeshIdentity: c.host.host.MeshIdentity, TailscaleName: c.host.host.TailscaleName,
-			PrivateName: "pc.mesh.shaulavo.dev",
+			PrivateName: "pc.mesh.shaulavo.dev", RecoverySupported: c.host.recoverTo != "",
 		}
 	case protocol.TypeList:
 		response.Type = protocol.TypeListed
+		if c.host.listRows != nil {
+			response.Sessions = c.host.listRows()
+			break
+		}
 		id := c.host.sessionID
 		if id == "" {
 			id = "7K3D"
@@ -158,6 +172,12 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 		c.host.mu.Lock()
 		c.host.attach = request
 		c.host.mu.Unlock()
+		if c.host.attachError != nil {
+			if message := c.host.attachError(request.SessionID); message != "" {
+				c.responses <- mustCommandControlFrame(protocol.Control{Type: protocol.TypeError, SessionID: request.SessionID, Message: message})
+				return nil
+			}
+		}
 		if c.host.attachStart != nil {
 			c.host.attachStart()
 		}
@@ -172,6 +192,20 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 		c.host.action = request
 		c.host.mu.Unlock()
 		response.Type = protocol.TypeOK
+	case protocol.TypeHibernate:
+		c.host.mu.Lock()
+		c.host.action = request
+		c.host.mu.Unlock()
+		response.Type = protocol.TypeOK
+		if c.host.hibernateError != "" {
+			response.Type, response.Message = protocol.TypeError, c.host.hibernateError
+		}
+	case protocol.TypeRecover:
+		c.host.mu.Lock()
+		c.host.recovered = request
+		c.host.mu.Unlock()
+		response.Type = protocol.TypeRecovered
+		response.RecoveryResult = &recovery.Result{SessionID: c.host.recoverTo, RecoveredFrom: request.SessionID, State: worker.StateDetached}
 	case protocol.TypeRemove:
 		c.host.mu.Lock()
 		c.host.action = request
@@ -477,12 +511,9 @@ func TestProtocolSessionTableLabelsEscapesAndBoundsLaunchDirectory(t *testing.T)
 func TestLocalSessionTableLabelsAndEscapesLaunchDirectory(t *testing.T) {
 	var output bytes.Buffer
 	malicious := "/work\tFAKE\nROW\x1b[31m\u202e"
-	err := writeLocalSessions(&output, commandTestTime, []Session{{
-		Meta: worker.Meta{
-			ID: "7K3D", Command: []string{"bash"}, Cwd: malicious,
-			State: worker.StateRunning, CreatedAt: commandTestTime,
-		},
-		Alive: true,
+	err := writeLocalSessions(&output, commandTestTime, []protocol.SessionInfo{{
+		ID: "7K3D", Command: []string{"bash"}, Cwd: malicious,
+		State: worker.StateRunning, CreatedAt: commandTestTime,
 	}})
 	if err != nil {
 		t.Fatal(err)
