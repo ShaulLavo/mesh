@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"debug/buildinfo"
 	"encoding/hex"
+	"io"
 	"os"
 	"runtime/debug"
 )
@@ -29,15 +30,21 @@ func readExecutingBuild() Build {
 		WorkerProtocol: CurrentWorkerProtocol,
 		UpdateProtocol: CurrentUpdateProtocol,
 	}
-	path := executingExecutablePath()
-	contents, err := os.ReadFile(path) //nolint:gosec // path names the executable loaded by this process
+	file, err := os.Open(executingExecutablePath())
 	if err != nil {
 		build.Modified = true
 		return build
 	}
-	digest := sha256.Sum256(contents)
-	build.Digest = hex.EncodeToString(digest[:])
-	info, err := buildinfo.ReadFile(path)
+	defer file.Close() //nolint:errcheck // read-only
+	// Stream the image: every mesh process runs this at init, and reading the
+	// whole binary into the heap left each long-lived worker tens of MB larger.
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		build.Modified = true
+		return build
+	}
+	build.Digest = hex.EncodeToString(hash.Sum(nil))
+	info, err := buildinfo.Read(file)
 	if err != nil {
 		build.Modified = true
 		return build

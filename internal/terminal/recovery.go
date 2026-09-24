@@ -8,16 +8,15 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 )
 
-// TextSnapshot copies bounded cells while the emulator is locked. Render runs
+// TextSnapshot copies bounded rows while the emulator is locked. Render runs
 // after the worker releases its PTY lock and never produces terminal controls.
 type TextSnapshot struct {
 	Title     string
 	Directory string
-	rows      [][]textCell
-}
-
-type textCell struct {
-	content string
+	// One string per row rather than per cell: checkpoints run every few
+	// seconds for the life of the session, and per-cell copies were most of
+	// an idle worker's garbage.
+	rows []string
 }
 
 func (s *emulatorScreen) SaveText(maxLines, maxBytes int) TextSnapshot {
@@ -49,33 +48,33 @@ func (s *emulatorScreen) SaveText(maxLines, maxBytes int) TextSnapshot {
 	return snapshot
 }
 
-func copyTextRow(width int, at func(int) *uv.Cell, remaining *int) []textCell {
-	row := make([]textCell, 0, min(width, *remaining))
+func copyTextRow(width int, at func(int) *uv.Cell, remaining *int) string {
+	var row strings.Builder
+	row.Grow(min(width, *remaining))
 	for x := 0; x < width && *remaining > 0; x++ {
 		cell := at(x)
 		if cell == nil || cell.Width <= 0 {
 			continue
 		}
-		concealed := cell.Style.Attrs&uv.AttrConceal != 0
-		content := cell.Content
-		if concealed || content == "" {
-			content = strings.Repeat(" ", cell.Width)
+		if cell.Style.Attrs&uv.AttrConceal != 0 || cell.Content == "" {
+			blank := min(cell.Width, *remaining)
+			for range blank {
+				row.WriteByte(' ')
+			}
+			*remaining -= blank
+			continue
 		}
-		count := validUTF8PrefixBytes(content, *remaining)
-		row = append(row, textCell{content: strings.Clone(content[:count])})
+		count := validUTF8PrefixBytes(cell.Content, *remaining)
+		row.WriteString(cell.Content[:count])
 		*remaining -= count
 	}
-	return row
+	return row.String()
 }
 
 func (snapshot TextSnapshot) Render() []string {
 	lines := make([]string, 0, len(snapshot.rows))
 	for _, row := range snapshot.rows {
-		var line strings.Builder
-		for _, cell := range row {
-			line.WriteString(cell.content)
-		}
-		text := strings.TrimRight(line.String(), " ")
+		text := strings.TrimRight(row, " ")
 		text = strings.Map(withoutTerminalControls, text)
 		lines = append(lines, text)
 	}

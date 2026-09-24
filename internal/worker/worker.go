@@ -163,11 +163,13 @@ type attachment struct {
 	closeOnce     sync.Once
 }
 
+// outboundFrame holds its control message by pointer. Control is nearly 1 KiB,
+// and every attachment's queue reserves a slot per frame it may hold.
 type outboundFrame struct {
 	kind       protocol.Kind
 	seq        uint64
 	payload    []byte
-	control    protocol.Control
+	control    *protocol.Control
 	closeAfter bool
 }
 
@@ -286,9 +288,10 @@ func (a *attachment) startLocked(w *Worker) {
 // enqueueData takes its own copy because the PTY pump reuses its read buffer.
 // It never waits for the socket or for queue capacity.
 func (a *attachment) enqueueData(seq uint64, payload []byte) bool {
-	return a.enqueuePayload(protocol.KindData, seq, payload, outboundDataFrameSize, false)
+	return a.enqueuePayload(protocol.KindData, seq, bytes.Clone(payload), outboundDataFrameSize, false)
 }
 
+// enqueuePayload takes ownership of payload; nothing may modify it afterwards.
 func (a *attachment) enqueuePayload(kind protocol.Kind, seq uint64, payload []byte, maxFrameSize int, allowEmpty bool) bool {
 	if len(payload) == 0 && !allowEmpty {
 		return true
@@ -303,7 +306,7 @@ func (a *attachment) enqueuePayload(kind protocol.Kind, seq uint64, payload []by
 	f := outboundFrame{
 		kind:    kind,
 		seq:     seq,
-		payload: bytes.Clone(payload),
+		payload: payload,
 	}
 	select {
 	case a.queue <- f:
@@ -315,16 +318,19 @@ func (a *attachment) enqueuePayload(kind protocol.Kind, seq uint64, payload []by
 	}
 }
 
+// enqueueSnapshot takes ownership of payload.
 func (a *attachment) enqueueSnapshot(payload []byte) bool {
 	// A snapshot is one frame so a client commits its resume sequence only
 	// after Reader has received the complete repaint.
 	return a.enqueuePayload(protocol.KindSnapshot, 0, payload, maxSnapshotPayload, true)
 }
 
+// enqueueDataChunks takes ownership of payload and queues subslices of it, so
+// a full replay is held once rather than copied again frame by frame.
 func (a *attachment) enqueueDataChunks(seq uint64, payload []byte) bool {
 	for len(payload) > 0 {
 		n := min(len(payload), outboundDataFrameSize)
-		if !a.enqueueData(seq, payload[:n]) {
+		if !a.enqueuePayload(protocol.KindData, seq, payload[:n:n], outboundDataFrameSize, false) {
 			return false
 		}
 		seq += uint64(n)
@@ -344,7 +350,7 @@ func (a *attachment) enqueueControl(msg protocol.Control, closeAfter bool) bool 
 	select {
 	case a.queue <- outboundFrame{
 		kind:       protocol.KindControl,
-		control:    msg,
+		control:    &msg,
 		closeAfter: closeAfter,
 	}:
 		return true
@@ -396,7 +402,7 @@ func (a *attachment) write(f outboundFrame) error {
 
 	switch f.kind {
 	case protocol.KindControl:
-		return a.w.WriteControlMsg(f.control)
+		return a.w.WriteControlMsg(*f.control)
 	case protocol.KindData:
 		return a.w.WriteData(a.sid, f.seq, f.payload)
 	case protocol.KindSnapshot:
@@ -471,7 +477,7 @@ func Run(cfg Config) (int, error) {
 	// xpty assigns the slave to the child's stdin, so Ctty 0 names it, and
 	// Setctty requires Setsid because only a session leader may acquire one.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
-	if err := pty.Start(cmd); err != nil {
+	if err := startSession(pty, cmd); err != nil {
 		return 0, fmt.Errorf("worker: start %s: %w", cfg.Command[0], err)
 	}
 	// xpty retains the parent's slave descriptor after Start. Closing that copy

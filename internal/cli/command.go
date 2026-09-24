@@ -1633,6 +1633,8 @@ func (a *application) workerCommand() *cobra.Command {
 			if id == "" || dir == "" {
 				return errors.New("session-worker requires --id and --dir")
 			}
+			// Before the emulator and ring allocate.
+			worker.TuneProcess()
 			cwd, _ := os.Getwd()
 			code, err := worker.Run(worker.Config{
 				ID: id, Dir: dir, Command: command, Cwd: cwd, Env: os.Environ(),
