@@ -88,7 +88,11 @@ func diagnoseAgentRecovery(cmd *cobra.Command, name string) error {
 	status := agentHookSetupStatus(settings, readErr, provider, meshExecutable)
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\nHooks: %s (%s)\n", provider, launch.ProviderVersion, status, path)
 	if provider == agentresume.Codex {
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Trust: review Mesh hooks in Codex; Mesh does not override hook trust or disabled hooks.")
+		trust := "not checked (Mesh hooks are not installed)"
+		if command, err := agentresume.StableHookCommand(provider, meshExecutable); readErr == nil && err == nil {
+			trust = codexHookTrust(path, settings, command, codexConfigPath(path))
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Trust: %s\n", trust)
 	}
 	if reason := agentresume.Compatibility(launch); reason != "" {
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Automatic recovery: unavailable (%s)\nExplicit binding: mesh agent bind %s CONVERSATION_ID\n", reason, provider)

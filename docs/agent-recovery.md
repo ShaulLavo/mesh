@@ -30,7 +30,10 @@ home. Use `--path /absolute/settings-file` to choose a different file, or omit
 Existing settings symlinks remain intact. Setup updates their target and reports
 an error if that target is missing.
 
-For Codex, open its normal `/hooks` screen and review and trust the Mesh hooks.
+**For Codex, open `/hooks` and approve the Mesh SessionStart and SessionEnd
+hooks.** Codex ignores unapproved hooks, so skipping this leaves every Codex
+conversation unsaved. `mesh agent doctor codex` reports `Trust: approved in
+Codex` once it is done.
 Keep the Mesh executable at the installed path. If that path changes, install the
 fragment from the new executable and review the changed hook definition.
 

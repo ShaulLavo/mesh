@@ -10,28 +10,45 @@ Only an agent whose conversation Mesh has registered can hibernate. A plain
 shell, or an agent started without the Mesh launch helper, has nothing Mesh can
 reopen exactly, so Mesh leaves it running.
 
-## Prerequisites
+## First-time setup
 
-Hibernation resumes through agent recovery, so its setup applies:
+Do these once on each host that runs agents. Hibernation resumes through
+[agent recovery](agent-recovery.md), so an agent that skipped a step keeps
+running and never hibernates.
 
-```sh
-mesh agent setup claude --install
-mesh agent setup codex --install
-```
+1. Install the provider hooks:
 
-Review and trust the Mesh hooks in Codex's `/hooks` screen. Then load the shell
-wrappers so plain `claude` and `codex` commands register their conversations.
-Put the line before any alias of the same name: the wrappers skip a command that
-is already an alias, and an alias defined afterwards expands into the wrapper.
+   ```sh
+   mesh agent setup claude --install
+   mesh agent setup codex --install
+   ```
 
-```sh
-eval "$(mesh shell-init bash --agents)"
-alias claude='claude --dangerously-skip-permissions'
-```
+2. **Approve the hooks in Codex.** Open Codex, run `/hooks`, and approve the
+   Mesh SessionStart and SessionEnd hooks. Codex ignores hooks nobody approved,
+   so this step cannot be automated or skipped. Claude needs no approval.
 
-`mesh agent doctor claude` reports whether the installed version is supported.
-Mesh accepts the natively verified version and later releases in the same major
-line: Claude Code 2.1.261 and Codex CLI 0.153.4 onward.
+3. Load the shell wrappers so plain `claude` and `codex` register their
+   conversations. Put the line before any alias of the same name: the wrappers
+   skip a command that is already an alias, and an alias defined afterwards
+   expands into the wrapper.
+
+   ```sh
+   eval "$(mesh shell-init bash --agents)"
+   alias claude='claude --dangerously-skip-permissions'
+   ```
+
+4. Check each provider. Every line should read as configured, supported, and
+   for Codex, `Trust: approved in Codex`:
+
+   ```sh
+   mesh agent doctor claude
+   mesh agent doctor codex
+   ```
+
+Mesh accepts the natively verified provider versions and later releases in the
+same major line: Claude Code 2.1.261 and Codex CLI 0.153.4 onward. Agents already
+running when you finish setup were started without the wrappers; they hibernate
+only after you restart them.
 
 ## Hibernate automatically
 

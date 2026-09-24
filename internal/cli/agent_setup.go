@@ -72,7 +72,7 @@ func setupAgentHooks(cmd *cobra.Command, name, path string, install, uninstall b
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Updated %s\n", path)
 	if provider == agentresume.Codex && install {
-		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Review and trust the Mesh hooks in Codex's normal hook trust flow. Run mesh agent doctor codex to check the installed setup.")
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "One more step: %s.\nCodex ignores untrusted hooks, so until then its conversations are not saved and cannot hibernate.\nCheck with: mesh agent doctor codex\n", codexHookReview)
 	}
 	return err
 }
