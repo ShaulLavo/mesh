@@ -72,7 +72,9 @@ done < <(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
   --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')
 
 IFS=',' read -r -a assets <<<"$frozen_assets"
-for name in "${assets[@]}"; do
+# macOS runners ship bash 3.2, where "${assets[@]}" on an empty array fails
+# under set -u; the + form expands to nothing instead.
+for name in ${assets[@]+"${assets[@]}"}; do
   [[ -n $name ]] || continue
   [[ $name =~ ^baseline_${platform_key}_([0-9a-f]{64})\.bin$ ]] || continue
   expected=${BASH_REMATCH[1]}
