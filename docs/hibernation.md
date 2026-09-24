@@ -53,20 +53,40 @@ hibernated session and, once, why a candidate stayed running.
 ## Hibernate now, and reclaim memory
 
 ```sh
-mesh hibernate 7K3D
+mesh hibernate 7K3D    # stop one detached agent now
 mesh gc                # preview what idle sessions would be reclaimed
 mesh gc --yes          # hibernate idle agents
 mesh gc --shells --yes # also end idle plain shells
+mesh gc --idle 1h      # change the idle threshold (default 6h)
 ```
 
-<!-- CLI surface: finalized from the t27-cli branch. -->
+`mesh hibernate` refuses an attached session and one with no registered agent,
+and names the reason. `mesh gc` looks at this host and every known host. It
+considers only detached sessions whose detach and last output are both at least
+`--idle` ago, and never touches the terminal it runs in:
 
-`mesh ls` shows `hibernated` in the STATE column, each live session's memory in
-MEM, and how long it has been quiet in IDLE.
+```
+HOST       ID    MEM   IDLE  ACTION                      WHAT
+this host  5Q3H  110M  7h    hibernate                   claude
+this host  C8E7  57M   2d    left running (plain shell)  /bin/bash
+
+reclaimable: 110M from 1 session; run mesh gc --yes to act
+```
+
+A plain shell ends only with `--shells`; its directory and history remain
+available to [workspace recovery](recovery.md). Before ending one, `gc` checks
+that it is still detached and has printed nothing since the plan.
+
+`mesh ls` shows `hibernated` in the STATE column, how long each session has been
+quiet in IDLE, and each live session's memory in MEM. On Linux MEM is the
+proportional size of the worker and everything it runs, swapped pages included,
+so shared pages are not counted twice. macOS reports resident size.
 
 ## Wake a session
 
-Attach as usual: `mesh 7K3D`, or select it in the picker and press Enter. Mesh
+Attach as usual: `mesh 7K3D`, or select it in the picker and press Enter.
+`mesh pc -r` still prefers a live session; it wakes the most recently active
+hibernated one only when nothing on that host is running. Mesh
 reopens the saved conversation in a new session with the provider's own resume
 command, in the recorded project directory, without sending a prompt. The old
 session stays in history and points to its replacement. A second attach while

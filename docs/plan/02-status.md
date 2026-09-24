@@ -75,6 +75,9 @@ power-loss acceptance remains an operator check.
 - `internal/agentresume` — exact Codex and Claude identity capture, native launch
   and resume, provider hook setup, explicit binding, and verified recovery receipts
   shared by the CLI, pickers, WebSocket, and SSH (T25)
+- `internal/procmem` and hibernation in `internal/worker`, `internal/daemon`,
+  `internal/cli` — per-session memory, idle agent hibernation with resume on
+  attach, `mesh hibernate` and `mesh gc` (T27)
 - `internal/wake`, `internal/wakeclient`, `internal/inhibit` — signed target
   permission, automatic LAN sender selection, conservative reconnect recovery,
   public-service wake, and child-process sleep inhibition (T19)
@@ -180,7 +183,7 @@ TUI · T10 packaging · T11 serving core · T12 private names · T13 public edge
 T14 `mesh serve` · T15 SSH front door · T16 SFTP and SCP · T17 sessions over SSH ·
 T18 reverse tunnels · T19 wake and sleep inhibition · T20 Tailscale provisioning · T22 live session
 inspector · T23 Mesh as your terminal · T24 workspace crash recovery · T25 exact
-Codex and Claude conversation recovery.
+Codex and Claude conversation recovery · T27 agent hibernation and session memory.
 
 Verified 2026-09-05 after T24: `go test -race ./...`, `go vet ./...`, clean module
 and formatting checks, all 34 integration scripts, and CGO-disabled Linux

@@ -64,6 +64,9 @@ To recover saved directories and previous output after a host crash, follow
 To reopen a saved Codex or Claude conversation after a crash, follow
 [Recover an exact conversation](docs/agent-recovery.md).
 
+To stop idle agents and resume them on attach, and to see what each session
+costs, follow [Hibernate idle agent sessions](docs/hibernation.md).
+
 To wake a sleeping PC automatically when connecting, follow
 [Wake a machine](docs/power.md). The target grants permission with
 `mesh wake allow`; Mesh chooses an awake sender on its LAN.

@@ -38,7 +38,8 @@ cannot receive a wake packet. Configure the firmware's AC power restoration
 behavior separately if it should start after an outage.
 
 The daemon prevents idle sleep while sessions are running, including detached
-sessions. Linux needs working `systemd-inhibit` authorization; macOS uses
+sessions. [Hibernated](hibernation.md) agent sessions have ended, so they no
+longer hold the host awake. Linux needs working `systemd-inhibit` authorization; macOS uses
 `caffeinate`. Unavailable inhibition logs once and leaves sessions usable. Forced
 sleep, loss of power, and reboot can still interrupt sessions.
 
