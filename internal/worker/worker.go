@@ -118,6 +118,7 @@ type Worker struct {
 	agentExpected    *agentresume.Recipe
 	agentReaders     sync.WaitGroup
 	agentCaller      func(net.Conn, int) error
+	agentHookCaller  func(net.Conn, int) error
 
 	// mu orders ring delivery, attachment ownership, and shutdown. A client
 	// attaching mid-write cannot miss bytes, and finish cannot race a new writer

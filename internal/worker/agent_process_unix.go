@@ -28,6 +28,14 @@ func (w *Worker) validateAgentCaller(conn net.Conn, pid int) error {
 	return nil
 }
 
+func validateAgentHookCaller(conn net.Conn, agentPID int) error {
+	peerPID, err := agentPeerPID(conn)
+	if err != nil || !hookFromAgent(peerPID, agentPID, readAncestorProcess) {
+		return fmt.Errorf("worker: hook does not come from the registered agent process")
+	}
+	return nil
+}
+
 func agentPeerPID(conn net.Conn) (int, error) {
 	local, ok := conn.(*net.UnixConn)
 	if !ok {

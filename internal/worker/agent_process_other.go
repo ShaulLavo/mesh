@@ -10,3 +10,7 @@ import (
 func (w *Worker) validateAgentCaller(net.Conn, int) error {
 	return fmt.Errorf("worker: automatic agent capture is unavailable on this platform")
 }
+
+func validateAgentHookCaller(net.Conn, int) error {
+	return fmt.Errorf("worker: automatic agent capture is unavailable on this platform")
+}

@@ -24,6 +24,7 @@ type agentInvocation struct {
 	lookupOnly bool
 	resuming   bool
 	registered bool
+	pid        int
 	conn       net.Conn
 }
 
@@ -81,7 +82,7 @@ func (w *Worker) beginAgent(conn net.Conn, request protocol.Control) (*agentInvo
 		return nil, fmt.Errorf("worker: create agent invocation: %w", err)
 	}
 	invocation := &agentInvocation{token: hex.EncodeToString(token[:]), launch: *request.AgentLaunch,
-		expectedID: request.AgentExpectedID, explicit: request.AgentExplicit, lookupOnly: request.AgentLookupOnly, conn: conn}
+		expectedID: request.AgentExpectedID, explicit: request.AgentExplicit, lookupOnly: request.AgentLookupOnly, pid: request.AgentPID, conn: conn}
 	invocation.launch.Options = slices.Clone(invocation.launch.Options)
 	w.agentMu.Lock()
 	defer w.agentMu.Unlock()
@@ -139,11 +140,11 @@ func (w *Worker) validateAgentTarget(request protocol.Control) error {
 }
 
 func (w *Worker) writeAgentEvent(conn net.Conn, request protocol.Control) {
-	err := w.registerAgentEvent(request)
+	err := w.registerAgentEvent(conn, request)
 	w.writeRecoveryResponse(conn, request, protocol.TypeAgentRegistered, err)
 }
 
-func (w *Worker) registerAgentEvent(request protocol.Control) error {
+func (w *Worker) registerAgentEvent(conn net.Conn, request protocol.Control) error {
 	if err := w.validateAgentTarget(request); err != nil {
 		return err
 	}
@@ -161,6 +162,13 @@ func (w *Worker) registerAgentEvent(request protocol.Control) error {
 	}
 	if request.AgentProvider != invocation.launch.Provider {
 		return fmt.Errorf("worker: hook provider does not match the current invocation")
+	}
+	validate := w.agentHookCaller
+	if validate == nil {
+		validate = validateAgentHookCaller
+	}
+	if err := validate(conn, invocation.pid); err != nil {
+		return err
 	}
 	event := *request.AgentEvent
 	if event.Subagent || event.Kind == "end" {

@@ -22,6 +22,7 @@ func agentTestWorkerAt(t *testing.T, now func() time.Time) *Worker {
 	t.Helper()
 	w := recoveryTestWorkerAt(t, now)
 	w.agentCaller = func(net.Conn, int) error { return nil }
+	w.agentHookCaller = func(net.Conn, int) error { return nil }
 	t.Cleanup(w.closeAgents)
 	return w
 }

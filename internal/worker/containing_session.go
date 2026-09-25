@@ -3,6 +3,7 @@ package worker
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/shaul/mesh/internal/session"
 )
@@ -126,4 +127,44 @@ func workerFlagValue(args []string, name string) (string, int) {
 		index++
 	}
 	return value, count
+}
+
+// hookFromAgent accepts a hook only from the provider Mesh launched: a direct
+// child of the agent helper, reached directly or through the shell that runs
+// hooks. A provider started below it (a test, a headless `claude -p`) inherits
+// MESH_AGENT_* too, and its SessionStart overwrote the saved conversation.
+func hookFromAgent(peer, agent int, read ancestorProcessReader) bool {
+	if peer <= 1 || agent <= 1 {
+		return false
+	}
+	if peer == agent {
+		return true
+	}
+	hook, ok := read(peer)
+	if !ok {
+		return false
+	}
+	runner, ok := read(hook.parentID)
+	if !ok {
+		return false
+	}
+	if runner.parentID == agent {
+		return true
+	}
+	if !isHookShell(runner.args) {
+		return false
+	}
+	provider, ok := read(runner.parentID)
+	return ok && provider.parentID == agent
+}
+
+func isHookShell(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch strings.TrimPrefix(filepath.Base(args[0]), "-") {
+	case "sh", "bash", "dash", "zsh":
+		return true
+	}
+	return false
 }
