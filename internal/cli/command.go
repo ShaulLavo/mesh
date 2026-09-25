@@ -789,6 +789,18 @@ func (a *application) runHostWithContainment(
 	)
 }
 
+// stoppedSessionError names the way back for a session attach cannot reach.
+func stoppedSessionError(id, host, state string) error {
+	where := id
+	if host != "" {
+		where = id + " on " + host
+	}
+	if state == worker.StateInterrupted {
+		return fmt.Errorf("session %s is interrupted; recover it with mesh recover %s (add --shell for a plain shell)", where, id)
+	}
+	return fmt.Errorf("session %s is %s", where, state)
+}
+
 type resolvedSession struct {
 	host       *HostRecord
 	remote     protocol.SessionInfo
@@ -908,14 +920,14 @@ func (a *application) attachResolvedWithContainment(
 	var display string
 	if resolved.local != nil {
 		if !resolved.local.Alive {
-			return fmt.Errorf("session %s is %s", resolved.local.ID, resolved.local.State())
+			return stoppedSessionError(resolved.local.ID, "", resolved.local.State())
 		}
 		options.SocketPath = paths.Socket(resolved.local.Dir)
 		options.SessionID = resolved.local.ID
 		display = resolved.local.ID
 	} else {
 		if resolved.remote.State != string(storage.StateRunning) && resolved.remote.State != string(storage.StateDetached) {
-			return fmt.Errorf("session %s on %s is %s", resolved.remote.ID, resolved.host.Alias, resolved.remote.State)
+			return stoppedSessionError(resolved.remote.ID, resolved.host.Alias, resolved.remote.State)
 		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), wakeIntentTimeout)
 		conn, err := openVerifiedHost(ctx, *resolved.host, a.intentDialer(cmd.ErrOrStderr()))
@@ -1371,7 +1383,7 @@ func (a *application) attachCommand() *cobra.Command {
 				return err
 			}
 			if !current.Alive {
-				return fmt.Errorf("session %s is %s", current.ID, current.State())
+				return stoppedSessionError(current.ID, "", current.State())
 			}
 			opts, err := a.attachmentOptions(cmd, detachKey, raw)
 			if err != nil {

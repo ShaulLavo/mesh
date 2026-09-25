@@ -75,6 +75,20 @@ func hibernatedLocalSession(current Session) *recovery.Hibernation {
 	return localHibernation(current, replacement)
 }
 
+func resolvedInterrupted(resolved resolvedSession) bool {
+	if resolved.local != nil {
+		return resolved.local.State() == worker.StateInterrupted
+	}
+	return resolved.remote.State == worker.StateInterrupted
+}
+
+func resolvedLabel(resolved resolvedSession) string {
+	if resolved.local != nil {
+		return resolved.local.ID
+	}
+	return resolved.remote.ID + " on " + resolved.host.Alias
+}
+
 func resolvedHibernation(resolved resolvedSession) *recovery.Hibernation {
 	if resolved.local != nil {
 		return hibernatedLocalSession(*resolved.local)
@@ -253,8 +267,15 @@ func exchangeWorkerControl(s Session, msg protocol.Control) (protocol.Control, e
 }
 
 // attachOrWake attaches by ID, resuming a hibernated conversation instead of
-// reporting the session exited.
+// reporting the session exited, and recovering an interrupted one the way the
+// picker does.
 func (a *application) attachOrWake(cmd *cobra.Command, resolved resolvedSession, detachKey string, raw bool) error {
+	if resolvedInterrupted(resolved) {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "session %s was interrupted; recovering it…\n", resolvedLabel(resolved)); err != nil {
+			return err
+		}
+		return a.recoverSession(cmd, resolved, recovery.ActionDefault, detachKey, raw, false)
+	}
 	if marker := resolvedHibernation(resolved); marker != nil {
 		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "resuming hibernated %s conversation…\n", marker.Provider); err != nil {
 			return err
