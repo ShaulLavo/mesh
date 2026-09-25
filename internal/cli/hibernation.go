@@ -40,9 +40,11 @@ func Hibernation(row protocol.SessionInfo) *recovery.Hibernation {
 
 // displayState is the STATE cell. A hibernated session stays exited on the
 // wire so older clients keep listing its host.
+const stateHibernated = "hibernated"
+
 func displayState(row protocol.SessionInfo) string {
 	if Hibernation(row) != nil {
-		return "hibernated"
+		return stateHibernated
 	}
 	return row.State
 }

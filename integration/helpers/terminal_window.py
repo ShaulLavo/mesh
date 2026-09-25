@@ -173,7 +173,7 @@ class Fixture:
         return json.loads((self.local / "s" / session_id / "meta.json").read_text())
 
     def local_listing(self):
-        result = subprocess.run([self.binary, "ls"], env=self.environment, stdin=subprocess.DEVNULL,
+        result = subprocess.run([self.binary, "ls", "--all"], env=self.environment, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=3)
         require(result.returncode == 0, f"local listing failed: {result.stdout!r}")
         return result.stdout.decode()

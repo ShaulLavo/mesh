@@ -1,21 +1,26 @@
 package cli
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/procmem"
 	"github.com/shaul/mesh/internal/protocol"
@@ -1089,6 +1094,7 @@ func aliasFromTarget(target string) string {
 func (a *application) listCommand() *cobra.Command {
 	var (
 		viaDaemon bool
+		all       bool
 		timeout   time.Duration
 	)
 	command := &cobra.Command{
@@ -1097,27 +1103,29 @@ func (a *application) listCommand() *cobra.Command {
 		Short:   "List sessions across known hosts",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.runList(cmd, viaDaemon, timeout)
+			return a.runList(cmd, viaDaemon, timeout, listView{all: all, width: outputWidth(cmd.OutOrStdout())})
 		},
 	}
+	command.Flags().BoolVarP(&all, "all", "a", false, "include exited and interrupted sessions")
 	command.Flags().BoolVar(&viaDaemon, "daemon", false, "read only the local daemon catalog")
 	command.Flags().DurationVar(&timeout, "timeout", defaultCatalogTimeout, "maximum wait for the host fan-out")
 	return command
 }
 
-func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.Duration) error {
+func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.Duration, view listView) error {
+	stateDir, err := paths.StateDir()
+	if err != nil {
+		return err
+	}
 	if viaDaemon {
-		stateDir, err := paths.StateDir()
-		if err != nil {
-			return err
-		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), localQueryTimeout)
 		rows, err := ListViaDaemon(ctx, meshdaemon.SocketPath(stateDir))
 		cancel()
 		if err != nil {
 			return err
 		}
-		return writeProtocolSessions(cmd.OutOrStdout(), a.dependencies.Now(), []HostSessions{{Host: HostRecord{Alias: "local"}, Sessions: rows}})
+		hidden, err := writeSessionList(cmd.OutOrStdout(), a.dependencies.Now(), []HostSessions{{Host: HostRecord{Alias: "local"}, Sessions: rows}}, view)
+		return reportHiddenSessions(cmd.ErrOrStderr(), hidden, err)
 	}
 	hosts, err := LoadHosts()
 	if err != nil {
@@ -1125,12 +1133,14 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	}
 	// One process scan per listing: every row's MEM comes from it.
 	memory := procmem.Snapshot()
+	hosts, selfAlias := withoutThisHost(stateDir, hosts)
 	if len(hosts) == 0 {
 		rows, err := localSessionRowsMeasured(memory)
 		if err != nil {
 			return err
 		}
-		return writeLocalSessions(cmd.OutOrStdout(), a.dependencies.Now(), rows)
+		hidden, err := writeLocalSessionList(cmd.OutOrStdout(), a.dependencies.Now(), rows, view)
+		return reportHiddenSessions(cmd.ErrOrStderr(), hidden, err)
 	}
 	cache, err := OpenCatalogCache(cmd.Context())
 	if err != nil {
@@ -1141,17 +1151,18 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	if err != nil {
 		return err
 	}
-	// This host is never in its own address book, so its sessions have to be
-	// added deliberately. Without this, adopting one remote host hid every
-	// local session from `mesh ls` while its worker kept running.
+	// This host's own sessions come from disk, not from the fan-out. Without
+	// this, adopting one remote host hid every local session from `mesh ls`
+	// while its worker kept running.
 	if localRows, err := localSessionRowsMeasured(memory); err != nil {
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "this host: local sessions unavailable: %s\n", safeRemoteText(err.Error())); err != nil {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: local sessions unavailable: %s\n", selfAlias, safeRemoteText(err.Error())); err != nil {
 			return err
 		}
 	} else if len(localRows) > 0 {
-		results = append([]HostSessions{{Host: HostRecord{Alias: localHostAlias}, Sessions: localRows}}, results...)
+		results = append([]HostSessions{{Host: HostRecord{Alias: selfAlias}, Sessions: localRows}}, results...)
 	}
-	if err := writeProtocolSessions(cmd.OutOrStdout(), a.dependencies.Now(), results); err != nil {
+	hidden, err := writeSessionList(cmd.OutOrStdout(), a.dependencies.Now(), results, view)
+	if err := reportHiddenSessions(cmd.ErrOrStderr(), hidden, err); err != nil {
 		return err
 	}
 	for _, result := range results {
@@ -1168,49 +1179,170 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	return nil
 }
 
-func writeLocalSessions(output io.Writer, now time.Time, sessions []protocol.SessionInfo) error {
-	if len(sessions) == 0 {
-		_, err := fmt.Fprintln(output, "no sessions on this host")
+// withoutThisHost drops this machine from the fan-out when it has adopted
+// itself, which listed every local session twice: once from disk and once
+// over the tailnet. Its local rows then carry the alias the user chose.
+func withoutThisHost(stateDir string, hosts []HostRecord) ([]HostRecord, string) {
+	self, _, err := identity.LoadOrCreate(stateDir)
+	if err != nil {
+		return hosts, localHostAlias
+	}
+	alias := localHostAlias
+	remote := make([]HostRecord, 0, len(hosts))
+	for _, host := range hosts {
+		if host.ID == self.ID {
+			alias = host.Alias
+			continue
+		}
+		remote = append(remote, host)
+	}
+	return remote, alias
+}
+
+func reportHiddenSessions(output io.Writer, hidden int, err error) error {
+	if err != nil || hidden == 0 {
 		return err
 	}
-	table := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "ID\tSTATE\tAGE\tIDLE\tMEM\tSTARTED IN\tCOMMAND"); err != nil {
+	noun := "sessions"
+	if hidden == 1 {
+		noun = "session"
+	}
+	_, err = fmt.Fprintf(output, "%d ended %s hidden; mesh ls --all lists them\n", hidden, noun)
+	return err
+}
+
+func outputWidth(output io.Writer) int {
+	file, ok := output.(*os.File)
+	if !ok || !term.IsTerminal(file.Fd()) {
+		return 0
+	}
+	width, _, err := term.GetSize(file.Fd())
+	if err != nil {
+		return 0
+	}
+	return width
+}
+
+// listView is what a human `mesh ls` shows. Scripts and the SSH front door use
+// the zero-width, everything view, so their parsing never changes.
+type listView struct {
+	all   bool
+	width int
+}
+
+var fullListView = listView{all: true}
+
+func (v listView) shows(row protocol.SessionInfo) bool {
+	if v.all {
+		return true
+	}
+	switch displayState(row) {
+	case worker.StateRunning, worker.StateDetached, stateHibernated:
+		return true
+	}
+	return false
+}
+
+// writeTable cuts each rendered line to the terminal. COMMAND is the last
+// column, so a long command loses its tail instead of widening every row.
+func (v listView) writeTable(output io.Writer, render func(io.Writer) error) error {
+	var buffer bytes.Buffer
+	table := tabwriter.NewWriter(&buffer, 0, 0, 2, ' ', 0)
+	if err := render(table); err != nil {
 		return err
 	}
-	for _, current := range sessions {
-		if _, err := fmt.Fprintf(
-			table,
-			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			current.ID,
-			displayState(current),
-			ageAt(now, current.CreatedAt),
-			sessionIdle(now, current),
-			sessionMemory(current),
-			sessionLaunchDirectory(current.Cwd),
-			SafeTerminalText(strings.Join(current.Command, " ")),
-		); err != nil {
+	if err := table.Flush(); err != nil {
+		return err
+	}
+	for line := range strings.SplitSeq(strings.TrimSuffix(buffer.String(), "\n"), "\n") {
+		if v.width > 0 {
+			line = ansi.Truncate(line, v.width, "…")
+		}
+		if _, err := fmt.Fprintln(output, strings.TrimRight(line, " ")); err != nil {
 			return err
 		}
 	}
-	return table.Flush()
+	return nil
+}
+
+func writeLocalSessions(output io.Writer, now time.Time, sessions []protocol.SessionInfo) error {
+	_, err := writeLocalSessionList(output, now, sessions, fullListView)
+	return err
+}
+
+func writeLocalSessionList(output io.Writer, now time.Time, sessions []protocol.SessionInfo, view listView) (int, error) {
+	shown := slices.DeleteFunc(slices.Clone(sessions), func(row protocol.SessionInfo) bool { return !view.shows(row) })
+	hidden := len(sessions) - len(shown)
+	if len(shown) == 0 {
+		_, err := fmt.Fprintln(output, "no live sessions on this host")
+		return hidden, err
+	}
+	return hidden, view.writeTable(output, func(table io.Writer) error {
+		if _, err := fmt.Fprintln(table, "ID\tSTATE\tAGE\tIDLE\tMEM\tSTARTED IN\tCOMMAND"); err != nil {
+			return err
+		}
+		for _, current := range shown {
+			if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				current.ID, displayState(current), ageAt(now, current.CreatedAt), sessionIdle(now, current),
+				sessionMemory(current), sessionLaunchDirectory(current.Cwd), SafeTerminalText(strings.Join(current.Command, " "))); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func writeProtocolSessions(output io.Writer, now time.Time, hosts []HostSessions) error {
-	type row struct {
-		host    string
-		session protocol.SessionInfo
-		stale   bool
-	}
-	var rows []row
+	_, err := writeSessionList(output, now, hosts, fullListView)
+	return err
+}
+
+type listRow struct {
+	host    string
+	session protocol.SessionInfo
+	stale   bool
+}
+
+func writeSessionList(output io.Writer, now time.Time, hosts []HostSessions, view listView) (int, error) {
+	var rows []listRow
+	hidden, columns := 0, listColumns{}
 	for _, result := range hosts {
 		for _, current := range result.Sessions {
-			rows = append(rows, row{host: result.Host.Alias, session: current, stale: result.Stale})
+			if !view.shows(current) {
+				hidden++
+				continue
+			}
+			rows = append(rows, listRow{host: result.Host.Alias, session: current, stale: result.Stale})
+			columns.cache = columns.cache || result.Stale
+			columns.title = columns.title || sessionTitle(current) != ""
 		}
 	}
 	if len(rows) == 0 {
-		_, err := fmt.Fprintln(output, "no sessions on known hosts")
-		return err
+		_, err := fmt.Fprintln(output, "no live sessions on known hosts")
+		return hidden, err
 	}
+	sortListRows(rows)
+	return hidden, view.writeTable(output, func(table io.Writer) error {
+		header := "HOST\tID\tSTATE\tAGE\tIDLE\tMEM\tSTARTED IN\t"
+		if columns.cache {
+			header += "CACHE\t"
+		}
+		if columns.title {
+			header += "TITLE\t"
+		}
+		if _, err := fmt.Fprintln(table, header+"COMMAND"); err != nil {
+			return err
+		}
+		for _, current := range rows {
+			if err := writeListRow(table, now, current, columns); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func sortListRows(rows []listRow) {
 	sort.Slice(rows, func(i, j int) bool {
 		if left, right := rows[i].session.LastActiveAt(), rows[j].session.LastActiveAt(); !left.Equal(right) {
 			return left.After(right)
@@ -1220,32 +1352,39 @@ func writeProtocolSessions(output io.Writer, now time.Time, hosts []HostSessions
 		}
 		return rows[i].session.ID < rows[j].session.ID
 	})
-	table := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "HOST\tID\tSTATE\tAGE\tIDLE\tMEM\tSTARTED IN\tCOMMAND\tCACHE"); err != nil {
-		return err
-	}
-	for _, current := range rows {
+}
+
+// listColumns are the optional columns, shown only when a row fills them.
+type listColumns struct {
+	cache bool
+	title bool
+}
+
+func writeListRow(table io.Writer, now time.Time, current listRow, columns listColumns) error {
+	cells := []string{current.host, current.session.ID, displayState(current.session), ageAt(now, current.session.CreatedAt),
+		sessionIdle(now, current.session), sessionMemory(current.session), sessionLaunchDirectory(current.session.Cwd)}
+	if columns.cache {
 		cache := "-"
 		if current.stale {
 			cache = "stale"
 		}
-		if _, err := fmt.Fprintf(
-			table,
-			"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			current.host,
-			current.session.ID,
-			displayState(current.session),
-			ageAt(now, current.session.CreatedAt),
-			sessionIdle(now, current.session),
-			sessionMemory(current.session),
-			sessionLaunchDirectory(current.session.Cwd),
-			SafeTerminalText(strings.Join(current.session.Command, " ")),
-			cache,
-		); err != nil {
-			return err
-		}
+		cells = append(cells, cache)
 	}
-	return table.Flush()
+	if columns.title {
+		cells = append(cells, cmp.Or(sessionTitle(current.session), "-"))
+	}
+	cells = append(cells, SafeTerminalText(strings.Join(current.session.Command, " ")))
+	_, err := fmt.Fprintln(table, strings.Join(cells, "\t"))
+	return err
+}
+
+// sessionTitle is the terminal title the command last set, such as an agent
+// naming its task, which tells apart sessions that all run the same command.
+func sessionTitle(row protocol.SessionInfo) string {
+	if row.Recovery == nil {
+		return ""
+	}
+	return SafeTerminalText(strings.TrimSpace(row.Recovery.Title))
 }
 
 func sessionLaunchDirectory(cwd string) string {

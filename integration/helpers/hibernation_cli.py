@@ -101,7 +101,7 @@ def run_checks(fixture):
     terminal.expect(b"AGENT_READY_sleepy")
     resumed = [json.loads(path.read_text()) for path in fixture.root.glob("launch-*.json")]
     require(any(entry["id"] == "sleepy" and "--resume=sleepy" in entry["argv"] for entry in resumed), f"wake did not resume the conversation: {resumed}")
-    listing = cli(fixture, on_host, "ls").stdout
+    listing = cli(fixture, on_host, "ls", "--all").stdout
     require(listing_row(listing, agent)[1] == "exited", f"a woken session still reads as hibernated:\n{listing}")
 
     idle_agent = create(fixture, "idle-agent")

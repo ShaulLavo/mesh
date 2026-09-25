@@ -1440,7 +1440,7 @@ func TestLocalSessionsStayReachableAfterAdoptingAHost(t *testing.T) {
 			return nil, errors.New("host is offline")
 		},
 		Now: func() time.Time { return commandTestTime.Add(time.Minute) },
-	}, "ls", "--timeout", "20ms")
+	}, "ls", "--all", "--timeout", "20ms")
 	if err != nil {
 		t.Fatalf("ls returned an error: %v", err)
 	}

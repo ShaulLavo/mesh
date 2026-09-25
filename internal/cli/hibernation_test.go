@@ -106,7 +106,7 @@ func TestProtocolSessionTableShowsHibernationIdleAndMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
-	if len(lines) != 3 || strings.Join(strings.Fields(lines[0]), " ") != "HOST ID STATE AGE IDLE MEM STARTED IN COMMAND CACHE" {
+	if len(lines) != 3 || strings.Join(strings.Fields(lines[0]), " ") != "HOST ID STATE AGE IDLE MEM STARTED IN COMMAND" {
 		t.Fatalf("session table =\n%s", &output)
 	}
 	if fields := strings.Fields(lines[1]); strings.Join(fields[:6], " ") != "pc 7K3D detached 1h 1h 412M" {

@@ -127,7 +127,7 @@ done
 [ "$(database_state)" = interrupted ] || fail "old-boot session was not recorded as interrupted"
 kill -0 "$WORKER_PID" 2>/dev/null || fail "boot mismatch test worker died before classification"
 kill -0 "$SESSION_PID" 2>/dev/null || fail "boot mismatch test session died before classification"
-"$MESH" ls --daemon | grep -q "$SID.*interrupted" || fail "daemon did not report $SID as interrupted"
+"$MESH" ls --daemon --all | grep -q "$SID.*interrupted" || fail "daemon did not report $SID as interrupted"
 if timeout --kill-after=1s 3s "$MESH" attach --daemon "$SID" </dev/null >"$T/resurrect.out" 2>&1; then
   fail "daemon attached to interrupted session $SID"
 fi
