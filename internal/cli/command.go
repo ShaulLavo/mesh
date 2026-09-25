@@ -1651,6 +1651,7 @@ func (a *application) workerCommand() *cobra.Command {
 			}
 			// Before the emulator and ring allocate.
 			worker.TuneProcess()
+			worker.IsolateSession(id)
 			cwd, _ := os.Getwd()
 			code, err := worker.Run(worker.Config{
 				ID: id, Dir: dir, Command: command, Cwd: cwd, Env: os.Environ(),
