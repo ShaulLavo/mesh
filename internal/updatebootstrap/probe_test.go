@@ -1,6 +1,9 @@
 package updatebootstrap
 
 import (
+	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -71,5 +74,26 @@ func TestWorkerProbeAcceptsModernInspectionAndExactLegacyAcknowledgement(t *test
 				t.Fatalf("validWorkerProbe() = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestWorkerProbeSkipsKilledWorker(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "7K3D")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.WriteMeta(dir, worker.Meta{ID: "7K3D", State: worker.StateRunning, BootID: worker.BootID()}); err != nil {
+		t.Fatal(err)
+	}
+	// A socket file with no listener is what SIGKILL leaves behind.
+	listener, err := net.Listen("unix", filepath.Join(dir, "sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener.(*net.UnixListener).SetUnlinkOnClose(false)
+	_ = listener.Close()
+	current, err := inspectWorker(t.Context(), dir, 1)
+	if err != nil || current != nil {
+		t.Fatalf("inspectWorker = %+v, %v; want nothing to preserve", current, err)
 	}
 }

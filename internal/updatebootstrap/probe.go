@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/shaul/mesh/internal/paths"
@@ -220,6 +221,11 @@ func inspectWorker(ctx context.Context, dir string, stateVersion int) (*updatein
 		return nil, nil
 	}
 	conn, err := dial(ctx, filepath.Join(dir, "sock"))
+	// A killed worker (SIGKILL, systemd-oomd) never records its end, so its
+	// metadata still says running. Nothing listening means nothing to preserve.
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("verify session %s: %w", meta.ID, err)
 	}
