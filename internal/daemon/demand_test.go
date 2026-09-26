@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -370,18 +369,19 @@ func listenerAddress(t *testing.T, manager *demandManager, port uint16) string {
 
 func TestDemandListenerProxiesAndCountsConnections(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		_, _ = fmt.Fprintf(w, "upstream saw %s", request.URL.Path)
+		if request.URL.Path == "/page" {
+			_, _ = io.WriteString(w, "upstream saw /page")
+		}
 	}))
 	defer upstream.Close()
-	_, upstreamPort, _ := net.SplitHostPort(upstream.Listener.Addr().String())
-	port, _ := strconv.Atoi(upstreamPort)
+	port := uint16(upstream.Listener.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
 
 	sessions := newFakeDemandSessions()
 	manager := testDemandManager(t, sessions, func() bool { return true })
 	plain := meshserve.Service{Name: "4000", Kind: meshserve.Proxy, Target: "4000", LocalOnly: true,
-		Listens: []meshserve.Listen{{Public: 4000, Upstream: uint16(port)}}}
+		Listens: []meshserve.Listen{{Public: 4000, Upstream: port}}}
 	onDemand := demandService(time.Minute)
-	onDemand.Listens = []meshserve.Listen{{Public: 5173, Upstream: uint16(port)}}
+	onDemand.Listens = []meshserve.Listen{{Public: 5173, Upstream: port}}
 	manager.Sync([]meshserve.Service{plain, onDemand})
 
 	for _, public := range []uint16{4000, 5173} {
@@ -397,6 +397,7 @@ func TestDemandListenerProxiesAndCountsConnections(t *testing.T) {
 			t.Fatal(err)
 		}
 		body, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
 		if string(body) != "upstream saw /page" {
 			t.Fatalf("listener %d answered %q", public, body)
 		}

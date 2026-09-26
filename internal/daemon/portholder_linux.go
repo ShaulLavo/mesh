@@ -49,7 +49,7 @@ func listeningInodes(port uint16) map[string]struct{} {
 	inodes := make(map[string]struct{})
 	wanted := fmt.Sprintf(":%04X", port)
 	for _, table := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
-		file, err := os.Open(table)
+		file, err := os.Open(table) //nolint:gosec // one of two fixed kernel tables
 		if err != nil {
 			continue
 		}
