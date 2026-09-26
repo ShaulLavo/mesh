@@ -131,6 +131,8 @@ waits up to 90 seconds for the target and a fresh service publication.
 - `T12-private-names.md` — DNS and TLS for `mesh.shaulavo.dev`, per-host routing
 - `T13-public-edge.md` — VPS edge mode, public routes on `shaulavo.dev`
 - `T14-serve-cli.md` — `m serve`, `m unserve`, `m serve ls`
+- `T28-serve-on-demand.md` — a proxy route that starts its command on the first
+  connection and stops it when idle (proposed)
 
 ## Explicitly not in step 8
 
