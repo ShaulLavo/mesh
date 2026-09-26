@@ -55,6 +55,9 @@ func (r ServiceCatalogRow) Health() string {
 	if !r.Live {
 		return "offline/stale"
 	}
+	if state, ok := r.demandHealth(); ok {
+		return state
+	}
 	if !r.Service.Healthy {
 		return "unhealthy"
 	}

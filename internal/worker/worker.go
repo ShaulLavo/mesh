@@ -94,6 +94,7 @@ type Config struct {
 	Rows               int
 	AwaitInitialAttach bool
 	RecoveredFrom      string
+	Label              string
 }
 
 // Worker owns one PTY and serves clients over a Unix socket.
@@ -517,6 +518,7 @@ func Run(cfg Config) (int, error) {
 		CreatedAt:     time.Now(),
 		BootID:        BootID(),
 		RecoveredFrom: cfg.RecoveredFrom,
+		Label:         cfg.Label,
 	}
 	if err := WriteMeta(cfg.Dir, meta); err != nil {
 		return 0, err

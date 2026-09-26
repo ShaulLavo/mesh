@@ -54,6 +54,14 @@ func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer,
 	if err := validatePreviewInference(service, preview.Service); err != nil {
 		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned an invalid service preview: %w", host.Alias, err)
 	}
+	if !sameDemandDefinition(service, preview.Service) {
+		if (service.Run != nil || len(service.Listens) > 0) && preview.Service.Run == nil && len(preview.Service.Listens) == 0 {
+			// An older daemon drops fields it does not know and would
+			// otherwise serve a plain proxy to a port nothing listens on.
+			return protocol.ServicePreview{}, "", fmt.Errorf("host %s does not support --run or --listen; update Mesh there first", host.Alias)
+		}
+		return protocol.ServicePreview{}, "", fmt.Errorf("host %s changed the listeners or launch recipe in its preview", host.Alias)
+	}
 	return preview, privateName, nil
 }
 
@@ -217,15 +225,16 @@ func remoteServiceRequest(ctx context.Context, host HostRecord, dial HostDialer,
 }
 
 func validateRemoteService(info protocol.ServiceInfo) (protocol.ServiceInfo, error) {
-	service, err := meshserve.Normalize(meshserve.Service{
-		Name: info.Name, Kind: meshserve.Kind(info.Kind), Target: info.Target,
-		PublicName: info.PublicName, WakeOnRequest: info.WakeOnRequest, Isolate: info.Isolate,
-	})
+	received := protocol.ServiceFromInfo(info)
+	service, err := meshserve.Normalize(received)
 	if err != nil {
 		return protocol.ServiceInfo{}, errors.New("service definition is invalid")
 	}
-	if service.Name != info.Name || string(service.Kind) != info.Kind || service.Target != info.Target || service.PublicName != info.PublicName {
+	if !service.Equal(received) {
 		return protocol.ServiceInfo{}, errors.New("service definition is not canonical")
+	}
+	if err := validateServiceDemand(info.Demand); err != nil {
+		return protocol.ServiceInfo{}, err
 	}
 	if len(info.Problem) > meshserve.MaximumServiceProblemBytes || info.Healthy && info.Problem != "" || !utf8.ValidString(info.Problem) {
 		return protocol.ServiceInfo{}, errors.New("service health is invalid")
@@ -234,9 +243,7 @@ func validateRemoteService(info protocol.ServiceInfo) (protocol.ServiceInfo, err
 }
 
 func sameServiceDefinition(left, right protocol.ServiceInfo) bool {
-	return left.Name == right.Name && left.Kind == right.Kind && left.Target == right.Target &&
-		left.PublicName == right.PublicName && left.WakeOnRequest == right.WakeOnRequest &&
-		left.Isolate == right.Isolate
+	return protocol.ServiceFromInfo(left).Equal(protocol.ServiceFromInfo(right))
 }
 
 func validatePreviewInference(requested, preview protocol.ServiceInfo) error {

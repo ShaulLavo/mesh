@@ -59,6 +59,9 @@ type Service struct {
 	PublicName    string
 	WakeOnRequest int64
 	Isolate       int64
+	Listens       string
+	Demand        string
+	LocalOnly     int64
 }
 
 type Session struct {
@@ -71,4 +74,26 @@ type Session struct {
 	LastAttachedAt     *int64
 	ExitCode           *int64
 	LastOutputSequence int64
+}
+
+type TunnelClaim struct {
+	PublicName string
+	ClaimantID string
+}
+
+type TunnelHighwater struct {
+	ClaimantID string
+	Sequence   int64
+	Digest     string
+}
+
+type TunnelOutbox struct {
+	TargetID   string
+	ClaimantID string
+	Sequence   int64
+	Action     *string
+	PublicName *string
+	Canonical  []byte
+	Digest     *string
+	Signature  []byte
 }

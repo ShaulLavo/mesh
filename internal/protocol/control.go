@@ -41,6 +41,8 @@ const (
 	TypeServiceUpsert      = "service.upsert"
 	TypeServiceList        = "service.list"
 	TypeServiceDelete      = "service.delete"
+	TypeServiceStart       = "service.start"
+	TypeServiceStop        = "service.stop"
 	TypeCertificateInstall = "certificate.install"
 	TypeEdgeRegister       = "edge.register"
 	TypeEdgeRegistered     = "edge.registered"
@@ -116,6 +118,9 @@ type SessionInfo struct {
 	// MemoryBytes is the proportional memory of the session's process tree,
 	// zero when the host cannot measure it.
 	MemoryBytes uint64 `json:"memoryBytes,omitempty"`
+	// Label says what the daemon started the session for, such as "serve
+	// /dev"; empty for a session someone asked for.
+	Label string `json:"label,omitempty"`
 }
 
 // LastActiveAt includes durable output and checkpoint changes as well as use.
@@ -158,6 +163,49 @@ type ServiceInfo struct {
 	Isolate       bool   `json:"isolate,omitempty"`
 	Healthy       bool   `json:"healthy"`
 	Problem       string `json:"problem,omitempty"`
+
+	Listens   []ServiceListen `json:"listens,omitempty"`
+	Run       *ServiceRun     `json:"run,omitempty"`
+	LocalOnly bool            `json:"localOnly,omitempty"`
+	// Demand is the live state of an on-demand route. Like Healthy, the
+	// daemon ignores it in client definitions.
+	Demand *ServiceDemand `json:"demand,omitempty"`
+}
+
+// ServiceListen binds 127.0.0.1:Public on the origin and proxies it to
+// 127.0.0.1:Upstream.
+type ServiceListen struct {
+	Public   int `json:"public"`
+	Upstream int `json:"upstream"`
+}
+
+// ServiceRun is the launch recipe that makes a proxy route on-demand.
+type ServiceRun struct {
+	Command            string   `json:"command"`
+	Cwd                string   `json:"cwd"`
+	Env                []string `json:"env,omitempty"`
+	IdleMillis         int64    `json:"idleMs,omitempty"`
+	ReadyTimeoutMillis int64    `json:"readyTimeoutMs,omitempty"`
+}
+
+// On-demand route states.
+const (
+	DemandStopped  = "stopped"
+	DemandStarting = "starting"
+	DemandRunning  = "running"
+	DemandStopping = "stopping"
+	DemandFailed   = "failed"
+)
+
+// ServiceDemand is what an on-demand route is doing now.
+type ServiceDemand struct {
+	State       string `json:"state"`
+	Connections int    `json:"connections,omitempty"`
+	SessionID   string `json:"sessionId,omitempty"`
+	// Failure says why the last start failed, or why the session ended.
+	Failure string `json:"failure,omitempty"`
+	// Unbound lists listener ports the daemon could not bind, with why.
+	Unbound []string `json:"unbound,omitempty"`
 }
 
 // ServicePreview is the origin-authoritative interpretation of a requested

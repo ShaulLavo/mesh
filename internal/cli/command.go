@@ -1277,14 +1277,23 @@ func writeLocalSessionList(output io.Writer, now time.Time, sessions []protocol.
 		_, err := fmt.Fprintln(output, "no live sessions on this host")
 		return hidden, err
 	}
+	labelled := slices.ContainsFunc(shown, func(row protocol.SessionInfo) bool { return row.Label != "" })
 	return hidden, view.writeTable(output, func(table io.Writer) error {
-		if _, err := fmt.Fprintln(table, "ID\tSTATE\tAGE\tIDLE\tMEM\tSTARTED IN\tCOMMAND"); err != nil {
+		header := "ID\tSTATE\tAGE\tIDLE\tMEM\tSTARTED IN\t"
+		if labelled {
+			header += "TITLE\t"
+		}
+		if _, err := fmt.Fprintln(table, header+"COMMAND"); err != nil {
 			return err
 		}
 		for _, current := range shown {
-			if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				current.ID, displayState(current), ageAt(now, current.CreatedAt), sessionIdle(now, current),
-				sessionMemory(current), sessionLaunchDirectory(current.Cwd), SafeTerminalText(strings.Join(current.Command, " "))); err != nil {
+			cells := []string{current.ID, displayState(current), ageAt(now, current.CreatedAt), sessionIdle(now, current),
+				sessionMemory(current), sessionLaunchDirectory(current.Cwd)}
+			if labelled {
+				cells = append(cells, cmp.Or(sessionTitle(current), "-"))
+			}
+			cells = append(cells, SafeTerminalText(strings.Join(current.Command, " ")))
+			if _, err := fmt.Fprintln(table, strings.Join(cells, "\t")); err != nil {
 				return err
 			}
 		}
@@ -1380,7 +1389,12 @@ func writeListRow(table io.Writer, now time.Time, current listRow, columns listC
 
 // sessionTitle is the terminal title the command last set, such as an agent
 // naming its task, which tells apart sessions that all run the same command.
+// A session the daemon started for a route shows the route instead: that is
+// the one thing its title cannot say.
 func sessionTitle(row protocol.SessionInfo) string {
+	if row.Label != "" {
+		return SafeTerminalText(row.Label)
+	}
 	if row.Recovery == nil {
 		return ""
 	}
@@ -1785,7 +1799,7 @@ func (a *application) daemonCommand() *cobra.Command {
 }
 
 func (a *application) workerCommand() *cobra.Command {
-	var recoveredFrom string
+	var recoveredFrom, label string
 	var (
 		id   string
 		dir  string
@@ -1806,7 +1820,11 @@ func (a *application) workerCommand() *cobra.Command {
 			cwd, _ := os.Getwd()
 			code, err := worker.Run(worker.Config{
 				ID: id, Dir: dir, Command: command, Cwd: cwd, Env: os.Environ(),
-				Cols: cols, Rows: rows, AwaitInitialAttach: true, RecoveredFrom: recoveredFrom,
+				// A labelled session was started by the daemon for a purpose,
+				// not for someone about to attach, so nobody is coming to see
+				// its exit and holding it would only delay the report.
+				Cols: cols, Rows: rows, AwaitInitialAttach: label == "", RecoveredFrom: recoveredFrom,
+				Label: label,
 			})
 			if err != nil {
 				return err
@@ -1818,6 +1836,7 @@ func (a *application) workerCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&recoveredFrom, "recovered-from", "", "previous recovery attempt")
+	command.Flags().StringVar(&label, "label", "", "why the daemon started this session")
 	command.Flags().StringVar(&id, "id", "", "session ID")
 	command.Flags().StringVar(&dir, "dir", "", "session state directory")
 	command.Flags().IntVar(&cols, "cols", 80, "initial terminal width")

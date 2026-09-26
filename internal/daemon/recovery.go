@@ -81,6 +81,7 @@ func (l *lifecycle) addRecoveryInfo(info *protocol.SessionInfo) {
 	meta, metaErr := worker.ReadMeta(dir)
 	if metaErr == nil {
 		info.RecoveredFrom = meta.RecoveredFrom
+		info.Label = meta.Label
 	}
 	var err error
 	info.ReplacementID, err = recovery.ReplacementID(dir, string(l.host.ID), info.ID)

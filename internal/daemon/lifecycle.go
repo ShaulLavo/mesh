@@ -77,10 +77,15 @@ type creationRequest struct {
 	rows    int
 	term    string
 	depth   int
+	// label and env are set only by the daemon itself, for sessions it
+	// starts on a route's behalf; a client request never carries them.
+	label string
+	env   []string
 }
 
 func (r creationRequest) equal(other creationRequest) bool {
-	return slices.Equal(r.command, other.command) && r.cwd == other.cwd && r.cols == other.cols && r.rows == other.rows
+	return slices.Equal(r.command, other.command) && r.cwd == other.cwd && r.cols == other.cols && r.rows == other.rows &&
+		r.label == other.label && slices.Equal(r.env, other.env)
 }
 
 type creation struct {
@@ -243,33 +248,54 @@ func (l *lifecycle) create(ctx context.Context, request protocol.Control) (proto
 	if err := ctx.Err(); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
-	created, owner, err := l.creation(request)
+	return l.createSession(ctx, request.Type, request.RequestID, creationRequest{
+		command: append([]string(nil), request.Command...),
+		cwd:     request.Cwd,
+		cols:    request.Cols,
+		rows:    request.Rows,
+		term:    request.Term,
+		depth:   request.Depth,
+	})
+}
+
+func (l *lifecycle) createSession(ctx context.Context, requestType, requestID string, wanted creationRequest) (protocol.Control, error) {
+	created, owner, err := l.creation(requestID, wanted)
 	if err != nil {
 		return protocol.Control{}, err
 	}
 	if owner {
+		env := append([]string(nil), l.env...)
+		if len(created.request.env) > 0 {
+			if env == nil {
+				env = os.Environ()
+			}
+			// Later entries win when the worker starts the command, so the
+			// recipe overrides the daemon's own value of the same name.
+			env = append(env, created.request.env...)
+		}
 		created.launched, created.launchErr = l.launch(worker.LaunchConfig{
 			SessionsDir: l.sessionsDir,
 			HostID:      string(l.host.ID),
 			Executable:  l.executable,
 			Command:     append([]string(nil), created.request.command...),
 			Cwd:         created.request.cwd,
-			Env:         append([]string(nil), l.env...),
+			Env:         env,
 			Cols:        created.request.cols,
 			Rows:        created.request.rows,
 			Term:        created.request.term,
 			Depth:       created.request.depth,
+			Label:       created.request.label,
 		})
 		close(created.done)
 	} else {
 		select {
 		case <-created.done:
 		case <-ctx.Done():
-			return protocol.Control{}, fmt.Errorf("daemon: wait for %s request %s: %w", request.Type, request.RequestID, ctx.Err())
+			return protocol.Control{}, fmt.Errorf("daemon: wait for %s request %s: %w", requestType, requestID, ctx.Err())
 		}
 	}
 	if created.launchErr != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, created.launchErr)
+		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", requestType, created.launchErr)
 	}
 	parsedID, err := session.ParseID(created.launched.Meta.ID)
 	if err != nil || parsedID != created.launched.Meta.ID {
@@ -298,25 +324,17 @@ func (l *lifecycle) create(ctx context.Context, request protocol.Control) (proto
 	}
 	return protocol.Control{
 		Type:      protocol.TypeCreated,
-		RequestID: request.RequestID,
+		RequestID: requestID,
 		SessionID: created.launched.Meta.ID,
 	}, nil
 }
 
-func (l *lifecycle) creation(request protocol.Control) (*creation, bool, error) {
-	wanted := creationRequest{
-		command: append([]string(nil), request.Command...),
-		cwd:     request.Cwd,
-		cols:    request.Cols,
-		rows:    request.Rows,
-		term:    request.Term,
-		depth:   request.Depth,
-	}
+func (l *lifecycle) creation(requestID string, wanted creationRequest) (*creation, bool, error) {
 	l.creationsMu.Lock()
 	defer l.creationsMu.Unlock()
-	if existing := l.creations[request.RequestID]; existing != nil {
+	if existing := l.creations[requestID]; existing != nil {
 		if !existing.request.equal(wanted) {
-			return nil, false, fmt.Errorf("daemon: request ID %q was already used for a different session creation", request.RequestID)
+			return nil, false, fmt.Errorf("daemon: request ID %q was already used for a different session creation", requestID)
 		}
 		return existing, false, nil
 	}
@@ -326,7 +344,7 @@ func (l *lifecycle) creation(request protocol.Control) (*creation, bool, error) 
 		publishGate: make(chan struct{}, 1),
 	}
 	created.publishGate <- struct{}{}
-	l.creations[request.RequestID] = created
+	l.creations[requestID] = created
 	return created, true, nil
 }
 

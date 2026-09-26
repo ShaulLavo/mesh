@@ -36,7 +36,37 @@ func (disabledServicePublisher) ListPage(context.Context, string, int) ([]protoc
 	return nil, "", errors.New("daemon: public edge is not configured")
 }
 
+// demandRuntime runs listeners and on-demand routes for the controller.
+type demandRuntime interface {
+	Reserve(meshserve.Service) error
+	Sync([]meshserve.Service)
+	Status(string) *protocol.ServiceDemand
+	Start(context.Context, string) error
+	Stop(context.Context, string) error
+}
+
+type disabledDemand struct{}
+
+func (disabledDemand) Reserve(service meshserve.Service) error {
+	if service.Demand != nil || len(service.Listens) > 0 {
+		return errors.New("daemon: this daemon does not run listeners or on-demand routes")
+	}
+	return nil
+}
+func (disabledDemand) Sync([]meshserve.Service)              {}
+func (disabledDemand) Status(string) *protocol.ServiceDemand { return nil }
+func (disabledDemand) Start(context.Context, string) error {
+	return errors.New("daemon: on-demand routes are not available")
+}
+func (disabledDemand) Stop(context.Context, string) error {
+	return errors.New("daemon: on-demand routes are not available")
+}
+
 const (
+	// serviceStartTimeout bounds service.start past the route's own ready
+	// timeout, which ends the wait first.
+	serviceStartTimeout = 2 * time.Hour
+
 	publicServiceHeartbeatInterval = time.Minute
 	publicServiceRollbackTimeout   = 20 * time.Second
 )
@@ -50,6 +80,7 @@ type serviceController struct {
 	store          serviceStore
 	registry       *meshserve.Registry
 	publisher      servicePublisher
+	demand         demandRuntime
 	gate           chan struct{}
 	unsynced       bool
 	catalogUnknown bool
@@ -78,7 +109,7 @@ func newServiceController(ctx context.Context, home string, store serviceStore, 
 			}
 		}
 	}
-	return &serviceController{lifetime: ctx, home: home, store: store, registry: registry, publisher: publisher, gate: make(chan struct{}, 1)}, nil
+	return &serviceController{lifetime: ctx, home: home, store: store, registry: registry, publisher: publisher, demand: disabledDemand{}, gate: make(chan struct{}, 1)}, nil
 }
 
 func (c *serviceController) HandleControl(ctx context.Context, request protocol.Control) (protocol.Control, bool, error) {
@@ -106,6 +137,12 @@ func (c *serviceController) HandleControl(ctx context.Context, request protocol.
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
 		}
 		response, err := c.delete(ctx, request)
+		return response, true, err
+	case protocol.TypeServiceStart, protocol.TypeServiceStop:
+		if ctx == nil {
+			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
+		}
+		response, err := c.startOrStop(ctx, request)
 		return response, true, err
 	case protocol.TypeEdgeList:
 		if !c.publisher.Enabled() {
@@ -156,10 +193,7 @@ func (c *serviceController) upsert(ctx context.Context, request protocol.Control
 	}
 	// The health probe runs after the gate is released: a proxy dial may take
 	// its full timeout, and no other mutation should queue behind it.
-	status := meshserve.CheckService(ctx, persisted)
-	info := serviceDefinitionInfo(persisted)
-	info.Healthy = status.Healthy
-	info.Problem = boundedServiceProblem(status.Problem)
+	info := c.serviceStatuses(ctx, []meshserve.Service{persisted})[0]
 	return protocol.Control{
 		Type:      protocol.TypeServiceUpserted,
 		RequestID: request.RequestID,
@@ -167,11 +201,81 @@ func (c *serviceController) upsert(ctx context.Context, request protocol.Control
 	}, nil
 }
 
+// serviceStatuses reports definitions with live health. A route whose
+// session is not running is reported by its demand state instead of a probe:
+// a stopped on-demand route is waiting, not broken.
+func (c *serviceController) serviceStatuses(ctx context.Context, registered []meshserve.Service) []protocol.ServiceInfo {
+	infos := make([]protocol.ServiceInfo, len(registered))
+	var probe []meshserve.Service
+	var probed []int
+	for index, service := range registered {
+		infos[index] = serviceDefinitionInfo(service)
+		demand := c.demand.Status(service.Name)
+		infos[index].Demand = demand
+		if demand != nil && service.Demand != nil && demand.State != protocol.DemandRunning {
+			infos[index].Healthy = demand.State != protocol.DemandFailed
+			if !infos[index].Healthy {
+				infos[index].Problem = demand.Failure
+			}
+			continue
+		}
+		probe = append(probe, service)
+		probed = append(probed, index)
+	}
+	for position, status := range meshserve.CheckServices(ctx, probe) {
+		index := probed[position]
+		infos[index].Healthy = status.Healthy
+		infos[index].Problem = boundedServiceProblem(status.Problem)
+	}
+	for index := range infos {
+		if demand := infos[index].Demand; demand != nil && len(demand.Unbound) > 0 && infos[index].Healthy {
+			infos[index].Healthy = false
+			infos[index].Problem = boundedServiceProblem("listener unavailable: " + strings.Join(demand.Unbound, "; "))
+		}
+	}
+	return infos
+}
+
+func (c *serviceController) startOrStop(ctx context.Context, request protocol.Control) (protocol.Control, error) {
+	if err := validateRequestID(request); err != nil {
+		return protocol.Control{}, err
+	}
+	if err := meshserve.ValidateName(request.ServiceName); err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+	}
+	registered, err := c.catalog(ctx, request)
+	if err != nil {
+		return protocol.Control{}, err
+	}
+	service, found := findService(registered, request.ServiceName)
+	if !found {
+		return protocol.Control{}, fmt.Errorf("daemon: %s: no route named %s", request.Type, request.ServiceName)
+	}
+	if service.Demand == nil {
+		return protocol.Control{}, fmt.Errorf("daemon: %s: route %s has no --run command", request.Type, service.Route())
+	}
+	if request.Type == protocol.TypeServiceStart {
+		startCtx, cancel := context.WithTimeout(ctx, serviceStartTimeout)
+		err = c.demand.Start(startCtx, service.Name)
+		cancel()
+	} else {
+		err = c.demand.Stop(ctx, service.Name)
+	}
+	if err != nil {
+		return protocol.Control{}, err
+	}
+	info := c.serviceStatuses(ctx, []meshserve.Service{service})[0]
+	return protocol.Control{Type: protocol.TypeOK, RequestID: request.RequestID, ServiceName: service.Name, Service: &info}, nil
+}
+
 func (c *serviceController) commitUpsert(ctx context.Context, request protocol.Control) (meshserve.Service, error) {
 	if err := c.acquire(ctx); err != nil {
 		return meshserve.Service{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
 	defer c.release()
+	// Whatever happens below, listeners and routes end up matching what the
+	// registry holds, which is what SQLite holds.
+	defer c.syncDemand()
 	if err := c.ensureSynchronized("service upsert"); err != nil {
 		return meshserve.Service{}, err
 	}
@@ -195,6 +299,9 @@ func (c *serviceController) commitUpsert(ctx context.Context, request protocol.C
 	services := upsertService(priorServices, service)
 	if _, err := meshserve.NewRegistryWithReservedPrefix(services, c.registry.ReservedPrefix(), nil); err != nil {
 		return meshserve.Service{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+	}
+	if err := c.demand.Reserve(service); err != nil {
+		return meshserve.Service{}, fmt.Errorf("daemon: route %s: %w", service.Route(), err)
 	}
 	persisted, err := c.store.UpsertService(ctx, service)
 	if err != nil {
@@ -228,18 +335,10 @@ func (c *serviceController) list(ctx context.Context, request protocol.Control) 
 	}
 	// Probing after the gate is released keeps up to MaximumServices proxy
 	// dials from stalling every upsert and delete behind a listing.
-	statuses := meshserve.CheckServices(ctx, registered)
-	services := make([]protocol.ServiceInfo, 0, len(statuses))
-	for _, status := range statuses {
-		info := serviceDefinitionInfo(status.Service)
-		info.Healthy = status.Healthy
-		info.Problem = boundedServiceProblem(status.Problem)
-		services = append(services, info)
-	}
 	return protocol.Control{
 		Type:      protocol.TypeServiceListed,
 		RequestID: request.RequestID,
-		Services:  services,
+		Services:  c.serviceStatuses(ctx, registered),
 	}, nil
 }
 
@@ -274,6 +373,7 @@ func (c *serviceController) delete(ctx context.Context, request protocol.Control
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
 	defer c.release()
+	defer c.syncDemand()
 	if err := c.ensureSynchronized("service deletion"); err != nil {
 		return protocol.Control{}, err
 	}
@@ -393,6 +493,7 @@ func (c *serviceController) rollbackUpsert(priorServices []meshserve.Service, pr
 // reconcileDurable reloads the only authoritative service state after a
 // potentially post-commit SQLite error. The caller holds c.gate.
 func (c *serviceController) reconcileDurable(operation string) error {
+	defer c.syncDemand()
 	c.unsynced = true
 	ctx, cancel := context.WithTimeout(c.lifetime, publicServiceRollbackTimeout)
 	defer cancel()
@@ -415,6 +516,16 @@ func (c *serviceController) reconcileDurable(operation string) error {
 	}
 	c.unsynced = false
 	return nil
+}
+
+// syncDemand makes listeners and routes match the registry. A registry that
+// was cleared because the catalog could not be read says nothing about which
+// routes exist, so it must not stop their sessions.
+func (c *serviceController) syncDemand() {
+	if c.catalogUnknown {
+		return
+	}
+	c.demand.Sync(c.registry.Services())
 }
 
 func (c *serviceController) ensureSynchronized(operation string) error {
@@ -469,29 +580,15 @@ func deleteService(services []meshserve.Service, name string) []meshserve.Servic
 }
 
 func serviceFromInfo(info protocol.ServiceInfo) meshserve.Service {
-	return meshserve.Service{
-		Name:          info.Name,
-		Kind:          meshserve.Kind(info.Kind),
-		Target:        info.Target,
-		PublicName:    info.PublicName,
-		WakeOnRequest: info.WakeOnRequest,
-		Isolate:       info.Isolate,
-	}
+	return protocol.ServiceFromInfo(info)
 }
 
 func serviceDefinitionInfo(service meshserve.Service) protocol.ServiceInfo {
-	return protocol.ServiceInfo{
-		Name:          service.Name,
-		Kind:          string(service.Kind),
-		Target:        service.Target,
-		PublicName:    service.PublicName,
-		WakeOnRequest: service.WakeOnRequest,
-		Isolate:       service.Isolate,
-	}
+	return protocol.ServiceDefinitionInfo(service)
 }
 
 func sameServicePreview(actual meshserve.Preview, expected protocol.ServicePreview) bool {
-	return actual.Service == serviceFromInfo(expected.Service) && actual.FileCount == expected.FileCount
+	return actual.Service.Equal(serviceFromInfo(expected.Service)) && actual.FileCount == expected.FileCount
 }
 
 func boundedServiceProblem(problem string) string {

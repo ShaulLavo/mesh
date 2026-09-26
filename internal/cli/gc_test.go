@@ -39,6 +39,8 @@ func TestPlanGCSelectsIdleDetachedSessions(t *testing.T) {
 	attachedRecently := commandTestTime.Add(-time.Hour)
 	legacyRecent := gcRow("L1G1", worker.StateDetached, 0, 9*time.Hour, true)
 	legacyRecent.LastAttachedAt = &attachedRecently
+	served := gcRow("V1V1", worker.StateDetached, 7*time.Hour, 7*time.Hour, false)
+	served.Label = "serve /dev"
 
 	for _, test := range []struct {
 		name       string
@@ -59,6 +61,7 @@ func TestPlanGCSelectsIdleDetachedSessions(t *testing.T) {
 		{name: "idle shell with --shells", row: gcRow("S2S2", worker.StateDetached, 7*time.Hour, 7*time.Hour, false), shells: true, want: gcKill},
 		{name: "missing detach time falls back to last attach", row: legacy, want: gcHibernate, note: "detach time unknown; idle counted from last attach"},
 		{name: "missing detach time with a recent attach", row: legacyRecent},
+		{name: "served session with --shells", row: served, shells: true, want: gcLeave, note: "serve /dev"},
 		{name: "caller's own session", row: gcRow("M1M1", worker.StateDetached, 7*time.Hour, 7*time.Hour, true), shells: true, containing: true, want: gcLeave, note: "contains this terminal"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

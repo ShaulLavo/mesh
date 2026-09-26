@@ -421,6 +421,13 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
+	demand := newDemandManager(daemonCtx, lifecycle, reporter.report)
+	defer demand.Close()
+	serviceControl.demand = demand
+	serviceRegistry.SetDemandGate(demand)
+	// Bind listeners and adopt sessions a previous daemon started before any
+	// client can ask about them.
+	demand.Sync(serviceRegistry.Services())
 	server, err := newClientServer(lifecycle, connector, edgeControl, serviceControl, certificateRuntime.Controller)
 	if err != nil {
 		return err
@@ -508,6 +515,11 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	go func() {
 		defer close(reconciled)
 		reconcilePeriodically(daemonCtx, catalog, opts.reconcileInterval, reporter)
+	}()
+	demandDone := make(chan struct{})
+	go func() {
+		defer close(demandDone)
+		demand.Run(daemonCtx, demandSuperviseInterval)
 	}()
 	hibernated := make(chan struct{})
 	go func() {
@@ -613,6 +625,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	<-updatesDone
 	<-powerDone
 	<-reconciled
+	<-demandDone
 	<-hibernated
 	<-privateNamesDone
 	<-publicCertificateDone

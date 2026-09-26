@@ -107,6 +107,11 @@ The SFTP root lists the declared directory services. Proxy services are omitted;
 uploads and other writes are refused. Service changes take effect without an
 SSH restart.
 
+A proxy route can also own the command behind its port. `mesh serve pc --run
+'bun run dev' --listen 5173=15173` starts the dev server on the first connection
+to `127.0.0.1:5173` and stops it after 15 idle minutes. See
+[Serve a dev server on demand](docs/serve-on-demand.md).
+
 To reach an app on your current machine from outside the tailnet, reserve a
 hostname with `mesh serve claim vps blog.shaulavo.dev`, then connect a named
 SSH reverse forward. See [Reach a local app through the public edge](docs/reverse-tunnels.md)

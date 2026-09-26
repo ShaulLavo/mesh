@@ -23,7 +23,7 @@ func (q *Queries) DeleteService(ctx context.Context, name string) (int64, error)
 }
 
 const getService = `-- name: GetService :one
-SELECT name, kind, target, public_name, wake_on_request, isolate
+SELECT name, kind, target, public_name, wake_on_request, isolate, listens, demand, local_only
 FROM services
 WHERE name = ?
 `
@@ -38,12 +38,15 @@ func (q *Queries) GetService(ctx context.Context, name string) (Service, error) 
 		&i.PublicName,
 		&i.WakeOnRequest,
 		&i.Isolate,
+		&i.Listens,
+		&i.Demand,
+		&i.LocalOnly,
 	)
 	return i, err
 }
 
 const listServices = `-- name: ListServices :many
-SELECT name, kind, target, public_name, wake_on_request, isolate
+SELECT name, kind, target, public_name, wake_on_request, isolate, listens, demand, local_only
 FROM services
 ORDER BY name
 `
@@ -64,6 +67,9 @@ func (q *Queries) ListServices(ctx context.Context) ([]Service, error) {
 			&i.PublicName,
 			&i.WakeOnRequest,
 			&i.Isolate,
+			&i.Listens,
+			&i.Demand,
+			&i.LocalOnly,
 		); err != nil {
 			return nil, err
 		}
@@ -85,15 +91,21 @@ INSERT INTO services (
     target,
     public_name,
     wake_on_request,
-    isolate
-) VALUES (?, ?, ?, ?, ?, ?)
+    isolate,
+    listens,
+    demand,
+    local_only
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (name) DO UPDATE SET
     kind = excluded.kind,
     target = excluded.target,
     public_name = excluded.public_name,
     wake_on_request = excluded.wake_on_request,
-    isolate = excluded.isolate
-RETURNING name, kind, target, public_name, wake_on_request, isolate
+    isolate = excluded.isolate,
+    listens = excluded.listens,
+    demand = excluded.demand,
+    local_only = excluded.local_only
+RETURNING name, kind, target, public_name, wake_on_request, isolate, listens, demand, local_only
 `
 
 type UpsertServiceParams struct {
@@ -103,6 +115,9 @@ type UpsertServiceParams struct {
 	PublicName    string
 	WakeOnRequest int64
 	Isolate       int64
+	Listens       string
+	Demand        string
+	LocalOnly     int64
 }
 
 func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) (Service, error) {
@@ -113,6 +128,9 @@ func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) (S
 		arg.PublicName,
 		arg.WakeOnRequest,
 		arg.Isolate,
+		arg.Listens,
+		arg.Demand,
+		arg.LocalOnly,
 	)
 	var i Service
 	err := row.Scan(
@@ -122,6 +140,9 @@ func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) (S
 		&i.PublicName,
 		&i.WakeOnRequest,
 		&i.Isolate,
+		&i.Listens,
+		&i.Demand,
+		&i.LocalOnly,
 	)
 	return i, err
 }

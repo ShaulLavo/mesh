@@ -1,6 +1,6 @@
 # T28 — Serve a session on demand
 
-**Status:** proposed 2026-09-26, decisions made · **Prerequisites:** T11, T14, T27
+**Status:** implemented 2026-09-26 · **Prerequisites:** T11, T14, T27
 
 ## Outcome
 
@@ -101,3 +101,59 @@ binds two ports after a delay:
 - Restarting the daemon mid-run keeps the session running; clients reconnect
   through the re-bound listeners, and the idle clock starts over.
 - `--listen` on a held port is refused with the holder named.
+
+## Delivery notes
+
+See [the user guide](../serve-on-demand.md).
+
+- **Model.** `serve.Service` gains `Listens`, `Demand` (the recipe) and
+  `LocalOnly`. Migration 00008 stores them as two JSON columns and a flag, and
+  `CurrentStateVersion` moves to 8. A release-7 binary opens the migrated
+  database; it would drop the new fields from any route it rewrites.
+- **Locking.** The connection path looks routes up in a copy published after
+  each sync, never under the manager lock: closing a listener waits for its
+  accept loop, which would otherwise wait for the lock. A catalog read failure
+  that empties the registry does not sync, so it cannot stop served sessions.
+- **Daemon.** `internal/daemon/demand.go` owns the listeners and one state
+  machine per route: `stopped → starting → running → stopping`, plus `failed`.
+  The service controller reserves new listener ports before it commits a route,
+  so a held port refuses the request. After every commit it syncs listeners and
+  routes to the registry. Sessions start through the normal lifecycle with a
+  `--label` recorded in `meta.json`, which is how a restarted daemon finds
+  them. A labelled worker skips the five-second first-attach wait, so a failing
+  start is reported right away. Each successful start removes the ended
+  sessions that earlier starts of the same route left behind.
+- **Connections.** A listener counts TCP connections, so keep-alives count, and
+  it closes keep-alives after two idle minutes. The tailnet path shares the
+  daemon's listener with every other route, so there a request counts for as
+  long as it runs. An upgraded WebSocket runs until it closes.
+- **Ports.** The tailnet path forwards to the listener's upstream when TARGET is
+  a listener port, instead of looping through Mesh. Readiness waits for every
+  upstream. Linux names a port's holder from `/proc`; macOS uses `lsof`.
+- **Beyond the brief.** TARGET may be omitted when `--listen` is given. The
+  route is then local-only and named by its first listener port (`:5173`), which
+  is the form Plan 185 in fregat registers; `--at :5173` asks for the same.
+  `--listen` also works without `--run`, as a plain loopback proxy. A listener
+  port belongs to one route; the registry refuses a second.
+- **`--cwd`.** The brief defaults it to the directory `mesh serve` runs in.
+  That holds when the host is this machine. For another machine the CLI
+  requires `--cwd`, and a relative one is resolved against that host's home.
+- **Changing a route.** A new command, directory, environment or label stops
+  the running session. A new idle window or ready timeout does not.
+- **Narrower than the brief.** `--run` is refused with `--public`: a public
+  route that starts a process on request needs its own decision. A ready
+  timeout stops the session it started, so the next attempt starts clean. A
+  session that exits while serving shows `failed` for a non-zero status and
+  `stopped` otherwise.
+
+Limits: the CLI's catalog cache does not store the new fields, so an offline
+host's cached row shows a plain proxy. A route whose listener port is taken
+while the daemon is down stays reachable on its tailnet path; its health names
+the unbound port, and the daemon retries the bind every second.
+
+`integration/serve_on_demand.sh` covers every verification bullet above, plus
+`serve start`, `serve stop`, `unserve`, and a TARGET-less local-only route.
+`internal/daemon/demand_test.go` covers the state machine with a fake
+lifecycle, including concurrent waiters, a crash while serving, a changed
+recipe, and adoption.
+

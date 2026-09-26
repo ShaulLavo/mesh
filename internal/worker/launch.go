@@ -38,6 +38,7 @@ type LaunchConfig struct {
 	Rows          int
 	Term          string
 	Depth         int
+	Label         string
 }
 
 // Launched is a worker that has published its metadata and is accepting local
@@ -117,6 +118,9 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 	}
 	if cfg.RecoveredFrom != "" {
 		args = append(args, "--recovered-from", cfg.RecoveredFrom)
+	}
+	if cfg.Label != "" {
+		args = append(args, "--label", cfg.Label)
 	}
 	args = append(args, "--")
 	args = append(args, cfg.Command...)

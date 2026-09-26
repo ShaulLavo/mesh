@@ -50,6 +50,10 @@ type Meta struct {
 	// BootID ties a running session to the kernel boot that hosted it. After a
 	// reboot the PID is meaningless, so a mismatch means interrupted, not alive.
 	BootID string `json:"bootId,omitempty"`
+	// Label names what the daemon launched this session for, such as the
+	// on-demand route "serve /dev", so the daemon can find it again after a
+	// restart and a listing can say why it exists.
+	Label string `json:"label,omitempty"`
 }
 
 // WriteMeta atomically replaces the metadata file in dir.

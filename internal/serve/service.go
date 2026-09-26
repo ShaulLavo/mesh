@@ -59,6 +59,15 @@ type Service struct {
 	// Off by default because the embedder policy also blocks cross-origin
 	// subresources that do not opt in.
 	Isolate bool
+	// Listens are loopback ports the origin binds for this route. Only a
+	// proxy route has them.
+	Listens []Listen
+	// Demand makes a proxy route start its upstream on the first connection
+	// and stop it when idle. Nil for a route to something already running.
+	Demand *Demand
+	// LocalOnly routes have no tailnet path; Name is then the route's first
+	// listener port and exists only to address the route.
+	LocalOnly bool
 }
 
 // ServiceStatus reports whether the service target is available now.
@@ -74,6 +83,7 @@ type Registry struct {
 	reservedPrefix        string
 	trustForwardedHeaders func(netip.Addr) bool
 	snapshot              atomic.Pointer[registrySnapshot]
+	gate                  atomic.Pointer[DemandGate]
 }
 
 type registrySnapshot struct {
@@ -128,7 +138,7 @@ func NewRegistryWithReservedPrefix(services []Service, reservedPrefix string, tr
 
 // Replace validates and atomically publishes a complete service list.
 func (r *Registry) Replace(services []Service) error {
-	snapshot, err := buildRegistrySnapshot(services, r.reservedPrefix, r.trustForwardedHeaders)
+	snapshot, err := r.buildSnapshot(services)
 	if err != nil {
 		return err
 	}
@@ -167,7 +177,7 @@ func CheckService(ctx context.Context, service Service) ServiceStatus {
 	case Static, Files:
 		err = checkRoot(service.Target)
 	case Proxy:
-		err = checkUpstream(ctx, upstreamAddress(service.Target))
+		err = checkUpstream(ctx, upstreamAddress(service.UpstreamPort()))
 	}
 	if err != nil {
 		return ServiceStatus{Service: service, Problem: err.Error()}
@@ -224,11 +234,12 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	http.NotFound(w, request)
 }
 
-func buildRegistrySnapshot(services []Service, reservedPrefix string, trustForwardedHeaders func(netip.Addr) bool) (*registrySnapshot, error) {
+func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) {
 	if len(services) > MaximumServices {
 		return nil, fmt.Errorf("serve: service count %d exceeds %d", len(services), MaximumServices)
 	}
 	seen := make(map[string]struct{}, len(services))
+	listeners := make(map[uint16]string)
 	snapshot := &registrySnapshot{
 		services: make([]Service, 0, len(services)),
 		routes:   make([]serviceRoute, 0, len(services)),
@@ -242,15 +253,31 @@ func buildRegistrySnapshot(services []Service, reservedPrefix string, trustForwa
 			return nil, fmt.Errorf("serve: duplicate service route %q", normalized.Name)
 		}
 		seen[normalized.Name] = struct{}{}
-		prefix := "/" + normalized.Name
-		if prefixesOverlap(prefix, reservedPrefix) {
-			return nil, fmt.Errorf("serve: service route %q overlaps reserved prefix %s", normalized.Name, reservedPrefix)
+		for _, listen := range normalized.Listens {
+			if owner, taken := listeners[listen.Public]; taken {
+				return nil, fmt.Errorf("serve: routes %s and %s both listen on port %d", owner, normalized.Route(), listen.Public)
+			}
+			listeners[listen.Public] = normalized.Route()
 		}
-		handler, err := handlerForNormalizedService(normalized, prefix, trustForwardedHeaders)
+		snapshot.services = append(snapshot.services, normalized)
+		if normalized.LocalOnly {
+			continue
+		}
+		prefix := "/" + normalized.Name
+		if prefixesOverlap(prefix, r.reservedPrefix) {
+			return nil, fmt.Errorf("serve: service route %q overlaps reserved prefix %s", normalized.Name, r.reservedPrefix)
+		}
+		routed := normalized
+		if routed.Kind == Proxy {
+			routed.Target = routed.UpstreamPort()
+		}
+		handler, err := handlerForNormalizedService(routed, prefix, r.trustForwardedHeaders)
 		if err != nil {
 			return nil, err
 		}
-		snapshot.services = append(snapshot.services, normalized)
+		if normalized.Demand != nil {
+			handler = r.gatedHandler(normalized.Name, handler)
+		}
 		snapshot.routes = append(snapshot.routes, serviceRoute{prefix: prefix, handler: handler})
 	}
 	sort.Slice(snapshot.services, func(i, j int) bool {
@@ -297,7 +324,7 @@ func normalizeService(service Service) (Service, error) {
 	default:
 		return Service{}, fmt.Errorf("serve: service %q has unsupported kind %q", service.Name, service.Kind)
 	}
-	return service, nil
+	return normalizeDemand(service)
 }
 
 func validatePublicName(name string) error {

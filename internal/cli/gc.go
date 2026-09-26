@@ -216,6 +216,11 @@ func planGCRow(policy gcPolicy, result HostSessions, row protocol.SessionInfo, k
 	case slices.Contains(policy.containing, key):
 		entry.action = gcLeave
 		entry.notes = append(entry.notes, "contains this terminal")
+	case row.Label != "":
+		// The daemon started it for a route, which stops it when idle and
+		// would only start it again on the next connection.
+		entry.action = gcLeave
+		entry.notes = append(entry.notes, SafeTerminalText(row.Label))
 	case gcHibernatable(row):
 		entry.action = gcHibernate
 	case policy.shells:

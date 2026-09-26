@@ -93,7 +93,7 @@ func TestCheckServicesKeepsInputOrder(t *testing.T) {
 
 	statuses := CheckServices(t.Context(), services)
 	for index, status := range statuses {
-		if status.Service != services[index] || status.Healthy != (index%2 == 0) {
+		if !status.Service.Equal(services[index]) || status.Healthy != (index%2 == 0) {
 			t.Fatalf("status %d = %#v, want service %#v healthy=%v", index, status, services[index], index%2 == 0)
 		}
 	}

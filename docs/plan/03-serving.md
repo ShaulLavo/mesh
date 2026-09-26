@@ -132,7 +132,7 @@ waits up to 90 seconds for the target and a fresh service publication.
 - `T13-public-edge.md` — VPS edge mode, public routes on `shaulavo.dev`
 - `T14-serve-cli.md` — `m serve`, `m unserve`, `m serve ls`
 - `T28-serve-on-demand.md` — a proxy route that starts its command on the first
-  connection and stops it when idle (proposed)
+  connection and stops it when idle
 
 ## Explicitly not in step 8
 

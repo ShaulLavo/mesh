@@ -78,6 +78,10 @@ power-loss acceptance remains an operator check.
 - `internal/procmem` and hibernation in `internal/worker`, `internal/daemon`,
   `internal/cli` — per-session memory, idle agent hibernation with resume on
   attach, `mesh hibernate` and `mesh gc` (T27)
+- On-demand routes in `internal/serve`, `internal/daemon`, `internal/cli` —
+  loopback listeners, a proxy route that starts its command as a labelled
+  session on the first connection and stops it when idle, `mesh serve
+  start|stop` (T28)
 - `internal/wake`, `internal/wakeclient`, `internal/inhibit` — signed target
   permission, automatic LAN sender selection, conservative reconnect recovery,
   public-service wake, and child-process sleep inhibition (T19)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -80,6 +81,13 @@ func InspectService(ctx context.Context, home string, service Service, allowCred
 		return Preview{}, errors.New("serve: credential override applies only to public directories")
 	}
 
+	if service.Demand != nil && service.Demand.Cwd != "" && !filepath.IsAbs(service.Demand.Cwd) {
+		// A client on another machine cannot know this host's home, so a
+		// relative directory is this host's user's, as a directory TARGET is.
+		demand := *service.Demand
+		demand.Cwd = filepath.Join(home, demand.Cwd)
+		service.Demand = &demand
+	}
 	if service.Kind == Static || service.Kind == Files {
 		resolved, err := resolveDirectoryTarget(home, service.Target)
 		if err != nil {
@@ -90,6 +98,15 @@ func InspectService(ctx context.Context, home string, service Service, allowCred
 	normalized, err := normalizeService(service)
 	if err != nil {
 		return Preview{}, err
+	}
+	if normalized.Demand != nil {
+		info, err := os.Stat(normalized.Demand.Cwd)
+		if err != nil {
+			return Preview{}, fmt.Errorf("serve: service %q working directory: %w", normalized.Name, err)
+		}
+		if !info.IsDir() {
+			return Preview{}, fmt.Errorf("serve: service %q working directory %s is not a directory", normalized.Name, normalized.Demand.Cwd)
+		}
 	}
 	preview := Preview{Service: normalized}
 	if normalized.PublicName == "" || normalized.Kind == Proxy {
