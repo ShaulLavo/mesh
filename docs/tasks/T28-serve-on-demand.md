@@ -1,6 +1,6 @@
 # T28 — Serve a session on demand
 
-**Status:** proposed 2026-09-26 · **Prerequisites:** T11, T14, T27
+**Status:** proposed 2026-09-26, decisions made · **Prerequisites:** T11, T14, T27
 
 ## Outcome
 
@@ -79,14 +79,12 @@ mesh unserve /dev              # stop, release the ports, forget the route
 - **Health** keeps T14's meaning for a running route. A stopped on-demand route
   is `stopped`, not `unhealthy`.
 
-## Open questions
+## Owner decisions (2026-09-26)
 
-- **Q1 — tailnet path.** Should an on-demand route also accept its tailnet `--at`
-  path when idle, starting the process from another machine's request?
-  Recommend yes: it's the same route, and T19 already waits for a whole host.
-- **Q2 — explicit holds.** Should a session be able to hold the route without a
-  connection (`mesh serve hold /dev` for the length of a job)? Recommend not
-  in T28; connections have covered every case so far.
+- **Q1 — tailnet path.** Yes: a request to the route's tailnet `--at` path starts
+  an idle route too. It is the same route, and T19 already waits for a whole host.
+- **Q2 — explicit holds.** Not in T28: no `mesh serve hold`. Connections have
+  covered every case so far.
 
 ## Verification
 
