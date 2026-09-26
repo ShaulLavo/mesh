@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/recovery"
@@ -170,5 +171,25 @@ func TestUnpublishedReservationFromPreviousBootCanLaunch(t *testing.T) {
 	meta, err := ReadMeta(dir)
 	if err != nil || meta.BootID != "previous-boot" {
 		t.Fatalf("reservation check removed prior metadata: %+v %v", meta, err)
+	}
+}
+
+func TestWaitForWorkerAcceptsAWorkerThatAlreadyFinished(t *testing.T) {
+	dir := t.TempDir()
+	code := 7
+	now := time.Now()
+	meta := Meta{ID: "7K3D", PID: 1, Command: []string{"true"}, State: StateRunning, CreatedAt: now}
+	if err := WriteMeta(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForWorker(dir, 50*time.Millisecond); err == nil {
+		t.Fatal("a published worker with no socket and no exit counted as ready")
+	}
+	meta.State, meta.ExitCode, meta.ExitedAt = StateExited, &code, &now
+	if err := WriteMeta(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForWorker(dir, time.Second); err != nil {
+		t.Fatalf("a worker that recorded its exit before the dial: %v", err)
 	}
 }

@@ -143,7 +143,7 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 	// the launcher exits, and meta.json remains authoritative for its outcome.
 	go func() { _ = cmd.Wait() }()
 
-	if err := waitForWorker(paths.Socket(dir), paths.Launching(dir), workerReadyTimeout); err != nil {
+	if err := waitForWorker(dir, workerReadyTimeout); err != nil {
 		return Launched{}, fmt.Errorf("launch worker %s: readiness (see %s): %w", id, logPath, err)
 	}
 	meta, err := ReadMeta(dir)
@@ -206,14 +206,20 @@ func reserveSessionDir(root string) (string, string, error) {
 	return "", "", fmt.Errorf("launch worker: could not reserve a session ID after %d attempts", sessionIDAttempts)
 }
 
-func waitForWorker(socketPath, launchingPath string, timeout time.Duration) error {
+func waitForWorker(dir string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		_, markerErr := os.Lstat(launchingPath)
+		_, markerErr := os.Lstat(paths.Launching(dir))
 		if errors.Is(markerErr, os.ErrNotExist) {
-			conn, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond)
+			conn, err := net.DialTimeout("unix", paths.Socket(dir), 200*time.Millisecond)
 			if err == nil {
 				_ = conn.Close()
+				return nil
+			}
+			// A worker that no first attach holds open can publish, run a
+			// command that exits at once, record the exit and close its socket
+			// before this dial. That session launched; it has also ended.
+			if meta, metaErr := ReadMeta(dir); metaErr == nil && meta.State == StateExited {
 				return nil
 			}
 			markerErr = err
