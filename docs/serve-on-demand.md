@@ -22,7 +22,7 @@ Point the dev server at the upstream ports (15173 and 13001 here), bound to
 | `--cwd DIR` | Where it starts. On this machine it defaults to the directory you ran `mesh serve` from. Another machine needs it named; a relative path there is under that user's home. |
 | `--env KEY=VALUE` | Added to the daemon's environment. Repeatable. |
 | `--listen PUBLIC=UPSTREAM` | A loopback listener on the host. Repeatable. |
-| `--at /path` | Also serve the route on the tailnet at `/path`. Optional when `--listen` is given. |
+| `--at /path` | Also serve the route on the tailnet at `/path`. Optional when `--listen` is given; without it `mesh serve ls` shows SCOPE `local`. |
 | `--idle 15m` | How long the route runs with no open connection. |
 | `--ready-timeout 60s` | How long a starting route holds connections before failing them. |
 

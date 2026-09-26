@@ -86,6 +86,13 @@ func TestServeListShowsDemandState(t *testing.T) {
 	if got := serviceTargetCell(service); !strings.HasPrefix(got, "8080 ") {
 		t.Fatalf("target outside the listeners is hidden: %q", got)
 	}
+	if row.Scope() != "tailnet" {
+		t.Fatalf("a route with a tailnet path has scope %q", row.Scope())
+	}
+	row.Service.LocalOnly = true
+	if row.Scope() != "local" {
+		t.Fatalf("a local-only route has scope %q", row.Scope())
+	}
 	row.Live = false
 	if row.State() != "-" {
 		t.Fatalf("offline row state = %q", row.State())

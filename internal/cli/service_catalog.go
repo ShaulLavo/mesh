@@ -41,6 +41,10 @@ type ServiceCatalogRow struct {
 }
 
 func (r ServiceCatalogRow) Scope() string {
+	if r.Service.LocalOnly {
+		// Reached only through its listeners on the host itself.
+		return "local"
+	}
 	if r.Service.PublicName != "" {
 		return "public"
 	}
