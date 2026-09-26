@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -252,12 +253,17 @@ func runNativeAgent(cmd *cobra.Command, executable string, arguments []string, d
 	child := exec.Command(executable, arguments...) //nolint:gosec // native provider argv passes unchanged without a shell
 	child.Stdin, child.Stdout, child.Stderr = cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()
 	child.Dir, child.Env = directory, env
+	// Catch terminal signals before the child exists. A Ctrl+C typed the
+	// moment the provider draws its prompt otherwise reaches this process
+	// with the default action, which exits and hangs up the provider.
+	relay := make(chan *os.Process, 1)
+	stop := relayAgentSignals(relay)
+	defer stop()
 	if err := child.Start(); err != nil {
 		return fmt.Errorf("start %s: %w", executable, err)
 	}
-	stop := relayAgentSignals(child.Process)
+	relay <- child.Process
 	err := child.Wait()
-	stop()
 	var exited *exec.ExitError
 	if errors.As(err, &exited) {
 		return statusError{code: agentExitCode(exited)}
@@ -280,21 +286,37 @@ func preserveAgentTerminal(input io.Reader) func() {
 	return func() { _ = term.Restore(file.Fd(), state) }
 }
 
-func relayAgentSignals(child *os.Process) func() {
+// relayAgentSignals starts catching terminal signals at once and forwards
+// them to the child once it arrives on started. A signal caught before then
+// is forwarded as soon as the child exists.
+func relayAgentSignals(started <-chan *os.Process) func() {
 	changes := make(chan os.Signal, 4)
 	done := make(chan struct{})
 	signal.Notify(changes, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGQUIT, os.Interrupt)
 	go func() {
+		var child *os.Process
+		var early []os.Signal
 		for {
 			select {
+			case child = <-started:
+				for _, received := range early {
+					forwardAgentSignal(child, received)
+				}
+				early = nil
+				started = nil
 			case received := <-changes:
+				if child == nil {
+					early = append(early, received)
+					continue
+				}
 				forwardAgentSignal(child, received)
 			case <-done:
 				return
 			}
 		}
 	}()
-	return func() { signal.Stop(changes); close(done) }
+	var once sync.Once
+	return func() { once.Do(func() { signal.Stop(changes); close(done) }) }
 }
 
 func forwardAgentSignal(child *os.Process, received os.Signal) {
