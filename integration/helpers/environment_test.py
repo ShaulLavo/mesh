@@ -176,9 +176,15 @@ class VerifierEnvironmentTest(unittest.TestCase):
         result = self.run_verifier()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_user_bus_and_supported_overrides_reach_scripts(self):
-        selected = {"XDG_RUNTIME_DIR": "/fixture-runtime", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/fixture-runtime/bus",
-                    "MESH_TEST_ZSH": "/fixture/zsh", "MESH_SHORT_TMP": str(self.root)}
+    def test_user_bus_reaches_scripts(self):
+        selected = {"XDG_RUNTIME_DIR": "/fixture-runtime", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/fixture-runtime/bus"}
+        self.caller.update(selected)
+        _, test = self.captured_environments()
+        for name, value in selected.items():
+            self.assertEqual(test.get(name), value, name)
+
+    def test_supported_overrides_reach_scripts(self):
+        selected = {"MESH_TEST_ZSH": "/fixture/zsh", "MESH_SHORT_TMP": str(self.root)}
         self.caller.update(selected | {"MESH_AGENT_NATIVE": "fixture", "MESH_SESSION_ID": "CALLER"})
         _, test = self.captured_environments()
         for name, value in selected.items():

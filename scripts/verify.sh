@@ -25,6 +25,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
+caller_user_bus=0
+if [[ $(uname -s) == Linux ]] && busctl --user status >/dev/null 2>&1; then
+  caller_user_bus=1
+fi
+
 # Version-manager shims depend on HOME. Resolve Go before replacing it, and
 # reuse compiler caches so isolation does not turn warm checks into cold builds.
 go_root=$(cd "$repo_root" && go env GOROOT) || exit 1
@@ -35,6 +40,11 @@ test_env=(
   "TERM=${TERM:-dumb}" "LANG=${LANG:-C}"
   "GOCACHE=$go_cache" "GOMODCACHE=$go_modules"
 )
+for name in XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS; do
+  if [[ ${!name+x} ]]; then
+    test_env+=("$name=${!name}")
+  fi
+done
 build_env=("${test_env[@]}")
 # Module downloads need the caller's network policy; loopback fixtures do not.
 for name in HTTPS_PROXY HTTP_PROXY NO_PROXY ALL_PROXY https_proxy http_proxy no_proxy all_proxy \
@@ -99,10 +109,16 @@ for test_path in "${tests[@]}"; do
     esac
     # Provider routing, proxies and shell startup files must come from fixtures,
     # not the developer's environment.
+    script_env=("${test_env[@]}" "HOME=$home_dir" "MESH=$binary"
+      "MESH_INTEGRATION_BINARY=$integration_binary" "MESH_CONFIG_DIR=$config_dir")
+    # Losing an available bus would turn the scope assertions into a false pass.
+    if [[ $name == session_scope.sh ]] && (( caller_user_bus )) &&
+      ! env -i "${script_env[@]}" busctl --user status >/dev/null 2>&1; then
+      echo "FAIL: session_scope.sh lost the caller's user bus" >&2
+      exit 1
+    fi
     timeout --kill-after=5s "$this_timeout" \
-      env -i "${test_env[@]}" HOME="$home_dir" \
-      MESH="$binary" MESH_INTEGRATION_BINARY="$integration_binary" \
-      MESH_CONFIG_DIR="$config_dir" bash "$test_path"
+      env -i "${script_env[@]}" bash "$test_path"
   ) >"$log" 2>&1 &
   pids+=("$!")
   if (( ${#pids[@]} - next_wait >= integration_jobs )); then

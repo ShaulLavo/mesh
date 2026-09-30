@@ -146,7 +146,7 @@ class Fixture:
         self.identity_requests = 0
         home = self.root / "fixture-home"
         home.mkdir()
-        self.environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "TERM", "LANG") if key in os.environ}
+        self.environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "TERM", "LANG", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS") if key in os.environ}
         self.environment.update({
             "HOME": str(home),
             "MESH_STATE_DIR": str(self.local),
