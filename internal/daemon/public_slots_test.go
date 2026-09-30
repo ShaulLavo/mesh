@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"syscall"
@@ -476,5 +477,65 @@ func TestPublicListenerPreservesTemporaryAcceptErrors(t *testing.T) {
 	transient, ok := err.(net.Error)   //nolint:errorlint // net/http uses a direct assertion before retrying Accept
 	if !ok || !transient.Temporary() { //nolint:staticcheck // net/http still uses Temporary to retry Accept
 		t.Fatalf("Accept error lost net/http retry semantics: %v", err)
+	}
+}
+
+func TestPublicProxyExpiryPreventsLateAdmission(t *testing.T) {
+	closeStarted := make(chan struct{})
+	allowClose := make(chan struct{})
+	var allowOnce sync.Once
+	unblock := func() { allowOnce.Do(func() { close(allowClose) }) }
+	defer unblock()
+	server, peer := net.Pipe()
+	defer func() { _ = peer.Close() }()
+	base := &queuedPublicListener{connections: make(chan net.Conn, 1), accepted: make(chan struct{}, 1), closed: make(chan struct{})}
+	base.connections <- publicBlockingCloseConn{Conn: server, started: closeStarted, release: allowClose}
+	listener := newBoundedPublicListener(base, 512)
+	listener.proxyUIDs = []uint32{0}
+	t.Cleanup(func() { unblock(); _ = listener.Close(); _ = listener.closeActive() })
+	connection, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitSignal(t, closeStarted, "expired PROXY socket close")
+	admitted := listener.admit(connection.(*boundedPublicConn), netip.MustParsePrefix("198.51.100.1/32"))
+	unblock()
+	if admitted {
+		t.Fatal("an expired authentication socket was promoted while Close was finishing")
+	}
+}
+
+type publicBlockingCloseConn struct {
+	net.Conn
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (c publicBlockingCloseConn) Close() error {
+	close(c.started)
+	<-c.release
+	if err := c.Conn.Close(); err != nil {
+		return fmt.Errorf("test socket close: %w", err)
+	}
+	return nil
+}
+
+func TestPublicLateProxyExpiryPreservesAdmittedConnection(t *testing.T) {
+	server, peer := net.Pipe()
+	defer func() { _ = peer.Close() }()
+	base := &queuedPublicListener{connections: make(chan net.Conn, 1), accepted: make(chan struct{}, 1), closed: make(chan struct{})}
+	base.connections <- publicAddressedConn{Conn: server, address: &net.TCPAddr{IP: net.IPv4(198, 51, 100, 1), Port: 1234}}
+	listener := newBoundedPublicListener(base, 512)
+	t.Cleanup(func() { _ = listener.Close(); _ = listener.closeActive() })
+	connection, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener.expireAuthentication(connection.(*boundedPublicConn))
+	listener.mu.Lock()
+	admitted := connection.(*boundedPublicConn).admitted
+	listener.mu.Unlock()
+	if !admitted {
+		t.Fatal("a late authentication deadline closed an admitted source")
 	}
 }

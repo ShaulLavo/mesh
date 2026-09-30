@@ -106,9 +106,20 @@ func (l *boundedPublicListener) acceptTracked() (*boundedPublicConn, error) {
 	l.active[tracked] = struct{}{}
 	if proxy {
 		// Authentication runs in the HTTP goroutine, not the shared Accept loop.
-		tracked.authTimer = time.AfterFunc(publicProxyHeaderTimeout, func() { _ = tracked.Close() })
+		tracked.authTimer = time.AfterFunc(publicProxyHeaderTimeout, func() { l.expireAuthentication(tracked) })
 	}
 	return tracked, nil
+}
+
+func (l *boundedPublicListener) expireAuthentication(c *boundedPublicConn) {
+	l.mu.Lock()
+	if !c.pending {
+		l.mu.Unlock()
+		return
+	}
+	l.releaseLocked(c)
+	l.mu.Unlock()
+	_ = c.Close()
 }
 
 func publicConnectionSource(address net.Addr) netip.Prefix {
