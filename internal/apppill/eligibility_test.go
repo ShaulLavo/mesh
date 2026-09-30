@@ -133,6 +133,7 @@ func assertOnePillPreservesDocument(t *testing.T, resp *http.Response, document 
 	if strings.Count(text, pillAttribute) != 1 {
 		t.Fatal("expected exactly one pill")
 	}
+	assertPillPlacement(t, text)
 	start := strings.Index(text, `<script defer charset="utf-8" src="`+AssetPath+`"`)
 	if start < 0 {
 		t.Fatal("missing pill script")
