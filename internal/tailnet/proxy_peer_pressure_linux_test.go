@@ -14,13 +14,14 @@ func TestProxyPeerUIDAndStartupWithBusyTCPTable(t *testing.T) {
 	// A developer's host may run a live edge. Only disposable CI hosts may
 	// run the pressure fixture without a private network namespace.
 	if os.Getenv("MESH_PROXY_PRESSURE_ISOLATED") != "1" && os.Getenv("CI") != "true" {
-		executable, err := os.Executable()
+		executable, err := os.Open("/proc/self/exe")
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer func() { _ = executable.Close() }()
 		command := exec.Command("unshare", "--user", "--map-root-user", "--net", "sh", "-c",
-			`ip link set lo up && exec "$@"`, "mesh-proxy-pressure", executable,
-			"-test.run=^TestProxyPeerUIDAndStartupWithBusyTCPTable$", "-test.v")
+			`ip link set lo up && exec /proc/self/fd/3 -test.run=^TestProxyPeerUIDAndStartupWithBusyTCPTable$ -test.v`)
+		command.ExtraFiles = []*os.File{executable}
 		command.Env = append(os.Environ(), "MESH_PROXY_PRESSURE_ISOLATED=1")
 		output, err := command.CombinedOutput()
 		t.Logf("isolated pressure test:\n%s", output)
