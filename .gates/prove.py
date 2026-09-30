@@ -106,6 +106,45 @@ def prove(root, evidence):
     planted_shell.write_text("#!/usr/bin/env bash\nvalue='fixture value'\necho $value\n")
     expect(run_gates(root, evidence, "shellcheck"), 1, "[SC2086]")
     planted_shell.unlink()
+
+    # Keep exported-environment exceptions tied to their statements, not the file's count.
+    exported_shell = root / "scripts/install/linux.sh"
+    original_shell = """#!/usr/bin/env bash
+remote_uid=1000
+source_binary=source
+binary_tmp=destination
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$remote_uid}
+export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}
+install -m 0755 "$source_binary" "$binary_tmp"
+"""
+    exported_shell.write_text(original_shell)
+    shell_new = run_gates(root, evidence, "shell-statements-new")
+    expect(shell_new, 1, "[SC2086]")
+    issues = json.loads((shell_new[2] / "shellcheck.json").read_text())
+    if len(issues) != 2 or any(issue["code"] != 2086 for issue in issues):
+        raise RuntimeError("replacement fixture must produce exactly two SC2086 findings")
+    baseline.write_text(json.dumps({"version": 2, "entries": [{
+        "gate": "shellcheck", "file": issue["file"], "rule": "SC2086",
+        "text": issue["message"], "function": "",
+        "source": original_shell.splitlines()[issue["line"] - 1].strip(), "count": 1,
+        "reason": "Deliberate fixture exception for this exported-environment statement only.",
+    } for issue in issues]}))
+    expect(run_gates(root, evidence, "shell-statements-baselined"), 0, "shellcheck: PASS")
+    replacement_shell = original_shell.replace(
+        'export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$remote_uid}',
+        'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$remote_uid}"',
+    ).replace('install -m 0755 "$source_binary"', 'install -m 0755 $source_binary')
+    exported_shell.write_text(replacement_shell)
+    expect(run_gates(root, evidence, "shell-statement-replacement"), 1,
+           "shellcheck: FAIL (2 findings, 1 new, 1 stale)")
+    before = baseline.read_bytes()
+    expect(run_gates(root, evidence, "shell-replacement-refuse", "--update-baseline"), 1,
+           "REFUSED: --update-baseline cannot add findings")
+    if baseline.read_bytes() != before:
+        raise RuntimeError("replacement changed the baseline despite refusal")
+    exported_shell.unlink()
+    baseline.write_text(json.dumps({"version": 2, "entries": []}))
+
     planted_python = root / "scripts/planted.py"
     planted_python.write_text("import os\n")
     expect(run_gates(root, evidence, "ruff"), 1, "[F401]")

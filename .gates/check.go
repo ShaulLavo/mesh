@@ -31,6 +31,7 @@ var constantLiteral = regexp.MustCompile("(?s)^string (`.*`) has [0-9]+ occurren
 var cognitiveFunction = regexp.MustCompile("^cognitive complexity [0-9]+ of func (`.*`) is high \\(> [0-9]+\\)$")
 var complexityScore = regexp.MustCompile(`\(complexity: \d+\)$`)
 var diagnosticLine = regexp.MustCompile(`\bline \d+\b`)
+var closureOrdinal = regexp.MustCompile(`\$[0-9]+`)
 
 func normalizeText(rule, text string) string {
 	if rule == "goconst" {
@@ -45,6 +46,8 @@ func normalizeText(rule, text string) string {
 		return cognitiveFunction.ReplaceAllString(text, "func $1")
 	case "nilerr":
 		return diagnosticLine.ReplaceAllString(text, "line <location>")
+	case "contextcheck":
+		return closureOrdinal.ReplaceAllLiteralString(text, "$N")
 	case "dupl":
 		return cloneRange.ReplaceAllString(text, "<range> lines are duplicate of ")
 	default:
@@ -59,6 +62,7 @@ type findingKey struct {
 	Rule     string `json:"rule"`
 	Text     string `json:"text"`
 	Function string `json:"function"`
+	Source   string `json:"source,omitempty"`
 }
 
 type entry struct {
@@ -145,11 +149,17 @@ func (c *collector) key(gate, file, rule, text string, line int) (findingKey, er
 	if line == 0 {
 		return key, nil
 	}
-	if _, err := c.source(file, line); err != nil {
+	source, err := c.source(file, line)
+	if err != nil {
 		return findingKey{}, err
 	}
+	// Non-Go exceptions stay attached to the statement they originally deferred.
+	if gate != golangciGate {
+		key.Source = source
+		return key, nil
+	}
 	// Goconst reports a file-scoped literal at an arbitrary representative occurrence.
-	if gate != golangciGate || rule == "goconst" {
+	if rule == "goconst" {
 		return key, nil
 	}
 	key.Function, err = c.function(file, line)
@@ -373,7 +383,7 @@ func readBaseline(path string) (map[findingKey]entry, error) {
 }
 
 func keyText(key findingKey) string {
-	return strings.Join([]string{key.Gate, key.File, key.Rule, key.Text, key.Function}, "\x00")
+	return strings.Join([]string{key.Gate, key.File, key.Rule, key.Text, key.Function, key.Source}, "\x00")
 }
 
 func sortedKeys[V any](values map[findingKey]V) []findingKey {
@@ -459,6 +469,9 @@ func printFindings(out io.Writer, label string, values map[findingKey]int) {
 		_, _ = fmt.Fprintf(out, "%s: %s %s [%s] %s (count %d)\n", label, key.Gate, key.File, key.Rule, key.Text, values[key])
 		if key.Function != "" {
 			_, _ = fmt.Fprintf(out, "  %s\n", key.Function)
+		}
+		if key.Source != "" {
+			_, _ = fmt.Fprintf(out, "  %s\n", key.Source)
 		}
 	}
 }

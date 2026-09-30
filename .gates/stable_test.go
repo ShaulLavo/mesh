@@ -8,6 +8,7 @@ func TestVolatileMessagesHaveStableIdentity(t *testing.T) {
 		{"goconst", "string `/mesh` has 26 occurrences, make it a constant", "string `/mesh` has 27 occurrences, but such constant `defaultWebSocketPath` already exists"},
 		{"gocognit", "cognitive complexity 20 of func `sample` is high (> 15)", "cognitive complexity 21 of func `sample` is high (> 15)"},
 		{"nilerr", "error is not nil (line 197) but it returns nil", "error is not nil (line 198) but it returns nil"},
+		{"contextcheck", "Function `stageBinary$2->cleanupRemoteTemporary` should pass the context parameter", "Function `stageBinary$3->cleanupRemoteTemporary` should pass the context parameter"},
 		{"nestif", "`if n > 1` has complex nested blocks (complexity: 4)", "`if n > 1` has complex nested blocks (complexity: 5)"},
 	} {
 		t.Run(tc.rule+tc.first, func(t *testing.T) {
@@ -66,6 +67,7 @@ func TestLiteralDigitsRemainPartOfIdentity(t *testing.T) {
 		{"goconst", "string `file.go:1` has 3 occurrences, make it a constant", "string `file.go:2` has 3 occurrences, make it a constant"},
 		{"nestif", "`if s == \"complexity: 4\"` has complex nested blocks (complexity: 5)", "`if s == \"complexity: 6\"` has complex nested blocks (complexity: 5)"},
 		{"nestif", "`if s == \"file.go:1\"` has complex nested blocks (complexity: 5)", "`if s == \"file.go:2\"` has complex nested blocks (complexity: 5)"},
+		{"contextcheck", "Function `stageBinary$2->cleanupRemoteTemporary` should pass the context parameter", "Function `stageBinary$2->differentCleanup` should pass the context parameter"},
 	} {
 		t.Run(tc.rule+tc.first, func(t *testing.T) {
 			if normalizeText(tc.rule, tc.first) == normalizeText(tc.rule, tc.second) {
