@@ -54,6 +54,10 @@ type inetDiagMsg struct {
 }
 
 func ProxyForwarderUIDs() ([]uint32, error) {
+	return proxyForwarderUIDs(systemPeerUIDLookup{})
+}
+
+func proxyForwarderUIDs(_ peerUIDLookup) ([]uint32, error) {
 	// Port zero cannot identify an established TCP socket. ENOENT proves the
 	// kernel answered the exact query without enumerating any host sockets.
 	probe := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 0)
