@@ -1,0 +1,5 @@
+pre-commit:
+  parallel: false
+  jobs:
+    - name: Go gates on staged packages
+      run: ./scripts/gates.sh --fast
