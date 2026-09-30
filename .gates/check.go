@@ -29,19 +29,20 @@ var goLocation = regexp.MustCompile(`(\.go):\d+(?:-\d+)?`)
 var cloneRange = regexp.MustCompile(`^\d+-\d+ lines are duplicate of `)
 var constantLiteral = regexp.MustCompile("(?s)^string (`.*`) has [0-9]+ occurrences.*$")
 var cognitiveFunction = regexp.MustCompile("^cognitive complexity [0-9]+ of func (`.*`) is high \\(> [0-9]+\\)$")
-var complexityScore = regexp.MustCompile(`complexity: \d+`)
+var complexityScore = regexp.MustCompile(`\(complexity: \d+\)$`)
 var diagnosticLine = regexp.MustCompile(`\bline \d+\b`)
 
 func normalizeText(rule, text string) string {
 	if rule == "goconst" {
 		return constantLiteral.ReplaceAllString(text, "string $1")
 	}
+	if rule == "nestif" {
+		return complexityScore.ReplaceAllString(text, "(complexity: <score>)")
+	}
 	text = goLocation.ReplaceAllString(text, "${1}:<location>")
 	switch rule {
 	case "gocognit":
 		return cognitiveFunction.ReplaceAllString(text, "func $1")
-	case "nestif":
-		return complexityScore.ReplaceAllString(text, "complexity: <score>")
 	case "nilerr":
 		return diagnosticLine.ReplaceAllString(text, "line <location>")
 	case "dupl":

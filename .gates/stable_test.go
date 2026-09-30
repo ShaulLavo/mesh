@@ -61,7 +61,16 @@ func TestAlignmentAndRepresentativeOccurrenceDoNotChangeIdentity(t *testing.T) {
 }
 
 func TestLiteralDigitsRemainPartOfIdentity(t *testing.T) {
-	if normalizeText("goconst", "string `127.0.0.1` has 3 occurrences, make it a constant") == normalizeText("goconst", "string `127.0.0.2` has 3 occurrences, make it a constant") {
-		t.Fatal("different literals merged")
+	for _, tc := range []struct{ rule, first, second string }{
+		{"goconst", "string `127.0.0.1` has 3 occurrences, make it a constant", "string `127.0.0.2` has 3 occurrences, make it a constant"},
+		{"goconst", "string `file.go:1` has 3 occurrences, make it a constant", "string `file.go:2` has 3 occurrences, make it a constant"},
+		{"nestif", "`if s == \"complexity: 4\"` has complex nested blocks (complexity: 5)", "`if s == \"complexity: 6\"` has complex nested blocks (complexity: 5)"},
+		{"nestif", "`if s == \"file.go:1\"` has complex nested blocks (complexity: 5)", "`if s == \"file.go:2\"` has complex nested blocks (complexity: 5)"},
+	} {
+		t.Run(tc.rule+tc.first, func(t *testing.T) {
+			if normalizeText(tc.rule, tc.first) == normalizeText(tc.rule, tc.second) {
+				t.Fatal("different literals merged")
+			}
+		})
 	}
 }
