@@ -25,7 +25,7 @@ func TestInjectHTMLPreservesAppAndPermitsOnlyControlAssets(t *testing.T) {
 	resp.Header.Add("Content-Security-Policy", "script-src 'unsafe-inline'")
 	resp.Header.Set("ETag", `"original"`)
 	resp.Header.Set("Content-Length", "200")
-	if err := Inject(resp, "7k3d", "https://apps.shaulavo.dev"); err != nil {
+	if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err != nil {
 		t.Fatal(err)
 	}
 	body, err := io.ReadAll(resp.Body)
@@ -77,7 +77,7 @@ func TestInjectCompressedDocuments(t *testing.T) {
 			defer func() { _ = resp.Body.Close() }()
 			resp.Body = io.NopCloser(bytes.NewReader(compressed.Bytes()))
 			resp.Header.Set("Content-Encoding", encoding)
-			if err := Inject(resp, "7k3d", "https://apps.shaulavo.dev"); err != nil {
+			if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err != nil {
 				t.Fatal(err)
 			}
 			content, err := io.ReadAll(resp.Body)
@@ -97,7 +97,7 @@ func TestInjectNonHTMLUntouched(t *testing.T) {
 	original := resp.Body
 	resp.Header.Set("ETag", `"json"`)
 	resp.Header.Set("Content-Encoding", "gzip")
-	if err := Inject(resp, "7k3d", "https://apps.shaulavo.dev"); err != nil {
+	if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err != nil {
 		t.Fatal(err)
 	}
 	if resp.Body != original || resp.Header.Get("ETag") != `"json"` || resp.Header.Get("Content-Encoding") != "gzip" {
@@ -110,7 +110,7 @@ func TestInjectStreamsBeforeUpstreamCompletes(t *testing.T) {
 	resp := response("", "text/html")
 	defer func() { _ = resp.Body.Close() }()
 	resp.Body = input
-	if err := Inject(resp, "7k3d", "https://apps.shaulavo.dev"); err != nil {
+	if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = output.Close() }()
@@ -146,7 +146,7 @@ func TestInjectRejectsUnsupportedEncoding(t *testing.T) {
 			resp.Header.Set("Content-Encoding", "zstd")
 		}
 		original := resp.Body
-		if err := Inject(resp, "7k3d", "https://apps.shaulavo.dev"); err == nil {
+		if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err == nil {
 			t.Fatal("accepted unsupported encoding")
 		}
 		if resp.Body != original {

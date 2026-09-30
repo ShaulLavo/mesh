@@ -15,7 +15,9 @@ function loadDock(): { edge: SnapEdge; ratio: number } {
   return { edge: 'bottom', ratio: .5 };
 }
 
-function Pill(props: { appID: string; manager: string; nonce: string }) {
+type Access = { visibility: 'public' | 'private'; owns: boolean };
+
+function Pill(props: { appID: string; manager: string; nonce: string; initialAccess: Access | undefined }) {
   const dock = loadDock();
   const [collapsed, setCollapsed] = createSignal(true);
   const [edge, setEdge] = createSignal(dock.edge);
@@ -25,7 +27,7 @@ function Pill(props: { appID: string; manager: string; nonce: string }) {
   const [resizing, setResizing] = createSignal(false);
   const [pressed, setPressed] = createSignal(false);
   const [keyboardMotion, setKeyboardMotion] = createSignal(false);
-  const [access, setAccess] = createSignal<{ visibility: 'public' | 'private'; owns: boolean }>();
+  const [access, setAccess] = createSignal<Access | undefined>(props.initialAccess);
   let shell: HTMLDivElement | undefined;
   let frame: HTMLIFrameElement | undefined;
   const focusHandle = () => shell?.querySelector<HTMLButtonElement>('[data-react-grab-toolbar-collapse]')?.focus();
@@ -137,7 +139,10 @@ function Pill(props: { appID: string; manager: string; nonce: string }) {
           <Show when={access()}>{current => {
             const action = () => current().visibility === 'public' ? 'private' : 'public';
             const label = () => current().owns ? `Make ${action()}` : 'Pair owner browser';
-            return <div class="action-wrap"><a class="action" draggable={false} href={current().owns ? `${props.manager}/confirm?id=${encodeURIComponent(props.appID)}&action=${action()}` : `${props.manager}/pair`} target="_blank" rel="noopener noreferrer" aria-label={label()} title={label()} onClick={drag.createDragAwareHandler()}>
+            let link: HTMLAnchorElement | undefined;
+            const destination = () => current().owns ? `${props.manager}/confirm?id=${encodeURIComponent(props.appID)}&action=${action()}&return=${encodeURIComponent(location.href)}` : `${props.manager}/pair`;
+            const refreshLink = () => { if (link) link.href = destination(); };
+            return <div class="action-wrap"><a ref={link} class="action" draggable={false} href={destination()} onPointerDown={refreshLink} rel="noopener noreferrer" aria-label={label()} title={label()} onClick={drag.createDragAwareHandler(refreshLink)}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d={current().visibility === 'private' ? 'M8 10V7a4 4 0 0 1 8 0v3' : 'M8 10V7a4 4 0 0 1 8 0'}/><path d="M12 14v3"/></svg>
             </a></div>;
           }}</Show>
@@ -156,7 +161,10 @@ function mount() {
   const appID = script.dataset.meshApp;
   const value = script.dataset.meshManager;
   if (!appID || !value) return;
-  const config = { appID, nonce: script.nonce ?? '' };
+  const initialAccess: Access | undefined = script.dataset.meshPrivate === undefined ? undefined : {
+    visibility: script.dataset.meshPrivate === 'true' ? 'private' : 'public', owns: script.dataset.meshOwns === 'true',
+  };
+  const config = { appID, nonce: script.nonce ?? '', initialAccess };
   const manager = new URL(value);
   if (manager.protocol !== 'https:' && !(manager.protocol === 'http:' && manager.hostname === 'localhost')) return;
   const host = document.createElement('mesh-app-pill');
@@ -166,7 +174,7 @@ function mount() {
   host.style.zIndex = '2147483647';
   host.style.pointerEvents = 'none';
   document.documentElement.append(host);
-  render(() => <Pill appID={config.appID} manager={manager.origin} nonce={config.nonce}/>, host.attachShadow({ mode: 'open' }));
+  render(() => <Pill appID={config.appID} manager={manager.origin} nonce={config.nonce} initialAccess={config.initialAccess}/>, host.attachShadow({ mode: 'open' }));
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true });
 else mount();

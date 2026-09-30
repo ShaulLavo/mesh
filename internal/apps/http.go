@@ -70,7 +70,7 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		clean := r.URL.Query()
 		clean.Del("mesh_view")
 		r.URL.RawQuery = clean.Encode()
-		http.Redirect(w, r, managementReturn(r), http.StatusSeeOther)
+		http.Redirect(w, r, appReturn(id, URL(id)+r.URL.RequestURI()), http.StatusSeeOther) //nolint:gosec // appReturn fixes this consumed ticket redirect to the app host.
 		return true
 	}
 	if app.Visibility == "private" && !networkOwns(r, app.Owner) {
@@ -178,7 +178,8 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 				}
 			}}
 		}
-		return apppill.Inject(response, id, ManagementOrigin)
+		viewer, _ := e.auth.ViewOwner(r.Context(), r, id)
+		return apppill.Inject(response, apppill.Config{AppID: id, ManagementOrigin: ManagementOrigin, Private: app.Visibility == "private", Owns: networkOwns(r, app.Owner) || viewer == app.Owner})
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		http.Error(w, "App origin is unavailable.", http.StatusServiceUnavailable)
@@ -335,7 +336,7 @@ func (s *activeStream) Close() error {
 	return err
 }
 
-var page = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh temporary apps</title><style>body{font:16px system-ui;background:#101214;color:#eef0f2;margin:0;padding:24px}main{max-width:680px;margin:auto}a{color:#9ddcff}button,a.button{border:0;border-radius:999px;background:#e9edf2;color:#101214;padding:10px 16px;cursor:pointer;display:inline-block;text-decoration:none}code{font-size:16px;overflow-wrap:anywhere}.pill{display:flex;align-items:center;gap:10px;padding:8px;flex-wrap:wrap}small{color:#bcc4cb}form{display:inline}body.frame{padding:0;border-radius:999px}.error{color:#ffbab4}</style></head><body class="{{if .Frame}}frame{{end}}"><main>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Code}}<h1>Pair this browser</h1><p>Approve from the Mesh host that owns the app:</p><code>mesh app browser approve HOST {{.Code}}</code><p>Code: <strong>{{.Code}}</strong></p><p>Expires in 10 minutes.</p><p id="pair-status" role="status">Waiting for approval. This page will continue automatically.</p><button id="check-approval" type="button">Check now</button><p><a id="restart-pair" href="/pair" hidden>Get a new code</a></p>{{else if .Frame}}<div class="pill"><strong>Mesh</strong><small>{{.App.Visibility}}</small><a href="{{.URL}}" target="_blank" rel="noopener">Share</a>{{if .Owns}}<a href="/confirm?id={{.App.ID}}&action={{.Toggle}}" target="_blank" rel="noopener">Make {{.Toggle}}</a><a href="/confirm?id={{.App.ID}}&action=renew" target="_blank" rel="noopener">Renew</a><a href="/download?id={{.App.ID}}" target="_blank" rel="noopener">Download</a><a href="/confirm?id={{.App.ID}}&action=delete" target="_blank" rel="noopener">Delete</a>{{else}}<a href="/pair" target="_blank" rel="noopener">Pair browser</a>{{end}}</div>{{else if .Confirm}}<h1>{{.Confirm}} {{.App.ID}}</h1><p>Owner controls for <a href="{{.URL}}">{{.URL}}</a>.</p><form method="post" action="/action"><input type="hidden" name="id" value="{{.App.ID}}"><input type="hidden" name="action" value="{{.Confirm}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><button>Confirm {{.Confirm}}</button></form>{{else}}<h1>Temporary apps</h1><p>Apps expire after 24 hours without app traffic. Expiry deletes their managed source, data and server.</p>{{range .Apps}}<p><a href="/view?id={{.ID}}">{{.ID}}.shaulavo.dev</a> · {{.Visibility}} · {{.Status}}<br><small>Expires {{.ExpiresAt}}</small></p>{{end}}<a href="/pair">Pair another owner</a>{{end}}</main>{{if .Frame}}<script>parent.postMessage({type:'mesh-app-status',visibility:{{.App.Visibility}},owns:{{.Owns}},deadline:{{.App.ExpiresAt.Format "2006-01-02T15:04:05Z07:00"}}},{{.Parent}})</script>{{end}}{{if .Code}}<script>
+var page = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh temporary apps</title><style>body{font:16px system-ui;background:#101214;color:#eef0f2;margin:0;padding:24px}main{max-width:680px;margin:auto}a{color:#9ddcff}button,a.button{border:0;border-radius:999px;background:#e9edf2;color:#101214;padding:10px 16px;cursor:pointer;display:inline-block;text-decoration:none}code{font-size:16px;overflow-wrap:anywhere}.pill{display:flex;align-items:center;gap:10px;padding:8px;flex-wrap:wrap}small{color:#bcc4cb}form{display:inline}body.frame{padding:0;border-radius:999px}.error{color:#ffbab4}</style></head><body class="{{if .Frame}}frame{{end}}"><main>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Code}}<h1>Pair this browser</h1><p>Approve from the Mesh host that owns the app:</p><code>mesh app browser approve HOST {{.Code}}</code><p>Code: <strong>{{.Code}}</strong></p><p>Expires in 10 minutes.</p><p id="pair-status" role="status">Waiting for approval. This page will continue automatically.</p><button id="check-approval" type="button">Check now</button><p><a id="restart-pair" href="/pair" hidden>Get a new code</a></p>{{else if .Frame}}<div class="pill"><strong>Mesh</strong><small>{{.App.Visibility}}</small><a href="{{.URL}}" target="_blank" rel="noopener">Share</a>{{if .Owns}}<a href="/confirm?id={{.App.ID}}&action={{.Toggle}}" target="_blank" rel="noopener">Make {{.Toggle}}</a><a href="/confirm?id={{.App.ID}}&action=renew" target="_blank" rel="noopener">Renew</a><a href="/download?id={{.App.ID}}" target="_blank" rel="noopener">Download</a><a href="/confirm?id={{.App.ID}}&action=delete" target="_blank" rel="noopener">Delete</a>{{else}}<a href="/pair" target="_blank" rel="noopener">Pair browser</a>{{end}}</div>{{else if .Confirm}}<h1>{{.Confirm}} {{.App.ID}}</h1><p>Owner controls for <a href="{{.URL}}">{{.URL}}</a>.</p><form method="post" action="/action"><input type="hidden" name="id" value="{{.App.ID}}"><input type="hidden" name="action" value="{{.Confirm}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="return" value="{{.Return}}"><button>Confirm {{.Confirm}}</button></form>{{else}}<h1>Temporary apps</h1><p>Apps expire after 24 hours without app traffic. Expiry deletes their managed source, data and server.</p>{{range .Apps}}<p><a href="/view?id={{.ID}}">{{.ID}}.shaulavo.dev</a> · {{.Visibility}} · {{.Status}}<br><small>Expires {{.ExpiresAt}}</small></p>{{end}}<a href="/pair">Pair another owner</a>{{end}}</main>{{if .Frame}}<script>parent.postMessage({type:'mesh-app-status',visibility:{{.App.Visibility}},owns:{{.Owns}},deadline:{{.App.ExpiresAt.Format "2006-01-02T15:04:05Z07:00"}}},{{.Parent}})</script>{{end}}{{if .Code}}<script>
 const checkButton = document.getElementById('check-approval');
 const status = document.getElementById('pair-status');
 const expiresAt = performance.now() + {{.PairLifetimeMS}};
@@ -391,7 +392,7 @@ func render(w http.ResponseWriter, data pageData) {
 	_ = page.Execute(w, data)
 }
 func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 	if r.URL.Path == "/pair/status" {
@@ -451,8 +452,9 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "App expired", http.StatusGone)
 				return
 			}
+			destination := appReturn(id, r.URL.Query().Get("return"))
 			if app.Visibility == "public" || networkOwns(r, app.Owner) {
-				http.Redirect(w, r, URL(id), http.StatusSeeOther) //nolint:gosec // The app ID was looked up in the owner registry and contains four Crockford characters.
+				http.Redirect(w, r, destination, http.StatusSeeOther) //nolint:gosec // appReturn fixes the destination to this registry-owned app host.
 				return
 			}
 			ticket, err := e.auth.IssueView(r.Context(), r, app.Owner, id)
@@ -460,7 +462,11 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Cannot issue private view", http.StatusForbidden)
 				return
 			}
-			http.Redirect(w, r, URL(id)+"/?mesh_view="+url.QueryEscape(ticket), http.StatusSeeOther) //nolint:gosec // Registry-owned Crockford ID fixes the host; the ticket is query escaped.
+			target, _ := url.Parse(destination)
+			query := target.Query()
+			query.Set("mesh_view", ticket)
+			target.RawQuery = query.Encode()
+			http.Redirect(w, r, target.String(), http.StatusSeeOther) //nolint:gosec // appReturn fixes the host; URL.Query escapes the view ticket.
 			return
 		}
 		if r.URL.Path == "/confirm" {
@@ -469,7 +475,9 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				http.NotFound(w, r)
 				return
 			}
-			render(w, pageData{Confirm: action, App: app, CSRF: session.CSRF, URL: URL(id)})
+			policy := strings.Replace(w.Header().Get("Content-Security-Policy"), "form-action 'self'", "form-action 'self' "+URL(id), 1)
+			w.Header().Set("Content-Security-Policy", policy)
+			render(w, pageData{Confirm: action, App: app, CSRF: session.CSRF, URL: URL(id), Return: appReturn(id, r.URL.Query().Get("return"))})
 			return
 		}
 	}
@@ -578,7 +586,7 @@ func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Change failed", http.StatusServiceUnavailable)
 		return
 	}
-	destination := "/view?id=" + id
+	destination := "/view?" + url.Values{"id": {id}, "return": {appReturn(id, r.PostForm.Get("return"))}}.Encode()
 	if action == "delete" {
 		destination = "/"
 	}
@@ -640,4 +648,20 @@ func managementReturn(r *http.Request) string {
 		return "/"
 	}
 	return r.URL.RequestURI()
+}
+
+// appReturn accepts only a page belonging to the app being managed.
+func appReturn(id, value string) string {
+	fallback := URL(id) + "/"
+	if len(value) > 4096 || strings.ContainsAny(value, "\r\n\\") {
+		return fallback
+	}
+	target, err := url.Parse(value)
+	if err != nil || target.Scheme != "https" || target.Host != id+"."+Domain || target.User != nil || target.Opaque != "" {
+		return fallback
+	}
+	if target.Path == "" {
+		target.Path = "/"
+	}
+	return target.String()
 }
