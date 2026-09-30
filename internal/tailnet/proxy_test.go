@@ -23,7 +23,7 @@ func TestProxyConnPreservesPayloadAndRemoteAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = server.Close() }()
-	proxy := NewProxyConn(server)
+	proxy := &proxyConn{Conn: server, allowedUIDs: []uint32{42}, peerUID: peerUIDFunc(func(net.Conn) (uint32, error) { return 42, nil })}
 	go func() {
 		_, _ = io.WriteString(client, "PROXY TCP4 100.64.0.2 127.0.0.1 12345 443\r\npayload")
 		_ = client.Close()
@@ -46,7 +46,7 @@ func TestProxyHeaderRejectsUntrustedAndMalformedInput(t *testing.T) {
 	left, right := net.Pipe()
 	defer func() { _ = left.Close(); _ = right.Close() }()
 	_ = left.SetReadDeadline(time.Now().Add(time.Second))
-	if _, err := NewProxyConn(left).Read(make([]byte, 1)); err == nil {
+	if _, err := NewProxyConn(left, []uint32{42}).Read(make([]byte, 1)); err == nil {
 		t.Fatal("accepted metadata from an untrusted transport")
 	}
 }

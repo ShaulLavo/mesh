@@ -234,6 +234,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return append([]tailnet.Peer{self}, peers...), nil
 	}
 	var tailnetAddrs []string
+	var tailnetNames []string
 	var tailscaleName *string
 	if cfg.TailnetPort != 0 || cfg.SSHPort != 0 {
 		disabledListeners := "Tailnet control listener"
@@ -270,6 +271,8 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			if peer.Name != "" {
 				name := peer.Name
 				tailscaleName = &name
+				shortName, _, _ := strings.Cut(name, ".")
+				tailnetNames = []string{name, shortName}
 			}
 			if len(tailnetAddrs) == 0 {
 				if requiresStableTailnetControl {
@@ -502,6 +505,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	listener, err := validateListenerConfig(daemonCtx, ListenerConfig{
 		StateDir:                   stateDir,
 		TailnetAddrs:               controlAddrs,
+		TailnetNames:               tailnetNames,
+		PrivateName:                certificateRuntime.PrivateName,
+		TrustPublicEdgeForwarding:  trustPublicEdgeForwarding,
 		TailnetPort:                cfg.TailnetPort,
 		WebSocketPath:              cfg.WebSocketPath,
 		HTTPHandler:                appOriginHandler(appLocal, serviceRegistry),

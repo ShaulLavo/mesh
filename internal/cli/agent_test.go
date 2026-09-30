@@ -18,6 +18,7 @@ import (
 	"github.com/shaul/mesh/internal/agentresume"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/testenv"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -49,7 +50,7 @@ func TestAgentNativeSignalExitIsPreserved(t *testing.T) {
 	command.SetIn(strings.NewReader(""))
 	command.SetOut(io.Discard)
 	command.SetErr(io.Discard)
-	err := runNativeAgent(command, "/bin/sh", []string{"-c", "kill -TERM $$"}, "", os.Environ())
+	err := runNativeAgent(command, "/bin/sh", []string{"-c", "kill -TERM $$"}, "", testenv.ForProcess(t.TempDir()))
 	if code, ok := StatusCode(err); !ok || code != 143 {
 		t.Fatalf("signal exit = %v", err)
 	}
@@ -85,7 +86,7 @@ func TestAgentLaunchLeasePreservesOriginalDirectoryAndReplacesToken(t *testing.T
 	command.SetErr(&diagnostics)
 	launch := agentresume.Launch{Provider: agentresume.Claude, Executable: "/bin/sh", ProviderVersion: "fake", Directory: "/effective/provider/directory", DataRoot: "/unused"}
 	err = runRegisteredAgent(command, worker.SessionWorkerLocation{SessionID: "7K3D", Dir: directory}, launch,
-		[]string{"-c", "pwd; printf '%s\\n' \"$MESH_AGENT_TOKEN\""}, os.Environ(), "", "", false)
+		[]string{"-c", "pwd; printf '%s\\n' \"$MESH_AGENT_TOKEN\""}, testenv.ForProcess(directory), "", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,6 +295,7 @@ func TestAgentShellFunctionsPreserveArgumentsAndExistingFunction(t *testing.T) {
 	fragment := agentShellInit("bash", mesh)
 	script := "function claude { printf 'existing function\\n'; }\n" + fragment + fragment + "codex 'one argument' '; $(literal)'\nclaude\n"
 	command := exec.Command("/bin/bash", "--noprofile", "--norc", "-ic", script) //nolint:gosec // test executes its own generated shell integration against a private fake Mesh executable
+	command.Env = testenv.ForProcess(filepath.Dir(mesh))
 	var output bytes.Buffer
 	command.Stdout, command.Stderr = &output, io.Discard
 	if err := command.Run(); err != nil {
