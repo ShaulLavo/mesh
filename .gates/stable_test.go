@@ -29,3 +29,39 @@ func TestVolatileMessagesHaveStableIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestAlignmentAndRepresentativeOccurrenceDoNotChangeIdentity(t *testing.T) {
+	for _, rule := range []string{"wrapcheck", "goconst"} {
+		t.Run(rule, func(t *testing.T) {
+			o := fixture(t)
+			writeFile(t, o.root+"/"+sampleFile, "package sample\nfunc sample() {\n _ = struct{ A, Longer string }{\n A: \"boot-a\",\n Longer: \"other\",\n }\n}\n")
+			text := "external error is unwrapped"
+			if rule == "goconst" {
+				text = "string `boot-a` has 37 occurrences, make it a constant"
+			}
+			ruleIssueReport(t, o, rule, sampleFile, text, 4, 1)
+			actual, err := collect(o.reports, o.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries := make(map[findingKey]entry)
+			for key, count := range actual {
+				entries[key] = entry{findingKey: key, Count: count, Reason: "Existing finding; formatting does not fix it."}
+			}
+			if err := writeBaseline(o.baseline, entries); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, o.root+"/"+sampleFile, "package sample\n\nfunc sample() {\n _ = struct{ A, Longer string }{\n A:      \"boot-a\",\n Longer: \"other\",\n }\n}\n")
+			ruleIssueReport(t, o, rule, sampleFile, text, 5, 1)
+			expectCheck(t, o, 0)
+			ruleIssueReport(t, o, rule, sampleFile, text, 5, 2)
+			expectCheck(t, o, 1)
+		})
+	}
+}
+
+func TestLiteralDigitsRemainPartOfIdentity(t *testing.T) {
+	if normalizeText("goconst", "string `127.0.0.1` has 3 occurrences, make it a constant") == normalizeText("goconst", "string `127.0.0.2` has 3 occurrences, make it a constant") {
+		t.Fatal("different literals merged")
+	}
+}

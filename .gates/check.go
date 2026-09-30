@@ -33,10 +33,11 @@ var complexityScore = regexp.MustCompile(`complexity: \d+`)
 var diagnosticLine = regexp.MustCompile(`\bline \d+\b`)
 
 func normalizeText(rule, text string) string {
+	if rule == "goconst" {
+		return constantLiteral.ReplaceAllString(text, "string $1")
+	}
 	text = goLocation.ReplaceAllString(text, "${1}:<location>")
 	switch rule {
-	case "goconst":
-		return constantLiteral.ReplaceAllString(text, "string $1")
 	case "gocognit":
 		return cognitiveFunction.ReplaceAllString(text, "func $1")
 	case "nestif":

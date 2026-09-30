@@ -153,6 +153,11 @@ also requires Ruff. Full gates run in CI. Deadcode runs through
 `go run golang.org/x/tools/cmd/deadcode@v0.49.0` without changing `go.mod`.
 
 `.gates/baseline.json` records existing findings with reasons and occurrence counts.
+Keys use file, rule, normalized diagnostic, and enclosing Go function, not a
+source-line fingerprint. Diagnostic line numbers and complexity scores are omitted;
+goconst uses only the literal within its file, so a representative occurrence or
+reported count can change without churning the key. Literal digits remain significant.
+Goconst, gocognit, and dupl exclude `_test.go`; all security linters still check tests.
 New findings fail. Fixed findings also fail until you run
 `./scripts/gates.sh --update-baseline`. That command removes entries or reduces
 counts, but refuses all additions without changing the baseline. Any new exception

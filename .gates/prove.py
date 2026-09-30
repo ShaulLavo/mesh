@@ -56,6 +56,19 @@ def prove(root, evidence):
     write_go(root, CLEAN)
     expect(run_gates(root, evidence, "clean"), 0, "golangci: PASS")
 
+    write_go(root, 'package main\nfunc main() { println("stable"); println("stable"); println("stable") }\n')
+    expect(run_gates(root, evidence, "constant-new"), 1, "[goconst]")
+    baseline.write_text(json.dumps({"version": 2, "entries": [{
+        "gate": "golangci", "file": "cmd/mesh/main.go", "rule": "goconst",
+        "text": "string `stable`", "function": "", "count": 1,
+        "reason": "Deliberate fixture exception: diagnostic occurrence counts do not identify a finding.",
+    }]}))
+    expect(run_gates(root, evidence, "constant-baselined"), 0, "golangci: PASS")
+    write_go(root, 'package main\nfunc main() { println("stable"); println("stable"); println("stable"); println("stable") }\n')
+    expect(run_gates(root, evidence, "constant-more-occurrences"), 0, "golangci: PASS")
+    baseline.write_text(json.dumps({"version": 2, "entries": []}))
+    write_go(root, CLEAN)
+
     fixtures = {
         "dead-code": ("deadcode", CLEAN + "\nfunc abandonedValue() int { return 7 }\n"),
         "nesting": ("nestif", """\
