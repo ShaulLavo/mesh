@@ -67,7 +67,7 @@ packages=(./... ./.gates)
 shell_files=()
 arguments=()
 if (( fast )); then
-  git diff --cached --name-only --diff-filter=ACMRD -z >"$scratch/staged"
+  git diff --cached --name-only --no-renames --diff-filter=ACMRD -z >"$scratch/staged"
   # Inspect the index, not unstaged edits, without stashing or modifying the worktree.
   git checkout-index --all --prefix="$scratch/index/"
   cd "$scratch/index"
@@ -92,7 +92,7 @@ if (( fast )); then
       fi
     fi
     seen=0
-    for package in "${packages[@]}"; do
+    for package in ${packages[@]+"${packages[@]}"}; do
       [[ $package != "./$directory" ]] || seen=1
     done
     if (( ! seen )); then
@@ -138,7 +138,7 @@ fi
 if (( fast )); then
   printf '[]\n' >"$report_dir/deadcode.json"
   printf '[]\n' >"$report_dir/ruff.json"
-  go run ./.gates --reports "$report_dir" "${arguments[@]}"
+  go run ./.gates --reports "$report_dir" ${arguments[@]+"${arguments[@]}"}
   exit
 fi
 run_report deadcode "$report_dir/deadcode.json" \
@@ -165,4 +165,4 @@ echo 'terminal dependencies: PASS'
 if (( update )); then
   arguments+=(--update-baseline)
 fi
-go run ./.gates --reports "$report_dir" "${arguments[@]}"
+go run ./.gates --reports "$report_dir" ${arguments[@]+"${arguments[@]}"}
