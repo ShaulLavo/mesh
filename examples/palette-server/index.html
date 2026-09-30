@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f8f5f0">
+  <title>A little color room</title>
+  <style>
+    :root { color-scheme: light; --paper:#f8f5f0; --ink:#282722; --muted:#6d665e; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.5 system-ui,sans-serif; }
+    main { max-width:1180px; padding:40px 36px 70px; margin:auto; }
+    .top { display:flex; justify-content:space-between; align-items:center; gap:20px; }
+    .brand { font-size:13px; letter-spacing:.08em; text-transform:uppercase; font-weight:650; }
+    .small { font-size:12px; color:var(--muted); }
+    header { margin:70px 0 34px; display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:24px; }
+    h1 { font-family:Georgia,serif; font-weight:400; font-size:clamp(42px,6vw,70px); line-height:1.08; letter-spacing:-.05em; margin:0 0 15px; }
+    p { margin:0; color:var(--muted); }
+    button { font:inherit; cursor:pointer; touch-action:manipulation; }
+    .actions { display:flex; gap:10px; flex-wrap:wrap; }
+    .favorites { margin-top:38px; }
+    .favorites h2 { font:400 28px Georgia,serif; margin:0 0 8px; }
+    .saved { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; margin-top:18px; }
+    .favorite { border:1px solid #d1cbc2; border-radius:16px; padding:14px; }
+    .mini { display:flex; height:50px; overflow:hidden; border-radius:8px; margin-bottom:12px; }
+    .mini span { flex:1; }
+    .favorite .row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:10px; }
+    .favorite button { padding:6px 12px; min-height:44px; }
+    button:disabled { opacity:.55; cursor:wait; }
+    .action { border:1px solid #d1cbc2; background:transparent; padding:12px 19px; border-radius:999px; min-height:48px; color:var(--ink); }
+    .primary { background:var(--ink); color:var(--paper); border-color:var(--ink); }
+    button:focus-visible { outline:3px solid #6b60b0; outline-offset:5px; }
+    .palette { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
+    .swatch { position:relative; height:350px; border-radius:18px; overflow:hidden; }
+    .copy { border:0; background:transparent; color:inherit; padding:24px; width:100%; height:100%; display:flex; flex-direction:column; align-items:flex-start; justify-content:flex-end; text-align:left; }
+    .copy strong { font-size:22px; font-weight:550; letter-spacing:-.025em; }
+    .copy span { font-size:12px; margin-bottom:3px; }
+    .lock { position:absolute; top:14px; right:14px; border:1px solid currentColor; color:inherit; background:transparent; border-radius:50%; width:44px; height:44px; display:grid; place-items:center; }
+    .lock svg { width:17px; height:17px; }
+    .bottom { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-top:22px; }
+    #status { min-height:24px; color:var(--ink); }
+    footer { margin-top:70px; border-top:1px solid #dcd6cc; padding-top:20px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+    kbd { font:inherit; border:1px solid #d1cbc2; border-radius:4px; padding:1px 5px; }
+    @media (max-width:700px) { main { padding:26px 20px 65px; } header { margin-top:45px; } .palette { grid-template-columns:repeat(2,minmax(0,1fr)); } .swatch { height:180px; } .swatch:last-child { grid-column:span 2; height:130px; } .copy { padding:18px; } footer { margin-top:40px; } .top .small { max-width:130px; text-align:right; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="top"><div class="brand">A little color room</div><span class="small">A tiny idea, ready to share.</span></div>
+    <header><div><h1>Find your next five.</h1><p>Shuffle. Keep what you love. Take the colors with you.</p></div><div class="actions"><button class="action" id="export">Copy CSS</button><button class="action" id="save">Save palette</button><button class="action primary" id="shuffle">Shuffle ↗</button></div></header>
+    <section class="palette" id="palette" aria-label="Five-color palette"></section>
+    <div class="bottom"><p id="name">Soft landing</p><span class="small">Tap a color to copy. Tap a lock to keep it.</span></div>
+    <p id="status" role="status" aria-live="polite"></p>
+    <section class="favorites" aria-label="Shared favorites"><h2>Keep a little inspiration.</h2><p>Favorites are shared with everyone who opens this room.</p><button class="action" id="refresh" style="margin-top:14px">Refresh favorites</button><div id="favorites" class="saved"></div></section>
+    <footer><span class="small">Saved here, until this room disappears.</span><span class="small"><kbd>Space</kbd> to shuffle · <button id="reset" class="action" style="padding:6px 12px;min-height:40px">Reset</button></span></footer>
+  </main>
+  <script>
+    let current = [], locked = [false,false,false,false,false], name = '', busy = false;
+    const palette = document.querySelector('#palette'), status = document.querySelector('#status');
+    const lockIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3"/></svg>';
+    function foreground(hex) {
+      const channels = hex.slice(1).match(/../g).map(v => parseInt(v,16)/255).map(v => v<=.04045 ? v/12.92 : ((v+.055)/1.055)**2.4);
+      const light = channels[0]*.2126 + channels[1]*.7152 + channels[2]*.0722;
+      return (light+.05)/.05 > 1.05/(light+.05) ? '#000000' : '#ffffff';
+    }
+    function render() {
+      palette.replaceChildren(...current.map((hex,i) => {
+        const card = document.createElement('article'); card.className='swatch'; card.style.background=hex; card.style.color=foreground(hex);
+        const copy = document.createElement('button'); copy.className='copy'; copy.setAttribute('aria-label',`Copy color ${i+1}, ${hex}`); copy.innerHTML=`<span>COLOR 0${i+1}</span><strong>${hex}</strong>`;
+        copy.addEventListener('click',() => copyText(hex,`${hex} copied.`));
+        const lock = document.createElement('button'); lock.className='lock'; lock.innerHTML=lockIcon; lock.setAttribute('aria-label',`${locked[i] ? 'Unlock' : 'Lock'} color ${i+1}`); lock.setAttribute('aria-pressed',String(locked[i])); lock.style.background=locked[i] ? '#ffffff40' : 'transparent';
+        lock.addEventListener('click',() => toggleLock(i)); card.append(copy,lock); return card;
+      }));
+      document.querySelector('#name').textContent=name;
+    }
+    function toggleLock(i) { locked[i]=!locked[i]; render(); palette.children[i].querySelector('.lock').focus(); status.textContent=locked[i] ? `Color ${i+1} stays for the next shuffle.` : `Color ${i+1} unlocked.`; }
+    async function api(path, options = {}) {
+      const response = await fetch(path, options);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'The room could not answer. Try again.');
+      return result;
+    }
+    function request(method, payload) { return {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}; }
+    function applyPalette(value) { current=value.colors; name=value.name; render(); }
+    function setBusy(value) { busy=value; document.querySelector('#shuffle').disabled=value; document.querySelector('#save').disabled=value; document.querySelector('#reset').disabled=value; }
+    async function shuffle() {
+      if (busy) return;
+      if (locked.every(Boolean)) {status.textContent='All five colors are locked. Unlock one to explore.'; return;}
+      setBusy(true);
+      try {applyPalette(await api('/api/palette',request('POST',{name,colors:current,locked}))); status.textContent='';}
+      catch (error) {status.textContent=error.message;}
+      finally {setBusy(false);}
+    }
+    function favoriteCard(value) {
+      const card=document.createElement('article'); card.className='favorite';
+      const mini=document.createElement('div'); mini.className='mini';
+      value.colors.forEach(hex => {const swatch=document.createElement('span'); swatch.style.background=hex; mini.append(swatch);});
+      const title=document.createElement('strong'); title.textContent=value.name;
+      const row=document.createElement('div'); row.className='row';
+      const load=document.createElement('button'); load.className='action'; load.textContent='Use palette';
+      load.addEventListener('click',() => {if (busy) return; locked.fill(false); applyPalette(value); status.textContent='Favorite loaded.'; document.querySelector('#palette').scrollIntoView({block:'center'});});
+      const remove=document.createElement('button'); remove.className='action'; remove.textContent='Remove'; remove.setAttribute('aria-label',`Remove ${value.name}`);
+      remove.addEventListener('click',() => removeFavorite(value.id,remove));
+      row.append(load,remove); card.append(mini,title,row); return card;
+    }
+    async function refreshFavorites() {
+      const values=await api('/api/favorites');
+      const list=document.querySelector('#favorites'); list.replaceChildren(...values.map(favoriteCard));
+      if (!values.length) {const empty=document.createElement('p'); empty.textContent='Nothing saved yet. Find five colors you love.'; list.append(empty);}
+    }
+    async function saveFavorite() {
+      if (busy) return;
+      setBusy(true);
+      try {await api('/api/favorites',request('POST',{name,colors:current})); await refreshFavorites(); status.textContent='Saved. Open this room on another device to see it there.';}
+      catch (error) {status.textContent=error.message;}
+      finally {setBusy(false);}
+    }
+    async function removeFavorite(id,button) {
+      button.disabled=true;
+      try {await api(`/api/favorites/${id}`,{method:'DELETE'}); await refreshFavorites(); status.textContent='Favorite removed.';}
+      catch (error) {button.disabled=false; status.textContent=error.message;}
+    }
+    async function reset() {
+      if (busy) return;
+      setBusy(true);
+      try {locked.fill(false); applyPalette(await api('/api/palette')); status.textContent='Back to soft landing.';}
+      catch (error) {status.textContent=error.message;}
+      finally {setBusy(false);}
+    }
+    async function start() {
+      setBusy(true);
+      try {applyPalette(await api('/api/palette')); await refreshFavorites();}
+      catch (error) {status.textContent=error.message;}
+      finally {setBusy(false);}
+    }
+    async function copyText(text,message) {
+      try { await navigator.clipboard.writeText(text); status.textContent=message; }
+      catch { status.textContent='Select and copy the text below.'; const area=document.createElement('textarea'); area.value=text; area.setAttribute('aria-label','Text to copy'); area.style.width='100%'; status.append(area); area.focus(); area.select(); }
+    }
+    document.querySelector('#shuffle').addEventListener('click',shuffle);
+    document.querySelector('#export').addEventListener('click',() => copyText(`:root {\n${current.map((hex,i) => `  --color-${i+1}: ${hex};`).join('\n')}\n}`, 'Five CSS variables copied.'));
+    document.querySelector('#reset').addEventListener('click',reset);
+    document.querySelector('#save').addEventListener('click',saveFavorite);
+    document.querySelector('#refresh').addEventListener('click',() => refreshFavorites().catch(error => {status.textContent=error.message;}));
+    document.addEventListener('keydown',event => {if (event.code==='Space' && event.target===document.body) {event.preventDefault();shuffle();}});
+    void start();
+  </script>
+</body>
+</html>

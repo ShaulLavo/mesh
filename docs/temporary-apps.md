@@ -8,6 +8,9 @@ mesh app create pc ./backend --setup 'bun install' \
   --run 'bun run start --host 127.0.0.1' --port 3000
 ```
 
+For a dependency-free server example with shared SQLite favorites, see
+[A little color room](../examples/palette-server/README.md).
+
 Use `local` for this machine. Remote operations use the origin's authenticated
 Mesh SSH service, default port 2222. `--ssh-port` selects a different configured
 port. The origin needs `--public-edge-target`; its identity must be in the edge's
@@ -47,9 +50,12 @@ The edge issues a separate view-only cookie for the private app. Public visitors
 need no pairing and cannot change ownership or visibility.
 
 Click the floating dot to expand the pill. Drag or flick it to an edge; its position
-survives reloads. Copy the URL or open the controls menu. Paired owners can open
-trusted confirmation pages to publish, privatize, renew or delete, and download
-source. These pages are separate from app content.
+survives reloads. The share button copies the current URL. The lock button opens
+a trusted visibility confirmation for paired owners, or browser pairing for
+visitors. It appears only after the management origin responds. The dot collapses
+the pill. Owner authorization runs in a hidden frame; there is no controls menu.
+Management pages remain separate from app content. Renew, delete and source
+download are also available through the CLI.
 
 ```sh
 mesh app public pc 7k3d

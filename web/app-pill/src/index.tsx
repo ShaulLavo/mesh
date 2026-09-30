@@ -18,13 +18,12 @@ function loadDock(): { edge: SnapEdge; ratio: number } {
 function Pill(props: { appID: string; manager: string; nonce: string }) {
   const dock = loadDock();
   const [collapsed, setCollapsed] = createSignal(true);
-  const [menu, setMenu] = createSignal(false);
   const [edge, setEdge] = createSignal(dock.edge);
   const [ratio, setRatio] = createSignal(dock.ratio);
   const [position, setPosition] = createSignal<Position>({ x: -1000, y: -1000 });
   const [copied, setCopied] = createSignal(false);
   const [keyboardMotion, setKeyboardMotion] = createSignal(false);
-  const [status, setStatus] = createSignal('App');
+  const [access, setAccess] = createSignal<{ visibility: 'public' | 'private'; owns: boolean }>();
   let shell: HTMLDivElement | undefined;
   let frame: HTMLIFrameElement | undefined;
   let handle: HTMLButtonElement | undefined;
@@ -54,16 +53,16 @@ function Pill(props: { appID: string; manager: string; nonce: string }) {
   };
   const drag = createToolbarDrag({
     getContainerRef: () => shell, isCollapsed: collapsed, getExpandedDimensions: dimensions,
-    onDragStart: () => setMenu(false), onPositionUpdate: next => setPosition(constrain(next)),
+    onDragStart: () => setKeyboardMotion(false), onPositionUpdate: next => setPosition(constrain(next)),
     onSnapEdgeChange: (nextEdge, nextRatio) => { setEdge(nextEdge); setRatio(nextRatio); },
     onSnapComplete: result => { setPosition(constrain(result.position)); saveDock(); },
   });
-  const toggle = drag.createDragAwareHandler(() => { setCollapsed(value => !value); setMenu(false); });
+  const toggle = drag.createDragAwareHandler(() => setCollapsed(value => !value));
   const copy = async () => {
     try { await navigator.clipboard.writeText(location.origin); setCopied(true); clearTimeout(copyTimer); copyTimer = setTimeout(() => setCopied(false), 1800); }
     catch { window.prompt('Copy app link', location.origin); }
   };
-  createEffect(() => { collapsed(); menu(); edge(); queueMicrotask(redock); });
+  createEffect(() => { collapsed(); access(); edge(); queueMicrotask(redock); });
   onMount(() => {
     const abort = new AbortController();
     const { signal } = abort;
@@ -76,14 +75,15 @@ function Pill(props: { appID: string; manager: string; nonce: string }) {
       if (event.origin !== props.manager || event.source !== frame?.contentWindow) return;
       const value: unknown = event.data;
       if (typeof value !== 'object' || value === null || !('type' in value) || value.type !== 'mesh-app-status' || !('visibility' in value)) return;
-      if (value.visibility === 'public' || value.visibility === 'private') setStatus(value.visibility === 'public' ? 'Public' : 'Private');
+      if (!('owns' in value) || typeof value.owns !== 'boolean') return;
+      if (value.visibility === 'public' || value.visibility === 'private') setAccess({ visibility: value.visibility, owns: value.owns });
     }, { signal });
     onCleanup(() => { abort.abort(); observer.disconnect(); clearTimeout(copyTimer); });
     redock();
   });
   const keyboard = (event: KeyboardEvent) => {
     setKeyboardMotion(true);
-    if (event.key === 'Escape') { setMenu(false); setCollapsed(true); handle?.focus(); return; }
+    if (event.key === 'Escape') { setCollapsed(true); handle?.focus(); return; }
     const docks: Record<string, SnapEdge> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'top', ArrowDown: 'bottom' };
     const next = docks[event.key];
     if (!next || !event.altKey) return;
@@ -94,9 +94,28 @@ function Pill(props: { appID: string; manager: string; nonce: string }) {
     <div ref={shell} class="shell" classList={{ closed: collapsed(), dragging: drag.isDragging(), keyboard: keyboardMotion() }} style={{ transform: `translate3d(${position().x}px,${position().y}px,0)` }} onKeyDown={keyboard}>
       <div class="surface" role="toolbar" aria-label="Mesh app controls">
         <button ref={handle} class="handle" aria-label={collapsed() ? 'Open Mesh controls. Drag to move; Alt and arrow keys to dock.' : 'Collapse Mesh controls'} aria-expanded={!collapsed()} onPointerDown={event => { setKeyboardMotion(false); drag.handlePointerDown(event); }} onClick={toggle}><span class="dot"/></button>
-        <Show when={!collapsed()}><div class="controls"><span class="status">{status()}</span><button class="action" onClick={() => void copy()}>{copied() ? 'Copied' : 'Copy link'}</button><button class="action" aria-label="Owner controls" aria-expanded={menu()} onClick={() => setMenu(value => !value)}>...</button></div></Show>
+        <Show when={!collapsed()}>
+          <div class="controls">
+            <button class="action" aria-label={copied() ? 'Link copied' : 'Share app'} title={copied() ? 'Copied' : 'Copy link'} onClick={() => void copy()}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <path d={copied() ? 'm5 12 4 4L19 6' : 'M12 16V3m-5 5 5-5 5 5M5 13v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7'}/>
+              </svg>
+            </button>
+            <Show when={access()}>{current => {
+              const action = () => current().visibility === 'public' ? 'private' : 'public';
+              const label = () => current().owns ? `Make ${action()}` : 'Pair owner browser';
+              return <a class="action" href={current().owns ? `${props.manager}/confirm?id=${encodeURIComponent(props.appID)}&action=${action()}` : `${props.manager}/pair`} target="_blank" rel="noopener noreferrer" aria-label={label()} title={label()}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                  <rect x="5" y="10" width="14" height="11" rx="3"/>
+                  <path d={current().visibility === 'private' ? 'M8 10V7a4 4 0 0 1 8 0v3' : 'M8 10V7a4 4 0 0 1 8 0'}/>
+                  <path d="M12 14v3"/>
+                </svg>
+              </a>;
+            }}</Show>
+          </div>
+        </Show>
       </div>
-      <Show when={!collapsed() && menu()}><iframe ref={frame} class="frame" title="Mesh owner controls" src={`${props.manager}/frame?id=${encodeURIComponent(props.appID)}`} referrerPolicy="no-referrer"/></Show>
+      <Show when={!collapsed()}><iframe ref={frame} class="auth-frame" hidden aria-hidden="true" tabIndex={-1} title="Mesh browser authorization" src={`${props.manager}/frame?id=${encodeURIComponent(props.appID)}`} referrerPolicy="no-referrer"/></Show>
     </div>
   </>;
 }

@@ -83,6 +83,32 @@ func createStaticApp(t *testing.T, f *appFixture) Record {
 	return *result.App
 }
 
+func TestPillFrameReportsBrowserOwnership(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
+		t.Fatal(err)
+	}
+	owner := pairedOwner(t, f)
+	check := func(t *testing.T, cookie *http.Cookie, owns string) {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/frame?id="+app.ID, nil)
+		if cookie != nil {
+			request.AddCookie(cookie)
+		}
+		response := httptest.NewRecorder()
+		f.edge.ServeHost(response, request, ManagementHost)
+		if response.Code != http.StatusOK || !regexp.MustCompile(`owns:\s*`+owns+`\b`).MatchString(response.Body.String()) {
+			t.Fatalf("incorrect pill ownership: %d %s", response.Code, response.Body.String())
+		}
+		if strings.Contains(response.Body.String(), owner.Value) {
+			t.Fatal("pill frame leaked owner credential")
+		}
+	}
+	t.Run("visitor", func(t *testing.T) { check(t, nil, "false") })
+	t.Run("owner", func(t *testing.T) { check(t, owner, "true") })
+}
+
 func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 	f := newAppFixture(t)
 	app := createStaticApp(t, f)

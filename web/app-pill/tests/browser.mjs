@@ -51,7 +51,7 @@ async function checkInteractions(browser, name, reducedMotion) {
     await page.route(`${manager}/**`, route => route.fulfill({
       status: 200,
       contentType: 'text/html; charset=utf-8',
-      body: `<!doctype html><html><head><style>body{margin:0;padding:16px;color:#eef0f2;font:13px system-ui;background:#18181b}a{color:#a5b4fc}small{display:block;margin-bottom:12px}</style></head><body><small>Mock owner frame</small><a target="_blank" rel="noopener" href="${manager}/">Owner sign-in</a><script>parent.postMessage({type:'mesh-app-status',visibility:'public'},${JSON.stringify(origin)})</script></body></html>`,
+      body: `<!doctype html><html><head><style>body{margin:0;padding:16px;color:#eef0f2;font:13px system-ui;background:#18181b}a{color:#a5b4fc}small{display:block;margin-bottom:12px}</style></head><body><small>Mock owner frame</small><a target="_blank" rel="noopener" href="${manager}/">Owner sign-in</a><script>parent.postMessage({type:'mesh-app-status',visibility:'public',owns:true},${JSON.stringify(origin)})</script></body></html>`,
     }));
     await page.goto(origin);
     const pill = page.locator('mesh-app-pill');
@@ -62,16 +62,19 @@ async function checkInteractions(browser, name, reducedMotion) {
     assert(box && box.width >= 44 && box.height >= 44, 'Collapsed dot requires a 44px touch target');
     await handle.click();
     await pill.locator('.controls').waitFor({ state: 'visible' });
-    await pill.locator('[aria-label="Owner controls"]').click();
-    await page.waitForFunction(() => document.querySelector('mesh-app-pill').shadowRoot.querySelector('.status').textContent === 'Public');
+    await pill.locator('[aria-label="Make private"]').waitFor({ state: 'visible' });
+    assert.equal(await pill.locator('[aria-label="Make private"]').getAttribute('href'), `${manager}/confirm?id=7k3d&action=private`);
+    assert.equal(await pill.locator('button, a').count(), 3, 'Expanded pill has exactly three direct actions');
+    assert.equal(await pill.locator('iframe').isVisible(), false, 'Authorization must never show a blank panel');
+    assert.equal(await pill.locator('.status').count(), 0, 'No generic App label');
     assert.equal(await pill.locator('iframe').getAttribute('src'), `${manager}/frame?id=7k3d`);
     await page.evaluate(() => {
       for (const message of [
-        { origin: location.origin, source: window, data: { type: 'mesh-app-status', visibility: 'private' } },
-        { origin: 'https://apps.shaulavo.dev', source: window, data: { type: 'mesh-app-status', visibility: 'private' } },
+        { origin: location.origin, source: window, data: { type: 'mesh-app-status', visibility: 'private', owns: true } },
+        { origin: 'https://apps.shaulavo.dev', source: window, data: { type: 'mesh-app-status', visibility: 'private', owns: true } },
       ]) window.dispatchEvent(new MessageEvent('message', message));
     });
-    assert.equal(await pill.locator('.status').textContent(), 'Public', 'App messages must not impersonate the owner frame');
+    assert.equal(await pill.locator('[aria-label="Make private"]').count(), 1, 'App messages must not impersonate the owner frame');
     if (reducedMotion === 'reduce') {
       assert.equal(await pill.locator('.shell').evaluate(element => getComputedStyle(element).transitionDuration), '0s');
       assert.equal(await pill.locator('.controls').evaluate(element => getComputedStyle(element).animationName), 'none');
@@ -124,6 +127,36 @@ async function checkInteractions(browser, name, reducedMotion) {
   }
 }
 
+async function checkUnavailableOrVisitor(browser, name, unavailable) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  try {
+    const page = await context.newPage();
+    let resolveFrame;
+    const frameRequested = new Promise(resolve => { resolveFrame = resolve; });
+    await page.route(`${manager}/**`, async route => {
+      if (unavailable) await route.abort('failed');
+      else await route.fulfill({contentType: 'text/html', body: `<script>parent.postMessage({type:'mesh-app-status',visibility:'public',owns:false},${JSON.stringify(origin)})</script>`});
+      resolveFrame();
+    });
+    await page.goto(origin);
+    const pill = page.locator('mesh-app-pill');
+    await pill.locator('.handle').click();
+    await frameRequested;
+    await pill.getByRole('button', { name: 'Share app', exact: true }).waitFor();
+    assert.equal(await pill.locator('iframe').isVisible(), false);
+    assert.equal(await pill.locator('[aria-label="Owner controls"]').count(), 0);
+    assert.equal(await pill.locator('[aria-label="Make private"]').count(), 0);
+    if (unavailable) assert.equal(await pill.locator('a').count(), 0, 'Unavailable management must not leave a dead action');
+    else await pill.getByRole('link', { name: 'Pair owner browser' }).waitFor();
+    await screenshot(page, `${name}-${unavailable ? 'unavailable' : 'visitor'}`);
+    await pill.locator('.handle').click();
+    await pill.locator('.controls').waitFor({state: 'detached'});
+    console.log(`${name}: ${unavailable ? 'unavailable manager' : 'visitor pairing'} remains compact and usable`);
+  } finally {
+    await context.close();
+  }
+}
+
 try {
   for (const [name, engine] of [['chromium', chromium], ['webkit', webkit]]) {
     const options = name === 'chromium' && process.env.MESH_CHROMIUM_EXECUTABLE
@@ -133,6 +166,8 @@ try {
     try {
       await checkInteractions(browser, name, 'no-preference');
       await checkInteractions(browser, name, 'reduce');
+      await checkUnavailableOrVisitor(browser, name, false);
+      await checkUnavailableOrVisitor(browser, name, true);
     } finally {
       await browser.close();
     }
