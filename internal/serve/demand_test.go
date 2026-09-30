@@ -117,7 +117,7 @@ func TestRegistryGatesOnDemandRoutesAndSkipsLocalOnlyOnes(t *testing.T) {
 	registry.SetDemandGate(gate)
 	response = httptest.NewRecorder()
 	registry.ServeHTTP(response, request)
-	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "boom") {
+	if response.Code != http.StatusBadGateway || strings.Contains(response.Body.String(), "boom") {
 		t.Fatalf("failed start answered %d %q", response.Code, response.Body.String())
 	}
 
