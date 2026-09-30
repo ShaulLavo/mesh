@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -713,5 +714,100 @@ func TestDemandPublicationFailureDoesNotLaunchAgain(t *testing.T) {
 	defer reportedMu.Unlock()
 	if len(reported) == 0 || !strings.Contains(reported[0].Error(), "S001") {
 		t.Fatalf("reported %v, want the publication failure naming S001", reported)
+	}
+}
+
+// upgradingUpstream answers every request by switching protocols and then
+// holding the raw connection open until the test ends.
+func upgradingUpstream(t *testing.T) uint16 {
+	t.Helper()
+	var held sync.Mutex
+	var connections []net.Conn
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		connection, buffered, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		held.Lock()
+		connections = append(connections, connection)
+		held.Unlock()
+		_, _ = buffered.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tunnel\r\n\r\n")
+		_ = buffered.Flush()
+	}))
+	t.Cleanup(func() {
+		upstream.Close()
+		held.Lock()
+		defer held.Unlock()
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+	})
+	return uint16(upstream.Listener.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
+}
+
+func upgradeThrough(t *testing.T, address string) net.Conn {
+	t.Helper()
+	connection, err := net.Dial("tcp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	if _, err := fmt.Fprint(connection, "GET /socket HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: tunnel\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(connection), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade answered %s", response.Status)
+	}
+	return connection
+}
+
+func expectClosed(t *testing.T, connection net.Conn, what string) {
+	t.Helper()
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := connection.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("%s left its hijacked upstream tunnel open (read: %v)", what, err)
+	}
+}
+
+func TestDemandRemovalClosesHijackedConnections(t *testing.T) {
+	port := upgradingUpstream(t)
+	manager := testDemandManager(t, newFakeDemandSessions(), func() bool { return true })
+	tunnel := meshserve.Service{Name: "4000", Kind: meshserve.Proxy, Target: "4000", LocalOnly: true,
+		Listens: []meshserve.Listen{{Public: 4000, Upstream: port}}}
+	manager.Sync([]meshserve.Service{tunnel})
+	connection := upgradeThrough(t, listenerAddress(t, manager, 4000))
+
+	manager.Sync(nil)
+	expectClosed(t, connection, "unpublished route")
+}
+
+func TestDemandManagerCloseClosesHijackedConnections(t *testing.T) {
+	port := upgradingUpstream(t)
+	sessions := newFakeDemandSessions()
+	manager := testDemandManager(t, sessions, func() bool { return true })
+	service := demandService(time.Minute)
+	service.Listens = []meshserve.Listen{{Public: 5173, Upstream: port}}
+	manager.Sync([]meshserve.Service{service})
+	connection := upgradeThrough(t, listenerAddress(t, manager, 5173))
+	if status := manager.Status("dev"); status.Connections != 1 {
+		t.Fatalf("status = %+v, want the upgraded connection counted", status)
+	}
+
+	manager.Close()
+	expectClosed(t, connection, "closing the manager")
+	deadline := time.Now().Add(2 * time.Second)
+	for manager.Status("dev").Connections != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("connections = %d after close, want 0", manager.Status("dev").Connections)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if _, stopped := sessions.counts(); stopped != 0 || sessions.liveCount() != 1 {
+		t.Fatal("closing the manager stopped the route's session")
 	}
 }
