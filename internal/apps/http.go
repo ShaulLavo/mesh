@@ -162,6 +162,7 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 			request.URL.RawPath = "/.mesh-app/origin/" + id + request.URL.RawPath
 		}
 		request.Host = name
+		request.Header.Set("Accept-Encoding", "identity, gzip;q=0.8, br;q=0.8")
 		apppill.StripRequestCookies(request)
 		request.Header.Set("X-Mesh-App-Admission", base64.RawURLEncoding.EncodeToString(encoded))
 		request.Header.Set("X-Forwarded-Proto", "https")

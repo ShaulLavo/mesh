@@ -270,10 +270,15 @@ reference=$(sed -n 's/^on-demand service unavailable; reference \([A-Z2-7]\{26,\
 if grep -Eq 'BROKEN_OUTPUT_MARKER|session |command |status 7|route :' "$TEST_ROOT/broken.body"; then
   fail "502 disclosed owner diagnostics: $(<"$TEST_ROOT/broken.body")"
 fi
-grep -Fq "on-demand failure $reference: route :$BROKEN" "$TEST_ROOT/origin.log" ||
+grep -Fq "daemon: on-demand failure $reference: \"route :$BROKEN" "$TEST_ROOT/origin.log" ||
   fail "owner log has no correlated failure"
+[ "$(grep -Fc "daemon: on-demand failure $reference: " "$TEST_ROOT/origin.log")" = 1 ] ||
+  fail "owner log must contain exactly one correlated line before the HTTP response returns"
 grep -Fq 'status 7' "$TEST_ROOT/origin.log" || fail "owner log lost the exit status"
-grep -Fq 'command "echo BROKEN_OUTPUT_MARKER; exit 7"' "$TEST_ROOT/origin.log" || fail "owner log lost the command"
+grep -Fq 'command \"echo BROKEN_OUTPUT_MARKER; exit 7\"' "$TEST_ROOT/origin.log" || fail "owner log lost the command"
+grep -Fq '\n\nlast output:\nBROKEN_OUTPUT_MARKER' "$TEST_ROOT/origin.log" || fail "owner log did not escape the output"
+grep -Fq "The owner can see details with \`mesh serve ls\` and \`mesh logs <session>\`" "$TEST_ROOT/broken.body" ||
+  fail "502 has no owner hint"
 grep -Fq BROKEN_OUTPUT_MARKER "$TEST_ROOT/origin.log" || fail "owner log lost the output"
 failed_session=$(sed -n "s/.*on-demand failure $reference: .* (session \([^,]*\), command .*/\1/p" "$TEST_ROOT/origin.log")
 [ -n "$failed_session" ] || fail "owner log lost the session ID"

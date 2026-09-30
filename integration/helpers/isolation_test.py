@@ -5,7 +5,11 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import shutil
+import signal
 import subprocess
+import time
+from types import SimpleNamespace
 import sys
 import tempfile
 import unittest
@@ -125,6 +129,167 @@ class IsolationBoundaryTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("integration isolation refuses", result.stderr)
             self.assertFalse((home / ".config/mesh").exists())
+
+
+class ReviewRegressionsTest(unittest.TestCase):
+    def test_source_failure_never_invokes_mesh(self):
+        entry = Path(__file__).resolve().parents[1] / "kill_waits.sh"
+        source = entry.read_text().splitlines()[1]
+        for broken in ("missing", "error"):
+            with self.subTest(helper=broken), tempfile.TemporaryDirectory(prefix="m-source-") as temporary:
+                root = Path(temporary)
+                marker = root / "mesh-invoked"
+                binary = root / "mesh"
+                binary.write_text(f'#!/bin/sh\nprintf invoked > "{marker}"\n')
+                binary.chmod(0o700)
+                probe = root / "probe.sh"
+                probe.write_text('#!/bin/bash\n' + source + '\n"$MESH"\n')
+                if broken == "error":
+                    (root / "helpers").mkdir()
+                    (root / "helpers/isolate.sh").write_text("false\n")
+                environment = {"PATH": os.defpath, "HOME": str(root / "home"), "TMPDIR": str(root),
+                               "MESH": str(binary), "MESH_STATE_DIR": str(root / "state"),
+                               "MESH_CONFIG_DIR": str(root / "config")}
+                result = subprocess.run(["bash", str(probe)], env=environment, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(marker.exists(), "failed sourcing must stop before Mesh")
+
+    def test_symlink_launch_never_invokes_mesh(self):
+        entry = Path(__file__).resolve().parents[1] / "kill_waits.sh"
+        with tempfile.TemporaryDirectory(prefix="m-entry-link-") as temporary:
+            root = Path(temporary)
+            alias = root / "kill_waits.sh"
+            alias.symlink_to(entry)
+            marker = root / "mesh-invoked"
+            binary = root / "mesh"
+            binary.write_text(f'#!/bin/sh\nprintf invoked > "{marker}"\nexit 99\n')
+            binary.chmod(0o700)
+            environment = {"PATH": os.defpath, "HOME": str(root / "home"), "TMPDIR": str(root),
+                           "MESH": str(binary), "MESH_STATE_DIR": str(root / "state"),
+                           "MESH_CONFIG_DIR": str(root / "config")}
+            result = subprocess.run(["bash", str(alias)], env=environment, capture_output=True, text=True, timeout=15)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(marker.exists(), "an entry-point alias without helpers must fail closed")
+
+    def test_account_home_default_symlink_targets_are_refused(self):
+        with tempfile.TemporaryDirectory(prefix="m-passwd-home-") as temporary:
+            root = Path(temporary)
+            home = root / "caller-home"
+            home.mkdir()
+            account = root / "account-home"
+            for suffix in (".config/mesh", ".local/state/mesh"):
+                with self.subTest(default=suffix):
+                    default = account / suffix
+                    default.parent.mkdir(parents=True, exist_ok=True)
+                    target = root / suffix.replace("/", "-")
+                    target.mkdir()
+                    default.symlink_to(target, target_is_directory=True)
+                    with patch("isolation.pwd.getpwuid", return_value=SimpleNamespace(pw_dir=str(account))):
+                        with self.assertRaisesRegex(RuntimeError, "integration isolation refuses"):
+                            refuse_live_paths({"config": str(target)}, {"HOME": str(home)})
+
+    def test_fixture_refuses_all_destinations_before_writes(self):
+        for name in ("remote-config", "tailscale.json", "daemon.log", "config/hosts.json"):
+            with self.subTest(destination=name), tempfile.TemporaryDirectory(prefix="m-fixture-alias-") as temporary:
+                root = Path(temporary)
+                home = root / "home"
+                default = home / ".config/mesh"
+                default.mkdir(parents=True)
+                sentinel = default / "hosts.json"
+                sentinel.write_text("decoy untouched")
+                fixture_root = root / "fixture"
+                fixture_root.mkdir()
+                destination = fixture_root / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.symlink_to(default if name == "remote-config" else sentinel)
+                before = set(fixture_root.iterdir())
+                with patch.dict(os.environ, {"HOME": str(home)}, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, "integration isolation refuses"):
+                        Fixture("/bin/true", fixture_root)
+                self.assertEqual(set(fixture_root.iterdir()), before)
+                self.assertEqual(sentinel.read_text(), "decoy untouched")
+
+    def test_fixture_rechecks_destinations_before_starting_daemons(self):
+        for method in ("start_remote", "start_local_daemon"):
+            names = ("remote-config", "tailscale.json", "daemon.log", "config/hosts.json") if method == "start_remote" else ("daemon.log",)
+            for name in names:
+                with self.subTest(method=method, destination=name), tempfile.TemporaryDirectory(prefix="m-fixture-start-") as temporary:
+                    root = Path(temporary)
+                    home = root / "home"
+                    default = home / ".config/mesh"
+                    default.mkdir(parents=True)
+                    sentinel = default / "hosts.json"
+                    sentinel.write_text("decoy untouched")
+                    fixture_root = root / "fixture"
+                    fixture_root.mkdir()
+                    with patch.dict(os.environ, {"HOME": str(home)}, clear=True):
+                        fixture = Fixture("/bin/true", fixture_root)
+                        destination = fixture_root / name
+                        destination.symlink_to(default if name == "remote-config" else sentinel)
+                        with patch("terminal_window.subprocess.Popen", side_effect=RuntimeError("process launched")) as spawn:
+                            with self.assertRaisesRegex(RuntimeError, "integration isolation refuses"):
+                                getattr(fixture, method)()
+                        spawn.assert_not_called()
+                    self.assertEqual(sentinel.read_text(), "decoy untouched")
+
+    def test_fixture_preserves_symlinked_tmpdir_spelling(self):
+        with tempfile.TemporaryDirectory(prefix="m-fixture-tmp-") as temporary:
+            root = Path(temporary)
+            real = root / "real"
+            real.mkdir()
+            alias = root / "short"
+            alias.symlink_to(real, target_is_directory=True)
+            with tempfile.TemporaryDirectory(dir=alias, prefix="fixture-") as fixture_root:
+                environment = {"HOME": str(root / "home"), "TMPDIR": str(alias)}
+                with patch.dict(os.environ, environment, clear=True):
+                    fixture = Fixture("/bin/true", fixture_root)
+                self.assertEqual(fixture.environment["TMPDIR"], str(alias))
+                self.assertTrue(Path(fixture.environment["HOME"]).is_relative_to(fixture_root))
+                self.assertEqual(fixture.root, Path(fixture_root))
+
+    def test_cancelling_entry_pid_or_group_stops_children_and_cleans_scratch(self):
+        helpers = Path(__file__).resolve().parent
+        source = (helpers.parent / "kill_waits.sh").read_text().splitlines()[1]
+        for target in ("pid", "group"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory(prefix="m-cancel-") as temporary:
+                root = Path(temporary)
+                (root / "helpers").mkdir()
+                for name in ("isolate.sh", "isolation.py"):
+                    shutil.copyfile(helpers / name, root / "helpers" / name)
+                capture = root / "children"
+                probe = root / "probe.sh"
+                probe.write_text('#!/bin/bash\n' + source + '\nsleep 300 &\nchild=$!\n'
+                                 'printf "%s\\n" "$$" "$child" "$HOME" "$(ps -o pgid= -p $$)" > "$1"\nwait "$child"\n')
+                environment = {"PATH": os.defpath, "HOME": str(root / "caller-home"), "TMPDIR": str(root),
+                               "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config")}
+                entry = subprocess.Popen(["bash", str(probe), str(capture)], env=environment,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                child_group = None
+                try:
+                    deadline = time.monotonic() + 5
+                    while not capture.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(capture.exists(), "guarded probe did not start")
+                    inner, child, home, group = capture.read_text().splitlines()
+                    child_group = int(group)
+                    if target == "pid":
+                        entry.terminate()
+                    else:
+                        os.killpg(entry.pid, signal.SIGTERM)
+                    entry.wait(timeout=12)
+                    self.assertNotEqual(entry.returncode, 0)
+                    for pid in (int(inner), int(child)):
+                        status = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+                        self.assertFalse(status.stdout.strip() and not status.stdout.strip().startswith("Z"),
+                                         f"entry cancellation left process {pid} running")
+                    self.assertFalse(Path(home).parent.exists(), "entry cancellation leaked wrapper scratch")
+                finally:
+                    for group in {entry.pid, child_group} - {None}:
+                        try:
+                            os.killpg(group, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    entry.wait(timeout=3)
 
 
 class StandaloneIsolationTest(unittest.TestCase):

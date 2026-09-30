@@ -295,33 +295,19 @@ func TestServiceAppGuardRejectsOwnedPortsAndFileRootsBeforePersistence(t *testin
 	}
 }
 
-func TestServiceAppGuardWaitsForOriginMutationBeforeCheckingOwnedPort(t *testing.T) {
-	store, registry, controller := newServiceControllerTest(t, "/mesh")
-	origin, _ := protectedTestOrigin(t, store, registry, t.TempDir(), 31337)
-	release, err := origin.GuardService(context.Background(), nil, "")
+func TestHeldServiceGuardKeepsAppsOffItsPorts(t *testing.T) {
+	store, registry, _ := newServiceControllerTest(t, "/mesh")
+	origin, workers := protectedTestOrigin(t, store, registry, t.TempDir(), 0)
+	release, err := appServiceGuard(origin)(context.Background(), meshserve.Service{Name: "alias", Kind: meshserve.Proxy, Target: "31337"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := make(chan struct{})
-	guard := appServiceGuard(origin)
-	controller.guard = func(ctx context.Context, service meshserve.Service) (func(), error) {
-		close(started)
-		return guard(ctx, service)
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := controller.commitUpsert(context.Background(), protocol.Control{Type: protocol.TypeServiceUpsert, RequestID: "concurrent-alias", Service: &protocol.ServiceInfo{Name: "alias", Kind: "proxy", Target: "31337"}})
-		done <- err
-	}()
-	<-started
-	select {
-	case err := <-done:
-		release()
-		t.Fatalf("service commit passed the held origin lock: %v", err)
-	default:
+	create := apps.Request{Action: "create", Kind: "server", Command: "server", Port: 31337}
+	if _, err := origin.Handle(context.Background(), create); err == nil || !strings.Contains(err.Error(), "claimed by an ordinary service") || workers.starts != 0 {
+		t.Fatalf("app reserved a port an ordinary service commit holds: %v, starts=%d", err, workers.starts)
 	}
 	release()
-	if err := <-done; err == nil || !strings.Contains(err.Error(), "app-owned port") {
-		t.Fatalf("service did not inspect owned port after mutation: %v", err)
+	if _, err := origin.Handle(context.Background(), create); err == nil || strings.Contains(err.Error(), "ordinary service") {
+		t.Fatalf("released service guard still blocked the port: %v", err)
 	}
 }
