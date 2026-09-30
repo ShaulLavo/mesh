@@ -16,7 +16,7 @@ trap 'rm -rf -- "$scratch"' EXIT
 export MESH_PROOF_BINARY
 MESH_PROOF_BINARY=$(realpath "$MESH")
 export MESH_PROOF_CHECKPOINT="$scratch/checkpoint.json"
-export MESH_SHORT_TMP=${TMPDIR:-/tmp}
+export MESH_SHORT_TMP=${MESH_SHORT_TMP:-/tmp}
 cat >"$scratch/candidate" <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
