@@ -94,6 +94,10 @@ func Inject(resp *http.Response, config Config) error {
 	if resp == nil || resp.Body == nil {
 		return errors.New("apppill: missing response body")
 	}
+	if config.Private {
+		// Keep the edge framing policy outside the pill's script and frame adaptation.
+		defer resp.Header.Add("Content-Security-Policy", "frame-ancestors 'self'")
+	}
 	contentType, params, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil || contentType != "text/html" || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified {
 		return nil
