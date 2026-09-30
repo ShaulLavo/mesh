@@ -82,6 +82,8 @@ if (( fast )); then
     [[ $file == *.go ]] || continue
     directory=$(dirname -- "$file")
     [[ -d $directory ]] || continue
+    go_files=("$directory"/*.go)
+    [[ -f ${go_files[0]} ]] || continue
     if [[ -f $file ]]; then
       formatted=$(gofmt -l "$file")
       if [[ -n $formatted ]]; then
