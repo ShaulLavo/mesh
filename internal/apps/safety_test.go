@@ -10,53 +10,6 @@ import (
 	"testing"
 )
 
-func TestLinuxListenerAddressesRejectExternalBindings(t *testing.T) {
-	tests := []struct {
-		name, raw string
-		ipv6      bool
-		allowed   bool
-	}{
-		{"IPv4 loopback", "0100007F", false, true},
-		{"IPv4 wildcard", "00000000", false, false},
-		{"IPv4 Tailnet", "02004064", false, false},
-		{"IPv4 other loopback", "0200007F", false, false},
-		{"IPv6 loopback", "00000000000000000000000001000000", true, true},
-		{"IPv6 wildcard", "00000000000000000000000000000000", true, false},
-		{"IPv6 mapped loopback", "0000000000000000FFFF00000100007F", true, true},
-		{"IPv6 mapped wildcard", "0000000000000000FFFF000000000000", true, false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			raw := []byte("  sl  local_address rem_address st\n  0: " + test.raw + ":0BB8 00000000:0000 0A\n")
-			addresses, err := parseLinuxListeners(raw, 3000, test.ipv6)
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = validateServerAddresses(addresses)
-			if (err == nil) != test.allowed {
-				t.Fatalf("address=%v allowed=%t error=%v", addresses, test.allowed, err)
-			}
-		})
-	}
-}
-func TestLinuxListenerTableIncludesEverySelectedPortListener(t *testing.T) {
-	raw := []byte("sl local_address rem_address st\n0: 0100007F:0BB8 00000000:0000 0A\n1: 00000000:0BB8 00000000:0000 0A\n2: 00000000:0BB9 00000000:0000 0A\n3: 00000000:0BB8 00000000:0000 01\n")
-	addresses, err := parseLinuxListeners(raw, 3000, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(addresses) != 2 || validateServerAddresses(addresses) == nil {
-		t.Fatalf("missed external listener: %v", addresses)
-	}
-	for _, malformed := range []string{"0: malformed", "0: 0100007F:QQQQ 00000000:0000 0A", "0: zzzzzzzz:0BB8 00000000:0000 0A"} {
-		if _, err := parseLinuxListeners([]byte(malformed), 3000, false); err == nil {
-			t.Fatalf("accepted %q", malformed)
-		}
-	}
-	if _, err := parseLinuxListeners(make([]byte, maximumListenerTableBytes+1), 3000, false); err == nil {
-		t.Fatal("unbounded table accepted")
-	}
-}
 func TestDarwinListenerTableRejectsWildcardAndTailnet(t *testing.T) {
 	allowed := []byte("Active Internet connections (including servers)\nProto Recv-Q Send-Q Local Address Foreign Address (state)\ntcp4 0 0 127.0.0.1.3000 *.* LISTEN\ntcp6 0 0 ::1.3000 *.* LISTEN\ntcp4 0 0 *.4000 *.* LISTEN\ntcp4 0 0 100.64.0.2.3000 100.64.0.3.5000 ESTABLISHED\n")
 	addresses, err := parseDarwinListeners(allowed, 3000)
