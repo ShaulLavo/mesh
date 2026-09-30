@@ -49,26 +49,44 @@ try {
   assert(await button.isDisabled(), 'Elapsed time alone must not activate confirmation');
   await page.evaluate(() => document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true })));
   assert(await button.isDisabled(), 'Synthetic input must not activate confirmation');
-  await page.keyboard.press('Tab');
+  await page.keyboard.press('ArrowDown');
   assert(await button.isEnabled(), 'Deliberate keyboard input after the delay should activate');
 
-  const other = await context.newPage();
-  await other.bringToFront();
-  await page.waitForFunction(() => !document.hasFocus());
+  // Headless Chromium reports focus on both tabs. Control that input without replacing the page's guard.
+  await page.evaluate(() => {
+    document.hasFocus = () => false;
+    window.dispatchEvent(new Event('blur'));
+  });
   assert(await button.isDisabled(), 'Losing focus must deactivate confirmation');
   await page.clock.runFor(2000);
   assert(await button.isDisabled(), 'Background time must not count toward activation');
-  await page.bringToFront();
-  await page.waitForFunction(() => document.hasFocus());
-  await page.keyboard.press('Tab');
+  await page.evaluate(() => {
+    document.hasFocus = () => true;
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.keyboard.press('ArrowDown');
   await page.clock.runFor(749);
   assert(await button.isDisabled(), 'Refocusing requires a fresh 750 ms delay');
+  await page.clock.runFor(1);
+  assert(await button.isEnabled());
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.clock.runFor(2000);
+  assert(await button.isDisabled(), 'Hidden time must not activate confirmation');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.keyboard.press('ArrowDown');
+  await page.clock.runFor(749);
+  assert(await button.isDisabled(), 'Becoming visible requires a fresh delay');
   await page.clock.runFor(1);
   assert(await button.isEnabled());
   await button.click();
   await page.getByText('Confirmed', { exact: true }).waitFor();
   assert.equal(submissions, 1, 'An activated confirmation should submit exactly once');
-  await other.close();
 
   for (const action of ['public', 'delete']) {
     await page.goto(`${manager}/confirm?id=7k3d&action=${action}`);
@@ -76,7 +94,7 @@ try {
     assert(await confirm.isDisabled());
     await page.locator('#confirm-id').fill('wrong');
     await page.clock.runFor(750);
-    await page.keyboard.press('Tab');
+    await page.keyboard.press('ArrowDown');
     assert(await confirm.isDisabled(), `${action} requires the exact app ID`);
     await page.locator('#confirm-id').fill('7k3d');
     assert(await confirm.isEnabled());

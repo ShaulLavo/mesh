@@ -55,6 +55,36 @@ keep GET read-only and defend mutations against headerless legacy clients.
 WebSocket clients without Origin cannot upgrade. Public-app admission and
 management authorization retain their existing behavior.
 
+Browser pairing starts only after a same-origin POST from the pairing form.
+Anonymous GETs create no pending records or durable writes. Each browser reuses
+its pending cookie and code until approval or expiry. Unapproved pairs stay in
+memory; restarting the edge requires a new code, while approved grants remain
+durable. Each IPv4 address or IPv6 /64 may issue eight codes per minute and
+occupy four of the global 256 slots. A new code at that source's occupancy cap
+replaces its oldest unapproved pair, never an approved one. Shared NATs and /64s
+share these limits. `mesh app browser approve` prints the pending browser's
+bounded User-Agent summary, source IP, and age before asking for a default-no
+TTY confirmation. These details are unverified hints, not proof of identity.
+Noninteractive approval requires `--yes`, which skips the human check for scripts.
+Never approve a code merely because an app, message, or agent asks for it.
+Browser `/confirm` buttons start disabled and require 750 ms of uninterrupted
+visibility and focus plus deliberate pointer or keyboard input. Public exposure
+and deletion also require typing the app ID. Confirm pages cannot be framed.
+
+To rerun the confirmation browser check, render the Go templates into a scratch
+directory, then run the verifier from the repository root:
+
+```sh
+export MESH_CONFIRM_BROWSER_DIR=$(mktemp -d /work/tmp/mesh-confirm-XXXXXX)
+TMPDIR=/work/tmp go test ./internal/apps -run '^TestConfirmationBrowserPages$'
+node web/app-pill/tests/confirm.mjs "$MESH_CONFIRM_BROWSER_DIR"
+```
+
+The script uses the existing Playwright development dependency and headless
+Chromium. Set `MESH_PLAYWRIGHT_MODULE` to an installed Playwright entry point or
+`MESH_CHROMIUM_EXECUTABLE` to a system Chromium binary if needed. All browser
+requests are intercepted; no application or management origin receives traffic.
+
 ## Starting points and scope changes
 
 The source baseline is `492ae74`. Reuse these mechanisms:

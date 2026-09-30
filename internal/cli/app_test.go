@@ -142,7 +142,6 @@ func TestAppCLIManagementAndUpdateMapping(t *testing.T) {
 		{[]string{"app", "renew", "pc", "7k3d"}, "renew", "7k3d", "", ""},
 		{[]string{"app", "delete", "pc", "7k3d"}, "delete", "7k3d", "", ""},
 		{[]string{"app", "info", "pc", "7k3d"}, "inspect", "7k3d", "", ""},
-		{[]string{"app", "browser", "approve", "pc", "abcde-fghjk"}, "browser.approve", "", "abcde-fghjk", ""},
 		{[]string{"app", "browser", "revoke", "pc", "browser-id"}, "browser.revoke", "", "", "browser-id"},
 		{[]string{"app", "update", "pc", "7k3d", dir}, "update", "7k3d", "", ""},
 	}

@@ -118,7 +118,7 @@ func TestPairingInspectionReportsTrustedSourceBrowserAndAge(t *testing.T) {
 		t.Fatal("missing pending code")
 	}
 	f.now = f.now.Add(90 * time.Second)
-	result, err := f.edge.apply(context.Background(), identityFor(f.ownerKey), Request{Action: "browser.inspect", Code: code[1]})
+	result, err := f.origin.Handle(context.Background(), Request{Action: "browser.inspect", Code: code[1]})
 	if err != nil {
 		t.Fatalf("owner cannot inspect browser: %v", err)
 	}

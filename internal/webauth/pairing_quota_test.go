@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,7 +17,7 @@ func beginFrom(t *testing.T, s *Service, address string, cookies ...*http.Cookie
 	r.RemoteAddr = address
 	r.Header.Set("User-Agent", "Mozilla/5.0 TestBrowser/1.0")
 	w := httptest.NewRecorder()
-	p, err := s.Begin(context.Background(), w, r)
+	p, err := s.Begin(context.Background(), w, r, netip.MustParseAddrPort(address).Addr())
 	return p, w, err
 }
 
@@ -118,5 +120,94 @@ func TestUnapprovedPairDoesNotPersistWithOtherChanges(t *testing.T) {
 	}
 	if _, err := restarted.Promote(context.Background(), httptest.NewRecorder(), request(namedCookie(t, w, PairCookie))); err != nil {
 		t.Fatalf("durable approval lost: %v", err)
+	}
+}
+
+func TestApprovedSourceSlotsCannotBeEvicted(t *testing.T) {
+	s, _, _ := fixture(t)
+	for range 4 {
+		p, _, err := beginFrom(t, s, "192.0.2.1:1234")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Approve(context.Background(), p.Code, "owner-a"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := beginFrom(t, s, "192.0.2.1:9999"); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("approved occupancy was evicted: %v", err)
+	}
+	if _, _, err := beginFrom(t, s, "192.0.2.2:1234"); err != nil {
+		t.Fatalf("approved first source blocked second source: %v", err)
+	}
+}
+
+func TestPairingConcurrentStartsRespectSourceLimits(t *testing.T) {
+	s, store, _ := fixture(t)
+	results := make(chan error, 32)
+	for range 32 {
+		go func() {
+			_, _, err := beginFrom(t, s, "192.0.2.1:1234")
+			results <- err
+		}()
+	}
+	issued := 0
+	for range 32 {
+		err := <-results
+		if err == nil {
+			issued++
+		} else if !errors.Is(err, ErrRateLimited) {
+			t.Fatal(err)
+		}
+	}
+	if issued != 8 || len(s.state.Pairs) != 4 || len(store.raw) != 0 {
+		t.Fatalf("concurrent issuance=%d occupancy=%d durable bytes=%d", issued, len(s.state.Pairs), len(store.raw))
+	}
+}
+
+func TestPendingPairSurvivesFailedApprovalWithSafeMetadata(t *testing.T) {
+	s, store, _ := fixture(t)
+	r := request()
+	r.Header.Set("User-Agent", "TestBrowser\x1b[2J\r\n\u202e"+strings.Repeat("x", 400))
+	w := httptest.NewRecorder()
+	store.fail = true
+	p, err := s.Begin(context.Background(), w, r, netip.MustParseAddr("::ffff:192.0.2.1"))
+	if err != nil {
+		t.Fatalf("pending issuance depended on disk: %v", err)
+	}
+	if err := s.Approve(context.Background(), p.Code, "owner-a"); err == nil {
+		t.Fatal("approval ignored failed persistence")
+	}
+	info, err := s.Inspect(context.Background(), p.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.SourceIP != "192.0.2.1" || len([]rune(info.UserAgent)) != 256 || strings.ContainsAny(info.UserAgent, "\x1b\r\n\u202e") {
+		t.Fatalf("unsafe metadata: %#v", info)
+	}
+	reused, err := s.Begin(context.Background(), httptest.NewRecorder(), request(namedCookie(t, w, PairCookie)), netip.MustParseAddr("192.0.2.1"))
+	if err != nil || reused.Code != p.Code {
+		t.Fatalf("failed approval lost pending browser: %v", err)
+	}
+}
+
+func TestGlobalPairingBackstopStillReusesPendingBrowser(t *testing.T) {
+	s, _, _ := fixture(t)
+	first, w, err := beginFrom(t, s, "192.0.2.1:1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < maxPairs; i++ {
+		ip := netip.AddrFrom4([4]byte{198, 51, byte(i / 256), byte(i % 256)})
+		if _, err := s.Begin(context.Background(), httptest.NewRecorder(), request(), ip); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := beginFrom(t, s, "203.0.113.1:1234"); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("global backstop not enforced: %v", err)
+	}
+	reused, _, err := beginFrom(t, s, "192.0.2.1:1234", namedCookie(t, w, PairCookie))
+	if err != nil || reused.Code != first.Code {
+		t.Fatalf("global backstop blocked existing browser: %v", err)
 	}
 }

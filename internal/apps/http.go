@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strings"
@@ -372,7 +373,7 @@ func (s *activeStream) Close() error {
 	return err
 }
 
-var page = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh temporary apps</title><style>body{font:16px system-ui;background:#101214;color:#eef0f2;margin:0;padding:24px}main{max-width:680px;margin:auto}a{color:#9ddcff}button,a.button{border:0;border-radius:999px;background:#e9edf2;color:#101214;padding:10px 16px;cursor:pointer;display:inline-block;text-decoration:none}code{font-size:16px;overflow-wrap:anywhere}.pill{display:flex;align-items:center;gap:10px;padding:8px;flex-wrap:wrap}small{color:#bcc4cb}form{display:inline}body.frame{padding:0;border-radius:999px}.error{color:#ffbab4}</style></head><body class="{{if .Frame}}frame{{end}}"><main>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Code}}<h1>Pair this browser</h1><p>Approve from the Mesh host that owns the app:</p><code>mesh app browser approve HOST {{.Code}}</code><p>Code: <strong>{{.Code}}</strong></p><p>Expires in 10 minutes.</p><p id="pair-status" role="status">Waiting for approval. This page will continue automatically.</p><button id="check-approval" type="button">Check now</button><p><a id="restart-pair" href="/pair" hidden>Get a new code</a></p>{{else if .Frame}}<div class="pill"><strong>Mesh</strong><small>{{.App.Visibility}}</small><a href="{{.URL}}" target="_blank" rel="noopener">Share</a>{{if .Owns}}<a href="/confirm?id={{.App.ID}}&action={{.Toggle}}" target="_blank" rel="noopener">Make {{.Toggle}}</a><a href="/confirm?id={{.App.ID}}&action=renew" target="_blank" rel="noopener">Renew</a><a href="/download?id={{.App.ID}}" target="_blank" rel="noopener">Download</a><a href="/confirm?id={{.App.ID}}&action=delete" target="_blank" rel="noopener">Delete</a>{{else}}<a href="/pair" target="_blank" rel="noopener">Pair browser</a>{{end}}</div>{{else if .Confirm}}<h1>{{.Confirm}} {{.App.ID}}</h1><p>Owner controls for <a href="{{.URL}}">{{.URL}}</a>.</p><form method="post" action="/action"><input type="hidden" name="id" value="{{.App.ID}}"><input type="hidden" name="action" value="{{.Confirm}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="return" value="{{.Return}}"><button>Confirm {{.Confirm}}</button></form>{{else}}<h1>Temporary apps</h1><p>Apps expire after 24 hours without app traffic. Expiry deletes their managed source, data and server.</p>{{range .Apps}}<p><a href="/view?id={{.ID}}">{{.ID}}.shaulavo.dev</a> · {{.Visibility}} · {{.Status}}<br><small>Expires {{.ExpiresAt}}</small></p>{{end}}<a href="/pair">Pair another owner</a>{{end}}</main>{{if .Frame}}<script>parent.postMessage({type:'mesh-app-status',visibility:{{.App.Visibility}},owns:{{.Owns}},deadline:{{.App.ExpiresAt.Format "2006-01-02T15:04:05Z07:00"}}},{{.Parent}})</script>{{end}}{{if .Code}}<script>
+var page = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh temporary apps</title><style>body{font:16px system-ui;background:#101214;color:#eef0f2;margin:0;padding:24px}main{max-width:680px;margin:auto}a{color:#9ddcff}button,a.button{border:0;border-radius:999px;background:#e9edf2;color:#101214;padding:10px 16px;cursor:pointer;display:inline-block;text-decoration:none}code{font-size:16px;overflow-wrap:anywhere}.pill{display:flex;align-items:center;gap:10px;padding:8px;flex-wrap:wrap}small{color:#bcc4cb}form{display:inline}body.frame{padding:0;border-radius:999px}.error{color:#ffbab4}</style></head><body class="{{if .Frame}}frame{{end}}"><main>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Code}}<h1>Pair this browser</h1><p>Approve from the Mesh host that owns the app:</p><code>mesh app browser approve HOST {{.Code}}</code><p>Code: <strong>{{.Code}}</strong></p><p>Expires in 10 minutes.</p><p id="pair-status" role="status">Waiting for approval. This page will continue automatically.</p><button id="check-approval" type="button">Check now</button><p><a id="restart-pair" href="/pair" hidden>Get a new code</a></p>{{else if .PairStart}}<h1>Pair this browser</h1><p>Start pairing, then approve the code on the Mesh host that owns your app.</p><form method="post" action="/pair"><input type="hidden" name="return" value="{{.Return}}"><button>Start pairing</button></form>{{else if .Frame}}<div class="pill"><strong>Mesh</strong><small>{{.App.Visibility}}</small><a href="{{.URL}}" target="_blank" rel="noopener">Share</a>{{if .Owns}}<a href="/confirm?id={{.App.ID}}&action={{.Toggle}}" target="_blank" rel="noopener">Make {{.Toggle}}</a><a href="/confirm?id={{.App.ID}}&action=renew" target="_blank" rel="noopener">Renew</a><a href="/download?id={{.App.ID}}" target="_blank" rel="noopener">Download</a><a href="/confirm?id={{.App.ID}}&action=delete" target="_blank" rel="noopener">Delete</a>{{else}}<a href="/pair" target="_blank" rel="noopener">Pair browser</a>{{end}}</div>{{else if .Confirm}}<h1>{{.Confirm}} {{.App.ID}}</h1><p>Owner controls for <a href="{{.URL}}">{{.URL}}</a>.</p><form id="confirm-form" method="post" action="/action"><input type="hidden" name="id" value="{{.App.ID}}"><input type="hidden" name="action" value="{{.Confirm}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="return" value="{{.Return}}">{{if or (eq .Confirm "public") (eq .Confirm "delete")}}<p><label>Type {{.App.ID}} to confirm <input id="confirm-id" name="confirmation" autocomplete="off" required></label></p>{{end}}<p><small>Read the change, then move the pointer or use the keyboard to enable confirmation.</small></p><button id="confirm-action" disabled>Confirm {{.Confirm}}</button></form>{{else}}<h1>Temporary apps</h1><p>Apps expire after 24 hours without app traffic. Expiry deletes their managed source, data and server.</p>{{range .Apps}}<p><a href="/view?id={{.ID}}">{{.ID}}.shaulavo.dev</a> · {{.Visibility}} · {{.Status}}<br><small>Expires {{.ExpiresAt}}</small></p>{{end}}<a href="/pair">Pair another owner</a>{{end}}</main>{{if .Frame}}<script>parent.postMessage({type:'mesh-app-status',visibility:{{.App.Visibility}},owns:{{.Owns}},deadline:{{.App.ExpiresAt.Format "2006-01-02T15:04:05Z07:00"}}},{{.Parent}})</script>{{end}}{{if .Code}}<script>
 const checkButton = document.getElementById('check-approval');
 const status = document.getElementById('pair-status');
 const expiresAt = performance.now() + {{.PairLifetimeMS}};
@@ -412,11 +413,47 @@ async function checkApproval() {
 checkButton.addEventListener('click', checkApproval);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkApproval(); });
 checkApproval();
+</script>{{end}}{{if .Confirm}}<script>
+const confirmButton = document.getElementById('confirm-action');
+const confirmForm = document.getElementById('confirm-form');
+const confirmID = document.getElementById('confirm-id');
+let focusedAt = null;
+let deliberate = false;
+let activationTimer;
+function activePage() { return document.visibilityState === 'visible' && document.hasFocus(); }
+function updateActivation() {
+  confirmButton.disabled = !activePage() || focusedAt === null || performance.now() - focusedAt < 750 || !deliberate || (confirmID && confirmID.value !== {{.App.ID}});
+}
+function resetActivation() {
+  clearTimeout(activationTimer);
+  deliberate = false;
+  focusedAt = activePage() ? performance.now() : null;
+  confirmButton.disabled = true;
+  if (focusedAt !== null) activationTimer = setTimeout(updateActivation, 750);
+}
+function deliberateInput(event) {
+  if (event.isTrusted && activePage()) {
+    deliberate = true;
+    updateActivation();
+  }
+}
+window.addEventListener('focus', resetActivation);
+window.addEventListener('blur', resetActivation);
+window.addEventListener('pageshow', resetActivation);
+document.addEventListener('visibilitychange', resetActivation);
+document.addEventListener('pointermove', deliberateInput);
+document.addEventListener('keydown', deliberateInput);
+if (confirmID) confirmID.addEventListener('input', updateActivation);
+confirmForm.addEventListener('submit', event => {
+  updateActivation();
+  if (confirmButton.disabled) event.preventDefault();
+});
+resetActivation();
 </script>{{end}}</body></html>`))
 
 type pageData struct {
 	Error, Code, Return, URL, Toggle, Confirm, CSRF, Parent string
-	Frame, Owns                                             bool
+	Frame, Owns, PairStart                                  bool
 	PairLifetimeMS                                          int64
 	App                                                     Record
 	Apps                                                    []Record
@@ -435,13 +472,8 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 		e.pairStatus(w, r)
 		return
 	}
-	if r.URL.Path == "/pair" && r.Method == "GET" {
-		pair, err := e.auth.Begin(r.Context(), w, r)
-		if err != nil {
-			http.Error(w, "Pairing unavailable", http.StatusTooManyRequests)
-			return
-		}
-		render(w, pageData{Code: pair.Code, Return: "/", PairLifetimeMS: max(0, pair.ExpiresAt.Sub(e.config.Now()).Milliseconds())})
+	if r.URL.Path == "/pair" {
+		e.pairPage(w, r)
 		return
 	}
 	if r.URL.Path == "/frame" {
@@ -460,12 +492,12 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Pair your browser first", http.StatusUnauthorized)
 			return
 		}
-		pair, pairErr := e.auth.Begin(r.Context(), w, r)
-		if pairErr != nil {
-			http.Error(w, "Pairing unavailable", http.StatusTooManyRequests)
-			return
+		pair, pairErr := e.auth.Pending(r.Context(), r)
+		if pairErr == nil {
+			render(w, pageData{Code: pair.Code, Return: managementReturn(r), PairLifetimeMS: max(0, pair.ExpiresAt.Sub(e.config.Now()).Milliseconds())})
+		} else {
+			render(w, pageData{PairStart: true, Return: managementReturn(r)})
 		}
-		render(w, pageData{Code: pair.Code, Return: managementReturn(r), PairLifetimeMS: max(0, pair.ExpiresAt.Sub(e.config.Now()).Milliseconds())})
 		return
 	}
 	if r.URL.Path == "/action" {
@@ -531,6 +563,62 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 	e.mu.Unlock()
 	render(w, pageData{Apps: apps})
 }
+func (e *Edge) pairPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.Method == http.MethodPost {
+		e.startPairing(w, r)
+		return
+	}
+	destination := pairingReturn(r.URL.Query().Get("return"))
+	if _, err := e.auth.Promote(r.Context(), w, r); err == nil {
+		http.Redirect(w, r, ManagementOrigin+destination, http.StatusSeeOther) //nolint:gosec // pairingReturn permits only local paths on this fixed management origin.
+		return
+	}
+	pair, err := e.auth.Pending(r.Context(), r)
+	if err != nil {
+		render(w, pageData{PairStart: true, Return: destination})
+		return
+	}
+	render(w, pageData{Code: pair.Code, Return: destination, PairLifetimeMS: max(0, pair.ExpiresAt.Sub(e.config.Now()).Milliseconds())})
+}
+
+func (e *Edge) startPairing(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Origin") != ManagementOrigin {
+		http.Error(w, "Start pairing from Mesh", http.StatusForbidden)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8192)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid pairing request", http.StatusBadRequest)
+		return
+	}
+	destination := pairingReturn(r.PostForm.Get("return"))
+	var ip netip.Addr
+	if e.config.ClientIP != nil {
+		ip = e.config.ClientIP(r)
+	} else if address, parseErr := netip.ParseAddrPort(r.RemoteAddr); parseErr == nil {
+		ip = address.Addr()
+	}
+	pair, err := e.auth.Begin(r.Context(), w, r, ip)
+	if err != nil {
+		http.Error(w, "Pairing unavailable. Try again in a minute.", http.StatusTooManyRequests)
+		return
+	}
+	render(w, pageData{Code: pair.Code, Return: destination, PairLifetimeMS: max(0, pair.ExpiresAt.Sub(e.config.Now()).Milliseconds())})
+}
+
+func pairingReturn(value string) string {
+	target, err := url.Parse(value)
+	if err != nil || target.IsAbs() || target.Host != "" || target.Opaque != "" {
+		return "/"
+	}
+	return managementReturn(&http.Request{URL: target})
+}
+
 func (e *Edge) pairStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
