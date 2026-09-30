@@ -223,6 +223,11 @@ it is a nicety, not the only way in.
 
 ## D22 — Serving is exposure, not deployment or sharing
 
+Scope update, 2026-09-30: [D30](#d30--temporary-apps-have-an-owned-lifecycle)
+and the Approved [temporary-app plan](06-temporary-apps.md) supersede this
+exclusion for disposable websites. The original rationale below still defines
+ordinary `serve` and reverse-tunnel behavior.
+
 A separate product will handle sharing work with other people: quick dev builds,
 preview links, sending someone the thing you are working on. That is not this,
 and Mesh will not grow toward it.
@@ -367,3 +372,33 @@ will not be added, so `mesh ls` and the picker each splice it in deliberately.
 Pre-picker containment capture is local only. Remote containing identities keep
 an unavailable frozen preview, because waiting for their screen delays startup
 and capturing it after rendering can record the picker itself.
+
+## D30 — Temporary apps have an owned lifecycle
+
+Status: Approved, 2026-09-30. See [the execution plan](06-temporary-apps.md).
+
+Mesh adds `mesh app` for disposable static websites and HTTP servers. Allocate
+four-character hostnames such as `7k3d.shaulavo.dev` with an atomic edge-wide
+reservation. Start owner-only. The origin host's Mesh identity owns the app;
+explicit browser pairing grants that identity's management permissions.
+
+Everyone who can view an app gets the floating Solid pill. Public visitors
+receive visitor controls. The owner can change visibility, renew, download
+source, and delete. Enforce permissions on the server and isolate owner
+credentials from arbitrary app code.
+
+Admitted app traffic extends a 24-hour inactivity deadline. Expiry revokes
+access, stops the app, and deletes its managed workspace and local data.
+Retain the used hostname so old links cannot open an unrelated future app.
+An offline origin completes pending cleanup when it returns.
+
+This is an explicit scope change from D22. App name allocation is also a scoped
+exception to D15's manually typed names; public visibility still requires an
+explicit owner action. D20's ordinary SSH tunnel contract remains unchanged.
+Private apps use authenticated access on their eventual shared hostname, which
+is distinct from D13's tailnet-only service names.
+
+Terminal sessions retain host ownership and direct transport. Existing `serve`
+routes and tunnels retain their lifecycles. This feature uses the current
+process model and does not promise OS sandbox containment or a general build
+and deployment pipeline.

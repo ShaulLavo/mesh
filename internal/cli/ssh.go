@@ -40,6 +40,9 @@ func NewSSHSessionHandler(stateDir string, picker TerminalPickerFactory) sshd.Se
 }
 
 func (a sshApplication) run(ctx context.Context, client sshd.Session) (int, error) {
+	if client.Command.Kind == sshd.CommandApp {
+		return a.runApp(ctx, client)
+	}
 	if client.Command.Kind == sshd.CommandList {
 		catalog, err := a.catalog(ctx)
 		if err != nil {

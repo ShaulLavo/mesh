@@ -4,3 +4,5 @@
 *.db
 *.db-wal
 *.db-shm
+
+/web/app-pill/node_modules/

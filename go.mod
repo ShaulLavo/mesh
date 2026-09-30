@@ -13,6 +13,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	charm.land/ssh v0.4.2
 	charm.land/wish/v2 v2.0.3
+	github.com/andybalholm/brotli v1.2.5
 	github.com/charmbracelet/fang v1.0.0
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886
 	github.com/charmbracelet/x/ansi v0.11.8
@@ -29,6 +30,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/spf13/cobra v1.9.1
 	golang.org/x/crypto v0.56.0
+	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/time v0.15.0
 	modernc.org/sqlite v1.57.0

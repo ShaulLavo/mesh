@@ -14,6 +14,9 @@ import (
 
 // Control message type names.
 const (
+	TypeAppRequest         = "app.request"
+	TypeAppResult          = "app.result"
+	TypeAppEdge            = "app.edge"
 	TypeAttach             = "session.attach"
 	TypeAttachDetached     = "session.attach-detached"
 	TypeAttached           = "session.attached"
@@ -269,6 +272,7 @@ type EdgeListProof struct {
 // Control is the envelope for every JSON control message. Unused fields are
 // omitted so messages stay readable on the wire during debugging.
 type Control struct {
+	App                  json.RawMessage      `json:"app,omitempty"`
 	Update               json.RawMessage      `json:"update,omitempty"`
 	AgentLaunch          *agentresume.Launch  `json:"agentLaunch,omitempty"`
 	AgentEvent           *agentresume.Event   `json:"agentEvent,omitempty"`

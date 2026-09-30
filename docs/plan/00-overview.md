@@ -160,11 +160,12 @@ other users · replacing Tailscale · arbitrary proxying through the Pi.
 T25's use of native agent resume commands is narrower than coding-agent
 knowledge: providers still own their conversations, tools, and authentication.
 
-Deployment is not on that list, because it is not a later Mesh feature at all. A
-separate product handles sharing work with other people: dev builds, preview
-links, sending someone what you are working on. Mesh serving publishes something
-that already runs on a machine you own, for you to reach from outside. See D22
-for where the line falls and how to tell which side a request is on.
+Temporary websites are now Approved as a separate `mesh app` capability. See
+[the execution plan](06-temporary-apps.md) and D30 for short URLs, owner-only
+creation, public sharing, a floating pill, and deletion after 24 quiet hours.
+That supersedes D22's exclusion of disposable previews. Ordinary Mesh serving
+still exposes existing directories and ports, with its current lifecycle.
+A general build and deployment pipeline remains outside this work.
 
 Serving (step 8) is deliberately scoped proxying through the VPS, not the general
 case.

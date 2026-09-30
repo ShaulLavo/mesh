@@ -1,0 +1,13 @@
+:host{all:initial;color-scheme:dark;font-family:system-ui,sans-serif}
+*{box-sizing:border-box}button,a{font:inherit}button{border:0;color:inherit;cursor:pointer}
+.shell{font:13px system-ui,sans-serif;position:fixed;top:0;left:0;z-index:2147483647;pointer-events:auto;color:#fafafa;touch-action:none;transition:transform 250ms cubic-bezier(.23,1,.32,1)}
+.shell.dragging,.shell.keyboard{transition:none}.shell.keyboard .controls{animation:none}.surface{height:48px;display:flex;align-items:center;border-radius:999px;background:#18181bec;border:1px solid #ffffff24;box-shadow:0 6px 28px #0005;backdrop-filter:blur(16px)}
+.handle{width:44px;height:44px;flex:none;display:grid;place-items:center;border-radius:50%;background:transparent;touch-action:none;cursor:grab}.handle:active{cursor:grabbing}
+.dot{width:12px;height:12px;border-radius:50%;background:#a5b4fc;box-shadow:0 0 12px #a5b4fc30;transition:transform 180ms cubic-bezier(.23,1,.32,1)}
+.closed .surface{width:44px;height:44px;background:transparent;border-color:transparent;box-shadow:none;backdrop-filter:none}.closed .dot{box-shadow:0 2px 12px #0009,0 0 0 4px #18181b}
+.controls{display:flex;align-items:center;gap:3px;padding-right:8px;animation:appear 180ms cubic-bezier(.23,1,.32,1)}.action{padding:8px 10px;border-radius:999px;background:transparent;white-space:nowrap;font-size:12px;text-decoration:none;color:inherit}
+.status{padding:0 6px;font-size:11px;color:#a1a1aa}.frame{width:min(300px,calc(100vw - 48px));height:164px;display:block;border:1px solid #ffffff24;border-radius:18px;background:#18181b;box-shadow:0 6px 28px #0005;margin-top:8px;pointer-events:auto;touch-action:auto}
+button:focus-visible,a:focus-visible{outline:2px solid #a5b4fc;outline-offset:2px}.safe{position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+@keyframes appear{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:scale(1)}}
+@media(hover:hover) and (pointer:fine){.action:hover{background:#ffffff14}.handle:hover .dot{transform:scale(1.15)}}
+@media(prefers-reduced-motion:reduce){.shell,.dot{transition:none}.controls{animation:none}}
