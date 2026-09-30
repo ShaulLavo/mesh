@@ -15,6 +15,10 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go build -o "$RUNNER_TEMP/mesh" ./cmd/mesh
+      - run: command -v strace || (sudo apt-get update -qq && sudo apt-get install -y strace)
+      - name: Fixture shutdown regression
+        continue-on-error: true
+        run: MESH="$RUNNER_TEMP/mesh" bash integration/fixture_cleanup.sh
       - name: Run thirty recovery cleanup trials
         env:
           PYTHONDONTWRITEBYTECODE: '1'
@@ -58,7 +62,9 @@ jobs:
           def trial(number):
               log = root / 'recovery-evidence' / f'trial-{number}.log'
               with log.open('w') as output:
-                  result = subprocess.run([sys.executable, str(root / 'recovery-probe.py'), str(root / 'mesh')],
+                  result = subprocess.run(['strace', '-f', '-e', 'trace=renameat,openat,unlinkat,rmdir,kill,exit_group',
+                                           '-e', 'inject=renameat:delay_enter=20ms', '-o', str(log) + '.trace',
+                                           sys.executable, str(root / 'recovery-probe.py'), str(root / 'mesh')],
                                           stdout=output, stderr=subprocess.STDOUT)
               return number, result.returncode, log
           failures = 0
