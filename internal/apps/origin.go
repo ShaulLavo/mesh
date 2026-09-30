@@ -238,11 +238,17 @@ func (o *Origin) preempt(ctx context.Context, id, reason string) (func(), error)
 		}
 	}
 }
-func (o *Origin) revoked(id string) string {
+
+// startRefusal names why an app may not run now: its operation was revoked, or
+// its stored lease has elapsed.
+func (o *Origin) startRefusal(id string) string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if op := o.ops["app "+id]; op != nil {
+	if op := o.ops["app "+id]; op != nil && op.revoked != "" {
 		return op.revoked
+	}
+	if a, ok := o.state.Apps[id]; ok && !o.config.Now().Before(a.Record.LeaseUntil) {
+		return "left without a lease"
 	}
 	return ""
 }
@@ -252,14 +258,14 @@ func (o *Origin) revoked(id string) string {
 // operation starts goes through here, so a revoked operation cannot restart the
 // app behind the safety stop.
 func (o *Origin) start(ctx context.Context, id, label, command, root string, env []string) (string, error) {
-	if reason := o.revoked(id); reason != "" {
+	if reason := o.startRefusal(id); reason != "" {
 		return "", fmt.Errorf("app %s: not starting %s: app was %s", id, label, reason)
 	}
 	session, err := o.config.Workers.Start(ctx, label, command, root, env)
 	if err != nil {
 		return "", fmt.Errorf("app %s: start %s: %w", id, label, err)
 	}
-	if reason := o.revoked(id); reason != "" {
+	if reason := o.startRefusal(id); reason != "" {
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maintenanceBudget)
 		defer cancel()
 		return "", errors.Join(fmt.Errorf("app %s: %s started after the app was %s", id, label, reason), o.config.Workers.Stop(stopCtx, session))
@@ -291,12 +297,12 @@ func (o *Origin) edgeLocked(ctx context.Context, q Request) (Result, error) {
 	if o.state.Pending != nil {
 		pending := *o.state.Pending
 		result, err := o.settle(ctx, pending)
-		if err != nil {
-			return Result{}, err
-		}
 		expected, _ := json.Marshal(q)
 		if digestBytes(expected) == digestBytes(pending.Body) {
-			return result, nil
+			return result, err
+		}
+		if err != nil {
+			return Result{}, err
 		}
 	}
 	o.mu.Lock()
@@ -333,16 +339,24 @@ func (o *Origin) settle(ctx context.Context, s Signed) (Result, error) {
 	}
 	o.mu.Lock()
 	o.state.Pending = nil
-	err = o.persist(ctx)
+	saveErr := o.persist(ctx)
 	o.mu.Unlock()
-	if err != nil {
-		return Result{}, err
-	}
 	if reply.Error != "" {
-		return Result{}, errors.New(reply.Error)
+		return Result{}, errors.Join(errors.New(reply.Error), saveErr)
+	}
+	if saveErr != nil {
+		return reply.Result, &unsavedReply{err: saveErr}
 	}
 	return reply.Result, nil
 }
+
+// unsavedReply accompanies a verified edge result whose acknowledgement could
+// not be saved. The result is still authoritative; the edge answers a resend of
+// the same pending request identically.
+type unsavedReply struct{ err error }
+
+func (e *unsavedReply) Error() string { return "app: save edge acknowledgement: " + e.err.Error() }
+func (e *unsavedReply) Unwrap() error { return e.err }
 func (o *Origin) Handle(ctx context.Context, q Request) (Result, error) {
 	switch q.Action {
 	case "upload.begin":
@@ -529,8 +543,8 @@ func (o *Origin) checkPortLocked(id string, q Request) error {
 	if q.Kind != "server" {
 		return nil
 	}
-	if owner, ok := o.portOwnerLocked(q.Port); ok && owner != id {
-		return fmt.Errorf("app: port %d already belongs to app %s", q.Port, owner)
+	if owners := o.portOwnersLocked(q.Port, id); len(owners) != 0 {
+		return fmt.Errorf("app: port %d already belongs to app %s", q.Port, owners[0])
 	}
 	for hold := range o.holds {
 		if slices.Contains(hold.ports, q.Port) {
@@ -540,19 +554,23 @@ func (o *Origin) checkPortLocked(id string, q Request) error {
 	return nil
 }
 
-// portOwnerLocked requires mu and names the app that runs or reserves port.
-func (o *Origin) portOwnerLocked(port int) (string, bool) {
+// portOwnersLocked requires mu. It names, in order, every app other than self
+// that runs port (a stored app with a command) or reserves it (an operation's
+// ports), so no single match can hide another.
+func (o *Origin) portOwnersLocked(port int, self string) []string {
+	var owners []string
 	for id, a := range o.state.Apps {
-		if a.Command != "" && a.Port == port {
-			return id, true
+		if id != self && a.Command != "" && a.Port == port {
+			owners = append(owners, id)
 		}
 	}
 	for key, op := range o.ops {
-		if id, ok := strings.CutPrefix(key, "app "); ok && slices.Contains(op.ports, port) {
-			return id, true
+		if id, ok := strings.CutPrefix(key, "app "); ok && id != self && slices.Contains(op.ports, port) {
+			owners = append(owners, id)
 		}
 	}
-	return "", false
+	slices.Sort(owners)
+	return slices.Compact(owners)
 }
 
 // admitRecipe checks the recipe's port and source upload. An update, which
@@ -570,7 +588,10 @@ func (o *Origin) admitRecipe(q Request) error {
 	if q.Action != "update" {
 		return nil
 	}
-	op := o.ops["app "+q.ID]
+	op, owned := o.ops["app "+q.ID]
+	if !owned {
+		return fmt.Errorf("app %s: update does not own the app", q.ID)
+	}
 	if q.Kind == "server" {
 		op.ports = append(op.ports, q.Port)
 	}
@@ -605,8 +626,13 @@ func (o *Origin) allocate(ctx context.Context, q Request, digest string) (contex
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	opCtx, release := o.claimLocked(ctx, "app "+id, q.Action)
+	// Check before the record exists, so the create's own port cannot stand in
+	// for an owner that reserved it meanwhile.
+	if err := o.checkPortLocked(id, q); err != nil {
+		return opCtx, local, release, err
+	}
 	o.state.Apps[id] = local
-	return opCtx, local, release, errors.Join(o.checkPortLocked(id, q), o.persist(ctx))
+	return opCtx, local, release, o.persist(ctx)
 }
 
 // stageUpdate describes the workspace an update of a still-active app will use,
@@ -645,6 +671,9 @@ func (o *Origin) stageCreate(ctx context.Context, q Request, digest string) (con
 func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	if q.Kind == "" {
 		q.Kind = "static"
+	}
+	if q.Action == "update" && !ValidID(q.ID) {
+		return Result{}, fmt.Errorf("app: update needs a valid app id, not %q", q.ID)
 	}
 	normalized, _ := json.Marshal(q)
 	digest := digestBytes(normalized)
@@ -955,23 +984,36 @@ func (o *Origin) failCreate(ctx context.Context, id string, err error) error {
 // stop ends only the app's own labelled workers; ordinary sessions never carry
 // these labels.
 func (o *Origin) stop(ctx context.Context, id string) error {
-	// A worker can outlive its local record, so search by label regardless.
-	for _, label := range []string{"app " + id, "app-setup " + id} {
-		session, alive, err := o.config.Workers.Find(ctx, label)
-		if err != nil {
-			return fmt.Errorf("find %s worker: %w", label, err)
-		}
-		if alive {
-			if err := o.config.Workers.Stop(ctx, session); err != nil {
-				return fmt.Errorf("stop %s worker %s: %w", label, session, err)
-			}
-		}
+	// A worker can outlive its local record, so search by label regardless. The
+	// labels are stopped side by side so one failing or slow stop cannot keep
+	// the other worker running.
+	labels := []string{"app " + id, "app-setup " + id}
+	errs := make([]error, len(labels))
+	var wg sync.WaitGroup
+	for i, label := range labels {
+		wg.Go(func() { errs[i] = o.stopLabel(ctx, label) })
 	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if a, ok := o.state.Apps[id]; ok {
-		a.Session = ""
-		o.state.Apps[id] = a
+	wg.Wait()
+	if errs[0] == nil {
+		o.mu.Lock()
+		if a, ok := o.state.Apps[id]; ok {
+			a.Session = ""
+			o.state.Apps[id] = a
+		}
+		o.mu.Unlock()
+	}
+	return errors.Join(errs...)
+}
+func (o *Origin) stopLabel(ctx context.Context, label string) error {
+	session, alive, err := o.config.Workers.Find(ctx, label)
+	if err != nil {
+		return fmt.Errorf("find %s worker: %w", label, err)
+	}
+	if !alive {
+		return nil
+	}
+	if err := o.config.Workers.Stop(ctx, session); err != nil {
+		return fmt.Errorf("stop %s worker %s: %w", label, session, err)
 	}
 	return nil
 }
@@ -1037,7 +1079,8 @@ func (o *Origin) renewLeases(ctx context.Context) (map[string]Record, error) {
 	}
 	defer o.unlockExchange()
 	result, err := o.edgeLocked(ctx, Request{Action: "sync"})
-	if err != nil {
+	var unsaved *unsavedReply
+	if err != nil && !errors.As(err, &unsaved) {
 		return nil, fmt.Errorf("app: sync leases with edge: %w", err)
 	}
 	records := make(map[string]Record, len(result.Apps))
@@ -1050,10 +1093,10 @@ func (o *Origin) renewLeases(ctx context.Context) (map[string]Record, error) {
 			o.state.Apps[record.ID] = a
 		}
 	}
-	if err := o.persist(ctx); err != nil {
-		return records, fmt.Errorf("app: save renewed leases: %w", err)
+	if saveErr := o.persist(ctx); saveErr != nil {
+		err = errors.Join(err, fmt.Errorf("app: save renewed leases: %w", saveErr))
 	}
-	return records, nil
+	return records, err
 }
 func (o *Origin) appIDs(records map[string]Record) []string {
 	o.mu.Lock()
@@ -1178,6 +1221,9 @@ func (o *Origin) deny(ctx context.Context, id string, records map[string]Record)
 		if _, err := o.edge(ctx, Request{Action: "delete", ID: id}); err != nil {
 			return fmt.Errorf("app %s: delete app missing on origin: %w", id, err)
 		}
+	case !o.config.Now().Before(a.Record.LeaseUntil):
+		// Listed but already past its lease, as when the reply outlived it.
+		return o.stopLapsed(ctx, id)
 	case a.Phase != "ready" && a.Phase != "activating":
 		if _, err := o.edge(ctx, Request{Action: "delete", ID: id}); err != nil {
 			return fmt.Errorf("app %s: delete unfinished app: %w", id, err)
@@ -1214,7 +1260,7 @@ func (o *Origin) recover(ctx context.Context, id string, records map[string]Reco
 	o.mu.Lock()
 	a, local := o.state.Apps[id]
 	o.mu.Unlock()
-	if !local || a.Record.Status != "active" {
+	if !local || a.Record.Status != "active" || !o.config.Now().Before(a.Record.LeaseUntil) {
 		return nil
 	}
 	if a.Phase == "activating" {
@@ -1451,7 +1497,7 @@ func (o *Origin) GuardService(ctx context.Context, ports []int, root string) (fu
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for _, port := range ports {
-		if _, owned := o.portOwnerLocked(port); owned {
+		if len(o.portOwnersLocked(port, "")) != 0 {
 			return nil, errors.New("app: ordinary services cannot proxy an app-owned port")
 		}
 	}
