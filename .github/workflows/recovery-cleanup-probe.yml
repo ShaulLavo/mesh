@@ -10,14 +10,27 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
           cache: true
       - run: go build -o "$RUNNER_TEMP/mesh" ./cmd/mesh
       - run: command -v strace || (sudo apt-get update -qq && sudo apt-get install -y strace)
+      - name: Regression negative control
+        run: |
+          fixed="$RUNNER_TEMP/terminal-window-fixed.py"
+          cp integration/helpers/terminal_window.py "$fixed"
+          trap 'cp "$fixed" integration/helpers/terminal_window.py' EXIT
+          git show 9b19c48:integration/helpers/terminal_window.py > integration/helpers/terminal_window.py
+          if MESH="$RUNNER_TEMP/mesh" bash integration/fixture_cleanup.sh > "$RUNNER_TEMP/negative-control.log" 2>&1; then
+            echo 'FAIL: unfixed teardown passed the regression'
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/negative-control.log"
+          grep -F 'fixture.close returned while its worker was suspended' "$RUNNER_TEMP/negative-control.log"
       - name: Fixture shutdown regression
-        continue-on-error: true
         run: MESH="$RUNNER_TEMP/mesh" bash integration/fixture_cleanup.sh
       - name: Run thirty recovery cleanup trials
         env:
