@@ -92,8 +92,9 @@ type registrySnapshot struct {
 }
 
 type serviceRoute struct {
-	prefix  string
-	handler http.Handler
+	prefix     string
+	publicName string
+	handler    http.Handler
 }
 
 // Normalize validates service and resolves directory targets to absolute paths.
@@ -218,15 +219,25 @@ func upstreamAddress(port string) string {
 }
 
 // ServeHTTP dispatches by longest path prefix and returns 404 for unknown paths.
+// A private nested mount must not become public through a parent fallback.
 func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	snapshot := r.snapshot.Load()
 	if snapshot == nil {
 		http.NotFound(w, request)
 		return
 	}
+	host := request.Host
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		host = name
+	}
+	publicRequest := host != "" && validatePublicName(host) == nil
 	requestPath := request.URL.EscapedPath()
 	for _, route := range snapshot.routes {
 		if requestPath == route.prefix || strings.HasPrefix(requestPath, route.prefix+"/") {
+			if publicRequest && (route.publicName == "" || route.publicName != host) {
+				http.NotFound(w, request)
+				return
+			}
 			route.handler.ServeHTTP(w, request)
 			return
 		}
@@ -278,7 +289,7 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 		if normalized.Demand != nil {
 			handler = r.gatedHandler(normalized.Name, handler)
 		}
-		snapshot.routes = append(snapshot.routes, serviceRoute{prefix: prefix, handler: handler})
+		snapshot.routes = append(snapshot.routes, serviceRoute{prefix: prefix, publicName: normalized.PublicName, handler: handler})
 	}
 	sort.Slice(snapshot.services, func(i, j int) bool {
 		return snapshot.services[i].Name < snapshot.services[j].Name
