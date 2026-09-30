@@ -26,7 +26,8 @@ const server = createServer((request, response) => {
   }
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
   response.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-test'; style-src ${origin}/.mesh-app/pill.css; frame-src ${manager}`);
-  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script defer nonce="test" data-mesh-app="7k3d" data-mesh-manager="${manager}" src="/.mesh-app/pill.js"></script></head><body><h1>Mesh pill interaction harness</h1><p>The owner frame is mocked. Authorization has separate Go integration tests.</p></body></html>`);
+  const access = request.url.startsWith('/private-bootstrap') ? 'data-mesh-private="true" data-mesh-owns="true"' : '';
+  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script defer nonce="test" data-mesh-app="7k3d" ${access} data-mesh-manager="${manager}" src="/.mesh-app/pill.js"></script></head><body><h1>Mesh pill interaction harness</h1><p>The owner frame is mocked. Authorization has separate Go integration tests.</p></body></html>`);
 });
 
 await new Promise((resolveListen, reject) => {
@@ -102,10 +103,16 @@ async function checkLinkDrag(page, pill) {
   assert(result.prevented, 'Releasing a drag on the lock must cancel link navigation');
   assert(result.stayedUnderPointer, 'An ownership response must not redock the pill during dragging');
   await page.waitForFunction(() => !document.querySelector('mesh-app-pill').shadowRoot.querySelector('.shell').classList.contains('snapping'));
-  const popupRequested = page.waitForEvent('popup');
+  const appURL = page.url();
+  await page.evaluate(() => history.replaceState(null, '', '/colors?palette=rose%20water#favorites'));
+  const destination = page.url();
+  assert.equal(await pill.getByRole('link', { name: 'Make private' }).getAttribute('target'), null, 'Owner controls must stay in the current tab');
   await pill.getByRole('link', { name: 'Make private' }).click();
-  const popup = await popupRequested;
-  await popup.close();
+  await page.waitForURL(`${manager}/confirm?**`);
+  assert.equal(new URL(page.url()).searchParams.get('return'), destination, 'Click must capture the current SPA page');
+  await page.goto(appURL);
+  await pill.locator('[data-react-grab-toolbar-collapse]').click();
+  await pill.getByRole('link', { name: 'Make private' }).waitFor();
 }
 
 async function checkInteractions(browser, name, reducedMotion) {
@@ -131,7 +138,7 @@ async function checkInteractions(browser, name, reducedMotion) {
     await handle.click();
     await pill.locator('.controls').waitFor({ state: 'visible' });
     await pill.locator('[aria-label="Make private"]').waitFor({ state: 'visible' });
-    assert.equal(await pill.locator('[aria-label="Make private"]').getAttribute('href'), `${manager}/confirm?id=7k3d&action=private`);
+    assert.equal(await pill.locator('[aria-label="Make private"]').getAttribute('href'), `${manager}/confirm?id=7k3d&action=private&return=${encodeURIComponent(origin + '/')}`);
     assert.equal(await pill.locator('button, a').count(), 3, 'Expanded pill has exactly three direct actions');
     assert.equal(await pill.locator('iframe').isVisible(), false, 'Authorization must never show a blank panel');
     assert.equal(await pill.locator('.status').count(), 0, 'No generic App label');
@@ -241,6 +248,23 @@ async function checkUnavailableOrVisitor(browser, name, unavailable) {
   }
 }
 
+async function checkPrivateBootstrap(browser, name) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    await page.route(`${manager}/**`, route => route.abort());
+    await page.goto(`${origin}/private-bootstrap`);
+    const pill = page.locator('mesh-app-pill');
+    await pill.locator('[data-react-grab-toolbar-collapse]').click();
+    await pill.getByRole('link', { name: 'Make public' }).waitFor();
+    assert.equal(await pill.getByRole('link', { name: 'Pair owner browser' }).count(), 0);
+    console.log(`${name}: private owner lock survives an unavailable management frame`);
+  } finally {
+    await context.close();
+  }
+}
+
 try {
   for (const [name, engine] of [['chromium', chromium], ['webkit', webkit]]) {
     const options = name === 'chromium' && process.env.MESH_CHROMIUM_EXECUTABLE
@@ -252,6 +276,7 @@ try {
       await checkInteractions(browser, name, 'reduce');
       await checkUnavailableOrVisitor(browser, name, false);
       await checkUnavailableOrVisitor(browser, name, true);
+      await checkPrivateBootstrap(browser, name);
     } finally {
       await browser.close();
     }

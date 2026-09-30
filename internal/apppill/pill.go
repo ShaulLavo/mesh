@@ -80,9 +80,17 @@ func StripRequestCookies(request *http.Request) {
 	}
 }
 
-// Inject installs a streaming HTML transformer. Documents use a bounded token
-// buffer; unsupported encodings fail explicitly instead of returning damaged HTML.
-func Inject(resp *http.Response, appID string, managementOrigin string) error {
+// Config contains the app state verified by the edge before serving its HTML.
+type Config struct {
+	AppID            string
+	ManagementOrigin string
+	Private          bool
+	Owns             bool
+}
+
+// Inject installs a streaming HTML transformer with a bounded token buffer.
+func Inject(resp *http.Response, config Config) error {
+	appID, managementOrigin := config.AppID, config.ManagementOrigin
 	if resp == nil || resp.Body == nil {
 		return errors.New("apppill: missing response body")
 	}
@@ -123,7 +131,7 @@ func Inject(resp *http.Response, appID string, managementOrigin string) error {
 	default:
 		return fmt.Errorf("apppill: unsupported HTML content encoding %q", resp.Header.Get("Content-Encoding"))
 	}
-	script := "<script defer charset=\"utf-8\" src=\"" + AssetPath + "\" data-mesh-app=\"" + html.EscapeString(appID) + "\" data-mesh-manager=\"" + html.EscapeString(managerOrigin) + "\" nonce=\"" + nonce + "\"></script>"
+	script := "<script defer charset=\"utf-8\" src=\"" + AssetPath + "\" data-mesh-app=\"" + html.EscapeString(appID) + "\" data-mesh-manager=\"" + html.EscapeString(managerOrigin) + "\" data-mesh-private=\"" + fmt.Sprint(config.Private) + "\" data-mesh-owns=\"" + fmt.Sprint(config.Owns) + "\" nonce=\"" + nonce + "\"></script>"
 	for _, key := range []string{"Content-Security-Policy", "Content-Security-Policy-Report-Only"} {
 		policies := resp.Header.Values(key)
 		resp.Header.Del(key)

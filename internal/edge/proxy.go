@@ -430,6 +430,10 @@ func (r *Registry) ServeHTTP(response http.ResponseWriter, request *http.Request
 	}
 	if r.mode == ModeDirectTLS {
 		serverName := request.TLS.ServerName
+		if request.ProtoMajor == 2 && serverName != publicName && serve.ValidatePublicName(serverName) == nil {
+			http.Error(response, "Use a dedicated HTTPS connection for this host", http.StatusMisdirectedRequest)
+			return
+		}
 		if serverName != publicName || serve.ValidatePublicName(serverName) != nil {
 			r.logger.Printf("edge event=invalid-server-name client=%s host=%s", clientIP, publicName)
 			http.NotFound(response, request)

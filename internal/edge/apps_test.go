@@ -247,3 +247,28 @@ func TestAppAcquireRejectsUnvalidatedClientWithoutBudgetLeak(t *testing.T) {
 		t.Fatal("failed admission leaked concurrency budget")
 	}
 }
+
+func TestCoalescedAppConnectionRequestsRetryBeforeAuthorization(t *testing.T) {
+	registry := testRegistry(t, ModeDirectTLS, time.Now())
+	t.Cleanup(registry.Close)
+	calls := 0
+	registry.SetAppHandler(appHandlerFunc(func(w http.ResponseWriter, r *http.Request, name string) bool {
+		calls++
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}))
+	request := publicRequest(http.MethodGet, apps.ManagementHost, "/frame?id=7k3d")
+	request.ProtoMajor = 2
+	request.TLS.ServerName = "7k3d.shaulavo.dev"
+	response := httptest.NewRecorder()
+	registry.ServeHTTP(response, request)
+	if response.Code != http.StatusMisdirectedRequest || calls != 0 {
+		t.Fatalf("coalesced connection = %d, calls=%d; browser needs a 421 to reconnect", response.Code, calls)
+	}
+	request.TLS.ServerName = apps.ManagementHost
+	response = httptest.NewRecorder()
+	registry.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || calls != 1 {
+		t.Fatal("dedicated management connection was rejected")
+	}
+}

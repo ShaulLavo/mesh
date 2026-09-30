@@ -266,7 +266,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 	request.AddCookie(owner)
 	result := httptest.NewRecorder()
 	f.edge.ServeHost(result, request, app.ID+"."+Domain)
-	if result.Code != 200 || !strings.Contains(result.Body.String(), "original page") || !strings.Contains(result.Body.String(), "data-mesh-app") {
+	if result.Code != 200 || !strings.Contains(result.Body.String(), "original page") || !strings.Contains(result.Body.String(), `data-mesh-private="true"`) || !strings.Contains(result.Body.String(), `data-mesh-owns="true"`) {
 		t.Fatalf("owner private content missing: %d %s", result.Code, result.Body.String())
 	}
 	deadline, _, err := f.edge.lookup(context.Background(), app.ID, false)
@@ -363,5 +363,76 @@ func TestPublicRequestBlockedByPrivacyChangeDuringOriginResolution(t *testing.T)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("request stuck after privacy change")
+	}
+}
+
+func TestVisibilityConfirmationPreservesBrowserOriginAndReturn(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	cookie := pairedOwner(t, f)
+	destination := URL(app.ID) + "/colors?palette=rose%20water#favorites"
+	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/confirm?id="+app.ID+"&action=public&return="+url.QueryEscape(destination), nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	f.edge.ServeHost(response, request, ManagementHost)
+	if response.Header().Get("Referrer-Policy") != "same-origin" {
+		t.Fatal("confirmation suppresses the Origin header needed by its own POST")
+	}
+	if !strings.Contains(response.Header().Get("Content-Security-Policy"), "form-action 'self' "+URL(app.ID)+";") {
+		t.Fatal("confirmation blocks its form redirect back to the app")
+	}
+	if !strings.Contains(response.Body.String(), `name="return"`) {
+		t.Fatal("confirmation lost the originating app page")
+	}
+	session, err := f.edge.auth.Browser(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "return": {destination}}
+	post := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
+	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	post.Header.Set("Origin", ManagementOrigin)
+	post.AddCookie(cookie)
+	changed := httptest.NewRecorder()
+	f.edge.ServeHost(changed, post, ManagementHost)
+	view := httptest.NewRequest(http.MethodGet, ManagementOrigin+changed.Header().Get("Location"), nil)
+	view.AddCookie(cookie)
+	back := httptest.NewRecorder()
+	f.edge.ServeHost(back, view, ManagementHost)
+	if back.Header().Get("Location") != destination {
+		t.Fatalf("returned to %q, want %q", back.Header().Get("Location"), destination)
+	}
+}
+
+func TestPrivateViewReturnPreservesPageAcrossTicketExchange(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	cookie := pairedOwner(t, f)
+	destination := URL(app.ID) + "/colors?palette=rose%20water#favorites"
+	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+app.ID+"&return="+url.QueryEscape(destination), nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	f.edge.ServeHost(response, request, ManagementHost)
+	target, err := url.Parse(response.Header().Get("Location"))
+	if err != nil || target.Path != "/colors" || target.Fragment != "favorites" || target.Query().Get("palette") != "rose water" || target.Query().Get("mesh_view") == "" {
+		t.Fatalf("private view lost its destination: %s", target)
+	}
+	consume := httptest.NewRecorder()
+	wireTarget := *target
+	wireTarget.Fragment = ""
+	wireTarget.RawFragment = ""
+	f.edge.ServeHost(consume, httptest.NewRequest(http.MethodGet, wireTarget.String(), nil), app.ID+"."+Domain)
+	clean, err := url.Parse(consume.Header().Get("Location"))
+	if err != nil || clean.Path != "/colors" || clean.Query().Get("palette") != "rose water" || clean.Query().Get("mesh_view") != "" {
+		t.Fatalf("ticket cleanup lost its app page: %s", clean)
+	}
+}
+
+func TestAppReturnRejectsOtherOrigins(t *testing.T) {
+	fallback := URL("7k3d") + "/"
+	for _, value := range []string{"https://evil.test/", "//evil.test/", "https://7k3d.shaulavo.dev@evil.test/", "https://7k3d.shaulavo.dev.evil.test/", "https://other.shaulavo.dev/", "http://7k3d.shaulavo.dev/", "https://7k3d.shaulavo.dev\\evil.test/", "https://7k3d.shaulavo.dev/\r\nLocation: https://evil.test"} {
+		if got := appReturn("7k3d", value); got != fallback {
+			t.Fatalf("accepted outside return %q as %q", value, got)
+		}
 	}
 }
