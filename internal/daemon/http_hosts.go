@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"net"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -55,4 +56,12 @@ func (p httpHostPolicy) accepts(request *http.Request) bool {
 	}
 	peer, err := netip.ParseAddrPort(request.RemoteAddr)
 	return err == nil && p.trustPublicEdgeForwarding(peer.Addr().Unmap())
+}
+
+func boundHTTPAddresses(listeners []net.Listener) []netip.Addr {
+	addresses := make([]netip.Addr, 0, len(listeners))
+	for _, listener := range listeners {
+		addresses = append(addresses, listener.Addr().(*net.TCPAddr).AddrPort().Addr().Unmap())
+	}
+	return addresses
 }

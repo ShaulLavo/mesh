@@ -191,13 +191,8 @@ func serveBoundListeners(
 			publicListener = tailnet.ProxyListener{Listener: publicListener}
 		}
 	}
-	// Discovery can include addresses whose bind failed. Only listeners that
-	// actually opened establish an IP authority for private HTTP.
-	normalized.httpHosts.tailnetAddrs = nil
-	for _, listener := range tailnetListeners {
-		address := listener.Addr().(*net.TCPAddr).AddrPort().Addr().Unmap()
-		normalized.httpHosts.tailnetAddrs = append(normalized.httpHosts.tailnetAddrs, address)
-	}
+	// Failed discovery binds must not establish non-loopback IP authorities.
+	normalized.httpHosts.tailnetAddrs = boundHTTPAddresses(tailnetListeners)
 	connections := newConnectionGroup(handler)
 	server := newWebSocketServer(ctx, normalized, connections)
 	var httpsServer *http.Server

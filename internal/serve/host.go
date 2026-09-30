@@ -11,32 +11,15 @@ import (
 // the same authority: DNS case, root dots, and forwarding ports are not identity.
 // Malformed authorities and scoped IPv6 literals have no canonical Host.
 func CanonicalHost(authority string) (string, bool) {
-	host := authority
-	if address, err := netip.ParseAddr(host); err == nil {
+	if address, err := netip.ParseAddr(authority); err == nil {
 		return address.String(), address.Zone() == ""
 	}
-	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
-		address, err := netip.ParseAddr(host[1 : len(host)-1])
-		return address.String(), err == nil && address.Is6() && address.Zone() == ""
+	host, ok := authorityHost(authority)
+	if !ok {
+		return "", false
 	}
-	if strings.Contains(host, ":") {
-		var service string
-		var err error
-		host, service, err = net.SplitHostPort(authority)
-		if err != nil {
-			return "", false
-		}
-		number, err := strconv.ParseUint(service, 10, 16)
-		if err != nil || number == 0 {
-			return "", false
-		}
-		if strings.HasPrefix(authority, "[") {
-			address, err := netip.ParseAddr(host)
-			return address.String(), err == nil && address.Is6() && address.Zone() == ""
-		}
-		if address, err := netip.ParseAddr(host); err == nil {
-			return address.String(), address.Zone() == ""
-		}
+	if address, err := netip.ParseAddr(host); err == nil {
+		return address.String(), address.Zone() == ""
 	}
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	if len(host) > 253 {
@@ -48,6 +31,32 @@ func CanonicalHost(authority string) (string, bool) {
 		}
 	}
 	return host, true
+}
+
+func authorityHost(authority string) (string, bool) {
+	if strings.HasPrefix(authority, "[") && strings.HasSuffix(authority, "]") {
+		return bracketedIPv6Host(authority[1 : len(authority)-1])
+	}
+	if !strings.Contains(authority, ":") {
+		return authority, true
+	}
+	host, port, err := net.SplitHostPort(authority)
+	if err != nil {
+		return "", false
+	}
+	number, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || number == 0 {
+		return "", false
+	}
+	if strings.HasPrefix(authority, "[") {
+		return bracketedIPv6Host(host)
+	}
+	return host, true
+}
+
+func bracketedIPv6Host(host string) (string, bool) {
+	address, err := netip.ParseAddr(host)
+	return address.String(), err == nil && address.Is6() && address.Zone() == ""
 }
 
 func validHostLabel(label string) bool {
