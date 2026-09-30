@@ -58,6 +58,12 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	privateAtLookup := app.Visibility == "private"
+	if privateAtLookup {
+		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
+	}
 	if app.Status != "active" {
 		http.Error(w, "This temporary app has expired or was deleted.", http.StatusGone)
 		return true
@@ -73,10 +79,21 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		http.Redirect(w, r, appReturn(id, URL(id)+r.URL.RequestURI()), http.StatusSeeOther) //nolint:gosec // appReturn fixes this consumed ticket redirect to the app host.
 		return true
 	}
-	if app.Visibility == "private" && !networkOwns(r, app.Owner) {
-		owner, err := e.auth.ViewOwner(r.Context(), r, id)
-		if err != nil || owner != app.Owner {
-			http.Redirect(w, r, ManagementOrigin+"/view?id="+id, http.StatusSeeOther)
+	if app.Visibility == "private" {
+		owner := networkOwns(r, app.Owner)
+		if !owner {
+			viewer, err := e.auth.ViewOwner(r.Context(), r, id)
+			owner = err == nil && viewer == app.Owner
+		}
+		if !owner || !ambientOwnerAllowed(r, URL(id)) {
+			legacyNavigation := (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+				r.Header.Get("Sec-Fetch-Site") == "" && r.Header.Get("Sec-Fetch-Mode") == "" &&
+				r.Header.Get("Sec-Fetch-Dest") == "" && !strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+			if topLevelAppNavigation(r) || legacyNavigation {
+				http.Redirect(w, r, ManagementOrigin+"/view?id="+id, http.StatusSeeOther)
+			} else {
+				http.Error(w, "App is private. Open it from Mesh.", http.StatusForbidden)
+			}
 			return true
 		}
 	}
@@ -165,6 +182,12 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 	defer proxy.Transport.(*http.Transport).CloseIdleConnections()
 	proxy.ModifyResponse = func(response *http.Response) error {
 		apppill.StripCookies(response.Header)
+		if app.Visibility == "private" {
+			response.Header.Set("Cross-Origin-Resource-Policy", "same-origin")
+			if !strings.EqualFold(strings.TrimSpace(response.Header.Get("X-Frame-Options")), "DENY") {
+				response.Header.Set("X-Frame-Options", "SAMEORIGIN")
+			}
+		}
 		if response.StatusCode == http.StatusSwitchingProtocols {
 			if rw, ok := response.Body.(io.ReadWriteCloser); ok {
 				stream := e.watchStream(app, rw)
@@ -182,7 +205,18 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		return apppill.Inject(response, apppill.Config{AppID: id, ManagementOrigin: ManagementOrigin, Private: app.Visibility == "private", Owns: networkOwns(r, app.Owner) || viewer == app.Owner})
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		if app.Visibility == "private" {
+			w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+			w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+			w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
+		}
 		http.Error(w, "App origin is unavailable.", http.StatusServiceUnavailable)
+	}
+	if privateAtLookup {
+		// Duplicate CORP values invalidate the browser's resource policy.
+		w.Header().Del("Cross-Origin-Resource-Policy")
+		w.Header().Del("X-Frame-Options")
+		w.Header().Del("Content-Security-Policy")
 	}
 	proxy.ServeHTTP(w, r)
 	return true

@@ -349,6 +349,9 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 	if !exists || app.Status != "active" || !app.Ready {
 		return Record{}, nil, nil, errors.New("app unavailable")
 	}
+	if app.Visibility == "private" && !ambientOwnerAllowed(r, URL(id)) {
+		return Record{}, nil, nil, errors.New("app private")
+	}
 	if app.Visibility == "private" && !networkOwns(r, app.Owner) {
 		owner, err := e.auth.ViewOwner(r.Context(), r, id)
 		if err != nil || owner != app.Owner {
@@ -373,7 +376,7 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 		e.inflight[id] = map[string]admittedRequest{}
 	}
 	viewer, _ := e.auth.ViewOwner(r.Context(), r, id)
-	e.inflight[id][token] = admittedRequest{cancel: cancel, owner: viewer == app.Owner || networkOwns(r, app.Owner)}
+	e.inflight[id][token] = admittedRequest{cancel: cancel, owner: ambientOwnerAllowed(r, URL(id)) && (viewer == app.Owner || networkOwns(r, app.Owner))}
 	release := func() { cancel(); e.mu.Lock(); delete(e.inflight[id], token); e.mu.Unlock() }
 	return app, r.WithContext(ctx), release, nil
 }

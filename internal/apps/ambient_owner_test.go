@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaul/mesh/internal/webauth"
 )
@@ -58,6 +59,7 @@ func TestPrivateAppRejectsAmbientOwnerFromOtherPages(t *testing.T) {
 				app := createStaticApp(t, f)
 				forwarded := networkOrigin(t, f)
 				authenticate := ambientOwnerRequest(t, f, app, credential)
+				f.now = f.now.Add(time.Second)
 				r := httptest.NewRequest(tc.method, URL(app.ID)+"/index.html", strings.NewReader("confirm=yes"))
 				authenticate(r)
 				r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
