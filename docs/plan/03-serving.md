@@ -49,6 +49,10 @@ store surgery.
 - **files** — a directory, served as a browsable and downloadable listing
 - **proxy** — a port already listening on that machine
 
+On-demand startup failures return a generic HTTP message and an opaque reference.
+The daemon log keeps the correlated command, session ID, and output tail.
+`mesh serve ls` reports the failed state, and `mesh logs SESSION` retains the output.
+
 ## Where it lands
 
 ```
@@ -88,6 +92,62 @@ per-host URL keeps working.
 Build the per-host form first, because it is strictly simpler and cannot fail
 partially. Add the alias afterwards if typing the machine name actually annoys
 you, which it might not.
+
+## Private listener Host policy
+
+The tailnet HTTP listener and loopback HTTPS listener check `Host` before
+routing any non-control request to an app, file listing, proxy, or on-demand
+service. An unrecognized Host returns `421 Misdirected Request` without
+contacting an upstream or starting a command. Being on the tailnet alone does
+not authorize a browser request under an attacker-controlled DNS name.
+
+Accepted authorities are:
+
+- An IPv4 or IPv6 literal equal to an address whose tailnet HTTP listener
+  successfully bound. IPv4-mapped IPv6 literals compare as IPv4.
+- `localhost` and loopback literals (`127.0.0.0/8` and `::1`), including
+  IPv4-mapped loopback. These preserve SSH forwards such as
+  `ssh -L 12000:<tailnet-ip>:7337`, then `http://localhost:12000/<service>`.
+  The forwarding authority need not be the origin listener's address. An
+  attacker-controlled DNS name still does not become a loopback Host.
+- This host's full MagicDNS name and its short first label, obtained from local
+  Tailscale discovery. Other hosts on the same tailnet are not aliases. The
+  short name is the only accepted name whose safety depends on the client's
+  resolver using MagicDNS rather than a hostile LAN resolver. These names are
+  captured at startup; a MagicDNS rename needs a daemon restart to take effect.
+- Exactly the current certificate-backed private name published by
+  `certificateRuntime.PrivateName()`. It becomes accepted only after ingress
+  is ready and stops being accepted if the source withdraws it. Additional
+  labels below that name are not aliases: neither the private certificate nor
+  the managed DNS records cover them. Private services route by path.
+- A canonical one-label public name accepted by `serve.ValidatePublicName`,
+  only when the immediate TCP peer matches the identity-verified public edge's
+  pinned address through `trustPublicEdgeForwarding`. Forwarding headers do not
+  establish trust. This admits a public authority; the downstream dispatcher
+  still owns which route that authority may serve.
+
+The listener guard and service registry use the same `serve.CanonicalHost`
+helper: DNS names compare case-insensitively and may have a trailing root dot.
+Public-name variants therefore remain public during route selection and cannot
+fall through to private nested routes. An optional authority port must be
+numeric and in range, but does not participate
+in the Host identity decision. Tailscale Serve, the public edge, and port
+forwards can preserve an external authority port that differs from the internal
+listener. IPv6 zones, malformed authorities, the public apex, and nested public
+names are refused.
+
+Public-name traffic, including app-origin requests, is refused until a
+successful edge publication establishes the pin. After a failed initial sync,
+the next scheduled attempt is a minute later. The connection's immediate
+source address must match that pin; both edge resolvers currently prefer IPv4.
+The loopback integration fixtures do not prove a deployed address-family match.
+
+Service WebSocket upgrades follow the same Host policy as service HTTP. The
+WebSocket control path retains its separate browser Origin refusal. The
+loopback HTTPS listener still returns 404 for that path. IP-dialed CLI and
+host-to-host control connections do not change. Accepting a loopback Host does
+not add a loopback name to the private TLS certificate; the SSH-forward example
+uses HTTP.
 
 ## The CLI
 

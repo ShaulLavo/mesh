@@ -2,6 +2,7 @@
 """Exercise terminal windows through real PTYs, workers and a WebSocket daemon."""
 
 import base64
+from contextlib import ExitStack
 import errno
 import hashlib
 import fcntl
@@ -143,10 +144,15 @@ class Fixture:
         self.daemon_log = None
         self.daemon_args = []
         self.identity_requests = 0
-        self.environment = os.environ.copy()
-        for key in ("MESH_SESSION_ID", "MESH_HOST_ID", "MESH_DEPTH", "BASH_ENV", "ENV"):
-            self.environment.pop(key, None)
+        home = self.root / "fixture-home"
+        home.mkdir()
+        tools = home / "bin"
+        tools.mkdir()
+        (tools / "python3").symlink_to(Path(sys.executable).resolve())
+        self.environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "TERM", "LANG", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS") if key in os.environ}
         self.environment.update({
+            "PATH": str(tools) + os.pathsep + self.environment.get("PATH", os.defpath),
+            "HOME": str(home),
             "MESH_STATE_DIR": str(self.local),
             "MESH_CONFIG_DIR": str(self.config),
             "SHELL": str(self.helpers / "window_shell.sh"),
@@ -342,19 +348,48 @@ class Fixture:
         return terminal, outer_id, outer_pid, inner_id, inner_pid
 
     def close(self):
-        for state in (self.local, self.remote):
-            for session in self.sessions(state):
-                try:
-                    with socket.socket(socket.AF_UNIX) as connection:
+        from mesh_control import receive
+
+        workers = []
+        with ExitStack() as connections:
+            with ExitStack() as processes:
+                processes.callback(self.stop_daemon)
+                for terminal in self.terminals:
+                    processes.callback(terminal.close)
+                for state in {self.local, self.remote}:
+                    for socket_path in (state / "s").glob("*/sock"):
+                        connection = connections.enter_context(socket.socket(socket.AF_UNIX))
                         connection.settimeout(0.3)
-                        connection.connect(str(state / "s" / session["id"] / "sock"))
-                        request = json.dumps({"type": "session.signal", "signal": "kill"}).encode()
-                        connection.sendall(b"\x01" + struct.pack(">I", len(request)) + request)
-                except OSError:
+                        try:
+                            connection.connect(str(socket_path))
+                        except OSError as error:
+                            if error.errno in (errno.ENOENT, errno.ECONNREFUSED):
+                                continue
+                            raise
+                        workers.append((socket_path, connection))
+                        request = json.dumps({"type": "session.kill", "sessionId": socket_path.parent.name}).encode()
+                        try:
+                            connection.sendall(b"\x01" + struct.pack(">I", len(request)) + request)
+                        except (BrokenPipeError, ConnectionResetError):
+                            pass
+            for socket_path, connection in workers:
+                # Match the product's control exchange deadline, which includes kill
+                # escalation and the retained output of a never-attached command.
+                connection.settimeout(10)
+                try:
+                    kind = connection.recv(1)
+                    if kind:
+                        require(kind == b"\x01", f"worker {socket_path}: unexpected completion frame")
+                        length = struct.unpack(">I", receive(connection, 4))[0]
+                        require(length <= 4 << 20, f"worker {socket_path}: oversized completion")
+                        response = json.loads(receive(connection, length))
+                        require(response.get("type") == "ok", f"worker {socket_path}: kill failed: {response}")
+                except (BrokenPipeError, ConnectionResetError):
                     pass
-        for terminal in self.terminals:
-            terminal.close()
-        self.stop_daemon()
+                # A finishing worker can close or reset without accepting the kill.
+                # Neither peer closure nor acknowledgment covers its final disk writes.
+                eventually(lambda: not socket_path.exists(),
+                           f"fixture worker {socket_path} did not finish writing its session data")
 
 
 def nested_detach(fixture):

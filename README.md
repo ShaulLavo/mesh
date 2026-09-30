@@ -153,6 +153,17 @@ also requires Ruff. Full gates run in CI. Deadcode runs through
 `go run golang.org/x/tools/cmd/deadcode@v0.49.0` without changing `go.mod`.
 
 `.gates/baseline.json` records existing findings with reasons and occurrence counts.
+Go lint keys use file, rule, normalized diagnostic, and enclosing Go function, not a
+source-line fingerprint. Diagnostic line numbers, complexity scores, and contextcheck
+SSA closure ordinals are omitted; callee paths and literal digits remain significant.
+Growth of an already-baselined complexity score is not ratcheted; new findings and
+per-key finding-count growth still fail. Goconst uses only the literal within its file,
+so a representative occurrence or reported count can change without churning the key.
+ShellCheck and Ruff retain source-statement keys, preventing a fixed exception from
+covering an unrelated replacement warning. Goconst, gocognit, and dupl exclude
+`_test.go`; all security linters still check tests. Dupl's exclusion filters report
+location, not analyzer input, so a production-side report of a test/production clone
+still fails unless baselined.
 New findings fail. Fixed findings also fail until you run
 `./scripts/gates.sh --update-baseline`. That command removes entries or reduces
 counts, but refuses all additions without changing the baseline. Any new exception
@@ -162,6 +173,15 @@ patch contracts remain in the integration suite.
 
 Run `./scripts/verify.sh` for the integration suite. It builds both test binaries
 once and runs up to four tests concurrently, limited by available CPUs. Set
-`MESH_INTEGRATION_JOBS` to choose a different concurrency limit. See the
+`MESH_INTEGRATION_JOBS` to choose a different concurrency limit. Each script gets
+a scratch HOME and an allow-listed environment. The verifier resolves Go and
+Python before replacing HOME. It preserves user-bus discovery so Linux scope
+checks cannot silently skip coverage, plus `MESH_TEST_ZSH` and `MESH_SHORT_TMP`.
+The initial binary builds keep effective Go module policy, proxy settings, CA
+trust, and an absolute netrc path for dependency downloads. Those build-only
+settings do not reach tests. Fixtures set any provider or proxy settings they
+need. Standalone agent scripts also scrub inherited settings and pin Python
+through their shared fixture. Use the verifier to isolate the full shell-script
+environment. See the
 [implementation status](docs/plan/02-status.md) and [task briefs](docs/tasks/)
 for the design and build order.

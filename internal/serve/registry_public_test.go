@@ -18,6 +18,9 @@ func TestRegistryPublicHostRejectsNestedPrivateRoutes(t *testing.T) {
 		}{
 			{name: "direct tailnet peer", host: "app.shaulavo.dev", remote: "100.64.0.3:40000"},
 			{name: "public host with port", host: "app.shaulavo.dev:443", remote: "100.64.0.3:40000"},
+			{name: "public host uppercase", host: "APP.SHAULAVO.DEV", remote: "100.64.0.2:40000"},
+			{name: "public host root dot", host: "app.shaulavo.dev.", remote: "100.64.0.2:40000"},
+			{name: "public host case dot and port", host: "APP.SHAULAVO.DEV.:443", remote: "100.64.0.2:40000"},
 			{name: "pinned edge", host: "app.shaulavo.dev", remote: "100.64.0.2:40000"},
 		} {
 			name := "proxy/" + peer.name
@@ -73,6 +76,8 @@ func TestRegistryPublicHostRouting(t *testing.T) {
 		wantPrefix       string
 	}{
 		{name: "public parent", host: "app.shaulavo.dev", path: "/app/value", wantStatus: http.StatusNoContent, wantHits: 1, wantPrefix: "/app"},
+		{name: "public parent case dot and port", host: "APP.SHAULAVO.DEV.:443", path: "/app/value", wantStatus: http.StatusNoContent, wantHits: 1, wantPrefix: "/app"},
+		{name: "unknown public host case and dot", host: "OTHER.SHAULAVO.DEV.:443", path: "/app/value", wantStatus: http.StatusNotFound},
 		{name: "public bare mount", host: "app.shaulavo.dev", path: "/app", wantStatus: http.StatusPermanentRedirect},
 		{name: "public mount boundary", host: "app.shaulavo.dev", path: "/application/value", wantStatus: http.StatusNotFound},
 		{name: "unknown public host", host: "other.shaulavo.dev", path: "/app/value", wantStatus: http.StatusNotFound},
