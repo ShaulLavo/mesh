@@ -340,3 +340,27 @@ func TestLogsAttemptsTheWorkerOnAnUnknownProbe(t *testing.T) {
 		t.Fatalf("unknown probe logs read stale disk output: %q, %v", stdout, err)
 	}
 }
+
+func TestOfflineRemoveHidesSessionFromCLIAndPickerBeforeReconciliation(t *testing.T) {
+	host := setupCommandTestHost(t)
+	writeLocalSessionDir(t, "L0CL", worker.StateExited)
+	dependencies := Dependencies{DialHost: host.dial}
+	if _, _, err := executeCommand(t, dependencies, "rm", "L0CL"); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := paths.SessionDir("L0CL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(paths.Forgotten(dir)); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err := executeCommand(t, dependencies, "ls", "--all")
+	if err != nil || strings.Contains(stdout, "L0CL") {
+		t.Fatalf("offline removed session remained in ls: %q, %v", stdout, err)
+	}
+	picker, err := localPickerCatalog()
+	if err != nil || len(picker.Sessions) != 0 {
+		t.Fatalf("offline removed session remained in picker: %+v, %v", picker, err)
+	}
+}
