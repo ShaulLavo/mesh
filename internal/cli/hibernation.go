@@ -142,7 +142,7 @@ func (a *application) hibernateByID(cmd *cobra.Command, hosts []HostRecord, id s
 			return fmt.Errorf("session %s has already exited", resolved.local.ID)
 		}
 		err := hibernateLocal(*resolved.local, 0)
-		if err != nil && !resolved.local.Alive {
+		if err != nil && resolved.local.Liveness == LivenessGone {
 			return fmt.Errorf("session %s is %s", resolved.local.ID, resolved.local.State())
 		}
 		return err
@@ -339,7 +339,7 @@ func (a *application) reread(ctx context.Context, resolved resolvedSession) (res
 		if err != nil {
 			return resolvedSession{}, false, err
 		}
-		return resolvedSession{local: &current}, !current.Alive, nil
+		return resolvedSession{local: &current}, current.Liveness == LivenessGone, nil
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, remoteConnectTimeout)
 	rows, err := a.queryHost(queryCtx, *resolved.host)

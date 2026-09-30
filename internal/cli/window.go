@@ -286,7 +286,7 @@ func (a *application) createLocalSession(cmd *cobra.Command, command []string, c
 	if err != nil {
 		return Session{}, "", err
 	}
-	return Session{Meta: worker.Meta{ID: id, Command: command, Cwd: cwd}, Dir: dir, Alive: true}, socket, nil
+	return Session{Meta: worker.Meta{ID: id, Command: command, Cwd: cwd}, Dir: dir, Liveness: LivenessAlive}, socket, nil
 }
 
 func localPickerCatalog() (HostSessions, error) {
@@ -348,7 +348,7 @@ func (a *application) localPickerSessionAction(ctx context.Context, request Pick
 	case PickerKillSession:
 		return Kill(current)
 	case PickerRemoveSession:
-		if current.Alive {
+		if current.Liveness == LivenessAlive {
 			return fmt.Errorf("session %s is still running; kill it before removing it", current.ID)
 		}
 		return forgetLocalSession(ctx, current)
@@ -358,7 +358,7 @@ func (a *application) localPickerSessionAction(ctx context.Context, request Pick
 }
 
 func forgetLocalSession(parent context.Context, current Session) error {
-	if alive(current.Dir) {
+	if probeLiveness(current.Dir, &current.Meta) == LivenessAlive {
 		return fmt.Errorf("session %s is still running; kill it before removing it", current.ID)
 	}
 	stateDir, err := paths.StateDir()
@@ -382,6 +382,13 @@ func forgetLocalSession(parent context.Context, current Session) error {
 	}
 	if !errors.Is(err, ErrDaemonUnavailable) {
 		return err
+	}
+	switch probeLiveness(current.Dir, &current.Meta) {
+	case LivenessAlive:
+		return fmt.Errorf("session %s is still running; kill it before removing it", current.ID)
+	case LivenessUnknown:
+		return fmt.Errorf("session %s liveness is unknown; refusing to remove it", current.ID)
+	case LivenessGone:
 	}
 	// The daemon may have a durable row from before it stopped. Keep a marker
 	// until reconciliation can retire the row and directory together.

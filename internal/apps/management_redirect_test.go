@@ -43,7 +43,7 @@ func TestManagementReturnReconstructsAllowedPaths(t *testing.T) {
 func TestPairingPromotionRedirectUsesCanonicalManagementOrigin(t *testing.T) {
 	f := newAppFixture(t)
 	begin := httptest.NewRecorder()
-	f.edge.ServeHost(begin, httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair", nil), ManagementHost)
+	f.edge.ServeHost(begin, pairingStartRequest("/"), ManagementHost)
 	code := regexp.MustCompile(`Code: <strong>([a-z0-9-]+)</strong>`).FindStringSubmatch(begin.Body.String())
 	if len(code) != 2 {
 		t.Fatal("missing pairing code")

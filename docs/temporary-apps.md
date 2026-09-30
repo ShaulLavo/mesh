@@ -43,19 +43,40 @@ configured origin. Fresh browsers can view private apps and get the Make public
 or Make private button without pairing. Public visitors get no owner authority.
 This check runs on requests to both private and public apps.
 
-For deployments without automatic Tailnet access, private apps send you to `https://apps.shaulavo.dev`, where the
-browser displays a one-use approval code. Approve on the owner host:
+For deployments without automatic Tailnet access, private apps send you to
+`https://apps.shaulavo.dev`. Click **Start pairing** to get a one-use code; simply
+opening or refreshing the page does not allocate one. Approve on the owner host:
 
 ```sh
 mesh app browser approve pc CODE
 ```
 
+The terminal shows the browser's User-Agent summary, source IP, and pending age,
+then asks `Approve this browser? [y/N]`. Only approve a code you requested in your
+own browser. Browser details are unverified hints, not proof of identity. Empty
+or negative answers cancel. Scripts must explicitly pass `--yes`, which skips
+the human check; agents must never use it for a code the owner did not ask them
+to approve in that session.
+
 Keep the pairing page open. It checks for approval automatically and continues
-as soon as the owner approves. Checks preserve the code until its ten-minute
-expiry. Pairing grants that browser management
-rights for apps owned by `pc`; it grants no rights for another origin's apps.
-The edge issues a separate view-only cookie for the private app. Public visitors
-need no pairing and cannot change ownership or visibility.
+as soon as the owner approves. Refreshes reuse the same pending code until its
+ten-minute expiry or eviction. Pending codes are memory-only and disappear on
+an edge restart; approved grants remain durable. Pairing grants that browser
+management rights for apps owned by `pc`, not another origin's apps. The edge
+issues a separate view-only cookie for the private app. Public visitors need no
+pairing and cannot change ownership or visibility.
+
+Pairing is limited per IPv4 address or IPv6 /64, with an additional IPv6 /48
+aggregate quota. Shared NATs and delegations share these limits. When pending
+capacity is full, new browsers replace an old unapproved code rather than being
+locked out; approved records are never evicted. If your code expires or is
+evicted, start again from the pairing page.
+
+Browser confirmation pages require 750 ms of uninterrupted focus and visibility,
+then a fresh pointer, keyboard, or touch input. Input during the delay does not
+arm the button. One tap after the delay works on phone touch profiles in
+Chromium and WebKit. Making public or deleting also requires entering the app ID;
+the server rejects a missing or incorrect ID even from an older page.
 
 Click the small edge tab to expand the React Grab pill. Drag or flick it to an edge;
 its position survives reloads. The link button copies the app URL and briefly shows
@@ -102,10 +123,26 @@ Expiry or deletion first removes access, then stops workers and deletes managed
 source, dependencies, data and retained app output. The original source and
 external databases remain yours. If the origin is offline, cleanup stays pending;
 its short edge lease stops serving/running during a partition. Cleanup completes
-when the origin reconnects. Expired names are never reassigned or revived.
+when the origin reconnects. If the edge stops listing an app, for example after
+losing its state, the origin stops the app when its lease lapses. It deletes the
+managed copy 24 hours later unless the edge lists the app again first. Expired
+names are never reassigned or revived.
 
-HTML injection supports UTF-8 and common single-byte encodings, gzip/Brotli,
-header/meta CSP, and strict nonce policies. Binary/API responses remain intact.
-Unsupported HTML encodings and oversized tokens fail explicitly. Browser checks
-cover Chromium and WebKit; Safari device and production deployment checks are
-still pending rollout.
+The app pill is injected only into 200 inline HTML responses. Rewriting supports
+UTF-8 (including `utf8`), US-ASCII, ISO-8859-1, and Windows-1252, with an omitted
+charset treated as supported. The edge prefers identity encoding upstream and
+also accepts gzip and Brotli. Header/meta CSP and strict nonce policies are
+adapted for the pill, including CSP metas between `</head>` and `<body>`.
+
+Attachments, partial responses, HEAD responses, binary/API responses, unsupported
+charsets, and unsupported encodings pass through without a pill or changes to
+their representation. This includes an origin that sends zstd despite the edge's
+restricted encoding negotiation. Private-app isolation headers still apply.
+
+If an HTML token exceeds the bounded scanner buffer, every remaining app byte is
+passed through. A pill already inserted stays in place; otherwise a pill is added
+only at a proven safe boundary, never inside a partial script, style, textarea,
+title, or comment. CSP metas after that overflow are not rewritten. Streaming
+rewrites remove the original length and validators even if overflow later skips
+the pill. Browser checks cover Chromium and WebKit; Safari device and production
+deployment checks are still pending rollout.

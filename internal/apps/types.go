@@ -15,13 +15,19 @@ import (
 	"io"
 	"regexp"
 	"time"
+
+	"github.com/shaul/mesh/internal/webauth"
 )
 
 const Domain = "shaulavo.dev"
 const ManagementHost = "apps." + Domain
 const ManagementOrigin = "https://" + ManagementHost
 const IdleTTL = 24 * time.Hour
-const LeaseTTL = 3 * time.Minute
+
+// LeaseTTL is a variable only so integration builds can let a lease lapse
+// within a script's time budget.
+var LeaseTTL = 3 * time.Minute
+
 const MaxArchive = 64 << 20
 const ChunkSize = 256 << 10
 
@@ -70,13 +76,14 @@ type RuntimeInfo struct {
 	Root      string `json:"root,omitempty"`
 }
 type Result struct {
-	Runtime  *RuntimeInfo    `json:"runtime,omitempty"`
-	App      *Record         `json:"app,omitempty"`
-	Apps     []Record        `json:"apps,omitempty"`
-	UploadID string          `json:"uploadId,omitempty"`
-	Data     []byte          `json:"data,omitempty"`
-	Done     bool            `json:"done,omitempty"`
-	Browsers json.RawMessage `json:"browsers,omitempty"`
+	Pairing  *webauth.PairingInfo `json:"pairing,omitempty"`
+	Runtime  *RuntimeInfo         `json:"runtime,omitempty"`
+	App      *Record              `json:"app,omitempty"`
+	Apps     []Record             `json:"apps,omitempty"`
+	UploadID string               `json:"uploadId,omitempty"`
+	Data     []byte               `json:"data,omitempty"`
+	Done     bool                 `json:"done,omitempty"`
+	Browsers json.RawMessage      `json:"browsers,omitempty"`
 }
 
 type StateStore interface {

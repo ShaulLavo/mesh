@@ -12,12 +12,13 @@ MESH_APP=${MESH_INTEGRATION_BINARY:-$TEST_ROOT/mesh}
 EDGE_PID=""
 ORIGIN_PID=""
 APP_ID=""
+ORDINARY_PID=""
 
 cleanup() {
   if [ -n "$APP_ID" ] && [ -n "$ORIGIN_PID" ]; then
     MESH_STATE_DIR="$ORIGIN_STATE" timeout 5s "$MESH_APP" app delete local "$APP_ID" >/dev/null 2>&1 || true
   fi
-  for pid in "$ORIGIN_PID" "$EDGE_PID"; do
+  for pid in "$ORIGIN_PID" "$EDGE_PID" "$ORDINARY_PID"; do
     [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
   done
   for pid in "$ORIGIN_PID" "$EDGE_PID"; do
@@ -122,10 +123,14 @@ start_origin() {
   wait_for_socket "$ORIGIN_PID" "$ORIGIN_STATE/daemon.sock" || fail 'origin startup'
 }
 
-env MESH_STATE_DIR="$EDGE_STATE" MESH_FAKE_TAILSCALE_STATUS="$TEST_ROOT/e-status.json" PATH="$TEST_ROOT/bin:$PATH" \
-  "$MESH_APP" daemon --tailnet-port "$CONTROL_PORT" --edge "$TEST_ROOT/edge.json" >"$TEST_ROOT/edge.log" 2>&1 &
-EDGE_PID=$!
-wait_for_socket "$EDGE_PID" "$EDGE_STATE/daemon.sock" || fail 'edge startup'
+start_edge() {
+  env MESH_STATE_DIR="$EDGE_STATE" MESH_FAKE_TAILSCALE_STATUS="$TEST_ROOT/e-status.json" PATH="$TEST_ROOT/bin:$PATH" \
+    "$MESH_APP" daemon --tailnet-port "$CONTROL_PORT" --edge "$TEST_ROOT/edge.json" >>"$TEST_ROOT/edge.log" 2>&1 &
+  EDGE_PID=$!
+  wait_for_socket "$EDGE_PID" "$EDGE_STATE/daemon.sock" || fail 'edge startup'
+}
+
+start_edge
 start_origin
 
 MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app create local "$SOURCE" --run './server' --setup 'printf setup-complete >setup.txt' --port "$BACKEND_PORT" --json >"$TEST_ROOT/create.json" || fail 'create HTTP app'
@@ -199,6 +204,68 @@ if original['pid'] != restarted['pid'] or original['cwd'] != restarted['cwd']:
 PY
 [ $? -eq 0 ] || fail 'running worker adoption'
 
+json_field() {
+  python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$@"
+}
+
+# Integration builds lease for 3 s and renew every 500 ms, so a setup that
+# outlasts the lease must not delay renewal for the app already serving.
+SLOW_SOURCE="$TEST_ROOT/slow"
+mkdir -p "$SLOW_SOURCE"
+printf 'slow app' >"$SLOW_SOURCE/index.html"
+MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app create local "$SLOW_SOURCE" --setup 'sleep 6' --json >"$TEST_ROOT/slow.json" 2>"$TEST_ROOT/slow.err" &
+SLOW_CREATE=$!
+for _ in $(seq 100); do
+  grep -Eqs '"label": *"app-setup ' "$ORIGIN_STATE"/s/*/meta.json && break
+  sleep 0.05
+done
+grep -Eqs '"label": *"app-setup ' "$ORIGIN_STATE"/s/*/meta.json || fail 'slow setup did not start'
+sleep 4
+app_curl --fail "$APP_ENDPOINT/api" >"$TEST_ROOT/during-setup.json" || fail "app lease lapsed while another app ran setup"
+wait "$SLOW_CREATE" || fail "slow-setup app creation: $(cat "$TEST_ROOT/slow.err")"
+SLOW_ID=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["app"]["id"])' "$TEST_ROOT/slow.json") || fail 'slow app result'
+MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app delete local "$SLOW_ID" --json >/dev/null || fail 'delete slow-setup app'
+
+# With the edge gone nothing renews the lease. Once it lapses the origin stops the
+# app's worker, keeps its files, and leaves ordinary sessions alone.
+# The session's shell expands these, not this script.
+# shellcheck disable=SC2016
+MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" local --daemon -- sh -c 'echo $$ >"$1"; exec sleep 600' sh "$TEST_ROOT/ordinary.pid" \
+  </dev/null >/dev/null 2>&1 &
+ORDINARY_CLIENT=$!
+for _ in $(seq 100); do
+  [ -s "$TEST_ROOT/ordinary.pid" ] && break
+  sleep 0.05
+done
+[ -s "$TEST_ROOT/ordinary.pid" ] || fail 'ordinary session start'
+ORDINARY_PID=$(cat "$TEST_ROOT/ordinary.pid")
+kill -KILL "$ORDINARY_CLIENT" 2>/dev/null
+wait "$ORDINARY_CLIENT" 2>/dev/null
+APP_PID=$(json_field "$TEST_ROOT/restarted.json" pid)
+APP_CWD=$(json_field "$TEST_ROOT/restarted.json" cwd)
+kill -TERM "$EDGE_PID"
+wait "$EDGE_PID" 2>/dev/null
+EDGE_PID=""
+for _ in $(seq 100); do
+  kill -0 "$APP_PID" 2>/dev/null || break
+  sleep 0.1
+done
+kill -0 "$APP_PID" 2>/dev/null && fail 'app worker kept running after its lease lapsed'
+[ -f "$APP_CWD/setup.txt" ] || fail 'lapsed lease deleted app files'
+kill -0 "$ORDINARY_PID" 2>/dev/null || fail 'lapsed-lease stop killed an ordinary session'
+
+start_edge
+RECOVERED=""
+for _ in $(seq 100); do
+  if app_curl --fail "$APP_ENDPOINT/api" >"$TEST_ROOT/recovered.json" 2>/dev/null; then
+    RECOVERED=$(json_field "$TEST_ROOT/recovered.json" pid)
+    break
+  fi
+  sleep 0.1
+done
+[ -n "$RECOVERED" ] && [ "$RECOVERED" != "$APP_PID" ] || fail 'app did not restart once the edge renewed its lease'
+cp "$TEST_ROOT/recovered.json" "$TEST_ROOT/api.json"
+
 MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app delete local "$APP_ID" --json >"$TEST_ROOT/deleted.json" || fail 'delete running app'
 DELETED_STATUS=$(app_curl -o "$TEST_ROOT/deleted.body" -w '%{http_code}' "$APP_ENDPOINT/api") || fail 'deleted host request'
 [ "$DELETED_STATUS" = 410 ] || fail "deleted host returned $DELETED_STATUS"
@@ -224,4 +291,5 @@ with sqlite3.connect(edge_db) as database:
 PY
 [ $? -eq 0 ] || fail 'process and payload cleanup'
 APP_ID=""
-echo 'PASS: labelled HTTP app worker serves HTML/API/redirects/WebSockets, survives daemon restart, and deletes its managed payload'
+kill -0 "$ORDINARY_PID" 2>/dev/null || fail 'app deletion killed an ordinary session'
+echo 'PASS: labelled HTTP app worker serves HTML/API/redirects/WebSockets, survives daemon restart, keeps its lease through another app'"'"'s setup, stops when its lease lapses without touching ordinary sessions, restarts when the edge returns, and deletes its managed payload'

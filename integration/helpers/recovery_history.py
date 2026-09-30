@@ -63,8 +63,16 @@ def exercise(fixture):
     restored.expect(PROMPT)
     current_id, _ = fixture.shell_identity(restored)
     require(fixture.metadata(current_id)["cwd"] == str(fixture.root), "missing directory did not use nearest existing parent")
+    fixture.start_local_daemon()
+    require(session_id in fixture.daemon_listing(), "daemon did not adopt the source before offline removal")
+    fixture.stop_daemon()
     run(fixture, "rm", session_id)
-    eventually(lambda: not (fixture.local / "s" / session_id).exists(), "explicit forgetting retained source data")
+    source_directory = fixture.local / "s" / session_id
+    require((source_directory / ".forgotten").exists(), "offline removal did not leave a retirement marker")
+    require(session_id not in fixture.local_listing(), "offline removal remained visible in ls")
+    fixture.start_local_daemon()
+    eventually(lambda: not source_directory.exists(), "reconciliation retained explicitly forgotten source data")
+    require(session_id not in fixture.daemon_listing(), "reconciliation retained the forgotten catalog row")
     require((fixture.local / "s" / current_id).exists(), "forgetting a previous attempt deleted current work")
     print("PASS: explicit recovery recipes, history, directory fallback and forgetting")
 
