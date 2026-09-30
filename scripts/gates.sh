@@ -62,6 +62,18 @@ run_report() {
   fi
 }
 
+check_integration_isolation() {
+  local entry first_action
+  for entry in integration/*.sh; do
+    [[ -f $entry ]] || continue
+    first_action=$(sed -n '2p' "$entry")
+    if [[ $first_action != "source \"\$(dirname -- \"\${BASH_SOURCE[0]}\")/helpers/isolate.sh\"" ]]; then
+      printf 'integration isolation: FAIL (%s must source the prelude first)\n' "$entry" >&2
+      return 1
+    fi
+  done
+}
+
 export GOOS=linux GOARCH=amd64 CGO_ENABLED=0
 packages=(./... ./.gates)
 shell_files=()
@@ -71,7 +83,7 @@ if (( fast )); then
   # Inspect the index, not unstaged edits, without stashing or modifying the worktree.
   git checkout-index --all --prefix="$scratch/index/"
   cd "$scratch/index"
-  python3 integration/helpers/isolation_test.py EntryPointContractTest
+  check_integration_isolation
   packages=()
   arguments=(--partial)
   while IFS= read -r -d '' file; do
@@ -106,7 +118,7 @@ if (( fast )); then
     exit 0
   fi
 else
-  python3 integration/helpers/isolation_test.py EntryPointContractTest
+  check_integration_isolation
   find cmd internal scripts integration .gates -type f -name '*.go' -print0 |
     xargs -0 gofmt -l >"$scratch/unformatted"
   if [[ -s $scratch/unformatted ]]; then

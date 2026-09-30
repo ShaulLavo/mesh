@@ -55,7 +55,7 @@ func TestTailnetOwnerCanViewAndToggleWithoutPairing(t *testing.T) {
 		if len(csrf) != 2 {
 			t.Fatal("owner was asked to pair instead of confirming")
 		}
-		form := url.Values{"id": {app.ID}, "action": {action}, "csrf": {csrf[1]}}
+		form := url.Values{"id": {app.ID}, "action": {action}, "csrf": {csrf[1]}, "confirmation": {app.ID}}
 		post := func(ip, origin string) *httptest.ResponseRecorder {
 			r := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
 			r.RemoteAddr = ip + ":12345"

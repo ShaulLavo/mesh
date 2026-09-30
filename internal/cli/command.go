@@ -925,7 +925,7 @@ func (a *application) attachResolvedWithContainment(
 	options.IfDetached = resolved.ifDetached
 	var display string
 	if resolved.local != nil {
-		if !resolved.local.Alive {
+		if resolved.local.Liveness == LivenessGone {
 			return stoppedSessionError(resolved.local.ID, "", resolved.local.State())
 		}
 		options.SocketPath = paths.Socket(resolved.local.Dir)
@@ -1536,7 +1536,7 @@ func (a *application) attachCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !current.Alive {
+			if current.Liveness == LivenessGone {
 				return stoppedSessionError(current.ID, "", current.State())
 			}
 			opts, err := a.attachmentOptions(cmd, detachKey, raw)
@@ -1600,7 +1600,7 @@ func (a *application) logsCommand() *cobra.Command {
 			}
 			var output []byte
 			if resolved.local != nil {
-				if resolved.local.Alive {
+				if resolved.local.Liveness != LivenessGone {
 					output, err = Logs(*resolved.local, tail)
 				} else {
 					output, err = worker.ReadLogTail(resolved.local.Dir, tail)
@@ -1640,7 +1640,11 @@ func (a *application) signalCommand() *cobra.Command {
 		Short:   "Send a signal to a session process group",
 		Args:    exactArgs(2, "a session id and a signal", "mesh sig 7K3D TERM"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.runSessionControl(cmd, args[0], protocol.TypeSignal, args[1])
+			name, err := normaliseSignalName(args[1])
+			if err != nil {
+				return err
+			}
+			return a.runSessionControl(cmd, args[0], protocol.TypeSignal, name)
 		},
 	}
 }
@@ -1679,10 +1683,10 @@ func (a *application) removeSession(cmd *cobra.Command, hosts []HostRecord, id s
 		return err
 	}
 	if resolved.local != nil {
-		if resolved.local.Meta.State != worker.StateExited && resolved.local.Alive {
+		if resolved.local.Liveness == LivenessAlive {
 			return fmt.Errorf("session %s is still running; kill it before removing it", resolved.local.ID)
 		}
-		return RemoveLocal(*resolved.local)
+		return forgetLocalSession(cmd.Context(), *resolved.local)
 	}
 	if resolved.remote.State == string(storage.StateRunning) || resolved.remote.State == string(storage.StateDetached) {
 		return fmt.Errorf("session %s on %s is still %s; kill it before removing it", resolved.remote.ID, resolved.host.Alias, resolved.remote.State)
@@ -1702,10 +1706,8 @@ func (a *application) runSessionControl(cmd *cobra.Command, id, controlType, sig
 		return err
 	}
 	if resolved.local != nil {
-		// Refuse only on a state the worker actually recorded. Alive is a
-		// 500ms socket dial, and a loaded machine can miss it for a perfectly
-		// healthy session — which is exactly when kill and sig matter most.
-		// Attempt the operation and let the worker's own answer decide.
+		// An inconclusive probe must not prevent control of a loaded worker.
+		// Only a recorded exit can refuse the request before dialing.
 		if resolved.local.Meta.State == worker.StateExited {
 			return fmt.Errorf("session %s is already exited", resolved.local.ID)
 		}
@@ -1714,9 +1716,7 @@ func (a *application) runSessionControl(cmd *cobra.Command, id, controlType, sig
 		} else {
 			err = Signal(*resolved.local, signal)
 		}
-		if err != nil && !resolved.local.Alive {
-			// The worker really is unreachable, so the probe was right after
-			// all: report the session's state rather than a dial failure.
+		if err != nil && resolved.local.Liveness == LivenessGone {
 			return fmt.Errorf("session %s is already interrupted", resolved.local.ID)
 		}
 	} else {
@@ -1926,7 +1926,7 @@ func localSessionRowsMeasured(memory procmem.Table) ([]protocol.SessionInfo, err
 		}
 		addLocalRecoveryInfo(&row, current, config.HostID)
 		row.Hibernated = localHibernation(current, row.ReplacementID)
-		if current.Alive {
+		if current.Liveness == LivenessAlive {
 			row.MemoryBytes = worker.SessionMemory(memory, current.ID, current.PID)
 		}
 		rows = append(rows, row)
