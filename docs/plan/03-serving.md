@@ -31,6 +31,12 @@ is an argument for keeping that edge small, not for dropping it.
 tailnet addresses, so they resolve to something reachable only from the
 tailnet. Everyone else gets an address they cannot route to.
 
+For a canonical public Host, the origin serves only the longest matching route
+published under that Host. A nested private route or a route published under
+another hostname returns 404 before proxying or starting an on-demand process,
+without falling back to a public parent. Private tailnet Hosts keep the existing
+longest-prefix routing, including requests from the public edge host.
+
 Certificates work anyway. Let's Encrypt DNS-01 validates by publishing a TXT
 record, never by connecting to the host, so `*.mesh.shaulavo.dev` gets a real
 publicly trusted certificate despite the per-host records pointing at
