@@ -84,21 +84,30 @@ func TestPrivateHTTPHostAllowlist(t *testing.T) {
 		{name: "bound IPv6 with listener port", host: "[fd7a:115c:a1e0::1]:7337", allowed: true},
 		{name: "other IPv4", host: "100.64.0.2:7337"},
 		{name: "other IPv6", host: "[fd7a:115c:a1e0::2]:7337"},
-		{name: "loopback", host: "127.0.0.1:7337"},
-		{name: "localhost is not a tailnet alias", host: "localhost"},
+		{name: "IPv4 loopback", host: "127.0.0.1:7337", allowed: true},
+		{name: "IPv4 loopback range", host: "127.99.12.34:7337", allowed: true},
+		{name: "IPv6 loopback", host: "[::1]:7337", allowed: true},
+		{name: "mapped IPv4 loopback", host: "[::ffff:127.0.0.1]:7337", allowed: true},
+		{name: "IPv4 outside loopback range", host: "128.0.0.1:7337"},
+		{name: "IPv6 outside loopback", host: "[::2]:7337"},
+		{name: "localhost", host: "localhost", allowed: true},
+		{name: "SSH port forward", host: "localhost:12000", allowed: true},
+		{name: "localhost case and dot", host: "LOCALHOST.:12000", allowed: true},
+		{name: "localhost suffix attack", host: "localhost.attacker.example:12000"},
 		{name: "MagicDNS full name", host: "pc.example.ts.net", allowed: true},
 		{name: "MagicDNS short name", host: "pc", allowed: true},
 		{name: "MagicDNS case and dot", host: "PC.EXAMPLE.TS.NET.:7337", allowed: true},
 		{name: "other MagicDNS host", host: "other.example.ts.net"},
 		{name: "private name", host: "pc.mesh.shaulavo.dev", allowed: true},
 		{name: "private external TLS port", host: "pc.mesh.shaulavo.dev:443", allowed: true},
-		{name: "private route subdomain", host: "blog.pc.mesh.shaulavo.dev", allowed: true},
+		{name: "unused private subdomain", host: "blog.pc.mesh.shaulavo.dev"},
 		{name: "nested private route subdomain", host: "nested.blog.pc.mesh.shaulavo.dev"},
 		{name: "private name suffix attack", host: "evilpc.mesh.shaulavo.dev"},
 		{name: "other private host", host: "other.mesh.shaulavo.dev"},
 		{name: "private base wildcard", host: "mesh.shaulavo.dev"},
 		{name: "public pinned edge", host: "blog.shaulavo.dev", edge: true, allowed: true},
 		{name: "public pinned edge external port", host: "blog.shaulavo.dev:443", edge: true, allowed: true},
+		{name: "public pinned edge case and dot", host: "BLOG.SHAULAVO.DEV.:443", edge: true, allowed: true},
 		{name: "public untrusted peer", host: "blog.shaulavo.dev"},
 		{name: "public apex", host: "shaulavo.dev", edge: true},
 		{name: "nested public name", host: "nested.blog.shaulavo.dev", edge: true},
@@ -257,11 +266,19 @@ func TestPrivateHTTPRejectsBeforeProxyAndDemand(t *testing.T) {
 		serviceOnlyHTTPSHandler(cfg),
 	} {
 		for _, route := range []string{"proxy", "demand"} {
-			request := httptest.NewRequest(http.MethodGet, "http://rebind.attacker.example:7337/"+route+"/", nil)
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, request)
-			if response.Code != http.StatusMisdirectedRequest || hits.Load() != 0 || gate.entered.Load() != 0 {
-				t.Fatalf("rejected /%s status = %d, upstream hits = %d, demand starts = %d", route, response.Code, hits.Load(), gate.entered.Load())
+			for _, upgrade := range []bool{false, true} {
+				request := httptest.NewRequest(http.MethodGet, "http://rebind.attacker.example:7337/"+route+"/", nil)
+				if upgrade {
+					request.Header.Set("Connection", "Upgrade")
+					request.Header.Set("Upgrade", "websocket")
+					request.Header.Set("Sec-WebSocket-Version", "13")
+					request.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+				}
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				if response.Code != http.StatusMisdirectedRequest || hits.Load() != 0 || gate.entered.Load() != 0 {
+					t.Fatalf("rejected /%s upgrade=%t status = %d, upstream hits = %d, demand starts = %d", route, upgrade, response.Code, hits.Load(), gate.entered.Load())
+				}
 			}
 		}
 	}
@@ -314,7 +331,8 @@ func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 	}{
 		{host: "127.0.0.1", want: http.StatusNoContent},
 		{host: net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))), want: http.StatusNoContent},
-		{host: "127.0.0.2", want: http.StatusMisdirectedRequest},
+		{host: "127.0.0.2", want: http.StatusNoContent},
+		{host: "100.64.0.2", want: http.StatusMisdirectedRequest},
 		{host: "pc.example.ts.net", want: http.StatusNoContent},
 		{host: "pc", want: http.StatusNoContent},
 		{host: "pc.mesh.shaulavo.dev:443", want: http.StatusNoContent},
@@ -369,7 +387,9 @@ func TestPrivateHTTPServiceWebSocketHostAllowlist(t *testing.T) {
 	}{
 		{host: "127.0.0.11:7337", want: http.StatusSwitchingProtocols},
 		{host: "pc.fixture.test:7337", want: http.StatusSwitchingProtocols},
-		{host: "localhost", want: http.StatusMisdirectedRequest},
+		{host: "localhost:12000", want: http.StatusSwitchingProtocols},
+		{host: "127.0.0.1:12000", want: http.StatusSwitchingProtocols},
+		{host: "[::1]:12000", want: http.StatusSwitchingProtocols},
 		{host: "rebind.attacker.example:7337", want: http.StatusMisdirectedRequest},
 	} {
 		t.Run(test.host, func(t *testing.T) {
