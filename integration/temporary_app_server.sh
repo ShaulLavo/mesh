@@ -146,19 +146,19 @@ app_curl() {
 APP_ENDPOINT="http://127.0.0.1:$PROXY_PORT"
 PRIVATE_STATUS=$(app_curl -o "$TEST_ROOT/private.body" -w '%{http_code}' "$APP_ENDPOINT/api") || fail 'private gate request'
 [ "$PRIVATE_STATUS" = 303 ] || fail "private app returned $PRIVATE_STATUS"
-if rg -q 'APP_LABELLED_WORKER|"pid"' "$TEST_ROOT/private.body"; then
+if grep -Eq 'APP_LABELLED_WORKER|"pid"' "$TEST_ROOT/private.body"; then
   fail 'private backend bytes escaped'
 fi
 python3 "$REPO_ROOT/integration/helpers/mesh_control.py" --expect-type error upsert \
   "$ORIGIN_STATE/daemon.sock" alias proxy "$BACKEND_PORT" alias.shaulavo.dev >"$TEST_ROOT/alias.out" || fail 'app port alias refusal'
-rg -q 'app-owned port' "$TEST_ROOT/alias.out" || fail 'ordinary public proxy bypassed private app gate'
+grep -Eq 'app-owned port' "$TEST_ROOT/alias.out" || fail 'ordinary public proxy bypassed private app gate'
 python3 "$REPO_ROOT/integration/helpers/mesh_control.py" --expect-type error upsert \
   "$ORIGIN_STATE/daemon.sock" source-alias files "$WORKLOAD" '' >"$TEST_ROOT/source-alias.out" || fail 'app source alias refusal'
-rg -q 'managed app directories' "$TEST_ROOT/source-alias.out" || fail 'ordinary file route exposed private app source'
+grep -Eq 'managed app directories' "$TEST_ROOT/source-alias.out" || fail 'ordinary file route exposed private app source'
 MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app public local "$APP_ID" --json >"$TEST_ROOT/public.json" || fail 'publish app'
 app_curl --fail "$APP_ENDPOINT/" >"$TEST_ROOT/index.html" || fail 'public HTML'
-rg -q 'APP_LABELLED_WORKER' "$TEST_ROOT/index.html" || fail 'server HTML missing'
-rg -q '/.mesh-app/' "$TEST_ROOT/index.html" || fail 'floating pill missing'
+grep -Eq 'APP_LABELLED_WORKER' "$TEST_ROOT/index.html" || fail 'server HTML missing'
+grep -Eq '/.mesh-app/' "$TEST_ROOT/index.html" || fail 'floating pill missing'
 app_curl --fail "$APP_ENDPOINT/api" >"$TEST_ROOT/api.json" || fail 'public API'
 app_curl --fail "$APP_ENDPOINT/mesh" >"$TEST_ROOT/mesh.json" || fail 'whole-host /mesh API'
 app_curl --fail --location "$APP_ENDPOINT/redirect" >"$TEST_ROOT/redirect.json" || fail 'root-relative redirect'

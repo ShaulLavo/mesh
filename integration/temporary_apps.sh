@@ -32,22 +32,22 @@ done
 [ -S "$MESH_STATE_DIR/daemon.sock" ] || fail "daemon startup: $(cat "$TEST_ROOT/daemon.log")"
 
 "$MESH" app --help >"$TEST_ROOT/help" || fail 'app help failed'
-rg -q 'create|Create' "$TEST_ROOT/help" || fail 'app create absent from help'
+grep -Eq 'create|Create' "$TEST_ROOT/help" || fail 'app create absent from help'
 
 if "$MESH" app create local "$TEST_ROOT/source" --run 'printf should-not-run' >"$TEST_ROOT/invalid.out" 2>"$TEST_ROOT/invalid.err"; then
   fail 'server recipe accepted without explicit port'
 fi
-rg -q -- '--run requires --port' "$TEST_ROOT/invalid.err" || fail "port error unclear: $(cat "$TEST_ROOT/invalid.err")"
+grep -Eq -- '--run requires --port' "$TEST_ROOT/invalid.err" || fail "port error unclear: $(cat "$TEST_ROOT/invalid.err")"
 
 if "$MESH" app create local "$TEST_ROOT/source" >"$TEST_ROOT/create.out" 2>"$TEST_ROOT/create.err"; then
   fail 'app accepted without a configured public edge'
 fi
-rg -q -- '--public-edge-target' "$TEST_ROOT/create.err" || fail "edge configuration error unclear: $(cat "$TEST_ROOT/create.err")"
+grep -Eq -- '--public-edge-target' "$TEST_ROOT/create.err" || fail "edge configuration error unclear: $(cat "$TEST_ROOT/create.err")"
 
 if "$MESH" app list local --json >"$TEST_ROOT/list.out" 2>"$TEST_ROOT/list.err"; then
   fail 'app list accepted without a configured public edge'
 fi
-rg -q -- '--public-edge-target' "$TEST_ROOT/list.err" || fail "list error unclear: $(cat "$TEST_ROOT/list.err")"
+grep -Eq -- '--public-edge-target' "$TEST_ROOT/list.err" || fail "list error unclear: $(cat "$TEST_ROOT/list.err")"
 
 "$MESH" ls >"$TEST_ROOT/sessions.out" || fail 'ordinary daemon stopped accepting controls'
 python3 - "$MESH_STATE_DIR/mesh.db" "$TEST_ROOT/source/index.html" "$TEST_ROOT/workload" <<'PY'
