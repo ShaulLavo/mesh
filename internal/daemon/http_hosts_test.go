@@ -85,6 +85,7 @@ func TestPrivateHTTPHostAllowlist(t *testing.T) {
 		{name: "other IPv4", host: "100.64.0.2:7337"},
 		{name: "other IPv6", host: "[fd7a:115c:a1e0::2]:7337"},
 		{name: "loopback", host: "127.0.0.1:7337"},
+		{name: "localhost is not a tailnet alias", host: "localhost"},
 		{name: "MagicDNS full name", host: "pc.example.ts.net", allowed: true},
 		{name: "MagicDNS short name", host: "pc", allowed: true},
 		{name: "MagicDNS case and dot", host: "PC.EXAMPLE.TS.NET.:7337", allowed: true},
@@ -357,5 +358,43 @@ func TestPrivateHTTPDoesNotReplaceWebSocketOriginRefusal(t *testing.T) {
 	serviceOnlyHTTPSHandler(cfg).ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("HTTPS WebSocket refusal = %d, want 404", response.Code)
+	}
+}
+
+func TestPrivateHTTPServiceWebSocketHostAllowlist(t *testing.T) {
+	for _, test := range []struct {
+		host string
+		want int
+	}{
+		{host: "127.0.0.11:7337", want: http.StatusSwitchingProtocols},
+		{host: "pc.fixture.test:7337", want: http.StatusSwitchingProtocols},
+		{host: "localhost", want: http.StatusMisdirectedRequest},
+		{host: "rebind.attacker.example:7337", want: http.StatusMisdirectedRequest},
+	} {
+		t.Run(test.host, func(t *testing.T) {
+			dispatched := false
+			cfg := listenerConfig{
+				webSocketPath: "/mesh",
+				httpHosts: httpHostPolicy{
+					tailnetAddrs: []netip.Addr{netip.MustParseAddr("127.0.0.11")},
+					tailnetNames: []string{"pc.fixture.test", "pc"},
+				},
+				httpHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					dispatched = true
+					w.WriteHeader(http.StatusSwitchingProtocols)
+				}),
+			}
+			request := httptest.NewRequest(http.MethodGet, "http://127.0.0.11:7337/dev/ws", nil)
+			request.Host = test.host
+			request.Header.Set("Connection", "Upgrade")
+			request.Header.Set("Upgrade", "websocket")
+			request.Header.Set("Sec-WebSocket-Version", "13")
+			request.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+			response := httptest.NewRecorder()
+			newWebSocketServer(context.Background(), cfg, newConnectionGroup(echoOneFrame)).Handler.ServeHTTP(response, request)
+			if response.Code != test.want || dispatched != (test.want == http.StatusSwitchingProtocols) {
+				t.Fatalf("service WebSocket Host %q returned %d, dispatched = %t; want %d", test.host, response.Code, dispatched, test.want)
+			}
+		})
 	}
 }
