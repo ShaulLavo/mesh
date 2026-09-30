@@ -293,7 +293,7 @@ func TestSyncLetsOwnersDeleteFinish(t *testing.T) {
 			select {
 			case <-time.After(200 * time.Millisecond):
 			case <-ctx.Done():
-				err = ctx.Err()
+				err = fmt.Errorf("find %s: %w", label, ctx.Err())
 			}
 		})
 		return err
