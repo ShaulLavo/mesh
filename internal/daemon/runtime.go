@@ -49,12 +49,17 @@ var ErrDaemonAlreadyRunning = errors.New("daemon: already running")
 // listeners. TailnetPort and WebSocketPath are required when TailnetAddrs is
 // non-empty. HTTPSPort binds a service-only TLS listener to loopback and
 // requires TLSConfig.GetCertificate. HTTPHandler receives HTTPS requests and
-// Tailnet HTTP requests outside WebSocketPath. ReportError receives non-fatal
-// listener errors and may be nil. RequireAllTailnetListeners turns any
+// Tailnet HTTP requests outside WebSocketPath, after the Host policy accepts a
+// bound IP, TailnetNames entry, current PrivateName, or a public name from
+// TrustPublicEdgeForwarding. ReportError receives non-fatal listener errors and
+// may be nil. RequireAllTailnetListeners turns any
 // discovered-address bind failure into a startup failure.
 type ListenerConfig struct {
 	StateDir                   string
 	TailnetAddrs               []string
+	TailnetNames               []string
+	PrivateName                func() string
+	TrustPublicEdgeForwarding  func(netip.Addr) bool
 	TailnetPort                uint16
 	WebSocketPath              string
 	HTTPHandler                http.Handler
@@ -74,6 +79,7 @@ type listenerConfig struct {
 	tailnetPort                uint16
 	webSocketPath              string
 	httpHandler                http.Handler
+	httpHosts                  httpHostPolicy
 	httpsPort                  uint16
 	tlsConfig                  *tls.Config
 	tailnetOwnerAccess         bool
@@ -185,12 +191,19 @@ func serveBoundListeners(
 			publicListener = tailnet.ProxyListener{Listener: publicListener}
 		}
 	}
+	// Discovery can include addresses whose bind failed. Only listeners that
+	// actually opened establish an IP authority for private HTTP.
+	normalized.httpHosts.tailnetAddrs = nil
+	for _, listener := range tailnetListeners {
+		address := listener.Addr().(*net.TCPAddr).AddrPort().Addr().Unmap()
+		normalized.httpHosts.tailnetAddrs = append(normalized.httpHosts.tailnetAddrs, address)
+	}
 	connections := newConnectionGroup(handler)
 	server := newWebSocketServer(ctx, normalized, connections)
 	var httpsServer *http.Server
 	if httpsListener != nil {
 		httpsServer = &http.Server{
-			Handler:           serviceOnlyHTTPSHandler(normalized.webSocketPath, normalized.httpHandler),
+			Handler:           serviceOnlyHTTPSHandler(normalized),
 			ReadHeaderTimeout: httpReadHeaderTimeout,
 			BaseContext:       func(net.Listener) context.Context { return ctx },
 			TLSConfig:         normalized.tlsConfig,
@@ -429,6 +442,11 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		requireAllTailnetListeners: cfg.RequireAllTailnetListeners,
 		shutdownTimeout:            httpShutdownTimeout,
 		reporter:                   newErrorReporter(cfg.ReportError),
+		httpHosts: httpHostPolicy{
+			tailnetNames:              append([]string(nil), cfg.TailnetNames...),
+			privateName:               cfg.PrivateName,
+			trustPublicEdgeForwarding: cfg.TrustPublicEdgeForwarding,
+		},
 	}
 	if cfg.TailnetOwnerAccess {
 		address, parseErr := netip.ParseAddrPort(cfg.PublicListenAddress)
@@ -507,9 +525,10 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 	return normalized, nil
 }
 
-func serviceOnlyHTTPSHandler(webSocketPath string, services http.Handler) http.Handler {
+func serviceOnlyHTTPSHandler(cfg listenerConfig) http.Handler {
+	services := privateHTTPHandler(cfg.httpHandler, cfg.httpHosts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.EscapedPath() == webSocketPath || r.URL.Path == webSocketPath {
+		if r.URL.EscapedPath() == cfg.webSocketPath || r.URL.Path == cfg.webSocketPath {
 			http.NotFound(w, r)
 			return
 		}
@@ -555,13 +574,10 @@ type webSocketServer struct {
 
 func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *connectionGroup) *webSocketServer {
 	server := &webSocketServer{}
+	services := privateHTTPHandler(cfg.httpHandler, cfg.httpHosts)
 	serveHTTP := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.EscapedPath() != cfg.webSocketPath {
-			if cfg.httpHandler == nil {
-				http.NotFound(w, r)
-				return
-			}
-			cfg.httpHandler.ServeHTTP(w, r)
+			services.ServeHTTP(w, r)
 			return
 		}
 		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{}, func(connectionCtx context.Context, conn transport.Conn) error {

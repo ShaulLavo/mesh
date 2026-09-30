@@ -83,6 +83,41 @@ Build the per-host form first, because it is strictly simpler and cannot fail
 partially. Add the alias afterwards if typing the machine name actually annoys
 you, which it might not.
 
+## Private listener Host policy
+
+The tailnet HTTP listener and loopback HTTPS listener check `Host` before
+routing any non-control request to an app, file listing, proxy, or on-demand
+service. An unrecognized Host returns `421 Misdirected Request` without
+contacting an upstream or starting a command. Being on the tailnet alone does
+not authorize a browser request under an attacker-controlled DNS name.
+
+Accepted authorities are:
+
+- An IPv4 or IPv6 literal equal to an address whose tailnet HTTP listener
+  successfully bound. IPv4-mapped IPv6 literals compare as IPv4.
+- This host's full MagicDNS name and its short first label, obtained from local
+  Tailscale discovery. Other hosts on the same tailnet are not aliases.
+- The current certificate-backed private name published by
+  `certificateRuntime.PrivateName()`, plus one DNS label immediately below it,
+  such as `blog.pc.mesh.shaulavo.dev`. The name becomes accepted only after
+  ingress is ready and stops being accepted if the source withdraws it.
+- A canonical one-label public name accepted by `serve.ValidatePublicName`,
+  only when the immediate TCP peer matches the identity-verified public edge's
+  pinned address through `trustPublicEdgeForwarding`. Forwarding headers do not
+  establish trust. This admits a public authority; the downstream dispatcher
+  still owns which route that authority may serve.
+
+DNS names compare case-insensitively and may have a trailing root dot. An
+optional authority port must be numeric and in range, but does not participate
+in the Host identity decision. Tailscale Serve, the public edge, and port
+forwards can preserve an external authority port that differs from the internal
+listener. IPv6 zones, malformed authorities, the public apex, and nested public
+names are refused.
+
+The WebSocket control path retains its separate browser Origin refusal. The
+loopback HTTPS listener still returns 404 for that path. IP-dialed CLI and
+host-to-host control connections do not change.
+
 ## The CLI
 
 ```bash
