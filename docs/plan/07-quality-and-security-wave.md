@@ -1,0 +1,164 @@
+# Quality and security wave
+
+Status: Approved, 2026-09-30. Not started. Written to be handed to a wave coordinator.
+
+## Outcome
+
+Mesh gets the same guard rails Fregat has, a codebase cleaned by independent audits, and a
+hardened attack surface checked by two different models. Every finding is fixed or explicitly
+parked with a reason. After the wave:
+- One `gates` command blocks new dead code, duplication, deep nesting, unwrapped errors and
+  lint findings, in pre-commit and CI.
+- Every area of `internal/` has been audited for quality by one Sol run and one Opus run.
+- Every attack surface has been audited for security by at least two Sol runs and one Opus run.
+- Everything above is fixed, released, and running on every host in the fleet, temporary apps
+  (plan [06](06-temporary-apps.md), T29) included.
+
+## How to run it
+
+Run it with the `orchestrate` skill (`~/.agents/skills/orchestrate`), which sits on poteto mode.
+The coordinator plans, steers design calls, merges and releases. Agents implement and review.
+
+- **Models:** Sol (GPT 6.1 Sol, native `sol` subagent) does most audits, implementation and
+  reviews. Opus subagents take the second audit pass, taste-heavy refactors, and any unit Sol
+  failed twice. Check usage with `bun ~/.agents/skills/orchestrate/scripts/usage.ts` before each
+  launch batch.
+- **Two eyes:** every audit area gets runs from both models, launched independently with the
+  same brief and without seeing each other's output. Every security fix is reviewed by the other
+  model from the one that wrote it.
+- **Pace:** at most 4 live agents unless the owner raises it. Launch in small batches; bursts
+  hit rate limits.
+- **Machine:** heavy commands (`go test -race ./...`, `scripts/verify.sh`, builds) go through
+  `/work/tmp/wave-heavy/run.sh`. Do not run test-heavy lanes while a Fregat input-latency
+  calibration is running on this host: CPU load corrupts its measurements. Audits are read-only
+  and may run alongside it.
+- **Ledger:** `/work/reports/mesh-wave/` holds the checklist, events log, audit reports,
+  findings table and handoff.
+- **Every brief restates:** `CLAUDE.md`'s six invariants, `docs/plan/01-decisions.md`, "all
+  integration scripts stay green", "no `internal/protocol` rename", and "no new dependency
+  without a line of justification".
+
+This wave's own agents run inside Mesh sessions on this host. A daemon upgrade on this host is a
+live test of invariant 3. Update the other hosts first; this host goes last, with the rollback
+binary in place.
+
+## Phase 0: baseline
+
+1. Main CI green (`ci.yml`: vet, race tests, `verify.sh`, golangci-lint, govulncheck).
+2. Record the baseline in the ledger: head SHA, test counts, `verify.sh` duration, golangci
+   findings count, govulncheck output, and binary size.
+3. Read `docs/plan/00-overview.md`, `01-decisions.md`, `02-status.md` and the task briefs of any
+   area a lane will touch.
+
+## Phase 1: toolchain gates
+
+One lane (Sol, high). Fregat's `bun run gates` is the model: one command, run in pre-commit and
+CI, with allow-lists that carry a reason for every entry.
+
+| Fregat gate | Mesh equivalent |
+|---|---|
+| knip (unused code) | `deadcode` (golang.org/x/tools/cmd/deadcode) over `./cmd/...`, plus golangci `unused` and `unparam` |
+| dupes, dupes:functions | golangci `dupl`, plus `goconst` |
+| never-nester (max nesting 3) | golangci `nestif` and `gocognit` |
+| errors:census | golangci `errorlint`, `wrapcheck` and `nilerr`, matching `CLAUDE.md`'s error rule |
+| oxlint | golangci `gocritic`, `misspell`, `revive` (curated rules), `exhaustive`, `contextcheck` |
+| (none) | `shellcheck` for `scripts/` and `integration/`, `ruff` for the Python release tools |
+
+- **Baseline, then ratchet.** Existing violations go in a checked-in baseline so the gate blocks
+  new ones from day one. Phase 4 burns the baseline down. A baseline entry is never added to
+  make a new change pass.
+- **Wiring:** `scripts/gates.sh` runs everything; lefthook runs it pre-commit; `ci.yml` gets a
+  gates job. `third_party/` is excluded and gets its own drift check (Phase 3).
+- **The `check-tNN.sh` scripts** (T16–T25) are audited in Phase 2: fold any that still protect
+  behavior into `integration/` or the gates, and delete the rest.
+- **Acceptance:** the gate fails on a planted violation of each kind, passes on main, and runs
+  in CI. It gets one independent review.
+
+## Phase 2: quality audits
+
+Read-only. Each area gets one Sol run and one Opus run with the `improve` skill, each producing
+ranked, self-contained fix plans in `/work/reports/mesh-wave/quality/<area>-<model>.md`.
+
+| Area | Paths |
+|---|---|
+| CLI and entry | `internal/cli` (`command.go` is the largest file), `cmd/mesh` |
+| Daemon | `internal/daemon` (demand, runtime, lifecycle, relay), `internal/procmem` |
+| Sessions and terminals | `internal/worker`, `session`, `terminal`, `protocol`, `transport`, `inspection` |
+| TUI | `internal/tui` |
+| Serving and edge | `internal/edge`, `serve`, `dnsname`, `webauth` |
+| Temporary apps | `internal/apps`, `internal/apppill`, `examples/` |
+| SSH | `internal/sshd`, `sshfs`, `tunnel` |
+| Host setup and updates | `internal/bootstrap`, `identity`, `tailnet`, `update`, `updatebootstrap`, `updategate`, `updateinstall`, `updatenotice`, `release` |
+| Recovery, power and state | `internal/recovery`, `agentresume`, `wake`, `wakeclient`, `inhibit`, `storage`, `paths`, `db/` |
+| Scripts and release | `scripts/`, `integration/`, `.github/workflows`, goreleaser, Casks |
+
+The coordinator merges both runs into one findings table: area, finding, severity, which models
+found it, and fix unit. A finding both models raised ranks first. A finding one model raised is
+checked by the coordinator before it becomes a unit.
+
+## Phase 3: security audits
+
+Read-only. The first step is a short threat model (`/work/reports/mesh-wave/security/threat-model.md`):
+assets, trust boundaries, attackers (tailnet peer, public internet, local user, compromised
+agent, malicious release), and the invariants security depends on. Each surface then gets at
+least two Sol runs (different prompts: one attacker-led, one code-led) and one Opus run.
+
+| Surface | What to check |
+|---|---|
+| **Temporary apps (first)** | Shipped in v0.1.55 and runs arbitrary code behind a public URL: process isolation from the host and other apps, filesystem reach of app workspaces, owner recognition (Tailnet ownership, paired grants, browser pairing), public/private switching, the injected pill as a script-injection point, name reservation and guessing, expiry that really stops processes and deletes files, resource limits per app |
+| Public edge and serving | Authentication, request limits and deadlines, header and host handling, TLS and certificate installation, private DNS, serve-on-demand start-up as an amplifier |
+| SSH front door | Auth, sessions over SSH, SFTP/SCP path containment and read-only guarantees, named reverse tunnels and claim lifetime |
+| Transport | WebSocket auth and resume, replay ring bounds, frame limits, relay backpressure, protocol parsing of hostile frames |
+| Local daemon and workers | Socket permissions, cross-user access, attach/steal authorization, signal and kill scope, `meta.json` trust, containment paths |
+| Agent hooks and recovery | Hook identity (the 2026-09-25 hijack: inherited `MESH_AGENT_*` env let child processes overwrite saved ids), resume targets, env leakage into child sessions |
+| Resource limits | Per-session memory/CPU scopes (the 2026-09-25 OOM killed all of `mesh.service`), hibernation, queue bounds, disk growth of logs and replay |
+| Host setup | Auth-key and sudo-password paths, remote output handling, identity verification, installers run as root |
+| Updates and supply chain | Release signing and checksum verification in `mesh update` and `install.sh`, GitHub API trust, rollback, pinned actions, govulncheck, `third_party/` (wish, sftp) drift from upstream and patch review |
+| Pi wake and power | Target-owned permission, wake protocol spoofing, inhibitor scope |
+
+Findings go in `/work/reports/mesh-wave/security/findings.md` with severity (critical, high,
+medium, low), exploit scenario, affected invariant, and fix unit. **Critical and high findings
+are fixed before any quality refactor lands in the same area.** A critical finding is reported to
+the owner the same turn.
+
+## Phase 4: fixes
+
+- The coordinator turns findings into units, each with a plan: data shape, owning package,
+  contracts touched, invariants at risk, acceptance, and the test or integration script that
+  fails first.
+- Order: critical and high security, then gate baseline burn-down, then quality refactors by
+  value, then medium and low security.
+- Each unit: an implementer in its own worktree (`/work/worktrees/mesh/<unit>`), one
+  independent reviewer (the other model for security fixes), coordinator checks the fixes, merge
+  on green CI.
+- Large-file refactors (`command.go`, `tui/model.go`, `daemon/demand.go`) are split by
+  responsibility, not by line count, and keep behavior identical: existing integration scripts
+  are the safety net, plus new ones where coverage is thin.
+- Update `02-status.md` and the task briefs as units land, as the pickup rules require.
+
+## Phase 5: release and rollout
+
+- Release through the existing pipeline (`scripts/plan-release.sh`, goreleaser,
+  `check-packaging.sh`, Casks).
+- Update order: `shaul` (Linux), then `mac`, then this host (`omarchy`), each with
+  `mesh update --host`. Before updating this host, keep the previous binary as the rollback and
+  confirm live sessions survive (`mesh ls` before and after).
+- After each host: `mesh doctor`, sessions attached, serving routes answering, logs clean.
+
+## Phase 6: backlog
+
+- T29 leftovers: production rollout checks and real Safari-device verification of the pill,
+  after the temporary-apps security fixes land.
+- Agent compatibility work listed in `02-status.md` (other provider versions, a managed
+  standalone Codex daemon) stays outside this wave.
+- A draft "agent command execution" plan exists only as an uncommitted file in the shared
+  `/work/projects/mesh` checkout. It is not part of this wave and needs owner approval first.
+
+## Done when
+
+- Gates run in pre-commit and CI; the baseline is empty or every remaining entry has a reason.
+- Every area has two quality reports and every surface has at least three security reports,
+  all merged into the findings tables.
+- Every critical and high finding is fixed with a test that fails without the fix; the rest are
+  fixed or parked with a reason in the findings table.
+- Main CI green, released, all three hosts updated, and the handoff lists what was parked.
