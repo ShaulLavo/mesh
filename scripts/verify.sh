@@ -55,11 +55,17 @@ for name in GOPROXY GONOSUMDB GONOPROXY GOPRIVATE GOFLAGS GOINSECURE GOSUMDB; do
   fi
   build_env+=("$name=$value")
 done
-for name in HTTPS_PROXY HTTP_PROXY NO_PROXY ALL_PROXY https_proxy http_proxy no_proxy all_proxy; do
+for name in HTTPS_PROXY HTTP_PROXY NO_PROXY ALL_PROXY https_proxy http_proxy no_proxy all_proxy \
+  SSL_CERT_FILE SSL_CERT_DIR; do
   if [[ ${!name+x} ]]; then
     build_env+=("$name=${!name}")
   fi
 done
+netrc=${NETRC:-"$HOME/.netrc"}
+if [[ -n ${NETRC:-} || -f $netrc ]]; then
+  netrc=$(cd "$repo_root" && python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$netrc") || exit 1
+  build_env+=("NETRC=$netrc")
+fi
 build_home="$run_root/build-home"
 mkdir -p "$build_home"
 
