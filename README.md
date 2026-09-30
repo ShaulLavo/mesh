@@ -162,6 +162,11 @@ patch contracts remain in the integration suite.
 
 Run `./scripts/verify.sh` for the integration suite. It builds both test binaries
 once and runs up to four tests concurrently, limited by available CPUs. Set
-`MESH_INTEGRATION_JOBS` to choose a different concurrency limit. See the
+`MESH_INTEGRATION_JOBS` to choose a different concurrency limit. Each script gets
+a scratch HOME and an allow-listed environment. The initial binary builds keep
+the caller's network and Go module settings for dependency downloads. Fixtures
+set any provider or proxy settings they need. Standalone agent scripts also scrub
+inherited settings through their shared Python fixture. Use the verifier to isolate the full
+shell-script environment. See the
 [implementation status](docs/plan/02-status.md) and [task briefs](docs/tasks/)
 for the design and build order.

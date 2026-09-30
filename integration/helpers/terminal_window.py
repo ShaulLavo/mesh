@@ -143,10 +143,11 @@ class Fixture:
         self.daemon_log = None
         self.daemon_args = []
         self.identity_requests = 0
-        self.environment = os.environ.copy()
-        for key in ("MESH_SESSION_ID", "MESH_HOST_ID", "MESH_DEPTH", "BASH_ENV", "ENV"):
-            self.environment.pop(key, None)
+        home = self.root / "fixture-home"
+        home.mkdir()
+        self.environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "TERM", "LANG") if key in os.environ}
         self.environment.update({
+            "HOME": str(home),
             "MESH_STATE_DIR": str(self.local),
             "MESH_CONFIG_DIR": str(self.config),
             "SHELL": str(self.helpers / "window_shell.sh"),

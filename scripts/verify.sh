@@ -25,13 +25,34 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Version-manager shims depend on HOME. Resolve Go before replacing it, and
+# reuse compiler caches so isolation does not turn warm checks into cold builds.
+go_root=$(cd "$repo_root" && go env GOROOT) || exit 1
+go_cache=$(cd "$repo_root" && go env GOCACHE) || exit 1
+go_modules=$(cd "$repo_root" && go env GOMODCACHE) || exit 1
+test_env=(
+  "PATH=$go_root/bin:$PATH" "TMPDIR=${TMPDIR:-/tmp}"
+  "TERM=${TERM:-dumb}" "LANG=${LANG:-C}"
+  "GOCACHE=$go_cache" "GOMODCACHE=$go_modules"
+)
+build_env=("${test_env[@]}")
+# Module downloads need the caller's network policy; loopback fixtures do not.
+for name in HTTPS_PROXY HTTP_PROXY NO_PROXY ALL_PROXY https_proxy http_proxy no_proxy all_proxy \
+  GOPROXY GONOPROXY GONOSUMDB GOSUMDB GOPRIVATE GOFLAGS; do
+  if [[ ${!name+x} ]]; then
+    build_env+=("$name=${!name}")
+  fi
+done
+build_home="$run_root/build-home"
+mkdir -p "$build_home"
+
 binary="$run_root/mesh"
-if ! (cd "$repo_root" && go build -o "$binary" ./cmd/mesh); then
+if ! (cd "$repo_root" && env -i "${build_env[@]}" HOME="$build_home" go build -o "$binary" ./cmd/mesh); then
   echo "FAIL: build" >&2
   exit 1
 fi
 integration_binary="$run_root/mesh-integration"
-if ! (cd "$repo_root" && go build -tags mesh_integration -o "$integration_binary" ./cmd/mesh); then
+if ! (cd "$repo_root" && env -i "${build_env[@]}" HOME="$build_home" go build -tags mesh_integration -o "$integration_binary" ./cmd/mesh); then
   echo "FAIL: integration build" >&2
   exit 1
 fi
@@ -66,7 +87,8 @@ for test_path in "${tests[@]}"; do
   name=$(basename "$test_path")
   log="$run_root/$name.log"
   config_dir="$run_root/config/$name"
-  mkdir -p "$config_dir"
+  home_dir="$run_root/home/$name"
+  mkdir -p "$config_dir" "$home_dir"
   names+=("$name")
   logs+=("$log")
   (
@@ -75,11 +97,10 @@ for test_path in "${tests[@]}"; do
     case "$slow_tests" in
       *" $name "*) this_timeout=$slow_test_timeout ;;
     esac
-    # Integration tests create their own state. Give each one an equally
-    # isolated address book and no inherited nesting identity, so running this
-    # verifier from inside Mesh cannot change its detach key or catalog shape.
+    # Provider routing, proxies and shell startup files must come from fixtures,
+    # not the developer's environment.
     timeout --kill-after=5s "$this_timeout" \
-      env -u MESH_DEPTH -u MESH_HOST_ID -u MESH_SESSION_ID \
+      env -i "${test_env[@]}" HOME="$home_dir" \
       MESH="$binary" MESH_INTEGRATION_BINARY="$integration_binary" \
       MESH_CONFIG_DIR="$config_dir" bash "$test_path"
   ) >"$log" 2>&1 &
