@@ -240,7 +240,7 @@ func (m *demandManager) listenLocked(owner, route string, port uint16, describe 
 		ReadHeaderTimeout: 30 * time.Second,
 		IdleTimeout:       demandListenerIdleTimeout,
 	}
-	listener.listener = &countingListener{Listener: raw, hold: func() func() {
+	listener.listener = &countingListener{Listener: raw, open: map[*countedConn]struct{}{}, hold: func() func() {
 		if route := m.route(owner); route != nil {
 			return route.hold()
 		}
@@ -932,13 +932,14 @@ type demandListener struct {
 	owner    string
 	route    string
 	port     uint16
-	listener net.Listener
+	listener *countingListener
 	server   *http.Server
 	handlers sync.Map // upstream port and isolation → proxy handler
 }
 
 func (l *demandListener) close() {
 	_ = l.server.Close()
+	l.listener.closeAll()
 }
 
 func (l *demandListener) serveHTTP(w http.ResponseWriter, request *http.Request) {
@@ -982,10 +983,16 @@ func (l *demandListener) serveHTTP(w http.ResponseWriter, request *http.Request)
 
 // countingListener counts each accepted connection against its route until
 // the connection closes. Keep-alives and upgraded WebSockets alike hold the
-// route open; the server's idle timeout ends keep-alives nobody uses.
+// route open; the server's idle timeout ends keep-alives nobody uses. It also
+// owns every connection it accepted, because http.Server.Close forgets one
+// once a proxied upgrade hijacks it.
 type countingListener struct {
 	net.Listener
 	hold func() func()
+
+	mu     sync.Mutex
+	closed bool
+	open   map[*countedConn]struct{}
 }
 
 func (l *countingListener) Accept() (net.Conn, error) {
@@ -993,17 +1000,48 @@ func (l *countingListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &countedConn{Conn: connection, release: l.hold()}, nil
+	counted := &countedConn{Conn: connection, owner: l, release: l.hold()}
+	l.mu.Lock()
+	closed := l.closed
+	if !closed {
+		l.open[counted] = struct{}{}
+	}
+	l.mu.Unlock()
+	if closed {
+		_ = counted.Close()
+		return nil, net.ErrClosed
+	}
+	return counted, nil
+}
+
+// closeAll closes every connection still open and refuses any accepted later.
+func (l *countingListener) closeAll() {
+	l.mu.Lock()
+	l.closed = true
+	open := make([]*countedConn, 0, len(l.open))
+	for connection := range l.open {
+		open = append(open, connection)
+	}
+	l.mu.Unlock()
+	for _, connection := range open {
+		_ = connection.Close()
+	}
 }
 
 type countedConn struct {
 	net.Conn
+	owner   *countingListener
 	once    sync.Once
 	release func()
 }
 
 func (c *countedConn) Close() error {
 	err := c.Conn.Close()
-	c.once.Do(c.release)
+	c.once.Do(func() {
+		c.owner.mu.Lock()
+		delete(c.owner.open, c)
+		c.owner.mu.Unlock()
+		c.release()
+	})
 	return err
 }
