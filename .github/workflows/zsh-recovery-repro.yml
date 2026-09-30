@@ -24,6 +24,8 @@ jobs:
         run: |
           set -o pipefail
           env -u ANTHROPIC_BASE_URL -u ANTHROPIC_API_KEY -u OPENAI_BASE_URL -u OPENAI_API_KEY python3 .github/zsh-recovery-probe.py "$RUNNER_TEMP/mesh" 2>&1 | tee "$RUNNER_TEMP/zsh-reproduction.log"
+      - name: Exercise bash and zsh recovery without instrumentation
+        run: env -u ANTHROPIC_BASE_URL -u ANTHROPIC_API_KEY -u OPENAI_BASE_URL -u OPENAI_API_KEY MESH="$RUNNER_TEMP/mesh" bash integration/shell_recovery.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

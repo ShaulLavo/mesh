@@ -42,6 +42,8 @@ def run_shell(fixture, shell, mode):
     snippet = subprocess.check_output([fixture.binary, "shell-init", kind], env=fixture.environment).decode()
     common = "PS1='RECOVERY_PROMPT> '\nHISTFILE=" + shlex.quote(str(history)) + "\n"
     if mode == "zsh":
+        # Global zshrc can block on the runner's insecure system completion directories.
+        (fixture.root / ".zshenv").write_text("unsetopt GLOBAL_RCS\n")
         setup = common + "SAVEHIST=1000\nHISTSIZE=1000\nsetopt HIST_IGNORE_SPACE\n"
         setup += "old_prompt() { print -r -- __STATUS__${?}; }\nprecmd_functions=(old_prompt)\n"
     else:
@@ -52,7 +54,7 @@ def run_shell(fixture, shell, mode):
     rc.write_text(setup + snippet + snippet)
     fixture.environment.update({"HOME": str(fixture.root), "ZDOTDIR": str(fixture.root), "SHELL": shell,
                                 "PATH": str(Path(shell).parent) + os.pathsep + fixture.environment["PATH"]})
-    argv = [shell, "-d", "-i"] if mode == "zsh" else [shell, "--noprofile", "--rcfile", str(rc), "-i"]
+    argv = [shell, "-i"] if mode == "zsh" else [shell, "--noprofile", "--rcfile", str(rc), "-i"]
     terminal = Terminal([fixture.binary, "local", "--"] + argv, fixture.environment, fixture.root, timeout=SHELL_PROMPT_TIMEOUT)
     fixture.terminals.append(terminal)
     terminal.expect("RECOVERY_PROMPT> ")
@@ -75,7 +77,7 @@ def run_shell(fixture, shell, mode):
     eventually(lambda: any("retained-work-output" in line for line in checkpoint(fixture, session_id).get("lines", [])), "rendered checkpoint omitted completed output")
     require(checkpoint(fixture, session_id)["directorySource"] == "shell", "shell directory was not authoritative")
     # An interactive child shell is not the registered session leader.
-    nested = [shell, "-d", "-i"] if mode == "zsh" else [shell, "--noprofile", "--rcfile", str(rc), "-i"]
+    nested = [shell, "-i"] if mode == "zsh" else [shell, "--noprofile", "--rcfile", str(rc), "-i"]
     start = len(terminal.drain())
     terminal.send(shlex.join(nested) + "\n")
     terminal.expect("RECOVERY_PROMPT> ", since=start)
