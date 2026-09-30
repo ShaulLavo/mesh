@@ -19,23 +19,26 @@ import (
 )
 
 const (
-	PairCookie      = "__Host-mesh-pair"
-	OwnerCookie     = "__Host-mesh-owner"
-	ViewCookie      = "__Host-mesh-view"
-	stateKey        = "browser-auth-v1"
-	pairTTL         = 10 * time.Minute
-	sessionTTL      = 30 * 24 * time.Hour
-	ticketTTL       = time.Minute
-	viewTTL         = 12 * time.Hour
-	maxPairs        = 256
-	maxSourcePairs  = 4
-	maxSourceStarts = 8
-	maxPairSources  = 1024
-	maxBrowsers     = 1024
-	maxTickets      = 1024
-	maxViews        = 4096
-	maxOwners       = 64
-	maxStateBytes   = 4 << 20
+	PairCookie         = "__Host-mesh-pair"
+	OwnerCookie        = "__Host-mesh-owner"
+	ViewCookie         = "__Host-mesh-view"
+	stateKey           = "browser-auth-v1"
+	pairTTL            = 10 * time.Minute
+	sessionTTL         = 30 * 24 * time.Hour
+	ticketTTL          = time.Minute
+	viewTTL            = 12 * time.Hour
+	maxPairs           = 256
+	maxPendingPairs    = 256
+	maxAggregatePairs  = 16
+	maxAggregateStarts = 32
+	maxSourcePairs     = 4
+	maxSourceStarts    = 8
+	maxPairSources     = 1024
+	maxBrowsers        = 1024
+	maxTickets         = 1024
+	maxViews           = 4096
+	maxOwners          = 64
+	maxStateBytes      = 4 << 20
 )
 
 var (
@@ -82,6 +85,7 @@ type pairRecord struct {
 	PairingInfo
 	Code       string    `json:"-"`
 	Source     string    `json:"source,omitempty"`
+	Aggregate  string    `json:"aggregate,omitempty"`
 	CodeHash   string    `json:"codeHash"`
 	ExpiresAt  time.Time `json:"expiresAt"`
 	ExistingID string    `json:"existingId,omitempty"`
@@ -105,8 +109,9 @@ type state struct {
 	ApprovalAttempts int                      `json:"approvalAttempts"`
 }
 type sourceWindow struct {
-	StartedAt time.Time
-	Issued    int
+	LastUsedAt time.Time
+	StartedAt  time.Time
+	Issued     int
 }
 
 type Service struct {

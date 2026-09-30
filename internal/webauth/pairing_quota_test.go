@@ -237,7 +237,7 @@ func TestGlobalPairingEvictsOldestPairOfFullestSource(t *testing.T) {
 	if _, _, exists := findPair(&s.state, codeHash(first.Code)); exists {
 		t.Fatal("oldest pending pair of the fullest source was not evicted")
 	}
-	if len(s.state.Pairs) != maxPairs {
+	if len(s.state.Pairs) != maxPendingPairs {
 		t.Fatal("pending table is not bounded")
 	}
 }
@@ -293,5 +293,38 @@ func TestApprovedPairsDoNotConsumePendingCapacity(t *testing.T) {
 	}
 	if approved != maxPairs {
 		t.Fatal("approved pairing was evicted")
+	}
+}
+
+func TestFloodBeyondTrackerCapacityStillAdmitsFreshBrowser(t *testing.T) {
+	s, _, now := fixture(t)
+	for source := range maxPairSources + 1 {
+		if _, _, err := beginFrom(t, s, fmt.Sprintf("[2001:db8:%x::1]:1234", source)); err != nil {
+			t.Fatal(err)
+		}
+		*now = now.Add(time.Millisecond)
+	}
+	if _, _, err := beginFrom(t, s, "203.0.113.1:1234"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.sources) > maxPairSources || pendingPairCount(&s.state) > maxPendingPairs {
+		t.Fatal("flood exceeded memory bounds")
+	}
+}
+
+func TestApprovalCapacityPreservesPendingBrowser(t *testing.T) {
+	s, _, now := fixture(t)
+	for i := range maxPairs {
+		s.state.Pairs[fmt.Sprint(i)] = pairRecord{Owner: "owner-a", ExpiresAt: now.Add(pairTTL)}
+	}
+	p, _, err := beginFrom(t, s, "203.0.113.1:1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Approve(context.Background(), p.Code, "owner-a"); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("durable approval cap not enforced: %v", err)
+	}
+	if _, err := s.Inspect(context.Background(), p.Code); err != nil {
+		t.Fatalf("rejected approval lost pending code: %v", err)
 	}
 }
