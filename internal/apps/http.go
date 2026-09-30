@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -448,7 +449,7 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, cookieErr := r.Cookie(webauth.PairCookie); cookieErr == nil {
 		if _, promoteErr := e.auth.Promote(r.Context(), w, r); promoteErr == nil {
-			http.Redirect(w, r, managementReturn(r), http.StatusSeeOther)
+			http.Redirect(w, r, ManagementOrigin+managementReturn(r), http.StatusSeeOther)
 			return
 		}
 	}
@@ -675,13 +676,36 @@ func (e *Edge) downloadSource(w http.ResponseWriter, r *http.Request, app Record
 }
 
 func managementReturn(r *http.Request) string {
-	if r.URL.Path != "/" && r.URL.Path != "/view" && r.URL.Path != "/confirm" {
+	var path string
+	switch r.URL.Path {
+	case "/":
+		path = "/"
+	case "/view":
+		path = "/view"
+	case "/confirm":
+		path = "/confirm"
+	default:
 		return "/"
 	}
 	if len(r.URL.RawQuery) > 4096 {
 		return "/"
 	}
-	return r.URL.RequestURI()
+	query := r.URL.Query()
+	keys := make([]string, 0, len(query))
+	for key := range query {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		for _, value := range query[key] {
+			parts = append(parts, url.QueryEscape(key)+"="+url.QueryEscape(value))
+		}
+	}
+	if len(parts) == 0 {
+		return path
+	}
+	return path + "?" + strings.Join(parts, "&")
 }
 
 // appReturn accepts only a page belonging to the app being managed.
