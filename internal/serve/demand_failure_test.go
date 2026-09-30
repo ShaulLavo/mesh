@@ -40,8 +40,8 @@ func TestDemandFailureKeepsDiagnosticsInOwnerLog(t *testing.T) {
 		if match == nil {
 			t.Fatalf("failure has no generic message and opaque reference: %q", response.Body.String())
 		}
-		if match[1] == previousID {
-			t.Fatal("failure references repeat")
+		if previousID != "" && match[1] != previousID {
+			t.Errorf("two waiters on one failure received different references")
 		}
 		previousID = match[1]
 		if !strings.Contains(ownerLog.String(), "on-demand failure "+match[1]+": "+diagnostic) {
@@ -50,6 +50,25 @@ func TestDemandFailureKeepsDiagnosticsInOwnerLog(t *testing.T) {
 		if response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("X-Content-Type-Options") != "nosniff" {
 			t.Fatalf("failure headers = %v", response.Header())
 		}
+	}
+	if count := strings.Count(ownerLog.String(), "on-demand failure "); count != 1 {
+		t.Errorf("two waiting requests logged %d diagnostics, want 1", count)
+	}
+}
+
+func TestDemandFailureEscapesDiagnosticLog(t *testing.T) {
+	const diagnostic = "private output\n2026/10/01 00:00:00 daemon: forged entry\r\x1b[2J"
+	var ownerLog bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&ownerLog)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	WriteDemandFailure(httptest.NewRecorder(), errString(diagnostic))
+	if lines := strings.Count(ownerLog.String(), "\n"); lines != 1 {
+		t.Errorf("one failed start wrote %d log lines, want 1", lines)
+	}
+	if !strings.Contains(ownerLog.String(), fmt.Sprintf("%q", diagnostic)) {
+		t.Errorf("owner log did not escape process output: %q", ownerLog.String())
 	}
 }
 
