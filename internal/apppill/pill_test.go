@@ -138,7 +138,7 @@ func TestInjectStreamsBeforeUpstreamCompletes(t *testing.T) {
 	}
 }
 
-func TestInjectRejectsUnsupportedEncoding(t *testing.T) {
+func TestInjectPassesUnsupportedEncodingThrough(t *testing.T) {
 	for _, kind := range []string{"text/html; charset=utf-16", "text/html"} {
 		resp := response("original", kind)
 		defer func() { _ = resp.Body.Close() }()
@@ -146,8 +146,8 @@ func TestInjectRejectsUnsupportedEncoding(t *testing.T) {
 			resp.Header.Set("Content-Encoding", "zstd")
 		}
 		original := resp.Body
-		if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err == nil {
-			t.Fatal("accepted unsupported encoding")
+		if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err != nil {
+			t.Fatalf("unsupported encoding blocked the response: %v", err)
 		}
 		if resp.Body != original {
 			t.Fatal("mutated body on rejection")
