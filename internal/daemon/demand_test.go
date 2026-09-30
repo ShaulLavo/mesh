@@ -624,7 +624,7 @@ func TestDemandRemovalRetriesAFailedStop(t *testing.T) {
 	}
 	sessions.failStops(errWorkerSilent)
 	manager.Sync(nil)
-	waitForStops(t, sessions, 1)
+	waitForSettledRoute(t, manager, "dev")
 
 	sessions.failStops(nil)
 	manager.Sync(nil)
@@ -647,7 +647,7 @@ func TestDemandRouteReaddedAfterAFailedRemovalKeepsOwnership(t *testing.T) {
 	}
 	sessions.failStops(errWorkerSilent)
 	manager.Sync(nil)
-	waitForStops(t, sessions, 1)
+	waitForSettledRoute(t, manager, "dev")
 
 	manager.Sync([]meshserve.Service{demandService(time.Minute)})
 	if err := manager.Start(context.Background(), "dev"); err == nil {
@@ -668,6 +668,31 @@ func TestDemandManagerCloseLeavesTheSessionRunning(t *testing.T) {
 	manager.Close()
 	if _, stopped := sessions.counts(); stopped != 0 || sessions.liveCount() != 1 {
 		t.Fatal("closing the manager stopped the route's session")
+	}
+}
+
+// waitForSettledRoute waits until a route, removed or not, has no start or
+// stop in progress, so the next Sync sees how its last transition ended.
+func waitForSettledRoute(t *testing.T, manager *demandManager, name string) {
+	t.Helper()
+	manager.mu.Lock()
+	route := manager.routes[name]
+	if route == nil {
+		route = manager.retiring[name]
+	}
+	manager.mu.Unlock()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		route.mu.Lock()
+		settled := route.pending == nil
+		route.mu.Unlock()
+		if settled {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("route %s is still starting or stopping", name)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 
