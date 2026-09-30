@@ -22,8 +22,9 @@ import tempfile
 import termios
 import time
 
-sys.dont_write_bytecode = True
 from mesh_control import receive, round_trip
+
+sys.dont_write_bytecode = True
 
 
 PROMPT = b"MESH_PROMPT> "
