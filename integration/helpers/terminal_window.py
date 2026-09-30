@@ -146,8 +146,12 @@ class Fixture:
         self.identity_requests = 0
         home = self.root / "fixture-home"
         home.mkdir()
+        tools = home / "bin"
+        tools.mkdir()
+        (tools / "python3").symlink_to(Path(sys.executable).resolve())
         self.environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "TERM", "LANG", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS") if key in os.environ}
         self.environment.update({
+            "PATH": str(tools) + os.pathsep + self.environment.get("PATH", os.defpath),
             "HOME": str(home),
             "MESH_STATE_DIR": str(self.local),
             "MESH_CONFIG_DIR": str(self.config),

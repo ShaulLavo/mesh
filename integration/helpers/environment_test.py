@@ -176,6 +176,19 @@ class VerifierEnvironmentTest(unittest.TestCase):
         result = self.run_verifier()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_home_dependent_shell_shims_are_resolved(self):
+        for name in ("bash", "sh"):
+            shim = self.tools / name
+            shim.write_text(
+                "#!/bin/sh\n"
+                f"[ \"$HOME\" = {shlex.quote(str(self.caller_home))} ] || exit 126\n"
+                f"exec /bin/{name} \"$@\"\n"
+            )
+            shim.chmod(0o700)
+        self.probe.write_text("bash -c 'sh -c true'\n")
+        result = self.run_verifier()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_user_bus_reaches_scripts(self):
         selected = {"XDG_RUNTIME_DIR": "/fixture-runtime", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/fixture-runtime/bus"}
         self.caller.update(selected)

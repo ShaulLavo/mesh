@@ -30,13 +30,19 @@ if [[ $(uname -s) == Linux ]] && busctl --user status >/dev/null 2>&1; then
   caller_user_bus=1
 fi
 
-# Version-manager shims depend on HOME. Resolve Go before replacing it, and
-# reuse compiler caches so isolation does not turn warm checks into cold builds.
+# Version-manager shims depend on HOME. Pin the interpreters before replacing
+# it, and reuse compiler caches so isolation does not turn warm builds cold.
+python_binary=$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))') || exit 1
+tool_bin="$run_root/bin"
+mkdir -p "$tool_bin"
+ln -s "$python_binary" "$tool_bin/python3"
+ln -s "$BASH" "$tool_bin/bash"
+ln -s /bin/sh "$tool_bin/sh"
 go_root=$(cd "$repo_root" && go env GOROOT) || exit 1
 go_cache=$(cd "$repo_root" && go env GOCACHE) || exit 1
 go_modules=$(cd "$repo_root" && go env GOMODCACHE) || exit 1
 test_env=(
-  "PATH=$go_root/bin:$PATH" "TMPDIR=${TMPDIR:-/tmp}"
+  "PATH=$tool_bin:$go_root/bin:$PATH" "TMPDIR=${TMPDIR:-/tmp}"
   "TERM=${TERM:-dumb}" "LANG=${LANG:-C}"
   "GOCACHE=$go_cache" "GOMODCACHE=$go_modules"
 )
