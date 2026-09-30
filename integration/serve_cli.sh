@@ -329,6 +329,28 @@ grep -Fq "serving https://blog.shaulavo.dev/blog on pc (static -> $ORIGIN_HOME/s
 wait_for_public_body blog.shaulavo.dev /blog/ SERVE_CLI_PUBLIC_MARKER ||
   fail "confirmed public route did not reach the real origin"
 
+mkdir -p "$TEST_ROOT/public-files"
+printf 'PUBLIC_DOWNLOAD_MARKER\n' >"$TEST_ROOT/public-files/download.txt"
+"${CLI[@]}" serve pc "$TEST_ROOT/public-files" --at /downloads --files --public downloads.shaulavo.dev --yes \
+  >"$TEST_ROOT/downloads.out" 2>"$TEST_ROOT/downloads.err" ||
+  fail "publish clean public Files directory: $(<"$TEST_ROOT/downloads.err")"
+wait_for_public_body downloads.shaulavo.dev /downloads/download.txt PUBLIC_DOWNLOAD_MARKER ||
+  fail "public Files route did not serve its ordinary file"
+mkdir -p "$TEST_ROOT/public-files/.git"
+printf 'LATE_CREDENTIAL_FIXTURE\n' >"$TEST_ROOT/public-files/.env"
+printf 'LATE_CREDENTIAL_FIXTURE\n' >"$TEST_ROOT/public-files/.git/config"
+printf 'LATE_CREDENTIAL_FIXTURE\n' >"$TEST_ROOT/public-files/id_rsa"
+for credential in .env .git/config id_rsa %252eenv; do
+  credential_status=$(edge_request downloads.shaulavo.dev "/downloads/$credential" --output /dev/null --write-out '%{http_code}') ||
+    fail "query late credential file $credential"
+  [ "$credential_status" = 404 ] || fail "late credential file $credential answered $credential_status"
+done
+edge_request downloads.shaulavo.dev /downloads/ >"$TEST_ROOT/downloads-listing.body" || fail "query public Files listing"
+if grep -Eq '\.env|\.git|id_rsa' "$TEST_ROOT/downloads-listing.body"; then
+  fail "public Files listing exposed late credential entries"
+fi
+grep -Fq 'download.txt' "$TEST_ROOT/downloads-listing.body" || fail "public Files listing lost its ordinary file"
+
 "${CLI[@]}" serve pc "$TEST_ROOT/files" --at /blog/admin --files \
   >"$TEST_ROOT/nested-private.out" 2>"$TEST_ROOT/nested-private.err" ||
   fail "publish nested private directory: $(<"$TEST_ROOT/nested-private.err")"
