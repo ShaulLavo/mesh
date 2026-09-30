@@ -2,6 +2,7 @@
 package apppill
 
 import (
+	"bytes"
 	"compress/gzip"
 	"crypto/rand"
 	"embed"
@@ -98,13 +99,9 @@ func Inject(resp *http.Response, config Config) error {
 		// Keep the edge framing policy outside the pill's script and frame adaptation.
 		defer resp.Header.Add("Content-Security-Policy", "frame-ancestors 'self'")
 	}
-	contentType, params, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	if err != nil || contentType != "text/html" || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified {
+	encoding, eligible := eligibleHTML(resp)
+	if !eligible {
 		return nil
-	}
-	charset := strings.ToLower(params["charset"])
-	if charset != "" && charset != "utf-8" && charset != "utf8" && charset != "us-ascii" && charset != "iso-8859-1" && charset != "windows-1252" {
-		return fmt.Errorf("apppill: unsupported HTML charset %q", charset)
 	}
 	manager, err := url.Parse(managementOrigin)
 	if err != nil || manager.Host == "" || manager.User != nil || manager.RawQuery != "" || manager.Fragment != "" || manager.Path != "" && manager.Path != "/" || manager.Scheme != "https" && !(manager.Scheme == "http" && manager.Hostname() == "localhost") {
@@ -122,7 +119,7 @@ func Inject(resp *http.Response, config Config) error {
 	source := resp.Body
 	var reader io.Reader = source
 	var decoder io.Closer
-	switch strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))) {
+	switch encoding {
 	case "", "identity":
 	case "gzip":
 		zipped, err := gzip.NewReader(source)
@@ -132,8 +129,6 @@ func Inject(resp *http.Response, config Config) error {
 		reader, decoder = zipped, zipped
 	case "br":
 		reader = brotli.NewReader(source)
-	default:
-		return fmt.Errorf("apppill: unsupported HTML content encoding %q", resp.Header.Get("Content-Encoding"))
 	}
 	script := "<script defer charset=\"utf-8\" src=\"" + AssetPath + "\" data-mesh-app=\"" + html.EscapeString(appID) + "\" data-mesh-manager=\"" + html.EscapeString(managerOrigin) + "\" data-mesh-private=\"" + fmt.Sprint(config.Private) + "\" data-mesh-owns=\"" + fmt.Sprint(config.Owns) + "\" nonce=\"" + nonce + "\"></script>"
 	for _, key := range []string{"Content-Security-Policy", "Content-Security-Policy-Report-Only"} {
@@ -163,6 +158,34 @@ func Inject(resp *http.Response, config Config) error {
 	return nil
 }
 
+func eligibleHTML(resp *http.Response) (string, bool) {
+	if resp.StatusCode != http.StatusOK || resp.Body == http.NoBody || resp.Request != nil && resp.Request.Method == http.MethodHead {
+		return "", false
+	}
+	contentType, params, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || contentType != "text/html" {
+		return "", false
+	}
+	switch strings.ToLower(params["charset"]) {
+	case "", "utf-8", "utf8", "us-ascii", "iso-8859-1", "windows-1252":
+	default:
+		return "", false
+	}
+	if disposition := resp.Header.Get("Content-Disposition"); disposition != "" {
+		kind, _, err := mime.ParseMediaType(disposition)
+		if err != nil || kind != "inline" {
+			return "", false
+		}
+	}
+	encoding := strings.ToLower(strings.TrimSpace(strings.Join(resp.Header.Values("Content-Encoding"), ",")))
+	switch encoding {
+	case "", "identity", "gzip", "br":
+		return encoding, true
+	default:
+		return "", false
+	}
+}
+
 type transformedBody struct {
 	*io.PipeReader
 	source  io.Closer
@@ -182,23 +205,21 @@ func transform(reader io.Reader, writer io.Writer, script, appHost, manager, non
 	for {
 		kind := tokenizer.Next()
 		if kind == html.ErrorToken {
-			if err := tokenizer.Err(); !errors.Is(err, io.EOF) {
-				return fmt.Errorf("apppill: HTML token: %w", err)
+			if injected {
+				script = ""
 			}
-			if !injected {
-				_, err := io.WriteString(writer, script)
-				return err
-			}
-			return nil
+			return finishHTML(reader, writer, tokenizer, script)
 		}
 		raw := append([]byte(nil), tokenizer.Raw()...)
 		var name string
-		if kind == html.StartTagToken || kind == html.SelfClosingTagToken {
+		switch kind {
+		case html.StartTagToken, html.SelfClosingTagToken, html.EndTagToken:
 			token := tokenizer.Token()
 			name = token.Data
 			if name == "meta" {
 				raw = rewriteMeta(token, raw, appHost, manager, nonce)
 			}
+		case html.ErrorToken, html.TextToken, html.CommentToken, html.DoctypeToken:
 		}
 		if !injected && name == "body" {
 			if _, err := io.WriteString(writer, script); err != nil {
@@ -209,6 +230,9 @@ func transform(reader io.Reader, writer io.Writer, script, appHost, manager, non
 		if _, err := writer.Write(raw); err != nil {
 			return err
 		}
+		if injected && pastHTMLHead(kind, name) {
+			return copyHTML(reader, writer, tokenizer.Buffered())
+		}
 		if !injected && name == "head" {
 			if _, err := io.WriteString(writer, script); err != nil {
 				return err
@@ -216,6 +240,38 @@ func transform(reader io.Reader, writer io.Writer, script, appHost, manager, non
 			injected = true
 		}
 	}
+}
+
+func pastHTMLHead(kind html.TokenType, name string) bool {
+	return name == "body" || kind == html.EndTagToken && name == "head"
+}
+
+func finishHTML(reader io.Reader, writer io.Writer, tokenizer *html.Tokenizer, script string) error {
+	if errors.Is(tokenizer.Err(), html.ErrBufferExceeded) {
+		return copyHTML(reader, writer, []byte(script), tokenizer.Raw(), tokenizer.Buffered())
+	}
+	if err := tokenizer.Err(); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("apppill: HTML token: %w", err)
+	}
+	if script == "" {
+		return nil
+	}
+	if _, err := io.WriteString(writer, script); err != nil {
+		return fmt.Errorf("apppill: write bootstrap: %w", err)
+	}
+	return nil
+}
+
+func copyHTML(reader io.Reader, writer io.Writer, pending ...[]byte) error {
+	readers := make([]io.Reader, 0, len(pending)+1)
+	for _, prefix := range pending {
+		readers = append(readers, bytes.NewReader(prefix))
+	}
+	readers = append(readers, reader)
+	if _, err := io.Copy(writer, io.MultiReader(readers...)); err != nil {
+		return fmt.Errorf("apppill: copy HTML remainder: %w", err)
+	}
+	return nil
 }
 
 func rewriteMeta(token html.Token, raw []byte, appHost, manager, nonce string) []byte {
