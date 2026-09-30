@@ -136,8 +136,8 @@ class Fixture:
     def __init__(self, binary, root):
         refuse_live_paths({"fixture root": str(root)})
         self.binary = str(Path(binary).resolve())
-        self.root = Path(root).resolve()
-        refuse_live_paths({name: str(self.root / name) for name in ("local", "remote", "config", "fixture-home")})
+        self.root = Path(root)
+        self.validate_destinations()
         self.helpers = Path(__file__).resolve().parent
         self.local = self.root / "local"
         self.remote = self.root / "remote"
@@ -164,7 +164,13 @@ class Fixture:
             "NO_COLOR": "1",
         })
 
+    def validate_destinations(self):
+        names = ("local", "remote", "config", "config/hosts.json", "remote-config", "fixture-home",
+                 "fixture-home/bin", "fixture-home/bin/python3", "bin", "bin/tailscale", "tailscale.json", "daemon.log")
+        refuse_live_paths({"fixture root": str(self.root)} | {name: str(self.root / name) for name in names})
+
     def window(self, take=False):
+        self.validate_destinations()
         command = [self.binary, "--window"]
         if take:
             command.append("--take")
@@ -173,6 +179,7 @@ class Fixture:
         return terminal
 
     def seed_session(self, cwd):
+        self.validate_destinations()
         command = [self.binary, "local", "--", str(self.helpers / "window_shell.sh"), "retained-argument"]
         terminal = Terminal(command, self.environment, cwd)
         self.terminals.append(terminal)
@@ -183,6 +190,7 @@ class Fixture:
         return json.loads((self.local / "s" / session_id / "meta.json").read_text())
 
     def local_listing(self):
+        self.validate_destinations()
         result = subprocess.run([self.binary, "ls", "--all"], env=self.environment, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=3)
         require(result.returncode == 0, f"local listing failed: {result.stdout!r}")
@@ -194,6 +202,7 @@ class Fixture:
         return {session["id"]: session for session in response.get("sessions", [])}
 
     def start_local_daemon(self):
+        self.validate_destinations()
         require(self.daemon is None, "fixture daemon is already running")
         self.daemon_log = open(self.root / "daemon.log", "ab")
         self.daemon = subprocess.Popen(
@@ -252,6 +261,7 @@ class Fixture:
                    and self.metadata(session_id).get("state") == "detached", message)
 
     def tab(self, terminal_id, command=None):
+        self.validate_destinations()
         """Open a session from a terminal that names itself, the way a terminal
         emulator exports a per-tab identifier."""
         environment = dict(self.environment, MESH_TERMINAL_ID=terminal_id)
@@ -275,12 +285,14 @@ class Fixture:
             return None
 
     def back(self, terminal_id):
+        self.validate_destinations()
         environment = dict(self.environment, MESH_TERMINAL_ID=terminal_id)
         terminal = Terminal([self.binary, "back"], environment, self.root)
         self.terminals.append(terminal)
         return terminal
 
     def back_output(self, terminal_id):
+        self.validate_destinations()
         environment = dict(self.environment, MESH_TERMINAL_ID=terminal_id)
         result = subprocess.run([self.binary, "back"], env=environment, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=5)
@@ -296,6 +308,7 @@ class Fixture:
         return match[1].decode(), int(match[2])
 
     def start_remote(self):
+        self.validate_destinations()
         bindir = self.root / "bin"
         bindir.mkdir()
         (bindir / "tailscale").symlink_to(self.helpers / "fake_tailscale")
@@ -330,6 +343,7 @@ class Fixture:
             except OSError:
                 return False
         eventually(listening, "remote daemon did not open its WebSocket listener")
+        self.validate_destinations()
         (self.config / "hosts.json").write_text(json.dumps({
             "version": 1,
             "hosts": [{"alias": "pc", "id": self.remote_id, "meshIdentity": response["host"]["meshIdentity"],
