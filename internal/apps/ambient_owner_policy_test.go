@@ -285,7 +285,7 @@ func TestPrivateAppGateRechecksVisibilityAtAdmission(t *testing.T) {
 	}
 	resolve := f.edge.config.Resolve
 	f.edge.config.Resolve = func(ctx context.Context, owner string) (netip.AddrPort, error) {
-		if _, err := f.edge.apply(ctx, app.Owner, Request{Action: "private", ID: app.ID}); err != nil {
+		if _, err := f.origin.Handle(ctx, Request{Action: "private", ID: app.ID}); err != nil {
 			return netip.AddrPort{}, err
 		}
 		return resolve(ctx, owner)
@@ -308,7 +308,7 @@ func TestPublicCrossPageOwnerRequestIsRevokedWhenMadePrivate(t *testing.T) {
 				f := newAppFixture(t)
 				app := createStaticApp(t, f)
 				authenticate := ambientOwnerRequest(t, f, app, credential)
-				if _, err := f.edge.apply(context.Background(), app.Owner, Request{Action: "public", ID: app.ID}); err != nil {
+				if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
 					t.Fatal(err)
 				}
 				r := httptest.NewRequest(http.MethodGet, URL(app.ID)+"/stream", nil)
@@ -319,7 +319,7 @@ func TestPublicCrossPageOwnerRequestIsRevokedWhenMadePrivate(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer release()
-				if _, err := f.edge.apply(context.Background(), app.Owner, Request{Action: "private", ID: app.ID}); err != nil {
+				if _, err := f.origin.Handle(context.Background(), Request{Action: "private", ID: app.ID}); err != nil {
 					t.Fatal(err)
 				}
 				if revoked := admitted.Context().Err() != nil; revoked != (site == "same-site") {

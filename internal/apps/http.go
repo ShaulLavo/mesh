@@ -609,13 +609,13 @@ func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	before, _ := json.Marshal(e.state)
-	_, err = e.apply(r.Context(), app.Owner, Request{Action: action, ID: id})
+	next := e.next()
+	_, err = e.apply(r.Context(), next, app.Owner, Request{Action: action, ID: id})
 	if err == nil {
-		err = e.persist(r.Context())
+		err = e.persist(r.Context(), next)
 	}
-	if err != nil {
-		_ = json.Unmarshal(before, &e.state)
+	if err == nil {
+		_ = e.retireLocked(r.Context(), next.retireNames)
 	}
 	e.mu.Unlock()
 	if err != nil {
