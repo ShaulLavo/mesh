@@ -125,8 +125,21 @@ external databases remain yours. If the origin is offline, cleanup stays pending
 its short edge lease stops serving/running during a partition. Cleanup completes
 when the origin reconnects. Expired names are never reassigned or revived.
 
-HTML injection supports UTF-8 and common single-byte encodings, gzip/Brotli,
-header/meta CSP, and strict nonce policies. Binary/API responses remain intact.
-Unsupported HTML encodings and oversized tokens fail explicitly. Browser checks
-cover Chromium and WebKit; Safari device and production deployment checks are
-still pending rollout.
+The app pill is injected only into 200 inline HTML responses. Rewriting supports
+UTF-8 (including `utf8`), US-ASCII, ISO-8859-1, and Windows-1252, with an omitted
+charset treated as supported. The edge prefers identity encoding upstream and
+also accepts gzip and Brotli. Header/meta CSP and strict nonce policies are
+adapted for the pill, including CSP metas between `</head>` and `<body>`.
+
+Attachments, partial responses, HEAD responses, binary/API responses, unsupported
+charsets, and unsupported encodings pass through without a pill or changes to
+their representation. This includes an origin that sends zstd despite the edge's
+restricted encoding negotiation. Private-app isolation headers still apply.
+
+If an HTML token exceeds the bounded scanner buffer, every remaining app byte is
+passed through. A pill already inserted stays in place; otherwise a pill is added
+only at a proven safe boundary, never inside a partial script, style, textarea,
+title, or comment. CSP metas after that overflow are not rewritten. Streaming
+rewrites remove the original length and validators even if overflow later skips
+the pill. Browser checks cover Chromium and WebKit; Safari device and production
+deployment checks are still pending rollout.
