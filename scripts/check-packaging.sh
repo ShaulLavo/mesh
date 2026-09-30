@@ -114,7 +114,17 @@ check_source_contract() {
   does_not_contain .golangci.yml '-SA1019'
   does_not_contain .golangci.yml '-SA2001'
   contains .golangci.yml '        - all'
-  does_not_contain .golangci.yml 'exclusions:'
+  local expected_exclusions='  exclusions:
+    rules:
+      - path: _test\.go$
+        linters:
+          - goconst
+          - gocognit
+          - dupl'
+  local actual_exclusions
+  actual_exclusions=$(sed -n '/^  exclusions:/,/^  settings:/{ /^  settings:/d; p; }' .golangci.yml)
+  [[ $actual_exclusions == "$expected_exclusions" ]] || fail 'only the three approved test-only lint exclusions are allowed'
+  [[ $(grep -c 'exclusions:' .golangci.yml) == 1 ]] || fail 'additional lint exclusions are forbidden'
   does_not_contain .golangci.yml 'exclude-rules:'
   does_not_contain .golangci.yml 'exclude-dirs:'
   does_not_contain .golangci.yml 'exclude-files:'
