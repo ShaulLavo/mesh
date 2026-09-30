@@ -15,7 +15,15 @@ import (
 
 // ProxyListener accepts PROXY v1 metadata only from a loopback TCP forwarder.
 // Enable it solely behind Tailscale Serve or a trusted local SNI gateway.
-type ProxyListener struct{ net.Listener }
+type ProxyListener struct {
+	net.Listener
+	AllowedUIDs []uint32
+	peerUID     peerUIDLookup
+}
+
+type peerUIDLookup interface {
+	PeerUID(net.Conn) (uint32, error)
+}
 
 func (l ProxyListener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
