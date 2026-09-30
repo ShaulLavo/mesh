@@ -16,7 +16,7 @@ func TestAgentProcessTestEnvDoesNotInheritCallerSettings(t *testing.T) {
 	env := agentProcessTestEnv("native", dir)
 	for _, entry := range env {
 		name, _, _ := strings.Cut(entry, "=")
-		if !slices.Contains([]string{"PATH", "HOME", "TMPDIR", "TERM", "LANG", "MESH_TEST_AGENT_ROLE", "MESH_TEST_AGENT_DIR"}, name) {
+		if !slices.Contains([]string{"PATH", "HOME", "TMPDIR", "TERM", "LANG", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "MESH_TEST_AGENT_ROLE", "MESH_TEST_AGENT_DIR"}, name) {
 			t.Errorf("agent test process inherited %s", name)
 		}
 	}

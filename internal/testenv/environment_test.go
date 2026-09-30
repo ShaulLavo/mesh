@@ -14,6 +14,8 @@ func TestForProcessRunsWithOnlySelectedEnvironment(t *testing.T) {
 	}
 	t.Setenv("TERM", "fixture-term")
 	t.Setenv("LANG", "C")
+	t.Setenv("XDG_RUNTIME_DIR", "/fixture-runtime")
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/fixture-runtime/bus")
 	home := t.TempDir()
 	command := exec.Command("env")
 	command.Env = ForProcess(home)
@@ -26,7 +28,10 @@ func TestForProcessRunsWithOnlySelectedEnvironment(t *testing.T) {
 		name, value, _ := strings.Cut(entry, "=")
 		got[name] = value
 	}
-	want := map[string]string{"PATH": os.Getenv("PATH"), "HOME": home, "TERM": "fixture-term", "LANG": "C"}
+	want := map[string]string{
+		"PATH": os.Getenv("PATH"), "HOME": home, "TERM": "fixture-term", "LANG": "C",
+		"XDG_RUNTIME_DIR": "/fixture-runtime", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/fixture-runtime/bus",
+	}
 	if value, ok := os.LookupEnv("TMPDIR"); ok {
 		want["TMPDIR"] = value
 	}
