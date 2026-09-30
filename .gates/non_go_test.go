@@ -28,7 +28,7 @@ func TestNonGoReplacementIsNewAndUpdateRefuses(t *testing.T) {
 		gate, file, before, after string
 		beforeLines, afterLines   []int
 	}{
-		{shellcheckGate, "linux.sh", "#!/usr/bin/env bash\nexport XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$remote_uid}\nexport OTHER=$value\ninstall -m 0755 \"$source_binary\" \"$binary_tmp\"\n", "#!/usr/bin/env bash\nexport XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$remote_uid}\"\nexport OTHER=$value\ninstall -m 0755 $source_binary \"$binary_tmp\"\n", []int{2, 3}, []int{3, 4}},
+		{shellcheckGate, "linux.sh", "#!/bin/sh\nexport XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$remote_uid}\nexport OTHER=$value\ninstall -m 0755 \"$source_binary\" \"$binary_tmp\"\n", "#!/bin/sh\nexport XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/run/user/$remote_uid}\"\nexport OTHER=$value\ninstall -m 0755 $source_binary \"$binary_tmp\"\n", []int{2, 3}, []int{3, 4}},
 		{ruffGate, "sample.py", "value = 1\nimport os\nimport sys\n", "import os\nvalue = 1\nimport sys\nimport pathlib\n", []int{2, 3}, []int{3, 4}},
 	} {
 		t.Run(tc.gate, func(t *testing.T) {

@@ -109,9 +109,9 @@ def prove(root, evidence):
 
     # Keep exported-environment exceptions tied to their statements, not the file's count.
     exported_shell = root / "scripts/install/linux.sh"
-    original_shell = """#!/usr/bin/env bash
+    original_shell = """#!/bin/sh
 remote_uid=1000
-source_binary=source
+source_binary=$1
 binary_tmp=destination
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$remote_uid}
 export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}
