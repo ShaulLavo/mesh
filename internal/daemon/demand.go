@@ -61,6 +61,10 @@ type demandManager struct {
 	mu        sync.Mutex
 	routes    map[string]*demandRoute
 	listeners map[uint16]*demandListener
+	// retiring holds removed routes that may still own a session, so the
+	// next Sync retries their stop and a route added back under the same
+	// name takes its old session over instead of launching beside it.
+	retiring map[string]*demandRoute
 	// published is a copy of routes for the connection path. A listener's
 	// accept loop must never wait on mu: closing that listener under mu
 	// waits for its accept loop to return.
@@ -78,6 +82,7 @@ func newDemandManager(ctx context.Context, sessions demandSessions, report func(
 		ctx: ctx, sessions: sessions, report: report,
 		bind: bindLoopback, dial: dialUpstream, holder: portHolder, poll: demandPollInterval,
 		routes: make(map[string]*demandRoute), listeners: make(map[uint16]*demandListener),
+		retiring: make(map[string]*demandRoute),
 	}
 }
 
@@ -150,16 +155,27 @@ func (m *demandManager) Sync(services []meshserve.Service) {
 	}
 	for name, route := range m.routes {
 		if _, keep := wanted[name]; !keep {
-			route.retire()
 			delete(m.routes, name)
+			m.retiring[name] = route
+		}
+	}
+	for name, route := range m.retiring {
+		if _, back := wanted[name]; !back && route.retire() {
+			delete(m.retiring, name)
 		}
 	}
 	for name, service := range wanted {
-		if route := m.routes[name]; route != nil {
+		route := m.routes[name]
+		if route == nil && m.retiring[name] != nil {
+			route = m.retiring[name]
+			delete(m.retiring, name)
+			m.routes[name] = route
+		}
+		if route != nil {
 			route.redefine(service)
 			continue
 		}
-		route := &demandRoute{manager: m, service: service, state: protocol.DemandStopped, unbound: map[uint16]string{}}
+		route = &demandRoute{manager: m, service: service, state: protocol.DemandStopped, unbound: map[uint16]string{}}
 		m.routes[name] = route
 		route.adopt()
 	}
@@ -392,10 +408,12 @@ func (m *demandManager) startFailure(ctx context.Context, service meshserve.Serv
 	tailCtx, cancelTail := context.WithTimeout(ctx, demandOutputTimeout)
 	tail := m.sessions.outputTail(tailCtx, id)
 	cancelTail()
+	ended := true
 	if stop {
 		stopCtx, cancel := context.WithTimeout(m.ctx, demandStopTimeout)
 		if err := m.sessions.stopSession(stopCtx, id); err != nil {
 			reason += fmt.Sprintf("; stopping it failed: %v", err)
+			ended = false
 		} else {
 			reason += "; stopped it"
 		}
@@ -405,12 +423,17 @@ func (m *demandManager) startFailure(ctx context.Context, service meshserve.Serv
 	if tail != "" {
 		message += "\n\nlast output:\n" + tail
 	}
-	return demandFailure{summary: fmt.Sprintf("%s (session %s)", reason, id), message: message}
+	return demandFailure{summary: fmt.Sprintf("%s (session %s)", reason, id), message: message, ended: ended}
 }
 
 // demandFailure keeps the one-line summary `mesh serve ls` shows apart from
-// the full text a waiting connection gets.
-type demandFailure struct{ summary, message string }
+// the full text a waiting connection gets. ended records that the failed
+// start's session is known to be over, which is what lets the route launch
+// another.
+type demandFailure struct {
+	summary, message string
+	ended            bool
+}
 
 func (f demandFailure) Error() string { return f.message }
 
@@ -459,6 +482,22 @@ func lastLines(text string, count, width int) string {
 
 func isRuneStart(b byte) bool { return b&0xC0 != 0x80 }
 
+// demandOwnership is what a route knows about the session it launched. It
+// is kept apart from the state the route shows because a failed route can
+// still own a running worker, and only a route that owns nothing may launch.
+type demandOwnership int
+
+const (
+	// ownsNothing: no session this route launched can still be running.
+	ownsNothing demandOwnership = iota
+	// ownsLive: sessionID is running and serves the route.
+	ownsLive
+	// ownsUncertain: sessionID may still be running, because stopping it
+	// failed or its start was cut off before anyone saw it end. It is
+	// stopped again before anything else launches.
+	ownsUncertain
+)
+
 // demandRoute is one route's live state. Its mutex orders every state change;
 // starting and stopping run outside it and report back through a transition.
 type demandRoute struct {
@@ -469,6 +508,7 @@ type demandRoute struct {
 	removed     bool
 	restart     bool
 	state       string
+	owned       demandOwnership
 	sessionID   string
 	failure     string
 	connections int
@@ -518,6 +558,7 @@ func (r *demandRoute) adopt() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.state = protocol.DemandRunning
+	r.owned = ownsLive
 	r.sessionID = id
 	r.armIdleLocked()
 }
@@ -527,10 +568,17 @@ func (r *demandRoute) redefine(service meshserve.Service) {
 	defer r.mu.Unlock()
 	previous := r.service
 	r.service = service
+	// A route added back while its removal was still stopping keeps the
+	// session it owns.
+	r.removed = false
 	for port := range r.unbound {
 		if !slices.ContainsFunc(service.Listens, func(listen meshserve.Listen) bool { return listen.Public == port }) {
 			delete(r.unbound, port)
 		}
+	}
+	if r.pending == nil && r.owned == ownsUncertain {
+		r.beginStopLocked()
+		return
 	}
 	if sameLaunch(previous.Demand, service.Demand) && previous.Label() == service.Label() {
 		// Only the timing changed. The idle clock picks up the new window
@@ -544,12 +592,12 @@ func (r *demandRoute) redefine(service meshserve.Service) {
 	// started from the old one, so it stops now rather than lingering. A new
 	// label counts too: the next daemon would not recognise the old one and
 	// would leave it running unowned.
-	switch r.state {
-	case protocol.DemandStarting:
+	switch {
+	case r.state == protocol.DemandStarting:
 		r.restart = true
-	case protocol.DemandRunning:
+	case r.pending == nil && r.owned == ownsLive:
 		r.beginStopLocked()
-	case protocol.DemandFailed:
+	case r.state == protocol.DemandFailed:
 		r.state = protocol.DemandStopped
 		r.failure = ""
 	}
@@ -564,14 +612,17 @@ func sameLaunch(a, b *meshserve.Demand) bool {
 	return a.Command == b.Command && a.Cwd == b.Cwd && slices.Equal(a.Env, b.Env)
 }
 
-func (r *demandRoute) retire() {
+// retire stops a removed route's session, or tries again when the last stop
+// failed. It reports whether the route owns nothing any more.
+func (r *demandRoute) retire() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.removed = true
 	r.cancelIdleLocked()
-	if r.state == protocol.DemandRunning {
+	if r.pending == nil && r.owned != ownsNothing {
 		r.beginStopLocked()
 	}
+	return r.pending == nil && r.owned == ownsNothing
 }
 
 // hold counts one open connection until the returned release runs. A
@@ -580,8 +631,7 @@ func (r *demandRoute) hold() func() {
 	r.mu.Lock()
 	r.connections++
 	r.cancelIdleLocked()
-	if r.service.Demand != nil && !r.removed && r.pending == nil &&
-		(r.state == protocol.DemandStopped || r.state == protocol.DemandFailed) {
+	if r.service.Demand != nil && !r.removed && r.pending == nil && r.owned == ownsNothing {
 		r.beginStartLocked()
 	}
 	r.mu.Unlock()
@@ -599,7 +649,8 @@ func (r *demandRoute) release() {
 }
 
 // ready waits until the route's session accepts on every upstream. A start
-// that fails answers everyone who waited on it; the next call tries again.
+// that fails answers everyone who waited on it; the next call tries again,
+// first stopping a session the failure may have left running.
 func (r *demandRoute) ready(ctx context.Context) error {
 	for {
 		r.mu.Lock()
@@ -608,25 +659,34 @@ func (r *demandRoute) ready(ctx context.Context) error {
 			r.mu.Unlock()
 			return fmt.Errorf("route %s was removed", route)
 		}
-		if r.service.Demand == nil || r.state == protocol.DemandRunning && r.pending == nil {
+		if r.service.Demand == nil || r.owned == ownsLive && r.pending == nil {
 			r.mu.Unlock()
 			return nil
 		}
-		transition := r.pending
-		if transition == nil {
-			r.beginStartLocked()
-			transition = r.pending
-		}
+		transition := r.towardRunningLocked() //nolint:contextcheck // runs on the daemon's context, so a waiter that gives up never abandons a launch or its cleanup
 		r.mu.Unlock()
 		select {
 		case <-transition.done:
 		case <-ctx.Done():
 			return fmt.Errorf("waiting for route %s: %w", route, ctx.Err())
 		}
-		if transition.starting {
+		if transition.starting || transition.err != nil {
 			return transition.err
 		}
 	}
+}
+
+// towardRunningLocked returns the transition in progress, or begins the next
+// one on the way to running: a stop of a session a failure may have left
+// behind, otherwise a start.
+func (r *demandRoute) towardRunningLocked() *demandTransition {
+	if r.pending == nil && r.owned == ownsUncertain {
+		r.beginStopLocked()
+	}
+	if r.pending == nil {
+		r.beginStartLocked()
+	}
+	return r.pending
 }
 
 func (r *demandRoute) stop(ctx context.Context) error {
@@ -635,7 +695,7 @@ func (r *demandRoute) stop(ctx context.Context) error {
 		route := r.service.Route()
 		transition := r.pending
 		if transition == nil {
-			if r.state != protocol.DemandRunning {
+			if r.owned == ownsNothing {
 				r.mu.Unlock()
 				return nil
 			}
@@ -697,13 +757,23 @@ func (r *demandRoute) finishStart(transition *demandTransition, id string, err e
 	case err != nil:
 		r.state = protocol.DemandFailed
 		r.failure = err.Error()
+		// A session that launched stays owned until it is seen to end: a
+		// cancelled wait or a failed cleanup proves nothing about it.
+		r.owned = ownsNothing
+		if id != "" {
+			r.owned = ownsUncertain
+		}
 		var failure demandFailure
 		if errors.As(err, &failure) {
 			r.failure = failure.summary
+			if failure.ended {
+				r.owned = ownsNothing
+			}
 		}
 		transition.err = err
 	case r.removed || r.restart:
 		r.state = protocol.DemandRunning
+		r.owned = ownsLive
 		r.beginStopLocked()
 		if r.removed {
 			transition.err = fmt.Errorf("route %s was removed while it started", r.service.Route())
@@ -712,6 +782,7 @@ func (r *demandRoute) finishStart(transition *demandTransition, id string, err e
 		}
 	default:
 		r.state = protocol.DemandRunning
+		r.owned = ownsLive
 		if r.connections == 0 {
 			r.armIdleLocked()
 		}
@@ -737,9 +808,11 @@ func (r *demandRoute) beginStopLocked() {
 		r.mu.Lock()
 		r.pending = nil
 		r.state = protocol.DemandStopped
+		r.owned = ownsNothing
 		if err != nil {
 			r.state = protocol.DemandFailed
 			r.failure = err.Error()
+			r.owned = ownsUncertain
 		}
 		transition.err = err
 		r.mu.Unlock()
@@ -796,6 +869,7 @@ func (r *demandRoute) checkSession() {
 	}
 	r.cancelIdleLocked()
 	r.state = protocol.DemandStopped
+	r.owned = ownsNothing
 	if code == nil || *code != 0 {
 		r.state = protocol.DemandFailed
 		r.failure = fmt.Sprintf("%s while serving (session %s)", exitDescription(code), id)
