@@ -266,13 +266,37 @@ func TestSignalNormalisesRemoteName(t *testing.T) {
 	}
 }
 
+func TestUnsupportedSignalNamesComeFromWorkerTable(t *testing.T) {
+	_, err := normaliseSignalName("bogus")
+	if err == nil {
+		t.Fatal("unsupported signal was accepted")
+	}
+	want := "use one of " + strings.Join(worker.SignalNames(), ", ")
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("unsupported signal error = %q, want %q", err, want)
+	}
+}
+
 func TestUnknownProbeDoesNotAutoRecoverOnAttach(t *testing.T) {
 	setupCommandTestHost(t)
 	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
+	dir, err := paths.SessionDir("PR0B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := controlTestListener(t, paths.Socket(dir))
 	setWorkerProbe(t, func(string) error { return context.DeadlineExceeded })
 	_, stderr, err := executeCommand(t, Dependencies{}, "PR0B", "--raw")
-	if err == nil || strings.Contains(stderr, "recovering") || strings.Contains(err.Error(), "interrupted") {
+	if err != nil || strings.Contains(stderr, "recovering") {
 		t.Fatalf("unknown probe attach = %v, stderr %q", err, stderr)
+	}
+	select {
+	case request := <-received:
+		if request.Type != protocol.TypeAttach || request.SessionID != "PR0B" {
+			t.Fatalf("unknown probe worker request = %+v, want attach to PR0B", request)
+		}
+	default:
+		t.Fatal("unknown probe attachment did not reach the worker")
 	}
 	root, err := paths.SessionsDir()
 	if err != nil {

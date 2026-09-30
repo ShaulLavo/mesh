@@ -99,7 +99,7 @@ func control(s Session, msg protocol.Control) error {
 func normaliseSignalName(name string) (string, error) {
 	normalised := strings.TrimPrefix(strings.ToLower(name), "sig")
 	if !worker.SupportsSignal(normalised) {
-		return "", fmt.Errorf("signal %q is not supported; use one of int, term, quit, hup, kill, usr1, usr2", name)
+		return "", fmt.Errorf("signal %q is not supported; use one of %s", name, strings.Join(worker.SignalNames(), ", "))
 	}
 	return normalised, nil
 }
