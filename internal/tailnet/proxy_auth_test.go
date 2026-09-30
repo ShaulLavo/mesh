@@ -1,6 +1,7 @@
 package tailnet
 
 import (
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -67,6 +68,65 @@ func TestProxyListenerAuthenticatesForwarderUID(t *testing.T) {
 				t.Fatal("forwarder UID lookup was not used")
 			}
 		})
+	}
+}
+
+func TestProxyListenerRejectsBeforeTLS(t *testing.T) {
+	listener, client := proxyClient(t, "tcp4", "127.0.0.1:0")
+	proxyListener := ProxyListener{Listener: listener, AllowedUIDs: []uint32{42}, peerUID: peerUIDFunc(func(net.Conn) (uint32, error) { return 43, nil })}
+	server, err := proxyListener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	if _, err := io.WriteString(client, "PROXY TCP4 100.64.0.2 127.0.0.1 40000 443\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+	_ = server.SetDeadline(time.Now().Add(time.Second))
+	type handshakeResult struct {
+		hello bool
+		err   error
+	}
+	done := make(chan handshakeResult, 1)
+	go func() {
+		hello := false
+		tlsServer := tls.Server(server, &tls.Config{MinVersion: tls.VersionTLS12, GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			hello = true
+			return nil, errors.New("unauthenticated ClientHello reached TLS")
+		}})
+		err := tlsServer.Handshake()
+		done <- handshakeResult{hello: hello, err: err}
+	}()
+	tlsClient := tls.Client(client, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: "apps.example.test"})
+	if err := tlsClient.Handshake(); err == nil {
+		t.Fatal("disallowed forwarder completed TLS")
+	}
+	result := <-done
+	if result.err == nil || result.hello {
+		t.Fatalf("disallowed forwarder reached TLS: ClientHello=%t, error=%v", result.hello, result.err)
+	}
+	if got := server.RemoteAddr().String(); got != client.LocalAddr().String() {
+		t.Fatalf("TLS rejection exposed source %s", got)
+	}
+}
+
+func TestProxyListenerRequiresHeaderFromAuthenticatedForwarder(t *testing.T) {
+	listener, client := proxyClient(t, "tcp4", "127.0.0.1:0")
+	proxyListener := ProxyListener{Listener: listener, AllowedUIDs: []uint32{42}, peerUID: peerUIDFunc(func(net.Conn) (uint32, error) { return 42, nil })}
+	server, err := proxyListener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	if _, err := io.WriteString(client, "GET / HTTP/1.1\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.Read(make([]byte, 1)); err == nil {
+		t.Fatal("authenticated forwarder bypassed mandatory PROXY header")
+	}
+	if got := server.RemoteAddr().String(); got != client.LocalAddr().String() {
+		t.Fatalf("missing header changed source to %s", got)
 	}
 }
 

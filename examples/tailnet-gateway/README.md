@@ -34,9 +34,17 @@ Tailscale Serve supplies the device address through PROXY v1. The gateway consum
 that header and sends it only to the app backend; private Mesh TLS stays unchanged.
 The edge checks Tailscale's local device inventory, cached for at most five seconds,
 on each request. It does not issue a browser grant that survives leaving the tailnet.
-HTTP forwarding headers never identify an owner. Both PROXY listeners must remain
-on loopback and behind trusted local forwarders. Local processes are trusted, as
-with Mesh's other loopback control endpoints.
+HTTP forwarding headers never identify an owner. Both PROXY listeners require a
+header and authenticate the loopback forwarder's socket UID through Linux
+`/proc/net/tcp` and `/proc/net/tcp6`. Only root and the Mesh process UID may forward
+source addresses. Run the gateway as the same UID as Mesh. Root covers Tailscale
+Serve's `tailscaled` process. Connections from other UIDs, missing headers, and UID
+lookup failures are closed before TLS. Local processes under other UIDs cannot
+claim a Tailnet source address. Processes under the Mesh UID remain trusted.
+
+Automatic Tailnet owner access requires Linux on the edge and gateway. On macOS
+and other unsupported platforms, these owner-access settings fail startup with an
+error. Mac origin hosts and routing with manual browser pairing remain supported.
 
 For routing with manual browser pairing, omit all three owner-access settings.
 

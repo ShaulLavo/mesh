@@ -41,7 +41,6 @@ func appHost(host string) bool {
 func bridge(client net.Conn, privateAddress, appAddress string, ownerAccess bool) {
 	defer func() { _ = client.Close() }()
 	if ownerAccess {
-		client = tailnet.NewProxyConn(client)
 		_ = client.RemoteAddr()
 	}
 	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -91,9 +90,20 @@ func main() {
 	appAddress := flag.String("apps", "127.0.0.1:8445", "temporary-app edge TLS listener")
 	ownerAccess := flag.Bool("tailnet-owner-access", false, "require Tailscale Serve PROXY v1 and forward device addresses to the app edge")
 	flag.Parse()
+	var allowedUIDs []uint32
+	if *ownerAccess {
+		var err error
+		allowedUIDs, err = tailnet.ProxyForwarderUIDs()
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *ownerAccess {
+		listener = tailnet.ProxyListener{Listener: listener, AllowedUIDs: allowedUIDs}
 	}
 	for {
 		client, err := listener.Accept()

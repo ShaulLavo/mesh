@@ -7,14 +7,15 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// ProxyListener accepts PROXY v1 metadata only from a loopback TCP forwarder.
-// Enable it solely behind Tailscale Serve or a trusted local SNI gateway.
+// ProxyListener authenticates forwarders because PROXY metadata conveys owner
+// authority. An empty UID allow-list rejects every connection.
 type ProxyListener struct {
 	net.Listener
 	AllowedUIDs []uint32
@@ -30,25 +31,50 @@ func (l ProxyListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewProxyConn(c), nil
+	lookup := l.peerUID
+	if lookup == nil {
+		lookup = systemPeerUIDLookup{}
+	}
+	return &proxyConn{Conn: c, allowedUIDs: l.AllowedUIDs, peerUID: lookup}, nil
 }
 
 type proxyConn struct {
 	net.Conn
-	once   sync.Once
-	reader *bufio.Reader
-	source net.Addr
-	err    error
+	allowedUIDs []uint32
+	peerUID     peerUIDLookup
+	once        sync.Once
+	reader      *bufio.Reader
+	source      net.Addr
+	err         error
 }
 
-// NewProxyConn consumes one mandatory PROXY v1 header before any TLS bytes.
-func NewProxyConn(c net.Conn) net.Conn { return &proxyConn{Conn: c} }
+func NewProxyConn(c net.Conn, allowedUIDs []uint32) net.Conn {
+	return &proxyConn{Conn: c, allowedUIDs: allowedUIDs, peerUID: systemPeerUIDLookup{}}
+}
 
 func (c *proxyConn) initialize() {
 	c.once.Do(func() {
+		defer func() {
+			if c.err != nil {
+				_ = c.Conn.Close()
+			}
+		}()
 		peer, err := netip.ParseAddrPort(c.Conn.RemoteAddr().String())
 		if err != nil || !peer.Addr().IsLoopback() {
 			c.err = errors.New("tailnet: PROXY sender must be loopback")
+			return
+		}
+		if len(c.allowedUIDs) == 0 {
+			c.err = errors.New("tailnet: no allowed PROXY forwarder UIDs")
+			return
+		}
+		uid, err := c.peerUID.PeerUID(c.Conn)
+		if err != nil {
+			c.err = fmt.Errorf("tailnet: authenticate PROXY forwarder %s: %w", peer, err)
+			return
+		}
+		if !slices.Contains(c.allowedUIDs, uid) {
+			c.err = fmt.Errorf("tailnet: PROXY forwarder %s UID %d is not allowed", peer, uid)
 			return
 		}
 		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))

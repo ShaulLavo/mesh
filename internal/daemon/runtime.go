@@ -77,6 +77,7 @@ type listenerConfig struct {
 	httpsPort                  uint16
 	tlsConfig                  *tls.Config
 	tailnetOwnerAccess         bool
+	proxyForwarderUIDs         []uint32
 	publicListenAddress        string
 	publicHTTPHandler          http.Handler
 	publicTLSConfig            *tls.Config
@@ -182,7 +183,7 @@ func serveBoundListeners(
 		boundedPublic = newBoundedPublicListener(publicListener, maximumPublicConnections)
 		publicListener = boundedPublic
 		if normalized.tailnetOwnerAccess {
-			publicListener = tailnet.ProxyListener{Listener: publicListener}
+			publicListener = tailnet.ProxyListener{Listener: publicListener, AllowedUIDs: normalized.proxyForwarderUIDs}
 		}
 	}
 	connections := newConnectionGroup(handler)
@@ -434,6 +435,10 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		address, parseErr := netip.ParseAddrPort(cfg.PublicListenAddress)
 		if parseErr != nil || !address.Addr().IsLoopback() || cfg.PublicTLSConfig == nil {
 			return listenerConfig{}, errors.New("daemon: Tailnet owner access requires a loopback public TLS listener")
+		}
+		normalized.proxyForwarderUIDs, err = tailnet.ProxyForwarderUIDs()
+		if err != nil {
+			return listenerConfig{}, fmt.Errorf("daemon: enable Tailnet owner access: %w", err)
 		}
 	}
 	if cfg.HTTPSPort == 0 && cfg.TLSConfig != nil {
