@@ -137,8 +137,9 @@ class VerifierEnvironmentTest(unittest.TestCase):
         policy = {"GOPROXY": "http://127.0.0.1:9", "GONOSUMDB": "fixture.invalid/*",
                   "GONOPROXY": "direct.fixture.invalid/*", "GOPRIVATE": "private.fixture.invalid/*",
                   "GOFLAGS": "-mod=readonly", "GOINSECURE": "insecure.fixture.invalid/*", "GOSUMDB": "off"}
-        config = self.caller_home / ".config" / "go" / "env"
-        config.parent.mkdir(parents=True)
+        config = Path(subprocess.check_output([str(self.tools / "go"), "env", "GOENV"],
+                                              env=self.caller, text=True).strip())
+        config.parent.mkdir(parents=True, exist_ok=True)
         config.write_text("".join(f"{name}={value}\n" for name, value in policy.items()))
         build, test = self.captured_environments()
         for name, value in policy.items():
@@ -222,6 +223,9 @@ class VerifierEnvironmentTest(unittest.TestCase):
             self.assertEqual(test.get(name), value, name)
 
     def test_scope_cannot_skip_a_working_caller_user_bus(self):
+        uname = self.tools / "uname"
+        uname.write_text("#!/bin/sh\nprintf 'Linux\\n'\n")
+        uname.chmod(0o700)
         busctl = self.tools / "busctl"
         busctl.write_text(
             "#!/bin/sh\n"
