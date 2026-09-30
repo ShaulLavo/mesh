@@ -209,9 +209,9 @@ func (o *Origin) tryOp(key, name string) (func(), bool) {
 }
 
 // preempt claims an app for safety work, revoking any operation that owns it
-// and waiting up to yieldBudget for it to unwind. It fails only when the
-// operation does not yield; the caller may then stop workers but not change
-// the app's state.
+// except a delete, and waiting up to yieldBudget for it to unwind. It fails
+// only when the operation does not yield; the caller may then stop workers but
+// not change the app's state.
 func (o *Origin) preempt(ctx context.Context, id, reason string) (func(), error) {
 	wait, cancel := context.WithTimeout(ctx, yieldBudget)
 	defer cancel()
@@ -221,7 +221,9 @@ func (o *Origin) preempt(ctx context.Context, id, reason string) (func(), error)
 		}
 		o.mu.Lock()
 		op := o.ops["app "+id]
-		if op != nil && op.revoked == "" {
+		// A delete is already doing the safety work; revoking it would only fail
+		// the owner's request.
+		if op != nil && op.revoked == "" && op.name != "delete" {
 			op.revoked = reason
 			op.cancel()
 		}

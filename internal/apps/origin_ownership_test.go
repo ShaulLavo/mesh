@@ -276,3 +276,43 @@ func TestRecoveryKeepsNewerActivation(t *testing.T) {
 		t.Fatalf("recovery from an earlier sync snapshot reverted app %s to generation %d", app.ID, got)
 	}
 }
+
+func TestSyncLetsOwnersDeleteFinish(t *testing.T) {
+	f := newAppFixture(t)
+	workers := newServerWorkers(t, f)
+	app := createServerApp(t, f)
+	cleaning := newGate(t)
+	var once sync.Once
+	hook := func(ctx context.Context, label string) error {
+		if label != "app "+app.ID {
+			return nil
+		}
+		var err error
+		once.Do(func() {
+			cleaning.arrive()
+			select {
+			case <-time.After(200 * time.Millisecond):
+			case <-ctx.Done():
+				err = ctx.Err()
+			}
+		})
+		return err
+	}
+	workers.mu.Lock()
+	workers.beforeFind = hook
+	workers.mu.Unlock()
+	deleted := make(chan error, 1)
+	go func() {
+		_, err := f.origin.Handle(context.Background(), Request{Action: "delete", ID: app.ID})
+		deleted <- err
+	}()
+	<-cleaning.entered
+	syncErr := f.origin.Sync(context.Background())
+	if err := receive(t, deleted, "owner's delete"); err != nil {
+		t.Fatalf("Sync broke the owner's delete of %s it was already carrying out: %v (sync: %v)", app.ID, err, syncErr)
+	}
+	requireEdgeCleanup(t, f, app.ID)
+	if workers.alive(t, "app "+app.ID) {
+		t.Fatalf("deleted app %s kept running", app.ID)
+	}
+}

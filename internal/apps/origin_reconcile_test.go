@@ -28,6 +28,7 @@ type serverWorkers struct {
 	findErr   map[string]error
 	// beforeStart and wait, when set, let a test hold or fail one start or setup.
 	beforeStart func(ctx context.Context, label, command string) error
+	beforeFind  func(ctx context.Context, label string) error
 	wait        func(ctx context.Context) (int, error)
 }
 
@@ -92,8 +93,11 @@ func (w *serverWorkers) Find(ctx context.Context, label string) (string, bool, e
 		return "", false, fmt.Errorf("find %s: %w", label, err)
 	}
 	w.mu.Lock()
-	err := w.findErr[label]
+	err, hook := w.findErr[label], w.beforeFind
 	w.mu.Unlock()
+	if err == nil && hook != nil {
+		err = hook(ctx, label)
+	}
 	if err != nil {
 		return "", false, err
 	}
