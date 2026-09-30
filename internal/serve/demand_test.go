@@ -114,7 +114,7 @@ func TestRegistryGatesOnDemandRoutesAndSkipsLocalOnlyOnes(t *testing.T) {
 	}
 
 	gate := &fakeGate{err: errString("route /dev did not start: boom")}
-	registry.SetDemandGate(gate)
+	registry.SetDemandGate(gate, nil)
 	response = httptest.NewRecorder()
 	registry.ServeHTTP(response, request)
 	if response.Code != http.StatusBadGateway || strings.Contains(response.Body.String(), "boom") {

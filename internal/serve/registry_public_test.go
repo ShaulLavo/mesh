@@ -50,7 +50,7 @@ func TestRegistryPublicHostRejectsNestedPrivateRoutes(t *testing.T) {
 					t.Fatal(err)
 				}
 				gate := &fakeGate{err: errString("unexpected on-demand start")}
-				registry.SetDemandGate(gate)
+				registry.SetDemandGate(gate, nil)
 				request := httptest.NewRequest(http.MethodGet, "/app/admin/secrets", nil)
 				request.Host = peer.host
 				request.RemoteAddr = peer.remote

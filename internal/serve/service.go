@@ -83,7 +83,7 @@ type Registry struct {
 	reservedPrefix        string
 	trustForwardedHeaders func(netip.Addr) bool
 	snapshot              atomic.Pointer[registrySnapshot]
-	gate                  atomic.Pointer[DemandGate]
+	gate                  atomic.Pointer[demandGate]
 }
 
 type registrySnapshot struct {
