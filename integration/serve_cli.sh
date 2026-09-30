@@ -329,6 +329,21 @@ grep -Fq "serving https://blog.shaulavo.dev/blog on pc (static -> $ORIGIN_HOME/s
 wait_for_public_body blog.shaulavo.dev /blog/ SERVE_CLI_PUBLIC_MARKER ||
   fail "confirmed public route did not reach the real origin"
 
+"${CLI[@]}" serve pc "$TEST_ROOT/files" --at /blog/admin --files \
+  >"$TEST_ROOT/nested-private.out" 2>"$TEST_ROOT/nested-private.err" ||
+  fail "publish nested private directory: $(<"$TEST_ROOT/nested-private.err")"
+NESTED_PUBLIC_STATUS=$(edge_request blog.shaulavo.dev /blog/admin/download.txt --output /dev/null --write-out '%{http_code}') ||
+  fail "query nested private route through the public edge"
+[ "$NESTED_PUBLIC_STATUS" = 404 ] ||
+  fail "public edge exposed nested private route with status $NESTED_PUBLIC_STATUS"
+NESTED_DIRECT_PUBLIC_STATUS=$(curl --noproxy '*' --silent --max-time 2 --header 'Host: blog.shaulavo.dev' \
+  --output /dev/null --write-out '%{http_code}' "http://127.0.0.11:$CONTROL_PORT/blog/admin/download.txt") ||
+  fail "query nested private route with a direct public Host"
+[ "$NESTED_DIRECT_PUBLIC_STATUS" = 404 ] ||
+  fail "direct public Host exposed nested private route with status $NESTED_DIRECT_PUBLIC_STATUS"
+[ "$(curl --noproxy '*' --fail --silent --max-time 2 "http://127.0.0.11:$CONTROL_PORT/blog/admin/download.txt")" = DOWNLOAD_MARKER ] ||
+  fail "nested private service did not serve through the Tailnet listener"
+
 if "${CLI[@]}" serve pc "$TEST_ROOT/secret" --at /secret --public secret.shaulavo.dev --yes \
   >"$TEST_ROOT/secret-refused.out" 2>"$TEST_ROOT/secret-refused.err"; then
   fail "--yes bypassed the public credential scan"
