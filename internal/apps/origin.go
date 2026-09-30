@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,12 +75,39 @@ type originState struct {
 	Sequence uint64                   `json:"sequence"`
 	Pending  *Signed                  `json:"pending,omitempty"`
 }
+
+// appOp is the long operation that owns one app ("app <id>") or one upload
+// ("upload <id>"). Operations on the same key wait for each other, and Sync
+// leaves an owned app to its operation.
+type appOp struct {
+	name string
+	done chan struct{}
+}
+
+// serviceHold keeps an ordinary service's ports from new app reservations while
+// that service is being committed.
+type serviceHold struct{ ports []int }
+
+// maintenanceBudget bounds each step of Sync on its own: the lease exchange, then
+// each app's safety work, then each app's recovery. It is the budget the whole
+// pass used to share, so no step waits longer than before, and no app can spend
+// another app's share.
+const maintenanceBudget = 15 * time.Second
+
 type Origin struct {
-	mu          sync.Mutex
+	// mu guards state, ops and holds. It is held only to read or commit state,
+	// never across an edge exchange, a worker wait or unpacking, so one slow app
+	// cannot stall lease renewal, service registration or other apps.
+	mu    sync.Mutex
+	state originState
+	ops   map[string]*appOp
+	holds map[*serviceHold]struct{}
+	// exchangeMu serializes signed edge exchanges, because the edge accepts one
+	// pending sequence per owner. Take it before mu, never after.
+	exchangeMu  sync.Mutex
 	routes      atomic.Pointer[map[string]appRoute]
 	downloadMu  sync.Mutex
 	config      OriginConfig
-	state       originState
 	identity    string
 	admissionMu sync.Mutex
 	admissions  map[string]time.Time
@@ -92,13 +120,15 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, admissions: map[string]time.Time{}}
+	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, holds: map[*serviceHold]struct{}{}, admissions: map[string]time.Time{}}
 	if err := load(ctx, c.Store, "apps.origin", &o.state); err != nil {
 		return nil, err
 	}
 	o.publishRoutes()
 	return o, nil
 }
+
+// persist requires mu.
 func (o *Origin) persist(ctx context.Context) error {
 	o.publishRoutes()
 	return save(ctx, o.config.Store, "apps.origin", o.state)
@@ -110,7 +140,67 @@ func (o *Origin) publishRoutes() {
 	}
 	o.routes.Store(&routes)
 }
+
+// modify edits the stored app in place. Writing back a whole copy read before a
+// wait would undo the lease Sync renewed meanwhile.
+func (o *Origin) modify(ctx context.Context, id string, change func(*localApp)) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	a, ok := o.state.Apps[id]
+	if !ok {
+		return fmt.Errorf("app %s: local record missing", id)
+	}
+	change(&a)
+	o.state.Apps[id] = a
+	return o.persist(ctx)
+}
+
+// claimLocked requires mu and an unowned key.
+func (o *Origin) claimLocked(key, name string) func() {
+	op := &appOp{name: name, done: make(chan struct{})}
+	o.ops[key] = op
+	return func() {
+		o.mu.Lock()
+		delete(o.ops, key)
+		o.mu.Unlock()
+		close(op.done)
+	}
+}
+func (o *Origin) beginOp(ctx context.Context, key, name string) (func(), error) {
+	for {
+		o.mu.Lock()
+		current := o.ops[key]
+		if current == nil {
+			release := o.claimLocked(key, name)
+			o.mu.Unlock()
+			return release, nil
+		}
+		o.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%s: wait for %s: %w", key, current.name, ctx.Err())
+		case <-current.done:
+		}
+	}
+}
+func (o *Origin) tryOp(key, name string) (func(), bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.ops[key] != nil {
+		return nil, false
+	}
+	return o.claimLocked(key, name), true
+}
+
 func (o *Origin) edge(ctx context.Context, q Request) (Result, error) {
+	o.exchangeMu.Lock()
+	defer o.exchangeMu.Unlock()
+	return o.edgeLocked(ctx, q)
+}
+
+// edgeLocked requires exchangeMu, which makes its holder the only writer of
+// Pending and Sequence; mu covers only the writes and their persistence.
+func (o *Origin) edgeLocked(ctx context.Context, q Request) (Result, error) {
 	if o.state.Pending != nil {
 		pending := *o.state.Pending
 		result, err := o.settle(ctx, pending)
@@ -122,13 +212,15 @@ func (o *Origin) edge(ctx context.Context, q Request) (Result, error) {
 			return result, nil
 		}
 	}
+	o.mu.Lock()
 	o.state.Sequence++
 	s, err := Sign("mesh-app/request/v1", o.config.EdgeIdentity, o.state.Sequence, q, o.config.Key, o.config.Now())
-	if err != nil {
-		return Result{}, err
+	if err == nil {
+		o.state.Pending = &s
+		err = o.persist(ctx)
 	}
-	o.state.Pending = &s
-	if err := o.persist(ctx); err != nil {
+	o.mu.Unlock()
+	if err != nil {
 		return Result{}, err
 	}
 	return o.settle(ctx, s)
@@ -152,8 +244,11 @@ func (o *Origin) settle(ctx context.Context, s Signed) (Result, error) {
 	if reply.RequestID != s.ID || response.Sequence != s.Sequence {
 		return Result{}, errors.New("app: mismatched edge acknowledgement")
 	}
+	o.mu.Lock()
 	o.state.Pending = nil
-	if err := o.persist(ctx); err != nil {
+	err = o.persist(ctx)
+	o.mu.Unlock()
+	if err != nil {
 		return Result{}, err
 	}
 	if reply.Error != "" {
@@ -162,10 +257,10 @@ func (o *Origin) settle(ctx context.Context, s Signed) (Result, error) {
 	return reply.Result, nil
 }
 func (o *Origin) Handle(ctx context.Context, q Request) (Result, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
 	switch q.Action {
 	case "upload.begin":
+		o.mu.Lock()
+		defer o.mu.Unlock()
 		return o.beginUpload(ctx)
 	case "upload.chunk":
 		return o.appendUpload(ctx, q)
@@ -180,11 +275,19 @@ func (o *Origin) Handle(ctx context.Context, q Request) (Result, error) {
 		if err != nil {
 			return result, err
 		}
-		if a, ok := o.state.Apps[q.ID]; ok {
+		o.mu.Lock()
+		a, ok := o.state.Apps[q.ID]
+		o.mu.Unlock()
+		if ok {
 			result.Runtime = &RuntimeInfo{Phase: a.Phase, SessionID: a.Session, Command: a.Command, Port: a.Port, Root: a.Root}
 		}
 		return result, nil
 	case "delete":
+		release, err := o.beginOp(ctx, "app "+q.ID, "delete")
+		if err != nil {
+			return Result{}, err
+		}
+		defer release()
 		result, err := o.edge(ctx, q)
 		if err != nil {
 			return Result{}, err
@@ -215,6 +318,8 @@ func (o *Origin) ensureRoot() error {
 func (o *Origin) uploadPath(id string) string {
 	return filepath.Join(o.config.DataRoot, "uploads", id+".tar.gz")
 }
+
+// beginUpload requires mu; it only creates an empty file.
 func (o *Origin) beginUpload(ctx context.Context) (Result, error) {
 	if err := o.ensureRoot(); err != nil {
 		return Result{}, err
@@ -240,7 +345,14 @@ func (o *Origin) beginUpload(ctx context.Context) (Result, error) {
 	return Result{UploadID: id}, nil
 }
 func (o *Origin) appendUpload(ctx context.Context, q Request) (Result, error) {
+	release, err := o.beginOp(ctx, "upload "+q.UploadID, "upload.chunk")
+	if err != nil {
+		return Result{}, err
+	}
+	defer release()
+	o.mu.Lock()
 	u, ok := o.state.Uploads[q.UploadID]
+	o.mu.Unlock()
 	if !ok || !o.config.Now().Before(u.ExpiresAt) {
 		return Result{}, errors.New("app: upload not found or expired")
 	}
@@ -274,6 +386,8 @@ func (o *Origin) appendUpload(ctx context.Context, q Request) (Result, error) {
 		return Result{}, err
 	}
 	u.Size = q.Offset + int64(len(q.Data))
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.state.Uploads[u.ID] = u
 	return Result{UploadID: u.ID}, o.persist(ctx)
 }
@@ -303,52 +417,120 @@ func validateRecipe(q Request) error {
 	}
 	return nil
 }
+
+// checkPortLocked requires mu. Callers repeat it when the port lands in state,
+// because services and other apps may claim ports while a recipe prepares.
+func (o *Origin) checkPortLocked(id string, q Request) error {
+	if o.config.CheckHosting != nil {
+		if err := o.config.CheckHosting(q.Port, o.config.DataRoot); err != nil {
+			return err
+		}
+	}
+	if q.Kind != "server" {
+		return nil
+	}
+	for other, existing := range o.state.Apps {
+		if other != id && existing.Record.Kind == "server" && existing.Port == q.Port {
+			return errors.New("app: port already belongs to another app")
+		}
+	}
+	for hold := range o.holds {
+		if slices.Contains(hold.ports, q.Port) {
+			return errors.New("app: port is being claimed by an ordinary service")
+		}
+	}
+	return nil
+}
+func (o *Origin) pendingCommitLocked(uploadID string) (localApp, bool) {
+	for _, a := range o.state.Apps {
+		if a.Commit != nil && a.Commit.UploadID == uploadID {
+			return a, true
+		}
+	}
+	return localApp{}, false
+}
+
+// allocate reserves a new app at the edge and records it locally, owned by the
+// caller, before any other exchange can run. Otherwise a Sync between the two
+// would find the edge record without a local app and delete it as abandoned.
+func (o *Origin) allocate(ctx context.Context, q Request, digest string) (localApp, func(), error) {
+	o.exchangeMu.Lock()
+	defer o.exchangeMu.Unlock()
+	result, err := o.edgeLocked(ctx, Request{Action: "allocate", Kind: q.Kind})
+	if err != nil {
+		return localApp{}, nil, err
+	}
+	id := result.App.ID
+	local := localApp{Record: *result.App, Root: filepath.Join(o.config.DataRoot, "apps", id, "source-"+q.UploadID), Command: q.Command, Port: q.Port, Env: q.Env, Phase: "preparing", Commit: &commitIntent{UploadID: q.UploadID, Digest: digest}}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	release := o.claimLocked("app "+id, q.Action)
+	o.state.Apps[id] = local
+	return local, release, errors.Join(o.checkPortLocked(id, q), o.persist(ctx))
+}
 func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	if q.Kind == "" {
 		q.Kind = "static"
 	}
 	normalized, _ := json.Marshal(q)
 	digest := digestBytes(normalized)
-	if prior, ok := o.state.Receipts[q.UploadID]; ok {
+	// A retry of the same upload waits for the attempt in progress rather than
+	// unpacking or allocating beside it.
+	releaseUpload, err := o.beginOp(ctx, "upload "+q.UploadID, q.Action)
+	if err != nil {
+		return Result{}, err
+	}
+	defer releaseUpload()
+	o.mu.Lock()
+	target := q.ID
+	if a, ok := o.pendingCommitLocked(q.UploadID); ok {
+		target = a.Record.ID
+	}
+	o.mu.Unlock()
+	if target != "" {
+		releaseApp, err := o.beginOp(ctx, "app "+target, q.Action)
+		if err != nil {
+			return Result{}, err
+		}
+		defer releaseApp()
+	}
+	o.mu.Lock()
+	prior, receipted := o.state.Receipts[q.UploadID]
+	pending, hasPending := o.pendingCommitLocked(q.UploadID)
+	current, exists := o.state.Apps[q.ID]
+	o.mu.Unlock()
+	if receipted {
 		if prior.Digest != digest {
 			return Result{}, errors.New("app: commit retry conflicts with previous recipe")
 		}
-		latest, err := o.edge(ctx, Request{Action: "inspect", ID: prior.Record.ID})
-		return latest, err
+		return o.edge(ctx, Request{Action: "inspect", ID: prior.Record.ID})
 	}
-	for _, a := range o.state.Apps {
-		if a.Commit == nil || a.Commit.UploadID != q.UploadID {
-			continue
-		}
-		if a.Commit.Digest != digest {
+	if hasPending {
+		if pending.Commit.Digest != digest {
 			return Result{}, errors.New("app: commit retry conflicts with pending recipe")
 		}
-		if a.Phase != "activating" {
+		if pending.Phase != "activating" {
 			return Result{}, errors.New("app: source preparation requires reconciliation")
 		}
-		return o.activate(ctx, a)
+		return o.activate(ctx, pending)
 	}
-	if a, ok := o.state.Apps[q.ID]; q.Action == "update" && ok && a.Phase == "ready" && a.Commit != nil {
-		if err := o.finishActivation(ctx, a, a.Record); err != nil {
+	if q.Action == "update" && exists && current.Phase == "ready" && current.Commit != nil {
+		if err := o.finishActivation(ctx, current, current.Record); err != nil {
 			return Result{}, err
 		}
 	}
 	if err := validateRecipe(q); err != nil {
 		return Result{}, err
 	}
-	if o.config.CheckHosting != nil {
-		if err := o.config.CheckHosting(q.Port, o.config.DataRoot); err != nil {
-			return Result{}, err
-		}
-	}
+	o.mu.Lock()
+	err = o.checkPortLocked(q.ID, q)
 	u, ok := o.state.Uploads[q.UploadID]
+	o.mu.Unlock()
+	if err != nil {
+		return Result{}, err
+	}
 	if !ok || !o.config.Now().Before(u.ExpiresAt) {
 		return Result{}, errors.New("app: missing source upload")
-	}
-	for id, existing := range o.state.Apps {
-		if id != q.ID && q.Kind == "server" && existing.Record.Kind == "server" && existing.Port == q.Port {
-			return Result{}, errors.New("app: port already belongs to another app")
-		}
 	}
 	staging := filepath.Join(o.config.DataRoot, "uploads", "source-"+q.UploadID)
 	if err := os.MkdirAll(staging, 0700); err != nil {
@@ -359,7 +541,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		return Result{}, err
 	}
 	var app Record
-	var previous localApp
+	var local, previous localApp
 	if q.Action == "update" {
 		result, err := o.edge(ctx, Request{Action: "inspect", ID: q.ID})
 		if err != nil {
@@ -371,47 +553,60 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 			_ = os.RemoveAll(staging)
 			return Result{}, errors.New("app: cannot update expired app")
 		}
+		o.mu.Lock()
 		previous, ok = o.state.Apps[q.ID]
+		o.mu.Unlock()
 		if !ok {
 			return Result{}, errors.New("app: managed workspace missing")
 		}
+		local = localApp{Record: app, Root: filepath.Join(o.config.DataRoot, "apps", app.ID, "source-"+q.UploadID), Command: q.Command, Port: q.Port, Env: q.Env, Phase: "preparing"}
+		local.Commit = &commitIntent{UploadID: q.UploadID, Digest: digest, PreviousRoot: previous.Root}
 	} else {
-		result, err := o.edge(ctx, Request{Action: "allocate", Kind: q.Kind})
-		if err != nil {
+		allocated, releaseApp, err := o.allocate(ctx, q, digest)
+		if releaseApp == nil {
 			_ = os.RemoveAll(staging)
 			return Result{}, err
 		}
-		app = *result.App
-	}
-	workspace := filepath.Join(o.config.DataRoot, "apps", app.ID, "source-"+q.UploadID)
-	if err := os.MkdirAll(filepath.Dir(workspace), 0700); err != nil {
-		return Result{}, err
-	}
-	if err := os.Rename(staging, workspace); err != nil {
-		return Result{}, err
-	}
-	local := localApp{Record: app, Root: workspace, Command: q.Command, Port: q.Port, Env: q.Env, Phase: "preparing"}
-	local.Commit = &commitIntent{UploadID: q.UploadID, Digest: digest, PreviousRoot: previous.Root}
-	if q.Action == "create" {
-		o.state.Apps[app.ID] = local
-		if err := o.persist(ctx); err != nil {
-			return Result{}, err
+		defer releaseApp()
+		local, app = allocated, allocated.Record
+		if err != nil {
+			_ = os.RemoveAll(staging)
+			return Result{}, o.failCreate(ctx, app.ID, err)
 		}
 	}
+	workspace := local.Root
 	fail := func(cause error) (Result, error) {
 		if q.Action == "create" {
 			return Result{}, o.failCreate(ctx, app.ID, cause)
 		}
 		_ = o.stop(ctx, app.ID)
-		o.state.Apps[app.ID] = previous
 		if previous.Record.Kind == "server" {
 			session, startErr := o.config.Workers.Start(ctx, "app "+app.ID, previous.Command, previous.Root, o.environment(previous))
 			previous.Session = session
-			o.state.Apps[app.ID] = previous
 			cause = errors.Join(cause, startErr)
 		}
 		_ = os.RemoveAll(workspace)
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		// Keep the lease and expiry Sync applied while the update ran.
+		if latest, ok := o.state.Apps[app.ID]; ok {
+			revision := previous.Record.Revision
+			previous.Record = latest.Record
+			previous.Record.Revision = revision
+		}
+		o.state.Apps[app.ID] = previous
 		return Result{}, errors.Join(cause, o.persist(ctx))
+	}
+	err = os.MkdirAll(filepath.Dir(workspace), 0700)
+	if err == nil {
+		err = os.Rename(staging, workspace)
+	}
+	if err != nil && q.Action == "create" {
+		_ = os.RemoveAll(staging)
+		return Result{}, o.failCreate(ctx, app.ID, err)
+	}
+	if err != nil {
+		return Result{}, err
 	}
 	if q.Setup != "" {
 		if err := validateDataRoot(workspace); err != nil {
@@ -438,8 +633,17 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	local.Record = *refreshed.App
 	local.Phase = "activating"
 	local.Record.Revision = q.UploadID
-	o.state.Apps[app.ID] = local
-	if err := o.persist(ctx); err != nil {
+	o.mu.Lock()
+	reserveErr := o.checkPortLocked(app.ID, q)
+	if reserveErr == nil {
+		o.state.Apps[app.ID] = local
+		err = o.persist(ctx)
+	}
+	o.mu.Unlock()
+	if reserveErr != nil {
+		return fail(reserveErr)
+	}
+	if err != nil {
 		return Result{}, err
 	}
 	if q.Kind == "server" {
@@ -451,8 +655,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 			return fail(err)
 		}
 		local.Session = session
-		o.state.Apps[app.ID] = local
-		if err := o.persist(ctx); err != nil {
+		if err := o.modify(ctx, app.ID, func(a *localApp) { a.Session = session }); err != nil {
 			return Result{}, err
 		}
 		if err := waitPort(ctx, q.Port); err != nil {
@@ -478,6 +681,7 @@ func (o *Origin) finishActivation(ctx context.Context, a localApp, record Record
 	commit := a.Commit
 	a.Record = record
 	a.Phase = "ready"
+	o.mu.Lock()
 	o.state.Apps[record.ID] = a
 	if o.state.Receipts == nil {
 		o.state.Receipts = map[string]createReceipt{}
@@ -489,7 +693,9 @@ func (o *Origin) finishActivation(ctx context.Context, a localApp, record Record
 	}
 	o.state.Receipts[commit.UploadID] = createReceipt{Record: record, Digest: commit.Digest}
 	delete(o.state.Uploads, commit.UploadID)
-	if err := o.persist(ctx); err != nil {
+	err := o.persist(ctx)
+	o.mu.Unlock()
+	if err != nil {
 		return err
 	}
 	if err := os.Remove(o.uploadPath(commit.UploadID)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -500,9 +706,7 @@ func (o *Origin) finishActivation(ctx context.Context, a localApp, record Record
 			return err
 		}
 	}
-	a.Commit = nil
-	o.state.Apps[record.ID] = a
-	return o.persist(ctx)
+	return o.modify(ctx, record.ID, func(a *localApp) { a.Commit = nil })
 }
 func (o *Origin) activate(ctx context.Context, a localApp) (Result, error) {
 	if a.Commit == nil {
@@ -538,8 +742,7 @@ func (o *Origin) ensureServer(ctx context.Context, a *localApp) error {
 		}
 	}
 	a.Session = session
-	o.state.Apps[a.Record.ID] = *a
-	if err := o.persist(ctx); err != nil {
+	if err := o.modify(ctx, a.Record.ID, func(stored *localApp) { stored.Session = session }); err != nil {
 		return err
 	}
 	if err := waitPort(ctx, a.Port); err != nil {
@@ -598,24 +801,33 @@ func (o *Origin) failCreate(ctx context.Context, id string, err error) error {
 	cleanupErr := o.cleanup(ctx, id)
 	return errors.Join(err, deleteErr, cleanupErr)
 }
+
+// stop ends only the app's own labelled workers; ordinary sessions never carry
+// these labels.
 func (o *Origin) stop(ctx context.Context, id string) error {
-	a, ok := o.state.Apps[id]
+	o.mu.Lock()
+	_, ok := o.state.Apps[id]
+	o.mu.Unlock()
 	if !ok {
 		return nil
 	}
 	for _, label := range []string{"app " + id, "app-setup " + id} {
 		session, alive, err := o.config.Workers.Find(ctx, label)
 		if err != nil {
-			return err
+			return fmt.Errorf("find %s worker: %w", label, err)
 		}
 		if alive {
 			if err := o.config.Workers.Stop(ctx, session); err != nil {
-				return err
+				return fmt.Errorf("stop %s worker %s: %w", label, session, err)
 			}
 		}
 	}
-	a.Session = ""
-	o.state.Apps[id] = a
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if a, ok := o.state.Apps[id]; ok {
+		a.Session = ""
+		o.state.Apps[id] = a
+	}
 	return nil
 }
 func (o *Origin) cleanup(ctx context.Context, id string) error {
@@ -638,6 +850,8 @@ func (o *Origin) cleanup(ctx context.Context, id string) error {
 	}
 	o.config.Workers.Forget(ctx, "app "+id)
 	o.config.Workers.Forget(ctx, "app-setup "+id)
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	delete(o.state.Apps, id)
 	for token, receipt := range o.state.Receipts {
 		if receipt.Record.ID == id {
@@ -646,83 +860,201 @@ func (o *Origin) cleanup(ctx context.Context, id string) error {
 	}
 	return o.persist(ctx)
 }
+
+// Sync renews every app's lease from the edge, then reconciles each app on its
+// own: safety work first, recovery second. A failing or slow app is reported
+// with the others instead of holding them back.
 func (o *Origin) Sync(ctx context.Context) error {
+	records, err := o.renewLeases(ctx)
+	// Safety work must run even when the caller's budget is spent, because that
+	// is exactly when a silent edge lets leases lapse.
+	safety := context.WithoutCancel(ctx)
+	if err != nil {
+		return errors.Join(err, o.eachApp(safety, o.appIDs(nil), o.stopLapsed))
+	}
+	ids := o.appIDs(records)
+	denied := o.eachApp(safety, ids, func(ctx context.Context, id string) error { return o.deny(ctx, id, records) })
+	recovered := o.eachApp(ctx, ids, func(ctx context.Context, id string) error { return o.recover(ctx, id, records) })
+	return errors.Join(denied, recovered, o.expireUploads(ctx))
+}
+
+// renewLeases applies the edge's records while still holding exchangeMu, so no
+// allocation or activation can land between the edge's answer and its use.
+func (o *Origin) renewLeases(ctx context.Context) (map[string]Record, error) {
+	ctx, cancel := context.WithTimeout(ctx, maintenanceBudget)
+	defer cancel()
+	o.exchangeMu.Lock()
+	defer o.exchangeMu.Unlock()
+	result, err := o.edgeLocked(ctx, Request{Action: "sync"})
+	if err != nil {
+		return nil, fmt.Errorf("app: sync leases with edge: %w", err)
+	}
+	records := make(map[string]Record, len(result.Apps))
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	result, err := o.edge(ctx, Request{Action: "sync"})
+	for _, record := range result.Apps {
+		records[record.ID] = record
+		if a, ok := o.state.Apps[record.ID]; ok {
+			a.Record = record
+			o.state.Apps[record.ID] = a
+		}
+	}
+	return records, o.persist(ctx)
+}
+func (o *Origin) appIDs(records map[string]Record) []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	ids := make([]string, 0, len(o.state.Apps)+len(records))
+	for id := range o.state.Apps {
+		ids = append(ids, id)
+	}
+	for id := range records {
+		if _, ok := o.state.Apps[id]; !ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// eachApp runs step for every app no operation owns, concurrently and each
+// under its own budget.
+func (o *Origin) eachApp(ctx context.Context, ids []string, step func(context.Context, string) error) error {
+	var wg sync.WaitGroup
+	errs := make([]error, len(ids))
+	for i, id := range ids {
+		release, ok := o.tryOp("app "+id, "sync")
+		if !ok {
+			continue
+		}
+		wg.Go(func() {
+			defer release()
+			stepCtx, cancel := context.WithTimeout(ctx, maintenanceBudget)
+			defer cancel()
+			errs[i] = step(stepCtx, id)
+		})
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+// stopLapsed stops an app whose last lease has run out; its files stay until
+// the edge says otherwise.
+func (o *Origin) stopLapsed(ctx context.Context, id string) error {
+	o.mu.Lock()
+	a, ok := o.state.Apps[id]
+	o.mu.Unlock()
+	if !ok || o.config.Now().Before(a.Record.LeaseUntil) {
+		return nil
+	}
+	if err := o.stop(ctx, id); err != nil {
+		return fmt.Errorf("app %s: stop after lease lapsed: %w", id, err)
+	}
+	return nil
+}
+
+// deny carries out what the edge's answer forbids: serving a deleted or expired
+// app, keeping an app the origin cannot serve, or running an app the edge no
+// longer knows.
+func (o *Origin) deny(ctx context.Context, id string, records map[string]Record) error {
+	record, listed := records[id]
+	o.mu.Lock()
+	a, local := o.state.Apps[id]
+	o.mu.Unlock()
+	switch {
+	case listed && record.Status != "active":
+		if err := o.cleanup(ctx, id); err != nil {
+			return fmt.Errorf("app %s: clean up %s app: %w", id, record.Status, err)
+		}
+		if _, err := o.edge(ctx, Request{Action: "cleanup", ID: id}); err != nil {
+			return fmt.Errorf("app %s: confirm cleanup: %w", id, err)
+		}
+	case listed && !local:
+		// Nothing here can serve it, so traffic would only extend its deadline.
+		if _, err := o.edge(ctx, Request{Action: "delete", ID: id}); err != nil {
+			return fmt.Errorf("app %s: delete app missing on origin: %w", id, err)
+		}
+	case listed && a.Phase != "ready" && a.Phase != "activating":
+		if _, err := o.edge(ctx, Request{Action: "delete", ID: id}); err != nil {
+			return fmt.Errorf("app %s: delete unfinished app: %w", id, err)
+		}
+	case !listed && local && !o.config.Now().Before(a.Record.LeaseUntil.Add(IdleTTL)):
+		// An edge that lost the app cannot route to it or renew it. The files
+		// wait one idle period past the last lease, as long as the edge keeps an
+		// app without traffic, so a restored edge can list it again first.
+		if err := o.cleanup(ctx, id); err != nil {
+			return fmt.Errorf("app %s: remove app the edge no longer lists: %w", id, err)
+		}
+	case !listed && local:
+		return o.stopLapsed(ctx, id)
+	}
+	return nil
+}
+
+// recover restores what an interrupted operation or a lost worker left behind
+// for an app the edge still lists as active.
+func (o *Origin) recover(ctx context.Context, id string, records map[string]Record) error {
+	record, listed := records[id]
+	o.mu.Lock()
+	a, local := o.state.Apps[id]
+	o.mu.Unlock()
+	if !listed || !local || record.Status != "active" {
+		return nil
+	}
+	if a.Phase == "activating" {
+		if _, err := o.activate(ctx, a); err != nil {
+			return fmt.Errorf("app %s: resume activation: %w", id, err)
+		}
+		return nil
+	}
+	if a.Phase != "ready" {
+		return nil
+	}
+	if a.Commit != nil {
+		if err := o.finishActivation(ctx, a, record); err != nil {
+			return fmt.Errorf("app %s: finish activation: %w", id, err)
+		}
+	}
+	if record.Kind != "server" {
+		return nil
+	}
+	_, alive, err := o.config.Workers.Find(ctx, "app "+id)
 	if err != nil {
-		for id, a := range o.state.Apps {
-			if !o.config.Now().Before(a.Record.LeaseUntil) {
-				_ = o.stop(ctx, id)
-			}
-		}
-		return err
+		return fmt.Errorf("app %s: find server: %w", id, err)
 	}
-	for _, app := range result.Apps {
-		if err := o.syncApp(ctx, app); err != nil {
-			return err
-		}
+	if alive {
+		return nil
 	}
+	o.mu.Lock()
+	a = o.state.Apps[id]
+	o.mu.Unlock()
+	if err := o.ensureServer(ctx, &a); err != nil {
+		return fmt.Errorf("app %s: restart server: %w", id, err)
+	}
+	return nil
+}
+func (o *Origin) expireUploads(ctx context.Context) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	for id, u := range o.state.Uploads {
-		if !o.config.Now().Before(u.ExpiresAt) {
+		if o.ops["upload "+id] == nil && !o.config.Now().Before(u.ExpiresAt) {
 			_ = os.Remove(o.uploadPath(id))
 			delete(o.state.Uploads, id)
 		}
 	}
 	return o.persist(ctx)
 }
-func (o *Origin) syncApp(ctx context.Context, app Record) error {
-	if app.Status != "active" {
-		if err := o.cleanup(ctx, app.ID); err != nil {
-			return err
-		}
-		_, err := o.edge(ctx, Request{Action: "cleanup", ID: app.ID})
-		return err
-	}
-	a, ok := o.state.Apps[app.ID]
-	if !ok {
-		if !app.Ready {
-			_, err := o.edge(ctx, Request{Action: "delete", ID: app.ID})
-			return err
-		}
-		return nil
-	}
-	a.Record = app
-	o.state.Apps[app.ID] = a
-	if a.Phase == "activating" {
-		result, err := o.activate(ctx, a)
-		if err != nil {
-			return err
-		}
-		app = *result.App
-		a = o.state.Apps[app.ID]
-	}
-	if a.Phase != "ready" {
-		_, err := o.edge(ctx, Request{Action: "delete", ID: app.ID})
-		return err
-	}
-	if a.Commit != nil {
-		if err := o.finishActivation(ctx, a, app); err != nil {
-			return err
-		}
-		a = o.state.Apps[app.ID]
-	}
-	if app.Kind == "server" {
-		_, alive, err := o.config.Workers.Find(ctx, "app "+app.ID)
-		if err != nil {
-			return err
-		}
-		if !alive {
-			return o.ensureServer(ctx, &a)
-		}
-	}
-	return nil
-}
 func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 	if q.Offset < 0 || q.Offset > MaxArchive {
 		return Result{}, errors.New("app: invalid download offset")
 	}
+	release, err := o.beginOp(ctx, "app "+q.ID, "download")
+	if err != nil {
+		return Result{}, err
+	}
+	defer release()
+	o.mu.Lock()
 	a, ok := o.state.Apps[q.ID]
+	o.mu.Unlock()
 	if !ok {
 		return Result{}, errors.New("app: app not found")
 	}
@@ -882,35 +1214,34 @@ func (o *Origin) configCheckSourceDownload(w http.ResponseWriter, r *http.Reques
 	return err
 }
 
-// GuardService holds the origin mutation lock through the ordinary service commit.
-// Holding it prevents a checked service from racing with a new app reservation.
+// GuardService checks an ordinary service against app-owned ports and roots,
+// then holds its ports until release, so no app reserves one before the service
+// reaches the registry. It never waits for an app operation.
 func (o *Origin) GuardService(ctx context.Context, ports []int, root string) (func(), error) {
-	o.mu.Lock()
 	if err := ctx.Err(); err != nil {
-		o.mu.Unlock()
 		return nil, err
 	}
 	managedRoot, err := canonicalAppRoot(o.config.DataRoot)
 	if err != nil {
-		o.mu.Unlock()
 		return nil, err
 	}
 	if root != "" && (within(root, managedRoot) || within(managedRoot, root)) {
-		o.mu.Unlock()
 		return nil, errors.New("app: ordinary services cannot expose managed app directories")
 	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	for _, app := range o.state.Apps {
-		if app.Command == "" {
-			continue
-		}
-		for _, port := range ports {
-			if app.Port == port {
-				o.mu.Unlock()
-				return nil, errors.New("app: ordinary services cannot proxy an app-owned port")
-			}
+		if app.Command != "" && slices.Contains(ports, app.Port) {
+			return nil, errors.New("app: ordinary services cannot proxy an app-owned port")
 		}
 	}
-	return o.mu.Unlock, nil
+	hold := &serviceHold{ports: ports}
+	o.holds[hold] = struct{}{}
+	return func() {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		delete(o.holds, hold)
+	}, nil
 }
 func within(parent, child string) bool {
 	relative, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))

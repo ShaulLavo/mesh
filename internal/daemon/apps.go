@@ -270,8 +270,8 @@ func appResolver(origins []edge.OriginConfig, resolve edge.ResolveOrigin, pin ed
 	}
 }
 
-// appSyncInterval is how often the origin renews leases; a lease lasts nine
-// intervals. It is a variable only so integration builds can shorten both.
+// appSyncInterval is how often the origin renews leases, well inside LeaseTTL.
+// It is a variable only so integration builds can shorten it with the lease.
 var appSyncInterval = 20 * time.Second
 
 func runAppMaintenance(ctx context.Context, ready <-chan struct{}, origin *apps.Origin, public *apps.Edge, reporter *errorReporter) {
@@ -308,8 +308,10 @@ func syncApps(ctx context.Context, origin *apps.Origin, public *apps.Edge, repor
 			reporter.report(fmt.Errorf("daemon: expire temporary apps: %w", err))
 		}
 	}
+	// Sync budgets each of its steps itself; the shared deadline would leave its
+	// safety stops a cancelled context after a slow lease exchange.
 	if origin != nil {
-		if err := origin.Sync(bounded); err != nil && ctx.Err() == nil {
+		if err := origin.Sync(ctx); err != nil && ctx.Err() == nil {
 			reporter.report(fmt.Errorf("daemon: reconcile temporary apps: %w", err))
 		}
 	}
