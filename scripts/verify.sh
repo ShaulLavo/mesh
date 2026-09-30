@@ -46,7 +46,7 @@ test_env=(
   "TERM=${TERM:-dumb}" "LANG=${LANG:-C}"
   "GOCACHE=$go_cache" "GOMODCACHE=$go_modules"
 )
-for name in XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS; do
+for name in XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS MESH_TEST_ZSH MESH_SHORT_TMP; do
   if [[ ${!name+x} ]]; then
     test_env+=("$name=${!name}")
   fi
