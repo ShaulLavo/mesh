@@ -19,6 +19,7 @@ const maximumConfigBytes = 1 << 20
 // RuntimeConfig fixes the public listener, edge identity pins, and complete
 // origin allowlist. It contains no Cloudflare or certificate private key.
 type RuntimeConfig struct {
+	TailnetOwnerAccess   bool
 	Mode                 Mode
 	ListenAddress        string
 	CertificateRenewerID string
@@ -26,6 +27,7 @@ type RuntimeConfig struct {
 }
 
 type runtimeConfigFile struct {
+	TailnetOwnerAccess   bool           `json:"tailnetOwnerAccess"`
 	Mode                 Mode           `json:"mode"`
 	ListenAddress        string         `json:"listenAddress"`
 	CertificateRenewerID string         `json:"certificateRenewerId"`
@@ -50,6 +52,12 @@ func LoadRuntimeConfig(path string) (RuntimeConfig, error) {
 	}
 	if err := validateListenAddress(raw.Mode, raw.ListenAddress); err != nil {
 		return RuntimeConfig{}, err
+	}
+	if raw.TailnetOwnerAccess {
+		address, err := netip.ParseAddrPort(raw.ListenAddress)
+		if err != nil || !address.Addr().IsLoopback() || raw.Mode != ModeDirectTLS {
+			return RuntimeConfig{}, errors.New("edge: Tailnet owner access requires a loopback direct-TLS listener behind a trusted PROXY v1 forwarder")
+		}
 	}
 	switch raw.Mode {
 	case ModeProxy:
@@ -82,7 +90,8 @@ func LoadRuntimeConfig(path string) (RuntimeConfig, error) {
 		names[origin.TailscaleName] = struct{}{}
 	}
 	return RuntimeConfig{
-		Mode: raw.Mode, ListenAddress: raw.ListenAddress, CertificateRenewerID: raw.CertificateRenewerID,
+		TailnetOwnerAccess: raw.TailnetOwnerAccess,
+		Mode:               raw.Mode, ListenAddress: raw.ListenAddress, CertificateRenewerID: raw.CertificateRenewerID,
 		Origins: append([]OriginConfig(nil), raw.Origins...),
 	}, nil
 }

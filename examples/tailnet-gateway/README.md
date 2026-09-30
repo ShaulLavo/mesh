@@ -10,21 +10,35 @@ Build and run the gateway on the Mesh host:
 
 ```sh
 go build -o /work/mesh/tls-gateway ./examples/tailnet-gateway
-/work/mesh/tls-gateway
+/work/mesh/tls-gateway --tailnet-owner-access
 ```
 
 Configure the private Mesh daemon with its existing HTTPS certificate options
-and `--https-port=8443 --tailscale-serve --tailscale-serve-port=8446`.
+and `--https-port=8443 --tailscale-serve --tailscale-serve-port=8446` plus
+`--tailscale-serve-proxy-protocol`.
 Configure the temporary-app edge with `mode: "direct-tls"`,
-`listenAddress: "127.0.0.1:8445"`, and its certificate renewer identity.
+`listenAddress: "127.0.0.1:8445"`, `tailnetOwnerAccess: true`, and its certificate
+renewer identity.
 The certificate renewer must issue and deliver a certificate covering
 `*.shaulavo.dev` to that edge. Existing private Mesh certificates stay on the
 private backend. The gateway stores no certificates or browser credentials.
 
 Point the management and app DNS names at the host's Tailnet IP. Clients need
-Tailnet access, even for apps whose visibility is public. Pairing only establishes
-owner permissions; visitors to public apps do not pair. HTTPS works automatically
-for both visitors and owners once routing, DNS, and certificates are configured.
+Tailnet access, even for apps whose visibility is public. Your devices receive
+owner controls automatically when their Tailscale account matches the app's
+configured origin device. Tagged devices do not identify a person, so browser
+pairing remains available for them. Other accounts and internet visitors receive
+no automatic owner permissions. HTTPS works for both visitors and owners.
+
+Tailscale Serve supplies the device address through PROXY v1. The gateway consumes
+that header and sends it only to the app backend; private Mesh TLS stays unchanged.
+The edge checks Tailscale's local device inventory, cached for at most five seconds,
+on each request. It does not issue a browser grant that survives leaving the tailnet.
+HTTP forwarding headers never identify an owner. Both PROXY listeners must remain
+on loopback and behind trusted local forwarders. Local processes are trusted, as
+with Mesh's other loopback control endpoints.
+
+For routing with manual browser pairing, omit all three owner-access settings.
 
 The gateway accepts `--listen`, `--private`, and `--apps` to override these ports.
 It bounds the ClientHello size and handshake/connect times. This example is for

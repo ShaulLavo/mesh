@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/sshd"
+	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -59,6 +60,7 @@ type ListenerConfig struct {
 	HTTPHandler                http.Handler
 	HTTPSPort                  uint16
 	TLSConfig                  *tls.Config
+	TailnetOwnerAccess         bool
 	PublicListenAddress        string
 	PublicHTTPHandler          http.Handler
 	PublicTLSConfig            *tls.Config
@@ -74,6 +76,7 @@ type listenerConfig struct {
 	httpHandler                http.Handler
 	httpsPort                  uint16
 	tlsConfig                  *tls.Config
+	tailnetOwnerAccess         bool
 	publicListenAddress        string
 	publicHTTPHandler          http.Handler
 	publicTLSConfig            *tls.Config
@@ -178,6 +181,9 @@ func serveBoundListeners(
 	if publicListener != nil {
 		boundedPublic = newBoundedPublicListener(publicListener, maximumPublicConnections)
 		publicListener = boundedPublic
+		if normalized.tailnetOwnerAccess {
+			publicListener = tailnet.ProxyListener{Listener: publicListener}
+		}
 	}
 	connections := newConnectionGroup(handler)
 	server := newWebSocketServer(ctx, normalized, connections)
@@ -417,11 +423,18 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		httpHandler:                cfg.HTTPHandler,
 		httpsPort:                  cfg.HTTPSPort,
 		publicListenAddress:        cfg.PublicListenAddress,
+		tailnetOwnerAccess:         cfg.TailnetOwnerAccess,
 		publicHTTPHandler:          cfg.PublicHTTPHandler,
 		publicReadTimeout:          publicReadTimeout,
 		requireAllTailnetListeners: cfg.RequireAllTailnetListeners,
 		shutdownTimeout:            httpShutdownTimeout,
 		reporter:                   newErrorReporter(cfg.ReportError),
+	}
+	if cfg.TailnetOwnerAccess {
+		address, parseErr := netip.ParseAddrPort(cfg.PublicListenAddress)
+		if parseErr != nil || !address.Addr().IsLoopback() || cfg.PublicTLSConfig == nil {
+			return listenerConfig{}, errors.New("daemon: Tailnet owner access requires a loopback public TLS listener")
+		}
 	}
 	if cfg.HTTPSPort == 0 && cfg.TLSConfig != nil {
 		return listenerConfig{}, errors.New("daemon: TLS config requires a non-zero HTTPS port")

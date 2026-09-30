@@ -8,6 +8,8 @@ These original utilities supply Mesh's drag threshold, velocity projection, edge
 snapping, and collapsed/expanded positioning. The application copies are adapted
 by scripts/sync-app-pill.mjs: import boundaries are local, runtime inspection is
 removed, collapsed dragging is enabled, interrupted snapping preserves the current position, and stale release velocity is discarded. Run that script to regenerate them.
+Dragging suppresses the resulting click and link navigation. A fresh pointer
+gesture clears that suppression so the next deliberate click works.
 The pill shell now uses the original ToolbarContent, IconChevron and cn sources
 from the same commit. The sync script changes only their import paths. Tailwind
 compiles their original spacing, collapse transitions and edge orientation.

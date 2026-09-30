@@ -37,7 +37,13 @@ with its managed copy and are deleted with it.
 
 ## View and share
 
-Open the app URL. Private apps send you to `https://apps.shaulavo.dev`, where the
+For Tailnet hosting, configure [automatic owner access](../examples/tailnet-gateway/README.md).
+Mesh recognizes your devices by matching their Tailscale account to the app's
+configured origin. Fresh browsers can view private apps and get the Make public
+or Make private button without pairing. Public visitors get no owner authority.
+This check runs on requests to both private and public apps.
+
+For deployments without automatic Tailnet access, private apps send you to `https://apps.shaulavo.dev`, where the
 browser displays a one-use approval code. Approve on the owner host:
 
 ```sh
@@ -54,7 +60,7 @@ need no pairing and cannot change ownership or visibility.
 Click the small edge tab to expand the React Grab pill. Drag or flick it to an edge;
 its position survives reloads. The link button copies the app URL and briefly shows
 a checkmark. Clipboard access requires HTTPS. The lock button opens
-a trusted visibility confirmation for paired owners, or browser pairing for
+a trusted visibility confirmation for recognized owners, or browser pairing for
 visitors. It appears only after the management origin responds. The chevron collapses
 the pill. Owner authorization runs in a hidden frame; there is no controls menu.
 Management pages remain separate from app content. Renew, delete and source

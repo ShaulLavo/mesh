@@ -74,6 +74,23 @@ func TestClientVerifiesRawTailscaleServeForward(t *testing.T) {
 	}
 }
 
+func TestClientVerifiesExactProxyProtocolAndTailnetExposure(t *testing.T) {
+	for _, test := range []struct {
+		status string
+		valid  bool
+	}{
+		{`{"TCP":{"443":{"TCPForward":"127.0.0.1:8446","ProxyProtocol":1}}}`, true},
+		{`{"TCP":{"443":{"TCPForward":"127.0.0.1:8446","ProxyProtocol":2}}}`, false},
+		{`{"TCP":{"443":{"TCPForward":"127.0.0.1:8446"}}}`, false},
+		{`{"TCP":{"443":{"TCPForward":"127.0.0.1:8446","ProxyProtocol":1}},"AllowFunnel":{"box.example.ts.net:443":true}}`, false},
+	} {
+		client := NewClient(runFunc(func(context.Context, string, ...string) ([]byte, []byte, error) { return []byte(test.status), nil, nil }))
+		if err := client.verifyServeForward(context.Background(), 8446, 1); (err == nil) != test.valid {
+			t.Fatalf("status %s accepted incorrectly: %v", test.status, err)
+		}
+	}
+}
+
 func TestClientRejectsWrongTailscaleServeForward(t *testing.T) {
 	tests := []struct {
 		name   string

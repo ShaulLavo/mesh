@@ -62,6 +62,9 @@ func TestPairingPollPreservesCodeAndPromotesAfterApproval(t *testing.T) {
 		!strings.Contains(begin.Body.String(), "location.replace(\"/view?id=7k3d\")") {
 		t.Fatal("pairing page cannot poll and return to the requested app")
 	}
+	if !regexp.MustCompile(`performance\.now\(\) \+\s*600000\b`).MatchString(begin.Body.String()) {
+		t.Fatal("pairing expiry depends on the browser's wall clock")
+	}
 	pair := cookieNamed(t, begin, webauth.PairCookie)
 	poll := func(cookie *http.Cookie) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair/status", nil)
@@ -96,8 +99,8 @@ func TestPairingPollPreservesCodeAndPromotesAfterApproval(t *testing.T) {
 	if poll(pair).Code != http.StatusGone {
 		t.Fatal("consumed pairing was accepted twice")
 	}
-	if poll(owner).Code != http.StatusOK {
-		t.Fatal("another open pairing tab did not recognize the promoted session")
+	if poll(owner).Code != http.StatusGone {
+		t.Fatal("an existing owner session was mistaken for a pending pairing approval")
 	}
 }
 
@@ -122,6 +125,46 @@ func TestPairingPollRejectsExpiredAndUnboundBrowsers(t *testing.T) {
 	f.edge.ServeHost(response, httptest.NewRequest(http.MethodPost, ManagementOrigin+"/pair/status", nil), ManagementHost)
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("unsupported poll method = %d", response.Code)
+	}
+}
+
+func TestPairingAnotherOwnerRequiresItsOwnApproval(t *testing.T) {
+	f := newAppFixture(t)
+	owner := pairedOwner(t, f)
+	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair", nil)
+	request.AddCookie(owner)
+	begin := httptest.NewRecorder()
+	f.edge.ServeHost(begin, request, ManagementHost)
+	pair := cookieNamed(t, begin, webauth.PairCookie)
+	poll := func(includePair bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair/status", nil)
+		r.AddCookie(owner)
+		if includePair {
+			r.AddCookie(pair)
+		}
+		response := httptest.NewRecorder()
+		f.edge.ServeHost(response, r, ManagementHost)
+		return response
+	}
+	if poll(false).Code != http.StatusGone || poll(true).Code != http.StatusAccepted {
+		t.Fatal("existing browser rights bypassed pairing for another owner")
+	}
+	code := regexp.MustCompile(`Code: <strong>([a-z0-9-]+)</strong>`).FindStringSubmatch(begin.Body.String())
+	if len(code) != 2 {
+		t.Fatal("missing code for the second owner")
+	}
+	if err := f.edge.auth.Approve(context.Background(), code[1], identityFor(f.otherKey)); err != nil {
+		t.Fatal(err)
+	}
+	approved := poll(true)
+	if approved.Code != http.StatusOK {
+		t.Fatalf("second owner approval rejected: %d", approved.Code)
+	}
+	r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/", nil)
+	r.AddCookie(cookieNamed(t, approved, webauth.OwnerCookie))
+	session, err := f.edge.auth.Browser(context.Background(), r)
+	if err != nil || !session.Owns(identityFor(f.ownerKey)) || !session.Owns(identityFor(f.otherKey)) {
+		t.Fatal("second owner approval did not preserve both explicit grants")
 	}
 }
 func networkOrigin(t *testing.T, f *appFixture) *atomic.Int64 {

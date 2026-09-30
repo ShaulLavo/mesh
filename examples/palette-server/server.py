@@ -3,6 +3,7 @@ import os
 import random
 import re
 import sqlite3
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -68,7 +69,7 @@ class Room(BaseHTTPRequestHandler):
             self.send(200, {'name': name, 'colors': selected})
             return
         if path == '/api/favorites':
-            with sqlite3.connect(DATABASE) as database:
+            with closing(sqlite3.connect(DATABASE)) as database, database:
                 rows = database.execute('SELECT id, name, colors FROM favorites ORDER BY id DESC').fetchall()
             self.send(200, [favorite(row) for row in rows])
             return
@@ -101,7 +102,7 @@ class Room(BaseHTTPRequestHandler):
         name = payload.get('name')
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
             raise ValueError('Name must contain 1 to 80 characters.')
-        with sqlite3.connect(DATABASE) as database:
+        with closing(sqlite3.connect(DATABASE)) as database, database:
             database.execute('BEGIN IMMEDIATE')
             if database.execute('SELECT COUNT(*) FROM favorites').fetchone()[0] >= 50:
                 raise ValueError('This room has 50 favorites. Remove one before saving another.')
@@ -113,12 +114,12 @@ class Room(BaseHTTPRequestHandler):
         if not match or len(match[1]) > 10:
             self.send(404, {'error': 'Not found.'})
             return
-        with sqlite3.connect(DATABASE) as database:
+        with closing(sqlite3.connect(DATABASE)) as database, database:
             cursor = database.execute('DELETE FROM favorites WHERE id = ?', (int(match[1]),))
         self.send(200 if cursor.rowcount else 404, {'deleted': bool(cursor.rowcount)})
 
 
 if __name__ == '__main__':
-    with sqlite3.connect(DATABASE) as database:
+    with closing(sqlite3.connect(DATABASE)) as database, database:
         database.execute('CREATE TABLE IF NOT EXISTS favorites (id INTEGER PRIMARY KEY, name TEXT NOT NULL, colors TEXT NOT NULL)')
     ThreadingHTTPServer((os.environ.get('HOST', '127.0.0.1'), int(os.environ.get('PORT', '18747'))), Room).serve_forever()

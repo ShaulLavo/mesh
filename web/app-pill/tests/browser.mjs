@@ -78,6 +78,36 @@ async function checkCopyAndViewport(page, pill) {
   await pill.getByText('Couldn’t copy. Tap to try again.', { exact: true }).waitFor({ state: 'hidden' });
 }
 
+async function checkLinkDrag(page, pill) {
+  await pill.getByRole('link', { name: 'Make private' }).waitFor();
+  const result = await page.evaluate(async () => {
+    const shadow = document.querySelector('mesh-app-pill').shadowRoot;
+    const link = shadow.querySelector('a.action');
+    const bounds = link.getBoundingClientRect();
+    link.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true, button: 0, clientX: bounds.x + bounds.width / 2, clientY: bounds.y + bounds.height / 2 }));
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: bounds.x + 60, clientY: bounds.y - 60 }));
+    const dragged = shadow.querySelector('.shell').getBoundingClientRect();
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'https://apps.shaulavo.dev', source: shadow.querySelector('iframe').contentWindow,
+      data: { type: 'mesh-app-status', visibility: 'public', owns: true },
+    }));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    const refreshed = shadow.querySelector('.shell').getBoundingClientRect();
+    window.dispatchEvent(new PointerEvent('pointerup'));
+    return {
+      prevented: !link.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true, cancelable: true })),
+      stayedUnderPointer: dragged.x === refreshed.x && dragged.y === refreshed.y,
+    };
+  });
+  assert(result.prevented, 'Releasing a drag on the lock must cancel link navigation');
+  assert(result.stayedUnderPointer, 'An ownership response must not redock the pill during dragging');
+  await page.waitForFunction(() => !document.querySelector('mesh-app-pill').shadowRoot.querySelector('.shell').classList.contains('snapping'));
+  const popupRequested = page.waitForEvent('popup');
+  await pill.getByRole('link', { name: 'Make private' }).click();
+  const popup = await popupRequested;
+  await popup.close();
+}
+
 async function checkInteractions(browser, name, reducedMotion) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, reducedMotion });
   try {
@@ -146,6 +176,11 @@ async function checkInteractions(browser, name, reducedMotion) {
     await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch' })));
     await page.waitForTimeout(320);
     assert((await handle.boundingBox()).x < 40, 'Touch pointer dragging should snap left');
+    await handle.click();
+    assert.equal(await handle.getAttribute('aria-expanded'), 'true', 'The first deliberate click after a drag must expand');
+    await checkLinkDrag(page, pill);
+    await handle.click();
+    assert.equal(await handle.getAttribute('aria-expanded'), 'false');
     await handle.focus();
     await page.keyboard.press('Alt+ArrowRight');
     await page.reload();
@@ -172,10 +207,11 @@ async function checkUnavailableOrVisitor(browser, name, unavailable) {
   try {
     const page = await context.newPage();
     let resolveFrame;
+    let owns = false;
     const frameRequested = new Promise(resolve => { resolveFrame = resolve; });
     await page.route(`${manager}/**`, async route => {
       if (unavailable) await route.abort('failed');
-      else await route.fulfill({contentType: 'text/html', body: `<script>parent.postMessage({type:'mesh-app-status',visibility:'public',owns:false},${JSON.stringify(origin)})</script>`});
+      else await route.fulfill({contentType: 'text/html', body: `<script>parent.postMessage({type:'mesh-app-status',visibility:'public',owns:${owns}},${JSON.stringify(origin)})</script>`});
       resolveFrame();
     });
     await page.goto(origin);
@@ -189,6 +225,14 @@ async function checkUnavailableOrVisitor(browser, name, unavailable) {
     if (unavailable) assert.equal(await pill.locator('a').count(), 0, 'Unavailable management must not leave a dead action');
     else await pill.getByRole('link', { name: 'Pair owner browser' }).waitFor();
     await screenshot(page, `${name}-${unavailable ? 'unavailable' : 'visitor'}`);
+    if (!unavailable) {
+      owns = true;
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await pill.getByRole('link', { name: 'Make private' }).waitFor();
+      owns = false;
+      await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+      await pill.getByRole('link', { name: 'Pair owner browser' }).waitFor();
+    }
     await pill.locator('[data-react-grab-toolbar-collapse]').click();
     assert.equal(await pill.locator('[data-react-grab-toolbar-collapse]').getAttribute('aria-expanded'), 'false');
     console.log(`${name}: ${unavailable ? 'unavailable manager' : 'visitor pairing'} remains compact and usable`);

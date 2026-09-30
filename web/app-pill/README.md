@@ -24,7 +24,7 @@ The bundle retains the MIT notices for Solid and React Grab from `third_party`.
 Playwright is pinned as a development dependency for repeatable interaction
 checks. The harness starts an ephemeral loopback HTTP server, serves the actual
 compiled assets under a strict CSP, and tests Chromium and WebKit with normal
-and reduced motion. It checks the 44px dot target, expansion, mouse dragging,
+and reduced motion. It checks the original compact edge tab, expansion, mouse dragging,
 synthetic touch dragging, keyboard docking, stored position, management-frame
 status messages, and rejection of messages from an incorrect origin or window.
 

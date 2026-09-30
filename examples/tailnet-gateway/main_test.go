@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -15,13 +16,24 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shaul/mesh/internal/tailnet"
 )
 
 func TestGatewayPreservesTLSAndRoutesByServerName(t *testing.T) {
+	for _, metadata := range []bool{false, true} {
+		t.Run(fmt.Sprint(metadata), func(t *testing.T) { checkGateway(t, metadata) })
+	}
+}
+
+func checkGateway(t *testing.T, metadata bool) {
 	hosts := []string{"apps.shaulavo.dev", "5yfw.shaulavo.dev", "omarchy.mesh.shaulavo.dev", "longer.shaulavo.dev", "iiii.shaulavo.dev"}
 	certificate, roots := gatewayCertificate(t, hosts)
 	backend := func(name string) *httptest.Server {
 		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if metadata && name == "apps" && r.RemoteAddr != "100.64.0.2:12345" {
+				t.Errorf("lost verified device address: %s", r.RemoteAddr)
+			}
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				t.Error(err)
@@ -31,6 +43,9 @@ func TestGatewayPreservesTLSAndRoutesByServerName(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(name + ":" + r.TLS.ServerName + ":" + string(body))
 		}))
 		server.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}
+		if metadata && name == "apps" {
+			server.Listener = tailnet.ProxyListener{Listener: server.Listener}
+		}
 		server.StartTLS()
 		t.Cleanup(server.Close)
 		return server
@@ -41,31 +56,38 @@ func TestGatewayPreservesTLSAndRoutesByServerName(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
-	go acceptGateway(listener, private.Listener.Addr().String(), apps.Listener.Addr().String())
+	go acceptGateway(listener, private.Listener.Addr().String(), apps.Listener.Addr().String(), metadata)
 	for _, version := range []uint16{tls.VersionTLS12, tls.VersionTLS13} {
 		for _, host := range hosts {
-			checkGatewayRequest(t, listener.Addr().String(), host, version, roots)
+			checkGatewayRequest(t, listener.Addr().String(), host, version, roots, metadata)
 		}
 	}
 }
 
-func acceptGateway(listener net.Listener, private, apps string) {
+func acceptGateway(listener net.Listener, private, apps string, metadata bool) {
 	for {
 		client, err := listener.Accept()
 		if err != nil {
 			return
 		}
-		go bridge(client, private, apps)
+		go bridge(client, private, apps, metadata)
 	}
 }
 
-func checkGatewayRequest(t *testing.T, address, host string, version uint16, roots *x509.CertPool) {
+func checkGatewayRequest(t *testing.T, address, host string, version uint16, roots *x509.CertPool, metadata bool) {
 	t.Helper()
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{MinVersion: version, MaxVersion: version, RootCAs: roots},
 	}
 	transport.DialContext = func(_ context.Context, _, _ string) (net.Conn, error) {
-		return net.DialTimeout("tcp", address, time.Second)
+		connection, err := net.DialTimeout("tcp", address, time.Second)
+		if err == nil && metadata {
+			_, err = io.WriteString(connection, "PROXY TCP4 100.64.0.2 127.0.0.1 12345 443\r\n")
+			if err != nil {
+				_ = connection.Close()
+			}
+		}
+		return connection, err
 	}
 	t.Cleanup(transport.CloseIdleConnections)
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}

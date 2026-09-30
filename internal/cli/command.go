@@ -1740,18 +1740,19 @@ func (a *application) runSessionControl(cmd *cobra.Command, id, controlType, sig
 
 func (a *application) daemonCommand() *cobra.Command {
 	var (
-		port               uint
-		sshPort            uint
-		path               string
-		httpsPort          uint
-		tailscaleServePort uint
-		certificateRenewer string
-		privateNamesConfig string
-		edgeConfig         string
-		publicEdgeTarget   string
-		appDataRoot        string
-		tailscaleServe     bool
-		hibernateIdle      time.Duration
+		port                uint
+		sshPort             uint
+		path                string
+		httpsPort           uint
+		tailscaleServePort  uint
+		tailscaleServeProxy bool
+		certificateRenewer  string
+		privateNamesConfig  string
+		edgeConfig          string
+		publicEdgeTarget    string
+		appDataRoot         string
+		tailscaleServe      bool
+		hibernateIdle       time.Duration
 	)
 	command := &cobra.Command{
 		Use:   "daemon",
@@ -1786,7 +1787,7 @@ func (a *application) daemonCommand() *cobra.Command {
 				StateDir:          stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
 				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget, AppDataRoot: appDataRoot,
-				TailscaleServe: tailscaleServe, TailscaleServePort: uint16(tailscaleServePort), HibernateIdle: hibernateIdle,
+				TailscaleServe: tailscaleServe, TailscaleServePort: uint16(tailscaleServePort), TailscaleServeProxyProtocol: tailscaleServeProxy, HibernateIdle: hibernateIdle,
 				ReportError: func(err error) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %v\n", err) },
 			})
 		},
@@ -1801,6 +1802,7 @@ func (a *application) daemonCommand() *cobra.Command {
 	command.Flags().StringVar(&publicEdgeTarget, "public-edge-target", "", "pinned public-edge target config file")
 	command.Flags().StringVar(&appDataRoot, "app-data-root", "", "managed temporary app workload root; Linux defaults to /work/mesh/apps")
 	command.Flags().UintVar(&tailscaleServePort, "tailscale-serve-port", 0, "loopback TLS gateway port; zero forwards directly to --https-port")
+	command.Flags().BoolVar(&tailscaleServeProxy, "tailscale-serve-proxy-protocol", false, "send PROXY v1 device metadata to a trusted loopback TLS gateway")
 	command.Flags().BoolVar(&tailscaleServe, "tailscale-serve", false, "persist raw Tailscale TCP/443 forwarding to the HTTPS port")
 	command.Flags().DurationVar(&hibernateIdle, "hibernate-idle", 0, "stop a Codex or Claude conversation after its session is detached and quiet this long, resuming it on attach; zero disables")
 	return command

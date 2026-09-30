@@ -5,8 +5,6 @@ import './pill.css';
 import { ToolbarContent } from './grab/toolbar-content';
 import { getPositionFromEdgeAndRatio, isHorizontalEdge } from './grab/toolbar-position';
 import type { Position, SnapEdge } from './grab/types';
-
-
 function loadDock(): { edge: SnapEdge; ratio: number } {
   try {
     const value: unknown = JSON.parse(localStorage.getItem('mesh-app-pill-position') ?? 'null');
@@ -50,6 +48,7 @@ function Pill(props: { appID: string; manager: string; nonce: string }) {
     return { x: Math.max(minX, Math.min(next.x, left + width - size.width - Math.max(margin, inset('padding-right')))), y: Math.max(minY, Math.min(next.y, top + height - size.height - Math.max(margin, inset('padding-bottom')))) };
   };
   const redock = () => {
+    if (drag.isDragging()) return;
     const size = dimensions();
     const next = getPositionFromEdgeAndRatio(edge(), ratio(), size.width, size.height);
     const viewport = window.visualViewport;
@@ -94,7 +93,13 @@ function Pill(props: { appID: string; manager: string; nonce: string }) {
     window.addEventListener('resize', updateViewport, { signal, passive: true });
     window.visualViewport?.addEventListener('resize', updateViewport, { signal, passive: true });
     window.visualViewport?.addEventListener('scroll', updateViewport, { signal, passive: true });
-    window.addEventListener('focus', () => { if (frame) frame.src = `${props.manager}/frame?id=${encodeURIComponent(props.appID)}`; }, { signal });
+    const refreshAccess = () => {
+      if (!frame) return;
+      frame.src = `${props.manager}/frame?id=${encodeURIComponent(props.appID)}`;
+    };
+    window.addEventListener('focus', refreshAccess, { signal });
+    window.addEventListener('pageshow', refreshAccess, { signal });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAccess(); }, { signal });
     window.addEventListener('message', event => {
       if (event.origin !== props.manager || event.source !== frame?.contentWindow) return;
       const value: unknown = event.data;
@@ -132,7 +137,7 @@ function Pill(props: { appID: string; manager: string; nonce: string }) {
           <Show when={access()}>{current => {
             const action = () => current().visibility === 'public' ? 'private' : 'public';
             const label = () => current().owns ? `Make ${action()}` : 'Pair owner browser';
-            return <div class="action-wrap"><a class="action" href={current().owns ? `${props.manager}/confirm?id=${encodeURIComponent(props.appID)}&action=${action()}` : `${props.manager}/pair`} target="_blank" rel="noopener noreferrer" aria-label={label()} title={label()}>
+            return <div class="action-wrap"><a class="action" draggable={false} href={current().owns ? `${props.manager}/confirm?id=${encodeURIComponent(props.appID)}&action=${action()}` : `${props.manager}/pair`} target="_blank" rel="noopener noreferrer" aria-label={label()} title={label()} onClick={drag.createDragAwareHandler()}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d={current().visibility === 'private' ? 'M8 10V7a4 4 0 0 1 8 0v3' : 'M8 10V7a4 4 0 0 1 8 0'}/><path d="M12 14v3"/></svg>
             </a></div>;
           }}</Show>

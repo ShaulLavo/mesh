@@ -20,7 +20,7 @@ const (
 type externalCommand func(context.Context, string, ...string) ([]byte, error)
 type serveForwardVerifier func(context.Context, uint16) error
 
-func configureTailscaleServe(ctx context.Context, httpsPort uint16, timeout time.Duration, run externalCommand) error {
+func configureTailscaleServe(ctx context.Context, httpsPort uint16, proxyProtocol bool, timeout time.Duration, run externalCommand) error {
 	if ctx == nil {
 		return errors.New("daemon: configure Tailscale Serve with nil context")
 	}
@@ -39,7 +39,11 @@ func configureTailscaleServe(ctx context.Context, httpsPort uint16, timeout time
 
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	output, err := run(commandCtx, "tailscale", tailscaleServeArguments(httpsPort)...)
+	arguments := tailscaleServeArguments(httpsPort)
+	if proxyProtocol {
+		arguments = append(arguments[:len(arguments)-1], "--proxy-protocol=1", arguments[len(arguments)-1])
+	}
+	output, err := run(commandCtx, "tailscale", arguments...)
 	if err == nil {
 		return nil
 	}

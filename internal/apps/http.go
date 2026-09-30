@@ -30,6 +30,7 @@ type admission struct {
 }
 
 func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bool {
+	r = e.authenticateNetwork(r)
 	if name == ManagementHost {
 		e.management(w, r)
 		return true
@@ -72,7 +73,7 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		http.Redirect(w, r, managementReturn(r), http.StatusSeeOther)
 		return true
 	}
-	if app.Visibility == "private" {
+	if app.Visibility == "private" && !networkOwns(r, app.Owner) {
 		owner, err := e.auth.ViewOwner(r.Context(), r, id)
 		if err != nil || owner != app.Owner {
 			http.Redirect(w, r, ManagementOrigin+"/view?id="+id, http.StatusSeeOther)
@@ -337,7 +338,7 @@ func (s *activeStream) Close() error {
 var page = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh temporary apps</title><style>body{font:16px system-ui;background:#101214;color:#eef0f2;margin:0;padding:24px}main{max-width:680px;margin:auto}a{color:#9ddcff}button,a.button{border:0;border-radius:999px;background:#e9edf2;color:#101214;padding:10px 16px;cursor:pointer;display:inline-block;text-decoration:none}code{font-size:16px;overflow-wrap:anywhere}.pill{display:flex;align-items:center;gap:10px;padding:8px;flex-wrap:wrap}small{color:#bcc4cb}form{display:inline}body.frame{padding:0;border-radius:999px}.error{color:#ffbab4}</style></head><body class="{{if .Frame}}frame{{end}}"><main>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Code}}<h1>Pair this browser</h1><p>Approve from the Mesh host that owns the app:</p><code>mesh app browser approve HOST {{.Code}}</code><p>Code: <strong>{{.Code}}</strong></p><p>Expires in 10 minutes.</p><p id="pair-status" role="status">Waiting for approval. This page will continue automatically.</p><button id="check-approval" type="button">Check now</button><p><a id="restart-pair" href="/pair" hidden>Get a new code</a></p>{{else if .Frame}}<div class="pill"><strong>Mesh</strong><small>{{.App.Visibility}}</small><a href="{{.URL}}" target="_blank" rel="noopener">Share</a>{{if .Owns}}<a href="/confirm?id={{.App.ID}}&action={{.Toggle}}" target="_blank" rel="noopener">Make {{.Toggle}}</a><a href="/confirm?id={{.App.ID}}&action=renew" target="_blank" rel="noopener">Renew</a><a href="/download?id={{.App.ID}}" target="_blank" rel="noopener">Download</a><a href="/confirm?id={{.App.ID}}&action=delete" target="_blank" rel="noopener">Delete</a>{{else}}<a href="/pair" target="_blank" rel="noopener">Pair browser</a>{{end}}</div>{{else if .Confirm}}<h1>{{.Confirm}} {{.App.ID}}</h1><p>Owner controls for <a href="{{.URL}}">{{.URL}}</a>.</p><form method="post" action="/action"><input type="hidden" name="id" value="{{.App.ID}}"><input type="hidden" name="action" value="{{.Confirm}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><button>Confirm {{.Confirm}}</button></form>{{else}}<h1>Temporary apps</h1><p>Apps expire after 24 hours without app traffic. Expiry deletes their managed source, data and server.</p>{{range .Apps}}<p><a href="/view?id={{.ID}}">{{.ID}}.shaulavo.dev</a> · {{.Visibility}} · {{.Status}}<br><small>Expires {{.ExpiresAt}}</small></p>{{end}}<a href="/pair">Pair another owner</a>{{end}}</main>{{if .Frame}}<script>parent.postMessage({type:'mesh-app-status',visibility:{{.App.Visibility}},owns:{{.Owns}},deadline:{{.App.ExpiresAt.Format "2006-01-02T15:04:05Z07:00"}}},{{.Parent}})</script>{{end}}{{if .Code}}<script>
 const checkButton = document.getElementById('check-approval');
 const status = document.getElementById('pair-status');
-const expiresAt = {{.PairExpiresAt}};
+const expiresAt = performance.now() + {{.PairLifetimeMS}};
 let checking = false;
 let timer;
 let finished = false;
@@ -350,7 +351,7 @@ function expired() {
 async function checkApproval() {
   if (checking || finished) return;
   clearTimeout(timer);
-  if (Date.now() >= expiresAt) { expired(); return; }
+  if (performance.now() >= expiresAt) { expired(); return; }
   checking = true;
   checkButton.disabled = true;
   const abort = new AbortController();
@@ -379,7 +380,7 @@ checkApproval();
 type pageData struct {
 	Error, Code, Return, URL, Toggle, Confirm, CSRF, Parent string
 	Frame, Owns                                             bool
-	PairExpiresAt                                           int64
+	PairLifetimeMS                                          int64
 	App                                                     Record
 	Apps                                                    []Record
 }
@@ -403,7 +404,7 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Pairing unavailable", http.StatusTooManyRequests)
 			return
 		}
-		render(w, pageData{Code: pair.Code, Return: "/", PairExpiresAt: pair.ExpiresAt.UnixMilli()})
+		render(w, pageData{Code: pair.Code, Return: "/", PairLifetimeMS: max(0, pair.ExpiresAt.Sub(e.config.Now()).Milliseconds())})
 		return
 	}
 	if r.URL.Path == "/frame" {
@@ -416,7 +417,7 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	session, err := e.auth.Browser(r.Context(), r)
+	session, err := e.browser(r)
 	if err != nil {
 		if r.Method != "GET" {
 			http.Error(w, "Pair your browser first", http.StatusUnauthorized)
@@ -427,7 +428,7 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Pairing unavailable", http.StatusTooManyRequests)
 			return
 		}
-		render(w, pageData{Code: pair.Code, Return: managementReturn(r), PairExpiresAt: pair.ExpiresAt.UnixMilli()})
+		render(w, pageData{Code: pair.Code, Return: managementReturn(r), PairLifetimeMS: max(0, pair.ExpiresAt.Sub(e.config.Now()).Milliseconds())})
 		return
 	}
 	if r.URL.Path == "/action" {
@@ -450,7 +451,7 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "App expired", http.StatusGone)
 				return
 			}
-			if app.Visibility == "public" {
+			if app.Visibility == "public" || networkOwns(r, app.Owner) {
 				http.Redirect(w, r, URL(id), http.StatusSeeOther) //nolint:gosec // The app ID was looked up in the owner registry and contains four Crockford characters.
 				return
 			}
@@ -503,12 +504,6 @@ func (e *Edge) pairStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(err, webauth.ErrPairing) {
-		_, cookieErr := r.Cookie(webauth.PairCookie)
-		_, browserErr := e.auth.Browser(r.Context(), r)
-		if cookieErr != nil && browserErr == nil {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
 		http.Error(w, "Pairing expired. Start again.", http.StatusGone)
 		return
 	}
@@ -525,7 +520,7 @@ func (e *Edge) frame(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	session, _ := e.auth.Browser(r.Context(), r)
+	session, _ := e.browser(r)
 	owns := session.Owns(app.Owner)
 	if app.Visibility == "private" && !owns {
 		http.NotFound(w, r)
@@ -539,7 +534,10 @@ func (e *Edge) frame(w http.ResponseWriter, r *http.Request) {
 	render(w, pageData{Frame: true, App: app, Owns: owns, URL: URL(id), Toggle: toggle, Parent: URL(id)})
 }
 func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
-	_, err := e.auth.ValidateMutation(r.Context(), r, ManagementOrigin)
+	session, err := e.browser(r)
+	if err == nil {
+		err = webauth.ValidateSessionMutation(r, ManagementOrigin, session)
+	}
 	if err != nil {
 		http.Error(w, "Owner authorization required", http.StatusForbidden)
 		return
@@ -555,7 +553,7 @@ func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.mu.Lock()
-	session, err := e.auth.Browser(r.Context(), r)
+	session, err = e.browser(r)
 	if err != nil {
 		e.mu.Unlock()
 		http.Error(w, "Owner authorization required", http.StatusForbidden)
@@ -599,7 +597,7 @@ func (e *Edge) downloadSource(w http.ResponseWriter, r *http.Request, app Record
 		http.Error(w, "App origin offline", http.StatusServiceUnavailable)
 		return
 	}
-	session, err := e.auth.Browser(ctx, r)
+	session, err := e.browser(r)
 	if err != nil || !session.Owns(app.Owner) {
 		http.Error(w, "Owner authorization required", http.StatusForbidden)
 		return

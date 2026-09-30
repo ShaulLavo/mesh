@@ -11,6 +11,10 @@ for (const name of ['toolbar-position.ts', 'create-toolbar-drag.ts', 'clamp-to-r
   text = text.replace('if (config.isCollapsed() || isSnapping()) return;', 'cancelSnapAnimationFrame();\n    clearTimeout(snapAnimationTimeout);\n    setIsSnapping(false);');
   text = text.replace('const currentVelocity = velocity();', 'const currentVelocity = performance.now() - lastPointerPosition.time > 100 ? { x: 0, y: 0 } : velocity();');
   text = text.replace('pointerStartPosition = { x: event.clientX, y: event.clientY };', 'config.onPositionUpdate({ x: rect.left, y: rect.top });\n    pointerStartPosition = { x: event.clientX, y: event.clientY };');
+  text = text.replace('if (event.button !== 0) return;', 'if (event.button !== 0) return;\n    didDragOccur = false;');
+  text = text.replaceAll('(callback: () => void)', '(callback?: () => void)');
+  text = text.replace('if (didDragOccur) {', 'if (didDragOccur) {\n      event.preventDefault();');
+  text = text.replace('callback();', 'callback?.();');
   writeFileSync(resolve(target, name), text);
 }
 

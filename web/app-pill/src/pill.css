@@ -1,5 +1,5 @@
 @import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
 @source "./grab/toolbar-content.tsx";
 @theme { --spacing: 4px; --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1); }
 :host{all:initial;direction:ltr;color-scheme:dark;--rg-panel-bg:#161616;--rg-text-primary:#fff;--rg-text-secondary:#a7a7a7;--rg-shadow:0 2px 8px rgb(0 0 0 / .08)}

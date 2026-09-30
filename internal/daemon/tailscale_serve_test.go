@@ -24,7 +24,7 @@ import (
 func TestConfigureTailscaleServeUsesExactBoundedCommand(t *testing.T) {
 	var gotName string
 	var gotArguments []string
-	err := configureTailscaleServe(context.Background(), 8443, time.Second, func(ctx context.Context, name string, arguments ...string) ([]byte, error) {
+	err := configureTailscaleServe(context.Background(), 8443, false, time.Second, func(ctx context.Context, name string, arguments ...string) ([]byte, error) {
 		gotName = name
 		gotArguments = append([]string(nil), arguments...)
 		deadline, ok := ctx.Deadline()
@@ -42,9 +42,22 @@ func TestConfigureTailscaleServeUsesExactBoundedCommand(t *testing.T) {
 	}
 }
 
+func TestConfigureTailscaleGatewayPreservesDeviceAddress(t *testing.T) {
+	err := configureTailscaleServe(context.Background(), 8446, true, time.Second, func(_ context.Context, name string, arguments ...string) ([]byte, error) {
+		want := []string{"serve", "--bg", "--yes", "--tcp=443", "--proxy-protocol=1", "tcp://127.0.0.1:8446"}
+		if name != "tailscale" || !reflect.DeepEqual(arguments, want) {
+			t.Fatalf("wrong device forwarding command: %s %v", name, arguments)
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestConfigureTailscaleServePropagatesTimeoutCancellationAndFailure(t *testing.T) {
 	t.Run("timeout", func(t *testing.T) {
-		err := configureTailscaleServe(context.Background(), 8443, 25*time.Millisecond, func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+		err := configureTailscaleServe(context.Background(), 8443, false, 25*time.Millisecond, func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		})
@@ -57,7 +70,7 @@ func TestConfigureTailscaleServePropagatesTimeoutCancellationAndFailure(t *testi
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		called := false
-		err := configureTailscaleServe(ctx, 8443, time.Second, func(context.Context, string, ...string) ([]byte, error) {
+		err := configureTailscaleServe(ctx, 8443, false, time.Second, func(context.Context, string, ...string) ([]byte, error) {
 			called = true
 			return nil, nil
 		})
@@ -67,7 +80,7 @@ func TestConfigureTailscaleServePropagatesTimeoutCancellationAndFailure(t *testi
 	})
 
 	t.Run("command failure", func(t *testing.T) {
-		err := configureTailscaleServe(context.Background(), 8443, time.Second, func(context.Context, string, ...string) ([]byte, error) {
+		err := configureTailscaleServe(context.Background(), 8443, false, time.Second, func(context.Context, string, ...string) ([]byte, error) {
 			return []byte("operator permission is missing\n"), errors.New("exit status 1")
 		})
 		if err == nil || !strings.Contains(err.Error(), "operator permission is missing") || !strings.Contains(err.Error(), "exit status 1") {

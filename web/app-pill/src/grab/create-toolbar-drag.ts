@@ -30,7 +30,7 @@ interface ToolbarDragResult {
   isDragging: Accessor<boolean>;
   isSnapping: Accessor<boolean>;
   handlePointerDown: (event: PointerEvent) => void;
-  createDragAwareHandler: (callback: () => void) => (event: MouseEvent) => void;
+  createDragAwareHandler: (callback?: () => void) => (event: MouseEvent) => void;
 }
 
 export const createToolbarDrag = (config: ToolbarDragConfig): ToolbarDragResult => {
@@ -155,6 +155,7 @@ export const createToolbarDrag = (config: ToolbarDragConfig): ToolbarDragResult 
 
   const handlePointerDown = ignoreRealInput((event: PointerEvent) => {
     if (event.button !== 0) return;
+    didDragOccur = false;
     cancelSnapAnimationFrame();
     clearTimeout(snapAnimationTimeout);
     setIsSnapping(false);
@@ -187,13 +188,14 @@ export const createToolbarDrag = (config: ToolbarDragConfig): ToolbarDragResult 
     window.addEventListener("pointercancel", handleWindowPointerUp, { signal });
   });
 
-  const createDragAwareHandler = (callback: () => void) => (event: MouseEvent) => {
+  const createDragAwareHandler = (callback?: () => void) => (event: MouseEvent) => {
     event.stopImmediatePropagation();
     if (didDragOccur) {
+      event.preventDefault();
       didDragOccur = false;
       return;
     }
-    callback();
+    callback?.();
   };
 
   onCleanup(() => {
