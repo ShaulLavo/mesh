@@ -67,6 +67,12 @@ service/tunnel collisions, staged updates and retry recovery, source boundaries,
 exact expiry, partition leases, actual HTTP edge-to-origin forwarding, pairing,
 private tickets, CSRF, revocation, and public-to-private admission races.
 
+Origin routing uses an immutable snapshot so setup and readiness waits cannot
+block existing app HTTP requests. Fault-injection regressions cover lost
+activation acknowledgements with direct retries and restart reconciliation,
+receipt persistence failures, upload consumption, and update revision recovery
+with expiry renewal, stream cancellation, and previous-workspace cleanup.
+
 `integration/temporary_apps.sh` verifies the real CLI and disabled-feature boundary.
 `integration/temporary_app_server.sh` runs actual labelled setup/server workers,
 HTML/API/redirect/WebSocket forwarding, daemon restart adoption and deletion.

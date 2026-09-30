@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,13 +38,25 @@ type OriginConfig struct {
 	Now          func() time.Time
 }
 type localApp struct {
-	Record  Record   `json:"record"`
-	Root    string   `json:"root"`
-	Command string   `json:"command,omitempty"`
-	Port    int      `json:"port,omitempty"`
-	Env     []string `json:"env,omitempty"`
-	Session string   `json:"session,omitempty"`
-	Phase   string   `json:"phase"`
+	Commit  *commitIntent `json:"commit,omitempty"`
+	Record  Record        `json:"record"`
+	Root    string        `json:"root"`
+	Command string        `json:"command,omitempty"`
+	Port    int           `json:"port,omitempty"`
+	Env     []string      `json:"env,omitempty"`
+	Session string        `json:"session,omitempty"`
+	Phase   string        `json:"phase"`
+}
+type commitIntent struct {
+	UploadID     string `json:"uploadId"`
+	Digest       string `json:"digest"`
+	PreviousRoot string `json:"previousRoot,omitempty"`
+}
+type appRoute struct {
+	Record Record
+	Root   string
+	Port   int
+	Phase  string
 }
 type upload struct {
 	ID        string    `json:"id"`
@@ -63,6 +76,8 @@ type originState struct {
 }
 type Origin struct {
 	mu          sync.Mutex
+	routes      atomic.Pointer[map[string]appRoute]
+	downloadMu  sync.Mutex
 	config      OriginConfig
 	state       originState
 	identity    string
@@ -81,10 +96,19 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 	if err := load(ctx, c.Store, "apps.origin", &o.state); err != nil {
 		return nil, err
 	}
+	o.publishRoutes()
 	return o, nil
 }
 func (o *Origin) persist(ctx context.Context) error {
+	o.publishRoutes()
 	return save(ctx, o.config.Store, "apps.origin", o.state)
+}
+func (o *Origin) publishRoutes() {
+	routes := make(map[string]appRoute, len(o.state.Apps))
+	for id, a := range o.state.Apps {
+		routes[id] = appRoute{Record: a.Record, Root: a.Root, Port: a.Port, Phase: a.Phase}
+	}
+	o.routes.Store(&routes)
 }
 func (o *Origin) edge(ctx context.Context, q Request) (Result, error) {
 	if o.state.Pending != nil {
@@ -280,16 +304,34 @@ func validateRecipe(q Request) error {
 	return nil
 }
 func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
+	if q.Kind == "" {
+		q.Kind = "static"
+	}
+	normalized, _ := json.Marshal(q)
+	digest := digestBytes(normalized)
 	if prior, ok := o.state.Receipts[q.UploadID]; ok {
-		normalized, _ := json.Marshal(q)
-		if prior.Digest != digestBytes(normalized) {
+		if prior.Digest != digest {
 			return Result{}, errors.New("app: commit retry conflicts with previous recipe")
 		}
 		latest, err := o.edge(ctx, Request{Action: "inspect", ID: prior.Record.ID})
 		return latest, err
 	}
-	if q.Kind == "" {
-		q.Kind = "static"
+	for _, a := range o.state.Apps {
+		if a.Commit == nil || a.Commit.UploadID != q.UploadID {
+			continue
+		}
+		if a.Commit.Digest != digest {
+			return Result{}, errors.New("app: commit retry conflicts with pending recipe")
+		}
+		if a.Phase != "activating" {
+			return Result{}, errors.New("app: source preparation requires reconciliation")
+		}
+		return o.activate(ctx, a)
+	}
+	if a, ok := o.state.Apps[q.ID]; q.Action == "update" && ok && a.Phase == "ready" && a.Commit != nil {
+		if err := o.finishActivation(ctx, a, a.Record); err != nil {
+			return Result{}, err
+		}
 	}
 	if err := validateRecipe(q); err != nil {
 		return Result{}, err
@@ -349,6 +391,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		return Result{}, err
 	}
 	local := localApp{Record: app, Root: workspace, Command: q.Command, Port: q.Port, Env: q.Env, Phase: "preparing"}
+	local.Commit = &commitIntent{UploadID: q.UploadID, Digest: digest, PreviousRoot: previous.Root}
 	if q.Action == "create" {
 		o.state.Apps[app.ID] = local
 		if err := o.persist(ctx); err != nil {
@@ -426,28 +469,88 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	local.Record = *result.App
-	local.Phase = "ready"
-	o.state.Apps[app.ID] = local
+	return result, o.finishActivation(ctx, local, *result.App)
+}
+func (o *Origin) finishActivation(ctx context.Context, a localApp, record Record) error {
+	if a.Commit == nil {
+		return errors.New("app: activation commit missing")
+	}
+	commit := a.Commit
+	a.Record = record
+	a.Phase = "ready"
+	o.state.Apps[record.ID] = a
 	if o.state.Receipts == nil {
 		o.state.Receipts = map[string]createReceipt{}
 	}
 	for token, receipt := range o.state.Receipts {
-		if receipt.Record.ID == app.ID {
+		if receipt.Record.ID == record.ID {
 			delete(o.state.Receipts, token)
 		}
 	}
-	normalized, _ := json.Marshal(q)
-	o.state.Receipts[q.UploadID] = createReceipt{Record: *result.App, Digest: digestBytes(normalized)}
-	delete(o.state.Uploads, q.UploadID)
+	o.state.Receipts[commit.UploadID] = createReceipt{Record: record, Digest: commit.Digest}
+	delete(o.state.Uploads, commit.UploadID)
 	if err := o.persist(ctx); err != nil {
+		return err
+	}
+	if err := os.Remove(o.uploadPath(commit.UploadID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if commit.PreviousRoot != "" && commit.PreviousRoot != a.Root {
+		if err := os.RemoveAll(commit.PreviousRoot); err != nil {
+			return err
+		}
+	}
+	a.Commit = nil
+	o.state.Apps[record.ID] = a
+	return o.persist(ctx)
+}
+func (o *Origin) activate(ctx context.Context, a localApp) (Result, error) {
+	if a.Commit == nil {
+		return Result{}, errors.New("app: activation commit missing")
+	}
+	if a.Command != "" {
+		if err := o.ensureServer(ctx, &a); err != nil {
+			return Result{}, err
+		}
+	}
+	kind := "static"
+	if a.Command != "" {
+		kind = "server"
+	}
+	result, err := o.edge(ctx, Request{Action: "activate", ID: a.Record.ID, Kind: kind, UploadID: a.Commit.UploadID})
+	if err != nil {
 		return Result{}, err
 	}
-	_ = os.Remove(o.uploadPath(q.UploadID))
-	if previous.Root != "" && previous.Root != workspace {
-		_ = os.RemoveAll(previous.Root)
+	return result, o.finishActivation(ctx, a, *result.App)
+}
+func (o *Origin) ensureServer(ctx context.Context, a *localApp) error {
+	session, alive, err := o.config.Workers.Find(ctx, "app "+a.Record.ID)
+	if err != nil {
+		return err
 	}
-	return result, nil
+	if !alive {
+		if err := ProbePortAvailable(a.Port); err != nil {
+			return err
+		}
+		session, err = o.config.Workers.Start(ctx, "app "+a.Record.ID, a.Command, a.Root, o.environment(*a))
+		if err != nil {
+			return err
+		}
+	}
+	a.Session = session
+	o.state.Apps[a.Record.ID] = *a
+	if err := o.persist(ctx); err != nil {
+		return err
+	}
+	if err := waitPort(ctx, a.Port); err != nil {
+		_ = o.stop(ctx, a.Record.ID)
+		return err
+	}
+	if err := checkServerListener(ctx, a.Port); err != nil {
+		_ = o.stop(ctx, a.Record.ID)
+		return err
+	}
+	return nil
 }
 func (o *Origin) environment(a localApp) []string {
 	env := append([]string{}, a.Env...)
@@ -556,88 +659,8 @@ func (o *Origin) Sync(ctx context.Context) error {
 		return err
 	}
 	for _, app := range result.Apps {
-		if app.Status != "active" {
-			if err := o.cleanup(ctx, app.ID); err != nil {
-				return err
-			}
-			if _, err := o.edge(ctx, Request{Action: "cleanup", ID: app.ID}); err != nil {
-				return err
-			}
-			continue
-		}
-		a, ok := o.state.Apps[app.ID]
-		if !ok {
-			if !app.Ready {
-				_, _ = o.edge(ctx, Request{Action: "delete", ID: app.ID})
-			}
-			continue
-		}
-		a.Record = app
-		o.state.Apps[app.ID] = a
-		if a.Phase == "activating" {
-			if a.Command != "" {
-				_, alive, err := o.config.Workers.Find(ctx, "app "+app.ID)
-				if err != nil {
-					return err
-				}
-				if !alive {
-					if err := ProbePortAvailable(a.Port); err != nil {
-						return err
-					}
-					session, err := o.config.Workers.Start(ctx, "app "+app.ID, a.Command, a.Root, o.environment(a))
-					if err != nil {
-						return err
-					}
-					a.Session = session
-				}
-				if err := waitPort(ctx, a.Port); err != nil {
-					return err
-				}
-				if err := checkServerListener(ctx, a.Port); err != nil {
-					return err
-				}
-			}
-			activated, err := o.edge(ctx, Request{Action: "activate", ID: app.ID, Kind: func() string {
-				if a.Command != "" {
-					return "server"
-				}
-				return "static"
-			}(), UploadID: a.Record.Revision})
-			if err != nil {
-				return err
-			}
-			a.Record = *activated.App
-			a.Phase = "ready"
-			o.state.Apps[app.ID] = a
-		}
-		if a.Phase != "ready" {
-			_, _ = o.edge(ctx, Request{Action: "delete", ID: app.ID})
-			continue
-		}
-		if app.Kind == "server" {
-			_, alive, err := o.config.Workers.Find(ctx, "app "+app.ID)
-			if err != nil {
-				return err
-			}
-			if !alive {
-				if err := ProbePortAvailable(a.Port); err != nil {
-					return err
-				}
-				id, err := o.config.Workers.Start(ctx, "app "+app.ID, a.Command, a.Root, o.environment(a))
-				if err != nil {
-					return err
-				}
-				a.Session = id
-				if err := waitPort(ctx, a.Port); err != nil {
-					_ = o.stop(ctx, app.ID)
-					return err
-				}
-				if err := checkServerListener(ctx, a.Port); err != nil {
-					_ = o.stop(ctx, app.ID)
-					return err
-				}
-				o.state.Apps[app.ID] = a
-			}
+		if err := o.syncApp(ctx, app); err != nil {
+			return err
 		}
 	}
 	for id, u := range o.state.Uploads {
@@ -647,6 +670,53 @@ func (o *Origin) Sync(ctx context.Context) error {
 		}
 	}
 	return o.persist(ctx)
+}
+func (o *Origin) syncApp(ctx context.Context, app Record) error {
+	if app.Status != "active" {
+		if err := o.cleanup(ctx, app.ID); err != nil {
+			return err
+		}
+		_, err := o.edge(ctx, Request{Action: "cleanup", ID: app.ID})
+		return err
+	}
+	a, ok := o.state.Apps[app.ID]
+	if !ok {
+		if !app.Ready {
+			_, err := o.edge(ctx, Request{Action: "delete", ID: app.ID})
+			return err
+		}
+		return nil
+	}
+	a.Record = app
+	o.state.Apps[app.ID] = a
+	if a.Phase == "activating" {
+		result, err := o.activate(ctx, a)
+		if err != nil {
+			return err
+		}
+		app = *result.App
+		a = o.state.Apps[app.ID]
+	}
+	if a.Phase != "ready" {
+		_, err := o.edge(ctx, Request{Action: "delete", ID: app.ID})
+		return err
+	}
+	if a.Commit != nil {
+		if err := o.finishActivation(ctx, a, app); err != nil {
+			return err
+		}
+		a = o.state.Apps[app.ID]
+	}
+	if app.Kind == "server" {
+		_, alive, err := o.config.Workers.Find(ctx, "app "+app.ID)
+		if err != nil {
+			return err
+		}
+		if !alive {
+			return o.ensureServer(ctx, &a)
+		}
+	}
+	return nil
 }
 func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 	if q.Offset < 0 || q.Offset > MaxArchive {
@@ -734,16 +804,14 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 		http.NotFound(w, r)
 		return true
 	}
-	o.mu.Lock()
-	app, ok := o.state.Apps[admission.ID]
-	o.mu.Unlock()
+	app, ok := (*o.routes.Load())[admission.ID]
 	if !ok || app.Phase != "ready" || app.Record.Generation != admission.Generation || !o.config.Now().Before(app.Record.LeaseUntil) {
 		http.Error(w, "app unavailable", http.StatusServiceUnavailable)
 		return true
 	}
 	if admission.Download {
-		o.mu.Lock()
-		defer o.mu.Unlock()
+		o.downloadMu.Lock()
+		defer o.downloadMu.Unlock()
 		if err := o.configCheckSourceDownload(w, r, app); err != nil {
 			http.Error(w, "Download unavailable", http.StatusServiceUnavailable)
 		}
@@ -792,7 +860,7 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func (o *Origin) configCheckSourceDownload(w http.ResponseWriter, r *http.Request, app localApp) error {
+func (o *Origin) configCheckSourceDownload(w http.ResponseWriter, r *http.Request, app appRoute) error {
 	filename := filepath.Join(o.config.DataRoot, "apps", app.Record.ID, "browser-download.tar.gz")
 	f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600) //nolint:gosec // Fixed owner-download archive inside the looked-up app workspace.
 	if err != nil {
