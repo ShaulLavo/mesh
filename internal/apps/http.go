@@ -87,10 +87,11 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 			owner = err == nil && viewer == app.Owner
 		}
 		if !owner || !ambientOwnerAllowed(r, URL(id)) {
-			legacyNavigation := (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+			origin := r.Header.Get("Origin")
+			legacyNavigation := (r.Method == http.MethodGet || r.Method == http.MethodHead) && origin == "" &&
 				r.Header.Get("Sec-Fetch-Site") == "" && r.Header.Get("Sec-Fetch-Mode") == "" &&
 				r.Header.Get("Sec-Fetch-Dest") == "" && !strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
-			if topLevelAppNavigation(r) || legacyNavigation {
+			if (origin == "" || origin == URL(id)) && (topLevelAppNavigation(r) || legacyNavigation) {
 				http.Redirect(w, r, ManagementOrigin+"/view?id="+id, http.StatusSeeOther)
 			} else {
 				http.Error(w, "App is private. Open it from Mesh.", http.StatusForbidden)

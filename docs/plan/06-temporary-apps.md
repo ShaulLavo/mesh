@@ -44,12 +44,16 @@ delivered to a visitor.
 
 Private-app owner authority from Tailnet recognition or a view cookie applies
 only to same-origin requests, direct browser requests, and top-level GET or HEAD
-navigations. Other same-site and cross-site browser requests receive 403 before
-forwarding. Without Fetch Metadata, safe methods remain available; unsafe methods
-require no Origin header or the app's exact origin. WebSocket upgrades always
-require the app's exact Origin. Private responses restrict cross-origin reads and
-framing to the same origin without weakening stricter app CSP. Public apps and
-the management origin retain their existing behavior.
+navigations. A foreign Origin always receives 403, even without Fetch Metadata.
+Other same-site and cross-site browser requests receive 403 before resolving or
+forwarding to the origin host. Without Fetch Metadata, every method requires no
+Origin header or the app's exact origin. WebSocket upgrades always require the
+app's exact Origin. Private responses restrict cross-origin reads and framing to
+the same origin without weakening stricter app CSP. Top-level GET navigations
+and legacy requests lacking both headers remain owner-authorized, so apps must
+keep GET read-only and defend mutations against headerless legacy clients.
+WebSocket clients without Origin cannot upgrade. Public-app admission and
+management authorization retain their existing behavior.
 
 ## Starting points and scope changes
 
