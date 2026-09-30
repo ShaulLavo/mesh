@@ -59,24 +59,29 @@ func TestProxyListenerAuthenticatesForwarderUID(t *testing.T) {
 			_ = server.SetReadDeadline(time.Now().Add(time.Second))
 			body := make([]byte, len("payload"))
 			n, err := io.ReadFull(server, body)
-			if !tt.accept {
-				if err == nil || n != 0 {
-					t.Fatalf("disallowed forwarder exposed payload %q and forged RemoteAddr %s", body[:n], server.RemoteAddr())
-				}
-				if got := server.RemoteAddr().String(); got != client.LocalAddr().String() {
-					t.Fatalf("disallowed forwarder exposed forged RemoteAddr %s", got)
-				}
-				_ = client.SetReadDeadline(time.Now().Add(time.Second))
-				if _, err := client.Read(make([]byte, 1)); err == nil {
-					t.Fatal("rejected peer connection remained open")
-				} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
-					t.Fatal("rejected peer connection was not closed")
-				}
-			} else if err != nil || string(body) != "payload" || server.RemoteAddr().String() != "100.64.0.2:40000" {
-				t.Fatalf("allowed forwarder lost source or payload: %s %q %v", server.RemoteAddr(), body[:n], err)
-			}
 			if !lookupCalled && len(tt.allowed) != 0 {
 				t.Fatal("forwarder UID lookup was not used")
+			}
+			if tt.accept {
+				if err != nil || string(body) != "payload" || server.RemoteAddr().String() != "100.64.0.2:40000" {
+					t.Fatalf("allowed forwarder lost source or payload: %s %q %v", server.RemoteAddr(), body[:n], err)
+				}
+				return
+			}
+			if err == nil || n != 0 {
+				t.Fatalf("disallowed forwarder exposed payload %q and forged RemoteAddr %s", body[:n], server.RemoteAddr())
+			}
+			if got := server.RemoteAddr().String(); got != client.LocalAddr().String() {
+				t.Fatalf("disallowed forwarder exposed forged RemoteAddr %s", got)
+			}
+			_ = client.SetReadDeadline(time.Now().Add(time.Second))
+			_, readErr := client.Read(make([]byte, 1))
+			if readErr == nil {
+				t.Fatal("rejected peer connection remained open")
+			}
+			var timeout net.Error
+			if errors.As(readErr, &timeout) && timeout.Timeout() {
+				t.Fatal("rejected peer connection was not closed")
 			}
 		})
 	}

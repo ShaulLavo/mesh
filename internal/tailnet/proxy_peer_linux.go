@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -57,16 +58,34 @@ func ProxyForwarderUIDs() ([]uint32, error) {
 	return proxyForwarderUIDs(systemPeerUIDLookup{})
 }
 
-func proxyForwarderUIDs(_ peerUIDLookup) ([]uint32, error) {
-	// Port zero cannot identify an established TCP socket. ENOENT proves the
-	// kernel answered the exact query without enumerating any host sockets.
-	probe := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 0)
-	if _, err := queryPeerDiag(probe, probe, unix.AF_INET); err != nil && !errors.Is(err, unix.ENOENT) {
-		return nil, fmt.Errorf("tailnet: PROXY forwarder authentication unavailable: %w", err)
-	}
+func proxyForwarderUIDs(lookup peerUIDLookup) ([]uint32, error) {
 	uid := int64(os.Getuid())
 	if uid < 0 || uid > math.MaxUint32 {
 		return nil, fmt.Errorf("tailnet: invalid Mesh UID %d", uid)
+	}
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return nil, fmt.Errorf("tailnet: PROXY forwarder authentication unavailable: listen for owned loopback probe: %w", err)
+	}
+	defer func() { _ = listener.Close() }()
+	client, err := net.DialTimeout("tcp4", listener.Addr().String(), time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("tailnet: PROXY forwarder authentication unavailable: connect owned loopback probe: %w", err)
+	}
+	defer func() { _ = client.Close() }()
+	server, err := listener.AcceptTCP()
+	if err != nil {
+		return nil, fmt.Errorf("tailnet: PROXY forwarder authentication unavailable: accept owned loopback probe: %w", err)
+	}
+	defer func() { _ = server.Close() }()
+	// ENOENT also means a missing inet_diag/tcp_diag handler. Only a successful
+	// lookup of our live client proves the kernel can authenticate forwarders.
+	owner, err := lookup.PeerUID(server)
+	if err != nil {
+		return nil, fmt.Errorf("tailnet: PROXY forwarder authentication unavailable: inspect owned loopback probe: %w", err)
+	}
+	if owner != uint32(uid) {
+		return nil, fmt.Errorf("tailnet: PROXY forwarder authentication unavailable: owned loopback probe UID %d differs from Mesh UID %d", owner, uid)
 	}
 	return []uint32{0, uint32(uid)}, nil
 }
@@ -86,13 +105,8 @@ func (systemPeerUIDLookup) PeerUID(c net.Conn) (uint32, error) {
 		return 0, errors.New("peer and local socket address families differ")
 	}
 	if peer.Addr().Is4() {
-		uid, err := queryPeerDiag(peer, local, unix.AF_INET)
-		if !errors.Is(err, unix.ENOENT) {
-			return uid, err
-		}
+		return queryPeerDiag(peer, local, unix.AF_INET)
 	}
-	// IPv4 clients may own an IPv6 socket using mapped addresses. As16 keeps
-	// that mapping for the second exact query; no table dump is requested.
 	return queryPeerDiag(peer, local, unix.AF_INET6)
 }
 
@@ -111,7 +125,7 @@ func peerDiagID(peer, local netip.AddrPort, family uint8) inetDiagSockID {
 }
 
 func marshalPeerDiagRequest(id inetDiagSockID, family uint8) ([]byte, error) {
-	return binary.Append(nil, binary.NativeEndian, struct {
+	request, err := binary.Append(nil, binary.NativeEndian, struct {
 		Header  unix.NlMsghdr
 		Request inetDiagReqV2
 	}{
@@ -121,6 +135,10 @@ func marshalPeerDiagRequest(id inetDiagSockID, family uint8) ([]byte, error) {
 		},
 		Request: inetDiagReqV2{Family: family, Protocol: unix.IPPROTO_TCP, States: 1 << tcpEstablished, ID: id},
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal peer socket diagnostic request: %w", err)
+	}
+	return request, nil
 }
 
 func queryPeerDiag(peer, local netip.AddrPort, family uint8) (uint32, error) {
@@ -154,6 +172,17 @@ func queryPeerDiag(peer, local netip.AddrPort, family uint8) (uint32, error) {
 	return parsePeerDiagReply(reply[:n], id, family)
 }
 
+func peerDiagError(data []byte) error {
+	if len(data) < 4+unix.NLMSG_HDRLEN {
+		return errors.New("incomplete peer socket diagnostic error")
+	}
+	code := binary.NativeEndian.Uint32(data[:4])
+	if code <= math.MaxInt32 {
+		return errors.New("unexpected peer socket diagnostic acknowledgement")
+	}
+	return fmt.Errorf("query peer socket diagnostics: %w", unix.Errno(^code+1))
+}
+
 func parsePeerDiagReply(raw []byte, id inetDiagSockID, family uint8) (uint32, error) {
 	var header unix.NlMsghdr
 	if _, err := binary.Decode(raw, binary.NativeEndian, &header); err != nil {
@@ -165,14 +194,7 @@ func parsePeerDiagReply(raw []byte, id inetDiagSockID, family uint8) (uint32, er
 	}
 	data := raw[unix.NLMSG_HDRLEN:]
 	if header.Type == unix.NLMSG_ERROR {
-		if len(data) < 4+unix.NLMSG_HDRLEN {
-			return 0, errors.New("incomplete peer socket diagnostic error")
-		}
-		code := binary.NativeEndian.Uint32(data[:4])
-		if code <= math.MaxInt32 {
-			return 0, errors.New("unexpected peer socket diagnostic acknowledgement")
-		}
-		return 0, fmt.Errorf("query peer socket diagnostics: %w", unix.Errno(^code+1))
+		return 0, peerDiagError(data)
 	}
 	if header.Type != unix.SOCK_DIAG_BY_FAMILY {
 		return 0, errors.New("unexpected peer socket diagnostic message")

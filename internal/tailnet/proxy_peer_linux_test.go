@@ -81,7 +81,7 @@ func TestProxyPeerUIDRejectsClosedClient(t *testing.T) {
 	if err := client.(*net.TCPConn).CloseWrite(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := server.Read(make([]byte, 1)); err != io.EOF {
+	if _, err := server.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
 		t.Fatalf("client FIN not received: %v", err)
 	}
 	if uid, err := (systemPeerUIDLookup{}).PeerUID(server); err == nil {

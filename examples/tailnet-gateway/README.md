@@ -49,9 +49,13 @@ the trusted `tailscaled` socket.
 Rebuild and restart this gateway when deploying changes to its authentication.
 `mesh update` updates Mesh, not this separately built gateway.
 
-Automatic Tailnet owner access requires Linux on the edge and gateway. On macOS
-and other unsupported platforms, these owner-access settings fail startup with an
-error. Mac origin hosts and routing with manual browser pairing remain supported.
+Automatic Tailnet owner access requires Linux on the edge and gateway, with
+kernel `INET_DIAG` support and its `tcp_diag` handler. Any sandbox must allow
+`NETLINK_SOCK_DIAG`. Startup looks up an owned loopback connection and requires
+its UID to match the Mesh process. Missing handlers, blocked diagnostics, and UID
+mismatches fail startup instead of silently refusing all traffic. On macOS and
+other unsupported platforms, these owner-access settings also fail startup.
+Mac origin hosts and routing with manual browser pairing remain supported.
 
 For routing with manual browser pairing, omit all three owner-access settings.
 

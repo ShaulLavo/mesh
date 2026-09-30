@@ -19,6 +19,8 @@ func TestProxyPeerUIDAndStartupWithBusyTCPTable(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = executable.Close() }()
+		// Namespace setup needs UID 0 to bring up loopback. CI keeps the runner's
+		// UID, so its lookup assertion also detects a mistaken UID-zero result.
 		command := exec.Command("unshare", "--user", "--map-root-user", "--net", "sh", "-c",
 			`ip link set lo up && exec /proc/self/fd/3 -test.run=^TestProxyPeerUIDAndStartupWithBusyTCPTable$ -test.v`)
 		command.ExtraFiles = []*os.File{executable}

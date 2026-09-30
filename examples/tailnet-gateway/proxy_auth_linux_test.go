@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -57,7 +58,8 @@ func TestGatewayRejectsDisallowedForwarderBeforeBackendDial(t *testing.T) {
 		_ = connection.Close()
 		t.Fatal("gateway dialed a backend for a disallowed forwarder")
 	}
-	if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
+	var timeout net.Error
+	if !errors.As(err, &timeout) || !timeout.Timeout() {
 		t.Fatalf("backend accept failed unexpectedly: %v", err)
 	}
 }

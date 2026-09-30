@@ -31,11 +31,10 @@ func (l ProxyListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	lookup := l.peerUID
-	if lookup == nil {
-		lookup = systemPeerUIDLookup{}
+	if l.peerUID == nil {
+		return NewProxyConn(c, l.AllowedUIDs), nil
 	}
-	return &proxyConn{Conn: c, allowedUIDs: l.AllowedUIDs, peerUID: lookup}, nil
+	return &proxyConn{Conn: c, allowedUIDs: l.AllowedUIDs, peerUID: l.peerUID}, nil
 }
 
 type proxyConn struct {
@@ -59,22 +58,8 @@ func (c *proxyConn) initialize() {
 				_ = c.Close()
 			}
 		}()
-		peer, err := netip.ParseAddrPort(c.Conn.RemoteAddr().String())
-		if err != nil || !peer.Addr().IsLoopback() {
-			c.err = errors.New("tailnet: PROXY sender must be loopback")
-			return
-		}
-		if len(c.allowedUIDs) == 0 {
-			c.err = errors.New("tailnet: no allowed PROXY forwarder UIDs")
-			return
-		}
-		uid, err := c.peerUID.PeerUID(c.Conn)
-		if err != nil {
-			c.err = fmt.Errorf("tailnet: authenticate PROXY forwarder %s: %w", peer, err)
-			return
-		}
-		if !slices.Contains(c.allowedUIDs, uid) {
-			c.err = fmt.Errorf("tailnet: PROXY forwarder %s UID %d is not allowed", peer, uid)
+		if err := c.authenticateForwarder(); err != nil {
+			c.err = err
 			return
 		}
 		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -91,6 +76,24 @@ func (c *proxyConn) initialize() {
 			c.source = net.TCPAddrFromAddrPort(source)
 		}
 	})
+}
+
+func (c *proxyConn) authenticateForwarder() error {
+	peer, err := netip.ParseAddrPort(c.Conn.RemoteAddr().String())
+	if err != nil || !peer.Addr().IsLoopback() {
+		return errors.New("tailnet: PROXY sender must be loopback")
+	}
+	if len(c.allowedUIDs) == 0 {
+		return errors.New("tailnet: no allowed PROXY forwarder UIDs")
+	}
+	uid, err := c.peerUID.PeerUID(c.Conn)
+	if err != nil {
+		return fmt.Errorf("tailnet: authenticate PROXY forwarder %s: %w", peer, err)
+	}
+	if !slices.Contains(c.allowedUIDs, uid) {
+		return fmt.Errorf("tailnet: PROXY forwarder %s UID %d is not allowed", peer, uid)
+	}
+	return nil
 }
 
 func (c *proxyConn) Read(p []byte) (int, error) {
