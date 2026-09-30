@@ -108,6 +108,11 @@ func inspectTunnelVersion(ctx context.Context, tx *sql.Tx, mutation tunnel.Mutat
 }
 
 func checkTunnelMutation(ctx context.Context, tx *sql.Tx, mutation tunnel.Mutation, versionExists bool) error {
+	if mutation.Action == tunnel.Create {
+		if err := checkTunnelAppCollision(ctx, tx, mutation.PublicName); err != nil {
+			return err
+		}
+	}
 	var owner string
 	err := tx.QueryRowContext(ctx, "SELECT claimant_id FROM tunnel_claims WHERE public_name = ?", mutation.PublicName).Scan(&owner)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -127,7 +132,8 @@ func checkTunnelMutation(ctx context.Context, tx *sql.Tx, mutation tunnel.Mutati
         (SELECT count(*) FROM edge_routes WHERE public_name = ?),
         (SELECT count(*) FROM tunnel_claims WHERE claimant_id = ?),
         (SELECT count(*) FROM tunnel_highwater),
-        (SELECT count(*) FROM tunnel_claims) + (SELECT count(*) FROM edge_routes)`, mutation.PublicName, mutation.ClaimantID).Scan(&routes, &held, &claimants, &combined)
+        (SELECT count(*) FROM tunnel_claims) + (SELECT count(*) FROM edge_routes) +
+        (SELECT count(*) FROM app_names WHERE active = 1)`, mutation.PublicName, mutation.ClaimantID).Scan(&routes, &held, &claimants, &combined)
 	if err != nil {
 		return fmt.Errorf("storage: inspect tunnel capacity: %w", err)
 	}
@@ -155,6 +161,7 @@ func (s *Store) DeleteTunnelClaim(ctx context.Context, publicName string) error 
 func checkEdgeTunnelCollisions(ctx context.Context, tx *sql.Tx, snapshot edge.Snapshot) error {
 	var combined int
 	err := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM tunnel_claims) +
+        (SELECT count(*) FROM app_names WHERE active = 1) +
         (SELECT count(*) FROM edge_routes WHERE origin_id != ?)`, snapshot.OriginID).Scan(&combined)
 	if err != nil {
 		return fmt.Errorf("storage: inspect combined edge capacity: %w", err)
@@ -164,13 +171,26 @@ func checkEdgeTunnelCollisions(ctx context.Context, tx *sql.Tx, snapshot edge.Sn
 	}
 	for _, route := range snapshot.Routes {
 		var exists bool
-		err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM tunnel_claims WHERE public_name = ?)", route.PublicName).Scan(&exists)
+		err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM tunnel_claims WHERE public_name = ?)
+            OR EXISTS (SELECT 1 FROM app_names WHERE public_name = ?)`, route.PublicName, route.PublicName).Scan(&exists)
 		if err != nil {
 			return fmt.Errorf("storage: inspect tunnel collision: %w", err)
 		}
 		if exists {
 			return edge.ErrRouteCollision
 		}
+	}
+	return nil
+}
+
+func checkTunnelAppCollision(ctx context.Context, tx *sql.Tx, publicName string) error {
+	var exists bool
+	err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM app_names WHERE public_name = ?)", publicName).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("storage: inspect app collision: %w", err)
+	}
+	if exists {
+		return tunnel.ErrCollision
 	}
 	return nil
 }

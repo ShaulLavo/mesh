@@ -10,6 +10,22 @@ permissions:
   contents: read
 
 jobs:
+  app-pill:
+    name: Solid app pill
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.24.0
+      - run: pnpm --dir web/app-pill install --frozen-lockfile
+      - run: pnpm --dir web/app-pill build
+      - name: Require current embedded assets and upstream adaptations
+        run: git diff --exit-code -- internal/apppill/assets web/app-pill/src/grab
+
   test:
     name: Race tests and integrations
     runs-on: ubuntu-24.04
@@ -83,17 +99,18 @@ jobs:
   gate:
     name: Complete CI gate
     if: always()
-    needs: [test, lint, vulnerability, packaging]
+    needs: [app-pill, test, lint, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every CI job
         env:
+          APP_PILL: ${{ needs.app-pill.result }}
           TEST: ${{ needs.test.result }}
           LINT: ${{ needs.lint.result }}
           VULNERABILITY: ${{ needs.vulnerability.result }}
           PACKAGING: ${{ needs.packaging.result }}
         run: |
-          [[ $TEST == success && $LINT == success && $VULNERABILITY == success && $PACKAGING == success ]]
+          [[ $APP_PILL == success && $TEST == success && $LINT == success && $VULNERABILITY == success && $PACKAGING == success ]]
 
   publish:
     name: Publish tested main commit

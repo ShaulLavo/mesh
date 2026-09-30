@@ -34,6 +34,7 @@ const (
 	CommandAttach
 	CommandList
 	CommandRecover
+	CommandApp
 )
 
 type Command struct {
@@ -43,6 +44,7 @@ type Command struct {
 }
 
 type Session struct {
+	AppInput      io.Reader
 	In            *os.File
 	Out, Err      io.Writer
 	Terminal      string
@@ -233,6 +235,12 @@ func parseCommand(raw string, hasPTY, installed bool) (Command, error) {
 	if !installed {
 		return Command{}, errors.New("SSH sessions are not configured")
 	}
+	if raw == "app" {
+		if hasPTY {
+			return Command{}, errors.New("app RPC requires SSH without a terminal")
+		}
+		return Command{Kind: CommandApp}, nil
+	}
 	if raw == "ls" {
 		return Command{Kind: CommandList}, nil
 	}
@@ -288,6 +296,12 @@ func runSession(channel charmssh.Session, application SessionHandler, command Co
 	}}
 	if state != nil {
 		session.Terminal, session.Size, session.WindowChanges = state.term, state.size, state.changes
+	}
+	if command.Kind == CommandApp {
+		session.AppInput = raw
+		status, err := application(channel.Context(), session)
+		finishSession(channel, status, err)
+		return
 	}
 	if command.Kind == CommandList {
 		status, err := application(channel.Context(), session)

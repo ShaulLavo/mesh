@@ -4,9 +4,10 @@ Mesh already knows which of your machines are up and how to reach them. Serving
 adds one verb: publish something from a machine, privately on the tailnet or
 publicly on the internet.
 
-Not a deployment system. Not a tunnel product. Not a way to share work with
-other people, which is a different product entirely (D22). Three service types,
-two front doors.
+This plan covers ordinary serving: three service types and two front doors.
+The Approved [temporary-app plan](06-temporary-apps.md) adds a separate
+`mesh app` capability for disposable websites and public sharing. D30 narrows
+the older D22 boundary without changing ordinary serving behavior.
 
 Publishing here is rarer than it sounds. The common case is a directory or a
 local port you want to reach from your phone on the tailnet. Reaching the public

@@ -18,11 +18,11 @@ tailnet, gone the moment you disconnect. The one capability Tailscale cannot
 provide, because it needs a publicly routable machine and step 8 already put one
 there.
 
-**Read D22 before adding anything to this.** Sharing work with other people is a
-separate product. This exists so you can reach your own machine, and every
-feature that only makes sense because somebody else is looking at the result
-belongs somewhere else: preview URLs per build, share links, expiring access,
-anything that turns a route into an artifact with a lifecycle.
+**Read D20 and D30 before adding anything to this.** Ordinary reverse tunnels
+retain their exact-name and connection-bound lifecycle. The Approved
+[temporary-app plan](../plan/06-temporary-apps.md) reuses hostname reservation
+and proxy mechanisms through a separate app capability. It owns share links,
+visitor authorization, expiry, and payload cleanup; those are not tunnel state.
 
 ## The rule this must not break
 

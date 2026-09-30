@@ -28,6 +28,7 @@ type clientServer struct {
 	certificates controlHandler
 	wake         *wakeController
 	updates      controlHandler
+	apps         controlHandler
 }
 
 type controlHandler interface {
@@ -120,6 +121,9 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		}
 		if !lifecycleHandled {
 			response, lifecycleHandled, requestErr = s.edge.HandleControl(ctx, request)
+		}
+		if !lifecycleHandled && s.apps != nil {
+			response, lifecycleHandled, requestErr = s.apps.HandleControl(ctx, request)
 		}
 		if !lifecycleHandled {
 			response, lifecycleHandled, requestErr = s.services.HandleControl(ctx, request)

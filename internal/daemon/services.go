@@ -81,6 +81,7 @@ type serviceController struct {
 	registry       *meshserve.Registry
 	publisher      servicePublisher
 	demand         demandRuntime
+	guard          func(context.Context, meshserve.Service) (func(), error)
 	gate           chan struct{}
 	unsynced       bool
 	catalogUnknown bool
@@ -275,7 +276,13 @@ func (c *serviceController) commitUpsert(ctx context.Context, request protocol.C
 	defer c.release()
 	// Whatever happens below, listeners and routes end up matching what the
 	// registry holds, which is what SQLite holds.
-	defer c.syncDemand()
+	var releaseGuard func()
+	defer func() {
+		c.syncDemand()
+		if releaseGuard != nil {
+			releaseGuard()
+		}
+	}()
 	if err := c.ensureSynchronized("service upsert"); err != nil {
 		return meshserve.Service{}, err
 	}
@@ -287,6 +294,12 @@ func (c *serviceController) commitUpsert(ctx context.Context, request protocol.C
 		return meshserve.Service{}, errors.New("daemon: service changed after preview; preview it again")
 	}
 	service := preview.Service
+	if c.guard != nil {
+		releaseGuard, err = c.guard(ctx, service)
+		if err != nil {
+			return meshserve.Service{}, fmt.Errorf("daemon: temporary app hosting guard: %w", err)
+		}
+	}
 	priorServices := c.registry.Services()
 	prior, hadPrior := findService(priorServices, service.Name)
 	if hadPrior && prior.PublicName != "" && prior.PublicName != service.PublicName {

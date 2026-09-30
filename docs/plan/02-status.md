@@ -1,6 +1,7 @@
 # Status
 
-Updated 2026-09-06.
+Updated 2026-09-30 for the Approved temporary-app implementation. Existing completion
+and verification dates remain unchanged.
 
 ## Done
 
@@ -236,6 +237,11 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 | 10 Mesh as your terminal | T23 | complete |
 
 ## Next
+
+Approved: [temporary apps with short URLs](06-temporary-apps.md) is implemented
+for PR review. [T29](../tasks/T29-temporary-apps.md) records architecture, build and
+validation. Production rollout and actual Safari-device verification remain
+pending deployment. D30 records the authorized scope change from D22.
 
 T18 is complete. Its claims remain inactive across disconnects and edge restarts.
 See [reverse tunnels](../reverse-tunnels.md) for the stock SSH command.

@@ -1,0 +1,20 @@
+{
+  "name": "mesh-app-pill",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ../../scripts/sync-app-pill.mjs && tsc --noEmit && vite build",
+    "dev": "vite --host 127.0.0.1",
+    "test:browser": "pnpm build && node tests/browser.mjs"
+  },
+  "dependencies": {
+    "solid-js": "1.9.12"
+  },
+  "devDependencies": {
+    "vite": "7.3.1",
+    "vite-plugin-solid": "2.11.10",
+    "typescript": "5.9.3",
+    "playwright": "1.63.0"
+  },
+  "packageManager": "pnpm@11.24.0"
+}

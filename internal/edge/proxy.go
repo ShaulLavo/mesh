@@ -111,6 +111,8 @@ type RouteStatus struct {
 
 // Registry atomically publishes a complete public route table.
 type Registry struct {
+	appMu            sync.RWMutex
+	apps             AppHandler
 	tunnelsMu        sync.RWMutex
 	tunnels          map[string]*tunnelRoute
 	mode             Mode
@@ -132,6 +134,24 @@ type Registry struct {
 	wakeTimeout      time.Duration
 	logger           *eventLogger
 	reservedPath     string
+}
+
+type AppHandler interface {
+	ServeHost(http.ResponseWriter, *http.Request, string) bool
+}
+
+// SetAppHandler installs independent whole-host app routing.
+func (r *Registry) SetAppHandler(handler AppHandler) {
+	r.appMu.Lock()
+	defer r.appMu.Unlock()
+	r.apps = handler
+}
+
+func (r *Registry) serveApp(response http.ResponseWriter, request *http.Request, publicName string) bool {
+	r.appMu.RLock()
+	handler := r.apps
+	r.appMu.RUnlock()
+	return handler != nil && handler.ServeHost(response, request, publicName)
 }
 
 type proxySnapshot struct {
@@ -386,11 +406,6 @@ func (r *Registry) ServeHTTP(response http.ResponseWriter, request *http.Request
 		http.NotFound(response, request)
 		return
 	}
-	if reservedTerminalPath(request.URL, r.reservedPath) {
-		r.logger.Print("edge event=reserved-terminal-path")
-		http.NotFound(response, request)
-		return
-	}
 	publicName, forwardedHost, err := canonicalPublicHost(request.Host)
 	if err != nil {
 		r.logger.Print("edge event=invalid-public-host")
@@ -436,6 +451,14 @@ func (r *Registry) ServeHTTP(response http.ResponseWriter, request *http.Request
 	}
 	request = request.WithContext(context.WithValue(request.Context(), proxyClientIPKey{}, clientIP))
 	request.Host = forwardedHost
+	if r.serveApp(response, request, publicName) {
+		return
+	}
+	if reservedTerminalPath(request.URL, r.reservedPath) {
+		r.logger.Print("edge event=reserved-terminal-path")
+		http.NotFound(response, request)
+		return
+	}
 	if route := r.findTunnel(publicName); route != nil {
 		route.serve(response, request, r)
 		return

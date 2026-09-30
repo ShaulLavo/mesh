@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/identity"
@@ -49,6 +50,7 @@ type Config struct {
 	PrivateNamesConfig   string
 	EdgeConfig           string
 	PublicEdgeTarget     string
+	AppDataRoot          string
 	TailscaleServe       bool
 	// HibernateIdle stops a registered agent once its session has been
 	// detached and quiet this long. Zero leaves every session running.
@@ -317,6 +319,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return fmt.Errorf("daemon: restore services: %w", err)
 	}
 	var edgeRegistry *edge.Registry
+	var appPublic *apps.Edge
 	var tunnelForwarder tunnel.Activator
 	var edgeControl controlHandler = disabledEdgeController{}
 	var publicListenAddress string
@@ -343,6 +346,19 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			return fmt.Errorf("daemon: configure public edge registration: %w", err)
 		}
 		edgeControl = controller
+		allowed := make(map[string]bool, len(publicEdgeConfig.Origins))
+		for _, origin := range publicEdgeConfig.Origins {
+			allowed[origin.Identity] = true
+		}
+		appPublic, err = apps.NewEdge(daemonCtx, apps.EdgeConfig{
+			Store: store, Key: meshPrivateKey, Allowed: allowed, Now: opts.now,
+			Resolve: appResolver(publicEdgeConfig.Origins, edge.TailscaleResolver(discoverAllPeers), waker.pin),
+			Acquire: edgeRegistry.AcquireApp, ClientIP: edgeRegistry.AppClientIP,
+		})
+		if err != nil {
+			return fmt.Errorf("daemon: configure temporary app edge: %w", err)
+		}
+		edgeRegistry.SetAppHandler(appPublic)
 		tunnelForwarder = controller
 		defer controller.CloseTunnels()
 		stopTunnelShutdown := context.AfterFunc(daemonCtx, controller.CloseTunnels)
@@ -353,6 +369,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		publicCertificatePin = publicEdgeConfig.CertificateRenewerID
 	}
 	var publication servicePublisher = disabledServicePublisher{}
+	var appPublisher *edge.Publisher
 	if publicEdgeTarget != nil {
 		publisher, err := edge.NewPublisher(edge.PublisherConfig{
 			Signer: meshPrivateKey, Target: *publicEdgeTarget, State: store,
@@ -366,6 +383,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			return fmt.Errorf("daemon: configure public edge publisher: %w", err)
 		}
 		publication = publisher
+		appPublisher = publisher
 	}
 	serviceControl, err := newServiceController(daemonCtx, homeDir, store, serviceRegistry, publication)
 	if err != nil {
@@ -421,6 +439,18 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
+	var appLocal *apps.Origin
+	if appPublisher != nil {
+		appLocal, err = apps.NewOrigin(daemonCtx, apps.OriginConfig{
+			Store: store, Key: meshPrivateKey, EdgeIdentity: publicEdgeTarget.Identity,
+			Exchange: appPublisher.AppExchange, Workers: appWorkers{lifecycle: lifecycle},
+			DataRoot: appDataRoot(cfg.AppDataRoot, stateDir), Now: opts.now, CheckHosting: checkAppHosting(serviceRegistry),
+		})
+		if err != nil {
+			return fmt.Errorf("daemon: configure temporary app origin: %w", err)
+		}
+		serviceControl.guard = appServiceGuard(appLocal)
+	}
 	demand := newDemandManager(daemonCtx, lifecycle, reporter.report)
 	defer demand.Close()
 	serviceControl.demand = demand
@@ -433,6 +463,14 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return err
 	}
 	server.wake = power
+	appControl := &appController{}
+	if appLocal != nil {
+		appControl.origin = appLocal
+	}
+	if appPublic != nil {
+		appControl.edge = appPublic
+	}
+	server.apps = appControl
 	updates, err := newUpdateController(stateDir, meshHost.ID, meshPrivateKey)
 	if err != nil {
 		return err
@@ -448,7 +486,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		TailnetAddrs:               controlAddrs,
 		TailnetPort:                cfg.TailnetPort,
 		WebSocketPath:              cfg.WebSocketPath,
-		HTTPHandler:                serviceRegistry,
+		HTTPHandler:                appOriginHandler(appLocal, serviceRegistry),
 		HTTPSPort:                  cfg.HTTPSPort,
 		TLSConfig:                  certificateRuntime.OriginTLS,
 		PublicListenAddress:        publicListenAddress,
@@ -579,6 +617,11 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			reporter.report(fmt.Errorf("daemon: reconcile public edge routes: %w", err))
 		})
 	}()
+	appsDone := make(chan struct{})
+	go func() {
+		defer close(appsDone)
+		runAppMaintenance(daemonCtx, listenersReady, appLocal, appPublic, reporter)
+	}()
 	tailnetMonitorDone := make(chan error, 1)
 	// Watch Tailnet addresses whenever a listener depends on them, not only for
 	// the public-networking roles. Startup discovery is one shot: if tailscaled
@@ -630,6 +673,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	<-privateNamesDone
 	<-publicCertificateDone
 	<-publicHeartbeatDone
+	<-appsDone
 	return errors.Join(serveErr, <-tailnetMonitorDone)
 }
 
