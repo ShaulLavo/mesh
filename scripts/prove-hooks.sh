@@ -19,7 +19,8 @@ git -C "$scratch/repo" config user.email 'hook-fixture@example.invalid'
 git -C "$scratch/repo" add .
 git -C "$scratch/repo" -c core.hooksPath=/dev/null commit -qm 'Fixture source'
 git -C "$scratch/repo" worktree add -qb hook-proof "$scratch/worktree"
-(cd "$scratch/repo" && lefthook install)
+cp "$(command -v lefthook)" "$scratch/fixture-lefthook"
+(cd "$scratch/repo" && "$scratch/fixture-lefthook" install)
 cd "$scratch/worktree"
 common=$(git rev-parse --git-common-dir)
 [[ -x $common/hooks/pre-commit && -x $common/hooks/pre-push ]]
@@ -77,10 +78,13 @@ rm internal/session/hook_format.go
 git add -u internal/session/hook_format.go
 
 mkdir "$scratch/limited-tools"
-for tool in bash sh git dirname cat grep go gofmt golangci-lint; do
+for tool in bash sh git dirname cat grep uname tr sed go gofmt golangci-lint; do
   ln -s "$(command -v "$tool")" "$scratch/limited-tools/$tool"
 done
 printf '\n// Missing-tool fixture.\n' >>internal/session/ring.go
 git add internal/session/ring.go
 PATH="$scratch/limited-tools" attempt missing-shellcheck 1 'Run mise install, then lefthook install'
+rm "$scratch/fixture-lefthook"
+PATH="$scratch/limited-tools" attempt missing-lefthook 1 "Can't find lefthook in PATH"
+grep -Fq 'Make sure lefthook is available' "$evidence/missing-lefthook.txt"
 printf 'PASS: pre-push is wired to full gates; full execution is covered separately by CI\n'
