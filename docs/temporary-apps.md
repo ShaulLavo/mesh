@@ -123,7 +123,10 @@ Expiry or deletion first removes access, then stops workers and deletes managed
 source, dependencies, data and retained app output. The original source and
 external databases remain yours. If the origin is offline, cleanup stays pending;
 its short edge lease stops serving/running during a partition. Cleanup completes
-when the origin reconnects. Expired names are never reassigned or revived.
+when the origin reconnects. If the edge stops listing an app, for example after
+losing its state, the origin stops the app when its lease lapses. It deletes the
+managed copy 24 hours later unless the edge lists the app again first. Expired
+names are never reassigned or revived.
 
 The app pill is injected only into 200 inline HTML responses. Rewriting supports
 UTF-8 (including `utf8`), US-ASCII, ISO-8859-1, and Windows-1252, with an omitted
