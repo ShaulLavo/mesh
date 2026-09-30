@@ -60,16 +60,24 @@ Anonymous GETs create no pending records or durable writes. Each browser reuses
 its pending cookie and code until approval or expiry. Unapproved pairs stay in
 memory; restarting the edge requires a new code, while approved grants remain
 durable. Each IPv4 address or IPv6 /64 may issue eight codes per minute and
-occupy four of the global 256 slots. A new code at that source's occupancy cap
-replaces its oldest unapproved pair, never an approved one. Shared NATs and /64s
+occupy four slots. IPv6 /48 aggregates may issue 32 codes per minute and occupy
+16 slots. The global in-memory pending cap is 256, separate from the durable
+256 approved-record cap. At source or aggregate occupancy limits, a new code
+replaces the oldest unapproved pair in that bucket. At global pending capacity,
+it replaces the oldest pending pair from the source holding the most pending
+slots, so a fresh source can still pair under a distributed flood. Approved
+records are never evicted. The bounded issuance tracker replaces its least-recent
+window instead of refusing new sources. Shared NATs and /64s
 share these limits. `mesh app browser approve` prints the pending browser's
 bounded User-Agent summary, source IP, and age before asking for a default-no
 TTY confirmation. These details are unverified hints, not proof of identity.
 Noninteractive approval requires `--yes`, which skips the human check for scripts.
 Never approve a code merely because an app, message, or agent asks for it.
 Browser `/confirm` buttons start disabled and require 750 ms of uninterrupted
-visibility and focus plus deliberate pointer or keyboard input. Public exposure
-and deletion also require typing the app ID. Confirm pages cannot be framed.
+visibility and focus, followed by trusted pointer, keyboard, or touch input.
+Input during the delay does not count, and a single native tap after the delay
+can submit. Public exposure and deletion also require typing the app ID, enforced
+by the server as well as the page. Confirm pages cannot be framed.
 
 To rerun the confirmation browser check, render the Go templates into a scratch
 directory, then run the verifier from the repository root:
@@ -81,7 +89,9 @@ node web/app-pill/tests/confirm.mjs "$MESH_CONFIRM_BROWSER_DIR"
 ```
 
 The script uses the existing Playwright development dependency and headless
-Chromium. Set `MESH_PLAYWRIGHT_MODULE` to an installed Playwright entry point or
+Chromium and WebKit, including phone touch profiles. CI runs this verifier in
+the app-pill job. Real Safari device checks remain a rollout requirement. Set
+`MESH_PLAYWRIGHT_MODULE` to an installed Playwright entry point or
 `MESH_CHROMIUM_EXECUTABLE` to a system Chromium binary if needed. All browser
 requests are intercepted; no application or management origin receives traffic.
 
