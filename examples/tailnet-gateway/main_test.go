@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -21,6 +22,16 @@ import (
 
 	"github.com/shaul/mesh/internal/tailnet"
 )
+
+func proxyTestUID(t *testing.T) uint32 {
+	t.Helper()
+	uid := int64(os.Getuid())
+	if uid >= 0 && uid <= math.MaxUint32 {
+		return uint32(uid)
+	}
+	t.Fatalf("test process UID %d is outside the kernel UID range", uid)
+	return 0
+}
 
 func TestGatewayPreservesTLSAndRoutesByServerName(t *testing.T) {
 	for _, metadata := range []bool{false, true} {
@@ -52,7 +63,7 @@ func checkGateway(t *testing.T, metadata bool) {
 		}))
 		server.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}
 		if metadata && name == "apps" {
-			server.Listener = tailnet.ProxyListener{Listener: server.Listener, AllowedUIDs: []uint32{uint32(os.Getuid())}}
+			server.Listener = tailnet.ProxyListener{Listener: server.Listener, AllowedUIDs: []uint32{proxyTestUID(t)}}
 		}
 		server.StartTLS()
 		t.Cleanup(server.Close)
@@ -65,7 +76,7 @@ func checkGateway(t *testing.T, metadata bool) {
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 	if metadata {
-		listener = tailnet.ProxyListener{Listener: listener, AllowedUIDs: []uint32{uint32(os.Getuid())}}
+		listener = tailnet.ProxyListener{Listener: listener, AllowedUIDs: []uint32{proxyTestUID(t)}}
 	}
 	go acceptGateway(listener, private.Listener.Addr().String(), apps.Listener.Addr().String(), metadata)
 	for _, version := range []uint16{tls.VersionTLS12, tls.VersionTLS13} {

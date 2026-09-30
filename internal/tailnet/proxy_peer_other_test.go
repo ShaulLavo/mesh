@@ -4,7 +4,6 @@ package tailnet
 
 import (
 	"io"
-	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -16,7 +15,7 @@ func TestProxyOwnerAccessUnsupported(t *testing.T) {
 		t.Fatalf("unsupported platform returned %v, %v", uids, err)
 	}
 	listener, client := proxyClient(t, "tcp4", "127.0.0.1:0")
-	proxyListener := ProxyListener{Listener: listener, AllowedUIDs: []uint32{uint32(os.Getuid())}}
+	proxyListener := ProxyListener{Listener: listener, AllowedUIDs: []uint32{proxyTestUID(t)}}
 	server, err := proxyListener.Accept()
 	if err != nil {
 		t.Fatal(err)

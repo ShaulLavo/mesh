@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"os"
 	"strings"
 	"testing"
 )
@@ -35,8 +34,8 @@ func TestProxyPeerUIDFromProc(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = server.Close() })
 			uid, err := (systemPeerUIDLookup{}).PeerUID(server)
-			if err != nil || uid != uint32(os.Getuid()) {
-				t.Fatalf("peer UID = %d, %v; want %d", uid, err, os.Getuid())
+			if err != nil || uid != proxyTestUID(t) {
+				t.Fatalf("peer UID = %d, %v; want %d", uid, err, proxyTestUID(t))
 			}
 			if _, err := io.WriteString(client, "PROXY TCP4 100.64.0.2 127.0.0.1 40000 443\r\npayload"); err != nil {
 				t.Fatal(err)
@@ -52,7 +51,7 @@ func TestProxyPeerUIDFromProc(t *testing.T) {
 
 func TestProxyListenerRejectsRealDisallowedPeerUID(t *testing.T) {
 	listener, client := proxyClient(t, "tcp4", "127.0.0.1:0")
-	proxyListener := ProxyListener{Listener: listener, AllowedUIDs: []uint32{uint32(os.Getuid()) + 1}}
+	proxyListener := ProxyListener{Listener: listener, AllowedUIDs: []uint32{proxyTestUID(t) + 1}}
 	server, err := proxyListener.Accept()
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +111,7 @@ func TestParsePeerUIDAuthenticatesClientSocketOnly(t *testing.T) {
 
 func TestProxyForwarderUIDs(t *testing.T) {
 	uids, err := ProxyForwarderUIDs()
-	if err != nil || len(uids) != 2 || uids[0] != 0 || uids[1] != uint32(os.Getuid()) {
+	if err != nil || len(uids) != 2 || uids[0] != 0 || uids[1] != proxyTestUID(t) {
 		t.Fatalf("forwarder allow-list = %v, %v", uids, err)
 	}
 }

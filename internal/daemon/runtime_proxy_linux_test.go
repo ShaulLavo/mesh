@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
@@ -57,7 +56,7 @@ func TestPublicOwnerAccessListenerAuthenticatesBeforeTLS(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !allowed {
-				normalized.proxyForwarderUIDs = []uint32{uint32(os.Getuid()) + 1}
+				normalized.proxyForwarderUIDs = []uint32{proxyTestUID(t) + 1}
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan error, 1)

@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"os"
 	"testing"
@@ -14,8 +15,18 @@ type peerUIDFunc func(net.Conn) (uint32, error)
 
 func (f peerUIDFunc) PeerUID(c net.Conn) (uint32, error) { return f(c) }
 
+func proxyTestUID(t *testing.T) uint32 {
+	t.Helper()
+	uid := int64(os.Getuid())
+	if uid >= 0 && uid <= math.MaxUint32 {
+		return uint32(uid)
+	}
+	t.Fatalf("test process UID %d is outside the kernel UID range", uid)
+	return 0
+}
+
 func TestProxyListenerAuthenticatesForwarderUID(t *testing.T) {
-	uid := uint32(os.Getuid())
+	uid := proxyTestUID(t)
 	for _, tt := range []struct {
 		name    string
 		allowed []uint32

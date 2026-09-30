@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"io"
 	"net"
-	"os"
 	"testing"
 	"time"
 
@@ -22,7 +21,7 @@ func TestGatewayRejectsDisallowedForwarderBeforeBackendDial(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
-	proxyListener := tailnet.ProxyListener{Listener: listener, AllowedUIDs: []uint32{uint32(os.Getuid()) + 1}}
+	proxyListener := tailnet.ProxyListener{Listener: listener, AllowedUIDs: []uint32{proxyTestUID(t) + 1}}
 	done := make(chan error, 1)
 	go func() {
 		client, err := proxyListener.Accept()

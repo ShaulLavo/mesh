@@ -56,7 +56,7 @@ func (c *proxyConn) initialize() {
 	c.once.Do(func() {
 		defer func() {
 			if c.err != nil {
-				_ = c.Conn.Close()
+				_ = c.Close()
 			}
 		}()
 		peer, err := netip.ParseAddrPort(c.Conn.RemoteAddr().String())
