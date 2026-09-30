@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # An on-demand route starts its command on the first connection, shares it
 # between clients, stops it once no connection has been open for the idle
 # window, and keeps its listeners. A daemon restart keeps the session; a

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # A persisted origin service must return after a daemon crash. If its directory
 # later disappears, the daemon stays alive and reports the service unavailable.
 set -uo pipefail

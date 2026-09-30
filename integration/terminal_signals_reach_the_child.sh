@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # ctrl+c must kill the running command, the way it does in any terminal. That
 # needs the child to be a session leader with the PTY slave as its controlling
 # terminal, because the line discipline only sends SIGINT to the foreground

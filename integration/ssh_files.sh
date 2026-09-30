@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # Exercise SFTP and both OpenSSH SCP protocols against live service updates.
 set -euo pipefail
 

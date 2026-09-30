@@ -71,6 +71,7 @@ if (( fast )); then
   # Inspect the index, not unstaged edits, without stashing or modifying the worktree.
   git checkout-index --all --prefix="$scratch/index/"
   cd "$scratch/index"
+  python3 integration/helpers/isolation_test.py EntryPointContractTest
   packages=()
   arguments=(--partial)
   while IFS= read -r -d '' file; do
@@ -105,6 +106,7 @@ if (( fast )); then
     exit 0
   fi
 else
+  python3 integration/helpers/isolation_test.py EntryPointContractTest
   find cmd internal scripts integration .gates -type f -name '*.go' -print0 |
     xargs -0 gofmt -l >"$scratch/unformatted"
   if [[ -s $scratch/unformatted ]]; then
@@ -131,7 +133,7 @@ else
   printf '{"Issues":[]}\n' >"$report_dir/golangci.json"
 fi
 if (( ${#shell_files[@]} )); then
-  run_report shellcheck "$report_dir/shellcheck.json" shellcheck --format=json "${shell_files[@]}"
+  run_report shellcheck "$report_dir/shellcheck.json" shellcheck --source-path=SCRIPTDIR --external-sources --format=json "${shell_files[@]}"
 else
   printf '[]\n' >"$report_dir/shellcheck.json"
 fi

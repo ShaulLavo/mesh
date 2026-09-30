@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # Reading recent output is a one-shot control request. It must not steal the
 # terminal from the client that is already attached.
 set -uo pipefail

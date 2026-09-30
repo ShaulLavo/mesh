@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # Bare mesh rejects redirected input instead of waiting for picker keystrokes.
 set -uo pipefail
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # A worker must flush accepted terminal output and session.exit before its
 # process ends, even when the client consumes output slowly.
 set -uo pipefail

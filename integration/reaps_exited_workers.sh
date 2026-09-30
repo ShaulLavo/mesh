@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # The daemon launches workers but does not supervise their lifetime. It still
 # has to reap each child that exits while the daemon remains alive.
 set -uo pipefail

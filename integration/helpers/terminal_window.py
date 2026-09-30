@@ -22,6 +22,8 @@ import tempfile
 import termios
 import time
 
+from isolation import refuse_live_paths
+
 sys.dont_write_bytecode = True
 from mesh_control import round_trip
 
@@ -132,8 +134,10 @@ class Terminal:
 
 class Fixture:
     def __init__(self, binary, root):
+        refuse_live_paths({"fixture root": str(root)})
         self.binary = str(Path(binary).resolve())
-        self.root = Path(root)
+        self.root = Path(root).resolve()
+        refuse_live_paths({name: str(self.root / name) for name in ("local", "remote", "config", "fixture-home")})
         self.helpers = Path(__file__).resolve().parent
         self.local = self.root / "local"
         self.remote = self.root / "remote"

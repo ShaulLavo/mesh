@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # Acceptance test for the Mesh contract: killing the client must not kill the
 # command. Run from the repo root after `go build -o mesh ./cmd/mesh`.
 set -uo pipefail

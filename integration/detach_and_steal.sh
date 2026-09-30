@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # Covers the two client-side behaviours we committed to: ctrl+] detaches
 # without killing anything, and a second attach steals the session from the
 # first (single attacher, steal on attach).

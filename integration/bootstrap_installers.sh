@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 set -euo pipefail
 
 if [[ -z ${MESH:-} ]]; then

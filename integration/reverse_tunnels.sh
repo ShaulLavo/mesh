@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # Exercise durable claims and transient HTTP routes with real daemons and OpenSSH.
 set -uo pipefail
 export PYTHONDONTWRITEBYTECODE=1

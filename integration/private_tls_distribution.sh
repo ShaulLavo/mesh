@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # Signed private-name bundles bind the name to the certificate transcript.
 # Staging stays non-serving, and host.info exposes the name only after Mesh
 # verifies the raw Tailscale Serve ingress route.

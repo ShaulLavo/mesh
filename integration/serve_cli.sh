@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # The product CLI publishes services through identity-pinned real daemons.
 # This fixture has no T12 certificate or Tailscale Serve, so private services
 # use the verified control endpoint while public URLs remain canonical HTTPS.

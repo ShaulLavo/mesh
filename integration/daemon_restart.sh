@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
 # A daemon is disposable: restarting it must neither replace nor interrupt a
 # worker that it discovered and served before the restart.
 set -uo pipefail
