@@ -372,6 +372,7 @@ func TestServeHTTPSUsesLoopbackServicesOnlyAndHotReloads(t *testing.T) {
 		StateDir: stateDir, HTTPSPort: port, WebSocketPath: "/mesh",
 		TLSConfig:   &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: source.GetCertificate},
 		HTTPHandler: services,
+		PrivateName: func() string { return "probe.mesh.shaulavo.dev" },
 	}, func(context.Context, transport.Conn) error {
 		return errors.New("terminal handler reached from HTTPS")
 	})
