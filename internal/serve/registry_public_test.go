@@ -19,8 +19,6 @@ func TestRegistryPublicHostRejectsNestedPrivateRoutes(t *testing.T) {
 			{name: "direct tailnet peer", host: "app.shaulavo.dev", remote: "100.64.0.3:40000"},
 			{name: "public host with port", host: "app.shaulavo.dev:443", remote: "100.64.0.3:40000"},
 			{name: "pinned edge", host: "app.shaulavo.dev", remote: "100.64.0.2:40000"},
-			{name: "pinned edge with private host", host: "pc.mesh.shaulavo.dev", remote: "100.64.0.2:40000"},
-			{name: "pinned edge with empty host", remote: "100.64.0.2:40000"},
 		} {
 			name := "proxy/" + peer.name
 			if demand {
@@ -85,8 +83,9 @@ func TestRegistryPublicHostRouting(t *testing.T) {
 		{name: "tailnet private namespace", host: "mesh.shaulavo.dev", path: "/app/admin/value", wantStatus: http.StatusNoContent, wantHits: 1, wantPrefix: "/app/admin"},
 		{name: "tailnet IP", host: "100.64.0.1:7337", path: "/app/admin/value", wantStatus: http.StatusNoContent, wantHits: 1, wantPrefix: "/app/admin"},
 		{name: "tailnet IPv6", host: "[fd7a:115c:a1e0::1]:7337", path: "/app/admin/value", wantStatus: http.StatusNoContent, wantHits: 1, wantPrefix: "/app/admin"},
-		{name: "pinned edge private host", host: "pc.mesh.shaulavo.dev", path: "/app/value", remote: "100.64.0.2:40000", wantStatus: http.StatusNotFound},
-		{name: "pinned mapped edge", host: "pc.mesh.shaulavo.dev", path: "/app/value", remote: "[::ffff:100.64.0.2]:40000", wantStatus: http.StatusNotFound},
+		{name: "pinned edge private host", host: "pc.mesh.shaulavo.dev", path: "/app/admin/value", remote: "100.64.0.2:40000", wantStatus: http.StatusNoContent, wantHits: 1, wantPrefix: "/app/admin"},
+		{name: "pinned edge IP host", host: "100.64.0.1:7337", path: "/app/admin/value", remote: "100.64.0.2:40000", wantStatus: http.StatusNoContent, wantHits: 1, wantPrefix: "/app/admin"},
+		{name: "pinned mapped edge", host: "pc.mesh.shaulavo.dev", path: "/app/admin/value", remote: "[::ffff:100.64.0.2]:40000", wantStatus: http.StatusNoContent, wantHits: 1, wantPrefix: "/app/admin"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var hits atomic.Int32

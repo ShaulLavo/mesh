@@ -323,20 +323,16 @@ func proxyHandler(port, prefix string, trustForwardedHeaders func(netip.Addr) bo
 	})
 }
 
-func trustedForwardingPeer(request *http.Request, trust func(netip.Addr) bool) bool {
+func trustedForwardingMetadata(request *http.Request, trust func(netip.Addr) bool) (string, string, bool) {
 	if trust == nil {
-		return false
+		return "", "", false
 	}
 	host, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err != nil {
-		return false
+		return "", "", false
 	}
 	immediate, err := netip.ParseAddr(host)
-	return err == nil && trust(immediate.Unmap())
-}
-
-func trustedForwardingMetadata(request *http.Request, trust func(netip.Addr) bool) (string, string, bool) {
-	if !trustedForwardingPeer(request, trust) {
+	if err != nil || !trust(immediate.Unmap()) {
 		return "", "", false
 	}
 	forwardedForValues := request.Header.Values("X-Forwarded-For")

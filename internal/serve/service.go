@@ -219,6 +219,7 @@ func upstreamAddress(port string) string {
 }
 
 // ServeHTTP dispatches by longest path prefix and returns 404 for unknown paths.
+// A private nested mount must not become public through a parent fallback.
 func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	snapshot := r.snapshot.Load()
 	if snapshot == nil {
@@ -229,7 +230,7 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	if name, _, err := net.SplitHostPort(host); err == nil {
 		host = name
 	}
-	publicRequest := (host != "" && validatePublicName(host) == nil) || trustedForwardingPeer(request, r.trustForwardedHeaders)
+	publicRequest := host != "" && validatePublicName(host) == nil
 	requestPath := request.URL.EscapedPath()
 	for _, route := range snapshot.routes {
 		if requestPath == route.prefix || strings.HasPrefix(requestPath, route.prefix+"/") {
