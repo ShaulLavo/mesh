@@ -49,9 +49,15 @@ store surgery.
 - **files** — a directory, served as a browsable and downloadable listing
 - **proxy** — a port already listening on that machine
 
-On-demand startup failures return a generic HTTP message and an opaque reference.
-The daemon log keeps the correlated command, session ID, and output tail.
-`mesh serve ls` reports the failed state, and `mesh logs SESSION` retains the output.
+On-demand startup failures return a generic HTTP message, an opaque reference,
+and an owner hint to use `mesh serve ls` and `mesh logs <session>` on the host.
+All requests waiting on one failed start share its reference. The daemon logs
+that start once, with the command, session ID, and output tail quoted so process
+output cannot forge log entries. On Linux, read the daemon log with
+`journalctl --user -u mesh`. On macOS, it is
+`~/.local/state/mesh/daemon.err.log`.
+`mesh serve ls` reports the failed state and session ID. `mesh logs SESSION`
+retains the process output.
 
 ## Where it lands
 

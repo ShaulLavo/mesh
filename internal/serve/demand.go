@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -280,11 +279,33 @@ func (r *Registry) SetDemandGate(gate DemandGate) {
 	r.gate.Store(&gate)
 }
 
-// WriteDemandFailure keeps launch diagnostics in the daemon log because an
-// HTTP caller is not necessarily the session owner.
+type loggedDemandFailure struct {
+	err       error
+	reference string
+}
+
+func (f *loggedDemandFailure) Error() string { return f.err.Error() }
+func (f *loggedDemandFailure) Unwrap() error { return f.err }
+
+// LogDemandFailure records a failed start before its error is shared with
+// waiting requests. Quoting the diagnostic prevents process output from
+// forging daemon log entries.
+func LogDemandFailure(err error, report func(error)) error {
+	failure := &loggedDemandFailure{err: err, reference: rand.Text()}
+	report(fmt.Errorf("daemon: on-demand failure %s: %q", failure.reference, err.Error()))
+	return failure
+}
+
+// WriteDemandFailure redacts launch diagnostics because an HTTP caller is not
+// necessarily the session owner. Waiters on one failed start share its reference.
 func WriteDemandFailure(w http.ResponseWriter, err error) {
-	reference := rand.Text()
-	log.Printf("on-demand failure %s: %v", reference, err)
+	var failure *loggedDemandFailure
+	var reference string
+	if errors.As(err, &failure) {
+		reference = failure.reference
+	} else {
+		reference = rand.Text()
+	}
 	status := http.StatusBadGateway
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		status = http.StatusServiceUnavailable
@@ -293,5 +314,5 @@ func WriteDemandFailure(w http.ResponseWriter, err error) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	_, _ = fmt.Fprintf(w, "on-demand service unavailable; reference %s\n", reference)
+	_, _ = fmt.Fprintf(w, "on-demand service unavailable; reference %s\nThe owner can see details with `mesh serve ls` and `mesh logs <session>` on the host.\n", reference)
 }
