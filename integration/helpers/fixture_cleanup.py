@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fixture teardown waits for workers before deleting their state directories."""
 
+import json
 import os
 import signal
 import socket
@@ -10,6 +11,7 @@ import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from mesh_control import round_trip
 from terminal_window import (
     PROMPT,
     Fixture,
@@ -63,9 +65,39 @@ def exercise(binary, root):
     print("PASS: fixture teardown waits for final worker writes")
 
 
+def exercise_unattached(binary, root):
+    fixture = Fixture(binary, root)
+    fixture.start_local_daemon()
+    created = round_trip(str(fixture.local / "daemon.sock"), {
+        "type": "session.create", "requestId": "fixture-unattached",
+        "command": ["/bin/sh", "-c", "printf retained-output"], "cwd": str(fixture.root),
+    })
+    require(created.get("type") == "session.created", f"create failed: {created}")
+    session_id = created["sessionId"]
+    socket_path = fixture.local / "s" / session_id / "sock"
+    pid = fixture.metadata(session_id)["pid"]
+
+    def reaped():
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        return False
+
+    eventually(reaped, "unattached command was not reaped")
+    require(socket_path.exists(), "worker did not retain output for its first attachment")
+    fixture.close()
+    require(not socket_path.exists(), "unattached worker retained its socket after teardown")
+    metadata = json.loads((socket_path.parent / "meta.json").read_text())
+    require(metadata["state"] == "exited", f"worker did not finish its metadata: {metadata}")
+    print("PASS: fixture teardown acknowledges an exited never-attached worker")
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="mesh-fixture-cleanup-") as root:
         exercise(sys.argv[1], root)
+    with tempfile.TemporaryDirectory(prefix="mesh-fixture-unattached-") as root:
+        exercise_unattached(sys.argv[1], root)
 
 
 if __name__ == "__main__":
