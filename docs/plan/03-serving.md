@@ -49,6 +49,10 @@ store surgery.
 - **files** — a directory, served as a browsable and downloadable listing
 - **proxy** — a port already listening on that machine
 
+On-demand startup failures return a generic HTTP message and an opaque reference.
+The daemon log keeps the correlated command, session ID, and output tail.
+`mesh serve ls` reports the failed state, and `mesh logs SESSION` retains the output.
+
 ## Where it lands
 
 ```
