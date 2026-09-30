@@ -1,0 +1,81 @@
+name: Recovery cleanup probe
+on:
+  push:
+    branches: [fix/recovery-history-cleanup]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build -o "$RUNNER_TEMP/mesh" ./cmd/mesh
+      - name: Ten origin main SSH resize trials
+        run: |
+          git fetch -q origin main
+          baseline="$RUNNER_TEMP/baseline"
+          mkdir -p "$baseline" "$RUNNER_TEMP/recovery-evidence"
+          git archive origin/main | tar -x -C "$baseline"
+          echo "BASELINE COMMIT: $(git rev-parse origin/main)"
+          (cd "$baseline" && go build -o "$RUNNER_TEMP/mesh-main" ./cmd/mesh)
+          failures=0
+          for number in $(seq 1 10); do
+            if MESH="$RUNNER_TEMP/mesh-main" bash "$baseline/integration/ssh_sessions.sh" > "$RUNNER_TEMP/recovery-evidence/main-ssh-$number.log" 2>&1; then
+              echo "MAIN SSH TRIAL $number PASS"
+            else
+              failures=$((failures + 1))
+              echo "MAIN SSH TRIAL $number FAIL"
+              cat "$RUNNER_TEMP/recovery-evidence/main-ssh-$number.log"
+            fi
+          done
+          echo "MAIN SSH FAILURES: $failures/10"
+      - name: Diagnose pending workers
+        run: |
+          mkdir -p "$RUNNER_TEMP/recovery-evidence"
+          cat > "$RUNNER_TEMP/diagnose.py" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import runpy
+          import subprocess
+          import sys
+          import time
+          sys.path.insert(0, str(Path('integration/helpers').resolve()))
+          import terminal_window
+          original = terminal_window.Fixture.close
+          def diagnostic_close(self):
+              started = time.monotonic()
+              try:
+                  original(self)
+              except RuntimeError:
+                  print(f'CLOSE ELAPSED: {time.monotonic() - started}', flush=True)
+                  for state in {self.local, self.remote}:
+                      for path in (state / 's').glob('*/sock'):
+                          print(f'PENDING SOCKET: {path}', flush=True)
+                          for name in ('meta.json', 'worker.log'):
+                              data = path.parent / name
+                              if data.exists():
+                                  print(f'{name}: {data.read_text()[-4000:]}', flush=True)
+                  print(subprocess.check_output(['ps', '-eo', 'pid,ppid,stat,wchan,args']).decode(), flush=True)
+                  raise
+          terminal_window.Fixture.close = diagnostic_close
+          script = sys.argv[1]
+          sys.argv = [script, sys.argv[2]]
+          runpy.run_path(script, run_name='__main__')
+          PY
+          failed=0
+          for script in agent_recovery hibernation ssh_sessions; do
+            python3 "$RUNNER_TEMP/diagnose.py" "integration/helpers/$script.py" "$RUNNER_TEMP/mesh" > "$RUNNER_TEMP/recovery-evidence/$script.log" 2>&1 || failed=1
+            cat "$RUNNER_TEMP/recovery-evidence/$script.log"
+          done
+          exit "$failed"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: recovery-cleanup-evidence
+          path: ${{ runner.temp }}/recovery-evidence
