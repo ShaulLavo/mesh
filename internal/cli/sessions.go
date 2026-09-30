@@ -125,13 +125,17 @@ func Latest() (Session, error) {
 
 // alive reports whether a worker is listening on the session's socket. The
 // socket file existing is not enough: a killed worker leaves one behind.
-func alive(dir string) bool {
-	conn, err := net.DialTimeout("unix", paths.Socket(dir), 500*time.Millisecond)
+var probeWorker = func(socket string) error {
+	conn, err := net.DialTimeout("unix", socket, 500*time.Millisecond)
 	if err != nil {
-		return false
+		return fmt.Errorf("probe worker socket %s: %w", socket, err)
 	}
 	_ = conn.Close()
-	return true
+	return nil
+}
+
+func alive(dir string) bool {
+	return probeWorker(paths.Socket(dir)) == nil
 }
 
 // Spawn starts a detached worker for command and returns the new session once
