@@ -3,6 +3,7 @@ package daemon
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -27,7 +28,8 @@ type fakeDemandSessions struct {
 	exits    map[string]int
 	started  []string
 	stopped  []string
-	exitNow  *int // a started session exits at once with this code
+	exitNow  *int  // a started session exits at once with this code
+	stopErr  error // a stop fails and leaves the session running
 	adoptID  string
 	adoptFor string
 }
@@ -54,6 +56,9 @@ func (f *fakeDemandSessions) stopSession(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, id)
+	if f.stopErr != nil {
+		return f.stopErr
+	}
 	if _, live := f.live[id]; live {
 		delete(f.live, id)
 		f.exits[id] = 129
@@ -89,6 +94,18 @@ func (f *fakeDemandSessions) crash(id string, code int) {
 	defer f.mu.Unlock()
 	delete(f.live, id)
 	f.exits[id] = code
+}
+
+func (f *fakeDemandSessions) failStops(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopErr = err
+}
+
+func (f *fakeDemandSessions) liveCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.live)
 }
 
 func (f *fakeDemandSessions) counts() (started, stopped int) {
@@ -484,4 +501,180 @@ func TestDemandListenersCloseWhileConnectionsArrive(t *testing.T) {
 	}
 	close(stop)
 	dialers.Wait()
+}
+
+var errWorkerSilent = errors.New("worker did not answer")
+
+func TestDemandFailedStopMustNotSpawnDuplicate(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	manager := testDemandManager(t, sessions, func() bool { return true })
+	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+	if err := manager.Start(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	sessions.failStops(errWorkerSilent)
+	if err := manager.Stop(context.Background(), "dev"); !errors.Is(err, errWorkerSilent) {
+		t.Fatalf("Stop = %v, want the stop failure", err)
+	}
+	if status := manager.Status("dev"); status.State != protocol.DemandFailed || status.SessionID != "S001" {
+		t.Fatalf("status after a failed stop = %+v, want failed and still naming S001", status)
+	}
+
+	if err := manager.Start(context.Background(), "dev"); err == nil {
+		t.Fatal("Start succeeded while the route's first session may still run")
+	}
+	release, err := manager.Enter(context.Background(), "dev")
+	if err == nil {
+		release()
+		t.Fatal("Enter succeeded while the route's first session may still run")
+	}
+	if started, _ := sessions.counts(); started != 1 || sessions.liveCount() != 1 {
+		t.Fatalf("failed stop retained live original but started %d workers", started)
+	}
+
+	sessions.failStops(nil)
+	if err := manager.Start(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if started, _ := sessions.counts(); started != 2 || sessions.liveCount() != 1 {
+		t.Fatalf("after the original stopped, started %d with %d live; want one replacement", started, sessions.liveCount())
+	}
+}
+
+func TestDemandSecondStopRetriesTheOwnedSession(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	manager := testDemandManager(t, sessions, func() bool { return true })
+	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+	if err := manager.Start(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	sessions.failStops(errWorkerSilent)
+	if err := manager.Stop(context.Background(), "dev"); err == nil {
+		t.Fatal("first Stop succeeded although the stop failed")
+	}
+	if err := manager.Stop(context.Background(), "dev"); !errors.Is(err, errWorkerSilent) {
+		t.Fatalf("second Stop = %v, want a retried stop that fails again", err)
+	}
+	if _, stopped := sessions.counts(); stopped != 2 {
+		t.Fatalf("stop attempts = %d, want the second Stop to retry", stopped)
+	}
+	sessions.failStops(nil)
+	if err := manager.Stop(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if sessions.liveCount() != 0 || manager.Status("dev").State != protocol.DemandStopped {
+		t.Fatalf("status = %+v with %d live, want stopped", manager.Status("dev"), sessions.liveCount())
+	}
+}
+
+func TestDemandReadyTimeoutWithFailedCleanupDoesNotDuplicate(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	manager := testDemandManager(t, sessions, func() bool { return false })
+	service := demandService(time.Minute)
+	service.Demand.ReadyTimeout = 30 * time.Millisecond
+	manager.Sync([]meshserve.Service{service})
+	sessions.failStops(errWorkerSilent)
+
+	if err := manager.Start(context.Background(), "dev"); err == nil || !strings.Contains(err.Error(), "stopping it failed") {
+		t.Fatalf("Start = %v, want a ready timeout whose cleanup failed", err)
+	}
+	if err := manager.Start(context.Background(), "dev"); err == nil {
+		t.Fatal("Start succeeded although the upstream never accepts")
+	}
+	if started, _ := sessions.counts(); started != 1 {
+		t.Fatalf("a timed-out session that could not be stopped was followed by %d starts, want 1", started)
+	}
+}
+
+func TestDemandRecipeChangeAfterAFailedStopKeepsOwnership(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	manager := testDemandManager(t, sessions, func() bool { return true })
+	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+	if err := manager.Start(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	sessions.failStops(errWorkerSilent)
+	if err := manager.Stop(context.Background(), "dev"); err == nil {
+		t.Fatal("Stop succeeded although the stop failed")
+	}
+	changed := demandService(time.Minute)
+	changed.Demand.Command = "bun run dev --port 1"
+	manager.Sync([]meshserve.Service{changed})
+	if err := manager.Start(context.Background(), "dev"); err == nil {
+		t.Fatal("Start succeeded while the old recipe's session may still run")
+	}
+	if started, _ := sessions.counts(); started != 1 {
+		t.Fatalf("a recipe change after a failed stop started %d sessions, want 1", started)
+	}
+}
+
+func TestDemandRemovalRetriesAFailedStop(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	manager := testDemandManager(t, sessions, func() bool { return true })
+	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+	if err := manager.Start(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	sessions.failStops(errWorkerSilent)
+	manager.Sync(nil)
+	waitForStops(t, sessions, 1)
+
+	sessions.failStops(nil)
+	manager.Sync(nil)
+	waitForStops(t, sessions, 2)
+	deadline := time.Now().Add(2 * time.Second)
+	for sessions.liveCount() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("a removed route forgot the session its failed stop left running")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func TestDemandRouteReaddedAfterAFailedRemovalKeepsOwnership(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	manager := testDemandManager(t, sessions, func() bool { return true })
+	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+	if err := manager.Start(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	sessions.failStops(errWorkerSilent)
+	manager.Sync(nil)
+	waitForStops(t, sessions, 1)
+
+	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+	if err := manager.Start(context.Background(), "dev"); err == nil {
+		t.Fatal("a re-added route started while its old session may still run")
+	}
+	if started, _ := sessions.counts(); started != 1 {
+		t.Fatalf("re-adding a route whose stop failed started %d sessions, want 1", started)
+	}
+}
+
+func TestDemandManagerCloseLeavesTheSessionRunning(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	manager := testDemandManager(t, sessions, func() bool { return true })
+	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+	if err := manager.Start(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	manager.Close()
+	if _, stopped := sessions.counts(); stopped != 0 || sessions.liveCount() != 1 {
+		t.Fatal("closing the manager stopped the route's session")
+	}
+}
+
+func waitForStops(t *testing.T, sessions *fakeDemandSessions, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, stopped := sessions.counts(); stopped >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			_, stopped := sessions.counts()
+			t.Fatalf("stop attempts = %d, want %d", stopped, want)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
