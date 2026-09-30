@@ -475,7 +475,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	demand := newDemandManager(daemonCtx, lifecycle, reporter.report)
 	defer demand.Close()
 	serviceControl.demand = demand
-	serviceRegistry.SetDemandGate(demand)
+	serviceRegistry.SetDemandGate(demand, demand.logger)
 	// Bind listeners and adopt sessions a previous daemon started before any
 	// client can ask about them.
 	demand.Sync(serviceRegistry.Services())

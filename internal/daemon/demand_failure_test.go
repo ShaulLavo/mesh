@@ -31,7 +31,7 @@ func TestDemandFailedStartLogsOnceForWaitingRequests(t *testing.T) {
 	manager := testDemandManager(t, sessions, func() bool { return false })
 	var ownerLog bytes.Buffer
 	logger := log.New(&ownerLog, "", 0)
-	manager.report = func(err error) { logger.Print(err) }
+	manager.logger = logger
 
 	allowFailure := make(chan struct{})
 	var unblock sync.Once
@@ -48,7 +48,7 @@ func TestDemandFailedStartLogsOnceForWaitingRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry.SetDemandGate(manager)
+	registry.SetDemandGate(manager, manager.logger)
 	waiting := make(chan struct{}, 2)
 	responses := make(chan *httptest.ResponseRecorder, 2)
 	for range 2 {
@@ -104,7 +104,7 @@ func TestDemandFailedStartLogsWithoutHTTPWaiters(t *testing.T) {
 	manager := testDemandManager(t, sessions, func() bool { return false })
 	var ownerLog bytes.Buffer
 	logger := log.New(&ownerLog, "", 0)
-	manager.report = func(err error) { logger.Print(err) }
+	manager.logger = logger
 	manager.Sync([]meshserve.Service{demandService(time.Minute)})
 	if err := manager.Start(context.Background(), "dev"); err == nil {
 		t.Fatal("failed command started successfully")

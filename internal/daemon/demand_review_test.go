@@ -70,6 +70,7 @@ func TestDemandFailureBypassesFullReporterQueue(t *testing.T) {
 	sessions.exitNow = &code
 	manager := testDemandManager(t, sessions, func() bool { return false })
 	manager.report = reporter.report
+	manager.logger = logger
 	manager.Sync([]meshserve.Service{demandService(time.Minute)})
 	result := make(chan error, 1)
 	go func() {
@@ -95,7 +96,7 @@ func TestDemandFailureBypassesFullReporterQueue(t *testing.T) {
 		t.Fatal("failed start returned no error")
 	}
 	response := httptest.NewRecorder()
-	meshserve.WriteDemandFailure(response, failure)
+	meshserve.WriteDemandFailure(response, failure, logger)
 	reference, _, _ := strings.Cut(strings.TrimPrefix(response.Body.String(), "on-demand service unavailable; reference "), "\n")
 	if !strings.Contains(sink.String(), "on-demand failure "+reference+": ") {
 		t.Errorf("full reporter queue lost the referenced diagnostic: %q", sink.String())
@@ -109,14 +110,14 @@ func TestDemandAdmissionErrorsHaveCorrelatedLog(t *testing.T) {
 			manager := testDemandManager(t, newFakeDemandSessions(), func() bool { return false })
 			sink := &demandLogSink{}
 			logger := log.New(sink, "", 0)
-			manager.report = func(err error) { logger.Print(err) }
+			manager.logger = logger
 			service := demandService(time.Minute)
 			manager.Sync([]meshserve.Service{service})
 			registry, err := meshserve.NewRegistry([]meshserve.Service{service})
 			if err != nil {
 				t.Fatal(err)
 			}
-			registry.SetDemandGate(manager)
+			registry.SetDemandGate(manager, manager.logger)
 			request := httptest.NewRequest(http.MethodGet, "/dev/", nil)
 			wantStatus := http.StatusServiceUnavailable
 			if removed {

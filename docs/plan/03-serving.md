@@ -53,7 +53,12 @@ On-demand startup failures return a generic HTTP message, an opaque reference,
 and an owner hint to use `mesh serve ls` and `mesh logs <session>` on the host.
 All requests waiting on one failed start share its reference. The daemon logs
 that start once, with the command, session ID, and output tail quoted so process
-output cannot forge log entries. On Linux, read the daemon log with
+output cannot forge log entries. The synchronous log write completes before any
+waiter receives the reference, bypassing the daemon's best-effort error queue.
+Admission errors, including cancellation and removed routes, use the same log
+path with their own references. If the log write fails, the generic response
+omits the reference rather than claiming a diagnostic was recorded.
+On Linux, read the daemon log with
 `journalctl --user -u mesh`. On macOS, it is
 `~/.local/state/mesh/daemon.err.log`.
 `mesh serve ls` reports the failed state and session ID. `mesh logs SESSION`

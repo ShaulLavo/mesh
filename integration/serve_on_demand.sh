@@ -271,6 +271,8 @@ if grep -Eq 'BROKEN_OUTPUT_MARKER|session |command |status 7|route :' "$TEST_ROO
 fi
 grep -Fq "daemon: on-demand failure $reference: \"route :$BROKEN" "$TEST_ROOT/origin.log" ||
   fail "owner log has no correlated failure"
+[ "$(grep -Fc "daemon: on-demand failure $reference: " "$TEST_ROOT/origin.log")" = 1 ] ||
+  fail "owner log must contain exactly one correlated line before the HTTP response returns"
 grep -Fq 'status 7' "$TEST_ROOT/origin.log" || fail "owner log lost the exit status"
 grep -Fq 'command \"echo BROKEN_OUTPUT_MARKER; exit 7\"' "$TEST_ROOT/origin.log" || fail "owner log lost the command"
 grep -Fq '\n\nlast output:\nBROKEN_OUTPUT_MARKER' "$TEST_ROOT/origin.log" || fail "owner log did not escape the output"

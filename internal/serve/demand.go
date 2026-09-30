@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -263,9 +264,9 @@ func (r *Registry) gatedHandler(name string, inner http.Handler) http.Handler {
 			http.Error(w, "on-demand serving is not available", http.StatusServiceUnavailable)
 			return
 		}
-		release, err := (*gate).Enter(request.Context(), name)
+		release, err := gate.Enter(request.Context(), name)
 		if err != nil {
-			WriteDemandFailure(w, err)
+			WriteDemandFailure(w, err, gate.logger)
 			return
 		}
 		defer release()
@@ -273,38 +274,47 @@ func (r *Registry) gatedHandler(name string, inner http.Handler) http.Handler {
 	})
 }
 
-// SetDemandGate installs the gate that on-demand routes wait on. Until it is
-// set they answer 503, which only happens while the daemon is starting.
-func (r *Registry) SetDemandGate(gate DemandGate) {
-	r.gate.Store(&gate)
+type demandGate struct {
+	DemandGate
+	logger *log.Logger
 }
 
-type loggedDemandFailure struct {
+// SetDemandGate installs the admission policy and its synchronous diagnostic
+// logger together. A nil logger uses the daemon's default logger.
+func (r *Registry) SetDemandGate(gate DemandGate, logger *log.Logger) {
+	r.gate.Store(&demandGate{DemandGate: gate, logger: logger})
+}
+
+// DemandFailure carries an owner diagnostic. Its reference is available only
+// after the synchronous log write succeeds.
+type DemandFailure struct {
 	err       error
 	reference string
 }
 
-func (f *loggedDemandFailure) Error() string { return f.err.Error() }
-func (f *loggedDemandFailure) Unwrap() error { return f.err }
+func (f *DemandFailure) Error() string { return f.err.Error() }
+func (f *DemandFailure) Unwrap() error { return f.err }
 
-// LogDemandFailure records a failed start before its error is shared with
-// waiting requests. Quoting the diagnostic prevents process output from
-// forging daemon log entries.
-func LogDemandFailure(err error, report func(error)) error {
-	failure := &loggedDemandFailure{err: err, reference: rand.Text()}
-	report(fmt.Errorf("daemon: on-demand failure %s: %q", failure.reference, err.Error()))
+// LogDemandFailure bypasses best-effort queues before sharing a reference.
+// Quoting the diagnostic prevents process output from forging log entries.
+func LogDemandFailure(err error, logger *log.Logger) *DemandFailure {
+	if logger == nil {
+		logger = log.Default()
+	}
+	failure := &DemandFailure{err: err, reference: rand.Text()}
+	if logErr := logger.Output(2, fmt.Sprintf("daemon: on-demand failure %s: %q", failure.reference, err.Error())); logErr != nil {
+		failure.reference = ""
+		failure.err = errors.Join(err, fmt.Errorf("daemon: write on-demand failure diagnostic: %w", logErr))
+	}
 	return failure
 }
 
 // WriteDemandFailure redacts launch diagnostics because an HTTP caller is not
 // necessarily the session owner. Waiters on one failed start share its reference.
-func WriteDemandFailure(w http.ResponseWriter, err error) {
-	var failure *loggedDemandFailure
-	var reference string
-	if errors.As(err, &failure) {
-		reference = failure.reference
-	} else {
-		reference = rand.Text()
+func WriteDemandFailure(w http.ResponseWriter, err error, logger *log.Logger) {
+	var failure *DemandFailure
+	if !errors.As(err, &failure) {
+		failure = LogDemandFailure(err, logger)
 	}
 	status := http.StatusBadGateway
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -314,5 +324,9 @@ func WriteDemandFailure(w http.ResponseWriter, err error) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	_, _ = fmt.Fprintf(w, "on-demand service unavailable; reference %s\nThe owner can see details with `mesh serve ls` and `mesh logs <session>` on the host.\n", reference)
+	message := "on-demand service unavailable"
+	if failure.reference != "" {
+		message += "; reference " + failure.reference
+	}
+	_, _ = fmt.Fprintf(w, "%s\nThe owner can see details with `mesh serve ls` and `mesh logs <session>` on the host.\n", message)
 }

@@ -22,8 +22,8 @@ func TestDemandFailureKeepsDiagnosticsInOwnerLog(t *testing.T) {
 	}
 	var ownerLog bytes.Buffer
 	logger := log.New(&ownerLog, "", 0)
-	failure := LogDemandFailure(errString(diagnostic), func(err error) { logger.Print(err) })
-	registry.SetDemandGate(&fakeGate{err: failure})
+	failure := LogDemandFailure(errString(diagnostic), logger)
+	registry.SetDemandGate(&fakeGate{err: failure}, logger)
 
 	var previousID string
 	for range 2 {
@@ -65,8 +65,8 @@ func TestDemandFailureEscapesDiagnosticLog(t *testing.T) {
 	const diagnostic = "private output\n2026/10/01 00:00:00 daemon: forged entry\r\x1b[2J"
 	var ownerLog bytes.Buffer
 	logger := log.New(&ownerLog, "", 0)
-	failure := LogDemandFailure(errString(diagnostic), func(err error) { logger.Print(err) })
-	WriteDemandFailure(httptest.NewRecorder(), failure)
+	failure := LogDemandFailure(errString(diagnostic), logger)
+	WriteDemandFailure(httptest.NewRecorder(), failure, logger)
 	if lines := strings.Count(ownerLog.String(), "\n"); lines != 1 {
 		t.Errorf("one failed start wrote %d log lines, want 1", lines)
 	}
@@ -79,9 +79,9 @@ func TestDemandFailurePreservesCancellationStatus(t *testing.T) {
 	t.Parallel()
 	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
 		err := fmt.Errorf("private diagnostic: %w", cause)
-		for _, failure := range []error{err, LogDemandFailure(err, func(error) {})} {
+		for _, failure := range []error{err, LogDemandFailure(err, nil)} {
 			response := httptest.NewRecorder()
-			WriteDemandFailure(response, failure)
+			WriteDemandFailure(response, failure, nil)
 			if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "private diagnostic") {
 				t.Fatalf("cancelled admission answered %d %q", response.Code, response.Body.String())
 			}
@@ -94,15 +94,51 @@ func TestDemandFailurePreservesCancellationStatus(t *testing.T) {
 
 func TestDemandFailureReferencesIdentifyStartAttempts(t *testing.T) {
 	t.Parallel()
-	first := LogDemandFailure(errString("same diagnostic"), func(error) {})
-	second := LogDemandFailure(errString("same diagnostic"), func(error) {})
+	first := LogDemandFailure(errString("same diagnostic"), nil)
+	second := LogDemandFailure(errString("same diagnostic"), nil)
 	responses := make([]string, 0, 2)
 	for _, failure := range []error{first, second} {
 		response := httptest.NewRecorder()
-		WriteDemandFailure(response, fmt.Errorf("wrapped: %w", failure))
+		WriteDemandFailure(response, fmt.Errorf("wrapped: %w", failure), nil)
 		responses = append(responses, response.Body.String())
 	}
 	if responses[0] == responses[1] {
 		t.Fatal("independent failed starts shared a reference")
+	}
+}
+
+type failedDemandLogSink struct {
+	err    error
+	writes int
+}
+
+func (s *failedDemandLogSink) Write([]byte) (int, error) {
+	s.writes++
+	return 0, s.err
+}
+
+func TestDemandFailureDoesNotClaimFailedLogWrite(t *testing.T) {
+	t.Parallel()
+	for _, recorded := range []bool{false, true} {
+		sink := &failedDemandLogSink{err: errors.New("owner log is unavailable")}
+		logger := log.New(sink, "", 0)
+		failure := fmt.Errorf("private admission diagnostic: %w", context.Canceled)
+		if recorded {
+			failure = LogDemandFailure(failure, logger)
+			if !errors.Is(failure, sink.err) {
+				t.Errorf("owner error lost its log-write failure: %v", failure)
+			}
+		}
+		response := httptest.NewRecorder()
+		WriteDemandFailure(response, failure, logger)
+		if strings.Contains(response.Body.String(), "reference ") || strings.Contains(response.Body.String(), "private admission") || strings.Contains(response.Body.String(), sink.err.Error()) {
+			t.Errorf("failed log write claimed a reference or disclosed details: %q", response.Body.String())
+		}
+		if response.Code != http.StatusServiceUnavailable || !errors.Is(failure, context.Canceled) {
+			t.Error("log-write failure lost the admission cancellation")
+		}
+		if sink.writes != 1 {
+			t.Errorf("failed log write was retried %d times, want one attempt", sink.writes)
+		}
 	}
 }
