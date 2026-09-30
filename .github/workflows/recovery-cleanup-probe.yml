@@ -63,7 +63,8 @@ jobs:
               log = root / 'recovery-evidence' / f'trial-{number}.log'
               with log.open('w') as output:
                   result = subprocess.run(['strace', '-f', '-e', 'trace=renameat,openat,unlinkat,rmdir,kill,exit_group',
-                                           '-e', 'inject=renameat:delay_enter=20ms', '-o', str(log) + '.trace',
+                                           '-e', 'inject=renameat:delay_enter=20ms',
+                                           '-e', 'inject=rmdir:delay_enter=50ms', '-o', str(log) + '.trace',
                                            sys.executable, str(root / 'recovery-probe.py'), str(root / 'mesh')],
                                           stdout=output, stderr=subprocess.STDOUT)
               return number, result.returncode, log
