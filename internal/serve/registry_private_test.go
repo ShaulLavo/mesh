@@ -236,7 +236,12 @@ func TestRegistryWebSocketOrigins(t *testing.T) {
 					headers := make(http.Header)
 					if origin != "" {
 						headers.Set("Origin", origin)
-						headers.Set("Sec-Fetch-Site", "same-origin")
+						headers.Set("Sec-Fetch-Site", map[string]string{
+							"https://" + host:              "same-origin",
+							"https://sibling.shaulavo.dev": "same-site",
+							"https://attacker.example":     "cross-site",
+							"null":                         "same-origin",
+						}[origin])
 					}
 					conn, response, err := websocket.Dial(ctx, "wss"+strings.TrimPrefix(front.URL, "https")+"/api/socket", &websocket.DialOptions{
 						HTTPClient: front.Client(), Host: host, HTTPHeader: headers,

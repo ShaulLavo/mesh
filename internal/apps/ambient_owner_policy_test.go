@@ -189,7 +189,13 @@ func TestPrivateAppWebSocketRequiresOwnOrigin(t *testing.T) {
 				r := httptest.NewRequest(http.MethodGet, URL(app.ID)+"/socket", nil)
 				authenticate(r)
 				r.Header.Set("Origin", origin)
-				r.Header.Set("Sec-Fetch-Site", "same-origin")
+				r.Header.Set("Sec-Fetch-Site", map[string]string{
+					URL(app.ID):                 "same-origin",
+					"https://zzzz.shaulavo.dev": "same-site",
+					"https://attacker.example":  "cross-site",
+					"null":                      "same-origin",
+					"":                          "same-origin",
+				}[origin])
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				before := forwarded.Load()
 				conn, response, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(front.URL, "http")+"/socket", &websocket.DialOptions{HTTPHeader: r.Header})

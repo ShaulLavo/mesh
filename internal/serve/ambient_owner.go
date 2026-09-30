@@ -19,10 +19,16 @@ const (
 // by the browser's network or owner credentials.
 func AmbientOwnerAllowed(r *http.Request, ownOrigin string, websocketPolicy WebSocketOriginPolicy) bool {
 	origin := r.Header.Get("Origin")
+	upgrade := strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+	// No-referrer forms can serialize a same-origin POST's Origin as null;
+	// browser-controlled Fetch Metadata distinguishes it from an opaque origin.
+	if origin == "null" && !upgrade && r.Header.Get("Sec-Fetch-Site") == "same-origin" {
+		origin = ""
+	}
 	if origin != "" && origin != ownOrigin {
 		return false
 	}
-	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+	if upgrade {
 		return origin == ownOrigin || (origin == "" && websocketPolicy == AllowOriginlessWebSocket)
 	}
 	switch r.Header.Get("Sec-Fetch-Site") {
