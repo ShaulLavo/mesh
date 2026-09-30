@@ -52,7 +52,10 @@ func (f *fakeDemandSessions) startLabelled(_ context.Context, label string, comm
 		return id, nil
 	}
 	f.live[id] = label
-	return id, f.publishErr
+	if f.publishErr != nil {
+		return id, fmt.Errorf("daemon: publish session %s: %w", id, f.publishErr)
+	}
+	return id, nil
 }
 
 func (f *fakeDemandSessions) stopSession(_ context.Context, id string) error {

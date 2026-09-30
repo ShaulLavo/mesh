@@ -39,15 +39,14 @@ func demandRequestID(action string) string {
 
 func (l *lifecycle) startLabelled(ctx context.Context, label string, command []string, cwd string, env []string) (string, error) {
 	requestID := demandRequestID("start")
-	response, err := l.createSession(ctx, protocol.TypeCreate, requestID, creationRequest{
+	id, err := l.createSession(ctx, protocol.TypeCreate, requestID, creationRequest{
 		command: command, cwd: cwd, cols: servedSessionCols, rows: servedSessionRows,
 		term: servedSessionTerm, label: label, env: env,
 	})
+	// The receipt can go even when publication failed: the route now holds
+	// the ID, and the catalog's next reconcile lists the session from disk.
 	l.forgetCreation(requestID)
-	if err != nil {
-		return "", err
-	}
-	return response.SessionID, nil
+	return id, err
 }
 
 // forgetCreation drops the entry that makes a client's retried create

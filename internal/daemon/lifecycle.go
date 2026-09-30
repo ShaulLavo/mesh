@@ -248,7 +248,7 @@ func (l *lifecycle) create(ctx context.Context, request protocol.Control) (proto
 	if err := ctx.Err(); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
-	return l.createSession(ctx, request.Type, request.RequestID, creationRequest{
+	id, err := l.createSession(ctx, request.Type, request.RequestID, creationRequest{
 		command: append([]string(nil), request.Command...),
 		cwd:     request.Cwd,
 		cols:    request.Cols,
@@ -256,12 +256,18 @@ func (l *lifecycle) create(ctx context.Context, request protocol.Control) (proto
 		term:    request.Term,
 		depth:   request.Depth,
 	})
-}
-
-func (l *lifecycle) createSession(ctx context.Context, requestType, requestID string, wanted creationRequest) (protocol.Control, error) {
-	created, owner, err := l.creation(requestID, wanted)
 	if err != nil {
 		return protocol.Control{}, err
+	}
+	return protocol.Control{Type: protocol.TypeCreated, RequestID: request.RequestID, SessionID: id}, nil
+}
+
+// createSession returns the launched session's ID even when a later step
+// fails: that worker is running, and whoever asked for it owns it.
+func (l *lifecycle) createSession(ctx context.Context, requestType, requestID string, wanted creationRequest) (string, error) {
+	created, owner, err := l.creation(requestID, wanted)
+	if err != nil {
+		return "", err
 	}
 	if owner {
 		env := append([]string(nil), l.env...)
@@ -291,16 +297,17 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 		select {
 		case <-created.done:
 		case <-ctx.Done():
-			return protocol.Control{}, fmt.Errorf("daemon: wait for %s request %s: %w", requestType, requestID, ctx.Err())
+			return "", fmt.Errorf("daemon: wait for %s request %s: %w", requestType, requestID, ctx.Err())
 		}
 	}
 	if created.launchErr != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", requestType, created.launchErr)
+		return "", fmt.Errorf("daemon: %s: %w", requestType, created.launchErr)
 	}
 	parsedID, err := session.ParseID(created.launched.Meta.ID)
 	if err != nil || parsedID != created.launched.Meta.ID {
-		return protocol.Control{}, fmt.Errorf("daemon: launcher returned invalid session ID %q", created.launched.Meta.ID)
+		return "", fmt.Errorf("daemon: launcher returned invalid session ID %q", created.launched.Meta.ID)
 	}
+	id := created.launched.Meta.ID
 	waitCtx := ctx
 	if owner {
 		waitCtx = l.context
@@ -309,7 +316,7 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 	case <-created.publishGate:
 		defer func() { created.publishGate <- struct{}{} }()
 	case <-waitCtx.Done():
-		return protocol.Control{}, fmt.Errorf("daemon: wait to publish session %s: %w", created.launched.Meta.ID, waitCtx.Err())
+		return id, fmt.Errorf("daemon: wait to publish session %s: %w", id, waitCtx.Err())
 	}
 	if !created.published {
 		// Publication belongs to the daemon, not the disposable client, but must
@@ -318,15 +325,11 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 		err = l.catalog.Reconcile(publishCtx)
 		cancel()
 		if err != nil {
-			return protocol.Control{}, fmt.Errorf("daemon: publish session %s: %w", created.launched.Meta.ID, err)
+			return id, fmt.Errorf("daemon: publish session %s: %w", id, err)
 		}
 		created.published = true
 	}
-	return protocol.Control{
-		Type:      protocol.TypeCreated,
-		RequestID: requestID,
-		SessionID: created.launched.Meta.ID,
-	}, nil
+	return id, nil
 }
 
 func (l *lifecycle) creation(requestID string, wanted creationRequest) (*creation, bool, error) {
