@@ -270,6 +270,10 @@ func appResolver(origins []edge.OriginConfig, resolve edge.ResolveOrigin, pin ed
 	}
 }
 
+// appSyncInterval is how often the origin renews leases; a lease lasts nine
+// intervals. It is a variable only so integration builds can shorten both.
+var appSyncInterval = 20 * time.Second
+
 func runAppMaintenance(ctx context.Context, ready <-chan struct{}, origin *apps.Origin, public *apps.Edge, reporter *errorReporter) {
 	if origin == nil && public == nil {
 		return
@@ -280,7 +284,7 @@ func runAppMaintenance(ctx context.Context, ready <-chan struct{}, origin *apps.
 	case <-ready:
 	}
 	syncApps(ctx, origin, public, reporter)
-	ticker := time.NewTicker(20 * time.Second)
+	ticker := time.NewTicker(appSyncInterval)
 	defer ticker.Stop()
 	expiryTicker := time.NewTicker(time.Minute)
 	defer expiryTicker.Stop()

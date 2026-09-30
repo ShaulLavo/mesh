@@ -21,7 +21,11 @@ const Domain = "shaulavo.dev"
 const ManagementHost = "apps." + Domain
 const ManagementOrigin = "https://" + ManagementHost
 const IdleTTL = 24 * time.Hour
-const LeaseTTL = 3 * time.Minute
+
+// LeaseTTL is a variable only so integration builds can let a lease lapse
+// within a script's time budget.
+var LeaseTTL = 3 * time.Minute
+
 const MaxArchive = 64 << 20
 const ChunkSize = 256 << 10
 
