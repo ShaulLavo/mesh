@@ -41,6 +41,43 @@ async function screenshot(page, name) {
   if (artifacts) await page.screenshot({ path: resolve(artifacts, `${name}.png`) });
 }
 
+async function checkCopyAndViewport(page, pill) {
+  await page.evaluate(() => {
+    window.copyWrites = [];
+    window.rejectCopy = false;
+    window.prompt = () => { throw new Error('Copy must never open a native input'); };
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async text => {
+        if (window.rejectCopy) throw new Error('Clipboard unavailable');
+        window.copyWrites.push(text);
+      },
+    } });
+  });
+  await pill.getByRole('button', { name: 'Copy link', exact: true }).click();
+  await pill.getByRole('button', { name: 'Link copied', exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.copyWrites), [origin]);
+  await page.evaluate(() => { window.rejectCopy = true; });
+  await pill.getByRole('button', { name: 'Link copied', exact: true }).click();
+  await pill.getByText('Couldn’t copy. Tap to try again.', { exact: true }).waitFor();
+  await page.evaluate(() => {
+    Object.defineProperty(visualViewport, 'height', { configurable: true, value: innerHeight - 200 });
+    Object.defineProperty(visualViewport, 'offsetTop', { configurable: true, value: 120 });
+    visualViewport.dispatchEvent(new Event('resize'));
+    visualViewport.dispatchEvent(new Event('scroll'));
+  });
+  assert.equal(await pill.locator('.shell').evaluate(element => getComputedStyle(element).transitionDuration), '0s', 'Safari viewport changes must not animate position');
+  await page.waitForFunction(() => {
+    const bounds = document.querySelector('mesh-app-pill').shadowRoot.querySelector('.shell').getBoundingClientRect();
+    return bounds.bottom <= visualViewport.offsetTop + visualViewport.height;
+  });
+  await page.evaluate(() => {
+    delete visualViewport.height;
+    delete visualViewport.offsetTop;
+    visualViewport.dispatchEvent(new Event('resize'));
+  });
+  await pill.getByText('Couldn’t copy. Tap to try again.', { exact: true }).waitFor({ state: 'hidden' });
+}
+
 async function checkInteractions(browser, name, reducedMotion) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, reducedMotion });
   try {
@@ -55,11 +92,12 @@ async function checkInteractions(browser, name, reducedMotion) {
     }));
     await page.goto(origin);
     const pill = page.locator('mesh-app-pill');
-    const handle = pill.locator('.handle');
+    const handle = pill.locator('[data-react-grab-toolbar-collapse]');
     await handle.waitFor({ state: 'visible' });
-    await page.waitForFunction(() => { const bounds = document.querySelector('mesh-app-pill').shadowRoot.querySelector('.handle').getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight; });
+    await page.waitForFunction(() => { const bounds = document.querySelector('mesh-app-pill').shadowRoot.querySelector('[data-react-grab-toolbar-collapse]').getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight; });
     const box = await handle.boundingBox();
-    assert(box && box.width >= 44 && box.height >= 44, 'Collapsed dot requires a 44px touch target');
+    assert(box, 'Collapse control must be visible');
+    assert.equal(await handle.evaluate(element => getComputedStyle(element, '::before').minWidth), '24px');
     await handle.click();
     await pill.locator('.controls').waitFor({ state: 'visible' });
     await pill.locator('[aria-label="Make private"]').waitFor({ state: 'visible' });
@@ -68,6 +106,7 @@ async function checkInteractions(browser, name, reducedMotion) {
     assert.equal(await pill.locator('iframe').isVisible(), false, 'Authorization must never show a blank panel');
     assert.equal(await pill.locator('.status').count(), 0, 'No generic App label');
     assert.equal(await pill.locator('iframe').getAttribute('src'), `${manager}/frame?id=7k3d`);
+    await checkCopyAndViewport(page, pill);
     await page.evaluate(() => {
       for (const message of [
         { origin: location.origin, source: window, data: { type: 'mesh-app-status', visibility: 'private', owns: true } },
@@ -79,15 +118,16 @@ async function checkInteractions(browser, name, reducedMotion) {
       assert.equal(await pill.locator('.shell').evaluate(element => getComputedStyle(element).transitionDuration), '0s');
       assert.equal(await pill.locator('.controls').evaluate(element => getComputedStyle(element).animationName), 'none');
     }
+    await page.waitForFunction(() => { const panel = document.querySelector('mesh-app-pill').shadowRoot.querySelector('[data-react-grab-toolbar-panel]'); return Math.min(panel.offsetWidth, panel.offsetHeight) === 26; });
     await screenshot(page, `${name}-${reducedMotion}-expanded`);
     await handle.click();
-    await pill.locator('.controls').waitFor({ state: 'detached' });
+    assert.equal(await handle.getAttribute('aria-expanded'), 'false');
     await handle.hover();
     const dragStart = await handle.boundingBox();
     assert(dragStart);
-    await page.mouse.move(dragStart.x + 22, dragStart.y + 22);
+    await page.mouse.move(dragStart.x + dragStart.width / 2, dragStart.y + dragStart.height / 2);
     await page.mouse.down();
-    await page.mouse.move(25, dragStart.y + 22, { steps: 12 });
+    await page.mouse.move(25, dragStart.y + dragStart.height / 2, { steps: 12 });
     await page.mouse.up();
     await page.waitForTimeout(320);
     const snappedMouse = await handle.boundingBox();
@@ -98,7 +138,7 @@ async function checkInteractions(browser, name, reducedMotion) {
     assert((await handle.boundingBox()).x > 300, 'Keyboard docking should move the dot right');
     await handle.evaluate(element => {
       const bounds = element.getBoundingClientRect();
-      element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true, button: 0, clientX: bounds.x + 22, clientY: bounds.y + 22, pointerType: 'touch' }));
+      element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true, button: 0, clientX: bounds.x + bounds.width / 2, clientY: bounds.y + bounds.height / 2, pointerType: 'touch' }));
     });
     await page.waitForTimeout(50);
     await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointermove', { clientX: 25, clientY: 180, pointerType: 'touch' })));
@@ -110,15 +150,15 @@ async function checkInteractions(browser, name, reducedMotion) {
     await page.keyboard.press('Alt+ArrowRight');
     await page.reload();
     await handle.waitFor({ state: 'visible' });
-    await page.waitForFunction(() => { const bounds = document.querySelector('mesh-app-pill').shadowRoot.querySelector('.handle').getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight; });
+    await page.waitForFunction(() => { const bounds = document.querySelector('mesh-app-pill').shadowRoot.querySelector('[data-react-grab-toolbar-collapse]').getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight; });
     assert((await handle.boundingBox()).x > 300, 'Docked position should survive reload');
     const touchTarget = await handle.boundingBox();
     assert(touchTarget);
-    await page.touchscreen.tap(touchTarget.x + 22, touchTarget.y + 22);
+    await page.touchscreen.tap(touchTarget.x + touchTarget.width / 2, touchTarget.y + touchTarget.height / 2);
     await pill.locator('.controls').waitFor({ state: 'visible' });
     await handle.focus();
     await page.keyboard.press('Escape');
-    await pill.locator('.controls').waitFor({ state: 'detached' });
+    assert.equal(await handle.getAttribute('aria-expanded'), 'false');
     await screenshot(page, `${name}-${reducedMotion}-collapsed`);
     assert.deepEqual(errors, [], 'The pill must not throw browser errors');
     console.log(`${name} ${reducedMotion}: strict CSP, expansion, frame messages, mouse/touch drag, keyboard docking, and persistence passed`);
@@ -140,17 +180,17 @@ async function checkUnavailableOrVisitor(browser, name, unavailable) {
     });
     await page.goto(origin);
     const pill = page.locator('mesh-app-pill');
-    await pill.locator('.handle').click();
+    await pill.locator('[data-react-grab-toolbar-collapse]').click();
     await frameRequested;
-    await pill.getByRole('button', { name: 'Share app', exact: true }).waitFor();
+    await pill.getByRole('button', { name: 'Copy link', exact: true }).waitFor();
     assert.equal(await pill.locator('iframe').isVisible(), false);
     assert.equal(await pill.locator('[aria-label="Owner controls"]').count(), 0);
     assert.equal(await pill.locator('[aria-label="Make private"]').count(), 0);
     if (unavailable) assert.equal(await pill.locator('a').count(), 0, 'Unavailable management must not leave a dead action');
     else await pill.getByRole('link', { name: 'Pair owner browser' }).waitFor();
     await screenshot(page, `${name}-${unavailable ? 'unavailable' : 'visitor'}`);
-    await pill.locator('.handle').click();
-    await pill.locator('.controls').waitFor({state: 'detached'});
+    await pill.locator('[data-react-grab-toolbar-collapse]').click();
+    assert.equal(await pill.locator('[data-react-grab-toolbar-collapse]').getAttribute('aria-expanded'), 'false');
     console.log(`${name}: ${unavailable ? 'unavailable manager' : 'visitor pairing'} remains compact and usable`);
   } finally {
     await context.close();

@@ -159,8 +159,8 @@ func validateListenAddress(mode Mode, value string) error {
 	if mode == ModeProxy && !address.IsLoopback() {
 		return errors.New("edge: proxy mode must bind a loopback address")
 	}
-	if mode == ModeDirectTLS && !validPublicListenAddress(address) {
-		return errors.New("edge: direct TLS must bind an unspecified or public unicast address outside private and Tailscale ranges")
+	if mode == ModeDirectTLS && !address.IsLoopback() && !validPublicListenAddress(address) {
+		return errors.New("edge: direct TLS must bind loopback, an unspecified address, or public unicast outside private and Tailscale ranges")
 	}
 	return nil
 }

@@ -13,3 +13,11 @@ for (const name of ['toolbar-position.ts', 'create-toolbar-drag.ts', 'clamp-to-r
   text = text.replace('pointerStartPosition = { x: event.clientX, y: event.clientY };', 'config.onPositionUpdate({ x: rect.left, y: rect.top });\n    pointerStartPosition = { x: event.clientX, y: event.clientY };');
   writeFileSync(resolve(target, name), text);
 }
+
+for (const name of ['toolbar-content.tsx', 'icon-chevron.tsx', 'cn.ts']) {
+  const text = readFileSync(resolve(source, name), 'utf8')
+    .replace('../../utils/cn.js', './cn.js')
+    .replace('../../utils/toolbar-position.js', './toolbar-position.js')
+    .replace('../icons/icon-chevron.jsx', './icon-chevron.jsx');
+  writeFileSync(resolve(target, name), text);
+}

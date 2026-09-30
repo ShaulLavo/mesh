@@ -1744,6 +1744,7 @@ func (a *application) daemonCommand() *cobra.Command {
 		sshPort            uint
 		path               string
 		httpsPort          uint
+		tailscaleServePort uint
 		certificateRenewer string
 		privateNamesConfig string
 		edgeConfig         string
@@ -1766,6 +1767,9 @@ func (a *application) daemonCommand() *cobra.Command {
 			if httpsPort > 65535 {
 				return fmt.Errorf("HTTPS port %d is out of range", httpsPort)
 			}
+			if tailscaleServePort > 65535 {
+				return fmt.Errorf("Tailscale Serve gateway port %d is out of range", tailscaleServePort)
+			}
 			// Zero disables; anything shorter than a second would round to the
 			// wire's zero, which the worker treats as an unconditional request.
 			if hibernateIdle != 0 && hibernateIdle < time.Second {
@@ -1782,7 +1786,7 @@ func (a *application) daemonCommand() *cobra.Command {
 				StateDir:          stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
 				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget, AppDataRoot: appDataRoot,
-				TailscaleServe: tailscaleServe, HibernateIdle: hibernateIdle,
+				TailscaleServe: tailscaleServe, TailscaleServePort: uint16(tailscaleServePort), HibernateIdle: hibernateIdle,
 				ReportError: func(err error) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %v\n", err) },
 			})
 		},
@@ -1796,6 +1800,7 @@ func (a *application) daemonCommand() *cobra.Command {
 	command.Flags().StringVar(&edgeConfig, "edge", "", "public-edge runtime and origin allowlist config file")
 	command.Flags().StringVar(&publicEdgeTarget, "public-edge-target", "", "pinned public-edge target config file")
 	command.Flags().StringVar(&appDataRoot, "app-data-root", "", "managed temporary app workload root; Linux defaults to /work/mesh/apps")
+	command.Flags().UintVar(&tailscaleServePort, "tailscale-serve-port", 0, "loopback TLS gateway port; zero forwards directly to --https-port")
 	command.Flags().BoolVar(&tailscaleServe, "tailscale-serve", false, "persist raw Tailscale TCP/443 forwarding to the HTTPS port")
 	command.Flags().DurationVar(&hibernateIdle, "hibernate-idle", 0, "stop a Codex or Claude conversation after its session is detached and quiet this long, resuming it on attach; zero disables")
 	return command

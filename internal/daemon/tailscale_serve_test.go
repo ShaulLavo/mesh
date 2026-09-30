@@ -269,16 +269,26 @@ func TestRunFailsWhenTailscaleServeConfigurationFails(t *testing.T) {
 }
 
 func TestRunAcceptsVerifiedOperatorManagedTailscaleServeForward(t *testing.T) {
+	t.Run("direct", func(t *testing.T) { checkOperatorManagedServeForward(t, 0) })
+	t.Run("gateway", func(t *testing.T) { checkOperatorManagedServeForward(t, 8446) })
+}
+
+func checkOperatorManagedServeForward(t *testing.T, gatewayPort uint16) {
+	t.Helper()
 	stateDir := t.TempDir()
 	httpsPort := reserveTCPPort(t, "127.0.0.1")
 	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
+	forwardPort := gatewayPort
+	if forwardPort == 0 {
+		forwardPort = httpsPort
+	}
 	options := defaultRunOptions()
 	options.reconcileInterval = time.Hour
 	var verified atomic.Bool
 	options.verifyServeForward = func(_ context.Context, port uint16) error {
 		verified.Store(true)
-		if port != httpsPort {
-			return fmt.Errorf("verified port %d, want %d", port, httpsPort)
+		if port != forwardPort {
+			return fmt.Errorf("verified port %d, want %d", port, forwardPort)
 		}
 		return nil
 	}
@@ -288,7 +298,7 @@ func TestRunAcceptsVerifiedOperatorManagedTailscaleServeForward(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, Config{StateDir: stateDir, HTTPSPort: httpsPort, CertificateRenewerID: signerID}, options)
+		done <- run(ctx, Config{StateDir: stateDir, HTTPSPort: httpsPort, TailscaleServePort: gatewayPort, CertificateRenewerID: signerID}, options)
 	}()
 	deadline := time.Now().Add(runtimeTestTimeout)
 	for {

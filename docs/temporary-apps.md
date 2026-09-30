@@ -44,15 +44,18 @@ browser displays a one-use approval code. Approve on the owner host:
 mesh app browser approve pc CODE
 ```
 
-Return to the browser and check approval. Pairing grants that browser management
+Keep the pairing page open. It checks for approval automatically and continues
+as soon as the owner approves. Checks preserve the code until its ten-minute
+expiry. Pairing grants that browser management
 rights for apps owned by `pc`; it grants no rights for another origin's apps.
 The edge issues a separate view-only cookie for the private app. Public visitors
 need no pairing and cannot change ownership or visibility.
 
-Click the floating dot to expand the pill. Drag or flick it to an edge; its position
-survives reloads. The share button copies the current URL. The lock button opens
+Click the small edge tab to expand the React Grab pill. Drag or flick it to an edge;
+its position survives reloads. The link button copies the app URL and briefly shows
+a checkmark. Clipboard access requires HTTPS. The lock button opens
 a trusted visibility confirmation for paired owners, or browser pairing for
-visitors. It appears only after the management origin responds. The dot collapses
+visitors. It appears only after the management origin responds. The chevron collapses
 the pill. Owner authorization runs in a hidden frame; there is no controls menu.
 Management pages remain separate from app content. Renew, delete and source
 download are also available through the CLI.

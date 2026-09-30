@@ -49,6 +49,81 @@ func pairedOwner(t *testing.T, f *appFixture) *http.Cookie {
 	}
 	return cookie
 }
+
+func TestPairingPollPreservesCodeAndPromotesAfterApproval(t *testing.T) {
+	f := newAppFixture(t)
+	begin := httptest.NewRecorder()
+	f.edge.ServeHost(begin, httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id=7k3d", nil), ManagementHost)
+	matched := regexp.MustCompile(`Code: <strong>([a-z0-9-]+)</strong>`).FindStringSubmatch(begin.Body.String())
+	if len(matched) != 2 {
+		t.Fatal("pairing page is missing its approval code")
+	}
+	if !strings.Contains(begin.Header().Get("Content-Security-Policy"), "connect-src 'self'") ||
+		!strings.Contains(begin.Body.String(), "location.replace(\"/view?id=7k3d\")") {
+		t.Fatal("pairing page cannot poll and return to the requested app")
+	}
+	pair := cookieNamed(t, begin, webauth.PairCookie)
+	poll := func(cookie *http.Cookie) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair/status", nil)
+		r.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		f.edge.ServeHost(response, r, ManagementHost)
+		return response
+	}
+	for range 3 {
+		pending := poll(pair)
+		if pending.Code != http.StatusAccepted || len(pending.Result().Cookies()) != 0 {
+			t.Fatalf("checking replaced the pending pairing: %d", pending.Code)
+		}
+	}
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "browser.approve", Code: matched[1]}); err != nil {
+		t.Fatalf("original code stopped working after polling: %v", err)
+	}
+	approved := poll(pair)
+	if approved.Code != http.StatusOK || approved.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("approved poll status = %d", approved.Code)
+	}
+	owner := cookieNamed(t, approved, webauth.OwnerCookie)
+	if !owner.Secure || !owner.HttpOnly || owner.Domain != "" {
+		t.Fatal("approval poll issued an unsafe cookie")
+	}
+	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/", nil)
+	request.AddCookie(owner)
+	session, err := f.edge.auth.Browser(context.Background(), request)
+	if err != nil || !session.Owns(identityFor(f.ownerKey)) {
+		t.Fatalf("poll did not grant the approved owner: %v", err)
+	}
+	if poll(pair).Code != http.StatusGone {
+		t.Fatal("consumed pairing was accepted twice")
+	}
+	if poll(owner).Code != http.StatusOK {
+		t.Fatal("another open pairing tab did not recognize the promoted session")
+	}
+}
+
+func TestPairingPollRejectsExpiredAndUnboundBrowsers(t *testing.T) {
+	f := newAppFixture(t)
+	begin := httptest.NewRecorder()
+	f.edge.ServeHost(begin, httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair", nil), ManagementHost)
+	pair := cookieNamed(t, begin, webauth.PairCookie)
+	f.now = f.now.Add(10 * time.Minute)
+	for _, cookie := range []*http.Cookie{nil, pair} {
+		request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair/status", nil)
+		if cookie != nil {
+			request.AddCookie(cookie)
+		}
+		response := httptest.NewRecorder()
+		f.edge.ServeHost(response, request, ManagementHost)
+		if response.Code != http.StatusGone || len(response.Result().Cookies()) != 0 {
+			t.Fatalf("invalid pairing poll = %d", response.Code)
+		}
+	}
+	response := httptest.NewRecorder()
+	f.edge.ServeHost(response, httptest.NewRequest(http.MethodPost, ManagementOrigin+"/pair/status", nil), ManagementHost)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("unsupported poll method = %d", response.Code)
+	}
+}
 func networkOrigin(t *testing.T, f *appFixture) *atomic.Int64 {
 	t.Helper()
 	count := &atomic.Int64{}

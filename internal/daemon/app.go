@@ -46,6 +46,7 @@ type Config struct {
 	SSHPort              uint16
 	WebSocketPath        string
 	HTTPSPort            uint16
+	TailscaleServePort   uint16
 	CertificateRenewerID string
 	PrivateNamesConfig   string
 	EdgeConfig           string
@@ -119,6 +120,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	if cfg.HTTPSPort != 0 && (opts.verifyServeForward == nil || opts.tailscaleTimeout <= 0) {
 		return errors.New("daemon: incomplete private HTTPS forwarding dependencies")
+	}
+	if cfg.TailscaleServePort != 0 && cfg.HTTPSPort == 0 {
+		return errors.New("daemon: a Tailscale Serve gateway requires private HTTPS")
 	}
 	if cfg.SSHPort != 0 && opts.serveSSH == nil {
 		return errors.New("daemon: incomplete SSH runtime dependencies")
@@ -527,13 +531,17 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		updates.coordinator.Run(daemonCtx, reporter.report)
 	}()
 	listener.ready = func(readyCtx context.Context) error {
+		servePort := cfg.TailscaleServePort
+		if servePort == 0 {
+			servePort = cfg.HTTPSPort
+		}
 		if cfg.TailscaleServe {
-			if err := configureTailscaleServe(readyCtx, cfg.HTTPSPort, opts.tailscaleTimeout, opts.runCommand); err != nil {
+			if err := configureTailscaleServe(readyCtx, servePort, opts.tailscaleTimeout, opts.runCommand); err != nil {
 				return err
 			}
 		}
 		if cfg.HTTPSPort != 0 {
-			if err := verifyTailscaleServeForward(readyCtx, cfg.HTTPSPort, opts.tailscaleTimeout, opts.verifyServeForward); err != nil {
+			if err := verifyTailscaleServeForward(readyCtx, servePort, opts.tailscaleTimeout, opts.verifyServeForward); err != nil {
 				return err
 			}
 			if certificateRuntime.PrivateNameReady != nil {
