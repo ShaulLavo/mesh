@@ -56,7 +56,8 @@ def prove(root, evidence):
     write_go(root, CLEAN)
     expect(run_gates(root, evidence, "clean"), 0, "golangci: PASS")
 
-    write_go(root, 'package main\nfunc main() { println("stable"); println("stable"); println("stable") }\n')
+    # Goconst ignores call arguments by default; composite literals are analyzed.
+    write_go(root, 'package main\nfunc main() { values := []string{"stable", "stable", "stable"}; println(values) }\n')
     expect(run_gates(root, evidence, "constant-new"), 1, "[goconst]")
     baseline.write_text(json.dumps({"version": 2, "entries": [{
         "gate": "golangci", "file": "cmd/mesh/main.go", "rule": "goconst",
@@ -64,8 +65,10 @@ def prove(root, evidence):
         "reason": "Deliberate fixture exception: diagnostic occurrence counts do not identify a finding.",
     }]}))
     expect(run_gates(root, evidence, "constant-baselined"), 0, "golangci: PASS")
-    write_go(root, 'package main\nfunc main() { println("stable"); println("stable"); println("stable"); println("stable") }\n')
+    write_go(root, 'package main\nfunc main() { values := []string{"stable", "stable", "stable", "stable"}; println(values) }\n')
     expect(run_gates(root, evidence, "constant-more-occurrences"), 0, "golangci: PASS")
+    write_go(root, 'package main\nfunc main() { values := []string{"stable", "stable", "stable", "stable", "new-literal", "new-literal", "new-literal"}; println(values) }\n')
+    expect(run_gates(root, evidence, "constant-different-literal"), 1, "[goconst] string `new-literal`")
     baseline.write_text(json.dumps({"version": 2, "entries": []}))
     write_go(root, CLEAN)
 
