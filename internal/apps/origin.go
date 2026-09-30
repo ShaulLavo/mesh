@@ -77,12 +77,23 @@ type originState struct {
 }
 
 // appOp is the long operation that owns one app ("app <id>") or one upload
-// ("upload <id>"). Operations on the same key wait for each other, and Sync
-// leaves an owned app to its operation.
+// ("upload <id>"). Operations on the same key wait for each other. The edge's
+// answer outranks an operation: Sync revokes it, which ends its context and
+// forbids it from starting the app again, then does its safety work.
 type appOp struct {
-	name string
-	done chan struct{}
+	name   string
+	done   chan struct{}
+	cancel context.CancelFunc
+	// revoked names why the edge withdrew the app; set under mu.
+	revoked string
+	// ports are what the operation may bind or roll back onto, reserved until
+	// it ends so no service or other app takes them meanwhile.
+	ports []int
 }
+
+// yieldBudget is how long safety work waits for a revoked operation. The
+// operation only has to notice its cancelled context and unwind.
+const yieldBudget = 5 * time.Second
 
 // serviceHold keeps an ordinary service's ports from new app reservations while
 // that service is being committed.
@@ -102,9 +113,10 @@ type Origin struct {
 	state originState
 	ops   map[string]*appOp
 	holds map[*serviceHold]struct{}
-	// exchangeMu serializes signed edge exchanges, because the edge accepts one
-	// pending sequence per owner. Take it before mu, never after.
-	exchangeMu  sync.Mutex
+	// exchange is a one-slot lock on signed edge exchanges, because the edge
+	// accepts one pending sequence per owner. Waiting for it honours the
+	// caller's context. Take it before mu, never after.
+	exchange    chan struct{}
 	routes      atomic.Pointer[map[string]appRoute]
 	downloadMu  sync.Mutex
 	config      OriginConfig
@@ -120,7 +132,7 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, holds: map[*serviceHold]struct{}{}, admissions: map[string]time.Time{}}
+	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]time.Time{}}
 	if err := load(ctx, c.Store, "apps.origin", &o.state); err != nil {
 		return nil, err
 	}
@@ -155,30 +167,33 @@ func (o *Origin) modify(ctx context.Context, id string, change func(*localApp)) 
 	return o.persist(ctx)
 }
 
-// claimLocked requires mu and an unowned key.
-func (o *Origin) claimLocked(key, name string) func() {
-	op := &appOp{name: name, done: make(chan struct{})}
+// claimLocked requires mu and an unowned key. The returned context ends when
+// the operation is released or revoked.
+func (o *Origin) claimLocked(ctx context.Context, key, name string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	op := &appOp{name: name, done: make(chan struct{}), cancel: cancel}
 	o.ops[key] = op
-	return func() {
+	return ctx, func() {
+		cancel()
 		o.mu.Lock()
 		delete(o.ops, key)
 		o.mu.Unlock()
 		close(op.done)
 	}
 }
-func (o *Origin) beginOp(ctx context.Context, key, name string) (func(), error) {
+func (o *Origin) beginOp(ctx context.Context, key, name string) (context.Context, func(), error) {
 	for {
 		o.mu.Lock()
 		current := o.ops[key]
 		if current == nil {
-			release := o.claimLocked(key, name)
+			opCtx, release := o.claimLocked(ctx, key, name)
 			o.mu.Unlock()
-			return release, nil
+			return opCtx, release, nil
 		}
 		o.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("%s: wait for %s: %w", key, current.name, ctx.Err())
+			return nil, nil, fmt.Errorf("%s: wait for %s: %w", key, current.name, ctx.Err())
 		case <-current.done:
 		}
 	}
@@ -189,16 +204,86 @@ func (o *Origin) tryOp(key, name string) (func(), bool) {
 	if o.ops[key] != nil {
 		return nil, false
 	}
-	return o.claimLocked(key, name), true
+	_, release := o.claimLocked(context.Background(), key, name)
+	return release, true
 }
 
+// preempt claims an app for safety work, revoking any operation that owns it
+// and waiting up to yieldBudget for it to unwind. It fails only when the
+// operation does not yield; the caller may then stop workers but not change
+// the app's state.
+func (o *Origin) preempt(ctx context.Context, id, reason string) (func(), error) {
+	wait, cancel := context.WithTimeout(ctx, yieldBudget)
+	defer cancel()
+	for {
+		if release, ok := o.tryOp("app "+id, "sync"); ok {
+			return release, nil
+		}
+		o.mu.Lock()
+		op := o.ops["app "+id]
+		if op != nil && op.revoked == "" {
+			op.revoked = reason
+			op.cancel()
+		}
+		o.mu.Unlock()
+		if op == nil {
+			continue
+		}
+		select {
+		case <-op.done:
+		case <-wait.Done():
+			return nil, fmt.Errorf("app %s: %s did not yield after the app was %s: %w", id, op.name, reason, wait.Err())
+		}
+	}
+}
+func (o *Origin) revoked(id string) string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if op := o.ops["app "+id]; op != nil {
+		return op.revoked
+	}
+	return ""
+}
+
+// start launches one of an app's workers unless the edge has withdrawn the app,
+// and stops it again if that happens while it launches. Every worker an
+// operation starts goes through here, so a revoked operation cannot restart the
+// app behind the safety stop.
+func (o *Origin) start(ctx context.Context, id, label, command, root string, env []string) (string, error) {
+	if reason := o.revoked(id); reason != "" {
+		return "", fmt.Errorf("app %s: not starting %s: app was %s", id, label, reason)
+	}
+	session, err := o.config.Workers.Start(ctx, label, command, root, env)
+	if err != nil {
+		return "", fmt.Errorf("app %s: start %s: %w", id, label, err)
+	}
+	if reason := o.revoked(id); reason != "" {
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maintenanceBudget)
+		defer cancel()
+		return "", errors.Join(fmt.Errorf("app %s: %s started after the app was %s", id, label, reason), o.config.Workers.Stop(stopCtx, session))
+	}
+	return session, nil
+}
+
+func (o *Origin) lockExchange(ctx context.Context) error {
+	select {
+	case o.exchange <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("app: wait for edge exchange: %w", ctx.Err())
+	}
+}
+func (o *Origin) unlockExchange() { <-o.exchange }
+
 func (o *Origin) edge(ctx context.Context, q Request) (Result, error) {
-	o.exchangeMu.Lock()
-	defer o.exchangeMu.Unlock()
+	if err := o.lockExchange(ctx); err != nil {
+		return Result{}, err
+	}
+	defer o.unlockExchange()
 	return o.edgeLocked(ctx, q)
 }
 
-// edgeLocked requires exchangeMu, which makes its holder the only writer of
+// edgeLocked requires the exchange slot, which makes its holder the only writer of
 // Pending and Sequence; mu covers only the writes and their persistence.
 func (o *Origin) edgeLocked(ctx context.Context, q Request) (Result, error) {
 	if o.state.Pending != nil {
@@ -283,7 +368,7 @@ func (o *Origin) Handle(ctx context.Context, q Request) (Result, error) {
 		}
 		return result, nil
 	case "delete":
-		release, err := o.beginOp(ctx, "app "+q.ID, "delete")
+		ctx, release, err := o.beginOp(ctx, "app "+q.ID, "delete")
 		if err != nil {
 			return Result{}, err
 		}
@@ -345,7 +430,7 @@ func (o *Origin) beginUpload(ctx context.Context) (Result, error) {
 	return Result{UploadID: id}, nil
 }
 func (o *Origin) appendUpload(ctx context.Context, q Request) (Result, error) {
-	release, err := o.beginOp(ctx, "upload "+q.UploadID, "upload.chunk")
+	_, release, err := o.beginOp(ctx, "upload "+q.UploadID, "upload.chunk")
 	if err != nil {
 		return Result{}, err
 	}
@@ -388,6 +473,11 @@ func (o *Origin) appendUpload(ctx context.Context, q Request) (Result, error) {
 	u.Size = q.Offset + int64(len(q.Data))
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	// Activation retires an upload while holding only its app, so the record may
+	// be gone; writing the cached copy back would revive it without its file.
+	if _, ok := o.state.Uploads[u.ID]; !ok {
+		return Result{}, fmt.Errorf("app: upload %s was consumed or expired while writing", u.ID)
+	}
 	o.state.Uploads[u.ID] = u
 	return Result{UploadID: u.ID}, o.persist(ctx)
 }
@@ -418,8 +508,11 @@ func validateRecipe(q Request) error {
 	return nil
 }
 
-// checkPortLocked requires mu. Callers repeat it when the port lands in state,
-// because services and other apps may claim ports while a recipe prepares.
+// checkPortLocked requires mu. Ports belong to the local runtime (a stored app
+// with a command) or to an operation's reservation, never to the edge's view of
+// the app's kind, which lags a static-to-server update. Callers repeat the check
+// when the port lands in state, because services and other apps may claim ports
+// while a recipe prepares.
 func (o *Origin) checkPortLocked(id string, q Request) error {
 	if o.config.CheckHosting != nil {
 		if err := o.config.CheckHosting(q.Port, o.config.DataRoot); err != nil {
@@ -429,15 +522,53 @@ func (o *Origin) checkPortLocked(id string, q Request) error {
 	if q.Kind != "server" {
 		return nil
 	}
-	for other, existing := range o.state.Apps {
-		if other != id && existing.Record.Kind == "server" && existing.Port == q.Port {
-			return errors.New("app: port already belongs to another app")
-		}
+	if owner, ok := o.portOwnerLocked(q.Port); ok && owner != id {
+		return fmt.Errorf("app: port %d already belongs to app %s", q.Port, owner)
 	}
 	for hold := range o.holds {
 		if slices.Contains(hold.ports, q.Port) {
 			return errors.New("app: port is being claimed by an ordinary service")
 		}
+	}
+	return nil
+}
+
+// portOwnerLocked requires mu and names the app that runs or reserves port.
+func (o *Origin) portOwnerLocked(port int) (string, bool) {
+	for id, a := range o.state.Apps {
+		if a.Command != "" && a.Port == port {
+			return id, true
+		}
+	}
+	for key, op := range o.ops {
+		if id, ok := strings.CutPrefix(key, "app "); ok && slices.Contains(op.ports, port) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// admitRecipe checks the recipe's port and source upload. An update, which
+// already owns its app, also reserves the candidate port and the running one
+// until it ends, because until then it may still roll back onto the old port.
+func (o *Origin) admitRecipe(q Request) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if err := o.checkPortLocked(q.ID, q); err != nil {
+		return err
+	}
+	if u, ok := o.state.Uploads[q.UploadID]; !ok || !o.config.Now().Before(u.ExpiresAt) {
+		return errors.New("app: missing source upload")
+	}
+	if q.Action != "update" {
+		return nil
+	}
+	op := o.ops["app "+q.ID]
+	if q.Kind == "server" {
+		op.ports = append(op.ports, q.Port)
+	}
+	if current, ok := o.state.Apps[q.ID]; ok && current.Command != "" {
+		op.ports = append(op.ports, current.Port)
 	}
 	return nil
 }
@@ -453,20 +584,22 @@ func (o *Origin) pendingCommitLocked(uploadID string) (localApp, bool) {
 // allocate reserves a new app at the edge and records it locally, owned by the
 // caller, before any other exchange can run. Otherwise a Sync between the two
 // would find the edge record without a local app and delete it as abandoned.
-func (o *Origin) allocate(ctx context.Context, q Request, digest string) (localApp, func(), error) {
-	o.exchangeMu.Lock()
-	defer o.exchangeMu.Unlock()
+func (o *Origin) allocate(ctx context.Context, q Request, digest string) (context.Context, localApp, func(), error) {
+	if err := o.lockExchange(ctx); err != nil {
+		return ctx, localApp{}, nil, err
+	}
+	defer o.unlockExchange()
 	result, err := o.edgeLocked(ctx, Request{Action: "allocate", Kind: q.Kind})
 	if err != nil {
-		return localApp{}, nil, err
+		return ctx, localApp{}, nil, err
 	}
 	id := result.App.ID
 	local := localApp{Record: *result.App, Root: filepath.Join(o.config.DataRoot, "apps", id, "source-"+q.UploadID), Command: q.Command, Port: q.Port, Env: q.Env, Phase: "preparing", Commit: &commitIntent{UploadID: q.UploadID, Digest: digest}}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	release := o.claimLocked("app "+id, q.Action)
+	opCtx, release := o.claimLocked(ctx, "app "+id, q.Action)
 	o.state.Apps[id] = local
-	return local, release, errors.Join(o.checkPortLocked(id, q), o.persist(ctx))
+	return opCtx, local, release, errors.Join(o.checkPortLocked(id, q), o.persist(ctx))
 }
 
 // stageUpdate describes the workspace an update of a still-active app will use,
@@ -492,15 +625,15 @@ func (o *Origin) stageUpdate(ctx context.Context, q Request, digest string) (loc
 
 // stageCreate allocates the new app and always returns a release for it. An
 // allocation that could not be recorded is undone at the edge.
-func (o *Origin) stageCreate(ctx context.Context, q Request, digest string) (localApp, func(), error) {
-	local, release, err := o.allocate(ctx, q, digest)
+func (o *Origin) stageCreate(ctx context.Context, q Request, digest string) (context.Context, localApp, func(), error) {
+	opCtx, local, release, err := o.allocate(ctx, q, digest)
 	if release == nil {
-		return localApp{}, func() {}, err
+		return ctx, localApp{}, func() {}, err
 	}
 	if err != nil {
-		err = o.failCreate(ctx, local.Record.ID, err)
+		err = o.failCreate(opCtx, local.Record.ID, err)
 	}
-	return local, release, err
+	return opCtx, local, release, err
 }
 func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	if q.Kind == "" {
@@ -510,7 +643,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	digest := digestBytes(normalized)
 	// A retry of the same upload waits for the attempt in progress rather than
 	// unpacking or allocating beside it.
-	releaseUpload, err := o.beginOp(ctx, "upload "+q.UploadID, q.Action)
+	ctx, releaseUpload, err := o.beginOp(ctx, "upload "+q.UploadID, q.Action)
 	if err != nil {
 		return Result{}, err
 	}
@@ -522,7 +655,8 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	}
 	o.mu.Unlock()
 	if target != "" {
-		releaseApp, err := o.beginOp(ctx, "app "+target, q.Action)
+		var releaseApp func()
+		ctx, releaseApp, err = o.beginOp(ctx, "app "+target, q.Action)
 		if err != nil {
 			return Result{}, err
 		}
@@ -556,15 +690,8 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	if err := validateRecipe(q); err != nil {
 		return Result{}, err
 	}
-	o.mu.Lock()
-	err = o.checkPortLocked(q.ID, q)
-	u, ok := o.state.Uploads[q.UploadID]
-	o.mu.Unlock()
-	if err != nil {
+	if err := o.admitRecipe(q); err != nil {
 		return Result{}, err
-	}
-	if !ok || !o.config.Now().Before(u.ExpiresAt) {
-		return Result{}, errors.New("app: missing source upload")
 	}
 	staging := filepath.Join(o.config.DataRoot, "uploads", "source-"+q.UploadID)
 	if err := os.MkdirAll(staging, 0700); err != nil {
@@ -579,7 +706,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	if q.Action == "update" {
 		local, previous, err = o.stageUpdate(ctx, q, digest)
 	} else {
-		local, releaseApp, err = o.stageCreate(ctx, q, digest)
+		ctx, local, releaseApp, err = o.stageCreate(ctx, q, digest)
 	}
 	defer releaseApp()
 	if err != nil {
@@ -588,12 +715,16 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	}
 	app, workspace := local.Record, local.Root
 	fail := func(cause error) (Result, error) {
+		// Undoing must finish even when the request or the operation's context
+		// has ended; start still refuses to restart a revoked app.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maintenanceBudget)
+		defer cancel()
 		if q.Action == "create" {
 			return Result{}, o.failCreate(ctx, app.ID, cause)
 		}
 		_ = o.stop(ctx, app.ID)
-		if previous.Record.Kind == "server" {
-			session, startErr := o.config.Workers.Start(ctx, "app "+app.ID, previous.Command, previous.Root, o.environment(previous))
+		if previous.Command != "" {
+			session, startErr := o.start(ctx, app.ID, "app "+app.ID, previous.Command, previous.Root, o.environment(previous))
 			previous.Session = session
 			cause = errors.Join(cause, startErr)
 		}
@@ -624,7 +755,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		if err := validateDataRoot(workspace); err != nil {
 			return fail(err)
 		}
-		id, err := o.config.Workers.Start(ctx, "app-setup "+app.ID, q.Setup, workspace, o.environment(local))
+		id, err := o.start(ctx, app.ID, "app-setup "+app.ID, q.Setup, workspace, o.environment(local))
 		if err != nil {
 			return fail(err)
 		}
@@ -662,7 +793,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		if err := ProbePortAvailable(q.Port); err != nil {
 			return fail(err)
 		}
-		session, err := o.config.Workers.Start(ctx, "app "+app.ID, q.Command, workspace, o.environment(local))
+		session, err := o.start(ctx, app.ID, "app "+app.ID, q.Command, workspace, o.environment(local))
 		if err != nil {
 			return fail(err)
 		}
@@ -748,7 +879,7 @@ func (o *Origin) ensureServer(ctx context.Context, a *localApp) error {
 		if err := ProbePortAvailable(a.Port); err != nil {
 			return err
 		}
-		session, err = o.config.Workers.Start(ctx, "app "+a.Record.ID, a.Command, a.Root, o.environment(*a))
+		session, err = o.start(ctx, a.Record.ID, "app "+a.Record.ID, a.Command, a.Root, o.environment(*a))
 		if err != nil {
 			return err
 		}
@@ -817,12 +948,7 @@ func (o *Origin) failCreate(ctx context.Context, id string, err error) error {
 // stop ends only the app's own labelled workers; ordinary sessions never carry
 // these labels.
 func (o *Origin) stop(ctx context.Context, id string) error {
-	o.mu.Lock()
-	_, ok := o.state.Apps[id]
-	o.mu.Unlock()
-	if !ok {
-		return nil
-	}
+	// A worker can outlive its local record, so search by label regardless.
 	for _, label := range []string{"app " + id, "app-setup " + id} {
 		session, alive, err := o.config.Workers.Find(ctx, label)
 		if err != nil {
@@ -881,22 +1007,28 @@ func (o *Origin) Sync(ctx context.Context) error {
 	// Safety work must run even when the caller's budget is spent, because that
 	// is exactly when a silent edge lets leases lapse.
 	safety := context.WithoutCancel(ctx)
-	if err != nil {
-		return errors.Join(err, o.eachApp(safety, o.appIDs(nil), o.stopLapsed))
+	if records == nil {
+		// Without an authoritative answer only lapsed leases are known, and a
+		// partition is not permission to delete anything.
+		return errors.Join(err, o.eachApp(safety, o.appIDs(nil), o.guardLapsed))
 	}
 	ids := o.appIDs(records)
-	denied := o.eachApp(safety, ids, func(ctx context.Context, id string) error { return o.deny(ctx, id, records) })
+	denied := o.eachApp(safety, ids, func(ctx context.Context, id string) error { return o.enforce(ctx, id, records) })
 	recovered := o.eachApp(ctx, ids, func(ctx context.Context, id string) error { return o.recover(ctx, id, records) })
-	return errors.Join(denied, recovered, o.expireUploads(ctx))
+	return errors.Join(err, denied, recovered, o.expireUploads(ctx))
 }
 
-// renewLeases applies the edge's records while still holding exchangeMu, so no
-// allocation or activation can land between the edge's answer and its use.
+// renewLeases applies the edge's records while still holding the exchange slot,
+// so no allocation or activation can land between the edge's answer and its
+// use. Records it applied but could not save are still returned: they are
+// signed, and a revocation among them must be carried out.
 func (o *Origin) renewLeases(ctx context.Context) (map[string]Record, error) {
 	ctx, cancel := context.WithTimeout(ctx, maintenanceBudget)
 	defer cancel()
-	o.exchangeMu.Lock()
-	defer o.exchangeMu.Unlock()
+	if err := o.lockExchange(ctx); err != nil {
+		return nil, fmt.Errorf("app: sync leases with edge: %w", err)
+	}
+	defer o.unlockExchange()
 	result, err := o.edgeLocked(ctx, Request{Action: "sync"})
 	if err != nil {
 		return nil, fmt.Errorf("app: sync leases with edge: %w", err)
@@ -911,7 +1043,10 @@ func (o *Origin) renewLeases(ctx context.Context) (map[string]Record, error) {
 			o.state.Apps[record.ID] = a
 		}
 	}
-	return records, o.persist(ctx)
+	if err := o.persist(ctx); err != nil {
+		return records, fmt.Errorf("app: save renewed leases: %w", err)
+	}
+	return records, nil
 }
 func (o *Origin) appIDs(records map[string]Record) []string {
 	o.mu.Lock()
@@ -928,18 +1063,13 @@ func (o *Origin) appIDs(records map[string]Record) []string {
 	return ids
 }
 
-// eachApp runs step for every app no operation owns, concurrently and each
-// under its own budget.
+// eachApp runs step for every app, concurrently and each under its own budget.
+// Steps claim the app themselves.
 func (o *Origin) eachApp(ctx context.Context, ids []string, step func(context.Context, string) error) error {
 	var wg sync.WaitGroup
 	errs := make([]error, len(ids))
 	for i, id := range ids {
-		release, ok := o.tryOp("app "+id, "sync")
-		if !ok {
-			continue
-		}
 		wg.Go(func() {
-			defer release()
 			stepCtx, cancel := context.WithTimeout(ctx, maintenanceBudget)
 			defer cancel()
 			errs[i] = step(stepCtx, id)
@@ -947,6 +1077,56 @@ func (o *Origin) eachApp(ctx context.Context, ids []string, step func(context.Co
 	}
 	wg.Wait()
 	return errors.Join(errs...)
+}
+
+// withdrawal names why the edge no longer allows an app to run: a signed
+// deletion or expiry, or a lease that has run out. Records are nil when the
+// edge gave no answer.
+func (o *Origin) withdrawal(id string, records map[string]Record) string {
+	if record, listed := records[id]; listed && record.Status != "active" {
+		return record.Status
+	}
+	o.mu.Lock()
+	a, local := o.state.Apps[id]
+	o.mu.Unlock()
+	if local && !o.config.Now().Before(a.Record.LeaseUntil) {
+		return "left without a lease"
+	}
+	return ""
+}
+
+// overrule runs safety work that outranks any operation on the app. If the
+// operation does not yield, the app's workers are stopped anyway and its state
+// is left for the next pass.
+func (o *Origin) overrule(ctx context.Context, id, reason string, work func(context.Context) error) error {
+	release, err := o.preempt(ctx, id, reason)
+	if err != nil {
+		return errors.Join(err, o.stop(ctx, id))
+	}
+	defer release()
+	return work(ctx)
+}
+func (o *Origin) guardLapsed(ctx context.Context, id string) error {
+	reason := o.withdrawal(id, nil)
+	if reason == "" {
+		return nil
+	}
+	return o.overrule(ctx, id, reason, func(ctx context.Context) error { return o.stopLapsed(ctx, id) })
+}
+
+// enforce applies the edge's answer to one app. A withdrawal overrules the
+// app's operation; the other denials only concern apps no operation owns.
+func (o *Origin) enforce(ctx context.Context, id string, records map[string]Record) error {
+	deny := func(ctx context.Context) error { return o.deny(ctx, id, records) }
+	if reason := o.withdrawal(id, records); reason != "" {
+		return o.overrule(ctx, id, reason, deny)
+	}
+	release, ok := o.tryOp("app "+id, "sync")
+	if !ok {
+		return nil
+	}
+	defer release()
+	return deny(ctx)
 }
 
 // stopLapsed stops an app whose last lease has run out; its files stay until
@@ -1013,13 +1193,21 @@ func (o *Origin) denyUnlisted(ctx context.Context, id string, a localApp) error 
 }
 
 // recover restores what an interrupted operation or a lost worker left behind
-// for an app the edge still lists as active.
+// for an app the edge still lists as active. It decides from the stored record,
+// which may be newer than the pass's records if an operation ran in between.
 func (o *Origin) recover(ctx context.Context, id string, records map[string]Record) error {
-	record, listed := records[id]
+	if _, listed := records[id]; !listed {
+		return nil
+	}
+	release, ok := o.tryOp("app "+id, "sync")
+	if !ok {
+		return nil
+	}
+	defer release()
 	o.mu.Lock()
 	a, local := o.state.Apps[id]
 	o.mu.Unlock()
-	if !listed || !local || record.Status != "active" {
+	if !local || a.Record.Status != "active" {
 		return nil
 	}
 	if a.Phase == "activating" {
@@ -1032,11 +1220,11 @@ func (o *Origin) recover(ctx context.Context, id string, records map[string]Reco
 		return nil
 	}
 	if a.Commit != nil {
-		if err := o.finishActivation(ctx, a, record); err != nil {
+		if err := o.finishActivation(ctx, a, a.Record); err != nil {
 			return fmt.Errorf("app %s: finish activation: %w", id, err)
 		}
 	}
-	if record.Kind != "server" {
+	if a.Command == "" {
 		return nil
 	}
 	_, alive, err := o.config.Workers.Find(ctx, "app "+id)
@@ -1077,7 +1265,7 @@ func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 	if q.Offset < 0 || q.Offset > MaxArchive {
 		return Result{}, errors.New("app: invalid download offset")
 	}
-	release, err := o.beginOp(ctx, "app "+q.ID, "download")
+	ctx, release, err := o.beginOp(ctx, "app "+q.ID, "download")
 	if err != nil {
 		return Result{}, err
 	}
@@ -1255,8 +1443,8 @@ func (o *Origin) GuardService(ctx context.Context, ports []int, root string) (fu
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	for _, app := range o.state.Apps {
-		if app.Command != "" && slices.Contains(ports, app.Port) {
+	for _, port := range ports {
+		if _, owned := o.portOwnerLocked(port); owned {
 			return nil, errors.New("app: ordinary services cannot proxy an app-owned port")
 		}
 	}
