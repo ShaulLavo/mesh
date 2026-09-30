@@ -26,6 +26,7 @@ type serverWorkers struct {
 	mu        sync.Mutex
 	listeners map[string]net.Listener
 	findErr   map[string]error
+	stopErr   map[string]error
 	// beforeStart and wait, when set, let a test hold or fail one start or setup.
 	beforeStart func(ctx context.Context, label, command string) error
 	beforeFind  func(ctx context.Context, label string) error
@@ -34,7 +35,7 @@ type serverWorkers struct {
 
 func newServerWorkers(t *testing.T, f *appFixture) *serverWorkers {
 	t.Helper()
-	w := &serverWorkers{fakeWorkers: f.workers, listeners: map[string]net.Listener{}, findErr: map[string]error{}}
+	w := &serverWorkers{fakeWorkers: f.workers, listeners: map[string]net.Listener{}, findErr: map[string]error{}, stopErr: map[string]error{}}
 	t.Cleanup(func() {
 		w.mu.Lock()
 		defer w.mu.Unlock()
@@ -80,6 +81,10 @@ func (w *serverWorkers) Stop(ctx context.Context, id string) error {
 		return fmt.Errorf("stop %s: %w", id, err)
 	}
 	w.mu.Lock()
+	if err := w.stopErr[id]; err != nil {
+		w.mu.Unlock()
+		return err
+	}
 	if listener, ok := w.listeners[id]; ok {
 		_ = listener.Close()
 		delete(w.listeners, id)

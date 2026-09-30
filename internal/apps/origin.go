@@ -473,15 +473,20 @@ func (o *Origin) appendUpload(ctx context.Context, q Request) (Result, error) {
 		return Result{}, err
 	}
 	u.Size = q.Offset + int64(len(q.Data))
+	return Result{UploadID: u.ID}, o.recordChunk(ctx, u)
+}
+
+// recordChunk saves a writer's copy of its upload after the chunk is on disk.
+// Activation retires an upload while holding only its app, so the record may be
+// gone; writing the cached copy back would revive it without its file.
+func (o *Origin) recordChunk(ctx context.Context, u upload) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	// Activation retires an upload while holding only its app, so the record may
-	// be gone; writing the cached copy back would revive it without its file.
 	if _, ok := o.state.Uploads[u.ID]; !ok {
-		return Result{}, fmt.Errorf("app: upload %s was consumed or expired while writing", u.ID)
+		return fmt.Errorf("app: upload %s was consumed or expired while writing", u.ID)
 	}
 	o.state.Uploads[u.ID] = u
-	return Result{UploadID: u.ID}, o.persist(ctx)
+	return o.persist(ctx)
 }
 func validateRecipe(q Request) error {
 	if q.Kind == "" {

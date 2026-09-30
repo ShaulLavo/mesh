@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -314,5 +315,201 @@ func TestSyncLetsOwnersDeleteFinish(t *testing.T) {
 	requireEdgeCleanup(t, f, app.ID)
 	if workers.alive(t, "app "+app.ID) {
 		t.Fatalf("deleted app %s kept running", app.ID)
+	}
+}
+
+func TestCreateCannotTakePortAnUpdateReserved(t *testing.T) {
+	f := newAppFixture(t)
+	newServerWorkers(t, f)
+	updating := createStaticApp(t, f)
+	port := freePort(t)
+	allocating := newGate(t)
+	exchange := f.origin.config.Exchange
+	f.origin.config.Exchange = func(ctx context.Context, s Signed) (Signed, error) {
+		var q Request
+		_ = json.Unmarshal(s.Body, &q)
+		if q.Action == "allocate" {
+			allocating.arrive()
+			<-allocating.release
+		}
+		return exchange(ctx, s)
+	}
+	upload, digest := uploadSource(t, f, sourceFixture(t))
+	created := make(chan error, 1)
+	go func() {
+		_, err := f.origin.Handle(context.Background(), Request{Action: "create", Kind: "server", Command: "serve", Port: port, UploadID: upload, Digest: digest})
+		created <- err
+	}()
+	<-allocating.entered
+	next, nextDigest := uploadSource(t, f, sourceFixture(t))
+	updated := make(chan error, 1)
+	go func() {
+		_, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: updating.ID, Kind: "server", Command: "serve", Port: port, UploadID: next, Digest: nextDigest})
+		updated <- err
+	}()
+	waitFor(t, func() bool {
+		f.origin.mu.Lock()
+		defer f.origin.mu.Unlock()
+		op := f.origin.ops["app "+updating.ID]
+		return op != nil && slices.Contains(op.ports, port)
+	}, "update reserving its candidate port")
+	allocating.done()
+	createErr := receive(t, created, "create")
+	_ = receive(t, updated, "update")
+	if createErr == nil {
+		t.Fatalf("a create took port %d that app %s's update had reserved while the create was allocating", port, updating.ID)
+	}
+}
+
+func TestUpdateWithoutAppIDIsRejected(t *testing.T) {
+	f := newAppFixture(t)
+	newServerWorkers(t, f)
+	upload, digest := uploadSource(t, f, sourceFixture(t))
+	var err error
+	func() {
+		defer func() {
+			if p := recover(); p != nil {
+				t.Fatalf("update without an app ID panicked: %v", p)
+			}
+		}()
+		_, err = f.origin.Handle(context.Background(), Request{Action: "update", Kind: "server", Command: "serve", Port: freePort(t), UploadID: upload, Digest: digest})
+	}()
+	if err == nil {
+		t.Fatal("update without an app ID was accepted")
+	}
+}
+
+func TestSyncEnforcesLeaseThatElapsedInTransit(t *testing.T) {
+	for _, running := range []bool{true, false} {
+		name := "running"
+		if !running {
+			name = "stopped"
+		}
+		t.Run(name, func(t *testing.T) { testLeaseElapsedInTransit(t, running) })
+	}
+}
+
+func testLeaseElapsedInTransit(t *testing.T, running bool) {
+	t.Helper()
+	f := newAppFixture(t)
+	workers := newServerWorkers(t, f)
+	app := createServerApp(t, f)
+	root := f.origin.state.Apps[app.ID].Root
+	if !running {
+		if err := workers.Stop(context.Background(), "worker-app "+app.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The edge signs a lease that ends at the app's deadline, one second away,
+	// and the answer arrives two seconds later.
+	f.now = app.ExpiresAt.Add(-time.Second)
+	f.origin.config.Exchange = func(ctx context.Context, s Signed) (Signed, error) {
+		response, err := f.edge.Exchange(ctx, s)
+		f.now = f.now.Add(2 * time.Second)
+		return response, err
+	}
+	err := f.origin.Sync(context.Background())
+	if workers.alive(t, "app "+app.ID) {
+		t.Fatalf("app %s runs on a lease that had elapsed when Sync applied it (running before: %t): %v", app.ID, running, err)
+	}
+	if _, statErr := os.Stat(root); statErr != nil {
+		t.Fatalf("an elapsed lease deleted app %s's files: %v", app.ID, statErr)
+	}
+}
+
+// ackFaultStore fails the second save after it is armed: the one that clears
+// Pending once the edge's signed reply has been verified.
+type ackFaultStore struct {
+	*memoryAppStore
+	saves   int
+	tripped bool
+}
+
+func (s *ackFaultStore) SaveAppState(ctx context.Context, key string, data []byte) error {
+	if key == "apps.origin" {
+		s.saves++
+		if s.saves == 2 {
+			s.tripped = true
+			return errors.New("state store unavailable")
+		}
+	}
+	return s.memoryAppStore.SaveAppState(ctx, key, data)
+}
+
+func TestSyncActsOnVerifiedReplyItCouldNotAcknowledge(t *testing.T) {
+	f := newAppFixture(t)
+	workers := newServerWorkers(t, f)
+	app := createServerApp(t, f)
+	deleteAtEdge(t, f, app.ID)
+	store := &ackFaultStore{memoryAppStore: f.originStore}
+	f.origin.config.Store = store
+	err := f.origin.Sync(context.Background())
+	if !store.tripped {
+		t.Fatal("fault not triggered")
+	}
+	if !workers.wasStopped(app.ID) {
+		t.Fatalf("deleted app %s kept running because the edge's verified reply could not be acknowledged: %v", app.ID, err)
+	}
+	if err == nil {
+		t.Fatal("Sync hid the acknowledgement failure")
+	}
+}
+
+func TestSafetyStopsSetupWhenServerStopFails(t *testing.T) {
+	f := newAppFixture(t)
+	workers := newServerWorkers(t, f)
+	app := createServerApp(t, f)
+	port := f.origin.state.Apps[app.ID].Port
+	setup := newGate(t)
+	workers.wait = setup.setup
+	upload, digest := uploadSource(t, f, sourceFixture(t))
+	updated := make(chan error, 1)
+	go func() {
+		_, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: app.ID, Kind: "server", Command: "serve", Setup: "npm ci", Port: port, UploadID: upload, Digest: digest})
+		updated <- err
+	}()
+	<-setup.entered
+	workers.mu.Lock()
+	workers.stopErr["worker-app "+app.ID] = errors.New("worker socket unavailable")
+	workers.mu.Unlock()
+	deleteAtEdge(t, f, app.ID)
+	syncErr := f.origin.Sync(context.Background())
+	_ = receive(t, updated, "revoked update")
+	if workers.alive(t, "app-setup "+app.ID) {
+		t.Fatalf("app %s's setup kept running because stopping its server failed: %v", app.ID, syncErr)
+	}
+	if syncErr == nil {
+		t.Fatal("Sync hid the failed server stop")
+	}
+}
+
+func TestRetiredUploadIsNotRevivedByItsWriter(t *testing.T) {
+	f := newAppFixture(t)
+	created, err := f.origin.Handle(context.Background(), Request{Action: "upload.begin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.origin.mu.Lock()
+	cached := f.origin.state.Uploads[created.UploadID]
+	// Activation consumes the upload while the writer holds its cached copy.
+	delete(f.origin.state.Uploads, created.UploadID)
+	f.origin.mu.Unlock()
+	cached.Size = 5
+	if err := f.origin.recordChunk(context.Background(), cached); err == nil {
+		t.Fatal("writer's save of a retired upload succeeded")
+	}
+	if _, ok := f.origin.state.Uploads[created.UploadID]; ok {
+		t.Fatalf("writer revived retired upload %s", created.UploadID)
+	}
+}
+
+func waitFor(t *testing.T, ready func() bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !ready() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
