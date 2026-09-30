@@ -167,6 +167,40 @@ assert_session_processes() {
     fail 'retained shell is no longer owned by the original worker server'
 }
 
+assert_live_recovery() {
+  python3 - "$state" "$session" <<'PY'
+import json
+import pathlib
+import socket
+import sqlite3
+import struct
+import sys
+
+state = pathlib.Path(sys.argv[1])
+session = sys.argv[2]
+with sqlite3.connect(state / "mesh.db") as database:
+    host = database.execute("SELECT id FROM hosts ORDER BY id LIMIT 1").fetchone()[0]
+record = json.loads((state / "s" / session / "recovery.json").read_bytes())
+assert record["version"] == 1 and record["hostId"] == host and record["sessionId"] == session, record
+request = {"type": "session.recovery", "sessionId": session, "requestId": "transition-proof-recovery"}
+payload = json.dumps(request).encode()
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+    connection.settimeout(10)
+    connection.connect(str(state / "daemon.sock"))
+    connection.sendall(b"\x01" + struct.pack(">I", len(payload)) + payload)
+    with connection.makefile("rb") as stream:
+        header = stream.read(5)
+        assert len(header) == 5 and header[0] == 1, header
+        length = struct.unpack(">I", header[1:])[0]
+        assert 0 < length <= 4 << 20, length
+        response = json.loads(stream.read(length))
+assert response["type"] == "session.recovery-record", response
+accepted = response["recovery"]
+assert accepted["version"] == 1 and accepted["hostId"] == host and accepted["sessionId"] == session, response
+assert accepted["checkpointAt"] != "0001-01-01T00:00:00Z", response
+PY
+}
+
 stop_daemon() {
   local pid=$1
   local binary=$2
@@ -195,6 +229,8 @@ env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$old_binary" daemon --tai
 old_daemon=$!
 wait_for_daemon "$old_binary" "$old_daemon" || fail "retained daemon did not start: $(cat "$test_root/old-first.log")"
 
+# Polling must not depend on the background shell opening its redirections first.
+touch "$test_root/client.err"
 mesh "$old_binary" local --daemon --detach-key=ctrl+] -- /bin/sh <"$test_root/input" >"$test_root/client.out" 2>"$test_root/client.err" &
 client=$!
 exec 3>"$test_root/input"
@@ -222,7 +258,8 @@ old_daemon=''
 old_state_version=$(read_state_version)
 old_worker_protocol=$(build_field "$old_binary" workerProtocol 1)
 
-python3 - "$state" "$session" <<'PY'
+# Live checkpoints belong to the worker and must remain free to change.
+saved_session=$(python3 - "$state" "$session" <<'PY'
 import datetime
 import json
 import pathlib
@@ -231,13 +268,22 @@ import sys
 
 state = pathlib.Path(sys.argv[1])
 session = sys.argv[2]
+saved_session = "0000" if session != "0000" else "0001"
+saved_dir = state / "s" / saved_session
+saved_dir.mkdir(mode=0o700)
+checkpoint_at = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+meta = json.loads((state / "s" / session / "meta.json").read_text())
+meta.update(id=saved_session, state="exited", exitedAt=checkpoint_at, exitCode=0)
+meta.pop("detachedAt", None)
+meta.pop("lastAttachedAt", None)
+(saved_dir / "meta.json").write_text(json.dumps(meta, sort_keys=True) + "\n")
 with sqlite3.connect(state / "mesh.db") as database:
     host = database.execute("SELECT id FROM hosts ORDER BY id LIMIT 1").fetchone()[0]
 record = {
     "version": 1,
     "hostId": host,
-    "sessionId": session,
-    "checkpointAt": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+    "sessionId": saved_session,
+    "checkpointAt": checkpoint_at,
     "shell": "/bin/sh",
     "shellDirectory": str(state),
     "directorySource": "launch",
@@ -245,9 +291,11 @@ record = {
     "lines": ["READY"],
     "command": ["/bin/sh"],
 }
-(state / "s" / session / "recovery.json").write_text(json.dumps(record, sort_keys=True) + "\n")
+(saved_dir / "recovery.json").write_text(json.dumps(record, sort_keys=True) + "\n")
+print(saved_session)
 PY
-recovery_before=$(sha256sum "$state/s/$session/recovery.json" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$state/s/$session/recovery.json" | awk '{print $1}')
+)
+recovery_before=$(sha256sum "$state/s/$saved_session/recovery.json" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$state/s/$saved_session/recovery.json" | awk '{print $1}')
 
 candidate_state_version=$(build_field "$candidate_binary" stateVersion 0)
 candidate_worker_protocol=$(build_field "$candidate_binary" workerProtocol 0)
@@ -259,6 +307,7 @@ wait_for_daemon "$candidate_binary" "$candidate_daemon" || fail "candidate daemo
 candidate_written_state=$(read_state_version)
 [[ $candidate_written_state == "$candidate_state_version" ]] || fail 'candidate database schema differs from its reported state version'
 mesh "$candidate_binary" ls --daemon | grep -Fq "$session" || fail 'candidate did not inventory retained session'
+mesh "$candidate_binary" ls --daemon --all | grep -Fq "$saved_session" || fail 'candidate did not inventory saved recovery session'
 assert_session_processes
 mkfifo "$test_root/candidate-input"
 mesh "$candidate_binary" attach "$session" --daemon --detach-key=ctrl+] <"$test_root/candidate-input" >"$test_root/candidate.out" 2>"$test_root/candidate.err" &
@@ -267,6 +316,7 @@ exec 4>"$test_root/candidate-input"
 send_token 4 "CANDIDATE_REATTACH_$session"
 wait_for_token "$test_root/candidate.out" "CANDIDATE_REATTACH_$session" || fail 'candidate could not exchange data with retained worker'
 assert_session_processes
+assert_live_recovery || fail 'candidate did not accept retained worker checkpoint'
 printf '\035' >&4
 wait_for_exit "$client" || fail 'candidate client did not detach'
 wait "$client" 2>/dev/null || true
@@ -280,6 +330,7 @@ old_daemon=$!
 wait_for_daemon "$old_binary" "$old_daemon" || fail "retained daemon could not reopen candidate-written state: $(cat "$test_root/old-rollback.log")"
 [[ $(read_state_version) == "$candidate_written_state" ]] || fail 'retained daemon changed candidate-written schema'
 mesh "$old_binary" ls --daemon | grep -Fq "$session" || fail 'retained daemon lost the live session after candidate writes'
+mesh "$candidate_binary" ls --daemon --all | grep -Fq "$saved_session" || fail 'retained daemon lost saved recovery session after candidate writes'
 assert_session_processes
 mkfifo "$test_root/rollback-input"
 mesh "$old_binary" attach "$session" --daemon --detach-key=ctrl+] <"$test_root/rollback-input" >"$test_root/rollback.out" 2>"$test_root/rollback.err" &
@@ -288,7 +339,8 @@ exec 5>"$test_root/rollback-input"
 send_token 5 "RETAINED_ROLLBACK_$session"
 wait_for_token "$test_root/rollback.out" "RETAINED_ROLLBACK_$session" || fail 'retained daemon could not exchange data after rollback'
 assert_session_processes
-recovery_after=$(sha256sum "$state/s/$session/recovery.json" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$state/s/$session/recovery.json" | awk '{print $1}')
+assert_live_recovery || fail 'retained daemon did not accept worker checkpoint after rollback'
+recovery_after=$(sha256sum "$state/s/$saved_session/recovery.json" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$state/s/$saved_session/recovery.json" | awk '{print $1}')
 [[ $recovery_after == "$recovery_before" ]] || fail 'recovery record changed across candidate and retained daemon startups'
 printf '\035' >&5
 exec 5>&-
