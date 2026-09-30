@@ -52,7 +52,7 @@ def prove(root, evidence):
     shutil.copyfile(ROOT / "scripts/gates.sh", root / "scripts/gates.sh")
     shutil.copyfile(ROOT / ".golangci.yml", root / ".golangci.yml")
     baseline = root / ".gates/baseline.json"
-    baseline.write_text(json.dumps({"version": 1, "entries": []}))
+    baseline.write_text(json.dumps({"version": 2, "entries": []}))
     write_go(root, CLEAN)
     expect(run_gates(root, evidence, "clean"), 0, "golangci: PASS")
 
@@ -104,14 +104,14 @@ def prove(root, evidence):
     entries = []
     for issue in json.loads((refused[2] / "golangci.json").read_text())["Issues"] or []:
         file = issue["Pos"]["Filename"]
-        source = (root / file).read_text().splitlines()[issue["Pos"]["Line"] - 1].strip()
-        entries.append({"gate": "golangci", "file": file, "rule": issue["FromLinter"], "text": issue["Text"], "source": source, "count": 1})
+        function = "abandonedValue"
+        entries.append({"gate": "golangci", "file": file, "rule": issue["FromLinter"], "text": issue["Text"], "function": function, "count": 1})
     for package in json.loads((refused[2] / "deadcode.json").read_text()) or []:
         for function in package["Funcs"]:
-            entries.append({"gate": "deadcode", "file": function["Position"]["File"], "rule": "unreachable", "text": function["Name"], "source": "", "count": 1})
+            entries.append({"gate": "deadcode", "file": function["Position"]["File"], "rule": "unreachable", "text": function["Name"], "function": "", "count": 1})
     for entry in entries:
         entry["reason"] = "Deliberate test fixture exception; removed in the next assertion."
-    baseline.write_text(json.dumps({"version": 1, "entries": entries}))
+    baseline.write_text(json.dumps({"version": 2, "entries": entries}))
     expect(run_gates(root, evidence, "reasoned-exception"), 0, "deadcode: PASS")
     write_go(root, CLEAN)
     expect(run_gates(root, evidence, "stale-exception"), 1, "STALE (run scripts/gates.sh --update-baseline)")

@@ -6,6 +6,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -24,14 +27,36 @@ const (
 var gateNames = []string{golangciGate, deadcodeGate, shellcheckGate, ruffGate}
 var goLocation = regexp.MustCompile(`(\.go):\d+(?:-\d+)?`)
 var cloneRange = regexp.MustCompile(`^\d+-\d+ lines are duplicate of `)
+var constantLiteral = regexp.MustCompile("(?s)^string (`.*`) has [0-9]+ occurrences.*$")
+var cognitiveFunction = regexp.MustCompile("^cognitive complexity [0-9]+ of func (`.*`) is high \\(> [0-9]+\\)$")
+var complexityScore = regexp.MustCompile(`complexity: \d+`)
+var diagnosticLine = regexp.MustCompile(`\bline \d+\b`)
 
-// Keys retain source text and occurrence counts, but never report positions.
+func normalizeText(rule, text string) string {
+	text = goLocation.ReplaceAllString(text, "${1}:<location>")
+	switch rule {
+	case "goconst":
+		return constantLiteral.ReplaceAllString(text, "string $1")
+	case "gocognit":
+		return cognitiveFunction.ReplaceAllString(text, "func $1")
+	case "nestif":
+		return complexityScore.ReplaceAllString(text, "complexity: <score>")
+	case "nilerr":
+		return diagnosticLine.ReplaceAllString(text, "line <location>")
+	case "dupl":
+		return cloneRange.ReplaceAllString(text, "<range> lines are duplicate of ")
+	default:
+		return text
+	}
+}
+
+// Function context survives formatting and movement; repeated findings remain counted.
 type findingKey struct {
-	Gate   string `json:"gate"`
-	File   string `json:"file"`
-	Rule   string `json:"rule"`
-	Text   string `json:"text"`
-	Source string `json:"source"`
+	Gate     string `json:"gate"`
+	File     string `json:"file"`
+	Rule     string `json:"rule"`
+	Text     string `json:"text"`
+	Function string `json:"function"`
 }
 
 type entry struct {
@@ -51,10 +76,11 @@ type position struct {
 }
 
 type collector struct {
-	root   string
-	fs     *os.Root
-	lines  map[string][]string
-	counts map[findingKey]int
+	root      string
+	fs        *os.Root
+	lines     map[string][]string
+	functions map[string][]functionRange
+	counts    map[findingKey]int
 }
 
 func readJSON(path string, value any) error {
@@ -74,34 +100,123 @@ func readJSON(path string, value any) error {
 }
 
 func (c *collector) add(gate, file, rule, text string, line int) error {
+	key, err := c.key(gate, file, rule, text, line)
+	if err != nil {
+		return err
+	}
+	if key.File != "" {
+		c.counts[key]++
+	}
+	return nil
+}
+
+func (c *collector) reportFile(file string) (string, error) {
 	if filepath.IsAbs(file) {
 		name, err := filepath.Rel(c.root, file)
 		if err != nil {
-			return fmt.Errorf("report path %s: %w", file, err)
+			return "", fmt.Errorf("report path %s: %w", file, err)
 		}
 		file = name
 	}
 	file = filepath.ToSlash(filepath.Clean(file))
-	if file == ".." || strings.HasPrefix(file, "../") || file == "." || rule == "" || text == "" {
-		return fmt.Errorf("invalid report finding: %s [%s] %s", file, rule, text)
+	if file == ".." || strings.HasPrefix(file, "../") || file == "." {
+		return "", fmt.Errorf("invalid report path: %s", file)
 	}
 	if file == "third_party" || strings.HasPrefix(file, "third_party/") {
-		return nil
+		return "", nil
 	}
-	text = goLocation.ReplaceAllString(text, "${1}:<location>")
-	if gate == golangciGate && rule == "dupl" {
-		text = cloneRange.ReplaceAllString(text, "<range> lines are duplicate of ")
+	return file, nil
+}
+
+func (c *collector) key(gate, file, rule, text string, line int) (findingKey, error) {
+	file, err := c.reportFile(file)
+	if err != nil {
+		return findingKey{}, err
 	}
-	key := findingKey{Gate: gate, File: file, Rule: rule, Text: text}
-	if line != 0 {
-		source, err := c.source(file, line)
-		if err != nil {
-			return err
+	if file == "" {
+		return findingKey{}, nil
+	}
+	if rule == "" || text == "" {
+		return findingKey{}, fmt.Errorf("invalid report finding: %s [%s] %s", file, rule, text)
+	}
+	key := findingKey{Gate: gate, File: file, Rule: rule, Text: normalizeText(rule, text)}
+	if line == 0 {
+		return key, nil
+	}
+	if _, err := c.source(file, line); err != nil {
+		return findingKey{}, err
+	}
+	// Goconst reports a file-scoped literal at an arbitrary representative occurrence.
+	if gate != golangciGate || rule == "goconst" {
+		return key, nil
+	}
+	key.Function, err = c.function(file, line)
+	return key, err
+}
+
+type functionRange struct {
+	first, last int
+	name        string
+}
+
+func receiverName(expr ast.Expr) string {
+	switch value := expr.(type) {
+	case *ast.Ident:
+		return value.Name
+	case *ast.StarExpr:
+		return receiverName(value.X)
+	case *ast.IndexExpr:
+		return receiverName(value.X)
+	case *ast.IndexListExpr:
+		return receiverName(value.X)
+	default:
+		return ""
+	}
+}
+
+func functionName(function *ast.FuncDecl) string {
+	if function.Recv == nil {
+		return function.Name.Name
+	}
+	return receiverName(function.Recv.List[0].Type) + "." + function.Name.Name
+}
+
+func (c *collector) parseFunctions(file string) ([]functionRange, error) {
+	set := token.NewFileSet()
+	tree, err := parser.ParseFile(set, file, strings.Join(c.lines[file], "\n"), parser.SkipObjectResolution)
+	if err != nil {
+		return nil, fmt.Errorf("source functions %s: %w", file, err)
+	}
+	functions := []functionRange{}
+	for _, declaration := range tree.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok {
+			continue
 		}
-		key.Source = source
+		functions = append(functions, functionRange{set.Position(function.Pos()).Line, set.Position(function.End()).Line, functionName(function)})
 	}
-	c.counts[key]++
-	return nil
+	return functions, nil
+}
+
+func (c *collector) function(file string, line int) (string, error) {
+	functions, ok := c.functions[file]
+	if !ok {
+		var err error
+		functions, err = c.parseFunctions(file)
+		if err != nil {
+			return "", err
+		}
+		if c.functions == nil {
+			c.functions = make(map[string][]functionRange)
+		}
+		c.functions[file] = functions
+	}
+	for _, function := range functions {
+		if line >= function.first && line <= function.last {
+			return function.name, nil
+		}
+	}
+	return "", nil
 }
 
 func (c *collector) source(file string, line int) (string, error) {
@@ -236,7 +351,7 @@ func readBaseline(path string) (map[findingKey]entry, error) {
 	if err := readJSON(path, &data); err != nil {
 		return nil, err
 	}
-	if data.Version != 1 {
+	if data.Version != 2 {
 		return nil, errors.New("unsupported baseline version")
 	}
 	entries := make(map[findingKey]entry)
@@ -244,8 +359,8 @@ func readBaseline(path string) (map[findingKey]entry, error) {
 		if !slices.Contains(gateNames, item.Gate) || item.File == "" || item.Rule == "" || item.Text == "" || item.Count < 1 || strings.TrimSpace(item.Reason) == "" {
 			return nil, fmt.Errorf("invalid baseline entry or missing reason: %s [%s]", item.File, item.Rule)
 		}
-		if goLocation.MatchString(item.Text) {
-			return nil, fmt.Errorf("line-number baseline key: %s [%s]", item.File, item.Rule)
+		if item.Text != normalizeText(item.Rule, item.Text) {
+			return nil, fmt.Errorf("unnormalized baseline key: %s [%s]", item.File, item.Rule)
 		}
 		if _, exists := entries[item.findingKey]; exists {
 			return nil, fmt.Errorf("duplicate baseline entry: %s [%s]", item.File, item.Rule)
@@ -256,7 +371,7 @@ func readBaseline(path string) (map[findingKey]entry, error) {
 }
 
 func keyText(key findingKey) string {
-	return strings.Join([]string{key.Gate, key.File, key.Rule, key.Text, key.Source}, "\x00")
+	return strings.Join([]string{key.Gate, key.File, key.Rule, key.Text, key.Function}, "\x00")
 }
 
 func sortedKeys[V any](values map[findingKey]V) []findingKey {
@@ -270,7 +385,7 @@ func sortedKeys[V any](values map[findingKey]V) []findingKey {
 
 func writeBaseline(path string, entries map[findingKey]entry) error {
 	var buffer bytes.Buffer
-	buffer.WriteString("{\n  \"version\": 1,\n  \"entries\": [\n")
+	buffer.WriteString("{\n  \"version\": 2,\n  \"entries\": [\n")
 	for i, key := range sortedKeys(entries) {
 		if i != 0 {
 			buffer.WriteString(",\n")
@@ -340,8 +455,8 @@ func differences(actual map[findingKey]int, entries map[findingKey]entry, o opti
 func printFindings(out io.Writer, label string, values map[findingKey]int) {
 	for _, key := range sortedKeys(values) {
 		_, _ = fmt.Fprintf(out, "%s: %s %s [%s] %s (count %d)\n", label, key.Gate, key.File, key.Rule, key.Text, values[key])
-		if key.Source != "" {
-			_, _ = fmt.Fprintf(out, "  %s\n", key.Source)
+		if key.Function != "" {
+			_, _ = fmt.Fprintf(out, "  %s\n", key.Function)
 		}
 	}
 }
