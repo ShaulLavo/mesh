@@ -44,6 +44,10 @@ func (e *Edge) authenticateNetwork(r *http.Request) *http.Request {
 
 func (e *Edge) browser(r *http.Request) (webauth.Session, error) {
 	if session, ok := r.Context().Value(networkSessionKey{}).(webauth.Session); ok {
+		paired, err := e.auth.Browser(r.Context(), r)
+		if err == nil {
+			session.Owners = append(append([]string(nil), session.Owners...), paired.Owners...)
+		}
 		return session, nil
 	}
 	return e.auth.Browser(r.Context(), r)

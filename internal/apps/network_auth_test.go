@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/shaul/mesh/internal/webauth"
 )
 
 func TestTailnetOwnerCanViewAndToggleWithoutPairing(t *testing.T) {
@@ -94,4 +96,17 @@ func TestTailnetOwnerCanViewAndToggleWithoutPairing(t *testing.T) {
 		t.Fatal("automatic access created a persistent browser grant")
 	}
 
+}
+
+func TestNetworkRecognitionPreservesExistingBrowserGrants(t *testing.T) {
+	f := newAppFixture(t)
+	cookie := pairedOwner(t, f)
+	networkOwner := identityFor(f.otherKey)
+	r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/", nil)
+	r.AddCookie(cookie)
+	r = r.WithContext(context.WithValue(r.Context(), networkSessionKey{}, webauth.Session{Owners: []string{networkOwner}, CSRF: "network-csrf"}))
+	session, err := f.edge.browser(r)
+	if err != nil || !session.Owns(networkOwner) || !session.Owns(identityFor(f.ownerKey)) || session.CSRF != "network-csrf" {
+		t.Fatal("network recognition replaced an explicitly paired owner grant")
+	}
 }
