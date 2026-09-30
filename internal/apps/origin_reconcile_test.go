@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -43,7 +44,7 @@ func newServerWorkers(t *testing.T, f *appFixture) *serverWorkers {
 
 func (w *serverWorkers) Start(ctx context.Context, label, command, root string, env []string) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", fmt.Errorf("start %s: %w", label, err)
 	}
 	id, err := w.fakeWorkers.Start(ctx, label, command, root, env)
 	if err != nil || !strings.HasPrefix(label, "app ") {
@@ -57,7 +58,7 @@ func (w *serverWorkers) Start(ctx context.Context, label, command, root string, 
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:"+port)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("listen for %s: %w", label, err)
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -67,7 +68,7 @@ func (w *serverWorkers) Start(ctx context.Context, label, command, root string, 
 
 func (w *serverWorkers) Stop(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("stop %s: %w", id, err)
 	}
 	w.mu.Lock()
 	if listener, ok := w.listeners[id]; ok {
@@ -80,7 +81,7 @@ func (w *serverWorkers) Stop(ctx context.Context, id string) error {
 
 func (w *serverWorkers) Find(ctx context.Context, label string) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf("find %s: %w", label, err)
 	}
 	w.mu.Lock()
 	err := w.findErr[label]
@@ -148,6 +149,14 @@ func deleteAtEdge(t *testing.T, f *appFixture, id string) {
 	}
 }
 
+func requireEdgeCleanup(t *testing.T, f *appFixture, id string) {
+	t.Helper()
+	record, _, err := f.edge.lookup(context.Background(), id, false)
+	if err != nil || record.Cleanup != "complete" {
+		t.Fatalf("edge cleanup of app %s not confirmed: %#v %v", id, record, err)
+	}
+}
+
 // startBlockedSetup begins creating a static app whose setup waits until the
 // returned release runs, and returns once that setup has started.
 func startBlockedSetup(t *testing.T, f *appFixture) (release func() error) {
@@ -157,7 +166,7 @@ func startBlockedSetup(t *testing.T, f *appFixture) (release func() error) {
 	upload, digest := uploadSource(t, f, sourceFixture(t))
 	created := make(chan error, 1)
 	go func() {
-		_, err := f.origin.Handle(context.Background(), Request{Action: "create", Kind: "static", Setup: "npm ci", UploadID: upload, Digest: digest})
+		_, err := f.origin.Handle(context.Background(), Request{Action: "create", Setup: "npm ci", UploadID: upload, Digest: digest})
 		created <- err
 	}()
 	<-workers.entered
@@ -220,10 +229,7 @@ func TestSyncCleansUpPastAFailingApp(t *testing.T) {
 	if _, statErr := os.Stat(laterRoot); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("deleted app %s kept its files behind failing app %s: %v", later.ID, first.ID, statErr)
 	}
-	record, _, lookupErr := f.edge.lookup(context.Background(), later.ID, false)
-	if lookupErr != nil || record.Cleanup != "complete" {
-		t.Fatalf("edge cleanup of %s not confirmed: %#v %v", later.ID, record, lookupErr)
-	}
+	requireEdgeCleanup(t, f, later.ID)
 	if err == nil || !strings.Contains(err.Error(), first.ID) {
 		t.Fatalf("Sync hid or misattributed app %s's failure: %v", first.ID, err)
 	}
@@ -328,14 +334,11 @@ func TestSyncDeletesEdgeAppMissingOnOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	record, _, err := f.edge.lookup(context.Background(), app.ID, false)
-	if err != nil || record.Status == "active" {
+	if err != nil || record.Status != "deleted" {
 		t.Fatalf("edge keeps routing app %s that its origin no longer has: %#v %v", app.ID, record, err)
 	}
 	if err := f.origin.Sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	record, _, err = f.edge.lookup(context.Background(), app.ID, false)
-	if err != nil || record.Cleanup != "complete" {
-		t.Fatalf("edge cleanup of missing app %s not confirmed: %#v %v", app.ID, record, err)
-	}
+	requireEdgeCleanup(t, f, app.ID)
 }

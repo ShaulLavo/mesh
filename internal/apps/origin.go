@@ -468,6 +468,40 @@ func (o *Origin) allocate(ctx context.Context, q Request, digest string) (localA
 	o.state.Apps[id] = local
 	return local, release, errors.Join(o.checkPortLocked(id, q), o.persist(ctx))
 }
+
+// stageUpdate describes the workspace an update of a still-active app will use,
+// beside the app it replaces.
+func (o *Origin) stageUpdate(ctx context.Context, q Request, digest string) (localApp, localApp, error) {
+	result, err := o.edge(ctx, Request{Action: "inspect", ID: q.ID})
+	if err != nil {
+		return localApp{}, localApp{}, err
+	}
+	if result.App.Status != "active" {
+		return localApp{}, localApp{}, errors.New("app: cannot update expired app")
+	}
+	o.mu.Lock()
+	previous, ok := o.state.Apps[q.ID]
+	o.mu.Unlock()
+	if !ok {
+		return localApp{}, localApp{}, errors.New("app: managed workspace missing")
+	}
+	local := localApp{Record: *result.App, Root: filepath.Join(o.config.DataRoot, "apps", q.ID, "source-"+q.UploadID), Command: q.Command, Port: q.Port, Env: q.Env, Phase: "preparing"}
+	local.Commit = &commitIntent{UploadID: q.UploadID, Digest: digest, PreviousRoot: previous.Root}
+	return local, previous, nil
+}
+
+// stageCreate allocates the new app and always returns a release for it. An
+// allocation that could not be recorded is undone at the edge.
+func (o *Origin) stageCreate(ctx context.Context, q Request, digest string) (localApp, func(), error) {
+	local, release, err := o.allocate(ctx, q, digest)
+	if release == nil {
+		return localApp{}, func() {}, err
+	}
+	if err != nil {
+		err = o.failCreate(ctx, local.Record.ID, err)
+	}
+	return local, release, err
+}
 func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	if q.Kind == "" {
 		q.Kind = "static"
@@ -540,41 +574,19 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		_ = os.RemoveAll(staging)
 		return Result{}, err
 	}
-	var app Record
 	var local, previous localApp
+	releaseApp := func() {}
 	if q.Action == "update" {
-		result, err := o.edge(ctx, Request{Action: "inspect", ID: q.ID})
-		if err != nil {
-			_ = os.RemoveAll(staging)
-			return Result{}, err
-		}
-		app = *result.App
-		if app.Status != "active" {
-			_ = os.RemoveAll(staging)
-			return Result{}, errors.New("app: cannot update expired app")
-		}
-		o.mu.Lock()
-		previous, ok = o.state.Apps[q.ID]
-		o.mu.Unlock()
-		if !ok {
-			return Result{}, errors.New("app: managed workspace missing")
-		}
-		local = localApp{Record: app, Root: filepath.Join(o.config.DataRoot, "apps", app.ID, "source-"+q.UploadID), Command: q.Command, Port: q.Port, Env: q.Env, Phase: "preparing"}
-		local.Commit = &commitIntent{UploadID: q.UploadID, Digest: digest, PreviousRoot: previous.Root}
+		local, previous, err = o.stageUpdate(ctx, q, digest)
 	} else {
-		allocated, releaseApp, err := o.allocate(ctx, q, digest)
-		if releaseApp == nil {
-			_ = os.RemoveAll(staging)
-			return Result{}, err
-		}
-		defer releaseApp()
-		local, app = allocated, allocated.Record
-		if err != nil {
-			_ = os.RemoveAll(staging)
-			return Result{}, o.failCreate(ctx, app.ID, err)
-		}
+		local, releaseApp, err = o.stageCreate(ctx, q, digest)
 	}
-	workspace := local.Root
+	defer releaseApp()
+	if err != nil {
+		_ = os.RemoveAll(staging)
+		return Result{}, err
+	}
+	app, workspace := local.Record, local.Root
 	fail := func(cause error) (Result, error) {
 		if q.Action == "create" {
 			return Result{}, o.failCreate(ctx, app.ID, cause)
@@ -960,32 +972,42 @@ func (o *Origin) deny(ctx context.Context, id string, records map[string]Record)
 	o.mu.Lock()
 	a, local := o.state.Apps[id]
 	o.mu.Unlock()
+	if !listed {
+		if !local {
+			return nil
+		}
+		return o.denyUnlisted(ctx, id, a)
+	}
 	switch {
-	case listed && record.Status != "active":
+	case record.Status != "active":
 		if err := o.cleanup(ctx, id); err != nil {
 			return fmt.Errorf("app %s: clean up %s app: %w", id, record.Status, err)
 		}
 		if _, err := o.edge(ctx, Request{Action: "cleanup", ID: id}); err != nil {
 			return fmt.Errorf("app %s: confirm cleanup: %w", id, err)
 		}
-	case listed && !local:
+	case !local:
 		// Nothing here can serve it, so traffic would only extend its deadline.
 		if _, err := o.edge(ctx, Request{Action: "delete", ID: id}); err != nil {
 			return fmt.Errorf("app %s: delete app missing on origin: %w", id, err)
 		}
-	case listed && a.Phase != "ready" && a.Phase != "activating":
+	case a.Phase != "ready" && a.Phase != "activating":
 		if _, err := o.edge(ctx, Request{Action: "delete", ID: id}); err != nil {
 			return fmt.Errorf("app %s: delete unfinished app: %w", id, err)
 		}
-	case !listed && local && !o.config.Now().Before(a.Record.LeaseUntil.Add(IdleTTL)):
-		// An edge that lost the app cannot route to it or renew it. The files
-		// wait one idle period past the last lease, as long as the edge keeps an
-		// app without traffic, so a restored edge can list it again first.
-		if err := o.cleanup(ctx, id); err != nil {
-			return fmt.Errorf("app %s: remove app the edge no longer lists: %w", id, err)
-		}
-	case !listed && local:
+	}
+	return nil
+}
+
+// denyUnlisted handles an app the edge no longer lists: it cannot route to it or
+// renew it. The files wait one idle period past the last lease, as long as the
+// edge keeps an app without traffic, so a restored edge can list it again first.
+func (o *Origin) denyUnlisted(ctx context.Context, id string, a localApp) error {
+	if o.config.Now().Before(a.Record.LeaseUntil.Add(IdleTTL)) {
 		return o.stopLapsed(ctx, id)
+	}
+	if err := o.cleanup(ctx, id); err != nil {
+		return fmt.Errorf("app %s: remove app the edge no longer lists: %w", id, err)
 	}
 	return nil
 }
@@ -1043,6 +1065,14 @@ func (o *Origin) expireUploads(ctx context.Context) error {
 	}
 	return o.persist(ctx)
 }
+func packArchive(ctx context.Context, root, archive string) error {
+	f, err := os.Create(archive) //nolint:gosec // The archive is inside the looked-up app managed workspace.
+	if err != nil {
+		return fmt.Errorf("app: create download archive: %w", err)
+	}
+	_, packErr := Pack(ctx, root, f)
+	return errors.Join(packErr, f.Close())
+}
 func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 	if q.Offset < 0 || q.Offset > MaxArchive {
 		return Result{}, errors.New("app: invalid download offset")
@@ -1064,13 +1094,8 @@ func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 	}
 	archive := filepath.Join(o.config.DataRoot, "apps", q.ID, "download.tar.gz")
 	if q.Offset == 0 {
-		f, err := os.Create(archive) //nolint:gosec // The archive is inside the looked-up app managed workspace.
-		if err != nil {
+		if err := packArchive(ctx, a.Root, archive); err != nil {
 			return Result{}, err
-		}
-		_, packErr := Pack(ctx, a.Root, f)
-		if closeErr := f.Close(); packErr != nil || closeErr != nil {
-			return Result{}, errors.Join(packErr, closeErr)
 		}
 	}
 	f, err := os.Open(archive) //nolint:gosec // The archive is inside the looked-up app managed workspace.

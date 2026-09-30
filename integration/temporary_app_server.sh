@@ -228,6 +228,8 @@ MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app delete local "$SLOW_ID" --json >/
 
 # With the edge gone nothing renews the lease. Once it lapses the origin stops the
 # app's worker, keeps its files, and leaves ordinary sessions alone.
+# The session's shell expands these, not this script.
+# shellcheck disable=SC2016
 MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" local --daemon -- sh -c 'echo $$ >"$1"; exec sleep 600' sh "$TEST_ROOT/ordinary.pid" \
   </dev/null >/dev/null 2>&1 &
 ORDINARY_CLIENT=$!
