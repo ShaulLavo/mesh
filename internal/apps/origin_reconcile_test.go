@@ -26,6 +26,9 @@ type serverWorkers struct {
 	mu        sync.Mutex
 	listeners map[string]net.Listener
 	findErr   map[string]error
+	// beforeStart and wait, when set, let a test hold or fail one start or setup.
+	beforeStart func(ctx context.Context, label, command string) error
+	wait        func(ctx context.Context) (int, error)
 }
 
 func newServerWorkers(t *testing.T, f *appFixture) *serverWorkers {
@@ -45,6 +48,11 @@ func newServerWorkers(t *testing.T, f *appFixture) *serverWorkers {
 func (w *serverWorkers) Start(ctx context.Context, label, command, root string, env []string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("start %s: %w", label, err)
+	}
+	if w.beforeStart != nil {
+		if err := w.beforeStart(ctx, label, command); err != nil {
+			return "", err
+		}
 	}
 	id, err := w.fakeWorkers.Start(ctx, label, command, root, env)
 	if err != nil || !strings.HasPrefix(label, "app ") {
@@ -92,6 +100,40 @@ func (w *serverWorkers) Find(ctx context.Context, label string) (string, bool, e
 	return w.fakeWorkers.Find(ctx, label)
 }
 
+// Wait reports a setup worker's exit; like a real one, the worker is gone after.
+func (w *serverWorkers) Wait(ctx context.Context, id string) (int, error) {
+	code, err := w.fakeWorkers.Wait(ctx, id)
+	if w.wait != nil {
+		code, err = w.wait(ctx)
+	}
+	if err == nil {
+		w.fakeWorkers.mu.Lock()
+		for label, worker := range w.labels {
+			if worker == id {
+				delete(w.labels, label)
+			}
+		}
+		w.fakeWorkers.mu.Unlock()
+	}
+	return code, err
+}
+
+// Forget keeps live workers, as the daemon does; only ended ones are dropped.
+func (w *serverWorkers) Forget(_ context.Context, label string) {
+	w.fakeWorkers.mu.Lock()
+	defer w.fakeWorkers.mu.Unlock()
+	w.forgotten = append(w.forgotten, label)
+}
+
+func (w *serverWorkers) alive(t *testing.T, label string) bool {
+	t.Helper()
+	_, alive, err := w.fakeWorkers.Find(context.Background(), label)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return alive
+}
+
 func (w *serverWorkers) wasStopped(id string) bool {
 	w.fakeWorkers.mu.Lock()
 	defer w.fakeWorkers.mu.Unlock()
@@ -110,8 +152,13 @@ func freePort(t *testing.T) int {
 
 func createServerApp(t *testing.T, f *appFixture) Record {
 	t.Helper()
+	return createServerAppOn(t, f, freePort(t))
+}
+
+func createServerAppOn(t *testing.T, f *appFixture, port int) Record {
+	t.Helper()
 	upload, digest := uploadSource(t, f, sourceFixture(t))
-	result, err := f.origin.Handle(context.Background(), Request{Action: "create", Kind: "server", Command: "serve", Port: freePort(t), UploadID: upload, Digest: digest})
+	result, err := f.origin.Handle(context.Background(), Request{Action: "create", Kind: "server", Command: "serve", Port: port, UploadID: upload, Digest: digest})
 	if err != nil {
 		t.Fatal(err)
 	}
