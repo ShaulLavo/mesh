@@ -79,7 +79,7 @@ jobs:
         with:
           version: v2.13.2
           install-only: true
-      - name: Install pinned ShellCheck and Ruff
+      - name: Install pinned ShellCheck, Ruff, and Lefthook
         run: |
           mkdir -p "$RUNNER_TEMP/gates-tools"
           curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz -o "$RUNNER_TEMP/shellcheck.tar.xz"
@@ -88,9 +88,16 @@ jobs:
           curl -fsSL https://github.com/astral-sh/ruff/releases/download/0.16.9/ruff-x86_64-unknown-linux-gnu.tar.gz -o "$RUNNER_TEMP/ruff.tar.gz"
           echo "1bfbb819b5d4f9af501748862276b60e412d336034d99387691a4d4bce7a6f13  $RUNNER_TEMP/ruff.tar.gz" | sha256sum -c -
           tar -xf "$RUNNER_TEMP/ruff.tar.gz" -C "$RUNNER_TEMP/gates-tools" --strip-components=1
+          curl -fsSL https://github.com/evilmartians/lefthook/releases/download/v2.1.15/lefthook_2.1.15_Linux_x86_64.gz -o "$RUNNER_TEMP/lefthook.gz"
+          echo "b3ed1e83389d0a98b5f243a8a1afcb0fdfad527834f87170f2a2ff9ddfe0f836  $RUNNER_TEMP/lefthook.gz" | sha256sum -c -
+          gzip -dc "$RUNNER_TEMP/lefthook.gz" > "$RUNNER_TEMP/gates-tools/lefthook"
+          chmod +x "$RUNNER_TEMP/gates-tools/lefthook"
           echo "$RUNNER_TEMP/gates-tools" >> "$GITHUB_PATH"
       - name: Full gates
         run: ./scripts/gates.sh --report-dir "$RUNNER_TEMP/gates-reports"
+      - name: Prove staged hooks in a linked worktree
+        if: always()
+        run: bash scripts/prove-hooks.sh "$RUNNER_TEMP/gates-reports/hooks"
       - name: Prove planted violations and baseline updates
         if: always()
         run: python3 .gates/prove.py --evidence "$RUNNER_TEMP/gates-reports/proofs"

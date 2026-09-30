@@ -134,7 +134,7 @@ lefthook install
 
 `mise.toml` pins Go 1.27.0, golangci-lint 2.13.2, ShellCheck 0.11.0, Lefthook
 2.1.15, and Ruff 0.16.9. Use `mise exec -- lefthook install` if your shell does
-not activate mise. CI verifies the ShellCheck and Ruff release archive checksums.
+not activate mise. CI verifies the ShellCheck, Ruff, and Lefthook release checksums.
 Lefthook is a development tool, not a Go module dependency.
 
 Pre-commit runs `gates.sh --fast`. It checks gofmt on staged Go files, vet and
@@ -146,7 +146,8 @@ fail with an install hint. Full scans alone enforce removal of stale baseline
 entries because partial package graphs can omit cross-package findings.
 
 Lefthook installs hooks in the common Git directory. The same installation
-covers linked worktrees. Each hook resolves its config and `scripts/gates.sh`
+covers linked worktrees. `assert_lefthook_installed` makes a missing Lefthook
+executable fail rather than silently skip checks. Each hook resolves its config and `scripts/gates.sh`
 from the worktree where Git runs it. Pre-push runs the full gates command and
 also requires Ruff. Full gates run in CI. Deadcode runs through
 `go run golang.org/x/tools/cmd/deadcode@v0.49.0` without changing `go.mod`.
