@@ -174,7 +174,7 @@ func TestRegistryPrivateGatePrecedesRouteHandlers(t *testing.T) {
 					t.Fatal(err)
 				}
 				gate := &fakeGate{err: errString("unexpected on-demand start")}
-				registry.SetDemandGate(gate)
+				registry.SetDemandGate(gate, nil)
 				request := httptest.NewRequest(http.MethodPost, "https://pc.mesh.shaulavo.dev"+path, nil)
 				request.Header.Set("Origin", "https://attacker.example")
 				request.Header.Set("Sec-Fetch-Site", "cross-site")
