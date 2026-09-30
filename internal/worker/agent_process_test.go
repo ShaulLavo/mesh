@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
+	"github.com/shaul/mesh/internal/testenv"
 )
 
 func TestMain(m *testing.M) {
@@ -69,13 +69,7 @@ func writeRecoveredAgentTest(recipe *agentresume.Recipe) error {
 }
 
 func agentProcessTestEnv(role, dir string) []string {
-	env := make([]string, 0, len(os.Environ())+2)
-	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "MESH_TEST_AGENT_") {
-			env = append(env, entry)
-		}
-	}
-	return append(env, "MESH_TEST_AGENT_ROLE="+role, "MESH_TEST_AGENT_DIR="+dir)
+	return append(testenv.ForProcess(dir), "MESH_TEST_AGENT_ROLE="+role, "MESH_TEST_AGENT_DIR="+dir)
 }
 
 func runNativeAgentTestProcess(dir string) error {
