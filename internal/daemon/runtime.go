@@ -83,6 +83,7 @@ type listenerConfig struct {
 	httpsPort                  uint16
 	tlsConfig                  *tls.Config
 	tailnetOwnerAccess         bool
+	proxyForwarderUIDs         []uint32
 	publicListenAddress        string
 	publicHTTPHandler          http.Handler
 	publicTLSConfig            *tls.Config
@@ -188,7 +189,7 @@ func serveBoundListeners(
 		boundedPublic = newBoundedPublicListener(publicListener, maximumPublicConnections)
 		publicListener = boundedPublic
 		if normalized.tailnetOwnerAccess {
-			publicListener = tailnet.ProxyListener{Listener: publicListener}
+			publicListener = tailnet.ProxyListener{Listener: publicListener, AllowedUIDs: normalized.proxyForwarderUIDs}
 		}
 	}
 	// Failed discovery binds must not establish non-loopback IP authorities.
@@ -406,6 +407,21 @@ func (c *boundedPublicConn) Close() error {
 	return result
 }
 
+func validateTailnetOwnerAccess(cfg ListenerConfig) ([]uint32, error) {
+	if !cfg.TailnetOwnerAccess {
+		return nil, nil
+	}
+	address, err := netip.ParseAddrPort(cfg.PublicListenAddress)
+	if err != nil || !address.Addr().IsLoopback() || cfg.PublicTLSConfig == nil {
+		return nil, errors.New("daemon: Tailnet owner access requires a loopback public TLS listener")
+	}
+	uids, err := tailnet.ProxyForwarderUIDs()
+	if err != nil {
+		return nil, fmt.Errorf("daemon: enable Tailnet owner access: %w", err)
+	}
+	return uids, nil
+}
+
 func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler transport.Handler) (listenerConfig, error) {
 	if ctx == nil {
 		return listenerConfig{}, errors.New("daemon: nil context")
@@ -443,11 +459,9 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 			trustPublicEdgeForwarding: cfg.TrustPublicEdgeForwarding,
 		},
 	}
-	if cfg.TailnetOwnerAccess {
-		address, parseErr := netip.ParseAddrPort(cfg.PublicListenAddress)
-		if parseErr != nil || !address.Addr().IsLoopback() || cfg.PublicTLSConfig == nil {
-			return listenerConfig{}, errors.New("daemon: Tailnet owner access requires a loopback public TLS listener")
-		}
+	normalized.proxyForwarderUIDs, err = validateTailnetOwnerAccess(cfg)
+	if err != nil {
+		return listenerConfig{}, err
 	}
 	if cfg.HTTPSPort == 0 && cfg.TLSConfig != nil {
 		return listenerConfig{}, errors.New("daemon: TLS config requires a non-zero HTTPS port")
