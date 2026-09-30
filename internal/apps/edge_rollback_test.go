@@ -146,7 +146,7 @@ func TestEdgeFailedMutationPreservesStateAndRequests(t *testing.T) {
 						t.Fatalf("mutation error = %v, want failed save", err)
 					}
 				} else {
-					form := url.Values{"id": {app.ID}, "action": {action}, "csrf": {"fixture-csrf"}}
+					form := url.Values{"id": {app.ID}, "action": {action}, "csrf": {"fixture-csrf"}, "confirmation": {app.ID}}
 					r := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
 					r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 					r.Header.Set("Origin", ManagementOrigin)

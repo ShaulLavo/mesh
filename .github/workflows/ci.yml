@@ -25,6 +25,19 @@ jobs:
       - run: pnpm --dir web/app-pill build
       - name: Require current embedded assets and upstream adaptations
         run: git diff --exit-code -- internal/apppill/assets web/app-pill/src/grab
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install confirmation browser engines
+        run: pnpm --dir web/app-pill exec playwright install --with-deps chromium webkit
+      - name: Verify desktop and mobile confirmation guards
+        env:
+          MESH_CONFIRM_BROWSER_DIR: ${{ runner.temp }}/mesh-confirm
+        run: |
+          mkdir -p "$MESH_CONFIRM_BROWSER_DIR"
+          go test ./internal/apps -run '^TestConfirmationBrowserPages$' -count=1
+          node web/app-pill/tests/confirm.mjs "$MESH_CONFIRM_BROWSER_DIR"
 
   test:
     name: Race tests and integrations
@@ -32,6 +45,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sudo apt-get update && sudo apt-get install -y zsh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -61,6 +75,52 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.13.2
+          args: --enable-only=bodyclose,errcheck,gosec,govet,ineffassign,staticcheck,unused
+
+  gates:
+    name: Quality gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.2
+          install-only: true
+      - name: Install pinned ShellCheck, Ruff, and Lefthook
+        run: |
+          mkdir -p "$RUNNER_TEMP/gates-tools"
+          curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz -o "$RUNNER_TEMP/shellcheck.tar.xz"
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          tar -xf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP/gates-tools" --strip-components=1
+          curl -fsSL https://github.com/astral-sh/ruff/releases/download/0.16.9/ruff-x86_64-unknown-linux-gnu.tar.gz -o "$RUNNER_TEMP/ruff.tar.gz"
+          echo "1bfbb819b5d4f9af501748862276b60e412d336034d99387691a4d4bce7a6f13  $RUNNER_TEMP/ruff.tar.gz" | sha256sum -c -
+          tar -xf "$RUNNER_TEMP/ruff.tar.gz" -C "$RUNNER_TEMP/gates-tools" --strip-components=1
+          curl -fsSL https://github.com/evilmartians/lefthook/releases/download/v2.1.15/lefthook_2.1.15_Linux_x86_64.gz -o "$RUNNER_TEMP/lefthook.gz"
+          echo "b3ed1e83389d0a98b5f243a8a1afcb0fdfad527834f87170f2a2ff9ddfe0f836  $RUNNER_TEMP/lefthook.gz" | sha256sum -c -
+          gzip -dc "$RUNNER_TEMP/lefthook.gz" > "$RUNNER_TEMP/gates-tools/lefthook"
+          chmod +x "$RUNNER_TEMP/gates-tools/lefthook"
+          echo "$RUNNER_TEMP/gates-tools" >> "$GITHUB_PATH"
+      - name: Full gates
+        run: ./scripts/gates.sh --report-dir "$RUNNER_TEMP/gates-reports"
+      - name: Prove staged hooks in a linked worktree
+        if: always()
+        run: bash scripts/prove-hooks.sh "$RUNNER_TEMP/gates-reports/hooks"
+      - name: Prove planted violations and baseline updates
+        if: always()
+        run: python3 .gates/prove.py --evidence "$RUNNER_TEMP/gates-reports/proofs"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: gates-reports
+          path: ${{ runner.temp }}/gates-reports
+          retention-days: 7
 
   vulnerability:
     name: Vulnerability scan
@@ -99,7 +159,7 @@ jobs:
   gate:
     name: Complete CI gate
     if: always()
-    needs: [app-pill, test, lint, vulnerability, packaging]
+    needs: [app-pill, test, lint, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every CI job
@@ -107,10 +167,11 @@ jobs:
           APP_PILL: ${{ needs.app-pill.result }}
           TEST: ${{ needs.test.result }}
           LINT: ${{ needs.lint.result }}
+          GATES: ${{ needs.gates.result }}
           VULNERABILITY: ${{ needs.vulnerability.result }}
           PACKAGING: ${{ needs.packaging.result }}
         run: |
-          [[ $APP_PILL == success && $TEST == success && $LINT == success && $VULNERABILITY == success && $PACKAGING == success ]]
+          [[ $APP_PILL == success && $TEST == success && $LINT == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
 
   publish:
     name: Publish tested main commit
