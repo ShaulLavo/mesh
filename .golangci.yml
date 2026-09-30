@@ -31,9 +31,6 @@ linters:
     - revive
     - exhaustive
     - contextcheck
-  exclusions:
-    paths:
-      - ^third_party/
   settings:
     staticcheck:
       checks:
@@ -80,6 +77,3 @@ linters:
 formatters:
   enable:
     - gofmt
-  exclusions:
-    paths:
-      - ^third_party/

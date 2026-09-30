@@ -1,5 +1,11 @@
 pre-commit:
   parallel: false
   jobs:
-    - name: Go gates on staged packages
+    - name: Staged Go and shell gates
       run: ./scripts/gates.sh --fast
+
+pre-push:
+  parallel: false
+  jobs:
+    - name: Full quality gates
+      run: ./scripts/gates.sh

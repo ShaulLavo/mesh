@@ -122,31 +122,33 @@ for the exact identity and SSH command. Disconnecting returns the hostname to 40
 Run `./scripts/gates.sh` for formatting, vet, golangci-lint, deadcode, ShellCheck,
 Ruff, and the bootstrap and terminal dependency contracts. Go analysis targets
 Linux/amd64 with CGO disabled so the checked-in baseline is independent of the
-machine running it. Python 3 is required for the release tools and baseline checker.
+machine running it. The baseline checker uses only the Go standard library.
+Python 3 is needed for the existing release tools and the CI-only planted-violation proof.
 
-Install golangci-lint v2.13.2, ShellCheck v0.11.0, and Ruff 0.16.9 on your PATH.
-CI downloads the ShellCheck and Ruff release archives into its temporary tools
- directory and verifies their SHA-256 checksums. Use the matching OS and architecture
-archives from [ShellCheck releases](https://github.com/koalaman/shellcheck/releases/tag/v0.11.0)
-and [Ruff releases](https://github.com/astral-sh/ruff/releases/tag/0.16.9).
-For example, on Linux/amd64:
+From the repository root, install the pinned tools and hooks once:
 
 ```bash
-mkdir -p /work/cache/mesh-gates-tools
-curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz -o /work/cache/mesh-gates-tools/shellcheck.tar.xz
-echo '8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /work/cache/mesh-gates-tools/shellcheck.tar.xz' | sha256sum -c -
-tar -xf /work/cache/mesh-gates-tools/shellcheck.tar.xz -C /work/cache/mesh-gates-tools --strip-components=1
-python3 -m pip install --target /work/cache/mesh-gates-tools/python ruff==0.16.9
-export PATH="/work/cache/mesh-gates-tools:/work/cache/mesh-gates-tools/python/bin:$PATH"
-export PYTHONPATH="/work/cache/mesh-gates-tools/python${PYTHONPATH:+:$PYTHONPATH}"
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
-go install github.com/evilmartians/lefthook@v2.1.15
+mise install
 lefthook install
 ```
 
-Lefthook is a development tool, not a Go module dependency. The pre-commit hook
-runs `gates.sh --fast`, which checks formatting, vet, and golangci findings in
-staged Go packages. Full gates run in CI. Deadcode runs through
+`mise.toml` pins Go 1.27.0, golangci-lint 2.13.2, ShellCheck 0.11.0, Lefthook
+2.1.15, and Ruff 0.16.9. Use `mise exec -- lefthook install` if your shell does
+not activate mise. CI verifies the ShellCheck and Ruff release archive checksums.
+Lefthook is a development tool, not a Go module dependency.
+
+Pre-commit runs `gates.sh --fast`. It checks gofmt on staged Go files, vet and
+golangci findings in their packages, and ShellCheck on staged shell files.
+It inspects an isolated snapshot of the Git index, so unstaged changes cannot
+hide staged violations or block an unrelated commit. Only Go, golangci-lint,
+ShellCheck, and Lefthook are needed for this hook. Missing or mismatched tools
+fail with an install hint. Full scans alone enforce removal of stale baseline
+entries because partial package graphs can omit cross-package findings.
+
+Lefthook installs hooks in the common Git directory. The same installation
+covers linked worktrees. Each hook resolves its config and `scripts/gates.sh`
+from the worktree where Git runs it. Pre-push runs the full gates command and
+also requires Ruff. Full gates run in CI. Deadcode runs through
 `go run golang.org/x/tools/cmd/deadcode@v0.49.0` without changing `go.mod`.
 
 `.gates/baseline.json` records existing findings with reasons and occurrence counts.

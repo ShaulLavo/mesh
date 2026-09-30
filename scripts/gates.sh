@@ -23,6 +23,27 @@ if (( fast && update )); then
   echo 'gates: --update-baseline requires a full scan' >&2
   exit 2
 fi
+
+install_hint='Run mise install, then lefthook install from the repository.'
+require_tool() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf 'gates: missing %s. %s\n' "$1" "$install_hint" >&2
+    exit 2
+  fi
+}
+require_version() {
+  local tool=$1 pattern=$2
+  require_tool "$tool"
+  if ! "$tool" --version | grep -Eq "$pattern"; then
+    printf 'gates: %s version mismatch. %s\n' "$tool" "$install_hint" >&2
+    exit 2
+  fi
+}
+require_tool go
+require_tool gofmt
+require_version golangci-lint 'version 2\.13\.2([[:space:]]|$)'
+require_version shellcheck '^version: 0\.11\.0$'
+
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/mesh-gates.XXXXXX")
 trap 'rm -rf -- "$scratch"' EXIT
 if [[ -z $report_dir ]]; then
@@ -30,14 +51,6 @@ if [[ -z $report_dir ]]; then
 fi
 mkdir -p "$report_dir"
 report_dir=$(cd "$report_dir" && pwd)
-
-require_version() {
-  local tool=$1 pattern=$2
-  if ! "$tool" --version | grep -Eq "$pattern"; then
-    echo "gates: $tool version mismatch; see README.md" >&2
-    exit 2
-  fi
-}
 
 run_report() {
   local name=$1 destination=$2 status=0
@@ -50,63 +63,88 @@ run_report() {
 }
 
 export GOOS=linux GOARCH=amd64 CGO_ENABLED=0
-packages=(./...)
+packages=(./... ./.gates)
+shell_files=()
+arguments=()
 if (( fast )); then
+  git diff --cached --name-only --diff-filter=ACMRD -z >"$scratch/staged"
+  # Inspect the index, not unstaged edits, without stashing or modifying the worktree.
+  git checkout-index --all --prefix="$scratch/index/"
+  cd "$scratch/index"
   packages=()
+  arguments=(--partial)
   while IFS= read -r -d '' file; do
-    [[ $file != third_party/* && $file == *.go && -f $file ]] || continue
-    dirname -- "$file" >>"$scratch/scope"
-    if [[ -n $(gofmt -l "$file") ]]; then
-      echo "gofmt: FAIL ($file)" >&2
-      exit 1
+    [[ $file != third_party/* ]] || continue
+    if [[ $file == *.sh && -f $file ]]; then
+      shell_files+=("$file")
+      arguments+=(--shell-file "$file")
     fi
-  done < <(git diff --cached --name-only --diff-filter=ACMR -z)
-  if [[ ! -s $scratch/scope ]]; then
-    echo 'gates: PASS (no staged Go packages)'
+    [[ $file == *.go ]] || continue
+    directory=$(dirname -- "$file")
+    [[ -d $directory ]] || continue
+    if [[ -f $file ]]; then
+      formatted=$(gofmt -l "$file")
+      if [[ -n $formatted ]]; then
+        echo "gofmt: FAIL ($file)" >&2
+        exit 1
+      fi
+    fi
+    seen=0
+    for package in "${packages[@]}"; do
+      [[ $package != "./$directory" ]] || seen=1
+    done
+    if (( ! seen )); then
+      packages+=("./$directory")
+      arguments+=(--package "$directory")
+    fi
+  done <"$scratch/staged"
+  if (( ${#packages[@]} == 0 && ${#shell_files[@]} == 0 )); then
+    echo 'gates: PASS (no staged Go or shell files)'
     exit 0
   fi
-  sort -u "$scratch/scope" -o "$scratch/scope"
-  while IFS= read -r directory; do
-    packages+=("./$directory")
-  done <"$scratch/scope"
-fi
-if (( ! fast )); then
-  find cmd internal scripts integration -type f -name '*.go' -print0 |
+else
+  find cmd internal scripts integration .gates -type f -name '*.go' -print0 |
     xargs -0 gofmt -l >"$scratch/unformatted"
   if [[ -s $scratch/unformatted ]]; then
     echo 'gofmt: FAIL' >&2
     cat "$scratch/unformatted" >&2
     exit 1
   fi
+  while IFS= read -r -d '' file; do
+    shell_files+=("$file")
+  done < <(find scripts integration -type f -name '*.sh' -print0)
 fi
 echo 'gofmt: PASS'
-go vet "${packages[@]}"
-echo 'vet: PASS'
-require_version golangci-lint 'version 2\.13\.2([[:space:]]|$)'
-status=0
-golangci-lint run --output.json.path="$report_dir/golangci.json" --output.text.path="$report_dir/golangci.txt" \
-  "${packages[@]}" || status=$?
-if (( status > 1 )) || [[ ! -s $report_dir/golangci.json ]]; then
-  echo "golangci: ERROR (tool exit $status)" >&2
-  exit 2
+if (( ${#packages[@]} )); then
+  go vet "${packages[@]}"
+  echo 'vet: PASS'
+  status=0
+  golangci-lint run --output.json.path="$report_dir/golangci.json" --output.text.path="$report_dir/golangci.txt" \
+    "${packages[@]}" || status=$?
+  if (( status > 1 )) || [[ ! -s $report_dir/golangci.json ]]; then
+    echo "golangci: ERROR (tool exit $status)" >&2
+    exit 2
+  fi
+else
+  printf '{"Issues":[]}\n' >"$report_dir/golangci.json"
+fi
+if (( ${#shell_files[@]} )); then
+  run_report shellcheck "$report_dir/shellcheck.json" shellcheck --format=json "${shell_files[@]}"
+else
+  printf '[]\n' >"$report_dir/shellcheck.json"
 fi
 if (( fast )); then
-  printf '[]\n' | tee "$report_dir/deadcode.json" "$report_dir/shellcheck.json" >"$report_dir/ruff.json"
-  python3 .gates/check.py --reports "$report_dir" --scope "$scratch/scope"
+  printf '[]\n' >"$report_dir/deadcode.json"
+  printf '[]\n' >"$report_dir/ruff.json"
+  go run ./.gates --reports "$report_dir" "${arguments[@]}"
   exit
 fi
 run_report deadcode "$report_dir/deadcode.json" \
   go run golang.org/x/tools/cmd/deadcode@v0.49.0 -json -filter '^github\.com/shaul/mesh/' ./cmd/...
-require_version shellcheck '^version: 0\.11\.0$'
-shell_files=()
-while IFS= read -r -d '' file; do
-  shell_files+=("$file")
-done < <(find scripts integration -type f -name '*.sh' -print0)
-run_report shellcheck "$report_dir/shellcheck.json" shellcheck --format=json "${shell_files[@]}"
 require_version ruff '^ruff 0\.16\.9$'
 run_report ruff "$report_dir/ruff.json" ruff check --isolated --select E4,E7,E9,F \
   --output-format=json scripts integration .gates
-python3 -m unittest discover -s .gates -p 'test_*.py'
+go test ./.gates
 echo 'baseline tests: PASS'
 
 unexpected_auth_flags=$(grep -RnE --include='*.go' --include='*.sh' --exclude='*_test.go' -- '--auth-key' internal cmd scripts/install |
@@ -116,13 +154,13 @@ if [[ -n $unexpected_auth_flags ]]; then
   exit 1
 fi
 echo 'bootstrap auth-key contract: PASS'
-if go list -deps ./cmd/mesh | grep -Eq '^github\.com/charmbracelet/(bubbletea|lipgloss)$'; then
+dependencies=$(go list -deps ./cmd/mesh)
+if grep -Eq '^github\.com/charmbracelet/(bubbletea|lipgloss)$' <<<"$dependencies"; then
   echo 'terminal dependencies: FAIL (legacy terminal initialization)' >&2
   exit 1
 fi
 echo 'terminal dependencies: PASS'
-arguments=()
 if (( update )); then
   arguments+=(--update-baseline)
 fi
-python3 .gates/check.py --reports "$report_dir" "${arguments[@]}"
+go run ./.gates --reports "$report_dir" "${arguments[@]}"

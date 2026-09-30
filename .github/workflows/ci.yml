@@ -91,23 +91,9 @@ jobs:
           echo "$RUNNER_TEMP/gates-tools" >> "$GITHUB_PATH"
       - name: Full gates
         run: ./scripts/gates.sh --report-dir "$RUNNER_TEMP/gates-reports"
-      - name: Record Phase 0 from the branched main commit
+      - name: Prove planted violations and baseline updates
         if: always()
-        env:
-          MESH_INTEGRATION_TIMEOUT: 60s
-        run: |
-          mkdir -p "$RUNNER_TEMP/mesh-phase0" "$RUNNER_TEMP/gates-reports/phase0"
-          git archive 9ebb348 | tar -x -C "$RUNNER_TEMP/mesh-phase0"
-          cd "$RUNNER_TEMP/mesh-phase0"
-          go test -json ./... > "$RUNNER_TEMP/gates-reports/phase0/test.json"
-          start=$(date +%s)
-          ./scripts/verify.sh > "$RUNNER_TEMP/gates-reports/phase0/verify.txt" 2>&1
-          echo "$(( $(date +%s) - start ))" > "$RUNNER_TEMP/gates-reports/phase0/verify-seconds.txt"
-          find integration -maxdepth 1 -name '*.sh' | wc -l > "$RUNNER_TEMP/gates-reports/phase0/script-count.txt"
-          golangci-lint run --output.json.path="$RUNNER_TEMP/gates-reports/phase0/golangci-current.json" --output.text.path="$RUNNER_TEMP/gates-reports/phase0/golangci-current.txt"
-          go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./... > "$RUNNER_TEMP/gates-reports/phase0/govulncheck.txt"
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags '-s -w' -o "$RUNNER_TEMP/mesh-phase0-bin" ./cmd/mesh
-          stat -c '%s' "$RUNNER_TEMP/mesh-phase0-bin" > "$RUNNER_TEMP/gates-reports/phase0/binary-bytes.txt"
+        run: python3 .gates/prove.py --evidence "$RUNNER_TEMP/gates-reports/proofs"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
