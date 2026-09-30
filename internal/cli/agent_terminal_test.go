@@ -13,6 +13,8 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/spf13/cobra"
+
+	"github.com/shaul/mesh/internal/testenv"
 )
 
 func TestAgentTerminalControlCReachesNativeProcess(t *testing.T) {
@@ -23,7 +25,7 @@ func TestAgentTerminalControlCReachesNativeProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "-test.run=^TestAgentTerminalProcess$") //nolint:gosec // this test binary is its own isolated PTY helper
-	command.Env = append(clearAgentInvocationEnv(os.Environ()), "MESH_AGENT_TERMINAL_TEST=1")
+	command.Env = append(testenv.ForProcess(t.TempDir()), "MESH_AGENT_TERMINAL_TEST=1")
 	terminal, err := pty.Start(command)
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +61,7 @@ func TestAgentTerminalProcess(t *testing.T) {
 	command.SetOut(os.Stdout)
 	command.SetErr(os.Stderr)
 	script := "trap 'printf \"NATIVE_INTERRUPT\\n\"; exit 42' INT\nprintf 'NATIVE_READY\\n'\nread ignored\nexit 90"
-	err := runNativeAgent(command, "/bin/sh", []string{"-c", script}, "", clearAgentInvocationEnv(os.Environ()))
+	err := runNativeAgent(command, "/bin/sh", []string{"-c", script}, "", testenv.ForProcess(os.Getenv("HOME")))
 	if code, ok := StatusCode(err); ok {
 		os.Exit(code)
 	}
