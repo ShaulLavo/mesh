@@ -684,6 +684,10 @@ func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid action", http.StatusBadRequest)
 		return
 	}
+	if (action == "public" || action == "delete") && r.PostForm.Get("confirmation") != id {
+		http.Error(w, "Type the app ID to confirm this change", http.StatusBadRequest)
+		return
+	}
 	e.mu.Lock()
 	session, err = e.browser(r)
 	if err != nil {

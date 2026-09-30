@@ -302,7 +302,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, origin := range []string{URL(app.ID), "https://other.shaulavo.dev"} {
-		form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}}
+		form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}}
 		forged := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
 		forged.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		forged.Header.Set("Origin", origin)
@@ -313,7 +313,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 			t.Fatalf("sibling-origin mutation status %d", response.Code)
 		}
 	}
-	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}}
+	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}}
 	mutation := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
 	mutation.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	mutation.Header.Set("Origin", ManagementOrigin)
@@ -396,7 +396,7 @@ func TestVisibilityConfirmationPreservesBrowserOriginAndReturn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "return": {destination}}
+	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}, "return": {destination}}
 	post := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
 	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	post.Header.Set("Origin", ManagementOrigin)
