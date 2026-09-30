@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,7 +51,13 @@ func TestPrivateAppRejectsAmbientOwnerFromOtherPages(t *testing.T) {
 			{name: "same-site iframe", method: http.MethodGet, site: "same-site", mode: "navigate", dest: "iframe"},
 			{name: "cross-site form POST", method: http.MethodPost, site: "cross-site", mode: "navigate", dest: "document", origin: "https://attacker.example"},
 			{name: "same-site POST", method: http.MethodPost, site: "same-site", mode: "cors", dest: "empty", origin: "https://zzzz.shaulavo.dev"},
+			{name: "legacy cross-origin GET", method: http.MethodGet, origin: "https://attacker.example"},
+			{name: "legacy cross-origin HEAD", method: http.MethodHead, origin: "https://attacker.example"},
+			{name: "legacy cross-origin OPTIONS", method: http.MethodOptions, origin: "https://attacker.example"},
+			{name: "legacy cross-origin TRACE", method: http.MethodTrace, origin: "https://attacker.example"},
 			{name: "legacy cross-origin POST", method: http.MethodPost, origin: "https://attacker.example"},
+			{name: "same-origin metadata with foreign Origin", method: http.MethodGet, site: "same-origin", origin: "https://attacker.example"},
+			{name: "navigation metadata with foreign Origin", method: http.MethodGet, site: "cross-site", mode: "navigate", dest: "document", origin: "https://attacker.example"},
 			{name: "cross-origin websocket", method: http.MethodGet, site: "same-origin", origin: "https://attacker.example", upgrade: "websocket"},
 			{name: "websocket missing origin", method: http.MethodGet, site: "same-origin", upgrade: "websocket"},
 		} {
@@ -58,6 +65,12 @@ func TestPrivateAppRejectsAmbientOwnerFromOtherPages(t *testing.T) {
 				f := newAppFixture(t)
 				app := createStaticApp(t, f)
 				forwarded := networkOrigin(t, f)
+				var resolved atomic.Int64
+				resolve := f.edge.config.Resolve
+				f.edge.config.Resolve = func(ctx context.Context, owner string) (netip.AddrPort, error) {
+					resolved.Add(1)
+					return resolve(ctx, owner)
+				}
 				authenticate := ambientOwnerRequest(t, f, app, credential)
 				f.now = f.now.Add(time.Second)
 				r := httptest.NewRequest(tc.method, URL(app.ID)+"/index.html", strings.NewReader("confirm=yes"))
@@ -73,8 +86,8 @@ func TestPrivateAppRejectsAmbientOwnerFromOtherPages(t *testing.T) {
 				}
 				w := httptest.NewRecorder()
 				f.edge.ServeHost(w, r, app.ID+"."+Domain)
-				if w.Code != http.StatusForbidden || forwarded.Load() != 0 {
-					t.Fatalf("private request status=%d, upstream hits=%d; want 403 and zero", w.Code, forwarded.Load())
+				if w.Code != http.StatusForbidden || forwarded.Load() != 0 || resolved.Load() != 0 {
+					t.Fatalf("private request status=%d, upstream hits=%d, resolutions=%d; want 403 and zero", w.Code, forwarded.Load(), resolved.Load())
 				}
 				current, _, err := f.edge.lookup(context.Background(), app.ID, false)
 				if err != nil || !current.ExpiresAt.Equal(app.ExpiresAt) {

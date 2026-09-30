@@ -42,8 +42,8 @@ func TestPrivateFramingPolicyIntersectsWithAppPolicies(t *testing.T) {
 			if len(policies) != len(tc.policies)+1 {
 				t.Fatalf("private CSP values=%q; want original policies and one restriction", policies)
 			}
-			if !strings.Contains(policies[len(policies)-1], "frame-ancestors 'self'") {
-				t.Fatal("missing independent same-origin framing policy")
+			if policies[len(policies)-1] != "frame-ancestors 'self'" {
+				t.Fatalf("edge policy must restrict only framing: %q", policies[len(policies)-1])
 			}
 			for index, original := range tc.policies {
 				for _, policy := range strings.Split(original, ",") {
@@ -58,14 +58,21 @@ func TestPrivateFramingPolicyIntersectsWithAppPolicies(t *testing.T) {
 			if tc.kind == "text/html" && tc.status == http.StatusOK {
 				for _, value := range policies {
 					for _, policy := range strings.Split(value, ",") {
-						permitsManager := false
+						permitsManager, restrictsFrames := false, false
 						for _, directive := range strings.Split(policy, ";") {
 							fields := strings.Fields(directive)
-							if len(fields) > 0 && fields[0] == "frame-src" {
+							if len(fields) == 0 {
+								continue
+							}
+							switch fields[0] {
+							case "frame-src":
+								restrictsFrames = true
 								permitsManager = containsSource(fields[1:], "https://apps.shaulavo.dev")
+							case "child-src", "default-src":
+								restrictsFrames = true
 							}
 						}
-						if !permitsManager {
+						if restrictsFrames && !permitsManager {
 							t.Fatalf("pill management frame is not permitted in %q", policy)
 						}
 					}
