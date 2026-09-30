@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 env:
-  PROOF_PHASE: before
+  PROOF_PHASE: after
 
 jobs:
   reproduce:
