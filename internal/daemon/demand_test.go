@@ -22,16 +22,19 @@ import (
 // fakeDemandSessions is a lifecycle whose sessions are flags: a started
 // session is live until stopped or told to exit.
 type fakeDemandSessions struct {
-	mu       sync.Mutex
-	next     int
-	live     map[string]string // id → label
-	exits    map[string]int
-	started  []string
-	stopped  []string
-	exitNow  *int  // a started session exits at once with this code
-	stopErr  error // a stop fails and leaves the session running
-	adoptID  string
-	adoptFor string
+	mu      sync.Mutex
+	next    int
+	live    map[string]string // id → label
+	exits   map[string]int
+	started []string
+	stopped []string
+	exitNow *int  // a started session exits at once with this code
+	stopErr error // a stop fails and leaves the session running
+	// publishErr makes a start launch its session and then fail, the way a
+	// catalog that cannot record it does.
+	publishErr error
+	adoptID    string
+	adoptFor   string
 }
 
 func newFakeDemandSessions() *fakeDemandSessions {
@@ -49,7 +52,7 @@ func (f *fakeDemandSessions) startLabelled(_ context.Context, label string, comm
 		return id, nil
 	}
 	f.live[id] = label
-	return id, nil
+	return id, f.publishErr
 }
 
 func (f *fakeDemandSessions) stopSession(_ context.Context, id string) error {
@@ -676,5 +679,36 @@ func waitForStops(t *testing.T, sessions *fakeDemandSessions, want int) {
 			t.Fatalf("stop attempts = %d, want %d", stopped, want)
 		}
 		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func TestDemandPublicationFailureDoesNotLaunchAgain(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	sessions.publishErr = errors.New("catalog is read-only")
+	var reported []error
+	var reportedMu sync.Mutex
+	manager := testDemandManager(t, sessions, func() bool { return true })
+	manager.report = func(err error) { reportedMu.Lock(); reported = append(reported, err); reportedMu.Unlock() }
+	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+
+	for range 3 {
+		_ = manager.Start(context.Background(), "dev")
+	}
+	if started, _ := sessions.counts(); started != 1 || sessions.liveCount() != 1 {
+		t.Fatalf("a start whose publication failed was followed by %d launches with %d live, want 1", started, sessions.liveCount())
+	}
+	if status := manager.Status("dev"); status.SessionID != "S001" {
+		t.Fatalf("status = %+v, want the route to own S001", status)
+	}
+	if err := manager.Stop(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if sessions.liveCount() != 0 {
+		t.Fatal("stopping the route left the session whose publication failed running")
+	}
+	reportedMu.Lock()
+	defer reportedMu.Unlock()
+	if len(reported) == 0 || !strings.Contains(reported[0].Error(), "S001") {
+		t.Fatalf("reported %v, want the publication failure naming S001", reported)
 	}
 }
