@@ -541,7 +541,14 @@ func TestHTTPPrivateGatePublicVisitorAndAnonymousManagement(t *testing.T) {
 			request.Header.Set("Upgrade", "websocket")
 		}
 		result := httptest.NewRecorder()
-		if !f.edge.ServeHost(result, request, host) || result.Code != http.StatusSeeOther || !strings.HasPrefix(result.Header().Get("Location"), ManagementOrigin+"/view") {
+		if !f.edge.ServeHost(result, request, host) {
+			t.Fatalf("private %s not handled", path)
+		}
+		if path == "/socket" {
+			if result.Code != http.StatusForbidden {
+				t.Fatalf("private websocket status %d", result.Code)
+			}
+		} else if result.Code != http.StatusSeeOther || !strings.HasPrefix(result.Header().Get("Location"), ManagementOrigin+"/view") {
 			t.Fatalf("private %s status %d", path, result.Code)
 		}
 		if strings.Contains(result.Body.String(), "original page") {

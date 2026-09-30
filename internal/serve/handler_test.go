@@ -276,7 +276,7 @@ func TestProxyPreservesForwardingMetadataOnlyFromPinnedPeer(t *testing.T) {
 	}
 	pinned := netip.MustParseAddr("100.64.0.2")
 	registry, err := NewRegistryWithReservedPrefix(
-		[]Service{{Name: "api", Kind: Proxy, Target: port}},
+		[]Service{{Name: "api", Kind: Proxy, Target: port, PublicName: "app.shaulavo.dev"}},
 		ReservedPrefix,
 		func(address netip.Addr) bool { return address == pinned },
 	)
