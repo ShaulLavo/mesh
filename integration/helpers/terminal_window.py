@@ -342,12 +342,14 @@ class Fixture:
         return terminal, outer_id, outer_pid, inner_id, inner_pid
 
     def close(self):
+        worker_sockets = []
         for state in (self.local, self.remote):
-            for session in self.sessions(state):
+            for socket_path in (state / "s").glob("*/sock"):
                 try:
                     with socket.socket(socket.AF_UNIX) as connection:
                         connection.settimeout(0.3)
-                        connection.connect(str(state / "s" / session["id"] / "sock"))
+                        connection.connect(str(socket_path))
+                        worker_sockets.append(socket_path)
                         request = json.dumps({"type": "session.signal", "signal": "kill"}).encode()
                         connection.sendall(b"\x01" + struct.pack(">I", len(request)) + request)
                 except OSError:
@@ -355,6 +357,9 @@ class Fixture:
         for terminal in self.terminals:
             terminal.close()
         self.stop_daemon()
+        # Workers remove their sockets only after the final checkpoint and metadata writes.
+        eventually(lambda: all(not path.exists() for path in worker_sockets),
+                   "fixture workers did not finish writing their session data")
 
 
 def nested_detach(fixture):

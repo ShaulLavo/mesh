@@ -3,13 +3,20 @@
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
-sys.dont_write_bytecode = True
-from terminal_window import Fixture, PROMPT, eventually, require, run_outside_containing_session
+from terminal_window import (
+    PROMPT,
+    Fixture,
+    eventually,
+    require,
+    run_outside_containing_session,
+)
 
 
 class TeardownReached:
@@ -30,31 +37,28 @@ def exercise(binary, root):
     arguments = subprocess.check_output(["ps", "-o", "args=", "-p", str(worker_pid)]).decode()
     require("session-worker" in arguments and str(socket_path.parent) in arguments,
             f"shell parent is not the fixture worker: {arguments}")
+    for state in (fixture.local, fixture.remote):
+        stale = state / "s" / "stale" / "sock"
+        stale.parent.mkdir(parents=True)
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(str(stale))
     reached = TeardownReached()
     fixture.terminals.append(reached)
-    closed = threading.Event()
-    errors = []
-
-    def close():
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        os.kill(worker_pid, signal.SIGSTOP)
+        closer = executor.submit(fixture.close)
         try:
-            fixture.close()
-        except Exception as error:
-            errors.append(error)
+            require(reached.reached.wait(timeout=4), "fixture did not reach terminal teardown")
+            try:
+                closer.result(timeout=0.1)
+            except TimeoutError:
+                pass
+            else:
+                raise RuntimeError("fixture.close returned while its worker was suspended")
         finally:
-            closed.set()
-
-    os.kill(worker_pid, signal.SIGSTOP)
-    closer = threading.Thread(target=close)
-    closer.start()
-    try:
-        require(reached.reached.wait(timeout=4), "fixture did not reach terminal teardown")
-        require(not closed.wait(timeout=0.1), "fixture.close returned while its worker was suspended")
-    finally:
-        os.kill(worker_pid, signal.SIGCONT)
-        closer.join(timeout=4)
-        eventually(lambda: not socket_path.exists(), "fixture worker did not finish shutdown")
-    require(not closer.is_alive(), "fixture.close did not finish after its worker resumed")
-    require(not errors, f"fixture.close failed: {errors}")
+            os.kill(worker_pid, signal.SIGCONT)
+            closer.result(timeout=4)
+            eventually(lambda: not socket_path.exists(), "fixture worker did not finish shutdown")
     require(not socket_path.exists(), "fixture.close retained a live worker socket")
     print("PASS: fixture teardown waits for final worker writes")
 
