@@ -55,6 +55,17 @@ class IsolationBoundaryTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "integration isolation refuses"):
                 refuse_live_paths({"config": str(target / "mesh")}, {"HOME": str(home)})
 
+    def test_symlinked_default_directory_is_refused(self):
+        with tempfile.TemporaryDirectory(prefix="m-default-target-") as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            (home / ".config").mkdir(parents=True)
+            target = root / "config-target"
+            target.mkdir()
+            (home / ".config/mesh").symlink_to(target, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "integration isolation refuses"):
+                refuse_live_paths({"config": str(target)}, {"HOME": str(home)})
+
     def test_fixture_refuses_before_creating_any_files(self):
         with tempfile.TemporaryDirectory(prefix="m-fixture-guard-") as temporary:
             home = Path(temporary)

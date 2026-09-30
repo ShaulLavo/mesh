@@ -22,9 +22,12 @@ def refuse_live_paths(paths, environment=None, *, parents=True):
         for suffix in (".config", ".local/state"):
             parent = os.path.join(home, suffix)
             defaults.update(os.path.join(resolve(parent), "mesh") for resolve in (os.path.abspath, os.path.realpath))
+    if environment.get("HOME"):
+        defaults.update(os.path.realpath(os.path.join(environment["HOME"], suffix))
+                        for suffix in (".config/mesh", ".local/state/mesh"))
     for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME"):
         if environment.get(name):
-            defaults.update(os.path.join(resolve(environment[name]), "mesh") for resolve in (os.path.abspath, os.path.realpath))
+            defaults.update(resolve(os.path.join(environment[name], "mesh")) for resolve in (os.path.abspath, os.path.realpath))
     for name, value in paths.items():
         if not value:
             continue
