@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/x/term"
@@ -20,25 +20,34 @@ import (
 	"github.com/shaul/mesh/internal/worker"
 )
 
-// Session is a local session as the CLI sees it: what the worker recorded,
-// plus whether it is answering right now.
+// Liveness distinguishes a stopped worker from an inconclusive socket probe.
+type Liveness uint8
+
+const (
+	LivenessUnknown Liveness = iota
+	LivenessAlive
+	LivenessGone
+)
+
+// Session combines worker metadata with the latest socket observation.
 type Session struct {
 	worker.Meta
-	Dir   string
-	Alive bool
+	Dir      string
+	Liveness Liveness
 }
 
 // State returns the state to display, reconciling what the worker last wrote
 // with what is actually true now.
 func (s Session) State() string {
 	switch {
-	case s.Alive && s.Meta.State == worker.StateDetached:
-		// Alive, but nobody is watching it.
+	case s.Liveness == LivenessAlive && s.Meta.State == worker.StateDetached:
 		return worker.StateDetached
-	case s.Alive:
+	case s.Liveness == LivenessAlive:
 		return worker.StateRunning
 	case s.Meta.State == worker.StateExited:
 		return worker.StateExited
+	case s.Liveness == LivenessUnknown:
+		return s.Meta.State
 	default:
 		// A session that claimed to be running but has no socket did not exit
 		// cleanly: its worker was killed or the machine rebooted underneath it.
@@ -78,7 +87,8 @@ func List() ([]Session, error) {
 		if err != nil {
 			continue // half-created or hand-deleted; not our problem to report
 		}
-		out = append(out, Session{Meta: meta, Dir: dir, Alive: alive(dir)})
+		liveness := probeLiveness(dir, &meta)
+		out = append(out, Session{Meta: meta, Dir: dir, Liveness: liveness})
 		row := protocol.SessionInfo{CreatedAt: meta.CreatedAt, LastAttachedAt: meta.LastAttachedAt}
 		if saved, err := recovery.Read(dir); err == nil && saved.SessionID == meta.ID {
 			row.Recovery = &saved
@@ -109,22 +119,20 @@ func Find(id string) (Session, error) {
 	return Session{}, fmt.Errorf("no session %s on this host: %w", id, ErrNoLocalSession)
 }
 
-// Latest returns the most recent session that is still answering.
+// Latest returns the most recent session that may still accept attachment.
 func Latest() (Session, error) {
 	all, err := List()
 	if err != nil {
 		return Session{}, err
 	}
 	for _, s := range all {
-		if s.Alive {
+		if s.Liveness != LivenessGone && liveState(s.State()) {
 			return s, nil
 		}
 	}
 	return Session{}, fmt.Errorf("no live sessions on this host")
 }
 
-// alive reports whether a worker is listening on the session's socket. The
-// socket file existing is not enough: a killed worker leaves one behind.
 var probeWorker = func(socket string) error {
 	conn, err := net.DialTimeout("unix", socket, 500*time.Millisecond)
 	if err != nil {
@@ -134,8 +142,26 @@ var probeWorker = func(socket string) error {
 	return nil
 }
 
-func alive(dir string) bool {
-	return probeWorker(paths.Socket(dir)) == nil
+func probeLiveness(dir string, meta *worker.Meta) Liveness {
+	bootID := worker.BootID()
+	if meta.BootID != "" && bootID != "" && meta.BootID != bootID {
+		return LivenessGone
+	}
+	err := probeWorker(paths.Socket(dir))
+	if err == nil {
+		return LivenessAlive
+	}
+	if !errors.Is(err, syscall.ENOENT) && !errors.Is(err, syscall.ECONNREFUSED) {
+		return LivenessUnknown
+	}
+	// The worker writes its exit before removing the socket. A failed dial
+	// can therefore make the metadata read before the probe stale.
+	refreshed, err := worker.ReadMeta(dir)
+	if err != nil {
+		return LivenessUnknown
+	}
+	*meta = refreshed
+	return LivenessGone
 }
 
 // Spawn starts a detached worker for command and returns the new session once
@@ -172,26 +198,5 @@ func Spawn(command []string, cwd string) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
-	return Session{Meta: launched.Meta, Dir: launched.Dir, Alive: true}, nil
-}
-
-// RemoveLocal deletes what a finished local session left on disk. The caller
-// establishes that it is finished; a live worker's directory holds its socket
-// and metadata and removing it would orphan the process.
-func RemoveLocal(s Session) error {
-	if strings.TrimSpace(s.Dir) == "" {
-		return fmt.Errorf("session %s has no directory", s.ID)
-	}
-	root, err := paths.SessionsDir()
-	if err != nil {
-		return err
-	}
-	// Only ever a session directory directly under the sessions root.
-	if filepath.Dir(filepath.Clean(s.Dir)) != filepath.Clean(root) {
-		return fmt.Errorf("session %s directory %s is outside %s", s.ID, s.Dir, root)
-	}
-	if err := os.RemoveAll(s.Dir); err != nil {
-		return fmt.Errorf("remove session %s: %w", s.ID, err)
-	}
-	return nil
+	return Session{Meta: launched.Meta, Dir: launched.Dir, Liveness: LivenessAlive}, nil
 }

@@ -187,7 +187,7 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 		exitCode := 0
 		c.responses <- mustCommandControlFrame(protocol.Control{Type: protocol.TypeExit, SessionID: request.SessionID, ExitCode: &exitCode})
 		return nil
-	case protocol.TypeKill:
+	case protocol.TypeKill, protocol.TypeSignal:
 		c.host.mu.Lock()
 		c.host.action = request
 		c.host.mu.Unlock()

@@ -248,3 +248,95 @@ func TestAwaitHibernatedDoesNotEndOnAnUnknownProbe(t *testing.T) {
 		t.Fatalf("hibernation settled on unknown probe: calls %d, session %+v, error %v", calls, settled.local, err)
 	}
 }
+
+func TestSignalNormalisesRemoteName(t *testing.T) {
+	const term = "term"
+	for _, name := range []string{"TERM", term, "SIGTERM"} {
+		t.Run(name, func(t *testing.T) {
+			host := setupCommandTestHost(t)
+			stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial}, "sig", "7K3D", name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := host.actedOn()
+			if request.Type != protocol.TypeSignal || request.Signal != term || !strings.Contains(stdout, "sent "+term) {
+				t.Fatalf("remote signal = %+v, output %q", request, stdout)
+			}
+		})
+	}
+}
+
+func TestUnknownProbeDoesNotAutoRecoverOnAttach(t *testing.T) {
+	setupCommandTestHost(t)
+	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
+	setWorkerProbe(t, func(string) error { return context.DeadlineExceeded })
+	_, stderr, err := executeCommand(t, Dependencies{}, "PR0B", "--raw")
+	if err == nil || strings.Contains(stderr, "recovering") || strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("unknown probe attach = %v, stderr %q", err, stderr)
+	}
+	root, err := paths.SessionsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("unknown probe created a replacement: %v, %v", entries, err)
+	}
+}
+
+func TestControlErrorOnUnknownProbePreservesWorkerFailure(t *testing.T) {
+	setupCommandTestHost(t)
+	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
+	setWorkerProbe(t, func(string) error { return context.DeadlineExceeded })
+	_, _, err := executeCommand(t, Dependencies{}, "kill", "PR0B")
+	if err == nil || strings.Contains(err.Error(), "already interrupted") || !strings.Contains(err.Error(), "PR0B") || !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("worker dial error = %v, want the wrapped socket failure", err)
+	}
+}
+
+func TestRemoveOfflineRequiresAFreshDefinitiveProbe(t *testing.T) {
+	setupCommandTestHost(t)
+	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
+	calls := 0
+	setWorkerProbe(t, func(string) error {
+		calls++
+		if calls < 3 {
+			return syscall.ENOENT
+		}
+		return context.DeadlineExceeded
+	})
+	_, _, err := executeCommand(t, Dependencies{}, "rm", "PR0B")
+	if err == nil || calls < 3 {
+		t.Fatalf("offline removal without fresh proof: probes %d, error %v", calls, err)
+	}
+	dir, err := paths.SessionDir("PR0B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(paths.Forgotten(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unknown worker was marked forgotten: %v", err)
+	}
+}
+
+func TestLatestDoesNotSkipAnUnknownLiveSession(t *testing.T) {
+	setupCommandTestHost(t)
+	writeLocalSessionDir(t, "PR0B", worker.StateDetached)
+	setWorkerProbe(t, func(string) error { return context.DeadlineExceeded })
+	current, err := Latest()
+	if err != nil || current.ID != "PR0B" {
+		t.Fatalf("latest skipped a potentially live session: %+v, %v", current, err)
+	}
+}
+
+func TestLogsAttemptsTheWorkerOnAnUnknownProbe(t *testing.T) {
+	setupCommandTestHost(t)
+	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
+	setWorkerProbe(t, func(string) error { return context.DeadlineExceeded })
+	stdout, _, err := executeCommand(t, Dependencies{}, "logs", "PR0B")
+	if !errors.Is(err, syscall.ENOENT) || stdout != "" {
+		t.Fatalf("unknown probe logs read stale disk output: %q, %v", stdout, err)
+	}
+}

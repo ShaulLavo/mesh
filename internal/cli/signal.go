@@ -3,10 +3,12 @@ package cli
 import (
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/worker"
 )
 
 // Kill ends a session. It is not a signal: it means the session is over, and
@@ -92,4 +94,12 @@ func control(s Session, msg protocol.Control) error {
 		return fmt.Errorf("%s %s: %w", msg.Type, s.ID, err)
 	}
 	return nil
+}
+
+func normaliseSignalName(name string) (string, error) {
+	normalised := strings.TrimPrefix(strings.ToLower(name), "sig")
+	if !worker.SupportsSignal(normalised) {
+		return "", fmt.Errorf("signal %q is not supported; use one of int, term, quit, hup, kill, usr1, usr2", name)
+	}
+	return normalised, nil
 }
