@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 
 from terminal_window import (
     PROMPT,
@@ -53,7 +54,7 @@ def exercise(binary, root):
             require(reached.reached.wait(timeout=4), "fixture did not reach terminal teardown")
             try:
                 closer.result(timeout=0.1)
-            except TimeoutError:
+            except FutureTimeoutError:
                 pass
             else:
                 raise RuntimeError("fixture.close returned while its worker was suspended")
