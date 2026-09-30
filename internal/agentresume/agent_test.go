@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shaul/mesh/internal/testenv"
 )
 
 func fixtureRecipe(provider Provider) Recipe {
@@ -80,7 +82,7 @@ func checkRealArgv(t *testing.T, provider Provider) {
 		t.Fatal(err)
 	}
 	command := exec.Command(os.Args[0], append([]string{"-test.run=^TestNativeArgumentBoundariesThroughARealProcess$", "--"}, argv...)...) //nolint:gosec // self-exec of this test binary proves argument boundaries without a shell
-	command.Env = append(os.Environ(), "MESH_TEST_AGENT_ARGV=1")
+	command.Env = append(testenv.ForProcess(t.TempDir()), "MESH_TEST_AGENT_ARGV=1")
 	output, err := command.Output()
 	if err != nil {
 		t.Fatal(err)
