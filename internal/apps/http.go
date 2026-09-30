@@ -419,20 +419,17 @@ const confirmForm = document.getElementById('confirm-form');
 const confirmID = document.getElementById('confirm-id');
 let focusedAt = null;
 let deliberate = false;
-let activationTimer;
 function activePage() { return document.visibilityState === 'visible' && document.hasFocus(); }
 function updateActivation() {
   confirmButton.disabled = !activePage() || focusedAt === null || performance.now() - focusedAt < 750 || !deliberate || (confirmID && confirmID.value !== {{.App.ID}});
 }
 function resetActivation() {
-  clearTimeout(activationTimer);
   deliberate = false;
   focusedAt = activePage() ? performance.now() : null;
   confirmButton.disabled = true;
-  if (focusedAt !== null) activationTimer = setTimeout(updateActivation, 750);
 }
 function deliberateInput(event) {
-  if (event.isTrusted && activePage()) {
+  if (event.isTrusted && activePage() && focusedAt !== null && performance.now() - focusedAt >= 750) {
     deliberate = true;
     updateActivation();
   }
@@ -442,6 +439,8 @@ window.addEventListener('blur', resetActivation);
 window.addEventListener('pageshow', resetActivation);
 document.addEventListener('visibilitychange', resetActivation);
 document.addEventListener('pointermove', deliberateInput);
+document.addEventListener('pointerdown', deliberateInput, true);
+document.addEventListener('touchstart', deliberateInput, {capture: true, passive: true});
 document.addEventListener('keydown', deliberateInput);
 if (confirmID) confirmID.addEventListener('input', updateActivation);
 confirmForm.addEventListener('submit', event => {
