@@ -326,6 +326,7 @@ func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 			t.Fatal(err)
 		}
 		request.Host = test.host
+		request.Close = true
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatal(err)
