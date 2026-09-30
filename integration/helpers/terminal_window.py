@@ -22,9 +22,8 @@ import tempfile
 import termios
 import time
 
-from mesh_control import receive, round_trip
-
 sys.dont_write_bytecode = True
+from mesh_control import round_trip
 
 
 PROMPT = b"MESH_PROMPT> "
@@ -344,6 +343,8 @@ class Fixture:
         return terminal, outer_id, outer_pid, inner_id, inner_pid
 
     def close(self):
+        from mesh_control import receive
+
         workers = []
         with ExitStack() as connections:
             for state in {self.local, self.remote}:
