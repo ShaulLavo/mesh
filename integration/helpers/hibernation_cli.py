@@ -60,6 +60,16 @@ def hibernated(fixture, session_id):
     return (fixture.remote / "s" / session_id / "hibernation.json").exists() and meta(fixture, session_id)["state"] == "exited"
 
 
+def hibernated_listing(fixture, environment, session_id):
+    listing = cli(fixture, environment, "ls")
+    require(listing.returncode == 0, f"ls failed: {listing}")
+    for line in listing.stdout.splitlines():
+        fields = line.split()
+        if fields[:2] == [session_id, "hibernated"]:
+            return listing.stdout
+    return None
+
+
 def run_checks(fixture):
     setup(fixture)
     local_config = fixture.root / "local-config"
@@ -80,12 +90,12 @@ def run_checks(fixture):
     require(result.returncode == 0 and result.stdout.strip() == f"hibernated {agent}", f"hibernate: {result}")
     eventually(lambda: hibernated(fixture, agent), "hibernated agent left no marker or kept running")
 
-    listing = cli(fixture, on_host, "ls")
-    require(listing.returncode == 0, f"ls failed: {listing}")
-    require(listing.stdout.splitlines()[0].split()[:5] == ["ID", "STATE", "AGE", "IDLE", "MEM"], listing.stdout)
-    require(listing_row(listing.stdout, agent)[1] == "hibernated", listing.stdout)
-    shell_row = listing_row(listing.stdout, shell)
-    require(shell_row[1] == "detached" and shell_row[4] != "-", f"live shell has no memory figure:\n{listing.stdout}")
+    # Worker exit metadata and the daemon's session catalog settle separately.
+    listing = eventually(lambda: hibernated_listing(fixture, on_host, agent),
+                         f"mesh ls did not report {agent} as hibernated")
+    require(listing.splitlines()[0].split()[:5] == ["ID", "STATE", "AGE", "IDLE", "MEM"], listing)
+    shell_row = listing_row(listing, shell)
+    require(shell_row[1] == "detached" and shell_row[4] != "-", f"live shell has no memory figure:\n{listing}")
 
     # Through the adopted-host path the daemon forwards the request.
     remote_agent = create(fixture, "remote-sleepy")
@@ -117,7 +127,7 @@ def run_checks(fixture):
     require(applied.returncode == 0, f"gc --yes failed: {applied}")
     require(f"hibernated {idle_agent} on this host" in applied.stdout and f"killed {shell} on this host" in applied.stdout, applied.stdout)
     eventually(lambda: hibernated(fixture, idle_agent), "gc did not hibernate the idle agent")
-    require(meta(fixture, shell)["state"] == "exited", "gc --shells left the idle shell running")
+    eventually(lambda: meta(fixture, shell)["state"] == "exited", "gc --shells left the idle shell running")
     require(terminal.poll() is None, "gc touched the attached, woken session")
     terminal.send("\n")
     terminal.expect_exit()
