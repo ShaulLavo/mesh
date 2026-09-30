@@ -256,7 +256,7 @@ func TestPrivateHTTPRejectsBeforeProxyAndDemand(t *testing.T) {
 		t.Fatal(err)
 	}
 	gate := &hostPolicyDemandGate{}
-	registry.SetDemandGate(gate)
+	registry.SetDemandGate(gate, nil)
 	cfg := listenerConfig{
 		webSocketPath: "/mesh", httpHandler: appOriginHandler(nil, registry), tailnetPort: 7337, httpsPort: 7337,
 		httpHosts: httpHostPolicy{tailnetAddrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}},

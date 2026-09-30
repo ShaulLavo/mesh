@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"slices"
@@ -53,10 +54,12 @@ type demandManager struct {
 	ctx      context.Context
 	sessions demandSessions
 	report   func(error)
-	bind     func(port uint16) (net.Listener, error)
-	dial     func(ctx context.Context, address string) error
-	holder   func(port uint16) string
-	poll     time.Duration
+	// Correlated diagnostics must bypass report's lossy queue.
+	logger *log.Logger
+	bind   func(port uint16) (net.Listener, error)
+	dial   func(ctx context.Context, address string) error
+	holder func(port uint16) string
+	poll   time.Duration
 
 	mu        sync.Mutex
 	routes    map[string]*demandRoute
@@ -75,7 +78,7 @@ func newDemandManager(ctx context.Context, sessions demandSessions, report func(
 		report = func(error) {}
 	}
 	return &demandManager{
-		ctx: ctx, sessions: sessions, report: report,
+		ctx: ctx, sessions: sessions, report: report, logger: log.Default(),
 		bind: bindLoopback, dial: dialUpstream, holder: portHolder, poll: demandPollInterval,
 		routes: make(map[string]*demandRoute), listeners: make(map[uint16]*demandListener),
 	}
@@ -383,9 +386,8 @@ func (m *demandManager) allAccept(ctx context.Context, ports []string) bool {
 	return true
 }
 
-// startFailure is the answer a waiting connection gets. It names the route,
-// what went wrong and what the command printed, because the person reading
-// it is looking at a browser tab, not the session.
+// startFailure builds the owner diagnostic. The failed transition logs it under
+// a reference; waiting HTTP callers receive only a generic answer and that reference.
 func (m *demandManager) startFailure(ctx context.Context, service meshserve.Service, id, reason string, stop bool) error {
 	// A worker that accepts the request and never answers must not keep the
 	// route starting forever.
@@ -409,7 +411,7 @@ func (m *demandManager) startFailure(ctx context.Context, service meshserve.Serv
 }
 
 // demandFailure keeps the one-line summary `mesh serve ls` shows apart from
-// the full text a waiting connection gets.
+// the full diagnostic retained in the owner log and local control responses.
 type demandFailure struct{ summary, message string }
 
 func (f demandFailure) Error() string { return f.message }
@@ -717,6 +719,9 @@ func (r *demandRoute) finishStart(transition *demandTransition, id string, err e
 		}
 	}
 	r.mu.Unlock()
+	if transition.err != nil {
+		transition.err = meshserve.LogDemandFailure(transition.err, r.manager.logger)
+	}
 	close(transition.done)
 }
 
@@ -868,7 +873,7 @@ func (l *demandListener) serveHTTP(w http.ResponseWriter, request *http.Request)
 		return
 	}
 	if err := route.ready(request.Context()); err != nil {
-		meshserve.WriteDemandFailure(w, err)
+		meshserve.WriteDemandFailure(w, err, l.manager.logger)
 		return
 	}
 	service := route.definition()
