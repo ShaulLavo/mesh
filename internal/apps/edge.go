@@ -151,6 +151,8 @@ func (e *Edge) apply(ctx context.Context, owner string, q Request) (Result, erro
 		}
 		sort.Slice(result.Apps, func(i, j int) bool { return result.Apps[i].ID < result.Apps[j].ID })
 		return result, nil
+	case "browser.inspect":
+		return e.inspectPairing(ctx, q.Code)
 	case "browser.approve":
 		return Result{}, e.auth.Approve(ctx, q.Code, owner)
 	case "browser.list":
@@ -380,4 +382,12 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 	e.inflight[id][token] = admittedRequest{cancel: cancel, owner: serve.AmbientOwnerAllowed(r, URL(id), serve.RequireWebSocketOrigin) && (viewer == app.Owner || networkOwns(r, app.Owner))}
 	release := func() { cancel(); e.mu.Lock(); delete(e.inflight[id], token); e.mu.Unlock() }
 	return app, r.WithContext(ctx), release, nil
+}
+
+func (e *Edge) inspectPairing(ctx context.Context, code string) (Result, error) {
+	info, err := e.auth.Inspect(ctx, code)
+	if err != nil {
+		return Result{}, fmt.Errorf("app: inspect browser pairing: %w", err)
+	}
+	return Result{Pairing: &info}, nil
 }

@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
+	"slices"
 	"syscall"
 	"time"
 
@@ -372,4 +374,8 @@ var signals = map[string]syscall.Signal{
 func SupportsSignal(name string) bool {
 	_, ok := signals[name]
 	return ok
+}
+
+func SignalNames() []string {
+	return slices.Sorted(maps.Keys(signals))
 }

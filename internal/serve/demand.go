@@ -2,8 +2,10 @@ package serve
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -278,10 +280,11 @@ func (r *Registry) SetDemandGate(gate DemandGate) {
 	r.gate.Store(&gate)
 }
 
-// WriteDemandFailure answers a request an on-demand route could not admit.
-// The body is plain text because the one reading it is usually a person
-// wondering why their dev server did not come up.
+// WriteDemandFailure keeps launch diagnostics in the daemon log because an
+// HTTP caller is not necessarily the session owner.
 func WriteDemandFailure(w http.ResponseWriter, err error) {
+	reference := rand.Text()
+	log.Printf("on-demand failure %s: %v", reference, err)
 	status := http.StatusBadGateway
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		status = http.StatusServiceUnavailable
@@ -290,5 +293,5 @@ func WriteDemandFailure(w http.ResponseWriter, err error) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	_, _ = fmt.Fprintln(w, err.Error())
+	_, _ = fmt.Fprintf(w, "on-demand service unavailable; reference %s\n", reference)
 }

@@ -25,13 +25,63 @@ cleanup() {
 }
 trap cleanup EXIT
 
+caller_user_bus=0
+if [[ $(uname -s) == Linux ]] && busctl --user status >/dev/null 2>&1; then
+  caller_user_bus=1
+fi
+
+# Version-manager shims depend on HOME. Pin the interpreters before replacing
+# it, and reuse compiler caches so isolation does not turn warm builds cold.
+python_binary=$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))') || exit 1
+tool_bin="$run_root/bin"
+mkdir -p "$tool_bin"
+ln -s "$python_binary" "$tool_bin/python3"
+ln -s "$BASH" "$tool_bin/bash"
+ln -s /bin/sh "$tool_bin/sh"
+go_root=$(cd "$repo_root" && go env GOROOT) || exit 1
+go_cache=$(cd "$repo_root" && go env GOCACHE) || exit 1
+go_modules=$(cd "$repo_root" && go env GOMODCACHE) || exit 1
+test_env=(
+  "PATH=$tool_bin:$go_root/bin:$PATH" "TMPDIR=${TMPDIR:-/tmp}"
+  "TERM=${TERM:-dumb}" "LANG=${LANG:-C}"
+  "GOCACHE=$go_cache" "GOMODCACHE=$go_modules"
+)
+for name in XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS MESH_TEST_ZSH MESH_SHORT_TMP; do
+  if [[ ${!name+x} ]]; then
+    test_env+=("$name=${!name}")
+  fi
+done
+build_env=("${test_env[@]}")
+# Module downloads need the caller's network policy; loopback fixtures do not.
+for name in GOPROXY GONOSUMDB GONOPROXY GOPRIVATE GOFLAGS GOINSECURE GOSUMDB; do
+  value=$(cd "$repo_root" && go env "$name") || exit 1
+  # An exported empty value is still an explicit caller override.
+  if [[ ${!name+x} ]]; then
+    value=${!name}
+  fi
+  build_env+=("$name=$value")
+done
+for name in HTTPS_PROXY HTTP_PROXY NO_PROXY ALL_PROXY https_proxy http_proxy no_proxy all_proxy \
+  SSL_CERT_FILE SSL_CERT_DIR; do
+  if [[ ${!name+x} ]]; then
+    build_env+=("$name=${!name}")
+  fi
+done
+netrc=${NETRC:-"$HOME/.netrc"}
+if [[ -n ${NETRC:-} || -f $netrc ]]; then
+  netrc=$(cd "$repo_root" && python3 -c 'import os, sys; print(os.path.abspath(sys.argv[1]))' "$netrc") || exit 1
+  build_env+=("NETRC=$netrc")
+fi
+build_home="$run_root/build-home"
+mkdir -p "$build_home"
+
 binary="$run_root/mesh"
-if ! (cd "$repo_root" && go build -o "$binary" ./cmd/mesh); then
+if ! (cd "$repo_root" && env -i "${build_env[@]}" HOME="$build_home" go build -o "$binary" ./cmd/mesh); then
   echo "FAIL: build" >&2
   exit 1
 fi
 integration_binary="$run_root/mesh-integration"
-if ! (cd "$repo_root" && go build -tags mesh_integration -o "$integration_binary" ./cmd/mesh); then
+if ! (cd "$repo_root" && env -i "${build_env[@]}" HOME="$build_home" go build -tags mesh_integration -o "$integration_binary" ./cmd/mesh); then
   echo "FAIL: integration build" >&2
   exit 1
 fi
@@ -66,7 +116,8 @@ for test_path in "${tests[@]}"; do
   name=$(basename "$test_path")
   log="$run_root/$name.log"
   config_dir="$run_root/config/$name"
-  mkdir -p "$config_dir"
+  home_dir="$run_root/home/$name"
+  mkdir -p "$config_dir" "$home_dir"
   names+=("$name")
   logs+=("$log")
   (
@@ -75,13 +126,18 @@ for test_path in "${tests[@]}"; do
     case "$slow_tests" in
       *" $name "*) this_timeout=$slow_test_timeout ;;
     esac
-    # Integration tests create their own state. Give each one an equally
-    # isolated address book and no inherited nesting identity, so running this
-    # verifier from inside Mesh cannot change its detach key or catalog shape.
+    # Provider routing, proxies and shell startup files must come from fixtures,
+    # not the developer's environment.
+    script_env=("${test_env[@]}" "HOME=$home_dir" "MESH=$binary"
+      "MESH_INTEGRATION_BINARY=$integration_binary" "MESH_CONFIG_DIR=$config_dir")
+    # Losing an available bus would turn the scope assertions into a false pass.
+    if [[ $name == session_scope.sh ]] && (( caller_user_bus )) &&
+      ! env -i "${script_env[@]}" busctl --user status >/dev/null 2>&1; then
+      echo "FAIL: session_scope.sh lost the caller's user bus" >&2
+      exit 1
+    fi
     timeout --kill-after=5s "$this_timeout" \
-      env -u MESH_DEPTH -u MESH_HOST_ID -u MESH_SESSION_ID \
-      MESH="$binary" MESH_INTEGRATION_BINARY="$integration_binary" \
-      MESH_CONFIG_DIR="$config_dir" bash "$test_path"
+      env -i "${script_env[@]}" bash "$test_path"
   ) >"$log" 2>&1 &
   pids+=("$!")
   if (( ${#pids[@]} - next_wait >= integration_jobs )); then

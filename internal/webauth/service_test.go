@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -57,7 +58,7 @@ func pair(t *testing.T, s *Service, owner string, old ...*http.Cookie) (*http.Co
 	t.Helper()
 	ctx := context.Background()
 	begin := httptest.NewRecorder()
-	p, err := s.Begin(ctx, begin, request(old...))
+	p, err := s.Begin(ctx, begin, request(old...), netip.MustParseAddr("192.0.2.1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +78,7 @@ func TestPairingRequiresBoundBrowserAndConsumesCode(t *testing.T) {
 	s, store, _ := fixture(t)
 	ctx := context.Background()
 	w := httptest.NewRecorder()
-	pending, err := s.Begin(ctx, w, request())
+	pending, err := s.Begin(ctx, w, request(), netip.MustParseAddr("192.0.2.1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +122,7 @@ func TestPairingExpiryRateLimitAndPersistence(t *testing.T) {
 	s, store, now := fixture(t)
 	ctx := context.Background()
 	w := httptest.NewRecorder()
-	p, err := s.Begin(ctx, w, request())
+	p, err := s.Begin(ctx, w, request(), netip.MustParseAddr("192.0.2.1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestMultiOwnerPairingBoundToExistingSessionAndRevocation(t *testing.T) {
 	ctx := context.Background()
 	owner, first := pair(t, s, "owner-a")
 	begin := httptest.NewRecorder()
-	p, err := s.Begin(ctx, begin, request(owner))
+	p, err := s.Begin(ctx, begin, request(owner), netip.MustParseAddr("192.0.2.1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +273,7 @@ func TestFailedPersistenceDoesNotApproveOrConsume(t *testing.T) {
 	s, store, _ := fixture(t)
 	ctx := context.Background()
 	w := httptest.NewRecorder()
-	p, err := s.Begin(ctx, w, request())
+	p, err := s.Begin(ctx, w, request(), netip.MustParseAddr("192.0.2.1"))
 	if err != nil {
 		t.Fatal(err)
 	}

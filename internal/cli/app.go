@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,7 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
+	"github.com/charmbracelet/x/term"
 	appspkg "github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/bootstrap"
 	"github.com/spf13/cobra"
@@ -119,25 +122,87 @@ func (a *application) appActionCommand(output *appOutput, operation string) *cob
 	}
 	return cmd
 }
+
+const browserApproveOperation = "approve"
+const browserYesFlag = "yes"
+
 func (a *application) appBrowserCommand(output *appOutput, operation string) *cobra.Command {
 	use, n := operation+" HOST ID", 2
-	if operation == "approve" {
+	if operation == browserApproveOperation {
 		use = operation + " HOST CODE"
 	}
 	if operation == "list" {
 		use, n = operation+" HOST", 1
 	}
-	return &cobra.Command{Use: use, Short: operation + " owner browser grants", Args: cobra.ExactArgs(n), RunE: func(cmd *cobra.Command, args []string) error {
-		r := appspkg.Request{Action: "browser." + operation}
-		if operation == "approve" {
-			r.Code = args[1]
+	var yes bool
+	command := &cobra.Command{Use: use, Short: operation + " owner browser grants", Args: cobra.ExactArgs(n), RunE: func(cmd *cobra.Command, args []string) error {
+		if operation == browserApproveOperation {
+			return a.runBrowserApproval(cmd, args[0], args[1], output, yes)
 		}
+		r := appspkg.Request{Action: "browser." + operation}
 		if operation == "revoke" {
 			r.BrowserID = args[1]
 		}
 		return a.runAppAction(cmd, args[0], r, output)
 	}}
+	if operation == browserApproveOperation {
+		command.Flags().BoolVar(&yes, browserYesFlag, false, "skip the human browser confirmation for scripts")
+	}
+	return command
 }
+
+func (a *application) runBrowserApproval(cmd *cobra.Command, host, code string, output *appOutput, yes bool) error {
+	transport, err := a.appConnection(cmd.Context(), host, output)
+	if err != nil {
+		return err
+	}
+	defer transport.close() //nolint:errcheck // the request outcome is authoritative
+	inspection, err := transport.request(cmd.Context(), appspkg.Request{Action: "browser.inspect", Code: code})
+	if err != nil {
+		return fmt.Errorf("inspect pending browser on %s: %w", host, err)
+	}
+	if inspection.Pairing == nil {
+		return errors.New("host did not return pending browser details; update Mesh before approving")
+	}
+	info := inspection.Pairing
+	if _, err = fmt.Fprintf(cmd.ErrOrStderr(), "User-Agent: %s\nSource IP: %s\nPending age: %s\nOnly approve a code you requested in your own browser. Browser details are not proof of identity.\n", info.UserAgent, info.SourceIP, (time.Duration(info.AgeSeconds) * time.Second).String()); err != nil {
+		return fmt.Errorf("show pending browser details: %w", err)
+	}
+	confirmed, err := confirmBrowserApproval(cmd, yes)
+	if err != nil || !confirmed {
+		return err
+	}
+	result, err := transport.request(cmd.Context(), appspkg.Request{Action: "browser.approve", Code: code})
+	if err != nil {
+		return err
+	}
+	return writeAppResult(cmd.OutOrStdout(), host, result, output.json)
+}
+func confirmBrowserApproval(cmd *cobra.Command, yes bool) (bool, error) {
+	if yes {
+		return true, nil
+	}
+	input, ok := cmd.InOrStdin().(*os.File)
+	if !ok || !term.IsTerminal(input.Fd()) {
+		return false, errors.New("browser approval requires interactive confirmation; --yes skips the human check for scripts")
+	}
+	if _, err := fmt.Fprint(cmd.ErrOrStderr(), "Approve this browser? [y/N] "); err != nil {
+		return false, fmt.Errorf("show browser approval prompt: %w", err)
+	}
+	answer, err := bufio.NewReader(io.LimitReader(input, 1024)).ReadString('\n')
+	if err != nil {
+		return false, fmt.Errorf("read browser approval confirmation: %w", err)
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	if answer == "y" || answer == browserYesFlag {
+		return true, nil
+	}
+	if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "browser approval cancelled"); err != nil {
+		return false, fmt.Errorf("show browser approval cancellation: %w", err)
+	}
+	return false, nil
+}
+
 func (a *application) runAppAction(cmd *cobra.Command, host string, request appspkg.Request, output *appOutput) error {
 	transport, err := a.appConnection(cmd.Context(), host, output)
 	if err != nil {

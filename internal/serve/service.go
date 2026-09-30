@@ -226,9 +226,10 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		http.NotFound(w, request)
 		return
 	}
-	host := request.Host
-	if name, _, err := net.SplitHostPort(host); err == nil {
-		host = name
+	host, ok := CanonicalHost(request.Host)
+	if !ok {
+		http.NotFound(w, request)
+		return
 	}
 	publicRequest := host != "" && validatePublicName(host) == nil
 	requestPath := request.URL.EscapedPath()
