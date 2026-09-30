@@ -87,6 +87,9 @@ func findPair(d *state, codeHash string) (string, pairRecord, bool) {
 }
 
 func (s *Service) Promote(ctx context.Context, w http.ResponseWriter, r *http.Request) (Session, error) {
+	if err := s.checkPairApproval(ctx, r); err != nil {
+		return Session{}, err
+	}
 	token, err := bearer()
 	if err != nil {
 		return Session{}, err
@@ -106,8 +109,11 @@ func (s *Service) Promote(ctx context.Context, w http.ResponseWriter, r *http.Re
 			return ErrPairing
 		}
 		p, ok := d.Pairs[pairKey]
-		if !ok || p.Owner == "" {
+		if !ok {
 			return ErrPairing
+		}
+		if p.Owner == "" {
+			return ErrApprovalPending
 		}
 		b := browserRecord{Session: Session{ID: id, CSRF: csrf, ExpiresAt: now.Add(sessionTTL)}, CreatedAt: now}
 		b, err = promotionBrowser(d, r, p, b, now)
@@ -134,6 +140,25 @@ func (s *Service) Promote(ctx context.Context, w http.ResponseWriter, r *http.Re
 	writeCookie(w, OwnerCookie, token, result.ExpiresAt, s.now())
 	http.SetCookie(w, &http.Cookie{Name: PairCookie, Path: "/", MaxAge: -1, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	return result, nil
+}
+func (s *Service) checkPairApproval(ctx context.Context, r *http.Request) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	key, err := cookieKey(r, PairCookie)
+	if err != nil {
+		return ErrPairing
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pair, ok := s.state.Pairs[key]
+	if !ok || !s.now().Before(pair.ExpiresAt) {
+		return ErrPairing
+	}
+	if pair.Owner == "" {
+		return ErrApprovalPending
+	}
+	return nil
 }
 func appendOwner(owners []string, owner string) []string {
 	if slices.Contains(owners, owner) {

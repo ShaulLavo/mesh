@@ -10,12 +10,20 @@ import (
 )
 
 func (s *Service) ValidateMutation(ctx context.Context, r *http.Request, managementOrigin string) (Session, error) {
-	if r.Method != http.MethodPost || r.Header.Get("Origin") != managementOrigin || !validOrigin(managementOrigin) {
-		return Session{}, ErrMutation
-	}
 	session, err := s.Browser(ctx, r)
 	if err != nil {
 		return Session{}, err
+	}
+	if err = ValidateSessionMutation(r, managementOrigin, session); err != nil {
+		return Session{}, err
+	}
+	return session, nil
+}
+
+// ValidateSessionMutation checks origin and CSRF for an already verified session.
+func ValidateSessionMutation(r *http.Request, managementOrigin string, session Session) error {
+	if r.Method != http.MethodPost || r.Header.Get("Origin") != managementOrigin || !validOrigin(managementOrigin) || session.CSRF == "" {
+		return ErrMutation
 	}
 	csrf := r.Header.Get("X-Mesh-CSRF")
 	if csrf == "" {
@@ -23,15 +31,15 @@ func (s *Service) ValidateMutation(ctx context.Context, r *http.Request, managem
 	}
 	if csrf == "" {
 		r.Body = http.MaxBytesReader(nil, r.Body, 16<<10)
-		if err = r.ParseForm(); err != nil {
-			return Session{}, ErrMutation
+		if err := r.ParseForm(); err != nil {
+			return ErrMutation
 		}
 		csrf = r.PostForm.Get("csrf")
 	}
 	if subtle.ConstantTimeCompare([]byte(csrf), []byte(session.CSRF)) != 1 {
-		return Session{}, ErrMutation
+		return ErrMutation
 	}
-	return session, nil
+	return nil
 }
 func validOrigin(origin string) bool {
 	parsed, err := url.Parse(origin)

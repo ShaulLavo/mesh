@@ -69,6 +69,11 @@ func VerifyServeForward(ctx context.Context, localPort uint16) error {
 	return NewClient(execRunner{}).VerifyServeForward(ctx, localPort)
 }
 
+// VerifyServeProxyForward verifies a Tailnet-only TCP forward with PROXY v1.
+func VerifyServeProxyForward(ctx context.Context, localPort uint16) error {
+	return NewClient(execRunner{}).verifyServeForward(ctx, localPort, 1)
+}
+
 // Self returns the local Tailscale peer.
 func (c *Client) Self(ctx context.Context) (Peer, error) {
 	status, err := c.status(ctx)
@@ -114,6 +119,10 @@ func (c *Client) Peers(ctx context.Context) ([]Peer, error) {
 
 // VerifyServeForward checks the installed Tailscale Serve configuration.
 func (c *Client) VerifyServeForward(ctx context.Context, localPort uint16) error {
+	return c.verifyServeForward(ctx, localPort, 0)
+}
+
+func (c *Client) verifyServeForward(ctx context.Context, localPort uint16, proxyProtocol int) error {
 	if ctx == nil {
 		return errors.New("tailnet: verify Tailscale Serve with nil context")
 	}
@@ -143,8 +152,8 @@ func (c *Client) VerifyServeForward(ctx context.Context, localPort uint16) error
 	if handler.HTTP || handler.HTTPS || handler.TerminateTLS != "" {
 		return errors.New("tailscale serve TCP/443 terminates HTTP or TLS; Mesh requires a raw TCP forward")
 	}
-	if handler.ProxyProtocol != 0 {
-		return fmt.Errorf("tailscale serve TCP/443 enables PROXY protocol version %d; Mesh requires an unmodified raw TCP forward", handler.ProxyProtocol)
+	if handler.ProxyProtocol != proxyProtocol {
+		return fmt.Errorf("tailscale serve TCP/443 uses PROXY protocol version %d; want %d", handler.ProxyProtocol, proxyProtocol)
 	}
 	wantTarget := fmt.Sprintf("127.0.0.1:%d", localPort)
 	if handler.TCPForward != wantTarget {
@@ -160,6 +169,8 @@ type rawStatus struct {
 }
 
 type rawPeer struct {
+	UserID       uint64   `json:"UserID"`
+	Tags         []string `json:"Tags"`
 	HostName     string   `json:"HostName"`
 	DNSName      string   `json:"DNSName"`
 	TailscaleIPs []string `json:"TailscaleIPs"`

@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import { readFileSync } from 'node:fs';
 import solid from 'vite-plugin-solid';
+import tailwindcss from '@tailwindcss/vite';
 
 const notices = ['solid-js', 'react-grab-toolbar'].map(name =>
   readFileSync(new URL(`../../third_party/${name}/LICENSE`, import.meta.url), 'utf8'),
@@ -9,16 +10,12 @@ const notices = ['solid-js', 'react-grab-toolbar'].map(name =>
 export default defineConfig({
   plugins: [
     solid(),
+    tailwindcss(),
     {
-      name: 'mesh-pill-styles',
+      name: 'mesh-pill-notices',
       generateBundle(_, bundle) {
         const script = Object.values(bundle).find(asset => asset.type === 'chunk');
         if (script?.type === 'chunk') script.code = `/*!\n${notices}*/\n${script.code}`;
-        this.emitFile({
-          type: 'asset',
-          fileName: 'pill.css',
-          source: readFileSync(new URL('./src/pill.css', import.meta.url), 'utf8'),
-        });
       },
     },
   ],
@@ -29,6 +26,7 @@ export default defineConfig({
     lib: {
       entry: 'src/index.tsx',
       name: 'MeshAppPill',
+      cssFileName: 'pill',
       formats: ['iife'],
       fileName: () => 'pill.js',
     },

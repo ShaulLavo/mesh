@@ -81,9 +81,11 @@ func TestPairingRequiresBoundBrowserAndConsumesCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Promote(ctx, httptest.NewRecorder(), request(namedCookie(t, w, PairCookie))); !errors.Is(err, ErrPairing) {
+	store.fail = true
+	if _, err = s.Promote(ctx, httptest.NewRecorder(), request(namedCookie(t, w, PairCookie))); !errors.Is(err, ErrApprovalPending) {
 		t.Fatalf("unapproved promotion: %v", err)
 	}
+	store.fail = false
 	if err = s.Approve(ctx, "unknown", "owner-a"); !errors.Is(err, ErrPairing) {
 		t.Fatalf("unknown code: %v", err)
 	}

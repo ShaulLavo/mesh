@@ -8,6 +8,9 @@ mesh app create pc ./backend --setup 'bun install' \
   --run 'bun run start --host 127.0.0.1' --port 3000
 ```
 
+For a dependency-free server example with shared SQLite favorites, see
+[A little color room](../examples/palette-server/README.md).
+
 Use `local` for this machine. Remote operations use the origin's authenticated
 Mesh SSH service, default port 2222. `--ssh-port` selects a different configured
 port. The origin needs `--public-edge-target`; its identity must be in the edge's
@@ -34,22 +37,34 @@ with its managed copy and are deleted with it.
 
 ## View and share
 
-Open the app URL. Private apps send you to `https://apps.shaulavo.dev`, where the
+For Tailnet hosting, configure [automatic owner access](../examples/tailnet-gateway/README.md).
+Mesh recognizes your devices by matching their Tailscale account to the app's
+configured origin. Fresh browsers can view private apps and get the Make public
+or Make private button without pairing. Public visitors get no owner authority.
+This check runs on requests to both private and public apps.
+
+For deployments without automatic Tailnet access, private apps send you to `https://apps.shaulavo.dev`, where the
 browser displays a one-use approval code. Approve on the owner host:
 
 ```sh
 mesh app browser approve pc CODE
 ```
 
-Return to the browser and check approval. Pairing grants that browser management
+Keep the pairing page open. It checks for approval automatically and continues
+as soon as the owner approves. Checks preserve the code until its ten-minute
+expiry. Pairing grants that browser management
 rights for apps owned by `pc`; it grants no rights for another origin's apps.
 The edge issues a separate view-only cookie for the private app. Public visitors
 need no pairing and cannot change ownership or visibility.
 
-Click the floating dot to expand the pill. Drag or flick it to an edge; its position
-survives reloads. Copy the URL or open the controls menu. Paired owners can open
-trusted confirmation pages to publish, privatize, renew or delete, and download
-source. These pages are separate from app content.
+Click the small edge tab to expand the React Grab pill. Drag or flick it to an edge;
+its position survives reloads. The link button copies the app URL and briefly shows
+a checkmark. Clipboard access requires HTTPS. The lock button opens
+a trusted visibility confirmation for recognized owners, or browser pairing for
+visitors. It appears only after the management origin responds. The chevron collapses
+the pill. Owner authorization runs in a hidden frame; there is no controls menu.
+Management pages remain separate from app content. Renew, delete and source
+download are also available through the CLI.
 
 ```sh
 mesh app public pc 7k3d

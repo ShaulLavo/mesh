@@ -40,18 +40,20 @@ const (
 // Config identifies the state and optional listeners owned by a daemon. Zero
 // TailnetPort and SSHPort values disable their corresponding listeners.
 type Config struct {
-	SSHSessionHandler    sshd.SessionHandlerFactory
-	StateDir             string
-	TailnetPort          uint16
-	SSHPort              uint16
-	WebSocketPath        string
-	HTTPSPort            uint16
-	CertificateRenewerID string
-	PrivateNamesConfig   string
-	EdgeConfig           string
-	PublicEdgeTarget     string
-	AppDataRoot          string
-	TailscaleServe       bool
+	SSHSessionHandler           sshd.SessionHandlerFactory
+	StateDir                    string
+	TailnetPort                 uint16
+	SSHPort                     uint16
+	WebSocketPath               string
+	HTTPSPort                   uint16
+	TailscaleServePort          uint16
+	TailscaleServeProxyProtocol bool
+	CertificateRenewerID        string
+	PrivateNamesConfig          string
+	EdgeConfig                  string
+	PublicEdgeTarget            string
+	AppDataRoot                 string
+	TailscaleServe              bool
 	// HibernateIdle stops a registered agent once its session has been
 	// detached and quiet this long. Zero leaves every session running.
 	HibernateIdle time.Duration
@@ -119,6 +121,12 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	if cfg.HTTPSPort != 0 && (opts.verifyServeForward == nil || opts.tailscaleTimeout <= 0) {
 		return errors.New("daemon: incomplete private HTTPS forwarding dependencies")
+	}
+	if cfg.TailscaleServeProxyProtocol && (cfg.TailscaleServePort == 0 || cfg.TailscaleServePort == cfg.HTTPSPort) {
+		return errors.New("daemon: Tailscale PROXY metadata requires a separate gateway port")
+	}
+	if cfg.TailscaleServePort != 0 && cfg.HTTPSPort == 0 {
+		return errors.New("daemon: a Tailscale Serve gateway requires private HTTPS")
 	}
 	if cfg.SSHPort != 0 && opts.serveSSH == nil {
 		return errors.New("daemon: incomplete SSH runtime dependencies")
@@ -323,6 +331,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	var tunnelForwarder tunnel.Activator
 	var edgeControl controlHandler = disabledEdgeController{}
 	var publicListenAddress string
+	var tailnetOwnerAccess bool
 	var publicHTTPHandler http.Handler
 	var publicMode edge.Mode
 	var publicCertificatePin string
@@ -350,10 +359,18 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		for _, origin := range publicEdgeConfig.Origins {
 			allowed[origin.Identity] = true
 		}
+		var networkOwners func(context.Context, netip.Addr) ([]string, error)
+		if publicEdgeConfig.TailnetOwnerAccess {
+			origins := make(map[string]string, len(publicEdgeConfig.Origins))
+			for _, origin := range publicEdgeConfig.Origins {
+				origins[origin.TailscaleName] = origin.Identity
+			}
+			networkOwners = tailnet.OwnerResolver(origins)
+		}
 		appPublic, err = apps.NewEdge(daemonCtx, apps.EdgeConfig{
 			Store: store, Key: meshPrivateKey, Allowed: allowed, Now: opts.now,
 			Resolve: appResolver(publicEdgeConfig.Origins, edge.TailscaleResolver(discoverAllPeers), waker.pin),
-			Acquire: edgeRegistry.AcquireApp, ClientIP: edgeRegistry.AppClientIP,
+			Acquire: edgeRegistry.AcquireApp, ClientIP: edgeRegistry.AppClientIP, NetworkOwners: networkOwners,
 		})
 		if err != nil {
 			return fmt.Errorf("daemon: configure temporary app edge: %w", err)
@@ -364,6 +381,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		stopTunnelShutdown := context.AfterFunc(daemonCtx, controller.CloseTunnels)
 		defer stopTunnelShutdown()
 		publicListenAddress = publicEdgeConfig.ListenAddress
+		tailnetOwnerAccess = publicEdgeConfig.TailnetOwnerAccess
 		publicHTTPHandler = edgeRegistry
 		publicMode = publicEdgeConfig.Mode
 		publicCertificatePin = publicEdgeConfig.CertificateRenewerID
@@ -492,6 +510,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		PublicListenAddress:        publicListenAddress,
 		PublicHTTPHandler:          publicHTTPHandler,
 		PublicTLSConfig:            certificateRuntime.PublicTLS,
+		TailnetOwnerAccess:         tailnetOwnerAccess,
 		RequireAllTailnetListeners: requiresStableTailnetControl,
 		ReportError:                reporter.report,
 	}, server.Handle)
@@ -527,13 +546,21 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		updates.coordinator.Run(daemonCtx, reporter.report)
 	}()
 	listener.ready = func(readyCtx context.Context) error {
+		servePort := cfg.TailscaleServePort
+		if servePort == 0 {
+			servePort = cfg.HTTPSPort
+		}
 		if cfg.TailscaleServe {
-			if err := configureTailscaleServe(readyCtx, cfg.HTTPSPort, opts.tailscaleTimeout, opts.runCommand); err != nil {
+			if err := configureTailscaleServe(readyCtx, servePort, cfg.TailscaleServeProxyProtocol, opts.tailscaleTimeout, opts.runCommand); err != nil {
 				return err
 			}
 		}
 		if cfg.HTTPSPort != 0 {
-			if err := verifyTailscaleServeForward(readyCtx, cfg.HTTPSPort, opts.tailscaleTimeout, opts.verifyServeForward); err != nil {
+			verify := opts.verifyServeForward
+			if cfg.TailscaleServeProxyProtocol {
+				verify = tailnet.VerifyServeProxyForward
+			}
+			if err := verifyTailscaleServeForward(readyCtx, servePort, opts.tailscaleTimeout, verify); err != nil {
 				return err
 			}
 			if certificateRuntime.PrivateNameReady != nil {

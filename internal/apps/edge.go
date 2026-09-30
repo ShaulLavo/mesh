@@ -19,13 +19,14 @@ import (
 )
 
 type EdgeConfig struct {
-	Acquire  func(*http.Request, string) (func(), error)
-	ClientIP func(*http.Request) netip.Addr
-	Store    NameStore
-	Key      ed25519.PrivateKey
-	Allowed  map[string]bool
-	Resolve  func(context.Context, string) (netip.AddrPort, error)
-	Now      func() time.Time
+	Acquire       func(*http.Request, string) (func(), error)
+	ClientIP      func(*http.Request) netip.Addr
+	NetworkOwners func(context.Context, netip.Addr) ([]string, error)
+	Store         NameStore
+	Key           ed25519.PrivateKey
+	Allowed       map[string]bool
+	Resolve       func(context.Context, string) (netip.AddrPort, error)
+	Now           func() time.Time
 }
 type edgeState struct {
 	Apps   map[string]Record     `json:"apps"`
@@ -348,7 +349,7 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 	if !exists || app.Status != "active" || !app.Ready {
 		return Record{}, nil, nil, errors.New("app unavailable")
 	}
-	if app.Visibility == "private" {
+	if app.Visibility == "private" && !networkOwns(r, app.Owner) {
 		owner, err := e.auth.ViewOwner(r.Context(), r, id)
 		if err != nil || owner != app.Owner {
 			return Record{}, nil, nil, errors.New("app private")
@@ -372,7 +373,7 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 		e.inflight[id] = map[string]admittedRequest{}
 	}
 	viewer, _ := e.auth.ViewOwner(r.Context(), r, id)
-	e.inflight[id][token] = admittedRequest{cancel: cancel, owner: viewer == app.Owner}
+	e.inflight[id][token] = admittedRequest{cancel: cancel, owner: viewer == app.Owner || networkOwns(r, app.Owner)}
 	release := func() { cancel(); e.mu.Lock(); delete(e.inflight[id], token); e.mu.Unlock() }
 	return app, r.WithContext(ctx), release, nil
 }

@@ -35,6 +35,12 @@ func TestLoadRuntimeConfigValidatesListenerModeAndAllowlist(t *testing.T) {
 	}
 
 	cases := map[string]runtimeConfigFile{
+		"owner access public bind": {
+			Mode: ModeDirectTLS, ListenAddress: ":8443", TailnetOwnerAccess: true, CertificateRenewerID: renewerID, Origins: []OriginConfig{origin},
+		},
+		"owner access HTTP proxy": {
+			Mode: ModeProxy, ListenAddress: "127.0.0.1:8080", TailnetOwnerAccess: true, Origins: []OriginConfig{origin},
+		},
 		"proxy public bind": {
 			Mode: ModeProxy, ListenAddress: "0.0.0.0:8080", Origins: []OriginConfig{origin},
 		},
@@ -43,9 +49,6 @@ func TestLoadRuntimeConfigValidatesListenerModeAndAllowlist(t *testing.T) {
 		},
 		"direct no pin": {
 			Mode: ModeDirectTLS, Origins: []OriginConfig{origin},
-		},
-		"direct loopback": {
-			Mode: ModeDirectTLS, ListenAddress: "127.0.0.1:443", CertificateRenewerID: renewerID, Origins: []OriginConfig{origin},
 		},
 		"direct private": {
 			Mode: ModeDirectTLS, ListenAddress: "192.168.1.2:443", CertificateRenewerID: renewerID, Origins: []OriginConfig{origin},
@@ -147,4 +150,15 @@ func writeConfigFile(t *testing.T, value any) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestDirectTLSAllowsTailnetGatewayLoopback(t *testing.T) {
+	originID, _ := testIdentity(t)
+	renewerID, _ := testIdentity(t)
+	for _, address := range []string{"127.0.0.1:8445", "[::1]:8445"} {
+		_, err := LoadRuntimeConfig(writeConfigFile(t, runtimeConfigFile{Mode: ModeDirectTLS, ListenAddress: address, CertificateRenewerID: renewerID, Origins: []OriginConfig{testOriginConfig(originID)}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 }

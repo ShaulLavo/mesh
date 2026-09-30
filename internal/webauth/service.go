@@ -35,11 +35,12 @@ const (
 )
 
 var (
-	ErrUnauthorized = errors.New("webauth: owner authentication required")
-	ErrPairing      = errors.New("webauth: pairing code is invalid, expired, or already used")
-	ErrCapacity     = errors.New("webauth: browser authentication capacity reached")
-	ErrRateLimited  = errors.New("webauth: too many pairing approval attempts")
-	ErrMutation     = errors.New("webauth: invalid management request origin or CSRF token")
+	ErrUnauthorized    = errors.New("webauth: owner authentication required")
+	ErrPairing         = errors.New("webauth: pairing code is invalid, expired, or already used")
+	ErrApprovalPending = fmt.Errorf("%w: awaiting owner approval", ErrPairing)
+	ErrCapacity        = errors.New("webauth: browser authentication capacity reached")
+	ErrRateLimited     = errors.New("webauth: too many pairing approval attempts")
+	ErrMutation        = errors.New("webauth: invalid management request origin or CSRF token")
 )
 
 type StateStore interface {
