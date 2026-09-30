@@ -11,12 +11,12 @@ import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from mesh_control import round_trip
 from terminal_window import (
     PROMPT,
     Fixture,
     eventually,
     require,
+    round_trip,
     run_outside_containing_session,
 )
 
