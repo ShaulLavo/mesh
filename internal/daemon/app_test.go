@@ -40,9 +40,12 @@ func TestRunRestoresPersistedServicesOnRestart(t *testing.T) {
 	port := reserveTCPPort(t, "127.0.0.1")
 	url := fmt.Sprintf("http://127.0.0.1:%d/site/", port)
 	options := runOptions{
-		now:               func() time.Time { return catalogTestTime },
-		bootID:            func() string { return "boot-a" },
-		discoverSelf:      func(context.Context) (tailnet.Peer, error) { return tailnet.Peer{Addrs: []string{"127.0.0.1"}}, nil },
+		now:    func() time.Time { return catalogTestTime },
+		bootID: func() string { return "boot-a" },
+		discoverSelf: func(context.Context) (tailnet.Peer, error) {
+			return tailnet.Peer{Name: "pc.example.ts.net", Addrs: []string{"127.0.0.1"}}, nil
+		},
+		discoverPeers:     func(context.Context) ([]tailnet.Peer, error) { return nil, nil },
 		reconcileInterval: time.Hour,
 	}
 	for restart := 0; restart < 2; restart++ {
@@ -54,6 +57,32 @@ func TestRunRestoresPersistedServicesOnRestart(t *testing.T) {
 		body := waitForHTTPBody(t, url, http.StatusOK)
 		if body != "survived restart" {
 			t.Fatalf("restart %d body = %q", restart, body)
+		}
+		for _, host := range []string{"pc.example.ts.net", "pc", "rebind.attacker.example:7337"} {
+			request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Host = host
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			responseBody, readErr := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			want := http.StatusOK
+			if strings.HasPrefix(host, "rebind.") {
+				want = http.StatusMisdirectedRequest
+			}
+			if response.StatusCode != want {
+				t.Fatalf("restart %d Host %q returned %d, want %d", restart, host, response.StatusCode, want)
+			}
+			if want == http.StatusOK && string(responseBody) != "survived restart" {
+				t.Fatalf("restart %d Host %q body = %q", restart, host, responseBody)
+			}
 		}
 		cancel()
 		if err := waitRuntime(t, done); err != nil {

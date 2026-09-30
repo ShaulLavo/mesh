@@ -180,6 +180,19 @@ start_origin
 grep -Fq 'on the first connection' "$TEST_ROOT/serve.out" || fail "serve did not describe the recipe: $(<"$TEST_ROOT/serve.out")"
 route_in_state /dev stopped || fail "a new route is not stopped: $(serve_row /dev)"
 server_stopped || fail "declaring the route started its command"
+
+# An attacker authority must not activate the recipe, even on an upgrade.
+status=$(curl --noproxy '*' --silent --show-error --max-time 5 --output "$TEST_ROOT/rejected.body" --write-out '%{http_code}' \
+  --header "Host: rebind.attacker.example:$CONTROL_PORT" --header 'Connection: Upgrade' --header 'Upgrade: websocket' \
+  --header 'Sec-WebSocket-Version: 13' --header 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  "http://127.0.0.11:$CONTROL_PORT/dev/ws") || fail "foreign-Host WebSocket request failed"
+[ "$status" = 421 ] || fail "foreign-Host WebSocket answered $status, want 421"
+route_in_state /dev stopped || fail "foreign-Host WebSocket changed the route state: $(serve_row /dev)"
+[ ! -e "$WORK/server.pid" ] || fail "foreign-Host WebSocket started the command"
+"${CLI[@]}" ls >"$TEST_ROOT/rejected-ls.out" 2>&1 || fail "mesh ls after rejected upgrade"
+grep -Fq 'serve /dev' "$TEST_ROOT/rejected-ls.out" && fail "foreign-Host WebSocket created a session"
+# A TCP connection to the local demand listener activates it, unlike the
+# control listener, so probe it only after the refusal's no-start assertions.
 tcp_accepts "$WEB" || fail "listener $WEB is not bound"
 
 # --- The first request starts the session, waits for readiness, succeeds. --
@@ -189,6 +202,11 @@ case $body in
   *) fail "first request got: $body" ;;
 esac
 first_server=$(<"$WORK/server.pid")
+# SSH forwards preserve a localhost authority on the tailnet request.
+forwarded=$(curl --noproxy '*' --silent --show-error --max-time 5 --header 'Host: localhost:12000' \
+  "http://127.0.0.11:$CONTROL_PORT/dev/forward") || fail "port-forward authority failed"
+[[ $forwarded == "FAKE_OK port=$WEB_UP path=/forward"* ]] || fail "port-forward authority got: $forwarded"
+[ "$(<"$WORK/server.pid")" = "$first_server" ] || fail "the forwarded request started a second server"
 "${CLI[@]}" ls >"$TEST_ROOT/ls.out" 2>&1 || fail "mesh ls: $(<"$TEST_ROOT/ls.out")"
 grep -Fq 'serve /dev' "$TEST_ROOT/ls.out" || fail "mesh ls does not show the labelled session: $(<"$TEST_ROOT/ls.out")"
 api=$(curl --noproxy '*' --silent --max-time 5 "http://127.0.0.1:$API/api") || fail "second listener failed"

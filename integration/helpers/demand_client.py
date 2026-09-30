@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Hold one connection to an on-demand route open until killed.
 
-`http PORT READY` makes one keep-alive request and keeps the connection.
-`websocket PORT PATH READY` upgrades and keeps the socket. Either writes the
+`http HOST PORT READY` makes one keep-alive request and keeps the connection.
+`websocket HOST PORT PATH READY` upgrades and keeps the socket. Either writes the
 first response line to READY once the route has answered.
 """
 import base64
@@ -15,14 +15,16 @@ import time
 def main():
     mode, host, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
     connection = socket.create_connection((host, port), timeout=15)
+    authority = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    host_header = b"Host: " + authority.encode("ascii") + b"\r\n"
     if mode == "http":
         ready = sys.argv[4]
-        connection.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        connection.sendall(b"GET / HTTP/1.1\r\n" + host_header + b"\r\n")
     else:
         path, ready = sys.argv[4], sys.argv[5]
         key = base64.b64encode(os.urandom(16))
         connection.sendall(
-            b"GET " + path.encode() + b" HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+            b"GET " + path.encode() + b" HTTP/1.1\r\n" + host_header + b"Upgrade: websocket\r\n"
             + b"Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: " + key + b"\r\n\r\n"
         )
     response = b""

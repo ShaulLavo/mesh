@@ -7,40 +7,59 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// ProxyListener accepts PROXY v1 metadata only from a loopback TCP forwarder.
-// Enable it solely behind Tailscale Serve or a trusted local SNI gateway.
-type ProxyListener struct{ net.Listener }
+// ProxyListener authenticates forwarders because PROXY metadata conveys owner
+// authority. An empty UID allow-list rejects every connection.
+type ProxyListener struct {
+	net.Listener
+	AllowedUIDs []uint32
+	peerUID     peerUIDLookup
+}
+
+type peerUIDLookup interface {
+	PeerUID(net.Conn) (uint32, error)
+}
 
 func (l ProxyListener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}
-	return NewProxyConn(c), nil
+	if l.peerUID == nil {
+		return NewProxyConn(c, l.AllowedUIDs), nil
+	}
+	return &proxyConn{Conn: c, allowedUIDs: l.AllowedUIDs, peerUID: l.peerUID}, nil
 }
 
 type proxyConn struct {
 	net.Conn
-	once   sync.Once
-	reader *bufio.Reader
-	source net.Addr
-	err    error
+	allowedUIDs []uint32
+	peerUID     peerUIDLookup
+	once        sync.Once
+	reader      *bufio.Reader
+	source      net.Addr
+	err         error
 }
 
-// NewProxyConn consumes one mandatory PROXY v1 header before any TLS bytes.
-func NewProxyConn(c net.Conn) net.Conn { return &proxyConn{Conn: c} }
+func NewProxyConn(c net.Conn, allowedUIDs []uint32) net.Conn {
+	return &proxyConn{Conn: c, allowedUIDs: allowedUIDs, peerUID: systemPeerUIDLookup{}}
+}
 
 func (c *proxyConn) initialize() {
 	c.once.Do(func() {
-		peer, err := netip.ParseAddrPort(c.Conn.RemoteAddr().String())
-		if err != nil || !peer.Addr().IsLoopback() {
-			c.err = errors.New("tailnet: PROXY sender must be loopback")
+		defer func() {
+			if c.err != nil {
+				_ = c.Close()
+			}
+		}()
+		if err := c.authenticateForwarder(); err != nil {
+			c.err = err
 			return
 		}
 		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -57,6 +76,24 @@ func (c *proxyConn) initialize() {
 			c.source = net.TCPAddrFromAddrPort(source)
 		}
 	})
+}
+
+func (c *proxyConn) authenticateForwarder() error {
+	peer, err := netip.ParseAddrPort(c.Conn.RemoteAddr().String())
+	if err != nil || !peer.Addr().IsLoopback() {
+		return errors.New("tailnet: PROXY sender must be loopback")
+	}
+	if len(c.allowedUIDs) == 0 {
+		return errors.New("tailnet: no allowed PROXY forwarder UIDs")
+	}
+	uid, err := c.peerUID.PeerUID(c.Conn)
+	if err != nil {
+		return fmt.Errorf("tailnet: authenticate PROXY forwarder %s: %w", peer, err)
+	}
+	if !slices.Contains(c.allowedUIDs, uid) {
+		return fmt.Errorf("tailnet: PROXY forwarder %s UID %d is not allowed", peer, uid)
+	}
+	return nil
 }
 
 func (c *proxyConn) Read(p []byte) (int, error) {
