@@ -108,8 +108,124 @@ def exercise_unattached(binary, root):
             fixture.close()
 
 
+def exercise_peer_shutdown(binary, root, operation):
+    fixture = Fixture(binary, root)
+    close_started = False
+    peer_closed = threading.Event()
+    request_sent = threading.Event()
+    finish_writing = threading.Event()
+    observed = []
+    real_socket = socket.socket
+
+    class ShutdownSocket(real_socket):
+        def sendall(self, data, flags=0):
+            if operation == "send":
+                require(peer_closed.wait(timeout=4), "peer did not close before the request")
+            try:
+                super().sendall(data, flags)
+            except BrokenPipeError as error:
+                observed.append(type(error).__name__)
+                raise
+            request_sent.set()
+
+        def recv(self, length, flags=0):
+            if operation == "recv":
+                require(peer_closed.wait(timeout=4), "peer did not close with the request unread")
+            try:
+                return super().recv(length, flags)
+            except ConnectionResetError as error:
+                observed.append(type(error).__name__)
+                raise
+
+    try:
+        socket_path = fixture.local / "s" / "peer" / "sock"
+        socket_path.parent.mkdir(parents=True)
+        terminal = TeardownReached()
+        daemon = TeardownReached()
+        fixture.terminals.append(terminal)
+        fixture.stop_daemon = daemon.close
+        with real_socket(socket.AF_UNIX) as listener:
+            listener.settimeout(4)
+            listener.bind(str(socket_path))
+            listener.listen()
+
+            def worker():
+                with listener.accept()[0]:
+                    if operation == "recv":
+                        require(request_sent.wait(timeout=4), "client did not send its request")
+                peer_closed.set()
+                require(finish_writing.wait(timeout=4), "test did not release final worker writes")
+                (socket_path.parent / "final-data").write_text("checkpoint complete")
+                listener.close()
+                socket_path.unlink()
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                worker_done = executor.submit(worker)
+                closer = None
+                try:
+                    with patch("terminal_window.socket.socket", ShutdownSocket):
+                        closer = executor.submit(fixture.close)
+                        close_started = True
+                        require(peer_closed.wait(timeout=4), "worker connection remained open")
+                        try:
+                            closer.result(timeout=0.1)
+                        except FutureTimeoutError:
+                            pass
+                        else:
+                            raise RuntimeError("fixture.close returned before final peer writes")
+                        require(terminal.reached.wait(timeout=4), "terminal cleanup was skipped")
+                        require(daemon.reached.wait(timeout=4), "daemon cleanup was skipped")
+                        require(socket_path.exists(), "peer socket disappeared before final writes")
+                finally:
+                    finish_writing.set()
+                    worker_done.result(timeout=4)
+                    if closer is not None:
+                        closer.result(timeout=4)
+                require(not socket_path.exists(), "fixture.close retained the peer socket")
+                require((socket_path.parent / "final-data").read_text() == "checkpoint complete",
+                        "fixture.close preceded the final peer writes")
+        expected = "BrokenPipeError" if operation == "send" else "ConnectionResetError"
+        require(observed == [expected], f"did not exercise {expected}: {observed}")
+        print(f"PASS: {expected} still waits for final writes and cleans terminals and daemon")
+    finally:
+        finish_writing.set()
+        if not close_started:
+            fixture.close()
+
+
 class SetupFailure(RuntimeError):
     pass
+
+
+def exercise_unexpected_exchange(binary, root, operation):
+    fixture = Fixture(binary, root)
+    close_started = False
+    socket_path = fixture.local / "s" / "unexpected" / "sock"
+    try:
+        socket_path.parent.mkdir(parents=True)
+        socket_path.touch()
+        terminal = TeardownReached()
+        daemon = TeardownReached()
+        fixture.terminals.append(terminal)
+        fixture.stop_daemon = daemon.close
+        failure = SetupFailure(f"unexpected {operation} error")
+        with patch("terminal_window.socket.socket") as constructor:
+            connection = constructor.return_value.__enter__.return_value
+            getattr(connection, "sendall" if operation == "send" else "recv").side_effect = failure
+            close_started = True
+            try:
+                fixture.close()
+            except SetupFailure as error:
+                require(error is failure, "teardown replaced the unexpected exchange error")
+            else:
+                raise RuntimeError("teardown swallowed an unexpected exchange error")
+        require(terminal.reached.is_set(), "unexpected error skipped terminal cleanup")
+        require(daemon.reached.is_set(), "unexpected error skipped daemon cleanup")
+        print(f"PASS: unexpected {operation} error propagates after terminal and daemon cleanup")
+    finally:
+        socket_path.unlink(missing_ok=True)
+        if not close_started:
+            fixture.close()
 
 
 def exercise_failed_setup():
@@ -134,6 +250,11 @@ def exercise_failed_setup():
 
 def main():
     exercise_failed_setup()
+    for operation in ("send", "recv"):
+        with tempfile.TemporaryDirectory(prefix="mesh-peer-cleanup-") as root:
+            exercise_peer_shutdown(sys.argv[1], root, operation)
+        with tempfile.TemporaryDirectory(prefix="mesh-error-cleanup-") as root:
+            exercise_unexpected_exchange(sys.argv[1], root, operation)
     with tempfile.TemporaryDirectory(prefix="mesh-fixture-cleanup-") as root:
         exercise(sys.argv[1], root)
     with tempfile.TemporaryDirectory(prefix="mesh-fixture-unattached-") as root:
