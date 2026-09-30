@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -18,20 +19,26 @@ import (
 )
 
 const (
-	PairCookie    = "__Host-mesh-pair"
-	OwnerCookie   = "__Host-mesh-owner"
-	ViewCookie    = "__Host-mesh-view"
-	stateKey      = "browser-auth-v1"
-	pairTTL       = 10 * time.Minute
-	sessionTTL    = 30 * 24 * time.Hour
-	ticketTTL     = time.Minute
-	viewTTL       = 12 * time.Hour
-	maxPairs      = 256
-	maxBrowsers   = 1024
-	maxTickets    = 1024
-	maxViews      = 4096
-	maxOwners     = 64
-	maxStateBytes = 4 << 20
+	PairCookie         = "__Host-mesh-pair"
+	OwnerCookie        = "__Host-mesh-owner"
+	ViewCookie         = "__Host-mesh-view"
+	stateKey           = "browser-auth-v1"
+	pairTTL            = 10 * time.Minute
+	sessionTTL         = 30 * 24 * time.Hour
+	ticketTTL          = time.Minute
+	viewTTL            = 12 * time.Hour
+	maxPairs           = 256
+	maxPendingPairs    = 256
+	maxAggregatePairs  = 16
+	maxAggregateStarts = 32
+	maxSourcePairs     = 4
+	maxSourceStarts    = 8
+	maxPairSources     = 1024
+	maxBrowsers        = 1024
+	maxTickets         = 1024
+	maxViews           = 4096
+	maxOwners          = 64
+	maxStateBytes      = 4 << 20
 )
 
 var (
@@ -67,7 +74,18 @@ type BrowserInfo struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+type PairingInfo struct {
+	UserAgent  string    `json:"userAgent"`
+	SourceIP   string    `json:"sourceIP"`
+	CreatedAt  time.Time `json:"createdAt"`
+	AgeSeconds int64     `json:"ageSeconds"`
+}
+
 type pairRecord struct {
+	PairingInfo
+	Code       string    `json:"-"`
+	Source     string    `json:"source,omitempty"`
+	Aggregate  string    `json:"aggregate,omitempty"`
 	CodeHash   string    `json:"codeHash"`
 	ExpiresAt  time.Time `json:"expiresAt"`
 	ExistingID string    `json:"existingId,omitempty"`
@@ -90,11 +108,18 @@ type state struct {
 	ApprovalWindow   time.Time                `json:"approvalWindow"`
 	ApprovalAttempts int                      `json:"approvalAttempts"`
 }
+type sourceWindow struct {
+	LastUsedAt time.Time
+	StartedAt  time.Time
+	Issued     int
+}
+
 type Service struct {
-	mu    sync.Mutex
-	store StateStore
-	now   func() time.Time
-	state state
+	sources map[string]sourceWindow
+	mu      sync.Mutex
+	store   StateStore
+	now     func() time.Time
+	state   state
 }
 
 func New(store StateStore, now func() time.Time) (*Service, error) {
@@ -120,7 +145,14 @@ func New(store StateStore, now func() time.Time) (*Service, error) {
 	if len(initial.Pairs) > maxPairs || len(initial.Browsers) > maxBrowsers || len(initial.Tickets) > maxTickets || len(initial.Views) > maxViews {
 		return nil, ErrCapacity
 	}
-	return &Service{store: store, now: now, state: initial}, nil
+	// Older releases persisted unapproved pairs. A restart must drop that anonymous occupancy.
+	for key, pair := range initial.Pairs {
+		if pair.Owner == "" {
+			delete(initial.Pairs, key)
+		}
+	}
+	initial.prune(now().UTC())
+	return &Service{store: store, now: now, state: initial, sources: map[string]sourceWindow{}}, nil
 }
 
 func (s *Service) change(ctx context.Context, apply func(*state, time.Time) error) error {
@@ -134,11 +166,20 @@ func (s *Service) change(ctx context.Context, apply func(*state, time.Time) erro
 	if err = json.Unmarshal(raw, &next); err != nil {
 		return err
 	}
+	// Keep the display code in memory without ever serializing it to the store.
+	next.Pairs = maps.Clone(s.state.Pairs)
 	now := s.now().UTC()
 	next.prune(now)
 	operationErr := apply(&next, now)
 	// Rejected approval attempts still consume their durable rate limit.
-	raw, err = json.Marshal(next)
+	durable := next
+	durable.Pairs = maps.Clone(next.Pairs)
+	for key, pair := range durable.Pairs {
+		if pair.Owner == "" {
+			delete(durable.Pairs, key)
+		}
+	}
+	raw, err = json.Marshal(durable)
 	if err != nil {
 		return err
 	}

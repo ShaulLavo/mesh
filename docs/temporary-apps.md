@@ -43,19 +43,40 @@ configured origin. Fresh browsers can view private apps and get the Make public
 or Make private button without pairing. Public visitors get no owner authority.
 This check runs on requests to both private and public apps.
 
-For deployments without automatic Tailnet access, private apps send you to `https://apps.shaulavo.dev`, where the
-browser displays a one-use approval code. Approve on the owner host:
+For deployments without automatic Tailnet access, private apps send you to
+`https://apps.shaulavo.dev`. Click **Start pairing** to get a one-use code; simply
+opening or refreshing the page does not allocate one. Approve on the owner host:
 
 ```sh
 mesh app browser approve pc CODE
 ```
 
+The terminal shows the browser's User-Agent summary, source IP, and pending age,
+then asks `Approve this browser? [y/N]`. Only approve a code you requested in your
+own browser. Browser details are unverified hints, not proof of identity. Empty
+or negative answers cancel. Scripts must explicitly pass `--yes`, which skips
+the human check; agents must never use it for a code the owner did not ask them
+to approve in that session.
+
 Keep the pairing page open. It checks for approval automatically and continues
-as soon as the owner approves. Checks preserve the code until its ten-minute
-expiry. Pairing grants that browser management
-rights for apps owned by `pc`; it grants no rights for another origin's apps.
-The edge issues a separate view-only cookie for the private app. Public visitors
-need no pairing and cannot change ownership or visibility.
+as soon as the owner approves. Refreshes reuse the same pending code until its
+ten-minute expiry or eviction. Pending codes are memory-only and disappear on
+an edge restart; approved grants remain durable. Pairing grants that browser
+management rights for apps owned by `pc`, not another origin's apps. The edge
+issues a separate view-only cookie for the private app. Public visitors need no
+pairing and cannot change ownership or visibility.
+
+Pairing is limited per IPv4 address or IPv6 /64, with an additional IPv6 /48
+aggregate quota. Shared NATs and delegations share these limits. When pending
+capacity is full, new browsers replace an old unapproved code rather than being
+locked out; approved records are never evicted. If your code expires or is
+evicted, start again from the pairing page.
+
+Browser confirmation pages require 750 ms of uninterrupted focus and visibility,
+then a fresh pointer, keyboard, or touch input. Input during the delay does not
+arm the button. One tap after the delay works on phone touch profiles in
+Chromium and WebKit. Making public or deleting also requires entering the app ID;
+the server rejects a missing or incorrect ID even from an older page.
 
 Click the small edge tab to expand the React Grab pill. Drag or flick it to an edge;
 its position survives reloads. The link button copies the app URL and briefly shows

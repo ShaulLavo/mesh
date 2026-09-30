@@ -173,7 +173,7 @@ func (o *Origin) Handle(ctx context.Context, q Request) (Result, error) {
 		return o.create(ctx, q)
 	case "download":
 		return o.download(ctx, q)
-	case "list", "public", "private", "renew", "browser.approve", "browser.list", "browser.revoke":
+	case "list", "public", "private", "renew", "browser.inspect", "browser.approve", "browser.list", "browser.revoke":
 		return o.edge(ctx, q)
 	case "inspect":
 		result, err := o.edge(ctx, q)

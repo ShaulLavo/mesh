@@ -15,6 +15,8 @@ import (
 	"io"
 	"regexp"
 	"time"
+
+	"github.com/shaul/mesh/internal/webauth"
 )
 
 const Domain = "shaulavo.dev"
@@ -70,13 +72,14 @@ type RuntimeInfo struct {
 	Root      string `json:"root,omitempty"`
 }
 type Result struct {
-	Runtime  *RuntimeInfo    `json:"runtime,omitempty"`
-	App      *Record         `json:"app,omitempty"`
-	Apps     []Record        `json:"apps,omitempty"`
-	UploadID string          `json:"uploadId,omitempty"`
-	Data     []byte          `json:"data,omitempty"`
-	Done     bool            `json:"done,omitempty"`
-	Browsers json.RawMessage `json:"browsers,omitempty"`
+	Pairing  *webauth.PairingInfo `json:"pairing,omitempty"`
+	Runtime  *RuntimeInfo         `json:"runtime,omitempty"`
+	App      *Record              `json:"app,omitempty"`
+	Apps     []Record             `json:"apps,omitempty"`
+	UploadID string               `json:"uploadId,omitempty"`
+	Data     []byte               `json:"data,omitempty"`
+	Done     bool                 `json:"done,omitempty"`
+	Browsers json.RawMessage      `json:"browsers,omitempty"`
 }
 
 type StateStore interface {

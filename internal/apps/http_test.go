@@ -15,6 +15,14 @@ import (
 	"github.com/shaul/mesh/internal/webauth"
 )
 
+func pairingStartRequest(destination string) *http.Request {
+	form := url.Values{"return": {destination}}
+	r := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/pair", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("Origin", ManagementOrigin)
+	return r
+}
+
 func cookieNamed(t *testing.T, response *httptest.ResponseRecorder, name string) *http.Cookie {
 	t.Helper()
 	for _, cookie := range response.Result().Cookies() {
@@ -28,7 +36,7 @@ func cookieNamed(t *testing.T, response *httptest.ResponseRecorder, name string)
 func pairedOwner(t *testing.T, f *appFixture) *http.Cookie {
 	t.Helper()
 	begin := httptest.NewRecorder()
-	f.edge.ServeHost(begin, httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair", nil), ManagementHost)
+	f.edge.ServeHost(begin, pairingStartRequest("/"), ManagementHost)
 	matched := regexp.MustCompile(`Code: <strong>([a-z0-9-]+)</strong>`).FindStringSubmatch(begin.Body.String())
 	if len(matched) != 2 {
 		t.Fatalf("missing reachable approval code: %s", begin.Body.String())
@@ -53,7 +61,7 @@ func pairedOwner(t *testing.T, f *appFixture) *http.Cookie {
 func TestPairingPollPreservesCodeAndPromotesAfterApproval(t *testing.T) {
 	f := newAppFixture(t)
 	begin := httptest.NewRecorder()
-	f.edge.ServeHost(begin, httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id=7k3d", nil), ManagementHost)
+	f.edge.ServeHost(begin, pairingStartRequest("/view?id=7k3d"), ManagementHost)
 	matched := regexp.MustCompile(`Code: <strong>([a-z0-9-]+)</strong>`).FindStringSubmatch(begin.Body.String())
 	if len(matched) != 2 {
 		t.Fatal("pairing page is missing its approval code")
@@ -107,7 +115,7 @@ func TestPairingPollPreservesCodeAndPromotesAfterApproval(t *testing.T) {
 func TestPairingPollRejectsExpiredAndUnboundBrowsers(t *testing.T) {
 	f := newAppFixture(t)
 	begin := httptest.NewRecorder()
-	f.edge.ServeHost(begin, httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair", nil), ManagementHost)
+	f.edge.ServeHost(begin, pairingStartRequest("/"), ManagementHost)
 	pair := cookieNamed(t, begin, webauth.PairCookie)
 	f.now = f.now.Add(10 * time.Minute)
 	for _, cookie := range []*http.Cookie{nil, pair} {
@@ -131,7 +139,7 @@ func TestPairingPollRejectsExpiredAndUnboundBrowsers(t *testing.T) {
 func TestPairingAnotherOwnerRequiresItsOwnApproval(t *testing.T) {
 	f := newAppFixture(t)
 	owner := pairedOwner(t, f)
-	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair", nil)
+	request := pairingStartRequest("/")
 	request.AddCookie(owner)
 	begin := httptest.NewRecorder()
 	f.edge.ServeHost(begin, request, ManagementHost)
@@ -294,7 +302,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, origin := range []string{URL(app.ID), "https://other.shaulavo.dev"} {
-		form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}}
+		form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}}
 		forged := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
 		forged.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		forged.Header.Set("Origin", origin)
@@ -305,7 +313,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 			t.Fatalf("sibling-origin mutation status %d", response.Code)
 		}
 	}
-	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}}
+	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}}
 	mutation := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
 	mutation.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	mutation.Header.Set("Origin", ManagementOrigin)
@@ -388,7 +396,7 @@ func TestVisibilityConfirmationPreservesBrowserOriginAndReturn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "return": {destination}}
+	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}, "return": {destination}}
 	post := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
 	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	post.Header.Set("Origin", ManagementOrigin)
