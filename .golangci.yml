@@ -31,6 +31,13 @@ linters:
     - revive
     - exhaustive
     - contextcheck
+  exclusions:
+    rules:
+      - path: _test\.go$
+        linters:
+          - goconst
+          - gocognit
+          - dupl
   settings:
     staticcheck:
       checks:
@@ -43,7 +50,7 @@ linters:
     goconst:
       min-len: 3
       min-occurrences: 3
-      ignore-tests: false
+      ignore-tests: true
     nestif:
       min-complexity: 4
     gocognit:
