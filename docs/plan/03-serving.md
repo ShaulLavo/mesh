@@ -37,6 +37,26 @@ another hostname returns 404 before proxying or starting an on-demand process,
 without falling back to a public parent. Private tailnet Hosts keep the existing
 longest-prefix routing, including requests from the public edge host.
 
+Private service requests share a browser-request policy with private apps.
+An `Origin` different from the request's own origin returns 403 before any
+handler runs, including on-demand startup and mount redirects. Mesh derives
+that origin from the connection's TLS state and Host, not forwarded headers.
+A WebSocket upgrade with `Origin` requires an exact match. Without `Origin`,
+private services admit native WebSocket clients, because browsers send that
+header on upgrades. Browser-facing private apps still require `Origin`, as
+established in PR #7. The shared helper takes an explicit WebSocket-origin
+policy to preserve that difference. Other requests allow
+`Sec-Fetch-Site: same-origin` or `none`, or a top-level document navigation with
+GET or HEAD. Same-site sibling pages, cross-site fetches, frames, and unknown
+Fetch Metadata values cannot borrow tailnet access. Without Fetch Metadata,
+HTTP clients remain usable when `Origin` is absent or matches, for every method.
+Canonical public Hosts retain their existing behavior because the owner
+explicitly published those services.
+
+This policy is not authentication for clients already admitted to the tailnet.
+Headerless HTTP clients and top-level GET navigation remain allowed, so upstream
+applications must keep GET read-only and protect their own mutations.
+
 Certificates work anyway. Let's Encrypt DNS-01 validates by publishing a TXT
 record, never by connecting to the host, so `*.mesh.shaulavo.dev` gets a real
 publicly trusted certificate despite the per-host records pointing at

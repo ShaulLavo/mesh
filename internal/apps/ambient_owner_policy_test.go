@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/shaul/mesh/internal/serve"
 )
 
 func TestAmbientOwnerAllowed(t *testing.T) {
@@ -62,8 +64,8 @@ func TestAmbientOwnerAllowed(t *testing.T) {
 			r.Header.Set("Sec-Fetch-Dest", tc.dest)
 			r.Header.Set("Origin", tc.origin)
 			r.Header.Set("Upgrade", tc.upgrade)
-			if got := ambientOwnerAllowed(r, origin); got != tc.want {
-				t.Fatalf("ambientOwnerAllowed = %v; want %v", got, tc.want)
+			if got := serve.AmbientOwnerAllowed(r, origin, serve.RequireWebSocketOrigin); got != tc.want {
+				t.Fatalf("AmbientOwnerAllowed = %v; want %v", got, tc.want)
 			}
 		})
 	}

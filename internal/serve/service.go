@@ -233,14 +233,19 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	publicRequest := host != "" && validatePublicName(host) == nil
 	requestPath := request.URL.EscapedPath()
 	for _, route := range snapshot.routes {
-		if requestPath == route.prefix || strings.HasPrefix(requestPath, route.prefix+"/") {
-			if publicRequest && (route.publicName == "" || route.publicName != host) {
-				http.NotFound(w, request)
-				return
-			}
-			route.handler.ServeHTTP(w, request)
+		if requestPath != route.prefix && !strings.HasPrefix(requestPath, route.prefix+"/") {
+			continue
+		}
+		if publicRequest && (route.publicName == "" || route.publicName != host) {
+			http.NotFound(w, request)
 			return
 		}
+		if !publicRequest && !AmbientOwnerAllowed(request, privateRequestOrigin(request), AllowOriginlessWebSocket) {
+			http.Error(w, "cross-site request to private service", http.StatusForbidden)
+			return
+		}
+		route.handler.ServeHTTP(w, request)
+		return
 	}
 	http.NotFound(w, request)
 }
