@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -153,5 +154,49 @@ func TestConfirmationStartsInertAndCannotBeFramed(t *testing.T) {
 		if !strings.Contains(response.Body.String(), guard) {
 			t.Fatalf("confirm missing activation guard %s", guard)
 		}
+	}
+}
+
+func TestPublicAndDeleteRequireServerConfirmation(t *testing.T) {
+	for _, action := range []string{"public", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			f := newAppFixture(t)
+			app := createStaticApp(t, f)
+			cookie := pairedOwner(t, f)
+			r := pairingRequest(http.MethodGet, "/", "192.0.2.1", cookie)
+			session, err := f.edge.auth.Browser(context.Background(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, confirmation := range []string{"", "wrong", app.ID} {
+				form := url.Values{"id": {app.ID}, "action": {action}, "csrf": {session.CSRF}, "confirmation": {confirmation}}
+				request := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
+				request.Header.Set("Origin", ManagementOrigin)
+				request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				request.AddCookie(cookie)
+				response := httptest.NewRecorder()
+				f.edge.ServeHost(response, request, ManagementHost)
+				if confirmation != app.ID {
+					if response.Code != http.StatusBadRequest {
+						t.Fatalf("confirmation %q returned %d, want 400", confirmation, response.Code)
+					}
+					unchanged := f.edge.state.Apps[app.ID]
+					if unchanged.Visibility != "private" || unchanged.Status != "active" {
+						t.Fatal("unconfirmed mutation changed app")
+					}
+					continue
+				}
+				if response.Code != http.StatusSeeOther {
+					t.Fatalf("exact confirmation returned %d", response.Code)
+				}
+				changed := f.edge.state.Apps[app.ID]
+				if action == "public" && changed.Visibility != "public" {
+					t.Fatal("public confirmation did not apply")
+				}
+				if action == "delete" && changed.Status == "active" {
+					t.Fatal("delete confirmation did not apply")
+				}
+			}
+		})
 	}
 }

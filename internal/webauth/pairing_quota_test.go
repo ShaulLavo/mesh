@@ -3,6 +3,7 @@ package webauth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -191,23 +192,106 @@ func TestPendingPairSurvivesFailedApprovalWithSafeMetadata(t *testing.T) {
 	}
 }
 
-func TestGlobalPairingBackstopStillReusesPendingBrowser(t *testing.T) {
-	s, _, _ := fixture(t)
-	first, w, err := beginFrom(t, s, "192.0.2.1:1234")
-	if err != nil {
+func TestFreshBrowserPairsThroughDistributedFlood(t *testing.T) {
+	for _, ipv6 := range []bool{false, true} {
+		t.Run(fmt.Sprintf("IPv6=%t", ipv6), func(t *testing.T) {
+			s, _, now := fixture(t)
+			for source := range 64 {
+				address := fmt.Sprintf("198.51.100.%d:1234", source+1)
+				if ipv6 {
+					address = fmt.Sprintf("[2001:db8:ffff:%x::1]:1234", source)
+				}
+				for range 4 {
+					_, _, err := beginFrom(t, s, address)
+					if err != nil && !errors.Is(err, ErrRateLimited) {
+						t.Fatal(err)
+					}
+					*now = now.Add(time.Millisecond)
+				}
+			}
+			if _, _, err := beginFrom(t, s, "203.0.113.1:1234"); err != nil {
+				t.Fatalf("fresh owner browser blocked by distributed flood: %v", err)
+			}
+		})
+	}
+}
+
+func TestGlobalPairingEvictsOldestPairOfFullestSource(t *testing.T) {
+	s, _, now := fixture(t)
+	var first Pairing
+	for source := range 64 {
+		for slot := range 4 {
+			p, _, err := beginFrom(t, s, fmt.Sprintf("198.51.100.%d:1234", source+1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if source == 0 && slot == 0 {
+				first = p
+			}
+			*now = now.Add(time.Millisecond)
+		}
+	}
+	if _, _, err := beginFrom(t, s, "203.0.113.1:1234"); err != nil {
 		t.Fatal(err)
 	}
-	for i := 1; i < maxPairs; i++ {
-		ip := netip.AddrFrom4([4]byte{198, 51, byte(i / 256), byte(i % 256)})
-		if _, err := s.Begin(context.Background(), httptest.NewRecorder(), request(), ip); err != nil {
+	if _, _, exists := findPair(&s.state, codeHash(first.Code)); exists {
+		t.Fatal("oldest pending pair of the fullest source was not evicted")
+	}
+	if len(s.state.Pairs) != maxPairs {
+		t.Fatal("pending table is not bounded")
+	}
+}
+
+func TestIPv6DelegationHasAggregateQuotas(t *testing.T) {
+	s, _, _ := fixture(t)
+	for source := range 32 {
+		if _, _, err := beginFrom(t, s, fmt.Sprintf("[2001:db8:ffff:%x::1]:1234", source)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := beginFrom(t, s, "203.0.113.1:1234"); !errors.Is(err, ErrCapacity) {
-		t.Fatalf("global backstop not enforced: %v", err)
+	if len(s.state.Pairs) != 16 {
+		t.Fatalf("one /48 occupies %d pairs, want 16", len(s.state.Pairs))
 	}
-	reused, _, err := beginFrom(t, s, "192.0.2.1:1234", namedCookie(t, w, PairCookie))
-	if err != nil || reused.Code != first.Code {
-		t.Fatalf("global backstop blocked existing browser: %v", err)
+	if _, _, err := beginFrom(t, s, "[2001:db8:ffff:100::1]:1234"); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("one /48 has no aggregate issuance limit: %v", err)
+	}
+	if _, _, err := beginFrom(t, s, "[2001:db8:fffe::1]:1234"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFullSourceTrackerEvictsLeastRecentWindow(t *testing.T) {
+	s, _, now := fixture(t)
+	for source := range maxPairSources {
+		s.sources[fmt.Sprintf("tracker-%04d", source)] = sourceWindow{StartedAt: now.Add(time.Duration(source) * time.Millisecond)}
+	}
+	*now = now.Add(2 * time.Second)
+	if _, _, err := beginFrom(t, s, "203.0.113.1:1234"); err != nil {
+		t.Fatalf("full tracker blocks owner: %v", err)
+	}
+	if len(s.sources) != maxPairSources {
+		t.Fatal("source tracker grew beyond its bound")
+	}
+	if _, exists := s.sources["tracker-0000"]; exists {
+		t.Fatal("least recent source was not evicted")
+	}
+}
+
+func TestApprovedPairsDoNotConsumePendingCapacity(t *testing.T) {
+	s, _, now := fixture(t)
+	for i := range maxPairs {
+		s.state.Pairs[fmt.Sprint(i)] = pairRecord{Owner: "owner-a", ExpiresAt: now.Add(pairTTL)}
+	}
+	if _, _, err := beginFrom(t, s, "203.0.113.1:1234"); err != nil {
+		t.Fatalf("approved records blocked fresh pending browser: %v", err)
+	}
+	approved := 0
+	for _, p := range s.state.Pairs {
+		if p.Owner != "" {
+			approved++
+		}
+	}
+	if approved != maxPairs {
+		t.Fatal("approved pairing was evicted")
 	}
 }
