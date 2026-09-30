@@ -202,13 +202,14 @@ func transform(reader io.Reader, writer io.Writer, script, appHost, manager, non
 	tokenizer := html.NewTokenizer(reader)
 	tokenizer.SetMaxBuf(maximumHTMLToken)
 	injected := false
+	safeInsertion := true
 	for {
 		kind := tokenizer.Next()
 		if kind == html.ErrorToken {
 			if injected {
 				script = ""
 			}
-			return finishHTML(reader, writer, tokenizer, script)
+			return finishHTML(reader, writer, tokenizer, script, safeInsertion)
 		}
 		raw := append([]byte(nil), tokenizer.Raw()...)
 		var name string
@@ -221,7 +222,8 @@ func transform(reader io.Reader, writer io.Writer, script, appHost, manager, non
 			}
 		case html.ErrorToken, html.TextToken, html.CommentToken, html.DoctypeToken:
 		}
-		if !injected && name == "body" {
+		safeInsertion = safeHTMLInsertion(kind, name)
+		if !injected && pastHTMLHead(kind, name) {
 			if _, err := io.WriteString(writer, script); err != nil {
 				return err
 			}
@@ -243,11 +245,19 @@ func transform(reader io.Reader, writer io.Writer, script, appHost, manager, non
 }
 
 func pastHTMLHead(kind html.TokenType, name string) bool {
-	return name == "body" || kind == html.EndTagToken && name == "head"
+	return kind == html.StartTagToken && name == "body"
 }
 
-func finishHTML(reader io.Reader, writer io.Writer, tokenizer *html.Tokenizer, script string) error {
+func safeHTMLInsertion(kind html.TokenType, name string) bool {
+	return kind == html.DoctypeToken || kind == html.CommentToken || kind == html.StartTagToken && name == "html"
+}
+
+func finishHTML(reader io.Reader, writer io.Writer, tokenizer *html.Tokenizer, script string, safeInsertion bool) error {
 	if errors.Is(tokenizer.Err(), html.ErrBufferExceeded) {
+		// A partial text token may already be inside a script, style, or comment.
+		if !safeInsertion || len(tokenizer.Raw()) == 0 {
+			script = ""
+		}
 		return copyHTML(reader, writer, []byte(script), tokenizer.Raw(), tokenizer.Buffered())
 	}
 	if err := tokenizer.Err(); !errors.Is(err, io.EOF) {
