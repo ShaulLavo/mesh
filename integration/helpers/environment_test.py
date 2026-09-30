@@ -205,6 +205,22 @@ class VerifierEnvironmentTest(unittest.TestCase):
         for name in ("MESH_AGENT_NATIVE", "MESH_SESSION_ID"):
             self.assertNotIn(name, test)
 
+    def test_working_caller_user_bus_reaches_scope_script(self):
+        selected = {"XDG_RUNTIME_DIR": "/fixture-runtime", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/fixture-runtime/bus"}
+        self.caller.update(selected)
+        busctl = self.tools / "busctl"
+        busctl.write_text(
+            "#!/bin/sh\n"
+            '[ "$XDG_RUNTIME_DIR" = /fixture-runtime ] &&\n'
+            '[ "$DBUS_SESSION_BUS_ADDRESS" = unix:path=/fixture-runtime/bus ]\n'
+        )
+        busctl.chmod(0o700)
+        self.probe.write_text("busctl --user status || exit 9\n" + self.probe.read_text())
+        self.probe.rename(self.root / "integration" / "session_scope.sh")
+        _, test = self.captured_environments()
+        for name, value in selected.items():
+            self.assertEqual(test.get(name), value, name)
+
     def test_scope_cannot_skip_a_working_caller_user_bus(self):
         busctl = self.tools / "busctl"
         busctl.write_text(
