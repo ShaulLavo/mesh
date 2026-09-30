@@ -47,8 +47,15 @@ for name in XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS; do
 done
 build_env=("${test_env[@]}")
 # Module downloads need the caller's network policy; loopback fixtures do not.
-for name in HTTPS_PROXY HTTP_PROXY NO_PROXY ALL_PROXY https_proxy http_proxy no_proxy all_proxy \
-  GOPROXY GONOPROXY GONOSUMDB GOSUMDB GOPRIVATE GOFLAGS; do
+for name in GOPROXY GONOSUMDB GONOPROXY GOPRIVATE GOFLAGS GOINSECURE GOSUMDB; do
+  value=$(cd "$repo_root" && go env "$name") || exit 1
+  # An exported empty value is still an explicit caller override.
+  if [[ ${!name+x} ]]; then
+    value=${!name}
+  fi
+  build_env+=("$name=$value")
+done
+for name in HTTPS_PROXY HTTP_PROXY NO_PROXY ALL_PROXY https_proxy http_proxy no_proxy all_proxy; do
   if [[ ${!name+x} ]]; then
     build_env+=("$name=${!name}")
   fi
