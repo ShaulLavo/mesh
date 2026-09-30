@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -14,7 +13,7 @@ const sampleFile = "sample.go"
 const sampleSource = "func sample() {}"
 
 func sampleKey() findingKey {
-	return findingKey{Gate: "golangci", File: sampleFile, Rule: "dupl", Text: "duplicated with sample.go:<location>", Source: sampleSource}
+	return findingKey{Gate: "golangci", File: sampleFile, Rule: "dupl", Text: "duplicated with sample.go:<location>", Function: "sample"}
 }
 
 func sampleEntry(count int) entry {
@@ -48,9 +47,14 @@ func fixture(t *testing.T) options {
 
 func issueReport(t *testing.T, o options, file, text string, line, count int) {
 	t.Helper()
+	ruleIssueReport(t, o, "dupl", file, text, line, count)
+}
+
+func ruleIssueReport(t *testing.T, o options, rule, file, text string, line, count int) {
+	t.Helper()
 	issues := make([]any, count)
 	for i := range issues {
-		issues[i] = map[string]any{"Pos": map[string]any{"Filename": file, "Line": line}, "FromLinter": "dupl", "Text": text}
+		issues[i] = map[string]any{"Pos": map[string]any{"Filename": file, "Line": line}, "FromLinter": rule, "Text": text}
 	}
 	data, err := json.Marshal(map[string]any{"Issues": issues})
 	if err != nil {
@@ -183,11 +187,11 @@ func TestChangedSourceIsNewFinding(t *testing.T) {
 
 func TestInvalidBaselines(t *testing.T) {
 	for name, content := range map[string]string{
-		"reason":    `{"version":1,"entries":[{"gate":"golangci","file":"sample.go","rule":"dupl","text":"clone","count":1,"reason":" "}]}`,
-		"count":     `{"version":1,"entries":[{"gate":"golangci","file":"sample.go","rule":"dupl","text":"clone","count":0,"reason":"existing"}]}`,
-		"line key":  `{"version":1,"entries":[{"gate":"golangci","file":"sample.go","rule":"dupl","text":"clone sample.go:3","count":1,"reason":"existing"}]}`,
-		"version":   `{"version":2,"entries":[]}`,
-		"duplicate": `{"version":1,"entries":[{"gate":"ruff","file":"sample.py","rule":"F401","text":"unused","count":1,"reason":"existing"},{"gate":"ruff","file":"sample.py","rule":"F401","text":"unused","count":1,"reason":"existing"}]}`,
+		"reason":    `{"version":2,"entries":[{"gate":"golangci","file":"sample.go","rule":"dupl","text":"clone","count":1,"reason":" "}]}`,
+		"count":     `{"version":2,"entries":[{"gate":"golangci","file":"sample.go","rule":"dupl","text":"clone","count":0,"reason":"existing"}]}`,
+		"line key":  `{"version":2,"entries":[{"gate":"golangci","file":"sample.go","rule":"dupl","text":"clone sample.go:3","count":1,"reason":"existing"}]}`,
+		"version":   `{"version":3,"entries":[]}`,
+		"duplicate": `{"version":2,"entries":[{"gate":"ruff","file":"sample.py","rule":"F401","text":"unused","count":1,"reason":"existing"},{"gate":"ruff","file":"sample.py","rule":"F401","text":"unused","count":1,"reason":"existing"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			o := fixture(t)
@@ -240,9 +244,5 @@ func TestOtherToolReports(t *testing.T) {
 	if err != nil || len(actual) != 3 {
 		t.Fatalf("tool reports = %v, %v", actual, err)
 	}
-	for key := range actual {
-		if key.Gate != "deadcode" && strings.TrimSpace(key.Source) == "" {
-			t.Fatal("tool finding has no source key")
-		}
-	}
+
 }
