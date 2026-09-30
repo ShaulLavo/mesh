@@ -117,6 +117,10 @@ func TestRegistryBrowserRequests(t *testing.T) {
 				{name: "legacy foreign GET", method: "GET", origin: "https://attacker.example"},
 				{name: "foreign OPTIONS", method: "OPTIONS", origin: "https://attacker.example"},
 				{name: "null Origin", method: "DELETE", origin: "null"},
+				{name: "same-origin no-referrer form", method: "POST", site: "same-origin", mode: "navigate", dest: "document", origin: "null", allow: true},
+				{name: "cross-site null Origin", method: "POST", site: "cross-site", mode: "navigate", dest: "document", origin: "null"},
+				{name: "same-site null Origin", method: "POST", site: "same-site", mode: "navigate", dest: "document", origin: "null"},
+				{name: "null Origin without fetch metadata", method: "POST", origin: "null"},
 				{name: "conflicting same-origin metadata", method: "POST", site: "same-origin", origin: "https://attacker.example"},
 				{name: "conflicting navigation metadata", method: "GET", site: "cross-site", mode: "navigate", dest: "document", origin: "https://attacker.example"},
 				{name: "wrong scheme despite forwarded headers", method: "POST", origin: wrongScheme},
@@ -220,7 +224,7 @@ func TestRegistryWebSocketOrigins(t *testing.T) {
 			}
 			front := httptest.NewTLSServer(registry)
 			defer front.Close()
-			for _, origin := range []string{"https://" + host, "https://sibling.shaulavo.dev", "https://attacker.example", ""} {
+			for _, origin := range []string{"https://" + host, "https://sibling.shaulavo.dev", "https://attacker.example", "null", ""} {
 				name := origin
 				if name == "" {
 					name = "headerless client"

@@ -50,6 +50,11 @@ func TestAmbientOwnerAllowed(t *testing.T) {
 		{name: "legacy foreign POST", method: "POST", origin: "https://attacker.example"},
 		{name: "legacy sibling PUT", method: "PUT", origin: "https://zzzz.shaulavo.dev"},
 		{name: "legacy null origin", method: "DELETE", origin: "null"},
+		{name: "same-origin no-referrer form", method: "POST", site: "same-origin", mode: "navigate", dest: "document", origin: "null", want: true},
+		{name: "cross-site null origin", method: "POST", site: "cross-site", mode: "navigate", dest: "document", origin: "null"},
+		{name: "same-site null origin", method: "POST", site: "same-site", mode: "navigate", dest: "document", origin: "null"},
+		{name: "null origin without fetch metadata", method: "POST", origin: "null"},
+		{name: "same-origin null websocket", method: "GET", site: "same-origin", origin: "null", upgrade: "websocket"},
 		{name: "legacy origin prefix", method: "PATCH", origin: origin + ".attacker.example"},
 		{name: "same-origin websocket", method: "GET", site: "same-origin", origin: origin, upgrade: "websocket", want: true},
 		{name: "legacy same-origin websocket", method: "GET", origin: origin, upgrade: "WebSocket", want: true},
@@ -105,6 +110,7 @@ func TestPrivateAppAllowsIntentionalOwnerRequests(t *testing.T) {
 			for _, tc := range []struct{ name, method, site, mode, dest, origin string }{
 				{"same-origin fetch", "GET", "same-origin", "cors", "empty", URL(app.ID)},
 				{"same-origin POST", "POST", "same-origin", "cors", "empty", URL(app.ID)},
+				{"same-origin no-referrer form", "POST", "same-origin", "navigate", "document", "null"},
 				{"cross-site top-level", "GET", "cross-site", "navigate", "document", ""},
 				{"same-site top-level", "HEAD", "same-site", "navigate", "document", ""},
 				{"direct navigation", "GET", "none", "navigate", "document", ""},
@@ -179,7 +185,7 @@ func TestPrivateAppWebSocketRequiresOwnOrigin(t *testing.T) {
 				f.edge.ServeHost(w, r, app.ID+"."+Domain)
 			}))
 			defer front.Close()
-			for _, origin := range []string{URL(app.ID), "https://zzzz.shaulavo.dev", "https://attacker.example", ""} {
+			for _, origin := range []string{URL(app.ID), "https://zzzz.shaulavo.dev", "https://attacker.example", "null", ""} {
 				r := httptest.NewRequest(http.MethodGet, URL(app.ID)+"/socket", nil)
 				authenticate(r)
 				r.Header.Set("Origin", origin)
