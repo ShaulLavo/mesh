@@ -298,7 +298,7 @@ func TestPrivateRequestHostRejectsMalformedAuthorities(t *testing.T) {
 		strings.Repeat("a", 64) + ".pc.mesh.shaulavo.dev", "pc.mesh.shaulavo.dev/path", "pc.mesh.shaulavo.dev#fragment",
 	} {
 		t.Run(authority, func(t *testing.T) {
-			if host, ok := privateRequestHost(authority); ok {
+			if host, ok := meshserve.CanonicalHost(authority); ok {
 				t.Fatalf("malformed authority %q accepted as %q", authority, host)
 			}
 		})
@@ -417,5 +417,67 @@ func TestPrivateHTTPServiceWebSocketHostAllowlist(t *testing.T) {
 				t.Fatalf("service WebSocket Host %q returned %d, dispatched = %t; want %d", test.host, response.Code, dispatched, test.want)
 			}
 		})
+	}
+}
+
+type hostPolicyListener struct {
+	net.Listener
+	address *net.TCPAddr
+}
+
+func (l hostPolicyListener) Addr() net.Addr { return l.address }
+
+func TestServePrivateHTTPUsesListenerAuthorities(t *testing.T) {
+	unixListener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(reserveTCPPort(t, "127.0.0.1")))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = unixListener.Close() })
+	tailnetListener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(reserveTCPPort(t, "127.0.0.1")))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tailnetListener.Close() })
+	// Keep the transport on loopback while distinguishing a bound tailnet
+	// address from a failed discovery bind; loopback Hosts are always aliases.
+	address := *tailnetListener.Addr().(*net.TCPAddr)
+	address.IP = net.ParseIP("100.64.0.1")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- serveBoundListeners(ctx, cancel, listenerConfig{
+			webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: runtimeTestTimeout,
+			httpHosts:   httpHostPolicy{tailnetAddrs: []netip.Addr{netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("100.64.0.2")}},
+			httpHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
+		}, echoOneFrame, unixListener, []net.Listener{hostPolicyListener{Listener: tailnetListener, address: &address}}, nil, nil)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if err := waitRuntime(t, done); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, test := range []struct {
+		host string
+		want int
+	}{
+		{host: "100.64.0.1:12000", want: http.StatusNoContent},
+		{host: "100.64.0.2:12000", want: http.StatusMisdirectedRequest},
+		{host: "localhost:12000", want: http.StatusNoContent},
+	} {
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+tailnetListener.Addr().String()+"/service", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Host = test.host
+		request.Close = true
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != test.want {
+			t.Fatalf("Host %q returned %d, want %d", test.host, response.StatusCode, test.want)
+		}
 	}
 }
