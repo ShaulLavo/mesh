@@ -1,0 +1,67 @@
+name: Recovery cleanup probe
+on:
+  push:
+    branches: [fix/recovery-history-cleanup]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build -o "$RUNNER_TEMP/mesh" ./cmd/mesh
+      - name: Run thirty recovery cleanup trials
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          mkdir -p "$RUNNER_TEMP/recovery-evidence"
+          cat > "$RUNNER_TEMP/recovery-probe.py" <<'PY'
+          import os
+          from pathlib import Path
+          import runpy
+          import subprocess
+          import sys
+          sys.dont_write_bytecode = True
+          original = os.rmdir
+          def diagnostic_rmdir(path, *, dir_fd=None):
+              try:
+                  return original(path, dir_fd=dir_fd)
+              except OSError as error:
+                  if dir_fd is not None:
+                      target = Path(os.readlink(f'/proc/self/fd/{dir_fd}')) / path
+                  else:
+                      target = Path(path)
+                  print(f'CLEANUP ERROR: {error}; path={target}', flush=True)
+                  for entry in target.rglob('*'):
+                      print(f'REMAINING: {entry}', flush=True)
+                      if entry.is_file() and entry.name.endswith('.json'):
+                          print(entry.read_text(), flush=True)
+                  print(subprocess.check_output(['ps', '-eo', 'pid,ppid,stat,args']).decode(), flush=True)
+                  raise
+          os.rmdir = diagnostic_rmdir
+          sys.path.insert(0, str(Path('integration/helpers').resolve()))
+          sys.argv = ['integration/helpers/recovery_history.py', sys.argv[1]]
+          runpy.run_path(sys.argv[0], run_name='__main__')
+          PY
+          failures=0
+          for trial in $(seq 1 30); do
+            log="$RUNNER_TEMP/recovery-evidence/trial-$trial.log"
+            if python3 "$RUNNER_TEMP/recovery-probe.py" "$RUNNER_TEMP/mesh" > "$log" 2>&1; then
+              echo "TRIAL $trial PASS"
+            else
+              failures=$((failures + 1))
+              echo "TRIAL $trial FAIL"
+              cat "$log"
+            fi
+          done
+          echo "RECOVERY CLEANUP FAILURES: $failures/30"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: recovery-cleanup-evidence
+          path: ${{ runner.temp }}/recovery-evidence
