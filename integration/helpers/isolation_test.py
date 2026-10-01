@@ -13,16 +13,16 @@ from types import SimpleNamespace
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
-from isolation import refuse_live_paths
+from isolation import refuse_live_paths, run_process
 from terminal_window import Fixture
 
 
 class EntryPointContractTest(unittest.TestCase):
     def test_every_script_sources_the_prelude_first(self):
         scripts = Path(__file__).resolve().parents[1].glob("*.sh")
-        expected = 'source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"'
+        expected = 'source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1'
         for script in scripts:
             with self.subTest(script=script.name):
                 self.assertEqual(script.read_text().splitlines()[1], expected)
@@ -246,6 +246,20 @@ class ReviewRegressionsTest(unittest.TestCase):
                 self.assertEqual(fixture.environment["TMPDIR"], str(alias))
                 self.assertTrue(Path(fixture.environment["HOME"]).is_relative_to(fixture_root))
                 self.assertEqual(fixture.root, Path(fixture_root))
+
+    def test_cancellation_during_process_start_is_not_lost(self):
+        process = Mock(pid=123456)
+
+        def launch(*_, **__):
+            os.kill(os.getpid(), signal.SIGTERM)
+            return process
+
+        with patch("isolation.subprocess.Popen", side_effect=launch), patch("isolation.os.killpg") as kill_group:
+            with self.assertRaises(SystemExit) as result:
+                run_process(["unused"], {})
+        self.assertEqual(result.exception.code, 128 + signal.SIGTERM)
+        self.assertEqual(kill_group.call_args_list, [call(process.pid, signal.SIGTERM), call(process.pid, signal.SIGKILL)])
+        self.assertEqual(process.wait.call_count, 2)
 
     def test_cancelling_entry_pid_or_group_stops_children_and_cleans_scratch(self):
         helpers = Path(__file__).resolve().parent

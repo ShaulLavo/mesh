@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # `mesh kill` is a completion barrier. When it prints success, the complete
 # process group must already be gone, including a command that ignored SIGHUP.
 set -uo pipefail

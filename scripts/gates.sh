@@ -67,7 +67,7 @@ check_integration_isolation() {
   for entry in integration/*.sh; do
     [[ -f $entry ]] || continue
     first_action=$(sed -n '2p' "$entry")
-    if [[ $first_action != "source \"\$(dirname -- \"\${BASH_SOURCE[0]}\")/helpers/isolate.sh\"" ]]; then
+    if [[ $first_action != "source \"\$(dirname -- \"\${BASH_SOURCE[0]}\")/helpers/isolate.sh\" || exit 1" ]]; then
       printf 'integration isolation: FAIL (%s must source the prelude first)\n' "$entry" >&2
       return 1
     fi

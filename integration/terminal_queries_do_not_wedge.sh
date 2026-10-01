@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # A session program may ask the terminal questions: DSR cursor position, device
 # attributes, DECRQM. The attached client's real terminal answers those; Mesh's
 # shadow emulator must never try to, because nothing reads its replies and the

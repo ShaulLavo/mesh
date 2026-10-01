@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # Reattaching to a full-screen program must repaint its current screen without
 # replaying raw output from the screen that preceded it.
 set -uo pipefail

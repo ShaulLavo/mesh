@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # Real tagged daemons exercise public registration, proxy and direct-TLS
 # listeners, streaming WebSockets, durable offline claims, collision refusal,
 # deletion acknowledgement, and v3 certificates with no private name.

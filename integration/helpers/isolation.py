@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Keep integration processes away from the caller's Mesh installation."""
 
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import pwd
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -45,6 +47,71 @@ def check_environment():
         raise RuntimeError("integration isolation requires explicit MESH_STATE_DIR and MESH_CONFIG_DIR")
 
 
+TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+
+
+@contextmanager
+def termination_cleanup():
+    def stop(signum, _):
+        raise SystemExit(128 + signum)
+
+    previous = {signum: signal.getsignal(signum) for signum in TERMINATION_SIGNALS}
+    try:
+        for signum in previous:
+            signal.signal(signum, stop)
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+def run_process(command, environment):
+    cancelled = None
+
+    def pending(signum, _):
+        nonlocal cancelled
+        cancelled = signum
+
+    def terminate(signum, _):
+        for watched in TERMINATION_SIGNALS:
+            signal.signal(watched, signal.SIG_IGN)
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            pass
+        raise SystemExit(128 + signum)
+
+    process = None
+    previous = {signum: signal.getsignal(signum) for signum in TERMINATION_SIGNALS}
+    try:
+        # Queue cancellation until Popen has returned the PID we must reap.
+        for signum in previous:
+            signal.signal(signum, pending)
+        process = subprocess.Popen(command, env=environment, start_new_session=True)
+        for signum in previous:
+            signal.signal(signum, terminate)
+        if cancelled is not None:
+            terminate(cancelled, None)
+        status = process.wait()
+        return status if status >= 0 else 128 - status
+    except SystemExit:
+        # Wait outside the signal handler so Popen's wait lock has unwound.
+        if process is not None:
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+        raise
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
 def run(bash, script, arguments):
     refuse_live_paths({name: os.environ.get(name) for name in ("MESH_STATE_DIR", "MESH_CONFIG_DIR")})
     refuse_live_paths({name: os.environ.get(name) for name in ("TMPDIR", "TEMP", "TMP", "MESH_SHORT_TMP")}, parents=False)
@@ -81,8 +148,7 @@ def run(bash, script, arguments):
         # The bus is needed to prove scope ownership, but is never a Mesh path.
         if "DBUS_SESSION_BUS_ADDRESS" not in environment and os.environ.get("XDG_RUNTIME_DIR"):
             environment["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + os.path.join(os.environ["XDG_RUNTIME_DIR"], "bus")
-        result = subprocess.run([bash, script, *arguments], env=environment)
-        return result.returncode if result.returncode >= 0 else 128 - result.returncode
+        return run_process([bash, script, *arguments], environment)
 
 
 def main():
@@ -97,4 +163,5 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    with termination_cleanup():
+        sys.exit(main())

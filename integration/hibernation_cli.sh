@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # mesh hibernate, the hibernated row in mesh ls, wake on attach by ID, and
 # mesh gc, against a real daemon, real workers and a fake Claude provider.
 set -euo pipefail
