@@ -71,7 +71,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 	}
 
 	client := conn
-	relay := newClientRelay(client, s.workers)
+	relay := newClientRelay(client, s.workers, s.lifecycle.operationTimeout)
 	stopCancellation := context.AfterFunc(ctx, func() { _ = client.Close() })
 	defer func() {
 		stopCancellation()

@@ -35,29 +35,31 @@ type lifecycleCatalog interface {
 type launchWorker func(worker.LaunchConfig) (worker.Launched, error)
 
 type lifecycleConfig struct {
-	Context        context.Context
-	Catalog        lifecycleCatalog
-	Connector      WorkerConnector
-	Host           storage.Host
-	PrivateName    func() string
-	SessionsDir    string
-	Executable     string
-	Env            []string
-	Launch         launchWorker
-	PublishTimeout time.Duration
+	Context          context.Context
+	Catalog          lifecycleCatalog
+	Connector        WorkerConnector
+	Host             storage.Host
+	PrivateName      func() string
+	SessionsDir      string
+	Executable       string
+	Env              []string
+	Launch           launchWorker
+	PublishTimeout   time.Duration
+	OperationTimeout time.Duration
 }
 
 type lifecycle struct {
-	context        context.Context
-	catalog        lifecycleCatalog
-	connector      WorkerConnector
-	host           storage.Host
-	privateName    func() string
-	sessionsDir    string
-	executable     string
-	env            []string
-	launch         launchWorker
-	publishTimeout time.Duration
+	context          context.Context
+	catalog          lifecycleCatalog
+	connector        WorkerConnector
+	host             storage.Host
+	privateName      func() string
+	sessionsDir      string
+	executable       string
+	env              []string
+	launch           launchWorker
+	publishTimeout   time.Duration
+	operationTimeout time.Duration
 	// observeTerminalSize is a read-only compatibility boundary for workers
 	// whose inspection protocol predates structured terminal styles.
 	observeTerminalSize func(int) (int, int, bool)
@@ -68,7 +70,11 @@ type lifecycle struct {
 	memory memorySampler
 }
 
-const defaultPublishTimeout = 30 * time.Second
+const (
+	defaultPublishTimeout = 30 * time.Second
+	// Kill and hibernate acknowledgements follow the worker's five-second grace.
+	defaultWorkerOperationTimeout = 15 * time.Second
+)
 
 type creationRequest struct {
 	command []string
@@ -85,7 +91,7 @@ type creationRequest struct {
 
 func (r creationRequest) equal(other creationRequest) bool {
 	return slices.Equal(r.command, other.command) && r.cwd == other.cwd && r.cols == other.cols && r.rows == other.rows &&
-		r.label == other.label && slices.Equal(r.env, other.env)
+		r.term == other.term && r.depth == other.depth && r.label == other.label && slices.Equal(r.env, other.env)
 }
 
 type creation struct {
@@ -127,6 +133,12 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 	if cfg.PublishTimeout == 0 {
 		cfg.PublishTimeout = defaultPublishTimeout
 	}
+	if cfg.OperationTimeout < 0 {
+		return nil, fmt.Errorf("daemon: negative worker operation timeout")
+	}
+	if cfg.OperationTimeout == 0 {
+		cfg.OperationTimeout = defaultWorkerOperationTimeout
+	}
 	cfg.Host.Alias = cloneLifecycleString(cfg.Host.Alias)
 	cfg.Host.TailscaleName = cloneLifecycleString(cfg.Host.TailscaleName)
 	return &lifecycle{
@@ -140,6 +152,7 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 		env:                 append([]string(nil), cfg.Env...),
 		launch:              cfg.Launch,
 		publishTimeout:      cfg.PublishTimeout,
+		operationTimeout:    cfg.OperationTimeout,
 		observeTerminalSize: worker.ReadSessionLeaderTerminalSize,
 		creations:           make(map[string]*creation),
 	}, nil
@@ -408,14 +421,20 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 			return protocol.Control{}, fmt.Errorf("daemon: inspect session %s: %w", request.SessionID, err)
 		}
 	}
+	if request.Type == protocol.TypeHibernate && request.HibernateIdleMillis < 0 {
+		return protocol.Control{}, fmt.Errorf("daemon: hibernate session %s: negative idle time", id)
+	}
 	sid, err := protocol.NewSessionID(id)
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: encode session ID %s: %w", id, err)
 	}
+	ctx, cancel := workerOperationContext(ctx, l.context, l.operationTimeout)
+	defer cancel()
 	conn, err := l.connector.ConnectWorker(ctx, sid)
 	if err != nil {
-		return protocol.Control{}, err
+		return protocol.Control{}, workerOperationError(ctx, sid, "connect worker for "+request.Type, err)
 	}
+	defer func() { _ = conn.Close() }()
 	stopCancellation := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopCancellation()
 	forwarded := protocol.Control{
@@ -431,9 +450,6 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		forwarded.PreviewCols = request.PreviewCols
 		forwarded.PreviewRows = request.PreviewRows
 	} else if request.Type == protocol.TypeHibernate {
-		if request.HibernateIdleMillis < 0 {
-			return protocol.Control{}, fmt.Errorf("daemon: hibernate session %s: negative idle time", id)
-		}
 		forwarded.HibernateIdleMillis = request.HibernateIdleMillis
 	}
 	payload, err := forwarded.Encode()
@@ -467,7 +483,7 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		return protocol.Control{}, refused
 	}
 	if err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: forward %s to session %s: %w", request.Type, id, err)
+		return protocol.Control{}, workerOperationError(ctx, sid, "forward "+request.Type, err)
 	}
 	if closeErr != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: close session %s control connection: %w", id, closeErr)
