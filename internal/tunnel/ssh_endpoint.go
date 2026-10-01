@@ -76,8 +76,6 @@ func (e *sshEndpoint) Dial(ctx context.Context) (net.Conn, error) {
 	case opened := <-result:
 		return opened.conn, opened.err
 	case <-ctx.Done():
-		// OpenChannel has no context. Deactivate before closing SSH to unblock it.
-		e.connection.stop()
 		return nil, ctx.Err()
 	}
 }
