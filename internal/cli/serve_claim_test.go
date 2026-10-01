@@ -19,7 +19,7 @@ import (
 
 func setupTunnelCLI(t *testing.T) (HostRecord, ed25519.PrivateKey, string) {
 	t.Helper()
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	t.Setenv("MESH_STATE_DIR", stateDir)
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	_, key, err := identity.LoadOrCreate(stateDir)

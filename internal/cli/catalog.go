@@ -25,10 +25,16 @@ type HostSessions struct {
 type HostQuery func(context.Context, HostRecord) ([]protocol.SessionInfo, error)
 
 // CatalogCache stores the last authoritative catalog for offline display.
+// Implementations must honor context cancellation and permit concurrent calls.
 type CatalogCache interface {
 	Load(context.Context, HostRecord) ([]protocol.SessionInfo, error)
 	Save(context.Context, HostRecord, []protocol.SessionInfo) error
 }
+
+const (
+	catalogCacheWriteTimeout = 200 * time.Millisecond
+	catalogCacheReadTimeout  = 200 * time.Millisecond
+)
 
 type hostQueryResult struct {
 	index    int
@@ -36,9 +42,10 @@ type hostQueryResult struct {
 	err      error
 }
 
-// CollectHostSessions queries all hosts concurrently. It returns cached rows
-// for failures and stops waiting when the shared deadline expires, even if a
-// broken query implementation ignores context cancellation.
+// CollectHostSessions queries all hosts concurrently under a shared deadline,
+// even if a broken query implementation ignores context cancellation. Cache
+// writes fit within that deadline; stale fallback reads get a separate bounded
+// budget so the network deadline cannot prevent offline display.
 func CollectHostSessions(parent context.Context, hosts []HostRecord, timeout time.Duration, query HostQuery, cache CatalogCache) ([]HostSessions, error) {
 	if parent == nil {
 		return nil, errors.New("collect host sessions with nil context")
@@ -70,7 +77,23 @@ func CollectHostSessions(parent context.Context, hosts []HostRecord, timeout tim
 		out[i].Host = host
 		pending[i] = struct{}{}
 	}
-	var saveWG sync.WaitGroup
+	var cacheWG sync.WaitGroup
+	loadCached := func(index int, queryErr error) {
+		out[index].Stale = true
+		out[index].Err = queryErr
+		cacheWG.Add(1)
+		go func() {
+			defer cacheWG.Done()
+			cacheCtx, cacheCancel := context.WithTimeout(parent, catalogCacheReadTimeout)
+			defer cacheCancel()
+			rows, err := cache.Load(cacheCtx, hosts[index])
+			if err != nil {
+				out[index].Err = errors.Join(queryErr, fmt.Errorf("load cache host %s: %w", hosts[index].Alias, err))
+			} else {
+				out[index].Sessions = cloneSessionInfo(rows)
+			}
+		}()
+	}
 	for len(pending) > 0 {
 		select {
 		case result := <-results:
@@ -80,38 +103,30 @@ func CollectHostSessions(parent context.Context, hosts []HostRecord, timeout tim
 			delete(pending, result.index)
 			if result.err == nil {
 				out[result.index].Sessions = cloneSessionInfo(result.sessions)
-				saveWG.Add(1)
+				cacheWG.Add(1)
 				go func(index int, rows []protocol.SessionInfo) {
-					defer saveWG.Done()
-					if err := cache.Save(parent, hosts[index], rows); err != nil {
+					defer cacheWG.Done()
+					cacheCtx, cacheCancel := context.WithTimeout(ctx, catalogCacheWriteTimeout)
+					defer cacheCancel()
+					if err := cache.Save(cacheCtx, hosts[index], rows); err != nil {
 						out[index].CacheErr = fmt.Errorf("cache host %s: %w", hosts[index].Alias, err)
 					}
 				}(result.index, cloneSessionInfo(result.sessions))
 				continue
 			}
-			out[result.index].Stale = true
-			out[result.index].Err = result.err
-			rows, err := cache.Load(parent, hosts[result.index])
-			if err != nil {
-				out[result.index].Err = errors.Join(result.err, fmt.Errorf("load cache: %w", err))
-			} else {
-				out[result.index].Sessions = cloneSessionInfo(rows)
-			}
+			loadCached(result.index, result.err)
 		case <-ctx.Done():
 			for index := range pending {
-				out[index].Stale = true
-				out[index].Err = ctx.Err()
-				rows, err := cache.Load(parent, hosts[index])
-				if err != nil {
-					out[index].Err = errors.Join(ctx.Err(), fmt.Errorf("load cache: %w", err))
-				} else {
-					out[index].Sessions = cloneSessionInfo(rows)
-				}
+				loadCached(index, ctx.Err())
 			}
 			pending = nil
 		}
 	}
-	saveWG.Wait()
+	cacheWG.Wait()
+	cancel()
+	if err := parent.Err(); err != nil {
+		return nil, fmt.Errorf("collect host sessions: %w", err)
+	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Host.Alias < out[j].Host.Alias })
 	return out, nil
 }

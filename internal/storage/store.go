@@ -35,7 +35,17 @@ type Store struct {
 // Open opens databasePath, applies every pending migration, and returns a Store.
 // The caller owns the parent state directory and supplies its path explicitly.
 func Open(ctx context.Context, databasePath string) (*Store, error) {
-	dsn, err := sqliteDSN(databasePath)
+	return open(ctx, databasePath, sqliteBusyTimeout)
+}
+
+// OpenAdvisory skips lock contention instead of delaying authoritative work.
+// The DSN applies the policy to every connection opened by the pool.
+func OpenAdvisory(ctx context.Context, databasePath string) (*Store, error) {
+	return open(ctx, databasePath, "0")
+}
+
+func open(ctx context.Context, databasePath, busyTimeout string) (*Store, error) {
+	dsn, err := sqliteDSN(databasePath, busyTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +289,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func sqliteDSN(databasePath string) (string, error) {
+func sqliteDSN(databasePath, busyTimeout string) (string, error) {
 	if databasePath == "" {
 		return "", fmt.Errorf("storage: empty database path")
 	}
@@ -289,7 +299,7 @@ func sqliteDSN(databasePath string) (string, error) {
 	}
 	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
 	query := u.Query()
-	query.Set("_busy_timeout", sqliteBusyTimeout)
+	query.Set("_busy_timeout", busyTimeout)
 	query.Set("_foreign_keys", "on")
 	query.Set("_journal_mode", "WAL")
 	query.Set("_synchronous", "NORMAL")

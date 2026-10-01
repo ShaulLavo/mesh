@@ -2,9 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
@@ -18,6 +23,9 @@ const catalogDatabaseName = "mesh.db"
 type SQLiteCatalogCache struct {
 	store *storage.Store
 	now   func() time.Time
+
+	openErr     error
+	openErrOnce sync.Once
 }
 
 // OpenCatalogCache opens the metadata database shared with the local daemon.
@@ -26,18 +34,44 @@ func OpenCatalogCache(ctx context.Context) (*SQLiteCatalogCache, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := storage.Open(ctx, filepath.Join(stateDir, catalogDatabaseName))
+	store, err := storage.OpenAdvisory(ctx, filepath.Join(stateDir, catalogDatabaseName))
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("open catalog cache: %w", ctx.Err())
+		}
+		var sqliteErr *sqlite.Error
+		if !errors.As(err, &sqliteErr) || (sqliteErr.Code()&0xff != sqlite3.SQLITE_BUSY && sqliteErr.Code()&0xff != sqlite3.SQLITE_LOCKED) {
+			return nil, fmt.Errorf("open catalog cache: %w", err)
+		}
+		// Another command can own schema setup. Live queries must still run;
+		// defer one diagnostic to the existing cache warning path.
+		return &SQLiteCatalogCache{now: time.Now, openErr: err}, nil
 	}
 	return &SQLiteCatalogCache{store: store, now: time.Now}, nil
 }
 
 // Close closes the cache database.
-func (c *SQLiteCatalogCache) Close() error { return c.store.Close() }
+func (c *SQLiteCatalogCache) Close() error {
+	if c.store == nil {
+		return nil
+	}
+	return c.store.Close()
+}
+
+func (c *SQLiteCatalogCache) unavailable(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("catalog cache: %w", err)
+	}
+	var err error
+	c.openErrOnce.Do(func() { err = c.openErr })
+	return err
+}
 
 // Load returns the last catalog observed for host.
 func (c *SQLiteCatalogCache) Load(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
+	if c.store == nil {
+		return nil, c.unavailable(ctx)
+	}
 	rows, err := c.store.ListHostSessions(ctx, storage.HostID(host.ID))
 	if err != nil {
 		return nil, err
@@ -61,6 +95,9 @@ func (c *SQLiteCatalogCache) Load(ctx context.Context, host HostRecord) ([]proto
 
 // Save replaces the cached active catalog after one authoritative query.
 func (c *SQLiteCatalogCache) Save(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) error {
+	if c.store == nil {
+		return c.unavailable(ctx)
+	}
 	observed := make([]storage.Session, len(rows))
 	for i, row := range rows {
 		if row.HostID != host.ID {
@@ -83,6 +120,14 @@ func (c *SQLiteCatalogCache) Save(ctx context.Context, host HostRecord, rows []p
 
 // LoadAllServices returns the bounded cached service snapshot keyed by host ID.
 func (c *SQLiteCatalogCache) LoadAllServices(ctx context.Context) (map[string][]storage.CachedService, error) {
+	if c.store == nil {
+		// A snapshot failure aborts service discovery before live fan-out.
+		// Leave the warning for a subsequent live result's cache save.
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("load service cache: %w", err)
+		}
+		return nil, nil
+	}
 	rows, err := c.store.ListAllCachedServices(ctx)
 	if err != nil {
 		return nil, err
@@ -98,11 +143,17 @@ func (c *SQLiteCatalogCache) LoadAllServices(ctx context.Context) (map[string][]
 // LoadServices returns only the selected host's cached service snapshot. The
 // picker uses this path on its hot refresh loop instead of scanning all hosts.
 func (c *SQLiteCatalogCache) LoadServices(ctx context.Context, host HostRecord) ([]storage.CachedService, error) {
+	if c.store == nil {
+		return nil, c.unavailable(ctx)
+	}
 	return c.store.ListCachedServices(ctx, storage.HostID(host.ID))
 }
 
 // SaveServices atomically replaces the cached list after a live service.list.
 func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, privateName string, rows []protocol.ServiceInfo) error {
+	if c.store == nil {
+		return c.unavailable(ctx)
+	}
 	now := c.now().UTC()
 	services := make([]storage.CachedService, len(rows))
 	for index, row := range rows {
