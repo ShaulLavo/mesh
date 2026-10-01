@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -35,26 +36,74 @@ func uploadDirs(t *testing.T, f *appFixture) []string {
 func TestStagingLeftByCrashDoesNotOutliveRestartOrBlockRetry(t *testing.T) {
 	f := newAppFixture(t)
 	upload, digest := uploadSource(t, f, sourceFixture(t))
-	// A crash between unpacking and the rename leaves the extracted tree.
-	leftover := filepath.Join(f.root, "uploads", "source-"+upload)
-	if err := os.MkdirAll(leftover, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(leftover, "index.html"), []byte("original page"), 0600); err != nil {
-		t.Fatal(err)
+	// A crash between unpacking and the rename leaves the extracted tree, and
+	// takes its owner's lock with it.
+	for _, leftover := range []string{"staging-crashed", "source-" + upload} {
+		if err := os.MkdirAll(filepath.Join(f.root, "uploads", leftover), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(f.root, "uploads", leftover, "index.html"), []byte("original page"), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	restartAppOrigin(t, f)
-	if dirs := uploadDirs(t, f); len(dirs) != 0 {
-		t.Fatalf("restart kept staging a crashed commit left: %v", dirs)
-	}
-	if err := os.MkdirAll(leftover, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(leftover, "index.html"), []byte("original page"), 0600); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(f.root, "uploads", "staging-crashed")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restart kept staging a crashed commit left: %v", err)
 	}
 	if _, err := f.origin.Handle(context.Background(), Request{Action: "create", Kind: "static", UploadID: upload, Digest: digest}); err != nil {
 		t.Fatalf("leftover staging blocked the retry: %v", err)
+	}
+}
+
+func TestStartupSweepNeverFollowsSymlinkedUploads(t *testing.T) {
+	f := newAppFixture(t)
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "staging-unrelated")
+	if err := os.MkdirAll(victim, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(victim, "keep.txt"), []byte("unrelated"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(f.root, "uploads")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(f.root, "uploads")); err != nil {
+		t.Fatal(err)
+	}
+	restartAppOrigin(t, f)
+	if _, err := os.Stat(filepath.Join(victim, "keep.txt")); err != nil {
+		t.Fatalf("startup sweep followed a symlinked uploads directory: %v", err)
+	}
+}
+
+func TestStartupSweepSparesAnotherOriginsLiveStaging(t *testing.T) {
+	f := newAppFixture(t)
+	upload, digest := uploadSource(t, f, sourceFixture(t))
+	entered, release := make(chan struct{}), make(chan struct{})
+	f.origin.config.Exchange = func(ctx context.Context, s Signed) (Signed, error) {
+		var q Request
+		_ = json.Unmarshal(s.Body, &q)
+		if q.Action == "allocate" {
+			close(entered)
+			<-release
+		}
+		return f.edge.Exchange(ctx, s)
+	}
+	created := make(chan error, 1)
+	go func() {
+		_, err := f.origin.Handle(context.Background(), Request{Action: "create", Kind: "static", UploadID: upload, Digest: digest})
+		created <- err
+	}()
+	<-entered
+	// Another origin, with its own state, starts on the same workload root
+	// while the first is between unpacking and the rename.
+	if _, err := NewOrigin(context.Background(), OriginConfig{Store: newMemoryAppStore(), Key: f.otherKey, EdgeIdentity: identityFor(f.edgeKey), Exchange: f.edge.Exchange, Workers: &fakeWorkers{}, DataRoot: f.root, Now: func() time.Time { return f.now }}); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-created; err != nil {
+		t.Fatalf("another origin's start removed live staging: %v", err)
 	}
 }
 
@@ -265,4 +314,55 @@ func TestAbandonedDownloadIsReleased(t *testing.T) {
 	if _, err := f.origin.Handle(context.Background(), Request{Action: "download", ID: created.App.ID, Offset: int64(len(first.Data))}); err == nil || !strings.Contains(err.Error(), "start it again") {
 		t.Fatalf("resumed an expired download: %v", err)
 	}
+}
+
+// largeApp creates an app whose source archive spans several download chunks.
+func largeApp(t *testing.T, f *appFixture) Record {
+	t.Helper()
+	source := t.TempDir()
+	data := make([]byte, 3*ChunkSize)
+	if _, err := rand.Read(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "index.html"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	upload, digest := uploadSource(t, f, source)
+	created, err := f.origin.Handle(context.Background(), Request{Action: "create", Kind: "static", UploadID: upload, Digest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return *created.App
+}
+
+func TestOverlappingDownloadsBothFinish(t *testing.T) {
+	f := newAppFixture(t)
+	app := largeApp(t, f)
+	read := func(offset int) Result {
+		t.Helper()
+		result, err := f.origin.Handle(context.Background(), Request{Action: "download", ID: app.ID, Offset: int64(offset)})
+		if err != nil {
+			t.Fatalf("chunk at %d: %v", offset, err)
+		}
+		return result
+	}
+	first, second := read(0).Data, read(0).Data
+	for {
+		chunk := read(len(first))
+		first = append(first, chunk.Data...)
+		if chunk.Done {
+			break
+		}
+	}
+	for {
+		chunk := read(len(second))
+		second = append(second, chunk.Data...)
+		if chunk.Done {
+			break
+		}
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("overlapping downloads received different archives")
+	}
+	requireSourceArchive(t, second)
 }
