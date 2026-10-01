@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # Exercise the shipped daemon with stock OpenSSH, including identity selection,
 # listener scope, shutdown, and worker survival.
 set -uo pipefail

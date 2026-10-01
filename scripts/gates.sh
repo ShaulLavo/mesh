@@ -62,6 +62,18 @@ run_report() {
   fi
 }
 
+check_integration_isolation() {
+  local entry first_action
+  for entry in integration/*.sh; do
+    [[ -f $entry ]] || continue
+    first_action=$(sed -n '2p' "$entry")
+    if [[ $first_action != "source \"\$(dirname -- \"\${BASH_SOURCE[0]}\")/helpers/isolate.sh\" || exit 1" ]]; then
+      printf 'integration isolation: FAIL (%s must source the prelude first)\n' "$entry" >&2
+      return 1
+    fi
+  done
+}
+
 export GOOS=linux GOARCH=amd64 CGO_ENABLED=0
 packages=(./... ./.gates)
 shell_files=()
@@ -71,6 +83,7 @@ if (( fast )); then
   # Inspect the index, not unstaged edits, without stashing or modifying the worktree.
   git checkout-index --all --prefix="$scratch/index/"
   cd "$scratch/index"
+  check_integration_isolation
   packages=()
   arguments=(--partial)
   while IFS= read -r -d '' file; do
@@ -105,6 +118,7 @@ if (( fast )); then
     exit 0
   fi
 else
+  check_integration_isolation
   find cmd internal scripts integration .gates -type f -name '*.go' -print0 |
     xargs -0 gofmt -l >"$scratch/unformatted"
   if [[ -s $scratch/unformatted ]]; then
@@ -131,7 +145,7 @@ else
   printf '{"Issues":[]}\n' >"$report_dir/golangci.json"
 fi
 if (( ${#shell_files[@]} )); then
-  run_report shellcheck "$report_dir/shellcheck.json" shellcheck --format=json "${shell_files[@]}"
+  run_report shellcheck "$report_dir/shellcheck.json" shellcheck --source-path=SCRIPTDIR --external-sources --format=json "${shell_files[@]}"
 else
   printf '[]\n' >"$report_dir/shellcheck.json"
 fi
