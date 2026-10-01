@@ -6,10 +6,116 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/shaul/mesh/internal/webauth"
 )
+
+type failingActivityStore struct {
+	*failingEdgeStore
+	attempts atomic.Int64
+}
+
+func (s *failingActivityStore) SaveAppState(ctx context.Context, key string, value []byte) error {
+	if key == "apps.edge" {
+		s.attempts.Add(1)
+	}
+	return s.failingEdgeStore.SaveAppState(ctx, key, value)
+}
+
+func TestFailedActivityFlushKeepsRestartLagBounded(t *testing.T) {
+	for _, surface := range []string{"admission", "stream"} {
+		t.Run(surface, func(t *testing.T) {
+			f := newAppFixture(t)
+			app := publicStaticApp(t, f)
+			activity := func() error {
+				if surface == "stream" {
+					_, _, err := f.edge.activity(context.Background(), app)
+					return err
+				}
+				_, _, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(app.ID), nil), app.ID)
+				if release != nil {
+					release()
+				}
+				return err
+			}
+			f.now = f.now.Add(30 * time.Second)
+			if err := activity(); err != nil {
+				t.Fatal(err)
+			}
+			rt := (*f.edge.runtime.Load())[app.ID]
+			accepted := rt.record.Load().ExpiresAt
+			store := &failingActivityStore{failingEdgeStore: &failingEdgeStore{memoryAppStore: f.edgeStore, fail: true}}
+			f.edge.config.Store = store
+			for n := range 3 {
+				f.now = f.now.Add(time.Minute)
+				if err := activity(); !errors.Is(err, errEdgeSave) {
+					t.Fatalf("failed activity %d returned %v, want storage error", n+1, err)
+				}
+				current := rt.record.Load().ExpiresAt
+				persisted := time.Unix(0, rt.persisted.Load())
+				if lag := current.Sub(persisted); lag > time.Minute {
+					t.Errorf("failed activity %d left runtime %s ahead of durability", n+1, lag)
+				}
+				if current.Before(accepted) {
+					t.Error("failed save discarded previously accepted sub-minute activity")
+				}
+			}
+			if store.attempts.Load() != 3 {
+				t.Fatalf("failed saves attempted %d times, want 3", store.attempts.Load())
+			}
+			restarted := f.openEdge(t)
+			durable, _, err := restarted.lookup(context.Background(), app.ID, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lag := rt.record.Load().ExpiresAt.Sub(durable.ExpiresAt)
+			t.Logf("3 failed %s saves: restart deadline lag=%s", surface, lag)
+			if lag < 0 || lag > time.Minute {
+				t.Errorf("restart lost %s after failed saves, want at most one minute", lag)
+			}
+			store.fail = false
+			f.now = f.now.Add(time.Minute)
+			if err := activity(); err != nil {
+				t.Fatal(err)
+			}
+			if store.attempts.Load() != 4 || !rt.record.Load().ExpiresAt.Equal(f.now.Add(IdleTTL)) {
+				t.Fatal("next activity did not retry and persist the full current deadline")
+			}
+		})
+	}
+}
+
+func TestPendingActivityFlushKeepsRuntimeWithinDurabilitySlack(t *testing.T) {
+	f := newAppFixture(t)
+	app := publicStaticApp(t, f)
+	f.now = f.now.Add(3 * time.Minute)
+	store := &pausedActivityStore{memoryAppStore: f.edgeStore, entered: make(chan struct{}), release: make(chan struct{})}
+	f.edge.config.Store = store
+	done := make(chan error, 1)
+	go func() {
+		_, _, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(app.ID), nil), app.ID)
+		if release != nil {
+			release()
+		}
+		done <- err
+	}()
+	<-store.entered
+	rt := (*f.edge.runtime.Load())[app.ID]
+	lag := rt.record.Load().ExpiresAt.Sub(time.Unix(0, rt.persisted.Load()))
+	if lag > time.Minute {
+		t.Errorf("pending save published activity %s ahead of durability", lag)
+	}
+	close(store.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !rt.record.Load().ExpiresAt.Equal(f.now.Add(IdleTTL)) {
+		t.Fatal("successful save did not publish the full proposed deadline")
+	}
+}
 
 func TestViewCredentialMutationDuringOriginResolution(t *testing.T) {
 	for _, mutation := range []string{"replace", "expire", "revoke"} {
