@@ -644,8 +644,10 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 			return protocol.Control{}, fmt.Errorf("daemon: inspect session %s: %w", request.SessionID, err)
 		}
 	}
-	if request.Type == protocol.TypeHibernate && request.HibernateIdleMillis < 0 {
-		return protocol.Control{}, fmt.Errorf("daemon: hibernate session %s: negative idle time", id)
+	if request.Type == protocol.TypeHibernate {
+		if _, err := worker.HibernateIdleDuration(request.HibernateIdleMillis); err != nil {
+			return protocol.Control{}, fmt.Errorf("daemon: hibernate session %s: %w", id, err)
+		}
 	}
 	sid, err := protocol.NewSessionID(id)
 	if err != nil {
