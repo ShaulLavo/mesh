@@ -12,6 +12,7 @@ import (
 
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/protocol"
+	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/storage"
 )
 
@@ -36,6 +37,8 @@ type stateSubscriber struct {
 type stateBroker struct {
 	projection   chan struct{}
 	dirty        map[storage.SessionID]bool
+	revisions    map[storage.SessionID]uint64
+	revision     uint64
 	activity     chan struct{}
 	stored       map[storage.SessionID]storage.Session
 	memory       map[string]protocol.SessionMemory
@@ -55,7 +58,7 @@ func newStateBroker(limit int, now func() time.Time) *stateBroker {
 	if limit == 0 {
 		limit = DefaultSubscriberLimit
 	}
-	return &stateBroker{projection: make(chan struct{}, 1), dirty: map[storage.SessionID]bool{}, activity: make(chan struct{}, 1), now: now, limit: limit, stored: map[storage.SessionID]storage.Session{}, memory: map[string]protocol.SessionMemory{}, sessions: map[string]protocol.SessionInfo{}, services: map[string]protocol.ServiceInfo{}, observations: map[string]sectionObservation{}, subscribers: map[*stateSubscriber]struct{}{}}
+	return &stateBroker{projection: make(chan struct{}, 1), dirty: map[storage.SessionID]bool{}, revisions: map[storage.SessionID]uint64{}, activity: make(chan struct{}, 1), now: now, limit: limit, stored: map[storage.SessionID]storage.Session{}, memory: map[string]protocol.SessionMemory{}, sessions: map[string]protocol.SessionInfo{}, services: map[string]protocol.ServiceInfo{}, observations: map[string]sectionObservation{}, subscribers: map[*stateSubscriber]struct{}{}}
 }
 func (b *stateBroker) observeSessions(err error) { b.observe(protocol.TopicSessions, err) }
 func (b *stateBroker) observeServices(err error) { b.observe(protocol.TopicServices, err) }
@@ -73,7 +76,14 @@ func (b *stateBroker) sessionsChanged(diff SessionDiff) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.updateObservationLocked(protocol.TopicSessions, sectionObservation{at: b.now()})
+	for _, id := range diff.MetadataChanged {
+		b.markRecognitionLocked(id)
+	}
+	for _, id := range diff.Removed {
+		b.markRecognitionLocked(id)
+	}
 	for _, row := range diff.Added {
+		b.markRecognitionLocked(row.ID)
 		b.sessionLocked("session.added", row)
 	}
 	for _, row := range diff.Changed {
@@ -83,6 +93,7 @@ func (b *stateBroker) sessionsChanged(diff SessionDiff) {
 		delete(b.sessions, string(id))
 		delete(b.stored, id)
 		delete(b.dirty, id)
+		delete(b.revisions, id)
 		delete(b.memory, string(id))
 		b.publishLocked(protocol.TopicSessions, "session/"+string(id), protocol.StateEvent{Kind: "session.removed", Payload: protocol.StatePayload{SessionID: string(id)}})
 	}
@@ -127,17 +138,31 @@ func (b *stateBroker) servicesCommitted(rows []protocol.ServiceInfo, err error) 
 	}
 	b.services = next
 }
-func (b *stateBroker) serviceDemandChanged(name string, demand *protocol.ServiceDemand) {
+func (b *stateBroker) serviceDemandChanged(next protocol.ServiceInfo, retiring bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	row, exists := b.services[name]
-	if !exists || reflect.DeepEqual(row.Demand, demand) {
+	row, exists := b.services[next.Name]
+	if retiring && next.Demand == nil {
+		if exists {
+			delete(b.services, next.Name)
+			b.publishLocked(protocol.TopicServices, "service/"+next.Name, protocol.StateEvent{Kind: "service.removed", Payload: protocol.StatePayload{ServiceName: next.Name}})
+		}
 		return
 	}
-	row = cloneState(row)
-	row.Demand = cloneState(demand)
-	b.services[name] = row
-	b.publishLocked(protocol.TopicServices, "service/"+name, protocol.StateEvent{Kind: "service.changed", Payload: protocol.StatePayload{Service: &row}})
+	if !retiring {
+		if !exists {
+			return
+		}
+		demand := next.Demand
+		next = row
+		next.Demand = demand
+	}
+	if !exists && len(b.services) >= meshserve.MaximumServices || exists && reflect.DeepEqual(row, next) {
+		return
+	}
+	next = cloneState(next)
+	b.services[next.Name] = next
+	b.publishLocked(protocol.TopicServices, "service/"+next.Name, protocol.StateEvent{Kind: "service.changed", Payload: protocol.StatePayload{Service: &next}})
 }
 func (b *stateBroker) metricsChanged(metrics hostmetrics.Snapshot) {
 	b.mu.Lock()
@@ -372,6 +397,11 @@ func (b *stateBroker) updateObservationLocked(topic string, next sectionObservat
 }
 
 func (b *stateBroker) markProjectionLocked(id storage.SessionID) {
+	if _, exists := b.stored[id]; !exists {
+		return
+	}
+	b.revision++
+	b.revisions[id] = b.revision
 	b.dirty[id] = true
 	select {
 	case b.projection <- struct{}{}:
@@ -388,4 +418,13 @@ func retainRecognition(info *protocol.SessionInfo, previous protocol.SessionInfo
 	info.AgentStatus = previous.AgentStatus
 	info.Hibernated = previous.Hibernated
 	info.Label = previous.Label
+}
+
+func (b *stateBroker) markRecognitionLocked(id storage.SessionID) {
+	b.markProjectionLocked(id)
+	for key, row := range b.sessions {
+		if row.RecoveredFrom == string(id) || row.ReplacementID == string(id) {
+			b.markProjectionLocked(storage.SessionID(key))
+		}
+	}
 }

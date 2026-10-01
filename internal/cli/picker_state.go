@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"fmt"
-	"github.com/shaul/mesh/internal/protocol"
+	"reflect"
 	"sync"
 	"time"
+
+	"github.com/shaul/mesh/internal/protocol"
 )
 
 // pickerState owns the selected remote host's stream across short refresh calls.
@@ -14,6 +16,8 @@ type pickerState struct {
 	serviceHost string
 	services    *PickerServiceCatalog
 	servicesAt  time.Time
+	cache       CatalogCache
+	cacheErr    error
 	ctx         context.Context
 	watcher     *StateWatcher
 	switchMu    sync.Mutex
@@ -28,7 +32,16 @@ type pickerState struct {
 func newPickerState(ctx context.Context, dialControl HostDialer) *pickerState {
 	return &pickerState{ctx: ctx, watcher: NewStateWatcher(dialControl)}
 }
-func (p *pickerState) close() { p.switchMu.Lock(); defer p.switchMu.Unlock(); p.stop() }
+func (p *pickerState) close() {
+	p.switchMu.Lock()
+	defer p.switchMu.Unlock()
+	p.stop()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.host = HostRecord{}
+	p.ready = nil
+	p.view = StateView{}
+}
 func (p *pickerState) stop() {
 	if p.cancel != nil {
 		p.cancel()
@@ -36,13 +49,14 @@ func (p *pickerState) stop() {
 		p.cancel = nil
 	}
 }
-func (p *pickerState) selectHost(host HostRecord) {
+func (p *pickerState) selectHost(host HostRecord) (chan struct{}, chan struct{}) {
 	p.switchMu.Lock()
 	defer p.switchMu.Unlock()
-	if p.cancel != nil && p.host.ID == host.ID && p.host.Endpoint == host.Endpoint {
-		return
+	if p.cancel != nil && p.host.ID == host.ID && p.host.MeshIdentity == host.MeshIdentity && p.host.Endpoint == host.Endpoint {
+		return p.ready, p.done
 	}
 	p.stop()
+	cached, cacheErr := p.loadCache(host)
 	ctx, cancel := context.WithCancel(p.ctx)
 	p.cancel = cancel
 	done := make(chan struct{})
@@ -51,33 +65,72 @@ func (p *pickerState) selectHost(host HostRecord) {
 	var first sync.Once
 	p.mu.Lock()
 	p.host = host
-	p.view = StateView{}
+	p.view = StateView{Sessions: cloneSessionInfo(cached)}
+	p.cacheErr = cacheErr
 	p.ready = ready
 	p.mu.Unlock()
-	go func() {
-		defer close(done)
-		_ = p.watcher.Watch(ctx, host, protocol.StateWatch{Topics: []string{protocol.TopicSessions}}, func(view StateView) {
-			if ctx.Err() != nil {
-				return
-			}
-			p.mu.Lock()
-			p.view = view
-			p.mu.Unlock()
-			first.Do(func() { close(ready) })
-		})
-	}()
+	go p.run(ctx, host, ready, done, cached, cacheErr, &first)
+	return ready, done
+}
+func (p *pickerState) loadCache(host HostRecord) ([]protocol.SessionInfo, error) {
+	if p.cache == nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(p.ctx, catalogCacheReadTimeout)
+	defer cancel()
+	rows, err := p.cache.Load(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("picker cache: %w", err)
+	}
+	return rows, nil
+}
+func (p *pickerState) run(ctx context.Context, host HostRecord, ready, done chan struct{}, cached []protocol.SessionInfo, cacheErr error, first *sync.Once) {
+	defer close(done)
+	_ = p.watcher.Watch(ctx, host, protocol.StateWatch{Topics: []string{protocol.TopicSessions}}, func(view StateView) {
+		if ctx.Err() != nil {
+			return
+		}
+		if !view.initialized && view.Sections[protocol.TopicSessions].ReceivedAt.IsZero() {
+			view.Sessions = cloneSessionInfo(cached)
+		}
+		cached, cacheErr = p.saveCache(ctx, host, view, cached, cacheErr)
+		p.mu.Lock()
+		p.cacheErr = cacheErr
+		p.view = view
+		p.mu.Unlock()
+		first.Do(func() { close(ready) })
+	})
+}
+func (p *pickerState) saveCache(ctx context.Context, host HostRecord, view StateView, cached []protocol.SessionInfo, previousErr error) ([]protocol.SessionInfo, error) {
+	section := view.Sections[protocol.TopicSessions]
+	if p.cache == nil || section.Observation.Failing || !view.initialized && section.ReceivedAt.IsZero() {
+		return cached, previousErr
+	}
+	if reflect.DeepEqual(cached, view.Sessions) && previousErr == nil {
+		return cached, nil
+	}
+	cacheCtx, cancel := context.WithTimeout(ctx, catalogCacheWriteTimeout)
+	defer cancel()
+	if err := p.cache.Save(cacheCtx, host, view.Sessions); err != nil {
+		return cached, fmt.Errorf("picker cache: %w", err)
+	}
+	return cloneSessionInfo(view.Sessions), nil
 }
 func (p *pickerState) read(ctx context.Context, host HostRecord) (HostSessions, error) {
-	p.selectHost(host) //nolint:contextcheck // The stream uses the picker lifetime, not this short refresh.
-	p.mu.Lock()
-	ready := p.ready
-	p.mu.Unlock()
+	ready, done := p.selectHost(host) //nolint:contextcheck // The stream uses the picker lifetime, not this short refresh.
 	select {
 	case <-ctx.Done():
 		return HostSessions{}, fmt.Errorf("picker state: %w", ctx.Err())
 	case <-ready:
+	case <-done:
+		return HostSessions{}, fmt.Errorf("picker state selection changed")
 	}
 	p.mu.Lock()
+	if p.ready != ready {
+		p.mu.Unlock()
+		return HostSessions{}, fmt.Errorf("picker state selection changed")
+	}
+	cacheErr := p.cacheErr
 	view := p.view.Clone()
 	p.mu.Unlock()
 	now := time.Now()
@@ -88,7 +141,7 @@ func (p *pickerState) read(ctx context.Context, host HostRecord) (HostSessions, 
 			rows[i].MemoryBytes = memory.Bytes
 		}
 	}
-	return HostSessions{Host: host, Sessions: rows, Stale: view.Sections[protocol.TopicSessions].Stale(now, view.LastReply)}, nil
+	return HostSessions{Host: host, Sessions: rows, CacheErr: cacheErr, Stale: view.Sections[protocol.TopicSessions].Stale(now, view.LastReply)}, nil
 }
 
 func (a *application) refreshWatchedPickerHost(ctx context.Context, host HostRecord, cache pickerCatalogCache, state *pickerState) (PickerHostSnapshot, error) {

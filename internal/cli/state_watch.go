@@ -13,6 +13,8 @@ import (
 	"github.com/shaul/mesh/internal/transport"
 )
 
+var errStateBuildChanged = errors.New("host build changed during state polling")
+
 // StateWatcher shares admission and capability observations across watched hosts.
 // Dial must be the CLI's DialControl, which uses transport.DialOnce without recovery.
 type StateWatcher struct {
@@ -32,7 +34,7 @@ func (w *StateWatcher) Watch(ctx context.Context, host HostRecord, request proto
 	view := StateView{Sections: map[string]ObservedSection{}}
 	attempt := 0
 	for ctx.Err() == nil {
-		err := w.watchOnce(ctx, host, request, &view, publish)
+		err := w.watchAttempt(ctx, host, request, &view, publish, &attempt)
 		if ctx.Err() != nil {
 			break
 		}
@@ -44,18 +46,30 @@ func (w *StateWatcher) Watch(ctx context.Context, host HostRecord, request proto
 			attempt++
 			continue
 		}
-		if !view.LastReply.IsZero() {
-			for _, topic := range request.Topics {
-				markSectionFailed(&view, topic)
-			}
-			publish(view.Clone())
+		for _, topic := range request.Topics {
+			markSectionFailed(&view, topic)
 		}
+		publish(view.Clone())
 		attempt++
 		if err := waitState(ctx, stateBackoff(attempt)); err != nil {
 			return err
 		}
 	}
 	return fmt.Errorf("state watch ended: %w", ctx.Err())
+}
+func (w *StateWatcher) watchAttempt(ctx context.Context, host HostRecord, request protocol.StateWatch, view *StateView, publish func(StateView), attempt *int) error {
+	publications := 0
+	var initialSeq uint64
+	return w.watchOnce(ctx, host, request, view, func(next StateView) {
+		if publications > 0 && !next.LastReply.IsZero() && (!next.initialized || next.Seq > initialSeq) {
+			*attempt = 0
+		}
+		if publications == 0 {
+			initialSeq = next.Seq
+		}
+		publications++
+		publish(next)
+	})
 }
 func stateBackoff(attempt int) time.Duration {
 	return time.Duration(min(60, 5<<min(max(attempt-1, 0), 4))) * time.Second
@@ -101,7 +115,7 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 	unsupported := w.unsupported[key] == string(build)
 	w.mu.Unlock()
 	if unsupported {
-		return w.poll(ctx, host, info, conn, request, view, publish)
+		return w.poll(ctx, host, info, request, view, publish)
 	}
 	id, err := newDaemonRequestID()
 	if err != nil {
@@ -120,7 +134,7 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 		w.mu.Lock()
 		w.unsupported[key] = string(build)
 		w.mu.Unlock()
-		return w.poll(ctx, host, info, conn, request, view, publish)
+		return w.poll(ctx, host, info, request, view, publish)
 	}
 	if response.Type == protocol.TypeError {
 		return daemonResponseError("state watch", response.Message)
@@ -202,7 +216,7 @@ type pollSection struct {
 	build       string
 }
 
-func (w *StateWatcher) poll(ctx context.Context, host HostRecord, info protocol.HostInfo, conn transport.Conn, request protocol.StateWatch, view *StateView, publish func(StateView)) error {
+func (w *StateWatcher) poll(ctx context.Context, host HostRecord, info protocol.HostInfo, request protocol.StateWatch, view *StateView, publish func(StateView)) error {
 	sections := make([]pollSection, len(request.Topics))
 	for i, topic := range request.Topics {
 		build, _ := json.Marshal(info.Build)
@@ -211,7 +225,7 @@ func (w *StateWatcher) poll(ctx context.Context, host HostRecord, info protocol.
 	for ctx.Err() == nil {
 		next := time.Now().Add(time.Minute)
 		for i := range sections {
-			due, err := w.pollDue(ctx, host, conn, request, &sections[i], view, publish)
+			due, err := w.pollDue(ctx, host, request, &sections[i], view, publish)
 			if err != nil {
 				return err
 			}
@@ -229,7 +243,7 @@ func minTime(a, b time.Time) time.Time {
 	}
 	return a
 }
-func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, conn transport.Conn, section *pollSection, view *StateView) error {
+func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, section *pollSection, view *StateView) error {
 	readCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 	if err := w.acquire(readCtx); err != nil {
@@ -241,6 +255,15 @@ func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, conn tr
 		return err
 	}
 	kind := pollControl(section.topic)
+	conn, info, err := openVerifiedHostInfo(readCtx, host, w.dial)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	build, _ := json.Marshal(info.Build)
+	if section.build != string(build) {
+		return errStateBuildChanged
+	}
 	w.mu.Lock()
 	unsupported := w.unsupported[section.capability] == section.build
 	w.mu.Unlock()
@@ -254,6 +277,7 @@ func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, conn tr
 		return err
 	}
 	received := time.Now()
+	view.LastReply = received
 	if explicitUnknownControl(response, kind) {
 		w.mu.Lock()
 		w.unsupported[section.capability] = section.build
@@ -273,6 +297,9 @@ func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, conn tr
 	return nil
 }
 func markSectionFailed(view *StateView, topic string) {
+	if view.Sections == nil {
+		view.Sections = map[string]ObservedSection{}
+	}
 	observation := view.Sections[topic]
 	observation.Observation.Failing = true
 	view.Sections[topic] = observation
@@ -311,23 +338,23 @@ func applyPolledSection(host HostRecord, topic string, response protocol.Control
 	return nil
 }
 
-func (w *StateWatcher) pollDue(ctx context.Context, host HostRecord, conn transport.Conn, request protocol.StateWatch, section *pollSection, view *StateView, publish func(StateView)) (time.Time, error) {
-	if section.unsupported {
-		return time.Now().Add(time.Minute), nil
-	}
+func (w *StateWatcher) pollDue(ctx context.Context, host HostRecord, request protocol.StateWatch, section *pollSection, view *StateView, publish func(StateView)) (time.Time, error) {
 	if time.Now().Before(section.due) {
 		return section.due, nil
 	}
-	if err := w.pollSection(ctx, host, conn, section, view); err != nil {
-		return time.Time{}, err
+	if err := w.pollSection(ctx, host, section, view); err != nil {
+		if ctx.Err() != nil || errors.Is(err, errStateBuildChanged) {
+			return time.Time{}, err
+		}
+		section.failures++
+		markSectionFailed(view, section.topic)
 	}
-	view.LastReply = time.Now()
 	if err := ctx.Err(); err != nil {
 		return time.Time{}, fmt.Errorf("publish state poll: %w", err)
 	}
 	publish(view.Clone())
 	interval := 10 * time.Second
-	if section.topic == protocol.TopicMetrics {
+	if section.topic == protocol.TopicMetrics && !section.unsupported {
 		interval = request.MetricsEvery()
 	}
 	if section.failures > 0 {

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import json
+import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from failed_fixture import owned_processes, retain_evidence, stop_owned
 
@@ -32,6 +35,75 @@ class FailedFixtureTest(unittest.TestCase):
                     parent.kill()
                     parent.wait(timeout=2)
                 stop_owned(root, sys.executable, captured)
+                parent.stdout.close()
+
+    def test_ownership_read_rechecks_the_seed_process_start(self):
+        with tempfile.TemporaryDirectory(prefix="mesh-failed-fixture-") as directory:
+            root = Path(directory)
+            parent = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=root)
+            read_text = Path.read_text
+            reads = 0
+            try:
+                parent_stat = Path(f"/proc/{parent.pid}/stat")
+
+                def kernel_read(path, *args, **kwargs):
+                    nonlocal reads
+                    data = read_text(path, *args, **kwargs)
+                    if path != parent_stat:
+                        return data
+                    reads += 1
+                    if reads > 1:
+                        prefix, suffix = data.rsplit(")", 1)
+                        fields = suffix.split()
+                        fields[19] = str(int(fields[19]) + 1)
+                        return prefix + ") " + " ".join(fields)
+                    return data
+
+                with patch.object(Path, "read_text", kernel_read):
+                    captured = owned_processes(root, sys.executable)
+                self.assertNotIn(parent.pid, captured)
+            finally:
+                parent.terminate()
+                parent.wait(timeout=2)
+
+    def test_reused_parent_snapshot_cannot_adopt_a_foreign_child(self):
+        with tempfile.TemporaryDirectory(prefix="mesh-failed-fixture-") as directory:
+            root = Path(directory)
+            program = "import subprocess,sys,time; child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],cwd='/',stdout=subprocess.DEVNULL); print(child.pid,flush=True); time.sleep(60)"
+            parent = subprocess.Popen([sys.executable, "-c", program], cwd=root, stdout=subprocess.PIPE)
+            read_text = Path.read_text
+            parent_changed = False
+            child_descriptor = None
+            try:
+                child = int(parent.stdout.readline())
+                child_descriptor = os.pidfd_open(child)
+                self.assertEqual(int(Path(f"/proc/{child}/stat").read_text().rsplit(")", 1)[1].split()[1]), parent.pid)
+                parent_stat = Path(f"/proc/{parent.pid}/stat")
+                child_stat = Path(f"/proc/{child}/stat")
+
+                def kernel_read(path, *args, **kwargs):
+                    nonlocal parent_changed
+                    data = read_text(path, *args, **kwargs)
+                    if path == child_stat:
+                        parent_changed = True
+                    if path == parent_stat and parent_changed:
+                        prefix, suffix = data.rsplit(")", 1)
+                        fields = suffix.split()
+                        fields[19] = str(int(fields[19]) + 1)
+                        return prefix + ") " + " ".join(fields)
+                    return data
+
+                with patch.object(Path, "read_text", kernel_read):
+                    captured = owned_processes(root, sys.executable)
+                self.assertIn(parent.pid, captured)
+                self.assertNotIn(child, captured)
+            finally:
+                if child_descriptor is not None:
+                    signal.pidfd_send_signal(child_descriptor, signal.SIGTERM)
+                    os.close(child_descriptor)
+                if parent.poll() is None:
+                    parent.terminate()
+                parent.wait(timeout=2)
                 parent.stdout.close()
 
     def test_pre_cleanup_state_and_terminal_output_are_retained(self):

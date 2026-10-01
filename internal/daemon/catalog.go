@@ -33,10 +33,12 @@ type Catalog struct {
 	onChange      func(SessionDiff)
 	onObservation func(error)
 
-	previous      map[storage.SessionID]storage.Session
-	lastSeenAt    time.Time
-	persistedAt   time.Time
-	reconcileGate chan struct{}
+	metadata        map[storage.SessionID]directoryRevision
+	scannedMetadata map[storage.SessionID]directoryRevision
+	previous        map[storage.SessionID]storage.Session
+	lastSeenAt      time.Time
+	persistedAt     time.Time
+	reconcileGate   chan struct{}
 }
 
 // NewCatalog validates and retains the boundaries used by a local catalog.
@@ -109,6 +111,8 @@ func (c *Catalog) Reconcile(ctx context.Context) (resultErr error) {
 	if changes.Host != nil {
 		c.persistedAt = host.LastSeenAt
 	}
+	diff.MetadataChanged = c.metadataChanges(next)
+	c.metadata = c.scannedMetadata
 	c.publishDiff(diff)
 	if c.onReconcile != nil {
 		c.onReconcile(observed)
@@ -161,6 +165,7 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 		return nil, fmt.Errorf("daemon: read session directory %s: %w", c.sessionsDir, err)
 	}
 
+	c.scannedMetadata = make(map[storage.SessionID]directoryRevision)
 	currentBootID := c.bootID()
 	observed := make([]storage.Session, 0, len(entries))
 	for _, entry := range entries {
@@ -171,6 +176,9 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 			return nil, fmt.Errorf("daemon: scan session directory %s: %w", c.sessionsDir, err)
 		}
 
+		if err := c.observeDirectory(entry); err != nil {
+			return nil, err
+		}
 		dir := filepath.Join(c.sessionsDir, entry.Name())
 		if _, err := os.Lstat(paths.Launching(dir)); err == nil {
 			continue

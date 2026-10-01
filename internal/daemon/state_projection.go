@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"reflect"
+	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/storage"
@@ -22,34 +23,60 @@ func (b *stateBroker) runProjection(ctx context.Context, l *lifecycle) {
 }
 func (b *stateBroker) projectDirty(ctx context.Context, l *lifecycle) {
 	for ctx.Err() == nil && b.hasTopic(protocol.TopicSessions) {
-		stored, ok := b.nextProjection()
+		projection, ok := b.nextProjection()
 		if !ok {
 			return
 		}
-		info := sessionInfo(stored)
+		info := sessionInfo(projection.stored)
 		l.addRecoveryInfo(&info, true)
 		if ctx.Err() != nil {
 			return
 		}
-		b.commitProjection(stored, info)
+		b.commitProjection(projection, info)
 	}
 }
-func (b *stateBroker) nextProjection() (storage.Session, bool) {
+
+type sessionProjection struct {
+	stored   storage.Session
+	revision uint64
+}
+
+func (b *stateBroker) nextProjection() (sessionProjection, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for id := range b.dirty {
 		delete(b.dirty, id)
-		return cloneStoredSession(b.stored[id]), true
+		return sessionProjection{stored: cloneStoredSession(b.stored[id]), revision: b.revisions[id]}, true
 	}
-	return storage.Session{}, false
+	return sessionProjection{}, false
 }
-func (b *stateBroker) commitProjection(stored storage.Session, info protocol.SessionInfo) {
+func (b *stateBroker) commitProjection(projection sessionProjection, info protocol.SessionInfo) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	stored := projection.stored
 	current, exists := b.stored[stored.ID]
-	if !exists || !sameStoredSession(current, stored) || reflect.DeepEqual(b.sessions[info.ID], info) {
+	if !exists || b.revisions[stored.ID] != projection.revision || !sameStoredSession(current, stored) {
 		return
 	}
+	previous := b.sessions[info.ID]
 	b.sessions[info.ID] = info
+	if sameRecognition(previous, info) {
+		return
+	}
 	b.publishLocked(protocol.TopicSessions, "session/"+info.ID, protocol.StateEvent{Kind: "session.changed", Payload: protocol.StatePayload{Session: &info}})
+}
+
+// Checkpoint time can advance without changing the recognition a viewer shows.
+func sameRecognition(a, b protocol.SessionInfo) bool {
+	if a.Recovery != nil {
+		record := *a.Recovery
+		record.CheckpointAt = time.Time{}
+		a.Recovery = &record
+	}
+	if b.Recovery != nil {
+		record := *b.Recovery
+		record.CheckpointAt = time.Time{}
+		b.Recovery = &record
+	}
+	return reflect.DeepEqual(a, b)
 }

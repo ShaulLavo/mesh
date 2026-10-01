@@ -127,7 +127,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 				}
 				continue
 			}
-			return s.serveState(ctx, client, request)
+			return s.transitionState(ctx, client, request, relay)
 		}
 		if request.Type == protocol.TypeHostMetrics && s.metrics != nil {
 			if err := s.replyMetrics(ctx, relay, request); err != nil {
@@ -303,4 +303,14 @@ func (s *clientServer) readMetrics(ctx context.Context, request protocol.Control
 		return protocol.Frame{}, fmt.Errorf("daemon: host metrics: %w", err)
 	}
 	return encodeClientControl(protocol.Control{Type: protocol.TypeHostMetricsResult, RequestID: request.RequestID, Metrics: &metrics})
+}
+
+func (s *clientServer) transitionState(ctx context.Context, client transport.Conn, request protocol.Control, relay *clientRelay) error {
+	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	err := relay.drainWriter(writeCtx)
+	cancel()
+	if err != nil {
+		return err
+	}
+	return s.serveState(ctx, client, request)
 }

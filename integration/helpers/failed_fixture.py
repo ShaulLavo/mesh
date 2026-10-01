@@ -34,7 +34,8 @@ def owned_processes(root, binary):
         try:
             cwd = Path(os.readlink(entry / "cwd"))
             if cwd.is_relative_to(root):
-                owned[pid] = identity
+                if same_process(pid, identity):
+                    owned[pid] = identity
                 continue
             if os.readlink(entry / "exe") != str(Path(binary).resolve()):
                 continue
@@ -42,7 +43,7 @@ def owned_processes(root, binary):
             if len(args) < 6 or args[1] != b"session-worker":
                 continue
             directory = Path(os.fsdecode(args[args.index(b"--dir") + 1])).resolve()
-            if directory.parent in (root / "local/s", root / "remote/s"):
+            if directory.parent in (root / "local/s", root / "remote/s") and same_process(pid, identity):
                 owned[pid] = identity
         except (FileNotFoundError, ProcessLookupError, PermissionError, ValueError, IndexError):
             continue
@@ -50,8 +51,13 @@ def owned_processes(root, binary):
     previous = -1
     while previous != len(owned):
         previous = len(owned)
-        owned.update({pid: identity for pid, identity in identities.items() if identity[1] in owned})
+        owned.update({pid: identity for pid, identity in identities.items() if current_descendant(pid, identity, owned)})
     return owned
+
+
+def current_descendant(pid, identity, owned):
+    parent = owned.get(identity[1])
+    return parent is not None and process_identity(pid) == identity and same_process(identity[1], parent)
 
 
 def same_process(pid, identity):

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 )
 
 // HostSessions is one host's live catalog or its last cached catalog.
@@ -135,7 +137,25 @@ func cloneSessionInfo(rows []protocol.SessionInfo) []protocol.SessionInfo {
 	cloned := make([]protocol.SessionInfo, len(rows))
 	for i, row := range rows {
 		row.Command = append([]string(nil), row.Command...)
+		row.LastAttachedAt = cloneTime(row.LastAttachedAt)
+		row.DetachedAt = cloneTime(row.DetachedAt)
+		row.ExitCode = cloneInt(row.ExitCode)
+		row.Recovery = cloneRecoveryRecord(row.Recovery)
+		if row.Hibernated != nil {
+			h := *row.Hibernated
+			row.Hibernated = &h
+		}
 		cloned[i] = row
 	}
 	return cloned
+}
+
+func cloneRecoveryRecord(record *recovery.Record) *recovery.Record {
+	if record == nil {
+		return nil
+	}
+	data, _ := json.Marshal(record)
+	var cloned recovery.Record
+	_ = json.Unmarshal(data, &cloned)
+	return &cloned
 }

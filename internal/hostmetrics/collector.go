@@ -4,13 +4,18 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/mem"
 )
 
-type systemCollector struct{}
+type systemCollector struct {
+	temperatureRoot string
+	sensorMu        sync.Mutex
+	sensorBusy      bool
+}
 
 func supported(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
@@ -21,7 +26,7 @@ func supported(ctx context.Context) error {
 	}
 	return nil
 }
-func (systemCollector) CPU(ctx context.Context) (Counters, error) {
+func (*systemCollector) CPU(ctx context.Context) (Counters, error) {
 	if err := supported(ctx); err != nil {
 		return Counters{}, fmt.Errorf("host CPU counters: %w", err)
 	}
@@ -35,7 +40,7 @@ func (systemCollector) CPU(ctx context.Context) (Counters, error) {
 	v := values[0]
 	return Counters{User: v.User, Nice: v.Nice, System: v.System, Idle: v.Idle, IOWait: v.Iowait, IRQ: v.Irq, SoftIRQ: v.Softirq, Steal: v.Steal}, nil
 }
-func (systemCollector) Memory(ctx context.Context) (Memory, error) {
+func (*systemCollector) Memory(ctx context.Context) (Memory, error) {
 	if err := supported(ctx); err != nil {
 		return Memory{}, fmt.Errorf("host available memory: %w", err)
 	}
@@ -49,7 +54,7 @@ func (systemCollector) Memory(ctx context.Context) (Memory, error) {
 	}
 	return Memory{TotalBytes: v.Total, AvailableBytes: v.Available, Estimate: estimate}, nil
 }
-func (systemCollector) Uptime(ctx context.Context) (uint64, error) {
+func (*systemCollector) Uptime(ctx context.Context) (uint64, error) {
 	if err := supported(ctx); err != nil {
 		return 0, err
 	}

@@ -156,7 +156,7 @@ func TestClientRelayOutputQueueIsBoundedAndReservesControls(t *testing.T) {
 	defer cancel()
 	relay := &clientRelay{
 		lifetime: lifetime,
-		output:   make(chan protocol.Frame, relayOutputQueueFrameLimit+relayOutputControlReserve),
+		output:   make(chan relayOutput, relayOutputQueueFrameLimit+relayOutputControlReserve),
 	}
 
 	payload := []byte{0}
@@ -171,8 +171,8 @@ func TestClientRelayOutputQueueIsBoundedAndReservesControls(t *testing.T) {
 		t.Fatalf("data overflow error = %v, want %v", err, errRelayOutputQueueFull)
 	}
 	first := <-relay.output
-	if len(first.Payload) != 1 || first.Payload[0] != 0 {
-		t.Fatalf("queued data was not copied: %v", first.Payload)
+	if len(first.frame.Payload) != 1 || first.frame.Payload[0] != 0 {
+		t.Fatalf("queued data was not copied: %v", first.frame.Payload)
 	}
 	relay.output <- first
 
@@ -190,7 +190,7 @@ func TestClientRelayOutputQueueIsBoundedAndReservesControls(t *testing.T) {
 func TestClientRelayBoundsQueuedControlResponseBytes(t *testing.T) {
 	lifetime, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	relay := &clientRelay{lifetime: lifetime, output: make(chan protocol.Frame, 4)}
+	relay := &clientRelay{lifetime: lifetime, output: make(chan relayOutput, 4)}
 	large := protocol.Frame{Kind: protocol.KindControl, Payload: make([]byte, protocol.MaxPayload)}
 	for range 2 {
 		if err := relay.enqueueOutput(large); err != nil {
@@ -204,7 +204,7 @@ func TestClientRelayBoundsQueuedControlResponseBytes(t *testing.T) {
 	if err := relay.enqueueOutput(protocol.Frame{Kind: protocol.KindControl, Payload: []byte{1}}); !errors.Is(err, errRelayOutputQueueFull) {
 		t.Fatalf("control bytes overflow = %v", err)
 	}
-	relay.releaseOutput(<-relay.output)
+	relay.releaseOutput((<-relay.output).frame)
 	if err := relay.enqueueOutput(large); err != nil {
 		t.Fatalf("completed control response did not release byte budget: %v", err)
 	}

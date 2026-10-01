@@ -499,7 +499,10 @@ func (r *demandRoute) status() *protocol.ServiceDemand {
 // retiringInfo describes a removed route that may still own a session.
 func (r *demandRoute) retiringInfo() (protocol.ServiceInfo, bool) {
 	r.mu.Lock()
-	defer r.unlock()
+	defer r.mu.Unlock()
+	return r.retiringInfoLocked()
+}
+func (r *demandRoute) retiringInfoLocked() (protocol.ServiceInfo, bool) {
 	if r.owned == ownsNothing {
 		return protocol.ServiceInfo{}, false
 	}
@@ -535,7 +538,19 @@ func (r *demandRoute) statusLocked() *protocol.ServiceDemand {
 
 func (r *demandRoute) unlock() {
 	if r.manager.onChange != nil {
-		r.manager.onChange(r.service.Name, r.statusLocked())
+		r.manager.onChange(r.changeInfoLocked(), r.removed)
 	}
 	r.mu.Unlock()
+}
+func (r *demandRoute) changeInfoLocked() protocol.ServiceInfo {
+	info := protocol.ServiceDefinitionInfo(r.service)
+	info.Demand = r.statusLocked()
+	if !r.removed {
+		return info
+	}
+	if retained, owning := r.retiringInfoLocked(); owning {
+		return retained
+	}
+	info.Demand = nil
+	return info
 }

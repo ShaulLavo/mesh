@@ -467,8 +467,10 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 		pickerContext, cancelPicker := context.WithCancel(cmd.Context())
 		pickerOperations := newPickerOperationGate()
 		pickerState := newPickerState(pickerContext, a.dependencies.DialControl)
+		pickerState.cache = cache
 		refreshHost := func(ctx context.Context, alias string) (PickerHostSnapshot, error) {
 			if alias == localHostAlias {
+				pickerState.close()
 				local, err := localPickerCatalog()
 				return PickerHostSnapshot{Sessions: local}, err
 			}
@@ -487,6 +489,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 					return nil, context.Canceled
 				}
 				defer pickerOperations.done()
+				pickerState.close()
 				return CollectHostSessions(ctx, hosts, defaultCatalogTimeout, a.queryHost, cache)
 			},
 			OpenHostAlias:      openHostAlias,

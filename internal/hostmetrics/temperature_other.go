@@ -7,7 +7,7 @@ import (
 	"fmt"
 )
 
-func (systemCollector) Temperature(ctx context.Context) (Temperature, error) {
+func (*systemCollector) Temperature(ctx context.Context) (Temperature, error) {
 	if err := ctx.Err(); err != nil {
 		return Temperature{}, fmt.Errorf("CPU temperature context: %w", err)
 	}

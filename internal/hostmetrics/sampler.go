@@ -81,7 +81,7 @@ type Sampler struct {
 	changed                    chan struct{}
 }
 
-func New() *Sampler { return NewWithCollector(systemCollector{}, time.Now) }
+func New() *Sampler { return NewWithCollector(&systemCollector{}, time.Now) }
 func NewWithCollector(c Collector, now func() time.Time) *Sampler {
 	return &Sampler{gate: make(chan struct{}, 1), collector: c, now: now, instance: rand.Text(), demands: make(map[uint64]time.Duration), changed: make(chan struct{}, 1), cpu: empty[float64](), ram: empty[Memory](), temperature: empty[Temperature](), uptime: empty[uint64]()}
 }

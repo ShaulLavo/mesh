@@ -145,13 +145,14 @@ func TestWatchLeanProjectionRejectsSupersededAndRemovedRows(t *testing.T) {
 	if !broker.sessions["one"].RecoveryPending {
 		t.Fatal("base row claimed metadata was complete")
 	}
+	projection, _ := broker.nextProjection()
 	broker.sessionsChanged(SessionDiff{Changed: []storage.Session{{ID: "one", Command: []string{"new"}}}})
-	broker.commitProjection(original, protocol.SessionInfo{ID: "one", Command: []string{"stale"}})
+	broker.commitProjection(projection, protocol.SessionInfo{ID: "one", Command: []string{"stale"}})
 	if broker.sessions["one"].Command[0] != "new" {
 		t.Fatal("stale projection replaced committed row")
 	}
 	broker.sessionsChanged(SessionDiff{Removed: []storage.SessionID{"one"}})
-	broker.commitProjection(original, protocol.SessionInfo{ID: "one"})
+	broker.commitProjection(projection, protocol.SessionInfo{ID: "one"})
 	if _, exists := broker.sessions["one"]; exists {
 		t.Fatal("projection restored removed row")
 	}
@@ -172,7 +173,8 @@ func TestWatchProjectionCompletesPendingSnapshot(t *testing.T) {
 	if !snapshot.Sessions[0].RecoveryPending {
 		t.Fatal("initial base row claimed complete recognition")
 	}
-	broker.commitProjection(row, sessionInfo(row))
+	projection, _ := broker.nextProjection()
+	broker.commitProjection(projection, sessionInfo(row))
 	messages := broker.take(sub)
 	if len(messages) != 1 || messages[0].StateEvent.Payload.Session.RecoveryPending {
 		t.Fatalf("projection did not finish pending row: %+v", messages)

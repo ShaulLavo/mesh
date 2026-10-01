@@ -654,7 +654,7 @@ func (c *serviceController) publishCommitted() {
 		row.Demand = c.demand.Status(service.Name)
 		rows = append(rows, row)
 	}
-	c.onCommitted(rows, nil)
+	c.onCommitted(withRetiring(rows, c.demand.Retiring()), nil)
 }
 
 // observeRegistry confirms the authoritative registry without re-probing routes.

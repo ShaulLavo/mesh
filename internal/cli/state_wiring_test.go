@@ -109,8 +109,8 @@ func TestWatchPickerActualControlTransportNeverWakes(t *testing.T) {
 					}
 					result, refreshErr := input.Refresh(refresh, fixture.host.Alias)
 					if mode == "generic-error" || mode == "wrong-identity" {
-						if refreshErr == nil {
-							t.Error("refused host published usable rows")
+						if refreshErr == nil && !result.Sessions.Stale {
+							t.Error("refused host published fresh rows")
 						}
 						return PickerSelection{}, nil
 					}
