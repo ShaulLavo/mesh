@@ -22,35 +22,31 @@ import (
 )
 
 func TestPublicSlotsOneSourceCannotStarveAnother(t *testing.T) {
-	base, err := net.Listen("tcp4", "127.0.0.1:0")
+	base := &queuedPublicListener{connections: make(chan net.Conn, maximumPublicConnections+1), accepted: make(chan struct{}, maximumPublicConnections+2), closed: make(chan struct{})}
+	for i := range maximumPublicConnections + 1 {
+		server, peer := net.Pipe()
+		t.Cleanup(func() { _ = peer.Close() })
+		source := "198.51.100.1"
+		if i == maximumPublicConnections {
+			source = "198.51.100.2"
+		}
+		base.connections <- publicAddressedConn{Conn: server, address: &net.TCPAddr{IP: net.ParseIP(source), Port: 1234}}
+	}
+	listener := newBoundedPublicListener(base, maximumPublicConnections)
+	t.Cleanup(func() { _ = listener.Close(); _ = listener.closeActive() })
+	for range maximumPublicSourceConnections {
+		if _, err := listener.Accept(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	connection, err := listener.Accept()
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener := newBoundedPublicListener(base, maximumPublicConnections)
-	server := &http.Server{ReadHeaderTimeout: httpReadHeaderTimeout, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })}
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { _ = server.Close(); _ = listener.closeActive() })
-	served := 0
-	for range maximumPublicConnections {
-		connection, err := publicSlotRequest(base.Addr().String(), "127.0.0.1")
-		if connection != nil {
-			t.Cleanup(func() { _ = connection.Close() })
-		}
-		if err == nil {
-			served++
-		}
+	if got := connection.RemoteAddr().String(); got != "198.51.100.2:1234" {
+		t.Fatalf("first source retained more than its share: next admitted source %s", got)
 	}
-	connection, err := publicSlotRequest(base.Addr().String(), "127.0.0.2")
-	if connection != nil {
-		defer func() { _ = connection.Close() }()
-	}
-	if err != nil {
-		t.Fatalf("second source blocked after first source parked %d connections: %v", served, err)
-	}
-	if served > 32 {
-		t.Fatalf("one source parked %d connections, want at most 32", served)
-	}
-	t.Logf("first source parked %d connections; second source served", served)
+	t.Logf("first source parked %d connections; second source admitted", maximumPublicSourceConnections)
 }
 
 func publicSlotRequest(address, source string) (net.Conn, error) {

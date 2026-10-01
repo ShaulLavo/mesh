@@ -39,6 +39,7 @@ type boundedPublicConn struct {
 	once      sync.Once
 	identify  sync.Once
 	source    netip.Prefix
+	frontDoor bool
 	admitted  bool
 	closed    bool
 	idleSince time.Time
@@ -138,6 +139,8 @@ func publicConnectionSource(address net.Addr) netip.Prefix {
 func (c *boundedPublicConn) RemoteAddr() net.Addr {
 	address := c.Conn.RemoteAddr()
 	c.identify.Do(func() {
+		peer, _ := netip.ParseAddrPort(address.String())
+		c.frontDoor = c.owner.proxyUIDs == nil && peer.Addr().Unmap().IsLoopback()
 		if !c.owner.admit(c, publicConnectionSource(address)) {
 			_ = c.Close()
 		}
@@ -156,7 +159,7 @@ func (c *boundedPublicConn) Read(p []byte) (int, error) {
 
 func (l *boundedPublicListener) admit(c *boundedPublicConn, source netip.Prefix) bool {
 	l.mu.Lock()
-	if l.closed || c.closed || !source.IsValid() || l.sources[source] >= maximumPublicSourceConnections {
+	if l.closed || c.closed || !source.IsValid() || (!c.frontDoor && l.sources[source] >= maximumPublicSourceConnections) {
 		l.mu.Unlock()
 		return false
 	}
