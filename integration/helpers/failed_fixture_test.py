@@ -42,7 +42,7 @@ class FailedFixtureTest(unittest.TestCase):
             metadata.write_text('{"state":"running"}')
             (metadata.parent / "worker.log").write_text("startup stage\n")
             (root / "daemon.log").write_text("daemon stage\n")
-            fixture = SimpleNamespace(root=root, local=root / "local", remote=root / "remote",
+            fixture = SimpleNamespace(root=root, local=root / "local", remote=root / "remote", binary=sys.executable,
                                       terminals=[SimpleNamespace(output=b"raw terminal error")])
             retain_evidence(fixture)
             metadata.write_text('{"state":"exited"}')
