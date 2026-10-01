@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
@@ -1143,5 +1144,109 @@ func TestLifecycleCreationRetirementClockIncludesCatalogLookupTime(t *testing.T)
 	create()
 	if launches != 2 {
 		t.Fatalf("launches after observed retirement window = %d, want 2", launches)
+	}
+}
+
+type receiptPublicationFailureStore struct{ *storage.Store }
+
+func (s *receiptPublicationFailureStore) ReconcileHost(context.Context, storage.Host, []storage.Session) error {
+	return errors.New("publication rejected")
+}
+
+func unpublishedReceiptLifecycle(t *testing.T, failure string, now func() time.Time, launches *int) *lifecycle {
+	t.Helper()
+	root := t.TempDir()
+	store, err := storage.Open(t.Context(), filepath.Join(root, "receipt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	host := catalogTestHost(now())
+	catalog, err := NewCatalog(CatalogConfig{
+		SessionsDir: root, Host: host, Store: &receiptPublicationFailureStore{Store: store},
+		Probe: probeFunc(func(context.Context, string) error { return nil }), BootID: func() string { return "boot-a" }, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mustLifecycle(t, lifecycleConfig{
+		Catalog: catalog, Connector: failingLifecycleConnector(), Host: host, SessionsDir: root,
+		Now: now, CreationRetention: time.Minute,
+		Launch: func(worker.LaunchConfig) (worker.Launched, error) {
+			*launches++
+			id := []string{"7K3D", "8M4F", "9P5G"}[*launches-1]
+			dir := filepath.Join(root, id)
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			fakeOwnedWorker(t, dir, id)
+			if failure == "started" {
+				if err := os.Remove(paths.Meta(dir)); err != nil {
+					t.Fatal(err)
+				}
+				return worker.Launched{}, &worker.StartedError{ID: id, Err: errors.New("metadata unavailable after start")}
+			}
+			meta := catalogTestMeta(id, worker.StateRunning, "boot-a")
+			meta.CreatedAt = now()
+			meta.PID = os.Getpid()
+			if err := worker.WriteMeta(dir, meta); err != nil {
+				t.Fatal(err)
+			}
+			return worker.Launched{Meta: meta}, nil
+		},
+	})
+}
+
+func TestLifecycleUnpublishedReceiptLives(t *testing.T) {
+	for _, failure := range []string{"publication", "started"} {
+		t.Run(failure, func(t *testing.T) {
+			now := time.Now()
+			launches := 0
+			l := unpublishedReceiptLifecycle(t, failure, func() time.Time { return now }, &launches)
+			wanted := creationRequest{command: []string{"sh"}}
+			for range 3 {
+				id, err := l.createSession(t.Context(), protocol.TypeCreate, "unpublished", wanted)
+				if err == nil || id != "7K3D" {
+					t.Fatalf("live unpublished replay = %q, %v", id, err)
+				}
+				now = now.Add(time.Minute)
+			}
+			if launches != 1 {
+				t.Fatalf("unpublished live worker launches = %d, want 1", launches)
+			}
+		})
+	}
+}
+
+func TestLifecycleUnpublishedReceiptExpiresAfterExit(t *testing.T) {
+	for _, failure := range []string{"publication", "started"} {
+		t.Run(failure, func(t *testing.T) {
+			now := time.Now()
+			launches := 0
+			l := unpublishedReceiptLifecycle(t, failure, func() time.Time { return now }, &launches)
+			wanted := creationRequest{command: []string{"sh"}}
+			id, err := l.createSession(t.Context(), protocol.TypeCreate, "unpublished-exit", wanted)
+			if err == nil || id != "7K3D" {
+				t.Fatalf("unpublished creation = %q, %v", id, err)
+			}
+			meta := catalogTestMeta(id, worker.StateExited, "boot-a")
+			meta.CreatedAt = now
+			meta.ExitedAt = &now
+			code := 0
+			meta.ExitCode = &code
+			if err := worker.WriteMeta(filepath.Join(l.sessionsDir, id), meta); err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(time.Minute)
+			_, _ = l.createSession(t.Context(), protocol.TypeCreate, "unpublished-exit", wanted)
+			if launches != 1 {
+				t.Fatalf("relaunch at observed worker exit = %d, want 1", launches)
+			}
+			now = now.Add(time.Minute)
+			_, _ = l.createSession(t.Context(), protocol.TypeCreate, "unpublished-exit", wanted)
+			if launches != 2 {
+				t.Fatalf("launches after confirmed exit retention = %d, want 2", launches)
+			}
+		})
 	}
 }
