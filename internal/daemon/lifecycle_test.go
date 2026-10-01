@@ -1275,3 +1275,22 @@ func TestLifecycleReceiptRemembersPublishedCatalogRow(t *testing.T) {
 		t.Fatalf("launches after confirmed published-row retirement = %d, want 2", launches)
 	}
 }
+
+func TestLifecycleCreationDetachesMapRequestID(t *testing.T) {
+	l := receiptTestLifecycle(t, time.Now, func(worker.LaunchConfig) (worker.Launched, error) {
+		return worker.Launched{}, nil
+	})
+	requestID := strings.Repeat("x", 1<<20)[:4]
+	created, _, err := l.creation(requestID, creationRequest{command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.ValueOf(created.requestID).Pointer() == reflect.ValueOf(requestID).Pointer() {
+		t.Fatal("receipt request ID retains the caller's backing allocation")
+	}
+	for key := range l.creations {
+		if reflect.ValueOf(key).Pointer() == reflect.ValueOf(requestID).Pointer() {
+			t.Fatal("map request ID retains the caller's backing allocation")
+		}
+	}
+}

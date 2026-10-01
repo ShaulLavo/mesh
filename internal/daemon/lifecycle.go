@@ -494,7 +494,7 @@ func (l *lifecycle) creation(requestID string, wanted creationRequest) (*creatio
 		retainedBytes: retainedBytes,
 	}
 	created.publishGate <- struct{}{}
-	l.creations[requestID] = created
+	l.creations[created.requestID] = created
 	l.pendingCreations++
 	l.creationBytes += retainedBytes
 	return created, true, nil
