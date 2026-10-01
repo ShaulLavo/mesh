@@ -45,6 +45,7 @@ test_env=(
   "PATH=$tool_bin:$go_root/bin:$PATH" "TMPDIR=${TMPDIR:-/tmp}"
   "TERM=${TERM:-dumb}" "LANG=${LANG:-C}"
   "GOCACHE=$go_cache" "GOMODCACHE=$go_modules"
+  "PYTHONDONTWRITEBYTECODE=1"
 )
 for name in XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS MESH_TEST_ZSH MESH_SHORT_TMP; do
   if [[ ${!name+x} ]]; then

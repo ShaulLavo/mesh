@@ -139,6 +139,7 @@ def run(bash, script, arguments):
             "MESH_STATE_DIR": os.path.abspath(os.environ.get("MESH_STATE_DIR") or str(root / "state")),
             "MESH_CONFIG_DIR": os.path.abspath(os.environ.get("MESH_CONFIG_DIR") or str(root / "config")),
             "MESH_INTEGRATION_ENTRY": os.path.abspath(script),
+            "PYTHONDONTWRITEBYTECODE": "1",
         })
         for name, suffix in (("XDG_CONFIG_HOME", "config-home"), ("XDG_STATE_HOME", "state-home"),
                              ("XDG_CACHE_HOME", "cache"), ("XDG_DATA_HOME", "data"), ("XDG_RUNTIME_DIR", "runtime")):

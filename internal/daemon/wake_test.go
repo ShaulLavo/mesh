@@ -115,7 +115,7 @@ func testWakeController(t *testing.T) (*wakeController, *wake.Authority, *atomic
 }
 
 func TestWakePermissionUsesRealLocalDaemonSocket(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	for restart := range 2 {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)

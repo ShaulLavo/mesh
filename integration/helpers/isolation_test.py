@@ -137,6 +137,28 @@ class IsolationBoundaryTest(unittest.TestCase):
             for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"):
                 self.assertTrue(Path(child[name]).is_relative_to(Path(child["HOME"]).parent))
 
+    def test_prelude_python_does_not_write_bytecode(self):
+        helpers = Path(__file__).resolve().parent
+        for reentry in (False, True):
+            with self.subTest(reentry=reentry), tempfile.TemporaryDirectory(prefix="m-bytecode-") as temporary:
+                root = Path(temporary)
+                (root / "helpers").mkdir()
+                for name in ("isolate.sh", "isolation.py"):
+                    shutil.copyfile(helpers / name, root / "helpers" / name)
+                (root / "bytecode_probe.py").write_text("VALUE = 1\n")
+                probe = root / "probe.sh"
+                probe.write_text('#!/bin/bash\nsource "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1\n'
+                                 "python3 -c 'import bytecode_probe'\n")
+                environment = {"PATH": os.defpath, "HOME": str(root / "home"), "TMPDIR": str(root),
+                               "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config"),
+                               "PYTHONDONTWRITEBYTECODE": "0"}
+                if reentry:
+                    environment["MESH_INTEGRATION_ENTRY"] = str(probe)
+                result = subprocess.run(["bash", str(probe)], cwd=root, env=environment,
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(list(root.rglob("__pycache__")))
+
     def test_reentry_does_not_bypass_the_guard(self):
         repo = Path(__file__).resolve().parents[2]
         script = repo / "integration/kill_waits.sh"

@@ -4,5 +4,6 @@
 *.db
 *.db-wal
 *.db-shm
+__pycache__/
 
 /web/app-pill/node_modules/
