@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -304,11 +305,36 @@ func downloadApp(ctx context.Context, transport appTransport, id, dest string) e
 	if err = tmp.Sync(); err != nil {
 		return err
 	}
+	if err = checkDownloadedArchive(tmp); err != nil {
+		return fmt.Errorf("app %s download is not one intact archive, perhaps because its source changed during the transfer; run it again: %w", id, err)
+	}
 	if err = tmp.Close(); err != nil {
 		return err
 	}
 	// Link publishes atomically and refuses to replace an existing destination.
 	return os.Link(tmp.Name(), absolute)
+}
+
+// checkDownloadedArchive reads the archive through gzip, whose checksum fails
+// when the host served chunks from two different snapshots. Expansion is
+// bounded so a host cannot make the check itself unbounded work.
+func checkDownloadedArchive(f *os.File) error {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind download: %w", err)
+	}
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("read download: %w", err)
+	}
+	limit := int64(2 * appspkg.MaxArchive)
+	n, err := io.Copy(io.Discard, io.LimitReader(gz, limit+1))
+	if err != nil {
+		return fmt.Errorf("read download: %w", err)
+	}
+	if n > limit {
+		return errors.New("download expands past the source limit")
+	}
+	return nil
 }
 func writeAppResult(w io.Writer, host string, result appspkg.Result, asJSON bool) error {
 	if asJSON {
