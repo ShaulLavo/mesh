@@ -2,10 +2,12 @@ package apps
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"os"
 	"slices"
+	"syscall"
 	"testing"
 
 	"github.com/shaul/mesh/internal/sockdiag"
@@ -130,6 +132,11 @@ func TestLiveListenerInspectionIncludesEverySelectedPortBinding(t *testing.T) {
 	}
 }
 
+// TestLiveIPv6ListenerInspection decodes and attributes the IPv6 listener it
+// holds. IPv6 loopback does not reserve the port number on IPv4 addresses, so
+// another socket, such as another test's 127.0.0.2 listener, may share it; the
+// test holds one such neighbour itself and examines only its own socket's
+// inode. The rule for every listener on a port belongs to the safety tests.
 func TestLiveIPv6ListenerInspection(t *testing.T) {
 	for _, address := range []netip.Addr{netip.IPv6Loopback(), netip.MustParseAddr("::ffff:127.0.0.1")} {
 		t.Run(address.String(), func(t *testing.T) {
@@ -149,11 +156,37 @@ func TestLiveIPv6ListenerInspection(t *testing.T) {
 				t.Fatal(err)
 			}
 			port := local.(*unix.SockaddrInet6).Port
-			addresses, err := serverListeners(context.Background(), port)
-			if err != nil || len(addresses) != 1 || addresses[0] != address {
-				t.Fatalf("IPv6 listeners = %v, %v; want %v", addresses, err, address)
+			// EADDRINUSE means another process already shares the port there.
+			neighbour, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 2), Port: port})
+			if err != nil && !errors.Is(err, syscall.EADDRINUSE) {
+				t.Fatal(err)
 			}
-			upstream, err := checkServerListener(context.Background(), port, thisProcess)
+			if err == nil {
+				t.Cleanup(func() { _ = neighbour.Close() })
+			}
+			var stat unix.Stat_t
+			if err := unix.Fstat(fd, &stat); err != nil {
+				t.Fatal(err)
+			}
+			listeners, err := sockdiag.TCPListeners(context.Background(), port)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var own []sockdiag.Listener
+			for _, listener := range listeners {
+				if uint64(listener.Inode) == stat.Ino {
+					own = append(own, listener)
+				}
+			}
+			if len(own) != 1 || own[0].Address.Addr() != address || int(own[0].Address.Port()) != port {
+				t.Fatalf("listener with inode %d among %+v; want one at %v port %d", stat.Ino, listeners, address, port)
+			}
+			held, err := heldSockets([]int{os.Getpid()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			uid := uint32(os.Geteuid()) //nolint:gosec // an effective UID is a non-negative 32-bit value
+			upstream, err := verifyListeners(port, attributeListeners(own, port, uid, held))
 			if err != nil || upstream.Addr() != address.Unmap() || int(upstream.Port()) != port {
 				t.Fatalf("upstream for %v = %v, %v", address, upstream, err)
 			}
