@@ -335,6 +335,7 @@ type Control struct {
 	// List / host info
 	Sessions []SessionInfo `json:"sessions,omitempty"`
 	Host     *HostInfo     `json:"host,omitempty"`
+	Metrics  *HostMetrics  `json:"metrics,omitempty"`
 
 	// Inspect
 	Inspection *SessionInspection `json:"inspection,omitempty"`

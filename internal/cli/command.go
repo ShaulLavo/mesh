@@ -232,6 +232,7 @@ type Dependencies struct {
 	Terminal               TerminalFunc
 	Picker                 PickerFunc
 	WindowPicker           WindowPickerFunc
+	Dashboard              DashboardFunc
 	ReconcilePrivateNames  PrivateNamesFunc
 	DialHost               HostDialer
 	DialControl            HostDialer
@@ -354,7 +355,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 		inGroup(groupSessions, app.listCommand(), app.attachCommand(), app.localCommand(),
 			app.logsCommand(), app.killCommand(), app.hibernateCommand(), app.gcCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand(), app.agentCommand(), app.backCommand())...,
 	)
-	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.renameCommand(), app.wakeCommand())...)
+	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.renameCommand(), app.wakeCommand(), app.dashboardCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand())...)
 	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), versionCommand())...)
 	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand())

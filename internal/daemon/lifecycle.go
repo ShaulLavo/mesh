@@ -16,6 +16,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/shaul/mesh/internal/hostmetrics"
 	inspectionwire "github.com/shaul/mesh/internal/inspection"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
@@ -65,7 +66,8 @@ type lifecycle struct {
 	creationsMu sync.Mutex
 	creations   map[string]*creation
 
-	memory memorySampler
+	memory  memorySampler
+	metrics *hostmetrics.Sampler
 }
 
 const defaultPublishTimeout = 30 * time.Second
@@ -142,6 +144,7 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 		publishTimeout:      cfg.PublishTimeout,
 		observeTerminalSize: worker.ReadSessionLeaderTerminalSize,
 		creations:           make(map[string]*creation),
+		metrics:             hostmetrics.New(),
 	}, nil
 }
 
@@ -174,6 +177,9 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
 		}
 		response, err := l.hostInfo(request)
+		return response, true, err
+	case protocol.TypeHostMetrics:
+		response, err := l.hostMetrics(ctx, request)
 		return response, true, err
 	case protocol.TypeLogs:
 		if ctx == nil {

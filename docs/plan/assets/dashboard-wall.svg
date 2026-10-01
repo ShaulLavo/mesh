@@ -1,0 +1,322 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" xml:space="preserve">
+<title>Mesh terminal fleet dashboard — MOCKUP / SAMPLE DATA</title>
+<desc>Static design mockup of a passive fullscreen terminal dashboard. All values are synthetic sample data.</desc>
+<style>
+text{font-family:'JetBrains Mono','DejaVu Sans Mono','Cascadia Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:#cfdbd4}
+.f18{font-size:18px}.f20{font-size:20px}.f22{font-size:22px}.f24{font-size:24px}.b{font-weight:700}
+.tx{fill:#cfdbd4}.dm{fill:#7a8f86}.fa{fill:#71887c}.cy{fill:#5fd7d7}.gr{fill:#7bd88f}.bl{fill:#56c8e8}.am{fill:#e0b050}.rd{fill:#ef6b5b}
+.st{fill:#9ab0a6}.cm{fill:#b5c4bd}.ca{fill:#c5aa6e}
+.box{fill:none;stroke:#24453a;stroke-width:2}.boxr{fill:none;stroke:#4b302b;stroke-width:2}
+.tb{fill:#090c0b}
+.grid{fill:none;stroke:#1d2e27;stroke-width:1;stroke-dasharray:2 6}
+.base{fill:none;stroke:#2b4439;stroke-width:1}
+.rule{fill:none;stroke:#1d2e27;stroke-width:1}
+.rulea{fill:none;stroke:#4a3d22;stroke-width:1;stroke-dasharray:4 4}
+.trk{stroke:#16231e;stroke-width:12;stroke-dasharray:12 2}
+.mg{stroke:#7bd88f;stroke-width:12;stroke-dasharray:12 2}
+.mb{stroke:#56c8e8;stroke-width:12;stroke-dasharray:12 2}
+.ag{fill:#163823}.ab{fill:#103540}
+.lg{fill:none;stroke:#7bd88f;stroke-width:2}.lb{fill:none;stroke:#56c8e8;stroke-width:2}
+</style>
+<rect x="0" y="0" width="1920" height="1080" fill="#090c0b"/>
+
+<!-- ================= HEADER ================= -->
+<rect class="box" x="12" y="10" width="1896" height="58"/>
+<rect class="tb" x="1650" y="1" width="240" height="18"/>
+<text x="1878" y="16" class="f18 am" text-anchor="end">MOCKUP / SAMPLE DATA</text>
+<text x="36" y="48" class="f24 b cy">MESH</text>
+<text x="110" y="48" class="f24 tx">fleet</text>
+<path class="base" d="M212,24V54M604,24V54M984,24V54"/>
+<text x="236" y="47" class="f22"><tspan class="dm">reachable </tspan><tspan class="gr">3</tspan></text>
+<text x="406" y="47" class="f22"><tspan class="dm">unreachable </tspan><tspan class="rd">1</tspan></text>
+<text x="628" y="47" class="f22"><tspan class="dm">sessions </tspan><tspan class="gr">7</tspan><tspan class="dm"> live  </tspan><tspan class="am">2</tspan><tspan class="dm"> cached</tspan></text>
+<text x="1008" y="47" class="f22"><tspan class="dm">services </tspan><tspan class="tx">5</tspan><tspan class="dm">  ready </tspan><tspan class="gr">4</tspan><tspan class="dm">  failed </tspan><tspan class="rd">1</tspan></text>
+<text x="1884" y="47" class="f22" text-anchor="end"><tspan class="dm">2026-10-01 </tspan><tspan class="tx">14:32:07</tspan></text>
+
+<!-- ================= PANEL: pc ================= -->
+<rect class="box" x="12" y="88" width="942" height="256"/>
+<rect class="tb" x="32" y="74" width="188" height="28"/>
+<text x="42" y="96" class="f22 b cy">pc</text>
+<rect x="82" y="83" width="10" height="10" fill="#7bd88f"/>
+<text x="100" y="95" class="f20 gr">reachable</text>
+<rect class="tb" x="646" y="74" width="300" height="28"/>
+<text x="934" y="95" class="f20" text-anchor="end"><tspan class="dm">metrics </tspan><tspan class="tx">1s</tspan><tspan class="dm">  catalogs </tspan><tspan class="tx">3s</tspan></text>
+
+<text x="32" y="134" class="f20 dm">CPU</text>
+<text x="84" y="134" class="f18 fa">all cores</text>
+<text x="452" y="134" class="f24 b gr" text-anchor="end">34%</text>
+<text x="494" y="134" class="f20 dm">RAM</text>
+<text x="554" y="134" class="f20 tx">18.2 / 64.0 GiB</text>
+<text x="914" y="134" class="f24 b bl" text-anchor="end">28%</text>
+
+<line class="trk" x1="32" y1="148" x2="452" y2="148"/>
+<line class="mg" x1="32" y1="148" x2="174.8" y2="148"/>
+<line class="trk" x1="494" y1="148" x2="914" y2="148"/>
+<line class="mb" x1="494" y1="148" x2="613.3" y2="148"/>
+
+<path class="grid" d="M32,168H452M32,218H452M494,168H914M494,218H914"/>
+<path class="ag" d="M32,268 V246 H46 V243 H60 V237 H74 V240 H88 V228 H102 V222 H116 V230 H130 V235 H144 V239 H158 V233 H172 V216 H186 V207 H200 V220 H214 V231 H228 V238 H242 V241 H256 V235 H270 V227 H284 V232 H298 V239 H312 V242 H326 V237 H340 V224 H354 V229 H368 V235 H382 V238 H396 V232 H410 V227 H424 V231 H438 V234 H452 V268 Z"/>
+<path class="lg" d="M32,246 H46 V243 H60 V237 H74 V240 H88 V228 H102 V222 H116 V230 H130 V235 H144 V239 H158 V233 H172 V216 H186 V207 H200 V220 H214 V231 H228 V238 H242 V241 H256 V235 H270 V227 H284 V232 H298 V239 H312 V242 H326 V237 H340 V224 H354 V229 H368 V235 H382 V238 H396 V232 H410 V227 H424 V231 H438 V234 H452"/>
+<path class="ab" d="M494,268 V241.5 H564 V241 H662 V240.4 H774 V240 H858 V239.6 H914 V268 Z"/>
+<path class="lb" d="M494,241.5 H564 V241 H662 V240.4 H774 V240 H858 V239.6 H914"/>
+<path class="base" d="M32,268H452M494,268H914"/>
+<text x="32" y="290" class="f18 fa">-2m</text>
+<text x="452" y="290" class="f18 fa" text-anchor="end">now</text>
+<text x="494" y="290" class="f18 fa">-2m</text>
+<text x="914" y="290" class="f18 fa" text-anchor="end">now</text>
+
+<path class="grid" d="M32,302H934"/>
+<text x="32" y="324" class="f20"><tspan class="dm">cpu temp </tspan><tspan class="tx">58°C</tspan></text>
+<text x="222" y="324" class="f20"><tspan class="dm">uptime </tspan><tspan class="tx">3d 7h</tspan></text>
+<text x="412" y="324" class="f20"><tspan class="dm">sessions </tspan><tspan class="tx">4</tspan><tspan class="dm"> live</tspan></text>
+<text x="652" y="324" class="f20"><tspan class="dm">services </tspan><tspan class="tx">2</tspan><tspan class="dm"> · </tspan><tspan class="rd">1 failed</tspan></text>
+
+<!-- ================= PANEL: pi (local) ================= -->
+<rect class="box" x="966" y="88" width="942" height="256"/>
+<rect class="tb" x="986" y="74" width="454" height="28"/>
+<text x="996" y="96" class="f22 b cy">pi</text>
+<rect x="1036" y="83" width="10" height="10" fill="#7bd88f"/>
+<text x="1054" y="95" class="f20 gr">reachable</text>
+<text x="1176" y="95" class="f20 dm">· local (this screen)</text>
+<rect class="tb" x="1600" y="74" width="300" height="28"/>
+<text x="1888" y="95" class="f20" text-anchor="end"><tspan class="dm">metrics </tspan><tspan class="tx">1s</tspan><tspan class="dm">  catalogs </tspan><tspan class="tx">1s</tspan></text>
+
+<text x="986" y="134" class="f20 dm">CPU</text>
+<text x="1038" y="134" class="f18 fa">all cores</text>
+<text x="1406" y="134" class="f24 b gr" text-anchor="end">3%</text>
+<text x="1448" y="134" class="f20 dm">RAM</text>
+<text x="1508" y="134" class="f20 tx">0.7 / 4.0 GiB</text>
+<text x="1868" y="134" class="f24 b bl" text-anchor="end">18%</text>
+
+<line class="trk" x1="986" y1="148" x2="1406" y2="148"/>
+<line class="mg" x1="986" y1="148" x2="998.6" y2="148"/>
+<line class="trk" x1="1448" y1="148" x2="1868" y2="148"/>
+<line class="mb" x1="1448" y1="148" x2="1521.5" y2="148"/>
+
+<path class="grid" d="M986,168H1406M986,218H1406M1448,168H1868M1448,218H1868"/>
+<path class="ag" d="M986,268 V265 H1000 V266 H1014 V264 H1028 V265 H1042 V263 H1056 V265 H1070 V266 H1084 V265 H1098 V264 H1112 V262 H1126 V264 H1140 V265 H1154 V266 H1168 V265 H1182 V265 H1196 V264 H1210 V266 H1224 V265 H1238 V263 H1252 V264 H1266 V265 H1280 V266 H1294 V265 H1308 V264 H1322 V265 H1336 V265 H1350 V266 H1364 V264 H1378 V265 H1392 V265 H1406 V268 Z"/>
+<path class="lg" d="M986,265 H1000 V266 H1014 V264 H1028 V265 H1042 V263 H1056 V265 H1070 V266 H1084 V265 H1098 V264 H1112 V262 H1126 V264 H1140 V265 H1154 V266 H1168 V265 H1182 V265 H1196 V264 H1210 V266 H1224 V265 H1238 V263 H1252 V264 H1266 V265 H1280 V266 H1294 V265 H1308 V264 H1322 V265 H1336 V265 H1350 V266 H1364 V264 H1378 V265 H1392 V265 H1406"/>
+<path class="ab" d="M1448,268 V250.8 H1658 V250.5 H1868 V268 Z"/>
+<path class="lb" d="M1448,250.8 H1658 V250.5 H1868"/>
+<path class="base" d="M986,268H1406M1448,268H1868"/>
+<text x="986" y="290" class="f18 fa">-2m</text>
+<text x="1406" y="290" class="f18 fa" text-anchor="end">now</text>
+<text x="1448" y="290" class="f18 fa">-2m</text>
+<text x="1868" y="290" class="f18 fa" text-anchor="end">now</text>
+
+<path class="grid" d="M986,302H1888"/>
+<text x="986" y="324" class="f20"><tspan class="dm">cpu temp </tspan><tspan class="tx">44°C</tspan></text>
+<text x="1176" y="324" class="f20"><tspan class="dm">uptime </tspan><tspan class="tx">12d 4h</tspan></text>
+<text x="1366" y="324" class="f20"><tspan class="dm">sessions </tspan><tspan class="tx">1</tspan><tspan class="dm"> live</tspan></text>
+<text x="1606" y="324" class="f20"><tspan class="dm">services </tspan><tspan class="tx">0</tspan></text>
+
+<!-- ================= PANEL: vps ================= -->
+<g transform="translate(0 6)">
+<rect class="box" x="12" y="356" width="942" height="256"/>
+<rect class="tb" x="32" y="342" width="202" height="28"/>
+<text x="42" y="364" class="f22 b cy">vps</text>
+<rect x="96" y="351" width="10" height="10" fill="#7bd88f"/>
+<text x="114" y="363" class="f20 gr">reachable</text>
+<rect class="tb" x="646" y="342" width="300" height="28"/>
+<text x="934" y="363" class="f20" text-anchor="end"><tspan class="dm">metrics </tspan><tspan class="tx">2s</tspan><tspan class="dm">  catalogs </tspan><tspan class="tx">4s</tspan></text>
+
+<text x="32" y="402" class="f20 dm">CPU</text>
+<text x="84" y="402" class="f18 fa">all cores</text>
+<text x="452" y="402" class="f24 b gr" text-anchor="end">6%</text>
+<text x="494" y="402" class="f20 dm">RAM</text>
+<text x="554" y="402" class="f20 tx">1.1 / 4.0 GiB</text>
+<text x="914" y="402" class="f24 b bl" text-anchor="end">28%</text>
+
+<line class="trk" x1="32" y1="416" x2="452" y2="416"/>
+<line class="mg" x1="32" y1="416" x2="57.2" y2="416"/>
+<line class="trk" x1="494" y1="416" x2="914" y2="416"/>
+<line class="mb" x1="494" y1="416" x2="609.5" y2="416"/>
+
+<path class="grid" d="M32,436H452M32,486H452M494,436H914M494,486H914"/>
+<path class="ag" d="M32,536 V531 H46 V532 H60 V530 H74 V527 H88 V529 H102 V531 H116 V532 H130 V531 H144 V524 H158 V528 H172 V530 H186 V531 H200 V532 H214 V530 H228 V529 H242 V531 H256 V532 H270 V531 H284 V530 H298 V525 H312 V529 H326 V531 H340 V530 H354 V531 H368 V532 H382 V530 H396 V528 H410 V530 H424 V531 H438 V530 H452 V536 Z"/>
+<path class="lg" d="M32,531 H46 V532 H60 V530 H74 V527 H88 V529 H102 V531 H116 V532 H130 V531 H144 V524 H158 V528 H172 V530 H186 V531 H200 V532 H214 V530 H228 V529 H242 V531 H256 V532 H270 V531 H284 V530 H298 V525 H312 V529 H326 V531 H340 V530 H354 V531 H368 V532 H382 V530 H396 V528 H410 V530 H424 V531 H438 V530 H452"/>
+<path class="ab" d="M494,536 V508.7 H704 V508.5 H914 V536 Z"/>
+<path class="lb" d="M494,508.7 H704 V508.5 H914"/>
+<path class="base" d="M32,536H452M494,536H914"/>
+<text x="32" y="558" class="f18 fa">-2m</text>
+<text x="452" y="558" class="f18 fa" text-anchor="end">now</text>
+<text x="494" y="558" class="f18 fa">-2m</text>
+<text x="914" y="558" class="f18 fa" text-anchor="end">now</text>
+
+<path class="grid" d="M32,570H934"/>
+<text x="32" y="592" class="f20"><tspan class="dm">cpu temp </tspan><tspan class="fa">--</tspan></text>
+<text x="222" y="592" class="f20"><tspan class="dm">uptime </tspan><tspan class="tx">26d 1h</tspan></text>
+<text x="412" y="592" class="f20"><tspan class="dm">sessions </tspan><tspan class="tx">2</tspan><tspan class="dm"> live</tspan></text>
+<text x="652" y="592" class="f20"><tspan class="dm">services </tspan><tspan class="tx">3</tspan></text>
+</g>
+
+<!-- ================= PANEL: macbook (unreachable) ================= -->
+<g transform="translate(0 6)">
+<rect class="boxr" x="966" y="356" width="942" height="256"/>
+<rect class="tb" x="986" y="342" width="278" height="28"/>
+<text x="996" y="364" class="f22 b cy">macbook</text>
+<rect x="1102" y="351" width="10" height="10" fill="#ef6b5b"/>
+<text x="1120" y="363" class="f20 rd">unreachable</text>
+<rect class="tb" x="1660" y="342" width="240" height="28"/>
+<text x="1888" y="363" class="f20" text-anchor="end"><tspan class="dm">last reply </tspan><tspan class="am">32m ago</tspan></text>
+
+<text x="986" y="402" class="f20 dm">CPU</text>
+<text x="1038" y="402" class="f18 fa">all cores</text>
+<text x="1406" y="402" class="f24 b fa" text-anchor="end">--</text>
+<text x="1448" y="402" class="f20 dm">RAM</text>
+<text x="1508" y="402" class="f20 fa">-- / -- GiB</text>
+<text x="1868" y="402" class="f24 b fa" text-anchor="end">--</text>
+
+<line class="trk" x1="986" y1="416" x2="1406" y2="416"/>
+<line class="trk" x1="1448" y1="416" x2="1868" y2="416"/>
+
+<text x="986" y="466" class="f20 dm">last verified reply</text>
+<text x="1286" y="466" class="f20 am">32m ago</text>
+<text x="986" y="500" class="f20 dm">cached catalog</text>
+<text x="1286" y="500" class="f20"><tspan class="am">32m old</tspan><tspan class="dm">  · counts below are from this cache</tspan></text>
+<text x="986" y="534" class="f20 dm">fresh metrics</text>
+<text x="1286" y="534" class="f20"><tspan class="fa">--</tspan><tspan class="dm">  none since last reply</tspan></text>
+
+<path class="grid" d="M986,570H1888"/>
+<text x="986" y="592" class="f20"><tspan class="dm">cpu temp </tspan><tspan class="fa">--</tspan></text>
+<text x="1176" y="592" class="f20"><tspan class="dm">uptime </tspan><tspan class="fa">--</tspan></text>
+<text x="1366" y="592" class="f20"><tspan class="dm">sessions </tspan><tspan class="am">2 cached</tspan></text>
+<text x="1606" y="592" class="f20"><tspan class="dm">services </tspan><tspan class="am">0 cached</tspan></text>
+</g>
+
+<!-- ================= SESSIONS ================= -->
+<rect class="box" x="12" y="636" width="1138" height="384"/>
+<rect class="tb" x="32" y="622" width="356" height="28"/>
+<text x="42" y="644" class="f22 b cy">sessions</text>
+<text x="164" y="643" class="f20"><tspan class="dm">live </tspan><tspan class="tx">5/7</tspan></text>
+<text x="280" y="643" class="f20"><tspan class="dm">cached </tspan><tspan class="am">2</tspan></text>
+
+<text x="36" y="686" class="f20 dm">HOST</text>
+<text x="156" y="686" class="f20 dm">ID</text>
+<text x="252" y="686" class="f20 dm">NAME</text>
+<text x="472" y="686" class="f20 dm">STATE</text>
+<text x="612" y="686" class="f20 dm">COMMAND (observed)</text>
+<text x="1126" y="686" class="f20 dm" text-anchor="end">AGE</text>
+<path class="rule" d="M36,700H1126"/>
+
+<text x="36" y="734" class="f20 cy">pc</text>
+<text x="156" y="734" class="f20 tx">7K3D</text>
+<text x="252" y="734" class="f20 tx">codex audit</text>
+<text x="472" y="734" class="f20 st">detached</text>
+<text x="612" y="734" class="f20 cm">codex</text>
+<text x="1126" y="734" class="f20 dm" text-anchor="end">3s</text>
+
+<text x="36" y="770" class="f20 cy">pc</text>
+<text x="156" y="770" class="f20 tx">9N2A</text>
+<text x="252" y="770" class="f20 tx">bun dev</text>
+<text x="472" y="770" class="f20 gr">running</text>
+<text x="612" y="770" class="f20 cm">bun run dev</text>
+<text x="1126" y="770" class="f20 dm" text-anchor="end">3s</text>
+
+<text x="36" y="806" class="f20 cy">pi</text>
+<text x="156" y="806" class="f20 tx">2P8R</text>
+<text x="252" y="806" class="f20 tx">maintenance</text>
+<text x="472" y="806" class="f20 gr">running</text>
+<text x="612" y="806" class="f20 cm">journalctl -fu mesh</text>
+<text x="1126" y="806" class="f20 dm" text-anchor="end">1s</text>
+
+<text x="36" y="842" class="f20 cy">vps</text>
+<text x="156" y="842" class="f20 tx">4B7T</text>
+<text x="252" y="842" class="f20 tx">edge</text>
+<text x="472" y="842" class="f20 st">detached</text>
+<text x="612" y="842" class="f20 cm">journalctl -fu edge</text>
+<text x="1126" y="842" class="f20 dm" text-anchor="end">4s</text>
+
+<text x="36" y="878" class="f20 cy">vps</text>
+<text x="156" y="878" class="f20 tx">8C1M</text>
+<text x="252" y="878" class="f20 tx">bash</text>
+<text x="472" y="878" class="f20 st">detached</text>
+<text x="612" y="878" class="f20 cm">bash</text>
+<text x="1126" y="878" class="f20 dm" text-anchor="end">4s</text>
+
+<path class="rulea" d="M36,900H1126"/>
+<text x="36" y="932" class="f20 am">cached · macbook · catalog 32m old · not counted as live</text>
+
+<text x="36" y="968" class="f20 ca">macbook</text>
+<text x="156" y="968" class="f20 ca">3F9Q</text>
+<text x="252" y="968" class="f20 ca">writing</text>
+<text x="472" y="968" class="f20 ca">detached</text>
+<text x="612" y="968" class="f20 ca">nvim draft.md</text>
+<text x="1126" y="968" class="f20 ca" text-anchor="end">32m</text>
+
+<text x="36" y="1004" class="f20 ca">macbook</text>
+<text x="156" y="1004" class="f20 ca">6J2W</text>
+<text x="252" y="1004" class="f20 ca">scratch</text>
+<text x="472" y="1004" class="f20 ca">detached</text>
+<text x="612" y="1004" class="f20 ca">zsh</text>
+<text x="1126" y="1004" class="f20 ca" text-anchor="end">32m</text>
+
+<rect class="tb" x="682" y="1006" width="456" height="28"/>
+<text x="1126" y="1027" class="f20" text-anchor="end"><tspan class="dm">showing </tspan><tspan class="tx">5</tspan><tspan class="dm"> of </tspan><tspan class="tx">7</tspan><tspan class="dm"> live  ·  </tspan><tspan class="tx">2</tspan><tspan class="dm"> more on pc</tspan></text>
+
+<!-- ================= SERVICES ================= -->
+<rect class="box" x="1162" y="636" width="746" height="268"/>
+<rect class="tb" x="1182" y="622" width="344" height="28"/>
+<text x="1192" y="644" class="f22 b cy">services</text>
+<text x="1314" y="643" class="f20"><tspan class="dm">ready </tspan><tspan class="gr">4</tspan></text>
+<text x="1418" y="643" class="f20"><tspan class="dm">failed </tspan><tspan class="rd">1</tspan></text>
+<rect class="tb" x="1740" y="622" width="156" height="28"/>
+<text x="1884" y="643" class="f20" text-anchor="end"><tspan class="dm">visible </tspan><tspan class="tx">5/5</tspan></text>
+
+<text x="1186" y="686" class="f20 dm">HOST</text>
+<text x="1306" y="686" class="f20 dm">SERVICE</text>
+<text x="1506" y="686" class="f20 dm">STATE</text>
+<text x="1884" y="686" class="f20 dm" text-anchor="end">AGE</text>
+<path class="rule" d="M1186,700H1884"/>
+
+<text x="1186" y="734" class="f20 cy">pc</text>
+<text x="1306" y="734" class="f20 tx">api</text>
+<rect x="1506" y="722" width="10" height="10" fill="#7bd88f"/>
+<text x="1526" y="734" class="f20 gr">ready</text>
+<text x="1884" y="734" class="f20 dm" text-anchor="end">3s</text>
+
+<text x="1186" y="770" class="f20 cy">pc</text>
+<text x="1306" y="770" class="f20 tx">preview</text>
+<rect x="1506" y="758" width="10" height="10" fill="#ef6b5b"/>
+<text x="1526" y="770" class="f20 rd">failed</text>
+<text x="1884" y="770" class="f20 dm" text-anchor="end">3s</text>
+
+<text x="1186" y="806" class="f20 cy">vps</text>
+<text x="1306" y="806" class="f20 tx">edge</text>
+<rect x="1506" y="794" width="10" height="10" fill="#7bd88f"/>
+<text x="1526" y="806" class="f20 gr">ready</text>
+<text x="1884" y="806" class="f20 dm" text-anchor="end">4s</text>
+
+<text x="1186" y="842" class="f20 cy">vps</text>
+<text x="1306" y="842" class="f20 tx">blog</text>
+<rect x="1506" y="830" width="10" height="10" fill="#7bd88f"/>
+<text x="1526" y="842" class="f20 gr">ready</text>
+<text x="1884" y="842" class="f20 dm" text-anchor="end">4s</text>
+
+<text x="1186" y="878" class="f20 cy">vps</text>
+<text x="1306" y="878" class="f20 tx">notes</text>
+<rect x="1506" y="866" width="10" height="10" fill="#7bd88f"/>
+<text x="1526" y="878" class="f20 gr">ready</text>
+<text x="1884" y="878" class="f20 dm" text-anchor="end">4s</text>
+
+<!-- ================= ATTENTION ================= -->
+<rect class="boxr" x="1162" y="928" width="746" height="92"/>
+<rect class="tb" x="1182" y="914" width="166" height="28"/>
+<text x="1192" y="936" class="f22 b am">attention</text>
+<text x="1324" y="935" class="f20 tx">2</text>
+
+<rect x="1186" y="956" width="10" height="10" fill="#ef6b5b"/>
+<text x="1206" y="968" class="f20 tx">pc/preview</text>
+<text x="1386" y="968" class="f20 rd">failed</text>
+<text x="1884" y="968" class="f20" text-anchor="end"><tspan class="dm">catalog </tspan><tspan class="tx">3s</tspan></text>
+
+<rect x="1186" y="990" width="10" height="10" fill="#ef6b5b"/>
+<text x="1206" y="1002" class="f20 tx">macbook</text>
+<text x="1386" y="1002" class="f20 rd">unreachable</text>
+<text x="1884" y="1002" class="f20" text-anchor="end"><tspan class="dm">last reply </tspan><tspan class="am">32m ago</tspan></text>
+
+<!-- ================= STATUS ================= -->
+<text x="14" y="1064" class="f18 fa">auto-refresh  metrics 2s  catalogs 10s  ·  history 2m  ·  frame 14:32:07 on pi</text>
+<text x="1906" y="1064" class="f18" text-anchor="end"><tspan class="am">MOCKUP / SAMPLE DATA</tspan><tspan class="fa"> · synthetic values, not a live fleet</tspan></text>
+</svg>
