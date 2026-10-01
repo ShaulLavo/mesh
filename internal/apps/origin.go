@@ -1026,15 +1026,7 @@ func (o *Origin) cleanup(ctx context.Context, id string) error {
 	if err := o.stop(ctx, id); err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(o.config.DataRoot)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Close() }()
-	if err := root.RemoveAll(filepath.Join("apps", id)); err != nil {
+	if err := o.removeAppFiles(id); err != nil {
 		return err
 	}
 	o.config.Workers.Forget(ctx, "app "+id)
@@ -1048,6 +1040,38 @@ func (o *Origin) cleanup(ctx context.Context, id string) error {
 		}
 	}
 	return o.persist(ctx)
+}
+
+// removeAppFiles deletes the app's managed directory. A missing workload root
+// means there is nothing left to delete, unless the data SSD that holds it is
+// simply not mounted; that must stay a failure so cleanup is retried.
+func (o *Origin) removeAppFiles(id string) error {
+	root, err := os.OpenRoot(o.config.DataRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := workloadStorageMounted(o.config.DataRoot); err != nil {
+			return fmt.Errorf("app %s: workload root missing: %w", id, err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("app %s: open workload root: %w", id, err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.RemoveAll(filepath.Join("apps", id)); err != nil {
+		return fmt.Errorf("app %s: remove workload: %w", id, err)
+	}
+	return nil
+}
+func workloadStorageMounted(root string) error {
+	parent, err := existingDirectory(root)
+	if err != nil {
+		return err
+	}
+	resolved, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return fmt.Errorf("resolve workload directory: %w", err)
+	}
+	return validateDataMount(filepath.Clean(root), resolved)
 }
 
 // Sync renews every app's lease from the edge, then reconciles each app on its
