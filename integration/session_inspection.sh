@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # The session picker inspection path is intentionally not a standalone CLI
 # command. Run its in-package end-to-end test so the real WebSocket, daemon,
 # Unix worker, process observer, and terminal emulator stay covered together.

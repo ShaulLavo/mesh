@@ -1024,79 +1024,58 @@ func TestPublicServerRejectsOversizedHeadersBeforeHandler(t *testing.T) {
 	}
 }
 
-func TestBoundedPublicListenerCapsAndUnblocksAccepts(t *testing.T) {
+func TestBoundedPublicListenerRejectsFullActivePool(t *testing.T) {
 	base := &queuedPublicListener{
-		connections: make(chan net.Conn, 3), accepted: make(chan struct{}, 3), closed: make(chan struct{}),
+		connections: make(chan net.Conn, 3), accepted: make(chan struct{}, 8), closed: make(chan struct{}),
 	}
-	peers := make([]net.Conn, 0, 3)
-	for range 3 {
+	for i := range 3 {
 		server, peer := net.Pipe()
-		base.connections <- server
-		peers = append(peers, peer)
+		base.connections <- publicAddressedConn{Conn: server, address: &net.TCPAddr{IP: net.IPv4(127, 0, 0, byte(i+1)), Port: 1234}}
+		t.Cleanup(func() { _ = peer.Close() })
 	}
-	defer func() {
-		for _, peer := range peers {
-			_ = peer.Close()
-		}
-	}()
 	listener := newBoundedPublicListener(base, 2)
+	t.Cleanup(func() { _ = listener.Close(); _ = listener.closeActive() })
 	first, err := listener.Accept()
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := listener.Accept()
-	if err != nil {
+	if _, err := listener.Accept(); err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
-		<-base.accepted
-	}
-	thirdResult := make(chan net.Conn, 1)
-	thirdError := make(chan error, 1)
-	go func() {
-		connection, acceptErr := listener.Accept()
-		thirdResult <- connection
-		thirdError <- acceptErr
-	}()
-	select {
-	case <-base.accepted:
-		t.Fatal("listener accepted beyond its connection cap")
-	case <-time.After(25 * time.Millisecond):
+	<-base.accepted
+	<-base.accepted
+	result := make(chan error, 1)
+	go func() { _, err := listener.Accept(); result <- err }()
+	<-base.accepted
+	<-base.accepted
+	listener.mu.Lock()
+	admitted := listener.admitted
+	listener.mu.Unlock()
+	if admitted != 2 {
+		t.Fatalf("admitted %d connections, want 2", admitted)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-base.accepted:
-	case <-time.After(time.Second):
-		t.Fatal("closing one connection did not admit one waiter")
-	}
-	third := <-thirdResult
-	if err := <-thirdError; err != nil {
-		t.Fatal(err)
-	}
-	fourthError := make(chan error, 1)
-	go func() {
-		_, acceptErr := listener.Accept()
-		fourthError <- acceptErr
-	}()
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case err := <-fourthError:
+	case err := <-result:
 		if !errors.Is(err, net.ErrClosed) {
-			t.Fatalf("blocked Accept error = %v, want net.ErrClosed", err)
+			t.Fatalf("Accept error = %v, want net.ErrClosed", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("listener shutdown did not unblock a capped Accept")
-	}
-	_ = second.Close()
-	_ = third.Close()
-	if err := listener.closeActive(); err != nil {
-		t.Fatal(err)
+		t.Fatal("listener shutdown did not unblock Accept")
 	}
 }
+
+type publicAddressedConn struct {
+	net.Conn
+	address net.Addr
+}
+
+func (c publicAddressedConn) RemoteAddr() net.Addr { return c.address }
 
 type queuedPublicListener struct {
 	connections chan net.Conn

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 if [[ -z ${MESH:-} ]]; then
@@ -68,6 +69,8 @@ def signals(fixture, remote):
                    f"sig {name} did not reach {'remote' if remote else 'local'} process", timeout=3)
         eventually(lambda: json.loads((directory / "meta.json").read_text()).get("state") == "exited",
                    "signalled process did not exit")
+        eventually(lambda: not (directory / "sock").exists(),
+                   "signalled worker did not finish writing its session data")
         if remote:
             def reconciled_exit():
                 response = round_trip(str(state / "daemon.sock"), {
