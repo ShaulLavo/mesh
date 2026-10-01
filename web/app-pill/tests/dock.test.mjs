@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DOT_LINE, DOT_TARGET, GAP, PILL_THICKNESS, confine, dockFromRelease, dotCenter, placeDot, placePill } from '../src/dock.ts';
+import { DOT_CAP, DOT_LINE, DOT_TARGET, GAP, PILL_THICKNESS, confine, dockFromRelease, dotCenter, placeDot, placePill } from '../src/dock.ts';
 
 const edges = ['top', 'bottom', 'left', 'right'];
 const none = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -58,14 +58,26 @@ for (const [name, viewport, insets] of scenarios) {
   });
 }
 
-test('the expanded pill grows around the dot unless a corner pushes it inward', () => {
-  const middle = { edge: 'bottom', ratio: 0.5 };
-  const pill = placePill(middle, { width: 74, height: PILL_THICKNESS }, portrait, none);
-  const center = dotCenter(middle, portrait, none);
-  assert.deepEqual({ x: pill.x + 37, y: pill.y + PILL_THICKNESS / 2 }, center);
-  const corner = { edge: 'bottom', ratio: 0 };
-  assert.deepEqual(dotCenter(corner, portrait, none), { x: DOT_LINE, y: 844 - DOT_LINE }, 'a corner dot is equidistant from both edges');
-  assert.equal(placePill(corner, { width: 74, height: PILL_THICKNESS }, portrait, none).x, GAP);
+for (const [name, viewport, insets] of scenarios) {
+  test(`${name}: the open pill holds the dot in its end cap, actions toward the middle`, () => {
+    for (const edge of edges) {
+      for (const ratio of [0, 0.2, 0.5, 0.51, 0.8, 1]) {
+        const size = pillSize(edge);
+        const pill = placePill({ edge, ratio }, size, viewport, insets);
+        const center = dotCenter({ edge, ratio }, viewport, insets);
+        const horizontal = edge === 'top' || edge === 'bottom';
+        const along = horizontal ? center.x - pill.x : center.y - pill.y;
+        const across = horizontal ? center.y - pill.y : center.x - pill.x;
+        const length = horizontal ? size.width : size.height;
+        assert.equal(across, DOT_CAP, `${edge} ${ratio}: the dot is on the pill's centerline`);
+        assert.equal(along, ratio <= 0.5 ? DOT_CAP : length - DOT_CAP, `${edge} ${ratio}: the dot is in the cap nearer the corner`);
+      }
+    }
+  });
+}
+
+test('a corner dot is equidistant from both edges', () => {
+  assert.deepEqual(dotCenter({ edge: 'bottom', ratio: 0 }, portrait, none), { x: DOT_LINE, y: 844 - DOT_LINE });
 });
 
 test('a flick lands where it was thrown, a slow release where it was dropped', () => {

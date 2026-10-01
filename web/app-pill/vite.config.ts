@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite';
 import { readFileSync } from 'node:fs';
 import solid from 'vite-plugin-solid';
-import tailwindcss from '@tailwindcss/vite';
 
 const notices = ['solid-js', 'react-grab-toolbar'].map(name =>
   readFileSync(new URL(`../../third_party/${name}/LICENSE`, import.meta.url), 'utf8'),
@@ -10,7 +9,6 @@ const notices = ['solid-js', 'react-grab-toolbar'].map(name =>
 export default defineConfig({
   plugins: [
     solid(),
-    tailwindcss(),
     {
       name: 'mesh-pill-notices',
       generateBundle(_, bundle) {
