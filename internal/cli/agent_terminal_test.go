@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"testing"
 	"time"
@@ -60,12 +62,34 @@ func TestAgentTerminalProcess(t *testing.T) {
 	command.SetIn(os.Stdin)
 	command.SetOut(os.Stdout)
 	command.SetErr(os.Stderr)
-	script := "trap 'printf \"NATIVE_INTERRUPT\\n\"; exit 42' INT\nprintf 'NATIVE_READY\\n'\nread ignored\nexit 90"
-	err := runNativeAgent(command, "/bin/sh", []string{"-c", script}, "", testenv.ForProcess(os.Getenv("HOME")))
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := append(testenv.ForProcess(os.Getenv("HOME")), "MESH_AGENT_TERMINAL_TEST=native")
+	err = runNativeAgent(command, executable, []string{"-test.run=^TestAgentNativeTerminalProcess$"}, "", env)
 	if code, ok := StatusCode(err); ok {
 		os.Exit(code)
 	}
 	t.Fatalf("native test process returned unexpectedly: %v", err)
+}
+
+func TestAgentNativeTerminalProcess(t *testing.T) {
+	if os.Getenv("MESH_AGENT_TERMINAL_TEST") != "native" {
+		return
+	}
+	// A shell can defer its INT trap until a blocking read returns. This
+	// fixture must handle even a prompt-time interrupt without further input.
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	if _, err := fmt.Fprintln(os.Stdout, "NATIVE_READY"); err != nil {
+		t.Fatal(err)
+	}
+	<-interrupts
+	if _, err := fmt.Fprintln(os.Stdout, "NATIVE_INTERRUPT"); err != nil {
+		t.Fatal(err)
+	}
+	os.Exit(42)
 }
 
 func readAgentTestTerminal(terminal *os.File, chunks chan<- []byte) {
