@@ -21,6 +21,7 @@ import (
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/updategate"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -35,29 +36,31 @@ type lifecycleCatalog interface {
 type launchWorker func(worker.LaunchConfig) (worker.Launched, error)
 
 type lifecycleConfig struct {
-	Context        context.Context
-	Catalog        lifecycleCatalog
-	Connector      WorkerConnector
-	Host           storage.Host
-	PrivateName    func() string
-	SessionsDir    string
-	Executable     string
-	Env            []string
-	Launch         launchWorker
-	PublishTimeout time.Duration
+	Context          context.Context
+	Catalog          lifecycleCatalog
+	Connector        WorkerConnector
+	Host             storage.Host
+	PrivateName      func() string
+	SessionsDir      string
+	Executable       string
+	Env              []string
+	Launch           launchWorker
+	PublishTimeout   time.Duration
+	OperationTimeout time.Duration
 }
 
 type lifecycle struct {
-	context        context.Context
-	catalog        lifecycleCatalog
-	connector      WorkerConnector
-	host           storage.Host
-	privateName    func() string
-	sessionsDir    string
-	executable     string
-	env            []string
-	launch         launchWorker
-	publishTimeout time.Duration
+	context          context.Context
+	catalog          lifecycleCatalog
+	connector        WorkerConnector
+	host             storage.Host
+	privateName      func() string
+	sessionsDir      string
+	executable       string
+	env              []string
+	launch           launchWorker
+	publishTimeout   time.Duration
+	operationTimeout time.Duration
 	// observeTerminalSize is a read-only compatibility boundary for workers
 	// whose inspection protocol predates structured terminal styles.
 	observeTerminalSize func(int) (int, int, bool)
@@ -68,7 +71,11 @@ type lifecycle struct {
 	memory memorySampler
 }
 
-const defaultPublishTimeout = 30 * time.Second
+const (
+	defaultPublishTimeout = 30 * time.Second
+	// Kill and hibernate acknowledgements follow the worker's five-second grace.
+	defaultWorkerOperationTimeout = 15 * time.Second
+)
 
 type creationRequest struct {
 	command []string
@@ -85,7 +92,7 @@ type creationRequest struct {
 
 func (r creationRequest) equal(other creationRequest) bool {
 	return slices.Equal(r.command, other.command) && r.cwd == other.cwd && r.cols == other.cols && r.rows == other.rows &&
-		r.label == other.label && slices.Equal(r.env, other.env)
+		r.term == other.term && r.depth == other.depth && r.label == other.label && slices.Equal(r.env, other.env)
 }
 
 type creation struct {
@@ -127,6 +134,12 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 	if cfg.PublishTimeout == 0 {
 		cfg.PublishTimeout = defaultPublishTimeout
 	}
+	if cfg.OperationTimeout < 0 {
+		return nil, fmt.Errorf("daemon: negative worker operation timeout")
+	}
+	if cfg.OperationTimeout == 0 {
+		cfg.OperationTimeout = defaultWorkerOperationTimeout
+	}
 	cfg.Host.Alias = cloneLifecycleString(cfg.Host.Alias)
 	cfg.Host.TailscaleName = cloneLifecycleString(cfg.Host.TailscaleName)
 	return &lifecycle{
@@ -140,6 +153,7 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 		env:                 append([]string(nil), cfg.Env...),
 		launch:              cfg.Launch,
 		publishTimeout:      cfg.PublishTimeout,
+		operationTimeout:    cfg.OperationTimeout,
 		observeTerminalSize: worker.ReadSessionLeaderTerminalSize,
 		creations:           make(map[string]*creation),
 	}, nil
@@ -191,7 +205,7 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 		if ctx == nil {
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
 		}
-		response, err := l.forwardOneShot(ctx, request)
+		response, err := l.forwardOneShot(ctx, request, l.connector.ConnectWorker)
 		return response, true, err
 	default:
 		return protocol.Control{}, false, nil
@@ -214,7 +228,7 @@ func (l *lifecycle) logs(ctx context.Context, request protocol.Control) (protoco
 		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
 	}
 	if stored.State == storage.StateRunning || stored.State == storage.StateDetached {
-		response, err := l.forwardOneShot(ctx, request)
+		response, err := l.forwardOneShot(ctx, request, l.connector.ConnectWorker)
 		if err == nil {
 			return response, nil
 		}
@@ -248,7 +262,7 @@ func (l *lifecycle) create(ctx context.Context, request protocol.Control) (proto
 	if err := ctx.Err(); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
-	return l.createSession(ctx, request.Type, request.RequestID, creationRequest{
+	id, err := l.createSession(ctx, request.Type, request.RequestID, creationRequest{
 		command: append([]string(nil), request.Command...),
 		cwd:     request.Cwd,
 		cols:    request.Cols,
@@ -256,12 +270,25 @@ func (l *lifecycle) create(ctx context.Context, request protocol.Control) (proto
 		term:    request.Term,
 		depth:   request.Depth,
 	})
-}
-
-func (l *lifecycle) createSession(ctx context.Context, requestType, requestID string, wanted creationRequest) (protocol.Control, error) {
-	created, owner, err := l.creation(requestID, wanted)
 	if err != nil {
 		return protocol.Control{}, err
+	}
+	return protocol.Control{Type: protocol.TypeCreated, RequestID: request.RequestID, SessionID: id}, nil
+}
+
+// publicationError is a creation whose worker launched and is ready but which
+// the catalog has not recorded yet. Its next reconcile lists the session.
+type publicationError struct{ err error }
+
+func (e publicationError) Error() string { return e.err.Error() }
+func (e publicationError) Unwrap() error { return e.err }
+
+// createSession returns the launched session's ID even when a later step
+// fails: that worker may be running, and whoever asked for it owns it.
+func (l *lifecycle) createSession(ctx context.Context, requestType, requestID string, wanted creationRequest) (string, error) {
+	created, owner, err := l.creation(requestID, wanted)
+	if err != nil {
+		return "", err
 	}
 	if owner {
 		env := append([]string(nil), l.env...)
@@ -291,16 +318,22 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 		select {
 		case <-created.done:
 		case <-ctx.Done():
-			return protocol.Control{}, fmt.Errorf("daemon: wait for %s request %s: %w", requestType, requestID, ctx.Err())
+			return "", fmt.Errorf("daemon: wait for %s request %s: %w", requestType, requestID, ctx.Err())
 		}
 	}
 	if created.launchErr != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", requestType, created.launchErr)
+		err := fmt.Errorf("daemon: %s: %w", requestType, created.launchErr)
+		var started *worker.StartedError
+		if errors.As(created.launchErr, &started) && isCanonicalSessionID(started.ID) {
+			return started.ID, err
+		}
+		return "", err
 	}
 	parsedID, err := session.ParseID(created.launched.Meta.ID)
 	if err != nil || parsedID != created.launched.Meta.ID {
-		return protocol.Control{}, fmt.Errorf("daemon: launcher returned invalid session ID %q", created.launched.Meta.ID)
+		return "", fmt.Errorf("daemon: launcher returned invalid session ID %q", created.launched.Meta.ID)
 	}
+	id := created.launched.Meta.ID
 	waitCtx := ctx
 	if owner {
 		waitCtx = l.context
@@ -309,7 +342,7 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 	case <-created.publishGate:
 		defer func() { created.publishGate <- struct{}{} }()
 	case <-waitCtx.Done():
-		return protocol.Control{}, fmt.Errorf("daemon: wait to publish session %s: %w", created.launched.Meta.ID, waitCtx.Err())
+		return id, publicationError{fmt.Errorf("daemon: wait to publish session %s: %w", id, waitCtx.Err())}
 	}
 	if !created.published {
 		// Publication belongs to the daemon, not the disposable client, but must
@@ -318,15 +351,11 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 		err = l.catalog.Reconcile(publishCtx)
 		cancel()
 		if err != nil {
-			return protocol.Control{}, fmt.Errorf("daemon: publish session %s: %w", created.launched.Meta.ID, err)
+			return id, publicationError{fmt.Errorf("daemon: publish session %s: %w", id, err)}
 		}
 		created.published = true
 	}
-	return protocol.Control{
-		Type:      protocol.TypeCreated,
-		RequestID: requestID,
-		SessionID: created.launched.Meta.ID,
-	}, nil
+	return id, nil
 }
 
 func (l *lifecycle) creation(requestID string, wanted creationRequest) (*creation, bool, error) {
@@ -389,7 +418,10 @@ func (l *lifecycle) hostInfo(request protocol.Control) (protocol.Control, error)
 	}, nil
 }
 
-func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control) (protocol.Control, error) {
+// forwardOneShot sends one validated control to a worker reached through
+// connect: the catalog-checked connector for clients, or connectOwned for a
+// session the daemon launched itself.
+func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control, connect func(context.Context, protocol.SessionID) (transport.Conn, error)) (protocol.Control, error) {
 	if err := validateRequestID(request); err != nil {
 		return protocol.Control{}, err
 	}
@@ -408,14 +440,20 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 			return protocol.Control{}, fmt.Errorf("daemon: inspect session %s: %w", request.SessionID, err)
 		}
 	}
+	if request.Type == protocol.TypeHibernate && request.HibernateIdleMillis < 0 {
+		return protocol.Control{}, fmt.Errorf("daemon: hibernate session %s: negative idle time", id)
+	}
 	sid, err := protocol.NewSessionID(id)
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: encode session ID %s: %w", id, err)
 	}
-	conn, err := l.connector.ConnectWorker(ctx, sid)
+	ctx, cancel := workerOperationContext(ctx, l.context, l.operationTimeout)
+	defer cancel()
+	conn, err := connect(ctx, sid)
 	if err != nil {
-		return protocol.Control{}, err
+		return protocol.Control{}, workerOperationError(ctx, sid, "connect worker for "+request.Type, err)
 	}
+	defer func() { _ = conn.Close() }()
 	stopCancellation := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopCancellation()
 	forwarded := protocol.Control{
@@ -431,9 +469,6 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		forwarded.PreviewCols = request.PreviewCols
 		forwarded.PreviewRows = request.PreviewRows
 	} else if request.Type == protocol.TypeHibernate {
-		if request.HibernateIdleMillis < 0 {
-			return protocol.Control{}, fmt.Errorf("daemon: hibernate session %s: negative idle time", id)
-		}
 		forwarded.HibernateIdleMillis = request.HibernateIdleMillis
 	}
 	payload, err := forwarded.Encode()
@@ -467,7 +502,7 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		return protocol.Control{}, refused
 	}
 	if err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: forward %s to session %s: %w", request.Type, id, err)
+		return protocol.Control{}, workerOperationError(ctx, sid, "forward "+request.Type, err)
 	}
 	if closeErr != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: close session %s control connection: %w", id, closeErr)
@@ -498,7 +533,7 @@ func (l *lifecycle) enrichLegacyInspection(ctx context.Context, id string, reque
 	}
 	logs, err := l.forwardOneShot(ctx, protocol.Control{
 		Type: protocol.TypeLogs, RequestID: request.RequestID, SessionID: id, Tail: protocol.MaxLogTail,
-	})
+	}, l.connector.ConnectWorker)
 	if err != nil || logs.Type != protocol.TypeLogged {
 		return
 	}

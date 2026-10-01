@@ -18,7 +18,7 @@ func TestClientRelayForwardsAttachmentFrames(t *testing.T) {
 	client := newRelayTestConn()
 	worker := newRelayTestConn()
 	connector := newRelayTestConnector(connectResult{conn: worker})
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	id := mustRelaySessionID(t, "7K3D")
@@ -94,7 +94,7 @@ func TestClientRelayBlockedSessionDoesNotBlockAnother(t *testing.T) {
 		connectResult{conn: workerA},
 		connectResult{conn: workerB},
 	)
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	idA := mustRelaySessionID(t, "AAAA")
@@ -132,7 +132,7 @@ func TestClientRelaySlowClientDoesNotStopWorkerReaders(t *testing.T) {
 		connectResult{conn: workerA},
 		connectResult{conn: workerB},
 	)
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	idA := mustRelaySessionID(t, "AAAA")
@@ -217,7 +217,7 @@ func TestClientRelayFailedReplacementPreservesIncumbent(t *testing.T) {
 		connectResult{conn: incumbent},
 		connectResult{err: errors.New("dial failed")},
 	)
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	id := mustRelaySessionID(t, "KEEP")
@@ -248,7 +248,7 @@ func TestClientRelayRejectedReplacementPreservesIncumbent(t *testing.T) {
 		connectResult{conn: incumbent},
 		connectResult{conn: candidate},
 	)
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	id := mustRelaySessionID(t, "KEEP")
@@ -283,7 +283,7 @@ func TestClientRelayHandshakeEOFPreservesIncumbent(t *testing.T) {
 		connectResult{conn: incumbent},
 		connectResult{conn: candidate},
 	)
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	id := mustRelaySessionID(t, "KEEP")
@@ -306,7 +306,7 @@ func TestClientRelayCanceledHandshakePreservesIncumbent(t *testing.T) {
 		connectResult{conn: incumbent},
 		connectResult{conn: candidate},
 	)
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	id := mustRelaySessionID(t, "KEEP")
@@ -338,7 +338,7 @@ func TestClientRelayCrossSessionHandshakePreservesIncumbent(t *testing.T) {
 		connectResult{conn: incumbent},
 		connectResult{conn: candidate},
 	)
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	id := mustRelaySessionID(t, "KEEP")
@@ -365,7 +365,7 @@ func TestClientRelayOrdersGenerationReplacementWithOutboundFrames(t *testing.T) 
 		connectResult{conn: oldWorker},
 		connectResult{conn: newWorker},
 	)
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	id := mustRelaySessionID(t, "SWAP")
@@ -410,7 +410,7 @@ func TestClientRelayCloseInterruptsBlockedWorkWithoutLifecycleFrames(t *testing.
 	client := newRelayTestConn()
 	worker := newRelayTestConn()
 	connector := newRelayTestConnector(connectResult{conn: worker})
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	id := mustRelaySessionID(t, "LIVE")
 	attachRelaySession(t, relay, client, worker, id)
 
@@ -436,7 +436,7 @@ func TestClientRelayCloseInterruptsPendingHandshake(t *testing.T) {
 	client := newRelayTestConn()
 	candidate := newRelayTestConn()
 	connector := newRelayTestConnector(connectResult{conn: candidate})
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	id := mustRelaySessionID(t, "WAIT")
 	attach := controlFrame(t, protocol.Control{Type: protocol.TypeAttach, SessionID: id.String()})
 	handled := make(chan error, 1)
@@ -465,7 +465,7 @@ func TestClientRelayDetachFlushesItsOrderedQueue(t *testing.T) {
 	client := newRelayTestConn()
 	worker := newRelayTestConn()
 	connector := newRelayTestConnector(connectResult{conn: worker})
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	id := mustRelaySessionID(t, "LEAVE")
@@ -507,7 +507,7 @@ func TestClientRelayRejectsMalformedAndCrossSessionFrames(t *testing.T) {
 	client := newRelayTestConn()
 	worker := newRelayTestConn()
 	connector := newRelayTestConnector(connectResult{conn: worker})
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	if handled, err := relay.HandleFrame(context.Background(), protocol.Frame{
@@ -547,7 +547,7 @@ func TestClientRelayInputQueueIsBounded(t *testing.T) {
 	client := newRelayTestConn()
 	worker := newRelayTestConn()
 	connector := newRelayTestConnector(connectResult{conn: worker})
-	relay := newClientRelay(client, connector)
+	relay := newClientRelay(client, connector, defaultWorkerOperationTimeout)
 	t.Cleanup(func() { _ = relay.Close() })
 
 	id := mustRelaySessionID(t, "FULL")
