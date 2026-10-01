@@ -29,7 +29,7 @@ type lifecycleCatalog interface {
 	Reconcile(context.Context) error
 	List(context.Context) ([]storage.Session, error)
 	Get(context.Context, storage.SessionID) (storage.Session, error)
-	Retire(context.Context, []storage.SessionID) (int64, error)
+	Remove(context.Context, storage.SessionID) error
 }
 
 type launchWorker func(worker.LaunchConfig) (worker.Launched, error)
@@ -719,17 +719,8 @@ func (l *lifecycle) remove(ctx context.Context, request protocol.Control) (proto
 	if stored.State == storage.StateRunning || stored.State == storage.StateDetached {
 		return protocol.Control{}, fmt.Errorf("daemon: session %s is %s; kill it before removing it", id, stored.State)
 	}
-	removed, err := l.catalog.Retire(ctx, []storage.SessionID{storage.SessionID(id)})
-	if err != nil {
+	if err := l.catalog.Remove(ctx, storage.SessionID(id)); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s %s: %w", request.Type, id, err)
-	}
-	if removed == 0 {
-		return protocol.Control{}, fmt.Errorf("daemon: session %s was not removed; it may have restarted", id)
-	}
-	// The catalog row is gone, so a directory left here would be re-adopted by
-	// the next reconciliation and the session would come back.
-	if err := os.RemoveAll(filepath.Join(l.sessionsDir, id)); err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: remove session directory %s: %w", id, err)
 	}
 	// TypeOK, like kill and signal: remove travels through the same client
 	// helper, and a result type of its own would make that helper special-case

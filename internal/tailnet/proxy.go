@@ -104,6 +104,12 @@ func (c *proxyConn) Read(p []byte) (int, error) {
 	return c.reader.Read(p)
 }
 
+// Authenticated distinguishes a verified source from RemoteAddr's failure fallback.
+func (c *proxyConn) Authenticated() bool {
+	c.initialize()
+	return c.err == nil
+}
+
 func (c *proxyConn) RemoteAddr() net.Addr {
 	c.initialize()
 	if c.err != nil {
