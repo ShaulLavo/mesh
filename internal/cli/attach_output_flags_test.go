@@ -81,16 +81,6 @@ func TestAttachDoesNotMakeConcurrentPipeWriterFailWithEAGAIN(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = input.Close(); _ = reader.Close(); _ = output.Close() })
-	if err := output.SetWriteDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
-		t.Fatal(err)
-	}
-	filled, fillErr := output.Write(bytes.Repeat([]byte("x"), 1<<20))
-	if !errors.Is(fillErr, os.ErrDeadlineExceeded) {
-		t.Fatalf("fill output pipe: %v", fillErr)
-	}
-	if err := output.SetWriteDeadline(time.Time{}); err != nil {
-		t.Fatal(err)
-	}
 	fd, err := unix.Dup(int(output.Fd()))
 	if err != nil {
 		t.Fatal(err)
@@ -111,19 +101,34 @@ func TestAttachDoesNotMakeConcurrentPipeWriterFailWithEAGAIN(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("attachment did not acknowledge")
 	}
-	assertOutputBlocking(t, output, "during a blocked output write")
+	assertOutputBlocking(t, output, "during concurrent attachment")
+	// A prefill deadline can expire before writing anything. Check the shared
+	// writer's result with a concurrent drain, independent of pipe capacity.
+	payload := bytes.Repeat([]byte("p"), 512)
+	started := make(chan struct{})
 	written := make(chan error, 1)
 	go func() {
-		_, err := unix.Write(fd, bytes.Repeat([]byte("p"), 512))
-		written <- err
+		close(started)
+		for range 128 {
+			n, err := unix.Write(fd, payload)
+			if err != nil {
+				written <- err
+				return
+			}
+			if n != len(payload) {
+				written <- io.ErrShortWrite
+				return
+			}
+		}
+		written <- nil
 	}()
-	peerReturned := false
-	select {
-	case err := <-written:
-		peerReturned = true
-		t.Errorf("concurrent writer returned before the full pipe was drained: %v (prefill wrote %d bytes)", err, filled)
-	case <-time.After(50 * time.Millisecond):
+	<-started
+	drained := make(chan int64, 1)
+	go func() { n, _ := io.Copy(io.Discard, reader); drained <- n }()
+	if err := <-written; err != nil {
+		t.Errorf("concurrent writer failed during attachment: %v", err)
 	}
+	assertOutputBlocking(t, output, "after concurrent writes")
 	cancel()
 	select {
 	case err := <-done:
@@ -133,18 +138,13 @@ func TestAttachDoesNotMakeConcurrentPipeWriterFailWithEAGAIN(t *testing.T) {
 	case <-time.After(time.Second):
 		_ = reader.Close()
 		<-done
-		t.Error("cancelled output did not return before draining")
-	}
-	drained := make(chan struct{})
-	go func() { _, _ = io.Copy(io.Discard, reader); close(drained) }()
-	if !peerReturned {
-		if err := <-written; err != nil {
-			t.Errorf("concurrent writer failed after draining: %v", err)
-		}
+		t.Error("cancelled attachment did not return")
 	}
 	_ = peer.Close()
 	_ = output.Close()
-	<-drained
+	if n := <-drained; n != 64<<10 {
+		t.Errorf("concurrent output drained %d bytes, want %d", n, 64<<10)
+	}
 }
 
 func assertOutputBlocking(t *testing.T, output *os.File, stage string) {
