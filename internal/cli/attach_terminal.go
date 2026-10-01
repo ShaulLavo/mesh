@@ -88,8 +88,8 @@ func localAttachTerminal(ctx context.Context, input, output *os.File) (AttachTer
 		return AttachTerminal{}, nil, false, err
 	}
 	terminal.Output = ownedOutput
-	terminal.restoreOutput = func(sequence string) { restoreLocalOutput(ownedOutput, sequence) }
-	resizes, stopResizes := localTerminalResizes(ownedOutput)
+	terminal.restoreOutput = ownedOutput.restore
+	resizes, stopResizes := localTerminalResizes(ownedOutput.file)
 	terminal.Resizes = resizes
 	closeTerminal := func() {
 		terminal.restore()
