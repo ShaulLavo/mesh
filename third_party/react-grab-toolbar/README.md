@@ -10,8 +10,7 @@ discard, collapsed dragging and grabbing a snap in flight at its on-screen posit
 Edge snapping and collapsed/expanded positioning are Mesh's own
 (web/app-pill/src/dock.ts): React Grab's flush collapsed tab and padded release
 target were two placement rules, which made the docked position depend on the path.
-The pill shell now uses the original ToolbarContent, IconChevron and cn sources
-from the same commit. The sync script changes only their import paths. Mesh renders ToolbarContent
-expanded only; its collapsed state is the Mesh dot. Tailwind
-compiles their original spacing and edge orientation.
-Mesh supplies the actions and disables position transitions during viewport changes.
+The pill's panel was React Grab's ToolbarContent until the dot became the pill's
+only toggle. Its chevron and collapse animation no longer had a place, so Mesh
+draws the panel in plain CSS with the same padding, radius, color and shadow,
+and no longer copies ToolbarContent, IconChevron or cn.

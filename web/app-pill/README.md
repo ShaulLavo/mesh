@@ -1,10 +1,13 @@
 # Mesh app pill
 
-The Solid control mounts in an app's Shadow DOM. Collapsed, it is a floating dot;
-expanded, it is React Grab's pinned toolbar. `src/dock.ts` owns placement: one rule
-puts the expanded pill 16px from the safe edge and the dot's center on the pill's
-centerline, for every path (load, drag, flick, viewport change, keyboard, toggle).
-`src/drag.ts` adapts React Grab's drag gesture. The
+The Solid control mounts in an app's Shadow DOM. It is a floating dot; tapping the
+dot grows a pill of actions out of it, and tapping the dot again folds them away.
+`src/dock.ts` owns placement. The open pill is a row of 44px touch targets, the
+dot's and one per action. One rule puts the dot's center 38px from the safe edge
+(a 16px gap plus half the pill) and the open pill 16px from it, with the dot in
+the pill's end cap and the actions toward the middle of the edge. Every path uses it: load, drag, flick,
+viewport change, keyboard and toggle. `src/drag.ts` adapts React Grab's drag
+gesture. The
 browser build embeds `pill.js` and `pill.css` in the Go binary; installed Mesh
 hosts need neither Node nor Playwright.
 
@@ -16,8 +19,7 @@ pnpm install --frozen-lockfile --store-dir /work/cache/pnpm
 pnpm build
 ```
 
-`build` regenerates the adapted upstream utilities, checks TypeScript, and
-bundles the assets into `internal/apppill/assets`. Commit generated assets
+`build` checks TypeScript and bundles the assets into `internal/apppill/assets`. Commit generated assets
 alongside their source changes.
 
 The bundle retains the MIT notices for Solid and React Grab from `third_party`.

@@ -1,16 +1,15 @@
 import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from 'solid-js';
 import { render } from 'solid-js/web';
 import './pill.css';
-import { ToolbarContent } from './grab/toolbar-content';
-import { DOT_TARGET, confine, dockFromRelease, isHorizontalEdge, placeDot, placePill, type Box, type Dock, type Insets, type Point } from './dock';
+import { DOT_TARGET, confine, dockFromRelease, dotLeads, isHorizontalEdge, placeDot, placePill, type Box, type Dock, type Insets, type Point } from './dock';
 import { createDrag } from './drag';
 
 const SNAP_MS = 250;
 // The opening morph ends in a transitionend; this only guards against a missed event.
 const REVEAL_FALLBACK_MS = 1500;
-const DOT_RING_RADIUS = 10;
+const DOT_RING_RADIUS = 11;
 // The open clip extends past the pill so its shadow is not cut off.
-const OPEN_CLIP = 'inset(-12px round 25px)';
+const OPEN_CLIP = 'inset(-16px round 38px)';
 
 function loadDock(): Dock {
   try {
@@ -33,11 +32,10 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
   const [copyState, setCopyState] = createSignal<'idle' | 'copied' | 'failed'>('idle');
   const [snapping, setSnapping] = createSignal(false);
   const [resizing, setResizing] = createSignal(false);
-  const [pressed, setPressed] = createSignal(false);
   const [keyboardMotion, setKeyboardMotion] = createSignal(false);
   // The stylesheet loads after the elements exist; morph transitions wait for a real toggle so loading never flashes the pill.
   const [animated, setAnimated] = createSignal(false);
-  // Until the opening morph lands, the dot keeps its hit area and the actions appearing under it stay inert to touch.
+  // Until the opening morph lands, the actions appearing beside the dot ignore pointers, so a quick second tap stays on the dot.
   const [revealed, setRevealed] = createSignal(false);
   const [access, setAccess] = createSignal<Access | undefined>(props.initialAccess);
   let shell: HTMLDivElement | undefined;
@@ -49,7 +47,6 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
   let snapTimer: ReturnType<typeof setTimeout> | undefined;
   let revealTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const collapseButton = () => shell?.querySelector<HTMLButtonElement>('[data-react-grab-toolbar-collapse]') || undefined;
   const viewport = (): Box => {
     const visual = window.visualViewport;
     return { left: visual?.offsetLeft ?? 0, top: visual?.offsetTop ?? 0, width: visual?.width ?? innerWidth, height: visual?.height ?? innerHeight };
@@ -105,9 +102,6 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
   });
   const reveal = () => { clearTimeout(revealTimer); if (!collapsed()) setRevealed(true); };
   const setOpen = (open: boolean) => {
-    const root = shell?.getRootNode() as ShadowRoot | undefined;
-    const focused = open ? dotButton : collapseButton();
-    const hadFocus = !!focused && root?.activeElement === focused;
     // A toggle can interrupt a snap. Starting the new state from the rendered box keeps the dot under the finger,
     // and the snap then carries on toward the dock while the morph runs.
     const rendered = shell?.getBoundingClientRect();
@@ -129,7 +123,6 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
       snapTimer = setTimeout(() => setSnapping(false), SNAP_MS);
     }
     if (open) revealTimer = setTimeout(reveal, REVEAL_FALLBACK_MS);
-    if (hadFocus) (open ? collapseButton() : dotButton)?.focus({ preventScroll: true });
   };
   const copy = async () => {
     clearTimeout(copyTimer);
@@ -188,31 +181,30 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
       classList={{ closed: collapsed(), vertical: !isHorizontalEdge(dock().edge), dragging: drag.isDragging(), snapping: snapping(), animated: animated(), revealed: revealed(), resizing: resizing(), keyboard: keyboardMotion() }}
       style={{ transform: `translate3d(${position().x}px,${position().y}px,0)`, width: `${box().width}px`, height: `${box().height}px` }} onKeyDown={keyboard}
       onPointerDown={event => { setKeyboardMotion(false); drag.handlePointerDown(event); }}>
+      <button ref={dotButton} class="dot-target" type="button" aria-label={collapsed() ? 'Open Mesh controls. Drag to move; Alt and arrow keys to dock.' : 'Close Mesh controls'} aria-expanded={!collapsed()}
+        style={{ left: `${offsets().dot.x}px`, top: `${offsets().dot.y}px` }} onClick={drag.dragAware(() => setOpen(collapsed()))}><span class="dot"/></button>
       <div ref={morph} class="morph" inert={collapsed()} aria-hidden={collapsed()} onTransitionEnd={event => { if (event.target === morph) reveal(); }} onTransitionCancel={event => { if (event.target === morph) reveal(); }} style={{ left: `${offsets().pill.x}px`, top: `${offsets().pill.y}px`, 'clip-path': clip() }}>
-        <ToolbarContent isCollapsed={false} snapEdge={dock().edge} isChevronPressed={pressed()}
-          onCollapseClick={drag.dragAware(() => setOpen(false))} onCollapsePointerDown={() => setPressed(true)} onCollapsePointerUp={() => setPressed(false)} onCollapsePointerLeave={() => setPressed(false)}
-          actionButtons={<div class="controls" classList={{ 'flex-col': !isHorizontalEdge(dock().edge) }} style={{ display: 'flex' }}>
-            <div class="action-wrap">
-              <button class="action" classList={{ copied: copyState() === 'copied' }} aria-label={copyState() === 'copied' ? 'Link copied' : 'Copy link'} title={copyState() === 'copied' ? 'Copied' : 'Copy link'} onClick={drag.dragAware(() => void copy())}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <Show when={copyState() === 'copied'} fallback={<><path d="M10 13a5 5 0 0 0 7 .2l3-3a5 5 0 0 0-7-7l-2 2"/><path d="M14 11a5 5 0 0 0-7-.2l-3 3a5 5 0 0 0 7 7l2-2"/></>}><path d="m5 12 4 4L19 6"/></Show>
-                </svg>
-              </button>
-            </div>
+        <div class="panel" classList={{ trailing: !dotLeads(dock()) }}>
+          <span class="dot-slot"/>
+          <div class="controls">
+            <button class="action" classList={{ copied: copyState() === 'copied' }} aria-label={copyState() === 'copied' ? 'Link copied' : 'Copy link'} title={copyState() === 'copied' ? 'Copied' : 'Copy link'} onClick={drag.dragAware(() => void copy())}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <Show when={copyState() === 'copied'} fallback={<><path d="M10 13a5 5 0 0 0 7 .2l3-3a5 5 0 0 0-7-7l-2 2"/><path d="M14 11a5 5 0 0 0-7-.2l-3 3a5 5 0 0 0 7 7l2-2"/></>}><path d="m5 12 4 4L19 6"/></Show>
+              </svg>
+            </button>
             <Show when={access()}>{current => {
               const action = () => current().visibility === 'public' ? 'private' : 'public';
               const label = () => current().owns ? `Make ${action()}` : 'Pair owner browser';
               let link: HTMLAnchorElement | undefined;
               const destination = () => current().owns ? `${props.manager}/confirm?id=${encodeURIComponent(props.appID)}&action=${action()}&return=${encodeURIComponent(location.href)}` : `${props.manager}/pair`;
               const refreshLink = () => { if (link) link.href = destination(); };
-              return <div class="action-wrap"><a ref={link} class="action" draggable={false} href={destination()} onPointerDown={refreshLink} rel="noopener noreferrer" aria-label={label()} title={label()} onClick={drag.dragAware(refreshLink)}>
+              return <a ref={link} class="action" draggable={false} href={destination()} onPointerDown={refreshLink} rel="noopener noreferrer" aria-label={label()} title={label()} onClick={drag.dragAware(refreshLink)}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d={current().visibility === 'private' ? 'M8 10V7a4 4 0 0 1 8 0v3' : 'M8 10V7a4 4 0 0 1 8 0'}/><path d="M12 14v3"/></svg>
-              </a></div>;
+              </a>;
             }}</Show>
-          </div>}/>
+          </div>
+        </div>
       </div>
-      <button ref={dotButton} class="dot-target" type="button" aria-label="Open Mesh controls. Drag to move; Alt and arrow keys to dock." aria-expanded="false"
-        inert={revealed()} aria-hidden={!collapsed()} style={{ left: `${offsets().dot.x}px`, top: `${offsets().dot.y}px` }} onClick={drag.dragAware(() => setOpen(collapsed()))}><span class="dot"/></button>
       <span class="sr-only" role="status">{copyState() === 'copied' ? 'Link copied' : ''}</span>
       <Show when={copyState() === 'failed'}><span class="copy-error" role="status">Couldn’t copy. Tap to try again.</span></Show>
       <Show when={!collapsed()}><iframe ref={frame} class="auth-frame" hidden aria-hidden="true" tabIndex={-1} title="Mesh browser authorization" src={`${props.manager}/frame?id=${encodeURIComponent(props.appID)}`} referrerPolicy="no-referrer"/></Show>

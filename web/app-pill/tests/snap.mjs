@@ -10,7 +10,8 @@ if (artifacts) await mkdir(resolve(artifacts), { recursive: true });
 const manager = 'https://apps.shaulavo.dev';
 const script = await readFile(new URL('pill.js', assets));
 const stylesheet = await readFile(new URL('pill.css', assets));
-const DOT_LINE = 29;
+const DOT_LINE = 38;
+const TARGET = 44;
 const GAP = 16;
 
 let origin;
@@ -34,7 +35,17 @@ const measure = page => page.evaluate(() => {
   };
   const dot = root.querySelector('.dot');
   const shell = root.querySelector('.shell');
-  return { shell: gaps(shell), closed: shell.classList.contains('closed'), dot: dot ? gaps(dot) : undefined, panel: gaps(root.querySelector('[data-react-grab-toolbar-panel]')) };
+  return {
+    shell: gaps(shell), closed: shell.classList.contains('closed'), dot: gaps(dot), panel: gaps(root.querySelector('.panel')),
+    panelWidth: root.querySelector('.panel').offsetWidth, panelHeight: root.querySelector('.panel').offsetHeight,
+    target: gaps(root.querySelector('.dot-target')),
+    dotVisible: getComputedStyle(dot).opacity === '1', chevrons: root.querySelectorAll('[data-react-grab-toolbar-collapse]').length,
+    // Every touch target, the dot's and each action's, as rendered rectangles.
+    targets: [root.querySelector('.dot-target'), ...root.querySelectorAll('.action')].map(element => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height };
+    }),
+  };
 });
 
 const settle = page => page.waitForTimeout(450);
@@ -42,7 +53,7 @@ const center = async page => { const { shell } = await measure(page); return { x
 // Expanded drags start on the chevron so no link or copy action sits under the pointer.
 const grip = async (page, expanded) => {
   if (!expanded) return center(page);
-  const box = await page.locator('mesh-app-pill [data-react-grab-toolbar-collapse]').boundingBox();
+  const box = await page.locator('mesh-app-pill .dot-target').boundingBox();
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 };
 const targets = (size) => ({ top: { x: size.width / 2, y: 4 }, bottom: { x: size.width / 2, y: size.height - 4 }, left: { x: 4, y: size.height / 2 }, right: { x: size.width - 4, y: size.height / 2 } });
@@ -62,7 +73,7 @@ async function drag(page, edge, expanded, size) {
 async function flick(page, edge, expanded) {
   await page.evaluate(({ edge, expanded }) => {
     const root = document.querySelector('mesh-app-pill').shadowRoot;
-    const target = root.querySelector(expanded ? '[data-react-grab-toolbar-collapse]' : '.dot-target') ?? root.querySelector('[data-react-grab-toolbar-collapse]');
+    const target = root.querySelector('.dot-target');
     const bounds = target.getBoundingClientRect();
     const now = performance.now;
     let clock = now.call(performance);
@@ -86,8 +97,7 @@ async function flick(page, edge, expanded) {
 }
 
 async function keyboardDock(page, edge, expanded) {
-  const control = expanded ? 'mesh-app-pill [data-react-grab-toolbar-collapse]' : 'mesh-app-pill button[aria-expanded="false"]';
-  await page.locator(control).focus();
+  await page.locator('mesh-app-pill .dot-target').focus();
   await page.keyboard.press(`Alt+${{ top: 'ArrowUp', bottom: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight' }[edge]}`);
   await settle(page);
 }
@@ -95,7 +105,7 @@ async function keyboardDock(page, edge, expanded) {
 async function setExpanded(page, expanded) {
   const { closed } = await measure(page);
   if (closed === !expanded) return;
-  await page.locator(expanded ? 'mesh-app-pill button[aria-expanded="false"]' : 'mesh-app-pill [data-react-grab-toolbar-collapse]').click();
+  await page.locator('mesh-app-pill .dot-target').click();
   await settle(page);
 }
 
@@ -134,8 +144,23 @@ async function checkOrientation(browser, engine, orientation, size) {
           assert(Math.min(result.shell.top, result.shell.bottom, result.shell.left, result.shell.right) === result.shell[edge], `${label}: ${path} docks to ${edge}`);
         }
         const [, rest] = rests.at(-1);
-        if (rest.dot && !expanded) assert(Math.abs(rest.dot[edge] + 6 - DOT_LINE) < 0.5, `${label}: dot center ${rest.dot[edge] + 6}px from the edge, want ${DOT_LINE}`);
-        if (rest.dot && expanded) assert(Math.abs(rest.panel[edge] - GAP) < 0.5, `${label}: pill ${rest.panel[edge]}px from the edge, want ${GAP}`);
+        assert(Math.abs(rest.target[edge] + TARGET / 2 - DOT_LINE) < 0.5, `${label}: dot center ${rest.target[edge] + TARGET / 2}px from the edge, want ${DOT_LINE}`);
+        assert(Math.abs(rest.dot.x - rest.target.x) < 0.5 && Math.abs(rest.dot.y - rest.target.y) < 0.5, `${label}: the dot is centered in its target`);
+        assert.deepEqual([rest.targets[0].width, rest.targets[0].height], [TARGET, TARGET], `${label}: the dot keeps a ${TARGET}px target`);
+        assert.equal(rest.chevrons, 0, `${label}: no arrow`);
+        if (expanded) {
+          assert(Math.abs(rest.panel[edge] - GAP) < 0.5, `${label}: pill ${rest.panel[edge]}px from the edge, want ${GAP}`);
+          assert(rest.dotVisible, `${label}: the open pill keeps its dot`);
+          const panelThickness = edge === 'top' || edge === 'bottom' ? rest.panelHeight : rest.panelWidth;
+          assert.equal(panelThickness, TARGET, `${label}: the open pill is one ${TARGET}px target thick`);
+          for (const [index, target] of rest.targets.entries()) {
+            assert.deepEqual([target.width, target.height], [TARGET, TARGET], `${label}: target ${index} is ${target.width}x${target.height}, want ${TARGET}px`);
+            for (const other of rest.targets.slice(index + 1)) {
+              const apart = Math.max(other.left - target.right, target.left - other.right, other.top - target.bottom, target.top - other.bottom);
+              assert(apart >= -0.5, `${label}: touch targets overlap by ${-apart}px`);
+            }
+          }
+        }
         if (artifacts && (edge === 'right' || (orientation === 'portrait' && edge === 'bottom'))) await page.screenshot({ path: resolve(artifacts, `${engine}-${orientation}-${state}-${edge}.png`) });
       }
     }
@@ -148,7 +173,7 @@ async function checkOrientation(browser, engine, orientation, size) {
     });
     await settle(page);
     const shifted = await measure(page);
-    if (shifted.dot) assert(Math.abs(shifted.dot.bottom + 6 - DOT_LINE) < 0.5, `${engine} ${orientation}: a Safari toolbar keeps the dot ${DOT_LINE}px above the visible bottom, got ${shifted.dot.bottom + 6}`);
+    assert(Math.abs(shifted.target.bottom + TARGET / 2 - DOT_LINE) < 0.5, `${engine} ${orientation}: a Safari toolbar keeps the dot ${DOT_LINE}px above the visible bottom, got ${shifted.target.bottom + TARGET / 2}`);
     assert.deepEqual(errors, [], 'The pill must not throw browser errors');
     console.log(`${engine} ${orientation}: one rest position per edge and state after drag, flick, keyboard, resize and reload`);
   } finally {
@@ -161,7 +186,7 @@ const anchorOf = page => page.evaluate(() => {
   const box = document.querySelector('mesh-app-pill').shadowRoot.querySelector('.dot-target').getBoundingClientRect();
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 });
-const isOpen = async page => (await page.locator('mesh-app-pill .dot-target').getAttribute('aria-hidden')) === 'true';
+const isOpen = async page => (await page.locator('mesh-app-pill .dot-target').getAttribute('aria-expanded')) === 'true';
 const near = (a, b) => Math.abs(a.x - b.x) <= 1.5 && Math.abs(a.y - b.y) <= 1.5;
 // Holds the pill's running transitions, so a tap lands at a known moment of the motion.
 // Already held ones stay where they are; rewinding them would resize the pill under the test.
@@ -189,7 +214,7 @@ async function checkAnchoring(browser, engine, reducedMotion) {
     await page.goto(origin);
     const label = `${engine} ${reducedMotion}`;
     const dot = page.locator('mesh-app-pill .dot-target');
-    const collapse = page.locator('mesh-app-pill [data-react-grab-toolbar-collapse]');
+    const collapse = dot;
     await dot.click();
     await page.locator('mesh-app-pill').getByRole('link', { name: 'Make private' }).waitFor();
     await collapse.click();
@@ -204,6 +229,7 @@ async function checkAnchoring(browser, engine, reducedMotion) {
       await dot.click();
       await page.locator('mesh-app-pill').getByRole('link', { name: 'Make private' }).waitFor();
       await settle(page);
+      assert(near(await anchorOf(page), before), `${label} ${edge} ${ratio}: opening moved the dot from ${JSON.stringify(before)} to ${JSON.stringify(await anchorOf(page))}`);
       const grip = await collapse.boundingBox();
       const from = { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 };
       const [dx, dy] = edge === 'top' || edge === 'bottom' ? [10, 0] : [0, 10];

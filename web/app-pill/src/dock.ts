@@ -7,13 +7,18 @@ export interface Insets { top: number; right: number; bottom: number; left: numb
 export interface Dock { edge: Edge; ratio: number }
 
 export const GAP = 16;
-export const PILL_THICKNESS = 26;
+// Every control, the dot included, is a full 44px touch target, so the open pill is one target thick.
 export const DOT_TARGET = 44;
+export const PILL_THICKNESS = DOT_TARGET;
 // The dot rides the expanded pill's centerline, so expanding grows the pill around it instead of moving it.
 export const DOT_LINE = GAP + PILL_THICKNESS / 2;
+// The open pill keeps the dot at the center of one rounded end, so the dot never moves and never covers an action.
+export const DOT_CAP = PILL_THICKNESS / 2;
 const FLICK_PROJECTION_MS = 150;
 
 export const isHorizontalEdge = (edge: Edge): boolean => edge === 'top' || edge === 'bottom';
+// The actions extend toward the middle of the edge, where there is room for them.
+export const dotLeads = (dock: Dock): boolean => dock.ratio <= 0.5;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
 
@@ -45,8 +50,9 @@ export function placeDot(dock: Dock, viewport: Box, insets: Insets): Point {
 export function placePill(dock: Dock, size: Size, viewport: Box, insets: Insets): Point {
   const frame = safeFrame(viewport, insets);
   const center = dotCenter(dock, viewport, insets);
-  const x = clamp(center.x - size.width / 2, frame.left + GAP, frame.right - GAP - size.width);
-  const y = clamp(center.y - size.height / 2, frame.top + GAP, frame.bottom - GAP - size.height);
+  const start = (anchor: number, length: number) => dotLeads(dock) ? anchor - DOT_CAP : anchor + DOT_CAP - length;
+  const x = clamp(start(center.x, size.width), frame.left + GAP, frame.right - GAP - size.width);
+  const y = clamp(start(center.y, size.height), frame.top + GAP, frame.bottom - GAP - size.height);
   switch (dock.edge) {
     case 'top': return { x, y: frame.top + GAP };
     case 'bottom': return { x, y: frame.bottom - GAP - size.height };

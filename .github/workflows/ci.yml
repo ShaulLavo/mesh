@@ -23,8 +23,8 @@ jobs:
           version: 11.24.0
       - run: pnpm --dir web/app-pill install --frozen-lockfile
       - run: pnpm --dir web/app-pill build
-      - name: Require current embedded assets and upstream adaptations
-        run: git diff --exit-code -- internal/apppill/assets web/app-pill/src/grab
+      - name: Require current embedded assets
+        run: git diff --exit-code -- internal/apppill/assets
       - run: pnpm --dir web/app-pill test
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
