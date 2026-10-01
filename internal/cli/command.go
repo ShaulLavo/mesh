@@ -913,15 +913,6 @@ func (a *application) attachResolvedWithContainment(
 	lastSeq *uint64,
 	containingSessions []protocol.SessionIdentity,
 ) error {
-	if len(containingSessions) > 0 {
-		target, err := resolvedTargetIdentity(resolved)
-		if err != nil {
-			return fmt.Errorf("resolve attach target containment: %w", err)
-		}
-		if err := rejectContainingTarget(target, containingSessions); err != nil {
-			return err
-		}
-	}
 	options, err := a.attachmentOptions(cmd, detachKey, raw)
 	if err != nil {
 		return err
@@ -929,52 +920,7 @@ func (a *application) attachResolvedWithContainment(
 	options.LastSeq = lastSeq
 	options.ContainingSessions = containingSessions
 	options.IfDetached = resolved.ifDetached
-	var display string
-	if resolved.local != nil {
-		if resolved.local.Liveness == LivenessGone {
-			return stoppedSessionError(resolved.local.ID, "", resolved.local.State())
-		}
-		options.SocketPath = paths.Socket(resolved.local.Dir)
-		options.SessionID = resolved.local.ID
-		display = resolved.local.ID
-	} else {
-		if resolved.remote.State != string(storage.StateRunning) && resolved.remote.State != string(storage.StateDetached) {
-			return stoppedSessionError(resolved.remote.ID, resolved.host.Alias, resolved.remote.State)
-		}
-		ctx, cancel := context.WithTimeout(cmd.Context(), wakeIntentTimeout)
-		conn, err := openVerifiedHost(ctx, *resolved.host, a.intentDialer(cmd.ErrOrStderr()))
-		cancel()
-		if err != nil {
-			return err
-		}
-		options.Conn = conn
-		options.HostID = resolved.host.ID
-		options.SessionID = resolved.remote.ID
-		display = resolved.remote.ID + " on " + resolved.host.Alias
-	}
-	restore := a.bindTerminal(bindingFor(resolved))
-	a.noticeBeforeAttachment(cmd)
-	result, err := Attach(cmd.Context(), options)
-	if err != nil {
-		if !result.Established {
-			restore()
-		}
-		return err
-	}
-	switch {
-	case result.Exited:
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "\r\nsession %s exited (%d)\r\n", display, result.ExitCode); err != nil {
-			return err
-		}
-		if result.ExitCode != 0 {
-			return statusError{code: result.ExitCode}
-		}
-	case result.Detached:
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndetached from %s, still running\r\n", display)
-	default:
-		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndisconnected from %s\r\n", display)
-	}
-	return err
+	return a.attach(cmd, attachRequest{target: resolved, options: options})
 }
 
 func (a *application) queryHost(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
@@ -1489,47 +1435,9 @@ func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool
 	if socketPath == "" {
 		socketPath = paths.Socket(current.Dir)
 	}
-	copy := current
-	resolved := resolvedSession{local: &copy}
-	opts.SocketPath, opts.SessionID, opts.LastSeq = socketPath, current.ID, lastSeq
+	opts.SocketPath, opts.LastSeq = socketPath, lastSeq
 	opts.ContainingSessions = a.dependencies.Containment(cmd.Context())
-	if len(opts.ContainingSessions) > 0 {
-		target, err := resolvedTargetIdentity(resolved)
-		if err != nil {
-			return err
-		}
-		opts.HostID = target.HostID
-	}
-	restore := a.bindTerminal(bindingFor(resolved))
-	a.noticeBeforeAttachment(cmd)
-	result, err := Attach(cmd.Context(), opts)
-	if err != nil {
-		if !result.Established {
-			restore()
-		}
-		return err
-	}
-	return reportAttachment(cmd, resolved, result)
-}
-
-func reportAttachment(cmd *cobra.Command, resolved resolvedSession, result AttachResult) error {
-	id := resolved.local.ID
-	switch {
-	case result.Exited:
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "\r\nsession %s exited (%d)\r\n", id, result.ExitCode); err != nil {
-			return err
-		}
-		if result.ExitCode != 0 {
-			return statusError{code: result.ExitCode}
-		}
-	case result.Detached:
-		_, err := fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndetached from %s, still running\r\n", id)
-		return err
-	default:
-		_, err := fmt.Fprintf(cmd.ErrOrStderr(), "\r\ndisconnected from %s\r\n", id)
-		return err
-	}
-	return nil
+	return a.attach(cmd, attachRequest{target: resolvedSession{local: &current}, options: opts})
 }
 
 func (a *application) attachCommand() *cobra.Command {
@@ -1562,26 +1470,9 @@ func (a *application) attachCommand() *cobra.Command {
 				}
 				socketPath = meshdaemon.SocketPath(stateDir)
 			}
-			opts.SocketPath, opts.SessionID = socketPath, current.ID
+			opts.SocketPath = socketPath
 			opts.ContainingSessions = a.dependencies.Containment(cmd.Context())
-			if len(opts.ContainingSessions) > 0 {
-				target, err := resolvedTargetIdentity(resolvedSession{local: &current})
-				if err != nil {
-					return err
-				}
-				opts.HostID = target.HostID
-			}
-			attached := resolvedSession{local: &current}
-			restore := a.bindTerminal(bindingFor(attached))
-			a.noticeBeforeAttachment(cmd)
-			result, err := Attach(cmd.Context(), opts)
-			if err != nil {
-				if !result.Established {
-					restore()
-				}
-				return err
-			}
-			return reportAttachment(cmd, attached, result)
+			return a.attach(cmd, attachRequest{target: resolvedSession{local: &current}, options: opts})
 		},
 	}
 	command.Flags().BoolVar(&viaDaemon, "daemon", false, "attach through the local daemon")
