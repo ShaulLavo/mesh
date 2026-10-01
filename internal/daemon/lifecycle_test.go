@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -15,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
@@ -24,6 +27,9 @@ import (
 type lifecycleTestCatalog struct {
 	mu             sync.Mutex
 	sessions       []storage.Session
+	getHook        func()
+	getErr         error
+	getCalls       int
 	reconcileErr   error
 	reconcileHook  func(context.Context) error
 	reconcileCalls int
@@ -53,12 +59,21 @@ func (c *lifecycleTestCatalog) List(context.Context) ([]storage.Session, error) 
 }
 
 func (c *lifecycleTestCatalog) Get(_ context.Context, id storage.SessionID) (storage.Session, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.getCalls++
+	if c.getHook != nil {
+		c.getHook()
+	}
+	if c.getErr != nil {
+		return storage.Session{}, c.getErr
+	}
 	for _, item := range c.sessions {
 		if item.ID == id {
 			return item, nil
 		}
 	}
-	return storage.Session{}, errors.New("not found")
+	return storage.Session{}, sql.ErrNoRows
 }
 
 type lifecycleConnectorFunc func(context.Context, protocol.SessionID) (transport.Conn, error)
@@ -804,5 +819,478 @@ func TestRemoveDelegatesToCatalog(t *testing.T) {
 	}
 	if catalog.retired != 1 {
 		t.Fatalf("catalog retired %d sessions, want 1", catalog.retired)
+	}
+}
+
+func TestLifecycleCompletedCreationKeepsOnlyReplayData(t *testing.T) {
+	const commandText = "private-command-text-must-not-stay-in-the-receipt"
+	l := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{}, Connector: failingLifecycleConnector(),
+		Host: storage.Host{ID: "host-a", MeshIdentity: "mesh-key"}, SessionsDir: "/state/s",
+		Launch: func(cfg worker.LaunchConfig) (worker.Launched, error) {
+			return worker.Launched{Meta: worker.Meta{ID: "7K3D", Command: cfg.Command}}, nil
+		},
+	})
+	if _, err := l.createSession(context.Background(), protocol.TypeCreate, "compact", creationRequest{command: []string{"sh", "-c", commandText}}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", *l.creations["compact"]), commandText) {
+		t.Fatal("completed receipt still retains the full command or launch metadata")
+	}
+}
+
+func receiptTestLifecycle(t *testing.T, now func() time.Time, launch launchWorker) *lifecycle {
+	t.Helper()
+	return mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{sessions: []storage.Session{{ID: "7K3D", State: storage.StateExited}}}, Connector: failingLifecycleConnector(),
+		Host: storage.Host{ID: "host-a", MeshIdentity: "mesh-key"}, SessionsDir: "/state/s",
+		Now: now, CreationRetention: time.Minute, Launch: launch,
+	})
+}
+
+func TestLifecycleCreationReceiptsBoundedOverTime(t *testing.T) {
+	now := time.Now()
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprint(failed), func(t *testing.T) {
+			l := receiptTestLifecycle(t, func() time.Time { return now }, func(worker.LaunchConfig) (worker.Launched, error) {
+				if failed {
+					return worker.Launched{}, errors.New("launch failed")
+				}
+				return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+			})
+			for i := range 1000 {
+				_, err := l.createSession(context.Background(), protocol.TypeCreate, fmt.Sprintf("create-%d", i), creationRequest{command: []string{"sh"}})
+				if (err != nil) != failed {
+					t.Fatalf("create %d error = %v", i, err)
+				}
+				now = now.Add(10 * time.Second)
+				if len(l.creations) > 13 {
+					t.Fatalf("retained creations = %d, want at most 13", len(l.creations))
+				}
+			}
+		})
+	}
+}
+
+func TestLifecycleCreationReplayWindow(t *testing.T) {
+	now := time.Now()
+	launches := 0
+	l := receiptTestLifecycle(t, func() time.Time { return now }, func(worker.LaunchConfig) (worker.Launched, error) {
+		launches++
+		return worker.Launched{}, errors.New("failed before starting a worker")
+	})
+	wanted := creationRequest{command: []string{"sh"}}
+	for range 2 {
+		_, _ = l.createSession(context.Background(), protocol.TypeCreate, "retry", wanted)
+		now = now.Add(20 * time.Second)
+	}
+	if launches != 1 {
+		t.Fatalf("launches inside retention = %d, want 1", launches)
+	}
+	now = now.Add(time.Minute)
+	_, _ = l.createSession(context.Background(), protocol.TypeCreate, "retry", wanted)
+	if launches != 2 {
+		t.Fatalf("launches after expiry = %d, want 2", launches)
+	}
+}
+
+func TestLifecycleLiveReceiptStartsRetentionAtObservedRetirement(t *testing.T) {
+	now := time.Now()
+	launches := 0
+	l := receiptTestLifecycle(t, func() time.Time { return now }, func(worker.LaunchConfig) (worker.Launched, error) {
+		launches++
+		return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+	})
+	catalog := l.catalog.(*lifecycleTestCatalog)
+	catalog.sessions = []storage.Session{{ID: "7K3D", State: storage.StateDetached}}
+	wanted := creationRequest{command: []string{"sh"}}
+	create := func() {
+		t.Helper()
+		if _, err := l.createSession(context.Background(), protocol.TypeCreate, "live", wanted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create()
+	now = now.Add(24 * time.Hour)
+	create()
+	if launches != 1 {
+		t.Fatalf("live session relaunched after retention, launches = %d", launches)
+	}
+	catalog.sessions = nil
+	now = now.Add(time.Minute)
+	create()
+	if launches != 1 {
+		t.Fatalf("session relaunched at observed retirement, launches = %d", launches)
+	}
+	now = now.Add(time.Minute - time.Nanosecond)
+	create()
+	if launches != 1 {
+		t.Fatalf("session relaunched before retirement retention elapsed, launches = %d", launches)
+	}
+	now = now.Add(time.Nanosecond)
+	create()
+	if launches != 2 {
+		t.Fatalf("launches after retirement retention = %d, want 2", launches)
+	}
+}
+
+func TestLifecycleCreationPendingAndByteLimits(t *testing.T) {
+	for _, budget := range []string{"pending", "bytes"} {
+		t.Run(budget, func(t *testing.T) {
+			now := time.Now()
+			l := receiptTestLifecycle(t, func() time.Time { return now }, func(worker.LaunchConfig) (worker.Launched, error) {
+				return worker.Launched{}, errors.New("unused")
+			})
+			wanted := creationRequest{command: []string{"sh"}}
+			first, owner, err := l.creation("pending", wanted)
+			if err != nil || !owner {
+				t.Fatalf("first admission owner = %v, error = %v", owner, err)
+			}
+			if budget == "pending" {
+				l.maxPendingCreations = 1
+			} else {
+				l.maxCreationBytes = l.creationBytes
+			}
+			now = now.Add(24 * time.Hour)
+			if _, _, err := l.creation("new", wanted); err == nil || !strings.Contains(err.Error(), budget) {
+				t.Fatalf("new admission error = %v, want contextual %s limit", err, budget)
+			}
+			replay, owner, err := l.creation("pending", wanted)
+			if err != nil || owner || replay != first {
+				t.Fatalf("pending replay owner = %v, error = %v", owner, err)
+			}
+			changed := wanted
+			changed.command = []string{"other"}
+			if _, _, err := l.creation("pending", changed); err == nil {
+				t.Fatal("conflicting retry admitted at capacity")
+			}
+			l.forgetCreation("pending")
+			if len(l.creations) != 1 {
+				t.Fatal("forgot a pending creation")
+			}
+		})
+	}
+}
+
+func TestLifecycleCreationBytesReleasedOnExpiryAndForget(t *testing.T) {
+	now := time.Now()
+	l := receiptTestLifecycle(t, func() time.Time { return now }, func(worker.LaunchConfig) (worker.Launched, error) {
+		return worker.Launched{}, errors.New("launch failed")
+	})
+	wanted := creationRequest{command: []string{"sh", strings.Repeat("x", 10000)}}
+	_, _ = l.createSession(context.Background(), protocol.TypeCreate, "expiry", wanted)
+	if l.creationBytes == 0 || l.creationBytes >= 10000 {
+		t.Fatalf("completed retained bytes = %d, want compact nonzero receipt", l.creationBytes)
+	}
+	now = now.Add(time.Minute)
+	_, _ = l.createSession(context.Background(), protocol.TypeCreate, "forget", wanted)
+	if len(l.creations) != 1 {
+		t.Fatalf("receipts after expiry = %d, want 1", len(l.creations))
+	}
+	l.forgetCreation("forget")
+	if l.creationBytes != 0 || l.pendingCreations != 0 || l.completedCreations.Len() != 0 {
+		t.Fatalf("accounting after forget = %d bytes, %d pending, %d queued", l.creationBytes, l.pendingCreations, l.completedCreations.Len())
+	}
+}
+
+func TestLifecycleConcurrentCreationAdmissionsRespectPendingCap(t *testing.T) {
+	now := time.Now()
+	l := receiptTestLifecycle(t, func() time.Time { return now }, func(worker.LaunchConfig) (worker.Launched, error) { return worker.Launched{}, nil })
+	l.maxPendingCreations = 4
+	var admitted atomic.Int32
+	var wg sync.WaitGroup
+	for i := range 100 {
+		wg.Go(func() {
+			if _, owner, err := l.creation(fmt.Sprintf("concurrent-%d", i), creationRequest{command: []string{"sh"}}); err == nil && owner {
+				admitted.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if admitted.Load() != 4 || l.pendingCreations != 4 {
+		t.Fatalf("admitted = %d, pending = %d, want 4", admitted.Load(), l.pendingCreations)
+	}
+}
+
+func TestLifecycleReceiptLookupOnlyWhenDueAndPreservesInconclusiveRetirement(t *testing.T) {
+	now := time.Now()
+	launches := 0
+	l := receiptTestLifecycle(t, func() time.Time { return now }, func(worker.LaunchConfig) (worker.Launched, error) {
+		launches++
+		return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+	})
+	wanted := creationRequest{command: []string{"sh"}}
+	for range 100 {
+		if _, err := l.createSession(context.Background(), protocol.TypeCreate, "lookup", wanted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog := l.catalog.(*lifecycleTestCatalog)
+	if catalog.getCalls != 1 {
+		t.Fatalf("catalog lookups before expiry = %d, want only the publication lookup", catalog.getCalls)
+	}
+	catalog.getErr = errors.New("catalog unavailable")
+	for range 3 {
+		now = now.Add(time.Hour)
+		if _, err := l.createSession(context.Background(), protocol.TypeCreate, "lookup", wanted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if launches != 1 || catalog.getCalls != 4 {
+		t.Fatalf("launches = %d, lookups = %d, want 1 and 4", launches, catalog.getCalls)
+	}
+}
+
+func TestLifecycleCreationFingerprintIncludesEveryLaunchField(t *testing.T) {
+	wanted := creationRequest{command: []string{"sh", "-c", "ab"}, cwd: "/work", cols: 80, rows: 24, term: "xterm", depth: 1, label: "route", env: []string{"A=b"}}
+	l := receiptTestLifecycle(t, time.Now, func(worker.LaunchConfig) (worker.Launched, error) { return worker.Launched{}, errors.New("unused") })
+	if _, _, err := l.creation("identity", wanted); err != nil {
+		t.Fatal(err)
+	}
+	for _, changed := range []creationRequest{
+		{command: []string{"sh", "-c", "a", "b"}, cwd: wanted.cwd, cols: wanted.cols, rows: wanted.rows, term: wanted.term, depth: wanted.depth, label: wanted.label, env: wanted.env},
+		{command: wanted.command, cwd: "/elsewhere", cols: wanted.cols, rows: wanted.rows, term: wanted.term, depth: wanted.depth, label: wanted.label, env: wanted.env},
+		{command: wanted.command, cwd: wanted.cwd, cols: 81, rows: wanted.rows, term: wanted.term, depth: wanted.depth, label: wanted.label, env: wanted.env},
+		{command: wanted.command, cwd: wanted.cwd, cols: wanted.cols, rows: 25, term: wanted.term, depth: wanted.depth, label: wanted.label, env: wanted.env},
+		{command: wanted.command, cwd: wanted.cwd, cols: wanted.cols, rows: wanted.rows, term: "vt100", depth: wanted.depth, label: wanted.label, env: wanted.env},
+		{command: wanted.command, cwd: wanted.cwd, cols: wanted.cols, rows: wanted.rows, term: wanted.term, depth: 2, label: wanted.label, env: wanted.env},
+		{command: wanted.command, cwd: wanted.cwd, cols: wanted.cols, rows: wanted.rows, term: wanted.term, depth: wanted.depth, label: "other", env: wanted.env},
+		{command: wanted.command, cwd: wanted.cwd, cols: wanted.cols, rows: wanted.rows, term: wanted.term, depth: wanted.depth, label: wanted.label, env: []string{"A=c"}},
+	} {
+		if _, _, err := l.creation("identity", changed); err == nil {
+			t.Fatalf("admitted conflicting launch fields %+v", changed)
+		}
+	}
+}
+
+func TestLifecycleCreationCompletedFailureBoundsErrorBytes(t *testing.T) {
+	l := receiptTestLifecycle(t, time.Now, func(worker.LaunchConfig) (worker.Launched, error) {
+		return worker.Launched{}, errors.New(strings.Repeat("failure", 10000))
+	})
+	l.maxCreationBytes = int64(creationReceiptBytes + len("large-error") + session.IDLen + maxCreationErrorBytes)
+	_, _ = l.createSession(context.Background(), protocol.TypeCreate, "large-error", creationRequest{})
+	if len(l.creations) != 1 || l.creationBytes > l.maxCreationBytes {
+		t.Fatalf("error receipt count = %d, bytes = %d, budget = %d", len(l.creations), l.creationBytes, l.maxCreationBytes)
+	}
+	if len(l.creations["large-error"].launchErr.Error()) != maxCreationErrorBytes {
+		t.Fatal("error replay did not cap retained error text")
+	}
+}
+
+func TestLifecycleCreationStartedFailureFitsReservedBytes(t *testing.T) {
+	var l *lifecycle
+	var reserved int64
+	l = receiptTestLifecycle(t, time.Now, func(worker.LaunchConfig) (worker.Launched, error) {
+		reserved = l.creationBytes
+		return worker.Launched{}, &worker.StartedError{ID: "7K3D", Err: errors.New(strings.Repeat("e", maxCreationErrorBytes))}
+	})
+	id, err := l.createSession(context.Background(), protocol.TypeCreate, "started-error", creationRequest{})
+	if err == nil || id != "7K3D" {
+		t.Fatalf("started worker identity = %q, error = %v", id, err)
+	}
+	if l.creationBytes > reserved {
+		t.Fatalf("completed bytes = %d exceed admission reservation %d", l.creationBytes, reserved)
+	}
+}
+
+func TestLifecycleCreationByteLimitRefusesLaunchButReplaysCompleted(t *testing.T) {
+	launches := 0
+	l := receiptTestLifecycle(t, time.Now, func(worker.LaunchConfig) (worker.Launched, error) {
+		launches++
+		return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+	})
+	wanted := creationRequest{command: []string{"sh"}}
+	if _, err := l.createSession(context.Background(), protocol.TypeCreate, "complete", wanted); err != nil {
+		t.Fatal(err)
+	}
+	l.maxCreationBytes = l.creationBytes
+	if _, err := l.createSession(context.Background(), protocol.TypeCreate, "new", wanted); err == nil || !strings.Contains(err.Error(), "bytes") {
+		t.Fatalf("new creation at byte capacity error = %v", err)
+	}
+	if id, err := l.createSession(context.Background(), protocol.TypeCreate, "complete", wanted); err != nil || id != "7K3D" {
+		t.Fatalf("completed replay at capacity = %q, %v", id, err)
+	}
+	if launches != 1 {
+		t.Fatalf("launches at capacity = %d, want 1", launches)
+	}
+}
+
+func TestLifecycleCreationRetirementClockIncludesCatalogLookupTime(t *testing.T) {
+	now := time.Now()
+	launches := 0
+	l := receiptTestLifecycle(t, func() time.Time { return now }, func(worker.LaunchConfig) (worker.Launched, error) {
+		launches++
+		return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+	})
+	wanted := creationRequest{command: []string{"sh"}}
+	create := func() {
+		t.Helper()
+		if _, err := l.createSession(context.Background(), protocol.TypeCreate, "lookup-clock", wanted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create()
+	catalog := l.catalog.(*lifecycleTestCatalog)
+	catalog.getHook = func() { now = now.Add(30 * time.Second) }
+	now = now.Add(time.Minute)
+	create()
+	catalog.getHook = nil
+	now = now.Add(time.Minute - time.Nanosecond)
+	create()
+	if launches != 1 {
+		t.Fatalf("session relaunched before a full window after catalog lookup, launches = %d", launches)
+	}
+	now = now.Add(time.Nanosecond)
+	create()
+	if launches != 2 {
+		t.Fatalf("launches after observed retirement window = %d, want 2", launches)
+	}
+}
+
+type receiptPublicationFailureStore struct{ *storage.Store }
+
+func (s *receiptPublicationFailureStore) ReconcileHost(context.Context, storage.Host, []storage.Session) error {
+	return errors.New("publication rejected")
+}
+
+func unpublishedReceiptLifecycle(t *testing.T, failure string, now func() time.Time, launches *int) *lifecycle {
+	t.Helper()
+	root := t.TempDir()
+	store, err := storage.Open(t.Context(), filepath.Join(root, "receipt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	host := catalogTestHost(now())
+	catalog, err := NewCatalog(CatalogConfig{
+		SessionsDir: root, Host: host, Store: &receiptPublicationFailureStore{Store: store},
+		Probe: probeFunc(func(context.Context, string) error { return nil }), BootID: func() string { return "boot-a" }, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mustLifecycle(t, lifecycleConfig{
+		Catalog: catalog, Connector: failingLifecycleConnector(), Host: host, SessionsDir: root,
+		Now: now, CreationRetention: time.Minute,
+		Launch: func(worker.LaunchConfig) (worker.Launched, error) {
+			*launches++
+			id := []string{"7K3D", "8M4F", "9P5G"}[*launches-1]
+			dir := filepath.Join(root, id)
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			fakeOwnedWorker(t, dir, id)
+			if failure == "started" {
+				if err := os.Remove(paths.Meta(dir)); err != nil {
+					t.Fatal(err)
+				}
+				return worker.Launched{}, &worker.StartedError{ID: id, Err: errors.New("metadata unavailable after start")}
+			}
+			meta := catalogTestMeta(id, worker.StateRunning, "boot-a")
+			meta.CreatedAt = now()
+			meta.PID = os.Getpid()
+			if err := worker.WriteMeta(dir, meta); err != nil {
+				t.Fatal(err)
+			}
+			return worker.Launched{Meta: meta}, nil
+		},
+	})
+}
+
+func TestLifecycleUnpublishedReceiptLives(t *testing.T) {
+	for _, failure := range []string{"publication", "started"} {
+		t.Run(failure, func(t *testing.T) {
+			now := time.Now()
+			launches := 0
+			l := unpublishedReceiptLifecycle(t, failure, func() time.Time { return now }, &launches)
+			wanted := creationRequest{command: []string{"sh"}}
+			for range 3 {
+				id, err := l.createSession(t.Context(), protocol.TypeCreate, "unpublished", wanted)
+				if err == nil || id != "7K3D" {
+					t.Fatalf("live unpublished replay = %q, %v", id, err)
+				}
+				now = now.Add(time.Minute)
+			}
+			if launches != 1 {
+				t.Fatalf("unpublished live worker launches = %d, want 1", launches)
+			}
+		})
+	}
+}
+
+func TestLifecycleUnpublishedReceiptExpiresAfterExit(t *testing.T) {
+	for _, failure := range []string{"publication", "started"} {
+		t.Run(failure, func(t *testing.T) {
+			now := time.Now()
+			launches := 0
+			l := unpublishedReceiptLifecycle(t, failure, func() time.Time { return now }, &launches)
+			wanted := creationRequest{command: []string{"sh"}}
+			id, err := l.createSession(t.Context(), protocol.TypeCreate, "unpublished-exit", wanted)
+			if err == nil || id != "7K3D" {
+				t.Fatalf("unpublished creation = %q, %v", id, err)
+			}
+			meta := catalogTestMeta(id, worker.StateExited, "boot-a")
+			meta.CreatedAt = now
+			meta.ExitedAt = &now
+			code := 0
+			meta.ExitCode = &code
+			if err := worker.WriteMeta(filepath.Join(l.sessionsDir, id), meta); err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(time.Minute)
+			_, _ = l.createSession(t.Context(), protocol.TypeCreate, "unpublished-exit", wanted)
+			if launches != 1 {
+				t.Fatalf("relaunch at observed worker exit = %d, want 1", launches)
+			}
+			now = now.Add(time.Minute)
+			_, _ = l.createSession(t.Context(), protocol.TypeCreate, "unpublished-exit", wanted)
+			if launches != 2 {
+				t.Fatalf("launches after confirmed exit retention = %d, want 2", launches)
+			}
+		})
+	}
+}
+
+func TestLifecycleReceiptRemembersPublishedCatalogRow(t *testing.T) {
+	now := time.Now()
+	launches := 0
+	l := receiptTestLifecycle(t, func() time.Time { return now }, func(worker.LaunchConfig) (worker.Launched, error) {
+		launches++
+		return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+	})
+	catalog := l.catalog.(*lifecycleTestCatalog)
+	catalog.sessions = []storage.Session{{ID: "7K3D", State: storage.StateDetached}}
+	wanted := creationRequest{command: []string{"sh"}}
+	if _, err := l.createSession(t.Context(), protocol.TypeCreate, "rapid-retirement", wanted); err != nil {
+		t.Fatal(err)
+	}
+	catalog.sessions = nil
+	for range 2 {
+		now = now.Add(time.Minute)
+		if _, err := l.createSession(t.Context(), protocol.TypeCreate, "rapid-retirement", wanted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if launches != 2 {
+		t.Fatalf("launches after confirmed published-row retirement = %d, want 2", launches)
+	}
+}
+
+func TestLifecycleCreationDetachesMapRequestID(t *testing.T) {
+	l := receiptTestLifecycle(t, time.Now, func(worker.LaunchConfig) (worker.Launched, error) {
+		return worker.Launched{}, nil
+	})
+	requestID := strings.Repeat("x", 1<<20)[:4]
+	created, _, err := l.creation(requestID, creationRequest{command: []string{"sh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.ValueOf(created.requestID).Pointer() == reflect.ValueOf(requestID).Pointer() {
+		t.Fatal("receipt request ID retains the caller's backing allocation")
+	}
+	for key := range l.creations {
+		if reflect.ValueOf(key).Pointer() == reflect.ValueOf(requestID).Pointer() {
+			t.Fatal("map request ID retains the caller's backing allocation")
+		}
 	}
 }

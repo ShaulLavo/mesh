@@ -56,6 +56,12 @@ func (l *lifecycle) startLabelled(ctx context.Context, label string, command []s
 func (l *lifecycle) forgetCreation(requestID string) {
 	l.creationsMu.Lock()
 	defer l.creationsMu.Unlock()
+	created := l.creations[requestID]
+	if created == nil || created.completed == nil {
+		return
+	}
+	l.creationBytes -= created.retainedBytes
+	l.completedCreations.Remove(created.completed)
 	delete(l.creations, requestID)
 }
 
