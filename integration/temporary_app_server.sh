@@ -144,6 +144,10 @@ if app['visibility'] != 'private' or app['kind'] != 'server' or not app['ready']
 print(app['id'])
 PY
 ) || fail 'private creation result'
+MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app download local "$APP_ID" "$TEST_ROOT/source.tar.gz" --json >/dev/null || fail 'download app source'
+tar -tzf "$TEST_ROOT/source.tar.gz" >"$TEST_ROOT/source.list" || fail 'downloaded archive is not a tarball'
+grep -qx server "$TEST_ROOT/source.list" || fail 'downloaded archive misses the app source'
+[ -z "$(find "$WORKLOAD/apps/$APP_ID" -mindepth 1 -maxdepth 1 ! -name 'source-*')" ] || fail 'download left an archive in the app directory'
 
 app_curl() {
   curl --noproxy '*' --silent --show-error --max-time 3 --header "Host: $APP_ID.shaulavo.dev" \
@@ -293,4 +297,4 @@ PY
 [ $? -eq 0 ] || fail 'process and payload cleanup'
 APP_ID=""
 kill -0 "$ORDINARY_PID" 2>/dev/null || fail 'app deletion killed an ordinary session'
-echo 'PASS: labelled HTTP app worker serves HTML/API/redirects/WebSockets, survives daemon restart, keeps its lease through another app'"'"'s setup, stops when its lease lapses without touching ordinary sessions, restarts when the edge returns, and deletes its managed payload'
+echo 'PASS: labelled HTTP app worker downloads its source without leaving an archive, serves HTML/API/redirects/WebSockets, survives daemon restart, keeps its lease through another app'"'"'s setup, stops when its lease lapses without touching ordinary sessions, restarts when the edge returns, and deletes its managed payload'
