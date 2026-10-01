@@ -201,6 +201,24 @@ func TestServeEnforcesSingleOwnerWithoutUnlinkingLiveSocket(t *testing.T) {
 	}
 }
 
+func TestRunRuntimeReleasesLockBeforeCompletion(t *testing.T) {
+	stateDir := t.TempDir()
+	listener, _ := newTCPListener(t, "127.0.0.1:0")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := runRuntime(t, ctx, ListenerConfig{StateDir: stateDir}, echoOneFrame, listener)
+	if err := waitRuntime(t, done); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireDaemonLock(filepath.Join(stateDir, daemonLockName))
+	if err != nil {
+		t.Fatalf("runtime completed before releasing its lock: %v", err)
+	}
+	if err := lock.release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestServeDoesNotRemoveAReplacementAtTheDaemonSocketPath(t *testing.T) {
 	t.Parallel()
 
@@ -1162,10 +1180,10 @@ func runRuntime(t *testing.T, ctx context.Context, cfg ListenerConfig, handler t
 	}
 	normalized.listen = useTCPListeners(listeners...)
 	go func() {
-		defer func() { _ = lock.release() }()
 		runCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		done <- serveListeners(runCtx, cancel, normalized, handler)
+		err := serveListeners(runCtx, cancel, normalized, handler)
+		done <- errors.Join(err, lock.release())
 	}()
 	return done
 }
