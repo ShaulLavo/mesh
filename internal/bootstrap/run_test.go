@@ -28,7 +28,7 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 	deps := dependencies{
 		localTailnet: func(context.Context) error { return nil },
 		connect: func(_ context.Context, got target, _ SSHOptions) (remoteHost, error) {
-			if got.display() != "shaul@pi" {
+			if got.display() != "shaul@bootstrap-fixture.invalid" {
 				t.Fatalf("target = %s", got.display())
 			}
 			return remote, nil
@@ -66,7 +66,7 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 	}
 
 	result, err := run(context.Background(), Options{
-		Target:   "shaul@pi",
+		Target:   "shaul@bootstrap-fixture.invalid",
 		StateDir: t.TempDir(),
 		Progress: func(event Event) {
 			steps = append(steps, event.Step)
@@ -175,7 +175,7 @@ func TestRunProvisionFailurePrecedesBinaryTransferAndMeshInstall(t *testing.T) {
 		authorizedKey: func(string) (string, error) { t.Fatal("identity load ran after failed provisioning"); return "", nil },
 		now:           time.Now,
 	}
-	_, err := run(context.Background(), Options{Target: "alice@pi", StateDir: t.TempDir()}, deps)
+	_, err := run(context.Background(), Options{Target: "alice@bootstrap-fixture.invalid", StateDir: t.TempDir()}, deps)
 	if !errors.Is(err, provisionFailure) {
 		t.Fatalf("run() error = %v, want provision failure", err)
 	}

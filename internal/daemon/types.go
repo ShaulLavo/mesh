@@ -12,7 +12,7 @@ import (
 
 // CatalogStore is the durable boundary used while rediscovering local workers.
 type CatalogStore interface {
-	ReconcileHost(context.Context, storage.Host, []storage.Session) error
+	ApplyHostChanges(context.Context, storage.HostID, storage.HostChanges) error
 	ListHostSessions(context.Context, storage.HostID) ([]storage.Session, error)
 	GetSession(context.Context, storage.HostID, storage.SessionID) (storage.Session, error)
 	// RetireSessions deletes finished sessions the catalog has pruned from
@@ -34,7 +34,12 @@ type CatalogConfig struct {
 	Probe       WorkerProbe
 	BootID      func() string
 	Now         func() time.Time
+	// OnReconcile observes successful passes, including unchanged passes.
+	// The caller observes failures through Reconcile's returned error.
 	OnReconcile func([]storage.Session)
+	// OnChange runs synchronously after a committed session delta, under the
+	// catalog gate. It must not block or call back into the catalog.
+	OnChange func(SessionDiff)
 }
 
 // WorkerConnector resolves and opens one worker without exposing filesystem
