@@ -733,8 +733,10 @@ type edgeReportWriter struct{ reporter *errorReporter }
 
 func (w edgeReportWriter) Write(contents []byte) (int, error) {
 	message := strings.TrimSpace(string(contents))
-	if message != "" {
-		w.reporter.report(fmt.Errorf("daemon: public edge: %s", message))
+	if message != "" && w.reporter != nil {
+		// The edge already owns bounded category queues; a second lossy queue
+		// would hide both important events and its dropped-count summaries.
+		w.reporter.fn(fmt.Errorf("daemon: public edge: %s", message))
 	}
 	return len(contents), nil
 }

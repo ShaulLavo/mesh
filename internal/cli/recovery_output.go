@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
 )
@@ -37,15 +38,7 @@ func (a *application) previousOutput(cmd *cobra.Command, id string, tail int) er
 
 func (a *application) readRecoveryRecord(ctx context.Context, resolved resolvedSession) (recovery.Record, error) {
 	if resolved.local != nil {
-		record, err := recovery.Read(resolved.local.Dir)
-		if err != nil {
-			return recovery.Record{}, fmt.Errorf("previous output unavailable: %w", err)
-		}
-		config, err := localRecoveryConfig()
-		if err != nil {
-			return recovery.Record{}, err
-		}
-		return record, recovery.ValidateOwner(record, config.HostID, resolved.local.ID)
+		return readLocalRecoveryRecord(*resolved.local)
 	}
 	ctx, cancel := context.WithTimeout(ctx, remoteConnectTimeout)
 	defer cancel()
@@ -68,4 +61,26 @@ func (a *application) readRecoveryRecord(ctx context.Context, resolved resolvedS
 		return recovery.Record{}, errors.New("previous output is unavailable on this host")
 	}
 	return *response.Recovery, recovery.ValidateOwner(*response.Recovery, resolved.host.ID, resolved.remote.ID)
+}
+
+func readLocalRecoveryRecord(current Session) (recovery.Record, error) {
+	record, err := recovery.Read(current.Dir)
+	if err != nil {
+		return recovery.Record{}, fmt.Errorf("previous output unavailable: %w", err)
+	}
+	stateDir, err := paths.StateDir()
+	if err != nil {
+		return recovery.Record{}, fmt.Errorf("locate recovery host: %w", err)
+	}
+	host, err := existingLocalIdentity(stateDir)
+	if err != nil {
+		return recovery.Record{}, err
+	}
+	if host.ID == "" {
+		return recovery.Record{}, fmt.Errorf("session %s: previous output unavailable: local host identity is missing", current.ID)
+	}
+	if err := recovery.ValidateOwner(record, host.ID, current.ID); err != nil {
+		return recovery.Record{}, fmt.Errorf("session %s: validate previous output owner: %w", current.ID, err)
+	}
+	return record, nil
 }

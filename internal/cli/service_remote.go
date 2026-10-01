@@ -65,7 +65,13 @@ func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer,
 	return preview, privateName, nil
 }
 
-func upsertRemoteService(ctx context.Context, host HostRecord, dial HostDialer, requested protocol.ServiceInfo, preview protocol.ServicePreview, privateName string, allowCredentials bool) (protocol.ServiceInfo, string, error) {
+type remoteServicePublication struct {
+	Service     protocol.ServiceInfo
+	PrivateName string
+	Warning     string
+}
+
+func upsertRemoteService(ctx context.Context, host HostRecord, dial HostDialer, requested protocol.ServiceInfo, preview protocol.ServicePreview, privateName string, allowCredentials bool) (remoteServicePublication, error) {
 	var expectedPrivateName *string
 	if requested.PublicName == "" && privateName != "" {
 		expectedPrivateName = &privateName
@@ -74,22 +80,22 @@ func upsertRemoteService(ctx context.Context, host HostRecord, dial HostDialer, 
 		Type: protocol.TypeServiceUpsert, Service: &requested, ServicePreview: &preview, AllowCredentials: allowCredentials,
 	}, expectedPrivateName)
 	if err != nil {
-		return protocol.ServiceInfo{}, "", err
+		return remoteServicePublication{}, err
 	}
 	if response.Type == protocol.TypeError {
-		return protocol.ServiceInfo{}, "", remoteServiceResponseError(host, "service publication", response)
+		return remoteServicePublication{}, remoteServiceResponseError(host, "service publication", response)
 	}
 	if response.Type != protocol.TypeServiceUpserted || response.Service == nil {
-		return protocol.ServiceInfo{}, "", fmt.Errorf("host %s returned an invalid service publication acknowledgement", host.Alias)
+		return remoteServicePublication{}, fmt.Errorf("host %s returned an invalid service publication acknowledgement", host.Alias)
 	}
 	acknowledged, err := validateRemoteService(*response.Service)
 	if err != nil {
-		return protocol.ServiceInfo{}, "", err
+		return remoteServicePublication{}, err
 	}
 	if !sameServiceDefinition(acknowledged, preview.Service) {
-		return protocol.ServiceInfo{}, "", fmt.Errorf("host %s acknowledged a different service definition", host.Alias)
+		return remoteServicePublication{}, fmt.Errorf("host %s acknowledged a different service definition", host.Alias)
 	}
-	return acknowledged, currentPrivateName, nil
+	return remoteServicePublication{Service: acknowledged, PrivateName: currentPrivateName, Warning: response.Message}, nil
 }
 
 type remoteServiceSnapshot struct {

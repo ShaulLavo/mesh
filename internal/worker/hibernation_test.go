@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,34 @@ func hibernateRequest(t *testing.T, w *Worker, idle time.Duration) protocol.Cont
 	t.Helper()
 	return inspectRequest(t, w, protocol.Control{Type: protocol.TypeHibernate, RequestID: "h1",
 		SessionID: w.cfg.ID, HibernateIdleMillis: idle.Milliseconds()})
+}
+
+func TestHibernateRejectsInvalidIdleBeforeClaiming(t *testing.T) {
+	for _, idle := range []int64{-1, -1 << 63, (1<<63-1)/int64(time.Millisecond) + 1, 288230376151711744, 1<<63 - 1} {
+		t.Run(strconv.FormatInt(idle, 10), func(t *testing.T) {
+			w, _, _, stops := hibernationTestWorker(t, time.Date(2026, 9, 24, 8, 0, 0, 0, time.UTC))
+			response := inspectRequest(t, w, protocol.Control{Type: protocol.TypeHibernate, RequestID: "invalid-idle",
+				SessionID: w.cfg.ID, HibernateIdleMillis: idle})
+			if response.Type != protocol.TypeError || !strings.Contains(response.Message, "session "+w.cfg.ID) || !strings.Contains(response.Message, "idle time") {
+				t.Errorf("invalid idle hibernate = %+v after %d stops; want idle rejection naming the session", response, *stops)
+			}
+			if *stops != 0 || w.hibernating {
+				t.Errorf("invalid idle claimed hibernation = %v after %d stops", w.hibernating, *stops)
+			}
+			if _, err := recovery.ReadHibernation(w.cfg.Dir); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("invalid idle left a marker: %v", err)
+			}
+		})
+	}
+}
+
+func TestHibernateAcceptsLargestRepresentableIdle(t *testing.T) {
+	w, _, _, stops := hibernationTestWorker(t, time.Date(2026, 9, 24, 8, 0, 0, 0, time.UTC))
+	response := inspectRequest(t, w, protocol.Control{Type: protocol.TypeHibernate, RequestID: "max-idle",
+		SessionID: w.cfg.ID, HibernateIdleMillis: (1<<63 - 1) / int64(time.Millisecond)})
+	if response.Type != protocol.TypeError || !strings.Contains(response.Message, "detached long enough") || *stops != 0 {
+		t.Fatalf("largest idle hibernate = %+v after %d stops; want idle requirement enforced", response, *stops)
+	}
 }
 
 func TestHibernateStopsTheAgentButKeepsItsConversationResumable(t *testing.T) {

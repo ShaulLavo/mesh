@@ -125,7 +125,7 @@ func Serve(ctx context.Context, cfg ListenerConfig, handler transport.Handler) e
 // shares its lifetime, such as catalog polling and lifecycle publication.
 func serveListeners(ctx context.Context, cancel context.CancelFunc, normalized listenerConfig, handler transport.Handler) error {
 	defer cancel()
-	defer normalized.reporter.shutdown()
+	defer closeListenerDiagnostics(normalized)
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -174,6 +174,15 @@ func serveListeners(ctx context.Context, cancel context.CancelFunc, normalized l
 	return serveBoundListeners(ctx, cancel, normalized, handler, unixListener, tailnetListeners, httpsListener, publicListener)
 }
 
+// Listener teardown stops public producers before this flush; early failures
+// also flush before the general reporter is retired.
+func closeListenerDiagnostics(config listenerConfig) {
+	if registry, ok := config.publicHTTPHandler.(interface{ Close() }); ok {
+		registry.Close()
+	}
+	config.reporter.shutdown()
+}
+
 func serveBoundListeners(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -184,7 +193,7 @@ func serveBoundListeners(
 	httpsListener net.Listener,
 	publicListener net.Listener,
 ) error {
-	defer normalized.reporter.shutdown()
+	defer closeListenerDiagnostics(normalized)
 	var boundedPublic *boundedPublicListener
 	if publicListener != nil {
 		boundedPublic = newBoundedPublicListener(publicListener, maximumPublicConnections)
