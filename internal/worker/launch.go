@@ -48,6 +48,17 @@ type Launched struct {
 	Dir  string
 }
 
+// StartedError is a launch that failed after the worker process started. The
+// worker may still run its command, so whoever launched it keeps owning ID
+// instead of treating the session as never started.
+type StartedError struct {
+	ID  string
+	Err error
+}
+
+func (e *StartedError) Error() string { return e.Err.Error() }
+func (e *StartedError) Unwrap() error { return e.Err }
+
 // LaunchDetached starts a worker in its own process session and waits only for
 // readiness. The worker is deliberately not supervised by the caller.
 func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
@@ -144,11 +155,11 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 	go func() { _ = cmd.Wait() }()
 
 	if err := waitForWorker(dir, workerReadyTimeout); err != nil {
-		return Launched{}, fmt.Errorf("launch worker %s: readiness (see %s): %w", id, logPath, err)
+		return Launched{}, &StartedError{ID: id, Err: fmt.Errorf("launch worker %s: readiness (see %s): %w", id, logPath, err)}
 	}
 	meta, err := ReadMeta(dir)
 	if err != nil {
-		return Launched{}, fmt.Errorf("launch worker %s: read metadata: %w", id, err)
+		return Launched{}, &StartedError{ID: id, Err: fmt.Errorf("launch worker %s: read metadata: %w", id, err)}
 	}
 	return Launched{Meta: meta, Dir: dir}, nil
 }
