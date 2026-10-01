@@ -249,18 +249,12 @@ done
 RENEWER_KEY="$TEST_ROOT/renewer.key"
 # The renewer is an external signer that Mesh never loads, and openssl signs
 # with it directly, so it stays PKCS#8 rather than following the daemon keys.
-# Its identity is forced to begin with a dash. Identities are base64url, so
-# 1.66% of them start with one, and a positional that does was read as an option
-# flag until the calls below gained "--". Forcing it makes every run cover the
-# case that used to flake instead of one run in sixty.
-for _ in $(seq 500); do
-  openssl genpkey -algorithm ED25519 -out "$RENEWER_KEY" >/dev/null 2>&1 || fail "generate renewer identity"
-  RENEWER_ID=$(pkcs8_identity_id "$RENEWER_KEY") || fail "derive renewer identity"
-  case $RENEWER_ID in -*) break ;; esac
-done
+# A fixed public test signer keeps dash-leading positional coverage deterministic.
+cp "$REPO_ROOT/integration/fixtures/public-edge-renewer.pem" "$RENEWER_KEY" || fail "copy test renewer identity"
+RENEWER_ID=$(pkcs8_identity_id "$RENEWER_KEY") || fail "derive renewer identity"
 case $RENEWER_ID in
   -*) ;;
-  *) fail "no renewer identity beginning with a dash in 500 tries" ;;
+  *) fail "test renewer identity must begin with a dash" ;;
 esac
 chmod 0600 "$RENEWER_KEY"
 EDGE_ID=$(identity_id "$EDGE_STATE/identity.key") || fail "derive edge identity"
