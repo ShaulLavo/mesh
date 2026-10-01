@@ -84,8 +84,9 @@ func TestAttachDoesNotMakeConcurrentPipeWriterFailWithEAGAIN(t *testing.T) {
 	if err := output.SetWriteDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := output.Write(bytes.Repeat([]byte("x"), 1<<20)); !errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatalf("fill output pipe: %v", err)
+	filled, fillErr := output.Write(bytes.Repeat([]byte("x"), 1<<20))
+	if !errors.Is(fillErr, os.ErrDeadlineExceeded) {
+		t.Fatalf("fill output pipe: %v", fillErr)
 	}
 	if err := output.SetWriteDeadline(time.Time{}); err != nil {
 		t.Fatal(err)
@@ -120,7 +121,7 @@ func TestAttachDoesNotMakeConcurrentPipeWriterFailWithEAGAIN(t *testing.T) {
 	select {
 	case err := <-written:
 		peerReturned = true
-		t.Errorf("concurrent writer returned before the full pipe was drained: %v", err)
+		t.Errorf("concurrent writer returned before the full pipe was drained: %v (prefill wrote %d bytes)", err, filled)
 	case <-time.After(50 * time.Millisecond):
 	}
 	cancel()
