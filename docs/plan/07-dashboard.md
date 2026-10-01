@@ -292,9 +292,10 @@ for predictable behavior across platforms and no new central storage.
 
 Execute after the audit in these verifiable steps:
 
-1. Add the local sampler and additive metric protocol. Prove CPU baseline/reset,
-   RAM semantics, optional sensors, independent ages, shared sampling, and
-   idle overhead on Linux ARM64. Build Linux and Darwin targets.
+1. Reuse plan 08's sampler, `host.metrics` request and `metrics` watch topic.
+   Verify, before building on them: CPU baseline/reset, RAM semantics, optional
+   sensors, independent ages, shared sampling, and idle overhead on Linux ARM64,
+   with Linux and Darwin builds. Fix gaps there, in plan 08's code.
 2. Add the safe monitor and `mesh dashboard` entry. Prove identity checks,
    partial success, older-host fallback, fair scheduling, cancellation, and zero
    wake calls through the actual CLI wiring, including failed reads and fallbacks.
@@ -311,6 +312,6 @@ Execute after the audit in these verifiable steps:
    clean remote stop, crash recovery, and SSH recovery.
    Run repository checks for the eventual code change.
 
-The first implementation step is the local sampler and `host.metrics` contract.
+The first implementation step verifies plan 08's sampler and watch contract.
 The first integrated slice should already show real CPU/RAM for one host in the
-terminal before adding the full wall or boot setup.
+terminal, through `state.watch`, before adding the full wall or boot setup.

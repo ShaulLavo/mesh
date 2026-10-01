@@ -92,12 +92,14 @@ state.watch { topics: [sessions, services, metrics], metricsEvery: 2s }
 - **Liveness.** The existing 15-second transport keepalive detects dead viewers.
   A viewer that stops reading is dropped, not buffered.
 - **Freshness without change.** An unchanged catalog sends no events, so the
-  publisher sends `state.current { seq, reconciledAt }` every ten seconds while
-  subscribed. It costs a few bytes and tells the viewer how old the host's
-  latest reconcile is. A viewer marks a host's catalog stale when no event or
-  `state.current` arrived for thirty seconds, matching plan 07's catalog
-  staleness rule, and shows the age from `reconciledAt` translated to its own
-  monotonic clock.
+  publisher sends `state.current { seq, ageMillis, failing }` every ten seconds
+  while subscribed. `ageMillis` is the daemon's monotonic time since its latest
+  successful reconciliation of that section, measured when the message is sent,
+  so no remote wall clock is involved. `failing` is set while reconciliation is
+  failing. The viewer adds its own monotonic time since receipt and marks the
+  catalog stale when that observation age exceeds thirty seconds, when `failing`
+  is set, or when no message arrived for thirty seconds (a lost stream). A
+  `state.current` that keeps arriving never makes a failing catalog look fresh.
 - **Compatibility.** A daemon that answers `unknown control` gets the plan 07
   polling path, unchanged, as a fallback, cached per host identity and build.
 - **Invariants preserved.** Sessions belong to their host; the watch carries
@@ -114,6 +116,10 @@ Gates:
 - A stalled viewer causes a resync, never daemon memory growth (soak with a
   viewer that stops reading).
 - Zero wake calls from any watch path (counted through the real CLI wiring).
+- Freshness: a catalog unchanged for five minutes stays fresh; a forced
+  reconciliation failure turns it stale within thirty seconds while
+  `state.current` keeps arriving; a dropped stream turns it stale within thirty
+  seconds and recovers through a new snapshot.
 
 ### 4. Bounds and footprint
 
