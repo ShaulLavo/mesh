@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
@@ -1061,12 +1062,28 @@ func TestLifecycleCreationCompletedFailureBoundsErrorBytes(t *testing.T) {
 	l := receiptTestLifecycle(t, time.Now, func(worker.LaunchConfig) (worker.Launched, error) {
 		return worker.Launched{}, errors.New(strings.Repeat("failure", 10000))
 	})
-	l.maxCreationBytes = int64(creationReceiptBytes + len("large-error") + maxCreationErrorBytes)
+	l.maxCreationBytes = int64(creationReceiptBytes + len("large-error") + session.IDLen + maxCreationErrorBytes)
 	_, _ = l.createSession(context.Background(), protocol.TypeCreate, "large-error", creationRequest{})
 	if len(l.creations) != 1 || l.creationBytes > l.maxCreationBytes {
 		t.Fatalf("error receipt count = %d, bytes = %d, budget = %d", len(l.creations), l.creationBytes, l.maxCreationBytes)
 	}
 	if len(l.creations["large-error"].launchErr.Error()) != maxCreationErrorBytes {
 		t.Fatal("error replay did not cap retained error text")
+	}
+}
+
+func TestLifecycleCreationStartedFailureFitsReservedBytes(t *testing.T) {
+	var l *lifecycle
+	var reserved int64
+	l = receiptTestLifecycle(t, time.Now, func(worker.LaunchConfig) (worker.Launched, error) {
+		reserved = l.creationBytes
+		return worker.Launched{}, &worker.StartedError{ID: "7K3D", Err: errors.New(strings.Repeat("e", maxCreationErrorBytes))}
+	})
+	id, err := l.createSession(context.Background(), protocol.TypeCreate, "started-error", creationRequest{})
+	if err == nil || id != "7K3D" {
+		t.Fatalf("started worker identity = %q, error = %v", id, err)
+	}
+	if l.creationBytes > reserved {
+		t.Fatalf("completed bytes = %d exceed admission reservation %d", l.creationBytes, reserved)
 	}
 }

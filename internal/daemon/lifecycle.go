@@ -469,7 +469,7 @@ func (l *lifecycle) creation(requestID string, wanted creationRequest) (*creatio
 	}
 	// Reserve error space before launching, so even a failed launch can leave a
 	// replay receipt without overrunning the retained-byte budget.
-	retainedBytes := creationReceiptBytes + int64(len(requestID)) + requestBytes + maxCreationErrorBytes
+	retainedBytes := creationReceiptBytes + int64(len(requestID)) + requestBytes + session.IDLen + maxCreationErrorBytes
 	if retainedBytes > l.maxCreationBytes-l.creationBytes {
 		return nil, false, fmt.Errorf("daemon: create request %q exceeds retained creation bytes limit (%d)", requestID, l.maxCreationBytes)
 	}
