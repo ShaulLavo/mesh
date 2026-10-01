@@ -31,7 +31,7 @@ const (
 
 	staleSocketProbeTimeout  = 200 * time.Millisecond
 	httpReadHeaderTimeout    = 5 * time.Second
-	publicReadTimeout        = 10 * time.Minute
+	publicReadTimeout        = 30 * time.Second
 	httpShutdownTimeout      = 2 * time.Second
 	maximumPublicConnections = 512
 	maximumPublicHeaderBytes = 64 << 10
@@ -189,7 +189,7 @@ func serveBoundListeners(
 		boundedPublic = newBoundedPublicListener(publicListener, maximumPublicConnections)
 		publicListener = boundedPublic
 		if normalized.tailnetOwnerAccess {
-			publicListener = tailnet.ProxyListener{Listener: publicListener, AllowedUIDs: normalized.proxyForwarderUIDs}
+			boundedPublic.proxyUIDs = append([]uint32{}, normalized.proxyForwarderUIDs...)
 		}
 	}
 	// Failed discovery binds must not establish non-loopback IP authorities.
@@ -212,8 +212,8 @@ func serveBoundListeners(
 			readTimeout = publicReadTimeout
 		}
 		publicServer = &http.Server{
-			Handler: normalized.publicHTTPHandler, ReadHeaderTimeout: httpReadHeaderTimeout,
-			ReadTimeout: readTimeout, IdleTimeout: 30 * time.Second, MaxHeaderBytes: maximumPublicHeaderBytes,
+			Handler: guardPublicBody(normalized.publicHTTPHandler, readTimeout), ReadHeaderTimeout: httpReadHeaderTimeout,
+			ConnState: boundedPublic.connState, ConnContext: publicConnectionContext, IdleTimeout: readTimeout, MaxHeaderBytes: maximumPublicHeaderBytes,
 			BaseContext: func(net.Listener) context.Context { return ctx }, TLSConfig: normalized.publicTLSConfig,
 			ErrorLog: log.New(io.Discard, "", 0),
 		}
@@ -317,94 +317,6 @@ func serveBoundListeners(
 	listenerWG.Wait()
 	connections.wait()
 	return errors.Join(runErr, closeErr)
-}
-
-type boundedPublicListener struct {
-	net.Listener
-	maximum   chan struct{}
-	done      chan struct{}
-	closeOnce sync.Once
-	mu        sync.Mutex
-	closed    bool
-	active    map[*boundedPublicConn]struct{}
-}
-
-type boundedPublicConn struct {
-	net.Conn
-	owner *boundedPublicListener
-	once  sync.Once
-}
-
-func newBoundedPublicListener(listener net.Listener, maximum int) *boundedPublicListener {
-	return &boundedPublicListener{
-		Listener: listener, maximum: make(chan struct{}, maximum), done: make(chan struct{}),
-		active: make(map[*boundedPublicConn]struct{}),
-	}
-}
-
-func (l *boundedPublicListener) Accept() (net.Conn, error) {
-	select {
-	case l.maximum <- struct{}{}:
-	case <-l.done:
-		return nil, net.ErrClosed
-	}
-	connection, err := l.Listener.Accept()
-	if err != nil {
-		<-l.maximum
-		return nil, err
-	}
-	tracked := &boundedPublicConn{Conn: connection, owner: l}
-	l.mu.Lock()
-	if l.closed {
-		l.mu.Unlock()
-		_ = connection.Close()
-		<-l.maximum
-		return nil, net.ErrClosed
-	}
-	l.active[tracked] = struct{}{}
-	l.mu.Unlock()
-	return tracked, nil
-}
-
-func (l *boundedPublicListener) Close() error {
-	var result error
-	l.closeOnce.Do(func() {
-		close(l.done)
-		result = l.Listener.Close()
-		l.mu.Lock()
-		l.closed = true
-		l.mu.Unlock()
-	})
-	return result
-}
-
-func (l *boundedPublicListener) closeActive() error {
-	if l == nil {
-		return nil
-	}
-	l.mu.Lock()
-	connections := make([]*boundedPublicConn, 0, len(l.active))
-	for connection := range l.active {
-		connections = append(connections, connection)
-	}
-	l.mu.Unlock()
-	var result error
-	for _, connection := range connections {
-		result = errors.Join(result, connection.Close())
-	}
-	return result
-}
-
-func (c *boundedPublicConn) Close() error {
-	var result error
-	c.once.Do(func() {
-		result = c.Conn.Close()
-		c.owner.mu.Lock()
-		delete(c.owner.active, c)
-		c.owner.mu.Unlock()
-		<-c.owner.maximum
-	})
-	return result
 }
 
 func validateTailnetOwnerAccess(cfg ListenerConfig) ([]uint32, error) {
