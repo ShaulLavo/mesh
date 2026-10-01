@@ -69,11 +69,22 @@ type Record struct {
 }
 
 type RuntimeInfo struct {
-	Phase     string `json:"phase"`
-	SessionID string `json:"sessionId,omitempty"`
-	Command   string `json:"command,omitempty"`
-	Port      int    `json:"port,omitempty"`
-	Root      string `json:"root,omitempty"`
+	Phase     string        `json:"phase"`
+	SessionID string        `json:"sessionId,omitempty"`
+	Command   string        `json:"command,omitempty"`
+	Port      int           `json:"port,omitempty"`
+	Root      string        `json:"root,omitempty"`
+	Failure   *SetupFailure `json:"failure,omitempty"`
+}
+
+// SetupFailure is the owner's account of an app's last failed setup. It outlives
+// the workspace and worker it describes, so an owner can still learn why a
+// create failed after the app is gone.
+type SetupFailure struct {
+	UploadID  string    `json:"uploadId"`
+	Error     string    `json:"error"`
+	Output    string    `json:"output,omitempty"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 type Result struct {
 	Pairing  *webauth.PairingInfo `json:"pairing,omitempty"`
