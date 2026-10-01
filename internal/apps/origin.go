@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -147,25 +148,120 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 	return o, nil
 }
 
-// sweepStaging removes extracted trees a crash left between unpacking and the
-// rename into an app. Uploads holds only archives besides staging, and nothing
-// stages before this origin exists, so every directory there is left over. It
-// is best effort; whatever stays is retried on the next start.
+// sweepStaging removes staging trees whose origin died between unpacking and
+// the rename. Origins with separate state can share one workload root, so a
+// tree is removed only if its lock can be taken: the kernel drops a dead
+// owner's lock, and a live owner keeps it. It is best effort; whatever stays
+// is retried on the next start.
 func (o *Origin) sweepStaging() {
-	root, err := os.OpenRoot(filepath.Join(o.config.DataRoot, "uploads"))
+	uploads, err := o.openUploads()
 	if err != nil {
 		return
 	}
-	defer func() { _ = root.Close() }()
-	entries, err := fs.ReadDir(root.FS(), ".")
+	defer func() { _ = uploads.Close() }()
+	entries, err := fs.ReadDir(uploads.FS(), ".")
 	if err != nil {
 		return
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
-			_ = root.RemoveAll(entry.Name())
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "staging-") {
+			continue
 		}
+		dir, err := lockDir(uploads, entry.Name(), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err != nil {
+			continue
+		}
+		_ = uploads.RemoveAll(entry.Name())
+		_ = dir.Close()
 	}
+}
+
+// openUploads opens the upload directory through the workload root and refuses
+// a symlink there, so staging is never created or swept anywhere else.
+func (o *Origin) openUploads() (*os.Root, error) {
+	root, err := os.OpenRoot(o.config.DataRoot)
+	if err != nil {
+		return nil, fmt.Errorf("app: open workload root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Lstat("uploads")
+	if err != nil {
+		return nil, fmt.Errorf("app: inspect uploads: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, errors.New("app: uploads is not a directory")
+	}
+	uploads, err := root.OpenRoot("uploads")
+	if err != nil {
+		return nil, fmt.Errorf("app: open uploads: %w", err)
+	}
+	return uploads, nil
+}
+
+// heldStaging is a staging directory this origin holds locked until release.
+type heldStaging struct {
+	path string
+	dir  *os.File
+}
+
+func (h *heldStaging) release() {
+	if h.dir != nil {
+		_ = h.dir.Close()
+		h.dir = nil
+	}
+}
+
+// lockStaging creates a staging directory and locks it. A sweep may take a
+// fresh directory before its creator locks it; the creator then finds it gone
+// and tries another name.
+func (o *Origin) lockStaging() (*heldStaging, error) {
+	uploads, err := o.openUploads()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = uploads.Close() }()
+	for range 8 {
+		token, err := RandomToken()
+		if err != nil {
+			return nil, err
+		}
+		name := "staging-" + token[:16]
+		if err := uploads.Mkdir(name, 0700); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				continue
+			}
+			return nil, fmt.Errorf("app: create staging: %w", err)
+		}
+		dir, err := lockDir(uploads, name, syscall.LOCK_EX)
+		if errors.Is(err, errStagingGone) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &heldStaging{path: filepath.Join(o.config.DataRoot, "uploads", name), dir: dir}, nil
+	}
+	return nil, errors.New("app: could not hold a staging directory")
+}
+
+var errStagingGone = errors.New("app: staging directory was removed")
+
+// lockDir locks a directory under root by its own descriptor, then checks the
+// name still refers to it: it may have been removed or replaced meanwhile.
+func lockDir(root *os.Root, name string, how int) (*os.File, error) {
+	dir, err := root.Open(name)
+	if err != nil {
+		return nil, errors.Join(errStagingGone, err)
+	}
+	if err := syscall.Flock(int(dir.Fd()), how); err != nil {
+		return nil, errors.Join(fmt.Errorf("app: lock staging %s: %w", name, err), dir.Close())
+	}
+	current, err := root.Lstat(name)
+	held, heldErr := dir.Stat()
+	if err != nil || heldErr != nil || !os.SameFile(current, held) {
+		return nil, errors.Join(errStagingGone, dir.Close())
+	}
+	return dir, nil
 }
 
 // persist requires mu.
@@ -801,15 +897,18 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	}
 	// An unpredictable name cannot collide with staging a crash left behind, and
 	// nothing can be planted in advance where unpack writes.
-	staging, err := os.MkdirTemp(filepath.Join(o.config.DataRoot, "uploads"), "staging-")
+	held, err := o.lockStaging()
 	if err != nil {
 		return Result{}, fmt.Errorf("app: stage upload %s: %w", q.UploadID, err)
 	}
-	// Every exit removes the staging until the rename hands it to the app.
+	staging := held.path
+	// Every exit removes the staging until the rename hands it to the app, and
+	// removes it before giving up the lock, so no sweep races the removal.
 	defer func() {
 		if staging != "" {
 			_ = os.RemoveAll(staging)
 		}
+		held.release()
 	}()
 	if err := unpack(o.uploadPath(q.UploadID), staging, q.Digest); err != nil {
 		return Result{}, err
@@ -863,6 +962,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		return Result{}, err
 	}
 	staging = ""
+	held.release()
 	if q.Setup != "" {
 		if err := validateDataRoot(workspace); err != nil {
 			return fail(err)
