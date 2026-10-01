@@ -131,6 +131,15 @@ func TestOriginAdmissionFloodIsolatedFromOtherAppsAndOwner(t *testing.T) {
 			t.Fatalf("full app returned %d with Retry-After %q, want 503 with 1", w.Code, w.Header().Get("Retry-After"))
 		}
 	})
+	t.Run("browser-visible overload", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		if !f.edge.ServeHost(w, httptest.NewRequest(http.MethodGet, URL(flooded.ID)+"/", nil), flooded.ID+"."+Domain) {
+			t.Fatal("edge did not handle flooded app")
+		}
+		if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "1" {
+			t.Fatalf("edge returned %d with Retry-After %q, want 503 with 1", w.Code, w.Header().Get("Retry-After"))
+		}
+	})
 	t.Run("replay at capacity", func(t *testing.T) {
 		if w := serveAdmission(t, f.origin, first); w.Code != http.StatusNotFound {
 			t.Fatalf("replayed view at capacity returned %d, want 404", w.Code)
