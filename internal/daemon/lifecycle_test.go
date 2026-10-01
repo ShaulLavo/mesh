@@ -648,11 +648,11 @@ func TestLogsStillReportsARealForwardingFailure(t *testing.T) {
 	}
 }
 
-func (c *lifecycleTestCatalog) Retire(_ context.Context, ids []storage.SessionID) (int64, error) {
+func (c *lifecycleTestCatalog) Remove(_ context.Context, _ storage.SessionID) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.retired += len(ids)
-	return int64(len(ids)), nil
+	c.retired++
+	return nil
 }
 
 func TestRemoveRefusesARunningSession(t *testing.T) {
@@ -676,14 +676,10 @@ func TestRemoveRefusesARunningSession(t *testing.T) {
 	}
 }
 
-func TestRemoveDeletesTheRecordAndItsDirectory(t *testing.T) {
+func TestRemoveDelegatesToCatalog(t *testing.T) {
 	t.Parallel()
 
 	sessionsDir := t.TempDir()
-	dir := filepath.Join(sessionsDir, "7K3D")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	catalog := &lifecycleTestCatalog{sessions: []storage.Session{{ID: "7K3D", State: storage.StateExited}}}
 	lifecycle := mustLifecycle(t, lifecycleConfig{
 		Catalog: catalog,
@@ -699,11 +695,6 @@ func TestRemoveDeletesTheRecordAndItsDirectory(t *testing.T) {
 	})
 	if err != nil || !handled || response.Type != protocol.TypeOK {
 		t.Fatalf("remove = %+v, handled = %v, error = %v", response, handled, err)
-	}
-	// A directory left behind would be re-adopted by the next reconciliation
-	// and the session would come back.
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("session directory survived removal: %v", err)
 	}
 	if catalog.retired != 1 {
 		t.Fatalf("catalog retired %d sessions, want 1", catalog.retired)

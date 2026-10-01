@@ -511,14 +511,27 @@ func removeRetiredSession(dir string) error {
 	return os.Remove(dir)
 }
 
-// Retire deletes finished sessions for this host. The store refuses a running
-// one in SQL, so a mistaken ID cannot remove live work.
-func (c *Catalog) Retire(ctx context.Context, ids []storage.SessionID) (int64, error) {
+// Remove keeps row retirement and directory deletion under one catalog owner.
+func (c *Catalog) Remove(ctx context.Context, id storage.SessionID) error {
 	if err := validContext(ctx); err != nil {
-		return 0, fmt.Errorf("daemon: retire sessions for %s: %w", c.host.ID, err)
+		return fmt.Errorf("daemon: remove session %s: %w", id, err)
 	}
-	if len(ids) == 0 {
-		return 0, nil
+	parsed, err := session.ParseID(string(id))
+	if err != nil {
+		return fmt.Errorf("daemon: remove session %s: %w", id, err)
 	}
-	return c.store.RetireSessions(ctx, c.host.ID, ids)
+	if parsed != string(id) {
+		return fmt.Errorf("daemon: remove session %s: ID is not canonical", id)
+	}
+	removed, err := c.store.RetireSessions(ctx, c.host.ID, []storage.SessionID{id})
+	if err != nil {
+		return fmt.Errorf("daemon: retire session %s: %w", id, err)
+	}
+	if removed == 0 {
+		return fmt.Errorf("daemon: session %s was not removed; it may have restarted", id)
+	}
+	if err := os.RemoveAll(filepath.Join(c.sessionsDir, string(id))); err != nil {
+		return fmt.Errorf("daemon: remove session directory %s: %w", id, err)
+	}
+	return nil
 }
