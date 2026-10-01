@@ -235,3 +235,34 @@ func TestExpandedSizeLimitAgreesBetweenPackAndUnpack(t *testing.T) {
 	}
 	sameError(t, "expanded", map[string]error{"pack": packErr, "unpack": unpackErr})
 }
+
+func TestAbandonedDownloadIsReleased(t *testing.T) {
+	f := newAppFixture(t)
+	source := t.TempDir()
+	data := make([]byte, 2*ChunkSize)
+	if _, err := rand.Read(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "index.html"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	upload, digest := uploadSource(t, f, source)
+	created, err := f.origin.Handle(context.Background(), Request{Action: "create", Kind: "static", UploadID: upload, Digest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := f.origin.Handle(context.Background(), Request{Action: "download", ID: created.App.ID})
+	if err != nil || first.Done {
+		t.Fatalf("first chunk: done %v, %v", first.Done, err)
+	}
+	f.now = f.now.Add(downloadIdle)
+	if err := f.origin.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.origin.downloads) != 0 {
+		t.Fatal("abandoned download kept its archive open")
+	}
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "download", ID: created.App.ID, Offset: int64(len(first.Data))}); err == nil || !strings.Contains(err.Error(), "start it again") {
+		t.Fatalf("resumed an expired download: %v", err)
+	}
+}

@@ -118,9 +118,11 @@ type Origin struct {
 	// exchange is a one-slot lock on signed edge exchanges, because the edge
 	// accepts one pending sequence per owner. Waiting for it honours the
 	// caller's context. Take it before mu, never after.
-	exchange    chan struct{}
-	routes      atomic.Pointer[map[string]appRoute]
-	downloadMu  sync.Mutex
+	exchange   chan struct{}
+	routes     atomic.Pointer[map[string]appRoute]
+	downloadMu sync.Mutex
+	// downloads are CLI downloads in progress by app ID; guarded by mu.
+	downloads   map[string]*downloadArchive
 	config      OriginConfig
 	identity    string
 	admissionMu sync.Mutex
@@ -135,7 +137,7 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}}
+	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}, downloads: map[string]*downloadArchive{}}
 	if err := load(ctx, c.Store, "apps.origin", &o.state); err != nil {
 		return nil, err
 	}
@@ -1338,16 +1340,39 @@ func (o *Origin) expireUploads(ctx context.Context) error {
 			delete(o.state.Uploads, id)
 		}
 	}
+	for id, d := range o.downloads {
+		if o.ops["app "+id] == nil && !o.config.Now().Before(d.expiresAt) {
+			_ = d.file.Close()
+			delete(o.downloads, id)
+		}
+	}
 	return o.persist(ctx)
 }
 
-func packArchive(ctx context.Context, root, archive string) error {
-	f, err := os.Create(archive) //nolint:gosec // The archive is inside the looked-up app managed workspace.
+// downloadArchive is a CLI download in progress, read a chunk per request.
+type downloadArchive struct {
+	file      *os.File
+	expiresAt time.Time
+}
+
+// downloadIdle is how long a CLI download may pause between chunks.
+const downloadIdle = 5 * time.Minute
+
+// packUnnamed packs an app's source into a file unlinked as soon as it exists.
+// The random name is created exclusively, so a planted symlink or hard link is
+// never written through, and no exit or crash can leave the archive behind.
+func (o *Origin) packUnnamed(ctx context.Context, id, root string) (*os.File, error) {
+	f, err := os.CreateTemp(filepath.Join(o.config.DataRoot, "apps", id), ".download-*")
 	if err != nil {
-		return fmt.Errorf("app: create download archive: %w", err)
+		return nil, fmt.Errorf("app %s: create download archive: %w", id, err)
 	}
-	_, packErr := Pack(ctx, root, f)
-	return errors.Join(packErr, f.Close())
+	if err := os.Remove(f.Name()); err != nil {
+		return nil, errors.Join(fmt.Errorf("app %s: unlink download archive: %w", id, err), f.Close())
+	}
+	if _, err := Pack(ctx, root, f); err != nil {
+		return nil, errors.Join(fmt.Errorf("app %s: pack download: %w", id, err), f.Close())
+	}
+	return f, nil
 }
 func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 	if q.Offset < 0 || q.Offset > MaxArchive {
@@ -1368,23 +1393,56 @@ func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 	if err != nil || result.App.Status != "active" {
 		return Result{}, errors.Join(err, errors.New("app: app expired"))
 	}
-	archive := filepath.Join(o.config.DataRoot, "apps", q.ID, "download.tar.gz")
 	if q.Offset == 0 {
-		if err := packArchive(ctx, a.Root, archive); err != nil {
+		if err := o.startDownload(ctx, q.ID, a.Root); err != nil {
 			return Result{}, err
 		}
 	}
-	f, err := os.Open(archive) //nolint:gosec // The archive is inside the looked-up app managed workspace.
+	return o.readDownload(q.ID, q.Offset)
+}
+
+// startDownload packs a fresh archive for a CLI download, replacing one the
+// owner abandoned. The caller owns the app.
+func (o *Origin) startDownload(ctx context.Context, id, root string) error {
+	f, err := o.packUnnamed(ctx, id, root)
 	if err != nil {
-		return Result{}, err
+		return err
 	}
-	defer func() { _ = f.Close() }()
+	o.mu.Lock()
+	previous := o.downloads[id]
+	o.downloads[id] = &downloadArchive{file: f}
+	o.mu.Unlock()
+	if previous != nil {
+		_ = previous.file.Close()
+	}
+	return nil
+}
+
+// readDownload returns one chunk of a CLI download and releases the archive
+// after its last chunk. The caller owns the app.
+func (o *Origin) readDownload(id string, offset int64) (Result, error) {
+	o.mu.Lock()
+	d := o.downloads[id]
+	if d != nil {
+		d.expiresAt = o.config.Now().Add(downloadIdle)
+	}
+	o.mu.Unlock()
+	if d == nil {
+		return Result{}, fmt.Errorf("app %s: download expired; start it again", id)
+	}
 	b := make([]byte, ChunkSize)
-	n, err := f.ReadAt(b, q.Offset)
+	n, err := d.file.ReadAt(b, offset)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return Result{}, err
+		return Result{}, fmt.Errorf("app %s: read download: %w", id, err)
 	}
-	return Result{Data: b[:n], Done: errors.Is(err, io.EOF) || n < ChunkSize}, nil
+	done := errors.Is(err, io.EOF) || n < ChunkSize
+	if done {
+		o.mu.Lock()
+		delete(o.downloads, id)
+		o.mu.Unlock()
+		_ = d.file.Close()
+	}
+	return Result{Data: b[:n], Done: done}, nil
 }
 
 // The edge permits 32 active apps per owner. A second generation of caches lets
@@ -1584,21 +1642,14 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (o *Origin) configCheckSourceDownload(w http.ResponseWriter, r *http.Request, app appRoute) error {
-	filename := filepath.Join(o.config.DataRoot, "apps", app.Record.ID, "browser-download.tar.gz")
-	f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600) //nolint:gosec // Fixed owner-download archive inside the looked-up app workspace.
-	if err != nil {
-		return err
-	}
-	_, packErr := Pack(r.Context(), app.Root, f)
-	if closeErr := f.Close(); packErr != nil || closeErr != nil {
-		return errors.Join(packErr, closeErr)
-	}
-	defer func() { _ = os.Remove(filename) }()
-	f, err = os.Open(filename) //nolint:gosec // Fixed owner-download archive inside the looked-up app workspace.
+	f, err := o.packUnnamed(r.Context(), app.Record.ID, app.Root)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("app %s: rewind download: %w", app.Record.ID, err)
+	}
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Cache-Control", "no-store")
 	_, err = io.Copy(w, f)
