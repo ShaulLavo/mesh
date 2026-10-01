@@ -132,6 +132,7 @@ func testDemandManager(t *testing.T, sessions *fakeDemandSessions, upstreamReady
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := newDemandManager(ctx, sessions, func(error) {})
 	manager.poll = 5 * time.Millisecond
+	manager.cleanupRetry = 0
 	manager.bind = func(uint16) (net.Listener, error) { return net.Listen("tcp", "127.0.0.1:0") }
 	manager.dial = func(context.Context, string) error {
 		if upstreamReady() {
@@ -886,6 +887,9 @@ func TestDemandRetirementRecoversWithoutAnotherSync(t *testing.T) {
 	}
 	waitForSettledRoute(t, manager)
 	manager.supervise()
+	if retained := manager.Retiring(); len(retained) != 0 {
+		t.Fatalf("a finished retirement is still reported: %+v", retained)
+	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if len(manager.retiring) != 0 {
@@ -896,6 +900,7 @@ func TestDemandRetirementRecoversWithoutAnotherSync(t *testing.T) {
 func TestDemandPersistentRetirementFailureIsBounded(t *testing.T) {
 	sessions := newFakeDemandSessions()
 	manager := testDemandManager(t, sessions, func() bool { return true })
+	manager.cleanupRetry = time.Hour
 	manager.Sync([]meshserve.Service{demandService(time.Minute)})
 	if err := manager.Start(context.Background(), "dev"); err != nil {
 		t.Fatal(err)
@@ -913,5 +918,32 @@ func TestDemandPersistentRetirementFailureIsBounded(t *testing.T) {
 	}
 	if sessions.liveCount() != 1 {
 		t.Fatal("the retained worker is no longer accounted for")
+	}
+	retained := manager.Retiring()
+	if len(retained) != 1 || retained[0].Name != "dev" || retained[0].Healthy || retained[0].Demand == nil ||
+		retained[0].Demand.SessionID != "S001" || !strings.Contains(retained[0].Problem, "S001") {
+		t.Fatalf("removed route still owning S001 is reported as %+v", retained)
+	}
+}
+
+func TestWithRetiringKeepsCanonicalOrderAndRegisteredServices(t *testing.T) {
+	got := withRetiring(
+		[]protocol.ServiceInfo{{Name: "api"}, {Name: "web"}},
+		[]protocol.ServiceInfo{{Name: "dev"}, {Name: "zed"}},
+	)
+	var names []string
+	for _, info := range got {
+		names = append(names, info.Name)
+	}
+	if strings.Join(names, ",") != "api,dev,web,zed" {
+		t.Fatalf("listed %v, want canonical order", names)
+	}
+
+	full := make([]protocol.ServiceInfo, meshserve.MaximumServices)
+	for index := range full {
+		full[index].Name = fmt.Sprintf("s%04d", index)
+	}
+	if got := withRetiring(full, []protocol.ServiceInfo{{Name: "a"}}); len(got) != meshserve.MaximumServices || got[0].Name != "s0000" {
+		t.Fatalf("a full list grew to %d or lost a registered service", len(got))
 	}
 }

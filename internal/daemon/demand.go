@@ -29,9 +29,13 @@ const (
 	// using, so an open browser tab without a live socket lets the route idle.
 	demandListenerIdleTimeout = 2 * time.Minute
 	demandStopTimeout         = 30 * time.Second
-	demandOutputTimeout       = 5 * time.Second
-	demandFailureLines        = 20
-	demandFailureLineBytes    = 240
+	// demandCleanupRetry spaces out stopping again a session whose stop
+	// failed, so a worker nobody can reach is retried steadily instead of by
+	// every request, Sync and supervisor tick.
+	demandCleanupRetry     = 15 * time.Second
+	demandOutputTimeout    = 5 * time.Second
+	demandFailureLines     = 20
+	demandFailureLineBytes = 240
 )
 
 // demandSessions is what on-demand routes need from the session lifecycle.
@@ -60,6 +64,8 @@ type demandManager struct {
 	dial   func(ctx context.Context, address string) error
 	holder func(port uint16) string
 	poll   time.Duration
+	// cleanupRetry is demandCleanupRetry, shortened by tests.
+	cleanupRetry time.Duration
 
 	mu        sync.Mutex
 	routes    map[string]*demandRoute
@@ -83,7 +89,7 @@ func newDemandManager(ctx context.Context, sessions demandSessions, report func(
 	}
 	return &demandManager{
 		ctx: ctx, sessions: sessions, report: report, logger: log.Default(),
-		bind: bindLoopback, dial: dialUpstream, holder: portHolder, poll: demandPollInterval,
+		bind: bindLoopback, dial: dialUpstream, holder: portHolder, poll: demandPollInterval, cleanupRetry: demandCleanupRetry,
 		routes: make(map[string]*demandRoute), listeners: make(map[uint16]*demandListener),
 		retiring: make(map[string]*demandRoute),
 	}
@@ -345,11 +351,37 @@ func (m *demandManager) supervise() {
 	}
 	if !m.closed.Load() {
 		m.bindMissingLocked(listens)
+		for name, route := range m.retiring {
+			if route.retire() {
+				delete(m.retiring, name)
+			}
+		}
 	}
 	m.mu.Unlock()
 	for _, route := range routes {
 		route.checkSession()
+		route.retryCleanup()
 	}
+}
+
+// Retiring describes removed routes that may still own a running session.
+// They are no longer registered, so without this their owner could not see
+// what is left running or why.
+func (m *demandManager) Retiring() []protocol.ServiceInfo {
+	m.mu.Lock()
+	routes := make([]*demandRoute, 0, len(m.retiring))
+	for _, route := range m.retiring {
+		routes = append(routes, route)
+	}
+	m.mu.Unlock()
+	var infos []protocol.ServiceInfo
+	for _, route := range routes {
+		if info, owning := route.retiringInfo(); owning {
+			infos = append(infos, info)
+		}
+	}
+	slices.SortFunc(infos, func(a, b protocol.ServiceInfo) int { return strings.Compare(a.Name, b.Name) })
+	return infos
 }
 
 // Close releases every listener. Sessions keep running: the next daemon
@@ -511,6 +543,7 @@ type demandRoute struct {
 	restart     bool
 	state       string
 	owned       demandOwnership
+	retryAt     time.Time // when an uncertain session is next stopped again
 	sessionID   string
 	failure     string
 	connections int
@@ -578,8 +611,10 @@ func (r *demandRoute) redefine(service meshserve.Service) {
 			delete(r.unbound, port)
 		}
 	}
-	if r.pending == nil && r.owned == ownsUncertain {
-		r.beginStopLocked()
+	if r.owned == ownsUncertain {
+		if r.cleanupDueLocked() {
+			r.beginStopLocked()
+		}
 		return
 	}
 	if sameLaunch(previous.Demand, service.Demand) && previous.Label() == service.Label() {
@@ -621,10 +656,31 @@ func (r *demandRoute) retire() bool {
 	defer r.mu.Unlock()
 	r.removed = true
 	r.cancelIdleLocked()
-	if r.pending == nil && r.owned != ownsNothing {
+	if r.pending == nil && r.owned == ownsLive || r.cleanupDueLocked() {
 		r.beginStopLocked()
 	}
 	return r.pending == nil && r.owned == ownsNothing
+}
+
+// cleanupDueLocked reports whether a session that may still be running is
+// due to be stopped again.
+func (r *demandRoute) cleanupDueLocked() bool {
+	return r.pending == nil && r.owned == ownsUncertain && !time.Now().Before(r.retryAt)
+}
+
+func (r *demandRoute) markUncertainLocked() {
+	r.owned = ownsUncertain
+	r.retryAt = time.Now().Add(r.manager.cleanupRetry)
+}
+
+// retryCleanup stops again a session whose stop failed, once that is due.
+// A closed manager stops nothing: daemon shutdown keeps every session.
+func (r *demandRoute) retryCleanup() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.manager.closed.Load() && r.cleanupDueLocked() {
+		r.beginStopLocked()
+	}
 }
 
 // hold counts one open connection until the returned release runs. A
@@ -665,8 +721,11 @@ func (r *demandRoute) ready(ctx context.Context) error {
 			r.mu.Unlock()
 			return nil
 		}
-		transition := r.towardRunningLocked() //nolint:contextcheck // runs on the daemon's context, so a waiter that gives up never abandons a launch or its cleanup
+		transition, err := r.towardRunningLocked() //nolint:contextcheck // runs on the daemon's context, so a waiter that gives up never abandons a launch or its cleanup
 		r.mu.Unlock()
+		if err != nil {
+			return err
+		}
 		select {
 		case <-transition.done:
 		case <-ctx.Done():
@@ -681,14 +740,18 @@ func (r *demandRoute) ready(ctx context.Context) error {
 // towardRunningLocked returns the transition in progress, or begins the next
 // one on the way to running: a stop of a session a failure may have left
 // behind, otherwise a start.
-func (r *demandRoute) towardRunningLocked() *demandTransition {
+func (r *demandRoute) towardRunningLocked() (*demandTransition, error) {
 	if r.pending == nil && r.owned == ownsUncertain {
+		if !r.cleanupDueLocked() {
+			return nil, fmt.Errorf("route %s did not start: session %s may still be running and is stopped again at %s: %s",
+				r.service.Route(), r.sessionID, r.retryAt.Format(time.TimeOnly), r.failure)
+		}
 		r.beginStopLocked()
 	}
 	if r.pending == nil {
 		r.beginStartLocked()
 	}
-	return r.pending
+	return r.pending, nil
 }
 
 func (r *demandRoute) stop(ctx context.Context) error {
@@ -765,7 +828,11 @@ func (r *demandRoute) finishStart(transition *demandTransition, id string, err e
 	case err != nil:
 		r.state = protocol.DemandFailed
 		r.failure = err.Error()
-		r.owned = failedStartOwnership(id, err)
+		if failedStartOwnership(id, err) == ownsUncertain {
+			r.markUncertainLocked()
+		} else {
+			r.owned = ownsNothing
+		}
 		var failure demandFailure
 		if errors.As(err, &failure) {
 			r.failure = failure.summary
@@ -826,7 +893,7 @@ func (r *demandRoute) beginStopLocked() {
 		if err != nil {
 			r.state = protocol.DemandFailed
 			r.failure = err.Error()
-			r.owned = ownsUncertain
+			r.markUncertainLocked()
 		}
 		transition.err = err
 		r.mu.Unlock()
@@ -915,6 +982,27 @@ func (r *demandRoute) markBound(port uint16) {
 func (r *demandRoute) status() *protocol.ServiceDemand {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.statusLocked()
+}
+
+// retiringInfo describes a removed route that may still own a session.
+func (r *demandRoute) retiringInfo() (protocol.ServiceInfo, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.owned == ownsNothing {
+		return protocol.ServiceInfo{}, false
+	}
+	info := protocol.ServiceDefinitionInfo(r.service)
+	info.Demand = r.statusLocked()
+	problem := fmt.Sprintf("removed; stopping its session %s", r.sessionID)
+	if r.state == protocol.DemandFailed {
+		problem = fmt.Sprintf("removed, but its session %s may still be running: %s", r.sessionID, r.failure)
+	}
+	info.Problem = boundedServiceProblem(problem)
+	return info, true
+}
+
+func (r *demandRoute) statusLocked() *protocol.ServiceDemand {
 	status := &protocol.ServiceDemand{State: r.state, Connections: r.connections, SessionID: r.sessionID}
 	if r.service.Demand == nil {
 		status.State = ""
