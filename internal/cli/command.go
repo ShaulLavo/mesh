@@ -743,6 +743,9 @@ func (a *application) runHostWithContainment(
 	raw bool,
 	containment ContainmentFunc,
 ) error {
+	if _, err := a.attachmentOptions(cmd, detachKey, raw); err != nil {
+		return err
+	}
 	if resume {
 		ctx, cancel := context.WithTimeout(cmd.Context(), wakeIntentTimeout)
 		rows, err := listRemoteHost(ctx, host, a.intentDialer(cmd.ErrOrStderr()))
@@ -750,6 +753,9 @@ func (a *application) runHostWithContainment(
 		if err != nil {
 			return err
 		}
+		sort.SliceStable(rows, func(i, j int) bool {
+			return rows[i].LastActiveAt().After(rows[j].LastActiveAt())
+		})
 		for _, row := range rows {
 			if row.State == string(storage.StateRunning) || row.State == string(storage.StateDetached) {
 				containingSessions := containment(cmd.Context())
@@ -947,7 +953,8 @@ func (a *application) attachResolvedWithContainment(
 		display = resolved.remote.ID + " on " + resolved.host.Alias
 	}
 	restore := a.bindTerminal(bindingFor(resolved))
-	result, err := Attach(options)
+	a.noticeBeforeAttachment(cmd)
+	result, err := Attach(cmd.Context(), options)
 	if err != nil {
 		restore()
 		return err
@@ -1432,11 +1439,14 @@ func (a *application) localCommand() *cobra.Command {
 }
 
 func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool, requireDaemon bool, detachKey string, raw bool) error {
+	opts, err := a.attachmentOptions(cmd, detachKey, raw)
+	if err != nil {
+		return err
+	}
 	var (
 		current    Session
 		socketPath string
 		lastSeq    *uint64
-		err        error
 	)
 	if resume {
 		if len(command) > 0 {
@@ -1479,10 +1489,6 @@ func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool
 	}
 	copy := current
 	resolved := resolvedSession{local: &copy}
-	opts, err := a.attachmentOptions(cmd, detachKey, raw)
-	if err != nil {
-		return err
-	}
 	opts.SocketPath, opts.SessionID, opts.LastSeq = socketPath, current.ID, lastSeq
 	opts.ContainingSessions = a.dependencies.Containment(cmd.Context())
 	if len(opts.ContainingSessions) > 0 {
@@ -1493,7 +1499,8 @@ func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool
 		opts.HostID = target.HostID
 	}
 	restore := a.bindTerminal(bindingFor(resolved))
-	result, err := Attach(opts)
+	a.noticeBeforeAttachment(cmd)
+	result, err := Attach(cmd.Context(), opts)
 	if err != nil {
 		restore()
 		return err
@@ -1562,7 +1569,8 @@ func (a *application) attachCommand() *cobra.Command {
 			}
 			attached := resolvedSession{local: &current}
 			restore := a.bindTerminal(bindingFor(attached))
-			result, err := Attach(opts)
+			a.noticeBeforeAttachment(cmd)
+			result, err := Attach(cmd.Context(), opts)
 			if err != nil {
 				restore()
 				return err

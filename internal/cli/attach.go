@@ -134,7 +134,7 @@ type AttachResult struct {
 // Attach connects to a session worker and relays the local terminal to it
 // until the client detaches or the remote process exits. Returning never
 // implies anything about whether the remote process is still alive.
-func Attach(opts AttachOptions) (AttachResult, error) {
+func Attach(ctx context.Context, opts AttachOptions) (AttachResult, error) {
 	res := initialAttachResult(opts)
 	if opts.Conn != nil {
 		defer opts.Conn.Close() //nolint:errcheck // release even if local terminal setup fails
@@ -151,7 +151,13 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 	if _, err := validateAttachOptions(opts); err != nil {
 		return res, err
 	}
-	registration, inside, err := registerAttachmentNesting(opts)
+	if ctx == nil {
+		return res, errors.New("attach with nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return res, fmt.Errorf("attach %s: %w", opts.SessionID, err)
+	}
+	registration, inside, err := registerAttachmentNesting(ctx, opts)
 	if err != nil {
 		return res, fmt.Errorf("attach %s nesting: %w", opts.SessionID, err)
 	}
@@ -167,7 +173,7 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 		return res, err
 	}
 	defer closeTerminal()
-	return attachWithTerminal(context.Background(), opts, terminal, keys, inputIsTerminal)
+	return attachWithTerminal(ctx, opts, terminal, keys, inputIsTerminal)
 }
 
 func initialAttachResult(opts AttachOptions) AttachResult {
