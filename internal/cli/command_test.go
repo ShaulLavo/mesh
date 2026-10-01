@@ -1313,7 +1313,7 @@ func TestPickerReturnsBeforeRawAttachStarts(t *testing.T) {
 func setupCommandTestHost(t *testing.T) *commandTestHost {
 	t.Helper()
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
-	t.Setenv("MESH_STATE_DIR", t.TempDir())
+	t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
 	host := &commandTestHost{host: HostRecord{
 		Alias: "pc", ID: "host-id", MeshIdentity: "host-key", TailscaleName: "pc.example.ts.net",
 		Addresses: []string{"100.64.0.2"}, Endpoint: "ws://100.64.0.2:7777/mesh",

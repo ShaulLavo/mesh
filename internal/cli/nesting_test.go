@@ -190,7 +190,7 @@ func TestNestingRegistrationHoldsConnectionAndRejectsLegacyWorkers(t *testing.T)
 			name = "supported"
 		}
 		t.Run(name, func(t *testing.T) {
-			location := worker.SessionWorkerLocation{SessionID: "AAAA", Dir: t.TempDir()}
+			location := worker.SessionWorkerLocation{SessionID: "AAAA", Dir: compactSocketTempDir(t)}
 			listener, err := net.Listen("unix", paths.Socket(location.Dir))
 			if err != nil {
 				t.Fatal(err)

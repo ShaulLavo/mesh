@@ -15,7 +15,16 @@ import (
 
 func compactSocketTempDir(t *testing.T) string {
 	t.Helper()
-	return t.TempDir()
+	dir, err := os.MkdirTemp(os.TempDir(), "c-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Error(err)
+		}
+	})
+	return dir
 }
 
 func TestSocketFixturesBindAndDetectAbsentDaemonUnderLongScratchRoot(t *testing.T) {
