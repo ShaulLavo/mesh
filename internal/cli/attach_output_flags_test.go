@@ -72,6 +72,11 @@ func TestAttachNeverMakesSharedOutputNonblocking(t *testing.T) {
 }
 
 func TestAttachDoesNotMakeConcurrentPipeWriterFailWithEAGAIN(t *testing.T) {
+	exerciseConcurrentPipeWriter(t, nil)
+}
+
+func exerciseConcurrentPipeWriter(t *testing.T, configure func(*os.File)) int64 {
+	t.Helper()
 	input, err := os.CreateTemp(t.TempDir(), "input")
 	if err != nil {
 		t.Fatal(err)
@@ -87,6 +92,9 @@ func TestAttachDoesNotMakeConcurrentPipeWriterFailWithEAGAIN(t *testing.T) {
 	}
 	peer := os.NewFile(uintptr(fd), "concurrent-output")
 	t.Cleanup(func() { _ = peer.Close() })
+	if configure != nil {
+		configure(output)
+	}
 	conn := &flagCheckConn{outputCancelConn: &outputCancelConn{frames: make(chan protocol.Frame, 2), closed: make(chan struct{})}, ready: make(chan struct{})}
 	conn.frames <- mustCommandControlFrame(protocol.Control{Type: protocol.TypeAttached, SessionID: "7K3D"})
 	ctx, cancel := context.WithCancel(t.Context())
@@ -142,9 +150,11 @@ func TestAttachDoesNotMakeConcurrentPipeWriterFailWithEAGAIN(t *testing.T) {
 	}
 	_ = peer.Close()
 	_ = output.Close()
-	if n := <-drained; n != 64<<10 {
+	n := <-drained
+	if n != 64<<10 {
 		t.Errorf("concurrent output drained %d bytes, want %d", n, 64<<10)
 	}
+	return n
 }
 
 func assertOutputBlocking(t *testing.T, output *os.File, stage string) {
