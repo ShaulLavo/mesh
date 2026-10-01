@@ -311,6 +311,13 @@ func inspectLocalSession(parent context.Context, request PickerInspectRequest) (
 	if err != nil {
 		return SessionInspection{}, err
 	}
+	current, err := Find(request.SessionID)
+	if err != nil {
+		return SessionInspection{}, err
+	}
+	if !liveState(current.State()) {
+		return inspectSavedLocalSession(current)
+	}
 	ctx, cancel := context.WithTimeout(parent, localQueryTimeout)
 	defer cancel()
 	requestID, err := newDaemonRequestID()

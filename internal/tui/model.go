@@ -45,18 +45,19 @@ type servedWebsite struct {
 }
 
 type session struct {
-	id              string
-	state           string
-	command         []string
-	cwd             string
-	createdAt       time.Time
-	lastActiveAt    time.Time
-	recovery        *recovery.Record
-	recoveryError   string
-	agentStatus     string
-	replacementID   string
-	recoveredFrom   string
-	previousAttempt bool
+	id                     string
+	state                  string
+	command                []string
+	cwd                    string
+	createdAt              time.Time
+	lastActiveAt           time.Time
+	recovery               *recovery.Record
+	recoveryDetailsOmitted bool
+	recoveryError          string
+	agentStatus            string
+	replacementID          string
+	recoveredFrom          string
+	previousAttempt        bool
 	// hibernation marks an exited agent session that resumes on selection.
 	hibernation *recovery.Hibernation
 }

@@ -162,10 +162,10 @@ const (
 	SessionDirectoryTerminal
 )
 
-// SessionInspection is the live, non-durable view of one selected session.
-// Launch command and directory stay in SessionInfo because they describe a
-// different fact and remain useful while a host is offline.
+// SessionInspection holds live observations or a selected saved preview.
+// Launch facts stay in SessionInfo and remain useful while a host is offline.
 type SessionInspection struct {
+	Recovery          *recovery.Record
 	ObservedAt        time.Time
 	CurrentDirectory  string
 	DirectorySource   SessionDirectorySource
@@ -1097,15 +1097,13 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	if err != nil {
 		return err
 	}
-	// One process scan per listing: every row's MEM comes from it.
-	memory := procmem.Snapshot()
+	localRows, localErr := localSessionRowsWithDaemonMemory(cmd.Context(), stateDir)
 	hosts, selfAlias := withoutThisHost(stateDir, hosts)
 	if len(hosts) == 0 {
-		rows, err := localSessionRowsMeasured(memory)
-		if err != nil {
-			return err
+		if localErr != nil {
+			return localErr
 		}
-		hidden, err := writeLocalSessionList(cmd.OutOrStdout(), a.dependencies.Now(), rows, view)
+		hidden, err := writeLocalSessionList(cmd.OutOrStdout(), a.dependencies.Now(), localRows, view)
 		return reportHiddenSessions(cmd.ErrOrStderr(), hidden, err)
 	}
 	cache, err := OpenCatalogCache(cmd.Context())
@@ -1120,11 +1118,12 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	// This host's own sessions come from disk, not from the fan-out. Without
 	// this, adopting one remote host hid every local session from `mesh ls`
 	// while its worker kept running.
-	if localRows, err := localSessionRowsMeasured(memory); err != nil {
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: local sessions unavailable: %s\n", selfAlias, safeRemoteText(err.Error())); err != nil {
+	if localErr != nil {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: local sessions unavailable: %s\n", selfAlias, safeRemoteText(localErr.Error())); err != nil {
 			return err
 		}
-	} else if len(localRows) > 0 {
+	}
+	if len(localRows) > 0 {
 		results = append([]HostSessions{{Host: HostRecord{Alias: selfAlias}, Sessions: localRows}}, results...)
 	}
 	hidden, err := writeSessionList(cmd.OutOrStdout(), a.dependencies.Now(), results, view)

@@ -96,20 +96,21 @@ const (
 
 // SessionInfo is the transport representation of durable session metadata.
 type SessionInfo struct {
-	AgentStatus        string           `json:"agentStatus,omitempty"`
-	Recovery           *recovery.Record `json:"recovery,omitempty"`
-	RecoveryError      string           `json:"recoveryError,omitempty"`
-	ReplacementID      string           `json:"replacementId,omitempty"`
-	RecoveredFrom      string           `json:"recoveredFrom,omitempty"`
-	ID                 string           `json:"id"`
-	HostID             string           `json:"hostId"`
-	Command            []string         `json:"command"`
-	Cwd                string           `json:"cwd"`
-	State              string           `json:"state"`
-	CreatedAt          time.Time        `json:"createdAt"`
-	LastAttachedAt     *time.Time       `json:"lastAttachedAt,omitempty"`
-	ExitCode           *int             `json:"exitCode,omitempty"`
-	LastOutputSequence uint64           `json:"lastOutputSequence"`
+	AgentStatus            string           `json:"agentStatus,omitempty"`
+	Recovery               *recovery.Record `json:"recovery,omitempty"`
+	RecoveryDetailsOmitted bool             `json:"recoveryDetailsOmitted,omitempty"`
+	RecoveryError          string           `json:"recoveryError,omitempty"`
+	ReplacementID          string           `json:"replacementId,omitempty"`
+	RecoveredFrom          string           `json:"recoveredFrom,omitempty"`
+	ID                     string           `json:"id"`
+	HostID                 string           `json:"hostId"`
+	Command                []string         `json:"command"`
+	Cwd                    string           `json:"cwd"`
+	State                  string           `json:"state"`
+	CreatedAt              time.Time        `json:"createdAt"`
+	LastAttachedAt         *time.Time       `json:"lastAttachedAt,omitempty"`
+	ExitCode               *int             `json:"exitCode,omitempty"`
+	LastOutputSequence     uint64           `json:"lastOutputSequence"`
 	// DetachedAt is when the last client left a live session. Idle policy
 	// measures from here, not from LastAttachedAt, which marks the start of
 	// an attachment that may have lasted days.
@@ -337,6 +338,9 @@ type Control struct {
 	Signal string `json:"signal,omitempty"`
 
 	// List / host info
+	// Lean omits display-independent recovery details. Absent keeps the full
+	// catalog for older clients; older daemons ignore this additive option.
+	Lean     bool          `json:"lean,omitempty"`
 	Sessions []SessionInfo `json:"sessions,omitempty"`
 	Host     *HostInfo     `json:"host,omitempty"`
 

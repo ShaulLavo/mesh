@@ -24,7 +24,6 @@ func addLocalRecoveryInfo(row *protocol.SessionInfo, current Session, hostID str
 		row.RecoveryError = err.Error()
 		return
 	}
-	preview := protocol.RecoveryPreview(record)
-	row.Recovery = &preview
+	protocol.LeanRecoveryInfo(row, record)
 	row.AgentStatus = recovery.AgentStatus(filepath.Dir(current.Dir), hostID, current.RecoveredFrom, current.ID, record.AgentResume)
 }
