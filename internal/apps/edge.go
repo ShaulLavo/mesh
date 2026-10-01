@@ -171,7 +171,7 @@ func (e *Edge) publishRuntime(state edgeState, locked map[string]*edgeRuntime) {
 		// Other apps keep admitting traffic during this save. Publishing must not
 		// erase an extension that is newer than the snapshot written to storage.
 		if current := rt.record.Load(); current != nil && app.Status == "active" && current.Generation == app.Generation {
-			app.ExpiresAt = maxTime(app.ExpiresAt, current.ExpiresAt)
+			app.ExpiresAt = minTime(maxTime(app.ExpiresAt, current.ExpiresAt), app.ExpiresAt.Add(activityPersistSlack))
 		}
 		rt.record.Store(&app)
 		if locked[id] == nil {
@@ -449,7 +449,7 @@ func (e *Edge) lookup(ctx context.Context, id string, touch bool) (Record, bool,
 	}
 	app := *rt.record.Load()
 	if app.Status == "active" && !e.config.Now().Before(app.ExpiresAt) {
-		return e.flushActivity(ctx, id, true)
+		return e.flushActivity(ctx, app, true)
 	}
 	if touch && app.Status == "active" {
 		return e.activity(ctx, app)
@@ -467,14 +467,22 @@ func (e *Edge) activity(ctx context.Context, admitted Record) (Record, bool, err
 	now := e.config.Now()
 	expired := app.Status == "active" && !now.Before(app.ExpiresAt)
 	if !expired && app.Status == "active" && app.Generation == admitted.Generation {
-		app.ExpiresAt = maxTime(app.ExpiresAt, now.UTC().Add(IdleTTL))
-		rt.record.Store(&app)
+		app = rt.proposeActivity(app, now.UTC().Add(IdleTTL))
 	}
 	rt.mu.Unlock()
 	if expired {
-		return e.flushActivity(ctx, admitted.ID, true)
+		return e.flushActivity(ctx, app, true)
 	}
-	return e.flushIfDue(ctx, admitted.ID, rt, app)
+	return e.flushIfDue(ctx, rt, app)
+}
+
+func (rt *edgeRuntime) proposeActivity(app Record, deadline time.Time) Record {
+	app.ExpiresAt = maxTime(app.ExpiresAt, deadline)
+	bounded := app
+	// A failed or pending save must not publish more activity than restart can lose.
+	bounded.ExpiresAt = minTime(app.ExpiresAt, time.Unix(0, rt.persisted.Load()).Add(activityPersistSlack))
+	rt.record.Store(&bounded)
+	return app
 }
 
 func maxTime(a, b time.Time) time.Time {
@@ -484,14 +492,15 @@ func maxTime(a, b time.Time) time.Time {
 	return b
 }
 
-func (e *Edge) flushIfDue(ctx context.Context, id string, rt *edgeRuntime, app Record) (Record, bool, error) {
+func (e *Edge) flushIfDue(ctx context.Context, rt *edgeRuntime, app Record) (Record, bool, error) {
 	if app.Status == "active" && app.ExpiresAt.Sub(time.Unix(0, rt.persisted.Load())) >= activityPersistSlack {
-		return e.flushActivity(ctx, id, false)
+		return e.flushActivity(ctx, app, false)
 	}
 	return app, true, nil
 }
 
-func (e *Edge) flushActivity(ctx context.Context, id string, expire bool) (Record, bool, error) {
+func (e *Edge) flushActivity(ctx context.Context, proposed Record, expire bool) (Record, bool, error) {
+	id := proposed.ID
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	rt := (*e.runtime.Load())[id]
@@ -499,13 +508,18 @@ func (e *Edge) flushActivity(ctx context.Context, id string, expire bool) (Recor
 		return Record{}, false, nil
 	}
 	current := *rt.record.Load()
-	if !expire && current.ExpiresAt.Sub(time.Unix(0, rt.persisted.Load())) < activityPersistSlack {
+	if !expire && (current.Status != "active" || current.Generation != proposed.Generation || maxTime(current.ExpiresAt, proposed.ExpiresAt).Sub(time.Unix(0, rt.persisted.Load())) < activityPersistSlack) {
 		return current, true, nil
 	}
 	next := e.next()
 	defer next.unlock()
 	next.lockApp(e, id)
 	e.expireAppLocked(next, id)
+	app := next.state.Apps[id]
+	if !expire && app.Status == "active" && app.Generation == proposed.Generation {
+		app.ExpiresAt = maxTime(app.ExpiresAt, proposed.ExpiresAt)
+		next.state.Apps[id] = app
+	}
 	if err := e.persist(ctx, next); err != nil {
 		return Record{}, true, err
 	}
@@ -571,8 +585,7 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 		return Record{}, nil, nil, errors.New("app private")
 	}
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-		app.ExpiresAt = maxTime(app.ExpiresAt, e.config.Now().UTC().Add(IdleTTL))
-		rt.record.Store(&app)
+		app = rt.proposeActivity(app, e.config.Now().UTC().Add(IdleTTL))
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	if rt.inflight == nil {
@@ -589,7 +602,7 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 		}
 		rt.mu.Unlock()
 	}
-	if _, _, err := e.flushIfDue(ctx, id, rt, app); err != nil {
+	if _, _, err := e.flushIfDue(ctx, rt, app); err != nil {
 		release()
 		return Record{}, nil, nil, err
 	}
