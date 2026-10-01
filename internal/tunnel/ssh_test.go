@@ -351,22 +351,70 @@ func TestSSHDisconnectStartsEveryReleaseBeforeWaiting(t *testing.T) {
 	}
 }
 
-func TestSSHDialCancellationUnpublishesStalledChannelOpen(t *testing.T) {
+func TestSSHDialCancellationPreservesStalledChannelOpen(t *testing.T) {
 	const name = "blog.shaulavo.dev"
-	f := newSSHFixture(t, time.Second, name)
+	f := newSSHFixture(t, 10*time.Millisecond, name)
 	conn, channels := f.client(t, true)
 	if !sendForward(t, conn, "tcpip-forward", name, 80) {
 		t.Fatal("forward refused")
 	}
+	endpoint := f.activator.endpoint(name).(*sshEndpoint)
 	go func() { <-channels }()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	_, err := f.activator.endpoint(name).Dial(ctx)
+	_, err := endpoint.Dial(ctx)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Dial error = %v", err)
 	}
-	if f.activator.endpoint(name) != nil {
-		t.Fatal("stalled open returned before deactivation")
+	time.Sleep(80 * time.Millisecond)
+	if f.activator.endpoint(name) != endpoint {
+		t.Fatal("stalled open unpublished a connection answering keepalives")
+	}
+	if len(endpoint.slots) != 1 || len(endpoint.global) != 1 {
+		t.Fatal("stalled channel open lost its reservation")
+	}
+	_ = conn.Close()
+	waitTunnel(t, func() bool { return f.activator.endpoint(name) == nil })
+	waitTunnel(t, func() bool { return len(endpoint.slots) == 0 && len(endpoint.global) == 0 })
+}
+
+func TestSSHStalledChannelOpenExpiresWithoutKeepaliveReply(t *testing.T) {
+	const name = "blog.shaulavo.dev"
+	f := newSSHFixture(t, 20*time.Millisecond, name)
+	conn, channels := f.client(t, false)
+	if !sendForward(t, conn, "tcpip-forward", name, 80) {
+		t.Fatal("forward refused")
+	}
+	endpoint := f.activator.endpoint(name).(*sshEndpoint)
+	result := make(chan error, 1)
+	go func() {
+		stream, err := endpoint.Dial(context.Background())
+		if err == nil {
+			_ = stream.Close()
+		}
+		result <- err
+	}()
+	select {
+	case <-channels:
+	case <-time.After(time.Second):
+		t.Fatal("channel open did not reach the peer")
+	}
+	waitTunnel(t, func() bool { return f.activator.endpoint(name) == nil })
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("dead connection's stalled dial succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("keepalive expiry did not unblock the stalled dial")
+	}
+	waitTunnel(t, func() bool { return len(endpoint.slots) == 0 && len(endpoint.global) == 0 })
+	closed := make(chan error, 1)
+	go func() { closed <- conn.Wait() }()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("keepalive expiry did not close the SSH connection")
 	}
 }
 

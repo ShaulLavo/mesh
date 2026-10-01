@@ -62,7 +62,7 @@ func (route *tunnelRoute) dial(ctx context.Context, _, _ string) (net.Conn, erro
 	defer cancel()
 	connection, err := route.endpoint.Dial(ctx)
 	if err != nil {
-		if !errors.Is(err, tunnel.ErrCapacity) {
+		if errors.Is(err, net.ErrClosed) {
 			route.release()
 		}
 		return nil, err
@@ -87,6 +87,10 @@ func (route *tunnelRoute) proxyError(response http.ResponseWriter, request *http
 	body, _ := request.Body.(*inboundRequestBody)
 	if body != nil && body.timedOut.Load() || errors.Is(err, errInboundRequestBodyTimeout) {
 		http.Error(response, "request body timed out", http.StatusRequestTimeout)
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		http.Error(response, "service temporarily unavailable", http.StatusGatewayTimeout)
 		return
 	}
 	http.Error(response, "service temporarily unavailable", http.StatusServiceUnavailable)

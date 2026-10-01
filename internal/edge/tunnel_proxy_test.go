@@ -207,7 +207,9 @@ func TestTunnelTerminalPathsNeverDial(t *testing.T) {
 
 func TestTunnelDialFailureWithdrawsOnlyItsActivation(t *testing.T) {
 	controller, registry, claimant := newProxyTunnel(t)
-	broken := &proxyTunnelEndpoint{dial: func(context.Context) (net.Conn, error) { return nil, errors.New("private-machine.mesh: disconnected") }}
+	broken := &proxyTunnelEndpoint{dial: func(context.Context) (net.Conn, error) {
+		return nil, fmt.Errorf("private-machine.mesh: disconnected: %w", net.ErrClosed)
+	}}
 	oldRelease := activateProxyTunnel(t, controller, claimant, broken)
 	recorder := httptest.NewRecorder()
 	registry.ServeHTTP(recorder, publicRequest(http.MethodGet, proxyTunnelName, "/"))

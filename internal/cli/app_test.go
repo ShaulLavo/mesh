@@ -244,6 +244,21 @@ func TestAppInspectTellsTheOwnerWhyAnAppIsNotServed(t *testing.T) {
 	}
 }
 
+func TestAppInspectShowsSetupFailure(t *testing.T) {
+	var out bytes.Buffer
+	result := appspkg.Result{App: &appspkg.Record{ID: "7k3d", Status: "deleted"}, Runtime: &appspkg.RuntimeInfo{Phase: "failed", Failure: &appspkg.SetupFailure{Error: "app: setup exited 1", Output: "npm ERR! missing script: build\n\x1b]0;title\x07\n"}}}
+	if err := writeAppResult(&out, "local", result, false); err != nil {
+		t.Fatal(err)
+	}
+	shown := out.String()
+	if !strings.Contains(shown, "setup failed: app: setup exited 1") || !strings.Contains(shown, "  npm ERR! missing script: build") {
+		t.Fatalf("setup failure not shown: %q", shown)
+	}
+	if strings.ContainsRune(shown, '\x1b') {
+		t.Fatalf("setup output reached the terminal unescaped: %q", shown)
+	}
+}
+
 func gzipBytes(t *testing.T, text string) []byte {
 	t.Helper()
 	var out bytes.Buffer

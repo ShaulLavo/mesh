@@ -353,7 +353,13 @@ func writeAppResult(w io.Writer, host string, result appspkg.Result, asJSON bool
 		return err
 	}
 	if result.App != nil {
-		return writeAppWithProblem(w, host, result)
+		if err := writeOneApp(w, host, *result.App); err != nil {
+			return err
+		}
+		if err := writeSetupFailure(w, result.Runtime); err != nil {
+			return err
+		}
+		return writeServingProblem(w, result.Runtime)
 	}
 	if result.Apps != nil {
 		table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
@@ -367,16 +373,31 @@ func writeAppResult(w io.Writer, host string, result appspkg.Result, asJSON bool
 	return err
 }
 
-// writeAppWithProblem adds why the host stopped serving the app, when it did.
-func writeAppWithProblem(w io.Writer, host string, result appspkg.Result) error {
-	if err := writeOneApp(w, host, *result.App); err != nil {
-		return err
-	}
-	if result.Runtime == nil || result.Runtime.Problem == "" {
+// writeServingProblem says why the host stopped serving the app, when it did.
+func writeServingProblem(w io.Writer, runtime *appspkg.RuntimeInfo) error {
+	if runtime == nil || runtime.Problem == "" {
 		return nil
 	}
-	if _, err := fmt.Fprintf(w, "not serving: %s\n", SafeTerminalText(result.Runtime.Problem)); err != nil {
-		return fmt.Errorf("write app %s problem: %w", result.App.ID, err)
+	if _, err := fmt.Fprintf(w, "not serving: %s\n", SafeTerminalText(runtime.Problem)); err != nil {
+		return fmt.Errorf("show serving problem: %w", err)
+	}
+	return nil
+}
+func writeSetupFailure(w io.Writer, runtime *appspkg.RuntimeInfo) error {
+	if runtime == nil || runtime.Failure == nil {
+		return nil
+	}
+	failure := runtime.Failure
+	if _, err := fmt.Fprintf(w, "setup failed: %s\n", SafeTerminalText(failure.Error)); err != nil {
+		return fmt.Errorf("show setup failure: %w", err)
+	}
+	for _, line := range strings.Split(strings.TrimRight(failure.Output, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		if _, err := fmt.Fprintf(w, "  %s\n", SafeTerminalText(line)); err != nil {
+			return fmt.Errorf("show setup output: %w", err)
+		}
 	}
 	return nil
 }
