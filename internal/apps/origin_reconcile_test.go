@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // serverWorkers backs each "app" worker with a real loopback listener, so server
@@ -151,12 +153,29 @@ func (w *serverWorkers) wasStopped(id string) bool {
 
 func freePort(t *testing.T) int {
 	t.Helper()
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_STREAM, unix.IPPROTO_TCP)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = listener.Close() }()
-	return listener.Addr().(*net.TCPAddr).Port
+	unix.CloseOnExec(fd)
+	t.Cleanup(func() { _ = unix.Close(fd) })
+	// A bound socket stays out of listener inspection but excludes this port
+	// from automatic allocation on both families. SO_REUSEADDR still lets
+	// preflight and fake workers bind the explicit port until test cleanup.
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_V6ONLY, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Bind(fd, &unix.SockaddrInet6{}); err != nil {
+		t.Fatal(err)
+	}
+	local, err := unix.Getsockname(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return local.(*unix.SockaddrInet6).Port
 }
 
 func createServerApp(t *testing.T, f *appFixture) Record {
