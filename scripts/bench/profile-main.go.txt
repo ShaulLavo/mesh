@@ -1,0 +1,53 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"runtime/pprof"
+	"sync"
+	"time"
+)
+
+// The overlay exists only in scratch profiling builds; measured baselines use
+// an ordinary binary. Profiles start after package initialization (including hash).
+func benchProfile() func() {
+	dir := os.Getenv("MESH_BENCH_PROFILE_DIR")
+	if dir == "" {
+		return func() {}
+	}
+	role := "cli"
+	if len(os.Args) > 1 {
+		role = filepath.Base(os.Args[1])
+	}
+	prefix := filepath.Join(dir, fmt.Sprintf("%s-%d", role, os.Getpid()))
+	cpu, err := os.Create(prefix + ".cpu.pprof")
+	if err != nil {
+		panic(err)
+	}
+	if err := pprof.StartCPUProfile(cpu); err != nil {
+		panic(err)
+	}
+	var once sync.Once
+	finish := func() {
+		once.Do(func() {
+			pprof.StopCPUProfile()
+			_ = cpu.Close()
+			runtime.GC()
+			for _, name := range []string{"heap", "allocs"} {
+				file, err := os.Create(prefix + "." + name + ".pprof")
+				if err != nil {
+					panic(err)
+				}
+				_ = pprof.Lookup(name).WriteTo(file, 0)
+				_ = file.Close()
+			}
+			if err := os.WriteFile(prefix+".done", nil, 0o600); err != nil {
+				panic(err)
+			}
+		})
+	}
+	time.AfterFunc(5*time.Second, finish)
+	return finish
+}
