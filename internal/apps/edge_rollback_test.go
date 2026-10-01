@@ -221,7 +221,7 @@ func TestEdgeFailedExpirySaveLeavesLiveState(t *testing.T) {
 			case "sweep":
 				err = f.edge.Sweep(context.Background())
 			case "lookup":
-				_, _, err = f.edge.lookup(context.Background(), healthy.ID, false)
+				_, _, err = f.edge.lookup(context.Background(), app.ID, false)
 			case "admission":
 				_, _, release, admitErr := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(healthy.ID), nil), healthy.ID)
 				if release != nil {

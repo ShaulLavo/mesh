@@ -306,7 +306,7 @@ func TestPrivateRequestHostRejectsMalformedAuthorities(t *testing.T) {
 }
 
 func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
-	port := reserveTCPPort(t, "127.0.0.1")
+	listener, port := newTCPListener(t, "127.0.0.1:0")
 	blocked, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.2", strconv.Itoa(int(port))))
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +323,7 @@ func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 		},
 		ReportError: func(err error) { t.Log(err) },
 		HTTPHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
-	}, echoOneFrame)
+	}, echoOneFrame, listener)
 	waitForTCPRuntime(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
 	for _, test := range []struct {
 		host string
@@ -428,16 +428,8 @@ type hostPolicyListener struct {
 func (l hostPolicyListener) Addr() net.Addr { return l.address }
 
 func TestServePrivateHTTPUsesListenerAuthorities(t *testing.T) {
-	unixListener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(reserveTCPPort(t, "127.0.0.1")))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = unixListener.Close() })
-	tailnetListener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(reserveTCPPort(t, "127.0.0.1")))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = tailnetListener.Close() })
+	unixListener, _ := newTCPListener(t, "127.0.0.1:0")
+	tailnetListener, _ := newTCPListener(t, "127.0.0.1:0")
 	// Keep the transport on loopback while distinguishing a bound tailnet
 	// address from a failed discovery bind; loopback Hosts are always aliases.
 	address := *tailnetListener.Addr().(*net.TCPAddr)
