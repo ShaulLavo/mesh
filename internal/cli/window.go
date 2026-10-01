@@ -128,6 +128,9 @@ func (a *application) relaunchSession(cmd *cobra.Command, resolved resolvedSessi
 }
 
 func (a *application) legacyRelaunchSession(cmd *cobra.Command, resolved resolvedSession, detachKey string, raw bool) error {
+	if _, err := a.attachmentOptions(cmd, detachKey, raw); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), remoteCreateTimeout)
 	defer cancel()
 	rows, err := a.queryHost(ctx, *resolved.host)
@@ -173,25 +176,31 @@ func windowSessionRows(source []protocol.SessionInfo) []protocol.SessionInfo {
 }
 
 func (a *application) startWindowSession(cmd *cobra.Command, detachKey string, raw bool) error {
+	if _, err := a.attachmentOptions(cmd, detachKey, raw); err != nil {
+		return err
+	}
+	if err := cmd.Context().Err(); err != nil {
+		return fmt.Errorf("start window session: %w", err)
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("read window working directory: %w", err)
 	}
-	for {
+	current, socket, err := a.createLocalSession(cmd, []string{defaultShell()}, cwd, false)
+	if err != nil {
+		return err
+	}
+	initial := uint64(0)
+	for range 3 {
 		if err := cmd.Context().Err(); err != nil {
 			return err
 		}
-		current, socket, err := a.createLocalSession(cmd, []string{defaultShell()}, cwd, false)
-		if err != nil {
+		err = a.attachWindow(cmd, current, socket, &initial, true, detachKey, raw)
+		if !errors.Is(err, ErrSessionAttached) && !errors.Is(err, ErrSessionUnavailable) {
 			return err
 		}
-		initial := uint64(0)
-		err = a.attachWindow(cmd, current, socket, &initial, true, detachKey, raw)
-		if errors.Is(err, ErrSessionAttached) || errors.Is(err, ErrSessionUnavailable) {
-			continue
-		}
-		return err
 	}
+	return fmt.Errorf("start window session: %w", err)
 }
 
 func (a *application) attachWindowSession(cmd *cobra.Command, id, detachKey string, raw bool) error {
@@ -223,9 +232,12 @@ func (a *application) attachWindow(cmd *cobra.Command, current Session, socket s
 		opts.HostID = target.HostID
 	}
 	restore := a.bindTerminal(bindingFor(resolvedSession{local: &current}))
-	result, err := Attach(opts)
+	a.noticeBeforeAttachment(cmd)
+	result, err := Attach(cmd.Context(), opts)
 	if err != nil {
-		restore()
+		if !result.Established {
+			restore()
+		}
 		return err
 	}
 	if result.Exited && result.ExitCode != 0 {
@@ -235,7 +247,6 @@ func (a *application) attachWindow(cmd *cobra.Command, current Session, socket s
 }
 
 func (a *application) attachmentOptions(cmd *cobra.Command, detachKey string, raw bool) (AttachOptions, error) {
-	a.noticeBeforeAttachment(cmd)
 	key, parsedRaw, err := ParseDetachKey(detachKey)
 	if err != nil {
 		return AttachOptions{}, err
