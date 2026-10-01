@@ -2,10 +2,12 @@ package daemon
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -945,5 +947,32 @@ func TestWithRetiringKeepsCanonicalOrderAndRegisteredServices(t *testing.T) {
 	}
 	if got := withRetiring(full, []protocol.ServiceInfo{{Name: "a"}}); len(got) != meshserve.MaximumServices || got[0].Name != "s0000" {
 		t.Fatalf("a full list grew to %d or lost a registered service", len(got))
+	}
+}
+
+func TestDemandBlockedRouteLogsItsFailureOncePerRetry(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	manager := testDemandManager(t, sessions, func() bool { return true })
+	manager.cleanupRetry = time.Hour
+	var logged bytes.Buffer
+	manager.logger = log.New(&logged, "", 0)
+	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+	if err := manager.Start(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	sessions.failStops(errWorkerSilent)
+	if err := manager.Stop(context.Background(), "dev"); err == nil {
+		t.Fatal("Stop succeeded although the stop failed")
+	}
+	for range 3 {
+		if err := manager.Start(context.Background(), "dev"); err == nil || !strings.Contains(err.Error(), "may still be running") {
+			t.Fatalf("Start = %v, want the route held back by its unstopped session", err)
+		}
+	}
+	if lines := strings.Count(logged.String(), "on-demand failure"); lines != 1 {
+		t.Fatalf("logged the held-back route %d times, want once per retry:\n%s", lines, logged.String())
+	}
+	if started, stopped := sessions.counts(); started != 1 || stopped != 1 {
+		t.Fatalf("started %d and stopped %d while the retry was not due, want 1 and 1", started, stopped)
 	}
 }

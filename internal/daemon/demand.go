@@ -537,13 +537,16 @@ const (
 type demandRoute struct {
 	manager *demandManager
 
-	mu          sync.Mutex
-	service     meshserve.Service
-	removed     bool
-	restart     bool
-	state       string
-	owned       demandOwnership
-	retryAt     time.Time // when an uncertain session is next stopped again
+	mu      sync.Mutex
+	service meshserve.Service
+	removed bool
+	restart bool
+	state   string
+	owned   demandOwnership
+	retryAt time.Time // when an uncertain session is next stopped again
+	// blocked is the logged answer a request gets until then, so a browser
+	// retrying every second does not log the same failure every second.
+	blocked     error
 	sessionID   string
 	failure     string
 	connections int
@@ -671,6 +674,7 @@ func (r *demandRoute) cleanupDueLocked() bool {
 func (r *demandRoute) markUncertainLocked() {
 	r.owned = ownsUncertain
 	r.retryAt = time.Now().Add(r.manager.cleanupRetry)
+	r.blocked = nil
 }
 
 // retryCleanup stops again a session whose stop failed, once that is due.
@@ -743,8 +747,11 @@ func (r *demandRoute) ready(ctx context.Context) error {
 func (r *demandRoute) towardRunningLocked() (*demandTransition, error) {
 	if r.pending == nil && r.owned == ownsUncertain {
 		if !r.cleanupDueLocked() {
-			return nil, fmt.Errorf("route %s did not start: session %s may still be running and is stopped again at %s: %s",
-				r.service.Route(), r.sessionID, r.retryAt.Format(time.TimeOnly), r.failure)
+			if r.blocked == nil {
+				r.blocked = meshserve.LogDemandFailure(fmt.Errorf("route %s did not start: session %s may still be running and is stopped again at %s: %s",
+					r.service.Route(), r.sessionID, r.retryAt.Format(time.TimeOnly), r.failure), r.manager.logger)
+			}
+			return nil, r.blocked
 		}
 		r.beginStopLocked()
 	}
