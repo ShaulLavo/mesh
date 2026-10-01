@@ -6,10 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/netip"
 	"os"
 	"strings"
+
+	"github.com/shaul/mesh/internal/sockdiag"
 
 	"golang.org/x/sys/unix"
 )
@@ -69,31 +70,12 @@ func unescapeMountPath(path string) string {
 	return strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(path)
 }
 func serverListeners(ctx context.Context, port int) ([]netip.Addr, error) {
-	var addresses []netip.Addr
-	for _, table := range []struct {
-		path string
-		ipv6 bool
-	}{{"/proc/net/tcp", false}, {"/proc/net/tcp6", true}} {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		f, err := os.Open(table.path)
-		if err != nil {
-			return nil, errors.New("app: cannot verify kernel TCP listeners")
-		}
-		raw, readErr := io.ReadAll(io.LimitReader(f, maximumListenerTableBytes+1))
-		closeErr := f.Close()
-		if readErr != nil || closeErr != nil {
-			return nil, errors.New("app: cannot read kernel TCP listeners")
-		}
-		parsed, err := parseLinuxListeners(raw, port, table.ipv6)
-		if err != nil {
-			return nil, err
-		}
-		addresses = append(addresses, parsed...)
-	}
-	if err := ctx.Err(); err != nil {
+	if err := validServerPort(port); err != nil {
 		return nil, err
+	}
+	addresses, err := sockdiag.TCPListeners(ctx, port)
+	if err != nil {
+		return nil, fmt.Errorf("app: inspect TCP listeners on port %d: %w", port, err)
 	}
 	return addresses, nil
 }
