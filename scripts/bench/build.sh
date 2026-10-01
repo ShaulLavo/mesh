@@ -2,15 +2,21 @@
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 if (( $# < 1 || $# > 3 )); then
-  echo 'Usage: build.sh <scratch-output-dir> [amd64|arm64] [profile]' >&2
+  echo 'Usage: build.sh <scratch-output-dir> [amd64|arm64] [release|profile|smoke]' >&2
   exit 2
 fi
 output=$(realpath "$1")
 arch=${2:-$(go env GOARCH)}
 mkdir -p "$output"
-version=$(git -C "$root" describe --tags --abbrev=0)
+mode=${3:-release}
+case $mode in release|profile|smoke) ;; *) exit 2 ;; esac
+ldflags=()
+if [[ $mode != smoke ]]; then
+  version=$(git -C "$root" describe --tags --abbrev=0)
+  ldflags=("-ldflags=-X github.com/shaul/mesh/internal/release.Version=$version")
+fi
 args=()
-if [[ ${3:-} == profile ]]; then
+if [[ $mode == profile ]]; then
   # Overlay main only in this build. Production sources and init order stay put.
   python3 - "$root" "$output" <<'PY'
 import json
@@ -31,12 +37,12 @@ PY
   args=(-overlay "$output/overlay.json")
 fi
 profile=()
-[[ ${3:-} != profile ]] || profile=(--profile)
+[[ $mode != profile ]] || profile=(--profile)
 python3 "$root/scripts/bench/receipt.py" snapshot --root "$root" --arch "$arch" "${profile[@]}" --sources "$output/sources.json"
 cd "$root"
-# Pin the normal release version so --version exercises the shipped CLI path.
+# Release builds pin the tag; smoke builds keep Go's embedded module version.
 CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build "${args[@]}" \
-  -ldflags="-X github.com/shaul/mesh/internal/release.Version=$version" \
+  "${ldflags[@]}" \
   -o "$output/mesh" ./cmd/mesh
 python3 "$root/scripts/bench/receipt.py" create --root "$root" --binary "$output/mesh" \
   --sources "$output/sources.json" --receipt "$output/receipt.json"

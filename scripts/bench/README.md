@@ -16,7 +16,10 @@ executable/script paths in `/proc`.
 Run from the checkout being measured, with Go 1.27 and Python 3.13+ available.
 The build embeds the checkout's latest release tag. These are unstripped Go
 builds, so compare like builds; startup numbers are not the installed release's
-stripped binary size. No production code is modified by the harness.
+stripped binary size. No production code is modified by the harness. Integration
+checks use explicit `smoke` mode with Go's embedded module version, so shallow
+checkouts need no release tags. Its receipt records the actual flags and VCS
+metadata. Ordinary and profile builds still require and embed the real release tag.
 
 ```sh
 export PATH="$HOME/.local/share/mise/shims:$PATH"
