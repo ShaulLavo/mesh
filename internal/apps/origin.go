@@ -92,7 +92,15 @@ type originState struct {
 	Uploads  map[string]upload        `json:"uploads"`
 	Sequence uint64                   `json:"sequence"`
 	Pending  *Signed                  `json:"pending,omitempty"`
+	Failures map[string]SetupFailure  `json:"failures,omitempty"`
 }
+
+// Setup failures are kept for the owner, bounded so a looping client cannot grow
+// the state: the tail of the output, a fixed number of apps, one idle period.
+const (
+	maxFailureOutput = 4 << 10
+	maxFailures      = 32
+)
 
 // appOp is the long operation that owns one app ("app <id>") or one upload
 // ("upload <id>"). Operations on the same key wait for each other. The edge's
@@ -391,17 +399,7 @@ func (o *Origin) Handle(ctx context.Context, q Request) (Result, error) {
 	case "list", "public", "private", "renew", "browser.inspect", "browser.approve", "browser.list", "browser.revoke":
 		return o.edge(ctx, q)
 	case "inspect":
-		result, err := o.edge(ctx, q)
-		if err != nil {
-			return result, err
-		}
-		o.mu.Lock()
-		a, ok := o.state.Apps[q.ID]
-		o.mu.Unlock()
-		if ok {
-			result.Runtime = &RuntimeInfo{Phase: a.Phase, SessionID: a.Session, Command: a.Command, Port: a.Port, Root: a.Root}
-		}
-		return result, nil
+		return o.inspect(ctx, q)
 	case "delete":
 		ctx, release, err := o.beginOp(ctx, "app "+q.ID, "delete")
 		if err != nil {
@@ -419,6 +417,29 @@ func (o *Origin) Handle(ctx context.Context, q Request) (Result, error) {
 		return result, err
 	}
 	return Result{}, errors.New("app: unsupported operation")
+}
+
+// inspect adds what only the origin knows to the edge's record: the runtime,
+// and why the last setup failed, which outlives a failed create's app.
+func (o *Origin) inspect(ctx context.Context, q Request) (Result, error) {
+	result, err := o.edge(ctx, q)
+	if err != nil {
+		return result, err
+	}
+	o.mu.Lock()
+	a, ok := o.state.Apps[q.ID]
+	failure, failed := o.state.Failures[q.ID]
+	o.mu.Unlock()
+	if ok {
+		result.Runtime = &RuntimeInfo{Phase: a.Phase, SessionID: a.Session, Command: a.Command, Port: a.Port, Root: a.Root}
+	}
+	if failed && o.config.Now().Before(failure.ExpiresAt) {
+		if result.Runtime == nil {
+			result.Runtime = &RuntimeInfo{Phase: "failed"}
+		}
+		result.Runtime.Failure = &failure
+	}
+	return result, nil
 }
 func (o *Origin) ensureRoot() error {
 	root := o.config.DataRoot
@@ -886,7 +907,7 @@ func (o *Origin) runSetup(ctx context.Context, q Request, a localApp, candidate 
 		}
 	}
 	if err := o.waitSetup(ctx, session); err != nil {
-		return err
+		return o.recordSetupFailure(ctx, id, q.UploadID, session, err)
 	}
 	o.config.Workers.Forget(ctx, "app-setup "+id)
 	return nil
@@ -910,6 +931,7 @@ func (o *Origin) finishActivation(ctx context.Context, a localApp, record Record
 	}
 	o.state.Receipts[commit.UploadID] = createReceipt{Record: record, Digest: commit.Digest}
 	delete(o.state.Uploads, commit.UploadID)
+	delete(o.state.Failures, record.ID)
 	err := o.persist(ctx)
 	o.mu.Unlock()
 	if err != nil {
@@ -1016,7 +1038,7 @@ func waitPort(ctx context.Context, port int) error {
 func (o *Origin) failCreate(ctx context.Context, id string, err error) error {
 	_, deleteErr := o.edge(ctx, Request{Action: "delete", ID: id})
 	cleanupErr := o.cleanup(ctx, id)
-	return errors.Join(err, deleteErr, cleanupErr)
+	return fmt.Errorf("app %s: %w", id, errors.Join(err, deleteErr, cleanupErr))
 }
 
 // failUpdate puts the previous revision back after an update failed. Before the
@@ -1073,6 +1095,46 @@ func (o *Origin) abandonCandidate(ctx context.Context, id string) error {
 		return fmt.Errorf("app %s: remove interrupted update %s: %w", id, a.Candidate.UploadID, err)
 	}
 	return o.modify(ctx, id, func(a *localApp) { a.Candidate = nil })
+}
+
+// recordSetupFailure keeps the setup's last output for the owner before the
+// worker holding it is forgotten, and returns the error the owner sees now.
+func (o *Origin) recordSetupFailure(ctx context.Context, id, uploadID, session string, cause error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maintenanceBudget)
+	defer cancel()
+	var output string
+	if source, ok := o.config.Workers.(interface {
+		Output(context.Context, string) string
+	}); ok {
+		output = source.Output(ctx, session)
+	}
+	if len(output) > maxFailureOutput {
+		output = output[len(output)-maxFailureOutput:]
+	}
+	output = strings.ToValidUTF8(output, "")
+	o.mu.Lock()
+	if o.state.Failures == nil {
+		o.state.Failures = map[string]SetupFailure{}
+	}
+	o.state.Failures[id] = SetupFailure{UploadID: uploadID, Error: cause.Error(), Output: output, ExpiresAt: o.config.Now().Add(IdleTTL)}
+	for len(o.state.Failures) > maxFailures {
+		oldest := ""
+		for key, failure := range o.state.Failures {
+			if oldest == "" || failure.ExpiresAt.Before(o.state.Failures[oldest].ExpiresAt) {
+				oldest = key
+			}
+		}
+		delete(o.state.Failures, oldest)
+	}
+	saveErr := o.persist(ctx)
+	o.mu.Unlock()
+	if output != "" {
+		cause = fmt.Errorf("%w; last setup output:\n%s", cause, output)
+	}
+	if saveErr != nil {
+		cause = errors.Join(cause, fmt.Errorf("save setup failure: %w", saveErr))
+	}
+	return cause
 }
 
 // stop ends only the app's own labelled workers; ordinary sessions never carry
@@ -1434,6 +1496,11 @@ func (o *Origin) expireUploads(ctx context.Context) error {
 		if o.ops["upload "+id] == nil && !o.config.Now().Before(u.ExpiresAt) {
 			_ = os.Remove(o.uploadPath(id))
 			delete(o.state.Uploads, id)
+		}
+	}
+	for id, failure := range o.state.Failures {
+		if !o.config.Now().Before(failure.ExpiresAt) {
+			delete(o.state.Failures, id)
 		}
 	}
 	return o.persist(ctx)

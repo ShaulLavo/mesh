@@ -326,7 +326,10 @@ func writeAppResult(w io.Writer, host string, result appspkg.Result, asJSON bool
 		return err
 	}
 	if result.App != nil {
-		return writeOneApp(w, host, *result.App)
+		if err := writeOneApp(w, host, *result.App); err != nil {
+			return err
+		}
+		return writeSetupFailure(w, result.Runtime)
 	}
 	if result.Apps != nil {
 		table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
@@ -338,6 +341,24 @@ func writeAppResult(w io.Writer, host string, result appspkg.Result, asJSON bool
 	}
 	_, err := fmt.Fprintln(w, "done")
 	return err
+}
+func writeSetupFailure(w io.Writer, runtime *appspkg.RuntimeInfo) error {
+	if runtime == nil || runtime.Failure == nil {
+		return nil
+	}
+	failure := runtime.Failure
+	if _, err := fmt.Fprintf(w, "setup failed: %s\n", SafeTerminalText(failure.Error)); err != nil {
+		return fmt.Errorf("show setup failure: %w", err)
+	}
+	for _, line := range strings.Split(strings.TrimRight(failure.Output, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		if _, err := fmt.Fprintf(w, "  %s\n", SafeTerminalText(line)); err != nil {
+			return fmt.Errorf("show setup output: %w", err)
+		}
+	}
+	return nil
 }
 func writeOneApp(w io.Writer, host string, app appspkg.Record) error {
 	_, err := fmt.Fprintf(w, "%s\nhost: %s\nowner: %s\nvisibility: %s\nstate: %s\nexpires: %s\n", appspkg.URL(app.ID), SafeTerminalText(host), SafeTerminalText(app.Owner), SafeTerminalText(app.Visibility), SafeTerminalText(app.Status), app.ExpiresAt.Format("2006-01-02 15:04:05 MST"))
