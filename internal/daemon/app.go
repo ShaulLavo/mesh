@@ -38,8 +38,11 @@ const (
 )
 
 // Config identifies the state and optional listeners owned by a daemon. Zero
-// TailnetPort and SSHPort values disable their corresponding listeners.
+// TailnetPort and SSHPort values disable their corresponding listeners. Zero
+// connection caps select the defaults for Unix and Tailnet independently.
 type Config struct {
+	UnixConnectionLimit         int
+	TailnetConnectionLimit      int
 	SSHSessionHandler           sshd.SessionHandlerFactory
 	StateDir                    string
 	TailnetPort                 uint16
@@ -505,6 +508,8 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	listener, err := validateListenerConfig(daemonCtx, ListenerConfig{
 		StateDir:                   stateDir,
+		UnixConnectionLimit:        cfg.UnixConnectionLimit,
+		TailnetConnectionLimit:     cfg.TailnetConnectionLimit,
 		TailnetAddrs:               controlAddrs,
 		TailnetNames:               tailnetNames,
 		PrivateName:                certificateRuntime.PrivateName,

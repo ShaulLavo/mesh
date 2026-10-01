@@ -59,7 +59,7 @@ func NewUpdateNoticeCallbacks(store *updatenotice.Store) UpdateNoticeCallbacks {
 
 func localUpdateNoticeStore(stateDir string) *updatenotice.Store {
 	return updatenotice.New(updatenotice.Config{
-		Directory: filepath.Join(stateDir, "update-notice"), Current: release.Current(),
+		Directory: filepath.Join(stateDir, "update-notice"), Current: release.Metadata(),
 	})
 }
 
@@ -69,7 +69,7 @@ func (a *application) interactiveUpdateNotices() bool {
 			return false
 		}
 	}
-	_, err := release.CompareVersions(release.Current().Version, "v0.0.0")
+	_, err := release.CompareVersions(release.Metadata().Version, "v0.0.0")
 	return err == nil
 }
 
@@ -184,7 +184,7 @@ func newUpdateNoticeCheckCommand() *cobra.Command {
 }
 
 func startUpdateNoticeChecks(ctx context.Context, stateDir string) func() {
-	if _, err := release.CompareVersions(release.Current().Version, "v0.0.0"); err != nil {
+	if _, err := release.CompareVersions(release.Metadata().Version, "v0.0.0"); err != nil {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
