@@ -405,6 +405,48 @@ func TestLifecycleRetriesPublicationWithoutLaunchingDuplicate(t *testing.T) {
 	}
 }
 
+func TestLifecycleCreationIdentityIncludesTermAndDepth(t *testing.T) {
+	launchCalls := 0
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog:     &lifecycleTestCatalog{},
+		Connector:   failingLifecycleConnector(),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key"},
+		SessionsDir: "/state/s",
+		Launch: func(cfg worker.LaunchConfig) (worker.Launched, error) {
+			launchCalls++
+			if cfg.Term != "xterm-256color" || cfg.Depth != 1 {
+				t.Fatalf("launch TERM = %q, depth = %d", cfg.Term, cfg.Depth)
+			}
+			return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+		},
+	})
+	request := protocol.Control{
+		Type: protocol.TypeCreate, RequestID: "launch-identity", Command: []string{"sh"}, Term: "xterm-256color", Depth: 1,
+	}
+	for range 2 {
+		response, handled, err := lifecycle.HandleControl(context.Background(), request)
+		if err != nil || !handled || response.SessionID != "7K3D" {
+			t.Fatalf("identical create response = %+v, handled = %v, error = %v", response, handled, err)
+		}
+	}
+	for _, field := range []string{"TERM", "depth"} {
+		t.Run(field, func(t *testing.T) {
+			changed := request
+			if field == "TERM" {
+				changed.Term = "vt100"
+			} else {
+				changed.Depth++
+			}
+			if _, handled, err := lifecycle.HandleControl(context.Background(), changed); !handled || err == nil {
+				t.Errorf("conflicting %s retry handled = %v, error = %v; want rejection", field, handled, err)
+			}
+			if launchCalls != 1 {
+				t.Fatalf("worker launches = %d, want 1", launchCalls)
+			}
+		})
+	}
+}
+
 func TestLifecycleCoalescesConcurrentCreateRequest(t *testing.T) {
 	catalog := &lifecycleTestCatalog{}
 	launchStarted := make(chan struct{})
@@ -506,6 +548,7 @@ func TestLifecycleRejectsMalformedRequestsBeforeSideEffects(t *testing.T) {
 		{Type: protocol.TypeKill, RequestID: "request-3", SessionID: "../X"},
 		{Type: protocol.TypeLogs, RequestID: "request-4", SessionID: "7K3D", Tail: protocol.MaxLogTail + 1},
 		{Type: protocol.TypeInspect, RequestID: "request-5", SessionID: "7K3D", PreviewCols: protocol.MaxInspectionPreviewCols + 1, PreviewRows: 1},
+		{Type: protocol.TypeHibernate, RequestID: "request-6", SessionID: "7K3D", HibernateIdleMillis: -1},
 		{Type: protocol.TypeList},
 	}
 	for _, request := range requests {
@@ -521,6 +564,69 @@ func TestLifecycleRejectsMalformedRequestsBeforeSideEffects(t *testing.T) {
 	}
 	if _, handled, err := lifecycle.HandleControl(nil, protocol.Control{Type: protocol.TypeList, RequestID: "request-4"}); !handled || err == nil { //nolint:staticcheck // boundary test intentionally passes a nil context
 		t.Fatalf("nil-context list handled = %v, error = %v; want handled error", handled, err)
+	}
+}
+
+func TestLifecycleRejectsMalformedHibernateBeforeConnecting(t *testing.T) {
+	connectCalls := 0
+	conn := &lifecycleRecordingConn{}
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{},
+		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+			connectCalls++
+			return conn, nil
+		}),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key"},
+		SessionsDir: "/state/s",
+	})
+	_, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeHibernate, RequestID: "invalid-idle", SessionID: "7K3D", HibernateIdleMillis: -1,
+	})
+	if !handled || err == nil {
+		t.Fatalf("hibernate handled = %v, error = %v; want handled rejection", handled, err)
+	}
+	if connectCalls != 0 || conn.read || len(conn.frames) != 0 {
+		t.Fatalf("invalid hibernate connected %d times, read = %v, writes = %d, closed = %v", connectCalls, conn.read, len(conn.frames), conn.closed)
+	}
+}
+
+func TestLifecycleForwardsOneShotHibernateAcknowledgement(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		response protocol.Control
+		wantErr  string
+	}{
+		{name: "accepted", response: protocol.Control{Type: protocol.TypeOK, RequestID: "hibernate-1", SessionID: "7K3D"}},
+		{name: "refused", response: protocol.Control{Type: protocol.TypeError, SessionID: "7K3D", Message: "not detached long enough"}, wantErr: "not detached long enough"},
+		{name: "invalid acknowledgement", response: protocol.Control{Type: protocol.TypeOK, RequestID: "wrong-request", SessionID: "7K3D"}, wantErr: "invalid hibernation acknowledgement"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &lifecycleRecordingConn{readFrame: controlFrame(t, test.response)}
+			lifecycle := mustLifecycle(t, lifecycleConfig{
+				Catalog: &lifecycleTestCatalog{},
+				Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+					return conn, nil
+				}),
+				Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key"},
+				SessionsDir: "/state/s",
+			})
+			response, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+				Type: protocol.TypeHibernate, RequestID: "hibernate-1", SessionID: "7K3D", HibernateIdleMillis: 250,
+			})
+			if !handled || (test.wantErr == "" && err != nil) || (test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr))) {
+				t.Fatalf("hibernate handled = %v, response = %+v, error = %v", handled, response, err)
+			}
+			if test.name == "refused" && err.Error() != test.wantErr {
+				t.Fatalf("worker refusal changed: %v", err)
+			}
+			if !conn.closed || !conn.read || len(conn.frames) != 1 {
+				t.Fatalf("closed = %v, read = %v, frames = %d", conn.closed, conn.read, len(conn.frames))
+			}
+			forwarded, err := protocol.DecodeControl(conn.frames[0].Payload)
+			if err != nil || forwarded.HibernateIdleMillis != 250 {
+				t.Fatalf("forwarded hibernate = %+v, error = %v", forwarded, err)
+			}
+		})
 	}
 }
 
