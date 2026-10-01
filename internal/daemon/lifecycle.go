@@ -408,6 +408,9 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 			return protocol.Control{}, fmt.Errorf("daemon: inspect session %s: %w", request.SessionID, err)
 		}
 	}
+	if request.Type == protocol.TypeHibernate && request.HibernateIdleMillis < 0 {
+		return protocol.Control{}, fmt.Errorf("daemon: hibernate session %s: negative idle time", id)
+	}
 	sid, err := protocol.NewSessionID(id)
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: encode session ID %s: %w", id, err)
@@ -416,6 +419,7 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	if err != nil {
 		return protocol.Control{}, err
 	}
+	defer func() { _ = conn.Close() }()
 	stopCancellation := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopCancellation()
 	forwarded := protocol.Control{
@@ -431,9 +435,6 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		forwarded.PreviewCols = request.PreviewCols
 		forwarded.PreviewRows = request.PreviewRows
 	} else if request.Type == protocol.TypeHibernate {
-		if request.HibernateIdleMillis < 0 {
-			return protocol.Control{}, fmt.Errorf("daemon: hibernate session %s: negative idle time", id)
-		}
 		forwarded.HibernateIdleMillis = request.HibernateIdleMillis
 	}
 	payload, err := forwarded.Encode()
