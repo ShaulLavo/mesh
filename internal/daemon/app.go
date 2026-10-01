@@ -449,6 +449,11 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err := catalog.Reconcile(daemonCtx); err != nil {
 		return err
 	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(daemonCtx), 5*time.Second)
+		defer cancel()
+		runErr = errors.Join(runErr, catalog.FlushHost(flushCtx))
+	}()
 	connector, err := newWorkerConnector(sessionsDir, catalog)
 	if err != nil {
 		return err

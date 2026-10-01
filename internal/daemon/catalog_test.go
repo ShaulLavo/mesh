@@ -536,12 +536,32 @@ type catalogStoreStub struct {
 	retired        []storage.SessionID
 }
 
-func (s *catalogStoreStub) ReconcileHost(_ context.Context, host storage.Host, observed []storage.Session) error {
-	s.upsertCalls++
+func (s *catalogStoreStub) ApplyHostChanges(ctx context.Context, hostID storage.HostID, changes storage.HostChanges) error {
 	s.reconcileCalls++
 	s.events = append(s.events, "reconcile-host")
-	s.host = cloneHost(host)
-	s.observed = append([]storage.Session(nil), observed...)
+	if changes.Host != nil {
+		s.upsertCalls++
+		s.host = cloneHost(*changes.Host)
+	}
+	records := make(map[storage.SessionID]storage.Session)
+	for _, current := range s.observed {
+		records[current.ID] = current
+	}
+	for _, current := range changes.Sessions {
+		records[current.ID] = current
+	}
+	for _, id := range changes.Retired {
+		delete(records, id)
+	}
+	s.observed = nil
+	for _, current := range records {
+		s.observed = append(s.observed, current)
+	}
+	sort.Slice(s.observed, func(i, j int) bool { return s.observed[i].ID < s.observed[j].ID })
+	if len(changes.Retired) > 0 {
+		_, err := s.RetireSessions(ctx, hostID, changes.Retired)
+		return err
+	}
 	return nil
 }
 
@@ -1030,11 +1050,14 @@ type retirementFailureStore struct {
 	failure error
 }
 
-func (s *retirementFailureStore) RetireSessions(ctx context.Context, host storage.HostID, ids []storage.SessionID) (int64, error) {
-	if s.failure != nil {
-		return 0, s.failure
+func (s *retirementFailureStore) ApplyHostChanges(ctx context.Context, host storage.HostID, changes storage.HostChanges) error {
+	if s.failure != nil && len(changes.Retired) > 0 {
+		return s.failure
 	}
-	return s.CatalogStore.RetireSessions(ctx, host, ids)
+	if err := s.CatalogStore.ApplyHostChanges(ctx, host, changes); err != nil {
+		return fmt.Errorf("apply retirement: %w", err)
+	}
+	return nil
 }
 
 func TestDetachedSessionIsAliveAndProbed(t *testing.T) {

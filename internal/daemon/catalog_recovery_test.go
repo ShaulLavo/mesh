@@ -178,8 +178,8 @@ type recoveryDuringReconcileStore struct {
 	during func(context.Context) error
 }
 
-func (s *recoveryDuringReconcileStore) ReconcileHost(ctx context.Context, host storage.Host, sessions []storage.Session) error {
-	if err := s.catalogStoreStub.ReconcileHost(ctx, host, sessions); err != nil {
+func (s *recoveryDuringReconcileStore) ApplyHostChanges(ctx context.Context, host storage.HostID, changes storage.HostChanges) error {
+	if err := s.catalogStoreStub.ApplyHostChanges(ctx, host, changes); err != nil {
 		return err
 	}
 	if s.during == nil {
