@@ -111,6 +111,11 @@ func (w appWorkers) Forget(ctx context.Context, label string) {
 	w.lifecycle.forgetLabelled(ctx, label, "")
 }
 
+// Output is the bounded tail an owner sees when an app's setup fails.
+func (w appWorkers) Output(ctx context.Context, id string) string {
+	return w.lifecycle.outputTail(ctx, id)
+}
+
 func (w appWorkers) Wait(ctx context.Context, id string) (int, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
