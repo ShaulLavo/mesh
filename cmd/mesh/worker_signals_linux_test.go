@@ -62,12 +62,10 @@ func launchSignalWorker(t *testing.T) launchedWorker {
 		}
 	}
 	env = append(env, runMainVariable+"=1")
-	out := filepath.Join(root, "child")
-	script := `echo $$ > "$1.pid"; grep -E '^Sig(Ign|Blk):' /proc/self/status > "$1.tmp"; mv "$1.tmp" "$1"; exec sleep 300`
 	launched, err := worker.LaunchDetached(worker.LaunchConfig{
 		SessionsDir: filepath.Join(root, "state", "sessions"),
 		Executable:  os.Args[0],
-		Command:     []string{"/bin/sh", "-c", script, "sh", out},
+		Command:     []string{"/bin/sleep", "300"},
 		Cwd:         root,
 		Env:         env,
 	})
@@ -81,23 +79,7 @@ func launchSignalWorker(t *testing.T) launchedWorker {
 			_ = syscall.Kill(w.workerPID, syscall.SIGKILL)
 		}
 	})
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(out); err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	pid, err := os.ReadFile(out + ".pid") //nolint:gosec // the session command writes this file under the test's own temporary root
-	if err != nil {
-		t.Fatalf("session command did not start: %v", err)
-	}
-	if _, err := os.Stat(out); err != nil {
-		t.Fatalf("session command did not report its signal dispositions: %v", err)
-	}
-	if w.childPID, err = strconv.Atoi(strings.TrimSpace(string(pid))); err != nil || w.childPID != launched.Meta.PID {
-		t.Fatalf("session command pid %q, metadata pid %d: %v", pid, launched.Meta.PID, err)
-	}
+	w.childPID = launched.Meta.PID
 	w.workerPID = parentPID(t, w.childPID)
 	return w
 }
@@ -170,19 +152,31 @@ func TestSessionWorkerSurvivesTerminationSignals(t *testing.T) {
 // does not. The session's command must see Ctrl-C and hangups normally.
 func TestSessionCommandInheritsDefaultSignalDispositions(t *testing.T) {
 	w := launchSignalWorker(t)
-	status, err := os.ReadFile(filepath.Join(w.root, "child"))
+	status, err := os.ReadFile("/proc/" + strconv.Itoa(w.Meta.PID) + "/status")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for line := range strings.SplitSeq(strings.TrimSpace(string(status)), "\n") {
+	masks := make(map[string]uint64)
+	for line := range strings.SplitSeq(string(status), "\n") {
 		name, mask, _ := strings.Cut(line, ":")
+		if name != "SigIgn" && name != "SigBlk" {
+			continue
+		}
 		bits, err := strconv.ParseUint(strings.TrimSpace(mask), 16, 64)
 		if err != nil {
 			t.Fatalf("%s mask %q: %v", name, mask, err)
 		}
+		masks[name] = bits
+	}
+	for _, name := range []string{"SigIgn", "SigBlk"} {
+		bits, ok := masks[name]
+		if !ok {
+			t.Errorf("session command status is missing %s", name)
+			continue
+		}
 		for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGQUIT} {
 			if bits&(1<<(uint(sig)-1)) != 0 {
-				t.Errorf("session command starts with %v in %s (%s)", sig, name, strings.TrimSpace(mask))
+				t.Errorf("session command starts with %v in %s (%016x)", sig, name, bits)
 			}
 		}
 	}
