@@ -132,3 +132,15 @@ func TestEdgeAdmissionUsesOneSigningTime(t *testing.T) {
 		})
 	}
 }
+
+func TestAdmissionCacheStoresWallTimeHighWaterMark(t *testing.T) {
+	o := &Origin{admissions: map[string]*admissionCache{}}
+	now := time.Now()
+	a := admission{ID: "aaaa", Until: now.Add(30 * time.Second).UTC()}
+	if got := o.consumeAdmission(Signed{ID: "first-token"}, a, now); got != admissionAccepted {
+		t.Fatalf("first consumption returned %d, want accepted", got)
+	}
+	if o.admissionAt != o.admissionAt.Round(0) {
+		t.Fatal("wall-time high-water mark retained a local monotonic timestamp")
+	}
+}

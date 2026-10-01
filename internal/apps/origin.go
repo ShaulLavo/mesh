@@ -123,6 +123,7 @@ type Origin struct {
 	config      OriginConfig
 	identity    string
 	admissionMu sync.Mutex
+	admissionAt time.Time
 	admissions  map[string]*admissionCache
 }
 
@@ -1407,6 +1408,16 @@ func (c *admissionCache) expire(now time.Time) {
 func (o *Origin) consumeAdmission(proof Signed, a admission, now time.Time) admissionResult {
 	o.admissionMu.Lock()
 	defer o.admissionMu.Unlock()
+	// Signed deadlines have no monotonic timestamp, so their high-water mark
+	// must use wall time too.
+	now = now.UTC()
+	if now.Before(o.admissionAt) {
+		now = o.admissionAt
+	}
+	o.admissionAt = now
+	if !now.Before(a.Until) {
+		return admissionReplayed
+	}
 	for app, cache := range o.admissions {
 		cache.expire(now)
 		if len(cache.seen) == 0 {
@@ -1469,7 +1480,7 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 	if r.URL.RawQuery != "" {
 		rawURI += "?" + r.URL.RawQuery
 	}
-	if !ValidID(admission.ID) || admission.Method != r.Method || admission.URI != rawURI || !now.Before(admission.Until) || admission.Until.After(proof.IssuedAt.Add(30*time.Second)) || admission.Host != admission.ID+"."+Domain {
+	if !ValidID(admission.ID) || admission.Method != r.Method || admission.URI != rawURI || !now.Before(admission.Until) || admission.Until.After(proof.IssuedAt.Add(admissionLifetime)) || admission.Host != admission.ID+"."+Domain {
 		http.NotFound(w, r)
 		return true
 	}
