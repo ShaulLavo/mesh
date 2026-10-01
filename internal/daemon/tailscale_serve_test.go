@@ -189,6 +189,8 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	case err := <-done:
+		t.Fatalf("run returned before Tailscale Serve was configured: %v", err)
 	case <-time.After(runtimeTestTimeout):
 		t.Fatal("Tailscale Serve was not configured")
 	}

@@ -1148,8 +1148,24 @@ func echoOneFrame(_ context.Context, conn transport.Conn) error {
 func runRuntime(t *testing.T, ctx context.Context, cfg ListenerConfig, handler transport.Handler, listeners ...net.Listener) <-chan error {
 	t.Helper()
 	done := make(chan error, 1)
+	if len(listeners) == 0 {
+		go func() { done <- Serve(ctx, cfg, handler) }()
+		return done
+	}
+	normalized, err := validateListenerConfig(ctx, cfg, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireDaemonLock(filepath.Join(normalized.stateDir, daemonLockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized.listen = useTCPListeners(listeners...)
 	go func() {
-		done <- serve(ctx, cfg, handler, useTCPListeners(listeners...))
+		defer func() { _ = lock.release() }()
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		done <- serveListeners(runCtx, cancel, normalized, handler)
 	}()
 	return done
 }

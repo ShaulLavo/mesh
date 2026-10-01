@@ -101,10 +101,6 @@ type listenerConfig struct {
 // cancelled or the required Unix listener fails. Serve closes client
 // connections, but it never opens, signals, or waits for a session worker.
 func Serve(ctx context.Context, cfg ListenerConfig, handler transport.Handler) error {
-	return serve(ctx, cfg, handler, nil)
-}
-
-func serve(ctx context.Context, cfg ListenerConfig, handler transport.Handler, listen func(string, string) (net.Listener, error)) error {
 	normalized, err := validateListenerConfig(ctx, cfg, handler)
 	if err != nil {
 		return err
@@ -119,9 +115,6 @@ func serve(ctx context.Context, cfg ListenerConfig, handler transport.Handler, l
 	}
 	defer lock.release() //nolint:errcheck // a held lock is released by Close even if unlock reports an error
 
-	if listen != nil {
-		normalized.listen = listen
-	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	return serveListeners(runCtx, cancel, normalized, handler)
