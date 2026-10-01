@@ -345,7 +345,7 @@ func TestRootDispatchesHostAndSessionTargets(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			host := setupCommandTestHost(t)
-			stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial, Now: func() time.Time { return commandTestTime }}, test.args...)
+			stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial, Now: func() time.Time { return commandTestTime }}, test.args...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -380,6 +380,10 @@ func TestListCommandReturnsCachedRowsAsStale(t *testing.T) {
 			return nil, errors.New("host is offline")
 		},
 		Now: func() time.Time { return commandTestTime.Add(time.Minute) },
+
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host is offline")
+		},
 	}, "ls", "--timeout", "20ms")
 	if err != nil {
 		t.Fatalf("ls returned an error: %v", err)
@@ -394,7 +398,7 @@ func TestListCommandReturnsCachedRowsAsStale(t *testing.T) {
 
 func TestKillAndLogsRouteToTheResolvedRemoteHost(t *testing.T) {
 	host := setupCommandTestHost(t)
-	stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial, Now: func() time.Time { return commandTestTime }}, "kill", "7K3D")
+	stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial, Now: func() time.Time { return commandTestTime }}, "kill", "7K3D")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +406,7 @@ func TestKillAndLogsRouteToTheResolvedRemoteHost(t *testing.T) {
 		t.Fatalf("kill output = %q", stdout)
 	}
 
-	stdout, _, err = executeCommand(t, Dependencies{DialHost: host.dial, Now: func() time.Time { return commandTestTime }}, "logs", "7K3D", "--tail", "1024")
+	stdout, _, err = executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial, Now: func() time.Time { return commandTestTime }}, "logs", "7K3D", "--tail", "1024")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +539,11 @@ func TestSessionListDiagnosticsCannotInjectTerminalControls(t *testing.T) {
 	cause := errors.New("ATTACKER\r\n\u202e" + strings.Repeat("x", 10_000))
 	_, stderr, err := executeCommand(t, Dependencies{DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
 		return nil, cause
-	}}, "ls", "--timeout", "100ms")
+	},
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, cause
+		},
+	}, "ls", "--timeout", "100ms")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -778,7 +786,7 @@ func TestAddPassesTailscaleProvisioningFlagsToBootstrap(t *testing.T) {
 func TestLogsRoutesCatalogedExitedSessionToRemoteFallback(t *testing.T) {
 	host := setupCommandTestHost(t)
 	host.sessionState = "exited"
-	stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial}, "logs", "7K3D", "--tail", "1024")
+	stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial}, "logs", "7K3D", "--tail", "1024")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -825,6 +833,10 @@ func TestPickerWakeRefreshesAndRejectsImpossibleSelections(t *testing.T) {
 				t.Fatalf("wake host = %#v", selected)
 			}
 			return nil
+		},
+
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host is asleep")
 		},
 	}, []string{}...)
 	if err != nil {
@@ -1240,6 +1252,11 @@ func TestAttachRefusesAContainingRemoteTargetWithoutDialingAnOldWorker(t *testin
 			dials++
 			return nil, errors.New("old worker would accept the recursive attach")
 		},
+
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			dials++
+			return nil, errors.New("old worker would accept the recursive attach")
+		},
 	}}
 	err := app.attachResolvedWithContainment(
 		&cobra.Command{},
@@ -1299,7 +1316,7 @@ func TestPickerReturnsBeforeRawAttachStarts(t *testing.T) {
 		}
 	}
 	_, _, err := executeCommand(t, Dependencies{
-		DialHost: host.dial,
+		DialHost: host.dial, DialControl: host.dial,
 		Picker: func(context.Context, PickerInput) (PickerSelection, error) {
 			pickerReturned = true
 			return PickerSelection{HostAlias: "pc", SessionID: "7K3D", TakeOver: true}, nil
@@ -1443,6 +1460,10 @@ func TestLocalSessionsStayReachableAfterAdoptingAHost(t *testing.T) {
 			return nil, errors.New("host is offline")
 		},
 		Now: func() time.Time { return commandTestTime.Add(time.Minute) },
+
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host is offline")
+		},
 	}, "ls", "--all", "--timeout", "20ms")
 	if err != nil {
 		t.Fatalf("ls returned an error: %v", err)
@@ -1458,6 +1479,10 @@ func TestLocalSessionsStayReachableAfterAdoptingAHost(t *testing.T) {
 			return nil, errors.New("host is offline")
 		},
 		Now: func() time.Time { return commandTestTime.Add(time.Minute) },
+
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host is offline")
+		},
 	}, "logs", "L0CL"); err != nil {
 		t.Fatalf("logs on a local session after adoption: %v", err)
 	}

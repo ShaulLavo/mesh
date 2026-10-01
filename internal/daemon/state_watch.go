@@ -34,6 +34,8 @@ type stateSubscriber struct {
 	seq     uint64
 }
 type stateBroker struct {
+	projection   chan struct{}
+	dirty        map[storage.SessionID]bool
 	activity     chan struct{}
 	stored       map[storage.SessionID]storage.Session
 	memory       map[string]protocol.SessionMemory
@@ -53,7 +55,7 @@ func newStateBroker(limit int, now func() time.Time) *stateBroker {
 	if limit == 0 {
 		limit = DefaultSubscriberLimit
 	}
-	return &stateBroker{activity: make(chan struct{}, 1), now: now, limit: limit, stored: map[storage.SessionID]storage.Session{}, memory: map[string]protocol.SessionMemory{}, sessions: map[string]protocol.SessionInfo{}, services: map[string]protocol.ServiceInfo{}, observations: map[string]sectionObservation{}, subscribers: map[*stateSubscriber]struct{}{}}
+	return &stateBroker{projection: make(chan struct{}, 1), dirty: map[storage.SessionID]bool{}, activity: make(chan struct{}, 1), now: now, limit: limit, stored: map[storage.SessionID]storage.Session{}, memory: map[string]protocol.SessionMemory{}, sessions: map[string]protocol.SessionInfo{}, services: map[string]protocol.ServiceInfo{}, observations: map[string]sectionObservation{}, subscribers: map[*stateSubscriber]struct{}{}}
 }
 func (b *stateBroker) observeSessions(err error) { b.observe(protocol.TopicSessions, err) }
 func (b *stateBroker) observeServices(err error) { b.observe(protocol.TopicServices, err) }
@@ -80,13 +82,20 @@ func (b *stateBroker) sessionsChanged(diff SessionDiff) {
 	for _, id := range diff.Removed {
 		delete(b.sessions, string(id))
 		delete(b.stored, id)
+		delete(b.dirty, id)
 		delete(b.memory, string(id))
 		b.publishLocked(protocol.TopicSessions, "session/"+string(id), protocol.StateEvent{Kind: "session.removed", Payload: protocol.StatePayload{SessionID: string(id)}})
 	}
 }
 func (b *stateBroker) sessionLocked(kind string, row storage.Session) {
 	b.stored[row.ID] = cloneStoredSession(row)
+	b.markProjectionLocked(row.ID)
 	info := sessionInfo(row)
+	if previous, exists := b.sessions[info.ID]; exists {
+		retainRecognition(&info, previous)
+	}
+	info.RecoveryPending = true
+	info.RecoveryDetailsOmitted = true
 	b.sessions[info.ID] = info
 	b.publishLocked(protocol.TopicSessions, "session/"+info.ID, protocol.StateEvent{Kind: kind, Payload: protocol.StatePayload{Session: &info}})
 }
@@ -152,6 +161,12 @@ func (b *stateBroker) subscribe(w protocol.StateWatch) (*stateSubscriber, *proto
 	}
 	b.subscribers[sub] = struct{}{}
 	b.notifyActivityLocked()
+	if sub.topics[protocol.TopicSessions] {
+		select {
+		case b.projection <- struct{}{}:
+		default:
+		}
+	}
 	return sub, b.snapshotLocked(sub), nil
 }
 func (b *stateBroker) unsubscribe(sub *stateSubscriber) {
@@ -331,7 +346,11 @@ func (b *stateBroker) seedSessions(rows map[storage.SessionID]storage.Session) {
 	defer b.mu.Unlock()
 	for id, row := range rows {
 		b.stored[id] = cloneStoredSession(row)
-		b.sessions[string(id)] = sessionInfo(row)
+		b.markProjectionLocked(id)
+		info := sessionInfo(row)
+		info.RecoveryPending = true
+		info.RecoveryDetailsOmitted = true
+		b.sessions[string(id)] = info
 	}
 }
 
@@ -350,4 +369,23 @@ func (b *stateBroker) updateObservationLocked(topic string, next sectionObservat
 			}
 		}
 	}
+}
+
+func (b *stateBroker) markProjectionLocked(id storage.SessionID) {
+	b.dirty[id] = true
+	select {
+	case b.projection <- struct{}{}:
+	default:
+	}
+}
+
+func retainRecognition(info *protocol.SessionInfo, previous protocol.SessionInfo) {
+	info.Recovery = previous.Recovery
+	info.RecoveryDetailsOmitted = previous.RecoveryDetailsOmitted
+	info.RecoveryError = previous.RecoveryError
+	info.ReplacementID = previous.ReplacementID
+	info.RecoveredFrom = previous.RecoveredFrom
+	info.AgentStatus = previous.AgentStatus
+	info.Hibernated = previous.Hibernated
+	info.Label = previous.Label
 }

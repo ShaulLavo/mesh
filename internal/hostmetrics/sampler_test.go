@@ -102,3 +102,75 @@ func TestUtilizationCounterResetAndIOWait(t *testing.T) {
 		t.Fatal("counter reset accepted")
 	}
 }
+
+func TestSlowestCadenceCPUAndDemandLoopStandDown(t *testing.T) {
+	now := time.Now()
+	sampler := NewWithCollector(&fakeCollector{}, func() time.Time { return now })
+	if _, err := sampler.Read(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(MaximumInterval + time.Millisecond)
+	value, err := sampler.Read(t.Context())
+	if err != nil || value.CPU.Availability != Available || value.CPU.Failing {
+		t.Fatal("slowest cadence reset CPU baseline", value.CPU, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	active := NewWithCollector(&fakeCollector{}, time.Now)
+	samples := make(chan Snapshot, 3)
+	done := make(chan struct{})
+	go func() { defer close(done); active.Run(ctx, func(value Snapshot) { samples <- value }) }()
+	select {
+	case <-samples:
+		t.Fatal("no demand sampled")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release := active.Demand(MinimumInterval)
+	select {
+	case <-samples:
+	case <-time.After(3 * time.Second):
+		t.Fatal("demand did not sample")
+	}
+	release()
+	select {
+	case <-samples:
+		t.Fatal("sampling continued after release")
+	case <-time.After(MinimumInterval + 100*time.Millisecond):
+	}
+	cancel()
+	<-done
+}
+
+func TestMetricsDemandChurnDoesNotPostponeSampling(t *testing.T) {
+	sampler := NewWithCollector(&fakeCollector{}, time.Now)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	samples := make(chan Snapshot, 1)
+	release := sampler.Demand(MinimumInterval)
+	defer release()
+	go func() {
+		defer close(done)
+		sampler.Run(ctx, func(snapshot Snapshot) {
+			select {
+			case samples <- snapshot:
+			default:
+			}
+		})
+	}()
+	defer func() { cancel(); <-done }()
+	churn := time.NewTicker(100 * time.Millisecond)
+	defer churn.Stop()
+	deadline := time.NewTimer(MinimumInterval + time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-churn.C:
+			extra := sampler.Demand(MinimumInterval)
+			extra()
+		case <-samples:
+			return
+		case <-deadline.C:
+			t.Fatal("unchanged metric demand repeatedly postponed the sample")
+		}
+	}
+}

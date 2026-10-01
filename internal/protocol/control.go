@@ -97,6 +97,7 @@ const (
 
 // SessionInfo is the transport representation of durable session metadata.
 type SessionInfo struct {
+	RecoveryPending        bool             `json:"recoveryPending,omitempty"`
 	AgentStatus            string           `json:"agentStatus,omitempty"`
 	Recovery               *recovery.Record `json:"recovery,omitempty"`
 	RecoveryDetailsOmitted bool             `json:"recoveryDetailsOmitted,omitempty"`

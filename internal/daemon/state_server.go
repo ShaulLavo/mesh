@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
+	"slices"
 	"time"
 )
 
@@ -17,8 +18,13 @@ func (s *clientServer) serveState(ctx context.Context, conn transport.Conn, requ
 	if request.Watch == nil {
 		return s.writeStateError(ctx, conn, request, fmt.Errorf("daemon: state.watch requires topics"))
 	}
-	if controller, ok := s.services.(*serviceController); ok {
-		controller.observeRegistry(ctx, s.state.observeServices)
+	if err := request.Watch.Validate(); err != nil {
+		return s.writeStateError(ctx, conn, request, err)
+	}
+	if controller, ok := s.services.(*serviceController); ok && slices.Contains(request.Watch.Topics, protocol.TopicServices) {
+		readCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		controller.observeRegistry(readCtx, s.state.observeServices)
+		cancel()
 	}
 	sub, initial, err := s.state.subscribe(*request.Watch)
 	if err != nil {
@@ -36,8 +42,12 @@ func (s *clientServer) streamState(ctx context.Context, conn transport.Conn, req
 	defer cancel()
 	stop := context.AfterFunc(lifetime, func() { _ = conn.Close() })
 	defer stop()
-	readerDone := make(chan error, 1)
-	go func() { _, err := conn.ReadFrame(); readerDone <- err; cancel() }()
+	requests := make(chan protocol.Frame)
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		readStateRequests(lifetime, conn, requests, cancel)
+	}()
 	defer func() { cancel(); <-readerDone }()
 	if err := writeState(lifetime, conn, protocol.Control{Type: protocol.TypeStateSnapshot, RequestID: requestID, StateSnapshot: initial}); err != nil {
 		return err
@@ -48,11 +58,13 @@ func (s *clientServer) streamState(ctx context.Context, conn transport.Conn, req
 		select {
 		case <-lifetime.Done():
 			return nil
+		case frame := <-requests:
+			if err := writeState(lifetime, conn, s.stateRequest(lifetime, frame)); err != nil {
+				return err
+			}
 		case <-sub.wake:
-			for _, message := range s.state.take(sub) {
-				if err := writeState(lifetime, conn, message); err != nil {
-					return err
-				}
+			if err := writeStateBatch(lifetime, conn, s.state.take(sub)); err != nil {
+				return err
 			}
 		case <-ticker.C:
 			if err := writeState(lifetime, conn, protocol.Control{Type: protocol.TypeStateCurrent, StateCurrent: s.state.current(sub)}); err != nil {
@@ -63,6 +75,14 @@ func (s *clientServer) streamState(ctx context.Context, conn transport.Conn, req
 }
 func (s *clientServer) writeStateError(ctx context.Context, conn transport.Conn, request protocol.Control, err error) error {
 	return writeState(ctx, conn, protocol.Control{Type: protocol.TypeError, RequestID: request.RequestID, ErrorCode: clientErrorCode(err), Message: err.Error()})
+}
+func writeStateBatch(ctx context.Context, conn transport.Conn, messages []protocol.Control) error {
+	for _, message := range messages {
+		if err := writeState(ctx, conn, message); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func writeState(ctx context.Context, conn transport.Conn, message protocol.Control) error {
 	frame, err := encodeClientControl(message)

@@ -117,6 +117,7 @@ func (s *Sampler) Interval() time.Duration {
 func (s *Sampler) Run(ctx context.Context, publish func(Snapshot)) {
 	var timer *time.Timer
 	var tick <-chan time.Time
+	var scheduled time.Duration
 	defer func() {
 		if timer != nil {
 			timer.Stop()
@@ -127,8 +128,9 @@ func (s *Sampler) Run(ctx context.Context, publish func(Snapshot)) {
 			timer.Stop()
 		}
 		tick = nil
-		if every := s.Interval(); every > 0 {
-			timer = time.NewTimer(every)
+		scheduled = s.Interval()
+		if scheduled > 0 {
+			timer = time.NewTimer(scheduled)
 			tick = timer.C
 		}
 	}
@@ -138,7 +140,9 @@ func (s *Sampler) Run(ctx context.Context, publish func(Snapshot)) {
 		case <-ctx.Done():
 			return
 		case <-s.changed:
-			reset()
+			if s.Interval() != scheduled {
+				reset()
+			}
 		case <-tick:
 			s.publishSample(ctx, publish)
 			reset()

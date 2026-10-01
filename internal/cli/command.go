@@ -937,7 +937,7 @@ func (a *application) attachResolvedWithContainment(
 }
 
 func (a *application) queryHost(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
-	return listRemoteHost(ctx, host, a.dependencies.DialHost)
+	return listRemoteHost(ctx, host, a.dependencies.DialControl)
 }
 
 func (a *application) addCommand() *cobra.Command {

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 )
@@ -39,11 +40,11 @@ func (w *StateWatcher) Watch(ctx context.Context, host HostRecord, request proto
 			attempt = 0
 			continue
 		}
-		if errors.Is(err, ErrStateGap) {
-			attempt = 0
+		if retryStateGap(err, attempt) {
+			attempt++
 			continue
 		}
-		if view.Seq != 0 {
+		if !view.LastReply.IsZero() {
 			for _, topic := range request.Topics {
 				markSectionFailed(&view, topic)
 			}
@@ -95,7 +96,7 @@ func (w *StateWatcher) watchOnce(ctx context.Context, host HostRecord, request p
 }
 func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRecord, info protocol.HostInfo, conn transport.Conn, request protocol.StateWatch, view *StateView, publish func(StateView)) error {
 	build, _ := json.Marshal(info.Build)
-	key := info.ID + "/" + info.MeshIdentity
+	key := info.ID + "/" + info.MeshIdentity + "/" + protocol.TypeStateWatch
 	w.mu.Lock()
 	unsupported := w.unsupported[key] == string(build)
 	w.mu.Unlock()
@@ -197,12 +198,15 @@ type pollSection struct {
 	due         time.Time
 	failures    int
 	unsupported bool
+	capability  string
+	build       string
 }
 
-func (w *StateWatcher) poll(ctx context.Context, host HostRecord, _ protocol.HostInfo, conn transport.Conn, request protocol.StateWatch, view *StateView, publish func(StateView)) error {
+func (w *StateWatcher) poll(ctx context.Context, host HostRecord, info protocol.HostInfo, conn transport.Conn, request protocol.StateWatch, view *StateView, publish func(StateView)) error {
 	sections := make([]pollSection, len(request.Topics))
 	for i, topic := range request.Topics {
-		sections[i] = pollSection{topic: topic}
+		build, _ := json.Marshal(info.Build)
+		sections[i] = pollSection{topic: topic, capability: info.ID + "/" + info.MeshIdentity + "/" + pollControl(topic), build: string(build)}
 	}
 	for ctx.Err() == nil {
 		next := time.Now().Add(time.Minute)
@@ -236,22 +240,25 @@ func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, conn tr
 	if err != nil {
 		return err
 	}
-	kind := protocol.TypeList
-	if section.topic == protocol.TopicServices {
-		kind = protocol.TypeServiceList
-	}
-	if section.topic == protocol.TopicMetrics {
-		kind = protocol.TypeHostMetrics
+	kind := pollControl(section.topic)
+	w.mu.Lock()
+	unsupported := w.unsupported[section.capability] == section.build
+	w.mu.Unlock()
+	if unsupported {
+		markUnsupportedSection(view, section)
+		return nil
 	}
 	started := time.Now()
-	response, err := controlRequest(readCtx, conn, protocol.Control{Type: kind, RequestID: id})
+	response, err := controlRequest(readCtx, conn, protocol.Control{Type: kind, RequestID: id, Lean: true})
 	if err != nil {
 		return err
 	}
 	received := time.Now()
 	if explicitUnknownControl(response, kind) {
-		section.unsupported = true
-		markSectionFailed(view, section.topic)
+		w.mu.Lock()
+		w.unsupported[section.capability] = section.build
+		w.mu.Unlock()
+		markUnsupportedSection(view, section)
 		return nil
 	}
 	if response.Type == protocol.TypeError {
@@ -294,6 +301,9 @@ func applyPolledSection(host HostRecord, topic string, response protocol.Control
 	case protocol.TopicMetrics:
 		if response.Type != protocol.TypeHostMetricsResult || response.Metrics == nil {
 			return errors.New("unexpected polling metrics response")
+		}
+		if err := validateStateMetrics(response.Metrics); err != nil {
+			return err
 		}
 		view.applyMetrics(response.Metrics, received, transit)
 	}
@@ -338,3 +348,33 @@ func validatePolledSessions(host HostRecord, rows []protocol.SessionInfo) error 
 	}
 	return nil
 }
+
+func pollControl(topic string) string {
+	if topic == protocol.TopicServices {
+		return protocol.TypeServiceList
+	}
+	if topic == protocol.TopicMetrics {
+		return protocol.TypeHostMetrics
+	}
+	return protocol.TypeList
+}
+func markUnsupportedSection(view *StateView, section *pollSection) {
+	section.unsupported = true
+	markSectionFailed(view, section.topic)
+	if section.topic != protocol.TopicMetrics {
+		return
+	}
+	if view.Metrics == nil {
+		view.Metrics = &hostmetrics.Snapshot{}
+	}
+	view.Metrics.CPU.Availability = hostmetrics.Unsupported
+	view.Metrics.RAM.Availability = hostmetrics.Unsupported
+	view.Metrics.Temperature.Availability = hostmetrics.Unsupported
+	view.Metrics.Uptime.Availability = hostmetrics.Unsupported
+	view.Metrics.CPU.Failing = false
+	view.Metrics.RAM.Failing = false
+	view.Metrics.Temperature.Failing = false
+	view.Metrics.Uptime.Failing = false
+}
+
+func retryStateGap(err error, attempt int) bool { return attempt == 0 && errors.Is(err, ErrStateGap) }

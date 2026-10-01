@@ -82,7 +82,8 @@ def main():
             continue
         payload = content["payload"]
         if content["kind"] in ("session.added", "session.changed") and payload["session"]["id"] == session_id:
-            assert "recovery" not in payload["session"], "watch sent full recovery preview"
+            record = payload["session"].get("recovery", {})
+            assert not record.get("lines") and not record.get("command") and not record.get("agentResume"), "watch sent recovery execution details"
             if not seen_session:
                 latency = time.monotonic() - started
             seen_session = True
@@ -96,6 +97,16 @@ def main():
             seen_metrics = True
     assert seen_session and seen_service_removed and seen_metrics
     assert latency <= 1.5, latency
+    metrics_started = time.monotonic()
+    metrics_bytes = 0
+    while time.monotonic() - metrics_started < args.seconds:
+        message, size = read(connection)
+        metrics_bytes += size
+        content = message.get("stateEvent", message.get("stateCurrent"))
+        assert content["seq"] == seq + 1, (seq, content)
+        seq = content["seq"]
+    metrics_elapsed = time.monotonic() - metrics_started
+    assert metrics_bytes / metrics_elapsed < 1000, (metrics_bytes, metrics_elapsed)
     connection.close()
     for _ in range(30):
         connection, initial = watch(args.socket, ["sessions", "services"])
@@ -122,7 +133,7 @@ def main():
     connection.close()
     assert observed, "unchanged catalog received no current confirmation"
     assert idle_bytes / elapsed < 1000, (idle_bytes, elapsed)
-    print(json.dumps({"idleBytes": idle_bytes, "idleSeconds": round(elapsed, 3), "idleBytesPerSecond": round(idle_bytes / elapsed, 3), "sessionDeliverySeconds": round(latency, 3), "subscriberRelease": True, "adapterRAM": ram}, sort_keys=True))
+    print(json.dumps({"metricsIdleBytes": metrics_bytes, "metricsIdleSeconds": round(metrics_elapsed, 3), "metricsIdleBytesPerSecond": round(metrics_bytes / metrics_elapsed, 3), "idleBytes": idle_bytes, "idleSeconds": round(elapsed, 3), "idleBytesPerSecond": round(idle_bytes / elapsed, 3), "sessionDeliverySeconds": round(latency, 3), "subscriberRelease": True, "adapterRAM": ram}, sort_keys=True))
 
 
 if __name__ == "__main__":

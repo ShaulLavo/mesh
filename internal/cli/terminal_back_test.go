@@ -27,7 +27,7 @@ func TestBackResolvesTheRememberedHostDespiteALocalIDCollision(t *testing.T) {
 		Command: []string{"bash"}, Cwd: "/work", CreatedAt: commandTestTime}); err != nil {
 		t.Fatal(err)
 	}
-	app := application{dependencies: Dependencies{DialHost: host.dial}}
+	app := application{dependencies: Dependencies{DialHost: host.dial, DialControl: host.dial}}
 	binding := TerminalBinding{HostID: host.host.ID, SessionID: host.sessionID, CreatedAt: commandTestTime}
 	resolved, err := app.resolveBinding(context.Background(), TerminalIdentity{Key: "tab"}, binding)
 	if err != nil {
@@ -47,7 +47,11 @@ func TestBackPreservesBindingWhenHostIsUnavailable(t *testing.T) {
 	}
 	app := application{dependencies: Dependencies{DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
 		return nil, errors.New("host offline")
-	}}}
+	},
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host offline")
+		},
+	}}
 	if _, err := app.resolveBinding(context.Background(), TerminalIdentity{Key: "tab"}, binding); err == nil {
 		t.Fatal("offline host resolved successfully")
 	}
@@ -58,7 +62,7 @@ func TestBackPreservesBindingWhenHostIsUnavailable(t *testing.T) {
 
 func TestBackDoesNotResolveALocalBindingOnARemoteHost(t *testing.T) {
 	host := setupCommandTestHost(t)
-	app := application{dependencies: Dependencies{DialHost: host.dial}}
+	app := application{dependencies: Dependencies{DialHost: host.dial, DialControl: host.dial}}
 	binding := TerminalBinding{SessionID: "7K3D"}
 	if _, err := app.resolveBinding(context.Background(), TerminalIdentity{Key: "tab"}, binding); !errors.Is(err, ErrNoLocalSession) {
 		t.Fatalf("missing local binding = %v, want local session not found", err)
@@ -186,6 +190,10 @@ func TestBackKeepsTheBindingWhenTheSessionCannotBeReached(t *testing.T) {
 	_, _, err := executeCommand(t, Dependencies{
 		Terminal: fakeTerminal("bound-tab"),
 		DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host unavailable")
+		},
+
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
 			return nil, errors.New("host unavailable")
 		},
 	}, "back")

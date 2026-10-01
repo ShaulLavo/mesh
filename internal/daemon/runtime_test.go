@@ -59,7 +59,7 @@ func TestErrorReporterWorkerStopsAfterHealthySink(t *testing.T) {
 func TestServeCarriesUnixFramesAndCancellationUnblocksHandler(t *testing.T) {
 	t.Parallel()
 
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	handlerBlocked := make(chan struct{})
 	done := runRuntime(t, ctx, ListenerConfig{StateDir: stateDir}, func(_ context.Context, conn transport.Conn) error {
@@ -106,7 +106,7 @@ func TestServeCarriesUnixFramesAndCancellationUnblocksHandler(t *testing.T) {
 func TestServeWaitsForConnectionHandlersDuringShutdown(t *testing.T) {
 	t.Parallel()
 
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	handlerStarted := make(chan struct{})
 	handlerCancelled := make(chan struct{})
@@ -138,7 +138,7 @@ func TestServeWaitsForConnectionHandlersDuringShutdown(t *testing.T) {
 func TestServeReplacesProvenStaleUnixSocket(t *testing.T) {
 	t.Parallel()
 
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	socketPath := filepath.Join(stateDir, daemonSocketName)
 	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
@@ -170,7 +170,7 @@ func TestServeReplacesProvenStaleUnixSocket(t *testing.T) {
 func TestServeEnforcesSingleOwnerWithoutUnlinkingLiveSocket(t *testing.T) {
 	t.Parallel()
 
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	firstAccepted := make(chan struct{}, 1)
 	firstDone := runRuntime(t, ctx, ListenerConfig{StateDir: stateDir}, func(ctx context.Context, _ transport.Conn) error {
@@ -202,7 +202,7 @@ func TestServeEnforcesSingleOwnerWithoutUnlinkingLiveSocket(t *testing.T) {
 }
 
 func TestRunRuntimeReleasesLockBeforeCompletion(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	listener, _ := newTCPListener(t, "127.0.0.1:0")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -222,7 +222,7 @@ func TestRunRuntimeReleasesLockBeforeCompletion(t *testing.T) {
 func TestServeDoesNotRemoveAReplacementAtTheDaemonSocketPath(t *testing.T) {
 	t.Parallel()
 
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runRuntime(t, ctx, ListenerConfig{StateDir: stateDir}, func(context.Context, transport.Conn) error {
 		return nil
@@ -253,7 +253,7 @@ func TestServeDoesNotRemoveAReplacementAtTheDaemonSocketPath(t *testing.T) {
 func TestServeDoesNotRemoveAReplacementUnixSocket(t *testing.T) {
 	t.Parallel()
 
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runRuntime(t, ctx, ListenerConfig{StateDir: stateDir}, func(context.Context, transport.Conn) error {
 		return nil
@@ -283,7 +283,7 @@ func TestServeDoesNotRemoveAReplacementUnixSocket(t *testing.T) {
 func TestServeDoesNotReplaceAReachableForeignUnixSocket(t *testing.T) {
 	t.Parallel()
 
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	socketPath := filepath.Join(stateDir, daemonSocketName)
 	foreign, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
@@ -307,7 +307,7 @@ func TestServeDoesNotReplaceAReachableForeignUnixSocket(t *testing.T) {
 func TestServeAllowsLocalOnlyConfiguration(t *testing.T) {
 	t.Parallel()
 
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runRuntime(t, ctx, ListenerConfig{StateDir: stateDir}, func(context.Context, transport.Conn) error {
 		return nil
@@ -324,7 +324,7 @@ func TestServeWebSocketUsesExactAddressAndPath(t *testing.T) {
 	t.Parallel()
 
 	listener, port := newTCPListener(t, "127.0.0.1:0")
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runRuntime(t, ctx, ListenerConfig{
 		StateDir:      stateDir,
@@ -377,7 +377,7 @@ func TestServeHTTPSUsesLoopbackServicesOnlyAndHotReloads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	services := http.NewServeMux()
 	service := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -433,7 +433,7 @@ func TestServeFailsWhenHTTPSPortCannotBind(t *testing.T) {
 	}
 	defer blocked.Close()                              //nolint:errcheck // test cleanup
 	port := uint16(blocked.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	err = Serve(context.Background(), ListenerConfig{
 		StateDir: stateDir, HTTPSPort: port, WebSocketPath: "/mesh", HTTPHandler: http.NotFoundHandler(),
 		TLSConfig: &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -458,7 +458,7 @@ func TestServeReportsPartialTailnetBindFailure(t *testing.T) {
 	defer blocked.Close()                              //nolint:errcheck // test cleanup
 	port := uint16(blocked.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
 	reports := make(chan error, 4)
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runRuntime(t, ctx, ListenerConfig{
 		StateDir:      stateDir,
@@ -493,7 +493,7 @@ func TestServeFailsWhenNoTailnetAddressCanBind(t *testing.T) {
 	}
 	defer blocked.Close()                              //nolint:errcheck // test cleanup
 	port := uint16(blocked.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	err = Serve(context.Background(), ListenerConfig{
 		StateDir:      stateDir,
 		TailnetAddrs:  []string{"127.0.0.1"},
@@ -564,7 +564,7 @@ func TestServeRejectsInvalidBoundaryConfiguration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stateDir := t.TempDir()
+			stateDir := compactSocketTempDir(t)
 			err := Serve(context.Background(), tt.cfg(stateDir), echoOneFrame)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Serve error = %v, want text %q", err, tt.want)
@@ -575,7 +575,7 @@ func TestServeRejectsInvalidBoundaryConfiguration(t *testing.T) {
 		})
 	}
 
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	if err := Serve(context.Background(), ListenerConfig{StateDir: stateDir}, nil); err == nil || !strings.Contains(err.Error(), "handler") {
 		t.Fatalf("nil handler error = %v", err)
 	}
@@ -584,7 +584,7 @@ func TestServeRejectsInvalidBoundaryConfiguration(t *testing.T) {
 func TestServeDoesNotTouchWorkerArtifacts(t *testing.T) {
 	t.Parallel()
 
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	workerDir := filepath.Join(stateDir, "s", "ABCD")
 	if err := os.MkdirAll(workerDir, 0o700); err != nil {
 		t.Fatal(err)

@@ -54,7 +54,7 @@ func TestWatchViewGapsFailureSilenceAndOwnership(t *testing.T) {
 func TestWatchSnapshotKeepsSameMetricAging(t *testing.T) {
 	now := time.Now()
 	view := StateView{}
-	snapshot := protocol.Control{Type: protocol.TypeStateSnapshot, StateSnapshot: &protocol.StateSnapshot{Seq: 1, Metrics: &hostmetrics.Snapshot{CPU: hostmetrics.Reading[float64]{Availability: hostmetrics.Available, Sample: "same"}}, Current: map[string]protocol.Observation{}}}
+	snapshot := protocol.Control{Type: protocol.TypeStateSnapshot, StateSnapshot: &protocol.StateSnapshot{Seq: 1, Metrics: &hostmetrics.Snapshot{CPU: hostmetrics.Reading[float64]{Availability: hostmetrics.Available, Sample: "same"}, RAM: hostmetrics.Reading[hostmetrics.Memory]{Availability: hostmetrics.Unavailable}, Temperature: hostmetrics.Reading[hostmetrics.Temperature]{Availability: hostmetrics.Unsupported}, Uptime: hostmetrics.Reading[uint64]{Availability: hostmetrics.Unavailable}}, Current: map[string]protocol.Observation{}}}
 	if err := view.Apply(snapshot, now, 0); err != nil {
 		t.Fatal(err)
 	}

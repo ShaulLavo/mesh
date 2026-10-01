@@ -130,7 +130,7 @@ func TestRunExternalCommandBoundsCancellationWithInheritedPipes(t *testing.T) {
 }
 
 func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	httpsListener, httpsPort := newTCPListener(t, "127.0.0.1:0")
 	controlListener, controlPort := newTCPListener(t, "127.0.0.1:0")
 	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
@@ -214,7 +214,7 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 }
 
 func TestRunFailsWhenTailscaleServeVerificationFails(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	httpsListener, httpsPort := newTCPListener(t, "127.0.0.1:0")
 	controlListener, controlPort := newTCPListener(t, "127.0.0.1:0")
 	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
@@ -252,7 +252,7 @@ func TestRunFailsWhenTailscaleServeVerificationFails(t *testing.T) {
 }
 
 func TestRunFailsWhenTailscaleServeConfigurationFails(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	httpsListener, httpsPort := newTCPListener(t, "127.0.0.1:0")
 	controlListener, controlPort := newTCPListener(t, "127.0.0.1:0")
 	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
@@ -293,7 +293,7 @@ func TestRunAcceptsVerifiedOperatorManagedTailscaleServeForward(t *testing.T) {
 
 func checkOperatorManagedServeForward(t *testing.T, gatewayPort uint16) {
 	t.Helper()
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	httpsListener, httpsPort := newTCPListener(t, "127.0.0.1:0")
 	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
 	forwardPort := gatewayPort
@@ -349,7 +349,7 @@ func checkOperatorManagedServeForward(t *testing.T, gatewayPort uint16) {
 
 func TestRunRejectsTailscaleServeControlPortConflict(t *testing.T) {
 	err := run(context.Background(), Config{
-		StateDir: t.TempDir(), TailnetPort: 443, HTTPSPort: 8443, TailscaleServe: true,
+		StateDir: compactSocketTempDir(t), TailnetPort: 443, HTTPSPort: 8443, TailscaleServe: true,
 	}, defaultRunOptions())
 	if err == nil || !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("Tailscale Serve port conflict = %v", err)
@@ -358,7 +358,7 @@ func TestRunRejectsTailscaleServeControlPortConflict(t *testing.T) {
 
 func TestRunRejectsTailscaleServeWithoutControlListener(t *testing.T) {
 	err := run(context.Background(), Config{
-		StateDir: t.TempDir(), HTTPSPort: 8443, TailscaleServe: true,
+		StateDir: compactSocketTempDir(t), HTTPSPort: 8443, TailscaleServe: true,
 	}, defaultRunOptions())
 	if err == nil || !strings.Contains(err.Error(), "control port") {
 		t.Fatalf("Tailscale Serve without control listener = %v", err)
@@ -391,7 +391,7 @@ func TestRunRejectsTailscaleServeWithoutEligibleAddressesBeforeCommand(t *testin
 				return nil, nil
 			}
 			err := run(context.Background(), Config{
-				StateDir: t.TempDir(), TailnetPort: 7337, HTTPSPort: 8443, TailscaleServe: true,
+				StateDir: compactSocketTempDir(t), TailnetPort: 7337, HTTPSPort: 8443, TailscaleServe: true,
 			}, options)
 			if err == nil || !strings.Contains(err.Error(), test.contains) {
 				t.Fatalf("startup error = %v, want text %q", err, test.contains)
@@ -416,7 +416,7 @@ func TestRunBoundsInitialTailscaleServeDiscovery(t *testing.T) {
 		return nil, nil
 	}
 	err := run(context.Background(), Config{
-		StateDir: t.TempDir(), TailnetPort: 7337, HTTPSPort: 8443, TailscaleServe: true,
+		StateDir: compactSocketTempDir(t), TailnetPort: 7337, HTTPSPort: 8443, TailscaleServe: true,
 	}, options)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("bounded startup discovery error = %v", err)
@@ -448,7 +448,7 @@ func TestRunTailscaleServeRequiresEveryControlAddressToBind(t *testing.T) {
 		return nil, nil
 	}
 	err = run(context.Background(), Config{
-		StateDir: t.TempDir(), TailnetPort: controlPort, HTTPSPort: httpsPort,
+		StateDir: compactSocketTempDir(t), TailnetPort: controlPort, HTTPSPort: httpsPort,
 		CertificateRenewerID: signerID, TailscaleServe: true,
 	}, options)
 	if err == nil || !strings.Contains(err.Error(), "127.0.0.1") || !strings.Contains(err.Error(), "bind Tailnet") {
@@ -480,7 +480,7 @@ func TestRunAllowsEqualHTTPSAndControlPortsOnSeparateAddresses(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- run(ctx, Config{
-			StateDir: t.TempDir(), TailnetPort: port, HTTPSPort: port,
+			StateDir: compactSocketTempDir(t), TailnetPort: port, HTTPSPort: port,
 			CertificateRenewerID: signerID, TailscaleServe: true,
 		}, options)
 	}()
@@ -496,7 +496,7 @@ func TestRunAllowsEqualHTTPSAndControlPortsOnSeparateAddresses(t *testing.T) {
 }
 
 func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	sessionDir := filepath.Join(stateDir, sessionsDirectoryName, "R7T2")
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
 		t.Fatal(err)

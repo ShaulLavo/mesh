@@ -20,7 +20,8 @@ type ObservedSection struct {
 }
 
 func (s ObservedSection) Stale(now, lastReply time.Time) bool {
-	return s.Observation.Failing || s.ReceivedAt.IsZero() || lastReply.IsZero() || now.Sub(lastReply) >= 30*time.Second || time.Duration(s.Observation.AgeMillis)*time.Millisecond+now.Sub(s.ReceivedAt) >= 30*time.Second
+	reading := hostmetrics.Reading[struct{}]{Availability: hostmetrics.Available, AgeMillis: s.Observation.AgeMillis, Failing: s.Observation.Failing}
+	return MetricStale(reading, s.ReceivedAt, lastReply, now, 30*time.Second)
 }
 
 type StateView struct {
@@ -51,6 +52,9 @@ func (v StateView) Clone() StateView {
 
 // Apply ages from receipt using the verified setup round trip for stream transit.
 func (v *StateView) Apply(message protocol.Control, received time.Time, transit time.Duration) error {
+	if err := validateStateMessage(message); err != nil {
+		return err
+	}
 	if message.Type == protocol.TypeStateResync {
 		v.initialized = false
 		return nil
@@ -121,7 +125,7 @@ func retainMetricAge[T any](next *hostmetrics.Reading[T], old hostmetrics.Readin
 	}
 }
 func MetricStale[T any](metric hostmetrics.Reading[T], received, lastReply, now time.Time, limit time.Duration) bool {
-	return metric.Failing || metric.Availability != hostmetrics.Available || received.IsZero() || lastReply.IsZero() || now.Sub(lastReply) >= 30*time.Second || time.Duration(metric.AgeMillis)*time.Millisecond+now.Sub(received) >= limit
+	return metric.AgeMillis < 0 || metric.AgeMillis >= limit.Milliseconds() || metric.Failing || metric.Availability != hostmetrics.Available || received.IsZero() || lastReply.IsZero() || now.Sub(lastReply) >= 30*time.Second || time.Duration(metric.AgeMillis)*time.Millisecond+now.Sub(received) >= limit
 }
 func (v *StateView) applyEvent(event protocol.StateEvent, received time.Time, transit time.Duration) error {
 	p := event.Payload

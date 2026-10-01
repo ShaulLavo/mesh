@@ -274,3 +274,27 @@ func TestResumedHibernationReadsAsAnOrdinaryExit(t *testing.T) {
 		t.Fatalf("a session that already woke still reads as hibernated:\n%s", view)
 	}
 }
+
+func TestWatchPendingRecoveryMetadataKeepsExplicitInspection(t *testing.T) {
+	row := savedPickerSession()
+	record := row.Recovery
+	row.Recovery = nil
+	row.RecoveryPending = true
+	row.RecoveryDetailsOmitted = true
+	current := recoveryPicker(row)
+	view := ansi.Strip(current.View().Content)
+	if !strings.Contains(view, "Loading session metadata") || strings.Contains(view, "No checkpoint was saved") {
+		t.Fatalf("pending metadata looked complete:\n%s", view)
+	}
+	current.inspection.hasValue = true
+	current.inspection.target = inspectionTarget{hostAlias: current.currentHost().alias, sessionID: row.ID}
+	current.inspection.value = cli.SessionInspection{Recovery: record}
+	_, selected, ok := current.currentSession()
+	if !ok {
+		t.Fatal("selected session missing")
+	}
+	details := current.savedDetailsFor(selected)
+	if len(details.preview) != 2 || details.preview[0] != "earlier output" {
+		t.Fatalf("explicit saved inspection was lost: %+v", details)
+	}
+}

@@ -84,6 +84,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		}
 	}()
 
+	terminalUsed := false
 	for {
 		frame, err := client.ReadFrame()
 		if err != nil {
@@ -96,6 +97,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		handled, requestErr := relay.HandleFrame(ctx, frame)
 		if handled {
 			if requestErr == nil {
+				terminalUsed = true
 				continue
 			}
 			if err := writeClientRequestError(relay, requestMetadata(frame), requestErr); err != nil {
@@ -119,6 +121,12 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		}
 
 		if request.Type == protocol.TypeStateWatch && s.state != nil {
+			if terminalUsed {
+				if err := writeClientRequestError(relay, request, errWatchMode); err != nil {
+					return err
+				}
+				continue
+			}
 			return s.serveState(ctx, client, request)
 		}
 		if request.Type == protocol.TypeHostMetrics && s.metrics != nil {

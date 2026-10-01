@@ -506,6 +506,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
+	projectionDone := make(chan struct{})
+	go func() { defer close(projectionDone); state.runProjection(daemonCtx, lifecycle) }()
+	defer func() { cancelDaemon(); <-projectionDone }()
 	server.state = state
 	server.metrics = metrics
 	memoryDone := make(chan struct{})

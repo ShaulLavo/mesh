@@ -15,14 +15,19 @@ func (b *stateBroker) runMemory(ctx context.Context, l *lifecycle) {
 		}
 	}()
 	reset := func() {
-		if timer != nil {
-			timer.Stop()
+		if !b.hasTopic(protocol.TopicSessions) {
+			if timer != nil {
+				timer.Stop()
+			}
+			timer = nil
+			tick = nil
+			return
 		}
-		tick = nil
-		if b.hasTopic(protocol.TopicSessions) {
-			timer = time.NewTimer(memorySampleTTL)
-			tick = timer.C
+		if tick != nil {
+			return
 		}
+		timer = time.NewTimer(memorySampleTTL)
+		tick = timer.C
 	}
 	for {
 		select {
@@ -31,6 +36,8 @@ func (b *stateBroker) runMemory(ctx context.Context, l *lifecycle) {
 		case <-b.activity:
 			reset()
 		case <-tick:
+			timer = nil
+			tick = nil
 			b.sampleMemory(l)
 			reset()
 		}

@@ -11,11 +11,12 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
+	"github.com/shaul/mesh/internal/testenv"
 )
 
 func recoveryListenerFixture(t *testing.T, reply func(net.Conn)) RecoveryRuntime {
 	t.Helper()
-	root := t.TempDir()
+	root := testenv.SocketTempDir(t)
 	dir := filepath.Join(root, "7K3D")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)

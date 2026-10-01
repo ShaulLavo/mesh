@@ -45,7 +45,8 @@ func (p *pickerState) selectHost(host HostRecord) {
 	p.stop()
 	ctx, cancel := context.WithCancel(p.ctx)
 	p.cancel = cancel
-	p.done = make(chan struct{})
+	done := make(chan struct{})
+	p.done = done
 	ready := make(chan struct{})
 	var first sync.Once
 	p.mu.Lock()
@@ -54,7 +55,7 @@ func (p *pickerState) selectHost(host HostRecord) {
 	p.ready = ready
 	p.mu.Unlock()
 	go func() {
-		defer close(p.done)
+		defer close(done)
 		_ = p.watcher.Watch(ctx, host, protocol.StateWatch{Topics: []string{protocol.TopicSessions}}, func(view StateView) {
 			if ctx.Err() != nil {
 				return
@@ -83,7 +84,7 @@ func (p *pickerState) read(ctx context.Context, host HostRecord) (HostSessions, 
 	rows := cloneSessionInfo(view.Sessions)
 	for i := range rows {
 		memory, exists := view.Memory[rows[i].ID]
-		if exists && memory.Available && time.Duration(memory.AgeMillis)*time.Millisecond+now.Sub(view.MemoryReceivedAt) < 30*time.Second {
+		if exists && memory.Available && memory.AgeMillis >= 0 && memory.AgeMillis < 30000 && time.Duration(memory.AgeMillis)*time.Millisecond+now.Sub(view.MemoryReceivedAt) < 30*time.Second {
 			rows[i].MemoryBytes = memory.Bytes
 		}
 	}

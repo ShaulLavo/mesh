@@ -109,6 +109,7 @@ func hostCatalog(input cli.PickerInput) []host {
 				recovery:     cloneRecovery(current.Recovery), recoveryError: current.RecoveryError, agentStatus: current.AgentStatus,
 				replacementID: current.ReplacementID, recoveredFrom: current.RecoveredFrom,
 				recoveryDetailsOmitted: current.RecoveryDetailsOmitted,
+				recoveryPending:        current.RecoveryPending,
 			}
 			if marker := cli.Hibernation(current); marker != nil {
 				copied := *marker
