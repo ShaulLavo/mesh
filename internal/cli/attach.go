@@ -171,7 +171,7 @@ func Attach(ctx context.Context, opts AttachOptions) (AttachResult, error) {
 	if inside && registration == nil && !keys.explicit && !opts.Raw {
 		_, _ = fmt.Fprintf(opts.Stderr, "  (%s detaches this one, ctrl+] leaves them all)\r\n", DetachKeyName(keys.detachKey))
 	}
-	terminal, closeTerminal, inputIsTerminal, err := localAttachTerminal(opts.In, opts.Out)
+	terminal, closeTerminal, inputIsTerminal, err := localAttachTerminal(ctx, opts.In, opts.Out)
 	if err != nil {
 		return res, err
 	}
@@ -380,10 +380,15 @@ func (s *attachmentOutput) restoreTerminal() {
 	if s.terminal.restore != nil {
 		s.terminal.restore()
 	}
+	sequence := restoreTerminalState
 	if s.altScreen.Active() {
-		_, _ = io.WriteString(s.terminal.Output, leaveAltScreenSequence)
+		sequence = leaveAltScreenSequence + sequence
 	}
-	_, _ = io.WriteString(s.terminal.Output, restoreTerminalState)
+	if s.terminal.restoreOutput != nil {
+		s.terminal.restoreOutput(sequence)
+		return
+	}
+	_, _ = io.WriteString(s.terminal.Output, sequence)
 }
 
 func (s *attachmentOutput) read(ctx context.Context, conn transport.Conn, detached <-chan struct{}) (AttachResult, error) {
@@ -395,6 +400,9 @@ func (s *attachmentOutput) read(ctx context.Context, conn transport.Conn, detach
 		}
 		done, err := s.accept(frame)
 		if done || err != nil {
+			if err != nil && ctx.Err() != nil {
+				err = fmt.Errorf("session %s output: %w", s.opts.SessionID, ctx.Err())
+			}
 			return s.result, err
 		}
 	}
@@ -568,10 +576,6 @@ const restoreTerminalState = "\x1b[?25h" + // show the cursor
 	"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" + // stop mouse reporting
 	"\x1b[?2004l" + // stop bracketed paste
 	"\x1b[0m" // reset colours and attributes
-
-func makeRaw(f *os.File) (func(), error) {
-	return makeRawFD(f.Fd())
-}
 
 func makeRawFD(fd uintptr) (func(), error) {
 	state, err := term.MakeRaw(fd)

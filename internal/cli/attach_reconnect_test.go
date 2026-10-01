@@ -113,7 +113,7 @@ func reconnectInputPair(t *testing.T, tty bool) (*os.File, *os.File, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restore, err := makeRaw(input)
+	restore, err := makeRawFD(input.Fd())
 	if err != nil {
 		_ = input.Close()
 		_ = writer.Close()

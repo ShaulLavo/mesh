@@ -27,9 +27,10 @@ type AttachTerminal struct {
 	CancelInput func()
 	// ResetInput discards pending input and restarts a canceled reader. It is
 	// required when Conn can reconnect; local and SSH streams do not need it.
-	ResetInput func() error
-	begin      func() error
-	restore    func()
+	ResetInput    func() error
+	begin         func() error
+	restore       func()
+	restoreOutput func(string)
 }
 
 // AttachWithTerminal uses an explicit terminal without discovering process
@@ -52,7 +53,7 @@ func validateAttachTerminal(ctx context.Context, terminal AttachTerminal) error 
 	return ctx.Err()
 }
 
-func localAttachTerminal(input, output *os.File) (AttachTerminal, func(), bool, error) {
+func localAttachTerminal(ctx context.Context, input, output *os.File) (AttachTerminal, func(), bool, error) {
 	terminal := AttachTerminal{Input: input, Output: output, Size: localTerminalSize(output), CancelInput: func() {}}
 	inputFD := input.Fd()
 	inputIsTerminal := term.IsTerminal(inputFD)
@@ -81,12 +82,20 @@ func localAttachTerminal(input, output *os.File) (AttachTerminal, func(), bool, 
 	terminal.Input = cancelReader.reader
 	terminal.CancelInput = cancelReader.cancel
 	terminal.ResetInput = cancelReader.reset
-	resizes, stopResizes := localTerminalResizes(output)
+	ownedOutput, closeOutput, err := localAttachOutput(ctx, output)
+	if err != nil {
+		_ = cancelReader.close()
+		return AttachTerminal{}, nil, false, err
+	}
+	terminal.Output = ownedOutput
+	terminal.restoreOutput = func(sequence string) { restoreLocalOutput(ownedOutput, sequence) }
+	resizes, stopResizes := localTerminalResizes(ownedOutput)
 	terminal.Resizes = resizes
 	closeTerminal := func() {
 		terminal.restore()
 		stopResizes()
 		_ = cancelReader.close()
+		closeOutput()
 	}
 	return terminal, closeTerminal, inputIsTerminal, nil
 }
