@@ -15,7 +15,7 @@ func TestUnknownLoopbackSenderCannotRotateQuotaWithXFF(t *testing.T) {
 	registry := testRegistry(t, ModeProxy, time.Now())
 	defer registry.Close()
 	for i := 0; i <= maximumRequestsPerMinute; i++ {
-		request := httptest.NewRequest(http.MethodGet, "http://app.shaulavo.dev/", nil)
+		request := publicRequest(http.MethodGet, "app.shaulavo.dev", "/")
 		request.RemoteAddr = "127.0.0.1:12345"
 		request.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i+1))
 		request.Header.Set("X-Forwarded-Proto", "https")

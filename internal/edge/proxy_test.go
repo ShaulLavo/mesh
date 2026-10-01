@@ -71,6 +71,7 @@ func TestProxyModeTrustsOnlyLoopbackForwardedScheme(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	originID, _ := testIdentity(t)
 	registry := testRegistry(t, ModeProxy, now)
+	registry.forwarderTrusted = func(*http.Request) bool { return true }
 	defer registry.Close()
 	if err := registry.Replace([]PublishedRoute{{
 		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app"},
