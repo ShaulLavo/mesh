@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strconv"
@@ -232,5 +233,22 @@ func TestUpdatingASuspendedAppStartsANewGeneration(t *testing.T) {
 	_ = f.origin.Sync(context.Background())
 	if record := edgeRecord(t, f, app.ID); record.Status != "active" {
 		t.Fatalf("updated app %s was %s at its old deadline", app.ID, record.Status)
+	}
+}
+
+func TestCachedRouteFollowsTheVerifiedUpstream(t *testing.T) {
+	app := localApp{Record: Record{ID: "7k3d", Kind: "server", Status: "active", Revision: "r1"}, Root: "/apps/7k3d", Port: 3000, Phase: "ready"}
+	first := cachedAppRoute(app, appRoute{}, netip.MustParseAddrPort("127.0.0.1:3000"))
+	if first.Handler == nil {
+		t.Fatal("verified server app has no handler")
+	}
+	if again := cachedAppRoute(app, first, first.Upstream); again.Handler != first.Handler {
+		t.Fatal("unchanged route rebuilt its handler")
+	}
+	if moved := cachedAppRoute(app, first, netip.MustParseAddrPort("[::1]:3000")); moved.Handler == first.Handler || moved.Handler == nil {
+		t.Fatal("handler for 127.0.0.1 reused for [::1]")
+	}
+	if withdrawn := cachedAppRoute(app, first, netip.AddrPort{}); withdrawn.Handler != nil {
+		t.Fatal("server app without a verified upstream kept a handler")
 	}
 }
