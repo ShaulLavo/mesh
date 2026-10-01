@@ -302,6 +302,17 @@ class ReviewRegressionsTest(unittest.TestCase):
         self.assertEqual(kill_group.call_args_list, [call(process.pid, signal.SIGTERM), call(process.pid, signal.SIGKILL)])
         self.assertEqual(process.wait.call_count, 2)
 
+    def test_cancellation_uses_runner_toolchain_before_system_fallback(self):
+        with tempfile.TemporaryDirectory(prefix="m-cancel-go-") as temporary:
+            root = Path(temporary)
+            fallback = root / "go"
+            fallback.write_text('#!/bin/sh\nprintf invoked > "${0%/*}/invoked"\n'
+                                'echo "fallback Go would bootstrap a cold toolchain" >&2\nexit 97\n')
+            fallback.chmod(0o700)
+            with patch("os.defpath", str(root) + os.pathsep + os.defpath):
+                self.test_cancelling_entry_pid_or_group_stops_children_and_cleans_scratch()
+            self.assertFalse((root / "invoked").exists(), "cancellation fixture used fallback Go")
+
     def test_cancelling_entry_pid_or_group_stops_children_and_cleans_scratch(self):
         helpers = Path(__file__).resolve().parent
         source = (helpers.parent / "kill_waits.sh").read_text().splitlines()[1]
