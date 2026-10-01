@@ -95,6 +95,8 @@ func exerciseConcurrentPipeWriter(t *testing.T, configure func(*os.File)) int64 
 	if configure != nil {
 		configure(output)
 	}
+	filled := prefillConcurrentPipe(t, fd)
+	assertOutputBlocking(t, output, "after prefill, before attachment")
 	conn := &flagCheckConn{outputCancelConn: &outputCancelConn{frames: make(chan protocol.Frame, 2), closed: make(chan struct{})}, ready: make(chan struct{})}
 	conn.frames <- mustCommandControlFrame(protocol.Control{Type: protocol.TypeAttached, SessionID: "7K3D"})
 	ctx, cancel := context.WithCancel(t.Context())
@@ -110,13 +112,12 @@ func exerciseConcurrentPipeWriter(t *testing.T, configure func(*os.File)) int64 
 		t.Fatal("attachment did not acknowledge")
 	}
 	assertOutputBlocking(t, output, "during concurrent attachment")
-	// A prefill deadline can expire before writing anything. Check the shared
-	// writer's result with a concurrent drain, independent of pipe capacity.
 	payload := bytes.Repeat([]byte("p"), 512)
 	started := make(chan struct{})
 	written := make(chan error, 1)
 	go func() {
 		close(started)
+		assertOutputBlocking(t, output, "at the peer's write attempt")
 		for range 128 {
 			n, err := unix.Write(fd, payload)
 			if err != nil {
@@ -151,10 +152,51 @@ func exerciseConcurrentPipeWriter(t *testing.T, configure func(*os.File)) int64 
 	_ = peer.Close()
 	_ = output.Close()
 	n := <-drained
-	if n != 64<<10 {
-		t.Errorf("concurrent output drained %d bytes, want %d", n, 64<<10)
+	if want := filled + 64<<10; n != want {
+		t.Errorf("concurrent output drained %d bytes, want %d", n, want)
 	}
 	return n
+}
+
+func prefillConcurrentPipe(t *testing.T, fd int) int64 {
+	t.Helper()
+	probe, err := unix.Dup(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = unix.Close(probe) }()
+	flags, err := unix.FcntlInt(uintptr(probe), unix.F_GETFL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unix.FcntlInt(uintptr(probe), unix.F_SETFL, flags|unix.O_NONBLOCK); err != nil {
+		t.Fatal(err)
+	}
+	// This is an owned fixture pipe, before attachment or any peer writer.
+	// A dup shares flags, so restore them before returning, not at test cleanup.
+	defer func() {
+		if _, err := unix.FcntlInt(uintptr(probe), unix.F_SETFL, flags); err != nil {
+			t.Fatalf("restore prefill flags: %v", err)
+		}
+	}()
+	payload := bytes.Repeat([]byte("f"), 512)
+	var filled int64
+	for {
+		n, err := unix.Write(probe, payload)
+		if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) {
+			if filled == 0 {
+				t.Fatal("pipe reported exhaustion without any prefill")
+			}
+			return filled
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != len(payload) {
+			t.Fatalf("prefill wrote %d bytes, want %d", n, len(payload))
+		}
+		filled += int64(n)
+	}
 }
 
 func assertOutputBlocking(t *testing.T, output *os.File, stage string) {
