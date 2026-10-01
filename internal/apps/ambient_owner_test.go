@@ -32,10 +32,11 @@ func ambientOwnerRequest(t *testing.T, f *appFixture, app Record, credential str
 	owner := pairedOwner(t, f)
 	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+app.ID, nil)
 	request.AddCookie(owner)
-	redirect := httptest.NewRecorder()
-	f.edge.ServeHost(redirect, request, ManagementHost)
+	redirect, nonce := privateViewRedirect(t, f, request)
 	consume := httptest.NewRecorder()
-	f.edge.ServeHost(consume, httptest.NewRequest(http.MethodGet, redirect.Header().Get("Location"), nil), app.ID+"."+Domain)
+	consumeRequest := httptest.NewRequest(http.MethodGet, redirect.Header().Get("Location"), nil)
+	consumeRequest.AddCookie(nonce)
+	f.edge.ServeHost(consume, consumeRequest, app.ID+"."+Domain)
 	view := cookieNamed(t, consume, webauth.ViewCookie)
 	return func(r *http.Request) { r.AddCookie(view) }
 }

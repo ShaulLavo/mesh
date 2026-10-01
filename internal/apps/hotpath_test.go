@@ -114,12 +114,19 @@ func viewCookie(t *testing.T, f *appFixture, owner *http.Cookie, id string) *htt
 	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+id, nil)
 	r.AddCookie(owner)
-	ticket, err := f.edge.auth.IssueView(context.Background(), r, identityFor(f.ownerKey), id)
+	nonceResponse := httptest.NewRecorder()
+	nonceHash, err := f.edge.auth.BeginView(nonceResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := f.edge.auth.IssueView(context.Background(), r, identityFor(f.ownerKey), id, nonceHash)
 	if err != nil {
 		t.Fatal(err)
 	}
 	consume := httptest.NewRecorder()
-	f.edge.ServeHost(consume, httptest.NewRequest(http.MethodGet, URL(id)+"/?mesh_view="+ticket, nil), id+"."+Domain)
+	consumeRequest := httptest.NewRequest(http.MethodGet, URL(id)+"/?mesh_view="+ticket, nil)
+	consumeRequest.AddCookie(cookieNamed(t, nonceResponse, webauth.ViewNonceCookie))
+	f.edge.ServeHost(consume, consumeRequest, id+"."+Domain)
 	return cookieNamed(t, consume, webauth.ViewCookie)
 }
 func TestBrowserRevocationIsolatesInflight(t *testing.T) {

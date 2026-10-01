@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 set -euo pipefail
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/mesh-client-signal.XXXXXX")
@@ -7,6 +8,7 @@ export MESH_STATE_DIR="$T/state" MESH_CONFIG_DIR="$T/config"
 CLIENT1='' CLIENT2='' SID=''
 
 cleanup() {
+  local test_status=$?
   for client in "$CLIENT1" "$CLIENT2"; do
     if [[ -n $client ]]; then
       kill -TERM "$client" 2>/dev/null || true
@@ -17,7 +19,7 @@ cleanup() {
     SID=$("$MESH" ls 2>/dev/null | awk 'NR==2 {print $1}') || true
   fi
   if [[ -n $SID ]]; then "$MESH" kill "$SID" >/dev/null 2>&1 || true; fi
-  rm -rf -- "$T"
+  finish_fixture_cleanup "$MESH_STATE_DIR" "$T" "$test_status"
 }
 trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }

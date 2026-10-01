@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # Covers the two client-side behaviours we committed to: ctrl+] detaches
 # without killing anything, and a second attach steals the session from the
 # first (single attacher, steal on attach).
@@ -13,7 +14,7 @@ if [ -z "${MESH:-}" ]; then
 fi
 T=$(mktemp -d)
 export MESH_STATE_DIR="$T/state"
-trap 'rm -rf "$T"' EXIT
+trap 'finish_fixture_cleanup "$MESH_STATE_DIR" "$T" "$?"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 

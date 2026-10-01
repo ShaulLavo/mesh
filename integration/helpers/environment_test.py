@@ -56,6 +56,17 @@ class FixtureEnvironmentTest(unittest.TestCase):
             fixture.environment["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:7"
             self.assertEqual(fixture.environment["ANTHROPIC_BASE_URL"], "http://127.0.0.1:7")
 
+    def test_fixture_python_does_not_write_bytecode(self):
+        with tempfile.TemporaryDirectory(prefix="m-bytecode-env-") as temporary:
+            root = Path(temporary)
+            fixture = Fixture("/bin/true", root)
+            (root / "bytecode_probe.py").write_text("VALUE = 1\n")
+            result = subprocess.run([sys.executable, "-c", "import bytecode_probe"], env=fixture.environment,
+                                    cwd=root, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((root / "__pycache__").exists())
+            self.assertEqual(fixture.environment.get("PYTHONDONTWRITEBYTECODE"), "1")
+
     def test_fixture_bypasses_home_dependent_python_shim(self):
         with tempfile.TemporaryDirectory(prefix="m-python-env-") as temporary:
             root = Path(temporary)
@@ -189,6 +200,13 @@ class VerifierEnvironmentTest(unittest.TestCase):
         self.probe.write_text("bash -c 'sh -c true'\n")
         result = self.run_verifier()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_verifier_python_does_not_write_bytecode(self):
+        (self.root / "bytecode_probe.py").write_text("VALUE = 1\n")
+        self.probe.write_text("python3 -c 'import bytecode_probe'\n" + self.probe.read_text())
+        _, test = self.captured_environments()
+        self.assertFalse((self.root / "__pycache__").exists())
+        self.assertEqual(test.get("PYTHONDONTWRITEBYTECODE"), "1")
 
     def test_user_bus_reaches_scripts(self):
         selected = {"XDG_RUNTIME_DIR": "/fixture-runtime", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/fixture-runtime/bus"}

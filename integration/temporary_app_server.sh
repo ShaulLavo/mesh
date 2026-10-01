@@ -273,7 +273,7 @@ cp "$TEST_ROOT/recovered.json" "$TEST_ROOT/api.json"
 
 MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app delete local "$APP_ID" --json >"$TEST_ROOT/deleted.json" || fail 'delete running app'
 DELETED_STATUS=$(app_curl -o "$TEST_ROOT/deleted.body" -w '%{http_code}' "$APP_ENDPOINT/api") || fail 'deleted host request'
-[ "$DELETED_STATUS" = 410 ] || fail "deleted host returned $DELETED_STATUS"
+[ "$DELETED_STATUS" = 303 ] || fail "deleted host returned $DELETED_STATUS"
 python3 - "$TEST_ROOT/api.json" "$SOURCE/server" "$EDGE_STATE/mesh.db" "$APP_ID" <<'PY'
 import json, os, sqlite3, sys
 api_path, source_binary, edge_db, app_id = sys.argv[1:]

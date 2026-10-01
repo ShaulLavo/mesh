@@ -344,6 +344,9 @@ func normalizeService(service Service) (Service, error) {
 	return normalizeDemand(service)
 }
 
+// ReservedLabel identifies public labels owned by Mesh rather than a service.
+func ReservedLabel(label string) bool { return label == "mesh" }
+
 func validatePublicName(name string) error {
 	if name == "" {
 		return nil
@@ -359,7 +362,7 @@ func validatePublicName(name string) error {
 	if label == "" || strings.Contains(label, ".") {
 		return fmt.Errorf("public name %q is not one label below %s", name, PublicDomain)
 	}
-	if label == "mesh" {
+	if ReservedLabel(label) {
 		return fmt.Errorf("public name %q is reserved for private naming", name)
 	}
 	for _, label := range strings.Split(name, ".") {

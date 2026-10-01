@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # Exercise the shipped daemon with stock OpenSSH, including identity selection,
 # listener scope, shutdown, and worker survival.
 set -uo pipefail
@@ -17,6 +18,7 @@ session_id=
 session_pid=
 
 cleanup() {
+  local test_status=$?
   [[ -z $session_id ]] || MESH_STATE_DIR="$server_state" "$MESH" kill "$session_id" >/dev/null 2>&1 || true
   for pid in "$ssh_pid" "$client_pid" "$daemon_pid"; do
     [[ -z $pid ]] || kill -9 "$pid" 2>/dev/null || true
@@ -24,7 +26,7 @@ cleanup() {
   for pid in "$ssh_pid" "$client_pid" "$daemon_pid"; do
     [[ -z $pid ]] || wait "$pid" 2>/dev/null || true
   done
-  rm -rf -- "$test_root"
+  finish_fixture_cleanup "$server_state" "$test_root" "$test_status"
 }
 trap cleanup EXIT
 

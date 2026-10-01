@@ -230,21 +230,28 @@ func TestViewTicketScopeReplayRevocationAndRestart(t *testing.T) {
 	s, store, _ := fixture(t)
 	ctx := context.Background()
 	cookie, session := pair(t, s, "owner-a")
-	if _, err := s.IssueView(ctx, request(cookie), "owner-b", "abcd"); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("wrong owner issue: %v", err)
-	}
-	ticket, err := s.IssueView(ctx, request(cookie), "owner-a", "abcd")
+	nonceResponse := httptest.NewRecorder()
+	nonceHash, err := s.BeginView(nonceResponse)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.ConsumeView(ctx, httptest.NewRecorder(), request(), ticket, "efgh"); !errors.Is(err, ErrUnauthorized) {
+	nonceCookie := namedCookie(t, nonceResponse, ViewNonceCookie)
+	consumeRequest := request(nonceCookie)
+	if _, err := s.IssueView(ctx, request(cookie), "owner-b", "abcd", nonceHash); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("wrong owner issue: %v", err)
+	}
+	ticket, err := s.IssueView(ctx, request(cookie), "owner-a", "abcd", nonceHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ConsumeView(ctx, httptest.NewRecorder(), consumeRequest, ticket, "efgh"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("wrong app consume: %v", err)
 	}
 	w := httptest.NewRecorder()
-	if err = s.ConsumeView(ctx, w, request(), ticket, "abcd"); err != nil {
+	if err = s.ConsumeView(ctx, w, consumeRequest, ticket, "abcd"); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.ConsumeView(ctx, httptest.NewRecorder(), request(), ticket, "abcd"); !errors.Is(err, ErrUnauthorized) {
+	if err = s.ConsumeView(ctx, httptest.NewRecorder(), consumeRequest, ticket, "abcd"); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("view ticket replay: %v", err)
 	}
 	view := namedCookie(t, w, ViewCookie)
