@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 set -euo pipefail
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/mesh-client-signal.XXXXXX")
