@@ -20,7 +20,6 @@ import (
 	"github.com/spf13/cobra"
 
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
-	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/procmem"
 	"github.com/shaul/mesh/internal/protocol"
@@ -424,9 +423,13 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 	if err != nil {
 		return fmt.Errorf("locate picker state directory: %w", err)
 	}
-	cache, err := OpenCatalogCache(cmd.Context())
-	if err != nil {
-		return err
+	hosts, _ = withoutThisHost(stateDir, hosts)
+	cache := &SQLiteCatalogCache{}
+	if len(hosts) > 0 {
+		cache, err = OpenCatalogCache(cmd.Context())
+		if err != nil {
+			return err
+		}
 	}
 	defer cache.Close() //nolint:errcheck // command result takes precedence
 	refreshSessions := func(ctx context.Context, alias string) (HostSessions, error) {
@@ -1911,8 +1914,8 @@ func localSessionRowsMeasured(memory procmem.Table) ([]protocol.SessionInfo, err
 	if err != nil {
 		return nil, fmt.Errorf("locate local catalog state directory: %w", err)
 	}
-	host, err := identity.Load(stateDir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	host, err := existingLocalIdentity(stateDir)
+	if err != nil {
 		return nil, fmt.Errorf("load local catalog identity: %w", err)
 	}
 	rows := make([]protocol.SessionInfo, 0, len(sessions))

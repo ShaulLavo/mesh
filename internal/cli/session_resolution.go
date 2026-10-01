@@ -1,10 +1,8 @@
 package cli
 
-import "github.com/shaul/mesh/internal/identity"
-
 func withoutThisHost(stateDir string, hosts []HostRecord) ([]HostRecord, string) {
-	self, err := identity.Load(stateDir)
-	if err != nil {
+	self, err := existingLocalIdentity(stateDir)
+	if err != nil || self.ID == "" {
 		return hosts, localHostAlias
 	}
 	alias := localHostAlias
