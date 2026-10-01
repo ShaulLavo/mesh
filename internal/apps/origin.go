@@ -10,6 +10,7 @@ import (
 	"fmt"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -131,11 +133,14 @@ type Origin struct {
 	// exchange is a one-slot lock on signed edge exchanges, because the edge
 	// accepts one pending sequence per owner. Waiting for it honours the
 	// caller's context. Take it before mu, never after.
-	exchange chan struct{}
-	routes   atomic.Pointer[map[string]appRoute]
+	exchange   chan struct{}
+	routes     atomic.Pointer[map[string]appRoute]
+	downloadMu sync.Mutex
 	// serving is guarded by mu and published with the routes.
-	serving     map[string]serving
-	downloadMu  sync.Mutex
+	serving map[string]serving
+	// downloads are the source snapshots CLI downloads read, by app ID;
+	// guarded by mu.
+	downloads   map[string][]*downloadArchive
 	config      OriginConfig
 	identity    string
 	admissionMu sync.Mutex
@@ -150,13 +155,130 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, serving: map[string]serving{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}}
+	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, serving: map[string]serving{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}, downloads: map[string][]*downloadArchive{}}
 	if err := load(ctx, c.Store, "apps.origin", &o.state); err != nil {
 		return nil, err
 	}
 	o.publishRoutes()
+	o.sweepStaging()
 	context.AfterFunc(ctx, o.Close)
 	return o, nil
+}
+
+// sweepStaging removes staging trees whose origin died between unpacking and
+// the rename. Origins with separate state can share one workload root, so a
+// tree is removed only if its lock can be taken: the kernel drops a dead
+// owner's lock, and a live owner keeps it. It is best effort; whatever stays
+// is retried on the next start.
+func (o *Origin) sweepStaging() {
+	uploads, err := o.openUploads()
+	if err != nil {
+		return
+	}
+	defer func() { _ = uploads.Close() }()
+	entries, err := fs.ReadDir(uploads.FS(), ".")
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "staging-") {
+			continue
+		}
+		dir, err := lockDir(uploads, entry.Name(), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err != nil {
+			continue
+		}
+		_ = uploads.RemoveAll(entry.Name())
+		_ = dir.Close()
+	}
+}
+
+// openUploads opens the upload directory through the workload root and refuses
+// a symlink there, so staging is never created or swept anywhere else.
+func (o *Origin) openUploads() (*os.Root, error) {
+	root, err := os.OpenRoot(o.config.DataRoot)
+	if err != nil {
+		return nil, fmt.Errorf("app: open workload root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Lstat("uploads")
+	if err != nil {
+		return nil, fmt.Errorf("app: inspect uploads: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, errors.New("app: uploads is not a directory")
+	}
+	uploads, err := root.OpenRoot("uploads")
+	if err != nil {
+		return nil, fmt.Errorf("app: open uploads: %w", err)
+	}
+	return uploads, nil
+}
+
+// heldStaging is a staging directory this origin holds locked until release.
+type heldStaging struct {
+	path string
+	dir  *os.File
+}
+
+func (h *heldStaging) release() {
+	if h.dir != nil {
+		_ = h.dir.Close()
+		h.dir = nil
+	}
+}
+
+// lockStaging creates a staging directory and locks it. A sweep may take a
+// fresh directory before its creator locks it; the creator then finds it gone
+// and tries another name.
+func (o *Origin) lockStaging() (*heldStaging, error) {
+	uploads, err := o.openUploads()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = uploads.Close() }()
+	for range 8 {
+		token, err := RandomToken()
+		if err != nil {
+			return nil, err
+		}
+		name := "staging-" + token[:16]
+		if err := uploads.Mkdir(name, 0700); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				continue
+			}
+			return nil, fmt.Errorf("app: create staging: %w", err)
+		}
+		dir, err := lockDir(uploads, name, syscall.LOCK_EX)
+		if errors.Is(err, errStagingGone) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &heldStaging{path: filepath.Join(o.config.DataRoot, "uploads", name), dir: dir}, nil
+	}
+	return nil, errors.New("app: could not hold a staging directory")
+}
+
+var errStagingGone = errors.New("app: staging directory was removed")
+
+// lockDir locks a directory under root by its own descriptor, then checks the
+// name still refers to it: it may have been removed or replaced meanwhile.
+func lockDir(root *os.Root, name string, how int) (*os.File, error) {
+	dir, err := root.Open(name)
+	if err != nil {
+		return nil, errors.Join(errStagingGone, err)
+	}
+	if err := syscall.Flock(int(dir.Fd()), how); err != nil {
+		return nil, errors.Join(fmt.Errorf("app: lock staging %s: %w", name, err), dir.Close())
+	}
+	current, err := root.Lstat(name)
+	held, heldErr := dir.Stat()
+	if err != nil || heldErr != nil || !os.SameFile(current, held) {
+		return nil, errors.Join(errStagingGone, dir.Close())
+	}
+	return dir, nil
 }
 
 // persist requires mu.
@@ -206,6 +328,11 @@ func cachedAppRoute(app localApp, old appRoute, upstream netip.AddrPort) appRout
 }
 
 func (o *Origin) Close() {
+	o.mu.Lock()
+	for id := range o.downloads {
+		o.releaseDownloadsLocked(id)
+	}
+	o.mu.Unlock()
 	if routes := o.routes.Load(); routes != nil {
 		for _, route := range *routes {
 			if route.Handler != nil && route.Handler.transport != nil {
@@ -520,8 +647,11 @@ func (o *Origin) appendUpload(ctx context.Context, q Request) (Result, error) {
 	if !ok || !o.config.Now().Before(u.ExpiresAt) {
 		return Result{}, errors.New("app: upload not found or expired")
 	}
-	if len(q.Data) > ChunkSize || q.Offset < 0 || q.Offset+int64(len(q.Data)) > MaxArchive {
+	if len(q.Data) > ChunkSize || q.Offset < 0 {
 		return Result{}, errors.New("app: upload chunk exceeds limit")
+	}
+	if q.Offset+int64(len(q.Data)) > MaxArchive {
+		return Result{}, ErrArchiveTooLarge
 	}
 	f, err := os.OpenFile(o.uploadPath(u.ID), os.O_RDWR, 0600)
 	if err != nil {
@@ -792,12 +922,22 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	if err := o.admitRecipe(q); err != nil {
 		return Result{}, err
 	}
-	staging := filepath.Join(o.config.DataRoot, "uploads", "source-"+q.UploadID)
-	if err := os.MkdirAll(staging, 0700); err != nil {
-		return Result{}, err
+	// An unpredictable name cannot collide with staging a crash left behind, and
+	// nothing can be planted in advance where unpack writes.
+	held, err := o.lockStaging()
+	if err != nil {
+		return Result{}, fmt.Errorf("app: stage upload %s: %w", q.UploadID, err)
 	}
+	staging := held.path
+	// Every exit removes the staging until the rename hands it to the app, and
+	// removes it before giving up the lock, so no sweep races the removal.
+	defer func() {
+		if staging != "" {
+			_ = os.RemoveAll(staging)
+		}
+		held.release()
+	}()
 	if err := unpack(o.uploadPath(q.UploadID), staging, q.Digest); err != nil {
-		_ = os.RemoveAll(staging)
 		return Result{}, err
 	}
 	var local, previous localApp
@@ -809,7 +949,6 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	}
 	defer releaseApp()
 	if err != nil {
-		_ = os.RemoveAll(staging)
 		return Result{}, err
 	}
 	app, workspace := local.Record, local.Root
@@ -844,12 +983,13 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		err = os.Rename(staging, workspace)
 	}
 	if err != nil && q.Action == "create" {
-		_ = os.RemoveAll(staging)
 		return Result{}, o.failCreate(ctx, app.ID, err)
 	}
 	if err != nil {
 		return Result{}, err
 	}
+	staging = ""
+	held.release()
 	if q.Setup != "" {
 		if err := validateDataRoot(workspace); err != nil {
 			return fail(err)
@@ -1100,6 +1240,10 @@ func (o *Origin) cleanup(ctx context.Context, id string) error {
 	if !ValidID(id) {
 		return errors.New("app: invalid cleanup id")
 	}
+	// The snapshots hold the source being deleted.
+	o.mu.Lock()
+	o.releaseDownloadsLocked(id)
+	o.mu.Unlock()
 	if err := o.stop(ctx, id); err != nil {
 		return err
 	}
@@ -1131,6 +1275,7 @@ func (o *Origin) cleanup(ctx context.Context, id string) error {
 // own: safety work first, recovery second. A failing or slow app is reported
 // with the others instead of holding them back.
 func (o *Origin) Sync(ctx context.Context) error {
+	o.expireDownloads()
 	records, err := o.renewLeases(ctx)
 	// Safety work must run even when the caller's budget is spent, because that
 	// is exactly when a silent edge lets leases lapse.
@@ -1451,13 +1596,42 @@ func (o *Origin) expireUploads(ctx context.Context) error {
 	}
 	return o.persist(ctx)
 }
-func packArchive(ctx context.Context, root, archive string) error {
-	f, err := os.Create(archive) //nolint:gosec // The archive is inside the looked-up app managed workspace.
+
+// downloadArchive is a snapshot of one app source that CLI downloads read a
+// chunk per request. Requests carry no transfer identity, so every download of
+// the same source shares the snapshot, and a reader finishing never closes it:
+// only idle time, the app's deletion or the origin closing does.
+type downloadArchive struct {
+	source   string
+	file     *os.File
+	lastRead time.Time
+}
+
+// downloadIdle is how long a snapshot stays without a chunk read.
+const downloadIdle = 5 * time.Minute
+
+// maxAppDownloads bounds the snapshots kept per app: one for the current
+// source and one for a revision a transfer started before an update. Past it
+// the least recently read one is closed. A reader still on it is then served
+// another snapshot's bytes, which the CLI's archive check refuses, so that
+// download fails and asks to be run again rather than saving a mixed archive.
+const maxAppDownloads = 2
+
+// packUnnamed packs an app's source into a file unlinked as soon as it exists.
+// The random name is created exclusively, so a planted symlink or hard link is
+// never written through, and no exit or crash can leave the archive behind.
+func (o *Origin) packUnnamed(ctx context.Context, id, root string) (*os.File, error) {
+	f, err := os.CreateTemp(filepath.Join(o.config.DataRoot, "apps", id), ".download-*")
 	if err != nil {
-		return fmt.Errorf("app: create download archive: %w", err)
+		return nil, fmt.Errorf("app %s: create download archive: %w", id, err)
 	}
-	_, packErr := Pack(ctx, root, f)
-	return errors.Join(packErr, f.Close())
+	if err := os.Remove(f.Name()); err != nil {
+		return nil, errors.Join(fmt.Errorf("app %s: unlink download archive: %w", id, err), f.Close())
+	}
+	if _, err := Pack(ctx, root, f); err != nil {
+		return nil, errors.Join(fmt.Errorf("app %s: pack download: %w", id, err), f.Close())
+	}
+	return f, nil
 }
 func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 	if q.Offset < 0 || q.Offset > MaxArchive {
@@ -1478,23 +1652,104 @@ func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 	if err != nil || result.App.Status != "active" {
 		return Result{}, errors.Join(err, errors.New("app: app expired"))
 	}
-	archive := filepath.Join(o.config.DataRoot, "apps", q.ID, "download.tar.gz")
 	if q.Offset == 0 {
-		if err := packArchive(ctx, a.Root, archive); err != nil {
+		if err := o.snapshotDownload(ctx, q.ID, a.Root); err != nil {
 			return Result{}, err
 		}
 	}
-	f, err := os.Open(archive) //nolint:gosec // The archive is inside the looked-up app managed workspace.
-	if err != nil {
-		return Result{}, err
+	return o.readDownload(q.ID, a.Root, q.Offset)
+}
+
+// snapshotDownload makes sure a snapshot of the app's current source exists,
+// reusing one another download still reads. The caller owns the app.
+func (o *Origin) snapshotDownload(ctx context.Context, id, source string) error {
+	o.mu.Lock()
+	for _, d := range o.downloads[id] {
+		if d.source == source {
+			o.mu.Unlock()
+			return nil
+		}
 	}
-	defer func() { _ = f.Close() }()
+	o.mu.Unlock()
+	f, err := o.packUnnamed(ctx, id, source)
+	if err != nil {
+		return err
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.downloads[id] = append(o.downloads[id], &downloadArchive{source: source, file: f, lastRead: o.config.Now()})
+	kept := o.downloads[id]
+	for len(kept) > maxAppDownloads {
+		oldest := 0
+		for i, d := range kept {
+			if d.lastRead.Before(kept[oldest].lastRead) {
+				oldest = i
+			}
+		}
+		_ = kept[oldest].file.Close()
+		kept = slices.Delete(kept, oldest, oldest+1)
+	}
+	o.downloads[id] = kept
+	return nil
+}
+
+// readDownload returns one chunk from the snapshot of the app's current
+// source, or from the most recently read one when the source changed since
+// the transfer began. The caller owns the app.
+func (o *Origin) readDownload(id, source string, offset int64) (Result, error) {
+	o.mu.Lock()
+	var d *downloadArchive
+	for _, candidate := range o.downloads[id] {
+		if candidate.source == source || d == nil || (d.source != source && candidate.lastRead.After(d.lastRead)) {
+			d = candidate
+		}
+	}
+	if d != nil {
+		d.lastRead = o.config.Now()
+	}
+	o.mu.Unlock()
+	if d == nil {
+		return Result{}, fmt.Errorf("app %s: download expired; start it again", id)
+	}
 	b := make([]byte, ChunkSize)
-	n, err := f.ReadAt(b, q.Offset)
+	n, err := d.file.ReadAt(b, offset)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return Result{}, err
+		return Result{}, fmt.Errorf("app %s: read download: %w", id, err)
 	}
 	return Result{Data: b[:n], Done: errors.Is(err, io.EOF) || n < ChunkSize}, nil
+}
+
+// releaseDownloadsLocked closes an app's snapshots; it requires mu.
+func (o *Origin) releaseDownloadsLocked(id string) {
+	for _, d := range o.downloads[id] {
+		_ = d.file.Close()
+	}
+	delete(o.downloads, id)
+}
+
+// expireDownloads closes snapshots no download has read for downloadIdle. It
+// needs no edge, so Sync runs it whether or not the edge answered.
+func (o *Origin) expireDownloads() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for id, list := range o.downloads {
+		if o.ops["app "+id] != nil {
+			continue
+		}
+		kept := list[:0]
+		for _, d := range list {
+			if o.config.Now().Before(d.lastRead.Add(downloadIdle)) {
+				kept = append(kept, d)
+			} else {
+				_ = d.file.Close()
+			}
+		}
+		if len(kept) == 0 {
+			delete(o.downloads, id)
+		} else {
+			o.downloads[id] = kept
+		}
+	}
 }
 
 // The edge permits 32 active apps per owner. A second generation of caches lets
@@ -1676,21 +1931,14 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (o *Origin) configCheckSourceDownload(w http.ResponseWriter, r *http.Request, app appRoute) error {
-	filename := filepath.Join(o.config.DataRoot, "apps", app.Record.ID, "browser-download.tar.gz")
-	f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600) //nolint:gosec // Fixed owner-download archive inside the looked-up app workspace.
-	if err != nil {
-		return err
-	}
-	_, packErr := Pack(r.Context(), app.Root, f)
-	if closeErr := f.Close(); packErr != nil || closeErr != nil {
-		return errors.Join(packErr, closeErr)
-	}
-	defer func() { _ = os.Remove(filename) }()
-	f, err = os.Open(filename) //nolint:gosec // Fixed owner-download archive inside the looked-up app workspace.
+	f, err := o.packUnnamed(r.Context(), app.Record.ID, app.Root)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("app %s: rewind download: %w", app.Record.ID, err)
+	}
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Cache-Control", "no-store")
 	_, err = io.Copy(w, f)

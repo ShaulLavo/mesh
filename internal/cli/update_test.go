@@ -45,7 +45,7 @@ func updateTestRelease(t *testing.T) (release.Client, *atomic.Int32) {
 
 func setupUpdateCLI(t *testing.T) (string, update.Host) {
 	t.Helper()
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	t.Setenv("MESH_STATE_DIR", stateDir)
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	host, _, err := identity.LoadOrCreate(stateDir)

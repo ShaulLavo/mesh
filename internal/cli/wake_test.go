@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"os"
 	"strings"
 	"testing"
 
@@ -128,11 +127,7 @@ func TestWakePermissionCommandsOnlyConfigureTheLocalDaemon(t *testing.T) {
 
 func testWakePermissionCommand(t *testing.T, allowed bool) {
 	t.Helper()
-	stateDir, err := os.MkdirTemp("", "mesh-wake-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(stateDir) //nolint:errcheck // test resource cleanup
+	stateDir := compactSocketTempDir(t)
 	t.Setenv("MESH_STATE_DIR", stateDir)
 	listener, err := net.Listen("unix", meshdaemon.SocketPath(stateDir))
 	if err != nil {
@@ -188,11 +183,7 @@ func testWakePermissionCommand(t *testing.T, allowed bool) {
 // A grant is a promise that the host wakes. When the NIC cannot be armed there
 // is nothing to promise, so the daemon must never be asked for one.
 func TestWakeAllowDoesNotGrantWhenTheNICCannotBeArmed(t *testing.T) {
-	stateDir, err := os.MkdirTemp("", "mesh-wake-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(stateDir) //nolint:errcheck // test resource cleanup
+	stateDir := compactSocketTempDir(t)
 	t.Setenv("MESH_STATE_DIR", stateDir)
 	listener, err := net.Listen("unix", meshdaemon.SocketPath(stateDir))
 	if err != nil {

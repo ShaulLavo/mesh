@@ -18,7 +18,7 @@ import (
 )
 
 func TestQueryContainingSessionWorkerReturnsExactNestedPath(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "7K3D")
+	dir := filepath.Join(compactSocketTempDir(t), "7K3D")
 	if err := mkdirPrivate(dir); err != nil {
 		t.Fatal(err)
 	}

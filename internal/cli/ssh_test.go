@@ -17,7 +17,7 @@ import (
 )
 
 func TestSSHListUsesConfiguredDaemonWithoutTerminal(t *testing.T) {
-	t.Setenv("MESH_STATE_DIR", t.TempDir())
+	t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
 	socket, done := startDaemonCreateServer(t, func(conn transport.Conn, request protocol.Control) error {
 		if request.Type != protocol.TypeList {
 			return fmt.Errorf("unexpected request %s", request.Type)
@@ -69,7 +69,7 @@ func TestSSHCreateUsesClientTerminalAndFreshNesting(t *testing.T) {
 }
 
 func TestSSHRejectsRemotePickerOperations(t *testing.T) {
-	app := sshApplication{socket: filepath.Join(t.TempDir(), "missing.sock")}
+	app := sshApplication{socket: filepath.Join(compactSocketTempDir(t), "missing.sock")}
 	_, err := app.inspect(t.Context(), PickerInspectRequest{HostAlias: "pc", SessionID: "7K3D"})
 	if err == nil || !strings.Contains(err.Error(), "only this host") {
 		t.Fatalf("remote inspection = %v", err)
