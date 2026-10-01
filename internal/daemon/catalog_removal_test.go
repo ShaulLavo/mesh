@@ -22,14 +22,14 @@ type removalRaceStore struct {
 	pause   sync.Once
 }
 
-func (s *removalRaceStore) ReconcileHost(ctx context.Context, host storage.Host, observed []storage.Session) error {
+func (s *removalRaceStore) ApplyHostChanges(ctx context.Context, host storage.HostID, changes storage.HostChanges) error {
 	if s.scanned != nil {
 		s.pause.Do(func() {
 			close(s.scanned)
 			<-s.publish
 		})
 	}
-	if err := s.Store.ReconcileHost(ctx, host, observed); err != nil {
+	if err := s.Store.ApplyHostChanges(ctx, host, changes); err != nil {
 		return fmt.Errorf("publish reconciliation snapshot: %w", err)
 	}
 	return nil
@@ -79,6 +79,10 @@ func TestCatalogRemovalCannotBeUndoneByAnInFlightScan(t *testing.T) {
 		probeFunc(func(context.Context, string) error { return syscall.ENOENT }),
 		func() string { return "boot-a" })
 	if err := catalog.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	meta.Cwd = root
+	if err := worker.WriteMeta(filepath.Join(root, meta.ID), meta); err != nil {
 		t.Fatal(err)
 	}
 	paused.scanned, paused.publish = make(chan struct{}), make(chan struct{})

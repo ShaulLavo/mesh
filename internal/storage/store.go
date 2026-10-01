@@ -226,21 +226,9 @@ func (s *Store) ReconcileHost(ctx context.Context, host Host, observed []Session
 		return err
 	}
 	hostID := host.ID
-	params := make([]dbsqlc.UpsertSessionParams, 0, len(observed))
-	seen := make(map[SessionID]struct{}, len(observed))
-	for _, session := range observed {
-		if session.HostID != hostID {
-			return fmt.Errorf("storage: reconcile host %s: session %s belongs to host %s", hostID, session.ID, session.HostID)
-		}
-		if _, ok := seen[session.ID]; ok {
-			return fmt.Errorf("storage: reconcile host %s: duplicate session %s", hostID, session.ID)
-		}
-		seen[session.ID] = struct{}{}
-		p, err := sessionParams(session)
-		if err != nil {
-			return fmt.Errorf("storage: reconcile host %s: %w", hostID, err)
-		}
-		params = append(params, p)
+	params, err := sessionChangeParams(hostID, observed)
+	if err != nil {
+		return err
 	}
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})

@@ -30,7 +30,11 @@ type Catalog struct {
 	bootID      func() string
 	now         func() time.Time
 	onReconcile func([]storage.Session)
+	onChange    func(SessionDiff)
 
+	previous      map[storage.SessionID]storage.Session
+	lastSeenAt    time.Time
+	persistedAt   time.Time
 	reconcileGate chan struct{}
 }
 
@@ -50,6 +54,7 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		bootID:        cfg.BootID,
 		now:           cfg.Now,
 		onReconcile:   cfg.OnReconcile,
+		onChange:      cfg.OnChange,
 		reconcileGate: make(chan struct{}, 1),
 	}, nil
 }
@@ -79,21 +84,31 @@ func (c *Catalog) Reconcile(ctx context.Context) error {
 	if host.LastSeenAt.IsZero() || host.LastSeenAt.UnixMilli() < 0 {
 		return fmt.Errorf("daemon: reconcile host %s: clock returned invalid observation time", host.ID)
 	}
-	observed, retired := c.retireFinishedSessions(observed)
-	if err := c.store.ReconcileHost(ctx, host, observed); err != nil {
-		return fmt.Errorf("daemon: reconcile host %s sessions: %w", c.host.ID, err)
+	if err := c.loadPrevious(ctx); err != nil {
+		return err
 	}
+	observed, retired := c.retireFinishedSessions(observed)
+	next, changes, diff := c.sessionChanges(observed, retired)
+	c.lastSeenAt = host.LastSeenAt
+	if c.persistedAt.IsZero() || host.LastSeenAt.Sub(c.persistedAt) >= hostPersistenceInterval {
+		changes.Host = &host
+	}
+	if changes.Host != nil || len(changes.Sessions) > 0 || len(changes.Retired) > 0 {
+		if err := c.store.ApplyHostChanges(ctx, c.host.ID, changes); err != nil {
+			return fmt.Errorf("daemon: reconcile host %s sessions: %w", c.host.ID, err)
+		}
+	}
+	c.previous = next
+	if changes.Host != nil {
+		c.persistedAt = host.LastSeenAt
+	}
+	c.publishDiff(diff)
 	if c.onReconcile != nil {
 		c.onReconcile(observed)
 	}
-	if len(retired) > 0 {
-		if _, err := c.store.RetireSessions(ctx, c.host.ID, retired); err != nil {
-			return fmt.Errorf("daemon: retire session rows for host %s: %w", c.host.ID, err)
-		}
-		for _, id := range retired {
-			if err := removeUnclaimedRetiredSession(filepath.Join(c.sessionsDir, string(id))); err != nil {
-				log.Printf("daemon: retire session %s directory: %v", id, err)
-			}
+	for _, id := range retired {
+		if err := removeUnclaimedRetiredSession(filepath.Join(c.sessionsDir, string(id))); err != nil {
+			log.Printf("daemon: retire session %s directory: %v", id, err)
 		}
 	}
 	return nil
@@ -536,6 +551,8 @@ func (c *Catalog) Remove(ctx context.Context, id storage.SessionID) error {
 	if removed == 0 {
 		return fmt.Errorf("daemon: session %s was not removed; it may have restarted", id)
 	}
+	delete(c.previous, id)
+	c.publishDiff(SessionDiff{Removed: []storage.SessionID{id}})
 	if err := os.RemoveAll(filepath.Join(c.sessionsDir, string(id))); err != nil {
 		return fmt.Errorf("daemon: remove session directory %s: %w", id, err)
 	}
