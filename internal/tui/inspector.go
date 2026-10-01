@@ -144,7 +144,8 @@ func (m *model) inspectSelected() tea.Cmd {
 		return nil
 	}
 
-	if previous.target == target && previous.hasValue {
+	// Live observations cannot fill a saved preview after the session ends.
+	if previous.target == target && previous.hasValue && (previous.value.Recovery != nil) == endedSession(current) {
 		next.kind = inspectionReady
 		next.value = previous.value
 		next.receivedAt = previous.receivedAt
