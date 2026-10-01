@@ -12,6 +12,7 @@ import tempfile
 
 sys.dont_write_bytecode = True
 from terminal_window import run_outside_containing_session, Fixture, Terminal, eventually, require
+from failed_fixture import owned_processes, retain_evidence, stop_owned
 
 
 # Real shell startup and prompt hooks share CPU with every parallel integration.
@@ -26,12 +27,32 @@ def checkpoint(fixture, session_id):
 
 
 def exercise(binary, shell, mode):
-    with tempfile.TemporaryDirectory(prefix="mesh-shell-recovery-") as directory:
-        fixture = Fixture(binary, directory)
+    directory = tempfile.mkdtemp(prefix="mesh-shell-recovery-")
+    fixture = Fixture(binary, directory)
+    failed = False
+    try:
+        run_shell(fixture, shell, mode)
+    except BaseException:
+        failed = True
+        retain_evidence(fixture)
+        raise
+    finally:
+        captured = owned_processes(fixture.root, fixture.binary)
         try:
-            run_shell(fixture, shell, mode)
-        finally:
             fixture.close()
+        except BaseException:
+            failed = True
+            retain_evidence(fixture)
+            raise
+        finally:
+            try:
+                stop_owned(fixture.root, fixture.binary, captured)
+            except BaseException:
+                failed = True
+                retain_evidence(fixture)
+                raise
+            if not failed:
+                shutil.rmtree(directory)
 
 
 def run_shell(fixture, shell, mode):
