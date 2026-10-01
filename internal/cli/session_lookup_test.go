@@ -180,3 +180,41 @@ waiting:
 		t.Errorf("total probes = %d, want 20", got)
 	}
 }
+
+func TestFindNormalizesIDsAndIgnoresDirectorySymlinks(t *testing.T) {
+	setupCommandTestHost(t)
+	writeLocalSessionDir(t, "7K3D", worker.StateDetached)
+	dir, err := paths.SessionDir("7K3D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probes atomic.Int32
+	setWorkerProbe(t, func(string) error { probes.Add(1); return nil })
+	current, err := Find("7k3d")
+	if err != nil || current.ID != "7K3D" || probes.Load() != 1 {
+		t.Fatalf("lowercase Find = %+v, %v, probes = %d", current, err, probes.Load())
+	}
+	link, err := paths.SessionDir("91AZ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Find("91AZ"); !errors.Is(err, ErrNoLocalSession) || probes.Load() != 1 {
+		t.Fatalf("directory symlink error = %v, probes = %d", err, probes.Load())
+	}
+}
+
+func TestFindKeepsDirectoryFailuresDistinctFromMissingSessions(t *testing.T) {
+	setupCommandTestHost(t)
+	stateFile := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(stateFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MESH_STATE_DIR", stateFile)
+	_, err := Find("7K3D")
+	if err == nil || errors.Is(err, ErrNoLocalSession) {
+		t.Fatalf("invalid state directory error = %v, want a directory failure", err)
+	}
+}
