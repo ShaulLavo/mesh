@@ -63,7 +63,11 @@ catalog without changing this baseline's full-list request. `build.sh` captures
 production compilation-input hashes before and after building, and fails if they
 change. Its receipt records executable SHA256, all embedded build settings
 (including target, flags and VCS dirty status), compiler, profiling overlay
-identity, actual production-input manifest and separate harness revision.
+identity, actual production-input manifest and separate build-harness revision.
+Each run also hashes its actually executed Python scripts and records their
+checkout revision and dirty status when available; copied scripts keep that exact content hash
+even on a host with no checkout. Reusing a binary therefore preserves its build
+provenance while identifying the measurement harness separately.
 `run.py` checks the actual binary against this receipt before opening a scratch
 daemon. The Pi launchers verify again after copying; the Pi needs only Python.
 Optional `--commit` and `--go-version` assertions must match verified production

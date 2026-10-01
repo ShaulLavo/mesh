@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 
-from receipt import inspect_binary, verify_receipt
+from receipt import digest, inspect_binary, verify_receipt
 
 HERE = Path(__file__).resolve().parent
 
@@ -505,6 +505,21 @@ def summary(result):
     return "\n".join(lines) + "\n"
 
 
+def measurement_harness():
+    files = {name: digest((HERE / name).read_bytes()) for name in ("run.py", "workload.py", "receipt.py")}
+    revision = None
+    dirty = None
+    try:
+        revision = subprocess.check_output(["git", "-C", str(HERE), "rev-parse", "HEAD"],
+                                           stderr=subprocess.DEVNULL).decode().strip()
+        dirty = bool(subprocess.check_output(["git", "-C", str(HERE), "status", "--porcelain", "--", *files],
+                                             stderr=subprocess.DEVNULL))
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return {"checkout_revision": revision, "checkout_dirty": dirty, "files": files,
+            "sha256": digest(json.dumps(files, sort_keys=True).encode())}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -540,7 +555,8 @@ def main():
                            "kernel": platform.release(),
                            "production_source_revision": receipt["embedded_vcs_revision"] if receipt["production_equivalent_to_vcs_revision"] else None,
                            "embedded_vcs_revision": receipt["embedded_vcs_revision"],
-                           "harness_revision": receipt["harness_revision"],
+                           "build_harness_revision": receipt["harness_revision"],
+                           "measurement_harness": measurement_harness(),
                            "go_version": receipt["binary"]["go_version"], "build_receipt": receipt, "unix_transport": True,
                            "idle_seconds_requested": args.idle_seconds,
                            "settle_seconds": args.settle_seconds, "list_fields": args.list_fields,

@@ -16,6 +16,15 @@ spec.loader.exec_module(bench)
 
 
 class HarnessTests(unittest.TestCase):
+    def test_measurement_harness_identifies_executed_scripts(self):
+        import hashlib
+        observed = bench.measurement_harness()
+        for name in ("run.py", "workload.py", "receipt.py"):
+            expected = hashlib.sha256((bench.HERE / name).read_bytes()).hexdigest()
+            self.assertEqual(observed["files"][name], expected)
+        expected = hashlib.sha256(json.dumps(observed["files"], sort_keys=True).encode()).hexdigest()
+        self.assertEqual(observed["sha256"], expected)
+
     def test_fragmented_frame_and_control(self):
         left, right = socket.socketpair()
         with left, right:
