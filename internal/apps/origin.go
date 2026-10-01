@@ -10,6 +10,7 @@ import (
 	"fmt"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -139,7 +140,29 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 		return nil, err
 	}
 	o.publishRoutes()
+	o.sweepStaging()
 	return o, nil
+}
+
+// sweepStaging removes extracted trees a crash left between unpacking and the
+// rename into an app. Uploads holds only archives besides staging, and nothing
+// stages before this origin exists, so every directory there is left over. It
+// is best effort; whatever stays is retried on the next start.
+func (o *Origin) sweepStaging() {
+	root, err := os.OpenRoot(filepath.Join(o.config.DataRoot, "uploads"))
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			_ = root.RemoveAll(entry.Name())
+		}
+	}
 }
 
 // persist requires mu.
@@ -734,12 +757,19 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	if err := o.admitRecipe(q); err != nil {
 		return Result{}, err
 	}
-	staging := filepath.Join(o.config.DataRoot, "uploads", "source-"+q.UploadID)
-	if err := os.MkdirAll(staging, 0700); err != nil {
-		return Result{}, err
+	// An unpredictable name cannot collide with staging a crash left behind, and
+	// nothing can be planted in advance where unpack writes.
+	staging, err := os.MkdirTemp(filepath.Join(o.config.DataRoot, "uploads"), "staging-")
+	if err != nil {
+		return Result{}, fmt.Errorf("app: stage upload %s: %w", q.UploadID, err)
 	}
+	// Every exit removes the staging until the rename hands it to the app.
+	defer func() {
+		if staging != "" {
+			_ = os.RemoveAll(staging)
+		}
+	}()
 	if err := unpack(o.uploadPath(q.UploadID), staging, q.Digest); err != nil {
-		_ = os.RemoveAll(staging)
 		return Result{}, err
 	}
 	var local, previous localApp
@@ -751,7 +781,6 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	}
 	defer releaseApp()
 	if err != nil {
-		_ = os.RemoveAll(staging)
 		return Result{}, err
 	}
 	app, workspace := local.Record, local.Root
@@ -786,12 +815,12 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		err = os.Rename(staging, workspace)
 	}
 	if err != nil && q.Action == "create" {
-		_ = os.RemoveAll(staging)
 		return Result{}, o.failCreate(ctx, app.ID, err)
 	}
 	if err != nil {
 		return Result{}, err
 	}
+	staging = ""
 	if q.Setup != "" {
 		if err := validateDataRoot(workspace); err != nil {
 			return fail(err)
@@ -1311,6 +1340,7 @@ func (o *Origin) expireUploads(ctx context.Context) error {
 	}
 	return o.persist(ctx)
 }
+
 func packArchive(ctx context.Context, root, archive string) error {
 	f, err := os.Create(archive) //nolint:gosec // The archive is inside the looked-up app managed workspace.
 	if err != nil {
