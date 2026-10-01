@@ -263,8 +263,15 @@ func (l *lifecycle) create(ctx context.Context, request protocol.Control) (proto
 	return protocol.Control{Type: protocol.TypeCreated, RequestID: request.RequestID, SessionID: id}, nil
 }
 
+// publicationError is a creation whose worker launched and is ready but which
+// the catalog has not recorded yet. Its next reconcile lists the session.
+type publicationError struct{ err error }
+
+func (e publicationError) Error() string { return e.err.Error() }
+func (e publicationError) Unwrap() error { return e.err }
+
 // createSession returns the launched session's ID even when a later step
-// fails: that worker is running, and whoever asked for it owns it.
+// fails: that worker may be running, and whoever asked for it owns it.
 func (l *lifecycle) createSession(ctx context.Context, requestType, requestID string, wanted creationRequest) (string, error) {
 	created, owner, err := l.creation(requestID, wanted)
 	if err != nil {
@@ -302,7 +309,12 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 		}
 	}
 	if created.launchErr != nil {
-		return "", fmt.Errorf("daemon: %s: %w", requestType, created.launchErr)
+		err := fmt.Errorf("daemon: %s: %w", requestType, created.launchErr)
+		var started *worker.StartedError
+		if errors.As(created.launchErr, &started) && isCanonicalSessionID(started.ID) {
+			return started.ID, err
+		}
+		return "", err
 	}
 	parsedID, err := session.ParseID(created.launched.Meta.ID)
 	if err != nil || parsedID != created.launched.Meta.ID {
@@ -317,7 +329,7 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 	case <-created.publishGate:
 		defer func() { created.publishGate <- struct{}{} }()
 	case <-waitCtx.Done():
-		return id, fmt.Errorf("daemon: wait to publish session %s: %w", id, waitCtx.Err())
+		return id, publicationError{fmt.Errorf("daemon: wait to publish session %s: %w", id, waitCtx.Err())}
 	}
 	if !created.published {
 		// Publication belongs to the daemon, not the disposable client, but must
@@ -326,7 +338,7 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 		err = l.catalog.Reconcile(publishCtx)
 		cancel()
 		if err != nil {
-			return id, fmt.Errorf("daemon: publish session %s: %w", id, err)
+			return id, publicationError{fmt.Errorf("daemon: publish session %s: %w", id, err)}
 		}
 		created.published = true
 	}

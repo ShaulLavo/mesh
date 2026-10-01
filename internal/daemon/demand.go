@@ -731,9 +731,9 @@ func (r *demandRoute) runStart(transition *demandTransition, service meshserve.S
 	manager := r.manager
 	command := []string{hostShell(), "-lc", service.Demand.Command}
 	id, err := manager.sessions.startLabelled(manager.ctx, service.Label(), command, service.Demand.Cwd, service.Demand.Env)
-	if err != nil && id != "" {
-		// Only publication failed. The worker runs and belongs to this route,
-		// so the start carries on; launching again would run the command twice.
+	if errors.As(err, new(publicationError)) {
+		// Only publication failed. The worker is ready and belongs to this
+		// route, so the start carries on; launching again would run it twice.
 		manager.report(fmt.Errorf("daemon: route %s: %w", service.Route(), err))
 		err = nil
 	}

@@ -60,7 +60,7 @@ func (f *fakeDemandSessions) startLabelled(_ context.Context, label string, comm
 		return id, fmt.Errorf("daemon: create: launch worker %s: %w", id, f.startErr)
 	}
 	if f.publishErr != nil {
-		return id, fmt.Errorf("daemon: publish session %s: %w", id, f.publishErr)
+		return id, publicationError{fmt.Errorf("daemon: publish session %s: %w", id, f.publishErr)}
 	}
 	return id, nil
 }
