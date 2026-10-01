@@ -30,6 +30,9 @@ var (
 	ErrInvalidFrame = errors.New("transport: invalid frame")
 )
 
+// ControlConnectionLimitHeader names the Tailnet control admission cap on HTTP 503 refusals.
+const ControlConnectionLimitHeader = "Mesh-Control-Connection-Limit"
+
 // Conn carries complete Mesh protocol frames. A Conn permits one concurrent
 // reader and any number of concurrent writers. Close is idempotent and must
 // unblock active reads and writes.

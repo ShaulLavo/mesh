@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -134,6 +135,9 @@ func dialSocket(ctx context.Context, url string, opts websocket.DialOptions, kee
 	ws, response, err := websocket.Dial(ctx, url, &opts) //nolint:bodyclose // websocket.Dial owns and closes its HTTP response body
 	if err != nil {
 		if response != nil {
+			if limit, parseErr := strconv.Atoi(response.Header.Get(ControlConnectionLimitHeader)); response.StatusCode == http.StatusServiceUnavailable && parseErr == nil && limit > 0 {
+				return nil, fmt.Errorf("transport: dial %s: Tailnet control connection cap (%d) reached: %w", url, limit, err)
+			}
 			return nil, fmt.Errorf("transport: dial %s: HTTP %s: %w", url, response.Status, err)
 		}
 		return nil, fmt.Errorf("transport: dial %s: %w", url, err)
