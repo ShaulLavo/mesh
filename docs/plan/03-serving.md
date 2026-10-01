@@ -37,6 +37,45 @@ another hostname returns 404 before proxying or starting an on-demand process,
 without falling back to a public parent. Private tailnet Hosts keep the existing
 longest-prefix routing, including requests from the public edge host.
 
+Private service requests share a browser-request policy with private apps.
+An `Origin` different from the request's own origin returns 403 before any
+handler runs, including on-demand startup and mount redirects. Mesh derives
+that origin from the connection's TLS state and Host, not forwarded headers.
+There is one exception for non-WebSocket requests: `Origin: null` is allowed
+with `Sec-Fetch-Site: same-origin`. Browsers can send that combination on a
+same-origin form POST under `Referrer-Policy: no-referrer`. A page cannot forge
+Fetch Metadata. Null Origin remains refused with cross-site, same-site, or
+missing Fetch Metadata, and on every WebSocket upgrade.
+
+A WebSocket upgrade with `Origin` requires an exact match. Without `Origin`,
+private services admit native WebSocket clients, because browsers send that
+header on upgrades. Browser-facing private apps still require `Origin`, as
+established in PR #7. The shared helper takes an explicit WebSocket-origin
+policy to preserve that difference. Other requests allow
+`Sec-Fetch-Site: same-origin` or `none`, or a top-level document navigation with
+GET or HEAD. Where browsers send Fetch Metadata, including private HTTPS and
+loopback HTTP, the gate refuses same-site sibling fetches, cross-site fetches,
+frames, and unknown Fetch Metadata values unless they are top-level GET/HEAD
+visits. A refused service request returns `cross-site request to private service`.
+Canonical public Hosts retain their existing behavior because the owner
+explicitly published those services.
+
+Browsers generally omit Fetch Metadata on ordinary plaintext tailnet HTTP
+such as `http://100.x:7337` or `http://pc:7337`. Without those headers, every
+method remains allowed when `Origin` is absent or matches, preserving native
+clients. Unsafe browser requests rely on Origin checks; headerless GET
+subresources can still reach services and trigger on-demand startup.
+No-referrer forms with null Origin and no Fetch Metadata remain refused.
+Use the private HTTPS name for browser apps that need the full metadata gate.
+
+This policy is not authentication for clients already admitted to the tailnet.
+Services under one private host share one origin, so it does not isolate one
+route from another. Cross-origin consumers, including a localhost Vite page
+fetching a private service, are refused when they send a foreign Origin;
+a configurable exception is a follow-up, not supported here. Headerless HTTP
+clients and top-level GET navigation remain allowed, so upstream applications
+must keep GET read-only and protect their own mutations.
+
 Certificates work anyway. Let's Encrypt DNS-01 validates by publishing a TXT
 record, never by connecting to the host, so `*.mesh.shaulavo.dev` gets a real
 publicly trusted certificate despite the per-host records pointing at
@@ -253,6 +292,42 @@ If it turns out to be Cloudflare, the public Mesh routes could sit behind
 Cloudflare too, which hides the VPS address and absorbs abuse. The tradeoff is
 that Cloudflare terminates TLS and therefore sees that traffic. Worth deciding
 deliberately rather than by default.
+
+## Public connection limits
+
+The public listener admits at most 512 connections. Each direct IPv4 peer or
+IPv6 /64 may hold at most 32, one sixteenth of that pool. Authenticated PROXY
+sources use the same quota. HTTP forwarding headers never establish a
+connection identity. Without PROXY, a loopback peer represents the local front
+door rather than one visitor, so it has no per-source quota. Caddy, nginx, or
+another such front door must enforce per-client connection limits itself.
+Its upstream sockets still share Mesh's global cap.
+
+PROXY authentication has a separate pool of 32 pending sockets and a fixed
+two-second deadline. Local forwarders send their headers immediately. A full
+pending pool waits rather than bypassing authentication. Invalid headers and
+disallowed forwarder UIDs close without consuming an admitted slot or evicting
+an authenticated connection.
+
+HTTP headers have five seconds and idle keep-alives have 30 seconds. At the
+global cap, an under-quota newcomer evicts the oldest idle keep-alive. Active
+responses and hijacked WebSockets are never evicted. If no idle socket exists,
+Mesh closes the newcomer instead of waiting for an active slot.
+
+Request bodies get a 30-second idle allowance and a sustained minimum of
+16 KiB/s, measured only during body reads. Origin wake-up, on-demand startup,
+and server pauses between reads do not charge the client's budget. Once a
+response starts or upgrades, body deadlines are cleared. HTTP/1 enables
+full-duplex handling so an early response is not blocked by implicit body
+draining. After a non-hijacked handler finishes, the final body drain is bounded
+again. An HTTP/2 body timeout affects its stream, not other streams on the same
+connection. Very slow client uploads below the minimum eventually time out.
+
+These limits are not a distributed denial-of-service defense. Sixteen IPv4
+addresses, or sixteen /64s from one wider IPv6 allocation, can still fill the
+pool with active responses or half-open connections. There is no wider-prefix
+aggregate quota or response write-progress timeout. A front door must provide
+those additional abuse controls when needed.
 
 ## The browser is not the only file client
 

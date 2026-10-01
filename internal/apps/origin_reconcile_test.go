@@ -198,9 +198,7 @@ func serveStatus(t *testing.T, f *appFixture, app Record) int {
 
 func deleteAtEdge(t *testing.T, f *appFixture, id string) {
 	t.Helper()
-	f.edge.mu.Lock()
-	defer f.edge.mu.Unlock()
-	if _, err := f.edge.apply(context.Background(), identityFor(f.ownerKey), Request{Action: "delete", ID: id}); err != nil {
+	if _, err := f.origin.edge(context.Background(), Request{Action: "delete", ID: id}); err != nil {
 		t.Fatal(err)
 	}
 }

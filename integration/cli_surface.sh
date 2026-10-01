@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # The product CLI keeps offline hosts useful, and names that look like session
 # IDs never enter the host address book.
 set -uo pipefail

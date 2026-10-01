@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # The product CLI publishes services through identity-pinned real daemons.
 # This fixture has no T12 certificate or Tailscale Serve, so private services
 # use the verified control endpoint while public URLs remain canonical HTTPS.
@@ -313,6 +314,26 @@ grep -Fq "serving http://127.0.0.11:$CONTROL_PORT/api on pc (proxy -> $BACKEND_P
 curl --noproxy '*' --fail --silent --max-time 2 "http://127.0.0.11:$CONTROL_PORT/api/headers" |
   grep -Fq 'method=GET' || fail "numeric target did not proxy to the origin-local port"
 
+PRIVATE_POST_STATUS=$(curl --noproxy '*' --silent --max-time 2 --request POST \
+  --header 'Origin: https://attacker.example' --header 'Sec-Fetch-Site: cross-site' \
+  --output /dev/null --write-out '%{http_code}' "http://127.0.0.11:$CONTROL_PORT/api/block") ||
+  fail "query private proxy with a cross-site POST"
+[ "$PRIVATE_POST_STATUS" = 403 ] || fail "private cross-site POST returned $PRIVATE_POST_STATUS, want 403"
+[ ! -e "$BLOCK_FILE" ] || fail "private cross-site POST reached the upstream"
+PRIVATE_FILES_STATUS=$(curl --noproxy '*' --silent --max-time 2 \
+  --header 'Sec-Fetch-Site: same-site' --header 'Sec-Fetch-Mode: no-cors' --header 'Sec-Fetch-Dest: image' \
+  --output /dev/null --write-out '%{http_code}' "http://127.0.0.11:$CONTROL_PORT/files/download.txt") ||
+  fail "query private files from a sibling page"
+[ "$PRIVATE_FILES_STATUS" = 403 ] || fail "private sibling-page read returned $PRIVATE_FILES_STATUS, want 403"
+curl --noproxy '*' --fail --silent --max-time 2 --request POST \
+  --header "Origin: http://127.0.0.11:$CONTROL_PORT" --header 'Sec-Fetch-Site: same-origin' \
+  "http://127.0.0.11:$CONTROL_PORT/api/headers" |
+  grep -Fq 'method=POST' || fail "private same-origin POST did not reach the upstream"
+curl --noproxy '*' --fail --silent --max-time 2 \
+  --header 'Sec-Fetch-Site: cross-site' --header 'Sec-Fetch-Mode: navigate' --header 'Sec-Fetch-Dest: document' \
+  "http://127.0.0.11:$CONTROL_PORT/files/download.txt" |
+  grep -Fq DOWNLOAD_MARKER || fail "private top-level navigation did not reach the files route"
+
 python3 "$CONFIRM_FIXTURE" -- "${CLI[@]}" serve pc ./site --at /blog \
   --public blog.shaulavo.dev >"$TEST_ROOT/public-prompt.out" 2>&1 ||
   fail "interactive public publication: $(<"$TEST_ROOT/public-prompt.out")"
@@ -328,6 +349,8 @@ grep -Fq "serving https://blog.shaulavo.dev/blog on pc (static -> $ORIGIN_HOME/s
   fail "confirmed publication did not wait for its acknowledgement"
 wait_for_public_body blog.shaulavo.dev /blog/ SERVE_CLI_PUBLIC_MARKER ||
   fail "confirmed public route did not reach the real origin"
+[ "$(edge_request blog.shaulavo.dev /blog/ --header 'Origin: https://attacker.example' --header 'Sec-Fetch-Site: cross-site')" = SERVE_CLI_PUBLIC_MARKER ] ||
+  fail "cross-site public service behavior changed"
 
 "${CLI[@]}" serve pc "$TEST_ROOT/files" --at /blog/admin --files \
   >"$TEST_ROOT/nested-private.out" 2>"$TEST_ROOT/nested-private.err" ||

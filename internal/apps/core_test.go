@@ -52,6 +52,16 @@ func (s *memoryAppStore) ReserveAppName(_ context.Context, name, owner string) e
 	s.names[name] = owner
 	return nil
 }
+func (s *memoryAppStore) ReserveAppNameAndState(_ context.Context, name, owner, key string, value []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.names[name]; ok && (existing != owner || s.inactive[name]) {
+		return errors.New("collision")
+	}
+	s.names[name] = owner
+	s.values[key] = append([]byte(nil), value...)
+	return nil
+}
 func (s *memoryAppStore) AppNameExists(_ context.Context, name string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
