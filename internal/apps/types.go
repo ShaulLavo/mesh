@@ -74,6 +74,9 @@ type RuntimeInfo struct {
 	Command   string `json:"command,omitempty"`
 	Port      int    `json:"port,omitempty"`
 	Root      string `json:"root,omitempty"`
+	// Problem is why a server app stopped being served, such as a listener
+	// beyond loopback or a port another process holds.
+	Problem string `json:"problem,omitempty"`
 }
 type Result struct {
 	Pairing  *webauth.PairingInfo `json:"pairing,omitempty"`

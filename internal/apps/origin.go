@@ -10,9 +10,9 @@ import (
 	"fmt"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -28,6 +28,9 @@ type Workers interface {
 	Stop(context.Context, string) error
 	Find(context.Context, string) (string, bool, error)
 	Forget(context.Context, string)
+	// Processes names the live processes of a worker's session, so the origin
+	// can tell an app's own listeners from another program's.
+	Processes(context.Context, string) ([]int, error)
 }
 type OriginConfig struct {
 	CheckHosting func(int, string) error
@@ -59,6 +62,17 @@ type appRoute struct {
 	Root   string
 	Port   int
 	Phase  string
+	// Upstream is the one address a server app may be proxied to; invalid
+	// means it is not served.
+	Upstream netip.AddrPort
+}
+
+// serving is what the last listener check found for a server app: the address
+// the proxy may dial, or the fault that withdrew it. An app with no entry has
+// not passed a check since its worker started, and is not served.
+type serving struct {
+	upstream netip.AddrPort
+	fault    string
 }
 type upload struct {
 	ID        string    `json:"id"`
@@ -117,8 +131,10 @@ type Origin struct {
 	// exchange is a one-slot lock on signed edge exchanges, because the edge
 	// accepts one pending sequence per owner. Waiting for it honours the
 	// caller's context. Take it before mu, never after.
-	exchange    chan struct{}
-	routes      atomic.Pointer[map[string]appRoute]
+	exchange chan struct{}
+	routes   atomic.Pointer[map[string]appRoute]
+	// serving is guarded by mu and published with the routes.
+	serving     map[string]serving
 	downloadMu  sync.Mutex
 	config      OriginConfig
 	identity    string
@@ -134,7 +150,7 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}}
+	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, serving: map[string]serving{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}}
 	if err := load(ctx, c.Store, "apps.origin", &o.state); err != nil {
 		return nil, err
 	}
@@ -150,7 +166,7 @@ func (o *Origin) persist(ctx context.Context) error {
 func (o *Origin) publishRoutes() {
 	routes := make(map[string]appRoute, len(o.state.Apps))
 	for id, a := range o.state.Apps {
-		routes[id] = appRoute{Record: a.Record, Root: a.Root, Port: a.Port, Phase: a.Phase}
+		routes[id] = appRoute{Record: a.Record, Root: a.Root, Port: a.Port, Phase: a.Phase, Upstream: o.serving[id].upstream}
 	}
 	o.routes.Store(&routes)
 }
@@ -380,9 +396,10 @@ func (o *Origin) Handle(ctx context.Context, q Request) (Result, error) {
 		}
 		o.mu.Lock()
 		a, ok := o.state.Apps[q.ID]
+		problem := o.serving[q.ID].fault
 		o.mu.Unlock()
 		if ok {
-			result.Runtime = &RuntimeInfo{Phase: a.Phase, SessionID: a.Session, Command: a.Command, Port: a.Port, Root: a.Root}
+			result.Runtime = &RuntimeInfo{Phase: a.Phase, SessionID: a.Session, Command: a.Command, Port: a.Port, Root: a.Root, Problem: problem}
 		}
 		return result, nil
 	case "delete":
@@ -839,10 +856,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		if err := o.modify(ctx, app.ID, func(a *localApp) { a.Session = session }); err != nil {
 			return Result{}, err
 		}
-		if err := waitPort(ctx, q.Port); err != nil {
-			return fail(err)
-		}
-		if err := checkServerListener(ctx, q.Port); err != nil {
+		if err := o.awaitServer(ctx, app.ID, session, q.Port); err != nil {
 			return fail(err)
 		}
 		if _, alive, err := o.config.Workers.Find(ctx, "app "+app.ID); err != nil || !alive {
@@ -926,11 +940,7 @@ func (o *Origin) ensureServer(ctx context.Context, a *localApp) error {
 	if err := o.modify(ctx, a.Record.ID, func(stored *localApp) { stored.Session = session }); err != nil {
 		return err
 	}
-	if err := waitPort(ctx, a.Port); err != nil {
-		_ = o.stop(ctx, a.Record.ID)
-		return err
-	}
-	if err := checkServerListener(ctx, a.Port); err != nil {
+	if err := o.awaitServer(ctx, a.Record.ID, session, a.Port); err != nil {
 		_ = o.stop(ctx, a.Record.ID)
 		return err
 	}
@@ -956,26 +966,47 @@ func (o *Origin) waitSetup(ctx context.Context, id string) error {
 	}
 	return nil
 }
-func waitPort(ctx context.Context, port int) error {
+
+// awaitServer waits for the app's worker to listen on its port, then records
+// the one address the proxy may dial. A listener that fails the identity check
+// ends the wait at once: a process that took the port after the preflight is
+// not going to leave, and the app cannot bind it.
+func (o *Origin) awaitServer(ctx context.Context, id, session string, port int) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		for _, address := range []string{"127.0.0.1", "::1"} {
-			conn, err := (&net.Dialer{Timeout: 100 * time.Millisecond}).DialContext(ctx, "tcp", net.JoinHostPort(address, fmt.Sprint(port)))
-			if err == nil {
-				_ = conn.Close()
-				return nil
-			}
+		upstream, err := o.checkServer(ctx, session, port)
+		if err == nil {
+			o.setServing(id, serving{upstream: upstream})
+			return nil
 		}
-
+		if !errors.Is(err, errNoListener) {
+			return fmt.Errorf("app %s: %w", id, err)
+		}
 		select {
 		case <-ctx.Done():
 			return errors.New("app: server readiness timed out")
 		case <-ticker.C:
 		}
 	}
+}
+func (o *Origin) checkServer(ctx context.Context, session string, port int) (netip.AddrPort, error) {
+	return checkServerListener(ctx, port, func() ([]int, error) { return o.config.Workers.Processes(ctx, session) })
+}
+
+// setServing records a listener check and republishes the routes, so the
+// proxy follows it at once.
+func (o *Origin) setServing(id string, state serving) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if state == (serving{}) {
+		delete(o.serving, id)
+	} else {
+		o.serving[id] = state
+	}
+	o.publishRoutes()
 }
 func (o *Origin) failCreate(ctx context.Context, id string, err error) error {
 	_, deleteErr := o.edge(ctx, Request{Action: "delete", ID: id})
@@ -986,6 +1017,8 @@ func (o *Origin) failCreate(ctx context.Context, id string, err error) error {
 // stop ends only the app's own labelled workers; ordinary sessions never carry
 // these labels.
 func (o *Origin) stop(ctx context.Context, id string) error {
+	// Whatever listens on the port once the worker is gone is not the app.
+	o.setServing(id, serving{})
 	// A worker can outlive its local record, so search by label regardless. The
 	// labels are stopped side by side so one failing or slow stop cannot keep
 	// the other worker running.
@@ -1061,12 +1094,78 @@ func (o *Origin) Sync(ctx context.Context) error {
 	if records == nil {
 		// Without an authoritative answer only lapsed leases are known, and a
 		// partition is not permission to delete anything.
-		return errors.Join(err, o.eachApp(safety, o.appIDs(nil), o.guardLapsed))
+		ids := o.appIDs(nil)
+		return errors.Join(err, o.eachApp(safety, ids, o.guardLapsed), o.eachApp(safety, ids, o.checkServing))
 	}
 	ids := o.appIDs(records)
 	denied := o.eachApp(safety, ids, func(ctx context.Context, id string) error { return o.enforce(ctx, id, records) })
 	recovered := o.eachApp(ctx, ids, func(ctx context.Context, id string) error { return o.recover(ctx, id, records) })
-	return errors.Join(err, denied, recovered, o.expireUploads(ctx))
+	checked := o.eachApp(safety, ids, o.checkServing)
+	return errors.Join(err, denied, recovered, checked, o.expireUploads(ctx))
+}
+
+// checkServing repeats the readiness listener check for a ready server app, so
+// one that later listens beyond loopback, or loses its port to another
+// process, stops being served. Its worker keeps running: a squatter's victim
+// did nothing wrong, and stopping an app that exposed itself would only have
+// recover start it again. Serving resumes once the check passes.
+func (o *Origin) checkServing(ctx context.Context, id string) error {
+	release, ok := o.tryOp("app "+id, "check listeners")
+	if !ok {
+		return nil
+	}
+	defer release()
+	o.mu.Lock()
+	a, local := o.state.Apps[id]
+	o.mu.Unlock()
+	if !local || a.Phase != "ready" || a.Command == "" || a.Record.Status != "active" {
+		return nil
+	}
+	session, alive, err := o.config.Workers.Find(ctx, "app "+id)
+	if err != nil {
+		o.setServing(id, serving{})
+		return fmt.Errorf("app %s: find server: %w", id, err)
+	}
+	if !alive {
+		o.setServing(id, serving{})
+		return nil
+	}
+	upstream, err := o.checkServer(ctx, session, a.Port)
+	if errors.Is(err, errNoListener) {
+		err = listenerFault(fmt.Sprintf("nothing the app runs listens on port %d", a.Port))
+	}
+	if err != nil {
+		return o.suspend(ctx, a, err)
+	}
+	o.setServing(id, serving{upstream: upstream})
+	if a.Record.Ready {
+		return nil
+	}
+	if _, err := o.edge(ctx, Request{Action: "activate", ID: id, Kind: "server", UploadID: a.Record.Revision}); err != nil {
+		return fmt.Errorf("app %s: resume serving: %w", id, err)
+	}
+	return nil
+}
+
+// suspend withdraws an app's route here first, then at the edge, which shows
+// the app as not ready. A fault already reported is not reported again.
+func (o *Origin) suspend(ctx context.Context, a localApp, cause error) error {
+	id := a.Record.ID
+	fault := strings.TrimPrefix(cause.Error(), "app: ")
+	o.mu.Lock()
+	reported := o.serving[id].fault == fault
+	o.mu.Unlock()
+	o.setServing(id, serving{fault: fault})
+	var edgeErr error
+	if a.Record.Ready {
+		if _, err := o.edge(ctx, Request{Action: "suspend", ID: id}); err != nil {
+			edgeErr = fmt.Errorf("app %s: withdraw route at the edge: %w", id, err)
+		}
+	}
+	if reported {
+		return edgeErr
+	}
+	return errors.Join(fmt.Errorf("app %s: stopped serving: %w", id, cause), edgeErr)
 }
 
 // renewLeases applies the edge's records while still holding the exchange slot,
@@ -1532,15 +1631,15 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 
-	target := &url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", app.Port)}
+	if !app.Upstream.IsValid() {
+		http.Error(w, "app unavailable", http.StatusServiceUnavailable)
+		return true
+	}
+	// The verified address only: another family's loopback on the same port
+	// may belong to anyone.
+	target := &url.URL{Scheme: "http", Host: app.Upstream.String()}
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	transport := &http.Transport{Proxy: nil, MaxResponseHeaderBytes: 1 << 20, ResponseHeaderTimeout: 10 * time.Second, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-		connection, err := netDialer.DialContext(ctx, network, address)
-		if err == nil {
-			return connection, nil
-		}
-		return netDialer.DialContext(ctx, network, net.JoinHostPort("::1", fmt.Sprint(app.Port)))
-	}}
+	transport := &http.Transport{Proxy: nil, MaxResponseHeaderBytes: 1 << 20, ResponseHeaderTimeout: 10 * time.Second, DialContext: netDialer.DialContext}
 	defer transport.CloseIdleConnections()
 	proxy.Transport = transport
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {

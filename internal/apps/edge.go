@@ -238,6 +238,15 @@ func (e *Edge) apply(ctx context.Context, next *edgeMutation, owner string, q Re
 		if q.Kind != "" {
 			app.Kind = q.Kind
 		}
+	case "suspend":
+		// The origin found the app's listeners unsafe; activate restores it.
+		if app.Status != "active" {
+			return Result{}, errors.New("app: app expired")
+		}
+		if app.Ready {
+			next.cancelAll = append(next.cancelAll, app.ID)
+		}
+		app.Ready = false
 	case "renew":
 		if app.Status != "active" {
 			return Result{}, errors.New("app: app expired")

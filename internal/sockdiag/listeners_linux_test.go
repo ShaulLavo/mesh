@@ -48,7 +48,7 @@ func listenerDiagReply(t *testing.T, family uint8, address string) []byte {
 	} else {
 		id.Source = parsed.As16()
 	}
-	raw := peerDiagReply(t, inetDiagMsg{Family: family, State: tcpListen, ID: id, Inode: 101})
+	raw := peerDiagReply(t, inetDiagMsg{Family: family, State: tcpListen, ID: id, UID: 1000, Inode: 101})
 	binary.NativeEndian.PutUint16(raw[6:8], unix.NLM_F_MULTI)
 	return raw
 }
@@ -83,8 +83,9 @@ func TestListenerDiagReplyIncludesUnsafeAndMappedAddresses(t *testing.T) {
 			t.Fatalf("listeners = %v, done %t, error %v", addresses, done, err)
 		}
 		for i, expected := range tt.addresses {
-			if addresses[i] != netip.MustParseAddr(expected) {
-				t.Fatalf("address %d = %v; want %s", i, addresses[i], expected)
+			want := Listener{Address: netip.AddrPortFrom(netip.MustParseAddr(expected), 3000), UID: 1000, Inode: 101}
+			if addresses[i] != want {
+				t.Fatalf("listener %d = %+v; want %+v", i, addresses[i], want)
 			}
 		}
 	}
@@ -211,9 +212,44 @@ func TestTCPListenersFindsEveryBindingAcrossDatagrams(t *testing.T) {
 	if err != nil || len(addresses) != count {
 		t.Fatalf("multipart listeners = %d, %v; want %d", len(addresses), err, count)
 	}
-	for _, address := range addresses {
-		if address != netip.MustParseAddr("127.0.0.1") {
-			t.Fatalf("unrelated listener returned %v", address)
+	for _, listener := range addresses {
+		if listener.Address != netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(port)) {
+			t.Fatalf("unrelated listener returned %v", listener.Address)
+		}
+	}
+}
+
+func TestAllTCPListenersAttributesEveryPort(t *testing.T) {
+	var want []netip.AddrPort
+	for _, network := range []string{"tcp4", "tcp4", "tcp6"} {
+		address := "127.0.0.1:0"
+		if network == "tcp6" {
+			address = "[::1]:0"
+		}
+		listener, err := net.Listen(network, address)
+		if err != nil {
+			t.Skipf("listen %s: %v", network, err)
+		}
+		t.Cleanup(func() { _ = listener.Close() })
+		want = append(want, listener.Addr().(*net.TCPAddr).AddrPort())
+	}
+	listeners, err := AllTCPListeners(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, address := range want {
+		found := false
+		for _, listener := range listeners {
+			if listener.Address != address {
+				continue
+			}
+			found = true
+			if int(listener.UID) != unix.Geteuid() || listener.Inode == 0 {
+				t.Fatalf("listener %v owner %d inode %d; want owner %d and an inode", address, listener.UID, listener.Inode, unix.Geteuid())
+			}
+		}
+		if !found {
+			t.Fatalf("every-port dump missed %v among %d listeners", address, len(listeners))
 		}
 	}
 }

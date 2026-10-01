@@ -143,14 +143,22 @@ func TestSyncWithdrawsAnAppThatListensBeyondLoopback(t *testing.T) {
 	if workers.wasStopped(app.ID) {
 		t.Fatalf("app %s worker was stopped; withdrawing the route is the response", app.ID)
 	}
+	inspected, err := f.origin.Handle(context.Background(), Request{Action: "inspect", ID: app.ID})
+	if err != nil || inspected.Runtime == nil || !strings.Contains(inspected.Runtime.Problem, wildcard.Addr().String()) {
+		t.Fatalf("owner is not told why app %s stopped serving: %+v %v", app.ID, inspected.Runtime, err)
+	}
 	if err := wildcard.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.origin.Sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !edgeRecord(t, f, app.ID).Ready {
-		t.Fatalf("app %s stayed withdrawn after its wildcard listener closed", app.ID)
+	resumed := edgeRecord(t, f, app.ID)
+	if !resumed.Ready || resumed.Generation != app.Generation {
+		t.Fatalf("app %s after its wildcard listener closed: ready %t, generation %d; want ready at generation %d", app.ID, resumed.Ready, resumed.Generation, app.Generation)
+	}
+	if !(*f.origin.routes.Load())[app.ID].Upstream.IsValid() {
+		t.Fatalf("resumed app %s is still refused at the origin", app.ID)
 	}
 }
 
