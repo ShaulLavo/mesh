@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -84,6 +87,43 @@ func TestUpdateKeepsOldPortUntilRollbackIsImpossible(t *testing.T) {
 	}
 	if !workers.alive(t, "app "+app.ID) {
 		t.Fatalf("rollback did not restart app %s's previous server", app.ID)
+	}
+}
+
+func TestUpdatePortCollisionFinishesBeforeReplacementHook(t *testing.T) {
+	f := newAppFixture(t)
+	workers := newServerWorkers(t, f)
+	app := createServerApp(t, f)
+	port := freePort(t)
+	listener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	replacement := newGate(t)
+	workers.beforeStart = func(_ context.Context, _, command string) error {
+		if command == "replacement" {
+			replacement.arrive()
+		}
+		return nil
+	}
+	upload, digest := uploadSource(t, f, sourceFixture(t))
+	updated := make(chan error, 1)
+	go func() {
+		_, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: app.ID, Kind: "server", Command: "replacement", Port: port, UploadID: upload, Digest: digest})
+		updated <- err
+	}()
+	waited := make(chan error, 1)
+	go func() {
+		<-replacement.entered
+		waited <- nil
+	}()
+	err = receive(t, waited, "hook wait after port collision")
+	if err == nil || !strings.Contains(err.Error(), "server port already has a listener") {
+		t.Fatalf("hook wait hid the pre-start port collision: %v", err)
+	}
+	if !workers.alive(t, "app "+app.ID) {
+		t.Fatal("port collision did not restore the old server")
 	}
 }
 
