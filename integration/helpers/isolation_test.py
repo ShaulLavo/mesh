@@ -302,6 +302,40 @@ class ReviewRegressionsTest(unittest.TestCase):
         self.assertEqual(kill_group.call_args_list, [call(process.pid, signal.SIGTERM), call(process.pid, signal.SIGKILL)])
         self.assertEqual(process.wait.call_count, 2)
 
+    def test_cancellation_fixture_cleans_up_before_process_capture_is_read(self):
+        with tempfile.TemporaryDirectory(prefix="m-cancel-cleanup-") as temporary:
+            root = Path(temporary)
+            captured = []
+
+            def fail_readiness(*_):
+                capture, = root.glob("m-cancel-*/children")
+                captured.append(capture.read_text().splitlines())
+                raise AssertionError("forced readiness failure before reading process capture")
+
+            case = type(self)("test_cancelling_entry_pid_or_group_stops_children_and_cleans_scratch")
+            result = unittest.TestResult()
+            try:
+                with patch("tempfile.tempdir", str(root)), patch.object(case, "assertTrue", side_effect=fail_readiness):
+                    case.run(result)
+                self.assertEqual(len(result.failures), 2, result.failures)
+                self.assertFalse(result.errors, result.errors)
+                self.assertEqual(len(captured), 2)
+                for inner, child, home, _ in captured:
+                    for pid in (int(inner), int(child)):
+                        status = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+                        self.assertFalse(status.stdout.strip() and not status.stdout.strip().startswith("Z"),
+                                         f"failed readiness left process {pid} running")
+                    self.assertFalse(Path(home).parent.exists(), "failed readiness leaked wrapper scratch")
+            finally:
+                for inner, child, _, group in captured:
+                    for pid in (int(inner), int(child)):
+                        try:
+                            if os.getpgid(pid) == int(group):
+                                os.killpg(int(group), signal.SIGKILL)
+                                break
+                        except ProcessLookupError:
+                            pass
+
     def test_cancellation_uses_runner_toolchain_before_system_fallback(self):
         with tempfile.TemporaryDirectory(prefix="m-cancel-go-") as temporary:
             root = Path(temporary)
