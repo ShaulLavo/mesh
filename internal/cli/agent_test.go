@@ -68,7 +68,7 @@ func TestAgentHelpDoesNotRunAProvider(t *testing.T) {
 }
 
 func TestAgentLaunchLeasePreservesOriginalDirectoryAndReplacesToken(t *testing.T) {
-	directory := filepath.Join(t.TempDir(), "7K3D")
+	directory := filepath.Join(compactSocketTempDir(t), "7K3D")
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestAgentLaunchLeasePreservesOriginalDirectoryAndReplacesToken(t *testing.T
 type agentLeaseTestTraffic struct{ begin, finish protocol.Control }
 
 func TestAgentLookupProofDoesNotClaimNativeResume(t *testing.T) {
-	directory := filepath.Join(t.TempDir(), "7K3D")
+	directory := filepath.Join(compactSocketTempDir(t), "7K3D")
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestAgentHookSilencesInvalidPayloadsAndMissingIntegration(t *testing.T) {
 }
 
 func TestAgentHookRegistersExactIdentityWithoutPromptFields(t *testing.T) {
-	directory := filepath.Join(t.TempDir(), "7K3D")
+	directory := filepath.Join(compactSocketTempDir(t), "7K3D")
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}

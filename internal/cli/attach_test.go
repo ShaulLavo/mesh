@@ -18,7 +18,7 @@ import (
 )
 
 func TestAttachStopsReadingInputBeforeReturning(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "worker.sock")
+	socketPath := filepath.Join(compactSocketTempDir(t), "worker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func goroutinesWithStack(markers ...string) int {
 }
 
 func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "worker.sock")
+	socketPath := filepath.Join(compactSocketTempDir(t), "worker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
@@ -259,7 +259,7 @@ func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 }
 
 func TestAttachDoesNotCommitAnIncompleteSnapshot(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "worker.sock")
+	socketPath := filepath.Join(compactSocketTempDir(t), "worker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)

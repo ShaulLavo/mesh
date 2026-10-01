@@ -111,7 +111,7 @@ func TestListViaDaemonRejectsInvalidCatalogEntry(t *testing.T) {
 }
 
 func TestCreateViaDaemonRejectsInvalidOptionsBeforeDial(t *testing.T) {
-	missingSocket := filepath.Join(t.TempDir(), "missing.sock")
+	missingSocket := filepath.Join(compactSocketTempDir(t), "missing.sock")
 	tests := []struct {
 		name string
 		ctx  context.Context
@@ -142,7 +142,7 @@ func TestCreateViaDaemonRejectsInvalidOptionsBeforeDial(t *testing.T) {
 func TestCreateViaDaemonMapsUnavailableDialFailures(t *testing.T) {
 	t.Run("missing socket", func(t *testing.T) {
 		_, err := CreateViaDaemon(context.Background(), DaemonCreateOptions{
-			SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
+			SocketPath: filepath.Join(compactSocketTempDir(t), "missing.sock"),
 			Command:    []string{"sh"},
 		})
 		if !errors.Is(err, ErrDaemonUnavailable) {
@@ -151,7 +151,7 @@ func TestCreateViaDaemonMapsUnavailableDialFailures(t *testing.T) {
 	})
 
 	t.Run("refused socket", func(t *testing.T) {
-		socketPath := filepath.Join(t.TempDir(), "stale.sock")
+		socketPath := filepath.Join(compactSocketTempDir(t), "stale.sock")
 		listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 		if err != nil {
 			t.Fatal(err)
@@ -176,7 +176,7 @@ func TestCreateViaDaemonPreservesOtherDialFailures(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := CreateViaDaemon(cancelled, DaemonCreateOptions{
-		SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
+		SocketPath: filepath.Join(compactSocketTempDir(t), "missing.sock"),
 		Command:    []string{"sh"},
 	})
 	if !errors.Is(err, context.Canceled) {
@@ -349,7 +349,7 @@ func TestCreateViaDaemonCancellationUnblocksRead(t *testing.T) {
 
 func startDaemonCreateServer(t *testing.T, handle func(transport.Conn, protocol.Control) error) (string, <-chan error) {
 	t.Helper()
-	socketPath := filepath.Join(t.TempDir(), "daemon.sock")
+	socketPath := filepath.Join(compactSocketTempDir(t), "daemon.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)

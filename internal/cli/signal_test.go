@@ -11,7 +11,7 @@ import (
 )
 
 func TestKillWaitsForWorkerAcknowledgement(t *testing.T) {
-	dir := t.TempDir()
+	dir := compactSocketTempDir(t)
 	socketPath := filepath.Join(dir, "sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
