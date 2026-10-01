@@ -9,8 +9,8 @@ import (
 
 // bindTerminal records the session this terminal is opening, before the attach
 // begins. It cannot be done afterwards: a host crash never returns from the
-// read, a closed tab runs no deferred code, and Attach is handed a background
-// context, so the end of an attachment is not a place code reliably reaches.
+// read and a closed tab runs no deferred code, so the end of an attachment is
+// not a place code reliably reaches.
 //
 // It reports a function that puts the previous binding back, for the claim
 // failures that mean this attachment never started.

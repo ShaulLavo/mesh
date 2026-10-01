@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -37,6 +38,10 @@ func TestAttachStopsReadingInputBeforeReturning(t *testing.T) {
 			serverErr <- err
 			return
 		}
+		if err := protocol.NewWriter(conn).WriteControlMsg(protocol.Control{Type: protocol.TypeAttached, SessionID: "STOP"}); err != nil {
+			serverErr <- err
+			return
+		}
 		<-detach
 		serverErr <- protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
 			Type:      protocol.TypeDetach,
@@ -59,7 +64,7 @@ func TestAttachStopsReadingInputBeforeReturning(t *testing.T) {
 	baseline := goroutinesWithStack("internal/cli.relayInput")
 	attached := make(chan error, 1)
 	go func() {
-		_, err := Attach(AttachOptions{
+		_, err := Attach(context.Background(), AttachOptions{
 			SocketPath: socketPath,
 			SessionID:  "STOP",
 			In:         in,
@@ -106,7 +111,7 @@ func TestAttachTransportErrorsAreBoundedAndPreserveCause(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer output.Close() //nolint:errcheck // test resource cleanup
-			_, err = Attach(AttachOptions{SessionID: "7K3D", Conn: test.conn, In: input, Out: output})
+			_, err = Attach(context.Background(), AttachOptions{SessionID: "7K3D", Conn: test.conn, In: input, Out: output})
 			if err == nil || !errors.Is(err, cause) || strings.ContainsAny(err.Error(), "\r\n\x1b") || strings.ContainsRune(err.Error(), '\u202e') || len(err.Error()) > maximumRemoteErrorBytes+100 {
 				t.Fatalf("bounded attach error = %q (%d bytes), errors.Is = %v", err, len(err.Error()), errors.Is(err, cause))
 			}
@@ -221,7 +226,7 @@ func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 	defer out.Close() //nolint:errcheck // test resource cleanup
 
 	initialSeq := uint64(0)
-	result, err := Attach(AttachOptions{
+	result, err := Attach(context.Background(), AttachOptions{
 		SocketPath:         socketPath,
 		SessionID:          sid.String(),
 		ContainingSessions: wantContaining,
@@ -304,7 +309,7 @@ func TestAttachDoesNotCommitAnIncompleteSnapshot(t *testing.T) {
 	defer out.Close() //nolint:errcheck // test resource cleanup
 
 	lastSeq := uint64(7)
-	result, err := Attach(AttachOptions{
+	result, err := Attach(context.Background(), AttachOptions{
 		SocketPath: socketPath,
 		SessionID:  "SNAP",
 		LastSeq:    &lastSeq,
