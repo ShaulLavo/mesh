@@ -110,7 +110,7 @@ func attributeListeners(listeners []sockdiag.Listener, port int, uid uint32, hel
 	for _, listener := range listeners {
 		own := listener.UID == uid && held[listener.Inode]
 		if own || int(listener.Address.Port()) == port {
-			sockets = append(sockets, listenerSocket{Address: listener.Address, Own: own})
+			sockets = append(sockets, listenerSocket{Address: listener.Address, Own: own, Inode: listener.Inode})
 		}
 	}
 	return sockets

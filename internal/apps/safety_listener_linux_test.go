@@ -50,10 +50,10 @@ func TestListenerAttributionRequiresOwnerAndHeldInode(t *testing.T) {
 	held := map[uint32]bool{11: true, 12: true, 14: true, 16: true}
 	got := attributeListeners(listeners, 3000, 1000, held)
 	want := []listenerSocket{
-		{Address: netip.MustParseAddrPort("127.0.0.1:3000"), Own: true},
-		{Address: netip.MustParseAddrPort("[::1]:3000")},
-		{Address: netip.MustParseAddrPort("127.0.0.1:3000")},
-		{Address: netip.MustParseAddrPort("0.0.0.0:5173"), Own: true},
+		{Address: netip.MustParseAddrPort("127.0.0.1:3000"), Own: true, Inode: 11},
+		{Address: netip.MustParseAddrPort("[::1]:3000"), Inode: 12},
+		{Address: netip.MustParseAddrPort("127.0.0.1:3000"), Inode: 13},
+		{Address: netip.MustParseAddrPort("0.0.0.0:5173"), Own: true, Inode: 14},
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("attributed = %+v\nwant %+v", got, want)
@@ -187,7 +187,7 @@ func TestLiveIPv6ListenerInspection(t *testing.T) {
 			}
 			uid := uint32(os.Geteuid()) //nolint:gosec // an effective UID is a non-negative 32-bit value
 			upstream, err := verifyListeners(port, attributeListeners(own, port, uid, held))
-			if err != nil || upstream.Addr() != address.Unmap() || int(upstream.Port()) != port {
+			if err != nil || upstream.Address.Addr() != address.Unmap() || int(upstream.Address.Port()) != port || uint64(upstream.Inode) != stat.Ino {
 				t.Fatalf("upstream for %v = %v, %v", address, upstream, err)
 			}
 		})

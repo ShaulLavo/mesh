@@ -88,6 +88,8 @@ type appRoute struct {
 	// Upstream is the one address a server app may be proxied to; invalid
 	// means it is not served.
 	Upstream netip.AddrPort
+	// upstreamInode is the verified socket at Upstream.
+	upstreamInode uint32
 }
 
 // serving is what the last listener check found for a server app: the address
@@ -95,7 +97,10 @@ type appRoute struct {
 // not passed a check since its worker started, and is not served.
 type serving struct {
 	upstream netip.AddrPort
-	fault    string
+	// inode identifies the verified socket; a listener rebound at the same
+	// address is a different one.
+	inode uint32
+	fault string
 }
 type upload struct {
 	ID        string    `json:"id"`
@@ -330,7 +335,7 @@ func (o *Origin) publishRoutes() {
 		if previous != nil {
 			old = (*previous)[id]
 		}
-		route := cachedAppRoute(a, old, o.serving[id].upstream)
+		route := cachedAppRoute(a, old, o.serving[id])
 		routes[id] = route
 	}
 	o.routes.Store(&routes)
@@ -345,12 +350,16 @@ func (o *Origin) publishRoutes() {
 
 // cachedAppRoute reuses the previous handler while nothing it was built from
 // changed. A server app is proxied only to its verified upstream, so it has no
-// handler without one, and a new upstream needs a new transport.
-func cachedAppRoute(app localApp, old appRoute, upstream netip.AddrPort) appRoute {
-	route := appRoute{Record: app.Record, Root: app.Root, Port: app.Port, Phase: app.Phase, Upstream: upstream}
+// handler without one. A different verified socket, even at the same address,
+// gets a new transport: the old pool may hold connections another process
+// accepted while it held the port. Where the platform reports no inode, reuse
+// follows the address alone.
+func cachedAppRoute(app localApp, old appRoute, verified serving) appRoute {
+	upstream := verified.upstream
+	route := appRoute{Record: app.Record, Root: app.Root, Port: app.Port, Phase: app.Phase, Upstream: upstream, upstreamInode: verified.inode}
 	switch {
 	case app.Phase != "ready" || app.Record.Status != "active":
-	case old.Handler != nil && old.Root == app.Root && old.Port == app.Port && old.Record.Kind == app.Record.Kind && old.Record.Revision == app.Record.Revision && old.Upstream == upstream:
+	case old.Handler != nil && old.Root == app.Root && old.Port == app.Port && old.Record.Kind == app.Record.Kind && old.Record.Revision == app.Record.Revision && old.Upstream == upstream && old.upstreamInode == verified.inode:
 		route.Handler = old.Handler
 	case app.Record.Kind == "static":
 		handler, err := meshserve.Handler(meshserve.Service{Name: "temporary-app", Kind: meshserve.Static, Target: app.Root}, "/")
@@ -1245,9 +1254,9 @@ func (o *Origin) awaitServer(ctx context.Context, id, session string, port int) 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		upstream, err := o.checkServer(ctx, session, port)
+		verified, err := o.checkServer(ctx, session, port)
 		if err == nil {
-			o.setServing(id, serving{upstream: upstream})
+			o.setServing(id, serving{upstream: verified.Address, inode: verified.Inode})
 			return nil
 		}
 		if !errors.Is(err, errNoListener) {
@@ -1260,7 +1269,7 @@ func (o *Origin) awaitServer(ctx context.Context, id, session string, port int) 
 		}
 	}
 }
-func (o *Origin) checkServer(ctx context.Context, session string, port int) (netip.AddrPort, error) {
+func (o *Origin) checkServer(ctx context.Context, session string, port int) (listenerSocket, error) {
 	return checkServerListener(ctx, port, func() ([]int, error) { return o.config.Workers.Processes(ctx, session) })
 }
 
@@ -1552,14 +1561,14 @@ func (o *Origin) checkServing(ctx context.Context, id string) error {
 		o.setServing(id, serving{})
 		return nil
 	}
-	upstream, err := o.checkServer(ctx, session, a.Port)
+	verified, err := o.checkServer(ctx, session, a.Port)
 	if errors.Is(err, errNoListener) {
 		err = listenerFault(fmt.Sprintf("nothing the app runs listens on port %d", a.Port))
 	}
 	if err != nil {
 		return o.suspend(ctx, a, err)
 	}
-	o.setServing(id, serving{upstream: upstream})
+	o.setServing(id, serving{upstream: verified.Address, inode: verified.Inode})
 	if a.Record.Ready {
 		return nil
 	}

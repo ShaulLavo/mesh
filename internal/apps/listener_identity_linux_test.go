@@ -271,19 +271,23 @@ func TestUpdatingASuspendedAppStartsANewGeneration(t *testing.T) {
 	}
 }
 
-func TestCachedRouteFollowsTheVerifiedUpstream(t *testing.T) {
+func TestCachedRouteFollowsTheVerifiedListener(t *testing.T) {
 	app := localApp{Record: Record{ID: "7k3d", Kind: "server", Status: "active", Revision: "r1"}, Root: "/apps/7k3d", Port: 3000, Phase: "ready"}
-	first := cachedAppRoute(app, appRoute{}, netip.MustParseAddrPort("127.0.0.1:3000"))
+	verified := serving{upstream: netip.MustParseAddrPort("127.0.0.1:3000"), inode: 41}
+	first := cachedAppRoute(app, appRoute{}, verified)
 	if first.Handler == nil {
 		t.Fatal("verified server app has no handler")
 	}
-	if again := cachedAppRoute(app, first, first.Upstream); again.Handler != first.Handler {
-		t.Fatal("unchanged route rebuilt its handler")
+	if again := cachedAppRoute(app, first, verified); again.Handler != first.Handler {
+		t.Fatal("unchanged listener rebuilt its handler")
 	}
-	if moved := cachedAppRoute(app, first, netip.MustParseAddrPort("[::1]:3000")); moved.Handler == first.Handler || moved.Handler == nil {
+	if rebound := cachedAppRoute(app, first, serving{upstream: verified.upstream, inode: 42}); rebound.Handler == first.Handler || rebound.Handler == nil {
+		t.Fatal("handler for one socket reused for another rebound at the same address")
+	}
+	if moved := cachedAppRoute(app, first, serving{upstream: netip.MustParseAddrPort("[::1]:3000"), inode: 41}); moved.Handler == first.Handler || moved.Handler == nil {
 		t.Fatal("handler for 127.0.0.1 reused for [::1]")
 	}
-	if withdrawn := cachedAppRoute(app, first, netip.AddrPort{}); withdrawn.Handler != nil {
+	if withdrawn := cachedAppRoute(app, first, serving{fault: "port 3000 is held by a process outside the app"}); withdrawn.Handler != nil {
 		t.Fatal("server app without a verified upstream kept a handler")
 	}
 }

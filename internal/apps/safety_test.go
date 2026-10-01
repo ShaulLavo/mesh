@@ -29,7 +29,7 @@ func TestDarwinListenerTableRejectsWildcardAndTailnet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if upstream, err := verifyListeners(3000, ownSockets(addresses)); len(addresses) != 2 || err != nil || upstream != netip.MustParseAddrPort("127.0.0.1:3000") {
+	if upstream, err := verifyListeners(3000, ownSockets(addresses)); len(addresses) != 2 || err != nil || upstream.Address != netip.MustParseAddrPort("127.0.0.1:3000") {
 		t.Fatalf("valid loopbacks rejected: %v", addresses)
 	}
 	for _, row := range []string{"tcp4 0 0 *.3000 *.* LISTEN", "tcp6 0 0 ::.3000 *.* LISTEN", "tcp4 0 0 100.64.0.2.3000 *.* LISTEN"} {
@@ -165,7 +165,7 @@ func TestVerifiedListenerChoosesOneAddress(t *testing.T) {
 				addresses = append(addresses, netip.MustParseAddr(address))
 			}
 			upstream, err := verifyListeners(3000, ownSockets(addresses))
-			if err != nil || upstream != netip.MustParseAddrPort(tt.want) {
+			if err != nil || upstream.Address != netip.MustParseAddrPort(tt.want) {
 				t.Fatalf("upstream = %v, %v; want %s", upstream, err, tt.want)
 			}
 		})
@@ -198,7 +198,17 @@ func TestVerifiedListenerRejectsForeignAndExposedSockets(t *testing.T) {
 		})
 	}
 	upstream, err := verifyListeners(3000, []listenerSocket{own("127.0.0.1:3000"), own("127.0.0.1:24678")})
-	if err != nil || upstream != netip.MustParseAddrPort("127.0.0.1:3000") {
+	if err != nil || upstream.Address != netip.MustParseAddrPort("127.0.0.1:3000") {
 		t.Fatalf("own loopback listener on another port refused: %v, %v", upstream, err)
+	}
+}
+
+func TestVerifiedListenerCarriesTheDialledSocketsInode(t *testing.T) {
+	upstream, err := verifyListeners(3000, []listenerSocket{
+		{Address: netip.MustParseAddrPort("[::1]:3000"), Own: true, Inode: 7},
+		{Address: netip.MustParseAddrPort("127.0.0.1:3000"), Own: true, Inode: 8},
+	})
+	if err != nil || upstream.Address != netip.MustParseAddrPort("127.0.0.1:3000") || upstream.Inode != 8 {
+		t.Fatalf("upstream = %+v, %v; want 127.0.0.1:3000 with inode 8", upstream, err)
 	}
 }
