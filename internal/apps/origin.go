@@ -122,8 +122,9 @@ type Origin struct {
 	exchange   chan struct{}
 	routes     atomic.Pointer[map[string]appRoute]
 	downloadMu sync.Mutex
-	// downloads are CLI downloads in progress by app ID; guarded by mu.
-	downloads   map[string]*downloadArchive
+	// downloads are the source snapshots CLI downloads read, by app ID;
+	// guarded by mu.
+	downloads   map[string][]*downloadArchive
 	config      OriginConfig
 	identity    string
 	admissionMu sync.Mutex
@@ -138,7 +139,7 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}, downloads: map[string]*downloadArchive{}}
+	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}, downloads: map[string][]*downloadArchive{}}
 	if err := load(ctx, c.Store, "apps.origin", &o.state); err != nil {
 		return nil, err
 	}
@@ -307,6 +308,11 @@ func cachedAppRoute(app localApp, old appRoute) appRoute {
 }
 
 func (o *Origin) Close() {
+	o.mu.Lock()
+	for id := range o.downloads {
+		o.releaseDownloadsLocked(id)
+	}
+	o.mu.Unlock()
 	if routes := o.routes.Load(); routes != nil {
 		for _, route := range *routes {
 			if route.Handler != nil && route.Handler.transport != nil {
@@ -1197,6 +1203,10 @@ func (o *Origin) cleanup(ctx context.Context, id string) error {
 	if !ValidID(id) {
 		return errors.New("app: invalid cleanup id")
 	}
+	// The snapshots hold the source being deleted.
+	o.mu.Lock()
+	o.releaseDownloadsLocked(id)
+	o.mu.Unlock()
 	if err := o.stop(ctx, id); err != nil {
 		return err
 	}
@@ -1228,6 +1238,7 @@ func (o *Origin) cleanup(ctx context.Context, id string) error {
 // own: safety work first, recovery second. A failing or slow app is reported
 // with the others instead of holding them back.
 func (o *Origin) Sync(ctx context.Context) error {
+	o.expireDownloads()
 	records, err := o.renewLeases(ctx)
 	// Safety work must run even when the caller's budget is spent, because that
 	// is exactly when a silent edge lets leases lapse.
@@ -1480,23 +1491,28 @@ func (o *Origin) expireUploads(ctx context.Context) error {
 			delete(o.state.Uploads, id)
 		}
 	}
-	for id, d := range o.downloads {
-		if o.ops["app "+id] == nil && !o.config.Now().Before(d.expiresAt) {
-			_ = d.file.Close()
-			delete(o.downloads, id)
-		}
-	}
 	return o.persist(ctx)
 }
 
-// downloadArchive is a CLI download in progress, read a chunk per request.
+// downloadArchive is a snapshot of one app source that CLI downloads read a
+// chunk per request. Requests carry no transfer identity, so every download of
+// the same source shares the snapshot, and a reader finishing never closes it:
+// only idle time, the app's deletion or the origin closing does.
 type downloadArchive struct {
-	file      *os.File
-	expiresAt time.Time
+	source   string
+	file     *os.File
+	lastRead time.Time
 }
 
-// downloadIdle is how long a CLI download may pause between chunks.
+// downloadIdle is how long a snapshot stays without a chunk read.
 const downloadIdle = 5 * time.Minute
+
+// maxAppDownloads bounds the snapshots kept per app: one for the current
+// source and one for a revision a transfer started before an update. Past it
+// the least recently read one is closed. A reader still on it is then served
+// another snapshot's bytes, which the CLI's archive check refuses, so that
+// download fails and asks to be run again rather than saving a mixed archive.
+const maxAppDownloads = 2
 
 // packUnnamed packs an app's source into a file unlinked as soon as it exists.
 // The random name is created exclusively, so a planted symlink or hard link is
@@ -1534,37 +1550,59 @@ func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 		return Result{}, errors.Join(err, errors.New("app: app expired"))
 	}
 	if q.Offset == 0 {
-		if err := o.startDownload(ctx, q.ID, a.Root); err != nil {
+		if err := o.snapshotDownload(ctx, q.ID, a.Root); err != nil {
 			return Result{}, err
 		}
 	}
-	return o.readDownload(q.ID, q.Offset)
+	return o.readDownload(q.ID, a.Root, q.Offset)
 }
 
-// startDownload packs a fresh archive for a CLI download, replacing one the
-// owner abandoned. The caller owns the app.
-func (o *Origin) startDownload(ctx context.Context, id, root string) error {
-	f, err := o.packUnnamed(ctx, id, root)
+// snapshotDownload makes sure a snapshot of the app's current source exists,
+// reusing one another download still reads. The caller owns the app.
+func (o *Origin) snapshotDownload(ctx context.Context, id, source string) error {
+	o.mu.Lock()
+	for _, d := range o.downloads[id] {
+		if d.source == source {
+			o.mu.Unlock()
+			return nil
+		}
+	}
+	o.mu.Unlock()
+	f, err := o.packUnnamed(ctx, id, source)
 	if err != nil {
 		return err
 	}
 	o.mu.Lock()
-	previous := o.downloads[id]
-	o.downloads[id] = &downloadArchive{file: f}
-	o.mu.Unlock()
-	if previous != nil {
-		_ = previous.file.Close()
+	defer o.mu.Unlock()
+	o.downloads[id] = append(o.downloads[id], &downloadArchive{source: source, file: f, lastRead: o.config.Now()})
+	kept := o.downloads[id]
+	for len(kept) > maxAppDownloads {
+		oldest := 0
+		for i, d := range kept {
+			if d.lastRead.Before(kept[oldest].lastRead) {
+				oldest = i
+			}
+		}
+		_ = kept[oldest].file.Close()
+		kept = slices.Delete(kept, oldest, oldest+1)
 	}
+	o.downloads[id] = kept
 	return nil
 }
 
-// readDownload returns one chunk of a CLI download and releases the archive
-// after its last chunk. The caller owns the app.
-func (o *Origin) readDownload(id string, offset int64) (Result, error) {
+// readDownload returns one chunk from the snapshot of the app's current
+// source, or from the most recently read one when the source changed since
+// the transfer began. The caller owns the app.
+func (o *Origin) readDownload(id, source string, offset int64) (Result, error) {
 	o.mu.Lock()
-	d := o.downloads[id]
+	var d *downloadArchive
+	for _, candidate := range o.downloads[id] {
+		if candidate.source == source || d == nil || (d.source != source && candidate.lastRead.After(d.lastRead)) {
+			d = candidate
+		}
+	}
 	if d != nil {
-		d.expiresAt = o.config.Now().Add(downloadIdle)
+		d.lastRead = o.config.Now()
 	}
 	o.mu.Unlock()
 	if d == nil {
@@ -1575,14 +1613,40 @@ func (o *Origin) readDownload(id string, offset int64) (Result, error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		return Result{}, fmt.Errorf("app %s: read download: %w", id, err)
 	}
-	done := errors.Is(err, io.EOF) || n < ChunkSize
-	if done {
-		o.mu.Lock()
-		delete(o.downloads, id)
-		o.mu.Unlock()
+	return Result{Data: b[:n], Done: errors.Is(err, io.EOF) || n < ChunkSize}, nil
+}
+
+// releaseDownloadsLocked closes an app's snapshots; it requires mu.
+func (o *Origin) releaseDownloadsLocked(id string) {
+	for _, d := range o.downloads[id] {
 		_ = d.file.Close()
 	}
-	return Result{Data: b[:n], Done: done}, nil
+	delete(o.downloads, id)
+}
+
+// expireDownloads closes snapshots no download has read for downloadIdle. It
+// needs no edge, so Sync runs it whether or not the edge answered.
+func (o *Origin) expireDownloads() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for id, list := range o.downloads {
+		if o.ops["app "+id] != nil {
+			continue
+		}
+		kept := list[:0]
+		for _, d := range list {
+			if o.config.Now().Before(d.lastRead.Add(downloadIdle)) {
+				kept = append(kept, d)
+			} else {
+				_ = d.file.Close()
+			}
+		}
+		if len(kept) == 0 {
+			delete(o.downloads, id)
+		} else {
+			o.downloads[id] = kept
+		}
+	}
 }
 
 // The edge permits 32 active apps per owner. A second generation of caches lets

@@ -366,3 +366,43 @@ func TestOverlappingDownloadsBothFinish(t *testing.T) {
 	}
 	requireSourceArchive(t, second)
 }
+
+func TestDownloadStartedBeforeUpdateFinishesOnItsRevision(t *testing.T) {
+	f := newAppFixture(t)
+	app := largeApp(t, f)
+	first, err := f.origin.Handle(context.Background(), Request{Action: "download", ID: app.ID})
+	if err != nil || first.Done {
+		t.Fatalf("first chunk: done %v, %v", first.Done, err)
+	}
+	upload, digest := uploadSource(t, f, updatedSourceArchiveFixture(t))
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: app.ID, Kind: "static", UploadID: upload, Digest: digest}); err != nil {
+		t.Fatal(err)
+	}
+	archive := first.Data
+	for {
+		chunk, err := f.origin.Handle(context.Background(), Request{Action: "download", ID: app.ID, Offset: int64(len(archive))})
+		if err != nil {
+			t.Fatalf("download begun before the update failed: %v", err)
+		}
+		archive = append(archive, chunk.Data...)
+		if chunk.Done {
+			break
+		}
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
+	if err == nil {
+		_, err = io.Copy(io.Discard, io.LimitReader(gz, 2*MaxArchive))
+	}
+	if err != nil {
+		t.Fatalf("download begun before the update is not one intact archive: %v", err)
+	}
+}
+
+func updatedSourceArchiveFixture(t *testing.T) string {
+	t.Helper()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "index.html"), []byte("updated page"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return source
+}
