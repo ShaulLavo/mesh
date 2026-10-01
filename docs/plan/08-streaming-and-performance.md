@@ -75,10 +75,14 @@ state.watch { topics: [sessions, services, metrics], metricsEvery: 2s }
 ```
 
 - **Single source.** Session and service events come from the reconcile diff (§1).
-  Metrics come from plan 07's `internal/hostmetrics` sampler, run only while at
-  least one subscriber asked for metrics, at the slowest requested interval
-  within bounds. With no subscribers nothing samples. This keeps plan 07's
-  "no always-on sampling loop" rule.
+  Metrics come from an `internal/hostmetrics` sampler that this plan delivers
+  (step 3): CPU, RAM, temperature and uptime, as specified in plan 07's
+  measurement contract. Start from the salvaged dashboard work
+  (`origin/wip/dashboard-salvage`, 829af08), which already contains a draft
+  sampler and the `host.metrics` request; review it rather than trusting it.
+  The sampler runs only while at least one subscriber asked for metrics, at the
+  slowest requested interval within bounds. With no subscribers nothing
+  samples. This keeps plan 07's "no always-on sampling loop" rule.
 - **Bounded queues.** Each subscriber has a fixed-size queue. Pending events
   coalesce by key (the latest state of a session replaces an older unsent one).
   On overflow the publisher drops the queue and sends `state.resync`, then a
@@ -87,6 +91,13 @@ state.watch { topics: [sessions, services, metrics], metricsEvery: 2s }
   reconnect means the client takes a new snapshot; it never guesses.
 - **Liveness.** The existing 15-second transport keepalive detects dead viewers.
   A viewer that stops reading is dropped, not buffered.
+- **Freshness without change.** An unchanged catalog sends no events, so the
+  publisher sends `state.current { seq, reconciledAt }` every ten seconds while
+  subscribed. It costs a few bytes and tells the viewer how old the host's
+  latest reconcile is. A viewer marks a host's catalog stale when no event or
+  `state.current` arrived for thirty seconds, matching plan 07's catalog
+  staleness rule, and shows the age from `reconciledAt` translated to its own
+  monotonic clock.
 - **Compatibility.** A daemon that answers `unknown control` gets the plan 07
   polling path, unchanged, as a fallback, cached per host identity and build.
 - **Invariants preserved.** Sessions belong to their host; the watch carries
@@ -132,7 +143,8 @@ When this plan's step 4 is verified, plan 07 continues with these changes:
   can show, plus visible and total counts. No unbounded slices cross into the TUI.
 - Footprint budget on the Pi, measured with the Plan 284 heavy-job accounting
   or `/proc` sampling: dashboard resident memory under 40 MB, flat Go heap over a
-  four-hour soak, goroutines bounded at one per host plus the UI, and redraws
+  four-hour soak, a constant number of goroutines per host (the transport's
+  read and keepalive loops plus one consumer) plus the UI, and redraws
   only on change or graph tick.
 
 ## Execution order
