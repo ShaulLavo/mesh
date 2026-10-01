@@ -137,7 +137,7 @@ async function checkInteractions(browser, name, reducedMotion) {
     const box = await dot.boundingBox();
     assert(box, 'The collapsed dot must be visible');
     assert.deepEqual([box.width, box.height], [44, 44], 'The dot keeps a 44px touch target');
-    assert.deepEqual(await pill.locator('.dot').evaluate(element => [element.offsetWidth, getComputedStyle(element).backgroundColor]), [12, 'rgb(165, 180, 252)']);
+    assert.deepEqual(await pill.locator('.dot').evaluate(element => [element.offsetWidth, getComputedStyle(element).backgroundColor]), [14, 'rgb(165, 180, 252)']);
     assert.equal(await pill.locator('[data-react-grab-toolbar-collapse]').count(), 0, 'There is no arrow; the dot is the only toggle');
     assert.equal(await dot.getAttribute('aria-expanded'), 'false');
     const closedCenter = await dotCenter();

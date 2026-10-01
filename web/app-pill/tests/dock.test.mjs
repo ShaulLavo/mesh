@@ -8,7 +8,7 @@ const portrait = { left: 0, top: 0, width: 390, height: 844 };
 const landscape = { left: 0, top: 0, width: 844, height: 390 };
 const notch = { top: 0, right: 47, bottom: 21, left: 47 };
 const middle = { x: DOT_TARGET / 2, y: DOT_TARGET / 2 };
-const pillSize = edge => edge === 'top' || edge === 'bottom' ? { width: 74, height: PILL_THICKNESS } : { width: PILL_THICKNESS, height: 74 };
+const pillSize = edge => edge === 'top' || edge === 'bottom' ? { width: 3 * DOT_TARGET, height: PILL_THICKNESS } : { width: PILL_THICKNESS, height: 3 * DOT_TARGET };
 
 const gapTo = (edge, box, viewport, insets) => ({
   top: box.top - viewport.top - insets.top,

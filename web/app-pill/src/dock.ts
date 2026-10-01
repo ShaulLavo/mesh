@@ -7,8 +7,9 @@ export interface Insets { top: number; right: number; bottom: number; left: numb
 export interface Dock { edge: Edge; ratio: number }
 
 export const GAP = 16;
-export const PILL_THICKNESS = 26;
+// Every control, the dot included, is a full 44px touch target, so the open pill is one target thick.
 export const DOT_TARGET = 44;
+export const PILL_THICKNESS = DOT_TARGET;
 // The dot rides the expanded pill's centerline, so expanding grows the pill around it instead of moving it.
 export const DOT_LINE = GAP + PILL_THICKNESS / 2;
 // The open pill keeps the dot at the center of one rounded end, so the dot never moves and never covers an action.

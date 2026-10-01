@@ -7,9 +7,9 @@ import { createDrag } from './drag';
 const SNAP_MS = 250;
 // The opening morph ends in a transitionend; this only guards against a missed event.
 const REVEAL_FALLBACK_MS = 1500;
-const DOT_RING_RADIUS = 10;
+const DOT_RING_RADIUS = 11;
 // The open clip extends past the pill so its shadow is not cut off.
-const OPEN_CLIP = 'inset(-12px round 25px)';
+const OPEN_CLIP = 'inset(-16px round 38px)';
 
 function loadDock(): Dock {
   try {
