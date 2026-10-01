@@ -12,6 +12,7 @@ import (
 	"modernc.org/sqlite"
 
 	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -68,6 +69,48 @@ func TestCatalogOpenContentionKeepsAnOptionalCache(t *testing.T) {
 	}
 	if err := result.cache.SaveServices(t.Context(), host, "", nil); err != nil {
 		t.Fatalf("cache open warning repeated on service save: %v", err)
+	}
+}
+
+func TestCatalogOpenContentionKeepsServiceFanoutLive(t *testing.T) {
+	t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
+	release := holdCatalogWriter(t, os.Getenv("MESH_STATE_DIR"))
+	defer release()
+	cache, err := OpenCatalogCache(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := cache.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	hosts := []HostRecord{{ID: "host-pc", Alias: "pc"}, {ID: "host-pi", Alias: "pi"}}
+	rows, diagnostics, err := CollectServiceCatalog(t.Context(), hosts, 40*time.Millisecond,
+		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {
+			return remoteServiceSnapshot{Services: []protocol.ServiceInfo{{Name: "api", Kind: "proxy", Target: "3000", Healthy: true}}}, nil
+		}, nil, cache)
+	if err != nil || len(rows) != len(hosts) {
+		t.Fatalf("live service fan-out = %#v, %v", rows, err)
+	}
+	for _, row := range rows {
+		if !row.Live || row.Stale || row.Service.Name != "api" {
+			t.Fatalf("optional cache replaced live service authority: %#v", row)
+		}
+	}
+	if len(diagnostics) != 1 || len(unavailableServiceAliases(diagnostics)) != 0 {
+		t.Fatalf("service diagnostics = %#v, want one nonfatal cache warning", diagnostics)
+	}
+	for _, diagnostic := range diagnostics {
+		var busy *sqlite.Error
+		if !errors.As(diagnostic, &busy) || busy.Code()&0xff != 5 {
+			t.Fatalf("cache warning = %v, want SQLITE_BUSY", diagnostic)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := cache.Load(ctx, hosts[0]); !errors.Is(err, context.Canceled) {
+		t.Fatalf("disabled cache swallowed cancellation: %v", err)
 	}
 }
 
