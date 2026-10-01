@@ -159,6 +159,7 @@ type creation struct {
 
 	retainedBytes      int64
 	expiresAt          time.Time
+	catalogSeen        bool
 	retirementObserved bool
 	completed          *list.Element
 }
@@ -508,8 +509,8 @@ func (l *lifecycle) completeCreation(created *creation) {
 	created.completed = l.completedCreations.PushBack(created)
 }
 
-// Catalog retirement, not worker exit, ends session ownership. A saved session
-// or a route-held worker must not lose its receipt merely because time passed.
+// An unpublished worker may be absent from the catalog for its entire life.
+// Only a positive exit observation can start its receipt's retirement window.
 func (l *lifecycle) expireCreations() {
 	now := l.now()
 	first := l.completedCreations.Front()
@@ -541,9 +542,7 @@ func (l *lifecycle) retainCreation(ctx context.Context, created *creation) bool 
 	if created.sessionID == "" {
 		return false
 	}
-	_, err := l.catalog.Get(ctx, storage.SessionID(created.sessionID))
-	if !errors.Is(err, sql.ErrNoRows) {
-		// An inconclusive catalog read is not evidence of retirement.
+	if !l.creationEnded(ctx, created) {
 		created.retirementObserved = false
 		return true
 	}
@@ -552,6 +551,22 @@ func (l *lifecycle) retainCreation(ctx context.Context, created *creation) bool 
 		return true
 	}
 	return false
+}
+
+func (l *lifecycle) creationEnded(ctx context.Context, created *creation) bool {
+	stored, err := l.catalog.Get(ctx, storage.SessionID(created.sessionID))
+	if err == nil {
+		created.catalogSeen = true
+		return stored.State == storage.StateExited || stored.State == storage.StateInterrupted
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false
+	}
+	if created.catalogSeen {
+		return true
+	}
+	_, ended := l.sessionExit(created.sessionID)
+	return ended
 }
 
 func (l *lifecycle) list(ctx context.Context, request protocol.Control) (protocol.Control, error) {

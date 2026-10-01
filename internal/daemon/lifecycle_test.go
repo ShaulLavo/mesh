@@ -842,7 +842,7 @@ func TestLifecycleCompletedCreationKeepsOnlyReplayData(t *testing.T) {
 func receiptTestLifecycle(t *testing.T, now func() time.Time, launch launchWorker) *lifecycle {
 	t.Helper()
 	return mustLifecycle(t, lifecycleConfig{
-		Catalog: &lifecycleTestCatalog{}, Connector: failingLifecycleConnector(),
+		Catalog: &lifecycleTestCatalog{sessions: []storage.Session{{ID: "7K3D", State: storage.StateExited}}}, Connector: failingLifecycleConnector(),
 		Host: storage.Host{ID: "host-a", MeshIdentity: "mesh-key"}, SessionsDir: "/state/s",
 		Now: now, CreationRetention: time.Minute, Launch: launch,
 	})
