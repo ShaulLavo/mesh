@@ -1087,3 +1087,25 @@ func TestLifecycleCreationStartedFailureFitsReservedBytes(t *testing.T) {
 		t.Fatalf("completed bytes = %d exceed admission reservation %d", l.creationBytes, reserved)
 	}
 }
+
+func TestLifecycleCreationByteLimitRefusesLaunchButReplaysCompleted(t *testing.T) {
+	launches := 0
+	l := receiptTestLifecycle(t, time.Now, func(worker.LaunchConfig) (worker.Launched, error) {
+		launches++
+		return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+	})
+	wanted := creationRequest{command: []string{"sh"}}
+	if _, err := l.createSession(context.Background(), protocol.TypeCreate, "complete", wanted); err != nil {
+		t.Fatal(err)
+	}
+	l.maxCreationBytes = l.creationBytes
+	if _, err := l.createSession(context.Background(), protocol.TypeCreate, "new", wanted); err == nil || !strings.Contains(err.Error(), "bytes") {
+		t.Fatalf("new creation at byte capacity error = %v", err)
+	}
+	if id, err := l.createSession(context.Background(), protocol.TypeCreate, "complete", wanted); err != nil || id != "7K3D" {
+		t.Fatalf("completed replay at capacity = %q, %v", id, err)
+	}
+	if launches != 1 {
+		t.Fatalf("launches at capacity = %d, want 1", launches)
+	}
+}
