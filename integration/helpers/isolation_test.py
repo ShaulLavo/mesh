@@ -27,6 +27,25 @@ class EntryPointContractTest(unittest.TestCase):
             with self.subTest(script=script.name):
                 self.assertEqual(script.read_text().splitlines()[1], expected)
 
+    def test_gate_requires_fail_closed_sourcing(self):
+        gates = Path(__file__).resolve().parents[2] / "scripts/gates.sh"
+        text = gates.read_text()
+        start = text.index("check_integration_isolation() {")
+        definition = text[start:text.index("\n}", start) + 2]
+        source = 'source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh"'
+        for action, expected in ((source + " || exit 1", 0), (source, 1), ("true", 1)):
+            with self.subTest(action=action), tempfile.TemporaryDirectory(prefix="m-gate-contract-") as temporary:
+                root = Path(temporary)
+                (root / "integration").mkdir()
+                (root / "integration/probe.sh").write_text("#!/bin/bash\n" + action + "\n")
+                environment = {"PATH": os.defpath, "HOME": str(root / "home"),
+                               "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config")}
+                result = subprocess.run(["bash", "-c", definition + "\ncheck_integration_isolation"],
+                                        cwd=root, env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                if expected:
+                    self.assertIn("must source the prelude", result.stderr)
+
 
 class IsolationBoundaryTest(unittest.TestCase):
     def test_defaults_and_aliases_are_refused(self):
