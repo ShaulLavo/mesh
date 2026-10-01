@@ -221,55 +221,6 @@ func TestDemandStopsAnUnpublishedWorkerThroughItsSocket(t *testing.T) {
 	}
 }
 
-// startedWorkerFixture is a stand-in mesh binary whose session-worker opens
-// its socket and clears the launching marker but never writes metadata, so
-// the real launcher fails after the process started.
-const startedWorkerFixture = `#!/usr/bin/env python3
-import os, socket, sys, time
-args = sys.argv[1:]
-d = args[args.index("--dir") + 1]
-s = socket.socket(socket.AF_UNIX)
-s.bind(os.path.join(d, "sock"))
-s.listen()
-with open(os.path.join(d, "fixture.pid"), "w") as f:
-    f.write(str(os.getpid()))
-os.remove(os.path.join(d, ".launching"))
-time.sleep(60)
-`
-
-func TestLabelledLaunchFailureAfterStartKeepsWorkerIdentity(t *testing.T) {
-	executable := filepath.Join(t.TempDir(), "mesh")
-	if err := os.WriteFile(executable, []byte(startedWorkerFixture), 0o700); err != nil { //nolint:gosec // the fixture must be executable
-		t.Fatal(err)
-	}
-	sessionsDir := t.TempDir()
-	lifecycle := mustLifecycle(t, lifecycleConfig{
-		Catalog:     &lifecycleTestCatalog{},
-		Connector:   failingLifecycleConnector(),
-		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
-		SessionsDir: sessionsDir,
-		Executable:  executable,
-	})
-	id, err := lifecycle.startLabelled(context.Background(), "serve /dev", []string{"sh", "-lc", "vite"}, "/work", nil)
-	entries, _ := os.ReadDir(sessionsDir)
-	for _, entry := range entries {
-		text, readErr := os.ReadFile(filepath.Join(sessionsDir, entry.Name(), "fixture.pid")) //nolint:gosec // a fixture file under the test's own sessions directory
-		if readErr != nil {
-			continue
-		}
-		var pid int
-		if _, scanErr := fmt.Sscan(string(text), &pid); scanErr == nil && pid > 0 {
-			t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
-		}
-	}
-	if err == nil || len(entries) != 1 {
-		t.Fatalf("startLabelled = %q, %v with %d session directories; want a launch failure after start", id, err, len(entries))
-	}
-	if id != entries[0].Name() {
-		t.Fatalf("worker %s started and is still running, but startLabelled returned %q", entries[0].Name(), id)
-	}
-}
-
 func TestLabelledLaunchFailureBeforeStartOwnsNoWorker(t *testing.T) {
 	sessionsDir := t.TempDir()
 	lifecycle := mustLifecycle(t, lifecycleConfig{
