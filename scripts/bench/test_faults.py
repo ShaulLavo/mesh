@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 import signal
 import threading
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import run as bench
 
@@ -87,11 +89,39 @@ def fixture(binary, parent, mode):
         shutil.rmtree(root)
 
 
+def cancelled_spawn(binary, parent):
+    started = []
+    original = subprocess.Popen
+    def spawn(*arguments, **keywords):
+        child = original(*arguments, **keywords)
+        started.append(child)
+        os.kill(os.getpid(), signal.SIGTERM)
+        return child
+    previous = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    try:
+        with bench.scratch_case(parent.resolve(), binary) as root:
+            args = SimpleNamespace(binary=binary, profile_dir=None, output=parent / "spawn-cancel.json")
+            try:
+                with patch.object(bench.subprocess, "Popen", spawn):
+                    bench.run_case(args, 0, root)
+            except KeyboardInterrupt:
+                pass
+        assert started[0].poll() is not None, "owned daemon survived cancellation during spawn"
+        print("PASS: cancellation during spawn settles owned daemon", flush=True)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        for child in started:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=5)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--scratch-parent", type=Path, required=True)
     args = parser.parse_args()
+    cancelled_spawn(args.binary.resolve(), args.scratch_parent)
     # A live child forces retention even when the benchmark exits through an error.
     with bench.scratch_case(args.scratch_parent.resolve(), args.binary.resolve()) as root:
         child = subprocess.Popen(["sleep", "30"], cwd=root)

@@ -368,6 +368,21 @@ def scratch_case(parent, binary):
         shutil.rmtree(root)
 
 
+
+@contextlib.contextmanager
+def defer_launch_interrupts():
+    pending = []
+    previous = {sig: signal.signal(sig, lambda *_: pending.append(True))
+                for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    if pending:
+        raise KeyboardInterrupt("benchmark interrupted during owned launch")
+
+
 def run_case(args, count, root):
     state = root / "state"
     state.mkdir()
@@ -386,11 +401,14 @@ def run_case(args, count, root):
         reservation.bind(("0.0.0.0", 0))
         port = reservation.getsockname()[1]
     with (root / "daemon.log").open("wb") as log:
-        daemon = subprocess.Popen([str(args.binary), "daemon", "--tailnet-port", str(port),
-                                   "--app-data-root", str(root / "apps")],
-                                  env=env, stdout=log, stderr=log)
         sessions = []
+        daemon = None
         try:
+            # Record the launched PID before delivering a cancellation to the owner.
+            with defer_launch_interrupts():
+                daemon = subprocess.Popen([str(args.binary), "daemon", "--tailnet-port", str(port),
+                                           "--app-data-root", str(root / "apps")],
+                                          env=env, stdout=log, stderr=log)
             wait_until(lambda: rpc(state, {"type": "host.info"})[0])
             for _ in range(count):
                 command = [os.sys.executable, str(HERE / "workload.py")]
@@ -461,7 +479,8 @@ def run_case(args, count, root):
             # A partially failed creation can leave a worker without a response.
             # Enumerate only the session directories under our own fresh root.
             sessions = sorted(set(sessions) | {p.name for p in (state / "s").glob("*/meta.json") for p in [p.parent]})
-            cleanup(state, sessions, daemon, args.binary)
+            if daemon is not None:
+                cleanup(state, sessions, daemon, args.binary)
 
 
 def summary(result):
