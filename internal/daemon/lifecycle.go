@@ -524,7 +524,7 @@ func (l *lifecycle) expireCreations() {
 			return
 		}
 		if l.retainCreation(lookupCtx, created) {
-			created.expiresAt = now.Add(l.creationRetention)
+			created.expiresAt = l.now().Add(l.creationRetention)
 			l.completedCreations.MoveToBack(element)
 			if lookupCtx.Err() != nil {
 				return

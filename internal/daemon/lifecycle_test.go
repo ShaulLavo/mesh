@@ -26,6 +26,7 @@ import (
 type lifecycleTestCatalog struct {
 	mu             sync.Mutex
 	sessions       []storage.Session
+	getHook        func()
 	getErr         error
 	getCalls       int
 	reconcileErr   error
@@ -60,6 +61,9 @@ func (c *lifecycleTestCatalog) Get(_ context.Context, id storage.SessionID) (sto
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.getCalls++
+	if c.getHook != nil {
+		c.getHook()
+	}
 	if c.getErr != nil {
 		return storage.Session{}, c.getErr
 	}
@@ -1107,5 +1111,37 @@ func TestLifecycleCreationByteLimitRefusesLaunchButReplaysCompleted(t *testing.T
 	}
 	if launches != 1 {
 		t.Fatalf("launches at capacity = %d, want 1", launches)
+	}
+}
+
+func TestLifecycleCreationRetirementClockIncludesCatalogLookupTime(t *testing.T) {
+	now := time.Now()
+	launches := 0
+	l := receiptTestLifecycle(t, func() time.Time { return now }, func(worker.LaunchConfig) (worker.Launched, error) {
+		launches++
+		return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+	})
+	wanted := creationRequest{command: []string{"sh"}}
+	create := func() {
+		t.Helper()
+		if _, err := l.createSession(context.Background(), protocol.TypeCreate, "lookup-clock", wanted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create()
+	catalog := l.catalog.(*lifecycleTestCatalog)
+	catalog.getHook = func() { now = now.Add(30 * time.Second) }
+	now = now.Add(time.Minute)
+	create()
+	catalog.getHook = nil
+	now = now.Add(time.Minute - time.Nanosecond)
+	create()
+	if launches != 1 {
+		t.Fatalf("session relaunched before a full window after catalog lookup, launches = %d", launches)
+	}
+	now = now.Add(time.Nanosecond)
+	create()
+	if launches != 2 {
+		t.Fatalf("launches after observed retirement window = %d, want 2", launches)
 	}
 }
