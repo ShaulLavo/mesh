@@ -806,3 +806,20 @@ func TestRemoveDelegatesToCatalog(t *testing.T) {
 		t.Fatalf("catalog retired %d sessions, want 1", catalog.retired)
 	}
 }
+
+func TestLifecycleCompletedCreationKeepsOnlyReplayData(t *testing.T) {
+	const commandText = "private-command-text-must-not-stay-in-the-receipt"
+	l := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{}, Connector: failingLifecycleConnector(),
+		Host: storage.Host{ID: "host-a", MeshIdentity: "mesh-key"}, SessionsDir: "/state/s",
+		Launch: func(cfg worker.LaunchConfig) (worker.Launched, error) {
+			return worker.Launched{Meta: worker.Meta{ID: "7K3D", Command: cfg.Command}}, nil
+		},
+	})
+	if _, err := l.createSession(context.Background(), protocol.TypeCreate, "compact", creationRequest{command: []string{"sh", "-c", commandText}}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", *l.creations["compact"]), commandText) {
+		t.Fatal("completed receipt still retains the full command or launch metadata")
+	}
+}
