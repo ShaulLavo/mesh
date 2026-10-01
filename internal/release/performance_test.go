@@ -2,12 +2,12 @@ package release
 
 import "testing"
 
-// Package init precedes main's CPU profile. Re-running exactly that read here
-// attributes CLI startup without changing the shipped initialization path.
+// Fresh identity readers measure cold image hashing; Current's process cache
+// would hide that work.
 func BenchmarkExecutingBuildRead(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
-		build := readExecutingBuild()
+		build := newExecutingBuild(executingExecutablePath())()
 		if build.Digest == "" {
 			b.Fatal("executable digest missing")
 		}

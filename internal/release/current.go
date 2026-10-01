@@ -2,50 +2,47 @@ package release
 
 import (
 	"crypto/sha256"
-	"debug/buildinfo"
 	"encoding/hex"
 	"io"
 	"os"
 	"runtime/debug"
+	"sync"
 )
 
 // Version is set by the release linker. Development builds leave it empty.
 var Version string
 
-var executingBuild = readExecutingBuild()
+var buildMetadata = readBuildMetadata()
+var executingBuild = newExecutingBuild(executingExecutablePath())
 
-// Current reports the executable image loaded by this process.
-func Current() Build {
-	build := executingBuild
+// Metadata reports build settings without reading or hashing the executable.
+// Its empty digest must not be used for update or compatibility decisions.
+func Metadata() Build {
+	build := buildMetadata
 	if Version != "" {
 		build.Version = Version
 	}
 	return build
 }
 
-func readExecutingBuild() Build {
+// Current lazily hashes the executable image once per process for build identity.
+func Current() Build {
+	build := executingBuild()
+	if Version != "" {
+		build.Version = Version
+	}
+	return build
+}
+
+func readBuildMetadata() Build {
 	build := Build{
 		Platform:       CurrentPlatform(),
 		StateVersion:   CurrentStateVersion,
 		WorkerProtocol: CurrentWorkerProtocol,
 		UpdateProtocol: CurrentUpdateProtocol,
 	}
-	file, err := os.Open(executingExecutablePath())
-	if err != nil {
-		build.Modified = true
-		return build
-	}
-	defer file.Close() //nolint:errcheck // read-only
-	// Stream the image: every mesh process runs this at init, and reading the
-	// whole binary into the heap left each long-lived worker tens of MB larger.
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		build.Modified = true
-		return build
-	}
-	build.Digest = hex.EncodeToString(hash.Sum(nil))
-	info, err := buildinfo.Read(file)
-	if err != nil {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
 		build.Modified = true
 		return build
 	}
@@ -53,6 +50,30 @@ func readExecutingBuild() Build {
 	for _, setting := range info.Settings {
 		applyBuildSetting(&build, setting)
 	}
+	return build
+}
+
+// Pin the image before an update replaces its pathname, including on macOS
+// where /proc/self/exe is unavailable. Opening it does not read its contents.
+func newExecutingBuild(path string) func() Build {
+	file, err := os.Open(path) //nolint:gosec // path names this process executable
+	return sync.OnceValue(func() Build { return readExecutingBuild(file, err) })
+}
+
+func readExecutingBuild(file *os.File, err error) Build {
+	build := buildMetadata
+	if err != nil {
+		build.Modified = true
+		return build
+	}
+	defer file.Close() //nolint:errcheck // read-only
+	// Stream the image so identity checks do not retain binary-sized allocations.
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		build.Modified = true
+		return build
+	}
+	build.Digest = hex.EncodeToString(hash.Sum(nil))
 	return build
 }
 

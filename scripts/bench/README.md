@@ -59,7 +59,9 @@ activity, and the timings do not characterize SD-card latency or wear.
 catalog without changing this baseline's full-list request. Labels include source
 commit, architecture, Go version, kernel, host, timestamp, window and binary size.
 The committed `results/origin-main-9e3f62b/` measurements use production source at
-`9e3f62b56405bdda7a90a32b0acfe3d628fd9208`; only test/harness files were added.
+`9e3f62b56405bdda7a90a32b0acfe3d628fd9208`; only test/harness files were added when
+those measurements were collected. Later main integrations do not change that
+pin or relabel the results. A new run measures the checkout being built.
 
 ## Profiles
 
@@ -77,11 +79,16 @@ relay/attachment queues, unchanged picker/inspector updates and keepalive
 Ping/Pong, plus CLI command-tree construction. The Ping benchmark measures each Ping's timeout/socket work without waiting
 15 seconds between operations. Loopback keepalive results are not WAN RTTs.
 
-`GODEBUG=inittrace=1` captures CLI package initialization. The release benchmark
-repeats the real initializer on its **test executable**; its hash cost scales with
-that executable's size and must not be substituted for Mesh startup. A profile
-started in `main` alone misses package-init hashing entirely. Profiling changes
-no shipped source and proposes no performance fixes.
+`GODEBUG=inittrace=1` captures CLI package initialization. At the committed
+baseline pin hashing runs during package init, before a profile started in `main`.
+Current main hashes lazily; the release benchmark creates and invokes a fresh
+identity reader each iteration so the process cache does not hide cold hashing.
+It measures its **test executable**, including reader creation/open/hash/close,
+not CLI startup. The baseline benchmark also reread build metadata per iteration;
+the current implementation reads metadata once during package init, so these
+operation costs differ. Keep the original profiles pinned, and use actual Mesh
+startup measurements for before/after claims. Profiling changes no shipped source
+and proposes no performance fixes.
 
 `integration/bench_harness.sh` checks fragmented frames, limits, `/proc`, real
 SQLite commit/reset counting, and a real 0/2-session lifecycle/throughput smoke

@@ -9,6 +9,8 @@ ExecStart=@MESH_BINARY@ daemon --tailnet-port=@MESH_PORT@ --ssh-port=@MESH_SSH_P
 Restart=on-failure
 RestartSec=2
 KillMode=process
+MemoryAccounting=yes
+# Workers share this cgroup; MemoryMax could kill their sessions.
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 [Install]

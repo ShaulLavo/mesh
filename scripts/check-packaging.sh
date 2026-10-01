@@ -44,6 +44,8 @@ check_source_contract() {
 
   contains scripts/install/assets/mesh.service 'Restart=on-failure'
   contains scripts/install/assets/mesh.service 'KillMode=process'
+  contains scripts/install/assets/mesh.service 'MemoryAccounting=yes'
+  does_not_contain scripts/install/assets/mesh.service 'MemoryMax='
   contains scripts/install/assets/mesh.service 'WantedBy=default.target'
   contains scripts/install/assets/dev.shaulavo.mesh.plist '<key>RunAtLoad</key>'
   contains scripts/install/assets/dev.shaulavo.mesh.plist '<key>KeepAlive</key>'

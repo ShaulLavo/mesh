@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/transport"
@@ -35,6 +36,11 @@ const (
 	httpShutdownTimeout      = 2 * time.Second
 	maximumPublicConnections = 512
 	maximumPublicHeaderBytes = 64 << 10
+	connectionRefusalTimeout = 100 * time.Millisecond
+
+	// These budgets are independent; the Tailnet budget spans every bound address.
+	DefaultUnixConnectionLimit    = 128
+	DefaultTailnetConnectionLimit = 128
 )
 
 // A replacement entry gets the current time, even if the filesystem reuses the
@@ -53,8 +59,11 @@ var ErrDaemonAlreadyRunning = errors.New("daemon: already running")
 // bound IP, TailnetNames entry, current PrivateName, or a public name from
 // TrustPublicEdgeForwarding. ReportError receives non-fatal listener errors and
 // may be nil. RequireAllTailnetListeners turns any
-// discovered-address bind failure into a startup failure.
+// discovered-address bind failure into a startup failure. Zero connection caps
+// select the defaults; negative caps are rejected.
 type ListenerConfig struct {
+	UnixConnectionLimit        int
+	TailnetConnectionLimit     int
 	StateDir                   string
 	TailnetAddrs               []string
 	TailnetNames               []string
@@ -74,6 +83,8 @@ type ListenerConfig struct {
 }
 
 type listenerConfig struct {
+	unixConnectionLimit        int
+	tailnetConnectionLimit     int
 	listen                     func(string, string) (net.Listener, error)
 	stateDir                   string
 	tailnetAddrs               []netip.Addr
@@ -205,7 +216,10 @@ func serveBoundListeners(
 	// Failed discovery binds must not establish non-loopback IP authorities.
 	normalized.httpHosts.tailnetAddrs = boundHTTPAddresses(tailnetListeners)
 	connections := newConnectionGroup(handler)
-	server := newWebSocketServer(ctx, normalized, connections)
+	connections.name, connections.limit = "Unix", normalized.unixConnectionLimit
+	tailnetConnections := newConnectionGroup(handler)
+	tailnetConnections.name, tailnetConnections.limit = "Tailnet", normalized.tailnetConnectionLimit
+	server := newWebSocketServer(ctx, normalized, tailnetConnections)
 	var httpsServer *http.Server
 	if httpsListener != nil {
 		httpsServer = &http.Server{
@@ -309,7 +323,7 @@ func serveBoundListeners(
 	cancel()
 
 	closeErr := unixListener.Close()
-	closeErr = errors.Join(closeErr, connections.closeAll())
+	closeErr = errors.Join(closeErr, connections.closeAll(), tailnetConnections.closeAll())
 	if err := shutdownHTTPServer(server.Server, normalized.shutdownTimeout); err != nil {
 		closeErr = errors.Join(closeErr, fmt.Errorf("daemon: close WebSocket server: %w", err))
 	}
@@ -326,6 +340,7 @@ func serveBoundListeners(
 	}
 	listenerWG.Wait()
 	connections.wait()
+	tailnetConnections.wait()
 	return errors.Join(runErr, closeErr)
 }
 
@@ -362,7 +377,18 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		return listenerConfig{}, fmt.Errorf("daemon: state directory %s is not a directory", cfg.StateDir)
 	}
 
+	if cfg.UnixConnectionLimit < 0 || cfg.TailnetConnectionLimit < 0 {
+		return listenerConfig{}, errors.New("daemon: control connection caps must be positive; zero selects the default")
+	}
+	if cfg.UnixConnectionLimit == 0 {
+		cfg.UnixConnectionLimit = DefaultUnixConnectionLimit
+	}
+	if cfg.TailnetConnectionLimit == 0 {
+		cfg.TailnetConnectionLimit = DefaultTailnetConnectionLimit
+	}
 	normalized := listenerConfig{
+		unixConnectionLimit:        cfg.UnixConnectionLimit,
+		tailnetConnectionLimit:     cfg.TailnetConnectionLimit,
 		listen:                     net.Listen,
 		stateDir:                   filepath.Clean(cfg.StateDir),
 		tailnetPort:                cfg.TailnetPort,
@@ -512,6 +538,15 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 			services.ServeHTTP(w, r)
 			return
 		}
+		id, err := connections.reserve()
+		if err != nil {
+			if !errors.Is(err, transport.ErrClosed) {
+				w.Header().Set(transport.ControlConnectionLimitHeader, strconv.Itoa(connections.limit))
+			}
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		defer connections.release(id)
 		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{}, func(connectionCtx context.Context, conn transport.Conn) error {
 			handlerCtx, cancel := context.WithCancel(ctx)
 			stop := context.AfterFunc(connectionCtx, cancel)
@@ -519,7 +554,7 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 				stop()
 				cancel()
 			}()
-			return connections.handle(handlerCtx, conn)
+			return connections.run(id, handlerCtx, conn)
 		})
 	})
 	server.Server = &http.Server{
@@ -560,12 +595,22 @@ func serveUnixConnections(ctx context.Context, listener net.Listener, connection
 			_ = stream.Close()
 			continue
 		}
-		connections.start(context.WithValue(ctx, localClientKey{}, true), conn)
+		id, err := connections.reserve()
+		if err != nil {
+			refuseUnixConnection(stream, conn, err)
+			continue
+		}
+		go func() {
+			defer connections.release(id)
+			_ = connections.run(id, context.WithValue(ctx, localClientKey{}, true), conn)
+		}()
 	}
 }
 
 type connectionGroup struct {
 	handler transport.Handler
+	name    string
+	limit   int
 	mu      sync.Mutex
 	nextID  uint64
 	closed  bool
@@ -577,47 +622,58 @@ func newConnectionGroup(handler transport.Handler) *connectionGroup {
 	return &connectionGroup{handler: handler, conns: make(map[uint64]transport.Conn)}
 }
 
-func (g *connectionGroup) start(ctx context.Context, conn transport.Conn) {
-	id, ok := g.add(conn)
-	if !ok {
-		_ = conn.Close()
+// Refusals read one request so older clients receive their matching error.
+// A deadline bounds this work without allocating another handler goroutine.
+func refuseUnixConnection(stream net.Conn, conn transport.Conn, refusal error) {
+	defer conn.Close() //nolint:errcheck // refused socket is disposable
+	_ = stream.SetDeadline(time.Now().Add(connectionRefusalTimeout))
+	frame, err := conn.ReadFrame()
+	if err != nil || frame.Kind != protocol.KindControl {
 		return
 	}
-	go func() {
-		_ = g.run(id, ctx, conn)
-	}()
-}
-
-func (g *connectionGroup) handle(ctx context.Context, conn transport.Conn) error {
-	id, ok := g.add(conn)
-	if !ok {
-		_ = conn.Close()
-		return transport.ErrClosed
+	request, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return
 	}
-	return g.run(id, ctx, conn)
+	payload, err := (protocol.Control{Type: protocol.TypeError, RequestID: request.RequestID, Message: refusal.Error()}).Encode()
+	if err == nil {
+		_ = conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload})
+	}
 }
 
-func (g *connectionGroup) add(conn transport.Conn) (uint64, bool) {
+func (g *connectionGroup) reserve() (uint64, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {
-		return 0, false
+		return 0, transport.ErrClosed
+	}
+	if g.limit > 0 && len(g.conns) >= g.limit {
+		return 0, fmt.Errorf("daemon: %s control connection cap (%d) reached", g.name, g.limit)
 	}
 	g.nextID++
 	id := g.nextID
-	g.conns[id] = conn
+	// Reservations also count before WebSocket upgrade allocates its queues.
+	g.conns[id] = nil
 	g.wg.Add(1)
-	return id, true
+	return id, nil
+}
+
+func (g *connectionGroup) release(id uint64) {
+	g.mu.Lock()
+	delete(g.conns, id)
+	g.mu.Unlock()
+	g.wg.Done()
 }
 
 func (g *connectionGroup) run(id uint64, ctx context.Context, conn transport.Conn) error {
-	defer g.wg.Done()
-	defer func() {
-		g.mu.Lock()
-		delete(g.conns, id)
+	defer conn.Close() //nolint:errcheck // connection teardown
+	g.mu.Lock()
+	if g.closed {
 		g.mu.Unlock()
-		_ = conn.Close()
-	}()
+		return transport.ErrClosed
+	}
+	g.conns[id] = conn
+	g.mu.Unlock()
 	return g.handler(ctx, conn)
 }
 
@@ -626,7 +682,9 @@ func (g *connectionGroup) closeAll() error {
 	g.closed = true
 	connections := make([]transport.Conn, 0, len(g.conns))
 	for _, conn := range g.conns {
-		connections = append(connections, conn)
+		if conn != nil {
+			connections = append(connections, conn)
+		}
 	}
 	g.mu.Unlock()
 
