@@ -31,7 +31,7 @@ func TestFreePortKeepsReservationUntilCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = unix.Close(fd) }()
-	if err := unix.Bind(fd, &unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 2}, Port: port}); err != nil {
+	if err := unix.Bind(fd, &unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}, Port: port}); err != nil {
 		t.Fatalf("cleanup kept port %d reserved: %v", port, err)
 	}
 }
@@ -44,7 +44,7 @@ func requirePortReservation(t *testing.T, port int) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = unix.Close(fd) })
-		var address unix.Sockaddr = &unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 2}, Port: port}
+		var address unix.Sockaddr = &unix.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}, Port: port}
 		if family == unix.AF_INET6 {
 			address = &unix.SockaddrInet6{Addr: [16]byte{15: 1}, Port: port}
 		}
