@@ -22,6 +22,8 @@ import (
 	"github.com/shaul/mesh/internal/webauth"
 )
 
+const admissionLifetime = 30 * time.Second
+
 type admission struct {
 	Download   bool      `json:"download,omitempty"`
 	ID         string    `json:"id"`
@@ -145,7 +147,8 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 	r = admitted
 	activityStarted := time.Now()
 	defer release()
-	proof, err := Sign("mesh-app/admission/v1", app.Owner, app.Generation, admission{ID: id, Generation: app.Generation, Method: r.Method, URI: r.URL.RequestURI(), Host: name, Until: e.config.Now().Add(30 * time.Second)}, e.config.Key, e.config.Now())
+	now := e.config.Now()
+	proof, err := Sign("mesh-app/admission/v1", app.Owner, app.Generation, admission{ID: id, Generation: app.Generation, Method: r.Method, URI: r.URL.RequestURI(), Host: name, Until: now.Add(admissionLifetime)}, e.config.Key, now)
 	if err != nil {
 		http.Error(w, "app unavailable", http.StatusServiceUnavailable)
 		return true
@@ -741,7 +744,8 @@ func (e *Edge) downloadSource(w http.ResponseWriter, r *http.Request, app Record
 		http.Error(w, "Owner authorization required", http.StatusForbidden)
 		return
 	}
-	proof, err := Sign("mesh-app/admission/v1", app.Owner, app.Generation, admission{ID: app.ID, Generation: app.Generation, Method: "GET", URI: "/", Host: app.ID + "." + Domain, Until: e.config.Now().Add(30 * time.Second), Download: true}, e.config.Key, e.config.Now())
+	now := e.config.Now()
+	proof, err := Sign("mesh-app/admission/v1", app.Owner, app.Generation, admission{ID: app.ID, Generation: app.Generation, Method: "GET", URI: "/", Host: app.ID + "." + Domain, Until: now.Add(admissionLifetime), Download: true}, e.config.Key, now)
 	if err != nil {
 		http.Error(w, "Download unavailable", http.StatusServiceUnavailable)
 		return

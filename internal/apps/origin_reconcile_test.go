@@ -184,7 +184,7 @@ func sortedServerApps(t *testing.T, f *appFixture) (Record, Record) {
 
 func serveStatus(t *testing.T, f *appFixture, app Record) int {
 	t.Helper()
-	proof, err := Sign("mesh-app/admission/v1", identityFor(f.ownerKey), 1, admission{ID: app.ID, Generation: app.Generation, Method: http.MethodGet, URI: "/", Host: app.ID + "." + Domain, Until: f.now.Add(time.Minute)}, f.edgeKey, f.now)
+	proof, err := Sign("mesh-app/admission/v1", identityFor(f.ownerKey), 1, admission{ID: app.ID, Generation: app.Generation, Method: http.MethodGet, URI: "/", Host: app.ID + "." + Domain, Until: f.now.Add(30 * time.Second)}, f.edgeKey, f.now)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"container/heap"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -122,7 +123,8 @@ type Origin struct {
 	config      OriginConfig
 	identity    string
 	admissionMu sync.Mutex
-	admissions  map[string]time.Time
+	admissionAt time.Time
+	admissions  map[string]*admissionCache
 }
 
 func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
@@ -132,7 +134,7 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]time.Time{}}
+	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}}
 	if err := load(ctx, c.Store, "apps.origin", &o.state); err != nil {
 		return nil, err
 	}
@@ -1392,6 +1394,103 @@ func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 	return Result{Data: b[:n], Done: errors.Is(err, io.EOF) || n < ChunkSize}, nil
 }
 
+// The edge permits 32 active apps per owner. A second generation of caches lets
+// app turnover retain live proofs without taking a new app's replay capacity.
+const maxAdmissionApps = 64
+const maxViewAdmissions = 4096
+const maxDownloadAdmissions = 64
+
+type admissionCache struct {
+	seen      map[string]struct{}
+	deadlines admissionDeadlines
+	views     int
+	downloads int
+}
+type admissionDeadline struct {
+	id       string
+	until    time.Time
+	download bool
+}
+type admissionDeadlines []admissionDeadline
+
+func (d admissionDeadlines) Len() int           { return len(d) }
+func (d admissionDeadlines) Less(i, j int) bool { return d[i].until.Before(d[j].until) }
+func (d admissionDeadlines) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
+func (d *admissionDeadlines) Push(value any)    { *d = append(*d, value.(admissionDeadline)) }
+func (d *admissionDeadlines) Pop() any {
+	last := len(*d) - 1
+	value := (*d)[last]
+	(*d)[last] = admissionDeadline{}
+	*d = (*d)[:last]
+	return value
+}
+
+type admissionResult uint8
+
+const (
+	admissionAccepted admissionResult = iota
+	admissionReplayed
+	admissionFull
+)
+
+func (c *admissionCache) expire(now time.Time) {
+	for len(c.deadlines) > 0 && !now.Before(c.deadlines[0].until) {
+		expired := heap.Pop(&c.deadlines).(admissionDeadline)
+		delete(c.seen, expired.id)
+		if expired.download {
+			c.downloads--
+		} else {
+			c.views--
+		}
+	}
+}
+
+func (o *Origin) consumeAdmission(proof Signed, a admission, now time.Time) admissionResult {
+	o.admissionMu.Lock()
+	defer o.admissionMu.Unlock()
+	// Signed deadlines have no monotonic timestamp, so their high-water mark
+	// must use wall time too.
+	now = now.UTC()
+	if now.Before(o.admissionAt) {
+		now = o.admissionAt
+	}
+	o.admissionAt = now
+	if !now.Before(a.Until) {
+		return admissionReplayed
+	}
+	for app, cache := range o.admissions {
+		cache.expire(now)
+		if len(cache.seen) == 0 {
+			delete(o.admissions, app)
+		}
+	}
+	cache := o.admissions[a.ID]
+	if cache == nil {
+		if len(o.admissions) >= maxAdmissionApps {
+			return admissionFull
+		}
+		cache = &admissionCache{seen: map[string]struct{}{}}
+		o.admissions[a.ID] = cache
+	}
+	if _, replayed := cache.seen[proof.ID]; replayed {
+		return admissionReplayed
+	}
+	if a.Download {
+		if cache.downloads >= maxDownloadAdmissions {
+			return admissionFull
+		}
+		cache.downloads++
+	} else {
+		if cache.views >= maxViewAdmissions {
+			return admissionFull
+		}
+		cache.views++
+	}
+	cache.seen[proof.ID] = struct{}{}
+	heap.Push(&cache.deadlines, admissionDeadline{id: proof.ID, until: a.Until, download: a.Download})
+	return admissionAccepted
+}
+
 func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 	const prefix = "/.mesh-app/origin/"
 	if !strings.HasPrefix(r.URL.Path, prefix) {
@@ -1402,8 +1501,9 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 		http.NotFound(w, r)
 		return true
 	}
+	now := o.config.Now()
 	var proof Signed
-	if err := decode(token, &proof); err != nil || proof.Verify("mesh-app/admission/v1", o.identity, o.config.EdgeIdentity, o.config.Now()) != nil {
+	if err := decode(token, &proof); err != nil || proof.Verify("mesh-app/admission/v1", o.identity, o.config.EdgeIdentity, now) != nil {
 		http.NotFound(w, r)
 		return true
 	}
@@ -1420,32 +1520,24 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 	if r.URL.RawQuery != "" {
 		rawURI += "?" + r.URL.RawQuery
 	}
-	if !ValidID(admission.ID) || admission.Method != r.Method || admission.URI != rawURI || !o.config.Now().Before(admission.Until) || admission.Host != admission.ID+"."+Domain {
-		http.NotFound(w, r)
-		return true
-	}
-	o.admissionMu.Lock()
-	for id, until := range o.admissions {
-		if !o.config.Now().Before(until) {
-			delete(o.admissions, id)
-		}
-	}
-	_, replayed := o.admissions[proof.ID]
-	if len(o.admissions) >= 4096 {
-		replayed = true
-	}
-	if !replayed {
-		o.admissions[proof.ID] = admission.Until
-	}
-	o.admissionMu.Unlock()
-	if replayed {
+	if !ValidID(admission.ID) || admission.Method != r.Method || admission.URI != rawURI || !now.Before(admission.Until) || admission.Until.After(proof.IssuedAt.Add(admissionLifetime)) || admission.Host != admission.ID+"."+Domain {
 		http.NotFound(w, r)
 		return true
 	}
 	app, ok := (*o.routes.Load())[admission.ID]
-	if !ok || app.Phase != "ready" || app.Record.Generation != admission.Generation || !o.config.Now().Before(app.Record.LeaseUntil) {
+	if !ok || app.Phase != "ready" || app.Record.Generation != admission.Generation || !now.Before(app.Record.LeaseUntil) {
 		http.Error(w, "app unavailable", http.StatusServiceUnavailable)
 		return true
+	}
+	switch o.consumeAdmission(proof, admission, now) {
+	case admissionReplayed:
+		http.NotFound(w, r)
+		return true
+	case admissionFull:
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "app busy", http.StatusServiceUnavailable)
+		return true
+	case admissionAccepted:
 	}
 	if admission.Download {
 		o.downloadMu.Lock()
