@@ -222,28 +222,9 @@ func (a *application) attachWindow(cmd *cobra.Command, current Session, socket s
 	if err != nil {
 		return err
 	}
-	opts.SocketPath, opts.SessionID, opts.LastSeq, opts.IfDetached = socket, current.ID, lastSeq, ifDetached
+	opts.SocketPath, opts.LastSeq, opts.IfDetached = socket, lastSeq, ifDetached
 	opts.ContainingSessions = a.dependencies.Containment(cmd.Context())
-	if len(opts.ContainingSessions) > 0 {
-		target, err := resolvedTargetIdentity(resolvedSession{local: &current})
-		if err != nil {
-			return err
-		}
-		opts.HostID = target.HostID
-	}
-	restore := a.bindTerminal(bindingFor(resolvedSession{local: &current}))
-	a.noticeBeforeAttachment(cmd)
-	result, err := Attach(cmd.Context(), opts)
-	if err != nil {
-		if !result.Established {
-			restore()
-		}
-		return err
-	}
-	if result.Exited && result.ExitCode != 0 {
-		return statusError{code: result.ExitCode}
-	}
-	return nil
+	return a.attach(cmd, attachRequest{target: resolvedSession{local: &current}, options: opts, quiet: true})
 }
 
 func (a *application) attachmentOptions(cmd *cobra.Command, detachKey string, raw bool) (AttachOptions, error) {

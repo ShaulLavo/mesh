@@ -1,13 +1,16 @@
 package daemon
 
 import (
+	"container/list"
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,17 +39,21 @@ type lifecycleCatalog interface {
 type launchWorker func(worker.LaunchConfig) (worker.Launched, error)
 
 type lifecycleConfig struct {
-	Context          context.Context
-	Catalog          lifecycleCatalog
-	Connector        WorkerConnector
-	Host             storage.Host
-	PrivateName      func() string
-	SessionsDir      string
-	Executable       string
-	Env              []string
-	Launch           launchWorker
-	PublishTimeout   time.Duration
-	OperationTimeout time.Duration
+	Context             context.Context
+	Catalog             lifecycleCatalog
+	Connector           WorkerConnector
+	Host                storage.Host
+	PrivateName         func() string
+	SessionsDir         string
+	Executable          string
+	Env                 []string
+	Launch              launchWorker
+	PublishTimeout      time.Duration
+	OperationTimeout    time.Duration
+	Now                 func() time.Time
+	CreationRetention   time.Duration
+	MaxPendingCreations int
+	MaxCreationBytes    int64
 }
 
 type lifecycle struct {
@@ -65,14 +72,30 @@ type lifecycle struct {
 	// whose inspection protocol predates structured terminal styles.
 	observeTerminalSize func(int) (int, int, bool)
 
-	creationsMu sync.Mutex
-	creations   map[string]*creation
+	creationsMu         sync.Mutex
+	creations           map[string]*creation
+	completedCreations  list.List
+	pendingCreations    int
+	creationBytes       int64
+	now                 func() time.Time
+	creationRetention   time.Duration
+	maxPendingCreations int
+	maxCreationBytes    int64
 
 	memory memorySampler
 }
 
 const (
 	defaultPublishTimeout = 30 * time.Second
+	// CLI creates have a 40-second budget. Bootstrap commands also guard their
+	// operations with a durable journal, since they outlive daemon receipts.
+	defaultCreationRetention = 10 * time.Minute
+	// Thousands of simultaneous launches exceed normal terminal and app demand.
+	defaultMaxPendingCreations = 4096
+	defaultMaxCreationBytes    = 64 << 20
+	creationReceiptBytes       = 512
+	maxCreationErrorBytes      = 4096
+
 	// Kill and hibernate acknowledgements follow the worker's five-second grace.
 	defaultWorkerOperationTimeout = 15 * time.Second
 )
@@ -90,20 +113,55 @@ type creationRequest struct {
 	env   []string
 }
 
-func (r creationRequest) equal(other creationRequest) bool {
-	return slices.Equal(r.command, other.command) && r.cwd == other.cwd && r.cols == other.cols && r.rows == other.rows &&
-		r.term == other.term && r.depth == other.depth && r.label == other.label && slices.Equal(r.env, other.env)
+func (r creationRequest) fingerprint() ([sha256.Size]byte, int64) {
+	h := sha256.New()
+	var size int64
+	var encoded [binary.MaxVarintLen64]byte
+	writeInt := func(value int) {
+		n := binary.PutVarint(encoded[:], int64(value))
+		_, _ = h.Write(encoded[:n])
+	}
+	writeString := func(value string) {
+		writeInt(len(value))
+		_, _ = h.Write([]byte(value))
+		size += int64(len(value))
+	}
+	writeInt(len(r.command))
+	for _, arg := range r.command {
+		writeString(arg)
+		size += 16
+	}
+	writeString(r.cwd)
+	writeInt(r.cols)
+	writeInt(r.rows)
+	writeString(r.term)
+	writeInt(r.depth)
+	writeString(r.label)
+	writeInt(len(r.env))
+	for _, variable := range r.env {
+		writeString(variable)
+		size += 16
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], h.Sum(nil))
+	return digest, size
 }
 
 type creation struct {
-	request creationRequest
-	done    chan struct{}
-
-	launched  worker.Launched
+	requestID string
+	digest    [sha256.Size]byte
+	done      chan struct{}
+	sessionID string
 	launchErr error
 
 	publishGate chan struct{}
 	published   bool
+
+	retainedBytes      int64
+	expiresAt          time.Time
+	catalogSeen        bool
+	retirementObserved bool
+	completed          *list.Element
 }
 
 func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
@@ -140,6 +198,11 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 	if cfg.OperationTimeout == 0 {
 		cfg.OperationTimeout = defaultWorkerOperationTimeout
 	}
+	var err error
+	cfg, err = creationDefaults(cfg)
+	if err != nil {
+		return nil, err
+	}
 	cfg.Host.Alias = cloneLifecycleString(cfg.Host.Alias)
 	cfg.Host.TailscaleName = cloneLifecycleString(cfg.Host.TailscaleName)
 	return &lifecycle{
@@ -156,7 +219,30 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 		operationTimeout:    cfg.OperationTimeout,
 		observeTerminalSize: worker.ReadSessionLeaderTerminalSize,
 		creations:           make(map[string]*creation),
+		now:                 cfg.Now,
+		creationRetention:   cfg.CreationRetention,
+		maxPendingCreations: cfg.MaxPendingCreations,
+		maxCreationBytes:    cfg.MaxCreationBytes,
 	}, nil
+}
+
+func creationDefaults(cfg lifecycleConfig) (lifecycleConfig, error) {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.CreationRetention < 0 || cfg.MaxPendingCreations < 0 || cfg.MaxCreationBytes < 0 {
+		return cfg, fmt.Errorf("daemon: negative creation retention or admission limit")
+	}
+	if cfg.CreationRetention == 0 {
+		cfg.CreationRetention = defaultCreationRetention
+	}
+	if cfg.MaxPendingCreations == 0 {
+		cfg.MaxPendingCreations = defaultMaxPendingCreations
+	}
+	if cfg.MaxCreationBytes == 0 {
+		cfg.MaxCreationBytes = defaultMaxCreationBytes
+	}
+	return cfg, nil
 }
 
 // HandleControl handles daemon-owned control requests. Attachment controls are
@@ -290,29 +376,44 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 	if err != nil {
 		return "", err
 	}
+	var ownerLaunchErr error
 	if owner {
+		defer l.completeCreation(created)
 		env := append([]string(nil), l.env...)
-		if len(created.request.env) > 0 {
+		if len(wanted.env) > 0 {
 			if env == nil {
 				env = os.Environ()
 			}
 			// Later entries win when the worker starts the command, so the
 			// recipe overrides the daemon's own value of the same name.
-			env = append(env, created.request.env...)
+			env = append(env, wanted.env...)
 		}
-		created.launched, created.launchErr = l.launch(worker.LaunchConfig{
+		launched, launchErr := l.launch(worker.LaunchConfig{
 			SessionsDir: l.sessionsDir,
 			HostID:      string(l.host.ID),
 			Executable:  l.executable,
-			Command:     append([]string(nil), created.request.command...),
-			Cwd:         created.request.cwd,
+			Command:     append([]string(nil), wanted.command...),
+			Cwd:         wanted.cwd,
 			Env:         env,
-			Cols:        created.request.cols,
-			Rows:        created.request.rows,
-			Term:        created.request.term,
-			Depth:       created.request.depth,
-			Label:       created.request.label,
+			Cols:        wanted.cols,
+			Rows:        wanted.rows,
+			Term:        wanted.term,
+			Depth:       wanted.depth,
+			Label:       wanted.label,
 		})
+		ownerLaunchErr = launchErr
+		switch {
+		case launchErr != nil:
+			created.launchErr = errors.New(boundedCreationError(launchErr.Error()))
+			var started *worker.StartedError
+			if errors.As(launchErr, &started) && isCanonicalSessionID(started.ID) {
+				created.sessionID = strings.Clone(started.ID)
+			}
+		case isCanonicalSessionID(launched.Meta.ID):
+			created.sessionID = strings.Clone(launched.Meta.ID)
+		default:
+			created.launchErr = errors.New(boundedCreationError(fmt.Sprintf("launcher returned invalid session ID %q", boundedCreationError(launched.Meta.ID))))
+		}
 		close(created.done)
 	} else {
 		select {
@@ -322,18 +423,13 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 		}
 	}
 	if created.launchErr != nil {
-		err := fmt.Errorf("daemon: %s: %w", requestType, created.launchErr)
-		var started *worker.StartedError
-		if errors.As(created.launchErr, &started) && isCanonicalSessionID(started.ID) {
-			return started.ID, err
+		launchErr := created.launchErr
+		if ownerLaunchErr != nil {
+			launchErr = ownerLaunchErr
 		}
-		return "", err
+		return created.sessionID, fmt.Errorf("daemon: %s: %w", requestType, launchErr)
 	}
-	parsedID, err := session.ParseID(created.launched.Meta.ID)
-	if err != nil || parsedID != created.launched.Meta.ID {
-		return "", fmt.Errorf("daemon: launcher returned invalid session ID %q", created.launched.Meta.ID)
-	}
-	id := created.launched.Meta.ID
+	id := created.sessionID
 	waitCtx := ctx
 	if owner {
 		waitCtx = l.context
@@ -349,6 +445,9 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 		// still stop promptly with daemon shutdown and has its own upper bound.
 		publishCtx, cancel := context.WithTimeout(l.context, l.publishTimeout)
 		err = l.catalog.Reconcile(publishCtx)
+		if err == nil {
+			l.observePublishedCreation(publishCtx, created)
+		}
 		cancel()
 		if err != nil {
 			return id, publicationError{fmt.Errorf("daemon: publish session %s: %w", id, err)}
@@ -358,23 +457,128 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 	return id, nil
 }
 
+func (l *lifecycle) observePublishedCreation(ctx context.Context, created *creation) {
+	if _, err := l.catalog.Get(ctx, storage.SessionID(created.sessionID)); err != nil {
+		return
+	}
+	l.creationsMu.Lock()
+	created.catalogSeen = true
+	l.creationsMu.Unlock()
+}
+
 func (l *lifecycle) creation(requestID string, wanted creationRequest) (*creation, bool, error) {
+	digest, requestBytes := wanted.fingerprint()
 	l.creationsMu.Lock()
 	defer l.creationsMu.Unlock()
+	l.expireCreations()
 	if existing := l.creations[requestID]; existing != nil {
-		if !existing.request.equal(wanted) {
+		if existing.digest != digest {
 			return nil, false, fmt.Errorf("daemon: request ID %q was already used for a different session creation", requestID)
 		}
 		return existing, false, nil
 	}
+	if l.pendingCreations >= l.maxPendingCreations {
+		return nil, false, fmt.Errorf("daemon: create request %q exceeds pending creation limit (%d)", requestID, l.maxPendingCreations)
+	}
+	// Reserve error space before launching, so even a failed launch can leave a
+	// replay receipt without overrunning the retained-byte budget.
+	retainedBytes := creationReceiptBytes + int64(len(requestID)) + requestBytes + session.IDLen + maxCreationErrorBytes
+	if retainedBytes > l.maxCreationBytes-l.creationBytes {
+		return nil, false, fmt.Errorf("daemon: create request %q exceeds retained creation bytes limit (%d)", requestID, l.maxCreationBytes)
+	}
 	created := &creation{
-		request:     wanted,
-		done:        make(chan struct{}),
-		publishGate: make(chan struct{}, 1),
+		requestID:     strings.Clone(requestID),
+		digest:        digest,
+		done:          make(chan struct{}),
+		publishGate:   make(chan struct{}, 1),
+		retainedBytes: retainedBytes,
 	}
 	created.publishGate <- struct{}{}
-	l.creations[requestID] = created
+	l.creations[created.requestID] = created
+	l.pendingCreations++
+	l.creationBytes += retainedBytes
 	return created, true, nil
+}
+
+func boundedCreationError(message string) string {
+	if len(message) > maxCreationErrorBytes {
+		message = message[:maxCreationErrorBytes]
+	}
+	return strings.Clone(message)
+}
+
+func (l *lifecycle) completeCreation(created *creation) {
+	l.creationsMu.Lock()
+	defer l.creationsMu.Unlock()
+	retainedBytes := int64(creationReceiptBytes + len(created.requestID) + len(created.sessionID))
+	if created.launchErr != nil {
+		retainedBytes += int64(len(created.launchErr.Error()))
+	}
+	l.creationBytes += retainedBytes - created.retainedBytes
+	created.retainedBytes = retainedBytes
+	l.pendingCreations--
+	created.expiresAt = l.now().Add(l.creationRetention)
+	created.completed = l.completedCreations.PushBack(created)
+}
+
+// An unpublished worker may be absent from the catalog for its entire life.
+// Only a positive exit observation can start its receipt's retirement window.
+func (l *lifecycle) expireCreations() {
+	now := l.now()
+	first := l.completedCreations.Front()
+	if first == nil || now.Before(first.Value.(*creation).expiresAt) {
+		return
+	}
+	lookupCtx, cancel := context.WithTimeout(l.context, l.operationTimeout)
+	defer cancel()
+	for element := l.completedCreations.Front(); element != nil; element = l.completedCreations.Front() {
+		created := element.Value.(*creation)
+		if now.Before(created.expiresAt) {
+			return
+		}
+		if l.retainCreation(lookupCtx, created) {
+			created.expiresAt = l.now().Add(l.creationRetention)
+			l.completedCreations.MoveToBack(element)
+			if lookupCtx.Err() != nil {
+				return
+			}
+			continue
+		}
+		l.creationBytes -= created.retainedBytes
+		delete(l.creations, created.requestID)
+		l.completedCreations.Remove(element)
+	}
+}
+
+func (l *lifecycle) retainCreation(ctx context.Context, created *creation) bool {
+	if created.sessionID == "" {
+		return false
+	}
+	if !l.creationEnded(ctx, created) {
+		created.retirementObserved = false
+		return true
+	}
+	if !created.retirementObserved {
+		created.retirementObserved = true
+		return true
+	}
+	return false
+}
+
+func (l *lifecycle) creationEnded(ctx context.Context, created *creation) bool {
+	stored, err := l.catalog.Get(ctx, storage.SessionID(created.sessionID))
+	if err == nil {
+		created.catalogSeen = true
+		return stored.State == storage.StateExited || stored.State == storage.StateInterrupted
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false
+	}
+	if created.catalogSeen {
+		return true
+	}
+	_, ended := l.sessionExit(created.sessionID)
+	return ended
 }
 
 func (l *lifecycle) list(ctx context.Context, request protocol.Control) (protocol.Control, error) {
