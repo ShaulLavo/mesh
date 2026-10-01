@@ -90,3 +90,45 @@ func TestPublicBodyDoesNotChargeServerPauses(t *testing.T) {
 		})
 	}
 }
+
+func TestPublicLoopbackAddressFamiliesKeepGlobalCap(t *testing.T) {
+	for _, address := range []string{"127.0.0.1", "::1", "::ffff:127.0.0.1"} {
+		t.Run(address, func(t *testing.T) {
+			const maximum = 40
+			base := &queuedPublicListener{connections: make(chan net.Conn, maximum+2), accepted: make(chan struct{}, maximum+2), closed: make(chan struct{})}
+			peerAddress := &net.TCPAddr{IP: net.ParseIP(address), Port: 1234}
+			for i := range maximum + 2 {
+				server, peer := net.Pipe()
+				t.Cleanup(func() { _ = server.Close(); _ = peer.Close() })
+				source := peerAddress
+				if i == maximum+1 {
+					source = &net.TCPAddr{IP: net.ParseIP("198.51.100.1"), Port: 1234}
+				}
+				base.connections <- publicAddressedConn{Conn: server, address: source}
+			}
+			listener := newBoundedPublicListener(base, maximum)
+			t.Cleanup(func() { _ = listener.Close(); _ = listener.closeActive() })
+			for i := range maximum {
+				connection, err := listener.Accept()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := connection.RemoteAddr().String(); got != peerAddress.String() {
+					t.Fatalf("loopback connection %d quota-limited: admitted %s", i+1, got)
+				}
+			}
+			excess, err := listener.acceptTracked()
+			if err != nil {
+				t.Fatal(err)
+			}
+			excess.RemoteAddr()
+			listener.mu.Lock()
+			admitted := listener.admitted
+			closed := excess.closed
+			listener.mu.Unlock()
+			if admitted != maximum || !closed {
+				t.Fatalf("loopback bypassed global cap: admitted=%d excess closed=%t", admitted, closed)
+			}
+		})
+	}
+}

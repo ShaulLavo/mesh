@@ -254,6 +254,42 @@ Cloudflare too, which hides the VPS address and absorbs abuse. The tradeoff is
 that Cloudflare terminates TLS and therefore sees that traffic. Worth deciding
 deliberately rather than by default.
 
+## Public connection limits
+
+The public listener admits at most 512 connections. Each direct IPv4 peer or
+IPv6 /64 may hold at most 32, one sixteenth of that pool. Authenticated PROXY
+sources use the same quota. HTTP forwarding headers never establish a
+connection identity. Without PROXY, a loopback peer represents the local front
+door rather than one visitor, so it has no per-source quota. Caddy, nginx, or
+another such front door must enforce per-client connection limits itself.
+Its upstream sockets still share Mesh's global cap.
+
+PROXY authentication has a separate pool of 32 pending sockets and a fixed
+two-second deadline. Local forwarders send their headers immediately. A full
+pending pool waits rather than bypassing authentication. Invalid headers and
+disallowed forwarder UIDs close without consuming an admitted slot or evicting
+an authenticated connection.
+
+HTTP headers have five seconds and idle keep-alives have 30 seconds. At the
+global cap, an under-quota newcomer evicts the oldest idle keep-alive. Active
+responses and hijacked WebSockets are never evicted. If no idle socket exists,
+Mesh closes the newcomer instead of waiting for an active slot.
+
+Request bodies get a 30-second idle allowance and a sustained minimum of
+16 KiB/s, measured only during body reads. Origin wake-up, on-demand startup,
+and server pauses between reads do not charge the client's budget. Once a
+response starts or upgrades, body deadlines are cleared. HTTP/1 enables
+full-duplex handling so an early response is not blocked by implicit body
+draining. After a non-hijacked handler finishes, the final body drain is bounded
+again. An HTTP/2 body timeout affects its stream, not other streams on the same
+connection. Very slow client uploads below the minimum eventually time out.
+
+These limits are not a distributed denial-of-service defense. Sixteen IPv4
+addresses, or sixteen /64s from one wider IPv6 allocation, can still fill the
+pool with active responses or half-open connections. There is no wider-prefix
+aggregate quota or response write-progress timeout. A front door must provide
+those additional abuse controls when needed.
+
 ## The browser is not the only file client
 
 `files` services render HTML listings, which exist for people holding a browser
