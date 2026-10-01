@@ -6,6 +6,8 @@ import { DOT_TARGET, confine, dockFromRelease, isHorizontalEdge, placeDot, place
 import { createDrag } from './drag';
 
 const SNAP_MS = 250;
+// The opening morph ends in a transitionend; this only guards against a missed event.
+const REVEAL_FALLBACK_MS = 1500;
 const DOT_RING_RADIUS = 10;
 // The open clip extends past the pill so its shadow is not cut off.
 const OPEN_CLIP = 'inset(-12px round 25px)';
@@ -35,6 +37,8 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
   const [keyboardMotion, setKeyboardMotion] = createSignal(false);
   // The stylesheet loads after the elements exist; morph transitions wait for a real toggle so loading never flashes the pill.
   const [animated, setAnimated] = createSignal(false);
+  // Until the opening morph lands, the dot keeps its hit area and the actions appearing under it stay inert to touch.
+  const [revealed, setRevealed] = createSignal(false);
   const [access, setAccess] = createSignal<Access | undefined>(props.initialAccess);
   let shell: HTMLDivElement | undefined;
   let morph: HTMLDivElement | undefined;
@@ -43,6 +47,7 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
   let safe: HTMLDivElement | undefined;
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
   let snapTimer: ReturnType<typeof setTimeout> | undefined;
+  let revealTimer: ReturnType<typeof setTimeout> | undefined;
 
   const collapseButton = () => shell?.querySelector<HTMLButtonElement>('[data-react-grab-toolbar-collapse]') || undefined;
   const viewport = (): Box => {
@@ -55,11 +60,15 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
     return { top: inset('padding-top'), right: inset('padding-right'), bottom: inset('padding-bottom'), left: inset('padding-left') };
   };
   const box = () => collapsed() ? { width: DOT_TARGET, height: DOT_TARGET } : { width: layout().pillWidth, height: layout().pillHeight };
-  const redock = () => {
-    if (drag.isDragging()) return;
+  const relayout = (): Layout => {
     const size = { width: morph?.offsetWidth ?? 0, height: morph?.offsetHeight ?? 0 };
     const next = { dot: placeDot(dock(), viewport(), insets()), pill: placePill(dock(), size, viewport(), insets()), pillWidth: size.width, pillHeight: size.height };
     setLayout(next);
+    return next;
+  };
+  const redock = () => {
+    if (drag.isDragging()) return;
+    const next = relayout();
     setPosition(collapsed() ? next.dot : next.pill);
   };
   // Both states hang off one anchor, the dot's center, so a toggle reshapes the pill in place instead of moving it.
@@ -84,7 +93,9 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
     onStart: () => setKeyboardMotion(false),
     onMove: next => { clearTimeout(snapTimer); setSnapping(false); setPosition(confine(next, box(), viewport(), insets())); },
     onRelease: (released, velocity) => {
-      setDock(dockFromRelease(released, velocity, viewport(), insets()));
+      const { dot, pill } = layout();
+      const anchor = collapsed() ? { x: DOT_TARGET / 2, y: DOT_TARGET / 2 } : { x: dot.x + DOT_TARGET / 2 - pill.x, y: dot.y + DOT_TARGET / 2 - pill.y };
+      setDock(dockFromRelease(released, anchor, velocity, viewport(), insets()));
       setSnapping(true);
       saveDock();
       redock();
@@ -92,14 +103,32 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
       snapTimer = setTimeout(() => setSnapping(false), SNAP_MS);
     },
   });
+  const reveal = () => { clearTimeout(revealTimer); if (!collapsed()) setRevealed(true); };
   const setOpen = (open: boolean) => {
     const root = shell?.getRootNode() as ShadowRoot | undefined;
-    const from = open ? dotButton : collapseButton();
-    const hadFocus = !!from && root?.activeElement === from;
+    const focused = open ? dotButton : collapseButton();
+    const hadFocus = !!focused && root?.activeElement === focused;
+    // A toggle can interrupt a snap. Starting the new state from the rendered box keeps the dot under the finger,
+    // and the snap then carries on toward the dock while the morph runs.
+    const rendered = shell?.getBoundingClientRect();
+    const { dot, pill } = relayout();
+    const from = collapsed() ? dot : pill;
+    const to = open ? pill : dot;
+    const carry = rendered ? { x: rendered.left - from.x, y: rendered.top - from.y } : { x: 0, y: 0 };
     clearTimeout(snapTimer);
+    clearTimeout(revealTimer);
     setSnapping(false);
     setAnimated(true);
+    setRevealed(false);
     setCollapsed(!open);
+    setPosition({ x: to.x + carry.x, y: to.y + carry.y });
+    if (Math.hypot(carry.x, carry.y) > 0.5) {
+      void shell?.offsetWidth;
+      setSnapping(true);
+      setPosition(to);
+      snapTimer = setTimeout(() => setSnapping(false), SNAP_MS);
+    }
+    if (open) revealTimer = setTimeout(reveal, REVEAL_FALLBACK_MS);
     if (hadFocus) (open ? collapseButton() : dotButton)?.focus({ preventScroll: true });
   };
   const copy = async () => {
@@ -142,7 +171,7 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
       if (!('owns' in value) || typeof value.owns !== 'boolean') return;
       if (value.visibility === 'public' || value.visibility === 'private') setAccess({ visibility: value.visibility, owns: value.owns });
     }, { signal });
-    onCleanup(() => { abort.abort(); observer.disconnect(); clearTimeout(copyTimer); clearTimeout(snapTimer); clearTimeout(viewportTimer); cancelAnimationFrame(viewportFrame); });
+    onCleanup(() => { abort.abort(); observer.disconnect(); clearTimeout(copyTimer); clearTimeout(snapTimer); clearTimeout(revealTimer); clearTimeout(viewportTimer); cancelAnimationFrame(viewportFrame); });
     redock();
   });
   const keyboard = (event: KeyboardEvent) => {
@@ -156,10 +185,10 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
   return <>
     <link rel="stylesheet" href="/.mesh-app/pill.css"/><div class="safe" ref={safe}/>
     <div ref={shell} class="shell" role="toolbar" aria-label="Mesh app controls"
-      classList={{ closed: collapsed(), vertical: !isHorizontalEdge(dock().edge), dragging: drag.isDragging(), snapping: snapping(), animated: animated(), resizing: resizing(), keyboard: keyboardMotion() }}
+      classList={{ closed: collapsed(), vertical: !isHorizontalEdge(dock().edge), dragging: drag.isDragging(), snapping: snapping(), animated: animated(), revealed: revealed(), resizing: resizing(), keyboard: keyboardMotion() }}
       style={{ transform: `translate3d(${position().x}px,${position().y}px,0)`, width: `${box().width}px`, height: `${box().height}px` }} onKeyDown={keyboard}
       onPointerDown={event => { setKeyboardMotion(false); drag.handlePointerDown(event); }}>
-      <div ref={morph} class="morph" inert={collapsed()} aria-hidden={collapsed()} style={{ left: `${offsets().pill.x}px`, top: `${offsets().pill.y}px`, 'clip-path': clip() }}>
+      <div ref={morph} class="morph" inert={collapsed()} aria-hidden={collapsed()} onTransitionEnd={event => { if (event.target === morph) reveal(); }} onTransitionCancel={event => { if (event.target === morph) reveal(); }} style={{ left: `${offsets().pill.x}px`, top: `${offsets().pill.y}px`, 'clip-path': clip() }}>
         <ToolbarContent isCollapsed={false} snapEdge={dock().edge} isChevronPressed={pressed()}
           onCollapseClick={drag.dragAware(() => setOpen(false))} onCollapsePointerDown={() => setPressed(true)} onCollapsePointerUp={() => setPressed(false)} onCollapsePointerLeave={() => setPressed(false)}
           actionButtons={<div class="controls" classList={{ 'flex-col': !isHorizontalEdge(dock().edge) }} style={{ display: 'flex' }}>
@@ -183,7 +212,7 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
           </div>}/>
       </div>
       <button ref={dotButton} class="dot-target" type="button" aria-label="Open Mesh controls. Drag to move; Alt and arrow keys to dock." aria-expanded="false"
-        inert={!collapsed()} aria-hidden={!collapsed()} style={{ left: `${offsets().dot.x}px`, top: `${offsets().dot.y}px` }} onClick={drag.dragAware(() => setOpen(true))}><span class="dot"/></button>
+        inert={revealed()} aria-hidden={!collapsed()} style={{ left: `${offsets().dot.x}px`, top: `${offsets().dot.y}px` }} onClick={drag.dragAware(() => setOpen(collapsed()))}><span class="dot"/></button>
       <span class="sr-only" role="status">{copyState() === 'copied' ? 'Link copied' : ''}</span>
       <Show when={copyState() === 'failed'}><span class="copy-error" role="status">Couldn’t copy. Tap to try again.</span></Show>
       <Show when={!collapsed()}><iframe ref={frame} class="auth-frame" hidden aria-hidden="true" tabIndex={-1} title="Mesh browser authorization" src={`${props.manager}/frame?id=${encodeURIComponent(props.appID)}`} referrerPolicy="no-referrer"/></Show>

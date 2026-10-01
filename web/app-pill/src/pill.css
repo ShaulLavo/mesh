@@ -10,7 +10,7 @@
 .animated .morph{transition:clip-path 220ms var(--ease-drawer),visibility 0s}.animated.closed .morph{transition:clip-path 140ms var(--ease-drawer),visibility 0s linear 180ms}
 .dot-target{position:absolute;width:44px;height:44px;display:grid;place-items:center;border-radius:50%;touch-action:none;cursor:grab}.dragging .dot-target{cursor:grabbing}
 .dot{width:12px;height:12px;border-radius:50%;background:#a5b4fc;box-shadow:0 2px 12px #0009,0 0 0 4px var(--rg-panel-bg);transition:opacity 120ms cubic-bezier(.23,1,.32,1) 40ms,transform 160ms cubic-bezier(.23,1,.32,1)}
-.shell:not(.closed) .dot-target{pointer-events:none}.shell:not(.closed) .dot{opacity:0;transform:scale(.6);transition-delay:0s}
+.revealed .dot-target{pointer-events:none}.shell:not(.closed):not(.revealed) .morph{pointer-events:none}.shell:not(.closed) .dot{opacity:0;transform:scale(.6);transition-delay:0s}
 .closed .morph [data-react-grab-toolbar-panel]>*{opacity:0}.animated .morph [data-react-grab-toolbar-panel]>*{transition:opacity 180ms var(--ease-drawer) 80ms}.animated.closed .morph [data-react-grab-toolbar-panel]>*{transition:opacity 100ms var(--ease-drawer)}
 .closed .dot-target:active .dot{transform:scale(.9);transition-duration:100ms}
 .action-wrap{position:relative;display:flex;align-items:center;justify-content:center;margin-right:6px}.vertical .action-wrap{margin-right:0;margin-bottom:6px}

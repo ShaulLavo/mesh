@@ -7,6 +7,7 @@ const none = { top: 0, right: 0, bottom: 0, left: 0 };
 const portrait = { left: 0, top: 0, width: 390, height: 844 };
 const landscape = { left: 0, top: 0, width: 844, height: 390 };
 const notch = { top: 0, right: 47, bottom: 21, left: 47 };
+const middle = { x: DOT_TARGET / 2, y: DOT_TARGET / 2 };
 const pillSize = edge => edge === 'top' || edge === 'bottom' ? { width: 74, height: PILL_THICKNESS } : { width: PILL_THICKNESS, height: 74 };
 
 const gapTo = (edge, box, viewport, insets) => ({
@@ -43,13 +44,15 @@ for (const [name, viewport, insets] of scenarios) {
       for (const ratio of [0, 0.25, 0.5, 1]) {
         const dock = { edge, ratio };
         const dot = placeDot(dock, viewport, insets);
-        const fromDot = dockFromRelease({ left: dot.x, top: dot.y, width: DOT_TARGET, height: DOT_TARGET }, { x: 0, y: 0 }, viewport, insets);
+        const fromDot = dockFromRelease({ left: dot.x, top: dot.y, width: DOT_TARGET, height: DOT_TARGET }, middle, { x: 0, y: 0 }, viewport, insets);
         assert.deepEqual(placeDot(fromDot, viewport, insets), dot, `${edge} ${ratio}: dot release path matches the redock path (a corner may report either edge)`);
         const size = pillSize(edge);
         const pill = placePill(dock, size, viewport, insets);
-        const fromPill = dockFromRelease({ left: pill.x, top: pill.y, ...size }, { x: 0, y: 0 }, viewport, insets);
+        const anchor = { x: dot.x + DOT_TARGET / 2 - pill.x, y: dot.y + DOT_TARGET / 2 - pill.y };
+        const fromPill = dockFromRelease({ left: pill.x, top: pill.y, ...size }, anchor, { x: 0, y: 0 }, viewport, insets);
         assert.equal(fromPill.edge, edge);
         assert.deepEqual(placePill(fromPill, size, viewport, insets), pill, `${edge} ${ratio}: pill release path matches the redock path`);
+        assert.deepEqual(placeDot(fromPill, viewport, insets), dot, `${edge} ${ratio}: releasing the open pill where it rests keeps the dot, even when a corner clamps the pill off-center`);
       }
     }
   });
@@ -67,13 +70,13 @@ test('the expanded pill grows around the dot unless a corner pushes it inward', 
 
 test('a flick lands where it was thrown, a slow release where it was dropped', () => {
   const box = { left: 173, top: 400, width: DOT_TARGET, height: DOT_TARGET };
-  assert.equal(dockFromRelease(box, { x: 0, y: 0 }, portrait, none).edge, 'left', 'ties resolve to the first nearest edge');
-  assert.equal(dockFromRelease(box, { x: 1.5, y: 0 }, portrait, none).edge, 'right');
-  assert.equal(dockFromRelease(box, { x: 0, y: 3 }, portrait, none).edge, 'bottom');
-  const thrown = dockFromRelease({ ...box, left: 300 }, { x: 0.2, y: -0.8 }, portrait, none);
+  assert.equal(dockFromRelease(box, middle, { x: 0, y: 0 }, portrait, none).edge, 'left', 'ties resolve to the first nearest edge');
+  assert.equal(dockFromRelease(box, middle, { x: 1.5, y: 0 }, portrait, none).edge, 'right');
+  assert.equal(dockFromRelease(box, middle, { x: 0, y: 3 }, portrait, none).edge, 'bottom');
+  const thrown = dockFromRelease({ ...box, left: 300 }, middle, { x: 0.2, y: -0.8 }, portrait, none);
   assert.equal(thrown.edge, 'right');
   assert.equal(dotCenter(thrown, portrait, none).y, 400 + DOT_TARGET / 2 - 0.8 * 150);
-  assert.equal(dockFromRelease({ left: 0, top: -400, width: DOT_TARGET, height: DOT_TARGET }, { x: 0, y: 0 }, portrait, none).ratio, 0);
+  assert.equal(dockFromRelease({ left: 0, top: -400, width: DOT_TARGET, height: DOT_TARGET }, middle, { x: 0, y: 0 }, portrait, none).ratio, 0);
 });
 
 test('dragging keeps the box inside the safe frame', () => {

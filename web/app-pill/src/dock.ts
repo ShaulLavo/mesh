@@ -61,14 +61,18 @@ export function confine(point: Point, size: Size, viewport: Box, insets: Insets)
   return { x: clamp(point.x, frame.left, frame.right - size.width), y: clamp(point.y, frame.top, frame.bottom - size.height) };
 }
 
+// anchor is the dot's center inside the released box. A pill clamped into a corner is not
+// centered on its dot, so the box center alone would move the dot on a drag that went nowhere.
 // velocity is in px/ms. A flick throws the release point forward before the nearest edge is chosen.
-export function dockFromRelease(box: Box, velocity: Point, viewport: Box, insets: Insets): Dock {
+export function dockFromRelease(box: Box, anchor: Point, velocity: Point, viewport: Box, insets: Insets): Dock {
   const frame = safeFrame(viewport, insets);
-  const x = box.left + box.width / 2 + velocity.x * FLICK_PROJECTION_MS;
-  const y = box.top + box.height / 2 + velocity.y * FLICK_PROJECTION_MS;
+  const throwX = velocity.x * FLICK_PROJECTION_MS;
+  const throwY = velocity.y * FLICK_PROJECTION_MS;
+  const x = box.left + box.width / 2 + throwX;
+  const y = box.top + box.height / 2 + throwY;
   const distances: [Edge, number][] = [['top', y - frame.top], ['bottom', frame.bottom - y], ['left', x - frame.left], ['right', frame.right - x]];
   const [edge] = distances.reduce((nearest, next) => next[1] < nearest[1] ? next : nearest);
-  const [start, end, value] = isHorizontalEdge(edge) ? [frame.left, frame.right, x] : [frame.top, frame.bottom, y];
+  const [start, end, value] = isHorizontalEdge(edge) ? [frame.left, frame.right, box.left + anchor.x + throwX] : [frame.top, frame.bottom, box.top + anchor.y + throwY];
   const span = end - start - 2 * DOT_LINE;
   return { edge, ratio: span > 0 ? clamp((value - start - DOT_LINE) / span, 0, 1) : 0.5 };
 }
