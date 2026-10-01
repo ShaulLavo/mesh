@@ -83,6 +83,9 @@ type fakeWorkers struct {
 	labels    map[string]string
 	stopped   []string
 	forgotten []string
+	// processes, when set, names the processes in a worker's session. Fake apps
+	// listen inside the test process, so by default it is every session.
+	processes func(session string) []int
 }
 
 func (w *fakeWorkers) Start(_ context.Context, label, command, root string, env []string) (string, error) {
@@ -119,6 +122,14 @@ func (w *fakeWorkers) Forget(_ context.Context, label string) {
 	delete(w.labels, label)
 }
 func (w *fakeWorkers) Wait(context.Context, string) (int, error) { return 0, nil }
+func (w *fakeWorkers) Processes(_ context.Context, session string) ([]int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.processes != nil {
+		return w.processes(session), nil
+	}
+	return []int{os.Getpid()}, nil
+}
 
 type appFixture struct {
 	edge                        *Edge

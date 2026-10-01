@@ -228,6 +228,22 @@ func TestAppSSHChecksExactMeshHostIdentity(t *testing.T) {
 	}
 }
 
+func TestAppInspectTellsTheOwnerWhyAnAppIsNotServed(t *testing.T) {
+	var out bytes.Buffer
+	result := appspkg.Result{App: &appspkg.Record{ID: "7k3d", Status: "active"}, Runtime: &appspkg.RuntimeInfo{Phase: "ready", Problem: "port 5173 is held by a process outside the app\x1b[2J"}}
+	if err := writeAppResult(&out, "laptop", result, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "not serving: port 5173 is held by a process outside the app") || strings.Contains(out.String(), "\x1b") {
+		t.Fatalf("inspect output does not show the safe reason:\n%q", out.String())
+	}
+	out.Reset()
+	result.Runtime.Problem = ""
+	if err := writeAppResult(&out, "laptop", result, false); err != nil || strings.Contains(out.String(), "not serving") {
+		t.Fatalf("served app reported as not serving: %q %v", out.String(), err)
+	}
+}
+
 func TestAppInspectShowsSetupFailure(t *testing.T) {
 	var out bytes.Buffer
 	result := appspkg.Result{App: &appspkg.Record{ID: "7k3d", Status: "deleted"}, Runtime: &appspkg.RuntimeInfo{Phase: "failed", Failure: &appspkg.SetupFailure{Error: "app: setup exited 1", Output: "npm ERR! missing script: build\n\x1b]0;title\x07\n"}}}

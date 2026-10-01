@@ -20,6 +20,7 @@ import (
 	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
+	"github.com/shaul/mesh/internal/worker"
 )
 
 type appOrigin interface {
@@ -109,6 +110,21 @@ func (w appWorkers) Find(ctx context.Context, label string) (string, bool, error
 
 func (w appWorkers) Forget(ctx context.Context, label string) {
 	w.lifecycle.forgetLabelled(ctx, label, "")
+}
+
+func (w appWorkers) Processes(_ context.Context, id string) ([]int, error) {
+	meta, err := worker.ReadMeta(filepath.Join(w.lifecycle.sessionsDir, id))
+	if err != nil {
+		return nil, fmt.Errorf("session %s: read metadata: %w", id, err)
+	}
+	if meta.ID != id || meta.PID <= 0 {
+		return nil, fmt.Errorf("session %s: no command process recorded", id)
+	}
+	processes, err := worker.SessionProcesses(id, meta.PID)
+	if err != nil {
+		return nil, fmt.Errorf("list app processes: %w", err)
+	}
+	return processes, nil
 }
 
 // Output is the bounded tail an owner sees when an app's setup fails.

@@ -82,6 +82,9 @@ type RuntimeInfo struct {
 	Port      int           `json:"port,omitempty"`
 	Root      string        `json:"root,omitempty"`
 	Failure   *SetupFailure `json:"failure,omitempty"`
+	// Problem is why a server app stopped being served, such as a listener
+	// beyond loopback or a port another process holds.
+	Problem string `json:"problem,omitempty"`
 }
 
 // SetupFailure is the owner's account of an app's last failed setup. It outlives

@@ -178,6 +178,7 @@ func (w *guardedAppWorkers) Start(context.Context, string, string, string, []str
 func (*guardedAppWorkers) Stop(context.Context, string) error                 { return nil }
 func (*guardedAppWorkers) Find(context.Context, string) (string, bool, error) { return "", false, nil }
 func (*guardedAppWorkers) Forget(context.Context, string)                     {}
+func (*guardedAppWorkers) Processes(context.Context, string) ([]int, error)   { return nil, nil }
 
 func protectedTestOrigin(t *testing.T, store *storage.Store, registry *meshserve.Registry, root string, activePort int) (*apps.Origin, *guardedAppWorkers) {
 	t.Helper()

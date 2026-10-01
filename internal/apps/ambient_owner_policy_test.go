@@ -85,6 +85,7 @@ func ambientAppBackend(t *testing.T, f *appFixture, id string, handler http.Hand
 	local.Command = "fixture"
 	local.Port = backend.Listener.Addr().(*net.TCPAddr).Port
 	f.origin.state.Apps[id] = local
+	f.origin.serving[id] = serving{upstream: backend.Listener.Addr().(*net.TCPAddr).AddrPort()}
 	f.origin.publishRoutes()
 }
 

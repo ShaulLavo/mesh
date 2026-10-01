@@ -308,7 +308,9 @@ func (e *Edge) apply(ctx context.Context, next *edgeMutation, owner string, q Re
 		if app.Status != "active" {
 			return Result{}, errors.New("app: app expired")
 		}
-		if app.Ready && app.Revision != q.UploadID {
+		// A different revision replaces whatever was activated before, even
+		// while suspended; the same one only resumes it.
+		if app.Revision != "" && app.Revision != q.UploadID {
 			next.cancelAll = append(next.cancelAll, app.ID)
 			app.Generation++
 			app.ExpiresAt = e.config.Now().Add(IdleTTL)
@@ -318,6 +320,15 @@ func (e *Edge) apply(ctx context.Context, next *edgeMutation, owner string, q Re
 		if q.Kind != "" {
 			app.Kind = q.Kind
 		}
+	case "suspend":
+		// The origin found the app's listeners unsafe; activate restores it.
+		if app.Status != "active" {
+			return Result{}, errors.New("app: app expired")
+		}
+		if app.Ready {
+			next.cancelAll = append(next.cancelAll, app.ID)
+		}
+		app.Ready = false
 	case "renew":
 		if app.Status != "active" {
 			return Result{}, errors.New("app: app expired")

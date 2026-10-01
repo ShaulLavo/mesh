@@ -356,7 +356,10 @@ func writeAppResult(w io.Writer, host string, result appspkg.Result, asJSON bool
 		if err := writeOneApp(w, host, *result.App); err != nil {
 			return err
 		}
-		return writeSetupFailure(w, result.Runtime)
+		if err := writeSetupFailure(w, result.Runtime); err != nil {
+			return err
+		}
+		return writeServingProblem(w, result.Runtime)
 	}
 	if result.Apps != nil {
 		table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
@@ -368,6 +371,17 @@ func writeAppResult(w io.Writer, host string, result appspkg.Result, asJSON bool
 	}
 	_, err := fmt.Fprintln(w, "done")
 	return err
+}
+
+// writeServingProblem says why the host stopped serving the app, when it did.
+func writeServingProblem(w io.Writer, runtime *appspkg.RuntimeInfo) error {
+	if runtime == nil || runtime.Problem == "" {
+		return nil
+	}
+	if _, err := fmt.Fprintf(w, "not serving: %s\n", SafeTerminalText(runtime.Problem)); err != nil {
+		return fmt.Errorf("show serving problem: %w", err)
+	}
+	return nil
 }
 func writeSetupFailure(w io.Writer, runtime *appspkg.RuntimeInfo) error {
 	if runtime == nil || runtime.Failure == nil {

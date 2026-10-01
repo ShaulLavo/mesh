@@ -203,6 +203,12 @@ func sortedServerApps(t *testing.T, f *appFixture) (Record, Record) {
 
 func serveStatus(t *testing.T, f *appFixture, app Record) int {
 	t.Helper()
+	code, _ := serveResponse(t, f, app)
+	return code
+}
+
+func serveResponse(t *testing.T, f *appFixture, app Record) (int, string) {
+	t.Helper()
 	proof, err := Sign("mesh-app/admission/v1", identityFor(f.ownerKey), 1, admission{ID: app.ID, Generation: app.Generation, Method: http.MethodGet, URI: "/", Host: app.ID + "." + Domain, Until: f.now.Add(30 * time.Second)}, f.edgeKey, f.now)
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +218,7 @@ func serveStatus(t *testing.T, f *appFixture, app Record) int {
 	request.Header.Set("X-Mesh-App-Admission", base64.RawURLEncoding.EncodeToString(raw))
 	response := httptest.NewRecorder()
 	f.origin.ServeHTTP(response, request)
-	return response.Code
+	return response.Code, response.Body.String()
 }
 
 func deleteAtEdge(t *testing.T, f *appFixture, id string) {

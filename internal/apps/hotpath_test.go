@@ -206,6 +206,7 @@ func TestProxyConnectionsAreReused(t *testing.T) {
 	local := f.origin.state.Apps[app.ID]
 	local.Record.Kind, local.Port = "server", int(port)
 	f.origin.state.Apps[app.ID] = local
+	f.origin.serving[app.ID] = serving{upstream: netip.MustParseAddrPort(upstreamURL.Host)}
 	f.origin.publishRoutes()
 	origin, originConns := countingHTTPServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.origin.ServeHTTP(w, r) }))
 	originURL, err := url.Parse(origin.URL)

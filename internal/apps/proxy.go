@@ -7,7 +7,6 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -57,14 +56,12 @@ type appHandler struct {
 	transport *http.Transport
 }
 
+// originHandler proxies to the app's verified upstream only: another family's
+// loopback on the same port may belong to anyone.
 func originHandler(app appRoute) *appHandler {
-	target := &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(app.Port))}
+	target := &url.URL{Scheme: "http", Host: app.Upstream.String()}
 	transport := appTransport(func(ctx context.Context, network, _ string) (net.Conn, error) {
-		connection, err := netDialer.DialContext(ctx, network, target.Host)
-		if err == nil {
-			return connection, nil
-		}
-		return netDialer.DialContext(ctx, network, net.JoinHostPort("::1", strconv.Itoa(app.Port)))
+		return netDialer.DialContext(ctx, network, target.Host)
 	})
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.Transport = transport

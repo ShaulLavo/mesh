@@ -106,7 +106,7 @@ func TestAppListenerInspectionWithBusyTCPTable(t *testing.T) {
 	t.Logf("held %d loopback pairs, closed 512 into TIME_WAIT; /proc/net/tcp has %d bytes", pairs, bytes)
 	port := listener.Addr().(*net.TCPAddr).Port
 	t.Run("readiness", func(t *testing.T) {
-		if err := checkServerListener(context.Background(), port); err != nil {
+		if err := checkServerListenerErr(context.Background(), port); err != nil {
 			t.Fatalf("busy-host listener readiness: %v", err)
 		}
 	})

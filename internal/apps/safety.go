@@ -93,34 +93,75 @@ func ProbePortAvailable(port int) error {
 	return ipv6.Close()
 }
 
-// checkServerListener rejects wildcard, Tailnet, and LAN bindings. It does not
-// establish OS process or network isolation for owner-authorized app commands.
-func checkServerListener(ctx context.Context, port int) error {
+// listenerSocket is one listening TCP socket as far as the platform can
+// attribute it. Own means the daemon's user owns it and a process in the app's
+// worker session holds it. Inode is the kernel's socket identity, zero where
+// the platform cannot report it.
+type listenerSocket struct {
+	Address netip.AddrPort
+	Own     bool
+	Inode   uint32
+}
+
+// errNoListener means the app has not bound its port yet; readiness waits for it.
+var errNoListener = errors.New("app: no server listener found on the configured port")
+
+// listenerFault is why an app's listeners must not be proxied to. Its text is
+// what the owner sees.
+type listenerFault string
+
+func (f listenerFault) Error() string { return string(f) }
+
+// checkServerListener inspects the app's listeners and returns the one address
+// the proxy may dial. processes names the app's worker session; it is asked
+// only after the listeners are listed, so a process the app started meanwhile
+// cannot leave its socket looking foreign. Mesh does not isolate the app's
+// network: this check reports what the app bound, it does not prevent it.
+func checkServerListener(ctx context.Context, port int, processes func() ([]int, error)) (listenerSocket, error) {
 	if err := validServerPort(port); err != nil {
-		return err
+		return listenerSocket{}, err
 	}
-	addresses, err := serverListeners(ctx, port)
+	sockets, err := appListeners(ctx, port, processes)
 	if err != nil {
-		return err
+		return listenerSocket{}, err
 	}
-	return validateServerAddresses(addresses)
+	return verifyListeners(port, sockets)
+}
+
+// verifyListeners requires every listener on the app's port to be the app's own
+// and on loopback, and every listener the app holds on any port to be on
+// loopback. IPv4 wins over IPv6 so a dual-stack server is always dialled the
+// same way. The result carries the dialled socket's inode, so a listener later
+// rebound at the same address is told apart from the one verified.
+func verifyListeners(port int, sockets []listenerSocket) (listenerSocket, error) {
+	var upstream listenerSocket
+	for _, socket := range sockets {
+		address := socket.Address.Addr().Unmap()
+		if socket.Own && !loopbackListener(address) {
+			return listenerSocket{}, listenerFault(fmt.Sprintf("app listens on %s beyond loopback; bind only 127.0.0.1 or ::1", socket.Address))
+		}
+		if int(socket.Address.Port()) != port {
+			continue
+		}
+		if !socket.Own {
+			return listenerSocket{}, listenerFault(fmt.Sprintf("port %d is held by a process outside the app", port))
+		}
+		if address.Is4() || !upstream.Address.IsValid() {
+			upstream = listenerSocket{Address: netip.AddrPortFrom(address, socket.Address.Port()), Own: true, Inode: socket.Inode}
+		}
+	}
+	if !upstream.Address.IsValid() {
+		return listenerSocket{}, errNoListener
+	}
+	return upstream, nil
+}
+
+func loopbackListener(address netip.Addr) bool {
+	return address == netip.MustParseAddr("127.0.0.1") || address == netip.IPv6Loopback()
 }
 func validServerPort(port int) error {
 	if port < 1 || port > 65535 {
 		return errors.New("app: server port must be from 1 to 65535")
-	}
-	return nil
-}
-func validateServerAddresses(addresses []netip.Addr) error {
-	if len(addresses) == 0 {
-		return errors.New("app: no server listener found on the configured port")
-	}
-	ipv4 := netip.MustParseAddr("127.0.0.1")
-	ipv6 := netip.IPv6Loopback()
-	for _, address := range addresses {
-		if address.Unmap() != ipv4 && address != ipv6 {
-			return errors.New("app: server must bind only 127.0.0.1 or ::1; configure its host explicitly")
-		}
 	}
 	return nil
 }
