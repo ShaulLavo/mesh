@@ -150,6 +150,9 @@ type Origin struct {
 	admissionMu sync.Mutex
 	admissionAt time.Time
 	admissions  map[string]*admissionCache
+	// storageMounted reports whether the data SSD holding the workload root is
+	// mounted. Tests replace it, since mounts cannot be faked in-process.
+	storageMounted func(string) error
 }
 
 func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
@@ -159,7 +162,7 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}}
+	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}, storageMounted: workloadStorageMounted}
 	if err := load(ctx, c.Store, "apps.origin", &o.state); err != nil {
 		return nil, err
 	}
@@ -1242,7 +1245,7 @@ func (o *Origin) cleanup(ctx context.Context, id string) error {
 func (o *Origin) removeAppFiles(id string) error {
 	root, err := os.OpenRoot(o.config.DataRoot)
 	if errors.Is(err, os.ErrNotExist) {
-		if err := workloadStorageMounted(o.config.DataRoot); err != nil {
+		if err := o.storageMounted(o.config.DataRoot); err != nil {
 			return fmt.Errorf("app %s: workload root missing: %w", id, err)
 		}
 		return nil
