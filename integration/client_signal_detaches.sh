@@ -7,13 +7,16 @@ export MESH_STATE_DIR="$T/state" MESH_CONFIG_DIR="$T/config"
 CLIENT1='' CLIENT2='' SID=''
 
 cleanup() {
-  if [[ -n $SID ]]; then "$MESH" kill "$SID" >/dev/null 2>&1 || true; fi
   for client in "$CLIENT1" "$CLIENT2"; do
     if [[ -n $client ]]; then
       kill -TERM "$client" 2>/dev/null || true
       wait "$client" 2>/dev/null || true
     fi
   done
+  if [[ -z $SID && -n ${MESH:-} && -x $MESH ]]; then
+    SID=$("$MESH" ls 2>/dev/null | awk 'NR==2 {print $1}') || true
+  fi
+  if [[ -n $SID ]]; then "$MESH" kill "$SID" >/dev/null 2>&1 || true; fi
   rm -rf -- "$T"
 }
 trap cleanup EXIT
@@ -53,6 +56,7 @@ printf 'echo $$ > %q\n' "$T/pid2" >&4
 for _ in $(seq 100); do [[ -s $T/pid2 ]] && break; sleep 0.05; done
 [[ -s $T/pid2 ]] || fail "reattached shell never responded"
 [[ $(cat "$T/pid2") == "$PID1" ]] || fail "reattachment started a different command"
+for _ in $(seq 100); do grep -q SIGNAL_MARKER "$T/out2" && break; sleep 0.05; done
 grep -q SIGNAL_MARKER "$T/out2" || fail "reattachment lost the pre-signal output"
 printf '\035' >&4
 for _ in $(seq 100); do kill -0 "$CLIENT2" 2>/dev/null || break; sleep 0.05; done
