@@ -1160,7 +1160,7 @@ func TestLifecycleCreationRetirementClockIncludesCatalogLookupTime(t *testing.T)
 
 type receiptPublicationFailureStore struct{ *storage.Store }
 
-func (s *receiptPublicationFailureStore) ReconcileHost(context.Context, storage.Host, []storage.Session) error {
+func (s *receiptPublicationFailureStore) ApplyHostChanges(context.Context, storage.HostID, storage.HostChanges) error {
 	return errors.New("publication rejected")
 }
 

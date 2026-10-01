@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import platform
 import signal
+import shutil
 import socket
 import statistics
 import struct
@@ -16,6 +17,8 @@ import tempfile
 import threading
 import time
 import uuid
+
+from receipt import inspect_binary, verify_receipt
 
 HERE = Path(__file__).resolve().parent
 
@@ -247,42 +250,122 @@ def throughput(state, sid, size):
         detach(conn, sid)
 
 
-def cleanup(state, sessions, daemon):
-    failures = []
-    # Lifecycle requests are confined to this fresh daemon socket. Workers
-    # outlive daemon shutdown, so stop them before terminating the daemon.
-    for sid in sessions:
-        try:
-            worker = own_worker(state, sid)
-            identity = proc_sample(worker)["start_ticks"]
-        except (FileNotFoundError, ProcessLookupError):
+def process_alive(pid, start):
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return fields[0] != "Z" and int(fields[19]) == start
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+
+
+def owned_workers(state, binary):
+    found = {}
+    session_root = (state / "s").resolve()
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
             continue
         try:
-            rpc(state, {"type": "session.kill", "sessionId": sid})
-        except (OSError, EOFError, RuntimeError) as error:
-            failures.append(str(error))
-        end = time.monotonic() + 6
-        while time.monotonic() < end:
-            try:
-                current = proc_sample(worker)
-                if current["start_ticks"] != identity:
-                    break
-                if Path(f"/proc/{worker}/stat").read_text().rsplit(")", 1)[1].split()[0] == "Z":
-                    break
-            except FileNotFoundError:
-                break
-            time.sleep(0.05)
-        else:
-            failures.append(f"scratch worker {worker} still running")
-    daemon.terminate()
+            command = (entry / "cmdline").read_bytes().split(b"\0")
+            if os.readlink(entry / "exe") != str(binary):
+                continue
+            if len(command) < 6 or command[1] != b"session-worker":
+                continue
+            directory = Path(os.fsdecode(command[command.index(b"--dir") + 1])).resolve()
+            if directory.parent != session_root:
+                continue
+            start = proc_sample(int(entry.name))["start_ticks"]
+            if process_alive(int(entry.name), start):
+                found[int(entry.name)] = (start, directory)
+        except (FileNotFoundError, ProcessLookupError, PermissionError, ValueError, IndexError):
+            continue
+    return found
+
+
+def stop_worker(pid, start, directory, state, binary, sig):
+    # Pin the PID while rechecking executable, session path and start identity.
     try:
-        daemon.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        daemon.kill()
-        daemon.wait()
-        failures.append("scratch daemon required SIGKILL")
-    if failures:
-        raise RuntimeError("scratch cleanup incomplete: " + "; ".join(failures))
+        with contextlib.ExitStack() as stack:
+            descriptor = os.pidfd_open(pid)
+            stack.callback(os.close, descriptor)
+            if owned_workers(state, binary).get(pid) == (start, directory):
+                signal.pidfd_send_signal(descriptor, sig)
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+
+
+def cleanup(state, sessions, daemon, binary):
+    del sessions  # /proc also finds workers whose create reply or metadata was lost.
+    failures = []
+    previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        # Settle the coordinator first so it cannot launch during the ownership scan.
+        daemon.terminate()
+        try:
+            daemon.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            daemon.kill()
+            daemon.wait(timeout=2)
+        workers = owned_workers(state, binary)
+        for pid, (start, directory) in workers.items():
+            try:
+                if not process_alive(pid, start):
+                    continue
+                with socket.socket(socket.AF_UNIX) as conn:
+                    conn.settimeout(0.5)
+                    conn.connect(str(directory / "sock"))
+                    control(conn, {"type": "session.kill", "sessionId": directory.name,
+                                   "requestId": uuid.uuid4().hex})
+            except (OSError, EOFError, RuntimeError, KeyboardInterrupt):
+                # A dead socket is expected after a partial launch; identity fallback follows.
+                continue
+        for sig, seconds in ((None, 2), (signal.SIGTERM, 0.2), (signal.SIGKILL, 2)):
+            for pid, (start, directory) in workers.items():
+                if sig is None:
+                    continue
+                try:
+                    stop_worker(pid, start, directory, state, binary, sig)
+                except (OSError, RuntimeError, KeyboardInterrupt) as error:
+                    failures.append(str(error))
+            end = time.monotonic() + seconds
+            while time.monotonic() < end and any(process_alive(pid, start) for pid, (start, _) in workers.items()):
+                time.sleep(0.05)
+        remaining = owned_workers(state, binary)
+        if remaining:
+            failures.append(f"owned workers still running: {list(remaining)}")
+        if failures:
+            raise RuntimeError("scratch cleanup incomplete: " + "; ".join(failures))
+    finally:
+        # Always reap our daemon, even if a worker inspection or control operation failed.
+        if daemon.poll() is None:
+            daemon.kill()
+            daemon.wait(timeout=2)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def root_processes(root):
+    found = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cwd = Path(os.readlink(entry / "cwd"))
+            if cwd.is_relative_to(root) and process_alive(int(entry.name), proc_sample(int(entry.name))["start_ticks"]):
+                found.append(int(entry.name))
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+    return found
+
+
+@contextlib.contextmanager
+def scratch_case(parent, binary):
+    root = Path(tempfile.mkdtemp(prefix="mesh-m5-", dir=parent))
+    try:
+        yield root
+    finally:
+        if owned_workers(root / "state", binary) or root_processes(root):
+            raise RuntimeError(f"scratch root retained while owned processes remain: {root}")
+        shutil.rmtree(root)
 
 
 def run_case(args, count, root):
@@ -378,13 +461,14 @@ def run_case(args, count, root):
             # A partially failed creation can leave a worker without a response.
             # Enumerate only the session directories under our own fresh root.
             sessions = sorted(set(sessions) | {p.name for p in (state / "s").glob("*/meta.json") for p in [p.parent]})
-            cleanup(state, sessions, daemon)
+            cleanup(state, sessions, daemon, args.binary)
 
 
 def summary(result):
     metadata = result["metadata"]
     lines = [f"# Mesh baseline — {metadata['host']} ({metadata['arch']})", "",
-             f"Commit: `{metadata['commit']}`. Go: `{metadata['go_version']}`.", "",
+             f"Embedded VCS revision: `{metadata['embedded_vcs_revision']}`. Go: `{metadata['go_version']}`.", "",
+             f"Production inputs SHA256: `{metadata['build_receipt']['production_source']['sha256']}`. Equivalent to VCS revision: `{metadata['build_receipt']['production_equivalent_to_vcs_revision']}`.", "",
              "Warm cache, scratch Unix transport, one-core CPU percentage. WAL rates are short-window extrapolations.", "",
              "| Sessions | Idle CPU % | Daemon RSS MiB | WAL commits/min | WAL frames/min | List JSON bytes | List ms | ls ms | version ms | Worker RSS MiB | Attach paint ms | Throughput MiB/s |",
              "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
@@ -405,8 +489,9 @@ def summary(result):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
-    parser.add_argument("--commit", required=True)
-    parser.add_argument("--go-version", required=True)
+    parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--commit")
+    parser.add_argument("--go-version")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--scratch-parent", type=Path, default=Path("/work/tmp"))
     parser.add_argument("--sessions", nargs="+", type=int, default=[0, 5, 20])
@@ -421,16 +506,23 @@ def main():
         parser.error("use 0–20 sessions, a positive window/repeats/throughput, and nonnegative settlement")
     args.binary = args.binary.resolve(strict=True)
     args.scratch_parent = args.scratch_parent.resolve(strict=True)
+    if inspect_binary(args.binary)["build_info"].splitlines()[0] != "path\tgithub.com/shaul/mesh/cmd/mesh":
+        parser.error("run.py requires the Mesh executable")
+    receipt = verify_receipt(args.binary, json.loads(args.receipt.read_text()), profiled=bool(args.profile_dir),
+                             commit=args.commit, go_version=args.go_version)
     if args.profile_dir:
         args.profile_dir.mkdir(parents=True, exist_ok=True)
     def interrupted(_signal, _frame):
         raise KeyboardInterrupt("benchmark interrupted; cleaning scratch processes")
 
     signal.signal(signal.SIGTERM, interrupted)
-    result = {"schema_version": 1,
+    result = {"schema_version": 2,
               "metadata": {"host": platform.node(), "arch": platform.machine(),
-                           "kernel": platform.release(), "commit": args.commit,
-                           "go_version": args.go_version, "unix_transport": True,
+                           "kernel": platform.release(),
+                           "production_source_revision": receipt["embedded_vcs_revision"] if receipt["production_equivalent_to_vcs_revision"] else None,
+                           "embedded_vcs_revision": receipt["embedded_vcs_revision"],
+                           "harness_revision": receipt["harness_revision"],
+                           "go_version": receipt["binary"]["go_version"], "build_receipt": receipt, "unix_transport": True,
                            "idle_seconds_requested": args.idle_seconds,
                            "settle_seconds": args.settle_seconds, "list_fields": args.list_fields,
                            "repeats": args.repeats, "binary_bytes": args.binary.stat().st_size,
@@ -439,8 +531,8 @@ def main():
                            "profiled": bool(args.profile_dir), "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
               "cases": []}
     for count in args.sessions:
-        with tempfile.TemporaryDirectory(prefix="mesh-m5-", dir=args.scratch_parent) as temporary:
-            result["cases"].append(run_case(args, count, Path(temporary)))
+        with scratch_case(args.scratch_parent, args.binary) as temporary:
+            result["cases"].append(run_case(args, count, temporary))
         print(f"measured and cleaned {count} scratch sessions", flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")

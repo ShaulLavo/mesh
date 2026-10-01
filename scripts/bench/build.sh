@@ -30,10 +30,13 @@ overlay = {'Replace': {str(main): str(replacement),
 PY
   args=(-overlay "$output/overlay.json")
 fi
+profile=()
+[[ ${3:-} != profile ]] || profile=(--profile)
+python3 "$root/scripts/bench/receipt.py" snapshot --root "$root" --arch "$arch" "${profile[@]}" --sources "$output/sources.json"
 cd "$root"
 # Pin the normal release version so --version exercises the shipped CLI path.
 CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build "${args[@]}" \
   -ldflags="-X github.com/shaul/mesh/internal/release.Version=$version" \
   -o "$output/mesh" ./cmd/mesh
-git rev-parse HEAD > "$output/commit.txt"
-go version > "$output/go-version.txt"
+python3 "$root/scripts/bench/receipt.py" create --root "$root" --binary "$output/mesh" \
+  --sources "$output/sources.json" --receipt "$output/receipt.json"

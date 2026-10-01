@@ -4,9 +4,16 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$root/scripts/bench" -p test_run.py
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/mesh-m5-test-XXXXXX")
-trap 'rm -rf -- "$scratch"' EXIT
-python3 "$root/scripts/bench/run.py" --binary "$MESH" --commit integration \
-  --go-version "$(go version)" --scratch-parent "$scratch" --sessions 0 2 \
+cleanup() {
+  [[ -z $(find "$scratch" -name "mesh-m5-*" -type d -mindepth 1 -print -quit) ]] || return 1
+  rm -rf -- "$scratch"
+}
+trap cleanup EXIT
+"$root/scripts/bench/build.sh" "$scratch/build"
+python3 "$root/scripts/bench/test_receipt.py" --binary "$scratch/build/mesh" --receipt "$scratch/build/receipt.json" --scratch-parent "$scratch"
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$root/scripts/bench" -p test_profile.py
+python3 "$root/scripts/bench/test_faults.py" --binary "$MESH" --scratch-parent "$scratch"
+python3 "$root/scripts/bench/run.py" --binary "$scratch/build/mesh" --receipt "$scratch/build/receipt.json" --scratch-parent "$scratch" --sessions 0 2 \
   --idle-seconds 1 --settle-seconds 0 --repeats 1 --output "$scratch/result.json"
 python3 - "$scratch/result.json" <<'PY'
 import json

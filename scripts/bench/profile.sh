@@ -7,12 +7,15 @@ if (( $# != 2 )); then
 fi
 build=$(realpath "$1")
 output=$(realpath -m "$2")
+python3 "$root/scripts/bench/receipt.py" verify --binary "$build/mesh" --receipt "$build/receipt.json" > /dev/null
 mkdir -p "$output"
 cd "$root"
 for package in worker tui daemon transport session terminal release cli; do
-  go test -run '^$' -bench . -benchtime=1s -count=3 -benchmem \
-    -cpuprofile "$output/$package.cpu.pprof" -memprofile "$output/$package.heap.pprof" \
-    -o "$output/$package.test" "./internal/$package" > "$output/$package.bench.txt"
+  scripts/bench/build-test.sh "$output" "$package"
+  python3 scripts/bench/receipt.py verify --binary "$output/$package.test" --receipt "$output/$package.receipt.json" > /dev/null
+  "$output/$package.test" -test.run '^$' -test.bench . -test.benchtime=1s -test.count=3 -test.benchmem \
+    -test.cpuprofile "$output/$package.cpu.pprof" -test.memprofile "$output/$package.heap.pprof" \
+    > "$output/$package.bench.txt"
   for sample in cpu alloc_space inuse_space; do
     profile="$output/$package.heap.pprof"
     [[ $sample != cpu ]] || profile="$output/$package.cpu.pprof"
@@ -21,8 +24,7 @@ for package in worker tui daemon transport session terminal release cli; do
   done
 done
 runtime="$output/runtime-$(date -u +%Y%m%dT%H%M%SZ)"
-python3 scripts/bench/run.py --binary "$build/mesh" --commit "$(cat "$build/commit.txt")" \
-  --go-version "$(cat "$build/go-version.txt")" --scratch-parent "$build" \
+python3 scripts/bench/run.py --binary "$build/mesh" --receipt "$build/receipt.json" --scratch-parent "$build" \
   --sessions 1 --idle-seconds 1 --settle-seconds 0 --repeats 1 --throughput-bytes 16777216 \
   --profile-dir "$runtime" --output "$output/instrumented.json"
 for profile in "$runtime"/*.pprof; do

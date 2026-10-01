@@ -15,7 +15,30 @@
     "cpu_ticks_per_second": 100,
     "sqlite_counter": "committed WAL transactions and frames at 5 Hz",
     "profiled": false,
-    "timestamp_utc": "2026-10-01T14:37:04Z"
+    "timestamp_utc": "2026-10-01T14:37:04Z",
+    "historical_provenance": {
+      "status": "independent reviewer observations; incomplete historical receipt",
+      "reviewed_harness_revision": "6fc53d6dac7ccc132ffa40bd436749f13b2e2ed1",
+      "production_baseline_revision": "9e3f62b56405bdda7a90a32b0acfe3d628fd9208",
+      "ordinary_binary_sha256_observed_by_reviewer": "d06c45e0fed1f624cdb4893c981f5d3a383f03a2d0b44d0f6566b15713b57a1a",
+      "embedded_go_version_observed_by_reviewer": "go1.27.0",
+      "embedded_target_observed_by_reviewer": {
+        "GOOS": "linux",
+        "GOARCH": "amd64"
+      },
+      "embedded_vcs_modified_observed_by_reviewer": true,
+      "production_blob_equivalence_checked_by_reviewer": true,
+      "review_reference": "https://github.com/ShaulLavo/mesh/pull/62#issuecomment-5935038472",
+      "ordinary_artifact_retained_now": false,
+      "profiled": false,
+      "gaps": [
+        "Original full embedded settings/build-flags receipt was not saved.",
+        "Original dirty-worktree explanation was not captured.",
+        "Original ordinary binaries were removed after runs; these are reviewer hashes, not fresh verification."
+      ],
+      "observed_artifact_root": "/work/tmp/mesh-m5-lfMbho/",
+      "hash_observation_source": "Independent reviewer observations relayed by mesh sub-coordinator a3eed3677d959545e on 2026-10-01."
+    }
   },
   "cases": [
     {

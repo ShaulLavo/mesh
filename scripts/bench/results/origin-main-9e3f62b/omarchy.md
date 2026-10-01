@@ -15,3 +15,5 @@ Warm cache, scratch Unix transport, one-core CPU percentage. WAL rates are short
 | 0 | 32.13 | 19.23 | 20.54 | 19.23 |
 | 5 | 37.59 | 21.95 | 20.46 | 19.45 |
 | 20 | 50.80 | 23.97 | 20.94 | 19.45 |
+
+Historical provenance: the [independent review](https://github.com/ShaulLavo/mesh/pull/62#issuecomment-5935038472) observed ordinary binary SHA256 `d06c45e0fed1f624cdb4893c981f5d3a383f03a2d0b44d0f6566b15713b57a1a`, embedded `go1.27.0`, Linux/amd64 and `vcs.modified=true`; production blobs matched the immutable baseline. The ordinary artifact was later removed. Full original build settings and the dirty-worktree explanation were not captured. This is an attributed observation, not a complete newly verified build receipt. Measurement samples are unchanged.

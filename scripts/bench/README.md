@@ -4,8 +4,12 @@
 creates a fresh HOME, config, state, app-data root and unused tailnet port for
 every session count. Unix control requests address only that daemon. It never
 installs a binary or calls the installed daemon's socket. SSH/HTTPS/serving stay
-disabled. Workers are killed through the scratch socket before daemon shutdown;
-the Pi launcher additionally checks exact executable/script paths in `/proc`.
+disabled. Cleanup settles the owned daemon, sends `session.kill` directly to each worker
+socket, then uses bounded PID-fd signals only after checking executable, exact
+session directory and PID start identity. `/proc` discovery covers missing create
+replies and metadata. Cancellation is held during cleanup, and roots stay on disk
+while a worker or command remains. The Pi launcher additionally checks exact
+executable/script paths in `/proc`.
 
 ## Reproduce
 
@@ -20,8 +24,7 @@ scratch=$(mktemp -d /work/tmp/mesh-m5-XXXXXX)
 heavy=/work/platform-production/heavy/current/run.js
 bun "$heavy" --class build mesh-bench-build -- scripts/bench/build.sh "$scratch/native"
 bun "$heavy" --class bench mesh-bench-local -- python3 scripts/bench/run.py \
-  --binary "$scratch/native/mesh" --commit "$(cat "$scratch/native/commit.txt")" \
-  --go-version "$(cat "$scratch/native/go-version.txt")" --output "$scratch/omarchy.json"
+  --binary "$scratch/native/mesh" --receipt "$scratch/native/receipt.json" --output "$scratch/omarchy.json"
 bun "$heavy" --class build mesh-bench-arm64 -- scripts/bench/build.sh "$scratch/arm64" arm64
 bun "$heavy" --class bench mesh-bench-pi -- scripts/bench/pi.sh "$scratch/arm64" "$scratch/results"
 # Copy the JSON/Markdown results before removing your scratch root.
@@ -56,12 +59,25 @@ The committed Pi run uses `/tmp` on tmpfs; WAL counts measure logical persistenc
 activity, and the timings do not characterize SD-card latency or wear.
 
 `--list-fields '{"someAdditiveOption":true}'` lets another lane compare a lean
-catalog without changing this baseline's full-list request. Labels include source
-commit, architecture, Go version, kernel, host, timestamp, window and binary size.
+catalog without changing this baseline's full-list request. `build.sh` captures
+production compilation-input hashes before and after building, and fails if they
+change. Its receipt records executable SHA256, all embedded build settings
+(including target, flags and VCS dirty status), compiler, profiling overlay
+identity, actual production-input manifest and separate harness revision.
+`run.py` checks the actual binary against this receipt before opening a scratch
+daemon. The Pi launchers verify again after copying; the Pi needs only Python.
+Optional `--commit` and `--go-version` assertions must match verified production
+source and the embedded compiler (`go1.27.0` spelling). A dirty production
+snapshot has its own input hash and no claimed production revision. Host,
+architecture, kernel, timestamp and windows remain observation metadata.
 The committed `results/origin-main-9e3f62b/` measurements use production source at
 `9e3f62b56405bdda7a90a32b0acfe3d628fd9208`; only test/harness files were added when
 those measurements were collected. Later main integrations do not change that
-pin or relabel the results. A new run measures the checkout being built.
+pin or relabel the results. Reviewer-observed ordinary SHA256s and embedded
+metadata are backfilled with explicit attribution in each JSON/Markdown pair.
+Those binaries were removed; original full build settings and the dirty-worktree
+explanation were not captured. These historical observations are incomplete,
+and are not new verified receipts. A new run measures the checkout being built.
 
 ## Profiles
 
@@ -74,6 +90,8 @@ The build overlay adds CPU/heap/alloc profiling to `main` only in this scratch
 binary. Runtime profiles cover a 16 MiB burst through a real daemon, worker, PTY,
 ring and x/vt screen. The profiler stops after five seconds; its forced GC and
 200 ms CPU-profile shutdown make instrumented timings unsuitable as baselines.
+Completion markers require successful CPU writes (including asynchronous writer
+errors), CPU close, heap/alloc writes and closes. Output errors withhold `.done`.
 Microbenchmarks cover ring write/replay, screen parsing/save, quiet checkpoints,
 relay/attachment queues, unchanged picker/inspector updates and keepalive
 Ping/Pong, plus CLI command-tree construction. The Ping benchmark measures each Ping's timeout/socket work without waiting
@@ -91,18 +109,25 @@ startup measurements for before/after claims. Profiling changes no shipped sourc
 and proposes no performance fixes.
 
 `integration/bench_harness.sh` checks fragmented frames, limits, `/proc`, real
-SQLite commit/reset counting, and a real 0/2-session lifecycle/throughput smoke
-run. Full baselines remain opt-in rather than adding Pi access or long workloads
+SQLite commit/reset counting, actual-binary receipt mismatch rejection,
+CPU/heap/alloc write and close failures, worker cleanup after daemon death,
+partial creation and cancellation, root retention, and a real 0/2-session
+lifecycle/throughput smoke run. Full baselines remain opt-in rather than adding Pi access or long workloads
 to CI.
 
 For short Pi microbenchmarks, cross-compile the test binaries into the same build
-folder before running `profile-pi.sh`; these run serially at 200 ms per benchmark,
+folder with `build-test.sh` before running `profile-pi.sh`; each has a receipt
+with its actual compiler/target/flags, production and benchmark input hashes.
+Go test executables omit embedded VCS settings, recorded as absent alongside the
+source checkout revision/dirty status. New test builds use `CGO_ENABLED=0`; the
+archived local microbenchmarks used the default CGO setting and remain pinned.
+These run serially at 200 ms per benchmark,
 collect CPU and heap profiles, and keep test scratch inside the remote root:
 
 ```sh
 bun "$heavy" --class build mesh-pi-tests -- bash -c '
   for p in worker tui daemon transport session terminal release cli; do
-    GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -o "$1/$p.test" "./internal/$p"
+    scripts/bench/build-test.sh "$1" "$p" arm64
   done
 ' _ "$scratch/arm64"
 bun "$heavy" --class bench mesh-pi-profile -- scripts/bench/profile-pi.sh "$scratch/arm64" "$scratch/pi-profiles"

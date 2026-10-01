@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,8 +12,34 @@ import (
 	"time"
 )
 
-// The overlay exists only in scratch profiling builds; measured baselines use
-// an ordinary binary. Profiles start after package initialization (including hash).
+var benchCreateProfile = func(name string) (io.WriteCloser, error) { return os.Create(name) }
+
+// pprof's asynchronous CPU writer discards write errors; retain them until Stop returns.
+type benchCPUWriter struct {
+	io.WriteCloser
+	mu  sync.Mutex
+	err error
+}
+
+func (w *benchCPUWriter) Write(data []byte) (int, error) {
+	n, err := w.WriteCloser.Write(data)
+	if n != len(data) && err == nil {
+		err = io.ErrShortWrite
+	}
+	w.mu.Lock()
+	w.err = errors.Join(w.err, err)
+	w.mu.Unlock()
+	return n, err
+}
+
+func (w *benchCPUWriter) closeChecked() error {
+	err := w.Close()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return errors.Join(w.err, err)
+}
+
+// The overlay is confined to scratch builds. Baselines use an ordinary binary.
 func benchProfile() func() {
 	dir := os.Getenv("MESH_BENCH_PROFILE_DIR")
 	if dir == "" {
@@ -22,26 +50,34 @@ func benchProfile() func() {
 		role = filepath.Base(os.Args[1])
 	}
 	prefix := filepath.Join(dir, fmt.Sprintf("%s-%d", role, os.Getpid()))
-	cpu, err := os.Create(prefix + ".cpu.pprof")
+	if err := os.Remove(prefix + ".done"); err != nil && !os.IsNotExist(err) {
+		panic(err)
+	}
+	file, err := benchCreateProfile(prefix + ".cpu.pprof")
 	if err != nil {
 		panic(err)
 	}
+	cpu := &benchCPUWriter{WriteCloser: file}
 	if err := pprof.StartCPUProfile(cpu); err != nil {
-		panic(err)
+		panic(errors.Join(err, cpu.closeChecked()))
 	}
 	var once sync.Once
 	finish := func() {
 		once.Do(func() {
 			pprof.StopCPUProfile()
-			_ = cpu.Close()
+			if err := cpu.closeChecked(); err != nil {
+				panic(err)
+			}
 			runtime.GC()
 			for _, name := range []string{"heap", "allocs"} {
-				file, err := os.Create(prefix + "." + name + ".pprof")
+				file, err := benchCreateProfile(prefix + "." + name + ".pprof")
 				if err != nil {
 					panic(err)
 				}
-				_ = pprof.Lookup(name).WriteTo(file, 0)
-				_ = file.Close()
+				writeErr := pprof.Lookup(name).WriteTo(file, 0)
+				if err := errors.Join(writeErr, file.Close()); err != nil {
+					panic(err)
+				}
 			}
 			if err := os.WriteFile(prefix+".done", nil, 0o600); err != nil {
 				panic(err)

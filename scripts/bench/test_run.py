@@ -5,7 +5,10 @@ from pathlib import Path
 import socket
 import struct
 import tempfile
+import sys
 import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 spec = importlib.util.spec_from_file_location("bench", Path(__file__).with_name("run.py"))
 bench = importlib.util.module_from_spec(spec)
