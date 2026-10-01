@@ -34,8 +34,11 @@ type fakeDemandSessions struct {
 	// publishErr makes a start launch its session and then fail, the way a
 	// catalog that cannot record it does.
 	publishErr error
-	adoptID    string
-	adoptFor   string
+	// startErr makes a start launch its session and then fail before it is
+	// known to be ready, the way a worker that never answers does.
+	startErr error
+	adoptID  string
+	adoptFor string
 }
 
 func newFakeDemandSessions() *fakeDemandSessions {
@@ -53,6 +56,9 @@ func (f *fakeDemandSessions) startLabelled(_ context.Context, label string, comm
 		return id, nil
 	}
 	f.live[id] = label
+	if f.startErr != nil {
+		return id, fmt.Errorf("daemon: create: launch worker %s: %w", id, f.startErr)
+	}
 	if f.publishErr != nil {
 		return id, fmt.Errorf("daemon: publish session %s: %w", id, f.publishErr)
 	}
@@ -834,5 +840,26 @@ func TestDemandManagerCloseClosesHijackedConnections(t *testing.T) {
 	}
 	if _, stopped := sessions.counts(); stopped != 0 || sessions.liveCount() != 1 {
 		t.Fatal("closing the manager stopped the route's session")
+	}
+}
+
+func TestDemandLaunchFailureAfterStartKeepsOwnership(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	sessions.startErr = errors.New("readiness: worker did not answer")
+	manager := testDemandManager(t, sessions, func() bool { return true })
+	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+
+	if err := manager.Start(context.Background(), "dev"); err == nil {
+		t.Fatal("Start succeeded although the worker's launch failed after it started")
+	}
+	if status := manager.Status("dev"); status.State != protocol.DemandFailed || status.SessionID != "S001" {
+		t.Fatalf("status = %+v, want failed and still owning S001", status)
+	}
+	sessions.failStops(errWorkerSilent)
+	if err := manager.Start(context.Background(), "dev"); err == nil {
+		t.Fatal("Start succeeded while the half-launched worker may still run")
+	}
+	if started, _ := sessions.counts(); started != 1 {
+		t.Fatalf("a launch that failed after start was followed by %d launches, want 1", started)
 	}
 }
