@@ -30,7 +30,7 @@ func main() {
 		}),
 	}
 	// Without this a tagged build reports itself as built from source.
-	if version := release.Current().Version; version != "" {
+	if version := release.Metadata().Version; version != "" {
 		options = append(options, fang.WithVersion(version))
 	}
 	err := fang.Execute(context.Background(), root, options...)
