@@ -124,10 +124,11 @@ func TestClientRelayBoundsHandshakeWithoutCallerDeadline(t *testing.T) {
 	for _, blocked := range []string{"read", "write"} {
 		t.Run(blocked, func(t *testing.T) {
 			client, incumbent, candidate := newRelayTestConn(), newRelayTestConn(), newRelayTestConn()
-			relay := newClientRelay(client, newRelayTestConnector(connectResult{conn: incumbent}, connectResult{conn: candidate}), testWorkerOperationTimeout)
+			relay := newClientRelay(client, newRelayTestConnector(connectResult{conn: incumbent}, connectResult{conn: candidate}), defaultWorkerOperationTimeout)
 			t.Cleanup(func() { _ = relay.Close() })
 			id := mustRelaySessionID(t, "KEEP")
 			attachRelaySession(t, relay, client, incumbent, id)
+			relay.operationTimeout = testWorkerOperationTimeout
 			if blocked == "write" {
 				_, release := candidate.blockWrites()
 				defer release()

@@ -197,7 +197,7 @@ func (r *clientRelay) attach(ctx context.Context, id protocol.SessionID, frame p
 
 	worker, err := r.workers.ConnectWorker(dialCtx, id)
 	if err != nil {
-		return workerOperationError(dialCtx, id, "connect worker", err)
+		return workerAttachOperationError(dialCtx, id, "connect worker", err)
 	}
 	if worker == nil {
 		return fmt.Errorf("daemon: connect session %s worker: nil connection", id.String())
@@ -222,12 +222,12 @@ func (r *clientRelay) attach(ctx context.Context, id protocol.SessionID, frame p
 	defer stopCandidate()
 
 	if err := worker.WriteFrame(frame); err != nil {
-		return workerOperationError(dialCtx, id, "write attach", err)
+		return workerAttachOperationError(dialCtx, id, "write attach", err)
 	}
 
 	first, err := worker.ReadFrame()
 	if err != nil {
-		return workerOperationError(dialCtx, id, "read attach response", err)
+		return workerAttachOperationError(dialCtx, id, "read attach response", err)
 	}
 	response, err := validateWorkerAttachResponse(id, first)
 	if err != nil {
@@ -235,7 +235,7 @@ func (r *clientRelay) attach(ctx context.Context, id protocol.SessionID, frame p
 	}
 	if !stopCandidate() {
 		_ = candidate.close()
-		return workerOperationError(dialCtx, id, "complete attach", transport.ErrClosed)
+		return workerAttachOperationError(dialCtx, id, "complete attach", transport.ErrClosed)
 	}
 
 	if response.Type == protocol.TypeError {
@@ -647,6 +647,16 @@ func workerOperationError(ctx context.Context, id protocol.SessionID, operation 
 		err = contextErr
 	}
 	return fmt.Errorf("daemon: session %s %s: %w", id.String(), operation, err)
+}
+
+func workerAttachOperationError(ctx context.Context, id protocol.SessionID, operation string, err error) error {
+	err = workerOperationError(ctx, id, operation, err)
+	if errors.Is(err, context.DeadlineExceeded) {
+		// The worker can retire the incumbent before its acknowledgement arrives.
+		// Closing the candidate cannot undo that handoff, but never stops the command.
+		return fmt.Errorf("%w; worker did not acknowledge attach before the deadline; the session is still running but may be detached; attach again", err)
+	}
+	return err
 }
 
 func validateWorkerAttachResponse(id protocol.SessionID, frame protocol.Frame) (protocol.Control, error) {
