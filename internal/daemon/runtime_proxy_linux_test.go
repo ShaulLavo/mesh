@@ -206,3 +206,89 @@ func TestPublicProxyQuotaUsesAuthenticatedSource(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicFailedProxyDoesNotEvictAuthenticatedIdle(t *testing.T) {
+	base, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := newBoundedPublicListener(base, 1)
+	listener.proxyUIDs = []uint32{proxyTestUID(t)}
+	idle := make(chan struct{}, 2)
+	closed := make(chan struct{}, 2)
+	server := &http.Server{ReadHeaderTimeout: httpReadHeaderTimeout, ConnState: func(c net.Conn, state http.ConnState) {
+		listener.connState(c, state)
+		if state == http.StateIdle {
+			idle <- struct{}{}
+		}
+		if state == http.StateClosed {
+			closed <- struct{}{}
+		}
+	}, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close(); _ = listener.closeActive() })
+	legitimate, err := net.Dial("tcp4", base.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = legitimate.Close() }()
+	_ = legitimate.SetDeadline(time.Now().Add(time.Second))
+	if _, err := io.WriteString(legitimate, "PROXY TCP4 198.51.100.1 127.0.0.1 40000 443\r\nGET / HTTP/1.1\r\nHost: app.example.test\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(legitimate)
+	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodGet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	waitSignal(t, idle, "authenticated idle keep-alive")
+	invalid, err := net.Dial("tcp4", base.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = invalid.Close() }()
+	if _, err := io.WriteString(invalid, "NOT-A-PROXY-HEADER\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	waitSignal(t, closed, "failed PROXY connection")
+	_ = legitimate.SetDeadline(time.Now().Add(time.Second))
+	if _, err := io.WriteString(legitimate, "GET / HTTP/1.1\r\nHost: app.example.test\r\n\r\n"); err != nil {
+		t.Fatalf("failed authentication evicted legitimate socket: %v", err)
+	}
+	response, err = http.ReadResponse(reader, &http.Request{Method: http.MethodGet})
+	if err != nil {
+		t.Fatalf("failed authentication evicted legitimate socket: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("legitimate keep-alive status %d", response.StatusCode)
+	}
+}
+
+func TestPublicDisallowedProxyNeverAdmits(t *testing.T) {
+	base, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := newBoundedPublicListener(base, 1)
+	listener.proxyUIDs = []uint32{proxyTestUID(t) + 1}
+	t.Cleanup(func() { _ = listener.Close(); _ = listener.closeActive() })
+	peer, err := net.Dial("tcp4", base.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = peer.Close() }()
+	connection, err := listener.acceptTracked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection.RemoteAddr()
+	listener.mu.Lock()
+	admitted := listener.admitted
+	pending := connection.pending
+	listener.mu.Unlock()
+	if admitted != 0 || pending {
+		t.Fatalf("disallowed forwarder admitted=%d pending=%t, want 0 and false", admitted, pending)
+	}
+}
