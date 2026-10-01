@@ -134,6 +134,7 @@ type Registry struct {
 	wakeTimeout      time.Duration
 	logger           *eventLogger
 	reservedPath     string
+	forwarderTrusted func(*http.Request) bool
 }
 
 type AppHandler interface {
@@ -230,6 +231,7 @@ func NewRegistry(config HandlerConfig) (*Registry, error) {
 		wakeTimeout:      config.WakeTimeout,
 		logger:           newEventLogger(config.Logger, config.Now),
 		reservedPath:     config.ReservedPath,
+		forwarderTrusted: trustedLoopbackForwarder,
 	}
 	registry.snapshot.Store(&proxySnapshot{})
 	return registry, nil
@@ -452,13 +454,16 @@ func (r *Registry) ServeHTTP(response http.ResponseWriter, request *http.Request
 			return
 		}
 	}
-	if r.mode == ModeProxy {
+	if r.mode == ModeProxy && r.forwarderTrusted(request) {
 		clientIP, err = trustedForwardedMetadata(request.Header)
 		if err != nil {
 			r.logger.Print("edge event=invalid-forwarded-metadata")
 			http.NotFound(response, request)
 			return
 		}
+	} else if r.mode == ModeProxy {
+		// Unverified metadata cannot become downstream identity or scheme.
+		removeForwarded(request.Header)
 	}
 	if !r.rate.Allow(clientIP, r.now().UTC()) {
 		r.logger.Printf("edge event=rate-limit client=%s host=%s", clientIP, publicName)
@@ -613,7 +618,8 @@ func (b *inboundRequestBody) Read(buffer []byte) (int, error) {
 
 func (r *Registry) reverseProxy(route *proxyRoute) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
-		Transport: r.transport,
+		Transport:      r.transport,
+		ModifyResponse: r.filterPublicCookies,
 		Rewrite: func(request *httputil.ProxyRequest) {
 			removeForwarded(request.Out.Header)
 			request.Out.URL.Scheme = "http"

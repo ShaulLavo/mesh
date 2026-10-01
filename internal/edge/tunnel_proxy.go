@@ -36,7 +36,8 @@ func (r *Registry) newTunnelRoute(name, claimant string, endpoint tunnel.Endpoin
 		ReadBufferSize:         32 << 10, WriteBufferSize: 32 << 10,
 	}
 	route.proxy = &httputil.ReverseProxy{
-		Transport: route.transport,
+		Transport:      route.transport,
+		ModifyResponse: r.filterPublicCookies,
 		Rewrite: func(p *httputil.ProxyRequest) {
 			removeForwarded(p.Out.Header)
 			p.Out.URL.Scheme = "http"
