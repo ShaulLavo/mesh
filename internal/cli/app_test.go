@@ -181,8 +181,9 @@ func TestAppDownloadIsAtomicAndDoesNotOverwrite(t *testing.T) {
 	if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("partial download published: %v", err)
 	}
+	complete := gzipBytes(t, "complete")
 	transport.request = func(_ context.Context, r appspkg.Request) (appspkg.Result, error) {
-		return appspkg.Result{Data: []byte("complete"), Done: true}, nil
+		return appspkg.Result{Data: complete, Done: true}, nil
 	}
 	if err := downloadApp(context.Background(), transport, "7k3d", dest); err != nil {
 		t.Fatal(err)
@@ -191,7 +192,7 @@ func TestAppDownloadIsAtomicAndDoesNotOverwrite(t *testing.T) {
 		t.Fatalf("overwrote existing archive: %v", err)
 	}
 	contents, err := os.ReadFile(dest) //nolint:gosec // Read the test-selected download destination to verify atomic publication.
-	if err != nil || string(contents) != "complete" {
+	if err != nil || !bytes.Equal(contents, complete) {
 		t.Fatalf("archive: %q %v", contents, err)
 	}
 }
@@ -224,5 +225,37 @@ func TestAppSSHChecksExactMeshHostIdentity(t *testing.T) {
 	}
 	if _, err = appHostKeyCallback("missing pin"); err == nil {
 		t.Fatal("missing Mesh pin accepted")
+	}
+}
+
+func gzipBytes(t *testing.T, text string) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	gz := gzip.NewWriter(&out)
+	if _, err := gz.Write([]byte(text)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return out.Bytes()
+}
+
+func TestAppDownloadRefusesArchiveMixedFromTwoSnapshots(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "source.tar.gz")
+	before, after := gzipBytes(t, strings.Repeat("before ", 4096)), gzipBytes(t, strings.Repeat("after! ", 4096))
+	half := len(before) / 2
+	transport := appTransport{request: func(_ context.Context, r appspkg.Request) (appspkg.Result, error) {
+		if r.Offset == 0 {
+			return appspkg.Result{Data: before[:half]}, nil
+		}
+		return appspkg.Result{Data: after[r.Offset:], Done: true}, nil
+	}}
+	err := downloadApp(context.Background(), transport, "7k3d", dest)
+	if err == nil || !strings.Contains(err.Error(), "run it again") {
+		t.Fatalf("mixed archive was not refused: %v", err)
+	}
+	if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("mixed archive published: %v", err)
 	}
 }
