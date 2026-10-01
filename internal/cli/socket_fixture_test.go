@@ -28,7 +28,8 @@ func compactSocketTempDir(t *testing.T) string {
 }
 
 func TestSocketFixturesBindAndDetectAbsentDaemonUnderLongScratchRoot(t *testing.T) {
-	root, err := os.MkdirTemp(os.TempDir(), "cli-long-")
+	callerRoot := os.TempDir()
+	root, err := os.MkdirTemp(callerRoot, "cli-long-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestSocketFixturesBindAndDetectAbsentDaemonUnderLongScratchRoot(t *testing.
 		t.Fatal(err)
 	}
 	awaitDaemonServer(t, done)
-	if filepath.Dir(stateDir) != root {
-		t.Fatalf("socket fixture %q is not directly under scratch root %q", stateDir, root)
+	if filepath.Dir(stateDir) != callerRoot {
+		t.Fatalf("socket fixture %q is not directly under caller scratch root %q", stateDir, callerRoot)
 	}
 }
