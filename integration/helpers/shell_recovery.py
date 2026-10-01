@@ -12,7 +12,7 @@ import tempfile
 
 sys.dont_write_bytecode = True
 from terminal_window import run_outside_containing_session, Fixture, Terminal, eventually, require
-from failed_fixture import owned_processes, retain_evidence, stop_owned
+from failed_fixture import owned_processes, retain_evidence, stop_owned  # noqa: E402 - suppress bytecode before importing fixture helpers
 
 
 # Real shell startup and prompt hooks share CPU with every parallel integration.
