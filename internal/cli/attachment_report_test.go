@@ -140,10 +140,8 @@ func serveAttachmentEnding(t *testing.T, socket string, ending protocol.Control)
 
 func TestAttachmentReportPreservesWriterErrors(t *testing.T) {
 	failure := errors.New("report writer failed")
-	cmd := &cobra.Command{}
-	cmd.SetErr(attachmentReportErrorWriter{failure})
 	for _, result := range []AttachResult{{Exited: true}, {Exited: true, ExitCode: 7}, {Detached: true}, {}} {
-		err := reportAttachment(cmd, resolvedSession{local: &Session{Meta: worker.Meta{ID: "7K3D"}}}, result)
+		err := writeAttachResult(attachmentReportErrorWriter{failure}, "7K3D", result)
 		if !errors.Is(err, failure) {
 			t.Errorf("result %+v error = %v, want writer failure", result, err)
 		}
