@@ -88,8 +88,10 @@ func (l *lifecycle) stopSession(ctx context.Context, id string) error {
 func (l *lifecycle) sessionExit(id string) (*int, bool) {
 	meta, err := worker.ReadMeta(filepath.Join(l.sessionsDir, id))
 	if err != nil {
-		// A session whose record is gone cannot be serving anything.
-		return nil, true
+		// A missing or unreadable record proves nothing about the worker. Only
+		// an exit record or a process group seen gone below ends a session;
+		// anything less would let its route launch a second copy.
+		return nil, false
 	}
 	if meta.State == worker.StateExited {
 		return meta.ExitCode, true
