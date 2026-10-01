@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/webauth"
 )
 
@@ -351,7 +352,7 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 	if !exists || app.Status != "active" || !app.Ready {
 		return Record{}, nil, nil, errors.New("app unavailable")
 	}
-	if app.Visibility == "private" && !ambientOwnerAllowed(r, URL(id)) {
+	if app.Visibility == "private" && !serve.AmbientOwnerAllowed(r, URL(id), serve.RequireWebSocketOrigin) {
 		return Record{}, nil, nil, errors.New("app private")
 	}
 	if app.Visibility == "private" && !networkOwns(r, app.Owner) {
@@ -378,7 +379,7 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 		e.inflight[id] = map[string]admittedRequest{}
 	}
 	viewer, _ := e.auth.ViewOwner(r.Context(), r, id)
-	e.inflight[id][token] = admittedRequest{cancel: cancel, owner: ambientOwnerAllowed(r, URL(id)) && (viewer == app.Owner || networkOwns(r, app.Owner))}
+	e.inflight[id][token] = admittedRequest{cancel: cancel, owner: serve.AmbientOwnerAllowed(r, URL(id), serve.RequireWebSocketOrigin) && (viewer == app.Owner || networkOwns(r, app.Owner))}
 	release := func() { cancel(); e.mu.Lock(); delete(e.inflight[id], token); e.mu.Unlock() }
 	return app, r.WithContext(ctx), release, nil
 }

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/apppill"
+	"github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/webauth"
 )
 
@@ -87,12 +88,12 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 			viewer, err := e.auth.ViewOwner(r.Context(), r, id)
 			owner = err == nil && viewer == app.Owner
 		}
-		if !owner || !ambientOwnerAllowed(r, URL(id)) {
+		if !owner || !serve.AmbientOwnerAllowed(r, URL(id), serve.RequireWebSocketOrigin) {
 			origin := r.Header.Get("Origin")
 			legacyNavigation := (r.Method == http.MethodGet || r.Method == http.MethodHead) && origin == "" &&
 				r.Header.Get("Sec-Fetch-Site") == "" && r.Header.Get("Sec-Fetch-Mode") == "" &&
 				r.Header.Get("Sec-Fetch-Dest") == "" && !strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
-			if (origin == "" || origin == URL(id)) && (topLevelAppNavigation(r) || legacyNavigation) {
+			if (origin == "" || origin == URL(id)) && (serve.TopLevelNavigation(r) || legacyNavigation) {
 				http.Redirect(w, r, ManagementOrigin+"/view?id="+id, http.StatusSeeOther)
 			} else {
 				http.Error(w, "App is private. Open it from Mesh.", http.StatusForbidden)
