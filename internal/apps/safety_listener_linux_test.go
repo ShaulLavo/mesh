@@ -78,18 +78,49 @@ func TestHeldSocketsFindsAListenersInode(t *testing.T) {
 	}
 }
 
+// samePortListeners listens on each IPv4 address at one shared port. Binding
+// one address and then the next leaves a window in which another process can
+// take the port on the second address. A wildcard reservation instead has the
+// kernel pick a port free on every address, and SO_REUSEPORT lets only this
+// test's sockets join it until all of them listen.
+func samePortListeners(t *testing.T, addresses ...[4]byte) int {
+	t.Helper()
+	reservation := reusePortSocket(t)
+	if err := unix.Bind(reservation, &unix.SockaddrInet4{}); err != nil {
+		t.Fatal(err)
+	}
+	local, err := unix.Getsockname(reservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := local.(*unix.SockaddrInet4).Port
+	for _, address := range addresses {
+		fd := reusePortSocket(t)
+		if err := unix.Bind(fd, &unix.SockaddrInet4{Port: port, Addr: address}); err != nil {
+			t.Fatalf("bind %v:%d: %v", address, port, err)
+		}
+		if err := unix.Listen(fd, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return port
+}
+
+func reusePortSocket(t *testing.T) int {
+	t.Helper()
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, unix.IPPROTO_TCP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = unix.Close(fd) })
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
+		t.Fatal(err)
+	}
+	return fd
+}
+
 func TestLiveListenerInspectionIncludesEverySelectedPortBinding(t *testing.T) {
-	first, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = first.Close() })
-	port := first.Addr().(*net.TCPAddr).Port
-	second, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 2), Port: port})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = second.Close() })
+	port := samePortListeners(t, [4]byte{127, 0, 0, 1}, [4]byte{127, 0, 0, 2})
 	addresses, err := serverListeners(context.Background(), port)
 	if err != nil || len(addresses) != 2 {
 		t.Fatalf("missed selected-port binding: %v, %v", addresses, err)
