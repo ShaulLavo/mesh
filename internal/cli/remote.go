@@ -99,7 +99,7 @@ func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer) ([]pr
 	}
 	queryCtx, cancelQuery := context.WithTimeout(ctx, remoteConnectTimeout)
 	defer cancelQuery()
-	response, err := controlRequest(queryCtx, conn, protocol.Control{Type: protocol.TypeList, RequestID: requestID})
+	response, err := controlRequest(queryCtx, conn, protocol.Control{Type: protocol.TypeList, RequestID: requestID, Lean: true})
 	if err != nil {
 		return nil, err
 	}
@@ -263,26 +263,33 @@ func validateInspectionResponse(host HostRecord, sessionID string, previewCols, 
 		if response.SessionID != sessionID {
 			return SessionInspection{}, fmt.Errorf("host %s inspected a different session", host.Alias)
 		}
-		if response.Inspection == nil {
-			return SessionInspection{}, fmt.Errorf("host %s returned no inspection for session %s", host.Alias, sessionID)
+		if response.Recovery != nil {
+			return savedInspection(host, sessionID, *response.Recovery)
 		}
-		if err := protocol.ValidateSessionInspection(*response.Inspection); err != nil {
-			return SessionInspection{}, fmt.Errorf("host %s returned an invalid inspection for session %s: %w", host.Alias, sessionID, err)
-		}
-		if len(response.Inspection.Preview) > previewRows {
-			return SessionInspection{}, fmt.Errorf("host %s returned %d preview rows for session %s, want at most %d", host.Alias, len(response.Inspection.Preview), sessionID, previewRows)
-		}
-		for row, line := range response.Inspection.Preview {
-			if width := ansi.StringWidth(line); width > previewCols {
-				return SessionInspection{}, fmt.Errorf("host %s returned preview row %d with width %d for session %s, want at most %d", host.Alias, row, width, sessionID, previewCols)
-			}
-		}
-		return inspectionFromProtocol(*response.Inspection), nil
+		return validatedLiveInspection(host, sessionID, previewCols, previewRows, response.Inspection)
 	case protocol.TypeError:
 		return SessionInspection{}, daemonResponseError("inspect "+sessionID, response.Message)
 	default:
 		return SessionInspection{}, fmt.Errorf("host %s returned an unexpected inspect response", host.Alias)
 	}
+}
+
+func validatedLiveInspection(host HostRecord, sessionID string, previewCols, previewRows int, inspection *protocol.SessionInspection) (SessionInspection, error) {
+	if inspection == nil {
+		return SessionInspection{}, fmt.Errorf("host %s returned no inspection for session %s", host.Alias, sessionID)
+	}
+	if err := protocol.ValidateSessionInspection(*inspection); err != nil {
+		return SessionInspection{}, fmt.Errorf("host %s returned an invalid inspection for session %s: %w", host.Alias, sessionID, err)
+	}
+	if len(inspection.Preview) > previewRows {
+		return SessionInspection{}, fmt.Errorf("host %s returned %d preview rows for session %s, want at most %d", host.Alias, len(inspection.Preview), sessionID, previewRows)
+	}
+	for row, line := range inspection.Preview {
+		if width := ansi.StringWidth(line); width > previewCols {
+			return SessionInspection{}, fmt.Errorf("host %s returned preview row %d with width %d for session %s, want at most %d", host.Alias, row, width, sessionID, previewCols)
+		}
+	}
+	return inspectionFromProtocol(*inspection), nil
 }
 
 func inspectionFromProtocol(source protocol.SessionInspection) SessionInspection {

@@ -70,6 +70,7 @@ func ListViaDaemon(ctx context.Context, socketPath string) ([]protocol.SessionIn
 	response, err := daemonControlRequest(ctx, socketPath, protocol.Control{
 		Type:      protocol.TypeList,
 		RequestID: requestID,
+		Lean:      true,
 	})
 	if err != nil {
 		return nil, err
