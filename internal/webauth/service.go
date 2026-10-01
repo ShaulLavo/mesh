@@ -22,6 +22,7 @@ const (
 	PairCookie         = "__Host-mesh-pair"
 	OwnerCookie        = "__Host-mesh-owner"
 	ViewCookie         = "__Host-mesh-view"
+	ViewNonceCookie    = "__Host-mesh-viewnonce"
 	stateKey           = "browser-auth-v1"
 	pairTTL            = 10 * time.Minute
 	sessionTTL         = 30 * 24 * time.Hour
@@ -97,6 +98,7 @@ type browserRecord struct {
 }
 type viewRecord struct {
 	BrowserID, Owner, AppID string
+	NonceHash               string `json:"nonceHash,omitempty"`
 	ExpiresAt               time.Time
 }
 type state struct {

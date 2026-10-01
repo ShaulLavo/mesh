@@ -2,10 +2,12 @@ package apps
 
 import (
 	"context"
+	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/shaul/mesh/internal/webauth"
@@ -36,8 +38,13 @@ func (e *Edge) authenticateNetwork(r *http.Request) *http.Request {
 	if len(allowed) == 0 {
 		return r
 	}
-	mac := hmac.New(sha256.New, e.config.Key.Seed())
-	_, _ = mac.Write([]byte("mesh-app/tailnet-csrf/v1\x00" + ip.String()))
+	key, err := hkdf.Key(sha256.New, e.config.Key.Seed(), nil, "mesh-app/tailnet-csrf/key/v1", sha256.Size)
+	if err != nil {
+		return r
+	}
+	mac := hmac.New(sha256.New, key)
+	bucket := e.config.Now().Unix() / int64(time.Hour/time.Second)
+	_, _ = mac.Write([]byte("mesh-app/tailnet-csrf/v2\x00" + ip.String() + "\x00" + strconv.FormatInt(bucket, 10)))
 	session := webauth.Session{Owners: allowed, CSRF: base64.RawURLEncoding.EncodeToString(mac.Sum(nil))}
 	return r.WithContext(context.WithValue(r.Context(), networkSessionKey{}, session))
 }

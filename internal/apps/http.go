@@ -23,6 +23,7 @@ import (
 )
 
 const admissionLifetime = 30 * time.Second
+const returnQueryKey = "return"
 
 type admission struct {
 	Download   bool      `json:"download,omitempty"`
@@ -32,6 +33,36 @@ type admission struct {
 	URI        string    `json:"uri"`
 	Host       string    `json:"host"`
 	Until      time.Time `json:"until"`
+}
+
+func downloadAllowed(r *http.Request) bool {
+	site := r.Header.Get("Sec-Fetch-Site")
+	if site != "" && site != "same-origin" && site != "none" {
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	return origin == "" || origin == ManagementOrigin
+}
+
+func (e *Edge) refuseView(w http.ResponseWriter, r *http.Request, id string) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
+	if r.URL.Query().Get("mesh_view") != "" {
+		http.Error(w, "View link expired. Open it again from Mesh.", http.StatusForbidden)
+		return
+	}
+	origin := r.Header.Get("Origin")
+	legacy := (r.Method == http.MethodGet || r.Method == http.MethodHead) && origin == "" &&
+		r.Header.Get("Sec-Fetch-Site") == "" && r.Header.Get("Sec-Fetch-Mode") == "" && r.Header.Get("Sec-Fetch-Dest") == "" &&
+		!strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+	if (origin == "" || origin == URL(id)) && (serve.TopLevelNavigation(r) || legacy) {
+		http.Redirect(w, r, ManagementOrigin+"/view?id="+id, http.StatusSeeOther)
+	} else {
+		http.Error(w, "App is private. Open it from Mesh.", http.StatusForbidden)
+	}
 }
 
 func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bool {
@@ -49,17 +80,21 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		http.Error(w, "app unavailable", http.StatusServiceUnavailable)
 		return true
 	}
-	if !exists {
-		reserved, err := e.config.Store.AppNameExists(r.Context(), name)
+	if r.URL.Path == "/.mesh-app/view-start" && r.Method == http.MethodGet {
+		nonceHash, err := e.auth.BeginView(w)
 		if err != nil {
-			http.Error(w, "app unavailable", http.StatusServiceUnavailable)
+			http.Error(w, "Cannot start private view", http.StatusServiceUnavailable)
 			return true
 		}
-		if reserved {
-			http.Error(w, "This temporary app has expired or was deleted.", http.StatusGone)
-			return true
-		}
-		return false
+		query := url.Values{"id": {id}, "view_nonce": {nonceHash}, returnQueryKey: {appReturn(id, r.URL.Query().Get(returnQueryKey))}}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		http.Redirect(w, r, ManagementOrigin+"/view?"+query.Encode(), http.StatusSeeOther)
+		return true
+	}
+	if !exists || app.Status != "active" {
+		e.refuseView(w, r, id)
+		return true
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
@@ -68,10 +103,6 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
-	}
-	if app.Status != "active" {
-		http.Error(w, "This temporary app has expired or was deleted.", http.StatusGone)
-		return true
 	}
 	if ticket := r.URL.Query().Get("mesh_view"); ticket != "" {
 		if err := e.auth.ConsumeView(r.Context(), w, r, ticket, id); err != nil {
@@ -91,15 +122,7 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 			owner = viewer.Owner == app.Owner
 		}
 		if !owner || !serve.AmbientOwnerAllowed(r, URL(id), serve.RequireWebSocketOrigin) {
-			origin := r.Header.Get("Origin")
-			legacyNavigation := (r.Method == http.MethodGet || r.Method == http.MethodHead) && origin == "" &&
-				r.Header.Get("Sec-Fetch-Site") == "" && r.Header.Get("Sec-Fetch-Mode") == "" &&
-				r.Header.Get("Sec-Fetch-Dest") == "" && !strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
-			if (origin == "" || origin == URL(id)) && (serve.TopLevelNavigation(r) || legacyNavigation) {
-				http.Redirect(w, r, ManagementOrigin+"/view?id="+id, http.StatusSeeOther)
-			} else {
-				http.Error(w, "App is private. Open it from Mesh.", http.StatusForbidden)
-			}
+			e.refuseView(w, r, id)
 			return true
 		}
 	}
@@ -516,6 +539,10 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.URL.Path == "/download" && r.Method == "GET" {
+			if !downloadAllowed(r) {
+				http.Error(w, "Owner authorization required", http.StatusForbidden)
+				return
+			}
 			e.downloadSource(w, r, app)
 			return
 		}
@@ -524,12 +551,18 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "App expired", http.StatusGone)
 				return
 			}
-			destination := appReturn(id, r.URL.Query().Get("return"))
+			destination := appReturn(id, r.URL.Query().Get(returnQueryKey))
 			if app.Visibility == "public" || networkOwns(r, app.Owner) {
 				http.Redirect(w, r, destination, http.StatusSeeOther) //nolint:gosec // appReturn fixes the destination to this registry-owned app host.
 				return
 			}
-			ticket, err := e.auth.IssueView(r.Context(), r, app.Owner, id)
+			nonceHash := r.URL.Query().Get("view_nonce")
+			if nonceHash == "" {
+				challenge := URL(id) + "/.mesh-app/view-start?" + url.Values{returnQueryKey: {destination}}.Encode()
+				http.Redirect(w, r, challenge, http.StatusSeeOther) //nolint:gosec // URL uses the registry-owned app ID; only the escaped return query is supplied by the caller.
+				return
+			}
+			ticket, err := e.auth.IssueView(r.Context(), r, app.Owner, id, nonceHash)
 			if err != nil {
 				http.Error(w, "Cannot issue private view", http.StatusForbidden)
 				return
@@ -549,7 +582,7 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 			}
 			policy := strings.Replace(w.Header().Get("Content-Security-Policy"), "form-action 'self'", "form-action 'self' "+URL(id), 1)
 			w.Header().Set("Content-Security-Policy", policy)
-			render(w, pageData{Confirm: action, App: app, CSRF: session.CSRF, URL: URL(id), Return: appReturn(id, r.URL.Query().Get("return"))})
+			render(w, pageData{Confirm: action, App: app, CSRF: session.CSRF, URL: URL(id), Return: appReturn(id, r.URL.Query().Get(returnQueryKey))})
 			return
 		}
 	}
@@ -577,7 +610,7 @@ func (e *Edge) pairPage(w http.ResponseWriter, r *http.Request) {
 		e.startPairing(w, r)
 		return
 	}
-	destination := pairingReturn(r.URL.Query().Get("return"))
+	destination := pairingReturn(r.URL.Query().Get(returnQueryKey))
 	if _, err := e.auth.Promote(r.Context(), w, r); err == nil {
 		http.Redirect(w, r, ManagementOrigin+destination, http.StatusSeeOther) //nolint:gosec // pairingReturn permits only local paths on this fixed management origin.
 		return
@@ -600,7 +633,7 @@ func (e *Edge) startPairing(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid pairing request", http.StatusBadRequest)
 		return
 	}
-	destination := pairingReturn(r.PostForm.Get("return"))
+	destination := pairingReturn(r.PostForm.Get(returnQueryKey))
 	var ip netip.Addr
 	if e.config.ClientIP != nil {
 		ip = e.config.ClientIP(r)
@@ -719,7 +752,7 @@ func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Change failed", http.StatusServiceUnavailable)
 		return
 	}
-	destination := "/view?" + url.Values{"id": {id}, "return": {appReturn(id, r.PostForm.Get("return"))}}.Encode()
+	destination := "/view?" + url.Values{"id": {id}, returnQueryKey: {appReturn(id, r.PostForm.Get(returnQueryKey))}}.Encode()
 	if action == "delete" {
 		destination = "/"
 	}

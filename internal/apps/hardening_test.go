@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/serve"
+	"github.com/shaul/mesh/internal/webauth"
 )
 
 func TestAppIDsRejectServeReservedLabels(t *testing.T) {
@@ -30,8 +31,8 @@ func TestAppIDsRejectServeReservedLabels(t *testing.T) {
 }
 
 func TestUnavailableAppHostsHaveUniformResponses(t *testing.T) {
-	for _, unsafe := range []bool{false, true} {
-		t.Run(map[bool]string{false: "navigation", true: "cross-site POST"}[unsafe], func(t *testing.T) {
+	for _, mode := range []string{"navigation", "cross-site POST", "invalid ticket"} {
+		t.Run(mode, func(t *testing.T) {
 			f := newAppFixture(t)
 			app := createStaticApp(t, f)
 			var baseline *httptest.ResponseRecorder
@@ -55,11 +56,15 @@ func TestUnavailableAppHostsHaveUniformResponses(t *testing.T) {
 					f.edgeStore.mu.Unlock()
 				}
 				method := http.MethodGet
-				if unsafe {
+				if mode == "cross-site POST" {
 					method = http.MethodPost
 				}
-				r := httptest.NewRequest(method, URL(app.ID)+"/", nil)
-				if unsafe {
+				target := URL(app.ID) + "/"
+				if mode == "invalid ticket" {
+					target += "?mesh_view=invalid"
+				}
+				r := httptest.NewRequest(method, target, nil)
+				if mode == "cross-site POST" {
 					r.Header.Set("Origin", "https://attacker.example")
 					r.Header.Set("Sec-Fetch-Site", "cross-site")
 				}
@@ -106,8 +111,23 @@ func TestNetworkCSRFTokensUseSeparateKeyAndExpire(t *testing.T) {
 		t.Error("CSRF still uses raw identity seed")
 	}
 	f.now = f.now.Add(2 * time.Hour)
-	if token() == old {
+	fresh := token()
+	if fresh == old {
 		t.Error("CSRF token did not expire across time buckets")
+	}
+	mutation := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", nil)
+	mutation.Header.Set("Origin", ManagementOrigin)
+	mutation.Header.Set("X-Mesh-CSRF", old)
+	session, err := f.edge.browser(f.edge.authenticateNetwork(mutation))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if webauth.ValidateSessionMutation(mutation, ManagementOrigin, session) == nil {
+		t.Fatal("expired network CSRF authorized a mutation")
+	}
+	mutation.Header.Set("X-Mesh-CSRF", fresh)
+	if err := webauth.ValidateSessionMutation(mutation, ManagementOrigin, session); err != nil {
+		t.Fatalf("fresh network CSRF rejected: %v", err)
 	}
 }
 
@@ -133,14 +153,55 @@ func TestPrivateViewTicketCannotBeUsedWithoutBrowserNonce(t *testing.T) {
 	owner := pairedOwner(t, f)
 	r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+app.ID, nil)
 	r.AddCookie(owner)
-	w := httptest.NewRecorder()
-	f.edge.ServeHost(w, r, ManagementHost)
-	target := w.Header().Get("Location")
-	if strings.Contains(target, "mesh_view=") {
-		consume := httptest.NewRecorder()
-		f.edge.ServeHost(consume, httptest.NewRequest(http.MethodGet, target, nil), app.ID+"."+Domain)
-		if consume.Code == http.StatusSeeOther {
-			t.Fatal("stolen view URL granted a private session without a browser nonce")
+	redirect, nonce := privateViewRedirect(t, f, r)
+	target := redirect.Header().Get("Location")
+	if !strings.Contains(target, "mesh_view=") {
+		t.Fatalf("view ticket missing: %s", target)
+	}
+	consume := httptest.NewRecorder()
+	f.edge.ServeHost(consume, httptest.NewRequest(http.MethodGet, target, nil), app.ID+"."+Domain)
+	if consume.Code != http.StatusForbidden {
+		t.Fatalf("stolen view URL got %d", consume.Code)
+	}
+	legitimate := httptest.NewRequest(http.MethodGet, target, nil)
+	legitimate.AddCookie(nonce)
+	accepted := httptest.NewRecorder()
+	f.edge.ServeHost(accepted, legitimate, app.ID+"."+Domain)
+	if accepted.Code != http.StatusSeeOther {
+		t.Fatalf("bound browser could not consume ticket: %d %s", accepted.Code, accepted.Body.String())
+	}
+}
+
+func privateViewRedirect(t *testing.T, f *appFixture, management *http.Request) (*httptest.ResponseRecorder, *http.Cookie) {
+	t.Helper()
+	first := httptest.NewRecorder()
+	f.edge.ServeHost(first, management, ManagementHost)
+	challenge := httptest.NewRequest(http.MethodGet, first.Header().Get("Location"), nil)
+	start := httptest.NewRecorder()
+	f.edge.ServeHost(start, challenge, challenge.URL.Host)
+	nonce := cookieNamed(t, start, webauth.ViewNonceCookie)
+	resume := httptest.NewRequest(http.MethodGet, start.Header().Get("Location"), nil)
+	for _, cookie := range management.Cookies() {
+		resume.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	f.edge.ServeHost(response, resume, ManagementHost)
+	return response, nonce
+}
+
+func TestOwnerDownloadAllowsIntentionalRequests(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	networkOrigin(t, f)
+	owner := pairedOwner(t, f)
+	for _, site := range []string{"same-origin", "none", ""} {
+		r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/download?id="+app.ID, nil)
+		r.AddCookie(owner)
+		r.Header.Set("Sec-Fetch-Site", site)
+		w := httptest.NewRecorder()
+		f.edge.ServeHost(w, r, ManagementHost)
+		if w.Code != http.StatusOK || w.Body.Len() == 0 {
+			t.Errorf("intentional download site=%q got %d", site, w.Code)
 		}
 	}
 }

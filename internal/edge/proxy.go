@@ -399,6 +399,18 @@ func decodeListCursor(cursor string) (string, string, error) {
 	return parts[0], "/" + parts[1], nil
 }
 
+func (r *Registry) publishedHost(name string) bool {
+	if r.findTunnel(name) != nil {
+		return true
+	}
+	for _, route := range r.snapshot.Load().routes {
+		if route.publicName == name {
+			return true
+		}
+	}
+	return false
+}
+
 // ServeHTTP rejects malformed public requests before route lookup.
 func (r *Registry) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodConnect || request.URL.IsAbs() || request.URL.Opaque != "" {
@@ -455,7 +467,7 @@ func (r *Registry) ServeHTTP(response http.ResponseWriter, request *http.Request
 	}
 	request = request.WithContext(context.WithValue(request.Context(), proxyClientIPKey{}, clientIP))
 	request.Host = forwardedHost
-	if r.serveApp(response, request, publicName) {
+	if !r.publishedHost(publicName) && r.serveApp(response, request, publicName) {
 		return
 	}
 	if reservedTerminalPath(request.URL, r.reservedPath) {
