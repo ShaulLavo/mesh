@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # A daemon is disposable: restarting it must neither replace nor interrupt a
 # worker that it discovered and served before the restart.
 set -uo pipefail
@@ -26,6 +27,7 @@ cleanup() {
   [ -z "$DAEMON1" ] || kill -9 "$DAEMON1" 2>/dev/null || true
   [ -z "$DAEMON2" ] || kill -9 "$DAEMON2" 2>/dev/null || true
   [ -z "$SHELL_PID" ] || kill -9 "$SHELL_PID" 2>/dev/null || true
+  wait_for_fixture_workers "$MESH_STATE_DIR" || return 1
   rm -rf "$T"
 }
 trap cleanup EXIT

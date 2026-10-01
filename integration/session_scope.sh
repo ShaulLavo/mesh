@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # Each session runs in its own systemd scope, so systemd-oomd can kill one
 # runaway session without taking every other session and the daemon with it.
 set -uo pipefail
@@ -20,6 +21,7 @@ SID=""
 cleanup() {
   [ -z "$SID" ] || "$MESH" kill "$SID" >/dev/null 2>&1 || true
   [ -z "$CLIENT" ] || kill -9 "$CLIENT" 2>/dev/null || true
+  wait_for_fixture_workers "$MESH_STATE_DIR" || return 1
   rm -rf "$T"
 }
 trap cleanup EXIT

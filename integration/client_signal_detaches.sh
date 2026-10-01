@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 set -euo pipefail
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/mesh-client-signal.XXXXXX")
@@ -17,6 +18,7 @@ cleanup() {
     SID=$("$MESH" ls 2>/dev/null | awk 'NR==2 {print $1}') || true
   fi
   if [[ -n $SID ]]; then "$MESH" kill "$SID" >/dev/null 2>&1 || true; fi
+  wait_for_fixture_workers "$MESH_STATE_DIR" || return 1
   rm -rf -- "$T"
 }
 trap cleanup EXIT

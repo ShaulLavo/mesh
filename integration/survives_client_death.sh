@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # Acceptance test for the Mesh contract: killing the client must not kill the
 # command. Run from the repo root after `go build -o mesh ./cmd/mesh`.
 set -uo pipefail
@@ -12,7 +13,7 @@ if [ -z "${MESH:-}" ]; then
 fi
 T=$(mktemp -d)
 export MESH_STATE_DIR="$T/state"
-trap 'rm -rf "$T"' EXIT
+trap 'wait_for_fixture_workers "$MESH_STATE_DIR" && rm -rf "$T"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 

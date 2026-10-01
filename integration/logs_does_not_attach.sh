@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # Reading recent output is a one-shot control request. It must not steal the
 # terminal from the client that is already attached.
 set -uo pipefail
@@ -16,6 +17,7 @@ SID=""
 cleanup() {
   [ -z "$SID" ] || "$MESH" kill "$SID" >/dev/null 2>&1 || true
   [ -z "$CLIENT" ] || kill -9 "$CLIENT" 2>/dev/null || true
+  wait_for_fixture_workers "$MESH_STATE_DIR" || return 1
   rm -rf "$T"
 }
 trap cleanup EXIT

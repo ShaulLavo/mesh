@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # Exercise the shipped daemon with stock OpenSSH, including identity selection,
 # listener scope, shutdown, and worker survival.
 set -uo pipefail
@@ -24,6 +25,7 @@ cleanup() {
   for pid in "$ssh_pid" "$client_pid" "$daemon_pid"; do
     [[ -z $pid ]] || wait "$pid" 2>/dev/null || true
   done
+  wait_for_fixture_workers "$server_state" || return 1
   rm -rf -- "$test_root"
 }
 trap cleanup EXIT

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # Reattaching to a full-screen program must repaint its current screen without
 # replaying raw output from the screen that preceded it.
 set -uo pipefail
@@ -20,6 +21,7 @@ cleanup() {
   [ -z "$SID" ] || "$MESH" kill "$SID" >/dev/null 2>&1 || true
   [ -z "$C1" ] || kill -9 "$C1" 2>/dev/null || true
   [ -z "$C2" ] || kill -9 "$C2" 2>/dev/null || true
+  wait_for_fixture_workers "$MESH_STATE_DIR" || return 1
   rm -rf "$T"
 }
 trap cleanup EXIT
