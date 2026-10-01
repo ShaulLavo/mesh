@@ -405,6 +405,48 @@ func TestLifecycleRetriesPublicationWithoutLaunchingDuplicate(t *testing.T) {
 	}
 }
 
+func TestLifecycleCreationIdentityIncludesTermAndDepth(t *testing.T) {
+	launchCalls := 0
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog:     &lifecycleTestCatalog{},
+		Connector:   failingLifecycleConnector(),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key"},
+		SessionsDir: "/state/s",
+		Launch: func(cfg worker.LaunchConfig) (worker.Launched, error) {
+			launchCalls++
+			if cfg.Term != "xterm-256color" || cfg.Depth != 1 {
+				t.Fatalf("launch TERM = %q, depth = %d", cfg.Term, cfg.Depth)
+			}
+			return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+		},
+	})
+	request := protocol.Control{
+		Type: protocol.TypeCreate, RequestID: "launch-identity", Command: []string{"sh"}, Term: "xterm-256color", Depth: 1,
+	}
+	for range 2 {
+		response, handled, err := lifecycle.HandleControl(context.Background(), request)
+		if err != nil || !handled || response.SessionID != "7K3D" {
+			t.Fatalf("identical create response = %+v, handled = %v, error = %v", response, handled, err)
+		}
+	}
+	for _, field := range []string{"TERM", "depth"} {
+		t.Run(field, func(t *testing.T) {
+			changed := request
+			if field == "TERM" {
+				changed.Term = "vt100"
+			} else {
+				changed.Depth++
+			}
+			if _, handled, err := lifecycle.HandleControl(context.Background(), changed); !handled || err == nil {
+				t.Errorf("conflicting %s retry handled = %v, error = %v; want rejection", field, handled, err)
+			}
+			if launchCalls != 1 {
+				t.Fatalf("worker launches = %d, want 1", launchCalls)
+			}
+		})
+	}
+}
+
 func TestLifecycleCoalescesConcurrentCreateRequest(t *testing.T) {
 	catalog := &lifecycleTestCatalog{}
 	launchStarted := make(chan struct{})

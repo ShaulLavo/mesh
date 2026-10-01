@@ -85,7 +85,7 @@ type creationRequest struct {
 
 func (r creationRequest) equal(other creationRequest) bool {
 	return slices.Equal(r.command, other.command) && r.cwd == other.cwd && r.cols == other.cols && r.rows == other.rows &&
-		r.label == other.label && slices.Equal(r.env, other.env)
+		r.term == other.term && r.depth == other.depth && r.label == other.label && slices.Equal(r.env, other.env)
 }
 
 type creation struct {
