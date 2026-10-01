@@ -131,6 +131,9 @@ func TestProductionEdgeSinkPreservesCategoryBehindBlockedOperator(t *testing.T) 
 			t.Fatal("shared reporter silently lost the origin failure")
 		}
 	}
+	if !capture.contains("event=events-dropped category=invalid-public-host dropped=55") {
+		t.Fatal("production sink lost the exact category overflow count")
+	}
 }
 
 func TestDaemonTeardownFlushesCurrentEdgeDropSummary(t *testing.T) {
