@@ -162,6 +162,7 @@ class Fixture:
             "SHELL": str(self.helpers / "window_shell.sh"),
             "TERM": "xterm-256color",
             "NO_COLOR": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
         })
 
     def validate_destinations(self):
