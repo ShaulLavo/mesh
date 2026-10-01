@@ -84,11 +84,11 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		http.Redirect(w, r, appReturn(id, URL(id)+r.URL.RequestURI()), http.StatusSeeOther) //nolint:gosec // appReturn fixes this consumed ticket redirect to the app host.
 		return true
 	}
+	viewer, _ := e.auth.ViewSession(r.Context(), r, id)
 	if app.Visibility == "private" {
 		owner := networkOwns(r, app.Owner)
 		if !owner {
-			viewer, err := e.auth.ViewOwner(r.Context(), r, id)
-			owner = err == nil && viewer == app.Owner
+			owner = viewer.Owner == app.Owner
 		}
 		if !owner || !serve.AmbientOwnerAllowed(r, URL(id), serve.RequireWebSocketOrigin) {
 			origin := r.Header.Get("Origin")
@@ -144,6 +144,7 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		return true
 	}
 	r = admitted
+	activityStarted := time.Now()
 	defer release()
 	now := e.config.Now()
 	proof, err := Sign("mesh-app/admission/v1", app.Owner, app.Generation, admission{ID: id, Generation: app.Generation, Method: r.Method, URI: r.URL.RequestURI(), Host: name, Until: now.Add(admissionLifetime)}, e.config.Key, now)
@@ -186,8 +187,7 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 			request.Header["X-Forwarded-For"] = nil
 		}
 	}
-	proxy.Transport = &http.Transport{Proxy: nil, DialContext: (&netDialer).DialContext, ResponseHeaderTimeout: 10 * time.Second, MaxResponseHeaderBytes: 1 << 20, DisableCompression: true}
-	defer proxy.Transport.(*http.Transport).CloseIdleConnections()
+	proxy.Transport = e.transports.forEndpoint(endpoint)
 	proxy.ModifyResponse = func(response *http.Response) error {
 		apppill.StripCookies(response.Header)
 		if app.Visibility == "private" {
@@ -203,14 +203,14 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 				context.AfterFunc(r.Context(), func() { _ = stream.Close() })
 			}
 		} else {
-			response.Body = &activityBody{ReadCloser: response.Body, touch: func() {
+			response.Body = &activityBody{ReadCloser: response.Body, last: activityStarted, touch: func() {
 				if r.Context().Err() == nil {
-					_, _, _ = e.lookup(context.Background(), id, true)
+					_, _, _ = e.activity(r.Context(), app)
 				}
 			}}
 		}
-		viewer, _ := e.auth.ViewOwner(r.Context(), r, id)
-		return apppill.Inject(response, apppill.Config{AppID: id, ManagementOrigin: ManagementOrigin, Private: app.Visibility == "private", Owns: networkOwns(r, app.Owner) || viewer == app.Owner})
+		viewer, _ := e.auth.ViewSession(r.Context(), r, id)
+		return apppill.Inject(response, apppill.Config{AppID: id, ManagementOrigin: ManagementOrigin, Private: app.Visibility == "private", Owns: networkOwns(r, app.Owner) || viewer.Owner == app.Owner})
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		if app.Visibility == "private" {
@@ -359,7 +359,7 @@ func (s *activeStream) touch(active bool) {
 	if time.Since(s.last) < time.Second {
 		return
 	}
-	_, _, _ = s.edge.lookup(context.Background(), s.app.ID, true)
+	_, _, _ = s.edge.activity(context.Background(), s.app)
 	s.last = time.Now()
 }
 func (s *activeStream) Read(b []byte) (int, error) {
@@ -713,6 +713,7 @@ func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		_ = e.retireLocked(r.Context(), next.retireNames)
 	}
+	next.unlock()
 	e.mu.Unlock()
 	if err != nil {
 		http.Error(w, "Change failed", http.StatusServiceUnavailable)
