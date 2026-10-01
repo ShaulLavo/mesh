@@ -28,7 +28,7 @@ func guardPublicBody(handler http.Handler, idle time.Duration) http.Handler {
 		}
 		guard := &publicBodyGuard{
 			ResponseWriter: w, body: r.Body, controller: http.NewResponseController(w),
-			started: time.Now(), idle: idle,
+			idle: idle,
 		}
 		r.Body = guard
 		handler.ServeHTTP(guard, r)
@@ -55,7 +55,7 @@ type publicBodyGuard struct {
 	body       io.ReadCloser
 	controller *http.ResponseController
 	mu         sync.Mutex
-	started    time.Time
+	waited     time.Duration
 	idle       time.Duration
 	bytes      int64
 	responded  bool
@@ -68,15 +68,16 @@ func (g *publicBodyGuard) Read(p []byte) (int, error) {
 	if !g.responded {
 		budget := time.Duration(g.bytes/minimumPublicBodyBytesPerSecond)*time.Second +
 			time.Duration(g.bytes%minimumPublicBodyBytesPerSecond)*time.Second/time.Duration(minimumPublicBodyBytesPerSecond)
-		deadline := g.started.Add(g.idle + budget)
-		if idleDeadline := time.Now().Add(g.idle); idleDeadline.Before(deadline) {
-			deadline = idleDeadline
-		}
-		_ = g.controller.SetReadDeadline(deadline)
+		remaining := min(g.idle, g.idle+budget-g.waited)
+		_ = g.controller.SetReadDeadline(time.Now().Add(remaining))
 	}
 	g.mu.Unlock()
+	readStarted := time.Now()
 	n, err := g.body.Read(p)
+	waited := time.Since(readStarted)
 	g.mu.Lock()
+	// Origin wake-up and backpressure between reads are not client transfer time.
+	g.waited += waited
 	g.bytes += int64(n)
 	var timeout net.Error
 	if errors.As(err, &timeout) && timeout.Timeout() {
