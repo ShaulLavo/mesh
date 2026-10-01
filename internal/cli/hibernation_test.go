@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/shaul/mesh/internal/agentresume"
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
@@ -119,6 +121,9 @@ func TestProtocolSessionTableShowsHibernationIdleAndMemory(t *testing.T) {
 
 func TestLocalRowsReadTheHibernationMarker(t *testing.T) {
 	setupCommandTestHost(t)
+	if _, _, err := identity.LoadOrCreate(os.Getenv("MESH_STATE_DIR")); err != nil {
+		t.Fatal(err)
+	}
 	writeLocalSessionDir(t, "7K3D", worker.StateExited)
 	writeLocalSessionDir(t, "91AZ", worker.StateExited)
 	dir, err := paths.SessionDir("7K3D")

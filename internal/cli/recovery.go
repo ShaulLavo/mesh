@@ -199,11 +199,15 @@ func recoveredSession(source resolvedSession, result recovery.Result) (resolvedS
 }
 
 func (a *application) resolveSavedTarget(ctx context.Context, target recovery.Target) (resolvedSession, error) {
-	config, err := localRecoveryConfig()
+	stateDir, err := paths.StateDir()
+	if err != nil {
+		return resolvedSession{}, fmt.Errorf("locate saved target host: %w", err)
+	}
+	local, err := existingLocalIdentity(stateDir)
 	if err != nil {
 		return resolvedSession{}, err
 	}
-	if target.HostID == config.HostID {
+	if local.ID != "" && target.HostID == local.ID {
 		current, err := Find(target.SessionID)
 		return resolvedSession{local: &current}, err
 	}

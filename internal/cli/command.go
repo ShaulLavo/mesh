@@ -20,7 +20,6 @@ import (
 	"github.com/spf13/cobra"
 
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
-	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/procmem"
 	"github.com/shaul/mesh/internal/protocol"
@@ -420,9 +419,17 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 	if a.dependencies.Picker == nil {
 		return errors.New("the interactive picker is not installed yet; run mesh <host> or mesh <session-id>")
 	}
-	cache, err := OpenCatalogCache(cmd.Context())
+	stateDir, err := paths.StateDir()
 	if err != nil {
-		return err
+		return fmt.Errorf("locate picker state directory: %w", err)
+	}
+	hosts, _ = withoutThisHost(stateDir, hosts)
+	cache := &SQLiteCatalogCache{}
+	if len(hosts) > 0 {
+		cache, err = OpenCatalogCache(cmd.Context())
+		if err != nil {
+			return err
+		}
 	}
 	defer cache.Close() //nolint:errcheck // command result takes precedence
 	refreshSessions := func(ctx context.Context, alias string) (HostSessions, error) {
@@ -458,6 +465,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 		if err != nil {
 			return err
 		}
+		hosts, _ = withoutThisHost(stateDir, hosts)
 		catalog := []HostSessions{local}
 		for _, host := range hosts {
 			cached, cacheErr := cache.Load(cmd.Context(), host)
@@ -835,9 +843,11 @@ func (a *application) resolveSession(ctx context.Context, hosts []HostRecord, id
 		return resolvedSession{}, localErr
 	}
 	foundLocally := localErr == nil
-	if foundLocally {
-		hosts = withoutKnownSelfHost(hosts, local.Dir)
+	stateDir, err := paths.StateDir()
+	if err != nil {
+		return resolvedSession{}, fmt.Errorf("locate session resolution state directory: %w", err)
 	}
+	hosts, _ = withoutThisHost(stateDir, hosts)
 
 	if len(hosts) == 0 {
 		if !foundLocally {
@@ -1133,26 +1143,6 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 		}
 	}
 	return nil
-}
-
-// withoutThisHost drops this machine from the fan-out when it has adopted
-// itself, which listed every local session twice: once from disk and once
-// over the tailnet. Its local rows then carry the alias the user chose.
-func withoutThisHost(stateDir string, hosts []HostRecord) ([]HostRecord, string) {
-	self, _, err := identity.LoadOrCreate(stateDir)
-	if err != nil {
-		return hosts, localHostAlias
-	}
-	alias := localHostAlias
-	remote := make([]HostRecord, 0, len(hosts))
-	for _, host := range hosts {
-		if host.ID == self.ID {
-			alias = host.Alias
-			continue
-		}
-		remote = append(remote, host)
-	}
-	return remote, alias
 }
 
 func reportHiddenSessions(output io.Writer, hidden int, err error) error {
@@ -1794,8 +1784,8 @@ func ageAt(now, created time.Time) string {
 	}
 }
 
-// localHostAlias labels this machine's own sessions in a merged listing. It is
-// not an address-book entry: a host never adopts itself.
+// localHostAlias labels the disk-backed catalog even when an address-book alias
+// also names this machine.
 const localHostAlias = "this host"
 
 // localSessionRows renders this machine's sessions in the same shape the remote
@@ -1811,9 +1801,13 @@ func localSessionRowsMeasured(memory procmem.Table) ([]protocol.SessionInfo, err
 	if err != nil {
 		return nil, err
 	}
-	config, err := localRecoveryConfig()
+	stateDir, err := paths.StateDir()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("locate local catalog state directory: %w", err)
+	}
+	host, err := existingLocalIdentity(stateDir)
+	if err != nil {
+		return nil, fmt.Errorf("load local catalog identity: %w", err)
 	}
 	rows := make([]protocol.SessionInfo, 0, len(sessions))
 	for _, current := range sessions {
@@ -1830,7 +1824,7 @@ func localSessionRowsMeasured(memory procmem.Table) ([]protocol.SessionInfo, err
 			code := *current.ExitCode
 			row.ExitCode = &code
 		}
-		addLocalRecoveryInfo(&row, current, config.HostID)
+		addLocalRecoveryInfo(&row, current, host.ID)
 		row.Hibernated = localHibernation(current, row.ReplacementID)
 		if current.Liveness == LivenessAlive {
 			row.MemoryBytes = worker.SessionMemory(memory, current.ID, current.PID)

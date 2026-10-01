@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
-	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
@@ -290,7 +289,7 @@ func localPickerCatalog() (HostSessions, error) {
 	if err != nil {
 		return HostSessions{}, err
 	}
-	host, _, err := identity.LoadOrCreate(stateDir)
+	host, err := existingLocalIdentity(stateDir)
 	if err != nil {
 		return HostSessions{}, fmt.Errorf("load local identity: %w", err)
 	}
