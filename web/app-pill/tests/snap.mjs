@@ -156,11 +156,138 @@ async function checkOrientation(browser, engine, orientation, size) {
   }
 }
 
+const ownerFrame = route => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: `<!doctype html><script>parent.postMessage({type:'mesh-app-status',visibility:'public',owns:true},${JSON.stringify(origin)})</script>` });
+const anchorOf = page => page.evaluate(() => {
+  const box = document.querySelector('mesh-app-pill').shadowRoot.querySelector('.dot-target').getBoundingClientRect();
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+});
+const isOpen = async page => (await page.locator('mesh-app-pill .dot-target').getAttribute('aria-hidden')) === 'true';
+const near = (a, b) => Math.abs(a.x - b.x) <= 1.5 && Math.abs(a.y - b.y) <= 1.5;
+// Holds the pill's running transitions, so a tap lands at a known moment of the motion.
+// Already held ones stay where they are; rewinding them would resize the pill under the test.
+const hold = (page, at) => page.evaluate(at => {
+  for (const animation of document.querySelector('mesh-app-pill').shadowRoot.querySelector('.shell').getAnimations({ subtree: true })) {
+    if (animation.playState !== 'running') continue;
+    animation.pause();
+    if (at !== undefined) animation.currentTime = at;
+  }
+}, at);
+const release = page => page.evaluate(() => {
+  for (const animation of document.querySelector('mesh-app-pill').shadowRoot.querySelector('.shell').getAnimations({ subtree: true })) animation.play();
+});
+
+async function checkAnchoring(browser, engine, reducedMotion) {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, reducedMotion });
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const confirms = [];
+    page.on('request', request => { if (new URL(request.url()).pathname === '/confirm') confirms.push(request.url()); });
+    await page.route(`${manager}/**`, ownerFrame);
+    await page.goto(origin);
+    const label = `${engine} ${reducedMotion}`;
+    const dot = page.locator('mesh-app-pill .dot-target');
+    const collapse = page.locator('mesh-app-pill [data-react-grab-toolbar-collapse]');
+    await dot.click();
+    await page.locator('mesh-app-pill').getByRole('link', { name: 'Make private' }).waitFor();
+    await collapse.click();
+    await settle(page);
+
+    for (const [edge, ratio] of [['bottom', 0], ['bottom', 1], ['top', 0], ['top', 1], ['left', 0], ['left', 1], ['right', 0], ['right', 1]]) {
+      await page.evaluate(dock => localStorage.setItem('mesh-app-pill-position', JSON.stringify(dock)), { edge, ratio });
+      await page.reload();
+      await dot.waitFor();
+      await settle(page);
+      const before = await anchorOf(page);
+      await dot.click();
+      await page.locator('mesh-app-pill').getByRole('link', { name: 'Make private' }).waitFor();
+      await settle(page);
+      const grip = await collapse.boundingBox();
+      const from = { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 };
+      const [dx, dy] = edge === 'top' || edge === 'bottom' ? [10, 0] : [0, 10];
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(from.x + dx, from.y + dy, { steps: 4 });
+      await page.mouse.move(from.x, from.y, { steps: 4 });
+      await page.waitForTimeout(160);
+      await page.mouse.up();
+      await settle(page);
+      await collapse.click();
+      await settle(page);
+      assert.equal(await isOpen(page), false, `${label} ${edge} ${ratio}: collapsed`);
+      const after = await anchorOf(page);
+      assert(near(after, before), `${label} ${edge} ${ratio}: a zero-net drag of the open pill moved the dot from ${JSON.stringify(before)} to ${JSON.stringify(after)}`);
+      await page.reload();
+      await dot.waitFor();
+      await settle(page);
+      assert(near(await anchorOf(page), before), `${label} ${edge} ${ratio}: the dot moved after reload`);
+    }
+
+    await page.evaluate(() => localStorage.setItem('mesh-app-pill-position', JSON.stringify({ edge: 'bottom', ratio: 0.5 })));
+    await page.reload();
+    await dot.waitFor();
+    await settle(page);
+    await dot.click();
+    await page.locator('mesh-app-pill').getByRole('link', { name: 'Make private' }).waitFor();
+    await collapse.click();
+    await settle(page);
+    if (reducedMotion !== 'reduce') {
+      const start = await anchorOf(page);
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move(220, 420, { steps: 10 });
+      await page.waitForTimeout(160);
+      await page.mouse.up();
+      await hold(page, 35);
+      const flying = await anchorOf(page);
+      assert(flying.x > 230 && flying.x < 350, `${label}: the dot is mid-snap at ${JSON.stringify(flying)}`);
+      await page.touchscreen.tap(flying.x, flying.y);
+      await hold(page, 0);
+      assert.equal(await isOpen(page), true, `${label}: a tap during a snap opens the pill`);
+      const opening = await anchorOf(page);
+      assert(near(opening, flying), `${label}: opening mid-snap moved the anchor from ${JSON.stringify(flying)} to ${JSON.stringify(opening)}`);
+      await release(page);
+      await settle(page);
+      const rest = await measure(page);
+      assert(Math.abs(rest.panel.right - GAP) < 0.5, `${label}: the opened pill finishes its snap ${rest.panel.right}px from the right edge`);
+      await collapse.click();
+      await settle(page);
+      await page.keyboard.press('Tab');
+      await dot.focus();
+      await page.keyboard.press('Alt+ArrowDown');
+      await settle(page);
+    }
+
+    const center = await anchorOf(page);
+    await page.touchscreen.tap(center.x, center.y);
+    await hold(page);
+    await page.touchscreen.tap(center.x, center.y);
+    await settle(page);
+    assert.deepEqual(confirms, [], `${label}: a quick second tap must not activate an action that is still appearing`);
+    assert.equal(await isOpen(page), false, `${label}: a quick second tap reverses the morph`);
+    await release(page);
+    await settle(page);
+    await page.touchscreen.tap(center.x, center.y);
+    await settle(page);
+    const lock = await page.locator('mesh-app-pill').getByRole('link', { name: 'Make private' }).boundingBox();
+    await page.touchscreen.tap(lock.x + lock.width / 2, lock.y + lock.height / 2);
+    await page.waitForURL(`${manager}/confirm?**`);
+    assert.deepEqual(errors, [], 'The pill must not throw browser errors');
+    console.log(`${label}: corner drags keep the dot, a tap mid-snap keeps the anchor, and a quick second tap reverses the morph`);
+  } finally {
+    await context.close();
+  }
+}
+
 try {
   for (const [engine, type] of [['chromium', chromium], ['webkit', webkit]]) {
     const options = engine === 'chromium' && process.env.MESH_CHROMIUM_EXECUTABLE ? { executablePath: process.env.MESH_CHROMIUM_EXECUTABLE } : {};
     const browser = await type.launch({ headless: true, ...options });
     try {
+      await checkAnchoring(browser, engine, 'no-preference');
+      await checkAnchoring(browser, engine, 'reduce');
       await checkOrientation(browser, engine, 'portrait', { width: 390, height: 844 });
       await checkOrientation(browser, engine, 'landscape', { width: 844, height: 390 });
     } finally {
