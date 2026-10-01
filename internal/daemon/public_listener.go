@@ -139,6 +139,13 @@ func publicConnectionSource(address net.Addr) netip.Prefix {
 func (c *boundedPublicConn) RemoteAddr() net.Addr {
 	address := c.Conn.RemoteAddr()
 	c.identify.Do(func() {
+		if c.owner.proxyUIDs != nil {
+			proxy, ok := c.Conn.(interface{ Authenticated() bool })
+			if !ok || !proxy.Authenticated() {
+				_ = c.Close()
+				return
+			}
+		}
 		peer, _ := netip.ParseAddrPort(address.String())
 		c.frontDoor = c.owner.proxyUIDs == nil && peer.Addr().Unmap().IsLoopback()
 		if !c.owner.admit(c, publicConnectionSource(address)) {
