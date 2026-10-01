@@ -29,18 +29,11 @@ func compactSocketTempDir(t *testing.T) string {
 
 func TestSocketFixturesBindAndDetectAbsentDaemonUnderLongScratchRoot(t *testing.T) {
 	callerRoot := os.TempDir()
-	root, err := os.MkdirTemp(callerRoot, "cli-long-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.RemoveAll(root); err != nil {
-			t.Error(err)
-		}
-	})
-	t.Setenv("TMPDIR", root)
 	stateDir := compactSocketTempDir(t)
 	socket := daemon.SocketPath(stateDir)
+	if len(socket) > 103 {
+		t.Fatalf("socket path has %d bytes, exceeds the portable 103-byte limit: %q", len(socket), socket)
+	}
 	if _, err := ListViaDaemon(context.Background(), socket); !errors.Is(err, ErrDaemonUnavailable) {
 		t.Fatalf("absent daemon probe = %v, want ErrDaemonUnavailable", err)
 	}
