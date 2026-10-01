@@ -31,7 +31,10 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install confirmation browser engines
-        run: pnpm --dir web/app-pill exec playwright install --with-deps chromium webkit
+        timeout-minutes: 5
+        run: |
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          pnpm --dir web/app-pill exec playwright install --with-deps chromium webkit
       - name: Verify desktop and mobile confirmation guards
         env:
           MESH_CONFIRM_BROWSER_DIR: ${{ runner.temp }}/mesh-confirm
