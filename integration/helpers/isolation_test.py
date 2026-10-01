@@ -295,14 +295,16 @@ class ReviewRegressionsTest(unittest.TestCase):
                                  'printf "%s\\n" "$$" "$child" "$HOME" "$(ps -o pgid= -p $$)" > "$1"\nwait "$child"\n')
                 environment = {"PATH": os.defpath, "HOME": str(root / "caller-home"), "TMPDIR": str(root),
                                "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config")}
-                entry = subprocess.Popen(["bash", str(probe), str(capture)], env=environment,
-                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                stderr = root / "probe.stderr"
+                with stderr.open("w") as errors:
+                    entry = subprocess.Popen(["bash", str(probe), str(capture)], env=environment,
+                                             stdout=subprocess.DEVNULL, stderr=errors, start_new_session=True)
                 child_group = None
                 try:
                     deadline = time.monotonic() + 5
                     while not capture.exists() and time.monotonic() < deadline:
                         time.sleep(0.01)
-                    self.assertTrue(capture.exists(), "guarded probe did not start")
+                    self.assertTrue(capture.exists(), f"guarded probe did not start (exit={entry.poll()}):\n{stderr.read_text()}")
                     inner, child, home, group = capture.read_text().splitlines()
                     child_group = int(group)
                     if target == "pid":
