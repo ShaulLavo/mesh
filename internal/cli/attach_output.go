@@ -19,6 +19,6 @@ func (o *attachmentFileOutput) Write(payload []byte) (int, error) {
 }
 
 func (o *attachmentFileOutput) restore(sequence string) {
-	// These escapes are a courtesy, not a reason to hold the terminal hostage.
+	// Platforms with cancellable output also bound these courtesy escapes.
 	_, _ = o.write([]byte(sequence), time.Now().Add(100*time.Millisecond))
 }
