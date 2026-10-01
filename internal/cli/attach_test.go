@@ -38,6 +38,10 @@ func TestAttachStopsReadingInputBeforeReturning(t *testing.T) {
 			serverErr <- err
 			return
 		}
+		if err := protocol.NewWriter(conn).WriteControlMsg(protocol.Control{Type: protocol.TypeAttached, SessionID: "STOP"}); err != nil {
+			serverErr <- err
+			return
+		}
 		<-detach
 		serverErr <- protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
 			Type:      protocol.TypeDetach,

@@ -260,10 +260,18 @@ func attachWithTerminal(ctx context.Context, opts AttachOptions, terminal Attach
 		_ = conn.Close()
 		relays.Wait()
 	}()
-	relays.Go(func() { relayTerminalResizes(done, terminal.Resizes, opts.SessionID, send) })
-	relays.Go(func() {
-		relayInput(inputRelay, keys, sid, send, func() { detachAttachment(conn, opts.SessionID, send, detached) })
-	})
+	state.onAttached = func() error {
+		if terminal.begin != nil {
+			if err := terminal.begin(); err != nil {
+				return err
+			}
+		}
+		relays.Go(func() { relayTerminalResizes(done, terminal.Resizes, opts.SessionID, send) })
+		relays.Go(func() {
+			relayInput(inputRelay, keys, sid, send, func() { detachAttachment(conn, opts.SessionID, send, detached) })
+		})
+		return nil
+	}
 	return state.read(ctx, conn, detached)
 }
 
@@ -362,9 +370,13 @@ type attachmentOutput struct {
 	pendingSnapshot bool
 	snapshotSeq     uint64
 	acknowledged    bool
+	onAttached      func() error
 }
 
 func (s *attachmentOutput) restoreTerminal() {
+	if s.terminal.restore != nil {
+		s.terminal.restore()
+	}
 	if s.altScreen.Active() {
 		_, _ = io.WriteString(s.terminal.Output, leaveAltScreenSequence)
 	}
@@ -470,9 +482,15 @@ func (s *attachmentOutput) control(message protocol.Control) (bool, error) {
 }
 
 func (s *attachmentOutput) attached(message protocol.Control) error {
+	first := !s.acknowledged
 	s.acknowledged = true
 	if err := s.updateKeys(message); err != nil {
 		return err
+	}
+	if first && s.onAttached != nil {
+		if err := s.onAttached(); err != nil {
+			return err
+		}
 	}
 	if message.Snapshot {
 		s.pendingSnapshot = true
@@ -548,11 +566,15 @@ const restoreTerminalState = "\x1b[?25h" + // show the cursor
 	"\x1b[0m" // reset colours and attributes
 
 func makeRaw(f *os.File) (func(), error) {
-	state, err := term.MakeRaw(f.Fd())
+	return makeRawFD(f.Fd())
+}
+
+func makeRawFD(fd uintptr) (func(), error) {
+	state, err := term.MakeRaw(fd)
 	if err != nil {
 		return nil, fmt.Errorf("put terminal in raw mode: %w", err)
 	}
-	return func() { _ = term.Restore(f.Fd(), state) }, nil
+	return func() { _ = term.Restore(fd, state) }, nil
 }
 
 // detachNotifyTimeout bounds the courtesy detach frame. The worker treats a
