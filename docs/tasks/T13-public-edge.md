@@ -86,9 +86,13 @@ issue time. The edge checks that proof against the same allowlist.
 This is the only Mesh component with a public attack surface. Everything else
 hides behind Tailscale. Treat it accordingly:
 
-- The default proxy mode binds only a numeric loopback address. It trusts
-  forwarded metadata only from that loopback peer and requires exactly one
-  canonical `X-Forwarded-For` address and one `X-Forwarded-Proto` value.
+- The default proxy mode binds only a numeric loopback address. On Linux it
+  trusts forwarded metadata only when the live peer socket belongs to root or
+  the UID running Mesh, and then requires exactly one canonical
+  `X-Forwarded-For` address and one `X-Forwarded-Proto` value. An unverified or
+  different UID, and non-Linux platforms, keep the request available but use
+  the real loopback peer for rate/concurrency quotas and downstream identity;
+  forwarded identity and scheme are ignored.
 - Direct-TLS mode binds an unspecified or public unicast address. It requires
   TLS and an exact valid SNI/Host pair.
 - Both modes hard-return 404 for the terminal control path, including repeated
@@ -158,9 +162,12 @@ mesh daemon --tailnet-port=7337 --websocket-path=/mesh \
 ```
 
 The front door must connect from loopback, preserve the public `Host`, and set
-exactly one `X-Forwarded-For` address and one `X-Forwarded-Proto` value. Proxy
-mode rejects `certificateRenewerId` and never opens the public certificate
-stores.
+exactly one `X-Forwarded-For` address and one `X-Forwarded-Proto` value. Run the
+forwarder as root or the Mesh UID on Linux if those headers must be honored.
+A dedicated different proxy UID, an unknown socket owner, or a non-Linux host
+falls back to the peer address: requests still work, but share that peer’s
+rate/concurrency quota and lose forwarded scheme/identity. Proxy mode rejects
+`certificateRenewerId` and never opens the public certificate stores.
 
 Each origin pins that VPS with a separate target file:
 

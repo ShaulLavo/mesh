@@ -14,6 +14,7 @@ const (
 	maximumQueuedEvents    = 64
 	maximumEventsPerWindow = 60
 	eventWindow            = time.Minute
+	eventCloseTimeout      = time.Second
 )
 
 // Categories are code-owned: request strings cannot allocate new log budgets.
@@ -34,6 +35,9 @@ type eventLogger struct {
 	now     func() time.Time
 	notify  chan struct{}
 	cancel  context.CancelFunc
+	done    chan struct{}
+	close   sync.Once
+	closed  bool
 	mu      sync.Mutex
 	budgets [len(eventCategories)]eventBudget
 }
@@ -44,6 +48,7 @@ func newEventLogger(sink *log.Logger, now func() time.Time) *eventLogger {
 		return l
 	}
 	l.notify = make(chan struct{}, 1)
+	l.done = make(chan struct{})
 	for i := range l.budgets {
 		l.budgets[i].queue = make(chan string, maximumQueuedEvents)
 	}
@@ -54,6 +59,7 @@ func newEventLogger(sink *log.Logger, now func() time.Time) *eventLogger {
 }
 
 func (l *eventLogger) run(ctx context.Context) {
+	defer close(l.done)
 	ticker := time.NewTicker(eventWindow)
 	defer ticker.Stop()
 	for {
@@ -146,6 +152,10 @@ func (l *eventLogger) emit(message string) {
 	}
 	now := l.now().UTC()
 	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return
+	}
 	b := &l.budgets[index]
 	b.rotate(now, false)
 	if b.count >= maximumEventsPerWindow {
@@ -167,6 +177,17 @@ func (l *eventLogger) emit(message string) {
 
 func (l *eventLogger) Close() {
 	if l != nil && l.cancel != nil {
-		l.cancel()
+		l.close.Do(func() {
+			l.mu.Lock()
+			l.closed = true
+			l.mu.Unlock()
+			l.cancel()
+			timer := time.NewTimer(eventCloseTimeout)
+			defer timer.Stop()
+			select {
+			case <-l.done:
+			case <-timer.C:
+			}
+		})
 	}
 }
