@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # A running record from another boot is historical evidence, not a process the
 # new daemon may resurrect.
 set -uo pipefail
