@@ -12,7 +12,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -72,10 +71,11 @@ type updateCandidate struct {
 	Session  string   `json:"session,omitempty"`
 }
 type appRoute struct {
-	Record Record
-	Root   string
-	Port   int
-	Phase  string
+	Handler *appHandler
+	Record  Record
+	Root    string
+	Port    int
+	Phase   string
 }
 type upload struct {
 	ID        string    `json:"id"`
@@ -164,6 +164,7 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 		return nil, err
 	}
 	o.publishRoutes()
+	context.AfterFunc(ctx, o.Close)
 	return o, nil
 }
 
@@ -173,11 +174,50 @@ func (o *Origin) persist(ctx context.Context) error {
 	return save(ctx, o.config.Store, "apps.origin", o.state)
 }
 func (o *Origin) publishRoutes() {
+	previous := o.routes.Load()
 	routes := make(map[string]appRoute, len(o.state.Apps))
 	for id, a := range o.state.Apps {
-		routes[id] = appRoute{Record: a.Record, Root: a.Root, Port: a.Port, Phase: a.Phase}
+		var old appRoute
+		if previous != nil {
+			old = (*previous)[id]
+		}
+		route := cachedAppRoute(a, old)
+		routes[id] = route
 	}
 	o.routes.Store(&routes)
+	if previous != nil {
+		for id, old := range *previous {
+			if old.Handler != nil && old.Handler.transport != nil && old.Handler != routes[id].Handler {
+				old.Handler.transport.CloseIdleConnections()
+			}
+		}
+	}
+}
+func cachedAppRoute(app localApp, old appRoute) appRoute {
+	route := appRoute{Record: app.Record, Root: app.Root, Port: app.Port, Phase: app.Phase}
+	switch {
+	case app.Phase != "ready" || app.Record.Status != "active":
+	case old.Handler != nil && old.Root == app.Root && old.Port == app.Port && old.Record.Kind == app.Record.Kind && old.Record.Revision == app.Record.Revision:
+		route.Handler = old.Handler
+	case app.Record.Kind == "static":
+		handler, err := meshserve.Handler(meshserve.Service{Name: "temporary-app", Kind: meshserve.Static, Target: app.Root}, "/")
+		if err == nil {
+			route.Handler = &appHandler{Handler: handler}
+		}
+	default:
+		route.Handler = originHandler(route)
+	}
+	return route
+}
+
+func (o *Origin) Close() {
+	if routes := o.routes.Load(); routes != nil {
+		for _, route := range *routes {
+			if route.Handler != nil && route.Handler.transport != nil {
+				route.Handler.transport.CloseIdleConnections()
+			}
+		}
+	}
 }
 
 // modify edits the stored app in place. Writing back a whole copy read before a
@@ -1720,30 +1760,12 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 			http.NotFound(w, request)
 			return true
 		}
-		handler, err := meshserve.Handler(meshserve.Service{Name: "temporary-app", Kind: meshserve.Static, Target: app.Root}, "/")
-		if err != nil {
-			http.Error(w, "app unavailable", http.StatusServiceUnavailable)
-			return true
-		}
-		handler.ServeHTTP(w, request)
+	}
+	if app.Handler == nil {
+		http.Error(w, "app unavailable", http.StatusServiceUnavailable)
 		return true
 	}
-
-	target := &url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", app.Port)}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	transport := &http.Transport{Proxy: nil, MaxResponseHeaderBytes: 1 << 20, ResponseHeaderTimeout: 10 * time.Second, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-		connection, err := netDialer.DialContext(ctx, network, address)
-		if err == nil {
-			return connection, nil
-		}
-		return netDialer.DialContext(ctx, network, net.JoinHostPort("::1", fmt.Sprint(app.Port)))
-	}}
-	defer transport.CloseIdleConnections()
-	proxy.Transport = transport
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		http.Error(w, "app server unavailable", http.StatusServiceUnavailable)
-	}
-	proxy.ServeHTTP(w, request)
+	app.Handler.ServeHTTP(w, request)
 	return true
 }
 

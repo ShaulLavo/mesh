@@ -91,6 +91,9 @@ func localRecoveryConfig() (recovery.Config, error) {
 }
 
 func (a *application) recoverSession(cmd *cobra.Command, resolved resolvedSession, action recovery.Action, detachKey string, raw, takeover bool) error {
+	if _, err := a.attachmentOptions(cmd, detachKey, raw); err != nil {
+		return err
+	}
 	seen := make(map[recovery.Target]bool)
 	for range protocol.MaxContainingSessions + 1 {
 		target, err := resolvedTargetIdentity(resolved)

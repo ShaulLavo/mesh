@@ -318,7 +318,7 @@ func TestLegacyDetachHintDoesNotContaminateNonTerminalOutput(t *testing.T) {
 	go func() {
 		// With no destination identity, this embedded caller uses legacy keys
 		// without registering against the terminal that runs the test suite.
-		_, err := Attach(AttachOptions{
+		_, err := Attach(context.Background(), AttachOptions{
 			Conn: conn, SessionID: "BBBB", ContainingSessions: containing,
 			In: input, Out: output, Stderr: &diagnostics,
 		})
@@ -402,7 +402,7 @@ func startNestingAttachment(t *testing.T, opts AttachOptions) *nestingAttachment
 	opts.Conn, opts.SessionID, opts.In, opts.Out = conn, "AAAA", in, out
 	done := make(chan nestingAttachmentResult, 1)
 	go func() {
-		result, err := Attach(opts)
+		result, err := Attach(context.Background(), opts)
 		done <- nestingAttachmentResult{result: result, err: err}
 	}()
 	reader := protocol.NewReader(server)

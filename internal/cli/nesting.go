@@ -19,7 +19,7 @@ import (
 
 // A registration belongs to the client process, not its transport to the
 // destination. Reconnecting that transport must not restore the outer key.
-func registerAttachmentNesting(opts AttachOptions) (transport.Conn, bool, error) {
+func registerAttachmentNesting(parent context.Context, opts AttachOptions) (transport.Conn, bool, error) {
 	if opts.HostID != "" {
 		if err := protocol.ValidateSessionIdentity(protocol.SessionIdentity{HostID: opts.HostID, SessionID: opts.SessionID}); err != nil {
 			return nil, false, err
@@ -43,10 +43,13 @@ func registerAttachmentNesting(opts AttachOptions) (transport.Conn, bool, error)
 	if err != nil {
 		return nil, true, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), containmentQueryTimeout)
+	ctx, cancel := context.WithTimeout(parent, containmentQueryTimeout)
 	defer cancel()
 	conn, err := registerNesting(ctx, location, target)
 	if err != nil {
+		if parent.Err() != nil {
+			return nil, true, fmt.Errorf("register session %s nesting: %w", opts.SessionID, parent.Err())
+		}
 		if errors.Is(err, errNestingRejected) {
 			return nil, true, err
 		}

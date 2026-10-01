@@ -124,9 +124,12 @@ type AttachOptions struct {
 
 // AttachResult reports how an attachment ended.
 type AttachResult struct {
-	Detached bool
-	Exited   bool
-	ExitCode int
+	// Established means the worker acknowledged this claim, even if the
+	// connection later failed or the client cancelled.
+	Established bool
+	Detached    bool
+	Exited      bool
+	ExitCode    int
 	// LastSeq is the offset to resume from next time.
 	LastSeq uint64
 }
@@ -134,7 +137,7 @@ type AttachResult struct {
 // Attach connects to a session worker and relays the local terminal to it
 // until the client detaches or the remote process exits. Returning never
 // implies anything about whether the remote process is still alive.
-func Attach(opts AttachOptions) (AttachResult, error) {
+func Attach(ctx context.Context, opts AttachOptions) (AttachResult, error) {
 	res := initialAttachResult(opts)
 	if opts.Conn != nil {
 		defer opts.Conn.Close() //nolint:errcheck // release even if local terminal setup fails
@@ -151,7 +154,13 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 	if _, err := validateAttachOptions(opts); err != nil {
 		return res, err
 	}
-	registration, inside, err := registerAttachmentNesting(opts)
+	if ctx == nil {
+		return res, errors.New("attach with nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return res, fmt.Errorf("attach %s: %w", opts.SessionID, err)
+	}
+	registration, inside, err := registerAttachmentNesting(ctx, opts)
 	if err != nil {
 		return res, fmt.Errorf("attach %s nesting: %w", opts.SessionID, err)
 	}
@@ -162,12 +171,12 @@ func Attach(opts AttachOptions) (AttachResult, error) {
 	if inside && registration == nil && !keys.explicit && !opts.Raw {
 		_, _ = fmt.Fprintf(opts.Stderr, "  (%s detaches this one, ctrl+] leaves them all)\r\n", DetachKeyName(keys.detachKey))
 	}
-	terminal, closeTerminal, inputIsTerminal, err := localAttachTerminal(opts.In, opts.Out)
+	terminal, closeTerminal, inputIsTerminal, err := localAttachTerminal(ctx, opts.In, opts.Out)
 	if err != nil {
 		return res, err
 	}
 	defer closeTerminal()
-	return attachWithTerminal(context.Background(), opts, terminal, keys, inputIsTerminal)
+	return attachWithTerminal(ctx, opts, terminal, keys, inputIsTerminal)
 }
 
 func initialAttachResult(opts AttachOptions) AttachResult {
@@ -254,10 +263,18 @@ func attachWithTerminal(ctx context.Context, opts AttachOptions, terminal Attach
 		_ = conn.Close()
 		relays.Wait()
 	}()
-	relays.Go(func() { relayTerminalResizes(done, terminal.Resizes, opts.SessionID, send) })
-	relays.Go(func() {
-		relayInput(inputRelay, keys, sid, send, func() { detachAttachment(conn, opts.SessionID, send, detached) })
-	})
+	state.onAttached = func() error {
+		if terminal.begin != nil {
+			if err := terminal.begin(); err != nil {
+				return err
+			}
+		}
+		relays.Go(func() { relayTerminalResizes(done, terminal.Resizes, opts.SessionID, send) })
+		relays.Go(func() {
+			relayInput(inputRelay, keys, sid, send, func() { detachAttachment(conn, opts.SessionID, send, detached) })
+		})
+		return nil
+	}
 	return state.read(ctx, conn, detached)
 }
 
@@ -356,13 +373,22 @@ type attachmentOutput struct {
 	pendingSnapshot bool
 	snapshotSeq     uint64
 	acknowledged    bool
+	onAttached      func() error
 }
 
 func (s *attachmentOutput) restoreTerminal() {
-	if s.altScreen.Active() {
-		_, _ = io.WriteString(s.terminal.Output, leaveAltScreenSequence)
+	if s.terminal.restore != nil {
+		s.terminal.restore()
 	}
-	_, _ = io.WriteString(s.terminal.Output, restoreTerminalState)
+	sequence := restoreTerminalState
+	if s.altScreen.Active() {
+		sequence = leaveAltScreenSequence + sequence
+	}
+	if s.terminal.restoreOutput != nil {
+		s.terminal.restoreOutput(sequence)
+		return
+	}
+	_, _ = io.WriteString(s.terminal.Output, sequence)
 }
 
 func (s *attachmentOutput) read(ctx context.Context, conn transport.Conn, detached <-chan struct{}) (AttachResult, error) {
@@ -374,6 +400,9 @@ func (s *attachmentOutput) read(ctx context.Context, conn transport.Conn, detach
 		}
 		done, err := s.accept(frame)
 		if done || err != nil {
+			if err != nil && ctx.Err() != nil {
+				err = fmt.Errorf("session %s output: %w", s.opts.SessionID, ctx.Err())
+			}
 			return s.result, err
 		}
 	}
@@ -464,9 +493,16 @@ func (s *attachmentOutput) control(message protocol.Control) (bool, error) {
 }
 
 func (s *attachmentOutput) attached(message protocol.Control) error {
+	first := !s.acknowledged
 	s.acknowledged = true
+	s.result.Established = true
 	if err := s.updateKeys(message); err != nil {
 		return err
+	}
+	if first && s.onAttached != nil {
+		if err := s.onAttached(); err != nil {
+			return err
+		}
 	}
 	if message.Snapshot {
 		s.pendingSnapshot = true
@@ -541,12 +577,12 @@ const restoreTerminalState = "\x1b[?25h" + // show the cursor
 	"\x1b[?2004l" + // stop bracketed paste
 	"\x1b[0m" // reset colours and attributes
 
-func makeRaw(f *os.File) (func(), error) {
-	state, err := term.MakeRaw(f.Fd())
+func makeRawFD(fd uintptr) (func(), error) {
+	state, err := term.MakeRaw(fd)
 	if err != nil {
 		return nil, fmt.Errorf("put terminal in raw mode: %w", err)
 	}
-	return func() { _ = term.Restore(f.Fd(), state) }, nil
+	return func() { _ = term.Restore(fd, state) }, nil
 }
 
 // detachNotifyTimeout bounds the courtesy detach frame. The worker treats a

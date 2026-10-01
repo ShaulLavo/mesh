@@ -131,11 +131,12 @@ func TestRunExternalCommandBoundsCancellationWithInheritedPipes(t *testing.T) {
 
 func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 	stateDir := t.TempDir()
-	httpsPort := reserveTCPPort(t, "127.0.0.1")
-	controlPort := reserveTCPPort(t, "127.0.0.1")
+	httpsListener, httpsPort := newTCPListener(t, "127.0.0.1:0")
+	controlListener, controlPort := newTCPListener(t, "127.0.0.1:0")
 	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
 	configured := make(chan error, 1)
 	options := defaultRunOptions()
+	options.listen = useTCPListeners(controlListener, httpsListener)
 	options.reconcileInterval = time.Hour
 	options.discoverSelf = func(context.Context) (tailnet.Peer, error) {
 		return tailnet.Peer{Name: "origin.example.ts.net", Addrs: []string{"127.0.0.1"}}, nil
@@ -188,6 +189,8 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	case err := <-done:
+		t.Fatalf("run returned before Tailscale Serve was configured: %v", err)
 	case <-time.After(runtimeTestTimeout):
 		t.Fatal("Tailscale Serve was not configured")
 	}
@@ -212,11 +215,12 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 
 func TestRunFailsWhenTailscaleServeVerificationFails(t *testing.T) {
 	stateDir := t.TempDir()
-	httpsPort := reserveTCPPort(t, "127.0.0.1")
-	controlPort := reserveTCPPort(t, "127.0.0.1")
+	httpsListener, httpsPort := newTCPListener(t, "127.0.0.1:0")
+	controlListener, controlPort := newTCPListener(t, "127.0.0.1:0")
 	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
 	verifyErr := errors.New("TCP/443 is not configured")
 	options := defaultRunOptions()
+	options.listen = useTCPListeners(controlListener, httpsListener)
 	options.reconcileInterval = time.Hour
 	options.discoverSelf = func(context.Context) (tailnet.Peer, error) {
 		return tailnet.Peer{Name: "origin.example.ts.net", Addrs: []string{"127.0.0.1"}}, nil
@@ -249,10 +253,11 @@ func TestRunFailsWhenTailscaleServeVerificationFails(t *testing.T) {
 
 func TestRunFailsWhenTailscaleServeConfigurationFails(t *testing.T) {
 	stateDir := t.TempDir()
-	httpsPort := reserveTCPPort(t, "127.0.0.1")
-	controlPort := reserveTCPPort(t, "127.0.0.1")
+	httpsListener, httpsPort := newTCPListener(t, "127.0.0.1:0")
+	controlListener, controlPort := newTCPListener(t, "127.0.0.1:0")
 	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
 	options := defaultRunOptions()
+	options.listen = useTCPListeners(controlListener, httpsListener)
 	options.reconcileInterval = time.Hour
 	options.discoverSelf = func(context.Context) (tailnet.Peer, error) {
 		return tailnet.Peer{Name: "origin.example.ts.net", Addrs: []string{"127.0.0.1"}}, nil
@@ -289,13 +294,14 @@ func TestRunAcceptsVerifiedOperatorManagedTailscaleServeForward(t *testing.T) {
 func checkOperatorManagedServeForward(t *testing.T, gatewayPort uint16) {
 	t.Helper()
 	stateDir := t.TempDir()
-	httpsPort := reserveTCPPort(t, "127.0.0.1")
+	httpsListener, httpsPort := newTCPListener(t, "127.0.0.1:0")
 	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
 	forwardPort := gatewayPort
 	if forwardPort == 0 {
 		forwardPort = httpsPort
 	}
 	options := defaultRunOptions()
+	options.listen = useTCPListeners(httpsListener)
 	options.reconcileInterval = time.Hour
 	var verified atomic.Bool
 	options.verifyServeForward = func(_ context.Context, port uint16) error {
@@ -429,7 +435,9 @@ func TestRunTailscaleServeRequiresEveryControlAddressToBind(t *testing.T) {
 	controlPort := uint16(blocked.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
 	signerID, _ := composedIdentity(t)
 	called := false
+	httpsListener, httpsPort := newTCPListener(t, "127.0.0.1:0")
 	options := defaultRunOptions()
+	options.listen = useTCPListeners(httpsListener)
 	options.discoverSelf = func(context.Context) (tailnet.Peer, error) {
 		return tailnet.Peer{Addrs: []string{"127.0.0.1", "127.0.0.2"}}, nil
 	}
@@ -440,7 +448,7 @@ func TestRunTailscaleServeRequiresEveryControlAddressToBind(t *testing.T) {
 		return nil, nil
 	}
 	err = run(context.Background(), Config{
-		StateDir: t.TempDir(), TailnetPort: controlPort, HTTPSPort: reserveTCPPort(t, "127.0.0.1"),
+		StateDir: t.TempDir(), TailnetPort: controlPort, HTTPSPort: httpsPort,
 		CertificateRenewerID: signerID, TailscaleServe: true,
 	}, options)
 	if err == nil || !strings.Contains(err.Error(), "127.0.0.1") || !strings.Contains(err.Error(), "bind Tailnet") {
@@ -452,10 +460,12 @@ func TestRunTailscaleServeRequiresEveryControlAddressToBind(t *testing.T) {
 }
 
 func TestRunAllowsEqualHTTPSAndControlPortsOnSeparateAddresses(t *testing.T) {
-	port := reserveTCPPort(t, "127.0.0.1")
+	httpsListener, port := newTCPListener(t, "127.0.0.1:0")
+	controlListener, _ := newTCPListener(t, fmt.Sprintf("127.0.0.2:%d", port))
 	signerID, _ := composedIdentity(t)
 	ready := make(chan struct{}, 1)
 	options := defaultRunOptions()
+	options.listen = useTCPListeners(controlListener, httpsListener)
 	options.reconcileInterval = time.Hour
 	options.discoverSelf = func(context.Context) (tailnet.Peer, error) {
 		return tailnet.Peer{Addrs: []string{"127.0.0.2"}}, nil
@@ -505,8 +515,8 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	controlPort := reserveTCPPort(t, "127.0.0.1")
-	httpsPort := reserveTCPPort(t, "127.0.0.1")
+	controlListener, controlPort := newTCPListener(t, "127.0.0.1:0")
+	httpsListener, httpsPort := newTCPListener(t, "127.0.0.1:0")
 	signerID, _ := composedIdentity(t)
 	config := Config{
 		StateDir: stateDir, TailnetPort: controlPort, HTTPSPort: httpsPort,
@@ -514,6 +524,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	}
 	var discoveryCalls atomic.Int32
 	firstOptions := defaultRunOptions()
+	firstOptions.listen = useTCPListeners(controlListener, httpsListener)
 	firstOptions.now = func() time.Time { return exitedAt }
 	firstOptions.reconcileInterval = time.Hour
 	firstOptions.tailnetPollInterval = 10 * time.Millisecond
@@ -532,13 +543,24 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	if !errors.Is(firstErr, ErrTailnetAddressesChanged) {
 		t.Fatalf("first daemon error = %v, want address-change restart", firstErr)
 	}
-	if connection, dialErr := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", controlPort), 50*time.Millisecond); dialErr == nil {
-		_ = connection.Close()
-		t.Fatal("old control endpoint remained bound after address-change shutdown")
+	for _, listener := range []net.Listener{controlListener, httpsListener} {
+		_ = listener.(*net.TCPListener).SetDeadline(time.Now())
+		connection, acceptErr := listener.Accept()
+		if connection != nil {
+			_ = connection.Close()
+		}
+		if !errors.Is(acceptErr, net.ErrClosed) {
+			t.Fatalf("old listener %s after address-change shutdown = %v, want closed", listener.Addr(), acceptErr)
+		}
 	}
 
 	secondReady := make(chan struct{}, 1)
+	secondControl, secondPort := newTCPListener(t, "127.0.0.2:0")
+	secondHTTPS, secondHTTPSPort := newTCPListener(t, "127.0.0.1:0")
+	config.TailnetPort = secondPort
+	config.HTTPSPort = secondHTTPSPort
 	secondOptions := defaultRunOptions()
+	secondOptions.listen = useTCPListeners(secondControl, secondHTTPS)
 	secondOptions.now = func() time.Time { return exitedAt }
 	secondOptions.reconcileInterval = time.Hour
 	secondOptions.tailnetPollInterval = 10 * time.Millisecond
@@ -559,7 +581,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	case <-time.After(runtimeTestTimeout):
 		t.Fatal("restarted daemon did not reach readiness")
 	}
-	connection, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.2:%d", controlPort), time.Second)
+	connection, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.2:%d", secondPort), time.Second)
 	if err != nil {
 		t.Fatalf("restarted control endpoint was not bound: %v", err)
 	}

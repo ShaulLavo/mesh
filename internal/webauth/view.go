@@ -3,6 +3,7 @@ package webauth
 import (
 	"context"
 	"crypto/subtle"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -109,25 +110,35 @@ func (s *Service) ConsumeView(ctx context.Context, w http.ResponseWriter, r *htt
 	writeCookie(w, ViewCookie, token, expires, s.now())
 	return nil
 }
+
+type ViewSession struct {
+	Owner, BrowserID string
+	ExpiresAt        time.Time
+}
+
 func (s *Service) ViewOwner(ctx context.Context, r *http.Request, appID string) (string, error) {
+	view, err := s.ViewSession(ctx, r, appID)
+	return view.Owner, err
+}
+func (s *Service) ViewSession(ctx context.Context, r *http.Request, appID string) (ViewSession, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return ViewSession{}, fmt.Errorf("webauth: read view session: %w", err)
+	}
+	key, err := cookieKey(r, ViewCookie)
+	if err != nil {
+		return ViewSession{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key, err := cookieKey(r, ViewCookie)
-	if err != nil {
-		return "", err
-	}
 	v, ok := s.state.Views[key]
 	if !ok || v.AppID != appID || !s.now().Before(v.ExpiresAt) {
-		return "", ErrUnauthorized
+		return ViewSession{}, ErrUnauthorized
 	}
 	b, err := browserByID(&s.state, v.BrowserID, s.now())
 	if err != nil || !b.Owns(v.Owner) {
-		return "", ErrUnauthorized
+		return ViewSession{}, ErrUnauthorized
 	}
-	return v.Owner, nil
+	return ViewSession{Owner: v.Owner, BrowserID: v.BrowserID, ExpiresAt: v.ExpiresAt}, nil
 }
 func minTime(a, b time.Time) time.Time {
 	if a.Before(b) {
