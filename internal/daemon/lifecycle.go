@@ -21,6 +21,7 @@ import (
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/updategate"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -191,7 +192,7 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 		if ctx == nil {
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
 		}
-		response, err := l.forwardOneShot(ctx, request)
+		response, err := l.forwardOneShot(ctx, request, l.connector.ConnectWorker)
 		return response, true, err
 	default:
 		return protocol.Control{}, false, nil
@@ -214,7 +215,7 @@ func (l *lifecycle) logs(ctx context.Context, request protocol.Control) (protoco
 		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
 	}
 	if stored.State == storage.StateRunning || stored.State == storage.StateDetached {
-		response, err := l.forwardOneShot(ctx, request)
+		response, err := l.forwardOneShot(ctx, request, l.connector.ConnectWorker)
 		if err == nil {
 			return response, nil
 		}
@@ -392,7 +393,10 @@ func (l *lifecycle) hostInfo(request protocol.Control) (protocol.Control, error)
 	}, nil
 }
 
-func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control) (protocol.Control, error) {
+// forwardOneShot sends one validated control to a worker reached through
+// connect: the catalog-checked connector for clients, or connectOwned for a
+// session the daemon launched itself.
+func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control, connect func(context.Context, protocol.SessionID) (transport.Conn, error)) (protocol.Control, error) {
 	if err := validateRequestID(request); err != nil {
 		return protocol.Control{}, err
 	}
@@ -415,7 +419,7 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: encode session ID %s: %w", id, err)
 	}
-	conn, err := l.connector.ConnectWorker(ctx, sid)
+	conn, err := connect(ctx, sid)
 	if err != nil {
 		return protocol.Control{}, err
 	}
@@ -501,7 +505,7 @@ func (l *lifecycle) enrichLegacyInspection(ctx context.Context, id string, reque
 	}
 	logs, err := l.forwardOneShot(ctx, protocol.Control{
 		Type: protocol.TypeLogs, RequestID: request.RequestID, SessionID: id, Tail: protocol.MaxLogTail,
-	})
+	}, l.connector.ConnectWorker)
 	if err != nil || logs.Type != protocol.TypeLogged {
 		return
 	}

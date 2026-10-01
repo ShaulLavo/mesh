@@ -16,6 +16,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -64,7 +65,7 @@ func (l *lifecycle) stopSession(ctx context.Context, id string) error {
 	if _, ended := l.sessionExit(id); ended {
 		return nil
 	}
-	_, err := l.forwardOneShot(ctx, protocol.Control{Type: protocol.TypeKill, RequestID: demandRequestID("stop"), SessionID: id})
+	_, err := l.forwardOneShot(ctx, protocol.Control{Type: protocol.TypeKill, RequestID: demandRequestID("stop"), SessionID: id}, l.connectOwned)
 	if err != nil {
 		if _, ended := l.sessionExit(id); ended {
 			return nil
@@ -83,6 +84,24 @@ func (l *lifecycle) stopSession(ctx context.Context, id string) error {
 		case <-time.After(servedStopPoll):
 		}
 	}
+}
+
+// connectOwned reaches a worker the daemon launched through its own socket.
+// Client requests go through the catalog, but a session whose publication
+// failed is in no catalog yet and must still be stoppable by its owner.
+func (l *lifecycle) connectOwned(ctx context.Context, id protocol.SessionID) (transport.Conn, error) {
+	socketPath := paths.Socket(filepath.Join(l.sessionsDir, id.String()))
+	var dialer net.Dialer
+	stream, err := dialer.DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("daemon: connect owned worker %s at %s: %w", id, socketPath, err)
+	}
+	conn, err := transport.NewStreamConn(stream)
+	if err != nil {
+		_ = stream.Close()
+		return nil, fmt.Errorf("daemon: adapt owned worker %s connection: %w", id, err)
+	}
+	return conn, nil
 }
 
 func (l *lifecycle) sessionExit(id string) (*int, bool) {
@@ -115,7 +134,7 @@ func (l *lifecycle) outputTail(ctx context.Context, id string) string {
 	var output []byte
 	response, err := l.forwardOneShot(ctx, protocol.Control{
 		Type: protocol.TypeLogs, RequestID: demandRequestID("logs"), SessionID: id, Tail: servedOutputTail,
-	})
+	}, l.connectOwned)
 	if err == nil {
 		output = response.Output
 	} else if output, err = worker.ReadLogTail(filepath.Join(l.sessionsDir, id), servedOutputTail); err != nil {

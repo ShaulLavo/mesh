@@ -91,7 +91,7 @@ func (h *hibernator) hibernate(ctx context.Context, id storage.SessionID) bool {
 	_, err := h.lifecycle.forwardOneShot(operation, protocol.Control{
 		Type: protocol.TypeHibernate, RequestID: "hibernate-" + string(id),
 		SessionID: string(id), HibernateIdleMillis: h.idle.Milliseconds(),
-	})
+	}, h.lifecycle.connector.ConnectWorker)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err == nil {
