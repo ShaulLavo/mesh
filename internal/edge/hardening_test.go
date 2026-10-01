@@ -65,6 +65,9 @@ func TestPublicProxiesDropSharedParentCookies(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			capture := &eventCapture{}
+			registry.logger.Close()
+			registry.logger = newEventLogger(log.New(capture, "", 0), time.Now)
 			response := httptest.NewRecorder()
 			registry.ServeHTTP(response, publicRequest(http.MethodGet, name, requestPath))
 			if response.Code != http.StatusNoContent {
@@ -73,6 +76,13 @@ func TestPublicProxiesDropSharedParentCookies(t *testing.T) {
 			cookies := response.Header().Values("Set-Cookie")
 			if len(cookies) != 2 || !strings.HasPrefix(cookies[0], "host=ok") || !strings.HasPrefix(cookies[1], "scoped=ok") {
 				t.Fatalf("unsafe or lost cookies: %q", cookies)
+			}
+			deadline := time.Now().Add(time.Second)
+			for !capture.contains("event=cookies-stripped count=4") && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if !capture.contains("event=cookies-stripped count=4") {
+				t.Fatal("stripped cookie count was not logged")
 			}
 		})
 	}
