@@ -204,3 +204,33 @@ func TestProxyNeverFallsBackToIPv6Loopback(t *testing.T) {
 		t.Fatalf("proxy for app %s reached [::1]:%d after its verified 127.0.0.1 listener closed", app.ID, port)
 	}
 }
+
+func TestUpdatingASuspendedAppStartsANewGeneration(t *testing.T) {
+	f := newAppFixture(t)
+	workers := newServerWorkers(t, f)
+	port := freePort(t)
+	app := createServerAppOn(t, f, port)
+	f.now = app.ExpiresAt.Add(-time.Minute)
+	if err := workerListener(t, workers, app).Close(); err != nil {
+		t.Fatal(err)
+	}
+	startSquatter(t, port)
+	_ = f.origin.Sync(context.Background())
+	if edgeRecord(t, f, app.ID).Ready {
+		t.Fatalf("app %s was not suspended", app.ID)
+	}
+	upload, digest := uploadSource(t, f, sourceFixture(t))
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: app.ID, Kind: "static", UploadID: upload, Digest: digest}); err != nil {
+		t.Fatal(err)
+	}
+	updated := edgeRecord(t, f, app.ID)
+	if !updated.Ready || updated.Generation != app.Generation+1 || !updated.ExpiresAt.Equal(f.now.Add(IdleTTL)) {
+		t.Fatalf("update of suspended app %s: ready %t, generation %d, expires %s; want ready, generation %d, expires %s",
+			app.ID, updated.Ready, updated.Generation, updated.ExpiresAt, app.Generation+1, f.now.Add(IdleTTL))
+	}
+	f.now = app.ExpiresAt.Add(time.Minute)
+	_ = f.origin.Sync(context.Background())
+	if record := edgeRecord(t, f, app.ID); record.Status != "active" {
+		t.Fatalf("updated app %s was %s at its old deadline", app.ID, record.Status)
+	}
+}
