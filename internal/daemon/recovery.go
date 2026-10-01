@@ -76,7 +76,7 @@ func (l *lifecycle) readRecovery(ctx context.Context, request protocol.Control) 
 	return protocol.Control{Type: protocol.TypeRecoveryRecord, RequestID: request.RequestID, SessionID: source.ID, Recovery: &record, RecoverySupported: true}, nil
 }
 
-func (l *lifecycle) addRecoveryInfo(info *protocol.SessionInfo) {
+func (l *lifecycle) addRecoveryInfo(info *protocol.SessionInfo, lean bool) {
 	dir := filepath.Join(l.sessionsDir, info.ID)
 	meta, metaErr := worker.ReadMeta(dir)
 	if metaErr == nil {
@@ -95,11 +95,13 @@ func (l *lifecycle) addRecoveryInfo(info *protocol.SessionInfo) {
 		info.RecoveryError = err.Error()
 		return
 	}
-	// Lists carry recognition data. Full previous output has its own bounded,
-	// authenticated request so a host with many sessions stays listable.
-	record = protocol.RecoveryPreview(record)
-	info.Recovery = &record
 	if info.RecoveredFrom != "" {
 		info.AgentStatus = recovery.AgentStatus(l.sessionsDir, string(l.host.ID), info.RecoveredFrom, info.ID, record.AgentResume)
 	}
+	if lean {
+		protocol.LeanRecoveryInfo(info, record)
+		return
+	}
+	record = protocol.RecoveryPreview(record)
+	info.Recovery = &record
 }

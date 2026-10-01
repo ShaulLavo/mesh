@@ -74,6 +74,24 @@ func (m *model) selectRecoveryAction(key string) (bool, tea.Cmd) {
 	return true, tea.Quit
 }
 
+func (m model) savedDetailsFor(current session) inspectionDetails {
+	if !current.recoveryDetailsOmitted {
+		return savedRecoveryDetails(current)
+	}
+	if m.inspection.hasValue && m.inspection.target.sessionID == current.id && m.inspection.target.hostAlias == m.currentHost().alias && m.inspection.value.Recovery != nil {
+		current.recovery = m.inspection.value.Recovery
+		return savedRecoveryDetails(current)
+	}
+	details := savedRecoveryDetails(current)
+	details.screenStatus = "Loading previous output"
+	details.preview = []string{"Loading saved preview…"}
+	if m.inspection.kind == inspectionFailed || m.inspection.kind == inspectionUnavailable {
+		details.screenStatus = "Previous output unavailable"
+		details.preview = []string{safeText(m.inspection.problem)}
+	}
+	return details
+}
+
 func savedRecoveryDetails(current session) inspectionDetails {
 	details := inspectionDetails{
 		directoryLabel: "saved path", directory: safeText(current.cwd),

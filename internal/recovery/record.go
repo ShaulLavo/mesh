@@ -59,7 +59,7 @@ type Record struct {
 	Title           string               `json:"title,omitempty"`
 	LastOutputAt    time.Time            `json:"lastOutputAt,omitempty"`
 	Lines           []string             `json:"lines,omitempty"`
-	Command         []string             `json:"command"`
+	Command         []string             `json:"command,omitempty"`
 	Restart         *Command             `json:"restart,omitempty"`
 	Remote          *Target              `json:"remote,omitempty"`
 }
