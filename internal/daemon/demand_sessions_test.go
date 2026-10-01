@@ -230,7 +230,7 @@ func TestLabelledLaunchFailureBeforeStartOwnsNoWorker(t *testing.T) {
 		SessionsDir: sessionsDir,
 		Executable:  filepath.Join(t.TempDir(), "missing-mesh"),
 	})
-	id, err := lifecycle.startLabelled(context.Background(), "serve /dev", []string{"sh", "-lc", "vite"}, "/work", nil)
+	id, err := lifecycle.startLabelled(context.Background(), "serve /dev", []string{"sh", "-lc", "vite"}, t.TempDir(), nil)
 	if err == nil || id != "" {
 		t.Fatalf("startLabelled = %q, %v; want no session when the process never started", id, err)
 	}

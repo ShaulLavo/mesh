@@ -67,7 +67,9 @@ func TestLabelledLaunchFailureAfterStartKeepsWorkerIdentity(t *testing.T) {
 		SessionsDir: sessionsDir,
 		Executable:  executable,
 	})
-	id, err := lifecycle.startLabelled(context.Background(), "serve /dev", []string{"sh", "-lc", "vite"}, "/work",
+	// The launcher starts the worker in the session's directory, which must
+	// exist on every machine the test runs on.
+	id, err := lifecycle.startLabelled(context.Background(), "serve /dev", []string{"sh", "-lc", "vite"}, t.TempDir(),
 		[]string{startedWorkerVariable + "=started"})
 	entries, _ := os.ReadDir(sessionsDir)
 	started := ""
