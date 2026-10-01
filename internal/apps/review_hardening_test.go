@@ -86,6 +86,13 @@ func TestStoredReservedAppRestartAndCleanup(t *testing.T) {
 			if ValidID("mesh") {
 				t.Fatal("new allocation still allows reserved ID")
 			}
+			for range 16 {
+				next := &edgeMutation{state: edgeState{Apps: map[string]Record{}, Owners: map[string]ownerState{}}}
+				allocated, err := f.edge.allocate(context.Background(), next, record.Owner, "static")
+				if err != nil || allocated.App == nil || !ValidID(allocated.App.ID) {
+					t.Fatalf("new allocation accepted a reserved ID: %#v %v", allocated, err)
+				}
+			}
 		})
 	}
 }

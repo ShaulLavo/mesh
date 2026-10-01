@@ -75,6 +75,10 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 	if !ValidID(id) {
 		return false
 	}
+	if ticket := r.URL.Query().Get("mesh_view"); ticket != "" && e.auth.CheckView(r.Context(), r, ticket, id) != nil {
+		e.refuseView(w, r, id)
+		return true
+	}
 	app, exists, err := e.lookup(r.Context(), id, false)
 	if err != nil {
 		http.Error(w, "app unavailable", http.StatusServiceUnavailable)

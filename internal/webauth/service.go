@@ -160,19 +160,36 @@ func New(store StateStore, now func() time.Time) (*Service, error) {
 func (s *Service) change(ctx context.Context, apply func(*state, time.Time) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.changeLocked(ctx, s.now().UTC(), apply, true)
+}
+
+// Unlike approval attempts, rejected view consumption must not mutate durable state.
+func (s *Service) changeIf(ctx context.Context, check, apply func(*state, time.Time) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now().UTC()
+	if err := check(&s.state, now); err != nil {
+		return err
+	}
+	return s.changeLocked(ctx, now, apply, false)
+}
+
+func (s *Service) changeLocked(ctx context.Context, now time.Time, apply func(*state, time.Time) error, persistFailure bool) error {
 	raw, err := json.Marshal(s.state)
 	if err != nil {
-		return err
+		return fmt.Errorf("webauth: encode browser state: %w", err)
 	}
 	var next state
 	if err = json.Unmarshal(raw, &next); err != nil {
-		return err
+		return fmt.Errorf("webauth: clone browser state: %w", err)
 	}
 	// Keep the display code in memory without ever serializing it to the store.
 	next.Pairs = maps.Clone(s.state.Pairs)
-	now := s.now().UTC()
 	next.prune(now)
 	operationErr := apply(&next, now)
+	if operationErr != nil && !persistFailure {
+		return operationErr
+	}
 	// Rejected approval attempts still consume their durable rate limit.
 	durable := next
 	durable.Pairs = maps.Clone(next.Pairs)
@@ -183,7 +200,7 @@ func (s *Service) change(ctx context.Context, apply func(*state, time.Time) erro
 	}
 	raw, err = json.Marshal(durable)
 	if err != nil {
-		return err
+		return fmt.Errorf("webauth: encode browser state: %w", err)
 	}
 	if len(raw) > maxStateBytes {
 		return ErrCapacity

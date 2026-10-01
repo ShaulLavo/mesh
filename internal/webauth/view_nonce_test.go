@@ -77,3 +77,45 @@ func TestUnboundLegacyViewTicketFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestRejectedViewConsumptionDoesNotTouchDurableState(t *testing.T) {
+	for _, mode := range []string{"absent", "wrong nonce", "expired", "revoked"} {
+		t.Run(mode, func(t *testing.T) {
+			s, store, now := fixture(t)
+			owner, session := pair(t, s, "owner-a")
+			start := httptest.NewRecorder()
+			nonceHash, err := s.BeginView(start)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nonce := namedCookie(t, start, ViewNonceCookie)
+			ticket, err := s.IssueView(context.Background(), request(owner), "owner-a", "abcd", nonceHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "absent":
+				ticket = strings.Repeat("A", 43)
+			case "wrong nonce":
+				nonce.Value = strings.Repeat("A", 43)
+				nonce.Secure = true
+				nonce.HttpOnly = true
+				nonce.SameSite = http.SameSiteLaxMode
+			case "expired":
+				*now = now.Add(ticketTTL)
+			case "revoked":
+				s.mu.Lock()
+				for key, browser := range s.state.Browsers {
+					if browser.ID == session.ID {
+						delete(s.state.Browsers, key)
+					}
+				}
+				s.mu.Unlock()
+			}
+			store.fail = true
+			if err := s.ConsumeView(context.Background(), httptest.NewRecorder(), request(nonce), ticket, "abcd"); !errors.Is(err, ErrUnauthorized) {
+				t.Fatalf("invalid ticket reached durable storage: %v", err)
+			}
+		})
+	}
+}
