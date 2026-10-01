@@ -111,7 +111,7 @@ async function checkLinkDrag(page, pill) {
   await page.waitForURL(`${manager}/confirm?**`);
   assert.equal(new URL(page.url()).searchParams.get('return'), destination, 'Click must capture the current SPA page');
   await page.goto(appURL);
-  await pill.locator('[data-react-grab-toolbar-collapse]').click();
+  await pill.getByRole('button', { name: /^Open Mesh controls/ }).click();
   await pill.getByRole('link', { name: 'Make private' }).waitFor();
 }
 
@@ -129,17 +129,22 @@ async function checkInteractions(browser, name, reducedMotion) {
     }));
     await page.goto(origin);
     const pill = page.locator('mesh-app-pill');
-    const handle = pill.locator('[data-react-grab-toolbar-collapse]');
-    await handle.waitFor({ state: 'visible' });
-    await page.waitForFunction(() => { const bounds = document.querySelector('mesh-app-pill').shadowRoot.querySelector('[data-react-grab-toolbar-collapse]').getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight; });
-    const box = await handle.boundingBox();
-    assert(box, 'Collapse control must be visible');
-    assert.equal(await handle.evaluate(element => getComputedStyle(element, '::before').minWidth), '24px');
-    await handle.click();
+    const dot = pill.getByRole('button', { name: /^Open Mesh controls/ });
+    const collapse = pill.locator('[data-react-grab-toolbar-collapse]');
+    const isOpen = async () => (await pill.locator('.dot-target').getAttribute('aria-hidden')) === 'true';
+    await dot.waitFor({ state: 'visible' });
+    await page.waitForFunction(() => { const bounds = document.querySelector('mesh-app-pill').shadowRoot.querySelector('.dot-target').getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight; });
+    const box = await dot.boundingBox();
+    assert(box, 'The collapsed dot must be visible');
+    assert.deepEqual([box.width, box.height], [44, 44], 'The dot keeps a 44px touch target');
+    assert.deepEqual(await pill.locator('.dot').evaluate(element => [element.offsetWidth, getComputedStyle(element).backgroundColor]), [12, 'rgb(165, 180, 252)']);
+    assert.equal(await collapse.isVisible(), false, 'The collapsed state never shows the arrow');
+    await dot.click();
     await pill.locator('.controls').waitFor({ state: 'visible' });
+    assert.equal(await collapse.evaluate(element => getComputedStyle(element, '::before').minWidth), '24px');
     await pill.locator('[aria-label="Make private"]').waitFor({ state: 'visible' });
     assert.equal(await pill.locator('[aria-label="Make private"]').getAttribute('href'), `${manager}/confirm?id=7k3d&action=private&return=${encodeURIComponent(origin + '/')}`);
-    assert.equal(await pill.locator('button, a').count(), 3, 'Expanded pill has exactly three direct actions');
+    assert.equal(await pill.getByRole('button').count() + await pill.getByRole('link').count(), 3, 'Expanded pill has exactly three direct actions');
     assert.equal(await pill.locator('iframe').isVisible(), false, 'Authorization must never show a blank panel');
     assert.equal(await pill.locator('.status').count(), 0, 'No generic App label');
     assert.equal(await pill.locator('iframe').getAttribute('src'), `${manager}/frame?id=7k3d`);
@@ -157,23 +162,23 @@ async function checkInteractions(browser, name, reducedMotion) {
     }
     await page.waitForFunction(() => { const panel = document.querySelector('mesh-app-pill').shadowRoot.querySelector('[data-react-grab-toolbar-panel]'); return Math.min(panel.offsetWidth, panel.offsetHeight) === 26; });
     await screenshot(page, `${name}-${reducedMotion}-expanded`);
-    await handle.click();
-    assert.equal(await handle.getAttribute('aria-expanded'), 'false');
-    await handle.hover();
-    const dragStart = await handle.boundingBox();
+    await collapse.click();
+    assert.equal(await isOpen(), false);
+    await dot.hover();
+    const dragStart = await dot.boundingBox();
     assert(dragStart);
     await page.mouse.move(dragStart.x + dragStart.width / 2, dragStart.y + dragStart.height / 2);
     await page.mouse.down();
     await page.mouse.move(25, dragStart.y + dragStart.height / 2, { steps: 12 });
     await page.mouse.up();
     await page.waitForTimeout(320);
-    const snappedMouse = await handle.boundingBox();
+    const snappedMouse = await dot.boundingBox();
     assert(snappedMouse.x < 40, `Collapsed dot should snap left after dragging: ${JSON.stringify(snappedMouse)}, ${await page.evaluate(() => localStorage.getItem('mesh-app-pill-position'))}`);
-    await handle.focus();
+    await dot.focus();
     await page.keyboard.press('Alt+ArrowRight');
     await page.waitForTimeout(100);
-    assert((await handle.boundingBox()).x > 300, 'Keyboard docking should move the dot right');
-    await handle.evaluate(element => {
+    assert((await dot.boundingBox()).x > 300, 'Keyboard docking should move the dot right');
+    await dot.evaluate(element => {
       const bounds = element.getBoundingClientRect();
       element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true, button: 0, clientX: bounds.x + bounds.width / 2, clientY: bounds.y + bounds.height / 2, pointerType: 'touch' }));
     });
@@ -182,28 +187,29 @@ async function checkInteractions(browser, name, reducedMotion) {
     await page.waitForTimeout(120);
     await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointerup', { pointerType: 'touch' })));
     await page.waitForTimeout(320);
-    assert((await handle.boundingBox()).x < 40, 'Touch pointer dragging should snap left');
-    await handle.click();
-    assert.equal(await handle.getAttribute('aria-expanded'), 'true', 'The first deliberate click after a drag must expand');
+    assert((await dot.boundingBox()).x < 40, 'Touch pointer dragging should snap left');
+    await dot.click();
+    assert.equal(await isOpen(), true, 'The first deliberate click after a drag must expand');
     await checkLinkDrag(page, pill);
-    await handle.click();
-    assert.equal(await handle.getAttribute('aria-expanded'), 'false');
-    await handle.focus();
+    await collapse.click();
+    assert.equal(await isOpen(), false);
+    await dot.focus();
     await page.keyboard.press('Alt+ArrowRight');
     await page.reload();
-    await handle.waitFor({ state: 'visible' });
-    await page.waitForFunction(() => { const bounds = document.querySelector('mesh-app-pill').shadowRoot.querySelector('[data-react-grab-toolbar-collapse]').getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight; });
-    assert((await handle.boundingBox()).x > 300, 'Docked position should survive reload');
-    const touchTarget = await handle.boundingBox();
+    await dot.waitFor({ state: 'visible' });
+    await page.waitForFunction(() => { const bounds = document.querySelector('mesh-app-pill').shadowRoot.querySelector('.dot-target').getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight; });
+    assert((await dot.boundingBox()).x > 300, 'Docked position should survive reload');
+    const touchTarget = await dot.boundingBox();
     assert(touchTarget);
     await page.touchscreen.tap(touchTarget.x + touchTarget.width / 2, touchTarget.y + touchTarget.height / 2);
     await pill.locator('.controls').waitFor({ state: 'visible' });
-    await handle.focus();
+    await collapse.focus();
     await page.keyboard.press('Escape');
-    assert.equal(await handle.getAttribute('aria-expanded'), 'false');
+    assert.equal(await isOpen(), false);
+    assert.equal(await page.evaluate(() => document.querySelector('mesh-app-pill').shadowRoot.activeElement?.className), 'dot-target', 'Escape returns focus to the dot');
     await screenshot(page, `${name}-${reducedMotion}-collapsed`);
     assert.deepEqual(errors, [], 'The pill must not throw browser errors');
-    console.log(`${name} ${reducedMotion}: strict CSP, expansion, frame messages, mouse/touch drag, keyboard docking, and persistence passed`);
+    console.log(`${name} ${reducedMotion}: strict CSP, dot, expansion, frame messages, mouse/touch drag, keyboard docking, and persistence passed`);
   } finally {
     await context.close();
   }
@@ -223,7 +229,7 @@ async function checkUnavailableOrVisitor(browser, name, unavailable) {
     });
     await page.goto(origin);
     const pill = page.locator('mesh-app-pill');
-    await pill.locator('[data-react-grab-toolbar-collapse]').click();
+    await pill.getByRole('button', { name: /^Open Mesh controls/ }).click();
     await frameRequested;
     await pill.getByRole('button', { name: 'Copy link', exact: true }).waitFor();
     assert.equal(await pill.locator('iframe').isVisible(), false);
@@ -241,7 +247,7 @@ async function checkUnavailableOrVisitor(browser, name, unavailable) {
       await pill.getByRole('link', { name: 'Pair owner browser' }).waitFor();
     }
     await pill.locator('[data-react-grab-toolbar-collapse]').click();
-    assert.equal(await pill.locator('[data-react-grab-toolbar-collapse]').getAttribute('aria-expanded'), 'false');
+    assert.equal(await pill.locator('.dot-target').getAttribute('aria-hidden'), 'false');
     console.log(`${name}: ${unavailable ? 'unavailable manager' : 'visitor pairing'} remains compact and usable`);
   } finally {
     await context.close();
@@ -256,7 +262,7 @@ async function checkPrivateBootstrap(browser, name) {
     await page.route(`${manager}/**`, route => route.abort());
     await page.goto(`${origin}/private-bootstrap`);
     const pill = page.locator('mesh-app-pill');
-    await pill.locator('[data-react-grab-toolbar-collapse]').click();
+    await pill.getByRole('button', { name: /^Open Mesh controls/ }).click();
     await pill.getByRole('link', { name: 'Make public' }).waitFor();
     assert.equal(await pill.getByRole('link', { name: 'Pair owner browser' }).count(), 0);
     console.log(`${name}: private owner lock survives an unavailable management frame`);

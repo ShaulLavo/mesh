@@ -4,13 +4,14 @@ Source: https://github.com/aidenybai/react-grab
 Commit: ea4bbec9e80f4802e8ae19ad18431edb9ddbb670
 License: MIT, retained in LICENSE.
 
-These original utilities supply Mesh's drag threshold, velocity projection, edge
-snapping, and collapsed/expanded positioning. The application copies are adapted
-by scripts/sync-app-pill.mjs: import boundaries are local, runtime inspection is
-removed, collapsed dragging is enabled, interrupted snapping preserves the current position, and stale release velocity is discarded. Run that script to regenerate them.
-Dragging suppresses the resulting click and link navigation. A fresh pointer
-gesture clears that suppression so the next deliberate click works.
+create-toolbar-drag.ts is the source of web/app-pill/src/drag.ts, which keeps its
+drag threshold, velocity tracking and click suppression. Mesh adds stale-velocity
+discard, collapsed dragging and grabbing a snap in flight at its on-screen position.
+Edge snapping and collapsed/expanded positioning are Mesh's own
+(web/app-pill/src/dock.ts): React Grab's flush collapsed tab and padded release
+target were two placement rules, which made the docked position depend on the path.
 The pill shell now uses the original ToolbarContent, IconChevron and cn sources
-from the same commit. The sync script changes only their import paths. Tailwind
-compiles their original spacing, collapse transitions and edge orientation.
+from the same commit. The sync script changes only their import paths. Mesh renders ToolbarContent
+expanded only; its collapsed state is the Mesh dot. Tailwind
+compiles their original spacing and edge orientation.
 Mesh supplies the actions and disables position transitions during viewport changes.

@@ -5,7 +5,8 @@
   "scripts": {
     "build": "node ../../scripts/sync-app-pill.mjs && tsc --noEmit && vite build",
     "dev": "vite --host 127.0.0.1",
-    "test:browser": "pnpm build && node tests/browser.mjs"
+    "test": "node --test tests/dock.test.mjs",
+    "test:browser": "pnpm build && node tests/browser.mjs && node tests/snap.mjs"
   },
   "dependencies": {
     "solid-js": "1.9.12"

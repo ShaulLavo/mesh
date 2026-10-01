@@ -78,8 +78,10 @@ arm the button. One tap after the delay works on phone touch profiles in
 Chromium and WebKit. Making public or deleting also requires entering the app ID;
 the server rejects a missing or incorrect ID even from an older page.
 
-Click the small edge tab to expand the React Grab pill. Drag or flick it to an edge;
-its position survives reloads. The link button copies the app URL and briefly shows
+Tap the floating dot to expand the React Grab pill; the pill grows out of the dot
+and collapses back into it. Drag or flick either one to an edge. Both rest at one
+distance from that edge, counted from the visible screen and the safe area, whichever
+way they got there, and the position survives reloads. The link button copies the app URL and briefly shows
 a checkmark. Clipboard access requires HTTPS. The lock button opens
 a trusted visibility confirmation for recognized owners, or browser pairing for
 visitors. It appears only after the management origin responds. The chevron collapses

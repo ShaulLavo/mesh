@@ -1,1 +1,0 @@
-export const getVisualViewport = () => ({ width: window.visualViewport?.width ?? window.innerWidth, height: window.visualViewport?.height ?? window.innerHeight, offsetLeft: window.visualViewport?.offsetLeft ?? 0, offsetTop: window.visualViewport?.offsetTop ?? 0 });

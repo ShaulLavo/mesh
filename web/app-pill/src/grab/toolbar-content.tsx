@@ -1,6 +1,6 @@
 import type { Component, JSX } from "solid-js";
 import { cn } from "./cn.js";
-import { isHorizontalEdge } from "./toolbar-position.js";
+import { isHorizontalEdge } from "../dock.js";
 import { IconChevron } from "./icon-chevron.jsx";
 
 interface ToolbarContentProps {

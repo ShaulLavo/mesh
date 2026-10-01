@@ -1,7 +1,10 @@
 # Mesh app pill
 
-The Solid control mounts in an app's Shadow DOM. React Grab's pinned toolbar
-utilities supply dragging, velocity projection and screen-edge snapping. The
+The Solid control mounts in an app's Shadow DOM. Collapsed, it is a floating dot;
+expanded, it is React Grab's pinned toolbar. `src/dock.ts` owns placement: one rule
+puts the expanded pill 16px from the safe edge and the dot's center on the pill's
+centerline, for every path (load, drag, flick, viewport change, keyboard, toggle).
+`src/drag.ts` adapts React Grab's drag gesture. The
 browser build embeds `pill.js` and `pill.css` in the Go binary; installed Mesh
 hosts need neither Node nor Playwright.
 
@@ -24,7 +27,7 @@ The bundle retains the MIT notices for Solid and React Grab from `third_party`.
 Playwright is pinned as a development dependency for repeatable interaction
 checks. The harness starts an ephemeral loopback HTTP server, serves the actual
 compiled assets under a strict CSP, and tests Chromium and WebKit with normal
-and reduced motion. It checks the original compact edge tab, expansion, mouse dragging,
+and reduced motion. It checks the collapsed dot, expansion, mouse dragging,
 synthetic touch dragging, keyboard docking, stored position, management-frame
 status messages, and rejection of messages from an incorrect origin or window.
 
@@ -43,7 +46,15 @@ MESH_CHROMIUM_EXECUTABLE=/usr/bin/chromium \
 pnpm --dir web/app-pill test:browser
 ```
 
-Run this command from the repository root. `test:browser` builds first and fails
+`tests/snap.mjs` docks the dot and the pill on all four edges of iPhone portrait
+and landscape viewports by drag, flick, keyboard, resize and reload, and requires one
+rest position per edge and state. The placement math has fast unit tests:
+
+```sh
+pnpm --dir web/app-pill test
+```
+
+Run the browser command from the repository root. `test:browser` builds first and fails
 if either browser is unavailable or a check fails. `MESH_CHROMIUM_EXECUTABLE` is
 optional; without it Playwright uses its bundled Chromium. Neither dependency
 installation nor the test downloads browsers. On a fresh machine, install them
