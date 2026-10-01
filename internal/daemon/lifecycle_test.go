@@ -1026,8 +1026,8 @@ func TestLifecycleReceiptLookupOnlyWhenDueAndPreservesInconclusiveRetirement(t *
 		}
 	}
 	catalog := l.catalog.(*lifecycleTestCatalog)
-	if catalog.getCalls != 0 {
-		t.Fatalf("catalog lookups before expiry = %d, want 0", catalog.getCalls)
+	if catalog.getCalls != 1 {
+		t.Fatalf("catalog lookups before expiry = %d, want only the publication lookup", catalog.getCalls)
 	}
 	catalog.getErr = errors.New("catalog unavailable")
 	for range 3 {
@@ -1036,8 +1036,8 @@ func TestLifecycleReceiptLookupOnlyWhenDueAndPreservesInconclusiveRetirement(t *
 			t.Fatal(err)
 		}
 	}
-	if launches != 1 || catalog.getCalls != 3 {
-		t.Fatalf("launches = %d, lookups = %d, want 1 and 3", launches, catalog.getCalls)
+	if launches != 1 || catalog.getCalls != 4 {
+		t.Fatalf("launches = %d, lookups = %d, want 1 and 4", launches, catalog.getCalls)
 	}
 }
 
@@ -1248,5 +1248,30 @@ func TestLifecycleUnpublishedReceiptExpiresAfterExit(t *testing.T) {
 				t.Fatalf("launches after confirmed exit retention = %d, want 2", launches)
 			}
 		})
+	}
+}
+
+func TestLifecycleReceiptRemembersPublishedCatalogRow(t *testing.T) {
+	now := time.Now()
+	launches := 0
+	l := receiptTestLifecycle(t, func() time.Time { return now }, func(worker.LaunchConfig) (worker.Launched, error) {
+		launches++
+		return worker.Launched{Meta: worker.Meta{ID: "7K3D"}}, nil
+	})
+	catalog := l.catalog.(*lifecycleTestCatalog)
+	catalog.sessions = []storage.Session{{ID: "7K3D", State: storage.StateDetached}}
+	wanted := creationRequest{command: []string{"sh"}}
+	if _, err := l.createSession(t.Context(), protocol.TypeCreate, "rapid-retirement", wanted); err != nil {
+		t.Fatal(err)
+	}
+	catalog.sessions = nil
+	for range 2 {
+		now = now.Add(time.Minute)
+		if _, err := l.createSession(t.Context(), protocol.TypeCreate, "rapid-retirement", wanted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if launches != 2 {
+		t.Fatalf("launches after confirmed published-row retirement = %d, want 2", launches)
 	}
 }

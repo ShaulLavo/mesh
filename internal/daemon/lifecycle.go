@@ -445,6 +445,9 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 		// still stop promptly with daemon shutdown and has its own upper bound.
 		publishCtx, cancel := context.WithTimeout(l.context, l.publishTimeout)
 		err = l.catalog.Reconcile(publishCtx)
+		if err == nil {
+			l.observePublishedCreation(publishCtx, created)
+		}
 		cancel()
 		if err != nil {
 			return id, publicationError{fmt.Errorf("daemon: publish session %s: %w", id, err)}
@@ -452,6 +455,15 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 		created.published = true
 	}
 	return id, nil
+}
+
+func (l *lifecycle) observePublishedCreation(ctx context.Context, created *creation) {
+	if _, err := l.catalog.Get(ctx, storage.SessionID(created.sessionID)); err != nil {
+		return
+	}
+	l.creationsMu.Lock()
+	created.catalogSeen = true
+	l.creationsMu.Unlock()
 }
 
 func (l *lifecycle) creation(requestID string, wanted creationRequest) (*creation, bool, error) {
