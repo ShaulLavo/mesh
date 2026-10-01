@@ -3,6 +3,7 @@ package worker
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"time"
 
@@ -35,9 +36,9 @@ func (w *Worker) hibernateAndAcknowledge(conn net.Conn, request protocol.Control
 // every client that already offers "Resume" on an ended session wakes it.
 // A true claimed result means the caller owns one killResponders slot.
 func (w *Worker) hibernate(request protocol.Control) (bool, error) {
-	idle := time.Duration(request.HibernateIdleMillis) * time.Millisecond
-	if idle < 0 {
-		return false, fmt.Errorf("worker: session %s: negative hibernation idle time", w.cfg.ID)
+	idle, err := HibernateIdleDuration(request.HibernateIdleMillis)
+	if err != nil {
+		return false, fmt.Errorf("worker: hibernate session %s: %w", w.cfg.ID, err)
 	}
 	marker, err := w.claimHibernation(idle)
 	if err != nil {
@@ -101,6 +102,17 @@ func (w *Worker) claimHibernation(idle time.Duration) (recovery.Hibernation, err
 	w.killResponders.Add(1)
 	return recovery.Hibernation{Version: 1, At: w.currentTime().UTC().Round(0), Reason: reason,
 		Provider: recipe.Provider, ConversationID: recipe.ConversationID}, nil
+}
+
+func HibernateIdleDuration(millis int64) (time.Duration, error) {
+	if millis < 0 {
+		return 0, errors.New("negative hibernation idle time")
+	}
+	const maxMillis = math.MaxInt64 / int64(time.Millisecond)
+	if millis > maxMillis {
+		return 0, fmt.Errorf("hibernation idle time exceeds maximum of %d milliseconds", maxMillis)
+	}
+	return time.Duration(millis) * time.Millisecond, nil
 }
 
 func (w *Worker) detachedSince() time.Time {

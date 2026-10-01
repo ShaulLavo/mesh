@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -583,25 +584,29 @@ func TestLifecycleRejectsMalformedRequestsBeforeSideEffects(t *testing.T) {
 }
 
 func TestLifecycleRejectsMalformedHibernateBeforeConnecting(t *testing.T) {
-	connectCalls := 0
-	conn := &lifecycleRecordingConn{}
-	lifecycle := mustLifecycle(t, lifecycleConfig{
-		Catalog: &lifecycleTestCatalog{},
-		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
-			connectCalls++
-			return conn, nil
-		}),
-		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key"},
-		SessionsDir: "/state/s",
-	})
-	_, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
-		Type: protocol.TypeHibernate, RequestID: "invalid-idle", SessionID: "7K3D", HibernateIdleMillis: -1,
-	})
-	if !handled || err == nil {
-		t.Fatalf("hibernate handled = %v, error = %v; want handled rejection", handled, err)
-	}
-	if connectCalls != 0 || conn.read || len(conn.frames) != 0 {
-		t.Fatalf("invalid hibernate connected %d times, read = %v, writes = %d, closed = %v", connectCalls, conn.read, len(conn.frames), conn.closed)
+	for _, idle := range []int64{-1, -1 << 63, (1<<63-1)/int64(time.Millisecond) + 1, 288230376151711744, 1<<63 - 1} {
+		t.Run(strconv.FormatInt(idle, 10), func(t *testing.T) {
+			connectCalls := 0
+			conn := &lifecycleRecordingConn{}
+			lifecycle := mustLifecycle(t, lifecycleConfig{
+				Catalog: &lifecycleTestCatalog{},
+				Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+					connectCalls++
+					return conn, nil
+				}),
+				Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key"},
+				SessionsDir: "/state/s",
+			})
+			_, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+				Type: protocol.TypeHibernate, RequestID: "invalid-idle", SessionID: "7K3D", HibernateIdleMillis: idle,
+			})
+			if !handled || err == nil || !strings.Contains(err.Error(), "session 7K3D") || !strings.Contains(err.Error(), "idle time") {
+				t.Errorf("hibernate handled = %v, error = %v; want handled idle rejection naming the session", handled, err)
+			}
+			if connectCalls != 0 || conn.read || len(conn.frames) != 0 {
+				t.Fatalf("invalid hibernate connected %d times, read = %v, writes = %d, closed = %v", connectCalls, conn.read, len(conn.frames), conn.closed)
+			}
+		})
 	}
 }
 
@@ -610,8 +615,10 @@ func TestLifecycleForwardsOneShotHibernateAcknowledgement(t *testing.T) {
 		name     string
 		response protocol.Control
 		wantErr  string
+		idle     int64
 	}{
 		{name: "accepted", response: protocol.Control{Type: protocol.TypeOK, RequestID: "hibernate-1", SessionID: "7K3D"}},
+		{name: "largest idle", response: protocol.Control{Type: protocol.TypeOK, RequestID: "hibernate-1", SessionID: "7K3D"}, idle: (1<<63 - 1) / int64(time.Millisecond)},
 		{name: "refused", response: protocol.Control{Type: protocol.TypeError, SessionID: "7K3D", Message: "not detached long enough"}, wantErr: "not detached long enough"},
 		{name: "invalid acknowledgement", response: protocol.Control{Type: protocol.TypeOK, RequestID: "wrong-request", SessionID: "7K3D"}, wantErr: "invalid hibernation acknowledgement"},
 	} {
@@ -625,8 +632,12 @@ func TestLifecycleForwardsOneShotHibernateAcknowledgement(t *testing.T) {
 				Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key"},
 				SessionsDir: "/state/s",
 			})
+			idle := test.idle
+			if idle == 0 {
+				idle = 250
+			}
 			response, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
-				Type: protocol.TypeHibernate, RequestID: "hibernate-1", SessionID: "7K3D", HibernateIdleMillis: 250,
+				Type: protocol.TypeHibernate, RequestID: "hibernate-1", SessionID: "7K3D", HibernateIdleMillis: idle,
 			})
 			if !handled || (test.wantErr == "" && err != nil) || (test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr))) {
 				t.Fatalf("hibernate handled = %v, response = %+v, error = %v", handled, response, err)
@@ -638,7 +649,7 @@ func TestLifecycleForwardsOneShotHibernateAcknowledgement(t *testing.T) {
 				t.Fatalf("closed = %v, read = %v, frames = %d", conn.closed, conn.read, len(conn.frames))
 			}
 			forwarded, err := protocol.DecodeControl(conn.frames[0].Payload)
-			if err != nil || forwarded.HibernateIdleMillis != 250 {
+			if err != nil || forwarded.HibernateIdleMillis != idle {
 				t.Fatalf("forwarded hibernate = %+v, error = %v", forwarded, err)
 			}
 		})
