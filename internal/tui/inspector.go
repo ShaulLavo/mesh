@@ -132,7 +132,7 @@ func (m *model) inspectSelected() tea.Cmd {
 		next.problem = "Live view unavailable while the host is offline."
 		m.inspection = next
 		return nil
-	case current.state != "running" && current.state != "detached":
+	case endedSession(current) && !current.recoveryDetailsOmitted:
 		next.kind = inspectionUnavailable
 		next.problem = "Live view unavailable because this session has ended."
 		m.inspection = next
@@ -349,7 +349,7 @@ type inspectionDetails struct {
 
 func (m model) detailsFor(current session) inspectionDetails {
 	if endedSession(current) {
-		return savedRecoveryDetails(current)
+		return m.savedDetailsFor(current)
 	}
 	details := inspectionDetails{
 		directoryLabel: "started in",
@@ -629,6 +629,7 @@ func (m model) containingSessionFor(target inspectionTarget) (containingSessionS
 
 func cloneSessionInspection(source cli.SessionInspection) cli.SessionInspection {
 	cloned := source
+	cloned.Recovery = cloneRecovery(source.Recovery)
 	cloned.Nested = protocol.CloneSessionIdentities(source.Nested)
 	cloned.Preview = append([]string(nil), source.Preview...)
 	cloned.StyledPreview = make([]protocol.PreviewLine, len(source.StyledPreview))
