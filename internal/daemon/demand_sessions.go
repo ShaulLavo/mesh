@@ -16,6 +16,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -39,15 +40,14 @@ func demandRequestID(action string) string {
 
 func (l *lifecycle) startLabelled(ctx context.Context, label string, command []string, cwd string, env []string) (string, error) {
 	requestID := demandRequestID("start")
-	response, err := l.createSession(ctx, protocol.TypeCreate, requestID, creationRequest{
+	id, err := l.createSession(ctx, protocol.TypeCreate, requestID, creationRequest{
 		command: command, cwd: cwd, cols: servedSessionCols, rows: servedSessionRows,
 		term: servedSessionTerm, label: label, env: env,
 	})
+	// The receipt can go even when publication failed: the route now holds
+	// the ID, and the catalog's next reconcile lists the session from disk.
 	l.forgetCreation(requestID)
-	if err != nil {
-		return "", err
-	}
-	return response.SessionID, nil
+	return id, err
 }
 
 // forgetCreation drops the entry that makes a client's retried create
@@ -65,7 +65,7 @@ func (l *lifecycle) stopSession(ctx context.Context, id string) error {
 	if _, ended := l.sessionExit(id); ended {
 		return nil
 	}
-	_, err := l.forwardOneShot(ctx, protocol.Control{Type: protocol.TypeKill, RequestID: demandRequestID("stop"), SessionID: id})
+	_, err := l.forwardOneShot(ctx, protocol.Control{Type: protocol.TypeKill, RequestID: demandRequestID("stop"), SessionID: id}, l.connectOwned)
 	if err != nil {
 		if _, ended := l.sessionExit(id); ended {
 			return nil
@@ -86,11 +86,31 @@ func (l *lifecycle) stopSession(ctx context.Context, id string) error {
 	}
 }
 
+// connectOwned reaches a worker the daemon launched through its own socket.
+// Client requests go through the catalog, but a session whose publication
+// failed is in no catalog yet and must still be stoppable by its owner.
+func (l *lifecycle) connectOwned(ctx context.Context, id protocol.SessionID) (transport.Conn, error) {
+	socketPath := paths.Socket(filepath.Join(l.sessionsDir, id.String()))
+	var dialer net.Dialer
+	stream, err := dialer.DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("daemon: connect owned worker %s at %s: %w", id, socketPath, err)
+	}
+	conn, err := transport.NewStreamConn(stream)
+	if err != nil {
+		_ = stream.Close()
+		return nil, fmt.Errorf("daemon: adapt owned worker %s connection: %w", id, err)
+	}
+	return conn, nil
+}
+
 func (l *lifecycle) sessionExit(id string) (*int, bool) {
 	meta, err := worker.ReadMeta(filepath.Join(l.sessionsDir, id))
 	if err != nil {
-		// A session whose record is gone cannot be serving anything.
-		return nil, true
+		// A missing or unreadable record proves nothing about the worker. Only
+		// an exit record or a process group seen gone below ends a session;
+		// anything less would let its route launch a second copy.
+		return nil, false
 	}
 	if meta.State == worker.StateExited {
 		return meta.ExitCode, true
@@ -114,7 +134,7 @@ func (l *lifecycle) outputTail(ctx context.Context, id string) string {
 	var output []byte
 	response, err := l.forwardOneShot(ctx, protocol.Control{
 		Type: protocol.TypeLogs, RequestID: demandRequestID("logs"), SessionID: id, Tail: servedOutputTail,
-	})
+	}, l.connectOwned)
 	if err == nil {
 		output = response.Output
 	} else if output, err = worker.ReadLogTail(filepath.Join(l.sessionsDir, id), servedOutputTail); err != nil {
