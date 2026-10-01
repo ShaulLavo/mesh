@@ -18,6 +18,7 @@ import (
 	"github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/edge"
+	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/inhibit"
 	meshserve "github.com/shaul/mesh/internal/serve"
@@ -41,6 +42,7 @@ const (
 // TailnetPort and SSHPort values disable their corresponding listeners. Zero
 // connection caps select the defaults for Unix and Tailnet independently.
 type Config struct {
+	SubscriberLimit             int
 	UnixConnectionLimit         int
 	TailnetConnectionLimit      int
 	SSHSessionHandler           sshd.SessionHandlerFactory
@@ -185,6 +187,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return errors.New("daemon: public edge roles require a non-zero Tailnet control port")
 	}
 
+	if cfg.SubscriberLimit < 0 {
+		return errors.New("daemon: subscriber limit must be nonnegative")
+	}
 	stateDir, err := filepath.Abs(cfg.StateDir)
 	if err != nil {
 		return fmt.Errorf("daemon: resolve state directory %s: %w", cfg.StateDir, err)
@@ -410,6 +415,8 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		publication = publisher
 		appPublisher = publisher
 	}
+	state := newStateBroker(cfg.SubscriberLimit, opts.now)
+	metrics := hostmetrics.New()
 	serviceControl, err := newServiceController(daemonCtx, homeDir, store, serviceRegistry, publication)
 	if err != nil {
 		return err
@@ -432,16 +439,20 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		}
 	}
 
+	serviceControl.onCommitted = state.servicesCommitted
+	serviceControl.publishCommitted()
 	inhibitor := inhibit.New(reporter.report)
 	defer func() { runErr = errors.Join(runErr, inhibitor.Close()) }()
 	catalog, err := NewCatalog(CatalogConfig{
-		OnReconcile: syncSleepInhibitor(inhibitor.Update),
-		SessionsDir: sessionsDir,
-		Host:        host,
-		Store:       store,
-		Probe:       newUnixWorkerProbe(),
-		BootID:      opts.bootID,
-		Now:         opts.now,
+		OnReconcile:   syncSleepInhibitor(inhibitor.Update),
+		OnChange:      state.sessionsChanged,
+		OnObservation: state.observeSessions,
+		SessionsDir:   sessionsDir,
+		Host:          host,
+		Store:         store,
+		Probe:         newUnixWorkerProbe(),
+		BootID:        opts.bootID,
+		Now:           opts.now,
 	})
 	if err != nil {
 		return err
@@ -449,6 +460,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err := catalog.Reconcile(daemonCtx); err != nil {
 		return err
 	}
+	state.seedSessions(catalog.previous)
 	defer func() {
 		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(daemonCtx), 5*time.Second)
 		defer cancel()
@@ -484,14 +496,24 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	demand := newDemandManager(daemonCtx, lifecycle, reporter.report)
 	defer demand.Close()
 	serviceControl.demand = demand
+	demand.onChange = state.serviceDemandChanged
 	serviceRegistry.SetDemandGate(demand, demand.logger)
 	// Bind listeners and adopt sessions a previous daemon started before any
 	// client can ask about them.
 	demand.Sync(serviceRegistry.Services())
+	serviceControl.publishCommitted()
 	server, err := newClientServer(lifecycle, connector, edgeControl, serviceControl, certificateRuntime.Controller)
 	if err != nil {
 		return err
 	}
+	server.state = state
+	server.metrics = metrics
+	memoryDone := make(chan struct{})
+	go func() { defer close(memoryDone); state.runMemory(daemonCtx, lifecycle) }()
+	defer func() { cancelDaemon(); <-memoryDone }()
+	metricsDone := make(chan struct{})
+	go func() { defer close(metricsDone); metrics.Run(daemonCtx, state.metricsChanged) }()
+	defer func() { cancelDaemon(); <-metricsDone }()
 	server.wake = power
 	appControl := &appController{}
 	if appLocal != nil {
@@ -599,7 +621,11 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	reconciled := make(chan struct{})
 	go func() {
 		defer close(reconciled)
-		reconcilePeriodically(daemonCtx, catalog, opts.reconcileInterval, reporter)
+		reconcilePeriodically(daemonCtx, catalog, opts.reconcileInterval, reporter, func() {
+			if state.hasTopic("services") {
+				serviceControl.observeRegistry(daemonCtx, state.observeServices)
+			}
+		})
 	}()
 	demandDone := make(chan struct{})
 	go func() {
@@ -724,7 +750,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	return errors.Join(serveErr, <-tailnetMonitorDone)
 }
 
-func reconcilePeriodically(ctx context.Context, catalog *Catalog, interval time.Duration, reporter *errorReporter) {
+func reconcilePeriodically(ctx context.Context, catalog *Catalog, interval time.Duration, reporter *errorReporter, observers ...func()) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -734,6 +760,9 @@ func reconcilePeriodically(ctx context.Context, catalog *Catalog, interval time.
 		case <-ticker.C:
 			if err := catalog.Reconcile(ctx); err != nil && ctx.Err() == nil {
 				reporter.report(fmt.Errorf("daemon: periodic reconciliation: %w", err))
+			}
+			for _, observe := range observers {
+				observe()
 			}
 		}
 	}

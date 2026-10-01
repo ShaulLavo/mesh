@@ -88,6 +88,7 @@ type serviceController struct {
 	gate           chan struct{}
 	unsynced       bool
 	catalogUnknown bool
+	onCommitted    func([]protocol.ServiceInfo, error)
 }
 
 func newServiceController(ctx context.Context, home string, store serviceStore, registry *meshserve.Registry, publisher servicePublisher) (*serviceController, error) {
@@ -580,7 +581,10 @@ func (c *serviceController) acquire(ctx context.Context) error {
 	}
 }
 
-func (c *serviceController) release() { <-c.gate }
+func (c *serviceController) release() {
+	c.publishCommitted()
+	<-c.gate
+}
 
 func findService(services []meshserve.Service, name string) (meshserve.Service, bool) {
 	for _, service := range services {
@@ -634,4 +638,36 @@ func boundedServiceProblem(problem string) string {
 		limit--
 	}
 	return problem[:limit] + "…"
+}
+
+func (c *serviceController) publishCommitted() {
+	if c.onCommitted == nil {
+		return
+	}
+	if c.catalogUnknown {
+		c.onCommitted(nil, errors.New("service catalog is unavailable"))
+		return
+	}
+	rows := make([]protocol.ServiceInfo, 0)
+	for _, service := range c.registry.Services() {
+		row := serviceDefinitionInfo(service)
+		row.Demand = c.demand.Status(service.Name)
+		rows = append(rows, row)
+	}
+	c.onCommitted(rows, nil)
+}
+
+// observeRegistry confirms the authoritative registry without re-probing routes.
+func (c *serviceController) observeRegistry(ctx context.Context, observe func(error)) {
+	if err := c.acquire(ctx); err != nil {
+		observe(err)
+		return
+	}
+	defer func() { <-c.gate }()
+	if c.catalogUnknown {
+		observe(errors.New("service catalog is unavailable"))
+		return
+	}
+	_ = c.registry.Services()
+	observe(nil)
 }

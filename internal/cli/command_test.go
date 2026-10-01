@@ -132,6 +132,9 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 			ID: c.host.host.ID, MeshIdentity: c.host.host.MeshIdentity, TailscaleName: c.host.host.TailscaleName,
 			PrivateName: "pc.mesh.shaulavo.dev", RecoverySupported: c.host.recoverTo != "",
 		}
+	case protocol.TypeStateWatch:
+		response.Type = protocol.TypeError
+		response.Message = `daemon: unknown control "state.watch"`
 	case protocol.TypeList:
 		response.Type = protocol.TypeListed
 		if c.host.listRows != nil {

@@ -18,7 +18,7 @@ const (
 	MinimumInterval     = 2 * time.Second
 	MaximumInterval     = 10 * time.Second
 	TemperatureInterval = 10 * time.Second
-	BaselineGap         = 10 * time.Second
+	BaselineGap         = 2 * MaximumInterval
 )
 
 var ErrUnsupported = errors.New("host metric unsupported")
@@ -215,7 +215,6 @@ func record[T any](old cached[T], value T, err error, now time.Time, key string,
 	}
 	old.reading.Failing = true
 	old.reading.Problem = err.Error()
-	old.reading.Segment = segment
 	if len(old.reading.Problem) > 256 {
 		old.reading.Problem = old.reading.Problem[:256]
 	}

@@ -70,13 +70,13 @@ type demandTransition struct {
 
 func (r *demandRoute) definition() meshserve.Service {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	return r.service
 }
 
 func (r *demandRoute) onDemand() bool {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	return r.service.Demand != nil
 }
 
@@ -98,7 +98,7 @@ func (r *demandRoute) adopt() {
 		return
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	r.state = protocol.DemandRunning
 	r.owned = ownsLive
 	r.sessionID = id
@@ -107,7 +107,7 @@ func (r *demandRoute) adopt() {
 
 func (r *demandRoute) redefine(service meshserve.Service) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	previous := r.service
 	r.service = service
 	// A route added back while its removal was still stopping keeps the
@@ -160,7 +160,7 @@ func sameLaunch(a, b *meshserve.Demand) bool {
 // failed. It reports whether the route owns nothing any more.
 func (r *demandRoute) retire() bool {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	r.removed = true
 	r.cancelIdleLocked()
 	if r.pending == nil && r.owned == ownsLive || r.cleanupDueLocked() {
@@ -185,7 +185,7 @@ func (r *demandRoute) markUncertainLocked() {
 // A closed manager stops nothing: daemon shutdown keeps every session.
 func (r *demandRoute) retryCleanup() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	if !r.manager.closed.Load() && r.cleanupDueLocked() {
 		r.beginStopLocked()
 	}
@@ -200,14 +200,14 @@ func (r *demandRoute) hold() func() {
 	if r.service.Demand != nil && !r.removed && r.pending == nil && r.owned == ownsNothing {
 		r.beginStartLocked()
 	}
-	r.mu.Unlock()
+	r.unlock()
 	var once sync.Once
 	return func() { once.Do(r.release) }
 }
 
 func (r *demandRoute) release() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	r.connections--
 	if r.connections == 0 {
 		r.armIdleLocked()
@@ -222,15 +222,15 @@ func (r *demandRoute) ready(ctx context.Context) error {
 		r.mu.Lock()
 		route := r.service.Route()
 		if r.removed {
-			r.mu.Unlock()
+			r.unlock()
 			return fmt.Errorf("route %s was removed", route)
 		}
 		if r.service.Demand == nil || r.owned == ownsLive && r.pending == nil {
-			r.mu.Unlock()
+			r.unlock()
 			return nil
 		}
 		transition, err := r.towardRunningLocked() //nolint:contextcheck // runs on the daemon's context, so a waiter that gives up never abandons a launch or its cleanup
-		r.mu.Unlock()
+		r.unlock()
 		if err != nil {
 			return err
 		}
@@ -272,14 +272,14 @@ func (r *demandRoute) stop(ctx context.Context) error {
 		transition := r.pending
 		if transition == nil {
 			if r.owned == ownsNothing {
-				r.mu.Unlock()
+				r.unlock()
 				return nil
 			}
 			r.cancelIdleLocked()
 			r.beginStopLocked()
 			transition = r.pending
 		}
-		r.mu.Unlock()
+		r.unlock()
 		select {
 		case <-transition.done:
 		case <-ctx.Done():
@@ -365,7 +365,7 @@ func (r *demandRoute) finishStart(transition *demandTransition, id string, err e
 			r.armIdleLocked()
 		}
 	}
-	r.mu.Unlock()
+	r.unlock()
 	if transition.err != nil {
 		transition.err = meshserve.LogDemandFailure(transition.err, r.manager.logger)
 	}
@@ -407,7 +407,7 @@ func (r *demandRoute) beginStopLocked() {
 			r.markUncertainLocked()
 		}
 		transition.err = err
-		r.mu.Unlock()
+		r.unlock()
 		close(transition.done)
 	}()
 }
@@ -431,7 +431,7 @@ func (r *demandRoute) cancelIdleLocked() {
 
 func (r *demandRoute) idleExpired(token uint64) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	if token != r.idleToken || r.connections > 0 || r.state != protocol.DemandRunning || r.pending != nil {
 		return
 	}
@@ -446,7 +446,7 @@ func (r *demandRoute) checkSession() {
 	r.mu.Lock()
 	id := r.sessionID
 	running := r.state == protocol.DemandRunning && r.pending == nil
-	r.mu.Unlock()
+	r.unlock()
 	if !running || id == "" {
 		return
 	}
@@ -455,7 +455,7 @@ func (r *demandRoute) checkSession() {
 		return
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	if r.state != protocol.DemandRunning || r.pending != nil || r.sessionID != id {
 		return
 	}
@@ -470,7 +470,7 @@ func (r *demandRoute) checkSession() {
 
 func (r *demandRoute) markUnbound(port uint16, err error) bool {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	message := err.Error()
 	changed := r.unbound[port] != message
 	r.unbound[port] = message
@@ -479,27 +479,27 @@ func (r *demandRoute) markUnbound(port uint16, err error) bool {
 
 func (r *demandRoute) isUnbound(port uint16) bool {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	_, unbound := r.unbound[port]
 	return unbound
 }
 
 func (r *demandRoute) markBound(port uint16) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	delete(r.unbound, port)
 }
 
 func (r *demandRoute) status() *protocol.ServiceDemand {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	return r.statusLocked()
 }
 
 // retiringInfo describes a removed route that may still own a session.
 func (r *demandRoute) retiringInfo() (protocol.ServiceInfo, bool) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.unlock()
 	if r.owned == ownsNothing {
 		return protocol.ServiceInfo{}, false
 	}
@@ -531,4 +531,11 @@ func (r *demandRoute) statusLocked() *protocol.ServiceDemand {
 		status.Unbound = append(status.Unbound, boundedServiceProblem(r.unbound[port]))
 	}
 	return status
+}
+
+func (r *demandRoute) unlock() {
+	if r.manager.onChange != nil {
+		r.manager.onChange(r.service.Name, r.statusLocked())
+	}
+	r.mu.Unlock()
 }

@@ -39,6 +39,7 @@ type demandSessions interface {
 // owns the process, so a daemon restart drops connections but never the
 // server behind them.
 type demandManager struct {
+	onChange func(string, *protocol.ServiceDemand)
 	ctx      context.Context
 	sessions demandSessions
 	report   func(error)

@@ -53,7 +53,7 @@ func TestSamplerCadenceIndependentFailuresAndBaseline(t *testing.T) {
 	if !failed.RAM.Failing || failed.RAM.Sample != good.RAM.Sample || failed.RAM.AgeMillis != 2000 || failed.CPU.AgeMillis != 0 {
 		t.Fatalf("independent ages %+v", failed)
 	}
-	now = now.Add(20 * time.Second)
+	now = now.Add(BaselineGap + time.Second)
 	reset, _ := s.Read(context.Background())
 	if !reset.CPU.Failing || reset.CPU.Sample != good.CPU.Sample && reset.CPU.AgeMillis == 0 {
 		t.Fatalf("long gap %+v", reset.CPU)

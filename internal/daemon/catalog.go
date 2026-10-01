@@ -23,14 +23,15 @@ import (
 // Catalog reconstructs the durable view of local workers from their session
 // directories.
 type Catalog struct {
-	sessionsDir string
-	host        storage.Host
-	store       CatalogStore
-	probe       WorkerProbe
-	bootID      func() string
-	now         func() time.Time
-	onReconcile func([]storage.Session)
-	onChange    func(SessionDiff)
+	sessionsDir   string
+	host          storage.Host
+	store         CatalogStore
+	probe         WorkerProbe
+	bootID        func() string
+	now           func() time.Time
+	onReconcile   func([]storage.Session)
+	onChange      func(SessionDiff)
+	onObservation func(error)
 
 	previous      map[storage.SessionID]storage.Session
 	lastSeenAt    time.Time
@@ -55,13 +56,14 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		now:           cfg.Now,
 		onReconcile:   cfg.OnReconcile,
 		onChange:      cfg.OnChange,
+		onObservation: cfg.OnObservation,
 		reconcileGate: make(chan struct{}, 1),
 	}, nil
 }
 
 // Reconcile replaces the stored active view with one complete observation of
 // the worker directories.
-func (c *Catalog) Reconcile(ctx context.Context) error {
+func (c *Catalog) Reconcile(ctx context.Context) (resultErr error) {
 	if err := validContext(ctx); err != nil {
 		return fmt.Errorf("daemon: reconcile catalog: %w", err)
 	}
@@ -72,6 +74,11 @@ func (c *Catalog) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("daemon: reconcile catalog: %w", ctx.Err())
 	}
 
+	defer func() {
+		if c.onObservation != nil {
+			c.onObservation(resultErr)
+		}
+	}()
 	observed, err := c.scan(ctx)
 	if err != nil {
 		return err
