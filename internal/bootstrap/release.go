@@ -121,7 +121,7 @@ func normalizeReleaseOptions(selection binarySelection) (releaseOptions, error) 
 }
 
 func runningVersion() (string, error) {
-	if version := meshrelease.Current().Version; version != "" {
+	if version := meshrelease.Metadata().Version; version != "" {
 		return version, nil
 	}
 	return "", errors.New("automatic release download is unsafe from an unversioned development build; place a matching release artifact beside the executable or run mesh add from a tagged release")

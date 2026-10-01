@@ -1634,19 +1634,21 @@ func (a *application) runSessionControl(cmd *cobra.Command, id, controlType, sig
 
 func (a *application) daemonCommand() *cobra.Command {
 	var (
-		port                uint
-		sshPort             uint
-		path                string
-		httpsPort           uint
-		tailscaleServePort  uint
-		tailscaleServeProxy bool
-		certificateRenewer  string
-		privateNamesConfig  string
-		edgeConfig          string
-		publicEdgeTarget    string
-		appDataRoot         string
-		tailscaleServe      bool
-		hibernateIdle       time.Duration
+		port                   uint
+		sshPort                uint
+		path                   string
+		httpsPort              uint
+		tailscaleServePort     uint
+		tailscaleServeProxy    bool
+		certificateRenewer     string
+		privateNamesConfig     string
+		edgeConfig             string
+		publicEdgeTarget       string
+		appDataRoot            string
+		tailscaleServe         bool
+		hibernateIdle          time.Duration
+		unixConnectionLimit    int
+		tailnetConnectionLimit int
 	)
 	command := &cobra.Command{
 		Use:   "daemon",
@@ -1677,8 +1679,10 @@ func (a *application) daemonCommand() *cobra.Command {
 			stopUpdateNotices := startUpdateNoticeChecks(cmd.Context(), stateDir)
 			defer stopUpdateNotices()
 			return meshdaemon.Run(cmd.Context(), meshdaemon.Config{
-				SSHSessionHandler: a.dependencies.SSHSessionHandler,
-				StateDir:          stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
+				SSHSessionHandler:      a.dependencies.SSHSessionHandler,
+				UnixConnectionLimit:    unixConnectionLimit,
+				TailnetConnectionLimit: tailnetConnectionLimit,
+				StateDir:               stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
 				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget, AppDataRoot: appDataRoot,
 				TailscaleServe: tailscaleServe, TailscaleServePort: uint16(tailscaleServePort), TailscaleServeProxyProtocol: tailscaleServeProxy, HibernateIdle: hibernateIdle,
@@ -1686,6 +1690,8 @@ func (a *application) daemonCommand() *cobra.Command {
 			})
 		},
 	}
+	command.Flags().IntVar(&unixConnectionLimit, "unix-connection-limit", meshdaemon.DefaultUnixConnectionLimit, "maximum concurrent Unix control connections")
+	command.Flags().IntVar(&tailnetConnectionLimit, "tailnet-connection-limit", meshdaemon.DefaultTailnetConnectionLimit, "maximum concurrent Tailnet control connections across all addresses")
 	command.Flags().UintVar(&port, "tailnet-port", 0, "Tailnet WebSocket port; zero disables remote listening")
 	command.Flags().UintVar(&sshPort, "ssh-port", 0, "Tailnet SSH port; zero disables SSH")
 	command.Flags().StringVar(&path, "websocket-path", "/mesh", "Tailnet WebSocket path")

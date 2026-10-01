@@ -26,9 +26,9 @@ func versionCommand() *cobra.Command {
 	var structured bool
 	command := &cobra.Command{Use: "version", Short: "Show the executing Mesh build", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			build := release.Current()
+			build := release.Metadata()
 			if structured {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(build)
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(release.Current())
 			}
 			version := build.Version
 			if version == "" {
