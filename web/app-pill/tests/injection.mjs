@@ -59,7 +59,7 @@ try {
   page.setDefaultTimeout(5000);
   await page.goto(`${origin}/hoisted-csp`);
   const pill = page.locator('mesh-app-pill');
-  await pill.locator('[data-react-grab-toolbar-collapse]').click();
+  await pill.getByRole('button', { name: /^Open Mesh controls/ }).click();
   await pill.getByRole('link', { name: 'Make private', exact: true }).waitFor();
   assert.equal(frameLoads, 1, 'Hoisted CSP must allow the actual management frame to load');
   assert.equal(await page.locator('script[data-mesh-app]').evaluate(node => node.parentElement.tagName), 'HEAD');

@@ -6,13 +6,22 @@
 *{box-sizing:border-box}button,a{font:inherit;color:inherit;-webkit-tap-highlight-color:transparent}button{border:0;padding:0;background:none;cursor:pointer}a{text-decoration:none}svg{display:block}
 .shell{font:13px/1 system-ui,sans-serif;position:fixed;top:0;left:0;z-index:2147483647;pointer-events:auto;color:#fff;touch-action:none;user-select:none;transition:none}
 .shell.snapping:not(.resizing):not(.keyboard){transition:transform 250ms cubic-bezier(.23,1,.32,1)}
+.morph{position:absolute;width:max-content}.closed .morph{visibility:hidden;pointer-events:none}
+.animated .morph{transition:clip-path 220ms var(--ease-drawer),visibility 0s}.animated.closed .morph{transition:clip-path 140ms var(--ease-drawer),visibility 0s linear 180ms}
+.dot-target{position:absolute;width:44px;height:44px;display:grid;place-items:center;border-radius:50%;touch-action:none;cursor:grab}.dragging .dot-target{cursor:grabbing}
+.dot{width:12px;height:12px;border-radius:50%;background:#a5b4fc;box-shadow:0 2px 12px #0009,0 0 0 4px var(--rg-panel-bg);transition:opacity 120ms cubic-bezier(.23,1,.32,1) 40ms,transform 160ms cubic-bezier(.23,1,.32,1)}
+.shell:not(.closed) .dot-target{pointer-events:none}.shell:not(.closed) .dot{opacity:0;transform:scale(.6);transition-delay:0s}
+.closed .morph [data-react-grab-toolbar-panel]>*{opacity:0}.animated .morph [data-react-grab-toolbar-panel]>*{transition:opacity 180ms var(--ease-drawer) 80ms}.animated.closed .morph [data-react-grab-toolbar-panel]>*{transition:opacity 100ms var(--ease-drawer)}
+.closed .dot-target:active .dot{transform:scale(.9);transition-duration:100ms}
 .action-wrap{position:relative;display:flex;align-items:center;justify-content:center;margin-right:6px}.vertical .action-wrap{margin-right:0;margin-bottom:6px}
 .action{position:relative;display:grid;place-items:center;width:14px;height:14px;color:#a7a7a7;cursor:pointer;touch-action:manipulation}.action svg{width:14px;height:14px}.action.copied{color:#86efac}
 .a11y-hitbox,.action{position:relative}.a11y-hitbox::before,.action::before{content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:100%;height:100%;min-width:24px;min-height:24px;pointer-events:auto}
 .interactive-scale,.action{transition:transform 100ms cubic-bezier(.32,.72,0,1),color 100ms ease}.interactive-scale:active,.action:active{transform:scale(.96);transition-duration:60ms}
 .auth-frame{display:none!important}.safe{position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
-button:focus-visible,a:focus-visible{outline:2px solid #a5b4fc;outline-offset:4px;border-radius:3px}
+button:focus-visible,a:focus-visible{outline:2px solid #a5b4fc;outline-offset:4px;border-radius:3px}.dot-target:focus-visible{outline-offset:-6px;border-radius:50%}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .copy-error{position:absolute;bottom:calc(100% + 8px);right:0;background:#161616;border-radius:8px;padding:8px 10px;font:12px/1.4 system-ui;white-space:nowrap;color:#fff;box-shadow:var(--rg-shadow)}
-@media(hover:hover) and (pointer:fine){.action:hover{color:#fff}.interactive-scale:hover,.action:hover{transform:scale(1.05)}}
-@media(prefers-reduced-motion:reduce){.shell,.shell.snapping:not(.resizing):not(.keyboard),.shell *{transition:none!important;animation:none!important}}
+@media(hover:hover) and (pointer:fine){.action:hover{color:#fff}.interactive-scale:hover,.action:hover{transform:scale(1.05)}.closed .dot-target:hover .dot{transform:scale(1.15)}.closed .dot-target:hover:active .dot{transform:scale(1.05)}}
+@media(prefers-reduced-motion:reduce){.shell,.shell.snapping:not(.resizing):not(.keyboard),.shell *{transition:none!important;animation:none!important}
+.morph{clip-path:none!important}.closed .morph{opacity:0}.animated .morph{transition:opacity 150ms ease,visibility 0s!important}.animated.closed .morph{transition:opacity 150ms ease,visibility 0s linear 150ms!important}
+.dot{transform:none!important;transition:opacity 150ms ease!important}}

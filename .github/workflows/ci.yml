@@ -25,6 +25,7 @@ jobs:
       - run: pnpm --dir web/app-pill build
       - name: Require current embedded assets and upstream adaptations
         run: git diff --exit-code -- internal/apppill/assets web/app-pill/src/grab
+      - run: pnpm --dir web/app-pill test
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -38,6 +39,8 @@ jobs:
           mkdir -p "$MESH_CONFIRM_BROWSER_DIR"
           go test ./internal/apps -run '^TestConfirmationBrowserPages$' -count=1
           node web/app-pill/tests/confirm.mjs "$MESH_CONFIRM_BROWSER_DIR"
+      - name: Verify the pill docks at one position on every edge
+        run: node web/app-pill/tests/snap.mjs
 
   test:
     name: Race tests and integrations
