@@ -81,7 +81,7 @@ jobs:
                       for path in ("integration/kill_waits.sh", "integration/helpers/isolate.sh", "integration/helpers/isolation.py"):
                           content = subprocess.check_output(["git", "show", revision + ":" + path])
                           (root / path).write_bytes(content)
-                      for path in ("isolation_test.py", "terminal_window.py"):
+                      for path in ("isolation_test.py", "terminal_window.py", "mesh_control.py"):
                           shutil.copyfile(original / "integration/helpers" / path, helpers / path)
                       for iteration in range(1, 31):
                           result = subprocess.run([sys.executable, str(helpers / "isolation_test.py"),
