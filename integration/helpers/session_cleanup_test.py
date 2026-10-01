@@ -58,6 +58,28 @@ class SessionCleanupTest(unittest.TestCase):
                     os.killpg(process.pid, signal.SIGKILL)
                 process.communicate(timeout=3)
 
+    def test_non_errexit_exit_trap_propagates_cleanup_failure(self):
+        entry = (HELPERS.parent / "logs_does_not_attach.sh").read_text()
+        start = entry.index("cleanup() {")
+        cleanup = entry[start:entry.index("\n}", start) + 2]
+        for test_status in (0, 7):
+            with self.subTest(test_status=test_status), tempfile.TemporaryDirectory(prefix="m-cleanup-trap-") as temporary:
+                tree = Path(temporary)
+                state = tree / "state"
+                socket = state / "s/7K3D/sock"
+                socket.parent.mkdir(parents=True)
+                socket.touch()
+                command = (f"source {shlex.quote(str(HELPERS / 'session_cleanup.sh'))}\n"
+                           "set -uo pipefail\nfixture_mesh() { SECONDS=$((SECONDS + 20)); }\n"
+                           f"{cleanup}\ntrap cleanup EXIT\nexit {test_status}")
+                environment = os.environ | {"T": str(tree), "MESH_STATE_DIR": str(state),
+                                            "MESH": "fixture_mesh", "SID": "", "CLIENT": ""}
+                result = subprocess.run(["bash", "-c", command], env=environment,
+                                        capture_output=True, text=True, timeout=3)
+                self.assertEqual(result.returncode, test_status or 1, result.stdout + result.stderr)
+                self.assertIn(str(socket), result.stderr)
+                self.assertTrue(socket.exists())
+
     def test_deadline_reports_worker_and_preserves_state(self):
         with tempfile.TemporaryDirectory(prefix="m-cleanup-bound-") as temporary:
             state = Path(temporary)

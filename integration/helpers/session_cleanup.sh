@@ -13,3 +13,12 @@ wait_for_fixture_workers() {
     done
   done
 }
+
+finish_fixture_cleanup() {
+  local state=$1 root=$2 test_status=$3 cleanup_status=0
+  wait_for_fixture_workers "$state" && rm -rf -- "$root" || cleanup_status=$?
+  if (( test_status != 0 )); then
+    exit "$test_status"
+  fi
+  exit "$cleanup_status"
+}

@@ -15,10 +15,10 @@ CLIENT=""
 SESSION_PID=""
 
 cleanup() {
+  local test_status=$?
   [ -z "$CLIENT" ] || kill -9 "$CLIENT" 2>/dev/null || true
   [ -z "$SESSION_PID" ] || kill -9 "$SESSION_PID" 2>/dev/null || true
-  wait_for_fixture_workers "$MESH_STATE_DIR" || return 1
-  rm -rf "$T"
+  finish_fixture_cleanup "$MESH_STATE_DIR" "$T" "$test_status"
 }
 trap cleanup EXIT
 

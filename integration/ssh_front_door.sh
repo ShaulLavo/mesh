@@ -18,6 +18,7 @@ session_id=
 session_pid=
 
 cleanup() {
+  local test_status=$?
   [[ -z $session_id ]] || MESH_STATE_DIR="$server_state" "$MESH" kill "$session_id" >/dev/null 2>&1 || true
   for pid in "$ssh_pid" "$client_pid" "$daemon_pid"; do
     [[ -z $pid ]] || kill -9 "$pid" 2>/dev/null || true
@@ -25,8 +26,7 @@ cleanup() {
   for pid in "$ssh_pid" "$client_pid" "$daemon_pid"; do
     [[ -z $pid ]] || wait "$pid" 2>/dev/null || true
   done
-  wait_for_fixture_workers "$server_state" || return 1
-  rm -rf -- "$test_root"
+  finish_fixture_cleanup "$server_state" "$test_root" "$test_status"
 }
 trap cleanup EXIT
 

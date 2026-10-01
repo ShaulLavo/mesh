@@ -14,7 +14,7 @@ if [ -z "${MESH:-}" ]; then
 fi
 T=$(mktemp -d)
 export MESH_STATE_DIR="$T/state"
-trap 'wait_for_fixture_workers "$MESH_STATE_DIR" && rm -rf "$T"' EXIT
+trap 'finish_fixture_cleanup "$MESH_STATE_DIR" "$T" "$?"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 

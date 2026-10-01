@@ -18,11 +18,11 @@ C2=""
 SID=""
 
 cleanup() {
+  local test_status=$?
   [ -z "$SID" ] || "$MESH" kill "$SID" >/dev/null 2>&1 || true
   [ -z "$C1" ] || kill -9 "$C1" 2>/dev/null || true
   [ -z "$C2" ] || kill -9 "$C2" 2>/dev/null || true
-  wait_for_fixture_workers "$MESH_STATE_DIR" || return 1
-  rm -rf "$T"
+  finish_fixture_cleanup "$MESH_STATE_DIR" "$T" "$test_status"
 }
 trap cleanup EXIT
 

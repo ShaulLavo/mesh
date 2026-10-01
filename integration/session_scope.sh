@@ -19,10 +19,10 @@ CLIENT=""
 SID=""
 
 cleanup() {
+  local test_status=$?
   [ -z "$SID" ] || "$MESH" kill "$SID" >/dev/null 2>&1 || true
   [ -z "$CLIENT" ] || kill -9 "$CLIENT" 2>/dev/null || true
-  wait_for_fixture_workers "$MESH_STATE_DIR" || return 1
-  rm -rf "$T"
+  finish_fixture_cleanup "$MESH_STATE_DIR" "$T" "$test_status"
 }
 trap cleanup EXIT
 
