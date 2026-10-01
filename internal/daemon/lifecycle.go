@@ -287,7 +287,13 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 		}
 		response, err := l.remove(ctx, request)
 		return response, true, err
-	case protocol.TypeSignal, protocol.TypeKill, protocol.TypeInspect, protocol.TypeHibernate:
+	case protocol.TypeInspect:
+		if ctx == nil {
+			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
+		}
+		response, err := l.inspect(ctx, request)
+		return response, true, err
+	case protocol.TypeSignal, protocol.TypeKill, protocol.TypeHibernate:
 		if ctx == nil {
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
 		}
@@ -594,7 +600,7 @@ func (l *lifecycle) list(ctx context.Context, request protocol.Control) (protoco
 	for i, stored := range sessions {
 		items[i] = sessionInfo(stored)
 		items[i].MemoryBytes = sizes[items[i].ID]
-		l.addRecoveryInfo(&items[i])
+		l.addRecoveryInfo(&items[i], request.Lean)
 	}
 	return protocol.Control{Type: protocol.TypeListed, RequestID: request.RequestID, Sessions: items}, nil
 }
