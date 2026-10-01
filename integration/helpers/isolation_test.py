@@ -350,6 +350,7 @@ class ReviewRegressionsTest(unittest.TestCase):
     def test_cancelling_entry_pid_or_group_stops_children_and_cleans_scratch(self):
         helpers = Path(__file__).resolve().parent
         source = (helpers.parent / "kill_waits.sh").read_text().splitlines()[1]
+        go_root = subprocess.check_output(["go", "env", "GOROOT"], text=True).strip()
         for target in ("pid", "group"):
             with self.subTest(target=target), tempfile.TemporaryDirectory(prefix="m-cancel-") as temporary:
                 root = Path(temporary)
@@ -360,7 +361,8 @@ class ReviewRegressionsTest(unittest.TestCase):
                 probe = root / "probe.sh"
                 probe.write_text('#!/bin/bash\n' + source + '\nsleep 300 &\nchild=$!\n'
                                  'printf "%s\\n" "$$" "$child" "$HOME" "$(ps -o pgid= -p $$)" > "$1"\nwait "$child"\n')
-                environment = {"PATH": os.defpath, "HOME": str(root / "caller-home"), "TMPDIR": str(root),
+                environment = {"PATH": str(Path(go_root) / "bin") + os.pathsep + os.defpath,
+                               "HOME": str(root / "caller-home"), "TMPDIR": str(root),
                                "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config")}
                 stderr = root / "probe.stderr"
                 with stderr.open("w") as errors:
@@ -386,6 +388,15 @@ class ReviewRegressionsTest(unittest.TestCase):
                                          f"entry cancellation left process {pid} running")
                     self.assertFalse(Path(home).parent.exists(), "entry cancellation leaked wrapper scratch")
                 finally:
+                    if entry.poll() is None:
+                        try:
+                            os.killpg(entry.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            entry.wait(timeout=12)
+                        except subprocess.TimeoutExpired:
+                            pass
                     for group in {entry.pid, child_group} - {None}:
                         try:
                             os.killpg(group, signal.SIGKILL)
