@@ -30,6 +30,15 @@ func newGate(t *testing.T) *gate {
 func (g *gate) arrive() { g.enter.Do(func() { close(g.entered) }) }
 func (g *gate) done()   { g.open.Do(func() { close(g.release) }) }
 
+func (g *gate) waitFor(results <-chan error) error {
+	select {
+	case <-g.entered:
+		return nil
+	case err := <-results:
+		return errors.Join(errors.New("operation finished before reaching hook"), err)
+	}
+}
+
 // setup is a setup worker's wait that finishes when released, or fails like the
 // daemon's wait once its context ends.
 func (g *gate) setup(ctx context.Context) (int, error) {
@@ -73,7 +82,9 @@ func TestUpdateKeepsOldPortUntilRollbackIsImpossible(t *testing.T) {
 		_, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: app.ID, Kind: "server", Command: "replacement", Port: newPort, UploadID: upload, Digest: digest})
 		updated <- err
 	}()
-	<-replacement.entered
+	if err := replacement.waitFor(updated); err != nil {
+		t.Fatal(err)
+	}
 	release, guardErr := f.origin.GuardService(context.Background(), []int{oldPort}, "")
 	if guardErr == nil {
 		release()
@@ -114,10 +125,7 @@ func TestUpdatePortCollisionFinishesBeforeReplacementHook(t *testing.T) {
 		updated <- err
 	}()
 	waited := make(chan error, 1)
-	go func() {
-		<-replacement.entered
-		waited <- nil
-	}()
+	go func() { waited <- replacement.waitFor(updated) }()
 	err = receive(t, waited, "hook wait after port collision")
 	if err == nil || !strings.Contains(err.Error(), "server port already has a listener") {
 		t.Fatalf("hook wait hid the pre-start port collision: %v", err)
