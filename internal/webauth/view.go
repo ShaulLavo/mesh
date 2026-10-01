@@ -3,6 +3,8 @@ package webauth
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -50,7 +52,20 @@ func validApp(appID string) bool {
 	return appID != "" && len(appID) <= 64 && !strings.ContainsAny(appID, "/\\\x00\r\n ")
 }
 
-func (s *Service) IssueView(ctx context.Context, r *http.Request, owner, appID string) (string, error) {
+func (s *Service) BeginView(w http.ResponseWriter) (string, error) {
+	nonce, err := bearer()
+	if err != nil {
+		return "", err
+	}
+	writeCookie(w, ViewNonceCookie, nonce, s.now().Add(ticketTTL), s.now())
+	return hash(nonce), nil
+}
+
+func (s *Service) IssueView(ctx context.Context, r *http.Request, owner, appID, nonceHash string) (string, error) {
+	nonce, err := hex.DecodeString(nonceHash)
+	if err != nil || len(nonce) != 32 || hex.EncodeToString(nonce) != nonceHash {
+		return "", ErrUnauthorized
+	}
 	if !validOwner(owner) || !validApp(appID) {
 		return "", ErrUnauthorized
 	}
@@ -66,7 +81,7 @@ func (s *Service) IssueView(ctx context.Context, r *http.Request, owner, appID s
 		if len(d.Tickets) >= maxTickets {
 			return ErrCapacity
 		}
-		d.Tickets[hash(token)] = viewRecord{BrowserID: b.ID, Owner: owner, AppID: appID, ExpiresAt: minTime(now.Add(ticketTTL), b.ExpiresAt)}
+		d.Tickets[hash(token)] = viewRecord{BrowserID: b.ID, Owner: owner, AppID: appID, NonceHash: nonceHash, ExpiresAt: minTime(now.Add(ticketTTL), b.ExpiresAt)}
 		return nil
 	})
 	if err != nil {
@@ -74,31 +89,72 @@ func (s *Service) IssueView(ctx context.Context, r *http.Request, owner, appID s
 	}
 	return token, nil
 }
-func (s *Service) ConsumeView(ctx context.Context, w http.ResponseWriter, r *http.Request, ticket, appID string) error {
-	if len(ticket) != 43 || !validApp(appID) {
+func viewTicketKeys(r *http.Request, ticket, appID string) (string, string, error) {
+	nonceHash, err := cookieKey(r, ViewNonceCookie)
+	if err != nil || len(ticket) != 43 || !validApp(appID) {
+		return "", "", ErrUnauthorized
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(ticket)
+	if err != nil || len(decoded) != 32 {
+		return "", "", ErrUnauthorized
+	}
+	return hash(ticket), nonceHash, nil
+}
+
+func checkViewTicket(d *state, ticketHash, nonceHash, appID string, now time.Time) error {
+	v, ok := d.Tickets[ticketHash]
+	if !ok || v.AppID != appID || !now.Before(v.ExpiresAt) || v.NonceHash == "" || subtle.ConstantTimeCompare([]byte(v.NonceHash), []byte(nonceHash)) != 1 {
 		return ErrUnauthorized
 	}
-	token, err := bearer()
+	b, err := browserByID(d, v.BrowserID, now)
+	if err != nil || !b.Owns(v.Owner) {
+		return ErrUnauthorized
+	}
+	return nil
+}
+
+// CheckView rejects anonymous probes before app lookup or durable auth work.
+func (s *Service) CheckView(ctx context.Context, r *http.Request, ticket, appID string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("webauth: check view ticket: %w", err)
+	}
+	ticketHash, nonceHash, err := viewTicketKeys(r, ticket, appID)
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return checkViewTicket(&s.state, ticketHash, nonceHash, appID, s.now().UTC())
+}
+
+func (s *Service) ConsumeView(ctx context.Context, w http.ResponseWriter, r *http.Request, ticket, appID string) error {
+	ticketHash, nonceHash, err := viewTicketKeys(r, ticket, appID)
+	if err != nil {
+		return err
+	}
+	var token string
 	var expires time.Time
-	err = s.change(ctx, func(d *state, now time.Time) error {
-		v, ok := d.Tickets[hash(ticket)]
-		if !ok || v.AppID != appID {
-			return ErrUnauthorized
-		}
-		b, err := browserByID(d, v.BrowserID, now)
-		if err != nil || !b.Owns(v.Owner) {
-			return ErrUnauthorized
-		}
+	err = s.changeIf(ctx, func(d *state, now time.Time) error {
+		return checkViewTicket(d, ticketHash, nonceHash, appID, now)
+	}, func(d *state, now time.Time) error {
 		if len(d.Views) >= maxViews {
 			return ErrCapacity
 		}
-		delete(d.Tickets, hash(ticket))
+		var err error
+		token, err = bearer()
+		if err != nil {
+			return err
+		}
+		v := d.Tickets[ticketHash]
+		b, err := browserByID(d, v.BrowserID, now)
+		if err != nil {
+			return err
+		}
+		delete(d.Tickets, ticketHash)
 		if existing, err := cookieKey(r, ViewCookie); err == nil {
 			delete(d.Views, existing)
 		}
+		v.NonceHash = ""
 		v.ExpiresAt = minTime(now.Add(viewTTL), b.ExpiresAt)
 		d.Views[hash(token)] = v
 		expires = v.ExpiresAt
@@ -108,6 +164,7 @@ func (s *Service) ConsumeView(ctx context.Context, w http.ResponseWriter, r *htt
 		return err
 	}
 	writeCookie(w, ViewCookie, token, expires, s.now())
+	http.SetCookie(w, &http.Cookie{Name: ViewNonceCookie, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	return nil
 }
 

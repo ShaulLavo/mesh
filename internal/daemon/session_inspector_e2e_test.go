@@ -22,7 +22,7 @@ import (
 const sessionInspectorE2ETimeout = 5 * time.Second
 
 func TestSessionInspectionTraversesWebSocketDaemonAndLiveWorker(t *testing.T) {
-	root := t.TempDir()
+	root := compactSocketTempDir(t)
 	sessionsDir := filepath.Join(root, "sessions")
 	sessionDir := filepath.Join(sessionsDir, "7K3D")
 	currentDirectory := filepath.Join(root, "current-project")

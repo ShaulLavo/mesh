@@ -138,10 +138,12 @@ mutation gate. `mesh unserve FULLNAME --host EDGE` owner-signs release of an
 inactive claim and refuses while its tunnel is active.
 
 The server sends a reply-required SSH keepalive every 15 seconds and closes the
-connection after three missed replies. A failed channel open deactivates its
-token immediately. Either path conditionally removes the active route before
-closing, so a silent partition becomes inactive 404 within 60 seconds rather
-than leaving a hanging or stale public hostname.
+connection after three missed intervals. A failed channel open does not deactivate
+its token: liveness belongs to connection close and keepalive, not individual
+requests. Connection teardown conditionally removes only its own active token
+before closing, so an old connection cannot remove a newer reconnect and a silent
+partition becomes inactive 404 within 60 seconds rather than leaving a hanging
+or stale public hostname.
 
 The server rejects a bind address that is short, wildcard, loopback, an IP, or
 not the exact claimed hostname. It rejects port zero and every port except `80`.

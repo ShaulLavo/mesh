@@ -133,7 +133,13 @@ func TestViewCredentialMutationDuringOriginResolution(t *testing.T) {
 				management.AddCookie(owner)
 				switch mutation {
 				case "replace":
-					ticket, err := f.edge.auth.IssueView(ctx, management, identity, app.ID)
+					nonceResponse := httptest.NewRecorder()
+					nonceHash, err := f.edge.auth.BeginView(nonceResponse)
+					if err != nil {
+						t.Fatal(err)
+					}
+					request.AddCookie(cookieNamed(t, nonceResponse, webauth.ViewNonceCookie))
+					ticket, err := f.edge.auth.IssueView(ctx, management, identity, app.ID, nonceHash)
 					if err != nil {
 						t.Fatal(err)
 					}
