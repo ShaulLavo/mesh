@@ -40,19 +40,36 @@ type OriginConfig struct {
 	Now          func() time.Time
 }
 type localApp struct {
-	Commit  *commitIntent `json:"commit,omitempty"`
-	Record  Record        `json:"record"`
-	Root    string        `json:"root"`
-	Command string        `json:"command,omitempty"`
-	Port    int           `json:"port,omitempty"`
-	Env     []string      `json:"env,omitempty"`
-	Session string        `json:"session,omitempty"`
-	Phase   string        `json:"phase"`
+	Commit *commitIntent `json:"commit,omitempty"`
+	// Candidate is an update being prepared beside this ready app. It stays
+	// optional so a state written with one still loads in an older binary.
+	Candidate *updateCandidate `json:"candidate,omitempty"`
+	Record    Record           `json:"record"`
+	Root      string           `json:"root"`
+	Command   string           `json:"command,omitempty"`
+	Port      int              `json:"port,omitempty"`
+	Env       []string         `json:"env,omitempty"`
+	Session   string           `json:"session,omitempty"`
+	Phase     string           `json:"phase"`
 }
 type commitIntent struct {
 	UploadID     string `json:"uploadId"`
 	Digest       string `json:"digest"`
 	PreviousRoot string `json:"previousRoot,omitempty"`
+}
+
+// updateCandidate is saved before an update's workspace exists and cleared only
+// once its setup worker and workspace are gone, so a restart always knows what an
+// interrupted update left behind. Recovery rolls it back and never reruns setup.
+type updateCandidate struct {
+	UploadID string   `json:"uploadId"`
+	Digest   string   `json:"digest"`
+	Root     string   `json:"root"`
+	Command  string   `json:"command,omitempty"`
+	Port     int      `json:"port,omitempty"`
+	Env      []string `json:"env,omitempty"`
+	Setup    string   `json:"setup,omitempty"`
+	Session  string   `json:"session,omitempty"`
 }
 type appRoute struct {
 	Record Record
@@ -725,6 +742,17 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 			return Result{}, err
 		}
 	}
+	// This operation owns the app, so a candidate here belongs to an attempt that
+	// died with an earlier daemon. Retrying it is an explicit request to run it
+	// again, from the start.
+	if c := current.Candidate; q.Action == "update" && exists && c != nil {
+		if c.UploadID == q.UploadID && c.Digest != digest {
+			return Result{}, fmt.Errorf("app %s: update %s conflicts with the recipe of its interrupted attempt", q.ID, q.UploadID)
+		}
+		if err := o.abandonCandidate(ctx, q.ID); err != nil {
+			return Result{}, err
+		}
+	}
 	if err := validateRecipe(q); err != nil {
 		return Result{}, err
 	}
@@ -752,6 +780,10 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		return Result{}, err
 	}
 	app, workspace := local.Record, local.Root
+	// swapped is set once the live server may have been stopped for the new one;
+	// before that, a failure has no reason to touch it.
+	swapped := false
+	candidate := &updateCandidate{UploadID: q.UploadID, Digest: digest, Root: workspace, Command: q.Command, Port: q.Port, Env: q.Env, Setup: q.Setup}
 	fail := func(cause error) (Result, error) {
 		// Undoing must finish even when the request or the operation's context
 		// has ended; start still refuses to restart a revoked app.
@@ -760,49 +792,29 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		if q.Action == "create" {
 			return Result{}, o.failCreate(ctx, app.ID, cause)
 		}
-		_ = o.stop(ctx, app.ID)
-		if previous.Command != "" {
-			session, startErr := o.start(ctx, app.ID, "app "+app.ID, previous.Command, previous.Root, o.environment(previous))
-			previous.Session = session
-			cause = errors.Join(cause, startErr)
-		}
-		_ = os.RemoveAll(workspace)
-		o.mu.Lock()
-		defer o.mu.Unlock()
-		// Keep the lease and expiry Sync applied while the update ran.
-		if latest, ok := o.state.Apps[app.ID]; ok {
-			revision := previous.Record.Revision
-			previous.Record = latest.Record
-			previous.Record.Revision = revision
-		}
-		o.state.Apps[app.ID] = previous
-		return Result{}, errors.Join(cause, o.persist(ctx))
+		return Result{}, fmt.Errorf("app %s: update %s: %w", app.ID, q.UploadID, o.failUpdate(ctx, previous, candidate, swapped, cause))
 	}
 	err = os.MkdirAll(filepath.Dir(workspace), 0700)
+	if err == nil && q.Action == "update" {
+		err = o.modify(ctx, app.ID, func(a *localApp) { a.Candidate = candidate })
+	}
 	if err == nil {
 		err = os.Rename(staging, workspace)
 	}
-	if err != nil && q.Action == "create" {
-		_ = os.RemoveAll(staging)
-		return Result{}, o.failCreate(ctx, app.ID, err)
-	}
 	if err != nil {
-		return Result{}, err
+		_ = os.RemoveAll(staging)
+		if q.Action == "create" {
+			return Result{}, o.failCreate(ctx, app.ID, err)
+		}
+		return fail(err)
 	}
 	if q.Setup != "" {
-		if err := validateDataRoot(workspace); err != nil {
+		if err := o.runSetup(ctx, q, local, candidate); err != nil {
 			return fail(err)
 		}
-		id, err := o.start(ctx, app.ID, "app-setup "+app.ID, q.Setup, workspace, o.environment(local))
-		if err != nil {
-			return fail(err)
-		}
-		if err := o.waitSetup(ctx, id); err != nil {
-			return fail(err)
-		}
-		o.config.Workers.Forget(ctx, "app-setup "+app.ID)
 	}
 	if q.Action == "update" {
+		swapped = true
 		if err := o.stop(ctx, app.ID); err != nil {
 			return fail(err)
 		}
@@ -854,6 +866,30 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		return Result{}, err
 	}
 	return result, o.finishActivation(ctx, local, *result.App)
+}
+
+// runSetup runs the recipe's setup in the new workspace. An update records the
+// setup session on its candidate before waiting, so a crash leaves it findable.
+func (o *Origin) runSetup(ctx context.Context, q Request, a localApp, candidate *updateCandidate) error {
+	id := a.Record.ID
+	if err := validateDataRoot(a.Root); err != nil {
+		return err
+	}
+	session, err := o.start(ctx, id, "app-setup "+id, q.Setup, a.Root, o.environment(a))
+	if err != nil {
+		return err
+	}
+	if q.Action == "update" {
+		candidate.Session = session
+		if err := o.modify(ctx, id, func(a *localApp) { a.Candidate = candidate }); err != nil {
+			return err
+		}
+	}
+	if err := o.waitSetup(ctx, session); err != nil {
+		return err
+	}
+	o.config.Workers.Forget(ctx, "app-setup "+id)
+	return nil
 }
 func (o *Origin) finishActivation(ctx context.Context, a localApp, record Record) error {
 	if a.Commit == nil {
@@ -981,6 +1017,62 @@ func (o *Origin) failCreate(ctx context.Context, id string, err error) error {
 	_, deleteErr := o.edge(ctx, Request{Action: "delete", ID: id})
 	cleanupErr := o.cleanup(ctx, id)
 	return errors.Join(err, deleteErr, cleanupErr)
+}
+
+// failUpdate puts the previous revision back after an update failed. Before the
+// swap only the setup worker is stopped. After it, whatever server now runs is
+// stopped and the previous one restarted through ensureServer, so its port and
+// listener are checked like any other start. A worker that will not stop keeps
+// its candidate recorded, so recovery tries again instead of losing track of it.
+func (o *Origin) failUpdate(ctx context.Context, previous localApp, candidate *updateCandidate, swapped bool, cause error) error {
+	id := previous.Record.ID
+	stopErr := o.stopLabel(ctx, "app-setup "+id)
+	if swapped {
+		stopErr = errors.Join(stopErr, o.stopLabel(ctx, "app "+id))
+		previous.Session = ""
+	}
+	var removeErr error
+	if stopErr == nil {
+		removeErr = os.RemoveAll(candidate.Root)
+	}
+	previous.Candidate = nil
+	if stopErr != nil || removeErr != nil {
+		previous.Candidate = candidate
+	}
+	o.mu.Lock()
+	// Keep the lease and expiry Sync applied while the update ran.
+	if latest, ok := o.state.Apps[id]; ok {
+		revision := previous.Record.Revision
+		previous.Record = latest.Record
+		previous.Record.Revision = revision
+	}
+	o.state.Apps[id] = previous
+	saveErr := o.persist(ctx)
+	o.mu.Unlock()
+	var restartErr error
+	if swapped && stopErr == nil && previous.Command != "" {
+		restartErr = o.ensureServer(ctx, &previous)
+	}
+	return errors.Join(cause, stopErr, removeErr, saveErr, restartErr)
+}
+
+// abandonCandidate rolls back an update preparation no operation owns any more:
+// its setup worker, then its workspace, then its record. It never reruns setup
+// and never touches the revision being served. The caller owns the app.
+func (o *Origin) abandonCandidate(ctx context.Context, id string) error {
+	o.mu.Lock()
+	a, ok := o.state.Apps[id]
+	o.mu.Unlock()
+	if !ok || a.Candidate == nil {
+		return nil
+	}
+	if err := o.stopLabel(ctx, "app-setup "+id); err != nil {
+		return fmt.Errorf("app %s: stop interrupted update %s: %w", id, a.Candidate.UploadID, err)
+	}
+	if err := os.RemoveAll(a.Candidate.Root); err != nil {
+		return fmt.Errorf("app %s: remove interrupted update %s: %w", id, a.Candidate.UploadID, err)
+	}
+	return o.modify(ctx, id, func(a *localApp) { a.Candidate = nil })
 }
 
 // stop ends only the app's own labelled workers; ordinary sessions never carry
@@ -1298,10 +1390,8 @@ func (o *Origin) recover(ctx context.Context, id string, records map[string]Reco
 	if a.Phase != "ready" {
 		return nil
 	}
-	if a.Commit != nil {
-		if err := o.finishActivation(ctx, a, a.Record); err != nil {
-			return fmt.Errorf("app %s: finish activation: %w", id, err)
-		}
+	if err := o.settleReady(ctx, a); err != nil {
+		return err
 	}
 	if a.Command == "" {
 		return nil
@@ -1318,6 +1408,22 @@ func (o *Origin) recover(ctx context.Context, id string, records map[string]Reco
 	o.mu.Unlock()
 	if err := o.ensureServer(ctx, &a); err != nil {
 		return fmt.Errorf("app %s: restart server: %w", id, err)
+	}
+	return nil
+}
+
+// settleReady finishes what an interrupted operation left on a ready app: a
+// committed activation is completed, an update candidate is rolled back. The
+// rollback reads the stored record itself, so it runs after the commit writes.
+func (o *Origin) settleReady(ctx context.Context, a localApp) error {
+	id := a.Record.ID
+	if a.Commit != nil {
+		if err := o.finishActivation(ctx, a, a.Record); err != nil {
+			return fmt.Errorf("app %s: finish activation: %w", id, err)
+		}
+	}
+	if err := o.abandonCandidate(ctx, id); err != nil {
+		return fmt.Errorf("app %s: roll back interrupted update: %w", id, err)
 	}
 	return nil
 }
