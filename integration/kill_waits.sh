@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # `mesh kill` is a completion barrier. When it prints success, the complete
 # process group must already be gone, including a command that ignored SIGHUP.
 set -uo pipefail
@@ -14,9 +15,10 @@ CLIENT=""
 SESSION_PID=""
 
 cleanup() {
+  local test_status=$?
   [ -z "$CLIENT" ] || kill -9 "$CLIENT" 2>/dev/null || true
   [ -z "$SESSION_PID" ] || kill -9 "$SESSION_PID" 2>/dev/null || true
-  rm -rf "$T"
+  finish_fixture_cleanup "$MESH_STATE_DIR" "$T" "$test_status"
 }
 trap cleanup EXIT
 

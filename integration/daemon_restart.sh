@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # A daemon is disposable: restarting it must neither replace nor interrupt a
 # worker that it discovered and served before the restart.
 set -uo pipefail
@@ -20,13 +21,14 @@ SID=""
 SHELL_PID=""
 
 cleanup() {
+  local test_status=$?
   [ -z "$SID" ] || "$MESH" kill "$SID" >/dev/null 2>&1 || true
   [ -z "$CLIENT1" ] || kill -9 "$CLIENT1" 2>/dev/null || true
   [ -z "$CLIENT2" ] || kill -9 "$CLIENT2" 2>/dev/null || true
   [ -z "$DAEMON1" ] || kill -9 "$DAEMON1" 2>/dev/null || true
   [ -z "$DAEMON2" ] || kill -9 "$DAEMON2" 2>/dev/null || true
   [ -z "$SHELL_PID" ] || kill -9 "$SHELL_PID" 2>/dev/null || true
-  rm -rf "$T"
+  finish_fixture_cleanup "$MESH_STATE_DIR" "$T" "$test_status"
 }
 trap cleanup EXIT
 
