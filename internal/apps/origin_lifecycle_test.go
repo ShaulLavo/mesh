@@ -253,3 +253,191 @@ func TestFailedCreateKeepsSetupDiagnostic(t *testing.T) {
 		t.Fatal("diagnostic outlived its retention")
 	}
 }
+
+// crashAfterActivatingStore keeps every save up to the update's activating
+// write and loses all later ones, as if the daemon died right after it.
+type crashAfterActivatingStore struct {
+	*memoryAppStore
+	crashed bool
+}
+
+func (s *crashAfterActivatingStore) SaveAppState(ctx context.Context, key string, data []byte) error {
+	if key != "apps.origin" {
+		return s.memoryAppStore.SaveAppState(ctx, key, data)
+	}
+	if s.crashed {
+		return errors.New("daemon crashed")
+	}
+	var state originState
+	_ = json.Unmarshal(data, &state)
+	for _, a := range state.Apps {
+		if a.Phase == "activating" {
+			s.crashed = true
+		}
+	}
+	return s.memoryAppStore.SaveAppState(ctx, key, data)
+}
+
+func TestRollbackIsDurableBeforeCandidateIsRemoved(t *testing.T) {
+	f := newAppFixture(t)
+	workers := newServerWorkers(t, f)
+	port := freePort(t)
+	app := createServerAppOn(t, f, port)
+	failed := false
+	workers.beforeStart = func(_ context.Context, _, command string) error {
+		if command == "replacement" && !failed {
+			failed = true
+			return errors.New("replacement failed to start")
+		}
+		return nil
+	}
+	upload, digest := uploadSource(t, f, updatedSourceFixture(t))
+	f.origin.config.Store = &crashAfterActivatingStore{memoryAppStore: f.originStore}
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: app.ID, Kind: "server", Command: "replacement", Port: port, UploadID: upload, Digest: digest}); err == nil {
+		t.Fatal("replacement start failure was hidden")
+	}
+	restartAppOrigin(t, f)
+	f.origin.config.Workers = workers
+	_ = f.origin.Sync(context.Background())
+	a := f.origin.state.Apps[app.ID]
+	if a.Phase != "ready" {
+		t.Fatalf("recovery left the app %s", a.Phase)
+	}
+	if _, err := os.Stat(filepath.Join(a.Root, "index.html")); err != nil {
+		t.Fatalf("recovery serves a workspace the rollback already deleted: %v", err)
+	}
+}
+
+func TestFailedReplacementStopIsFinishedByRecovery(t *testing.T) {
+	f := newAppFixture(t)
+	workers := newServerWorkers(t, f)
+	port := freePort(t)
+	app := createServerAppOn(t, f, port)
+	var mu sync.Mutex
+	var started []string
+	failing := false
+	workers.beforeStart = func(_ context.Context, label, command string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if label == "app "+app.ID {
+			started = append(started, command)
+			failing = command == "replacement"
+		}
+		return nil
+	}
+	workers.beforeFind = func(_ context.Context, label string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if failing && label == "app "+app.ID {
+			return errors.New("catalog unavailable")
+		}
+		return nil
+	}
+	upload, digest := uploadSource(t, f, updatedSourceFixture(t))
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: app.ID, Kind: "server", Command: "replacement", Port: port, UploadID: upload, Digest: digest}); err == nil {
+		t.Fatal("replacement validation failure was hidden")
+	}
+	mu.Lock()
+	failing = false
+	mu.Unlock()
+	restartAppOrigin(t, f)
+	f.origin.config.Workers = workers
+	if err := f.origin.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	last := started[len(started)-1]
+	mu.Unlock()
+	if last != "serve" || !workers.alive(t, "app "+app.ID) {
+		t.Fatalf("recovery left the rejected replacement in place of the previous server: starts %v", started)
+	}
+}
+
+// persistingSetupWorkers runs a hook as setup starts, before Start returns.
+type persistingSetupWorkers struct {
+	*fakeWorkers
+	starting func()
+}
+
+func (w *persistingSetupWorkers) Start(ctx context.Context, label, command, root string, env []string) (string, error) {
+	if strings.HasPrefix(label, "app-setup ") {
+		w.starting()
+	}
+	return w.fakeWorkers.Start(ctx, label, command, root, env)
+}
+
+// TestPublishedCandidateIsNeverMutated guards persistence against a data race:
+// other apps' saves serialize the candidate under the state lock, so once a
+// candidate is reachable from state it must be replaced, never written.
+func TestPublishedCandidateIsNeverMutated(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	var published *updateCandidate
+	var snapshot updateCandidate
+	f.origin.config.Workers = &persistingSetupWorkers{fakeWorkers: f.workers, starting: func() {
+		f.origin.mu.Lock()
+		defer f.origin.mu.Unlock()
+		published = f.origin.state.Apps[app.ID].Candidate
+		snapshot = *published
+	}}
+	upload, digest := uploadSource(t, f, updatedSourceFixture(t))
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: app.ID, Kind: "static", Setup: "npm ci", UploadID: upload, Digest: digest}); err != nil {
+		t.Fatal(err)
+	}
+	if published.Session != snapshot.Session {
+		t.Fatalf("setup wrote session %q into a candidate other saves could be serializing", published.Session)
+	}
+}
+
+var errUnmounted = errors.New("app: required data SSD /work is not mounted")
+
+func TestCandidateRollbackWaitsForStorage(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	upload, digest := uploadSource(t, f, updatedSourceFixture(t))
+	crashInSetup(t, f, Request{Action: "update", ID: app.ID, Kind: "static", Setup: "npm ci", UploadID: upload, Digest: digest})
+	f.origin.storageMounted = func(string) error { return errUnmounted }
+	_ = f.origin.Sync(context.Background())
+	if f.origin.state.Apps[app.ID].Candidate == nil {
+		t.Fatal("rollback forgot the interrupted update while its storage was unmounted")
+	}
+	f.origin.storageMounted = workloadStorageMounted
+	if err := f.origin.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.origin.state.Apps[app.ID].Candidate != nil {
+		t.Fatal("rollback did not finish once storage returned")
+	}
+}
+
+func TestCleanupWaitsForStorageWhenRootStillExists(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	f.origin.storageMounted = func(string) error { return errUnmounted }
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "delete", ID: app.ID}); err == nil {
+		t.Fatal("delete acknowledged cleanup while storage was unmounted")
+	}
+	if _, ok := f.origin.state.Apps[app.ID]; !ok {
+		t.Fatal("delete dropped the app record while storage was unmounted")
+	}
+	record, _, err := f.edge.lookup(context.Background(), app.ID, false)
+	if err != nil || record.Cleanup == "complete" {
+		t.Fatalf("edge was told cleanup finished while storage was unmounted: %#v %v", record, err)
+	}
+}
+
+func TestInterruptedUpdateRefusesChangedRecipeAfterRecovery(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	upload, digest := uploadSource(t, f, updatedSourceFixture(t))
+	q := Request{Action: "update", ID: app.ID, Kind: "static", Setup: "npm ci", UploadID: upload, Digest: digest}
+	crashInSetup(t, f, q)
+	if err := f.origin.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	q.Setup = "npm install"
+	_, err := f.origin.Handle(context.Background(), q)
+	if err == nil || !strings.Contains(err.Error(), "conflicts") || !strings.Contains(err.Error(), app.ID) || !strings.Contains(err.Error(), upload) {
+		t.Fatalf("changed recipe was accepted after recovery rolled the attempt back: %v", err)
+	}
+}
