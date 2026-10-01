@@ -228,7 +228,9 @@ func (e *Edge) apply(ctx context.Context, next *edgeMutation, owner string, q Re
 		if app.Status != "active" {
 			return Result{}, errors.New("app: app expired")
 		}
-		if app.Ready && app.Revision != q.UploadID {
+		// A different revision replaces whatever was activated before, even
+		// while suspended; the same one only resumes it.
+		if app.Revision != "" && app.Revision != q.UploadID {
 			next.cancelAll = append(next.cancelAll, app.ID)
 			app.Generation++
 			app.ExpiresAt = e.config.Now().Add(IdleTTL)
