@@ -355,6 +355,9 @@ wait_for_public_body blog.shaulavo.dev /blog/ SERVE_CLI_PUBLIC_MARKER ||
 "${CLI[@]}" serve pc "$TEST_ROOT/files" --at /blog/admin --files \
   >"$TEST_ROOT/nested-private.out" 2>"$TEST_ROOT/nested-private.err" ||
   fail "publish nested private directory: $(<"$TEST_ROOT/nested-private.err")"
+SHADOW_WARNING='private route /blog/admin shadows public route https://blog.shaulavo.dev/blog at /blog/admin; public requests there return 404'
+grep -Fq "warning: pc: $SHADOW_WARNING" "$TEST_ROOT/nested-private.err" ||
+  fail "registration omitted the private-route shadow warning: $(<"$TEST_ROOT/nested-private.err")"
 NESTED_PUBLIC_STATUS=$(edge_request blog.shaulavo.dev /blog/admin/download.txt --output /dev/null --write-out '%{http_code}') ||
   fail "query nested private route through the public edge"
 [ "$NESTED_PUBLIC_STATUS" = 404 ] ||
@@ -391,6 +394,8 @@ wait_for_public_body secret.shaulavo.dev /secret/ SECRET_PUBLIC_MARKER ||
 
 "${CLI[@]}" serve ls --timeout 800ms >"$TEST_ROOT/list-live.out" 2>"$TEST_ROOT/list-live.err" ||
   fail "list live services: $(<"$TEST_ROOT/list-live.err")"
+grep -Fq "warning: pc: $SHADOW_WARNING" "$TEST_ROOT/list-live.err" ||
+  fail "live list omitted the private-route shadow warning: $(<"$TEST_ROOT/list-live.err")"
 grep -Eq '^ROUTE[[:space:]]+HOST[[:space:]]+KIND[[:space:]]+TARGET[[:space:]]+SCOPE[[:space:]]+STATE[[:space:]]+HEALTH[[:space:]]+URL$' \
   "$TEST_ROOT/list-live.out" || fail "service list header is incomplete: $(<"$TEST_ROOT/list-live.out")"
 grep -Eq "^/blog[[:space:]]+pc[[:space:]]+static[[:space:]]+$ORIGIN_HOME/site[[:space:]]+public[[:space:]]+-[[:space:]]+healthy[[:space:]]+https://blog\.shaulavo\.dev/blog$" \
@@ -407,6 +412,8 @@ ORIGIN_PID=""
 timeout --kill-after=1s 3s "${CLI[@]}" serve ls --timeout 150ms \
   >"$TEST_ROOT/list-offline.out" 2>"$TEST_ROOT/list-offline.err" ||
   fail "offline service list exceeded its hard deadline: $(<"$TEST_ROOT/list-offline.err")"
+grep -Fq "warning: pc (cached): $SHADOW_WARNING" "$TEST_ROOT/list-offline.err" ||
+  fail "cached list omitted the private-route shadow warning: $(<"$TEST_ROOT/list-offline.err")"
 grep -Eq '^/blog[[:space:]]+pc[[:space:]]+static.*offline/stale[[:space:]]+https://blog\.shaulavo\.dev/blog$' \
   "$TEST_ROOT/list-offline.out" || fail "offline cache lost the public URL: $(<"$TEST_ROOT/list-offline.out")"
 grep -Eq "^/files[[:space:]]+pc[[:space:]]+files.*offline/stale[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/files$" \

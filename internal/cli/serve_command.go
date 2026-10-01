@@ -206,12 +206,20 @@ func (a *application) runServe(cmd *cobra.Command, hostAlias, target string, fla
 		}
 	}
 	mutationCtx, cancelMutation := context.WithTimeout(cmd.Context(), serviceMutationTimeout)
-	persisted, currentPrivateName, err := upsertRemoteService(mutationCtx, host, a.dependencies.DialControl, requested, preview, privateName, flags.allowCredentials)
+	publication, err := upsertRemoteService(mutationCtx, host, a.dependencies.DialControl, requested, preview, privateName, flags.allowCredentials)
 	cancelMutation()
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "serving %s on %s (%s -> %s)\n", serviceURL(host, currentPrivateName, persisted), host.Alias, persisted.Kind, serviceTargetCell(persisted))
+	if publication.Warning != "" {
+		for warning := range strings.SplitSeq(publication.Warning, "\n") {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s: %s\n", safeTableCell(host.Alias), safeRemoteText(warning)); err != nil {
+				return fmt.Errorf("write service shadow warning: %w", err)
+			}
+		}
+	}
+	persisted := publication.Service
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "serving %s on %s (%s -> %s)\n", serviceURL(host, publication.PrivateName, persisted), host.Alias, persisted.Kind, serviceTargetCell(persisted))
 	if err != nil || persisted.Run == nil {
 		return err
 	}
@@ -259,6 +267,9 @@ func (a *application) runServeList(cmd *cobra.Command, timeout time.Duration) er
 		return err
 	}
 	if err := writeServiceDiagnostics(cmd.ErrOrStderr(), diagnostics); err != nil {
+		return err
+	}
+	if err := writeServiceShadowWarnings(cmd.ErrOrStderr(), rows); err != nil {
 		return err
 	}
 	writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
@@ -552,6 +563,30 @@ func terminalPublicConfirmation(input *os.File, output io.Writer) ConfirmPublicF
 		answer = strings.ToLower(strings.TrimSpace(answer))
 		return answer == "y" || answer == "yes", nil
 	}
+}
+
+func writeServiceShadowWarnings(output io.Writer, rows []ServiceCatalogRow) error {
+	byHost := make(map[string][]meshserve.Service)
+	for _, row := range rows {
+		byHost[row.Host.ID] = append(byHost[row.Host.ID], protocol.ServiceFromInfo(row.Service))
+	}
+	for _, row := range rows {
+		services, ok := byHost[row.Host.ID]
+		if !ok {
+			continue
+		}
+		delete(byHost, row.Host.ID)
+		cached := ""
+		if !row.Live {
+			cached = " (cached)"
+		}
+		for _, shadow := range meshserve.PrivateRouteShadows(services) {
+			if _, err := fmt.Fprintf(output, "warning: %s%s: %s\n", safeTableCell(row.Host.Alias), cached, safeRemoteText(shadow.Message())); err != nil {
+				return fmt.Errorf("write service shadow warning: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 func writeServiceDiagnostics(output io.Writer, diagnostics map[string]error) error {

@@ -75,7 +75,7 @@ func TestRemoteServiceBoundaryRejectsChangedPreviewAndAcknowledgement(t *testing
 	}
 
 	preview := protocol.ServicePreview{Service: protocol.ServiceInfo{Name: "blog", Kind: "static", Target: "/home/me/site", PublicName: "blog.shaulavo.dev"}}
-	_, _, err = upsertRemoteService(context.Background(), host, serviceRemoteDial(host, func(protocol.Control) protocol.Control {
+	_, err = upsertRemoteService(context.Background(), host, serviceRemoteDial(host, func(protocol.Control) protocol.Control {
 		ack := preview.Service
 		ack.Target = "/home/me/other"
 		return protocol.Control{Type: protocol.TypeServiceUpserted, Service: &ack}

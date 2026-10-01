@@ -198,10 +198,17 @@ func (c *serviceController) upsert(ctx context.Context, request protocol.Control
 	// The health probe runs after the gate is released: a proxy dial may take
 	// its full timeout, and no other mutation should queue behind it.
 	info := c.serviceStatuses(ctx, []meshserve.Service{persisted})[0]
+	var warnings []string
+	for _, shadow := range meshserve.PrivateRouteShadows(c.registry.Services()) {
+		if shadow.Private.Name == persisted.Name || shadow.Public.Name == persisted.Name {
+			warnings = append(warnings, shadow.Message())
+		}
+	}
 	return protocol.Control{
 		Type:      protocol.TypeServiceUpserted,
 		RequestID: request.RequestID,
 		Service:   &info,
+		Message:   strings.Join(warnings, "\n"),
 	}, nil
 }
 
