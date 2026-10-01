@@ -242,14 +242,15 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 	owner := pairedOwner(t, f)
 	viewRequest := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+app.ID, nil)
 	viewRequest.AddCookie(owner)
-	viewRedirect := httptest.NewRecorder()
-	f.edge.ServeHost(viewRedirect, viewRequest, ManagementHost)
+	viewRedirect, nonce := privateViewRedirect(t, f, viewRequest)
 	if viewRedirect.Code != http.StatusSeeOther || !strings.HasPrefix(viewRedirect.Header().Get("Location"), URL(app.ID)+"/?mesh_view=") {
 		t.Fatalf("private view grant missing: %d %s", viewRedirect.Code, viewRedirect.Body.String())
 	}
 	grantURL := viewRedirect.Header().Get("Location")
 	consume := httptest.NewRecorder()
-	f.edge.ServeHost(consume, httptest.NewRequest(http.MethodGet, grantURL, nil), app.ID+"."+Domain)
+	consumeRequest := httptest.NewRequest(http.MethodGet, grantURL, nil)
+	consumeRequest.AddCookie(nonce)
+	f.edge.ServeHost(consume, consumeRequest, app.ID+"."+Domain)
 	if consume.Code != http.StatusSeeOther || strings.Contains(consume.Header().Get("Location"), "mesh_view") {
 		t.Fatal("did not consume and strip private ticket")
 	}
@@ -419,8 +420,7 @@ func TestPrivateViewReturnPreservesPageAcrossTicketExchange(t *testing.T) {
 	destination := URL(app.ID) + "/colors?palette=rose%20water#favorites"
 	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+app.ID+"&return="+url.QueryEscape(destination), nil)
 	request.AddCookie(cookie)
-	response := httptest.NewRecorder()
-	f.edge.ServeHost(response, request, ManagementHost)
+	response, nonce := privateViewRedirect(t, f, request)
 	target, err := url.Parse(response.Header().Get("Location"))
 	if err != nil || target.Path != "/colors" || target.Fragment != "favorites" || target.Query().Get("palette") != "rose water" || target.Query().Get("mesh_view") == "" {
 		t.Fatalf("private view lost its destination: %s", target)
@@ -429,7 +429,9 @@ func TestPrivateViewReturnPreservesPageAcrossTicketExchange(t *testing.T) {
 	wireTarget := *target
 	wireTarget.Fragment = ""
 	wireTarget.RawFragment = ""
-	f.edge.ServeHost(consume, httptest.NewRequest(http.MethodGet, wireTarget.String(), nil), app.ID+"."+Domain)
+	consumeRequest := httptest.NewRequest(http.MethodGet, wireTarget.String(), nil)
+	consumeRequest.AddCookie(nonce)
+	f.edge.ServeHost(consume, consumeRequest, app.ID+"."+Domain)
 	clean, err := url.Parse(consume.Header().Get("Location"))
 	if err != nil || clean.Path != "/colors" || clean.Query().Get("palette") != "rose water" || clean.Query().Get("mesh_view") != "" {
 		t.Fatalf("ticket cleanup lost its app page: %s", clean)

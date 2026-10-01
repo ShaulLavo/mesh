@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/webauth"
 )
 
@@ -33,8 +34,14 @@ const ChunkSize = 256 << 10
 
 var idPattern = regexp.MustCompile(`^[0123456789abcdefghjkmnpqrstvwxyz]{4}$`)
 
-func ValidID(id string) bool { return idPattern.MatchString(id) && id != "apps" }
-func URL(id string) string   { return "https://" + id + "." + Domain }
+func ValidID(id string) bool {
+	return storedID(id) && id != "apps" && !serve.ReservedLabel(id)
+}
+
+// Stored IDs predate allocation reservations; syntax still confines their filesystem paths.
+func storedID(id string) bool { return idPattern.MatchString(id) }
+
+func URL(id string) string { return "https://" + id + "." + Domain }
 
 type Request struct {
 	Action     string   `json:"action"`

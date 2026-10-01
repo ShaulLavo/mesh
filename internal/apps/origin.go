@@ -893,7 +893,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	if q.Kind == "" {
 		q.Kind = "static"
 	}
-	if q.Action == "update" && !ValidID(q.ID) {
+	if q.Action == "update" && !storedID(q.ID) {
 		return Result{}, fmt.Errorf("app: update needs a valid app id, not %q", q.ID)
 	}
 	normalized, _ := json.Marshal(q)
@@ -1407,7 +1407,7 @@ func (o *Origin) stopLabel(ctx context.Context, label string) error {
 	return nil
 }
 func (o *Origin) cleanup(ctx context.Context, id string) error {
-	if !ValidID(id) {
+	if !storedID(id) {
 		return errors.New("app: invalid cleanup id")
 	}
 	// The snapshots hold the source being deleted.
@@ -2027,7 +2027,7 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 	if r.URL.RawQuery != "" {
 		rawURI += "?" + r.URL.RawQuery
 	}
-	if !ValidID(admission.ID) || admission.Method != r.Method || admission.URI != rawURI || !now.Before(admission.Until) || admission.Until.After(proof.IssuedAt.Add(admissionLifetime)) || admission.Host != admission.ID+"."+Domain {
+	if !storedID(admission.ID) || admission.Method != r.Method || admission.URI != rawURI || !now.Before(admission.Until) || admission.Until.After(proof.IssuedAt.Add(admissionLifetime)) || admission.Host != admission.ID+"."+Domain {
 		http.NotFound(w, r)
 		return true
 	}
