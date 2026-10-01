@@ -16,10 +16,15 @@ import (
 	"time"
 )
 
-const squatterPortEnv = "MESH_APPS_TEST_SQUAT_PORT"
+const (
+	squatterPortEnv = "MESH_APPS_TEST_SQUAT_PORT"
+	squatterHTTPEnv = "MESH_APPS_TEST_SQUAT_HTTP"
+)
 
 // TestListenerSquatterProcess only runs as a helper: the identity tests start
 // it as a separate process holding a port, as another program on the host would.
+// It can answer HTTP, and on "close" it closes only its listening socket, so
+// connections it already accepted stay open.
 func TestListenerSquatterProcess(t *testing.T) {
 	port := os.Getenv(squatterPortEnv)
 	if port == "" {
@@ -30,17 +35,45 @@ func TestListenerSquatterProcess(t *testing.T) {
 		fmt.Println("listen:", err)
 		os.Exit(1)
 	}
+	if os.Getenv(squatterHTTPEnv) != "" {
+		server := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "squatter")
+		})}
+		go func() { _ = server.Serve(listener) }()
+	}
 	fmt.Println("ready")
-	_, _ = io.Copy(io.Discard, os.Stdin)
-	_ = listener.Close()
+	commands := bufio.NewScanner(os.Stdin)
+	for commands.Scan() {
+		if commands.Text() == "close" {
+			_ = listener.Close()
+			fmt.Println("closed")
+		}
+	}
 	os.Exit(0)
 }
 
+type squatter struct {
+	stdin  io.Writer
+	stdout *bufio.Reader
+}
+
+// closeListener has the squatter close its listening socket and keep the
+// connections it accepted.
+func (s squatter) closeListener(t *testing.T) {
+	t.Helper()
+	if _, err := io.WriteString(s.stdin, "close\n"); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := s.stdout.ReadString('\n'); err != nil || strings.TrimSpace(line) != "closed" {
+		t.Fatalf("squatter did not close its listener: %q %v", line, err)
+	}
+}
+
 // startSquatter holds 127.0.0.1:port from another process until the test ends.
-func startSquatter(t *testing.T, port int) {
+func startSquatter(t *testing.T, port int, env ...string) squatter {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestListenerSquatterProcess$") //nolint:gosec // re-runs this test binary as a helper
-	cmd.Env = append(os.Environ(), squatterPortEnv+"="+strconv.Itoa(port))
+	cmd.Env = append(append(os.Environ(), squatterPortEnv+"="+strconv.Itoa(port)), env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -57,10 +90,12 @@ func startSquatter(t *testing.T, port int) {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
-	line, err := bufio.NewReader(stdout).ReadString('\n')
+	reader := bufio.NewReader(stdout)
+	line, err := reader.ReadString('\n')
 	if err != nil || strings.TrimSpace(line) != "ready" {
 		t.Fatalf("squatter on port %d did not start: %q %v", port, line, err)
 	}
+	return squatter{stdin: stdin, stdout: reader}
 }
 
 // squattedWorkers starts app workers that never listen, while another process
@@ -250,5 +285,41 @@ func TestCachedRouteFollowsTheVerifiedUpstream(t *testing.T) {
 	}
 	if withdrawn := cachedAppRoute(app, first, netip.AddrPort{}); withdrawn.Handler != nil {
 		t.Fatal("server app without a verified upstream kept a handler")
+	}
+}
+
+func TestRestoredListenerDoesNotReuseASquattersConnection(t *testing.T) {
+	f := newAppFixture(t)
+	workers := newServerWorkers(t, f)
+	port := freePort(t)
+	app := createServerAppOn(t, f, port)
+	initial := serveText(t, workerListener(t, workers, app), "app")
+	if code, body := serveResponse(t, f, app); code != http.StatusOK || body != "app" {
+		t.Fatalf("verified app %s answered %d %q", app.ID, code, body)
+	}
+	if err := initial.Close(); err != nil {
+		t.Fatal(err)
+	}
+	squatter := startSquatter(t, port, squatterHTTPEnv+"=1")
+	if code, body := serveResponse(t, f, app); body != "squatter" {
+		t.Fatalf("before the next Sync app %s answered %d %q; want the squatter, over a kept-alive connection", app.ID, code, body)
+	}
+	squatter.closeListener(t)
+	restored, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workers.mu.Lock()
+	workers.listeners["worker-app "+app.ID] = restored
+	workers.mu.Unlock()
+	serveText(t, restored, "restored")
+	if err := f.origin.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !edgeRecord(t, f, app.ID).Ready {
+		t.Fatalf("restored app %s is not ready at the edge", app.ID)
+	}
+	if code, body := serveResponse(t, f, app); code != http.StatusOK || body != "restored" {
+		t.Fatalf("after Sync verified the restored listener, app %s answered %d %q; want the app", app.ID, code, body)
 	}
 }
