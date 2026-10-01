@@ -3,11 +3,14 @@ package webauth
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"net/http"
+	"net/netip"
 	"slices"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 func approvalCode() (string, error) {
@@ -25,7 +28,26 @@ func codeHash(code string) string {
 	return hash(strings.ToLower(strings.ReplaceAll(strings.TrimSpace(code), "-", "")))
 }
 
-func (s *Service) Begin(ctx context.Context, w http.ResponseWriter, r *http.Request) (Pairing, error) {
+func (s *Service) Begin(ctx context.Context, w http.ResponseWriter, r *http.Request, ip netip.Addr) (Pairing, error) {
+	if err := ctx.Err(); err != nil {
+		return Pairing{}, fmt.Errorf("pending browser pairing: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now().UTC()
+	s.state.prune(now)
+	if p, err := s.pending(r, now); err == nil {
+		return p, nil
+	}
+	ip = ip.Unmap()
+	if !ip.IsValid() {
+		return Pairing{}, ErrPairing
+	}
+	buckets := pairingBuckets(ip)
+	oldest, err := s.pairingSlot(buckets, now)
+	if err != nil {
+		return Pairing{}, err
+	}
 	token, err := bearer()
 	if err != nil {
 		return Pairing{}, err
@@ -34,25 +56,213 @@ func (s *Service) Begin(ctx context.Context, w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		return Pairing{}, err
 	}
-	var pairing Pairing
-	err = s.change(ctx, func(d *state, now time.Time) error {
-		if len(d.Pairs) >= maxPairs {
-			return ErrCapacity
-		}
-		old, _ := browserIn(d, r, now)
-		p := pairRecord{CodeHash: codeHash(code), ExpiresAt: now.Add(pairTTL), ExistingID: old.ID}
-		if existing, err := cookieKey(r, PairCookie); err == nil {
-			delete(d.Pairs, existing)
-		}
-		d.Pairs[hash(token)] = p
-		pairing = Pairing{Code: code, ExpiresAt: p.ExpiresAt}
-		return nil
-	})
-	if err != nil {
-		return Pairing{}, err
+	if oldest != "" {
+		delete(s.state.Pairs, oldest)
 	}
-	writeCookie(w, PairCookie, token, pairing.ExpiresAt, s.now())
-	return pairing, nil
+	old, _ := browserIn(&s.state, r, now)
+	p := pairRecord{Code: code, Source: buckets[0].Key, CodeHash: codeHash(code), ExpiresAt: now.Add(pairTTL), ExistingID: old.ID,
+		PairingInfo: PairingInfo{CreatedAt: now, UserAgent: userAgentSummary(r.UserAgent()), SourceIP: ip.String()}}
+	if len(buckets) > 1 {
+		p.Aggregate = buckets[1].Key
+	}
+	s.state.Pairs[hash(token)] = p
+	s.recordPairingStart(buckets, now)
+	writeCookie(w, PairCookie, token, p.ExpiresAt, now)
+	return Pairing{Code: code, ExpiresAt: p.ExpiresAt}, nil
+}
+
+type pairingBucket struct {
+	Key           string
+	Starts, Slots int
+}
+
+func pairingBuckets(ip netip.Addr) []pairingBucket {
+	if ip.Is4() {
+		return []pairingBucket{{Key: ip.String(), Starts: maxSourceStarts, Slots: maxSourcePairs}}
+	}
+	return []pairingBucket{
+		{Key: netip.PrefixFrom(ip, 64).Masked().String(), Starts: maxSourceStarts, Slots: maxSourcePairs},
+		{Key: netip.PrefixFrom(ip, 48).Masked().String(), Starts: maxAggregateStarts, Slots: maxAggregatePairs},
+	}
+}
+
+func (s *Service) pairingSlot(buckets []pairingBucket, now time.Time) (string, error) {
+	for key, window := range s.sources {
+		if !now.Before(window.StartedAt.Add(time.Minute)) {
+			delete(s.sources, key)
+		}
+	}
+	victim := ""
+	for _, bucket := range buckets {
+		if s.sources[bucket.Key].Issued >= bucket.Starts {
+			return "", ErrRateLimited
+		}
+		candidate, err := s.bucketReplacement(bucket)
+		if err != nil {
+			return "", err
+		}
+		if victim == "" {
+			victim = candidate
+		}
+	}
+	if victim == "" && pendingPairCount(&s.state) >= maxPendingPairs {
+		victim = s.fullestPendingSource()
+	}
+	return victim, nil
+}
+
+func (s *Service) bucketReplacement(bucket pairingBucket) (string, error) {
+	count, oldest := 0, ""
+	for key, pair := range s.state.Pairs {
+		if pair.Source != bucket.Key && pair.Aggregate != bucket.Key {
+			continue
+		}
+		count++
+		if pair.Owner == "" && (oldest == "" || pair.CreatedAt.Before(s.state.Pairs[oldest].CreatedAt)) {
+			oldest = key
+		}
+	}
+	if count < bucket.Slots {
+		return "", nil
+	}
+	if oldest == "" {
+		return "", ErrCapacity
+	}
+	return oldest, nil
+}
+
+func pendingPairCount(d *state) int {
+	count := 0
+	for _, pair := range d.Pairs {
+		if pair.Owner == "" {
+			count++
+		}
+	}
+	return count
+}
+
+type pendingSource struct {
+	Count  int
+	Oldest string
+}
+
+func (s *Service) fullestPendingSource() string {
+	sources := map[string]pendingSource{}
+	for key, pair := range s.state.Pairs {
+		if pair.Owner != "" {
+			continue
+		}
+		source := sources[pair.Source]
+		source.Count++
+		if source.Oldest == "" || pair.CreatedAt.Before(s.state.Pairs[source.Oldest].CreatedAt) {
+			source.Oldest = key
+		}
+		sources[pair.Source] = source
+	}
+	fullest := pendingSource{}
+	for _, source := range sources {
+		if source.Count > fullest.Count || (source.Count == fullest.Count && s.state.Pairs[source.Oldest].CreatedAt.Before(s.state.Pairs[fullest.Oldest].CreatedAt)) {
+			fullest = source
+		}
+	}
+	return fullest.Oldest
+}
+
+func (s *Service) recordPairingStart(buckets []pairingBucket, now time.Time) {
+	for _, bucket := range buckets {
+		window, tracked := s.sources[bucket.Key]
+		if !tracked {
+			if len(s.sources) >= maxPairSources {
+				s.evictSourceWindow(buckets)
+			}
+			window.StartedAt = now
+		}
+		window.LastUsedAt = now
+		window.Issued++
+		s.sources[bucket.Key] = window
+	}
+}
+
+func bucketContains(buckets []pairingBucket, key string) bool {
+	for _, bucket := range buckets {
+		if bucket.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func windowLastUsed(window sourceWindow) time.Time {
+	if window.LastUsedAt.IsZero() {
+		return window.StartedAt
+	}
+	return window.LastUsedAt
+}
+
+func (s *Service) evictSourceWindow(keep []pairingBucket) {
+	oldest := ""
+	for key, window := range s.sources {
+		if bucketContains(keep, key) {
+			continue
+		}
+		if oldest == "" || windowLastUsed(window).Before(windowLastUsed(s.sources[oldest])) {
+			oldest = key
+		}
+	}
+	delete(s.sources, oldest)
+}
+
+func userAgentSummary(value string) string {
+	clean := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+			return -1
+		}
+		return r
+	}, value)
+	clean = strings.Join(strings.Fields(clean), " ")
+	if len([]rune(clean)) > 256 {
+		clean = string([]rune(clean)[:256])
+	}
+	if clean == "" {
+		return "Unknown browser"
+	}
+	return clean
+}
+
+func (s *Service) pending(r *http.Request, now time.Time) (Pairing, error) {
+	key, err := cookieKey(r, PairCookie)
+	if err != nil {
+		return Pairing{}, ErrPairing
+	}
+	p, ok := s.state.Pairs[key]
+	if !ok || !now.Before(p.ExpiresAt) || p.Code == "" {
+		return Pairing{}, ErrPairing
+	}
+	return Pairing{Code: p.Code, ExpiresAt: p.ExpiresAt}, nil
+}
+
+func (s *Service) Pending(ctx context.Context, r *http.Request) (Pairing, error) {
+	if err := ctx.Err(); err != nil {
+		return Pairing{}, fmt.Errorf("pending browser pairing: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pending(r, s.now())
+}
+
+func (s *Service) Inspect(ctx context.Context, code string) (PairingInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return PairingInfo{}, fmt.Errorf("inspect browser pairing: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, p, ok := findPair(&s.state, codeHash(code))
+	if !ok || p.Owner != "" || !s.now().Before(p.ExpiresAt) {
+		return PairingInfo{}, ErrPairing
+	}
+	info := p.PairingInfo
+	info.AgeSeconds = max(0, int64(s.now().Sub(p.CreatedAt).Seconds()))
+	return info, nil
 }
 
 func (s *Service) Approve(ctx context.Context, code, owner string) error {
@@ -71,6 +281,9 @@ func (s *Service) Approve(ctx context.Context, code, owner string) error {
 		key, p, ok := findPair(d, codeHash(code))
 		if !ok || p.Owner != "" {
 			return ErrPairing
+		}
+		if len(d.Pairs)-pendingPairCount(d) >= maxPairs {
+			return ErrCapacity
 		}
 		p.Owner = owner
 		d.Pairs[key] = p
