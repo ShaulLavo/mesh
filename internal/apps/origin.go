@@ -459,8 +459,11 @@ func (o *Origin) appendUpload(ctx context.Context, q Request) (Result, error) {
 	if !ok || !o.config.Now().Before(u.ExpiresAt) {
 		return Result{}, errors.New("app: upload not found or expired")
 	}
-	if len(q.Data) > ChunkSize || q.Offset < 0 || q.Offset+int64(len(q.Data)) > MaxArchive {
+	if len(q.Data) > ChunkSize || q.Offset < 0 {
 		return Result{}, errors.New("app: upload chunk exceeds limit")
+	}
+	if q.Offset+int64(len(q.Data)) > MaxArchive {
+		return Result{}, ErrArchiveTooLarge
 	}
 	f, err := os.OpenFile(o.uploadPath(u.ID), os.O_RDWR, 0600)
 	if err != nil {

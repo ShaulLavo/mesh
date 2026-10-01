@@ -220,7 +220,8 @@ func uploadApp(ctx context.Context, transport appTransport, directory string, re
 	if err != nil {
 		return appspkg.Result{}, err
 	}
-	archive := &appLimitedBuffer{limit: appspkg.MaxArchive}
+	// Pack refuses an archive over the limit the host enforces.
+	archive := &bytes.Buffer{}
 	digest, err := appspkg.Pack(ctx, root, archive)
 	if err != nil {
 		return appspkg.Result{}, err

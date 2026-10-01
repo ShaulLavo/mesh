@@ -29,6 +29,35 @@ func secretName(name string) bool {
 	return strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".key") || lower == "id_rsa" || lower == "id_ed25519" || lower == "credentials" || lower == "credentials.json" || lower == ".npmrc" || lower == ".netrc" || lower == ".pypirc" || lower == ".git-credentials"
 }
 
+// ErrArchiveTooLarge is what pack, upload and unpack all return for a
+// compressed archive over MaxArchive, so an owner sees one limit wherever the
+// archive is refused.
+var ErrArchiveTooLarge = errors.New("app: source archive exceeds 64 MiB compressed")
+
+// errSourceTooLarge is pack's and unpack's shared refusal of the expanded
+// source: MaxArchive bytes of file contents or maxSourceFiles files.
+var errSourceTooLarge = errors.New("app: source exceeds 64 MiB or 10000 files")
+
+const maxSourceFiles = 10000
+
+// archiveLimit refuses the write that would take the archive past MaxArchive.
+type archiveLimit struct {
+	w       io.Writer
+	written int64
+}
+
+func (l *archiveLimit) Write(p []byte) (int, error) {
+	if l.written+int64(len(p)) > MaxArchive {
+		return 0, ErrArchiveTooLarge
+	}
+	n, err := l.w.Write(p)
+	l.written += int64(n)
+	if err != nil {
+		return n, fmt.Errorf("app: write source archive: %w", err)
+	}
+	return n, nil
+}
+
 // Pack copies source, excluding environment files, credentials and generated dependencies.
 func Pack(ctx context.Context, dir string, w io.Writer) (string, error) {
 	canonical, err := filepath.EvalSymlinks(dir)
@@ -50,7 +79,7 @@ func Pack(ctx context.Context, dir string, w io.Writer) (string, error) {
 	}
 	defer func() { _ = root.Close() }()
 	h := sha256.New()
-	gz := gzip.NewWriter(io.MultiWriter(w, h))
+	gz := gzip.NewWriter(&archiveLimit{w: io.MultiWriter(w, h)})
 	tw := tar.NewWriter(gz)
 	var total int64
 	count := 0
@@ -82,8 +111,8 @@ func Pack(ctx context.Context, dir string, w io.Writer) (string, error) {
 		}
 		total += info.Size()
 		count++
-		if total > MaxArchive || count > 10000 {
-			return errors.New("app: source exceeds 64MiB or 10000 files")
+		if total > MaxArchive || count > maxSourceFiles {
+			return errSourceTooLarge
 		}
 		if err := tw.WriteHeader(&tar.Header{Name: filepath.ToSlash(name), Mode: int64(info.Mode().Perm()), Size: info.Size()}); err != nil {
 			return err
@@ -121,7 +150,7 @@ func unpack(archive, dir, digest string) error {
 		return err
 	}
 	if info.Size() > MaxArchive {
-		return errors.New("app: compressed archive exceeds limit")
+		return ErrArchiveTooLarge
 	}
 	h := sha256.New()
 	if _, err = io.Copy(h, io.LimitReader(f, MaxArchive+1)); err != nil {
@@ -163,8 +192,11 @@ func unpack(archive, dir, digest string) error {
 		}
 		total += header.Size
 		count++
-		if header.Size < 0 || total > MaxArchive || count > 10000 {
-			return errors.New("app: expanded archive exceeds limits")
+		if header.Size < 0 {
+			return errors.New("app: unsafe archive entry size")
+		}
+		if total > MaxArchive || count > maxSourceFiles {
+			return errSourceTooLarge
 		}
 		if err := root.MkdirAll(path.Dir(clean), 0700); err != nil {
 			return err
