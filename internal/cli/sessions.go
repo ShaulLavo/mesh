@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"syscall"
 	"time"
 
@@ -66,37 +67,64 @@ func List() ([]Session, error) {
 		return nil, fmt.Errorf("read sessions: %w", err)
 	}
 
-	var out []Session
-	activity := make(map[string]time.Time, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		dir := filepath.Join(root, e.Name())
-		if _, err := os.Lstat(paths.Forgotten(dir)); err == nil {
-			continue
-		}
-		// A directory still carrying the launching marker has not published
-		// itself: its metadata may be written but its socket is not accepting
-		// yet, so listing it reports a live session as interrupted. The
-		// daemon's catalog already skips these; this is the same rule.
-		if _, err := os.Lstat(paths.Launching(dir)); err == nil {
-			continue
-		}
-		meta, err := worker.ReadMeta(dir)
-		if err != nil {
-			continue // half-created or hand-deleted; not our problem to report
-		}
-		liveness := probeLiveness(dir, &meta)
-		out = append(out, Session{Meta: meta, Dir: dir, Liveness: liveness})
-		row := protocol.SessionInfo{CreatedAt: meta.CreatedAt, LastAttachedAt: meta.LastAttachedAt}
-		if saved, err := recovery.Read(dir); err == nil && saved.SessionID == meta.ID {
-			row.Recovery = &saved
-		}
-		activity[meta.ID] = row.LastActiveAt()
+	rows := make([]sessionListingRow, len(entries))
+	jobs := make(chan int)
+	var probes sync.WaitGroup
+	for range min(8, len(entries)) {
+		probes.Go(func() {
+			for i := range jobs {
+				rows[i] = readSessionListingRow(filepath.Join(root, entries[i].Name()))
+			}
+		})
 	}
-	sort.SliceStable(out, func(i, j int) bool { return activity[out[i].ID].After(activity[out[j].ID]) })
+	for i, entry := range entries {
+		if entry.IsDir() {
+			jobs <- i
+		}
+	}
+	close(jobs)
+	probes.Wait()
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].activeAt.After(rows[j].activeAt) })
+	var out []Session
+	for _, row := range rows {
+		if row.current.Dir != "" {
+			out = append(out, row.current)
+		}
+	}
 	return out, nil
+}
+
+type sessionListingRow struct {
+	current  Session
+	activeAt time.Time
+}
+
+func readSessionListingRow(dir string) sessionListingRow {
+	current, ok := readLocalSession(dir)
+	if !ok {
+		return sessionListingRow{}
+	}
+	activity := protocol.SessionInfo{CreatedAt: current.CreatedAt, LastAttachedAt: current.LastAttachedAt}
+	if saved, err := recovery.Read(current.Dir); err == nil && saved.SessionID == current.ID {
+		activity.Recovery = &saved
+	}
+	return sessionListingRow{current: current, activeAt: activity.LastActiveAt()}
+}
+
+func readLocalSession(dir string) (Session, bool) {
+	if _, err := os.Lstat(paths.Forgotten(dir)); err == nil {
+		return Session{}, false
+	}
+	// Unpublished workers may have metadata before their socket accepts clients.
+	if _, err := os.Lstat(paths.Launching(dir)); err == nil {
+		return Session{}, false
+	}
+	meta, err := worker.ReadMeta(dir)
+	if err != nil {
+		return Session{}, false
+	}
+	liveness := probeLiveness(dir, &meta)
+	return Session{Meta: meta, Dir: dir, Liveness: liveness}, true
 }
 
 // ErrNoLocalSession reports that an ID names no session on this host. It is
@@ -107,13 +135,21 @@ var ErrNoLocalSession = errors.New("session not found on this host")
 // Find returns the session with the given ID.
 func Find(id string) (Session, error) {
 	id = session.NormalizeID(id)
-	all, err := List()
-	if err != nil {
-		return Session{}, err
+	name := filepath.Base(id)
+	if name == "." || name == ".." || name != id {
+		return Session{}, fmt.Errorf("no session %s on this host: %w", id, ErrNoLocalSession)
 	}
-	for _, s := range all {
-		if s.ID == id {
-			return s, nil
+	dir, err := paths.SessionDir(name)
+	if err != nil {
+		return Session{}, fmt.Errorf("locate session %s: %w", id, err)
+	}
+	entry, err := os.Lstat(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Session{}, fmt.Errorf("read session %s directory: %w", id, err)
+	}
+	if err == nil && entry.IsDir() {
+		if current, ok := readLocalSession(dir); ok && current.ID == id {
+			return current, nil
 		}
 	}
 	return Session{}, fmt.Errorf("no session %s on this host: %w", id, ErrNoLocalSession)
