@@ -1,22 +1,20 @@
 package cli
 
-import (
-	"path/filepath"
+import "github.com/shaul/mesh/internal/identity"
 
-	"github.com/shaul/mesh/internal/identity"
-)
-
-func withoutKnownSelfHost(hosts []HostRecord, sessionDir string) []HostRecord {
-	local, err := identity.Load(filepath.Dir(filepath.Dir(sessionDir)))
+func withoutThisHost(stateDir string, hosts []HostRecord) ([]HostRecord, string) {
+	self, err := identity.Load(stateDir)
 	if err != nil {
-		return hosts
+		return hosts, localHostAlias
 	}
+	alias := localHostAlias
 	remote := make([]HostRecord, 0, len(hosts))
 	for _, host := range hosts {
-		if host.ID == local.ID && host.MeshIdentity == local.ID {
+		if host.ID == self.ID && host.MeshIdentity == self.ID {
+			alias = host.Alias
 			continue
 		}
 		remote = append(remote, host)
 	}
-	return remote
+	return remote, alias
 }

@@ -63,7 +63,7 @@ func TestListOmitsThisHostFromTheFanOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hosts, alias := withoutThisHost(stateDir, []HostRecord{{Alias: "omarchy", ID: self.ID}, {Alias: "mac", ID: "mac-id"}})
+	hosts, alias := withoutThisHost(stateDir, []HostRecord{{Alias: "omarchy", ID: self.ID, MeshIdentity: self.ID}, {Alias: "mac", ID: "mac-id"}})
 	if alias != "omarchy" || len(hosts) != 1 || hosts[0].Alias != "mac" {
 		t.Fatalf("withoutThisHost = %+v, %q", hosts, alias)
 	}
