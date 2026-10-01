@@ -124,9 +124,12 @@ type AttachOptions struct {
 
 // AttachResult reports how an attachment ended.
 type AttachResult struct {
-	Detached bool
-	Exited   bool
-	ExitCode int
+	// Established means the worker acknowledged this claim, even if the
+	// connection later failed or the client cancelled.
+	Established bool
+	Detached    bool
+	Exited      bool
+	ExitCode    int
 	// LastSeq is the offset to resume from next time.
 	LastSeq uint64
 }
@@ -484,6 +487,7 @@ func (s *attachmentOutput) control(message protocol.Control) (bool, error) {
 func (s *attachmentOutput) attached(message protocol.Control) error {
 	first := !s.acknowledged
 	s.acknowledged = true
+	s.result.Established = true
 	if err := s.updateKeys(message); err != nil {
 		return err
 	}

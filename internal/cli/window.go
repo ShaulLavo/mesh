@@ -235,7 +235,9 @@ func (a *application) attachWindow(cmd *cobra.Command, current Session, socket s
 	a.noticeBeforeAttachment(cmd)
 	result, err := Attach(cmd.Context(), opts)
 	if err != nil {
-		restore()
+		if !result.Established {
+			restore()
+		}
 		return err
 	}
 	if result.Exited && result.ExitCode != 0 {

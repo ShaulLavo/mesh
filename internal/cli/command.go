@@ -956,7 +956,9 @@ func (a *application) attachResolvedWithContainment(
 	a.noticeBeforeAttachment(cmd)
 	result, err := Attach(cmd.Context(), options)
 	if err != nil {
-		restore()
+		if !result.Established {
+			restore()
+		}
 		return err
 	}
 	switch {
@@ -1502,7 +1504,9 @@ func (a *application) runLocal(cmd *cobra.Command, command []string, resume bool
 	a.noticeBeforeAttachment(cmd)
 	result, err := Attach(cmd.Context(), opts)
 	if err != nil {
-		restore()
+		if !result.Established {
+			restore()
+		}
 		return err
 	}
 	return reportAttachment(cmd, resolved, result)
@@ -1572,7 +1576,9 @@ func (a *application) attachCommand() *cobra.Command {
 			a.noticeBeforeAttachment(cmd)
 			result, err := Attach(cmd.Context(), opts)
 			if err != nil {
-				restore()
+				if !result.Established {
+					restore()
+				}
 				return err
 			}
 			return reportAttachment(cmd, attached, result)
