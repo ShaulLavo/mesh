@@ -84,12 +84,11 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		http.Redirect(w, r, appReturn(id, URL(id)+r.URL.RequestURI()), http.StatusSeeOther) //nolint:gosec // appReturn fixes this consumed ticket redirect to the app host.
 		return true
 	}
-	viewer := e.viewer(r, id)
-	r = r.WithContext(context.WithValue(r.Context(), viewIdentityKey{}, viewer))
+	viewer, _ := e.auth.ViewSession(r.Context(), r, id)
 	if app.Visibility == "private" {
 		owner := networkOwns(r, app.Owner)
 		if !owner {
-			owner = viewer.owner == app.Owner
+			owner = viewer.Owner == app.Owner
 		}
 		if !owner || !serve.AmbientOwnerAllowed(r, URL(id), serve.RequireWebSocketOrigin) {
 			origin := r.Header.Get("Origin")
@@ -210,8 +209,8 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 				}
 			}}
 		}
-		viewer := r.Context().Value(viewIdentityKey{}).(viewIdentity)
-		return apppill.Inject(response, apppill.Config{AppID: id, ManagementOrigin: ManagementOrigin, Private: app.Visibility == "private", Owns: networkOwns(r, app.Owner) || viewer.owner == app.Owner})
+		viewer, _ := e.auth.ViewSession(r.Context(), r, id)
+		return apppill.Inject(response, apppill.Config{AppID: id, ManagementOrigin: ManagementOrigin, Private: app.Visibility == "private", Owns: networkOwns(r, app.Owner) || viewer.Owner == app.Owner})
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		if app.Visibility == "private" {

@@ -68,7 +68,6 @@ type edgeMutation struct {
 type Edge struct {
 	pendingRetire map[string]Record
 	runtime       atomic.Pointer[map[string]*edgeRuntime]
-	viewEpoch     atomic.Uint64
 	transports    proxyTransports
 	mu            sync.Mutex
 	config        EdgeConfig
@@ -521,22 +520,6 @@ type admittedRequest struct {
 	browserID string
 }
 
-type viewIdentity struct {
-	appID, owner, browserID string
-	epoch                   uint64
-	expiresAt               time.Time
-}
-type viewIdentityKey struct{}
-
-func (e *Edge) viewer(r *http.Request, id string) viewIdentity {
-	epoch := e.viewEpoch.Load()
-	if cached, ok := r.Context().Value(viewIdentityKey{}).(viewIdentity); ok && cached.appID == id && cached.epoch == epoch && (cached.owner == "" || e.config.Now().Before(cached.expiresAt)) {
-		return cached
-	}
-	view, _ := e.auth.ViewSession(r.Context(), r, id)
-	return viewIdentity{appID: id, owner: view.Owner, browserID: view.BrowserID, epoch: epoch, expiresAt: view.ExpiresAt}
-}
-
 func (rt *edgeRuntime) cancelWhere(match func(admittedRequest) bool) {
 	for token, request := range rt.inflight {
 		if match(request) {
@@ -558,7 +541,6 @@ func (e *Edge) revokeBrowser(ctx context.Context, owner, browserID string) error
 		return fmt.Errorf("app: revoke browser %s for owner %s: %w", browserID, owner, err)
 	}
 	// Revocation is already durable in webauth even if the subsequent edge save fails.
-	e.viewEpoch.Add(1)
 	for _, rt := range *e.runtime.Load() {
 		if rt.record.Load().Owner == owner {
 			rt.cancelWhere(func(request admittedRequest) bool { return request.browserID == browserID })
@@ -582,8 +564,8 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 		rt.mu.Unlock()
 		return Record{}, nil, nil, errors.New("app unavailable")
 	}
-	viewer := e.viewer(r, id)
-	owner := serve.AmbientOwnerAllowed(r, URL(id), serve.RequireWebSocketOrigin) && (viewer.owner == app.Owner || networkOwns(r, app.Owner))
+	viewer, _ := e.auth.ViewSession(r.Context(), r, id)
+	owner := serve.AmbientOwnerAllowed(r, URL(id), serve.RequireWebSocketOrigin) && (viewer.Owner == app.Owner || networkOwns(r, app.Owner))
 	if app.Visibility == "private" && !owner {
 		rt.mu.Unlock()
 		return Record{}, nil, nil, errors.New("app private")
@@ -592,11 +574,11 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 		app.ExpiresAt = maxTime(app.ExpiresAt, e.config.Now().UTC().Add(IdleTTL))
 		rt.record.Store(&app)
 	}
-	ctx, cancel := context.WithCancel(context.WithValue(r.Context(), viewIdentityKey{}, viewer))
+	ctx, cancel := context.WithCancel(r.Context())
 	if rt.inflight == nil {
 		rt.inflight = map[string]admittedRequest{}
 	}
-	rt.inflight[token] = admittedRequest{cancel: cancel, owner: owner, browserID: viewer.browserID}
+	rt.inflight[token] = admittedRequest{cancel: cancel, owner: owner, browserID: viewer.BrowserID}
 	rt.mu.Unlock()
 	release := func() {
 		cancel()
