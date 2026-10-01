@@ -79,11 +79,11 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 		t.Fatal(err)
 	}
 
-	controlPort := reserveTCPPort(t, "127.0.0.1")
+	controlListener, controlPort := newTCPListener(t, "127.0.0.1:0")
 	daemonCtx, stopDaemon := context.WithCancel(context.Background())
 	daemonDone := runRuntime(t, daemonCtx, ListenerConfig{
 		StateDir: originState, TailnetAddrs: []string{"127.0.0.1"}, TailnetPort: controlPort, WebSocketPath: "/control/ws",
-	}, clientServer.Handle)
+	}, clientServer.Handle, controlListener)
 	waitForHTTPStatus(t, fmt.Sprintf("http://127.0.0.1:%d/not-control", controlPort), http.StatusNotFound)
 	t.Cleanup(func() {
 		stopDaemon()

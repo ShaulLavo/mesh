@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -41,6 +42,7 @@ type demandRuntime interface {
 	Reserve(meshserve.Service) error
 	Sync([]meshserve.Service)
 	Status(string) *protocol.ServiceDemand
+	Retiring() []protocol.ServiceInfo
 	Start(context.Context, string) error
 	Stop(context.Context, string) error
 }
@@ -55,6 +57,7 @@ func (disabledDemand) Reserve(service meshserve.Service) error {
 }
 func (disabledDemand) Sync([]meshserve.Service)              {}
 func (disabledDemand) Status(string) *protocol.ServiceDemand { return nil }
+func (disabledDemand) Retiring() []protocol.ServiceInfo      { return nil }
 func (disabledDemand) Start(context.Context, string) error {
 	return errors.New("daemon: on-demand routes are not available")
 }
@@ -351,8 +354,18 @@ func (c *serviceController) list(ctx context.Context, request protocol.Control) 
 	return protocol.Control{
 		Type:      protocol.TypeServiceListed,
 		RequestID: request.RequestID,
-		Services:  c.serviceStatuses(ctx, registered),
+		Services:  withRetiring(c.serviceStatuses(ctx, registered), c.demand.Retiring()),
 	}, nil
+}
+
+// withRetiring lists removed routes that may still own a session among the
+// registered ones, in name order, so their owner sees what is left running.
+// Registered services keep their place when the list is full.
+func withRetiring(services, retiring []protocol.ServiceInfo) []protocol.ServiceInfo {
+	room := max(meshserve.MaximumServices-len(services), 0)
+	services = append(services, retiring[:min(room, len(retiring))]...)
+	slices.SortStableFunc(services, func(a, b protocol.ServiceInfo) int { return strings.Compare(a.Name, b.Name) })
+	return services
 }
 
 // catalog returns the registered services once the durable catalog is known

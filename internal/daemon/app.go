@@ -61,6 +61,7 @@ type Config struct {
 }
 
 type runOptions struct {
+	listen                  func(string, string) (net.Listener, error)
 	now                     func() time.Time
 	bootID                  func() string
 	discoverSelf            func(context.Context) (tailnet.Peer, error)
@@ -522,6 +523,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}, server.Handle)
 	if err != nil {
 		return err
+	}
+	if opts.listen != nil {
+		listener.listen = opts.listen
 	}
 	if cfg.SSHPort != 0 {
 		var sessionHandler sshd.SessionHandler

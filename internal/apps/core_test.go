@@ -161,6 +161,7 @@ func newAppFixture(t *testing.T) *appFixture {
 		t.Fatal(err)
 	}
 	f.origin = origin
+	t.Cleanup(origin.Close)
 	return f
 }
 func (f *appFixture) openEdge(t *testing.T) *Edge {
@@ -171,6 +172,7 @@ func (f *appFixture) openEdge(t *testing.T) *Edge {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(e.Close)
 	return e
 }
 func (f *appFixture) signed(t *testing.T, q Request) Signed {

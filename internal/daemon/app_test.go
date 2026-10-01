@@ -37,8 +37,6 @@ func TestRunRestoresPersistedServicesOnRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	port := reserveTCPPort(t, "127.0.0.1")
-	url := fmt.Sprintf("http://127.0.0.1:%d/site/", port)
 	options := runOptions{
 		now:    func() time.Time { return catalogTestTime },
 		bootID: func() string { return "boot-a" },
@@ -49,6 +47,9 @@ func TestRunRestoresPersistedServicesOnRestart(t *testing.T) {
 		reconcileInterval: time.Hour,
 	}
 	for restart := 0; restart < 2; restart++ {
+		listener, port := newTCPListener(t, "127.0.0.1:0")
+		url := fmt.Sprintf("http://127.0.0.1:%d/site/", port)
+		options.listen = useTCPListeners(listener)
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func() {

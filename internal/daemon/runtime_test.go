@@ -305,7 +305,7 @@ func TestServeAllowsLocalOnlyConfiguration(t *testing.T) {
 func TestServeWebSocketUsesExactAddressAndPath(t *testing.T) {
 	t.Parallel()
 
-	port := reserveTCPPort(t, "127.0.0.1")
+	listener, port := newTCPListener(t, "127.0.0.1:0")
 	stateDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runRuntime(t, ctx, ListenerConfig{
@@ -313,7 +313,7 @@ func TestServeWebSocketUsesExactAddressAndPath(t *testing.T) {
 		TailnetAddrs:  []string{"127.0.0.1"},
 		TailnetPort:   port,
 		WebSocketPath: "/mesh",
-	}, echoOneFrame)
+	}, echoOneFrame, listener)
 
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 	waitForHTTPStatus(t, baseURL+"/wrong", http.StatusNotFound)
@@ -350,7 +350,7 @@ func TestServeWebSocketUsesExactAddressAndPath(t *testing.T) {
 }
 
 func TestServeHTTPSUsesLoopbackServicesOnlyAndHotReloads(t *testing.T) {
-	port := reserveTCPPort(t, "127.0.0.1")
+	listener, port := newTCPListener(t, "127.0.0.1:0")
 	store, err := dnsname.NewBundleStore(filepath.Join(t.TempDir(), "tls"), dnsname.WildcardName)
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +375,7 @@ func TestServeHTTPSUsesLoopbackServicesOnlyAndHotReloads(t *testing.T) {
 		PrivateName: func() string { return "probe.mesh.shaulavo.dev" },
 	}, func(context.Context, transport.Conn) error {
 		return errors.New("terminal handler reached from HTTPS")
-	})
+	}, listener)
 	waitForTCPRuntime(t, net.JoinHostPort("127.0.0.1", fmt.Sprint(port)))
 	if connection, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.2", fmt.Sprint(port)), 100*time.Millisecond); err == nil {
 		_ = connection.Close()
@@ -1145,11 +1145,27 @@ func echoOneFrame(_ context.Context, conn transport.Conn) error {
 	return conn.WriteFrame(frame)
 }
 
-func runRuntime(t *testing.T, ctx context.Context, cfg ListenerConfig, handler transport.Handler) <-chan error {
+func runRuntime(t *testing.T, ctx context.Context, cfg ListenerConfig, handler transport.Handler, listeners ...net.Listener) <-chan error {
 	t.Helper()
 	done := make(chan error, 1)
+	if len(listeners) == 0 {
+		go func() { done <- Serve(ctx, cfg, handler) }()
+		return done
+	}
+	normalized, err := validateListenerConfig(ctx, cfg, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireDaemonLock(filepath.Join(normalized.stateDir, daemonLockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized.listen = useTCPListeners(listeners...)
 	go func() {
-		done <- Serve(ctx, cfg, handler)
+		defer func() { _ = lock.release() }()
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		done <- serveListeners(runCtx, cancel, normalized, handler)
 	}()
 	return done
 }
@@ -1207,17 +1223,29 @@ func waitSignal(t *testing.T, signal <-chan struct{}, description string) {
 	}
 }
 
-func reserveTCPPort(t *testing.T, address string) uint16 {
+func newTCPListener(t *testing.T, address string) (net.Listener, uint16) {
 	t.Helper()
-	listener, err := net.Listen("tcp4", net.JoinHostPort(address, "0"))
+	listener, err := net.Listen("tcp4", address)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = listener.Close() })
 	port := uint16(listener.Addr().(*net.TCPAddr).Port) //nolint:gosec // net.TCPAddr ports are bounded to uint16
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
+	return listener, port
+}
+
+func useTCPListeners(listeners ...net.Listener) func(string, string) (net.Listener, error) {
+	bound := make(map[string]net.Listener, len(listeners))
+	for _, listener := range listeners {
+		bound[listener.Addr().String()] = listener
 	}
-	return port
+	return func(network, address string) (net.Listener, error) {
+		if listener, ok := bound[address]; ok {
+			delete(bound, address)
+			return listener, nil
+		}
+		return net.Listen(network, address)
+	}
 }
 
 func waitForHTTPStatus(t *testing.T, url string, want int) {

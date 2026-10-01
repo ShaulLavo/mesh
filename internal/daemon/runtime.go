@@ -74,6 +74,7 @@ type ListenerConfig struct {
 }
 
 type listenerConfig struct {
+	listen                     func(string, string) (net.Listener, error)
 	stateDir                   string
 	tailnetAddrs               []netip.Addr
 	tailnetPort                uint16
@@ -134,7 +135,7 @@ func serveListeners(ctx context.Context, cancel context.CancelFunc, normalized l
 		return err
 	}
 
-	tailnetListeners, bindErrors := listenTailnet(normalized.tailnetAddrs, normalized.tailnetPort)
+	tailnetListeners, bindErrors := listenTailnet(normalized.tailnetAddrs, normalized.tailnetPort, normalized.listen)
 	if len(normalized.tailnetAddrs) > 0 && (len(tailnetListeners) == 0 || normalized.requireAllTailnetListeners && len(bindErrors) > 0) {
 		closeErr := unixListener.Close()
 		for _, listener := range tailnetListeners {
@@ -147,7 +148,7 @@ func serveListeners(ctx context.Context, cancel context.CancelFunc, normalized l
 	}
 	var httpsListener net.Listener
 	if normalized.httpsPort != 0 {
-		httpsListener, err = net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(normalized.httpsPort))))
+		httpsListener, err = normalized.listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(normalized.httpsPort))))
 		if err != nil {
 			closeErrors := []error{unixListener.Close()}
 			for _, listener := range tailnetListeners {
@@ -158,7 +159,7 @@ func serveListeners(ctx context.Context, cancel context.CancelFunc, normalized l
 	}
 	var publicListener net.Listener
 	if normalized.publicListenAddress != "" {
-		publicListener, err = net.Listen("tcp", normalized.publicListenAddress)
+		publicListener, err = normalized.listen("tcp", normalized.publicListenAddress)
 		if err != nil {
 			closeErrors := []error{unixListener.Close()}
 			for _, listener := range tailnetListeners {
@@ -353,6 +354,7 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 	}
 
 	normalized := listenerConfig{
+		listen:                     net.Listen,
 		stateDir:                   filepath.Clean(cfg.StateDir),
 		tailnetPort:                cfg.TailnetPort,
 		webSocketPath:              cfg.WebSocketPath,
@@ -469,7 +471,7 @@ func validateWebSocketPath(value string) error {
 	return nil
 }
 
-func listenTailnet(addrs []netip.Addr, port uint16) ([]net.Listener, []error) {
+func listenTailnet(addrs []netip.Addr, port uint16, listen func(string, string) (net.Listener, error)) ([]net.Listener, []error) {
 	listeners := make([]net.Listener, 0, len(addrs))
 	var listenErrors []error
 	service := strconv.Itoa(int(port))
@@ -479,7 +481,7 @@ func listenTailnet(addrs []netip.Addr, port uint16) ([]net.Listener, []error) {
 			network = "tcp4"
 		}
 		endpoint := net.JoinHostPort(addr.String(), service)
-		listener, err := net.Listen(network, endpoint)
+		listener, err := listen(network, endpoint)
 		if err != nil {
 			listenErrors = append(listenErrors, fmt.Errorf("daemon: bind Tailnet address %s: %w", endpoint, err))
 			continue
