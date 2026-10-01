@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -167,8 +169,9 @@ func TestInflightReleaseDeletesEmptyEntries(t *testing.T) {
 		}
 		release()
 	}
-	if len(f.edge.inflight) != 0 {
-		t.Fatalf("inflight retains %d empty app maps", len(f.edge.inflight))
+	rt := (*f.edge.runtime.Load())[app.ID]
+	if rt.inflight != nil {
+		t.Fatalf("inflight retains an empty app map")
 	}
 }
 func countingHTTPServer(t *testing.T, handler http.Handler) (*httptest.Server, *atomic.Int64) {
@@ -220,6 +223,11 @@ func TestProxyConnectionsAreReused(t *testing.T) {
 	}
 }
 func BenchmarkAppAdmission(b *testing.B) {
+	for _, tombstones := range []int{0, 1000, 16000} {
+		b.Run(fmt.Sprintf("tombstones=%d", tombstones), func(b *testing.B) { benchmarkAppAdmission(b, tombstones) })
+	}
+}
+func benchmarkAppAdmission(b *testing.B, tombstones int) {
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		b.Fatal(err)
@@ -227,7 +235,12 @@ func BenchmarkAppAdmission(b *testing.B) {
 	now := time.Now()
 	store := newMemoryAppStore()
 	app := Record{ID: "7k3d", Owner: identityFor(key), Kind: "static", Status: "active", Visibility: "public", Ready: true, Generation: 1, ExpiresAt: now.Add(IdleTTL)}
-	if err := save(context.Background(), store, "apps.edge", edgeState{Apps: map[string]Record{app.ID: app}, Owners: map[string]ownerState{}}); err != nil {
+	apps := map[string]Record{app.ID: app}
+	for n := range tombstones {
+		id := fmt.Sprintf("gone-%d", n)
+		apps[id] = Record{ID: id, Status: "deleted", Cleanup: "complete"}
+	}
+	if err := save(context.Background(), store, "apps.edge", edgeState{Apps: apps, Owners: map[string]ownerState{}}); err != nil {
 		b.Fatal(err)
 	}
 	edge, err := NewEdge(context.Background(), EdgeConfig{Store: store, Key: key, Now: func() time.Time { return now }, Resolve: func(context.Context, string) (netip.AddrPort, error) {
@@ -236,6 +249,7 @@ func BenchmarkAppAdmission(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	b.Cleanup(edge.Close)
 	s := &activityCountingStore{memoryAppStore: store}
 	edge.config.Store = s
 	r := httptest.NewRequest(http.MethodGet, URL(app.ID), nil)
@@ -249,4 +263,196 @@ func BenchmarkAppAdmission(b *testing.B) {
 		release()
 	}
 	b.ReportMetric(float64(s.writes.Load())/float64(b.N), "writes/op")
+}
+
+func TestWarmAdmissionDoesNotTakeEdgeMutationLock(t *testing.T) {
+	f := newAppFixture(t)
+	app := publicStaticApp(t, f)
+	store := countedActivity(t, f)
+	f.edge.mu.Lock()
+	defer f.edge.mu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		_, _, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(app.ID), nil), app.ID)
+		if release != nil {
+			release()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("warm admission waited for the edge mutation mutex")
+	}
+	if store.writes.Load() != 0 {
+		t.Fatal("warm admission wrote edge state")
+	}
+}
+func TestConcurrentActivityCoalescesDeadlineWrites(t *testing.T) {
+	f := newAppFixture(t)
+	app := publicStaticApp(t, f)
+	store := countedActivity(t, f)
+	f.now = f.now.Add(time.Minute)
+	var requests sync.WaitGroup
+	errors := make(chan error, 32)
+	for range 32 {
+		requests.Go(func() {
+			_, _, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(app.ID), nil), app.ID)
+			if release != nil {
+				release()
+			}
+			errors <- err
+		})
+	}
+	requests.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if store.writes.Load() != 1 {
+		t.Fatalf("simultaneous deadline crossings wrote %d times, want 1", store.writes.Load())
+	}
+	restarted := f.openEdge(t)
+	current, _, err := restarted.lookup(context.Background(), app.ID, false)
+	if err != nil || !current.ExpiresAt.Equal(f.now.Add(IdleTTL)) {
+		t.Fatalf("coalesced deadline did not survive restart: %v", err)
+	}
+}
+func TestRevokedViewIsRecheckedAfterOriginResolution(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	forwarded := networkOrigin(t, f)
+	owner := pairedOwner(t, f)
+	view := viewCookie(t, f, owner, app.ID)
+	resolve := f.edge.config.Resolve
+	entered, continueResolve := make(chan struct{}), make(chan struct{})
+	f.edge.config.Resolve = func(ctx context.Context, owner string) (netip.AddrPort, error) {
+		close(entered)
+		<-continueResolve
+		return resolve(ctx, owner)
+	}
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r := httptest.NewRequest(http.MethodGet, URL(app.ID), nil)
+		r.AddCookie(view)
+		f.edge.ServeHost(response, r, app.ID+"."+Domain)
+	}()
+	<-entered
+	r := httptest.NewRequest(http.MethodGet, ManagementOrigin, nil)
+	r.AddCookie(owner)
+	browser, err := f.edge.auth.Browser(context.Background(), r)
+	if err != nil {
+		close(continueResolve)
+		<-done
+		t.Fatal(err)
+	}
+	_, err = f.origin.Handle(context.Background(), Request{Action: "browser.revoke", BrowserID: browser.ID})
+	close(continueResolve)
+	<-done
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusForbidden || forwarded.Load() != 0 {
+		t.Fatalf("revoked cached view reached origin: status=%d forwarded=%d", response.Code, forwarded.Load())
+	}
+}
+func TestStaleStreamActivityDoesNotRefreshReplacement(t *testing.T) {
+	f := newAppFixture(t)
+	app := publicStaticApp(t, f)
+	f.seq = f.edge.state.Owners[identityFor(f.ownerKey)].Sequence
+	f.operation(t, Request{Action: "activate", ID: app.ID, UploadID: "replacement"})
+	before, _, err := f.edge.lookup(context.Background(), app.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.now = f.now.Add(time.Second)
+	if _, _, err := f.edge.activity(context.Background(), app); err != nil {
+		t.Fatal(err)
+	}
+	after, _, err := f.edge.lookup(context.Background(), app.ID, false)
+	if err != nil || !after.ExpiresAt.Equal(before.ExpiresAt) {
+		t.Fatal("old stream refreshed the new generation")
+	}
+}
+func TestRouteHandlersFollowRevisionNotLease(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	before := (*f.origin.routes.Load())[app.ID]
+	f.origin.publishRoutes()
+	same := (*f.origin.routes.Load())[app.ID]
+	if before.Handler == nil || before.Handler != same.Handler {
+		t.Fatal("static handler rebuilt without a revision change")
+	}
+	changed := f.origin.state.Apps[app.ID]
+	changed.Record.Revision = "replacement"
+	f.origin.state.Apps[app.ID] = changed
+	f.origin.publishRoutes()
+	after := (*f.origin.routes.Load())[app.ID]
+	if after.Handler == before.Handler {
+		t.Fatal("static handler reused across revisions")
+	}
+}
+
+type pausedActivityStore struct {
+	*memoryAppStore
+	paused           atomic.Bool
+	entered, release chan struct{}
+}
+
+func (s *pausedActivityStore) SaveAppState(ctx context.Context, key string, value []byte) error {
+	if key == "apps.edge" && s.paused.CompareAndSwap(false, true) {
+		close(s.entered)
+		<-s.release
+	}
+	return s.memoryAppStore.SaveAppState(ctx, key, value)
+}
+func TestDeadlineFlushDoesNotBlockOrEraseOtherAppActivity(t *testing.T) {
+	f := newAppFixture(t)
+	first := publicStaticApp(t, f)
+	f.now = f.now.Add(time.Minute)
+	second := publicStaticApp(t, f)
+	var clock atomic.Int64
+	clock.Store(f.now.UnixNano())
+	f.edge.config.Now = func() time.Time { return time.Unix(0, clock.Load()) }
+	store := &pausedActivityStore{memoryAppStore: f.edgeStore, entered: make(chan struct{}), release: make(chan struct{})}
+	f.edge.config.Store = store
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(store.release) }) }
+	defer unblock()
+	admit := func(id string) error {
+		_, _, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(id), nil), id)
+		if release != nil {
+			release()
+		}
+		return err
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- admit(first.ID) }()
+	<-store.entered
+	clock.Add(int64(time.Second))
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- admit(second.ID) }()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("another app's snapshot write blocked warm admission")
+	}
+	unblock()
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	current, _, err := f.edge.lookup(context.Background(), second.ID, false)
+	if err != nil || !current.ExpiresAt.Equal(time.Unix(0, clock.Load()).Add(IdleTTL)) {
+		t.Fatalf("publishing an older snapshot erased newer app activity: %v", err)
+	}
 }

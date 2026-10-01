@@ -37,6 +37,7 @@ func TestPrivateAppEdgeErrorsRetainIsolationHeaders(t *testing.T) {
 				record := f.edge.state.Apps[app.ID]
 				record.Ready = false
 				f.edge.state.Apps[app.ID] = record
+				f.edge.publishRuntime(f.edge.state, nil)
 				f.edge.mu.Unlock()
 			case "origin resolution fails":
 				f.edge.config.Resolve = func(context.Context, string) (netip.AddrPort, error) {
