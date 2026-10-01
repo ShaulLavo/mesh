@@ -1180,10 +1180,10 @@ func runRuntime(t *testing.T, ctx context.Context, cfg ListenerConfig, handler t
 	}
 	normalized.listen = useTCPListeners(listeners...)
 	go func() {
-		defer func() { _ = lock.release() }()
 		runCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		done <- serveListeners(runCtx, cancel, normalized, handler)
+		err := serveListeners(runCtx, cancel, normalized, handler)
+		done <- errors.Join(err, lock.release())
 	}()
 	return done
 }

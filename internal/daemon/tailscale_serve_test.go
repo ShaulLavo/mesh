@@ -543,9 +543,15 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	if !errors.Is(firstErr, ErrTailnetAddressesChanged) {
 		t.Fatalf("first daemon error = %v, want address-change restart", firstErr)
 	}
-	if connection, dialErr := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", controlPort), 50*time.Millisecond); dialErr == nil {
-		_ = connection.Close()
-		t.Fatal("old control endpoint remained bound after address-change shutdown")
+	for _, listener := range []net.Listener{controlListener, httpsListener} {
+		_ = listener.(*net.TCPListener).SetDeadline(time.Now())
+		connection, acceptErr := listener.Accept()
+		if connection != nil {
+			_ = connection.Close()
+		}
+		if !errors.Is(acceptErr, net.ErrClosed) {
+			t.Fatalf("old listener %s after address-change shutdown = %v, want closed", listener.Addr(), acceptErr)
+		}
 	}
 
 	secondReady := make(chan struct{}, 1)
