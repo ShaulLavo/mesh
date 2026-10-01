@@ -148,6 +148,12 @@ async function checkInteractions(browser, name, reducedMotion) {
     assert.deepEqual(await dotCenter(), closedCenter, 'The dot stays where it was when the pill opens');
     assert.equal(await pill.locator('.dot').evaluate(element => getComputedStyle(element).opacity), '1', 'The open pill keeps the dot visible');
     assert.equal(await pill.getByRole('button', { name: /^Close Mesh controls/ }).count(), 1, 'The dot is announced as the close control');
+    const openTarget = await dot.boundingBox();
+    assert.deepEqual([openTarget.width, openTarget.height], [44, 44], 'The open pill keeps the dot\'s 44px target');
+    for (const action of await pill.locator('.action').all()) {
+      const bounds = await action.boundingBox();
+      assert.deepEqual([bounds.width, bounds.height], [44, 44], 'Every action has a 44px target');
+    }
     await pill.locator('[aria-label="Make private"]').waitFor({ state: 'visible' });
     assert.equal(await pill.locator('[aria-label="Make private"]').getAttribute('href'), `${manager}/confirm?id=7k3d&action=private&return=${encodeURIComponent(origin + '/')}`);
     assert.equal(await pill.getByRole('button').count() + await pill.getByRole('link').count(), 3, 'Expanded pill has exactly three direct actions');
@@ -166,7 +172,7 @@ async function checkInteractions(browser, name, reducedMotion) {
       assert.equal(await pill.locator('.shell').evaluate(element => getComputedStyle(element).transitionDuration), '0s');
       assert.equal(await pill.locator('.controls').evaluate(element => getComputedStyle(element).animationName), 'none');
     }
-    await page.waitForFunction(() => { const panel = document.querySelector('mesh-app-pill').shadowRoot.querySelector('.panel'); return Math.min(panel.offsetWidth, panel.offsetHeight) === 26; });
+    await page.waitForFunction(() => { const panel = document.querySelector('mesh-app-pill').shadowRoot.querySelector('.panel'); return Math.min(panel.offsetWidth, panel.offsetHeight) === 44; });
     await screenshot(page, `${name}-${reducedMotion}-expanded`);
     await dot.click();
     assert.equal(await isOpen(), false, 'The dot collapses the pill it opened');

@@ -10,7 +10,8 @@ if (artifacts) await mkdir(resolve(artifacts), { recursive: true });
 const manager = 'https://apps.shaulavo.dev';
 const script = await readFile(new URL('pill.js', assets));
 const stylesheet = await readFile(new URL('pill.css', assets));
-const DOT_LINE = 29;
+const DOT_LINE = 38;
+const TARGET = 44;
 const GAP = 16;
 
 let origin;
@@ -36,13 +37,14 @@ const measure = page => page.evaluate(() => {
   const shell = root.querySelector('.shell');
   return {
     shell: gaps(shell), closed: shell.classList.contains('closed'), dot: gaps(dot), panel: gaps(root.querySelector('.panel')),
+    panelWidth: root.querySelector('.panel').offsetWidth, panelHeight: root.querySelector('.panel').offsetHeight,
+    target: gaps(root.querySelector('.dot-target')),
     dotVisible: getComputedStyle(dot).opacity === '1', chevrons: root.querySelectorAll('[data-react-grab-toolbar-collapse]').length,
-    // The smallest gap between the dot's core and any action, so a crowded or overlapping layout fails on every edge.
-    clearance: Math.min(...[...root.querySelectorAll('.action')].map(action => {
-      const a = action.getBoundingClientRect();
-      const d = dot.getBoundingClientRect();
-      return Math.max(a.left - d.right, d.left - a.right, a.top - d.bottom, d.top - a.bottom);
-    })),
+    // Every touch target, the dot's and each action's, as rendered rectangles.
+    targets: [root.querySelector('.dot-target'), ...root.querySelectorAll('.action')].map(element => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height };
+    }),
   };
 });
 
@@ -142,12 +144,22 @@ async function checkOrientation(browser, engine, orientation, size) {
           assert(Math.min(result.shell.top, result.shell.bottom, result.shell.left, result.shell.right) === result.shell[edge], `${label}: ${path} docks to ${edge}`);
         }
         const [, rest] = rests.at(-1);
-        assert(Math.abs(rest.dot[edge] + 6 - DOT_LINE) < 0.5, `${label}: dot center ${rest.dot[edge] + 6}px from the edge, want ${DOT_LINE}`);
+        assert(Math.abs(rest.target[edge] + TARGET / 2 - DOT_LINE) < 0.5, `${label}: dot center ${rest.target[edge] + TARGET / 2}px from the edge, want ${DOT_LINE}`);
+        assert(Math.abs(rest.dot.x - rest.target.x) < 0.5 && Math.abs(rest.dot.y - rest.target.y) < 0.5, `${label}: the dot is centered in its target`);
+        assert.deepEqual([rest.targets[0].width, rest.targets[0].height], [TARGET, TARGET], `${label}: the dot keeps a ${TARGET}px target`);
         assert.equal(rest.chevrons, 0, `${label}: no arrow`);
         if (expanded) {
           assert(Math.abs(rest.panel[edge] - GAP) < 0.5, `${label}: pill ${rest.panel[edge]}px from the edge, want ${GAP}`);
           assert(rest.dotVisible, `${label}: the open pill keeps its dot`);
-          assert(rest.clearance >= 8, `${label}: the dot sits ${rest.clearance}px from the nearest action, want at least 8`);
+          const panelThickness = edge === 'top' || edge === 'bottom' ? rest.panelHeight : rest.panelWidth;
+          assert.equal(panelThickness, TARGET, `${label}: the open pill is one ${TARGET}px target thick`);
+          for (const [index, target] of rest.targets.entries()) {
+            assert.deepEqual([target.width, target.height], [TARGET, TARGET], `${label}: target ${index} is ${target.width}x${target.height}, want ${TARGET}px`);
+            for (const other of rest.targets.slice(index + 1)) {
+              const apart = Math.max(other.left - target.right, target.left - other.right, other.top - target.bottom, target.top - other.bottom);
+              assert(apart >= -0.5, `${label}: touch targets overlap by ${-apart}px`);
+            }
+          }
         }
         if (artifacts && (edge === 'right' || (orientation === 'portrait' && edge === 'bottom'))) await page.screenshot({ path: resolve(artifacts, `${engine}-${orientation}-${state}-${edge}.png`) });
       }
@@ -161,7 +173,7 @@ async function checkOrientation(browser, engine, orientation, size) {
     });
     await settle(page);
     const shifted = await measure(page);
-    if (shifted.dot) assert(Math.abs(shifted.dot.bottom + 6 - DOT_LINE) < 0.5, `${engine} ${orientation}: a Safari toolbar keeps the dot ${DOT_LINE}px above the visible bottom, got ${shifted.dot.bottom + 6}`);
+    assert(Math.abs(shifted.target.bottom + TARGET / 2 - DOT_LINE) < 0.5, `${engine} ${orientation}: a Safari toolbar keeps the dot ${DOT_LINE}px above the visible bottom, got ${shifted.target.bottom + TARGET / 2}`);
     assert.deepEqual(errors, [], 'The pill must not throw browser errors');
     console.log(`${engine} ${orientation}: one rest position per edge and state after drag, flick, keyboard, resize and reload`);
   } finally {
