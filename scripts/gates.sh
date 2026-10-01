@@ -135,7 +135,7 @@ if (( ${#packages[@]} )); then
   go vet "${packages[@]}"
   echo 'vet: PASS'
   status=0
-  golangci-lint run --output.json.path="$report_dir/golangci.json" --output.text.path="$report_dir/golangci.txt" \
+  golangci-lint run --allow-serial-runners --output.json.path="$report_dir/golangci.json" --output.text.path="$report_dir/golangci.txt" \
     "${packages[@]}" || status=$?
   if (( status > 1 )) || [[ ! -s $report_dir/golangci.json ]]; then
     echo "golangci: ERROR (tool exit $status)" >&2
