@@ -292,6 +292,63 @@ func TestAttachCancellationUnblocksFullOutputAndRestoresPTY(t *testing.T) {
 	}
 }
 
+func TestAttachRestorationToFullOutputIsBounded(t *testing.T) {
+	master, input, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = master.Close(); _ = input.Close() })
+	before, err := term.GetState(input.Fd())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, output, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close(); _ = output.Close() })
+	if err := output.SetWriteDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := output.Write(bytes.Repeat([]byte("x"), 1<<20)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("fill output pipe: %v", err)
+	}
+	if err := output.SetWriteDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	conn := &outputCancelConn{frames: make(chan protocol.Frame, 2), closed: make(chan struct{})}
+	conn.frames <- mustCommandControlFrame(protocol.Control{Type: protocol.TypeAttached, SessionID: "7K3D"})
+	conn.frames <- mustCommandControlFrame(protocol.Control{Type: protocol.TypeExit, SessionID: "7K3D"})
+	done := make(chan error, 1)
+	go func() {
+		_, err := Attach(t.Context(), AttachOptions{SessionID: "7K3D", Conn: conn, In: input, Out: output})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		drained := make(chan struct{})
+		go func() { _, _ = io.Copy(io.Discard, reader); close(drained) }()
+		<-done
+		_ = output.Close()
+		<-drained
+		t.Fatal("restoration escape output blocked attachment return")
+	}
+	after, err := term.GetState(input.Fd())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("restoration output prevented termios restoration")
+	}
+	if _, err := output.Stat(); err != nil {
+		t.Fatalf("restoration closed caller-owned output: %v", err)
+	}
+}
+
 type outputCancelConn struct {
 	frames   chan protocol.Frame
 	closed   chan struct{}
