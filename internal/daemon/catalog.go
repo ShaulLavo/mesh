@@ -511,7 +511,7 @@ func removeRetiredSession(dir string) error {
 	return os.Remove(dir)
 }
 
-// Remove keeps row retirement and directory deletion under one catalog owner.
+// Remove prevents reconciliation from restoring a retired session.
 func (c *Catalog) Remove(ctx context.Context, id storage.SessionID) error {
 	if err := validContext(ctx); err != nil {
 		return fmt.Errorf("daemon: remove session %s: %w", id, err)
@@ -522,6 +522,12 @@ func (c *Catalog) Remove(ctx context.Context, id storage.SessionID) error {
 	}
 	if parsed != string(id) {
 		return fmt.Errorf("daemon: remove session %s: ID is not canonical", id)
+	}
+	select {
+	case c.reconcileGate <- struct{}{}:
+		defer func() { <-c.reconcileGate }()
+	case <-ctx.Done():
+		return fmt.Errorf("daemon: remove session %s: %w", id, ctx.Err())
 	}
 	removed, err := c.store.RetireSessions(ctx, c.host.ID, []storage.SessionID{id})
 	if err != nil {
