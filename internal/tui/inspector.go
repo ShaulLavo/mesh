@@ -415,7 +415,7 @@ func (m model) detailsFor(current session) inspectionDetails {
 			details.attachment = "detached"
 		}
 		details.output = inspectionOutputAge(m.now, m.inspection)
-		details.screenStatus = "live"
+		details.screenStatus = statusLive
 		if m.inspection.beforePicker {
 			details.screenStatus = "before picker"
 		}
@@ -552,7 +552,7 @@ func (m model) previewSubtitle() string {
 		m.sessionHeadline(current),
 		safeText(current.id),
 	}
-	if details.screenStatus != "live" {
+	if details.screenStatus != statusLive {
 		parts = append(parts, details.screenStatus)
 	}
 	parts = append(parts, details.attachment, details.directoryLabel+" "+details.directory)

@@ -24,7 +24,18 @@ func (s ObservedSection) Stale(now, lastReply time.Time) bool {
 	return MetricStale(reading, s.ReceivedAt, lastReply, now, 30*time.Second)
 }
 
+type StateConnection string
+
+const (
+	StateConnecting  StateConnection = "connecting"
+	StateReachable   StateConnection = "reachable"
+	StateUnreachable StateConnection = "unreachable"
+	StateRefused     StateConnection = "refused"
+)
+
 type StateView struct {
+	Connection        StateConnection
+	Problem           string
 	Memory            map[string]protocol.SessionMemory
 	MemoryReceivedAt  time.Time
 	Seq               uint64
@@ -188,7 +199,7 @@ func (v *StateView) applySnapshot(snapshot *protocol.StateSnapshot, received tim
 	}
 	s := snapshot
 	metrics, metricsReceived := v.Metrics, v.MetricsReceivedAt
-	*v = StateView{Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
+	*v = StateView{Connection: v.Connection, Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
 	v.applyMemory(s.Memory, received, transit)
 	v.applyCurrent(s.Current, received, transit)
 	v.applyMetrics(s.Metrics, received, transit)

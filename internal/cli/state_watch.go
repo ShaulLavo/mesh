@@ -49,6 +49,7 @@ func (w *StateWatcher) Watch(ctx context.Context, host HostRecord, request proto
 		for _, topic := range request.Topics {
 			markSectionFailed(&view, topic)
 		}
+		view.Problem = err.Error()
 		publish(view.Clone())
 		attempt++
 		if err := waitState(ctx, stateBackoff(attempt)); err != nil {
@@ -101,8 +102,10 @@ func (w *StateWatcher) watchOnce(ctx context.Context, host HostRecord, request p
 	conn, info, err := openVerifiedHostInfo(setupCtx, host, w.dial)
 	<-w.reads
 	if err != nil {
+		view.Connection = stateConnectionError(err)
 		return err
 	}
+	view.Connection, view.Problem = StateReachable, ""
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
@@ -115,6 +118,7 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 	unsupported := w.unsupported[key] == string(build)
 	w.mu.Unlock()
 	if unsupported {
+		_ = conn.Close()
 		return w.poll(ctx, host, info, request, view, publish)
 	}
 	id, err := newDaemonRequestID()
@@ -134,6 +138,7 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 		w.mu.Lock()
 		w.unsupported[key] = string(build)
 		w.mu.Unlock()
+		_ = conn.Close()
 		return w.poll(ctx, host, info, request, view, publish)
 	}
 	if response.Type == protocol.TypeError {
@@ -154,8 +159,21 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 		return fmt.Errorf("publish host state: %w", err)
 	}
 	publish(view.Clone())
-	return readStateStream(ctx, host, conn, view, transit, publish)
+	err = readStateStream(ctx, host, conn, view, transit, publish)
+	if err != nil {
+		view.Connection = StateUnreachable
+	}
+	return err
 }
+
+func stateConnectionError(err error) StateConnection {
+	var identityErr *hostIdentityError
+	if errors.As(err, &identityErr) {
+		return StateRefused
+	}
+	return StateUnreachable
+}
+
 func readStateStream(ctx context.Context, host HostRecord, conn transport.Conn, view *StateView, transit time.Duration, publish func(StateView)) error {
 	for ctx.Err() == nil {
 		frame, err := conn.ReadFrame()
@@ -257,8 +275,11 @@ func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, section
 	kind := pollControl(section.topic)
 	conn, info, err := openVerifiedHostInfo(readCtx, host, w.dial)
 	if err != nil {
+		view.Connection = stateConnectionError(err)
+		view.Problem = err.Error()
 		return err
 	}
+	view.Connection, view.Problem = StateReachable, ""
 	defer func() { _ = conn.Close() }()
 	build, _ := json.Marshal(info.Build)
 	if section.build != string(build) {

@@ -57,6 +57,7 @@ func commandDependencies() cli.Dependencies {
 		}),
 		Picker:       tui.NewCLIPicker(os.Stdin, os.Stdout),
 		WindowPicker: tui.NewCLIWindowPicker(os.Stdin, os.Stdout),
+		Dashboard:    tui.NewCLIDashboard(os.Stdout),
 	}
 }
 
