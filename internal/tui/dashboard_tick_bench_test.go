@@ -72,6 +72,7 @@ func TestDashboardRetainedTickAllocationBudget(t *testing.T) {
 		tick++
 	})
 	runtime.KeepAlive(retained)
+	t.Logf("full retained tick: %.0f allocations", allocations)
 	if allocations > 10000 {
 		t.Fatalf("full retained tick allocated %.0f objects; budget is 10000", allocations)
 	}
@@ -85,6 +86,7 @@ func TestDashboardRetainedTickWorkBudget(t *testing.T) {
 			model.renderWork = &work
 			next, _ := model.Update(dashboardTickMsg(model.now.Add(time.Second)))
 			runtime.KeepAlive(next)
+			t.Logf("tick work: %d summary builds, %d service-width host visits", work.summaries, work.serviceWidthVisits)
 			if work.summaries > 1 {
 				t.Errorf("built summaries %d times; budget is once per tick", work.summaries)
 			}
