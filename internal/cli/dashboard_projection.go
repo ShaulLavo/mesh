@@ -103,9 +103,9 @@ func appendDashboardServices(selected []DashboardService, rows []protocol.Servic
 }
 func projectDashboardService(row protocol.ServiceInfo, healthSupported bool) DashboardService {
 	if !healthSupported {
-		return DashboardService{Name: dashboardText(row.Name), State: "unknown", HealthUnknown: true}
+		return DashboardService{Name: dashboardText(serviceDisplayName(row)), State: "unknown", HealthUnknown: true}
 	}
-	service := DashboardService{Name: dashboardText(row.Name), State: "ready", Problem: dashboardText(row.Problem), Failed: dashboardServiceFailed(row), HealthUnknown: row.HealthUnknown && !dashboardServiceFailed(row)}
+	service := DashboardService{Name: dashboardText(serviceDisplayName(row)), State: "ready", Problem: dashboardText(row.Problem), Failed: dashboardServiceFailed(row), HealthUnknown: row.HealthUnknown && !dashboardServiceFailed(row)}
 	if row.Demand != nil && row.Demand.Failure != "" {
 		service.Problem = dashboardText(row.Demand.Failure)
 	}

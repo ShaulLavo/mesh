@@ -254,7 +254,7 @@ func cachedServiceCatalogRows(host HostRecord, cached []storage.CachedService) [
 		rows[index] = ServiceCatalogRow{
 			Host: host, PrivateName: row.PrivateName,
 			Service: protocol.ServiceInfo{
-				Name: row.Service.Name, Kind: string(row.Service.Kind), Target: row.Service.Target,
+				DisplayName: row.Service.DisplayName, Name: row.Service.Name, Kind: string(row.Service.Kind), Target: row.Service.Target,
 				PublicName: row.Service.PublicName, WakeOnRequest: row.Service.WakeOnRequest, Isolate: row.Service.Isolate,
 				Healthy: row.Healthy, Problem: row.Problem,
 			},

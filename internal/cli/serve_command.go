@@ -45,6 +45,7 @@ type ConfirmPublicFunc func(context.Context, PublicConfirmation) (bool, error)
 func (a *application) serveCommand() *cobra.Command {
 	var (
 		route            string
+		displayName      string
 		files            bool
 		publicName       string
 		wakeOnRequest    bool
@@ -88,7 +89,7 @@ func (a *application) serveCommand() *cobra.Command {
 				return err
 			}
 			return a.runServe(cmd, args[0], target, serveFlags{
-				route: route, files: files, publicName: publicName,
+				route: route, displayName: displayName, files: files, publicName: publicName,
 				wakeOnRequest: wakeOnRequest, isolate: isolate, yes: yes, allowCredentials: allowCredentials,
 				run: run, cwd: cwd, env: env, listens: listens, idle: idle, readyTimeout: readyTimeout,
 				cwdSet: cmd.Flags().Changed("cwd"), idleSet: cmd.Flags().Changed("idle"),
@@ -96,6 +97,7 @@ func (a *application) serveCommand() *cobra.Command {
 			})
 		},
 	}
+	command.Flags().StringVar(&displayName, "label", "", "display name shown in service lists")
 	command.Flags().StringVar(&route, "at", "", "route path, such as /blog")
 	command.Flags().BoolVar(&files, "files", false, "enable directory listings")
 	command.Flags().StringVar(&publicName, "public", "", "exact public hostname under shaulavo.dev")
@@ -109,12 +111,13 @@ func (a *application) serveCommand() *cobra.Command {
 	command.Flags().StringArrayVar(&listens, "listen", nil, "PUBLIC=UPSTREAM: proxy 127.0.0.1:PUBLIC on the host to 127.0.0.1:UPSTREAM (repeatable)")
 	command.Flags().DurationVar(&idle, "idle", meshserve.DefaultIdle, "stop --run after no connection has been open this long")
 	command.Flags().DurationVar(&readyTimeout, "ready-timeout", meshserve.DefaultReadyTimeout, "how long a starting --run holds connections before failing them")
-	command.AddCommand(a.serveListCommand(), a.serveClaimCommand(), a.serveStartStopCommand(true), a.serveStartStopCommand(false))
+	command.AddCommand(a.serveListCommand(), a.serveLabelCommand(), a.serveClaimCommand(), a.serveStartStopCommand(true), a.serveStartStopCommand(false))
 	return command
 }
 
 type serveFlags struct {
 	route            string
+	displayName      string
 	files            bool
 	publicName       string
 	wakeOnRequest    bool
@@ -174,7 +177,8 @@ func (a *application) runServe(cmd *cobra.Command, hostAlias, target string, fla
 		kind = string(meshserve.Files)
 	}
 	requested := protocol.ServiceInfo{
-		Name: name, Kind: kind, Target: target, PublicName: flags.publicName, WakeOnRequest: flags.wakeOnRequest,
+		DisplayName: flags.displayName,
+		Name:        name, Kind: kind, Target: target, PublicName: flags.publicName, WakeOnRequest: flags.wakeOnRequest,
 		Isolate: flags.isolate, Listens: demand.listens, Run: demand.run, LocalOnly: localOnly,
 	}
 	previewCtx, cancelPreview := context.WithTimeout(cmd.Context(), serviceMutationTimeout)
@@ -273,12 +277,12 @@ func (a *application) runServeList(cmd *cobra.Command, timeout time.Duration) er
 		return err
 	}
 	writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "ROUTE\tHOST\tKIND\tTARGET\tSCOPE\tSTATE\tHEALTH\tURL"); err != nil {
+	if _, err := fmt.Fprintln(writer, "ROUTE\tNAME\tHOST\tKIND\tTARGET\tSCOPE\tSTATE\tHEALTH\tURL"); err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			safeTableCell(serviceRoute(row.Service)), safeTableCell(row.Host.Alias), safeTableCell(row.Service.Kind), serviceTargetCell(row.Service),
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			safeTableCell(serviceRoute(row.Service)), safeTableCell(serviceDisplayName(row.Service)), safeTableCell(row.Host.Alias), safeTableCell(row.Service.Kind), serviceTargetCell(row.Service),
 			safeTableCell(row.Scope()), safeTableCell(row.State()), safeTableCell(row.Health()), safeTableCell(row.URL())); err != nil {
 			return err
 		}

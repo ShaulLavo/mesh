@@ -105,7 +105,7 @@ func (m *dashboardMonitor) cachedView(ctx context.Context, record HostRecord) Da
 	wire := make([]protocol.ServiceInfo, 0, len(services))
 	observed := time.Time{}
 	for _, row := range services {
-		wire = append(wire, protocol.ServiceInfo{Name: row.Service.Name, Healthy: row.Healthy, Problem: row.Problem})
+		wire = append(wire, protocol.ServiceInfo{DisplayName: row.Service.DisplayName, Name: row.Service.Name, Healthy: row.Healthy, Problem: row.Problem})
 		if observed.IsZero() || row.ObservedAt.Before(observed) {
 			observed = row.ObservedAt
 		}

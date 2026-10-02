@@ -18,6 +18,7 @@ func TestStoreServiceLifecycleSurvivesReopen(t *testing.T) {
 	root := t.TempDir()
 	want := meshserve.Service{
 		Name:          "blog/assets",
+		DisplayName:   "Blog assets",
 		Kind:          meshserve.Files,
 		Target:        root,
 		PublicName:    "blog.shaulavo.dev",

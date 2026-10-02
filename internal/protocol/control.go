@@ -43,6 +43,7 @@ const (
 	TypeServicePreview     = "service.preview"
 	TypeServicePreviewed   = "service.previewed"
 	TypeServiceUpsert      = "service.upsert"
+	TypeServiceLabel       = "service.label"
 	TypeServiceList        = "service.list"
 	TypeServiceDelete      = "service.delete"
 	TypeServiceStart       = "service.start"
@@ -59,6 +60,7 @@ const (
 
 	TypeHostInfoResult       = "host.info.result"
 	TypeServiceUpserted      = "service.upserted"
+	TypeServiceLabeled       = "service.labeled"
 	TypeServiceListed        = "service.listed"
 	TypeServiceDeleted       = "service.deleted"
 	TypeCertificateInstalled = "certificate.installed"
@@ -162,6 +164,7 @@ type HostInfo struct {
 // ServiceInfo is the transport representation of one origin service and its
 // current health. The daemon ignores Healthy and Problem in client definitions.
 type ServiceInfo struct {
+	DisplayName   string `json:"displayName,omitempty"`
 	Name          string `json:"name"`
 	Kind          string `json:"kind"`
 	Target        string `json:"target"`
@@ -360,11 +363,12 @@ type Control struct {
 	Output []byte `json:"output,omitempty"`
 
 	// Services
-	ServiceName      string          `json:"serviceName,omitempty"`
-	Service          *ServiceInfo    `json:"service,omitempty"`
-	Services         []ServiceInfo   `json:"services,omitempty"`
-	ServicePreview   *ServicePreview `json:"servicePreview,omitempty"`
-	AllowCredentials bool            `json:"allowCredentials,omitempty"`
+	ServiceName        string          `json:"serviceName,omitempty"`
+	ServiceDisplayName string          `json:"serviceDisplayName,omitempty"`
+	Service            *ServiceInfo    `json:"service,omitempty"`
+	Services           []ServiceInfo   `json:"services,omitempty"`
+	ServicePreview     *ServicePreview `json:"servicePreview,omitempty"`
+	AllowCredentials   bool            `json:"allowCredentials,omitempty"`
 
 	// Certificate distribution
 	Certificate            *CertificateInstall `json:"certificate,omitempty"`

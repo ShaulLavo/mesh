@@ -28,7 +28,7 @@ func TestServiceControllerMutatesDurableAndLiveRegistry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("live"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service := protocol.ServiceInfo{Name: "site", Kind: "static", Target: root, PublicName: "site.shaulavo.dev"}
+	service := protocol.ServiceInfo{DisplayName: "Site", Name: "site", Kind: "static", Target: root, PublicName: "site.shaulavo.dev"}
 
 	response, handled, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type:      protocol.TypeServiceUpsert,
@@ -72,6 +72,9 @@ func TestServiceControllerMutatesDurableAndLiveRegistry(t *testing.T) {
 		t.Fatalf("update handled = %v, error = %v", handled, err)
 	}
 	assertServiceResponse(t, registry, "/site/", http.StatusOK, "updated")
+	if response.Service.DisplayName != "Site" {
+		t.Fatalf("republication lost display name: %+v", response.Service)
+	}
 
 	if err := os.Rename(updatedRoot, updatedRoot+"-gone"); err != nil {
 		t.Fatal(err)
@@ -710,5 +713,32 @@ func assertWatchCommittedService(t *testing.T, broker *stateBroker, target strin
 	row, ok := broker.services["app"]
 	if !ok || row.Target != target || row.Healthy || broker.observations[protocol.TopicServices].failing {
 		t.Fatalf("watch differs from final routing state: %+v", row)
+	}
+}
+
+func TestServiceLabelOnlyChangesDurableDisplayName(t *testing.T) {
+	store, registry, controller := newServiceControllerTest(t, "/control")
+	service := protocol.ServiceInfo{Name: "api", Kind: "proxy", Target: "29999", Isolate: true}
+	ctx := context.Background()
+	if _, _, err := controller.HandleControl(ctx, protocol.Control{Type: protocol.TypeServiceUpsert, RequestID: "publish", Service: &service}); err != nil {
+		t.Fatal(err)
+	}
+	response, handled, err := controller.HandleControl(ctx, protocol.Control{
+		Type: protocol.TypeServiceLabel, RequestID: "label", ServiceName: "api", ServiceDisplayName: "CLI Proxy",
+	})
+	if err != nil || !handled {
+		t.Fatalf("label handled=%v error=%v", handled, err)
+	}
+	if response.Type != protocol.TypeServiceLabeled || response.Service == nil || response.Service.DisplayName != "CLI Proxy" {
+		t.Fatalf("label response = %+v", response)
+	}
+	want := protocol.ServiceFromInfo(service)
+	want.DisplayName = "CLI Proxy"
+	persisted, err := store.GetService(ctx, "api")
+	if err != nil || !persisted.Equal(want) || len(registry.Services()) != 1 || !registry.Services()[0].Equal(want) {
+		t.Fatalf("label changed service definition: durable=%+v live=%+v error=%v", persisted, registry.Services(), err)
+	}
+	if _, _, err := controller.HandleControl(ctx, protocol.Control{Type: protocol.TypeServiceLabel, RequestID: "missing", ServiceName: "missing", ServiceDisplayName: "Missing"}); err == nil {
+		t.Fatal("label created a missing route")
 	}
 }

@@ -121,48 +121,48 @@ func newServiceController(ctx context.Context, home string, store serviceStore, 
 }
 
 func (c *serviceController) HandleControl(ctx context.Context, request protocol.Control) (protocol.Control, bool, error) {
+	if !c.handlesControl(request.Type) {
+		return protocol.Control{}, false, nil
+	}
+	if ctx == nil {
+		return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
+	}
 	switch request.Type {
 	case protocol.TypeServicePreview:
-		if ctx == nil {
-			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
-		}
 		response, err := c.preview(ctx, request)
 		return response, true, err
 	case protocol.TypeServiceUpsert:
-		if ctx == nil {
-			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
-		}
 		response, err := c.upsert(ctx, request)
 		return response, true, err
+	case protocol.TypeServiceLabel:
+		response, err := c.label(ctx, request)
+		return response, true, err
 	case protocol.TypeServiceList:
-		if ctx == nil {
-			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
-		}
 		response, err := c.list(ctx, request)
 		return response, true, err
 	case protocol.TypeServiceDelete:
-		if ctx == nil {
-			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
-		}
 		response, err := c.delete(ctx, request)
 		return response, true, err
 	case protocol.TypeServiceStart, protocol.TypeServiceStop:
-		if ctx == nil {
-			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
-		}
 		response, err := c.startOrStop(ctx, request)
 		return response, true, err
 	case protocol.TypeEdgeList:
-		if !c.publisher.Enabled() {
-			return protocol.Control{}, false, nil
-		}
-		if ctx == nil {
-			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
-		}
 		response, err := c.edgeList(ctx, request)
 		return response, true, err
 	default:
 		return protocol.Control{}, false, nil
+	}
+}
+
+func (c *serviceController) handlesControl(requestType string) bool {
+	switch requestType {
+	case protocol.TypeServicePreview, protocol.TypeServiceUpsert, protocol.TypeServiceLabel,
+		protocol.TypeServiceList, protocol.TypeServiceDelete, protocol.TypeServiceStart, protocol.TypeServiceStop:
+		return true
+	case protocol.TypeEdgeList:
+		return c.publisher.Enabled()
+	default:
+		return false
 	}
 }
 
@@ -173,7 +173,7 @@ func (c *serviceController) preview(ctx context.Context, request protocol.Contro
 	if request.Service == nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request has no service", request.Type)
 	}
-	preview, err := meshserve.InspectService(ctx, c.home, serviceFromInfo(*request.Service), request.AllowCredentials)
+	preview, err := meshserve.InspectService(ctx, c.home, c.serviceForRequest(*request.Service), request.AllowCredentials)
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
 	}
@@ -300,7 +300,7 @@ func (c *serviceController) commitUpsert(ctx context.Context, request protocol.C
 	if err := c.ensureSynchronized("service upsert"); err != nil {
 		return meshserve.Service{}, err
 	}
-	preview, err := meshserve.InspectService(ctx, c.home, serviceFromInfo(*request.Service), request.AllowCredentials)
+	preview, err := meshserve.InspectService(ctx, c.home, c.serviceForRequest(*request.Service), request.AllowCredentials)
 	if err != nil {
 		return meshserve.Service{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
 	}
@@ -657,4 +657,54 @@ func (c *serviceController) publishCommitted() {
 		rows = append(rows, row)
 	}
 	c.onCommitted(withRetiring(rows, c.demand.Retiring()), nil)
+}
+
+func (c *serviceController) serviceForRequest(info protocol.ServiceInfo) meshserve.Service {
+	service := serviceFromInfo(info)
+	if service.DisplayName != "" {
+		return service
+	}
+	prior, found := findService(c.registry.Services(), service.Name)
+	if found {
+		service.DisplayName = prior.DisplayName
+	}
+	return service
+}
+
+//nolint:contextcheck // Reconciliation uses the controller lifetime to settle cancelled writes.
+func (c *serviceController) label(ctx context.Context, request protocol.Control) (protocol.Control, error) {
+	if err := validateRequestID(request); err != nil {
+		return protocol.Control{}, err
+	}
+	if err := meshserve.ValidateName(request.ServiceName); err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: service label: %w", err)
+	}
+	if request.ServiceDisplayName == "" {
+		return protocol.Control{}, fmt.Errorf("daemon: service display name must contain text")
+	}
+	if err := meshserve.ValidateDisplayName(request.ServiceDisplayName); err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: service label: %w", err)
+	}
+	if err := c.acquire(ctx); err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: service label: %w", err)
+	}
+	defer c.release()
+	defer c.syncDemand()
+	if err := c.ensureSynchronized("service label"); err != nil {
+		return protocol.Control{}, err
+	}
+	service, found := findService(c.registry.Services(), request.ServiceName)
+	if !found {
+		return protocol.Control{}, fmt.Errorf("daemon: service %s is not registered", request.ServiceName)
+	}
+	service.DisplayName = request.ServiceDisplayName
+	persisted, err := c.store.UpsertService(ctx, service)
+	if err != nil {
+		return protocol.Control{}, errors.Join(err, c.reconcileDurable("service label"))
+	}
+	if err := c.registry.Replace(upsertService(c.registry.Services(), persisted)); err != nil {
+		return protocol.Control{}, errors.Join(err, c.reconcileDurable("service label registry publication"))
+	}
+	info := serviceDefinitionInfo(persisted)
+	return protocol.Control{Type: protocol.TypeServiceLabeled, RequestID: request.RequestID, Service: &info}, nil
 }

@@ -24,7 +24,7 @@ func TestPickerShowsServedWebsitesInOpenHostPanel(t *testing.T) {
 			if alias != "pc" {
 				t.Fatalf("refresh alias = %q, want pc", alias)
 			}
-			services := []protocol.ServiceInfo{{Name: "blog", Kind: "proxy", Target: "3000", Healthy: true}}
+			services := []protocol.ServiceInfo{{DisplayName: "Blog", Name: "blog", Kind: "proxy", Target: "3000", Healthy: true}}
 			if refreshCalls > 1 {
 				services = append(services, protocol.ServiceInfo{Name: "status", Kind: "proxy", Target: "4000", Healthy: false})
 			}
@@ -48,7 +48,7 @@ func TestPickerShowsServedWebsitesInOpenHostPanel(t *testing.T) {
 	}
 	view := ansi.Strip(refreshed.View().Content)
 
-	for _, want := range []string{"1 served", "served websites", "healthy", "https://pc.mesh.example/blog"} {
+	for _, want := range []string{"Blog", "1 served", "served websites", "healthy", "https://pc.mesh.example/blog"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("picker view does not contain %q:\n%s", want, view)
 		}
