@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/charmbracelet/colorprofile"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func TestDashboardDesignRegionsAndOfflineFacts(t *testing.T) {
 			t.Fatalf("missing design region %q: %s", text, view)
 		}
 	}
-	card := ansi.Strip(strings.Join(model.card(model.hosts[3], 79), "\n"))
+	card := ansi.Strip(strings.Join(model.card(dashboardFixtureHost(model, "macbook"), 79), "\n"))
 	if strings.Contains(card, "CPU") || strings.Contains(card, "RAM") || !strings.Contains(card, "sessions 2 cached") {
 		t.Fatalf("offline reading presented as current: %s", card)
 	}
@@ -283,4 +284,8 @@ func TestDashboardCompactKeepsLiveRowsBeforeCachedGroups(t *testing.T) {
 		t.Fatalf("cached groups displaced live rows in compact budget: %s", view)
 	}
 	assertFits(t, model.render(), 80, 24)
+}
+
+func dashboardFixtureHost(model dashboardModel, alias string) cli.DashboardHostView {
+	return model.hosts[slices.IndexFunc(model.hosts, func(host cli.DashboardHostView) bool { return host.Host.Alias == alias })]
 }

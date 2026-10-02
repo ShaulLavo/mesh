@@ -79,6 +79,7 @@ type dashboardModel struct {
 	watchError    error
 	frame         string
 	history       map[string]dashboardHostHistory
+	ramTotals     map[string]uint64
 	wall, ascii   bool
 	profile       colorprofile.Profile
 	palette       dashboardPalette
@@ -96,10 +97,11 @@ func newDashboardForTerminal(input cli.DashboardInput, now time.Time, terminal s
 }
 
 func newDashboard(input cli.DashboardInput, now time.Time) dashboardModel {
-	model := dashboardModel{palette: dashboardTheme(input.Theme), profile: colorprofile.TrueColor, now: now, width: 80, height: 24, wall: input.Wall, history: map[string]dashboardHostHistory{}}
+	model := dashboardModel{palette: dashboardTheme(input.Theme), profile: colorprofile.TrueColor, now: now, width: 80, height: 24, wall: input.Wall, history: map[string]dashboardHostHistory{}, ramTotals: map[string]uint64{}}
 	for _, host := range input.Hosts {
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host, Connection: cli.StateConnecting})
 	}
+	model.sortHosts()
 	return model
 }
 func (m dashboardModel) Init() tea.Cmd { return dashboardTick() }
@@ -133,6 +135,7 @@ func (m *dashboardModel) receive(view cli.DashboardHostView) {
 			view.Host = host.Host
 			m.hosts[index] = view
 			m.remember(view)
+			m.rememberRAMTotal(view)
 			return
 		}
 	}

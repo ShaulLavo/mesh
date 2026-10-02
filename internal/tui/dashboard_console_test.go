@@ -13,7 +13,7 @@ import (
 func TestDashboardCompactFailureIsRed(t *testing.T) {
 	model := dashboardDesignFixture(4)
 	for _, state := range []cli.StateConnection{cli.StateUnreachable, cli.StateRefused} {
-		host := model.hosts[3]
+		host := dashboardFixtureHost(model, "macbook")
 		host.Connection = state
 		row := model.fleetRow(host)
 		if !strings.Contains(row, model.paint(dashboardFailureStyle).Render(string(state))) {
@@ -27,11 +27,12 @@ func TestDashboardConsoleUsesExplicitStatusColors(t *testing.T) {
 	updated, _ := model.Update(tea.ColorProfileMsg{Profile: colorprofile.ANSI})
 	model = updated.(dashboardModel)
 	model.ascii = true
-	cached := model.sessionRow(model.hosts[3], model.hosts[3].Sessions.Rows[0], 90)
+	host := dashboardFixtureHost(model, "macbook")
+	cached := model.sessionRow(host, host.Sessions.Rows[0], 90, model.sessionHostWidth(90))
 	if !regexp.MustCompile(`\x1b\[(?:[0-9]+;)*(?:33|93)(?:;[0-9]+)*m`).MatchString(cached) || regexp.MustCompile(`\x1b\[(?:[0-9]+;)*(?:31|91)(?:;[0-9]+)*m`).MatchString(cached) {
 		t.Fatalf("cached session must use explicit yellow and never red: %q", cached)
 	}
-	failure := model.fleetRow(model.hosts[3])
+	failure := model.fleetRow(host)
 	if !regexp.MustCompile(`\x1b\[(?:[0-9]+;)*(?:31|91)(?:;[0-9]+)*m`).MatchString(failure) {
 		t.Fatalf("unreachable host must use explicit red: %q", failure)
 	}
