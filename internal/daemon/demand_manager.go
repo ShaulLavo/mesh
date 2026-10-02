@@ -49,6 +49,9 @@ type demandManager struct {
 	dial   func(ctx context.Context, address string) error
 	holder func(port uint16) string
 	poll   time.Duration
+	// entered runs in Enter between counting the connection and waiting for
+	// its start. Tests use it to let that start finish first; nil otherwise.
+	entered func()
 	// cleanupRetry is demandCleanupRetry, shortened by tests.
 	cleanupRetry time.Duration
 
@@ -220,8 +223,14 @@ func (m *demandManager) Enter(ctx context.Context, name string) (func(), error) 
 	if route == nil {
 		return nil, fmt.Errorf("route /%s is not on-demand", name)
 	}
-	release := route.hold()
-	if err := route.ready(ctx); err != nil {
+	release, started := route.holdStarting()
+	if m.entered != nil {
+		m.entered()
+	}
+	// The start this connection caused may already have failed by the time
+	// it waits; answering with that failure keeps one connection from
+	// starting the session twice.
+	if err := route.awaitStart(ctx, started); err != nil {
 		release()
 		return nil, err
 	}

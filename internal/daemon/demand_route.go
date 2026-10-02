@@ -194,15 +194,23 @@ func (r *demandRoute) retryCleanup() {
 // hold counts one open connection until the returned release runs. A
 // connection to a stopped or failed route starts it: this is the wake signal.
 func (r *demandRoute) hold() func() {
+	release, _ := r.holdStarting()
+	return release
+}
+
+// holdStarting is hold that also returns the start it began, if any.
+func (r *demandRoute) holdStarting() (func(), *demandTransition) {
 	r.mu.Lock()
 	r.connections++
 	r.cancelIdleLocked()
+	var started *demandTransition
 	if r.service.Demand != nil && !r.removed && r.pending == nil && r.owned == ownsNothing {
 		r.beginStartLocked()
+		started = r.pending
 	}
 	r.unlock()
 	var once sync.Once
-	return func() { once.Do(r.release) }
+	return func() { once.Do(r.release) }, started
 }
 
 func (r *demandRoute) release() {
@@ -218,6 +226,20 @@ func (r *demandRoute) release() {
 // that fails answers everyone who waited on it; the next call tries again,
 // first stopping a session the failure may have left running.
 func (r *demandRoute) ready(ctx context.Context) error {
+	return r.awaitStart(ctx, nil)
+}
+
+// awaitStart is ready for a caller that already began started, whose outcome
+// is its answer even when it finished before the caller got here.
+func (r *demandRoute) awaitStart(ctx context.Context, started *demandTransition) error {
+	if started != nil {
+		select {
+		case <-started.done:
+			return started.err
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for route %s: %w", r.definition().Route(), ctx.Err())
+		}
+	}
 	for {
 		r.mu.Lock()
 		route := r.service.Route()

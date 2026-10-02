@@ -256,6 +256,27 @@ func TestDemandRouteReportsACommandThatExits(t *testing.T) {
 	}
 }
 
+func TestDemandRouteAnswersWithTheStartItCausedAfterItFailed(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	code := 3
+	sessions.exitNow = &code
+	manager := testDemandManager(t, sessions, func() bool { return false })
+	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+
+	// Enter's hold begins the start and its wait comes after; on a loaded
+	// machine the start can fail in between. Forcing that order here.
+	route := manager.route("dev")
+	release, started := route.holdStarting()
+	defer release()
+	<-started.done
+	if err := route.awaitStart(context.Background(), started); err == nil || !strings.Contains(err.Error(), "status 3") {
+		t.Fatalf("awaitStart = %v, want the failure of the start it caused", err)
+	}
+	if started, _ := sessions.counts(); started != 1 {
+		t.Fatalf("one connection started %d sessions, want 1", started)
+	}
+}
+
 func TestDemandRouteReadyTimeoutStopsTheSession(t *testing.T) {
 	sessions := newFakeDemandSessions()
 	manager := testDemandManager(t, sessions, func() bool { return false })
