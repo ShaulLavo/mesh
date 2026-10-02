@@ -155,7 +155,7 @@ func readOnlyFileInventory(t *testing.T, roots ...string) map[string]string {
 
 func TestSavedTargetWithoutIdentityStillResolvesRemoteHost(t *testing.T) {
 	fixture := setupCommandTestHost(t)
-	app := &application{dependencies: Dependencies{DialHost: fixture.dial}}
+	app := &application{dependencies: Dependencies{DialHost: fixture.dial, DialControl: fixture.dial}}
 	resolved, err := app.resolveSavedTarget(t.Context(), recovery.Target{HostID: fixture.host.ID, SessionID: "7K3D"})
 	if err != nil || resolved.host == nil || resolved.host.ID != fixture.host.ID {
 		t.Fatalf("saved remote target = %+v, %v", resolved, err)

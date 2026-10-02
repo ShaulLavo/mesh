@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/agentresume"
+	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/tunnel"
@@ -96,6 +97,7 @@ const (
 
 // SessionInfo is the transport representation of durable session metadata.
 type SessionInfo struct {
+	RecoveryPending        bool             `json:"recoveryPending,omitempty"`
 	AgentStatus            string           `json:"agentStatus,omitempty"`
 	Recovery               *recovery.Record `json:"recovery,omitempty"`
 	RecoveryDetailsOmitted bool             `json:"recoveryDetailsOmitted,omitempty"`
@@ -273,31 +275,36 @@ type EdgeListProof struct {
 // Control is the envelope for every JSON control message. Unused fields are
 // omitted so messages stay readable on the wire during debugging.
 type Control struct {
-	App                  json.RawMessage      `json:"app,omitempty"`
-	Update               json.RawMessage      `json:"update,omitempty"`
-	AgentLaunch          *agentresume.Launch  `json:"agentLaunch,omitempty"`
-	AgentEvent           *agentresume.Event   `json:"agentEvent,omitempty"`
-	AgentPID             int                  `json:"agentPid,omitempty"`
-	AgentToken           string               `json:"agentToken,omitempty"`
-	AgentHostID          string               `json:"agentHostId,omitempty"`
-	AgentExpectedID      string               `json:"agentExpectedId,omitempty"`
-	AgentExplicit        bool                 `json:"agentExplicit,omitempty"`
-	AgentLookupOnly      bool                 `json:"agentLookupOnly,omitempty"`
-	AgentVerified        bool                 `json:"agentVerified,omitempty"`
-	AgentProvider        agentresume.Provider `json:"agentProvider,omitempty"`
-	RecoveryAction       string               `json:"recoveryAction,omitempty"`
-	Recovery             *recovery.Record     `json:"recovery,omitempty"`
-	RecoveryResult       *recovery.Result     `json:"recoveryResult,omitempty"`
-	RecoverySupported    bool                 `json:"recoverySupported,omitempty"`
-	RecoveryCommand      *recovery.Command    `json:"recoveryCommand,omitempty"`
-	ClearRecoveryCommand bool                 `json:"clearRecoveryCommand,omitempty"`
-	HibernateIdleMillis  int64                `json:"hibernateIdleMs,omitempty"`
-	ShellPID             int                  `json:"shellPid,omitempty"`
-	ShellDirectory       string               `json:"shellDirectory,omitempty"`
-	ShellExecutable      string               `json:"shellExecutable,omitempty"`
-	Type                 string               `json:"type"`
-	RequestID            string               `json:"requestId,omitempty"`
-	SessionID            string               `json:"sessionId,omitempty"`
+	App                  json.RawMessage       `json:"app,omitempty"`
+	Update               json.RawMessage       `json:"update,omitempty"`
+	AgentLaunch          *agentresume.Launch   `json:"agentLaunch,omitempty"`
+	AgentEvent           *agentresume.Event    `json:"agentEvent,omitempty"`
+	AgentPID             int                   `json:"agentPid,omitempty"`
+	AgentToken           string                `json:"agentToken,omitempty"`
+	AgentHostID          string                `json:"agentHostId,omitempty"`
+	AgentExpectedID      string                `json:"agentExpectedId,omitempty"`
+	AgentExplicit        bool                  `json:"agentExplicit,omitempty"`
+	AgentLookupOnly      bool                  `json:"agentLookupOnly,omitempty"`
+	AgentVerified        bool                  `json:"agentVerified,omitempty"`
+	AgentProvider        agentresume.Provider  `json:"agentProvider,omitempty"`
+	RecoveryAction       string                `json:"recoveryAction,omitempty"`
+	Recovery             *recovery.Record      `json:"recovery,omitempty"`
+	RecoveryResult       *recovery.Result      `json:"recoveryResult,omitempty"`
+	RecoverySupported    bool                  `json:"recoverySupported,omitempty"`
+	RecoveryCommand      *recovery.Command     `json:"recoveryCommand,omitempty"`
+	ClearRecoveryCommand bool                  `json:"clearRecoveryCommand,omitempty"`
+	HibernateIdleMillis  int64                 `json:"hibernateIdleMs,omitempty"`
+	ShellPID             int                   `json:"shellPid,omitempty"`
+	ShellDirectory       string                `json:"shellDirectory,omitempty"`
+	ShellExecutable      string                `json:"shellExecutable,omitempty"`
+	Type                 string                `json:"type"`
+	RequestID            string                `json:"requestId,omitempty"`
+	SessionID            string                `json:"sessionId,omitempty"`
+	Watch                *StateWatch           `json:"watch,omitempty"`
+	StateSnapshot        *StateSnapshot        `json:"stateSnapshot,omitempty"`
+	StateEvent           *StateEvent           `json:"stateEvent,omitempty"`
+	StateCurrent         *StateCurrent         `json:"stateCurrent,omitempty"`
+	Metrics              *hostmetrics.Snapshot `json:"metrics,omitempty"`
 
 	WakeGrant   *wake.Grant `json:"wakeGrant,omitempty"`
 	WakeAllowed *bool       `json:"wakeAllowed,omitempty"`

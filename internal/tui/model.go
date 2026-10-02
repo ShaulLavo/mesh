@@ -53,6 +53,7 @@ type session struct {
 	lastActiveAt           time.Time
 	recovery               *recovery.Record
 	recoveryDetailsOmitted bool
+	recoveryPending        bool
 	recoveryError          string
 	agentStatus            string
 	replacementID          string

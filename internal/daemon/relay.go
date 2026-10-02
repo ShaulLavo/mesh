@@ -48,7 +48,7 @@ type clientRelay struct {
 	lanes   map[protocol.SessionID]*relayLane
 	all     map[*relayLane]struct{}
 	pending map[*relayCandidate]struct{}
-	output  chan protocol.Frame
+	output  chan relayOutput
 
 	outputMu     sync.Mutex
 	outputFrames int
@@ -109,7 +109,7 @@ func newClientRelay(client transport.Conn, workers WorkerConnector, operationTim
 		lanes:            make(map[protocol.SessionID]*relayLane),
 		all:              make(map[*relayLane]struct{}),
 		pending:          make(map[*relayCandidate]struct{}),
-		output:           make(chan protocol.Frame, relayOutputQueueFrameLimit+relayOutputControlReserve),
+		output:           make(chan relayOutput, relayOutputQueueFrameLimit+relayOutputControlReserve),
 	}
 	relay.wg.Add(1)
 	go relay.writeClientLoop()
@@ -513,7 +513,7 @@ func (r *clientRelay) enqueueOutput(frame protocol.Frame) error {
 		return errRelayOutputQueueFull
 	}
 	select {
-	case r.output <- queued:
+	case r.output <- relayOutput{frame: queued}:
 		r.outputBytes += bytes
 		if payload {
 			r.outputFrames++
@@ -537,7 +537,12 @@ func (r *clientRelay) writeClientLoop() {
 	defer r.wg.Done()
 	for {
 		select {
-		case frame := <-r.output:
+		case queued := <-r.output:
+			if queued.drained != nil {
+				close(queued.drained)
+				return
+			}
+			frame := queued.frame
 			err := r.client.WriteFrame(frame)
 			r.releaseOutput(frame)
 			if err != nil {
@@ -707,4 +712,29 @@ func validateWorkerFrame(id protocol.SessionID, frame protocol.Frame) error {
 func cloneFrame(frame protocol.Frame) protocol.Frame {
 	frame.Payload = bytes.Clone(frame.Payload)
 	return frame
+}
+
+type relayOutput struct {
+	frame   protocol.Frame
+	drained chan struct{}
+}
+
+// A control-only connection hands off after all queued replies leave its writer.
+func (r *clientRelay) drainWriter(ctx context.Context) error {
+	drained := make(chan struct{})
+	select {
+	case r.output <- relayOutput{drained: drained}:
+	case <-ctx.Done():
+		return fmt.Errorf("daemon: drain control writer: %w", ctx.Err())
+	case <-r.lifetime.Done():
+		return errRelayClosed
+	}
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("daemon: drain control writer: %w", ctx.Err())
+	case <-r.lifetime.Done():
+		return errRelayClosed
+	}
 }

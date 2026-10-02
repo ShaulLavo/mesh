@@ -13,7 +13,7 @@ import (
 func TestListDoesNotCreateIdentity(t *testing.T) {
 	host := setupCommandTestHost(t)
 	stateDir := os.Getenv("MESH_STATE_DIR")
-	if _, _, err := executeCommand(t, Dependencies{DialHost: host.dial}, "ls"); err != nil {
+	if _, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial}, "ls"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := identity.Load(stateDir); !errors.Is(err, os.ErrNotExist) {
@@ -52,6 +52,14 @@ func TestPickerCatalogOmitsSelfAdoptedHost(t *testing.T) {
 			}
 			return PickerSelection{}, nil
 		},
+
+		DialControl: func(ctx context.Context, host HostRecord) (transport.Conn, error) {
+			if host.ID == local.ID {
+				t.Error("picker queried this host over the network")
+				return nil, errors.New("unexpected self query")
+			}
+			return fixture.dial(ctx, host)
+		},
 	})
 	if err != nil || !called {
 		t.Fatalf("picker returned %v, called = %t", err, called)
@@ -66,7 +74,7 @@ func TestResolutionOmitsSelfWhenSessionIsNotLocal(t *testing.T) {
 	}
 	self := fixture.host
 	self.ID, self.MeshIdentity, self.Alias = local.ID, local.ID, "home"
-	app := &application{dependencies: Dependencies{DialHost: func(ctx context.Context, host HostRecord) (transport.Conn, error) {
+	app := &application{dependencies: Dependencies{DialControl: func(ctx context.Context, host HostRecord) (transport.Conn, error) {
 		if host.ID == local.ID {
 			t.Error("resolution queried self for a session missing locally")
 			return nil, errors.New("unexpected self query")

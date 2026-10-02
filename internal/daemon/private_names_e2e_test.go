@@ -37,7 +37,7 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 	targetID, _ := composedIdentity(t)
 	signerID, signer := composedIdentity(t)
 
-	originState := t.TempDir()
+	originState := compactSocketTempDir(t)
 	liveStore, err := dnsname.NewBundleStore(filepath.Join(originState, "live"), dnsname.WildcardName)
 	if err != nil {
 		t.Fatal(err)

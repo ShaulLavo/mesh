@@ -39,6 +39,13 @@ func testWakeSessionIntent(t *testing.T, args []string) {
 			awake = true
 			return nil
 		},
+
+		DialControl: func(ctx context.Context, target HostRecord) (transport.Conn, error) {
+			if !awake {
+				return nil, errors.New("host unavailable")
+			}
+			return host.dial(ctx, target)
+		},
 	}, args...)
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +71,10 @@ func TestCatalogPollingNeverWakesUnavailableHosts(t *testing.T) {
 			return nil, errors.New("host unavailable")
 		},
 		Wake: func(context.Context, HostRecord) error { wakes++; return nil },
+
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("host unavailable")
+		},
 	}
 	for range 3 {
 		_, _, err := executeCommand(t, dependencies, "ls", "--timeout", "20ms")
@@ -81,8 +92,8 @@ func TestFailedSessionCreationDoesNotWakeOrRetryTheCommand(t *testing.T) {
 	host.createError = "worker startup failed"
 	wakes := 0
 	_, _, err := executeCommand(t, Dependencies{
-		DialHost: host.dial,
-		Wake:     func(context.Context, HostRecord) error { wakes++; return nil },
+		DialHost: host.dial, DialControl: host.dial,
+		Wake: func(context.Context, HostRecord) error { wakes++; return nil },
 	}, "pc", "--", "/bin/true")
 	if err == nil || !strings.Contains(err.Error(), host.createError) {
 		t.Fatalf("create error=%v", err)
@@ -107,6 +118,13 @@ func TestColdBootResumeDoesNotCreateANewSession(t *testing.T) {
 			awake = true
 			host.sessionState = "interrupted"
 			return nil
+		},
+
+		DialControl: func(ctx context.Context, target HostRecord) (transport.Conn, error) {
+			if !awake {
+				return nil, errors.New("host unavailable")
+			}
+			return host.dial(ctx, target)
 		},
 	}, "pc", "-r")
 	if err == nil || !strings.Contains(err.Error(), "no active sessions") {
@@ -156,6 +174,11 @@ func testWakePermissionCommand(t *testing.T, allowed bool) {
 			}
 			armed++
 			return wake.ArmState{}, false, nil
+		},
+
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			t.Error("wake permission command dialed a remote host")
+			return nil, errors.New("unexpected remote dial")
 		},
 	}, "wake", verb)
 	if err != nil {

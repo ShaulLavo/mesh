@@ -124,7 +124,7 @@ def run(bash, script, arguments):
         for name, target in (("python3", str(Path(sys.executable).resolve())), ("bash", bash), ("sh", "/bin/sh")):
             (tools / name).symlink_to(target)
         selected = ("PATH", "TMPDIR", "TERM", "LANG", "DBUS_SESSION_BUS_ADDRESS", "GOCACHE", "GOMODCACHE",
-                    "MESH", "MESH_INTEGRATION_BINARY", "MESH_TEST_ZSH", "MESH_SHORT_TMP")
+                    "MESH", "MESH_INTEGRATION_BINARY", "MESH_TEST_ZSH", "MESH_SHORT_TMP", "MESH_WATCH_SECONDS")
         environment = {name: os.environ[name] for name in selected if name in os.environ}
         if shutil.which("go"):
             for name in ("GOROOT", "GOCACHE", "GOMODCACHE"):

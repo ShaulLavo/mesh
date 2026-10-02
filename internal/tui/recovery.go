@@ -83,6 +83,12 @@ func (m model) savedDetailsFor(current session) inspectionDetails {
 		return savedRecoveryDetails(current)
 	}
 	details := savedRecoveryDetails(current)
+	if current.recoveryPending {
+		details.output = "Loading session metadata"
+		details.screenStatus = "Loading session metadata"
+		details.preview = []string{"Loading session metadata…"}
+		return details
+	}
 	details.screenStatus = "Loading previous output"
 	details.preview = []string{"Loading saved preview…"}
 	if m.inspection.kind == inspectionFailed || m.inspection.kind == inspectionUnavailable {

@@ -110,7 +110,7 @@ func TestGCPrintsAPlanAndActsOnlyWithYes(t *testing.T) {
 		shell.MemoryBytes = 0
 		return []protocol.SessionInfo{agent, shell}
 	}
-	dependencies := Dependencies{DialHost: host.dial, Now: func() time.Time { return commandTestTime }}
+	dependencies := Dependencies{DialHost: host.dial, DialControl: host.dial, Now: func() time.Time { return commandTestTime }}
 	stdout, _, err := executeCommand(t, dependencies, "gc")
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestGCRechecksAShellBeforeKillingIt(t *testing.T) {
 	}
 	// The fake host's inspection reports the session attached, as if someone
 	// reattached between the listing and the kill.
-	stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial, Now: func() time.Time { return commandTestTime }}, "gc", "--shells", "--yes")
+	stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial, Now: func() time.Time { return commandTestTime }}, "gc", "--shells", "--yes")
 	if err == nil || !strings.Contains(err.Error(), "session 91AZ on pc: attached since the plan was made") {
 		t.Fatalf("gc kill of a reattached shell = %v\n%s", err, stdout)
 	}

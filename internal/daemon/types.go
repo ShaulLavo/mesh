@@ -40,6 +40,8 @@ type CatalogConfig struct {
 	// OnChange runs synchronously after a committed session delta, under the
 	// catalog gate. It must not block or call back into the catalog.
 	OnChange func(SessionDiff)
+	// OnObservation runs under the gate for every completed pass, using monotonic time at its consumer.
+	OnObservation func(error)
 }
 
 // WorkerConnector resolves and opens one worker without exposing filesystem

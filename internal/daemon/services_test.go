@@ -400,6 +400,9 @@ func TestPublicServiceUpsertRollsBackDurablyAndCompensatesEdge(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			broker := newStateBroker(1, time.Now)
+			controller.onCommitted = broker.servicesCommitted
+			controller.publishCommitted()
 			candidate := protocol.ServiceInfo{Name: "app", Kind: "proxy", Target: "8081", PublicName: "old.shaulavo.dev"}
 			if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
 				Type: protocol.TypeServiceUpsert, RequestID: "public-update", Service: &candidate,
@@ -410,6 +413,7 @@ func TestPublicServiceUpsertRollsBackDurablyAndCompensatesEdge(t *testing.T) {
 			if err != nil || persisted.Target != test.wantTarget || registry.Services()[0].Target != test.wantTarget {
 				t.Fatalf("persisted = %#v, live = %#v, error = %v", persisted, registry.Services(), err)
 			}
+			assertWatchCommittedService(t, broker, test.wantTarget)
 			calls := publisher.snapshot()
 			if len(calls) != 2 || calls[0][0].Target != "8081" || calls[1][0].Target != test.wantTarget {
 				t.Fatalf("edge convergence calls = %#v", calls)
@@ -696,5 +700,15 @@ func assertServiceResponse(t *testing.T, handler http.Handler, target string, wa
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
 	if response.Code != wantStatus || response.Body.String() != wantBody {
 		t.Fatalf("GET %s = %d %q, want %d %q", target, response.Code, response.Body.String(), wantStatus, wantBody)
+	}
+}
+
+func assertWatchCommittedService(t *testing.T, broker *stateBroker, target string) {
+	t.Helper()
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	row, ok := broker.services["app"]
+	if !ok || row.Target != target || row.Healthy || broker.observations[protocol.TopicServices].failing {
+		t.Fatalf("watch differs from final routing state: %+v", row)
 	}
 }

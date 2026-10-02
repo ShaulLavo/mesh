@@ -154,7 +154,7 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 	// the launcher exits, and meta.json remains authoritative for its outcome.
 	go func() { _ = cmd.Wait() }()
 
-	if err := waitForWorker(dir, workerReadyTimeout); err != nil {
+	if err := waitForWorker(dir, workerReadyTimeout, cmd.Process); err != nil {
 		return Launched{}, &StartedError{ID: id, Err: fmt.Errorf("launch worker %s: readiness (see %s): %w", id, logPath, err)}
 	}
 	meta, err := ReadMeta(dir)
@@ -217,11 +217,14 @@ func reserveSessionDir(root string) (string, string, error) {
 	return "", "", fmt.Errorf("launch worker: could not reserve a session ID after %d attempts", sessionIDAttempts)
 }
 
-func waitForWorker(dir string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+func waitForWorker(dir string, timeout time.Duration, process *os.Process) error {
+	started := time.Now()
+	deadline := started.Add(timeout)
 	for {
+		phase := "launch-marker-unreadable"
 		_, markerErr := os.Lstat(paths.Launching(dir))
 		if errors.Is(markerErr, os.ErrNotExist) {
+			phase = "socket-dial-failing"
 			conn, err := net.DialTimeout("unix", paths.Socket(dir), 200*time.Millisecond)
 			if err == nil {
 				_ = conn.Close()
@@ -235,10 +238,11 @@ func waitForWorker(dir string, timeout time.Duration) error {
 			}
 			markerErr = err
 		} else if markerErr == nil {
+			phase = "launch-marker-present"
 			markerErr = fmt.Errorf("worker is still publishing state")
 		}
 		if time.Now().After(deadline) {
-			return markerErr
+			return readinessTimeout(dir, process, started, deadline, phase, markerErr)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

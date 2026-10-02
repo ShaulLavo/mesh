@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/shaul/mesh/internal/edge"
+	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
 	meshserve "github.com/shaul/mesh/internal/serve"
@@ -21,6 +23,8 @@ import (
 // clientServer dispatches frames for each disposable client connection. Its
 // lifecycle and worker dependencies are safe to share across clients.
 type clientServer struct {
+	state        *stateBroker
+	metrics      *hostmetrics.Sampler
 	lifecycle    *lifecycle
 	workers      WorkerConnector
 	edge         controlHandler
@@ -80,6 +84,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		}
 	}()
 
+	terminalUsed := false
 	for {
 		frame, err := client.ReadFrame()
 		if err != nil {
@@ -92,6 +97,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		handled, requestErr := relay.HandleFrame(ctx, frame)
 		if handled {
 			if requestErr == nil {
+				terminalUsed = true
 				continue
 			}
 			if err := writeClientRequestError(relay, requestMetadata(frame), requestErr); err != nil {
@@ -114,6 +120,21 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			continue
 		}
 
+		if request.Type == protocol.TypeStateWatch && s.state != nil {
+			if terminalUsed {
+				if err := writeClientRequestError(relay, request, errWatchMode); err != nil {
+					return err
+				}
+				continue
+			}
+			return s.transitionState(ctx, client, request, relay)
+		}
+		if request.Type == protocol.TypeHostMetrics && s.metrics != nil {
+			if err := s.replyMetrics(ctx, relay, request); err != nil {
+				return err
+			}
+			continue
+		}
 		response, lifecycleHandled, requestErr := s.lifecycle.HandleControl(ctx, request)
 		if !lifecycleHandled && request.Type == protocol.TypeTunnelRecover {
 			response, requestErr = s.recoverTunnel(ctx, request)
@@ -147,7 +168,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			continue
 		}
 		if !lifecycleHandled {
-			requestErr = fmt.Errorf("daemon: unknown control %q", request.Type)
+			requestErr = fmt.Errorf("%w %q", errUnknownControl, request.Type)
 			if err := writeClientRequestError(relay, request, requestErr); err != nil {
 				return clientOperationError(ctx, fmt.Sprintf("report unknown control %q", request.Type), err)
 			}
@@ -192,7 +213,15 @@ func writeClientRequestError(relay *clientRelay, request protocol.Control, reque
 	return nil
 }
 
+var errUnknownControl = errors.New("daemon: unknown control")
+
 func clientErrorCode(err error) string {
+	if errors.Is(err, errUnknownControl) {
+		return protocol.ErrorCodeUnknownControl
+	}
+	if errors.Is(err, errWatchLimit) {
+		return protocol.ErrorCodeWatchLimit
+	}
 	if errors.Is(err, updategate.ErrUpdating) {
 		return "update.in_progress"
 	}
@@ -254,4 +283,34 @@ func onlyNormalClientErrors(err error) bool {
 	}
 	status := websocket.CloseStatus(err)
 	return status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway
+}
+
+func (s *clientServer) replyMetrics(ctx context.Context, relay *clientRelay, request protocol.Control) error {
+	response, err := s.readMetrics(ctx, request)
+	if err != nil {
+		return writeClientRequestError(relay, request, err)
+	}
+	return relay.enqueueResponse(response)
+}
+func (s *clientServer) readMetrics(ctx context.Context, request protocol.Control) (protocol.Frame, error) {
+	if err := validateRequestID(request); err != nil {
+		return protocol.Frame{}, err
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	metrics, err := s.metrics.Read(readCtx)
+	if err != nil {
+		return protocol.Frame{}, fmt.Errorf("daemon: host metrics: %w", err)
+	}
+	return encodeClientControl(protocol.Control{Type: protocol.TypeHostMetricsResult, RequestID: request.RequestID, Metrics: &metrics})
+}
+
+func (s *clientServer) transitionState(ctx context.Context, client transport.Conn, request protocol.Control, relay *clientRelay) error {
+	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	err := relay.drainWriter(writeCtx)
+	cancel()
+	if err != nil {
+		return err
+	}
+	return s.serveState(ctx, client, request)
 }

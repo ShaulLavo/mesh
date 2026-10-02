@@ -23,19 +23,22 @@ import (
 // Catalog reconstructs the durable view of local workers from their session
 // directories.
 type Catalog struct {
-	sessionsDir string
-	host        storage.Host
-	store       CatalogStore
-	probe       WorkerProbe
-	bootID      func() string
-	now         func() time.Time
-	onReconcile func([]storage.Session)
-	onChange    func(SessionDiff)
+	sessionsDir   string
+	host          storage.Host
+	store         CatalogStore
+	probe         WorkerProbe
+	bootID        func() string
+	now           func() time.Time
+	onReconcile   func([]storage.Session)
+	onChange      func(SessionDiff)
+	onObservation func(error)
 
-	previous      map[storage.SessionID]storage.Session
-	lastSeenAt    time.Time
-	persistedAt   time.Time
-	reconcileGate chan struct{}
+	metadata        map[storage.SessionID]directoryRevision
+	scannedMetadata map[storage.SessionID]directoryRevision
+	previous        map[storage.SessionID]storage.Session
+	lastSeenAt      time.Time
+	persistedAt     time.Time
+	reconcileGate   chan struct{}
 }
 
 // NewCatalog validates and retains the boundaries used by a local catalog.
@@ -55,13 +58,14 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		now:           cfg.Now,
 		onReconcile:   cfg.OnReconcile,
 		onChange:      cfg.OnChange,
+		onObservation: cfg.OnObservation,
 		reconcileGate: make(chan struct{}, 1),
 	}, nil
 }
 
 // Reconcile replaces the stored active view with one complete observation of
 // the worker directories.
-func (c *Catalog) Reconcile(ctx context.Context) error {
+func (c *Catalog) Reconcile(ctx context.Context) (resultErr error) {
 	if err := validContext(ctx); err != nil {
 		return fmt.Errorf("daemon: reconcile catalog: %w", err)
 	}
@@ -72,6 +76,11 @@ func (c *Catalog) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("daemon: reconcile catalog: %w", ctx.Err())
 	}
 
+	defer func() {
+		if c.onObservation != nil {
+			c.onObservation(resultErr)
+		}
+	}()
 	observed, err := c.scan(ctx)
 	if err != nil {
 		return err
@@ -102,6 +111,8 @@ func (c *Catalog) Reconcile(ctx context.Context) error {
 	if changes.Host != nil {
 		c.persistedAt = host.LastSeenAt
 	}
+	diff.MetadataChanged = c.metadataChanges(next)
+	c.metadata = c.scannedMetadata
 	c.publishDiff(diff)
 	if c.onReconcile != nil {
 		c.onReconcile(observed)
@@ -154,6 +165,7 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 		return nil, fmt.Errorf("daemon: read session directory %s: %w", c.sessionsDir, err)
 	}
 
+	c.scannedMetadata = make(map[storage.SessionID]directoryRevision)
 	currentBootID := c.bootID()
 	observed := make([]storage.Session, 0, len(entries))
 	for _, entry := range entries {
@@ -164,6 +176,9 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 			return nil, fmt.Errorf("daemon: scan session directory %s: %w", c.sessionsDir, err)
 		}
 
+		if err := c.observeDirectory(entry); err != nil {
+			return nil, err
+		}
 		dir := filepath.Join(c.sessionsDir, entry.Name())
 		if _, err := os.Lstat(paths.Launching(dir)); err == nil {
 			continue

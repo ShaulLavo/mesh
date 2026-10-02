@@ -24,7 +24,12 @@ func TestWindowFlagsRejectInvalidEntryBeforeDiscovery(t *testing.T) {
 		_, _, err := executeCommand(t, Dependencies{DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
 			t.Fatal("invalid window command queried the network")
 			return nil, errors.New("unexpected dial")
-		}}, args...)
+		},
+			DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+				t.Fatal("invalid window command queried the network")
+				return nil, errors.New("unexpected dial")
+			},
+		}, args...)
 		if err == nil {
 			t.Fatalf("%v succeeded", args)
 		}
@@ -39,7 +44,7 @@ func TestPickerStartsWithLocalCatalogBeforeRemoteDiscovery(t *testing.T) {
 	host := setupCommandTestHost(t)
 	called := false
 	_, _, err := executeCommand(t, Dependencies{
-		DialHost: host.dial,
+		DialHost: host.dial, DialControl: host.dial,
 		Picker: func(ctx context.Context, input PickerInput) (PickerSelection, error) {
 			called = true
 			if len(host.recorded()) != 0 || len(input.Hosts) != 2 || !input.Hosts[0].Local || input.Hosts[0].Host.Alias != localHostAlias {
@@ -66,7 +71,7 @@ func TestPickerResumeNeverTakesAnAttachedSession(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			host := setupCommandTestHost(t)
 			host.sessionState = state
-			_, _, err := executeCommand(t, Dependencies{DialHost: host.dial, Picker: func(context.Context, PickerInput) (PickerSelection, error) {
+			_, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial, Picker: func(context.Context, PickerInput) (PickerSelection, error) {
 				return PickerSelection{HostAlias: "pc"}, nil
 			}}, "--raw")
 			if state == worker.StateRunning {

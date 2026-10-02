@@ -182,14 +182,14 @@ func TestWaitForWorkerAcceptsAWorkerThatAlreadyFinished(t *testing.T) {
 	if err := WriteMeta(dir, meta); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitForWorker(dir, 50*time.Millisecond); err == nil {
+	if err := waitForWorker(dir, 50*time.Millisecond, nil); err == nil {
 		t.Fatal("a published worker with no socket and no exit counted as ready")
 	}
 	meta.State, meta.ExitCode, meta.ExitedAt = StateExited, &code, &now
 	if err := WriteMeta(dir, meta); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitForWorker(dir, time.Second); err != nil {
+	if err := waitForWorker(dir, time.Second, nil); err != nil {
 		t.Fatalf("a worker that recorded its exit before the dial: %v", err)
 	}
 }

@@ -202,7 +202,12 @@ func TestSignalRejectsUnknownBeforeRemoteDial(t *testing.T) {
 	stdout, _, err := executeCommand(t, Dependencies{DialHost: func(ctx context.Context, record HostRecord) (transport.Conn, error) {
 		dials++
 		return host.dial(ctx, record)
-	}}, "sig", "7K3D", "bogus")
+	},
+		DialControl: func(ctx context.Context, record HostRecord) (transport.Conn, error) {
+			dials++
+			return host.dial(ctx, record)
+		},
+	}, "sig", "7K3D", "bogus")
 	if err == nil || dials != 0 || strings.Contains(stdout, "sent") {
 		t.Fatalf("invalid remote signal = %q, %v, dials %d", stdout, err, dials)
 	}
@@ -254,7 +259,7 @@ func TestSignalNormalisesRemoteName(t *testing.T) {
 	for _, name := range []string{"TERM", term, "SIGTERM"} {
 		t.Run(name, func(t *testing.T) {
 			host := setupCommandTestHost(t)
-			stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial}, "sig", "7K3D", name)
+			stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial}, "sig", "7K3D", name)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -368,7 +373,7 @@ func TestLogsAttemptsTheWorkerOnAnUnknownProbe(t *testing.T) {
 func TestOfflineRemoveHidesSessionFromCLIAndPickerBeforeReconciliation(t *testing.T) {
 	host := setupCommandTestHost(t)
 	writeLocalSessionDir(t, "L0CL", worker.StateExited)
-	dependencies := Dependencies{DialHost: host.dial}
+	dependencies := Dependencies{DialHost: host.dial, DialControl: host.dial}
 	if _, _, err := executeCommand(t, dependencies, "rm", "L0CL"); err != nil {
 		t.Fatal(err)
 	}

@@ -103,7 +103,7 @@ func assertHandoffCandidateOnlyAttached(t *testing.T, candidate *handoffGateConn
 
 func realWorkerHandoffFixture(t *testing.T, boundary string) (*relayTestConn, *clientRelay, *handoffGateConn, <-chan error) {
 	t.Helper()
-	root := t.TempDir()
+	root := compactSocketTempDir(t)
 	dir := filepath.Join(root, "s")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)

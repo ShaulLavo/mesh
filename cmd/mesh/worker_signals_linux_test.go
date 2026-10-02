@@ -46,7 +46,7 @@ type launchedWorker struct {
 // fails, so the test never reaches the host's user manager.
 func launchSignalWorker(t *testing.T) launchedWorker {
 	t.Helper()
-	root := t.TempDir()
+	root := testenv.SocketTempDir(t)
 	bin := filepath.Join(root, "bin")
 	if err := os.Mkdir(bin, 0o700); err != nil {
 		t.Fatal(err)

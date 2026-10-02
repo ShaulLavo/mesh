@@ -36,7 +36,12 @@ func TestPreviousOutputReadsBeyondCatalogPreviewWithoutNetwork(t *testing.T) {
 	output, _, err := executeCommand(t, Dependencies{DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
 		t.Fatal("local previous output queried a remote host")
 		return nil, nil
-	}}, "logs", "7K3D", "--previous")
+	},
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			t.Fatal("local previous output queried a remote host")
+			return nil, nil
+		},
+	}, "logs", "7K3D", "--previous")
 	if err != nil || !strings.Contains(output, "Previous output") || !strings.Contains(output, lines[0]) {
 		t.Fatalf("saved output = %q, %v", output, err)
 	}

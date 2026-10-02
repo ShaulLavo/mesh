@@ -155,7 +155,7 @@ func TestCancelledAttachmentBindingDependsOnAcknowledgement(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Cleanup(func() { _ = output.Close() })
-				command := NewCommand(Dependencies{DialHost: dial, Stdin: input, Stdout: output, Stderr: output,
+				command := NewCommand(Dependencies{DialHost: dial, DialControl: dial, Stdin: input, Stdout: output, Stderr: output,
 					Terminal: fakeTerminal(key), Containment: func(context.Context) []protocol.SessionIdentity { return nil }})
 				command.SetArgs([]string{"pc", "-r", "--raw"})
 				ctx, cancel := context.WithCancel(t.Context())

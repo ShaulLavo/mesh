@@ -21,7 +21,7 @@ func TestControlConnectionCapsRefuseWithoutDisruptingClients(t *testing.T) {
 		t.Run(network, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), runtimeTestTimeout)
 			defer cancel()
-			cfg := ListenerConfig{StateDir: t.TempDir(), UnixConnectionLimit: 1, TailnetConnectionLimit: 1}
+			cfg := ListenerConfig{StateDir: compactSocketTempDir(t), UnixConnectionLimit: 1, TailnetConnectionLimit: 1}
 			dial := func() transport.Conn { return dialUnixRuntime(t, filepath.Join(cfg.StateDir, daemonSocketName)) }
 			var listeners []net.Listener
 			if network == "Tailnet" {
@@ -154,7 +154,7 @@ func TestInvalidWebSocketUpgradeReturnsReservation(t *testing.T) {
 }
 
 func TestControlConnectionLimitDefaultsAndValidation(t *testing.T) {
-	cfg := ListenerConfig{StateDir: t.TempDir()}
+	cfg := ListenerConfig{StateDir: compactSocketTempDir(t)}
 	normalized, err := validateListenerConfig(context.Background(), cfg, echoControlFrames)
 	if err != nil {
 		t.Fatal(err)

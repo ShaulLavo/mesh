@@ -277,7 +277,7 @@ func assertWorkerOperationClientRecovers(t *testing.T, client net.Conn, request 
 
 func workerOperationUnixPair(t *testing.T) (net.Conn, transport.Conn) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "c.sock")
+	path := filepath.Join(compactSocketTempDir(t), "c.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)

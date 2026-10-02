@@ -26,7 +26,12 @@ func TestLocalSessionWithAdoptedSelfAliasIsNotAmbiguous(t *testing.T) {
 	stdout, _, err := executeCommand(t, Dependencies{DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
 		t.Error("local host alias was queried as another machine")
 		return nil, errors.New("self queried")
-	}}, "logs", "BVMX")
+	},
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			t.Error("local host alias was queried as another machine")
+			return nil, errors.New("self queried")
+		},
+	}, "logs", "BVMX")
 	if err != nil || !strings.Contains(stdout, "local output") {
 		t.Fatalf("self alias hid local logs: %q, %v", stdout, err)
 	}
@@ -39,7 +44,7 @@ func TestSameSessionIDOnDifferentIdentityRemainsAmbiguous(t *testing.T) {
 	}
 	writeLocalSessionDir(t, "BVMX", worker.StateExited)
 	fixture.sessionID, fixture.sessionState = "BVMX", worker.StateExited
-	_, _, err := executeCommand(t, Dependencies{DialHost: fixture.dial}, "logs", "BVMX")
+	_, _, err := executeCommand(t, Dependencies{DialHost: fixture.dial, DialControl: fixture.dial}, "logs", "BVMX")
 	if err == nil || !strings.Contains(err.Error(), "both on this host and on pc") {
 		t.Fatalf("different host collision hidden: %v", err)
 	}

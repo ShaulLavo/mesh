@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 	"time"
 
@@ -15,9 +16,10 @@ const hostPersistenceInterval = time.Minute
 // SessionDiff describes a committed catalog change. Added and Changed carry
 // complete stored records; absent active workers change to interrupted.
 type SessionDiff struct {
-	Added   []storage.Session
-	Changed []storage.Session
-	Removed []storage.SessionID
+	Added           []storage.Session
+	Changed         []storage.Session
+	Removed         []storage.SessionID
+	MetadataChanged []storage.SessionID
 }
 
 func (c *Catalog) loadPrevious(ctx context.Context) error {
@@ -124,7 +126,7 @@ func sameExitCode(a, b *int) bool {
 }
 
 func (c *Catalog) publishDiff(diff SessionDiff) {
-	if c.onChange == nil || (len(diff.Added) == 0 && len(diff.Changed) == 0 && len(diff.Removed) == 0) {
+	if c.onChange == nil || (len(diff.Added) == 0 && len(diff.Changed) == 0 && len(diff.Removed) == 0 && len(diff.MetadataChanged) == 0) {
 		return
 	}
 	// A subscriber owns its records, including their pointer and slice fields.
@@ -169,4 +171,34 @@ func (c *Catalog) FlushHost(ctx context.Context) error {
 	}
 	c.persistedAt = host.LastSeenAt
 	return nil
+}
+
+type directoryRevision struct {
+	modified time.Time
+	size     int64
+}
+
+// Recognition writers atomically replace files, changing their directory revision.
+func (c *Catalog) observeDirectory(entry os.DirEntry) error {
+	if c.onChange == nil {
+		return nil
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return fmt.Errorf("daemon: observe session directory %s: %w", entry.Name(), err)
+	}
+	c.scannedMetadata[storage.SessionID(entry.Name())] = directoryRevision{modified: info.ModTime(), size: info.Size()}
+	return nil
+}
+func (c *Catalog) metadataChanges(rows map[storage.SessionID]storage.Session) []storage.SessionID {
+	var changed []storage.SessionID
+	for _, id := range slices.Sorted(maps.Keys(c.scannedMetadata)) {
+		if _, exists := rows[id]; !exists {
+			continue
+		}
+		if c.metadata[id] != c.scannedMetadata[id] {
+			changed = append(changed, id)
+		}
+	}
+	return changed
 }

@@ -193,7 +193,7 @@ func TestAttachByIDResumesAHibernatedRemoteSession(t *testing.T) {
 	host.listRows = func() []protocol.SessionInfo {
 		return []protocol.SessionInfo{hibernatedRow("7K3D", host.host.ID, commandTestTime.Add(-time.Hour))}
 	}
-	_, stderr, err := executeCommand(t, Dependencies{DialHost: host.dial, Now: func() time.Time { return commandTestTime }}, "7K3D")
+	_, stderr, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial, Now: func() time.Time { return commandTestTime }}, "7K3D")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestAttachRacingHibernationRetriesThroughRecovery(t *testing.T) {
 		stopped.Store(true)
 		return protocol.ReasonHibernating, "session is hibernating; attach again to resume it"
 	}
-	_, stderr, err := executeCommand(t, Dependencies{DialHost: host.dial, Now: func() time.Time { return commandTestTime }}, "7K3D")
+	_, stderr, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial, Now: func() time.Time { return commandTestTime }}, "7K3D")
 	if err != nil {
 		t.Fatalf("attach during hibernation = %v (stderr %q)", err, stderr)
 	}
@@ -274,7 +274,7 @@ func TestResumeFlagWakesAHibernatedSessionOnlyWhenNothingIsLive(t *testing.T) {
 			host := setupCommandTestHost(t)
 			host.recoverTo = "9ABC"
 			host.listRows = func() []protocol.SessionInfo { return test.rows(host.host.ID) }
-			if _, _, err := executeCommand(t, Dependencies{DialHost: host.dial, Now: func() time.Time { return commandTestTime }}, "pc", "-r"); err != nil {
+			if _, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial, Now: func() time.Time { return commandTestTime }}, "pc", "-r"); err != nil {
 				t.Fatal(err)
 			}
 			host.mu.Lock()
@@ -292,7 +292,7 @@ func TestResumeFlagWakesAHibernatedSessionOnlyWhenNothingIsLive(t *testing.T) {
 
 func TestHibernateCommandReportsEachOutcome(t *testing.T) {
 	host := setupCommandTestHost(t)
-	stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial, Now: func() time.Time { return commandTestTime }}, "hibernate", "7k3d", "ZZZZ")
+	stdout, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial, Now: func() time.Time { return commandTestTime }}, "hibernate", "7k3d", "ZZZZ")
 	if !strings.Contains(stdout, "hibernated 7K3D") {
 		t.Fatalf("stdout = %q", stdout)
 	}
@@ -304,7 +304,7 @@ func TestHibernateCommandReportsEachOutcome(t *testing.T) {
 	}
 
 	host.hibernateError = "worker: session 7K3D: " + worker.ErrNotHibernatable.Error()
-	_, _, err = executeCommand(t, Dependencies{DialHost: host.dial, Now: func() time.Time { return commandTestTime }}, "hibernate", "7K3D")
+	_, _, err = executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial, Now: func() time.Time { return commandTestTime }}, "hibernate", "7K3D")
 	if err == nil || err.Error() != "session 7K3D on pc: no running agent conversation is registered in this session" {
 		t.Fatalf("refusal = %v", err)
 	}

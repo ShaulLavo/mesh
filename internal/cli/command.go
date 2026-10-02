@@ -442,17 +442,6 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 		}
 		return a.refreshPickerSessions(ctx, host, cache)
 	}
-	refreshHost := func(ctx context.Context, alias string) (PickerHostSnapshot, error) {
-		if alias == localHostAlias {
-			local, err := localPickerCatalog()
-			return PickerHostSnapshot{Sessions: local}, err
-		}
-		host, err := hostWithAlias(hosts, alias)
-		if err != nil {
-			return PickerHostSnapshot{}, err
-		}
-		return a.refreshPickerHost(ctx, host, cache)
-	}
 	containingIdentities := a.dependencies.Containment(cmd.Context())
 	if err := protocol.ValidateContainingSessions(containingIdentities); err != nil {
 		return fmt.Errorf("read terminal containment: %w", err)
@@ -477,6 +466,21 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 		}
 		pickerContext, cancelPicker := context.WithCancel(cmd.Context())
 		pickerOperations := newPickerOperationGate()
+		pickerState := newPickerState(pickerContext, a.dependencies.DialControl)
+		pickerState.cache = cache
+		refreshHost := func(ctx context.Context, alias string) (PickerHostSnapshot, error) {
+			if alias == localHostAlias {
+				pickerState.close()
+				local, err := localPickerCatalog()
+				return PickerHostSnapshot{Sessions: local}, err
+			}
+			host, err := hostWithAlias(hosts, alias)
+			if err != nil {
+				return PickerHostSnapshot{}, err
+			}
+			return a.refreshWatchedPickerHost(ctx, host, cache, pickerState)
+		}
+
 		selection, err := a.dependencies.Picker(pickerContext, PickerInput{
 			UpdateNotice: a.pickerUpdateNotice(),
 			Hosts:        catalog,
@@ -485,6 +489,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 					return nil, context.Canceled
 				}
 				defer pickerOperations.done()
+				pickerState.close()
 				return CollectHostSessions(ctx, hosts, defaultCatalogTimeout, a.queryHost, cache)
 			},
 			OpenHostAlias:      openHostAlias,
@@ -519,6 +524,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 			},
 		})
 		cancelPicker()
+		pickerState.close()
 		pickerOperations.stopAndWait()
 		if err != nil {
 			return err
@@ -934,7 +940,7 @@ func (a *application) attachResolvedWithContainment(
 }
 
 func (a *application) queryHost(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
-	return listRemoteHost(ctx, host, a.dependencies.DialHost)
+	return listRemoteHost(ctx, host, a.dependencies.DialControl)
 }
 
 func (a *application) addCommand() *cobra.Command {
@@ -1647,6 +1653,7 @@ func (a *application) daemonCommand() *cobra.Command {
 		appDataRoot            string
 		tailscaleServe         bool
 		hibernateIdle          time.Duration
+		subscriberLimit        int
 		unixConnectionLimit    int
 		tailnetConnectionLimit int
 	)
@@ -1680,6 +1687,7 @@ func (a *application) daemonCommand() *cobra.Command {
 			defer stopUpdateNotices()
 			return meshdaemon.Run(cmd.Context(), meshdaemon.Config{
 				SSHSessionHandler:      a.dependencies.SSHSessionHandler,
+				SubscriberLimit:        subscriberLimit,
 				UnixConnectionLimit:    unixConnectionLimit,
 				TailnetConnectionLimit: tailnetConnectionLimit,
 				StateDir:               stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
@@ -1690,6 +1698,7 @@ func (a *application) daemonCommand() *cobra.Command {
 			})
 		},
 	}
+	command.Flags().IntVar(&subscriberLimit, "subscriber-limit", meshdaemon.DefaultSubscriberLimit, "maximum state.watch subscribers across all transports")
 	command.Flags().IntVar(&unixConnectionLimit, "unix-connection-limit", meshdaemon.DefaultUnixConnectionLimit, "maximum concurrent Unix control connections")
 	command.Flags().IntVar(&tailnetConnectionLimit, "tailnet-connection-limit", meshdaemon.DefaultTailnetConnectionLimit, "maximum concurrent Tailnet control connections across all addresses")
 	command.Flags().UintVar(&port, "tailnet-port", 0, "Tailnet WebSocket port; zero disables remote listening")

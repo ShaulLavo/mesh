@@ -140,7 +140,7 @@ func TestConcurrentListCommandsSurviveCatalogOpenContention(t *testing.T) {
 		go func() {
 			defer commands.Done()
 			stdout, stderr, err := executeCommand(t, Dependencies{
-				DialHost: func(ctx context.Context, queried HostRecord) (transport.Conn, error) {
+				DialControl: func(ctx context.Context, queried HostRecord) (transport.Conn, error) {
 					if queried.ID == host.host.ID {
 						return host.dial(ctx, queried)
 					}
