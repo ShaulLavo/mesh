@@ -11,14 +11,7 @@ import (
 )
 
 func (m dashboardModel) graphHeight() int {
-	if m.width < 140 || m.height < 40 {
-		return 4
-	}
-	cardRows := max(1, (len(m.hosts)+1)/2)
-	// Catalog content claims its rows before graphs grow into the remaining height.
-	tableHeight := len(m.summaries(m.height))
-	available := m.height - 5 - tableHeight
-	return max(1, (available-m.cardOverhead())/cardRows)
+	return m.currentLayout().graph
 }
 
 func (m dashboardModel) cardOverhead() int {
@@ -32,20 +25,12 @@ func (m dashboardModel) cardOverhead() int {
 	return total
 }
 func (m dashboardModel) cardsHeight() int {
-	height := m.cardOverhead()
-	for index := 0; index < len(m.hosts); index += 2 {
-		height += m.gridGraphHeight(index)
-	}
-	return height
+	return m.currentLayout().cards
 }
 func (m dashboardModel) gridGraphHeight(index int) int {
+	layout := m.currentLayout()
 	height := m.graphHeight()
-	if m.width < 140 || m.height < 40 {
-		return height
-	}
-	rows := max(1, (len(m.hosts)+1)/2)
-	available := max(0, m.height-5-len(m.summaries(m.height))-m.cardOverhead())
-	if index/2 < available%rows {
+	if index/2 < layout.remainder {
 		height++
 	}
 	return height
@@ -57,13 +42,16 @@ func (m dashboardModel) gridGPU(index int) bool {
 	return index+1 < len(m.hosts) && dashboardHasGPU(m.hosts[index+1])
 }
 func (m dashboardModel) cards() []string {
+	m.layout = m.currentLayout()
+	m.layoutPrepared = true
 	width := (m.width - 1) / 2
 	var lines []string
 	for index := 0; index < len(m.hosts); index += 2 {
-		left := m.cardWithGPU(m.hosts[index], width, m.gridGPU(index), m.gridGraphHeight(index))
+		gpuRow, height := m.gridGPU(index), m.gridGraphHeight(index)
+		left := m.cardWithGPU(m.hosts[index], width, gpuRow, height)
 		right := make([]string, len(left))
 		if index+1 < len(m.hosts) {
-			right = m.cardWithGPU(m.hosts[index+1], width, m.gridGPU(index), m.gridGraphHeight(index))
+			right = m.cardWithGPU(m.hosts[index+1], width, gpuRow, height)
 		}
 		for row := range left {
 			lines = append(lines, dashboardFit(left[row], width)+" "+dashboardFit(right[row], width))
