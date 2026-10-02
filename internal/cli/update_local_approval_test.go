@@ -44,7 +44,20 @@ func writeApprovalJournal(t *testing.T, status updateinstall.Status) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	file, err := os.CreateTemp(filepath.Dir(path), ".installation-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Remove(file.Name()) }()
+	defer func() { _ = file.Close() }()
+	if _, err := file.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Polling bootstrap readers must see a whole installation journal.
+	if err := os.Rename(file.Name(), path); err != nil {
 		t.Fatal(err)
 	}
 }
