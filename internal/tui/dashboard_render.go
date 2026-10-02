@@ -71,15 +71,17 @@ func (m dashboardModel) card(host cli.DashboardHostView, width int) []string {
 	ramMetric := cli.DashboardMeasurement[float64]{State: host.RAM.State, Value: dashboardMemoryPercent(host.RAM.Value), Sample: host.RAM.Sample, MeasuredAt: host.RAM.MeasuredAt, Failing: host.RAM.Failing}
 	ram := dashboardMeter(ramMetric, m.now, live, inner-5, m.ascii)
 	body := []string{details[1], dashboardCPUStyle.Render("CPU  " + cpu), dashboardRAMStyle.Render("RAM  " + ram), dashboardCPUStyle.Render("CPU  " + dashboardGraph(history.cpu, m.now, inner-5, m.ascii)), dashboardRAMStyle.Render("RAM  " + dashboardGraph(history.ram, m.now, inner-5, m.ascii)), "     -120s" + strings.Repeat(" ", max(0, inner-13)) + "now", m.temperature(host) + " · uptime " + m.uptime(host), details[2], "age CPU " + dashboardAge(m.now, host.CPU.MeasuredAt) + " · RAM " + dashboardAge(m.now, host.RAM.MeasuredAt) + " · temp " + dashboardAge(m.now, host.Temperature.MeasuredAt), details[3]}
-	horizontal, vertical, corner := "─", "│", "┌"
+	horizontal, vertical := "─", "│"
+	topLeft, topRight, bottomLeft, bottomRight := "┌", "┐", "└", "┘"
 	if m.ascii {
-		horizontal, vertical, corner = "-", "|", "+"
+		horizontal, vertical = "-", "|"
+		topLeft, topRight, bottomLeft, bottomRight = "+", "+", "+", "+"
 	}
-	lines := []string{corner + dashboardFit(details[0], width-2) + corner}
+	lines := []string{topLeft + dashboardFit(details[0], width-2) + topRight}
 	for _, line := range body {
 		lines = append(lines, vertical+" "+dashboardFit(line, inner)+" "+vertical)
 	}
-	return append(lines, corner+strings.Repeat(horizontal, width-2)+corner)
+	return append(lines, bottomLeft+strings.Repeat(horizontal, width-2)+bottomRight)
 }
 func (m dashboardModel) fleetRow(host cli.DashboardHostView) string {
 	cpu := dashboardReading(host.CPU, host, m.now, 10*time.Second, fmt.Sprintf("%.0f%%", host.CPU.Value))
@@ -90,7 +92,7 @@ func (m dashboardModel) fleetRow(host cli.DashboardHostView) string {
 }
 func (m dashboardModel) hostLines(host cli.DashboardHostView) []string {
 	title := safeText(host.Host.Alias) + " · " + string(host.Connection)
-	if host.Host.Local {
+	if host.Host.Local && host.Host.Alias != "this host" {
 		title += " · this host"
 	}
 	counts := dashboardCatalogCount("sessions", host.Sessions, host.LastReply, m.now) + " · " + dashboardCatalogCount("services", host.Services, host.LastReply, m.now)
@@ -111,10 +113,10 @@ func (m dashboardModel) hostLines(host cli.DashboardHostView) []string {
 	return []string{title, measurements, counts, detail}
 }
 func dashboardReading[T any](metric cli.DashboardMeasurement[T], host cli.DashboardHostView, now time.Time, limit time.Duration, value string) string {
+	if metric.State == "unsupported" {
+		return "unsupported"
+	}
 	if metric.Sample == "" || metric.MeasuredAt.IsZero() {
-		if metric.State == "unsupported" {
-			return "unsupported"
-		}
 		return statusUnavailable
 	}
 	if metric.Failing || metric.State != statusAvailable || now.Sub(metric.MeasuredAt) >= limit || host.Connection != cli.StateReachable || host.LastReply.IsZero() || now.Sub(host.LastReply) >= 30*time.Second {

@@ -9,10 +9,11 @@ import (
 )
 
 type dashboardPoint struct {
-	at      time.Time
-	sample  string
-	segment uint64
-	value   float64
+	at       time.Time
+	sample   string
+	instance string
+	segment  uint64
+	value    float64
 }
 type dashboardHostHistory struct{ cpu, ram []dashboardPoint }
 
@@ -46,7 +47,7 @@ func dashboardRemember(points []dashboardPoint, reading cli.DashboardMeasurement
 	if len(points) > 0 && !reading.MeasuredAt.After(points[len(points)-1].at) {
 		return points
 	}
-	points = append(points, dashboardPoint{at: reading.MeasuredAt, sample: reading.Sample, segment: reading.Segment, value: reading.Value})
+	points = append(points, dashboardPoint{at: reading.MeasuredAt, sample: reading.Sample, segment: reading.Segment, instance: dashboardInstance(reading.Sample), value: reading.Value})
 	return dashboardPrune(points, now)
 }
 func dashboardPrune(points []dashboardPoint, now time.Time) []dashboardPoint {
@@ -78,6 +79,10 @@ func dashboardGraphValue(points []dashboardPoint, at time.Time) (float64, bool) 
 		if point.at.After(at) {
 			continue
 		}
+		// A reset makes the interval before its first sample discontinuous.
+		if index+1 < len(points) && dashboardResetGap(point, points[index+1], at) {
+			return 0, false
+		}
 		return point.value, at.Sub(point.at) <= 3*time.Second
 	}
 	return 0, false
@@ -106,4 +111,17 @@ func maxTime(values ...time.Time) time.Time {
 		}
 	}
 	return result
+}
+
+func dashboardResetGap(previous, next dashboardPoint, at time.Time) bool {
+	reset := previous.segment != next.segment || previous.instance != next.instance
+	return reset && next.at.Sub(previous.at) <= 3*time.Second && at.After(previous.at)
+}
+
+func dashboardInstance(sample string) string {
+	index := strings.LastIndexByte(sample, '/')
+	if index < 0 {
+		return ""
+	}
+	return sample[:index]
 }
