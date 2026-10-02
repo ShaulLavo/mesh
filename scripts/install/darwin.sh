@@ -46,6 +46,8 @@ else
 	activation_required=0
 	changed=0
 fi
+# A previous failure may have published a plist that launchd has not loaded yet.
+reload_required=$activation_required
 mark_activation_pending() {
 	if [ "$activation_required" -eq 0 ]; then
 		: >"$activation_pending" || fail service_install "cannot mark the service activation pending"
@@ -102,6 +104,7 @@ grep -Fq '<key>AbandonProcessGroup</key>' "$plist_tmp" ||
 	fail service_install "launchd service would stop detached session workers"
 chmod 0644 "$plist_tmp"
 if [ ! -f "$plist_path" ] || ! cmp -s "$plist_tmp" "$plist_path"; then
+	reload_required=1
 	mark_activation_pending
 	mv -f "$plist_tmp" "$plist_path"
 	changed=1
@@ -163,7 +166,8 @@ fi
 if [ "$loaded" -eq 0 ]; then
 	changed=1
 fi
-if [ "$activation_required" -eq 1 ] && [ "$loaded" -eq 1 ]; then
+# Binary and key changes use kickstart to preserve the registered job and KeepAlive.
+if [ "$reload_required" -eq 1 ] && [ "$loaded" -eq 1 ]; then
 	bootout_service "$service"
 	loaded=0
 fi
@@ -173,7 +177,11 @@ if [ "$loaded" -eq 0 ]; then
 	done
 fi
 if [ "$activation_required" -eq 1 ]; then
-	launchctl kickstart -k "$service" >/dev/null 2>&1 || fail service_install "launchctl kickstart failed for $service"
+	if kickstart_error=$(launchctl kickstart -k "$service" 2>&1); then
+		:
+	else
+		fail service_install "launchctl kickstart failed for $service: $kickstart_error"
+	fi
 fi
 launchctl print "$service" >/dev/null 2>&1 || fail service_install "$service is not loaded"
 rm -f "$activation_pending" || fail service_install "cannot clear the service activation marker"
