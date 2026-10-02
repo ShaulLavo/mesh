@@ -249,12 +249,12 @@ done
 RENEWER_KEY="$TEST_ROOT/renewer.key"
 # The renewer is an external signer that Mesh never loads, and openssl signs
 # with it directly, so it stays PKCS#8 rather than following the daemon keys.
-# A fixed public test signer keeps dash-leading positional coverage deterministic.
+# An option-like test signer makes the positional -- separator necessary.
 cp "$REPO_ROOT/integration/fixtures/public-edge-renewer.pem" "$RENEWER_KEY" || fail "copy test renewer identity"
 RENEWER_ID=$(pkcs8_identity_id "$RENEWER_KEY") || fail "derive renewer identity"
 case $RENEWER_ID in
-  -*) ;;
-  *) fail "test renewer identity must begin with a dash" ;;
+  -[!0-9.]*) ;;
+  *) fail "test renewer identity must require the positional -- separator" ;;
 esac
 chmod 0600 "$RENEWER_KEY"
 EDGE_ID=$(identity_id "$EDGE_STATE/identity.key") || fail "derive edge identity"
