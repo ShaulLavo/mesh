@@ -617,13 +617,14 @@ func (l *lifecycle) hostInfo(request protocol.Control) (protocol.Control, error)
 		Type:      protocol.TypeHostInfoResult,
 		RequestID: request.RequestID,
 		Host: &protocol.HostInfo{
-			Build:             executingBuild(),
-			UpdateSupported:   true,
-			RecoverySupported: true,
-			ID:                string(l.host.ID),
-			MeshIdentity:      l.host.MeshIdentity,
-			TailscaleName:     name,
-			PrivateName:       l.privateName(),
+			Build:                  executingBuild(),
+			UpdateSupported:        true,
+			RecoverySupported:      true,
+			ServiceHealthSupported: true,
+			ID:                     string(l.host.ID),
+			MeshIdentity:           l.host.MeshIdentity,
+			TailscaleName:          name,
+			PrivateName:            l.privateName(),
 		},
 	}, nil
 }

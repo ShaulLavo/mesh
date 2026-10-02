@@ -28,6 +28,11 @@ func NewStateWatcher(dialControl HostDialer) *StateWatcher {
 	return &StateWatcher{dial: dialControl, reads: make(chan struct{}, 4), unsupported: map[string]string{}}
 }
 func (w *StateWatcher) Watch(ctx context.Context, host HostRecord, request protocol.StateWatch, publish func(StateView)) error {
+	return w.watch(ctx, host, request, func(view StateView) { publish(view.Clone()) })
+}
+
+// watch lends reader-owned state for synchronous projection; the callback must not retain it.
+func (w *StateWatcher) watch(ctx context.Context, host HostRecord, request protocol.StateWatch, publish func(StateView)) error {
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("watch host %s: %w", host.Alias, err)
 	}
@@ -50,7 +55,7 @@ func (w *StateWatcher) Watch(ctx context.Context, host HostRecord, request proto
 			markSectionFailed(&view, topic)
 		}
 		view.Problem = err.Error()
-		publish(view.Clone())
+		publish(view)
 		attempt++
 		if err := waitState(ctx, stateBackoff(attempt)); err != nil {
 			return err
@@ -106,6 +111,7 @@ func (w *StateWatcher) watchOnce(ctx context.Context, host HostRecord, request p
 		return err
 	}
 	view.Connection, view.Problem = StateReachable, ""
+	view.ServiceHealthSupported = info.ServiceHealthSupported
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
@@ -158,7 +164,7 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("publish host state: %w", err)
 	}
-	publish(view.Clone())
+	publish(*view)
 	err = readStateStream(ctx, host, conn, view, transit, publish)
 	if err != nil {
 		view.Connection = StateUnreachable
@@ -197,7 +203,7 @@ func readStateStream(ctx context.Context, host HostRecord, conn transport.Conn, 
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("publish host state: %w", err)
 		}
-		publish(view.Clone())
+		publish(*view)
 	}
 	return nil
 }
@@ -280,6 +286,7 @@ func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, section
 		return err
 	}
 	view.Connection, view.Problem = StateReachable, ""
+	view.ServiceHealthSupported = info.ServiceHealthSupported
 	defer func() { _ = conn.Close() }()
 	build, _ := json.Marshal(info.Build)
 	if section.build != string(build) {
@@ -373,7 +380,7 @@ func (w *StateWatcher) pollDue(ctx context.Context, host HostRecord, request pro
 	if err := ctx.Err(); err != nil {
 		return time.Time{}, fmt.Errorf("publish state poll: %w", err)
 	}
-	publish(view.Clone())
+	publish(*view)
 	interval := 10 * time.Second
 	if section.topic == protocol.TopicMetrics && !section.unsupported {
 		interval = request.MetricsEvery()
@@ -412,6 +419,7 @@ func markUnsupportedSection(view *StateView, section *pollSection) {
 	if section.topic != protocol.TopicMetrics {
 		return
 	}
+	view.MetricsUnsupported = true
 	if view.Metrics == nil {
 		view.Metrics = &hostmetrics.Snapshot{}
 	}

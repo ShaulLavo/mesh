@@ -86,6 +86,9 @@ type serviceController struct {
 	demand         demandRuntime
 	guard          func(context.Context, meshserve.Service) (func(), error)
 	gate           chan struct{}
+	healthGate     chan struct{}
+	observedHealth map[string]protocol.ServiceInfo
+	healthAt       time.Time
 	unsynced       bool
 	catalogUnknown bool
 	onCommitted    func([]protocol.ServiceInfo, error)
@@ -114,7 +117,7 @@ func newServiceController(ctx context.Context, home string, store serviceStore, 
 			}
 		}
 	}
-	return &serviceController{lifetime: ctx, home: home, store: store, registry: registry, publisher: publisher, demand: disabledDemand{}, gate: make(chan struct{}, 1)}, nil
+	return &serviceController{lifetime: ctx, home: home, store: store, registry: registry, publisher: publisher, demand: disabledDemand{}, gate: make(chan struct{}, 1), healthGate: make(chan struct{}, 1)}, nil
 }
 
 func (c *serviceController) HandleControl(ctx context.Context, request protocol.Control) (protocol.Control, bool, error) {
@@ -650,24 +653,8 @@ func (c *serviceController) publishCommitted() {
 	}
 	rows := make([]protocol.ServiceInfo, 0)
 	for _, service := range c.registry.Services() {
-		row := serviceDefinitionInfo(service)
-		row.Demand = c.demand.Status(service.Name)
+		row := c.publishedServiceHealth(service)
 		rows = append(rows, row)
 	}
 	c.onCommitted(withRetiring(rows, c.demand.Retiring()), nil)
-}
-
-// observeRegistry confirms the authoritative registry without re-probing routes.
-func (c *serviceController) observeRegistry(ctx context.Context, observe func(error)) {
-	if err := c.acquire(ctx); err != nil {
-		observe(err)
-		return
-	}
-	defer func() { <-c.gate }()
-	if c.catalogUnknown {
-		observe(errors.New("service catalog is unavailable"))
-		return
-	}
-	_ = c.registry.Services()
-	observe(nil)
 }
