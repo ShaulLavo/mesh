@@ -38,6 +38,7 @@ func runDashboard(ctx context.Context, input cli.DashboardInput, output io.Write
 	defer cancel()
 	terminal := os.Getenv("TERM")
 	model := newDashboardForTerminal(input, time.Now(), terminal)
+	model.ctx = run
 	configuration := []tea.ProgramOption{tea.WithContext(run), tea.WithInput(nil), tea.WithOutput(output), tea.WithoutSignals()}
 	switch terminal {
 	case "linux":
@@ -96,25 +97,30 @@ type dashboardRenderWork struct {
 }
 
 type dashboardModel struct {
-	layout           dashboardLayout
-	layoutPrepared   bool
-	attentionData    *dashboardAttention
-	serviceHostWidth int
-	renderWork       *dashboardRenderWork
-	hosts            []cli.DashboardHostView
-	now              time.Time
-	width, height    int
-	watchError       error
-	frame            string
-	history          map[string]dashboardHostHistory
-	ramTotals        map[string]uint64
-	wall, ascii      bool
-	profile          colorprofile.Profile
-	palette          dashboardPalette
-	usageEnabled     bool
-	usageFailing     bool
-	usageRevision    uint64
-	usage            dashboardUsage
+	layout            dashboardLayout
+	layoutPrepared    bool
+	attentionData     *dashboardAttention
+	serviceHostWidth  int
+	renderWork        *dashboardRenderWork
+	hosts             []cli.DashboardHostView
+	now               time.Time
+	width, height     int
+	watchError        error
+	frame             string
+	history           map[string]dashboardHostHistory
+	ramTotals         map[string]uint64
+	wall, ascii       bool
+	profile           colorprofile.Profile
+	palette           dashboardPalette
+	usageEnabled      bool
+	usageFailing      bool
+	usageRevision     uint64
+	usage             dashboardUsage
+	ctx               context.Context
+	inspect           cli.PickerInspectFunc
+	sessionSummaries  map[dashboardSessionTarget]sessionLiveSummary
+	inspectionPending bool
+	nextInspection    time.Time
 }
 
 func newDashboardForTerminal(input cli.DashboardInput, now time.Time, terminal string) dashboardModel {
@@ -134,6 +140,8 @@ func newDashboard(input cli.DashboardInput, now time.Time) dashboardModel {
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host, Connection: cli.StateConnecting})
 	}
 	model.usageEnabled = input.UsageWatch != nil
+	model.ctx, model.inspect = context.Background(), input.Inspect
+	model.sessionSummaries = map[dashboardSessionTarget]sessionLiveSummary{}
 	model.sortHosts()
 	return model
 }
@@ -157,11 +165,17 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case dashboardHostMsg:
 		m.receive(cli.DashboardHostView(message))
+		m.pruneSessionSummaries()
+	case dashboardSessionSummariesMsg:
+		m.inspectionPending = false
+		m.acceptSessionSummaries(message)
+		m.frame, m.layout = m.renderFrame()
 	case dashboardTickMsg:
 		m.now = time.Time(message)
 		m.pruneHistory()
 		m.frame, m.layout = m.renderFrame()
-		return m, dashboardTick()
+		inspection := m.inspectSessions()
+		return m, tea.Batch(dashboardTick(), inspection)
 	case dashboardDoneMsg:
 		m.watchError = message.err
 		return m, tea.Quit

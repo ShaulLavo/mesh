@@ -49,15 +49,15 @@ func TestDashboardPassiveViewFitsAndFreshnessIsIndependent(t *testing.T) {
 	assertFits(t, resized, 50, 12)
 }
 
-func TestDashboardSessionCommandPreservesCatalogQuotes(t *testing.T) {
+func TestDashboardSessionHidesLaunchPlumbing(t *testing.T) {
 	const command = `sh -c 'cd -- "$1" && exec "${SHELL:-/bin/bash}" -l'`
 	model := newDashboard(cli.DashboardInput{}, pickerTestNow)
 	host := cli.DashboardHostView{Host: cli.DashboardHost{Alias: "pc"}, Connection: cli.StateReachable,
 		Sessions: cli.DashboardCatalog[cli.DashboardSession]{ObservedAt: pickerTestNow}}
-	session := cli.DashboardSession{ID: "7K3D", State: "running", Command: cli.SafeTerminalText(command)}
+	session := cli.DashboardSession{ID: "7K3D", Name: "mesh", State: "running", Command: cli.SafeTerminalText(command)}
 	row := ansi.Strip(model.sessionRow(host, session, 200, 4))
-	if !strings.Contains(row, command) {
-		t.Fatalf("command quotes changed in the dashboard: %s", row)
+	if strings.Contains(row, "sh -c") || !strings.Contains(row, "mesh") || !strings.Contains(row, "Shell · launch only") {
+		t.Fatalf("dashboard should explain the terminal without its launch plumbing: %s", row)
 	}
 }
 
@@ -170,7 +170,7 @@ func TestDashboardWallContainsHistoriesTemperatureUptimeAndBoundedSummaries(t *t
 			RAM:         cli.DashboardMeasurement[cli.DashboardMemory]{State: "available", Value: cli.DashboardMemory{TotalBytes: 16 << 30, AvailableBytes: 8 << 30, Estimate: "Linux MemAvailable estimate"}, Sample: "ram", MeasuredAt: now},
 			Temperature: cli.DashboardMeasurement[cli.DashboardTemperature]{State: "available", Value: cli.DashboardTemperature{Sensor: "package", Celsius: 42}, Sample: "temp", MeasuredAt: now},
 			Uptime:      cli.DashboardMeasurement[uint64]{State: "available", Value: 3600, Sample: "uptime", MeasuredAt: now},
-			Sessions:    cli.DashboardCatalog[cli.DashboardSession]{Rows: []cli.DashboardSession{{ID: "7K3D", State: "running", Command: "quiet shell"}}, Total: 30, ObservedAt: now},
+			Sessions:    cli.DashboardCatalog[cli.DashboardSession]{Rows: []cli.DashboardSession{{ID: "7K3D", Name: "quiet shell", State: "running", Command: "bash"}}, Total: 30, ObservedAt: now},
 			Services:    cli.DashboardCatalog[cli.DashboardService]{Rows: []cli.DashboardService{{Name: "website", State: "ready"}, {Name: "broken", State: "unhealthy", Problem: "fixture failure", Failed: true}}, Total: 20, Ready: 19, Failed: 1, ObservedAt: now},
 		}
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host.Host})

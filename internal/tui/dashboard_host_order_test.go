@@ -80,7 +80,7 @@ func TestDashboardSessionHostColumnAtWallSize(t *testing.T) {
 	panel := ansi.Strip(strings.Join(model.sessionSummary(leftWidth, 15), "\n"))
 	var heading, row string
 	for _, line := range strings.Split(panel, "\n") {
-		if strings.Contains(line, "COMMAND (launch)") {
+		if strings.Contains(line, "ACTIVITY") {
 			heading = line
 		}
 		if strings.Contains(line, "12345") && strings.Contains(line, "macbook") {

@@ -45,27 +45,24 @@ func (m dashboardModel) summaryRows(services bool, width int) ([]dashboardSummar
 	return rows, total
 }
 func (m dashboardModel) sessionRow(host cli.DashboardHostView, session cli.DashboardSession, width, hostWidth int) string {
-	name := safeText(session.Name)
-	if name == "" {
-		name = "--"
-	}
-	state := m.paint(dashboardMutedStyle).Render(safeText(session.State))
+	name, activity, observedAge := m.sessionDescription(host, session)
+	state := m.paint(dashboardMutedStyle).Render(catalogSessionState(session.State))
 	if session.State == dashboardRunning {
-		state = m.paint(dashboardGoodStyle).Render(session.State)
+		state = m.paint(dashboardGoodStyle).Render(catalogSessionState(session.State))
 	}
 	cached := dashboardSessionsCached(host, m.now)
 	if cached {
-		state = safeText(session.State)
+		state = catalogSessionState(session.State)
 	}
 	if m.usageEnabled {
 		if cached {
-			state = m.paint(dashboardCachedStyle).Render("cached " + safeText(session.State))
+			state = m.paint(dashboardCachedStyle).Render("cached " + catalogSessionState(session.State))
 		}
-		return m.usageSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), session.ID, name, state, safeText(session.Command), width, hostWidth)
+		return m.usageSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), session.ID, name, state, activity, width, hostWidth)
 	}
-	text := dashboardSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), session.ID, name, state, safeText(session.Command), dashboardAge(m.now, host.Sessions.ObservedAt), width, hostWidth)
+	text := dashboardSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), session.ID, name, state, activity, observedAge, width, hostWidth)
 	if cached {
-		text = m.paint(dashboardCachedStyle).Render(dashboardSessionColumns(safeText(host.Host.Alias), session.ID, name, state, safeText(session.Command), dashboardAge(m.now, host.Sessions.ObservedAt), width, hostWidth))
+		text = m.paint(dashboardCachedStyle).Render(dashboardSessionColumns(safeText(host.Host.Alias), session.ID, name, state, activity, observedAge, width, hostWidth))
 	}
 	return text
 }
@@ -80,14 +77,11 @@ func (m dashboardModel) sessionHostWidth(width int) int {
 	if m.usageEnabled {
 		return min(hostWidth, max(4, min(20, width-18)))
 	}
-	// Bound long aliases while leaving room for the launch command on small terminals.
+	// Bound long aliases while leaving room for session context on small terminals.
 	return min(hostWidth, max(4, min(20, width/4)))
 }
 func dashboardSessionColumns(host, id, name, state, command, age string, width, hostWidth int) string {
-	nameWidth, stateWidth := 13, 10
-	if width < 90 {
-		nameWidth = 8
-	}
+	nameWidth, stateWidth := max(8, min(28, (width-hostWidth-26)/2)), 10
 	fixed := hostWidth + 5 + nameWidth + stateWidth + 6 + 5
 	return dashboardFit(host, hostWidth) + " " + dashboardFit(id, 5) + " " + dashboardFit(name, nameWidth) + " " + dashboardFit(state, stateWidth) + " " + dashboardFit(command, max(0, width-fixed)) + " " + dashboardFit(age, 6)
 }
@@ -216,9 +210,9 @@ func (m dashboardModel) sessionSummary(width, budget int) []string {
 		return nil
 	}
 	hostWidth := m.sessionHostWidth(width - 4)
-	headings := dashboardSessionColumns("HOST", "ID", "NAME", "STATE", "COMMAND (launch)", "AGE", width-4, hostWidth)
+	headings := dashboardSessionColumns("HOST", "ID", "SESSION", "STATE", "ACTIVITY", "AGE", width-4, hostWidth)
 	if m.usageEnabled {
-		headings = m.usageSessionColumns("HOST", "ID", "NAME", "STATE", "COMMAND (launch)", width-4, hostWidth)
+		headings = m.usageSessionColumns("HOST", "ID", "SESSION", "STATE", "ACTIVITY", width-4, hostWidth)
 	}
 	body := []string{m.paint(dashboardMutedStyle).Render(headings)}
 	liveLimit := max(0, budget-4)

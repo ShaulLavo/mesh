@@ -67,7 +67,7 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 			if _, _, err := identity.LoadOrCreate(stateDir); err != nil {
 				t.Fatal(err)
 			}
-			var recovery, wakes, connections, probes, lists, metrics atomic.Int32
+			var recovery, wakes, connections, probes, lists, metrics, inspections atomic.Int32
 			serve := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				connections.Add(1)
 				_ = transport.Serve(w, r, func(ctx context.Context, conn transport.Conn) error {
@@ -82,6 +82,13 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 						}
 						response := protocol.Control{RequestID: request.RequestID}
 						switch request.Type {
+						case protocol.TypeInspect:
+							inspections.Add(1)
+							if request.PreviewCols != 1 || request.PreviewRows != 1 {
+								return errors.New("dashboard requested full preview")
+							}
+							response.Type, response.SessionID = protocol.TypeInspected, request.SessionID
+							response.Inspection = &protocol.SessionInspection{ObservedAt: time.Now(), ForegroundCommand: "claude", CurrentDirectory: "/work/mesh", DirectorySource: protocol.DirectorySourceProcess}
 						case protocol.TypeHostInfo:
 							id := fixture.host.ID
 							if mode == "wrong-identity" {
@@ -166,6 +173,7 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 							done = done && view.Connection == StateUnreachable
 						}
 						if done {
+							inspectDashboardFixture(run, t, mode, input, fixture.host)
 							if mode == "watch" && view.Services.Ready != 1 {
 								t.Errorf("verified producer health advertisement lost: %+v", view.Services)
 							}
@@ -188,8 +196,12 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 			if recovery.Load() != 0 || wakes.Load() != 0 {
 				t.Fatal("dashboard woke host", recovery.Load(), wakes.Load())
 			}
+			if mode == "watch" && inspections.Load() != 1 {
+				t.Fatal("dashboard did not request exactly one live observation")
+			}
 			if mode == "watch" || mode == "old-producer" || mode == "partial" || mode == "disconnected" {
-				if connections.Load() != 1 || probes.Load() != 1 || lists.Load() != 0 {
+				wantConnections := 1 + inspections.Load()
+				if connections.Load() != wantConnections || probes.Load() != 1 || lists.Load() != 0 {
 					t.Fatal("watch reopened or polled", connections.Load(), probes.Load(), lists.Load())
 				}
 			}
@@ -200,6 +212,17 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 				t.Fatal("unverified host was queried")
 			}
 		})
+	}
+}
+
+func inspectDashboardFixture(ctx context.Context, t *testing.T, mode string, input DashboardInput, host HostRecord) {
+	t.Helper()
+	if mode != "watch" {
+		return
+	}
+	inspection, err := input.Inspect(ctx, PickerInspectRequest{HostAlias: host.Alias, SessionID: "7K3D"})
+	if err != nil || inspection.ForegroundCommand != "claude" {
+		t.Errorf("dashboard inspection failed: %+v / %v", inspection, err)
 	}
 }
 
@@ -225,7 +248,15 @@ func TestDashboardCatalogNameSanitizedBoundedAndRetained(t *testing.T) {
 		t.Fatal("published label changed with source catalog")
 	}
 	empty := projectDashboardSessions([]protocol.SessionInfo{{ID: "empty", State: "running"}}, ObservedSection{})
-	if empty.Rows[0].Name != "" {
-		t.Fatal("missing real catalog label was invented")
+	if empty.Rows[0].Name != "Terminal" || empty.Rows[0].Label != "" {
+		t.Fatal("unidentified terminal should have an honest fallback without inventing an explicit label")
+	}
+}
+
+func TestDashboardUnnamedSessionsUseTheirStartingDirectory(t *testing.T) {
+	rows := []protocol.SessionInfo{{ID: "7K3D", State: "detached", Cwd: "/work/projects/mesh", Command: []string{"sh", "-c", `cd -- "$1" && exec "${SHELL:-/bin/bash}" -l`}}}
+	catalog := projectDashboardSessions(rows, ObservedSection{})
+	if got := catalog.Rows[0].Name; got != "mesh" {
+		t.Fatalf("unnamed session displayed as %q, want its project mesh", got)
 	}
 }
