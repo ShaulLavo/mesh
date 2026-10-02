@@ -7,6 +7,7 @@ package macapp
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,9 @@ const (
 	// Holds the installed binary's path, so code running from the bundle can
 	// find the file the updater owns.
 	installedMarker = "installed-executable"
+	// Holds the installed binary's SHA-256. Signing rewrites the bundle's copy,
+	// so the copy itself cannot be compared with the installed file.
+	digestMarker = "installed-sha256"
 )
 
 var executableSuffix = filepath.Join(bundleName, "Contents", "MacOS", "mesh")
@@ -65,15 +69,15 @@ func (b Bundle) BundleExecutable() string { return filepath.Join(b.Dir, executab
 // from b, and reports whether it rebuilt.
 func Sync(b Bundle) (bool, error) {
 	clean(b.Dir)
-	current, err := upToDate(b)
+	installed, err := digest(b.Executable)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("hash installed mesh %s: %w", b.Executable, err)
 	}
-	if current {
+	if upToDate(b, installed) {
 		return false, nil
 	}
 	staged := filepath.Join(b.Dir, fmt.Sprintf("%s.new-%d", bundleName, os.Getpid()))
-	if err := build(b, staged); err != nil {
+	if err := build(b, staged, installed); err != nil {
 		_ = os.RemoveAll(staged)
 		return false, err
 	}
@@ -81,23 +85,20 @@ func Sync(b Bundle) (bool, error) {
 }
 
 // A missing or unreadable bundle is stale, not an error: Sync rebuilds it.
-func upToDate(b Bundle) (bool, error) {
-	marker, markerErr := os.ReadFile(filepath.Join(b.Dir, bundleName, "Contents", "Resources", installedMarker))
-	if markerErr != nil || string(bytes.TrimSpace(marker)) != b.Executable {
-		return false, nil //nolint:nilerr // see above
+func upToDate(b Bundle, installed string) bool {
+	resources := filepath.Join(b.Dir, bundleName, "Contents", "Resources")
+	path, pathErr := os.ReadFile(filepath.Join(resources, installedMarker))    //nolint:gosec // inside the bundle Sync owns
+	recorded, digestErr := os.ReadFile(filepath.Join(resources, digestMarker)) //nolint:gosec // inside the bundle Sync owns
+	if pathErr != nil || digestErr != nil {
+		return false
 	}
-	want, err := digest(b.Executable)
-	if err != nil {
-		return false, fmt.Errorf("hash installed mesh %s: %w", b.Executable, err)
+	if _, err := os.Stat(b.BundleExecutable()); err != nil {
+		return false
 	}
-	have, haveErr := digest(b.BundleExecutable())
-	if haveErr != nil {
-		return false, nil //nolint:nilerr // see above
-	}
-	return bytes.Equal(want, have), nil
+	return string(bytes.TrimSpace(path)) == b.Executable && string(bytes.TrimSpace(recorded)) == installed
 }
 
-func build(b Bundle, root string) error {
+func build(b Bundle, root, installed string) error {
 	contents := filepath.Join(root, "Contents")
 	for _, dir := range []string{"MacOS", "Resources"} {
 		if err := os.MkdirAll(filepath.Join(contents, dir), 0o700); err != nil {
@@ -111,6 +112,7 @@ func build(b Bundle, root string) error {
 		"Info.plist":                                []byte(infoPlist(b.Version)),
 		filepath.Join("Resources", "mesh.icns"):     b.Icon,
 		filepath.Join("Resources", installedMarker): []byte(b.Executable + "\n"),
+		filepath.Join("Resources", digestMarker):    []byte(installed + "\n"),
 	}
 	for name, data := range files {
 		if err := os.WriteFile(filepath.Join(contents, name), data, 0o600); err != nil {
@@ -170,17 +172,17 @@ func copyFile(from, to string, mode os.FileMode) error {
 	return nil
 }
 
-func digest(path string) ([]byte, error) {
-	file, err := os.Open(path) //nolint:gosec // the installed binary or its copy inside the bundle
+func digest(path string) (string, error) {
+	file, err := os.Open(path) //nolint:gosec // the installed binary
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", path, err)
+		return "", fmt.Errorf("open %s: %w", path, err)
 	}
 	defer func() { _ = file.Close() }()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return "", fmt.Errorf("read %s: %w", path, err)
 	}
-	return hash.Sum(nil), nil
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 var numericVersion = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)

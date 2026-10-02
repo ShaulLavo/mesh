@@ -7,6 +7,8 @@ import (
 	"os"
 	"runtime/debug"
 	"sync"
+
+	"github.com/shaul/mesh/internal/macapp"
 )
 
 // Version is set by the release linker. Development builds leave it empty.
@@ -81,7 +83,9 @@ func executingExecutablePath() string {
 	if _, err := os.Stat("/proc/self/exe"); err == nil {
 		return "/proc/self/exe"
 	}
-	path, _ := os.Executable()
+	// Mesh.app re-signs its copy, which changes its bytes; identity is the
+	// installed binary the release manifest pins.
+	path, _ := macapp.Installed()
 	return path
 }
 
