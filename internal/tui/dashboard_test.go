@@ -183,3 +183,31 @@ func TestDashboardWallContainsHistoriesTemperatureUptimeAndBoundedSummaries(t *t
 		t.Fatal("compact table omitted fleet")
 	}
 }
+
+func TestDashboardOrdersHostsByRAMCapacityAndKeepsOrderOffline(t *testing.T) {
+	now := pickerTestNow
+	hosts := []cli.DashboardHost{{ID: "mac", Alias: "mac"}, {ID: "pc", Alias: "pc"}, {ID: "pi", Alias: "pi"}, {ID: "vps", Alias: "vps"}, {ID: "wsl", Alias: "wsl"}}
+	model := newDashboard(cli.DashboardInput{Hosts: hosts}, now)
+	measured := func(host cli.DashboardHost, gib uint64) cli.DashboardHostView {
+		return cli.DashboardHostView{Host: host, Connection: cli.StateReachable, LastReply: now,
+			RAM: cli.DashboardMeasurement[cli.DashboardMemory]{State: "available", Value: cli.DashboardMemory{TotalBytes: gib << 30, AvailableBytes: gib << 29}, Sample: "ram", MeasuredAt: now}}
+	}
+	order := func() string {
+		aliases := make([]string, 0, len(model.hosts))
+		for _, host := range model.hosts {
+			aliases = append(aliases, host.Host.Alias)
+		}
+		return strings.Join(aliases, " ")
+	}
+	model.receive(measured(hosts[3], 4))
+	model.receive(measured(hosts[2], 4))
+	model.receive(measured(hosts[0], 24))
+	model.receive(measured(hosts[1], 64))
+	if got, want := order(), "pc mac pi vps wsl"; got != want {
+		t.Fatalf("order = %q, want %q", got, want)
+	}
+	model.receive(cli.DashboardHostView{Host: hosts[1], Connection: cli.StateUnreachable})
+	if got, want := order(), "pc mac pi vps wsl"; got != want {
+		t.Fatalf("order after pc went offline = %q, want %q", got, want)
+	}
+}

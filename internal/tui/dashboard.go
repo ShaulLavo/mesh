@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -79,6 +80,7 @@ type dashboardModel struct {
 	watchError    error
 	frame         string
 	history       map[string]dashboardHostHistory
+	capacity      map[string]uint64
 	wall, ascii   bool
 	profile       colorprofile.Profile
 	palette       dashboardPalette
@@ -96,7 +98,7 @@ func newDashboardForTerminal(input cli.DashboardInput, now time.Time, terminal s
 }
 
 func newDashboard(input cli.DashboardInput, now time.Time) dashboardModel {
-	model := dashboardModel{palette: dashboardTheme(input.Theme), profile: colorprofile.TrueColor, now: now, width: 80, height: 24, wall: input.Wall, history: map[string]dashboardHostHistory{}}
+	model := dashboardModel{palette: dashboardTheme(input.Theme), profile: colorprofile.TrueColor, now: now, width: 80, height: 24, wall: input.Wall, history: map[string]dashboardHostHistory{}, capacity: map[string]uint64{}}
 	for _, host := range input.Hosts {
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host, Connection: cli.StateConnecting})
 	}
@@ -133,9 +135,30 @@ func (m *dashboardModel) receive(view cli.DashboardHostView) {
 			view.Host = host.Host
 			m.hosts[index] = view
 			m.remember(view)
+			m.orderByCapacity(view)
 			return
 		}
 	}
+}
+
+// orderByCapacity puts the biggest machines first, since they usually carry
+// the most work. RAM total is fixed per machine, so remembering the largest
+// seen keeps the order stable when a host drops offline and loses its
+// measurement. Equal machines fall back to alias so arrival order can't swap
+// them; hosts never measured sort last.
+func (m *dashboardModel) orderByCapacity(view cli.DashboardHostView) {
+	total := view.RAM.Value.TotalBytes
+	if total <= m.capacity[view.Host.ID] {
+		return
+	}
+	m.capacity[view.Host.ID] = total
+	sort.SliceStable(m.hosts, func(a, b int) bool {
+		left, right := m.capacity[m.hosts[a].Host.ID], m.capacity[m.hosts[b].Host.ID]
+		if left != right {
+			return left > right
+		}
+		return m.hosts[a].Host.Alias < m.hosts[b].Host.Alias
+	})
 }
 func (m dashboardModel) View() tea.View {
 	frame := m.frame
