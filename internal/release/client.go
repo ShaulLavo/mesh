@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	httpsScheme     = "https"
 	OfficialBaseURL = "https://github.com/ShaulLavo/mesh/releases"
 	// OfficialLatestAPI names the latest published release. GitHub's
 	// /releases/latest download redirect kept serving the previous release for
@@ -82,6 +83,13 @@ func (c Client) latestTag(ctx context.Context, client *http.Client, baseURL stri
 	if address == "" {
 		return "", false
 	}
+	// Reserve time for the fallback when a background notice has a short enclosing deadline.
+	budget := 5 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = min(budget, time.Until(deadline)/2)
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	contents, err := downloadBytes(ctx, client, address, maximumLatestReply)
 	if err != nil {
 		return "", false
@@ -153,14 +161,44 @@ func (c Client) normalized() (string, *http.Client, error) {
 		baseURL = OfficialBaseURL
 	}
 	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Scheme != httpsScheme || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", nil, fmt.Errorf("release: base URL %q must be HTTPS without credentials, query, or fragment", baseURL)
 	}
 	client := c.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{Timeout: downloadAttemptTimeout}
 	}
-	return baseURL, client, nil
+	return baseURL, secureClient(client), nil
+}
+
+func secureClient(client *http.Client) *http.Client {
+	secured := *client
+	secured.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		return secureRedirect(client, request, via)
+	}
+	return &secured
+}
+
+func secureRedirect(client *http.Client, request *http.Request, via []*http.Request) error {
+	if request.URL == nil || request.URL.Scheme != httpsScheme {
+		return errors.New("release: redirect must use HTTPS")
+	}
+	if client.CheckRedirect == nil {
+		if len(via) >= 10 {
+			return errors.New("release: stopped after 10 redirects")
+		}
+		return nil
+	}
+	if err := client.CheckRedirect(request, via); err != nil {
+		if errors.Is(err, http.ErrUseLastResponse) {
+			return http.ErrUseLastResponse
+		}
+		return fmt.Errorf("release: redirect policy: %w", err)
+	}
+	if request.URL == nil || request.URL.Scheme != httpsScheme {
+		return errors.New("release: redirect callback must keep HTTPS")
+	}
+	return nil
 }
 
 func releaseURL(baseURL, selector string) (string, error) {
@@ -212,54 +250,20 @@ func cachedExecutable(path, wantDigest string) bool {
 	return err == nil && digest == wantDigest
 }
 
-func downloadBytes(ctx context.Context, client *http.Client, address string, maximum int64) ([]byte, error) {
-	response, err := response(ctx, client, address)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close() //nolint:errcheck // read result is authoritative
-	contents, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", address, err)
-	}
-	if int64(len(contents)) > maximum {
-		return nil, fmt.Errorf("%s exceeds %d bytes", address, maximum)
-	}
-	return contents, nil
-}
-
-func downloadTo(ctx context.Context, client *http.Client, address string, destination io.Writer, wantDigest string, maximum int64) error {
-	response, err := response(ctx, client, address)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close() //nolint:errcheck // copy result is authoritative
-	hash := sha256.New()
-	written, err := io.Copy(io.MultiWriter(destination, hash), io.LimitReader(response.Body, maximum+1))
-	if err != nil {
-		return fmt.Errorf("release: download %s: %w", address, err)
-	}
-	if written > maximum {
-		return fmt.Errorf("release: %s exceeds %d bytes", address, maximum)
-	}
-	digest := hex.EncodeToString(hash.Sum(nil))
-	if digest != wantDigest {
-		return fmt.Errorf("release: archive SHA-256 is %s, want %s", digest, wantDigest)
-	}
-	return nil
-}
-
 func response(ctx context.Context, client *http.Client, address string) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return nil, fmt.Errorf("release: create request: %w", err)
+	}
+	if request.URL.Scheme != httpsScheme {
+		return nil, errors.New("release: request must use HTTPS")
 	}
 	request.Header.Set("User-Agent", "mesh-release")
 	reply, err := client.Do(request)
 	if err != nil {
 		return nil, err
 	}
-	if reply.Request == nil || reply.Request.URL.Scheme != "https" {
+	if reply.Request == nil || reply.Request.URL.Scheme != httpsScheme {
 		_ = reply.Body.Close()
 		return nil, errors.New("release: request ended at a non-HTTPS URL")
 	}
@@ -268,7 +272,7 @@ func response(ctx context.Context, client *http.Client, address string) (*http.R
 	}
 	detail, _ := io.ReadAll(io.LimitReader(reply.Body, maximumErrorDetail))
 	_ = reply.Body.Close()
-	return nil, fmt.Errorf("release: GET %s: %s: %s", address, reply.Status, strings.TrimSpace(string(detail)))
+	return nil, &downloadStatusError{code: reply.StatusCode, err: fmt.Errorf("release: GET %s: %s: %s", address, reply.Status, strings.TrimSpace(string(detail)))}
 }
 
 func extractBinary(archivePath, directory, wantDigest string) (string, error) {

@@ -110,9 +110,7 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	if err != nil {
 		return err
 	}
-	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	manifest, err := a.dependencies.UpdateRelease.Manifest(checkCtx, options.version)
-	cancel()
+	manifest, err := a.dependencies.UpdateRelease.Manifest(ctx, options.version)
 	if err != nil {
 		return err
 	}
