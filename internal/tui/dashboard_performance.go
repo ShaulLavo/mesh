@@ -143,6 +143,18 @@ func (m dashboardModel) ioLine(host cli.DashboardHostView, leftWidth, rightWidth
 	borrow := min(max(0, ansi.StringWidth(left)-leftWidth), max(0, rightWidth-ansi.StringWidth(right)))
 	leftWidth += borrow
 	rightWidth -= borrow
+	if dashboardOptionalPresent(host.Disk) && ansi.StringWidth(left) > leftWidth {
+		disk := host.Disk.Value
+		value := "DISK r " + dashboardCompactRate(disk.ReadBytesPerSecond) + " w " + dashboardCompactRate(disk.WriteBytesPerSecond)
+		left = dashboardPerformanceReading(m, *host.Disk, host, 10*time.Second, value)
+		if disk.BusyAvailable {
+			busy := fmt.Sprintf(" %.0f%% busy", disk.BusyPercent)
+			if !dashboardFresh(*host.Disk, host, m.now, 10*time.Second) {
+				busy = m.paint(dashboardCachedStyle).Render(busy)
+			}
+			left = dashboardAlign(left, busy, leftWidth)
+		}
+	}
 	return dashboardFit(left, leftWidth) + "  " + dashboardFit(right, rightWidth)
 }
 func dashboardRate(value float64) string {
