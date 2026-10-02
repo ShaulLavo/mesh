@@ -57,7 +57,7 @@ func (a *application) runDashboard(ctx context.Context, wall bool, override stri
 	defer cache.Close() //nolint:errcheck // the view's result is authoritative
 	dial := dashboardControlDialer(localID, socket, a.dependencies.DialControl)
 	monitor := dashboardMonitor{records: records, localID: localID, watcher: NewStateWatcher(dial), cache: cache}
-	input := DashboardInput{Wall: wall, Theme: theme, Watch: monitor.Run}
+	input := DashboardInput{Privacy: a.privacy, Wall: wall, Theme: theme, Watch: monitor.Run}
 	config, err := loadHostConfig()
 	if err != nil {
 		return err

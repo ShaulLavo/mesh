@@ -182,7 +182,7 @@ func (a *application) runClientOnlyUpdate(ctx context.Context, environment updat
 			state = update.Newer
 		}
 		run := update.Run{Fleet: preview.Fleet, Release: preview.Release, Targets: []update.Target{{Host: environment.local, State: state, Build: &current}}}
-		return printUpdateRun(output.out, run, options.json)
+		return printUpdateRun(output.out, run, options.json, output.privacy)
 	}
 	if err := preview.Release.Allows(current); err != nil {
 		return err
@@ -261,7 +261,7 @@ func grantClientOnlyUpdate(ctx context.Context, engine *updateinstall.Engine, st
 
 func observeClientOnlyUpdate(ctx context.Context, stateDir string, status updateinstall.Status, structured bool, output updateOutput) error {
 	if !structured {
-		_, _ = fmt.Fprintf(output.diagnostic, "Local update %s saved; the supervised helper will finish it.\n", status.Request.ID)
+		_, _ = fmt.Fprintf(output.diagnostic, "Local update %s saved; the supervised helper will finish it.\n", output.privacy.Value("update", status.Request.ID))
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
@@ -270,7 +270,7 @@ func observeClientOnlyUpdate(ctx context.Context, stateDir string, status update
 	for !installationFinished(status.Phase) {
 		select {
 		case <-ctx.Done():
-			if err := printUpdateRun(output.out, runFromInstallation(status), structured); err != nil {
+			if err := printUpdateRun(output.out, runFromInstallation(status), structured, output.privacy); err != nil {
 				return err
 			}
 			return statusError{code: 2}
@@ -282,7 +282,7 @@ func observeClientOnlyUpdate(ctx context.Context, stateDir string, status update
 		}
 	}
 	run := runFromInstallation(status)
-	if err := printUpdateRun(output.out, run, structured); err != nil {
+	if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
 		return err
 	}
 	return updateExit(run.ExitCode())

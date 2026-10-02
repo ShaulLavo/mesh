@@ -128,7 +128,7 @@ func (m model) updateNoticeLines() []string {
 		lines = append(lines, m.styles.hints(hints...))
 	}
 	if m.updateNotice.problem != "" {
-		lines = append(lines, m.styles.warning.Render(safeText(m.updateNotice.problem)))
+		lines = append(lines, m.styles.warning.Render(safeText(m.privacy.Value("error", m.updateNotice.problem))))
 	}
 	for index := range lines {
 		lines[index] = truncate(lines[index], m.width)

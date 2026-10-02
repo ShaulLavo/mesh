@@ -71,6 +71,9 @@ To wake a sleeping PC automatically when connecting, follow
 [Wake a machine](docs/power.md). The target grants permission with
 `mesh wake allow`; Mesh chooses an awake sender on its LAN.
 
+Use [Privacy mode](docs/privacy.md) to record and screen-share fleet views with
+personal metadata masked and machine statistics and service health visible.
+
 ## Dashboard themes
 
 `mesh dashboard` shows the fleet with the OLED high-contrast theme by default.

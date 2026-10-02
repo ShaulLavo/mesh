@@ -117,7 +117,7 @@ func (a *application) recoverSession(cmd *cobra.Command, resolved resolvedSessio
 			continue
 		}
 		if result.OriginalCwd != "" && result.OriginalCwd != result.Cwd {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Saved directory %q is unavailable; opening shell in %q.\n", result.OriginalCwd, result.Cwd)
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Saved directory %q is unavailable; opening shell in %q.\n", a.privacy.Value("path", result.OriginalCwd), a.privacy.Value("path", result.Cwd))
 		}
 		reportAgentRecoveryStatus(cmd.ErrOrStderr(), result)
 		resolved, err = recoveredSession(resolved, result)

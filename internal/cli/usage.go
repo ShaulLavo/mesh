@@ -52,7 +52,8 @@ func RenderError(output io.Writer, styles fang.Styles, err error) {
 	problem, example := err.Error(), ""
 	var details []string
 	var usage *usageError
-	if errors.As(err, &usage) {
+	var masked privacyError
+	if !errors.As(err, &masked) && errors.As(err, &usage) {
 		problem, example, details = usage.problem, usage.example, usage.details
 	}
 

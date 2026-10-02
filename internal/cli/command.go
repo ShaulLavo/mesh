@@ -21,6 +21,7 @@ import (
 
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/procmem"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
@@ -83,6 +84,7 @@ type ContainmentFunc func(context.Context) []protocol.SessionIdentity
 // PickerInput contains the catalog and the optional live readers used by the
 // interactive picker.
 type PickerInput struct {
+	Privacy      *privacy.Mask
 	UpdateNotice UpdateNoticeCallbacks
 	Hosts        []HostSessions
 	LoadHosts    func(context.Context) ([]HostSessions, error)
@@ -195,6 +197,7 @@ type PickerSelection struct {
 
 // WindowInput is the local catalog available before any network discovery.
 type WindowInput struct {
+	Privacy      *privacy.Mask
 	UpdateNotice UpdateNoticeCallbacks
 	Sessions     []protocol.SessionInfo
 	Inspect      PickerInspectFunc
@@ -245,6 +248,7 @@ type Dependencies struct {
 }
 
 type application struct {
+	privacy               *privacy.Mask
 	dependencies          Dependencies
 	updateNoticeScheduled bool
 }
@@ -282,10 +286,12 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	if dependencies.Stderr == nil {
 		dependencies.Stderr = os.Stderr
 	}
-	if dependencies.ConfirmPublic == nil {
+	defaultPublicConfirmation := dependencies.ConfirmPublic == nil
+	if defaultPublicConfirmation {
 		dependencies.ConfirmPublic = terminalPublicConfirmation(dependencies.Stdin, dependencies.Stderr)
 	}
 	app := &application{dependencies: dependencies}
+	privacyEnabled := privacy.EnabledFromEnv()
 
 	var (
 		resume    bool
@@ -341,6 +347,18 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	root.Flags().BoolVar(&raw, "raw", false, "pass every input byte through without a detach key")
 	root.Flags().BoolVar(&window, "window", false, "open a terminal window with a local persistent session")
 	root.Flags().BoolVar(&take, "take", false, "resume the newest detached session without a prompt; requires --window")
+	root.PersistentFlags().BoolVar(&privacyEnabled, "privacy", privacyEnabled, "mask personal data for recording and screen sharing (MESH_PRIVACY)")
+	root.PersistentPreRun = func(_ *cobra.Command, _ []string) {
+		if privacyEnabled {
+			app.privacy = privacy.New()
+		} else {
+			app.privacy = nil
+		}
+		if defaultPublicConfirmation {
+			app.dependencies.ConfirmPublic = terminalPublicConfirmation(dependencies.Stdin, dependencies.Stderr, app.privacy)
+		}
+	}
+
 	root.PersistentFlags().String("leave-key", "ctrl+^", "key that leaves all nested sessions, or none")
 
 	// Grouped so the commands used daily are not sorted in among the ones
@@ -359,6 +377,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand(), app.appCommand())...)
 	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), versionCommand())...)
 	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand())
+	protectPrivacyErrors(root, &privacyEnabled)
 	return root
 }
 
@@ -483,6 +502,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 		}
 
 		selection, err := a.dependencies.Picker(pickerContext, PickerInput{
+			Privacy:      a.privacy,
 			UpdateNotice: a.pickerUpdateNotice(),
 			Hosts:        catalog,
 			LoadHosts: func(ctx context.Context) ([]HostSessions, error) {
@@ -606,7 +626,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 			if err := a.wakeHost(cmd.Context(), host, cmd.ErrOrStderr()); err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "woke %s; refreshing hosts\n", host.Alias); err != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "woke %s; refreshing hosts\n", a.privacy.Value("host", host.Alias)); err != nil {
 				return err
 			}
 			continue
@@ -782,7 +802,7 @@ func (a *application) runHostWithContainment(
 		// A live session always wins: it costs nothing to reattach, while a
 		// wake starts the agent again. Only an otherwise empty host wakes.
 		if row, ok := latestHibernated(rows); ok {
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "resuming hibernated %s conversation %s on %s…\n", row.Hibernated.Provider, row.ID, host.Alias); err != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "resuming hibernated %s conversation %s on %s…\n", row.Hibernated.Provider, row.ID, a.privacy.Value("host", host.Alias)); err != nil {
 				return err
 			}
 			return a.recoverSession(cmd, resolvedSession{host: &host, remote: row}, recovery.ActionDefault, detachKey, raw, false)
@@ -801,7 +821,7 @@ func (a *application) runHostWithContainment(
 	}
 	// "session X on pc" reads like one was found. `mesh pc` always creates,
 	// and `mesh pc -r` is the one that attaches to an existing session.
-	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "new session %s on %s\n", id, host.Alias); err != nil {
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "new session %s on %s\n", id, a.privacy.Value("host", host.Alias)); err != nil {
 		return err
 	}
 	initial := uint64(0)
@@ -998,9 +1018,9 @@ func (a *application) addCommand() *cobra.Command {
 			// the host was in the address book. "already configured" read as
 			// the second and left people wondering what the run had just done.
 			if result.AlreadyConfigured {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s was already up to date (%s)\nhost config: %s\n", selected, record.ID, path)
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s was already up to date (%s)\nhost config: %s\n", a.privacy.Value("host", selected), a.privacy.Value("host-id", record.ID), a.privacy.Value("path", path))
 			} else {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(), "added %s (%s)\nhost config: %s\n", selected, record.ID, path)
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "added %s (%s)\nhost config: %s\n", a.privacy.Value("host", selected), a.privacy.Value("host-id", record.ID), a.privacy.Value("path", path))
 			}
 			return err
 		},
@@ -1029,7 +1049,7 @@ func (a *application) wakeCommand() *cobra.Command {
 			if err := a.wakeHost(cmd.Context(), host, cmd.ErrOrStderr()); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "woke %s\n", host.Alias)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "woke %s\n", a.privacy.Value("host", host.Alias))
 			return err
 		},
 	}
@@ -1076,7 +1096,7 @@ func (a *application) listCommand() *cobra.Command {
 		Short:   "List sessions across known hosts",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.runList(cmd, viaDaemon, timeout, listView{all: all, width: outputWidth(cmd.OutOrStdout())})
+			return a.runList(cmd, viaDaemon, timeout, listView{all: all, width: outputWidth(cmd.OutOrStdout()), privacy: a.privacy})
 		},
 	}
 	command.Flags().BoolVarP(&all, "all", "a", false, "include exited and interrupted sessions")
@@ -1126,7 +1146,7 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	// this, adopting one remote host hid every local session from `mesh ls`
 	// while its worker kept running.
 	if localErr != nil {
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: local sessions unavailable: %s\n", selfAlias, safeRemoteText(localErr.Error())); err != nil {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: local sessions unavailable: %s\n", a.privacy.Value("host", selfAlias), safeRemoteText(a.privacy.Value("error", localErr.Error()))); err != nil {
 			return err
 		}
 	}
@@ -1139,11 +1159,11 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	}
 	for _, result := range results {
 		if result.Err != nil {
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %s; cached rows are stale\n", result.Host.Alias, safeRemoteText(result.Err.Error())); err != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %s; cached rows are stale\n", a.privacy.Value("host", result.Host.Alias), safeRemoteText(a.privacy.Value("error", result.Err.Error()))); err != nil {
 				return err
 			}
 		} else if result.CacheErr != nil {
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: live results could not be cached: %s\n", result.Host.Alias, safeRemoteText(result.CacheErr.Error())); err != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: live results could not be cached: %s\n", a.privacy.Value("host", result.Host.Alias), safeRemoteText(a.privacy.Value("error", result.CacheErr.Error()))); err != nil {
 				return err
 			}
 		}
@@ -1178,8 +1198,9 @@ func outputWidth(output io.Writer) int {
 // listView is what a human `mesh ls` shows. Scripts and the SSH front door use
 // the zero-width, everything view, so their parsing never changes.
 type listView struct {
-	all   bool
-	width int
+	privacy *privacy.Mask
+	all     bool
+	width   int
 }
 
 var fullListView = listView{all: true}
@@ -1240,11 +1261,11 @@ func writeLocalSessionList(output io.Writer, now time.Time, sessions []protocol.
 		}
 		for _, current := range shown {
 			cells := []string{current.ID, displayState(current), ageAt(now, current.CreatedAt), sessionIdle(now, current),
-				sessionMemory(current), sessionLaunchDirectory(current.Cwd)}
+				sessionMemory(current), sessionLaunchDirectory(view.privacy.Value("path", current.Cwd))}
 			if labelled {
-				cells = append(cells, cmp.Or(sessionTitle(current), "-"))
+				cells = append(cells, cmp.Or(view.privacy.Value("title", sessionTitle(current)), "-"))
 			}
-			cells = append(cells, SafeTerminalText(strings.Join(current.Command, " ")))
+			cells = append(cells, SafeTerminalText(strings.Join(view.privacy.Command(current.Command), " ")))
 			if _, err := fmt.Fprintln(table, strings.Join(cells, "\t")); err != nil {
 				return err
 			}
@@ -1295,7 +1316,7 @@ func writeSessionList(output io.Writer, now time.Time, hosts []HostSessions, vie
 			return err
 		}
 		for _, current := range rows {
-			if err := writeListRow(table, now, current, columns); err != nil {
+			if err := writePrivacyListRow(table, now, current, columns, view.privacy); err != nil {
 				return err
 			}
 		}
@@ -1321,9 +1342,9 @@ type listColumns struct {
 	title bool
 }
 
-func writeListRow(table io.Writer, now time.Time, current listRow, columns listColumns) error {
-	cells := []string{current.host, current.session.ID, displayState(current.session), ageAt(now, current.session.CreatedAt),
-		sessionIdle(now, current.session), sessionMemory(current.session), sessionLaunchDirectory(current.session.Cwd)}
+func writePrivacyListRow(table io.Writer, now time.Time, current listRow, columns listColumns, mask *privacy.Mask) error {
+	cells := []string{mask.Value("host", current.host), current.session.ID, displayState(current.session), ageAt(now, current.session.CreatedAt),
+		sessionIdle(now, current.session), sessionMemory(current.session), sessionLaunchDirectory(mask.Value("path", current.session.Cwd))}
 	if columns.cache {
 		cache := "-"
 		if current.stale {
@@ -1332,11 +1353,13 @@ func writeListRow(table io.Writer, now time.Time, current listRow, columns listC
 		cells = append(cells, cache)
 	}
 	if columns.title {
-		cells = append(cells, cmp.Or(sessionTitle(current.session), "-"))
+		cells = append(cells, cmp.Or(mask.Value("title", sessionTitle(current.session)), "-"))
 	}
-	cells = append(cells, SafeTerminalText(strings.Join(current.session.Command, " ")))
-	_, err := fmt.Fprintln(table, strings.Join(cells, "\t"))
-	return err
+	cells = append(cells, SafeTerminalText(strings.Join(mask.Command(current.session.Command), " ")))
+	if _, err := fmt.Fprintln(table, strings.Join(cells, "\t")); err != nil {
+		return fmt.Errorf("print session list row: %w", err)
+	}
+	return nil
 }
 
 // sessionTitle is the terminal title the command last set, such as an agent
@@ -1487,6 +1510,12 @@ func (a *application) logsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if tail <= 0 || tail > protocol.MaxLogTail {
 				return fmt.Errorf("--tail must be between 1 and %d bytes", protocol.MaxLogTail)
+			}
+			if a.privacy != nil {
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Terminal output hidden by privacy mode"); err != nil {
+					return fmt.Errorf("print private logs placeholder: %w", err)
+				}
+				return nil
 			}
 			if previous {
 				return a.previousOutput(cmd, args[0], tail)
@@ -1695,7 +1724,9 @@ func (a *application) daemonCommand() *cobra.Command {
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
 				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget, AppDataRoot: appDataRoot,
 				TailscaleServe: tailscaleServe, TailscaleServePort: uint16(tailscaleServePort), TailscaleServeProxyProtocol: tailscaleServeProxy, HibernateIdle: hibernateIdle,
-				ReportError: func(err error) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %v\n", err) },
+				ReportError: func(err error) {
+					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %s\n", a.privacy.Value("error", err.Error()))
+				},
 			})
 		},
 	}

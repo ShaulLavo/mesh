@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/shaul/mesh/internal/cli"
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
 )
@@ -95,6 +96,7 @@ type initialSessionRefreshMsg struct{}
 func (wakeSelection) pickerSelection() {}
 
 type model struct {
+	privacy            *privacy.Mask
 	hosts              []host
 	screen             screen
 	selectedHost       int
@@ -423,7 +425,7 @@ func (m *model) enterSessions(hostIndex int) {
 	m.hosts[hostIndex].sessions = orderSessionsByActivity(m.hosts[hostIndex].sessions)
 	m.screen = sessionScreen
 	m.notice = ""
-	m.list.SetDelegate(sessionDelegate{styles: m.styles, now: m.now})
+	m.list.SetDelegate(sessionDelegate{styles: m.styles, now: m.now, privacy: m.privacy})
 	m.list.SetStatusBarItemName("session", "sessions")
 	_ = m.list.SetItems(sessionItems(m.currentHost().sessions))
 	m.list.ResetSelected()
@@ -456,7 +458,7 @@ func (m *model) showHosts() {
 	m.notice = ""
 	m.fullPreview = false
 	m.inspection = inspectionState{}
-	m.list.SetDelegate(hostDelegate{styles: m.styles})
+	m.list.SetDelegate(hostDelegate{styles: m.styles, privacy: m.privacy})
 	m.list.SetStatusBarItemName("host", "hosts")
 	_ = m.list.SetItems(hostItems(m.hosts))
 	m.list.Select(m.selectedHost)
@@ -508,8 +510,8 @@ func (m model) chrome() (string, string, string) {
 	}
 
 	current := m.currentHost()
-	breadcrumb := m.styles.title.Render("mesh") + m.styles.muted.Render(" › ") + m.styles.accent.Render(safeText(current.alias))
-	if route := safeText(current.route); route != "" && route != safeText(current.alias) {
+	breadcrumb := m.styles.title.Render("mesh") + m.styles.muted.Render(" › ") + m.styles.accent.Render(safeText(m.privacy.Value("host", current.alias)))
+	if route := safeText(m.privacy.Value("route", current.route)); route != "" && route != safeText(m.privacy.Value("host", current.alias)) {
 		breadcrumb += m.styles.muted.Render("  " + route)
 	}
 	header := justify(breadcrumb, m.hostStatus(current), m.width)
@@ -518,7 +520,7 @@ func (m model) chrome() (string, string, string) {
 		subtitle = m.styles.muted.Render("Cached sessions may be stale. Wake the host before starting work.")
 	}
 	if m.notice != "" {
-		subtitle = m.styles.warning.Render(safeText(m.notice))
+		subtitle = m.styles.warning.Render(safeText(m.privacy.Value("notice", m.notice)))
 	}
 	return truncate(header, m.width), truncate(subtitle, m.width), truncate(m.footer(current), m.width)
 }
@@ -643,7 +645,10 @@ func sessionItems(sessions []session) []list.Item {
 	return items
 }
 
-type hostDelegate struct{ styles pickerStyles }
+type hostDelegate struct {
+	styles  pickerStyles
+	privacy *privacy.Mask
+}
 
 func (delegate hostDelegate) Height() int  { return 1 }
 func (delegate hostDelegate) Spacing() int { return 0 }
@@ -662,8 +667,8 @@ func (delegate hostDelegate) Render(output io.Writer, browser list.Model, index 
 		if !ok {
 			continue
 		}
-		aliasWidth = max(aliasWidth, ansi.StringWidth(safeText(other.host.alias)))
-		routeWidth = max(routeWidth, ansi.StringWidth(safeText(other.host.route)))
+		aliasWidth = max(aliasWidth, ansi.StringWidth(safeText(delegate.privacy.Value("host", other.host.alias))))
+		routeWidth = max(routeWidth, ansi.StringWidth(safeText(delegate.privacy.Value("route", other.host.route))))
 	}
 	aliasWidth = min(aliasWidth, 24)
 	routeWidth = min(routeWidth, 32)
@@ -679,15 +684,16 @@ func (delegate hostDelegate) Render(output io.Writer, browser list.Model, index 
 		glyph = delegate.styles.warning.Render("▲")
 		status = delegate.styles.warning.Render("offline  ·  cached") + delegate.styles.muted.Render("  ·  "+count(len(item.host.sessions), "session"))
 	}
-	row := cursor + glyph + " " + cell(delegate.styles.item(selected).Render(safeText(item.host.alias)), aliasWidth)
+	row := cursor + glyph + " " + cell(delegate.styles.item(selected).Render(safeText(delegate.privacy.Value("host", item.host.alias))), aliasWidth)
 	if routeWidth > 0 {
-		row += "  " + cell(delegate.styles.muted.Render(safeText(item.host.route)), routeWidth)
+		row += "  " + cell(delegate.styles.muted.Render(safeText(delegate.privacy.Value("route", item.host.route))), routeWidth)
 	}
 	row += "  " + status
 	_, _ = fmt.Fprint(output, truncate(row, browser.Width()))
 }
 
 type sessionDelegate struct {
+	privacy    *privacy.Mask
 	styles     pickerStyles
 	now        time.Time
 	hostAlias  string
@@ -825,7 +831,7 @@ func (delegate sessionDelegate) row(current session, selected bool) sessionRow {
 		row.activity = rowActivity(delegate.now, value.ObservedAt, delegate.inspection.receivedAt, value.LastOutputAt, current.createdAt)
 	}
 	row.context = appendRowLabel(row.context, delegate.via[current.id])
-	return row
+	return delegate.privacyRow(row)
 }
 
 func sessionHeadline(label, title string) (primary, secondary string) {

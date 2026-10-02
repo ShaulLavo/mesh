@@ -17,6 +17,7 @@ import (
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
 )
@@ -27,7 +28,10 @@ type updateOptions struct {
 	fleet, version, coordinator  string
 }
 
-type updateOutput struct{ out, diagnostic io.Writer }
+type updateOutput struct {
+	out, diagnostic io.Writer
+	privacy         *privacy.Mask
+}
 
 type updateEnvironment struct {
 	stateDir    string
@@ -54,7 +58,7 @@ func (a *application) updateCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use: "update", Short: "Review and update every machine in the configured fleet", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.runUpdate(cmd.Context(), options, updateOutput{cmd.OutOrStdout(), cmd.ErrOrStderr()})
+			return a.runUpdate(cmd.Context(), options, updateOutput{cmd.OutOrStdout(), cmd.ErrOrStderr(), a.privacy})
 		},
 	}
 	command.Flags().BoolVar(&options.all, "all", false, "update the configured fleet, the default scope")
@@ -74,7 +78,7 @@ func (a *application) updateCommand() *cobra.Command {
 }
 
 func (a *application) runUpdatePreview(ctx context.Context) error {
-	return a.runUpdate(ctx, updateOptions{version: "latest"}, updateOutput{a.dependencies.Stdout, a.dependencies.Stderr})
+	return a.runUpdate(ctx, updateOptions{version: "latest"}, updateOutput{a.dependencies.Stdout, a.dependencies.Stderr, a.privacy})
 }
 
 func validateUpdateOptions(options updateOptions) error {
@@ -125,10 +129,10 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 		return err
 	}
 	if options.check {
-		return printUpdatePreview(output.out, preview, options.json)
+		return printUpdatePreview(output.out, preview, options.json, output.privacy)
 	}
 	if !options.json {
-		if err := printUpdatePreview(output.diagnostic, preview, false); err != nil {
+		if err := printUpdatePreview(output.diagnostic, preview, false, output.privacy); err != nil {
 			return err
 		}
 	}

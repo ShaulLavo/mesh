@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/spf13/cobra"
 
 	"github.com/shaul/mesh/internal/agentresume"
@@ -57,23 +59,24 @@ func reportAgentHook(cmd *cobra.Command, args []string) error {
 
 func (a *application) agentDoctorCommand() *cobra.Command {
 	return &cobra.Command{Use: "doctor PROVIDER", Short: "Check provider recovery hooks and compatibility", Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error { return diagnoseAgentRecovery(cmd, args[0]) },
+		RunE: func(cmd *cobra.Command, args []string) error { return diagnoseAgentRecovery(cmd, args[0], a.privacy) },
 	}
 }
 
-func diagnoseAgentRecovery(cmd *cobra.Command, name string) error {
+func diagnoseAgentRecovery(cmd *cobra.Command, name string, masks ...*privacy.Mask) error {
+	mask := presentationMask(masks)
 	provider, err := parseAgentProvider(name)
 	if err != nil {
 		return err
 	}
 	executable, err := resolveAgentExecutable(provider)
 	if err != nil {
-		_, writeErr := fmt.Fprintf(cmd.OutOrStdout(), "%s: executable missing (%v)\n", provider, err)
+		_, writeErr := fmt.Fprintf(cmd.OutOrStdout(), "%s: executable missing (%v)\n", provider, mask.Value("error", err.Error()))
 		return writeErr
 	}
 	launch, err := inspectAgentLaunch(cmd.Context(), provider, executable, nil)
 	if err != nil {
-		_, writeErr := fmt.Fprintf(cmd.OutOrStdout(), "%s: recovery unavailable (%v)\n", provider, err)
+		_, writeErr := fmt.Fprintf(cmd.OutOrStdout(), "%s: recovery unavailable (%v)\n", provider, mask.Value("error", err.Error()))
 		return writeErr
 	}
 	path, err := agentSettingsPath(provider)
@@ -86,16 +89,16 @@ func diagnoseAgentRecovery(cmd *cobra.Command, name string) error {
 		return fmt.Errorf("locate Mesh hook helper: %w", err)
 	}
 	status := agentHookSetupStatus(settings, readErr, provider, meshExecutable)
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\nHooks: %s (%s)\n", provider, launch.ProviderVersion, status, path)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\nHooks: %s (%s)\n", provider, SafeTerminalText(mask.Text(launch.ProviderVersion)), status, mask.Value("path", path))
 	if provider == agentresume.Codex {
 		trust := "not checked (Mesh hooks are not installed)"
 		if command, err := agentresume.StableHookCommand(provider, meshExecutable); readErr == nil && err == nil {
 			trust = codexHookTrust(path, settings, command, codexConfigPath(path))
 		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Trust: %s\n", trust)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Trust: %s\n", SafeTerminalText(privateAgentTrust(mask, trust)))
 	}
 	if reason := agentresume.Compatibility(launch); reason != "" {
-		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Automatic recovery: unavailable (%s)\nExplicit binding: mesh agent bind %s CONVERSATION_ID\n", reason, provider)
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Automatic recovery: unavailable (%s)\nExplicit binding: mesh agent bind %s CONVERSATION_ID\n", SafeTerminalText(mask.Value("error", reason)), provider)
 		return err
 	}
 	_, err = fmt.Fprintln(cmd.OutOrStdout(), "Automatic recovery: identity remains unverified until a hook is durably acknowledged by its Mesh worker.")
@@ -131,4 +134,12 @@ func agentHookSetupStatus(settings []byte, readErr error, provider agentresume.P
 		return "Mesh hook missing"
 	}
 	return "configured; delivery unverified"
+}
+
+// Known trust guidance includes the provider's /hooks command, not a path.
+func privateAgentTrust(mask *privacy.Mask, trust string) string {
+	if mask != nil && strings.HasPrefix(trust, "unknown (") {
+		return "unknown (" + mask.Value("error", trust) + ")"
+	}
+	return trust
 }

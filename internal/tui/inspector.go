@@ -221,6 +221,7 @@ func (m *model) refreshSessionDelegate() {
 		return
 	}
 	m.list.SetDelegate(sessionDelegate{
+		privacy:    m.privacy,
 		styles:     m.styles,
 		now:        m.now,
 		hostAlias:  m.currentHost().alias,
@@ -348,7 +349,22 @@ type inspectionDetails struct {
 	previewStyled   bool
 }
 
-func (m model) detailsFor(current session) inspectionDetails {
+func (m model) detailsFor(current session) (result inspectionDetails) {
+	defer func() {
+		if m.privacy != nil {
+			if result.directory != "unknown" {
+				result.directory = m.privacy.Value("path", result.directory)
+			}
+			result.foreground = safeText(m.privacyForeground(current, result.foreground))
+			result.title = m.privacy.Value("session", result.title)
+			result.screenStatus = m.privacy.Text(result.screenStatus)
+			if m.inspection.problem != "" {
+				result.screenStatus = "refresh failed · details hidden for privacy"
+			}
+			result.preview = []string{privacyPreviewPlaceholder}
+			result.previewStyled = false
+		}
+	}()
 	if endedSession(current) {
 		return m.savedDetailsFor(current)
 	}
@@ -454,7 +470,7 @@ func (m model) detailPanel(previewRows int) []string {
 	if details.directorySource != "" {
 		directory += "  ·  " + details.directorySource
 	}
-	launched := safeText(strings.Join(current.command, " "))
+	launched := safeText(strings.Join(m.privacy.Command(current.command), " "))
 	if launched == "" {
 		launched = "unknown"
 	}
@@ -464,8 +480,8 @@ func (m model) detailPanel(previewRows int) []string {
 		{"launched", launched},
 		{"activity", strings.Join([]string{details.attachment, details.output, startedAge(m.now, current.createdAt)}, "  ·  ")},
 	}
-	heading := m.sessionHeadline(current)
-	if label := m.bestSessionLabel(current); label != heading {
+	heading := m.privacy.Value("session", m.sessionHeadline(current))
+	if label := m.privacy.Value("session", m.bestSessionLabel(current)); label != heading {
 		heading += "  ·  " + label
 	}
 	panel := []string{m.boxTop(heading+"  ·  "+safeText(current.id), m.width)}
@@ -527,7 +543,7 @@ func (m model) fullPreviewPanel(rows int) []string {
 		screenTitle = "current screen"
 	}
 	panel := make([]string, 0, rows)
-	panel = append(panel, m.boxTop(screenTitle+"  ·  "+m.sessionHeadline(current)+"  ·  "+safeText(current.id), m.width))
+	panel = append(panel, m.boxTop(screenTitle+"  ·  "+m.privacy.Value("session", m.sessionHeadline(current))+"  ·  "+safeText(current.id), m.width))
 	panel = append(panel, m.previewRows(details, rows-2)...)
 	return append(panel, m.boxBottom(m.width))
 }
@@ -549,7 +565,7 @@ func (m model) previewSubtitle() string {
 	}
 	details := m.detailsFor(current)
 	parts := []string{
-		m.sessionHeadline(current),
+		m.privacy.Value("session", m.sessionHeadline(current)),
 		safeText(current.id),
 	}
 	if details.screenStatus != statusLive {
@@ -645,6 +661,9 @@ func cloneSessionInspection(source cli.SessionInspection) cli.SessionInspection 
 }
 
 func (m model) renderInspectionPreview(inspection cli.SessionInspection) ([]string, bool) {
+	if m.privacy != nil {
+		return []string{privacyPreviewPlaceholder}, false
+	}
 	lines := make([]string, len(inspection.Preview))
 	stylesMatch := len(inspection.StyledPreview) == len(inspection.Preview)
 	for row, plain := range inspection.Preview {

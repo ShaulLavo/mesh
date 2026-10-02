@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"github.com/shaul/mesh/internal/hostmetrics"
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/usagefeed"
 	"time"
@@ -15,6 +16,7 @@ type DashboardWatch func(context.Context, func(DashboardHostView)) error
 
 type DashboardInput struct {
 	Notice     string
+	Privacy    *privacy.Mask
 	Hosts      []DashboardHost
 	Wall       bool
 	Theme      string

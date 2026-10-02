@@ -60,10 +60,10 @@ func (a *application) wakeHost(ctx context.Context, host HostRecord, output io.W
 		return fmt.Errorf("wake host %s: %w", host.Alias, err)
 	}
 	if result.AlreadyOnline {
-		_, err = fmt.Fprintf(output, "%s is already online\n", host.Alias)
+		_, err = fmt.Fprintf(output, "%s is already online\n", a.privacy.Value("host", host.Alias))
 		return err
 	}
-	_, err = fmt.Fprintf(output, "wake packet for %s sent by %s\n", host.Alias, result.Sender)
+	_, err = fmt.Fprintf(output, "wake packet for %s sent by %s\n", a.privacy.Value("host", host.Alias), a.privacy.Value("host", result.Sender))
 	return err
 }
 

@@ -26,7 +26,7 @@ func (a *application) renameCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "renamed %s to %s\n", args[0], renamed.Alias)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "renamed %s to %s\n", a.privacy.Value("host", args[0]), a.privacy.Value("host", renamed.Alias))
 			return err
 		},
 	}
@@ -99,7 +99,7 @@ func (a *application) confirmRename(cmd *cobra.Command, current, proposed string
 	}
 	output := cmd.ErrOrStderr()
 	if _, err := fmt.Fprintf(output, "\nThat host is already added as %q.\nRename it to %q? [y/N] ",
-		SafeTerminalText(current), SafeTerminalText(proposed)); err != nil {
+		SafeTerminalText(a.privacy.Value("host", current)), SafeTerminalText(a.privacy.Value("host", proposed))); err != nil {
 		return false, err
 	}
 	reader, err := cancelreader.NewReader(input)
