@@ -15,11 +15,12 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/testenv"
 	"github.com/shaul/mesh/internal/transport"
 )
 
-func TestUpdatePlanRetriesFitRPCBudget(t *testing.T) {
-	stateDir := t.TempDir()
+func TestUpdatePlanRetriesAcknowledgeRPC(t *testing.T) {
+	stateDir := testenv.SocketTempDir(t)
 	id, key := testIdentity(t)
 	store, err := OpenStore(stateDir)
 	if err != nil {
@@ -34,16 +35,26 @@ func TestUpdatePlanRetriesFitRPCBudget(t *testing.T) {
 	manifest := testManifest()
 	contents, _ := json.Marshal(manifest)
 	var calls atomic.Int32
-	var maximumBudget atomic.Int64
+	var thirdAllowance atomic.Int64
 	client := release.Client{HTTPClient: &http.Client{Transport: releaseDownloadTransport(func(request *http.Request) (*http.Response, error) {
 		deadline, ok := request.Context().Deadline()
 		if !ok {
 			return nil, fmt.Errorf("metadata attempt has no deadline")
 		}
-		// Charge each attempt its full allowance without sleeping through resolver stalls.
-		maximumBudget.Add(int64(time.Until(deadline)))
-		if calls.Add(1) < 3 {
+		allowance := time.Until(deadline)
+		switch calls.Add(1) {
+		case 1:
+			if allowance > 6*time.Second {
+				return nil, fmt.Errorf("initial metadata allowance %s exceeds the early-retry budget", allowance)
+			}
 			return nil, context.DeadlineExceeded
+		case 2:
+			if allowance < 20*time.Second {
+				return nil, fmt.Errorf("retry allowance %s cannot accommodate a slow DNS lookup", allowance)
+			}
+			return nil, context.DeadlineExceeded
+		default:
+			thirdAllowance.Store(int64(allowance))
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(contents)), Request: request}, nil
 	})}}
@@ -58,8 +69,10 @@ func TestUpdatePlanRetriesFitRPCBudget(t *testing.T) {
 		}
 		return coordinator.Start(ctx, plan)
 	}}
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	t.Cleanup(cancelServer)
 	done := make(chan error, 1)
-	go func() { done <- serveDownloadPlanRPC(listener, &authority) }()
+	go func() { done <- serveDownloadPlanRPC(serverCtx, listener, &authority) }()
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	var run Run
@@ -70,31 +83,33 @@ func TestUpdatePlanRetriesFitRPCBudget(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	budget := time.Duration(maximumBudget.Load()) + 750*time.Millisecond
-	if calls.Load() != 3 || run.ID == "" || budget >= 45*time.Second {
-		t.Fatalf("plan RPC: calls %d, run %q, worst-case retry budget %s; want acknowledged run within 45s", calls.Load(), run.ID, budget)
+	allowance := time.Duration(thirdAllowance.Load())
+	if calls.Load() != 3 || run.ID == "" || allowance > 30*time.Second || ctx.Err() != nil {
+		t.Fatalf("plan RPC: calls %d, run %q, final allowance %s; want acknowledged run within the enclosing deadline", calls.Load(), run.ID, allowance)
 	}
 }
 
-func serveDownloadPlanRPC(listener net.Listener, authority *Authority) error {
+func serveDownloadPlanRPC(ctx context.Context, listener net.Listener, authority *Authority) error {
 	stream, err := listener.Accept()
 	if err != nil {
 		return fmt.Errorf("accept update RPC: %w", err)
 	}
 	defer stream.Close() //nolint:errcheck // request result is authoritative
+	stop := context.AfterFunc(ctx, func() { _ = stream.Close() })
+	defer stop()
 	conn, err := transport.NewStreamConn(stream)
 	if err != nil {
 		return fmt.Errorf("open RPC transport: %w", err)
 	}
 	for range 2 {
-		if err := exchangeDownloadPlan(conn, authority); err != nil {
+		if err := exchangeDownloadPlan(ctx, conn, authority); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func exchangeDownloadPlan(conn transport.Conn, authority *Authority) error {
+func exchangeDownloadPlan(ctx context.Context, conn transport.Conn, authority *Authority) error {
 	frame, err := conn.ReadFrame()
 	if err != nil {
 		return fmt.Errorf("read RPC: %w", err)
@@ -103,7 +118,7 @@ func exchangeDownloadPlan(conn transport.Conn, authority *Authority) error {
 	if err != nil {
 		return fmt.Errorf("decode RPC: %w", err)
 	}
-	response, _, err := authority.HandleControl(context.Background(), request)
+	response, _, err := authority.HandleControl(ctx, request)
 	if err != nil {
 		return fmt.Errorf("handle RPC: %w", err)
 	}

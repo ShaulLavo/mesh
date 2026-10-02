@@ -168,20 +168,37 @@ func (c Client) normalized() (string, *http.Client, error) {
 	if client == nil {
 		client = &http.Client{Timeout: downloadAttemptTimeout}
 	}
+	return baseURL, secureClient(client), nil
+}
+
+func secureClient(client *http.Client) *http.Client {
 	secured := *client
 	secured.CheckRedirect = func(request *http.Request, via []*http.Request) error {
-		if request.URL.Scheme != httpsScheme {
-			return errors.New("release: redirect must use HTTPS")
-		}
-		if client.CheckRedirect != nil {
-			return client.CheckRedirect(request, via)
-		}
+		return secureRedirect(client, request, via)
+	}
+	return &secured
+}
+
+func secureRedirect(client *http.Client, request *http.Request, via []*http.Request) error {
+	if request.URL == nil || request.URL.Scheme != httpsScheme {
+		return errors.New("release: redirect must use HTTPS")
+	}
+	if client.CheckRedirect == nil {
 		if len(via) >= 10 {
 			return errors.New("release: stopped after 10 redirects")
 		}
 		return nil
 	}
-	return baseURL, &secured, nil
+	if err := client.CheckRedirect(request, via); err != nil {
+		if errors.Is(err, http.ErrUseLastResponse) {
+			return http.ErrUseLastResponse
+		}
+		return fmt.Errorf("release: redirect policy: %w", err)
+	}
+	if request.URL == nil || request.URL.Scheme != httpsScheme {
+		return errors.New("release: redirect callback must keep HTTPS")
+	}
+	return nil
 }
 
 func releaseURL(baseURL, selector string) (string, error) {

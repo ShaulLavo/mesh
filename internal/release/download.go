@@ -13,7 +13,7 @@ import (
 
 func downloadBytes(ctx context.Context, client *http.Client, address string, maximum int64) ([]byte, error) {
 	var contents []byte
-	err := retryDownload(ctx, metadataAttemptTimeout, func(ctx context.Context) error {
+	err := retryDownload(ctx, metadataDownloadTimeout, metadataInitialTimeout, func(ctx context.Context) error {
 		var err error
 		contents, err = readDownload(ctx, client, address, maximum)
 		return err
@@ -38,7 +38,7 @@ func readDownload(ctx context.Context, client *http.Client, address string, maxi
 }
 
 func downloadTo(ctx context.Context, client *http.Client, address string, destination *os.File, wantDigest string, maximum int64) error {
-	return retryDownload(ctx, downloadAttemptTimeout, func(ctx context.Context) error {
+	return retryDownload(ctx, assetDownloadTimeout, downloadAttemptTimeout, func(ctx context.Context) error {
 		// A failed read may have written a prefix; every attempt verifies one complete archive.
 		if err := destination.Truncate(0); err != nil {
 			return fmt.Errorf("release: reset archive: %w", err)

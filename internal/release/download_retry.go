@@ -11,20 +11,30 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"golang.org/x/net/http2"
 )
 
 const (
 	downloadAttempts = 3
-	// Metadata retries must finish before the enclosing 45-second update RPC.
-	metadataAttemptTimeout = 10 * time.Second
-	downloadAttemptTimeout = 30 * time.Second
-	downloadBackoff        = 250 * time.Millisecond
+	// Leave room for RPC framing while a retry can wait through a 20-second DNS stall.
+	metadataDownloadTimeout = 40 * time.Second
+	metadataInitialTimeout  = 5 * time.Second
+	assetDownloadTimeout    = 60 * time.Second
+	downloadAttemptTimeout  = 30 * time.Second
+	downloadBackoff         = 250 * time.Millisecond
 )
 
-func retryDownload(ctx context.Context, timeout time.Duration, operation func(context.Context) error) error {
+func retryDownload(ctx context.Context, totalTimeout, initialTimeout time.Duration, operation func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
+	defer cancel()
 	for attempt := 1; attempt <= downloadAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("release: download cancelled: %w", err)
+		}
+		timeout := downloadAttemptTimeout
+		if attempt == 1 {
+			timeout = initialTimeout
 		}
 		err := downloadAttempt(ctx, timeout, attempt, operation)
 		if err == nil {
@@ -82,6 +92,14 @@ func retryableDownload(err error) bool {
 	var status *downloadStatusError
 	if errors.As(err, &status) {
 		return status.code == http.StatusRequestTimeout || status.code == http.StatusTooManyRequests || status.code >= 500
+	}
+	return retryableDownloadTransport(err)
+}
+
+func retryableDownloadTransport(err error) bool {
+	var stream http2.StreamError
+	if errors.As(err, &stream) {
+		return stream.Code == http2.ErrCodeInternal || stream.Code == http2.ErrCodeRefusedStream || stream.Code == http2.ErrCodeCancel || stream.Code == http2.ErrCodeEnhanceYourCalm
 	}
 	var dns *net.DNSError
 	if errors.As(err, &dns) {
