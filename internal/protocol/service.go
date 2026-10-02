@@ -11,6 +11,7 @@ import (
 func ServiceFromInfo(info ServiceInfo) meshserve.Service {
 	service := meshserve.Service{
 		Name:          info.Name,
+		DisplayName:   info.DisplayName,
 		Kind:          meshserve.Kind(info.Kind),
 		Target:        info.Target,
 		PublicName:    info.PublicName,
@@ -40,6 +41,7 @@ func ServiceFromInfo(info ServiceInfo) meshserve.Service {
 func ServiceDefinitionInfo(service meshserve.Service) ServiceInfo {
 	info := ServiceInfo{
 		Name:          service.Name,
+		DisplayName:   service.DisplayName,
 		Kind:          string(service.Kind),
 		Target:        service.Target,
 		PublicName:    service.PublicName,

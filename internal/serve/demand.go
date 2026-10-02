@@ -63,7 +63,7 @@ type DemandGate interface {
 
 // Equal reports whether two services have the same definition.
 func (s Service) Equal(other Service) bool {
-	return s.Name == other.Name && s.Kind == other.Kind && s.Target == other.Target &&
+	return s.DisplayName == other.DisplayName && s.Name == other.Name && s.Kind == other.Kind && s.Target == other.Target &&
 		s.PublicName == other.PublicName && s.WakeOnRequest == other.WakeOnRequest &&
 		s.Isolate == other.Isolate && s.LocalOnly == other.LocalOnly &&
 		slices.Equal(s.Listens, other.Listens) && s.Demand.Equal(other.Demand)

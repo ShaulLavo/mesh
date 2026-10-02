@@ -995,3 +995,21 @@ func TestDemandBlockedRouteLogsItsFailureOncePerRetry(t *testing.T) {
 		t.Fatalf("started %d and stopped %d while the retry was not due, want 1 and 1", started, stopped)
 	}
 }
+
+func TestDemandDisplayNameChangeKeepsRunningSession(t *testing.T) {
+	sessions := newFakeDemandSessions()
+	manager := testDemandManager(t, sessions, func() bool { return true })
+	service := demandService(time.Minute)
+	manager.Sync([]meshserve.Service{service})
+	if err := manager.Start(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	before := manager.Status("dev")
+	service.DisplayName = "Fregat dev"
+	manager.Sync([]meshserve.Service{service})
+	after := manager.Status("dev")
+	started, stopped := sessions.counts()
+	if after == nil || before.SessionID != after.SessionID || after.State != protocol.DemandRunning || started != 1 || stopped != 0 {
+		t.Fatalf("label change restarted session: before=%+v after=%+v started=%d stopped=%d", before, after, started, stopped)
+	}
+}

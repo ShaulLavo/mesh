@@ -281,6 +281,17 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 		c.host.mu.Unlock()
 		response.Type = protocol.TypeServiceUpserted
 		response.Service = &service
+	case protocol.TypeServiceLabel:
+		c.host.mu.Lock()
+		for index := range c.host.services {
+			if c.host.services[index].Name == request.ServiceName {
+				c.host.services[index].DisplayName = request.ServiceDisplayName
+				service := c.host.services[index]
+				response.Service = &service
+			}
+		}
+		c.host.mu.Unlock()
+		response.Type = protocol.TypeServiceLabeled
 	case protocol.TypeServiceList:
 		c.host.mu.Lock()
 		response.Services = append([]protocol.ServiceInfo(nil), c.host.services...)

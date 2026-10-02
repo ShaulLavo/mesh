@@ -13,6 +13,7 @@ func servedWebsites(rows []cli.ServiceCatalogRow, catalogStale bool) []servedWeb
 	for index, row := range rows {
 		websites[index] = servedWebsite{
 			url:    row.URL(),
+			name:   row.Service.DisplayName,
 			health: row.Health(),
 			stale:  catalogStale || row.Stale || !row.Live,
 		}
@@ -83,7 +84,11 @@ func (m model) servedWebsiteRows(rowBudget int) []string {
 		case status != "healthy":
 			style = m.styles.warning
 		}
-		rows = append(rows, "  "+style.Render(status)+"  "+safeText(website.url))
+		label := ""
+		if website.name != "" {
+			label = safeText(website.name) + "  "
+		}
+		rows = append(rows, "  "+style.Render(status)+"  "+label+safeText(website.url))
 	}
 	if hidden := len(current.served) - websiteRows; showMoreRow && hidden > 0 {
 		rows = append(rows, m.styles.muted.Render(fmt.Sprintf("  … %d more  ·  mesh serve ls", hidden)))
