@@ -51,6 +51,11 @@ class ReadinessTests(unittest.TestCase):
         return {"type": "host.info.result", "requestId": request["requestId"],
                 "host": {"id": "fixture", "meshIdentity": "fixture-key"}}
 
+    @staticmethod
+    def snapshot(request):
+        return {"type": "state.snapshot", "requestId": request["requestId"],
+                "stateSnapshot": {"seq": 0, "current": {"sessions": {"ageMillis": 0}, "services": {"ageMillis": 0}}}}
+
     def test_known_good_identity(self):
         observed = self.exchange(lambda conn: readiness.host_info(conn, readiness.SetupDeadline(1)), self.identity)
         self.assertEqual(observed, ("fixture", "fixture-key"))
@@ -112,8 +117,17 @@ class ReadinessTests(unittest.TestCase):
                     readiness.exchange(left, {"type": "host.info"}, readiness.SetupDeadline(1))
 
     def test_snapshot_error_is_terminal(self):
-        for snapshot in ({}, {"seq": True}, {"seq": -1}, {"seq": 0, "sessions": [{"id": "occupied"}]}):
-            with self.subTest(snapshot=snapshot), self.assertRaises(ValueError):
+        valid = self.snapshot({"requestId": "fixture"})["stateSnapshot"]
+        invalid = [None, [], {}, {**valid, "seq": True}, {**valid, "seq": -1}, {"seq": 0},
+                   {**valid, "current": None}, {**valid, "current": {}}, {**valid, "current": []}]
+        for topic in ("sessions", "services"):
+            for catalog in (None, False, "", {}, [{"id": "occupied"}]):
+                invalid.append({**valid, topic: catalog})
+            for observation in (None, {}, {"ageMillis": True}, {"ageMillis": -1}, {"ageMillis": 30000},
+                                {"ageMillis": 0, "failing": True}, {"ageMillis": 0, "failing": None}):
+                invalid.append({**valid, "current": {**valid["current"], topic: observation}})
+        for snapshot in invalid:
+            with self.subTest(snapshot=snapshot), self.assertRaises((ValueError, TypeError)):
                 self.exchange(lambda conn: readiness.subscribe(conn, readiness.SetupDeadline(1)),
                               lambda request, snapshot=snapshot: {"type": "state.snapshot", "requestId": request["requestId"], "stateSnapshot": snapshot})
 
@@ -130,8 +144,42 @@ class ReadinessTests(unittest.TestCase):
 
     def test_snapshot_is_observed_before_setup_completes(self):
         result = self.exchange(lambda conn: readiness.subscribe(conn, readiness.SetupDeadline(1)),
-                               lambda request: {"type": "state.snapshot", "requestId": request["requestId"], "stateSnapshot": {"seq": 0}}, delay=0.35)
-        self.assertEqual(result, {"seq": 0})
+                               self.snapshot, delay=0.35)
+        self.assertEqual(result, self.snapshot({"requestId": "fixture"})["stateSnapshot"])
+        result = self.exchange(lambda conn: readiness.subscribe(conn, readiness.SetupDeadline(1)),
+                               lambda request: {**self.snapshot(request), "stateSnapshot": {
+                                   **self.snapshot(request)["stateSnapshot"], "sessions": [], "services": []}})
+        self.assertEqual(result["sessions"], [])
+        self.assertEqual(result["services"], [])
+
+    def test_decoding_cannot_cross_setup_deadline_into_success(self):
+        original_loads = json.loads
+        for action, response in ((readiness.host_info, self.identity), (readiness.subscribe, self.snapshot)):
+            now = [0.0]
+
+            class Connection:
+                def settimeout(self, seconds):
+                    pass
+
+                def sendall(self, payload, response=response):
+                    request = original_loads(payload[5:])
+                    data = json.dumps(response(request)).encode()
+                    self.wire = b"\x01" + len(data).to_bytes(4, "big") + data
+
+                def recv(self, size):
+                    value, self.wire = self.wire[:size], self.wire[size:]
+                    return value
+
+            deadline = readiness.SetupDeadline(1, monotonic=lambda now=now: now[0])
+            self.assertIsNotNone(action(Connection(), deadline))
+
+            def delayed_decode(payload, now=now):
+                result = original_loads(payload)
+                now[0] = 1.1
+                return result
+
+            with self.subTest(action=action.__name__), patch.object(readiness.json, "loads", delayed_decode), self.assertRaises(TimeoutError):
+                action(Connection(), deadline)
 
     def test_invalid_deadline_is_rejected(self):
         for seconds in (0, -1, float("inf"), float("nan")):
