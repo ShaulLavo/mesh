@@ -83,7 +83,7 @@ awaiting traffic` or no current data; never refill to 0% without an observation.
 - [ ] Compose the panel with existing `internal/tui/dashboard_tables.go` and
       `dashboard_render.go` glyphs/themes. Keep renderer provider-agnostic.
 
-## 160×45 wall layout (awaiting owner approval)
+## 160×45 wall layout (approved by the owner 2026-10-02)
 
 ![Four accounts, OLED](images/usage-panel.png)
 
