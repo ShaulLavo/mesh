@@ -129,6 +129,11 @@ func dashboardServicesCached(host cli.DashboardHostView, now time.Time) bool {
 func (m dashboardModel) fleetRow(host cli.DashboardHostView) string {
 	cpu := m.metricValue(host.CPU, host, fmt.Sprintf("%.0f%%", host.CPU.Value))
 	memory := m.ramValue(host)
+	if strings.Contains(ansi.Strip(memory), "stale") {
+		memory = dashboardCachedStyle.Render("stale " + dashboardAge(m.now, host.RAM.MeasuredAt))
+	} else {
+		memory = strings.ReplaceAll(strings.TrimSuffix(memory, " GiB"), " / ", "/")
+	}
 	counts := m.catalogCounts(host)
 	return dashboardFit(safeText(host.Host.Alias), 11) + " " + dashboardFit(string(host.Connection), 12) + " " + dashboardFit(cpu, 10) + " " + dashboardFit(memory, 14) + " " + counts
 }

@@ -272,3 +272,13 @@ func TestDashboardDesignConsoleEvidence(t *testing.T) {
 	}
 	fmt.Printf("\nBEGIN_DESIGN_4_LINUX16\n%s\nEND_DESIGN_4_LINUX16\n", raw)
 }
+
+func TestDashboardCompactKeepsLiveRowsBeforeCachedGroups(t *testing.T) {
+	model := dashboardDesignFixture(4)
+	model.width, model.height = 80, 24
+	view := ansi.Strip(model.render())
+	if !strings.Contains(view, "live 3/7") || !strings.Contains(view, "maintenance") || !strings.Contains(view, "0/2 cached") {
+		t.Fatalf("cached groups displaced live rows in compact budget: %s", view)
+	}
+	assertFits(t, model.render(), 80, 24)
+}

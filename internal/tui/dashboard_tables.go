@@ -138,6 +138,10 @@ func (m dashboardModel) sessionSummary(width, budget int) []string {
 			cachedHeight += 1 + len(host.Sessions.Rows)
 		}
 	}
+	cachedHeight = min(cachedHeight, max(0, budget-6))
+	if cachedHeight < 2 {
+		cachedHeight = 0
+	}
 	liveLimit := max(0, budget-4-cachedHeight)
 	selected := m.liveSelection(liveLimit)
 	shown := 0
