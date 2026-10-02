@@ -131,7 +131,7 @@ func (m dashboardModel) ioLine(host cli.DashboardHostView, leftWidth, rightWidth
 		disk := host.Disk.Value
 		value := "DISK r " + dashboardRate(disk.ReadBytesPerSecond) + "  w " + dashboardRate(disk.WriteBytesPerSecond)
 		if disk.BusyAvailable {
-			value = dashboardAlign(value, fmt.Sprintf(" %.0f%% busy", disk.BusyPercent), leftWidth)
+			value += fmt.Sprintf(" %.0f%% busy", disk.BusyPercent)
 		}
 		left = dashboardPerformanceReading(m, *host.Disk, host, 10*time.Second, value)
 	}
@@ -139,6 +139,10 @@ func (m dashboardModel) ioLine(host cli.DashboardHostView, leftWidth, rightWidth
 		net := host.Network.Value
 		right = dashboardPerformanceReading(m, *host.Network, host, 10*time.Second, "NET ↓ "+dashboardRate(net.ReceiveBytesPerSecond)+"  ↑ "+dashboardRate(net.SendBytesPerSecond))
 	}
+	// Three-digit busy and rounded rates can exceed half a card; use spare network padding.
+	borrow := min(max(0, ansi.StringWidth(left)-leftWidth), max(0, rightWidth-ansi.StringWidth(right)))
+	leftWidth += borrow
+	rightWidth -= borrow
 	return dashboardFit(left, leftWidth) + "  " + dashboardFit(right, rightWidth)
 }
 func dashboardRate(value float64) string {
