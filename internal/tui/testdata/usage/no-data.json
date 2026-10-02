@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-02T18:53:07Z",
+  "accounts": [
+    {
+      "id": "claude-shaul9191",
+      "provider": "claude",
+      "label": "shaul9191",
+      "plan": "max",
+      "checkedAt": null,
+      "lastSeenAt": null,
+      "state": "no-data",
+      "source": "passive-header",
+      "routing": {
+        "mode": "single",
+        "active": null,
+        "lastServedAt": null
+      },
+      "windows": [],
+      "cooldown": null
+    },
+    {
+      "id": "codex-shaul9191",
+      "provider": "codex",
+      "label": "shaul9191",
+      "plan": "pro",
+      "checkedAt": null,
+      "lastSeenAt": null,
+      "state": "no-data",
+      "source": "proxy-state",
+      "routing": {
+        "mode": "rotating",
+        "active": null,
+        "lastServedAt": null
+      },
+      "windows": [],
+      "cooldown": null
+    },
+    {
+      "id": "codex-shaul.lavochkin",
+      "provider": "codex",
+      "label": "shaul.lavochkin",
+      "plan": "pro",
+      "checkedAt": null,
+      "lastSeenAt": null,
+      "state": "no-data",
+      "source": "proxy-state",
+      "routing": {
+        "mode": "rotating",
+        "active": null,
+        "lastServedAt": null
+      },
+      "windows": [],
+      "cooldown": null
+    }
+  ]
+}

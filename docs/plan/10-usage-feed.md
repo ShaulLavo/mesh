@@ -1,8 +1,9 @@
 # Generic usage feed on the TV dashboard
 
-Status: Approved, 2026-10-02. Planning/design only; no runtime changes in this PR.
-The owner's approved October 2 normal and no-data designs are authoritative;
-implementation follows independent review and merge of this planning PR.
+Status: Approved, 2026-10-02. Generic consumer and dashboard implemented;
+local fixture verification complete. Independent implementation review, live
+static-route checks and Pi deployment remain separate delivery steps. The owner's
+approved October 2 normal and no-data designs remain authoritative.
 
 Canonical source inventory, contract and gateway implementation plan:
 [Fregat Plan 289](https://github.com/ShaulLavo/fregat/blob/main/plans/289-proxy-usage-feed.md).
@@ -46,11 +47,12 @@ CLIProxyAPI on **18317**. These operational ports are not portable test constant
 The producer uses validated runtime configuration. Management stays loopback-only;
 the key's contents never enter a feed, log, screenshot or Pi configuration.
 There is no management enablement or proxy restart prerequisite left in this
-plan, and this documentation-only PR makes no live changes or provider calls.
+plan. This consumer implementation makes no installed runtime changes, proxy
+restarts or provider calls.
 
 A dedicated sanitized directory is served through a **tailnet-only isolated
 static route**, for example `https://omarchy.mesh.shaulavo.dev/ai-usage/v1.json`.
-This example route is not provisioned by this PR. It is separate from the
+This example route is not provisioned by the consumer implementation. It is separate from the
 on-demand `/ai` backend and keeps serving the last file while inference sleeps.
 Static serving belongs to the existing Mesh daemon, not a new collector service.
 
@@ -89,19 +91,20 @@ awaiting traffic` or no current data; never refill to 0% without an observation.
 
 ## Implementation
 
-- [ ] Add optional sanitized-feed URL to existing local config and its validation.
+- [x] Add optional sanitized-feed URL to existing local config and its validation.
+      `dashboard.usageFeedURL` in the existing `hosts.json` dashboard settings.
       With no URL, keep today's dashboard unchanged. No provider secrets/config.
-- [ ] Add a small client/projection beside `internal/cli/dashboard_monitor.go`
+- [x] Add a small client/projection beside `internal/cli/dashboard_monitor.go`
       and dashboard types. At most one HTTP request per 60 seconds, one in
       flight, bounded timeout and 64 KiB response, normal TLS verification.
       Cancel with monitor shutdown. No wake, activation or provider redirects.
-- [ ] Strictly validate v1 values. Unsupported schema, malformed/oversized data,
+- [x] Strictly validate v1 values. Unsupported schema, malformed/oversized data,
       timeout or HTTP failure retains the previous valid snapshot whole and
       exposes freshness/unreachable state; do not replace it with an empty view.
-- [ ] Compute reset countdown locally. Use each window's lastSeenAt for age and
+- [x] Compute reset countdown locally. Use each window's lastSeenAt for age and
       a 15-minute stale threshold. Keep provider/account/window order stable.
       Feed fetches never change lastSeenAt or fabricate routing information.
-- [ ] Compose the panel with existing `internal/tui/dashboard_tables.go` and
+- [x] Compose the panel with existing `internal/tui/dashboard_tables.go` and
       `dashboard_render.go` glyphs/themes. Keep renderer provider-agnostic.
 
 ## Authoritative 160×45 wall layout
@@ -196,16 +199,16 @@ commands and session names may shorten first.
 The approved source report's TXT grids are the equivalent readable tables;
 its generator asserts exactly 45 rows of 160 Unicode cells, validates panel
 budgets, and preserves all four host cards between usage states. A terminal TV
-has no hover interaction. No chart generator, browser preview, new palette or
-additional mockup variants are introduced by this documentation PR.
+has no hover interaction. Implementation evidence exports production terminal
+cells; it introduces no browser preview, new palette or additional mockup variants.
 
 ## Narrow checks and delivery
 
-- [ ] `httptest` fixtures, injected clock/client: v1/no-data/two rotating accounts,
+- [x] `httptest` fixtures, injected clock/client: v1/no-data/two rotating accounts,
       per-window observation ages, cancellation, at-least-60-second cadence,
       bounded bodies/timeouts, bad schema and last-good retention. Counters prove
       no extra request caused by screen renders or multiple consumers.
-- [ ] Dashboard projection/render snapshots at 160×45 with four hosts/three
+- [x] Dashboard projection/render snapshots at 160×45 with four hosts/three
       accounts, provider headings once and five rows per account; all six themes;
       no-data/stale/75%/100%/reset-passed, unknown routing, model windows,
       account overflow, ASCII fallback, 80×24 and resizing. Run only affected Go
@@ -213,12 +216,82 @@ additional mockup variants are introduced by this documentation PR.
 - [ ] Integration proof with inference asleep: repeated static GETs leave `/ai`
       asleep and its idle deadline unchanged. With producer unreachable, keep
       prior data and observe no wake call. Production/provider probes are not CI.
-- [ ] Read real terminal screenshots against both approved mockups, then verify
-      on the Pi TV. Keep machine-specific proof outside portable committed tests.
-- [ ] Commit/push owned paths and obtain independent review before implementation.
-      Ship the implemented gateway/static route and Mesh/Pi only in the subsequent
-      implementation run. This planning PR makes no live changes, restarts,
-      provider calls or deployments and is not merged by its author.
+- [x] Read actual-renderer fixture PNGs against both approved mockups, plus all
+      six themes, compact/ASCII, failures and intermediate widths. These are
+      deterministic synthetic observations, not live terminal or provider captures.
+- [ ] Verify on the Pi TV. Keep machine-specific proof outside portable committed tests.
+- [ ] Commit/push owned implementation paths and obtain independent review.
+      The coordinator handles CI and merge; the author does not merge this PR.
+- [ ] Ship the gateway/static route and Mesh/Pi in the coordinated deployment run.
+      This implementation run makes no live changes, restarts, provider calls
+      or deployments.
+
+## Consumer execution evidence
+
+The HTTP/JSON reader lives in `internal/usagefeed/`; the optional watcher is
+separate from host metrics and the session protocol. Construction performs no
+request. Shutdown cancels and joins both dashboard readers. Every changed
+publication is validated before replacing the whole last-good snapshot; identical
+bytes skip parsing. Failed reads show feed availability separately from actual
+account/window observation ages.
+
+Projection occurs on publication and retains at most twelve display accounts
+and two windows each. The wall panel always claims at most seventeen rows, so
+hidden accounts cannot consume host graph rows. Three five-row slots remain at
+160×45; omitted accounts and extra windows have explicit counts. Compact views
+label their paired percentages `used/left`, retain full approved host/account
+identities, and retain failure attention while reporting omitted services.
+
+Actual production-renderer terminal-cell fixtures, personally read back:
+
+![Implemented OLED normal fixture](images/usage-panel-implementation.png)
+
+![Implemented OLED no-data fixture](images/usage-panel-implementation-no-data.png)
+
+![Implemented compact 80×24 fixture](images/usage-panel-implementation-compact.png)
+
+![Implemented unhealthy-service attention fixture](images/usage-panel-implementation-failure.png)
+
+These PNGs are generated from `dashboardModel.render()` through the existing VT
+emulator; their positions, foregrounds and bold attributes come from rendered
+cells. They are independent of the mockup generator. Reproduce with
+`scripts/render-usage-fixture.sh OUTPUT_DIRECTORY`; it also exports all six themes,
+ASCII, overflow and intermediate widths. PNG conversion skips with a reason when
+`rsvg-convert` is absent. Text/grid tests need no external converter.
+
+Local verification covers affected `internal/usagefeed`, `internal/cli` and
+`internal/tui` packages under the race detector, URL/config persistence, normal
+TLS and redirect rejection, malformed/oversized/unsupported responses, cancelled
+and slow reads, byte-change-only parsing, whole-snapshot retention, watcher joins,
+per-window ages, reset-passed values, routing unknowns and six-theme neutral values.
+Retained `View()` remains **zero allocations** in normal and 1,000-account tests;
+this is not a zero-allocation claim for `Update()` or rendering. Full delivery
+gates pass: formatting, vet, bootstrap authentication and terminal dependency
+contracts, plus golangci/deadcode/shellcheck/ruff comparisons with **zero new and
+zero stale baseline findings**. No baseline or dependency was changed.
+
+Five-sample measurements on the local i7-14700K, Go 1.27.1, using
+`go test ./internal/tui -run '^$' -bench '^BenchmarkDashboard(HostOrderRender|UsageRender)$' -benchmem -count=5`:
+
+| Renderer fixture | Median ms/op | Median B/op | Median allocs/op |
+| --- | ---: | ---: | ---: |
+| Existing host-order fixture, before | 6.849 | 1,545,589 | 32,283 |
+| Same host-order fixture, after | 6.799 | 1,545,538 | 32,282 |
+| Four hosts / three approved accounts | 6.473 | 1,795,669 | 24,872 |
+| Same visible accounts / 100 accounts | 6.350 | 1,795,002 | 24,886 |
+| Same visible accounts / 1,000 accounts | 6.402 | 1,795,233 | 24,929 |
+
+The final after run held the heavy-job queue quiet. The original baseline did
+not request quiet, so its small timing difference is not an optimization claim.
+The usage fixtures preserve the same three visible observations; larger inputs
+add generic hidden accounts and a hidden 1,000-window account. Projection is
+outside the render benchmark. Digit-length changes in omission labels add a
+small bounded allocation difference, while visible render time/bytes stay flat.
+These are local rendering costs, not Pi frame-time or terminal-write measurements.
+
+Live idle/deadline/no-wake verification, the static route, real feed observations,
+Pi TV inspection, installed configuration and deployment remain **deferred**.
+Neither this consumer nor these tests contact provider or management endpoints.
 
 ## Acceptance
 

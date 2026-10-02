@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/usagefeed"
 )
 
 const (
@@ -161,6 +162,11 @@ func validateHostConfig(config hostConfig, path string) (hostConfig, error) {
 		aliases[host.Alias] = host.ID
 		identities[host.ID] = host.Alias
 		config.Hosts[i] = host
+	}
+	if config.Dashboard != nil && config.Dashboard.UsageFeedURL != "" {
+		if err := usagefeed.ValidateURL(config.Dashboard.UsageFeedURL); err != nil {
+			return hostConfig{}, fmt.Errorf("dashboard configuration: %w", err)
+		}
 	}
 	sortHosts(config.Hosts)
 	return config, nil

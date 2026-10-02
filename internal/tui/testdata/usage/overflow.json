@@ -1,0 +1,239 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-02T18:53:07Z",
+  "accounts": [
+    {
+      "id": "claude-shaul9191",
+      "provider": "claude",
+      "label": "shaul9191",
+      "plan": "max",
+      "checkedAt": "2026-10-02T18:53:07Z",
+      "lastSeenAt": "2026-10-02T18:51:07Z",
+      "state": "ready",
+      "source": "passive-header",
+      "routing": {
+        "mode": "single",
+        "active": null,
+        "lastServedAt": null
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "5h",
+          "usedPercent": 20,
+          "resetsAt": "2026-10-02T21:07:07Z",
+          "windowMinutes": 300,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:51:07Z",
+          "source": "passive-header"
+        },
+        {
+          "id": "weekly",
+          "label": "Weekly",
+          "usedPercent": 66,
+          "resetsAt": "2026-10-03T01:53:07Z",
+          "windowMinutes": 10080,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:51:07Z",
+          "source": "passive-header"
+        }
+      ],
+      "cooldown": null
+    },
+    {
+      "id": "codex-shaul9191",
+      "provider": "codex",
+      "label": "shaul9191",
+      "plan": "pro",
+      "checkedAt": "2026-10-02T18:53:07Z",
+      "lastSeenAt": "2026-10-02T18:52:07Z",
+      "state": "ready",
+      "source": "proxy-state",
+      "routing": {
+        "mode": "rotating",
+        "active": null,
+        "lastServedAt": "2026-10-02T18:52:07Z"
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "5h",
+          "usedPercent": 42,
+          "resetsAt": "2026-10-02T20:25:07Z",
+          "windowMinutes": 300,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:52:07Z",
+          "source": "proxy-state"
+        },
+        {
+          "id": "weekly",
+          "label": "Weekly",
+          "usedPercent": 54,
+          "resetsAt": "2026-10-07T03:53:07Z",
+          "windowMinutes": 10080,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:52:07Z",
+          "source": "proxy-state"
+        }
+      ],
+      "cooldown": null
+    },
+    {
+      "id": "codex-shaul.lavochkin",
+      "provider": "codex",
+      "label": "shaul.lavochkin",
+      "plan": "pro",
+      "checkedAt": "2026-10-02T18:53:07Z",
+      "lastSeenAt": "2026-10-02T18:35:07Z",
+      "state": "cooldown",
+      "source": "proxy-state",
+      "routing": {
+        "mode": "rotating",
+        "active": null,
+        "lastServedAt": null
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "5h",
+          "usedPercent": 100,
+          "resetsAt": "2026-10-02T19:31:07Z",
+          "windowMinutes": 300,
+          "status": "exhausted",
+          "lastSeenAt": "2026-10-02T18:35:07Z",
+          "source": "proxy-state"
+        },
+        {
+          "id": "weekly",
+          "label": "Weekly",
+          "usedPercent": 97,
+          "resetsAt": "2026-10-05T00:53:07Z",
+          "windowMinutes": 10080,
+          "status": "warning",
+          "lastSeenAt": "2026-10-02T18:35:07Z",
+          "source": "proxy-state"
+        }
+      ],
+      "cooldown": {
+        "reason": "quota",
+        "until": "2026-10-02T19:31:07Z",
+        "observedAt": "2026-10-02T18:35:07Z",
+        "source": "proxy-state"
+      }
+    },
+    {
+      "id": "generic-0",
+      "provider": "generic-provider",
+      "label": "additional-0",
+      "plan": "standard",
+      "checkedAt": "2026-10-02T18:53:07Z",
+      "lastSeenAt": "2026-10-02T18:52:07Z",
+      "state": "ready",
+      "source": "proxy-state",
+      "routing": {
+        "mode": "rotating",
+        "active": null,
+        "lastServedAt": null
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "5h",
+          "usedPercent": 30,
+          "resetsAt": "2026-10-02T20:25:07Z",
+          "windowMinutes": 300,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:52:07Z",
+          "source": "proxy-state"
+        },
+        {
+          "id": "weekly",
+          "label": "Weekly",
+          "usedPercent": 50,
+          "resetsAt": "2026-10-07T03:53:07Z",
+          "windowMinutes": 10080,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:52:07Z",
+          "source": "proxy-state"
+        }
+      ],
+      "cooldown": null
+    },
+    {
+      "id": "generic-1",
+      "provider": "generic-provider",
+      "label": "additional-1",
+      "plan": "standard",
+      "checkedAt": "2026-10-02T18:53:07Z",
+      "lastSeenAt": "2026-10-02T18:52:07Z",
+      "state": "ready",
+      "source": "proxy-state",
+      "routing": {
+        "mode": "rotating",
+        "active": null,
+        "lastServedAt": null
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "5h",
+          "usedPercent": 30,
+          "resetsAt": "2026-10-02T20:25:07Z",
+          "windowMinutes": 300,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:52:07Z",
+          "source": "proxy-state"
+        },
+        {
+          "id": "weekly",
+          "label": "Weekly",
+          "usedPercent": 50,
+          "resetsAt": "2026-10-07T03:53:07Z",
+          "windowMinutes": 10080,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:52:07Z",
+          "source": "proxy-state"
+        }
+      ],
+      "cooldown": null
+    },
+    {
+      "id": "generic-2",
+      "provider": "generic-provider",
+      "label": "additional-2",
+      "plan": "standard",
+      "checkedAt": "2026-10-02T18:53:07Z",
+      "lastSeenAt": "2026-10-02T18:52:07Z",
+      "state": "ready",
+      "source": "proxy-state",
+      "routing": {
+        "mode": "rotating",
+        "active": null,
+        "lastServedAt": null
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "5h",
+          "usedPercent": 30,
+          "resetsAt": "2026-10-02T20:25:07Z",
+          "windowMinutes": 300,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:52:07Z",
+          "source": "proxy-state"
+        },
+        {
+          "id": "weekly",
+          "label": "Weekly",
+          "usedPercent": 50,
+          "resetsAt": "2026-10-07T03:53:07Z",
+          "windowMinutes": 10080,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:52:07Z",
+          "source": "proxy-state"
+        }
+      ],
+      "cooldown": null
+    }
+  ]
+}
