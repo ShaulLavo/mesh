@@ -277,7 +277,7 @@ func TestDashboardCompactKeepsLiveRowsBeforeCachedGroups(t *testing.T) {
 	model := dashboardDesignFixture(4)
 	model.width, model.height = 80, 24
 	view := ansi.Strip(model.render())
-	if !strings.Contains(view, "live 3/7") || !strings.Contains(view, "maintenance") || !strings.Contains(view, "0/2 cached") {
+	if !strings.Contains(view, "live 3/7") || !strings.Contains(view, "1K0D") || !strings.Contains(view, "0/2 cached") {
 		t.Fatalf("cached groups displaced live rows in compact budget: %s", view)
 	}
 	assertFits(t, model.render(), 80, 24)
