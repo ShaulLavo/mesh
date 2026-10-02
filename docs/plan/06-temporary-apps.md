@@ -346,7 +346,7 @@ Document any unsupported document encoding rather than silently corrupting it.
 
 Each step lands with focused verification. Expand testing when a later step
 changes an earlier assumption. Update this plan and the status index as work
-lands. Leave unrelated `docs/plan/05-agent-usage.md` work intact.
+lands. Leave unrelated [agent interface](05-agent-interface.md) work intact.
 
 ## Acceptance and completion
 

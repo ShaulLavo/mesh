@@ -167,6 +167,11 @@ That supersedes D22's exclusion of disposable previews. Ordinary Mesh serving
 still exposes existing directories and ports, with its current lifecycle.
 A general build and deployment pipeline remains outside this work.
 
+Agent use is Approved as [the agent interface plan](05-agent-interface.md): one
+generic skill embedded in the binary, host and fleet profiles read live, and
+structured, restart-safe session operations. Mesh still runs no MCP server and
+holds no coding-agent knowledge.
+
 Serving (step 8) is deliberately scoped proxying through the VPS, not the general
 case.
 

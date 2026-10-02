@@ -243,6 +243,9 @@ for PR review. [T29](../tasks/T29-temporary-apps.md) records architecture, build
 validation. Production rollout and actual Safari-device verification remain
 pending deployment. D30 records the authorized scope change from D22.
 
+Approved: [agent interface, host and fleet context, and bundled skill](05-agent-interface.md).
+Not started.
+
 T18 is complete. Its claims remain inactive across disconnects and edge restarts.
 See [reverse tunnels](../reverse-tunnels.md) for the stock SSH command.
 
