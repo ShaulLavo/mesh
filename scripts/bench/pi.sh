@@ -18,7 +18,7 @@ cleanup() {
 trap cleanup EXIT
 scp -q "$build/mesh" "$build/receipt.json" \
   "$root/scripts/bench/receipt.py" "$root/scripts/bench/run.py" "$root/scripts/bench/workload.py" \
-  "$root/scripts/bench/remote_cleanup.py" "pi:$remote/"
+  "$root/scripts/bench/remote_cleanup.py" "$root/scripts/bench/process_diagnostics.py" "pi:$remote/"
 # Timeout wraps the Python coordinator, which handles TERM and cleans up. The
 # independent EXIT cleanup also checks /proc by exact scratch executable path.
 ssh -o BatchMode=yes pi "timeout --signal=TERM --kill-after=15s 300s python3 '$remote/run.py' --binary '$remote/mesh' --receipt '$remote/receipt.json' --scratch-parent '$remote' --idle-seconds 30 --output '$remote/pi.json'"

@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 import unittest
 
+from process_diagnostics import run_observed
+
 
 class ProfileTests(unittest.TestCase):
     @classmethod
@@ -25,7 +27,7 @@ func main() {
  finish := benchProfile(); finish()
 }
 ''')
-        subprocess.run(["go", "build", "-o", str(cls.root / "fixture"), str(cls.root / "main.go"), str(cls.root / "profile.go")], check=True)
+        run_observed(["go", "build", "-o", str(cls.root / "fixture"), str(cls.root / "main.go"), str(cls.root / "profile.go")], reason="profile-fixture-build", check=True)
 
     @classmethod
     def tearDownClass(cls):
@@ -34,12 +36,12 @@ func main() {
     def test_failed_profile_has_no_completion_marker(self):
         for name in ("cpu", "heap", "allocs", "cpu-close", "heap-close", "allocs-close"):
             with self.subTest(name=name), tempfile.TemporaryDirectory(dir=self.root) as directory:
-                subprocess.run([str(self.root / "fixture"), name], env={**os.environ, "MESH_BENCH_PROFILE_DIR": directory}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                run_observed([str(self.root / "fixture"), name], reason="profile-failure-fixture", env={**os.environ, "MESH_BENCH_PROFILE_DIR": directory}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 self.assertFalse(list(Path(directory).glob("*.done")), name)
 
     def test_success_profiles_are_closed_and_valid(self):
         with tempfile.TemporaryDirectory(dir=self.root) as directory:
-            subprocess.run([str(self.root / "fixture")], env={**os.environ, "MESH_BENCH_PROFILE_DIR": directory}, check=True)
+            run_observed([str(self.root / "fixture")], reason="profile-success-fixture", env={**os.environ, "MESH_BENCH_PROFILE_DIR": directory}, check=True)
             self.assertEqual(len(list(Path(directory).glob("*.done"))), 1)
             profiles = list(Path(directory).glob("*.pprof"))
             self.assertEqual(len(profiles), 3)

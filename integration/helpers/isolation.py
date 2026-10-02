@@ -13,6 +13,8 @@ import tempfile
 
 sys.dont_write_bytecode = True
 
+from process_diagnostics import process_snapshot, record_signal  # noqa: E402 - copied helpers stay bytecode-free
+
 
 def refuse_live_paths(paths, environment=None, *, parents=True):
     environment = os.environ if environment is None else environment
@@ -76,18 +78,22 @@ def run_process(command, environment):
         for watched in TERMINATION_SIGNALS:
             signal.signal(watched, signal.SIG_IGN)
         try:
+            record_signal(process.pid, signum, "integration-cancellation",
+                          {"kind": "popen_process_group", "group_id": process.pid}, incarnation)
             os.killpg(process.pid, signum)
         except ProcessLookupError:
             pass
         raise SystemExit(128 + signum)
 
     process = None
+    incarnation = None
     previous = {signum: signal.getsignal(signum) for signum in TERMINATION_SIGNALS}
     try:
         # Queue cancellation until Popen has returned the PID we must reap.
         for signum in previous:
             signal.signal(signum, pending)
         process = subprocess.Popen(command, env=environment, start_new_session=True)
+        incarnation = process_snapshot(process.pid)
         for signum in previous:
             signal.signal(signum, terminate)
         if cancelled is not None:
@@ -102,6 +108,8 @@ def run_process(command, environment):
             except subprocess.TimeoutExpired:
                 pass
             try:
+                record_signal(process.pid, signal.SIGKILL, "integration-cancellation-cleanup",
+                              {"kind": "popen_process_group", "group_id": process.pid}, incarnation)
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass

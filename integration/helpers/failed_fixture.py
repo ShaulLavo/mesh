@@ -7,6 +7,8 @@ import signal
 import shutil
 import time
 
+from process_diagnostics import record_signal
+
 
 def process_identity(pid):
     try:
@@ -73,6 +75,9 @@ def stop_owned(root, binary, captured):
                 descriptor = os.pidfd_open(pid)
                 try:
                     if same_process(pid, identity):
+                        record_signal(pid, sig, "failed-fixture-owned-cleanup",
+                                      {"kind": "pidfd_private_root", "root": str(root), "pidfd": descriptor},
+                                      {"status": "observed", "start_ticks": identity[0], "parent_pid": identity[1]})
                         signal.pidfd_send_signal(descriptor, sig)
                 finally:
                     os.close(descriptor)

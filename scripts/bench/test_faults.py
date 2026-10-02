@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import run as bench
+from process_diagnostics import record_signal, signal_child, signal_self
 
 
 def alive(pid, identity):
@@ -41,7 +42,7 @@ def fixture(binary, parent, mode):
         bench.wait_until(lambda: b"BENCH_READY" in base64.b64decode(bench.rpc(state, {"type": "session.logs", "sessionId": sid, "tail": 4096})[0].get("output", "")))
         worker = bench.own_worker(state, sid)
         identity = bench.proc_sample(worker)["start_ticks"]
-        daemon.kill()
+        signal_child(daemon, signal.SIGKILL, "fault-fixture-daemon-death")
         daemon.wait()
         sessions = [sid]
         if mode == "partial":
@@ -51,7 +52,7 @@ def fixture(binary, parent, mode):
             (state / "s" / sid / "sock").unlink()
         if mode == "cancel":
             previous = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
-            timer = threading.Timer(0.001, os.kill, args=(os.getpid(), signal.SIGTERM))
+            timer = threading.Timer(0.001, signal_self, args=(signal.SIGTERM, "fault-fixture-cancellation"))
             timer.start()
             try:
                 try:
@@ -81,10 +82,13 @@ def fixture(binary, parent, mode):
                 bench.wait_until(lambda: not alive(worker, identity), timeout=5)
             except TimeoutError:
                 if alive(worker, identity):
-                    os.kill(worker, 15)
+                    record_signal(worker, signal.SIGTERM, "fault-fixture-worker-rescue",
+                                  {"kind": "verified_fixture_worker", "root": str(root)},
+                                  {"status": "observed", "start_ticks": identity})
+                    os.kill(worker, signal.SIGTERM)
                 bench.wait_until(lambda: not alive(worker, identity), timeout=5)
         if daemon.poll() is None:
-            daemon.terminate()
+            signal_child(daemon, signal.SIGTERM, "fault-fixture-daemon-rescue")
             daemon.wait(timeout=5)
         shutil.rmtree(root)
 
@@ -95,7 +99,7 @@ def cancelled_spawn(binary, parent):
     def spawn(*arguments, **keywords):
         child = original(*arguments, **keywords)
         started.append(child)
-        os.kill(os.getpid(), signal.SIGTERM)
+        signal_self(signal.SIGTERM, "fault-fixture-spawn-cancellation")
         return child
     previous = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     try:
@@ -112,7 +116,7 @@ def cancelled_spawn(binary, parent):
         signal.signal(signal.SIGTERM, previous)
         for child in started:
             if child.poll() is None:
-                child.kill()
+                signal_child(child, signal.SIGKILL, "fault-fixture-child-rescue")
                 child.wait(timeout=5)
 
 
@@ -131,11 +135,11 @@ if __name__ == "__main__":
                 try:
                     raise RuntimeError("fixture failure")
                 finally:
-                    child.terminate()
+                    signal_child(child, signal.SIGTERM, "fault-fixture-child-cleanup")
                     child.wait()
         except RuntimeError as error:
             assert "retained" in str(error) and held.exists()
-            survivor.terminate()
+            signal_child(survivor, signal.SIGTERM, "fault-fixture-survivor-cleanup")
             survivor.wait()
             shutil.rmtree(held)
     print("PASS: failed case retains root until owned child ends")
