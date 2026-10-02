@@ -99,9 +99,16 @@ func TestDashboardSessionHostColumnAtWallSize(t *testing.T) {
 
 func dashboardHostColumnFixture() dashboardModel {
 	model := dashboardPerformanceFixture()
-	model.hosts[1].Host.Alias = "macbook-air"
-	model.hosts[1].Sessions.Rows[0].ID = "12345"
-	model.hosts[3].RAM.Value.TotalBytes = model.hosts[2].RAM.Value.TotalBytes
+	for index := range model.hosts {
+		host := &model.hosts[index]
+		if host.Host.Alias == "shauls-macbook-air" {
+			host.Host.Alias = "macbook-air"
+			host.Sessions.Rows[0].ID = "12345"
+		}
+		if host.Host.Alias == "vps" {
+			host.RAM.Value.TotalBytes = dashboardFixtureHost(model, "pi").RAM.Value.TotalBytes
+		}
+	}
 	for _, host := range slices.Clone(model.hosts) {
 		model.receive(host)
 	}
@@ -141,4 +148,14 @@ func TestDashboardSessionHostWidthCapsAndCachedAlignment(t *testing.T) {
 		t.Fatalf("cached host name did not share the live column width: %s", panel)
 	}
 	assertFits(t, panel, 95, 25)
+}
+
+func TestDashboardPerformanceFixtureUsesMeasuredOrder(t *testing.T) {
+	model := dashboardPerformanceFixture()
+	assertDashboardHostOrder(t, model, []string{"pc", "shauls-macbook-air", "vps", "pi"})
+	for _, host := range model.hosts {
+		if total := model.ramTotals[host.Host.ID]; total != host.RAM.Value.TotalBytes {
+			t.Errorf("fixture %s remembered total %d differs from measured %d", host.Host.Alias, total, host.RAM.Value.TotalBytes)
+		}
+	}
 }

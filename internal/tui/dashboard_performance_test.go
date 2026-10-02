@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -118,6 +119,9 @@ func dashboardPerformanceFixture() dashboardModel {
 			host.Temperatures = []cli.DashboardMeasurement[hostmetrics.ComponentTemperature]{{State: statusAvailable, Value: hostmetrics.ComponentTemperature{Kind: "soc", Label: "SoC", Celsius: 48}, Sample: "temps", MeasuredAt: model.now}}
 		}
 	}
+	for _, host := range slices.Clone(model.hosts) {
+		model.receive(host)
+	}
 	return model
 }
 func TestDashboardPerformanceDesignEvidence(t *testing.T) {
@@ -137,16 +141,17 @@ func TestDashboardPerformanceDesignEvidence(t *testing.T) {
 	if !strings.Contains(rows[3+model.cardsHeight()], "Hosts 4 / 4") {
 		t.Fatalf("host grid changed table budget: %s", rows[3+model.cardsHeight()])
 	}
-	for _, index := range []int{2, 3} {
-		card := ansi.Strip(strings.Join(model.card(model.hosts[index], 79), "\n"))
+	for _, alias := range []string{"pi", "vps"} {
+		host := dashboardFixtureHost(model, alias)
+		card := ansi.Strip(strings.Join(model.card(host, 79), "\n"))
 		if strings.Contains(card, "GPU") || strings.Contains(card, "BAT") || strings.Contains(card, "VRAM") {
 			t.Fatalf("absent hardware takes space: %s", card)
 		}
-		if len(model.card(model.hosts[index], 79)) != 9 {
+		if len(model.card(host, 79)) != 9 {
 			t.Fatal("absent GPU/BAT kept a row")
 		}
 	}
-	mac := ansi.Strip(strings.Join(model.card(model.hosts[1], 79), "\n"))
+	mac := ansi.Strip(strings.Join(model.card(dashboardFixtureHost(model, "shauls-macbook-air"), 79), "\n"))
 	if strings.Contains(mac, "VRAM") || strings.Contains(mac, "busy") || strings.Contains(mac, "353763328") {
 		t.Fatal("Mac shows dedicated memory or disk busy", mac)
 	}
@@ -166,7 +171,7 @@ func TestDashboardPerformanceDesignEvidence(t *testing.T) {
 }
 func TestDashboardPerformanceOfflineAndStaleFacts(t *testing.T) {
 	model := dashboardPerformanceFixture()
-	host := model.hosts[1]
+	host := dashboardFixtureHost(model, "shauls-macbook-air")
 	host.Connection = cli.StateUnreachable
 	host.LastReply = model.now.Add(-32 * time.Minute)
 	view := ansi.Strip(strings.Join(model.card(host, 79), "\n"))
@@ -178,7 +183,7 @@ func TestDashboardPerformanceOfflineAndStaleFacts(t *testing.T) {
 	if !strings.Contains(view, "last verified reply 32m") {
 		t.Fatal("missing offline evidence", view)
 	}
-	host = model.hosts[0]
+	host = dashboardFixtureHost(model, "pc")
 	host.GPU.MeasuredAt = model.now.Add(-time.Minute)
 	host.GPU.Failing = true
 	view = ansi.Strip(model.gpuLine(host, 36, 37))
@@ -188,7 +193,7 @@ func TestDashboardPerformanceOfflineAndStaleFacts(t *testing.T) {
 }
 func TestDashboardCoreGroupingAndPalettes(t *testing.T) {
 	model := dashboardPerformanceFixture()
-	host := model.hosts[0]
+	host := dashboardFixtureHost(model, "pc")
 	host.Cores.Value = make([]float64, 64)
 	host.Cores.Value[63] = 100
 	strip := ansi.Strip(model.coreStrip(host, 28))

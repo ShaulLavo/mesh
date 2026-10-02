@@ -21,7 +21,10 @@ type dashboardSummaryRow struct {
 func (m dashboardModel) summaryRows(services bool, width int) ([]dashboardSummaryRow, int) {
 	var rows []dashboardSummaryRow
 	total := 0
-	hostWidth := m.sessionHostWidth(width)
+	hostWidth := 0
+	if !services {
+		hostWidth = m.sessionHostWidth(width)
+	}
 	for _, host := range m.hosts {
 		if services {
 			total += host.Services.Total
