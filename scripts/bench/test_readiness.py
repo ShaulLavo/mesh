@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import readiness
+from process_diagnostics import signal_child
 from run import read_frame, write_frame
 
 
@@ -225,11 +227,11 @@ class ReadinessTests(unittest.TestCase):
                 finally:
                     for conn in connections:
                         conn.close()
-                    daemon.terminate()
+                    signal_child(daemon, signal.SIGTERM, "readiness-fixture-owned-cleanup")
                     try:
                         daemon.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        daemon.kill()
+                        signal_child(daemon, signal.SIGKILL, "readiness-fixture-owned-cleanup")
                         daemon.wait(timeout=5)
                 self.assertEqual(daemon.returncode, 0)
                 self.assertFalse(endpoint.exists(), "owned daemon socket was not released")

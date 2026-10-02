@@ -13,6 +13,39 @@ import unittest
 from unittest.mock import patch
 
 import run as bench
+from process_diagnostics import signal_child
+
+
+class FailedDiagnosticSink(io.StringIO):
+    def __init__(self, operation):
+        super().__init__()
+        self.operation = operation
+        self.failed = False
+
+    def write(self, text):
+        if self.operation == "write":
+            self.failed = True
+            raise BrokenPipeError("fixture diagnostic write failure")
+        return super().write(text)
+
+    def flush(self):
+        self.failed = True
+        raise OSError("fixture diagnostic flush failure")
+
+
+def assert_failed_sink_signals(test, child, observation, operation):
+    sink = FailedDiagnosticSink(operation)
+    with contextlib.redirect_stderr(sink), patch.object(child, "send_signal", wraps=child.send_signal) as direct:
+        signal_child(child, signal.SIGTERM, "regression-failed-sink-direct")
+        direct.assert_called_once_with(signal.SIGTERM)
+    test.assertTrue(sink.failed)
+    sink.failed = False
+    with contextlib.redirect_stderr(sink), patch.object(os, "killpg", wraps=os.killpg) as group:
+        observation.send_group(signal.SIGTERM, "regression-failed-sink-group")
+        group.assert_called_once_with(child.pid, signal.SIGTERM)
+    test.assertTrue(sink.failed)
+    test.assertEqual(observation.sent, [])
+    test.assertIsNone(child.poll())
 
 
 @unittest.skipUnless(os.name == "posix" and hasattr(os, "wait4"), "POSIX child signal status")
@@ -44,7 +77,8 @@ class ProcessDiagnosticsTests(unittest.TestCase):
                     self.assertLessEqual(len(event.get("MESSAGE", "")), 512)
 
             from process_diagnostics import ChildObservation
-            child = subprocess.Popen([sys.executable, "-c", "import time; print('ready',flush=True); time.sleep(30)"],
+            child = subprocess.Popen([sys.executable, "-c",
+                                      "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print('ready',flush=True); time.sleep(30)"],
                                      stdout=subprocess.PIPE, text=True, start_new_session=True)
             observation = ChildObservation(child.pid, "regression-owned-child")
             actual_killpg = os.killpg
@@ -60,10 +94,17 @@ class ProcessDiagnosticsTests(unittest.TestCase):
 
             try:
                 self.assertEqual(child.stdout.readline().strip(), "ready")
+                for operation in ("write", "flush"):
+                    assert_failed_sink_signals(self, child, observation, operation)
+                    messages.write(json.dumps({"event": "regression.failed_sink_signals", "operation": operation,
+                                               "native_signal_calls_completed": 2}) + "\n")
                 with patch.object(os, "killpg", deliver):
                     observation.send_group(signal.SIGKILL, "regression-owned-cleanup")
                 self.assertEqual(child.wait(timeout=5), -signal.SIGKILL)
                 observation.finish(child.returncode)
+                with contextlib.redirect_stderr(FailedDiagnosticSink("flush")):
+                    observation.finish(child.returncode)
+                self.assertFalse(observation.thread.is_alive())
                 records = [json.loads(line) for line in messages.getvalue().splitlines()]
                 known = [row for row in records if row["event"] == "bench.child_sigkill" and row["target_pid"] == child.pid][0]
                 self.assertEqual(known["attribution"], "owner_signal_recorded")

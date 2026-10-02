@@ -12,8 +12,13 @@ import time
 
 
 def emit(record):
-    print(json.dumps({"actor_pid": os.getpid(), "timestamp_ns": time.time_ns(), **record}, sort_keys=True),
-          file=sys.stderr, flush=True)
+    message = json.dumps({"actor_pid": os.getpid(), "timestamp_ns": time.time_ns(), **record}, sort_keys=True)
+    try:
+        print(message, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        # A broken or closed diagnostic sink must leave owned cleanup runnable.
+        return False
+    return True
 
 
 def process_snapshot(pid):
@@ -33,8 +38,7 @@ def process_snapshot(pid):
 def record_signal(pid, sig, reason, ownership, incarnation=None):
     record = {"event": "bench.signal_send", "target_pid": pid, "signal": int(sig), "reason": reason,
               "ownership": ownership, "incarnation": incarnation or process_snapshot(pid)}
-    emit(record)
-    return record
+    return record if emit(record) else None
 
 
 def signal_child(process, sig, reason):
@@ -177,8 +181,10 @@ class ChildObservation:
         self.thread.join()
 
     def send_group(self, sig, reason):
-        self.sent.append(record_signal(self.pid, sig, reason,
-                                       {"kind": "popen_process_group", "group_id": self.pid}, self.incarnation))
+        record = record_signal(self.pid, sig, reason,
+                               {"kind": "popen_process_group", "group_id": self.pid}, self.incarnation)
+        if record is not None:
+            self.sent.append(record)
         os.killpg(self.pid, sig)
 
     def finish(self, returncode):
