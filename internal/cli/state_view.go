@@ -57,7 +57,7 @@ func (v StateView) Clone() StateView {
 	cloned.Services = cloneWireServices(v.Services)
 	cloned.Sections = maps.Clone(v.Sections)
 	if v.Metrics != nil {
-		metrics := *v.Metrics
+		metrics := hostmetrics.AgeSnapshot(*v.Metrics, 0)
 		cloned.Metrics = &metrics
 	}
 	return cloned
@@ -117,18 +117,14 @@ func (v *StateView) applyMetrics(metrics *hostmetrics.Snapshot, received time.Ti
 		return
 	}
 	v.MetricsUnsupported = false
-	cloned := *metrics
-	age := max(0, transit.Milliseconds())
-	cloned.CPU.AgeMillis += age
-	cloned.RAM.AgeMillis += age
-	cloned.Temperature.AgeMillis += age
-	cloned.Uptime.AgeMillis += age
+	cloned := hostmetrics.AgeSnapshot(*metrics, max(0, transit.Milliseconds()))
 	if v.Metrics != nil {
 		elapsed := max(0, received.Sub(v.MetricsReceivedAt).Milliseconds())
 		retainMetricAge(&cloned.CPU, v.Metrics.CPU, elapsed)
 		retainMetricAge(&cloned.RAM, v.Metrics.RAM, elapsed)
 		retainMetricAge(&cloned.Temperature, v.Metrics.Temperature, elapsed)
 		retainMetricAge(&cloned.Uptime, v.Metrics.Uptime, elapsed)
+		retainPerformanceAge(&cloned, *v.Metrics, elapsed)
 	}
 	v.Metrics = &cloned
 	v.MetricsReceivedAt = received

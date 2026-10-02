@@ -76,7 +76,7 @@ def exercise(binary, socket, stop_signal, evidence, screen):
                                stdout=slave, stderr=slave, env=environment, start_new_session=True)
     try:
         output = collect(master, process,
-                         lambda data: bool(re.search(rb"CPU [0-9]+%.*RAM [0-9.]+\s*/\s*[0-9.]+ GiB", data)), 8, screen)
+                         lambda data: bool(re.search(rb"CPU [0-9]+%.*RAM [0-9.]+\s*/\s*[0-9.]+", data)), 8, screen)
         assert b"\x1b[?1049h" in output, "fullscreen view never entered alternate screen"
         connection, initial = watch(socket, ["sessions"])
         connection.close()

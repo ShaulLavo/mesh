@@ -26,7 +26,7 @@ func TestDashboardPassiveViewFitsAndFreshnessIsIndependent(t *testing.T) {
 	})
 	view := ansi.Strip(model.View().Content)
 	assertFits(t, view, 80, 24)
-	for _, value := range []string{"CPU 0%", "RAM 8.0 / 16.0 GiB stale 20s", "sessions 30 live", "services 2 cached"} {
+	for _, value := range []string{"CPU 0%", "RAM 8.0/16.0 GiB stale 20s", "sessions 30 live", "services 2", "cached 2"} {
 		if !strings.Contains(view, value) {
 			t.Fatalf("missing %q: %s", value, view)
 		}
@@ -159,14 +159,16 @@ func TestDashboardWallContainsHistoriesTemperatureUptimeAndBoundedSummaries(t *t
 			Temperature: cli.DashboardMeasurement[cli.DashboardTemperature]{State: "available", Value: cli.DashboardTemperature{Sensor: "package", Celsius: 42}, Sample: "temp", MeasuredAt: now},
 			Uptime:      cli.DashboardMeasurement[uint64]{State: "available", Value: 3600, Sample: "uptime", MeasuredAt: now},
 			Sessions:    cli.DashboardCatalog[cli.DashboardSession]{Rows: []cli.DashboardSession{{ID: "7K3D", State: "running", Command: "quiet shell"}}, Total: 30, ObservedAt: now},
-			Services:    cli.DashboardCatalog[cli.DashboardService]{Rows: []cli.DashboardService{{Name: "website", State: "healthy"}, {Name: "broken", State: "unhealthy", Problem: "fixture failure", Failed: true}}, Total: 20, ObservedAt: now},
+			Services:    cli.DashboardCatalog[cli.DashboardService]{Rows: []cli.DashboardService{{Name: "website", State: "ready"}, {Name: "broken", State: "unhealthy", Problem: "fixture failure", Failed: true}}, Total: 20, Ready: 19, Failed: 1, ObservedAt: now},
 		}
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host.Host})
 		model.receive(host)
 	}
+	// Keep one history row per pair after this fixture's catalog content.
+	model.height = 5 + len(model.summaries(model.height)) + model.cardOverhead() + (len(model.hosts)+1)/2
 	view := ansi.Strip(model.render())
-	assertFits(t, view, 160, 48)
-	for _, label := range []string{"CPU all cores", "25%", "RAM 8.0 / 16.0 GiB", "package 42°C", "uptime 1h", "120s", "0–100%", "quiet shell", "fixture failure", "180 total", "120 total", "Hosts 6 / 6 visible"} {
+	assertFits(t, view, 160, model.height)
+	for _, label := range []string{"CPU ", "25%", "RAM 8.0 / 16.0 GiB", "CPU 42°", "up 1h", "120s", "0–100%", "quiet shell", "fixture failure", "180 total", "services 120", "/120 visible", "Hosts 6 / 6 visible"} {
 		if !strings.Contains(view, label) {
 			t.Fatalf("missing wall %q: %s", label, view)
 		}

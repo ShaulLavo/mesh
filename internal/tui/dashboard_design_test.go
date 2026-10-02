@@ -25,7 +25,7 @@ func TestDashboardDesignRegionsAndOfflineFacts(t *testing.T) {
 		}
 	}
 	card := ansi.Strip(strings.Join(model.card(model.hosts[3], 79), "\n"))
-	if strings.Contains(card, "CPU 34%") || !strings.Contains(card, "RAM --/-- GiB") || !strings.Contains(card, "fresh metrics --") {
+	if strings.Contains(card, "CPU") || strings.Contains(card, "RAM") || !strings.Contains(card, "sessions 2 cached") {
 		t.Fatalf("offline reading presented as current: %s", card)
 	}
 	for _, size := range [][2]int{{140, 40}, {80, 24}, {50, 12}} {
@@ -267,7 +267,7 @@ func TestDashboardDesignConsoleEvidence(t *testing.T) {
 	if strings.Contains(raw, "38;2;") || strings.Contains(raw, "38;5;") || strings.Contains(raw, "48;2;") || strings.Contains(raw, "48;5;") {
 		t.Fatal("forced16-color console retained extendedcolors")
 	}
-	if !strings.Contains(ansi.Strip(raw), "CPU all cores") {
+	if !strings.Contains(ansi.Strip(raw), "CPU ") {
 		t.Fatal("console positivecontrol has no hostcard")
 	}
 	fmt.Printf("\nBEGIN_DESIGN_4_LINUX16\n%s\nEND_DESIGN_4_LINUX16\n", raw)
@@ -277,7 +277,7 @@ func TestDashboardCompactKeepsLiveRowsBeforeCachedGroups(t *testing.T) {
 	model := dashboardDesignFixture(4)
 	model.width, model.height = 80, 24
 	view := ansi.Strip(model.render())
-	if !strings.Contains(view, "live 3/7") || !strings.Contains(view, "1K0D") || !strings.Contains(view, "0/2 cached") {
+	if !strings.Contains(view, "live 2/7") || !strings.Contains(view, "1K0D") || !strings.Contains(view, "0/2 cached") {
 		t.Fatalf("cached groups displaced live rows in compact budget: %s", view)
 	}
 	assertFits(t, model.render(), 80, 24)

@@ -80,6 +80,9 @@ func validateStateMetrics(metrics *hostmetrics.Snapshot) error {
 	if metrics == nil {
 		return nil
 	}
+	if err := validatePerformance(metrics); err != nil {
+		return err
+	}
 	if err := validateMetricReading(metrics.CPU); err != nil {
 		return err
 	}

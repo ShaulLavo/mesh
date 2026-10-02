@@ -23,6 +23,19 @@ func projectDashboardState(host DashboardHost, state StateView) DashboardHostVie
 		return view
 	}
 	metrics := state.Metrics
+	view.PerformanceVersion = metrics.PerformanceVersion
+	view.GPU = projectOptionalMetric(metrics.GPU, state.MetricsReceivedAt)
+	view.Disk = projectOptionalMetric(metrics.Disk, state.MetricsReceivedAt)
+	view.Network = projectOptionalMetric(metrics.Network, state.MetricsReceivedAt)
+	view.Cores = projectOptionalMetric(metrics.Cores, state.MetricsReceivedAt)
+	if view.Cores != nil {
+		view.Cores.Value = append([]float64(nil), view.Cores.Value...)
+	}
+	view.Battery = projectOptionalMetric(metrics.Battery, state.MetricsReceivedAt)
+	for _, entry := range metrics.Temperatures {
+		reading := hostmetrics.Reading[hostmetrics.ComponentTemperature]{Availability: hostmetrics.Available, Value: entry, Sample: metrics.TemperaturesSample, AgeMillis: entry.AgeMillis, Failing: metrics.TemperaturesFailing}
+		view.Temperatures = append(view.Temperatures, projectDashboardMetric(reading, state.MetricsReceivedAt))
+	}
 	view.CPU = projectDashboardMetric(metrics.CPU, state.MetricsReceivedAt)
 	view.Uptime = projectDashboardMetric(metrics.Uptime, state.MetricsReceivedAt)
 	ram := projectDashboardMetric(metrics.RAM, state.MetricsReceivedAt)
@@ -57,19 +70,16 @@ func projectDashboardSessions(rows []protocol.SessionInfo, section ObservedSecti
 func projectDashboardServices(rows []protocol.ServiceInfo, section ObservedSection, healthSupported bool) DashboardCatalog[DashboardService] {
 	result := DashboardCatalog[DashboardService]{Total: len(rows), ObservedAt: dashboardObservedAt(section), Failing: section.Observation.Failing}
 	for _, row := range rows {
-		if !healthSupported {
+		switch {
+		case !healthSupported:
 			result.Unknown++
-			continue
-		}
-		if dashboardServiceFailed(row) {
+		case dashboardServiceFailed(row):
 			result.Failed++
-			continue
-		}
-		if row.HealthUnknown {
+		case row.HealthUnknown:
 			result.Unknown++
-			continue
-		}
-		if row.Demand == nil || row.Demand.State == "" || row.Demand.State == protocol.DemandRunning {
+		case row.Demand != nil && row.Demand.State == protocol.DemandStopped:
+			result.Idle++
+		case row.Demand == nil || row.Demand.State == "" || row.Demand.State == protocol.DemandRunning:
 			result.Ready++
 		}
 	}
@@ -93,26 +103,27 @@ func appendDashboardServices(selected []DashboardService, rows []protocol.Servic
 }
 func projectDashboardService(row protocol.ServiceInfo, healthSupported bool) DashboardService {
 	if !healthSupported {
-		return DashboardService{Name: dashboardText(row.Name), State: "health unknown", HealthUnknown: true}
+		return DashboardService{Name: dashboardText(row.Name), State: "unknown", HealthUnknown: true}
 	}
 	service := DashboardService{Name: dashboardText(row.Name), State: "ready", Problem: dashboardText(row.Problem), Failed: dashboardServiceFailed(row), HealthUnknown: row.HealthUnknown && !dashboardServiceFailed(row)}
-	if !row.Healthy {
+	if row.Demand != nil && row.Demand.Failure != "" {
+		service.Problem = dashboardText(row.Demand.Failure)
+	}
+	if service.Failed {
 		service.State = "unhealthy"
-	}
-	if row.HealthUnknown {
-		service.State = "health pending"
-	}
-	if row.Demand == nil {
 		return service
 	}
-	if row.Demand.State != "" {
-		service.State = dashboardText(row.Demand.State)
+	if service.HealthUnknown {
+		service.State = "unknown"
+		return service
 	}
-	if row.Demand.Failure != "" {
-		service.Problem = dashboardText(row.Demand.Failure)
-		service.Failed = true
+	if row.Demand == nil || row.Demand.State == "" {
+		return service
 	}
-	service.Failed = service.Failed || row.Demand.State == protocol.DemandFailed
+	service.State = dashboardText(row.Demand.State)
+	if row.Demand.State == protocol.DemandStopped {
+		service.State = "idle"
+	}
 	return service
 }
 func dashboardObservedAt(section ObservedSection) time.Time {
@@ -150,4 +161,12 @@ func dashboardServiceFailed(row protocol.ServiceInfo) bool {
 		return true
 	}
 	return row.Demand != nil && (row.Demand.Failure != "" || row.Demand.State == protocol.DemandFailed)
+}
+
+func projectOptionalMetric[T any](metric *hostmetrics.Reading[T], received time.Time) *DashboardMeasurement[T] {
+	if metric == nil {
+		return nil
+	}
+	value := projectDashboardMetric(*metric, received)
+	return &value
 }

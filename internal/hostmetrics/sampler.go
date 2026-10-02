@@ -45,10 +45,19 @@ type Temperature struct {
 	Celsius float64 `json:"celsius"`
 }
 type Snapshot struct {
-	CPU         Reading[float64]     `json:"cpu"`
-	RAM         Reading[Memory]      `json:"ram"`
-	Temperature Reading[Temperature] `json:"temperature"`
-	Uptime      Reading[uint64]      `json:"uptime"`
+	CPU                 Reading[float64]       `json:"cpu"`
+	RAM                 Reading[Memory]        `json:"ram"`
+	Temperature         Reading[Temperature]   `json:"temperature"`
+	Uptime              Reading[uint64]        `json:"uptime"`
+	TemperaturesSample  string                 `json:"temperaturesSample,omitempty"`
+	TemperaturesFailing bool                   `json:"temperaturesFailing,omitempty"`
+	PerformanceVersion  int                    `json:"performanceVersion,omitempty"`
+	Temperatures        []ComponentTemperature `json:"temperatures,omitempty"`
+	Battery             *Reading[Battery]      `json:"battery,omitempty"`
+	GPU                 *Reading[GPU]          `json:"gpu,omitempty"`
+	Disk                *Reading[Disk]         `json:"disk,omitempty"`
+	Network             *Reading[Network]      `json:"network,omitempty"`
+	Cores               *Reading[[]float64]    `json:"cores,omitempty"`
 }
 
 // Counters excludes guest, which is already included in Linux user/nice counters.
@@ -75,6 +84,8 @@ type Sampler struct {
 	ram                        cached[Memory]
 	temperature                cached[Temperature]
 	uptime                     cached[uint64]
+	performance                performanceState
+	activeCancel               context.CancelFunc
 	mu                         sync.Mutex
 	demands                    map[uint64]time.Duration
 	next                       uint64
@@ -95,7 +106,17 @@ func (s *Sampler) Demand(every time.Duration) func() {
 	s.mu.Unlock()
 	s.notify()
 	var once sync.Once
-	return func() { once.Do(func() { s.mu.Lock(); delete(s.demands, id); s.mu.Unlock(); s.notify() }) }
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			delete(s.demands, id)
+			if len(s.demands) == 0 && s.activeCancel != nil {
+				s.activeCancel()
+			}
+			s.mu.Unlock()
+			s.notify()
+		})
+	}
 }
 func (s *Sampler) notify() {
 	select {
@@ -170,7 +191,7 @@ func (s *Sampler) Read(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("host metrics context: %w", err)
 	}
 	now = s.now()
-	return Snapshot{CPU: aged(s.cpu, now), RAM: aged(s.ram, now), Temperature: aged(s.temperature, now), Uptime: aged(s.uptime, now)}, nil
+	return s.snapshot(now), nil
 }
 func (s *Sampler) collect(ctx context.Context) {
 	s.last = s.now()
@@ -182,7 +203,8 @@ func (s *Sampler) collect(ctx context.Context) {
 	s.ram = record(s.ram, memory, err, s.now(), s.key(), 0)
 	uptime, err := s.collector.Uptime(ctx)
 	s.uptime = record(s.uptime, uptime, err, s.now(), s.key(), 0)
-	if s.sensorAt.IsZero() || s.now().Sub(s.sensorAt) >= TemperatureInterval {
+	sensorDue := s.sensorAt.IsZero() || s.now().Sub(s.sensorAt) >= TemperatureInterval
+	if sensorDue {
 		s.sensorAt = s.now()
 		temperature, err := s.collector.Temperature(ctx)
 		if err == nil && (temperature.Sensor == "" || !finite(temperature.Celsius) || temperature.Celsius < -273.15 || temperature.Celsius > 1000) {
@@ -190,6 +212,7 @@ func (s *Sampler) collect(ctx context.Context) {
 		}
 		s.temperature = record(s.temperature, temperature, err, s.now(), s.key(), 0)
 	}
+	s.collectPerformance(ctx, sensorDue)
 }
 func (s *Sampler) collectCPU(ctx context.Context) {
 	current, err := s.collector.CPU(ctx)
@@ -271,8 +294,19 @@ func (s *Sampler) publishSample(ctx context.Context, publish func(Snapshot)) {
 		return
 	}
 	sampleCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	s.mu.Lock()
+	if len(s.demands) == 0 {
+		s.mu.Unlock()
+		cancel()
+		return
+	}
+	s.activeCancel = cancel
+	s.mu.Unlock()
 	value, err := s.Read(sampleCtx)
 	cancel()
+	s.mu.Lock()
+	s.activeCancel = nil
+	s.mu.Unlock()
 	if err != nil {
 		value, err = s.current(ctx)
 	}
@@ -288,5 +322,5 @@ func (s *Sampler) current(ctx context.Context) (Snapshot, error) {
 	}
 	defer func() { <-s.gate }()
 	now := s.now()
-	return Snapshot{CPU: aged(s.cpu, now), RAM: aged(s.ram, now), Temperature: aged(s.temperature, now), Uptime: aged(s.uptime, now)}, nil
+	return s.snapshot(now), nil
 }
