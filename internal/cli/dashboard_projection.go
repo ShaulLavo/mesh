@@ -55,7 +55,9 @@ func projectDashboardServices(rows []protocol.ServiceInfo, section ObservedSecti
 			result.Failed++
 			continue
 		}
-		result.Ready++
+		if row.Demand == nil || row.Demand.State == protocol.DemandRunning {
+			result.Ready++
+		}
 	}
 	// Select failures before healthy rows without copying an unbounded catalog.
 	for _, failed := range []bool{true, false} {
