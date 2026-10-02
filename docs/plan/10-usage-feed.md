@@ -83,16 +83,22 @@ awaiting traffic` or no current data; never refill to 0% without an observation.
 - [ ] Compose the panel with existing `internal/tui/dashboard_tables.go` and
       `dashboard_render.go` glyphs/themes. Keep renderer provider-agnostic.
 
-## Approved 160×45 wall layout
+## 160×45 wall layout (awaiting owner approval)
 
-[Normal mockup](https://github.com/ShaulLavo/fregat/blob/plan/tv-usage/plans/287-proxy-usage-feed/dashboard-usage.png)
-· [No-data mockup](https://github.com/ShaulLavo/fregat/blob/plan/tv-usage/plans/287-proxy-usage-feed/dashboard-usage-no-data.png)
-· [Exact cell grid](https://github.com/ShaulLavo/fregat/blob/plan/tv-usage/plans/287-proxy-usage-feed/dashboard-usage.txt)
+![Four accounts, OLED](images/usage-panel.png)
 
-Four host cards and four-row graphs remain unchanged in rows 0–26. Rows 27–43:
-Sessions columns 0–56 (57 wide), Services/Attention 58–104 (47 wide), Usage
-106–159 (54 wide, 50 inner). Three identities × five body rows; one identity,
-then two aggregate windows with a data line and a meter line each.
+[Overflow: six accounts across three providers](images/usage-panel-overflow.png)
+
+Four host cards keep their four-row graphs in rows 0–26, in RAM order, with the OLED theme. Rows 27–43 are three columns:
+- Sessions: columns 0–56.
+- Services and Attention: columns 58–104.
+- Usage: columns 106–159.
+
+Usage groups accounts under a provider line (Claude, Codex, and future providers). Each account takes three rows:
+- an identity line: plan, neutral account label, `last served` / `rotating` / `cooldown` / `routing unknown`, and `seen` / `stale`;
+- one line per aggregate window (5h, weekly), each with its own meter, % used, % left, reset countdown and status word.
+
+When accounts don't fit, the provider line shows `+N more`; the panel never pages or scrolls.
 
 Sessions retain 13/16 visible rows, Services 9/14, Attention the full unhealthy
 service name and reason. Session names/commands narrow and its per-row age drops;
