@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -73,6 +74,21 @@ class ProcessDiagnosticsTests(unittest.TestCase):
                     child.wait(timeout=5)
                 observation.close()
                 child.stdout.close()
+
+            from process_diagnostics import journal_context
+            wording = "Killed /user.slice/sample.scope due to memory pressure for /user.slice being 80.00% > 60.00%"
+            journal = Path(root) / "journalctl"
+            journal.write_text(f"#!{sys.executable}\nimport json,re,sys\nmessage={wording!r}\n"
+                               "if '--grep' in sys.argv and not re.search(sys.argv[sys.argv.index('--grep')+1],message):\n"
+                               " raise SystemExit(1)\n"
+                               "print(json.dumps({'MESSAGE':message,'_SYSTEMD_UNIT':'systemd-oomd.service'}))\n")
+            journal.chmod(0o700)
+            with patch.dict(os.environ, {"PATH": root}):
+                context = journal_context("systemd-oomd", time.time() - 1, time.time())
+            self.assertEqual(context["status"], "available")
+            self.assertEqual(context["events"][0]["MESSAGE"], wording)
+            self.assertEqual(context["attribution"], "context_only")
+            messages.write(json.dumps({"event": "regression.oomd_known_positive", **context}) + "\n")
         print(messages.getvalue(), file=sys.stderr, end="")
 
 

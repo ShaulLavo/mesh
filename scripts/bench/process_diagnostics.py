@@ -105,9 +105,8 @@ def journal_context(kind, started, ended):
         return {**result, "status": "unavailable"}
     command = [executable, "--no-pager", "--output=json", "--lines=16",
                "--output-fields=MESSAGE,_PID,_SYSTEMD_UNIT,_SYSTEMD_CGROUP,__REALTIME_TIMESTAMP",
-               "--since", f"@{int(max(started - 1, ended - 60))}", "--until", f"@{int(ended) + 1}",
-               "--grep", "(?i)oom|out of memory|killed process"]
-    command += ["--dmesg"] if kind == "kernel" else ["--unit=systemd-oomd.service"]
+               "--since", f"@{int(max(started - 1, ended - 60))}", "--until", f"@{int(ended) + 1}"]
+    command += ["--dmesg", "--grep", "(?i)oom|out of memory|killed process"] if kind == "kernel" else ["--unit=systemd-oomd.service"]
     try:
         with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
             process = subprocess.Popen(command, stdout=output, stderr=errors)
