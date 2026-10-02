@@ -218,7 +218,11 @@ func (m dashboardModel) compactHost(host cli.DashboardHostView) []string {
 	if host.MetricsUnsupported {
 		return []string{m.hostTitle(host), m.paint(dashboardMutedStyle).Render("    " + m.catalogCounts(host))}
 	}
-	first := m.paint(dashboardGoodStyle).Render(dashboardCompactMark(m.ascii)+" ") + dashboardFit(m.paint(dashboardTitleStyle).Render(safeText(host.Host.Alias)), 10) + "  CPU " + m.coloredPercent(host.CPU, host, m.paint(dashboardCPUStyle)) + "  RAM " + strings.ReplaceAll(strings.TrimSuffix(m.ramValue(host), " GiB"), " / ", "/")
+	aliasWidth := 10
+	if m.usageEnabled {
+		aliasWidth = 11
+	}
+	first := m.paint(dashboardGoodStyle).Render(dashboardCompactMark(m.ascii)+" ") + dashboardFit(m.paint(dashboardTitleStyle).Render(safeText(host.Host.Alias)), aliasWidth) + "  CPU " + m.coloredPercent(host.CPU, host, m.paint(dashboardCPUStyle)) + "  RAM " + strings.ReplaceAll(strings.TrimSuffix(m.ramValue(host), " GiB"), " / ", "/")
 	if dashboardOptionalPresent(host.GPU) {
 		gpu := *host.GPU
 		first += "  GPU " + dashboardPerformanceReading(m, gpu, host, 30*time.Second, fmt.Sprintf("%.0f%%", gpu.Value.Utilization))

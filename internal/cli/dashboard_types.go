@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"github.com/shaul/mesh/internal/hostmetrics"
+	"github.com/shaul/mesh/internal/usagefeed"
 	"time"
 )
 
@@ -12,10 +13,11 @@ type DashboardFunc func(context.Context, DashboardInput) error
 type DashboardWatch func(context.Context, func(DashboardHostView)) error
 
 type DashboardInput struct {
-	Hosts []DashboardHost
-	Wall  bool
-	Theme string
-	Watch DashboardWatch
+	Hosts      []DashboardHost
+	Wall       bool
+	Theme      string
+	Watch      DashboardWatch
+	UsageWatch func(context.Context, func(usagefeed.Result)) error
 }
 
 type DashboardHost struct {

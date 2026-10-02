@@ -13,6 +13,7 @@ import (
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/transport"
+	"github.com/shaul/mesh/internal/usagefeed"
 	"github.com/spf13/cobra"
 )
 
@@ -53,6 +54,17 @@ func (a *application) runDashboard(ctx context.Context, wall bool, override stri
 	dial := dashboardControlDialer(localID, socket, a.dependencies.DialControl)
 	monitor := dashboardMonitor{records: records, localID: localID, watcher: NewStateWatcher(dial), cache: cache}
 	input := DashboardInput{Wall: wall, Theme: theme, Watch: monitor.Run}
+	config, err := loadHostConfig()
+	if err != nil {
+		return err
+	}
+	if config.Dashboard != nil && config.Dashboard.UsageFeedURL != "" {
+		feed, err := usagefeed.New(usagefeed.Config{URL: config.Dashboard.UsageFeedURL})
+		if err != nil {
+			return fmt.Errorf("dashboard usage feed: %w", err)
+		}
+		input.UsageWatch = feed.Run
+	}
 	for _, record := range records {
 		input.Hosts = append(input.Hosts, dashboardHost(record, localID))
 	}

@@ -199,6 +199,9 @@ func (m dashboardModel) catalogCounts(host cli.DashboardHostView) string {
 }
 
 func (m dashboardModel) footer() string {
+	if m.usageEnabled {
+		return m.usageFooter()
+	}
 	cadence := "metrics 2s · catalogs change-driven · history 2m (120s)"
 	if m.width >= 140 {
 		cadence += " · 0–100% · AGE catalog age"
