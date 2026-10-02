@@ -2,6 +2,8 @@
 
 Status: Approved, 2026-10-01. Implementation follows the active audit.
 
+[Plan 10](10-usage-feed.md) adds a generic passive usage-feed panel; provider collection stays in Fregat's gateway tooling.
+
 **Paused 2026-10-01 (owner):** resumes after [plan 08](08-streaming-and-performance.md) step 4. The monitor then reads hosts through `state.watch` instead of polling; see plan 08, "Plan 07 changes".
 
 ## Outcome and usage
