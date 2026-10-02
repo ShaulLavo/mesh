@@ -49,6 +49,18 @@ func TestDashboardPassiveViewFitsAndFreshnessIsIndependent(t *testing.T) {
 	assertFits(t, resized, 50, 12)
 }
 
+func TestDashboardSessionCommandPreservesCatalogQuotes(t *testing.T) {
+	const command = `sh -c 'cd -- "$1" && exec "${SHELL:-/bin/bash}" -l'`
+	model := newDashboard(cli.DashboardInput{}, pickerTestNow)
+	host := cli.DashboardHostView{Host: cli.DashboardHost{Alias: "pc"}, Connection: cli.StateReachable,
+		Sessions: cli.DashboardCatalog[cli.DashboardSession]{ObservedAt: pickerTestNow}}
+	session := cli.DashboardSession{ID: "7K3D", State: "running", Command: cli.SafeTerminalText(command)}
+	row := ansi.Strip(model.sessionRow(host, session, 200, 4))
+	if !strings.Contains(row, command) {
+		t.Fatalf("command quotes changed in the dashboard: %s", row)
+	}
+}
+
 func TestDashboardCurrentKeepsQuietCatalogLiveAndReportsOverflow(t *testing.T) {
 	now := pickerTestNow
 	model := newDashboard(cli.DashboardInput{}, now)

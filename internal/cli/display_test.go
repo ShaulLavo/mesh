@@ -16,3 +16,26 @@ func TestSafeTerminalTextPreservesEmojiJoinersAndEscapesBidiControls(t *testing.
 		t.Fatalf("safe terminal text did not escape bidi override: %q", got)
 	}
 }
+
+func TestSafeTerminalTextPreservesCommandQuotesAcrossPresentation(t *testing.T) {
+	const command = `sh -c 'cd -- "$1" && exec "${SHELL:-/bin/bash}" -l' mesh-workspace /home/user/Projects`
+	got := command
+	for range 3 {
+		got = SafeTerminalText(got)
+		if got != command {
+			t.Fatalf("command text = %q, want %q", got, command)
+		}
+	}
+}
+
+func TestSafeTerminalTextEscapesControlsWithoutReescapingVisibleText(t *testing.T) {
+	const input = "quoted \"text\" \\path\x1b[2J\n\t\u202e"
+	const want = `quoted "text" \path\x1b[2J\n\t\u202e`
+	got := SafeTerminalText(input)
+	if got != want {
+		t.Fatalf("safe text = %q, want %q", got, want)
+	}
+	if repeated := SafeTerminalText(got); repeated != got {
+		t.Fatalf("presenting safe text again changed it: %q -> %q", got, repeated)
+	}
+}
