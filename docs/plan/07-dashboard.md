@@ -2,6 +2,13 @@
 
 Status: Approved, 2026-10-01. Implementation follows the active audit.
 
+[Plan 10](10-usage-feed.md) adds the Approved October 2 AI plans panel and is
+authoritative for the 160×45 wall layout, normal/no-data states and meter rules.
+Provider collection stays in Fregat's gateway tooling under
+[Fregat Plan 289](https://github.com/ShaulLavo/fregat/blob/main/plans/289-proxy-usage-feed.md).
+This planning PR updates no live services; implementation follows independent
+review and merge.
+
 **Paused 2026-10-01 (owner):** resumes after [plan 08](08-streaming-and-performance.md) step 4. The monitor then reads hosts through `state.watch` instead of polling; see plan 08, "Plan 07 changes".
 
 ## Outcome and usage
@@ -40,15 +47,25 @@ cached ages, and red for reported failures. The terminal grid, compact meters, a
 square borders supply the hacker aesthetic. Readability matters more than glow
 or decorative effects.
 
-![TV layout with synthetic data](assets/dashboard-wall.png)
+![Approved October 2 OLED wall with illustrative AI usage](images/usage-panel.png)
 
-This is an Opus-generated design mockup with sample machines and measurements,
-not a running dashboard. Labels were checked against this plan and corrected
-for the polling cadence. The [SVG source](assets/dashboard-wall.svg) preserves
-the layout.
+[Approved no-data wall](images/usage-panel-no-data.png) retains all three known
+accounts. These owner-approved mockups supersede the earlier synthetic wall as
+the layout authority; they are designs, not running Pi captures.
 
-Start with cards at roughly 140 columns by 40 rows, a table below that, and a
-compact list at 80 by 24. Confirm the breakpoints with real terminal rendering.
+The TV target is **160×45** cells: rows 0–26 retain four RAM-ordered host cards
+(`pc`, `macbook-air`, `vps`, `pi`) and all four graph rows. Rows 27–43 split into
+Sessions (columns 0–56), Services/Attention (58–104) and AI plans (106–159).
+Both live sessions and all seven services fit; Attention keeps rows 39–42 for
+an unhealthy service's full name and reason. AI plans groups providers once,
+with five rows per account and six full 28-cell meters. Claude `shaul9191` is
+Max, observed only through the gateway and never pooled/proxied through
+CLIProxyAPI. Codex `shaul9191` and `shaul.lavochkin` are both Pro. Keep the
+reader/rendering generic for future provider groups, such as Gemini; no
+provider-specific layout branches. Plan 10 defines stale, no-data, reset-passed,
+unknown routing and explicit overflow counts.
+
+Keep a compact list at 80 by 24 and confirm breakpoints with real terminal rendering.
 Below the minimum, show a readable resize message. Use room-distance readability
 to choose the foot font size, initially aiming for about 150–180 columns. The
 current 480-column console is too dense for this purpose.
@@ -62,8 +79,12 @@ Prioritize reported failures in the service summary. Keep cached session counts
 separate from live observations. There is no paging, filtering, scrolling, or
 keyboard-dependent recovery in wall mode.
 
-Use Mesh's existing theme stack, restrained borders, consistent CPU/RAM colors,
-and clear labels. Status text must remain understandable without color.
+Use all six existing themes (`current`, `rose-pine`, `rose-pine-moon`, `oled`,
+`kanagawa`, `gruvbox-material`) with OLED high contrast as the TV default.
+Retain semantic CPU/RAM/status roles, restrained borders and clear labels;
+theme selection changes colors, not layout. Status text must remain
+understandable without color. Plan 10's AI values use text roles, with status
+colors confined to meter marks and dots.
 Use Unicode graphs in foot and simple block/ASCII fallbacks on the Linux console.
 Adapt btop's graph and terminal fallback choices and bottom's space allocation;
 neither becomes a runtime dependency.
