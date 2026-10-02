@@ -67,8 +67,10 @@ def setup(fixture, ssh=False):
     storage.mkdir()
     home = fixture.root / "home"
     home.mkdir()
+    # The caller's own Claude settings (a routed ANTHROPIC_BASE_URL when run
+    # from inside Claude Code) make recovery refuse the launch on purpose.
     fixture.environment = {key: value for key, value in fixture.environment.items()
-                           if not key.startswith("MESH_AGENT_")}
+                           if not key.startswith(("MESH_AGENT_", "ANTHROPIC_", "CLAUDE_"))}
     fixture.environment.update(PATH=str(providers) + os.pathsep + fixture.environment["PATH"],
                                CLAUDE_CONFIG_DIR=str(storage), SHELL="/bin/bash",
                                HOME=str(home),
