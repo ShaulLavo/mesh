@@ -16,6 +16,12 @@ HELPERS = Path(__file__).resolve().parent
 
 class SessionCleanupTest(unittest.TestCase):
     def test_client_cleanup_waits_for_final_worker_writes(self):
+        self.check_final_worker_writes("client_signal_detaches.sh")
+
+    def test_terminal_signal_cleanup_waits_for_final_worker_writes(self):
+        self.check_final_worker_writes("terminal_signals_reach_the_child.sh")
+
+    def check_final_worker_writes(self, script):
         with tempfile.TemporaryDirectory(prefix="m-cleanup-") as temporary:
             root = Path(temporary)
             tree = root / "fixture"
@@ -33,12 +39,16 @@ class SessionCleanupTest(unittest.TestCase):
                             f'  printf polled >&{write_fd}\n'
                             f'  read -r _ < {shlex.quote(str(gate))}\nfi\n')
             mesh.chmod(0o700)
-            entry = (HELPERS.parent / "client_signal_detaches.sh").read_text()
-            start = entry.index("cleanup() {")
-            cleanup = entry[start:entry.index("\n}", start) + 2]
+            entry = (HELPERS.parent / script).read_text()
+            start = entry.find("cleanup() {")
+            if start >= 0:
+                cleanup = entry[start:entry.index("\n}", start) + 2] + "\ncleanup"
+            else:
+                trap = next(line for line in entry.splitlines() if line.startswith("trap "))
+                cleanup = shlex.split(trap)[1]
             environment = os.environ | {"T": str(tree), "MESH_STATE_DIR": str(tree / "state"),
                                         "MESH": str(mesh), "SID": "7K3D", "CLIENT1": "", "CLIENT2": ""}
-            command = f"source {shlex.quote(str(HELPERS / 'session_cleanup.sh'))}\n{cleanup}\ncleanup"
+            command = f"source {shlex.quote(str(HELPERS / 'session_cleanup.sh'))}\n{cleanup}"
             process = subprocess.Popen(["bash", "-c", command], env=environment, pass_fds=(write_fd,),
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
             try:
