@@ -20,7 +20,7 @@ func TestDashboardDesignRegionsAndOfflineFacts(t *testing.T) {
 	model := dashboardDesignFixture(4)
 	view := ansi.Strip(model.render())
 	assertFits(t, model.render(), 160, 48)
-	for _, text := range []string{"reachable 3", "unreachable 1", "sessions 7 live 2 cached", "ready 4", "failed 1", "COMMAND (launch)", "NAME", "AGE", "last verified reply 32m", "cached catalog 32m", "Attention", "metrics 2s", "catalogs change-driven", "0–100%"} {
+	for _, text := range []string{"reachable 3", "unreachable 1", "sessions 7 live 2 cached", "ready 4", "failed 1", "ACTIVITY", "SESSION", "AGE", "last verified reply 32m", "cached catalog 32m", "Attention", "metrics 2s", "catalogs change-driven", "0–100%"} {
 		if !strings.Contains(view, text) {
 			t.Fatalf("missing design region %q: %s", text, view)
 		}

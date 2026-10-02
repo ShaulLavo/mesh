@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"path"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -61,10 +62,22 @@ func projectDashboardSessions(rows []protocol.SessionInfo, section ObservedSecti
 		}
 		result.Total++
 		if len(result.Rows) < dashboardSessionLimit {
-			result.Rows = append(result.Rows, DashboardSession{ID: dashboardText(row.ID), Name: dashboardText(row.Label), State: dashboardText(row.State), Command: dashboardCommandText(row.Command)})
+			result.Rows = append(result.Rows, projectDashboardSession(row))
 		}
 	}
 	return result
+}
+
+func projectDashboardSession(row protocol.SessionInfo) DashboardSession {
+	label := strings.TrimSpace(row.Label)
+	name := label
+	if name == "" && row.Cwd != "" {
+		name = path.Base(strings.TrimRight(row.Cwd, "/"))
+	}
+	if name == "" || name == "." || name == "/" {
+		name = "Terminal"
+	}
+	return DashboardSession{ID: dashboardText(row.ID), Name: dashboardText(name), Label: dashboardText(label), State: dashboardText(row.State), Command: dashboardCommandText(row.Command)}
 }
 
 func projectDashboardServices(rows []protocol.ServiceInfo, section ObservedSection, healthSupported bool) DashboardCatalog[DashboardService] {

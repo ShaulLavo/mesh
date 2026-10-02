@@ -18,6 +18,7 @@ type DashboardInput struct {
 	Theme      string
 	Watch      DashboardWatch
 	UsageWatch func(context.Context, func(usagefeed.Result)) error
+	Inspect    PickerInspectFunc
 }
 
 type DashboardHost struct {
@@ -41,7 +42,7 @@ type DashboardTemperature struct {
 	Sensor  string
 	Celsius float64
 }
-type DashboardSession struct{ ID, Name, State, Command string }
+type DashboardSession struct{ ID, Name, Label, State, Command string }
 type DashboardService struct {
 	Name, State, Problem string
 	Failed               bool

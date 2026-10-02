@@ -36,6 +36,22 @@ func (m dashboardModel) renderFrame() (string, dashboardLayout) {
 		m.layout = dashboardLayout{}
 	}
 	lines := m.header()
+	body, visible := m.fleetBody()
+	lines = append(lines, body...)
+	lines = append(lines, m.paint(dashboardMutedStyle).Render(fmt.Sprintf("Hosts %d / %d visible · %d omitted", visible, len(m.hosts), len(m.hosts)-visible)))
+	lines = append(lines, m.summaries(m.height-len(lines)-1)...)
+	for len(lines) < m.height-1 {
+		lines = append(lines, "")
+	}
+	lines = append(lines, m.paint(dashboardMutedStyle).Render(m.footer()))
+	for index, line := range lines {
+		lines[index] = dashboardFit(line, m.width)
+	}
+	return m.paint(dashboardTextStyle).Render(strings.Join(lines, "\n")), m.layout
+}
+
+func (m dashboardModel) fleetBody() ([]string, int) {
+	var lines []string
 	visible := len(m.hosts)
 	switch {
 	case m.width >= 140 && m.height >= 40 && m.cardsHeight()+m.layout.key.summaries <= m.height-5:
@@ -52,16 +68,7 @@ func (m dashboardModel) renderFrame() (string, dashboardLayout) {
 			lines = append(lines, m.compactHost(host)...)
 		}
 	}
-	lines = append(lines, m.paint(dashboardMutedStyle).Render(fmt.Sprintf("Hosts %d / %d visible · %d omitted", visible, len(m.hosts), len(m.hosts)-visible)))
-	lines = append(lines, m.summaries(m.height-len(lines)-1)...)
-	for len(lines) < m.height-1 {
-		lines = append(lines, "")
-	}
-	lines = append(lines, m.paint(dashboardMutedStyle).Render(m.footer()))
-	for index, line := range lines {
-		lines[index] = dashboardFit(line, m.width)
-	}
-	return m.paint(dashboardTextStyle).Render(strings.Join(lines, "\n")), m.layout
+	return lines, visible
 }
 func (m dashboardModel) header() []string {
 	totals := m.totals()
@@ -217,7 +224,7 @@ func (m dashboardModel) footer() string {
 	}
 	cadence := "metrics 2s · catalogs change-driven · history 2m (120s)"
 	if m.width >= 140 {
-		cadence += " · 0–100% · AGE catalog age"
+		cadence += " · 0–100% · AGE observation age"
 	}
 	frame := "frame " + m.now.Format("15:04:05")
 	for _, host := range m.hosts {
