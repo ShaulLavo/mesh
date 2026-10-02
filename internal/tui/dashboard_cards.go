@@ -50,38 +50,38 @@ func (m dashboardModel) card(host cli.DashboardHostView, width int) []string {
 	inner := width - 4
 	plotWidth := (inner - 2) / 2
 	live := host.Connection == cli.StateReachable
-	cpuValue := m.coloredPercent(host.CPU, host, dashboardCPUStyle)
+	cpuValue := m.coloredPercent(host.CPU, host, m.paint(dashboardCPUStyle))
 	ramMetric := cli.DashboardMeasurement[float64]{State: host.RAM.State, Value: dashboardMemoryPercent(host.RAM.Value), Sample: host.RAM.Sample, MeasuredAt: host.RAM.MeasuredAt, Failing: host.RAM.Failing}
-	ramPercent := m.coloredPercent(ramMetric, host, dashboardRAMStyle)
-	label := dashboardAlign(dashboardMutedStyle.Render("CPU all cores"), cpuValue, plotWidth) + "  " + dashboardAlign(dashboardMutedStyle.Render("RAM ")+m.ramValue(host), ramPercent, inner-plotWidth-2)
-	meter := dashboardSegmentedMeter(host.CPU, m.now, live, plotWidth, m.ascii, dashboardCPUStyle) + "  " + dashboardSegmentedMeter(ramMetric, m.now, live, inner-plotWidth-2, m.ascii, dashboardRAMStyle)
+	ramPercent := m.coloredPercent(ramMetric, host, m.paint(dashboardRAMStyle))
+	label := dashboardAlign(m.paint(dashboardMutedStyle).Render("CPU all cores"), cpuValue, plotWidth) + "  " + dashboardAlign(m.paint(dashboardMutedStyle).Render("RAM ")+m.ramValue(host), ramPercent, inner-plotWidth-2)
+	meter := dashboardSegmentedMeter(host.CPU, m.now, live, plotWidth, m.ascii, m.paint(dashboardCPUStyle)) + "  " + dashboardSegmentedMeter(ramMetric, m.now, live, inner-plotWidth-2, m.ascii, m.paint(dashboardRAMStyle))
 	history := m.history[host.Host.ID]
-	left := dashboardArea(history.cpu, m.now, plotWidth, m.graphHeight(), m.ascii, dashboardCPUStyle)
-	right := dashboardArea(history.ram, m.now, inner-plotWidth-2, m.graphHeight(), m.ascii, dashboardRAMStyle)
+	left := dashboardArea(history.cpu, m.now, plotWidth, m.graphHeight(), m.ascii, m.paint(dashboardCPUStyle))
+	right := dashboardArea(history.ram, m.now, inner-plotWidth-2, m.graphHeight(), m.ascii, m.paint(dashboardRAMStyle))
 	body := []string{label, meter}
 	for row := range left {
 		body = append(body, left[row]+"  "+right[row])
 	}
-	body = append(body, dashboardMutedStyle.Render(dashboardAlign("-2m", "now", plotWidth)+"  "+dashboardAlign("-2m", "now", inner-plotWidth-2)))
+	body = append(body, m.paint(dashboardMutedStyle).Render(dashboardAlign("-2m", "now", plotWidth)+"  "+dashboardAlign("-2m", "now", inner-plotWidth-2)))
 	if !live {
 		body = m.offlineCard(host, label, meter, inner)
 	}
-	facts := m.temperature(host) + dashboardMutedStyle.Render(" · uptime ") + m.uptime(host)
+	facts := m.temperature(host) + m.paint(dashboardMutedStyle).Render(" · uptime ") + m.uptime(host)
 	if !live {
-		facts = dashboardMutedStyle.Render("temp -- · uptime --")
+		facts = m.paint(dashboardMutedStyle).Render("temp -- · uptime --")
 	}
 	facts += " · " + m.catalogCounts(host)
 	if host.Services.Failed > 0 {
-		facts += " · " + dashboardFailureStyle.Render(fmt.Sprintf("%d failed", host.Services.Failed))
+		facts += " · " + m.paint(dashboardFailureStyle).Render(fmt.Sprintf("%d failed", host.Services.Failed))
 	}
 	body = append(body, facts)
 	ages := "metrics " + dashboardAge(m.now, dashboardOldest(host.CPU.MeasuredAt, host.RAM.MeasuredAt)) + " catalogs " + dashboardAge(m.now, dashboardOldest(host.Sessions.ObservedAt, host.Services.ObservedAt))
-	frame := dashboardBorderStyle
+	frame := m.paint(dashboardBorderStyle)
 	if !live {
 		ages = "last reply " + dashboardAge(m.now, host.LastReply)
-		frame = dashboardFailureStyle
+		frame = m.paint(dashboardFailureStyle)
 	}
-	title := dashboardRuleTitle(m.hostTitle(host), dashboardMutedStyle.Render(ages), width-2, m.ascii, frame)
+	title := dashboardRuleTitle(m.hostTitle(host), m.paint(dashboardMutedStyle).Render(ages), width-2, m.ascii, frame)
 	return m.framedPanel(title, body, width, frame)
 }
 func (m dashboardModel) coloredPercent(metric cli.DashboardMeasurement[float64], host cli.DashboardHostView, style lipgloss.Style) string {
@@ -107,7 +107,7 @@ func (m dashboardModel) offlineCard(host cli.DashboardHostView, label, meter str
 	for row := range m.graphHeight() + 1 {
 		text := ""
 		if row < len(facts) {
-			text = dashboardCachedStyle.Render(facts[row])
+			text = m.paint(dashboardCachedStyle).Render(facts[row])
 		}
 		body = append(body, dashboardFit(text, width))
 	}
@@ -124,7 +124,7 @@ func dashboardRuleTitle(left, right string, width int, ascii bool, frame lipglos
 	return left + frame.Render(" "+strings.Repeat(h, gap)+" ") + right
 }
 func (m dashboardModel) panel(title string, body []string, width int) []string {
-	return m.framedPanel(dashboardRuleTitle(title, "", width-2, m.ascii, dashboardBorderStyle), body, width, dashboardBorderStyle)
+	return m.framedPanel(dashboardRuleTitle(title, "", width-2, m.ascii, m.paint(dashboardBorderStyle)), body, width, m.paint(dashboardBorderStyle))
 }
 func (m dashboardModel) framedPanel(title string, body []string, width int, frame lipgloss.Style) []string {
 	h, v, tl, tr, bl, br := "─", "│", "┌", "┐", "└", "┘"
@@ -145,7 +145,7 @@ func dashboardSegmentedMeter(metric cli.DashboardMeasurement[float64], now time.
 		if ascii {
 			mark = "-"
 		}
-		paint := dashboardGridStyle
+		paint := dashboardGraphStyle(style, dashboardGridStyle)
 		if cell == '█' || cell == '#' {
 			paint = style
 			if ascii {
@@ -159,9 +159,10 @@ func dashboardSegmentedMeter(metric cli.DashboardMeasurement[float64], now time.
 func dashboardArea(points []dashboardPoint, now time.Time, width, height int, ascii bool, style lipgloss.Style) []string {
 	lines := make([]strings.Builder, height)
 	fillStyle := dashboardCPUFillStyle
-	if style.GetForeground() == dashboardRAMStyle.GetForeground() {
+	if style.GetForeground() == dashboardRAMStyle.GetForeground() || style.GetForeground() == lipgloss.Cyan {
 		fillStyle = dashboardRAMFillStyle
 	}
+	fillStyle = dashboardGraphStyle(style, fillStyle)
 	for column := range width {
 		at := now.Add(-120*time.Second + time.Duration(float64(column+1)/float64(width)*float64(120*time.Second)))
 		value, found := dashboardGraphValue(points, at)
@@ -226,7 +227,7 @@ func dashboardPlotCell(value float64, found bool, row, height, column int, ascii
 		if ascii {
 			cell = "."
 		}
-		paint = dashboardGridStyle
+		paint = dashboardGraphStyle(style, dashboardGridStyle)
 	}
 	return paint.Render(cell)
 }

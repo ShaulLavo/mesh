@@ -48,26 +48,26 @@ func (m dashboardModel) render() string {
 		}
 	default:
 		visible = min(len(m.hosts), m.height-11)
-		lines = append(lines, dashboardMutedStyle.Render("HOST        DAEMON       CPU        RAM GiB       SESSIONS / SERVICES"))
+		lines = append(lines, m.paint(dashboardMutedStyle).Render("HOST        DAEMON       CPU        RAM GiB       SESSIONS / SERVICES"))
 		for _, host := range m.hosts[:visible] {
 			lines = append(lines, m.fleetRow(host))
 		}
 	}
-	lines = append(lines, dashboardMutedStyle.Render(fmt.Sprintf("Hosts %d / %d visible · %d omitted", visible, len(m.hosts), len(m.hosts)-visible)))
+	lines = append(lines, m.paint(dashboardMutedStyle).Render(fmt.Sprintf("Hosts %d / %d visible · %d omitted", visible, len(m.hosts), len(m.hosts)-visible)))
 	lines = append(lines, m.summaries(m.height-len(lines)-1)...)
 	for len(lines) < m.height-1 {
 		lines = append(lines, "")
 	}
-	lines = append(lines, dashboardMutedStyle.Render(m.footer()))
+	lines = append(lines, m.paint(dashboardMutedStyle).Render(m.footer()))
 	for index, line := range lines {
 		lines[index] = dashboardFit(line, m.width)
 	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("#cfdbd4")).Background(lipgloss.Color("#090c0b")).Render(strings.Join(lines, "\n"))
+	return m.paint(lipgloss.NewStyle().Foreground(lipgloss.Color("#cfdbd4")).Background(lipgloss.Color("#090c0b"))).Render(strings.Join(lines, "\n"))
 }
 func (m dashboardModel) header() []string {
 	totals := m.totals()
-	title := dashboardTitleStyle.Render("MESH") + " fleet · reachable " + dashboardGoodStyle.Render(fmt.Sprint(totals.reachable)) + " · unreachable " + dashboardFailureStyle.Render(fmt.Sprint(totals.unreachable))
-	counts := "sessions " + fmt.Sprint(totals.liveSessions) + " live " + dashboardCachedStyle.Render(fmt.Sprint(totals.cachedSessions)) + " cached · services " + fmt.Sprint(totals.services) + " · ready " + dashboardGoodStyle.Render(fmt.Sprint(totals.ready)) + " · failed " + dashboardFailureStyle.Render(fmt.Sprint(totals.failed))
+	title := m.paint(dashboardTitleStyle).Render("MESH") + " fleet · reachable " + m.paint(dashboardGoodStyle).Render(fmt.Sprint(totals.reachable)) + " · unreachable " + m.paint(dashboardFailureStyle).Render(fmt.Sprint(totals.unreachable))
+	counts := "sessions " + fmt.Sprint(totals.liveSessions) + " live " + m.paint(dashboardCachedStyle).Render(fmt.Sprint(totals.cachedSessions)) + " cached · services " + fmt.Sprint(totals.services) + " · ready " + m.paint(dashboardGoodStyle).Render(fmt.Sprint(totals.ready)) + " · failed " + m.paint(dashboardFailureStyle).Render(fmt.Sprint(totals.failed))
 	if totals.cachedServices > 0 {
 		counts += fmt.Sprintf(" · cached %d", totals.cachedServices)
 	}
@@ -75,7 +75,7 @@ func (m dashboardModel) header() []string {
 		title += fmt.Sprintf(" · connecting %d", totals.connecting)
 	}
 	if totals.refused > 0 {
-		title += " · " + dashboardFailureStyle.Render(fmt.Sprintf("refused %d", totals.refused))
+		title += " · " + m.paint(dashboardFailureStyle).Render(fmt.Sprintf("refused %d", totals.refused))
 	}
 	clock := m.now.Format("2006-01-02 15:04:05")
 	if m.width >= 140 {
@@ -83,7 +83,7 @@ func (m dashboardModel) header() []string {
 		if m.ascii {
 			h = "-"
 		}
-		return m.framedPanel(dashboardBorderStyle.Render(strings.Repeat(h, m.width-2)), []string{dashboardAlign(title+" · "+counts, clock, m.width-4)}, m.width, dashboardBorderStyle)
+		return m.framedPanel(m.paint(dashboardBorderStyle).Render(strings.Repeat(h, m.width-2)), []string{dashboardAlign(title+" · "+counts, clock, m.width-4)}, m.width, m.paint(dashboardBorderStyle))
 	}
 	return []string{dashboardAlign(title, m.now.Format("15:04:05"), m.width), counts}
 }
@@ -130,23 +130,27 @@ func (m dashboardModel) fleetRow(host cli.DashboardHostView) string {
 	cpu := m.metricValue(host.CPU, host, fmt.Sprintf("%.0f%%", host.CPU.Value))
 	memory := m.ramValue(host)
 	if strings.Contains(ansi.Strip(memory), "stale") {
-		memory = dashboardCachedStyle.Render("stale " + dashboardAge(m.now, host.RAM.MeasuredAt))
+		memory = m.paint(dashboardCachedStyle).Render("stale " + dashboardAge(m.now, host.RAM.MeasuredAt))
 	} else {
 		memory = strings.ReplaceAll(strings.TrimSuffix(memory, " GiB"), " / ", "/")
 	}
 	counts := m.catalogCounts(host)
-	return dashboardFit(safeText(host.Host.Alias), 11) + " " + dashboardFit(string(host.Connection), 12) + " " + dashboardFit(cpu, 10) + " " + dashboardFit(memory, 14) + " " + counts
+	state := string(host.Connection)
+	if host.Connection == cli.StateUnreachable || host.Connection == cli.StateRefused {
+		state = m.paint(dashboardFailureStyle).Render(state)
+	}
+	return dashboardFit(safeText(host.Host.Alias), 11) + " " + dashboardFit(state, 12) + " " + dashboardFit(cpu, 10) + " " + dashboardFit(memory, 14) + " " + counts
 }
 func (m dashboardModel) hostTitle(host cli.DashboardHostView) string {
 	mark := "●"
 	if m.ascii {
 		mark = "*"
 	}
-	state := dashboardGoodStyle.Render(mark + " " + string(host.Connection))
+	state := m.paint(dashboardGoodStyle).Render(mark + " " + string(host.Connection))
 	if host.Connection != cli.StateReachable {
-		state = dashboardFailureStyle.Render(mark + " " + string(host.Connection))
+		state = m.paint(dashboardFailureStyle).Render(mark + " " + string(host.Connection))
 	}
-	title := dashboardTitleStyle.Render(safeText(host.Host.Alias)) + " · " + state
+	title := m.paint(dashboardTitleStyle).Render(safeText(host.Host.Alias)) + " · " + state
 	if host.Host.Local && host.Host.Alias != "this host" {
 		title += " · this host"
 	}
@@ -173,7 +177,7 @@ func (m dashboardModel) metricValue(metric cli.DashboardMeasurement[float64], ho
 	}
 	reading := dashboardReading(metric, host, m.now, 10*time.Second, value)
 	if strings.Contains(reading, " stale ") {
-		return dashboardCachedStyle.Render(reading)
+		return m.paint(dashboardCachedStyle).Render(reading)
 	}
 	return reading
 }
@@ -191,7 +195,7 @@ func (m dashboardModel) ramValue(host cli.DashboardHostView) string {
 	}
 	reading := dashboardReading(host.RAM, host, m.now, 10*time.Second, value)
 	if strings.Contains(reading, " stale ") {
-		return dashboardCachedStyle.Render(reading)
+		return m.paint(dashboardCachedStyle).Render(reading)
 	}
 	return reading
 }
