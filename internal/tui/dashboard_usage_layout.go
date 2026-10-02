@@ -57,9 +57,12 @@ func dashboardJoinPanels(left, right []string, leftWidth, rightWidth int) []stri
 }
 
 func (m dashboardModel) usageSessionColumns(host, id, name, state, command string, width, hostWidth int) string {
-	nameWidth := 8
+	nameWidth := max(8, min(24, (width-hostWidth-19)/2))
 	if width < 45 {
-		return dashboardFit(host, hostWidth) + " " + dashboardFit(id, 5) + " " + dashboardFit(state, max(0, width-hostWidth-7))
+		if strings.HasPrefix(ansi.Strip(state), "cached ") {
+			name = "cached " + name
+		}
+		return dashboardFit(host, hostWidth) + " " + dashboardFit(id, 5) + " " + dashboardFit(name+" · "+command, max(0, width-hostWidth-7))
 	}
 	commandWidth := max(0, width-hostWidth-5-9-nameWidth-4)
 	return dashboardFit(host, hostWidth) + " " + dashboardFit(id, 5) + " " + dashboardFit(name, nameWidth) + " " + dashboardFit(state, 9) + " " + dashboardFit(command, commandWidth)

@@ -53,7 +53,10 @@ func (a *application) runDashboard(ctx context.Context, wall bool, override stri
 	defer cache.Close() //nolint:errcheck // the view's result is authoritative
 	dial := dashboardControlDialer(localID, socket, a.dependencies.DialControl)
 	monitor := dashboardMonitor{records: records, localID: localID, watcher: NewStateWatcher(dial), cache: cache}
-	input := DashboardInput{Wall: wall, Theme: theme, Watch: monitor.Run}
+	run, cancel := context.WithCancel(ctx)
+	operations := newPickerOperationGate()
+	defer func() { cancel(); operations.stopAndWait() }()
+	input := DashboardInput{Wall: wall, Theme: theme, Watch: monitor.Run, Inspect: dashboardInspector(records, dial, monitor.watcher, operations)}
 	config, err := loadHostConfig()
 	if err != nil {
 		return err
@@ -68,7 +71,25 @@ func (a *application) runDashboard(ctx context.Context, wall bool, override stri
 	for _, record := range records {
 		input.Hosts = append(input.Hosts, dashboardHost(record, localID))
 	}
-	return a.dependencies.Dashboard(ctx, input)
+	return a.dependencies.Dashboard(run, input)
+}
+
+func dashboardInspector(records []HostRecord, dial HostDialer, watcher *StateWatcher, operations *pickerOperationGate) PickerInspectFunc {
+	return func(ctx context.Context, request PickerInspectRequest) (SessionInspection, error) {
+		if !operations.begin(ctx) {
+			return SessionInspection{}, context.Canceled
+		}
+		defer operations.done()
+		host, err := hostWithAlias(records, request.HostAlias)
+		if err != nil {
+			return SessionInspection{}, err
+		}
+		if err := watcher.acquire(ctx); err != nil {
+			return SessionInspection{}, err
+		}
+		defer func() { <-watcher.reads }()
+		return inspectRemoteSession(ctx, host, dial, request.SessionID, 1, 1)
+	}
 }
 func dashboardInventory() ([]HostRecord, string, string, error) {
 	hosts, err := LoadHosts()
