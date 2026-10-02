@@ -40,9 +40,10 @@ metrics and the session protocol.
 ## Producer prerequisite and URL
 
 Management is already enabled on loopback port **18317**. Its private key file is
-`/work/cli-proxy-api/management-key`; the gateway is on **8318**. These are current
-operational facts supplied by the owner, not portable test constants. The
-producer uses validated runtime configuration. Management stays loopback-only;
+`/work/cli-proxy-api/management-key`. The Mesh `/ai` frontend is on **8318**;
+installed runtime configuration reports the gateway backend on **18318** and
+CLIProxyAPI on **18317**. These operational ports are not portable test constants.
+The producer uses validated runtime configuration. Management stays loopback-only;
 the key's contents never enter a feed, log, screenshot or Pi configuration.
 There is no management enablement or proxy restart prerequisite left in this
 plan, and this documentation-only PR makes no live changes or provider calls.
