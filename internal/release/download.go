@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,7 +13,7 @@ import (
 
 func downloadBytes(ctx context.Context, client *http.Client, address string, maximum int64) ([]byte, error) {
 	var contents []byte
-	err := retryDownload(ctx, func(ctx context.Context) error {
+	err := retryDownload(ctx, metadataAttemptTimeout, func(ctx context.Context) error {
 		var err error
 		contents, err = readDownload(ctx, client, address, maximum)
 		return err
@@ -26,7 +27,7 @@ func readDownload(ctx context.Context, client *http.Client, address string, maxi
 		return nil, err
 	}
 	defer response.Body.Close() //nolint:errcheck // read result is authoritative
-	contents, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
+	contents, err := io.ReadAll(io.LimitReader(downloadReader{response.Body}, maximum+1))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", address, err)
 	}
@@ -37,7 +38,7 @@ func readDownload(ctx context.Context, client *http.Client, address string, maxi
 }
 
 func downloadTo(ctx context.Context, client *http.Client, address string, destination *os.File, wantDigest string, maximum int64) error {
-	return retryDownload(ctx, func(ctx context.Context) error {
+	return retryDownload(ctx, downloadAttemptTimeout, func(ctx context.Context) error {
 		// A failed read may have written a prefix; every attempt verifies one complete archive.
 		if err := destination.Truncate(0); err != nil {
 			return fmt.Errorf("release: reset archive: %w", err)
@@ -56,7 +57,7 @@ func writeDownload(ctx context.Context, client *http.Client, address string, des
 	}
 	defer response.Body.Close() //nolint:errcheck // copy result is authoritative
 	hash := sha256.New()
-	written, err := io.Copy(io.MultiWriter(destination, hash), io.LimitReader(response.Body, maximum+1))
+	written, err := io.Copy(io.MultiWriter(destination, hash), io.LimitReader(downloadReader{response.Body}, maximum+1))
 	if err != nil {
 		return fmt.Errorf("release: download %s: %w", address, err)
 	}
@@ -68,4 +69,23 @@ func writeDownload(ctx context.Context, client *http.Client, address string, des
 		return fmt.Errorf("release: archive SHA-256 is %s, want %s", digest, wantDigest)
 	}
 	return nil
+}
+
+// Body transport failures are retryable; destination writes and digest failures stay terminal.
+type downloadReadError struct{ err error }
+
+func (e *downloadReadError) Error() string { return e.err.Error() }
+func (e *downloadReadError) Unwrap() error { return e.err }
+
+type downloadReader struct{ io.Reader }
+
+func (r downloadReader) Read(contents []byte) (int, error) {
+	n, err := r.Reader.Read(contents)
+	if err == nil {
+		return n, nil
+	}
+	if errors.Is(err, io.EOF) {
+		return n, io.EOF
+	}
+	return n, &downloadReadError{err: err}
 }

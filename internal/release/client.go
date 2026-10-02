@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	httpsScheme     = "https"
 	OfficialBaseURL = "https://github.com/ShaulLavo/mesh/releases"
 	// OfficialLatestAPI names the latest published release. GitHub's
 	// /releases/latest download redirect kept serving the previous release for
@@ -82,8 +83,12 @@ func (c Client) latestTag(ctx context.Context, client *http.Client, baseURL stri
 	if address == "" {
 		return "", false
 	}
-	// The optional API lookup keeps its own budget so fallback still has time to download.
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Reserve time for the fallback when a background notice has a short enclosing deadline.
+	budget := 5 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = min(budget, time.Until(deadline)/2)
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	contents, err := downloadBytes(ctx, client, address, maximumLatestReply)
 	if err != nil {
@@ -156,14 +161,27 @@ func (c Client) normalized() (string, *http.Client, error) {
 		baseURL = OfficialBaseURL
 	}
 	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Scheme != httpsScheme || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", nil, fmt.Errorf("release: base URL %q must be HTTPS without credentials, query, or fragment", baseURL)
 	}
 	client := c.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: downloadAttemptTimeout}
 	}
-	return baseURL, client, nil
+	secured := *client
+	secured.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if request.URL.Scheme != httpsScheme {
+			return errors.New("release: redirect must use HTTPS")
+		}
+		if client.CheckRedirect != nil {
+			return client.CheckRedirect(request, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("release: stopped after 10 redirects")
+		}
+		return nil
+	}
+	return baseURL, &secured, nil
 }
 
 func releaseURL(baseURL, selector string) (string, error) {
@@ -220,12 +238,15 @@ func response(ctx context.Context, client *http.Client, address string) (*http.R
 	if err != nil {
 		return nil, fmt.Errorf("release: create request: %w", err)
 	}
+	if request.URL.Scheme != httpsScheme {
+		return nil, errors.New("release: request must use HTTPS")
+	}
 	request.Header.Set("User-Agent", "mesh-release")
 	reply, err := client.Do(request)
 	if err != nil {
 		return nil, err
 	}
-	if reply.Request == nil || reply.Request.URL.Scheme != "https" {
+	if reply.Request == nil || reply.Request.URL.Scheme != httpsScheme {
 		_ = reply.Body.Close()
 		return nil, errors.New("release: request ended at a non-HTTPS URL")
 	}

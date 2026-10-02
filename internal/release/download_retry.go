@@ -8,22 +8,25 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"os"
 	"sync"
 	"time"
 )
 
 const (
-	downloadAttempts       = 3
+	downloadAttempts = 3
+	// Metadata retries must finish before the enclosing 45-second update RPC.
+	metadataAttemptTimeout = 10 * time.Second
 	downloadAttemptTimeout = 30 * time.Second
 	downloadBackoff        = 250 * time.Millisecond
 )
 
-func retryDownload(ctx context.Context, operation func(context.Context) error) error {
+func retryDownload(ctx context.Context, timeout time.Duration, operation func(context.Context) error) error {
 	for attempt := 1; attempt <= downloadAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("release: download cancelled: %w", err)
 		}
-		err := downloadAttempt(ctx, attempt, operation)
+		err := downloadAttempt(ctx, timeout, attempt, operation)
 		if err == nil {
 			return nil
 		}
@@ -37,8 +40,8 @@ func retryDownload(ctx context.Context, operation func(context.Context) error) e
 	return nil
 }
 
-func downloadAttempt(ctx context.Context, attempt int, operation func(context.Context) error) error {
-	ctx, cancel := context.WithTimeout(ctx, downloadAttemptTimeout)
+func downloadAttempt(ctx context.Context, timeout time.Duration, attempt int, operation func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	trace := &downloadTrace{stage: "connect"}
 	err := operation(httptrace.WithClientTrace(ctx, trace.clientTrace()))
@@ -68,6 +71,14 @@ func (e *downloadStatusError) Error() string { return e.err.Error() }
 func (e *downloadStatusError) Unwrap() error { return e.err }
 
 func retryableDownload(err error) bool {
+	var read *downloadReadError
+	if errors.As(err, &read) {
+		return true
+	}
+	var local *os.PathError
+	if errors.As(err, &local) {
+		return false
+	}
 	var status *downloadStatusError
 	if errors.As(err, &status) {
 		return status.code == http.StatusRequestTimeout || status.code == http.StatusTooManyRequests || status.code >= 500
@@ -114,6 +125,10 @@ func (t *downloadTrace) clientTrace() *httptrace.ClientTrace {
 		ConnectStart:      func(string, string) { t.setStage("connect") },
 		TLSHandshakeStart: func() { t.setStage("TLS handshake") },
 		GotConn:           func(httptrace.GotConnInfo) { t.setStage("request write") },
-		WroteRequest:      func(httptrace.WroteRequestInfo) { t.setStage("read") },
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				t.setStage("read")
+			}
+		},
 	}
 }

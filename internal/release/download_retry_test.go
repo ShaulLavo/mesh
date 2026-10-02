@@ -45,7 +45,7 @@ func TestManifestRetriesSlowResolver(t *testing.T) {
 }
 
 func TestDownloadTimeoutNamesStageAndBoundsAttempts(t *testing.T) {
-	for _, stage := range []string{"DNS", "connect", "read"} {
+	for _, stage := range []string{"DNS", "connect", "request write", "read"} {
 		t.Run(stage, func(t *testing.T) {
 			var calls atomic.Int32
 			transport := downloadRoundTripper(func(request *http.Request) (*http.Response, error) {
@@ -72,6 +72,9 @@ func startDownloadStage(trace *httptrace.ClientTrace, stage string) {
 		trace.DNSStart(httptrace.DNSStartInfo{Host: "release.invalid"})
 	case "connect":
 		trace.ConnectStart("tcp", "release.invalid:443")
+	case "request write":
+		trace.GotConn(httptrace.GotConnInfo{})
+		trace.WroteRequest(httptrace.WroteRequestInfo{Err: context.DeadlineExceeded})
 	case "read":
 		trace.WroteRequest(httptrace.WroteRequestInfo{})
 	}
@@ -135,12 +138,17 @@ func TestDownloadCancellationStopsBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var calls atomic.Int32
+	var timer *time.Timer
 	client := Client{HTTPClient: &http.Client{Transport: downloadRoundTripper(func(request *http.Request) (*http.Response, error) {
 		calls.Add(1)
+		timer = time.AfterFunc(25*time.Millisecond, cancel)
 		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader("unavailable")), Request: request}, nil
 	})}}
-	timer := time.AfterFunc(25*time.Millisecond, cancel)
-	defer timer.Stop()
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	started := time.Now()
 	_, err := client.Manifest(ctx, "v0.2.0")
 	if !errors.Is(err, context.Canceled) || calls.Load() != 1 || time.Since(started) > time.Second {
@@ -157,3 +165,96 @@ func (transport downloadRoundTripper) RoundTrip(request *http.Request) (*http.Re
 type interruptedDownload struct{}
 
 func (interruptedDownload) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+func TestLatestAPITimeoutLeavesFallbackBudget(t *testing.T) {
+	contents, _ := json.Marshal(testManifest())
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	var fallback atomic.Bool
+	client := Client{BaseURL: "https://release.invalid", LatestAPI: "https://release.invalid/api/latest", HTTPClient: &http.Client{Transport: downloadRoundTripper(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/api/latest" {
+			<-request.Context().Done()
+			return nil, request.Context().Err()
+		}
+		fallback.Store(true)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(contents)), Request: request}, nil
+	})}}
+	manifest, err := client.Manifest(ctx, "latest")
+	if err != nil || manifest.Version != "v0.2.0" || !fallback.Load() {
+		t.Fatalf("API timeout blocked fallback: version %q, error %v, fallback %t", manifest.Version, err, fallback.Load())
+	}
+}
+
+func TestDownloadRetriesHTTP2BodyReset(t *testing.T) {
+	binary := []byte("mesh-test-binary")
+	archive := testArchive(t, binary)
+	var calls atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != 2 {
+			t.Errorf("protocol = %s, want HTTP/2", r.Proto)
+		}
+		if calls.Add(1) == 1 {
+			_, _ = w.Write(archive[:len(archive)/2])
+			w.(http.Flusher).Flush()
+			panic(http.ErrAbortHandler)
+		}
+		_, _ = w.Write(archive)
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	client := Client{BaseURL: server.URL, HTTPClient: server.Client()}
+	path, err := client.Download(context.Background(), testManifestForArchive(binary, archive), Platform{OS: "linux", Arch: "amd64"}, t.TempDir())
+	if err != nil {
+		t.Fatalf("HTTP/2 reset was not recovered: %v", err)
+	}
+	contents, err := os.ReadFile(path) //nolint:gosec // Download returned a path inside the test cache
+	if err != nil || !bytes.Equal(contents, binary) || calls.Load() != 2 {
+		t.Fatalf("HTTP/2 download = %q, %v, calls %d; want intact binary after two requests", contents, err, calls.Load())
+	}
+}
+
+func TestDownloadRejectsInsecureRedirectHop(t *testing.T) {
+	var finalURL atomic.Value
+	var insecureCalls atomic.Int32
+	insecure := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		insecureCalls.Add(1)
+		http.Redirect(w, r, finalURL.Load().(string), http.StatusFound)
+	}))
+	t.Cleanup(insecure.Close)
+	contents, _ := json.Marshal(testManifest())
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/final" {
+			_, _ = w.Write(contents)
+			return
+		}
+		http.Redirect(w, r, insecure.URL, http.StatusFound)
+	}))
+	finalURL.Store(secure.URL + "/final")
+	t.Cleanup(secure.Close)
+	client := Client{BaseURL: secure.URL, HTTPClient: secure.Client()}
+	_, err := client.Manifest(context.Background(), "v0.2.0")
+	if err == nil || insecureCalls.Load() != 0 {
+		t.Fatalf("insecure redirect: error %v, requests %d; want rejection before sending HTTP", err, insecureCalls.Load())
+	}
+}
+
+func TestDownloadDestinationTimeoutStaysTerminal(t *testing.T) {
+	var calls atomic.Int32
+	client := &http.Client{Transport: downloadRoundTripper(func(request *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("archive")), Request: request}, nil
+	})}
+	err := retryDownload(context.Background(), downloadAttemptTimeout, func(ctx context.Context) error {
+		return writeDownload(ctx, client, "https://release.invalid/archive", failedDownloadDestination{}, "", maximumArchive)
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || calls.Load() != 1 {
+		t.Fatalf("destination error: %v, calls %d; want one terminal write failure", err, calls.Load())
+	}
+}
+
+type failedDownloadDestination struct{}
+
+func (failedDownloadDestination) Write([]byte) (int, error) {
+	return 0, &os.PathError{Op: "write", Path: "test-archive", Err: context.DeadlineExceeded}
+}
