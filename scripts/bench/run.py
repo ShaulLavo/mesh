@@ -19,6 +19,7 @@ import time
 import uuid
 
 from receipt import digest, inspect_binary, verify_receipt
+from process_diagnostics import ChildObservation, record_signal, signal_child
 
 HERE = Path(__file__).resolve().parent
 
@@ -135,11 +136,12 @@ def timed_command(binary, args, env, root):
         process = subprocess.Popen([str(binary), *args], env=env, stdout=output,
                                    stderr=output, start_new_session=True)
         expired = threading.Event()
+        observation = ChildObservation(process.pid, "benchmark-command")
 
         def timeout():
             expired.set()
             with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
+                observation.send_group(signal.SIGKILL, "benchmark-command-deadline")
 
         watchdog = threading.Timer(20, timeout)
         watchdog.start()
@@ -148,12 +150,13 @@ def timed_command(binary, args, env, root):
             process.returncode = os.waitstatus_to_exitcode(status)
         except BaseException:
             with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
+                observation.send_group(signal.SIGKILL, "benchmark-command-interrupted")
             process.wait()
             raise
         finally:
             watchdog.cancel()
             watchdog.join()
+            observation.finish(process.returncode)
         elapsed = time.perf_counter() - started
         output.seek(0)
         content = output.read()
@@ -288,6 +291,9 @@ def stop_worker(pid, start, directory, state, binary, sig):
             descriptor = os.pidfd_open(pid)
             stack.callback(os.close, descriptor)
             if owned_workers(state, binary).get(pid) == (start, directory):
+                record_signal(pid, sig, "benchmark-worker-owned-cleanup",
+                              {"kind": "pidfd_session_worker", "directory": str(directory), "pidfd": descriptor},
+                              {"status": "observed", "start_ticks": start})
                 signal.pidfd_send_signal(descriptor, sig)
     except (FileNotFoundError, ProcessLookupError):
         pass
@@ -299,11 +305,11 @@ def cleanup(state, sessions, daemon, binary):
     previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
         # Settle the coordinator first so it cannot launch during the ownership scan.
-        daemon.terminate()
+        signal_child(daemon, signal.SIGTERM, "benchmark-daemon-owned-cleanup")
         try:
             daemon.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            daemon.kill()
+            signal_child(daemon, signal.SIGKILL, "benchmark-daemon-owned-cleanup")
             daemon.wait(timeout=2)
         workers = owned_workers(state, binary)
         for pid, (start, directory) in workers.items():
@@ -337,7 +343,7 @@ def cleanup(state, sessions, daemon, binary):
     finally:
         # Always reap our daemon, even if a worker inspection or control operation failed.
         if daemon.poll() is None:
-            daemon.kill()
+            signal_child(daemon, signal.SIGKILL, "benchmark-daemon-owned-cleanup")
             daemon.wait(timeout=2)
         for sig, handler in previous.items():
             signal.signal(sig, handler)
@@ -506,7 +512,7 @@ def summary(result):
 
 
 def measurement_harness():
-    files = {name: digest((HERE / name).read_bytes()) for name in ("run.py", "workload.py", "receipt.py")}
+    files = {name: digest((HERE / name).read_bytes()) for name in ("run.py", "workload.py", "receipt.py", "process_diagnostics.py")}
     revision = None
     dirty = None
     try:

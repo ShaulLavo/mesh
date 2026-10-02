@@ -143,7 +143,7 @@ class IsolationBoundaryTest(unittest.TestCase):
             with self.subTest(reentry=reentry), tempfile.TemporaryDirectory(prefix="m-bytecode-") as temporary:
                 root = Path(temporary)
                 (root / "helpers").mkdir()
-                for name in ("isolate.sh", "isolation.py"):
+                for name in ("isolate.sh", "isolation.py", "process_diagnostics.py"):
                     shutil.copyfile(helpers / name, root / "helpers" / name)
                 (root / "bytecode_probe.py").write_text("VALUE = 1\n")
                 probe = root / "probe.sh"
@@ -355,7 +355,7 @@ class ReviewRegressionsTest(unittest.TestCase):
             with self.subTest(target=target), tempfile.TemporaryDirectory(prefix="m-cancel-") as temporary:
                 root = Path(temporary)
                 (root / "helpers").mkdir()
-                for name in ("isolate.sh", "isolation.py"):
+                for name in ("isolate.sh", "isolation.py", "process_diagnostics.py"):
                     shutil.copyfile(helpers / name, root / "helpers" / name)
                 capture = root / "children"
                 probe = root / "probe.sh"

@@ -6,6 +6,8 @@ import signal
 import sys
 import time
 
+from process_diagnostics import record_signal
+
 
 def owned(root):
     targets = {str(root / name).encode() for name in ("mesh", "run.py", "workload.py")}
@@ -25,10 +27,12 @@ def owned(root):
     return found
 
 
-def send(pid, start, sig):
+def send(pid, start, sig, root):
     try:
         stat = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
         if int(stat[19]) == start:
+            record_signal(pid, sig, "remote-scratch-owned-cleanup", {"kind": "exact_scratch_command", "root": str(root)},
+                          {"status": "observed", "start_ticks": start, "parent_pid": int(stat[1])})
             os.kill(pid, sig)
     except (FileNotFoundError, ProcessLookupError):
         pass
@@ -40,13 +44,13 @@ def main():
         raise SystemExit("cleanup requires the exact Pi scratch root")
     for pid, start, command in owned(root):
         if str(root / "run.py").encode() in command:
-            send(pid, start, signal.SIGTERM)
+            send(pid, start, signal.SIGTERM, root)
     deadline = time.monotonic() + 10
     while owned(root) and time.monotonic() < deadline:
         time.sleep(0.2)
     for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGKILL):
         for pid, start, _ in owned(root):
-            send(pid, start, sig)
+            send(pid, start, sig, root)
         time.sleep(0.5)
     remaining = owned(root)
     if remaining:

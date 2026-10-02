@@ -16,7 +16,8 @@ cleanup() {
 }
 trap cleanup EXIT
 scp -q "$build/mesh" "$build/receipt.json" "$build"/*.test "$build"/*.receipt.json \
-  "$root/scripts/bench/receipt.py" "$root/scripts/bench/remote_cleanup.py" "pi:$remote/"
+  "$root/scripts/bench/receipt.py" "$root/scripts/bench/remote_cleanup.py" \
+  "$root/scripts/bench/process_diagnostics.py" "pi:$remote/"
 # Short serial runs preserve headroom for the Pi's TV/dashboard workload.
 ssh -o BatchMode=yes pi "timeout --signal=TERM --kill-after=10s 90s bash -s '$remote'" <<'REMOTE'
 set -euo pipefail

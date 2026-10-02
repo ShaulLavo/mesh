@@ -3,6 +3,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$root/scripts/bench" -p test_run.py
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$root/scripts/bench" -p test_process_diagnostics.py
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/mesh-m5-test-XXXXXX")
 cleanup() {
   [[ -z $(find "$scratch" -name "mesh-m5-*" -type d -mindepth 1 -print -quit) ]] || return 1
