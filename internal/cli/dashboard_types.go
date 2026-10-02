@@ -37,16 +37,17 @@ type DashboardTemperature struct {
 	Sensor  string
 	Celsius float64
 }
-type DashboardSession struct{ ID, State, Command string }
+type DashboardSession struct{ ID, Name, State, Command string }
 type DashboardService struct {
 	Name, State, Problem string
 	Failed               bool
 }
 type DashboardCatalog[T any] struct {
-	Rows       []T
-	Total      int
-	ObservedAt time.Time
-	Failing    bool
+	Rows          []T
+	Total         int
+	Ready, Failed int // Service state totals are counted before row bounding.
+	ObservedAt    time.Time
+	Failing       bool
 }
 
 func (c DashboardCatalog[T]) Stale(now, lastReply time.Time) bool {

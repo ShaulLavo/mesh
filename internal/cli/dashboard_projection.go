@@ -43,13 +43,20 @@ func projectDashboardMetric[T any](reading hostmetrics.Reading[T], received time
 func projectDashboardSessions(rows []protocol.SessionInfo, section ObservedSection) DashboardCatalog[DashboardSession] {
 	result := DashboardCatalog[DashboardSession]{Total: len(rows), ObservedAt: dashboardObservedAt(section), Failing: section.Observation.Failing}
 	for _, row := range rows[:min(len(rows), dashboardSessionLimit)] {
-		result.Rows = append(result.Rows, DashboardSession{ID: dashboardText(row.ID), State: dashboardText(row.State), Command: dashboardCommandText(row.Command)})
+		result.Rows = append(result.Rows, DashboardSession{ID: dashboardText(row.ID), Name: dashboardText(row.Label), State: dashboardText(row.State), Command: dashboardCommandText(row.Command)})
 	}
 	return result
 }
 
 func projectDashboardServices(rows []protocol.ServiceInfo, section ObservedSection) DashboardCatalog[DashboardService] {
 	result := DashboardCatalog[DashboardService]{Total: len(rows), ObservedAt: dashboardObservedAt(section), Failing: section.Observation.Failing}
+	for _, row := range rows {
+		if dashboardServiceFailed(row) {
+			result.Failed++
+			continue
+		}
+		result.Ready++
+	}
 	// Select failures before healthy rows without copying an unbounded catalog.
 	for _, failed := range []bool{true, false} {
 		result.Rows = appendDashboardServices(result.Rows, rows, failed)
@@ -69,7 +76,7 @@ func appendDashboardServices(selected []DashboardService, rows []protocol.Servic
 	return selected
 }
 func projectDashboardService(row protocol.ServiceInfo) DashboardService {
-	service := DashboardService{Name: dashboardText(row.Name), State: "ready", Problem: dashboardText(row.Problem), Failed: !row.Healthy || row.Problem != ""}
+	service := DashboardService{Name: dashboardText(row.Name), State: "ready", Problem: dashboardText(row.Problem), Failed: dashboardServiceFailed(row)}
 	if !row.Healthy {
 		service.State = "unhealthy"
 	}
@@ -112,4 +119,11 @@ func dashboardCommandText(parts []string) string {
 		result.WriteString(dashboardClip(part, dashboardTextLimit-result.Len()))
 	}
 	return dashboardText(result.String())
+}
+
+func dashboardServiceFailed(row protocol.ServiceInfo) bool {
+	if !row.Healthy || row.Problem != "" {
+		return true
+	}
+	return row.Demand != nil && (row.Demand.Failure != "" || row.Demand.State == protocol.DemandFailed)
 }

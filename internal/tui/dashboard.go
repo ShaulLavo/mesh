@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/term"
 	"github.com/shaul/mesh/internal/cli"
 )
@@ -28,6 +29,12 @@ func runDashboard(ctx context.Context, input cli.DashboardInput, output io.Write
 	run, cancel := context.WithCancel(ctx)
 	defer cancel()
 	configuration := []tea.ProgramOption{tea.WithContext(run), tea.WithInput(nil), tea.WithOutput(output), tea.WithoutSignals()}
+	switch os.Getenv("TERM") {
+	case "linux":
+		configuration = append(configuration, tea.WithColorProfile(colorprofile.ANSI))
+	case "dumb":
+		configuration = append(configuration, tea.WithColorProfile(colorprofile.ASCII))
+	}
 	configuration = append(configuration, options...)
 	model := newDashboard(input, time.Now())
 	model.ascii = os.Getenv("TERM") == "linux" || os.Getenv("TERM") == "dumb"
