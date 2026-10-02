@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/shaul/mesh/internal/agentresume"
-	"github.com/shaul/mesh/internal/macapp"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 )
@@ -82,7 +81,7 @@ func diagnoseAgentRecovery(cmd *cobra.Command, name string) error {
 		return err
 	}
 	settings, readErr := readAgentSettings(path)
-	meshExecutable, err := macapp.Installed()
+	meshExecutable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate Mesh hook helper: %w", err)
 	}

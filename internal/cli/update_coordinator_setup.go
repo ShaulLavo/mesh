@@ -19,7 +19,6 @@ import (
 
 	"github.com/shaul/mesh/internal/bootstrap"
 	"github.com/shaul/mesh/internal/identity"
-	"github.com/shaul/mesh/internal/macapp"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/updatebootstrap"
@@ -28,9 +27,9 @@ import (
 )
 
 func (a *application) startFirstCoordinatorSetup(ctx context.Context, environment updateEnvironment, store *update.Store, run update.Run, options updateOptions, output updateOutput) error {
-	executable, err := macapp.Installed()
+	executable, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("locate installed mesh: %w", err)
+		return err
 	}
 	cache, err := update.CacheDir()
 	if err != nil {

@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
-	"github.com/shaul/mesh/internal/macapp"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
@@ -154,7 +153,7 @@ func (a *application) noticeBeforeAttachment(command *cobra.Command) {
 }
 
 func scheduleUpdateNoticeCheck(stateDir string) {
-	executable, err := macapp.Installed()
+	executable, err := os.Executable()
 	if err != nil {
 		return
 	}

@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/shaul/mesh/internal/macapp"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/worker"
@@ -21,7 +20,7 @@ func (a *application) shellInitCommand() *cobra.Command {
 		Use: "shell-init bash|zsh", Short: "Print opt-in directory and history recovery hooks",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			executable, err := macapp.Installed()
+			executable, err := os.Executable()
 			if err != nil {
 				return fmt.Errorf("locate Mesh shell helper: %w", err)
 			}

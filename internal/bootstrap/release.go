@@ -1,8 +1,6 @@
 package bootstrap
 
 import (
-	"github.com/shaul/mesh/internal/macapp"
-
 	"archive/tar"
 	"bufio"
 	"compress/gzip"
@@ -53,7 +51,7 @@ func resolvePlatformBinary(ctx context.Context, selection binarySelection, platf
 		return resolvedBinary{path: selection.explicitPath, cleanup: func() {}}, nil
 	}
 
-	executable, executableErr := macapp.Installed()
+	executable, executableErr := os.Executable()
 	if executableErr == nil {
 		if err := checkBinaryPlatform(executable, platform); err == nil {
 			return resolvedBinary{path: executable, cleanup: func() {}}, nil
