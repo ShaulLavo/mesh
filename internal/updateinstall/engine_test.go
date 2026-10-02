@@ -39,7 +39,7 @@ type fixture struct {
 type processService struct {
 	executable, stateDir, healthPath string
 	process                          *exec.Cmd
-	failCandidate                    bool
+	failCandidate, failRollback      bool
 	stops, starts                    int
 	worker                           Worker
 }
@@ -49,6 +49,9 @@ func (s *processService) Stop(ctx context.Context) error {
 		return fmt.Errorf("daemon stopped without persisted gate: %v", err)
 	}
 	s.stops++
+	if s.failRollback && s.stops == 2 {
+		return errors.New("service manager rejected rollback stop")
+	}
 	if s.process == nil {
 		return nil
 	}

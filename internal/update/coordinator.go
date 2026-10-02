@@ -256,12 +256,13 @@ func (c *Coordinator) reconcileInstallation(ctx context.Context, run Run, index 
 				t.InterruptedWorkers = status.Verified.InterruptedWorkers
 			}
 		})
-	case updateinstall.RolledBack, updateinstall.Failed:
+	case updateinstall.RolledBack, updateinstall.Failed, updateinstall.RollbackFailed:
+		if run.Cancel {
+			return c.cancelTarget(ctx, run, index)
+		}
 		if err := c.record(run.ID, index, func(t *Target) { t.Grant = false }); err != nil {
 			return err
 		}
-		return c.fail(run.ID, index, fmt.Errorf("%s: %s", status.Phase, status.Error))
-	case updateinstall.RollbackFailed:
 		return c.fail(run.ID, index, fmt.Errorf("%s: %s", status.Phase, status.Error))
 	case updateinstall.Cancelled:
 		return c.record(run.ID, index, func(t *Target) { t.State = Cancelled; t.Grant = false; t.Problem = "" })
@@ -363,8 +364,12 @@ func blocksDependency(run Run, target, other Target) bool {
 
 func (c *Coordinator) cancelTarget(ctx context.Context, run Run, index int) error {
 	target := run.Targets[index]
+	installationID := run.ID
+	if target.InstallationID != "" {
+		installationID = target.InstallationID
+	}
 	var status updateinstall.Status
-	err := c.Remote.Call(ctx, target.Host, "install-cancel", Operation{ID: run.ID, Generation: target.Generation}, &status)
+	err := c.Remote.Call(ctx, target.Host, "install-cancel", Operation{ID: installationID, Generation: target.Generation}, &status)
 	if err != nil {
 		var remote *RemoteError
 		if errors.As(err, &remote) && remote.Problem == updateinstall.ErrAlreadyGranted.Error() {
@@ -375,7 +380,16 @@ func (c *Coordinator) cancelTarget(ctx context.Context, run Run, index int) erro
 		}
 		return c.recordError(run.ID, index, err)
 	}
-	if status.Phase != updateinstall.Cancelled || status.Request.ID != run.ID || status.Request.TargetID != target.Host.ID || status.Request.Generation != target.Generation || status.Request.Manifest.Digest() != run.ReleaseDigest {
+	if status.Request.ID != installationID || status.Request.TargetID != target.Host.ID || status.Request.Generation != target.Generation || status.Request.Manifest.Digest() != run.ReleaseDigest {
+		return c.fail(run.ID, index, errors.New("target did not acknowledge cancellation of the approved installation"))
+	}
+	if status.Phase == updateinstall.RolledBack || status.Phase == updateinstall.Failed || status.Phase == updateinstall.RollbackFailed {
+		if err := c.record(run.ID, index, func(t *Target) { t.Grant = false }); err != nil {
+			return err
+		}
+		return c.fail(run.ID, index, fmt.Errorf("%s: %s", status.Phase, status.Error))
+	}
+	if status.Phase != updateinstall.Cancelled {
 		return c.fail(run.ID, index, errors.New("target did not acknowledge cancellation of the approved installation"))
 	}
 	return c.record(run.ID, index, func(t *Target) { t.State = Cancelled; t.Grant = false; t.Problem = "" })
