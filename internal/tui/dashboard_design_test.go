@@ -36,7 +36,7 @@ func TestDashboardDesignRegionsAndOfflineFacts(t *testing.T) {
 
 func TestDashboardDesignVariedFilledHistoryAndConsoleFallback(t *testing.T) {
 	model := dashboardDesignFixture(4)
-	panel := strings.Join(dashboardArea(model.history["pc"].cpu, model.now, 37, 4, false, dashboardCPUStyle), "\n")
+	panel := strings.Join(model.area(model.history["pc"].cpu, model.now, 37, 4, false, dashboardCPUStyle), "\n")
 	if strings.Count(panel, "█") < 15 || !strings.ContainsAny(panel, "⠉⠒⠤⣀") {
 		t.Fatalf("history has no multi-row filled variation: %s", panel)
 	}
@@ -179,13 +179,14 @@ func dashboardDesignFixture(count int) dashboardModel {
 
 func TestDashboardAreaFixedPercentHeight(t *testing.T) {
 	now := time.Unix(1700000000, 0)
+	model := newDashboard(cli.DashboardInput{}, now)
 	// 100% is the positive control: all four rows must be filled.
 	for _, test := range []struct {
 		value float64
 		units int
 	}{{100, 32}, {0, 0}, {25, 8}, {28, 9}, {50, 16}} {
 		points := []dashboardPoint{{at: now, value: test.value}}
-		lines := dashboardArea(points, now, 1, 4, false, dashboardRAMStyle)
+		lines := model.area(points, now, 1, 4, false, dashboardRAMStyle)
 		units := 0
 		for _, line := range lines {
 			for _, cell := range ansi.Strip(line) {
@@ -213,12 +214,12 @@ func TestDashboardAreaFixedPercentHeight(t *testing.T) {
 
 func TestDashboardDesignDenseMeterAndHumanDurations(t *testing.T) {
 	now := time.Unix(1700000000, 0)
+	model := newDashboard(cli.DashboardInput{}, now)
 	metric := cli.DashboardMeasurement[float64]{State: statusAvailable, Value: 100, Sample: "i/1", MeasuredAt: now}
-	meter := ansi.Strip(dashboardSegmentedMeter(metric, now, true, 37, false, dashboardCPUStyle))
+	meter := ansi.Strip(model.segmentedMeter(metric, now, true, 37, false, dashboardCPUStyle))
 	if strings.Count(meter, "▪") != 37 {
 		t.Fatalf("meter skips cells instead of thin full-width segments: %q", meter)
 	}
-	model := newDashboard(cli.DashboardInput{}, now)
 	host := cli.DashboardHostView{Connection: cli.StateReachable, LastReply: now, Uptime: cli.DashboardMeasurement[uint64]{State: statusAvailable, Value: 3*86400 + 7*3600, Sample: "i/1", MeasuredAt: now}}
 	if got := model.uptime(host); got != "3d 7h" {
 		t.Fatalf("uptime %q", got)
@@ -242,12 +243,13 @@ func TestDashboardDesignContentSizedGroupedTables(t *testing.T) {
 
 func TestDashboardAreaUsesThinEdgeOverDimFill(t *testing.T) {
 	now := time.Unix(1700000000, 0)
+	model := newDashboard(cli.DashboardInput{}, now)
 	points := []dashboardPoint{{at: now, value: 28}}
-	area := strings.Join(dashboardArea(points, now, 1, 4, false, dashboardRAMStyle), "\n")
+	area := strings.Join(model.area(points, now, 1, 4, false, dashboardRAMStyle), "\n")
 	if !strings.ContainsAny(ansi.Strip(area), "⠉⠒⠤⣀") {
 		t.Fatalf("fractional area paints a thick bright block instead of a thin edge: %q", area)
 	}
-	if !strings.Contains(area, "38;2;21;61;73") {
+	if !strings.Contains(area, "38;2;6;42;54") {
 		t.Fatalf("area has no dim RAM fill: %q", area)
 	}
 }

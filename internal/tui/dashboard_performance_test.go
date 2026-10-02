@@ -202,7 +202,8 @@ func TestDashboardCoreGroupingAndPalettes(t *testing.T) {
 	if len(dashboardPalettes) != 6 {
 		t.Fatal("missing palette")
 	}
-	if dashboardProfileStyle(dashboardGPUStyle, colorprofile.ANSI).GetForeground() != dashboardProfileStyle(dashboardColorStyle(dashboardColor{"#b39df3", 5}), colorprofile.ANSI).GetForeground() {
+	model.profile = colorprofile.ANSI
+	if model.paint(dashboardGPUStyle).GetForeground() != lipgloss.Magenta {
 		t.Fatal("GPU console role changed")
 	}
 }
@@ -229,7 +230,7 @@ func TestDashboardPerformanceServiceWordsColorsAndSparseLayout(t *testing.T) {
 	cases := []struct {
 		name, state, word string
 		failed, unknown   bool
-		style             lipgloss.Style
+		style             dashboardStyle
 	}{
 		{name: "idle-demand", state: "idle", word: "idle", style: dashboardMutedStyle},
 		{name: "running-demand", state: "running", word: "running", style: dashboardGoodStyle},

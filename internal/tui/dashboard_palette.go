@@ -1,6 +1,10 @@
 package tui
 
-import "charm.land/lipgloss/v2"
+import (
+	"charm.land/lipgloss/v2"
+	"github.com/shaul/mesh/internal/cli"
+	"image/color"
+)
 
 const (
 	dashboardCurrentGreen  = "#7bd88f"
@@ -13,32 +17,32 @@ const (
 
 type dashboardColor struct {
 	hex    string
-	ansi16 int
+	ansi16 uint8
 }
 type dashboardPalette struct {
-	name       string
-	background dashboardColor
-	text       dashboardColor
-	muted      dashboardColor
-	border     dashboardColor
-	grid       dashboardColor
-	title      dashboardColor
-	cpu        dashboardColor
-	cpuFill    dashboardColor
-	ram        dashboardColor
-	ramFill    dashboardColor
-	gpu        dashboardColor
-	battery    dashboardColor
-	good       dashboardColor
-	cached     dashboardColor
-	failure    dashboardColor
+	name                       string
+	backgroundValue, textValue color.Color
+	background                 dashboardColor
+	text                       dashboardColor
+	muted                      dashboardColor
+	border                     dashboardColor
+	grid                       dashboardColor
+	title                      dashboardColor
+	cpu                        dashboardColor
+	cpuFill                    dashboardColor
+	ram                        dashboardColor
+	ramFill                    dashboardColor
+	gpu                        dashboardColor
+	battery                    dashboardColor
+	good                       dashboardColor
+	cached                     dashboardColor
+	failure                    dashboardColor
 }
 
-// Palettes keep semantic console slots stable; selecting a theme changes one value.
-// Background roles describe matching terminal themes; the dashboard preserves their background.
+// Palettes keep semantic console slots stable across themes.
 var dashboardPalettes = []dashboardPalette{
-	{name: "Current",
-		background: dashboardColor{"#090c0b", 0},
+	{name: "current",
+		background: dashboardColor{"#0d1117", 0},
 		text:       dashboardColor{"#cfdbd4", 7},
 		muted:      dashboardColor{"#7a8f86", 8},
 		border:     dashboardColor{"#24453a", 8},
@@ -54,7 +58,7 @@ var dashboardPalettes = []dashboardPalette{
 		cached:     dashboardColor{"#e0b050", 3},
 		failure:    dashboardColor{"#ef6b5b", 1},
 	},
-	{name: "Rosé Pine",
+	{name: "rose-pine",
 		background: dashboardColor{"#191724", 0},
 		text:       dashboardColor{"#e0def4", 7},
 		muted:      dashboardColor{"#908caa", 8},
@@ -71,7 +75,7 @@ var dashboardPalettes = []dashboardPalette{
 		cached:     dashboardColor{"#f6c177", 3},
 		failure:    dashboardColor{"#eb6f92", 1},
 	},
-	{name: "Rosé Pine Moon",
+	{name: "rose-pine-moon",
 		background: dashboardColor{"#232136", 0},
 		text:       dashboardColor{"#e0def4", 7},
 		muted:      dashboardColor{"#908caa", 8},
@@ -88,7 +92,7 @@ var dashboardPalettes = []dashboardPalette{
 		cached:     dashboardColor{"#f6c177", 3},
 		failure:    dashboardColor{"#eb6f92", 1},
 	},
-	{name: "OLED high contrast",
+	{name: "oled",
 		background: dashboardColor{"#000000", 0},
 		text:       dashboardColor{"#f2f7f4", 7},
 		muted:      dashboardColor{"#9aaba3", 8},
@@ -105,7 +109,7 @@ var dashboardPalettes = []dashboardPalette{
 		cached:     dashboardColor{"#ffc23d", 3},
 		failure:    dashboardColor{"#ff5a52", 1},
 	},
-	{name: "Kanagawa Wave",
+	{name: "kanagawa",
 		background: dashboardColor{"#1f1f28", 0},
 		text:       dashboardColor{"#dcd7ba", 7},
 		muted:      dashboardColor{"#938aa9", 8},
@@ -122,7 +126,7 @@ var dashboardPalettes = []dashboardPalette{
 		cached:     dashboardColor{"#e6c384", 3},
 		failure:    dashboardColor{"#ff5d62", 1},
 	},
-	{name: "Gruvbox Material",
+	{name: "gruvbox-material",
 		background: dashboardColor{"#1d2021", 0},
 		text:       dashboardColor{"#d4be98", 7},
 		muted:      dashboardColor{"#a89984", 8},
@@ -141,8 +145,16 @@ var dashboardPalettes = []dashboardPalette{
 	},
 }
 
-var dashboardTheme = dashboardPalettes[0]
-
-func dashboardColorStyle(color dashboardColor) lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(color.hex))
+func dashboardTheme(name string) dashboardPalette {
+	if name == "" {
+		name = cli.DefaultDashboardTheme
+	}
+	for _, palette := range dashboardPalettes {
+		if palette.name == name {
+			palette.backgroundValue = lipgloss.Color(palette.background.hex)
+			palette.textValue = lipgloss.Color(palette.text.hex)
+			return palette
+		}
+	}
+	return dashboardPalette{}
 }

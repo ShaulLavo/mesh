@@ -79,13 +79,13 @@ func (m dashboardModel) cardWithGPU(host cli.DashboardHostView, width int, gpuRo
 	ramMetric := cli.DashboardMeasurement[float64]{State: host.RAM.State, Value: dashboardMemoryPercent(host.RAM.Value), Sample: host.RAM.Sample, MeasuredAt: host.RAM.MeasuredAt, Failing: host.RAM.Failing}
 	ramPercent := m.coloredPercent(ramMetric, host, m.paint(dashboardRAMStyle))
 	label := dashboardAlign(m.paint(dashboardMutedStyle).Render("CPU ")+m.coreStrip(host, max(0, plotWidth-8)), cpuValue, plotWidth) + "  " + dashboardAlign(m.paint(dashboardMutedStyle).Render("RAM ")+m.ramValue(host), ramPercent, inner-plotWidth-2)
-	meter := dashboardSegmentedMeter(host.CPU, m.now, live, plotWidth, m.ascii, m.paint(dashboardCPUStyle)) + "  " + dashboardSegmentedMeter(ramMetric, m.now, live, inner-plotWidth-2, m.ascii, m.paint(dashboardRAMStyle))
+	meter := m.segmentedMeter(host.CPU, m.now, live, plotWidth, m.ascii, dashboardCPUStyle) + "  " + m.segmentedMeter(ramMetric, m.now, live, inner-plotWidth-2, m.ascii, dashboardRAMStyle)
 	history := m.history[host.Host.ID]
 	if host.MetricsUnsupported {
 		history = dashboardHostHistory{}
 	}
-	left := dashboardArea(history.cpu, m.now, plotWidth, height, m.ascii, m.paint(dashboardCPUStyle))
-	right := dashboardArea(history.ram, m.now, inner-plotWidth-2, height, m.ascii, m.paint(dashboardRAMStyle))
+	left := m.area(history.cpu, m.now, plotWidth, height, m.ascii, dashboardCPUStyle)
+	right := m.area(history.ram, m.now, inner-plotWidth-2, height, m.ascii, dashboardRAMStyle)
 	body := []string{label, meter}
 	for row := range left {
 		body = append(body, left[row]+"  "+right[row])
@@ -168,14 +168,15 @@ func (m dashboardModel) framedPanel(title string, body []string, width int, fram
 	}
 	return append(lines, frame.Render(bl+strings.Repeat(h, width-2)+br))
 }
-func dashboardSegmentedMeter(metric cli.DashboardMeasurement[float64], now time.Time, live bool, width int, ascii bool, style lipgloss.Style) string {
+func (m dashboardModel) segmentedMeter(metric cli.DashboardMeasurement[float64], now time.Time, live bool, width int, ascii bool, role dashboardStyle) string {
+	style := m.paint(role)
 	raw := dashboardMeter(metric, now, live, width, ascii)
 	filled, empty := "▪", "▪"
 	if ascii {
 		filled, empty = "#", "-"
 	}
 	filled = style.Render(filled)
-	empty = dashboardGraphStyle(style, dashboardGridStyle).Render(empty)
+	empty = m.paint(dashboardGridStyle).Render(empty)
 	var meter strings.Builder
 	for _, cell := range raw {
 		if cell == '█' || cell == '#' {
@@ -187,14 +188,13 @@ func dashboardSegmentedMeter(metric cli.DashboardMeasurement[float64], now time.
 	return meter.String()
 }
 
-func dashboardArea(points []dashboardPoint, now time.Time, width, height int, ascii bool, style lipgloss.Style) []string {
+func (m dashboardModel) area(points []dashboardPoint, now time.Time, width, height int, ascii bool, role dashboardStyle) []string {
 	lines := make([]strings.Builder, height)
-	fillStyle := dashboardCPUFillStyle
-	if style.GetForeground() == dashboardRAMStyle.GetForeground() || style.GetForeground() == lipgloss.Cyan {
-		fillStyle = dashboardRAMFillStyle
+	fillRole := dashboardCPUFillStyle
+	if role == dashboardRAMStyle {
+		fillRole = dashboardRAMFillStyle
 	}
-	fillStyle = dashboardGraphStyle(style, fillStyle)
-	paints := [3]lipgloss.Style{style, fillStyle, dashboardGraphStyle(style, dashboardGridStyle)}
+	paints := [3]lipgloss.Style{m.paint(role), m.paint(fillRole), m.paint(dashboardGridStyle)}
 	marks := make(map[dashboardPlotMark]string)
 	for column := range width {
 		at := now.Add(-120*time.Second + time.Duration(float64(column+1)/float64(width)*float64(120*time.Second)))

@@ -9,21 +9,6 @@ import (
 	"github.com/shaul/mesh/internal/cli"
 )
 
-var (
-	dashboardGPUStyle     = dashboardColorStyle(dashboardTheme.gpu)
-	dashboardCPUStyle     = dashboardColorStyle(dashboardTheme.cpu)
-	dashboardCPUFillStyle = dashboardColorStyle(dashboardTheme.cpuFill)
-	dashboardRAMFillStyle = dashboardColorStyle(dashboardTheme.ramFill)
-	dashboardGridStyle    = dashboardColorStyle(dashboardTheme.grid)
-	dashboardRAMStyle     = dashboardColorStyle(dashboardTheme.ram)
-	dashboardMutedStyle   = dashboardColorStyle(dashboardTheme.muted)
-	dashboardBorderStyle  = dashboardColorStyle(dashboardTheme.border)
-	dashboardGoodStyle    = dashboardColorStyle(dashboardTheme.good)
-	dashboardCachedStyle  = dashboardColorStyle(dashboardTheme.cached)
-	dashboardFailureStyle = dashboardColorStyle(dashboardTheme.failure)
-	dashboardTitleStyle   = dashboardColorStyle(dashboardTheme.title).Bold(true)
-)
-
 func dashboardFit(value string, width int) string {
 	width = max(0, width)
 	value = ansi.Truncate(value, width, "…")
@@ -63,7 +48,7 @@ func (m dashboardModel) render() string {
 	for index, line := range lines {
 		lines[index] = dashboardFit(line, m.width)
 	}
-	return m.paint(dashboardColorStyle(dashboardTheme.text)).Render(strings.Join(lines, "\n"))
+	return m.paint(dashboardTextStyle).Render(strings.Join(lines, "\n"))
 }
 func (m dashboardModel) header() []string {
 	totals := m.totals()

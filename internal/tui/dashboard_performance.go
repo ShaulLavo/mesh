@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/hostmetrics"
@@ -36,11 +35,11 @@ func dashboardPerformanceReading[T any](m dashboardModel, metric cli.DashboardMe
 	}
 	return value
 }
-func (m dashboardModel) performanceMeter(metric cli.DashboardMeasurement[float64], host cli.DashboardHostView, width int, style lipgloss.Style) string {
+func (m dashboardModel) performanceMeter(metric cli.DashboardMeasurement[float64], host cli.DashboardHostView, width int, style dashboardStyle) string {
 	if dashboardFresh(metric, host, m.now, 30*time.Second) {
 		metric.MeasuredAt = m.now
 	}
-	return dashboardSegmentedMeter(metric, m.now, host.Connection == cli.StateReachable, max(0, width), m.ascii, m.paint(style))
+	return m.segmentedMeter(metric, m.now, host.Connection == cli.StateReachable, max(0, width), m.ascii, style)
 }
 func (m dashboardModel) coreStrip(host cli.DashboardHostView, width int) string {
 	if !dashboardOptionalPresent(host.Cores) || !dashboardFresh(*host.Cores, host, m.now, 10*time.Second) {
