@@ -35,6 +35,20 @@ func validatedUsageAccount(t *testing.T, m dashboardModel, a usagefeed.Account) 
 	}
 	return result.Snapshot.Accounts[0]
 }
+func usageRegressionFleetText(frame string, width int) string {
+	left, span := 0, (width-1)/2
+	if width == 160 {
+		left, span = 58, 47
+	}
+	left, span = left+2, span-4
+	lines := strings.Split(frame, "\n")
+	for index, line := range lines {
+		cells := []rune(line)
+		lines[index] = string(cells[min(left, len(cells)):min(left+span, len(cells))])
+	}
+	return strings.Join(lines, "\n")
+}
+
 func TestDashboardUsageReviewRegressions(t *testing.T) {
 	t.Run("attention-wrapped-reason", func(t *testing.T) {
 		for _, size := range [][2]int{{160, 45}, {80, 24}} {
@@ -53,6 +67,20 @@ func TestDashboardUsageReviewRegressions(t *testing.T) {
 			if !strings.Contains(got, "Attention") {
 				t.Errorf("size=%v failed service disappears from Attention", size)
 			}
+			panel := usageRegressionFleetText(got, size[0])
+			if !strings.Contains(strings.Join(strings.Fields(panel), " "), h.Services.Rows[0].Problem) {
+				t.Error("wrapped reason lost words", panel)
+			}
+			assertFits(t, got, size[0], size[1])
+			if size[0] == 160 && (m.graphHeight() != 4 || !strings.Contains(got, "7/7")) {
+				t.Fatal("wrapped attention changed graph or service budget", got)
+			}
+			h.Services.Rows[0].Problem = strings.Repeat("connection refused while reaching the local service ", 8)
+			got = ansi.Strip(m.render())
+			if !strings.Contains(got, "Attention") || !strings.Contains(got, "connection refused") || !strings.Contains(got, "…") {
+				t.Fatal("oversized reason removed bounded attention", got)
+			}
+			assertFits(t, got, size[0], size[1])
 		}
 	})
 	t.Run("independent-window-ages", func(t *testing.T) {
@@ -94,6 +122,11 @@ func TestDashboardUsageReviewRegressions(t *testing.T) {
 		if !strings.Contains(got, "cooldown") {
 			t.Error("valid observed cooldown hidden by missing quota age")
 		}
+		a.Cooldown = nil
+		a = validatedUsageAccount(t, m, a)
+		if usageRouting(a) != "cooldown" {
+			t.Error("explicit cooldown state depends on optional restriction details")
+		}
 	})
 	t.Run("cached-service-state", func(t *testing.T) {
 		m := usageFixture(t, "normal")
@@ -103,8 +136,8 @@ func TestDashboardUsageReviewRegressions(t *testing.T) {
 		rows := m.serviceRows(h, 43)
 		got := ansi.Strip(rows[1].text)
 		t.Logf("cached service row: %s", got)
-		if !strings.Contains(got, "cached") {
-			t.Error("cached marker clipped")
+		if !strings.Contains(got, "cached running") {
+			t.Error("cached service status clipped")
 		}
 	})
 	t.Run("compact-cached-sessions", func(t *testing.T) {
@@ -118,8 +151,15 @@ func TestDashboardUsageReviewRegressions(t *testing.T) {
 		m.usageEnabled = false
 		old := ansi.Strip(m.render())
 		t.Logf("no-feed positive control has E8WS=%v N8PF=%v", strings.Contains(old, "E8WS"), strings.Contains(old, "N8PF"))
-		if !strings.Contains(got, "E8WS") && !strings.Contains(got, "N8PF") {
-			t.Error("all cached session details omitted despite retained catalogs")
+		for _, id := range []string{"E8WS", "N8PF"} {
+			if !strings.Contains(got, id) {
+				t.Error("cached session details omitted despite retained catalogs", id)
+			}
+			for _, line := range strings.Split(got, "\n") {
+				if strings.Contains(line, id) && !strings.Contains(line, "cached") {
+					t.Error("retained session lacks cached status", line)
+				}
+			}
 		}
 	})
 	t.Run("compact-used-left-legend", func(t *testing.T) {

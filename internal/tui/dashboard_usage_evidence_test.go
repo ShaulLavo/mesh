@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
+	"github.com/shaul/mesh/internal/cli"
 )
 
 var usageEvidenceDirectory = flag.String("usage-evidence-dir", "", "write deterministic dashboard usage fixture SVGs and text grids")
@@ -53,6 +55,42 @@ func TestDashboardUsageEvidence(t *testing.T) {
 	writeUsageEvidence(t, "failure", model)
 	model.width, model.height = 80, 24
 	writeUsageEvidence(t, "compact-failure", model)
+	model.hosts[0].Services.Rows[0].Problem = "health check failed: connection refused while reaching the local service"
+	writeUsageEvidence(t, "review-wrapped-compact", model)
+	model.width, model.height = 160, 45
+	writeUsageEvidence(t, "review-wrapped", model)
+	model = usageFixture(t, "normal")
+	seen := model.now.Add(-10 * time.Minute)
+	model.usage.accounts[0].Windows[1].LastSeenAt = &seen
+	writeUsageEvidence(t, "review-fresh-age", model)
+	seen = model.now.Add(-18 * time.Minute)
+	reset := model.now.Add(-time.Minute)
+	model.usage.accounts[0].Windows[1].LastSeenAt = &seen
+	model.usage.accounts[0].Windows[1].ResetsAt = &reset
+	writeUsageEvidence(t, "review-reset", model)
+	model.width, model.height = 80, 24
+	writeUsageEvidence(t, "review-reset-compact", model)
+	model = usageFixture(t, "normal")
+	model.usage.accounts[0].Windows = model.usage.accounts[0].Windows[1:]
+	model.usage.accounts[1].State = "cooldown"
+	model.usage.accounts[1].LastSeenAt = nil
+	model.usage.accounts[1].Windows = nil
+	model.usage.accounts[1].Cooldown = model.usage.accounts[2].Cooldown
+	model.usage.accounts[2].State = "disabled"
+	writeUsageEvidence(t, "review-restrictions", model)
+	model = usageFixture(t, "normal")
+	model.ascii = true
+	model.hosts[0].Services.ObservedAt = model.now.Add(-12 * time.Minute)
+	writeUsageEvidence(t, "review-cached-service", model)
+	model.width, model.height = 80, 24
+	for index := range model.hosts {
+		model.hosts[index].Connection = cli.StateUnreachable
+	}
+	writeUsageEvidence(t, "review-cached-compact", model)
+	model = usageFixture(t, "overflow")
+	model.width, model.height = 80, 24
+	model.usageFailing = true
+	writeUsageEvidence(t, "review-overflow-compact", model)
 	for _, width := range []int{110, 140} {
 		model = usageFixture(t, "normal")
 		model.width = width

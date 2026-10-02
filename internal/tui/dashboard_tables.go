@@ -59,6 +59,9 @@ func (m dashboardModel) sessionRow(host cli.DashboardHostView, session cli.Dashb
 		text = m.paint(dashboardCachedStyle).Render(dashboardSessionColumns(safeText(host.Host.Alias), session.ID, name, state, safeText(session.Command), dashboardAge(m.now, host.Sessions.ObservedAt), width, hostWidth))
 	}
 	if m.usageEnabled {
+		if cached {
+			state = m.paint(dashboardCachedStyle).Render("cached " + safeText(session.State))
+		}
 		return m.usageSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), session.ID, name, state, safeText(session.Command), width, hostWidth)
 	}
 	return text
@@ -105,6 +108,9 @@ func (m dashboardModel) serviceRows(host cli.DashboardHostView, width int) []das
 		}
 		if dashboardServicesCached(host, m.now) {
 			state = m.paint(dashboardCachedStyle).Render(mark + " " + service.State + " cached")
+			if m.usageEnabled {
+				state = m.paint(dashboardCachedStyle).Render("cached " + service.State)
+			}
 		}
 		text := dashboardServiceColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), safeText(service.Name), state, dashboardAge(m.now, host.Services.ObservedAt), width)
 		if m.usageEnabled {
@@ -258,7 +264,8 @@ func (m dashboardModel) attention(width, budget int) []string {
 	var body []string
 	visible := 0
 	for _, group := range groups {
-		if len(body)+len(group) > max(0, budget-2) {
+		group = m.usageAttentionGroup(group, width, max(0, budget-2-len(body)))
+		if len(group) == 0 || len(body)+len(group) > max(0, budget-2) {
 			continue
 		}
 		body = append(body, group...)

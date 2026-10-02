@@ -412,7 +412,12 @@ func TestDashboardUsageCompactFactsStayVisible(t *testing.T) {
 	window = model.usage.accounts[0].Windows[1]
 	expired := model.now.Add(-time.Minute)
 	window.ResetsAt = &expired
-	if line := model.usageCompactWindow(window, 36, false); !strings.Contains(line, "reset passed · awaiting traffic") || ansi.StringWidth(line) > 36 {
-		t.Fatal("compact reset explanation lost", line)
+	if line := model.usageCompactWindow(window, 36, false); !strings.Contains(line, "66%/34%") || !strings.Contains(line, "reset passed") || ansi.StringWidth(line) > 36 {
+		t.Fatal("compact reset history lost", line)
+	}
+	model.width, model.height = 80, 24
+	model.usage.accounts[0].Windows[1] = window
+	if footer := model.usageFooter(); !strings.Contains(footer, "reset passed · awaiting traffic") || !strings.Contains(footer, "used/left") {
+		t.Fatal("compact reset explanation lost", footer)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/shaul/mesh/internal/usagefeed"
 )
 
@@ -13,6 +14,7 @@ const (
 	usageStaleAfter = 15 * time.Minute
 	usageUnknown    = "unknown"
 	usageExhausted  = "exhausted"
+	usageCooldown   = "cooldown"
 )
 
 func (m dashboardModel) usagePanel(width, budget int, compact bool) []string {
@@ -30,11 +32,17 @@ func (m dashboardModel) usagePanel(width, budget int, compact bool) []string {
 	}
 	if visible < m.usage.total {
 		label = fmt.Sprintf("AI plans · %d/%d accounts · %d omitted", visible, m.usage.total, m.usage.total-visible)
+		if compact {
+			label = fmt.Sprintf("AI plans · %d/%d · %d omitted", visible, m.usage.total, m.usage.total-visible)
+		}
 	}
 	if m.usageFailing {
 		label = "AI plans · feed unavailable"
 		if visible < m.usage.total {
 			label += fmt.Sprintf(" · %d omitted", m.usage.total-visible)
+			if compact {
+				label = fmt.Sprintf("AI plans · unavailable · %d omitted", m.usage.total-visible)
+			}
 		}
 	}
 	body := []string{}
@@ -74,11 +82,11 @@ func (m dashboardModel) usageIdentity(account dashboardUsageAccount, width int, 
 }
 
 func usageRouting(account usagefeed.Account) string {
+	if account.State == "disabled" || account.State == usageCooldown {
+		return account.State
+	}
 	if account.State == "no-data" || account.LastSeenAt == nil {
 		return ""
-	}
-	if account.State == "cooldown" {
-		return "cooldown"
 	}
 	if account.Routing.LastServedAt != nil {
 		return "last served"
@@ -103,11 +111,15 @@ func usageAge(now time.Time, seen *time.Time) string {
 func (m dashboardModel) usageAccountWindows(account dashboardUsageAccount, width int, compact bool) []string {
 	var result []string
 	for index := range 2 {
-		window := usagefeed.Window{Label: []string{"5h", "Weekly"}[index], Status: usageUnknown}
+		label := "—"
+		if len(account.Windows) == 0 {
+			label = []string{"5h", "Weekly"}[index]
+		}
+		window := usagefeed.Window{Label: label, Status: usageUnknown}
 		if index < len(account.Windows) {
 			window = account.Windows[index]
 		}
-		showAge := window.LastSeenAt == nil || account.LastSeenAt == nil || !window.LastSeenAt.Equal(*account.LastSeenAt)
+		showAge := !usageSameSeen(window.LastSeenAt, account.LastSeenAt)
 		if compact {
 			result = append(result, m.usageCompactWindow(window, width, showAge))
 			continue
@@ -117,9 +129,20 @@ func (m dashboardModel) usageAccountWindows(account dashboardUsageAccount, width
 	return result
 }
 
+func usageSameSeen(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Equal(*right)
+}
+
 func (m dashboardModel) usageWindowLines(window usagefeed.Window, width int, showAge bool) []string {
 	if window.LastSeenAt == nil && window.UsedPercent == nil && window.Status == usageUnknown {
-		return []string{dashboardFit(window.Label, 7) + "No data yet", "Waiting for normal traffic"}
+		waiting := "Waiting for normal traffic"
+		if showAge {
+			waiting = dashboardAlign(waiting, usageAge(m.now, window.LastSeenAt), width)
+		}
+		return []string{dashboardFit(window.Label, 7) + "No data yet", waiting}
 	}
 	used, left := "—", "—"
 	if window.UsedPercent != nil {
@@ -132,12 +155,12 @@ func (m dashboardModel) usageWindowLines(window usagefeed.Window, width int, sho
 	facts := fmt.Sprintf("%s%s used · %s left · resets %s", dashboardFit(window.Label, 7), used, left, reset)
 	word, role := usageStatus(window)
 	status := m.usageMeter(window, role) + " " + m.paint(role).Render(m.usageDot()) + " " + word
-	if showAge && (window.LastSeenAt == nil || m.now.Sub(*window.LastSeenAt) >= usageStaleAfter) {
-		status = dashboardAlign(status, usageAge(m.now, window.LastSeenAt), width)
-	}
 	if window.ResetsAt != nil && !window.ResetsAt.After(m.now) {
 		// Historical values remain on the first line; the expired bar yields to its explanation.
 		status = "reset passed · awaiting traffic"
+	}
+	if showAge {
+		status = dashboardAlign(status, usageAge(m.now, window.LastSeenAt), width)
 	}
 	return []string{facts, status}
 }
@@ -198,10 +221,11 @@ func (m dashboardModel) usagePace(window usagefeed.Window) int {
 
 func (m dashboardModel) usageCompactWindow(window usagefeed.Window, width int, showAge bool) string {
 	if window.LastSeenAt == nil && window.UsedPercent == nil && window.Status == usageUnknown {
-		return dashboardFit(window.Label, 7) + "No data yet"
-	}
-	if window.ResetsAt != nil && !window.ResetsAt.After(m.now) {
-		return dashboardFit(window.Label, max(0, width-31)) + "reset passed · awaiting traffic"
+		text := dashboardFit(window.Label, 7) + "No data yet"
+		if showAge {
+			text = dashboardAlign(text, usageAge(m.now, window.LastSeenAt), width)
+		}
+		return text
 	}
 	used, left := "—", "—"
 	if window.UsedPercent != nil {
@@ -212,8 +236,13 @@ func (m dashboardModel) usageCompactWindow(window usagefeed.Window, width int, s
 		reset = dashboardDuration(window.ResetsAt.Sub(m.now))
 	}
 	word, _ := usageStatus(window)
-	if showAge {
-		word += " " + usageAge(m.now, window.LastSeenAt)
+	facts := used + "/" + left + " " + strings.ReplaceAll(reset, " ", "") + " " + word
+	if window.ResetsAt != nil && !window.ResetsAt.After(m.now) {
+		facts = used + "/" + left + " reset passed"
 	}
-	return dashboardFit(fmt.Sprintf("%s %s/%s %s %s", window.Label, used, left, strings.ReplaceAll(reset, " ", ""), word), width)
+	if showAge {
+		facts += " " + usageAge(m.now, window.LastSeenAt)
+	}
+	label := ansi.Truncate(window.Label, max(0, width-ansi.StringWidth(facts)-1), "…")
+	return dashboardFit(strings.TrimSpace(label+" "+facts), width)
 }

@@ -20,12 +20,24 @@ func (m dashboardModel) usageSummaries(budget int) []string {
 	leftWidth := remaining * 57 / 104
 	centerWidth := remaining - leftWidth
 	left := m.summary(false, leftWidth, budget)
-	attention := m.attention(centerWidth, min(4, max(0, budget-11)))
+	attention := m.attention(centerWidth, min(7, max(0, budget-10)))
 	center := m.summary(true, centerWidth, budget-len(attention))
 	center = append(center, attention...)
 	right := m.usagePanel(54, budget, false)
 	fleet := dashboardJoinPanels(left, center, leftWidth, centerWidth)
 	return dashboardJoinPanels(fleet, right, m.width-55, 54)
+}
+
+func (m dashboardModel) usageAttentionGroup(group []string, width, budget int) []string {
+	if !m.usageEnabled || len(group) <= budget {
+		return group
+	}
+	if budget < min(2, len(group)) {
+		return nil
+	}
+	group = group[:budget]
+	group[budget-1] = ansi.Truncate(group[budget-1], max(0, width-5), "") + "…"
+	return group
 }
 
 func dashboardJoinPanels(left, right []string, leftWidth, rightWidth int) []string {
@@ -60,7 +72,7 @@ func (m dashboardModel) usageServiceColumns(host, name, state, age string, width
 		}
 	}
 	hostWidth = min(hostWidth, 11)
-	return dashboardFit(host, hostWidth) + " " + dashboardFit(name, max(0, width-hostWidth-17)) + " " + dashboardFit(state, 11) + " " + dashboardFit(age, 3)
+	return dashboardFit(host, hostWidth) + " " + dashboardFit(name, max(0, width-hostWidth-20)) + " " + dashboardFit(state, 14) + " " + dashboardFit(age, 3)
 }
 
 func (m dashboardModel) usageCompactFleet(width, budget int) []string {
@@ -68,14 +80,9 @@ func (m dashboardModel) usageCompactFleet(width, budget int) []string {
 		return nil
 	}
 	totals := m.totals()
-	attention := m.attention(width, min(4, max(0, budget-4)))
+	attention := m.attention(width, min(7, max(0, budget-5)))
 	rows := []string{m.paint(dashboardTitleStyle).Render(fmt.Sprintf("Sessions · %d live · %d cached", totals.liveSessions, totals.cachedSessions))}
-	selected := m.liveSelection(min(2, max(0, budget-len(attention)-3)))
-	for index, host := range m.hosts {
-		for _, session := range host.Sessions.Rows[:selected[index]] {
-			rows = append(rows, m.sessionRow(host, session, width, m.sessionHostWidth(width)))
-		}
-	}
+	rows = append(rows, m.usageCompactSessions(width, min(2, max(0, budget-len(attention)-3)))...)
 	services, total := m.summaryRows(true, width)
 	visible := min(len(services), max(0, budget-len(rows)-len(attention)-1))
 	label := fmt.Sprintf("Services · %d/%d · failed %d", visible, total, totals.failed)
@@ -86,10 +93,44 @@ func (m dashboardModel) usageCompactFleet(width, budget int) []string {
 	return append(rows, attention...)
 }
 
+func (m dashboardModel) usageCompactSessions(width, limit int) []string {
+	var rows []string
+	hostWidth := m.sessionHostWidth(width)
+	selected := m.liveSelection(limit)
+	for index, host := range m.hosts {
+		for _, session := range host.Sessions.Rows[:selected[index]] {
+			rows = append(rows, m.sessionRow(host, session, width, hostWidth))
+		}
+	}
+	for _, host := range m.hosts {
+		if !dashboardSessionsCached(host, m.now) {
+			continue
+		}
+		for _, session := range host.Sessions.Rows[:min(len(host.Sessions.Rows), limit-len(rows))] {
+			rows = append(rows, m.sessionRow(host, session, width, hostWidth))
+		}
+	}
+	return rows
+}
+
+func (m dashboardModel) usageAwaitingTraffic() bool {
+	for _, account := range m.usage.accounts {
+		for _, window := range account.Windows {
+			if window.ResetsAt != nil && !window.ResetsAt.After(m.now) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (m dashboardModel) usageFooter() string {
-	cadence := "metrics 2s · catalogs change-driven · history 2m"
-	if m.width >= 140 {
-		cadence += " · AI bars used 0–100% · │ elapsed pace"
+	cadence := "metrics 2s · catalogs change-driven · history 2m · AI bars used 0–100% · │ elapsed pace"
+	if m.width < 140 || m.height < 40 {
+		cadence = "metrics 2s · AI used/left · history 2m"
+		if m.usageAwaitingTraffic() {
+			cadence = "AI used/left · reset passed · awaiting traffic"
+		}
 	}
 	if m.ascii {
 		cadence = strings.ReplaceAll(cadence, "│", "|")
