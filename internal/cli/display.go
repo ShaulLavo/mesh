@@ -18,7 +18,7 @@ func SafeTerminalText(value string) string {
 	var output strings.Builder
 	for _, character := range value {
 		encoded := string(character)
-		if !unicode.Is(unicode.Join_Control, character) {
+		if !unicode.IsGraphic(character) && !unicode.Is(unicode.Join_Control, character) {
 			quoted := strconv.QuoteToGraphic(encoded)
 			encoded = quoted[1 : len(quoted)-1]
 		}
