@@ -113,7 +113,7 @@ func waitForHTTPBody(t *testing.T, url string, wantStatus int) string {
 }
 
 func TestRunServesLocalClientsWhenTailnetDiscoveryFails(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	reported := make(chan error, 1)
@@ -301,7 +301,7 @@ func TestRunShutdownDoesNotWaitForBlockedErrorSink(t *testing.T) {
 	reportStarted := make(chan struct{})
 	releaseReport := make(chan struct{})
 	defer close(releaseReport)
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	go func() {
 		done <- run(ctx, Config{
 			StateDir: stateDir, TailnetPort: 7337,

@@ -148,14 +148,15 @@ func (s SessionInfo) LastActiveAt() time.Time {
 
 // HostInfo is the transport representation of one daemon's identity.
 type HostInfo struct {
-	Build             *release.Build `json:"build,omitempty"`
-	UpdateSupported   bool           `json:"updateSupported,omitempty"`
-	RecoverySupported bool           `json:"recoverySupported,omitempty"`
-	ID                string         `json:"id"`
-	MeshIdentity      string         `json:"meshIdentity"`
-	TailscaleName     string         `json:"tailscaleName,omitempty"`
-	PrivateName       string         `json:"privateName,omitempty"`
-	Wake              *wake.Grant    `json:"wake,omitempty"`
+	Build                  *release.Build `json:"build,omitempty"`
+	UpdateSupported        bool           `json:"updateSupported,omitempty"`
+	RecoverySupported      bool           `json:"recoverySupported,omitempty"`
+	ServiceHealthSupported bool           `json:"serviceHealthSupported,omitempty"`
+	ID                     string         `json:"id"`
+	MeshIdentity           string         `json:"meshIdentity"`
+	TailscaleName          string         `json:"tailscaleName,omitempty"`
+	PrivateName            string         `json:"privateName,omitempty"`
+	Wake                   *wake.Grant    `json:"wake,omitempty"`
 }
 
 // ServiceInfo is the transport representation of one origin service and its
@@ -168,6 +169,7 @@ type ServiceInfo struct {
 	WakeOnRequest bool   `json:"wakeOnRequest,omitempty"`
 	Isolate       bool   `json:"isolate,omitempty"`
 	Healthy       bool   `json:"healthy"`
+	HealthUnknown bool   `json:"healthUnknown,omitempty"`
 	Problem       string `json:"problem,omitempty"`
 
 	Listens   []ServiceListen `json:"listens,omitempty"`

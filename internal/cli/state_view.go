@@ -34,18 +34,20 @@ const (
 )
 
 type StateView struct {
-	Connection        StateConnection
-	Problem           string
-	Memory            map[string]protocol.SessionMemory
-	MemoryReceivedAt  time.Time
-	Seq               uint64
-	Sessions          []protocol.SessionInfo
-	Services          []protocol.ServiceInfo
-	Metrics           *hostmetrics.Snapshot
-	Sections          map[string]ObservedSection
-	LastReply         time.Time
-	MetricsReceivedAt time.Time
-	initialized       bool
+	Connection             StateConnection
+	Problem                string
+	Memory                 map[string]protocol.SessionMemory
+	MemoryReceivedAt       time.Time
+	Seq                    uint64
+	Sessions               []protocol.SessionInfo
+	Services               []protocol.ServiceInfo
+	Metrics                *hostmetrics.Snapshot
+	MetricsUnsupported     bool
+	ServiceHealthSupported bool
+	Sections               map[string]ObservedSection
+	LastReply              time.Time
+	MetricsReceivedAt      time.Time
+	initialized            bool
 }
 
 func (v StateView) Clone() StateView {
@@ -114,6 +116,7 @@ func (v *StateView) applyMetrics(metrics *hostmetrics.Snapshot, received time.Ti
 	if metrics == nil {
 		return
 	}
+	v.MetricsUnsupported = false
 	cloned := *metrics
 	age := max(0, transit.Milliseconds())
 	cloned.CPU.AgeMillis += age
@@ -199,7 +202,7 @@ func (v *StateView) applySnapshot(snapshot *protocol.StateSnapshot, received tim
 	}
 	s := snapshot
 	metrics, metricsReceived := v.Metrics, v.MetricsReceivedAt
-	*v = StateView{Connection: v.Connection, Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
+	*v = StateView{Connection: v.Connection, ServiceHealthSupported: v.ServiceHealthSupported, MetricsUnsupported: v.MetricsUnsupported, Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
 	v.applyMemory(s.Memory, received, transit)
 	v.applyCurrent(s.Current, received, transit)
 	v.applyMetrics(s.Metrics, received, transit)

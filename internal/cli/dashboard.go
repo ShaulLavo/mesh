@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"sort"
 
@@ -66,7 +67,11 @@ func dashboardInventory() ([]HostRecord, string, string, error) {
 		result = append(result, host)
 	}
 	if !seen[local.ID] {
-		result = append(result, HostRecord{Alias: "this host", ID: local.ID, MeshIdentity: local.ID})
+		name, err := os.Hostname()
+		if err != nil {
+			return nil, "", "", fmt.Errorf("dashboard local hostname: %w", err)
+		}
+		result = append(result, HostRecord{Alias: name, ID: local.ID, MeshIdentity: local.ID})
 	}
 	sort.SliceStable(result, func(i, j int) bool { return result[i].Alias < result[j].Alias })
 	return result, local.ID, filepath.Join(stateDir, "daemon.sock"), nil

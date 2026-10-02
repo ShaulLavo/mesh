@@ -56,6 +56,9 @@ func (m dashboardModel) card(host cli.DashboardHostView, width int) []string {
 	label := dashboardAlign(m.paint(dashboardMutedStyle).Render("CPU all cores"), cpuValue, plotWidth) + "  " + dashboardAlign(m.paint(dashboardMutedStyle).Render("RAM ")+m.ramValue(host), ramPercent, inner-plotWidth-2)
 	meter := dashboardSegmentedMeter(host.CPU, m.now, live, plotWidth, m.ascii, m.paint(dashboardCPUStyle)) + "  " + dashboardSegmentedMeter(ramMetric, m.now, live, inner-plotWidth-2, m.ascii, m.paint(dashboardRAMStyle))
 	history := m.history[host.Host.ID]
+	if host.MetricsUnsupported {
+		history = dashboardHostHistory{}
+	}
 	left := dashboardArea(history.cpu, m.now, plotWidth, m.graphHeight(), m.ascii, m.paint(dashboardCPUStyle))
 	right := dashboardArea(history.ram, m.now, inner-plotWidth-2, m.graphHeight(), m.ascii, m.paint(dashboardRAMStyle))
 	body := []string{label, meter}
@@ -76,6 +79,9 @@ func (m dashboardModel) card(host cli.DashboardHostView, width int) []string {
 	}
 	body = append(body, facts)
 	ages := "metrics " + dashboardAge(m.now, dashboardOldest(host.CPU.MeasuredAt, host.RAM.MeasuredAt)) + " catalogs " + dashboardAge(m.now, dashboardOldest(host.Sessions.ObservedAt, host.Services.ObservedAt))
+	if host.MetricsUnsupported {
+		ages = "catalogs " + dashboardAge(m.now, dashboardOldest(host.Sessions.ObservedAt, host.Services.ObservedAt))
+	}
 	frame := m.paint(dashboardBorderStyle)
 	if !live {
 		ages = "last reply " + dashboardAge(m.now, host.LastReply)
@@ -139,23 +145,23 @@ func (m dashboardModel) framedPanel(title string, body []string, width int, fram
 }
 func dashboardSegmentedMeter(metric cli.DashboardMeasurement[float64], now time.Time, live bool, width int, ascii bool, style lipgloss.Style) string {
 	raw := dashboardMeter(metric, now, live, width, ascii)
+	filled, empty := "▪", "▪"
+	if ascii {
+		filled, empty = "#", "-"
+	}
+	filled = style.Render(filled)
+	empty = dashboardGraphStyle(style, dashboardGridStyle).Render(empty)
 	var meter strings.Builder
 	for _, cell := range raw {
-		mark := "▪"
-		if ascii {
-			mark = "-"
-		}
-		paint := dashboardGraphStyle(style, dashboardGridStyle)
 		if cell == '█' || cell == '#' {
-			paint = style
-			if ascii {
-				mark = "#"
-			}
+			meter.WriteString(filled)
+			continue
 		}
-		meter.WriteString(paint.Render(mark))
+		meter.WriteString(empty)
 	}
 	return meter.String()
 }
+
 func dashboardArea(points []dashboardPoint, now time.Time, width, height int, ascii bool, style lipgloss.Style) []string {
 	lines := make([]strings.Builder, height)
 	fillStyle := dashboardCPUFillStyle
@@ -163,11 +169,19 @@ func dashboardArea(points []dashboardPoint, now time.Time, width, height int, as
 		fillStyle = dashboardRAMFillStyle
 	}
 	fillStyle = dashboardGraphStyle(style, fillStyle)
+	paints := [3]lipgloss.Style{style, fillStyle, dashboardGraphStyle(style, dashboardGridStyle)}
+	marks := make(map[dashboardPlotMark]string)
 	for column := range width {
 		at := now.Add(-120*time.Second + time.Duration(float64(column+1)/float64(width)*float64(120*time.Second)))
 		value, found := dashboardGraphValue(points, at)
 		for row := range height {
-			_, _ = lines[row].WriteString(dashboardPlotCell(value, found, row, height, column, ascii, style, fillStyle))
+			mark := dashboardPlotGlyph(value, found, row, height, column, ascii)
+			painted, exists := marks[mark]
+			if !exists {
+				painted = paints[mark.paint].Render(mark.cell)
+				marks[mark] = painted
+			}
+			_, _ = lines[row].WriteString(painted)
 		}
 	}
 	result := make([]string, height)
@@ -210,9 +224,14 @@ func dashboardEdgeCell(fill int) string {
 	}
 }
 
-func dashboardPlotCell(value float64, found bool, row, height, column int, ascii bool, style, fillStyle lipgloss.Style) string {
+type dashboardPlotMark struct {
+	cell  string
+	paint int
+}
+
+func dashboardPlotGlyph(value float64, found bool, row, height, column int, ascii bool) dashboardPlotMark {
 	cell := dashboardAreaCell(value, found, height-row, height, ascii)
-	paint := style
+	paint := 0
 	units := int(value/100*float64(height*8) + 0.5)
 	low, high := (height-row-1)*8, (height-row)*8
 	edge := found && units > low && units <= high
@@ -220,14 +239,14 @@ func dashboardPlotCell(value float64, found bool, row, height, column int, ascii
 		cell = dashboardEdgeCell(units - low)
 	}
 	if !edge && (cell == "█" || cell == "#") {
-		paint = fillStyle
+		paint = 1
 	}
 	if cell == " " && (row == 0 || row == height/2) && column%2 == 0 {
 		cell = "·"
 		if ascii {
 			cell = "."
 		}
-		paint = dashboardGraphStyle(style, dashboardGridStyle)
+		paint = 2
 	}
-	return paint.Render(cell)
+	return dashboardPlotMark{cell: cell, paint: paint}
 }
