@@ -39,6 +39,7 @@ type host struct {
 }
 
 type servedWebsite struct {
+	name   string
 	url    string
 	health string
 	stale  bool

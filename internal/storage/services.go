@@ -23,6 +23,7 @@ func (s *Store) UpsertService(ctx context.Context, service meshserve.Service) (m
 	}
 	row, err := s.queries.UpsertService(ctx, dbsqlc.UpsertServiceParams{
 		Name:          normalized.Name,
+		DisplayName:   normalized.DisplayName,
 		Kind:          string(normalized.Kind),
 		Target:        normalized.Target,
 		PublicName:    normalized.PublicName,
@@ -97,6 +98,7 @@ func serviceFromRow(row dbsqlc.Service) (meshserve.Service, error) {
 	}
 	service := meshserve.Service{
 		Name:          row.Name,
+		DisplayName:   row.DisplayName,
 		Kind:          meshserve.Kind(row.Kind),
 		Target:        row.Target,
 		PublicName:    row.PublicName,

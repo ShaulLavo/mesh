@@ -4,6 +4,17 @@
 
 package sqlc
 
+type AppName struct {
+	PublicName string
+	OwnerID    string
+	Active     int64
+}
+
+type AppState struct {
+	Key  string
+	Data []byte
+}
+
 type CachedService struct {
 	HostID        string
 	PrivateName   string
@@ -16,6 +27,7 @@ type CachedService struct {
 	Problem       string
 	ObservedAt    int64
 	Isolate       int64
+	DisplayName   string
 }
 
 type EdgeOutbox struct {
@@ -62,6 +74,7 @@ type Service struct {
 	Listens       string
 	Demand        string
 	LocalOnly     int64
+	DisplayName   string
 }
 
 type Session struct {

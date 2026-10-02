@@ -48,6 +48,9 @@ func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer,
 	if preview.Service.Kind == string(meshserve.Proxy) && preview.FileCount != 0 {
 		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned files for a proxy preview", host.Alias)
 	}
+	if service.DisplayName != "" && preview.Service.DisplayName != service.DisplayName {
+		return protocol.ServicePreview{}, "", fmt.Errorf("host %s did not preserve the display name; update Mesh there first", host.Alias)
+	}
 	if preview.Service.Name != service.Name || preview.Service.PublicName != service.PublicName || preview.Service.WakeOnRequest != service.WakeOnRequest || preview.Service.Isolate != service.Isolate || service.Kind != "" && preview.Service.Kind != service.Kind {
 		return protocol.ServicePreview{}, "", fmt.Errorf("host %s changed service semantics in its preview", host.Alias)
 	}

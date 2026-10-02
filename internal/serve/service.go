@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -49,6 +51,7 @@ const (
 
 // Service is one durable route on an origin host.
 type Service struct {
+	DisplayName   string
 	Name          string
 	Kind          Kind
 	Target        string
@@ -310,6 +313,9 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 }
 
 func normalizeService(service Service) (Service, error) {
+	if err := ValidateDisplayName(service.DisplayName); err != nil {
+		return Service{}, err
+	}
 	if err := validateRouteName(service.Name); err != nil {
 		return Service{}, err
 	}
@@ -409,4 +415,14 @@ func routeCharacter(character rune) bool {
 		character >= 'A' && character <= 'Z' ||
 		character >= '0' && character <= '9' ||
 		strings.ContainsRune("-._~", character)
+}
+
+func ValidateDisplayName(name string) error {
+	if len(name) > 256 || !utf8.ValidString(name) {
+		return fmt.Errorf("serve: display name must be valid UTF-8 up to 256 bytes")
+	}
+	if strings.TrimSpace(name) != name || strings.ContainsFunc(name, unicode.IsControl) {
+		return fmt.Errorf("serve: display name must have no control characters or surrounding whitespace")
+	}
+	return nil
 }

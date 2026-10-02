@@ -15,7 +15,7 @@ import (
 
 const (
 	ManifestSchema        = 1
-	CurrentStateVersion   = 9
+	CurrentStateVersion   = 10
 	CurrentWorkerProtocol = 1
 	CurrentUpdateProtocol = 1
 	CurrentJournalVersion = 1

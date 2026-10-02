@@ -392,19 +392,22 @@ grep -Fq 'serving https://secret.shaulavo.dev/secret on pc' "$TEST_ROOT/secret-a
 wait_for_public_body secret.shaulavo.dev /secret/ SECRET_PUBLIC_MARKER ||
   fail "explicitly approved credential directory did not become reachable"
 
+"${CLI[@]}" serve label /api 'CLI Proxy' --host pc >"$TEST_ROOT/label.out" 2>"$TEST_ROOT/label.err" ||
+  fail "label existing service: $(<"$TEST_ROOT/label.err")"
+
 "${CLI[@]}" serve ls --timeout 800ms >"$TEST_ROOT/list-live.out" 2>"$TEST_ROOT/list-live.err" ||
   fail "list live services: $(<"$TEST_ROOT/list-live.err")"
 grep -Fq "warning: pc: $SHADOW_WARNING" "$TEST_ROOT/list-live.err" ||
   fail "live list omitted the private-route shadow warning: $(<"$TEST_ROOT/list-live.err")"
-grep -Eq '^ROUTE[[:space:]]+HOST[[:space:]]+KIND[[:space:]]+TARGET[[:space:]]+SCOPE[[:space:]]+STATE[[:space:]]+HEALTH[[:space:]]+URL$' \
+grep -Eq '^ROUTE[[:space:]]+NAME[[:space:]]+HOST[[:space:]]+KIND[[:space:]]+TARGET[[:space:]]+SCOPE[[:space:]]+STATE[[:space:]]+HEALTH[[:space:]]+URL$' \
   "$TEST_ROOT/list-live.out" || fail "service list header is incomplete: $(<"$TEST_ROOT/list-live.out")"
-grep -Eq "^/blog[[:space:]]+pc[[:space:]]+static[[:space:]]+$ORIGIN_HOME/site[[:space:]]+public[[:space:]]+-[[:space:]]+healthy[[:space:]]+https://blog\.shaulavo\.dev/blog$" \
+grep -Eq "^/blog[[:space:]]+blog[[:space:]]+pc[[:space:]]+static[[:space:]]+$ORIGIN_HOME/site[[:space:]]+public[[:space:]]+-[[:space:]]+healthy[[:space:]]+https://blog\.shaulavo\.dev/blog$" \
   "$TEST_ROOT/list-live.out" || fail "live list omitted the public static URL: $(<"$TEST_ROOT/list-live.out")"
-grep -Eq "^/files[[:space:]]+pc[[:space:]]+files[[:space:]]+$TEST_ROOT/files[[:space:]]+tailnet[[:space:]]+-[[:space:]]+healthy[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/files$" \
+grep -Eq "^/files[[:space:]]+files[[:space:]]+pc[[:space:]]+files[[:space:]]+$TEST_ROOT/files[[:space:]]+tailnet[[:space:]]+-[[:space:]]+healthy[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/files$" \
   "$TEST_ROOT/list-live.out" || fail "live list omitted the private fallback URL: $(<"$TEST_ROOT/list-live.out")"
-grep -Eq "^/api[[:space:]]+pc[[:space:]]+proxy[[:space:]]+$BACKEND_PORT[[:space:]]+tailnet[[:space:]]+-[[:space:]]+healthy[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/api$" \
+grep -Eq "^/api[[:space:]]+CLI Proxy[[:space:]]+pc[[:space:]]+proxy[[:space:]]+${BACKEND_PORT}[[:space:]]+tailnet[[:space:]]+-[[:space:]]+healthy[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/api$" \
   "$TEST_ROOT/list-live.out" || fail "live list omitted the proxy fallback URL: $(<"$TEST_ROOT/list-live.out")"
-grep -Eq "^/secret[[:space:]]+pc[[:space:]]+static[[:space:]]+$TEST_ROOT/secret[[:space:]]+public[[:space:]]+-[[:space:]]+healthy[[:space:]]+https://secret\.shaulavo\.dev/secret$" \
+grep -Eq "^/secret[[:space:]]+secret[[:space:]]+pc[[:space:]]+static[[:space:]]+$TEST_ROOT/secret[[:space:]]+public[[:space:]]+-[[:space:]]+healthy[[:space:]]+https://secret\.shaulavo\.dev/secret$" \
   "$TEST_ROOT/list-live.out" || fail "live list omitted the approved public URL: $(<"$TEST_ROOT/list-live.out")"
 
 stop_process "$ORIGIN_PID"
@@ -414,10 +417,12 @@ timeout --kill-after=1s 3s "${CLI[@]}" serve ls --timeout 150ms \
   fail "offline service list exceeded its hard deadline: $(<"$TEST_ROOT/list-offline.err")"
 grep -Fq "warning: pc (cached): $SHADOW_WARNING" "$TEST_ROOT/list-offline.err" ||
   fail "cached list omitted the private-route shadow warning: $(<"$TEST_ROOT/list-offline.err")"
-grep -Eq '^/blog[[:space:]]+pc[[:space:]]+static.*offline/stale[[:space:]]+https://blog\.shaulavo\.dev/blog$' \
+grep -Eq '^/blog[[:space:]]+blog[[:space:]]+pc[[:space:]]+static.*offline/stale[[:space:]]+https://blog\.shaulavo\.dev/blog$' \
   "$TEST_ROOT/list-offline.out" || fail "offline cache lost the public URL: $(<"$TEST_ROOT/list-offline.out")"
-grep -Eq "^/files[[:space:]]+pc[[:space:]]+files.*offline/stale[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/files$" \
+grep -Eq "^/files[[:space:]]+files[[:space:]]+pc[[:space:]]+files.*offline/stale[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/files$" \
   "$TEST_ROOT/list-offline.out" || fail "offline cache lost the private fallback URL: $(<"$TEST_ROOT/list-offline.out")"
+grep -Eq "^/api[[:space:]]+CLI Proxy[[:space:]]+pc[[:space:]]+proxy.*offline/stale" \
+  "$TEST_ROOT/list-offline.out" || fail "offline cache lost the display name: $(<"$TEST_ROOT/list-offline.out")"
 grep -Fq 'pc: unavailable' "$TEST_ROOT/list-offline.err" ||
   fail "offline service list omitted its host diagnostic: $(<"$TEST_ROOT/list-offline.err")"
 

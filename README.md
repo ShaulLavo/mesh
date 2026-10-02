@@ -133,6 +133,12 @@ A proxy route can also own the command behind its port. `mesh serve pc --run
 to `127.0.0.1:5173` and stops it after 15 idle minutes. See
 [Serve a dev server on demand](docs/serve-on-demand.md).
 
+Service lists and the dashboard can show a descriptive name alongside a route.
+Set it when publishing with `--label 'Fregat dev'`, or rename an existing entry
+with `mesh serve label :5173 'Fregat dev' --host pc`. The label is stored on the
+serving host and survives later publications. Changing it keeps the route, ports,
+and running process.
+
 To reach an app on your current machine from outside the tailnet, reserve a
 hostname with `mesh serve claim vps blog.shaulavo.dev`, then connect a named
 SSH reverse forward. See [Reach a local app through the public edge](docs/reverse-tunnels.md)

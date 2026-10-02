@@ -32,7 +32,7 @@ func (q *Queries) DeleteCachedServicesForHost(ctx context.Context, hostID string
 }
 
 const listCachedServices = `-- name: ListCachedServices :many
-SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate
+SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate, display_name
 FROM cached_services
 ORDER BY host_id, name
 LIMIT 8193
@@ -59,6 +59,7 @@ func (q *Queries) ListCachedServices(ctx context.Context) ([]CachedService, erro
 			&i.Problem,
 			&i.ObservedAt,
 			&i.Isolate,
+			&i.DisplayName,
 		); err != nil {
 			return nil, err
 		}
@@ -74,7 +75,7 @@ func (q *Queries) ListCachedServices(ctx context.Context) ([]CachedService, erro
 }
 
 const listCachedServicesForHost = `-- name: ListCachedServicesForHost :many
-SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate
+SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate, display_name
 FROM cached_services
 WHERE host_id = ?
 ORDER BY name
@@ -101,6 +102,7 @@ func (q *Queries) ListCachedServicesForHost(ctx context.Context, hostID string) 
 			&i.Problem,
 			&i.ObservedAt,
 			&i.Isolate,
+			&i.DisplayName,
 		); err != nil {
 			return nil, err
 		}
@@ -127,8 +129,9 @@ INSERT INTO cached_services (
     healthy,
     problem,
     observed_at,
-    isolate
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    isolate,
+    display_name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (host_id, name) DO UPDATE SET
 	private_name = excluded.private_name,
     kind = excluded.kind,
@@ -138,6 +141,7 @@ ON CONFLICT (host_id, name) DO UPDATE SET
     healthy = excluded.healthy,
     problem = excluded.problem,
     observed_at = excluded.observed_at,
+    display_name = excluded.display_name,
     isolate = excluded.isolate
 `
 
@@ -153,6 +157,7 @@ type UpsertCachedServiceParams struct {
 	Problem       string
 	ObservedAt    int64
 	Isolate       int64
+	DisplayName   string
 }
 
 func (q *Queries) UpsertCachedService(ctx context.Context, arg UpsertCachedServiceParams) error {
@@ -168,6 +173,7 @@ func (q *Queries) UpsertCachedService(ctx context.Context, arg UpsertCachedServi
 		arg.Problem,
 		arg.ObservedAt,
 		arg.Isolate,
+		arg.DisplayName,
 	)
 	return err
 }
