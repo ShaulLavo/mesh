@@ -21,6 +21,9 @@ type dashboardSummaryRow struct {
 func (m dashboardModel) summaryRows(services bool, width int) ([]dashboardSummaryRow, int) {
 	var rows []dashboardSummaryRow
 	total := 0
+	if services && m.usageEnabled {
+		m.serviceHostWidth = m.usageServiceHostWidth()
+	}
 	hostWidth := 0
 	if !services {
 		hostWidth = m.sessionHostWidth(width)
@@ -54,15 +57,15 @@ func (m dashboardModel) sessionRow(host cli.DashboardHostView, session cli.Dashb
 	if cached {
 		state = safeText(session.State)
 	}
-	text := dashboardSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), session.ID, name, state, safeText(session.Command), dashboardAge(m.now, host.Sessions.ObservedAt), width, hostWidth)
-	if cached {
-		text = m.paint(dashboardCachedStyle).Render(dashboardSessionColumns(safeText(host.Host.Alias), session.ID, name, state, safeText(session.Command), dashboardAge(m.now, host.Sessions.ObservedAt), width, hostWidth))
-	}
 	if m.usageEnabled {
 		if cached {
 			state = m.paint(dashboardCachedStyle).Render("cached " + safeText(session.State))
 		}
 		return m.usageSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), session.ID, name, state, safeText(session.Command), width, hostWidth)
+	}
+	text := dashboardSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), session.ID, name, state, safeText(session.Command), dashboardAge(m.now, host.Sessions.ObservedAt), width, hostWidth)
+	if cached {
+		text = m.paint(dashboardCachedStyle).Render(dashboardSessionColumns(safeText(host.Host.Alias), session.ID, name, state, safeText(session.Command), dashboardAge(m.now, host.Sessions.ObservedAt), width, hostWidth))
 	}
 	return text
 }
@@ -89,41 +92,57 @@ func dashboardSessionColumns(host, id, name, state, command, age string, width, 
 	return dashboardFit(host, hostWidth) + " " + dashboardFit(id, 5) + " " + dashboardFit(name, nameWidth) + " " + dashboardFit(state, stateWidth) + " " + dashboardFit(command, max(0, width-fixed)) + " " + dashboardFit(age, 6)
 }
 func (m dashboardModel) serviceRows(host cli.DashboardHostView, width int) []dashboardSummaryRow {
+	if m.usageEnabled {
+		m.serviceHostWidth = m.usageServiceHostWidth()
+	}
 	var rows []dashboardSummaryRow
+	hostLabel := m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias))
+	age := dashboardAge(m.now, host.Services.ObservedAt)
 	for _, service := range host.Services.Rows {
-		mark := "●"
-		if m.ascii {
-			mark = "*"
-		}
-		state := mark + " " + safeText(service.State)
-		switch {
-		case service.Failed:
-			state = m.paint(dashboardFailureStyle).Render(state)
-		case service.HealthUnknown || service.State == "idle":
-			state = m.paint(dashboardMutedStyle).Render(state)
-		case service.State == "starting" || service.State == "stopping":
-			state = m.paint(dashboardCachedStyle).Render(state)
-		default:
-			state = m.paint(dashboardGoodStyle).Render(state)
-		}
-		if dashboardServicesCached(host, m.now) {
-			state = m.paint(dashboardCachedStyle).Render(mark + " " + service.State + " cached")
-			if m.usageEnabled {
-				state = m.paint(dashboardCachedStyle).Render("cached " + service.State)
-			}
-		}
-		text := dashboardServiceColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), safeText(service.Name), state, dashboardAge(m.now, host.Services.ObservedAt), width)
+		state := m.serviceState(host, service)
+		name := safeText(service.Name)
+		var text string
 		if m.usageEnabled {
-			text = m.usageServiceColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), safeText(service.Name), state, dashboardAge(m.now, host.Services.ObservedAt), width)
+			text = m.usageServiceColumns(hostLabel, name, state, age, width)
+		} else {
+			text = dashboardServiceColumns(hostLabel, name, state, age, width)
 		}
 		rows = append(rows, dashboardSummaryRow{text: text, failed: service.Failed, priority: dashboardServicePriority(service)})
 	}
 	return rows
 }
+func (m dashboardModel) serviceState(host cli.DashboardHostView, service cli.DashboardService) string {
+	mark := "●"
+	if m.ascii {
+		mark = "*"
+	}
+	state := mark + " " + safeText(service.State)
+	switch {
+	case service.Failed:
+		state = m.paint(dashboardFailureStyle).Render(state)
+	case service.HealthUnknown || service.State == "idle":
+		state = m.paint(dashboardMutedStyle).Render(state)
+	case service.State == "starting" || service.State == "stopping":
+		state = m.paint(dashboardCachedStyle).Render(state)
+	default:
+		state = m.paint(dashboardGoodStyle).Render(state)
+	}
+	if dashboardServicesCached(host, m.now) {
+		state = m.paint(dashboardCachedStyle).Render(mark + " " + service.State + " cached")
+		if m.usageEnabled {
+			state = m.paint(dashboardCachedStyle).Render("cached " + service.State)
+		}
+	}
+	return state
+}
+
 func dashboardServiceColumns(host, name, state, age string, width int) string {
 	return dashboardFit(host, 10) + " " + dashboardFit(name, max(0, width-10-18-6-3)) + " " + dashboardFit(state, 18) + " " + dashboardFit(age, 6)
 }
 func (m dashboardModel) summaries(budget int) []string {
+	if m.renderWork != nil {
+		m.renderWork.summaries++
+	}
 	if m.usageEnabled {
 		return m.usageSummaries(budget)
 	}
@@ -159,6 +178,9 @@ func (m dashboardModel) summary(services bool, width, budget int) []string {
 	}
 	if !services {
 		return m.sessionSummary(width, budget)
+	}
+	if m.usageEnabled {
+		m.serviceHostWidth = m.usageServiceHostWidth()
 	}
 	rows, total := m.summaryRows(true, width-4)
 	if total == 0 {
@@ -241,7 +263,16 @@ func (m dashboardModel) liveSelection(limit int) []int {
 	}
 	return selected
 }
-func (m dashboardModel) attention(width, budget int) []string {
+
+type dashboardAttention struct {
+	width, total int
+	groups       [][]string
+}
+
+func (m dashboardModel) attentionForWidth(width int) dashboardAttention {
+	if m.attentionData != nil && m.attentionData.width == width {
+		return *m.attentionData
+	}
 	var groups [][]string
 	total := 0
 	for _, host := range m.hosts {
@@ -261,9 +292,14 @@ func (m dashboardModel) attention(width, budget int) []string {
 		text := m.paint(dashboardFailureStyle).Render(safeText(host.Host.Alias)+" · "+string(host.Connection)) + " · last reply " + m.paint(dashboardCachedStyle).Render(dashboardAge(m.now, host.LastReply))
 		groups = append(groups, strings.Split(ansi.Wrap(text, max(1, width-4), ""), "\n"))
 	}
+	return dashboardAttention{width: width, total: total, groups: groups}
+}
+
+func (m dashboardModel) attention(width, budget int) []string {
+	data := m.attentionForWidth(width)
 	var body []string
 	visible := 0
-	for _, group := range groups {
+	for _, group := range data.groups {
 		group = m.usageAttentionGroup(group, width, max(0, budget-2-len(body)))
 		if len(group) == 0 || len(body)+len(group) > max(0, budget-2) {
 			continue
@@ -274,7 +310,7 @@ func (m dashboardModel) attention(width, budget int) []string {
 	if len(body) == 0 {
 		return nil
 	}
-	label := fmt.Sprintf("Attention · %d · %d/%d visible", total, visible, total)
+	label := fmt.Sprintf("Attention · %d · %d/%d visible", data.total, visible, data.total)
 	return m.framedPanel(dashboardRuleTitle(m.paint(dashboardCachedStyle).Render(label), "", width-2, m.ascii, m.paint(dashboardFailureStyle)), body, width, m.paint(dashboardFailureStyle))
 }
 

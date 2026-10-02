@@ -91,21 +91,30 @@ type dashboardUsageMsg usagefeed.Result
 type dashboardHostMsg cli.DashboardHostView
 type dashboardTickMsg time.Time
 type dashboardDoneMsg struct{ err error }
+type dashboardRenderWork struct {
+	summaries, serviceWidthVisits, layouts, gpuPairs int
+}
+
 type dashboardModel struct {
-	hosts         []cli.DashboardHostView
-	now           time.Time
-	width, height int
-	watchError    error
-	frame         string
-	history       map[string]dashboardHostHistory
-	ramTotals     map[string]uint64
-	wall, ascii   bool
-	profile       colorprofile.Profile
-	palette       dashboardPalette
-	usageEnabled  bool
-	usageFailing  bool
-	usageRevision uint64
-	usage         dashboardUsage
+	layout           dashboardLayout
+	layoutPrepared   bool
+	attentionData    *dashboardAttention
+	serviceHostWidth int
+	renderWork       *dashboardRenderWork
+	hosts            []cli.DashboardHostView
+	now              time.Time
+	width, height    int
+	watchError       error
+	frame            string
+	history          map[string]dashboardHostHistory
+	ramTotals        map[string]uint64
+	wall, ascii      bool
+	profile          colorprofile.Profile
+	palette          dashboardPalette
+	usageEnabled     bool
+	usageFailing     bool
+	usageRevision    uint64
+	usage            dashboardUsage
 }
 
 func newDashboardForTerminal(input cli.DashboardInput, now time.Time, terminal string) dashboardModel {
@@ -136,10 +145,10 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.ColorProfileMsg:
 		m.profile = message.Profile
-		m.frame = m.render()
+		m.frame, m.layout = m.renderFrame()
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, message.Width), max(1, message.Height)
-		m.frame = m.render()
+		m.frame, m.layout = m.renderFrame()
 	case dashboardUsageMsg:
 		m.usageFailing = message.Failing
 		if message.Snapshot != nil && message.Revision != m.usageRevision {
@@ -151,7 +160,7 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case dashboardTickMsg:
 		m.now = time.Time(message)
 		m.pruneHistory()
-		m.frame = m.render()
+		m.frame, m.layout = m.renderFrame()
 		return m, dashboardTick()
 	case dashboardDoneMsg:
 		m.watchError = message.err

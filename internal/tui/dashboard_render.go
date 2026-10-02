@@ -19,13 +19,26 @@ func dashboardAlign(left, right string, width int) string {
 	return dashboardFit(left, max(0, width-ansi.StringWidth(right))) + right
 }
 func (m dashboardModel) render() string {
+	frame, _ := m.renderFrame()
+	return frame
+}
+
+func (m dashboardModel) renderFrame() (string, dashboardLayout) {
 	if m.width < 80 || m.height < 24 {
-		return ansi.Truncate(fmt.Sprintf("Mesh fleet needs 80×24; current %d×%d", m.width, m.height), m.width, "…")
+		return ansi.Truncate(fmt.Sprintf("Mesh fleet needs 80×24; current %d×%d", m.width, m.height), m.width, "…"), dashboardLayout{}
+	}
+	if m.width >= 140 && m.height >= 40 {
+		data := m.attentionForWidth(m.summaryAttentionWidth())
+		m.attentionData = &data
+		m.layout = m.layoutForSummaries(m.summariesHeight(m.height))
+		m.layoutPrepared = true
+	} else {
+		m.layout = dashboardLayout{}
 	}
 	lines := m.header()
 	visible := len(m.hosts)
 	switch {
-	case m.width >= 140 && m.height >= 40 && m.cardsHeight()+len(m.summaries(m.height)) <= m.height-5:
+	case m.width >= 140 && m.height >= 40 && m.cardsHeight()+m.layout.key.summaries <= m.height-5:
 		lines = append(lines, m.cards()...)
 	case len(m.hosts) > 6:
 		visible = min(len(m.hosts), m.height-11)
@@ -48,7 +61,7 @@ func (m dashboardModel) render() string {
 	for index, line := range lines {
 		lines[index] = dashboardFit(line, m.width)
 	}
-	return m.paint(dashboardTextStyle).Render(strings.Join(lines, "\n"))
+	return m.paint(dashboardTextStyle).Render(strings.Join(lines, "\n")), m.layout
 }
 func (m dashboardModel) header() []string {
 	totals := m.totals()

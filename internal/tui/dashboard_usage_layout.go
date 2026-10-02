@@ -29,14 +29,15 @@ func (m dashboardModel) usageSummaries(budget int) []string {
 }
 
 func (m dashboardModel) usageAttentionGroup(group []string, width, budget int) []string {
-	if !m.usageEnabled || len(group) <= budget {
+	height := m.attentionGroupHeight(len(group), budget)
+	if height == len(group) {
 		return group
 	}
-	if budget < min(2, len(group)) {
+	if height == 0 {
 		return nil
 	}
-	group = group[:budget]
-	group[budget-1] = ansi.Truncate(group[budget-1], max(0, width-5), "") + "…"
+	group = group[:height]
+	group[height-1] = ansi.Truncate(group[height-1], max(0, width-5), "") + "…"
 	return group
 }
 
@@ -64,14 +65,24 @@ func (m dashboardModel) usageSessionColumns(host, id, name, state, command strin
 	return dashboardFit(host, hostWidth) + " " + dashboardFit(id, 5) + " " + dashboardFit(name, nameWidth) + " " + dashboardFit(state, 9) + " " + dashboardFit(command, commandWidth)
 }
 
-func (m dashboardModel) usageServiceColumns(host, name, state, age string, width int) string {
+func (m dashboardModel) usageServiceHostWidth() int {
+	if m.serviceHostWidth != 0 {
+		return m.serviceHostWidth
+	}
 	hostWidth := 4
 	for _, entry := range m.hosts {
+		if m.renderWork != nil {
+			m.renderWork.serviceWidthVisits++
+		}
 		if len(entry.Services.Rows) > 0 {
 			hostWidth = max(hostWidth, ansi.StringWidth(entry.Host.Alias))
 		}
 	}
-	hostWidth = min(hostWidth, 11)
+	return min(hostWidth, 11)
+}
+
+func (m dashboardModel) usageServiceColumns(host, name, state, age string, width int) string {
+	hostWidth := m.usageServiceHostWidth()
 	return dashboardFit(host, hostWidth) + " " + dashboardFit(name, max(0, width-hostWidth-20)) + " " + dashboardFit(state, 14) + " " + dashboardFit(age, 3)
 }
 
