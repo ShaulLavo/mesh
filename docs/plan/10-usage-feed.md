@@ -72,8 +72,12 @@ Use Plan 289's JSON v1 schema, not a provider response shape:
   `source`, cache-inspection `checkedAt`, actual quota-observation `lastSeenAt`.
 - `routing {mode, active, lastServedAt}`: active is boolean or **null**;
   cooldown contains a sanitized reason/recovery time or null.
+- Optional account `credits {balance, unlimited}`: a finite nonnegative balance
+  and a boolean; absence means no credit observation.
 - `windows[]`: stable ID, label, `usedPercent`, `resetsAt`, `windowMinutes`,
   normalized status, `lastSeenAt`, source. Missing percentage/reset/length is null.
+  `reset-order` denotes historic routing-state observations. Future safe source
+  names retain values as stale readings; other fields remain strictly validated.
 
 Publication and cache inspection do not refresh observation age. Keep windows
 independent; never sum percentages, derive quotas from token counters, assume a
@@ -132,8 +136,10 @@ Rows 27–43 retain the three-column split:
 | 105 | 1 | Gap |
 | 106–159 | 54 | AI plans: 17 rows including frame, 50 inner cells, three accounts and six full 28-cell meters |
 
-Each account takes **five rows**: one identity/age line, then two lines per
-window. Each provider has exactly one heading, sharing its first account's
+An account with two readings takes **five rows**: one identity/age line, then
+two lines per window. An empty account takes two rows, and a single reading
+takes three. Optional credits add one line to accounts with readings. Each
+provider has exactly one heading, sharing its first account's
 identity line; following accounts are indented beneath it. The identity line
 shows the short account name, plan, observed routing badge where available, and
 `seen` / `stale` age. The two visible windows per account are **5h** and **Weekly**:
@@ -146,10 +152,13 @@ The normal sample shows Claude Max `shaul9191` at 20% / 66%, Codex Pro
 at 100% / 97% with `cooldown` and `stale 18m`. These are sample observations,
 not claims about today's provider quota or proven live account selection.
 
-The no-data sample retains the same provider groups, labels, plans and five-row
-slots, with `seen —`, `No data yet`, and `Waiting for normal traffic` in each
-window slot. No unobserved routing badge or filled meter appears. Expected-window
-placeholders describe the display slots, not an unobserved real allowance.
+Empty accounts keep their identity/age line and one summary: `No reading yet ·
+waits for traffic`, or `Out of rotation · no reading` when disabled. Window
+placeholders and reserved empty slots are absent; the freed rows admit more
+accounts in stable order. Accounts with observations retain their full window
+facts and meters. Optional credits appear beneath the identity, sharing the
+summary line on an empty account. Every known reset shows `resets <countdown>`,
+including disabled, historic and percentage-unknown readings.
 
 Sessions gives 38 columns and Services gives 17 columns to AI plans compared
 with the historical v2 design. Both live sessions and all seven services still
@@ -240,9 +249,12 @@ bytes skip parsing. Failed reads show feed availability separately from actual
 account/window observation ages.
 
 Projection occurs on publication and retains at most twelve display accounts
-and two windows each. The wall panel always claims at most seventeen rows, so
+and two readable aggregate windows each. Model-scoped `model:` window IDs are
+hidden; they describe the aggregate allowance and consume no main account rows.
+Unreadable windows are filtered before the two-window cap. The wall panel always claims at most seventeen rows, so
 hidden accounts cannot consume host graph rows. Three five-row slots remain at
-160×45; omitted accounts and extra windows have explicit counts. Compact views
+160×45 when every account has two readings; empty and single-reading accounts
+use fewer rows. Omitted accounts and extra windows have explicit counts. Compact views
 label their paired percentages `used/left`, retain full approved host/account
 identities, and retain failure attention while reporting omitted services.
 
@@ -255,6 +267,21 @@ Actual production-renderer terminal-cell fixtures, personally read back:
 ![Implemented compact 80×24 fixture](images/usage-panel-implementation-compact.png)
 
 ![Implemented unhealthy-service attention fixture](images/usage-panel-implementation-failure.png)
+
+![Empty and observed accounts share the freed rows](images/usage-panel-implementation-mixed.png)
+
+![Disabled historic readings retain credits, resets and age](images/usage-panel-implementation-historic.png)
+
+![Aggregate Weekly with its model-scoped copy hidden](images/usage-panel-implementation-model-scoped.png)
+
+![Compact historic warning, unknown and exhausted statuses](images/usage-panel-implementation-historic-status-compact.png)
+
+Compact rows preserve the full window label, reset countdown, status and actual
+independent age. When needed, paired percentages yield to those facts; the wall
+keeps the percentages. Long exhausted history uses `spent`, and compact ages may
+join their duration units (`stale 1d1h`). Unknown compact status uses `?` when
+space is limited; [known-age unknown and allowed readings](images/usage-panel-implementation-historic-late-compact.png)
+retain their complete reset and age.
 
 These PNGs are generated from `dashboardModel.render()` through the existing VT
 emulator; their positions, foregrounds and bold attributes come from rendered
@@ -342,8 +369,8 @@ Compact reset rows reserve space for percentages, reset-passed state and their
 independent age; the footer carries `reset passed · awaiting traffic` and the
 `AI used/left` legend. Explicit cooldown and disabled states survive null quota
 ages and null optional cooldown details. A single observed Weekly window has a
-neutral missing-window slot; zero observed windows retain the approved no-data
-slots. Cached service states reserve fourteen cells, and compact cached sessions
+single window row pair on the wall and one row in compact views. Zero observed
+windows use one account summary beneath the identity; neither case pads windows. Cached service states reserve fourteen cells, and compact cached sessions
 retain both IDs with explicit cached state.
 
 Local proof after these corrections: full feed/TUI race tests and affected CLI

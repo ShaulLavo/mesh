@@ -50,8 +50,18 @@ func projectDashboardUsage(snapshot *usagefeed.Snapshot) dashboardUsage {
 }
 
 func projectUsageAccount(account usagefeed.Account, first bool) dashboardUsageAccount {
-	result := dashboardUsageAccount{Account: account, first: first, extraWindows: max(0, len(account.Windows)-2)}
-	result.Windows = append([]usagefeed.Window(nil), account.Windows[:min(2, len(account.Windows))]...)
+	result := dashboardUsageAccount{Account: account, first: first}
+	result.Windows = nil
+	for _, window := range account.Windows {
+		if strings.HasPrefix(window.ID, "model:") || !usageWindowHasReading(window) {
+			continue
+		}
+		if len(result.Windows) == 2 {
+			result.extraWindows++
+			continue
+		}
+		result.Windows = append(result.Windows, window)
+	}
 	return result
 }
 

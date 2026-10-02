@@ -1,17 +1,8 @@
 ┌AI plans · 3 accounts · passive ─────────────────── ┐
 │ Claude · shaul9191 · Max                    seen — │
-│ 5h     No data yet                                 │
-│ Waiting for normal traffic                         │
-│ Weekly No data yet                                 │
-│ Waiting for normal traffic                         │
+│ No reading yet · waits for traffic                 │
 │ Codex · shaul9191 · Pro                     seen — │
-│ 5h     No data yet                                 │
-│ Waiting for normal traffic                         │
-│ Weekly No data yet                                 │
-│ Waiting for normal traffic                         │
+│ No reading yet · waits for traffic                 │
 │         shaul.lavochkin · Pro               seen — │
-│ 5h     No data yet                                 │
-│ Waiting for normal traffic                         │
-│ Weekly No data yet                                 │
-│ Waiting for normal traffic                         │
+│ No reading yet · waits for traffic                 │
 └────────────────────────────────────────────────────┘

@@ -34,6 +34,29 @@ type Account struct {
 	Routing    Routing    `json:"routing"`
 	Windows    []Window   `json:"windows"`
 	Cooldown   *Cooldown  `json:"cooldown"`
+	Credits    *Credits   `json:"credits,omitempty"`
+}
+
+type Credits struct {
+	Balance   float64 `json:"balance"`
+	Unlimited bool    `json:"unlimited"`
+}
+
+func (credits *Credits) UnmarshalJSON(data []byte) error {
+	var fields struct {
+		Balance   *float64 `json:"balance"`
+		Unlimited *bool    `json:"unlimited"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&fields); err != nil {
+		return fmt.Errorf("usage feed: invalid credits")
+	}
+	if fields.Balance == nil || fields.Unlimited == nil {
+		return fmt.Errorf("usage feed: incomplete credits")
+	}
+	*credits = Credits{Balance: *fields.Balance, Unlimited: *fields.Unlimited}
+	return nil
 }
 
 type Routing struct {
@@ -103,6 +126,9 @@ func validateAccount(account Account) error {
 	if !timestamp(account.CheckedAt) || !timestamp(account.LastSeenAt) || !timestamp(account.Routing.LastServedAt) {
 		return fmt.Errorf("usage feed: invalid account timestamp")
 	}
+	if !validCredits(account.Credits) {
+		return fmt.Errorf("usage feed: invalid credits")
+	}
 	if account.Cooldown != nil {
 		if err := validateCooldown(*account.Cooldown); err != nil {
 			return err
@@ -121,8 +147,12 @@ func validateAccount(account Account) error {
 	return nil
 }
 
+func validCredits(credits *Credits) bool {
+	return credits == nil || finite(credits.Balance) && credits.Balance >= 0
+}
+
 func validateWindow(window Window) error {
-	if !oneOf(window.Status, "allowed", "warning", "exhausted", "unknown") || !source(window.Source) {
+	if !oneOf(window.Status, "allowed", "warning", "exhausted", "unknown") || !text(window.Source) {
 		return fmt.Errorf("usage feed: invalid window state")
 	}
 	if window.UsedPercent != nil && (!finite(*window.UsedPercent) || *window.UsedPercent < 0 || *window.UsedPercent > 100 || window.LastSeenAt == nil) {
@@ -181,6 +211,7 @@ func clone(snapshot *Snapshot) *Snapshot {
 	result.Accounts = make([]Account, len(snapshot.Accounts))
 	for index, account := range snapshot.Accounts {
 		account.CheckedAt, account.LastSeenAt = copyValue(account.CheckedAt), copyValue(account.LastSeenAt)
+		account.Credits = copyValue(account.Credits)
 		account.Routing.Active = copyValue(account.Routing.Active)
 		account.Routing.LastServedAt = copyValue(account.Routing.LastServedAt)
 		if account.Cooldown != nil {
