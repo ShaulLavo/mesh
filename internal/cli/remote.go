@@ -63,9 +63,13 @@ func openVerifiedHostInfo(ctx context.Context, host HostRecord, dial HostDialer)
 	return conn, *response.Host, nil
 }
 
+type hostIdentityError struct{ alias string }
+
+func (e *hostIdentityError) Error() string { return fmt.Sprintf("host %s identity changed", e.alias) }
+
 func validateHostInfo(expected HostRecord, actual protocol.HostInfo) error {
 	if actual.ID != expected.ID || actual.MeshIdentity != expected.MeshIdentity {
-		return fmt.Errorf("host %s identity changed", expected.Alias)
+		return &hostIdentityError{alias: expected.Alias}
 	}
 	if actual.Wake != nil {
 		if err := validateHostWake(actual); err != nil {
