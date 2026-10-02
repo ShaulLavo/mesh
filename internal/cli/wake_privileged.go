@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/shaul/mesh/internal/macapp"
 	"github.com/shaul/mesh/internal/wake"
 )
 
@@ -42,7 +43,7 @@ func armNIC(ctx context.Context, output io.Writer, mac string, arm bool) (wake.A
 		}
 		return wake.Disarm(ctx, mac)
 	}
-	self, err := os.Executable()
+	self, err := macapp.Installed()
 	if err != nil {
 		return wake.ArmState{}, fmt.Errorf("locate the running mesh binary: %w", err)
 	}

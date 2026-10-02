@@ -181,7 +181,7 @@ func TestLifecycleListsSessionsAndHostIdentity(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatalf("host info handled = %v, error = %v", handled, err)
 	}
-	if response.Type != protocol.TypeHostInfoResult || response.RequestID != "host-1" || response.Host == nil || response.Host.ID != "host-a" || response.Host.MeshIdentity != "mesh-key" || response.Host.TailscaleName != tailscaleName {
+	if response.Type != protocol.TypeHostInfoResult || response.RequestID != "host-1" || response.Host == nil || response.Host.ID != "host-a" || response.Host.MeshIdentity != "mesh-key" || response.Host.TailscaleName != tailscaleName || !response.Host.ServiceHealthSupported {
 		t.Fatalf("host response = %+v", response)
 	}
 }

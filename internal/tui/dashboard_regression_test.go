@@ -77,13 +77,13 @@ func TestDashboardPanelUsesFourCorners(t *testing.T) {
 
 func TestDashboardLocalTitleNamesHostOnce(t *testing.T) {
 	model := newDashboard(cli.DashboardInput{}, pickerTestNow)
-	for _, alias := range []string{"this host", "adopted-pc"} {
+	for _, alias := range []string{"pi", "adopted-pc"} {
 		host := cli.DashboardHostView{Host: cli.DashboardHost{Alias: alias, Local: true}, Connection: cli.StateReachable}
 		for _, width := range []int{80, 160} {
 			model.width, model.height = width, 48
 			model.hosts = []cli.DashboardHostView{host}
 			view := model.render()
-			if strings.Count(ansi.Strip(model.hostTitle(host)), alias) != 1 || strings.Count(ansi.Strip(model.hostLines(host)[0]), "this host") != 1 {
+			if strings.Count(ansi.Strip(model.hostTitle(host)), alias) != 1 || strings.Contains(ansi.Strip(model.hostLines(host)[0]), "this host") {
 				t.Fatalf("duplicated local name at%d: %s", width, view)
 			}
 		}

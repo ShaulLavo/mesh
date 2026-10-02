@@ -136,7 +136,7 @@ func answerOwnedWorker(dir, id string, stream net.Conn, requests chan<- string) 
 // over a catalog that can neither publish nor find them.
 func unpublishedLifecycle(t *testing.T) (*lifecycle, map[string]<-chan string) {
 	t.Helper()
-	sessionsDir := t.TempDir()
+	sessionsDir := compactSocketTempDir(t)
 	catalog := &lifecycleTestCatalog{reconcileErr: errors.New("catalog is read-only")}
 	connector, err := newWorkerConnector(sessionsDir, catalog)
 	if err != nil {

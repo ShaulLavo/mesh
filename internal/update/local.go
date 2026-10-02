@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/shaul/mesh/internal/macapp"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
@@ -20,9 +21,9 @@ func LocalHost(stateDir, id string) Host {
 func LocalProbe(stateDir string) updateinstall.Probe { return updatebootstrap.Probe(stateDir) }
 
 func installedExecutable() (string, error) {
-	executable, err := os.Executable()
+	executable, err := macapp.Installed()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("locate installed mesh: %w", err)
 	}
 	if err = updateinstall.ValidateInstallationPath(executable); err != nil {
 		return "", err

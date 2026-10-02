@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/shaul/mesh/internal/macapp"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
@@ -176,9 +177,9 @@ func Run(ctx context.Context, request Request, cfg Config) (updateinstall.Status
 }
 
 func installBootstrapHelper(ctx context.Context, stateDir string, spec updateinstall.ServiceSpec) error {
-	executable, err := os.Executable()
+	executable, err := macapp.Installed()
 	if err != nil {
-		return err
+		return fmt.Errorf("locate installed mesh: %w", err)
 	}
 	_, err = updateinstall.InstallHelper(ctx, updateinstall.HelperConfig{StateDir: stateDir, Executable: executable, Kind: spec.Kind, Domain: spec.Domain})
 	return err
@@ -205,9 +206,9 @@ func resumeRetry(ctx context.Context, request Request, cfg Config, prior updatei
 	if err = cfg.Enroll(cfg.StateDir, request.CoordinatorID); err != nil {
 		return status, err
 	}
-	executable, err := os.Executable()
+	executable, err := macapp.Installed()
 	if err != nil {
-		return status, err
+		return status, fmt.Errorf("locate installed mesh: %w", err)
 	}
 	_, err = updateinstall.InstallHelper(ctx, updateinstall.HelperConfig{StateDir: cfg.StateDir, Executable: executable, Kind: config.ServiceSpec.Kind, Domain: config.ServiceSpec.Domain})
 	if err != nil {
