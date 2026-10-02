@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -56,16 +57,10 @@ func TestDashboardIdleTickOutput(t *testing.T) {
 			}
 			output.Reset()
 			draw(after)
-			cells := 0
-			for _, line := range strings.Split(ansi.Strip(output.String()), "\n") {
-				cells += ansi.StringWidth(line)
-			}
-			t.Logf("idle tick: %d bytes, %d written cells", output.Len(), cells)
+			cells := dashboardTerminalAffectedCells(t, emulator, output.String(), model.width, model.height)
+			t.Logf("idle tick: %d bytes, %d affected cells", output.Len(), cells)
 			if output.Len() > 500 || cells > 80 {
-				t.Errorf("idle tick rewrites quiet cells: %d bytes, %d written cells (budget 500 bytes / 80 cells)", output.Len(), cells)
-			}
-			if _, err := emulator.Write(output.Bytes()); err != nil {
-				t.Fatal(err)
+				t.Errorf("idle tick rewrites quiet cells: %d bytes, %d affected cells (budget 500 bytes / 80 cells)", output.Len(), cells)
 			}
 			for y := range model.height {
 				for x := range model.width {
@@ -87,8 +82,26 @@ func TestDashboardIdleTickOutput(t *testing.T) {
 func BenchmarkDashboardIdleTick(b *testing.B) {
 	model := dashboardPerformanceFixture()
 	clear(model.history)
+	renderer := uv.NewTerminalRenderer(io.Discard, []string{"TERM=xterm-256color"})
+	renderer.SetFullscreen(true)
+	renderer.SetColorProfile(model.profile)
+	renderer.SetScrollOptim(true)
+	renderer.SetTabStops(-1)
+	screen := uv.NewScreenBuffer(model.width, model.height)
+	draw := func(frame string) {
+		screen.Clear()
+		uv.NewStyledString(frame).Draw(screen, screen.Bounds())
+		renderer.Render(screen.RenderBuffer)
+		if err := renderer.Flush(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	draw(model.render())
 	b.ReportAllocs()
+	b.ResetTimer()
 	for b.Loop() {
-		_, _ = model.Update(dashboardTickMsg(model.now.Add(time.Second)))
+		next, _ := model.Update(dashboardTickMsg(model.now.Add(time.Second)))
+		model = next.(dashboardModel)
+		draw(model.View().Content)
 	}
 }

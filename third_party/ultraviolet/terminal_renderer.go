@@ -715,8 +715,8 @@ func (s *TerminalRenderer) putRange(newbuf *RenderBuffer, oldLine, newLine Line,
 			if cellEqual(oldCell, newCell) {
 				same++
 			} else {
-				// Skip equal spans when cursor movement costs less than rewriting them.
-				if same > inline {
+				// Estimate the gap's relative movement cost before skipping unchanged cells.
+				if same > len(ansi.CursorForward(same)) {
 					s.emitRange(newbuf, newLine[start:], j-same-start)
 					s.move(newbuf, j, y)
 					start = j
@@ -1529,33 +1529,25 @@ func relativeCursorMove(s *TerminalRenderer, newbuf *RenderBuffer, fx, fy, tx, t
 				xseq = cuf
 			}
 
-			// If we have no attribute and style changes, overwrite is cheaper.
-			var ovw string
+			// Bound overwrite candidates by cursor cost to avoid copying long unchanged spans.
+			var ovw strings.Builder
 			if overwrite && ty >= 0 {
 				for i := 0; i < n; i++ {
 					cell := newbuf.CellAt(fx+i, ty)
-					if cell != nil && cell.Width > 0 {
-						i += cell.Width - 1
-						if !cell.Style.Equal(&s.cur.Style) || !cell.Link.Equal(&s.cur.Link) {
-							overwrite = false
-							break
-						}
+					if cell == nil || cell.Width <= 0 {
+						continue
 					}
+					if !cell.Style.Equal(&s.cur.Style) || !cell.Link.Equal(&s.cur.Link) || ovw.Len()+len(cell.String()) >= len(xseq) {
+						overwrite = false
+						break
+					}
+					ovw.WriteString(cell.String())
+					i += cell.Width - 1
 				}
 			}
 
-			if overwrite && ty >= 0 {
-				for i := 0; i < n; i++ {
-					cell := newbuf.CellAt(fx+i, ty)
-					if cell != nil && cell.Width > 0 {
-						ovw += cell.String()
-						i += cell.Width - 1
-					}
-				}
-			}
-
-			if overwrite && len(ovw) < len(xseq) {
-				xseq = ovw
+			if overwrite && ovw.Len() < len(xseq) {
+				xseq = ovw.String()
 			}
 		} else if tx < fx {
 			n := fx - tx
