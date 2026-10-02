@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # ctrl+c must kill the running command, the way it does in any terminal. That
 # needs the child to be a session leader with the PTY slave as its controlling
 # terminal, because the line discipline only sends SIGINT to the foreground
@@ -14,7 +15,17 @@ if [ -z "${MESH:-}" ]; then
 fi
 T=$(mktemp -d)
 export MESH_STATE_DIR="$T/state"
-trap 'rm -rf "$T"' EXIT
+
+cleanup() {
+  local test_status=$? socket session_dir
+  for socket in "$MESH_STATE_DIR"/s/*/sock; do
+    [[ -S $socket ]] || continue
+    session_dir=${socket%/sock}
+    "$MESH" kill "${session_dir##*/}" >/dev/null 2>&1 || true
+  done
+  finish_fixture_cleanup "$MESH_STATE_DIR" "$T" "$test_status"
+}
+trap cleanup EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
