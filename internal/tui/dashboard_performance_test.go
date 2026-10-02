@@ -18,7 +18,7 @@ import (
 func dashboardPerformanceFixture() dashboardModel {
 	model := dashboardDesignFixture(4)
 	model.height = 45
-	model.hosts = []cli.DashboardHostView{model.hosts[0], model.hosts[3], model.hosts[1], model.hosts[2]}
+	model.hosts = []cli.DashboardHostView{dashboardFixtureHost(model, "pc"), dashboardFixtureHost(model, "macbook"), dashboardFixtureHost(model, "pi"), dashboardFixtureHost(model, "vps")}
 	aliases := []string{"pc", "shauls-macbook-air", "pi", "vps"}
 	sessionCounts := []int{10, 3, 1, 2}
 	for i := range model.hosts {
