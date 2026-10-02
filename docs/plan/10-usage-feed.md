@@ -220,8 +220,10 @@ cells; it introduces no browser preview, new palette or additional mockup varian
       six themes, compact/ASCII, failures and intermediate widths. These are
       deterministic synthetic observations, not live terminal or provider captures.
 - [ ] Verify on the Pi TV. Keep machine-specific proof outside portable committed tests.
-- [ ] Commit/push owned implementation paths and obtain independent review.
-      The coordinator handles CI and merge; the author does not merge this PR.
+- [x] Commit/push owned implementation paths on `feat/tv-usage-panel` through
+      the existing pre-commit and pre-push gates.
+- [ ] Obtain independent implementation review. The coordinator handles CI and
+      merge; the author does not merge this PR.
 - [ ] Ship the gateway/static route and Mesh/Pi in the coordinated deployment run.
       This implementation run makes no live changes, restarts, provider calls
       or deployments.
