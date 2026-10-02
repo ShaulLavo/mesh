@@ -320,6 +320,8 @@ func TestDashboardPerformanceWallWithZeroOrOneCatalogRow(t *testing.T) {
 	for _, services := range []int{0, 1} {
 		t.Run(fmt.Sprintf("services%d", services), func(t *testing.T) {
 			model := dashboardPerformanceFixture()
+			// Match capacity order before comparing the wall against directly rendered cards.
+			model.hosts[2], model.hosts[3] = model.hosts[3], model.hosts[2]
 			for index := range model.hosts {
 				host := &model.hosts[index]
 				host.Sessions = cli.DashboardCatalog[cli.DashboardSession]{ObservedAt: model.now}

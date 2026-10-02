@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +24,17 @@ func (m dashboardModel) render() string {
 	if m.width < 80 || m.height < 24 {
 		return ansi.Truncate(fmt.Sprintf("Mesh fleet needs 80×24; current %d×%d", m.width, m.height), m.width, "…")
 	}
+	// A render owns its ordering without moving the retained inventory on a value receiver.
+	m.hosts = slices.Clone(m.hosts)
+	slices.SortFunc(m.hosts, func(a, b cli.DashboardHostView) int {
+		if capacity := cmp.Compare(b.RAM.Value.TotalBytes, a.RAM.Value.TotalBytes); capacity != 0 {
+			return capacity
+		}
+		if name := cmp.Compare(a.Host.Alias, b.Host.Alias); name != 0 {
+			return name
+		}
+		return cmp.Compare(a.Host.ID, b.Host.ID)
+	})
 	lines := m.header()
 	visible := len(m.hosts)
 	switch {

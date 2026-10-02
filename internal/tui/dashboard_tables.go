@@ -50,16 +50,21 @@ func (m dashboardModel) sessionRow(host cli.DashboardHostView, session cli.Dashb
 	if cached {
 		state = safeText(session.State)
 	}
-	text := dashboardSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), session.ID, name, state, safeText(session.Command), dashboardAge(m.now, host.Sessions.ObservedAt), width)
+	text := m.sessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), session.ID, name, state, safeText(session.Command), dashboardAge(m.now, host.Sessions.ObservedAt), width)
 	if cached {
-		text = m.paint(dashboardCachedStyle).Render(dashboardSessionColumns(safeText(host.Host.Alias), session.ID, name, state, safeText(session.Command), dashboardAge(m.now, host.Sessions.ObservedAt), width))
+		text = m.paint(dashboardCachedStyle).Render(m.sessionColumns(safeText(host.Host.Alias), session.ID, name, state, safeText(session.Command), dashboardAge(m.now, host.Sessions.ObservedAt), width))
 	}
 	return text
 }
-func dashboardSessionColumns(host, id, name, state, command, age string, width int) string {
+func (m dashboardModel) sessionColumns(host, id, name, state, command, age string, width int) string {
 	hostWidth, nameWidth, stateWidth := 10, 13, 10
 	if width < 90 {
 		hostWidth, nameWidth = 8, 8
+	}
+	// Grow the shared HOST column from spare command space, preserving its heading.
+	limit := max(hostWidth, width-(5+nameWidth+stateWidth+6+5)-ansi.StringWidth("COMMAND (launch)"))
+	for _, view := range m.hosts {
+		hostWidth = max(hostWidth, min(limit, ansi.StringWidth(safeText(view.Host.Alias))))
 	}
 	fixed := hostWidth + 5 + nameWidth + stateWidth + 6 + 5
 	return dashboardFit(host, hostWidth) + " " + dashboardFit(id, 5) + " " + dashboardFit(name, nameWidth) + " " + dashboardFit(state, stateWidth) + " " + dashboardFit(command, max(0, width-fixed)) + " " + dashboardFit(age, 6)
@@ -153,7 +158,7 @@ func (m dashboardModel) sessionSummary(width, budget int) []string {
 	if totals.liveSessions+totals.cachedSessions == 0 {
 		return nil
 	}
-	body := []string{m.paint(dashboardMutedStyle).Render(dashboardSessionColumns("HOST", "ID", "NAME", "STATE", "COMMAND (launch)", "AGE", width-4))}
+	body := []string{m.paint(dashboardMutedStyle).Render(m.sessionColumns("HOST", "ID", "NAME", "STATE", "COMMAND (launch)", "AGE", width-4))}
 	liveLimit := max(0, budget-4)
 	selected := m.liveSelection(liveLimit)
 	shown := 0
