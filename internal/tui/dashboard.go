@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/term"
 	"github.com/shaul/mesh/internal/cli"
 )
@@ -27,10 +28,17 @@ func runDashboard(ctx context.Context, input cli.DashboardInput, output io.Write
 	}
 	run, cancel := context.WithCancel(ctx)
 	defer cancel()
-	configuration := []tea.ProgramOption{tea.WithContext(run), tea.WithInput(nil), tea.WithOutput(output), tea.WithoutSignals()}
-	configuration = append(configuration, options...)
 	model := newDashboard(input, time.Now())
-	model.ascii = os.Getenv("TERM") == "linux" || os.Getenv("TERM") == "dumb"
+	configuration := []tea.ProgramOption{tea.WithContext(run), tea.WithInput(nil), tea.WithOutput(output), tea.WithoutSignals()}
+	switch os.Getenv("TERM") {
+	case "linux":
+		model.ascii, model.profile = true, colorprofile.ANSI
+		configuration = append(configuration, tea.WithColorProfile(colorprofile.ANSI))
+	case "dumb":
+		model.ascii = true
+		configuration = append(configuration, tea.WithColorProfile(colorprofile.ASCII))
+	}
+	configuration = append(configuration, options...)
 	program := tea.NewProgram(model, configuration...)
 	joined := make(chan struct{})
 	go func() {
@@ -66,10 +74,11 @@ type dashboardModel struct {
 	watchError    error
 	history       map[string]dashboardHostHistory
 	wall, ascii   bool
+	profile       colorprofile.Profile
 }
 
 func newDashboard(input cli.DashboardInput, now time.Time) dashboardModel {
-	model := dashboardModel{now: now, width: 80, height: 24, wall: input.Wall, history: map[string]dashboardHostHistory{}}
+	model := dashboardModel{profile: colorprofile.TrueColor, now: now, width: 80, height: 24, wall: input.Wall, history: map[string]dashboardHostHistory{}}
 	for _, host := range input.Hosts {
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host, Connection: cli.StateConnecting})
 	}
@@ -81,6 +90,8 @@ func dashboardTick() tea.Cmd {
 }
 func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
+	case tea.ColorProfileMsg:
+		m.profile = message.Profile
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, message.Width), max(1, message.Height)
 	case dashboardHostMsg:

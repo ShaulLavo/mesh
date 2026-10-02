@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/shaul/mesh/internal/cli"
 )
 
@@ -56,6 +57,9 @@ func TestDashboardPanelUsesFourCorners(t *testing.T) {
 	host := cli.DashboardHostView{Host: cli.DashboardHost{Alias: "pc"}, Connection: cli.StateReachable}
 	for _, width := range []int{80, 160} {
 		panel := model.card(host, width)
+		for i := range panel {
+			panel[i] = ansi.Strip(panel[i])
+		}
 		if !strings.HasPrefix(panel[0], "┌") || !strings.HasSuffix(panel[0], "┐") || !strings.HasPrefix(panel[len(panel)-1], "└") || !strings.HasSuffix(panel[len(panel)-1], "┘") {
 			t.Fatalf("incorrect panel corners at%d: %q / %q", width, panel[0], panel[len(panel)-1])
 		}
@@ -63,6 +67,9 @@ func TestDashboardPanelUsesFourCorners(t *testing.T) {
 	}
 	model.ascii = true
 	panel := model.card(host, 80)
+	for i := range panel {
+		panel[i] = ansi.Strip(panel[i])
+	}
 	if !strings.HasPrefix(panel[0], "+") || !strings.HasSuffix(panel[0], "+") || !strings.HasPrefix(panel[len(panel)-1], "+") || !strings.HasSuffix(panel[len(panel)-1], "+") {
 		t.Fatal("ASCII corners lost")
 	}
@@ -76,7 +83,7 @@ func TestDashboardLocalTitleNamesHostOnce(t *testing.T) {
 			model.width, model.height = width, 48
 			model.hosts = []cli.DashboardHostView{host}
 			view := model.render()
-			if strings.Count(view, alias) != 1 || strings.Count(model.hostLines(host)[0], "this host") != 1 {
+			if strings.Count(ansi.Strip(model.hostTitle(host)), alias) != 1 || strings.Count(ansi.Strip(model.hostLines(host)[0]), "this host") != 1 {
 				t.Fatalf("duplicated local name at%d: %s", width, view)
 			}
 		}

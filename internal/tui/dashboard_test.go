@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/shaul/mesh/internal/cli"
 )
 
@@ -23,9 +24,9 @@ func TestDashboardPassiveViewFitsAndFreshnessIsIndependent(t *testing.T) {
 		Sessions: cli.DashboardCatalog[cli.DashboardSession]{Total: 30, ObservedAt: now},
 		Services: cli.DashboardCatalog[cli.DashboardService]{Total: 2, ObservedAt: now, Failing: true},
 	})
-	view := model.View().Content
+	view := ansi.Strip(model.View().Content)
 	assertFits(t, view, 80, 24)
-	for _, value := range []string{"CPU 0%", "RAM 8.0/16.0 GiB stale 20s", "sessions 30 live", "services 2 cached", "Linux MemAvailable estimate"} {
+	for _, value := range []string{"CPU 0%", "RAM 8.0 / 16.0 GiB stale 20s", "sessions 30 live", "services 2 cached"} {
 		if !strings.Contains(view, value) {
 			t.Fatalf("missing %q: %s", value, view)
 		}
@@ -54,7 +55,7 @@ func TestDashboardCurrentKeepsQuietCatalogLiveAndReportsOverflow(t *testing.T) {
 	for i := range 8 {
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: cli.DashboardHost{ID: string(rune('a' + i)), Alias: "long alias " + strings.Repeat("x", 120)}, Connection: cli.StateReachable, LastReply: now, Sessions: cli.DashboardCatalog[cli.DashboardSession]{ObservedAt: now, Total: 1}, Services: cli.DashboardCatalog[cli.DashboardService]{ObservedAt: now}})
 	}
-	view := model.render()
+	view := ansi.Strip(model.render())
 	assertFits(t, view, 80, 24)
 	if !strings.Contains(view, "Hosts 8 / 8 visible · 0 omitted") {
 		t.Fatal("overflow silently hid hosts", view)
@@ -141,7 +142,7 @@ func TestDashboardHistoryDistinctSamplesGapsResetsAndBounds(t *testing.T) {
 	if len(dashboardPrune(points, now.Add(130*time.Second))) != 0 {
 		t.Fatal("history did not expire")
 	}
-	if dashboardGraphCell(0, true, false) == dashboardGraphCell(0, false, false) {
+	if dashboardAreaCell(0, true, 1, 4, false) == dashboardAreaCell(0, false, 1, 4, false) {
 		t.Fatal("valid zero looks like missing data")
 	}
 }
@@ -163,9 +164,9 @@ func TestDashboardWallContainsHistoriesTemperatureUptimeAndBoundedSummaries(t *t
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host.Host})
 		model.receive(host)
 	}
-	view := model.render()
+	view := ansi.Strip(model.render())
 	assertFits(t, view, 160, 48)
-	for _, label := range []string{"CPU 25%", "RAM 8.0/16.0 GiB", "package 42°C", "uptime 1h", "120s", "0–100%", "quiet shell", "fixture failure", "180 total", "120 total", "Hosts 6 / 6 visible"} {
+	for _, label := range []string{"CPU all cores", "25%", "RAM 8.0 / 16.0 GiB", "package 42°C", "uptime 1h", "120s", "0–100%", "quiet shell", "fixture failure", "180 total", "120 total", "Hosts 6 / 6 visible"} {
 		if !strings.Contains(view, label) {
 			t.Fatalf("missing wall %q: %s", label, view)
 		}

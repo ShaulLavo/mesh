@@ -64,15 +64,6 @@ func dashboardMemoryPercent(memory cli.DashboardMemory) float64 {
 	}
 	return 100 * float64(memory.TotalBytes-memory.AvailableBytes) / float64(memory.TotalBytes)
 }
-func dashboardGraph(points []dashboardPoint, now time.Time, width int, ascii bool) string {
-	var line strings.Builder
-	for column := range width {
-		at := now.Add(-120*time.Second + time.Duration(float64(column+1)/float64(width)*float64(120*time.Second)))
-		value, found := dashboardGraphValue(points, at)
-		line.WriteString(dashboardGraphCell(value, found, ascii))
-	}
-	return line.String()
-}
 func dashboardGraphValue(points []dashboardPoint, at time.Time) (float64, bool) {
 	for index := len(points) - 1; index >= 0; index-- {
 		point := points[index]
@@ -86,21 +77,6 @@ func dashboardGraphValue(points []dashboardPoint, at time.Time) (float64, bool) 
 		return point.value, at.Sub(point.at) <= 3*time.Second
 	}
 	return 0, false
-}
-func dashboardGraphCell(value float64, found, ascii bool) string {
-	if !found {
-		return " "
-	}
-	if ascii {
-		if value == 0 {
-			return "."
-		}
-		return string("123456789#"[min(9, int(value/10))])
-	}
-	if value == 0 {
-		return "·"
-	}
-	return string([]rune("▁▂▃▄▅▆▇█")[min(7, max(0, int(math.Ceil(value/100*8))-1))])
 }
 
 func maxTime(values ...time.Time) time.Time {

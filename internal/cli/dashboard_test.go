@@ -26,7 +26,7 @@ func TestDashboardProjectionBoundsTotalsAndIndependentAges(t *testing.T) {
 		Metrics:  &hostmetrics.Snapshot{CPU: hostmetrics.Reading[float64]{Availability: hostmetrics.Available, Value: 0, Sample: "cpu", AgeMillis: 100}, RAM: hostmetrics.Reading[hostmetrics.Memory]{Availability: hostmetrics.Available, Value: hostmetrics.Memory{TotalBytes: 1024, AvailableBytes: 512, Estimate: "estimate"}, Sample: "ram", AgeMillis: 20000}},
 	}
 	for i := range 30 {
-		state.Sessions = append(state.Sessions, protocol.SessionInfo{ID: fmt.Sprintf("%04d", i), State: "running", Command: []string{strings.Repeat("x", 4096)}})
+		state.Sessions = append(state.Sessions, protocol.SessionInfo{ID: fmt.Sprintf("%04d", i), Label: "named shell", State: "running", Command: []string{strings.Repeat("x", 4096)}})
 		state.Services = append(state.Services, protocol.ServiceInfo{Name: fmt.Sprintf("service-%02d", i), Healthy: true})
 	}
 	state.Services[29].Healthy = false
@@ -34,6 +34,12 @@ func TestDashboardProjectionBoundsTotalsAndIndependentAges(t *testing.T) {
 	view := projectDashboardState(DashboardHost{ID: "host", Alias: "pc"}, state)
 	if view.Sessions.Total != 30 || len(view.Sessions.Rows) != dashboardSessionLimit || view.Services.Total != 30 || len(view.Services.Rows) != dashboardServiceLimit {
 		t.Fatalf("unbounded or false totals: %+v", view)
+	}
+	if view.Services.Ready != 29 || view.Services.Failed != 1 {
+		t.Fatalf("full-catalog state counts lost beyond row bound: %+v", view.Services)
+	}
+	if view.Sessions.Rows[0].Name != "named shell" {
+		t.Fatal("actual catalog label lost")
 	}
 	if view.Services.Rows[0].Name != "service-29" {
 		t.Fatal("reported failure hidden by bounds")
@@ -197,5 +203,22 @@ func TestDashboardTextIsOwnedBoundedUTF8AndTerminalSafe(t *testing.T) {
 				t.Fatalf("unsafe bounded text: %q (%d bytes)", text, len(text))
 			}
 		}
+	}
+}
+
+func TestDashboardCatalogNameSanitizedBoundedAndRetained(t *testing.T) {
+	rows := []protocol.SessionInfo{{ID: "7K3D", Label: "\x1b[2J" + strings.Repeat("名前", 200), State: "running"}}
+	catalog := projectDashboardSessions(rows, ObservedSection{})
+	name := catalog.Rows[0].Name
+	if len(name) > dashboardTextLimit || !utf8.ValidString(name) || strings.Contains(name, "\x1b") {
+		t.Fatalf("unsafe/unbounded catalog name: %q", name)
+	}
+	rows[0].Label = "changed"
+	if catalog.Rows[0].Name != name {
+		t.Fatal("published label changed with source catalog")
+	}
+	empty := projectDashboardSessions([]protocol.SessionInfo{{ID: "empty"}}, ObservedSection{})
+	if empty.Rows[0].Name != "" {
+		t.Fatal("missing real catalog label was invented")
 	}
 }
