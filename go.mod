@@ -25,6 +25,7 @@ require (
 	github.com/charmbracelet/x/xpty v0.1.4
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
+	github.com/ebitengine/purego v0.11.1
 	github.com/kevinburke/ssh_config v1.6.0
 	github.com/muesli/cancelreader v0.2.2
 	github.com/pkg/sftp v1.13.11
@@ -54,7 +55,6 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/go-logfmt/logfmt v0.6.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/google/uuid v1.6.0 // indirect

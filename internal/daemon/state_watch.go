@@ -316,10 +316,7 @@ func (b *stateBroker) currentLocked(sub *stateSubscriber) *protocol.StateCurrent
 	return &protocol.StateCurrent{Seq: sub.seq, Sections: sections}
 }
 func ageMetrics(v *hostmetrics.Snapshot, age int64) {
-	v.CPU.AgeMillis += age
-	v.RAM.AgeMillis += age
-	v.Temperature.AgeMillis += age
-	v.Uptime.AgeMillis += age
+	*v = hostmetrics.AgeSnapshot(*v, age)
 }
 func cloneState[T any](value T) T {
 	data, _ := json.Marshal(value)

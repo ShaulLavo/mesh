@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"github.com/shaul/mesh/internal/hostmetrics"
 	"time"
 )
 
@@ -55,14 +56,21 @@ func (c DashboardCatalog[T]) Stale(now, lastReply time.Time) bool {
 }
 
 type DashboardHostView struct {
-	Host        DashboardHost
-	Connection  StateConnection
-	Problem     string
-	LastReply   time.Time
-	CPU         DashboardMeasurement[float64]
-	RAM         DashboardMeasurement[DashboardMemory]
-	Temperature DashboardMeasurement[DashboardTemperature]
-	Uptime      DashboardMeasurement[uint64]
-	Sessions    DashboardCatalog[DashboardSession]
-	Services    DashboardCatalog[DashboardService]
+	Host               DashboardHost
+	Connection         StateConnection
+	Problem            string
+	LastReply          time.Time
+	CPU                DashboardMeasurement[float64]
+	RAM                DashboardMeasurement[DashboardMemory]
+	Temperature        DashboardMeasurement[DashboardTemperature]
+	Battery            *DashboardMeasurement[hostmetrics.Battery]
+	PerformanceVersion int
+	Temperatures       []DashboardMeasurement[hostmetrics.ComponentTemperature]
+	GPU                *DashboardMeasurement[hostmetrics.GPU]
+	Disk               *DashboardMeasurement[hostmetrics.Disk]
+	Network            *DashboardMeasurement[hostmetrics.Network]
+	Cores              *DashboardMeasurement[[]float64]
+	Uptime             DashboardMeasurement[uint64]
+	Sessions           DashboardCatalog[DashboardSession]
+	Services           DashboardCatalog[DashboardService]
 }

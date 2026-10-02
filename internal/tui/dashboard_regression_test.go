@@ -83,7 +83,7 @@ func TestDashboardLocalTitleNamesHostOnce(t *testing.T) {
 			model.width, model.height = width, 48
 			model.hosts = []cli.DashboardHostView{host}
 			view := model.render()
-			if strings.Count(ansi.Strip(model.hostTitle(host)), alias) != 1 || strings.Count(ansi.Strip(model.hostLines(host)[0]), "this host") != 1 {
+			if strings.Count(ansi.Strip(model.hostTitle(host)), alias) != 1 || strings.Count(ansi.Strip(model.compactHost(host)[0]), alias) != 1 {
 				t.Fatalf("duplicated local name at%d: %s", width, view)
 			}
 		}

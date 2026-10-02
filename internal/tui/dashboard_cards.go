@@ -27,18 +27,36 @@ func (m dashboardModel) graphHeight() int {
 		}
 	}
 	available := m.height - 5 - tableHeight
-	return min(12, max(minimum, available/cardRows-6))
+	return min(12, max(minimum, (available-m.cardOverhead())/cardRows))
 }
 
-func (m dashboardModel) cardHeight() int { return m.graphHeight() + 6 }
+func (m dashboardModel) cardOverhead() int {
+	total := 0
+	for index := 0; index < len(m.hosts); index += 2 {
+		total += 7
+		if m.gridGPU(index) {
+			total++
+		}
+	}
+	return total
+}
+func (m dashboardModel) cardsHeight() int {
+	return ((len(m.hosts)+1)/2)*m.graphHeight() + m.cardOverhead()
+}
+func (m dashboardModel) gridGPU(index int) bool {
+	if dashboardHasGPU(m.hosts[index]) {
+		return true
+	}
+	return index+1 < len(m.hosts) && dashboardHasGPU(m.hosts[index+1])
+}
 func (m dashboardModel) cards() []string {
 	width := (m.width - 1) / 2
 	var lines []string
 	for index := 0; index < len(m.hosts); index += 2 {
-		left := m.card(m.hosts[index], width)
+		left := m.cardWithGPU(m.hosts[index], width, m.gridGPU(index))
 		right := make([]string, len(left))
 		if index+1 < len(m.hosts) {
-			right = m.card(m.hosts[index+1], width)
+			right = m.cardWithGPU(m.hosts[index+1], width, m.gridGPU(index))
 		}
 		for row := range left {
 			lines = append(lines, dashboardFit(left[row], width)+" "+dashboardFit(right[row], width))
@@ -46,14 +64,14 @@ func (m dashboardModel) cards() []string {
 	}
 	return lines
 }
-func (m dashboardModel) card(host cli.DashboardHostView, width int) []string {
+func (m dashboardModel) cardWithGPU(host cli.DashboardHostView, width int, gpuRow bool) []string {
 	inner := width - 4
 	plotWidth := (inner - 2) / 2
 	live := host.Connection == cli.StateReachable
 	cpuValue := m.coloredPercent(host.CPU, host, m.paint(dashboardCPUStyle))
 	ramMetric := cli.DashboardMeasurement[float64]{State: host.RAM.State, Value: dashboardMemoryPercent(host.RAM.Value), Sample: host.RAM.Sample, MeasuredAt: host.RAM.MeasuredAt, Failing: host.RAM.Failing}
 	ramPercent := m.coloredPercent(ramMetric, host, m.paint(dashboardRAMStyle))
-	label := dashboardAlign(m.paint(dashboardMutedStyle).Render("CPU all cores"), cpuValue, plotWidth) + "  " + dashboardAlign(m.paint(dashboardMutedStyle).Render("RAM ")+m.ramValue(host), ramPercent, inner-plotWidth-2)
+	label := dashboardAlign(m.paint(dashboardMutedStyle).Render("CPU ")+m.coreStrip(host, max(0, plotWidth-8)), cpuValue, plotWidth) + "  " + dashboardAlign(m.paint(dashboardMutedStyle).Render("RAM ")+m.ramValue(host), ramPercent, inner-plotWidth-2)
 	meter := dashboardSegmentedMeter(host.CPU, m.now, live, plotWidth, m.ascii, m.paint(dashboardCPUStyle)) + "  " + dashboardSegmentedMeter(ramMetric, m.now, live, inner-plotWidth-2, m.ascii, m.paint(dashboardRAMStyle))
 	history := m.history[host.Host.ID]
 	left := dashboardArea(history.cpu, m.now, plotWidth, m.graphHeight(), m.ascii, m.paint(dashboardCPUStyle))
@@ -64,24 +82,28 @@ func (m dashboardModel) card(host cli.DashboardHostView, width int) []string {
 	}
 	body = append(body, m.paint(dashboardMutedStyle).Render(dashboardAlign("-2m", "now", plotWidth)+"  "+dashboardAlign("-2m", "now", inner-plotWidth-2)))
 	if !live {
-		body = m.offlineCard(host, label, meter, inner)
+		body = m.offlineCard(host, inner)
 	}
-	facts := m.temperature(host) + m.paint(dashboardMutedStyle).Render(" · uptime ") + m.uptime(host)
-	if !live {
-		facts = m.paint(dashboardMutedStyle).Render("temp -- · uptime --")
+	if gpuRow {
+		body = append(body, m.gpuLine(host, plotWidth, inner-plotWidth-2))
 	}
-	facts += " · " + m.catalogCounts(host)
-	if host.Services.Failed > 0 {
-		facts += " · " + m.paint(dashboardFailureStyle).Render(fmt.Sprintf("%d failed", host.Services.Failed))
+	body = append(body, m.ioLine(host, plotWidth, inner-plotWidth-2))
+	facts := ""
+	if live {
+		facts = m.cardFacts(host, inner)
 	}
 	body = append(body, facts)
 	ages := "metrics " + dashboardAge(m.now, dashboardOldest(host.CPU.MeasuredAt, host.RAM.MeasuredAt)) + " catalogs " + dashboardAge(m.now, dashboardOldest(host.Sessions.ObservedAt, host.Services.ObservedAt))
 	frame := m.paint(dashboardBorderStyle)
 	if !live {
 		ages = "last reply " + dashboardAge(m.now, host.LastReply)
-		frame = m.paint(dashboardFailureStyle)
+		frame = m.paint(dashboardCachedStyle)
 	}
-	title := dashboardRuleTitle(m.hostTitle(host), m.paint(dashboardMutedStyle).Render(ages), width-2, m.ascii, frame)
+	hostTitle := m.hostTitle(host)
+	if live && dashboardPresent(host.Uptime) {
+		hostTitle += m.paint(dashboardMutedStyle).Render(" · up ") + m.uptime(host)
+	}
+	title := dashboardRuleTitle(hostTitle, m.paint(dashboardMutedStyle).Render(ages), width-2, m.ascii, frame)
 	return m.framedPanel(title, body, width, frame)
 }
 func (m dashboardModel) coloredPercent(metric cli.DashboardMeasurement[float64], host cli.DashboardHostView, style lipgloss.Style) string {
@@ -101,15 +123,11 @@ func dashboardOldest(a, b time.Time) time.Time {
 	}
 	return b
 }
-func (m dashboardModel) offlineCard(host cli.DashboardHostView, label, meter string, width int) []string {
-	body := []string{label, meter}
-	facts := []string{"last verified reply " + dashboardAge(m.now, host.LastReply) + " ago", "cached catalog " + dashboardAge(m.now, host.Sessions.ObservedAt) + " old", "fresh metrics --"}
-	for row := range m.graphHeight() + 1 {
-		text := ""
-		if row < len(facts) {
-			text = m.paint(dashboardCachedStyle).Render(facts[row])
-		}
-		body = append(body, dashboardFit(text, width))
+func (m dashboardModel) offlineCard(host cli.DashboardHostView, width int) []string {
+	body := make([]string, m.graphHeight()+3)
+	facts := []string{"last verified reply " + dashboardAge(m.now, host.LastReply) + " ago", "cached catalog " + dashboardAge(m.now, host.Sessions.ObservedAt) + " old", m.catalogCounts(host)}
+	for row, text := range facts {
+		body[row] = dashboardFit(m.paint(dashboardCachedStyle).Render(text), width)
 	}
 	return body
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/host"
@@ -12,9 +13,15 @@ import (
 )
 
 type systemCollector struct {
-	temperatureRoot string
-	sensorMu        sync.Mutex
-	sensorBusy      bool
+	temperatureRoot  string
+	sensorMu         sync.Mutex
+	sensorBusy       bool
+	procRoot         string
+	components       []ComponentTemperature
+	componentsErr    error
+	componentsAt     time.Time
+	gpuTemperature   float64
+	gpuTemperatureAt time.Time
 }
 
 func supported(ctx context.Context) error {
@@ -63,4 +70,19 @@ func (*systemCollector) Uptime(ctx context.Context) (uint64, error) {
 		return 0, fmt.Errorf("host uptime: %w", err)
 	}
 	return value, nil
+}
+
+func (*systemCollector) Cores(ctx context.Context) ([]Counters, error) {
+	if err := supported(ctx); err != nil {
+		return nil, err
+	}
+	values, err := cpu.TimesWithContext(ctx, true)
+	if err != nil {
+		return nil, fmt.Errorf("per-core CPU counters: %w", err)
+	}
+	result := make([]Counters, 0, min(len(values), MaximumCores))
+	for _, v := range values[:min(len(values), MaximumCores)] {
+		result = append(result, Counters{User: v.User, Nice: v.Nice, System: v.System, Idle: v.Idle, IOWait: v.Iowait, IRQ: v.Irq, SoftIRQ: v.Softirq, Steal: v.Steal})
+	}
+	return result, nil
 }

@@ -44,9 +44,15 @@ func dashboardMeter(metric cli.DashboardMeasurement[float64], now time.Time, liv
 	return strings.Repeat(block, filled) + strings.Repeat(empty, width-filled)
 }
 func (m dashboardModel) temperature(host cli.DashboardHostView) string {
+	if host.PerformanceVersion > 0 {
+		return m.componentTemperatures(host)
+	}
 	metric := host.Temperature
-	value := fmt.Sprintf("%s %.0f°C", safeText(metric.Value.Sensor), metric.Value.Celsius)
-	return "temp " + dashboardReading(metric, host, m.now, 30*time.Second, value)
+	if !dashboardPresent(metric) {
+		return ""
+	}
+	value := fmt.Sprintf("CPU %.0f°", metric.Value.Celsius)
+	return dashboardPerformanceReading(m, metric, host, 30*time.Second, value)
 }
 func (m dashboardModel) uptime(host cli.DashboardHostView) string {
 	metric := host.Uptime

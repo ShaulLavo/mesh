@@ -23,6 +23,19 @@ func projectDashboardState(host DashboardHost, state StateView) DashboardHostVie
 		return view
 	}
 	metrics := state.Metrics
+	view.PerformanceVersion = metrics.PerformanceVersion
+	view.GPU = projectOptionalMetric(metrics.GPU, state.MetricsReceivedAt)
+	view.Disk = projectOptionalMetric(metrics.Disk, state.MetricsReceivedAt)
+	view.Network = projectOptionalMetric(metrics.Network, state.MetricsReceivedAt)
+	view.Cores = projectOptionalMetric(metrics.Cores, state.MetricsReceivedAt)
+	if view.Cores != nil {
+		view.Cores.Value = append([]float64(nil), view.Cores.Value...)
+	}
+	view.Battery = projectOptionalMetric(metrics.Battery, state.MetricsReceivedAt)
+	for _, entry := range metrics.Temperatures {
+		reading := hostmetrics.Reading[hostmetrics.ComponentTemperature]{Availability: hostmetrics.Available, Value: entry, Sample: metrics.TemperaturesSample, AgeMillis: entry.AgeMillis, Failing: metrics.TemperaturesFailing}
+		view.Temperatures = append(view.Temperatures, projectDashboardMetric(reading, state.MetricsReceivedAt))
+	}
 	view.CPU = projectDashboardMetric(metrics.CPU, state.MetricsReceivedAt)
 	view.Uptime = projectDashboardMetric(metrics.Uptime, state.MetricsReceivedAt)
 	ram := projectDashboardMetric(metrics.RAM, state.MetricsReceivedAt)
@@ -128,4 +141,12 @@ func dashboardServiceFailed(row protocol.ServiceInfo) bool {
 		return true
 	}
 	return row.Demand != nil && (row.Demand.Failure != "" || row.Demand.State == protocol.DemandFailed)
+}
+
+func projectOptionalMetric[T any](metric *hostmetrics.Reading[T], received time.Time) *DashboardMeasurement[T] {
+	if metric == nil {
+		return nil
+	}
+	value := projectDashboardMetric(*metric, received)
+	return &value
 }

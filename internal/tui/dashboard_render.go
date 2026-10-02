@@ -11,17 +11,18 @@ import (
 )
 
 var (
-	dashboardCPUStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#7bd88f"))
-	dashboardCPUFillStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#183c27"))
-	dashboardRAMFillStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#153d49"))
-	dashboardGridStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#17261f"))
-	dashboardRAMStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#56c8e8"))
-	dashboardMutedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#7a8f86"))
-	dashboardBorderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#24453a"))
-	dashboardGoodStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#7bd88f"))
-	dashboardCachedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#e0b050"))
-	dashboardFailureStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef6b5b"))
-	dashboardTitleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#5fd7d7")).Bold(true)
+	dashboardGPUStyle     = dashboardColorStyle(dashboardTheme.gpu)
+	dashboardCPUStyle     = dashboardColorStyle(dashboardTheme.cpu)
+	dashboardCPUFillStyle = dashboardColorStyle(dashboardTheme.cpuFill)
+	dashboardRAMFillStyle = dashboardColorStyle(dashboardTheme.ramFill)
+	dashboardGridStyle    = dashboardColorStyle(dashboardTheme.grid)
+	dashboardRAMStyle     = dashboardColorStyle(dashboardTheme.ram)
+	dashboardMutedStyle   = dashboardColorStyle(dashboardTheme.muted)
+	dashboardBorderStyle  = dashboardColorStyle(dashboardTheme.border)
+	dashboardGoodStyle    = dashboardColorStyle(dashboardTheme.good)
+	dashboardCachedStyle  = dashboardColorStyle(dashboardTheme.cached)
+	dashboardFailureStyle = dashboardColorStyle(dashboardTheme.failure)
+	dashboardTitleStyle   = dashboardColorStyle(dashboardTheme.title).Bold(true)
 )
 
 func dashboardFit(value string, width int) string {
@@ -40,17 +41,18 @@ func (m dashboardModel) render() string {
 	lines := m.header()
 	visible := len(m.hosts)
 	switch {
-	case m.width >= 140 && m.height >= 40 && ((len(m.hosts)+1)/2)*m.cardHeight() <= m.height-10:
+	case m.width >= 140 && m.height >= 40 && m.cardsHeight() <= m.height-10:
 		lines = append(lines, m.cards()...)
-	case len(m.hosts) <= 3:
-		for _, host := range m.hosts {
-			lines = append(lines, m.hostLines(host)...)
-		}
-	default:
+	case len(m.hosts) > 6:
 		visible = min(len(m.hosts), m.height-11)
 		lines = append(lines, m.paint(dashboardMutedStyle).Render("HOST        DAEMON       CPU        RAM GiB       SESSIONS / SERVICES"))
 		for _, host := range m.hosts[:visible] {
 			lines = append(lines, m.fleetRow(host))
+		}
+	default:
+		visible = min(len(m.hosts), max(0, (m.height-11)/2))
+		for _, host := range m.hosts[:visible] {
+			lines = append(lines, m.compactHost(host)...)
 		}
 	}
 	lines = append(lines, m.paint(dashboardMutedStyle).Render(fmt.Sprintf("Hosts %d / %d visible · %d omitted", visible, len(m.hosts), len(m.hosts)-visible)))
@@ -62,7 +64,7 @@ func (m dashboardModel) render() string {
 	for index, line := range lines {
 		lines[index] = dashboardFit(line, m.width)
 	}
-	return m.paint(lipgloss.NewStyle().Foreground(lipgloss.Color("#cfdbd4")).Background(lipgloss.Color("#090c0b"))).Render(strings.Join(lines, "\n"))
+	return m.paint(dashboardColorStyle(dashboardTheme.text).Background(lipgloss.Color(dashboardTheme.background.hex))).Render(strings.Join(lines, "\n"))
 }
 func (m dashboardModel) header() []string {
 	totals := m.totals()
@@ -148,25 +150,10 @@ func (m dashboardModel) hostTitle(host cli.DashboardHostView) string {
 	}
 	state := m.paint(dashboardGoodStyle).Render(mark + " " + string(host.Connection))
 	if host.Connection != cli.StateReachable {
-		state = m.paint(dashboardFailureStyle).Render(mark + " " + string(host.Connection))
+		state = m.paint(dashboardCachedStyle).Render(mark + " " + string(host.Connection))
 	}
 	title := m.paint(dashboardTitleStyle).Render(safeText(host.Host.Alias)) + " · " + state
-	if host.Host.Local && host.Host.Alias != "this host" {
-		title += " · this host"
-	}
 	return title
-}
-func (m dashboardModel) hostLines(host cli.DashboardHostView) []string {
-	counts := m.catalogCounts(host)
-	measurements := "CPU " + m.metricValue(host.CPU, host, fmt.Sprintf("%.0f%%", host.CPU.Value)) + " · RAM " + m.ramValue(host)
-	detail := ""
-	if host.Connection != cli.StateReachable {
-		detail = "last verified reply " + dashboardAge(m.now, host.LastReply) + " · cached catalog " + dashboardAge(m.now, host.Sessions.ObservedAt)
-	}
-	if host.Problem != "" {
-		detail += " · " + safeText(host.Problem)
-	}
-	return []string{m.hostTitle(host), measurements, counts, detail}
 }
 func (m dashboardModel) metricValue(metric cli.DashboardMeasurement[float64], host cli.DashboardHostView, value string) string {
 	if metric.State == dashboardUnsupported {

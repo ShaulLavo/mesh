@@ -18,6 +18,8 @@ func dashboardProfileStyle(style lipgloss.Style, profile colorprofile.Profile) l
 	switch style.GetForeground() {
 	case dashboardCPUStyle.GetForeground():
 		foreground = lipgloss.Green
+	case dashboardGPUStyle.GetForeground():
+		foreground = lipgloss.Magenta
 	case dashboardRAMStyle.GetForeground(), dashboardRAMFillStyle.GetForeground():
 		foreground = lipgloss.Cyan
 	case dashboardCPUFillStyle.GetForeground():
@@ -35,7 +37,7 @@ func dashboardProfileStyle(style lipgloss.Style, profile colorprofile.Profile) l
 		style = style.Faint(true)
 	}
 	style = style.Foreground(foreground)
-	if style.GetBackground() == lipgloss.Color("#090c0b") {
+	if style.GetBackground() == lipgloss.Color(dashboardTheme.background.hex) {
 		style = style.Background(lipgloss.Black)
 	}
 	return style

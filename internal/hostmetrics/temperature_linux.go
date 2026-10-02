@@ -8,113 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
 
-const maximumSensors = 64
-
-// A kernel sensor read may ignore cancellation; at most one remains in flight.
-func (c *systemCollector) Temperature(ctx context.Context) (Temperature, error) {
-	if err := ctx.Err(); err != nil {
-		return Temperature{}, fmt.Errorf("CPU temperature: %w", err)
-	}
-	c.sensorMu.Lock()
-	if c.sensorBusy {
-		c.sensorMu.Unlock()
-		return Temperature{}, errors.New("CPU sensor read is still in progress")
-	}
-	c.sensorBusy = true
-	c.sensorMu.Unlock()
-	result := make(chan temperatureResult, 1)
-	go c.collectTemperature(ctx, result)
-	select {
-	case <-ctx.Done():
-		return Temperature{}, fmt.Errorf("CPU temperature: %w", ctx.Err())
-	case value := <-result:
-		if err := ctx.Err(); err != nil {
-			return Temperature{}, fmt.Errorf("CPU temperature: %w", err)
-		}
-		return value.temperature, value.err
-	}
-}
-
-type temperatureResult struct {
-	temperature Temperature
-	err         error
-}
-
-func (c *systemCollector) collectTemperature(ctx context.Context, result chan<- temperatureResult) {
-	root := c.temperatureRoot
-	if root == "" {
-		root = "/sys"
-	}
-	value, err := readTemperature(ctx, root)
-	c.sensorMu.Lock()
-	c.sensorBusy = false
-	c.sensorMu.Unlock()
-	// Cancelled callers discard late values, so they cannot become fresh samples.
-	result <- temperatureResult{temperature: value, err: err}
-}
-func readTemperature(ctx context.Context, root string) (Temperature, error) {
-	var failures []error
-	thermal, err := sensorDirs(filepath.Join(root, "class/thermal"))
-	if err != nil && !errors.Is(err, ErrUnsupported) {
-		failures = append(failures, err)
-	}
-	value, thermalErr := thermalTemperature(ctx, root, thermal)
-	if thermalErr == nil {
-		return value, nil
-	}
-	if !errors.Is(thermalErr, ErrUnsupported) {
-		failures = append(failures, thermalErr)
-	}
-	hwmon, err := sensorDirs(filepath.Join(root, "class/hwmon"))
-	if err != nil && !errors.Is(err, ErrUnsupported) {
-		failures = append(failures, err)
-	}
-	for _, entry := range hwmon {
-		dir := filepath.Join(root, "class/hwmon", entry.Name())
-		value, err := packageTemperature(ctx, dir)
-		if err == nil {
-			return value, nil
-		}
-		if !errors.Is(err, ErrUnsupported) {
-			failures = append(failures, err)
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return Temperature{}, fmt.Errorf("CPU temperature: %w", err)
-	}
-	if len(failures) > 0 {
-		return Temperature{}, errors.Join(failures...)
-	}
-	return Temperature{}, ErrUnsupported
-}
-func packageTemperature(ctx context.Context, dir string) (Temperature, error) {
-	name, err := sensorText(ctx, filepath.Join(dir, "name"))
-	if err != nil || (name != "coretemp" && name != "k10temp" && name != "zenpower") {
-		return Temperature{}, ErrUnsupported
-	}
-	var failure error
-	for i := 1; i <= maximumSensors; i++ {
-		prefix := filepath.Join(dir, fmt.Sprintf("temp%d", i))
-		label, err := sensorText(ctx, prefix+"_label")
-		if err != nil || !packageSensor(label) {
-			continue
-		}
-		value, err := sensorValue(ctx, name+": "+label, prefix+"_input")
-		if err == nil {
-			return value, nil
-		}
-		failure = err
-	}
-	if failure != nil {
-		return Temperature{}, failure
-	}
-	return Temperature{}, ErrUnsupported
-}
 func cpuSensor(name string) bool {
 	switch strings.ToLower(name) {
 	case "cpu-thermal", "cpu_thermal", "x86_pkg_temp", "bcm2835_thermal":
@@ -176,24 +73,4 @@ func sensorValue(ctx context.Context, name, path string) (Temperature, error) {
 		return Temperature{}, errors.New("invalid CPU sensor temperature")
 	}
 	return Temperature{Sensor: name, Celsius: v}, nil
-}
-
-func thermalTemperature(ctx context.Context, root string, entries []os.DirEntry) (Temperature, error) {
-	var failure error
-	for _, entry := range entries {
-		dir := filepath.Join(root, "class/thermal", entry.Name())
-		name, err := sensorText(ctx, filepath.Join(dir, "type"))
-		if err != nil || !cpuSensor(name) {
-			continue
-		}
-		value, err := sensorValue(ctx, name, filepath.Join(dir, "temp"))
-		if err == nil {
-			return value, nil
-		}
-		failure = err
-	}
-	if failure != nil {
-		return Temperature{}, failure
-	}
-	return Temperature{}, ErrUnsupported
 }

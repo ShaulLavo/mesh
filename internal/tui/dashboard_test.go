@@ -26,7 +26,7 @@ func TestDashboardPassiveViewFitsAndFreshnessIsIndependent(t *testing.T) {
 	})
 	view := ansi.Strip(model.View().Content)
 	assertFits(t, view, 80, 24)
-	for _, value := range []string{"CPU 0%", "RAM 8.0 / 16.0 GiB stale 20s", "sessions 30 live", "services 2 cached"} {
+	for _, value := range []string{"CPU 0%", "RAM 8.0/16.0 GiB stale 20s", "sessions 30 live", "services 2", "cached 2"} {
 		if !strings.Contains(view, value) {
 			t.Fatalf("missing %q: %s", value, view)
 		}
@@ -166,7 +166,7 @@ func TestDashboardWallContainsHistoriesTemperatureUptimeAndBoundedSummaries(t *t
 	}
 	view := ansi.Strip(model.render())
 	assertFits(t, view, 160, 48)
-	for _, label := range []string{"CPU all cores", "25%", "RAM 8.0 / 16.0 GiB", "package 42°C", "uptime 1h", "120s", "0–100%", "quiet shell", "fixture failure", "180 total", "120 total", "Hosts 6 / 6 visible"} {
+	for _, label := range []string{"CPU ", "25%", "RAM 8.0 / 16.0 GiB", "CPU 42°", "up 1h", "120s", "0–100%", "quiet shell", "fixture failure", "180 total", "120 total", "Hosts 6 / 6 visible"} {
 		if !strings.Contains(view, label) {
 			t.Fatalf("missing wall %q: %s", label, view)
 		}
