@@ -49,6 +49,7 @@ func TestDashboardUsageEvidence(t *testing.T) {
 	model.hosts[0].Services.Rows[0].State = "unhealthy"
 	model.hosts[0].Services.Rows[0].Problem = "health check refused"
 	model.hosts[0].Services.Failed = 1
+	model.hosts[0].Services.Idle = 0
 	writeUsageEvidence(t, "failure", model)
 	model.width, model.height = 80, 24
 	writeUsageEvidence(t, "compact-failure", model)

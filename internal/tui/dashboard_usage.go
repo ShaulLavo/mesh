@@ -189,7 +189,7 @@ func (m dashboardModel) usageMeter(window usagefeed.Window, role dashboardStyle)
 
 func (m dashboardModel) usagePace(window usagefeed.Window) int {
 	word, _ := usageStatus(window)
-	if word == usageExhausted || word == usageUnknown || window.LastSeenAt == nil || m.now.Sub(*window.LastSeenAt) >= usageStaleAfter || window.WindowMinutes == nil || window.ResetsAt == nil || !window.ResetsAt.After(m.now) {
+	if window.Status == usageUnknown || word == usageExhausted || word == usageUnknown || window.LastSeenAt == nil || m.now.Sub(*window.LastSeenAt) >= usageStaleAfter || window.WindowMinutes == nil || window.ResetsAt == nil || !window.ResetsAt.After(m.now) {
 		return -1
 	}
 	elapsed := 1 - window.ResetsAt.Sub(m.now).Minutes() / *window.WindowMinutes

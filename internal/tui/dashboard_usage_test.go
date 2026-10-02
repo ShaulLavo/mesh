@@ -140,6 +140,15 @@ func TestDashboardUsageWindowFacts(t *testing.T) {
 		}
 	}
 	window = model.usage.accounts[0].Windows[0]
+	window.Status = "unknown"
+	for _, value := range []float64{74, 75, 97} {
+		window.UsedPercent = &value
+		lines := ansi.Strip(strings.Join(model.usageWindowLines(window, 50, true), "\n"))
+		if model.usagePace(window) != -1 || strings.Contains(lines, "│") {
+			t.Fatalf("unknown status exposed elapsed guide at %v%%: %s", value, lines)
+		}
+	}
+	window = model.usage.accounts[0].Windows[0]
 	window.Status = "exhausted"
 	if model.usagePace(window) != -1 {
 		t.Fatal("status-only exhaustion pace")
@@ -274,8 +283,12 @@ func TestDashboardUsageFailuresRetainAttention(t *testing.T) {
 		host := &model.hosts[0]
 		host.Services.Rows[0] = cli.DashboardService{Name: "failed-service", State: "unhealthy", Failed: true, Problem: "health check refused"}
 		host.Services.Failed = 1
+		host.Services.Idle = 0
 		plain := ansi.Strip(model.render())
 		assertFits(t, plain, size[0], size[1])
+		if strings.Contains(plain, "1 idle") {
+			t.Fatal("failed fixture retained its replaced idle service count", plain)
+		}
 		for _, want := range []string{"Attention", "failed-service", "health check refused", "Hosts 4 / 4", "E8WS", "N8PF"} {
 			if !strings.Contains(plain, want) {
 				t.Fatal(size, "missing", want, plain)
