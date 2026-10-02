@@ -82,6 +82,9 @@ func (c Client) latestTag(ctx context.Context, client *http.Client, baseURL stri
 	if address == "" {
 		return "", false
 	}
+	// The optional API lookup keeps its own budget so fallback still has time to download.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	contents, err := downloadBytes(ctx, client, address, maximumLatestReply)
 	if err != nil {
 		return "", false
@@ -158,7 +161,7 @@ func (c Client) normalized() (string, *http.Client, error) {
 	}
 	client := c.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{Timeout: downloadAttemptTimeout}
 	}
 	return baseURL, client, nil
 }
@@ -212,43 +215,6 @@ func cachedExecutable(path, wantDigest string) bool {
 	return err == nil && digest == wantDigest
 }
 
-func downloadBytes(ctx context.Context, client *http.Client, address string, maximum int64) ([]byte, error) {
-	response, err := response(ctx, client, address)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close() //nolint:errcheck // read result is authoritative
-	contents, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", address, err)
-	}
-	if int64(len(contents)) > maximum {
-		return nil, fmt.Errorf("%s exceeds %d bytes", address, maximum)
-	}
-	return contents, nil
-}
-
-func downloadTo(ctx context.Context, client *http.Client, address string, destination io.Writer, wantDigest string, maximum int64) error {
-	response, err := response(ctx, client, address)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close() //nolint:errcheck // copy result is authoritative
-	hash := sha256.New()
-	written, err := io.Copy(io.MultiWriter(destination, hash), io.LimitReader(response.Body, maximum+1))
-	if err != nil {
-		return fmt.Errorf("release: download %s: %w", address, err)
-	}
-	if written > maximum {
-		return fmt.Errorf("release: %s exceeds %d bytes", address, maximum)
-	}
-	digest := hex.EncodeToString(hash.Sum(nil))
-	if digest != wantDigest {
-		return fmt.Errorf("release: archive SHA-256 is %s, want %s", digest, wantDigest)
-	}
-	return nil
-}
-
 func response(ctx context.Context, client *http.Client, address string) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
@@ -268,7 +234,7 @@ func response(ctx context.Context, client *http.Client, address string) (*http.R
 	}
 	detail, _ := io.ReadAll(io.LimitReader(reply.Body, maximumErrorDetail))
 	_ = reply.Body.Close()
-	return nil, fmt.Errorf("release: GET %s: %s: %s", address, reply.Status, strings.TrimSpace(string(detail)))
+	return nil, &downloadStatusError{code: reply.StatusCode, err: fmt.Errorf("release: GET %s: %s: %s", address, reply.Status, strings.TrimSpace(string(detail)))}
 }
 
 func extractBinary(archivePath, directory, wantDigest string) (string, error) {
