@@ -17,15 +17,9 @@ The daemon builds the bundle itself and runs from it. `internal/macapp`:
   `<state>/Mesh.app` if its binary or recorded install path differs from the
   running binary: `Contents/MacOS/mesh` (a copy), `Info.plist`
   (`dev.shaulavo.mesh`, `LSUIElement`, so no Dock icon), `Resources/mesh.icns`
-  (embedded in the binary), `Resources/installed-executable` and
-  `Resources/installed-sha256`. It seals the bundle with an ad-hoc
-  `codesign --force --sign -`, then `exec`s the daemon from the bundle, keeping
-  the PID launchd tracks.
-- Signing rewrites the copy's bytes. Staleness compares the installed binary
-  with the recorded digest, and build identity (`release.Current`) hashes the
-  installed binary, so the update health probe sees the digest the release
-  manifest pins. The first cut hashed the copy, and an update to it rolled back
-  on the health deadline.
+  (embedded in the binary), and `Resources/installed-executable`. It seals
+  the bundle with an ad-hoc `codesign --force --sign -`, then `exec`s the daemon
+  from the bundle, keeping the PID launchd tracks.
 - The rebuild stages `Mesh.app.new-<pid>` and swaps directories. Running workers
   keep their mapped binary, so a rebuild never disturbs live sessions.
 - If the bundle cannot be built or signed, the daemon logs it and runs

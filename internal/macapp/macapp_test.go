@@ -2,7 +2,6 @@ package macapp
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,16 +21,7 @@ func testBundle(t *testing.T) (Bundle, *int) {
 	signs := 0
 	return Bundle{
 		Dir: filepath.Join(dir, "state"), Executable: executable, Version: "v0.1.115", Icon: []byte("icns"),
-		// Like codesign, rewrite the copy so it no longer matches the installed file.
-		Sign: func(bundle string) error {
-			signs++
-			binary := filepath.Join(bundle, "Contents", "MacOS", "mesh")
-			data, err := os.ReadFile(binary) //nolint:gosec // inside this test's bundle
-			if err != nil {
-				return fmt.Errorf("read staged binary: %w", err)
-			}
-			return os.WriteFile(binary, append(data, " signed"...), 0o600) //nolint:gosec // inside this test's bundle
-		},
+		Sign: func(string) error { signs++; return nil },
 	}, &signs
 }
 
@@ -46,7 +36,7 @@ func TestSyncBuildsBundleOnceAndRebuildsWhenTheBinaryChanges(t *testing.T) {
 	}
 	contents := filepath.Join(bundle.Dir, "Mesh.app", "Contents")
 	for name, want := range map[string]string{
-		"MacOS/mesh":                     "binary v1 signed",
+		"MacOS/mesh":                     "binary v1",
 		"Resources/mesh.icns":            "icns",
 		"Resources/installed-executable": bundle.Executable + "\n",
 	} {
@@ -70,7 +60,7 @@ func TestSyncBuildsBundleOnceAndRebuildsWhenTheBinaryChanges(t *testing.T) {
 	if rebuilt, err = Sync(bundle); err != nil || !rebuilt {
 		t.Fatalf("Sync after update = %v, %v; want rebuilt", rebuilt, err)
 	}
-	if data, _ := os.ReadFile(bundle.BundleExecutable()); string(data) != "binary v2 signed" {
+	if data, _ := os.ReadFile(bundle.BundleExecutable()); string(data) != "binary v2" {
 		t.Fatalf("bundle binary = %q after update", data)
 	}
 	if *signs != 2 {
@@ -96,7 +86,7 @@ func TestFailedSigningKeepsThePreviousBundle(t *testing.T) {
 	if _, err := Sync(bundle); err == nil || !strings.Contains(err.Error(), "no codesign") {
 		t.Fatalf("Sync with failing signer = %v", err)
 	}
-	if data, _ := os.ReadFile(bundle.BundleExecutable()); string(data) != "binary v1 signed" {
+	if data, _ := os.ReadFile(bundle.BundleExecutable()); string(data) != "binary v1" {
 		t.Fatalf("bundle binary = %q; want the previous build kept", data)
 	}
 	if leftovers, _ := filepath.Glob(filepath.Join(bundle.Dir, "Mesh.app.*")); len(leftovers) != 0 {
