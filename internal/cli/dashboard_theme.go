@@ -9,7 +9,8 @@ const DefaultDashboardTheme = "oled"
 
 // DashboardSettings lives beside the address book in the standard Mesh config.
 type DashboardSettings struct {
-	Theme string `json:"theme,omitempty"`
+	Theme        string `json:"theme,omitempty"`
+	UsageFeedURL string `json:"usageFeedURL,omitempty"`
 }
 
 func DashboardThemeNames() []string {

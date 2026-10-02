@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-02T10:20:00Z",
+  "accounts": [
+    {
+      "id": "account-one",
+      "provider": "opaque-provider",
+      "label": "First account",
+      "plan": "large",
+      "checkedAt": "2026-10-02T10:20:00Z",
+      "lastSeenAt": "2026-10-02T10:19:00Z",
+      "state": "ready",
+      "source": "proxy-state",
+      "routing": {"mode": "rotating", "active": null, "lastServedAt": null},
+      "windows": [
+        {"id": "primary", "label": "Weekly", "usedPercent": 42, "resetsAt": "2026-10-06T12:00:00Z", "windowMinutes": 10080, "status": "allowed", "lastSeenAt": "2026-10-02T10:19:00Z", "source": "passive-header"},
+        {"id": "model-window", "label": "Model allowance", "usedPercent": null, "resetsAt": null, "windowMinutes": null, "status": "unknown", "lastSeenAt": null, "source": "proxy-state"}
+      ],
+      "cooldown": null
+    },
+    {
+      "id": "account-two",
+      "provider": "another-provider",
+      "label": "Second account",
+      "plan": "small",
+      "checkedAt": null,
+      "lastSeenAt": null,
+      "state": "no-data",
+      "source": "proxy-state",
+      "routing": {"mode": "single", "active": false, "lastServedAt": null},
+      "windows": [],
+      "cooldown": null
+    },
+    {
+      "id": "account-three",
+      "provider": "opaque-provider",
+      "label": "Third account",
+      "plan": "large",
+      "checkedAt": "2026-10-02T10:20:00Z",
+      "lastSeenAt": "2026-10-02T10:00:00Z",
+      "state": "cooldown",
+      "source": "proxy-state",
+      "routing": {"mode": "unknown", "active": true, "lastServedAt": "2026-10-02T10:00:00Z"},
+      "windows": [],
+      "cooldown": {"reason": "quota", "until": "2026-10-02T12:00:00Z", "observedAt": "2026-10-02T10:00:00Z", "source": "proxy-state"}
+    }
+  ]
+}

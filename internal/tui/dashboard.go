@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/shaul/mesh/internal/cli"
+	"github.com/shaul/mesh/internal/usagefeed"
 )
 
 func NewCLIDashboard(output *os.File) cli.DashboardFunc {
@@ -45,21 +47,10 @@ func runDashboard(ctx context.Context, input cli.DashboardInput, output io.Write
 	}
 	configuration = append(configuration, options...)
 	program := tea.NewProgram(model, configuration...)
-	joined := make(chan struct{})
-	go func() {
-		defer close(joined)
-		err := input.Watch(run, func(view cli.DashboardHostView) {
-			if run.Err() == nil {
-				program.Send(dashboardHostMsg(view))
-			}
-		})
-		if run.Err() == nil {
-			program.Send(dashboardDoneMsg{err: err})
-		}
-	}()
+	readers := watchDashboard(run, input, program)
 	final, err := program.Run()
 	cancel()
-	<-joined
+	readers.Wait()
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -69,6 +60,34 @@ func runDashboard(ctx context.Context, input cli.DashboardInput, output io.Write
 	return final.(dashboardModel).watchError
 }
 
+func watchDashboard(ctx context.Context, input cli.DashboardInput, program *tea.Program) *sync.WaitGroup {
+	readers := new(sync.WaitGroup)
+	if input.UsageWatch != nil {
+		readers.Go(func() {
+			err := input.UsageWatch(ctx, func(result usagefeed.Result) {
+				if ctx.Err() == nil {
+					program.Send(dashboardUsageMsg(result))
+				}
+			})
+			if err != nil && ctx.Err() == nil {
+				program.Send(dashboardUsageMsg{Failing: true})
+			}
+		})
+	}
+	readers.Go(func() {
+		err := input.Watch(ctx, func(view cli.DashboardHostView) {
+			if ctx.Err() == nil {
+				program.Send(dashboardHostMsg(view))
+			}
+		})
+		if ctx.Err() == nil {
+			program.Send(dashboardDoneMsg{err: err})
+		}
+	})
+	return readers
+}
+
+type dashboardUsageMsg usagefeed.Result
 type dashboardHostMsg cli.DashboardHostView
 type dashboardTickMsg time.Time
 type dashboardDoneMsg struct{ err error }
@@ -83,6 +102,10 @@ type dashboardModel struct {
 	wall, ascii   bool
 	profile       colorprofile.Profile
 	palette       dashboardPalette
+	usageEnabled  bool
+	usageFailing  bool
+	usageRevision uint64
+	usage         dashboardUsage
 }
 
 func newDashboardForTerminal(input cli.DashboardInput, now time.Time, terminal string) dashboardModel {
@@ -101,6 +124,7 @@ func newDashboard(input cli.DashboardInput, now time.Time) dashboardModel {
 	for _, host := range input.Hosts {
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host, Connection: cli.StateConnecting})
 	}
+	model.usageEnabled = input.UsageWatch != nil
 	model.sortHosts()
 	return model
 }
@@ -116,6 +140,12 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, message.Width), max(1, message.Height)
 		m.frame = m.render()
+	case dashboardUsageMsg:
+		m.usageFailing = message.Failing
+		if message.Snapshot != nil && message.Revision != m.usageRevision {
+			m.usage = projectDashboardUsage(message.Snapshot)
+			m.usageRevision = message.Revision
+		}
 	case dashboardHostMsg:
 		m.receive(cli.DashboardHostView(message))
 	case dashboardTickMsg:
