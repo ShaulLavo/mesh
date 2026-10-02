@@ -150,12 +150,13 @@ func (b *stateBroker) serviceDemandChanged(next protocol.ServiceInfo, retiring b
 		return
 	}
 	if !retiring {
-		if !exists {
+		if !exists || reflect.DeepEqual(row.Demand, next.Demand) {
 			return
 		}
 		demand := next.Demand
 		next = row
 		next.Demand = demand
+		next.Healthy, next.Problem, next.HealthUnknown = false, "", true
 	}
 	if !exists && len(b.services) >= meshserve.MaximumServices || exists && reflect.DeepEqual(row, next) {
 		return

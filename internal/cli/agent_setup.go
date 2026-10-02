@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/shaul/mesh/internal/agentresume"
+	"github.com/shaul/mesh/internal/macapp"
 )
 
 const maximumAgentSettingsBytes = 1 << 20
@@ -38,7 +39,7 @@ func setupAgentHooks(cmd *cobra.Command, name, path string, install, uninstall b
 	if err != nil {
 		return err
 	}
-	executable, err := os.Executable()
+	executable, err := macapp.Installed()
 	if err != nil {
 		return fmt.Errorf("locate Mesh hook helper: %w", err)
 	}

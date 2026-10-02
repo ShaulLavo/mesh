@@ -72,6 +72,7 @@ type dashboardModel struct {
 	now           time.Time
 	width, height int
 	watchError    error
+	frame         string
 	history       map[string]dashboardHostHistory
 	wall, ascii   bool
 	profile       colorprofile.Profile
@@ -92,13 +93,16 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.ColorProfileMsg:
 		m.profile = message.Profile
+		m.frame = m.render()
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, message.Width), max(1, message.Height)
+		m.frame = m.render()
 	case dashboardHostMsg:
 		m.receive(cli.DashboardHostView(message))
 	case dashboardTickMsg:
 		m.now = time.Time(message)
 		m.pruneHistory()
+		m.frame = m.render()
 		return m, dashboardTick()
 	case dashboardDoneMsg:
 		m.watchError = message.err
@@ -117,7 +121,11 @@ func (m *dashboardModel) receive(view cli.DashboardHostView) {
 	}
 }
 func (m dashboardModel) View() tea.View {
-	view := tea.NewView(m.render())
+	frame := m.frame
+	if frame == "" {
+		frame = m.render()
+	}
+	view := tea.NewView(frame)
 	view.AltScreen = m.wall
 	view.WindowTitle = "Mesh fleet"
 	return view

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/macapp"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/updatebootstrap"
@@ -34,7 +35,7 @@ func previewFirstCoordinator(ctx context.Context, environment updateEnvironment,
 		local.Problem = "Approval installs a supervised local daemon and helper, preserves existing service configuration, and resumes this exact fleet operation."
 		build := release.Current()
 		local.Build = &build
-		if executable, err := os.Executable(); err == nil {
+		if executable, err := macapp.Installed(); err == nil {
 			if migrationErr := coordinatorSetupMigration(executable, build, preview.Release); migrationErr != nil {
 				local.State = update.Failed
 				local.Problem = migrationErr.Error()

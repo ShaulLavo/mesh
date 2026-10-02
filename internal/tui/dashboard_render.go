@@ -70,6 +70,9 @@ func (m dashboardModel) header() []string {
 	totals := m.totals()
 	title := m.paint(dashboardTitleStyle).Render("MESH") + " fleet · reachable " + m.paint(dashboardGoodStyle).Render(fmt.Sprint(totals.reachable)) + " · unreachable " + m.paint(dashboardFailureStyle).Render(fmt.Sprint(totals.unreachable))
 	counts := "sessions " + fmt.Sprint(totals.liveSessions) + " live " + m.paint(dashboardCachedStyle).Render(fmt.Sprint(totals.cachedSessions)) + " cached · services " + fmt.Sprint(totals.services) + " · ready " + m.paint(dashboardGoodStyle).Render(fmt.Sprint(totals.ready)) + " · failed " + m.paint(dashboardFailureStyle).Render(fmt.Sprint(totals.failed))
+	if totals.unknown > 0 {
+		counts += " · unknown " + m.paint(dashboardMutedStyle).Render(fmt.Sprint(totals.unknown))
+	}
 	if totals.cachedServices > 0 {
 		counts += fmt.Sprintf(" · cached %d", totals.cachedServices)
 	}
@@ -90,7 +93,7 @@ func (m dashboardModel) header() []string {
 	return []string{dashboardAlign(title, m.now.Format("15:04:05"), m.width), counts}
 }
 
-type dashboardTotals struct{ reachable, unreachable, connecting, refused, liveSessions, cachedSessions, services, ready, failed, cachedServices int }
+type dashboardTotals struct{ reachable, unreachable, connecting, refused, liveSessions, cachedSessions, services, ready, failed, unknown, cachedServices int }
 
 func (m dashboardModel) totals() dashboardTotals {
 	var totals dashboardTotals
@@ -119,6 +122,7 @@ func (m dashboardModel) totals() dashboardTotals {
 		}
 		totals.ready += host.Services.Ready
 		totals.failed += host.Services.Failed
+		totals.unknown += host.Services.Unknown
 	}
 	return totals
 }
@@ -138,6 +142,9 @@ func (m dashboardModel) fleetRow(host cli.DashboardHostView) string {
 	}
 	counts := m.catalogCounts(host)
 	state := string(host.Connection)
+	if host.MetricsUnsupported {
+		return dashboardFit(safeText(host.Host.Alias), 11) + " " + dashboardMetricsUpgrade + " · " + counts
+	}
 	if host.Connection == cli.StateUnreachable || host.Connection == cli.StateRefused {
 		state = m.paint(dashboardFailureStyle).Render(state)
 	}
@@ -153,9 +160,15 @@ func (m dashboardModel) hostTitle(host cli.DashboardHostView) string {
 		state = m.paint(dashboardCachedStyle).Render(mark + " " + string(host.Connection))
 	}
 	title := m.paint(dashboardTitleStyle).Render(safeText(host.Host.Alias)) + " · " + state
+	if host.MetricsUnsupported {
+		title += " · " + dashboardMetricsUpgrade
+	}
 	return title
 }
 func (m dashboardModel) metricValue(metric cli.DashboardMeasurement[float64], host cli.DashboardHostView, value string) string {
+	if host.MetricsUnsupported {
+		return "--"
+	}
 	if metric.State == dashboardUnsupported {
 		return dashboardUnsupported
 	}
@@ -169,6 +182,9 @@ func (m dashboardModel) metricValue(metric cli.DashboardMeasurement[float64], ho
 	return reading
 }
 func (m dashboardModel) ramValue(host cli.DashboardHostView) string {
+	if host.MetricsUnsupported {
+		return "--/-- GiB"
+	}
 	ram := host.RAM.Value
 	value := ""
 	if ram.TotalBytes > 0 && ram.AvailableBytes <= ram.TotalBytes {

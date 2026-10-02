@@ -22,7 +22,7 @@ func (f lookupFunc) Get(ctx context.Context, id storage.SessionID) (storage.Sess
 }
 
 func TestWorkerConnectorResolvesCatalogSessionAndCarriesFrames(t *testing.T) {
-	root := t.TempDir()
+	root := compactSocketTempDir(t)
 	sessionDir := filepath.Join(root, "7K3D")
 	if err := os.Mkdir(sessionDir, 0o700); err != nil {
 		t.Fatal(err)

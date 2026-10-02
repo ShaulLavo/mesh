@@ -3,6 +3,9 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/shaul/mesh/internal/cli"
 )
@@ -68,9 +71,12 @@ func (m dashboardModel) serviceRows(host cli.DashboardHostView, width int) []das
 			mark = "*"
 		}
 		state := mark + " " + safeText(service.State)
-		if service.Failed {
+		switch {
+		case service.Failed:
 			state = m.paint(dashboardFailureStyle).Render(state)
-		} else {
+		case service.HealthUnknown:
+			state = m.paint(dashboardMutedStyle).Render(state)
+		default:
 			state = m.paint(dashboardGoodStyle).Render(state)
 		}
 		if dashboardServicesCached(host, m.now) {
@@ -127,6 +133,9 @@ func (m dashboardModel) summary(services bool, width, budget int) []string {
 	}
 	totals := m.totals()
 	label := fmt.Sprintf("Services · %d total · ready %d · failed %d · %d/%d visible", total, totals.ready, totals.failed, visible, total)
+	if totals.unknown > 0 {
+		label = fmt.Sprintf("Services · %d · ready %d · failed %d · unknown %d · %d/%d visible", total, totals.ready, totals.failed, totals.unknown, visible, total)
+	}
 	return m.panel(m.paint(dashboardTitleStyle).Render(label), body, width)
 }
 func (m dashboardModel) sessionSummary(width, budget int) []string {
@@ -175,7 +184,7 @@ func (m dashboardModel) liveSelection(limit int) []int {
 	return selected
 }
 func (m dashboardModel) attention(width, budget int) []string {
-	var rows []string
+	var groups [][]string
 	total := 0
 	for _, host := range m.hosts {
 		total += host.Services.Failed
@@ -183,11 +192,7 @@ func (m dashboardModel) attention(width, budget int) []string {
 			if !service.Failed {
 				continue
 			}
-			state := service.State
-			if dashboardServicesCached(host, m.now) {
-				state += " cached"
-			}
-			rows = append(rows, m.paint(dashboardFailureStyle).Render(safeText(host.Host.Alias)+"/"+safeText(service.Name)+" · "+state+" · "+safeText(service.Problem)))
+			groups = append(groups, m.serviceAttention(host, service, width))
 		}
 	}
 	for _, host := range m.hosts {
@@ -195,12 +200,33 @@ func (m dashboardModel) attention(width, budget int) []string {
 			continue
 		}
 		total++
-		rows = append(rows, m.paint(dashboardFailureStyle).Render(safeText(host.Host.Alias)+" · "+string(host.Connection))+" · last reply "+m.paint(dashboardCachedStyle).Render(dashboardAge(m.now, host.LastReply)))
+		text := m.paint(dashboardFailureStyle).Render(safeText(host.Host.Alias)+" · "+string(host.Connection)) + " · last reply " + m.paint(dashboardCachedStyle).Render(dashboardAge(m.now, host.LastReply))
+		groups = append(groups, strings.Split(ansi.Wrap(text, max(1, width-4), ""), "\n"))
 	}
-	visible := min(len(rows), max(0, budget-2))
-	body := append([]string{}, rows[:visible]...)
+	var body []string
+	visible := 0
+	for _, group := range groups {
+		if len(body)+len(group) > max(0, budget-2) {
+			continue
+		}
+		body = append(body, group...)
+		visible++
+	}
 	label := fmt.Sprintf("Attention · %d · %d/%d visible", total, visible, total)
 	return m.framedPanel(dashboardRuleTitle(m.paint(dashboardCachedStyle).Render(label), "", width-2, m.ascii, m.paint(dashboardFailureStyle)), body, width, m.paint(dashboardFailureStyle))
+}
+
+func (m dashboardModel) serviceAttention(host cli.DashboardHostView, service cli.DashboardService, width int) []string {
+	state := service.State
+	if dashboardServicesCached(host, m.now) {
+		state += " cached"
+	}
+	problem := safeText(service.Problem)
+	if problem == "" {
+		problem = "reason unavailable"
+	}
+	text := safeText(host.Host.Alias) + "/" + safeText(service.Name) + " · " + state + " · " + problem
+	return strings.Split(ansi.Wrap(m.paint(dashboardFailureStyle).Render(text), max(1, width-4), ""), "\n")
 }
 
 func (m dashboardModel) cachedSessionRows(width, budget int) ([]string, int) {

@@ -16,9 +16,9 @@ const (
 )
 
 func projectDashboardState(host DashboardHost, state StateView) DashboardHostView {
-	view := DashboardHostView{Host: host, Connection: state.Connection, Problem: dashboardText(state.Problem), LastReply: state.LastReply}
+	view := DashboardHostView{Host: host, Connection: state.Connection, Problem: dashboardText(state.Problem), LastReply: state.LastReply, MetricsUnsupported: state.MetricsUnsupported}
 	view.Sessions = projectDashboardSessions(state.Sessions, state.Sections[protocol.TopicSessions])
-	view.Services = projectDashboardServices(state.Services, state.Sections[protocol.TopicServices])
+	view.Services = projectDashboardServices(state.Services, state.Sections[protocol.TopicServices], state.ServiceHealthSupported)
 	if state.Metrics == nil {
 		return view
 	}
@@ -54,51 +54,73 @@ func projectDashboardMetric[T any](reading hostmetrics.Reading[T], received time
 }
 
 func projectDashboardSessions(rows []protocol.SessionInfo, section ObservedSection) DashboardCatalog[DashboardSession] {
-	result := DashboardCatalog[DashboardSession]{Total: len(rows), ObservedAt: dashboardObservedAt(section), Failing: section.Observation.Failing}
-	for _, row := range rows[:min(len(rows), dashboardSessionLimit)] {
-		result.Rows = append(result.Rows, DashboardSession{ID: dashboardText(row.ID), Name: dashboardText(row.Label), State: dashboardText(row.State), Command: dashboardCommandText(row.Command)})
+	result := DashboardCatalog[DashboardSession]{ObservedAt: dashboardObservedAt(section), Failing: section.Observation.Failing}
+	for _, row := range rows {
+		if row.State != "running" && row.State != "detached" {
+			continue
+		}
+		result.Total++
+		if len(result.Rows) < dashboardSessionLimit {
+			result.Rows = append(result.Rows, DashboardSession{ID: dashboardText(row.ID), Name: dashboardText(row.Label), State: dashboardText(row.State), Command: dashboardCommandText(row.Command)})
+		}
 	}
 	return result
 }
 
-func projectDashboardServices(rows []protocol.ServiceInfo, section ObservedSection) DashboardCatalog[DashboardService] {
+func projectDashboardServices(rows []protocol.ServiceInfo, section ObservedSection, healthSupported bool) DashboardCatalog[DashboardService] {
 	result := DashboardCatalog[DashboardService]{Total: len(rows), ObservedAt: dashboardObservedAt(section), Failing: section.Observation.Failing}
 	for _, row := range rows {
+		if !healthSupported {
+			result.Unknown++
+			continue
+		}
 		if dashboardServiceFailed(row) {
 			result.Failed++
 			continue
 		}
-		if row.Demand == nil || row.Demand.State == protocol.DemandRunning {
+		if row.HealthUnknown {
+			result.Unknown++
+			continue
+		}
+		if row.Demand == nil || row.Demand.State == "" || row.Demand.State == protocol.DemandRunning {
 			result.Ready++
 		}
 	}
 	// Select failures before healthy rows without copying an unbounded catalog.
 	for _, failed := range []bool{true, false} {
-		result.Rows = appendDashboardServices(result.Rows, rows, failed)
+		result.Rows = appendDashboardServices(result.Rows, rows, failed, healthSupported)
 	}
 	return result
 }
-func appendDashboardServices(selected []DashboardService, rows []protocol.ServiceInfo, failed bool) []DashboardService {
+func appendDashboardServices(selected []DashboardService, rows []protocol.ServiceInfo, failed, healthSupported bool) []DashboardService {
 	for _, row := range rows {
 		if len(selected) == dashboardServiceLimit {
 			break
 		}
-		service := projectDashboardService(row)
-		if service.Failed == failed {
-			selected = append(selected, service)
+		if (healthSupported && dashboardServiceFailed(row)) != failed {
+			continue
 		}
+		selected = append(selected, projectDashboardService(row, healthSupported))
 	}
 	return selected
 }
-func projectDashboardService(row protocol.ServiceInfo) DashboardService {
-	service := DashboardService{Name: dashboardText(row.Name), State: "ready", Problem: dashboardText(row.Problem), Failed: dashboardServiceFailed(row)}
+func projectDashboardService(row protocol.ServiceInfo, healthSupported bool) DashboardService {
+	if !healthSupported {
+		return DashboardService{Name: dashboardText(row.Name), State: "health unknown", HealthUnknown: true}
+	}
+	service := DashboardService{Name: dashboardText(row.Name), State: "ready", Problem: dashboardText(row.Problem), Failed: dashboardServiceFailed(row), HealthUnknown: row.HealthUnknown && !dashboardServiceFailed(row)}
 	if !row.Healthy {
 		service.State = "unhealthy"
+	}
+	if row.HealthUnknown {
+		service.State = "health pending"
 	}
 	if row.Demand == nil {
 		return service
 	}
-	service.State = dashboardText(row.Demand.State)
+	if row.Demand.State != "" {
+		service.State = dashboardText(row.Demand.State)
+	}
 	if row.Demand.Failure != "" {
 		service.Problem = dashboardText(row.Demand.Failure)
 		service.Failed = true
@@ -137,7 +159,7 @@ func dashboardCommandText(parts []string) string {
 }
 
 func dashboardServiceFailed(row protocol.ServiceInfo) bool {
-	if !row.Healthy || row.Problem != "" {
+	if (!row.HealthUnknown && !row.Healthy) || row.Problem != "" {
 		return true
 	}
 	return row.Demand != nil && (row.Demand.Failure != "" || row.Demand.State == protocol.DemandFailed)

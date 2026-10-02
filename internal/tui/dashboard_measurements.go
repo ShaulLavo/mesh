@@ -9,8 +9,12 @@ import (
 )
 
 const dashboardUnsupported = "unsupported"
+const dashboardMetricsUpgrade = "needs mesh v0.1.114+"
 
 func dashboardReading[T any](metric cli.DashboardMeasurement[T], host cli.DashboardHostView, now time.Time, limit time.Duration, value string) string {
+	if host.MetricsUnsupported {
+		return "--"
+	}
 	if metric.State == dashboardUnsupported {
 		return dashboardUnsupported
 	}

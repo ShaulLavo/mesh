@@ -21,7 +21,7 @@ import (
 
 func TestDashboardProjectionBoundsTotalsAndIndependentAges(t *testing.T) {
 	now := time.Now()
-	state := StateView{Connection: StateReachable, LastReply: now, MetricsReceivedAt: now,
+	state := StateView{Connection: StateReachable, LastReply: now, MetricsReceivedAt: now, ServiceHealthSupported: true,
 		Sections: map[string]ObservedSection{protocol.TopicSessions: {ReceivedAt: now}, protocol.TopicServices: {ReceivedAt: now}},
 		Metrics:  &hostmetrics.Snapshot{CPU: hostmetrics.Reading[float64]{Availability: hostmetrics.Available, Value: 0, Sample: "cpu", AgeMillis: 100}, RAM: hostmetrics.Reading[hostmetrics.Memory]{Availability: hostmetrics.Available, Value: hostmetrics.Memory{TotalBytes: 1024, AvailableBytes: 512, Estimate: "estimate"}, Sample: "ram", AgeMillis: 20000}},
 	}
@@ -57,7 +57,7 @@ func TestDashboardProjectionBoundsTotalsAndIndependentAges(t *testing.T) {
 }
 
 func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
-	for _, mode := range []string{"watch", "legacy", "generic-error", "wrong-identity", "partial", "disconnected"} {
+	for _, mode := range []string{"watch", "old-producer", "legacy", "generic-error", "wrong-identity", "partial", "disconnected"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := setupCommandTestHost(t)
 			stateDir, err := paths.StateDir()
@@ -88,11 +88,11 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 								id = "another-host"
 							}
 							response.Type = protocol.TypeHostInfoResult
-							response.Host = &protocol.HostInfo{ID: id, MeshIdentity: fixture.host.MeshIdentity}
+							response.Host = &protocol.HostInfo{ID: id, MeshIdentity: fixture.host.MeshIdentity, ServiceHealthSupported: mode != "legacy" && mode != "old-producer"}
 						case protocol.TypeStateWatch:
 							probes.Add(1)
 							response.Type = protocol.TypeStateSnapshot
-							response.StateSnapshot = &protocol.StateSnapshot{Seq: 1, Sessions: []protocol.SessionInfo{{ID: "7K3D", HostID: fixture.host.ID, Command: []string{"shell"}, State: "running", CreatedAt: commandTestTime}}, Current: map[string]protocol.Observation{protocol.TopicSessions: {}, protocol.TopicServices: {}}, Metrics: &hostmetrics.Snapshot{CPU: hostmetrics.Reading[float64]{Availability: hostmetrics.Available, Value: 25, Sample: "cpu"}, RAM: hostmetrics.Reading[hostmetrics.Memory]{Availability: hostmetrics.Available, Value: hostmetrics.Memory{TotalBytes: 1024, AvailableBytes: 512, Estimate: "Linux MemAvailable estimate"}, Sample: "ram"}, Temperature: hostmetrics.Reading[hostmetrics.Temperature]{Availability: hostmetrics.Unsupported}, Uptime: hostmetrics.Reading[uint64]{Availability: hostmetrics.Available, Sample: "uptime"}}}
+							response.StateSnapshot = &protocol.StateSnapshot{Seq: 1, Services: []protocol.ServiceInfo{{Name: "proxy", Healthy: true}}, Sessions: []protocol.SessionInfo{{ID: "7K3D", HostID: fixture.host.ID, Command: []string{"shell"}, State: "running", CreatedAt: commandTestTime}}, Current: map[string]protocol.Observation{protocol.TopicSessions: {}, protocol.TopicServices: {}}, Metrics: &hostmetrics.Snapshot{CPU: hostmetrics.Reading[float64]{Availability: hostmetrics.Available, Value: 25, Sample: "cpu"}, RAM: hostmetrics.Reading[hostmetrics.Memory]{Availability: hostmetrics.Available, Value: hostmetrics.Memory{TotalBytes: 1024, AvailableBytes: 512, Estimate: "Linux MemAvailable estimate"}, Sample: "ram"}, Temperature: hostmetrics.Reading[hostmetrics.Temperature]{Availability: hostmetrics.Unsupported}, Uptime: hostmetrics.Reading[uint64]{Availability: hostmetrics.Available, Sample: "uptime"}}}
 							if mode == "legacy" {
 								response = protocol.Control{Type: protocol.TypeError, RequestID: request.RequestID, Message: `daemon: unknown control "state.watch"`}
 							}
@@ -111,6 +111,7 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 							response.Sessions = []protocol.SessionInfo{{ID: "7K3D", HostID: fixture.host.ID, State: "running", Command: []string{"shell"}, CreatedAt: commandTestTime}}
 						case protocol.TypeServiceList:
 							response.Type = protocol.TypeServiceListed
+							response.Services = []protocol.ServiceInfo{{Name: "proxy", Healthy: true}}
 						case protocol.TypeHostMetrics:
 							metrics.Add(1)
 							response.Type = protocol.TypeError
@@ -165,6 +166,12 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 							done = done && view.Connection == StateUnreachable
 						}
 						if done {
+							if mode == "watch" && view.Services.Ready != 1 {
+								t.Errorf("verified producer health advertisement lost: %+v", view.Services)
+							}
+							if (mode == "old-producer" || mode == "legacy") && (view.Services.Ready != 0 || view.Services.Failed != 0 || view.Services.Unknown != 1) {
+								t.Errorf("missing advertisement manufactured health facts: %+v", view.Services)
+							}
 							reached = true
 							cancel()
 						}
@@ -181,7 +188,7 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 			if recovery.Load() != 0 || wakes.Load() != 0 {
 				t.Fatal("dashboard woke host", recovery.Load(), wakes.Load())
 			}
-			if mode == "watch" || mode == "partial" || mode == "disconnected" {
+			if mode == "watch" || mode == "old-producer" || mode == "partial" || mode == "disconnected" {
 				if connections.Load() != 1 || probes.Load() != 1 || lists.Load() != 0 {
 					t.Fatal("watch reopened or polled", connections.Load(), probes.Load(), lists.Load())
 				}
@@ -217,7 +224,7 @@ func TestDashboardCatalogNameSanitizedBoundedAndRetained(t *testing.T) {
 	if catalog.Rows[0].Name != name {
 		t.Fatal("published label changed with source catalog")
 	}
-	empty := projectDashboardSessions([]protocol.SessionInfo{{ID: "empty"}}, ObservedSection{})
+	empty := projectDashboardSessions([]protocol.SessionInfo{{ID: "empty", State: "running"}}, ObservedSection{})
 	if empty.Rows[0].Name != "" {
 		t.Fatal("missing real catalog label was invented")
 	}

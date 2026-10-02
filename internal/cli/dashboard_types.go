@@ -42,13 +42,14 @@ type DashboardSession struct{ ID, Name, State, Command string }
 type DashboardService struct {
 	Name, State, Problem string
 	Failed               bool
+	HealthUnknown        bool
 }
 type DashboardCatalog[T any] struct {
-	Rows          []T
-	Total         int
-	Ready, Failed int // Service state totals are counted before row bounding.
-	ObservedAt    time.Time
-	Failing       bool
+	Rows                   []T
+	Total                  int
+	Ready, Failed, Unknown int // Service state totals are counted before row bounding.
+	ObservedAt             time.Time
+	Failing                bool
 }
 
 func (c DashboardCatalog[T]) Stale(now, lastReply time.Time) bool {
@@ -59,6 +60,7 @@ type DashboardHostView struct {
 	Host               DashboardHost
 	Connection         StateConnection
 	Problem            string
+	MetricsUnsupported bool
 	LastReply          time.Time
 	CPU                DashboardMeasurement[float64]
 	RAM                DashboardMeasurement[DashboardMemory]
