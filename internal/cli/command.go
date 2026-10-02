@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
+	"github.com/shaul/mesh/internal/macapp"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/procmem"
 	"github.com/shaul/mesh/internal/protocol"
@@ -1683,6 +1684,11 @@ func (a *application) daemonCommand() *cobra.Command {
 			stateDir, err := paths.StateDir()
 			if err != nil {
 				return err
+			}
+			// System Settings names and draws a permission holder only from an
+			// app bundle; a daemon that cannot enter one still runs.
+			if err := macapp.Enter(stateDir, release.Version, os.Args); err != nil {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: running outside Mesh.app: %v\n", err)
 			}
 			stopUpdateNotices := startUpdateNoticeChecks(cmd.Context(), stateDir)
 			defer stopUpdateNotices()
