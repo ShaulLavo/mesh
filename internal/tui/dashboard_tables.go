@@ -94,9 +94,6 @@ func dashboardServiceColumns(host, name, state, age string, width int) string {
 	return dashboardFit(host, 10) + " " + dashboardFit(name, max(0, width-10-18-6-3)) + " " + dashboardFit(state, 18) + " " + dashboardFit(age, 6)
 }
 func (m dashboardModel) summaries(budget int) []string {
-	if budget < 6 {
-		return m.summary(false, m.width, budget)
-	}
 	if m.width >= 140 {
 		leftWidth := (m.width - 1) * 3 / 5
 		rightWidth := m.width - leftWidth - 1
@@ -116,6 +113,9 @@ func (m dashboardModel) summaries(budget int) []string {
 			lines = append(lines, dashboardFit(a, leftWidth)+" "+dashboardFit(b, rightWidth))
 		}
 		return lines
+	}
+	if budget < 6 {
+		return m.summary(false, m.width, budget)
 	}
 	half := budget / 2
 	return append(m.summary(false, m.width, half), m.summary(true, m.width, budget-half)...)

@@ -314,3 +314,62 @@ func TestDashboardPerformanceUsesTerminalBackgroundEverywhere(t *testing.T) {
 		}
 	}
 }
+
+func TestDashboardPerformanceWallWithZeroOrOneCatalogRow(t *testing.T) {
+	for _, services := range []int{0, 1} {
+		t.Run(fmt.Sprintf("services%d", services), func(t *testing.T) {
+			model := dashboardPerformanceFixture()
+			for index := range model.hosts {
+				host := &model.hosts[index]
+				host.Sessions = cli.DashboardCatalog[cli.DashboardSession]{ObservedAt: model.now}
+				host.Services = cli.DashboardCatalog[cli.DashboardService]{ObservedAt: model.now}
+			}
+			if services == 1 {
+				model.hosts[0].Services.Rows = []cli.DashboardService{{Name: "single-service", State: "ready"}}
+				model.hosts[0].Services.Total, model.hosts[0].Services.Ready = 1, 1
+			}
+			view := model.render()
+			fmt.Printf("\nBEGIN_CATALOG_%d_160_45\n%s\nEND_CATALOG_%d_160_45\n", services, view, services)
+			assertFits(t, view, 160, 45)
+			plain := ansi.Strip(view)
+			rows := strings.Split(plain, "\n")
+			for index, cardRow := range model.cards() {
+				if strings.TrimRight(rows[3+index], " ") != strings.TrimRight(ansi.Strip(cardRow), " ") {
+					t.Fatalf("wall cards fell back to compact at row %d; cards=%d catalogs=%d: %s", index, model.cardsHeight(), len(model.summaries(model.height)), plain)
+				}
+			}
+			for _, row := range rows {
+				if strings.TrimSpace(row) == "" {
+					t.Fatal("unused full row remains while wall graphs could grow", plain)
+				}
+			}
+			if services == 1 && (!strings.Contains(plain, "single-service") || !strings.Contains(plain, "1/1 visible")) {
+				t.Fatal("single service disappeared", plain)
+			}
+			if strings.Contains(plain, "Sessions ·") || strings.Contains(plain, "Attention") || (services == 0 && strings.Contains(plain, "Services ·")) {
+				t.Fatal("empty catalog panel remains", plain)
+			}
+		})
+	}
+}
+
+func TestDashboardPerformanceUpgradeUsesCapability(t *testing.T) {
+	const upgrade = "Update mesh for GPU, disk and temperatures"
+	for _, size := range [][2]int{{160, 45}, {80, 24}} {
+		model := dashboardPerformanceFixture()
+		model.width, model.height = size[0], size[1]
+		model.hosts = model.hosts[:1]
+		host := &model.hosts[0]
+		host.PerformanceVersion = 0
+		host.GPU, host.Battery, host.Disk, host.Network, host.Cores = nil, nil, nil, nil, nil
+		host.Temperatures = nil
+		text := ansi.Strip(model.render())
+		if strings.Count(text, upgrade) != 1 || strings.Contains(text, "newer mesh producer") {
+			t.Fatalf("older producer needs one capability upgrade note at %dx%d: %s", size[0], size[1], text)
+		}
+		host.PerformanceVersion = 1
+		if strings.Contains(ansi.Strip(model.render()), upgrade) {
+			t.Fatal("supported producer with absent hardware asks for an upgrade")
+		}
+	}
+}

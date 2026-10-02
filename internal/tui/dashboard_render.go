@@ -40,7 +40,7 @@ func (m dashboardModel) render() string {
 	lines := m.header()
 	visible := len(m.hosts)
 	switch {
-	case m.width >= 140 && m.height >= 40 && m.cardsHeight() <= m.height-10:
+	case m.width >= 140 && m.height >= 40 && m.cardsHeight()+len(m.summaries(m.height)) <= m.height-5:
 		lines = append(lines, m.cards()...)
 	case len(m.hosts) > 6:
 		visible = min(len(m.hosts), m.height-11)

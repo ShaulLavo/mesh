@@ -12,6 +12,8 @@ import (
 	"github.com/shaul/mesh/internal/hostmetrics"
 )
 
+const dashboardPerformanceUpgrade = "Update mesh for GPU, disk and temperatures"
+
 func dashboardPresent[T any](metric cli.DashboardMeasurement[T]) bool {
 	return metric.State == statusAvailable && metric.Sample != "" && !metric.MeasuredAt.IsZero()
 }
@@ -123,7 +125,7 @@ func (m dashboardModel) ioLine(host cli.DashboardHostView, leftWidth, rightWidth
 		return ""
 	}
 	if host.PerformanceVersion == 0 {
-		return m.paint(dashboardCachedStyle).Render("Performance metrics need a newer mesh producer")
+		return m.paint(dashboardCachedStyle).Render(dashboardPerformanceUpgrade)
 	}
 	left, right := "", ""
 	if dashboardOptionalPresent(host.Disk) {
@@ -232,7 +234,7 @@ func (m dashboardModel) compactHost(host cli.DashboardHostView) []string {
 	}
 	second += strings.Join(m.temperatureValues(host), "  ")
 	if host.PerformanceVersion == 0 {
-		second += "Performance metrics need a newer mesh producer"
+		second += dashboardPerformanceUpgrade
 	}
 	return []string{dashboardAlign(first, up, m.width), dashboardFit(second, m.width)}
 }

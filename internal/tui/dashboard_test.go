@@ -164,8 +164,10 @@ func TestDashboardWallContainsHistoriesTemperatureUptimeAndBoundedSummaries(t *t
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host.Host})
 		model.receive(host)
 	}
+	// Keep one history row per pair after this fixture's catalog content.
+	model.height = 5 + len(model.summaries(model.height)) + model.cardOverhead() + (len(model.hosts)+1)/2
 	view := ansi.Strip(model.render())
-	assertFits(t, view, 160, 48)
+	assertFits(t, view, 160, model.height)
 	for _, label := range []string{"CPU ", "25%", "RAM 8.0 / 16.0 GiB", "CPU 42°", "up 1h", "120s", "0–100%", "quiet shell", "fixture failure", "180 total", "services 120", "/120 visible", "Hosts 6 / 6 visible"} {
 		if !strings.Contains(view, label) {
 			t.Fatalf("missing wall %q: %s", label, view)
