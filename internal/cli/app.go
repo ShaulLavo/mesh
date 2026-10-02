@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/term"
 	appspkg "github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/bootstrap"
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/spf13/cobra"
 )
 
@@ -73,7 +74,7 @@ func (a *application) appCreateCommand(output *appOutput, update bool) *cobra.Co
 		if err != nil {
 			return err
 		}
-		return writeAppResult(cmd.OutOrStdout(), args[0], result, output.json)
+		return writeAppResult(cmd.OutOrStdout(), args[0], result, output.json, a.privacy)
 	}}
 	cmd.Flags().StringVar(&flags.command, "run", "", "explicit HTTP server command; omit for static files")
 	cmd.Flags().StringVar(&flags.setup, "setup", "", "explicit setup command in the managed workspace")
@@ -166,7 +167,7 @@ func (a *application) runBrowserApproval(cmd *cobra.Command, host, code string, 
 		return errors.New("host did not return pending browser details; update Mesh before approving")
 	}
 	info := inspection.Pairing
-	if _, err = fmt.Fprintf(cmd.ErrOrStderr(), "User-Agent: %s\nSource IP: %s\nPending age: %s\nOnly approve a code you requested in your own browser. Browser details are not proof of identity.\n", info.UserAgent, info.SourceIP, (time.Duration(info.AgeSeconds) * time.Second).String()); err != nil {
+	if _, err = fmt.Fprintf(cmd.ErrOrStderr(), "User-Agent: %s\nSource IP: %s\nPending age: %s\nOnly approve a code you requested in your own browser. Browser details are not proof of identity.\n", browserPresentation(a.privacy, info.UserAgent), a.privacy.Value("ip", info.SourceIP), (time.Duration(info.AgeSeconds) * time.Second).String()); err != nil {
 		return fmt.Errorf("show pending browser details: %w", err)
 	}
 	confirmed, err := confirmBrowserApproval(cmd, yes)
@@ -177,7 +178,7 @@ func (a *application) runBrowserApproval(cmd *cobra.Command, host, code string, 
 	if err != nil {
 		return err
 	}
-	return writeAppResult(cmd.OutOrStdout(), host, result, output.json)
+	return writeAppResult(cmd.OutOrStdout(), host, result, output.json, a.privacy)
 }
 func confirmBrowserApproval(cmd *cobra.Command, yes bool) (bool, error) {
 	if yes {
@@ -214,7 +215,7 @@ func (a *application) runAppAction(cmd *cobra.Command, host string, request apps
 	if err != nil {
 		return err
 	}
-	return writeAppResult(cmd.OutOrStdout(), host, result, output.json)
+	return writeAppResult(cmd.OutOrStdout(), host, result, output.json, a.privacy)
 }
 func uploadApp(ctx context.Context, transport appTransport, directory string, request appspkg.Request) (appspkg.Result, error) {
 	root, err := filepath.Abs(directory)
@@ -265,9 +266,9 @@ func (a *application) appDownloadCommand(output *appOutput) *cobra.Command {
 			return err
 		}
 		if output.json {
-			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]string{"output": args[2]})
+			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]string{"output": a.privacy.Value("path", args[2])})
 		}
-		_, err = fmt.Fprintf(cmd.OutOrStdout(), "saved %s\n", args[2])
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "saved %s\n", a.privacy.Value("path", args[2]))
 		return err
 	}}
 }
@@ -336,41 +337,67 @@ func checkDownloadedArchive(f *os.File) error {
 	}
 	return nil
 }
-func writeAppResult(w io.Writer, host string, result appspkg.Result, asJSON bool) error {
+func writeAppResult(w io.Writer, host string, result appspkg.Result, asJSON bool, masks ...*privacy.Mask) error {
+	mask := presentationMask(masks)
 	if asJSON {
 		value := struct {
 			appspkg.Result
 			Host string `json:"host"`
 			URL  string `json:"url,omitempty"`
-		}{Result: result, Host: host}
+		}{Result: privateAppResult(mask, result), Host: mask.Value("host", host)}
 		if result.App != nil {
-			value.URL = appspkg.URL(result.App.ID)
+			value.URL = mask.Value("url", appspkg.URL(result.App.ID))
 		}
 		return json.NewEncoder(w).Encode(value)
 	}
 	if len(result.Browsers) > 0 {
-		_, err := fmt.Fprintln(w, string(result.Browsers))
+		_, err := fmt.Fprintln(w, browserPresentation(mask, string(result.Browsers)))
 		return err
 	}
 	if result.App != nil {
-		if err := writeOneApp(w, host, *result.App); err != nil {
-			return err
-		}
-		if err := writeSetupFailure(w, result.Runtime); err != nil {
-			return err
-		}
-		return writeServingProblem(w, result.Runtime)
+		return writeAppDetails(w, host, result, mask)
 	}
+
 	if result.Apps != nil {
 		table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 		_, _ = fmt.Fprintln(table, "ID\tVISIBILITY\tSTATE\tEXPIRES\tURL")
 		for _, app := range result.Apps {
-			_, _ = fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n", app.ID, app.Visibility, app.Status, app.ExpiresAt.Format("2006-01-02 15:04 MST"), appspkg.URL(app.ID))
+			_, _ = fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n", mask.Value("app", app.ID), app.Visibility, app.Status, app.ExpiresAt.Format("2006-01-02 15:04 MST"), mask.Value("url", appspkg.URL(app.ID)))
 		}
 		return table.Flush()
 	}
 	_, err := fmt.Fprintln(w, "done")
 	return err
+}
+
+func writeAppDetails(w io.Writer, host string, result appspkg.Result, mask *privacy.Mask) error {
+	if err := writeOneApp(w, host, *result.App, mask); err != nil {
+		return err
+	}
+	if mask != nil {
+		return writePrivateAppRuntime(w, result.Runtime)
+	}
+	if err := writeSetupFailure(w, result.Runtime); err != nil {
+		return err
+	}
+	return writeServingProblem(w, result.Runtime)
+}
+
+func writePrivateAppRuntime(w io.Writer, runtime *appspkg.RuntimeInfo) error {
+	if runtime == nil {
+		return nil
+	}
+	if runtime.Failure != nil {
+		if _, err := fmt.Fprintln(w, "setup failed: [build details withheld]"); err != nil {
+			return fmt.Errorf("show private setup failure: %w", err)
+		}
+	}
+	if runtime.Problem != "" {
+		if _, err := fmt.Fprintln(w, "not serving: [details withheld]"); err != nil {
+			return fmt.Errorf("show private serving problem: %w", err)
+		}
+	}
+	return nil
 }
 
 // writeServingProblem says why the host stopped serving the app, when it did.
@@ -401,7 +428,97 @@ func writeSetupFailure(w io.Writer, runtime *appspkg.RuntimeInfo) error {
 	}
 	return nil
 }
-func writeOneApp(w io.Writer, host string, app appspkg.Record) error {
-	_, err := fmt.Fprintf(w, "%s\nhost: %s\nowner: %s\nvisibility: %s\nstate: %s\nexpires: %s\n", appspkg.URL(app.ID), SafeTerminalText(host), SafeTerminalText(app.Owner), SafeTerminalText(app.Visibility), SafeTerminalText(app.Status), app.ExpiresAt.Format("2006-01-02 15:04:05 MST"))
+func writeOneApp(w io.Writer, host string, app appspkg.Record, masks ...*privacy.Mask) error {
+	mask := presentationMask(masks)
+	_, err := fmt.Fprintf(w, "%s\nhost: %s\nowner: %s\nvisibility: %s\nstate: %s\nexpires: %s\n", mask.Value("url", appspkg.URL(app.ID)), SafeTerminalText(mask.Value("host", host)), SafeTerminalText(mask.Value("owner", app.Owner)), SafeTerminalText(app.Visibility), SafeTerminalText(app.Status), app.ExpiresAt.Format("2006-01-02 15:04:05 MST"))
 	return err
+}
+
+// Arbitrary payloads can contain secrets that metadata recognition cannot find.
+func browserPresentation(mask *privacy.Mask, payload string) string {
+	if mask != nil {
+		return "[browser details withheld]"
+	}
+	return payload
+}
+
+func presentationMask(masks []*privacy.Mask) *privacy.Mask {
+	if len(masks) == 0 {
+		return nil
+	}
+	return masks[0]
+}
+
+// Clone nested records before masking: the result also carries authoritative
+// identifiers and payloads used by control operations.
+func privateAppResult(mask *privacy.Mask, result appspkg.Result) appspkg.Result {
+	if mask == nil {
+		return result
+	}
+	if result.App != nil {
+		app := privateAppRecord(mask, *result.App)
+		result.App = &app
+	}
+	if result.Apps != nil {
+		result.Apps = append([]appspkg.Record{}, result.Apps...)
+		for i := range result.Apps {
+			result.Apps[i] = privateAppRecord(mask, result.Apps[i])
+		}
+	}
+	if result.Pairing != nil {
+		pairing := *result.Pairing
+		pairing.UserAgent = browserPresentation(mask, pairing.UserAgent)
+		pairing.SourceIP = mask.Value("ip", pairing.SourceIP)
+		result.Pairing = &pairing
+	}
+	result.Runtime = privateAppRuntime(mask, result.Runtime)
+	result.UploadID = mask.Value("upload", result.UploadID)
+	if len(result.Data) > 0 {
+		result.Data = []byte("[data withheld]")
+	}
+	// Browser responses are intentionally unstructured. Keep the result field
+	// present as JSON null rather than guessing which nested properties are safe.
+	if len(result.Browsers) > 0 {
+		result.Browsers = json.RawMessage("null")
+	}
+	return result
+}
+
+func privateAppRecord(mask *privacy.Mask, app appspkg.Record) appspkg.Record {
+	app.ID = mask.Value("app", app.ID)
+	app.Owner = mask.Value("owner", app.Owner)
+	app.Revision = mask.Value("revision", app.Revision)
+	return app
+}
+
+func privateAppRuntime(mask *privacy.Mask, original *appspkg.RuntimeInfo) *appspkg.RuntimeInfo {
+	if original == nil {
+		return nil
+	}
+	runtime := *original
+	runtime.SessionID = mask.Value("session", runtime.SessionID)
+	runtime.Root = mask.Value("path", runtime.Root)
+	if runtime.Command != "" {
+		runtime.Command = "[command withheld]"
+	}
+	if runtime.Problem != "" {
+		runtime.Problem = "[details withheld]"
+	}
+	runtime.Failure = privateAppFailure(mask, runtime.Failure)
+	return &runtime
+}
+
+func privateAppFailure(mask *privacy.Mask, original *appspkg.SetupFailure) *appspkg.SetupFailure {
+	if original == nil {
+		return nil
+	}
+	failure := *original
+	failure.UploadID = mask.Value("upload", failure.UploadID)
+	if failure.Error != "" {
+		failure.Error = "[build details withheld]"
+	}
+	if failure.Output != "" {
+		failure.Output = "[build output withheld]"
+	}
+	return &failure
 }

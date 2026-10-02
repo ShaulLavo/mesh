@@ -18,6 +18,7 @@ import (
 	"github.com/muesli/cancelreader"
 	"github.com/spf13/cobra"
 
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
 )
@@ -217,18 +218,18 @@ func (a *application) runServe(cmd *cobra.Command, hostAlias, target string, fla
 	}
 	if publication.Warning != "" {
 		for warning := range strings.SplitSeq(publication.Warning, "\n") {
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s: %s\n", safeTableCell(host.Alias), safeRemoteText(warning)); err != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s: %s\n", safeTableCell(a.privacy.Value("host", host.Alias)), serviceDiagnostic(a.privacy, warning)); err != nil {
 				return fmt.Errorf("write service shadow warning: %w", err)
 			}
 		}
 	}
 	persisted := publication.Service
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "serving %s on %s (%s -> %s)\n", serviceURL(host, publication.PrivateName, persisted), host.Alias, persisted.Kind, serviceTargetCell(persisted))
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "serving %s on %s (%s -> %s)\n", a.privacy.Value("url", serviceURL(host, publication.PrivateName, persisted)), a.privacy.Value("host", host.Alias), persisted.Kind, privateServiceTarget(a.privacy, persisted))
 	if err != nil || persisted.Run == nil {
 		return err
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "starts %q in %s on the first connection; stops after %s idle\n",
-		persisted.Run.Command, safeTableCell(persisted.Run.Cwd), time.Duration(persisted.Run.IdleMillis)*time.Millisecond)
+		privateServiceCommand(a.privacy, persisted.Run.Command), safeTableCell(a.privacy.Value("path", persisted.Run.Cwd)), time.Duration(persisted.Run.IdleMillis)*time.Millisecond)
 	return err
 }
 
@@ -270,24 +271,13 @@ func (a *application) runServeList(cmd *cobra.Command, timeout time.Duration) er
 	if err != nil {
 		return err
 	}
-	if err := writeServiceDiagnostics(cmd.ErrOrStderr(), diagnostics); err != nil {
+	if err := writeServiceDiagnostics(cmd.ErrOrStderr(), diagnostics, a.privacy); err != nil {
 		return err
 	}
-	if err := writeServiceShadowWarnings(cmd.ErrOrStderr(), rows); err != nil {
+	if err := writeServiceShadowWarnings(cmd.ErrOrStderr(), rows, a.privacy); err != nil {
 		return err
 	}
-	writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "ROUTE\tNAME\tHOST\tKIND\tTARGET\tSCOPE\tSTATE\tHEALTH\tURL"); err != nil {
-		return err
-	}
-	for _, row := range rows {
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			safeTableCell(serviceRoute(row.Service)), safeTableCell(serviceDisplayName(row.Service)), safeTableCell(row.Host.Alias), safeTableCell(row.Service.Kind), serviceTargetCell(row.Service),
-			safeTableCell(row.Scope()), safeTableCell(row.State()), safeTableCell(row.Health()), safeTableCell(row.URL())); err != nil {
-			return err
-		}
-	}
-	return writer.Flush()
+	return writeServiceTable(cmd.OutOrStdout(), rows, a.privacy)
 }
 
 func (a *application) unserveCommand() *cobra.Command {
@@ -349,11 +339,11 @@ func (a *application) runUnserve(cmd *cobra.Command, route, hostAlias string, ti
 	cacheErr := cache.SaveServices(cacheCtx, selected.Host, selected.PrivateName, remaining)
 	cancelCache()
 	if cacheErr != nil {
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: service was deleted but the local cache was not updated (%s)\n", safeRemoteText(cacheErr.Error())); err != nil {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: service was deleted but the local cache was not updated (%s)\n", serviceDiagnostic(a.privacy, cacheErr.Error())); err != nil {
 			return err
 		}
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "unserved %s on %s\n", route, selected.Host.Alias)
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "unserved %s on %s\n", a.privacy.Value("route", route), a.privacy.Value("host", selected.Host.Alias))
 	return err
 }
 
@@ -505,7 +495,8 @@ func numericCLIServiceTarget(value string) bool {
 	return true
 }
 
-func terminalPublicConfirmation(input *os.File, output io.Writer) ConfirmPublicFunc {
+func terminalPublicConfirmation(input *os.File, output io.Writer, masks ...*privacy.Mask) ConfirmPublicFunc {
+	mask := presentationMask(masks)
 	return func(ctx context.Context, confirmation PublicConfirmation) (bool, error) {
 		if ctx == nil {
 			return false, errors.New("nil public confirmation context")
@@ -516,60 +507,78 @@ func terminalPublicConfirmation(input *os.File, output io.Writer) ConfirmPublicF
 		if input == nil || !term.IsTerminal(input.Fd()) {
 			return false, errors.New("public publication needs an interactive terminal or --yes")
 		}
-		question := "Publish this service to the internet?"
-		if confirmation.TunnelClaim {
-			question = "Reserve this hostname for an internet tunnel?"
-		}
-		if _, err := fmt.Fprintf(output, "%s\n  Host: %s\n", question, confirmation.Host.Alias); err != nil {
+		if err := writePublicConfirmation(output, confirmation, mask); err != nil {
 			return false, err
 		}
-		if confirmation.TunnelClaim {
-			if _, err := fmt.Fprintln(output, "  Exposure: public while your SSH forward is connected"); err != nil {
-				return false, err
-			}
-		} else if confirmation.Service.Kind == string(meshserve.Proxy) {
-			if _, err := fmt.Fprintf(output, "  Target: port %s\n", safeTableCell(confirmation.Service.Target)); err != nil {
-				return false, err
-			}
-		} else {
-			if _, err := fmt.Fprintf(output, "  Resolved path: %s\n  Files: %d\n", safeTableCell(confirmation.Service.Target), confirmation.FileCount); err != nil {
-				return false, err
-			}
-		}
-		if _, err := fmt.Fprintf(output, "  URL: %s\n", confirmation.URL); err != nil {
-			return false, err
-		}
-		if confirmation.CredentialsOverride {
-			if _, err := fmt.Fprintln(output, "  Credential check: explicitly overridden"); err != nil {
-				return false, err
-			}
-		}
-		if _, err := fmt.Fprint(output, "Continue? [y/N] "); err != nil {
-			return false, err
-		}
-		reader, err := cancelreader.NewReader(input)
-		if err != nil {
-			return false, fmt.Errorf("prepare public confirmation: %w", err)
-		}
-		defer reader.Close() //nolint:errcheck // prompt result is authoritative
-		stopCancellation := context.AfterFunc(ctx, func() { reader.Cancel() })
-		answer, err := bufio.NewReader(reader).ReadString('\n')
-		stopCancellation()
-		if ctx.Err() != nil {
-			return false, ctx.Err()
-		}
-		if errors.Is(err, cancelreader.ErrCanceled) {
-			return false, context.Canceled
-		}
-		if err != nil && !errors.Is(err, io.EOF) {
-			return false, fmt.Errorf("read public confirmation: %w", err)
-		}
-		answer = strings.ToLower(strings.TrimSpace(answer))
-		return answer == "y" || answer == "yes", nil
+		return readPublicConfirmation(ctx, input)
 	}
 }
 
-func writeServiceShadowWarnings(output io.Writer, rows []ServiceCatalogRow) error {
+func writePublicConfirmation(output io.Writer, confirmation PublicConfirmation, mask *privacy.Mask) error {
+	question := "Publish this service to the internet?"
+	if confirmation.TunnelClaim {
+		question = "Reserve this hostname for an internet tunnel?"
+	}
+	if _, err := fmt.Fprintf(output, "%s\n  Host: %s\n", question, mask.Value("host", confirmation.Host.Alias)); err != nil {
+		return fmt.Errorf("show public confirmation host: %w", err)
+	}
+	if err := writePublicConfirmationTarget(output, confirmation, mask); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "  URL: %s\n", mask.Value("url", confirmation.URL)); err != nil {
+		return fmt.Errorf("show public confirmation URL: %w", err)
+	}
+	if confirmation.CredentialsOverride {
+		if _, err := fmt.Fprintln(output, "  Credential check: explicitly overridden"); err != nil {
+			return fmt.Errorf("show public confirmation override: %w", err)
+		}
+	}
+	if _, err := fmt.Fprint(output, "Continue? [y/N] "); err != nil {
+		return fmt.Errorf("show public confirmation prompt: %w", err)
+	}
+	return nil
+}
+
+func writePublicConfirmationTarget(output io.Writer, confirmation PublicConfirmation, mask *privacy.Mask) error {
+	var err error
+	switch {
+	case confirmation.TunnelClaim:
+		_, err = fmt.Fprintln(output, "  Exposure: public while your SSH forward is connected")
+	case confirmation.Service.Kind == string(meshserve.Proxy):
+		_, err = fmt.Fprintf(output, "  Target: port %s\n", safeTableCell(confirmation.Service.Target))
+	default:
+		_, err = fmt.Fprintf(output, "  Resolved path: %s\n  Files: %d\n", safeTableCell(mask.Value("path", confirmation.Service.Target)), confirmation.FileCount)
+	}
+	if err != nil {
+		return fmt.Errorf("show public confirmation target: %w", err)
+	}
+	return nil
+}
+
+func readPublicConfirmation(ctx context.Context, input *os.File) (bool, error) {
+	reader, err := cancelreader.NewReader(input)
+	if err != nil {
+		return false, fmt.Errorf("prepare public confirmation: %w", err)
+	}
+	defer reader.Close() //nolint:errcheck // prompt result is authoritative
+	stopCancellation := context.AfterFunc(ctx, func() { reader.Cancel() })
+	answer, err := bufio.NewReader(reader).ReadString('\n')
+	stopCancellation()
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if errors.Is(err, cancelreader.ErrCanceled) {
+		return false, context.Canceled
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read public confirmation: %w", err)
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes", nil
+}
+
+func writeServiceShadowWarnings(output io.Writer, rows []ServiceCatalogRow, masks ...*privacy.Mask) error {
+	mask := presentationMask(masks)
 	byHost := make(map[string][]meshserve.Service)
 	for _, row := range rows {
 		byHost[row.Host.ID] = append(byHost[row.Host.ID], protocol.ServiceFromInfo(row.Service))
@@ -585,7 +594,7 @@ func writeServiceShadowWarnings(output io.Writer, rows []ServiceCatalogRow) erro
 			cached = " (cached)"
 		}
 		for _, shadow := range meshserve.PrivateRouteShadows(services) {
-			if _, err := fmt.Fprintf(output, "warning: %s%s: %s\n", safeTableCell(row.Host.Alias), cached, safeRemoteText(shadow.Message())); err != nil {
+			if _, err := fmt.Fprintf(output, "warning: %s%s: %s\n", safeTableCell(mask.Value("host", row.Host.Alias)), cached, serviceDiagnostic(mask, shadow.Message())); err != nil {
 				return fmt.Errorf("write service shadow warning: %w", err)
 			}
 		}
@@ -593,7 +602,8 @@ func writeServiceShadowWarnings(output io.Writer, rows []ServiceCatalogRow) erro
 	return nil
 }
 
-func writeServiceDiagnostics(output io.Writer, diagnostics map[string]error) error {
+func writeServiceDiagnostics(output io.Writer, diagnostics map[string]error, masks ...*privacy.Mask) error {
+	mask := presentationMask(masks)
 	aliases := make([]string, 0, len(diagnostics))
 	for alias := range diagnostics {
 		aliases = append(aliases, alias)
@@ -602,14 +612,55 @@ func writeServiceDiagnostics(output io.Writer, diagnostics map[string]error) err
 	for _, alias := range aliases {
 		var warning catalogCacheWarning
 		if errors.As(diagnostics[alias], &warning) {
-			if _, err := fmt.Fprintf(output, "%s: warning (%s)\n", alias, safeRemoteText(warning.Error())); err != nil {
+			if _, err := fmt.Fprintf(output, "%s: warning (%s)\n", mask.Value("host", alias), serviceDiagnostic(mask, warning.Error())); err != nil {
 				return err
 			}
 			continue
 		}
-		if _, err := fmt.Fprintf(output, "%s: unavailable (%s)\n", alias, safeRemoteText(diagnostics[alias].Error())); err != nil {
+		if _, err := fmt.Fprintf(output, "%s: unavailable (%s)\n", mask.Value("host", alias), serviceDiagnostic(mask, diagnostics[alias].Error())); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func writeServiceTable(output io.Writer, rows []ServiceCatalogRow, mask *privacy.Mask) error {
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	if _, err := fmt.Fprintln(writer, "ROUTE\tNAME\tHOST\tKIND\tTARGET\tSCOPE\tSTATE\tHEALTH\tURL"); err != nil {
+		return fmt.Errorf("write service table: %w", err)
+	}
+	for _, row := range rows {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			safeTableCell(mask.Value("route", serviceRoute(row.Service))), safeTableCell(mask.Value("name", serviceDisplayName(row.Service))), safeTableCell(mask.Value("host", row.Host.Alias)), safeTableCell(row.Service.Kind), privateServiceTarget(mask, row.Service),
+			safeTableCell(row.Scope()), safeTableCell(row.State()), safeTableCell(row.Health()), safeTableCell(mask.Value("url", row.URL()))); err != nil {
+			return fmt.Errorf("write service table: %w", err)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("flush service table: %w", err)
+	}
+	return nil
+}
+
+func privateServiceTarget(mask *privacy.Mask, service protocol.ServiceInfo) string {
+	if mask == nil || numericCLIServiceTarget(service.Target) {
+		return serviceTargetCell(service)
+	}
+	// Copy the presentation value, leaving the authoritative route untouched.
+	service.Target = mask.Value("path", service.Target)
+	return serviceTargetCell(service)
+}
+
+func privateServiceCommand(mask *privacy.Mask, command string) string {
+	if mask != nil {
+		return "[command withheld]"
+	}
+	return command
+}
+
+func serviceDiagnostic(mask *privacy.Mask, text string) string {
+	if mask != nil {
+		return "[details withheld]"
+	}
+	return safeRemoteText(text)
 }

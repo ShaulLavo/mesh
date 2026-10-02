@@ -24,6 +24,7 @@ func (m dashboardModel) render() string {
 }
 
 func (m dashboardModel) renderFrame() (string, dashboardLayout) {
+	m = m.privacyDisplay()
 	if m.width < 80 || m.height < 24 {
 		message := fmt.Sprintf("Mesh fleet needs 80×24; current %d×%d", m.width, m.height)
 		if m.notice != "" {

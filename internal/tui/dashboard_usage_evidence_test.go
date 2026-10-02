@@ -153,9 +153,13 @@ func TestDashboardUsageEvidence(t *testing.T) {
 
 func writeUsageEvidence(t *testing.T, name string, model dashboardModel) {
 	t.Helper()
-	frame := model.render()
-	assertFits(t, frame, model.width, model.height)
-	terminal := vt.NewEmulator(model.width, model.height)
+	writeFrameEvidence(t, name, model.render(), model.width, model.height, model.palette)
+}
+
+func writeFrameEvidence(t *testing.T, name, frame string, width, height int, palette dashboardPalette) {
+	t.Helper()
+	assertFits(t, frame, width, height)
+	terminal := vt.NewEmulator(width, height)
 	defer func() {
 		if err := terminal.Close(); err != nil {
 			t.Error(err)
@@ -165,14 +169,14 @@ func writeUsageEvidence(t *testing.T, name string, model dashboardModel) {
 		t.Fatal(err)
 	}
 	var svg strings.Builder
-	fmt.Fprintf(&svg, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d"><rect width="100%%" height="100%%" fill="%s"/><g font-family="DejaVu Sans Mono,monospace" font-size="20">`, model.width*12, model.height*24, model.width*12, model.height*24, model.palette.background.hex)
-	for y := range model.height {
-		for x := range model.width {
+	fmt.Fprintf(&svg, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d"><rect width="100%%" height="100%%" fill="%s"/><g font-family="DejaVu Sans Mono,monospace" font-size="20">`, width*12, height*24, width*12, height*24, palette.background.hex)
+	for y := range height {
+		for x := range width {
 			cell := terminal.CellAt(x, y)
 			if cell == nil || cell.Content == "" || cell.Content == " " {
 				continue
 			}
-			ink := model.palette.text.hex
+			ink := palette.text.hex
 			if cell.Style.Fg != nil {
 				ink = usageEvidenceColor(cell.Style.Fg)
 			}

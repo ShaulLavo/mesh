@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/spf13/cobra"
 
 	"github.com/shaul/mesh/internal/agentresume"
@@ -23,7 +24,7 @@ func (a *application) agentSetupCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use: "setup PROVIDER", Short: "Print or install stable conversation recovery hooks", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return setupAgentHooks(cmd, args[0], path, install, uninstall)
+			return setupAgentHooks(cmd, args[0], path, install, uninstall, a.privacy)
 		},
 	}
 	command.Flags().BoolVar(&install, "install", false, "merge Mesh hooks into provider settings")
@@ -33,7 +34,8 @@ func (a *application) agentSetupCommand() *cobra.Command {
 	return command
 }
 
-func setupAgentHooks(cmd *cobra.Command, name, path string, install, uninstall bool) error {
+func setupAgentHooks(cmd *cobra.Command, name, path string, install, uninstall bool, masks ...*privacy.Mask) error {
+	mask := presentationMask(masks)
 	provider, err := parseAgentProvider(name)
 	if err != nil {
 		return err
@@ -46,6 +48,7 @@ func setupAgentHooks(cmd *cobra.Command, name, path string, install, uninstall b
 	if err != nil {
 		return err
 	}
+	// Hook fragments are operational input for the provider, not a display projection.
 	if !install && !uninstall {
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), string(fragment))
 		return err
@@ -70,7 +73,7 @@ func setupAgentHooks(cmd *cobra.Command, name, path string, install, uninstall b
 	if err := writeAgentSettings(path, updated); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Updated %s\n", path)
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Updated %s\n", SafeTerminalText(mask.Value("path", path)))
 	if provider == agentresume.Codex && install {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "One more step: %s.\nCodex ignores untrusted hooks, so until then its conversations are not saved and cannot hibernate.\nCheck with: mesh agent doctor codex\n", codexHookReview)
 	}

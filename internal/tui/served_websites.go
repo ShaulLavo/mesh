@@ -86,9 +86,9 @@ func (m model) servedWebsiteRows(rowBudget int) []string {
 		}
 		label := ""
 		if website.name != "" {
-			label = safeText(website.name) + "  "
+			label = safeText(m.privacy.Value("service", website.name)) + "  "
 		}
-		rows = append(rows, "  "+style.Render(status)+"  "+label+safeText(website.url))
+		rows = append(rows, "  "+style.Render(status)+"  "+label+safeText(m.privacy.Value("url", website.url)))
 	}
 	if hidden := len(current.served) - websiteRows; showMoreRow && hidden > 0 {
 		rows = append(rows, m.styles.muted.Render(fmt.Sprintf("  … %d more  ·  mesh serve ls", hidden)))

@@ -26,7 +26,7 @@ func main() {
 			if _, ok := cli.StatusCode(err); ok {
 				return
 			}
-			cli.RenderError(output, styles, err)
+			cli.RenderError(output, styles, cli.PrivacyErrorForArguments(err, os.Args[1:]))
 		}),
 	}
 	// Without this a tagged build reports itself as built from source.
@@ -58,6 +58,7 @@ func plainAgentCommand(arguments []string) bool {
 }
 
 func finishAgentCommand(name string, err error) {
+	err = cli.PrivacyErrorForArguments(err, os.Args[1:])
 	if err == nil || name == "agent-hook" {
 		return
 	}

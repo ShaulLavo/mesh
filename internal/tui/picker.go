@@ -44,6 +44,8 @@ func NewCLIPicker(input, output *os.File) cli.PickerFunc {
 
 func newPickerModel(ctx context.Context, catalog cli.PickerInput, now time.Time) model {
 	current := newInspectingModel(ctx, hostCatalog(catalog), catalog.Inspect, now)
+	current.privacy = catalog.Privacy
+	current.list.SetDelegate(hostDelegate{styles: current.styles, privacy: current.privacy})
 	current.refresh = catalog.Refresh
 	current.act = catalog.Action
 	current.loadHosts = catalog.LoadHosts

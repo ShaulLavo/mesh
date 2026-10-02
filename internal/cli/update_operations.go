@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updategate"
@@ -38,7 +39,7 @@ func (a *application) updateOperationCommand(action string, options *updateOptio
 			if a.dependencies.UpdateCaller != nil {
 				environment.client = a.dependencies.UpdateCaller
 			}
-			output := updateOutput{cmd.OutOrStdout(), cmd.ErrOrStderr()}
+			output := updateOutput{cmd.OutOrStdout(), cmd.ErrOrStderr(), a.privacy}
 			return a.runUpdateOperation(cmd.Context(), environment, action, id, options.json, output)
 		},
 	}
@@ -57,7 +58,7 @@ func updateActionDescription(action string) string {
 
 func (a *application) runUpdateOperation(ctx context.Context, environment updateEnvironment, action, id string, structured bool, output updateOutput) error {
 	if action == "status" && !structured && update.IsLocal(environment.coordinator) {
-		if err := reportFinishedInstallationGate(environment.stateDir, id, output.diagnostic); err != nil {
+		if err := reportFinishedInstallationGate(environment.stateDir, id, output.diagnostic, output.privacy); err != nil {
 			return err
 		}
 	}
@@ -82,13 +83,14 @@ func (a *application) runUpdateOperation(ctx context.Context, environment update
 	if action == "retry" {
 		return observeUpdate(ctx, environment, run, structured, output)
 	}
-	if err := printUpdateRun(output.out, run, structured); err != nil {
+	if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
 		return err
 	}
 	return updateExit(run.ExitCode())
 }
 
-func reportFinishedInstallationGate(stateDir, id string, output io.Writer) error {
+func reportFinishedInstallationGate(stateDir, id string, output io.Writer, masks ...*privacy.Mask) error {
+	mask := presentationMask(masks)
 	var gate *updategate.UpdatingError
 	if !errors.As(updategate.Check(stateDir), &gate) || (id != "" && gate.Operation != id) {
 		return nil
@@ -100,7 +102,7 @@ func reportFinishedInstallationGate(stateDir, id string, output io.Writer) error
 	if status.Request.ID != gate.Operation || !installationFinished(status.Phase) {
 		return nil
 	}
-	_, err = fmt.Fprintf(output, "Update activation gate is held by finished run %s (%s). Run mesh update cancel %s to release it.\n", SafeTerminalText(gate.Operation), SafeTerminalText(string(status.Phase)), SafeTerminalText(gate.Operation))
+	_, err = fmt.Fprintf(output, "Update activation gate is held by finished run %s (%s). Run mesh update cancel %s to release it.\n", SafeTerminalText(mask.Value("update", gate.Operation)), SafeTerminalText(string(status.Phase)), SafeTerminalText(mask.Value("update", gate.Operation)))
 	if err != nil {
 		return fmt.Errorf("report finished installation gate: %w", err)
 	}
@@ -145,7 +147,7 @@ func listUpdateOperations(ctx context.Context, environment updateEnvironment, st
 	cancel()
 	if err != nil && update.IsLocal(environment.coordinator) {
 		if status, readErr := updateinstall.Read(environment.stateDir); readErr == nil && status.Settings.ClientOnly {
-			return printUpdateRun(output.out, runFromInstallation(status), structured)
+			return printUpdateRun(output.out, runFromInstallation(status), structured, output.privacy)
 		}
 		store, openErr := update.OpenStore(environment.stateDir)
 		if openErr != nil {
@@ -164,7 +166,7 @@ func listUpdateOperations(ctx context.Context, environment updateEnvironment, st
 		return err
 	}
 	for _, run := range runs {
-		if err := printUpdateRun(output.out, run, false); err != nil {
+		if err := printUpdateRun(output.out, run, false, output.privacy); err != nil {
 			return err
 		}
 	}
@@ -193,7 +195,7 @@ func (a *application) localUpdateOperation(ctx context.Context, environment upda
 	if !structured {
 		_, _ = fmt.Fprintln(output.diagnostic, "Coordinator unavailable. Showing the last persisted local state.")
 	}
-	if err := printUpdateRun(output.out, run, structured); err != nil {
+	if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
 		return err
 	}
 	return updateExit(run.ExitCode())
@@ -202,7 +204,7 @@ func (a *application) localUpdateOperation(ctx context.Context, environment upda
 func operateClientOnlyUpdate(ctx context.Context, environment updateEnvironment, status updateinstall.Status, action string, structured bool, output updateOutput) error {
 	if action == "status" {
 		run := runFromInstallation(status)
-		if err := printUpdateRun(output.out, run, structured); err != nil {
+		if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
 			return err
 		}
 		return updateExit(run.ExitCode())
@@ -223,7 +225,7 @@ func operateClientOnlyUpdate(ctx context.Context, environment updateEnvironment,
 		if err != nil {
 			status.Error = "Activation was already authorized and may still finish."
 		}
-		if err := printUpdateRun(output.out, runFromInstallation(status), structured); err != nil {
+		if err := printUpdateRun(output.out, runFromInstallation(status), structured, output.privacy); err != nil {
 			return err
 		}
 		return updateExit(runFromInstallation(status).ExitCode())

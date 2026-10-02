@@ -83,8 +83,8 @@ func (a *application) runTunnelClaim(cmd *cobra.Command, hostAlias, publicName s
 		destination = endpoint.Hostname()
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "claimed %s on %s\nssh -N -o ExitOnForwardFailure=yes -o IdentitiesOnly=yes -i %s -p 2222 -R %s %s\n",
-		publicName, host.Alias, tunnelShellQuote(filepath.Join(stateDir, "identity.key")),
-		tunnelShellQuote(publicName+":80:localhost:3000"), tunnelShellQuote(destination))
+		a.privacy.Value("route", publicName), a.privacy.Value("host", host.Alias), tunnelShellQuote(a.privacy.Value("path", filepath.Join(stateDir, "identity.key"))),
+		tunnelShellQuote(a.privacy.Value("route", publicName)+":80:localhost:3000"), tunnelShellQuote(a.privacy.Value("host", destination)))
 	return err
 }
 
@@ -100,7 +100,7 @@ func (a *application) runTunnelRelease(cmd *cobra.Command, publicName, hostAlias
 	if _, err := a.deliverTunnelMutation(cmd.Context(), host, tunnel.Release, publicName); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "released %s on %s\n", publicName, host.Alias)
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "released %s on %s\n", a.privacy.Value("route", publicName), a.privacy.Value("host", host.Alias))
 	return err
 }
 
@@ -186,6 +186,6 @@ func (a *application) runLocalTunnelRelease(cmd *cobra.Command, publicName, host
 	if response.Type != protocol.TypeTunnelRecovered || response.TunnelName != publicName {
 		return errors.New("local edge returned an invalid tunnel release acknowledgement")
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "released %s on the local edge\n", publicName)
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "released %s on the local edge\n", a.privacy.Value("route", publicName))
 	return err
 }

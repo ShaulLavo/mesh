@@ -96,7 +96,7 @@ func (a *application) bootstrapApprovedCoordinator(ctx context.Context, environm
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			if printErr := printUpdateRun(output.out, run, options.json); printErr != nil {
+			if printErr := printUpdateRun(output.out, run, options.json, output.privacy); printErr != nil {
 				return printErr
 			}
 			return statusError{code: 2}
@@ -108,7 +108,7 @@ func (a *application) bootstrapApprovedCoordinator(ctx context.Context, environm
 		if recordErr != nil {
 			return recordErr
 		}
-		if printErr := printUpdateRun(output.out, run, options.json); printErr != nil {
+		if printErr := printUpdateRun(output.out, run, options.json, output.privacy); printErr != nil {
 			return printErr
 		}
 		return statusError{code: 1}
@@ -271,7 +271,7 @@ func (a *application) operateFirstCoordinator(ctx context.Context, environment u
 	if err != nil {
 		return err
 	}
-	if err := printUpdateRun(output.out, run, structured); err != nil {
+	if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
 		return err
 	}
 	return updateExit(run.ExitCode())

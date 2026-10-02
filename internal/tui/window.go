@@ -63,7 +63,7 @@ func newWindowModel(ctx context.Context, input cli.WindowInput, now time.Time) w
 	picker := newPickerModel(ctx, cli.PickerInput{
 		Hosts:   []cli.HostSessions{{Host: cli.HostRecord{ID: input.HostID, Alias: input.HostAlias}, Sessions: rows, Local: true}},
 		Inspect: input.Inspect, Action: input.Action, OpenHostAlias: input.HostAlias,
-		UpdateNotice: input.UpdateNotice,
+		UpdateNotice: input.UpdateNotice, Privacy: input.Privacy,
 	}, now)
 	// Empty aliases are valid in isolated callers, but the compact view always
 	// opens this machine directly.
@@ -216,14 +216,14 @@ func (m *windowModel) resize() {
 	rows := min(9, max(1, len(m.picker.currentHost().sessions)), max(1, m.picker.height-9-len(m.picker.updateNoticeLines())))
 	m.picker.list.SetSize(m.picker.width, rows)
 	m.picker.list.SetDelegate(windowDelegate{sessionDelegate: sessionDelegate{
-		styles: m.picker.styles, now: m.picker.now, hostAlias: m.picker.currentHost().alias,
+		privacy: m.picker.privacy, styles: m.picker.styles, now: m.picker.now, hostAlias: m.picker.currentHost().alias,
 		inspection: m.picker.inspection, summaries: m.picker.summaries, hostNames: m.hostNames,
 	}, selected: m.selected})
 }
 
 func (m windowModel) View() tea.View {
 	picker := m.picker
-	header := picker.styles.title.Render("mesh") + picker.styles.muted.Render("  Resume on "+safeText(picker.currentHost().alias))
+	header := picker.styles.title.Render("mesh") + picker.styles.muted.Render("  Resume on "+safeText(picker.privacy.Value("host", picker.currentHost().alias)))
 	lines := append([]string{header}, picker.updateNoticeLines()...)
 	lines = append(lines, "")
 	lines = append(lines, picker.listViewRows(picker.list.Height())...)
@@ -244,7 +244,7 @@ func (m windowModel) View() tea.View {
 		}
 	}
 	if picker.notice != "" {
-		lines = append(lines, picker.styles.warning.Render(safeText(picker.notice)))
+		lines = append(lines, picker.styles.warning.Render(safeText(picker.privacy.Value("notice", picker.notice))))
 	}
 	action := "resume"
 	if !m.selected {

@@ -16,6 +16,12 @@ import (
 )
 
 func (a *application) previousOutput(cmd *cobra.Command, id string, tail int) error {
+	if a.privacy != nil {
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Previous output withheld in privacy mode"); err != nil {
+			return fmt.Errorf("show private previous output notice: %w", err)
+		}
+		return nil
+	}
 	resolved, err := a.resolveRecoverySession(cmd.Context(), id)
 	if err != nil {
 		return err

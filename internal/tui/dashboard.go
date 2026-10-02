@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/shaul/mesh/internal/cli"
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/usagefeed"
 )
 
@@ -97,6 +98,7 @@ type dashboardRenderWork struct {
 }
 
 type dashboardModel struct {
+	privacy           *privacy.Mask
 	layout            dashboardLayout
 	layoutPrepared    bool
 	attentionData     *dashboardAttention
@@ -136,7 +138,7 @@ func newDashboardForTerminal(input cli.DashboardInput, now time.Time, terminal s
 }
 
 func newDashboard(input cli.DashboardInput, now time.Time) dashboardModel {
-	model := dashboardModel{palette: dashboardTheme(input.Theme), profile: colorprofile.TrueColor, now: now, width: 80, height: 24, wall: input.Wall, history: map[string]dashboardHostHistory{}, ramTotals: map[string]uint64{}}
+	model := dashboardModel{privacy: input.Privacy, palette: dashboardTheme(input.Theme), profile: colorprofile.TrueColor, now: now, width: 80, height: 24, wall: input.Wall, history: map[string]dashboardHostHistory{}, ramTotals: map[string]uint64{}}
 	for _, host := range input.Hosts {
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host, Connection: cli.StateConnecting})
 	}

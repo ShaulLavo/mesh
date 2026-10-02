@@ -65,7 +65,7 @@ func (a *application) runServeLabel(cmd *cobra.Command, route, label, hostAlias 
 	if response.Type != protocol.TypeServiceLabeled || response.Service == nil || response.Service.Name != name || response.Service.DisplayName != label {
 		return fmt.Errorf("host %s did not acknowledge the service label; update Mesh there first", selected.Host.Alias)
 	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s on %s is now %s\n", route, selected.Host.Alias, label); err != nil {
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s on %s is now %s\n", a.privacy.Value("route", route), a.privacy.Value("host", selected.Host.Alias), a.privacy.Value("name", label)); err != nil {
 		return fmt.Errorf("write service label: %w", err)
 	}
 	return nil

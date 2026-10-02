@@ -317,8 +317,8 @@ func (a *application) runServeStartStop(cmd *cobra.Command, route, hostAlias str
 	row := ServiceCatalogRow{Host: selected.Host, Service: status, Live: true}
 	state := row.State()
 	if status.Demand != nil && status.Demand.SessionID != "" && state != protocol.DemandStopped {
-		state += ", session " + safeTableCell(status.Demand.SessionID)
+		state += ", session " + safeTableCell(a.privacy.Value("session", status.Demand.SessionID))
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s on %s: %s\n", route, selected.Host.Alias, state)
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s on %s: %s\n", a.privacy.Value("route", route), a.privacy.Value("host", selected.Host.Alias), state)
 	return err
 }

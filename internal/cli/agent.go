@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/term"
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/spf13/cobra"
 
 	"github.com/shaul/mesh/internal/agentresume"
@@ -67,14 +68,14 @@ func (a *application) runAgentCommand(cmd *cobra.Command, args []string) error {
 	}
 	launch, err := inspectAgentLaunch(cmd.Context(), provider, executable, arguments)
 	if err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Mesh conversation recovery unavailable: %v\n", err)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Mesh conversation recovery unavailable: %s\n", a.privacy.Value("error", err.Error()))
 		return runNativeAgent(cmd, executable, arguments, "", clearAgentInvocationEnv(os.Environ()))
 	}
 	if reason := agentresume.Compatibility(launch); reason != "" {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Mesh conversation recovery unavailable: %s\n", reason)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Mesh conversation recovery unavailable: %s\n", a.privacy.Value("error", reason))
 		return runNativeAgent(cmd, executable, arguments, "", clearAgentInvocationEnv(os.Environ()))
 	}
-	return runRegisteredAgent(cmd, location, launch, arguments, os.Environ(), "", "", false)
+	return runRegisteredAgent(cmd, location, launch, arguments, os.Environ(), "", "", false, a.privacy)
 }
 
 func parseAgentProvider(name string) (agentresume.Provider, error) {
@@ -135,12 +136,13 @@ func installedAgentVersion(parent context.Context, executable string) (string, e
 	return strings.TrimSpace(string(output.data)), nil
 }
 
-func runRegisteredAgent(cmd *cobra.Command, location worker.SessionWorkerLocation, launch agentresume.Launch, arguments, env []string, directory, expected string, explicit bool) error {
+func runRegisteredAgent(cmd *cobra.Command, location worker.SessionWorkerLocation, launch agentresume.Launch, arguments, env []string, directory, expected string, explicit bool, masks ...*privacy.Mask) error {
+	mask := presentationMask(masks)
 	ctx, cancel := context.WithTimeout(context.Background(), agentRequestTimeout)
 	lease, err := beginAgentInvocation(ctx, location, launch, expected, explicit, false)
 	cancel()
 	if err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Mesh conversation recovery unverified: %v\n", err)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Mesh conversation recovery unverified: %s\n", mask.Value("error", err.Error()))
 		return runNativeAgent(cmd, launch.Executable, arguments, directory, clearAgentInvocationEnv(env))
 	}
 	defer lease.connection.Close() //nolint:errcheck // abrupt close retains the durable binding
@@ -364,12 +366,12 @@ func (a *application) runAgentBind(cmd *cobra.Command, args []string) error {
 	}
 	recipe := agentresume.Recipe{Version: 1, Launch: launch, ConversationID: args[1]}
 	if provider == agentresume.Codex {
-		return bindCodexConversation(cmd, location, recipe)
+		return bindCodexConversation(cmd, location, recipe, a.privacy)
 	}
-	return resumeAgentRecipe(cmd, location, recipe, true)
+	return resumeAgentRecipe(cmd, location, recipe, true, a.privacy)
 }
 
-func bindCodexConversation(cmd *cobra.Command, location worker.SessionWorkerLocation, recipe agentresume.Recipe) error {
+func bindCodexConversation(cmd *cobra.Command, location worker.SessionWorkerLocation, recipe agentresume.Recipe, masks ...*privacy.Mask) error {
 	event, err := agentresume.LookupConversation(cmd.Context(), recipe, clearAgentInvocationEnv(os.Environ()))
 	if err != nil {
 		return fmt.Errorf("verify explicit Codex conversation: %w", err)
@@ -394,11 +396,18 @@ func bindCodexConversation(cmd *cobra.Command, location worker.SessionWorkerLoca
 	if err != nil || !verified {
 		return fmt.Errorf("finish explicit Codex binding: %w", agentResponseError(protocol.Control{}, err))
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Saved exact Codex conversation %s in %s. Use mesh recover %s --agent to resume it.\n", recipe.ConversationID, recipe.Directory, location.SessionID)
-	return err
+	return writeAgentBindStatus(cmd.OutOrStdout(), recipe, location.SessionID, presentationMask(masks))
 }
 
-func resumeAgentRecipe(cmd *cobra.Command, location worker.SessionWorkerLocation, recipe agentresume.Recipe, explicit bool) error {
+func writeAgentBindStatus(output io.Writer, recipe agentresume.Recipe, sessionID string, mask *privacy.Mask) error {
+	_, err := fmt.Fprintf(output, "Saved exact Codex conversation %s in %s. Use mesh recover %s --agent to resume it.\n", mask.Value("conversation", recipe.ConversationID), mask.Value("path", recipe.Directory), mask.Value("session", sessionID))
+	if err != nil {
+		return fmt.Errorf("print agent binding status: %w", err)
+	}
+	return nil
+}
+
+func resumeAgentRecipe(cmd *cobra.Command, location worker.SessionWorkerLocation, recipe agentresume.Recipe, explicit bool, masks ...*privacy.Mask) error {
 	arguments, err := agentresume.ResumeCommand(recipe)
 	if err != nil {
 		return err
@@ -408,16 +417,17 @@ func resumeAgentRecipe(cmd *cobra.Command, location worker.SessionWorkerLocation
 		return err
 	}
 	_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Opening the saved conversation. Mesh verifies recovery when the provider reports the expected conversation ID.")
-	return runRegisteredAgent(cmd, location, recipe.Launch, arguments[1:], env, recipe.Directory, recipe.ConversationID, explicit)
+	return runRegisteredAgent(cmd, location, recipe.Launch, arguments[1:], env, recipe.Directory, recipe.ConversationID, explicit, presentationMask(masks))
 }
 
 func (a *application) agentResumeCommand() *cobra.Command {
 	return &cobra.Command{Use: "agent-resume", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return runPendingAgent(cmd)
+		return runPendingAgent(cmd, a.privacy)
 	}}
 }
 
-func runPendingAgent(cmd *cobra.Command) error {
+func runPendingAgent(cmd *cobra.Command, masks ...*privacy.Mask) error {
+	mask := presentationMask(masks)
 	location, contained := worker.ContainingSessionWorker()
 	if !contained {
 		return errors.New("agent-resume requires its reserved Mesh worker")
@@ -439,8 +449,8 @@ func runPendingAgent(cmd *cobra.Command) error {
 	if recipe == nil {
 		return errors.New("reserved worker has no pending agent conversation")
 	}
-	if err := resumeAgentRecipe(cmd, location, *recipe, recipe.Explicit); err != nil {
-		return openAgentRecoveryShell(cmd, location, metadata.RecoveredFrom, host.ID, recipe.Directory, err)
+	if err := resumeAgentRecipe(cmd, location, *recipe, recipe.Explicit, mask); err != nil {
+		return openAgentRecoveryShell(cmd, location, metadata.RecoveredFrom, host.ID, recipe.Directory, err, mask)
 	}
 	return nil
 }
@@ -457,7 +467,8 @@ func awaitAgentMetadata(ctx context.Context, directory string) (worker.Meta, err
 	}
 }
 
-func openAgentRecoveryShell(cmd *cobra.Command, location worker.SessionWorkerLocation, sourceID, hostID, directory string, failure error) error {
+func openAgentRecoveryShell(cmd *cobra.Command, location worker.SessionWorkerLocation, sourceID, hostID, directory string, failure error, masks ...*privacy.Mask) error {
+	mask := presentationMask(masks)
 	input, ok := cmd.InOrStdin().(*os.File)
 	if !ok || !term.IsTerminal(input.Fd()) {
 		return failure
@@ -466,7 +477,7 @@ func openAgentRecoveryShell(cmd *cobra.Command, location worker.SessionWorkerLoc
 	if err != nil {
 		return errors.Join(failure, err)
 	}
-	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Provider could not resume: %v\nPress Enter to open a shell in %s, or Ctrl+D to close.\n", failure, directory)
+	writeAgentRecoveryShellPrompt(cmd.ErrOrStderr(), failure, directory, mask)
 	if _, err := bufio.NewReader(input).ReadString('\n'); err != nil {
 		return failure
 	}
@@ -484,4 +495,8 @@ func reportAgentRecoveryStatus(output io.Writer, result recovery.Result) {
 	if result.AgentStatus == "unverified" {
 		_, _ = fmt.Fprintln(output, "Conversation recovery is unverified while the provider starts. This terminal remains usable; retry reconnects to the same replacement.")
 	}
+}
+
+func writeAgentRecoveryShellPrompt(output io.Writer, failure error, directory string, mask *privacy.Mask) {
+	_, _ = fmt.Fprintf(output, "Provider could not resume: %s\nPress Enter to open a shell in %s, or Ctrl+D to close.\n", mask.Value("error", failure.Error()), mask.Value("path", directory))
 }

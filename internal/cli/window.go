@@ -77,6 +77,7 @@ func (a *application) runWindow(cmd *cobra.Command, take bool, detachKey string,
 			aliases[host.ID] = host.Alias
 		}
 		selection, err := a.dependencies.WindowPicker(cmd.Context(), WindowInput{
+			Privacy:      a.privacy,
 			UpdateNotice: a.pickerUpdateNotice(),
 			Sessions:     rows, HostAlias: localHostAlias, HostID: local.Host.ID, HostAliases: aliases,
 			Inspect: inspectLocalSession,

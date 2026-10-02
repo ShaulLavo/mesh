@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/spf13/cobra"
 
 	"github.com/shaul/mesh/internal/agentresume"
@@ -108,7 +109,7 @@ func (a *application) runGC(cmd *cobra.Command, idle time.Duration, shells, yes 
 		_, err := fmt.Fprintf(output, "nothing to reclaim: no detached session has been idle for %s\n", idle)
 		return err
 	}
-	if err := writeGCPlan(output, entries); err != nil {
+	if err := writeGCPlan(output, entries, a.privacy); err != nil {
 		return err
 	}
 	if !yes {
@@ -123,7 +124,7 @@ func (a *application) gcCatalog(cmd *cobra.Command, hosts []HostRecord) ([]HostS
 	var catalog []HostSessions
 	local, err := localSessionRowsMeasured(procmem.Snapshot())
 	if err != nil {
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "this host: local sessions unavailable: %s\n", safeRemoteText(err.Error())); err != nil {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "this host: local sessions unavailable: %s\n", safeRemoteText(a.privacy.Value("error", err.Error()))); err != nil {
 			return nil, err
 		}
 	} else {
@@ -148,9 +149,9 @@ func (a *application) gcCatalog(cmd *cobra.Command, hosts []HostRecord) ([]HostS
 		}
 		reason := "no live catalog"
 		if result.Err != nil {
-			reason = safeRemoteText(result.Err.Error())
+			reason = safeRemoteText(a.privacy.Value("error", result.Err.Error()))
 		}
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %s; its sessions were not considered\n", result.Host.Alias, reason); err != nil {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %s; its sessions were not considered\n", a.privacy.Value("host", result.Host.Alias), reason); err != nil {
 			return nil, err
 		}
 	}
@@ -261,28 +262,30 @@ func gcActionText(entry gcEntry) string {
 	return string(entry.action) + " (" + strings.Join(entry.notes, "; ") + ")"
 }
 
-func gcWhat(row protocol.SessionInfo) string {
+func gcWhat(row protocol.SessionInfo, masks ...*privacy.Mask) string {
+	mask := presentationMask(masks)
 	var what string
 	if gcHibernatable(row) {
 		what = string(row.Recovery.Agent.Provider)
 	} else {
-		what = strings.Join(row.Command, " ")
+		what = strings.Join(mask.Command(row.Command), " ")
 	}
 	if row.Recovery != nil && strings.TrimSpace(row.Recovery.Title) != "" {
-		what += " · " + row.Recovery.Title
+		what += " · " + mask.Value("title", row.Recovery.Title)
 	}
 	return SafeTerminalText(what)
 }
 
-func writeGCPlan(output io.Writer, entries []gcEntry) error {
+func writeGCPlan(output io.Writer, entries []gcEntry, masks ...*privacy.Mask) error {
+	mask := presentationMask(masks)
 	table := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
 	if _, err := fmt.Fprintln(table, "HOST\tID\tMEM\tIDLE\tACTION\tWHAT"); err != nil {
 		return err
 	}
 	for _, entry := range entries {
 		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			SafeTerminalText(entry.host.Alias), entry.row.ID, formatBytes(entry.row.MemoryBytes),
-			compactDuration(entry.idle), gcActionText(entry), gcWhat(entry.row),
+			SafeTerminalText(mask.Value("host", entry.host.Alias)), mask.Value("session", entry.row.ID), formatBytes(entry.row.MemoryBytes),
+			compactDuration(entry.idle), privateGCActionText(mask, entry), gcWhat(entry.row, mask),
 		); err != nil {
 			return err
 		}
@@ -354,7 +357,7 @@ func (a *application) applyGCPlan(cmd *cobra.Command, policy gcPolicy, entries [
 		if entry.action == gcKill {
 			verb = "killed"
 		}
-		if _, err := fmt.Fprintf(output, "%s %s\n", verb, SafeTerminalText(entry.label())); err != nil {
+		if _, err := fmt.Fprintf(output, "%s %s\n", verb, SafeTerminalText(a.privacy.Value("session", entry.row.ID)+" on "+a.privacy.Value("host", entry.host.Alias))); err != nil {
 			return err
 		}
 	}
@@ -423,4 +426,18 @@ func (a *application) confirmIdleShell(ctx context.Context, policy gcPolicy, ent
 // compactDuration renders an elapsed time in the same units as AGE.
 func compactDuration(elapsed time.Duration) string {
 	return ageAt(time.Time{}.Add(elapsed), time.Time{})
+}
+
+// Route labels are metadata, while the other notes explain the GC policy.
+func privateGCActionText(mask *privacy.Mask, entry gcEntry) string {
+	if mask == nil || entry.row.Label == "" {
+		return gcActionText(entry)
+	}
+	entry.notes = slices.Clone(entry.notes)
+	for i, note := range entry.notes {
+		if note == SafeTerminalText(entry.row.Label) {
+			entry.notes[i] = mask.Value("label", entry.row.Label)
+		}
+	}
+	return gcActionText(entry)
 }
