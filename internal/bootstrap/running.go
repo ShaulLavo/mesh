@@ -30,8 +30,8 @@ const probeVerifyTimeout = 5 * time.Second
 // cancels the context on its way out, so a probe that ran afterwards would
 // inherit a dead one and report nothing.
 func probeRunningDaemon(ctx context.Context, normalized normalizedOptions, deps dependencies) (Result, bool) {
-	peer, err := tailnetPeerFor(ctx, normalized.target)
-	if err != nil || !reachesMeshPort(ctx, peer.Addrs, normalized.daemonPort) {
+	peer, ok := deps.servingPeer(ctx, normalized.target, normalized.daemonPort)
+	if !ok {
 		return Result{}, false
 	}
 	verifyCtx, cancel := context.WithTimeout(ctx, probeVerifyTimeout)
@@ -52,6 +52,16 @@ func probeRunningDaemon(ctx context.Context, normalized normalizedOptions, deps 
 		Endpoint:           endpoint,
 		AlreadyConfigured:  true,
 	}, true
+}
+
+// findServingPeer finds the tailnet peer the target names and reports whether
+// anything answers on its Mesh port.
+func findServingPeer(ctx context.Context, wanted target, port uint16) (tailnet.Peer, bool) {
+	peer, err := tailnetPeerFor(ctx, wanted)
+	if err != nil || !reachesMeshPort(ctx, peer.Addrs, port) {
+		return tailnet.Peer{}, false
+	}
+	return peer, true
 }
 
 // reachesMeshPort keeps the probe from costing anything on a bare machine.

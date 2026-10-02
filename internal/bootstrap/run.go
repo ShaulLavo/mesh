@@ -34,8 +34,14 @@ type remoteHost interface {
 }
 
 type dependencies struct {
-	connect       func(context.Context, target, SSHOptions) (remoteHost, error)
-	localTailnet  func(context.Context) error
+	connect      func(context.Context, target, SSHOptions) (remoteHost, error)
+	localTailnet func(context.Context) error
+	// servingPeer reads this machine's real tailnet and dials it, so tests must
+	// replace it or they adopt whatever real host shares the target's name.
+	servingPeer func(context.Context, target, uint16) (tailnet.Peer, bool)
+	// sshConfig reads the operator's ~/.ssh/config, whose aliases would
+	// otherwise rewrite a test's fixture target into a real host.
+	sshConfig     func() sshConfigResolver
 	resolveBinary func(context.Context, binarySelection, Platform) (resolvedBinary, error)
 	install       func(context.Context, remoteHost, installRequest) (bool, error)
 	discover      func(context.Context, remoteHost) (tailscaleObservation, error)
@@ -50,6 +56,8 @@ func defaultDependencies() dependencies {
 	return dependencies{
 		connect:       connectSSH,
 		localTailnet:  checkLocalTailnet,
+		servingPeer:   findServingPeer,
+		sshConfig:     userSSHConfig,
 		resolveBinary: resolvePlatformBinary,
 		install:       installRemote,
 		discover:      discoverTailnet,
@@ -98,7 +106,7 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		}
 		resultErr = redactAuthKey(resultErr, authKeyForRedaction)
 	}()
-	normalized, err := normalizeOptions(ctx, opts)
+	normalized, err := normalizeOptions(ctx, opts, deps.sshConfig)
 	if err != nil {
 		return Result{}, err
 	}
@@ -303,7 +311,9 @@ func stringsContainAuthKey(values []string, authKey []byte) bool {
 	return false
 }
 
-func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, error) {
+// normalizeOptions runs before the dependencies are validated so an option
+// error still reaches the redaction, which is why a nil loader reads no config.
+func normalizeOptions(ctx context.Context, opts Options, loadSSHConfig func() sshConfigResolver) (normalizedOptions, error) {
 	if ctx == nil {
 		return normalizedOptions{}, errors.New("bootstrap: nil context")
 	}
@@ -316,7 +326,10 @@ func normalizeOptions(ctx context.Context, opts Options) (normalizedOptions, err
 	}
 	// Mesh dials the address itself, so a Host alias only ssh knows about would
 	// otherwise fail as a DNS lookup for the alias.
-	sshConfig := userSSHConfig()
+	var sshConfig sshConfigResolver
+	if loadSSHConfig != nil {
+		sshConfig = loadSSHConfig()
+	}
 	remoteTarget = applySSHConfig(remoteTarget, sshConfig)
 	// An explicitly named identity wins; otherwise take the one the config
 	// names for this alias, the way ssh would.
@@ -419,7 +432,7 @@ func checkLocalTailnet(ctx context.Context) error {
 }
 
 func validateDependencies(deps dependencies) error {
-	if deps.connect == nil || deps.localTailnet == nil || deps.resolveBinary == nil || deps.install == nil || deps.discover == nil || deps.provision == nil || deps.checkClock == nil || deps.verify == nil || deps.authorizedKey == nil || deps.now == nil {
+	if deps.connect == nil || deps.localTailnet == nil || deps.servingPeer == nil || deps.sshConfig == nil || deps.resolveBinary == nil || deps.install == nil || deps.discover == nil || deps.provision == nil || deps.checkClock == nil || deps.verify == nil || deps.authorizedKey == nil || deps.now == nil {
 		return errors.New("bootstrap: incomplete dependencies")
 	}
 	return nil

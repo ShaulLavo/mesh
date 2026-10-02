@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shaul/mesh/internal/tailnet"
 )
 
 func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
@@ -27,6 +29,8 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 	foundVariant := ""
 	deps := dependencies{
 		localTailnet: func(context.Context) error { return nil },
+		servingPeer:  noServingPeer,
+		sshConfig:    noSSHConfig,
 		connect: func(_ context.Context, got target, _ SSHOptions) (remoteHost, error) {
 			if got.display() != "shaul@bootstrap-fixture.invalid" {
 				t.Fatalf("target = %s", got.display())
@@ -108,6 +112,8 @@ func TestRunRefusesChangedPinnedIdentity(t *testing.T) {
 	pinnedID := base64.RawURLEncoding.EncodeToString(pinnedKey)
 	deps := dependencies{
 		localTailnet: func(context.Context) error { return nil },
+		servingPeer:  noServingPeer,
+		sshConfig:    noSSHConfig,
 		connect:      func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
 		resolveBinary: func(context.Context, binarySelection, Platform) (resolvedBinary, error) {
 			return resolvedBinary{path: "/tmp/mesh", cleanup: func() {}}, nil
@@ -146,6 +152,8 @@ func TestRunProvisionFailurePrecedesBinaryTransferAndMeshInstall(t *testing.T) {
 	provisionFailure := diagnostic(DiagnosticTailscaleUnavailable, errors.New("fixture provision failure"))
 	deps := dependencies{
 		localTailnet: func(context.Context) error { return nil },
+		servingPeer:  noServingPeer,
+		sshConfig:    noSSHConfig,
 		connect:      func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
 		resolveBinary: func(context.Context, binarySelection, Platform) (resolvedBinary, error) {
 			t.Fatal("binary resolution ran before Tailscale provisioning succeeded")
@@ -193,6 +201,8 @@ func TestRunRedactsAuthKeyFromAnyReturnedDiagnostic(t *testing.T) {
 	}}
 	deps := dependencies{
 		localTailnet:  func(context.Context) error { return nil },
+		servingPeer:   noServingPeer,
+		sshConfig:     noSSHConfig,
 		connect:       func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
 		resolveBinary: func(context.Context, binarySelection, Platform) (resolvedBinary, error) { return resolvedBinary{}, nil },
 		install:       func(context.Context, remoteHost, installRequest) (bool, error) { return false, nil },
@@ -241,6 +251,8 @@ func TestRunDiscardsResultContainingAuthKey(t *testing.T) {
 	hostID := base64.RawURLEncoding.EncodeToString(make([]byte, ed25519.PublicKeySize))
 	deps := dependencies{
 		localTailnet: func(context.Context) error { return nil },
+		servingPeer:  noServingPeer,
+		sshConfig:    noSSHConfig,
 		connect:      func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
 		resolveBinary: func(context.Context, binarySelection, Platform) (resolvedBinary, error) {
 			return resolvedBinary{path: "/tmp/mesh", cleanup: func() {}}, nil
@@ -278,6 +290,8 @@ func TestRunRejectsAuthKeyInTailnetStatusBeforeMeshWrite(t *testing.T) {
 	}}
 	deps := dependencies{
 		localTailnet: func(context.Context) error { return nil },
+		servingPeer:  noServingPeer,
+		sshConfig:    noSSHConfig,
 		connect:      func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
 		discover: func(context.Context, remoteHost) (tailscaleObservation, error) {
 			return tailscaleObservation{State: tailscaleRunning, Tailnet: tailnetObservation{Name: secret, Addresses: []string{"100.64.0.8"}}}, nil
@@ -346,6 +360,8 @@ func TestRunChecksThisMachineBeforeTouchingTheRemote(t *testing.T) {
 		Target: "alice@pi", StateDir: t.TempDir(),
 	}, dependencies{
 		localTailnet: func(context.Context) error { return errors.New("tailscale is not installed") },
+		servingPeer:  noServingPeer,
+		sshConfig:    noSSHConfig,
 		connect: func(context.Context, target, SSHOptions) (remoteHost, error) {
 			connected = true
 			return nil, errors.New("must not connect")
@@ -370,3 +386,58 @@ func TestRunChecksThisMachineBeforeTouchingTheRemote(t *testing.T) {
 		t.Fatal("connected to the remote host before checking this machine")
 	}
 }
+
+func TestRunAdoptsAHostAlreadyServingMeshWhenSSHFails(t *testing.T) {
+	t.Parallel()
+
+	hostID := base64.RawURLEncoding.EncodeToString(make([]byte, ed25519.PublicKeySize))
+	sshRefused := diagnostic(DiagnosticSSHConnect, errors.New("fixture SSH refusal"))
+	deps := dependencies{
+		localTailnet: func(context.Context) error { return nil },
+		servingPeer: func(_ context.Context, got target, port uint16) (tailnet.Peer, bool) {
+			if got.host != "mac" || port != DefaultPort {
+				t.Fatalf("serving probe target = %s, port %d", got.display(), port)
+			}
+			return tailnet.Peer{Name: "mac.tail.example", Addrs: []string{"100.64.0.9"}}, true
+		},
+		sshConfig: noSSHConfig,
+		connect:   func(context.Context, target, SSHOptions) (remoteHost, error) { return nil, sshRefused },
+		resolveBinary: func(context.Context, binarySelection, Platform) (resolvedBinary, error) {
+			t.Fatal("binary resolution ran for a host already serving Mesh")
+			return resolvedBinary{}, nil
+		},
+		install: func(context.Context, remoteHost, installRequest) (bool, error) {
+			t.Fatal("installer ran for a host already serving Mesh")
+			return false, nil
+		},
+		discover: func(context.Context, remoteHost) (tailscaleObservation, error) { return tailscaleObservation{}, nil },
+		provision: func(context.Context, remoteHost, provisionRequest) (provisionResult, error) {
+			return provisionResult{}, nil
+		},
+		checkClock: func(context.Context, remoteHost, time.Time) error { return nil },
+		verify: func(_ context.Context, addresses []string, _ uint16, _ string) (verifiedHost, string, error) {
+			if !reflect.DeepEqual(addresses, []string{"100.64.0.9"}) {
+				t.Fatalf("verify addresses = %v", addresses)
+			}
+			return verifiedHost{ID: hostID, MeshIdentity: hostID, TailscaleName: "mac.tail.example"}, "ws://100.64.0.9:7337/mesh", nil
+		},
+		authorizedKey: func(string) (string, error) { return "ssh-ed25519 adopter", nil },
+		now:           time.Now,
+	}
+	result, err := run(context.Background(), Options{Target: "shaul@mac", StateDir: t.TempDir()}, deps)
+	if err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	if result.ID != hostID || result.TailscaleName != "mac.tail.example" || !result.AlreadyConfigured {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+// noServingPeer keeps the already-serving probe off this machine's real
+// tailnet, where a host named like the fixture target may answer.
+func noServingPeer(context.Context, target, uint16) (tailnet.Peer, bool) {
+	return tailnet.Peer{}, false
+}
+
+// noSSHConfig keeps the operator's ~/.ssh/config from rewriting fixture targets.
+func noSSHConfig() sshConfigResolver { return nil }
