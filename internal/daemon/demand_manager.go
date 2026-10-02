@@ -223,7 +223,7 @@ func (m *demandManager) Enter(ctx context.Context, name string) (func(), error) 
 	if route == nil {
 		return nil, fmt.Errorf("route /%s is not on-demand", name)
 	}
-	release, started := route.holdStarting()
+	release, started := route.hold()
 	if m.entered != nil {
 		m.entered()
 	}

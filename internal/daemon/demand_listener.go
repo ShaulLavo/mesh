@@ -46,7 +46,8 @@ func (m *demandManager) listenLocked(owner, route string, port uint16, describe 
 	}
 	listener.listener = &countingListener{Listener: raw, open: map[*countedConn]struct{}{}, hold: func() func() {
 		if route := m.route(owner); route != nil {
-			return route.hold()
+			release, _ := route.hold()
+			return release
 		}
 		return func() {}
 	}}
