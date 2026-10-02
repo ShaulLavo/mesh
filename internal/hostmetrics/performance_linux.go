@@ -27,17 +27,14 @@ func readComponentSensors(ctx context.Context, root string) ([]ComponentTemperat
 	if err := ctx.Err(); err != nil {
 		return nil, Temperature{}, fmt.Errorf("component temperatures: %w", err)
 	}
-	if len(values) > 0 {
-		return values, legacy, nil
-	}
 	var failures []error
 	for _, err := range []error{thermalErr, hwmonErr} {
 		if err != nil && !errors.Is(err, ErrUnsupported) {
 			failures = append(failures, err)
 		}
 	}
-	if len(failures) > 0 {
-		return nil, Temperature{}, errors.Join(failures...)
+	if len(values) > 0 || len(failures) > 0 {
+		return values, legacy, errors.Join(failures...)
 	}
 	return nil, Temperature{}, ErrUnsupported
 }

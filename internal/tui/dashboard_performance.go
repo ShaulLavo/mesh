@@ -119,7 +119,7 @@ func dashboardCompactBatteryState(battery hostmetrics.Battery) string {
 	return dashboardBatteryState(battery)
 }
 func (m dashboardModel) ioLine(host cli.DashboardHostView, leftWidth, rightWidth int) string {
-	if host.Connection != cli.StateReachable {
+	if host.Connection != cli.StateReachable || host.MetricsUnsupported {
 		return ""
 	}
 	if host.PerformanceVersion == 0 {
@@ -197,6 +197,9 @@ func (m dashboardModel) cardFacts(host cli.DashboardHostView, width int) string 
 func (m dashboardModel) compactHost(host cli.DashboardHostView) []string {
 	if host.Connection != cli.StateReachable {
 		return []string{dashboardAlign(m.hostTitle(host), "last reply "+dashboardAge(m.now, host.LastReply), m.width), m.paint(dashboardCachedStyle).Render("    " + m.catalogCounts(host))}
+	}
+	if host.MetricsUnsupported {
+		return []string{m.hostTitle(host), m.paint(dashboardMutedStyle).Render("    " + m.catalogCounts(host))}
 	}
 	first := m.paint(dashboardGoodStyle).Render(dashboardCompactMark(m.ascii)+" ") + dashboardFit(m.paint(dashboardTitleStyle).Render(safeText(host.Host.Alias)), 10) + "  CPU " + m.coloredPercent(host.CPU, host, m.paint(dashboardCPUStyle)) + "  RAM " + strings.ReplaceAll(strings.TrimSuffix(m.ramValue(host), " GiB"), " / ", "/")
 	if dashboardOptionalPresent(host.GPU) {

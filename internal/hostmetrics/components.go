@@ -2,6 +2,7 @@ package hostmetrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -20,5 +21,9 @@ func (c *systemCollector) Components(ctx context.Context) ([]ComponentTemperatur
 		return result, c.componentsErr
 	}
 	result = append(result, ComponentTemperature{Kind: KindGPU, Label: "GPU", Celsius: c.gpuTemperature, AgeMillis: max(0, time.Since(c.gpuTemperatureAt).Milliseconds())})
-	return HottestTemperatures(result), nil
+	err := c.componentsErr
+	if errors.Is(err, ErrUnsupported) {
+		err = nil
+	}
+	return HottestTemperatures(result), err
 }

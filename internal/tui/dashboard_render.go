@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/shaul/mesh/internal/cli"
 )
@@ -64,12 +63,15 @@ func (m dashboardModel) render() string {
 	for index, line := range lines {
 		lines[index] = dashboardFit(line, m.width)
 	}
-	return m.paint(dashboardColorStyle(dashboardTheme.text).Background(lipgloss.Color(dashboardTheme.background.hex))).Render(strings.Join(lines, "\n"))
+	return m.paint(dashboardColorStyle(dashboardTheme.text)).Render(strings.Join(lines, "\n"))
 }
 func (m dashboardModel) header() []string {
 	totals := m.totals()
 	title := m.paint(dashboardTitleStyle).Render("MESH") + " fleet · reachable " + m.paint(dashboardGoodStyle).Render(fmt.Sprint(totals.reachable)) + " · unreachable " + m.paint(dashboardFailureStyle).Render(fmt.Sprint(totals.unreachable))
 	counts := "sessions " + fmt.Sprint(totals.liveSessions) + " live " + m.paint(dashboardCachedStyle).Render(fmt.Sprint(totals.cachedSessions)) + " cached · services " + fmt.Sprint(totals.services) + " · ready " + m.paint(dashboardGoodStyle).Render(fmt.Sprint(totals.ready)) + " · failed " + m.paint(dashboardFailureStyle).Render(fmt.Sprint(totals.failed))
+	if totals.idle > 0 {
+		counts += " · " + m.paint(dashboardMutedStyle).Render(fmt.Sprintf("%d idle", totals.idle))
+	}
 	if totals.unknown > 0 {
 		counts += " · unknown " + m.paint(dashboardMutedStyle).Render(fmt.Sprint(totals.unknown))
 	}
@@ -93,7 +95,7 @@ func (m dashboardModel) header() []string {
 	return []string{dashboardAlign(title, m.now.Format("15:04:05"), m.width), counts}
 }
 
-type dashboardTotals struct{ reachable, unreachable, connecting, refused, liveSessions, cachedSessions, services, ready, failed, unknown, cachedServices int }
+type dashboardTotals struct{ reachable, unreachable, connecting, refused, liveSessions, cachedSessions, services, ready, failed, idle, unknown, cachedServices int }
 
 func (m dashboardModel) totals() dashboardTotals {
 	var totals dashboardTotals
@@ -122,6 +124,7 @@ func (m dashboardModel) totals() dashboardTotals {
 		}
 		totals.ready += host.Services.Ready
 		totals.failed += host.Services.Failed
+		totals.idle += host.Services.Idle
 		totals.unknown += host.Services.Unknown
 	}
 	return totals

@@ -70,19 +70,16 @@ func projectDashboardSessions(rows []protocol.SessionInfo, section ObservedSecti
 func projectDashboardServices(rows []protocol.ServiceInfo, section ObservedSection, healthSupported bool) DashboardCatalog[DashboardService] {
 	result := DashboardCatalog[DashboardService]{Total: len(rows), ObservedAt: dashboardObservedAt(section), Failing: section.Observation.Failing}
 	for _, row := range rows {
-		if !healthSupported {
+		switch {
+		case !healthSupported:
 			result.Unknown++
-			continue
-		}
-		if dashboardServiceFailed(row) {
+		case dashboardServiceFailed(row):
 			result.Failed++
-			continue
-		}
-		if row.HealthUnknown {
+		case row.HealthUnknown:
 			result.Unknown++
-			continue
-		}
-		if row.Demand == nil || row.Demand.State == "" || row.Demand.State == protocol.DemandRunning {
+		case row.Demand != nil && row.Demand.State == protocol.DemandStopped:
+			result.Idle++
+		case row.Demand == nil || row.Demand.State == "" || row.Demand.State == protocol.DemandRunning:
 			result.Ready++
 		}
 	}
@@ -106,26 +103,27 @@ func appendDashboardServices(selected []DashboardService, rows []protocol.Servic
 }
 func projectDashboardService(row protocol.ServiceInfo, healthSupported bool) DashboardService {
 	if !healthSupported {
-		return DashboardService{Name: dashboardText(row.Name), State: "health unknown", HealthUnknown: true}
+		return DashboardService{Name: dashboardText(row.Name), State: "unknown", HealthUnknown: true}
 	}
 	service := DashboardService{Name: dashboardText(row.Name), State: "ready", Problem: dashboardText(row.Problem), Failed: dashboardServiceFailed(row), HealthUnknown: row.HealthUnknown && !dashboardServiceFailed(row)}
-	if !row.Healthy {
+	if row.Demand != nil && row.Demand.Failure != "" {
+		service.Problem = dashboardText(row.Demand.Failure)
+	}
+	if service.Failed {
 		service.State = "unhealthy"
-	}
-	if row.HealthUnknown {
-		service.State = "health pending"
-	}
-	if row.Demand == nil {
 		return service
 	}
-	if row.Demand.State != "" {
-		service.State = dashboardText(row.Demand.State)
+	if service.HealthUnknown {
+		service.State = "unknown"
+		return service
 	}
-	if row.Demand.Failure != "" {
-		service.Problem = dashboardText(row.Demand.Failure)
-		service.Failed = true
+	if row.Demand == nil || row.Demand.State == "" {
+		return service
 	}
-	service.Failed = service.Failed || row.Demand.State == protocol.DemandFailed
+	service.State = dashboardText(row.Demand.State)
+	if row.Demand.State == protocol.DemandStopped {
+		service.State = "idle"
+	}
 	return service
 }
 func dashboardObservedAt(section ObservedSection) time.Time {

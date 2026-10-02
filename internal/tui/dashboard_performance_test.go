@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/vt"
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/hostmetrics"
 )
@@ -128,19 +130,19 @@ func TestDashboardPerformanceDesignEvidence(t *testing.T) {
 			t.Fatal("missing", want, plain)
 		}
 	}
-	if model.graphHeight() != 4 || model.cardsHeight() != 23 {
+	if model.graphHeight() != 2 || model.cardsHeight() != model.height-5-len(model.summaries(model.height)) {
 		t.Fatalf("grid budget graph=%d cards=%d", model.graphHeight(), model.cardsHeight())
 	}
 	rows := strings.Split(plain, "\n")
-	if !strings.Contains(rows[26], "Hosts 4 / 4") {
-		t.Fatalf("host grid changed table budget: %s", rows[26])
+	if !strings.Contains(rows[3+model.cardsHeight()], "Hosts 4 / 4") {
+		t.Fatalf("host grid changed table budget: %s", rows[3+model.cardsHeight()])
 	}
 	for _, index := range []int{2, 3} {
 		card := ansi.Strip(strings.Join(model.card(model.hosts[index], 79), "\n"))
 		if strings.Contains(card, "GPU") || strings.Contains(card, "BAT") || strings.Contains(card, "VRAM") {
 			t.Fatalf("absent hardware takes space: %s", card)
 		}
-		if len(model.card(model.hosts[index], 79)) != 11 {
+		if len(model.card(model.hosts[index], 79)) != 9 {
 			t.Fatal("absent GPU/BAT kept a row")
 		}
 	}
@@ -206,5 +208,109 @@ func TestDashboardCoreGroupingAndPalettes(t *testing.T) {
 }
 
 func (m dashboardModel) card(host cli.DashboardHostView, width int) []string {
-	return m.cardWithGPU(host, width, dashboardHasGPU(host))
+	height := m.graphHeight()
+	for index, shown := range m.hosts {
+		if shown.Host.ID == host.Host.ID {
+			height = m.gridGraphHeight(index)
+			break
+		}
+	}
+	return m.cardWithGPU(host, width, dashboardHasGPU(host), height)
+}
+
+func TestDashboardPerformanceServiceWordsColorsAndSparseLayout(t *testing.T) {
+	model := dashboardPerformanceFixture()
+	for index := range model.hosts {
+		host := &model.hosts[index]
+		host.Sessions.Rows = host.Sessions.Rows[:1]
+		host.Sessions.Total = 1
+		host.Services = cli.DashboardCatalog[cli.DashboardService]{ObservedAt: model.now}
+	}
+	cases := []struct {
+		name, state, word string
+		failed, unknown   bool
+		style             lipgloss.Style
+	}{
+		{name: "idle-demand", state: "idle", word: "idle", style: dashboardMutedStyle},
+		{name: "running-demand", state: "running", word: "running", style: dashboardGoodStyle},
+		{name: "starting-demand", state: "starting", word: "starting", style: dashboardCachedStyle},
+		{name: "stopping-demand", state: "stopping", word: "stopping", style: dashboardCachedStyle},
+		{name: "static-ready", state: "ready", word: "ready", style: dashboardGoodStyle},
+		{name: "unhealthy-demand", state: "unhealthy", word: "unhealthy", failed: true, style: dashboardFailureStyle},
+		{name: "legacy-unknown", state: "unknown", word: "unknown", unknown: true, style: dashboardMutedStyle},
+		{name: "another-ready", state: "ready", word: "ready", style: dashboardGoodStyle},
+	}
+	for _, example := range cases {
+		index := 0
+		if example.unknown {
+			index = 1
+		}
+		host := &model.hosts[index]
+		service := cli.DashboardService{Name: example.name, State: example.state, Failed: example.failed, HealthUnknown: example.unknown}
+		if example.failed {
+			service.Problem = "health check refused"
+		}
+		host.Services.Rows = append(host.Services.Rows, service)
+		host.Services.Total++
+	}
+	model.hosts[0].Services.Ready, model.hosts[0].Services.Failed, model.hosts[0].Services.Idle = 3, 1, 1
+	model.hosts[1].Services.Unknown = 1
+	view := model.render()
+	plain := ansi.Strip(view)
+	assertFits(t, view, 160, 45)
+	if model.graphHeight() <= 4 || model.cardsHeight() != model.height-5-len(model.summaries(model.height)) {
+		t.Errorf("content-first budget: graph=%d cards=%d; graphs must fill the height left by catalog content", model.graphHeight(), model.cardsHeight())
+	}
+	for _, example := range cases {
+		if !strings.Contains(plain, example.name) {
+			t.Errorf("free rows omitted service %s: %s", example.name, plain)
+		}
+	}
+	if !strings.Contains(plain, "1 idle") || !strings.Contains(plain, "ready 3") {
+		t.Error("service header totals disagree", plain)
+	}
+	if !strings.Contains(plain, "Sessions · live 4/4") {
+		t.Error("a live session disappeared", plain)
+	}
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.TrimSpace(line) == "" {
+			t.Error("filler row remains while graphs could grow")
+		}
+	}
+	rows, total := model.summaryRows(true, 60)
+	if total != 8 || !strings.Contains(rows[0].text, "unhealthy-demand") || !strings.Contains(rows[1].text, "idle-demand") {
+		t.Fatal("failures are not first", rows)
+	}
+	for _, example := range cases {
+		for _, row := range rows {
+			if strings.Contains(row.text, example.name) && !strings.Contains(row.text, model.paint(example.style).Render("● "+example.word)) {
+				t.Errorf("service word and color disagree: %s: %s", example.name, row.text)
+			}
+		}
+	}
+	fmt.Printf("\nBEGIN_SPARSE_160_45\n%s\nEND_SPARSE_160_45\n", view)
+	if !strings.Contains(plain, "health check refused") || !strings.Contains(plain, "8/8 visible") {
+		t.Errorf("service attention or visible count missing: %s", plain)
+	}
+}
+
+func TestDashboardPerformanceUsesTerminalBackgroundEverywhere(t *testing.T) {
+	model := dashboardPerformanceFixture()
+	terminal := vt.NewEmulator(model.width, model.height)
+	defer func() {
+		if err := terminal.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if _, err := terminal.WriteString(strings.ReplaceAll(model.render(), "\n", "\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	for y := range model.height {
+		for x := range model.width {
+			cell := terminal.CellAt(x, y)
+			if cell != nil && cell.Style.Bg != nil {
+				t.Fatalf("cell %d,%d overrides the terminal background: %v", x, y, cell.Style.Bg)
+			}
+		}
+	}
 }

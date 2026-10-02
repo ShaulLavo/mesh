@@ -37,9 +37,6 @@ func dashboardProfileStyle(style lipgloss.Style, profile colorprofile.Profile) l
 		style = style.Faint(true)
 	}
 	style = style.Foreground(foreground)
-	if style.GetBackground() == lipgloss.Color(dashboardTheme.background.hex) {
-		style = style.Background(lipgloss.Black)
-	}
 	return style
 }
 

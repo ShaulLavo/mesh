@@ -11,23 +11,14 @@ import (
 )
 
 func (m dashboardModel) graphHeight() int {
-	minimum := 4
-	if len(m.hosts) > 4 {
-		minimum = 3
-	}
 	if m.width < 140 || m.height < 40 {
-		return minimum
+		return 4
 	}
 	cardRows := max(1, (len(m.hosts)+1)/2)
-	tableHeight := 4
-	for _, host := range m.hosts {
-		tableHeight += len(host.Sessions.Rows)
-		if dashboardSessionsCached(host, m.now) && len(host.Sessions.Rows) > 0 {
-			tableHeight++
-		}
-	}
+	// Catalog content claims its rows before graphs grow into the remaining height.
+	tableHeight := len(m.summaries(m.height))
 	available := m.height - 5 - tableHeight
-	return min(12, max(minimum, (available-m.cardOverhead())/cardRows))
+	return max(1, (available-m.cardOverhead())/cardRows)
 }
 
 func (m dashboardModel) cardOverhead() int {
@@ -41,7 +32,23 @@ func (m dashboardModel) cardOverhead() int {
 	return total
 }
 func (m dashboardModel) cardsHeight() int {
-	return ((len(m.hosts)+1)/2)*m.graphHeight() + m.cardOverhead()
+	height := m.cardOverhead()
+	for index := 0; index < len(m.hosts); index += 2 {
+		height += m.gridGraphHeight(index)
+	}
+	return height
+}
+func (m dashboardModel) gridGraphHeight(index int) int {
+	height := m.graphHeight()
+	if m.width < 140 || m.height < 40 {
+		return height
+	}
+	rows := max(1, (len(m.hosts)+1)/2)
+	available := max(0, m.height-5-len(m.summaries(m.height))-m.cardOverhead())
+	if index/2 < available%rows {
+		height++
+	}
+	return height
 }
 func (m dashboardModel) gridGPU(index int) bool {
 	if dashboardHasGPU(m.hosts[index]) {
@@ -53,10 +60,10 @@ func (m dashboardModel) cards() []string {
 	width := (m.width - 1) / 2
 	var lines []string
 	for index := 0; index < len(m.hosts); index += 2 {
-		left := m.cardWithGPU(m.hosts[index], width, m.gridGPU(index))
+		left := m.cardWithGPU(m.hosts[index], width, m.gridGPU(index), m.gridGraphHeight(index))
 		right := make([]string, len(left))
 		if index+1 < len(m.hosts) {
-			right = m.cardWithGPU(m.hosts[index+1], width, m.gridGPU(index))
+			right = m.cardWithGPU(m.hosts[index+1], width, m.gridGPU(index), m.gridGraphHeight(index))
 		}
 		for row := range left {
 			lines = append(lines, dashboardFit(left[row], width)+" "+dashboardFit(right[row], width))
@@ -64,7 +71,7 @@ func (m dashboardModel) cards() []string {
 	}
 	return lines
 }
-func (m dashboardModel) cardWithGPU(host cli.DashboardHostView, width int, gpuRow bool) []string {
+func (m dashboardModel) cardWithGPU(host cli.DashboardHostView, width int, gpuRow bool, height int) []string {
 	inner := width - 4
 	plotWidth := (inner - 2) / 2
 	live := host.Connection == cli.StateReachable
@@ -77,15 +84,15 @@ func (m dashboardModel) cardWithGPU(host cli.DashboardHostView, width int, gpuRo
 	if host.MetricsUnsupported {
 		history = dashboardHostHistory{}
 	}
-	left := dashboardArea(history.cpu, m.now, plotWidth, m.graphHeight(), m.ascii, m.paint(dashboardCPUStyle))
-	right := dashboardArea(history.ram, m.now, inner-plotWidth-2, m.graphHeight(), m.ascii, m.paint(dashboardRAMStyle))
+	left := dashboardArea(history.cpu, m.now, plotWidth, height, m.ascii, m.paint(dashboardCPUStyle))
+	right := dashboardArea(history.ram, m.now, inner-plotWidth-2, height, m.ascii, m.paint(dashboardRAMStyle))
 	body := []string{label, meter}
 	for row := range left {
 		body = append(body, left[row]+"  "+right[row])
 	}
 	body = append(body, m.paint(dashboardMutedStyle).Render(dashboardAlign("-2m", "now", plotWidth)+"  "+dashboardAlign("-2m", "now", inner-plotWidth-2)))
 	if !live {
-		body = m.offlineCard(host, inner)
+		body = m.offlineCard(host, inner, height)
 	}
 	if gpuRow {
 		body = append(body, m.gpuLine(host, plotWidth, inner-plotWidth-2))
@@ -129,8 +136,8 @@ func dashboardOldest(a, b time.Time) time.Time {
 	}
 	return b
 }
-func (m dashboardModel) offlineCard(host cli.DashboardHostView, width int) []string {
-	body := make([]string, m.graphHeight()+3)
+func (m dashboardModel) offlineCard(host cli.DashboardHostView, width, height int) []string {
+	body := make([]string, height+3)
 	facts := []string{"last verified reply " + dashboardAge(m.now, host.LastReply) + " ago", "cached catalog " + dashboardAge(m.now, host.Sessions.ObservedAt) + " old", m.catalogCounts(host)}
 	for row, text := range facts {
 		body[row] = dashboardFit(m.paint(dashboardCachedStyle).Render(text), width)

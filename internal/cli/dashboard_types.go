@@ -45,11 +45,11 @@ type DashboardService struct {
 	HealthUnknown        bool
 }
 type DashboardCatalog[T any] struct {
-	Rows                   []T
-	Total                  int
-	Ready, Failed, Unknown int // Service state totals are counted before row bounding.
-	ObservedAt             time.Time
-	Failing                bool
+	Rows                         []T
+	Total                        int
+	Ready, Failed, Idle, Unknown int // Service state totals are counted before row bounding.
+	ObservedAt                   time.Time
+	Failing                      bool
 }
 
 func (c DashboardCatalog[T]) Stale(now, lastReply time.Time) bool {

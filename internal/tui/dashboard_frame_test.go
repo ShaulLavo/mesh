@@ -47,16 +47,16 @@ func TestDashboardRetainedViewDoesNotAllocatePerCall(t *testing.T) {
 func TestDashboardUnknownServicesStayOutOfAttention(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	model := newDashboard(cli.DashboardInput{}, now)
-	model.hosts = []cli.DashboardHostView{{Host: cli.DashboardHost{Alias: "pi"}, Connection: cli.StateReachable, LastReply: now, Services: cli.DashboardCatalog[cli.DashboardService]{ObservedAt: now, Total: 1, Unknown: 1, Rows: []cli.DashboardService{{Name: "legacy", State: "health unknown", HealthUnknown: true}}}}}
+	model.hosts = []cli.DashboardHostView{{Host: cli.DashboardHost{Alias: "pi"}, Connection: cli.StateReachable, LastReply: now, Services: cli.DashboardCatalog[cli.DashboardService]{ObservedAt: now, Total: 1, Unknown: 1, Rows: []cli.DashboardService{{Name: "legacy", State: "unknown", HealthUnknown: true}}}}}
 	if totals := model.totals(); totals.ready != 0 || totals.failed != 0 || totals.unknown != 1 {
 		t.Fatalf("unknown totals: %+v", totals)
 	}
 	attention := ansi.Strip(strings.Join(model.attention(80, 5), "\n"))
-	if !strings.Contains(attention, "Attention · 0 · 0/0 visible") || strings.Contains(attention, "legacy") {
+	if attention != "" {
 		t.Fatalf("unknown health entered Attention: %s", attention)
 	}
 	rows := model.serviceRows(model.hosts[0], 80)
-	if !strings.Contains(rows[0].text, model.paint(dashboardMutedStyle).Render("● health unknown")) {
+	if !strings.Contains(rows[0].text, model.paint(dashboardMutedStyle).Render("● unknown")) {
 		t.Fatal("unknown health painted as ready")
 	}
 }

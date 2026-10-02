@@ -97,3 +97,51 @@ func TestLinuxBatteryChargeState(t *testing.T) {
 		t.Fatal(value, err)
 	}
 }
+
+type inventoryPerformanceFixture struct {
+	performanceFixture
+	native *systemCollector
+}
+
+func (c *inventoryPerformanceFixture) Temperature(ctx context.Context) (Temperature, error) {
+	return c.native.Temperature(ctx)
+}
+func (c *inventoryPerformanceFixture) Components(ctx context.Context) ([]ComponentTemperature, error) {
+	return c.native.Components(ctx)
+}
+func (c *inventoryPerformanceFixture) GPU(ctx context.Context) (GPU, error) { return c.native.GPU(ctx) }
+
+func TestNVIDIAKeepsInventoryFailureAndIndependentLastGood(t *testing.T) {
+	root := t.TempDir()
+	fixtureField(t, root, "bin/nvidia-smi", "#!/bin/sh\nprintf '37, 3072, 8192, 52\\n'\n")
+	// #nosec G302 -- executable fixture requires user execute permission.
+	if err := os.Chmod(filepath.Join(root, "bin/nvidia-smi"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Join(root, "bin"))
+	fixtureField(t, root, "class/hwmon/hwmon0/name", "coretemp")
+	fixtureField(t, root, "class/hwmon/hwmon0/temp1_label", "Package id 0")
+	fixtureField(t, root, "class/hwmon/hwmon0/temp1_input", "69000")
+	now := time.Now()
+	collector := &inventoryPerformanceFixture{native: &systemCollector{temperatureRoot: root}}
+	sampler := NewWithCollector(collector, func() time.Time { return now })
+	first, err := sampler.Read(t.Context())
+	if err != nil || first.TemperaturesFailing || len(first.Temperatures) != 2 || first.Temperatures[0].Celsius != 69 || first.GPU == nil || first.GPU.Failing {
+		t.Fatal("known-good sysfs and NVIDIA", first, err)
+	}
+	fixtureField(t, root, "class/hwmon/hwmon0/temp1_input", "broken")
+	now = now.Add(10 * time.Second)
+	failed, err := sampler.Read(t.Context())
+	if err != nil || !failed.TemperaturesFailing || len(failed.Temperatures) != 2 || failed.Temperatures[0].Celsius != 69 || failed.Temperatures[0].AgeMillis < 10000 || failed.GPU == nil || failed.GPU.Failing || failed.GPU.AgeMillis != 0 || failed.GPU.Value.Utilization != 37 {
+		t.Fatal("GPU success masked real inventory failure", failed, err)
+	}
+	if failed.Temperatures[1].Kind != KindGPU || failed.Temperatures[1].AgeMillis > 100 {
+		t.Fatal("independent GPU temperature stopped updating", failed.Temperatures)
+	}
+	collector.native.temperatureRoot = t.TempDir()
+	fresh := NewWithCollector(collector, func() time.Time { return now })
+	gpuOnly, err := fresh.Read(t.Context())
+	if err != nil || gpuOnly.TemperaturesFailing || len(gpuOnly.Temperatures) != 1 || gpuOnly.Temperatures[0].Kind != KindGPU {
+		t.Fatal("GPU-only host invents an inventory failure", gpuOnly, err)
+	}
+}

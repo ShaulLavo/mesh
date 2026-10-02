@@ -35,6 +35,7 @@ type dashboardPalette struct {
 }
 
 // Palettes keep semantic console slots stable; selecting a theme changes one value.
+// Background roles describe matching terminal themes; the dashboard preserves their background.
 var dashboardPalettes = []dashboardPalette{
 	{name: "Current",
 		background: dashboardColor{"#090c0b", 0},

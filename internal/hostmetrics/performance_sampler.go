@@ -58,10 +58,7 @@ func (s *Sampler) collectPerformance(ctx context.Context, sensors bool) {
 func (s *Sampler) collectTemperatures(ctx context.Context, collector performanceCollector) {
 	p := &s.performance
 	values, err := collector.Components(ctx)
-	p.temperaturesFailing = err != nil
-	if err != nil {
-		return
-	}
+	p.temperaturesFailing = err != nil && (!errors.Is(err, ErrUnsupported) || len(p.temperatures) > 0)
 	now := s.now()
 	if len(values) > 0 {
 		p.temperatureSample = s.key()

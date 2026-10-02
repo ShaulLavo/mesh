@@ -16,7 +16,7 @@ func TestDashboardMissingProducerHealthCapabilityIsUnknown(t *testing.T) {
 		t.Fatalf("missing advertisement manufactured health facts: %+v", view.Services)
 	}
 	for _, row := range view.Services.Rows {
-		if row.State != "health unknown" || row.Failed || row.Problem != "" {
+		if row.State != "unknown" || row.Failed || row.Problem != "" {
 			t.Fatalf("legacy health reached rows: %+v", row)
 		}
 	}
@@ -48,7 +48,7 @@ func TestDashboardHealthCapabilityAndUnknownCountsSurviveSnapshots(t *testing.T)
 				}
 				continue
 			}
-			if services.Ready != 1 || services.Failed != 1 || services.Unknown != 20 {
+			if services.Ready != 1 || services.Failed != 1 || services.Idle != 1 || services.Unknown != 20 {
 				t.Fatalf("new producer health facts lost beyond row cap: %+v", services)
 			}
 		}
