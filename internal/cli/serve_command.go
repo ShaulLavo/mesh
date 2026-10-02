@@ -564,8 +564,8 @@ func readPublicConfirmation(ctx context.Context, input *os.File) (bool, error) {
 	stopCancellation := context.AfterFunc(ctx, func() { reader.Cancel() })
 	answer, err := bufio.NewReader(reader).ReadString('\n')
 	stopCancellation()
-	if ctx.Err() != nil {
-		return false, ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return false, fmt.Errorf("read public confirmation: %w", err)
 	}
 	if errors.Is(err, cancelreader.ErrCanceled) {
 		return false, context.Canceled
