@@ -71,7 +71,7 @@ and preserves T25's silent hook startup.
 
 Two [local dependency patches](../../third_party/README.md) fix SCP directory
 ancestry and SFTP FSTAT. The copies include upstream licenses and tests.
-`scripts/check-ssh-dependencies.py` verifies each copy against its pinned module
+`scripts/check-dependencies.py` verifies each copy against its pinned module
 archive plus the recorded patch.
 
 ## Implementation

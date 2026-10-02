@@ -162,6 +162,7 @@ run_report ruff "$report_dir/ruff.json" ruff check --isolated --select E4,E7,E9,
   --output-format=json scripts integration .gates
 go test ./.gates
 echo 'baseline tests: PASS'
+python3 scripts/check-dependencies.py
 
 unexpected_auth_flags=$(grep -RnE --include='*.go' --include='*.sh' --exclude='*_test.go' -- '--auth-key' internal cmd scripts/install |
   grep -vE -- '--auth-key=file:/dev/stdin|tailscale-auth-key-file' || true)

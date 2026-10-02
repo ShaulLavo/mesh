@@ -44,12 +44,14 @@ def write_go(root, content):
 
 
 def prove(root, evidence):
-    for directory in ("cmd/mesh", "internal", "scripts/install", "integration", ".gates"):
+    for directory in ("cmd/mesh", "internal", "scripts/install", "integration", ".gates", "third_party"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     (root / "go.mod").write_text("module github.com/shaul/mesh\n\ngo 1.27.0\n")
     for name in ("check.go", "check_test.go"):
         shutil.copyfile(ROOT / ".gates" / name, root / ".gates" / name)
     shutil.copyfile(ROOT / "scripts/gates.sh", root / "scripts/gates.sh")
+    shutil.copyfile(ROOT / "scripts/check-dependencies.py", root / "scripts/check-dependencies.py")
+    (root / "third_party/dependencies.json").write_text("[]\n")
     shutil.copyfile(ROOT / ".golangci.yml", root / ".golangci.yml")
     baseline = root / ".gates/baseline.json"
     baseline.write_text(json.dumps({"version": 2, "entries": []}))
