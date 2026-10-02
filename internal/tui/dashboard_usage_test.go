@@ -100,7 +100,7 @@ func dashboardUsageFleetFixture() dashboardModel {
 }
 
 func TestDashboardUsageApprovedGrid(t *testing.T) {
-	for _, name := range []string{"normal", "no-data", "overflow"} {
+	for _, name := range []string{"normal", "no-data", "overflow", "mixed", "historic", "model-scoped"} {
 		t.Run(name, func(t *testing.T) {
 			model := usageFixture(t, name)
 			want, err := os.ReadFile("testdata/usage/" + name + ".txt") //nolint:gosec // name comes from the fixed fixture list above
@@ -172,6 +172,7 @@ func TestDashboardUsageWindowFacts(t *testing.T) {
 	}
 	window.Status = "unknown"
 	window.UsedPercent = nil
+	window.ResetsAt = nil
 	got = ansi.Strip(strings.Join(model.usageWindowLines(window, 50, true), "\n"))
 	if !strings.Contains(got, "No data yet") || strings.Contains(got, "0%") {
 		t.Fatal(got)
@@ -187,7 +188,7 @@ func TestDashboardUsageNoDataFailureAndExtraWindows(t *testing.T) {
 	}
 	model = usageFixture(t, "no-data")
 	got = ansi.Strip(strings.Join(model.usagePanel(54, 17, false), "\n"))
-	for _, want := range []string{"Claude · shaul9191 · Max", "Codex · shaul9191 · Pro", "shaul.lavochkin · Pro", "seen —", "No data yet", "Waiting for normal traffic"} {
+	for _, want := range []string{"Claude · shaul9191 · Max", "Codex · shaul9191 · Pro", "shaul.lavochkin · Pro", "seen —", "No reading yet · waits for traffic"} {
 		if !strings.Contains(got, want) {
 			t.Fatal("missing", want, got)
 		}
@@ -363,6 +364,9 @@ func TestDashboardUsageProjectionBoundsAndStableOrder(t *testing.T) {
 		accounts[index].ID = fmt.Sprint(index)
 	}
 	accounts[0].Windows = make([]usagefeed.Window, 1000)
+	for index := range accounts[0].Windows {
+		accounts[0].Windows[index] = first.Windows[index%2]
+	}
 	projected = projectDashboardUsage(&usagefeed.Snapshot{Accounts: accounts})
 	if len(projected.accounts) != dashboardUsageCapacity || len(projected.accounts[0].Windows) != 2 || projected.accounts[0].extraWindows != 998 || projected.total != 1000 {
 		t.Fatal("unbounded projection")
@@ -412,7 +416,7 @@ func TestDashboardUsageCompactFactsStayVisible(t *testing.T) {
 	window = model.usage.accounts[0].Windows[1]
 	expired := model.now.Add(-time.Minute)
 	window.ResetsAt = &expired
-	if line := model.usageCompactWindow(window, 36, false); !strings.Contains(line, "66%/34%") || !strings.Contains(line, "reset passed") || ansi.StringWidth(line) > 36 {
+	if line := model.usageCompactWindow(window, 36, false); !strings.Contains(line, "66%/34%") || !strings.Contains(line, "resets 0s passed") || ansi.StringWidth(line) > 36 {
 		t.Fatal("compact reset history lost", line)
 	}
 	model.width, model.height = 80, 24
