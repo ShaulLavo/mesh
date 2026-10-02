@@ -262,15 +262,13 @@ func TestDemandRouteAnswersWithTheStartItCausedAfterItFailed(t *testing.T) {
 	sessions.exitNow = &code
 	manager := testDemandManager(t, sessions, func() bool { return false })
 	manager.Sync([]meshserve.Service{demandService(time.Minute)})
+	// On a loaded machine the start Enter's hold began can fail before Enter
+	// waits for it. Forcing that order here.
+	manager.entered = func() { waitForDemand(t, manager, protocol.DemandFailed) }
 
-	// Enter's hold begins the start and its wait comes after; on a loaded
-	// machine the start can fail in between. Forcing that order here.
-	route := manager.route("dev")
-	release, started := route.holdStarting()
-	defer release()
-	<-started.done
-	if err := route.awaitStart(context.Background(), started); err == nil || !strings.Contains(err.Error(), "status 3") {
-		t.Fatalf("awaitStart = %v, want the failure of the start it caused", err)
+	_, err := manager.Enter(context.Background(), "dev")
+	if err == nil || !strings.Contains(err.Error(), "status 3") {
+		t.Fatalf("Enter = %v, want the failure of the start it caused", err)
 	}
 	if started, _ := sessions.counts(); started != 1 {
 		t.Fatalf("one connection started %d sessions, want 1", started)
