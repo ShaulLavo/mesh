@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-02T18:53:07Z",
+  "accounts": [
+    {
+      "id": "weekly-sample",
+      "provider": "codex",
+      "label": "weekly-sample",
+      "plan": "pro",
+      "checkedAt": "2026-10-02T18:53:07Z",
+      "lastSeenAt": "2026-10-02T18:51:07Z",
+      "state": "ready",
+      "source": "proxy-state",
+      "routing": {
+        "mode": "single",
+        "active": null,
+        "lastServedAt": null
+      },
+      "windows": [
+        {
+          "id": "weekly",
+          "label": "Weekly",
+          "usedPercent": 66,
+          "resetsAt": "2026-10-03T01:53:07Z",
+          "windowMinutes": 10080,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:51:07Z",
+          "source": "passive-header"
+        },
+        {
+          "id": "model:gpt-6.1-sol:weekly",
+          "label": "Sol Weekly",
+          "usedPercent": 66,
+          "resetsAt": "2026-10-03T01:53:07Z",
+          "windowMinutes": 10080,
+          "status": "allowed",
+          "lastSeenAt": "2026-10-02T18:51:07Z",
+          "source": "passive-header"
+        }
+      ],
+      "cooldown": null
+    }
+  ]
+}

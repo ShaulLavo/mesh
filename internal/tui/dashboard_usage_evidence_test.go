@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 	"github.com/shaul/mesh/internal/cli"
+	"github.com/shaul/mesh/internal/usagefeed"
 )
 
 var usageEvidenceDirectory = flag.String("usage-evidence-dir", "", "write deterministic dashboard usage fixture SVGs and text grids")
@@ -27,7 +28,7 @@ func TestDashboardUsageEvidence(t *testing.T) {
 	if err := os.MkdirAll(*usageEvidenceDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"normal", "no-data", "overflow"} {
+	for _, name := range []string{"normal", "no-data", "overflow", "mixed", "historic", "model-scoped"} {
 		model := usageFixture(t, name)
 		writeUsageEvidence(t, name, model)
 		panel := ansi.Strip(strings.Join(model.usagePanel(54, 17, false), "\n")) + "\n"
@@ -39,10 +40,18 @@ func TestDashboardUsageEvidence(t *testing.T) {
 		model := usageFixture(t, "normal")
 		model.palette = dashboardTheme(palette.name)
 		writeUsageEvidence(t, "theme-"+palette.name, model)
+		model = usageFixture(t, "mixed")
+		model.palette = dashboardTheme(palette.name)
+		writeUsageEvidence(t, "theme-mixed-"+palette.name, model)
 	}
 	model := usageFixture(t, "normal")
 	model.width, model.height = 80, 24
 	writeUsageEvidence(t, "compact", model)
+	for _, name := range []string{"no-data", "mixed", "historic", "model-scoped"} {
+		fixture := usageFixture(t, name)
+		fixture.width, fixture.height = 80, 24
+		writeUsageEvidence(t, "compact-"+name, fixture)
+	}
 	model = usageFixture(t, "normal")
 	model.ascii = true
 	writeUsageEvidence(t, "ascii", model)
@@ -78,6 +87,50 @@ func TestDashboardUsageEvidence(t *testing.T) {
 	model.usage.accounts[1].Cooldown = model.usage.accounts[2].Cooldown
 	model.usage.accounts[2].State = "disabled"
 	writeUsageEvidence(t, "review-restrictions", model)
+	model = usageFixture(t, "historic")
+	recent := model.now.Add(-time.Minute)
+	for index := range model.usage.accounts {
+		model.usage.accounts[index].LastSeenAt = &recent
+	}
+	model.width, model.height = 80, 24
+	writeUsageEvidence(t, "historic-independent-compact", model)
+	model = usageFixture(t, "historic")
+	model.usage.accounts = append(model.usage.accounts, model.usage.accounts[0])
+	model.usage.total = len(model.usage.accounts)
+	for index := range model.usage.accounts {
+		account := &model.usage.accounts[index]
+		window := account.Windows[0]
+		account.LastSeenAt, account.Credits = &recent, nil
+		switch index {
+		case 0:
+			warning := 97.0
+			window.Status, window.UsedPercent = "warning", &warning
+		case 1:
+			window.Status, window.UsedPercent, window.LastSeenAt = usageUnknown, nil, nil
+		case 2:
+			seen := model.now.Add(-25 * time.Hour)
+			window.LastSeenAt = &seen
+		}
+		account.Windows = []usagefeed.Window{window}
+	}
+	model.width, model.height = 80, 24
+	writeUsageEvidence(t, "historic-status-compact", model)
+	model = usageFixture(t, "historic")
+	for index := range model.usage.accounts {
+		account := &model.usage.accounts[index]
+		window := account.Windows[0]
+		account.LastSeenAt, account.Credits = &recent, nil
+		seen := model.now.Add(-25 * time.Hour)
+		window.LastSeenAt = &seen
+		window.Status, window.UsedPercent = usageUnknown, nil
+		if index == 1 {
+			allowed := 20.0
+			window.Status, window.UsedPercent = "allowed", &allowed
+		}
+		account.Windows = []usagefeed.Window{window}
+	}
+	model.width, model.height = 80, 24
+	writeUsageEvidence(t, "historic-late-compact", model)
 	model = usageFixture(t, "normal")
 	model.ascii = true
 	model.hosts[0].Services.ObservedAt = model.now.Add(-12 * time.Minute)

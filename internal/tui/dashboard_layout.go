@@ -51,11 +51,7 @@ func (m dashboardModel) summariesHeight(budget int) int {
 	if !m.usageEnabled {
 		return max(left, right)
 	}
-	visible := min(len(m.usage.accounts), max(0, (budget-2)/5))
-	usage := 2 + 5*visible
-	if m.usage.total == 0 {
-		usage = 4
-	}
+	_, usage := m.usageVisible(budget, false)
 	return max(left, right, usage)
 }
 
