@@ -10,11 +10,13 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/transport"
+	"github.com/shaul/mesh/internal/updateinstall"
 	"github.com/shaul/mesh/internal/usagefeed"
 	"github.com/spf13/cobra"
 )
@@ -70,7 +72,17 @@ func (a *application) runDashboard(ctx context.Context, wall bool, override stri
 	for _, record := range records {
 		input.Hosts = append(input.Hosts, dashboardHost(record, localID))
 	}
-	restart := dashboardRestart{current: release.Current(), argv: os.Args, env: os.Environ(), exec: syscall.Exec,
+	restart := dashboardRestart{current: release.Current(), argv: os.Args, env: os.Environ(),
+		exec: func(ctx context.Context, build release.Build, path string, argv, env []string) error {
+			handoff, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+			defer cancel()
+			return updateinstall.WithCommittedExecutable(handoff, filepath.Dir(socket), localID, build, func(installed string) error {
+				if installed != path {
+					return fmt.Errorf("installed mesh path changed before restart")
+				}
+				return syscall.Exec(installed, argv, env) //nolint:gosec // exec the verified installed image under the activation lock with unchanged argv and env
+			})
+		},
 		installed: func(build release.Build) (string, error) {
 			return dashboardInstalledTarget(filepath.Dir(socket), localID, build)
 		},

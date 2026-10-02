@@ -29,7 +29,7 @@ func TestDashboardRestartAfterHealthyLocalBuildAndTerminalCleanup(t *testing.T) 
 			}
 			return "/installed/mesh", nil
 		},
-		exec: func(path string, args, environment []string) error {
+		exec: func(_ context.Context, _ release.Build, path string, args, environment []string) error {
 			calls++
 			if !cleaned || path != "/installed/mesh" || !reflect.DeepEqual(args, argv) || !reflect.DeepEqual(environment, env) {
 				t.Fatal("exec lost terminal cleanup, installed path, argv or env")
@@ -63,7 +63,7 @@ func TestDashboardFailedExecContinuesOnceWithNotice(t *testing.T) {
 	attempts, runs := 0, 0
 	restart := dashboardRestart{current: release.Build{Digest: "old"},
 		installed: func(release.Build) (string, error) { return "/installed/mesh", nil },
-		exec: func(string, []string, []string) error {
+		exec: func(context.Context, release.Build, string, []string, []string) error {
 			attempts++
 			return errors.New("permission denied\nsecond line")
 		},
@@ -100,7 +100,7 @@ func TestDashboardRestartWaitsForInstalledHealthCommit(t *testing.T) {
 			}
 			return "/installed/mesh", nil
 		},
-		exec: func(string, []string, []string) error { attempts++; return nil },
+		exec: func(context.Context, release.Build, string, []string, []string) error { attempts++; return nil },
 	}
 	input := DashboardInput{Watch: func(ctx context.Context, publish func(DashboardHostView)) error {
 		view := DashboardHostView{Host: DashboardHost{Local: true}, Build: release.Build{Digest: "new"}, Connection: StateReachable, LastReply: time.Now()}
@@ -164,7 +164,7 @@ func TestDashboardInstalledTargetRequiresCommittedMatchingImage(t *testing.T) {
 	if err := os.WriteFile(path, []byte("different image"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dashboardInstalledTarget(root, "local", build); err == nil {
+	if err := updateinstall.WithCommittedExecutable(t.Context(), root, "local", build, func(string) error { t.Fatal("different installed image handed off"); return nil }); err == nil {
 		t.Fatal("different installed image accepted")
 	}
 }
@@ -223,7 +223,10 @@ func TestDashboardParentCancellationSkipsExec(t *testing.T) {
 	defer cancel()
 	restart := dashboardRestart{current: release.Build{Digest: "old"},
 		installed: func(release.Build) (string, error) { return "/installed/mesh", nil },
-		exec:      func(string, []string, []string) error { t.Fatal("exec after parent cancellation"); return nil },
+		exec: func(context.Context, release.Build, string, []string, []string) error {
+			t.Fatal("exec after parent cancellation")
+			return nil
+		},
 	}
 	input := DashboardInput{Watch: func(ctx context.Context, publish func(DashboardHostView)) error {
 		publish(DashboardHostView{Host: DashboardHost{Local: true}, Build: release.Build{Digest: "new"}, Connection: StateReachable, LastReply: time.Now()})
@@ -236,5 +239,60 @@ func TestDashboardParentCancellationSkipsExec(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDashboardReplacementDuringTerminalCleanupSkipsExec(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "mesh")
+	contents := []byte("healthy new mesh")
+	sum := sha256.Sum256(contents)
+	build := release.Build{Digest: hex.EncodeToString(sum[:])}
+	if err := os.WriteFile(path, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "update"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(updateinstall.Status{Schema: 1, Phase: updateinstall.Committed, Settings: updateinstall.Settings{Executable: path}, Verified: &updateinstall.Health{HostID: "local", Build: build}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "update", "installation.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	runs := 0
+	restart := dashboardRestart{current: release.Build{Digest: "old"},
+		installed: func(build release.Build) (string, error) { return dashboardInstalledTarget(root, "local", build) },
+		exec: func(ctx context.Context, build release.Build, _ string, _, _ []string) error {
+			return updateinstall.WithCommittedExecutable(ctx, root, "local", build, func(string) error { t.Fatal("executed replacement before its healthy commit"); return nil })
+		},
+	}
+	input := DashboardInput{Watch: func(ctx context.Context, publish func(DashboardHostView)) error {
+		publish(DashboardHostView{Host: DashboardHost{Local: true}, Build: build, Connection: StateReachable, LastReply: time.Now()})
+		if runs == 1 {
+			<-ctx.Done()
+		}
+		return nil
+	}}
+	err = restart.run(t.Context(), input, func(ctx context.Context, input DashboardInput) error {
+		runs++
+		if runs == 2 && !strings.Contains(input.Notice, "differs from the healthy daemon") {
+			t.Fatalf("missing replacement notice: %q", input.Notice)
+		}
+		err := input.Watch(ctx, func(DashboardHostView) {})
+		if runs == 1 {
+			replacement := filepath.Join(root, "replacement")
+			if err := os.WriteFile(replacement, []byte("unvalidated replacement"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(replacement, path); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return err
+	})
+	if err != nil || runs != 2 {
+		t.Fatalf("replacement handoff: runs=%d err=%v", runs, err)
 	}
 }
