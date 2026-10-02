@@ -106,6 +106,7 @@ type dashboardModel struct {
 	now               time.Time
 	width, height     int
 	watchError        error
+	notice            string
 	frame             string
 	history           map[string]dashboardHostHistory
 	ramTotals         map[string]uint64
@@ -139,6 +140,7 @@ func newDashboard(input cli.DashboardInput, now time.Time) dashboardModel {
 	for _, host := range input.Hosts {
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host, Connection: cli.StateConnecting})
 	}
+	model.notice = safeText(input.Notice)
 	model.usageEnabled = input.UsageWatch != nil
 	model.ctx, model.inspect = context.Background(), input.Inspect
 	model.sessionSummaries = map[dashboardSessionTarget]sessionLiveSummary{}

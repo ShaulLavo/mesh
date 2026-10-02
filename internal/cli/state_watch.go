@@ -10,6 +10,7 @@ import (
 
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -99,6 +100,7 @@ func (w *StateWatcher) acquire(ctx context.Context) error {
 	}
 }
 func (w *StateWatcher) watchOnce(ctx context.Context, host HostRecord, request protocol.StateWatch, view *StateView, publish func(StateView)) error {
+	view.Build = release.Build{}
 	setupCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 	if err := w.acquire(setupCtx); err != nil {
@@ -163,6 +165,11 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("publish host state: %w", err)
+	}
+	if info.Build != nil {
+		view.Build = *info.Build
+	} else {
+		view.Build = release.Build{}
 	}
 	publish(*view)
 	err = readStateStream(ctx, host, conn, view, transit, publish)
@@ -268,6 +275,7 @@ func minTime(a, b time.Time) time.Time {
 	return a
 }
 func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, section *pollSection, view *StateView) error {
+	view.Build = release.Build{}
 	readCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 	if err := w.acquire(readCtx); err != nil {
@@ -320,6 +328,11 @@ func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, section
 	}
 	if err := applyPolledSection(host, section.topic, response, view, received, received.Sub(started)); err != nil {
 		return err
+	}
+	if info.Build != nil {
+		view.Build = *info.Build
+	} else {
+		view.Build = release.Build{}
 	}
 	section.failures = 0
 	return nil

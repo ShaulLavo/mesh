@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/usagefeed"
 	"github.com/spf13/cobra"
@@ -53,10 +55,7 @@ func (a *application) runDashboard(ctx context.Context, wall bool, override stri
 	defer cache.Close() //nolint:errcheck // the view's result is authoritative
 	dial := dashboardControlDialer(localID, socket, a.dependencies.DialControl)
 	monitor := dashboardMonitor{records: records, localID: localID, watcher: NewStateWatcher(dial), cache: cache}
-	run, cancel := context.WithCancel(ctx)
-	operations := newPickerOperationGate()
-	defer func() { cancel(); operations.stopAndWait() }()
-	input := DashboardInput{Wall: wall, Theme: theme, Watch: monitor.Run, Inspect: dashboardInspector(records, dial, monitor.watcher, operations)}
+	input := DashboardInput{Wall: wall, Theme: theme, Watch: monitor.Run}
 	config, err := loadHostConfig()
 	if err != nil {
 		return err
@@ -71,7 +70,17 @@ func (a *application) runDashboard(ctx context.Context, wall bool, override stri
 	for _, record := range records {
 		input.Hosts = append(input.Hosts, dashboardHost(record, localID))
 	}
-	return a.dependencies.Dashboard(run, input)
+	restart := dashboardRestart{current: release.Current(), argv: os.Args, env: os.Environ(), exec: syscall.Exec,
+		installed: func(build release.Build) (string, error) {
+			return dashboardInstalledTarget(filepath.Dir(socket), localID, build)
+		},
+	}
+	return restart.run(ctx, input, func(run context.Context, next DashboardInput) error {
+		operations := newPickerOperationGate()
+		defer operations.stopAndWait()
+		next.Inspect = dashboardInspector(records, dial, monitor.watcher, operations)
+		return a.dependencies.Dashboard(run, next)
+	})
 }
 
 func dashboardInspector(records []HostRecord, dial HostDialer, watcher *StateWatcher, operations *pickerOperationGate) PickerInspectFunc {

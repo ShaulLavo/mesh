@@ -25,7 +25,11 @@ func (m dashboardModel) render() string {
 
 func (m dashboardModel) renderFrame() (string, dashboardLayout) {
 	if m.width < 80 || m.height < 24 {
-		return ansi.Truncate(fmt.Sprintf("Mesh fleet needs 80×24; current %d×%d", m.width, m.height), m.width, "…"), dashboardLayout{}
+		message := fmt.Sprintf("Mesh fleet needs 80×24; current %d×%d", m.width, m.height)
+		if m.notice != "" {
+			message = m.notice
+		}
+		return ansi.Truncate(message, m.width, "…"), dashboardLayout{}
 	}
 	if m.width >= 140 && m.height >= 40 {
 		data := m.attentionForWidth(m.summaryAttentionWidth())
@@ -219,6 +223,9 @@ func (m dashboardModel) catalogCounts(host cli.DashboardHostView) string {
 }
 
 func (m dashboardModel) footer() string {
+	if m.notice != "" {
+		return m.notice
+	}
 	if m.usageEnabled {
 		return m.usageFooter()
 	}
