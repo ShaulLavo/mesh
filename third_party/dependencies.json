@@ -12,5 +12,12 @@
     "sum": "h1:0N92SLTB8JqASJB14ZLHHzFnBV8mG9zw4K7jghEFWuE=",
     "directory": "sftp",
     "patch": "patches/sftp.patch"
+  },
+  {
+    "module": "github.com/charmbracelet/ultraviolet",
+    "version": "v0.0.0-20260811164956-006e29f97886",
+    "sum": "h1:rdnVWKgJpTVXKuKuJyxDJ+NFJdUaUqGvyGy61OcvlbA=",
+    "directory": "ultraviolet",
+    "patch": "patches/ultraviolet.patch"
   }
 ]

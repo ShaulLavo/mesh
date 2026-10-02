@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the local SSH dependencies with pinned upstream archives plus patches."""
+"""Compare the local dependencies with pinned upstream archives plus patches."""
 
 import json
 from pathlib import Path
@@ -37,7 +37,7 @@ def check(dependency):
     source = go_metadata("mod", "download", "-json", f"{dependency['module']}@{dependency['version']}")
     if source["Sum"] != dependency["sum"]:
         raise ValueError(f"upstream checksum changed for {dependency['module']}")
-    with tempfile.TemporaryDirectory(prefix="mesh-ssh-deps-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="mesh-deps-") as temporary:
         with zipfile.ZipFile(source["Zip"]) as archive:
             archive.extractall(temporary)
         expected = Path(temporary) / f"{dependency['module']}@{dependency['version']}"
@@ -56,5 +56,5 @@ def check(dependency):
 
 
 if __name__ == "__main__":
-    for dependency in json.loads((THIRD_PARTY / "ssh-dependencies.json").read_text()):
+    for dependency in json.loads((THIRD_PARTY / "dependencies.json").read_text()):
         check(dependency)

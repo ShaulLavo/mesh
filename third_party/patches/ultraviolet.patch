@@ -1,0 +1,12 @@
+--- a/terminal_renderer.go
++++ b/terminal_renderer.go
+@@ -715,7 +715,8 @@
+ 			if cellEqual(oldCell, newCell) {
+ 				same++
+ 			} else {
+-				if same > end-start {
++				// Skip equal spans when cursor movement costs less than rewriting them.
++				if same > inline {
+ 					s.emitRange(newbuf, newLine[start:], j-same-start)
+ 					s.move(newbuf, j, y)
+ 					start = j

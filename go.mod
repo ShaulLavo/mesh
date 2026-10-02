@@ -6,6 +6,8 @@ replace charm.land/wish/v2 => ./third_party/wish
 
 replace github.com/pkg/sftp => ./third_party/sftp
 
+replace github.com/charmbracelet/ultraviolet => ./third_party/ultraviolet
+
 require (
 	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.0.9
