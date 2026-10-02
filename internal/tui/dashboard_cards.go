@@ -17,6 +17,9 @@ func (m dashboardModel) graphHeight() int {
 func (m dashboardModel) cardOverhead() int {
 	total := 0
 	for index := 0; index < len(m.hosts); index += 2 {
+		if m.renderWork != nil {
+			m.renderWork.gpuPairs++
+		}
 		total += 7
 		if m.gridGPU(index) {
 			total++

@@ -92,7 +92,7 @@ type dashboardHostMsg cli.DashboardHostView
 type dashboardTickMsg time.Time
 type dashboardDoneMsg struct{ err error }
 type dashboardRenderWork struct {
-	summaries, serviceWidthVisits, layouts int
+	summaries, serviceWidthVisits, layouts, gpuPairs int
 }
 
 type dashboardModel struct {

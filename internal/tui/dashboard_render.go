@@ -30,9 +30,11 @@ func (m dashboardModel) renderFrame() (string, dashboardLayout) {
 	if m.width >= 140 && m.height >= 40 {
 		data := m.attentionForWidth(m.summaryAttentionWidth())
 		m.attentionData = &data
+		m.layout = m.layoutForSummaries(m.summariesHeight(m.height))
+		m.layoutPrepared = true
+	} else {
+		m.layout = dashboardLayout{}
 	}
-	m.layout = m.layoutForSummaries(m.summariesHeight(m.height))
-	m.layoutPrepared = true
 	lines := m.header()
 	visible := len(m.hosts)
 	switch {

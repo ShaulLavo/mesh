@@ -124,3 +124,21 @@ func TestDashboardGeometryCacheAcrossRetainedModelMessages(t *testing.T) {
 		})
 	}
 }
+
+func TestDashboardCompactFramesSkipGridLayout(t *testing.T) {
+	for _, size := range [][2]int{{80, 24}, {110, 32}, {110, 45}, {160, 39}} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			model := dashboardTickFixture(t, true, 32)
+			model.width, model.height = size[0], size[1]
+			work := dashboardRenderWork{}
+			model.renderWork = &work
+			for range 2 {
+				next, _ := model.Update(dashboardTickMsg(model.now))
+				model = next.(dashboardModel)
+			}
+			if work.layouts != 0 || work.gpuPairs != 0 {
+				t.Fatalf("compact frames prepared unused grid geometry: %+v", work)
+			}
+		})
+	}
+}

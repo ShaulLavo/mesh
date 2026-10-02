@@ -12,6 +12,11 @@ import (
 )
 
 func TestDashboardFrameByteParity(t *testing.T) {
+	if *usageEvidenceDirectory != "" {
+		if err := os.MkdirAll(*usageEvidenceDirectory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var golden map[string]string
 	if *usageEvidenceDirectory == "" {
 		data, err := os.ReadFile("testdata/dashboard-frame-sha256.json")
