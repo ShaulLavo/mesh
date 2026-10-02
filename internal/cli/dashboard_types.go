@@ -14,6 +14,7 @@ type DashboardWatch func(context.Context, func(DashboardHostView)) error
 type DashboardInput struct {
 	Hosts []DashboardHost
 	Wall  bool
+	Theme string
 	Watch DashboardWatch
 }
 

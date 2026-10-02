@@ -41,8 +41,9 @@ type HostRecord struct {
 }
 
 type hostConfig struct {
-	Version int          `json:"version"`
-	Hosts   []HostRecord `json:"hosts"`
+	Version   int                `json:"version"`
+	Hosts     []HostRecord       `json:"hosts"`
+	Dashboard *DashboardSettings `json:"dashboard,omitempty"`
 }
 
 // ConfigPath returns the host address book path. MESH_CONFIG_DIR overrides the
@@ -106,54 +107,63 @@ func ValidateHostAlias(value string) (string, error) {
 
 // LoadHosts reads and validates the local host address book.
 func LoadHosts() ([]HostRecord, error) {
+	config, err := loadHostConfig()
+	return config.Hosts, err
+}
+
+func loadHostConfig() (hostConfig, error) {
 	path, err := ConfigPath()
 	if err != nil {
-		return nil, err
+		return hostConfig{}, err
 	}
 	contents, err := os.ReadFile(path) //nolint:gosec // path is Mesh's fixed per-user host configuration file
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return hostConfig{Version: hostConfigVersion}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read host config %s: %w", path, err)
+		return hostConfig{}, fmt.Errorf("read host config %s: %w", path, err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	var config hostConfig
 	if err := decoder.Decode(&config); err != nil {
-		return nil, fmt.Errorf("parse host config %s: %w", path, err)
+		return hostConfig{}, fmt.Errorf("parse host config %s: %w", path, err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = errors.New("multiple JSON values")
 		}
-		return nil, fmt.Errorf("parse host config %s: trailing data: %w", path, err)
+		return hostConfig{}, fmt.Errorf("parse host config %s: trailing data: %w", path, err)
 	}
+	return validateHostConfig(config, path)
+}
+
+func validateHostConfig(config hostConfig, path string) (hostConfig, error) {
 	if config.Version != hostConfigVersion {
-		return nil, fmt.Errorf("parse host config %s: version %d is unsupported", path, config.Version)
+		return hostConfig{}, fmt.Errorf("parse host config %s: version %d is unsupported", path, config.Version)
 	}
 	if len(config.Hosts) > maximumConfiguredHosts {
-		return nil, fmt.Errorf("parse host config %s: host count %d exceeds %d", path, len(config.Hosts), maximumConfiguredHosts)
+		return hostConfig{}, fmt.Errorf("parse host config %s: host count %d exceeds %d", path, len(config.Hosts), maximumConfiguredHosts)
 	}
 	aliases := make(map[string]string, len(config.Hosts))
 	identities := make(map[string]string, len(config.Hosts))
 	for i := range config.Hosts {
 		host, err := validateHostRecord(config.Hosts[i])
 		if err != nil {
-			return nil, fmt.Errorf("parse host config %s: host %d: %w", path, i+1, err)
+			return hostConfig{}, fmt.Errorf("parse host config %s: host %d: %w", path, i+1, err)
 		}
 		if prior := aliases[host.Alias]; prior != "" {
-			return nil, fmt.Errorf("parse host config %s: alias %q is used by hosts %s and %s", path, host.Alias, prior, host.ID)
+			return hostConfig{}, fmt.Errorf("parse host config %s: alias %q is used by hosts %s and %s", path, host.Alias, prior, host.ID)
 		}
 		if prior := identities[host.ID]; prior != "" {
-			return nil, fmt.Errorf("parse host config %s: host ID %s has aliases %q and %q", path, host.ID, prior, host.Alias)
+			return hostConfig{}, fmt.Errorf("parse host config %s: host ID %s has aliases %q and %q", path, host.ID, prior, host.Alias)
 		}
 		aliases[host.Alias] = host.ID
 		identities[host.ID] = host.Alias
 		config.Hosts[i] = host
 	}
 	sortHosts(config.Hosts)
-	return config.Hosts, nil
+	return config, nil
 }
 
 // SaveHost atomically adds or replaces one adopted host in the address book.
@@ -162,10 +172,11 @@ func SaveHost(record HostRecord) error {
 	if err != nil {
 		return err
 	}
-	hosts, err := LoadHosts()
+	config, err := loadHostConfig()
 	if err != nil {
 		return err
 	}
+	hosts := config.Hosts
 	replaced := false
 	for i, existing := range hosts {
 		switch {
@@ -180,7 +191,8 @@ func SaveHost(record HostRecord) error {
 		hosts = append(hosts, host)
 	}
 	sortHosts(hosts)
-	return writeHostConfig(hostConfig{Version: hostConfigVersion, Hosts: hosts})
+	config.Hosts = hosts
+	return writeHostConfig(config)
 }
 
 func validateHostRecord(record HostRecord) (HostRecord, error) {

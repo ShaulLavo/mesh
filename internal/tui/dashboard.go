@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/shaul/mesh/internal/cli"
 )
@@ -23,19 +24,23 @@ func NewCLIDashboard(output *os.File) cli.DashboardFunc {
 	}
 }
 func runDashboard(ctx context.Context, input cli.DashboardInput, output io.Writer, options ...tea.ProgramOption) error {
+	if input.Theme != "" {
+		if err := cli.ValidateDashboardTheme(input.Theme); err != nil {
+			return fmt.Errorf("dashboard theme: %w", err)
+		}
+	}
 	if input.Watch == nil {
 		return errors.New("dashboard requires a state watch")
 	}
 	run, cancel := context.WithCancel(ctx)
 	defer cancel()
-	model := newDashboard(input, time.Now())
+	terminal := os.Getenv("TERM")
+	model := newDashboardForTerminal(input, time.Now(), terminal)
 	configuration := []tea.ProgramOption{tea.WithContext(run), tea.WithInput(nil), tea.WithOutput(output), tea.WithoutSignals()}
-	switch os.Getenv("TERM") {
+	switch terminal {
 	case "linux":
-		model.ascii, model.profile = true, colorprofile.ANSI
 		configuration = append(configuration, tea.WithColorProfile(colorprofile.ANSI))
 	case "dumb":
-		model.ascii = true
 		configuration = append(configuration, tea.WithColorProfile(colorprofile.ASCII))
 	}
 	configuration = append(configuration, options...)
@@ -76,10 +81,22 @@ type dashboardModel struct {
 	history       map[string]dashboardHostHistory
 	wall, ascii   bool
 	profile       colorprofile.Profile
+	palette       dashboardPalette
+}
+
+func newDashboardForTerminal(input cli.DashboardInput, now time.Time, terminal string) dashboardModel {
+	model := newDashboard(input, now)
+	switch terminal {
+	case "linux":
+		model.ascii, model.profile = true, colorprofile.ANSI
+	case "dumb":
+		model.ascii, model.profile = true, colorprofile.ASCII
+	}
+	return model
 }
 
 func newDashboard(input cli.DashboardInput, now time.Time) dashboardModel {
-	model := dashboardModel{profile: colorprofile.TrueColor, now: now, width: 80, height: 24, wall: input.Wall, history: map[string]dashboardHostHistory{}}
+	model := dashboardModel{palette: dashboardTheme(input.Theme), profile: colorprofile.TrueColor, now: now, width: 80, height: 24, wall: input.Wall, history: map[string]dashboardHostHistory{}}
 	for _, host := range input.Hosts {
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host, Connection: cli.StateConnecting})
 	}
@@ -128,5 +145,14 @@ func (m dashboardModel) View() tea.View {
 	view := tea.NewView(frame)
 	view.AltScreen = m.wall
 	view.WindowTitle = "Mesh fleet"
+	// Terminal defaults cover every cell, including nested SGR resets; Bubble Tea restores them on exit.
+	if m.profile != colorprofile.ASCII {
+		view.BackgroundColor = m.palette.backgroundValue
+		view.ForegroundColor = m.palette.textValue
+		if m.profile == colorprofile.ANSI {
+			view.BackgroundColor = ansi.BasicColor(m.palette.background.ansi16)
+			view.ForegroundColor = ansi.BasicColor(m.palette.text.ansi16)
+		}
+	}
 	return view
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
@@ -17,15 +18,28 @@ import (
 
 func (a *application) dashboardCommand() *cobra.Command {
 	var wall bool
+	var theme string
 	command := &cobra.Command{Use: "dashboard", Short: "Watch machine usage, sessions, and services", Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error { return a.runDashboard(cmd.Context(), wall) },
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("theme") {
+				if err := ValidateDashboardTheme(theme); err != nil {
+					return err
+				}
+			}
+			return a.runDashboard(cmd.Context(), wall, theme)
+		},
 	}
 	command.Flags().BoolVar(&wall, "wall", false, "show the passive fullscreen fleet view")
+	command.Flags().StringVar(&theme, "theme", "", "dashboard theme ("+strings.Join(DashboardThemeNames(), ", ")+"); overrides config")
 	return command
 }
-func (a *application) runDashboard(ctx context.Context, wall bool) error {
+func (a *application) runDashboard(ctx context.Context, wall bool, override string) error {
 	if a.dependencies.Dashboard == nil {
 		return errors.New("dashboard terminal view is unavailable")
+	}
+	theme, err := dashboardConfiguredTheme(override)
+	if err != nil {
+		return err
 	}
 	records, localID, socket, err := dashboardInventory()
 	if err != nil {
@@ -38,7 +52,7 @@ func (a *application) runDashboard(ctx context.Context, wall bool) error {
 	defer cache.Close() //nolint:errcheck // the view's result is authoritative
 	dial := dashboardControlDialer(localID, socket, a.dependencies.DialControl)
 	monitor := dashboardMonitor{records: records, localID: localID, watcher: NewStateWatcher(dial), cache: cache}
-	input := DashboardInput{Wall: wall, Watch: monitor.Run}
+	input := DashboardInput{Wall: wall, Theme: theme, Watch: monitor.Run}
 	for _, record := range records {
 		input.Hosts = append(input.Hosts, dashboardHost(record, localID))
 	}

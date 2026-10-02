@@ -3,47 +3,42 @@ package tui
 import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 )
 
-func (m dashboardModel) paint(style lipgloss.Style) lipgloss.Style {
-	return dashboardProfileStyle(style, m.profile)
-}
+type dashboardStyle uint8
 
-// Select basic colors before rendering so cached yellow cannot quantize to failure red.
-func dashboardProfileStyle(style lipgloss.Style, profile colorprofile.Profile) lipgloss.Style {
-	if profile != colorprofile.ANSI {
-		return style
+const (
+	dashboardTextStyle dashboardStyle = iota
+	dashboardGPUStyle
+	dashboardCPUStyle
+	dashboardCPUFillStyle
+	dashboardRAMFillStyle
+	dashboardGridStyle
+	dashboardRAMStyle
+	dashboardMutedStyle
+	dashboardBorderStyle
+	dashboardGoodStyle
+	dashboardCachedStyle
+	dashboardFailureStyle
+	dashboardTitleStyle
+)
+
+func (m dashboardModel) paint(role dashboardStyle) lipgloss.Style {
+	if m.profile == colorprofile.ASCII {
+		return lipgloss.NewStyle()
 	}
-	foreground := lipgloss.White
-	switch style.GetForeground() {
-	case dashboardCPUStyle.GetForeground():
-		foreground = lipgloss.Green
-	case dashboardGPUStyle.GetForeground():
-		foreground = lipgloss.Magenta
-	case dashboardRAMStyle.GetForeground(), dashboardRAMFillStyle.GetForeground():
-		foreground = lipgloss.Cyan
-	case dashboardCPUFillStyle.GetForeground():
-		foreground = lipgloss.Green
-	case dashboardCachedStyle.GetForeground():
-		foreground = lipgloss.Yellow
-	case dashboardFailureStyle.GetForeground():
-		foreground = lipgloss.Red
-	case dashboardTitleStyle.GetForeground():
-		foreground = lipgloss.BrightCyan
-	case dashboardMutedStyle.GetForeground(), dashboardBorderStyle.GetForeground(), dashboardGridStyle.GetForeground():
-		foreground = lipgloss.BrightBlack
+	palette := m.palette
+	colors := [...]dashboardColor{palette.text, palette.gpu, palette.cpu, palette.cpuFill, palette.ramFill, palette.grid, palette.ram, palette.muted, palette.border, palette.good, palette.cached, palette.failure, palette.title}
+	value := colors[role]
+	foreground := lipgloss.Color(value.hex)
+	if m.profile == colorprofile.ANSI {
+		// Semantic slots stay distinct even when a theme shares title and RAM hues.
+		foreground = ansi.BasicColor(value.ansi16)
 	}
-	if style.GetForeground() == dashboardCPUFillStyle.GetForeground() || style.GetForeground() == dashboardRAMFillStyle.GetForeground() {
+	style := lipgloss.NewStyle().Foreground(foreground).Bold(role == dashboardTitleStyle)
+	if m.profile == colorprofile.ANSI && (role == dashboardCPUFillStyle || role == dashboardRAMFillStyle) {
 		style = style.Faint(true)
 	}
-	style = style.Foreground(foreground)
 	return style
-}
-
-func dashboardGraphStyle(style, paint lipgloss.Style) lipgloss.Style {
-	foreground := style.GetForeground()
-	if foreground == lipgloss.Green || foreground == lipgloss.Cyan {
-		return dashboardProfileStyle(paint, colorprofile.ANSI)
-	}
-	return paint
 }

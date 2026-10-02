@@ -38,10 +38,11 @@ func RenameHost(from, to string) (HostRecord, error) {
 	if err != nil {
 		return HostRecord{}, err
 	}
-	hosts, err := LoadHosts()
+	config, err := loadHostConfig()
 	if err != nil {
 		return HostRecord{}, err
 	}
+	hosts := config.Hosts
 	current, err := hostWithAlias(hosts, from)
 	if err != nil {
 		return HostRecord{}, err
@@ -65,7 +66,8 @@ func RenameHost(from, to string) (HostRecord, error) {
 	current.Alias = alias
 	remaining = append(remaining, current)
 	sortHosts(remaining)
-	if err := writeHostConfig(hostConfig{Version: hostConfigVersion, Hosts: remaining}); err != nil {
+	config.Hosts = remaining
+	if err := writeHostConfig(config); err != nil {
 		return HostRecord{}, err
 	}
 	return current, nil

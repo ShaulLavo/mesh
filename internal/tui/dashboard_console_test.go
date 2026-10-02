@@ -16,7 +16,7 @@ func TestDashboardCompactFailureIsRed(t *testing.T) {
 		host := model.hosts[3]
 		host.Connection = state
 		row := model.fleetRow(host)
-		if !strings.Contains(row, dashboardFailureStyle.Render(string(state))) {
+		if !strings.Contains(row, model.paint(dashboardFailureStyle).Render(string(state))) {
 			t.Fatalf("compact failure state has no failure color: %q", row)
 		}
 	}
@@ -39,7 +39,7 @@ func TestDashboardConsoleUsesExplicitStatusColors(t *testing.T) {
 	if strings.Contains(view, "38;2;") || strings.Contains(view, "38;5;") || strings.Contains(view, "48;2;") || strings.Contains(view, "48;5;") {
 		t.Fatal("ANSI16 model retained colors requiring automatic quantization")
 	}
-	if !strings.Contains(dashboardDesignFixture(4).render(), "38;2;224;176;80") {
+	if !strings.Contains(dashboardDesignFixture(4).render(), "38;2;255;194;61") {
 		t.Fatal("ANSI16 model changed another model's truecolor palette")
 	}
 	for _, code := range []string{"32", "36", "90"} {
