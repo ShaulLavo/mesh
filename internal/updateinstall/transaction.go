@@ -42,11 +42,12 @@ func (e *Engine) Run(ctx context.Context) (Status, error) {
 	if status.Phase == RollingBack {
 		return e.rollback(status)
 	}
-	if status.Phase == RollbackFailed || status.Phase == Failed {
-		return status, errors.New(status.Error)
-	}
-	if status.Phase == Committed || status.Phase == RolledBack {
-		return status, updategate.Clear(e.cfg.StateDir, status.Request.ID)
+	if finished(status.Phase) {
+		settlementErr := updategate.Clear(e.cfg.StateDir, status.Request.ID)
+		if status.Phase == RollbackFailed || status.Phase == Failed {
+			return status, errors.Join(errors.New(status.Error), settlementErr)
+		}
+		return status, settlementErr
 	}
 	return status, nil
 }
@@ -195,7 +196,10 @@ func (e *Engine) rollback(status Status) (Status, error) {
 	health, err := e.restore(ctx, status)
 	if err != nil {
 		status.Phase, status.Error = RollbackFailed, status.Error+"; rollback failed: "+err.Error()
-		return status, errors.Join(errors.New(status.Error), e.save(&status))
+		if saveErr := e.save(&status); saveErr != nil {
+			return status, errors.Join(errors.New(status.Error), saveErr)
+		}
+		return status, errors.Join(errors.New(status.Error), updategate.Clear(e.cfg.StateDir, status.Request.ID))
 	}
 	status.Phase, status.Verified = RolledBack, &health
 	if err = e.save(&status); err != nil {

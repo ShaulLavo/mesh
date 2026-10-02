@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/updategate"
 )
 
 var operationPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$`)
@@ -71,7 +72,7 @@ func (e *Engine) accept(ctx context.Context, request Request) (Status, error) {
 	prior, err := e.Read()
 	if err == nil {
 		if sameRequest(prior, request) {
-			return prior, nil
+			return prior, e.settleGate(prior)
 		}
 		if !finished(prior.Phase) {
 			return prior, ErrConflict
@@ -81,6 +82,10 @@ func (e *Engine) accept(ctx context.Context, request Request) (Status, error) {
 		}
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return prior, err
+	}
+	// Recover a crash between the durable terminal receipt and gate removal.
+	if err := e.settleGate(prior); err != nil {
 		return prior, err
 	}
 	manifest, err := e.cfg.Client.Manifest(ctx, request.Manifest.Version)
@@ -129,12 +134,12 @@ func validateRequest(request Request) error {
 }
 
 func sameRequest(status Status, request Request) bool {
-	return status.Request.TargetID == request.TargetID && status.Request.Generation == request.Generation &&
+	return status.Request.ID == request.ID && status.Request.TargetID == request.TargetID && status.Request.Generation == request.Generation &&
 		status.Request.Manifest.Digest() == request.Manifest.Digest()
 }
 
 func finished(phase Phase) bool {
-	return phase == Committed || phase == RolledBack || phase == Cancelled || phase == Failed
+	return phase == Committed || phase == RolledBack || phase == RollbackFailed || phase == Cancelled || phase == Failed
 }
 
 func (e *Engine) preflight(ctx context.Context, request Request) (Health, error) {
@@ -266,14 +271,30 @@ func (e *Engine) Cancel(ctx context.Context, id string, generation uint64) (Stat
 	}
 	defer unlock(lock)
 	status, err := e.identify(id, generation)
-	if err != nil || status.Phase == Cancelled {
+	if err != nil {
 		return status, err
+	}
+	if finished(status.Phase) {
+		return status, e.settleGate(status)
 	}
 	if status.Phase != Accepted && status.Phase != Staged {
 		return status, ErrAlreadyGranted
 	}
 	status.Phase = Cancelled
-	return status, e.save(&status)
+	if err := e.save(&status); err != nil {
+		return status, err
+	}
+	return status, e.settleGate(status)
+}
+
+func (e *Engine) settleGate(status Status) error {
+	if !finished(status.Phase) {
+		return nil
+	}
+	if err := updategate.Clear(e.cfg.StateDir, status.Request.ID); err != nil {
+		return fmt.Errorf("settle installation gate: %w", err)
+	}
+	return nil
 }
 
 func (e *Engine) Retry(ctx context.Context, id string, generation uint64) (Status, error) {

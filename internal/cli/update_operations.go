@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/shaul/mesh/internal/update"
+	"github.com/shaul/mesh/internal/updatebootstrap"
+	"github.com/shaul/mesh/internal/updategate"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
@@ -53,8 +56,18 @@ func updateActionDescription(action string) string {
 }
 
 func (a *application) runUpdateOperation(ctx context.Context, environment updateEnvironment, action, id string, structured bool, output updateOutput) error {
+	if action == "status" && !structured && update.IsLocal(environment.coordinator) {
+		if err := reportFinishedInstallationGate(environment.stateDir, id, output.diagnostic); err != nil {
+			return err
+		}
+	}
 	if action == "status" && id == "" {
 		return listUpdateOperations(ctx, environment, structured, output)
+	}
+	if action == "cancel" && update.IsLocal(environment.coordinator) {
+		if err := settleLocalTerminalInstallation(ctx, environment.stateDir, id); err != nil {
+			return err
+		}
 	}
 	var run update.Run
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -73,6 +86,56 @@ func (a *application) runUpdateOperation(ctx context.Context, environment update
 		return err
 	}
 	return updateExit(run.ExitCode())
+}
+
+func reportFinishedInstallationGate(stateDir, id string, output io.Writer) error {
+	var gate *updategate.UpdatingError
+	if !errors.As(updategate.Check(stateDir), &gate) || (id != "" && gate.Operation != id) {
+		return nil
+	}
+	status, err := updateinstall.Read(stateDir)
+	if err != nil {
+		return fmt.Errorf("read held installation gate: %w", err)
+	}
+	if status.Request.ID != gate.Operation || !installationFinished(status.Phase) {
+		return nil
+	}
+	_, err = fmt.Fprintf(output, "Update activation gate is held by finished run %s (%s). Run mesh update cancel %s to release it.\n", SafeTerminalText(gate.Operation), SafeTerminalText(string(status.Phase)), SafeTerminalText(gate.Operation))
+	if err != nil {
+		return fmt.Errorf("report finished installation gate: %w", err)
+	}
+	return nil
+}
+
+func settleLocalTerminalInstallation(ctx context.Context, stateDir, id string) error {
+	status, err := updateinstall.Read(stateDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read local installation settlement: %w", err)
+	}
+	if status.Request.ID != id || !installationFinished(status.Phase) {
+		return nil
+	}
+	if status.Settings.StateDir != stateDir {
+		return errors.New("installation journal belongs to another state directory")
+	}
+	config := status.Settings.Config()
+	config.Probe = updatebootstrap.Probe(stateDir)
+	engine, err := updateinstall.New(config)
+	if err != nil {
+		return fmt.Errorf("open local installation settlement: %w", err)
+	}
+	// Cancel rechecks the journal under the installer lock before releasing its gate.
+	_, err = engine.Cancel(ctx, id, status.Request.Generation)
+	if errors.Is(err, updateinstall.ErrAlreadyGranted) || errors.Is(err, updateinstall.ErrStaleGeneration) || errors.Is(err, updateinstall.ErrConflict) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("settle local terminal installation: %w", err)
+	}
+	return nil
 }
 
 func listUpdateOperations(ctx context.Context, environment updateEnvironment, structured bool, output updateOutput) error {
