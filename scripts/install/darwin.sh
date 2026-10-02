@@ -138,20 +138,39 @@ elif launchctl print "$user_domain" >/dev/null 2>&1; then
 else
 	fail service_install "launchd has no user domain for UID $remote_uid"
 fi
+# Teardown visibility and transient bootstrap errors share a five-second backoff budget.
+activation_attempts=20
+retry_activation() {
+	activation_attempts=$((activation_attempts - 1))
+	[ "$activation_attempts" -gt 0 ] || fail service_install "$1"
+	sleep 0.25
+}
+bootout_service() {
+	if bootout_error=$(launchctl bootout "$1" 2>&1); then
+		:
+	else
+		fail service_install "launchctl bootout failed for $1: $bootout_error"
+	fi
+	while launchctl print "$1" >/dev/null 2>&1; do
+		retry_activation "launchctl bootout timed out for $1"
+	done
+}
 if [ "$other_loaded" -eq 1 ]; then
 	mark_activation_pending
-	launchctl bootout "$other_service" >/dev/null 2>&1 || fail service_install "launchctl bootout failed for $other_service"
+	bootout_service "$other_service"
 	changed=1
 fi
 if [ "$loaded" -eq 0 ]; then
 	changed=1
 fi
 if [ "$activation_required" -eq 1 ] && [ "$loaded" -eq 1 ]; then
-	launchctl bootout "$service" >/dev/null 2>&1 || fail service_install "launchctl bootout failed for $service"
+	bootout_service "$service"
 	loaded=0
 fi
 if [ "$loaded" -eq 0 ]; then
-	launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1 || fail service_install "launchctl bootstrap failed for $plist_path"
+	while ! bootstrap_error=$(launchctl bootstrap "$domain" "$plist_path" 2>&1); do
+		retry_activation "launchctl bootstrap failed for $plist_path: $bootstrap_error"
+	done
 fi
 if [ "$activation_required" -eq 1 ]; then
 	launchctl kickstart -k "$service" >/dev/null 2>&1 || fail service_install "launchctl kickstart failed for $service"
