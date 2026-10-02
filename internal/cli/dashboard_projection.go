@@ -17,7 +17,7 @@ const (
 )
 
 func projectDashboardState(host DashboardHost, state StateView) DashboardHostView {
-	view := DashboardHostView{Host: host, Connection: state.Connection, Problem: dashboardText(state.Problem), LastReply: state.LastReply, MetricsUnsupported: state.MetricsUnsupported}
+	view := DashboardHostView{Build: state.Build, Host: host, Connection: state.Connection, Problem: dashboardText(state.Problem), LastReply: state.LastReply, MetricsUnsupported: state.MetricsUnsupported}
 	view.Sessions = projectDashboardSessions(state.Sessions, state.Sections[protocol.TopicSessions])
 	view.Services = projectDashboardServices(state.Services, state.Sections[protocol.TopicServices], state.ServiceHealthSupported)
 	if state.Metrics == nil {

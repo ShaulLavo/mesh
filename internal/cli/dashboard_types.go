@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"github.com/shaul/mesh/internal/hostmetrics"
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/usagefeed"
 	"time"
 )
@@ -13,6 +14,7 @@ type DashboardFunc func(context.Context, DashboardInput) error
 type DashboardWatch func(context.Context, func(DashboardHostView)) error
 
 type DashboardInput struct {
+	Notice     string
 	Hosts      []DashboardHost
 	Wall       bool
 	Theme      string
@@ -61,6 +63,7 @@ func (c DashboardCatalog[T]) Stale(now, lastReply time.Time) bool {
 }
 
 type DashboardHostView struct {
+	Build              release.Build
 	Host               DashboardHost
 	Connection         StateConnection
 	Problem            string
