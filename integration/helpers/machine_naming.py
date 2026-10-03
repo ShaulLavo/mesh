@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import struct
 import subprocess
@@ -73,10 +74,15 @@ def start_replacement(fixture, binary, port):
     eventually(ready, "replacement destination did not start")
 
 
+def printed_marker(output, marker):
+    return re.search(rb"(?:^|[\r\n])" + re.escape(marker.encode()) + rb"\r?\n", output) is not None
+
+
 def terminal_marker(fixture, terminal, marker, session_identity):
     start = len(terminal.drain())
     terminal.send("printf '" + marker + "\\n'\n")
-    terminal.expect(b"\r" + marker.encode() + b"\r\n", since=start)
+    terminal.expect(marker.encode() + b"\r\n", since=start)
+    require(printed_marker(terminal.drain()[start:], marker), "terminal did not print a complete naming I/O marker")
     require(fixture.shell_identity(terminal) == session_identity, "rename replaced the retained shell or session")
 
 

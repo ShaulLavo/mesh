@@ -12,6 +12,7 @@ if [[ -n ${NAMING_PROOF_PLATFORM:-} && $platform != "$NAMING_PROOF_PLATFORM" ]];
 fi
 mkdir -p "$1"
 output=$(cd -- "$1" && pwd)
+python3 "$repo_root/integration/helpers/test_machine_naming.py" > "$output/marker-tests.txt" 2>&1
 root=$(mktemp -d "${MESH_SHORT_TMP:-/tmp}/mesh-naming.XXXXXX")
 trap 'rm -rf -- "$root"' EXIT
 mkdir -p "$root/baseline"

@@ -2,6 +2,7 @@
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+python3 "$repo_root/integration/helpers/test_machine_naming.py"
 scratch=$(mktemp -d "${MESH_SHORT_TMP:-${TMPDIR:-/tmp}}/mesh-name.XXXXXX")
 trap 'rm -rf -- "$scratch"' EXIT
 if [[ -z ${MESH:-} ]]; then
