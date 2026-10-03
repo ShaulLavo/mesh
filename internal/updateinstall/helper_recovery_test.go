@@ -319,10 +319,28 @@ func (s *failRestorationStart) Start(ctx context.Context) error {
 		s.failed = true
 		return errors.New("fixture rejected original service restart")
 	}
+	if s.manager.process == nil {
+		if err = clearRecoveryFixtureReport(s.manager.healthPath); err != nil {
+			return err
+		}
+	}
 	if err = s.manager.Start(ctx); err != nil {
 		return err
 	}
 	return awaitRecoveryFixtureReport(ctx, s.manager.healthPath, digest)
+}
+
+func clearRecoveryFixtureReport(path string) error {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open recovery fixture health directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	// A restarted fixture must publish its own report before Start settles.
+	if err = root.Remove(filepath.Base(path)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove previous recovery fixture health report: %w", err)
+	}
+	return nil
 }
 
 func awaitRecoveryFixtureReport(ctx context.Context, path, digest string) error {
