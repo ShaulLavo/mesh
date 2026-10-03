@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type SystemService struct{ Spec ServiceSpec }
@@ -74,11 +75,31 @@ func (s *SystemService) Start(ctx context.Context) error {
 }
 
 func (s *SystemService) stopLaunchd(ctx context.Context) error {
-	if _, err := runCommand(ctx, "launchctl", "print", s.Spec.Domain+"/"+s.Spec.Name); err != nil {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	target := s.Spec.Domain + "/" + s.Spec.Name
+	if _, err := runCommand(ctx, "launchctl", "print", target); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("inspect launchd service %s: %w", target, ctx.Err())
+		}
 		return nil
 	}
-	_, err := runCommand(ctx, "launchctl", "bootout", s.Spec.Domain+"/"+s.Spec.Name)
-	return err
+	if _, err := runCommand(ctx, "launchctl", "bootout", target); err != nil {
+		return err
+	}
+	// bootout can return while the outgoing job remains visible to Start.
+	for {
+		_, err := runCommand(ctx, "launchctl", "print", target)
+		if ctx.Err() != nil {
+			return fmt.Errorf("wait for launchd service %s removal: %w", target, ctx.Err())
+		}
+		if err != nil {
+			return nil
+		}
+		if err = waitContext(ctx, 100*time.Millisecond); err != nil {
+			return fmt.Errorf("wait for launchd service %s removal: %w", target, err)
+		}
+	}
 }
 
 func runCommand(ctx context.Context, name string, args ...string) (string, error) {
