@@ -119,12 +119,7 @@ func pendingFleetUpdateNotice(stateDir string) string {
 	if err != nil {
 		return ""
 	}
-	pending := 0
-	for _, run := range runs {
-		if !run.Done() {
-			pending++
-		}
-	}
+	pending := len(update.Unfinished(runs))
 	if pending == 0 {
 		return ""
 	}

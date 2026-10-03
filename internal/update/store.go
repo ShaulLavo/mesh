@@ -86,6 +86,43 @@ func (r Run) Done() bool {
 	return true
 }
 
+// Unfinished returns the runs that still need attention. A run stays
+// unfinished only while a machine it left behind has not been verified by a
+// later run; otherwise one failure from weeks ago would be reported forever
+// after the fleet has moved on.
+func Unfinished(runs []Run) []Run {
+	var pending []Run
+	for _, run := range runs {
+		if run.Done() {
+			continue
+		}
+		for _, target := range run.Targets {
+			if target.State == Updated || target.State == Newer || target.State == Cancelled {
+				continue
+			}
+			if !verifiedAfter(runs, target.Host.ID, run.CreatedAt) {
+				pending = append(pending, run)
+				break
+			}
+		}
+	}
+	return pending
+}
+
+func verifiedAfter(runs []Run, hostID string, after time.Time) bool {
+	for _, later := range runs {
+		if !later.CreatedAt.After(after) {
+			continue
+		}
+		for _, target := range later.Targets {
+			if target.Host.ID == hostID && (target.State == Updated || target.State == Newer) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (r Run) ExitCode() int {
 	for _, target := range r.Targets {
 		if target.State == Failed || target.State == Bootstrap {
