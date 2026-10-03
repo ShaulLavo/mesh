@@ -330,11 +330,21 @@ func (s *Store) lock() (func(), error) {
 }
 
 func readJSON(path string, target any) error {
-	file, err := os.Open(path) //nolint:gosec // private update journal path is validated at the store boundary
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // policy snapshots must reject symlinks and special files without blocking authentication
 	if err != nil {
-		return err
+		return fmt.Errorf("update: open state snapshot: %w", err)
 	}
 	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("update: inspect state snapshot: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || info.Mode().Perm()&0o444 == 0 {
+		return errors.New("update: state snapshot requires a readable regular file with safe permissions")
+	}
+	if info.Size() > 2<<20 {
+		return errors.New("update: state snapshot exceeds the size limit")
+	}
 	data, err := io.ReadAll(io.LimitReader(file, (2<<20)+1))
 	if err != nil || len(data) > 2<<20 {
 		return errors.New("update: state exceeds the size limit or cannot be read")
