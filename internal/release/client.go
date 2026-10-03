@@ -198,6 +198,9 @@ func secureRedirect(client *http.Client, request *http.Request, via []*http.Requ
 	if request.URL == nil || request.URL.Scheme != httpsScheme {
 		return errors.New("release: redirect callback must keep HTTPS")
 	}
+	if request.Method != http.MethodGet {
+		return errors.New("release: redirect callback must keep GET")
+	}
 	return nil
 }
 
