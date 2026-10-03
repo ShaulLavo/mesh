@@ -101,7 +101,7 @@ jobs:
           python3 scripts/test-published-releases.py
       - name: Verify native authentication regressions
         run: |
-          go test -race -count=1 -timeout=180s -run 'Test(QueriedKeyMustNotOwnAuthenticatedSSHGrant|BootstrapReapprovalMustNotHealBareGrant|BootstrapMustSerializeWithDeviceRevocation|GrantLockMustRespectHandshakeCancellation|ManagedGrantWriterBoundsLockContention|GrantPolicyRejectsSpecialFilesWithoutBlocking|PublishedGrantSurvivesOtherAndIdempotentWriterContention|GrantContentionReleasesRealControlSlotBeforeUnlock|DarwinInstallerLaunchdActivation)$' ./internal/identity ./internal/transport ./internal/sshd ./internal/daemon ./scripts/install
+          go test -race -count=1 -timeout=180s -run 'Test(QueriedKeyMustNotOwnAuthenticatedSSHGrant|BootstrapReapprovalMustNotHealBareGrant|BootstrapMustSerializeWithDeviceRevocation|GrantLockMustRespectHandshakeCancellation|ManagedGrantWriterBoundsLockContention|GrantPolicyRejectsSpecialFilesWithoutBlocking|PublishedGrantSurvivesOtherAndIdempotentWriterContention|GrantContentionReleasesRealControlSlotBeforeUnlock|UpdaterPolicyFIFOReleasesRealControlSlot|UpdaterPolicyUnsafeSnapshotsRejectRealTLS|DarwinInstallerLaunchdActivation)$' ./internal/identity ./internal/transport ./internal/sshd ./internal/daemon ./scripts/install
       - name: Verify Darwin retains its mapped executable
         if: matrix.platform == 'darwin/arm64'
         run: |
