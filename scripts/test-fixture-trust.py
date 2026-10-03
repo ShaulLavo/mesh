@@ -33,6 +33,7 @@ class SecurityFixture:
         self.prior_trust = {}
         self.missing_trust_store = False
         self.fail_export = False
+        self.deny_authorization_write = False
 
     def run(self, command, **kwargs):
         administrator = command[:3] == ["sudo", "-n", "security"]
@@ -41,6 +42,8 @@ class SecurityFixture:
         action = args[0]
         output = b""
         if action == "authorizationdb":
+            if args[1] == "write" and self.deny_authorization_write:
+                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"NO (-60005)\n")
             if args[1] == "read":
                 output = plistlib.dumps(self.right)
             elif args[-1] == "allow":
@@ -131,6 +134,15 @@ class NativeTrustTest(unittest.TestCase):
         self.assertFalse(self.fixture.keychains)
         self.assertEqual(self.fixture.right, self.fixture.original_right)
         self.assertIn(("authorizationdb", "read", "com.apple.trust-settings.admin"), self.fixture.calls)
+
+    def test_runner_denies_authorization_writes_without_blocking_cleanup(self):
+        self.fixture.deny_authorization_write = True
+        self.install()
+        self.cleanup()
+        self.assertFalse(self.fixture.trusted)
+        self.assertEqual(self.fixture.right, self.fixture.original_right)
+        self.assertEqual(self.fixture.search, self.fixture.prior)
+        self.assertFalse(self.fixture.keychains)
 
     def test_existing_admin_trust_is_preserved(self):
         self.fixture.prior_trust = {"existing": {"trustSettings": [{"result": 1}]}}
