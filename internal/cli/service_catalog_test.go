@@ -161,7 +161,7 @@ func TestCollectServiceCatalogMarksPublicHealthUnknownWithoutEdgeStatus(t *testi
 	cache := &serviceCatalogTestCache{}
 	rows, diagnostics, err := CollectServiceCatalog(context.Background(), []HostRecord{host}, time.Second,
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {
-			return remoteServiceSnapshot{Services: []protocol.ServiceInfo{{
+			return remoteServiceSnapshot{ServiceHealthSupported: true, Services: []protocol.ServiceInfo{{
 				Name: "blog", Kind: "proxy", Target: "3000", PublicName: "blog.shaulavo.dev", Healthy: true,
 			}}}, nil
 		}, func(context.Context, HostRecord) ([]protocol.EdgeRouteInfo, error) {

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -45,9 +46,11 @@ func NewCLIPicker(input, output *os.File) cli.PickerFunc {
 func newPickerModel(ctx context.Context, catalog cli.PickerInput, now time.Time) model {
 	current := newInspectingModel(ctx, hostCatalog(catalog), catalog.Inspect, now)
 	current.privacy = catalog.Privacy
-	current.list.SetDelegate(hostDelegate{styles: current.styles, privacy: current.privacy})
+	current.refreshMainDelegate()
 	current.refresh = catalog.Refresh
 	current.act = catalog.Action
+	current.watchServices = catalog.WatchServices
+	current.serviceAct = catalog.ServiceAction
 	current.loadHosts = catalog.LoadHosts
 	current.configureUpdateNotice(catalog.UpdateNotice)
 	for _, containing := range catalog.ContainingSessions {
@@ -86,14 +89,28 @@ func (m *model) rememberContainingSessionSnapshots() {
 }
 
 func runProgram(ctx context.Context, initial tea.Model, input io.Reader, output io.Writer) (tea.Model, error) {
+	run, cancel := context.WithCancel(ctx)
+	defer cancel()
 	program := tea.NewProgram(
 		initial,
-		tea.WithContext(ctx),
+		tea.WithContext(run),
 		tea.WithInput(input),
 		tea.WithOutput(output),
 		tea.WithoutSignals(),
 	)
-	return program.Run()
+	var readers sync.WaitGroup
+	if picker, ok := initial.(model); ok && picker.watchServices != nil {
+		readers.Go(func() {
+			err := picker.watchServices(run, func(update cli.PickerServicesUpdate) { program.Send(pickerServicesMsg(update)) })
+			if err != nil && run.Err() == nil {
+				program.Send(pickerServicesFailedMsg{err})
+			}
+		})
+	}
+	final, err := program.Run()
+	cancel()
+	readers.Wait()
+	return final, err
 }
 
 func hostCatalog(input cli.PickerInput) []host {

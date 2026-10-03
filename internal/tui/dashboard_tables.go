@@ -112,16 +112,7 @@ func (m dashboardModel) serviceState(host cli.DashboardHostView, service cli.Das
 		mark = "*"
 	}
 	state := mark + " " + safeText(service.State)
-	switch {
-	case service.Failed:
-		state = m.paint(dashboardFailureStyle).Render(state)
-	case service.HealthUnknown || service.State == "idle":
-		state = m.paint(dashboardMutedStyle).Render(state)
-	case service.State == "starting" || service.State == "stopping":
-		state = m.paint(dashboardCachedStyle).Render(state)
-	default:
-		state = m.paint(dashboardGoodStyle).Render(state)
-	}
+	state = m.paint(dashboardServiceRole(service)).Render(state)
 	if dashboardServicesCached(host, m.now) {
 		state = m.paint(dashboardCachedStyle).Render(mark + " " + service.State + " cached")
 		if m.usageEnabled {
@@ -129,6 +120,19 @@ func (m dashboardModel) serviceState(host cli.DashboardHostView, service cli.Das
 		}
 	}
 	return state
+}
+
+func dashboardServiceRole(service cli.DashboardService) dashboardStyle {
+	switch {
+	case service.Failed:
+		return dashboardFailureStyle
+	case service.HealthUnknown || service.State == "idle":
+		return dashboardMutedStyle
+	case service.State == "starting" || service.State == "stopping":
+		return dashboardCachedStyle
+	default:
+		return dashboardGoodStyle
+	}
 }
 
 func dashboardServiceColumns(host, name, state, age string, width int) string {

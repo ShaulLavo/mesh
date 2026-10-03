@@ -114,6 +114,7 @@ func (w *StateWatcher) watchOnce(ctx context.Context, host HostRecord, request p
 	}
 	view.Connection, view.Problem = StateReachable, ""
 	view.ServiceHealthSupported = info.ServiceHealthSupported
+	view.PrivateName = info.PrivateName
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
@@ -295,6 +296,7 @@ func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, section
 	}
 	view.Connection, view.Problem = StateReachable, ""
 	view.ServiceHealthSupported = info.ServiceHealthSupported
+	view.PrivateName = info.PrivateName
 	defer func() { _ = conn.Close() }()
 	build, _ := json.Marshal(info.Build)
 	if section.build != string(build) {

@@ -12,6 +12,9 @@ func servedWebsites(rows []cli.ServiceCatalogRow, catalogStale bool) []servedWeb
 	websites := make([]servedWebsite, len(rows))
 	for index, row := range rows {
 		websites[index] = servedWebsite{
+			route:  row.Service.Name,
+			row:    row,
+			state:  cli.PickerServiceState(row),
 			url:    row.URL(),
 			name:   row.Service.DisplayName,
 			health: row.Health(),
