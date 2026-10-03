@@ -413,7 +413,7 @@ func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 				return true, nil
 			}
 			if session.state == "running" || session.state == "detached" {
-				m.notice = session.id + " is still " + session.state + "; kill it first"
+				m.notice = "End session " + session.id + " with k before forgetting it."
 				return true, nil
 			}
 			return true, m.startSessionAction(cli.PickerRemoveSession)
@@ -596,7 +596,7 @@ func (m model) footer(current host) string {
 	}
 	return m.styles.hints(
 		hint{"↑/↓", ""}, hint{"enter", action}, hint{"space", "screen"},
-		hint{"n", "new"}, hint{"r", "resume"}, hint{"k", "kill"}, hint{"x", "rm"}, hint{"esc", "hosts"},
+		hint{"n", "new"}, hint{"r", "resume"}, hint{"k", "end"}, hint{"x", forgetLabel}, hint{"esc", "hosts"},
 	)
 }
 
@@ -1054,6 +1054,8 @@ func (styles pickerStyles) stateText(state string) string {
 	}
 	return styles.muted.Render(state)
 }
+
+const forgetLabel = "forget"
 
 // hint is one footer entry. An empty key renders a plain status phrase.
 type hint struct{ key, label string }

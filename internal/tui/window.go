@@ -256,7 +256,7 @@ func (m windowModel) View() tea.View {
 			action = "open picker"
 		}
 	}
-	footer := picker.styles.hints(hint{"enter", action}, hint{"1-9", "pick"}, hint{"s", "shell"}, hint{"n", "new"}, hint{"l", "list"}, hint{"x", "forget"}, hint{"esc", "cancel"})
+	footer := picker.styles.hints(hint{"enter", action}, hint{"1-9", "pick"}, hint{"s", "shell"}, hint{"n", "new"}, hint{"l", "list"}, hint{"x", forgetLabel}, hint{"esc", "cancel"})
 	if _, current, ok := picker.currentSession(); m.selected && ok && canResumeAgent(current) {
 		footer = picker.styles.hints(hint{"enter", action}, hint{"a", "conversation"}, hint{"s", "shell"}, hint{"n", "new"}, hint{"l", "list"}, hint{"esc", "cancel"})
 	}

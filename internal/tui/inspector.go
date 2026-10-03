@@ -378,10 +378,10 @@ func (m model) detailsFor(current session) (result inspectionDetails) {
 		directory:      safeText(current.cwd),
 		foreground:     "loading",
 		title:          "loading",
-		attachment:     "catalog " + catalogSessionState(current.state),
+		attachment:     "listed " + catalogSessionState(current.state),
 		output:         "last output loading",
 		screenStatus:   "loading live view",
-		preview:        []string{"Loading current screen..."},
+		preview:        []string{"Loading current screen…"},
 	}
 	if details.directory == "" {
 		details.directory = "unknown"
@@ -402,8 +402,8 @@ func (m model) detailsFor(current session) (result inspectionDetails) {
 		details.foreground = "unavailable"
 		details.title = "unavailable"
 		details.output = "last output unavailable"
-		details.screenStatus = "inspect failed, retrying"
-		details.preview = []string{"Inspect failed: " + safeText(m.inspection.problem)}
+		details.screenStatus = "Screen unavailable; retrying"
+		details.preview = []string{"Could not read the screen: " + safeText(m.inspection.problem)}
 	case inspectionReady:
 		value := m.inspection.value
 		if value.CurrentDirectory != "" {

@@ -113,7 +113,7 @@ func TestSessionInspectorStates(t *testing.T) {
 					t.Fatalf("offline inspector lacks its fallback and reason:\n%s", plain)
 				}
 			case "failed":
-				if !strings.Contains(plain, "Inspect failed: worker did not answer") {
+				if !strings.Contains(plain, "Could not read the screen: worker did not answer") {
 					t.Fatalf("failed inspector leaked outside its panel:\n%s", plain)
 				}
 			case "stale":
