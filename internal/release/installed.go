@@ -12,6 +12,12 @@ import (
 
 // VerifyExecutable checks an installed image without blocking on special files.
 func VerifyExecutable(ctx context.Context, path, digest string) error {
+	return CopyExecutable(ctx, path, digest, io.Discard)
+}
+
+// CopyExecutable writes verified, bounded image bytes to a caller-owned staging file.
+// The caller publishes that file only after this function succeeds.
+func CopyExecutable(ctx context.Context, path, digest string, destination io.Writer) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("verify executable: %w", err)
 	}
@@ -30,7 +36,7 @@ func VerifyExecutable(ctx context.Context, path, digest string) error {
 	hash := sha256.New()
 	stop := context.AfterFunc(ctx, func() { _ = file.Close() })
 	defer stop()
-	written, err := io.Copy(hash, io.LimitReader(executableReader{ctx: ctx, file: file}, maximumBinary+1))
+	written, err := io.Copy(io.MultiWriter(destination, hash), io.LimitReader(executableReader{ctx: ctx, file: file}, maximumBinary+1))
 	if err != nil {
 		return fmt.Errorf("read executable: %w", err)
 	}
@@ -38,7 +44,7 @@ func VerifyExecutable(ctx context.Context, path, digest string) error {
 		return fmt.Errorf("verify executable: %w", err)
 	}
 	if written != info.Size() || hex.EncodeToString(hash.Sum(nil)) != digest {
-		return fmt.Errorf("executable differs from the healthy daemon")
+		return fmt.Errorf("executable checksum mismatch")
 	}
 	return nil
 }

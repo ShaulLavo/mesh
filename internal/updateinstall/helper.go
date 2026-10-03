@@ -32,15 +32,19 @@ type HelperInstallation struct {
 // PrepareHelper writes an independent executable and its own service definition.
 // InstallHelper additionally enables that service through the platform manager.
 func PrepareHelper(cfg HelperConfig) (HelperInstallation, error) {
-	lock, err := lockInstallation(context.Background(), cfg.StateDir)
+	return prepareHelperLocked(context.Background(), cfg)
+}
+
+func prepareHelperLocked(ctx context.Context, cfg HelperConfig) (HelperInstallation, error) {
+	lock, err := lockInstallation(ctx, cfg.StateDir)
 	if err != nil {
 		return HelperInstallation{}, err
 	}
 	defer unlock(lock)
-	return prepareHelper(cfg, false)
+	return prepareHelper(ctx, cfg, false, "")
 }
 
-func prepareHelper(cfg HelperConfig, upgrade bool) (HelperInstallation, error) {
+func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approvedDigest string) (HelperInstallation, error) {
 	if !filepath.IsAbs(cfg.StateDir) || !filepath.IsAbs(cfg.Executable) {
 		return HelperInstallation{}, errors.New("helper requires absolute state and executable paths")
 	}
@@ -60,16 +64,20 @@ func prepareHelper(cfg HelperConfig, upgrade bool) (HelperInstallation, error) {
 	if !filepath.IsAbs(cfg.ServiceDir) {
 		return HelperInstallation{}, errors.New("helper service directory must be absolute")
 	}
-	digest, err := fileDigest(cfg.Executable)
-	if err != nil {
-		return HelperInstallation{}, err
+	digest := approvedDigest
+	if digest == "" {
+		var err error
+		digest, err = fileDigest(cfg.Executable)
+		if err != nil {
+			return HelperInstallation{}, err
+		}
 	}
 	dir := filepath.Join(transactionDir(cfg.StateDir), "helper", digest)
-	if err = os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return HelperInstallation{}, err
 	}
 	installed := HelperInstallation{Executable: filepath.Join(dir, "mesh"), Digest: digest}
-	if err = durableCopy(cfg.Executable, installed.Executable, digest); err != nil {
+	if err := durableCopy(ctx, cfg.Executable, installed.Executable, digest); err != nil {
 		return installed, err
 	}
 	launcher := filepath.Join(transactionDir(cfg.StateDir), "helper", "current")
@@ -96,7 +104,7 @@ func prepareHelper(cfg HelperConfig, upgrade bool) (HelperInstallation, error) {
 		}
 	}
 	if upgrade {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		if _, err = runCommand(ctx, installed.Executable, "update-helper", "--state-dir", cfg.StateDir, "--check-journal"); err != nil {
 			return installed, err
@@ -134,7 +142,7 @@ func UpgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 	if status.Phase != Committed {
 		return HelperInstallation{}, errors.New("helper replacement requires a committed daemon installation")
 	}
-	digest, err := fileDigest(cfg.Executable)
+	digest, err := committedHelperDigest(ctx, cfg.Executable, status.Request.Manifest)
 	if err != nil {
 		return HelperInstallation{}, err
 	}
@@ -142,24 +150,24 @@ func UpgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 	if err = readJSON(helperRecord(cfg.StateDir), &prior); err != nil {
 		return prior, err
 	}
-	if err = verifyHelperReceipt(cfg.StateDir, prior); err != nil {
-		return prior, err
-	}
-	artifact, err := status.Request.Manifest.Artifact(release.CurrentPlatform())
+	interrupted, err := verifyHelperReceipt(ctx, cfg.StateDir, prior, digest)
 	if err != nil {
-		return prior, fmt.Errorf("committed helper artifact: %w", err)
-	}
-	if digest != artifact.BinarySHA256 {
-		return prior, errors.New("helper source does not match the committed release artifact")
+		return prior, err
 	}
 	if prior.Digest == digest {
 		return prior, nil
 	}
 	allowed, err := helperUpgradeAllowed(ctx, cfg, status.Request.Manifest, prior, digest)
-	if err != nil || !allowed {
+	if err != nil {
 		return prior, err
 	}
-	installed, err := prepareHelper(cfg, true)
+	if !allowed {
+		if interrupted {
+			return prior, errors.New("interrupted helper promotion does not advance its receipt")
+		}
+		return prior, nil
+	}
+	installed, err := prepareHelper(ctx, cfg, true, digest)
 	if err != nil {
 		return installed, err
 	}
@@ -174,21 +182,38 @@ func UpgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 	return installed, err
 }
 
-func verifyHelperReceipt(stateDir string, prior HelperInstallation) error {
-	if prior.Executable != filepath.Join(transactionDir(stateDir), "helper", prior.Digest, "mesh") {
-		return errors.New("helper receipt does not name its immutable executable copy")
+func committedHelperDigest(ctx context.Context, executable string, manifest release.Manifest) (string, error) {
+	artifact, err := manifest.Artifact(release.CurrentPlatform())
+	if err != nil {
+		return "", fmt.Errorf("committed helper artifact: %w", err)
 	}
-	if err := verifyFile(prior.Executable, prior.Digest); err != nil {
-		return err
+	if err = release.VerifyExecutable(ctx, executable, artifact.BinarySHA256); err != nil {
+		return "", fmt.Errorf("verify committed helper source: %w", err)
+	}
+	return artifact.BinarySHA256, nil
+}
+
+func verifyHelperReceipt(ctx context.Context, stateDir string, prior HelperInstallation, committedDigest string) (bool, error) {
+	if prior.Executable != filepath.Join(transactionDir(stateDir), "helper", prior.Digest, "mesh") {
+		return false, errors.New("helper receipt does not name its immutable executable copy")
+	}
+	if err := release.VerifyExecutable(ctx, prior.Executable, prior.Digest); err != nil {
+		return false, fmt.Errorf("verify helper receipt: %w", err)
 	}
 	link, err := os.Readlink(filepath.Join(transactionDir(stateDir), "helper", "current"))
 	if err != nil {
-		return fmt.Errorf("read helper launcher: %w", err)
+		return false, fmt.Errorf("read helper launcher: %w", err)
 	}
-	if link != prior.Executable {
-		return errors.New("helper launcher does not match its installation receipt")
+	if link == prior.Executable {
+		return false, nil
 	}
-	return nil
+	if link != filepath.Join(transactionDir(stateDir), "helper", committedDigest, "mesh") {
+		return false, errors.New("helper launcher does not match its installation receipt or committed artifact")
+	}
+	if err = release.VerifyExecutable(ctx, link, committedDigest); err != nil {
+		return false, fmt.Errorf("verify interrupted helper promotion: %w", err)
+	}
+	return true, nil
 }
 
 func helperUpgradeAllowed(ctx context.Context, cfg HelperConfig, manifest release.Manifest, prior HelperInstallation, digest string) (bool, error) {
@@ -226,15 +251,12 @@ func helperUpgradeAllowed(ctx context.Context, cfg HelperConfig, manifest releas
 func helperBuild(ctx context.Context, executable, digest string) (release.Build, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	output, err := runCommand(ctx, executable, "version", "--json")
+	output, err := helperMetadataOutput(ctx, executable)
 	if err != nil {
 		return release.Build{}, err
 	}
-	if len(output) > 64<<10 {
-		return release.Build{}, errors.New("helper build report exceeds size limit")
-	}
 	var build release.Build
-	if err = json.Unmarshal([]byte(output), &build); err != nil {
+	if err = json.Unmarshal(output, &build); err != nil {
 		return build, fmt.Errorf("decode helper build report: %w", err)
 	}
 	if build.Digest != digest || build.Platform != release.CurrentPlatform() || build.Modified ||
@@ -268,7 +290,7 @@ func replaceHelperLink(path, target string) error {
 }
 
 func InstallHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, error) {
-	installed, err := PrepareHelper(cfg)
+	installed, err := prepareHelperLocked(ctx, cfg)
 	if err != nil {
 		return installed, err
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,8 +20,12 @@ func TestUpgradeHelperRealBuildContract(t *testing.T) {
 			t.Skipf("real build contract requires %s", tool)
 		}
 	}
-	root, err := filepath.Abs("../..")
+	checkout, err := filepath.Abs("../..")
 	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "mesh checkout")
+	if err = os.Symlink(checkout, root); err != nil {
 		t.Fatal(err)
 	}
 	source, err := os.ReadFile("testdata/helperbuild/main.go")
@@ -28,7 +33,7 @@ func TestUpgradeHelperRealBuildContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspace, artifacts := t.TempDir(), t.TempDir()
-	module := "module github.com/shaul/mesh/internal/updateinstall/helperfixture\n\ngo 1.27.0\n\nrequire github.com/shaul/mesh v0.0.0\nreplace github.com/shaul/mesh => " + root + "\n"
+	module := "module github.com/shaul/mesh/internal/updateinstall/helperfixture\n\ngo 1.27.0\n\nrequire github.com/shaul/mesh v0.0.0\nreplace github.com/shaul/mesh => " + strconv.Quote(root) + "\n"
 	for name, data := range map[string][]byte{"go.mod": []byte(module), "main.go": source} {
 		if err = os.WriteFile(filepath.Join(workspace, name), data, 0600); err != nil {
 			t.Fatal(err)
@@ -79,7 +84,7 @@ func TestUpgradeHelperRealBuildContract(t *testing.T) {
 				f.publish(t, builds[version])
 			}
 			stage("v0.1.170")
-			f.prior, err = prepareHelper(f.cfg, true)
+			f.prior, err = prepareHelper(t.Context(), f.cfg, true, "")
 			if err != nil {
 				t.Fatal(err)
 			}
