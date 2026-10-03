@@ -24,9 +24,7 @@ func firstCoordinatorFleet(t *testing.T) (string, update.Host, update.Fleet, str
 	}
 	fleet := scopedUpdateFleet("remote only", []update.Host{{ID: remote.ID, Alias: "laptop", Endpoint: "ws://laptop.invalid/mesh"}})
 	file := filepath.Join(t.TempDir(), "fleet.json")
-	if err := update.SaveFleet(file, fleet); err != nil {
-		t.Fatal(err)
-	}
+	saveUpdateTestFleet(t, file, fleet)
 	return stateDir, local, fleet, file
 }
 

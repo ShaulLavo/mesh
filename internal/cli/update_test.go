@@ -37,6 +37,20 @@ func updateTestBuild() release.Build {
 	return release.Build{Version: "v0.1.0", Digest: strings.Repeat("d", 64), Platform: release.CurrentPlatform(), StateVersion: 1, WorkerProtocol: 1, UpdateProtocol: 1}
 }
 
+func saveUpdateTestFleet(t *testing.T, path string, fleet update.Fleet) {
+	t.Helper()
+	if err := fleet.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(fleet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func updateTestRelease(t *testing.T) (release.Client, *atomic.Int32) {
 	t.Helper()
 	requests := new(atomic.Int32)
@@ -113,9 +127,7 @@ func TestUpdateKeepsOfflineMembersAndSubmitsOnePinnedPlan(t *testing.T) {
 	remote := update.Host{ID: remoteIdentity.ID, Alias: "laptop", Endpoint: "ws://laptop.invalid/mesh"}
 	fleet := scopedUpdateFleet("test", []update.Host{local, remote})
 	file := filepath.Join(t.TempDir(), "fleet.json")
-	if err := update.SaveFleet(file, fleet); err != nil {
-		t.Fatal(err)
-	}
+	saveUpdateTestFleet(t, file, fleet)
 	client, _ := updateTestRelease(t)
 	var plans atomic.Int32
 	caller := updateCallFunc(func(_ context.Context, host update.Host, action string, input, output any) error {

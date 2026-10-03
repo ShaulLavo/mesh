@@ -143,9 +143,7 @@ func TestUpdateFlowExplicitFleetRetainsExactScope(t *testing.T) {
 	dependencies, local, _ := updateFlowFixture(t, true)
 	fleet := scopedUpdateFleet("chosen", []update.Host{local})
 	file := filepath.Join(t.TempDir(), "fleet.json")
-	if err := update.SaveFleet(file, fleet); err != nil {
-		t.Fatal(err)
-	}
+	saveUpdateTestFleet(t, file, fleet)
 	before, err := os.ReadFile(file) //nolint:gosec // file belongs to this test's temporary directory
 	if err != nil {
 		t.Fatal(err)
@@ -252,9 +250,7 @@ func TestUpdateFlowSavedFleetAndAllKeepExplicitMembership(t *testing.T) {
 	}
 	fleet := scopedUpdateFleet("chosen", []update.Host{local, adoptedUpdateHost(hosts[0])})
 	config, _ := ConfigPath()
-	if err = update.SaveFleet(filepath.Join(filepath.Dir(config), "fleet.json"), fleet); err != nil {
-		t.Fatal(err)
-	}
+	saveUpdateTestFleet(t, filepath.Join(filepath.Dir(config), "fleet.json"), fleet)
 	for _, args := range [][]string{{"update", "--check", "--json"}, {"update", "--all", "--check", "--json"}} {
 		text, _, err := executeCommand(t, dependencies, args...)
 		var preview updatePreview
