@@ -198,6 +198,9 @@ func secureRedirect(client *http.Client, request *http.Request, via []*http.Requ
 	if request.URL == nil || request.URL.Scheme != httpsScheme {
 		return errors.New("release: redirect callback must keep HTTPS")
 	}
+	if request.Method != http.MethodGet {
+		return errors.New("release: redirect callback must keep GET")
+	}
 	return nil
 }
 
@@ -261,7 +264,11 @@ func response(ctx context.Context, client *http.Client, address string) (*http.R
 	request.Header.Set("User-Agent", "mesh-release")
 	reply, err := client.Do(request)
 	if err != nil {
-		return nil, err
+		// Client.Do returns a response with an error only for a rejected redirect.
+		if reply != nil {
+			return nil, &downloadRedirectError{err: err}
+		}
+		return nil, &downloadTransportError{err: err}
 	}
 	if reply.Request == nil || reply.Request.URL.Scheme != httpsScheme {
 		_ = reply.Body.Close()

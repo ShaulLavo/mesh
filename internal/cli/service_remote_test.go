@@ -55,7 +55,7 @@ func serviceRemoteDial(host HostRecord, handler func(protocol.Control) protocol.
 	return func(context.Context, HostRecord) (transport.Conn, error) {
 		return newServiceRemoteTestConn(func(request protocol.Control) protocol.Control {
 			if request.Type == protocol.TypeHostInfo {
-				return protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity}}
+				return protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity, ServiceHealthSupported: true}}
 			}
 			return handler(request)
 		}), nil

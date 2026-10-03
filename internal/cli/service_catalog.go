@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	serviceHealthUnknown            = "unknown"
 	maximumConcurrentServiceQueries = 16
 	maximumConcurrentEdgeQueries    = 4
 	maximumConcurrentCacheWrites    = 4
@@ -30,14 +31,15 @@ type serviceCatalogCache interface {
 // ServiceCatalogRow joins one live or cached origin definition to any public
 // edge status that could be obtained within the same hard deadline.
 type ServiceCatalogRow struct {
-	Host        HostRecord
-	PrivateName string
-	Service     protocol.ServiceInfo
-	Live        bool
-	Stale       bool
-	ObservedAt  time.Time
-	EdgeKnown   bool
-	EdgeOnline  bool
+	Host              HostRecord
+	PrivateName       string
+	Service           protocol.ServiceInfo
+	Live              bool
+	Stale             bool
+	ObservedAt        time.Time
+	EdgeKnown         bool
+	EdgeOnline        bool
+	HealthUnsupported bool
 }
 
 func (r ServiceCatalogRow) Scope() string {
@@ -58,6 +60,9 @@ func (r ServiceCatalogRow) URL() string {
 func (r ServiceCatalogRow) Health() string {
 	if !r.Live {
 		return "offline/stale"
+	}
+	if r.HealthUnsupported || r.Service.HealthUnknown {
+		return serviceHealthUnknown
 	}
 	if state, ok := r.demandHealth(); ok {
 		return state
@@ -255,7 +260,7 @@ func cachedServiceCatalogRows(host HostRecord, cached []storage.CachedService) [
 			Host: host, PrivateName: row.PrivateName,
 			Service: protocol.ServiceInfo{
 				DisplayName: row.Service.DisplayName, Name: row.Service.Name, Kind: string(row.Service.Kind), Target: row.Service.Target,
-				PublicName: row.Service.PublicName, WakeOnRequest: row.Service.WakeOnRequest, Isolate: row.Service.Isolate,
+				PublicName: row.Service.PublicName, WakeOnRequest: row.Service.WakeOnRequest, Isolate: row.Service.Isolate, LocalOnly: row.Service.LocalOnly,
 				Healthy: row.Healthy, Problem: row.Problem,
 			},
 			Stale: true, ObservedAt: row.ObservedAt,
@@ -267,7 +272,7 @@ func cachedServiceCatalogRows(host HostRecord, cached []storage.CachedService) [
 func liveServiceCatalogRows(host HostRecord, snapshot remoteServiceSnapshot) []ServiceCatalogRow {
 	rows := make([]ServiceCatalogRow, len(snapshot.Services))
 	for index, service := range snapshot.Services {
-		rows[index] = ServiceCatalogRow{Host: host, PrivateName: snapshot.PrivateName, Service: service, Live: true}
+		rows[index] = ServiceCatalogRow{Host: host, PrivateName: snapshot.PrivateName, Service: service, Live: true, HealthUnsupported: !snapshot.ServiceHealthSupported}
 	}
 	return rows
 }

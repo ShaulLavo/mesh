@@ -30,7 +30,7 @@ func dialControlHost(ctx context.Context, host HostRecord) (transport.Conn, erro
 }
 
 func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer, service protocol.ServiceInfo, allowCredentials bool) (protocol.ServicePreview, string, error) {
-	response, privateName, err := remoteServiceRequest(ctx, host, dial, protocol.Control{
+	response, info, err := remoteServiceRequest(ctx, host, dial, protocol.Control{
 		Type: protocol.TypeServicePreview, Service: &service, AllowCredentials: allowCredentials,
 	}, nil)
 	if err != nil {
@@ -69,7 +69,7 @@ func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer,
 		}
 		return protocol.ServicePreview{}, "", fmt.Errorf("host %s changed the listeners or launch recipe in its preview", host.Alias)
 	}
-	return preview, privateName, nil
+	return preview, info.PrivateName, nil
 }
 
 type remoteServicePublication struct {
@@ -83,7 +83,7 @@ func upsertRemoteService(ctx context.Context, host HostRecord, dial HostDialer, 
 	if requested.PublicName == "" && privateName != "" {
 		expectedPrivateName = &privateName
 	}
-	response, currentPrivateName, err := remoteServiceRequest(ctx, host, dial, protocol.Control{
+	response, info, err := remoteServiceRequest(ctx, host, dial, protocol.Control{
 		Type: protocol.TypeServiceUpsert, Service: &requested, ServicePreview: &preview, AllowCredentials: allowCredentials,
 	}, expectedPrivateName)
 	if err != nil {
@@ -102,16 +102,17 @@ func upsertRemoteService(ctx context.Context, host HostRecord, dial HostDialer, 
 	if !sameServiceDefinition(acknowledged, preview.Service) {
 		return remoteServicePublication{}, fmt.Errorf("host %s acknowledged a different service definition", host.Alias)
 	}
-	return remoteServicePublication{Service: acknowledged, PrivateName: currentPrivateName, Warning: response.Message}, nil
+	return remoteServicePublication{Service: acknowledged, PrivateName: info.PrivateName, Warning: response.Message}, nil
 }
 
 type remoteServiceSnapshot struct {
-	PrivateName string
-	Services    []protocol.ServiceInfo
+	PrivateName            string
+	Services               []protocol.ServiceInfo
+	ServiceHealthSupported bool
 }
 
 func listRemoteServices(ctx context.Context, host HostRecord, dial HostDialer) (remoteServiceSnapshot, error) {
-	response, privateName, err := remoteServiceRequest(ctx, host, dial, protocol.Control{Type: protocol.TypeServiceList}, nil)
+	response, info, err := remoteServiceRequest(ctx, host, dial, protocol.Control{Type: protocol.TypeServiceList}, nil)
 	if err != nil {
 		return remoteServiceSnapshot{}, err
 	}
@@ -139,7 +140,7 @@ func listRemoteServices(ctx context.Context, host HostRecord, dial HostDialer) (
 		previous = service.Name
 		services[index] = service
 	}
-	return remoteServiceSnapshot{PrivateName: privateName, Services: services}, nil
+	return remoteServiceSnapshot{PrivateName: info.PrivateName, Services: services, ServiceHealthSupported: info.ServiceHealthSupported}, nil
 }
 
 func deleteRemoteService(ctx context.Context, host HostRecord, dial HostDialer, name string) error {
@@ -216,25 +217,25 @@ func listRemoteEdge(ctx context.Context, host HostRecord, dial HostDialer) ([]pr
 	return nil, fmt.Errorf("host %s public edge list did not terminate", host.Alias)
 }
 
-func remoteServiceRequest(ctx context.Context, host HostRecord, dial HostDialer, request protocol.Control, expectedPrivateName *string) (protocol.Control, string, error) {
+func remoteServiceRequest(ctx context.Context, host HostRecord, dial HostDialer, request protocol.Control, expectedPrivateName *string) (protocol.Control, protocol.HostInfo, error) {
 	if ctx == nil {
-		return protocol.Control{}, "", errors.New("cli: nil service request context")
+		return protocol.Control{}, protocol.HostInfo{}, errors.New("cli: nil service request context")
 	}
 	conn, info, err := openVerifiedHostInfo(ctx, host, dial)
 	if err != nil {
-		return protocol.Control{}, "", err
+		return protocol.Control{}, protocol.HostInfo{}, err
 	}
 	defer conn.Close() //nolint:errcheck // request result is authoritative
 	if expectedPrivateName != nil && info.PrivateName != *expectedPrivateName {
-		return protocol.Control{}, "", fmt.Errorf("host %s private name changed after preview", host.Alias)
+		return protocol.Control{}, protocol.HostInfo{}, fmt.Errorf("host %s private name changed after preview", host.Alias)
 	}
 	requestID, err := newDaemonRequestID()
 	if err != nil {
-		return protocol.Control{}, "", err
+		return protocol.Control{}, protocol.HostInfo{}, err
 	}
 	request.RequestID = requestID
 	response, err := controlRequest(ctx, conn, request)
-	return response, info.PrivateName, err
+	return response, info, err
 }
 
 func validateRemoteService(info protocol.ServiceInfo) (protocol.ServiceInfo, error) {
