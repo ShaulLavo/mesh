@@ -2,4 +2,7 @@
 │ Codex · weekly-sample · Pro                seen 2m │
 │ Weekly  66% used · 34% left · resets 7h            │
 │ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪│▪ ● OK                  │
+│ Model · gpt-6.1-sol                                │
+│ Sol We… 66% used · 34% left · resets 7h            │
+│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪│▪ ● OK                  │
 └────────────────────────────────────────────────────┘

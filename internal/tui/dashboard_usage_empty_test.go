@@ -281,17 +281,17 @@ func TestDashboardUsageReviewEmptyCreditsAwaitTraffic(t *testing.T) {
 	}
 }
 
-func TestDashboardUsageAggregateWindowsOnly(t *testing.T) {
+func TestDashboardUsageAccountAndModelScopes(t *testing.T) {
 	for _, compact := range []bool{false, true} {
 		model := usageFixture(t, "model-scoped")
 		rows := model.usagePanel(54, 17, compact)
 		got := ansi.Strip(strings.Join(rows, "\n"))
-		wantRows := 5
+		wantRows := 8
 		if compact {
-			wantRows = 4
+			wantRows = 6
 		}
-		if len(rows) != wantRows || strings.Count(got, "Weekly") != 1 || strings.Contains(got, "Sol Weekly") || strings.Contains(got, "5h") {
-			t.Fatal("model-scoped copy became another aggregate allowance", got)
+		if len(rows) != wantRows || strings.Count(got, "66%") != 2 || !strings.Contains(got, "Weekly") || !strings.Contains(got, "Model · gpt-6.1-sol") || strings.Contains(got, "5h") {
+			t.Fatal("account-wide and model-specific allowances need distinct displays", got)
 		}
 	}
 }
