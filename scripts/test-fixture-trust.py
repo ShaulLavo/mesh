@@ -10,8 +10,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
+from fixtures import native_tls
 from fixtures.native_tls import SOURCES, fixture_certificates, macho_signature_flags, probe_tls, verify_injectable_binaries
 
 SOURCE = Path(__file__).with_name("prove-device-auth-cutover.py")
@@ -185,6 +186,13 @@ class TLSControlsTest(unittest.TestCase):
                        check=True, capture_output=True, timeout=60)
         cls.environment = os.environ | {"SSL_CERT_FILE": str(cls.root / "cert.pem"),
             "SSL_CERT_DIR": str(cls.root / "empty-certs")}
+
+    def test_existing_certificate_files_need_no_native_interposer(self):
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "RUNNER_OS": "macOS"}), \
+                patch.object(native_tls, "verify_injectable_binaries", return_value=[]):
+            environment = native_tls.prepare_native_tls(self.root, [], Mock())
+        self.assertEqual(environment, {"SSL_CERT_FILE": str(self.root / "cert.pem"),
+            "SSL_CERT_DIR": str(self.root / "empty-certs")})
 
     def test_fixture_ca_is_trusted(self):
         probe_tls(self.root, self.probe, self.environment, "server.pem", "server.key", "trusted")
