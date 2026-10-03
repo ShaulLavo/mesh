@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
@@ -74,9 +73,7 @@ func (a *application) runDashboard(ctx context.Context, wall bool, override stri
 	}
 	restart := dashboardRestart{current: release.Current(), argv: os.Args, env: os.Environ(),
 		exec: func(ctx context.Context, build release.Build, path string, argv, env []string) error {
-			handoff, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-			defer cancel()
-			return updateinstall.WithCommittedExecutable(handoff, filepath.Dir(socket), localID, build, func(installed string) error {
+			return updateinstall.WithCommittedExecutable(ctx, filepath.Dir(socket), localID, build, func(installed string) error {
 				if installed != path {
 					return fmt.Errorf("installed mesh path changed before restart")
 				}
