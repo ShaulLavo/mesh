@@ -1,6 +1,7 @@
 package updatebootstrap
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -10,7 +11,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func peerImage(conn net.Conn) (executableImage, error) {
+func peerImage(ctx context.Context, conn net.Conn) (executableImage, error) {
 	socket, ok := conn.(syscall.Conn)
 	if !ok {
 		return executableImage{}, errors.New("bootstrap requires a local Unix socket")
@@ -29,7 +30,17 @@ func peerImage(conn net.Conn) (executableImage, error) {
 	if probeErr != nil {
 		return executableImage{}, probeErr
 	}
-	path := fmt.Sprintf("/proc/%d/exe", credentials.Pid)
+	return processImage(ctx, int(credentials.Pid))
+}
+
+func processImage(ctx context.Context, pid int) (executableImage, error) {
+	if err := ctx.Err(); err != nil {
+		return executableImage{}, fmt.Errorf("inspect process image: %w", err)
+	}
+	path := fmt.Sprintf("/proc/%d/exe", pid)
 	installed, err := os.Readlink(path)
-	return executableImage{Path: path, Installed: installed, PID: int(credentials.Pid)}, err
+	if err != nil {
+		return executableImage{}, fmt.Errorf("resolve executing process image: %w", err)
+	}
+	return executableImage{Path: path, Installed: installed, PID: pid}, nil
 }

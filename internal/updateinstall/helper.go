@@ -16,11 +16,12 @@ import (
 )
 
 type HelperConfig struct {
-	StateDir   string
-	Executable string
-	ServiceDir string
-	Kind       string
-	Domain     string
+	StateDir        string
+	Executable      string
+	ServiceDir      string
+	Kind            string
+	Domain          string
+	beforePromotion func(context.Context) error
 }
 
 type HelperInstallation struct {
@@ -68,12 +69,8 @@ func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approved
 			return HelperInstallation{}, err
 		}
 	}
-	dir := filepath.Join(transactionDir(cfg.StateDir), "helper", digest)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return HelperInstallation{}, err
-	}
-	installed := HelperInstallation{Executable: filepath.Join(dir, "mesh"), Digest: digest}
-	if err := durableCopy(ctx, cfg.Executable, installed.Executable, digest); err != nil {
+	installed, err := stageHelperImage(ctx, cfg, digest)
+	if err != nil {
 		return installed, err
 	}
 	launcher := filepath.Join(transactionDir(cfg.StateDir), "helper", "current")
@@ -100,11 +97,19 @@ func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approved
 		}
 	}
 	if upgrade {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		if _, err = runCommand(ctx, installed.Executable, "update-helper", "--state-dir", cfg.StateDir, "--check-journal"); err != nil {
+		if _, err = helperCommandOutput(ctx, installed.Executable, "update-helper", "--state-dir", cfg.StateDir, "--check-journal"); err != nil {
 			return installed, err
 		}
+	}
+	if cfg.beforePromotion != nil {
+		if err = cfg.beforePromotion(ctx); err != nil {
+			return installed, err
+		}
+	}
+	if err = ctx.Err(); err != nil {
+		return installed, fmt.Errorf("helper preparation cancelled: %w", err)
 	}
 	if err = atomicWrite(installed.ServicePath, []byte(data), 0644); err != nil {
 		return installed, err
@@ -118,6 +123,31 @@ func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approved
 		return installed, err
 	}
 	return installed, replaceHelperLink(launcher, installed.Executable)
+}
+
+func stageHelperImage(ctx context.Context, cfg HelperConfig, digest string) (HelperInstallation, error) {
+	dir := filepath.Join(transactionDir(cfg.StateDir), "helper", digest)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return HelperInstallation{}, fmt.Errorf("create immutable helper directory: %w", err)
+	}
+	installed := HelperInstallation{Executable: filepath.Join(dir, "mesh"), Digest: digest}
+	info, err := os.Lstat(installed.Executable)
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			return installed, errors.New("retained helper image must be a regular file")
+		}
+		if err = release.VerifyExecutable(ctx, installed.Executable, digest); err != nil {
+			return installed, fmt.Errorf("verify retained immutable helper: %w", err)
+		}
+		return installed, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return installed, fmt.Errorf("inspect immutable helper destination: %w", err)
+	}
+	if err := durableCopy(ctx, cfg.Executable, installed.Executable, digest); err != nil {
+		return installed, err
+	}
+	return installed, nil
 }
 
 func helperRecord(stateDir string) string {
@@ -296,7 +326,7 @@ func helperUpgradeAllowed(ctx context.Context, cfg HelperConfig, manifest releas
 func helperBuild(ctx context.Context, executable, digest string) (release.Build, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	output, err := helperMetadataOutput(ctx, executable)
+	output, err := helperCommandOutput(ctx, executable, "version", "--json")
 	if err != nil {
 		return release.Build{}, err
 	}

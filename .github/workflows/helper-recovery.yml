@@ -1,0 +1,52 @@
+name: Local helper recovery
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  native-recovery:
+    name: Native helper recovery (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: darwin/arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Require actual native execution
+        env:
+          REQUIRED_PLATFORM: ${{ matrix.platform }}
+        run: test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$REQUIRED_PLATFORM"
+      - name: Verify recovery cancellation, rejection and mapped helper identity
+        run: |
+          go test -race ./internal/updateinstall ./internal/updatebootstrap ./internal/cli -run 'TestHelperRecovery|TestHelperProcess|TestHelperLaunchdTarget|TestLaunchdHelperPID|TestUpgradeHelper|TestFailedRollback|TestOriginalInode|TestDarwinMappedExecutable' -count=1 -timeout=180s
+      - name: Verify shared acquisition and child-only TLS controls
+        run: |
+          python3 scripts/test-fixture-tls.py
+          python3 scripts/test-published-releases.py
+      - name: Recover historical helper and run published bridge chain
+        env:
+          HELPER_RECOVERY_PLATFORM: ${{ matrix.platform }}
+        run: bash scripts/prove-helper-recovery.sh "$RUNNER_TEMP/helper-recovery"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: helper-recovery-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/helper-recovery
+          retention-days: 7
