@@ -57,8 +57,8 @@ func TestVerifyExecutableMatchesImageAndCancellation(t *testing.T) {
 	if err := VerifyExecutable(t.Context(), path, testDigest(contents)); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyExecutable(t.Context(), path, "other image"); err == nil {
-		t.Fatal("accepted wrong image")
+	if err := VerifyExecutable(t.Context(), path, "other image"); !errors.Is(err, ErrExecutableChecksumMismatch) {
+		t.Fatalf("wrong image lost integrity classification: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -84,6 +84,9 @@ func TestCopyExecutableMatchesImageAndCancellation(t *testing.T) {
 	var destination bytes.Buffer
 	if err := CopyExecutable(t.Context(), path, testDigest(contents), &destination); err != nil || !bytes.Equal(contents, destination.Bytes()) {
 		t.Fatalf("verified copy differs: %v", err)
+	}
+	if err := CopyExecutable(t.Context(), path, "other image", &destination); !errors.Is(err, ErrExecutableChecksumMismatch) {
+		t.Fatalf("staged wrong image lost integrity classification: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

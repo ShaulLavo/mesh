@@ -277,7 +277,7 @@ func TestDashboardReplacementDuringTerminalCleanupSkipsExec(t *testing.T) {
 	}}
 	err = restart.run(t.Context(), input, func(ctx context.Context, input DashboardInput) error {
 		runs++
-		if runs == 2 && !strings.Contains(input.Notice, "executable checksum mismatch") {
+		if runs == 2 && !strings.Contains(input.Notice, "differs from the healthy daemon") {
 			t.Fatalf("missing replacement notice: %q", input.Notice)
 		}
 		err := input.Watch(ctx, func(DashboardHostView) {})

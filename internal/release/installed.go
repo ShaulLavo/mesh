@@ -4,11 +4,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"syscall"
 )
+
+// ErrExecutableChecksumMismatch identifies image integrity failure independently of presentation.
+var ErrExecutableChecksumMismatch = errors.New("executable checksum mismatch")
 
 // VerifyExecutable checks an installed image without blocking on special files.
 func VerifyExecutable(ctx context.Context, path, digest string) error {
@@ -44,7 +48,7 @@ func CopyExecutable(ctx context.Context, path, digest string, destination io.Wri
 		return fmt.Errorf("verify executable: %w", err)
 	}
 	if written != info.Size() || hex.EncodeToString(hash.Sum(nil)) != digest {
-		return fmt.Errorf("executable checksum mismatch")
+		return ErrExecutableChecksumMismatch
 	}
 	return nil
 }
