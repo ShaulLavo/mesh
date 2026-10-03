@@ -448,9 +448,39 @@ sys.exit(result["status"])
             log.close()
 
 
+def historical_failure_phase(host, expected):
+    try:
+        return host.journal()["phase"] == expected
+    except FileNotFoundError:
+        return False
+
+
+def observe_failed_rollback(host):
+    command = [str(host.binary), "update", "--local", "--version", "v0.1.151", "--yes", "--json"]
+    process = subprocess.Popen(command, env=host.environment, cwd=host.root, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        eventually(lambda: historical_failure_phase(host, "rollback_failed"), "historical failed rollback receipt missing", timeout=60)
+        event("historical-rollback-failed-observed", host=host.name, provider="unchanged published v149 Engine")
+        # The historical client observes through the daemon; restore connectivity after its real failure receipt.
+        host.fail_original = False
+        require(host.start("daemon")[0] == 0, "original fixture daemon could not restart")
+        _, stderr = process.communicate(timeout=15)
+        require(process.returncode == 1, "historical failed rollback client did not report failure")
+        (host.root / "historical-rollback-error.log").write_bytes(stderr)
+        event("command", host=host.name, operation="update", status=process.returncode)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+
 def failed_historical_update(host, rollback_failed=False):
     host.fail_candidate, host.fail_original = True, rollback_failed
-    host.command(host.binary, "update", "--local", "--version", "v0.1.151", "--yes", "--json", expected=1)
+    if rollback_failed:
+        observe_failed_rollback(host)
+    else:
+        host.command(host.binary, "update", "--local", "--version", "v0.1.151", "--yes", "--json", expected=1)
     expected = "rollback_failed" if rollback_failed else "rolled_back"
     require(host.journal()["phase"] == expected, "historical Engine did not write expected failure receipt")
     event("historical-failure-receipt", host=host.name, phase=expected, operation=host.journal()["request"]["id"])
