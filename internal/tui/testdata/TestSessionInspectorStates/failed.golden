@@ -8,9 +8,9 @@
 [2m│[m [2mstarted in  [m /home/shaul/src/mesh                                            [2m│[m
 [2m│[m [2mforeground  [m [2munavailable[m                                                     [2m│[m
 [2m│[m [2mlaunched    [m claude --dangerously-skip-permissions                           [2m│[m
-[2m│[m [2mactivity    [m catalog detached  ·  last output unavailable  ·  started 4m ago [2m│[m
-[2m├─ [m[1;38;2;255;184;108minspect failed, retrying[m[2m ───────────────────────────────────────────────────┤[m
-[2m│[m [38;2;216;222;233mInspect failed: worker did not answer[m                                        [2m│[m
+[2m│[m [2mactivity    [m listed detached  ·  last output unavailable  ·  started 4m ago  [2m│[m
+[2m├─ [m[1;38;2;255;184;108mScreen unavailable; retrying[m[2m ───────────────────────────────────────────────┤[m
+[2m│[m [38;2;216;222;233mCould not read the screen: worker did not answer[m                             [2m│[m
 [2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
 [2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
 [2m│[m [38;2;216;222;233m[m                                                                             [2m│[m

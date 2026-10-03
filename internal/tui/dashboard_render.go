@@ -230,11 +230,11 @@ func (m dashboardModel) footer() string {
 	if m.usageEnabled {
 		return m.usageFooter()
 	}
-	cadence := "metrics 2s · catalogs change-driven · history 2m (120s)"
+	cadence := "readings every 2s · lists update on change · history 2m"
 	if m.width >= 140 {
-		cadence += " · 0–100% · AGE observation age"
+		cadence += " · 0–100% · AGE since reading"
 	}
-	frame := "frame " + m.now.Format("15:04:05")
+	frame := "updated " + m.now.Format("15:04:05")
 	for _, host := range m.hosts {
 		if host.Host.Local {
 			frame += " on " + safeText(host.Host.Alias)

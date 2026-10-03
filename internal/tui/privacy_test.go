@@ -281,7 +281,7 @@ func TestPrivacyPickerActionErrorNotice(t *testing.T) {
 		current.sessionAction = sessionActionState{target: target, action: cli.PickerKillSession, phase: sessionActionRunning, generation: 1}
 		current, _ = current.applySessionAction(sessionActionResultMsg{target: target, action: cli.PickerKillSession, generation: 1, err: errors.New(secret)})
 		frame := ansi.Strip(current.View().Content)
-		if !strings.Contains(frame, "kill 7K3D failed:") {
+		if !strings.Contains(frame, "Could not end session 7K3D:") {
 			t.Fatalf("trusted status missing: %s", frame)
 		}
 		if strings.Contains(frame, secret) == enabled {
