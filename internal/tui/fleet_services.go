@@ -115,9 +115,9 @@ func (m model) mainExtraRows() int {
 		return 0
 	}
 	if _, selected := m.list.SelectedItem().(serviceItem); selected {
-		return 2
+		return 3
 	}
-	return 1
+	return 2
 }
 
 func (m model) mainListView() string {
@@ -181,7 +181,7 @@ func (delegate hostDelegate) renderService(output io.Writer, browser list.Model,
 		_, previousService = browser.Items()[index-1].(serviceItem)
 	}
 	if index == start || !previousService {
-		_, _ = fmt.Fprintln(output, delegate.styles.muted.Render("  Services"))
+		_, _ = fmt.Fprintln(output, "\n"+delegate.styles.muted.Render("  Services"))
 	}
 	_, _ = fmt.Fprint(output, truncate(row, browser.Width()))
 	if !selected {

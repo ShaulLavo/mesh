@@ -284,6 +284,11 @@ func TestCompactFleetServiceDetailsFollowSelection(t *testing.T) {
 	lines := strings.Split(frame, "\n")
 	alpha, beta := -1, -1
 	for index, line := range lines {
+		if strings.TrimSpace(line) == "Services" && (index == 0 || strings.TrimSpace(lines[index-1]) != "") {
+			t.Fatalf("Services heading needs a blank line above:\n%s", frame)
+		}
+	}
+	for index, line := range lines {
 		if strings.Contains(line, "● Fregat dev") && strings.Contains(line, "alpha") {
 			alpha = index
 		}

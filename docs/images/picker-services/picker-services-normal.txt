@@ -3,13 +3,13 @@ Choose a host or service.
 
   ● alpha  this host  0 active  ·  0 sessions
   ● beta              0 active  ·  0 sessions
+
   Services
   ● Fregat dev     alpha  idle
   ● Preview        alpha  idle
 › ● CLI Proxy      beta   running
     ping healthy 24 ms · https://beta.example.test/dev
   ● Comfy Gallery  beta   unhealthy
-
 
 
 
