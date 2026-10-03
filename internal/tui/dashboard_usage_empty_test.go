@@ -133,8 +133,8 @@ func TestDashboardUsageCredits(t *testing.T) {
 		{nil, ""},
 		{&usagefeed.Credits{Balance: 62500}, "credits 62,500"},
 		{&usagefeed.Credits{Unlimited: true}, "credits unlimited"},
-		{&usagefeed.Credits{}, "credits 0"},
-		{&usagefeed.Credits{Balance: 1234.5}, "credits 1,234.5"},
+		{&usagefeed.Credits{}, ""},
+		{&usagefeed.Credits{Balance: 1234.5}, "credits 1,235"},
 	} {
 		for _, fixture := range []string{"normal", "no-data"} {
 			for _, compact := range []bool{false, true} {
@@ -199,7 +199,7 @@ func TestDashboardUsageReviewReadableWindowProjection(t *testing.T) {
 	projected := projectUsageAccount(account, true)
 	model.usage = dashboardUsage{accounts: []dashboardUsageAccount{projected}, total: 1}
 	got := ansi.Strip(strings.Join(model.usagePanel(54, 17, false), "\n"))
-	if !strings.Contains(got, "Weekly 66% used") || strings.Contains(got, "No reading") || projected.extraWindows != 0 {
+	if !strings.Contains(got, "Weekly  66% used") || strings.Contains(got, "No reading") || projected.extraWindows != 0 {
 		t.Fatal("unobserved windows hid a real reading", got, projected.extraWindows)
 	}
 }

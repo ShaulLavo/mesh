@@ -1,17 +1,17 @@
 ┌AI plans · 3 accounts · passive ─────────────────── ┐
 │ Claude · shaul9191 · Max                   seen 2m │
-│ 5h     20% used · 80% left · resets 2h 14m         │
+│ 5h      20% used · 80% left · resets 2h 14m        │
 │ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪▪▪▪▪ ● OK                  │
-│ Weekly 66% used · 34% left · resets 7h             │
+│ Weekly  66% used · 34% left · resets 7h            │
 │ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪│▪ ● OK                  │
 │ Codex · shaul9191 · Pro · last served      seen 1m │
-│ 5h     42% used · 58% left · resets 1h 32m         │
+│ 5h      42% used · 58% left · resets 1h 32m        │
 │ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪ ● OK                  │
-│ Weekly 54% used · 46% left · resets 4d 9h          │
+│ Weekly  54% used · 46% left · resets 4d 9h         │
 │ ▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● OK                  │
 │         shaul.lavochkin · Pro · cooldown stale 18m │
-│ 5h     100% used · 0% left · resets 38m            │
+│ 5h      100% used · 0% left · resets 38m           │
 │ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● exhausted           │
-│ Weekly 97% used · 3% left · resets 2d 6h           │
+│ Weekly  97% used · 3% left · resets 2d 6h          │
 │ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● high                │
 └────────────────────────────────────────────────────┘

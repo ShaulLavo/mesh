@@ -1,0 +1,210 @@
+package update
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/shaul/mesh/internal/release"
+)
+
+type enrollmentRemote struct {
+	*fakeRemote
+	denied string
+}
+
+func (remote *enrollmentRemote) Call(ctx context.Context, host Host, action string, input, output any) error {
+	if host.ID == remote.denied {
+		return &RemoteError{Problem: "update administrator is not enrolled on this host"}
+	}
+	return remote.fakeRemote.Call(ctx, host, action, input, output)
+}
+
+func sameVersionFixture(t *testing.T) (*Coordinator, *enrollmentRemote, Run) {
+	t.Helper()
+	c, remote, run := testCoordinator(t, 3)
+	for _, index := range []int{0, 2} {
+		host := run.Targets[index].Host.ID
+		info := remote.info[host]
+		info.Health.Build.Version = run.Release.Version
+		info.Health.Build.Digest = run.Release.Artifacts[0].BinarySHA256
+		remote.info[host] = info
+	}
+	contents, err := json.Marshal(run.Release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Release = release.Client{HTTPClient: &http.Client{Transport: releaseDownloadTransport(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(contents)), Request: request}, nil
+	})}}
+	denied := &enrollmentRemote{fakeRemote: remote, denied: run.Targets[1].Host.ID}
+	c.Remote = denied
+	if err := c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	run, err = c.Store.Read(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Targets[0].State != Updated || run.Targets[1].State != Failed || !run.Stopped {
+		t.Fatalf("known-good host and failed enrollment not reproduced: %+v", run)
+	}
+	return c, denied, run
+}
+
+func TestStoppedUpdateObservesCurrentCoordinatorWithoutActivation(t *testing.T) {
+	c, remote, run := sameVersionFixture(t)
+	if err := c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	run, err := c.Store.Read(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := run.Targets[2]
+	if local.State != Updated || local.Build == nil || local.Build.Version != run.Release.Version {
+		t.Fatalf("current coordinator stayed stale after host failure: state=%s build=%+v", local.State, local.Build)
+	}
+	if remote.stages != 0 || len(remote.grants) != 0 || !run.Stopped || run.Targets[1].State != Failed {
+		t.Fatalf("observing a stopped run authorized work or erased failure: %+v", run)
+	}
+}
+
+func TestSameVersionApprovalRetriesFailedHostAfterRestart(t *testing.T) {
+	c, remote, run := sameVersionFixture(t)
+	remote.denied = ""
+	store, err := OpenStore(filepath.Dir(filepath.Dir(c.Store.directory)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := &Coordinator{ID: c.ID, Store: store, Remote: remote, Release: c.Release, CacheDir: c.CacheDir, Download: c.Download}
+	plan := Plan{Fleet: run.Fleet, Manifest: run.Release}
+	approved, err := restarted.Start(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.ID != run.ID || approved.Stopped || approved.Targets[1].State != Pending || approved.Targets[1].RetryToken != 1 {
+		t.Fatalf("same-version approval did not resume failed host: stopped=%v state=%s token=%d id=%s", approved.Stopped, approved.Targets[1].State, approved.Targets[1].RetryToken, approved.ID)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			replayed, err := restarted.Start(context.Background(), plan)
+			if err != nil || replayed.ID != run.ID || replayed.Targets[1].RetryToken != 1 {
+				t.Errorf("concurrent re-approval changed retry identity: %+v %v", replayed, err)
+			}
+		})
+	}
+	wg.Wait()
+	if err := restarted.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	remote.complete(run.Targets[1].Host.ID)
+	if err := restarted.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	final, err := store.Read(run.ID)
+	if err != nil || !final.Done() || final.ExitCode() != 0 || remote.stages != 1 || len(remote.grants) != 1 {
+		t.Fatalf("failed host did not recover exactly once: %+v stages=%d grants=%v err=%v", final, remote.stages, remote.grants, err)
+	}
+}
+
+func TestEnrollmentFailureNamesTrustCommand(t *testing.T) {
+	id, key := testIdentity(t)
+	actor, actorKey := testIdentity(t)
+	authority := Authority{StateDir: t.TempDir(), ID: id, Key: key}
+	request := Message{Action: "challenge", Actor: actor, Target: id, Nonce: "enrollment-check"}
+	request.Sign(actorKey)
+	_, err := callAuthority(&authority, request)
+	if err == nil || !strings.Contains(err.Error(), "mesh update trust "+actor) || !strings.Contains(err.Error(), "this host") {
+		t.Fatalf("enrollment failure has no actionable trust command: %v", err)
+	}
+}
+
+func TestConcurrentSameVersionApprovalsAllocateOneRetry(t *testing.T) {
+	c, _, failed := failedRetryFixture(t)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			run, err := c.Store.Start(c.ID, failed.Fleet, failed.Release)
+			if err != nil || run.ID != failed.ID || run.Stopped || run.Targets[0].RetryToken != 1 || !run.Targets[0].RetryPending {
+				t.Errorf("concurrent approval changed retry identity: %+v %v", run, err)
+			}
+		})
+	}
+	wg.Wait()
+}
+
+func TestStoppedUpdateDoesNotStagePendingOutdatedTargets(t *testing.T) {
+	c, remote, run := testCoordinator(t, 4)
+	for _, index := range []int{0, 3} {
+		host := run.Targets[index].Host.ID
+		info := remote.info[host]
+		info.Health.Build.Version = run.Release.Version
+		info.Health.Build.Digest = run.Release.Artifacts[0].BinarySHA256
+		remote.info[host] = info
+	}
+	c.Remote = &enrollmentRemote{fakeRemote: remote, denied: run.Targets[1].Host.ID}
+	if err := c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := c.Store.Read(run.ID)
+	if err != nil || current.Targets[3].State != Updated || current.Targets[2].State != Pending || remote.stages != 0 || len(remote.grants) != 0 {
+		t.Fatalf("stopped observation started outdated target: %+v stages=%d grants=%v err=%v", current, remote.stages, remote.grants, err)
+	}
+}
+
+func TestSameVersionApprovalLeavesCancelledOperationAlone(t *testing.T) {
+	c, _, run := sameVersionFixture(t)
+	if _, err := c.Store.Cancel(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := c.Start(context.Background(), Plan{Fleet: run.Fleet, Manifest: run.Release})
+	if err != nil || fresh.ID == run.ID {
+		t.Fatalf("cancelled operation reused: %+v %v", fresh, err)
+	}
+	cancelled, err := c.Store.Read(run.ID)
+	if err != nil || !cancelled.Cancel || !cancelled.Stopped || cancelled.Targets[1].RetryToken != 0 {
+		t.Fatalf("cancelled approval changed: %+v %v", cancelled, err)
+	}
+}
+
+func TestEnrollmentFailureRejectsMalformedActorsBeforeGuidance(t *testing.T) {
+	id, key := testIdentity(t)
+	canonical, _ := testIdentity(t)
+	called := 0
+	authority := Authority{StateDir: t.TempDir(), ID: id, Key: key, Handle: func(context.Context, string, json.RawMessage) (any, error) {
+		called++
+		return nil, nil
+	}}
+	for _, tc := range []struct {
+		name  string
+		actor string
+	}{
+		{name: "shell substitution", actor: "$(printf injected)"},
+		{name: "empty", actor: ""},
+		{name: "padded key", actor: canonical + "="},
+		{name: "newline", actor: canonical + "\n"},
+		{name: "carriage return", actor: canonical + "\r"},
+		{name: "tab", actor: canonical + "\t"},
+		{name: "null", actor: canonical + "\x00"},
+		{name: "terminal escape", actor: canonical + "\x1b[31m"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := Message{Action: "challenge", Actor: tc.actor, Target: id, Nonce: "invalid-actor-check"}
+			_, err := callAuthority(&authority, request)
+			if err == nil || err.Error() != "update: invalid host identity" || strings.Contains(err.Error(), "mesh update trust") {
+				t.Fatalf("malformed actor reached enrollment guidance: %v", err)
+			}
+		})
+	}
+	if called != 0 || len(authority.challenges) != 0 {
+		t.Fatalf("malformed actor reached an update handler or challenge: calls=%d challenges=%d", called, len(authority.challenges))
+	}
+}

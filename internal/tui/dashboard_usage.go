@@ -83,7 +83,7 @@ func (m dashboardModel) usageIdentity(account dashboardUsageAccount, width int, 
 	if compact {
 		identity = strings.TrimLeft(identity, " ")
 	}
-	return dashboardAlign(identity, age, width)
+	return dashboardAlign(identity, " "+age, width)
 }
 
 func usageRouting(account usagefeed.Account) string {
@@ -166,9 +166,9 @@ func (m dashboardModel) usageWindowLines(window usagefeed.Window, width int, sho
 	if !usageWindowHasReading(window) {
 		waiting := "Waiting for normal traffic"
 		if showAge {
-			waiting = dashboardAlign(waiting, m.usageWindowAge(window), width)
+			waiting = dashboardAlign(waiting, " "+m.usageWindowAge(window), width)
 		}
-		return []string{dashboardFit(window.Label, 7) + "No data yet", waiting}
+		return []string{dashboardFit(window.Label, 7) + " No data yet", waiting}
 	}
 	used, left := "—", "—"
 	if window.UsedPercent != nil {
@@ -178,9 +178,10 @@ func (m dashboardModel) usageWindowLines(window usagefeed.Window, width int, sho
 	if window.ResetsAt != nil {
 		reset = dashboardDuration(window.ResetsAt.Sub(m.now))
 	}
-	facts := fmt.Sprintf("%s%s used · %s left · resets %s", dashboardFit(window.Label, 7), used, left, reset)
+	facts := fmt.Sprintf("%s %s used · %s left · resets %s", dashboardFit(window.Label, 7), used, left, reset)
+	facts = ansi.Truncate(facts, width, "…")
 	word, role := usageStatus(window)
-	meter := m.usageMeter(window, role)
+	meter := ansi.Truncate(m.usageMeter(window, role), max(0, width-ansi.StringWidth(word)-3), "")
 	if showAge {
 		// Keep the status word and observation age when an unknown age needs extra cells.
 		meter = ansi.Truncate(meter, max(0, width-ansi.StringWidth(m.usageWindowAge(window))-ansi.StringWidth(word)-4), "")
@@ -194,7 +195,7 @@ func (m dashboardModel) usageWindowLines(window usagefeed.Window, width int, sho
 		}
 	}
 	if showAge {
-		status = dashboardAlign(status, m.usageWindowAge(window), width)
+		status = dashboardAlign(status, " "+m.usageWindowAge(window), width)
 	}
 	return []string{facts, status}
 }
@@ -255,9 +256,9 @@ func (m dashboardModel) usagePace(window usagefeed.Window) int {
 
 func (m dashboardModel) usageCompactWindow(window usagefeed.Window, width int, showAge bool) string {
 	if !usageWindowHasReading(window) {
-		text := dashboardFit(window.Label, 7) + "No data yet"
+		text := dashboardFit(window.Label, 7) + " No data yet"
 		if showAge {
-			text = dashboardAlign(text, m.usageWindowAge(window), width)
+			text = dashboardAlign(text, " "+m.usageWindowAge(window), width)
 		}
 		return text
 	}
@@ -340,15 +341,15 @@ func usageCredits(credits *usagefeed.Credits) string {
 	if credits.Unlimited {
 		return "credits unlimited"
 	}
-	value := strconv.FormatFloat(credits.Balance, 'f', -1, 64)
-	integer, fraction, found := strings.Cut(value, ".")
-	for position := len(integer) - 3; position > 0; position -= 3 {
-		integer = integer[:position] + "," + integer[position:]
+	balance := math.Round(credits.Balance)
+	if balance == 0 {
+		return ""
 	}
-	if found {
-		integer += "." + fraction
+	value := strconv.FormatFloat(balance, 'f', 0, 64)
+	for position := len(value) - 3; position > 0; position -= 3 {
+		value = value[:position] + "," + value[position:]
 	}
-	return "credits " + integer
+	return "credits " + value
 }
 
 func (m dashboardModel) usageVisible(budget int, compact bool) (int, int) {
@@ -382,7 +383,7 @@ func usageAccountRows(account dashboardUsageAccount, compact bool) int {
 		windowRows = 1
 	}
 	rows := 1 + windowRows*readings
-	if account.Credits != nil {
+	if usageCredits(account.Credits) != "" {
 		rows++
 	}
 	return rows
