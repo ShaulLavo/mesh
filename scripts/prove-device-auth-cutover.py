@@ -22,7 +22,8 @@ import time
 from pathlib import Path
 
 sys.dont_write_bytecode = True
-fixture_tls = importlib.import_module("fixtures.native_tls")
+fixture_tls = importlib.import_module("fixtures.tls")
+published_releases = importlib.import_module("fixtures.published_releases")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integration" / "helpers"))
 controls = importlib.import_module("mesh_control")
 terminals = importlib.import_module("terminal_window")
@@ -31,8 +32,8 @@ Terminal, PROMPT = terminals.Terminal, terminals.PROMPT
 eventually, require = terminals.eventually, terminals.require
 
 ROOT = Path(sys.argv[1]).resolve()
-OLD, NEW, FLEET = [Path(x).resolve() for x in sys.argv[2:5]]
-CONTROL_CLIENT = Path(sys.argv[6]).resolve()
+NEW, FLEET = [Path(x).resolve() for x in sys.argv[2:4]]
+CONTROL_CLIENT = Path(sys.argv[4]).resolve()
 HELPERS = Path(__file__).resolve().parents[1] / "integration" / "helpers"
 ROOT.mkdir(parents=True, exist_ok=True)
 RELEASES = {}
@@ -167,7 +168,7 @@ class ServiceHandler(socketserver.StreamRequestHandler):
 
 
 class Host:
-    def __init__(self, name, proxy, service):
+    def __init__(self, name, original, proxy, service):
         self.name = name
         self.root = ROOT / name
         self.root.mkdir()
@@ -190,7 +191,8 @@ sys.exit(data["status"])
         service_cli.chmod(0o755)
         self.binary = self.home / ".local" / "bin" / "mesh"
         self.binary.parent.mkdir(parents=True)
-        self.binary.write_bytes(OLD.read_bytes())
+        self.binary.write_bytes(original["executable"].read_bytes())
+        self.original_build = original["build"]
         self.binary.chmod(0o755)
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -208,7 +210,6 @@ sys.exit(data["status"])
             "HTTPS_PROXY": "http://127.0.0.1:" + str(proxy), "HTTP_PROXY": "http://127.0.0.1:" + str(proxy),
             "NO_PROXY": "127.0.0.1,localhost", "SSL_CERT_FILE": str(ROOT / "cert.pem"), "SSL_CERT_DIR": str(ROOT / "empty-certs"),
             "PYTHONDONTWRITEBYTECODE": "1"})
-        self.environment.update(native_tls_environment)
         Path(self.environment["XDG_RUNTIME_DIR"]).mkdir(mode=0o700)
         if OLD_BUILD["platform"]["os"] == "darwin":
             agents = self.home / "Library" / "LaunchAgents"
@@ -366,6 +367,52 @@ sys.exit(data["status"])
             os.kill(pid, 0)
         require(any(row["id"] == self.session for row in self.control("session.list")["sessions"]), "daemon lost retained session")
 
+    def prove_loaded_image(self, expected):
+        observed = self.control("host.info")["host"]["build"]
+        require(observed["digest"] == expected["digest"] and observed["version"] == expected["version"],
+                "daemon reports a different executing build")
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.connect(str(self.state / "daemon.sock"))
+            pid = sock.getsockopt(0, 2) if native_platform["os"] == "darwin" else struct.unpack(
+                "3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[0]
+        require(pid == self.processes["mesh.service"].pid, "daemon socket belongs to another process")
+        installed = self.binary.stat()
+        image = Path("/proc") / str(pid) / "exe"
+        if native_platform["os"] == "darwin":
+            output = subprocess.check_output(["lsof", "-a", "-p", str(pid), "-d", "txt", "-F", "finD"],
+                                             text=True, timeout=5)
+            records, record = [], {}
+            for line in output.splitlines():
+                if line.startswith("f"):
+                    records.append(record)
+                    record = {}
+                if line[:1] in ("i", "D", "n"):
+                    record[line[0]] = line[1:]
+            records.append(record)
+            matched = [row for row in records if row.get("i") == str(installed.st_ino)
+                and row.get("D") and int(row["D"], 0) == installed.st_dev and row.get("n")]
+            require(len(matched) == 1, "native lsof did not identify the exact daemon image inode")
+            image = Path(matched[0]["n"])
+        mapped = image.stat()
+        require((mapped.st_dev, mapped.st_ino) == (installed.st_dev, installed.st_ino),
+                "loaded daemon image differs from the installed inode")
+        require(digest(image.read_bytes()) == expected["digest"], "loaded daemon image bytes differ")
+        event("loaded-image", host=self.name, pid=pid, version=expected["version"], digest=expected["digest"],
+              device=mapped.st_dev, inode=mapped.st_ino, provider="native lsof" if native_platform["os"] == "darwin" else "native procfs")
+
+    def check_io(self):
+        terminal = Terminal([str(self.binary), "local", "-r"], self.environment, self.root, timeout=8)
+        self.terminals.append(terminal)
+        try:
+            terminal.expect(PROMPT)
+            start = len(terminal.drain())
+            terminal.send("printf '__CUTOVER_IO__%s__END__\\n' \"$$\"\n")
+            terminal.expect("__CUTOVER_IO__" + str(self.shell_pid) + "__END__", since=start)
+        finally:
+            terminal.close()
+            self.terminals.remove(terminal)
+        event("retained-io", host=self.name, worker=self.worker_pid, shell=self.shell_pid)
+
     def close(self):
         for terminal in self.terminals:
             terminal.close()
@@ -380,89 +427,83 @@ sys.exit(data["status"])
             log.close()
 
 
-for binary in (OLD, NEW, FLEET, CONTROL_CLIENT):
+for binary in (NEW, FLEET, CONTROL_CLIENT):
     require(binary.is_file() and os.access(binary, os.X_OK), "proof requires executable inputs")
+native_platform = {"os": platform.system().lower(), "arch": {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine())}
+require(version(NEW)["platform"] == version(FLEET)["platform"] == native_platform,
+        "inputs must execute on the native runner platform")
+require(not os.environ.get("AUTH_CUTOVER_PLATFORM") or os.environ["AUTH_CUTOVER_PLATFORM"] == native_platform["os"] + "/" + native_platform["arch"],
+        "runner differs from the required CI platform")
+if native_platform["os"] == "darwin":
+    require(os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_OS") == "macOS",
+            "Darwin executable fixture requires a disposable GitHub macOS runner")
+historical = published_releases.acquire(ROOT / "published", native_platform)
+for bundle in historical:
+    build = version(bundle["executable"])
+    manifest = bundle["manifest"]
+    artifact = next(row for row in manifest["artifacts"] if row["platform"] == native_platform)
+    require(build["platform"] == native_platform and build["version"] == manifest["version"]
+        and build["commit"] == manifest["commit"] and build["digest"] == artifact["binarySha256"],
+        "executed published artifact differs from its descriptor")
+    bundle["build"] = build
+    for name, data in bundle["files"].items():
+        RELEASES[f"/ShaulLavo/mesh/releases/download/{manifest['version']}/{name}"] = data
+    event("published-input", version=build["version"], platform=native_platform, digest=build["digest"],
+        source="verified public GitHub artifact", manifestDigest=digest(bundle["files"]["mesh-release.json"]))
+OLD_BUILD = historical[0]["build"]
+NEW_BUILD = publish(NEW, historical[-1]["build"])
+FLEET_BUILD = publish(FLEET, NEW_BUILD)
+inputs = [NEW, FLEET, CONTROL_CLIENT, *(bundle["executable"] for bundle in historical)]
+original_digests = {binary: digest(binary.read_bytes()) for binary in inputs}
 fixture_tls.fixture_certificates(ROOT)
 (ROOT / "empty-certs").mkdir(exist_ok=True)
 TLS = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 TLS.load_cert_chain(ROOT / "server.pem", ROOT / "server.key")
-OLD_BUILD = version(OLD)
-native_platform = {"os": platform.system().lower(), "arch": {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine())}
-require(OLD_BUILD["platform"] == version(NEW)["platform"] == version(FLEET)["platform"] == native_platform,
-        "inputs must execute on the native runner platform")
-require(not os.environ.get("AUTH_CUTOVER_PLATFORM") or os.environ["AUTH_CUTOVER_PLATFORM"] == native_platform["os"] + "/" + native_platform["arch"],
-        "runner differs from the required CI platform")
-NEW_BUILD = publish(NEW, OLD_BUILD)
-FLEET_BUILD = publish(FLEET, NEW_BUILD)
 proxy = Server(("127.0.0.1", 0), ProxyHandler)
 services = Server(("127.0.0.1", 0), ServiceHandler)
 for server in (proxy, services):
     threading.Thread(target=server.serve_forever, daemon=True).start()
 hosts = []
-trust_cleanup = []
-native_tls_environment = {}
-
-def install_native_fixture_trust():
-    if OLD_BUILD["platform"]["os"] != "darwin":
-        return
-    require(os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_OS") == "macOS",
-            "Darwin TLS fixture requires a disposable GitHub macOS runner")
-    binaries = (OLD, NEW, FLEET, CONTROL_CLIENT)
-    original = {binary: digest(binary.read_bytes()) for binary in binaries}
-
-    def verify_artifacts():
-        native_tls_environment.clear()
-        require(all(digest(binary.read_bytes()) == value for binary, value in original.items()),
-                "native TLS fixture changed an input artifact")
-
-    trust_cleanup.append(verify_artifacts)
-    native_tls_environment.update(fixture_tls.prepare_native_tls(ROOT, binaries, event))
 
 
-def cleanup_native_fixture_trust(primary_error):
-    cleanup_errors = []
-    for cleanup in reversed(trust_cleanup):
-        try:
-            cleanup()
-        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
-            cleanup_errors.append(str(error))
-    if not cleanup_errors:
-        if trust_cleanup:
-            event("fixture-trust-restored", trustStoreModified=False, unchangedArtifacts=True, childInjectionCleared=True)
-        return
-    message = "native fixture trust cleanup: " + repr(cleanup_errors)
-    if primary_error is not None:
-        primary_error.add_note(message)
-        return
-    require(False, message)
+def local_cutover(host, target):
+    prior_id = host.id
+    before = len(EVENTS)
+    result = host.command("update", "--local", "--version", target["version"], "--yes", "--json")
+    run = json.loads(result.stdout)
+    require(len(run["fleet"]["members"]) == 1 and run["fleet"]["members"][0]["endpoint"] == "unix://" + str(host.state / "daemon.sock"), "local plan left own Unix endpoint")
+    require(run["coordinator"] == host.id and run["targets"][0]["state"] == "updated", "local daemon did not settle its own run")
+    retained = run["targets"][0]["workers"][0]
+    require(retained["pid"] == host.worker_pid and retained["shellPid"] == host.shell_pid, "installer receipt did not preserve actual worker and shell")
+    require(digest(host.binary.read_bytes()) == target["digest"], "local update did not install requested binary")
+    eventually(host.ready, "updated daemon unhealthy", timeout=10)
+    require(host.id == prior_id, "local update changed identity")
+    host.check_retained()
+    host.prove_loaded_image(target)
+    host.check_io()
+    touched = {row["host"] for row in EVENTS[before:] if row["kind"] in ("start", "stop")}
+    require(touched == {host.name}, "local update changed another installation: " + repr(touched))
+    print("PASS real local cutover", host.name, target["version"], "worker", host.worker_pid, "shell", host.shell_pid, flush=True)
 
 try:
-    install_native_fixture_trust()
-    for index in range(4):
-        host = Host("h" + str(index), proxy.server_address[1], services.server_address[1])
+    fixture_tls.prepare_fixture_tls(ROOT, event)
+    for index, original in enumerate((historical[0], historical[1], historical[2], historical[0])):
+        host = Host("h" + str(index), original, proxy.server_address[1], services.server_address[1])
         hosts.append(host)
         host.start("mesh.service")
-        eventually(host.ready, "old daemon failed to start", timeout=10)
+        eventually(host.ready, "published daemon failed to start", timeout=10)
+        host.prove_loaded_image(original["build"])
         host.seed()
     old_digests = [digest(host.binary.read_bytes()) for host in hosts]
     for index, host in enumerate(hosts):
-        prior_id = host.id
-        before = len(EVENTS)
-        result = host.command("update", "--local", "--version", NEW_BUILD["version"], "--yes", "--json")
-        run = json.loads(result.stdout)
-        require(len(run["fleet"]["members"]) == 1 and run["fleet"]["members"][0]["endpoint"] == "unix://" + str(host.state / "daemon.sock"), "local plan left own Unix endpoint")
-        require(run["coordinator"] == host.id and run["targets"][0]["state"] == "updated", "local daemon did not settle its own run")
-        retained = run["targets"][0]["workers"][0]
-        require(retained["pid"] == host.worker_pid and retained["shellPid"] == host.shell_pid, "installer receipt did not preserve actual worker and shell")
-        require(digest(host.binary.read_bytes()) == NEW_BUILD["digest"], "local update did not install new binary")
-        eventually(host.ready, "new daemon unhealthy", timeout=10)
-        require(host.id == prior_id, "local update changed identity")
-        host.check_retained()
-        touched = {row["host"] for row in EVENTS[before:] if row["kind"] in ("start", "stop")}
-        require(touched == {host.name}, "local update changed another installation: " + repr(touched))
-        for later in hosts[index + 1:]:
-            require(digest(later.binary.read_bytes()) == old_digests[index + 1], "local update changed not-yet-updated host")
-        print("PASS local old->new", host.name, "worker", host.worker_pid, "shell", host.shell_pid, flush=True)
+        start = next(position for position, bundle in enumerate(historical)
+            if bundle["build"]["digest"] == host.original_build["digest"])
+        for bundle in historical[start + 1:]:
+            local_cutover(host, bundle["build"])
+        local_cutover(host, NEW_BUILD)
+        for later_index in range(index + 1, len(hosts)):
+            require(digest(hosts[later_index].binary.read_bytes()) == old_digests[later_index],
+                    "local update changed not-yet-updated host")
     for host in hosts:
         with socket.create_connection(("127.0.0.1", host.port), timeout=2) as raw:
             raw.sendall(b"GET /mesh HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\n"
@@ -541,13 +582,17 @@ try:
         require(digest(host.binary.read_bytes()) == FLEET_BUILD["digest"], "fleet update missed host " + host.name)
         eventually(host.ready, "fleet daemon unhealthy", timeout=10)
         host.check_retained()
+        host.prove_loaded_image(FLEET_BUILD)
+        host.check_io()
     print("PASS real daemon-owned authenticated fleet update installed second patch on all four hosts; original workers preserved", flush=True)
-    (ROOT / "result.json").write_text(json.dumps({"old": OLD_BUILD, "new": NEW_BUILD, "fleet": FLEET_BUILD,
-        "oldSource": sys.argv[5], "nativePlatform": native_platform,
+    (ROOT / "result.json").write_text(json.dumps({"historical": [bundle["build"] for bundle in historical], "new": NEW_BUILD, "fleet": FLEET_BUILD,
+        "candidateReleaseProvider": "external fixture descriptors for two PR-source candidate patch builds",
+        "historicalReleaseProvider": "unchanged public GitHub artifacts, descriptors and joined receipts",
+        "nativePlatform": native_platform,
         "peerPIDProvider": "native LOCAL_PEERPID" if native_platform["os"] == "darwin" else "native SO_PEERCRED",
         "serviceProvider": "production plist argv with fake launchctl registration" if native_platform["os"] == "darwin" else "systemd-command fixture",
         "serviceRegistrationProven": False,
-        "hosts": [{"name": host.name, "identityDigest": digest(host.id.encode()), "worker": host.worker_pid, "shell": host.shell_pid,
+        "hosts": [{"name": host.name, "originalBuild": host.original_build, "identityDigest": digest(host.id.encode()), "worker": host.worker_pid, "shell": host.shell_pid,
                    "session": host.session} for host in hosts]}, indent=2))
 finally:
     try:
@@ -557,4 +602,4 @@ finally:
             server.shutdown()
             server.server_close()
     finally:
-        cleanup_native_fixture_trust(sys.exc_info()[1])
+        fixture_tls.verify_artifacts(original_digests, sys.exc_info()[1], event)

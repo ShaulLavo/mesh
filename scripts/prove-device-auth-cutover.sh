@@ -11,23 +11,31 @@ output=$(cd -- "$1" && pwd)
 # Native Unix sockets need a short path on Darwin's hosted runner.
 root=$(mktemp -d "${MESH_SHORT_TMP:-/tmp}/mesh-auth-cutover.XXXXXX")
 trap 'rm -rf -- "$root"' EXIT
-baseline=0cc5acd25e47a445c41e6052c5b7919fadb54883
-mkdir -p "$root/old" "$root/build"
-git -C "$repo_root" archive "$baseline" | tar -xf - -C "$root/old"
-(cd "$root/old" && go build -trimpath -ldflags '-X github.com/shaul/mesh/internal/release.Version=v0.1.150' -o "$root/build/old-mesh" ./cmd/mesh)
-(cd "$repo_root" && go build -trimpath -ldflags '-X github.com/shaul/mesh/internal/release.Version=v0.1.151' -o "$root/build/new-mesh" ./cmd/mesh)
-(cd "$repo_root" && go build -trimpath -ldflags '-X github.com/shaul/mesh/internal/release.Version=v0.1.152' -o "$root/build/fleet-mesh" ./cmd/mesh)
+mkdir -p "$root/build"
+(cd "$repo_root" && go build -trimpath -ldflags '-X github.com/shaul/mesh/internal/release.Version=v0.1.160' -o "$root/build/candidate-mesh" ./cmd/mesh)
+(cd "$repo_root" && go build -trimpath -ldflags '-X github.com/shaul/mesh/internal/release.Version=v0.1.161' -o "$root/build/fleet-mesh" ./cmd/mesh)
 (cd "$repo_root" && go build -trimpath -o "$root/build/control-client" ./integration/helpers/control-client)
-printf '%s\n' "$baseline" > "$output/old-source.txt"
+git -C "$repo_root" rev-parse HEAD > "$output/candidate-source.txt"
+printf '%s\n' 'Both candidate patches are source-built PR fixtures; historical binaries are public artifacts.' > "$output/artifact-boundaries.txt"
+preserve_published_evidence() {
+  [[ -d $root/proof/published ]] || return 0
+  while IFS= read -r path; do
+    relative=${path#"$root/proof/"}
+    mkdir -p "$output/$(dirname -- "$relative")"
+    cp "$path" "$output/$relative"
+  done < <(find "$root/proof/published" -type f -name '*.json')
+}
 # The external providers run only fixture-owned processes; no installed Mesh or services.
 python3 "$repo_root/scripts/prove-device-auth-cutover.py" "$root/proof" \
-  "$root/build/old-mesh" "$root/build/new-mesh" "$root/build/fleet-mesh" "$baseline" "$root/build/control-client" >"$output/proof.log" 2>&1 || {
+  "$root/build/candidate-mesh" "$root/build/fleet-mesh" "$root/build/control-client" >"$output/proof.log" 2>&1 || {
   mkdir -p "$output/failed-fixture"
   if [[ -d $root/proof ]]; then
-    find "$root/proof" -type f \( -name '*.log' -o -name 'events.jsonl' -o -name 'result.json' \) -exec cp {} "$output/failed-fixture/" \;
+    find "$root/proof" -type f \( -name '*.log' -o -name 'events.jsonl' -o -name 'result.json' -o -name 'verified.json' \) -exec cp {} "$output/failed-fixture/" \;
   fi
+  preserve_published_evidence
   cat "$output/proof.log" >&2
   exit 1
 }
-cp "$root/proof/result.json" "$root/proof/events.jsonl" "$output/"
+preserve_published_evidence
+cp "$root/proof/result.json" "$root/proof/events.jsonl" "$root/proof/published/verified.json" "$output/"
 cat "$output/proof.log"
