@@ -126,3 +126,51 @@ func TestEnrollmentFailureNamesTrustCommand(t *testing.T) {
 		t.Fatalf("enrollment failure has no actionable trust command: %v", err)
 	}
 }
+
+func TestConcurrentSameVersionApprovalsAllocateOneRetry(t *testing.T) {
+	c, _, failed := failedRetryFixture(t)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			run, err := c.Store.Start(c.ID, failed.Fleet, failed.Release)
+			if err != nil || run.ID != failed.ID || run.Stopped || run.Targets[0].RetryToken != 1 || !run.Targets[0].RetryPending {
+				t.Errorf("concurrent approval changed retry identity: %+v %v", run, err)
+			}
+		})
+	}
+	wg.Wait()
+}
+
+func TestStoppedUpdateDoesNotStagePendingOutdatedTargets(t *testing.T) {
+	c, remote, run := testCoordinator(t, 4)
+	for _, index := range []int{0, 3} {
+		host := run.Targets[index].Host.ID
+		info := remote.info[host]
+		info.Health.Build.Version = run.Release.Version
+		info.Health.Build.Digest = run.Release.Artifacts[0].BinarySHA256
+		remote.info[host] = info
+	}
+	c.Remote = &enrollmentRemote{fakeRemote: remote, denied: run.Targets[1].Host.ID}
+	if err := c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := c.Store.Read(run.ID)
+	if err != nil || current.Targets[3].State != Updated || current.Targets[2].State != Pending || remote.stages != 0 || len(remote.grants) != 0 {
+		t.Fatalf("stopped observation started outdated target: %+v stages=%d grants=%v err=%v", current, remote.stages, remote.grants, err)
+	}
+}
+
+func TestSameVersionApprovalLeavesCancelledOperationAlone(t *testing.T) {
+	c, _, run := sameVersionFixture(t)
+	if _, err := c.Store.Cancel(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := c.Start(context.Background(), Plan{Fleet: run.Fleet, Manifest: run.Release})
+	if err != nil || fresh.ID == run.ID {
+		t.Fatalf("cancelled operation reused: %+v %v", fresh, err)
+	}
+	cancelled, err := c.Store.Read(run.ID)
+	if err != nil || !cancelled.Cancel || !cancelled.Stopped || cancelled.Targets[1].RetryToken != 0 {
+		t.Fatalf("cancelled approval changed: %+v %v", cancelled, err)
+	}
+}
