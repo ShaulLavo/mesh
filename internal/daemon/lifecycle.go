@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	inspectionwire "github.com/shaul/mesh/internal/inspection"
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
@@ -39,6 +40,8 @@ type lifecycleCatalog interface {
 type launchWorker func(worker.LaunchConfig) (worker.Launched, error)
 
 type lifecycleConfig struct {
+	Names               *machinename.Store
+	NameChanged         func(protocol.HostInfo)
 	Context             context.Context
 	Catalog             lifecycleCatalog
 	Connector           WorkerConnector
@@ -57,6 +60,9 @@ type lifecycleConfig struct {
 }
 
 type lifecycle struct {
+	names            *machinename.Store
+	nameChanged      func(protocol.HostInfo)
+	renameMu         sync.Mutex
 	context          context.Context
 	catalog          lifecycleCatalog
 	connector        WorkerConnector
@@ -206,6 +212,8 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 	cfg.Host.Alias = cloneLifecycleString(cfg.Host.Alias)
 	cfg.Host.TailscaleName = cloneLifecycleString(cfg.Host.TailscaleName)
 	return &lifecycle{
+		names:               cfg.Names,
+		nameChanged:         cfg.NameChanged,
 		context:             cfg.Context,
 		catalog:             cfg.Catalog,
 		connector:           cfg.Connector,
@@ -268,6 +276,9 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
 		}
 		response, err := l.list(ctx, request)
+		return response, true, err
+	case protocol.TypeHostRename:
+		response, err := l.renameHost(ctx, request)
 		return response, true, err
 	case protocol.TypeHostInfo:
 		if ctx == nil {
@@ -609,23 +620,53 @@ func (l *lifecycle) hostInfo(request protocol.Control) (protocol.Control, error)
 	if err := validateRequestID(request); err != nil {
 		return protocol.Control{}, err
 	}
-	name := ""
+	host := l.declaredHostInfo()
+	return protocol.Control{Type: protocol.TypeHostInfoResult, RequestID: request.RequestID, Host: &host}, nil
+}
+
+func (l *lifecycle) declaredHostInfo() protocol.HostInfo {
+	tailscaleName := ""
 	if l.host.TailscaleName != nil {
-		name = *l.host.TailscaleName
+		tailscaleName = *l.host.TailscaleName
+	}
+	host := protocol.HostInfo{
+		Build: executingBuild(), UpdateSupported: true, RecoverySupported: true, ServiceHealthSupported: true,
+		ID: string(l.host.ID), MeshIdentity: l.host.MeshIdentity, TailscaleName: tailscaleName, PrivateName: l.privateName(),
+	}
+	if l.names != nil {
+		claim := l.names.Current()
+		host.MachineName = claim.MachineName
+		host.NameRevision = claim.Revision
+	}
+	return host
+}
+
+func (l *lifecycle) renameHost(ctx context.Context, request protocol.Control) (protocol.Control, error) {
+	if ctx == nil {
+		return protocol.Control{}, fmt.Errorf("daemon: rename has nil context")
+	}
+	if err := validateRequestID(request); err != nil {
+		return protocol.Control{}, err
+	}
+	if l.names == nil || request.Rename == nil {
+		return protocol.Control{}, fmt.Errorf("daemon: rename requires a destination name and revision")
+	}
+	// Persist and enqueue in the same order, including retries after a lost reply.
+	l.renameMu.Lock()
+	defer l.renameMu.Unlock()
+	rename := request.Rename
+	_, _, err := l.names.Rename(ctx, rename.TargetID, rename.MachineName, rename.ExpectedRevision)
+	// Recovery may finish a pending durable commit before rejecting this request.
+	host := l.declaredHostInfo()
+	if l.nameChanged != nil {
+		l.nameChanged(host)
+	}
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: rename machine: %w", err)
 	}
 	return protocol.Control{
-		Type:      protocol.TypeHostInfoResult,
-		RequestID: request.RequestID,
-		Host: &protocol.HostInfo{
-			Build:                  executingBuild(),
-			UpdateSupported:        true,
-			RecoverySupported:      true,
-			ServiceHealthSupported: true,
-			ID:                     string(l.host.ID),
-			MeshIdentity:           l.host.MeshIdentity,
-			TailscaleName:          name,
-			PrivateName:            l.privateName(),
-		},
+		Type: protocol.TypeHostRenamed, RequestID: request.RequestID, Host: &host,
+		Message: "Name saved on this machine. Other devices see it when they reconnect. Unreachable devices may know another machine by this name.",
 	}, nil
 }
 

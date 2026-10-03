@@ -21,6 +21,7 @@ import (
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/inhibit"
+	"github.com/shaul/mesh/internal/machinename"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/storage"
@@ -309,6 +310,15 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		}
 	}
 
+	osName, _ := os.Hostname()
+	initialName := osName
+	if tailscaleName != nil {
+		initialName = *tailscaleName
+	}
+	names, err := machinename.Open(daemonCtx, stateDir, meshHost.ID, machinename.Initial(meshHost.ID, initialName, osName))
+	if err != nil {
+		return fmt.Errorf("daemon: load machine name: %w", err)
+	}
 	now := opts.now().UTC()
 	host := storage.Host{
 		ID:            storage.HostID(meshHost.ID),
@@ -472,6 +482,8 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return err
 	}
 	lifecycle, err := newLifecycle(lifecycleConfig{
+		Names:       names,
+		NameChanged: state.hostChanged,
 		Context:     daemonCtx,
 		Catalog:     catalog,
 		Connector:   connector,
@@ -482,6 +494,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
+	state.hostChanged(lifecycle.declaredHostInfo())
 	var appLocal *apps.Origin
 	if appPublisher != nil {
 		appLocal, err = apps.NewOrigin(daemonCtx, apps.OriginConfig{

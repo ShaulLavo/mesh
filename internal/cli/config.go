@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/usagefeed"
 )
@@ -22,14 +23,6 @@ const (
 	hostConfigName         = "hosts.json"
 	maximumConfiguredHosts = 256
 )
-
-var reservedAliases = map[string]struct{}{
-	"add": {}, "app": {}, "attach": {}, "back": {}, "completion": {}, "daemon": {}, "gc": {}, "help": {}, "hibernate": {},
-	"kill": {}, "rm": {}, "remove": {}, "rename": {}, "mv": {}, "list": {}, "local": {}, "logs": {}, "ls": {}, "man": {},
-	"recover": {}, "recovery-command": {}, "shell-init": {}, "shell-update": {}, "agent": {}, "agent-hook": {}, "agent-resume": {}, "private-names": {}, "serve": {}, "session-worker": {}, "sig": {}, "signal": {}, "unserve": {}, "wake": {},
-	"device": {}, "update": {}, "version": {}, "update-helper": {}, "update-notice-check": {}, "update-bootstrap": {},
-	"update-bootstrap-status": {}, "dashboard": {},
-}
 
 // HostRecord is the local address book entry for one adopted Mesh host.
 type HostRecord struct {
@@ -81,29 +74,13 @@ func TailscaleAuthKeyPath() (string, error) {
 	return filepath.Join(filepath.Dir(config), "tailscale-auth-key"), nil
 }
 
-// ValidateHostAlias normalizes a host alias and rejects names the CLI cannot
-// distinguish from a command or a session ID.
+// ValidateHostAlias uses the destination's command-safe naming rules.
 func ValidateHostAlias(value string) (string, error) {
-	alias := strings.ToLower(strings.TrimSpace(value))
-	if alias == "" {
-		return "", errors.New("host alias is empty")
+	name, err := machinename.Normalize(value)
+	if err != nil {
+		return "", fmt.Errorf("host alias: %w", err)
 	}
-	if len(alias) > 63 {
-		return "", fmt.Errorf("host alias %q is longer than 63 characters", value)
-	}
-	for i, character := range []byte(alias) {
-		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-' && i > 0 && i < len(alias)-1 {
-			continue
-		}
-		return "", fmt.Errorf("host alias %q must contain lowercase letters, digits, or interior hyphens", value)
-	}
-	if _, exists := reservedAliases[alias]; exists {
-		return "", fmt.Errorf("host alias %q is a Mesh command; choose another alias", alias)
-	}
-	if _, err := session.ParseID(alias); err == nil {
-		return "", fmt.Errorf("host alias %q looks like a session ID; choose another alias", alias)
-	}
-	return alias, nil
+	return name, nil
 }
 
 // LoadHosts reads and validates the local host address book.
