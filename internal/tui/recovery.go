@@ -89,9 +89,11 @@ func (m model) savedDetailsFor(current session) inspectionDetails {
 		details.preview = []string{"Loading saved session details…"}
 		return details
 	}
+	details.output = "Loading previous output"
 	details.screenStatus = "Loading previous output"
 	details.preview = []string{"Loading saved preview…"}
 	if m.inspection.kind == inspectionFailed || m.inspection.kind == inspectionUnavailable {
+		details.output = "saved output unavailable"
 		details.screenStatus = "Previous output unavailable"
 		details.preview = []string{safeText(m.inspection.problem)}
 	}
@@ -108,7 +110,8 @@ func savedRecoveryDetails(current session) inspectionDetails {
 	if current.recovery == nil {
 		details.directorySource = "launch directory"
 		if current.recoveryError != "" {
-			details.preview = []string{safeText(current.recoveryError)}
+			details.output = "saved output unavailable"
+			details.preview = []string{safeText(current.recoveryError), "Recovery opens the launch directory."}
 		}
 		return details
 	}
@@ -163,7 +166,7 @@ func (m model) recoveryHints(current session, action string) string {
 	if canResumeAgent(current) {
 		return m.styles.hints(hint{"enter", action}, hint{"a", "Resume conversation"}, hint{"s", "Open shell"}, hint{"space", "output"}, hint{"esc", "hosts"})
 	}
-	return m.styles.hints(hint{"enter", action}, hint{"s", "Open shell"}, hint{"c", "Restart command"}, hint{"space", "output"}, hint{"x", "forget"}, hint{"esc", "hosts"})
+	return m.styles.hints(hint{"enter", action}, hint{"s", "Open shell"}, hint{"c", "Restart command"}, hint{"space", "output"}, hint{"x", forgetLabel}, hint{"esc", "hosts"})
 }
 
 func cloneRecovery(source *recovery.Record) *recovery.Record {
