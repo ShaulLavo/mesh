@@ -109,14 +109,15 @@ func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approved
 	if err = atomicWrite(installed.ServicePath, []byte(data), 0644); err != nil {
 		return installed, err
 	}
-	if err = replaceHelperLink(launcher, installed.Executable); err != nil {
-		return installed, err
-	}
 	record, err := json.Marshal(installed)
 	if err != nil {
 		return installed, err
 	}
-	return installed, atomicWrite(helperRecord(cfg.StateDir), record, 0600)
+	// The receipt retains the approved image binding after later daemon commits.
+	if err = atomicWrite(helperRecord(cfg.StateDir), record, 0600); err != nil {
+		return installed, err
+	}
+	return installed, replaceHelperLink(launcher, installed.Executable)
 }
 
 func helperRecord(stateDir string) string {
@@ -146,35 +147,46 @@ func UpgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 	if err = readJSON(helperRecord(cfg.StateDir), &prior); err != nil {
 		return prior, err
 	}
-	interrupted, err := verifyHelperReceipt(ctx, cfg.StateDir, prior, digest)
+	interrupted, err := verifyHelperReceipt(ctx, cfg.StateDir, prior, digest, status.Request.Manifest)
 	if err != nil {
 		return prior, err
 	}
 	if prior.Digest == digest {
-		return prior, nil
+		return finishHelperPromotion(ctx, cfg, prior, interrupted)
 	}
 	allowed, err := helperUpgradeAllowed(ctx, cfg, status.Request.Manifest, prior, digest)
 	if err != nil {
 		return prior, err
 	}
 	if !allowed {
-		if interrupted {
-			return prior, errors.New("interrupted helper promotion does not advance its receipt")
-		}
-		return prior, nil
+		return finishHelperPromotion(ctx, cfg, prior, interrupted)
 	}
 	installed, err := prepareHelper(ctx, cfg, true, digest)
 	if err != nil {
 		return installed, err
 	}
+	return activateHelper(ctx, cfg, installed)
+}
+
+func finishHelperPromotion(ctx context.Context, cfg HelperConfig, installed HelperInstallation, interrupted bool) (HelperInstallation, error) {
+	if !interrupted {
+		return installed, nil
+	}
+	if err := replaceHelperLink(filepath.Join(transactionDir(cfg.StateDir), "helper", "current"), installed.Executable); err != nil {
+		return installed, err
+	}
+	return activateHelper(ctx, cfg, installed)
+}
+
+func activateHelper(ctx context.Context, cfg HelperConfig, installed HelperInstallation) (HelperInstallation, error) {
 	if cfg.Kind == "launchd" {
-		_, err = runCommand(ctx, "launchctl", "kickstart", "-k", cfg.Domain+"/dev.shaulavo.mesh-update-helper")
+		_, err := runCommand(ctx, "launchctl", "kickstart", "-k", cfg.Domain+"/dev.shaulavo.mesh-update-helper")
 		return installed, err
 	}
-	if _, err = runCommand(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
+	if _, err := runCommand(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
 		return installed, err
 	}
-	_, err = runCommand(ctx, "systemctl", "--user", "restart", "--no-block", "mesh-update-helper.service")
+	_, err := runCommand(ctx, "systemctl", "--user", "restart", "--no-block", "mesh-update-helper.service")
 	return installed, err
 }
 
@@ -189,7 +201,7 @@ func committedHelperDigest(ctx context.Context, executable string, manifest rele
 	return artifact.BinarySHA256, nil
 }
 
-func verifyHelperReceipt(ctx context.Context, stateDir string, prior HelperInstallation, committedDigest string) (bool, error) {
+func verifyHelperReceipt(ctx context.Context, stateDir string, prior HelperInstallation, committedDigest string, manifest release.Manifest) (bool, error) {
 	if prior.Executable != filepath.Join(transactionDir(stateDir), "helper", prior.Digest, "mesh") {
 		return false, errors.New("helper receipt does not name its immutable executable copy")
 	}
@@ -203,13 +215,50 @@ func verifyHelperReceipt(ctx context.Context, stateDir string, prior HelperInsta
 	if link == prior.Executable {
 		return false, nil
 	}
-	if link != filepath.Join(transactionDir(stateDir), "helper", committedDigest, "mesh") {
-		return false, errors.New("helper launcher does not match its installation receipt or committed artifact")
+	linkDigest := filepath.Base(filepath.Dir(link))
+	if link != filepath.Join(transactionDir(stateDir), "helper", linkDigest, "mesh") {
+		return false, errors.New("helper launcher does not name a retained immutable executable")
 	}
-	if err = release.VerifyExecutable(ctx, link, committedDigest); err != nil {
-		return false, fmt.Errorf("verify interrupted helper promotion: %w", err)
+	if err = release.VerifyExecutable(ctx, link, linkDigest); err != nil {
+		return false, fmt.Errorf("verify interrupted helper launcher: %w", err)
 	}
-	return true, nil
+	return helperReceiptAhead(ctx, prior, link, linkDigest, committedDigest, manifest)
+}
+
+func helperReceiptAhead(ctx context.Context, prior HelperInstallation, link, linkDigest, committedDigest string, manifest release.Manifest) (bool, error) {
+	current, err := helperBuild(ctx, prior.Executable, prior.Digest)
+	if err != nil {
+		return false, err
+	}
+	linked, err := helperBuild(ctx, link, linkDigest)
+	if err != nil {
+		return false, err
+	}
+	order, err := release.CompareVersions(current.Version, linked.Version)
+	if err != nil {
+		return false, fmt.Errorf("compare interrupted helper releases: %w", err)
+	}
+	if order > 0 {
+		if err = helperCapabilities(current, manifest); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	// A legacy link-first promotion needs the still-current committed binding.
+	if order < 0 && linkDigest == committedDigest {
+		return false, nil
+	}
+	return false, errors.New("helper launcher advancement has no committed artifact binding")
+}
+
+func helperCapabilities(build release.Build, manifest release.Manifest) error {
+	compatibility := manifest.Compatibility
+	if compatibility.JournalVersion != release.CurrentJournalVersion ||
+		build.StateVersion < compatibility.StateReadMin || build.StateVersion > compatibility.StateReadMax ||
+		build.WorkerProtocol < compatibility.WorkerMin || build.WorkerProtocol > compatibility.WorkerMax {
+		return errors.New("helper build has incompatible state, worker, or journal capabilities")
+	}
+	return nil
 }
 
 func helperUpgradeAllowed(ctx context.Context, cfg HelperConfig, manifest release.Manifest, prior HelperInstallation, digest string) (bool, error) {

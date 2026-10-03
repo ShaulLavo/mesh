@@ -33,6 +33,105 @@ func TestReviewInterruptedHelperPromotion(t *testing.T) {
 	}
 }
 
+func TestUpgradeHelperReceiptAuthorityAfterLaterCommit(t *testing.T) {
+	for _, version := range []string{"v0.1.150", "v0.1.171", "v0.1.172"} {
+		for _, kind := range []string{"systemd", "launchd"} {
+			t.Run(kind+"/"+version, func(t *testing.T) {
+				f := newHelperUpgradeFixture(t, kind, "v0.1.170")
+				f.commit(t, "v0.1.171", "")
+				authority, err := prepareHelper(t.Context(), f.cfg, true, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				launcher := filepath.Join(transactionDir(f.cfg.StateDir), "helper", "current")
+				if err = replaceHelperLink(launcher, f.prior.Executable); err != nil {
+					t.Fatal(err)
+				}
+				if version != "v0.1.171" {
+					f.commit(t, version, "")
+				}
+				before := f.snapshot(t)
+				got, err := UpgradeHelper(t.Context(), f.cfg)
+				if err != nil {
+					t.Fatalf("receipt authority cannot converge after %s: %v", version, err)
+				}
+				if version != "v0.1.172" && got != authority {
+					t.Fatal("retry replaced authoritative newer receipt")
+				}
+				var receipt HelperInstallation
+				if err = readJSON(helperRecord(f.cfg.StateDir), &receipt); err != nil || receipt != got {
+					t.Fatalf("receipt differs: %v", err)
+				}
+				link, err := os.Readlink(launcher)
+				if err != nil || link != got.Executable {
+					t.Fatalf("launcher did not converge: %v", err)
+				}
+				if err = release.VerifyExecutable(t.Context(), authority.Executable, authority.Digest); err != nil {
+					t.Fatal(err)
+				}
+				for _, path := range []string{f.cfg.Executable, journalPath(f.cfg.StateDir), f.prior.Executable} {
+					data, err := os.ReadFile(path) //nolint:gosec // disposable installation fixture
+					if err != nil || string(data) != before[path] {
+						t.Fatalf("retry changed retained image or daemon/journal: %v", err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestPrepareHelperCommitsReceiptBeforeLauncher(t *testing.T) {
+	f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
+	f.commit(t, "v0.1.171", "")
+	launcher := filepath.Join(transactionDir(f.cfg.StateDir), "helper", "current")
+	if err := os.Remove(launcher); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(launcher, 0700); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := prepareHelper(t.Context(), f.cfg, true, "")
+	if err == nil {
+		t.Fatal("launcher rename unexpectedly replaced directory")
+	}
+	var receipt HelperInstallation
+	if err = readJSON(helperRecord(f.cfg.StateDir), &receipt); err != nil || receipt != candidate {
+		t.Fatalf("failed launcher promotion lost receipt authority: %v", err)
+	}
+	if err = os.Remove(launcher); err != nil {
+		t.Fatal(err)
+	}
+	if err = replaceHelperLink(launcher, f.prior.Executable); err != nil {
+		t.Fatal(err)
+	}
+	f.commit(t, "v0.1.150", "")
+	got, err := UpgradeHelper(t.Context(), f.cfg)
+	if err != nil || got != candidate {
+		t.Fatalf("durable receipt did not survive later bridge: %v", err)
+	}
+}
+
+func TestUpgradeHelperRejectsLostLegacyPromotionBinding(t *testing.T) {
+	f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
+	f.commit(t, "v0.1.171", "")
+	if _, err := prepareHelper(t.Context(), f.cfg, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	old, err := json.Marshal(f.prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = atomicWrite(helperRecord(f.cfg.StateDir), old, 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.commit(t, "v0.1.172", "")
+	before := f.snapshot(t)
+	if _, err = UpgradeHelper(t.Context(), f.cfg); err == nil {
+		t.Fatal("legacy launcher with lost historical binding was trusted")
+	}
+	f.assertUnchanged(t, before)
+}
+
 func TestReviewApprovedCandidateSwap(t *testing.T) {
 	f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
 	f.commit(t, "v0.1.150", "")
@@ -145,12 +244,12 @@ func TestUpgradeHelperPromotionBoundaries(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if boundary != "receipt" {
+				if boundary == "copy" || boundary == "service" {
 					if err = atomicWrite(helperRecord(f.cfg.StateDir), []byte(before[helperRecord(f.cfg.StateDir)]), 0600); err != nil {
 						t.Fatal(err)
 					}
 				}
-				if boundary == "copy" || boundary == "service" {
+				if boundary != "link" {
 					if err = replaceHelperLink(filepath.Join(transactionDir(f.cfg.StateDir), "helper", "current"), f.prior.Executable); err != nil {
 						t.Fatal(err)
 					}
@@ -160,20 +259,29 @@ func TestUpgradeHelperPromotionBoundaries(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+				f.commit(t, "v0.1.172", "")
+				before = f.snapshot(t)
 				got, err := UpgradeHelper(t.Context(), f.cfg)
-				if err != nil || got != installed {
+				if err != nil {
 					t.Fatalf("interrupted promotion at %s failed: %v", boundary, err)
 				}
 				var receipt HelperInstallation
-				if err = readJSON(helperRecord(f.cfg.StateDir), &receipt); err != nil || receipt != installed {
+				if err = readJSON(helperRecord(f.cfg.StateDir), &receipt); err != nil || receipt != got {
 					t.Fatalf("recovered receipt differs: %v", err)
 				}
 				link, err := os.Readlink(filepath.Join(transactionDir(f.cfg.StateDir), "helper", "current"))
-				if err != nil || link != installed.Executable {
+				if err != nil || link != got.Executable {
 					t.Fatalf("recovered launcher differs: %v", err)
 				}
 				if err = release.VerifyExecutable(t.Context(), f.prior.Executable, f.prior.Digest); err != nil {
 					t.Fatal(err)
+				}
+				if err = release.VerifyExecutable(t.Context(), installed.Executable, installed.Digest); err != nil {
+					t.Fatal(err)
+				}
+				build, err := helperBuild(t.Context(), got.Executable, got.Digest)
+				if err != nil || build.Version != "v0.1.172" {
+					t.Fatalf("later committed release did not advance: %v", err)
 				}
 				for _, path := range []string{f.cfg.Executable, journalPath(f.cfg.StateDir)} {
 					data, err := os.ReadFile(path) //nolint:gosec // disposable installation fixture
