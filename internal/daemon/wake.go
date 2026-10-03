@@ -40,7 +40,7 @@ type wakeController struct {
 	current   *wake.Grant
 }
 
-func newWakeController(ctx context.Context, stateDir string, key ed25519.PrivateKey, peers func(context.Context) ([]tailnet.Peer, error)) (*wakeController, error) {
+func newWakeController(ctx context.Context, stateDir string, key ed25519.PrivateKey, peers func(context.Context) ([]tailnet.Peer, error), pin func(context.Context, string) (string, error)) (*wakeController, error) {
 	authority, err := wake.NewAuthority(stateDir, key)
 	if err != nil {
 		return nil, err
@@ -52,7 +52,7 @@ func newWakeController(ctx context.Context, stateDir string, key ed25519.Private
 	if peers == nil {
 		peers = func(context.Context) ([]tailnet.Peer, error) { return nil, nil }
 	}
-	client, err := wakeclient.New(stateDir, wakeclient.Options{DiscoverPeers: peers})
+	client, err := wakeclient.New(stateDir, wakeclient.Options{DiscoverPeers: peers, PeerIdentity: pin})
 	if err != nil {
 		return nil, err
 	}

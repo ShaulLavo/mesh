@@ -78,17 +78,14 @@ if [ -f "$authorized_keys" ]; then
 else
 	: >"$auth_tmp"
 fi
-if ! grep -Fqx -- "$authorized_key" "$auth_tmp"; then
-	printf '%s\n' "$authorized_key" >>"$auth_tmp"
-fi
-chmod 0600 "$auth_tmp"
-if [ ! -f "$authorized_keys" ] || ! cmp -s "$auth_tmp" "$authorized_keys"; then
+# The snapshot reports activation changes only; the CLI owns every grant mutation.
+MESH_STATE_DIR="$state_dir" "$binary_path" device approve --allow-root --public-key -- "$authorized_key" >/dev/null ||
+	fail service_install "cannot approve the adopter device key"
+if ! cmp -s "$auth_tmp" "$authorized_keys"; then
 	mark_activation_pending
-	mv -f "$auth_tmp" "$authorized_keys"
 	changed=1
-else
-	rm -f "$auth_tmp"
 fi
+rm -f "$auth_tmp"
 
 plist_tmp=$agent_dir/.dev.shaulavo.mesh.plist.$$
 if printf '%s' "$service_b64" | base64 -d >"$plist_tmp" 2>/dev/null; then

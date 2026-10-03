@@ -61,6 +61,7 @@ type Backoff struct {
 
 // DialOptions configures a reconnecting client connection.
 type DialOptions struct {
+	Auth       *Authentication
 	HTTPClient *http.Client
 	HTTPHeader http.Header
 	KeepAlive  KeepAlive
@@ -72,6 +73,7 @@ type DialOptions struct {
 
 // ServeOptions configures an accepted connection.
 type ServeOptions struct {
+	Auth           *Authentication
 	KeepAlive      KeepAlive
 	Batch          BatchOptions
 	OriginPatterns []string

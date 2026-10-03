@@ -1,45 +1,27 @@
 #!/usr/bin/env python3
 """Crash real workers and exercise one recovery transaction over both transports."""
 
-import base64
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
 import signal
-import socket
-import struct
 import subprocess
 import sys
 import tempfile
 import threading
-from urllib.parse import urlparse
 
 sys.dont_write_bytecode = True
 from mesh_control import round_trip
-from public_http_fixture import receive_frame, receive_headers
 from terminal_window import Fixture, Terminal, PROMPT, eventually, require, run_outside_containing_session
 from ssh_sessions import SSHFixture
 
 
-def websocket_request(endpoint, request):
-    address = urlparse(endpoint)
-    with socket.create_connection((address.hostname, address.port), timeout=10) as connection:
-        key = base64.b64encode(os.urandom(16)).decode()
-        connection.sendall((f"GET {address.path} HTTP/1.1\r\nHost: {address.netloc}\r\n"
-                            "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
-                            f"Sec-WebSocket-Key: {key}\r\n\r\n").encode())
-        response = receive_headers(connection)
-        require(response.startswith(b"HTTP/1.1 101 "), f"WebSocket upgrade failed: {response!r}")
-        data = json.dumps(request).encode()
-        frame = b"\x01" + struct.pack(">I", len(data)) + data
-        mask = os.urandom(4)
-        masked = bytes(value ^ mask[index % 4] for index, value in enumerate(frame))
-        connection.sendall(b"\x82\xfe" + struct.pack(">H", len(frame)) + mask + masked)
-        opcode, response = receive_frame(connection)
-        require(opcode == 2 and response[0] == 1, f"unexpected recovery frame: {opcode} {response!r}")
-        require(struct.unpack(">I", response[1:5])[0] == len(response) - 5, "incomplete Mesh response")
-        return json.loads(response[5:])
+def websocket_request(fixture, endpoint, request):
+    result = subprocess.run([str(fixture.root / "control-client"), endpoint, fixture.remote_id,
+                             json.dumps(request)], env=fixture.environment, capture_output=True, timeout=12)
+    require(result.returncode == 0, f"authenticated recovery failed: {result.stderr!r}")
+    return json.loads(result.stdout)
 
 
 def kill_worker(state, session_id):
@@ -52,7 +34,17 @@ def kill_worker(state, session_id):
     return metadata["pid"]
 
 
+def build_control_client(fixture):
+    if (fixture.root / "control-client").exists():
+        return
+    repo = Path(__file__).resolve().parents[2]
+    caches = subprocess.check_output(["go", "env", "GOCACHE", "GOMODCACHE"], cwd=repo).decode().splitlines()
+    environment = fixture.environment | dict(zip(("GOCACHE", "GOMODCACHE"), caches, strict=True))
+    subprocess.run(["go", "build", "-o", str(fixture.root / "control-client"),
+                    "./integration/helpers/control-client"], cwd=repo, check=True,
+                   env=environment, timeout=60)
 def races(fixture):
+    build_control_client(fixture)
     fixture.start_remote()
     daemon_socket = str(fixture.remote / "daemon.sock")
     response = round_trip(daemon_socket, {"type": "session.create", "requestId": "race-source",
@@ -75,7 +67,7 @@ def races(fixture):
         request = {"type": "session.recover", "requestId": f"race-{index}", "sessionId": source}
         barrier.wait(timeout=3)
         if index % 2:
-            return websocket_request(endpoint, request)
+            return websocket_request(fixture, endpoint, request)
         return round_trip(daemon_socket, request)
 
     try:

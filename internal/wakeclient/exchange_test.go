@@ -25,7 +25,7 @@ func TestExchangePinsIdentityBeforeSendingMutation(t *testing.T) {
 		mutations.Add(1)
 		return protocol.Control{Type: protocol.TypeWakeSent}, nil
 	})
-	_, _, err := exchange(testContext(t), endpoint, expected.TargetID, protocol.Control{Type: protocol.TypeWakeSend, WakeGrant: &expected})
+	_, _, err := exchange(testContext(t), endpoint, expected.TargetID, protocol.Control{Type: protocol.TypeWakeSend, WakeGrant: &expected}, nil)
 	if err == nil || !strings.Contains(err.Error(), "identity changed") || mutations.Load() != 0 {
 		t.Fatalf("exchange = %v, mutations = %d", err, mutations.Load())
 	}
@@ -56,7 +56,7 @@ func TestExchangeRejectsResponseForAnotherRequest(t *testing.T) {
 		}
 		return protocol.Control{Type: protocol.TypeWakeSent, RequestID: "another-request"}, nil
 	})
-	_, _, err := exchange(testContext(t), endpoint, grant.TargetID, protocol.Control{Type: protocol.TypeWakeSend, WakeGrant: &grant})
+	_, _, err := exchange(testContext(t), endpoint, grant.TargetID, protocol.Control{Type: protocol.TypeWakeSend, WakeGrant: &grant}, nil)
 	if err == nil || !strings.Contains(err.Error(), "request ID") {
 		t.Fatalf("exchange = %v", err)
 	}
@@ -76,7 +76,7 @@ func TestExchangeCancellationClosesBlockedWebSocket(t *testing.T) {
 	defer cancel()
 	done := make(chan struct{})
 	go func() {
-		_, _, err := exchange(ctx, endpoint, grant.TargetID, protocol.Control{})
+		_, _, err := exchange(ctx, endpoint, grant.TargetID, protocol.Control{}, nil)
 		if err == nil {
 			t.Error("cancelled exchange returned success")
 		}

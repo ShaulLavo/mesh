@@ -20,10 +20,12 @@ func TestWatchPickerActualControlTransportNeverWakes(t *testing.T) {
 	for _, mode := range []string{"watch", "legacy", "generic-error", "wrong-identity"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := setupCommandTestHost(t)
+			auth, hostID := controlFixtureAuthentication(t)
+			fixture.host.MeshIdentity = hostID
 			var recoveryDials, wakes, lists, inspections, probes atomic.Int32
 			rejected := make(chan struct{}, 4)
 			serve := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_ = transport.Serve(w, r, func(ctx context.Context, conn transport.Conn) error {
+				_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: auth}, func(ctx context.Context, conn transport.Conn) error {
 					for ctx.Err() == nil {
 						frame, err := conn.ReadFrame()
 						if err != nil {

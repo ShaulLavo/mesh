@@ -59,6 +59,9 @@ fi
 for state in "$EDGE_STATE" "$ORIGIN_STATE"; do
   ssh-keygen -q -t ed25519 -N '' -C '' -f "$state/identity.key" || fail 'create fixture identity'
 done
+cat "$ORIGIN_STATE/identity.key.pub" >"$EDGE_STATE/authorized_keys"
+cat "$EDGE_STATE/identity.key.pub" >"$ORIGIN_STATE/authorized_keys"
+chmod 0600 "$EDGE_STATE/authorized_keys" "$ORIGIN_STATE/authorized_keys"
 
 python3 - "$TEST_ROOT" "$$" <<'PY' || fail 'fixture configuration'
 import base64, json, os, socket, sys

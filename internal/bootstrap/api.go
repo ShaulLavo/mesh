@@ -130,6 +130,7 @@ type ReleaseOptions struct {
 // selection from the running binary, sibling artifacts, and checksum-verified
 // releases.
 type Options struct {
+	AllowRoot        bool
 	Target           string
 	BinaryPath       string
 	Release          ReleaseOptions

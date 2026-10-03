@@ -63,8 +63,8 @@ Use `--coordinator ALIAS` when starting or inspecting an operation on another
 adopted host. Starting a fleet operation without a local daemon includes its
 one-time setup in the approval preview. The independent helper starts the
 coordinator and resumes the saved operation if the command closes during setup.
-With `--local`, approval installs only the update helper without adding a hosting
-daemon.
+For a client-only installation with no local daemon, `--local` installs the
+update helper without adding a hosting daemon.
 
 ## Approve an administrator
 
@@ -76,11 +76,92 @@ public Mesh identity:
 mesh update trust COORDINATOR_PUBLIC_ID
 ```
 
-The first upgrade of an older daemon uses its existing session-management
-access to install the updater and enroll the approved coordinator. This has the
-same user-level authority as running a command through that older daemon. It
-preserves existing service definitions. An existing administrator policy must
-be changed locally; bootstrap does not replace it.
+Existing update administrators have update-only network authority. Enrolling an
+administrator does not grant session controls, SSH access or service management.
+Use `mesh device approve` locally on each destination for that full daemon-account
+grant. Removing a device grant leaves a separately enrolled update administrator
+able to reconnect for signed update controls; the full-device connection retires.
+Each newly approved key line receives a unique grant-incarnation comment in
+`authorized_keys`. Connections capture that line identity under the admission
+lock. Immediate same-key reapproval creates a fresh incarnation: old control
+and SSH attachments retire even if no poll sampled the absent membership, and
+new connections use the new grant. Repeating approval of an existing full grant
+preserves its incarnation; another device mutation leaves it unchanged. Use
+`mesh device revoke` for retirement. Replacing policy files with an identical
+earlier copy can restore the same line identity and is an owner-account action.
+Edit the destination's local administrator policy when withdrawing that authority
+too.
+
+## Cross the control-authentication cutover
+
+The TLS peer is an Ed25519 key, verified by possession during TLS 1.3 and matched
+to an owner-controlled pin or grant. Certificate names, public CAs and certificate
+dates do not grant or remove Mesh authority. An encrypted acceptance byte lets
+the client observe the server's full-device or update-only grant before a dial
+succeeds. Ordinary clients reject update-only approval before sending controls;
+the signed updater opts into that narrower scope.
+Handshake admission has a five-second deadline and a 64 KiB inbound budget;
+reconnections perform a fresh handshake with session tickets disabled.
+
+Grant mutation takes an exclusive lock and frame admission reads under a shared
+lock. Later frames are denied once revocation publishes; already admitted work
+may finish. A 250 ms current-grant check also closes idle control and SSH
+connections. This retirement is polling-based, so scheduler or storage delays can
+postpone socket closure; frame admission still checks the current grant. Revoking
+a key does not signal its retained worker processes.
+
+The control protocol requires authenticated peers. There is no raw signed-update
+fallback. During this cutover, mixed-version network sessions, service controls,
+certificates, wake requests and fleet update reconciliation can fail. Local Unix
+controls and ordinary service URLs remain available. The owner accepts this short
+mixed-version interval and updates each host independently through system SSH.
+
+For the omarchy/macbook-air/pi/vps fleet, use this account-local sequence:
+
+1. Keep authenticated system SSH available. Record each daemon account, stable
+   Mesh identity and saved destination pin. The VPS daemon runs as root; full
+   device approvals there require `--allow-root`.
+2. Run `mesh update --local --version RELEASE --yes` on omarchy locally, then
+   run the same command independently over system SSH on macbook-air, pi and
+   vps in each daemon's own account. Do not select a remote `--coordinator`.
+   With the default coordinator, the old CLI submits its one-host plan to its
+   own daemon's Unix socket. That daemon stages the approved release, and its
+   independent helper replaces only that installation. The new daemon resumes
+   the saved local operation over the same Unix endpoint. Cross-host Mesh
+   controls are unnecessary. Retained PTY workers keep their original PID and
+   executable throughout daemon replacement.
+3. Read each identity with `mesh device identity --json` through that trusted
+   account-local path. Preserve existing saved pins and stop if a key changes.
+   On each destination, run `mesh device approve -- SOURCE_ID` for every device
+   allowed to control that daemon account, including daemon publishers,
+   certificate distributors and wake witnesses. On a root destination use
+   `mesh device approve --allow-root -- SOURCE_ID`. Keep each account's key in
+   its own state directory. Discovery supplies addresses, never approval.
+4. Enroll the selected fleet coordinator separately on every target with
+   `mesh update trust COORDINATOR_ID`. Existing administrator grants remain
+   update-only. Record trusted destination identities and reachable addresses
+   in the controlling accounts' host books and the approved fleet file. A Unix
+   endpoint identifies only the account-local daemon.
+5. After all four daemons run the authenticated release, verify authenticated
+   reconnection and reattach retained sessions from an approved device. Run a
+   daemon-owned fleet update using the explicit approved fleet and release.
+   Coordination can then use omarchy again; no temporary coordinator or bridge
+   release is needed for this cutover.
+
+A pin or grant failure is repaired through authenticated system SSH or a
+local destination command. Never reopen raw network controls for recovery.
+
+The disposable cutover proof builds the pre-authentication CLI and daemon, plus
+two authenticated patch builds, and uses four independent Linux installations
+with real state, Unix sockets and detached PTY workers. Each old CLI's local
+update settles only its own installation. After explicit grants and host-book
+pins, all twelve directed network connections and four retained-session
+reattachments succeed. A real daemon-owned fleet operation then installs the
+second authenticated patch on all four hosts while preserving the original
+worker and shell PIDs. Only the HTTPS release origin and service-manager
+commands are fixture providers. This establishes local ownership and network
+recovery; native macOS service management and the installed fleet are separate
+live checks. No installed hosts were accessed during this proof.
 
 ## Read progress
 
