@@ -416,11 +416,8 @@ func TestMarshalHostKeyUsesOpenSSHFormat(t *testing.T) {
 // authentication, so before this the authorized_keys file offered no protection
 // at all against a peer that simply connects and says nothing.
 func TestSilentConnectionsAreDroppedAfterTheLoginGrace(t *testing.T) {
-	previous := loginGrace
-	loginGrace = 100 * time.Millisecond
-	t.Cleanup(func() { loginGrace = previous })
-
 	server, err := newServer(normalizedConfig{
+		loginGrace:     100 * time.Millisecond,
 		hostKey:        generatePrivateKey(t),
 		authorizedKeys: writeAuthorizedKeys(t, generatePrivateKey(t), 0o600),
 		addr:           mustAddrPort(t, "127.0.0.1:2222"),

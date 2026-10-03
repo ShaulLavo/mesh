@@ -39,9 +39,8 @@ const (
 // loginGrace bounds how long an unauthenticated connection may hold a goroutine
 // and a descriptor, the way OpenSSH's LoginGraceTime does. It is cleared the
 // moment a key is accepted, because sessions are long-lived and a server-wide
-// MaxTimeout would cut them off mid-work. A variable so tests need not wait it
-// out in real time.
-var loginGrace = 30 * time.Second
+// MaxTimeout would cut them off mid-work.
+const loginGrace = 30 * time.Second
 
 // gracedConnKey addresses the wrapped connection inside the SSH context.
 type gracedConnKey struct{}
@@ -110,6 +109,7 @@ type Config struct {
 
 type normalizedConfig struct {
 	tunnels        tunnel.Activator
+	loginGrace     time.Duration
 	hostKey        ed25519.PrivateKey
 	authorizedKeys string
 	addr           netip.AddrPort
@@ -210,8 +210,12 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 	server.ServerConfigCallback = nil
 	server.PasswordHandler = nil
 	server.KeyboardInteractiveHandler = nil
+	grace := cfg.loginGrace
+	if grace == 0 {
+		grace = loginGrace
+	}
 	server.ConnCallback = func(ctx charmssh.Context, conn net.Conn) net.Conn {
-		_ = conn.SetDeadline(time.Now().Add(loginGrace))
+		_ = conn.SetDeadline(time.Now().Add(grace))
 		graced := &gracedConn{Conn: conn}
 		ctx.SetValue(gracedConnKey{}, graced)
 		return graced
