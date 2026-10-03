@@ -15,18 +15,19 @@ import (
 
 func TestDashboardUsageModelQuota(t *testing.T) {
 	for _, test := range []struct {
-		name, id string
-		used     float64
-		age      time.Duration
-		reading  bool
+		name, id, label string
+		used            float64
+		age             time.Duration
+		reading         bool
 	}{
-		{"account-zero", "weekly", 0, time.Minute, true},
-		{"account-partial", "weekly", 67, time.Minute, true},
-		{"account-full", "weekly", 100, time.Minute, true},
-		{"model-zero", "model:gpt-6.1-sol:weekly", 0, time.Minute, true},
-		{"model-full", "model:gpt-6.1-sol:weekly", 100, time.Minute, true},
-		{"model-stale", "model:gpt-6.1-sol:weekly", 0, 20 * time.Minute, true},
-		{"model-absent", "model:gpt-6.1-sol:weekly", 0, 0, false},
+		{"account-zero", "weekly", "Weekly", 0, time.Minute, true},
+		{"account-partial", "weekly", "Weekly", 67, time.Minute, true},
+		{"account-full", "weekly", "Weekly", 100, time.Minute, true},
+		{"model-zero", "model:gpt-6.1-sol:weekly", "Weekly", 0, time.Minute, true},
+		{"model-prefixed", "model:gpt-6.1-sol:weekly", "gpt-6.1-sol Weekly", 0, time.Minute, true},
+		{"model-full", "model:gpt-6.1-sol:weekly", "Weekly", 100, time.Minute, true},
+		{"model-stale", "model:gpt-6.1-sol:weekly", "Weekly", 0, 20 * time.Minute, true},
+		{"model-absent", "model:gpt-6.1-sol:weekly", "Weekly", 0, 0, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			model := dashboardUsageFleetFixture()
@@ -36,7 +37,7 @@ func TestDashboardUsageModelQuota(t *testing.T) {
 				ID: "synthetic", Provider: "codex", Label: "fixture", Plan: "Pro",
 				State: "disabled", Source: "proxy-state", CheckedAt: &seen, LastSeenAt: &seen,
 				Routing: usagefeed.Routing{Mode: "rotating", Active: &active},
-				Windows: []usagefeed.Window{{ID: test.id, Label: "Weekly", Status: usageUnknown, Source: "proxy-state"}},
+				Windows: []usagefeed.Window{{ID: test.id, Label: test.label, Status: usageUnknown, Source: "proxy-state"}},
 			}
 			if test.reading {
 				window := &account.Windows[0]
@@ -95,6 +96,9 @@ func TestDashboardUsageModelQuota(t *testing.T) {
 				}
 				if rows := usageAccountRows(model.usage.accounts[0], compact); rows != len(model.usageAccountWindows(model.usage.accounts[0], panelWidth-4, compact))+1 {
 					t.Errorf("row budget=%d does not match rendered account", rows)
+				}
+				if len(model.usage.accounts[0].Windows) == 1 && model.usage.accounts[0].Windows[0].Label != test.label {
+					t.Errorf("rendering changed the source label")
 				}
 			}
 		})

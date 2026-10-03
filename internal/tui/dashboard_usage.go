@@ -119,6 +119,10 @@ func (m dashboardModel) usageAccountWindows(account dashboardUsageAccount, width
 		if !usageWindowHasReading(window) {
 			continue
 		}
+		if model, scoped := usageWindowModel(window); scoped {
+			result = append(result, dashboardFit("Model · "+model, width))
+			window.Label = strings.TrimPrefix(window.Label, model+" ")
+		}
 		showAge := !usageSameSeen(window.LastSeenAt, account.LastSeenAt)
 		if compact {
 			result = append(result, m.usageCompactWindow(window, width, showAge))
@@ -153,6 +157,12 @@ func usageEmptySummary(state, credits string, width int) string {
 		summary = "Out of rotation"
 	}
 	return summary + " · " + credits
+}
+
+func usageWindowModel(window usagefeed.Window) (string, bool) {
+	value, scoped := strings.CutPrefix(window.ID, "model:")
+	model, _, _ := strings.Cut(value, ":")
+	return model, scoped
 }
 
 func usageSameSeen(left, right *time.Time) bool {
@@ -369,10 +379,14 @@ func (m dashboardModel) usageVisible(budget int, compact bool) (int, int) {
 }
 
 func usageAccountRows(account dashboardUsageAccount, compact bool) int {
-	readings := 0
+	readings, scopes := 0, 0
 	for _, window := range account.Windows {
-		if usageWindowHasReading(window) {
-			readings++
+		if !usageWindowHasReading(window) {
+			continue
+		}
+		readings++
+		if _, scoped := usageWindowModel(window); scoped {
+			scopes++
 		}
 	}
 	if readings == 0 {
@@ -382,7 +396,7 @@ func usageAccountRows(account dashboardUsageAccount, compact bool) int {
 	if compact {
 		windowRows = 1
 	}
-	rows := 1 + windowRows*readings
+	rows := 1 + windowRows*readings + scopes
 	if usageCredits(account.Credits) != "" {
 		rows++
 	}
