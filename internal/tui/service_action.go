@@ -9,10 +9,10 @@ import (
 )
 
 type serviceActionResultMsg struct {
-	request cli.PickerServiceActionRequest
-	before  *cli.ServiceCatalogRow
-	result  cli.PickerServiceActionResult
-	err     error
+	request     cli.PickerServiceActionRequest
+	observation uint64
+	result      cli.PickerServiceActionResult
+	err         error
 }
 
 func serviceActionLabel(action cli.PickerServiceAction) string {
@@ -57,10 +57,10 @@ func (m *model) handleServiceKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 	m.notice = ""
 	m.refreshMainDelegate()
 	act, ctx := m.serviceAct, m.ctx
-	before := selected.website.row
+	observation := m.serviceObservation
 	return true, func() tea.Msg {
 		result, err := act(ctx, request)
-		return serviceActionResultMsg{request: request, before: &before, result: result, err: err}
+		return serviceActionResultMsg{request: request, observation: observation, result: result, err: err}
 	}
 }
 
@@ -92,8 +92,8 @@ func (m model) applyServiceAction(message serviceActionResultMsg) model {
 		m.refreshMainDelegate()
 		return m
 	}
-	// A watch update can arrive while an action's older snapshot is in flight.
-	if message.before == nil || reflect.DeepEqual(website.row, *message.before) {
+	superseded := message.observation != m.serviceObservation
+	if !superseded {
 		*website = servedWebsites([]cli.ServiceCatalogRow{row}, false)[0]
 	}
 	switch message.request.Action {
@@ -106,13 +106,23 @@ func (m model) applyServiceAction(message serviceActionResultMsg) model {
 	case cli.PickerOpenService:
 		feedback = "Opened"
 	}
-	if m.screen == hostScreen && mainItemKey(m.list.SelectedItem()) == target {
+	if m.screen == hostScreen && mainItemKey(m.list.SelectedItem()) == target && serviceFeedbackCurrent(message, website.row, superseded) {
 		m.serviceFeedback[target] = feedback
 	}
 	if m.screen == hostScreen {
 		_ = m.resetMainItems(mainItemKey(m.list.SelectedItem()), m.list.Index())
 	}
 	return m
+}
+
+func serviceFeedbackCurrent(message serviceActionResultMsg, observed cli.ServiceCatalogRow, superseded bool) bool {
+	if !superseded {
+		return true
+	}
+	if message.request.Action != cli.PickerStopService && message.request.Action != cli.PickerRestartService {
+		return false
+	}
+	return reflect.DeepEqual(observed, message.result.Row)
 }
 
 func (m model) serviceWebsite(target serviceTarget) *servedWebsite {

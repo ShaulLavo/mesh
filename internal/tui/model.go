@@ -136,6 +136,7 @@ type model struct {
 	serviceFeedback    map[serviceTarget]string
 	pendingService     *cli.PickerServiceActionRequest
 	serviceInvalid     bool
+	serviceObservation uint64
 	containingPath     []protocol.SessionIdentity
 }
 

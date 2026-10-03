@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 
 	"charm.land/bubbles/v2/list"
@@ -94,19 +95,32 @@ func (m model) applyServices(update cli.PickerServicesUpdate) (model, tea.Cmd) {
 }
 
 func (m *model) updateServiceTargets(hostID string, previous, websites []servedWebsite) {
-	states := make(map[string]string, len(websites))
+	observed := make(map[string]servedWebsite, len(websites))
 	for _, website := range websites {
-		states[website.route] = website.state
+		observed[website.route] = website
 	}
 	for _, website := range previous {
 		target := serviceTarget{hostID, website.route}
-		state, exists := states[website.route]
-		if !exists || state != website.state {
+		next, exists := observed[website.route]
+		if !exists || next.state != website.state {
 			delete(m.serviceFeedback, target)
 		}
-		if !exists && m.pendingService != nil && m.pendingService.HostID == target.hostID && m.pendingService.ServiceName == target.route {
-			m.serviceInvalid = true
-		}
+		m.observeServiceAction(target, website, next, exists)
+	}
+}
+
+func (m *model) observeServiceAction(target serviceTarget, previous, next servedWebsite, exists bool) {
+	pending := m.pendingService
+	if pending == nil || pending.HostID != target.hostID || pending.ServiceName != target.route {
+		return
+	}
+	if exists && reflect.DeepEqual(previous.row, next.row) {
+		return
+	}
+	// Count each change, including transitions that return to the starting value.
+	m.serviceObservation++
+	if !exists {
+		m.serviceInvalid = true
 	}
 }
 
