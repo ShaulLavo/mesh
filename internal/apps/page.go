@@ -126,12 +126,13 @@ func showPageWithAssets(sources []showSource) (int, error) {
 			return -1, nil
 		}
 		names[source.name] = true
-		if !source.dir && showHTML(source.name) {
-			if page >= 0 {
-				return -1, nil
-			}
-			page = i
+		if source.dir || !showHTML(source.name) {
+			continue
 		}
+		if page >= 0 {
+			return -1, nil
+		}
+		page = i
 	}
 	if page < 0 {
 		return -1, nil
