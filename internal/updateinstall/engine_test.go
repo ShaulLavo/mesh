@@ -103,7 +103,13 @@ func testExecutable(version string) []byte {
 	return []byte(fmt.Sprintf(`#!/bin/sh
 set -eu
 if [ "$1" = version ]; then
-  if command -v sha256sum >/dev/null 2>&1; then digest=$(sha256sum "$0"); else digest=$(shasum -a 256 "$0"); fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest=$(sha256sum "$0")
+  elif command -v openssl >/dev/null 2>&1; then
+    digest=$(openssl dgst -sha256 -r "$0")
+  else
+    digest=$(shasum -a 256 "$0")
+  fi
   digest=${digest%%%% *}
   printf '{"version":"%s","commit":"%s","digest":"%%s","platform":{"os":"%s","arch":"%s"},"stateVersion":7,"workerProtocol":1,"updateProtocol":1}\n' "$digest"
   exit 0

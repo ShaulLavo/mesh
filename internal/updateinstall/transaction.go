@@ -40,7 +40,7 @@ func (e *Engine) Run(ctx context.Context) (Status, error) {
 		return e.validate(ctx, status)
 	}
 	if status.Phase == RollingBack {
-		return e.rollback(status)
+		return e.rollback(ctx, status)
 	}
 	if finished(status.Phase) {
 		settlementErr := updategate.Clear(e.cfg.StateDir, status.Request.ID)
@@ -84,13 +84,13 @@ func (e *Engine) activate(ctx context.Context, status Status) (Status, error) {
 		return status, err
 	}
 	if err := e.stop(ctx); err != nil {
-		return e.beginRollback(status, err)
+		return e.beginRollback(ctx, status, err)
 	}
 	if err := e.switchCandidate(status); err != nil {
 		if errors.Is(err, ErrInstallationChanged) {
 			return e.failBeforeActivation(status, err)
 		}
-		return e.beginRollback(status, err)
+		return e.beginRollback(ctx, status, err)
 	}
 	status.Phase = Validating
 	if err := e.save(&status); err != nil {
@@ -163,17 +163,17 @@ func (e *Engine) validate(ctx context.Context, status Status) (Status, error) {
 		return status, err
 	}
 	if err := e.start(ctx); err != nil {
-		return e.beginRollback(status, err)
+		return e.beginRollback(ctx, status, err)
 	}
 	artifact, err := status.Request.Manifest.Artifact(status.Request.Current.Platform)
 	if err != nil {
-		return e.beginRollback(status, err)
+		return e.beginRollback(ctx, status, err)
 	}
 	expected := release.Build{Version: status.Request.Manifest.Version, Commit: status.Request.Manifest.Commit,
 		Digest: artifact.BinarySHA256, Platform: status.Request.Current.Platform}
 	health, err := e.awaitHealth(ctx, expected, status)
 	if err != nil {
-		return e.beginRollback(status, err)
+		return e.beginRollback(ctx, status, err)
 	}
 	status.Phase, status.Verified, status.Error = Committed, &health, ""
 	if err = e.save(&status); err != nil {
@@ -182,16 +182,24 @@ func (e *Engine) validate(ctx context.Context, status Status) (Status, error) {
 	return status, updategate.Clear(e.cfg.StateDir, status.Request.ID)
 }
 
-func (e *Engine) beginRollback(status Status, cause error) (Status, error) {
+func (e *Engine) beginRollback(ctx context.Context, status Status, cause error) (Status, error) {
 	status.Phase, status.Error = RollingBack, cause.Error()
 	if err := e.save(&status); err != nil {
 		return status, errors.Join(cause, err)
 	}
-	return e.rollback(status)
+	return e.rollback(ctx, status)
 }
 
-func (e *Engine) rollback(status Status) (Status, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), e.cfg.HealthTimeout+15*time.Second)
+func (e *Engine) rollback(ctx context.Context, status Status) (Status, error) {
+	status, err := e.restoreRollback(ctx, status)
+	if err != nil {
+		return status, err
+	}
+	return status, fmt.Errorf("update rolled back: %s", status.Error)
+}
+
+func (e *Engine) restoreRollback(ctx context.Context, status Status) (Status, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.cfg.HealthTimeout+15*time.Second)
 	defer cancel()
 	health, err := e.restore(ctx, status)
 	if err != nil {
@@ -206,9 +214,9 @@ func (e *Engine) rollback(status Status) (Status, error) {
 		return status, err
 	}
 	if err = updategate.Clear(e.cfg.StateDir, status.Request.ID); err != nil {
-		return status, err
+		return status, fmt.Errorf("settle restored installation gate: %w", err)
 	}
-	return status, fmt.Errorf("update rolled back: %s", status.Error)
+	return status, nil
 }
 
 func (e *Engine) restore(ctx context.Context, status Status) (Health, error) {

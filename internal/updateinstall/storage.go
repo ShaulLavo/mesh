@@ -26,8 +26,20 @@ func journalPath(stateDir string) string {
 }
 
 func Read(stateDir string) (Status, error) {
+	return readJournal(nil, stateDir)
+}
+
+func ReadContext(ctx context.Context, stateDir string) (Status, error) {
+	return readJournal(ctx.Err, stateDir)
+}
+
+func readJournal(check func() error, stateDir string) (Status, error) {
 	var status Status
-	if err := readJSON(journalPath(stateDir), &status); err != nil {
+	data, err := readMetadataChecked(check, stateDir, filepath.Join("update", "installation.json"), true)
+	if err != nil {
+		return status, err
+	}
+	if err := readJSON(data, &status); err != nil {
 		return status, err
 	}
 	if status.Schema != 1 {
@@ -38,6 +50,11 @@ func Read(stateDir string) (Status, error) {
 
 func ReadSettings(stateDir string) (Settings, error) {
 	status, err := Read(stateDir)
+	return status.Settings, err
+}
+
+func ReadSettingsContext(ctx context.Context, stateDir string) (Settings, error) {
+	status, err := ReadContext(ctx, stateDir)
 	return status.Settings, err
 }
 
@@ -83,19 +100,15 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	return syncDirectory(dir)
 }
 
-func readJSON(path string, value any) error {
-	file, err := os.Open(path) //nolint:gosec // fixed journal, gate, or executable path beneath configured local directories
+func readHelperInstallation(ctx context.Context, stateDir string, value *HelperInstallation) error {
+	data, err := readMetadata(ctx, stateDir, filepath.Join("update", "helper", "installed.json"), true)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = file.Close() }()
-	data, err := io.ReadAll(io.LimitReader(file, journalLimit+1))
-	if err != nil {
-		return err
-	}
-	if len(data) > journalLimit {
-		return errors.New("installation journal exceeds size limit")
-	}
+	return readJSON(data, value)
+}
+
+func readJSON(data []byte, value any) error {
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {

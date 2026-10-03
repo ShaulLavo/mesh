@@ -22,6 +22,11 @@ import (
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
+const (
+	helperLaunchd = "launchd"
+	helperSystemd = "systemd"
+)
+
 func versionCommand() *cobra.Command {
 	var structured bool
 	command := &cobra.Command{Use: "version", Short: "Show the executing Mesh build", Args: cobra.NoArgs,
@@ -73,6 +78,7 @@ func updateHelperCommand() *cobra.Command {
 	}
 	command.Flags().StringVar(&stateDir, "state-dir", "", "Mesh state directory")
 	command.Flags().BoolVar(&checkJournal, "check-journal", false, "validate journal compatibility without performing work")
+	command.AddCommand(helperRecoveryCommand())
 	return command
 }
 
@@ -161,10 +167,10 @@ func helperUpgradeService(settings updateinstall.Settings) (string, string) {
 	if !settings.ClientOnly {
 		return settings.Service.Kind, settings.Service.Domain
 	}
-	if runtime.GOOS == "darwin" {
-		return "launchd", fmt.Sprintf("gui/%d", os.Getuid())
+	if runtime.GOOS == pickerDarwinOS {
+		return helperLaunchd, fmt.Sprintf("gui/%d", os.Getuid())
 	}
-	return "systemd", ""
+	return helperSystemd, ""
 }
 
 func (a *application) runClientOnlyUpdate(ctx context.Context, environment updateEnvironment, preview updatePreview, options updateOptions, output updateOutput) error {
@@ -310,4 +316,147 @@ func runFromInstallation(status updateinstall.Status) update.Run {
 		target.Build, target.Workers = &status.Verified.Build, status.Verified.Workers
 	}
 	return update.Run{ID: status.Request.ID, Coordinator: status.Request.TargetID, Fleet: scopedUpdateFleet("local", []update.Host{target.Host}), Release: status.Request.Manifest, ReleaseDigest: status.Request.Manifest.Digest(), Targets: []update.Target{target}, UpdatedAt: status.UpdatedAt}
+}
+
+func helperRecoveryCommand() *cobra.Command {
+	var request updateinstall.HelperRecovery
+	var version, phase string
+	var structured bool
+	command := &cobra.Command{Use: "recover", Short: "Recover the local update helper for a reviewed failed update", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			request.Expected.Phase = updateinstall.Phase(phase)
+			result, err := runLocalHelperRecovery(cmd.Context(), request, version)
+			if err != nil {
+				return err
+			}
+			if structured {
+				if err = json.NewEncoder(cmd.OutOrStdout()).Encode(result); err != nil {
+					return fmt.Errorf("write helper recovery diagnostics: %w", err)
+				}
+				return nil
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), "Update helper recovered. Review the next compatible update before approving it.")
+			if err != nil {
+				return fmt.Errorf("write helper recovery result: %w", err)
+			}
+			return nil
+		},
+	}
+	command.Flags().StringVar(&request.Helper.StateDir, "state-dir", "", "Mesh state directory")
+	command.Flags().StringVar(&request.Helper.Executable, "replacement", "", "verified local replacement executable")
+	command.Flags().StringVar(&request.Helper.ServiceDir, "service-dir", "", "existing helper service directory")
+	command.Flags().StringVar(&version, "version", "", "exact published replacement release")
+	command.Flags().StringVar(&request.Digest, "sha256", "", "exact published replacement executable digest")
+	command.Flags().StringVar(&request.Expected.Operation, "operation", "", "reviewed installation operation")
+	command.Flags().Uint64Var(&request.Expected.Generation, "generation", 0, "reviewed installation generation")
+	command.Flags().StringVar(&phase, "phase", "", "reviewed terminal installation phase")
+	command.Flags().StringVar(&request.Expected.OriginalDigest, "original-sha256", "", "reviewed original daemon executable digest")
+	command.Flags().BoolVar(&structured, "json", false, "write helper process and installation diagnostics")
+	return command
+}
+
+func runLocalHelperRecovery(ctx context.Context, request updateinstall.HelperRecovery, version string) (updateinstall.HelperRecoveryResult, error) {
+	if err := request.Expected.Validate(); err != nil {
+		return updateinstall.HelperRecoveryResult{}, fmt.Errorf("review helper recovery journal: %w", err)
+	}
+	if !filepath.IsAbs(request.Helper.StateDir) || !filepath.IsAbs(request.Helper.Executable) {
+		return updateinstall.HelperRecoveryResult{}, errors.New("helper recovery requires absolute state and replacement executable paths")
+	}
+	if _, err := release.CompareVersions(version, version); err != nil {
+		return updateinstall.HelperRecoveryResult{}, fmt.Errorf("review replacement helper release: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	settings, err := updateinstall.ReadSettingsContext(ctx, request.Helper.StateDir)
+	if err != nil {
+		return updateinstall.HelperRecoveryResult{}, fmt.Errorf("read helper recovery settings: %w", err)
+	}
+	if settings.StateDir != request.Helper.StateDir {
+		return updateinstall.HelperRecoveryResult{}, errors.New("installation journal belongs to another state directory")
+	}
+	request.Helper.Kind, request.Helper.Domain = settings.Service.Kind, settings.Service.Domain
+	request.Helper.ServiceDir, err = helperRecoveryServiceDir(request.Helper)
+	if err != nil {
+		return updateinstall.HelperRecoveryResult{}, err
+	}
+	client := release.Client{}
+	request.Manifest, err = client.Manifest(ctx, version)
+	if err != nil {
+		return updateinstall.HelperRecoveryResult{}, fmt.Errorf("read replacement helper release: %w", err)
+	}
+	config := settings.Config()
+	config.Client, config.Probe = client, updatebootstrap.Probe(settings.StateDir)
+	engine, err := updateinstall.New(config)
+	if err != nil {
+		return updateinstall.HelperRecoveryResult{}, fmt.Errorf("open helper recovery installation: %w", err)
+	}
+	request.Probe, request.CheckIdle = updatebootstrap.HelperProcessProbe(request.Helper), checkHelperRecoveryApprovals
+	result, err := engine.RecoverHelper(ctx, request)
+	if err != nil {
+		return updateinstall.HelperRecoveryResult{}, fmt.Errorf("recover local update helper: %w", err)
+	}
+	return result, nil
+}
+
+func helperRecoveryServiceDir(helper updateinstall.HelperConfig) (string, error) {
+	if helper.ServiceDir != "" {
+		return helper.ServiceDir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locate helper service directory: %w", err)
+	}
+	if helper.Kind == helperLaunchd {
+		return filepath.Join(home, "Library", "LaunchAgents"), nil
+	}
+	return filepath.Join(home, ".config", "systemd", "user"), nil
+}
+
+func checkHelperRecoveryApprovals(ctx context.Context, status updateinstall.Status) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("check helper recovery approvals: %w", err)
+	}
+	_, err := os.Stat(filepath.Join(status.Settings.StateDir, "updates", "runs"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("locate helper recovery approvals: %w", err)
+	}
+	store, err := update.OpenStore(status.Settings.StateDir)
+	if err != nil {
+		return fmt.Errorf("open helper recovery approvals: %w", err)
+	}
+	runs, err := store.List()
+	if err != nil {
+		return fmt.Errorf("read helper recovery approvals: %w", err)
+	}
+	for _, run := range runs {
+		for _, target := range run.Targets {
+			if target.Host.ID != status.Request.TargetID {
+				continue
+			}
+			if err := helperRecoveryTargetIdle(run, target); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func helperRecoveryTargetIdle(run update.Run, target update.Target) error {
+	if target.Grant || target.BootstrapRetry || run.CoordinatorSetup {
+		return errors.New("an update approval is pending; stop helper recovery")
+	}
+	// The coordinator skips verified targets; their saved retry metadata is inert.
+	if target.State == update.Updated || target.State == update.Newer {
+		return nil
+	}
+	if target.RetryPending {
+		return errors.New("an update approval is pending; stop helper recovery")
+	}
+	if target.State != update.Failed && target.State != update.Cancelled {
+		return errors.New("an update still owns this machine; stop helper recovery")
+	}
+	return nil
 }

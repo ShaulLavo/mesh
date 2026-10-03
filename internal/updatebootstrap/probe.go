@@ -51,7 +51,7 @@ func Inspect(ctx context.Context, stateDir string) (Observation, error) {
 		return Observation{}, fmt.Errorf("verify daemon phase=dial: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
-	image, err := peerImage(conn)
+	image, err := peerImage(ctx, conn)
 	if err != nil {
 		return Observation{}, fmt.Errorf("verify daemon phase=peer-image: %w", err)
 	}
@@ -230,7 +230,7 @@ func inspectWorker(ctx context.Context, dir string, stateVersion int) (*updatein
 		return nil, fmt.Errorf("verify session %s shellPID=%d phase=dial: %w", meta.ID, meta.PID, err)
 	}
 	defer func() { _ = conn.Close() }()
-	image, err := peerImage(conn)
+	image, err := peerImage(ctx, conn)
 	if err != nil {
 		return nil, fmt.Errorf("verify session %s shellPID=%d phase=peer-image: %w", meta.ID, meta.PID, err)
 	}

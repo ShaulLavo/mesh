@@ -59,7 +59,7 @@ func TestDarwinMappedExecutableSurvivesAtomicReplacement(t *testing.T) {
 	defer cancel()
 	conn := connectMappedChild(t, ctx, socket)
 	defer func() { _ = conn.Close() }()
-	before, err := peerImage(conn)
+	before, err := peerImage(ctx, conn)
 	if err != nil || before.PID != child.Process.Pid {
 		t.Fatalf("initial loaded image: %+v %v", before, err)
 	}
@@ -82,7 +82,7 @@ func TestDarwinMappedExecutableSurvivesAtomicReplacement(t *testing.T) {
 	if err = os.Rename(candidate, original); err != nil {
 		t.Fatal(err)
 	}
-	after, err := peerImage(conn)
+	after, err := peerImage(ctx, conn)
 	if err != nil || after.PID != before.PID {
 		t.Fatalf("retained mapping lost after atomic replacement: %+v %v", after, err)
 	}
