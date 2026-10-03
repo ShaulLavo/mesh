@@ -214,7 +214,7 @@ func (e *Engine) stage(ctx context.Context, status Status) (Status, error) {
 	if err != nil {
 		return status, err
 	}
-	if err = durableCopy(path, status.Candidate, artifact.BinarySHA256); err != nil {
+	if err = durableCopy(ctx, path, status.Candidate, artifact.BinarySHA256); err != nil {
 		return status, err
 	}
 	if err = durableLink(e.cfg.Executable, status.Previous, status.Request.Current.Digest); err != nil {
