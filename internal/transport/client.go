@@ -83,19 +83,25 @@ func Dial(ctx context.Context, url string, opts DialOptions) (Conn, error) {
 		HTTPHeader:      cloneHeader(opts.HTTPHeader),
 		CompressionMode: websocket.CompressionDisabled,
 	}
-	initial, err := dialSocket(ctx, url, dialOpts, normalized.keepAlive)
+	initial, err := dialSocket(ctx, url, dialOpts, normalized.keepAlive, opts.Auth)
 	if err != nil {
 		return nil, err
 	}
 	lifetime, cancel := context.WithCancel(context.Background())
 	return &reconnectingConn{
-		url:        url,
-		dialOpts:   dialOpts,
-		keepAlive:  normalized.keepAlive,
-		backoff:    normalized.backoff,
-		ctx:        lifetime,
-		cancel:     cancel,
-		dial:       dialLink,
+		url:       url,
+		dialOpts:  dialOpts,
+		keepAlive: normalized.keepAlive,
+		backoff:   normalized.backoff,
+		ctx:       lifetime,
+		cancel:    cancel,
+		dial: func(ctx context.Context, url string, dialOpts websocket.DialOptions, keepAlive KeepAlive) (linkConn, error) {
+			link, err := dialSocket(ctx, url, dialOpts, keepAlive, opts.Auth)
+			if err != nil {
+				return nil, err
+			}
+			return link, nil
+		},
 		recover:    opts.Recover,
 		current:    connectionRef{link: initial, generation: 1},
 		generation: 1,
@@ -116,22 +122,24 @@ func DialOnce(ctx context.Context, url string, opts DialOptions) (Conn, error) {
 		HTTPHeader:      cloneHeader(opts.HTTPHeader),
 		CompressionMode: websocket.CompressionDisabled,
 	}
-	return dialSocket(ctx, url, dialOpts, normalized.keepAlive)
-}
-
-// dialLink adapts dialSocket to the linkDialer signature. The nil check is
-// load-bearing: returning dialSocket's (*socketConn)(nil) directly would box a
-// typed nil into a non-nil linkConn, and connectionLocked's `link != nil` guard
-// would then call Close on it.
-func dialLink(ctx context.Context, url string, opts websocket.DialOptions, keepAlive KeepAlive) (linkConn, error) {
-	link, err := dialSocket(ctx, url, opts, keepAlive)
+	conn, err := dialSocket(ctx, url, dialOpts, normalized.keepAlive, opts.Auth)
 	if err != nil {
 		return nil, err
 	}
-	return link, nil
+	return conn, nil
 }
 
-func dialSocket(ctx context.Context, url string, opts websocket.DialOptions, keepAlive KeepAlive) (*socketConn, error) {
+func dialSocket(ctx context.Context, url string, opts websocket.DialOptions, keepAlive KeepAlive, authentication ...*Authentication) (*socketConn, error) {
+	var auth *Authentication
+	if len(authentication) > 0 {
+		auth = authentication[0]
+	}
+	if auth != nil {
+		if err := auth.validate(false); err != nil {
+			return nil, err
+		}
+		opts.Subprotocols = []string{AuthProtocol}
+	}
 	ws, response, err := websocket.Dial(ctx, url, &opts) //nolint:bodyclose // websocket.Dial owns and closes its HTTP response body
 	if err != nil {
 		if response != nil {
@@ -142,7 +150,18 @@ func dialSocket(ctx context.Context, url string, opts websocket.DialOptions, kee
 		}
 		return nil, fmt.Errorf("transport: dial %s: %w", url, err)
 	}
-	return newSocketConn(ws, keepAlive), nil
+	if auth == nil {
+		return newSocketConn(ws, keepAlive), nil //nolint:contextcheck // connected sockets outlive the bounded dialing context
+	}
+	if ws.Subprotocol() != AuthProtocol {
+		_ = ws.CloseNow()
+		return nil, ErrAuthenticationRequired
+	}
+	secure, _, err := authenticate(ctx, ws, auth, false)
+	if err != nil {
+		return nil, err
+	}
+	return newSecureSocketConn(ws, secure, keepAlive), nil //nolint:contextcheck // connected sockets outlive the bounded dialing context
 }
 
 func (c *reconnectingConn) ReadFrame() (protocol.Frame, error) {
@@ -364,6 +383,9 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 		}
 		if link != nil {
 			_ = link.Close()
+		}
+		if errors.Is(err, ErrAuthentication) || errors.Is(err, ErrAuthenticationRequired) {
+			return connectionRef{}, err
 		}
 		if !recovered && attempt >= 2 && !now().Before(nextRecovery) {
 			recovered = c.recoverSessions()

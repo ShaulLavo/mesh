@@ -34,14 +34,23 @@ independently of this updater project and does not wait for its milestones.
 | `mesh update retry RUN` | Retry unfinished targets using the original approved release. |
 | `mesh update cancel RUN` | Cancel pending targets and stop issuing activation grants. Report work already authorized. |
 
-`--all` is an explicit alias for the default scope. `--version TAG` selects an
+`--all` selects an explicitly saved fleet. With no saved fleet, an interactive
+update or `--check` reviews this machine only. No update command creates or saves
+a fleet from the address book. `--version TAG` selects an
 exact published release. Ordinary updates never downgrade a newer installation.
 `--fleet FILE` uses an explicit fleet manifest instead of the saved default.
 `--yes` approves the displayed scope for scripts; `--json` produces structured
 output. Noninteractive installation requires `--yes` and never reads stdin.
 
-The preview identifies the exact release, included machines, offline machines,
-and sessions using old workers. Approval occurs once for the whole operation.
+The default preview uses plain sentences for the release and selected machines.
+`--details` shows release identifiers, build capabilities, and session inventory;
+`--json` retains raw identifiers and rejection causes. Exact-current installations
+need no operation, and compatible newer builds are kept. Source compatibility,
+installation ordering/journal support, observed session protocols, and unresolved
+recovery are checked before approval, including local CLI and legacy paths.
+Unknown legacy builds or invalid authentication/control responses block approval.
+A missing direct transition does not identify a next release tag. Approval occurs
+once for the whole eligible operation.
 Accepting an update notification opens this same preview.
 
 Example notification, with illustrative versions and host counts:
@@ -140,11 +149,10 @@ platforms when known, and explicit routing dependencies. The file describes
 update scope; it grants no access to a member. An address-book entry alone
 does not establish that the full fleet has been inventoried.
 
-On first use, the interactive update preview seeds an editable candidate list
-from this machine and adopted hosts. Tailnet discovery can suggest additional
-Mesh hosts, but it cannot silently add or trust them. The user completes the
-list, including offline members, and reviews it in the same update approval.
-Save that exact membership with the operation. A script without a saved fleet
+On first use, the interactive update preview selects only this machine. The
+address book and discovery never add members, trust hosts, or save a fleet.
+Choose the complete group in an explicit fleet file, including offline members.
+The operation pins that approved membership. A script without a saved fleet
 must supply `--fleet FILE` or narrower `--local` or `--host` scope. `--yes`
 cannot treat an unreviewed address book as the whole fleet.
 
@@ -316,11 +324,11 @@ existing receipt or a stale-generation error.
 
 This controls who can invoke the update API. It does not create a privilege
 boundary against someone who already has arbitrary command execution as the
-same OS user. That user can replace binaries and policy files. Legacy Mesh
-sessions currently rely on tailnet access for that execution authority. The
-bootstrap path below inherits that trust model and says so in its preview;
-it must not claim independently authenticated ownership. General session-access
-hardening is a separate change, not a hidden prerequisite for updating.
+same OS user. That user can replace binaries and policy files. Pre-cutover Mesh sessions relied on Tailnet access for that execution authority.
+The authenticated coordinator removes that ordinary legacy bootstrap path.
+The control-authentication cutover uses independent account-local updates over
+system SSH; see `docs/updates.md`. Authenticated network clients have no raw
+update fallback.
 
 The remote API accepts an approved official release descriptor, not arbitrary
 shell commands, paths, or download URLs. Extract the existing bounded archive,
@@ -377,10 +385,11 @@ daemons cannot understand the new protocol. Include that path in this task:
   a fixed installer for the exact approved release. Persist bootstrap intent,
   run independently of the attaching client, seed the initiating administrator
   key, and verify the new daemon after reconnect. This uses the existing ability
-  to run a command and requires a real old-version compatibility test. It is an
-  use of the existing tailnet-authorized command channel, not proof of an
-  independently authenticated owner. The preview identifies this bootstrap
-  route before the operation is approved.
+  to run a command and requires a real old-version compatibility test. It is a
+  historical use of the Tailnet-admitted command channel. Authenticated
+  coordinators cannot use this raw channel after the control-authentication
+  cutover; system SSH or destination-local installation supplies recovery. The
+  preview identifies the bootstrap route before the operation is approved.
   An operation-specific marker and installation lock let retry discover work
   whose session acknowledgment was lost. The installer independently verifies
   the pinned artifacts and enrolls authority only when no policy exists; it

@@ -20,7 +20,12 @@ import (
 type HostDialer func(context.Context, HostRecord) (transport.Conn, error)
 
 func dialHost(ctx context.Context, host HostRecord) (transport.Conn, error) {
+	auth, err := transport.LocalAuthentication(host.MeshIdentity)
+	if err != nil {
+		return nil, fmt.Errorf("load control identity: %w", err)
+	}
 	return transport.Dial(ctx, host.Endpoint, transport.DialOptions{
+		Auth:    auth,
 		Recover: func(ctx context.Context) error { return recoverHost(ctx, host) },
 	})
 }

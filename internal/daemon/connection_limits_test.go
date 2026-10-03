@@ -33,7 +33,7 @@ func TestControlConnectionCapsRefuseWithoutDisruptingClients(t *testing.T) {
 				cfg.WebSocketPath = "/mesh"
 				endpoint := "ws://" + listener.Addr().String() + "/mesh"
 				dial = func() transport.Conn {
-					conn, err := transport.DialOnce(ctx, endpoint, transport.DialOptions{})
+					conn, err := transport.DialOnce(ctx, endpoint, runtimeDialOptions(t, cfg.StateDir))
 					if err != nil {
 						t.Fatal(err)
 					}

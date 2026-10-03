@@ -46,6 +46,7 @@ const (
 
 // AddRequest is the CLI-owned input to the SSH bootstrap adapter.
 type AddRequest struct {
+	AllowRoot            bool
 	Target               string
 	Alias                string
 	TailscaleAuthKeyFile string
@@ -231,6 +232,8 @@ type Dependencies struct {
 	UpdateBootstrap        func(context.Context, updatebootstrap.Request, updatebootstrap.Config) (updateinstall.Status, error)
 	UpdateRelease          release.Client
 	UpdateCaller           update.Caller
+	UpdateBuild            func() release.Build
+	UpdateInspect          func(context.Context, string) (updatebootstrap.Observation, error)
 	SSHSessionHandler      sshd.SessionHandlerFactory
 	Bootstrap              BootstrapFunc
 	Wake                   WakeFunc
@@ -382,7 +385,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	)
 	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.renameCommand(), app.wakeCommand(), app.dashboardCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand(), app.appCommand())...)
-	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), versionCommand())...)
+	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), deviceCommand(), versionCommand())...)
 	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand())
 	protectPrivacyErrors(root, &privacyEnabled)
 	return root
@@ -989,6 +992,7 @@ func (a *application) queryHost(ctx context.Context, host HostRecord) ([]protoco
 
 func (a *application) addCommand() *cobra.Command {
 	var (
+		allowRoot            bool
 		alias                string
 		tailscaleAuthKeyFile string
 		yes                  bool
@@ -1014,7 +1018,7 @@ func (a *application) addCommand() *cobra.Command {
 				return errors.New("SSH bootstrap support is unavailable in this build")
 			}
 			result, err := a.dependencies.Bootstrap(cmd.Context(), AddRequest{
-				Target: args[0], Alias: selected, IdentityFile: identityFile,
+				Target: args[0], Alias: selected, IdentityFile: identityFile, AllowRoot: allowRoot,
 				TailscaleAuthKeyFile: tailscaleAuthKeyFile,
 				Yes:                  yes,
 			})
@@ -1048,6 +1052,7 @@ func (a *application) addCommand() *cobra.Command {
 			return err
 		},
 	}
+	command.Flags().BoolVar(&allowRoot, "allow-root", false, "acknowledge that approving this device grants root access")
 	command.Flags().StringVar(&alias, "alias", "", "local name for the host")
 	command.Flags().StringVar(&tailscaleAuthKeyFile, "tailscale-auth-key-file", "", "read a Tailscale auth key from this local file")
 	command.Flags().BoolVar(&yes, "yes", false, "approve remote Tailscale installation and user lingering changes")
@@ -1740,6 +1745,7 @@ func (a *application) daemonCommand() *cobra.Command {
 			defer stopUpdateNotices()
 			return meshdaemon.Run(cmd.Context(), meshdaemon.Config{
 				SSHSessionHandler:      a.dependencies.SSHSessionHandler,
+				WakePeerIdentity:       configuredWakeIdentity,
 				SubscriberLimit:        subscriberLimit,
 				UnixConnectionLimit:    unixConnectionLimit,
 				TailnetConnectionLimit: tailnetConnectionLimit,

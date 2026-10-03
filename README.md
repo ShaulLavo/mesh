@@ -35,6 +35,39 @@ mesh add user@host  # put mesh on another machine
 
 `ctrl+]` detaches. the command keeps running
 
+## device access
+
+Network controls use mutual TLS 1.3 with each device's existing Mesh identity.
+`mesh add user@host` obtains the destination key through authenticated system SSH
+and approves this device for that destination's daemon account. Discovery supplies
+addresses; an existing pin is required for adoption when system SSH is unavailable.
+
+An approved device can run commands, inspect sessions and manage services as the
+OS account running the destination daemon. Root approval requires
+`mesh add root@host --allow-root` or an explicit destination-local approval:
+
+```bash
+mesh device identity --json
+mesh device approve -- DEVICE_PUBLIC_ID
+mesh device approve --allow-root -- DEVICE_PUBLIC_ID  # destination runs as root
+mesh device revoke -- DEVICE_PUBLIC_ID
+```
+
+Run approval and revocation on the destination through trusted system SSH or its
+local terminal. Compare the identity and SHA256 fingerprint through that trusted
+channel before approval. Grant mutation and frame admission share a lock: frames
+admitted after revocation are denied immediately; previously admitted work may
+finish. Connections bind the approved key line's incarnation; revoking and
+immediately reapproving that key retires old attachments and permits new ones.
+Idle SSH and control connections close when the next 250 ms grant check observes
+revocation. Commands and their detached workers remain available to other approved
+devices. Existing update-administrator grants are managed separately.
+An unknown or changed destination key requires explicit re-enrollment through
+system SSH; a discovery result never replaces the saved key.
+
+A daemon upgrade preserves retained workers. [Independent local upgrade and device enrollment](docs/updates.md#cross-the-control-authentication-cutover) explain
+how to move an existing fleet to authenticated controls.
+
 ## what's in it
 
 - **sessions.** each one is a process on its host with its screen kept in memory. attach from anywhere and it redraws where you left it. the picker lists every host and session with a live view of each screen

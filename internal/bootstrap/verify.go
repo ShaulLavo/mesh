@@ -22,7 +22,7 @@ type verificationResult struct {
 	err       error
 }
 
-func verifyWebSocket(ctx context.Context, addresses []string, port uint16, webSocketPath string) (verifiedHost, string, error) {
+func verifyWebSocket(ctx context.Context, addresses []string, port uint16, webSocketPath string, auth *transport.Authentication) (verifiedHost, string, error) {
 	if len(addresses) == 0 {
 		return verifiedHost{}, "", diagnostic(DiagnosticPortBlocked, errors.New("no Tailscale address to verify"))
 	}
@@ -32,7 +32,7 @@ func verifyWebSocket(ctx context.Context, addresses []string, port uint16, webSo
 	for _, address := range addresses {
 		endpoint := meshEndpoint(address, port, webSocketPath)
 		go func() {
-			host, connected, err := verifyUntilReady(verifyCtx, endpoint)
+			host, connected, err := verifyUntilReady(verifyCtx, endpoint, auth)
 			results <- verificationResult{host: host, endpoint: endpoint, connected: connected, err: err}
 		}()
 	}
@@ -60,11 +60,11 @@ func verifyWebSocket(ctx context.Context, addresses []string, port uint16, webSo
 	return verifiedHost{}, "", diagnostic(DiagnosticPortBlocked, errors.Join(dialErrors...))
 }
 
-func verifyUntilReady(ctx context.Context, endpoint string) (verifiedHost, bool, error) {
+func verifyUntilReady(ctx context.Context, endpoint string, auth *transport.Authentication) (verifiedHost, bool, error) {
 	delay := 100 * time.Millisecond
 	var lastErr error
 	for {
-		host, connected, err := verifyOne(ctx, endpoint)
+		host, connected, err := verifyOne(ctx, endpoint, auth)
 		if err == nil || connected {
 			return host, connected, err
 		}
@@ -90,8 +90,8 @@ func verifyUntilReady(ctx context.Context, endpoint string) (verifiedHost, bool,
 	}
 }
 
-func verifyOne(ctx context.Context, endpoint string) (verifiedHost, bool, error) {
-	conn, err := transport.Dial(ctx, endpoint, transport.DialOptions{})
+func verifyOne(ctx context.Context, endpoint string, auth *transport.Authentication) (verifiedHost, bool, error) {
+	conn, err := transport.Dial(ctx, endpoint, transport.DialOptions{Auth: auth})
 	if err != nil {
 		return verifiedHost{}, false, err
 	}

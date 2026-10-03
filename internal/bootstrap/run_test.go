@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/tailnet"
+	"github.com/shaul/mesh/internal/transport"
 )
 
 func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
@@ -60,7 +61,7 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 			}
 			return provisionResult{Tailnet: request.Observation.Tailnet}, nil
 		},
-		verify: func(_ context.Context, addresses []string, port uint16, websocketPath string) (verifiedHost, string, error) {
+		verify: func(_ context.Context, addresses []string, port uint16, websocketPath string, _ *transport.Authentication) (verifiedHost, string, error) {
 			if !reflect.DeepEqual(addresses, []string{"100.64.0.8", "fd7a:115c:a1e0::8"}) || port != DefaultPort || websocketPath != DefaultWebSocketPath {
 				t.Fatalf("verify args = %v, %d, %s", addresses, port, websocketPath)
 			}
@@ -127,7 +128,7 @@ func TestRunRefusesChangedPinnedIdentity(t *testing.T) {
 		provision: func(_ context.Context, _ remoteHost, request provisionRequest) (provisionResult, error) {
 			return provisionResult{Tailnet: request.Observation.Tailnet}, nil
 		},
-		verify: func(context.Context, []string, uint16, string) (verifiedHost, string, error) {
+		verify: func(context.Context, []string, uint16, string, *transport.Authentication) (verifiedHost, string, error) {
 			return verifiedHost{ID: hostID, MeshIdentity: hostID, TailscaleName: "pc.tail.example"}, "ws://100.64.0.1:7337/mesh", nil
 		},
 		now: time.Now,
@@ -176,7 +177,7 @@ func TestRunProvisionFailurePrecedesBinaryTransferAndMeshInstall(t *testing.T) {
 			t.Fatal("clock check ran after failed provisioning")
 			return nil
 		},
-		verify: func(context.Context, []string, uint16, string) (verifiedHost, string, error) {
+		verify: func(context.Context, []string, uint16, string, *transport.Authentication) (verifiedHost, string, error) {
 			t.Fatal("verification ran after failed provisioning")
 			return verifiedHost{}, "", nil
 		},
@@ -213,7 +214,7 @@ func TestRunRedactsAuthKeyFromAnyReturnedDiagnostic(t *testing.T) {
 			return provisionResult{}, diagnostic(DiagnosticTailscaleLoggedOut, errors.New("remote echoed "+secret))
 		},
 		checkClock: func(context.Context, remoteHost, time.Time) error { return nil },
-		verify: func(context.Context, []string, uint16, string) (verifiedHost, string, error) {
+		verify: func(context.Context, []string, uint16, string, *transport.Authentication) (verifiedHost, string, error) {
 			return verifiedHost{}, "", nil
 		},
 		authorizedKey: func(string) (string, error) { return "", nil },
@@ -266,7 +267,7 @@ func TestRunDiscardsResultContainingAuthKey(t *testing.T) {
 		},
 		checkClock:    func(context.Context, remoteHost, time.Time) error { return nil },
 		authorizedKey: func(string) (string, error) { return "ssh-ed25519 adopter", nil },
-		verify: func(context.Context, []string, uint16, string) (verifiedHost, string, error) {
+		verify: func(context.Context, []string, uint16, string, *transport.Authentication) (verifiedHost, string, error) {
 			return verifiedHost{ID: hostID, MeshIdentity: hostID, TailscaleName: "pi.tail.example"}, "ws://" + secret + ":7337/mesh", nil
 		},
 		now: time.Now,
@@ -309,7 +310,7 @@ func TestRunRejectsAuthKeyInTailnetStatusBeforeMeshWrite(t *testing.T) {
 		},
 		checkClock:    func(context.Context, remoteHost, time.Time) error { return nil },
 		authorizedKey: func(string) (string, error) { return "ssh-ed25519 adopter", nil },
-		verify: func(context.Context, []string, uint16, string) (verifiedHost, string, error) {
+		verify: func(context.Context, []string, uint16, string, *transport.Authentication) (verifiedHost, string, error) {
 			return verifiedHost{}, "", nil
 		},
 		now: time.Now,
@@ -375,7 +376,7 @@ func TestRunChecksThisMachineBeforeTouchingTheRemote(t *testing.T) {
 			return provisionResult{}, nil
 		},
 		checkClock: func(context.Context, remoteHost, time.Time) error { return nil },
-		verify: func(context.Context, []string, uint16, string) (verifiedHost, string, error) {
+		verify: func(context.Context, []string, uint16, string, *transport.Authentication) (verifiedHost, string, error) {
 			return verifiedHost{}, "", nil
 		},
 		authorizedKey: func(string) (string, error) { return "ssh-ed25519 AAAA", nil },
@@ -387,7 +388,7 @@ func TestRunChecksThisMachineBeforeTouchingTheRemote(t *testing.T) {
 	}
 }
 
-func TestRunAdoptsAHostAlreadyServingMeshWhenSSHFails(t *testing.T) {
+func TestRunAdoptsAPinnedHostAlreadyServingMeshWhenSSHFails(t *testing.T) {
 	t.Parallel()
 
 	hostID := base64.RawURLEncoding.EncodeToString(make([]byte, ed25519.PublicKeySize))
@@ -415,7 +416,7 @@ func TestRunAdoptsAHostAlreadyServingMeshWhenSSHFails(t *testing.T) {
 			return provisionResult{}, nil
 		},
 		checkClock: func(context.Context, remoteHost, time.Time) error { return nil },
-		verify: func(_ context.Context, addresses []string, _ uint16, _ string) (verifiedHost, string, error) {
+		verify: func(_ context.Context, addresses []string, _ uint16, _ string, _ *transport.Authentication) (verifiedHost, string, error) {
 			if !reflect.DeepEqual(addresses, []string{"100.64.0.9"}) {
 				t.Fatalf("verify addresses = %v", addresses)
 			}
@@ -424,7 +425,7 @@ func TestRunAdoptsAHostAlreadyServingMeshWhenSSHFails(t *testing.T) {
 		authorizedKey: func(string) (string, error) { return "ssh-ed25519 adopter", nil },
 		now:           time.Now,
 	}
-	result, err := run(context.Background(), Options{Target: "shaul@mac", StateDir: t.TempDir()}, deps)
+	result, err := run(context.Background(), Options{Target: "shaul@mac", StateDir: t.TempDir(), ExpectedIdentity: hostID}, deps)
 	if err != nil {
 		t.Fatalf("run() error = %v", err)
 	}

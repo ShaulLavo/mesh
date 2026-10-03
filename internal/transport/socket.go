@@ -28,9 +28,11 @@ type inboundFrame struct {
 }
 
 type socketConn struct {
-	ws     *websocket.Conn
-	ctx    context.Context
-	cancel context.CancelFunc
+	ws      *websocket.Conn
+	stream  io.ReadWriteCloser
+	writeMu sync.Mutex
+	ctx     context.Context
+	cancel  context.CancelFunc
 	// The close handshake still needs the reader, so writes have their own
 	// cancellation path.
 	writeCtx    context.Context
@@ -46,10 +48,15 @@ type socketConn struct {
 }
 
 func newSocketConn(ws *websocket.Conn, keepAlive KeepAlive) *socketConn {
+	return newSecureSocketConn(ws, nil, keepAlive)
+}
+
+func newSecureSocketConn(ws *websocket.Conn, stream io.ReadWriteCloser, keepAlive KeepAlive) *socketConn {
 	ctx, cancel := context.WithCancel(context.Background())
 	writeCtx, cancelWrite := context.WithCancel(ctx)
 	c := &socketConn{
 		ws:          ws,
+		stream:      stream,
 		ctx:         ctx,
 		cancel:      cancel,
 		writeCtx:    writeCtx,
@@ -81,7 +88,15 @@ func (c *socketConn) WriteFrame(frame protocol.Frame) error {
 	if err != nil {
 		return err
 	}
-	if err := c.ws.Write(c.writeCtx, websocket.MessageBinary, payload); err != nil {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	var writeErr error
+	if c.stream != nil {
+		_, writeErr = c.stream.Write(payload)
+	} else {
+		writeErr = c.ws.Write(c.writeCtx, websocket.MessageBinary, payload)
+	}
+	if err := writeErr; err != nil {
 		wrapped := fmt.Errorf("transport: write WebSocket frame: %w", err)
 		c.fail(wrapped)
 		return wrapped
@@ -114,48 +129,75 @@ func closeCompleted(err error) bool {
 	return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed)
 }
 
+type frameByteReader struct {
+	io.Reader
+	bytes int
+}
+
+func (r *frameByteReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.bytes += n
+	return n, err //nolint:wrapcheck // protocol.Reader needs the underlying EOF and stream errors
+}
+
 func (c *socketConn) readLoop() {
 	defer close(c.done)
 	defer close(c.frames)
 
+	var reader *protocol.Reader
+	var counted *frameByteReader
+	if c.stream != nil {
+		counted = &frameByteReader{Reader: c.stream}
+		reader = protocol.NewReader(counted)
+	}
 	for {
-		messageType, payload, err := c.ws.Read(c.ctx)
-		if err != nil {
-			c.fail(fmt.Errorf("transport: read WebSocket frame: %w", err))
-			return
-		}
-		if messageType != websocket.MessageBinary {
-			c.fail(fmt.Errorf("%w: expected binary WebSocket message, got %s", ErrInvalidFrame, messageType))
-			return
-		}
-		frame, err := decodeFrame(payload)
+		frame, payloadBytes, err := c.readFrame(reader, counted)
 		if err != nil {
 			c.fail(err)
 			return
 		}
-
 		select {
 		case <-c.ctx.Done():
 			return
 		default:
 		}
 		c.queueMu.Lock()
-		if len(payload) > inboundQueueByteLimit-c.queueBytes {
+		if payloadBytes > inboundQueueByteLimit-c.queueBytes {
 			c.queueMu.Unlock()
 			c.fail(ErrInboundQueueFull)
 			return
 		}
-		c.queueBytes += len(payload)
+		c.queueBytes += payloadBytes
 		select {
-		case c.frames <- inboundFrame{frame: frame, bytes: len(payload)}:
+		case c.frames <- inboundFrame{frame: frame, bytes: payloadBytes}:
 			c.queueMu.Unlock()
 		default:
-			c.queueBytes -= len(payload)
+			c.queueBytes -= payloadBytes
 			c.queueMu.Unlock()
 			c.fail(ErrInboundQueueFull)
 			return
 		}
 	}
+}
+
+func (c *socketConn) readFrame(reader *protocol.Reader, counted *frameByteReader) (protocol.Frame, int, error) {
+	if reader != nil {
+		counted.bytes = 0
+		frame, err := reader.ReadFrame()
+		if err != nil {
+			return frame, counted.bytes, fmt.Errorf("transport: read encrypted Mesh frame: %w", err)
+		}
+		return frame, counted.bytes, nil
+	}
+	messageType, payload, err := c.ws.Read(c.ctx)
+	if err != nil {
+		return protocol.Frame{}, 0, fmt.Errorf("transport: read WebSocket frame: %w", err)
+	}
+	if messageType != websocket.MessageBinary {
+		return protocol.Frame{}, 0, fmt.Errorf("%w: expected binary WebSocket message, got %s", ErrInvalidFrame, messageType)
+	}
+	frame, err := decodeFrame(payload)
+	return frame, len(payload), err
 }
 
 func (c *socketConn) keepAliveLoop(opts KeepAlive) {
@@ -283,16 +325,16 @@ func ServeWithOptions(w http.ResponseWriter, r *http.Request, opts ServeOptions,
 		http.Error(w, "browser origins cannot open a Mesh control connection", http.StatusForbidden)
 		return fmt.Errorf("transport: refused WebSocket from browser origin %q", r.Header.Get("Origin"))
 	}
-	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		CompressionMode: websocket.CompressionDisabled,
-		OriginPatterns:  append([]string(nil), opts.OriginPatterns...),
-	})
+	conn, peer, err := acceptSocket(w, r, opts, keepAlive)
 	if err != nil {
-		return fmt.Errorf("transport: accept WebSocket: %w", err)
+		return err
 	}
-	conn := newSocketConn(ws, keepAlive)
 	batched := &BatchingConn{dst: conn, opts: batchOpts}
-	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
+	handlerContext := context.WithoutCancel(r.Context())
+	if opts.Auth != nil {
+		handlerContext = context.WithValue(handlerContext, peerKey{}, peer)
+	}
+	ctx, cancel := context.WithCancel(handlerContext)
 	defer cancel()
 	go func() {
 		select {
@@ -302,7 +344,12 @@ func ServeWithOptions(w http.ResponseWriter, r *http.Request, opts ServeOptions,
 		}
 	}()
 
-	handlerErr := h(ctx, batched)
+	var handlerConn Conn = batched
+	if opts.Auth != nil {
+		handlerConn = &authorizedConn{Conn: batched, grant: peer.grant}
+		go conn.watchAuthorization(peer.grant.Current)
+	}
+	handlerErr := h(ctx, handlerConn)
 	flushErr := batched.Flush()
 	closeErr := batched.Close()
 	if handlerErr != nil {
@@ -312,4 +359,34 @@ func ServeWithOptions(w http.ResponseWriter, r *http.Request, opts ServeOptions,
 		return flushErr
 	}
 	return closeErr
+}
+
+func acceptSocket(w http.ResponseWriter, r *http.Request, opts ServeOptions, keepAlive KeepAlive) (*socketConn, AuthenticatedPeer, error) {
+	var subprotocols []string
+	if opts.Auth != nil {
+		if err := opts.Auth.validate(true); err != nil {
+			return nil, AuthenticatedPeer{}, err
+		}
+		if !containsAuthProtocol(r) {
+			http.Error(w, "Mesh control authentication required", http.StatusUpgradeRequired)
+			return nil, AuthenticatedPeer{}, ErrAuthenticationRequired
+		}
+		subprotocols = []string{AuthProtocol}
+	}
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		Subprotocols:    subprotocols,
+		CompressionMode: websocket.CompressionDisabled,
+		OriginPatterns:  append([]string(nil), opts.OriginPatterns...),
+	})
+	if err != nil {
+		return nil, AuthenticatedPeer{}, fmt.Errorf("transport: accept WebSocket: %w", err)
+	}
+	if opts.Auth == nil {
+		return newSocketConn(ws, keepAlive), AuthenticatedPeer{}, nil //nolint:contextcheck // sockets own their lifetime after the HTTP upgrade
+	}
+	secure, peer, err := authenticate(r.Context(), ws, opts.Auth, true)
+	if err != nil {
+		return nil, AuthenticatedPeer{}, err
+	}
+	return newSecureSocketConn(ws, secure, keepAlive), peer, nil //nolint:contextcheck // sockets own their lifetime after the HTTP upgrade
 }

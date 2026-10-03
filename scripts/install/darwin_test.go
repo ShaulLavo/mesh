@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shaul/mesh/internal/identity"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestDarwinInstallerLaunchdActivation(t *testing.T) {
@@ -18,6 +21,7 @@ func TestDarwinInstallerLaunchdActivation(t *testing.T) {
 			t.Skipf("Darwin shell installer fixture requires %s: %v", tool, err)
 		}
 	}
+	newBinary, adopterID, authorizedKey := darwinFixtureBinary(t)
 	tests := []struct {
 		name, mode, problem                           string
 		removal, otherRemoval, failures               int
@@ -64,22 +68,18 @@ func TestDarwinInstallerLaunchdActivation(t *testing.T) {
 			writeDarwinFixture(t, filepath.Join(home, "failures"), strconv.Itoa(tt.failures), 0600)
 			binary := "old binary\n"
 			if tt.installed && !tt.binaryChanged {
-				binary = "new binary\n"
+				binary = newBinary
 			}
 			writeDarwinFixture(t, filepath.Join(home, ".local", "bin", "mesh"), binary, 0755)
 			source := filepath.Join(home, "candidate")
-			writeDarwinFixture(t, source, "new binary\n", 0755)
+			writeDarwinFixture(t, source, newBinary, 0755)
 			service, err := RenderService("darwin", ServiceOptions{DaemonPort: 7337, SSHPort: 2222, WebSocketPath: "/mesh"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if tt.installed {
 				writeDarwinFixture(t, filepath.Join(home, "Library", "LaunchAgents", "dev.shaulavo.mesh.plist"), service, 0644)
-				key := "ssh-ed25519 fixture\n"
-				if tt.keyChanged {
-					key = "ssh-ed25519 previous\n"
-				}
-				writeDarwinFixture(t, filepath.Join(home, ".local", "state", "mesh", "authorized_keys"), key, 0600)
+				approveDarwinFixture(t, filepath.Join(home, ".local", "state", "mesh"), adopterID, tt.keyChanged)
 			}
 			marker := filepath.Join(home, ".local", "state", "mesh", "activation.pending")
 			if tt.pending {
@@ -87,7 +87,7 @@ func TestDarwinInstallerLaunchdActivation(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, "sh", "-s", "--", source, "7337", "2222", "/mesh", base64.StdEncoding.EncodeToString([]byte("ssh-ed25519 fixture")), base64.StdEncoding.EncodeToString([]byte(service))) //nolint:gosec // embedded installer, fixture-only arguments, and an external launchctl stub
+			cmd := exec.CommandContext(ctx, "sh", "-s", "--", source, "7337", "2222", "/mesh", base64.StdEncoding.EncodeToString([]byte(authorizedKey)), base64.StdEncoding.EncodeToString([]byte(service))) //nolint:gosec // embedded installer, fixture-only arguments, and an external launchctl stub
 			cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "LAUNCHCTL_FIXTURE="+home, "LAUNCHCTL_MODE="+tt.mode)
 			cmd.Stdin = strings.NewReader(darwin)
 			output, runErr := cmd.CombinedOutput()
@@ -127,7 +127,7 @@ func TestDarwinInstallerLaunchdActivation(t *testing.T) {
 				return
 			}
 			installed, err := os.ReadFile(filepath.Join(home, ".local", "bin", "mesh")) //nolint:gosec // fixture installation beneath t.TempDir
-			if err != nil || string(installed) != "new binary\n" {
+			if err != nil || string(installed) != newBinary {
 				t.Fatalf("installed binary = %q, error %v", installed, err)
 			}
 			if _, err := os.Stat(filepath.Join(home, "loaded")); err != nil {
@@ -149,6 +149,20 @@ func TestDarwinInstallerLaunchdActivation(t *testing.T) {
 				t.Fatalf("installer did not report %q:\n%s", wantResult, output)
 			}
 		})
+	}
+}
+
+func approveDarwinFixture(t *testing.T, state, id string, keyChanged bool) {
+	t.Helper()
+	if keyChanged {
+		other, _, err := identity.LoadOrCreate(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		id = other.ID
+	}
+	if err := identity.ApproveDevice(state, id); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -214,3 +228,33 @@ kickstart)
 *) exit 1 ;;
 esac
 `
+
+func darwinFixtureBinary(t *testing.T) (string, string, string) {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skipf("native installer fixture needs Go: %v", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(t.TempDir(), "mesh")
+	build := exec.CommandContext(t.Context(), "go", "build", "-o", candidate, "./cmd/mesh") //nolint:gosec // fresh binary built from this checkout into a fixture-owned path
+	build.Dir = filepath.Clean(filepath.Join(cwd, "../.."))
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build native fixture: %v %s", err, output)
+	}
+	contents, err := os.ReadFile(candidate) //nolint:gosec // fixture-owned native binary
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor, key, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := ssh.NewPublicKey(key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(contents), actor.ID, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(public)))
+}

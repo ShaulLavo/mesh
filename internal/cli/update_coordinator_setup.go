@@ -35,7 +35,7 @@ func (a *application) startFirstCoordinatorSetup(ctx context.Context, environmen
 	if err != nil {
 		return err
 	}
-	build := release.Current()
+	build := a.currentUpdateBuild()
 	run, err = store.Change(run.ID, func(current *update.Run) error {
 		current.CoordinatorSetup = true
 		current.SetupExecutable, current.SetupBuild = executable, &build
@@ -51,7 +51,7 @@ func (a *application) startFirstCoordinatorSetup(ctx context.Context, environmen
 	}
 	if err = setup(ctx, environment.stateDir); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			if printErr := printUpdateRun(output.out, run, options.json, output.privacy); printErr != nil {
+			if printErr := printUpdateRunMode(output.out, run, options.json, options.details, output.privacy); printErr != nil {
 				return printErr
 			}
 			return statusError{code: 2}

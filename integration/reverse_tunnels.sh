@@ -234,7 +234,10 @@ expect_forward_refused "$client_state/identity.key" "blog.shaulavo.dev:80:localh
 if cli serve claim vps revoked.shaulavo.dev --yes >"$test_root/command.log" 2>&1; then
   fail 'revoked owner created a reservation'
 fi
-cli unserve blog.shaulavo.dev --host vps >"$test_root/command.log" 2>&1 || fail 'revoked owner could not release its inactive claim'
+if cli unserve blog.shaulavo.dev --host vps >"$test_root/command.log" 2>&1; then
+  fail 'revoked device withdrew an edge reservation'
+fi
+env MESH_STATE_DIR="$edge_state" "$mesh" unserve blog.shaulavo.dev --local-edge >"$test_root/command.log" 2>&1 || fail 'destination-local recovery could not release revoked claim'
 expect_404
 
 cat "$client_state/identity.key.pub" "$other_state/identity.key.pub" >"$edge_state/authorized_keys"
@@ -247,4 +250,4 @@ cat "$other_state/identity.key.pub" >"$edge_state/authorized_keys"
 chmod 0600 "$edge_state/authorized_keys"
 env MESH_STATE_DIR="$other_state" MESH_CONFIG_DIR="$config_dir" "$mesh" serve claim vps recovery.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'local recovery did not release hostname ownership'
 
-echo 'PASS: stock CLI and OpenSSH reserved, activated, refused invalid forwards, disconnected, restarted, released after revocation, and recovered through the Unix socket'
+echo 'PASS: stock CLI and OpenSSH reserved, activated, refused invalid forwards, disconnected, restarted, denied revoked controls, and recovered through the Unix socket'
