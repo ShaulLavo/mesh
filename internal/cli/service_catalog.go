@@ -61,7 +61,7 @@ func (r ServiceCatalogRow) Health() string {
 	if !r.Live {
 		return "offline/stale"
 	}
-	if r.HealthUnsupported {
+	if r.HealthUnsupported || r.Service.HealthUnknown {
 		return serviceHealthUnknown
 	}
 	if state, ok := r.demandHealth(); ok {
@@ -272,7 +272,7 @@ func cachedServiceCatalogRows(host HostRecord, cached []storage.CachedService) [
 func liveServiceCatalogRows(host HostRecord, snapshot remoteServiceSnapshot) []ServiceCatalogRow {
 	rows := make([]ServiceCatalogRow, len(snapshot.Services))
 	for index, service := range snapshot.Services {
-		rows[index] = ServiceCatalogRow{Host: host, PrivateName: snapshot.PrivateName, Service: service, Live: true}
+		rows[index] = ServiceCatalogRow{Host: host, PrivateName: snapshot.PrivateName, Service: service, Live: true, HealthUnsupported: !snapshot.ServiceHealthSupported}
 	}
 	return rows
 }

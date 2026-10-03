@@ -41,15 +41,19 @@ func (m *model) handleServiceKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 		return false, nil
 	}
 	if m.pendingService != nil {
-		m.notice = "Service action in progress"
+		m.serviceFeedback[selected.target] = "Service action in progress"
+		m.refreshMainDelegate()
 		return true, nil
 	}
 	if m.serviceAct == nil {
-		m.notice = "Service actions unavailable"
+		m.serviceFeedback[selected.target] = "Service actions unavailable"
+		m.refreshMainDelegate()
 		return true, nil
 	}
 	request := cli.PickerServiceActionRequest{HostID: selected.target.hostID, ServiceName: selected.target.route, Action: action}
 	m.pendingService = &request
+	m.serviceInvalid = false
+	delete(m.serviceFeedback, selected.target)
 	m.notice = ""
 	m.refreshMainDelegate()
 	act, ctx := m.serviceAct, m.ctx
@@ -65,6 +69,11 @@ func (m model) applyServiceAction(message serviceActionResultMsg) model {
 		return m
 	}
 	m.pendingService = nil
+	if m.serviceInvalid {
+		m.serviceInvalid = false
+		m.refreshMainDelegate()
+		return m
+	}
 	target := serviceTarget{message.request.HostID, message.request.ServiceName}
 	feedback := m.serviceFeedback[target]
 	website := m.serviceWebsite(target)
@@ -73,7 +82,7 @@ func (m model) applyServiceAction(message serviceActionResultMsg) model {
 		if website != nil {
 			m.serviceFeedback[target] = feedback
 		}
-		m.notice = feedback
+		m.notice = ""
 		m.refreshMainDelegate()
 		return m
 	}
@@ -97,7 +106,9 @@ func (m model) applyServiceAction(message serviceActionResultMsg) model {
 	case cli.PickerOpenService:
 		feedback = "Opened"
 	}
-	m.serviceFeedback[target] = feedback
+	if m.screen == hostScreen && mainItemKey(m.list.SelectedItem()) == target {
+		m.serviceFeedback[target] = feedback
+	}
 	if m.screen == hostScreen {
 		_ = m.resetMainItems(mainItemKey(m.list.SelectedItem()), m.list.Index())
 	}

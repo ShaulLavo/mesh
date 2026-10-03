@@ -239,7 +239,7 @@ func (m *model) resizeList() {
 		if _, ok := m.list.SelectedItem().(serviceItem); ok {
 			footerRows = strings.Count(m.serviceFooter(), "\n") + 1
 		}
-		m.list.SetSize(m.width, max(1, m.height-frameRows-len(m.updateNoticeLines())-footerRows+1))
+		m.list.SetSize(m.width, max(1, m.height-frameRows-len(m.updateNoticeLines())-footerRows+1-m.mainExtraRows()))
 		return
 	}
 	listRows, _, _ := m.sessionLayout(max(0, m.height-4-len(m.updateNoticeLines())))

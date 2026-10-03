@@ -7,6 +7,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/shaul/mesh/internal/cli"
@@ -45,7 +46,11 @@ func mainItemKey(item list.Item) serviceTarget {
 }
 
 func (m *model) refreshMainDelegate() {
-	m.list.SetDelegate(hostDelegate{styles: m.styles, privacy: m.privacy, services: len(m.list.Items()) > len(m.hosts), feedback: m.serviceFeedback, pending: m.pendingService})
+	pending := m.pendingService
+	if m.serviceInvalid {
+		pending = nil
+	}
+	m.list.SetDelegate(hostDelegate{styles: m.styles, privacy: m.privacy, feedback: m.serviceFeedback, pending: pending})
 }
 
 func (m *model) resetMainItems(selected serviceTarget, previous int) tea.Cmd {
@@ -73,15 +78,7 @@ func (m model) applyServices(update cli.PickerServicesUpdate) (model, tea.Cmd) {
 
 		previous := m.hosts[index].served
 		websites := servedWebsites(update.Catalog.Rows, update.Catalog.Stale)
-		states := make(map[string]string, len(websites))
-		for _, website := range websites {
-			states[website.route] = website.state
-		}
-		for _, website := range previous {
-			if state, exists := states[website.route]; !exists || state != website.state {
-				delete(m.serviceFeedback, serviceTarget{update.Host.ID, website.route})
-			}
-		}
+		m.updateServiceTargets(update.Host.ID, previous, websites)
 		m.hosts[index].served, m.hosts[index].servedKnown, m.hosts[index].servedStale = websites, true, update.Catalog.Stale
 
 	}
@@ -94,6 +91,64 @@ func (m model) applyServices(update cli.PickerServicesUpdate) (model, tea.Cmd) {
 		return m, nil
 	}
 	return m, m.resetMainItems(selected, previous)
+}
+
+func (m *model) updateServiceTargets(hostID string, previous, websites []servedWebsite) {
+	states := make(map[string]string, len(websites))
+	for _, website := range websites {
+		states[website.route] = website.state
+	}
+	for _, website := range previous {
+		target := serviceTarget{hostID, website.route}
+		state, exists := states[website.route]
+		if !exists || state != website.state {
+			delete(m.serviceFeedback, target)
+		}
+		if !exists && m.pendingService != nil && m.pendingService.HostID == target.hostID && m.pendingService.ServiceName == target.route {
+			m.serviceInvalid = true
+		}
+	}
+}
+
+func (m model) mainExtraRows() int {
+	if m.screen != hostScreen || len(m.list.Items()) <= len(m.hosts) {
+		return 0
+	}
+	if _, selected := m.list.SelectedItem().(serviceItem); selected {
+		return 2
+	}
+	return 1
+}
+
+func (m model) mainListView() string {
+	return lipgloss.NewStyle().Height(m.list.Height() + m.mainExtraRows()).Render(m.list.View())
+}
+
+func (delegate hostDelegate) serviceName(item serviceItem) string {
+	name := item.website.name
+	if name == "" {
+		name = "/" + item.website.route
+	}
+	return safeText(delegate.privacy.Value("service", name))
+}
+
+func (delegate hostDelegate) serviceColumns(browser list.Model) (int, int) {
+	nameWidth, hostWidth, stateWidth := 1, 1, 1
+	for _, entry := range browser.Items() {
+		item, ok := entry.(serviceItem)
+		if !ok {
+			continue
+		}
+		nameWidth = max(nameWidth, ansi.StringWidth(delegate.serviceName(item)))
+		hostWidth = max(hostWidth, ansi.StringWidth(safeText(delegate.privacy.Value("host", item.hostAlias))))
+		stateWidth = max(stateWidth, ansi.StringWidth(item.website.state))
+		if item.website.stale {
+			stateWidth = max(stateWidth, ansi.StringWidth(item.website.state)+len(" cached"))
+		}
+	}
+	hostWidth = min(12, hostWidth)
+	nameWidth = min(24, nameWidth, max(1, browser.Width()-hostWidth-stateWidth-8))
+	return nameWidth, hostWidth
 }
 
 func (delegate hostDelegate) renderService(output io.Writer, browser list.Model, index int, item serviceItem) {
@@ -109,32 +164,45 @@ func (delegate hostDelegate) renderService(output io.Writer, browser list.Model,
 			state = "unhealthy"
 		}
 	}
-	feedback := delegate.feedback[item.target]
 	status := cli.DashboardService{State: state, Failed: state == "unhealthy", HealthUnknown: state == usageUnknown}
 	dashboard := dashboardModel{palette: dashboardTheme("current"), profile: colorprofile.TrueColor}
-	stateText := dashboard.paint(dashboardServiceRole(status)).Render("● " + safeText(state))
+	role := dashboardServiceRole(status)
 	if item.website.stale {
-		stateText = dashboard.paint(dashboardCachedStyle).Render("● " + state + " cached")
+		role = dashboardCachedStyle
+		state += " cached"
 	}
-	name := item.website.name
-	if name == "" {
-		name = "/" + item.website.route
-	}
-	name = safeText(delegate.privacy.Value("service", name))
+	paint := dashboard.paint(role)
+	nameWidth, hostWidth := delegate.serviceColumns(browser)
 	host := safeText(delegate.privacy.Value("host", item.hostAlias))
-	row := cursor + cell(delegate.styles.item(selected).Render(name), max(8, browser.Width()-32)) + " " + cell(delegate.styles.muted.Render(host), 10) + " " + stateText
+	row := cursor + paint.Render("●") + " " + cell(delegate.styles.item(selected).Render(delegate.serviceName(item)), nameWidth) + "  " + cell(delegate.styles.muted.Render(host), hostWidth) + "  " + paint.Render(safeText(state))
+	start, _ := browser.Paginator.GetSliceBounds(len(browser.Items()))
+	previousService := false
+	if index > 0 {
+		_, previousService = browser.Items()[index-1].(serviceItem)
+	}
+	if index == start || !previousService {
+		_, _ = fmt.Fprintln(output, delegate.styles.muted.Render("  Services"))
+	}
+	_, _ = fmt.Fprint(output, truncate(row, browser.Width()))
+	if !selected {
+		return
+	}
+	_, _ = fmt.Fprint(output, "\n"+delegate.styles.muted.Render(truncate("    "+delegate.serviceDetail(item), browser.Width())))
+}
+
+func (delegate hostDelegate) serviceDetail(item serviceItem) string {
 	address := item.website.url
 	if item.website.row.Service.LocalOnly && item.hostAlias != "this host" {
 		address = ":" + item.website.route + " on host"
 	}
 	detail := safeText(delegate.privacy.Value("url", address))
-	if feedback != "" {
+	if feedback := delegate.feedback[item.target]; feedback != "" {
 		detail = safeText(delegate.privacy.Value("notice", feedback)) + " · " + detail
 	}
 	if pending := delegate.pending; pending != nil && pending.HostID == item.target.hostID && pending.ServiceName == item.target.route {
 		detail = serviceActionLabel(pending.Action) + "…  " + detail
 	}
-	_, _ = fmt.Fprint(output, truncate(row, browser.Width())+"\n"+truncate("    "+detail, browser.Width()))
+	return detail
 }
 
 func (m model) serviceFooter() string {

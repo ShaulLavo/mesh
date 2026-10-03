@@ -129,7 +129,7 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 	case protocol.TypeHostInfo:
 		response.Type = protocol.TypeHostInfoResult
 		response.Host = &protocol.HostInfo{
-			ID: c.host.host.ID, MeshIdentity: c.host.host.MeshIdentity, TailscaleName: c.host.host.TailscaleName,
+			ServiceHealthSupported: true, ID: c.host.host.ID, MeshIdentity: c.host.host.MeshIdentity, TailscaleName: c.host.host.TailscaleName,
 			PrivateName: "pc.mesh.shaulavo.dev", RecoverySupported: c.host.recoverTo != "",
 		}
 	case protocol.TypeStateWatch:

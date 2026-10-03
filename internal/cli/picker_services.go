@@ -69,10 +69,9 @@ func (m *pickerServiceMonitor) watchHost(ctx context.Context, host HostRecord, u
 			send()
 			return
 		}
-		current.Catalog.Rows = liveServiceCatalogRows(host, remoteServiceSnapshot{PrivateName: state.PrivateName, Services: state.Services})
+		current.Catalog.Rows = liveServiceCatalogRows(host, remoteServiceSnapshot{PrivateName: state.PrivateName, Services: state.Services, ServiceHealthSupported: state.ServiceHealthSupported})
 		for index := range current.Catalog.Rows {
 			current.Catalog.Rows[index].Stale = current.Catalog.Stale
-			current.Catalog.Rows[index].HealthUnsupported = !state.ServiceHealthSupported
 		}
 		if err := m.saveCatalog(ctx, host, state, current.Catalog.Stale, &saved); err != nil {
 			current.Problem = fmt.Sprintf("cache services: %v", err)

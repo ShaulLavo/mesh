@@ -135,6 +135,7 @@ type model struct {
 	serviceAct         cli.PickerServiceActionFunc
 	serviceFeedback    map[serviceTarget]string
 	pendingService     *cli.PickerServiceActionRequest
+	serviceInvalid     bool
 	containingPath     []protocol.SessionIdentity
 }
 
@@ -154,7 +155,7 @@ func newInspectingModel(ctx context.Context, hosts []host, inspect cli.PickerIns
 	}
 	styles := newPickerStyles()
 	items := hostItems(hosts)
-	browser := list.New(items, hostDelegate{styles: styles, services: len(items) > len(hosts)}, defaultWidth, defaultHeight-frameRows)
+	browser := list.New(items, hostDelegate{styles: styles}, defaultWidth, defaultHeight-frameRows)
 	configureList(&browser)
 	browser.SetStatusBarItemName("host", "hosts")
 	return model{
@@ -281,6 +282,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	m.list = updated
 	if m.screen == hostScreen && mainItemKey(m.list.SelectedItem()) != beforeMain {
 		m.notice = ""
+		delete(m.serviceFeedback, beforeMain)
 		m.resizeList()
 	}
 	if m.screen == sessionScreen && m.selectedSessionID() != before {
@@ -516,7 +518,7 @@ func (m model) View() tea.View {
 	}
 	header, subtitle, footer := m.chrome()
 	lines := append([]string{header, subtitle}, m.updateNoticeLines()...)
-	lines = append(lines, "", m.list.View(), footer)
+	lines = append(lines, "", m.mainListView(), footer)
 	content := strings.Join(lines, "\n")
 	view := tea.NewView(content)
 	view.AltScreen = true
@@ -673,17 +675,11 @@ func sessionItems(sessions []session) []list.Item {
 type hostDelegate struct {
 	styles   pickerStyles
 	privacy  *privacy.Mask
-	services bool
 	feedback map[serviceTarget]string
 	pending  *cli.PickerServiceActionRequest
 }
 
-func (delegate hostDelegate) Height() int {
-	if delegate.services {
-		return 2
-	}
-	return 1
-}
+func (delegate hostDelegate) Height() int  { return 1 }
 func (delegate hostDelegate) Spacing() int { return 0 }
 func (delegate hostDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
 	return nil

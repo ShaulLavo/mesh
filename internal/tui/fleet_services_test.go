@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/protocol"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -20,7 +22,7 @@ func TestFleetServicesAppearOnMain(t *testing.T) {
 		{id: "beta", alias: "beta", served: []servedWebsite{{name: "CLI Proxy", url: "https://beta.example.test/ai", health: "healthy"}}, servedKnown: true},
 	}, pickerTestNow)
 	frame := ansi.Strip(current.View().Content)
-	for _, want := range []string{"Fregat dev", "CLI Proxy", "alpha.example.test/dev", "beta.example.test/ai"} {
+	for _, want := range []string{"Fregat dev", "CLI Proxy", "Services"} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("main picker omits %q:\n%s", want, frame)
 		}
@@ -113,7 +115,7 @@ func TestFleetServicesStopResultKeepsObservedIdle(t *testing.T) {
 	request := cli.PickerServiceActionRequest{HostID: "beta", ServiceName: "dev", Action: cli.PickerStopService}
 	current.pendingService = &request
 	current = current.applyServiceAction(serviceActionResultMsg{request: request, result: cli.PickerServiceActionResult{Row: row}})
-	if frame := ansi.Strip(current.View().Content); !strings.Contains(frame, "● idle") || strings.Contains(frame, "● stopped") || !strings.Contains(frame, "next connection starts it") {
+	if frame := ansi.Strip(current.View().Content); !strings.Contains(frame, "idle") || strings.Contains(frame, "● stopped") || !strings.Contains(frame, "next connection starts it") {
 		t.Fatalf("stop result changed observed idle:\n%s", frame)
 	}
 	current, _ = current.applyServices(update)
@@ -266,4 +268,126 @@ func TestFleetServiceActionKeepsNewerWatchedRow(t *testing.T) {
 	if current.hosts[1].served[0].state != "unhealthy" {
 		t.Fatal("older action reply overwrote newer watched health")
 	}
+}
+
+func TestCompactFleetServiceDetailsFollowSelection(t *testing.T) {
+	current := fleetPickerFixture()
+	current.width, current.height = 44, 20
+	current.serviceFeedback[serviceTarget{"alpha", "dev"}] = "Stopped"
+	current.serviceFeedback[serviceTarget{"beta", "dev"}] = "ping healthy 24 ms"
+	current.resizeList()
+	frame := ansi.Strip(current.View().Content)
+	assertFits(t, current.View().Content, 44, 20)
+	if !strings.Contains(frame, "Services") || strings.Contains(frame, "alpha.example.test/dev") || strings.Contains(frame, "Stopped") || !strings.Contains(frame, "ping healthy 24 ms") {
+		t.Fatalf("details must belong only to selected service:\n%s", frame)
+	}
+	lines := strings.Split(frame, "\n")
+	alpha, beta := -1, -1
+	for index, line := range lines {
+		if strings.Contains(line, "● Fregat dev") && strings.Contains(line, "alpha") {
+			alpha = index
+		}
+		if strings.Contains(line, "● Fregat dev") && strings.Contains(line, "beta") {
+			beta = index
+		}
+	}
+	if alpha < 0 || beta != alpha+1 {
+		t.Fatalf("service rows are not consecutive compact lines:\n%s", frame)
+	}
+	current = updateModel(t, current, key(tea.KeyUp))
+	frame = ansi.Strip(current.View().Content)
+	if !strings.Contains(frame, "alpha.example.test/dev") || strings.Contains(frame, "beta.example.test/dev") || strings.Contains(frame, "ping healthy 24 ms") {
+		t.Fatalf("details did not follow selection:\n%s", frame)
+	}
+	assertFits(t, current.View().Content, 44, 20)
+}
+
+func TestFleetRemovedReaddedRouteRejectsOldAction(t *testing.T) {
+	for _, renamed := range []bool{false, true} {
+		current := fleetPickerFixture()
+		before := current.hosts[1].served[0].row
+		current.serviceAct = func(context.Context, cli.PickerServiceActionRequest) (cli.PickerServiceActionResult, error) {
+			stopped := before
+			stopped.Service.Demand = &protocol.ServiceDemand{State: protocol.DemandStopped}
+			return cli.PickerServiceActionResult{Row: stopped}, nil
+		}
+		next, command := current.Update(runeKey('s'))
+		current = next.(model)
+		current, _ = current.applyServices(cli.PickerServicesUpdate{Host: before.Host})
+		after := before
+		if renamed {
+			after.Service.DisplayName = "Replacement"
+			after.Service.Target = "4000"
+		}
+		current, _ = current.applyServices(cli.PickerServicesUpdate{Host: after.Host, Catalog: cli.PickerServiceCatalog{Rows: []cli.ServiceCatalogRow{after}}})
+		if strings.Contains(ansi.Strip(current.View().Content), "Stopping") {
+			t.Fatal("readded route inherited obsolete pending label")
+		}
+		next, _ = current.Update(command())
+		current = next.(model)
+		website := current.serviceWebsite(serviceTarget{"beta", "dev"})
+		if website.state != dashboardRunning || current.serviceFeedback[serviceTarget{"beta", "dev"}] != "" {
+			t.Fatalf("old stop applied to readded route, renamed=%v state=%s feedback=%q", renamed, website.state, current.serviceFeedback[serviceTarget{"beta", "dev"}])
+		}
+	}
+}
+
+func TestFleetSuccessFeedbackDismissesOnSelectionChange(t *testing.T) {
+	current := fleetPickerFixture()
+	current.serviceFeedback[serviceTarget{"beta", "dev"}] = "Stopped · next connection starts it"
+	current = updateModel(t, current, key(tea.KeyUp))
+	current = updateModel(t, current, key(tea.KeyDown))
+	if current.serviceFeedback[serviceTarget{"beta", "dev"}] != "" {
+		t.Fatal("selection retained dismissed action feedback")
+	}
+}
+
+func TestCompactFleetServicePaginationFits(t *testing.T) {
+	current := fleetPickerFixture()
+	row := current.hosts[0].served[0].row
+	rows := make([]cli.ServiceCatalogRow, 24)
+	for index := range rows {
+		rows[index] = row
+		rows[index].Service.Name = fmt.Sprintf("route%02d", index)
+		rows[index].Service.DisplayName = fmt.Sprintf("Service%02d", index)
+	}
+	current, _ = current.applyServices(cli.PickerServicesUpdate{Host: row.Host, Catalog: cli.PickerServiceCatalog{Rows: rows}})
+	for _, height := range []int{12, 20} {
+		current.width, current.height = 44, height
+		current.list.Select(0)
+		current.resizeList()
+		for range len(current.list.Items()) {
+			current = updateModel(t, current, key(tea.KeyDown))
+			frame := ansi.Strip(current.View().Content)
+			assertFits(t, current.View().Content, 44, height)
+			selected, ok := current.list.SelectedItem().(serviceItem)
+			if ok && (!strings.Contains(frame, "Services") || !strings.Contains(frame, selected.website.url)) {
+				t.Fatalf("selected service fell outside page:\n%s", frame)
+			}
+		}
+	}
+}
+
+func TestCompactFleetPendingAndErrorStayInSelectedDetail(t *testing.T) {
+	current := fleetPickerFixture()
+	current.width, current.height = 44, 20
+	current.resizeList()
+	request := cli.PickerServiceActionRequest{HostID: "beta", ServiceName: "dev", Action: cli.PickerPingService}
+	current.pendingService = &request
+	current.refreshMainDelegate()
+	frame := ansi.Strip(current.View().Content)
+	assertFits(t, current.View().Content, 44, 20)
+	if !strings.Contains(frame, "    Pinging…") || strings.Contains(frame, "alpha.example.test/dev") {
+		t.Fatalf("pending details misplaced:\n%s", frame)
+	}
+	current = current.applyServiceAction(serviceActionResultMsg{request: request, err: errors.New("fixture refused")})
+	frame = ansi.Strip(current.View().Content)
+	if !strings.Contains(frame, "    Failed: fixture refused") || strings.Contains(strings.Split(frame, "\n")[1], "Failed") {
+		t.Fatalf("error details misplaced:\n%s", frame)
+	}
+	current = updateModel(t, current, key(tea.KeyUp))
+	if strings.Contains(ansi.Strip(current.View().Content), "fixture refused") {
+		t.Fatal("error escaped selected-only details")
+	}
+	assertFits(t, current.View().Content, 44, 20)
 }

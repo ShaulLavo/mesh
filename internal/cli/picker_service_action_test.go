@@ -215,3 +215,32 @@ func TestPickerServiceActionsRejectUnknownHostAndAction(t *testing.T) {
 		}
 	}
 }
+
+func TestPickerPingHonorsVerifiedHealthCapability(t *testing.T) {
+	host := HostRecord{ID: "alpha", Alias: "alpha", MeshIdentity: "a"}
+	for _, example := range []struct {
+		name               string
+		supported, unknown bool
+		want               string
+	}{
+		{"legacy", false, false, "unknown"},
+		{"unknown", true, true, "unknown"},
+		{"healthy", true, false, "healthy"},
+	} {
+		t.Run(example.name, func(t *testing.T) {
+			dial := reviewControlDial(t, func(host HostRecord, request protocol.Control) *protocol.Control {
+				if request.Type == protocol.TypeHostInfo {
+					return &protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity, ServiceHealthSupported: example.supported}}
+				}
+				if request.Type == protocol.TypeServiceList {
+					return &protocol.Control{Type: protocol.TypeServiceListed, Services: []protocol.ServiceInfo{{Name: "dev", Kind: "proxy", Target: "3000", Healthy: !example.unknown, HealthUnknown: example.unknown}}}
+				}
+				return nil
+			})
+			result, err := pickerServiceAction(t.Context(), []HostRecord{host}, dial, nil, PickerServiceActionRequest{HostID: host.ID, ServiceName: "dev", Action: PickerPingService})
+			if err != nil || result.Row.Health() != example.want {
+				t.Fatalf("ping health=%s want=%s err=%v", result.Row.Health(), example.want, err)
+			}
+		})
+	}
+}
