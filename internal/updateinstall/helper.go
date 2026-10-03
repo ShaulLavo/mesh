@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/shaul/mesh/internal/release"
 )
 
 type HelperConfig struct {
@@ -117,8 +119,8 @@ func helperRecord(stateDir string) string {
 	return filepath.Join(transactionDir(stateDir), "helper", "installed.json")
 }
 
-// UpgradeHelper switches the service only after daemon commitment and a real
-// journal-read probe by the replacement. Both executable copies are retained.
+// UpgradeHelper advances the helper after daemon commitment and a real journal
+// probe. A verified newer helper survives older daemon bridge releases.
 func UpgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, error) {
 	lock, err := lockInstallation(ctx, cfg.StateDir)
 	if err != nil {
@@ -140,8 +142,22 @@ func UpgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 	if err = readJSON(helperRecord(cfg.StateDir), &prior); err != nil {
 		return prior, err
 	}
+	if err = verifyHelperReceipt(cfg.StateDir, prior); err != nil {
+		return prior, err
+	}
+	artifact, err := status.Request.Manifest.Artifact(release.CurrentPlatform())
+	if err != nil {
+		return prior, fmt.Errorf("committed helper artifact: %w", err)
+	}
+	if digest != artifact.BinarySHA256 {
+		return prior, errors.New("helper source does not match the committed release artifact")
+	}
 	if prior.Digest == digest {
 		return prior, nil
+	}
+	allowed, err := helperUpgradeAllowed(ctx, cfg, status.Request.Manifest, prior, digest)
+	if err != nil || !allowed {
+		return prior, err
 	}
 	installed, err := prepareHelper(cfg, true)
 	if err != nil {
@@ -156,6 +172,77 @@ func UpgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 	}
 	_, err = runCommand(ctx, "systemctl", "--user", "restart", "--no-block", "mesh-update-helper.service")
 	return installed, err
+}
+
+func verifyHelperReceipt(stateDir string, prior HelperInstallation) error {
+	if prior.Executable != filepath.Join(transactionDir(stateDir), "helper", prior.Digest, "mesh") {
+		return errors.New("helper receipt does not name its immutable executable copy")
+	}
+	if err := verifyFile(prior.Executable, prior.Digest); err != nil {
+		return err
+	}
+	link, err := os.Readlink(filepath.Join(transactionDir(stateDir), "helper", "current"))
+	if err != nil {
+		return fmt.Errorf("read helper launcher: %w", err)
+	}
+	if link != prior.Executable {
+		return errors.New("helper launcher does not match its installation receipt")
+	}
+	return nil
+}
+
+func helperUpgradeAllowed(ctx context.Context, cfg HelperConfig, manifest release.Manifest, prior HelperInstallation, digest string) (bool, error) {
+	current, err := helperBuild(ctx, prior.Executable, prior.Digest)
+	if err != nil {
+		return false, err
+	}
+	candidate, err := helperBuild(ctx, cfg.Executable, digest)
+	if err != nil {
+		return false, err
+	}
+	if candidate.Version != manifest.Version || candidate.Commit != manifest.Commit {
+		return false, errors.New("helper source build does not match the committed release")
+	}
+	compatibility := manifest.Compatibility
+	if compatibility.JournalVersion != release.CurrentJournalVersion ||
+		current.StateVersion < compatibility.StateReadMin || current.StateVersion > compatibility.StateReadMax ||
+		current.WorkerProtocol < compatibility.WorkerMin || current.WorkerProtocol > compatibility.WorkerMax ||
+		candidate.StateVersion != compatibility.StateWrite || candidate.WorkerProtocol != compatibility.WorkerWrite {
+		return false, errors.New("helper builds have incompatible state, worker, or journal capabilities")
+	}
+	order, err := release.CompareVersions(candidate.Version, current.Version)
+	if err != nil {
+		return false, fmt.Errorf("compare helper releases: %w", err)
+	}
+	if order < 0 {
+		return false, nil
+	}
+	if order == 0 {
+		return false, errors.New("equal helper releases have different executable digests")
+	}
+	return true, nil
+}
+
+func helperBuild(ctx context.Context, executable, digest string) (release.Build, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	output, err := runCommand(ctx, executable, "version", "--json")
+	if err != nil {
+		return release.Build{}, err
+	}
+	if len(output) > 64<<10 {
+		return release.Build{}, errors.New("helper build report exceeds size limit")
+	}
+	var build release.Build
+	if err = json.Unmarshal([]byte(output), &build); err != nil {
+		return build, fmt.Errorf("decode helper build report: %w", err)
+	}
+	if build.Digest != digest || build.Platform != release.CurrentPlatform() || build.Modified ||
+		len(build.Commit) != 40 || strings.Trim(build.Commit, "0123456789abcdef") != "" ||
+		build.StateVersion <= 0 || build.WorkerProtocol <= 0 || build.UpdateProtocol != release.CurrentUpdateProtocol {
+		return build, errors.New("helper build report does not match its verified executable")
+	}
+	return build, nil
 }
 
 func replaceHelperLink(path, target string) error {
