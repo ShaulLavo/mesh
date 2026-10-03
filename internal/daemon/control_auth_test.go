@@ -266,3 +266,39 @@ func TestRevokedDeviceCanReconnectOnlyThroughSignedUpdater(t *testing.T) {
 		t.Fatalf("fresh signed update result=%q actions=%d", result, actions.Load())
 	}
 }
+
+func TestDeviceReapprovalCannotHealPriorGrantLifetime(t *testing.T) {
+	state := t.TempDir()
+	actor, _, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := update.Trust(state, actor.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := controlAuthentication(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := auth.Bind(actor.ID)
+	if !prior.Full || !prior.Current() {
+		t.Fatal("fixture did not bind a current full-device grant")
+	}
+	// No watcher or admission samples the temporarily absent membership.
+	if err := identity.RevokeDevice(state, actor.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+		t.Fatal(err)
+	}
+	if prior.Current() {
+		t.Fatal("immediate same-key reapproval healed the revoked grant lifetime")
+	}
+	fresh := auth.Bind(actor.ID)
+	if !fresh.Full || !fresh.Current() {
+		t.Fatal("new grant did not admit a fresh connection")
+	}
+}
