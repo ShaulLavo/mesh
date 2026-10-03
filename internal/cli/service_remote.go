@@ -22,7 +22,11 @@ const (
 )
 
 func dialControlHost(ctx context.Context, host HostRecord) (transport.Conn, error) {
-	return transport.DialOnce(ctx, host.Endpoint, transport.DialOptions{})
+	conn, err := transport.DialPinned(ctx, host.Endpoint, host.MeshIdentity)
+	if err != nil {
+		return nil, fmt.Errorf("authenticate control host: %w", err)
+	}
+	return conn, nil
 }
 
 func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer, service protocol.ServiceInfo, allowCredentials bool) (protocol.ServicePreview, string, error) {

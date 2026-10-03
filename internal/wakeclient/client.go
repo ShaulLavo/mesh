@@ -15,6 +15,7 @@ import (
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/tailnet"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/wake"
 )
 
@@ -36,6 +37,7 @@ type Observation struct {
 	Sender string
 }
 type Options struct {
+	PeerIdentity  func(context.Context, string) (string, error)
 	Endpoints     func(context.Context) ([]string, error)
 	DiscoverPeers func(context.Context) ([]tailnet.Peer, error)
 }
@@ -86,7 +88,23 @@ func New(stateDir string, opts Options) (*Client, error) {
 		return nil, err
 	}
 	return &Client{selfID: self.ID, cache: cache, sender: sender, endpoints: opts.Endpoints, peers: opts.DiscoverPeers,
-		exchange: exchange, flights: make(map[string]*flight)}, nil
+		exchange: func(ctx context.Context, endpoint, id string, request protocol.Control) (protocol.HostInfo, protocol.Control, error) {
+			if id == "" && opts.PeerIdentity != nil {
+				pin, err := opts.PeerIdentity(ctx, endpoint)
+				if err != nil {
+					return protocol.HostInfo{}, protocol.Control{}, err
+				}
+				id = pin
+			}
+			if id == "" {
+				return protocol.HostInfo{}, protocol.Control{}, fmt.Errorf("%w: wake peer needs an approved Mesh identity pin", ErrIdentityChanged)
+			}
+			_, key, err := identity.LoadOrCreate(stateDir)
+			if err != nil {
+				return protocol.HostInfo{}, protocol.Control{}, fmt.Errorf("load wake control identity: %w", err)
+			}
+			return exchange(ctx, endpoint, id, request, &transport.Authentication{Key: key, ExpectedIdentity: id})
+		}, flights: make(map[string]*flight)}, nil
 }
 
 func (c *Client) Remember(grant wake.Grant) error { return c.cache.Put(grant) }

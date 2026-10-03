@@ -60,6 +60,8 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 	for _, mode := range []string{"watch", "old-producer", "legacy", "generic-error", "wrong-identity", "partial", "disconnected"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := setupCommandTestHost(t)
+			auth, hostID := controlFixtureAuthentication(t)
+			fixture.host.MeshIdentity = hostID
 			stateDir, err := paths.StateDir()
 			if err != nil {
 				t.Fatal(err)
@@ -70,7 +72,7 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 			var recovery, wakes, connections, probes, lists, metrics, inspections atomic.Int32
 			serve := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				connections.Add(1)
-				_ = transport.Serve(w, r, func(ctx context.Context, conn transport.Conn) error {
+				_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: auth}, func(ctx context.Context, conn transport.Conn) error {
 					for ctx.Err() == nil {
 						frame, err := conn.ReadFrame()
 						if err != nil {

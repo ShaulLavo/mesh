@@ -85,7 +85,7 @@ func NewPublisher(config PublisherConfig) (*Publisher, error) {
 	}
 	if config.Dial == nil {
 		config.Dial = func(ctx context.Context, endpoint string) (transport.Conn, error) {
-			return transport.DialOnce(ctx, endpoint, transport.DialOptions{})
+			return transport.DialOnce(ctx, endpoint, transport.DialOptions{Auth: &transport.Authentication{Key: config.Signer, ExpectedIdentity: config.Target.Identity}})
 		}
 	}
 	if config.Now == nil {

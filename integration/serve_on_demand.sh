@@ -119,6 +119,8 @@ ssh-keygen -q -t ed25519 -N "" -C "" -f "$ORIGIN_STATE/identity.key" >/dev/null 
 rm -f "$ORIGIN_STATE/identity.key.pub"
 ORIGIN_ID=$(identity_id "$ORIGIN_STATE/identity.key") || fail "derive origin identity"
 
+CLIENT_ID=$(env MESH_STATE_DIR="$CLIENT_STATE" "$MESH_INTEGRATION" device identity --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])') || fail "create fixture client"
+env MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_INTEGRATION" device approve --allow-root -- "$CLIENT_ID" >/dev/null || fail "approve fixture client"
 mapfile -t PORTS < <(python3 - "$$" 9 <<'PY'
 import socket, sys
 

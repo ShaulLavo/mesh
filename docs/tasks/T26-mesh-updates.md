@@ -316,11 +316,10 @@ existing receipt or a stale-generation error.
 
 This controls who can invoke the update API. It does not create a privilege
 boundary against someone who already has arbitrary command execution as the
-same OS user. That user can replace binaries and policy files. Legacy Mesh
-sessions currently rely on tailnet access for that execution authority. The
-bootstrap path below inherits that trust model and says so in its preview;
-it must not claim independently authenticated ownership. General session-access
-hardening is a separate change, not a hidden prerequisite for updating.
+same OS user. That user can replace binaries and policy files. Pre-cutover Mesh sessions relied on Tailnet access for that execution authority.
+The authenticated coordinator removes that ordinary legacy bootstrap path.
+Targets lacking the signed updater must cross its bridge release first through
+an older coordinator or authenticated system SSH; see `docs/updates.md`.
 
 The remote API accepts an approved official release descriptor, not arbitrary
 shell commands, paths, or download URLs. Extract the existing bounded archive,
@@ -377,10 +376,10 @@ daemons cannot understand the new protocol. Include that path in this task:
   a fixed installer for the exact approved release. Persist bootstrap intent,
   run independently of the attaching client, seed the initiating administrator
   key, and verify the new daemon after reconnect. This uses the existing ability
-  to run a command and requires a real old-version compatibility test. It is an
-  use of the existing tailnet-authorized command channel, not proof of an
-  independently authenticated owner. The preview identifies this bootstrap
-  route before the operation is approved.
+  to run a command and requires a real old-version compatibility test. It is a
+  historical use of the Tailnet-admitted command channel. Authenticated
+  coordinators require the signed-updater bridge before this cutover. The preview identifies this
+  bootstrap route before the operation is approved.
   An operation-specific marker and installation lock let retry discover work
   whose session acknowledgment was lost. The installer independently verifies
   the pinned artifacts and enrolls authority only when no policy exists; it

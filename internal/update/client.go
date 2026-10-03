@@ -31,7 +31,7 @@ func (c Client) Call(ctx context.Context, host Host, action string, input, outpu
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	conn, err := dial(ctx, host)
+	conn, err := c.dialUpdate(ctx, host)
 	if err != nil {
 		return err
 	}
@@ -111,17 +111,39 @@ func (c Client) exchange(conn transport.Conn, host Host, message Message) (Messa
 	return response, nil
 }
 
-func dial(ctx context.Context, host Host) (transport.Conn, error) {
+func (c Client) dial(ctx context.Context, host Host) (transport.Conn, error) {
 	address, err := url.Parse(host.Endpoint)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse update endpoint: %w", err)
 	}
 	if address.Scheme != "unix" {
-		return transport.DialOnce(ctx, host.Endpoint, transport.DialOptions{})
+		conn, err := transport.DialOnce(ctx, host.Endpoint, transport.DialOptions{Auth: &transport.Authentication{Key: c.Key, ExpectedIdentity: host.ID}})
+		if err != nil {
+			return nil, fmt.Errorf("authenticate update endpoint: %w", err)
+		}
+		return conn, nil
 	}
 	stream, err := (&net.Dialer{}).DialContext(ctx, "unix", address.Path)
 	if err != nil {
 		return nil, fmt.Errorf("dial update daemon: %w", err)
 	}
-	return transport.NewStreamConn(stream)
+	conn, err := transport.NewStreamConn(stream)
+	if err != nil {
+		return nil, fmt.Errorf("open local update stream: %w", err)
+	}
+	return conn, nil
+}
+
+func (c Client) dialUpdate(ctx context.Context, host Host) (transport.Conn, error) {
+	conn, err := c.dial(ctx, host)
+	if !errors.Is(err, transport.ErrAuthenticationRequired) {
+		return conn, err
+	}
+	// Legacy update authorities still verify signed, single-use requests and replies.
+	// Session bootstrap and ordinary controls never enter this bridge.
+	conn, err = transport.DialOnce(ctx, host.Endpoint, transport.DialOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("open signed legacy update bridge: %w", err)
+	}
+	return conn, nil
 }

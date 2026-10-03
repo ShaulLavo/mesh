@@ -14,7 +14,7 @@ import time
 
 sys.dont_write_bytecode = True
 from mesh_control import round_trip
-from recovery_transactions import kill_worker, websocket_request
+from recovery_transactions import build_control_client, kill_worker, websocket_request  # noqa: E402  # bytecode policy precedes fixture imports
 from ssh_sessions import SSHFixture
 from terminal_window import Fixture, Terminal, eventually, require, run_outside_containing_session
 
@@ -53,7 +53,7 @@ def record(fixture, session_id):
 def recover(fixture, source, request_id, endpoint=None):
     request = {"type": "session.recover", "requestId": request_id, "sessionId": source}
     if endpoint:
-        return websocket_request(endpoint, request)
+        return websocket_request(fixture, endpoint, request)
     return round_trip(str(fixture.remote / "daemon.sock"), request)
 
 
@@ -79,6 +79,7 @@ def setup(fixture, ssh=False):
         fixture.start_ssh()
         fixture.remote = fixture.local
         return
+    build_control_client(fixture)
     fixture.start_remote()
 
 

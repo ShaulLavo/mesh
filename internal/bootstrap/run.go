@@ -17,6 +17,7 @@ import (
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/tailnet"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/wake"
 )
 
@@ -34,6 +35,8 @@ type remoteHost interface {
 }
 
 type dependencies struct {
+	destination  func(context.Context, remoteHost) (string, error)
+	account      func(context.Context, remoteHost) (string, error)
 	connect      func(context.Context, target, SSHOptions) (remoteHost, error)
 	localTailnet func(context.Context) error
 	// servingPeer reads this machine's real tailnet and dials it, so tests must
@@ -47,7 +50,7 @@ type dependencies struct {
 	discover      func(context.Context, remoteHost) (tailscaleObservation, error)
 	provision     func(context.Context, remoteHost, provisionRequest) (provisionResult, error)
 	checkClock    func(context.Context, remoteHost, time.Time) error
-	verify        func(context.Context, []string, uint16, string) (verifiedHost, string, error)
+	verify        func(context.Context, []string, uint16, string, *transport.Authentication) (verifiedHost, string, error)
 	authorizedKey func(string) (string, error)
 	now           func() time.Time
 }
@@ -64,6 +67,8 @@ func defaultDependencies() dependencies {
 		provision:     provisionRemote,
 		checkClock:    checkRemoteClock,
 		verify:        verifyWebSocket,
+		destination:   trustedDestinationIdentity,
+		account:       remoteAccount,
 		authorizedKey: adopterAuthorizedKey,
 		now:           time.Now,
 	}
@@ -167,6 +172,17 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		}
 	}()
 
+	if deps.account != nil {
+		account, err := deps.account(ctx, remote)
+		if err != nil {
+			return Result{}, err
+		}
+		if account == "root" && !opts.AllowRoot {
+			return Result{}, errors.New("bootstrap: approving this device grants root access; repeat mesh add with --allow-root to acknowledge it")
+		}
+		normalized.progress(Event{Step: StepConnect, Detail: "destination account " + account})
+	}
+
 	normalized.progress(Event{Step: StepDetect, Detail: "remote OS and architecture"})
 	stdout, stderr, err := remote.Run(ctx, "uname -s; uname -m", nil)
 	if err != nil {
@@ -237,7 +253,28 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 	verifyCtx, cancelVerify := context.WithTimeout(ctx, normalized.verifyTimeout)
 	defer cancelVerify()
 	normalized.progress(Event{Step: StepVerify, Detail: "direct WebSocket connection"})
-	host, endpoint, err := deps.verify(verifyCtx, tailnet.Addresses, normalized.daemonPort, normalized.webSocketPath)
+	pin := normalized.expectedIdentity
+	if deps.destination != nil {
+		observed, err := deps.destination(ctx, remote)
+		if err != nil {
+			return Result{}, err
+		}
+		if pin != "" && pin != observed {
+			return Result{}, diagnostic(DiagnosticIdentity, errors.New("destination Mesh identity changed; re-enroll explicitly"))
+		}
+		pin = observed
+	}
+	source, key, err := identity.LoadOrCreate(normalized.stateDir)
+	if err != nil {
+		return Result{}, fmt.Errorf("load source control identity: %w", err)
+	}
+	if deps.destination != nil {
+		if err := reportDeviceApproval(normalized.progress, source.ID, pin); err != nil {
+			return Result{}, err
+		}
+	}
+	auth := &transport.Authentication{Key: key, ExpectedIdentity: pin}
+	host, endpoint, err := deps.verify(verifyCtx, tailnet.Addresses, normalized.daemonPort, normalized.webSocketPath, auth)
 	if err != nil {
 		return Result{}, err
 	}

@@ -76,11 +76,76 @@ public Mesh identity:
 mesh update trust COORDINATOR_PUBLIC_ID
 ```
 
-The first upgrade of an older daemon uses its existing session-management
-access to install the updater and enroll the approved coordinator. This has the
-same user-level authority as running a command through that older daemon. It
-preserves existing service definitions. An existing administrator policy must
-be changed locally; bootstrap does not replace it.
+Existing update administrators have update-only network authority. Enrolling an
+administrator does not grant session controls, SSH access or service management.
+Use `mesh device approve` locally on each destination for that full daemon-account
+grant. Removing a device grant leaves a separately enrolled update administrator
+able to reconnect for signed update controls; the full-device connection retires.
+Edit the destination's local administrator policy when withdrawing that authority
+too.
+
+## Cross the control-authentication cutover
+
+The minimum signed-updater bridge release is **v0.1.39** (the first release
+containing `8b14666`). Prefer the known pre-cutover baseline **v0.1.147** or a newer
+pre-cutover release, so later updater and retained-worker fixes are included. A target older than that minimum
+must receive a bridge through an older coordinator or authenticated system SSH
+before the coordinator adopts authenticated network controls.
+
+The TLS peer is an Ed25519 key, verified by possession during TLS 1.3 and matched
+to an owner-controlled pin or grant. Certificate names, public CAs and certificate
+dates do not grant or remove Mesh authority. An encrypted acceptance byte lets
+the client observe the server's grant decision before a control dial succeeds.
+Handshake admission has a five-second deadline and a 64 KiB inbound budget;
+reconnections perform a fresh handshake with session tickets disabled.
+
+Grant mutation takes an exclusive lock and frame admission reads under a shared
+lock. Later frames are denied once revocation publishes; already admitted work
+may finish. A 250 ms current-grant check also closes idle control and SSH
+connections. This retirement is polling-based, so scheduler or storage delays can
+postpone socket closure; frame admission still checks the current grant. Revoking
+a key does not signal its retained worker processes.
+
+The upgraded coordinator permits one mixed-version exception: its signed update
+client may reconnect with the older WebSocket framing when the destination does
+not negotiate `mesh-control-tls-v1`. Both challenge and action are signed, bound
+to the pinned target and actor, and use a single-use expiring challenge. Replies
+must carry the pinned destination's signature. This path sends only
+`update.control`; it cannot create a session or bootstrap a pre-updater daemon.
+Failed TLS authentication never enters this bridge. A malicious downgrade can
+remove stream confidentiality for that signed update exchange; it cannot mint a
+control or turn an update administrator into a session controller.
+
+For the omarchy/macbook-air/pi/vps fleet, execute this order through the approved
+root coordinator and trusted account-local enrollment paths:
+
+1. Inventory each installed binary, destination account, stable Mesh key, saved
+   destination pin and update-administrator grant. Keep authenticated system SSH
+   available. The VPS daemon's account is root; every full-device approval there
+   requires `--allow-root`.
+2. While the old coordinator can still bootstrap pre-updater hosts, bring every
+   such target through v0.1.39 or later, preferably v0.1.147. Enroll the root
+   coordinator's existing key in each target's update-administrator policy.
+3. Approve each actual controlling device's key on its destinations, including
+   daemon-to-daemon publishers, certificate distributors and wake witnesses.
+   Record witness destination pins in each controlling account's host book.
+   Discovery alone cannot enroll a witness. Do not copy a root account's key to
+   a user account or assume they share Mesh state.
+4. Install the authenticated client binary in the coordinator's account while
+   retaining its old daemon until the remote targets settle. Update macbook-air
+   and pi, then the VPS; honor explicit fleet dependency ordering where it changes
+   that sequence. The new client's signed updater can manage their old framing.
+   Ordinary session clients need the authenticated binary before connecting to a
+   hardened destination.
+5. Update the coordinator daemon (omarchy unless the approved fleet selects a
+   different coordinator) last. Retained workers keep their original binary and
+   PID; new sessions use the new build. Confirm existing-session reattachment
+   from a still-approved device before withdrawing temporary grants.
+
+This order is covered by disposable local fixtures. The installed fleet, root
+VPS, Pi and gateway were not accessed or updated during the implementation lane.
+If a pin changes or a host lacks its grant, repair it through authenticated system
+SSH or a destination-local command; do not reopen unauthenticated controls.
 
 ## Read progress
 

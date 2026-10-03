@@ -514,16 +514,17 @@ func TailscaleWakeResolver(peers func(context.Context) ([]tailnet.Peer, error)) 
 // ControlPinner returns a host.info verifier that consumes the complete
 // allowlisted origin entry, including its canonical WebSocket path.
 func ControlPinner(dial func(context.Context, string) (transport.Conn, error)) PinOrigin {
-	if dial == nil {
-		dial = func(ctx context.Context, endpoint string) (transport.Conn, error) {
-			return transport.DialOnce(ctx, endpoint, transport.DialOptions{})
-		}
-	}
 	return func(ctx context.Context, endpoint netip.AddrPort, origin OriginConfig) error {
 		if err := validateControlPath(origin.WebSocketPath); err != nil {
 			return err
 		}
-		connection, err := dial(ctx, "ws://"+endpoint.String()+origin.WebSocketPath)
+		var connection transport.Conn
+		var err error
+		if dial == nil {
+			connection, err = transport.DialPinned(ctx, "ws://"+endpoint.String()+origin.WebSocketPath, origin.Identity)
+		} else {
+			connection, err = dial(ctx, "ws://"+endpoint.String()+origin.WebSocketPath)
+		}
 		if err != nil {
 			return err
 		}

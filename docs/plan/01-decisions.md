@@ -250,23 +250,23 @@ outside the tailnet. It is not a way to hand a build to somebody.
 **Naming follows from this.** The verb stays `serve`, never `deploy`. `mesh
 deploy` would invite exactly the pipeline the previous paragraph rules out.
 
-## D23 — Tailnet transport security belongs to Tailscale
+## D23 — Mesh keys authorize network controls
 
-The direct terminal WebSocket and the HTTP service routes on the shared Tailnet
-listener are intentionally plaintext. Mesh binds them only to current Tailscale
-addresses. Tailscale's WireGuard tunnel supplies confidentiality and integrity,
-and Tailnet ACLs supply admission. Mesh destination-identity pinning detects the
-wrong daemon, but it is not transport encryption or client authentication.
+The direct terminal WebSocket carries TLS 1.3 inside its binary stream. The
+certificate wraps the existing Ed25519 Mesh identity. Both peers prove possession;
+the client checks an owner-controlled destination pin, and the daemon checks its
+approved `authorized_keys`. CA roots, certificate names, discovery and Tailnet
+membership supply no device grants. TLS session tickets are disabled.
 
-Canonical private HTTPS is separate. Tailscale Serve forwards raw TCP/443 to the
-loopback TLS listener, so Mesh terminates TLS without changing the direct
-terminal protocol.
+The shared outer listener and HTTP service URLs stay unchanged. Tailscale still
+protects Tailnet traffic and restricts reachability. Ordinary HTTP service policy,
+canonical private HTTPS and browser-Origin refusal remain separate boundaries.
+Unix controls use same-account socket permissions.
 
-**Cost:** there is no second cryptographic or authorization layer on the direct
-listener. A routing or ACL policy that exposes its control port also exposes the
-terminal protocol and Tailnet-only HTTP services to those newly admitted
-clients. Operators must treat Tailscale routing and ACLs as part of Mesh's
-security boundary.
+**Cost:** cryptographic work on network connections and terminal records. Grant
+removal denies new admissions and retires active SSH and WebSocket connections;
+detached workers keep running. Existing update administrators retain update-only
+authority until separately enrolled for full daemon-account controls.
 
 ## D24 — Mesh SSH uses port 2222
 
