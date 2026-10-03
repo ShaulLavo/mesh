@@ -63,8 +63,8 @@ Use `--coordinator ALIAS` when starting or inspecting an operation on another
 adopted host. Starting a fleet operation without a local daemon includes its
 one-time setup in the approval preview. The independent helper starts the
 coordinator and resumes the saved operation if the command closes during setup.
-With `--local`, approval installs only the update helper without adding a hosting
-daemon.
+For a client-only installation with no local daemon, `--local` installs the
+update helper without adding a hosting daemon.
 
 ## Approve an administrator
 
@@ -142,6 +142,18 @@ For the omarchy/macbook-air/pi/vps fleet, use this account-local sequence:
 
 A pin or grant failure is repaired through authenticated system SSH or a
 local destination command. Never reopen raw network controls for recovery.
+
+The disposable cutover proof builds the pre-authentication CLI and daemon, plus
+two authenticated patch builds, and uses four independent Linux installations
+with real state, Unix sockets and detached PTY workers. Each old CLI's local
+update settles only its own installation. After explicit grants and host-book
+pins, all twelve directed network connections and four retained-session
+reattachments succeed. A real daemon-owned fleet operation then installs the
+second authenticated patch on all four hosts while preserving the original
+worker and shell PIDs. Only the HTTPS release origin and service-manager
+commands are fixture providers. This establishes local ownership and network
+recovery; native macOS service management and the installed fleet are separate
+live checks. No installed hosts were accessed during this proof.
 
 ## Read progress
 

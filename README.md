@@ -63,8 +63,7 @@ devices. Existing update-administrator grants are managed separately.
 An unknown or changed destination key requires explicit re-enrollment through
 system SSH; a discovery result never replaces the saved key.
 
-A daemon upgrade preserves retained workers. [Upgrade ordering and the signed
-older-host bridge](docs/updates.md#cross-the-control-authentication-cutover) explain
+A daemon upgrade preserves retained workers. [Independent local upgrade and device enrollment](docs/updates.md#cross-the-control-authentication-cutover) explain
 how to move an existing fleet to authenticated controls.
 
 ## what's in it
