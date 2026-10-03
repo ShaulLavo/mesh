@@ -174,3 +174,37 @@ func TestSameVersionApprovalLeavesCancelledOperationAlone(t *testing.T) {
 		t.Fatalf("cancelled approval changed: %+v %v", cancelled, err)
 	}
 }
+
+func TestEnrollmentFailureRejectsMalformedActorsBeforeGuidance(t *testing.T) {
+	id, key := testIdentity(t)
+	canonical, _ := testIdentity(t)
+	called := 0
+	authority := Authority{StateDir: t.TempDir(), ID: id, Key: key, Handle: func(context.Context, string, json.RawMessage) (any, error) {
+		called++
+		return nil, nil
+	}}
+	for _, tc := range []struct {
+		name  string
+		actor string
+	}{
+		{name: "shell substitution", actor: "$(printf injected)"},
+		{name: "empty", actor: ""},
+		{name: "padded key", actor: canonical + "="},
+		{name: "newline", actor: canonical + "\n"},
+		{name: "carriage return", actor: canonical + "\r"},
+		{name: "tab", actor: canonical + "\t"},
+		{name: "null", actor: canonical + "\x00"},
+		{name: "terminal escape", actor: canonical + "\x1b[31m"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := Message{Action: "challenge", Actor: tc.actor, Target: id, Nonce: "invalid-actor-check"}
+			_, err := callAuthority(&authority, request)
+			if err == nil || err.Error() != "update: invalid host identity" || strings.Contains(err.Error(), "mesh update trust") {
+				t.Fatalf("malformed actor reached enrollment guidance: %v", err)
+			}
+		})
+	}
+	if called != 0 || len(authority.challenges) != 0 {
+		t.Fatalf("malformed actor reached an update handler or challenge: calls=%d challenges=%d", called, len(authority.challenges))
+	}
+}
