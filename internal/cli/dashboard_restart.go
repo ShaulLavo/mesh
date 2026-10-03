@@ -30,7 +30,15 @@ type dashboardRestartTarget struct {
 	err   error
 }
 
+const dashboardPrivacyRestartNotice = "Daemon binary changed; dashboard restart skipped in privacy mode. Restart manually after recording."
+
 func (r dashboardRestart) run(ctx context.Context, input DashboardInput, dashboard DashboardFunc) error {
+	// A different installed image may predate privacy support and silently ignore
+	// MESH_PRIVACY. Keep the renderer that established the recording policy.
+	if input.Privacy != nil {
+		input.Watch = r.watchWhilePrivate(input.Watch)
+		return dashboard(ctx, input)
+	}
 	run, cancel := context.WithCancel(ctx)
 	defer cancel()
 	next := input
@@ -54,7 +62,7 @@ func (r dashboardRestart) run(ctx context.Context, input DashboardInput, dashboa
 	if target.err == nil {
 		return nil
 	}
-	input.Notice = "Dashboard restart failed: " + dashboardText(target.err.Error())
+	input.Notice = "Dashboard restart failed: " + dashboardText(input.Privacy.Value("error", target.err.Error()))
 	return dashboard(ctx, input)
 }
 
@@ -62,6 +70,17 @@ func (r dashboardRestart) handoff(ctx context.Context, target *dashboardRestartT
 	handoff, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return r.exec(handoff, target.build, target.path, r.argv, r.env)
+}
+
+func (r dashboardRestart) watchWhilePrivate(watch DashboardWatch) DashboardWatch {
+	return func(ctx context.Context, publish func(DashboardHostView)) error {
+		return watch(ctx, func(view DashboardHostView) {
+			if dashboardChangedBuild(view, r.current) {
+				view.Notice = dashboardPrivacyRestartNotice
+			}
+			publish(view)
+		})
+	}
 }
 
 func (r dashboardRestart) watchForRestart(watch DashboardWatch, cancel context.CancelFunc) (DashboardWatch, *dashboardRestartTarget) {

@@ -77,7 +77,7 @@ func (m model) applySessionAction(message sessionActionResultMsg) (model, tea.Cm
 	m.cancelAction = nil
 	if message.err != nil {
 		m.sessionAction.phase = sessionActionReconcilingFailure
-		m.notice = fmt.Sprintf("%s %s failed: %s", sessionActionVerb(message.action), message.target.sessionID, message.err)
+		m.notice = fmt.Sprintf("%s %s failed: %s", sessionActionVerb(message.action), message.target.sessionID, m.privacy.Value("error", message.err.Error()))
 	} else {
 		m.sessionAction.phase = sessionActionReconcilingSuccess
 		m.notice = fmt.Sprintf("%s %s; refreshing...", sessionActionCompleted(message.action), message.target.sessionID)

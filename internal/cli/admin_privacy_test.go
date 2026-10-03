@@ -23,9 +23,9 @@ func TestPrivateGCPlanPreservesAuthoritativeEntries(t *testing.T) {
 	mask := privacy.New()
 	row := gcRow("7K3D", "detached", 8*time.Hour, 8*time.Hour, false)
 	row.Command = []string{"/home/owner/bin/bash", "-c", "echo secret-argument"}
-	row.Label = "private-route"
-	row.Recovery.Title = "private-title"
-	entries := []gcEntry{{host: HostRecord{Alias: "private-host"}, row: row, idle: 8 * time.Hour, action: gcLeave, notes: []string{row.Label, "plain shell"}}}
+	row.Label = "dev-route owner@machine"
+	row.Recovery.Title = "Debug frontend /home/owner/private-project"
+	entries := []gcEntry{{host: HostRecord{Alias: "build-box owner@machine"}, row: row, idle: 8 * time.Hour, action: gcLeave, notes: []string{row.Label, "plain shell"}}}
 	before, err := json.Marshal(entries[0].row)
 	if err != nil {
 		t.Fatal(err)
@@ -34,12 +34,12 @@ func TestPrivateGCPlanPreservesAuthoritativeEntries(t *testing.T) {
 	if err := writeGCPlan(&output, entries, mask); err != nil {
 		t.Fatal(err)
 	}
-	for _, private := range []string{"private-host", "7K3D", "private-route", "private-title", "/home/owner", "secret-argument"} {
+	for _, private := range []string{"owner@machine", "/home/owner", "secret-argument"} {
 		if strings.Contains(output.String(), private) {
 			t.Fatalf("leaked %q: %s", private, &output)
 		}
 	}
-	for _, public := range []string{"HOST", "MEM", "left running", "plain shell", "bash", "[arguments withheld]", mask.Value("host", "private-host")} {
+	for _, public := range []string{"HOST", "MEM", "left running", "plain shell", "bash", "[arguments withheld]", "build-box", "7K3D", "dev-route", "Debug frontend"} {
 		if !strings.Contains(output.String(), public) {
 			t.Fatalf("missing %q: %s", public, &output)
 		}
@@ -69,7 +69,7 @@ func TestPrivateRenameUsesRealAliasesForControl(t *testing.T) {
 	if err := command.ExecuteContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output.String(), "private-old") || strings.Contains(output.String(), "private-new") || !strings.Contains(output.String(), "renamed host-") {
+	if output.String() != "renamed private-old to private-new\n" {
 		t.Fatalf("rename display = %s", &output)
 	}
 	hosts, err := LoadHosts()
@@ -80,18 +80,18 @@ func TestPrivateRenameUsesRealAliasesForControl(t *testing.T) {
 
 func TestPrivateAgentBindStatusDoesNotChangeRecipe(t *testing.T) {
 	mask := privacy.New()
-	recipe := agentresume.Recipe{ConversationID: "private-conversation", Directory: "/home/owner/private-project"}
+	recipe := agentresume.Recipe{ConversationID: "12345678-1234-1234-1234-123456789abc", Directory: "/home/owner/private-project"}
 	original := recipe
 	var output bytes.Buffer
 	if err := writeAgentBindStatus(&output, recipe, "7K3D", mask); err != nil {
 		t.Fatal(err)
 	}
-	for _, private := range []string{recipe.ConversationID, recipe.Directory, "7K3D"} {
+	for _, private := range []string{recipe.ConversationID, "/home/owner"} {
 		if strings.Contains(output.String(), private) {
 			t.Fatalf("bind leaked %q: %s", private, &output)
 		}
 	}
-	if !reflect.DeepEqual(recipe, original) || !strings.Contains(output.String(), "mesh recover session-") {
+	if !reflect.DeepEqual(recipe, original) || (!strings.Contains(output.String(), "mesh recover 7K3D --agent") || !strings.Contains(output.String(), "~/private-project")) {
 		t.Fatalf("bind recipe or guidance changed: %#v / %s", recipe, &output)
 	}
 }
@@ -135,7 +135,7 @@ func TestPrivateAgentSetupPreservesGeneratedHooks(t *testing.T) {
 	if err := setupAgentHooks(command, "claude", path, true, false, mask); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output.String(), path) || !strings.Contains(output.String(), mask.Value("path", path)) {
+	if output.String() != "Updated "+path+"\n" {
 		t.Fatalf("setup display = %s", &output)
 	}
 	installed, err := os.ReadFile(path) //nolint:gosec // read the hook settings fixture generated in this test's temporary directory
@@ -166,7 +166,7 @@ func TestPrivateAgentDoctorMasksSettingsPathAndErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", root)
-	t.Setenv("CODEX_HOME", filepath.Join(root, "private-provider-home"))
+	t.Setenv("CODEX_HOME", "/home/owner/private-provider-home")
 	mask := privacy.New()
 	command := &cobra.Command{}
 	command.SetContext(t.Context())
@@ -179,7 +179,7 @@ func TestPrivateAgentDoctorMasksSettingsPathAndErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output.String(), root) || !strings.Contains(output.String(), mask.Value("path", path)) || !strings.Contains(output.String(), "Hooks: missing") {
+	if strings.Contains(output.String(), "/home/owner") || !strings.Contains(output.String(), mask.Value("path", path)) || !strings.Contains(output.String(), "Hooks: missing") {
 		t.Fatalf("doctor display = %s", &output)
 	}
 	if err := os.Remove(provider); err != nil {
@@ -193,8 +193,8 @@ func TestPrivateAgentDoctorMasksSettingsPathAndErrors(t *testing.T) {
 
 func TestPrivateUpdateHumanDisplayLeavesMachineJSONRaw(t *testing.T) {
 	mask := privacy.New()
-	run := update.Run{ID: "private-update-id", Release: release.Manifest{Version: "v0.1.52"}, Problem: "private-freeform-problem", Targets: []update.Target{{Host: update.Host{Alias: "private-host"}, State: update.Updated, Problem: "private-target-problem"}}}
-	preview := updatePreview{Fleet: update.Fleet{Name: "private-fleet"}, Release: run.Release, Targets: run.Targets, OutsideFleet: []string{"private-outside"}}
+	run := update.Run{ID: "12345678-1234-1234-1234-123456789abc", Release: release.Manifest{Version: "v0.1.52"}, Problem: "private-freeform-problem", Targets: []update.Target{{Host: update.Host{Alias: "build-box owner@machine"}, State: update.Updated, Problem: "private-target-problem"}}}
+	preview := updatePreview{Fleet: update.Fleet{Name: "development"}, Release: run.Release, Targets: run.Targets, OutsideFleet: []string{"offline-box", "100.64.0.9"}}
 	var output bytes.Buffer
 	if err := printUpdatePreview(&output, preview, false, mask); err != nil {
 		t.Fatal(err)
@@ -202,12 +202,12 @@ func TestPrivateUpdateHumanDisplayLeavesMachineJSONRaw(t *testing.T) {
 	if err := printUpdateRun(&output, run, false, mask); err != nil {
 		t.Fatal(err)
 	}
-	for _, private := range []string{run.ID, run.Problem, "private-host", "private-target-problem", "private-fleet", "private-outside"} {
+	for _, private := range []string{run.ID, run.Problem, "owner@machine", "private-target-problem", "100.64.0.9"} {
 		if strings.Contains(output.String(), private) {
 			t.Fatalf("update leaked %q: %s", private, &output)
 		}
 	}
-	for _, public := range []string{"v0.1.52", "updated", "1 of 1 machines verified", mask.Value("host", "private-host")} {
+	for _, public := range []string{"v0.1.52", "updated", "1 of 1 machines verified", "build-box", "development", "offline-box"} {
 		if !strings.Contains(output.String(), public) {
 			t.Fatalf("update lost %q: %s", public, &output)
 		}
@@ -239,7 +239,7 @@ func TestPrivateAgentFallbackPromptRemainsActionable(t *testing.T) {
 	if strings.Contains(output.String(), failure.Error()) || strings.Contains(output.String(), directory) {
 		t.Fatalf("fallback leaked metadata: %s", &output)
 	}
-	for _, public := range []string{"Provider could not resume: error-", "Press Enter", "Ctrl+D", mask.Value("path", directory)} {
+	for _, public := range []string{"Provider could not resume: error-", "Press Enter", "Ctrl+D", "~/private-project"} {
 		if !strings.Contains(output.String(), public) {
 			t.Fatalf("fallback lost guidance %q: %s", public, &output)
 		}

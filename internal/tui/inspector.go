@@ -484,7 +484,7 @@ func (m model) detailPanel(previewRows int) []string {
 	if label := m.privacy.Value("session", m.bestSessionLabel(current)); label != heading {
 		heading += "  ·  " + label
 	}
-	panel := []string{m.boxTop(heading+"  ·  "+safeText(current.id), m.width)}
+	panel := []string{m.boxTop(heading+"  ·  "+safeText(m.privacy.Text(current.id)), m.width)}
 	for _, fact := range facts {
 		panel = append(panel, m.boxRow(m.styles.muted.Render(cell(fact.label, detailLabelColumns))+" "+m.factValue(fact.value), m.width))
 	}
@@ -543,7 +543,7 @@ func (m model) fullPreviewPanel(rows int) []string {
 		screenTitle = "current screen"
 	}
 	panel := make([]string, 0, rows)
-	panel = append(panel, m.boxTop(screenTitle+"  ·  "+m.privacy.Value("session", m.sessionHeadline(current))+"  ·  "+safeText(current.id), m.width))
+	panel = append(panel, m.boxTop(screenTitle+"  ·  "+m.privacy.Value("session", m.sessionHeadline(current))+"  ·  "+safeText(m.privacy.Text(current.id)), m.width))
 	panel = append(panel, m.previewRows(details, rows-2)...)
 	return append(panel, m.boxBottom(m.width))
 }
@@ -566,7 +566,7 @@ func (m model) previewSubtitle() string {
 	details := m.detailsFor(current)
 	parts := []string{
 		m.privacy.Value("session", m.sessionHeadline(current)),
-		safeText(current.id),
+		safeText(m.privacy.Text(current.id)),
 	}
 	if details.screenStatus != statusLive {
 		parts = append(parts, details.screenStatus)

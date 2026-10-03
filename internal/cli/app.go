@@ -430,6 +430,12 @@ func writeSetupFailure(w io.Writer, runtime *appspkg.RuntimeInfo) error {
 }
 func writeOneApp(w io.Writer, host string, app appspkg.Record, masks ...*privacy.Mask) error {
 	mask := presentationMask(masks)
+	// The sanitized URL authority no longer carries the actionable app ID.
+	if mask != nil {
+		if _, err := fmt.Fprintf(w, "id: %s\n", mask.Value("app", app.ID)); err != nil {
+			return fmt.Errorf("show private app ID: %w", err)
+		}
+	}
 	_, err := fmt.Fprintf(w, "%s\nhost: %s\nowner: %s\nvisibility: %s\nstate: %s\nexpires: %s\n", mask.Value("url", appspkg.URL(app.ID)), SafeTerminalText(mask.Value("host", host)), SafeTerminalText(mask.Value("owner", app.Owner)), SafeTerminalText(app.Visibility), SafeTerminalText(app.Status), app.ExpiresAt.Format("2006-01-02 15:04:05 MST"))
 	return err
 }

@@ -76,6 +76,7 @@ func (delegate sessionDelegate) privacyRow(row sessionRow) sessionRow {
 	if delegate.privacy == nil {
 		return row
 	}
+	row.id = delegate.privacy.Text(row.id)
 	row.primary = delegate.privacy.Value("session", row.primary)
 	row.secondary = delegate.privacy.Value("session", row.secondary)
 	if row.context != "previous attempt" {

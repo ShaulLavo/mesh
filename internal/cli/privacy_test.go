@@ -31,12 +31,12 @@ func TestPrivacySessionListsMaskMetadataKeepStatus(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := output.String()
-		for _, secret := range []string{"private-owner", "private-host", "secret-project", "secret-conversation", "--resume", "f15946ad"} {
+		for _, secret := range []string{"private-owner", "--resume", "f15946ad"} {
 			if strings.Contains(text, secret) {
 				t.Fatalf("leaked %q: %s", secret, text)
 			}
 		}
-		for _, fact := range []string{"7K3D", "running", "1.0M", "claude", mask.Value("path", rows[0].Cwd), mask.Value("title", rows[0].Label)} {
+		for _, fact := range []string{"7K3D", "running", "1.0M", "claude", "private-host", "~/secret-project", mask.Value("path", rows[0].Cwd), mask.Value("title", rows[0].Label)} {
 			if !strings.Contains(text, fact) {
 				t.Fatalf("missing %q: %s", fact, text)
 			}
@@ -169,10 +169,13 @@ func TestPrivacyHostManagementPresentationPreservesRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"private-user", "private-machine", "private-host-id"} {
+	for _, secret := range []string{"private-user", "private-host-id"} {
 		if strings.Contains(output, secret) {
 			t.Fatalf("add leaked %q: %s", secret, output)
 		}
+	}
+	if !strings.Contains(output, "added private-machine") {
+		t.Fatalf("add lost its readable host name: %s", output)
 	}
 	hosts, err := LoadHosts()
 	if err != nil || len(hosts) != 1 || hosts[0].Alias != "private-machine" || hosts[0].Endpoint != raw.Endpoint {
@@ -187,7 +190,7 @@ func TestPrivacyHostManagementPresentationPreservesRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output, "private-machine") || !strings.Contains(output, "woke host-") {
+	if !strings.Contains(output, "woke private-machine") {
 		t.Fatalf("wake output=%s", output)
 	}
 }
