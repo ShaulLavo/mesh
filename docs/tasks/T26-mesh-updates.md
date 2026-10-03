@@ -34,14 +34,23 @@ independently of this updater project and does not wait for its milestones.
 | `mesh update retry RUN` | Retry unfinished targets using the original approved release. |
 | `mesh update cancel RUN` | Cancel pending targets and stop issuing activation grants. Report work already authorized. |
 
-`--all` is an explicit alias for the default scope. `--version TAG` selects an
+`--all` selects an explicitly saved fleet. With no saved fleet, an interactive
+update or `--check` reviews this machine only. No update command creates or saves
+a fleet from the address book. `--version TAG` selects an
 exact published release. Ordinary updates never downgrade a newer installation.
 `--fleet FILE` uses an explicit fleet manifest instead of the saved default.
 `--yes` approves the displayed scope for scripts; `--json` produces structured
 output. Noninteractive installation requires `--yes` and never reads stdin.
 
-The preview identifies the exact release, included machines, offline machines,
-and sessions using old workers. Approval occurs once for the whole operation.
+The default preview uses plain sentences for the release and selected machines.
+`--details` shows release identifiers, build capabilities, and session inventory;
+`--json` retains raw identifiers and rejection causes. Exact-current installations
+need no operation, and compatible newer builds are kept. Source compatibility,
+installation ordering/journal support, observed session protocols, and unresolved
+recovery are checked before approval, including local CLI and legacy paths.
+Unknown legacy builds or invalid authentication/control responses block approval.
+A missing direct transition does not identify a next release tag. Approval occurs
+once for the whole eligible operation.
 Accepting an update notification opens this same preview.
 
 Example notification, with illustrative versions and host counts:
@@ -140,11 +149,10 @@ platforms when known, and explicit routing dependencies. The file describes
 update scope; it grants no access to a member. An address-book entry alone
 does not establish that the full fleet has been inventoried.
 
-On first use, the interactive update preview seeds an editable candidate list
-from this machine and adopted hosts. Tailnet discovery can suggest additional
-Mesh hosts, but it cannot silently add or trust them. The user completes the
-list, including offline members, and reviews it in the same update approval.
-Save that exact membership with the operation. A script without a saved fleet
+On first use, the interactive update preview selects only this machine. The
+address book and discovery never add members, trust hosts, or save a fleet.
+Choose the complete group in an explicit fleet file, including offline members.
+The operation pins that approved membership. A script without a saved fleet
 must supply `--fleet FILE` or narrower `--local` or `--host` scope. `--yes`
 cannot treat an unreviewed address book as the whole fleet.
 

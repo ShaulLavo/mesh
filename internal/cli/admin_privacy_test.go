@@ -196,7 +196,10 @@ func TestPrivateUpdateHumanDisplayLeavesMachineJSONRaw(t *testing.T) {
 	run := update.Run{ID: "12345678-1234-1234-1234-123456789abc", Release: release.Manifest{Version: "v0.1.52"}, Problem: "private-freeform-problem", Targets: []update.Target{{Host: update.Host{Alias: "build-box owner@machine"}, State: update.Updated, Problem: "private-target-problem"}}}
 	preview := updatePreview{Fleet: update.Fleet{Name: "development"}, Release: run.Release, Targets: run.Targets, OutsideFleet: []string{"offline-box", "100.64.0.9"}}
 	var output bytes.Buffer
-	if err := printUpdatePreview(&output, preview, false, mask); err != nil {
+	if err := printUpdatePreview(&output, preview, false, false, mask); err != nil {
+		t.Fatal(err)
+	}
+	if err := printUpdatePreview(&output, preview, false, true, mask); err != nil {
 		t.Fatal(err)
 	}
 	if err := printUpdateRun(&output, run, false, mask); err != nil {
@@ -207,7 +210,7 @@ func TestPrivateUpdateHumanDisplayLeavesMachineJSONRaw(t *testing.T) {
 			t.Fatalf("update leaked %q: %s", private, &output)
 		}
 	}
-	for _, public := range []string{"v0.1.52", "updated", "1 of 1 machines verified", "build-box", "development", "offline-box"} {
+	for _, public := range []string{"v0.1.52", "up to date", "1 of 1 machines verified", "build-box", "development", "offline-box"} {
 		if !strings.Contains(output.String(), public) {
 			t.Fatalf("update lost %q: %s", public, &output)
 		}
@@ -221,7 +224,7 @@ func TestPrivateUpdateHumanDisplayLeavesMachineJSONRaw(t *testing.T) {
 		t.Fatal("privacy changed machine-consumed update JSON")
 	}
 	output.Reset()
-	if err := printUpdatePreview(&output, preview, true, mask); err != nil {
+	if err := printUpdatePreview(&output, preview, true, false, mask); err != nil {
 		t.Fatal(err)
 	}
 	want, err = json.Marshal(preview)
