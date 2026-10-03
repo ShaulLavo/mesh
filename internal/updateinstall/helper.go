@@ -80,7 +80,7 @@ func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approved
 	}
 	installed.ServicePath = filepath.Join(cfg.ServiceDir, name)
 	var current HelperInstallation
-	currentErr := readJSON(helperRecord(cfg.StateDir), &current)
+	currentErr := readHelperInstallation(ctx, cfg.StateDir, &current)
 	if currentErr == nil && !upgrade {
 		return current, verifyFile(current.Executable, current.Digest)
 	}
@@ -88,7 +88,7 @@ func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approved
 		return installed, currentErr
 	}
 	if currentErr != nil {
-		existing, readErr := os.ReadFile(installed.ServicePath)
+		existing, readErr := readMetadata(ctx, cfg.ServiceDir, name, false)
 		if readErr == nil && !bytes.Equal(existing, []byte(data)) {
 			return installed, errors.New("refusing to overwrite an unmanaged update helper service")
 		}
@@ -174,7 +174,7 @@ func UpgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 		return HelperInstallation{}, err
 	}
 	var prior HelperInstallation
-	if err = readJSON(helperRecord(cfg.StateDir), &prior); err != nil {
+	if err = readHelperInstallation(ctx, cfg.StateDir, &prior); err != nil {
 		return prior, err
 	}
 	interrupted, err := verifyHelperReceipt(ctx, cfg.StateDir, prior, digest, status.Request.Manifest)

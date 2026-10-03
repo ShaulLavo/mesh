@@ -367,7 +367,7 @@ func runLocalHelperRecovery(ctx context.Context, request updateinstall.HelperRec
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	settings, err := updateinstall.ReadSettings(request.Helper.StateDir)
+	settings, err := updateinstall.ReadSettingsContext(ctx, request.Helper.StateDir)
 	if err != nil {
 		return updateinstall.HelperRecoveryResult{}, fmt.Errorf("read helper recovery settings: %w", err)
 	}

@@ -1,9 +1,7 @@
 name: Local helper recovery
 
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
@@ -32,14 +30,20 @@ jobs:
       - name: Require actual native execution
         env:
           REQUIRED_PLATFORM: ${{ matrix.platform }}
-        run: test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$REQUIRED_PLATFORM"
+        run: |
+          mkdir -p "$RUNNER_TEMP/helper-recovery"
+          git rev-parse HEAD > "$RUNNER_TEMP/helper-recovery/source-sha.txt"
+          go env GOHOSTOS GOHOSTARCH > "$RUNNER_TEMP/helper-recovery/native-platform.txt"
+          test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$REQUIRED_PLATFORM"
+      - name: Verify required publication aggregate and rejection controls
+        run: python3 scripts/test-helper-recovery-gate.py | tee "$RUNNER_TEMP/helper-recovery/publication-gate.log"
       - name: Verify recovery cancellation, rejection and mapped helper identity
         run: |
-          go test -race ./internal/updateinstall ./internal/updatebootstrap ./internal/cli -run 'TestHelperRecovery|TestHelperProcess|TestHelperLaunchdTarget|TestLaunchdHelperPID|TestUpgradeHelper|TestFailedRollback|TestOriginalInode|TestDarwinMappedExecutable' -count=1 -timeout=180s
+          go test -race ./internal/updateinstall ./internal/updatebootstrap ./internal/cli -run 'TestHelperRecovery|TestHelperProcess|TestHelperLaunchdTarget|TestLaunchdHelperPID|TestUpgradeHelper|TestFailedRollback|TestOriginalInode|TestDarwinMappedExecutable' -count=1 -timeout=180s 2>&1 | tee "$RUNNER_TEMP/helper-recovery/race-tests.log"
       - name: Verify shared acquisition and child-only TLS controls
         run: |
-          python3 scripts/test-fixture-tls.py
-          python3 scripts/test-published-releases.py
+          python3 scripts/test-fixture-tls.py 2>&1 | tee "$RUNNER_TEMP/helper-recovery/tls-controls.log"
+          python3 scripts/test-published-releases.py 2>&1 | tee "$RUNNER_TEMP/helper-recovery/acquisition-controls.log"
       - name: Recover historical helper and run published bridge chain
         env:
           HELPER_RECOVERY_PLATFORM: ${{ matrix.platform }}

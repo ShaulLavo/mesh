@@ -66,7 +66,7 @@ func (e *Engine) RecoverHelper(ctx context.Context, request HelperRecovery) (Hel
 	}
 	ctx, cancel := context.WithTimeout(ctx, e.cfg.HealthTimeout)
 	defer cancel()
-	initial, err := e.Read()
+	initial, err := ReadContext(ctx, e.cfg.StateDir)
 	if err != nil {
 		return HelperRecoveryResult{}, err
 	}
@@ -78,7 +78,7 @@ func (e *Engine) RecoverHelper(ctx context.Context, request HelperRecovery) (Hel
 		return HelperRecoveryResult{}, err
 	}
 	defer unlock(lock)
-	if err = e.unchangedRecoveryJournal(initial); err != nil {
+	if err = e.unchangedRecoveryJournal(ctx, initial); err != nil {
 		return HelperRecoveryResult{}, err
 	}
 	prior, err := e.recoverySnapshot(ctx, request, initial)
@@ -123,7 +123,7 @@ func (e *Engine) recoverySnapshot(ctx context.Context, request HelperRecovery, i
 	if err = e.verifyRecoveryCandidate(ctx, request, prior.installation, health); err != nil {
 		return helperRecoverySnapshot{}, err
 	}
-	if err = e.unchangedRecoveryJournal(initial); err != nil {
+	if err = e.unchangedRecoveryJournal(ctx, initial); err != nil {
 		return helperRecoverySnapshot{}, err
 	}
 	if err = e.recoveryIdle(ctx, request, initial); err != nil {
@@ -156,7 +156,7 @@ func (e *Engine) restoreRecoveryRollback(ctx context.Context, initial Status) (S
 }
 
 func (e *Engine) promoteRecoveryHelper(ctx context.Context, request HelperRecovery, initial Status, prior helperRecoverySnapshot) (HelperRecoveryResult, error) {
-	if err := retainRecoveryHelperReceipt(prior); err != nil {
+	if err := retainRecoveryHelperReceipt(ctx, e.cfg.StateDir, prior); err != nil {
 		return HelperRecoveryResult{}, err
 	}
 	promotionStarted := false
@@ -179,7 +179,7 @@ func (e *Engine) promoteRecoveryHelper(ctx context.Context, request HelperRecove
 		return result, nil
 	}
 	cause := fmt.Errorf("replacement helper did not become ready: %w", err)
-	if !promotionStarted || recoveryHelperUnchanged(e.cfg.StateDir, prior) {
+	if !promotionStarted || recoveryHelperUnchanged(ctx, e.cfg.StateDir, prior) {
 		return HelperRecoveryResult{}, cause
 	}
 	return HelperRecoveryResult{}, errors.Join(cause, e.restoreRecoveryHelper(ctx, request, prior))
@@ -190,7 +190,7 @@ func (e *Engine) verifyRecoveredHelper(ctx context.Context, request HelperRecove
 	if err != nil {
 		return HelperRecoveryResult{}, err
 	}
-	if err := e.unchangedRecoveryJournal(initial); err != nil {
+	if err := e.unchangedRecoveryJournal(ctx, initial); err != nil {
 		return HelperRecoveryResult{}, err
 	}
 	if err := e.recoveryIdle(ctx, request, initial); err != nil {
@@ -207,13 +207,13 @@ func (e *Engine) verifyRecoveredHelper(ctx context.Context, request HelperRecove
 }
 
 func (e *Engine) recoveryPromotionGuard(ctx context.Context, request HelperRecovery, initial Status, prior helperRecoverySnapshot) error {
-	if err := e.unchangedRecoveryJournal(initial); err != nil {
+	if err := e.unchangedRecoveryJournal(ctx, initial); err != nil {
 		return err
 	}
 	if err := e.recoveryIdle(ctx, request, initial); err != nil {
 		return err
 	}
-	if !recoveryHelperUnchanged(request.Helper.StateDir, prior) {
+	if !recoveryHelperUnchanged(ctx, request.Helper.StateDir, prior) {
 		return errors.New("prior helper changed during recovery")
 	}
 	_, err := e.recoveryOriginalHealth(ctx, initial)
@@ -240,14 +240,10 @@ func (e *Engine) recoveryOriginalHealth(ctx context.Context, initial Status) (He
 	return health, nil
 }
 
-func retainRecoveryHelperReceipt(prior helperRecoverySnapshot) error {
-	root, err := os.OpenRoot(filepath.Dir(prior.installation.Executable))
-	if err != nil {
-		return fmt.Errorf("open verified prior helper directory: %w", err)
-	}
-	defer func() { _ = root.Close() }()
-	path := filepath.Join(root.Name(), "installed.json")
-	retained, err := root.ReadFile("installed.json")
+func retainRecoveryHelperReceipt(ctx context.Context, stateDir string, prior helperRecoverySnapshot) error {
+	name := filepath.Join("update", "helper", prior.installation.Digest, "installed.json")
+	path := filepath.Join(stateDir, name)
+	retained, err := readMetadata(ctx, stateDir, name, true)
 	if err == nil {
 		if !bytes.Equal(retained, prior.receipt) {
 			return errors.New("retained prior helper receipt differs from the verified installation")
@@ -263,9 +259,9 @@ func retainRecoveryHelperReceipt(prior helperRecoverySnapshot) error {
 	return nil
 }
 
-func recoveryHelperUnchanged(stateDir string, prior helperRecoverySnapshot) bool {
-	receipt, receiptErr := os.ReadFile(helperRecord(stateDir))
-	service, serviceErr := os.ReadFile(prior.installation.ServicePath)
+func recoveryHelperUnchanged(ctx context.Context, stateDir string, prior helperRecoverySnapshot) bool {
+	receipt, receiptErr := readMetadata(ctx, stateDir, filepath.Join("update", "helper", "installed.json"), true)
+	service, serviceErr := readMetadata(ctx, filepath.Dir(prior.installation.ServicePath), filepath.Base(prior.installation.ServicePath), false)
 	link, linkErr := os.Readlink(filepath.Join(transactionDir(stateDir), "helper", "current"))
 	return receiptErr == nil && serviceErr == nil && linkErr == nil &&
 		bytes.Equal(receipt, prior.receipt) && bytes.Equal(service, prior.service) && link == prior.installation.Executable
@@ -279,8 +275,8 @@ func expectRecoveryJournal(status Status, expected JournalExpectation) error {
 	return nil
 }
 
-func (e *Engine) unchangedRecoveryJournal(expected Status) error {
-	current, err := e.Read()
+func (e *Engine) unchangedRecoveryJournal(ctx context.Context, expected Status) error {
+	current, err := ReadContext(ctx, e.cfg.StateDir)
 	if err != nil {
 		return err
 	}
@@ -294,8 +290,8 @@ func (e *Engine) recoveryIdle(ctx context.Context, request HelperRecovery, statu
 	if _, err := os.Lstat(filepath.Join(e.cfg.StateDir, "activation.pending")); !errors.Is(err, os.ErrNotExist) {
 		return errors.Join(errors.New("service activation is pending; stop helper recovery"), err)
 	}
-	if err := updategate.Check(e.cfg.StateDir); err != nil {
-		return fmt.Errorf("check helper recovery activation gate: %w", err)
+	if _, err := os.Lstat(updategate.Path(e.cfg.StateDir)); !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(errors.New("update activation gate is pending; stop helper recovery"), err)
 	}
 	return request.CheckIdle(ctx, status)
 }
@@ -323,9 +319,14 @@ func verifyRecoveryHealth(health Health, status Status) error {
 
 func recoveryHelperSnapshot(ctx context.Context, cfg HelperConfig) (helperRecoverySnapshot, error) {
 	var snapshot helperRecoverySnapshot
-	if err := readJSON(helperRecord(cfg.StateDir), &snapshot.installation); err != nil {
+	receipt, err := readMetadata(ctx, cfg.StateDir, filepath.Join("update", "helper", "installed.json"), true)
+	if err != nil {
 		return snapshot, err
 	}
+	if err = readJSON(receipt, &snapshot.installation); err != nil {
+		return snapshot, err
+	}
+	snapshot.receipt = receipt
 	prior := snapshot.installation
 	if prior.Executable != filepath.Join(transactionDir(cfg.StateDir), "helper", prior.Digest, "mesh") {
 		return snapshot, errors.New("prior helper receipt requires its immutable executable")
@@ -344,16 +345,12 @@ func recoveryHelperSnapshot(ctx context.Context, cfg HelperConfig) (helperRecove
 	if prior.ServicePath != filepath.Join(cfg.ServiceDir, name) {
 		return snapshot, errors.New("helper service differs from its managed receipt")
 	}
-	snapshot.service, err = os.ReadFile(prior.ServicePath)
+	snapshot.service, err = readMetadata(ctx, cfg.ServiceDir, name, false)
 	if err != nil {
 		return snapshot, fmt.Errorf("read prior helper service: %w", err)
 	}
 	if !bytes.Equal(snapshot.service, []byte(service)) {
 		return snapshot, errors.New("helper service configuration differs from its managed definition")
-	}
-	snapshot.receipt, err = os.ReadFile(helperRecord(cfg.StateDir))
-	if err != nil {
-		return snapshot, fmt.Errorf("read prior helper receipt: %w", err)
 	}
 	return snapshot, nil
 }

@@ -30,6 +30,13 @@ its capabilities must cover the journal, daemon, workers and prior helper. A rea
 cancellable `update-helper --check-journal` subprocess checks the selected state.
 Downgrades and equal-version/different-digest replacements fail closed.
 
+Journal, receipt and service metadata opens reject FIFOs, other special files,
+symlinks and unsafe permissions. Directory traversal beneath the selected state
+or service directory and inspection/read use the same descriptors. Reads stop at
+2 MiB and check cancellation between bounded chunks; no detached read goroutine
+holds the installation lock. An existing activation gate is rejected by presence,
+without opening its contents.
+
 For `rollback_failed`, the existing Engine's stop/restore/start path must prove
 the original daemon and workers and write its genuine `rolled_back` receipt.
 Recovery cannot manufacture settlement. This restoration can restart the daemon;
@@ -120,8 +127,13 @@ edit phases, force installation or skip a historical bridge.
 
 ## Native proof and limits
 
-`.github/workflows/helper-recovery.yml` requires actual Darwin/arm64 and
-Linux/amd64 execution. `scripts/prove-helper-recovery.sh OUTPUT-DIRECTORY` builds
+`.github/workflows/ci.yml` calls the reusable `helper-recovery.yml` workflow;
+actual Darwin/arm64 and Linux/amd64 results are mandatory dependencies of
+`Complete CI gate`. Failed, cancelled, skipped or unfinished native work cannot
+satisfy that gate. Automatic publication and manual exact-source release
+reservation require its success. Failure artifacts include source/platform and
+unit-test logs even when the historical process harness has not started.
+`scripts/prove-helper-recovery.sh OUTPUT-DIRECTORY` builds
 one fixed helper as an explicitly unpublished source fixture. The harness reuses
 `fixtures.published_releases.acquire` for unchanged actual v149/v151/v159 archives,
 descriptors and joined transition receipts, and `fixtures.tls` for child-only

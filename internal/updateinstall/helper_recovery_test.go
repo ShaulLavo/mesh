@@ -113,7 +113,7 @@ func (f *recoveryFixture) assertNoServiceMutation(t *testing.T) {
 	if _, err := os.Stat(f.events); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("helper service mutated before recovery guards passed")
 	}
-	if !recoveryHelperUnchanged(f.request.Helper.StateDir, f.prior) {
+	if !recoveryHelperUnchanged(t.Context(), f.request.Helper.StateDir, f.prior) {
 		t.Fatal("prior helper record, service, or launcher changed")
 	}
 	f.roundTrip()
@@ -136,7 +136,7 @@ func TestHelperRecoveryPreservesDaemonWorkersAndJournal(t *testing.T) {
 	if f.manager.process.Process.Pid != daemonPID {
 		t.Fatal("helper-only recovery restarted the daemon")
 	}
-	if err = f.engine.unchangedRecoveryJournal(before); err != nil {
+	if err = f.engine.unchangedRecoveryJournal(t.Context(), before); err != nil {
 		t.Fatal(err)
 	}
 	if err = release.VerifyExecutable(t.Context(), f.engine.cfg.Executable, f.request.Expected.OriginalDigest); err != nil {
@@ -169,7 +169,7 @@ func TestHelperRecoveryReadinessFailureRestoresPriorHelper(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "replacement helper refuses readiness") {
 		t.Fatalf("replacement readiness failure = %v", err)
 	}
-	if !recoveryHelperUnchanged(f.request.Helper.StateDir, f.prior) {
+	if !recoveryHelperUnchanged(t.Context(), f.request.Helper.StateDir, f.prior) {
 		t.Fatal("failed recovery did not restore the exact prior receipt, service, and launcher")
 	}
 	if pid, err := originalProbe(t.Context(), f.prior.installation); err != nil || pid <= 0 {
@@ -195,7 +195,7 @@ func TestHelperRecoveryCancellationRestoresPriorHelper(t *testing.T) {
 		return originalProbe(probeCtx, installed)
 	}
 	_, err := f.engine.RecoverHelper(ctx, f.request)
-	if !errors.Is(err, context.Canceled) || !restored || !recoveryHelperUnchanged(f.request.Helper.StateDir, f.prior) {
+	if !errors.Is(err, context.Canceled) || !restored || !recoveryHelperUnchanged(t.Context(), f.request.Helper.StateDir, f.prior) {
 		t.Fatalf("cancelled recovery restoration = %v, verified=%v", err, restored)
 	}
 	f.roundTrip()
@@ -319,10 +319,32 @@ func (s *failRestorationStart) Start(ctx context.Context) error {
 		s.failed = true
 		return errors.New("fixture rejected original service restart")
 	}
-	return s.manager.Start(ctx)
+	if err = s.manager.Start(ctx); err != nil {
+		return err
+	}
+	return awaitRecoveryFixtureReport(ctx, s.manager.healthPath, digest)
 }
 
-func TestHelperRecoverySettlesOnlyGenuineRollbackRestoration(t *testing.T) {
+func awaitRecoveryFixtureReport(ctx context.Context, path, digest string) error {
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open recovery fixture health directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	for {
+		data, readErr := root.ReadFile(filepath.Base(path))
+		var build release.Build
+		if readErr == nil && json.Unmarshal(data, &build) == nil && build.Digest == digest {
+			return nil
+		}
+		if err = waitContext(ctx, time.Millisecond); err != nil {
+			return fmt.Errorf("await actual recovery fixture health report: %w", err)
+		}
+	}
+}
+
+func newFailedRollbackRecoveryFixture(t *testing.T) *recoveryFixture {
+	t.Helper()
 	f := newRecoveryFixture(t)
 	replacementClient := f.engine.cfg.Client
 	f.engine.cfg.Client = release.Client{BaseURL: f.server.URL, HTTPClient: f.server.Client()}
@@ -343,12 +365,19 @@ func TestHelperRecoverySettlesOnlyGenuineRollbackRestoration(t *testing.T) {
 	f.awaitOriginal()
 	f.request.Expected.Phase = RollbackFailed
 	f.engine.cfg.Client = replacementClient
+	return f
+}
+
+func TestHelperRecoverySettlesOnlyGenuineRollbackRestoration(t *testing.T) {
+	f := newFailedRollbackRecoveryFixture(t)
 	stops := f.manager.stops
+	started := time.Now()
 	result, err := f.engine.RecoverHelper(t.Context(), f.request)
 	if err != nil || result.Phase != RolledBack || f.manager.stops != stops+1 {
-		t.Fatalf("existing engine restoration = %s, %v", result.Phase, err)
+		t.Fatalf("existing engine restoration = %s, %v; elapsed=%s health-budget=%s", result.Phase, err, time.Since(started), f.engine.cfg.HealthTimeout)
 	}
-	status, err = f.engine.Read()
+	t.Logf("genuine recovery elapsed=%s health-budget=%s", time.Since(started), f.engine.cfg.HealthTimeout)
+	status, err := f.engine.Read()
 	if err != nil || status.Verified == nil || status.Phase != RolledBack || status.Error == "" {
 		t.Fatal("recovery fabricated or discarded the real rollback receipt")
 	}
@@ -375,7 +404,7 @@ func TestHelperRecoveryRestartFailureRestoresAndRetainsBothCauses(t *testing.T) 
 			if strings.Contains(err.Error(), "restart prior helper") != restorationFails {
 				t.Fatalf("prior restart failure retained=%v: %v", restorationFails, err)
 			}
-			if !recoveryHelperUnchanged(f.request.Helper.StateDir, f.prior) {
+			if !recoveryHelperUnchanged(t.Context(), f.request.Helper.StateDir, f.prior) {
 				t.Fatal("restart failure did not retain the prior service, receipt, and launcher")
 			}
 			f.roundTrip()
@@ -401,7 +430,7 @@ func TestHelperRecoveryPriorReadinessFailureRetainsBothCauses(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "replacement helper is not ready") || !strings.Contains(err.Error(), "prior helper is not ready") {
 		t.Fatalf("readiness failures were discarded: %v", err)
 	}
-	if !recoveryHelperUnchanged(f.request.Helper.StateDir, f.prior) {
+	if !recoveryHelperUnchanged(t.Context(), f.request.Helper.StateDir, f.prior) {
 		t.Fatal("prior readiness failure discarded the restored receipt, service, or launcher")
 	}
 	f.roundTrip()
@@ -421,4 +450,41 @@ func writeRecoveryFixture(path string, data []byte) error {
 		return fmt.Errorf("make recovery fixture executable: %w", err)
 	}
 	return nil
+}
+
+type recoveryDeadlineStart struct {
+	manager *processService
+	attempt context.Context
+	started bool
+}
+
+func (s *recoveryDeadlineStart) Stop(ctx context.Context) error { return s.manager.Stop(ctx) }
+func (s *recoveryDeadlineStart) Start(ctx context.Context) error {
+	if err := s.manager.Start(ctx); err != nil {
+		return err
+	}
+	s.started = true
+	select {
+	case <-s.attempt.Done():
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("fixture restoration deadline: %w", ctx.Err())
+	}
+}
+
+func TestHelperRecoveryRollbackDeadlineKeepsGenuineReceipt(t *testing.T) {
+	f := newFailedRollbackRecoveryFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), f.engine.cfg.HealthTimeout)
+	defer cancel()
+	service := &recoveryDeadlineStart{manager: f.manager, attempt: ctx}
+	f.engine.cfg.Service = service
+	_, err := f.engine.RecoverHelper(ctx, f.request)
+	if !service.started || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "helper recovery cancelled") {
+		t.Fatalf("deadline after genuine restoration = %v; started=%t", err, service.started)
+	}
+	status, err := f.engine.Read()
+	if err != nil || status.Phase != RolledBack || status.Verified == nil || status.Error == "" {
+		t.Fatalf("real rollback receipt lost after attempt deadline: phase=%s error=%v", status.Phase, err)
+	}
+	f.assertNoServiceMutation(t)
 }
