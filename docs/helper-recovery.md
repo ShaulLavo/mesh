@@ -63,6 +63,7 @@ published containing release. `daemon` is the installation journal's absolute
 `settings.executable`. `state` is its absolute `settings.stateDir`.
 
 ```sh
+set -eu
 : "${fixed:?absolute downloaded containing-release executable}"
 : "${fixed_version:?published containing-release version}"
 : "${fixed_sha256:?published native binarySha256}"

@@ -199,7 +199,7 @@ sys.exit(result["status"])
             self.environment[variable] = str(self.root / directory)
             Path(self.environment[variable]).mkdir(mode=0o700)
         self.plists, self.processes, self.logs = {}, {}, []
-        self.timers, self.closed = [], False
+        self.closed = False
         self.departing = {}
         self.delay, self.fail_candidate, self.fail_original, self.helper_failure = 0, False, False, ""
         self.workers = []
@@ -217,7 +217,7 @@ sys.exit(result["status"])
         HOSTS[name] = self
 
     def service(self, args):
-        event("service", host=self.name, action=args[0])
+        event("service", host=self.name, action=args[1] if args[0] == "--user" else args[0])
         if NATIVE["os"] == "darwin":
             action = args[0]
             if action == "bootstrap":
@@ -257,9 +257,7 @@ sys.exit(result["status"])
         if self.helper_failure == "restart" and unit == "helper":
             self.helper_failure = ""
             return 1, "injected helper restart failure\n"
-        timer = threading.Timer(0.15, self.restart, args=(unit,))
-        self.timers.append(timer)
-        timer.start()
+        self.restart(unit)
         return 0, ""
 
     def query(self, unit):
@@ -337,8 +335,9 @@ sys.exit(result["status"])
     def command(self, binary, *args, expected=0):
         result = subprocess.run([str(binary), *args], env=self.environment, cwd=self.root, capture_output=True, timeout=100, check=False)
         event("command", host=self.name, operation=args[0], status=result.returncode)
-        if result.returncode != expected:
+        if result.returncode:
             (self.root / "command-error.log").write_bytes(result.stderr)
+        if result.returncode != expected:
             raise RuntimeError(f"fixture {args[0]} exit {result.returncode}, expected {expected}; see command-error.log")
         return result
 
@@ -436,10 +435,6 @@ sys.exit(result["status"])
     def close(self):
         with LOCK:
             self.closed = True
-            for timer in self.timers:
-                timer.cancel()
-        for timer in self.timers:
-            timer.join(timeout=10)
         for terminal in self.terminals:
             terminal.close()
         self.stop("helper")
