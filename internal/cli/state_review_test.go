@@ -180,7 +180,9 @@ func TestWatchReviewID4LegacyTopicTimeoutIsolation(t *testing.T) {
 	}
 }
 func TestWatchReviewID6DurableCatalogAndOfflineReopen(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	// Two SQLite opens with migrations under -race exceeded 3s on a loaded CI
+	// runner. The bound only stops a hang; a healthy run finishes in about 1s.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	database := filepath.Join(t.TempDir(), "catalog.db")
 	store, err := storage.Open(ctx, database)
