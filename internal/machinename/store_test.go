@@ -99,7 +99,7 @@ func TestConcurrentNamesSerializeOneObservedRevision(t *testing.T) {
 }
 
 func TestNameStateRejectsInvalidIdentityAndFile(t *testing.T) {
-	for _, mode := range []string{"symlink", "permissions", "wrong-identity", "unknown-field", "trailing", "oversize", "zero-revision", "invalid-receipt"} {
+	for _, mode := range []string{"symlink", "permissions", "wrong-identity", "unknown-field", "trailing", "oversize", "zero-revision", "invalid-receipt", "missing-receipt"} {
 		t.Run(mode, func(t *testing.T) {
 			_, directory, id := nameFixture(t)
 			path := filepath.Join(directory, stateName)
@@ -133,6 +133,8 @@ func TestNameStateRejectsInvalidIdentityAndFile(t *testing.T) {
 					fields["revision"] = 0
 				case "invalid-receipt":
 					fields["previousRevision"] = 8
+				case "missing-receipt":
+					fields["revision"] = 2
 				}
 				contents, err = json.Marshal(fields)
 				if err != nil {

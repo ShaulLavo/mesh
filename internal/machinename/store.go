@@ -138,6 +138,9 @@ func validateRecord(current record, id string) error {
 	if current.Version != 1 || current.ID != id || name != current.MachineName || current.Revision == 0 {
 		return errors.New("machine name state has an invalid version, identity, name, or revision")
 	}
+	if current.Revision > 1 && current.PreviousRevision == nil {
+		return errors.New("machine name state is missing its committed retry revision")
+	}
 	if current.PreviousRevision != nil && (*current.PreviousRevision == 0 || *current.PreviousRevision != current.Revision-1) {
 		return errors.New("machine name state has an invalid previous revision")
 	}
