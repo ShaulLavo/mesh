@@ -49,6 +49,8 @@ func (c *Coordinator) Start(ctx context.Context, plan Plan) (Run, error) {
 	if manifest.Digest() != plan.Manifest.Digest() {
 		return Run{}, errors.New("release changed after preview; review it again")
 	}
+	c.execution.Lock()
+	defer c.execution.Unlock()
 	return c.Store.Start(c.ID, plan.Fleet, manifest)
 }
 
@@ -109,7 +111,7 @@ func (c *Coordinator) stepRun(ctx context.Context, run Run) error {
 		if settled(target.State) || time.Now().Before(target.RetryAt) {
 			continue
 		}
-		if current.Stopped && !target.Grant && !current.Cancel {
+		if current.Stopped && !target.Grant && !current.Cancel && target.State == Failed {
 			continue
 		}
 		if err := c.reconcile(ctx, current, index); err != nil {
@@ -150,6 +152,12 @@ func (c *Coordinator) reconcile(ctx context.Context, run Run, index int) error {
 	if info.Health.HostID != target.Host.ID {
 		return c.fail(run.ID, index, errors.New("target health identity mismatch"))
 	}
+	if run.Stopped && !target.Grant && !run.Cancel {
+		if _, err := c.observeBuild(run, index, info); err != nil {
+			return c.fail(run.ID, index, err)
+		}
+		return nil
+	}
 	if info.Installation != nil && (info.Installation.Request.ID == run.ID || target.InstallationID != "") {
 		return c.reconcileInstallation(ctx, run, index, info)
 	}
@@ -187,25 +195,34 @@ func (c *Coordinator) reconcile(ctx context.Context, run Run, index int) error {
 	return c.reconcileInstallation(ctx, current, index, Info{Health: info.Health, Installation: &status})
 }
 
-func (c *Coordinator) prepare(run Run, index int, info Info) error {
+func (c *Coordinator) observeBuild(run Run, index int, info Info) (bool, error) {
 	build := info.Health.Build
 	if build.UpdateProtocol != release.CurrentUpdateProtocol {
-		return errors.New("bootstrap required: host does not support this update protocol")
+		return false, errors.New("bootstrap required: host does not support this update protocol")
 	}
 	artifact, err := run.Release.Artifact(build.Platform)
 	if err != nil {
-		return err
+		return false, fmt.Errorf("observe target artifact: %w", err)
 	}
 	if build.Digest == artifact.BinarySHA256 {
-		return c.record(run.ID, index, func(t *Target) { t.State = Updated; t.Build = &build; t.Workers = info.Health.Workers; t.Problem = "" })
+		return true, c.record(run.ID, index, func(t *Target) { t.State = Updated; t.Build = &build; t.Workers = info.Health.Workers; t.Problem = "" })
 	}
 	comparison, err := release.CompareVersions(build.Version, run.Release.Version)
 	if err == nil && comparison > 0 {
 		if err := compatibleNewerBuild(build, run.Release.Compatibility); err != nil {
-			return err
+			return false, err
 		}
-		return c.record(run.ID, index, func(t *Target) { t.State = Newer; t.Build = &build; t.Workers = info.Health.Workers; t.Problem = "" })
+		return true, c.record(run.ID, index, func(t *Target) { t.State = Newer; t.Build = &build; t.Workers = info.Health.Workers; t.Problem = "" })
 	}
+	return false, nil
+}
+
+func (c *Coordinator) prepare(run Run, index int, info Info) error {
+	observed, err := c.observeBuild(run, index, info)
+	if err != nil || observed {
+		return err
+	}
+	build := info.Health.Build
 	if err = run.Release.Allows(build); err != nil {
 		return err
 	}

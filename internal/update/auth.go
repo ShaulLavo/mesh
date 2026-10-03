@@ -188,8 +188,11 @@ func (a *Authority) HandleControl(ctx context.Context, request protocol.Control)
 	if err := decodeMessage(request.Update, &message); err != nil {
 		return protocol.Control{}, true, err
 	}
+	if _, err := PublicKey(message.Actor); err != nil {
+		return protocol.Control{}, true, err
+	}
 	if message.Target != a.ID || !a.allowed(message.Actor) {
-		return protocol.Control{}, true, errors.New("update administrator is not enrolled on this host")
+		return protocol.Control{}, true, fmt.Errorf("update administrator is not enrolled on this host; run mesh update trust %s on this host", message.Actor)
 	}
 	if err := message.Verify(message.Actor); err != nil {
 		return protocol.Control{}, true, err
