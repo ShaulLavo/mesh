@@ -48,12 +48,11 @@ func (a *application) appCommand() *cobra.Command {
 }
 func (a *application) appCreateCommand(output *appOutput, update bool) *cobra.Command {
 	flags := &appFlags{}
-	verb, use, n := "create", "create HOST DIR", 2
+	verb, use, n := "create", "create HOST SOURCE...", 2
 	if update {
-		verb, use, n = "update", "update HOST ID DIR", 3
+		verb, use, n = "update", "update HOST ID SOURCE...", 3
 	}
-	cmd := &cobra.Command{Use: use, Short: verb + " a private temporary app from a directory", Args: cobra.ExactArgs(n), RunE: func(cmd *cobra.Command, args []string) error {
-		directory := args[len(args)-1]
+	cmd := &cobra.Command{Use: use, Short: verb + " a temporary app from files or a directory", Args: cobra.MinimumNArgs(n), RunE: func(cmd *cobra.Command, args []string) error {
 		request, err := flags.recipe()
 		if err != nil {
 			return err
@@ -65,22 +64,45 @@ func (a *application) appCreateCommand(output *appOutput, update bool) *cobra.Co
 		if update && !appspkg.ValidID(request.ID) {
 			return errors.New("app ID must be four lowercase characters")
 		}
-		transport, err := a.appConnection(cmd.Context(), args[0], output)
-		if err != nil {
-			return err
-		}
-		defer transport.close() //nolint:errcheck // the request outcome is authoritative
-		result, err := uploadApp(cmd.Context(), transport, directory, request)
-		if err != nil {
-			return err
-		}
-		return writeAppResult(cmd.OutOrStdout(), args[0], result, output.json, a.privacy)
+		return a.publishAppSources(cmd, args[0], args[n-1:], request, output)
 	}}
 	cmd.Flags().StringVar(&flags.command, "run", "", "explicit HTTP server command; omit for static files")
 	cmd.Flags().StringVar(&flags.setup, "setup", "", "explicit setup command in the managed workspace")
 	cmd.Flags().IntVar(&flags.port, "port", 0, "HTTP server port; required with --run")
 	cmd.Flags().StringArrayVar(&flags.env, "env", nil, "server environment variable NAME=VALUE; repeatable")
 	return cmd
+}
+func (a *application) publishAppSources(cmd *cobra.Command, host string, sources []string, request appspkg.Request, output *appOutput) error {
+	if len(sources) == 1 {
+		info, err := os.Stat(sources[0])
+		if err != nil {
+			return fmt.Errorf("app: inspect source: %w", err)
+		}
+		if info.IsDir() {
+			return a.publishApp(cmd, host, sources[0], request, output)
+		}
+	}
+	if request.Kind == "server" || request.Setup != "" {
+		return errors.New("--run and --setup require a single source directory")
+	}
+	directory, err := appspkg.PreparePage(cmd.Context(), sources)
+	if err != nil {
+		return fmt.Errorf("app: prepare page: %w", err)
+	}
+	defer os.RemoveAll(directory) //nolint:errcheck // Remove the disposable staging copy after upload or failure.
+	return a.publishApp(cmd, host, directory, request, output)
+}
+func (a *application) publishApp(cmd *cobra.Command, host, directory string, request appspkg.Request, output *appOutput) error {
+	transport, err := a.appConnection(cmd.Context(), host, output)
+	if err != nil {
+		return err
+	}
+	defer transport.close() //nolint:errcheck // the request outcome is authoritative
+	result, err := uploadApp(cmd.Context(), transport, directory, request)
+	if err != nil {
+		return err
+	}
+	return writeAppResult(cmd.OutOrStdout(), host, result, output.json, a.privacy)
 }
 func (f appFlags) recipe() (appspkg.Request, error) {
 	r := appspkg.Request{Kind: "static", Command: f.command, Setup: f.setup, Port: f.port, Env: f.env}
