@@ -39,6 +39,10 @@ type Store struct {
 }
 
 func Open(ctx context.Context, directory, id, initial string) (*Store, error) {
+	return openStore(ctx, directory, id, initial, syncDirectory)
+}
+
+func openStore(ctx context.Context, directory, id, initial string, syncDir func(string) error) (*Store, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("open machine name: %w", err)
 	}
@@ -53,7 +57,11 @@ func Open(ctx context.Context, directory, id, initial string) (*Store, error) {
 		if err := validateRecord(current, id); err != nil {
 			return nil, err
 		}
-		return &Store{directory: directory, current: current, syncDirectory: syncDirectory}, nil
+		// A restarted process can see a replacement whose directory sync failed.
+		if err := syncDir(directory); err != nil {
+			return nil, err
+		}
+		return &Store{directory: directory, current: current, syncDirectory: syncDir}, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -66,10 +74,10 @@ func Open(ctx context.Context, directory, id, initial string) (*Store, error) {
 		return nil, fmt.Errorf("create machine name directory: %w", err)
 	}
 	current = record{Version: 1, Claim: Claim{ID: id, MachineName: name, Revision: 1}}
-	if _, err := publishRecord(directory, stateName, current, syncDirectory); err != nil {
+	if _, err := publishRecord(directory, stateName, current, syncDir); err != nil {
 		return nil, err
 	}
-	return &Store{directory: directory, current: current, syncDirectory: syncDirectory}, nil
+	return &Store{directory: directory, current: current, syncDirectory: syncDir}, nil
 }
 
 func (s *Store) Current() Claim {
