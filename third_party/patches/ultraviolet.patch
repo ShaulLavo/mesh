@@ -58,3 +58,14 @@
  			}
  		} else if tx < fx {
  			n := fx - tx
+--- a/README.md
++++ b/README.md
+@@ -1,5 +1,8 @@
+ # Ultraviolet
+
++Mesh keeps this fork because upstream `putRange` rewrites unchanged interior spans: its equal-run test is unreachable.
++Remove the replacement once upstream fixes that test.
++
+ <img width="400" alt="Charm Ultraviolet" src="https://github.com/user-attachments/assets/3484e4b0-3741-4e8c-bebf-9ea51f5bb49c" />
+
+ <p>

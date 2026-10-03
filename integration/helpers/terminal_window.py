@@ -337,6 +337,12 @@ class Fixture:
         response = round_trip(str(self.remote / "daemon.sock"), {"type": "host.info", "requestId": "terminal-fixture"})
         require(response.get("type") == "host.info.result", f"remote identity request failed: {response}")
         self.remote_id = response["host"]["id"]
+        source = subprocess.run([self.binary, "device", "identity", "--json"], env=self.environment,
+                                capture_output=True, check=True, timeout=5)
+        source_id = json.loads(source.stdout)["id"]
+        subprocess.run([self.binary, "device", "approve", "--allow-root", "--", source_id],
+                       env=environment, capture_output=True, check=True, timeout=5)
+
         def listening():
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.1):

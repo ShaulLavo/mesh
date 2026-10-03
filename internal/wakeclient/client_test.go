@@ -4,7 +4,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"runtime"
 	"strings"
@@ -12,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/tailnet"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/wake"
 )
 
@@ -145,7 +151,7 @@ func TestWakeFallsBackToRemoteLANOverWebSocket(t *testing.T) {
 	client.endpoints = staticEndpoints(peer)
 	client.exchange = func(ctx context.Context, endpoint, expectedID string, request protocol.Control) (protocol.HostInfo, protocol.Control, error) {
 		if endpoint != target.Endpoint {
-			return exchange(ctx, endpoint, expectedID, request)
+			return exchange(ctx, endpoint, expectedID, request, nil)
 		}
 		if expectedID != target.ID || sends.Load() == 0 {
 			return protocol.HostInfo{}, protocol.Control{}, errTargetOffline
@@ -464,6 +470,9 @@ func fixtureClient(t *testing.T) (*Client, wake.Grant, Target) {
 		t.Fatal(err)
 	}
 	client.peers = func(context.Context) ([]tailnet.Peer, error) { return nil, nil }
+	client.exchange = func(ctx context.Context, endpoint, id string, request protocol.Control) (protocol.HostInfo, protocol.Control, error) {
+		return exchange(ctx, endpoint, id, request, (*transport.Authentication)(nil))
+	}
 	client.sender = stubSender{}
 	grant := fixtureGrant(t, true)
 	return client, grant, Target{ID: grant.TargetID, Name: "pc", Endpoint: "ws://pc.test:7337/mesh"}
@@ -574,4 +583,36 @@ func testContext(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+func TestWakeAuthenticationDenialCannotSendPacket(t *testing.T) {
+	client, _, target := rememberedClient(t)
+	_, serverKey, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, clientKey, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: &transport.Authentication{Key: serverKey, Authorize: func(string) bool { return false }}}, func(context.Context, transport.Conn) error {
+			t.Error("unknown wake device reached handler")
+			return fmt.Errorf("denied fixture dispatched")
+		})
+	}))
+	defer server.Close()
+	target.Endpoint = server.URL
+	client.exchange = func(ctx context.Context, endpoint, _ string, request protocol.Control) (protocol.HostInfo, protocol.Control, error) {
+		return exchange(ctx, endpoint, "", request, &transport.Authentication{Key: clientKey, ExpectedIdentity: base64.RawURLEncoding.EncodeToString(serverKey.Public().(ed25519.PublicKey))})
+	}
+	var sends atomic.Int32
+	client.sender = stubSender{
+		probe: func(context.Context, wake.Grant) (wake.State, error) { return wake.Down, nil },
+		send:  func(context.Context, wake.Grant) (bool, error) { sends.Add(1); return true, nil },
+	}
+	_, err = client.Wake(testContext(t), target)
+	if !errors.Is(err, ErrIdentityChanged) || sends.Load() != 0 {
+		t.Fatalf("authentication denial=%v, wake sends=%d", err, sends.Load())
+	}
 }

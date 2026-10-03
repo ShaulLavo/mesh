@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -19,13 +18,14 @@ import (
 	charmssh "charm.land/ssh"
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/sshfs"
 	"github.com/shaul/mesh/internal/tunnel"
 )
 
 const (
-	authorizedKeysMaximum = 1 << 20
+	authorizedKeysMaximum = identity.AuthorizedKeysMaximum
 	helloCommand          = "hello"
 	helloMessage          = "mesh ssh ready\n"
 
@@ -38,7 +38,7 @@ const (
 
 // loginGrace bounds how long an unauthenticated connection may hold a goroutine
 // and a descriptor, the way OpenSSH's LoginGraceTime does. It is cleared the
-// moment a key is accepted, because sessions are long-lived and a server-wide
+// moment a signed key is verified, because sessions are long-lived and a server-wide
 // MaxTimeout would cut them off mid-work.
 const loginGrace = 30 * time.Second
 
@@ -46,14 +46,53 @@ const loginGrace = 30 * time.Second
 type gracedConnKey struct{}
 
 // gracedConn carries the pre-authentication deadline set by ConnCallback so the
-// public key handler can lift it once the client proves who it is.
+// verified-key callback can lift it once the client proves who it is.
 type gracedConn struct {
 	net.Conn
-	once sync.Once
+	once    sync.Once
+	grantMu sync.RWMutex
+	grant   func() bool
 }
 
 func (c *gracedConn) authenticated() {
 	c.once.Do(func() { _ = c.SetDeadline(time.Time{}) })
+}
+
+func (c *gracedConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.grantMu.RLock()
+	allowed := c.grant
+	c.grantMu.RUnlock()
+	if allowed != nil && !allowed() {
+		_ = c.Close()
+		return 0, errors.New("sshd: device grant revoked")
+	}
+	return n, err //nolint:wrapcheck // net.Conn preserves EOF and socket errors for the SSH transport
+}
+
+func (c *gracedConn) watchGrant(ctx context.Context, allowed func() bool) {
+	c.grantMu.Lock()
+	if c.grant != nil {
+		c.grantMu.Unlock()
+		return
+	}
+	c.grant = allowed
+	c.grantMu.Unlock()
+	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if !allowed() {
+					_ = c.Close()
+					return
+				}
+			}
+		}
+	}()
 }
 
 // boundedListener refuses to hold more than maximum live connections. Accepting
@@ -129,7 +168,7 @@ func Serve(ctx context.Context, cfg Config, opts ...charmssh.Option) error {
 		return nil
 	}
 
-	server, err := newServer(normalized, opts...)
+	server, err := newServer(normalized, opts...) //nolint:contextcheck // SSH publishes its own per-connection context to the authentication callback.
 	if err != nil {
 		return err
 	}
@@ -220,16 +259,10 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 		ctx.SetValue(gracedConnKey{}, graced)
 		return graced
 	}
-	server.PublicKeyHandler = func(ctx charmssh.Context, key charmssh.PublicKey) bool {
-		if !isAuthorized(cfg.authorizedKeys, key) {
-			return false
-		}
-		// Only a proven client gets to hold the connection indefinitely.
-		if graced, ok := ctx.Value(gracedConnKey{}).(*gracedConn); ok {
-			graced.authenticated()
-		}
-		return true
+	server.PublicKeyHandler = func(_ charmssh.Context, key charmssh.PublicKey) bool {
+		return identity.Granted(cfg.authorizedKeys, key)
 	}
+	server.ServerConfigCallback = cfg.signedConfig
 	handler := server.Handler
 	if handler == nil {
 		handler = helloHandler
@@ -245,6 +278,21 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 		}
 	}
 	return server, nil
+}
+
+func (cfg normalizedConfig) signedConfig(ctx charmssh.Context) *gossh.ServerConfig {
+	return &gossh.ServerConfig{VerifiedPublicKeyCallback: func(_ gossh.ConnMetadata, key gossh.PublicKey, permissions *gossh.Permissions, _ string) (*gossh.Permissions, error) {
+		current, ok := identity.BindGrant(cfg.authorizedKeys, key)
+		if !ok {
+			return nil, errors.New("sshd: signed device key is not approved")
+		}
+		// Unsigned public-key queries confer neither a lifetime nor an unlimited login.
+		if graced, ok := ctx.Value(gracedConnKey{}).(*gracedConn); ok {
+			graced.watchGrant(ctx, current)
+			graced.authenticated()
+		}
+		return permissions, nil
+	}}
 }
 
 // Authorizer checks the current managed file on every reservation or activation.
@@ -277,58 +325,7 @@ func helloHandler(session charmssh.Session) {
 }
 
 func isAuthorized(path string, presented charmssh.PublicKey) bool {
-	contents, err := readAuthorizedKeys(path)
-	if err != nil {
-		return false
-	}
-	for len(contents) > 0 {
-		key, _, options, rest, err := gossh.ParseAuthorizedKey(contents)
-		if err != nil {
-			return false
-		}
-		if len(options) == 0 && charmssh.KeysEqual(key, presented) {
-			return true
-		}
-		contents = rest
-	}
-	return false
-}
-
-func readAuthorizedKeys(path string) ([]byte, error) {
-	before, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("sshd: inspect authorized_keys %s: %w", path, err)
-	}
-	if !before.Mode().IsRegular() {
-		return nil, fmt.Errorf("sshd: authorized_keys %s is not a regular file", path)
-	}
-	file, err := os.Open(path) //nolint:gosec // the daemon supplies its fixed state-directory authorized_keys path
-	if err != nil {
-		return nil, fmt.Errorf("sshd: open authorized_keys %s: %w", path, err)
-	}
-	defer file.Close() //nolint:errcheck // a read-only authentication attempt has no close result to preserve
-	opened, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("sshd: inspect opened authorized_keys %s: %w", path, err)
-	}
-	if !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
-		return nil, fmt.Errorf("sshd: authorized_keys %s changed while opening", path)
-	}
-	permissions := opened.Mode().Perm()
-	if permissions&0o022 != 0 {
-		return nil, fmt.Errorf("sshd: authorized_keys %s has unsafe permissions %04o", path, permissions)
-	}
-	if permissions&0o444 == 0 {
-		return nil, fmt.Errorf("sshd: authorized_keys %s is not readable", path)
-	}
-	contents, err := io.ReadAll(io.LimitReader(file, authorizedKeysMaximum+1))
-	if err != nil {
-		return nil, fmt.Errorf("sshd: read authorized_keys %s: %w", path, err)
-	}
-	if len(contents) > authorizedKeysMaximum {
-		return nil, fmt.Errorf("sshd: authorized_keys %s exceeds %d bytes", path, authorizedKeysMaximum)
-	}
-	return contents, nil
+	return identity.Granted(path, presented)
 }
 
 func normalCloseError(err error) error {

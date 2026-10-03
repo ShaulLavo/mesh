@@ -126,7 +126,7 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 			if endpoint != want {
 				return nil, fmt.Errorf("manager endpoint %q, want %q", endpoint, want)
 			}
-			return transport.Dial(ctx, fmt.Sprintf("ws://127.0.0.1:%d/control/ws", controlPort), transport.DialOptions{})
+			return transport.Dial(ctx, fmt.Sprintf("ws://127.0.0.1:%d/control/ws", controlPort), runtimeDialOptions(t, originState))
 		},
 	})
 	if err != nil {

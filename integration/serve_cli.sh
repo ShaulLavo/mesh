@@ -179,6 +179,11 @@ done
 EDGE_ID=$(identity_id "$EDGE_STATE/identity.key") || fail "derive edge identity"
 ORIGIN_ID=$(identity_id "$ORIGIN_STATE/identity.key") || fail "derive origin identity"
 
+CLIENT_ID=$(env MESH_STATE_DIR="$CLIENT_STATE" "$MESH_INTEGRATION" device identity --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])') || fail "create fixture client"
+for id in "$CLIENT_ID" "$EDGE_ID"; do
+  env MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_INTEGRATION" device approve --allow-root -- "$id" >/dev/null || fail "approve fixture origin client"
+done
+env MESH_STATE_DIR="$EDGE_STATE" "$MESH_INTEGRATION" device approve --allow-root -- "$ORIGIN_ID" >/dev/null || fail "approve fixture publisher"
 mapfile -t PORTS < <(python3 - "$$" "2" <<'PY'
 import os, socket, sys
 

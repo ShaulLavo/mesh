@@ -69,6 +69,58 @@ jobs:
           MESH_INTEGRATION_TIMEOUT: 60s
         run: ./scripts/verify.sh
 
+  auth-cutover:
+    name: Device auth cutover (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Require the actual native platform
+        env:
+          REQUIRED_PLATFORM: ${{ matrix.platform }}
+        run: test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$REQUIRED_PLATFORM"
+      - name: Verify fixture TLS and published artifact boundaries
+        run: |
+          python3 scripts/test-fixture-tls.py
+          python3 scripts/test-published-releases.py
+      - name: Verify native authentication regressions
+        run: |
+          go test -race -count=1 -timeout=180s -run 'Test(QueriedKeyMustNotOwnAuthenticatedSSHGrant|BootstrapReapprovalMustNotHealBareGrant|BootstrapMustSerializeWithDeviceRevocation|GrantLockMustRespectHandshakeCancellation|ManagedGrantWriterBoundsLockContention|GrantPolicyRejectsSpecialFilesWithoutBlocking|PublishedGrantSurvivesOtherAndIdempotentWriterContention|GrantContentionReleasesRealControlSlotBeforeUnlock|UpdaterPolicyFIFOReleasesRealControlSlot|UpdaterPolicyUnsafeSnapshotsRejectRealTLS|DarwinInstallerLaunchdActivation)$' ./internal/identity ./internal/transport ./internal/sshd ./internal/daemon ./scripts/install
+      - name: Verify Darwin retains its mapped executable
+        if: matrix.platform == 'darwin/arm64'
+        run: |
+          output="$RUNNER_TEMP/darwin-mapped-executable-test.log"
+          go test -count=1 -run '^TestDarwinMappedExecutableSurvivesAtomicReplacement$' -v ./internal/updatebootstrap | tee "$output"
+          grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement' "$output"
+      - name: Exercise old local cutover and authenticated fleet recovery
+        env:
+          AUTH_CUTOVER_PLATFORM: ${{ matrix.platform }}
+        run: scripts/prove-device-auth-cutover.sh "$RUNNER_TEMP/auth-cutover"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: device-auth-cutover-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/auth-cutover
+            ${{ runner.temp }}/darwin-mapped-executable-test.log
+          retention-days: 7
+
   lint:
     name: golangci-lint v2
     runs-on: ubuntu-24.04
@@ -168,19 +220,20 @@ jobs:
   gate:
     name: Complete CI gate
     if: always()
-    needs: [app-pill, test, lint, gates, vulnerability, packaging]
+    needs: [app-pill, test, auth-cutover, lint, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every CI job
         env:
           APP_PILL: ${{ needs.app-pill.result }}
           TEST: ${{ needs.test.result }}
+          AUTH_CUTOVER: ${{ needs.auth-cutover.result }}
           LINT: ${{ needs.lint.result }}
           GATES: ${{ needs.gates.result }}
           VULNERABILITY: ${{ needs.vulnerability.result }}
           PACKAGING: ${{ needs.packaging.result }}
         run: |
-          [[ $APP_PILL == success && $TEST == success && $LINT == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
+          [[ $APP_PILL == success && $TEST == success && $AUTH_CUTOVER == success && $LINT == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
 
   publish:
     name: Publish tested main commit

@@ -46,6 +46,7 @@ type Config struct {
 	UnixConnectionLimit         int
 	TailnetConnectionLimit      int
 	SSHSessionHandler           sshd.SessionHandlerFactory
+	WakePeerIdentity            func(context.Context, string) (string, error)
 	StateDir                    string
 	TailnetPort                 uint16
 	SSHPort                     uint16
@@ -222,7 +223,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	reporter := newErrorReporter(cfg.ReportError)
 	defer reporter.shutdown()
-	power, err := newWakeController(daemonCtx, stateDir, meshPrivateKey, opts.discoverPeers)
+	power, err := newWakeController(daemonCtx, stateDir, meshPrivateKey, opts.discoverPeers, cfg.WakePeerIdentity)
 	if err != nil {
 		return fmt.Errorf("daemon: configure waking: %w", err)
 	}

@@ -165,7 +165,7 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 		}
 		if err == nil {
 			probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-			privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort)
+			privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(t, stateDir))
 			cancel()
 			if probeErr != nil {
 				err = probeErr
@@ -197,7 +197,7 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 	deadline := time.Now().Add(runtimeTestTimeout)
 	for {
 		probeCtx, probeCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-		privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort)
+		privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(t, stateDir))
 		probeCancel()
 		if probeErr == nil && privateName == "pc.mesh.shaulavo.dev" {
 			break
@@ -229,7 +229,7 @@ func TestRunFailsWhenTailscaleServeVerificationFails(t *testing.T) {
 	options.runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
 	options.verifyServeForward = func(context.Context, uint16) error {
 		probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		privateName, err := probeWebSocketPrivateName(probeCtx, controlPort)
+		privateName, err := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(t, stateDir))
 		cancel()
 		if err != nil {
 			return err
@@ -265,7 +265,7 @@ func TestRunFailsWhenTailscaleServeConfigurationFails(t *testing.T) {
 	options.validateServeAddresses = func([]string) error { return nil }
 	options.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		privateName, err := probeWebSocketPrivateName(probeCtx, controlPort)
+		privateName, err := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(t, stateDir))
 		cancel()
 		if err != nil {
 			return nil, err
@@ -632,8 +632,8 @@ func installRunTestPrivateName(t *testing.T, stateDir string, httpsPort uint16) 
 	return signerID
 }
 
-func probeWebSocketPrivateName(ctx context.Context, port uint16) (string, error) {
-	conn, err := transport.DialOnce(ctx, fmt.Sprintf("ws://127.0.0.1:%d/mesh", port), transport.DialOptions{})
+func probeWebSocketPrivateName(ctx context.Context, port uint16, opts transport.DialOptions) (string, error) {
+	conn, err := transport.DialOnce(ctx, fmt.Sprintf("ws://127.0.0.1:%d/mesh", port), opts)
 	if err != nil {
 		return "", err
 	}

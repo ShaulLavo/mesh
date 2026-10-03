@@ -21,13 +21,16 @@ func (a *application) updateInteractive() bool {
 	return a.dependencies.Stdin != nil && a.dependencies.Stdout != nil && term.IsTerminal(a.dependencies.Stdin.Fd()) && term.IsTerminal(a.dependencies.Stdout.Fd())
 }
 
-func printUpdatePreview(output io.Writer, preview updatePreview, structured bool, masks ...*privacy.Mask) error {
+func printUpdatePreview(output io.Writer, preview updatePreview, structured, details bool, masks ...*privacy.Mask) error {
 	mask := presentationMask(masks)
 	// Structured results are operational records and keep their real identifiers.
 	if structured {
 		return json.NewEncoder(output).Encode(preview)
 	}
-	if _, err := fmt.Fprintf(output, "Mesh %s\n", preview.Release.Version); err != nil {
+	if !details {
+		return printUpdateSummary(output, preview, mask)
+	}
+	if _, err := fmt.Fprintf(output, "Mesh %s · commit %s\nRelease digest: %s\nFleet %s revision %d · %d machines\n", preview.Release.Version, preview.Release.Commit, preview.ReleaseDigest, SafeTerminalText(mask.Value("fleet", preview.Fleet.Name)), preview.Fleet.Revision, len(preview.Fleet.Members)); err != nil {
 		return err
 	}
 	if len(preview.Fleet.Members) == 1 && preview.Fleet.Members[0].Alias == updateLocalAlias {
@@ -49,24 +52,22 @@ func printUpdatePreview(output io.Writer, preview updatePreview, structured bool
 			_, _ = fmt.Fprintln(output, "Additional machine in this operation: the local coordinator, which was outside the requested fleet scope.")
 		}
 	}
-	if err := printUpdateTargets(output, preview.Targets, preview.Release, mask); err != nil {
+
+	if err := printUpdateTargets(output, updateReviewDisplayTargets(preview), preview.Release, mask); err != nil {
 		return err
 	}
 	if preview.ApprovalProblem != "" {
-		_, _ = fmt.Fprintln(output, preview.ApprovalProblem)
+		_, err := fmt.Fprintln(output, SafeTerminalText(mask.Text(preview.ApprovalProblem)))
+		return err
 	}
-	_, err := fmt.Fprintln(output, "Running sessions stay alive and keep their current code until they end.")
-	return err
+	return nil
 }
 
 func printUpdateTargets(output io.Writer, targets []update.Target, manifest release.Manifest, masks ...*privacy.Mask) error {
 	mask := presentationMask(masks)
 	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
 	for _, target := range targets {
-		build := "version unknown"
-		if target.Build != nil {
-			build = "daemon " + target.Build.Version
-		}
+		build := updateTargetBuildText(target)
 		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s%s\n", SafeTerminalText(mask.Value("host", target.Host.Alias)), SafeTerminalText(updateTargetLabel(target)), SafeTerminalText(mask.Text(build)), workerUpdateSummary(target.Workers, manifest)); err != nil {
 			return err
 		}
@@ -103,14 +104,21 @@ func workerUpdateSummary(workers []updateinstall.Worker, manifest release.Manife
 			older++
 		}
 	}
-	text := fmt.Sprintf("; %d running sessions preserved", len(workers))
+	text := "; " + sessionCountText(len(workers))
 	if older > 0 {
-		text += fmt.Sprintf("; %d use older workers", older)
+		text += fmt.Sprintf("; %d using an older Mesh version", older)
 	}
 	if unknown > 0 {
-		text += fmt.Sprintf("; %d worker versions unknown", unknown)
+		text += fmt.Sprintf("; %d with unknown Mesh version", unknown)
 	}
 	return text
+}
+
+func printUpdateRunMode(output io.Writer, run update.Run, structured, details bool, masks ...*privacy.Mask) error {
+	if !structured && !details {
+		return printUpdateRunSummary(output, run, presentationMask(masks))
+	}
+	return printUpdateRun(output, run, structured, masks...)
 }
 
 func printUpdateRun(output io.Writer, run update.Run, structured bool, masks ...*privacy.Mask) error {
@@ -139,8 +147,9 @@ func printUpdateRun(output io.Writer, run update.Run, structured bool, masks ...
 
 func observeUpdate(ctx context.Context, environment updateEnvironment, run update.Run, structured bool, output updateOutput) error {
 	if !structured {
-		_, _ = fmt.Fprintf(output.diagnostic, "Update %s saved. Closing this terminal does not cancel it.\n", output.privacy.Value("update", run.ID))
+		printUpdateStarted(output, run)
 	}
+
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	ticker := time.NewTicker(time.Second)
@@ -148,7 +157,7 @@ func observeUpdate(ctx context.Context, environment updateEnvironment, run updat
 	for !updateObservationSettled(run) {
 		select {
 		case <-ctx.Done():
-			if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
+			if err := printUpdateRunMode(output.out, run, structured, output.details, output.privacy); err != nil {
 				return err
 			}
 			return statusError{code: 2}
@@ -164,7 +173,7 @@ func observeUpdate(ctx context.Context, environment updateEnvironment, run updat
 			run = local
 		}
 	}
-	if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
+	if err := printUpdateRunMode(output.out, run, structured, output.details, output.privacy); err != nil {
 		return err
 	}
 	return updateExit(run.ExitCode())
@@ -203,4 +212,44 @@ func privateUpdateHosts(mask *privacy.Mask, hosts []string) string {
 		labels[i] = mask.Value("host", host)
 	}
 	return SafeTerminalText(strings.Join(labels, ", "))
+}
+
+func updateTargetBuildText(target update.Target) string {
+	if target.Build == nil || target.Build.Version == "" {
+		return "version unknown"
+	}
+	return "daemon " + target.Build.Version
+}
+
+func updateReviewDisplayTargets(preview updatePreview) []update.Target {
+	targets := append([]update.Target(nil), preview.Targets...)
+	for i := range targets {
+		review := preview.Reviews[targets[i].Host.ID]
+		if review.Kind == "authorization" {
+			targets[i].Problem = review.Message
+		}
+	}
+	return targets
+}
+
+func printUpdateStarted(output updateOutput, run update.Run) {
+	sessions := 0
+	for _, target := range run.Targets {
+		if target.State == update.Updated || target.State == update.Newer || target.State == update.Failed {
+			continue
+		}
+		for _, worker := range target.Workers {
+			if worker.Protocol > 0 {
+				sessions++
+			}
+		}
+	}
+	if sessions > 0 {
+		verb := "keep"
+		if sessions == 1 {
+			verb = "keeps"
+		}
+		_, _ = fmt.Fprintf(output.diagnostic, "Your %s %s working during the update.\n", sessionCountText(sessions), verb)
+	}
+	_, _ = fmt.Fprintf(output.diagnostic, "Update %s saved. Closing this terminal does not cancel it.\n", output.privacy.Value("update", run.ID))
 }

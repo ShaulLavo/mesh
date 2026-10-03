@@ -24,14 +24,15 @@ import (
 )
 
 type updateOptions struct {
-	all, local, yes, json, check bool
-	hosts                        []string
-	fleet, version, coordinator  string
+	all, local, yes, json, check, details bool
+	hosts                                 []string
+	fleet, version, coordinator           string
 }
 
 type updateOutput struct {
 	out, diagnostic io.Writer
 	privacy         *privacy.Mask
+	details         bool
 }
 
 type updateEnvironment struct {
@@ -42,16 +43,17 @@ type updateEnvironment struct {
 }
 
 type updatePreview struct {
-	CoordinatorSetup     bool             `json:"coordinatorSetup"`
-	CoordinatorBootstrap bool             `json:"coordinatorBootstrap"`
-	CoordinatorAdded     bool             `json:"coordinatorAdded"`
-	Fleet                update.Fleet     `json:"fleet"`
-	Release              release.Manifest `json:"release"`
-	ReleaseDigest        string           `json:"releaseDigest"`
-	Targets              []update.Target  `json:"targets"`
-	ApprovalProblem      string           `json:"approvalProblem,omitempty"`
-	ClientOnly           bool             `json:"clientOnly"`
-	OutsideFleet         []string         `json:"outsideFleet,omitempty"`
+	CoordinatorSetup     bool                          `json:"coordinatorSetup"`
+	CoordinatorBootstrap bool                          `json:"coordinatorBootstrap"`
+	CoordinatorAdded     bool                          `json:"coordinatorAdded"`
+	Fleet                update.Fleet                  `json:"fleet"`
+	Release              release.Manifest              `json:"release"`
+	ReleaseDigest        string                        `json:"releaseDigest"`
+	Targets              []update.Target               `json:"targets"`
+	Reviews              map[string]updateTargetReview `json:"reviews,omitempty"`
+	ApprovalProblem      string                        `json:"approvalProblem,omitempty"`
+	ClientOnly           bool                          `json:"clientOnly"`
+	OutsideFleet         []string                      `json:"outsideFleet,omitempty"`
 }
 
 func (a *application) updateCommand() *cobra.Command {
@@ -59,7 +61,7 @@ func (a *application) updateCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use: "update", Short: "Review and update Mesh on this machine or your saved fleet", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.runUpdate(cmd.Context(), options, updateOutput{cmd.OutOrStdout(), cmd.ErrOrStderr(), a.privacy})
+			return a.runUpdate(cmd.Context(), options, updateOutput{cmd.OutOrStdout(), cmd.ErrOrStderr(), a.privacy, options.details})
 		},
 	}
 	command.Flags().BoolVar(&options.all, "all", false, "update the machines in your saved fleet")
@@ -68,6 +70,7 @@ func (a *application) updateCommand() *cobra.Command {
 	command.Flags().StringVar(&options.fleet, "fleet", "", "use an explicit fleet manifest")
 	command.Flags().StringVar(&options.version, "version", "latest", "exact published release tag, or latest")
 	command.Flags().BoolVar(&options.yes, "yes", false, "approve the selected scope without prompting")
+	command.PersistentFlags().BoolVar(&options.details, "details", false, "show release identifiers, selected machines, and update checks")
 	command.Flags().BoolVar(&options.check, "check", false, "check published and installed versions without installing")
 	command.PersistentFlags().BoolVar(&options.json, "json", false, "write structured results")
 	command.PersistentFlags().StringVar(&options.coordinator, "coordinator", "", "adopted host holding the operation; defaults to this machine")
@@ -79,7 +82,7 @@ func (a *application) updateCommand() *cobra.Command {
 }
 
 func (a *application) runUpdatePreview(ctx context.Context) error {
-	return a.runUpdate(ctx, updateOptions{version: "latest"}, updateOutput{a.dependencies.Stdout, a.dependencies.Stderr, a.privacy})
+	return a.runUpdate(ctx, updateOptions{version: "latest"}, updateOutput{a.dependencies.Stdout, a.dependencies.Stderr, a.privacy, false})
 }
 
 func validateUpdateOptions(options updateOptions) error {
@@ -123,25 +126,27 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	if options.version == "latest" {
 		_ = localUpdateNoticeStore(environment.stateDir).Record(ctx, manifest)
 	}
-	preview.Targets = inspectUpdateTargets(ctx, environment.client, fleet.Members)
+	preview.Targets, preview.Reviews = inspectUpdateTargets(ctx, environment.client, fleet.Members)
 	localScope := options.local || (!options.all && options.fleet == "" && len(options.hosts) == 0 && fleet.Name == "local" && len(fleet.Members) == 1 && fleet.Members[0].ID == environment.local.ID)
 	preview.ClientOnly = localScope && localCoordinatorMissing(preview.Targets, environment.local.ID) && localDaemonAbsent(ctx, environment.stateDir)
-	preview, err = previewFirstCoordinator(ctx, environment, preview)
+	preview = a.reviewLocalUpdateBuild(environment, preview)
+	preview, err = previewFirstCoordinator(ctx, a, environment, preview)
 	if err != nil {
 		return err
 	}
+	preview = reviewLocalUpdateJournal(preview, environment.stateDir, environment.local)
 	preview = prepareUpdateApproval(preview)
 	if options.check {
-		return printUpdatePreview(output.out, preview, options.json, output.privacy)
+		return printUpdatePreview(output.out, preview, options.json, options.details, output.privacy)
 	}
 	if !options.json {
-		if err := printUpdatePreview(output.diagnostic, preview, false, output.privacy); err != nil {
+		if err := printUpdatePreview(output.diagnostic, preview, false, options.details, output.privacy); err != nil {
 			return err
 		}
 	}
 	if preview.ApprovalProblem != "" {
 		if options.json {
-			if err := printUpdatePreview(output.out, preview, true); err != nil {
+			if err := printUpdatePreview(output.out, preview, true, options.details, output.privacy); err != nil {
 				return err
 			}
 		}
@@ -149,7 +154,7 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	}
 	if updatePreviewCurrent(preview) {
 		if options.json {
-			return printUpdatePreview(output.out, preview, true)
+			return printUpdatePreview(output.out, preview, true, options.details, output.privacy)
 		}
 		return nil
 	}
@@ -199,30 +204,39 @@ func adoptedUpdateHost(host HostRecord) update.Host {
 	return update.Host{ID: host.MeshIdentity, Alias: host.Alias, Endpoint: host.Endpoint}
 }
 
-func inspectUpdateTargets(ctx context.Context, client update.Caller, hosts []update.Host) []update.Target {
-	results := make(chan update.Target, len(hosts))
+type updateInspection struct {
+	target update.Target
+	review updateTargetReview
+}
+
+func inspectUpdateTargets(ctx context.Context, client update.Caller, hosts []update.Host) ([]update.Target, map[string]updateTargetReview) {
+	results := make(chan updateInspection, len(hosts))
 	limit := make(chan struct{}, 8)
 	for _, host := range hosts {
 		go inspectUpdateTarget(ctx, client, host, limit, results)
 	}
 	byID := make(map[string]update.Target, len(hosts))
+	reviews := make(map[string]updateTargetReview)
 	for range hosts {
-		target := <-results
-		byID[target.Host.ID] = target
+		result := <-results
+		byID[result.target.Host.ID] = result.target
+		if result.review.Kind != "" {
+			reviews[result.target.Host.ID] = result.review
+		}
 	}
 	targets := make([]update.Target, 0, len(hosts))
 	for _, host := range hosts {
 		targets = append(targets, byID[host.ID])
 	}
-	return targets
+	return targets, reviews
 }
 
-func inspectUpdateTarget(ctx context.Context, client update.Caller, host update.Host, limit chan struct{}, results chan<- update.Target) {
+func inspectUpdateTarget(ctx context.Context, client update.Caller, host update.Host, limit chan struct{}, results chan<- updateInspection) {
 	select {
 	case limit <- struct{}{}:
 		defer func() { <-limit }()
 	case <-ctx.Done():
-		results <- update.Target{Host: host, State: update.Offline, Problem: ctx.Err().Error()}
+		results <- updateInspection{target: update.Target{Host: host, State: update.Offline, Problem: ctx.Err().Error()}}
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -231,27 +245,32 @@ func inspectUpdateTarget(ctx context.Context, client update.Caller, host update.
 	err := client.Call(ctx, host, "info", nil, &info)
 	target := update.Target{Host: host, State: update.Pending}
 	if err != nil {
-		target.State, target.Problem = update.Offline, err.Error()
-		var remote *update.RemoteError
-		if errors.As(err, &remote) || updateAuthorizationUnavailable(target.Problem) || updateAccessUnverified(target.Problem) || updateIdentityFailure(target.Problem) {
-			target.State = update.Failed
+		target.State, target.Problem = update.Failed, err.Error()
+		review := classifyUpdateInspection(err)
+		review.Cause = err.Error()
+		if review.Kind == "offline" {
+			target.State = update.Offline
 		}
 		if legacyUpdateUnavailable(err) {
-			target.State, target.Problem = update.Bootstrap, "Legacy bootstrap required. Approval permits the existing same-user session management path to install the updater and enroll this coordinator."
+			target.State = update.Bootstrap
 		}
-		results <- target
+		results <- updateInspection{target: target, review: review}
 		return
 	}
+
 	if info.Health.HostID != host.ID {
 		target.State, target.Problem = update.Failed, "host health identity differs from pinned identity"
-		results <- target
+		results <- updateInspection{target: target}
 		return
 	}
 	target.Build, target.Workers = &info.Health.Build, info.Health.Workers
 	if info.Installation != nil && info.Installation.Phase == updateinstall.RollbackFailed {
-		target.State, target.Problem = update.Failed, updateRecoveryProblem
+		target.State = update.Failed
+		review := updateTargetReview{Kind: updateReviewRecovery, Message: updateRecoveryProblem, Cause: string(info.Installation.Phase) + ": " + info.Installation.Error}
+		results <- updateInspection{target: target, review: review}
+		return
 	}
-	results <- target
+	results <- updateInspection{target: target}
 }
 
 func legacyUpdateUnavailable(err error) bool {

@@ -363,11 +363,6 @@ func NewDistributor(config DistributorConfig) (*Distributor, error) {
 	if err != nil {
 		return nil, err
 	}
-	if config.Dial == nil {
-		config.Dial = func(ctx context.Context, endpoint string) (transport.Conn, error) {
-			return transport.DialOnce(ctx, endpoint, transport.DialOptions{})
-		}
-	}
 	if config.Concurrency == 0 {
 		config.Concurrency = defaultDistributionLimit
 	}
@@ -465,7 +460,13 @@ func validateOriginTarget(target OriginTarget) error {
 }
 
 func (d *Distributor) distributeOne(ctx context.Context, bundle Bundle, target OriginTarget) error {
-	connection, err := d.dial(ctx, target.Endpoint)
+	dial := d.dial
+	if dial == nil {
+		dial = func(ctx context.Context, endpoint string) (transport.Conn, error) {
+			return transport.DialOnce(ctx, endpoint, transport.DialOptions{Auth: &transport.Authentication{Key: d.signer, ExpectedIdentity: target.Identity}})
+		}
+	}
+	connection, err := dial(ctx, target.Endpoint)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()

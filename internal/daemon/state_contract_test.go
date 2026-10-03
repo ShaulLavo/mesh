@@ -200,7 +200,7 @@ func TestWatchSubscriberCapIndependentAcrossActualTransports(t *testing.T) {
 				if network == "Unix" {
 					return dialUnixRuntime(t, filepath.Join(cfg.StateDir, daemonSocketName))
 				}
-				conn, err := transport.DialOnce(ctx, fmt.Sprintf("ws://%s/mesh", listener.Addr()), transport.DialOptions{})
+				conn, err := transport.DialOnce(ctx, fmt.Sprintf("ws://%s/mesh", listener.Addr()), runtimeDialOptions(t, cfg.StateDir))
 				if err != nil {
 					t.Fatal(err)
 				}

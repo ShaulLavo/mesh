@@ -65,10 +65,12 @@ func TestValidateHostInfoRejectsAChangedIdentity(t *testing.T) {
 }
 
 func TestListRemoteHostUsesWebSocketAndVerifiesIdentity(t *testing.T) {
+	t.Setenv("MESH_STATE_DIR", t.TempDir())
+	auth, hostID := controlFixtureAuthentication(t)
 	createdAt := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
 	serverErr := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(output http.ResponseWriter, request *http.Request) {
-		serverErr <- transport.Serve(output, request, func(_ context.Context, conn transport.Conn) error {
+		serverErr <- transport.ServeWithOptions(output, request, transport.ServeOptions{Auth: auth}, func(_ context.Context, conn transport.Conn) error {
 			frame, err := conn.ReadFrame()
 			if err != nil {
 				return err
@@ -79,7 +81,7 @@ func TestListRemoteHostUsesWebSocketAndVerifiesIdentity(t *testing.T) {
 			}
 			if err := conn.WriteFrame(mustCommandControlFrame(protocol.Control{
 				Type: protocol.TypeHostInfoResult, RequestID: identityRequest.RequestID,
-				Host: &protocol.HostInfo{ID: "host-id", MeshIdentity: "host-key"},
+				Host: &protocol.HostInfo{ID: hostID, MeshIdentity: hostID},
 			})); err != nil {
 				return err
 			}
@@ -94,14 +96,14 @@ func TestListRemoteHostUsesWebSocketAndVerifiesIdentity(t *testing.T) {
 			return conn.WriteFrame(mustCommandControlFrame(protocol.Control{
 				Type: protocol.TypeListed, RequestID: listRequest.RequestID,
 				Sessions: []protocol.SessionInfo{{
-					ID: "7K3D", HostID: "host-id", Command: []string{"bash"}, State: "running", CreatedAt: createdAt,
+					ID: "7K3D", HostID: hostID, Command: []string{"bash"}, State: "running", CreatedAt: createdAt,
 				}},
 			}))
 		})
 	}))
 	defer server.Close()
 
-	host := HostRecord{Alias: "pc", ID: "host-id", MeshIdentity: "host-key", Endpoint: "ws" + strings.TrimPrefix(server.URL, "http")}
+	host := HostRecord{Alias: "pc", ID: hostID, MeshIdentity: hostID, Endpoint: "ws" + strings.TrimPrefix(server.URL, "http")}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	got, err := listRemoteHost(ctx, host, dialHost)

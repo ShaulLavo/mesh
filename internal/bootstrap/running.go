@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/tailnet"
+	"github.com/shaul/mesh/internal/transport"
 )
 
 // probeTCPTimeout keeps a machine that is not serving Mesh cheap to rule out:
@@ -19,24 +21,23 @@ const probeTCPTimeout = 700 * time.Millisecond
 // probeVerifyTimeout bounds the identity exchange with a host that did answer.
 const probeVerifyTimeout = 5 * time.Second
 
-// probeRunningDaemon reports the host when it is already serving Mesh, so a
-// failed SSH attempt has somewhere to go. Adoption installs over SSH because a
-// bare machine has no daemon to talk to, but a machine already serving needs
-// nothing installed, and the session path trusts the tailnet rather than an SSH
-// key. This is the only way in to a machine that refuses SSH, which is every
-// stock macOS install.
-//
-// It runs before the SSH attempt rather than after it: the host-key prompt
-// cancels the context on its way out, so a probe that ran afterwards would
-// inherit a dead one and report nothing.
+// Discovery supplies addresses only. Adoption without SSH requires an existing
+// owner-controlled destination pin and a device grant at that destination.
 func probeRunningDaemon(ctx context.Context, normalized normalizedOptions, deps dependencies) (Result, bool) {
+	if normalized.expectedIdentity == "" {
+		return Result{}, false
+	}
+	_, key, err := identity.LoadOrCreate(normalized.stateDir)
+	if err != nil {
+		return Result{}, false
+	}
 	peer, ok := deps.servingPeer(ctx, normalized.target, normalized.daemonPort)
 	if !ok {
 		return Result{}, false
 	}
 	verifyCtx, cancel := context.WithTimeout(ctx, probeVerifyTimeout)
 	defer cancel()
-	host, endpoint, err := deps.verify(verifyCtx, peer.Addrs, normalized.daemonPort, normalized.webSocketPath)
+	host, endpoint, err := deps.verify(verifyCtx, peer.Addrs, normalized.daemonPort, normalized.webSocketPath, &transport.Authentication{Key: key, ExpectedIdentity: normalized.expectedIdentity})
 	if err != nil || validateVerifiedHost(host, peer.Name) != nil {
 		return Result{}, false
 	}

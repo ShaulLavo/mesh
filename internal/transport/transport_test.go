@@ -1033,12 +1033,12 @@ func TestRedialAgainstClosedListenerRetriesInsteadOfPanicking(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	link, err := dialLink(context.Background(), url, websocket.DialOptions{}, KeepAlive{})
+	link, err := DialOnce(context.Background(), url, DialOptions{})
 	if err == nil {
-		t.Fatal("dialLink succeeded against a closed listener")
+		t.Fatal("DialOnce succeeded against a closed listener")
 	}
 	if link != nil {
-		t.Fatalf("dialLink returned a non-nil linkConn (%T) alongside an error; a typed nil here panics connectionLocked", link)
+		t.Fatalf("DialOnce returned a non-nil linkConn (%T) alongside an error; a typed nil here panics connectionLocked", link)
 	}
 }
 

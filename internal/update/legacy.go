@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
@@ -26,7 +27,15 @@ func Exchange(ctx context.Context, host Host, request protocol.Control) (protoco
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	conn, err := dial(ctx, host)
+	var client Client
+	if !strings.HasPrefix(host.Endpoint, "unix:") {
+		auth, err := transport.LocalAuthentication(host.ID)
+		if err != nil {
+			return protocol.Control{}, fmt.Errorf("load legacy observation identity: %w", err)
+		}
+		client.Key = auth.Key
+	}
+	conn, err := client.dial(ctx, host)
 	if err != nil {
 		return protocol.Control{}, err
 	}

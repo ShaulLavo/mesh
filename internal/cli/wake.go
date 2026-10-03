@@ -26,7 +26,20 @@ func newWakeClient() (*wakeclient.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return wakeclient.New(stateDir, wakeclient.Options{Endpoints: configuredWakeEndpoints})
+	return wakeclient.New(stateDir, wakeclient.Options{Endpoints: configuredWakeEndpoints, PeerIdentity: configuredWakeIdentity})
+}
+
+func configuredWakeIdentity(_ context.Context, endpoint string) (string, error) {
+	hosts, err := LoadHosts()
+	if err != nil {
+		return "", err
+	}
+	for _, host := range hosts {
+		if host.Endpoint == endpoint {
+			return host.MeshIdentity, nil
+		}
+	}
+	return "", errors.New("wake peer is absent from the pinned host book")
 }
 
 func configuredWakeEndpoints(context.Context) ([]string, error) {

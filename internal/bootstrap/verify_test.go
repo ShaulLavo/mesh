@@ -64,7 +64,7 @@ func TestVerifyWebSocketReadsIdentityFromDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	host, endpoint, err := verifyWebSocket(context.Background(), []string{"127.0.0.1"}, uint16(port), "/mesh")
+	host, endpoint, err := verifyWebSocket(context.Background(), []string{"127.0.0.1"}, uint16(port), "/mesh", nil)
 	if err != nil {
 		t.Fatalf("verifyWebSocket() error = %v", err)
 	}
@@ -86,6 +86,6 @@ func TestVerifyWebSocketNamesBlockedPort(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, _, err = verifyWebSocket(ctx, []string{"127.0.0.1"}, uint16(port), "/mesh") //nolint:gosec // net.TCPAddr ports are bounded to uint16
+	_, _, err = verifyWebSocket(ctx, []string{"127.0.0.1"}, uint16(port), "/mesh", nil) //nolint:gosec // net.TCPAddr ports are bounded to uint16
 	assertDiagnosticCode(t, err, DiagnosticPortBlocked)
 }

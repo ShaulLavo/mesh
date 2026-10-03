@@ -83,6 +83,7 @@ type ListenerConfig struct {
 }
 
 type listenerConfig struct {
+	controlAuth                *transport.Authentication
 	unixConnectionLimit        int
 	tailnetConnectionLimit     int
 	listen                     func(string, string) (net.Listener, error)
@@ -377,6 +378,11 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		return listenerConfig{}, fmt.Errorf("daemon: state directory %s is not a directory", cfg.StateDir)
 	}
 
+	controlAuth, err := controlAuthentication(cfg.StateDir)
+	if err != nil {
+		return listenerConfig{}, err
+	}
+
 	if cfg.UnixConnectionLimit < 0 || cfg.TailnetConnectionLimit < 0 {
 		return listenerConfig{}, errors.New("daemon: control connection caps must be positive; zero selects the default")
 	}
@@ -387,6 +393,7 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		cfg.TailnetConnectionLimit = DefaultTailnetConnectionLimit
 	}
 	normalized := listenerConfig{
+		controlAuth:                controlAuth,
 		unixConnectionLimit:        cfg.UnixConnectionLimit,
 		tailnetConnectionLimit:     cfg.TailnetConnectionLimit,
 		listen:                     net.Listen,
@@ -538,6 +545,10 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 			services.ServeHTTP(w, r)
 			return
 		}
+		if r.Header.Get("Origin") != "" {
+			http.Error(w, "browser control connections are forbidden", http.StatusForbidden)
+			return
+		}
 		id, err := connections.reserve()
 		if err != nil {
 			if !errors.Is(err, transport.ErrClosed) {
@@ -547,9 +558,16 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 			return
 		}
 		defer connections.release(id)
-		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{}, func(connectionCtx context.Context, conn transport.Conn) error {
-			handlerCtx, cancel := context.WithCancel(ctx)
-			stop := context.AfterFunc(connectionCtx, cancel)
+		if cfg.controlAuth == nil {
+			http.Error(w, "Mesh device authorization unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: cfg.controlAuth}, func(connectionCtx context.Context, conn transport.Conn) error {
+			if _, authenticated := transport.Peer(connectionCtx); !authenticated {
+				return transport.ErrAuthentication
+			}
+			handlerCtx, cancel := context.WithCancel(connectionCtx)
+			stop := context.AfterFunc(ctx, cancel)
 			defer func() {
 				stop()
 				cancel()

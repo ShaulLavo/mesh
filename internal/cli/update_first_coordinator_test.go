@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
@@ -45,7 +46,7 @@ func TestFirstCoordinatorPreviewIncludesAdditionalScopeWithoutApproval(t *testin
 		}
 		return legacyCoordinatorInfo(local, host, output)
 	})
-	stdout, stderr, err := executeCommand(t, Dependencies{UpdateRelease: client, UpdateCaller: caller}, "update", "--fleet", file, "--check", "--json")
+	stdout, stderr, err := executeCommand(t, Dependencies{UpdateBuild: updateTestBuild, UpdateInspect: firstCoordinatorObservation(local), UpdateRelease: client, UpdateCaller: caller}, "update", "--fleet", file, "--check", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +110,7 @@ func TestFirstCoordinatorPersistsEntireApprovedRunBeforeActivation(t *testing.T)
 		bootstrapped = true
 		return updateinstall.Status{Phase: updateinstall.Granted, Request: updateinstall.Request{ID: request.ID, TargetID: request.TargetID, Generation: request.Generation, Manifest: request.Manifest}}, nil
 	}
-	stdout, stderr, err := executeCommand(t, Dependencies{UpdateRelease: client, UpdateCaller: caller, UpdateBootstrap: bootstrap}, "update", "--fleet", file, "--yes", "--json")
+	stdout, stderr, err := executeCommand(t, Dependencies{UpdateBuild: updateTestBuild, UpdateInspect: firstCoordinatorObservation(local), UpdateRelease: client, UpdateCaller: caller, UpdateBootstrap: bootstrap}, "update", "--fleet", file, "--yes", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +143,7 @@ func TestFirstCoordinatorBootstrapCannotOverwriteExplicitPolicy(t *testing.T) {
 	bootstrap := func(_ context.Context, request updatebootstrap.Request, config updatebootstrap.Config) (updateinstall.Status, error) {
 		return updateinstall.Status{}, config.Enroll(stateDir, request.CoordinatorID)
 	}
-	stdout, _, err := executeCommand(t, Dependencies{UpdateRelease: client, UpdateCaller: caller, UpdateBootstrap: bootstrap}, "update", "--fleet", file, "--yes", "--json")
+	stdout, _, err := executeCommand(t, Dependencies{UpdateBuild: updateTestBuild, UpdateInspect: firstCoordinatorObservation(local), UpdateRelease: client, UpdateCaller: caller, UpdateBootstrap: bootstrap}, "update", "--fleet", file, "--yes", "--json")
 	if code, ok := StatusCode(err); !ok || code != 1 {
 		t.Fatalf("explicit policy overridden: %v", err)
 	}
@@ -344,5 +345,13 @@ func TestFirstCoordinatorHelperRecoversBeforeInstallationJournalExists(t *testin
 	}
 	if _, err := pendingFirstCoordinatorRequest(stateDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cancelled run authorized missing-journal bootstrap: %v", err)
+	}
+}
+
+func firstCoordinatorObservation(local update.Host) func(context.Context, string) (updatebootstrap.Observation, error) {
+	return func(context.Context, string) (updatebootstrap.Observation, error) {
+		build := updateTestBuild()
+		build.Platform = release.CurrentPlatform()
+		return updatebootstrap.Observation{Health: updateinstall.Health{HostID: local.ID, Build: build}}, nil
 	}
 }

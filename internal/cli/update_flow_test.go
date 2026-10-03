@@ -51,7 +51,7 @@ func updateFlowFixture(t *testing.T, current bool) (Dependencies, update.Host, *
 		if current {
 			build.Version, build.Digest = manifest.Version, manifest.Artifacts[2].BinarySHA256
 		}
-		*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: build, Workers: []updateinstall.Worker{{ID: "retained", Build: &release.Build{Version: "v0.1.149"}}}}}
+		*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: build, Workers: []updateinstall.Worker{{ID: "retained", Protocol: 1, Build: &release.Build{Version: "v0.1.149"}}}}}
 		return nil
 	})
 	return Dependencies{UpdateRelease: release.Client{BaseURL: server.URL, HTTPClient: server.Client()}, UpdateCaller: caller}, local, mutations
@@ -94,10 +94,10 @@ func TestUpdateFlowDefaultDoesNotDefineFleet(t *testing.T) {
 			t.Errorf("default local preview contains %q", unwanted)
 		}
 	}
-	if !strings.Contains(text, "This machine only.") || !strings.Contains(text, "on this machine before retrying") {
+	if !strings.Contains(text, "This Mac runs Mesh v0.1.149.") || !strings.Contains(text, "--local --check to review this Mac") {
 		t.Errorf("local next action is unclear: %s", text)
 	}
-	if !strings.Contains(text, "intermediate release") || strings.Contains(text, "[y/N]") {
+	if !strings.Contains(text, updateBridgeProblem) || strings.Contains(text, "[y/N]") {
 		t.Errorf("unsupported jump offered approval: %s", text)
 	}
 	config, _ := ConfigPath()
@@ -115,7 +115,7 @@ func TestUpdateFlowRemoteAuthorizationIsNotFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"not managed here", "version unknown", "Run mesh update --local", "on pc", "on pi"} {
+	for _, want := range []string{"has not authorized updates from here", "version unknown", "Run mesh update --local"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("preview lacks %q: %s", want, text)
 		}
@@ -131,7 +131,7 @@ func TestUpdateFlowKnownCurrentControl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(text, "up to date") {
+	if !strings.Contains(text, "already runs Mesh v0.1.160") {
 		t.Fatalf("known current not observable: %s", text)
 	}
 	if *mutations != 0 {
@@ -191,11 +191,11 @@ func TestUpdateFlowRollbackFailureBlocksFreshApproval(t *testing.T) {
 		output.(*update.Info).Installation = &updateinstall.Status{Phase: updateinstall.RollbackFailed}
 		return nil
 	})
-	text, _, err := executeCommand(t, dependencies, "update", "--local", "--yes")
+	text, diagnostic, err := executeCommand(t, dependencies, "update", "--local", "--yes")
 	if err == nil || *mutations != 0 {
 		t.Fatal("unrecovered installation accepted approval")
 	}
-	if !strings.Contains(text, "recovery") && !strings.Contains(err.Error(), "blocked") {
+	if !strings.Contains(text+diagnostic+err.Error(), "recovery") {
 		t.Fatal("missing recovery guidance")
 	}
 }
@@ -260,20 +260,49 @@ func TestUpdateFlowSavedFleetAndAllKeepExplicitMembership(t *testing.T) {
 	}
 }
 
-func TestUpdateFlowAuthenticatedAccessRemainsUnknown(t *testing.T) {
-	for _, test := range []struct{ problem, label string }{
-		{"authenticate update endpoint: transport: Mesh peer authentication failed: remote error: tls: bad certificate", "access unverified"},
-		{"transport: device key is not approved", "not managed here"},
-		{"authenticate update endpoint: transport: Mesh peer authentication failed: transport: destination Mesh identity changed", "failed"},
-	} {
-		t.Run(test.label, func(t *testing.T) {
-			dependencies, _, mutations := updateFlowFixture(t, true)
-			dependencies.UpdateCaller = updateCallFunc(func(context.Context, update.Host, string, any, any) error { return errors.New(test.problem) })
-			text, _, err := executeCommand(t, dependencies, "update", "--host", "pc", "--check")
-			if err != nil || !strings.Contains(text, test.label) || !strings.Contains(text, "version unknown") || *mutations != 0 {
-				t.Fatalf("access preview = %q, %v", text, err)
+func TestUpdateFlowPlainLocalReview(t *testing.T) {
+	dependencies, _, _ := updateFlowFixture(t, false)
+	text, _ := interactiveUpdateFlow(t, dependencies, "n\n", "update")
+	for _, want := range []string{"Mesh v0.1.160 is available.", "This Mac runs Mesh v0.1.149.", updateBridgeProblem, "Run mesh update --local --check to review this Mac before updating."} {
+		if !strings.Contains(text, want) {
+			t.Errorf("plain review lacks %q: %s", want, text)
+		}
+	}
+	for _, unwanted := range []string{"VERSION", "local  ", "needs intermediate release", "running session", "on that machine", "mesh update status", "--version v0.1.151", "[y/N]"} {
+		if strings.Contains(text, unwanted) {
+			t.Errorf("blocked review contains %q: %s", unwanted, text)
+		}
+	}
+}
+
+func TestUpdateFlowDetailsAreExplicit(t *testing.T) {
+	dependencies, _, _ := updateFlowFixture(t, false)
+	text, _, err := executeCommand(t, dependencies, "update", "--local", "--check", "--details")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"commit ", "Release digest:", "Fleet local revision 1", "daemon v0.1.149"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("details lack %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "trust ") {
+		t.Fatal("details exposed enrollment instructions")
+	}
+}
+
+func TestUpdateFlowChecksDoNotPromiseSessionChanges(t *testing.T) {
+	for _, current := range []bool{false, true} {
+		dependencies, _, _ := updateFlowFixture(t, current)
+		text, _, err := executeCommand(t, dependencies, "update", "--local", "--check")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, unwanted := range []string{"running session", "stay alive", "preserved", "keeps working"} {
+			if strings.Contains(text, unwanted) {
+				t.Errorf("check promises a change: %s", text)
 			}
-		})
+		}
 	}
 }
 
@@ -285,5 +314,41 @@ func TestUpdateFlowGenuineFailureRemainsFailure(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "failed") || strings.Contains(output.String(), "not managed here") {
 		t.Fatal(output.String())
+	}
+}
+
+func TestUpdateFlowStartedUpdateSessionGrammar(t *testing.T) {
+	for _, count := range []int{1, 2} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			_, local := setupUpdateCLI(t)
+			client, _ := updateTestRelease(t)
+			caller := updateCallFunc(func(_ context.Context, host update.Host, action string, input, output any) error {
+				if action == "info" {
+					*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
+					return nil
+				}
+				run := update.Run{ID: strings.Repeat("a", 32), Release: updateTestSupportedManifest(), Targets: []update.Target{{Host: local, State: update.Pending}}}
+				for range count {
+					run.Targets[0].Workers = append(run.Targets[0].Workers, updateinstall.Worker{Protocol: 1})
+				}
+				if action == "status" {
+					run.Targets[0].State = update.Updated
+				}
+				if action != "plan" && action != "status" {
+					t.Fatalf("unexpected mutation %s", action)
+				}
+				*output.(*update.Run) = run
+				return nil
+			})
+			_, diagnostic, err := executeCommand(t, Dependencies{UpdateRelease: client, UpdateCaller: caller}, "update", "--local", "--yes")
+			verb := "keep"
+			if count == 1 {
+				verb = "keeps"
+			}
+			want := "Your " + sessionCountText(count) + " " + verb + " working during the update."
+			if err != nil || !strings.Contains(diagnostic, want) {
+				t.Fatalf("started update grammar: %s, %v", diagnostic, err)
+			}
+		})
 	}
 }

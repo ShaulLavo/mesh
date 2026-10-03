@@ -28,7 +28,6 @@ func updateTestManifest() release.Manifest {
 	manifest := release.Manifest{Schema: 1, Version: "v0.2.0", Commit: strings.Repeat("a", 40), Compatibility: release.Compatibility{StateReadMin: 1, StateReadMax: 1, StateWrite: 1, WorkerMin: 1, WorkerMax: 1, WorkerWrite: 1, JournalVersion: 1}}
 	for _, platform := range []release.Platform{{OS: "linux", Arch: "amd64"}, {OS: "linux", Arch: "arm64"}, {OS: "darwin", Arch: "arm64"}} {
 		manifest.Artifacts = append(manifest.Artifacts, release.Artifact{Platform: platform, Archive: "mesh_" + platform.OS + "_" + platform.Arch + ".tar.gz", SHA256: strings.Repeat("b", 64), BinarySHA256: strings.Repeat("c", 64)})
-		manifest.Compatibility.Transitions = append(manifest.Compatibility.Transitions, release.Transition{Platform: platform, FromDigest: strings.Repeat("d", 64), ToDigest: strings.Repeat("c", 64), Proof: strings.Repeat("e", 64)})
 	}
 	return manifest
 }
@@ -54,12 +53,21 @@ func saveUpdateTestFleet(t *testing.T, path string, fleet update.Fleet) {
 func updateTestRelease(t *testing.T) (release.Client, *atomic.Int32) {
 	t.Helper()
 	requests := new(atomic.Int32)
+	manifest := updateTestSupportedManifest()
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		_ = json.NewEncoder(w).Encode(updateTestManifest())
+		_ = json.NewEncoder(w).Encode(manifest)
 	}))
 	t.Cleanup(server.Close)
 	return release.Client{BaseURL: server.URL, HTTPClient: server.Client()}, requests
+}
+
+func updateTestSupportedManifest() release.Manifest {
+	manifest := updateTestManifest()
+	for _, artifact := range manifest.Artifacts {
+		manifest.Compatibility.Transitions = append(manifest.Compatibility.Transitions, release.Transition{Platform: artifact.Platform, FromDigest: strings.Repeat("d", 64), ToDigest: artifact.BinarySHA256, Proof: strings.Repeat("e", 64)})
+	}
+	return manifest
 }
 
 func setupUpdateCLI(t *testing.T) (string, update.Host) {
@@ -143,7 +151,7 @@ func TestUpdateKeepsOfflineMembersAndSubmitsOnePinnedPlan(t *testing.T) {
 		}
 		plans.Add(1)
 		plan := input.(update.Plan)
-		if plan.Fleet.Digest() != fleet.Digest() || plan.Manifest.Digest() != updateTestManifest().Digest() {
+		if plan.Fleet.Digest() != fleet.Digest() || plan.Manifest.Digest() != updateTestSupportedManifest().Digest() {
 			return errors.New("plan lost approved membership or release")
 		}
 		*output.(*update.Run) = update.Run{ID: strings.Repeat("a", 32), Fleet: plan.Fleet, Release: plan.Manifest, Targets: []update.Target{{Host: local, State: update.Updated}, {Host: remote, State: update.Offline}}}
@@ -189,10 +197,13 @@ func TestVersionJSONAndHiddenHelperValidationAreQuiet(t *testing.T) {
 func TestWorkerUpdateReportDoesNotClaimOldSessionsWereUpgraded(t *testing.T) {
 	workers := []updateinstall.Worker{{ID: "old", Build: &release.Build{Version: "v0.1.0"}}, {ID: "unknown"}, {ID: "current", Build: &release.Build{Version: "v0.2.0"}}}
 	text := workerUpdateSummary(workers, updateTestManifest())
-	for _, want := range []string{"3 running sessions preserved", "1 use older workers", "1 worker versions unknown"} {
+	for _, want := range []string{"3 running sessions", "1 using an older Mesh version", "1 with unknown Mesh version"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("worker summary lacks %q: %s", want, text)
 		}
+	}
+	if strings.Contains(text, "preserved") || strings.Contains(text, "upgraded") {
+		t.Fatalf("inventory promises changes: %s", text)
 	}
 }
 

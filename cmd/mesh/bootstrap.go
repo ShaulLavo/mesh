@@ -98,6 +98,7 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 
 		result, err := run(ctx, bootstrap.Options{
 			Target:                 request.Target,
+			AllowRoot:              request.AllowRoot,
 			StateDir:               stateDir,
 			ExpectedIdentity:       identityForAlias(hosts, request.Alias),
 			TailscaleAuthKey:       authKey,

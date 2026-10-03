@@ -260,6 +260,12 @@ chmod 0600 "$RENEWER_KEY"
 EDGE_ID=$(identity_id "$EDGE_STATE/identity.key") || fail "derive edge identity"
 ORIGIN_ONE_ID=$(identity_id "$ORIGIN_ONE_STATE/identity.key") || fail "derive first origin identity"
 ORIGIN_TWO_ID=$(identity_id "$ORIGIN_TWO_STATE/identity.key") || fail "derive second origin identity"
+for id in "$ORIGIN_ONE_ID" "$ORIGIN_TWO_ID"; do
+  env MESH_STATE_DIR="$EDGE_STATE" "$MESH_INTEGRATION" device approve --allow-root -- "$id" >/dev/null || fail "approve fixture origin"
+done
+for state in "$ORIGIN_ONE_STATE" "$ORIGIN_TWO_STATE"; do
+  env MESH_STATE_DIR="$state" "$MESH_INTEGRATION" device approve --allow-root -- "$EDGE_ID" >/dev/null || fail "approve fixture edge"
+done
 for named in EDGE_ID ORIGIN_ONE_ID ORIGIN_TWO_ID RENEWER_ID; do
   [ -n "${!named}" ] || fail "$named is empty; every later control request would lose an argument"
 done
