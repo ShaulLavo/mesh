@@ -43,7 +43,7 @@ func newHelperUpgradeFixture(t *testing.T, kind, version string) helperUpgradeFi
 	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
 	f.commit(t, version, "")
 	var err error
-	f.prior, err = PrepareHelper(f.cfg)
+	f.prior, err = PrepareHelper(t.Context(), f.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

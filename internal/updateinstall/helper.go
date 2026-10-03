@@ -31,11 +31,7 @@ type HelperInstallation struct {
 
 // PrepareHelper writes an independent executable and its own service definition.
 // InstallHelper additionally enables that service through the platform manager.
-func PrepareHelper(cfg HelperConfig) (HelperInstallation, error) {
-	return prepareHelperLocked(context.Background(), cfg)
-}
-
-func prepareHelperLocked(ctx context.Context, cfg HelperConfig) (HelperInstallation, error) {
+func PrepareHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, error) {
 	lock, err := lockInstallation(ctx, cfg.StateDir)
 	if err != nil {
 		return HelperInstallation{}, err
@@ -290,7 +286,7 @@ func replaceHelperLink(path, target string) error {
 }
 
 func InstallHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, error) {
-	installed, err := prepareHelperLocked(ctx, cfg)
+	installed, err := PrepareHelper(ctx, cfg)
 	if err != nil {
 		return installed, err
 	}
