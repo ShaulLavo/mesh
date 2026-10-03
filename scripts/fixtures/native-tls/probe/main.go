@@ -21,14 +21,14 @@ func main() {
 		fmt.Println("trusted")
 		return
 	}
+	var verification *tls.CertificateVerificationError
 	var hostname x509.HostnameError
-	var authority x509.UnknownAuthorityError
 	kind := "other"
+	if errors.As(err, &verification) {
+		kind = "certificate"
+	}
 	if errors.As(err, &hostname) {
 		kind = "hostname"
-	}
-	if errors.As(err, &authority) {
-		kind = "authority"
 	}
 	fmt.Fprintln(os.Stderr, kind+": "+err.Error())
 	os.Exit(1)

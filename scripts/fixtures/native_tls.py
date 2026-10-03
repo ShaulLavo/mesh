@@ -123,16 +123,16 @@ def prepare_native_tls(root, binaries, event):
     verify_injectable_binaries([probe])
     environment = {key: value for key, value in os.environ.items() if not key.startswith("DYLD_")}
     environment.update(HOME=str(root), SSL_CERT_FILE=str(root / "cert.pem"), SSL_CERT_DIR=str(root / "empty-certs"))
-    error = probe_tls(root, probe, environment, "server.pem", "server.key", "authority")
-    event("native-tls-control", control="injection-unavailable", result="authority", error=error)
+    error = probe_tls(root, probe, environment, "server.pem", "server.key", "certificate")
+    event("native-tls-control", control="injection-unavailable", result="certificate", error=error)
     subprocess.run(["clang", "-Wall", "-Wextra", "-Werror", "-dynamiclib", "-framework", "Security",
                     "-framework", "CoreFoundation", "-I", str(root), str(SOURCES / "anchor.c"), "-o", str(library)],
                    check=True, capture_output=True, timeout=30)
     injected = environment | {"DYLD_INSERT_LIBRARIES": str(library)}
     for name, cert, key, expected, child in (
         ("fixture-ca", "server.pem", "server.key", "trusted", injected),
-        ("wrong-ca", "wrong-ca-server.pem", "server.key", "authority", injected),
-        ("self-signed", "self-signed.pem", "self-signed.key", "authority", injected),
+        ("wrong-ca", "wrong-ca-server.pem", "server.key", "certificate", injected),
+        ("self-signed", "self-signed.pem", "self-signed.key", "certificate", injected),
         ("wrong-hostname", "wrong-host.pem", "wrong-host.key", "hostname", injected),
     ):
         error = probe_tls(root, probe, child, cert, key, expected)
@@ -141,8 +141,8 @@ def prepare_native_tls(root, binaries, event):
         outside = Path(directory) / "tls-probe"
         shutil.copyfile(probe, outside)
         outside.chmod(0o755)
-        error = probe_tls(root, outside, injected, "server.pem", "server.key", "authority")
-        event("native-tls-control", control="outside-fixture-descendant", result="authority", error=error)
+        error = probe_tls(root, outside, injected, "server.pem", "server.key", "certificate")
+        event("native-tls-control", control="outside-fixture-descendant", result="certificate", error=error)
     event("fixture-trust", provider="process-local SecTrust fixture CA", caDigest=hashlib.sha256(anchor).hexdigest(),
           unchangedBinaries=rows, trustStoreModified=False)
     return {"DYLD_INSERT_LIBRARIES": str(library)}

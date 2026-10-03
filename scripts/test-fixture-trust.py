@@ -190,17 +190,17 @@ class TLSControlsTest(unittest.TestCase):
         probe_tls(self.root, self.probe, self.environment, "server.pem", "server.key", "trusted")
 
     def test_wrong_ca_is_rejected(self):
-        probe_tls(self.root, self.probe, self.environment, "wrong-ca-server.pem", "server.key", "authority")
+        probe_tls(self.root, self.probe, self.environment, "wrong-ca-server.pem", "server.key", "certificate")
 
     def test_self_signed_leaf_is_rejected(self):
-        probe_tls(self.root, self.probe, self.environment, "self-signed.pem", "self-signed.key", "authority")
+        probe_tls(self.root, self.probe, self.environment, "self-signed.pem", "self-signed.key", "certificate")
 
     def test_wrong_hostname_is_rejected(self):
         probe_tls(self.root, self.probe, self.environment, "wrong-host.pem", "wrong-host.key", "hostname")
 
     def test_missing_fixture_ca_retains_tls_error(self):
         environment = self.environment | {"SSL_CERT_FILE": str(self.root / "missing.pem")}
-        probe_tls(self.root, self.probe, environment, "server.pem", "server.key", "authority")
+        probe_tls(self.root, self.probe, environment, "server.pem", "server.key", "certificate")
 
 
 if __name__ == "__main__":
