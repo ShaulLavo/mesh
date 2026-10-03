@@ -154,6 +154,13 @@ func TestDashboardHistoryDistinctSamplesGapsResetsAndBounds(t *testing.T) {
 	if len(dashboardPrune(points, now.Add(130*time.Second))) != 0 {
 		t.Fatal("history did not expire")
 	}
+	boundary := []dashboardPoint{{at: now.Add(-2 * time.Minute), sample: "boundary", value: 50}}
+	if len(dashboardPrune(boundary, now)) != 1 {
+		t.Fatal("history expired before its displayed two-minute window")
+	}
+	if len(dashboardPrune(boundary, now.Add(time.Nanosecond))) != 0 {
+		t.Fatal("history outlived its displayed two-minute window")
+	}
 	if dashboardAreaCell(0, true, 1, 4, false) == dashboardAreaCell(0, false, 1, 4, false) {
 		t.Fatal("valid zero looks like missing data")
 	}
@@ -180,7 +187,7 @@ func TestDashboardWallContainsHistoriesTemperatureUptimeAndBoundedSummaries(t *t
 	model.height = 5 + len(model.summaries(model.height)) + model.cardOverhead() + (len(model.hosts)+1)/2
 	view := ansi.Strip(model.render())
 	assertFits(t, view, 160, model.height)
-	for _, label := range []string{"CPU ", "25%", "RAM 8.0 / 16.0 GiB", "CPU 42°", "up 1h", "120s", "0–100%", "quiet shell", "fixture failure", "180 total", "services 120", "/120 visible", "Hosts 6 / 6 visible"} {
+	for _, label := range []string{"CPU ", "25%", "RAM 8.0 / 16.0 GiB", "CPU 42°", "up 1h", "history 2m", "0–100%", "quiet shell", "fixture failure", "180 total", "services 120", "/120 visible", "Hosts 6 / 6 visible"} {
 		if !strings.Contains(view, label) {
 			t.Fatalf("missing wall %q: %s", label, view)
 		}
