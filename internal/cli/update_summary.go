@@ -75,10 +75,12 @@ func printUpdateRunSummary(output io.Writer, run update.Run, mask *privacy.Mask)
 		}
 		lines = append(lines, fmt.Sprintf("%s: %s", SafeTerminalText(mask.Value("host", updateTargetLocation(target))), updateRunTargetLabel(target.State)))
 	}
+	action := "to check again."
 	if run.Problem != "" {
-		lines = append(lines, SafeTerminalText(mask.Value("error", run.Problem)))
+		lines = append(lines, "Mesh could not finish this update.")
+		action = "--details to review this saved update."
 	}
-	lines = append(lines, fmt.Sprintf("%d of %d machines verified. Run mesh update status %s to check again.", updated, len(run.Targets), mask.Value("update", run.ID)))
+	lines = append(lines, fmt.Sprintf("%d of %d machines verified. Run mesh update status %s %s", updated, len(run.Targets), mask.Value("update", run.ID), action))
 	return writeUpdateLines(output, lines)
 }
 
