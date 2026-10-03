@@ -28,6 +28,28 @@ class OwnerFailureTest(unittest.TestCase):
         log = self.record("\x1b[0mwarning\r\n" + self.marker + "\r\n").replace(r"\u001b", r"\x1b")
         self.assertTrue(self.accepts(log))
 
+    def test_valid_go_unicode_scalar_escapes(self):
+        for escape in [r"λ", r"\U0001f600", r"\U0010ffff", r"\\ud800"]:
+            with self.subTest(escape=escape):
+                log = self.record("warning UNICODE\n" + self.marker).replace("UNICODE", escape)
+                self.assertTrue(self.accepts(log))
+
+    def test_rejects_invalid_go_unicode_scalars(self):
+        for escape in [r"\ud800", r"\udfff", r"\U0000d800", r"\U0000dfff", r"\U00110000", r"\Uffffffff"]:
+            with self.subTest(escape=escape):
+                log = self.record("warning UNICODE\n" + self.marker).replace("UNICODE", escape)
+                self.assertFalse(self.accepts(log))
+
+    def test_inline_non_lf_controls_do_not_supply_a_marker_line(self):
+        for escape in [r"\x85", r"\v", r"\f", r"\r", r" ", r" "]:
+            with self.subTest(escape=escape):
+                log = self.record("warning SEPARATOR" + self.marker).replace("SEPARATOR", escape)
+                self.assertFalse(self.accepts(log))
+
+    def test_non_lf_byte_with_real_lf_boundary(self):
+        log = self.record("warning BYTE\n" + self.marker).replace("BYTE", r"\x85")
+        self.assertTrue(self.accepts(log))
+
     def test_duplicate_correlated_failure(self):
         log = self.record(self.marker)
         self.assertFalse(self.accepts(log + log))
