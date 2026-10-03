@@ -75,8 +75,11 @@ with tempfile.TemporaryDirectory(prefix="mesh-control-auth-") as directory:
         revoked = command(local_destination, "device", "revoke", "--", first_identity)
         require(revoked.returncode == 0, f"device revocation failed: {revoked.stderr!r}")
         original.expect_exit()
-        denied = command(fixture.environment, "ls", "pc")
-        require(denied.returncode != 0, "revoked device listed sessions")
+        denied = subprocess.run([str(fixture.root / "control-client"), host["endpoint"], fixture.remote_id,
+                                 json.dumps({"type": "session.list", "requestId": "revoked-device"})],
+                                env=fixture.environment, capture_output=True, timeout=6)
+        require(denied.returncode != 0 and b"full device approval required" in denied.stderr,
+                f"revoked device did not receive the authenticated admission denial: {denied.stderr!r}")
         os.kill(shell_pid, 0)
         original.close()
         fixture.terminals.remove(original)
