@@ -201,6 +201,9 @@ func TestNameStateDirectorySyncFailureCannotAcknowledgeOrOverwritePendingCommit(
 		t.Fatal("failed sync permitted another rename")
 	}
 	store.syncDirectory = syncDirectory
+	if _, _, err := store.Rename(t.Context(), id, "overwrite-pc", 1); !errors.Is(err, ErrRevision) || store.Current() != persisted.Claim {
+		t.Fatal("stale request overwrote the recovered durable commit")
+	}
 	claim, _, err := store.Rename(t.Context(), id, "pending-pc", 1)
 	if err != nil || claim != persisted.Claim || store.pending != nil {
 		t.Fatalf("retry did not complete the original durable commit: %v", err)

@@ -655,12 +655,14 @@ func (l *lifecycle) renameHost(ctx context.Context, request protocol.Control) (p
 	l.renameMu.Lock()
 	defer l.renameMu.Unlock()
 	rename := request.Rename
-	if _, _, err := l.names.Rename(ctx, rename.TargetID, rename.MachineName, rename.ExpectedRevision); err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: rename machine: %w", err)
-	}
+	_, _, err := l.names.Rename(ctx, rename.TargetID, rename.MachineName, rename.ExpectedRevision)
+	// Recovery may finish a pending durable commit before rejecting this request.
 	host := l.declaredHostInfo()
 	if l.nameChanged != nil {
 		l.nameChanged(host)
+	}
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: rename machine: %w", err)
 	}
 	return protocol.Control{
 		Type: protocol.TypeHostRenamed, RequestID: request.RequestID, Host: &host,

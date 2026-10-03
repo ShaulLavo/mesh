@@ -75,6 +75,18 @@ func TestDestinationNamePublishedAfterCommitAndRetryCoalesces(t *testing.T) {
 	if snapshot.Host == nil || snapshot.Host.NameRevision != 2 || snapshot.Host.MachineName != "destination-pc" {
 		t.Fatal("reconnect lost newer authoritative declaration")
 	}
+	// Completing an uncertain directory sync can commit a pending name before
+	// the caller's stale request fails. The watch must still catch up.
+	if _, _, err := names.Rename(t.Context(), host.ID, "recovered-pc", 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := life.HandleControl(t.Context(), request); !errors.Is(err, machinename.ErrRevision) {
+		t.Fatal("stale request changed the recovered name")
+	}
+	recovered := broker.take(sub)
+	if len(recovered) != 1 || recovered[0].StateEvent.Payload.Host.NameRevision != 3 {
+		t.Fatal("failed request hid a recovered durable name from the watch")
+	}
 }
 
 func TestHostRenameErrorsAreStructuredAndWatchReadOnly(t *testing.T) {
