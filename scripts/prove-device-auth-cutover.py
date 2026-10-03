@@ -64,11 +64,11 @@ def publish(binary, previous):
     platforms = [{"os": "linux", "arch": "amd64"}, {"os": "linux", "arch": "arm64"}, {"os": "darwin", "arch": "arm64"}]
     artifacts = []
     transitions = []
-    for platform in platforms:
-        native = platform == build["platform"]
+    for target in platforms:
+        native = target == build["platform"]
         # Release manifests require three targets. Non-native provider placeholders
         # are unexecutable; downloading them proves no non-native execution.
-        payload = binary.read_bytes() if native else b"unexecuted external release fixture: " + json.dumps(platform).encode()
+        payload = binary.read_bytes() if native else b"unexecuted external release fixture: " + json.dumps(target).encode()
         content = io.BytesIO()
         with tarfile.open(fileobj=content, mode="w:gz") as archive:
             entry = tarfile.TarInfo("mesh")
@@ -76,9 +76,9 @@ def publish(binary, previous):
             entry.size = len(payload)
             archive.addfile(entry, io.BytesIO(payload))
         archive = content.getvalue()
-        name = "mesh_" + platform["os"] + "_" + platform["arch"] + ".tar.gz"
-        artifacts.append({"platform": platform, "archive": name, "sha256": digest(archive), "binarySha256": digest(payload)})
-        transitions.append({"platform": platform, "fromDigest": previous["digest"], "toDigest": digest(payload),
+        name = "mesh_" + target["os"] + "_" + target["arch"] + ".tar.gz"
+        artifacts.append({"platform": target, "archive": name, "sha256": digest(archive), "binarySha256": digest(payload)})
+        transitions.append({"platform": target, "fromDigest": previous["digest"], "toDigest": digest(payload),
                             "proof": digest(b"disposable fixture transition")})
         RELEASES[f"/ShaulLavo/mesh/releases/download/{build['version']}/{name}"] = archive
     manifest = {"schema": 1, "version": build["version"], "commit": build["commit"], "artifacts": artifacts,
