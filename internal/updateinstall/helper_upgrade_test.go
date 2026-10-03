@@ -60,17 +60,23 @@ health=$2`, 1) + suffix
 	if err := os.WriteFile(f.cfg.Executable, []byte(binary), 0755); err != nil { //nolint:gosec // isolated executable fixture
 		t.Fatal(err)
 	}
-	manifest := release.Manifest{Schema: 1, Version: version, Commit: strings.Repeat("a", 40),
-		Compatibility: release.Compatibility{StateReadMin: 7, StateReadMax: 7, StateWrite: 7,
-			WorkerMin: 1, WorkerMax: 1, WorkerWrite: 1, JournalVersion: 1}}
+	f.publish(t, release.Build{Version: version, Commit: strings.Repeat("a", 40),
+		Digest: digestBytes([]byte(binary)), StateVersion: 7, WorkerProtocol: 1, UpdateProtocol: 1})
+}
+
+func (f helperUpgradeFixture) publish(t *testing.T, build release.Build) {
+	t.Helper()
+	manifest := release.Manifest{Schema: 1, Version: build.Version, Commit: build.Commit,
+		Compatibility: release.Compatibility{StateReadMin: build.StateVersion, StateReadMax: build.StateVersion, StateWrite: build.StateVersion,
+			WorkerMin: build.WorkerProtocol, WorkerMax: build.WorkerProtocol, WorkerWrite: build.WorkerProtocol, JournalVersion: release.CurrentJournalVersion}}
 	for _, platform := range []release.Platform{{OS: "linux", Arch: "amd64"}, {OS: "linux", Arch: "arm64"}, {OS: "darwin", Arch: "arm64"}} {
 		manifest.Artifacts = append(manifest.Artifacts, release.Artifact{Platform: platform,
 			Archive: "mesh_" + platform.OS + "_" + platform.Arch + ".tar.gz",
-			SHA256:  strings.Repeat("b", 64), BinarySHA256: digestBytes([]byte(binary))})
+			SHA256:  strings.Repeat("b", 64), BinarySHA256: build.Digest})
 	}
 	status := Status{Schema: 1, Phase: Committed,
 		Request:  Request{ID: "helper-commit", TargetID: "fixture-host", Generation: 1, Manifest: manifest},
-		Settings: Settings{StateDir: f.cfg.StateDir, Executable: f.cfg.Executable}}
+		Settings: Settings{StateDir: f.cfg.StateDir, Executable: f.cfg.Executable, CacheDir: filepath.Join(f.cfg.StateDir, "cache"), ClientOnly: true}}
 	data, err := json.Marshal(status)
 	if err != nil {
 		t.Fatal(err)
@@ -261,6 +267,110 @@ func TestUpgradeHelperRejectsInvalidExistingReceipt(t *testing.T) {
 			before := f.snapshot(t)
 			if _, err = UpgradeHelper(context.Background(), f.cfg); err == nil {
 				t.Fatal("invalid helper receipt accepted")
+			}
+			f.assertUnchanged(t, before)
+		})
+	}
+}
+
+func TestUpgradeHelperRejectsIncompatibleBuilds(t *testing.T) {
+	for _, change := range []struct{ name, from, to string }{
+		{"state", `"stateVersion":7`, `"stateVersion":10`},
+		{"worker", `"workerProtocol":1`, `"workerProtocol":2`},
+		{"update", `"updateProtocol":1`, `"updateProtocol":2`},
+		{"missing-update", `"updateProtocol":1`, `"updateProtocol":0`},
+		{"missing-commit", strings.Repeat("a", 40), ""},
+		{"modified", `"stateVersion":7`, `"modified":true,"stateVersion":7`},
+		{"platform", `"os":"` + release.CurrentPlatform().OS + `"`, `"os":"unknown"`},
+		{"invalid-version", "v0.1.170", "development"},
+	} {
+		for _, side := range []string{"prior", "candidate"} {
+			t.Run(change.name+"/"+side, func(t *testing.T) {
+				f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
+				f.commit(t, "v0.1.171", "")
+				path := f.cfg.Executable
+				if side == "prior" {
+					path = f.prior.Executable
+				}
+				binary, err := os.ReadFile(path) //nolint:gosec // isolated fixture executable
+				if err != nil {
+					t.Fatal(err)
+				}
+				from := change.from
+				if change.name == "invalid-version" && side == "candidate" {
+					from = "v0.1.171"
+				}
+				changed := strings.Replace(string(binary), from, change.to, 1)
+				if changed == string(binary) {
+					t.Fatal("build mutation did not change fixture")
+				}
+				digest := digestBytes([]byte(changed))
+				if side == "candidate" {
+					f.publish(t, release.Build{Version: "v0.1.171", Commit: strings.Repeat("a", 40), Digest: digest, StateVersion: 7, WorkerProtocol: 1})
+				} else {
+					f.replacePrior(t, []byte(changed))
+					path = f.prior.Executable
+				}
+				if err = atomicWrite(path, []byte(changed), 0755); err != nil {
+					t.Fatal(err)
+				}
+				before := f.snapshot(t)
+				if _, err = UpgradeHelper(t.Context(), f.cfg); err == nil {
+					t.Fatal("invalid or incompatible build accepted")
+				}
+				f.assertUnchanged(t, before)
+			})
+		}
+	}
+}
+
+func TestUpgradeHelperBuildProbeCancellation(t *testing.T) {
+	f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
+	f.commit(t, "v0.1.171", "")
+	binary := []byte("#!/bin/sh\nexec sleep 10\n")
+	f.replacePrior(t, binary)
+	before := f.snapshot(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := UpgradeHelper(ctx, f.cfg); err == nil || time.Since(started) > 2*time.Second {
+		t.Fatalf("build probe cancellation failed: %v", err)
+	}
+	f.assertUnchanged(t, before)
+}
+
+func (f *helperUpgradeFixture) replacePrior(t *testing.T, binary []byte) {
+	t.Helper()
+	f.prior.Digest = digestBytes(binary)
+	f.prior.Executable = filepath.Join(transactionDir(f.cfg.StateDir), "helper", f.prior.Digest, "mesh")
+	if err := atomicWrite(f.prior.Executable, binary, 0755); err != nil {
+		t.Fatal(err)
+	}
+	record, err := json.Marshal(f.prior)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = atomicWrite(helperRecord(f.cfg.StateDir), record, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = replaceHelperLink(filepath.Join(transactionDir(f.cfg.StateDir), "helper", "current"), f.prior.Executable); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpgradeHelperRejectsInvalidBuildReports(t *testing.T) {
+	for _, report := range []struct{ name, command string }{
+		{"absent", "exit 0"},
+		{"invalid-json", "printf 'broken'"},
+		{"oversized", "printf '%65537s' x"},
+	} {
+		t.Run(report.name, func(t *testing.T) {
+			f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
+			f.commit(t, "v0.1.171", "")
+			f.replacePrior(t, []byte("#!/bin/sh\n"+report.command+"\n"))
+			before := f.snapshot(t)
+			if _, err := UpgradeHelper(t.Context(), f.cfg); err == nil {
+				t.Fatal("invalid build report accepted")
 			}
 			f.assertUnchanged(t, before)
 		})
