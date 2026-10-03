@@ -30,6 +30,9 @@ class SecurityFixture:
         self.fail_add = False
         self.ignore_right_restore = False
         self.ignore_trust_remove = False
+        self.prior_trust = {}
+        self.missing_trust_store = False
+        self.fail_export = False
 
     def run(self, command, **kwargs):
         administrator = command[:3] == ["sudo", "-n", "security"]
@@ -66,15 +69,13 @@ class SecurityFixture:
                 return SimpleNamespace(returncode=1, stdout=b"", stderr=b"fixture removal failure")
             if not self.ignore_trust_remove:
                 self.trusted = False
-        elif action == "dump-trust-settings":
-            output = b"Number of trusted certs = 1\n" if self.trusted else b"No Trust Settings were found.\n"
-        elif action == "find-certificate":
-            if self.trusted:
-                output = b"fixture certificate"
-            else:
-                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"certificate absent")
         elif action == "trust-settings-export":
-            Path(args[-1]).write_bytes(plistlib.dumps({"trustVersion": 1, "trustList": {"fixture": {}} if self.trusted else {}}))
+            if self.fail_export:
+                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"fixture export permission denied")
+            if self.missing_trust_store and not self.trusted:
+                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"No Trust Settings were found. (-25263)")
+            trust = self.prior_trust | ({"fixture": {}} if self.trusted else {})
+            Path(args[-1]).write_bytes(plistlib.dumps({"trustVersion": 1, "trustList": trust}))
         elif action == "delete-keychain":
             if not self.ignore_delete:
                 self.keychains.remove(args[-1])
@@ -109,7 +110,7 @@ class NativeTrustTest(unittest.TestCase):
             "os": SimpleNamespace(environ={"GITHUB_ACTIONS": "true", "RUNNER_OS": "macOS"}),
             "subprocess": SimpleNamespace(run=self.fixture.run, check_output=self.fixture.check_output,
                                           SubprocessError=subprocess.SubprocessError),
-            "shlex": shlex, "plistlib": plistlib, "sys": sys, "require": require,
+            "shlex": shlex, "plistlib": plistlib, "sys": sys, "Path": Path, "require": require,
             "event": lambda *args, **kwargs: None, "trust_cleanup": [],
         }
         exec(compile(ast.Module(body=definitions, type_ignores=[]), str(SOURCE), "exec"), self.namespace)
@@ -130,6 +131,28 @@ class NativeTrustTest(unittest.TestCase):
         self.assertFalse(self.fixture.keychains)
         self.assertEqual(self.fixture.right, self.fixture.original_right)
         self.assertIn(("authorizationdb", "read", "com.apple.trust-settings.admin"), self.fixture.calls)
+
+    def test_existing_admin_trust_is_preserved(self):
+        self.fixture.prior_trust = {"existing": {"trustSettings": [{"result": 1}]}}
+        self.install()
+        self.cleanup()
+        self.assertEqual(self.fixture.prior_trust, {"existing": {"trustSettings": [{"result": 1}]}})
+        self.assertFalse(self.fixture.trusted)
+
+    def test_absent_admin_trust_store_is_preserved(self):
+        self.fixture.missing_trust_store = True
+        self.install()
+        self.cleanup()
+        self.assertFalse(self.fixture.trusted)
+        self.assertEqual(self.fixture.right, self.fixture.original_right)
+
+    def test_export_failure_refuses_install_before_mutation(self):
+        self.fixture.fail_export = True
+        with self.assertRaisesRegex(RuntimeError, "export permission denied"):
+            self.install()
+        self.assertFalse(self.fixture.keychains)
+        self.assertFalse(self.fixture.trusted)
+        self.assertEqual(self.fixture.right, self.fixture.original_right)
 
     def test_primary_failure_survives_cleanup_failure(self):
         self.install()

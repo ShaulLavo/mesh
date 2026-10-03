@@ -412,18 +412,86 @@ def install_native_fixture_trust():
             "Darwin HTTPS fixture trust requires a disposable GitHub macOS runner")
     keychain = str(ROOT / "fixture.keychain-db")
     prior = shlex.split(subprocess.check_output(["security", "list-keychains", "-d", "user"]).decode())
-    def security(*args, administrator=False):
+    def security(*args, administrator=False, data=None, checked=True):
         command = ["sudo", "-n", "security"] if administrator else ["security"]
-        result = subprocess.run([*command, *args], check=False, capture_output=True, timeout=15)
-        require(result.returncode == 0, "native fixture trust " + args[0] + ": " + result.stderr.decode(errors="replace"))
+        result = subprocess.run([*command, *args], input=data, check=False, capture_output=True, timeout=15)
+        if checked:
+            require(result.returncode == 0, "native fixture trust " + args[0] + ": " + result.stderr.decode(errors="replace"))
+        return result
+
+    def trust_settings(name):
+        destination = ROOT / name
+        result = security("trust-settings-export", "-d", str(destination), checked=False)
+        if result.returncode != 0:
+            require(b"-25263" in result.stderr or b"No Trust Settings were found" in result.stderr,
+                    "native fixture trust export: " + result.stderr.decode(errors="replace"))
+            return {}
+        settings = plistlib.loads(destination.read_bytes())
+        require(isinstance(settings, dict) and isinstance(settings.get("trustList"), dict),
+                "native fixture trust export has an invalid trust list")
+        return settings["trustList"]
+
+    def remove_keychain():
+        security("delete-keychain", keychain)
+        require(not Path(keychain).exists(), "native fixture keychain removal did not remove its file")
+
+    def restore_search():
+        security("list-keychains", "-d", "user", "-s", *prior)
+        restored = shlex.split(security("list-keychains", "-d", "user").stdout.decode())
+        require(restored == prior, "native fixture keychain search list was not restored")
+
+    right = "com.apple.trust-settings.admin"
+    original_right = security("authorizationdb", "read", right, administrator=True).stdout
+    original_trust = trust_settings("trust-before.plist")
+
+    def authorization_policy(data):
+        # Security rewrites bookkeeping timestamps when restoring the same rule.
+        policy = plistlib.loads(data)
+        require(isinstance(policy, dict), "native fixture trust authorization policy is invalid")
+        return {key: value for key, value in policy.items() if key not in ("created", "modified")}
+
+    original_policy = authorization_policy(original_right)
+
+    def restore_authorization():
+        security("authorizationdb", "write", right, administrator=True, data=original_right)
+        restored = security("authorizationdb", "read", right, administrator=True).stdout
+        require(authorization_policy(restored) == original_policy,
+                "native fixture trust authorization policy was not restored")
+
+    def remove_trust():
+        # Removing the last admin record lacks SecTrust's root-only addition exemption
+        # and requests GUI authorization even under sudo. Scope this rule to CI cleanup.
+        security("authorizationdb", "write", right, "allow", administrator=True)
+        security("remove-trusted-cert", "-d", str(ROOT / "cert.pem"), administrator=True)
+        require(trust_settings("trust-after.plist") == original_trust,
+                "native fixture admin trust settings were not restored")
+
+    trust_cleanup.append(remove_keychain)
     security("create-keychain", "-p", "", keychain)
-    trust_cleanup.append(lambda: security("delete-keychain", keychain))
     security("unlock-keychain", "-p", "", keychain)
-    trust_cleanup.append(lambda: security("list-keychains", "-d", "user", "-s", *prior))
+    trust_cleanup.append(restore_search)
     security("list-keychains", "-d", "user", "-s", keychain, *prior)
-    trust_cleanup.append(lambda: security("remove-trusted-cert", "-d", str(ROOT / "cert.pem"), administrator=True))
+    trust_cleanup.extend((restore_authorization, remove_trust))
     security("add-trusted-cert", "-d", "-r", "trustRoot", "-k", keychain, str(ROOT / "cert.pem"), administrator=True)
     event("fixture-trust", provider="macOS temporary keychain with runner-only admin trust")
+
+
+def cleanup_native_fixture_trust(primary_error):
+    cleanup_errors = []
+    for cleanup in reversed(trust_cleanup):
+        try:
+            cleanup()
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            cleanup_errors.append(str(error))
+    if not cleanup_errors:
+        if trust_cleanup:
+            event("fixture-trust-restored", adminTrust=True, authorizationPolicy=True, searchList=True, keychainRemoved=True)
+        return
+    message = "native fixture trust cleanup: " + repr(cleanup_errors)
+    if primary_error is not None:
+        primary_error.add_note(message)
+        return
+    require(False, message)
 
 try:
     install_native_fixture_trust()
@@ -546,10 +614,4 @@ finally:
             server.shutdown()
             server.server_close()
     finally:
-        cleanup_errors = []
-        for cleanup in reversed(trust_cleanup):
-            try:
-                cleanup()
-            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-                cleanup_errors.append(str(error))
-        require(not cleanup_errors, "native fixture trust cleanup: " + repr(cleanup_errors))
+        cleanup_native_fixture_trust(sys.exc_info()[1])

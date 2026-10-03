@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 set -euo pipefail
+trap 'printf "FAIL: bootstrap_installers.sh line %s status %s\n" "$LINENO" "$?" >&2' ERR
 
 if [[ -z ${MESH:-} ]]; then
   MESH=$PWD/mesh
@@ -76,8 +77,18 @@ esac
 EOF
 chmod 0755 "$fake_bin/systemctl" "$fake_bin/loginctl" "$fake_bin/launchctl"
 
-authorized_key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMeshBootstrapInstallerFixture adopter'
+authorized_key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f'
 authorized_key_b64=$(printf '%s' "$authorized_key" | base64 | tr -d '\n')
+
+assert_installer_grant() {
+  awk -v key="$authorized_key" '
+    $1 " " $2 == key {
+      count++
+      if (NF != 3 || $3 !~ /^mesh-grant:[A-Za-z0-9_-]+$/) invalid=1
+    }
+    END { exit count != 1 || invalid }
+  ' "$1" || { echo 'FAIL: installer did not publish one managed device grant' >&2; exit 1; }
+}
 linux_service_b64=$(sed \
   -e 's|@MESH_BINARY@|%h/.local/bin/mesh|g' \
   -e 's|@MESH_PORT@|7337|g' \
@@ -110,7 +121,7 @@ cmp -s "$MESH" "$linux_home/.local/bin/mesh"
 grep -Fqx 'ExecStart=%h/.local/bin/mesh daemon --tailnet-port=7337 --ssh-port=2222 --websocket-path=/mesh' \
   "$linux_home/.config/systemd/user/mesh.service"
 grep -Fqx 'KillMode=process' "$linux_home/.config/systemd/user/mesh.service"
-test "$(grep -Fxc "$authorized_key" "$linux_home/.local/state/mesh/authorized_keys")" -eq 1
+assert_installer_grant "$linux_home/.local/state/mesh/authorized_keys"
 test "$(stat -c '%a' "$linux_home/.local/state/mesh/authorized_keys")" = 600
 
 # An empty source binary means the adopter found the host already running these
@@ -120,7 +131,7 @@ linux_skipped=$(env HOME="$linux_home" PATH="$fake_bin:$PATH" \
   sh scripts/install/linux.sh "" 7337 2222 /mesh "$authorized_key_b64" "$linux_service_b64")
 grep -Fxq 'MESH_INSTALL_RESULT=configured' <<<"$linux_skipped"
 cmp -s "$MESH" "$linux_home/.local/bin/mesh"
-test "$(grep -Fxc "$authorized_key" "$linux_home/.local/state/mesh/authorized_keys")" -eq 1
+assert_installer_grant "$linux_home/.local/state/mesh/authorized_keys"
 
 # Skipping the upload must never publish a service with no binary behind it.
 if missing_output=$(env HOME="$run_root/linux-missing-home" PATH="$fake_bin:$PATH" \
@@ -205,11 +216,11 @@ darwin_second=$(env HOME="$darwin_home" PATH="$fake_bin:$PATH" FAKE_LAUNCH_STATE
 grep -Fxq 'MESH_INSTALL_RESULT=unchanged' <<<"$darwin_second"
 
 rm -f "$darwin_home/.local/state/mesh/authorized_keys"
-darwin_skipped=$(env HOME="$darwin_home" PATH="$fake_bin:$PATH" \
+darwin_skipped=$(env HOME="$darwin_home" PATH="$fake_bin:$PATH" FAKE_LAUNCH_STATE="$launch_state" \
   sh scripts/install/darwin.sh "" 7337 2222 /mesh "$authorized_key_b64" "$darwin_service_b64")
 grep -Fxq 'MESH_INSTALL_RESULT=configured' <<<"$darwin_skipped"
 cmp -s "$MESH" "$darwin_home/.local/bin/mesh"
-test "$(grep -Fxc "$authorized_key" "$darwin_home/.local/state/mesh/authorized_keys")" -eq 1
+assert_installer_grant "$darwin_home/.local/state/mesh/authorized_keys"
 
 if darwin_missing=$(env HOME="$run_root/darwin-missing-home" PATH="$fake_bin:$PATH" \
     sh scripts/install/darwin.sh "" 7337 2222 /mesh "$authorized_key_b64" "$darwin_service_b64" 2>&1); then
@@ -222,7 +233,7 @@ grep -Fq -- '--tailnet-port=7337 --ssh-port=2222' \
   "$darwin_home/Library/LaunchAgents/dev.shaulavo.mesh.plist"
 grep -Fq '<key>AbandonProcessGroup</key>' \
   "$darwin_home/Library/LaunchAgents/dev.shaulavo.mesh.plist"
-test "$(grep -Fxc "$authorized_key" "$darwin_home/.local/state/mesh/authorized_keys")" -eq 1
+assert_installer_grant "$darwin_home/.local/state/mesh/authorized_keys"
 test "$(stat -c '%a' "$darwin_home/.local/state/mesh/authorized_keys")" = 600
 
 darwin_retry_home=$run_root/darwin-retry-home
