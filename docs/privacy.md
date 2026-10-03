@@ -24,9 +24,14 @@ mesh --privacy=false ls          # explicitly reveal details
 
 ## What appears on screen
 
-Host and provider-account names, session titles, working directories, service
-names, routes, targets, and URLs appear as aliases such as `host-a81c02` and
-`path-32fb10`. The same value in the same category has the same alias throughout
+Plain host names, session names and titles, service labels, and useful path
+suffixes stay readable. Privacy mode scrubs embedded usernames, home-directory
+owners, UUIDs, domains, and IP addresses. Home paths such as
+`/home/private-owner/project` appear as `~/project`. URLs retain useful scheme
+and path information with private authorities sanitized.
+
+Provider-account labels always appear as opaque aliases, including labels that
+contain no email address. The same masked value has the same alias throughout
 one Mesh invocation, including refreshed frames. Each invocation has a fresh
 random key, so aliases change when you restart Mesh.
 
@@ -36,11 +41,20 @@ session IDs, states, ages, and service health stay readable.
 
 The inspector displays a privacy placeholder for both live and saved terminal
 screens. `mesh logs`, including `--previous`, displays the same kind of placeholder.
-Mesh error details are masked while diagnostic status stays readable. Application
-setup output and browser payloads are hidden too. App text and JSON results
+Terminal output can contain passwords, tokens, and private prose with no
+recognizable pattern. Applying the metadata text filter to that output would
+leave those secrets visible, so previews and logs remain withheld. Arbitrary
+error details stay opaque for the same reason; diagnostic status stays readable.
+Application setup output and browser payloads are hidden too. App text and JSON results
 mask identifiers and private fields while the app operations use their original
 values. Human-readable GC, update, agent recovery, and host-management messages
 also mask their private metadata.
+
+While privacy is active, the dashboard keeps its current executable through
+local daemon updates. A different installed binary may predate privacy support
+and silently ignore `MESH_PRIVACY`. When its daemon's binary changes, the dashboard
+shows a one-line skipped-restart notice; restart it manually after recording.
+Ordinary dashboards keep their automatic restart behavior.
 
 Privacy mode keeps the real fleet identities and session data for lookup and
 control. Masking happens when Mesh presents data; caches, configuration, command

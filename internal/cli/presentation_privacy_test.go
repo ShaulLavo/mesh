@@ -18,7 +18,7 @@ import (
 
 func TestPrivateServiceTableMasksOnlyPresentation(t *testing.T) {
 	mask := privacy.New()
-	rows := []ServiceCatalogRow{{Host: HostRecord{Alias: "private-machine", Endpoint: "wss://machine.example/socket"}, Live: true,
+	rows := []ServiceCatalogRow{{Host: HostRecord{Alias: "private-machine", Endpoint: "wss://machine.example.ts.net/socket"}, Live: true,
 		Service: protocol.ServiceInfo{Name: "private-route", DisplayName: "Secret Site", Kind: "files", Target: "/home/owner/private-project", Healthy: true}}}
 	original := rows[0]
 	var output bytes.Buffer
@@ -26,12 +26,12 @@ func TestPrivateServiceTableMasksOnlyPresentation(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := output.String()
-	for _, private := range []string{"private-machine", "private-route", "Secret Site", "/home/owner/private-project", "machine.example"} {
+	for _, private := range []string{"/home/owner/private-project", "machine.example.ts.net"} {
 		if strings.Contains(text, private) {
 			t.Fatalf("leaked %q: %s", private, text)
 		}
 	}
-	for _, public := range []string{"ROUTE", "files", "tailnet", "healthy", mask.Value("host", "private-machine")} {
+	for _, public := range []string{"ROUTE", "files", "tailnet", "healthy", "private-machine", "/private-route", "Secret Site", "~/private-project"} {
 		if !strings.Contains(text, public) {
 			t.Fatalf("missing %q: %s", public, text)
 		}
@@ -55,14 +55,14 @@ func TestPrivateServicePortsAndDiagnostics(t *testing.T) {
 		t.Fatalf("port mapping changed: %s", got)
 	}
 	service.Target = "relative-secret-directory"
-	if got := privateServiceTarget(mask, service); strings.Contains(got, service.Target) || !strings.Contains(got, ":15173→5173") {
+	if got := privateServiceTarget(mask, service); !strings.Contains(got, service.Target) || !strings.Contains(got, ":15173→5173") {
 		t.Fatalf("target = %s", got)
 	}
 	var output bytes.Buffer
 	if err := writeServiceDiagnostics(&output, map[string]error{"private-machine": errors.New("secret-token-without-recognizable-format")}, mask); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output.String(), "private-machine") || strings.Contains(output.String(), "secret-token") || !strings.Contains(output.String(), "unavailable") {
+	if !strings.Contains(output.String(), "private-machine") || strings.Contains(output.String(), "secret-token") || !strings.Contains(output.String(), "unavailable") {
 		t.Fatalf("diagnostics = %s", output.String())
 	}
 	rows := []ServiceCatalogRow{{Host: HostRecord{ID: "id", Alias: "private-machine"}, Service: protocol.ServiceInfo{Name: "private-route", PublicName: "secret.example"}}, {Host: HostRecord{ID: "id", Alias: "private-machine"}, Service: protocol.ServiceInfo{Name: "private-route/admin"}}}
@@ -86,12 +86,12 @@ func TestPrivateAppPresentationWithholdsPayloads(t *testing.T) {
 	if err := writeAppResult(&output, "private-machine", result, false, mask); err != nil {
 		t.Fatal(err)
 	}
-	for _, private := range []string{"private-owner", "private-machine", "7k3d", "unrecognizable-secret", "secret-error", "secret-build-output"} {
+	for _, private := range []string{"private-owner", "unrecognizable-secret", "secret-error", "secret-build-output"} {
 		if strings.Contains(output.String(), private) {
 			t.Fatalf("leaked %q: %s", private, output.String())
 		}
 	}
-	for _, public := range []string{"active", "private", "setup failed", "not serving", mask.Value("owner", app.Owner)} {
+	for _, public := range []string{"active", "private", "setup failed", "not serving", "private-machine", "id: 7k3d", mask.Value("url", appspkg.URL(app.ID)), mask.Value("owner", app.Owner)} {
 		if !strings.Contains(output.String(), public) {
 			t.Fatalf("missing %q: %s", public, output.String())
 		}
@@ -112,7 +112,7 @@ func TestPrivateAppPresentationWithholdsPayloads(t *testing.T) {
 	if err := writeAppResult(&output, "host", result, false, mask); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output.String(), app.ID) || !strings.Contains(output.String(), "active") {
+	if !strings.Contains(output.String(), app.ID) || !strings.Contains(output.String(), "active") {
 		t.Fatalf("app list = %s", output.String())
 	}
 	output.Reset()
@@ -158,7 +158,7 @@ func TestPrivateAppJSONMutationUsesOriginalControlData(t *testing.T) {
 	if err != nil || !called {
 		t.Fatalf("mutation = %v, called %t", err, called)
 	}
-	if strings.Contains(output, "private-machine") || strings.Contains(output, "private-owner") || strings.Contains(output, "7k3d") {
+	if strings.Contains(output, "private-owner") || !strings.Contains(output, "private-machine") || !strings.Contains(output, "7k3d") {
 		t.Fatalf("JSON leaked: %s", output)
 	}
 	var result struct {
@@ -168,14 +168,14 @@ func TestPrivateAppJSONMutationUsesOriginalControlData(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.App.Status != "active" || result.App.Visibility != "public" || !strings.HasPrefix(result.URL, "url-") {
+	if result.App.Status != "active" || result.App.Visibility != "public" || result.URL != privacy.New().Value("url", "https://7k3d.shaulavo.dev") {
 		t.Fatalf("result shape changed: %s", output)
 	}
 }
 
 func TestPrivateAppJSONClonesEveryPrivatePayload(t *testing.T) {
 	mask := privacy.New()
-	result := appspkg.Result{App: &appspkg.Record{ID: "7k3d", Owner: "secret-owner", Revision: "secret-revision"}, Runtime: &appspkg.RuntimeInfo{SessionID: "7K3D", Root: "/secret/root", Command: "secret-command", Problem: "secret-problem", Port: 5173, Failure: &appspkg.SetupFailure{UploadID: "secret-upload", Error: "secret-error", Output: "secret-output"}}, UploadID: "secret-upload", Data: []byte("secret-data"), Browsers: json.RawMessage(`[{"secret-key":"secret-browser"}]`)}
+	result := appspkg.Result{App: &appspkg.Record{ID: "7k3d", Owner: "secret-owner", Revision: "secret-revision"}, Runtime: &appspkg.RuntimeInfo{SessionID: "7K3D", Root: "/home/private-person/project", Command: "secret-command", Problem: "secret-problem", Port: 5173, Failure: &appspkg.SetupFailure{UploadID: "secret-upload", Error: "secret-error", Output: "secret-output"}}, UploadID: "secret-upload", Data: []byte("secret-data"), Browsers: json.RawMessage(`[{"secret-key":"secret-browser"}]`)}
 	before, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -198,8 +198,16 @@ func TestPrivateAppJSONClonesEveryPrivatePayload(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("JSON masking mutated result")
 	}
-	if strings.Contains(output.String(), "secret-") || strings.Contains(output.String(), "/secret/root") || strings.Contains(string(decoded.Data), "secret-data") {
-		t.Fatalf("payload leaked: %s", output.String())
+	for _, private := range []string{"secret-owner", "secret-revision", "secret-upload", "secret-command", "secret-problem", "secret-error", "secret-output", "private-person", "secret-browser", "secret-key"} {
+		if strings.Contains(output.String(), private) {
+			t.Fatalf("payload leaked %q: %s", private, output.String())
+		}
+	}
+	if decoded.Host != "secret-host" || decoded.App.ID != "7k3d" || decoded.Runtime.SessionID != "7K3D" || decoded.Runtime.Root != "~/project" {
+		t.Fatalf("useful identifiers were not retained: %s", output.String())
+	}
+	if strings.Contains(string(decoded.Data), "secret-data") {
+		t.Fatalf("binary payload leaked: %s", decoded.Data)
 	}
 	if decoded.Runtime.Port != 5173 || string(decoded.Browsers) != "null" || decoded.Runtime.Failure.Output != "[build output withheld]" {
 		t.Fatalf("projection = %s", output.String())
@@ -213,8 +221,8 @@ func TestPrivateServiceLabelPreservesAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output, "private-route") || strings.Contains(output, "Secret Site") || strings.Contains(output, " on pc") {
-		t.Fatalf("label leaked: %s", output)
+	if !strings.Contains(output, "/private-route") || !strings.Contains(output, "Secret Site") || !strings.Contains(output, " on pc") {
+		t.Fatalf("useful label presentation lost: %s", output)
 	}
 	if host.services[0].Name != "private-route" || host.services[0].DisplayName != "Secret Site" {
 		t.Fatalf("label control data changed: %+v", host.services)
@@ -223,6 +231,7 @@ func TestPrivateServiceLabelPreservesAction(t *testing.T) {
 
 func TestPrivateTunnelClaimAndReleasePreserveSignedNames(t *testing.T) {
 	host, _, stateDir := setupTunnelCLI(t)
+	mask := privacy.New()
 	var actions []tunnel.Action
 	deps := Dependencies{DialControl: serviceRemoteDial(host, func(request protocol.Control) protocol.Control {
 		if request.Type != protocol.TypeTunnelClaim || request.TunnelMutation == nil {
@@ -243,9 +252,12 @@ func TestPrivateTunnelClaimAndReleasePreserveSignedNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []string{"secret.shaulavo.dev", host.TailscaleName, stateDir, " on vps"} {
-		if strings.Contains(output, value) {
-			t.Fatalf("claim leaked %q: %s", value, output)
+	if strings.Contains(output, host.TailscaleName) {
+		t.Fatalf("claim leaked private DNS: %s", output)
+	}
+	for _, value := range []string{"secret.shaulavo.dev", " on vps", mask.Value("path", stateDir+"/identity.key"), mask.Value("host", host.TailscaleName)} {
+		if !strings.Contains(output, value) {
+			t.Fatalf("claim lost usable summary %q: %s", value, output)
 		}
 	}
 	if !strings.Contains(output, "ssh -N") || !strings.Contains(output, "2222") {
@@ -255,10 +267,37 @@ func TestPrivateTunnelClaimAndReleasePreserveSignedNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(output, "secret.shaulavo.dev") || strings.Contains(output, " on vps") {
-		t.Fatalf("release leaked: %s", output)
+	if !strings.Contains(output, "secret.shaulavo.dev") || !strings.Contains(output, " on vps") {
+		t.Fatalf("release lost useful names: %s", output)
 	}
 	if len(actions) != 2 || actions[0] != tunnel.Create || actions[1] != tunnel.Release {
 		t.Fatalf("actions = %+v", actions)
+	}
+}
+
+func TestPrivatePublicConfirmationRetainsUsefulTarget(t *testing.T) {
+	mask := privacy.New()
+	confirmation := PublicConfirmation{
+		Host:      HostRecord{Alias: "recording-owner@pc"},
+		Service:   protocol.ServiceInfo{Kind: "files", Target: "/home/private-person/site"},
+		FileCount: 3,
+		URL:       "https://pc.example.ts.net/site/page?view=owner",
+	}
+	var output bytes.Buffer
+	if err := writePublicConfirmation(&output, confirmation, mask); err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"recording-owner", "private-person", "example.ts.net"} {
+		if strings.Contains(output.String(), private) {
+			t.Fatalf("confirmation leaked %q: %s", private, output.String())
+		}
+	}
+	for _, useful := range []string{"pc", "~/site", "Files: 3", "https://", "/site/page", "Continue? [y/N]"} {
+		if !strings.Contains(output.String(), useful) {
+			t.Fatalf("confirmation lost %q: %s", useful, output.String())
+		}
+	}
+	if confirmation.Service.Target != "/home/private-person/site" || confirmation.Host.Alias != "recording-owner@pc" {
+		t.Fatal("confirmation mutated original facts")
 	}
 }

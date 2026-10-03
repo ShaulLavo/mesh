@@ -192,7 +192,7 @@ func (m windowModel) applyForget(result sessionActionResultMsg) (tea.Model, tea.
 	m.picker.cancelAction = nil
 	m.picker.sessionAction = sessionActionState{}
 	if result.err != nil {
-		m.picker.notice = "Forget failed: " + result.err.Error()
+		m.picker.notice = "Forget failed: " + m.picker.privacy.Value("error", result.err.Error())
 		return m, nil
 	}
 	rows := m.picker.currentHost().sessions

@@ -65,6 +65,7 @@ func (c DashboardCatalog[T]) Stale(now, lastReply time.Time) bool {
 }
 
 type DashboardHostView struct {
+	Notice             string
 	Build              release.Build
 	Host               DashboardHost
 	Connection         StateConnection

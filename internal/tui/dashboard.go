@@ -187,6 +187,9 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m *dashboardModel) receive(view cli.DashboardHostView) {
+	if view.Notice != "" {
+		m.notice = view.Notice
+	}
 	for index, host := range m.hosts {
 		if host.Host.ID == view.Host.ID {
 			view.Host = host.Host
