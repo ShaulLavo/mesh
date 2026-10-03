@@ -28,6 +28,7 @@ func TestSessionStartReportsRawErrnoAndPath(t *testing.T) {
 			command.Env = []string{"SECRET_ENV=value"}
 			cause := &os.PathError{Op: "fork/exec", Path: path, Err: errno}
 			err := startSession(startFailurePTY{err: cause}, command)
+			t.Logf("child-start diagnostic: %v", err)
 			var original *os.PathError
 			if !errors.Is(err, errno) || !errors.As(err, &original) || original != cause {
 				t.Fatalf("child-start diagnostic lost the original error: %v", err)
