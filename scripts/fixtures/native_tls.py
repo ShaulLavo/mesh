@@ -60,9 +60,10 @@ def fixture_certificates(root):
     def openssl(*args):
         subprocess.run(["openssl", *args], cwd=root, check=True, capture_output=True, timeout=15)
 
+    (root / "ca.cnf").write_text("[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
+        "[dn]\nCN=Mesh disposable fixture CA\n[ext]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n")
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "cert.pem",
-            "-days", "1", "-subj", "/CN=Mesh disposable fixture CA", "-addext", "basicConstraints=critical,CA:TRUE",
-            "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+            "-days", "1", "-config", "ca.cnf")
     openssl("x509", "-in", "cert.pem", "-outform", "DER", "-out", "ca.der")
     for name, dns in (("server", "github.com,DNS:api.github.com"), ("wrong-host", "wrong.fixture.test")):
         (root / (name + ".ext")).write_text("basicConstraints=critical,CA:FALSE\n"
@@ -72,12 +73,13 @@ def fixture_certificates(root):
         openssl("x509", "-req", "-in", name + ".csr", "-CA", "cert.pem", "-CAkey", "ca.key", "-CAcreateserial",
                 "-out", name + ".pem", "-days", "1", "-extfile", name + ".ext")
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "wrong-ca.key", "-out", "wrong-ca.pem",
-            "-days", "1", "-subj", "/CN=Mesh disposable fixture CA", "-addext", "basicConstraints=critical,CA:TRUE")
+            "-days", "1", "-config", "ca.cnf")
     openssl("x509", "-req", "-in", "server.csr", "-CA", "wrong-ca.pem", "-CAkey", "wrong-ca.key", "-CAcreateserial",
             "-out", "wrong-ca-server.pem", "-days", "1", "-extfile", "server.ext")
+    (root / "self-signed.cnf").write_text("[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
+        "[dn]\nCN=github.com\n[ext]\nsubjectAltName=DNS:github.com\nbasicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\n")
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "self-signed.key", "-out", "self-signed.pem",
-            "-days", "1", "-subj", "/CN=github.com", "-addext", "subjectAltName=DNS:github.com",
-            "-addext", "basicConstraints=critical,CA:FALSE", "-addext", "extendedKeyUsage=serverAuth")
+            "-days", "1", "-config", "self-signed.cnf")
 
 
 def probe_tls(root, probe, environment, certificate, key, expected):

@@ -8,7 +8,6 @@ import json
 import os
 import plistlib
 import platform
-import shlex
 import select
 import signal
 import socket
