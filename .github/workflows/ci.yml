@@ -148,7 +148,18 @@ jobs:
           REQUIRED_PLATFORM: ${{ matrix.platform }}
         run: test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$REQUIRED_PLATFORM"
       - name: Verify destination persistence, publication and authentication
-        run: go test -race -count=1 ./internal/machinename ./internal/protocol ./internal/daemon
+        run: |
+          set -euo pipefail
+          go test -race -count=1 ./internal/machinename ./internal/protocol
+          if [[ "$(go env GOHOSTOS)" == darwin ]]; then
+            output="$RUNNER_TEMP/machine-naming-daemon.log"
+            go test -race -count=1 -v -run '^Test(DestinationNamePublishedAfterCommitAndRetryCoalesces|HostRenameErrorsAreStructuredAndWatchReadOnly|HostRenameCannotHealRevokedConnection)$' ./internal/daemon | tee "$output"
+            for test in TestDestinationNamePublishedAfterCommitAndRetryCoalesces TestHostRenameErrorsAreStructuredAndWatchReadOnly TestHostRenameCannotHealRevokedConnection; do
+              grep -Fq -- "--- PASS: $test " "$output"
+            done
+          else
+            go test -race -count=1 ./internal/daemon
+          fi
       - name: Verify native retained terminal and authenticated source transition
         env:
           NAMING_PROOF_PLATFORM: ${{ matrix.platform }}
@@ -157,7 +168,9 @@ jobs:
         if: always()
         with:
           name: machine-naming-${{ strategy.job-index }}
-          path: ${{ runner.temp }}/machine-naming
+          path: |
+            ${{ runner.temp }}/machine-naming
+            ${{ runner.temp }}/machine-naming-daemon.log
           retention-days: 7
 
   lint:
@@ -259,7 +272,7 @@ jobs:
   gate:
     name: Complete CI gate
     if: always()
-    needs: [app-pill, test, auth-cutover, lint, gates, vulnerability, packaging]
+    needs: [app-pill, test, auth-cutover, machine-naming, lint, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every CI job
@@ -267,12 +280,13 @@ jobs:
           APP_PILL: ${{ needs.app-pill.result }}
           TEST: ${{ needs.test.result }}
           AUTH_CUTOVER: ${{ needs.auth-cutover.result }}
+          MACHINE_NAMING: ${{ needs.machine-naming.result }}
           LINT: ${{ needs.lint.result }}
           GATES: ${{ needs.gates.result }}
           VULNERABILITY: ${{ needs.vulnerability.result }}
           PACKAGING: ${{ needs.packaging.result }}
         run: |
-          [[ $APP_PILL == success && $TEST == success && $AUTH_CUTOVER == success && $LINT == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
+          [[ $APP_PILL == success && $TEST == success && $AUTH_CUTOVER == success && $MACHINE_NAMING == success && $LINT == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
 
   publish:
     name: Publish tested main commit
