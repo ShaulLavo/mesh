@@ -139,6 +139,15 @@ one fixed helper as an explicitly unpublished source fixture. The harness reuses
 descriptors and joined transition receipts, and `fixtures.tls` for child-only
 certificate controls. It never changes host trust or installed services.
 
+The wrapper uses `/tmp` independently of the runner's `TMPDIR`, matching the
+existing authentication proof. `MESH_SHORT_TMP` selects an explicit fixture base.
+Resolved daemon, temporary daemon and retained worker socket paths must fit the
+103-byte portable limit before any binary builds or starts; an overlong configured
+base fails closed. Native socket controls retain the previous long-`TMPDIR`
+failure, bind the short paths, and check symlink resolution and filesystem byte
+length. `path-controls.log`, the `fixture-socket-paths` event and explicit published
+v149 startup events join those bounds to the unchanged historical proof.
+
 Real native daemon/helper/worker processes and retained shells execute in isolated
 state. External service-command providers expose actual helper PIDs and emulate
 delayed outgoing registration removal and failures. The chain verifies mapped

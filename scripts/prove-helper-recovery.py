@@ -24,7 +24,7 @@ import threading
 import time
 from pathlib import Path
 
-from fixtures import published_releases, tls
+from fixtures import helper_recovery_paths, published_releases, tls
 
 sys.dont_write_bytecode = True
 REPO = Path(__file__).resolve().parents[1]
@@ -534,6 +534,8 @@ def recovery_and_chain(host):
         require(any(row["kind"] == "delayed-removal" and row.get("host") == host.name and row.get("unit") == "daemon" for row in EVENTS), "delayed outgoing registration was not exercised")
 
 
+SOCKET_ROOT = helper_recovery_paths.validate_socket_root(ROOT)
+event("fixture-socket-paths", **SOCKET_ROOT)
 require(NATIVE == build(FIXED)["platform"], "helper must be a native executable")
 require(not build(FIXED)["modified"], "fixed helper requires a clean committed source checkout")
 require(not os.environ.get("HELPER_RECOVERY_PLATFORM") or os.environ["HELPER_RECOVERY_PLATFORM"] == NATIVE["os"] + "/" + NATIVE["arch"], "runner platform mismatch")
@@ -567,6 +569,7 @@ try:
         host.start("daemon")
         eventually(host.ready, "published v149 daemon did not start", timeout=10)
         host.prove_daemon(HISTORICAL[0]["build"])
+        event("published-v149-started", host=name, stateRoot=str(host.state), build=HISTORICAL[0]["build"])
         host.seed()
         if name == "repair":
             recovery_and_chain(host)
@@ -583,7 +586,8 @@ try:
     (ROOT / "result.json").write_text(json.dumps({"nativePlatform": NATIVE, "historical": [bundle["build"] for bundle in HISTORICAL], "fixedHelper": FIXED_BUILD,
         "historicalProvider": "actual public archives/descriptors/joined receipts", "fixedHelperProvider": "unpublished PR-source fixture descriptor",
         "serviceProvider": "external command provider using fixture-owned native processes", "serviceRegistrationProven": False,
-        "liveOwnerHostVerified": False, "chain": ["v0.1.149", "v0.1.151", "v0.1.159"]}, indent=2) + "\n")
+        "liveOwnerHostVerified": False, "socketRoot": SOCKET_ROOT,
+        "chain": ["v0.1.149", "v0.1.151", "v0.1.159"]}, indent=2) + "\n")
     print("PASS native helper recovery, failure restoration, genuine rollback settlement and published v149 -> v151 -> v159 retained-session chain", flush=True)
 finally:
     for host in reversed(hosts):

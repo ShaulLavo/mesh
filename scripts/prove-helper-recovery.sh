@@ -8,8 +8,9 @@ fi
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 mkdir -p "$1"
 output=$(cd -- "$1" && pwd)
-# Native Unix sockets need a short path on Darwin's hosted runner.
-root=$(mktemp -d "${MESH_SHORT_TMP:-${TMPDIR:-/tmp}}/mesh-helper-proof.XXXXXX")
+python3 "$repo_root/scripts/test-helper-recovery-paths.py" > "$output/path-controls.log" 2>&1
+# Validate resolved daemon and worker socket paths before building or starting binaries.
+root=$(python3 "$repo_root/scripts/fixtures/helper_recovery_paths.py" create)
 trap 'rm -rf -- "$root"' EXIT
 mkdir -p "$root/build"
 (cd "$repo_root" && go build -trimpath -ldflags '-X github.com/shaul/mesh/internal/release.Version=v0.1.162' -o "$root/build/fixed-helper" ./cmd/mesh)
