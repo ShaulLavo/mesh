@@ -19,7 +19,11 @@ import (
 
 func TestUpdateCheckUsesReleaseDownloadBudget(t *testing.T) {
 	setupUpdateCLI(t)
-	server := httptest.NewTLSServer(http.HandlerFunc(updateBudgetHandler))
+	var calls atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		updateBudgetHandler(w, r)
+	}))
 	t.Cleanup(server.Close)
 	client := release.Client{BaseURL: server.URL, HTTPClient: server.Client()}
 	caller := updateCallFunc(func(_ context.Context, host update.Host, _ string, _, output any) error {
@@ -30,6 +34,9 @@ func TestUpdateCheckUsesReleaseDownloadBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update check rejected a manifest within the release budget: %v", err)
 	}
+	if calls.Load() != 2 {
+		t.Fatalf("update check made %d requests, want one timeout and one recovery", calls.Load())
+	}
 }
 
 func updateBudgetHandler(w http.ResponseWriter, r *http.Request) {
@@ -38,7 +45,8 @@ func updateBudgetHandler(w http.ResponseWriter, r *http.Request) {
 	defer timer.Stop()
 	select {
 	case <-r.Context().Done():
-		return
+		// Returning here would publish an empty 200 response after cancellation.
+		panic(http.ErrAbortHandler)
 	case <-timer.C:
 		_ = json.NewEncoder(w).Encode(updateTestManifest())
 	}
@@ -65,5 +73,19 @@ func TestUpdateBudgetFixtureAbortsCancelledRequest(t *testing.T) {
 	var transport *url.Error
 	if !errors.As(err, &transport) || !errors.Is(err, io.EOF) {
 		t.Fatalf("cancelled budget handler must fail the exchange, not publish an empty manifest: %v", err)
+	}
+}
+
+func TestUpdateBudgetKeepsEmptyManifestTerminal(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls.Add(1)
+	}))
+	t.Cleanup(server.Close)
+	client := release.Client{BaseURL: server.URL, HTTPClient: server.Client()}
+	_, err := client.Manifest(context.Background(), "v0.2.0")
+	var transport *url.Error
+	if !errors.Is(err, io.EOF) || errors.As(err, &transport) || calls.Load() != 1 {
+		t.Fatalf("empty manifest must fail validation without retry: error %v, requests %d", err, calls.Load())
 	}
 }
