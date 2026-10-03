@@ -116,6 +116,33 @@ func TestDashboardUsageMetadataSpacing(t *testing.T) {
 	}
 }
 
+func TestDashboardUsageWindowMetadataSpacing(t *testing.T) {
+	model := usageFixture(t, "normal")
+	window := usagefeed.Window{Label: "Session", Status: usageUnknown, Source: "passive-header"}
+	for _, compact := range []bool{false, true} {
+		line := model.usageCompactWindow(window, 36, true)
+		if !compact {
+			lines := model.usageWindowLines(window, ansi.StringWidth("Waiting for normal trafficseen —"), true)
+			if !strings.HasPrefix(lines[0], "Session No data yet") {
+				t.Errorf("empty label/value joined: %q", lines[0])
+			}
+			line = lines[1]
+		}
+		if !strings.HasSuffix(line, " seen —") {
+			t.Errorf("compact=%v empty window age joined: %q", compact, line)
+		}
+	}
+	window = model.usage.accounts[0].Windows[0]
+	window.Label = "Session"
+	seen, reset := model.now.Add(-3*time.Minute), model.now.Add(-time.Minute)
+	window.LastSeenAt, window.ResetsAt = &seen, &reset
+	width := ansi.StringWidth("reset passed · awaiting trafficseen 3m")
+	lines := model.usageWindowLines(window, width, true)
+	if !strings.HasSuffix(ansi.Strip(lines[1]), " seen 3m") || ansi.StringWidth(lines[1]) != width {
+		t.Errorf("expired window metadata joined or overflowed: %q", ansi.Strip(lines[1]))
+	}
+}
+
 type usageFormatTransport struct{ body []byte }
 
 func (transport usageFormatTransport) RoundTrip(*http.Request) (*http.Response, error) {
@@ -146,7 +173,8 @@ func TestDashboardUsageFregatV1Format(t *testing.T) {
 			model.now = result.Snapshot.GeneratedAt
 			model.usageEnabled = true
 			model.usage = projectDashboardUsage(result.Snapshot)
-			if model.usage.total != len(result.Snapshot.Accounts) || *model.usage.accounts[0].Windows[0].UsedPercent != 5 {
+			wantAccounts := map[string]int{"fresh": 5, "aged": 2}[name]
+			if model.usage.total != wantAccounts || *model.usage.accounts[0].Windows[0].UsedPercent != 5 {
 				t.Fatal("producer fixture projection changed")
 			}
 			for _, compact := range []bool{false, true} {
@@ -164,6 +192,12 @@ func TestDashboardUsageFregatV1Format(t *testing.T) {
 				if *usageEvidenceDirectory != "" {
 					writeUsageEvidence(t, fmt.Sprintf("fregat-v1-%s-compact-%v", name, compact), model)
 				}
+			}
+			if *usageEvidenceDirectory != "" {
+				seen := model.now.Add(-3 * time.Minute)
+				account := dashboardUsageAccount{Account: usagefeed.Account{Provider: "codex", Label: "Fixture", Plan: "pro", LastSeenAt: &seen}, first: true, extraWindows: 1}
+				frame := model.usageIdentity(account, 41, false) + "\n" + model.usageIdentity(account, 42, false)
+				writeFrameEvidence(t, "metadata-spacing", frame, 42, 2, model.palette)
 			}
 			model.usage.accounts[0].Credits = &usagefeed.Credits{Balance: 62113.897503}
 			model.usage.accounts[1].Credits = &usagefeed.Credits{}

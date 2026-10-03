@@ -5,13 +5,13 @@
 │ No reading yet · waits for traffic                 │
 │         metered · Pro · last served        seen 1m │
 │ credits 62,500                                     │
-│ 5h     42% used · 58% left · resets 1h 32m         │
+│ 5h      42% used · 58% left · resets 1h 32m        │
 │ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪ ● OK                  │
-│ Weekly 54% used · 46% left · resets 4d 9h          │
+│ Weekly  54% used · 46% left · resets 4d 9h         │
 │ ▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● OK                  │
 │         historic · Pro · cooldown        stale 18m │
-│ 5h     100% used · 0% left · resets 38m            │
+│ 5h      100% used · 0% left · resets 38m           │
 │ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● exhausted           │
-│ Weekly 97% used · 3% left · resets 2d 6h           │
+│ Weekly  97% used · 3% left · resets 2d 6h          │
 │ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● high                │
 └────────────────────────────────────────────────────┘
