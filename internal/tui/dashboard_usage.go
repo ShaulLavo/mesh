@@ -17,6 +17,8 @@ const (
 	usageExhausted  = "exhausted"
 	usageCooldown   = "cooldown"
 	usageDisabled   = "disabled"
+	usageWaiting    = "Waiting"
+	usageRotating   = "rotating"
 )
 
 func (m dashboardModel) usagePanel(width, budget int, compact bool) []string {
@@ -63,7 +65,7 @@ func (m dashboardModel) usageIdentity(account dashboardUsageAccount, width int, 
 	}
 	identity := prefix + account.Label + " · " + usagePlan(account.Plan)
 	badge := usageRouting(account.Account)
-	if badge != "" && !compact {
+	if badge != "" && badge != usageWaiting && !compact {
 		identity += " · " + badge
 	}
 	if account.extraWindows > 0 {
@@ -83,10 +85,17 @@ func (m dashboardModel) usageIdentity(account dashboardUsageAccount, width int, 
 	if compact {
 		identity = strings.TrimLeft(identity, " ")
 	}
+	if badge == usageWaiting {
+		// Reserve parking and age together so compact identities retain both facts.
+		age = badge + " · " + age
+	}
 	return dashboardAlign(identity, " "+age, width)
 }
 
 func usageRouting(account usagefeed.Account) string {
+	if account.State == usageDisabled && account.Routing.Mode == usageRotating && account.Routing.Active != nil && !*account.Routing.Active && account.Cooldown == nil {
+		return usageWaiting
+	}
 	if account.State == usageDisabled || account.State == usageCooldown {
 		return account.State
 	}
@@ -96,8 +105,8 @@ func usageRouting(account usagefeed.Account) string {
 	if account.Routing.LastServedAt != nil {
 		return "last served"
 	}
-	if account.Routing.Mode == "rotating" {
-		return "rotating"
+	if account.Routing.Mode == usageRotating {
+		return usageRotating
 	}
 	return ""
 }
@@ -132,7 +141,7 @@ func (m dashboardModel) usageAccountWindows(account dashboardUsageAccount, width
 	}
 	credits := usageCredits(account.Credits)
 	if len(result) == 0 {
-		return []string{usageEmptySummary(account.State, credits, width)}
+		return []string{usageEmptySummary(account.Account, credits, width)}
 	}
 	if credits != "" {
 		result = append([]string{credits}, result...)
@@ -141,10 +150,14 @@ func (m dashboardModel) usageAccountWindows(account dashboardUsageAccount, width
 	return result
 }
 
-func usageEmptySummary(state, credits string, width int) string {
+func usageEmptySummary(account usagefeed.Account, credits string, width int) string {
+	badge := usageRouting(account)
 	summary := "No reading yet · waits for traffic"
-	if state == usageDisabled {
+	if badge == usageDisabled {
 		summary = "Out of rotation · no reading"
+	}
+	if badge == usageWaiting {
+		summary = usageWaiting + " · no reading"
 	}
 	if credits == "" {
 		return summary
@@ -153,8 +166,11 @@ func usageEmptySummary(state, credits string, width int) string {
 		return summary + " · " + credits
 	}
 	summary = "Awaiting traffic"
-	if state == usageDisabled {
+	if badge == usageDisabled {
 		summary = "Out of rotation"
+	}
+	if badge == usageWaiting {
+		summary = "no reading"
 	}
 	return summary + " · " + credits
 }

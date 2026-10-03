@@ -26,6 +26,7 @@ func TestDashboardUsageParkedWaiting(t *testing.T) {
 	for _, test := range []struct {
 		name, state, mode string
 		active            *bool
+		credits           *usagefeed.Credits
 		used              float64
 		age               time.Duration
 		scopes            int
@@ -39,6 +40,8 @@ func TestDashboardUsageParkedWaiting(t *testing.T) {
 		{name: "model-stale", state: "disabled", mode: "rotating", active: &inactive, scopes: 1, age: 20 * time.Minute, waiting: true, evidence: true},
 		{name: "equal-scopes", state: "disabled", mode: "rotating", active: &inactive, used: 67, scopes: 2, waiting: true},
 		{name: "parked-absent", state: "disabled", mode: "rotating", active: &inactive, absent: true, waiting: true, evidence: true},
+		{name: "parked-absent-credits", state: "disabled", mode: "rotating", active: &inactive, absent: true, waiting: true, credits: &usagefeed.Credits{Balance: 62500}},
+		{name: "ready-inactive", state: "ready", mode: "rotating", active: &inactive},
 		{name: "active", state: "ready", mode: "rotating", active: &active},
 		{name: "disabled-active", state: "disabled", mode: "rotating", active: &active},
 		{name: "unknown-activity", state: "disabled", mode: "rotating"},
@@ -53,6 +56,7 @@ func TestDashboardUsageParkedWaiting(t *testing.T) {
 			model.now = fixture.GeneratedAt.Add(time.Minute)
 			account := fixture.Accounts[0]
 			account.State, account.Routing.Mode, account.Routing.Active = test.state, test.mode, test.active
+			account.Credits = test.credits
 			window := account.Windows[0]
 			window.UsedPercent = &test.used
 			if test.scopes > 0 {
@@ -119,6 +123,9 @@ func TestDashboardUsageParkedWaiting(t *testing.T) {
 					if test.scopes > 0 && !strings.Contains(surface, "Model · gpt-6.1-sol") {
 						t.Errorf("model scope missing: %s", surface)
 					}
+				}
+				if test.credits != nil && !strings.Contains(panel, usageCredits(test.credits)) {
+					t.Errorf("absent quota lost its independent credits: %s", panel)
 				}
 				if test.scopes == 2 && strings.Count(panel, "67%") != 2 {
 					t.Errorf("equal values collapsed distinct scopes: %s", panel)
