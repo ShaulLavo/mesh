@@ -23,6 +23,10 @@ func NewCLIDashboard(output *os.File) cli.DashboardFunc {
 		if output == nil || !term.IsTerminal(output.Fd()) {
 			return errors.New("dashboard needs terminal output")
 		}
+		if term.IsTerminal(os.Stdin.Fd()) {
+			restore := quietTerminal(os.Stdin)
+			defer restore()
+		}
 		return runDashboard(ctx, input, output)
 	}
 }
