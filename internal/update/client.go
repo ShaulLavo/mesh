@@ -139,15 +139,5 @@ func (c Client) dialAuthenticated(ctx context.Context, host Host, allowUpdateOnl
 }
 
 func (c Client) dialUpdate(ctx context.Context, host Host) (transport.Conn, error) {
-	conn, err := c.dialAuthenticated(ctx, host, true)
-	if !errors.Is(err, transport.ErrAuthenticationRequired) {
-		return conn, err
-	}
-	// Legacy update authorities still verify signed, single-use requests and replies.
-	// Session bootstrap and ordinary controls never enter this bridge.
-	conn, err = transport.DialOnce(ctx, host.Endpoint, transport.DialOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("open signed legacy update bridge: %w", err)
-	}
-	return conn, nil
+	return c.dialAuthenticated(ctx, host, true)
 }

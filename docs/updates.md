@@ -86,12 +86,6 @@ too.
 
 ## Cross the control-authentication cutover
 
-The minimum signed-updater bridge release is **v0.1.39** (the first release
-containing `8b14666`). Prefer the known pre-cutover baseline **v0.1.147** or a newer
-pre-cutover release, so later updater and retained-worker fixes are included. A target older than that minimum
-must receive a bridge through an older coordinator or authenticated system SSH
-before the coordinator adopts authenticated network controls.
-
 The TLS peer is an Ed25519 key, verified by possession during TLS 1.3 and matched
 to an owner-controlled pin or grant. Certificate names, public CAs and certificate
 dates do not grant or remove Mesh authority. An encrypted acceptance byte lets
@@ -108,46 +102,46 @@ connections. This retirement is polling-based, so scheduler or storage delays ca
 postpone socket closure; frame admission still checks the current grant. Revoking
 a key does not signal its retained worker processes.
 
-The upgraded coordinator permits one mixed-version exception: its signed update
-client may reconnect with the older WebSocket framing when the destination does
-not negotiate `mesh-control-tls-v1`. Both challenge and action are signed, bound
-to the pinned target and actor, and use a single-use expiring challenge. Replies
-must carry the pinned destination's signature. This path sends only
-`update.control`; it cannot create a session or bootstrap a pre-updater daemon.
-Failed TLS authentication never enters this bridge. A malicious downgrade can
-remove stream confidentiality for that signed update exchange; it cannot mint a
-control or turn an update administrator into a session controller.
+The control protocol requires authenticated peers. There is no raw signed-update
+fallback. During this cutover, mixed-version network sessions, service controls,
+certificates, wake requests and fleet update reconciliation can fail. Local Unix
+controls and ordinary service URLs remain available. The owner accepts this short
+mixed-version interval and updates each host independently through system SSH.
 
-For the omarchy/macbook-air/pi/vps fleet, execute this order through the approved
-root coordinator and trusted account-local enrollment paths:
+For the omarchy/macbook-air/pi/vps fleet, use this account-local sequence:
 
-1. Inventory each installed binary, destination account, stable Mesh key, saved
-   destination pin and update-administrator grant. Keep authenticated system SSH
-   available. The VPS daemon's account is root; every full-device approval there
-   requires `--allow-root`.
-2. While the old coordinator can still bootstrap pre-updater hosts, bring every
-   such target through v0.1.39 or later, preferably v0.1.147. Enroll the root
-   coordinator's existing key in each target's update-administrator policy.
-3. Approve each actual controlling device's key on its destinations, including
-   daemon-to-daemon publishers, certificate distributors and wake witnesses.
-   Record witness destination pins in each controlling account's host book.
-   Discovery alone cannot enroll a witness. Do not copy a root account's key to
-   a user account or assume they share Mesh state.
-4. Install the authenticated client binary in the coordinator's account while
-   retaining its old daemon until the remote targets settle. Update macbook-air
-   and pi, then the VPS; honor explicit fleet dependency ordering where it changes
-   that sequence. The new client's signed updater can manage their old framing.
-   Ordinary session clients need the authenticated binary before connecting to a
-   hardened destination.
-5. Update the coordinator daemon (omarchy unless the approved fleet selects a
-   different coordinator) last. Retained workers keep their original binary and
-   PID; new sessions use the new build. Confirm existing-session reattachment
-   from a still-approved device before withdrawing temporary grants.
+1. Keep authenticated system SSH available. Record each daemon account, stable
+   Mesh identity and saved destination pin. The VPS daemon runs as root; full
+   device approvals there require `--allow-root`.
+2. Run `mesh update --local --version RELEASE --yes` on omarchy locally, then
+   run the same command independently over system SSH on macbook-air, pi and
+   vps in each daemon's own account. Do not select a remote `--coordinator`.
+   With the default coordinator, the old CLI submits its one-host plan to its
+   own daemon's Unix socket. That daemon stages the approved release, and its
+   independent helper replaces only that installation. The new daemon resumes
+   the saved local operation over the same Unix endpoint. Cross-host Mesh
+   controls are unnecessary. Retained PTY workers keep their original PID and
+   executable throughout daemon replacement.
+3. Read each identity with `mesh device identity --json` through that trusted
+   account-local path. Preserve existing saved pins and stop if a key changes.
+   On each destination, run `mesh device approve -- SOURCE_ID` for every device
+   allowed to control that daemon account, including daemon publishers,
+   certificate distributors and wake witnesses. On a root destination use
+   `mesh device approve --allow-root -- SOURCE_ID`. Keep each account's key in
+   its own state directory. Discovery supplies addresses, never approval.
+4. Enroll the selected fleet coordinator separately on every target with
+   `mesh update trust COORDINATOR_ID`. Existing administrator grants remain
+   update-only. Record trusted destination identities and reachable addresses
+   in the controlling accounts' host books and the approved fleet file. A Unix
+   endpoint identifies only the account-local daemon.
+5. After all four daemons run the authenticated release, verify authenticated
+   reconnection and reattach retained sessions from an approved device. Run a
+   daemon-owned fleet update using the explicit approved fleet and release.
+   Coordination can then use omarchy again; no temporary coordinator or bridge
+   release is needed for this cutover.
 
-This order is covered by disposable local fixtures. The installed fleet, root
-VPS, Pi and gateway were not accessed or updated during the implementation lane.
-If a pin changes or a host lacks its grant, repair it through authenticated system
-SSH or a destination-local command; do not reopen unauthenticated controls.
+A pin or grant failure is repaired through authenticated system SSH or a
+local destination command. Never reopen raw network controls for recovery.
 
 ## Read progress
 

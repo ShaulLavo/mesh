@@ -194,13 +194,6 @@ func (a *Authority) HandleControl(ctx context.Context, request protocol.Control)
 	if message.Target != a.ID || !a.IsAdministrator(message.Actor) {
 		return protocol.Control{}, true, fmt.Errorf("update administrator is not enrolled on this host; run mesh update trust %s on this host", message.Actor)
 	}
-	if message.Target != a.ID || !a.allowed(message.Actor) {
-		return protocol.Control{}, true, fmt.Errorf("update administrator is not enrolled on this host; run mesh update trust %s on this host", message.Actor)
-=======
-	if message.Target != a.ID || !a.IsAdministrator(message.Actor) {
-		return protocol.Control{}, true, errors.New("update administrator is not enrolled on this host")
->>>>>>> 680c409 (feat(auth): authenticate network controls with approved Mesh devices)
-	}
 	if err := message.Verify(message.Actor); err != nil {
 		return protocol.Control{}, true, err
 	}
