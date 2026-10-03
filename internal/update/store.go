@@ -172,9 +172,17 @@ func (s *Store) Start(coordinator string, fleet Fleet, manifest release.Manifest
 		return Run{}, err
 	}
 	for _, existing := range runs {
-		if !existing.Done() && !existing.Cancel && existing.Membership == fleet.Digest() && existing.ReleaseDigest == manifest.Digest() {
+		if existing.Done() || existing.Cancel || existing.Membership != fleet.Digest() || existing.ReleaseDigest != manifest.Digest() {
+			continue
+		}
+		if !existing.Stopped {
 			return existing, nil
 		}
+		if err := retryRun(&existing); err != nil {
+			return Run{}, err
+		}
+		existing.UpdatedAt = time.Now().UTC()
+		return existing, writeJSON(s.path(existing.ID), existing)
 	}
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -283,26 +291,28 @@ func (s *Store) Cancel(id string) (Run, error) {
 }
 
 func (s *Store) Retry(id string) (Run, error) {
-	return s.Change(id, func(run *Run) error {
-		if run.Cancel {
-			return errors.New("update: cancelled operations require a new approval")
+	return s.Change(id, retryRun)
+}
+
+func retryRun(run *Run) error {
+	if run.Cancel {
+		return errors.New("update: cancelled operations require a new approval")
+	}
+	run.Stopped, run.Problem = false, ""
+	for i := range run.Targets {
+		target := &run.Targets[i]
+		if target.State == Failed && target.InstallationID == "" && target.BootstrapSession == "" && !target.RetryPending {
+			target.RetryPending = true
+			target.RetryToken++
 		}
-		run.Stopped, run.Problem = false, ""
-		for i := range run.Targets {
-			target := &run.Targets[i]
-			if target.State == Failed && target.InstallationID == "" && target.BootstrapSession == "" && !target.RetryPending {
-				target.RetryPending = true
-				target.RetryToken++
-			}
-			if target.State == Failed && target.BootstrapSession != "" {
-				target.BootstrapRetry = true
-			}
-			if target.State == Failed || target.State == Bootstrap || target.State == Offline {
-				target.State, target.Problem, target.RetryAt = Pending, "", time.Time{}
-			}
+		if target.State == Failed && target.BootstrapSession != "" {
+			target.BootstrapRetry = true
 		}
-		return nil
-	})
+		if target.State == Failed || target.State == Bootstrap || target.State == Offline {
+			target.State, target.Problem, target.RetryAt = Pending, "", time.Time{}
+		}
+	}
+	return nil
 }
 
 func (s *Store) path(id string) string { return filepath.Join(s.directory, id+".json") }

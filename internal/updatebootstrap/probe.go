@@ -48,17 +48,17 @@ func Inspect(ctx context.Context, stateDir string) (Observation, error) {
 	defer cancel()
 	conn, err := dial(ctx, filepath.Join(stateDir, "daemon.sock"))
 	if err != nil {
-		return Observation{}, err
+		return Observation{}, fmt.Errorf("verify daemon phase=dial: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 	image, err := peerImage(conn)
 	if err != nil {
-		return Observation{}, err
+		return Observation{}, fmt.Errorf("verify daemon phase=peer-image: %w", err)
 	}
 	image.Installed = activeInstallationPath(stateDir, image)
 	response, err := exchange(conn, protocol.Control{Type: protocol.TypeHostInfo, RequestID: "bootstrap-host-info"})
 	if err != nil {
-		return Observation{}, err
+		return Observation{}, fmt.Errorf("verify daemon PID=%d: %w", image.PID, err)
 	}
 	if response.Type != protocol.TypeHostInfoResult || response.Host == nil {
 		return Observation{}, errors.New("legacy daemon did not return host identity")
@@ -69,7 +69,7 @@ func Inspect(ctx context.Context, stateDir string) (Observation, error) {
 	}
 	build, err := observedBuild(image.Path, response.Host.Build, stateVersion)
 	if err != nil {
-		return Observation{}, err
+		return Observation{}, fmt.Errorf("verify daemon PID=%d phase=build-identity: %w", image.PID, err)
 	}
 	if response.Host.Build == nil {
 		build.WorkerProtocol = 1
@@ -227,23 +227,23 @@ func inspectWorker(ctx context.Context, dir string, stateVersion int) (*updatein
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("verify session %s: %w", meta.ID, err)
+		return nil, fmt.Errorf("verify session %s shellPID=%d phase=dial: %w", meta.ID, meta.PID, err)
 	}
 	defer func() { _ = conn.Close() }()
 	image, err := peerImage(conn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("verify session %s shellPID=%d phase=peer-image: %w", meta.ID, meta.PID, err)
 	}
 	response, err := exchange(conn, protocol.Control{Type: protocol.TypeInspect, RequestID: "bootstrap-worker", PreviewCols: 1, PreviewRows: 1})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("verify session %s workerPID=%d shellPID=%d: %w", meta.ID, image.PID, meta.PID, err)
 	}
 	if !validWorkerProbe(response, meta) {
 		return nil, errors.New("worker cannot answer a read-only session inspection")
 	}
 	build, err := observedBuild(image.Path, meta.Build, stateVersion)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("verify session %s workerPID=%d shellPID=%d phase=build-identity: %w", meta.ID, image.PID, meta.PID, err)
 	}
 	if meta.Build == nil {
 		build.WorkerProtocol = 1
@@ -278,11 +278,11 @@ func dial(ctx context.Context, path string) (net.Conn, error) {
 
 func exchange(conn net.Conn, request protocol.Control) (protocol.Control, error) {
 	if err := protocol.NewWriter(conn).WriteControlMsg(request); err != nil {
-		return protocol.Control{}, err
+		return protocol.Control{}, fmt.Errorf("phase=write-request: %w", err)
 	}
 	frame, err := protocol.NewReader(conn).ReadFrame()
 	if err != nil {
-		return protocol.Control{}, err
+		return protocol.Control{}, fmt.Errorf("phase=read-response: %w", err)
 	}
 	if frame.Kind != protocol.KindControl {
 		return protocol.Control{}, errors.New("unexpected legacy response frame")
