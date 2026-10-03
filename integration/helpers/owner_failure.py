@@ -18,8 +18,11 @@ def escaped_owner_output(log, reference, marker):
         diagnostic = ast.literal_eval(records[0])
     except (SyntaxError, ValueError):
         return False
+    # Go rejects surrogate values that Python permits in quoted strings.
+    if any(0xD800 <= ord(char) <= 0xDFFF for char in diagnostic):
+        return False
     output = diagnostic.partition("\n\nlast output:\n")[2]
-    return marker in output.splitlines()
+    return marker in (line.removesuffix("\r") for line in output.split("\n"))
 
 
 if __name__ == "__main__":
