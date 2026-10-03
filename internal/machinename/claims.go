@@ -70,5 +70,28 @@ func Project(claims []Claim) []Projection {
 		rows[i].Priority = !previous
 		rows[i].Conflict = previous || next
 	}
+	for first := 0; first < len(rows); {
+		end := first + 1
+		for end < len(rows) && rows[end].MachineName == rows[first].MachineName {
+			end++
+		}
+		for length := 8; !distinctSuffixes(rows[first:end], length); length++ {
+		}
+		first = end
+	}
 	return rows
+}
+
+func distinctSuffixes(rows []Projection, length int) bool {
+	seen := make(map[string]bool, len(rows))
+	distinct := true
+	for index := range rows {
+		id := rows[index].ID
+		rows[index].Suffix = id[max(0, len(id)-length):]
+		if seen[rows[index].Suffix] {
+			distinct = false
+		}
+		seen[rows[index].Suffix] = true
+	}
+	return distinct
 }

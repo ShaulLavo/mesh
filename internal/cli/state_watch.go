@@ -479,10 +479,18 @@ func applyPolledHost(host HostRecord, response protocol.Control, view *StateView
 }
 
 func applyVerifiedPoll(ctx context.Context, host HostRecord, topic string, response protocol.Control, view *StateView, received time.Time, transit time.Duration) error {
+	if err := validateNameEnvelope(response); err != nil {
+		return err
+	}
+	next := view.Clone()
+	if err := applyPolledSection(host, topic, response, &next, received, transit); err != nil {
+		return err
+	}
 	if topic == protocol.TopicHost && response.Type == protocol.TypeHostInfoResult && response.Host != nil {
 		if err := rememberHostName(ctx, host, *response.Host); err != nil {
 			return err
 		}
 	}
-	return applyPolledSection(host, topic, response, view, received, transit)
+	*view = next
+	return nil
 }
