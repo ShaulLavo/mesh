@@ -4,9 +4,23 @@ Create a website from a local source directory on an enrolled Mesh origin:
 
 ```sh
 mesh app create pc ./site
+mesh app create local screenshot.png clip.webm
+mesh app create pc mock.html style.css image.png
 mesh app create pc ./backend --setup 'bun install' \
   --run 'bun run start --host 127.0.0.1' --port 3000
 ```
+
+Supply a directory to publish its contents, or select loose files to make a page.
+Images and videos appear in a gallery; other files get download links. A single
+HTML file becomes the app's index page. An HTML page supplied with the assets it
+names keeps their relative filenames. Pass a complete website directory for
+sites with nested assets. Several HTML directories can also appear in a gallery.
+
+Use `mesh app update HOST ID SOURCE...` for revisions at the same URL, with the
+same visibility. Both commands support `--json`. Server recipes with `--run` or
+`--setup` require a single source directory. Loose-file preparation uses the
+system temporary directory, configurable with `TMPDIR`, and removes its staging
+copy after upload or failure.
 
 For a dependency-free server example with shared SQLite favorites, see
 [A little color room](../examples/palette-server/README.md).
