@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/user"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
@@ -65,7 +68,7 @@ func deviceGrantCommand(approve bool) *cobra.Command {
 	if approve {
 		name, description = "approve", "Grant a device this daemon account's control and SSH access"
 	}
-	var allowRoot bool
+	var allowRoot, publicKey bool
 	command := &cobra.Command{Use: name + " ID", Short: description, Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if approve && os.Geteuid() == 0 && !allowRoot {
@@ -75,16 +78,21 @@ func deviceGrantCommand(approve bool) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("device command: %w", err)
 			}
+			id, err := deviceGrantIdentity(args[0], publicKey)
+			if err != nil {
+				return err
+			}
 			mutate := identity.RevokeDevice
 			if approve {
 				mutate = identity.ApproveDevice
 			}
-			if err := mutate(stateDir, args[0]); err != nil {
+			if err := mutate(stateDir, id); err != nil {
 				return fmt.Errorf("device command: %w", err)
 			}
-			return writeDeviceGrant(cmd, name, args[0])
+			return writeDeviceGrant(cmd, name, id)
 		}}
 	if approve {
+		command.Flags().BoolVar(&publicKey, "public-key", false, "read ID as an unrestricted OpenSSH Ed25519 public key")
 		command.Flags().BoolVar(&allowRoot, "allow-root", false, "acknowledge that approval grants root access")
 	}
 	return command
@@ -103,4 +111,23 @@ func writeDeviceGrant(cmd *cobra.Command, name, id string) error {
 		return fmt.Errorf("write device grant result: %w", err)
 	}
 	return nil
+}
+
+func deviceGrantIdentity(value string, publicKey bool) (string, error) {
+	if !publicKey {
+		return value, nil
+	}
+	key, _, options, rest, err := ssh.ParseAuthorizedKey([]byte(value))
+	if err != nil || len(options) != 0 || strings.TrimSpace(string(rest)) != "" {
+		return "", errors.New("device approval requires one unrestricted OpenSSH Ed25519 public key")
+	}
+	cryptoKey, ok := key.(ssh.CryptoPublicKey)
+	if !ok {
+		return "", errors.New("device approval requires an Ed25519 public key")
+	}
+	public, ok := cryptoKey.CryptoPublicKey().(ed25519.PublicKey)
+	if !ok {
+		return "", errors.New("device approval requires an Ed25519 public key")
+	}
+	return base64.RawURLEncoding.EncodeToString(public), nil
 }

@@ -74,6 +74,17 @@ func TestQueriedKeyMustNotOwnAuthenticatedSSHGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = good.Close()
+	if err := identity.RevokeDevice(state, queried.ID); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := client.NewSession()
+	if err != nil {
+		t.Fatalf("revoking queried key retired the signed device: %v", err)
+	}
+	if err := retained.Run(""); err != nil {
+		t.Fatalf("signed device lost its independent grant: %v", err)
+	}
+	_ = retained.Close()
 	if err := identity.RevokeDevice(state, actor.ID); err != nil {
 		t.Fatal(err)
 	}

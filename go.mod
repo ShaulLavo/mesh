@@ -6,6 +6,8 @@ replace charm.land/wish/v2 => ./third_party/wish
 
 replace github.com/pkg/sftp => ./third_party/sftp
 
+// This fork avoids upstream putRange rewriting unchanged interior spans; its equal-run test is unreachable.
+// Drop this replacement after upstream fixes the equal-run test.
 replace github.com/charmbracelet/ultraviolet => ./third_party/ultraviolet
 
 require (

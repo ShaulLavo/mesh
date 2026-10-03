@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -25,14 +26,8 @@ type DeviceGrant struct {
 }
 
 func currentGrant(path string, presented ssh.PublicKey, incarnation *[sha256.Size]byte) (DeviceGrant, bool) {
-	lock, err := os.OpenFile(filepath.Join(filepath.Dir(path), "device-grants.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return DeviceGrant{}, false
-	}
-	defer lock.Close() //nolint:errcheck // closing releases the shared admission lock
-	if syscall.Flock(int(lock.Fd()), syscall.LOCK_SH) != nil {
-		return DeviceGrant{}, false
-	}
+	// Writers publish whole policies atomically. Admission reads the published inode,
+	// so an unrelated writer lock cannot impersonate revocation or stall a handshake.
 	grants, err := DeviceGrants(path)
 	if err != nil {
 		return DeviceGrant{}, false
@@ -53,7 +48,7 @@ func Granted(path string, presented ssh.PublicKey) bool {
 	return ok
 }
 
-// BindGrant captures the approved line's incarnation under the admission lock.
+// BindGrant captures the approved line's incarnation from a published snapshot.
 // Reapproval creates a new line identity, so a missed removal cannot heal a socket.
 func BindGrant(path string, presented ssh.PublicKey) (func() bool, bool) {
 	grant, ok := currentGrant(path, presented, nil)
@@ -140,13 +135,20 @@ func changeDevice(stateDir, id string, approve bool) error {
 	if err != nil {
 		return fmt.Errorf("identity: encode device key: %w", err)
 	}
-	lock, err := os.OpenFile(filepath.Join(stateDir, "device-grants.lock"), os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // fixed owner-controlled state-directory lock
+	lock, err := os.OpenFile(filepath.Join(stateDir, "device-grants.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600) //nolint:gosec // fixed policy lock; reject symlinks and special files before locking
 	if err != nil {
 		return fmt.Errorf("identity: open grants lock: %w", err)
 	}
-	defer lock.Close() //nolint:errcheck // the lock has no buffered writes
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("identity: lock grants: %w", err)
+	defer lock.Close() //nolint:errcheck // closing releases exclusive policy ownership
+	info, err := lock.Stat()
+	if err != nil {
+		return fmt.Errorf("identity: inspect grants lock: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
+		return errors.New("identity: grants lock must be a regular file with safe permissions")
+	}
+	if err := lockGrantWriter(lock); err != nil {
+		return err
 	}
 	path := filepath.Join(stateDir, "authorized_keys")
 	contents, err := ReadAuthorizedKeys(path)
@@ -158,6 +160,24 @@ func changeDevice(stateDir, id string, approve bool) error {
 		return err
 	}
 	return publishGrants(stateDir, path, next)
+}
+
+// Only mutations contend. Published-snapshot readers never wait for this lock.
+func lockGrantWriter(file *os.File) error {
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for {
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
+			return fmt.Errorf("identity: lock grants: %w", err)
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("identity: grants writer contention exceeded 250ms: %w", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func existingGrant(contents []byte, key ssh.PublicKey) (bool, error) {
@@ -264,14 +284,7 @@ func publishGrants(stateDir, path string, next []byte) error {
 }
 
 func ReadAuthorizedKeys(path string) ([]byte, error) {
-	before, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("identity: inspect authorized_keys %s: %w", path, err)
-	}
-	if !before.Mode().IsRegular() {
-		return nil, fmt.Errorf("identity: authorized_keys %s is not a regular file", path)
-	}
-	file, err := os.Open(path) //nolint:gosec // the daemon supplies its fixed state-directory authorized_keys path
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // fixed policy path; reject symlinks and nonregular descriptors
 	if err != nil {
 		return nil, fmt.Errorf("identity: open authorized_keys %s: %w", path, err)
 	}
@@ -280,8 +293,8 @@ func ReadAuthorizedKeys(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("identity: inspect opened authorized_keys %s: %w", path, err)
 	}
-	if !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
-		return nil, fmt.Errorf("identity: authorized_keys %s changed while opening", path)
+	if !opened.Mode().IsRegular() {
+		return nil, fmt.Errorf("identity: authorized_keys %s is not a regular file", path)
 	}
 	permissions := opened.Mode().Perm()
 	if permissions&0o022 != 0 {

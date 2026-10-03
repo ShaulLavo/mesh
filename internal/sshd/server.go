@@ -38,7 +38,7 @@ const (
 
 // loginGrace bounds how long an unauthenticated connection may hold a goroutine
 // and a descriptor, the way OpenSSH's LoginGraceTime does. It is cleared the
-// moment a key is accepted, because sessions are long-lived and a server-wide
+// moment a signed key is verified, because sessions are long-lived and a server-wide
 // MaxTimeout would cut them off mid-work.
 const loginGrace = 30 * time.Second
 
@@ -46,7 +46,7 @@ const loginGrace = 30 * time.Second
 type gracedConnKey struct{}
 
 // gracedConn carries the pre-authentication deadline set by ConnCallback so the
-// public key handler can lift it once the client proves who it is.
+// verified-key callback can lift it once the client proves who it is.
 type gracedConn struct {
 	net.Conn
 	once    sync.Once
@@ -259,18 +259,10 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 		ctx.SetValue(gracedConnKey{}, graced)
 		return graced
 	}
-	server.PublicKeyHandler = func(ctx charmssh.Context, key charmssh.PublicKey) bool {
-		current, ok := identity.BindGrant(cfg.authorizedKeys, key)
-		if !ok {
-			return false
-		}
-		// Only a proven client gets to hold the connection indefinitely.
-		if graced, ok := ctx.Value(gracedConnKey{}).(*gracedConn); ok {
-			graced.authenticated()
-			graced.watchGrant(ctx, current)
-		}
-		return true
+	server.PublicKeyHandler = func(_ charmssh.Context, key charmssh.PublicKey) bool {
+		return identity.Granted(cfg.authorizedKeys, key)
 	}
+	server.ServerConfigCallback = cfg.signedConfig
 	handler := server.Handler
 	if handler == nil {
 		handler = helloHandler
@@ -286,6 +278,21 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 		}
 	}
 	return server, nil
+}
+
+func (cfg normalizedConfig) signedConfig(ctx charmssh.Context) *gossh.ServerConfig {
+	return &gossh.ServerConfig{VerifiedPublicKeyCallback: func(_ gossh.ConnMetadata, key gossh.PublicKey, permissions *gossh.Permissions, _ string) (*gossh.Permissions, error) {
+		current, ok := identity.BindGrant(cfg.authorizedKeys, key)
+		if !ok {
+			return nil, errors.New("sshd: signed device key is not approved")
+		}
+		// Unsigned public-key queries confer neither a lifetime nor an unlimited login.
+		if graced, ok := ctx.Value(gracedConnKey{}).(*gracedConn); ok {
+			graced.watchGrant(ctx, current)
+			graced.authenticated()
+		}
+		return permissions, nil
+	}}
 }
 
 // Authorizer checks the current managed file on every reservation or activation.

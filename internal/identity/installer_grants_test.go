@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -17,8 +16,11 @@ import (
 
 func installerGrantFixture(t *testing.T) (string, string, string, string) {
 	t.Helper()
-	_, source, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(source), "../.."))
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Clean(filepath.Join(cwd, "../.."))
 	home, err := os.MkdirTemp(t.TempDir(), "installer-")
 	if err != nil {
 		t.Fatal(err)

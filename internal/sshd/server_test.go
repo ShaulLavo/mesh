@@ -100,8 +100,12 @@ func TestExtensionOptionsCannotReplaceSecurityBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if server.Addr != "127.0.0.1:2222" || server.PasswordHandler != nil || server.KeyboardInteractiveHandler != nil || server.ServerConfigCallback != nil {
+	if server.Addr != "127.0.0.1:2222" || server.PasswordHandler != nil || server.KeyboardInteractiveHandler != nil || server.ServerConfigCallback == nil {
 		t.Fatalf("security-sensitive server fields were replaced: %#v", server)
+	}
+	securityConfig := server.ServerConfigCallback(nil)
+	if securityConfig.NoClientAuth || securityConfig.VerifiedPublicKeyCallback == nil || securityConfig.PasswordCallback != nil || securityConfig.KeyboardInteractiveCallback != nil {
+		t.Fatal("extension option replaced signed-key verification")
 	}
 	if len(server.HostSigners) != 1 {
 		t.Fatalf("host signer count = %d, want 1", len(server.HostSigners))
