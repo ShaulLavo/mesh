@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/shaul/mesh/internal/dnsname"
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/transport"
@@ -60,7 +61,11 @@ func openVerifiedHostInfo(ctx context.Context, host HostRecord, dial HostDialer)
 		_ = conn.Close()
 		return nil, protocol.HostInfo{}, fmt.Errorf("verify host %s: response is not host info", host.Alias)
 	}
-	if err := validateHostInfo(host, *response.Host); err != nil {
+	if err := rememberHostName(verifyCtx, host, *response.Host); err != nil {
+		_ = conn.Close()
+		return nil, protocol.HostInfo{}, err
+	}
+	if err := verifyNamedTarget(host, *response.Host); err != nil {
 		_ = conn.Close()
 		return nil, protocol.HostInfo{}, err
 	}
@@ -75,6 +80,11 @@ func (e *hostIdentityError) Error() string { return fmt.Sprintf("host %s identit
 func validateHostInfo(expected HostRecord, actual protocol.HostInfo) error {
 	if actual.ID != expected.ID || actual.MeshIdentity != expected.MeshIdentity {
 		return &hostIdentityError{alias: expected.Alias}
+	}
+	if actual.MachineName != "" || actual.NameRevision != 0 {
+		if err := machinename.ValidateClaim(expected.ID, declaredName(actual)); err != nil {
+			return fmt.Errorf("host returned invalid machine name: %w", err)
+		}
 	}
 	if actual.Wake != nil {
 		if err := validateHostWake(actual); err != nil {

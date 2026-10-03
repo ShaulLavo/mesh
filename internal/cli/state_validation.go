@@ -6,28 +6,26 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/hostmetrics"
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 )
 
 func validateStateMessage(message protocol.Control) error {
+	if err := validateStateName(message); err != nil {
+		return err
+	}
 	if message.StateSnapshot != nil {
 		snapshot := message.StateSnapshot
 		if err := validateStateSections(snapshot.Current); err != nil {
 			return err
 		}
-		if err := validateStateMemory(snapshot.Memory); err != nil {
-			return err
-		}
-		if err := validateStateMetrics(snapshot.Metrics); err != nil {
+		if err := validateStateSamples(snapshot.Memory, snapshot.Metrics); err != nil {
 			return err
 		}
 	}
 	if message.StateEvent != nil {
 		payload := message.StateEvent.Payload
-		if err := validateStateMemory(payload.Memory); err != nil {
-			return err
-		}
-		if err := validateStateMetrics(payload.Metrics); err != nil {
+		if err := validateStateSamples(payload.Memory, payload.Metrics); err != nil {
 			return err
 		}
 	}
@@ -42,7 +40,7 @@ func validateStateMessage(message protocol.Control) error {
 
 func validateStateSections(sections map[string]protocol.Observation) error {
 	for topic, observation := range sections {
-		if topic != protocol.TopicSessions && topic != protocol.TopicServices && topic != protocol.TopicMetrics {
+		if topic != protocol.TopicSessions && topic != protocol.TopicServices && topic != protocol.TopicMetrics && topic != protocol.TopicHost {
 			return fmt.Errorf("unknown state observation topic %q", topic)
 		}
 		if err := validateStateAge(observation.AgeMillis); err != nil {
@@ -109,4 +107,26 @@ func validateStateMetrics(metrics *hostmetrics.Snapshot) error {
 		return fmt.Errorf("state CPU temperature requires a sensor")
 	}
 	return nil
+}
+
+func validateStateName(message protocol.Control) error {
+	if message.Type != protocol.TypeStateEvent && message.StateEvent != nil && message.StateEvent.Payload.Host != nil {
+		return fmt.Errorf("unexpected machine name event in control %q", message.Type)
+	}
+	if info := stateDeclaredHost(message); info != nil {
+		if err := machinename.ValidateClaim(info.ID, declaredName(*info)); err != nil {
+			return fmt.Errorf("invalid state host name: %w", err)
+		}
+	}
+	if message.StateEvent != nil && message.StateEvent.Payload.Host != nil && message.StateEvent.Kind != "host.changed" {
+		return fmt.Errorf("unexpected machine name in state event %q", message.StateEvent.Kind)
+	}
+	return nil
+}
+
+func validateStateSamples(memory map[string]protocol.SessionMemory, metrics *hostmetrics.Snapshot) error {
+	if err := validateStateMemory(memory); err != nil {
+		return err
+	}
+	return validateStateMetrics(metrics)
 }

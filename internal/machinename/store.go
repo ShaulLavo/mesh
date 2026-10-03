@@ -66,7 +66,7 @@ func Open(ctx context.Context, directory, id, initial string) (*Store, error) {
 		return nil, fmt.Errorf("create machine name directory: %w", err)
 	}
 	current = record{Version: 1, Claim: Claim{ID: id, MachineName: name, Revision: 1}}
-	if _, err := publishRecord(directory, current, syncDirectory); err != nil {
+	if _, err := publishRecord(directory, stateName, current, syncDirectory); err != nil {
 		return nil, err
 	}
 	return &Store{directory: directory, current: current, syncDirectory: syncDirectory}, nil
@@ -119,7 +119,7 @@ func (s *Store) Rename(ctx context.Context, target, value string, expected uint6
 	current.MachineName = name
 	current.Revision++
 	current.PreviousRevision = &previous
-	published, err := publishRecord(s.directory, current, s.syncDirectory)
+	published, err := publishRecord(s.directory, stateName, current, s.syncDirectory)
 	if err != nil {
 		if published {
 			s.pending = &current
@@ -179,7 +179,7 @@ func readRecord(path string) (record, error) {
 	return current, nil
 }
 
-func publishRecord(directory string, current record, syncDir func(string) error) (bool, error) {
+func publishRecord(directory, filename string, current record, syncDir func(string) error) (bool, error) {
 	contents, err := json.Marshal(current)
 	if err != nil {
 		return false, fmt.Errorf("encode machine name state: %w", err)
@@ -199,7 +199,12 @@ func publishRecord(directory string, current record, syncDir func(string) error)
 	if err := file.Close(); err != nil {
 		return false, fmt.Errorf("close machine name state: %w", err)
 	}
-	if err := os.Rename(file.Name(), filepath.Join(directory, stateName)); err != nil {
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return false, fmt.Errorf("open machine name publication directory: %w", err)
+	}
+	defer root.Close() //nolint:errcheck // directory descriptor cleanup
+	if err := root.Rename(filepath.Base(file.Name()), filename); err != nil {
 		return false, fmt.Errorf("publish machine name state: %w", err)
 	}
 	if err := syncDir(directory); err != nil {
