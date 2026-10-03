@@ -27,14 +27,14 @@ func printUpdatePreview(output io.Writer, preview updatePreview, structured bool
 	if structured {
 		return json.NewEncoder(output).Encode(preview)
 	}
-	if _, err := fmt.Fprintf(output, "Mesh %s · commit %s\nRelease digest: %s\nFleet %s revision %d · %d machines\n", preview.Release.Version, preview.Release.Commit, preview.ReleaseDigest, SafeTerminalText(mask.Value("fleet", preview.Fleet.Name)), preview.Fleet.Revision, len(preview.Fleet.Members)); err != nil {
+	if _, err := fmt.Fprintf(output, "Mesh %s\n", preview.Release.Version); err != nil {
 		return err
 	}
-	if preview.FirstFleet {
-		_, _ = fmt.Fprintln(output, "First fleet preview: only this machine and locally adopted hosts are known. Include every intended machine, including offline hosts, using --fleet FILE if this list is incomplete.")
+	if len(preview.Fleet.Members) == 1 && preview.Fleet.Members[0].Alias == updateLocalAlias {
+		_, _ = fmt.Fprintln(output, "This machine only.")
 	}
 	if len(preview.OutsideFleet) > 0 {
-		_, _ = fmt.Fprintf(output, "Adopted hosts outside this fleet: %s. Revise fleet.json or pass --fleet FILE to include them.\n", privateUpdateHosts(mask, preview.OutsideFleet))
+		_, _ = fmt.Fprintf(output, "Other machines are outside this update: %s. Use --fleet FILE to choose a different group.\n", privateUpdateHosts(mask, preview.OutsideFleet))
 	}
 	if preview.ClientOnly {
 		_, _ = fmt.Fprintln(output, "This local CLI needs a supervised update helper. Approval includes installing that helper; it does not add a hosting daemon.")
@@ -52,7 +52,10 @@ func printUpdatePreview(output io.Writer, preview updatePreview, structured bool
 	if err := printUpdateTargets(output, preview.Targets, preview.Release, mask); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(output, "Running sessions stay alive. Existing workers retain their installed code until their sessions end.")
+	if preview.ApprovalProblem != "" {
+		_, _ = fmt.Fprintln(output, preview.ApprovalProblem)
+	}
+	_, err := fmt.Fprintln(output, "Running sessions stay alive and keep their current code until they end.")
 	return err
 }
 
@@ -64,7 +67,7 @@ func printUpdateTargets(output io.Writer, targets []update.Target, manifest rele
 		if target.Build != nil {
 			build = "daemon " + target.Build.Version
 		}
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s%s\n", SafeTerminalText(mask.Value("host", target.Host.Alias)), SafeTerminalText(string(target.State)), SafeTerminalText(mask.Text(build)), workerUpdateSummary(target.Workers, manifest)); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s%s\n", SafeTerminalText(mask.Value("host", target.Host.Alias)), SafeTerminalText(updateTargetLabel(target)), SafeTerminalText(mask.Text(build)), workerUpdateSummary(target.Workers, manifest)); err != nil {
 			return err
 		}
 		if len(target.InterruptedWorkers) > 0 {
@@ -73,7 +76,7 @@ func printUpdateTargets(output io.Writer, targets []update.Target, manifest rele
 			}
 		}
 		if target.Problem != "" {
-			if _, err := fmt.Fprintf(writer, "\t\t%s\n", SafeTerminalText(mask.Value("error", target.Problem))); err != nil {
+			if _, err := fmt.Fprintf(writer, "  %s\n", SafeTerminalText(mask.Value("error", updateTargetProblem(target)))); err != nil {
 				return err
 			}
 		}

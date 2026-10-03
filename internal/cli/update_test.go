@@ -28,8 +28,13 @@ func updateTestManifest() release.Manifest {
 	manifest := release.Manifest{Schema: 1, Version: "v0.2.0", Commit: strings.Repeat("a", 40), Compatibility: release.Compatibility{StateReadMin: 1, StateReadMax: 1, StateWrite: 1, WorkerMin: 1, WorkerMax: 1, WorkerWrite: 1, JournalVersion: 1}}
 	for _, platform := range []release.Platform{{OS: "linux", Arch: "amd64"}, {OS: "linux", Arch: "arm64"}, {OS: "darwin", Arch: "arm64"}} {
 		manifest.Artifacts = append(manifest.Artifacts, release.Artifact{Platform: platform, Archive: "mesh_" + platform.OS + "_" + platform.Arch + ".tar.gz", SHA256: strings.Repeat("b", 64), BinarySHA256: strings.Repeat("c", 64)})
+		manifest.Compatibility.Transitions = append(manifest.Compatibility.Transitions, release.Transition{Platform: platform, FromDigest: strings.Repeat("d", 64), ToDigest: strings.Repeat("c", 64), Proof: strings.Repeat("e", 64)})
 	}
 	return manifest
+}
+
+func updateTestBuild() release.Build {
+	return release.Build{Version: "v0.1.0", Digest: strings.Repeat("d", 64), Platform: release.CurrentPlatform(), StateVersion: 1, WorkerProtocol: 1, UpdateProtocol: 1}
 }
 
 func updateTestRelease(t *testing.T) (release.Client, *atomic.Int32) {
@@ -118,7 +123,7 @@ func TestUpdateKeepsOfflineMembersAndSubmitsOnePinnedPlan(t *testing.T) {
 			if host.ID == remote.ID {
 				return context.DeadlineExceeded
 			}
-			*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: release.Build{Version: "v0.1.0"}}}
+			*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 			return nil
 		}
 		if action != "plan" {

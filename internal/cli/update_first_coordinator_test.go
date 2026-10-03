@@ -34,7 +34,7 @@ func legacyCoordinatorInfo(local update.Host, host update.Host, output any) erro
 	if host.ID == local.ID {
 		return &update.RemoteError{Problem: `daemon: unknown control "update.control"`}
 	}
-	*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID}}
+	*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 	return nil
 }
 

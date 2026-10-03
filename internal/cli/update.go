@@ -20,6 +20,7 @@ import (
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
+	"github.com/shaul/mesh/internal/updateinstall"
 )
 
 type updateOptions struct {
@@ -48,7 +49,7 @@ type updatePreview struct {
 	Release              release.Manifest `json:"release"`
 	ReleaseDigest        string           `json:"releaseDigest"`
 	Targets              []update.Target  `json:"targets"`
-	FirstFleet           bool             `json:"firstFleet"`
+	ApprovalProblem      string           `json:"approvalProblem,omitempty"`
 	ClientOnly           bool             `json:"clientOnly"`
 	OutsideFleet         []string         `json:"outsideFleet,omitempty"`
 }
@@ -56,14 +57,14 @@ type updatePreview struct {
 func (a *application) updateCommand() *cobra.Command {
 	options := updateOptions{version: "latest"}
 	command := &cobra.Command{
-		Use: "update", Short: "Review and update every machine in the configured fleet", Args: cobra.NoArgs,
+		Use: "update", Short: "Review and update Mesh on this machine or your saved fleet", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return a.runUpdate(cmd.Context(), options, updateOutput{cmd.OutOrStdout(), cmd.ErrOrStderr(), a.privacy})
 		},
 	}
-	command.Flags().BoolVar(&options.all, "all", false, "update the configured fleet, the default scope")
+	command.Flags().BoolVar(&options.all, "all", false, "update the machines in your saved fleet")
 	command.Flags().BoolVar(&options.local, "local", false, "update this machine only")
-	command.Flags().StringArrayVar(&options.hosts, "host", nil, "update an adopted host; may repeat")
+	command.Flags().StringArrayVar(&options.hosts, "host", nil, "update a named machine; may repeat")
 	command.Flags().StringVar(&options.fleet, "fleet", "", "use an explicit fleet manifest")
 	command.Flags().StringVar(&options.version, "version", "latest", "exact published release tag, or latest")
 	command.Flags().BoolVar(&options.yes, "yes", false, "approve the selected scope without prompting")
@@ -110,7 +111,7 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	if a.dependencies.UpdateCaller != nil {
 		environment.client = a.dependencies.UpdateCaller
 	}
-	fleet, savePath, outside, err := a.updateFleet(options, environment, interactive)
+	fleet, outside, err := a.updateFleet(options, environment, interactive)
 	if err != nil {
 		return err
 	}
@@ -118,16 +119,18 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	if err != nil {
 		return err
 	}
-	preview := updatePreview{Fleet: fleet, Release: manifest, ReleaseDigest: manifest.Digest(), FirstFleet: savePath != "", OutsideFleet: outside}
+	preview := updatePreview{Fleet: fleet, Release: manifest, ReleaseDigest: manifest.Digest(), OutsideFleet: outside}
 	if options.version == "latest" {
 		_ = localUpdateNoticeStore(environment.stateDir).Record(ctx, manifest)
 	}
 	preview.Targets = inspectUpdateTargets(ctx, environment.client, fleet.Members)
-	preview.ClientOnly = options.local && localCoordinatorMissing(preview.Targets, environment.local.ID) && localDaemonAbsent(ctx, environment.stateDir)
+	localScope := options.local || (!options.all && options.fleet == "" && len(options.hosts) == 0 && fleet.Name == "local" && len(fleet.Members) == 1 && fleet.Members[0].ID == environment.local.ID)
+	preview.ClientOnly = localScope && localCoordinatorMissing(preview.Targets, environment.local.ID) && localDaemonAbsent(ctx, environment.stateDir)
 	preview, err = previewFirstCoordinator(ctx, environment, preview)
 	if err != nil {
 		return err
 	}
+	preview = prepareUpdateApproval(preview)
 	if options.check {
 		return printUpdatePreview(output.out, preview, options.json, output.privacy)
 	}
@@ -136,13 +139,22 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 			return err
 		}
 	}
+	if preview.ApprovalProblem != "" {
+		if options.json {
+			if err := printUpdatePreview(output.out, preview, true); err != nil {
+				return err
+			}
+		}
+		return errors.New(preview.ApprovalProblem)
+	}
+	if updatePreviewCurrent(preview) {
+		if options.json {
+			return printUpdatePreview(output.out, preview, true)
+		}
+		return nil
+	}
 	if !options.yes && !a.confirmUpdate(preview, output.diagnostic) {
 		return errors.New("update cancelled")
-	}
-	if savePath != "" {
-		if err := update.SaveFleet(savePath, preview.Fleet); err != nil {
-			return err
-		}
 	}
 	if preview.ClientOnly {
 		return a.runClientOnlyUpdate(ctx, environment, preview, options, output)
@@ -221,7 +233,7 @@ func inspectUpdateTarget(ctx context.Context, client update.Caller, host update.
 	if err != nil {
 		target.State, target.Problem = update.Offline, err.Error()
 		var remote *update.RemoteError
-		if errors.As(err, &remote) {
+		if errors.As(err, &remote) || updateAuthorizationUnavailable(target.Problem) || updateAccessUnverified(target.Problem) || updateIdentityFailure(target.Problem) {
 			target.State = update.Failed
 		}
 		if legacyUpdateUnavailable(err) {
@@ -236,6 +248,9 @@ func inspectUpdateTarget(ctx context.Context, client update.Caller, host update.
 		return
 	}
 	target.Build, target.Workers = &info.Health.Build, info.Health.Workers
+	if info.Installation != nil && info.Installation.Phase == updateinstall.RollbackFailed {
+		target.State, target.Problem = update.Failed, updateRecoveryProblem
+	}
 	results <- target
 }
 
@@ -264,8 +279,8 @@ func localDaemonAbsent(ctx context.Context, stateDir string) bool {
 
 func (a *application) confirmUpdate(preview updatePreview, output io.Writer) bool {
 	prompt := "Update these machines? [y/N] "
-	if preview.FirstFleet {
-		prompt = "Is this your complete intended fleet, and should Mesh save it and update these machines? [y/N] "
+	if len(preview.Fleet.Members) == 1 && preview.Fleet.Members[0].Alias == "local" {
+		prompt = "Update Mesh on this machine? [y/N] "
 	}
 	if preview.ClientOnly {
 		prompt = "Install the supervised update helper and update this local CLI? [y/N] "
@@ -278,48 +293,37 @@ func (a *application) confirmUpdate(preview updatePreview, output io.Writer) boo
 	return strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes")
 }
 
-func (a *application) updateFleet(options updateOptions, environment updateEnvironment, interactive bool) (update.Fleet, string, []string, error) {
+func (a *application) updateFleet(options updateOptions, environment updateEnvironment, interactive bool) (update.Fleet, []string, error) {
 	hosts, err := LoadHosts()
 	if err != nil {
-		return update.Fleet{}, "", nil, err
+		return update.Fleet{}, nil, err
 	}
 	if options.local {
-		return scopedUpdateFleet("local", []update.Host{environment.local}), "", nil, nil
+		return scopedUpdateFleet("local", []update.Host{environment.local}), nil, nil
 	}
 	if len(options.hosts) > 0 {
 		fleet, err := selectedUpdateFleet(options.hosts, hosts, environment.local)
-		return fleet, "", nil, err
+		return fleet, nil, err
 	}
 	path := options.fleet
 	if path == "" {
 		configPath, err := ConfigPath()
 		if err != nil {
-			return update.Fleet{}, "", nil, err
+			return update.Fleet{}, nil, err
 		}
 		path = filepath.Join(filepath.Dir(configPath), "fleet.json")
 	}
 	fleet, err := update.ReadFleet(path)
 	if err == nil {
-		return fleet, "", outsideUpdateFleet(fleet, hosts), nil
+		return fleet, outsideUpdateFleet(fleet, hosts), nil
 	}
 	if !errors.Is(err, os.ErrNotExist) || options.fleet != "" {
-		return update.Fleet{}, "", nil, err
+		return update.Fleet{}, nil, err
 	}
-	if !interactive || options.yes {
-		return update.Fleet{}, "", nil, errors.New("no saved fleet: provide --fleet FILE, --local, or --host; --yes cannot assume adopted hosts are the complete fleet")
+	if options.all || options.yes || (!interactive && !options.check) {
+		return update.Fleet{}, nil, errors.New("no saved fleet: use --fleet FILE to choose machines, or --local to update this machine")
 	}
-	members := []update.Host{environment.local}
-	seen := map[string]bool{environment.local.ID: true}
-	for _, host := range hosts {
-		member := adoptedUpdateHost(host)
-		if seen[member.ID] {
-			continue
-		}
-		members = append(members, member)
-		seen[member.ID] = true
-	}
-	fleet = scopedUpdateFleet("default", members)
-	return fleet, path, nil, fleet.Validate()
+	return scopedUpdateFleet("local", []update.Host{environment.local}), nil, nil
 }
 
 func scopedUpdateFleet(name string, members []update.Host) update.Fleet {
