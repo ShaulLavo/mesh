@@ -126,14 +126,22 @@ func TestLinuxProcessObserverUsesLivePipelineMemberAfterGroupLeaderExits(t *test
 	if unixPTY, ok := pty.(interface{ Slave() *os.File }); ok {
 		_ = unixPTY.Slave().Close()
 	}
-	foregroundGroupID := 0
+	foregroundGroupID, survivingPID := 0, 0
+	t.Cleanup(func() {
+		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+		_ = pty.Close()
+		_, _ = command.Process.Wait()
+	})
 	t.Cleanup(func() {
 		if foregroundGroupID > 0 && foregroundGroupID != command.Process.Pid {
 			_ = syscall.Kill(-foregroundGroupID, syscall.SIGKILL)
 		}
-		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		_ = pty.Close()
-		_, _ = command.Process.Wait()
+		if survivingPID > 0 {
+			waitFor(t, func() bool {
+				_, err := os.Stat(fmt.Sprintf("/proc/%d", survivingPID))
+				return errors.Is(err, os.ErrNotExist)
+			})
+		}
 	})
 	if _, err := pty.Write([]byte("true | sleep 30\n")); err != nil {
 		t.Fatal(err)
@@ -145,7 +153,26 @@ func TestLinuxProcessObserverUsesLivePipelineMemberAfterGroupLeaderExits(t *test
 			return false
 		}
 		_, err := os.Stat(fmt.Sprintf("/proc/%d", foregroundGroupID))
-		return errors.Is(err, os.ErrNotExist)
+		if !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+		// The first child's exit can precede the second child's exec of sleep.
+		children, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", command.Process.Pid, command.Process.Pid))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, pid := range parseLinuxChildProcessIDs(children) {
+			groupID, err := syscall.Getpgid(pid)
+			if err != nil || groupID != foregroundGroupID {
+				continue
+			}
+			cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+			if err == nil && string(cmdline) == "sleep\x0030\x00" {
+				survivingPID = pid
+				return true
+			}
+		}
+		return false
 	})
 	observation := defaultProcessObserver(int(pty.Fd()), command.Process.Pid)
 	if !strings.Contains(observation.command, "sleep 30") {
