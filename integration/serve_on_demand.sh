@@ -278,7 +278,8 @@ grep -Fq "daemon: on-demand failure $reference: \"route :$BROKEN" "$TEST_ROOT/or
   fail "owner log must contain exactly one correlated line before the HTTP response returns"
 grep -Fq 'status 7' "$TEST_ROOT/origin.log" || fail "owner log lost the exit status"
 grep -Fq 'command \"echo BROKEN_OUTPUT_MARKER; exit 7\"' "$TEST_ROOT/origin.log" || fail "owner log lost the command"
-grep -Fq '\n\nlast output:\nBROKEN_OUTPUT_MARKER' "$TEST_ROOT/origin.log" || fail "owner log did not escape the output"
+python3 "$REPO_ROOT/integration/helpers/owner_failure.py" "$TEST_ROOT/origin.log" "$reference" BROKEN_OUTPUT_MARKER ||
+  fail "owner log did not escape the captured command output"
 grep -Fq "The owner can see details with \`mesh serve ls\` and \`mesh logs <session>\`" "$TEST_ROOT/broken.body" ||
   fail "502 has no owner hint"
 grep -Fq BROKEN_OUTPUT_MARKER "$TEST_ROOT/origin.log" || fail "owner log lost the output"
