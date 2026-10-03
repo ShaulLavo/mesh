@@ -40,6 +40,9 @@ type host struct {
 }
 
 type servedWebsite struct {
+	route  string
+	state  string
+	row    cli.ServiceCatalogRow
 	name   string
 	url    string
 	health string
@@ -128,6 +131,10 @@ type model struct {
 	cancelAction       context.CancelFunc
 	refreshOnInit      bool
 	loadHosts          func(context.Context) ([]cli.HostSessions, error)
+	watchServices      cli.PickerServicesWatchFunc
+	serviceAct         cli.PickerServiceActionFunc
+	serviceFeedback    map[serviceTarget]string
+	pendingService     *cli.PickerServiceActionRequest
 	containingPath     []protocol.SessionIdentity
 }
 
@@ -147,7 +154,7 @@ func newInspectingModel(ctx context.Context, hosts []host, inspect cli.PickerIns
 	}
 	styles := newPickerStyles()
 	items := hostItems(hosts)
-	browser := list.New(items, hostDelegate{styles: styles}, defaultWidth, defaultHeight-frameRows)
+	browser := list.New(items, hostDelegate{styles: styles, services: len(items) > len(hosts)}, defaultWidth, defaultHeight-frameRows)
 	configureList(&browser)
 	browser.SetStatusBarItemName("host", "hosts")
 	return model{
@@ -161,6 +168,7 @@ func newInspectingModel(ctx context.Context, hosts []host, inspect cli.PickerIns
 		inspect:            inspect,
 		summaries:          make(map[inspectionTarget]sessionLiveSummary),
 		containingSessions: make(map[containingSessionKey]containingSessionState),
+		serviceFeedback:    make(map[serviceTarget]string),
 	}
 }
 
@@ -242,6 +250,13 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyLoadedHosts(message)
 	case sessionActionResultMsg:
 		return m.applySessionAction(message)
+	case pickerServicesMsg:
+		return m.applyServices(cli.PickerServicesUpdate(message))
+	case serviceActionResultMsg:
+		return m.applyServiceAction(message), nil
+	case pickerServicesFailedMsg:
+		m.notice = "Services unavailable: " + message.err.Error()
+		return m, nil
 	case catalogRefreshTickMsg:
 		if m.screen != sessionScreen || message.epoch != m.catalogEpoch {
 			return m, nil
@@ -260,9 +275,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(inspect, summaries, m.scheduleInspectionTick(message.epoch))
 	}
 
+	beforeMain := mainItemKey(m.list.SelectedItem())
 	before := m.selectedSessionID()
 	updated, command := m.list.Update(message)
 	m.list = updated
+	if m.screen == hostScreen && mainItemKey(m.list.SelectedItem()) != beforeMain {
+		m.notice = ""
+		m.resizeList()
+	}
 	if m.screen == sessionScreen && m.selectedSessionID() != before {
 		if !sessionActionBusy(m.sessionAction) {
 			m.notice = ""
@@ -279,6 +299,11 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 	if handled, command := m.handleUpdateNoticeKey(key); handled {
 		return true, command
+	}
+	if m.screen == hostScreen {
+		if handled, command := m.handleServiceKey(key); handled {
+			return true, command
+		}
 	}
 	if sessionActionBusy(m.sessionAction) {
 		switch key.String() {
@@ -462,6 +487,7 @@ func (m *model) showHosts() {
 	m.list.SetStatusBarItemName("host", "hosts")
 	_ = m.list.SetItems(hostItems(m.hosts))
 	m.list.Select(m.selectedHost)
+	m.refreshMainDelegate()
 	m.resizeList()
 }
 
@@ -500,13 +526,7 @@ func (m model) View() tea.View {
 
 func (m model) chrome() (string, string, string) {
 	if m.screen == hostScreen {
-		header := justify(m.styles.title.Render("mesh"), m.styles.muted.Render(count(len(m.hosts), "host")), m.width)
-		subtitle := "Choose a host."
-		if len(m.hosts) == 0 {
-			subtitle = "No hosts yet. Add one with mesh add [user@]host."
-		}
-		footer := m.styles.hints(hint{"↑/↓", "move"}, hint{"enter", "sessions"}, hint{"esc", "cancel"})
-		return truncate(header, m.width), truncate(m.styles.muted.Render(subtitle), m.width), truncate(footer, m.width)
+		return m.mainChrome()
 	}
 
 	current := m.currentHost()
@@ -624,9 +644,14 @@ type hostItem struct {
 func (item hostItem) FilterValue() string { return item.host.alias }
 
 func hostItems(hosts []host) []list.Item {
-	items := make([]list.Item, len(hosts))
+	items := make([]list.Item, 0, len(hosts))
 	for index, current := range hosts {
-		items[index] = hostItem{index: index, host: current}
+		items = append(items, hostItem{index: index, host: current})
+	}
+	for _, current := range hosts {
+		for _, website := range current.served {
+			items = append(items, serviceItem{target: serviceTarget{current.id, website.route}, hostAlias: current.alias, website: website})
+		}
 	}
 	return items
 }
@@ -646,17 +671,29 @@ func sessionItems(sessions []session) []list.Item {
 }
 
 type hostDelegate struct {
-	styles  pickerStyles
-	privacy *privacy.Mask
+	styles   pickerStyles
+	privacy  *privacy.Mask
+	services bool
+	feedback map[serviceTarget]string
+	pending  *cli.PickerServiceActionRequest
 }
 
-func (delegate hostDelegate) Height() int  { return 1 }
+func (delegate hostDelegate) Height() int {
+	if delegate.services {
+		return 2
+	}
+	return 1
+}
 func (delegate hostDelegate) Spacing() int { return 0 }
 func (delegate hostDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
 	return nil
 }
 
 func (delegate hostDelegate) Render(output io.Writer, browser list.Model, index int, value list.Item) {
+	if service, ok := value.(serviceItem); ok {
+		delegate.renderService(output, browser, index, service)
+		return
+	}
 	item, ok := value.(hostItem)
 	if !ok {
 		return

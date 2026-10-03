@@ -35,6 +35,7 @@ const (
 )
 
 type StateView struct {
+	PrivateName            string
 	Build                  release.Build
 	Connection             StateConnection
 	Problem                string
@@ -200,7 +201,7 @@ func (v *StateView) applySnapshot(snapshot *protocol.StateSnapshot, received tim
 	}
 	s := snapshot
 	metrics, metricsReceived := v.Metrics, v.MetricsReceivedAt
-	*v = StateView{Build: v.Build, Connection: v.Connection, ServiceHealthSupported: v.ServiceHealthSupported, MetricsUnsupported: v.MetricsUnsupported, Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
+	*v = StateView{PrivateName: v.PrivateName, Build: v.Build, Connection: v.Connection, ServiceHealthSupported: v.ServiceHealthSupported, MetricsUnsupported: v.MetricsUnsupported, Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
 	v.applyMemory(s.Memory, received, transit)
 	v.applyCurrent(s.Current, received, transit)
 	v.applyMetrics(s.Metrics, received, transit)

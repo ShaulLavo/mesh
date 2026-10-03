@@ -30,6 +30,7 @@ func (m model) applyLoadedHosts(message hostCatalogLoadedMsg) (model, tea.Cmd) {
 	if message.err != nil || m.selection != nil {
 		return m, nil
 	}
+	selectedKey := mainItemKey(m.list.SelectedItem())
 	selectedAlias := ""
 	if m.screen == sessionScreen {
 		selectedAlias = m.currentHost().alias
@@ -47,6 +48,7 @@ func (m model) applyLoadedHosts(message hostCatalogLoadedMsg) (model, tea.Cmd) {
 				// The local list and an open session screen already have their own
 				// current reader. A delayed network catalog cannot replace them.
 				if !merged[index].local && (m.screen != sessionScreen || merged[index].alias != selectedAlias) {
+					loaded.served, loaded.servedKnown, loaded.servedStale = merged[index].served, merged[index].servedKnown, merged[index].servedStale
 					merged[index] = loaded
 				}
 				found = true
@@ -63,13 +65,7 @@ func (m model) applyLoadedHosts(message hostCatalogLoadedMsg) (model, tea.Cmd) {
 		m.refreshSessionDelegate()
 		return m, nil
 	}
-	command := m.list.SetItems(hostItems(m.hosts))
-	for index, current := range m.hosts {
-		if current.alias == selectedAlias {
-			m.list.Select(index)
-			break
-		}
-	}
+	command := m.resetMainItems(selectedKey, m.list.Index())
 	return m, command
 }
 

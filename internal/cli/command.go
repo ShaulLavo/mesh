@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -84,13 +85,15 @@ type ContainmentFunc func(context.Context) []protocol.SessionIdentity
 // PickerInput contains the catalog and the optional live readers used by the
 // interactive picker.
 type PickerInput struct {
-	Privacy      *privacy.Mask
-	UpdateNotice UpdateNoticeCallbacks
-	Hosts        []HostSessions
-	LoadHosts    func(context.Context) ([]HostSessions, error)
-	Inspect      PickerInspectFunc
-	Refresh      PickerRefreshFunc
-	Action       PickerSessionActionFunc
+	Privacy       *privacy.Mask
+	UpdateNotice  UpdateNoticeCallbacks
+	Hosts         []HostSessions
+	LoadHosts     func(context.Context) ([]HostSessions, error)
+	Inspect       PickerInspectFunc
+	Refresh       PickerRefreshFunc
+	Action        PickerSessionActionFunc
+	WatchServices PickerServicesWatchFunc
+	ServiceAction PickerServiceActionFunc
 	// ContainingSessions are the exact terminal screens that receive this
 	// picker's output. Each available snapshot was captured before the picker
 	// wrote its first frame.
@@ -241,6 +244,7 @@ type Dependencies struct {
 	DialControl            HostDialer
 	ConfirmPublic          ConfirmPublicFunc
 	Containment            ContainmentFunc
+	OpenURL                func(context.Context, string) error
 	Now                    func() time.Time
 	Stdin                  *os.File
 	Stdout                 *os.File
@@ -267,6 +271,9 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	}
 	if dependencies.DialControl == nil {
 		dependencies.DialControl = dialControlHost
+	}
+	if dependencies.OpenURL == nil {
+		dependencies.OpenURL = openPickerURL
 	}
 	if dependencies.Now == nil {
 		dependencies.Now = time.Now
@@ -501,7 +508,23 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 			return a.refreshWatchedPickerHost(ctx, host, cache, pickerState)
 		}
 
+		serviceHosts := append([]HostRecord(nil), hosts...)
+		if local.Host.ID != "" {
+			self := local.Host
+			self.MeshIdentity = self.ID
+			serviceHosts = append(serviceHosts, self)
+		}
+		serviceDial := dashboardControlDialer(local.Host.ID, filepath.Join(stateDir, "daemon.sock"), a.dependencies.DialControl)
+		services := pickerServiceMonitor{hosts: serviceHosts, watcher: NewStateWatcher(serviceDial), cache: cache}
 		selection, err := a.dependencies.Picker(pickerContext, PickerInput{
+			WatchServices: services.Run,
+			ServiceAction: func(ctx context.Context, request PickerServiceActionRequest) (PickerServiceActionResult, error) {
+				if !pickerOperations.begin(ctx) {
+					return PickerServiceActionResult{}, context.Canceled
+				}
+				defer pickerOperations.done()
+				return pickerServiceAction(ctx, serviceHosts, serviceDial, a.dependencies.OpenURL, request)
+			},
 			Privacy:      a.privacy,
 			UpdateNotice: a.pickerUpdateNotice(),
 			Hosts:        catalog,
