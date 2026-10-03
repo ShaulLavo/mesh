@@ -1,97 +1,20 @@
 #!/usr/bin/env python3
-"""Exercise the native trust fixture with an in-memory Security tool boundary."""
+"""Native fixture boundaries and real TLS verification controls, without host trust."""
 import ast
-import copy
-import plistlib
-import shlex
+import hashlib
+import os
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
+
+from fixtures.native_tls import SOURCES, fixture_certificates, macho_signature_flags, probe_tls, verify_injectable_binaries
 
 SOURCE = Path(__file__).with_name("prove-device-auth-cutover.py")
-
-
-class SecurityFixture:
-    def __init__(self, root):
-        self.root = root
-        self.prior = ["/fixture/login.keychain-db", "/fixture/other keychain-db"]
-        self.search = self.prior[:]
-        self.keychains = set()
-        self.right = {"class": "rule", "rule": ["authenticate-admin"], "timeout": 300}
-        self.original_right = copy.deepcopy(self.right)
-        self.trusted = False
-        self.calls = []
-        self.fail_remove = False
-        self.ignore_restore = False
-        self.ignore_delete = False
-        self.fail_add = False
-        self.ignore_right_restore = False
-        self.ignore_trust_remove = False
-        self.prior_trust = {}
-        self.missing_trust_store = False
-        self.fail_export = False
-        self.deny_authorization_write = False
-
-    def run(self, command, **kwargs):
-        administrator = command[:3] == ["sudo", "-n", "security"]
-        args = command[3:] if administrator else command[1:]
-        self.calls.append(tuple(args))
-        action = args[0]
-        output = b""
-        if action == "authorizationdb":
-            if args[1] == "write" and self.deny_authorization_write:
-                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"NO (-60005)\n")
-            if args[1] == "read":
-                output = plistlib.dumps(self.right)
-            elif args[-1] == "allow":
-                self.right = {"class": "rule", "rule": ["allow"]}
-            elif not self.ignore_right_restore:
-                self.right = plistlib.loads(kwargs["input"])
-        elif action == "list-keychains":
-            if "-s" in args:
-                if not self.ignore_restore or args[args.index("-s") + 1:] != self.prior:
-                    self.search = args[args.index("-s") + 1:]
-            else:
-                output = ("\n".join(shlex.quote(path) for path in self.search) + "\n").encode()
-        elif action == "create-keychain":
-            self.keychains.add(args[-1])
-            Path(args[-1]).touch()
-        elif action == "unlock-keychain":
-            pass
-        elif action == "add-trusted-cert":
-            self.trusted = True
-            if self.fail_add:
-                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"fixture partial add failure")
-        elif action == "remove-trusted-cert":
-            if self.right.get("rule") != ["allow"]:
-                raise subprocess.TimeoutExpired("security remove-trusted-cert", 15)
-            if self.fail_remove:
-                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"fixture removal failure")
-            if not self.ignore_trust_remove:
-                self.trusted = False
-        elif action == "trust-settings-export":
-            if self.fail_export:
-                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"fixture export permission denied")
-            if self.missing_trust_store and not self.trusted:
-                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"No Trust Settings were found. (-25263)")
-            trust = self.prior_trust | ({"fixture": {}} if self.trusted else {})
-            Path(args[-1]).write_bytes(plistlib.dumps({"trustVersion": 1, "trustList": trust}))
-        elif action == "delete-keychain":
-            if not self.ignore_delete:
-                self.keychains.remove(args[-1])
-                Path(args[-1]).unlink()
-        else:
-            raise AssertionError("unexpected Security action " + action)
-        return SimpleNamespace(returncode=0, stdout=output, stderr=b"")
-
-    def check_output(self, command, **kwargs):
-        result = self.run(command, **kwargs)
-        if result.returncode:
-            raise subprocess.CalledProcessError(result.returncode, command)
-        return result.stdout
 
 
 def require(condition, message):
@@ -99,22 +22,82 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def macho(flags):
+    blob = struct.pack(">III", 0xfade0cc0, 12 + len(flags) * 24, len(flags))
+    for index in range(len(flags)):
+        blob += struct.pack(">II", index * 0x1000, 12 + len(flags) * 8 + index * 16)
+    for value in flags:
+        blob += struct.pack(">IIII", 0xfade0c02, 16, 0x20400, value)
+    header = bytearray(32)
+    header[:4] = b"\xcf\xfa\xed\xfe"
+    struct.pack_into("<I", header, 16, 1)
+    return bytes(header) + struct.pack("<IIII", 0x1d, 16, 48, len(blob)) + blob
+
+
+class SignatureTest(unittest.TestCase):
+    def test_adhoc_linker_signature_allows_fixture(self):
+        self.assertEqual(macho_signature_flags(macho([0x20002])), [0x20002])
+
+    def test_unsigned_binary_allows_fixture(self):
+        data = bytearray(32)
+        data[:4] = b"\xcf\xfa\xed\xfe"
+        self.assertEqual(macho_signature_flags(data), [])
+
+    def test_runtime_signature_in_any_directory_refuses_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mesh"
+            path.write_bytes(macho([0x20002, 0x10000]))
+            with self.assertRaisesRegex(RuntimeError, "hardened-runtime"):
+                verify_injectable_binaries([path])
+
+    def test_restricted_signature_refuses_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mesh"
+            for flag in (0x800, 0x2000):
+                with self.subTest(flag=hex(flag)):
+                    path.write_bytes(macho([flag]))
+                    with self.assertRaisesRegex(RuntimeError, "restricted"):
+                        verify_injectable_binaries([path])
+
+    def test_restrict_segment_refuses_fixture(self):
+        data = bytearray(56)
+        data[:4] = b"\xcf\xfa\xed\xfe"
+        struct.pack_into("<I", data, 16, 1)
+        struct.pack_into("<II", data, 32, 0x19, 24)
+        data[40:50] = b"__RESTRICT"
+        with self.assertRaisesRegex(RuntimeError, "restricted"):
+            macho_signature_flags(data)
+
+    def test_invalid_signature_refuses_fixture(self):
+        with self.assertRaises((ValueError, struct.error)):
+            macho_signature_flags(macho([0x20002])[:-1])
+
+    def test_wrong_binary_format_refuses_fixture(self):
+        with self.assertRaisesRegex(ValueError, "Mach-O"):
+            macho_signature_flags(b"not a Mach-O")
+
+
 class NativeTrustTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.fixture = SecurityFixture(self.root)
+        self.binaries = [self.root / name for name in ("old", "new", "fleet", "control")]
+        for binary in self.binaries:
+            binary.write_bytes(binary.name.encode())
         self.tree = ast.parse(SOURCE.read_text())
         definitions = [node for node in self.tree.body if isinstance(node, ast.FunctionDef)
                        and node.name in ("install_native_fixture_trust", "cleanup_native_fixture_trust")]
+        self.prepare = Mock(return_value={"DYLD_INSERT_LIBRARIES": str(self.root / "fixture-anchor.dylib")})
+        self.security = Mock(return_value=SimpleNamespace(returncode=1, stdout=b"", stderr=b"NO (-60005)\n"))
+        self.environment = {"GITHUB_ACTIONS": "true", "RUNNER_OS": "macOS"}
         self.namespace = {
             "ROOT": self.root, "OLD_BUILD": {"platform": {"os": "darwin"}},
-            "os": SimpleNamespace(environ={"GITHUB_ACTIONS": "true", "RUNNER_OS": "macOS"}),
-            "subprocess": SimpleNamespace(run=self.fixture.run, check_output=self.fixture.check_output,
-                                          SubprocessError=subprocess.SubprocessError),
-            "shlex": shlex, "plistlib": plistlib, "sys": sys, "Path": Path, "require": require,
-            "event": lambda *args, **kwargs: None, "trust_cleanup": [],
+            "OLD": self.binaries[0], "NEW": self.binaries[1], "FLEET": self.binaries[2], "CONTROL_CLIENT": self.binaries[3],
+            "os": SimpleNamespace(environ=self.environment), "subprocess": SimpleNamespace(run=self.security,
+                check_output=self.security, SubprocessError=subprocess.SubprocessError),
+            "sys": sys, "require": require, "event": Mock(), "trust_cleanup": [], "native_tls_environment": {},
+            "fixture_tls": SimpleNamespace(prepare_native_tls=self.prepare), "digest": lambda data: hashlib.sha256(data).hexdigest(),
         }
         exec(compile(ast.Module(body=definitions, type_ignores=[]), str(SOURCE), "exec"), self.namespace)
 
@@ -126,118 +109,98 @@ class NativeTrustTest(unittest.TestCase):
         self.namespace.update(hosts=[], services=server, proxy=server)
         exec(compile(ast.Module(body=self.tree.body[-1].finalbody, type_ignores=[]), str(SOURCE), "exec"), self.namespace)
 
-    def test_last_admin_certificate_removal_is_noninteractive_and_restored(self):
-        self.install()
-        self.cleanup()
-        self.assertFalse(self.fixture.trusted)
-        self.assertEqual(self.fixture.search, self.fixture.prior)
-        self.assertFalse(self.fixture.keychains)
-        self.assertEqual(self.fixture.right, self.fixture.original_right)
-        self.assertIn(("authorizationdb", "read", "com.apple.trust-settings.admin"), self.fixture.calls)
-
     def test_runner_denies_authorization_writes_without_blocking_cleanup(self):
-        self.fixture.deny_authorization_write = True
         self.install()
         self.cleanup()
-        self.assertFalse(self.fixture.trusted)
-        self.assertEqual(self.fixture.right, self.fixture.original_right)
-        self.assertEqual(self.fixture.search, self.fixture.prior)
-        self.assertFalse(self.fixture.keychains)
+        self.security.assert_not_called()
+        self.assertEqual(self.namespace["native_tls_environment"], {})
 
-    def test_existing_admin_trust_is_preserved(self):
-        self.fixture.prior_trust = {"existing": {"trustSettings": [{"result": 1}]}}
+    def test_injection_is_child_only_and_inputs_stay_unchanged(self):
+        before = [path.read_bytes() for path in self.binaries]
         self.install()
+        self.assertNotIn("DYLD_INSERT_LIBRARIES", self.environment)
+        self.assertIn("DYLD_INSERT_LIBRARIES", self.namespace["native_tls_environment"])
         self.cleanup()
-        self.assertEqual(self.fixture.prior_trust, {"existing": {"trustSettings": [{"result": 1}]}})
-        self.assertFalse(self.fixture.trusted)
+        self.assertEqual(before, [path.read_bytes() for path in self.binaries])
+        self.assertEqual(self.namespace["native_tls_environment"], {})
 
-    def test_absent_admin_trust_store_is_preserved(self):
-        self.fixture.missing_trust_store = True
+    def test_changed_artifact_fails_cleanup_and_clears_injection(self):
         self.install()
-        self.cleanup()
-        self.assertFalse(self.fixture.trusted)
-        self.assertEqual(self.fixture.right, self.fixture.original_right)
-
-    def test_export_failure_refuses_install_before_mutation(self):
-        self.fixture.fail_export = True
-        with self.assertRaisesRegex(RuntimeError, "export permission denied"):
-            self.install()
-        self.assertFalse(self.fixture.keychains)
-        self.assertFalse(self.fixture.trusted)
-        self.assertEqual(self.fixture.right, self.fixture.original_right)
+        self.binaries[0].write_bytes(b"changed")
+        with self.assertRaisesRegex(RuntimeError, "changed an input artifact"):
+            self.cleanup()
+        self.assertEqual(self.namespace["native_tls_environment"], {})
 
     def test_primary_failure_survives_cleanup_failure(self):
         self.install()
-        self.fixture.fail_remove = True
+        self.binaries[0].write_bytes(b"changed")
         primary = RuntimeError("primary cutover failure")
-        try:
+        with self.assertRaises(RuntimeError) as caught:
             try:
                 raise primary
             finally:
                 self.cleanup()
-        except RuntimeError as error:
-            self.assertIs(error, primary)
-            self.assertTrue(any("fixture removal failure" in note for note in error.__notes__))
-        else:
-            self.fail("primary failure disappeared")
-        self.assertEqual(self.fixture.right, self.fixture.original_right)
-        self.assertEqual(self.fixture.search, self.fixture.prior)
-        self.assertFalse(self.fixture.keychains)
+        self.assertIs(caught.exception, primary)
+        self.assertTrue(any("changed an input artifact" in note for note in primary.__notes__))
+        self.assertEqual(self.namespace["native_tls_environment"], {})
 
-    def test_cleanup_failure_fails_successful_proof(self):
-        self.install()
-        self.fixture.fail_remove = True
-        with self.assertRaisesRegex(RuntimeError, "fixture removal failure"):
-            self.cleanup()
-        self.assertEqual(self.fixture.right, self.fixture.original_right)
-
-    def test_search_restore_is_read_back(self):
-        self.install()
-        self.fixture.ignore_restore = True
-        with self.assertRaisesRegex(RuntimeError, "search list"):
-            self.cleanup()
-        self.assertEqual(self.fixture.right, self.fixture.original_right)
-        self.assertFalse(self.fixture.keychains)
-
-    def test_keychain_removal_is_read_back(self):
-        self.install()
-        self.fixture.ignore_delete = True
-        with self.assertRaisesRegex(RuntimeError, "keychain.*remov"):
-            self.cleanup()
-        self.assertEqual(self.fixture.right, self.fixture.original_right)
-
-    def test_authorization_restore_is_read_back(self):
-        self.install()
-        self.fixture.ignore_right_restore = True
-        with self.assertRaisesRegex(RuntimeError, "authorization.*restor"):
-            self.cleanup()
-        self.assertFalse(self.fixture.keychains)
-
-    def test_trust_removal_is_read_back(self):
-        self.install()
-        self.fixture.ignore_trust_remove = True
-        with self.assertRaisesRegex(RuntimeError, "trust.*restor"):
-            self.cleanup()
-        self.assertEqual(self.fixture.right, self.fixture.original_right)
-        self.assertFalse(self.fixture.keychains)
-
-    def test_partial_trust_install_is_cleaned(self):
-        self.fixture.fail_add = True
-        with self.assertRaisesRegex(RuntimeError, "partial add failure"):
+    def test_setup_error_retains_original_failure(self):
+        primary = RuntimeError("original TLS verification failure")
+        self.prepare.side_effect = primary
+        with self.assertRaises(RuntimeError) as caught:
             try:
                 self.install()
             finally:
                 self.cleanup()
-        self.assertFalse(self.fixture.trusted)
-        self.assertEqual(self.fixture.search, self.fixture.prior)
-        self.assertEqual(self.fixture.right, self.fixture.original_right)
-        self.assertFalse(self.fixture.keychains)
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(self.namespace["native_tls_environment"], {})
+        self.security.assert_not_called()
 
-    def test_guard_refuses_non_ci_runner_before_security(self):
-        self.namespace["os"].environ = {}
+    def test_guard_refuses_non_ci_runner_before_setup(self):
+        self.environment.clear()
         with self.assertRaisesRegex(RuntimeError, "disposable GitHub"):
             self.install()
-        self.assertEqual(self.fixture.calls, [])
+        self.prepare.assert_not_called()
+        self.security.assert_not_called()
+
+    def test_linux_needs_no_native_injection(self):
+        self.namespace["OLD_BUILD"]["platform"]["os"] = "linux"
+        self.install()
+        self.cleanup()
+        self.prepare.assert_not_called()
+        self.assertEqual(self.namespace["native_tls_environment"], {})
+
+
+@unittest.skipUnless(sys.platform == "linux", "Darwin controls run inside the native cutover fixture")
+class TLSControlsTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
+        cls.root = Path(cls.temp.name)
+        fixture_certificates(cls.root)
+        (cls.root / "empty-certs").mkdir()
+        cls.probe = cls.root / "tls-probe"
+        subprocess.run(["go", "build", "-o", str(cls.probe), str(SOURCES / "probe")],
+                       check=True, capture_output=True, timeout=60)
+        cls.environment = os.environ | {"SSL_CERT_FILE": str(cls.root / "cert.pem"),
+            "SSL_CERT_DIR": str(cls.root / "empty-certs")}
+
+    def test_fixture_ca_is_trusted(self):
+        probe_tls(self.root, self.probe, self.environment, "server.pem", "server.key", "trusted")
+
+    def test_wrong_ca_is_rejected(self):
+        probe_tls(self.root, self.probe, self.environment, "wrong-ca-server.pem", "server.key", "authority")
+
+    def test_self_signed_leaf_is_rejected(self):
+        probe_tls(self.root, self.probe, self.environment, "self-signed.pem", "self-signed.key", "authority")
+
+    def test_wrong_hostname_is_rejected(self):
+        probe_tls(self.root, self.probe, self.environment, "wrong-host.pem", "wrong-host.key", "hostname")
+
+    def test_missing_fixture_ca_retains_tls_error(self):
+        environment = self.environment | {"SSL_CERT_FILE": str(self.root / "missing.pem")}
+        probe_tls(self.root, self.probe, environment, "server.pem", "server.key", "authority")
 
 
 if __name__ == "__main__":

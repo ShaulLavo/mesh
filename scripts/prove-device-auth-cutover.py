@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 sys.dont_write_bytecode = True
+fixture_tls = importlib.import_module("fixtures.native_tls")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integration" / "helpers"))
 controls = importlib.import_module("mesh_control")
 terminals = importlib.import_module("terminal_window")
@@ -208,6 +209,7 @@ sys.exit(data["status"])
             "HTTPS_PROXY": "http://127.0.0.1:" + str(proxy), "HTTP_PROXY": "http://127.0.0.1:" + str(proxy),
             "NO_PROXY": "127.0.0.1,localhost", "SSL_CERT_FILE": str(ROOT / "cert.pem"), "SSL_CERT_DIR": str(ROOT / "empty-certs"),
             "PYTHONDONTWRITEBYTECODE": "1"})
+        self.environment.update(native_tls_environment)
         Path(self.environment["XDG_RUNTIME_DIR"]).mkdir(mode=0o700)
         if OLD_BUILD["platform"]["os"] == "darwin":
             agents = self.home / "Library" / "LaunchAgents"
@@ -381,13 +383,10 @@ sys.exit(data["status"])
 
 for binary in (OLD, NEW, FLEET, CONTROL_CLIENT):
     require(binary.is_file() and os.access(binary, os.X_OK), "proof requires executable inputs")
-(ROOT / "openssl.cnf").write_text("[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
-    "[dn]\nCN=github.com\n[ext]\nsubjectAltName=DNS:github.com,DNS:api.github.com\n")
-subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(ROOT / "key.pem"),
-    "-out", str(ROOT / "cert.pem"), "-days", "1", "-config", str(ROOT / "openssl.cnf")], check=True, capture_output=True)
+fixture_tls.fixture_certificates(ROOT)
 (ROOT / "empty-certs").mkdir(exist_ok=True)
 TLS = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-TLS.load_cert_chain(ROOT / "cert.pem", ROOT / "key.pem")
+TLS.load_cert_chain(ROOT / "server.pem", ROOT / "server.key")
 OLD_BUILD = version(OLD)
 native_platform = {"os": platform.system().lower(), "arch": {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine())}
 require(OLD_BUILD["platform"] == version(NEW)["platform"] == version(FLEET)["platform"] == native_platform,
@@ -402,78 +401,23 @@ for server in (proxy, services):
     threading.Thread(target=server.serve_forever, daemon=True).start()
 hosts = []
 trust_cleanup = []
+native_tls_environment = {}
 
 def install_native_fixture_trust():
     if OLD_BUILD["platform"]["os"] != "darwin":
         return
-    # Go uses macOS SecTrust, which ignores process SSL_CERT_FILE. Restrict temporary
-    # fixture trust to disposable hosted CI; never alter an owner's Mac keychains.
     require(os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_OS") == "macOS",
-            "Darwin HTTPS fixture trust requires a disposable GitHub macOS runner")
-    keychain = str(ROOT / "fixture.keychain-db")
-    prior = shlex.split(subprocess.check_output(["security", "list-keychains", "-d", "user"]).decode())
-    def security(*args, administrator=False, data=None, checked=True):
-        command = ["sudo", "-n", "security"] if administrator else ["security"]
-        result = subprocess.run([*command, *args], input=data, check=False, capture_output=True, timeout=15)
-        if checked:
-            require(result.returncode == 0, "native fixture trust " + args[0] + ": " + result.stderr.decode(errors="replace"))
-        return result
+            "Darwin TLS fixture requires a disposable GitHub macOS runner")
+    binaries = (OLD, NEW, FLEET, CONTROL_CLIENT)
+    original = {binary: digest(binary.read_bytes()) for binary in binaries}
 
-    def trust_settings(name):
-        destination = ROOT / name
-        result = security("trust-settings-export", "-d", str(destination), checked=False)
-        if result.returncode != 0:
-            require(b"-25263" in result.stderr or b"No Trust Settings were found" in result.stderr,
-                    "native fixture trust export: " + result.stderr.decode(errors="replace"))
-            return {}
-        settings = plistlib.loads(destination.read_bytes())
-        require(isinstance(settings, dict) and isinstance(settings.get("trustList"), dict),
-                "native fixture trust export has an invalid trust list")
-        return settings["trustList"]
+    def verify_artifacts():
+        native_tls_environment.clear()
+        require(all(digest(binary.read_bytes()) == value for binary, value in original.items()),
+                "native TLS fixture changed an input artifact")
 
-    def remove_keychain():
-        security("delete-keychain", keychain)
-        require(not Path(keychain).exists(), "native fixture keychain removal did not remove its file")
-
-    def restore_search():
-        security("list-keychains", "-d", "user", "-s", *prior)
-        restored = shlex.split(security("list-keychains", "-d", "user").stdout.decode())
-        require(restored == prior, "native fixture keychain search list was not restored")
-
-    right = "com.apple.trust-settings.admin"
-    original_right = security("authorizationdb", "read", right, administrator=True).stdout
-    original_trust = trust_settings("trust-before.plist")
-
-    def authorization_policy(data):
-        # Security rewrites bookkeeping timestamps when restoring the same rule.
-        policy = plistlib.loads(data)
-        require(isinstance(policy, dict), "native fixture trust authorization policy is invalid")
-        return {key: value for key, value in policy.items() if key not in ("created", "modified")}
-
-    original_policy = authorization_policy(original_right)
-
-    def restore_authorization():
-        security("authorizationdb", "write", right, administrator=True, data=original_right)
-        restored = security("authorizationdb", "read", right, administrator=True).stdout
-        require(authorization_policy(restored) == original_policy,
-                "native fixture trust authorization policy was not restored")
-
-    def remove_trust():
-        # Removing the last admin record lacks SecTrust's root-only addition exemption
-        # and requests GUI authorization even under sudo. Scope this rule to CI cleanup.
-        security("authorizationdb", "write", right, "allow", administrator=True)
-        security("remove-trusted-cert", "-d", str(ROOT / "cert.pem"), administrator=True)
-        require(trust_settings("trust-after.plist") == original_trust,
-                "native fixture admin trust settings were not restored")
-
-    trust_cleanup.append(remove_keychain)
-    security("create-keychain", "-p", "", keychain)
-    security("unlock-keychain", "-p", "", keychain)
-    trust_cleanup.append(restore_search)
-    security("list-keychains", "-d", "user", "-s", keychain, *prior)
-    trust_cleanup.extend((restore_authorization, remove_trust))
-    security("add-trusted-cert", "-d", "-r", "trustRoot", "-k", keychain, str(ROOT / "cert.pem"), administrator=True)
-    event("fixture-trust", provider="macOS temporary keychain with runner-only admin trust")
+    trust_cleanup.append(verify_artifacts)
+    native_tls_environment.update(fixture_tls.prepare_native_tls(ROOT, binaries, event))
 
 
 def cleanup_native_fixture_trust(primary_error):
@@ -485,7 +429,7 @@ def cleanup_native_fixture_trust(primary_error):
             cleanup_errors.append(str(error))
     if not cleanup_errors:
         if trust_cleanup:
-            event("fixture-trust-restored", adminTrust=True, authorizationPolicy=True, searchList=True, keychainRemoved=True)
+            event("fixture-trust-restored", trustStoreModified=False, unchangedArtifacts=True, childInjectionCleared=True)
         return
     message = "native fixture trust cleanup: " + repr(cleanup_errors)
     if primary_error is not None:

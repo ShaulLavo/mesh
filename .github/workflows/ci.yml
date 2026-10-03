@@ -95,7 +95,7 @@ jobs:
         env:
           REQUIRED_PLATFORM: ${{ matrix.platform }}
         run: test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$REQUIRED_PLATFORM"
-      - name: Verify fixture trust restoration
+      - name: Verify fixture TLS boundaries
         run: python3 scripts/test-fixture-trust.py
       - name: Verify native authentication regressions
         run: |
