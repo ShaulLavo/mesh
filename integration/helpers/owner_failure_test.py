@@ -46,8 +46,8 @@ class OwnerFailureTest(unittest.TestCase):
         log = self.record(self.marker)
         malformed = {
             "unescaped quotes": log.replace(r'\"echo BROKEN_OUTPUT_MARKER; exit 7\"', '"echo BROKEN_OUTPUT_MARKER; exit 7"'),
-            "raw newline": log.replace(r"\n\nlast output:", "\n\nlast output:"),
-            "raw tab": log.replace("last output:", "last\toutput:"),
+            "raw newline": log.replace("status 7", "status\n7"),
+            "raw tab": log.replace("status 7", "status\t7"),
             "invalid escape": log.replace("last output:", r"\qlast output:"),
             "missing closing quote": log[:-2] + "\n",
             "trailing text": log[:-1] + " trailing\n",
