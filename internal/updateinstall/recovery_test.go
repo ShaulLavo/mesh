@@ -208,14 +208,14 @@ func TestHelperKeepsIndependentBinaryAndPreservesExistingServiceConfiguration(t 
 	if err := os.WriteFile(filepath.Join(cfg.ServiceDir, "mesh.service"), custom, 0600); err != nil {
 		t.Fatal(err)
 	}
-	first, err := PrepareHelper(cfg)
+	first, err := PrepareHelper(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = os.WriteFile(source, testExecutable("v0.2.0"), 0755); err != nil { //nolint:gosec // executable test fixture
 		t.Fatal(err)
 	}
-	again, err := PrepareHelper(cfg)
+	again, err := PrepareHelper(t.Context(), cfg)
 	if err != nil || first.Executable != again.Executable {
 		t.Fatalf("uncommitted helper replacement: %+v %v", again, err)
 	}

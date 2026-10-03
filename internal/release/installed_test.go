@@ -1,6 +1,7 @@
 package release
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -56,8 +57,8 @@ func TestVerifyExecutableMatchesImageAndCancellation(t *testing.T) {
 	if err := VerifyExecutable(t.Context(), path, testDigest(contents)); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyExecutable(t.Context(), path, "other image"); err == nil {
-		t.Fatal("accepted wrong image")
+	if err := VerifyExecutable(t.Context(), path, "other image"); !errors.Is(err, ErrExecutableChecksumMismatch) {
+		t.Fatalf("wrong image lost integrity classification: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -72,4 +73,31 @@ func TestVerifyExecutableMatchesImageAndCancellation(t *testing.T) {
 	if _, err := (executableReader{ctx: ctx, file: file}).Read(make([]byte, 1)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("reader ignored cancellation: %v", err)
 	}
+}
+
+func TestCopyExecutableMatchesImageAndCancellation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mesh")
+	contents := make([]byte, 96<<10)
+	if err := os.WriteFile(path, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var destination bytes.Buffer
+	if err := CopyExecutable(t.Context(), path, testDigest(contents), &destination); err != nil || !bytes.Equal(contents, destination.Bytes()) {
+		t.Fatalf("verified copy differs: %v", err)
+	}
+	if err := CopyExecutable(t.Context(), path, "other image", &destination); !errors.Is(err, ErrExecutableChecksumMismatch) {
+		t.Fatalf("staged wrong image lost integrity classification: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := CopyExecutable(ctx, path, testDigest(contents), cancelImageWriter{cancel: cancel}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("copy hash ignored cancellation: %v", err)
+	}
+}
+
+type cancelImageWriter struct{ cancel context.CancelFunc }
+
+func (w cancelImageWriter) Write(data []byte) (int, error) {
+	w.cancel()
+	return len(data), nil
 }

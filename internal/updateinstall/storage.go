@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaul/mesh/internal/release"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -176,25 +178,15 @@ func verifyFile(path, expected string) error {
 	return nil
 }
 
-func durableCopy(source, destination, expected string) error {
-	in, err := os.Open(source) //nolint:gosec // source is the approved executable or a checksum-verified staged copy
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
+func durableCopy(ctx context.Context, source, destination, expected string) error {
 	file, err := os.CreateTemp(filepath.Dir(destination), ".mesh-copy-*")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(file.Name()) }()
-	hash := sha256.New()
-	if _, err = io.Copy(io.MultiWriter(file, hash), in); err != nil {
+	if err = release.CopyExecutable(ctx, source, expected, file); err != nil {
 		_ = file.Close()
-		return err
-	}
-	if hex.EncodeToString(hash.Sum(nil)) != expected {
-		_ = file.Close()
-		return errors.New("source changed while staging executable")
+		return fmt.Errorf("stage executable: %w", err)
 	}
 	if err = file.Chmod(0755); err != nil {
 		_ = file.Close()
