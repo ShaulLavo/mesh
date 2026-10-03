@@ -24,6 +24,7 @@ type goAwayConnectionKey struct{}
 type goAwayFixture struct {
 	server      *httptest.Server
 	calls       atomic.Int32
+	posts       atomic.Int32
 	connections atomic.Int32
 	disconnect  atomic.Bool
 	alwaysFail  atomic.Bool
@@ -41,6 +42,9 @@ func newGoAwayFixture(t *testing.T, contents []byte, redirect bool) *goAwayFixtu
 			return
 		}
 		fixture.calls.Add(1)
+		if r.Method == http.MethodPost {
+			fixture.posts.Add(1)
+		}
 		if fixture.disconnect.Swap(false) || fixture.alwaysFail.Load() {
 			conn := r.Context().Value(goAwayConnectionKey{}).(net.Conn)
 			framer := http2.NewFramer(conn, conn)
@@ -109,23 +113,30 @@ func TestHTTP2GoAwayUnknownRetryIsBounded(t *testing.T) {
 }
 
 func TestArchiveRecoversAcceptedHTTP2GoAwayBeforeHeaders(t *testing.T) {
-	binary := []byte("mesh-test-binary")
-	archive := testArchive(t, binary)
-	fixture := newGoAwayFixture(t, archive, false)
-	client := Client{BaseURL: fixture.server.URL, HTTPClient: fixture.server.Client()}
-	manifest := testManifestForArchive(binary, archive)
-	platform := Platform{OS: "linux", Arch: "amd64"}
-	if _, err := client.Download(context.Background(), manifest, platform, t.TempDir()); err != nil {
-		t.Fatalf("known-good HTTP/2 archive: %v", err)
-	}
-	fixture.disconnect.Store(true)
-	path, err := client.Download(context.Background(), manifest, platform, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	contents, err := os.ReadFile(path) //nolint:gosec // Download returned a path inside the test cache
-	if err != nil || !bytes.Equal(contents, binary) || fixture.calls.Load() != 3 || fixture.connections.Load() != 2 {
-		t.Fatalf("GOAWAY archive recovery: binary %q, error %v, requests %d, connections %d", contents, err, fixture.calls.Load(), fixture.connections.Load())
+	for _, tc := range []struct {
+		name     string
+		redirect bool
+	}{{name: "direct"}, {name: "redirected", redirect: true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			binary := []byte("mesh-test-binary")
+			archive := testArchive(t, binary)
+			fixture := newGoAwayFixture(t, archive, tc.redirect)
+			client := Client{BaseURL: fixture.server.URL, HTTPClient: fixture.server.Client()}
+			manifest := testManifestForArchive(binary, archive)
+			platform := Platform{OS: "linux", Arch: "amd64"}
+			if _, err := client.Download(context.Background(), manifest, platform, t.TempDir()); err != nil {
+				t.Fatalf("known-good HTTP/2 archive: %v", err)
+			}
+			fixture.disconnect.Store(true)
+			path, err := client.Download(context.Background(), manifest, platform, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			contents, err := os.ReadFile(path) //nolint:gosec // Download returned a path inside the test cache
+			if err != nil || !bytes.Equal(contents, binary) || fixture.calls.Load() != 3 || fixture.connections.Load() != 2 {
+				t.Fatalf("GOAWAY archive recovery: binary %q, error %v, requests %d, connections %d", contents, err, fixture.calls.Load(), fixture.connections.Load())
+			}
+		})
 	}
 }
 
@@ -258,5 +269,30 @@ func TestPermanentDNSFailureStaysTerminal(t *testing.T) {
 	var dns *net.DNSError
 	if !errors.As(err, &dns) || calls.Load() != 1 {
 		t.Fatalf("permanent DNS failure retried: %v, dials %d", err, calls.Load())
+	}
+}
+
+func TestHTTP2RedirectCallbackCannotChangeDownloadMethod(t *testing.T) {
+	contents, err := json.Marshal(testManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := newGoAwayFixture(t, contents, true)
+	httpClient := fixture.server.Client()
+	client := Client{BaseURL: fixture.server.URL, HTTPClient: httpClient}
+	if manifest, err := client.Manifest(context.Background(), "v0.2.0"); err != nil || manifest.Version != "v0.2.0" || fixture.calls.Load() != 1 || fixture.posts.Load() != 0 {
+		t.Fatalf("known-good redirected HTTP/2 GET: version %q, error %v, requests %d, POSTs %d", manifest.Version, err, fixture.calls.Load(), fixture.posts.Load())
+	}
+	var redirects atomic.Int32
+	httpClient.CheckRedirect = func(request *http.Request, _ []*http.Request) error {
+		redirects.Add(1)
+		request.Method = http.MethodPost
+		return nil
+	}
+	fixture.disconnect.Store(true)
+	_, err = client.Manifest(context.Background(), "v0.2.0")
+	var policy *downloadRedirectError
+	if !errors.As(err, &policy) || redirects.Load() != 1 || fixture.posts.Load() != 0 || fixture.calls.Load() != 1 {
+		t.Fatalf("method-changing callback escaped terminal GET policy: error %v, callbacks %d, requests %d, POSTs %d", err, redirects.Load(), fixture.calls.Load(), fixture.posts.Load())
 	}
 }
