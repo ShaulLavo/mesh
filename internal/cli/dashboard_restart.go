@@ -5,9 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/updateinstall"
+)
+
+const (
+	dashboardHandoffTimeout = 1500 * time.Millisecond
+	// Helper replacement can hold the lock through a ten-second journal probe.
+	dashboardSettlementTimeout = 15 * time.Second
 )
 
 type dashboardRestart struct {
@@ -36,13 +43,25 @@ func (r dashboardRestart) run(ctx context.Context, input DashboardInput, dashboa
 	}
 	// The terminal runner restores modes and joins its readers before returning.
 	if target.err == nil {
-		target.err = r.exec(ctx, target.build, target.path, r.argv, r.env)
+		target.err = r.handoff(ctx, target, dashboardHandoffTimeout)
+		if errors.Is(target.err, updateinstall.ErrHandoffTimeout) && ctx.Err() == nil {
+			target.err = r.handoff(ctx, target, dashboardSettlementTimeout)
+		}
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("dashboard restart canceled: %w", ctx.Err())
 	}
 	if target.err == nil {
 		return nil
 	}
 	input.Notice = "Dashboard restart failed: " + dashboardText(target.err.Error())
 	return dashboard(ctx, input)
+}
+
+func (r dashboardRestart) handoff(ctx context.Context, target *dashboardRestartTarget, timeout time.Duration) error {
+	handoff, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return r.exec(handoff, target.build, target.path, r.argv, r.env)
 }
 
 func (r dashboardRestart) watchForRestart(watch DashboardWatch, cancel context.CancelFunc) (DashboardWatch, *dashboardRestartTarget) {
