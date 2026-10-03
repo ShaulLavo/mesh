@@ -95,7 +95,9 @@ before the coordinator adopts authenticated network controls.
 The TLS peer is an Ed25519 key, verified by possession during TLS 1.3 and matched
 to an owner-controlled pin or grant. Certificate names, public CAs and certificate
 dates do not grant or remove Mesh authority. An encrypted acceptance byte lets
-the client observe the server's grant decision before a control dial succeeds.
+the client observe the server's full-device or update-only grant before a dial
+succeeds. Ordinary clients reject update-only approval before sending controls;
+the signed updater opts into that narrower scope.
 Handshake admission has a five-second deadline and a 64 KiB inbound budget;
 reconnections perform a fresh handshake with session tickets disabled.
 

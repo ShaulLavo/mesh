@@ -346,12 +346,8 @@ func ServeWithOptions(w http.ResponseWriter, r *http.Request, opts ServeOptions,
 
 	var handlerConn Conn = batched
 	if opts.Auth != nil {
-		allowed := func() bool { return opts.Auth.Authorize(peer.Identity) }
-		if opts.Auth.Retain != nil {
-			allowed = opts.Auth.Retain(peer.Identity)
-		}
-		handlerConn = &authorizedConn{Conn: batched, auth: opts.Auth, peer: peer, allowed: allowed}
-		go conn.watchAuthorization(allowed)
+		handlerConn = &authorizedConn{Conn: batched, grant: peer.grant}
+		go conn.watchAuthorization(peer.grant.Current)
 	}
 	handlerErr := h(ctx, handlerConn)
 	flushErr := batched.Flush()

@@ -19,21 +19,20 @@ func controlAuthentication(stateDir string) (*transport.Authentication, error) {
 	return &transport.Authentication{
 		Key:       key,
 		Authorize: func(id string) bool { return granted(id) || updates.IsAdministrator(id) },
-		Retain: func(id string) func() bool {
+		Bind: func(id string) transport.Authorization {
 			if granted(id) {
-				return func() bool { return granted(id) }
+				return transport.Authorization{Full: true, Current: func() bool { return granted(id) }}
 			}
-			return func() bool { return updates.IsAdministrator(id) }
-		},
-		Admit: func(id string, frame protocol.Frame) bool {
-			if granted(id) {
-				return true
+			return transport.Authorization{
+				Current: func() bool { return updates.IsAdministrator(id) },
+				Admit: func(frame protocol.Frame) bool {
+					if frame.Kind != protocol.KindControl {
+						return false
+					}
+					control, err := protocol.DecodeControl(frame.Payload)
+					return err == nil && control.Type == update.ControlType
+				},
 			}
-			if frame.Kind != protocol.KindControl || !updates.IsAdministrator(id) {
-				return false
-			}
-			control, err := protocol.DecodeControl(frame.Payload)
-			return err == nil && control.Type == update.ControlType
 		},
 	}, nil
 }

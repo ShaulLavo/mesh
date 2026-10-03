@@ -36,12 +36,33 @@ type Authentication struct {
 	Key              ed25519.PrivateKey
 	ExpectedIdentity string
 	Authorize        func(string) bool
-	Admit            func(string, protocol.Frame) bool
-	// Other authority must not keep a revoked full-device socket alive.
-	Retain func(string) func() bool
+	Bind             func(string) Authorization
+	AllowUpdateOnly  bool
 }
 
-type AuthenticatedPeer struct{ Identity string }
+// Authorization binds a socket to its original grant and its permitted frames.
+// Separate updater authority cannot keep a revoked terminal attachment alive.
+type Authorization struct {
+	Full    bool
+	Current func() bool
+	Admit   func(protocol.Frame) bool
+}
+
+func (a Authorization) Allows(frame protocol.Frame) bool {
+	return a.Current != nil && a.Current() && (a.Admit == nil || a.Admit(frame))
+}
+
+func (a *Authentication) bind(id string) Authorization {
+	if a.Bind != nil {
+		return a.Bind(id)
+	}
+	return Authorization{Full: true, Current: func() bool { return a.Authorize(id) }}
+}
+
+type AuthenticatedPeer struct {
+	Identity string
+	grant    Authorization
+}
 type peerKey struct{}
 
 func Peer(ctx context.Context) (AuthenticatedPeer, bool) {
@@ -182,7 +203,12 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 		_ = ws.CloseNow()
 		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: %w", ErrAuthentication, err)
 	}
-	if err := confirmAuthentication(secure, server); err != nil {
+	key := secure.ConnectionState().PeerCertificates[0].PublicKey.(ed25519.PublicKey)
+	peer := AuthenticatedPeer{Identity: base64.RawURLEncoding.EncodeToString(key)}
+	if server {
+		peer.grant = auth.bind(peer.Identity)
+	}
+	if err := confirmAuthentication(secure, auth, server, peer); err != nil {
 		_ = ws.CloseNow()
 		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: %w", ErrAuthentication, err)
 	}
@@ -192,15 +218,21 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 	}
 	raw.remaining = -1
 	ws.SetReadLimit(protocol.MaxPayload + protocolHeaderSize)
-	key := secure.ConnectionState().PeerCertificates[0].PublicKey.(ed25519.PublicKey)
-	return secure, AuthenticatedPeer{Identity: base64.RawURLEncoding.EncodeToString(key)}, nil
+	return secure, peer, nil
 }
 
 // TLS 1.3 can return to a client before the server checks its certificate.
 // An encrypted acceptance byte makes denial permanent before Dial returns.
-func confirmAuthentication(secure *tls.Conn, server bool) error {
+func confirmAuthentication(secure *tls.Conn, auth *Authentication, server bool, peer AuthenticatedPeer) error {
 	if server {
-		if _, err := secure.Write([]byte{1}); err != nil {
+		if peer.grant.Current == nil || !peer.grant.Current() {
+			return errors.New("transport: device grant removed during authentication")
+		}
+		acceptance := byte(1)
+		if !peer.grant.Full {
+			acceptance = 2
+		}
+		if _, err := secure.Write([]byte{acceptance}); err != nil {
 			return fmt.Errorf("confirm approved Mesh peer: %w", err)
 		}
 		return nil
@@ -209,7 +241,10 @@ func confirmAuthentication(secure *tls.Conn, server bool) error {
 	if _, err := io.ReadFull(secure, accepted[:]); err != nil {
 		return fmt.Errorf("read Mesh peer acceptance: %w", err)
 	}
-	if accepted[0] != 1 {
+	if accepted[0] == 2 && !auth.AllowUpdateOnly {
+		return errors.New("transport: device has signed-update access; full device approval required")
+	}
+	if accepted[0] != 1 && accepted[0] != 2 {
 		return errors.New("transport: invalid Mesh peer acceptance")
 	}
 	return nil
@@ -226,9 +261,7 @@ func containsAuthProtocol(r *http.Request) bool {
 
 type authorizedConn struct {
 	Conn
-	auth    *Authentication
-	peer    AuthenticatedPeer
-	allowed func() bool
+	grant Authorization
 }
 
 func (c *authorizedConn) ReadFrame() (protocol.Frame, error) {
@@ -236,7 +269,7 @@ func (c *authorizedConn) ReadFrame() (protocol.Frame, error) {
 	if err != nil {
 		return protocol.Frame{}, fmt.Errorf("transport: read authenticated frame: %w", err)
 	}
-	if !c.allowed() || c.auth.Admit != nil && !c.auth.Admit(c.peer.Identity, frame) {
+	if !c.grant.Allows(frame) {
 		_ = c.Close()
 		return protocol.Frame{}, errors.New("transport: device grant revoked or control denied")
 	}

@@ -32,7 +32,9 @@ func benchmarkAuthentication(b *testing.B, mode string, checks *atomic.Int64) (*
 	}
 	serverAuth := &Authentication{Key: serverKey, Authorize: authorize}
 	if mode == "tls-grants" {
-		serverAuth.Admit = func(id string, _ protocol.Frame) bool { return authorize(id) }
+		serverAuth.Bind = func(id string) Authorization {
+			return Authorization{Full: true, Current: func() bool { return authorize(id) }}
+		}
 	}
 	return serverAuth, &Authentication{Key: clientKey, ExpectedIdentity: serverID}
 }
