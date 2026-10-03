@@ -6,6 +6,7 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+python3 "$repo_root/scripts/test-device-auth-cutover.py"
 mkdir -p "$1"
 output=$(cd -- "$1" && pwd)
 # Native Unix sockets need a short path on Darwin's hosted runner.
