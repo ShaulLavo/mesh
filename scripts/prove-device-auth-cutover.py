@@ -159,7 +159,7 @@ class ServiceHandler(socketserver.StreamRequestHandler):
                 elif action in ("start", "enable"):
                     host.start(unit)
                 elif action == "restart" and "--no-block" in args:
-                    threading.Timer(0.2, host.restart, args=[unit]).start()
+                    host.queue_restart(unit)
                 else:
                     raise RuntimeError("unsupported fixture service action")
         except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
@@ -227,6 +227,7 @@ sys.exit(data["status"])
             self.plist.write_text(template)
             self.service_plists = {"mesh.service": self.plist}
         self.processes = {}
+        self.restarts = []
         self.logs = []
         self.terminals = []
         self.workers = []
@@ -270,7 +271,7 @@ sys.exit(data["status"])
         if action == "bootout":
             self.stop(unit)
         else:
-            threading.Timer(0.2, self.restart, args=[unit]).start()
+            self.queue_restart(unit)
         return 0, ""
 
     def start(self, unit):
@@ -311,6 +312,12 @@ sys.exit(data["status"])
     def restart(self, unit):
         self.stop(unit)
         self.start(unit)
+
+    def queue_restart(self, unit):
+        restart = threading.Timer(0.2, self.restart, args=[unit])
+        with LOCK:
+            self.restarts.append(restart)
+            restart.start()
 
     def control(self, kind):
         return round_trip(str(self.state / "daemon.sock"), {"type": kind, "requestId": "cutover-proof"})
@@ -466,6 +473,14 @@ for server in (proxy, services):
 hosts = []
 
 
+def wait_for_restarts():
+    with LOCK:
+        pending = [restart for host in hosts for restart in host.restarts]
+    for restart in pending:
+        restart.join(timeout=10)
+        require(not restart.is_alive(), "fixture service restart did not finish")
+
+
 def local_cutover(host, target):
     prior_id = host.id
     before = len(EVENTS)
@@ -481,6 +496,7 @@ def local_cutover(host, target):
     host.check_retained()
     host.prove_loaded_image(target)
     host.check_io()
+    wait_for_restarts()
     touched = {row["host"] for row in EVENTS[before:] if row["kind"] in ("start", "stop")}
     require(touched == {host.name}, "local update changed another installation: " + repr(touched))
     print("PASS real local cutover", host.name, target["version"], "worker", host.worker_pid, "shell", host.shell_pid, flush=True)
