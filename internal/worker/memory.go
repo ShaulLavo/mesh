@@ -1,9 +1,12 @@
 package worker
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
 	"runtime"
 	"runtime/debug"
+	"syscall"
 
 	"github.com/charmbracelet/x/xpty"
 )
@@ -35,11 +38,23 @@ func TuneProcess() {
 // faulted, and the restored opt-out keeps khugepaged from collapsing it again.
 func startSession(pty xpty.Pty, cmd *exec.Cmd) error {
 	if !hugePagesDisabled() {
-		return pty.Start(cmd)
+		return sessionStartError(cmd.Path, pty.Start(cmd))
 	}
 	setHugePages(true)
 	err := pty.Start(cmd)
 	setHugePages(false)
 	debug.FreeOSMemory()
-	return err
+	return sessionStartError(cmd.Path, err)
+}
+
+func sessionStartError(path string, err error) error {
+	if err == nil {
+		return nil
+	}
+	// Go's child-error pipe carries errno, not the failing pre-exec syscall.
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return fmt.Errorf("child-start path=%q errno=%d stage=unavailable: %w", path, uint64(errno), err)
+	}
+	return fmt.Errorf("child-start path=%q errno=unavailable stage=unavailable: %w", path, err)
 }
