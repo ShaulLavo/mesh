@@ -57,7 +57,9 @@ Run approval and revocation on the destination through trusted system SSH or its
 local terminal. Compare the identity and SHA256 fingerprint through that trusted
 channel before approval. Grant mutation and frame admission share a lock: frames
 admitted after revocation are denied immediately; previously admitted work may
-finish. Idle SSH and control connections close when the next 250 ms grant check observes
+finish. Connections bind the approved key line's incarnation; revoking and
+immediately reapproving that key retires old attachments and permits new ones.
+Idle SSH and control connections close when the next 250 ms grant check observes
 revocation. Commands and their detached workers remain available to other approved
 devices. Existing update-administrator grants are managed separately.
 An unknown or changed destination key requires explicit re-enrollment through

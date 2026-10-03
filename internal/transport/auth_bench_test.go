@@ -23,8 +23,9 @@ func benchmarkAuthentication(b *testing.B, mode string, checks *atomic.Int64) (*
 	serverID, serverKey := authIdentity(b)
 	clientID, clientKey := authIdentity(b)
 	authorize := func(id string) bool { checks.Add(1); return id == clientID }
+	state := ""
 	if mode == "tls-grants" {
-		state := b.TempDir()
+		state = b.TempDir()
 		if err := identity.ApproveDevice(state, clientID); err != nil {
 			b.Fatal(err)
 		}
@@ -33,7 +34,8 @@ func benchmarkAuthentication(b *testing.B, mode string, checks *atomic.Int64) (*
 	serverAuth := &Authentication{Key: serverKey, Authorize: authorize}
 	if mode == "tls-grants" {
 		serverAuth.Bind = func(id string) Authorization {
-			return Authorization{Full: true, Current: func() bool { return authorize(id) }}
+			current, ok := identity.BindIdentity(state, id)
+			return Authorization{Full: ok, Current: func() bool { checks.Add(1); return ok && current() }}
 		}
 	}
 	return serverAuth, &Authentication{Key: clientKey, ExpectedIdentity: serverID}

@@ -93,3 +93,46 @@ func TestDeviceGrantsFailClosed(t *testing.T) {
 		t.Fatal("symlink accepted")
 	}
 }
+
+func TestGrantIncarnationSurvivesIdempotentApprovalAndOtherDeviceMutation(t *testing.T) {
+	state := t.TempDir()
+	first, _, err := LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApproveDevice(state, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	prior, ok := BindIdentity(state, first.ID)
+	if !ok {
+		t.Fatal("approved grant did not bind")
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		if err := ApproveDevice(state, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := RevokeDevice(state, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !prior() {
+		t.Fatal("idempotent approval or another device mutation retired original grant")
+	}
+	if err := RevokeDevice(state, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApproveDevice(state, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if prior() {
+		t.Fatal("new approval healed old grant")
+	}
+	current, ok := BindIdentity(state, first.ID)
+	if !ok || !current() {
+		t.Fatal("new approval did not grant fresh access")
+	}
+}

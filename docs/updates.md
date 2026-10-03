@@ -81,6 +81,14 @@ administrator does not grant session controls, SSH access or service management.
 Use `mesh device approve` locally on each destination for that full daemon-account
 grant. Removing a device grant leaves a separately enrolled update administrator
 able to reconnect for signed update controls; the full-device connection retires.
+Each newly approved key line receives a unique grant-incarnation comment in
+`authorized_keys`. Connections capture that line identity under the admission
+lock. Immediate same-key reapproval creates a fresh incarnation: old control
+and SSH attachments retire even if no poll sampled the absent membership, and
+new connections use the new grant. Repeating approval of an existing full grant
+preserves its incarnation; another device mutation leaves it unchanged. Use
+`mesh device revoke` for retirement. Replacing policy files with an identical
+earlier copy can restore the same line identity and is an owner-account action.
 Edit the destination's local administrator policy when withdrawing that authority
 too.
 

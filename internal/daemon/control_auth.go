@@ -20,8 +20,8 @@ func controlAuthentication(stateDir string) (*transport.Authentication, error) {
 		Key:       key,
 		Authorize: func(id string) bool { return granted(id) || updates.IsAdministrator(id) },
 		Bind: func(id string) transport.Authorization {
-			if granted(id) {
-				return transport.Authorization{Full: true, Current: func() bool { return granted(id) }}
+			if current, ok := identity.BindIdentity(stateDir, id); ok {
+				return transport.Authorization{Full: true, Current: current}
 			}
 			return transport.Authorization{
 				Current: func() bool { return updates.IsAdministrator(id) },

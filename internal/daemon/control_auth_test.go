@@ -302,3 +302,79 @@ func TestDeviceReapprovalCannotHealPriorGrantLifetime(t *testing.T) {
 		t.Fatal("new grant did not admit a fresh connection")
 	}
 }
+
+func TestReapprovedDeviceRetiresActiveAndPassiveSockets(t *testing.T) {
+	state := t.TempDir()
+	host, _, err := identity.LoadOrCreate(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor, key, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := update.Trust(state, actor.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := controlAuthentication(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: auth}, func(_ context.Context, conn transport.Conn) error {
+			for {
+				frame, err := conn.ReadFrame()
+				if err != nil {
+					return fmt.Errorf("grant fixture read: %w", err)
+				}
+				if err := conn.WriteFrame(frame); err != nil {
+					return fmt.Errorf("grant fixture echo: %w", err)
+				}
+			}
+		})
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	opts := transport.DialOptions{Auth: &transport.Authentication{Key: key, ExpectedIdentity: host.ID}}
+	var attached []transport.Conn
+	for range 2 {
+		conn, err := transport.DialOnce(ctx, server.URL, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		attached = append(attached, conn)
+	}
+	if err := identity.RevokeDevice(state, actor.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := (protocol.Control{Type: protocol.TypeHostInfo}).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := protocol.Frame{Kind: protocol.KindControl, Payload: payload}
+	_ = attached[0].WriteFrame(frame)
+	for _, conn := range attached {
+		if _, err := conn.ReadFrame(); err == nil {
+			t.Fatal("reapproval healed an active or passive attachment")
+		}
+	}
+	fresh, err := transport.DialOnce(ctx, server.URL, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close() //nolint:errcheck // fixture cleanup
+	if err := fresh.WriteFrame(frame); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fresh.ReadFrame(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -3,6 +3,8 @@ package identity
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -17,29 +19,63 @@ import (
 const AuthorizedKeysMaximum = 1 << 20
 
 type DeviceGrant struct {
-	Identity string
-	Key      ssh.PublicKey
+	Identity    string
+	Key         ssh.PublicKey
+	incarnation [sha256.Size]byte
 }
 
-func Granted(path string, presented ssh.PublicKey) bool {
+func currentGrant(path string, presented ssh.PublicKey, incarnation *[sha256.Size]byte) (DeviceGrant, bool) {
 	lock, err := os.OpenFile(filepath.Join(filepath.Dir(path), "device-grants.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return false
+		return DeviceGrant{}, false
 	}
 	defer lock.Close() //nolint:errcheck // closing releases the shared admission lock
 	if syscall.Flock(int(lock.Fd()), syscall.LOCK_SH) != nil {
-		return false
+		return DeviceGrant{}, false
 	}
 	grants, err := DeviceGrants(path)
 	if err != nil {
-		return false
+		return DeviceGrant{}, false
 	}
 	for _, grant := range grants {
-		if bytes.Equal(grant.Key.Marshal(), presented.Marshal()) {
-			return true
+		if !bytes.Equal(grant.Key.Marshal(), presented.Marshal()) {
+			continue
+		}
+		if incarnation == nil || grant.incarnation == *incarnation {
+			return grant, true
 		}
 	}
-	return false
+	return DeviceGrant{}, false
+}
+
+func Granted(path string, presented ssh.PublicKey) bool {
+	_, ok := currentGrant(path, presented, nil)
+	return ok
+}
+
+// BindGrant captures the approved line's incarnation under the admission lock.
+// Reapproval creates a new line identity, so a missed removal cannot heal a socket.
+func BindGrant(path string, presented ssh.PublicKey) (func() bool, bool) {
+	grant, ok := currentGrant(path, presented, nil)
+	if !ok {
+		return nil, false
+	}
+	return func() bool {
+		_, current := currentGrant(path, presented, &grant.incarnation)
+		return current
+	}, true
+}
+
+func BindIdentity(stateDir, id string) (func() bool, bool) {
+	public, err := IdentityKey(id)
+	if err != nil {
+		return nil, false
+	}
+	key, err := ssh.NewPublicKey(public)
+	if err != nil {
+		return nil, false
+	}
+	return BindGrant(filepath.Join(stateDir, "authorized_keys"), key)
 }
 
 func GrantedIdentity(stateDir, id string) bool {
@@ -64,6 +100,10 @@ func DeviceGrants(path string) ([]DeviceGrant, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseDeviceGrants(contents)
+}
+
+func parseDeviceGrants(contents []byte) ([]DeviceGrant, error) {
 	var grants []DeviceGrant
 	for _, line := range bytes.SplitAfter(contents, []byte("\n")) {
 		trimmed := bytes.TrimSpace(line)
@@ -77,7 +117,7 @@ func DeviceGrants(path string) ([]DeviceGrant, error) {
 		if len(options) != 0 {
 			continue
 		}
-		grant := DeviceGrant{Key: key}
+		grant := DeviceGrant{Key: key, incarnation: sha256.Sum256(trimmed)}
 		if cryptoKey, ok := key.(ssh.CryptoPublicKey); ok {
 			if public, ok := cryptoKey.CryptoPublicKey().(ed25519.PublicKey); ok {
 				grant.Identity = base64.RawURLEncoding.EncodeToString(public)
@@ -120,7 +160,46 @@ func changeDevice(stateDir, id string, approve bool) error {
 	return publishGrants(stateDir, path, next)
 }
 
+func existingGrant(contents []byte, key ssh.PublicKey) (bool, error) {
+	grants, err := parseDeviceGrants(contents)
+	if err != nil {
+		return false, err
+	}
+	for _, grant := range grants {
+		if bytes.Equal(grant.Key.Marshal(), key.Marshal()) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func changedGrants(contents []byte, key ssh.PublicKey, approve bool) ([]byte, error) {
+	if approve {
+		exists, err := existingGrant(contents, key)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return contents, nil
+		}
+	}
+	next, err := removeGrants(contents, key)
+	if err != nil {
+		return nil, err
+	}
+	if approve {
+		next, err = appendGrant(next, key)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(next) > AuthorizedKeysMaximum {
+		return nil, errors.New("identity: device grants exceed size limit")
+	}
+	return next, nil
+}
+
+func removeGrants(contents []byte, key ssh.PublicKey) ([]byte, error) {
 	var next []byte
 	for _, line := range bytes.SplitAfter(contents, []byte("\n")) {
 		trimmed := bytes.TrimSpace(line)
@@ -136,16 +215,21 @@ func changedGrants(contents []byte, key ssh.PublicKey, approve bool) ([]byte, er
 			next = append(next, line...)
 		}
 	}
-	if approve {
-		if len(next) > 0 && next[len(next)-1] != '\n' {
-			next = append(next, '\n')
-		}
-		next = append(next, ssh.MarshalAuthorizedKey(key)...)
-	}
-	if len(next) > AuthorizedKeysMaximum {
-		return nil, errors.New("identity: device grants exceed size limit")
-	}
 	return next, nil
+}
+
+func appendGrant(contents []byte, key ssh.PublicKey) ([]byte, error) {
+	if len(contents) > 0 && contents[len(contents)-1] != '\n' {
+		contents = append(contents, '\n')
+	}
+	var incarnation [16]byte
+	if _, err := rand.Read(incarnation[:]); err != nil {
+		return nil, fmt.Errorf("identity: create grant incarnation: %w", err)
+	}
+	line := bytes.TrimSuffix(ssh.MarshalAuthorizedKey(key), []byte("\n"))
+	contents = append(contents, line...)
+	contents = append(contents, []byte(" mesh-grant:"+base64.RawURLEncoding.EncodeToString(incarnation[:])+"\n")...)
+	return contents, nil
 }
 
 func publishGrants(stateDir, path string, next []byte) error {

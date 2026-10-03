@@ -260,13 +260,14 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 		return graced
 	}
 	server.PublicKeyHandler = func(ctx charmssh.Context, key charmssh.PublicKey) bool {
-		if !isAuthorized(cfg.authorizedKeys, key) {
+		current, ok := identity.BindGrant(cfg.authorizedKeys, key)
+		if !ok {
 			return false
 		}
 		// Only a proven client gets to hold the connection indefinitely.
 		if graced, ok := ctx.Value(gracedConnKey{}).(*gracedConn); ok {
 			graced.authenticated()
-			graced.watchGrant(ctx, func() bool { return isAuthorized(cfg.authorizedKeys, key) })
+			graced.watchGrant(ctx, current)
 		}
 		return true
 	}

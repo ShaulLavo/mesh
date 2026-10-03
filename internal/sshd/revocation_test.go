@@ -10,7 +10,7 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-func TestDeviceRevocationClosesIdleSSHAndPreservesOtherDevice(t *testing.T) {
+func TestDeviceReapprovalRetiresIdleSSHAndPreservesOtherDevice(t *testing.T) {
 	directory := t.TempDir()
 	first, firstKey, err := identity.LoadOrCreate(t.TempDir())
 	if err != nil {
@@ -37,15 +37,19 @@ func TestDeviceRevocationClosesIdleSSHAndPreservesOtherDevice(t *testing.T) {
 	if err := identity.RevokeDevice(directory, first.ID); err != nil {
 		t.Fatal(err)
 	}
+	if err := identity.ApproveDevice(directory, first.ID); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-closed:
 	case <-time.After(2 * time.Second):
 		t.Fatal("revoked idle SSH connection remained open")
 	}
-	if replacement, err := gossh.Dial("tcp", address, clientConfig(t, firstKey, nil)); err == nil {
-		_ = replacement.Close()
-		t.Fatal("revoked SSH identity reconnected")
+	replacement, err := gossh.Dial("tcp", address, clientConfig(t, firstKey, nil))
+	if err != nil {
+		t.Fatalf("reapproved identity could not open a fresh SSH connection: %v", err)
 	}
+	_ = replacement.Close()
 	session, err := testsession.NewClientSession(t, address, clientConfig(t, secondKey, nil))
 	if err != nil {
 		t.Fatal(err)

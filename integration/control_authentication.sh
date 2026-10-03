@@ -12,6 +12,7 @@ python3 - "$MESH" "$repo_root/integration/helpers" <<'PY'
 import base64
 import json
 import os
+import select
 from pathlib import Path
 import socket
 import subprocess
@@ -22,6 +23,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, sys.argv[2])
 from mesh_control import round_trip
 from terminal_window import Fixture, Terminal, PROMPT, eventually, require
+from recovery_transactions import build_control_client
 
 with tempfile.TemporaryDirectory(prefix="mesh-control-auth-") as directory:
     fixture = Fixture(sys.argv[1], Path(directory))
@@ -48,6 +50,26 @@ with tempfile.TemporaryDirectory(prefix="mesh-control-auth-") as directory:
         local_destination = fixture.environment | {"MESH_STATE_DIR": str(fixture.remote)}
         updater = command(local_destination, "update", "trust", "--", first_identity)
         require(updater.returncode == 0, f"independent update trust failed: {updater.stderr!r}")
+        build_control_client(fixture)
+        probe = subprocess.Popen([str(fixture.root / "control-client"), host["endpoint"], fixture.remote_id,
+                                  "grant-lifetime"], env=fixture.environment, stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            require(select.select([probe.stdout], [], [], 5)[0], "grant-lifetime probe did not connect")
+            require(probe.stdout.readline() == b"READY\n", "grant-lifetime probe did not report readiness")
+            removed = command(local_destination, "device", "revoke", "--", first_identity)
+            require(removed.returncode == 0, f"temporary revocation failed: {removed.stderr!r}")
+            restored = command(local_destination, "device", "approve", "--allow-root", "--", first_identity)
+            require(restored.returncode == 0, f"same-key reapproval failed: {restored.stderr!r}")
+            stdout, stderr = probe.communicate(b"\n", timeout=8)
+            require(probe.returncode == 0, f"same-key reapproval healed an old socket: {stdout!r} {stderr!r}")
+            os.kill(shell_pid, 0)
+            require(json.loads((fixture.remote / "s" / session_id / "meta.json").read_text())["pid"] == metadata["pid"],
+                    "same-key grant retirement changed the retained command")
+        finally:
+            if probe.poll() is None:
+                probe.kill()
+                probe.wait()
         enrolled = command(local_destination, "device", "approve", "--allow-root", "--", second_identity)
         require(enrolled.returncode == 0, f"second-device enrollment failed: {enrolled.stderr!r}")
         revoked = command(local_destination, "device", "revoke", "--", first_identity)
@@ -83,7 +105,7 @@ with tempfile.TemporaryDirectory(prefix="mesh-control-auth-") as directory:
         fixture.terminals.append(approved)
         approved.expect(PROMPT)
         require(fixture.shell_identity(approved) == (session_id, shell_pid), "another approved device reached a different session")
-        print("PASS: raw controls denied; dual-authority passive terminal retired on device revocation; retained worker survived daemon replacement and reattached from another approved device")
+        print("PASS: old active/read-only and passive sockets retired after same-key reapproval; fresh grant connected; raw controls denied; dual-authority passive terminal retired on device revocation; retained worker survived daemon replacement and reattached from another approved device")
     finally:
         fixture.close()
 PY
