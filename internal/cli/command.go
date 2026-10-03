@@ -232,6 +232,8 @@ type Dependencies struct {
 	UpdateBootstrap        func(context.Context, updatebootstrap.Request, updatebootstrap.Config) (updateinstall.Status, error)
 	UpdateRelease          release.Client
 	UpdateCaller           update.Caller
+	UpdateBuild            func() release.Build
+	UpdateInspect          func(context.Context, string) (updatebootstrap.Observation, error)
 	SSHSessionHandler      sshd.SessionHandlerFactory
 	Bootstrap              BootstrapFunc
 	Wake                   WakeFunc

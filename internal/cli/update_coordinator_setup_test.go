@@ -26,10 +26,10 @@ func TestAbsentCoordinatorPreviewAddsExplicitSetupWithoutInstalling(t *testing.T
 		if host.ID == local.ID {
 			return os.ErrNotExist
 		}
-		*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID}}
+		*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 		return nil
 	})
-	stdout, _, err := executeCommand(t, Dependencies{UpdateRelease: client, UpdateCaller: caller}, "update", "--fleet", file, "--check", "--json")
+	stdout, _, err := executeCommand(t, Dependencies{UpdateBuild: updateTestBuild, UpdateRelease: client, UpdateCaller: caller}, "update", "--fleet", file, "--check", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestAbsentCoordinatorPersistsApprovalBeforeHelperInstallation(t *testing.T)
 			if host.ID == local.ID {
 				return os.ErrNotExist
 			}
-			*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID}}
+			*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 			return nil
 		}
 		if action != "status" || !installed {
@@ -86,7 +86,7 @@ func TestAbsentCoordinatorPersistsApprovalBeforeHelperInstallation(t *testing.T)
 		installed = true
 		return nil
 	}
-	_, _, err := executeCommand(t, Dependencies{UpdateRelease: client, UpdateCaller: caller, UpdateCoordinatorSetup: setup}, "update", "--fleet", file, "--yes", "--json")
+	_, _, err := executeCommand(t, Dependencies{UpdateBuild: updateTestBuild, UpdateRelease: client, UpdateCaller: caller, UpdateCoordinatorSetup: setup}, "update", "--fleet", file, "--yes", "--json")
 	if err != nil || !installed {
 		t.Fatalf("setup did not resume original operation: %v", err)
 	}
