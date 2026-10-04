@@ -292,6 +292,9 @@ func (s *Store) Change(id string, apply func(*Run) error) (Run, error) {
 func (s *Store) Cancel(id string) (Run, error) {
 	return s.Change(id, func(run *Run) error {
 		run.Cancel, run.Stopped = true, true
+		for index := range run.Targets {
+			run.Targets[index].RetryPending = false
+		}
 		return nil
 	})
 }
