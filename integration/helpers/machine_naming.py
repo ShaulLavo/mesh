@@ -71,7 +71,10 @@ def start_replacement(fixture, binary, port):
             return response.get("type") == "host.info.result"
         except (OSError, RuntimeError):
             return False
-    eventually(ready, "replacement destination did not start")
+    try:
+        eventually(ready, "replacement destination did not start")
+    except RuntimeError as error:
+        raise RuntimeError(f"{error}; daemon: {(fixture.root / 'daemon.log').read_text()[-2000:]}") from error
 
 
 def printed_marker(output, marker):
