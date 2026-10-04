@@ -99,25 +99,27 @@ func helperLaunchdTarget(domain string) (string, error) {
 }
 
 func launchdHelperPID(output string) (int, error) {
-	pid, running, seenPID := 0, false, false
+	values := make(map[string]string, 2)
 	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 3 || fields[1] != "=" {
+		// launchctl indents job fields by one tab and nested section fields by more.
+		if len(line) < 2 || line[0] != '\t' || line[1] == '\t' || line[1] == ' ' {
 			continue
 		}
-		if fields[0] == "state" {
-			running = fields[2] == "running"
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != "state" && fields[0] != "pid" {
+			continue
 		}
-		if fields[0] == "pid" {
-			if seenPID {
-				return 0, errors.New("helper service process is ambiguous")
-			}
-			seenPID = true
-			pid, _ = strconv.Atoi(fields[2])
+		if len(fields) != 3 || fields[1] != "=" {
+			return 0, errors.New("helper service process fields are malformed")
 		}
+		if _, seen := values[fields[0]]; seen {
+			return 0, errors.New("helper service process is ambiguous")
+		}
+		values[fields[0]] = fields[2]
 	}
-	if !running || pid <= 0 {
+	pid, err := strconv.ParseUint(values["pid"], 10, strconv.IntSize-1)
+	if values["state"] != "running" || err != nil || pid == 0 {
 		return 0, errors.New("helper service has no running process")
 	}
-	return pid, nil
+	return int(pid), nil
 }

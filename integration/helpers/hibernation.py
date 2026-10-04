@@ -50,8 +50,10 @@ def hibernate(fixture, session_id, request_id):
 
 
 def idle_policy(fixture):
+    require(not listing(fixture), "fresh fixture already has sessions")
     agent = create(fixture, "idle-conversation")
     shell = create_shell(fixture)
+    require(listing(fixture)[shell].get("memoryBytes", 0) > 0, "new live shell reported no memory after an empty list")
     attach_and_detach(fixture, agent, b"AGENT_READY_idle-conversation")
     attach_and_detach(fixture, shell, b"$")
 
