@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -133,23 +134,44 @@ type memorySampler struct {
 func (m *memorySampler) sizesFor(sessionsDir string, sessions []storage.Session, now time.Time) map[string]uint64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.sizes != nil && now.Sub(m.sampled) < memorySampleTTL {
+	fresh := m.sizes != nil && now.Sub(m.sampled) < memorySampleTTL
+	pending := m.pendingSessions(sessionsDir, sessions, fresh)
+	if fresh && len(pending) == 0 {
 		return m.sizes
 	}
-	table := procmem.Snapshot()
 	sizes := make(map[string]uint64, len(sessions))
+	if fresh {
+		sizes = maps.Clone(m.sizes)
+	}
+	if len(pending) > 0 {
+		table := procmem.Snapshot()
+		for _, meta := range pending {
+			sizes[meta.ID] = worker.SessionMemory(table, meta.ID, meta.PID)
+		}
+	}
+	m.sizes = sizes
+	if !fresh {
+		m.sampled = now
+	}
+	return sizes
+}
+
+func (m *memorySampler) pendingSessions(sessionsDir string, sessions []storage.Session, fresh bool) []worker.Meta {
+	var pending []worker.Meta
 	for _, stored := range sessions {
 		if stored.State != storage.StateRunning && stored.State != storage.StateDetached {
+			continue
+		}
+		if _, cached := m.sizes[string(stored.ID)]; fresh && cached {
 			continue
 		}
 		meta, err := worker.ReadMeta(filepath.Join(sessionsDir, string(stored.ID)))
 		if err != nil || meta.PID <= 0 {
 			continue
 		}
-		sizes[meta.ID] = worker.SessionMemory(table, meta.ID, meta.PID)
+		pending = append(pending, meta)
 	}
-	m.sizes, m.sampled = sizes, now
-	return sizes
+	return pending
 }
 
 // addHibernationInfo reports detach time for live sessions and the marker
