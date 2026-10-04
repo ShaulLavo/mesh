@@ -138,7 +138,7 @@ func (a *application) gcCatalog(cmd *cobra.Command, hosts []HostRecord) ([]HostS
 		return nil, err
 	}
 	defer cache.Close() //nolint:errcheck // command result takes precedence
-	results, err := CollectHostSessions(cmd.Context(), hosts, defaultCatalogTimeout, a.queryHost, cache)
+	results, err := CollectHostSessions(cmd.Context(), hosts, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout}, a.queryHost, cache)
 	if err != nil {
 		return nil, err
 	}

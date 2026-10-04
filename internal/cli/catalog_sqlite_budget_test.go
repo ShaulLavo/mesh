@@ -85,8 +85,8 @@ func TestCatalogSQLiteWriterContentionRespectsBudget(t *testing.T) {
 			started := time.Now()
 			go func() {
 				defer close(finished)
-				rows, err := CollectHostSessions(parent, hosts, timeout,
-					func(ctx context.Context, queried HostRecord) ([]protocol.SessionInfo, error) {
+				rows, err := CollectHostSessions(parent, hosts, HostQueryBudget{Reply: timeout},
+					func(ctx context.Context, queried HostRecord, _ HostQueryBudget) ([]protocol.SessionInfo, error) {
 						if queried.ID == host.ID {
 							return nil, nil
 						}

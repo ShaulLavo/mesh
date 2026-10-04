@@ -96,8 +96,10 @@ func validateHostWake(host protocol.HostInfo) error {
 	return wake.ValidateGrant(*host.Wake, time.Now())
 }
 
-func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer) ([]protocol.SessionInfo, error) {
-	conn, err := openVerifiedHost(ctx, host, dial)
+func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
+	setupCtx, cancelSetup := context.WithTimeout(ctx, budget.Setup)
+	conn, err := openVerifiedHost(setupCtx, host, dial)
+	cancelSetup()
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +108,7 @@ func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer) ([]pr
 	if err != nil {
 		return nil, err
 	}
-	queryCtx, cancelQuery := context.WithTimeout(ctx, remoteConnectTimeout)
+	queryCtx, cancelQuery := context.WithTimeout(ctx, budget.Reply)
 	defer cancelQuery()
 	response, err := controlRequest(queryCtx, conn, protocol.Control{Type: protocol.TypeList, RequestID: requestID, Lean: true})
 	if err != nil {

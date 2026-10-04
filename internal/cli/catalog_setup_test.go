@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -35,7 +36,7 @@ func TestListCatalogBudgetStartsAfterAuthenticatedSetup(t *testing.T) {
 			t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 			clientState := compactSocketTempDir(t)
 			t.Setenv("MESH_STATE_DIR", clientState)
-			host := nativeCatalogHost(t, test.delay, test.ended)
+			host := nativeCatalogHost(t, test.delay, 0, test.ended)
 			if err := SaveHost(host); err != nil {
 				t.Fatal(err)
 			}
@@ -63,7 +64,7 @@ func TestListCatalogBudgetStartsAfterAuthenticatedSetup(t *testing.T) {
 				t.Fatalf("settled cached row count=%d, want=%d", len(rows), want)
 			}
 			for _, row := range rows {
-				if row.HostID != host.ID || row.ID == "OLD1" && row.State != "interrupted" || row.ID == "7K3D" && row.State != "exited" {
+				if row.HostID != host.ID || row.ID != "OLD1" && row.ID != "7K3D" || row.ID == "OLD1" && row.State != "interrupted" || row.ID == "7K3D" && row.State != "exited" {
 					t.Fatal("cache did not settle authoritative host session states")
 				}
 			}
@@ -72,7 +73,7 @@ func TestListCatalogBudgetStartsAfterAuthenticatedSetup(t *testing.T) {
 	}
 }
 
-func nativeCatalogHost(t *testing.T, delay time.Duration, ended bool) HostRecord {
+func nativeCatalogHost(t *testing.T, setupDelay, replyDelay time.Duration, ended bool) HostRecord {
 	t.Helper()
 	state := compactSocketTempDir(t)
 	host, key, err := identity.LoadOrCreate(state)
@@ -126,7 +127,7 @@ func nativeCatalogHost(t *testing.T, delay time.Duration, ended bool) HostRecord
 	}
 	auth := &transport.Authentication{Key: key, Authorize: func(id string) bool { return identity.GrantedIdentity(state, id) }}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		timer := time.NewTimer(delay)
+		timer := time.NewTimer(setupDelay)
 		defer timer.Stop()
 		select {
 		case <-timer.C:
@@ -147,7 +148,7 @@ func nativeCatalogHost(t *testing.T, delay time.Duration, ended bool) HostRecord
 			finished := make(chan struct{})
 			go func() {
 				defer close(finished)
-				_ = relayCatalogFrames(local, peer)
+				_ = relayCatalogRequests(ctx, local, peer, replyDelay)
 				_ = local.Close()
 				_ = peer.Close()
 			}()
@@ -171,5 +172,115 @@ func relayCatalogFrames(target, source transport.Conn) error {
 		if err := target.WriteFrame(frame); err != nil {
 			return fmt.Errorf("write native fixture frame: %w", err)
 		}
+	}
+}
+
+func relayCatalogRequests(ctx context.Context, target, source transport.Conn, delay time.Duration) error {
+	for {
+		frame, err := source.ReadFrame()
+		if err != nil {
+			return fmt.Errorf("read native fixture request: %w", err)
+		}
+		request, err := protocol.DecodeControl(frame.Payload)
+		if err != nil {
+			return fmt.Errorf("decode native fixture request: %w", err)
+		}
+		if request.Type == protocol.TypeList {
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return fmt.Errorf("delay native fixture reply: %w", ctx.Err())
+			}
+		}
+		if err := target.WriteFrame(frame); err != nil {
+			return fmt.Errorf("write native fixture request: %w", err)
+		}
+	}
+}
+
+func TestListCatalogReplyDeadlineStillReportsStale(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup time.Duration
+		reply time.Duration
+		flags []string
+	}{
+		{name: "default reply deadline", setup: defaultCatalogTimeout + 150*time.Millisecond, reply: defaultCatalogTimeout + 150*time.Millisecond},
+		{name: "explicit reply deadline", setup: 100 * time.Millisecond, reply: 100 * time.Millisecond, flags: []string{"--timeout", "40ms"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+			t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
+			host := nativeCatalogHost(t, test.setup, test.reply, false)
+			if err := SaveHost(host); err != nil {
+				t.Fatal(err)
+			}
+			cache, err := OpenCatalogCache(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = cache.Close() }()
+			if err := cache.Save(t.Context(), host, []protocol.SessionInfo{{ID: "OLD1", HostID: host.ID, Command: []string{"cached-fixture"}, State: "detached", CreatedAt: time.Now()}}); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, err := executeCommand(t, Dependencies{}, append([]string{"ls"}, test.flags...)...)
+			if err != nil || !strings.Contains(stderr, "context deadline exceeded; cached rows are stale") || !strings.Contains(stdout, "OLD1") {
+				t.Fatalf("slow reply lost stale diagnostics: error=%v stderr=%q cached-row=%v", err, stderr, strings.Contains(stdout, "OLD1"))
+			}
+			rows, err := cache.Load(t.Context(), host)
+			if err != nil || len(rows) != 1 || rows[0].ID != "OLD1" || rows[0].State != "detached" {
+				t.Fatal("failed reply changed cached authority", err)
+			}
+		})
+	}
+}
+
+func TestListCatalogRejectsChangedAuthenticatedIdentity(t *testing.T) {
+	for _, pin := range []bool{false, true} {
+		t.Run(map[bool]string{false: "host.info identity", true: "authenticated signing pin"}[pin], func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+			t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
+			host := nativeCatalogHost(t, 0, 0, false)
+			other, _, err := identity.LoadOrCreate(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pin {
+				host.MeshIdentity = other.ID
+			} else {
+				host.ID = other.ID
+			}
+			rows, err := listRemoteHost(t.Context(), host, dialControlHost, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout})
+			if err == nil || len(rows) != 0 {
+				t.Fatal("changed host identity yielded authoritative rows")
+			}
+		})
+	}
+}
+
+func TestListCatalogSetupBudgetAndParentDeadline(t *testing.T) {
+	for _, parentDeadline := range []bool{false, true} {
+		t.Run(map[bool]string{false: "setup budget", true: "parent deadline"}[parentDeadline], func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+			t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
+			host := nativeCatalogHost(t, 200*time.Millisecond, 0, false)
+			ctx := t.Context()
+			budget := HostQueryBudget{Setup: 20 * time.Millisecond, Reply: defaultCatalogTimeout}
+			if parentDeadline {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 20*time.Millisecond)
+				defer cancel()
+				budget.Setup = remoteConnectTimeout
+			}
+			rows, err := listRemoteHost(ctx, host, dialControlHost, budget)
+			if !errors.Is(err, context.DeadlineExceeded) || len(rows) != 0 {
+				t.Fatal("setup or parent deadline did not bound authentication", err)
+			}
+		})
 	}
 }

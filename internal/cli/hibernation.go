@@ -342,7 +342,7 @@ func (a *application) reread(ctx context.Context, resolved resolvedSession) (res
 		return resolvedSession{local: &current}, current.Liveness == LivenessGone, nil
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, remoteConnectTimeout)
-	rows, err := a.queryHost(queryCtx, *resolved.host)
+	rows, err := a.queryHost(queryCtx, *resolved.host, HostQueryBudget{Setup: remoteConnectTimeout, Reply: remoteConnectTimeout})
 	cancel()
 	if err != nil {
 		return resolvedSession{}, false, err

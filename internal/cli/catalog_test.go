@@ -37,7 +37,7 @@ func TestCollectHostSessionsUsesCacheWithoutWaitingPastDeadline(t *testing.T) {
 	}}
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	query := func(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
+	query := func(ctx context.Context, host HostRecord, _ HostQueryBudget) ([]protocol.SessionInfo, error) {
 		switch host.Alias {
 		case "fast":
 			return []protocol.SessionInfo{{ID: "LIVE", HostID: host.ID, Command: []string{"bash"}, State: "running", CreatedAt: created}}, nil
@@ -50,7 +50,7 @@ func TestCollectHostSessionsUsesCacheWithoutWaitingPastDeadline(t *testing.T) {
 	}
 
 	started := time.Now()
-	got, err := CollectHostSessions(context.Background(), hosts, 40*time.Millisecond, query, cache)
+	got, err := CollectHostSessions(context.Background(), hosts, HostQueryBudget{Reply: 40 * time.Millisecond}, query, cache)
 	if err != nil {
 		t.Fatal(err)
 	}

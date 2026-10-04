@@ -219,7 +219,7 @@ func (a *application) resolveSavedTarget(ctx context.Context, target recovery.Ta
 		if host.ID != target.HostID {
 			continue
 		}
-		rows, err := a.queryHost(ctx, host)
+		rows, err := a.queryHost(ctx, host, HostQueryBudget{Setup: remoteConnectTimeout, Reply: remoteConnectTimeout})
 		if err != nil {
 			return resolvedSession{}, err
 		}

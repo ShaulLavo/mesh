@@ -56,8 +56,8 @@ func TestCatalogDeadlineBoundsCacheSave(t *testing.T) {
 			}}
 			go func() {
 				defer close(finished)
-				rows, err := CollectHostSessions(context.Background(), []HostRecord{{Alias: "pc", ID: "pc"}}, timeout,
-					func(context.Context, HostRecord) ([]protocol.SessionInfo, error) {
+				rows, err := CollectHostSessions(context.Background(), []HostRecord{{Alias: "pc", ID: "pc"}}, HostQueryBudget{Reply: timeout},
+					func(context.Context, HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error) {
 						return []protocol.SessionInfo{{ID: "LIVE"}}, nil
 					}, cache)
 				done <- catalogCollection{rows: rows, err: err}
@@ -95,8 +95,8 @@ func TestCatalogDeadlineBoundsCacheLoad(t *testing.T) {
 			}
 			go func() {
 				defer close(finished)
-				rows, err := CollectHostSessions(context.Background(), hosts, 40*time.Millisecond,
-					func(ctx context.Context, _ HostRecord) ([]protocol.SessionInfo, error) {
+				rows, err := CollectHostSessions(context.Background(), hosts, HostQueryBudget{Reply: 40 * time.Millisecond},
+					func(ctx context.Context, _ HostRecord, _ HostQueryBudget) ([]protocol.SessionInfo, error) {
 						if waitForDeadline {
 							<-ctx.Done()
 							return nil, ctx.Err()
@@ -137,8 +137,8 @@ func TestCatalogParentCancellationJoinsCacheWork(t *testing.T) {
 			}
 			done := make(chan catalogCollection, 1)
 			go func() {
-				rows, err := CollectHostSessions(parent, []HostRecord{{Alias: "pc", ID: "pc"}}, 2*time.Second,
-					func(context.Context, HostRecord) ([]protocol.SessionInfo, error) {
+				rows, err := CollectHostSessions(parent, []HostRecord{{Alias: "pc", ID: "pc"}}, HostQueryBudget{Reply: 2 * time.Second},
+					func(context.Context, HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error) {
 						if write {
 							return nil, nil
 						}
@@ -181,8 +181,8 @@ func TestCatalogSuccessfulEmptyQueryDoesNotLoadStaleRows(t *testing.T) {
 			return cacheErr
 		},
 	}
-	rows, err := CollectHostSessions(context.Background(), []HostRecord{{Alias: "pc", ID: "pc"}}, time.Second,
-		func(context.Context, HostRecord) ([]protocol.SessionInfo, error) { return nil, nil }, cache)
+	rows, err := CollectHostSessions(context.Background(), []HostRecord{{Alias: "pc", ID: "pc"}}, HostQueryBudget{Reply: time.Second},
+		func(context.Context, HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error) { return nil, nil }, cache)
 	if err != nil || len(rows) != 1 || rows[0].Stale || rows[0].Err != nil || len(rows[0].Sessions) != 0 || !errors.Is(rows[0].CacheErr, cacheErr) {
 		t.Fatalf("empty authoritative catalog = %#v, %v", rows, err)
 	}
@@ -201,12 +201,43 @@ func TestCatalogDeadlineAllowsFreshCacheReadBudget(t *testing.T) {
 		}
 		return []protocol.SessionInfo{{ID: "OLD1"}}, nil
 	}}
-	rows, err := CollectHostSessions(context.Background(), []HostRecord{{Alias: "pc", ID: "pc"}}, 20*time.Millisecond,
-		func(ctx context.Context, _ HostRecord) ([]protocol.SessionInfo, error) {
+	rows, err := CollectHostSessions(context.Background(), []HostRecord{{Alias: "pc", ID: "pc"}}, HostQueryBudget{Reply: 20 * time.Millisecond},
+		func(ctx context.Context, _ HostRecord, _ HostQueryBudget) ([]protocol.SessionInfo, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}, cache)
 	if err != nil || len(rows) != 1 || !rows[0].Stale || len(rows[0].Sessions) != 1 || rows[0].Sessions[0].ID != "OLD1" || !errors.Is(rows[0].Err, context.DeadlineExceeded) {
 		t.Fatalf("fallback after query deadline = %#v, %v", rows, err)
+	}
+}
+
+func TestCatalogPhaseBudgetsBoundUncooperativeQuery(t *testing.T) {
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	t.Cleanup(func() { close(release); <-finished })
+	budget := HostQueryBudget{Setup: 20 * time.Millisecond, Reply: 40 * time.Millisecond}
+	cache := catalogCacheFuncs{load: func(context.Context, HostRecord) ([]protocol.SessionInfo, error) {
+		return []protocol.SessionInfo{{ID: "OLD1"}}, nil
+	}}
+	done := make(chan catalogCollection, 1)
+	go func() {
+		rows, err := CollectHostSessions(t.Context(), []HostRecord{{Alias: "fixture", ID: "fixture"}}, budget,
+			func(ctx context.Context, _ HostRecord, actual HostQueryBudget) ([]protocol.SessionInfo, error) {
+				defer close(finished)
+				if actual != budget {
+					t.Error("collector changed phase budgets")
+				}
+				deadline, bounded := ctx.Deadline()
+				if !bounded || time.Until(deadline) > budget.Setup+budget.Reply {
+					t.Error("collector lost total query cap")
+				}
+				<-release
+				return nil, ctx.Err()
+			}, cache)
+		done <- catalogCollection{rows: rows, err: err}
+	}()
+	result := awaitCatalogCollection(t, done)
+	if result.err != nil || len(result.rows) != 1 || !result.rows[0].Stale || !errors.Is(result.rows[0].Err, context.DeadlineExceeded) || len(result.rows[0].Sessions) != 1 {
+		t.Fatalf("uncooperative query lost bounded stale fallback: %#v", result)
 	}
 }
