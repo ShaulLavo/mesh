@@ -157,6 +157,36 @@ func TestObservedCompletionClearsPendingRetry(t *testing.T) {
 	}
 }
 
+func TestObservedCompletionClearsBootstrapRetry(t *testing.T) {
+	f := newLegacyFixture(t)
+	f.step()
+	f.receipt(updateinstall.RolledBack)
+	f.step()
+	approved, err := f.c.Retry(context.Background(), f.run.ID)
+	if err != nil || !approved.Targets[0].BootstrapRetry {
+		t.Fatalf("bootstrap retry was not pending: %+v %v", approved, err)
+	}
+	host := f.run.Targets[0].Host.ID
+	info := f.remote.info[host]
+	artifact, err := f.run.Release.Artifact(info.Health.Build.Platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Health.Build.Digest = artifact.BinarySHA256
+	info.Health.Build.Version = f.run.Release.Version
+	f.remote.info[host] = info
+	if err := f.c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := f.c.Store.Read(f.run.ID)
+	if err != nil || !completed.Done() || completed.Targets[0].BootstrapRetry || completed.Targets[0].BootstrapRetryToken != approved.Targets[0].BootstrapRetryToken {
+		t.Fatalf("completion retained bootstrap retry or changed its token: %+v %v", completed, err)
+	}
+	if len(f.commands) != 2 || f.remote.stages != 0 {
+		t.Fatalf("completion dispatched work: commands=%d stages=%d", len(f.commands), f.remote.stages)
+	}
+}
+
 func observedCompletionClearsPendingRetry(t *testing.T, state State) {
 	t.Helper()
 	c, remote, run := testCoordinator(t, 1)

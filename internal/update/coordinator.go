@@ -212,6 +212,7 @@ func (c *Coordinator) observeBuild(run Run, index int, info Info) (bool, error) 
 			t.Workers = info.Health.Workers
 			t.Problem = ""
 			t.RetryPending = false
+			t.BootstrapRetry = false
 		})
 	}
 	comparison, err := release.CompareVersions(build.Version, run.Release.Version)
@@ -225,6 +226,7 @@ func (c *Coordinator) observeBuild(run Run, index int, info Info) (bool, error) 
 			t.Workers = info.Health.Workers
 			t.Problem = ""
 			t.RetryPending = false
+			t.BootstrapRetry = false
 		})
 	}
 	return false, nil
