@@ -212,33 +212,26 @@ func (m dashboardModel) cardFacts(host cli.DashboardHostView, width int) string 
 	return counts
 }
 func (m dashboardModel) compactHost(host cli.DashboardHostView) []string {
+	name := host.NameLabel(m.now)
+	if host.Host.NameConflict {
+		identity := "    ID " + safeText(m.privacy.Value("host-id", host.Host.ID))
+		return []string{m.hostTitle(host), m.paint(dashboardMutedStyle).Render(identity)}
+	}
 	if host.Connection != cli.StateReachable {
 		return []string{dashboardAlign(m.hostTitle(host), "last reply "+dashboardAge(m.now, host.LastReply), m.width), m.paint(dashboardCachedStyle).Render("    " + m.catalogCounts(host))}
 	}
 	if host.MetricsUnsupported {
 		return []string{m.hostTitle(host), m.paint(dashboardMutedStyle).Render("    " + m.catalogCounts(host))}
 	}
-	aliasWidth := 10
-	if m.usageEnabled {
-		aliasWidth = 11
-	}
-	first := m.paint(dashboardGoodStyle).Render(dashboardCompactMark(m.ascii)+" ") + dashboardFit(m.paint(dashboardTitleStyle).Render(safeText(host.Host.Alias)), aliasWidth) + "  CPU " + m.coloredPercent(host.CPU, host, m.paint(dashboardCPUStyle)) + "  RAM " + strings.ReplaceAll(strings.TrimSuffix(m.ramValue(host), " GiB"), " / ", "/")
-	if dashboardOptionalPresent(host.GPU) {
-		gpu := *host.GPU
-		first += "  GPU " + dashboardPerformanceReading(m, gpu, host, 30*time.Second, fmt.Sprintf("%.0f%%", gpu.Value.Utilization))
-		if gpu.Value.MemoryKind != "shared" && gpu.Value.MemoryTotalBytes > 0 {
-			first += fmt.Sprintf("  VRAM %.1f/%.1f", float64(gpu.Value.MemoryUsedBytes)/(1<<30), float64(gpu.Value.MemoryTotalBytes)/(1<<30))
-		}
-	}
-	if dashboardOptionalPresent(host.Battery) {
-		value := fmt.Sprintf("  BAT %.0f%% %s", host.Battery.Value.Percent, dashboardCompactBatteryState(host.Battery.Value))
-		first += dashboardPerformanceReading(m, *host.Battery, host, 30*time.Second, value)
-	}
+	first := m.compactMetrics(host)
 	up := ""
 	if dashboardPresent(host.Uptime) {
 		up = "up " + m.uptime(host)
 	}
 	second := "    "
+	if name != host.Host.Label() {
+		second += "last known name  "
+	}
 	if dashboardOptionalPresent(host.Disk) {
 		disk := host.Disk.Value
 		value := "DISK r " + dashboardCompactRate(disk.ReadBytesPerSecond) + " w " + dashboardCompactRate(disk.WriteBytesPerSecond)
@@ -256,6 +249,26 @@ func (m dashboardModel) compactHost(host cli.DashboardHostView) []string {
 		second += dashboardPerformanceUpgrade
 	}
 	return []string{dashboardAlign(first, up, m.width), dashboardFit(second, m.width)}
+}
+
+func (m dashboardModel) compactMetrics(host cli.DashboardHostView) string {
+	nameWidth := 10
+	if m.usageEnabled {
+		nameWidth = 11
+	}
+	first := m.paint(dashboardGoodStyle).Render(dashboardCompactMark(m.ascii)+" ") + dashboardFit(m.paint(dashboardTitleStyle).Render(safeText(host.Host.Label())), nameWidth) + "  CPU " + m.coloredPercent(host.CPU, host, m.paint(dashboardCPUStyle)) + "  RAM " + strings.ReplaceAll(strings.TrimSuffix(m.ramValue(host), " GiB"), " / ", "/")
+	if dashboardOptionalPresent(host.GPU) {
+		gpu := *host.GPU
+		first += "  GPU " + dashboardPerformanceReading(m, gpu, host, 30*time.Second, fmt.Sprintf("%.0f%%", gpu.Value.Utilization))
+		if gpu.Value.MemoryKind != "shared" && gpu.Value.MemoryTotalBytes > 0 {
+			first += fmt.Sprintf("  VRAM %.1f/%.1f", float64(gpu.Value.MemoryUsedBytes)/(1<<30), float64(gpu.Value.MemoryTotalBytes)/(1<<30))
+		}
+	}
+	if dashboardOptionalPresent(host.Battery) {
+		value := fmt.Sprintf("  BAT %.0f%% %s", host.Battery.Value.Percent, dashboardCompactBatteryState(host.Battery.Value))
+		first += dashboardPerformanceReading(m, *host.Battery, host, 30*time.Second, value)
+	}
+	return first
 }
 
 func dashboardCompactMark(ascii bool) string {

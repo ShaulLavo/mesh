@@ -35,7 +35,7 @@ func TestSignedUpdaterDoesNotFallBackToRawControls(t *testing.T) {
 	}))
 	defer server.Close()
 	client := Client{ID: actor.ID, Key: key}
-	err = client.Call(context.Background(), Host{ID: target.ID, Alias: "old", Endpoint: strings.Replace(server.URL, "http://", "ws://", 1)}, "info", nil, nil)
+	err = client.Call(context.Background(), Host{ID: target.ID, MachineName: "old", Endpoint: strings.Replace(server.URL, "http://", "ws://", 1)}, "info", nil, nil)
 	if !errors.Is(err, transport.ErrAuthenticationRequired) {
 		t.Fatalf("legacy endpoint returned %v; want upgrade required", err)
 	}

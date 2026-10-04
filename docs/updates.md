@@ -36,7 +36,10 @@ prints the proposed scope and available release without installing it.
 
 The default fleet file is `fleet.json` beside `hosts.json`. `MESH_CONFIG_DIR`
 changes this directory. A fleet lists stable Mesh public identities and explicit
-connection addresses:
+connection addresses. Names come from the destination declaration and stay out
+of fleet membership and saved operation records. Human output marks retained
+names as "last known name". A bare-name selection requires a fresh authenticated
+reply; an exact ID can select an offline member:
 
 ```json
 {
@@ -46,7 +49,6 @@ connection addresses:
   "members": [
     {
       "id": "MESH_HOST_PUBLIC_ID",
-      "alias": "server",
       "endpoint": "ws://server.example.ts.net:7337/mesh",
       "platform": { "os": "linux", "arch": "amd64" }
     }
@@ -59,7 +61,7 @@ when changing membership. A host's optional `dependsOn` array lists the public
 identities of routers or relays it needs. Mesh updates that host before those
 dependencies. The coordinator updates after the other eligible machines.
 
-Use `--coordinator ALIAS` when starting or inspecting an operation on another
+Use `--coordinator MACHINE_NAME_OR_ID` when starting or inspecting an operation on another
 adopted host. Starting a fleet operation without a local daemon includes its
 one-time setup in the approval preview. The independent helper starts the
 coordinator and resumes the saved operation if the command closes during setup.

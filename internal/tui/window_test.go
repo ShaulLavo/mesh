@@ -17,7 +17,7 @@ import (
 )
 
 func windowFixture() cli.WindowInput {
-	return cli.WindowInput{HostID: "laptop-id", HostAlias: "laptop", HostAliases: map[string]string{"pc-id": "pc"}, Sessions: []protocol.SessionInfo{
+	return cli.WindowInput{MachineName: "laptop", HostID: "laptop-id", HostNames: map[string]string{"pc-id": "pc"}, Sessions: []protocol.SessionInfo{
 		{ID: "91AZ", State: "running", Cwd: "/work/attached", CreatedAt: pickerTestNow},
 		{ID: "Q8ME", State: "interrupted", Cwd: "/work/interrupted", CreatedAt: pickerTestNow.Add(-time.Hour)},
 		{ID: "7K3D", State: "detached", Cwd: "/work/older", CreatedAt: pickerTestNow.Add(-time.Minute)},
@@ -129,7 +129,7 @@ func TestWindowPromptForgetsOnlyInterruptedSession(t *testing.T) {
 		calls := 0
 		input.Action = func(_ context.Context, request cli.PickerSessionActionRequest) error {
 			calls++
-			if request.HostAlias != "laptop" || request.SessionID != "Q8ME" || request.Action != cli.PickerRemoveSession {
+			if request.HostID != "laptop-id" || request.SessionID != "Q8ME" || request.Action != cli.PickerRemoveSession {
 				t.Fatalf("forget request = %#v", request)
 			}
 			if failure {

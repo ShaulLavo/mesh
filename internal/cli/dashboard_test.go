@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,7 +32,7 @@ func TestDashboardProjectionBoundsTotalsAndIndependentAges(t *testing.T) {
 	}
 	state.Services[29].Healthy = false
 	state.Services[29].Problem = "reported failure"
-	view := projectDashboardState(DashboardHost{ID: "host", Alias: "pc"}, state)
+	view := projectDashboardState(DashboardHost{ID: "host", MachineName: "pc"}, state)
 	if view.Sessions.Total != 30 || len(view.Sessions.Rows) != dashboardSessionLimit || view.Services.Total != 30 || len(view.Services.Rows) != dashboardServiceLimit {
 		t.Fatalf("unbounded or false totals: %+v", view)
 	}
@@ -61,7 +62,14 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			fixture := setupCommandTestHost(t)
 			auth, hostID := controlFixtureAuthentication(t)
-			fixture.host.MeshIdentity = hostID
+			fixture.host.ID, fixture.host.MeshIdentity = hostID, hostID
+			configPath, err := ConfigPath()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(configPath); err != nil {
+				t.Fatal(err)
+			}
 			stateDir, err := paths.StateDir()
 			if err != nil {
 				t.Fatal(err)
@@ -97,11 +105,15 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 								id = "another-host"
 							}
 							response.Type = protocol.TypeHostInfoResult
-							response.Host = &protocol.HostInfo{ID: id, MeshIdentity: fixture.host.MeshIdentity, ServiceHealthSupported: mode != "legacy" && mode != "old-producer"}
+							response.Host = &protocol.HostInfo{ID: id, MeshIdentity: fixture.host.MeshIdentity, MachineName: fixture.host.MachineName, NameRevision: 1, ServiceHealthSupported: mode != "legacy" && mode != "old-producer"}
 						case protocol.TypeStateWatch:
 							probes.Add(1)
 							response.Type = protocol.TypeStateSnapshot
 							response.StateSnapshot = &protocol.StateSnapshot{Seq: 1, Services: []protocol.ServiceInfo{{Name: "proxy", Healthy: true}}, Sessions: []protocol.SessionInfo{{ID: "7K3D", HostID: fixture.host.ID, Command: []string{"shell"}, State: "running", CreatedAt: commandTestTime}}, Current: map[string]protocol.Observation{protocol.TopicSessions: {}, protocol.TopicServices: {}}, Metrics: &hostmetrics.Snapshot{CPU: hostmetrics.Reading[float64]{Availability: hostmetrics.Available, Value: 25, Sample: "cpu"}, RAM: hostmetrics.Reading[hostmetrics.Memory]{Availability: hostmetrics.Available, Value: hostmetrics.Memory{TotalBytes: 1024, AvailableBytes: 512, Estimate: "Linux MemAvailable estimate"}, Sample: "ram"}, Temperature: hostmetrics.Reading[hostmetrics.Temperature]{Availability: hostmetrics.Unsupported}, Uptime: hostmetrics.Reading[uint64]{Availability: hostmetrics.Available, Sample: "uptime"}}}
+							if mode != "old-producer" {
+								response.StateSnapshot.Host = &protocol.HostInfo{ID: fixture.host.ID, MeshIdentity: fixture.host.MeshIdentity, MachineName: fixture.host.MachineName, NameRevision: 1}
+								response.StateSnapshot.Current[protocol.TopicHost] = protocol.Observation{}
+							}
 							if mode == "legacy" {
 								response = protocol.Control{Type: protocol.TypeError, RequestID: request.RequestID, Message: `daemon: unknown control "state.watch"`}
 							}
@@ -140,7 +152,7 @@ func TestDashboardActualCLIControlNeverWakes(t *testing.T) {
 			}))
 			defer serve.Close()
 			fixture.host.Endpoint = "ws" + strings.TrimPrefix(serve.URL, "http") + "/control/ws"
-			if err := SaveHost(fixture.host); err != nil {
+			if err := saveNamedTestHost(t, fixture.host); err != nil {
 				t.Fatal(err)
 			}
 			_, _, err = executeCommand(t, Dependencies{
@@ -222,7 +234,7 @@ func inspectDashboardFixture(ctx context.Context, t *testing.T, mode string, inp
 	if mode != "watch" {
 		return
 	}
-	inspection, err := input.Inspect(ctx, PickerInspectRequest{HostAlias: host.Alias, SessionID: "7K3D"})
+	inspection, err := input.Inspect(ctx, PickerInspectRequest{HostID: host.ID, SessionID: "7K3D"})
 	if err != nil || inspection.ForegroundCommand != "claude" {
 		t.Errorf("dashboard inspection failed: %+v / %v", inspection, err)
 	}

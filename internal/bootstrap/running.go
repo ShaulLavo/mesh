@@ -45,7 +45,8 @@ func probeRunningDaemon(ctx context.Context, normalized normalizedOptions, deps 
 		return Result{}, false
 	}
 	return Result{
-		Wake:               host.Wake,
+		Wake:        host.Wake,
+		MachineName: host.MachineName, NameRevision: host.NameRevision,
 		ID:                 host.ID,
 		MeshIdentity:       host.MeshIdentity,
 		TailscaleName:      peer.Name,

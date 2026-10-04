@@ -38,7 +38,7 @@ func TestDashboardMonitorAdmissionAndJoinedCancellation(t *testing.T) {
 	}
 	monitor := dashboardMonitor{watcher: NewStateWatcher(dial)}
 	for i := range 8 {
-		monitor.records = append(monitor.records, HostRecord{ID: fmt.Sprint(i), Alias: fmt.Sprint(i)})
+		monitor.records = append(monitor.records, HostRecord{ID: fmt.Sprint(i), MachineName: fmt.Sprint(i)})
 	}
 	failed := map[string]bool{}
 	publications := 0
@@ -60,7 +60,7 @@ func TestDashboardMonitorAdmissionAndJoinedCancellation(t *testing.T) {
 }
 
 func TestDashboardMonitorBackpressureStopsAllReaders(t *testing.T) {
-	host := HostRecord{ID: "host", Alias: "pc", MeshIdentity: "identity"}
+	host := HostRecord{ID: "host", MachineName: "pc", MeshIdentity: "identity"}
 	var closed atomic.Int32
 	dial := reviewControlDial(t, func(host HostRecord, request protocol.Control) *protocol.Control {
 		if request.Type == protocol.TypeStateWatch {
@@ -117,7 +117,7 @@ func (c *dashboardCountedConn) Close() error {
 }
 
 func TestDashboardReadDeadlineRetainsReachabilityAndCancels(t *testing.T) {
-	host := HostRecord{ID: "host", Alias: "pc", MeshIdentity: "identity"}
+	host := HostRecord{ID: "host", MachineName: "pc", MeshIdentity: "identity"}
 	watcher := NewStateWatcher(reviewControlDial(t, func(_ HostRecord, _ protocol.Control) *protocol.Control { return nil }))
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
@@ -139,12 +139,12 @@ func TestDashboardInventoryDeduplicatesLocalAndUsesLocalSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	localRecord := HostRecord{Alias: "adopted-local", ID: local.ID, MeshIdentity: local.ID, Endpoint: fixture.host.Endpoint}
+	localRecord := HostRecord{MachineName: "adopted-local", ID: local.ID, MeshIdentity: local.ID, Endpoint: fixture.host.Endpoint}
 	if err := SaveHost(localRecord); err != nil {
 		t.Fatal(err)
 	}
-	records, localID, socket, err := dashboardInventory()
-	if err != nil || localID != local.ID || len(records) != 2 || records[0].Alias != "adopted-local" {
+	records, localID, socket, err := dashboardInventory(t.Context())
+	if err != nil || localID != local.ID || len(records) != 2 || records[0].ID != local.ID || records[0].MachineName != "" {
 		t.Fatalf("inventory: %v %s %+v", err, localID, records)
 	}
 	listener, err := net.Listen("unix", socket)
@@ -219,7 +219,7 @@ func TestDashboardOfflineCacheRetainedAndIdentityScoped(t *testing.T) {
 }
 
 func TestDashboardPickerStillWaitsForFirstCatalog(t *testing.T) {
-	host := HostRecord{ID: "host", Alias: "pc", MeshIdentity: "identity"}
+	host := HostRecord{ID: "host", MachineName: "pc", MeshIdentity: "identity"}
 	var requested sync.Once
 	subscribed := make(chan struct{})
 	release := make(chan struct{})

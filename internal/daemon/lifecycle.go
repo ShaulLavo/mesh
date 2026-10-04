@@ -209,7 +209,6 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.Host.Alias = cloneLifecycleString(cfg.Host.Alias)
 	cfg.Host.TailscaleName = cloneLifecycleString(cfg.Host.TailscaleName)
 	return &lifecycle{
 		names:               cfg.Names,

@@ -4,15 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaul/mesh/internal/bootstrap"
 	"github.com/shaul/mesh/internal/cli"
+	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/machinename"
+	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/transport"
 )
 
 func TestBootstrapFuncPinsExistingIdentityAndMapsResult(t *testing.T) {
@@ -21,12 +30,19 @@ func TestBootstrapFuncPinsExistingIdentityAndMapsResult(t *testing.T) {
 	t.Setenv("MESH_STATE_DIR", stateDir)
 	identity := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	if err := cli.SaveHost(cli.HostRecord{
-		Alias: "pc", ID: identity, MeshIdentity: identity,
+		MachineName: "pc", ID: identity, MeshIdentity: identity,
 		Addresses: []string{"100.64.0.1"}, Endpoint: "ws://100.64.0.1:7337/mesh",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
+	path, err := cli.ConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := machinename.RememberClaim(t.Context(), filepath.Dir(path), identity, machinename.Claim{ID: identity, MachineName: "pc", Revision: 1}); err != nil {
+		t.Fatal(err)
+	}
 	var captured bootstrap.Options
 	var progress bytes.Buffer
 	bootstrapFunc := newBootstrapFunc(func(_ context.Context, opts bootstrap.Options) (bootstrap.Result, error) {
@@ -42,11 +58,11 @@ func TestBootstrapFuncPinsExistingIdentityAndMapsResult(t *testing.T) {
 		username: func() (string, error) { return "alice", nil },
 	})
 
-	result, err := bootstrapFunc(context.Background(), cli.AddRequest{Target: "pc", Alias: "pc"})
+	result, err := bootstrapFunc(context.Background(), cli.AddRequest{Target: "100.64.0.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if captured.Target != "pc" || captured.StateDir != stateDir || captured.ExpectedIdentity != identity {
+	if captured.Target != "100.64.0.1" || captured.StateDir != stateDir || captured.ExpectedIdentity != identity {
 		t.Fatalf("bootstrap options = %#v", captured)
 	}
 	if captured.SSH.Password == nil || captured.SSH.Passphrase == nil || captured.SSH.ConfirmHostKey == nil || captured.ConfirmProvision == nil || captured.SudoPassword == nil {
@@ -96,7 +112,7 @@ func TestBootstrapFuncReadsAuthKeyAndYesApprovesWithoutPrompt(t *testing.T) {
 		terminal: func() bool { return false },
 	})
 	result, err := bootstrapFunc(context.Background(), cli.AddRequest{
-		Target: "pi", Alias: "pi", TailscaleAuthKeyFile: keyPath, Yes: true,
+		Target: "pi", TailscaleAuthKeyFile: keyPath, Yes: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +219,7 @@ func TestPromptedAuthKeyIsRedactedLikeAFileKey(t *testing.T) {
 		username: func() (string, error) { return "alice", nil },
 		terminal: func() bool { return false },
 	})
-	if _, err := bootstrapFunc(context.Background(), cli.AddRequest{Target: "pi", Alias: "pi", Yes: true}); err != nil {
+	if _, err := bootstrapFunc(context.Background(), cli.AddRequest{Target: "pi", Yes: true}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -221,7 +237,7 @@ func TestBootstrapPassesTheTargetThroughUntouched(t *testing.T) {
 		username: func() (string, error) { return "whoever", nil },
 		terminal: func() bool { return false },
 	})
-	_, _ = bootstrapFunc(context.Background(), cli.AddRequest{Target: "pi", Alias: "pi"})
+	_, _ = bootstrapFunc(context.Background(), cli.AddRequest{Target: "pi"})
 	if captured.Target != "pi" {
 		t.Fatalf("target = %q, want it passed through untouched", captured.Target)
 	}
@@ -251,5 +267,104 @@ func TestAuthKeyFileRefusesLoosePermissions(t *testing.T) {
 	}
 	if string(key) != "tskey-secret" {
 		t.Fatalf("key = %q", key)
+	}
+}
+
+func TestBootstrapPinResolutionRefusesDuplicateNamesAndAddresses(t *testing.T) {
+	hosts := []cli.HostRecord{
+		{ID: "owner-a", MeshIdentity: "owner-a", MachineName: "garden", Endpoint: "wss://first.example.test/control/ws", Addresses: []string{"100.64.0.7"}},
+		{ID: "owner-b", MeshIdentity: "owner-b", MachineName: "garden", Endpoint: "wss://second.example.test/control/ws", Addresses: []string{"100.64.0.8"}},
+	}
+	if _, err := identityForTarget(hosts, "user@garden:2200"); err == nil {
+		t.Fatal("duplicate owner name chose a bootstrap destination")
+	}
+	for _, target := range []string{"owner-a", "user@100.64.0.7:2200", "first.example.test"} {
+		got, err := identityForTarget(hosts, target)
+		if err != nil || got != "owner-a" {
+			t.Fatalf("%s: %q, %v", target, got, err)
+		}
+	}
+	hosts[1].Addresses = []string{"100.64.0.7"}
+	if _, err := identityForTarget(hosts, "100.64.0.7"); err == nil {
+		t.Fatal("duplicate address chose an identity")
+	}
+	hosts[0].MachineName = "owner-b"
+	if got, err := identityForTarget(hosts, "owner-b"); err != nil || got != "owner-b" {
+		t.Fatalf("exact identity did not precede name: %q, %v", got, err)
+	}
+}
+
+func TestBootstrapKnownOwnerNameRequiresCurrentAuthenticatedDeclarationBeforeRunner(t *testing.T) {
+	for _, mode := range []string{"available", "renamed", "unavailable"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+			stateDir := t.TempDir()
+			t.Setenv("MESH_STATE_DIR", stateDir)
+			client, _, err := identity.LoadOrCreate(stateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner, key, err := identity.LoadOrCreate(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			auth := &transport.Authentication{Key: key, Authorize: func(id string) bool { return id == client.ID }}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: auth}, func(ctx context.Context, conn transport.Conn) error {
+					frame, err := conn.ReadFrame()
+					if err != nil {
+						return fmt.Errorf("bootstrap declaration fixture: %w", err)
+					}
+					request, err := protocol.DecodeControl(frame.Payload)
+					if err != nil {
+						return fmt.Errorf("bootstrap declaration fixture: %w", err)
+					}
+					if request.Type != protocol.TypeHostInfo {
+						return errors.New("bootstrap name preflight attempted an effect")
+					}
+					name, revision := "garden", uint64(1)
+					if mode == "renamed" {
+						name, revision = "owner-new", 2
+					}
+					payload, err := json.Marshal(protocol.Control{Type: protocol.TypeHostInfoResult, RequestID: request.RequestID, Host: &protocol.HostInfo{ID: owner.ID, MeshIdentity: owner.ID, MachineName: name, NameRevision: revision}})
+					if err != nil {
+						return fmt.Errorf("bootstrap declaration fixture: %w", err)
+					}
+					return conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload})
+				})
+			}))
+			defer server.Close()
+			host := cli.HostRecord{ID: owner.ID, MeshIdentity: owner.ID, Endpoint: "ws" + strings.TrimPrefix(server.URL, "http") + "/control/ws"}
+			if err := cli.SaveHost(host); err != nil {
+				t.Fatal(err)
+			}
+			path, err := cli.ConfigPath()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := machinename.RememberClaim(t.Context(), filepath.Dir(path), owner.ID, machinename.Claim{ID: owner.ID, MachineName: "garden", Revision: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "unavailable" {
+				server.Close()
+			}
+			ran := false
+			run := newBootstrapFunc(func(context.Context, bootstrap.Options) (bootstrap.Result, error) {
+				ran = true
+				return bootstrap.Result{}, nil
+			}, bootstrapUI{input: strings.NewReader(""), output: io.Discard})
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			_, err = run(ctx, cli.AddRequest{Target: "garden"})
+			if mode == "available" {
+				if err != nil || !ran {
+					t.Fatalf("known-good declaration did not reach runner: %v", err)
+				}
+				return
+			}
+			if err == nil || ran {
+				t.Fatalf("%s retained name reached bootstrap runner: ran=%t err=%v", mode, ran, err)
+			}
+		})
 	}
 }

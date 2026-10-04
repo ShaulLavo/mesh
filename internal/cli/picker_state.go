@@ -86,7 +86,7 @@ func (p *pickerState) loadCache(host HostRecord) ([]protocol.SessionInfo, error)
 }
 func (p *pickerState) run(ctx context.Context, host HostRecord, ready, done chan struct{}, cached []protocol.SessionInfo, cacheErr error, first *sync.Once) {
 	defer close(done)
-	_ = p.watcher.Watch(ctx, host, protocol.StateWatch{Topics: []string{protocol.TopicSessions}}, func(view StateView) {
+	_ = p.watcher.Watch(ctx, host, protocol.StateWatch{Topics: []string{protocol.TopicHost, protocol.TopicSessions}}, func(view StateView) {
 		if ctx.Err() != nil {
 			return
 		}
@@ -98,7 +98,11 @@ func (p *pickerState) run(ctx context.Context, host HostRecord, ready, done chan
 		p.cacheErr = cacheErr
 		p.view = view
 		p.mu.Unlock()
-		first.Do(func() { close(ready) })
+		// Host observations can arrive before the first session catalog.
+		section := view.Sections[protocol.TopicSessions]
+		if !section.ReceivedAt.IsZero() || section.Observation.Failing {
+			first.Do(func() { close(ready) })
+		}
 	})
 }
 func (p *pickerState) saveCache(ctx context.Context, host HostRecord, view StateView, cached []protocol.SessionInfo, previousErr error) ([]protocol.SessionInfo, error) {
@@ -134,6 +138,15 @@ func (p *pickerState) read(ctx context.Context, host HostRecord) (HostSessions, 
 	view := p.view.Clone()
 	p.mu.Unlock()
 	now := time.Now()
+	if view.Name.ID == host.ID && view.Name.MachineName != "" {
+		host.MachineName, host.NameRevision = view.Name.MachineName, view.Name.Revision
+	}
+	host.NameVerified = view.NameVerified && view.Connection == StateReachable && !view.Sections[protocol.TopicHost].Stale(now, view.LastReply)
+	host, err := projectKnownHost(host)
+	if err != nil {
+		return HostSessions{}, err
+	}
+
 	rows := cloneSessionInfo(view.Sessions)
 	for i := range rows {
 		memory, exists := view.Memory[rows[i].ID]
@@ -141,7 +154,21 @@ func (p *pickerState) read(ctx context.Context, host HostRecord) (HostSessions, 
 			rows[i].MemoryBytes = memory.Bytes
 		}
 	}
-	return HostSessions{Host: host, Sessions: rows, CacheErr: cacheErr, Stale: view.Sections[protocol.TopicSessions].Stale(now, view.LastReply)}, nil
+	return HostSessions{Host: host, Sessions: rows, CacheErr: cacheErr, Stale: view.Connection != StateReachable || view.Sections[protocol.TopicSessions].Stale(now, view.LastReply)}, nil
+}
+
+func projectKnownHost(host HostRecord) (HostRecord, error) {
+	known, err := LoadHosts()
+	if err != nil {
+		return HostRecord{}, err
+	}
+	known = withOwnerClaim(known, host)
+	for _, record := range known {
+		if record.ID == host.ID {
+			return record, nil
+		}
+	}
+	return host, nil
 }
 
 func (a *application) refreshWatchedPickerHost(ctx context.Context, host HostRecord, cache pickerCatalogCache, state *pickerState) (PickerHostSnapshot, error) {

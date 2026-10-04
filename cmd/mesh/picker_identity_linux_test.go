@@ -78,7 +78,7 @@ func runPickerFirstCreate(t *testing.T) {
 			if _, err := identity.Load(os.Getenv("MESH_STATE_DIR")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("picker created identity before selection: %v", err)
 			}
-			return cli.PickerSelection{HostAlias: "this host", New: true}, nil
+			return cli.PickerSelection{Local: true, New: true}, nil
 		},
 	})
 	command.SetArgs([]string{"--raw"})

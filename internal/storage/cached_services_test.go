@@ -17,8 +17,7 @@ func TestReplaceCachedServicesIsCompleteAndDurable(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	alias := "pc"
-	host := Host{ID: "host-1", Alias: &alias, MeshIdentity: "identity-1", LastSeenAt: now}
+	host := Host{ID: "host-1", MeshIdentity: "identity-1", LastSeenAt: now}
 	rows := []CachedService{
 		{HostID: host.ID, Service: meshserve.Service{DisplayName: "API service", Name: "api", Kind: meshserve.Proxy, Target: "3000"}, Healthy: true, ObservedAt: now},
 		{HostID: host.ID, Service: meshserve.Service{Name: "blog", Kind: meshserve.Static, Target: "/srv/blog", PublicName: "blog.shaulavo.dev"}, Problem: "root unavailable", ObservedAt: now},
@@ -58,8 +57,7 @@ func TestReplaceCachedServicesRejectsInvalidRowsBeforeChangingCache(t *testing.T
 	}
 	defer store.Close() //nolint:errcheck // test cleanup
 	now := time.Now().UTC()
-	alias := "pc"
-	host := Host{ID: "host-1", Alias: &alias, MeshIdentity: "identity-1", LastSeenAt: now}
+	host := Host{ID: "host-1", MeshIdentity: "identity-1", LastSeenAt: now}
 	valid := CachedService{HostID: host.ID, Service: meshserve.Service{DisplayName: "API service", Name: "api", Kind: meshserve.Proxy, Target: "3000"}, Healthy: true, ObservedAt: now}
 	if err := store.ReplaceCachedServices(ctx, host, []CachedService{valid}); err != nil {
 		t.Fatal(err)
@@ -83,8 +81,8 @@ func TestReplaceCachedServicesRollsBackAtGlobalBound(t *testing.T) {
 	}
 	defer store.Close() //nolint:errcheck // test cleanup
 	if _, err := store.db.ExecContext(ctx, `
-		INSERT INTO hosts (id, alias, mesh_identity, tailscale_name, last_seen_at)
-		VALUES ('seed', 'seed', 'seed-identity', NULL, 1);
+		INSERT INTO hosts (id, mesh_identity, tailscale_name, last_seen_at)
+		VALUES ('seed', 'seed-identity', NULL, 1);
 		WITH RECURSIVE entries(value) AS (
 			SELECT 1 UNION ALL SELECT value + 1 FROM entries WHERE value < 8192
 		)
@@ -96,8 +94,7 @@ func TestReplaceCachedServicesRollsBackAtGlobalBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	alias := "pc"
-	host := Host{ID: "host-1", Alias: &alias, MeshIdentity: "identity-1", LastSeenAt: now}
+	host := Host{ID: "host-1", MeshIdentity: "identity-1", LastSeenAt: now}
 	row := CachedService{HostID: host.ID, Service: meshserve.Service{DisplayName: "API service", Name: "api", Kind: meshserve.Proxy, Target: "3000"}, Healthy: true, ObservedAt: now}
 	if err := store.ReplaceCachedServices(ctx, host, []CachedService{row}); err == nil {
 		t.Fatal("cache grew past its global bound")

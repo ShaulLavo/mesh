@@ -24,20 +24,20 @@ func TestPickerRefreshAddsSessionsWithoutMovingTheSelection(t *testing.T) {
 	refreshCalls := 0
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts: []cli.HostSessions{{
-			Host:     cli.HostRecord{Alias: "pc"},
+			Host:     cli.HostRecord{ID: "pc", MachineName: "pc"},
 			Sessions: []protocol.SessionInfo{initial},
 		}},
-		Refresh: func(_ context.Context, alias string) (cli.PickerHostSnapshot, error) {
+		Refresh: func(_ context.Context, machineName string) (cli.PickerHostSnapshot, error) {
 			refreshCalls++
-			if alias != "pc" {
-				t.Fatalf("refresh alias = %q, want pc", alias)
+			if machineName != "pc" {
+				t.Fatalf("refresh machineName = %q, want pc", machineName)
 			}
 			sessions := []protocol.SessionInfo{initial}
 			if refreshCalls > 1 {
 				sessions = []protocol.SessionInfo{added, initial}
 			}
 			return cli.PickerHostSnapshot{Sessions: cli.HostSessions{
-				Host:     cli.HostRecord{Alias: "pc"},
+				Host:     cli.HostRecord{ID: "pc", MachineName: "pc"},
 				Sessions: sessions,
 			}}, nil
 		},
@@ -70,8 +70,8 @@ func TestPickerRefreshAddsSessionsWithoutMovingTheSelection(t *testing.T) {
 	if refreshCalls != 2 {
 		t.Fatalf("refresh calls = %d, want 2", refreshCalls)
 	}
-	if refreshed.screen != sessionScreen || refreshed.currentHost().alias != "pc" || refreshed.selection != nil {
-		t.Fatalf("refresh changed picker navigation: screen %d, host %q, selection %#v", refreshed.screen, refreshed.currentHost().alias, refreshed.selection)
+	if refreshed.screen != sessionScreen || refreshed.currentHost().machineName != "pc" || refreshed.selection != nil {
+		t.Fatalf("refresh changed picker navigation: screen %d, host %q, selection %#v", refreshed.screen, refreshed.currentHost().machineName, refreshed.selection)
 	}
 	if got := refreshed.selectedSessionID(); got != "7K3D" {
 		t.Fatalf("selected session after prepend = %q, want 7K3D", got)
@@ -86,7 +86,7 @@ func TestPickerRefreshAddsSessionsWithoutMovingTheSelection(t *testing.T) {
 }
 
 func TestPickerRefreshKeepsANewlyListedContainingSessionOnItsPrePickerSnapshot(t *testing.T) {
-	host := cli.HostRecord{ID: "host-a", Alias: "pc"}
+	host := cli.HostRecord{ID: "host-a", MachineName: "pc"}
 	inner := protocol.SessionInfo{ID: "7K3D", HostID: host.ID, State: "detached", CreatedAt: pickerTestNow}
 	outer := protocol.SessionInfo{ID: "91AZ", HostID: host.ID, State: "detached", CreatedAt: pickerTestNow}
 	unrelated := protocol.SessionInfo{ID: "Q8ME", HostID: host.ID, State: "detached", CreatedAt: pickerTestNow}
@@ -119,8 +119,8 @@ func TestPickerRefreshKeepsANewlyListedContainingSessionOnItsPrePickerSnapshot(t
 	}
 
 	refreshed, _ := current.applyCatalogRefresh(catalogRefreshResultMsg{
-		epoch:     current.catalogEpoch,
-		hostAlias: host.Alias,
+		epoch:  current.catalogEpoch,
+		hostID: host.ID,
 		snapshot: cli.PickerHostSnapshot{Sessions: cli.HostSessions{
 			Host: host, Sessions: []protocol.SessionInfo{inner, outer, unrelated},
 		}},
@@ -143,7 +143,7 @@ func TestPickerRefreshKeepsANewlyListedContainingSessionOnItsPrePickerSnapshot(t
 }
 
 func TestPickerRefreshErrorRetainsCatalogAndKeepsPolling(t *testing.T) {
-	host := cli.HostRecord{Alias: "pc", ID: "host-id"}
+	host := cli.HostRecord{MachineName: "pc", ID: "host-id"}
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts: []cli.HostSessions{{Host: host, Sessions: []protocol.SessionInfo{{
 			ID: "7K3D", HostID: host.ID, State: "detached", CreatedAt: pickerTestNow,
@@ -164,7 +164,7 @@ func TestPickerRefreshErrorRetainsCatalogAndKeepsPolling(t *testing.T) {
 }
 
 func TestPickerRefreshTracksDetachAndExitWithoutLeavingThePanel(t *testing.T) {
-	host := cli.HostRecord{Alias: "pc", ID: "host-id"}
+	host := cli.HostRecord{MachineName: "pc", ID: "host-id"}
 	refreshCalls := 0
 	snapshot := func(state string) cli.PickerHostSnapshot {
 		return cli.PickerHostSnapshot{

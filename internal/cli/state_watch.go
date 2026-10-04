@@ -36,7 +36,7 @@ func (w *StateWatcher) Watch(ctx context.Context, host HostRecord, request proto
 // watch lends reader-owned state for synchronous projection; the callback must not retain it.
 func (w *StateWatcher) watch(ctx context.Context, host HostRecord, request protocol.StateWatch, publish func(StateView)) error {
 	if err := request.Validate(); err != nil {
-		return fmt.Errorf("watch host %s: %w", host.Alias, err)
+		return fmt.Errorf("watch host %s: %w", HostLabel(host), err)
 	}
 	view := StateView{Sections: map[string]ObservedSection{}, Name: machinename.Claim{ID: host.ID, MachineName: host.MachineName, Revision: host.NameRevision}}
 	attempt := 0
@@ -479,10 +479,18 @@ func applyPolledHost(host HostRecord, response protocol.Control, view *StateView
 }
 
 func applyVerifiedPoll(ctx context.Context, host HostRecord, topic string, response protocol.Control, view *StateView, received time.Time, transit time.Duration) error {
+	if err := validateNameEnvelope(response); err != nil {
+		return err
+	}
+	next := view.Clone()
+	if err := applyPolledSection(host, topic, response, &next, received, transit); err != nil {
+		return err
+	}
 	if topic == protocol.TopicHost && response.Type == protocol.TypeHostInfoResult && response.Host != nil {
 		if err := rememberHostName(ctx, host, *response.Host); err != nil {
 			return err
 		}
 	}
-	return applyPolledSection(host, topic, response, view, received, transit)
+	*view = next
+	return nil
 }

@@ -388,7 +388,7 @@ func TestOfflineRemoveHidesSessionFromCLIAndPickerBeforeReconciliation(t *testin
 	if err != nil || strings.Contains(stdout, "L0CL") {
 		t.Fatalf("offline removed session remained in ls: %q, %v", stdout, err)
 	}
-	picker, err := localPickerCatalog()
+	picker, err := localPickerCatalog(t.Context())
 	if err != nil || len(picker.Sessions) != 0 {
 		t.Fatalf("offline removed session remained in picker: %+v, %v", picker, err)
 	}

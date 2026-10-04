@@ -52,7 +52,7 @@ func (m dashboardModel) visibleSessionTargets() map[dashboardSessionTarget]cli.P
 	for index, host := range m.hosts {
 		for _, session := range host.Sessions.Rows[:selected[index]] {
 			target := dashboardSessionTarget{host.Host.ID, session.ID}
-			targets[target] = cli.PickerInspectRequest{HostAlias: host.Host.Alias, SessionID: session.ID, PreviewCols: 1, PreviewRows: 1}
+			targets[target] = cli.PickerInspectRequest{HostID: host.Host.ID, SessionID: session.ID, PreviewCols: 1, PreviewRows: 1}
 		}
 	}
 	return targets

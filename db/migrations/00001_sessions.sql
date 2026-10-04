@@ -1,7 +1,6 @@
 -- +goose Up
 CREATE TABLE hosts (
     id TEXT PRIMARY KEY CHECK (length(id) > 0),
-    alias TEXT UNIQUE CHECK (alias IS NULL OR length(alias) > 0),
     mesh_identity TEXT NOT NULL UNIQUE CHECK (length(mesh_identity) > 0),
     tailscale_name TEXT CHECK (tailscale_name IS NULL OR length(tailscale_name) > 0),
     last_seen_at INTEGER NOT NULL CHECK (last_seen_at >= 0)

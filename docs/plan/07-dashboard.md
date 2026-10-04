@@ -33,7 +33,7 @@ client, never a session database or traffic proxy.
 ## One information-packed screen
 
 Use dense square terminal panels, inspired by btop, with two columns when space
-permits. Each machine panel shows alias, reachability, CPU percentage and meter,
+permits. Each machine panel shows destination name, reachability, CPU percentage and meter,
 used/total RAM and meter, named temperature, two-minute CPU/RAM histories, uptime,
 session/service counts, and data age. Below them, fixed session and service
 tables show useful commands, reported states, and health. Put connection failures,

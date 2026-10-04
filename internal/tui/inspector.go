@@ -33,7 +33,7 @@ const (
 )
 
 type inspectionTarget struct {
-	hostAlias string
+	hostID    string
 	sessionID string
 }
 
@@ -97,7 +97,7 @@ func (m *model) inspectSelected() tea.Cmd {
 		return nil
 	}
 
-	target := inspectionTarget{hostAlias: host.alias, sessionID: current.id}
+	target := inspectionTarget{hostID: host.id, sessionID: current.id}
 	m.inspectSeq++
 	generation := m.inspectSeq
 	previous := m.inspection
@@ -159,7 +159,7 @@ func (m *model) inspectSelected() tea.Cmd {
 	previewColumns := min(inspectionPreviewColumns, max(1, m.width-4))
 	previewRows := inspectionPreviewRows
 	request := cli.PickerInspectRequest{
-		HostAlias:   host.alias,
+		HostID:      host.id,
 		SessionID:   current.id,
 		PreviewCols: previewColumns,
 		PreviewRows: previewRows,
@@ -224,7 +224,7 @@ func (m *model) refreshSessionDelegate() {
 		privacy:    m.privacy,
 		styles:     m.styles,
 		now:        m.now,
-		hostAlias:  m.currentHost().alias,
+		hostID:     m.currentHost().id,
 		inspection: m.inspection,
 		summaries:  m.summaries,
 		hostNames:  m.hostNames(),
@@ -584,7 +584,7 @@ func (m model) bestSessionLabel(current session) string {
 	if endedSession(current) {
 		return sessionLabel(current)
 	}
-	if summary, ok := m.summaries[inspectionTarget{hostAlias: m.currentHost().alias, sessionID: current.id}]; ok {
+	if summary, ok := m.summaries[inspectionTarget{hostID: m.currentHost().id, sessionID: current.id}]; ok {
 		return summarizedSessionLabel(current, summary)
 	}
 	if m.inspection.kind == inspectionReady && m.inspection.target.sessionID == current.id {
@@ -604,7 +604,7 @@ func (m model) sessionHeadline(current session) string {
 		primary, _ := sessionHeadline(m.bestSessionLabel(current), title)
 		return primary
 	}
-	if summary, ok := m.summaries[inspectionTarget{hostAlias: m.currentHost().alias, sessionID: current.id}]; ok {
+	if summary, ok := m.summaries[inspectionTarget{hostID: m.currentHost().id, sessionID: current.id}]; ok {
 		title = summary.terminalTitle
 	}
 	if m.inspection.kind == inspectionReady && m.inspection.target.sessionID == current.id {
@@ -642,7 +642,7 @@ func (m model) inspectionTargetContainsPicker(target inspectionTarget) bool {
 
 func (m model) containingSessionFor(target inspectionTarget) (containingSessionState, bool) {
 	host := m.currentHost()
-	if host.alias != target.hostAlias || host.id == "" || target.sessionID == "" {
+	if host.id != target.hostID || host.id == "" || target.sessionID == "" {
 		return containingSessionState{}, false
 	}
 	state, ok := m.containingSessions[containingSessionKey{hostID: host.id, sessionID: target.sessionID}]

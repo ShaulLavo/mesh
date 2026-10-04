@@ -45,7 +45,7 @@ func (a *application) runDashboard(ctx context.Context, wall bool, override stri
 	if err != nil {
 		return err
 	}
-	records, localID, socket, err := dashboardInventory()
+	records, localID, socket, err := dashboardInventory(ctx)
 	if err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func dashboardInspector(records []HostRecord, dial HostDialer, watcher *StateWat
 			return SessionInspection{}, context.Canceled
 		}
 		defer operations.done()
-		host, err := hostWithAlias(records, request.HostAlias)
+		host, err := resolveHostTarget(records, request.HostID)
 		if err != nil {
 			return SessionInspection{}, err
 		}
@@ -109,7 +109,7 @@ func dashboardInspector(records []HostRecord, dial HostDialer, watcher *StateWat
 		return inspectRemoteSession(ctx, host, dial, request.SessionID, 1, 1)
 	}
 }
-func dashboardInventory() ([]HostRecord, string, string, error) {
+func dashboardInventory(ctx context.Context) ([]HostRecord, string, string, error) {
 	hosts, err := LoadHosts()
 	if err != nil {
 		return nil, "", "", err
@@ -131,18 +131,31 @@ func dashboardInventory() ([]HostRecord, string, string, error) {
 		seen[host.ID] = true
 		result = append(result, host)
 	}
-	if !seen[local.ID] {
-		name, err := os.Hostname()
-		if err != nil {
-			return nil, "", "", fmt.Errorf("dashboard local hostname: %w", err)
+	localRecord := HostRecord{ID: local.ID, MeshIdentity: local.ID, local: true}
+	readCtx, cancel := context.WithTimeout(ctx, localQueryTimeout)
+	declaration, readErr := localDeclaredHost(readCtx, stateDir)
+	cancel()
+	if readErr == nil {
+		if declaration.ID != local.ID || declaration.MeshIdentity != local.ID {
+			return nil, "", "", fmt.Errorf("local daemon reported another identity")
 		}
-		result = append(result, HostRecord{Alias: name, ID: local.ID, MeshIdentity: local.ID})
+		localRecord = declaration
+		localRecord.local = true
 	}
-	sort.SliceStable(result, func(i, j int) bool { return result[i].Alias < result[j].Alias })
+	for i := range result {
+		if result[i].ID == local.ID {
+			result[i] = localRecord
+		}
+	}
+	if !seen[local.ID] {
+		result = append(result, localRecord)
+	}
+	ProjectHostNames(result)
+	sort.SliceStable(result, func(i, j int) bool { return result[i].MachineName < result[j].MachineName })
 	return result, local.ID, filepath.Join(stateDir, "daemon.sock"), nil
 }
 func dashboardHost(record HostRecord, localID string) DashboardHost {
-	return DashboardHost{ID: record.ID, Alias: dashboardText(record.Alias), Local: record.ID == localID}
+	return DashboardHost{ID: record.ID, MachineName: record.MachineName, NameRevision: record.NameRevision, NameVerified: record.NameVerified, NameConflict: record.NameConflict, NamePriority: record.NamePriority, NameSuffix: record.NameSuffix, Local: record.ID == localID}
 }
 func dashboardControlDialer(localID, socket string, remote HostDialer) HostDialer {
 	return func(ctx context.Context, host HostRecord) (transport.Conn, error) {

@@ -1,125 +1,92 @@
 package cli
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
-	"strings"
+	"github.com/shaul/mesh/internal/paths"
+	"path/filepath"
 
-	"github.com/charmbracelet/x/term"
-	"github.com/muesli/cancelreader"
+	"github.com/shaul/mesh/internal/machinename"
+	"github.com/shaul/mesh/internal/protocol"
 	"github.com/spf13/cobra"
 )
 
-// renameCommand changes the local name for an adopted host. The name is this
-// machine's label for it and nothing on the host depends on it, so renaming is
-// a local edit rather than anything the remote needs to hear about.
 func (a *application) renameCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:     "rename host new-name",
-		Aliases: []string{"mv"},
-		Short:   "Change the local name for an adopted host",
-		Args:    exactArgs(2, "the host to rename and its new name", "mesh rename omarchy pc"),
+		Use: "rename host new-name", Aliases: []string{"mv"}, Short: "Change the destination machine's name",
+		Args: exactArgs(2, "a machine name or exact host ID and its new name", "mesh rename HOST_ID work-pc"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			renamed, err := RenameHost(args[0], args[1])
+			hosts, err := machineTargetHosts(cmd.Context())
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "renamed %s to %s\n", a.privacy.Value("host", args[0]), a.privacy.Value("host", renamed.Alias))
+			host, err := resolveHostTarget(hosts, args[0])
+			if err != nil {
+				return err
+			}
+			dial := a.dependencies.DialControl
+			if host.local {
+				stateDir, err := paths.StateDir()
+				if err != nil {
+					return fmt.Errorf("locate own rename state: %w", err)
+				}
+				dial = dashboardControlDialer(host.ID, filepath.Join(stateDir, "daemon.sock"), dial)
+			}
+			claim, err := RenameHost(cmd.Context(), host, args[1], dial)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "renamed %s to %s (revision %d)\nOther devices adopt this name when they reconnect. An unseen competing claim can still cause a conflict.\n", a.privacy.Value("host-id", claim.ID), a.privacy.Value("host", claim.MachineName), claim.Revision)
 			return err
 		},
 	}
 }
 
-// RenameHost gives an adopted host a new local name.
-func RenameHost(from, to string) (HostRecord, error) {
-	alias, err := ValidateHostAlias(to)
+// RenameHost pins the owner and uses its current revision on the same authenticated connection.
+func RenameHost(ctx context.Context, host HostRecord, value string, dial HostDialer) (machinename.Claim, error) {
+	name, err := machinename.Normalize(value)
 	if err != nil {
-		return HostRecord{}, err
+		return machinename.Claim{}, fmt.Errorf("normalize machine name: %w", err)
 	}
-	config, err := loadHostConfig()
-	if err != nil {
-		return HostRecord{}, err
-	}
-	hosts := config.Hosts
-	current, err := hostWithAlias(hosts, from)
-	if err != nil {
-		return HostRecord{}, err
-	}
-	if strings.EqualFold(current.Alias, alias) {
-		return current, nil
-	}
-	for _, existing := range hosts {
-		if strings.EqualFold(existing.Alias, alias) {
-			return HostRecord{}, fmt.Errorf("host name %q already belongs to host %s", alias, existing.ID)
-		}
-	}
-	// Remove the old entry first: SaveHost matches on identity, and would
-	// otherwise leave the host under its previous name too.
-	remaining := make([]HostRecord, 0, len(hosts))
-	for _, existing := range hosts {
-		if existing.ID != current.ID {
-			remaining = append(remaining, existing)
-		}
-	}
-	current.Alias = alias
-	remaining = append(remaining, current)
-	sortHosts(remaining)
-	config.Hosts = remaining
-	if err := writeHostConfig(config); err != nil {
-		return HostRecord{}, err
-	}
-	return current, nil
-}
-
-// existingAliasFor reports the name an adopted host already carries, when the
-// adoption that just ran would give it a different one.
-func existingAliasFor(id, proposed string) string {
 	hosts, err := LoadHosts()
 	if err != nil {
-		return ""
+		return machinename.Claim{}, err
 	}
-	for _, existing := range hosts {
-		if existing.ID == id && !strings.EqualFold(existing.Alias, proposed) {
-			return existing.Alias
+	conn, info, err := openVerifiedHostInfo(ctx, host, dial)
+	if err != nil {
+		return machinename.Claim{}, err
+	}
+	defer conn.Close() //nolint:errcheck // control descriptor cleanup
+	owner, err := targetOwnerClaim(ctx, host, info)
+	if err != nil {
+		return machinename.Claim{}, err
+	}
+	hosts = withOwnerClaim(hosts, owner)
+	for _, other := range hosts {
+		if other.ID != host.ID && other.MachineName == name {
+			return machinename.Claim{}, fmt.Errorf("machine name %q is already claimed by %s; choose another name", name, other.ID)
 		}
 	}
-	return ""
-}
-
-// confirmRename asks before replacing a name the operator chose earlier.
-// Adopting a host again under a different name used to rename it silently, so
-// `mesh add omarchy` quietly cost someone the alias `pc` they had been using.
-func (a *application) confirmRename(cmd *cobra.Command, current, proposed string) (bool, error) {
-	input := a.dependencies.Stdin
-	if input == nil || !term.IsTerminal(input.Fd()) {
-		// Nobody to ask: keep the name already in use.
-		return false, nil
+	if info.NameRevision == 0 {
+		return machinename.Claim{}, fmt.Errorf("destination %s has no naming declaration; update that destination", host.ID)
 	}
-	output := cmd.ErrOrStderr()
-	if _, err := fmt.Fprintf(output, "\nThat host is already added as %q.\nRename it to %q? [y/N] ",
-		SafeTerminalText(a.privacy.Value("host", current)), SafeTerminalText(a.privacy.Value("host", proposed))); err != nil {
-		return false, err
-	}
-	reader, err := cancelreader.NewReader(input)
+	requestID, err := newDaemonRequestID()
 	if err != nil {
-		return false, fmt.Errorf("prepare the rename prompt: %w", err)
+		return machinename.Claim{}, err
 	}
-	defer reader.Close() //nolint:errcheck // prompt result is authoritative
-	stop := context.AfterFunc(cmd.Context(), func() { reader.Cancel() })
-	answer, err := bufio.NewReader(reader).ReadString('\n')
-	stop()
-	if cmd.Context().Err() != nil {
-		return false, cmd.Context().Err()
+	response, err := controlRequest(ctx, conn, protocol.Control{RequestID: requestID, Type: protocol.TypeHostRename, Rename: &protocol.HostRename{TargetID: host.ID, MachineName: name, ExpectedRevision: info.NameRevision}})
+	if err != nil {
+		return machinename.Claim{}, err
 	}
-	if err != nil && !errors.Is(err, cancelreader.ErrCanceled) && answer == "" {
-		return false, err
+	if response.Type != protocol.TypeHostRenamed || response.Host == nil {
+		return machinename.Claim{}, fmt.Errorf("destination %s rejected name change: %s", host.ID, safeRemoteText(response.Message))
 	}
-	switch strings.ToLower(strings.TrimSpace(answer)) {
-	case "y", "yes":
-		return true, nil
-	default:
-		return false, nil
+	if err := rememberHostName(ctx, host, *response.Host); err != nil {
+		return machinename.Claim{}, err
 	}
+	claim := declaredName(*response.Host)
+	if claim.MachineName != name {
+		return machinename.Claim{}, fmt.Errorf("destination %s returned another name after rename", host.ID)
+	}
+	return claim, nil
 }

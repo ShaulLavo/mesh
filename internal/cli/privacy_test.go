@@ -23,7 +23,7 @@ func TestPrivacySessionListsMaskMetadataKeepStatus(t *testing.T) {
 		view := listView{privacy: mask}
 		var err error
 		if fleet {
-			_, err = writeSessionList(&output, commandTestTime, []HostSessions{{Host: HostRecord{Alias: "private-host"}, Sessions: rows}}, view)
+			_, err = writeSessionList(&output, commandTestTime, []HostSessions{{Host: HostRecord{MachineName: "private-host"}, Sessions: rows}}, view)
 		} else {
 			_, err = writeLocalSessionList(&output, commandTestTime, rows, view)
 		}
@@ -159,9 +159,9 @@ func TestPrivacyPreservesCreationAndAttachmentTargets(t *testing.T) {
 
 func TestPrivacyHostManagementPresentationPreservesRecords(t *testing.T) {
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
-	raw := HostRecord{ID: "private-host-id", MeshIdentity: "key", Endpoint: "ws://private-machine.example:7337/mesh"}
+	raw := HostRecord{ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MachineName: "private-machine", NameRevision: 1, Endpoint: "ws://private-machine.example:7337/mesh"}
 	output, _, err := executeCommand(t, Dependencies{Bootstrap: func(_ context.Context, request AddRequest) (BootstrapResult, error) {
-		if request.Target != "private-user@private-machine" || request.Alias != "private-machine" {
+		if request.Target != "private-user@private-machine" {
 			t.Fatalf("masked bootstrap: %+v", request)
 		}
 		return BootstrapResult{Host: raw}, nil
@@ -169,7 +169,7 @@ func TestPrivacyHostManagementPresentationPreservesRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"private-user", "private-host-id"} {
+	for _, secret := range []string{"private-user", "private-khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"} {
 		if strings.Contains(output, secret) {
 			t.Fatalf("add leaked %q: %s", secret, output)
 		}
@@ -178,15 +178,15 @@ func TestPrivacyHostManagementPresentationPreservesRecords(t *testing.T) {
 		t.Fatalf("add lost its readable host name: %s", output)
 	}
 	hosts, err := LoadHosts()
-	if err != nil || len(hosts) != 1 || hosts[0].Alias != "private-machine" || hosts[0].Endpoint != raw.Endpoint {
+	if err != nil || len(hosts) != 1 || hosts[0].MachineName != "private-machine" || hosts[0].Endpoint != raw.Endpoint {
 		t.Fatalf("masked saved records: %+v, %v", hosts, err)
 	}
 	output, _, err = executeCommand(t, Dependencies{Wake: func(_ context.Context, host HostRecord) error {
-		if host.Alias != "private-machine" {
+		if host.MachineName != "private-machine" {
 			t.Fatal("masked wake target")
 		}
 		return nil
-	}}, "--privacy", "wake", "private-machine")
+	}}, "--privacy", "wake", raw.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

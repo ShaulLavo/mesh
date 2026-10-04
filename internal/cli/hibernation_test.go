@@ -70,7 +70,7 @@ func TestSessionIdleAndMemoryCells(t *testing.T) {
 		Recovery: &recovery.Record{LastOutputAt: now.Add(-12 * time.Minute)}}
 	silent := protocol.SessionInfo{ID: "91AZ", State: worker.StateRunning, CreatedAt: now.Add(-45 * time.Second)}
 	exited := protocol.SessionInfo{ID: "Q2W3", State: worker.StateExited, CreatedAt: now.Add(-time.Hour), MemoryBytes: 1 << 20}
-	asleep := hibernatedRow("ZZ99", "host-id", now.Add(-2*24*time.Hour))
+	asleep := hibernatedRow("ZZ99", "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", now.Add(-2*24*time.Hour))
 	woken := asleep
 	woken.ReplacementID = "AB12"
 	for _, test := range []struct {
@@ -100,10 +100,10 @@ func TestSessionIdleAndMemoryCells(t *testing.T) {
 
 func TestProtocolSessionTableShowsHibernationIdleAndMemory(t *testing.T) {
 	var output bytes.Buffer
-	live := protocol.SessionInfo{ID: "7K3D", HostID: "host-id", Command: []string{"bash"}, Cwd: "/work", State: worker.StateDetached,
+	live := protocol.SessionInfo{ID: "7K3D", HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", Command: []string{"bash"}, Cwd: "/work", State: worker.StateDetached,
 		CreatedAt: commandTestTime.Add(-time.Hour), MemoryBytes: 412 << 20}
-	if err := writeProtocolSessions(&output, commandTestTime, []HostSessions{{Host: HostRecord{Alias: "pc"}, Sessions: []protocol.SessionInfo{
-		live, hibernatedRow("91AZ", "host-id", commandTestTime.Add(-3*time.Hour)),
+	if err := writeProtocolSessions(&output, commandTestTime, []HostSessions{{Host: HostRecord{MachineName: "pc", NameVerified: true}, Sessions: []protocol.SessionInfo{
+		live, hibernatedRow("91AZ", "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", commandTestTime.Add(-3*time.Hour)),
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestLocalRowsReadTheHibernationMarker(t *testing.T) {
 }
 
 func TestWakeDecisionFollowsTheCatalogRow(t *testing.T) {
-	host := HostRecord{Alias: "pc", ID: "host-id"}
+	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
 	asleep := hibernatedRow("7K3D", host.ID, commandTestTime)
 	woken := asleep
 	woken.ReplacementID = "9ABC"

@@ -103,7 +103,11 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	if !options.check && !options.yes && !interactive {
 		return errors.New("noninteractive updates require --yes; use --check to inspect availability")
 	}
-	environment, err := openUpdateEnvironment(options.coordinator)
+	options, intents, err := a.resolveUpdateNameIntents(ctx, options)
+	if err != nil {
+		return err
+	}
+	environment, err := openUpdateEnvironment(ctx, options.coordinator)
 	if err != nil {
 		return err
 	}
@@ -128,6 +132,12 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	if err != nil {
 		return err
 	}
+	if !options.json {
+		preview.Targets, err = declaredUpdateTargets(ctx, preview.Targets)
+		if err != nil {
+			return err
+		}
+	}
 	if options.check {
 		return printUpdatePreview(output.out, preview, options.json, output.privacy)
 	}
@@ -138,6 +148,9 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	}
 	if !options.yes && !a.confirmUpdate(preview, output.diagnostic) {
 		return errors.New("update cancelled")
+	}
+	if err := verifyUpdateNameIntents(ctx, intents, a.dependencies.DialControl); err != nil {
+		return err
 	}
 	if savePath != "" {
 		if err := update.SaveFleet(savePath, preview.Fleet); err != nil {
@@ -157,7 +170,7 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	return observeUpdate(ctx, environment, run, options.json, output)
 }
 
-func openUpdateEnvironment(coordinator string) (updateEnvironment, error) {
+func openUpdateEnvironment(ctx context.Context, coordinator string) (updateEnvironment, error) {
 	stateDir, err := paths.StateDir()
 	if err != nil {
 		return updateEnvironment{}, err
@@ -167,15 +180,18 @@ func openUpdateEnvironment(coordinator string) (updateEnvironment, error) {
 		return updateEnvironment{}, err
 	}
 	environment := updateEnvironment{stateDir: stateDir, client: update.Client{ID: host.ID, Key: key}, local: update.LocalHost(stateDir, host.ID)}
+	if declared, readErr := localNameRecord(ctx, stateDir); readErr == nil {
+		environment.local.MachineName = declared.MachineName
+	}
 	environment.coordinator = environment.local
-	if coordinator == "" || coordinator == localHostAlias {
+	if coordinator == "" || coordinator == localHostID() {
 		return environment, nil
 	}
 	hosts, err := LoadHosts()
 	if err != nil {
 		return environment, err
 	}
-	remote, err := hostWithAlias(hosts, coordinator)
+	remote, err := resolveHostTarget(hosts, coordinator)
 	if err != nil {
 		return environment, err
 	}
@@ -184,7 +200,7 @@ func openUpdateEnvironment(coordinator string) (updateEnvironment, error) {
 }
 
 func adoptedUpdateHost(host HostRecord) update.Host {
-	return update.Host{ID: host.MeshIdentity, Alias: host.Alias, Endpoint: host.Endpoint}
+	return update.Host{ID: host.MeshIdentity, MachineName: host.MachineName, Endpoint: host.Endpoint}
 }
 
 func inspectUpdateTargets(ctx context.Context, client update.Caller, hosts []update.Host) []update.Target {
@@ -345,11 +361,27 @@ func selectedUpdateFleet(aliases []string, hosts []HostRecord, local update.Host
 }
 
 func selectedUpdateHost(alias string, hosts []HostRecord, local update.Host) (update.Host, error) {
-	if alias == local.Alias || alias == "local" {
+	if alias == local.ID {
 		return local, nil
 	}
-	host, err := hostWithAlias(hosts, alias)
-	return adoptedUpdateHost(host), err
+	candidates := append([]HostRecord(nil), hosts...)
+	found := false
+	for _, host := range candidates {
+		if host.ID == local.ID {
+			found = true
+		}
+	}
+	if !found {
+		candidates = append(candidates, HostRecord{ID: local.ID, MeshIdentity: local.ID, MachineName: local.MachineName, local: true})
+	}
+	host, err := resolveHostTarget(candidates, alias)
+	if err != nil {
+		return update.Host{}, err
+	}
+	if host.ID == local.ID {
+		return local, nil
+	}
+	return adoptedUpdateHost(host), nil
 }
 
 func outsideUpdateFleet(fleet update.Fleet, hosts []HostRecord) []string {
@@ -360,8 +392,72 @@ func outsideUpdateFleet(fleet update.Fleet, hosts []HostRecord) []string {
 	var outside []string
 	for _, host := range hosts {
 		if !known[host.MeshIdentity] {
-			outside = append(outside, host.Alias)
+			outside = append(outside, HostLabel(host))
 		}
 	}
 	return outside
+}
+
+func (a *application) resolveUpdateNameIntents(ctx context.Context, options updateOptions) (updateOptions, []HostRecord, error) {
+	if options.coordinator == "" && len(options.hosts) == 0 {
+		return options, nil, nil
+	}
+	hosts, err := machineTargetHosts(ctx)
+	if err != nil {
+		return options, nil, err
+	}
+	var intents []HostRecord
+	resolve := func(value string) (string, error) {
+		host, err := resolveHostTarget(hosts, value)
+		if err != nil {
+			return "", err
+		}
+		if host.targetName != "" {
+			intents = append(intents, host)
+		}
+		return host.ID, nil
+	}
+	if options.coordinator != "" {
+		options.coordinator, err = resolve(options.coordinator)
+		if err != nil {
+			return options, nil, err
+		}
+	}
+	selected := make([]string, len(options.hosts))
+	for index, value := range options.hosts {
+		selected[index], err = resolve(value)
+		if err != nil {
+			return options, nil, err
+		}
+	}
+	options.hosts = selected
+	if err := verifyUpdateNameIntents(ctx, intents, a.dependencies.DialControl); err != nil {
+		return options, nil, err
+	}
+	return options, intents, nil
+}
+
+func verifyUpdateNameIntents(ctx context.Context, hosts []HostRecord, dial HostDialer) error {
+	for _, host := range hosts {
+		if host.local {
+			stateDir, err := paths.StateDir()
+			if err != nil {
+				return fmt.Errorf("locate updater target state: %w", err)
+			}
+			owner, err := localNameRecord(ctx, stateDir)
+			if err != nil {
+				return err
+			}
+			if owner.ID != host.ID || !owner.NameVerified || owner.MachineName != host.targetName {
+				return fmt.Errorf("local machine name changed; use exact host ID %s", host.ID)
+			}
+			continue
+		}
+		conn, _, err := openVerifiedHostInfo(ctx, host, dial)
+		if err != nil {
+			return err
+		}
+		_ = conn.Close()
+	}
+	return nil
 }

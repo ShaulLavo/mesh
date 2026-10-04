@@ -149,17 +149,17 @@ func TestInspectorRequestsOnlyTheSelectedSessionWithinBounds(t *testing.T) {
 	if !ok {
 		t.Fatalf("inspection command returned %T", command())
 	}
-	if got != (cli.PickerInspectRequest{HostAlias: "pc", SessionID: "7K3D", PreviewCols: 76, PreviewRows: 24}) {
+	if got != (cli.PickerInspectRequest{HostID: "pc", SessionID: "7K3D", PreviewCols: 76, PreviewRows: 24}) {
 		t.Fatalf("inspection request = %#v", got)
 	}
-	if message.target != (inspectionTarget{hostAlias: "pc", sessionID: "7K3D"}) {
+	if message.target != (inspectionTarget{hostID: "pc", sessionID: "7K3D"}) {
 		t.Fatalf("inspection target = %#v", message.target)
 	}
 }
 
 func TestPickerPopulatesLiveLabelsForEveryVisibleSession(t *testing.T) {
 	hosts := []host{{
-		alias: "pc",
+		id: "pc", machineName: "pc",
 		sessions: []session{
 			{id: "7K3D", state: "detached", command: []string{"bash"}, cwd: "/home/shaul", createdAt: pickerTestNow},
 			{id: "91AZ", state: "detached", command: []string{"bash"}, cwd: "/home/shaul", createdAt: pickerTestNow},
@@ -199,7 +199,7 @@ func TestPickerPopulatesLiveLabelsForEveryVisibleSession(t *testing.T) {
 
 func TestLiveSessionLabelsStayWithTheirSessionsWhenTheCursorMoves(t *testing.T) {
 	hosts := []host{{
-		alias: "pc",
+		id: "pc", machineName: "pc",
 		sessions: []session{
 			{id: "7K3D", state: "detached", command: []string{"bash"}, cwd: "/home/shaul", createdAt: pickerTestNow},
 			{id: "91AZ", state: "detached", command: []string{"bash"}, cwd: "/home/shaul", createdAt: pickerTestNow},
@@ -382,7 +382,7 @@ func TestSessionLayoutSpendsSpaceOnPreviewBeforeBlankRows(t *testing.T) {
 			for index := range sessions {
 				sessions[index] = session{id: fmt.Sprintf("S%03d", index), state: "detached"}
 			}
-			current := newModel([]host{{alias: "pc", sessions: sessions}}, pickerTestNow)
+			current := newModel([]host{{id: "pc", machineName: "pc", sessions: sessions}}, pickerTestNow)
 			_ = current.showSessions()
 			listRows, previewRows, showPanel := current.sessionLayout(20)
 			if !showPanel || listRows != test.wantList || previewRows != test.wantPreview {
@@ -447,7 +447,7 @@ func TestInspectorStillRendersANonPickerMeshProcess(t *testing.T) {
 func TestContainingSessionWithoutAnInitialSnapshotIsNeverInspectedAfterDrawing(t *testing.T) {
 	requests := 0
 	current := newInspectingModel(context.Background(), []host{{
-		id: "host-a", alias: "pc",
+		id: "host-a", machineName: "pc",
 		sessions: []session{{id: "7K3D", state: "detached"}},
 	}}, func(context.Context, cli.PickerInspectRequest) (cli.SessionInspection, error) {
 		requests++
@@ -473,7 +473,7 @@ func TestContainingSessionWithoutAnInitialSnapshotIsNeverInspectedAfterDrawing(t
 
 func TestInspectorIdentityDoesNotHideAnotherMeshPicker(t *testing.T) {
 	current := newInspectingModel(context.Background(), []host{{
-		id: "host-a", alias: "pc",
+		id: "host-a", machineName: "pc",
 		sessions: []session{{id: "7K3D", state: "detached"}},
 	}}, func(context.Context, cli.PickerInspectRequest) (cli.SessionInspection, error) {
 		return cli.SessionInspection{}, nil
@@ -497,7 +497,7 @@ func TestContainingSessionUsesScreenCapturedBeforePickerStarted(t *testing.T) {
 	inspectCalls := 0
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts: []cli.HostSessions{{
-			Host: cli.HostRecord{ID: "host-a", Alias: "pc"},
+			Host: cli.HostRecord{ID: "host-a", MachineName: "pc"},
 			Sessions: []protocol.SessionInfo{{
 				ID: "7K3D", HostID: "host-a", State: "running", CreatedAt: pickerTestNow,
 			}},
@@ -571,7 +571,7 @@ func TestEveryNestedContainingSessionUsesItsSnapshotWhileUnrelatedSessionsStayLi
 	requests := make(chan cli.PickerInspectRequest, len(sessions))
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts: []cli.HostSessions{{
-			Host:     cli.HostRecord{ID: "host-a", Alias: "pc"},
+			Host:     cli.HostRecord{ID: "host-a", MachineName: "pc"},
 			Sessions: sessions,
 		}},
 		Inspect: func(_ context.Context, request cli.PickerInspectRequest) (cli.SessionInspection, error) {
@@ -609,7 +609,7 @@ func TestEveryNestedContainingSessionUsesItsSnapshotWhileUnrelatedSessionsStayLi
 		t.Fatalf("live inspection command returned %T", command())
 	}
 	request := <-requests
-	if request.HostAlias != "pc" || request.SessionID != unrelatedID {
+	if request.HostID != "host-a" || request.SessionID != unrelatedID {
 		t.Fatalf("live inspection request = %#v", request)
 	}
 	current = current.applyInspection(message)
@@ -622,7 +622,7 @@ func TestContainingSessionSnapshotOutputAgeKeepsAdvancing(t *testing.T) {
 	lastOutputAt := pickerTestNow
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts: []cli.HostSessions{{
-			Host: cli.HostRecord{ID: "host-a", Alias: "pc"},
+			Host: cli.HostRecord{ID: "host-a", MachineName: "pc"},
 			Sessions: []protocol.SessionInfo{{
 				ID: "7K3D", HostID: "host-a", State: "running", CreatedAt: pickerTestNow,
 			}},
@@ -650,7 +650,7 @@ func TestContainingSessionSnapshotOutputAgeKeepsAdvancing(t *testing.T) {
 func TestContainingSessionUsesLiveCatalogAttachmentState(t *testing.T) {
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts: []cli.HostSessions{{
-			Host: cli.HostRecord{ID: "host-a", Alias: "pc"},
+			Host: cli.HostRecord{ID: "host-a", MachineName: "pc"},
 			Sessions: []protocol.SessionInfo{{
 				ID: "7K3D", HostID: "host-a", State: "running", CreatedAt: pickerTestNow,
 			}},
@@ -806,8 +806,8 @@ func TestInspectorPlainPreviewFallbackPreservesEmojiJoiners(t *testing.T) {
 
 func TestHostCatalogUsesCleanRoute(t *testing.T) {
 	hosts := hostCatalog(cli.PickerInput{Hosts: []cli.HostSessions{
-		{Host: cli.HostRecord{Alias: "pc", TailscaleName: "pc.tail.example", Endpoint: "ws://100.64.0.2:7337/mesh"}},
-		{Host: cli.HostRecord{Alias: "pi", Endpoint: "ws://100.64.0.8:7447/mesh"}},
+		{Host: cli.HostRecord{MachineName: "pc", TailscaleName: "pc.tail.example", Endpoint: "ws://100.64.0.2:7337/mesh"}},
+		{Host: cli.HostRecord{MachineName: "pi", Endpoint: "ws://100.64.0.8:7447/mesh"}},
 	}})
 	if hosts[0].route != "pc.tail.example" || hosts[1].route != "100.64.0.8:7447" {
 		t.Fatalf("routes = %q, %q", hosts[0].route, hosts[1].route)
@@ -816,7 +816,7 @@ func TestHostCatalogUsesCleanRoute(t *testing.T) {
 
 func TestOfflineExpandedPreviewStillWarnsBeforeAttach(t *testing.T) {
 	current := newModel([]host{{
-		alias:    "pc",
+		id: "pc", machineName: "pc",
 		stale:    true,
 		sessions: []session{{id: "7K3D", state: "running"}},
 	}}, pickerTestNow)

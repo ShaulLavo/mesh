@@ -3,16 +3,18 @@ package cli
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 )
 
 func TestResolveArgumentExactDestinationID(t *testing.T) {
-	host := HostRecord{Alias: "viewer-label", ID: "exact-destination-identity"}
+	host := HostRecord{MachineName: "viewer-label", ID: "exact-destination-identity"}
 	target, err := ResolveArgument(host.ID, []HostRecord{host})
 	if err != nil || target.Host == nil || target.Host.ID != host.ID {
 		t.Fatalf("exact destination ID did not resolve: target=%+v err=%v", target, err)
@@ -20,7 +22,7 @@ func TestResolveArgumentExactDestinationID(t *testing.T) {
 }
 
 func TestStateWatchRefusesAnotherDestinationName(t *testing.T) {
-	host := HostRecord{Alias: "destination", ID: "expected-id", MeshIdentity: "expected-pin"}
+	host := HostRecord{MachineName: "destination", ID: "expected-id", MeshIdentity: "expected-pin"}
 	for _, response := range []protocol.Control{
 		{Type: protocol.TypeStateSnapshot, StateSnapshot: &protocol.StateSnapshot{Seq: 1, Host: &protocol.HostInfo{ID: "another-id", MeshIdentity: "expected-pin", MachineName: "forged", NameRevision: 1}}},
 		{Type: protocol.TypeStateEvent, StateEvent: &protocol.StateEvent{Seq: 2, Kind: "host.changed", Payload: protocol.StatePayload{Host: &protocol.HostInfo{ID: "expected-id", MeshIdentity: "another-pin", MachineName: "forged", NameRevision: 1}}}},
@@ -32,8 +34,8 @@ func TestStateWatchRefusesAnotherDestinationName(t *testing.T) {
 }
 
 func TestResolveArgumentRefusesKnownNameConflictAndKeepsExactIDs(t *testing.T) {
-	a := HostRecord{Alias: "viewer-a", ID: "a-destination-id", MachineName: "shared", NameRevision: 1}
-	b := HostRecord{Alias: "viewer-b", ID: "b-destination-id", MachineName: "shared", NameRevision: 7}
+	a := HostRecord{ID: "a-destination-id", MachineName: "shared", NameRevision: 1}
+	b := HostRecord{ID: "b-destination-id", MachineName: "shared", NameRevision: 7}
 	for _, hosts := range [][]HostRecord{{a, b}, {b, a}} {
 		if target, err := ResolveArgument("SHARED", hosts); err == nil || target.Host != nil || !strings.Contains(err.Error(), "a-destination-id, b-destination-id") {
 			t.Fatalf("ambiguous name could select another host: %+v %v", target, err)
@@ -140,5 +142,64 @@ func TestPolledLegacyOwnerRetainsCachedNameAsUnverified(t *testing.T) {
 	}
 	if view.Name != f.names.Current() || view.NameVerified {
 		t.Fatalf("legacy owner erased or freshly verified cached name: %+v", view)
+	}
+}
+
+func TestAuthenticatedOwnerCannotDeclareAnotherCryptographicIdentity(t *testing.T) {
+	f := namedDestination(t)
+	if _, err := listRemoteHost(t.Context(), f.host, dialControlHost); err != nil {
+		t.Fatalf("legitimate named B/B: %v", err)
+	}
+	other, _, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := ConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := machinename.Claim{ID: other.ID, MachineName: "other-real-owner", Revision: 1}
+	if _, err := machinename.RememberClaim(t.Context(), filepath.Dir(path), other.ID, original); err != nil {
+		t.Fatal(err)
+	}
+	forged := f.info()
+	forged.ID, forged.MachineName, forged.NameRevision = other.ID, "forged-owner", 99
+	f.reported.Store(&forged)
+	expected := f.host
+	expected.ID = other.ID
+	if _, err := listRemoteHost(t.Context(), expected, dialControlHost); err == nil {
+		t.Fatal("authenticated owner admitted a claim for another cryptographic ID")
+	}
+	if f.operations.Load() != 1 {
+		t.Fatal("foreign claim reached a session effect")
+	}
+	view := StateView{Name: original, NameVerified: true, Seq: 1, Sections: map[string]ObservedSection{}}
+	view = view.Clone()
+	before := view.Clone()
+	for _, response := range []protocol.Control{
+		{Type: protocol.TypeStateSnapshot, StateSnapshot: &protocol.StateSnapshot{Seq: 2, Host: &forged}},
+		{Type: protocol.TypeStateEvent, StateEvent: &protocol.StateEvent{Seq: 2, Kind: "host.changed", Payload: protocol.StatePayload{Host: &forged}}},
+	} {
+		if err := applyVerifiedState(t.Context(), expected, &view, response, time.Now(), 0); err == nil {
+			t.Fatal("foreign claim entered watched state")
+		}
+		if !reflect.DeepEqual(view, before) {
+			t.Fatal("foreign watched claim changed view")
+		}
+	}
+	if err := applyPolledSection(expected, protocol.TopicHost, protocol.Control{Type: protocol.TypeHostInfoResult, Host: &forged}, &view, time.Now(), 0); err == nil {
+		t.Fatal("foreign claim entered polled state")
+	}
+	if !reflect.DeepEqual(view, before) {
+		t.Fatal("foreign polled claim changed view")
+	}
+	cached, err := machinename.CachedClaim(filepath.Dir(path), other.ID)
+	if err != nil || cached != original {
+		t.Fatalf("foreign claim changed owner cache: %+v %v", cached, err)
+	}
+	legacy := forged
+	legacy.MachineName, legacy.NameRevision = "", 0
+	if err := validateHostInfo(expected, legacy); err != nil {
+		t.Fatalf("unnamed legacy diagnostic changed: %v", err)
 	}
 }

@@ -235,7 +235,7 @@ func validateRunMembership(run Run) error {
 	}
 	for _, target := range run.Targets {
 		host, exists := members[target.Host.ID]
-		if !exists || host.Alias != target.Host.Alias || host.Endpoint != target.Host.Endpoint || host.Platform != target.Host.Platform || !slices.Equal(host.DependsOn, target.Host.DependsOn) {
+		if !exists || host.Endpoint != target.Host.Endpoint || host.Platform != target.Host.Platform || !slices.Equal(host.DependsOn, target.Host.DependsOn) {
 			return errors.New("update: target differs from approved fleet membership")
 		}
 		delete(members, target.Host.ID)

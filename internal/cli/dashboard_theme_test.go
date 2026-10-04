@@ -78,10 +78,7 @@ func TestDashboardUnknownThemeListsNames(t *testing.T) {
 func TestSaveHostPreservesDashboardTheme(t *testing.T) {
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	writeDashboardThemeFixture(t, "gruvbox-material")
-	if err := SaveHost(HostRecord{Alias: "pc", ID: "host-key", MeshIdentity: "host-key", Endpoint: "ws://100.64.0.2:7777/mesh"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := RenameHost("pc", "desktop"); err != nil {
+	if err := SaveHost(HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", Endpoint: "ws://100.64.0.2:7777/mesh"}); err != nil {
 		t.Fatal(err)
 	}
 	config, err := loadHostConfig()

@@ -16,7 +16,7 @@ import (
 
 func TestDashboardPassiveViewFitsAndFreshnessIsIndependent(t *testing.T) {
 	now := pickerTestNow
-	input := cli.DashboardInput{Hosts: []cli.DashboardHost{{ID: "pc", Alias: "pc"}}, Wall: true}
+	input := cli.DashboardInput{Hosts: []cli.DashboardHost{{ID: "pc", MachineName: "pc"}}, Wall: true}
 	model := newDashboard(input, now)
 	model.receive(cli.DashboardHostView{Host: input.Hosts[0], Connection: cli.StateReachable, LastReply: now,
 		CPU:      cli.DashboardMeasurement[float64]{State: "available", Value: 0, Sample: "cpu", MeasuredAt: now},
@@ -52,7 +52,7 @@ func TestDashboardPassiveViewFitsAndFreshnessIsIndependent(t *testing.T) {
 func TestDashboardSessionHidesLaunchPlumbing(t *testing.T) {
 	const command = `sh -c 'cd -- "$1" && exec "${SHELL:-/bin/bash}" -l'`
 	model := newDashboard(cli.DashboardInput{}, pickerTestNow)
-	host := cli.DashboardHostView{Host: cli.DashboardHost{Alias: "pc"}, Connection: cli.StateReachable,
+	host := cli.DashboardHostView{Host: cli.DashboardHost{MachineName: "pc"}, Connection: cli.StateReachable,
 		Sessions: cli.DashboardCatalog[cli.DashboardSession]{ObservedAt: pickerTestNow}}
 	session := cli.DashboardSession{ID: "7K3D", Name: "mesh", State: "running", Command: cli.SafeTerminalText(command)}
 	row := ansi.Strip(model.sessionRow(host, session, 200, 4))
@@ -65,7 +65,7 @@ func TestDashboardCurrentKeepsQuietCatalogLiveAndReportsOverflow(t *testing.T) {
 	now := pickerTestNow
 	model := newDashboard(cli.DashboardInput{}, now)
 	for i := range 8 {
-		model.hosts = append(model.hosts, cli.DashboardHostView{Host: cli.DashboardHost{ID: string(rune('a' + i)), Alias: "long alias " + strings.Repeat("x", 120)}, Connection: cli.StateReachable, LastReply: now, Sessions: cli.DashboardCatalog[cli.DashboardSession]{ObservedAt: now, Total: 1}, Services: cli.DashboardCatalog[cli.DashboardService]{ObservedAt: now}})
+		model.hosts = append(model.hosts, cli.DashboardHostView{Host: cli.DashboardHost{ID: string(rune('a' + i)), MachineName: "long machineName " + strings.Repeat("x", 120)}, Connection: cli.StateReachable, LastReply: now, Sessions: cli.DashboardCatalog[cli.DashboardSession]{ObservedAt: now, Total: 1}, Services: cli.DashboardCatalog[cli.DashboardService]{ObservedAt: now}})
 	}
 	view := ansi.Strip(model.render())
 	assertFits(t, view, 80, 24)
@@ -84,7 +84,7 @@ func TestDashboardCurrentKeepsQuietCatalogLiveAndReportsOverflow(t *testing.T) {
 
 func TestDashboardNoInputCancellationJoinsWatch(t *testing.T) {
 	var output dashboardTestOutput
-	input := cli.DashboardInput{Hosts: []cli.DashboardHost{{ID: "pc", Alias: "pc"}}}
+	input := cli.DashboardInput{Hosts: []cli.DashboardHost{{ID: "pc", MachineName: "pc"}}}
 	ctx, cancel := context.WithCancel(t.Context())
 	finished := make(chan struct{})
 	input.Watch = func(ctx context.Context, publish func(cli.DashboardHostView)) error {
@@ -165,7 +165,7 @@ func TestDashboardWallContainsHistoriesTemperatureUptimeAndBoundedSummaries(t *t
 	model.width, model.height = 160, 48
 	for i := range 6 {
 		id := fmt.Sprint(i)
-		host := cli.DashboardHostView{Host: cli.DashboardHost{ID: id, Alias: "pc-" + id}, Connection: cli.StateReachable, LastReply: now,
+		host := cli.DashboardHostView{Host: cli.DashboardHost{ID: id, MachineName: "pc-" + id}, Connection: cli.StateReachable, LastReply: now,
 			CPU:         cli.DashboardMeasurement[float64]{State: "available", Value: 25, Sample: "cpu", MeasuredAt: now},
 			RAM:         cli.DashboardMeasurement[cli.DashboardMemory]{State: "available", Value: cli.DashboardMemory{TotalBytes: 16 << 30, AvailableBytes: 8 << 30, Estimate: "Linux MemAvailable estimate"}, Sample: "ram", MeasuredAt: now},
 			Temperature: cli.DashboardMeasurement[cli.DashboardTemperature]{State: "available", Value: cli.DashboardTemperature{Sensor: "package", Celsius: 42}, Sample: "temp", MeasuredAt: now},

@@ -33,17 +33,17 @@ type appTransport struct {
 	close   func() error
 }
 
-func (a *application) openApps(ctx context.Context, hostAlias string, port uint16) (appTransport, error) {
+func (a *application) openApps(ctx context.Context, hostID string, port uint16) (appTransport, error) {
 	if a.dependencies.AppRequest != nil {
 		return appTransport{request: func(ctx context.Context, r appspkg.Request) (appspkg.Result, error) {
-			return a.dependencies.AppRequest(ctx, hostAlias, r)
+			return a.dependencies.AppRequest(ctx, hostID, r)
 		}, close: func() error { return nil }}, nil
 	}
 	stateDir, err := paths.StateDir()
 	if err != nil {
 		return appTransport{}, err
 	}
-	if hostAlias == "local" {
+	if hostID == "local" {
 		socket := daemon.SocketPath(stateDir)
 		return appTransport{request: func(ctx context.Context, r appspkg.Request) (appspkg.Result, error) {
 			return localAppRequest(ctx, socket, r)
@@ -53,7 +53,7 @@ func (a *application) openApps(ctx context.Context, hostAlias string, port uint1
 	if err != nil {
 		return appTransport{}, err
 	}
-	host, err := hostWithAlias(hosts, hostAlias)
+	host, err := resolveHostTarget(hosts, hostID)
 	if err != nil {
 		return appTransport{}, err
 	}
@@ -152,7 +152,7 @@ func dialAppSSH(ctx context.Context, host HostRecord, stateDir string, port uint
 	address := net.JoinHostPort(endpoint.Hostname(), strconv.Itoa(int(port)))
 	raw, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", address)
 	if err != nil {
-		return nil, fmt.Errorf("connect app host %s: %w", host.Alias, err)
+		return nil, fmt.Errorf("connect app host %s: %w", HostLabel(host), err)
 	}
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	defer stop()
@@ -160,7 +160,7 @@ func dialAppSSH(ctx context.Context, host HostRecord, stateDir string, port uint
 	conn, chans, requests, err := ssh.NewClientConn(raw, address, &ssh.ClientConfig{User: "mesh", Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: callback})
 	if err != nil {
 		_ = raw.Close()
-		return nil, fmt.Errorf("authenticate app host %s: %w", host.Alias, err)
+		return nil, fmt.Errorf("authenticate app host %s: %w", HostLabel(host), err)
 	}
 	_ = raw.SetDeadline(time.Time{})
 	return ssh.NewClient(conn, chans, requests), nil

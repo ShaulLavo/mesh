@@ -20,7 +20,7 @@ func TestLeanCatalogPickerRequestsSelectedSavedPreviewAndRendersIdentically(t *t
 	calls := 0
 	after.inspect = func(_ context.Context, request cli.PickerInspectRequest) (cli.SessionInspection, error) {
 		calls++
-		if request.SessionID != full.ID || request.HostAlias != "local" {
+		if request.SessionID != full.ID || request.HostID != "local" {
 			t.Fatalf("inspected unselected row: %+v", request)
 		}
 		return cli.SessionInspection{Recovery: full.Recovery}, nil
@@ -71,7 +71,7 @@ func TestSavedPreviewHydrationMatchesHostAndSession(t *testing.T) {
 	if !ok {
 		t.Fatal("missing selected row")
 	}
-	current.inspection = inspectionState{kind: inspectionReady, target: inspectionTarget{hostAlias: "another-host", sessionID: full.ID}, hasValue: true, value: cli.SessionInspection{Recovery: full.Recovery}}
+	current.inspection = inspectionState{kind: inspectionReady, target: inspectionTarget{hostID: "another-host", sessionID: full.ID}, hasValue: true, value: cli.SessionInspection{Recovery: full.Recovery}}
 	if details := current.savedDetailsFor(selected); len(details.preview) != 1 || details.preview[0] != "Loading saved preview…" {
 		t.Fatalf("another host's same-ID preview was displayed: %+v", details)
 	}
@@ -97,9 +97,9 @@ func TestLeanCatalogLiveToEndedSavedFailureShowsError(t *testing.T) {
 				return cli.SessionInspection{}, errors.New("saved checkpoint request failed")
 			}
 			current, _ = current.applyCatalogRefresh(catalogRefreshResultMsg{
-				epoch: current.catalogEpoch, hostAlias: "local",
+				epoch: current.catalogEpoch, hostID: "local",
 				snapshot: cli.PickerHostSnapshot{Sessions: cli.HostSessions{
-					Host: cli.HostRecord{Alias: "local"}, Local: true, Sessions: []protocol.SessionInfo{row},
+					Host: cli.HostRecord{ID: "local", MachineName: "local"}, Local: true, Sessions: []protocol.SessionInfo{row},
 				}},
 			})
 			command = current.inspectSelected()

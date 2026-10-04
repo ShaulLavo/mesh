@@ -44,7 +44,7 @@ func namedDestinationPeer(t *testing.T) *namedDestinationFixture {
 		t.Fatal(err)
 	}
 	f := &namedDestinationFixture{
-		host:  HostRecord{Alias: "viewer-label", ID: id, MeshIdentity: id, Addresses: []string{"100.64.0.7"}, TailscaleName: "os-name"},
+		host:  HostRecord{MachineName: "viewer-label", ID: id, MeshIdentity: id, Addresses: []string{"100.64.0.7"}, TailscaleName: "os-name"},
 		names: names, subscriptions: make(chan chan protocol.Control, 4), stop: make(chan struct{}),
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +78,20 @@ func (f *namedDestinationFixture) handle(ctx context.Context, conn transport.Con
 		case protocol.TypeHostInfo:
 			info := f.info()
 			response.Type, response.Host = protocol.TypeHostInfoResult, &info
+		case protocol.TypeHostRename:
+			if request.Rename == nil {
+				return fmt.Errorf("missing rename request")
+			}
+			claim, _, err := f.names.Rename(ctx, request.Rename.TargetID, request.Rename.MachineName, request.Rename.ExpectedRevision)
+			if err != nil {
+				response.Type = protocol.TypeError
+				response.Message = err.Error()
+			} else {
+				info := f.info()
+				info.MachineName, info.NameRevision = claim.MachineName, claim.Revision
+				response.Type = protocol.TypeHostRenamed
+				response.Host = &info
+			}
 		case protocol.TypeList:
 			f.operations.Add(1)
 			response.Type = protocol.TypeListed
@@ -315,7 +329,7 @@ func TestAuthenticatedNameWatchCachesCommittedEventAndReconnect(t *testing.T) {
 func TestAuthenticatedNameTargetRechecksNewlyKnownConflict(t *testing.T) {
 	f := namedDestination(t)
 	peer := namedDestinationPeer(t)
-	peer.host.Alias = "other-viewer-label"
+	peer.host.MachineName = "other-viewer-label"
 	if _, _, err := peer.names.Rename(t.Context(), peer.host.ID, "other", 1); err != nil {
 		t.Fatal(err)
 	}

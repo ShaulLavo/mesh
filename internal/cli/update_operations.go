@@ -32,7 +32,11 @@ func (a *application) updateOperationCommand(action string, options *updateOptio
 			if id != "" && !update.ValidRunID(id) {
 				return errors.New("invalid update run ID")
 			}
-			environment, err := openUpdateEnvironment(options.coordinator)
+			resolved, _, err := a.resolveUpdateNameIntents(cmd.Context(), *options)
+			if err != nil {
+				return err
+			}
+			environment, err := openUpdateEnvironment(cmd.Context(), resolved.coordinator)
 			if err != nil {
 				return err
 			}
@@ -83,7 +87,7 @@ func (a *application) runUpdateOperation(ctx context.Context, environment update
 	if action == "retry" {
 		return observeUpdate(ctx, environment, run, structured, output)
 	}
-	if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
+	if err := printDeclaredUpdateRun(ctx, output.out, run, structured, output.privacy); err != nil {
 		return err
 	}
 	return updateExit(run.ExitCode())
@@ -147,7 +151,7 @@ func listUpdateOperations(ctx context.Context, environment updateEnvironment, st
 	cancel()
 	if err != nil && update.IsLocal(environment.coordinator) {
 		if status, readErr := updateinstall.Read(environment.stateDir); readErr == nil && status.Settings.ClientOnly {
-			return printUpdateRun(output.out, runFromInstallation(status), structured, output.privacy)
+			return printDeclaredUpdateRun(ctx, output.out, runFromInstallation(status), structured, output.privacy)
 		}
 		store, openErr := update.OpenStore(environment.stateDir)
 		if openErr != nil {
@@ -166,7 +170,7 @@ func listUpdateOperations(ctx context.Context, environment updateEnvironment, st
 		return err
 	}
 	for _, run := range runs {
-		if err := printUpdateRun(output.out, run, false, output.privacy); err != nil {
+		if err := printDeclaredUpdateRun(ctx, output.out, run, false, output.privacy); err != nil {
 			return err
 		}
 	}
@@ -195,7 +199,7 @@ func (a *application) localUpdateOperation(ctx context.Context, environment upda
 	if !structured {
 		_, _ = fmt.Fprintln(output.diagnostic, "Coordinator unavailable. Showing the last persisted local state.")
 	}
-	if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
+	if err := printDeclaredUpdateRun(ctx, output.out, run, structured, output.privacy); err != nil {
 		return err
 	}
 	return updateExit(run.ExitCode())
@@ -204,7 +208,7 @@ func (a *application) localUpdateOperation(ctx context.Context, environment upda
 func operateClientOnlyUpdate(ctx context.Context, environment updateEnvironment, status updateinstall.Status, action string, structured bool, output updateOutput) error {
 	if action == "status" {
 		run := runFromInstallation(status)
-		if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
+		if err := printDeclaredUpdateRun(ctx, output.out, run, structured, output.privacy); err != nil {
 			return err
 		}
 		return updateExit(run.ExitCode())
@@ -225,7 +229,7 @@ func operateClientOnlyUpdate(ctx context.Context, environment updateEnvironment,
 		if err != nil {
 			status.Error = "Activation was already authorized and may still finish."
 		}
-		if err := printUpdateRun(output.out, runFromInstallation(status), structured, output.privacy); err != nil {
+		if err := printDeclaredUpdateRun(ctx, output.out, runFromInstallation(status), structured, output.privacy); err != nil {
 			return err
 		}
 		return updateExit(runFromInstallation(status).ExitCode())

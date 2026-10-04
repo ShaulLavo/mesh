@@ -39,7 +39,7 @@ func openVerifiedHost(ctx context.Context, host HostRecord, dial HostDialer) (tr
 func openVerifiedHostInfo(ctx context.Context, host HostRecord, dial HostDialer) (transport.Conn, protocol.HostInfo, error) {
 	conn, err := dial(ctx, host)
 	if err != nil {
-		return nil, protocol.HostInfo{}, presentError("connect to host "+host.Alias, err)
+		return nil, protocol.HostInfo{}, presentError("connect to host "+HostLabel(host), err)
 	}
 	requestID, err := newDaemonRequestID()
 	if err != nil {
@@ -51,7 +51,7 @@ func openVerifiedHostInfo(ctx context.Context, host HostRecord, dial HostDialer)
 	response, err := controlRequest(verifyCtx, conn, protocol.Control{Type: protocol.TypeHostInfo, RequestID: requestID})
 	if err != nil {
 		_ = conn.Close()
-		return nil, protocol.HostInfo{}, fmt.Errorf("verify host %s: %w", host.Alias, err)
+		return nil, protocol.HostInfo{}, fmt.Errorf("verify host %s: %w", HostLabel(host), err)
 	}
 	if response.Type == protocol.TypeError {
 		_ = conn.Close()
@@ -59,13 +59,17 @@ func openVerifiedHostInfo(ctx context.Context, host HostRecord, dial HostDialer)
 	}
 	if response.Type != protocol.TypeHostInfoResult || response.Host == nil {
 		_ = conn.Close()
-		return nil, protocol.HostInfo{}, fmt.Errorf("verify host %s: response is not host info", host.Alias)
+		return nil, protocol.HostInfo{}, fmt.Errorf("verify host %s: response is not host info", HostLabel(host))
+	}
+	if err := validateNameEnvelope(response); err != nil {
+		_ = conn.Close()
+		return nil, protocol.HostInfo{}, err
 	}
 	if err := rememberHostName(verifyCtx, host, *response.Host); err != nil {
 		_ = conn.Close()
 		return nil, protocol.HostInfo{}, err
 	}
-	if err := verifyNamedTarget(host, *response.Host); err != nil {
+	if err := verifyNamedTarget(verifyCtx, host, *response.Host); err != nil {
 		_ = conn.Close()
 		return nil, protocol.HostInfo{}, err
 	}
@@ -73,27 +77,30 @@ func openVerifiedHostInfo(ctx context.Context, host HostRecord, dial HostDialer)
 	return conn, *response.Host, nil
 }
 
-type hostIdentityError struct{ alias string }
+type hostIdentityError struct{ label string }
 
-func (e *hostIdentityError) Error() string { return fmt.Sprintf("host %s identity changed", e.alias) }
+func (e *hostIdentityError) Error() string { return fmt.Sprintf("host %s identity changed", e.label) }
 
 func validateHostInfo(expected HostRecord, actual protocol.HostInfo) error {
 	if actual.ID != expected.ID || actual.MeshIdentity != expected.MeshIdentity {
-		return &hostIdentityError{alias: expected.Alias}
+		return &hostIdentityError{label: HostLabel(expected)}
 	}
 	if actual.MachineName != "" || actual.NameRevision != 0 {
+		if actual.ID != actual.MeshIdentity {
+			return &hostIdentityError{label: HostLabel(expected)}
+		}
 		if err := machinename.ValidateClaim(expected.ID, declaredName(actual)); err != nil {
 			return fmt.Errorf("host returned invalid machine name: %w", err)
 		}
 	}
 	if actual.Wake != nil {
 		if err := validateHostWake(actual); err != nil {
-			return fmt.Errorf("host %s returned invalid wake permission: %w", expected.Alias, err)
+			return fmt.Errorf("host %s returned invalid wake permission: %w", HostLabel(expected), err)
 		}
 	}
 	if actual.PrivateName != "" {
 		if err := dnsname.ValidatePrivateName(actual.PrivateName); err != nil {
-			return fmt.Errorf("host %s returned an invalid private name", expected.Alias)
+			return fmt.Errorf("host %s returned an invalid private name", HostLabel(expected))
 		}
 	}
 	return nil
@@ -107,9 +114,17 @@ func validateHostWake(host protocol.HostInfo) error {
 }
 
 func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer) ([]protocol.SessionInfo, error) {
-	conn, err := openVerifiedHost(ctx, host, dial)
+	return listRemoteDeclaredHost(ctx, &host, dial)
+}
+
+func listRemoteDeclaredHost(ctx context.Context, host *HostRecord, dial HostDialer) ([]protocol.SessionInfo, error) {
+	conn, info, err := openVerifiedHostInfo(ctx, *host, dial)
 	if err != nil {
 		return nil, err
+	}
+	host.NameVerified = info.MachineName != ""
+	if host.NameVerified {
+		host.MachineName, host.NameRevision = info.MachineName, info.NameRevision
 	}
 	defer conn.Close() //nolint:errcheck // the request result is authoritative
 	requestID, err := newDaemonRequestID()
@@ -129,14 +144,14 @@ func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer) ([]pr
 				return nil, err
 			}
 			if listed.HostID != host.ID {
-				return nil, fmt.Errorf("host %s listed a session for a different host", host.Alias)
+				return nil, fmt.Errorf("host %s listed a session for a different host", HostLabel(*host))
 			}
 		}
 		return cloneSessionInfo(response.Sessions), nil
 	case protocol.TypeError:
 		return nil, daemonResponseError("session list", response.Message)
 	default:
-		return nil, fmt.Errorf("host %s returned an unexpected session-list response", host.Alias)
+		return nil, fmt.Errorf("host %s returned an unexpected session-list response", HostLabel(*host))
 	}
 }
 
@@ -180,13 +195,13 @@ func controlRemoteSession(ctx context.Context, host HostRecord, dial HostDialer,
 	switch response.Type {
 	case protocol.TypeOK:
 		if response.SessionID != sessionID {
-			return fmt.Errorf("host %s acknowledged a different session", host.Alias)
+			return fmt.Errorf("host %s acknowledged a different session", HostLabel(host))
 		}
 		return nil
 	case protocol.TypeError:
 		return daemonResponseError(controlType+" "+sessionID, response.Message)
 	default:
-		return fmt.Errorf("host %s returned an unexpected %s response", host.Alias, controlType)
+		return fmt.Errorf("host %s returned an unexpected %s response", HostLabel(host), controlType)
 	}
 }
 
@@ -227,22 +242,22 @@ func logsRemoteSession(ctx context.Context, host HostRecord, dial HostDialer, se
 	switch response.Type {
 	case protocol.TypeLogged:
 		if response.SessionID != sessionID {
-			return nil, fmt.Errorf("host %s returned logs for a different session", host.Alias)
+			return nil, fmt.Errorf("host %s returned logs for a different session", HostLabel(host))
 		}
 		if len(response.Output) > tail {
-			return nil, fmt.Errorf("host %s returned %d log bytes, want at most %d", host.Alias, len(response.Output), tail)
+			return nil, fmt.Errorf("host %s returned %d log bytes, want at most %d", HostLabel(host), len(response.Output), tail)
 		}
 		return append([]byte(nil), response.Output...), nil
 	case protocol.TypeError:
 		return nil, daemonResponseError("logs "+sessionID, response.Message)
 	default:
-		return nil, fmt.Errorf("host %s returned an unexpected logs response", host.Alias)
+		return nil, fmt.Errorf("host %s returned an unexpected logs response", HostLabel(host))
 	}
 }
 
 func inspectRemoteSession(ctx context.Context, host HostRecord, dial HostDialer, sessionID string, previewCols, previewRows int) (SessionInspection, error) {
 	if ctx == nil {
-		return SessionInspection{}, fmt.Errorf("inspect session on host %s with nil context", host.Alias)
+		return SessionInspection{}, fmt.Errorf("inspect session on host %s with nil context", HostLabel(host))
 	}
 	if err := ctx.Err(); err != nil {
 		return SessionInspection{}, err
@@ -280,7 +295,7 @@ func validateInspectionResponse(host HostRecord, sessionID string, previewCols, 
 	switch response.Type {
 	case protocol.TypeInspected:
 		if response.SessionID != sessionID {
-			return SessionInspection{}, fmt.Errorf("host %s inspected a different session", host.Alias)
+			return SessionInspection{}, fmt.Errorf("host %s inspected a different session", HostLabel(host))
 		}
 		if response.Recovery != nil {
 			return savedInspection(host, sessionID, *response.Recovery)
@@ -289,23 +304,23 @@ func validateInspectionResponse(host HostRecord, sessionID string, previewCols, 
 	case protocol.TypeError:
 		return SessionInspection{}, daemonResponseError("inspect "+sessionID, response.Message)
 	default:
-		return SessionInspection{}, fmt.Errorf("host %s returned an unexpected inspect response", host.Alias)
+		return SessionInspection{}, fmt.Errorf("host %s returned an unexpected inspect response", HostLabel(host))
 	}
 }
 
 func validatedLiveInspection(host HostRecord, sessionID string, previewCols, previewRows int, inspection *protocol.SessionInspection) (SessionInspection, error) {
 	if inspection == nil {
-		return SessionInspection{}, fmt.Errorf("host %s returned no inspection for session %s", host.Alias, sessionID)
+		return SessionInspection{}, fmt.Errorf("host %s returned no inspection for session %s", HostLabel(host), sessionID)
 	}
 	if err := protocol.ValidateSessionInspection(*inspection); err != nil {
-		return SessionInspection{}, fmt.Errorf("host %s returned an invalid inspection for session %s: %w", host.Alias, sessionID, err)
+		return SessionInspection{}, fmt.Errorf("host %s returned an invalid inspection for session %s: %w", HostLabel(host), sessionID, err)
 	}
 	if len(inspection.Preview) > previewRows {
-		return SessionInspection{}, fmt.Errorf("host %s returned %d preview rows for session %s, want at most %d", host.Alias, len(inspection.Preview), sessionID, previewRows)
+		return SessionInspection{}, fmt.Errorf("host %s returned %d preview rows for session %s, want at most %d", HostLabel(host), len(inspection.Preview), sessionID, previewRows)
 	}
 	for row, line := range inspection.Preview {
 		if width := ansi.StringWidth(line); width > previewCols {
-			return SessionInspection{}, fmt.Errorf("host %s returned preview row %d with width %d for session %s, want at most %d", host.Alias, row, width, sessionID, previewCols)
+			return SessionInspection{}, fmt.Errorf("host %s returned preview row %d with width %d for session %s, want at most %d", HostLabel(host), row, width, sessionID, previewCols)
 		}
 	}
 	return inspectionFromProtocol(*inspection), nil

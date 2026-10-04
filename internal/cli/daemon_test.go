@@ -60,7 +60,7 @@ func TestListViaDaemonRoundTrip(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 29, 20, 0, 0, 0, time.UTC)
 	want := []protocol.SessionInfo{{
 		ID:        "7K3D",
-		HostID:    "host-id",
+		HostID:    "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
 		Command:   []string{"sh", "-c", "printf ready"},
 		Cwd:       "/tmp/project",
 		State:     "running",
@@ -96,7 +96,7 @@ func TestListViaDaemonRejectsInvalidCatalogEntry(t *testing.T) {
 			RequestID: request.RequestID,
 			Sessions: []protocol.SessionInfo{{
 				ID:        "7k3d",
-				HostID:    "host-id",
+				HostID:    "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
 				Command:   []string{"sh"},
 				State:     "running",
 				CreatedAt: time.Now(),
@@ -349,45 +349,55 @@ func TestCreateViaDaemonCancellationUnblocksRead(t *testing.T) {
 
 func startDaemonCreateServer(t *testing.T, handle func(transport.Conn, protocol.Control) error) (string, <-chan error) {
 	t.Helper()
+	return startDaemonControlServer(t, 1, handle)
+}
+
+func startDaemonControlServer(t *testing.T, requests int, handle func(transport.Conn, protocol.Control) error) (string, <-chan error) {
+	t.Helper()
 	socketPath := filepath.Join(compactSocketTempDir(t), "daemon.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
-
 	done := make(chan error, 1)
 	go func() {
-		stream, err := listener.Accept()
-		if err != nil {
-			done <- err
-			return
+		for range requests {
+			stream, err := listener.Accept()
+			if err != nil {
+				done <- err
+				return
+			}
+			err = handleDaemonTestStream(stream, handle)
+			if err != nil {
+				done <- err
+				return
+			}
 		}
-		conn, err := transport.NewStreamConn(stream)
-		if err != nil {
-			_ = stream.Close()
-			done <- err
-			return
-		}
-		defer conn.Close() //nolint:errcheck // test connection cleanup
-
-		frame, err := conn.ReadFrame()
-		if err != nil {
-			done <- err
-			return
-		}
-		if frame.Kind != protocol.KindControl {
-			done <- fmt.Errorf("request frame kind = %d, want control", frame.Kind)
-			return
-		}
-		request, err := protocol.DecodeControl(frame.Payload)
-		if err != nil {
-			done <- err
-			return
-		}
-		done <- handle(conn, request)
+		done <- nil
 	}()
 	return socketPath, done
+}
+
+func handleDaemonTestStream(stream net.Conn, handle func(transport.Conn, protocol.Control) error) error {
+	conn, err := transport.NewStreamConn(stream)
+	if err != nil {
+		_ = stream.Close()
+		return fmt.Errorf("open fixture control stream: %w", err)
+	}
+	defer conn.Close() //nolint:errcheck // test connection cleanup
+	frame, err := conn.ReadFrame()
+	if err != nil {
+		return fmt.Errorf("read fixture control: %w", err)
+	}
+	if frame.Kind != protocol.KindControl {
+		return fmt.Errorf("request frame kind = %d, want control", frame.Kind)
+	}
+	request, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return fmt.Errorf("decode fixture control: %w", err)
+	}
+	return handle(conn, request)
 }
 
 func awaitDaemonServer(t *testing.T, done <-chan error) {

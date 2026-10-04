@@ -47,7 +47,7 @@ func reviewControlDial(t *testing.T, respond func(HostRecord, protocol.Control) 
 				if request.Type == protocol.TypeHostInfo {
 					response = respond(host, request)
 					if response == nil {
-						response = &protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity}}
+						response = &protocol.Control{Type: protocol.TypeHostInfoResult, Host: testHostDeclaration(host)}
 					}
 				} else {
 					response = respond(host, request)
@@ -79,7 +79,7 @@ func TestWatchReviewID5PublishesInitialFailure(t *testing.T) {
 	defer cancel()
 	watcher := NewStateWatcher(func(context.Context, HostRecord) (transport.Conn, error) { return nil, errors.New("fixture offline") })
 	var seen StateView
-	err := watcher.Watch(ctx, HostRecord{ID: "host", Alias: "host"}, protocol.StateWatch{Topics: []string{protocol.TopicSessions}}, func(v StateView) { seen = v; cancel() })
+	err := watcher.Watch(ctx, HostRecord{ID: "host", MachineName: "host"}, protocol.StateWatch{Topics: []string{protocol.TopicSessions}}, func(v StateView) { seen = v; cancel() })
 	if !errors.Is(err, context.Canceled) || !seen.Sections[protocol.TopicSessions].Observation.Failing {
 		t.Fatalf("initial failure was not published: %v %+v", err, seen)
 	}
@@ -129,8 +129,8 @@ func TestWatchReviewID3OverlappingHostReads(t *testing.T) {
 	})
 	state := newPickerState(ctx, dial)
 	defer state.close()
-	a := HostRecord{ID: "a", Alias: "a", MeshIdentity: "a"}
-	b := HostRecord{ID: "b", Alias: "b", MeshIdentity: "b"}
+	a := HostRecord{ID: "a", MachineName: "a", MeshIdentity: "a"}
+	b := HostRecord{ID: "b", MachineName: "b", MeshIdentity: "b"}
 	first, err := state.read(ctx, a)
 	if err != nil || first.Sessions[0].HostID != a.ID {
 		t.Fatal(first, err)
@@ -169,7 +169,7 @@ func TestWatchReviewID4LegacyTopicTimeoutIsolation(t *testing.T) {
 	})
 	var got StateView
 	watcher := NewStateWatcher(dial)
-	_ = watcher.Watch(ctx, HostRecord{ID: "host", Alias: "host", MeshIdentity: "identity"}, protocol.StateWatch{Topics: []string{protocol.TopicSessions, protocol.TopicServices}}, func(v StateView) {
+	_ = watcher.Watch(ctx, HostRecord{ID: "host", MachineName: "host", MeshIdentity: "identity"}, protocol.StateWatch{Topics: []string{protocol.TopicSessions, protocol.TopicServices}}, func(v StateView) {
 		if len(v.Services) > 0 {
 			got = v
 			cancel()
@@ -191,7 +191,7 @@ func TestWatchReviewID6DurableCatalogAndOfflineReopen(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 	cache := &SQLiteCatalogCache{store: store, now: time.Now}
-	host := HostRecord{ID: "host", Alias: "host", MeshIdentity: "identity"}
+	host := HostRecord{ID: "host", MachineName: "host", MeshIdentity: "identity"}
 	old := reviewSession(host)
 	old.ID = "9ABC"
 	if err := cache.Save(ctx, host, []protocol.SessionInfo{old}); err != nil {
@@ -281,7 +281,7 @@ func TestWatchReviewID11HealthyStreamResetsBackoff(t *testing.T) {
 		}()
 		return conn, nil
 	}
-	_ = NewStateWatcher(dial).Watch(ctx, HostRecord{ID: "host", Alias: "host", MeshIdentity: "identity"}, protocol.StateWatch{Topics: []string{protocol.TopicSessions}}, func(StateView) {})
+	_ = NewStateWatcher(dial).Watch(ctx, HostRecord{ID: "host", MachineName: "host", MeshIdentity: "identity"}, protocol.StateWatch{Topics: []string{protocol.TopicSessions}}, func(StateView) {})
 	if connections.Load() != 3 {
 		t.Fatalf("healthy streams retained increasing backoff: dials=%d", connections.Load())
 	}
@@ -323,7 +323,7 @@ func TestWatchReviewID10ScreenChangeReleasesRemoteDemand(t *testing.T) {
 						switch r.Type {
 						case protocol.TypeHostInfo:
 							response.Type = protocol.TypeHostInfoResult
-							response.Host = &protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity}
+							response.Host = testHostDeclaration(host)
 						case protocol.TypeStateWatch:
 							response = *reviewSnapshot(host)
 							response.RequestID = r.RequestID
@@ -346,12 +346,12 @@ func TestWatchReviewID10ScreenChangeReleasesRemoteDemand(t *testing.T) {
 				return client, nil
 			}
 			_, _, err := executeCommand(t, Dependencies{DialControl: dial, Picker: func(ctx context.Context, input PickerInput) (PickerSelection, error) {
-				snapshot, err := input.Refresh(ctx, fixture.host.Alias)
+				snapshot, err := input.Refresh(ctx, fixture.host.ID)
 				if err != nil || snapshot.Sessions.Stale || active.Load() != 1 {
 					t.Fatal(snapshot, err, active.Load())
 				}
 				if screen == "localhost" {
-					_, err = input.Refresh(ctx, localHostAlias)
+					_, err = input.Refresh(ctx, localHostID())
 				} else {
 					_, err = input.LoadHosts(ctx)
 				}
@@ -379,7 +379,7 @@ func TestWatchReviewID10ScreenChangeReleasesRemoteDemand(t *testing.T) {
 }
 
 func TestWatchReviewID4UnsupportedOnlyBuildChange(t *testing.T) {
-	host := HostRecord{ID: "host", Alias: "host", MeshIdentity: "identity"}
+	host := HostRecord{ID: "host", MachineName: "host", MeshIdentity: "identity"}
 	var version atomic.Int32
 	var probes atomic.Int32
 	dial := reviewControlDial(t, func(h HostRecord, r protocol.Control) *protocol.Control {
@@ -428,7 +428,7 @@ func TestWatchReviewID3SameHostChangedIdentity(t *testing.T) {
 	})
 	state := newPickerState(ctx, dial)
 	defer state.close()
-	host := HostRecord{ID: "host", Alias: "host", Endpoint: "same", MeshIdentity: "first"}
+	host := HostRecord{ID: "host", MachineName: "host", Endpoint: "same", MeshIdentity: "first"}
 	first, err := state.read(ctx, host)
 	if err != nil || first.Sessions[0].Label != "first" {
 		t.Fatal(first, err)

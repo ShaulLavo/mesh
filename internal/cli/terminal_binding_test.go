@@ -19,7 +19,7 @@ func TestTerminalBindingRoundTripsAndForgets(t *testing.T) {
 	bindingStateDir(t)
 	created := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	want := TerminalBinding{
-		Source: "cmux-pane", HostID: "host-id", SessionID: "7K3D",
+		Source: "cmux-pane", HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D",
 		OriginID: "2QW9", CreatedAt: created, BoundAt: created.Add(time.Minute),
 	}
 	if err := saveTerminalBinding("key", want); err != nil {
@@ -116,9 +116,9 @@ func TestBindingStillDescribesRejectsARecycledSessionID(t *testing.T) {
 // time would later read as "a different session reusing the id".
 func TestBindingForDropsTheTimestampOfAStaleRow(t *testing.T) {
 	created := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
-	host := HostRecord{ID: "host-id", Alias: "pc"}
+	host := HostRecord{ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MachineName: "pc"}
 	fresh := bindingFor(resolvedSession{host: &host, remote: sessionInfoFor("7K3D", created)})
-	if fresh.HostID != "host-id" || fresh.SessionID != "7K3D" || !fresh.CreatedAt.Equal(created) {
+	if fresh.HostID != "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE" || fresh.SessionID != "7K3D" || !fresh.CreatedAt.Equal(created) {
 		t.Fatalf("binding = %#v", fresh)
 	}
 	stale := bindingFor(resolvedSession{host: &host, remote: sessionInfoFor("7K3D", created), stale: true})
@@ -131,5 +131,5 @@ func TestBindingForDropsTheTimestampOfAStaleRow(t *testing.T) {
 }
 
 func sessionInfoFor(id string, created time.Time) protocol.SessionInfo {
-	return protocol.SessionInfo{ID: id, HostID: "host-id", CreatedAt: created, State: "running"}
+	return protocol.SessionInfo{ID: id, HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", CreatedAt: created, State: "running"}
 }

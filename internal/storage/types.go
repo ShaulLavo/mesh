@@ -31,7 +31,6 @@ const (
 // Host is durable metadata for one Mesh host.
 type Host struct {
 	ID            HostID
-	Alias         *string
 	MeshIdentity  string
 	TailscaleName *string
 	LastSeenAt    time.Time
@@ -102,9 +101,6 @@ func hostParams(h Host) (dbsqlc.UpsertHostParams, error) {
 	if strings.TrimSpace(h.MeshIdentity) == "" {
 		return dbsqlc.UpsertHostParams{}, fmt.Errorf("storage: host %s has an empty Mesh identity", h.ID)
 	}
-	if err := validateOptionalText("alias", h.Alias); err != nil {
-		return dbsqlc.UpsertHostParams{}, fmt.Errorf("storage: host %s: %w", h.ID, err)
-	}
 	if err := validateOptionalText("Tailscale name", h.TailscaleName); err != nil {
 		return dbsqlc.UpsertHostParams{}, fmt.Errorf("storage: host %s: %w", h.ID, err)
 	}
@@ -114,7 +110,6 @@ func hostParams(h Host) (dbsqlc.UpsertHostParams, error) {
 	}
 	return dbsqlc.UpsertHostParams{
 		ID:            string(h.ID),
-		Alias:         cloneString(h.Alias),
 		MeshIdentity:  h.MeshIdentity,
 		TailscaleName: cloneString(h.TailscaleName),
 		LastSeenAt:    lastSeenAt,
@@ -168,7 +163,6 @@ func sessionParams(s Session) (dbsqlc.UpsertSessionParams, error) {
 func hostFromRow(row dbsqlc.Host) (Host, error) {
 	h := Host{
 		ID:            HostID(row.ID),
-		Alias:         cloneString(row.Alias),
 		MeshIdentity:  row.MeshIdentity,
 		TailscaleName: cloneString(row.TailscaleName),
 		LastSeenAt:    time.UnixMilli(row.LastSeenAt).UTC(),

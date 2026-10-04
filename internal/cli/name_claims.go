@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/machinename"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 )
 
@@ -20,6 +21,9 @@ func rememberHostName(ctx context.Context, host HostRecord, info protocol.HostIn
 		return err
 	}
 	if info.MachineName == "" && info.NameRevision == 0 {
+		return nil
+	}
+	if host.local {
 		return nil
 	}
 	path, err := ConfigPath()
@@ -46,7 +50,7 @@ func stateDeclaredHost(response protocol.Control) *protocol.HostInfo {
 	return nil
 }
 
-func verifyNamedTarget(host HostRecord, info protocol.HostInfo) error {
+func verifyNamedTarget(ctx context.Context, host HostRecord, info protocol.HostInfo) error {
 	if host.targetName == "" {
 		return nil
 	}
@@ -57,6 +61,11 @@ func verifyNamedTarget(host HostRecord, info protocol.HostInfo) error {
 	if err != nil {
 		return err
 	}
+	owner, err := targetOwnerClaim(ctx, host, info)
+	if err != nil {
+		return err
+	}
+	hosts = withOwnerClaim(hosts, owner)
 	target, err := ResolveArgument(host.targetName, hosts)
 	if err != nil {
 		return err
@@ -111,4 +120,16 @@ func resolveDeclaredArgument(value string, hosts []HostRecord) (ArgumentTarget, 
 		}
 	}
 	return ArgumentTarget{}, false, nil
+}
+
+func targetOwnerClaim(ctx context.Context, host HostRecord, info protocol.HostInfo) (HostRecord, error) {
+	if host.local {
+		host.MachineName, host.NameRevision, host.NameVerified = info.MachineName, info.NameRevision, true
+		return host, nil
+	}
+	stateDir, err := paths.StateDir()
+	if err != nil {
+		return HostRecord{}, fmt.Errorf("locate own naming state: %w", err)
+	}
+	return localNameRecord(ctx, stateDir)
 }

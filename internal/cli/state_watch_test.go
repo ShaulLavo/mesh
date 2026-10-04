@@ -77,7 +77,7 @@ func TestWatchExplicitUnknownOnly(t *testing.T) {
 	}
 }
 func TestWatchVerifiedControlBuildReprobeAndCancellation(t *testing.T) {
-	host := HostRecord{Alias: "host", ID: "host", MeshIdentity: "identity"}
+	host := HostRecord{MachineName: "host", ID: "host", MeshIdentity: "identity"}
 	var probes atomic.Int32
 	var polls atomic.Int32
 	var version atomic.Int32

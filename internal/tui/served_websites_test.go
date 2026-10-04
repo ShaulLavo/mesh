@@ -12,17 +12,17 @@ import (
 )
 
 func TestPickerShowsServedWebsitesInOpenHostPanel(t *testing.T) {
-	host := cli.HostRecord{Alias: "pc", ID: "host-id", TailscaleName: "pc.example.ts.net"}
+	host := cli.HostRecord{MachineName: "pc", ID: "pc", TailscaleName: "pc.example.ts.net"}
 	sessions := cli.HostSessions{Host: host, Sessions: []protocol.SessionInfo{{
 		ID: "7K3D", HostID: host.ID, State: "detached", CreatedAt: pickerTestNow,
 	}}}
 	refreshCalls := 0
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts: []cli.HostSessions{sessions},
-		Refresh: func(_ context.Context, alias string) (cli.PickerHostSnapshot, error) {
+		Refresh: func(_ context.Context, machineName string) (cli.PickerHostSnapshot, error) {
 			refreshCalls++
-			if alias != "pc" {
-				t.Fatalf("refresh alias = %q, want pc", alias)
+			if machineName != "pc" {
+				t.Fatalf("refresh machineName = %q, want pc", machineName)
 			}
 			services := []protocol.ServiceInfo{{DisplayName: "Blog", Name: "blog", Kind: "proxy", Target: "3000", Healthy: true}}
 			if refreshCalls > 1 {
@@ -75,7 +75,7 @@ func TestPickerShowsServedWebsitesInOpenHostPanel(t *testing.T) {
 }
 
 func TestPickerRetainsLastServedWebsitesWhenServiceRefreshFails(t *testing.T) {
-	host := cli.HostRecord{Alias: "pc", ID: "host-id"}
+	host := cli.HostRecord{MachineName: "pc", ID: "pc"}
 	sessions := cli.HostSessions{Host: host}
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts:   []cli.HostSessions{sessions},
@@ -84,10 +84,10 @@ func TestPickerRetainsLastServedWebsitesWhenServiceRefreshFails(t *testing.T) {
 	current.enterSessions(0)
 	live := servedWebsiteSnapshot(host, sessions, protocol.ServiceInfo{Name: "blog", Kind: "proxy", Target: "3000", Healthy: true})
 	current, _ = current.applyCatalogRefresh(catalogRefreshResultMsg{
-		epoch: current.catalogEpoch, hostAlias: "pc", snapshot: live,
+		epoch: current.catalogEpoch, hostID: "pc", snapshot: live,
 	})
 	current, _ = current.applyCatalogRefresh(catalogRefreshResultMsg{
-		epoch: current.catalogEpoch, hostAlias: "pc", snapshot: cli.PickerHostSnapshot{Sessions: sessions},
+		epoch: current.catalogEpoch, hostID: "pc", snapshot: cli.PickerHostSnapshot{Sessions: sessions},
 	})
 
 	view := ansi.Strip(current.View().Content)
@@ -96,7 +96,7 @@ func TestPickerRetainsLastServedWebsitesWhenServiceRefreshFails(t *testing.T) {
 	}
 
 	current, _ = current.applyCatalogRefresh(catalogRefreshResultMsg{
-		epoch: current.catalogEpoch, hostAlias: "pc",
+		epoch: current.catalogEpoch, hostID: "pc",
 		snapshot: cli.PickerHostSnapshot{Sessions: sessions, Services: &cli.PickerServiceCatalog{}},
 	})
 	if view := ansi.Strip(current.View().Content); !strings.Contains(view, "0 served") || strings.Contains(view, "pc.mesh.example/blog") {
@@ -124,7 +124,7 @@ func TestCompactPickerKeepsDetailsAlongsideServedWebsites(t *testing.T) {
 }
 
 func TestPublicWebsiteDoesNotClaimReachabilityWithoutEdgeStatus(t *testing.T) {
-	host := cli.HostRecord{Alias: "pc", ID: "host-id"}
+	host := cli.HostRecord{MachineName: "pc", ID: "pc"}
 	websites := servedWebsites([]cli.ServiceCatalogRow{{
 		Host: host, Live: true,
 		Service: protocol.ServiceInfo{

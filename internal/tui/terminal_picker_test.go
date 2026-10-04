@@ -40,7 +40,7 @@ func TestTerminalPickerRendersSelectsAndResizes(t *testing.T) {
 		t.Fatal(finished.err)
 	}
 	current := finished.model.(terminalPickerProbe).model
-	if current.selection != (attachSelection{hostAlias: "pc", sessionID: "7K3D"}) {
+	if current.selection != (attachSelection{hostID: "pc", sessionID: "7K3D"}) {
 		t.Fatalf("selection = %#v", current.selection)
 	}
 	if current.width != 104 || current.height != 31 {
@@ -75,7 +75,7 @@ func runReusableTerminalPicker(t *testing.T, input, send *os.File, canceled bool
 	size := func() terminal.Size { return terminal.Size{Cols: 80, Rows: 24} }
 	picker := NewTerminalPicker(input, output, "xterm-256color", size, nil)
 	selected, err := picker(ctx, cli.PickerInput{Hosts: []cli.HostSessions{{
-		Host: cli.HostRecord{Alias: "pc"},
+		Host: cli.HostRecord{ID: "pc", MachineName: "pc"},
 	}}})
 	if canceled {
 		if !errors.Is(err, tea.ErrProgramKilled) {
@@ -86,7 +86,7 @@ func runReusableTerminalPicker(t *testing.T, input, send *os.File, canceled bool
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selected.HostAlias != "pc" || !selected.New {
+	if selected.HostID != "pc" || !selected.New {
 		t.Fatalf("selection = %#v, want a new session on pc", selected)
 	}
 	_, _ = io.WriteString(output, attachStarted)

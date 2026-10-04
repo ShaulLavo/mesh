@@ -32,29 +32,29 @@ func (a *application) serveClaimCommand() *cobra.Command {
 	return command
 }
 
-func tunnelEdge(hostAlias, publicName string) (HostRecord, error) {
+func tunnelEdge(hostID, publicName string) (HostRecord, error) {
 	if err := tunnel.ValidateHostname(publicName); err != nil {
 		return HostRecord{}, err
 	}
-	if hostAlias == "" {
+	if hostID == "" {
 		return HostRecord{}, errors.New("releasing a tunnel claim requires --host EDGE or --local-edge")
 	}
 	hosts, err := LoadHosts()
 	if err != nil {
 		return HostRecord{}, err
 	}
-	host, err := hostWithAlias(hosts, hostAlias)
+	host, err := resolveHostTarget(hosts, hostID)
 	if err != nil {
 		return HostRecord{}, err
 	}
 	if _, err := tunnel.PublicKey(host.MeshIdentity); err != nil {
-		return HostRecord{}, fmt.Errorf("edge %s has an invalid pinned Mesh identity: %w", host.Alias, err)
+		return HostRecord{}, fmt.Errorf("edge %s has an invalid pinned Mesh identity: %w", HostLabel(host), err)
 	}
 	return host, nil
 }
 
-func (a *application) runTunnelClaim(cmd *cobra.Command, hostAlias, publicName string, yes bool) error {
-	host, err := tunnelEdge(hostAlias, publicName)
+func (a *application) runTunnelClaim(cmd *cobra.Command, hostID, publicName string, yes bool) error {
+	host, err := tunnelEdge(hostID, publicName)
 	if err != nil {
 		return err
 	}
@@ -83,7 +83,7 @@ func (a *application) runTunnelClaim(cmd *cobra.Command, hostAlias, publicName s
 		destination = endpoint.Hostname()
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "claimed %s on %s\nssh -N -o ExitOnForwardFailure=yes -o IdentitiesOnly=yes -i %s -p 2222 -R %s %s\n",
-		a.privacy.Value("route", publicName), a.privacy.Value("host", host.Alias), tunnelShellQuote(a.privacy.Value("path", filepath.Join(stateDir, "identity.key"))),
+		a.privacy.Value("route", publicName), a.privacy.Value("host", HostLabel(host)), tunnelShellQuote(a.privacy.Value("path", filepath.Join(stateDir, "identity.key"))),
 		tunnelShellQuote(a.privacy.Value("route", publicName)+":80:localhost:3000"), tunnelShellQuote(a.privacy.Value("host", destination)))
 	return err
 }
@@ -92,15 +92,15 @@ func tunnelShellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func (a *application) runTunnelRelease(cmd *cobra.Command, publicName, hostAlias string) error {
-	host, err := tunnelEdge(hostAlias, publicName)
+func (a *application) runTunnelRelease(cmd *cobra.Command, publicName, hostID string) error {
+	host, err := tunnelEdge(hostID, publicName)
 	if err != nil {
 		return err
 	}
 	if _, err := a.deliverTunnelMutation(cmd.Context(), host, tunnel.Release, publicName); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "released %s on %s\n", a.privacy.Value("route", publicName), a.privacy.Value("host", host.Alias))
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "released %s on %s\n", a.privacy.Value("route", publicName), a.privacy.Value("host", HostLabel(host)))
 	return err
 }
 
@@ -125,7 +125,7 @@ func (a *application) deliverTunnelMutation(ctx context.Context, host HostRecord
 			return sendTunnelMutation(ctx, host, a.dependencies.DialControl, mutation)
 		})
 	if ack.Error != "" {
-		return "", fmt.Errorf("edge %s refused tunnel %s: %s", host.Alias, action, safeRemoteText(ack.Error))
+		return "", fmt.Errorf("edge %s refused tunnel %s: %s", HostLabel(host), action, safeRemoteText(ack.Error))
 	}
 	if err != nil {
 		return "", err
@@ -157,8 +157,8 @@ func sendTunnelMutation(ctx context.Context, host HostRecord, dial HostDialer, m
 	return ack, nil
 }
 
-func (a *application) runLocalTunnelRelease(cmd *cobra.Command, publicName, hostAlias string) error {
-	if hostAlias != "" {
+func (a *application) runLocalTunnelRelease(cmd *cobra.Command, publicName, hostID string) error {
+	if hostID != "" {
 		return errors.New("--local-edge cannot be combined with --host")
 	}
 	if err := tunnel.ValidateHostname(publicName); err != nil {

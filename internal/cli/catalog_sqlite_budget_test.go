@@ -63,7 +63,7 @@ func TestCatalogSQLiteWriterContentionRespectsBudget(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			host := HostRecord{Alias: "pc", ID: "host-pc", MeshIdentity: "identity-pc"}
+			host := HostRecord{MachineName: "pc", ID: "host-pc", MeshIdentity: "identity-pc"}
 			if err := cache.Save(t.Context(), host, []protocol.SessionInfo{{
 				ID: "OLD1", HostID: host.ID, Command: []string{"sh"}, State: "detached", CreatedAt: time.Now().UTC(),
 			}}); err != nil {
@@ -77,7 +77,7 @@ func TestCatalogSQLiteWriterContentionRespectsBudget(t *testing.T) {
 			hosts := []HostRecord{host}
 			timeout := 40 * time.Millisecond
 			if parentCancel {
-				hosts = append(hosts, HostRecord{Alias: "pending", ID: "host-pending"})
+				hosts = append(hosts, HostRecord{MachineName: "pending", ID: "host-pending"})
 				timeout = 2 * time.Second
 				timer := time.AfterFunc(40*time.Millisecond, cancel)
 				t.Cleanup(func() { timer.Stop() })
@@ -86,7 +86,7 @@ func TestCatalogSQLiteWriterContentionRespectsBudget(t *testing.T) {
 			go func() {
 				defer close(finished)
 				rows, err := CollectHostSessions(parent, hosts, timeout,
-					func(ctx context.Context, queried HostRecord) ([]protocol.SessionInfo, error) {
+					func(ctx context.Context, queried *HostRecord) ([]protocol.SessionInfo, error) {
 						if queried.ID == host.ID {
 							return nil, nil
 						}

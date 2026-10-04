@@ -30,9 +30,9 @@ func setupTunnelCLI(t *testing.T) (HostRecord, ed25519.PrivateKey, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := HostRecord{Alias: "vps", ID: edge.ID, MeshIdentity: edge.ID,
+	host := HostRecord{MachineName: "vps", ID: edge.ID, MeshIdentity: edge.ID,
 		TailscaleName: "vps.example.ts.net", Endpoint: "ws://100.64.0.2:7337/mesh"}
-	if err := SaveHost(host); err != nil {
+	if err := saveNamedTestHost(t, host); err != nil {
 		t.Fatal(err)
 	}
 	return host, key, stateDir

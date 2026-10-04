@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"charm.land/huh/v2"
@@ -71,6 +73,26 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 		if err != nil {
 			return cli.BootstrapResult{}, err
 		}
+		expected, err := identityForTarget(hosts, request.Target)
+		if err != nil {
+			return cli.BootstrapResult{}, err
+		}
+		parsed, _ := url.Parse("ssh://" + request.Target)
+		for _, host := range hosts {
+			if parsed.Hostname() == host.ID {
+				break
+			}
+			if host.MachineName != "" && strings.EqualFold(host.MachineName, parsed.Hostname()) {
+				target, err := cli.ResolveArgument(parsed.Hostname(), hosts)
+				if err != nil {
+					return cli.BootstrapResult{}, fmt.Errorf("resolve bootstrap machine name: %w", err)
+				}
+				if err := cli.VerifyNamedHost(ctx, *target.Host); err != nil {
+					return cli.BootstrapResult{}, fmt.Errorf("verify bootstrap machine name: %w", err)
+				}
+				break
+			}
+		}
 		steps := cli.NewStepPrinter(ui.output, "BOOTSTRAP")
 		defer steps.Done()
 		ui.steps = steps
@@ -100,7 +122,8 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 			Target:                 request.Target,
 			AllowRoot:              request.AllowRoot,
 			StateDir:               stateDir,
-			ExpectedIdentity:       identityForAlias(hosts, request.Alias),
+			ExpectedIdentity:       expected,
+			ResolveIdentity:        func(resolved string) (string, error) { return identityForTarget(hosts, resolved) },
 			TailscaleAuthKey:       authKey,
 			TailscaleAuthKeyPrompt: authKeyPrompt(ui),
 			LocalTailscaleSetup:    localTailscaleSetup(ui),
@@ -131,7 +154,8 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 		}
 		return cli.BootstrapResult{
 			Host: cli.HostRecord{
-				ID:            result.ID,
+				ID:          result.ID,
+				MachineName: result.MachineName, NameRevision: result.NameRevision,
 				MeshIdentity:  result.MeshIdentity,
 				TailscaleName: result.TailscaleName,
 				Addresses:     result.TailscaleAddresses,
@@ -262,13 +286,37 @@ func provisionPrompt(ui bootstrapUI) bootstrap.ConfirmProvisionFunc {
 	}
 }
 
-func identityForAlias(hosts []cli.HostRecord, alias string) string {
+func identityForTarget(hosts []cli.HostRecord, raw string) (string, error) {
+	parsed, err := url.Parse("ssh://" + raw)
+	if err != nil || parsed.Hostname() == "" {
+		return "", fmt.Errorf("invalid bootstrap destination")
+	}
+	target := parsed.Hostname()
 	for _, host := range hosts {
-		if strings.EqualFold(host.Alias, alias) {
-			return host.MeshIdentity
+		if target == host.ID {
+			return host.MeshIdentity, nil
 		}
 	}
-	return ""
+	matches := make(map[string]bool)
+	for _, host := range hosts {
+		if bootstrapTargetMatches(host, target) {
+			matches[host.MeshIdentity] = true
+		}
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("bootstrap destination %q matches multiple known identities; use an exact host ID or a unique address", target)
+	}
+	for id := range matches {
+		return id, nil
+	}
+	return "", nil
+}
+
+func bootstrapTargetMatches(host cli.HostRecord, target string) bool {
+	endpoint, _ := url.Parse(host.Endpoint)
+	return host.MachineName != "" && strings.EqualFold(host.MachineName, target) ||
+		host.TailscaleName != "" && strings.EqualFold(host.TailscaleName, target) ||
+		endpoint != nil && strings.EqualFold(endpoint.Hostname(), target) || slices.Contains(host.Addresses, target)
 }
 
 func passwordPrompt(ui bootstrapUI) func(context.Context, string) (string, error) {

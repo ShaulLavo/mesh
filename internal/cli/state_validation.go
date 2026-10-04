@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"time"
 
 	"github.com/shaul/mesh/internal/hostmetrics"
@@ -110,16 +111,90 @@ func validateStateMetrics(metrics *hostmetrics.Snapshot) error {
 }
 
 func validateStateName(message protocol.Control) error {
-	if message.Type != protocol.TypeStateEvent && message.StateEvent != nil && message.StateEvent.Payload.Host != nil {
-		return fmt.Errorf("unexpected machine name event in control %q", message.Type)
+	if err := validateNameEnvelope(message); err != nil {
+		return err
 	}
 	if info := stateDeclaredHost(message); info != nil {
 		if err := machinename.ValidateClaim(info.ID, declaredName(*info)); err != nil {
 			return fmt.Errorf("invalid state host name: %w", err)
 		}
 	}
-	if message.StateEvent != nil && message.StateEvent.Payload.Host != nil && message.StateEvent.Kind != "host.changed" {
-		return fmt.Errorf("unexpected machine name in state event %q", message.StateEvent.Kind)
+	return nil
+}
+
+func validateNameEnvelope(message protocol.Control) error {
+	remainder := message
+	remainder.Type, remainder.RequestID = "", ""
+	switch message.Type {
+	case protocol.TypeStateSnapshot:
+		if message.StateSnapshot == nil {
+			return fmt.Errorf("missing state snapshot")
+		}
+		remainder.StateSnapshot = nil
+	case protocol.TypeStateEvent:
+		if message.StateEvent == nil {
+			return fmt.Errorf("missing state event")
+		}
+		if err := validateEventPayload(*message.StateEvent); err != nil {
+			return err
+		}
+		if message.StateCurrent != nil && message.StateCurrent.Seq != message.StateEvent.Seq {
+			return fmt.Errorf("state event and observation sequences differ")
+		}
+		remainder.StateEvent, remainder.StateCurrent = nil, nil
+	case protocol.TypeStateCurrent:
+		if message.StateCurrent == nil {
+			return fmt.Errorf("missing state observation")
+		}
+		remainder.StateCurrent = nil
+	case protocol.TypeHostInfoResult:
+		if message.Host == nil {
+			return fmt.Errorf("missing host info")
+		}
+		remainder.Host = nil
+	default:
+		return nil
+	}
+	if !reflect.ValueOf(remainder).IsZero() {
+		return fmt.Errorf("unexpected members in %s envelope", message.Type)
+	}
+	return nil
+}
+
+func validateEventPayload(event protocol.StateEvent) error {
+	remainder := event.Payload
+	switch event.Kind {
+	case "host.changed":
+		if remainder.Host == nil {
+			return fmt.Errorf("missing host event payload")
+		}
+		remainder.Host = nil
+	case "session.added", "session.changed":
+		if remainder.Session == nil {
+			return fmt.Errorf("missing session event payload")
+		}
+		remainder.Session = nil
+	case "session.memory":
+		remainder.Memory = nil
+	case "session.removed":
+		remainder.SessionID = ""
+	case "service.changed":
+		if remainder.Service == nil {
+			return fmt.Errorf("missing service event payload")
+		}
+		remainder.Service = nil
+	case "service.removed":
+		remainder.ServiceName = ""
+	case protocol.TopicMetrics:
+		if remainder.Metrics == nil {
+			return fmt.Errorf("missing metrics event payload")
+		}
+		remainder.Metrics = nil
+	default:
+		return fmt.Errorf("unknown state event %q", event.Kind)
+	}
+	if !reflect.ValueOf(remainder).IsZero() {
+		return fmt.Errorf("unexpected members in %s event payload", event.Kind)
 	}
 	return nil
 }

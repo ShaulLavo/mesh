@@ -61,11 +61,11 @@ func newWindowModel(ctx context.Context, input cli.WindowInput, now time.Time) w
 		}
 	}
 	picker := newPickerModel(ctx, cli.PickerInput{
-		Hosts:   []cli.HostSessions{{Host: cli.HostRecord{ID: input.HostID, Alias: input.HostAlias}, Sessions: rows, Local: true}},
-		Inspect: input.Inspect, Action: input.Action, OpenHostAlias: input.HostAlias,
+		Hosts:   []cli.HostSessions{{Host: cli.HostRecord{ID: input.HostID, MachineName: input.MachineName, NameRevision: input.NameRevision, NameVerified: input.NameVerified}, Sessions: rows, Local: true}},
+		Inspect: input.Inspect, Action: input.Action, OpenHostID: input.HostID,
 		UpdateNotice: input.UpdateNotice, Privacy: input.Privacy,
 	}, now)
-	// Empty aliases are valid in isolated callers, but the compact view always
+	// Empty host IDs are valid in isolated callers, but the compact view always
 	// opens this machine directly.
 	if picker.screen != sessionScreen {
 		picker.enterSessions(0)
@@ -81,7 +81,7 @@ func newWindowModel(ctx context.Context, input cli.WindowInput, now time.Time) w
 		selected = true
 		break
 	}
-	current := windowModel{picker: picker, selected: selected, hostNames: input.HostAliases}
+	current := windowModel{picker: picker, selected: selected, hostNames: input.HostNames}
 	current.resize()
 	return current
 }
@@ -216,14 +216,14 @@ func (m *windowModel) resize() {
 	rows := min(9, max(1, len(m.picker.currentHost().sessions)), max(1, m.picker.height-9-len(m.picker.updateNoticeLines())))
 	m.picker.list.SetSize(m.picker.width, rows)
 	m.picker.list.SetDelegate(windowDelegate{sessionDelegate: sessionDelegate{
-		privacy: m.picker.privacy, styles: m.picker.styles, now: m.picker.now, hostAlias: m.picker.currentHost().alias,
+		privacy: m.picker.privacy, styles: m.picker.styles, now: m.picker.now, hostID: m.picker.currentHost().id,
 		inspection: m.picker.inspection, summaries: m.picker.summaries, hostNames: m.hostNames,
 	}, selected: m.selected})
 }
 
 func (m windowModel) View() tea.View {
 	picker := m.picker
-	header := picker.styles.title.Render("mesh") + picker.styles.muted.Render("  Resume on "+safeText(picker.privacy.Value("host", picker.currentHost().alias)))
+	header := picker.styles.title.Render("mesh") + picker.styles.muted.Render("  Resume on "+safeText(picker.privacy.Value("host", picker.currentHost().machineName)))
 	lines := append([]string{header}, picker.updateNoticeLines()...)
 	lines = append(lines, "")
 	lines = append(lines, picker.listViewRows(picker.list.Height())...)

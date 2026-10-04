@@ -25,6 +25,10 @@ func TestExplicitSessionIntentWakesAnUnavailableHost(t *testing.T) {
 func testWakeSessionIntent(t *testing.T, args []string) {
 	t.Helper()
 	host := setupCommandTestHost(t)
+	if len(args) > 0 && args[0] == "pc" {
+		args = append([]string(nil), args...)
+		args[0] = host.host.ID
+	}
 	saveWakeSessionCache(t, host)
 	awake, wakes := false, 0
 	_, _, err := executeCommand(t, Dependencies{
@@ -126,7 +130,7 @@ func TestColdBootResumeDoesNotCreateANewSession(t *testing.T) {
 			}
 			return host.dial(ctx, target)
 		},
-	}, "pc", "-r")
+	}, host.host.ID, "-r")
 	if err == nil || !strings.Contains(err.Error(), "no active sessions") {
 		t.Fatalf("resume error=%v", err)
 	}
@@ -268,5 +272,19 @@ func saveWakeSessionCache(t *testing.T, host *commandTestHost) {
 		ID: "7K3D", HostID: host.host.ID, State: "running", Command: []string{"bash"}, CreatedAt: commandTestTime,
 	}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRetainedBareNameCannotWakeUnavailableDestination(t *testing.T) {
+	host := setupCommandTestHost(t)
+	wakes := 0
+	_, _, err := executeCommand(t, Dependencies{
+		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+			return nil, errors.New("fixture unavailable")
+		},
+		Wake: func(context.Context, HostRecord) error { wakes++; return nil },
+	}, "wake", host.host.MachineName)
+	if err == nil || wakes != 0 {
+		t.Fatalf("unverified bare-name wake: %v, effects=%d", err, wakes)
 	}
 }

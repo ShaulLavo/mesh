@@ -141,7 +141,8 @@ func verifyOne(ctx context.Context, endpoint string, auth *transport.Authenticat
 		}
 	}
 	return verifiedHost{
-		Wake:          response.Host.Wake,
+		Wake:        response.Host.Wake,
+		MachineName: response.Host.MachineName, NameRevision: response.Host.NameRevision,
 		ID:            response.Host.ID,
 		MeshIdentity:  response.Host.MeshIdentity,
 		TailscaleName: response.Host.TailscaleName,

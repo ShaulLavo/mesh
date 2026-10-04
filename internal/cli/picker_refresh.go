@@ -31,7 +31,7 @@ func (a *application) refreshPickerServices(ctx context.Context, host HostRecord
 	cached, cacheErr := cache.LoadServices(operationContext, host)
 	snapshot, queryErr := listRemoteServices(operationContext, host, a.dependencies.DialControl)
 	if queryErr == nil {
-		rows := liveServiceCatalogRows(host, snapshot)
+		rows := liveServiceCatalogRows(snapshot.Host, snapshot)
 		cacheContext, cancelCache := context.WithTimeout(operationContext, serviceCacheWriteTimeout)
 		_ = cache.SaveServices(cacheContext, host, snapshot.PrivateName, snapshot.Services)
 		cancelCache()

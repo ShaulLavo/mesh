@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
@@ -64,7 +65,7 @@ func printUpdateTargets(output io.Writer, targets []update.Target, manifest rele
 		if target.Build != nil {
 			build = "daemon " + target.Build.Version
 		}
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s%s\n", SafeTerminalText(mask.Value("host", target.Host.Alias)), SafeTerminalText(string(target.State)), SafeTerminalText(mask.Text(build)), workerUpdateSummary(target.Workers, manifest)); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s%s\n", SafeTerminalText(mask.Value("host", target.Host.Label())), SafeTerminalText(string(target.State)), SafeTerminalText(mask.Text(build)), workerUpdateSummary(target.Workers, manifest)); err != nil {
 			return err
 		}
 		if len(target.InterruptedWorkers) > 0 {
@@ -145,7 +146,7 @@ func observeUpdate(ctx context.Context, environment updateEnvironment, run updat
 	for !updateObservationSettled(run) {
 		select {
 		case <-ctx.Done():
-			if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
+			if err := printDeclaredUpdateRun(ctx, output.out, run, structured, output.privacy); err != nil {
 				return err
 			}
 			return statusError{code: 2}
@@ -161,7 +162,7 @@ func observeUpdate(ctx context.Context, environment updateEnvironment, run updat
 			run = local
 		}
 	}
-	if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
+	if err := printDeclaredUpdateRun(ctx, output.out, run, structured, output.privacy); err != nil {
 		return err
 	}
 	return updateExit(run.ExitCode())
@@ -200,4 +201,49 @@ func privateUpdateHosts(mask *privacy.Mask, hosts []string) string {
 		labels[i] = mask.Value("host", host)
 	}
 	return SafeTerminalText(strings.Join(labels, ", "))
+}
+
+func printDeclaredUpdateRun(ctx context.Context, output io.Writer, run update.Run, structured bool, masks ...*privacy.Mask) error {
+	if !structured {
+		targets, err := declaredUpdateTargets(ctx, run.Targets)
+		if err != nil {
+			return err
+		}
+		run.Targets = targets
+	}
+	return printUpdateRun(output, run, structured, masks...)
+}
+
+func declaredUpdateTargets(ctx context.Context, targets []update.Target) ([]update.Target, error) {
+	hosts, err := LoadHosts()
+	if err != nil {
+		return nil, err
+	}
+	stateDir, err := paths.StateDir()
+	if err != nil {
+		return nil, fmt.Errorf("locate updater naming state: %w", err)
+	}
+	local, err := localNameRecord(ctx, stateDir)
+	if err != nil {
+		return nil, err
+	}
+	known := withOwnerClaim(hosts, local)
+	ProjectHostNames(known)
+	labels := make(map[string]string, len(known))
+	for _, host := range known {
+		if host.MachineName == "" {
+			continue
+		}
+		label := HostLabel(host)
+		if !host.NameVerified {
+			label += retainedNameSuffix
+		}
+		labels[host.ID] = label
+	}
+	displayed := make([]update.Target, len(targets))
+	copy(displayed, targets)
+	for index := range displayed {
+		displayed[index].Host.MachineName = labels[displayed[index].Host.ID]
+	}
+	return displayed, nil
 }

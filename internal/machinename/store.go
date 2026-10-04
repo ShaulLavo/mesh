@@ -3,6 +3,7 @@ package machinename
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -161,6 +162,10 @@ func readRecord(path string) (record, error) {
 		return record{}, fmt.Errorf("open machine name state: %w", err)
 	}
 	defer file.Close() //nolint:errcheck // read-only state descriptor
+	return readRecordFile(file)
+}
+
+func readRecordFile(file *os.File) (record, error) {
 	info, err := file.Stat()
 	if err != nil {
 		return record{}, fmt.Errorf("inspect machine name state: %w", err)
@@ -188,15 +193,25 @@ func readRecord(path string) (record, error) {
 }
 
 func publishRecord(directory, filename string, current record, syncDir func(string) error) (bool, error) {
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return false, fmt.Errorf("open machine name publication directory: %w", err)
+	}
+	defer root.Close() //nolint:errcheck // directory descriptor cleanup
+	return publishRecordRoot(root, filename, current, func() error { return syncDir(directory) })
+}
+
+func publishRecordRoot(root *os.Root, filename string, current record, syncDir func() error) (bool, error) {
 	contents, err := json.Marshal(current)
 	if err != nil {
 		return false, fmt.Errorf("encode machine name state: %w", err)
 	}
-	file, err := os.CreateTemp(directory, ".machine-name-*")
+	temporary := ".machine-name-" + rand.Text()
+	file, err := root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return false, fmt.Errorf("stage machine name state: %w", err)
 	}
-	defer os.Remove(file.Name()) //nolint:errcheck // cleanup after atomic publication
+	defer root.Remove(temporary) //nolint:errcheck // cleanup after atomic publication
 	defer file.Close()           //nolint:errcheck // closed before publication
 	if _, err := file.Write(append(contents, '\n')); err != nil {
 		return false, fmt.Errorf("write machine name state: %w", err)
@@ -207,15 +222,10 @@ func publishRecord(directory, filename string, current record, syncDir func(stri
 	if err := file.Close(); err != nil {
 		return false, fmt.Errorf("close machine name state: %w", err)
 	}
-	root, err := os.OpenRoot(directory)
-	if err != nil {
-		return false, fmt.Errorf("open machine name publication directory: %w", err)
-	}
-	defer root.Close() //nolint:errcheck // directory descriptor cleanup
-	if err := root.Rename(filepath.Base(file.Name()), filename); err != nil {
+	if err := root.Rename(temporary, filename); err != nil {
 		return false, fmt.Errorf("publish machine name state: %w", err)
 	}
-	if err := syncDir(directory); err != nil {
+	if err := syncDir(); err != nil {
 		return true, err
 	}
 	return true, nil

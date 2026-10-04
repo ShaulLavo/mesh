@@ -54,7 +54,7 @@ type sessionSummaryResult struct {
 }
 
 type sessionSummariesResultMsg struct {
-	hostAlias  string
+	hostID     string
 	generation uint64
 	values     map[inspectionTarget]cli.SessionInspection
 }
@@ -73,7 +73,7 @@ func (m *model) inspectVisibleSessionSummaries() tea.Cmd {
 
 	m.summarySeq++
 	generation := m.summarySeq
-	hostAlias := m.currentHost().alias
+	hostID := m.currentHost().id
 	requestContext, cancel := context.WithTimeout(m.ctx, inspectionRequestTimeout)
 	m.cancelSummary = cancel
 	inspect := m.inspect
@@ -90,7 +90,7 @@ func (m *model) inspectVisibleSessionSummaries() tea.Cmd {
 			go func() {
 				for target := range jobs {
 					value, err := inspect(requestContext, cli.PickerInspectRequest{
-						HostAlias:   target.hostAlias,
+						HostID:      target.hostID,
 						SessionID:   target.sessionID,
 						PreviewCols: 1,
 						PreviewRows: 1,
@@ -107,7 +107,7 @@ func (m *model) inspectVisibleSessionSummaries() tea.Cmd {
 				values[result.target] = result.value
 			}
 		}
-		return sessionSummariesResultMsg{hostAlias: hostAlias, generation: generation, values: values}
+		return sessionSummariesResultMsg{hostID: hostID, generation: generation, values: values}
 	}
 }
 
@@ -126,7 +126,7 @@ func (m model) visibleSessionSummaryTargets() []inspectionTarget {
 		if !ok || row.session.id == selectedID || row.session.state != "running" && row.session.state != "detached" {
 			continue
 		}
-		target := inspectionTarget{hostAlias: m.currentHost().alias, sessionID: row.session.id}
+		target := inspectionTarget{hostID: m.currentHost().id, sessionID: row.session.id}
 		if m.inspectionTargetContainsPicker(target) {
 			continue
 		}
@@ -139,7 +139,7 @@ func (m model) visibleSessionSummaryTargets() []inspectionTarget {
 }
 
 func (m model) applySessionSummaries(message sessionSummariesResultMsg) model {
-	if m.screen != sessionScreen || message.generation != m.summarySeq || message.hostAlias != m.currentHost().alias {
+	if m.screen != sessionScreen || message.generation != m.summarySeq || message.hostID != m.currentHost().id {
 		return m
 	}
 	m.cancelSummary = nil
@@ -148,7 +148,7 @@ func (m model) applySessionSummaries(message sessionSummariesResultMsg) model {
 		next[target] = summary
 	}
 	for target, value := range message.values {
-		if target.hostAlias != message.hostAlias || !liveSessionExists(m.currentHost().sessions, target.sessionID) {
+		if target.hostID != message.hostID || !liveSessionExists(m.currentHost().sessions, target.sessionID) {
 			continue
 		}
 		next[target] = newSessionLiveSummary(value, m.now)
@@ -167,14 +167,14 @@ func (m *model) rememberSessionSummary(target inspectionTarget, value cli.Sessio
 	m.summaries = next
 }
 
-func (m *model) pruneSessionSummaries(hostAlias string, sessions []session) {
+func (m *model) pruneSessionSummaries(hostID string, sessions []session) {
 	ids := make(map[string]struct{}, len(sessions))
 	for _, current := range sessions {
 		ids[current.id] = struct{}{}
 	}
 	next := make(map[inspectionTarget]sessionLiveSummary, len(m.summaries))
 	for target, summary := range m.summaries {
-		if target.hostAlias == hostAlias {
+		if target.hostID == hostID {
 			if _, exists := ids[target.sessionID]; !exists {
 				continue
 			}

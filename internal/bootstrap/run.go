@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/wake"
@@ -285,7 +286,8 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		return Result{}, diagnostic(DiagnosticIdentity, fmt.Errorf("daemon identity %q does not match the pinned identity %q", host.MeshIdentity, normalized.expectedIdentity))
 	}
 	return Result{
-		Wake:               host.Wake,
+		Wake:        host.Wake,
+		MachineName: host.MachineName, NameRevision: host.NameRevision,
 		ID:                 host.ID,
 		MeshIdentity:       host.MeshIdentity,
 		TailscaleName:      tailnet.Name,
@@ -368,6 +370,18 @@ func normalizeOptions(ctx context.Context, opts Options, loadSSHConfig func() ss
 		sshConfig = loadSSHConfig()
 	}
 	remoteTarget = applySSHConfig(remoteTarget, sshConfig)
+	if opts.ResolveIdentity != nil {
+		pinned, err := opts.ResolveIdentity(remoteTarget.host)
+		if err != nil {
+			return normalizedOptions{}, diagnostic(DiagnosticIdentity, err)
+		}
+		if pinned != "" && opts.ExpectedIdentity != "" && pinned != opts.ExpectedIdentity {
+			return normalizedOptions{}, diagnostic(DiagnosticIdentity, errors.New("resolved SSH target differs from the pinned destination"))
+		}
+		if pinned != "" {
+			opts.ExpectedIdentity = pinned
+		}
+	}
 	// An explicitly named identity wins; otherwise take the one the config
 	// names for this alias, the way ssh would.
 	if len(opts.SSH.IdentityFiles) == 0 {
@@ -501,6 +515,8 @@ func adopterAuthorizedKey(stateDir string) (string, error) {
 }
 
 type verifiedHost struct {
+	MachineName   string
+	NameRevision  uint64
 	Wake          *wake.Grant
 	ID            string
 	MeshIdentity  string
@@ -514,6 +530,11 @@ func validateVerifiedHost(host verifiedHost, discoveredName string) error {
 	publicKey, err := base64.RawURLEncoding.DecodeString(host.ID)
 	if err != nil || len(publicKey) != 32 {
 		return diagnostic(DiagnosticIdentity, fmt.Errorf("daemon reported invalid Ed25519 host ID %q", host.ID))
+	}
+	if host.MachineName != "" || host.NameRevision != 0 {
+		if err := machinename.ValidateClaim(host.ID, machinename.Claim{ID: host.ID, MachineName: host.MachineName, Revision: host.NameRevision}); err != nil {
+			return diagnostic(DiagnosticIdentity, err)
+		}
 	}
 	if host.TailscaleName != "" && discoveredName != "" && strings.TrimSuffix(host.TailscaleName, ".") != strings.TrimSuffix(discoveredName, ".") {
 		return diagnostic(DiagnosticIdentity, fmt.Errorf("daemon reports Tailscale name %q, but tailscale status reports %q", host.TailscaleName, discoveredName))

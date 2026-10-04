@@ -17,20 +17,20 @@ func serviceDisplayName(service protocol.ServiceInfo) string {
 }
 
 func (a *application) serveLabelCommand() *cobra.Command {
-	var hostAlias string
+	var hostID string
 	command := &cobra.Command{
 		Use:   "label ROUTE NAME",
 		Short: "Set the display name of an existing service",
 		Args:  exactArgs(2, "a route and display name", "mesh serve label :5173 'Fregat dev' --host pc"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.runServeLabel(cmd, args[0], args[1], hostAlias)
+			return a.runServeLabel(cmd, args[0], args[1], hostID)
 		},
 	}
-	command.Flags().StringVar(&hostAlias, "host", "", "host alias when more than one host owns ROUTE")
+	command.Flags().StringVar(&hostID, "host", "", "machine name or exact host ID when more than one host owns ROUTE")
 	return command
 }
 
-func (a *application) runServeLabel(cmd *cobra.Command, route, label, hostAlias string) error {
+func (a *application) runServeLabel(cmd *cobra.Command, route, label, hostID string) error {
 	if label == "" {
 		return fmt.Errorf("display name must contain text")
 	}
@@ -46,7 +46,7 @@ func (a *application) runServeLabel(cmd *cobra.Command, route, label, hostAlias 
 		return err
 	}
 	defer cache.Close() //nolint:errcheck // command result takes precedence
-	selected, _, err := a.resolveServiceOwner(cmd, cache, route, name, hostAlias, defaultServiceListTimeout)
+	selected, _, err := a.resolveServiceOwner(cmd, cache, route, name, hostID, defaultServiceListTimeout)
 	if err != nil {
 		return err
 	}
@@ -63,9 +63,9 @@ func (a *application) runServeLabel(cmd *cobra.Command, route, label, hostAlias 
 		return remoteServiceResponseError(selected.Host, "service label", response)
 	}
 	if response.Type != protocol.TypeServiceLabeled || response.Service == nil || response.Service.Name != name || response.Service.DisplayName != label {
-		return fmt.Errorf("host %s did not acknowledge the service label; update Mesh there first", selected.Host.Alias)
+		return fmt.Errorf("host %s did not acknowledge the service label; update Mesh there first", HostLabel(selected.Host))
 	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s on %s is now %s\n", a.privacy.Value("route", route), a.privacy.Value("host", selected.Host.Alias), a.privacy.Value("name", label)); err != nil {
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s on %s is now %s\n", a.privacy.Value("route", route), a.privacy.Value("host", HostLabel(selected.Host)), a.privacy.Value("name", label)); err != nil {
 		return fmt.Errorf("write service label: %w", err)
 	}
 	return nil

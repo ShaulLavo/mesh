@@ -36,7 +36,8 @@ const (
 )
 
 type StateView struct {
-	Name                   machinename.Claim
+	Name machinename.Claim
+	// NameVerified records owner-declaration provenance; connection and section ages determine freshness.
 	NameVerified           bool
 	PrivateName            string
 	Build                  release.Build

@@ -85,7 +85,7 @@ func TestInterruptedUnverifiedConversationKeepsItsRecoveryActions(t *testing.T) 
 
 func recoveryPicker(current protocol.SessionInfo) model {
 	return newPickerModel(context.Background(), cli.PickerInput{
-		Hosts: []cli.HostSessions{{Host: cli.HostRecord{Alias: "local"}, Local: true, Sessions: []protocol.SessionInfo{current}}}, OpenHostAlias: "local",
+		Hosts: []cli.HostSessions{{Host: cli.HostRecord{ID: "local", MachineName: "local"}, Local: true, Sessions: []protocol.SessionInfo{current}}}, OpenHostID: "local",
 	}, pickerTestNow)
 }
 
@@ -230,7 +230,7 @@ func TestLaunchOnlyRecoveryDoesNotInventCheckpointTime(t *testing.T) {
 func TestWindowKeepsPreviousAttemptsInFullPicker(t *testing.T) {
 	old := savedPickerSession()
 	old.ReplacementID = "91AZ"
-	input := cli.WindowInput{HostAlias: "local", Sessions: []protocol.SessionInfo{old, {ID: "91AZ", State: "running", RecoveredFrom: old.ID}, {ID: "Q8ME", State: "exited"}}}
+	input := cli.WindowInput{MachineName: "local", Sessions: []protocol.SessionInfo{old, {ID: "91AZ", State: "running", RecoveredFrom: old.ID}, {ID: "Q8ME", State: "exited"}}}
 	current := newWindowModel(context.Background(), input, pickerTestNow)
 	if len(current.picker.currentHost().sessions) != 1 || current.selected {
 		t.Fatalf("window selected previous or ended attempt: %#v", current)
@@ -287,7 +287,7 @@ func TestWatchPendingRecoveryMetadataKeepsExplicitInspection(t *testing.T) {
 		t.Fatalf("pending metadata looked complete:\n%s", view)
 	}
 	current.inspection.hasValue = true
-	current.inspection.target = inspectionTarget{hostAlias: current.currentHost().alias, sessionID: row.ID}
+	current.inspection.target = inspectionTarget{hostID: current.currentHost().machineName, sessionID: row.ID}
 	current.inspection.value = cli.SessionInspection{Recovery: record}
 	_, selected, ok := current.currentSession()
 	if !ok {

@@ -51,7 +51,7 @@ func (a *application) startFirstCoordinatorSetup(ctx context.Context, environmen
 	}
 	if err = setup(ctx, environment.stateDir); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			if printErr := printUpdateRun(output.out, run, options.json, output.privacy); printErr != nil {
+			if printErr := printDeclaredUpdateRun(ctx, output.out, run, options.json, output.privacy); printErr != nil {
 				return printErr
 			}
 			return statusError{code: 2}

@@ -28,10 +28,12 @@ const (
 )
 
 type host struct {
+	record      cli.HostRecord
 	id          string
-	alias       string
+	machineName string
 	route       string
 	stale       bool
+	nameStale   bool
 	local       bool
 	sessions    []session
 	served      []servedWebsite
@@ -75,7 +77,7 @@ type cancelSelection struct{}
 func (cancelSelection) pickerSelection() {}
 
 type attachSelection struct {
-	hostAlias      string
+	hostID         string
 	sessionID      string
 	relaunch       bool
 	takeOver       bool
@@ -84,15 +86,18 @@ type attachSelection struct {
 
 func (attachSelection) pickerSelection() {}
 
-type newSelection struct{ hostAlias string }
+type newSelection struct {
+	hostID string
+	local  bool
+}
 
 func (newSelection) pickerSelection() {}
 
-type resumeSelection struct{ hostAlias string }
+type resumeSelection struct{ hostID string }
 
 func (resumeSelection) pickerSelection() {}
 
-type wakeSelection struct{ hostAlias string }
+type wakeSelection struct{ hostID string }
 
 type initialSessionRefreshMsg struct{}
 
@@ -357,10 +362,10 @@ func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 			}
 			current := m.currentHost()
 			if current.stale {
-				m.notice = current.alias + " is offline; wake it first"
+				m.notice = current.machineName + " is offline; wake it first"
 				return true, nil
 			}
-			m.selection = newSelection{hostAlias: current.alias}
+			m.selection = newSelection{hostID: current.id, local: current.local}
 			return true, tea.Quit
 		}
 	case "r":
@@ -371,11 +376,11 @@ func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 			current := m.currentHost()
 			switch {
 			case current.stale:
-				m.notice = current.alias + " is offline; wake it first"
+				m.notice = current.machineName + " is offline; wake it first"
 			case activeSessions(current.sessions) == 0:
-				m.notice = current.alias + " has no active sessions"
+				m.notice = current.machineName + " has no active sessions"
 			default:
-				m.selection = resumeSelection{hostAlias: current.alias}
+				m.selection = resumeSelection{hostID: current.id}
 				return true, tea.Quit
 			}
 			return true, nil
@@ -390,7 +395,7 @@ func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 				return true, nil
 			}
 			if current.stale {
-				m.notice = current.alias + " is offline; wake it first"
+				m.notice = current.machineName + " is offline; wake it first"
 				return true, nil
 			}
 			if session.state != "running" && session.state != "detached" {
@@ -409,7 +414,7 @@ func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 				return true, nil
 			}
 			if current.stale {
-				m.notice = current.alias + " is offline; wake it first"
+				m.notice = current.machineName + " is offline; wake it first"
 				return true, nil
 			}
 			if session.state == "running" || session.state == "detached" {
@@ -425,10 +430,10 @@ func (m *model) handleKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 			}
 			current := m.currentHost()
 			if current.stale {
-				m.selection = wakeSelection{hostAlias: current.alias}
+				m.selection = wakeSelection{hostID: current.id}
 				return true, tea.Quit
 			}
-			m.notice = current.alias + " is already online"
+			m.notice = current.machineName + " is already online"
 			return true, nil
 		}
 	}
@@ -466,9 +471,9 @@ func (m *model) enterSessions(hostIndex int) {
 	}
 }
 
-func (m *model) openHostSessions(alias string) bool {
+func (m *model) openHostSessions(hostID string) bool {
 	for index := range m.hosts {
-		if m.hosts[index].alias != alias {
+		if m.hosts[index].id != hostID {
 			continue
 		}
 		m.list.Select(index)
@@ -504,7 +509,7 @@ func (m *model) attachSelected() {
 		return
 	}
 	m.selection = attachSelection{
-		hostAlias: m.currentHost().alias, sessionID: selected.session.id,
+		hostID: m.currentHost().id, sessionID: selected.session.id,
 		relaunch: endedSession(selected.session), takeOver: m.selectedSessionAttached(),
 	}
 }
@@ -533,12 +538,15 @@ func (m model) chrome() (string, string, string) {
 	}
 
 	current := m.currentHost()
-	breadcrumb := m.styles.title.Render("mesh") + m.styles.muted.Render(" › ") + m.styles.accent.Render(safeText(m.privacy.Value("host", current.alias)))
-	if route := safeText(m.privacy.Value("route", current.route)); route != "" && route != safeText(m.privacy.Value("host", current.alias)) {
+	breadcrumb := m.styles.title.Render("mesh") + m.styles.muted.Render(" › ") + m.styles.accent.Render(safeText(m.privacy.Value("host", current.machineName)))
+	if route := safeText(m.privacy.Value("route", current.route)); route != "" && route != safeText(m.privacy.Value("host", current.machineName)) {
 		breadcrumb += m.styles.muted.Render("  " + route)
 	}
 	header := justify(breadcrumb, m.hostStatus(current), m.width)
 	subtitle := m.styles.muted.Render("Choose a session, or start another one.")
+	if current.nameStale {
+		subtitle = m.styles.muted.Render("Last known machine name. Actions use the exact host ID.")
+	}
 	if current.stale {
 		subtitle = m.styles.muted.Render("Cached sessions may be stale. Wake the host before starting work.")
 	}
@@ -644,7 +652,7 @@ type hostItem struct {
 	host  host
 }
 
-func (item hostItem) FilterValue() string { return item.host.alias }
+func (item hostItem) FilterValue() string { return item.host.machineName }
 
 func hostItems(hosts []host) []list.Item {
 	items := make([]list.Item, 0, len(hosts))
@@ -653,7 +661,7 @@ func hostItems(hosts []host) []list.Item {
 	}
 	for _, current := range hosts {
 		for _, website := range current.served {
-			items = append(items, serviceItem{target: serviceTarget{current.id, website.route}, hostAlias: current.alias, website: website})
+			items = append(items, serviceItem{target: serviceTarget{current.id, website.route}, machineName: current.machineName, local: current.local, website: website})
 		}
 	}
 	return items
@@ -695,16 +703,16 @@ func (delegate hostDelegate) Render(output io.Writer, browser list.Model, index 
 	if !ok {
 		return
 	}
-	aliasWidth, routeWidth := 0, 0
+	nameWidth, routeWidth := 0, 0
 	for _, entry := range browser.Items() {
 		other, ok := entry.(hostItem)
 		if !ok {
 			continue
 		}
-		aliasWidth = max(aliasWidth, ansi.StringWidth(safeText(delegate.privacy.Value("host", other.host.alias))))
+		nameWidth = max(nameWidth, ansi.StringWidth(safeText(delegate.privacy.Value("host", other.host.machineName))))
 		routeWidth = max(routeWidth, ansi.StringWidth(safeText(delegate.privacy.Value("route", other.host.route))))
 	}
-	aliasWidth = min(aliasWidth, 24)
+	nameWidth = min(nameWidth, 24)
 	routeWidth = min(routeWidth, 32)
 
 	selected := index == browser.Index()
@@ -718,9 +726,12 @@ func (delegate hostDelegate) Render(output io.Writer, browser list.Model, index 
 		glyph = delegate.styles.warning.Render("▲")
 		status = delegate.styles.warning.Render("offline  ·  cached") + delegate.styles.muted.Render("  ·  "+count(len(item.host.sessions), "session"))
 	}
-	row := cursor + glyph + " " + cell(delegate.styles.item(selected).Render(safeText(delegate.privacy.Value("host", item.host.alias))), aliasWidth)
+	row := cursor + glyph + " " + cell(delegate.styles.item(selected).Render(safeText(delegate.privacy.Value("host", item.host.machineName))), nameWidth)
 	if routeWidth > 0 {
 		row += "  " + cell(delegate.styles.muted.Render(safeText(delegate.privacy.Value("route", item.host.route))), routeWidth)
+	}
+	if item.host.nameStale {
+		status += delegate.styles.muted.Render("  ·  last known name")
 	}
 	row += "  " + status
 	_, _ = fmt.Fprint(output, truncate(row, browser.Width()))
@@ -730,7 +741,7 @@ type sessionDelegate struct {
 	privacy    *privacy.Mask
 	styles     pickerStyles
 	now        time.Time
-	hostAlias  string
+	hostID     string
 	inspection inspectionState
 	summaries  map[inspectionTarget]sessionLiveSummary
 	hostNames  map[string]string
@@ -846,7 +857,7 @@ func (delegate sessionDelegate) row(current session, selected bool) sessionRow {
 		row.primary = "↳ " + row.primary
 		row.context = "previous attempt"
 	}
-	target := inspectionTarget{hostAlias: delegate.hostAlias, sessionID: current.id}
+	target := inspectionTarget{hostID: delegate.hostID, sessionID: current.id}
 	if summary, ok := delegate.summaries[target]; ok && !endedSession(current) {
 		row.primary, row.secondary = sessionHeadline(summarizedSessionLabel(current, summary), summary.terminalTitle)
 		row.context = nestedSessionLabel(summary.nested, delegate.hostNames)

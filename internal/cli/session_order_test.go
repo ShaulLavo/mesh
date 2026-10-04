@@ -50,7 +50,7 @@ func TestPrintedSessionListOrdersBySavedUpdate(t *testing.T) {
 		{ID: "NEW", CreatedAt: commandTestTime.Add(time.Hour)},
 	}
 	var output bytes.Buffer
-	if err := writeProtocolSessions(&output, commandTestTime, []HostSessions{{Host: HostRecord{Alias: "pc"}, Sessions: rows}}); err != nil {
+	if err := writeProtocolSessions(&output, commandTestTime, []HostSessions{{Host: HostRecord{MachineName: "pc"}, Sessions: rows}}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Index(output.String(), "OLD") > strings.Index(output.String(), "NEW") {

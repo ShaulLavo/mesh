@@ -29,9 +29,8 @@ const (
 type TerminalBinding struct {
 	Version int    `json:"version"`
 	Source  string `json:"source"`
-	// HostID is empty for a session on this machine. The alias is derived at
-	// read time: "this host" is not a real alias, and `mesh rename` would rot a
-	// stored one.
+	// HostID is empty for a session on this machine. Names are read from the
+	// destination declaration so a rename cannot change the stored target.
 	HostID    string `json:"hostId,omitempty"`
 	SessionID string `json:"sessionId"`
 	// OriginID is the session recovery is asked to bring back. Recovery mints a

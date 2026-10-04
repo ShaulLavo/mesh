@@ -49,7 +49,7 @@ func TestPickerReturnCancelsAndDrainsAnInFlightSessionAction(t *testing.T) {
 		Picker: func(ctx context.Context, input PickerInput) (PickerSelection, error) {
 			go func() {
 				actionResult <- input.Action(ctx, PickerSessionActionRequest{
-					HostAlias: "pc", SessionID: "7K3D", Action: PickerKillSession,
+					HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D", Action: PickerKillSession,
 				})
 			}()
 			select {

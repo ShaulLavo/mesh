@@ -17,7 +17,7 @@ func dashboardTickFixture(t testing.TB, usage bool, hosts int) dashboardModel {
 	for len(model.hosts) < hosts {
 		host := fleet[len(model.hosts)%len(fleet)]
 		host.Host.ID = fmt.Sprintf("host-%d", len(model.hosts))
-		host.Host.Alias = fmt.Sprintf("host-%02d", len(model.hosts))
+		host.Host.MachineName = fmt.Sprintf("host-%02d", len(model.hosts))
 		model.hosts = append(model.hosts, host)
 	}
 	model.wall = true

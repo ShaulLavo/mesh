@@ -105,7 +105,7 @@ func TestUpdateKeepsOfflineMembersAndSubmitsOnePinnedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := update.Host{ID: remoteIdentity.ID, Alias: "laptop", Endpoint: "ws://laptop.invalid/mesh"}
+	remote := update.Host{ID: remoteIdentity.ID, MachineName: "laptop", Endpoint: "ws://laptop.invalid/mesh"}
 	fleet := scopedUpdateFleet("test", []update.Host{local, remote})
 	file := filepath.Join(t.TempDir(), "fleet.json")
 	if err := update.SaveFleet(file, fleet); err != nil {
