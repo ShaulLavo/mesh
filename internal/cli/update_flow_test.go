@@ -51,7 +51,7 @@ func updateFlowFixture(t *testing.T, current bool) (Dependencies, update.Host, *
 		if current {
 			build.Version, build.Digest = manifest.Version, manifest.Artifacts[2].BinarySHA256
 		}
-		*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: build, Workers: []updateinstall.Worker{{ID: "retained", Protocol: 1, Build: &release.Build{Version: "v0.1.149"}}}}}
+		*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: build, Workers: []updateinstall.Worker{{ID: "retained", Protocol: 1, Build: &release.Build{Version: "v0.1.149"}}}}}
 		return nil
 	})
 	return Dependencies{UpdateRelease: release.Client{BaseURL: server.URL, HTTPClient: server.Client()}, UpdateCaller: caller}, local, mutations
@@ -222,7 +222,7 @@ func TestUpdateFlowDefaultApprovalOnlySubmitsLocalPlan(t *testing.T) {
 			return errors.New("default contacted another machine")
 		}
 		if action == "info" {
-			*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
+			*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 			return nil
 		}
 		if action != "plan" {
@@ -328,7 +328,7 @@ func TestUpdateFlowStartedUpdateSessionGrammar(t *testing.T) {
 			client, _ := updateTestRelease(t)
 			caller := updateCallFunc(func(_ context.Context, host update.Host, action string, input, output any) error {
 				if action == "info" {
-					*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
+					*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 					return nil
 				}
 				run := update.Run{ID: strings.Repeat("a", 32), Release: updateTestSupportedManifest(), Targets: []update.Target{{Host: local, State: update.Pending}}}

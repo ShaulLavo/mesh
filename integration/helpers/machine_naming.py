@@ -259,7 +259,7 @@ def prove(fixture, args):
                                        "candidate": {"source": args.candidate_source,
                                                      "digest": image_digest(fixture.binary)}},
                       "retainedWorkerCreatedByBaseline": bool(args.baseline), "phases": phases,
-                      "readerCutoverComplete": False}
+                      "proofScope": "destination-state-and-retained-session-source-transition"}
             (output / "checks.txt").write_text(json.dumps(result, indent=2) + "\n")
         print("PASS: destination name/revision, full-device authorization, forgery/target rejection, durable retry/restart, concurrent rename, watch reconnect, retained worker/shell/session I/O")
     finally:

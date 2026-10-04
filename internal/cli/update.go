@@ -118,6 +118,11 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	if a.dependencies.UpdateCaller != nil {
 		environment.client = a.dependencies.UpdateCaller
 	}
+	if !options.check {
+		if err := requireIdentityFleetCoordinator(ctx, environment); err != nil {
+			return err
+		}
+	}
 	fleet, outside, err := a.updateFleet(options, environment, interactive)
 	if err != nil {
 		return err

@@ -282,12 +282,13 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 	if err := validateVerifiedHost(host, tailnet.Name); err != nil {
 		return Result{}, err
 	}
-	if normalized.expectedIdentity != "" && host.MeshIdentity != normalized.expectedIdentity {
-		return Result{}, diagnostic(DiagnosticIdentity, fmt.Errorf("daemon identity %q does not match the pinned identity %q", host.MeshIdentity, normalized.expectedIdentity))
+	if pin == "" || host.ID != pin || host.MeshIdentity != pin {
+		return Result{}, diagnostic(DiagnosticIdentity, errors.New("daemon identity differs from the authenticated destination; re-enroll explicitly"))
 	}
 	return Result{
-		Wake:        host.Wake,
-		MachineName: host.MachineName, NameRevision: host.NameRevision,
+		AuthenticatedIdentity: pin,
+		Wake:                  host.Wake,
+		MachineName:           host.MachineName, NameRevision: host.NameRevision,
 		ID:                 host.ID,
 		MeshIdentity:       host.MeshIdentity,
 		TailscaleName:      tailnet.Name,

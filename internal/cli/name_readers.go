@@ -33,11 +33,16 @@ func HostLabel(host HostRecord) string {
 	return "Local machine"
 }
 
-func cacheBootstrapName(ctx context.Context, host HostRecord) error {
+func cacheBootstrapName(ctx context.Context, host HostRecord, authenticatedIdentity string) error {
+	if authenticatedIdentity == "" || host.ID != authenticatedIdentity || host.MeshIdentity != authenticatedIdentity {
+		return fmt.Errorf("bootstrap declaration differs from the authenticated destination; add this machine again")
+	}
 	if host.MachineName == "" && host.NameRevision == 0 {
 		return fmt.Errorf("destination %s has no naming declaration; update that destination", host.ID)
 	}
-	return rememberHostName(ctx, host, protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity, MachineName: host.MachineName, NameRevision: host.NameRevision})
+	owner := host
+	owner.ID, owner.MeshIdentity = authenticatedIdentity, authenticatedIdentity
+	return rememberHostName(ctx, owner, protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity, MachineName: host.MachineName, NameRevision: host.NameRevision})
 }
 
 func localDeclaredHost(ctx context.Context, stateDir string) (HostRecord, error) {
@@ -149,12 +154,16 @@ func ProjectHostNames(hosts []HostRecord) {
 
 // VerifyNamedHost checks a bare-name intent against its authenticated owner before bootstrap effects.
 func VerifyNamedHost(ctx context.Context, host HostRecord) error {
+	return verifyNamedHost(ctx, host, dialControlHost)
+}
+
+func verifyNamedHost(ctx context.Context, host HostRecord, dial HostDialer) error {
 	if host.targetName == "" {
 		return nil
 	}
 	query, cancel := context.WithTimeout(ctx, remoteConnectTimeout)
 	defer cancel()
-	conn, _, err := openVerifiedHostInfo(query, host, dialControlHost)
+	conn, _, err := openVerifiedHostInfo(query, host, dial)
 	if err != nil {
 		return err
 	}

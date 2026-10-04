@@ -26,7 +26,7 @@ func TestOwnerDeclarationReplacesDashboardViewerLabel(t *testing.T) {
 	}
 }
 
-func TestOwnerNameStorageDiscardsOnlyObsoleteViewerLabel(t *testing.T) {
+func TestOwnerNameStorageRefusesObsoleteViewerLabel(t *testing.T) {
 	f := namedDestination(t)
 	path, err := ConfigPath()
 	if err != nil {
@@ -50,6 +50,17 @@ func TestOwnerNameStorageDiscardsOnlyObsoleteViewerLabel(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := machinename.RememberClaim(t.Context(), filepath.Dir(path), f.host.ID, f.names.Current()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadHosts(); err == nil || !strings.Contains(err.Error(), "remove the unrecognized field") {
+		t.Fatalf("obsolete viewer field accepted without actionable guidance: %v", err)
+	}
+	delete(legacy, "alias")
+	raw, err = json.Marshal(map[string]any{"version": 1, "hosts": []any{legacy}, "dashboard": map[string]any{"usageFeedURL": "https://usage.example.test/feed"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	hosts, err := LoadHosts()

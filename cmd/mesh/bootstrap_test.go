@@ -49,7 +49,7 @@ func TestBootstrapFuncPinsExistingIdentityAndMapsResult(t *testing.T) {
 		captured = opts
 		opts.Progress(bootstrap.Event{Step: bootstrap.StepConnect, Detail: "alice@pc"})
 		return bootstrap.Result{
-			ID: identity, MeshIdentity: identity, TailscaleName: "pc.example.ts.net",
+			AuthenticatedIdentity: identity, ID: identity, MeshIdentity: identity, TailscaleName: "pc.example.ts.net",
 			TailscaleAddresses: []string{"100.64.0.2"}, Endpoint: "ws://100.64.0.2:7337/mesh",
 			AlreadyConfigured: true,
 		}, nil
@@ -68,7 +68,7 @@ func TestBootstrapFuncPinsExistingIdentityAndMapsResult(t *testing.T) {
 	if captured.SSH.Password == nil || captured.SSH.Passphrase == nil || captured.SSH.ConfirmHostKey == nil || captured.ConfirmProvision == nil || captured.SudoPassword == nil {
 		t.Fatalf("SSH prompt callbacks = %#v, want all callbacks", captured.SSH)
 	}
-	if result.Host.ID != identity || result.Host.TailscaleName != "pc.example.ts.net" || result.Host.Endpoint != "ws://100.64.0.2:7337/mesh" || !result.AlreadyConfigured {
+	if result.AuthenticatedIdentity != identity || result.Host.ID != identity || result.Host.TailscaleName != "pc.example.ts.net" || result.Host.Endpoint != "ws://100.64.0.2:7337/mesh" || !result.AlreadyConfigured {
 		t.Fatalf("bootstrap result = %#v", result)
 	}
 	if got, want := progress.String(), "BOOTSTRAP connect   alice@pc\n"; got != want {
@@ -103,7 +103,7 @@ func TestBootstrapFuncReadsAuthKeyAndYesApprovesWithoutPrompt(t *testing.T) {
 		}
 		opts.Progress(bootstrap.Event{Step: bootstrap.StepProvision, Detail: "authenticate Tailscale from standard input"})
 		return bootstrap.Result{
-			ID: identity, MeshIdentity: identity, TailscaleName: "pi.example.ts.net",
+			AuthenticatedIdentity: identity, ID: identity, MeshIdentity: identity, TailscaleName: "pi.example.ts.net",
 			TailscaleAddresses: []string{"100.64.0.8"}, Endpoint: "ws://100.64.0.8:7337/mesh",
 		}, nil
 	}, bootstrapUI{
@@ -211,7 +211,7 @@ func TestPromptedAuthKeyIsRedactedLikeAFileKey(t *testing.T) {
 		}
 		opts.Progress(bootstrap.Event{Step: bootstrap.StepProvision, Detail: secret})
 		return bootstrap.Result{
-			ID: identity, MeshIdentity: identity, TailscaleName: "pi.example.ts.net",
+			AuthenticatedIdentity: identity, ID: identity, MeshIdentity: identity, TailscaleName: "pi.example.ts.net",
 			TailscaleAddresses: []string{"100.64.0.8"}, Endpoint: "ws://100.64.0.8:7337/mesh",
 		}, nil
 	}, bootstrapUI{

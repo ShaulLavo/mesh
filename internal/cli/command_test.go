@@ -746,7 +746,7 @@ func TestAddSavesVerifiedHostAndReportsConvergedRerun(t *testing.T) {
 		if request.Target != "alice@pc.example.ts.net" {
 			t.Fatalf("add request = %#v", request)
 		}
-		return BootstrapResult{Host: bootstrapHost, AlreadyConfigured: bootstrapCalls > 1}, nil
+		return BootstrapResult{AuthenticatedIdentity: bootstrapHost.MeshIdentity, Host: bootstrapHost, AlreadyConfigured: bootstrapCalls > 1}, nil
 	}
 
 	stdout, _, err := executeCommand(t, Dependencies{Bootstrap: bootstrap}, "add", "alice@pc.example.ts.net")
@@ -780,7 +780,7 @@ func TestAddPassesTailscaleProvisioningFlagsToBootstrap(t *testing.T) {
 		if request.Target != "alice@pi" || request.TailscaleAuthKeyFile != "./tailnet.key" || !request.Yes {
 			t.Fatalf("add request = %#v", request)
 		}
-		return BootstrapResult{Host: HostRecord{
+		return BootstrapResult{AuthenticatedIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", Host: HostRecord{
 			MachineName: "garden", NameRevision: 1, ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", TailscaleName: "pi.example.ts.net",
 			Addresses: []string{"100.64.0.8"}, Endpoint: "ws://100.64.0.8:7337/mesh",
 		}}, nil

@@ -159,16 +159,17 @@ type Options struct {
 
 // Result is the host observation proved by the remote daemon itself.
 type Result struct {
-	MachineName        string
-	NameRevision       uint64
-	Wake               *wake.Grant
-	ID                 string
-	MeshIdentity       string
-	TailscaleName      string
-	TailscaleAddresses []string
-	Endpoint           string
-	Platform           Platform
-	AlreadyConfigured  bool
+	AuthenticatedIdentity string
+	MachineName           string
+	NameRevision          uint64
+	Wake                  *wake.Grant
+	ID                    string
+	MeshIdentity          string
+	TailscaleName         string
+	TailscaleAddresses    []string
+	Endpoint              string
+	Platform              Platform
+	AlreadyConfigured     bool
 }
 
 // Run converges an SSH-reachable machine on a running Mesh service, proves its

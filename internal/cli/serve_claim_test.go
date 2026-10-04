@@ -244,3 +244,12 @@ func TestTunnelClaimRejectsNamesAndMissingIdentityBeforeSend(t *testing.T) {
 		t.Fatalf("claim recreated missing identity: %v", err)
 	}
 }
+
+func sendTunnelMutation(ctx context.Context, host HostRecord, dial HostDialer, mutation tunnel.Mutation) (tunnel.Ack, error) {
+	conn, _, err := openVerifiedHostInfo(ctx, host, dial)
+	if err != nil {
+		return tunnel.Ack{}, err
+	}
+	defer conn.Close() //nolint:errcheck // mutation result decides the outcome
+	return sendVerifiedTunnelMutation(ctx, host, conn, mutation)
+}

@@ -15,6 +15,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/tunnel"
 )
 
@@ -115,6 +116,11 @@ func (a *application) deliverTunnelMutation(ctx context.Context, host HostRecord
 	}
 	ctx, cancel := context.WithTimeout(ctx, serviceMutationTimeout)
 	defer cancel()
+	conn, _, err := openVerifiedHostInfo(ctx, host, a.dependencies.DialControl)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close() //nolint:errcheck // mutation result decides the outcome
 	store, err := storage.Open(ctx, filepath.Join(stateDir, catalogDatabaseName))
 	if err != nil {
 		return "", err
@@ -122,7 +128,7 @@ func (a *application) deliverTunnelMutation(ctx context.Context, host HostRecord
 	defer store.Close() //nolint:errcheck // the mutation result is authoritative
 	ack, err := store.DeliverTunnelMutation(ctx, host.MeshIdentity, key, action, publicName,
 		func(ctx context.Context, mutation tunnel.Mutation) (tunnel.Ack, error) {
-			return sendTunnelMutation(ctx, host, a.dependencies.DialControl, mutation)
+			return sendVerifiedTunnelMutation(ctx, host, conn, mutation)
 		})
 	if ack.Error != "" {
 		return "", fmt.Errorf("edge %s refused tunnel %s: %s", HostLabel(host), action, safeRemoteText(ack.Error))
@@ -133,14 +139,19 @@ func (a *application) deliverTunnelMutation(ctx context.Context, host HostRecord
 	return stateDir, nil
 }
 
-func sendTunnelMutation(ctx context.Context, host HostRecord, dial HostDialer, mutation tunnel.Mutation) (tunnel.Ack, error) {
+// Keep the verified owner connection through durable intent creation and delivery.
+func sendVerifiedTunnelMutation(ctx context.Context, host HostRecord, conn transport.Conn, mutation tunnel.Mutation) (tunnel.Ack, error) {
 	digest, err := tunnel.Verify(mutation, host.MeshIdentity)
+	if err != nil {
+		return tunnel.Ack{}, fmt.Errorf("verify tunnel mutation destination: %w", err)
+	}
+	requestID, err := newDaemonRequestID()
 	if err != nil {
 		return tunnel.Ack{}, err
 	}
-	response, _, err := remoteServiceRequest(ctx, host, dial, protocol.Control{
-		Type: protocol.TypeTunnelClaim, TunnelMutation: &mutation,
-	}, nil)
+	response, err := controlRequest(ctx, conn, protocol.Control{
+		Type: protocol.TypeTunnelClaim, RequestID: requestID, TunnelMutation: &mutation,
+	})
 	if err != nil {
 		return tunnel.Ack{}, err
 	}

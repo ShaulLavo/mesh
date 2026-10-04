@@ -57,6 +57,9 @@ func (a *application) openApps(ctx context.Context, hostID string, port uint16) 
 	if err != nil {
 		return appTransport{}, err
 	}
+	if err := verifyNamedHost(ctx, host, a.dependencies.DialControl); err != nil {
+		return appTransport{}, err
+	}
 	client, err := dialAppSSH(ctx, host, stateDir, port)
 	if err != nil {
 		return appTransport{}, err

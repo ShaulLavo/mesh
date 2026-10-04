@@ -137,23 +137,6 @@ func mutatePublishedArchive(t *testing.T, apply func(map[string]any)) (*Store, s
 	return store, id
 }
 
-func TestApprovedArchiveTargetLabelsHaveNoNamingEffect(t *testing.T) {
-	store, id := mutatePublishedArchive(t, func(fields map[string]any) {
-		for _, target := range fields["targets"].([]any) {
-			target.(map[string]any)["host"].(map[string]any)["alias"] = "arbitrary archived display text"
-		}
-	})
-	run, err := store.Read(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, target := range run.Targets {
-		if target.Host.MachineName != "" || target.Host.Label() != target.Host.ID {
-			t.Fatal("archived target label changed live naming")
-		}
-	}
-}
-
 func TestApprovedArchiveStrictTamperDenials(t *testing.T) {
 	cases := map[string]func(map[string]any){
 		"root unknown":  func(f map[string]any) { f["unknown"] = true },
@@ -172,6 +155,15 @@ func TestApprovedArchiveStrictTamperDenials(t *testing.T) {
 		},
 		"member missing label": func(f map[string]any) {
 			delete(f["fleet"].(map[string]any)["members"].([]any)[0].(map[string]any), "alias")
+		},
+		"target null label": func(f map[string]any) {
+			f["targets"].([]any)[0].(map[string]any)["host"].(map[string]any)["alias"] = nil
+		},
+		"target nonstring label": func(f map[string]any) {
+			f["targets"].([]any)[0].(map[string]any)["host"].(map[string]any)["alias"] = 42
+		},
+		"target platform": func(f map[string]any) {
+			f["targets"].([]any)[0].(map[string]any)["host"].(map[string]any)["platform"] = map[string]any{"os": "darwin", "arch": "arm64"}
 		},
 		"target missing label": func(f map[string]any) {
 			delete(f["targets"].([]any)[0].(map[string]any)["host"].(map[string]any), "alias")
@@ -265,5 +257,14 @@ func TestApprovedArchiveRejectsTrailingData(t *testing.T) {
 	}
 	if _, err := store.Read(id); err == nil {
 		t.Fatal("accepted trailing archived operation data")
+	}
+}
+
+func TestApprovedArchiveTargetLabelMustMatchOriginalMembership(t *testing.T) {
+	store, id := mutatePublishedArchive(t, func(fields map[string]any) {
+		fields["targets"].([]any)[0].(map[string]any)["host"].(map[string]any)["alias"] = "tampered target label"
+	})
+	if _, err := store.Read(id); err == nil {
+		t.Fatal("archive accepted target label outside original approved membership")
 	}
 }

@@ -104,7 +104,7 @@ func TestUpdateCheckReturnsJSONWithoutMutationOrBackgroundNotice(t *testing.T) {
 			t.Errorf("--check sent mutation %s", action)
 			return errors.New("unexpected mutation")
 		}
-		*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: release.Build{Version: "v0.1.0", Platform: release.CurrentPlatform()}}}
+		*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: release.Build{Version: "v0.1.0", Platform: release.CurrentPlatform()}}}
 		return nil
 	})
 	stdout, stderr, err := executeCommand(t, Dependencies{UpdateRelease: client, UpdateCaller: caller}, "update", "--local", "--check", "--json")
@@ -143,7 +143,7 @@ func TestUpdateKeepsOfflineMembersAndSubmitsOnePinnedPlan(t *testing.T) {
 			if host.ID == remote.ID {
 				return context.DeadlineExceeded
 			}
-			*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
+			*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 			return nil
 		}
 		if action != "plan" {

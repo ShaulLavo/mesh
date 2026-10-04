@@ -58,8 +58,9 @@ type AddRequest struct {
 // BootstrapResult separates the durable address-book entry from metadata about
 // the bootstrap operation that produced it.
 type BootstrapResult struct {
-	Host              HostRecord
-	AlreadyConfigured bool
+	AuthenticatedIdentity string
+	Host                  HostRecord
+	AlreadyConfigured     bool
 }
 
 // BootstrapFunc installs a host and returns its verified address-book record.
@@ -1025,7 +1026,7 @@ func (a *application) addCommand() *cobra.Command {
 				return err
 			}
 			record := result.Host
-			if err := cacheBootstrapName(cmd.Context(), record); err != nil {
+			if err := cacheBootstrapName(cmd.Context(), record, result.AuthenticatedIdentity); err != nil {
 				return err
 			}
 			selected := HostLabel(record)

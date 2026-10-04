@@ -219,6 +219,7 @@ func TestDashboardOfflineCacheRetainedAndIdentityScoped(t *testing.T) {
 }
 
 func TestDashboardPickerStillWaitsForFirstCatalog(t *testing.T) {
+	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	host := HostRecord{ID: "host", MachineName: "pc", MeshIdentity: "identity"}
 	var requested sync.Once
 	subscribed := make(chan struct{})

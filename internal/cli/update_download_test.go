@@ -27,7 +27,7 @@ func TestUpdateCheckUsesReleaseDownloadBudget(t *testing.T) {
 	t.Cleanup(server.Close)
 	client := release.Client{BaseURL: server.URL, HTTPClient: server.Client()}
 	caller := updateCallFunc(func(_ context.Context, host update.Host, _ string, _, output any) error {
-		*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: release.Build{Version: "v0.1.0"}}}
+		*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: release.Build{Version: "v0.1.0"}}}
 		return nil
 	})
 	_, _, err := executeCommand(t, Dependencies{UpdateRelease: client, UpdateCaller: caller}, "update", "--local", "--version", "v0.2.0", "--check", "--json")

@@ -72,15 +72,21 @@ func (record *operationRecord) UnmarshalJSON(data []byte) error {
 	run := archived.Run
 	run.Fleet = Fleet{Version: archived.Fleet.Version, Name: archived.Fleet.Name, Revision: archived.Fleet.Revision}
 	archive := &operationArchive{fleet: archived.Fleet, targets: make(map[string]archivedHost, len(archived.Targets))}
+	labels := make(map[string]string, len(archived.Fleet.Members))
 	for _, host := range archived.Fleet.Members {
 		if host.Label == nil {
 			return errors.New("update: archived membership requires its original label field")
 		}
+		labels[host.ID] = *host.Label
 		run.Fleet.Members = append(run.Fleet.Members, host.live())
 	}
 	for _, target := range archived.Targets {
 		if target.Host.Label == nil {
 			return errors.New("update: archived target requires its original label field")
+		}
+		label, ok := labels[target.Host.ID]
+		if !ok || *target.Host.Label != label {
+			return errors.New("update: archived target label differs from its approved membership")
 		}
 		live := target.Target
 		live.Host = target.Host.live()

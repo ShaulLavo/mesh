@@ -153,6 +153,7 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 			}
 		}
 		return cli.BootstrapResult{
+			AuthenticatedIdentity: result.AuthenticatedIdentity,
 			Host: cli.HostRecord{
 				ID:          result.ID,
 				MachineName: result.MachineName, NameRevision: result.NameRevision,

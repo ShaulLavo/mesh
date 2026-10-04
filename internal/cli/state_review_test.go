@@ -119,6 +119,7 @@ func (c *reviewReadContext) Done() <-chan struct{} {
 	return c.Context.Done()
 }
 func TestWatchReviewID3OverlappingHostReads(t *testing.T) {
+	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	dial := reviewControlDial(t, func(h HostRecord, r protocol.Control) *protocol.Control {
@@ -180,6 +181,7 @@ func TestWatchReviewID4LegacyTopicTimeoutIsolation(t *testing.T) {
 	}
 }
 func TestWatchReviewID6DurableCatalogAndOfflineReopen(t *testing.T) {
+	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	// Two SQLite opens with migrations under -race exceeded 3s on a loaded CI
 	// runner. The bound only stops a hang; a healthy run finishes in about 1s.
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -414,6 +416,7 @@ func TestWatchReviewID4UnsupportedOnlyBuildChange(t *testing.T) {
 }
 
 func TestWatchReviewID3SameHostChangedIdentity(t *testing.T) {
+	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	var watches atomic.Int32

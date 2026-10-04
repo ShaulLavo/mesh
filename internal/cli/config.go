@@ -121,9 +121,10 @@ func loadHostConfig() (hostConfig, error) {
 		return hostConfig{}, fmt.Errorf("read host config %s: %w", path, err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
 	var config hostConfig
 	if err := decoder.Decode(&config); err != nil {
-		return hostConfig{}, fmt.Errorf("parse host config %s: %w", path, err)
+		return hostConfig{}, fmt.Errorf("parse host config %s: %w; remove the unrecognized field from this file and retry", path, err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {

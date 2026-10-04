@@ -164,7 +164,7 @@ func TestPrivacyHostManagementPresentationPreservesRecords(t *testing.T) {
 		if request.Target != "private-user@private-machine" {
 			t.Fatalf("masked bootstrap: %+v", request)
 		}
-		return BootstrapResult{Host: raw}, nil
+		return BootstrapResult{AuthenticatedIdentity: raw.MeshIdentity, Host: raw}, nil
 	}}, "--privacy", "add", "private-user@private-machine")
 	if err != nil {
 		t.Fatal(err)

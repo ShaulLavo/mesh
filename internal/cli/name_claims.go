@@ -97,7 +97,12 @@ func applyVerifiedState(ctx context.Context, host HostRecord, view *StateView, r
 
 func resolveDeclaredArgument(value string, hosts []HostRecord) (ArgumentTarget, bool, error) {
 	claims := make([]machinename.Claim, 0, len(hosts))
+	seen := make(map[string]bool, len(hosts))
 	for _, host := range hosts {
+		if seen[host.ID] {
+			return ArgumentTarget{}, true, fmt.Errorf("duplicate host ID %q in machine-name targets", host.ID)
+		}
+		seen[host.ID] = true
 		if host.MachineName != "" {
 			claims = append(claims, machinename.Claim{ID: host.ID, MachineName: host.MachineName, Revision: host.NameRevision})
 		}
