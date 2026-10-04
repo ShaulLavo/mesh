@@ -1,5 +1,18 @@
 # Dashboard
 
+## Names and freshness
+
+Each machine owns its name. "Cached name" means the dashboard is displaying a
+saved owner declaration while it awaits a fresh authenticated name observation.
+A reachable machine can show this marker because the name observation and the
+connection have separate freshness checks. Metrics and catalog ages refer to
+those readings. [Machine names](machine-names.md) describes the verification rules.
+
+"Connecting" means Mesh is trying to reach the machine. "Unreachable" means the
+connection failed. "Refused" means Mesh rejected the destination's identity or
+name claim. A missing observation has no recorded reading; a stale observation
+preserves an older one.
+
 ## Themes
 
 `mesh dashboard` shows the fleet with the OLED high-contrast theme by default.

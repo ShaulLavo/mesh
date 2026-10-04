@@ -250,7 +250,7 @@ func (m dashboardModel) compactHost(host cli.DashboardHostView) []string {
 	}
 	second := "    "
 	if name != host.Host.Label() {
-		second += "last known name  "
+		second += "cached name  "
 	}
 	if dashboardOptionalPresent(host.Disk) {
 		disk := host.Disk.Value

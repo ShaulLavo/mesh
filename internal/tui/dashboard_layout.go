@@ -97,7 +97,7 @@ func (m dashboardModel) serviceSummaryHeight(budget int) int {
 
 func (m dashboardModel) summaryAttentionWidth() int {
 	if m.usageEnabled {
-		remaining := m.width - 56
+		remaining := m.width - m.usagePanelWidth() - 2
 		return remaining - remaining*57/104
 	}
 	return m.width - (m.width-1)*3/5 - 1

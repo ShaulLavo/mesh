@@ -118,6 +118,11 @@ func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approved
 	if err != nil {
 		return installed, err
 	}
+	if upgrade {
+		if err = atomicWrite(helperActivationRecord(cfg.StateDir), []byte(digest), 0600); err != nil {
+			return installed, err
+		}
+	}
 	// The receipt retains the approved image binding after later daemon commits.
 	if err = atomicWrite(helperRecord(cfg.StateDir), record, 0600); err != nil {
 		return installed, err
@@ -152,6 +157,10 @@ func stageHelperImage(ctx context.Context, cfg HelperConfig, digest string) (Hel
 
 func helperRecord(stateDir string) string {
 	return filepath.Join(transactionDir(stateDir), "helper", "installed.json")
+}
+
+func helperActivationRecord(stateDir string) string {
+	return filepath.Join(transactionDir(stateDir), "helper", "activation-pending")
 }
 
 // UpgradeHelper advances the helper after daemon commitment and a real journal
@@ -199,7 +208,11 @@ func UpgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 }
 
 func finishHelperPromotion(ctx context.Context, cfg HelperConfig, installed HelperInstallation, interrupted bool) (HelperInstallation, error) {
-	if !interrupted {
+	pending, err := readMetadata(ctx, cfg.StateDir, filepath.Join("update", "helper", "activation-pending"), true)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return installed, err
+	}
+	if !interrupted && string(pending) != installed.Digest {
 		return installed, nil
 	}
 	if err := replaceHelperLink(filepath.Join(transactionDir(cfg.StateDir), "helper", "current"), installed.Executable); err != nil {
@@ -209,15 +222,28 @@ func finishHelperPromotion(ctx context.Context, cfg HelperConfig, installed Help
 }
 
 func activateHelper(ctx context.Context, cfg HelperConfig, installed HelperInstallation) (HelperInstallation, error) {
+	if err := restartHelper(ctx, cfg); err != nil {
+		return installed, err
+	}
+	if err := os.Remove(helperActivationRecord(cfg.StateDir)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return installed, nil
+		}
+		return installed, fmt.Errorf("clear helper activation request: %w", err)
+	}
+	return installed, syncDirectory(filepath.Dir(helperActivationRecord(cfg.StateDir)))
+}
+
+func restartHelper(ctx context.Context, cfg HelperConfig) error {
 	if cfg.Kind == "launchd" {
 		_, err := runCommand(ctx, "launchctl", "kickstart", "-k", cfg.Domain+"/dev.shaulavo.mesh-update-helper")
-		return installed, err
+		return err
 	}
 	if _, err := runCommand(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
-		return installed, err
+		return err
 	}
 	_, err := runCommand(ctx, "systemctl", "--user", "restart", "--no-block", "mesh-update-helper.service")
-	return installed, err
+	return err
 }
 
 func committedHelperDigest(ctx context.Context, executable string, manifest release.Manifest) (string, error) {

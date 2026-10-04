@@ -88,6 +88,12 @@ func TestUpgradeHelperRealBuildContract(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if _, err = activateHelper(t.Context(), f.cfg, f.prior); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Remove(f.commands); err != nil {
+				t.Fatal(err)
+			}
 			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 			defer cancel()
 			for _, version := range []string{"v0.1.151", "v0.1.159", "v0.1.150", "v0.1.170"} {

@@ -100,7 +100,7 @@ func (m dashboardModel) cardWithGPU(host cli.DashboardHostView, width int, gpuRo
 		if facts != "" {
 			facts += " · "
 		}
-		facts += "last known name"
+		facts += "cached name"
 	}
 	body = append(body, facts)
 	ages := "metrics " + dashboardAge(m.now, dashboardOldest(host.CPU.MeasuredAt, host.RAM.MeasuredAt)) + " catalogs " + dashboardAge(m.now, dashboardOldest(host.Sessions.ObservedAt, host.Services.ObservedAt))

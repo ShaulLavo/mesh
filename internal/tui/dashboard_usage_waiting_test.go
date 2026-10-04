@@ -109,7 +109,7 @@ func TestDashboardUsageParkedWaiting(t *testing.T) {
 				}
 				if test.absent {
 					age = "seen —"
-					if strings.Contains(panel, "0%") || !strings.Contains(strings.ToLower(panel), "no reading") || len(model.usage.accounts[0].Windows) != 0 {
+					if strings.Contains(panel, "0%") || !strings.Contains(strings.ToLower(panel), "no quota reading") || len(model.usage.accounts[0].Windows) != 0 {
 						t.Errorf("absent observation acquired quota or lost absence: %s", panel)
 					}
 				}
@@ -117,18 +117,21 @@ func TestDashboardUsageParkedWaiting(t *testing.T) {
 					if !strings.Contains(surface, age) {
 						t.Errorf("observation age missing: %s", surface)
 					}
-					if !test.absent && (!strings.Contains(surface, fmt.Sprintf("%.0f%%", test.used)) || !strings.Contains(surface, "resets 6d") || strings.Contains(surface, "no reading")) {
+					if !test.absent && test.scopes != 1 && (!strings.Contains(surface, fmt.Sprintf("%.0f%%", test.used)) || !strings.Contains(surface, "resets 6d") || strings.Contains(surface, "no quota reading")) {
 						t.Errorf("observed quota or reset lost: %s", surface)
 					}
-					if test.scopes > 0 && !strings.Contains(surface, "Model · gpt-6.1-sol") {
-						t.Errorf("model scope missing: %s", surface)
+					if test.scopes > 0 && strings.Contains(surface, "Model") {
+						t.Errorf("model scope entered account panel: %s", surface)
+					}
+					if test.scopes == 1 && (strings.Contains(panel, fmt.Sprintf("%.0f%%", test.used)) || !strings.Contains(surface, "no quota reading")) {
+						t.Errorf("model-only quota acquired an aggregate reading: %s", surface)
 					}
 				}
 				if test.credits != nil && !strings.Contains(panel, usageCredits(test.credits)) {
 					t.Errorf("absent quota lost its independent credits: %s", panel)
 				}
-				if test.scopes == 2 && strings.Count(panel, "67%") != 2 {
-					t.Errorf("equal values collapsed distinct scopes: %s", panel)
+				if test.scopes == 2 && strings.Count(panel, "67%") != 1 {
+					t.Errorf("model scope repeated account quota: %s", panel)
 				}
 				projected := model.usage.accounts[0]
 				if usageAccountRows(projected, compact) != len(model.usageAccountWindows(projected, panelWidth-4, compact))+1 {

@@ -188,7 +188,7 @@ func TestRetainedSessionTableNameIsExplicit(t *testing.T) {
 	if _, err := writeSessionList(&out, commandTestTime, []HostSessions{{Host: host, Sessions: []protocol.SessionInfo{{ID: "7K3D", HostID: host.ID, State: "running", CreatedAt: commandTestTime}}}}, fullListView); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "garden · last known name") {
+	if !strings.Contains(out.String(), "garden · cached name") {
 		t.Fatalf("retained list name has no provenance: %s", &out)
 	}
 }
@@ -266,7 +266,7 @@ func TestDaemonSessionListReadsOwnDeclarationWithoutSelfAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "local-own") || strings.Contains(out, "last known name") {
+	if !strings.Contains(out, "local-own") || strings.Contains(out, "cached name") {
 		t.Fatalf("own list declaration: %s", out)
 	}
 	hosts, err := LoadHosts()
@@ -326,7 +326,7 @@ func TestMixedSessionListKeepsOwnDeclarationProvenance(t *testing.T) {
 		if !strings.Contains(line, "70C7") {
 			continue
 		}
-		if !strings.Contains(line, "conflict") || strings.Contains(line, "last known name") {
+		if !strings.Contains(line, "conflict") || strings.Contains(line, "cached name") {
 			t.Fatalf("mixed list lost actual own conflict/provenance: %s", line)
 		}
 	}
