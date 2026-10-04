@@ -6,10 +6,10 @@ import socket
 import ssl
 import sys
 import tarfile
-import time
-import urllib.error
 import tempfile
+import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -185,7 +185,7 @@ class ControlledOpener:
         state["attempts"].append(time.monotonic())
         state["timeouts"].append(timeout)
         state["workerPID"] = os.getpid()
-        state["trusted"] = len(self.handlers) == 2 and all(handler.proxies == {} for handler in self.handlers
+        state["trusted"] = len(self.handlers) == 3 and all(handler.proxies == {} for handler in self.handlers
             if isinstance(handler, urllib.request.ProxyHandler)) and all(
             handler._context.verify_mode == ssl.CERT_REQUIRED and handler._context.check_hostname
             for handler in self.handlers if isinstance(handler, urllib.request.HTTPSHandler))
@@ -201,6 +201,18 @@ class ControlledOpener:
             raise urllib.error.URLError(ConnectionResetError("fixture connection reset"))
         if kind == "tls":
             raise urllib.error.URLError(ssl.SSLCertVerificationError("fixture certificate rejected"))
+        if kind in ("redirect-reset", "https-redirect"):
+            handler = next(entry for entry in self.handlers if isinstance(entry, urllib.request.HTTPRedirectHandler))
+            destination = "http://fixture.invalid/asset" if kind == "redirect-reset" else "https://fixture.invalid/asset"
+            response = ControlledResponse(self.control, kind)
+            redirected = handler.redirect_request(urllib.request.Request(address), response, 302, "fixture redirect", {}, destination)
+            if kind == "redirect-reset":
+                raise urllib.error.URLError(ConnectionResetError("fixture insecure redirect reset"))
+            if redirected.full_url != destination:
+                raise RuntimeError("fixture HTTPS redirect rejected")
+            response.close()
+        if kind == "redirect-http-503":
+            raise urllib.error.HTTPError("http://fixture.invalid/asset", 503, "fixture insecure redirect", {}, ControlledResponse(self.control, kind))
         if kind.startswith("http-"):
             raise urllib.error.HTTPError(address, int(kind[5:]), "fixture HTTP failure", {}, ControlledResponse(self.control, kind))
         if kind == "stall-open":
@@ -245,6 +257,12 @@ published.download_worker(*sys.argv[1:])
         self.assertEqual(self.state()["closed"], 1)
         self.assertTrue(self.state()["trusted"])
 
+    def test_https_redirect_keeps_standard_trusted_acquisition(self):
+        self.assertEqual(self.download(["https-redirect"]), b"verified fixture bytes")
+        self.assertEqual(len(self.state()["attempts"]), 1)
+        self.assertEqual(self.state()["closed"], 2)
+        self.assertTrue(self.state()["trusted"])
+
     def test_transient_dns_reset_and_eligible_server_failures_recover(self):
         for kind in ("dns", "nested-dns", "reset", "partial-reset", "http-500", "http-502", "http-503", "http-504"):
             with self.subTest(kind=kind):
@@ -261,7 +279,7 @@ published.download_worker(*sys.argv[1:])
         self.control.write_text(json.dumps({"outcomes": ["dns"], "attempts": [], "timeouts": []}))
         root = self.root / "assets"
         (root / published.VERSIONS[0]).mkdir(parents=True)
-        with self.assertRaisesRegex(Exception, "DNS failure"):
+        with self.assertRaisesRegex(RuntimeError, "DNS failure"):
             published.fetch(root, published.VERSIONS[0], "mesh-release.json", 64, published.download)
         attempts = self.state()["attempts"]
         self.assertEqual(len(attempts), 3)
@@ -270,9 +288,9 @@ published.download_worker(*sys.argv[1:])
         self.assertFalse(any(path.is_file() for path in root.rglob("*")))
 
     def test_permanent_http_tls_redirect_and_size_failures_are_not_retried(self):
-        for kind in ("http-400", "http-403", "http-404", "http-429", "http-501", "http-505", "tls", "dns-permanent", "redirect", "oversize"):
+        for kind in ("http-400", "http-403", "http-404", "http-429", "http-501", "http-505", "tls", "dns-permanent", "redirect", "redirect-http-503", "redirect-reset", "oversize"):
             with self.subTest(kind=kind):
-                with self.assertRaises(Exception):
+                with self.assertRaises(RuntimeError):
                     self.download([kind, "good"])
                 self.assertEqual(len(self.state()["attempts"]), 1)
                 self.assertTrue(self.state()["trusted"])

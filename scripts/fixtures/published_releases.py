@@ -64,17 +64,25 @@ def download_worker(address, maximum, timeout):
         if isinstance(cause, socket.gaierror):
             transient = cause.errno in (socket.EAI_AGAIN, socket.EAI_NONAME)
         if isinstance(cause, urllib.error.HTTPError):
-            transient = cause.code in (500, 502, 503, 504)
+            transient = cause.geturl().startswith("https://") and cause.code in (500, 502, 503, 504)
             cause.close()
         print(f"{type(error).__name__}: {error}", file=sys.stderr)
         raise SystemExit(75 if transient else 1) from error
     sys.stdout.buffer.write(data)
 
 
+class HTTPSRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, address):
+        if not address.startswith("https://"):
+            response.close()
+            raise RuntimeError("published release redirected outside HTTPS")
+        return super().redirect_request(request, response, code, message, headers, address)
+
+
 def download_once(address, maximum, timeout):
     # Fixture proxies and certificate files belong to children, never public acquisition.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
-        urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+        urllib.request.HTTPSHandler(context=ssl.create_default_context()), HTTPSRedirectHandler())
     with opener.open(address, timeout=timeout) as response:
         if not response.url.startswith("https://"):
             raise RuntimeError("published release redirected outside HTTPS")
