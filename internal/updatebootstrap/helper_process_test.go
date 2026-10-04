@@ -56,7 +56,7 @@ func TestHelperProcessProbeBindsRealPIDAndMappedImage(t *testing.T) {
 	tool, output, kind := "systemctl", strconv.Itoa(child.Process.Pid), "systemd"
 	if runtime.GOOS == "darwin" {
 		tool, kind = "launchctl", "launchd"
-		output = fmt.Sprintf("state = running\npid = %d\n", child.Process.Pid)
+		output = fmt.Sprintf("gui/501/dev.shaulavo.mesh-update-helper = {\n\tstate = running\n\tpid = %d\n\tresource coalition = {\n\t\tstate = active\n\t}\n}\n", child.Process.Pid)
 	}
 	if err = writeProcessFixture(filepath.Join(tools, tool), []byte("#!/bin/sh\nprintf '%s' '"+output+"'\n")); err != nil {
 		t.Fatal(err)
@@ -109,14 +109,80 @@ func TestHelperProcessProbeBindsRealPIDAndMappedImage(t *testing.T) {
 	}
 }
 
-func TestLaunchdHelperPIDRejectsStoppedAndAmbiguousJobs(t *testing.T) {
-	for _, output := range []string{"pid = 123", "state = waiting\npid = 123", "state = running\npid = 0", "state = running\npid = 123\npid = 456"} {
-		if _, err := launchdHelperPID(output); err == nil {
-			t.Fatal("unready or ambiguous service PID was accepted")
-		}
+func TestLaunchdHelperPIDRealCapture(t *testing.T) {
+	capture, err := os.ReadFile("testdata/launchctl-print-helper.txt")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if pid, err := launchdHelperPID("state = running\npid = 123"); err != nil || pid != 123 {
-		t.Fatalf("running service PID = %d, %v", pid, err)
+	pid, err := launchdHelperPID(string(capture))
+	if err != nil || pid != 91306 {
+		t.Fatalf("real capture helper PID = %d, %v; want 91306", pid, err)
+	}
+}
+
+func TestLaunchdHelperPIDTopLevelFields(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		fields string
+		want   int
+	}{
+		{name: "running", fields: "\tstate = running\n\tpid = 123\n", want: 123},
+		{name: "pid before state", fields: "\tpid = 123\n\tstate = running\n", want: 123},
+		{name: "nested state after", fields: "\tstate = running\n\tpid = 123\n\tendpoint = {\n\t\tstate = active\n\t}\n", want: 123},
+		{name: "nested pid after", fields: "\tstate = running\n\tpid = 123\n\tendpoint = {\n\t\tpid = 456\n\t}\n", want: 123},
+		{name: "nested fields before", fields: "\tendpoint = {\n\t\tstate = active\n\t\tpid = 456\n\t}\n\tstate = running\n\tpid = 123\n", want: 123},
+		{name: "nested malformed fields", fields: "\tstate = running\n\tpid = 123\n\tendpoint = {\n\t\tstate =\n\t\tpid = invalid\n\t}\n", want: 123},
+		{name: "missing fields"},
+		{name: "missing state", fields: "\tpid = 123\n"},
+		{name: "missing pid", fields: "\tstate = running\n"},
+		{name: "stopped", fields: "\tstate = waiting\n\tpid = 123\n"},
+		{name: "stopped with nested running", fields: "\tstate = waiting\n\tpid = 123\n\tendpoint = {\n\t\tstate = running\n\t}\n"},
+		{name: "nested only", fields: "\tendpoint = {\n\t\tstate = running\n\t\tpid = 123\n\t}\n"},
+		{name: "nested pid only", fields: "\tstate = running\n\tendpoint = {\n\t\tpid = 123\n\t}\n"},
+		{name: "nested state only", fields: "\tpid = 123\n\tendpoint = {\n\t\tstate = running\n\t}\n"},
+		{name: "zero pid", fields: "\tstate = running\n\tpid = 0\n"},
+		{name: "negative pid", fields: "\tstate = running\n\tpid = -123\n"},
+		{name: "signed pid", fields: "\tstate = running\n\tpid = +123\n"},
+		{name: "invalid pid", fields: "\tstate = running\n\tpid = invalid\n"},
+		{name: "overflow pid", fields: "\tstate = running\n\tpid = 18446744073709551616\n"},
+		{name: "duplicate pid", fields: "\tstate = running\n\tpid = 123\n\tpid = 123\n"},
+		{name: "contradictory pid", fields: "\tstate = running\n\tpid = 123\n\tpid = 456\n"},
+		{name: "duplicate state", fields: "\tstate = running\n\tstate = running\n\tpid = 123\n"},
+		{name: "contradictory state running last", fields: "\tstate = waiting\n\tstate = running\n\tpid = 123\n"},
+		{name: "contradictory state waiting last", fields: "\tstate = running\n\tstate = waiting\n\tpid = 123\n"},
+		{name: "malformed state before valid", fields: "\tstate =\n\tstate = running\n\tpid = 123\n"},
+		{name: "malformed state after valid", fields: "\tstate = running\n\tstate = running extra\n\tpid = 123\n"},
+		{name: "malformed pid before valid", fields: "\tstate = running\n\tpid =\n\tpid = 123\n"},
+		{name: "malformed pid after valid", fields: "\tstate = running\n\tpid = 123\n\tpid = 456 extra\n"},
+		{name: "invalid pid separator", fields: "\tstate = running\n\tpid => 123\n"},
+		{name: "unindented", fields: "state = running\npid = 123\n"},
+		{name: "space indented", fields: "    state = running\n    pid = 123\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pid, err := launchdHelperPID("gui/501/dev.shaulavo.mesh-update-helper = {\n" + test.fields + "}\n")
+			if test.want == 0 {
+				if err == nil || pid != 0 {
+					t.Fatalf("unready or ambiguous helper PID = %d, %v", pid, err)
+				}
+				return
+			}
+			if err != nil || pid != test.want {
+				t.Fatalf("helper PID = %d, %v; want %d", pid, err, test.want)
+			}
+		})
+	}
+}
+
+func TestHelperProcessLaunchdQueryFailure(t *testing.T) {
+	root := t.TempDir()
+	body := "#!/bin/sh\nprintf '\\tstate = running\\n\\tpid = 123\\n'\nexit 1\n"
+	if err := writeProcessFixture(filepath.Join(root, "launchctl"), []byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	pid, err := helperServicePID(t.Context(), updateinstall.HelperConfig{Kind: "launchd", Domain: "gui/501"})
+	if pid != 0 || err == nil || !strings.Contains(err.Error(), "inspect helper service process") {
+		t.Fatalf("failed launchctl query helper PID = %d, %v", pid, err)
 	}
 }
 
