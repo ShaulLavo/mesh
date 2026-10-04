@@ -11,10 +11,23 @@ import (
 // needed. Unix socket paths are limited to around 100 bytes by the kernel, so
 // this stays deliberately short.
 func StateDir() (string, error) {
-	base, err := StateDirPath()
-	if err != nil {
-		return "", err
+	base := os.Getenv("MESH_STATE_DIR")
+	if base == "" {
+		if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+			base = filepath.Join(xdg, "mesh")
+		} else {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("locate home directory: %w", err)
+			}
+			base = filepath.Join(home, ".local", "state", "mesh")
+		}
 	}
+	absolute, err := filepath.Abs(base)
+	if err != nil {
+		return "", fmt.Errorf("resolve state dir %s: %w", base, err)
+	}
+	base = absolute
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return "", fmt.Errorf("create state dir: %w", err)
 	}

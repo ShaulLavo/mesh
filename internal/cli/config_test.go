@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"github.com/shaul/mesh/internal/machinename"
 	"os"
 	"path/filepath"
@@ -73,4 +75,13 @@ func TestResolveArgumentNamesBothPossibilitiesOnMiss(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "exact host ID") || !strings.Contains(err.Error(), "session ID") {
 		t.Fatalf("ResolveArgument miss error = %v", err)
 	}
+}
+
+func writeHostConfig(config hostConfig) error {
+	return withClientConfigLock(context.Background(), true, func(dir *os.File, _ string) error {
+		if _, err := readClientConfig(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return writeLockedHostConfig(dir, config)
+	})
 }

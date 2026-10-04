@@ -218,15 +218,6 @@ func validateHostRecord(record HostRecord) (HostRecord, error) {
 	return record, nil
 }
 
-func writeHostConfig(config hostConfig) error {
-	return withClientConfigLock(context.Background(), true, func(dir *os.File, _ string) error {
-		if _, err := readClientConfig(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return writeLockedHostConfig(dir, config)
-	})
-}
-
 func writeLockedHostConfig(dir *os.File, config hostConfig) error {
 	if len(config.Hosts) > maximumConfiguredHosts {
 		return fmt.Errorf("host count %d exceeds %d", len(config.Hosts), maximumConfiguredHosts)
