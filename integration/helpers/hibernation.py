@@ -5,9 +5,9 @@ import json
 import sys
 import tempfile
 import time
-import terminal_window
 
 sys.dont_write_bytecode = True
+import terminal_window  # noqa: E402 - keep fixture helpers bytecode-free
 from agent_recovery import create, record, recover, setup
 from mesh_control import round_trip
 from terminal_window import Fixture, Terminal, eventually, require, run_outside_containing_session
