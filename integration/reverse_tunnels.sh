@@ -173,6 +173,8 @@ fixtures = {
 }
 for path, value in fixtures.items():
     (root / path).write_text(json.dumps(value))
+(root / "config/hosts.json").chmod(0o600)
+assert (root / "config/hosts.json").stat().st_mode & 0o777 == 0o600
 PY
 
 printf MESH_REVERSE_TUNNEL_BODY >"$test_root/site/index.html"

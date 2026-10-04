@@ -361,7 +361,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	root.Flags().BoolVar(&window, "window", false, "open a terminal window with a local persistent session")
 	root.Flags().BoolVar(&take, "take", false, "resume the newest detached session without a prompt; requires --window")
 	root.PersistentFlags().BoolVar(&privacyEnabled, "privacy", privacyEnabled, "mask personal data for recording and screen sharing (MESH_PRIVACY)")
-	root.PersistentPreRun = func(_ *cobra.Command, _ []string) {
+	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		if privacyEnabled {
 			app.privacy = privacy.New()
 		} else {
@@ -370,6 +370,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 		if defaultPublicConfirmation {
 			app.dependencies.ConfirmPublic = terminalPublicConfirmation(dependencies.Stdin, dependencies.Stderr, app.privacy)
 		}
+		return activateClientConfig(cmd)
 	}
 
 	root.PersistentFlags().String("leave-key", "ctrl+^", "key that leaves all nested sessions, or none")

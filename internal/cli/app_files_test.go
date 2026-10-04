@@ -32,6 +32,7 @@ func TestAppFilesCreateAndUpdateUseNormalUpload(t *testing.T) {
 
 func testAppFileUpload(t *testing.T, operation, image string) {
 	t.Helper()
+	prepareCommandEnvironment(t)
 	staging := t.TempDir()
 	t.Setenv("TMPDIR", staging)
 	t.Setenv("TMP", staging)
@@ -121,6 +122,7 @@ func appFileArchive(t *testing.T, data []byte) map[string]string {
 }
 
 func TestAppFilesRejectServerRecipesAndCleanFailedUpload(t *testing.T) {
+	prepareCommandEnvironment(t)
 	image := filepath.Join(t.TempDir(), "image.png")
 	if err := os.WriteFile(image, []byte("image"), 0600); err != nil {
 		t.Fatal(err)

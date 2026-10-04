@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
@@ -38,6 +39,58 @@ func (a *application) dashboardCommand() *cobra.Command {
 	return command
 }
 func (a *application) runDashboard(ctx context.Context, wall bool, override string) error {
+	if a.dependencies.Dashboard == nil {
+		return errors.New("dashboard terminal view is unavailable")
+	}
+	for ctx.Err() == nil {
+		if err := dashboardClientConfig(ctx, override); err != nil {
+			recovered := make(chan struct{})
+			input := DashboardInput{Privacy: a.privacy, Wall: wall, Theme: DefaultDashboardTheme, ConfigError: err,
+				ConfigWatch: func(run context.Context, publish func(error)) error {
+					if err := watchDashboardConfig(run, override, publish); err != nil {
+						return err
+					}
+					close(recovered)
+					return nil
+				}}
+			if err := a.dependencies.Dashboard(ctx, input); err != nil {
+				return err
+			}
+			select {
+			case <-recovered:
+				continue
+			default:
+				return nil
+			}
+		}
+		return a.runConfiguredDashboard(ctx, wall, override)
+	}
+	return nil
+}
+
+func dashboardClientConfig(ctx context.Context, override string) error {
+	if err := retireClientAliases(ctx); err != nil {
+		return err
+	}
+	_, err := dashboardConfiguredTheme(override)
+	return err
+}
+
+func watchDashboardConfig(ctx context.Context, override string, publish func(error)) error {
+	for ctx.Err() == nil {
+		if err := waitState(ctx, time.Second); err != nil {
+			return err
+		}
+		err := dashboardClientConfig(ctx, override)
+		if err == nil {
+			return nil
+		}
+		publish(err)
+	}
+	return fmt.Errorf("watch dashboard configuration: %w", ctx.Err())
+}
+
+func (a *application) runConfiguredDashboard(ctx context.Context, wall bool, override string) error {
 	if a.dependencies.Dashboard == nil {
 		return errors.New("dashboard terminal view is unavailable")
 	}

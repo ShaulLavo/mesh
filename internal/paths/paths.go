@@ -34,6 +34,19 @@ func StateDir() (string, error) {
 	return base, nil
 }
 
+// StateDirPath resolves the state location without creating workload state.
+func StateDirPath() (string, error) {
+	base, err := stateDirBase()
+	if err != nil {
+		return "", err
+	}
+	absolute, err := filepath.Abs(base)
+	if err != nil {
+		return "", fmt.Errorf("resolve state dir %s: %w", base, err)
+	}
+	return absolute, nil
+}
+
 // SessionsDir returns the directory containing one subdirectory per session.
 func SessionsDir() (string, error) {
 	base, err := StateDir()
@@ -70,3 +83,17 @@ func Launching(sessionDir string) string { return filepath.Join(sessionDir, ".la
 
 // Forgotten defers catalog retirement while the daemon is unavailable.
 func Forgotten(sessionDir string) string { return filepath.Join(sessionDir, ".forgotten") }
+
+func stateDirBase() (string, error) {
+	if base := os.Getenv("MESH_STATE_DIR"); base != "" {
+		return base, nil
+	}
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
+		return filepath.Join(xdg, "mesh"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locate home directory: %w", err)
+	}
+	return filepath.Join(home, ".local", "state", "mesh"), nil
+}

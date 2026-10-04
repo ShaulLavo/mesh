@@ -116,6 +116,25 @@ class CutoverEventsTest(unittest.TestCase):
     def kickstart(self, host):
         host.launchctl(["kickstart", "-k", "gui/" + str(os.getuid()) + "/dev.shaulavo.mesh-update-helper"])
 
+    def test_failed_listing_retains_bounded_nonsecret_config_diagnostic(self):
+        host = self.hosts[0]
+        host.config = host.root / "config"
+        host.config.mkdir()
+        config = host.config / "hosts.json"
+        config.write_text('{"version":1,"hosts":[]}')
+        config.chmod(0o644)
+        host.binary.write_text("#!" + sys.executable + "\nimport sys\nsys.stderr.write('config refusal ' + 'x' * 5000)\nsys.exit(1)\n")
+        host.binary.chmod(0o755)
+        with self.assertRaisesRegex(RuntimeError, "h0 fixture ls failed with status 1"):
+            self.scope["Host"].command(host, "ls")
+        failure = json.loads((host.root / "cli-failure.log").read_text())
+        self.assertEqual(failure["configMode"], "0o644")
+        self.assertTrue(failure["configOwned"])
+        self.assertEqual(failure["configLinks"], 1)
+        self.assertEqual(len(failure["stderr"]), 4096)
+        self.assertTrue(failure["stderr"].startswith("config refusal "))
+        self.assertEqual(config.read_text(), '{"version":1,"hosts":[]}')
+
     def test_previous_helper_restart_finishes_before_next_cutover(self):
         first, second = self.hosts
         restart = first.restart

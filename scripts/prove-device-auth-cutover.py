@@ -339,6 +339,16 @@ sys.exit(data["status"])
         result = subprocess.run([str(self.binary), *args], env=self.environment, cwd=self.root, capture_output=True, timeout=timeout, check=False)
         event("cli", host=self.name, operation=args[0], status=result.returncode,
               stdoutBytes=len(result.stdout), stderrBytes=len(result.stderr))
+        if result.returncode != 0 and args[0] == "ls":
+            config = self.config / "hosts.json"
+            failure = {"host": self.name, "operation": "ls", "status": result.returncode,
+                       "stderr": result.stderr[:4096].decode("utf-8", errors="replace").replace(str(ROOT), "<fixture>")}
+            if config.exists():
+                metadata = config.stat()
+                failure.update(configMode=oct(metadata.st_mode & 0o777), configLinks=metadata.st_nlink,
+                               configOwned=metadata.st_uid == os.getuid())
+            event("cli-failure", **failure)
+            (self.root / "cli-failure.log").write_text(json.dumps(failure) + "\n")
         require(result.returncode == 0, f"{self.name} fixture {args[0]} failed with status {result.returncode}")
         return result
 
@@ -537,7 +547,9 @@ try:
             host.command("device", "approve", "--allow-root", "--", peer.id)
             host.command("update", "trust", "--", peer.id)
             peers.append({"id": peer.id, "meshIdentity": peer.mesh_identity, "addresses": ["127.0.0.1"], "endpoint": f"ws://127.0.0.1:{peer.port}/mesh"})
-        (host.config / "hosts.json").write_text(json.dumps({"version": 1, "hosts": peers}))
+        config = host.config / "hosts.json"
+        config.write_text(json.dumps({"version": 1, "hosts": peers}))
+        config.chmod(0o600)
     for host in hosts:
         listing = host.command("ls").stdout
         for peer in hosts:

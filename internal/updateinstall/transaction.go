@@ -274,6 +274,7 @@ func (e *Engine) probe(ctx context.Context, targetID string) (Health, error) {
 		return e.cfg.Probe(ctx)
 	}
 	command := exec.CommandContext(ctx, e.cfg.Executable, "version", "--json") //nolint:gosec // verified executable selected by the durable installation transaction
+	command.Env = append(os.Environ(), "MESH_STATE_DIR="+e.cfg.StateDir)
 	output, err := command.Output()
 	if err != nil {
 		return Health{}, fmt.Errorf("verify installed client: %w", err)
