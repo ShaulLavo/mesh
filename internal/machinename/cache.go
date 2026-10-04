@@ -19,6 +19,23 @@ func CachedClaim(directory, owner string) (Claim, error) {
 	return cachedClaimWithSync(directory, owner, syncCacheRoot)
 }
 
+// CachedClaims returns durable observations for the requested authenticated owners.
+func CachedClaims(directory string, owners []string) (map[string]Claim, error) {
+	return cachedClaimsWithSync(directory, owners, syncCacheRoot)
+}
+
+func cachedClaimsWithSync(directory string, owners []string, syncRoot func(*os.Root) error) (map[string]Claim, error) {
+	claims := make(map[string]Claim, len(owners))
+	for _, owner := range owners {
+		claim, err := cachedClaimWithSync(directory, owner, syncRoot)
+		if err != nil {
+			return nil, err
+		}
+		claims[owner] = claim
+	}
+	return claims, nil
+}
+
 func cachedClaimWithSync(directory, owner string, syncRoot func(*os.Root) error) (Claim, error) {
 	if directory == "" {
 		return Claim{}, errors.New("machine name cache directory is empty")
