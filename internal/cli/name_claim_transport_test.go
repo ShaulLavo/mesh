@@ -245,11 +245,11 @@ func TestAuthenticatedNameCacheRejectsForgeryReplayAndWrongPin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cached, err := machinename.CachedClaim(filepath.Dir(path), f.host.ID)
+	cached, err := readNameCacheFixtureClaim(filepath.Dir(path), f.host.ID)
 	if err != nil || cached != f.names.Current() {
 		t.Fatalf("rejected claim changed cache: %+v %v", cached, err)
 	}
-	foreign, err := machinename.CachedClaim(filepath.Dir(path), other.ID)
+	foreign, err := readNameCacheFixtureClaim(filepath.Dir(path), other.ID)
 	if err != nil || foreign.Revision != 0 {
 		t.Fatalf("destination cached another peer's assertion: %+v %v", foreign, err)
 	}

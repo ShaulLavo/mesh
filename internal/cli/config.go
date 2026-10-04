@@ -93,15 +93,20 @@ func LoadHosts() ([]HostRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	for i := range config.Hosts {
-		host := &config.Hosts[i]
+	owners := make([]string, 0, len(config.Hosts))
+	for _, host := range config.Hosts {
 		if _, err := identity.IdentityKey(host.ID); err != nil {
 			continue
 		}
-		claim, err := machinename.CachedClaim(filepath.Dir(path), host.ID)
-		if err != nil {
-			return nil, fmt.Errorf("load cached machine name: %w", err)
-		}
+		owners = append(owners, host.ID)
+	}
+	claims, err := machinename.CachedClaims(filepath.Dir(path), owners)
+	if err != nil {
+		return nil, fmt.Errorf("load cached machine name: %w", err)
+	}
+	for i := range config.Hosts {
+		host := &config.Hosts[i]
+		claim := claims[host.ID]
 		host.MachineName, host.NameRevision = claim.MachineName, claim.Revision
 	}
 	ProjectHostNames(config.Hosts)

@@ -41,7 +41,7 @@ func TestClaimCacheDirectoryCreationBarriers(t *testing.T) {
 			if changed, err := RememberClaim(t.Context(), directory, claim.ID, claim); !changed || err != nil {
 				t.Fatalf("creation recovery: %t %v", changed, err)
 			}
-			if got, err := CachedClaim(directory, claim.ID); err != nil || got != claim {
+			if got, err := readCacheFixtureClaim(directory, claim.ID); err != nil || got != claim {
 				t.Fatalf("recovered claim: %+v %v", got, err)
 			}
 		})
@@ -63,10 +63,10 @@ func TestClaimCacheReaderSettlesVisibleFailedPublication(t *testing.T) {
 	if changed, err := rememberClaimWithSync(t.Context(), directory, claim.ID, claim, failPublished); changed || !errors.Is(err, failure) {
 		t.Fatalf("uncertain publication acknowledged: %t %v", changed, err)
 	}
-	if got, err := cachedClaimWithSync(directory, claim.ID, failPublished); !errors.Is(err, failure) || got != (Claim{}) {
+	if got, err := readCacheFixtureClaimWithSync(directory, claim.ID, failPublished); !errors.Is(err, failure) || got != (Claim{}) {
 		t.Fatalf("reader exposed unsynced revision: %+v %v", got, err)
 	}
-	if got, err := CachedClaim(directory, claim.ID); err != nil || got != claim {
+	if got, err := readCacheFixtureClaim(directory, claim.ID); err != nil || got != claim {
 		t.Fatalf("durability recovery failed: %+v %v", got, err)
 	}
 	older := claim
@@ -86,7 +86,7 @@ func TestClaimCacheReaderRejectsUnsafeDirectoryPermissions(t *testing.T) {
 	if err := os.Chmod(filepath.Join(directory, cacheDirectory), 0777); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := CachedClaim(directory, claim.ID); err == nil || got != (Claim{}) {
+	if got, err := readCacheFixtureClaim(directory, claim.ID); err == nil || got != (Claim{}) {
 		t.Fatalf("reader exposed claim from unsafe directory: %+v %v", got, err)
 	}
 }
