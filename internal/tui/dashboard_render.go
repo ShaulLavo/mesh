@@ -25,6 +25,14 @@ func (m dashboardModel) render() string {
 
 func (m dashboardModel) renderFrame() (string, dashboardLayout) {
 	m = m.privacyDisplay()
+	if m.configError != "" {
+		message := "MESH · Configuration error\n\n" + m.configError + "\n\nCorrect the configuration file. Mesh retries every second."
+		lines := strings.Split(ansi.Wrap(message, max(1, m.width), ""), "\n")
+		if len(lines) > m.height {
+			lines = lines[:m.height]
+		}
+		return m.paint(dashboardFailureStyle).Render(strings.Join(lines, "\n")), dashboardLayout{}
+	}
 	if m.width < 80 || m.height < 24 {
 		message := fmt.Sprintf("Mesh fleet needs 80×24; current %d×%d", m.width, m.height)
 		if m.notice != "" {

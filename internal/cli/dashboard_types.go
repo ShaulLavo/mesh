@@ -15,14 +15,16 @@ type DashboardFunc func(context.Context, DashboardInput) error
 type DashboardWatch func(context.Context, func(DashboardHostView)) error
 
 type DashboardInput struct {
-	Notice     string
-	Privacy    *privacy.Mask
-	Hosts      []DashboardHost
-	Wall       bool
-	Theme      string
-	Watch      DashboardWatch
-	UsageWatch func(context.Context, func(usagefeed.Result)) error
-	Inspect    PickerInspectFunc
+	ConfigError error
+	ConfigWatch func(context.Context, func(error)) error
+	Notice      string
+	Privacy     *privacy.Mask
+	Hosts       []DashboardHost
+	Wall        bool
+	Theme       string
+	Watch       DashboardWatch
+	UsageWatch  func(context.Context, func(usagefeed.Result)) error
+	Inspect     PickerInspectFunc
 }
 
 type DashboardHost struct {

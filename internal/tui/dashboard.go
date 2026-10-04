@@ -36,7 +36,7 @@ func runDashboard(ctx context.Context, input cli.DashboardInput, output io.Write
 			return fmt.Errorf("dashboard theme: %w", err)
 		}
 	}
-	if input.Watch == nil {
+	if input.Watch == nil && input.ConfigWatch == nil {
 		return errors.New("dashboard requires a state watch")
 	}
 	run, cancel := context.WithCancel(ctx)
@@ -68,6 +68,10 @@ func runDashboard(ctx context.Context, input cli.DashboardInput, output io.Write
 
 func watchDashboard(ctx context.Context, input cli.DashboardInput, program *tea.Program) *sync.WaitGroup {
 	readers := new(sync.WaitGroup)
+	if input.ConfigWatch != nil {
+		readers.Go(func() { watchDashboardConfig(ctx, input, program) })
+		return readers
+	}
 	if input.UsageWatch != nil {
 		readers.Go(func() {
 			err := input.UsageWatch(ctx, func(result usagefeed.Result) {
@@ -97,6 +101,7 @@ type dashboardUsageMsg usagefeed.Result
 type dashboardHostMsg cli.DashboardHostView
 type dashboardTickMsg time.Time
 type dashboardDoneMsg struct{ err error }
+type dashboardConfigMsg struct{ err error }
 type dashboardRenderWork struct {
 	summaries, serviceWidthVisits, layouts, gpuPairs int
 }
@@ -112,6 +117,7 @@ type dashboardModel struct {
 	now               time.Time
 	width, height     int
 	watchError        error
+	configError       string
 	notice            string
 	frame             string
 	history           map[string]dashboardHostHistory
@@ -147,6 +153,9 @@ func newDashboard(input cli.DashboardInput, now time.Time) dashboardModel {
 		model.hosts = append(model.hosts, cli.DashboardHostView{Host: host, Connection: cli.StateConnecting})
 	}
 	model.notice = safeText(input.Notice)
+	if input.ConfigError != nil {
+		model.configError = safeText(input.ConfigError.Error())
+	}
 	model.usageEnabled = input.UsageWatch != nil
 	model.ctx, model.inspect = context.Background(), input.Inspect
 	model.sessionSummaries = map[dashboardSessionTarget]sessionLiveSummary{}
@@ -184,6 +193,9 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.frame, m.layout = m.renderFrame()
 		inspection := m.inspectSessions()
 		return m, tea.Batch(dashboardTick(), inspection)
+	case dashboardConfigMsg:
+		m.configError = safeText(message.err.Error())
+		m.frame, m.layout = m.renderFrame()
 	case dashboardDoneMsg:
 		m.watchError = message.err
 		return m, tea.Quit
@@ -233,5 +245,16 @@ func (m *dashboardModel) projectNames() {
 	cli.ProjectHostNames(records)
 	for i, record := range records {
 		m.hosts[i].Host.NameConflict, m.hosts[i].Host.NamePriority, m.hosts[i].Host.NameSuffix = record.NameConflict, record.NamePriority, record.NameSuffix
+	}
+}
+
+func watchDashboardConfig(ctx context.Context, input cli.DashboardInput, program *tea.Program) {
+	err := input.ConfigWatch(ctx, func(problem error) {
+		if ctx.Err() == nil {
+			program.Send(dashboardConfigMsg{err: problem})
+		}
+	})
+	if ctx.Err() == nil {
+		program.Send(dashboardDoneMsg{err: err})
 	}
 }

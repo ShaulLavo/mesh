@@ -62,7 +62,12 @@ func TestDashboardUnknownThemeListsNames(t *testing.T) {
 				writeDashboardThemeFixture(t, "missing")
 				args = []string{"dashboard"}
 			}
-			_, _, err := executeCommand(t, Dependencies{Dashboard: func(context.Context, DashboardInput) error { t.Fatal("invalid theme reached dashboard"); return nil }}, args...)
+			_, _, err := executeCommand(t, Dependencies{Dashboard: func(_ context.Context, input DashboardInput) error {
+				if !configured || input.ConfigError == nil || input.ConfigWatch == nil || input.Watch != nil {
+					t.Fatal("invalid theme reached a healthy dashboard")
+				}
+				return input.ConfigError
+			}}, args...)
 			if err == nil || !strings.Contains(err.Error(), `unknown dashboard theme "missing"`) {
 				t.Fatalf("error = %v", err)
 			}

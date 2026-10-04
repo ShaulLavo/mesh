@@ -357,6 +357,7 @@ class Fixture:
                        "tailscaleName": "pc.fixture.test", "addresses": ["127.0.0.1"],
                        "endpoint": f"ws://127.0.0.1:{port}/mesh"}],
         }))
+        os.chmod(self.config / "hosts.json", 0o600)
         if initial_binary is None:
             self.adopt_remote_name(response["host"])
 

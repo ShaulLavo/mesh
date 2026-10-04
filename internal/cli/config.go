@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -120,6 +121,10 @@ func loadHostConfig() (hostConfig, error) {
 	if err != nil {
 		return hostConfig{}, fmt.Errorf("read host config %s: %w", path, err)
 	}
+	return parseHostConfig(contents, path)
+}
+
+func parseHostConfig(contents []byte, path string) (hostConfig, error) {
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	var config hostConfig
@@ -169,24 +174,23 @@ func SaveHost(record HostRecord) error {
 	if err != nil {
 		return err
 	}
-	config, err := loadHostConfig()
-	if err != nil {
-		return err
-	}
-	hosts := config.Hosts
-	replaced := false
-	for i, existing := range hosts {
-		if existing.ID == host.ID {
-			hosts[i] = host
-			replaced = true
+	return withClientConfigLock(context.Background(), true, func(dir *os.File, path string) error {
+		config, err := readLockedHostConfig(dir, path)
+		if err != nil {
+			return err
 		}
-	}
-	if !replaced {
-		hosts = append(hosts, host)
-	}
-	sortHosts(hosts)
-	config.Hosts = hosts
-	return writeHostConfig(config)
+		replaced := false
+		for i, existing := range config.Hosts {
+			if existing.ID == host.ID {
+				config.Hosts[i], replaced = host, true
+			}
+		}
+		if !replaced {
+			config.Hosts = append(config.Hosts, host)
+		}
+		sortHosts(config.Hosts)
+		return writeLockedHostConfig(dir, config)
+	})
 }
 
 func validateHostRecord(record HostRecord) (HostRecord, error) {
@@ -215,47 +219,23 @@ func validateHostRecord(record HostRecord) (HostRecord, error) {
 }
 
 func writeHostConfig(config hostConfig) error {
+	return withClientConfigLock(context.Background(), true, func(dir *os.File, _ string) error {
+		if _, err := readClientConfig(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return writeLockedHostConfig(dir, config)
+	})
+}
+
+func writeLockedHostConfig(dir *os.File, config hostConfig) error {
 	if len(config.Hosts) > maximumConfiguredHosts {
 		return fmt.Errorf("host count %d exceeds %d", len(config.Hosts), maximumConfiguredHosts)
-	}
-	path, err := ConfigPath()
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create Mesh config directory %s: %w", dir, err)
 	}
 	contents, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode host config: %w", err)
 	}
-	contents = append(contents, '\n')
-	temporary, err := os.CreateTemp(dir, ".hosts-*.json")
-	if err != nil {
-		return fmt.Errorf("create temporary host config: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath) //nolint:errcheck // best-effort cleanup after atomic replacement
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("secure temporary host config: %w", err)
-	}
-	if _, err := temporary.Write(contents); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("write temporary host config: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("sync temporary host config: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary host config: %w", err)
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return fmt.Errorf("publish host config %s: %w", path, err)
-	}
-	return nil
+	return publishClientConfig(dir, append(contents, '\n'), syncClientConfig)
 }
 
 func sortHosts(hosts []HostRecord) {
@@ -288,4 +268,15 @@ func ResolveArgument(value string, hosts []HostRecord) (ArgumentTarget, error) {
 		return ArgumentTarget{SessionID: id}, nil
 	}
 	return ArgumentTarget{}, fmt.Errorf("%q is neither a declared machine name, exact host ID nor a session ID", value)
+}
+
+func readLockedHostConfig(dir *os.File, path string) (hostConfig, error) {
+	contents, err := readClientConfig(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return hostConfig{Version: hostConfigVersion}, nil
+	}
+	if err != nil {
+		return hostConfig{}, err
+	}
+	return parseHostConfig(contents, path)
 }

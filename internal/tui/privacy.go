@@ -16,6 +16,7 @@ func (m dashboardModel) privacyDisplay() dashboardModel {
 	}
 	mask := m.privacy
 	m.notice = mask.Value("notice", m.notice)
+	m.configError = mask.Value("error", m.configError)
 	m.hosts = append([]cli.DashboardHostView(nil), m.hosts...)
 	for i := range m.hosts {
 		h := &m.hosts[i]
