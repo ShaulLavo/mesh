@@ -123,43 +123,57 @@ func parseDeviceGrants(contents []byte) ([]DeviceGrant, error) {
 	return grants, nil
 }
 
-func ApproveDevice(stateDir, id string) error { return changeDevice(stateDir, id, true) }
-func RevokeDevice(stateDir, id string) error  { return changeDevice(stateDir, id, false) }
+func ApproveDevice(stateDir, id string) error {
+	_, err := changeDevice(stateDir, id, true)
+	return err
+}
 
-func changeDevice(stateDir, id string, approve bool) error {
+func ApproveDeviceChanged(stateDir, id string) (bool, error) {
+	return changeDevice(stateDir, id, true)
+}
+
+func RevokeDevice(stateDir, id string) error {
+	_, err := changeDevice(stateDir, id, false)
+	return err
+}
+
+func changeDevice(stateDir, id string, approve bool) (bool, error) {
 	public, err := IdentityKey(id)
 	if err != nil {
-		return err
+		return false, err
 	}
 	key, err := ssh.NewPublicKey(public)
 	if err != nil {
-		return fmt.Errorf("identity: encode device key: %w", err)
+		return false, fmt.Errorf("identity: encode device key: %w", err)
 	}
 	lock, err := os.OpenFile(filepath.Join(stateDir, "device-grants.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600) //nolint:gosec // fixed policy lock; reject symlinks and special files before locking
 	if err != nil {
-		return fmt.Errorf("identity: open grants lock: %w", err)
+		return false, fmt.Errorf("identity: open grants lock: %w", err)
 	}
 	defer lock.Close() //nolint:errcheck // closing releases exclusive policy ownership
 	info, err := lock.Stat()
 	if err != nil {
-		return fmt.Errorf("identity: inspect grants lock: %w", err)
+		return false, fmt.Errorf("identity: inspect grants lock: %w", err)
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
-		return errors.New("identity: grants lock must be a regular file with safe permissions")
+		return false, errors.New("identity: grants lock must be a regular file with safe permissions")
 	}
 	if err := lockGrantWriter(lock); err != nil {
-		return err
+		return false, err
 	}
 	path := filepath.Join(stateDir, "authorized_keys")
 	contents, err := ReadAuthorizedKeys(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return false, err
 	}
 	next, err := changedGrants(contents, key, approve)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return publishGrants(stateDir, path, next)
+	if err := publishGrants(stateDir, path, next); err != nil {
+		return false, err
+	}
+	return !bytes.Equal(contents, next), nil
 }
 
 // Only mutations contend. Published-snapshot readers never wait for this lock.

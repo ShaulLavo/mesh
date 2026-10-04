@@ -68,7 +68,7 @@ func deviceGrantCommand(approve bool) *cobra.Command {
 	if approve {
 		name, description = "approve", "Grant a device this daemon account's control and SSH access"
 	}
-	var allowRoot, publicKey bool
+	var allowRoot, publicKey, structured bool
 	command := &cobra.Command{Use: name + " ID", Short: description, Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if approve && os.Geteuid() == 0 && !allowRoot {
@@ -82,20 +82,45 @@ func deviceGrantCommand(approve bool) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			mutate := identity.RevokeDevice
-			if approve {
-				mutate = identity.ApproveDevice
-			}
-			if err := mutate(stateDir, id); err != nil {
+			changed, err := changeDeviceGrant(stateDir, id, approve)
+			if err != nil {
 				return fmt.Errorf("device command: %w", err)
+			}
+			if structured {
+				return writeDeviceGrantChange(cmd, changed)
 			}
 			return writeDeviceGrant(cmd, name, id)
 		}}
 	if approve {
+		command.Flags().BoolVar(&structured, "json", false, "write whether device approval changed as JSON")
 		command.Flags().BoolVar(&publicKey, "public-key", false, "read ID as an unrestricted OpenSSH Ed25519 public key")
 		command.Flags().BoolVar(&allowRoot, "allow-root", false, "acknowledge that approval grants root access")
 	}
 	return command
+}
+
+func changeDeviceGrant(stateDir, id string, approve bool) (bool, error) {
+	if approve {
+		changed, err := identity.ApproveDeviceChanged(stateDir, id)
+		if err != nil {
+			return false, fmt.Errorf("approve device grant: %w", err)
+		}
+		return changed, nil
+	}
+	if err := identity.RevokeDevice(stateDir, id); err != nil {
+		return false, fmt.Errorf("revoke device grant: %w", err)
+	}
+	return false, nil
+}
+
+func writeDeviceGrantChange(cmd *cobra.Command, changed bool) error {
+	result := struct {
+		Changed bool `json:"changed"`
+	}{Changed: changed}
+	if err := json.NewEncoder(cmd.OutOrStdout()).Encode(result); err != nil {
+		return fmt.Errorf("write device grant result: %w", err)
+	}
+	return nil
 }
 
 func writeDeviceGrant(cmd *cobra.Command, name, id string) error {

@@ -56,8 +56,12 @@ func installerGrantFixture(t *testing.T) (string, string, string, string) {
 }
 
 func installerGrantCommand(t *testing.T, home, bin, script string, key ssh.PublicKey) *exec.Cmd {
+	return installerPlatformGrantCommand(t, "linux", home, bin, script, key)
+}
+
+func installerPlatformGrantCommand(t *testing.T, platform, home, bin, script string, key ssh.PublicKey) *exec.Cmd {
 	t.Helper()
-	service, err := installscript.RenderService("linux", installscript.ServiceOptions{DaemonPort: 7337, SSHPort: 2222, WebSocketPath: "/mesh"})
+	service, err := installscript.RenderService(platform, installscript.ServiceOptions{DaemonPort: 7337, SSHPort: 2222, WebSocketPath: "/mesh"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,12 +130,13 @@ func TestBootstrapMustSerializeWithDeviceRevocation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	awkTool, err := exec.LookPath("awk")
-	if err != nil {
-		t.Skipf("installer fixture needs awk: %v", err)
+	installed := filepath.Join(home, ".local/bin/mesh")
+	realBinary := installed + ".real"
+	if err := os.Rename(installed, realBinary); err != nil {
+		t.Fatal(err)
 	}
-	awk := "#!/bin/sh\n\"" + awkTool + "\" \"$@\"\nprintf 'r' >\"$HOME/ready\"\nread -r resumed <\"$HOME/proceed\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "awk"), []byte(awk), 0700); err != nil { //nolint:gosec // owned fixture paths, executable payloads and checkout-derived build arguments
+	barrier := "#!/bin/sh\nprintf 'r' >\"$HOME/ready\"\nread -r resumed <\"$HOME/proceed\"\nexec \"$0.real\" \"$@\"\n"
+	if err := os.WriteFile(installed, []byte(barrier), 0700); err != nil { //nolint:gosec // fixture-owned CLI launch barrier
 		t.Fatal(err)
 	}
 	cmd := installerGrantCommand(t, home, bin, script, pub)

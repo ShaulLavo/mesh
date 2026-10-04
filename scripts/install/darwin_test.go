@@ -16,7 +16,7 @@ import (
 )
 
 func TestDarwinInstallerLaunchdActivation(t *testing.T) {
-	for _, tool := range []string{"sh", "cat", "install", "base64", "awk", "cmp", "grep", "chmod", "mv", "id", "mkdir", "rm"} {
+	for _, tool := range []string{"sh", "cat", "install", "base64", "cmp", "grep", "chmod", "mv", "id", "mkdir", "rm"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("Darwin shell installer fixture requires %s: %v", tool, err)
 		}
