@@ -15,6 +15,8 @@ import (
 
 const cacheDirectory = "machine-names"
 
+var errCacheFileChanged = errors.New("machine name cache file changed while opening")
+
 // CachedClaims reads durable observations through one anchored directory.
 // Missing owners are omitted; any error discards the entire batch.
 func CachedClaims(directory string, owners []string) (map[string]Claim, error) {
@@ -273,12 +275,22 @@ func openPrivateCacheFile(root *os.Root, filename string, flag int, create bool)
 	if err != nil {
 		return nil, fmt.Errorf("open private cache file: %w", err)
 	}
-	actual, err := file.Stat()
-	if err != nil || !os.SameFile(info, actual) {
+	if err := verifyOpenedCacheFile(file, info); err != nil {
 		_ = file.Close()
-		return nil, errors.New("machine name cache file changed while opening")
+		return nil, err
 	}
 	return file, nil
+}
+
+func verifyOpenedCacheFile(file *os.File, inspected os.FileInfo) error {
+	actual, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect opened machine name cache file: %w", err)
+	}
+	if !os.SameFile(inspected, actual) {
+		return errCacheFileChanged
+	}
+	return nil
 }
 
 func settleCacheAncestors(directory string, syncRoot func(*os.Root) error) error {

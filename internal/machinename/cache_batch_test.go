@@ -122,14 +122,24 @@ func TestClaimCacheBatchConcurrentRevisionsStayFresh(t *testing.T) {
 	}
 	close(start)
 	previous := map[string]uint64{}
+	var successes, refusals int
 	for range 32 {
 		claims, err := CachedClaims(directory, owners)
+		if err != nil && claims != nil {
+			t.Fatalf("refused batch exposed partial claims: %+v, error=%v", claims, err)
+		}
+		if errors.Is(err, errCacheFileChanged) {
+			refusals++
+			continue
+		}
 		if err != nil {
 			t.Error(err)
 			break
 		}
+		successes++
 		checkBatchFixtureRevisions(t, owners, claims, previous)
 	}
+	t.Logf("concurrent reads: %d successful, %d inode-change refusals", successes, refusals)
 	writers.Wait()
 	claims, err := CachedClaims(directory, owners)
 	if err != nil || claims[owners[0]].Revision != 16 || claims[owners[1]].Revision != 16 {
