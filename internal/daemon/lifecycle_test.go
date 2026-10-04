@@ -1166,7 +1166,7 @@ func (s *receiptPublicationFailureStore) ApplyHostChanges(context.Context, stora
 
 func unpublishedReceiptLifecycle(t *testing.T, failure string, now func() time.Time, launches *int) *lifecycle {
 	t.Helper()
-	root := t.TempDir()
+	root := compactSocketTempDir(t)
 	store, err := storage.Open(t.Context(), filepath.Join(root, "receipt.db"))
 	if err != nil {
 		t.Fatal(err)

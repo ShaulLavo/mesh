@@ -15,6 +15,7 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
+	"github.com/shaul/mesh/internal/testenv"
 )
 
 func newNestingTestWorker(t *testing.T) *Worker {
@@ -365,11 +366,7 @@ func TestNestingClientProcess(t *testing.T) {
 }
 
 func TestRunUnregistersCrashedClientAndClosesLiveRegistration(t *testing.T) {
-	dir, err := os.MkdirTemp("", "mesh-nesting-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := testenv.SocketTempDir(t)
 	done := make(chan error, 1)
 	go func() {
 		_, runErr := Run(Config{ID: "A111", HostID: "host-a", Dir: dir, Command: []string{"/bin/sh", "-c", "exec sleep 30"}})

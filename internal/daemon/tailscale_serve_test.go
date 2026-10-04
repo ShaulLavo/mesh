@@ -439,7 +439,7 @@ func TestRunTailscaleServeRequiresEveryControlAddressToBind(t *testing.T) {
 	options := defaultRunOptions()
 	options.listen = useTCPListeners(httpsListener)
 	options.discoverSelf = func(context.Context) (tailnet.Peer, error) {
-		return tailnet.Peer{Addrs: []string{"127.0.0.1", "127.0.0.2"}}, nil
+		return tailnet.Peer{Addrs: []string{"127.0.0.1", "::1"}}, nil
 	}
 	options.validateServeAddresses = func([]string) error { return nil }
 	options.verifyServeForward = func(context.Context, uint16) error { return nil }
@@ -461,14 +461,14 @@ func TestRunTailscaleServeRequiresEveryControlAddressToBind(t *testing.T) {
 
 func TestRunAllowsEqualHTTPSAndControlPortsOnSeparateAddresses(t *testing.T) {
 	httpsListener, port := newTCPListener(t, "127.0.0.1:0")
-	controlListener, _ := newTCPListener(t, fmt.Sprintf("127.0.0.2:%d", port))
+	controlListener, _ := newTCPListener(t, fmt.Sprintf("[::1]:%d", port))
 	signerID, _ := composedIdentity(t)
 	ready := make(chan struct{}, 1)
 	options := defaultRunOptions()
 	options.listen = useTCPListeners(controlListener, httpsListener)
 	options.reconcileInterval = time.Hour
 	options.discoverSelf = func(context.Context) (tailnet.Peer, error) {
-		return tailnet.Peer{Addrs: []string{"127.0.0.2"}}, nil
+		return tailnet.Peer{Addrs: []string{"::1"}}, nil
 	}
 	options.validateServeAddresses = func([]string) error { return nil }
 	options.verifyServeForward = func(context.Context, uint16) error { return nil }
@@ -534,7 +534,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 		if discoveryCalls.Add(1) == 1 {
 			return tailnet.Peer{Addrs: []string{"127.0.0.1"}}, nil
 		}
-		return tailnet.Peer{Addrs: []string{"127.0.0.2"}}, nil
+		return tailnet.Peer{Addrs: []string{"::1"}}, nil
 	}
 	firstOptions.runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
 	firstDone := make(chan error, 1)
@@ -555,7 +555,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	}
 
 	secondReady := make(chan struct{}, 1)
-	secondControl, secondPort := newTCPListener(t, "127.0.0.2:0")
+	secondControl, secondPort := newTCPListener(t, "[::1]:0")
 	secondHTTPS, secondHTTPSPort := newTCPListener(t, "127.0.0.1:0")
 	config.TailnetPort = secondPort
 	config.HTTPSPort = secondHTTPSPort
@@ -567,7 +567,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	secondOptions.validateServeAddresses = func([]string) error { return nil }
 	secondOptions.verifyServeForward = func(context.Context, uint16) error { return nil }
 	secondOptions.discoverSelf = func(context.Context) (tailnet.Peer, error) {
-		return tailnet.Peer{Addrs: []string{"127.0.0.2"}}, nil
+		return tailnet.Peer{Addrs: []string{"::1"}}, nil
 	}
 	secondOptions.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		secondReady <- struct{}{}
@@ -581,7 +581,7 @@ func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) 
 	case <-time.After(runtimeTestTimeout):
 		t.Fatal("restarted daemon did not reach readiness")
 	}
-	connection, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.2:%d", secondPort), time.Second)
+	connection, err := net.DialTimeout("tcp6", fmt.Sprintf("[::1]:%d", secondPort), time.Second)
 	if err != nil {
 		t.Fatalf("restarted control endpoint was not bound: %v", err)
 	}

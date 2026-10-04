@@ -17,6 +17,7 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
+	"github.com/shaul/mesh/internal/testenv"
 )
 
 func TestFreshAttachReceivesSnapshotThenLiveSequence(t *testing.T) {
@@ -1051,7 +1052,7 @@ func TestFinishWaitsForQueuedOutputAndExit(t *testing.T) {
 }
 
 func TestRunDoesNotWaitForDescendantHoldingPTY(t *testing.T) {
-	dir := t.TempDir()
+	dir := testenv.SocketTempDir(t)
 	pidPath := filepath.Join(dir, "descendant.pid")
 	t.Cleanup(func() {
 		b, err := os.ReadFile(pidPath) //nolint:gosec // test reads its own temporary PID fixture
@@ -1097,7 +1098,7 @@ func TestRunRecordsItsInheritedLaunchDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	dir := testenv.SocketTempDir(t)
 	code, err := Run(Config{
 		ID:      "CWD1",
 		Dir:     dir,

@@ -27,7 +27,7 @@ func labelledTestLifecycle(t *testing.T, catalog *lifecycleTestCatalog, launch l
 		Catalog:     catalog,
 		Connector:   failingLifecycleConnector(),
 		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
-		SessionsDir: t.TempDir(),
+		SessionsDir: compactSocketTempDir(t),
 		Launch:      launch,
 	})
 }

@@ -1,11 +1,12 @@
 package paths
 
 import (
-	"github.com/shaul/mesh/internal/testenv"
 	"net"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/shaul/mesh/internal/testenv"
 )
 
 func TestSocketPathNativeBoundary(t *testing.T) {

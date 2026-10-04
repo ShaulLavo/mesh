@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,8 +33,29 @@ func TestServeRejectsLongSocketPathPromptly(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if entry.Name() != daemonLockName {
+		if entry.Name() == daemonSocketName || strings.HasPrefix(entry.Name(), ".d-") {
 			t.Fatalf("failed startup left %s", entry.Name())
 		}
+	}
+}
+
+func TestTCPReadinessObservesStartupFailure(t *testing.T) {
+	listener, _ := newTCPListener(t, "127.0.0.1:0")
+	want := errors.New("fixture socket bind failed")
+	done := make(chan error, 1)
+	done <- want
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := awaitTCPRuntime(ctx, listener.Addr().String(), done); !errors.Is(err, want) {
+		t.Fatalf("pre-bound listener readiness = %v, want startup failure", err)
+	}
+}
+
+func TestTCPReadinessRequiresHTTPResponse(t *testing.T) {
+	listener, _ := newTCPListener(t, "127.0.0.1:0")
+	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+	defer cancel()
+	if err := awaitTCPRuntime(ctx, listener.Addr().String(), make(chan error)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("idle pre-bound listener readiness = %v, want deadline exceeded", err)
 	}
 }

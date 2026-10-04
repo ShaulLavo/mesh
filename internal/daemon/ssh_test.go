@@ -17,7 +17,7 @@ import (
 )
 
 func TestRunStartsSSHOnlyOnDiscoveredTailnetAddresses(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	started := make(chan sshd.Config, 2)
 	options := runOptions{
 		now:    func() time.Time { return catalogTestTime },
@@ -106,7 +106,7 @@ func sshHandlerForDirectory(expected, actual string) sshd.SessionHandler {
 }
 
 func TestRunSkipsSSHAndReportsMissingTailnetAddress(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	reported := make(chan error, 1)
 	serveCalled := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -151,7 +151,7 @@ func TestRunSkipsSSHAndReportsMissingTailnetAddress(t *testing.T) {
 }
 
 func TestRunSkipsSSHOutsideTailscaleRanges(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	reported := make(chan error, 1)
 	serveCalled := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -197,7 +197,7 @@ func TestRunSkipsSSHOutsideTailscaleRanges(t *testing.T) {
 
 func TestRunTreatsSSHListenerFailureAsDaemonFailure(t *testing.T) {
 	serveErr := errors.New("SSH port is occupied")
-	err := run(context.Background(), Config{StateDir: t.TempDir(), SSHPort: 2222}, runOptions{
+	err := run(context.Background(), Config{StateDir: compactSocketTempDir(t), SSHPort: 2222}, runOptions{
 		now:               func() time.Time { return catalogTestTime },
 		bootID:            func() string { return "boot-a" },
 		discoverSelf:      func(context.Context) (tailnet.Peer, error) { return tailnet.Peer{Addrs: []string{"100.64.0.7"}}, nil },

@@ -69,6 +69,30 @@ jobs:
           MESH_INTEGRATION_TIMEOUT: 60s
         run: ./scripts/verify.sh
 
+  socket-portability:
+    name: Native socket and daemon fixtures (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify full daemon suite under long and symlinked scratch
+        shell: bash
+        run: |
+          short=$(mktemp -d /tmp/ms-XXXXXX)
+          long=$(mktemp -d "$RUNNER_TEMP/mesh-socket-portability-long-scratch-root.XXXXXX")
+          trap 'rm -rf -- "$short" "$long"' EXIT
+          ln -s "$long" "$short/alias"
+          TMPDIR="$short/alias/" MESH_SHORT_TMP="$short" go test -race -count=1 -timeout=180s ./internal/daemon ./internal/cli ./internal/worker ./internal/updatebootstrap ./internal/paths ./internal/testenv
+          MESH_SHORT_TMP="$short" python3 scripts/test-helper-recovery-paths.py
+
   auth-cutover:
     name: Device auth cutover (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}

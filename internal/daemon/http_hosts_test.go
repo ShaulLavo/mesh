@@ -307,7 +307,7 @@ func TestPrivateRequestHostRejectsMalformedAuthorities(t *testing.T) {
 
 func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 	listener, port := newTCPListener(t, "127.0.0.1:0")
-	blocked, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.2", strconv.Itoa(int(port))))
+	blocked, err := net.Listen("tcp6", net.JoinHostPort("::1", strconv.Itoa(int(port))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := runRuntime(t, ctx, ListenerConfig{
-		StateDir: t.TempDir(), TailnetPort: port, TailnetAddrs: []string{"127.0.0.1", "127.0.0.2"}, WebSocketPath: "/mesh",
+		StateDir: compactSocketTempDir(t), TailnetPort: port, TailnetAddrs: []string{"127.0.0.1", "::1"}, WebSocketPath: "/mesh",
 		TailnetNames: []string{"pc.example.ts.net", "pc"},
 		PrivateName:  func() string { return "pc.mesh.shaulavo.dev" },
 		TrustPublicEdgeForwarding: func(address netip.Addr) bool {
@@ -324,14 +324,14 @@ func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 		ReportError: func(err error) { t.Log(err) },
 		HTTPHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
 	}, echoOneFrame, listener)
-	waitForTCPRuntime(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+	waitForTCPRuntime(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))), done)
 	for _, test := range []struct {
 		host string
 		want int
 	}{
 		{host: "127.0.0.1", want: http.StatusNoContent},
 		{host: net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))), want: http.StatusNoContent},
-		{host: "127.0.0.2", want: http.StatusNoContent},
+		{host: "[::1]", want: http.StatusNoContent},
 		{host: "100.64.0.2", want: http.StatusMisdirectedRequest},
 		{host: "pc.example.ts.net", want: http.StatusNoContent},
 		{host: "pc", want: http.StatusNoContent},
@@ -345,7 +345,7 @@ func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 		}
 		request.Host = test.host
 		request.Close = true
-		response, err := http.DefaultClient.Do(request)
+		response, err := (&http.Client{Timeout: runtimeTestTimeout}).Do(request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -463,7 +463,7 @@ func TestServePrivateHTTPUsesListenerAuthorities(t *testing.T) {
 		}
 		request.Host = test.host
 		request.Close = true
-		response, err := http.DefaultClient.Do(request)
+		response, err := (&http.Client{Timeout: runtimeTestTimeout}).Do(request)
 		if err != nil {
 			t.Fatal(err)
 		}
