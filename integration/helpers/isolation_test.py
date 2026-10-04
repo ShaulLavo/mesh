@@ -46,6 +46,21 @@ class EntryPointContractTest(unittest.TestCase):
                 if expected:
                     self.assertIn("must source the prelude", result.stderr)
 
+    def test_name_observation_uses_existing_slow_budget(self):
+        runner = Path(__file__).resolve().parents[2] / "scripts/verify.sh"
+        text = runner.read_text()
+        defaults = text[:text.index("run_root=")]
+        start = text.index("    this_timeout=$test_timeout")
+        selection = text[start:text.index("    # Provider routing", start)]
+        program = defaults + "\nfor name in ordinary.sh packaging_contract.sh name_observation.sh; do\n"
+        program += selection + '    printf "%s %s\\n" "$name" "$this_timeout"\ndone\n'
+        environment = {"PATH": os.defpath}
+        result = subprocess.run(["bash", "-c", program], env=environment,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["ordinary.sh 30s", "packaging_contract.sh 600s",
+                                                     "name_observation.sh 600s"])
+
 
 class IsolationBoundaryTest(unittest.TestCase):
     def test_defaults_and_aliases_are_refused(self):

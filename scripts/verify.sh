@@ -5,10 +5,10 @@ set -uo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_timeout=${MESH_INTEGRATION_TIMEOUT:-30s}
-# packaging_contract.sh builds real release archives, so its cost tracks the
-# runner rather than the code and it cannot share a session-test budget.
+# Packaging builds release archives; name observation crosses real freshness windows.
+# Both need the existing slow budget independently of ordinary session tests.
 slow_test_timeout=${MESH_INTEGRATION_SLOW_TIMEOUT:-600s}
-slow_tests=" packaging_contract.sh "
+slow_tests=" packaging_contract.sh name_observation.sh "
 integration_jobs=${MESH_INTEGRATION_JOBS:-}
 if [[ -z $integration_jobs ]]; then
   integration_jobs=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
