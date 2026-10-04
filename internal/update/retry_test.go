@@ -158,6 +158,13 @@ func TestObservedCompletionClearsPendingRetry(t *testing.T) {
 }
 
 func TestObservedCompletionClearsBootstrapRetry(t *testing.T) {
+	for _, state := range []State{Updated, Newer} {
+		t.Run(string(state), func(t *testing.T) { observedCompletionClearsBootstrapRetry(t, state) })
+	}
+}
+
+func observedCompletionClearsBootstrapRetry(t *testing.T, state State) {
+	t.Helper()
 	f := newLegacyFixture(t)
 	f.step()
 	f.receipt(updateinstall.RolledBack)
@@ -174,12 +181,16 @@ func TestObservedCompletionClearsBootstrapRetry(t *testing.T) {
 	}
 	info.Health.Build.Digest = artifact.BinarySHA256
 	info.Health.Build.Version = f.run.Release.Version
+	if state == Newer {
+		info.Health.Build.Digest = strings.Repeat("e", 64)
+		info.Health.Build.Version = "v0.3.0"
+	}
 	f.remote.info[host] = info
 	if err := f.c.Step(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	completed, err := f.c.Store.Read(f.run.ID)
-	if err != nil || !completed.Done() || completed.Targets[0].BootstrapRetry || completed.Targets[0].BootstrapRetryToken != approved.Targets[0].BootstrapRetryToken {
+	if err != nil || !completed.Done() || completed.Targets[0].State != state || completed.Targets[0].BootstrapRetry || completed.Targets[0].BootstrapRetryToken != approved.Targets[0].BootstrapRetryToken {
 		t.Fatalf("completion retained bootstrap retry or changed its token: %+v %v", completed, err)
 	}
 	if len(f.commands) != 2 || f.remote.stages != 0 {
