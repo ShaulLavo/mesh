@@ -90,6 +90,11 @@ func (f *recoveryFixture) publishReplacement(t *testing.T, version, journalCheck
 	t.Helper()
 	binary := []byte(strings.Replace(string(testExecutable(version)), "health=$2",
 		"if [ \"$1\" = update-helper ]; then\n"+journalCheck+"\nfi\nhealth=$2", 1))
+	f.publishHelperImage(t, version, binary)
+}
+
+func (f *recoveryFixture) publishHelperImage(t *testing.T, version string, binary []byte) {
+	t.Helper()
 	if err := writeRecoveryFixture(f.request.Helper.Executable, binary); err != nil {
 		t.Fatal(err)
 	}
@@ -399,6 +404,41 @@ func TestHelperRecoverySettlesOnlyGenuineRollbackRestoration(t *testing.T) {
 	if err != nil || status.Verified == nil || status.Phase != RolledBack || status.Error == "" {
 		t.Fatal("recovery fabricated or discarded the real rollback receipt")
 	}
+	f.roundTrip()
+}
+
+func TestHelperRecoverySlowImageVerificationPreservesReadinessBudget(t *testing.T) {
+	f := newFailedRollbackRecoveryFixture(t)
+	binary := []byte(strings.Replace(string(testExecutable("v0.3.0")),
+		"digest=${digest%% *}", "sleep 0.4\n  digest=${digest%% *}", 1))
+	binary = []byte(strings.Replace(string(binary), "health=$2",
+		"if [ \"$1\" = update-helper ]; then exit 0; fi\nhealth=$2", 1))
+	f.publishHelperImage(t, "v0.3.0", binary)
+	originalProbe := f.request.Probe
+	f.request.Probe = func(ctx context.Context, installed HelperInstallation) (int, error) {
+		if installed.Digest == f.request.Digest {
+			deadline, ok := ctx.Deadline()
+			if !ok || time.Until(deadline) < f.engine.cfg.HealthTimeout/2 {
+				t.Error("image verification consumed the helper readiness budget")
+			}
+		}
+		return originalProbe(ctx, installed)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	result, err := f.engine.RecoverHelper(ctx, f.request)
+	if err != nil || result.Phase != RolledBack || result.Installation.Digest != f.request.Digest {
+		t.Fatalf("slow self-hash recovery = %s, %v; elapsed=%s health-budget=%s", result.Phase, err, time.Since(started), f.engine.cfg.HealthTimeout)
+	}
+	status, err := f.engine.Read()
+	if err != nil || status.Verified == nil || status.Phase != RolledBack || status.Error == "" {
+		t.Fatal("slow image verification discarded the genuine rollback receipt")
+	}
+	if err = release.VerifyExecutable(ctx, result.Installation.Executable, f.request.Digest); err != nil {
+		t.Fatalf("recovered immutable image: %v", err)
+	}
+	t.Logf("slow self-hash recovery elapsed=%s health-budget=%s", time.Since(started), f.engine.cfg.HealthTimeout)
 	f.roundTrip()
 }
 
