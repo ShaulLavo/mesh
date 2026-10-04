@@ -333,6 +333,9 @@ func usageCompactHistory(label, facts, ratio, reset, word, age string, width int
 	if ansi.StringWidth(label+" "+facts) <= width {
 		return facts
 	}
+	if reading := usageCompactReadingHistory(label, facts, ratio, reset, word, age, width); reading != "" {
+		return reading
+	}
 	if strings.HasSuffix(facts, " passed "+age) || word == "OK" || word == usageReading {
 		facts = ratio + " resets " + reset + " " + age
 	} else {
@@ -358,6 +361,36 @@ func usageCompactHistory(label, facts, ratio, reset, word, age string, width int
 	}
 	status := strings.NewReplacer(usageExhausted, "spent", usageUnknown, "?").Replace(word)
 	return status + " resets " + reset + " " + compactAge
+}
+
+func usageCompactReadingHistory(label, facts, ratio, reset, word, age string, width int) string {
+	if !(word == usageExhausted && strings.HasPrefix(ratio, "100%/") || word == "high" && !strings.HasPrefix(ratio, "—")) {
+		return ""
+	}
+	resetLabel := "reset " + reset
+	if strings.Contains(facts, " used up ") {
+		resetLabel = "reset passed"
+	}
+	used, _, _ := strings.Cut(ratio, "/")
+	if word == usageExhausted {
+		word = "used"
+	}
+	return usageCompactQuotaHistory(label, used+" "+word, resetLabel, age, width)
+}
+
+func usageCompactQuotaHistory(label, reading, resetLabel, age string, width int) string {
+	prefix := reading + " " + resetLabel + " "
+	facts := prefix + age
+	if ansi.StringWidth(label+" "+facts) <= width {
+		return facts
+	}
+	age = strings.ReplaceAll(strings.ReplaceAll(age, "d ", "d"), "h ", "h")
+	age = strings.Replace(age, "stale ", "old ", 1)
+	facts = prefix + age
+	if ansi.StringWidth(label+" "+facts) <= width {
+		return facts
+	}
+	return prefix + strings.Replace(age, "old ", "old", 1)
 }
 
 func usageWindowHasReading(window usagefeed.Window) bool {

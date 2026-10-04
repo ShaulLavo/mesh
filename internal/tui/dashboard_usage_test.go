@@ -401,7 +401,7 @@ func TestDashboardUsageCompactFactsStayVisible(t *testing.T) {
 	model := usageFixture(t, "normal")
 	model.width, model.height = 80, 24
 	plain := ansi.Strip(model.render())
-	for _, want := range []string{"used/left", "100%/0%", "97%/3%", "38m exhausted", "2d6h high", "stale 18m"} {
+	for _, want := range []string{"used/left", "100% used", "97% high", "reset 38m", "reset 2d6h", "stale 18m"} {
 		if !strings.Contains(plain, want) {
 			t.Fatal("compact facts missing", want, plain)
 		}

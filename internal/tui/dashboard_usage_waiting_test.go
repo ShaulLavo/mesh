@@ -117,7 +117,7 @@ func TestDashboardUsageParkedWaiting(t *testing.T) {
 					if !test.absent && test.scopes != 1 && !strings.Contains(surface, age) {
 						t.Errorf("observation age missing: %s", surface)
 					}
-					if !test.absent && test.scopes != 1 && (!strings.Contains(surface, fmt.Sprintf("%.0f%%", test.used)) || !strings.Contains(surface, "resets 6d") || strings.Contains(surface, "no quota reading")) {
+					if !test.absent && test.scopes != 1 && (!strings.Contains(surface, fmt.Sprintf("%.0f%%", test.used)) || !strings.Contains(surface, "resets 6d") && !strings.Contains(surface, "reset 6d") || strings.Contains(surface, "no quota reading")) {
 						t.Errorf("observed quota or reset lost: %s", surface)
 					}
 					if test.scopes > 0 && strings.Contains(surface, "Model") {
