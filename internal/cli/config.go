@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/usagefeed"
@@ -26,6 +27,9 @@ const (
 
 // HostRecord is the local address book entry for one adopted Mesh host.
 type HostRecord struct {
+	MachineName   string `json:"-"`
+	NameRevision  uint64 `json:"-"`
+	targetName    string
 	Alias         string   `json:"alias"`
 	ID            string   `json:"id"`
 	MeshIdentity  string   `json:"meshIdentity"`
@@ -86,7 +90,25 @@ func ValidateHostAlias(value string) (string, error) {
 // LoadHosts reads and validates the local host address book.
 func LoadHosts() ([]HostRecord, error) {
 	config, err := loadHostConfig()
-	return config.Hosts, err
+	if err != nil {
+		return nil, err
+	}
+	path, err := ConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	for i := range config.Hosts {
+		host := &config.Hosts[i]
+		if _, err := identity.IdentityKey(host.ID); err != nil {
+			continue
+		}
+		claim, err := machinename.CachedClaim(filepath.Dir(path), host.ID)
+		if err != nil {
+			return nil, fmt.Errorf("load cached machine name: %w", err)
+		}
+		host.MachineName, host.NameRevision = claim.MachineName, claim.Revision
+	}
+	return config.Hosts, nil
 }
 
 func loadHostConfig() (hostConfig, error) {
@@ -269,6 +291,14 @@ type ArgumentTarget struct {
 
 // ResolveArgument classifies the root command's positional argument.
 func ResolveArgument(value string, hosts []HostRecord) (ArgumentTarget, error) {
+	for _, host := range hosts {
+		if value != "" && value == host.ID {
+			return ArgumentTarget{Host: &host}, nil
+		}
+	}
+	if target, matched, err := resolveDeclaredArgument(value, hosts); matched || err != nil {
+		return target, err
+	}
 	var matched *HostRecord
 	for i := range hosts {
 		if strings.EqualFold(hosts[i].Alias, value) {

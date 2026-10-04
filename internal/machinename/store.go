@@ -3,6 +3,7 @@ package machinename
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,7 +75,7 @@ func openStore(ctx context.Context, directory, id, initial string, syncDir func(
 		return nil, fmt.Errorf("create machine name directory: %w", err)
 	}
 	current = record{Version: 1, Claim: Claim{ID: id, MachineName: name, Revision: 1}}
-	if _, err := publishRecord(directory, current, syncDir); err != nil {
+	if _, err := publishRecord(directory, stateName, current, syncDir); err != nil {
 		return nil, err
 	}
 	return &Store{directory: directory, current: current, syncDirectory: syncDir}, nil
@@ -127,7 +128,7 @@ func (s *Store) Rename(ctx context.Context, target, value string, expected uint6
 	current.MachineName = name
 	current.Revision++
 	current.PreviousRevision = &previous
-	published, err := publishRecord(s.directory, current, s.syncDirectory)
+	published, err := publishRecord(s.directory, stateName, current, s.syncDirectory)
 	if err != nil {
 		if published {
 			s.pending = &current
@@ -161,6 +162,10 @@ func readRecord(path string) (record, error) {
 		return record{}, fmt.Errorf("open machine name state: %w", err)
 	}
 	defer file.Close() //nolint:errcheck // read-only state descriptor
+	return readRecordFile(file)
+}
+
+func readRecordFile(file *os.File) (record, error) {
 	info, err := file.Stat()
 	if err != nil {
 		return record{}, fmt.Errorf("inspect machine name state: %w", err)
@@ -187,16 +192,26 @@ func readRecord(path string) (record, error) {
 	return current, nil
 }
 
-func publishRecord(directory string, current record, syncDir func(string) error) (bool, error) {
+func publishRecord(directory, filename string, current record, syncDir func(string) error) (bool, error) {
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return false, fmt.Errorf("open machine name publication directory: %w", err)
+	}
+	defer root.Close() //nolint:errcheck // directory descriptor cleanup
+	return publishRecordRoot(root, filename, current, func() error { return syncDir(directory) })
+}
+
+func publishRecordRoot(root *os.Root, filename string, current record, syncDir func() error) (bool, error) {
 	contents, err := json.Marshal(current)
 	if err != nil {
 		return false, fmt.Errorf("encode machine name state: %w", err)
 	}
-	file, err := os.CreateTemp(directory, ".machine-name-*")
+	temporary := ".machine-name-" + rand.Text()
+	file, err := root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return false, fmt.Errorf("stage machine name state: %w", err)
 	}
-	defer os.Remove(file.Name()) //nolint:errcheck // cleanup after atomic publication
+	defer root.Remove(temporary) //nolint:errcheck // cleanup after atomic publication
 	defer file.Close()           //nolint:errcheck // closed before publication
 	if _, err := file.Write(append(contents, '\n')); err != nil {
 		return false, fmt.Errorf("write machine name state: %w", err)
@@ -207,10 +222,10 @@ func publishRecord(directory string, current record, syncDir func(string) error)
 	if err := file.Close(); err != nil {
 		return false, fmt.Errorf("close machine name state: %w", err)
 	}
-	if err := os.Rename(file.Name(), filepath.Join(directory, stateName)); err != nil {
+	if err := root.Rename(temporary, filename); err != nil {
 		return false, fmt.Errorf("publish machine name state: %w", err)
 	}
-	if err := syncDir(directory); err != nil {
+	if err := syncDir(); err != nil {
 		return true, err
 	}
 	return true, nil

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/hostmetrics"
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/transport"
@@ -37,7 +38,7 @@ func (w *StateWatcher) watch(ctx context.Context, host HostRecord, request proto
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("watch host %s: %w", host.Alias, err)
 	}
-	view := StateView{Sections: map[string]ObservedSection{}}
+	view := StateView{Sections: map[string]ObservedSection{}, Name: machinename.Claim{ID: host.ID, MachineName: host.MachineName, Revision: host.NameRevision}}
 	attempt := 0
 	for ctx.Err() == nil {
 		err := w.watchAttempt(ctx, host, request, &view, publish, &attempt)
@@ -113,8 +114,7 @@ func (w *StateWatcher) watchOnce(ctx context.Context, host HostRecord, request p
 		return err
 	}
 	view.Connection, view.Problem = StateReachable, ""
-	view.ServiceHealthSupported = info.ServiceHealthSupported
-	view.PrivateName = info.PrivateName
+	applyHostObservation(view, info)
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
@@ -156,12 +156,9 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 	if response.Type != protocol.TypeStateSnapshot {
 		return errors.New("state watch requires an initial snapshot")
 	}
-	if err := validateStateHost(host, response); err != nil {
-		return err
-	}
 	received := time.Now()
 	transit := received.Sub(started)
-	if err := view.Apply(response, received, transit); err != nil {
+	if err := applyVerifiedState(ctx, host, view, response, received, transit); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -182,7 +179,7 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 
 func stateConnectionError(err error) StateConnection {
 	var identityErr *hostIdentityError
-	if errors.As(err, &identityErr) {
+	if errors.As(err, &identityErr) || errors.Is(err, machinename.ErrReplay) || errors.Is(err, machinename.ErrEquivocation) {
 		return StateRefused
 	}
 	return StateUnreachable
@@ -201,11 +198,8 @@ func readStateStream(ctx context.Context, host HostRecord, conn transport.Conn, 
 		if err != nil {
 			return fmt.Errorf("read host state: %w", err)
 		}
-		if err := validateStateHost(host, response); err != nil {
-			return err
-		}
 		received := time.Now()
-		if err := view.Apply(response, received, transit); err != nil {
+		if err := applyVerifiedState(ctx, host, view, response, received, transit); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -221,6 +215,11 @@ func explicitUnknownControl(response protocol.Control, control string) bool {
 	return response.Type == protocol.TypeError && (response.ErrorCode == protocol.ErrorCodeUnknownControl || response.ErrorCode == "") && response.Message == fmt.Sprintf("daemon: unknown control %q", control)
 }
 func validateStateHost(host HostRecord, response protocol.Control) error {
+	if info := stateDeclaredHost(response); info != nil {
+		if err := validateHostInfo(host, *info); err != nil {
+			return err
+		}
+	}
 	var sessions []protocol.SessionInfo
 	if response.StateSnapshot != nil {
 		sessions = response.StateSnapshot.Sessions
@@ -295,8 +294,7 @@ func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, section
 		return err
 	}
 	view.Connection, view.Problem = StateReachable, ""
-	view.ServiceHealthSupported = info.ServiceHealthSupported
-	view.PrivateName = info.PrivateName
+	applyHostObservation(view, info)
 	defer func() { _ = conn.Close() }()
 	build, _ := json.Marshal(info.Build)
 	if section.build != string(build) {
@@ -328,7 +326,7 @@ func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, section
 		markSectionFailed(view, section.topic)
 		return nil
 	}
-	if err := applyPolledSection(host, section.topic, response, view, received, received.Sub(started)); err != nil {
+	if err := applyVerifiedPoll(readCtx, host, section.topic, response, view, received, received.Sub(started)); err != nil {
 		return err
 	}
 	if info.Build != nil {
@@ -355,6 +353,10 @@ func markSectionFailed(view *StateView, topic string) {
 }
 func applyPolledSection(host HostRecord, topic string, response protocol.Control, view *StateView, received time.Time, transit time.Duration) error {
 	switch topic {
+	case protocol.TopicHost:
+		if err := applyPolledHost(host, response, view); err != nil {
+			return err
+		}
 	case protocol.TopicSessions:
 		if response.Type != protocol.TypeListed {
 			return errors.New("unexpected polling session response")
@@ -420,6 +422,9 @@ func validatePolledSessions(host HostRecord, rows []protocol.SessionInfo) error 
 }
 
 func pollControl(topic string) string {
+	if topic == protocol.TopicHost {
+		return protocol.TypeHostInfo
+	}
 	if topic == protocol.TopicServices {
 		return protocol.TypeServiceList
 	}
@@ -449,3 +454,43 @@ func markUnsupportedSection(view *StateView, section *pollSection) {
 }
 
 func retryStateGap(err error, attempt int) bool { return attempt == 0 && errors.Is(err, ErrStateGap) }
+
+func applyHostObservation(view *StateView, info protocol.HostInfo) {
+	view.ServiceHealthSupported = info.ServiceHealthSupported
+	view.PrivateName = info.PrivateName
+	view.NameVerified = info.MachineName != ""
+	if view.NameVerified {
+		view.Name = declaredName(info)
+	}
+}
+
+func applyPolledHost(host HostRecord, response protocol.Control, view *StateView) error {
+	if response.Type != protocol.TypeHostInfoResult || response.Host == nil {
+		return errors.New("unexpected polling host response")
+	}
+	if err := validateHostInfo(host, *response.Host); err != nil {
+		return err
+	}
+	view.NameVerified = response.Host.MachineName != ""
+	if view.NameVerified {
+		view.Name = declaredName(*response.Host)
+	}
+	return nil
+}
+
+func applyVerifiedPoll(ctx context.Context, host HostRecord, topic string, response protocol.Control, view *StateView, received time.Time, transit time.Duration) error {
+	if err := validateNameEnvelope(response); err != nil {
+		return err
+	}
+	next := view.Clone()
+	if err := applyPolledSection(host, topic, response, &next, received, transit); err != nil {
+		return err
+	}
+	if topic == protocol.TopicHost && response.Type == protocol.TypeHostInfoResult && response.Host != nil {
+		if err := rememberHostName(ctx, host, *response.Host); err != nil {
+			return err
+		}
+	}
+	*view = next
+	return nil
+}
