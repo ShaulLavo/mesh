@@ -64,7 +64,9 @@ func (e *Engine) RecoverHelper(ctx context.Context, request HelperRecovery) (Hel
 		e.cfg.ClientOnly || request.Probe == nil || request.CheckIdle == nil {
 		return HelperRecoveryResult{}, errors.New("helper recovery requires daemon, helper-image, and pending-approval probes")
 	}
-	ctx, cancel := context.WithTimeout(ctx, e.cfg.HealthTimeout)
+	// Image verification and preparation use the bounded recovery envelope.
+	// Helper readiness gets its own health budget after preparation.
+	ctx, cancel := context.WithTimeout(ctx, e.cfg.HealthTimeout+15*time.Second)
 	defer cancel()
 	initial, err := ReadContext(ctx, e.cfg.StateDir)
 	if err != nil {
@@ -186,7 +188,9 @@ func (e *Engine) promoteRecoveryHelper(ctx context.Context, request HelperRecove
 }
 
 func (e *Engine) verifyRecoveredHelper(ctx context.Context, request HelperRecovery, initial Status, installed HelperInstallation) (HelperRecoveryResult, error) {
-	readyPID, err := awaitRecoveryHelper(ctx, request.Probe, installed)
+	readyCtx, cancel := context.WithTimeout(ctx, e.cfg.HealthTimeout)
+	readyPID, err := awaitRecoveryHelper(readyCtx, request.Probe, installed)
+	cancel()
 	if err != nil {
 		return HelperRecoveryResult{}, err
 	}
