@@ -33,7 +33,7 @@ import (
 // All state and endpoints belong to disposable fixtures.
 func TestRV164ReadyControl(t *testing.T) {
 	manifest := updateTestSupportedManifest()
-	target := update.Target{Host: update.Host{Alias: "local"}, State: update.Pending, Build: ptrRV164Build(updateTestBuild())}
+	target := update.Target{Host: update.Host{MachineName: "local"}, State: update.Pending, Build: ptrRV164Build(updateTestBuild())}
 	preview := prepareUpdateApproval(updatePreview{Release: manifest, Targets: []update.Target{target}})
 	if preview.ApprovalProblem != "" {
 		t.Fatal("proven transition rejected")
@@ -69,7 +69,7 @@ func TestRV164CauseRetained(t *testing.T) {
 			if build.UpdateProtocol == release.CurrentUpdateProtocol {
 				cause = manifest.Allows(build).Error()
 			}
-			target := update.Target{Host: update.Host{Alias: "local"}, State: update.Pending, Build: &build}
+			target := update.Target{Host: update.Host{MachineName: "local"}, State: update.Pending, Build: &build}
 			preview := prepareUpdateApproval(updatePreview{Release: manifest, Targets: []update.Target{target}})
 			var machine bytes.Buffer
 			if err := printUpdatePreview(&machine, preview, true, false); err != nil {
@@ -279,7 +279,7 @@ func TestUpdateFlowActualTransportCauses(t *testing.T) {
 				}
 				target.ID = wrong.ID
 			}
-			host := update.Host{ID: target.ID, Alias: "fixture", Endpoint: strings.Replace(server.URL, "http://", "ws://", 1)}
+			host := update.Host{ID: target.ID, MachineName: "fixture", Endpoint: strings.Replace(server.URL, "http://", "ws://", 1)}
 			targets, reviews := inspectUpdateTargets(context.Background(), update.Client{ID: actor.ID, Key: key}, []update.Host{host})
 			preview := prepareUpdateApproval(updatePreview{Release: updateTestManifest(), Targets: targets, Reviews: reviews})
 			if targets[0].State != update.Failed || targets[0].Build != nil || preview.ApprovalProblem == "" || dispatched.Load() != 0 {
@@ -364,7 +364,7 @@ func TestUpdateFlowMalformedAuthenticatedPeer(t *testing.T) {
 				_, _ = secure.Write([]byte{3})
 			}))
 			defer server.Close()
-			host := update.Host{ID: target.ID, Alias: "fixture", Endpoint: strings.Replace(server.URL, "http://", "ws://", 1)}
+			host := update.Host{ID: target.ID, MachineName: "fixture", Endpoint: strings.Replace(server.URL, "http://", "ws://", 1)}
 			targets, reviews := inspectUpdateTargets(context.Background(), update.Client{ID: actor.ID, Key: key}, []update.Host{host})
 			preview := prepareUpdateApproval(updatePreview{Release: updateTestManifest(), Targets: targets, Reviews: reviews})
 			cause := "invalid Mesh peer acceptance"

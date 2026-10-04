@@ -41,6 +41,8 @@ func dashboardUsageFleetFixture() dashboardModel {
 	model.palette = dashboardTheme("oled")
 	for index := range model.hosts {
 		host := &model.hosts[index]
+		host.Host.NameVerified = true
+		host.NameObservedAt = model.now
 		host.Host.Local = host.Host.ID == "pi"
 		host.LastReply, host.CPU.MeasuredAt, host.RAM.MeasuredAt = model.now, model.now.Add(-time.Second), model.now.Add(-time.Second)
 		host.Uptime.MeasuredAt = model.now
@@ -80,7 +82,7 @@ func dashboardUsageFleetFixture() dashboardModel {
 			host.Services.Total, host.Services.Ready, host.Services.Idle = 7, 6, 1
 		}
 		if host.Host.ID == "macbook" {
-			host.Host.Alias = "macbook-air"
+			host.Host.MachineName = "macbook-air"
 			host.Sessions.Rows = []cli.DashboardSession{{ID: "N8PF", State: "detached", Command: "/bin/zsh"}}
 			host.Sessions.Total = 1
 		}

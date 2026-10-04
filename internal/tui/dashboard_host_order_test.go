@@ -15,8 +15,8 @@ import (
 func TestDashboardHostsOrderedByRAM(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	input := cli.DashboardInput{Wall: true}
-	for _, alias := range []string{"vps", "unknown-z", "macbook-air", "pi", "unknown-a", "pc"} {
-		input.Hosts = append(input.Hosts, cli.DashboardHost{ID: alias, Alias: alias})
+	for _, machineName := range []string{"vps", "unknown-z", "macbook-air", "pi", "unknown-a", "pc"} {
+		input.Hosts = append(input.Hosts, cli.DashboardHost{ID: machineName, MachineName: machineName})
 	}
 	model := newDashboard(input, now)
 	t.Run("before metrics", func(t *testing.T) {
@@ -27,17 +27,17 @@ func TestDashboardHostsOrderedByRAM(t *testing.T) {
 		model.receive(cli.DashboardHostView{Host: host, Connection: cli.StateReachable, LastReply: now,
 			RAM:      cli.DashboardMeasurement[cli.DashboardMemory]{State: statusAvailable, Value: cli.DashboardMemory{TotalBytes: total, AvailableBytes: total / 2}, MeasuredAt: now},
 			Sessions: cli.DashboardCatalog[cli.DashboardSession]{Total: 1, ObservedAt: now, Rows: []cli.DashboardSession{{ID: "12345", Command: "bash", State: dashboardRunning}}},
-			Services: cli.DashboardCatalog[cli.DashboardService]{Total: 1, ObservedAt: now, Rows: []cli.DashboardService{{Name: host.Alias, State: "ready"}}},
+			Services: cli.DashboardCatalog[cli.DashboardService]{Total: 1, ObservedAt: now, Rows: []cli.DashboardService{{Name: host.MachineName, State: "ready"}}},
 		})
 	}
 	want := []string{"pc", "macbook-air", "pi", "vps", "unknown-a", "unknown-z"}
 	assertDashboardHostOrder(t, model, want)
 	for _, services := range []bool{false, true} {
 		rows, _ := model.summaryRows(services, 120)
-		for index, alias := range want {
-			prefix := alias
+		for index, machineName := range want {
+			prefix := machineName
 			if services {
-				prefix = strings.TrimSpace(dashboardFit(alias, 10))
+				prefix = strings.TrimSpace(dashboardFit(machineName, 10))
 			}
 			if !strings.HasPrefix(ansi.Strip(rows[index].text), prefix) {
 				t.Fatalf("services=%v row %d did not follow host order: %q", services, index, rows[index].text)
@@ -65,7 +65,7 @@ func assertDashboardHostOrder(t *testing.T, model dashboardModel, want []string)
 	t.Helper()
 	var got []string
 	for _, host := range model.hosts {
-		got = append(got, host.Host.Alias)
+		got = append(got, host.Host.MachineName)
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("host order = %v, want %v", got, want)
@@ -101,11 +101,11 @@ func dashboardHostColumnFixture() dashboardModel {
 	model := dashboardPerformanceFixture()
 	for index := range model.hosts {
 		host := &model.hosts[index]
-		if host.Host.Alias == "shauls-macbook-air" {
-			host.Host.Alias = "macbook-air"
+		if host.Host.MachineName == "shauls-macbook-air" {
+			host.Host.MachineName = "macbook-air"
 			host.Sessions.Rows[0].ID = "12345"
 		}
-		if host.Host.Alias == "vps" {
+		if host.Host.MachineName == "vps" {
 			host.RAM.Value.TotalBytes = dashboardFixtureHost(model, "pi").RAM.Value.TotalBytes
 		}
 	}
@@ -126,9 +126,9 @@ func BenchmarkDashboardHostOrderRender(b *testing.B) {
 func TestDashboardSessionHostWidthCapsAndCachedAlignment(t *testing.T) {
 	model := dashboardHostColumnFixture()
 	for _, test := range []struct {
-		alias string
-		width int
-		want  int
+		machineName string
+		width       int
+		want        int
 	}{
 		{"macbook-air", 91, 11},
 		{"macbook-air", 76, 11},
@@ -136,12 +136,12 @@ func TestDashboardSessionHostWidthCapsAndCachedAlignment(t *testing.T) {
 		{"a-very-long-machine-name", 76, 19},
 		{"日本語ホスト", 91, 12},
 	} {
-		model.hosts[1].Host.Alias = test.alias
+		model.hosts[1].Host.MachineName = test.machineName
 		if got := model.sessionHostWidth(test.width); got != test.want {
-			t.Errorf("alias %q at width %d: HOST width %d, want %d", test.alias, test.width, got, test.want)
+			t.Errorf("machineName %q at width %d: HOST width %d, want %d", test.machineName, test.width, got, test.want)
 		}
 	}
-	model.hosts[1].Host.Alias = "macbook-air"
+	model.hosts[1].Host.MachineName = "macbook-air"
 	model.hosts[1].Connection = cli.StateUnreachable
 	panel := ansi.Strip(strings.Join(model.sessionSummary(95, 25), "\n"))
 	if !strings.Contains(panel, "cached · macbook-air") || !strings.Contains(panel, "macbook-air 12345") {
@@ -155,7 +155,7 @@ func TestDashboardPerformanceFixtureUsesMeasuredOrder(t *testing.T) {
 	assertDashboardHostOrder(t, model, []string{"pc", "shauls-macbook-air", "vps", "pi"})
 	for _, host := range model.hosts {
 		if total := model.ramTotals[host.Host.ID]; total != host.RAM.Value.TotalBytes {
-			t.Errorf("fixture %s remembered total %d differs from measured %d", host.Host.Alias, total, host.RAM.Value.TotalBytes)
+			t.Errorf("fixture %s remembered total %d differs from measured %d", host.Host.MachineName, total, host.RAM.Value.TotalBytes)
 		}
 	}
 }

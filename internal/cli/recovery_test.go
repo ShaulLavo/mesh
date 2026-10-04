@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"github.com/shaul/mesh/internal/machinename"
 	"io"
 	"path/filepath"
 	"strings"
@@ -82,8 +83,8 @@ func TestSSHRecoveryReportsExactRemoteTarget(t *testing.T) {
 
 func TestRecoveryCommandsReserveAliases(t *testing.T) {
 	for _, name := range []string{"recover", "recovery-command", "shell-init", "shell-update"} {
-		if _, err := ValidateHostAlias(name); err == nil {
-			t.Fatalf("accepted command %s as a host alias", name)
+		if _, err := machinename.Normalize(name); err == nil {
+			t.Fatalf("accepted command %s as a machine name or exact host ID", name)
 		}
 	}
 }
@@ -93,7 +94,7 @@ func TestLegacyDefaultRecoveryDoesNotRunSavedCommand(t *testing.T) {
 	host.sessionState = worker.StateInterrupted
 	_, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial,
 		Picker: func(context.Context, PickerInput) (PickerSelection, error) {
-			return PickerSelection{HostAlias: "pc", SessionID: "7K3D", Relaunch: true}, nil
+			return PickerSelection{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D", Relaunch: true}, nil
 		},
 	}, "--raw")
 	if err == nil || host.eventCount(protocol.TypeCreate) != 0 {

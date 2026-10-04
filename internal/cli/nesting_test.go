@@ -270,7 +270,7 @@ func TestNestingRegistrationHoldsConnectionAndRejectsLegacyWorkers(t *testing.T)
 }
 
 func TestAttachmentTargetDoesNotInferRemoteHostFromEnvironment(t *testing.T) {
-	t.Setenv(worker.MeshHostIDVariable, "outer-host")
+	t.Setenv(worker.MeshHostIDVariable, "MToonnAmc5k7lU1H_66-UANQVx_NfncGcpmFsRdRNt0")
 	if _, err := attachmentTargetIdentity(AttachOptions{SessionID: "BBBB"}); err == nil {
 		t.Fatal("remote attachment inherited the local host identity")
 	}

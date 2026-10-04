@@ -12,6 +12,7 @@ import (
 
 	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/hostmetrics"
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
 	meshserve "github.com/shaul/mesh/internal/serve"
@@ -229,6 +230,10 @@ func clientErrorCode(err error) string {
 		return protocol.ErrorCodeRecoveryUncertain
 	}
 	switch {
+	case errors.Is(err, machinename.ErrRevision):
+		return "host.name_revision"
+	case errors.Is(err, machinename.ErrTarget):
+		return "host.name_target"
 	case errors.Is(err, edge.ErrRouteCollision):
 		return protocol.ErrorCodeEdgeRouteCollision
 	case errors.Is(err, edge.ErrStaleSequence):

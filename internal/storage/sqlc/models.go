@@ -58,7 +58,6 @@ type EdgeSnapshot struct {
 
 type Host struct {
 	ID            string
-	Alias         *string
 	MeshIdentity  string
 	TailscaleName *string
 	LastSeenAt    int64

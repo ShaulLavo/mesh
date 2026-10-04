@@ -1,18 +1,22 @@
 package cli
 
-func withoutThisHost(stateDir string, hosts []HostRecord) ([]HostRecord, string) {
-	self, err := existingLocalIdentity(stateDir)
+import "context"
+
+func withoutThisHost(ctx context.Context, stateDir string, hosts []HostRecord) ([]HostRecord, string) {
+	self, err := localNameRecord(ctx, stateDir)
 	if err != nil || self.ID == "" {
-		return hosts, localHostAlias
+		return hosts, "Local machine"
 	}
-	alias := localHostAlias
+	return withoutOwnerHost(hosts, self), HostLabel(self)
+}
+
+func withoutOwnerHost(hosts []HostRecord, self HostRecord) []HostRecord {
 	remote := make([]HostRecord, 0, len(hosts))
 	for _, host := range hosts {
 		if host.ID == self.ID && host.MeshIdentity == self.ID {
-			alias = host.Alias
 			continue
 		}
 		remote = append(remote, host)
 	}
-	return remote, alias
+	return remote
 }

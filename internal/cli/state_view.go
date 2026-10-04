@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/shaul/mesh/internal/hostmetrics"
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
 	"maps"
@@ -35,6 +36,9 @@ const (
 )
 
 type StateView struct {
+	Name machinename.Claim
+	// NameVerified records owner-declaration provenance; connection and section ages determine freshness.
+	NameVerified           bool
 	PrivateName            string
 	Build                  release.Build
 	Connection             StateConnection
@@ -143,6 +147,12 @@ func MetricStale[T any](metric hostmetrics.Reading[T], received, lastReply, now 
 func (v *StateView) applyEvent(event protocol.StateEvent, received time.Time, transit time.Duration) error {
 	p := event.Payload
 	switch event.Kind {
+	case "host.changed":
+		if p.Host == nil {
+			return errors.New("missing host event payload")
+		}
+		v.Name = declaredName(*p.Host)
+		v.NameVerified = true
 	case "session.added", "session.changed":
 		if p.Session == nil {
 			return errors.New("missing session event payload")
@@ -201,7 +211,11 @@ func (v *StateView) applySnapshot(snapshot *protocol.StateSnapshot, received tim
 	}
 	s := snapshot
 	metrics, metricsReceived := v.Metrics, v.MetricsReceivedAt
-	*v = StateView{PrivateName: v.PrivateName, Build: v.Build, Connection: v.Connection, ServiceHealthSupported: v.ServiceHealthSupported, MetricsUnsupported: v.MetricsUnsupported, Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
+	*v = StateView{Name: v.Name, NameVerified: v.NameVerified, PrivateName: v.PrivateName, Build: v.Build, Connection: v.Connection, ServiceHealthSupported: v.ServiceHealthSupported, MetricsUnsupported: v.MetricsUnsupported, Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
+	if s.Host != nil {
+		v.Name = declaredName(*s.Host)
+		v.NameVerified = true
+	}
 	v.applyMemory(s.Memory, received, transit)
 	v.applyCurrent(s.Current, received, transit)
 	v.applyMetrics(s.Metrics, received, transit)

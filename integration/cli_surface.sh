@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # The product CLI keeps offline hosts useful, and names that look like session
-# IDs never enter the host address book.
+# IDs never become destination machine names.
 set -uo pipefail
 
 if [ -z "${MESH:-}" ]; then
@@ -42,9 +42,8 @@ import time
 config_path, database_path = sys.argv[1:]
 os.makedirs(os.path.dirname(config_path), mode=0o700, exist_ok=True)
 host = {
-    "alias": "offline",
-    "id": "offline-host-id",
-    "meshIdentity": "offline-host-key",
+    "id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "meshIdentity": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     "tailscaleName": "offline.example.ts.net",
     "addresses": ["100.64.0.99"],
     "endpoint": "ws://127.0.0.1:1/mesh",
@@ -57,8 +56,8 @@ os.chmod(config_path, 0o600)
 created_at = int(time.time() * 1000) - 60_000
 with sqlite3.connect(database_path) as database:
     database.execute(
-        "INSERT INTO hosts (id, alias, mesh_identity, tailscale_name, last_seen_at) VALUES (?, ?, ?, ?, ?)",
-        (host["id"], host["alias"], host["meshIdentity"], host["tailscaleName"], created_at),
+        "INSERT INTO hosts (id, mesh_identity, tailscale_name, last_seen_at) VALUES (?, ?, ?, ?)",
+        (host["id"], host["meshIdentity"], host["tailscaleName"], created_at),
     )
     database.execute(
         "INSERT INTO sessions (id, host_id, command, cwd, state, created_at, last_output_sequence) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -68,15 +67,15 @@ PY
 
 timeout --kill-after=1s 2s "$MESH" ls --timeout 100ms >"$T/list.out" 2>"$T/list.err" ||
   fail "cross-host list did not return promptly: $(cat "$T/list.err")"
-grep -q 'offline.*7K3D.*running.*stale' "$T/list.out" ||
+grep -q 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.*7K3D.*running.*stale' "$T/list.out" ||
   fail "cached session was not marked stale: $(cat "$T/list.out")"
-grep -q 'offline: unavailable' "$T/list.err" ||
+grep -q 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.*unavailable' "$T/list.err" ||
   fail "offline host diagnostic is missing: $(cat "$T/list.err")"
 
-if "$MESH" add --alias 7K3D user@pc >"$T/add.out" 2>"$T/add.err"; then
-  fail "mesh add accepted a session-shaped host alias"
+if "$MESH" rename AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA 7K3D >"$T/add.out" 2>"$T/add.err"; then
+  fail "mesh rename accepted a session-shaped machine name"
 fi
-grep -qi 'session ID' "$T/add.err" || fail "alias rejection did not explain the collision: $(cat "$T/add.err")"
+grep -qi 'session ID' "$T/add.err" || fail "name rejection did not explain the collision: $(cat "$T/add.err")"
 
 "$MESH" completion bash >"$T/completion"
 grep -q '__mesh' "$T/completion" || fail "Bash completion was not generated"

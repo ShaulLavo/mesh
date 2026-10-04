@@ -54,7 +54,7 @@ func TestDashboardHistoryCloseResetBoundary(t *testing.T) {
 
 func TestDashboardPanelUsesFourCorners(t *testing.T) {
 	model := newDashboard(cli.DashboardInput{}, pickerTestNow)
-	host := cli.DashboardHostView{Host: cli.DashboardHost{Alias: "pc"}, Connection: cli.StateReachable}
+	host := cli.DashboardHostView{Host: cli.DashboardHost{MachineName: "pc"}, Connection: cli.StateReachable}
 	for _, width := range []int{80, 160} {
 		panel := model.card(host, width)
 		for i := range panel {
@@ -77,13 +77,13 @@ func TestDashboardPanelUsesFourCorners(t *testing.T) {
 
 func TestDashboardLocalTitleNamesHostOnce(t *testing.T) {
 	model := newDashboard(cli.DashboardInput{}, pickerTestNow)
-	for _, alias := range []string{"pi", "adopted-pc"} {
-		host := cli.DashboardHostView{Host: cli.DashboardHost{Alias: alias, Local: true}, Connection: cli.StateReachable}
+	for _, machineName := range []string{"pi", "adopted-pc"} {
+		host := cli.DashboardHostView{Host: cli.DashboardHost{MachineName: machineName, Local: true}, Connection: cli.StateReachable}
 		for _, width := range []int{80, 160} {
 			model.width, model.height = width, 48
 			model.hosts = []cli.DashboardHostView{host}
 			view := model.render()
-			if strings.Count(ansi.Strip(model.hostTitle(host)), alias) != 1 || strings.Contains(ansi.Strip(model.compactHost(host)[0]), "this host") {
+			if strings.Count(ansi.Strip(model.hostTitle(host)), machineName) != 1 || strings.Contains(ansi.Strip(model.compactHost(host)[0]), "this host") {
 				t.Fatalf("duplicated local name at%d: %s", width, view)
 			}
 		}

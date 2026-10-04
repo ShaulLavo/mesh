@@ -53,7 +53,7 @@ func (c *serviceCatalogTestCache) SaveServices(ctx context.Context, host HostRec
 }
 
 func TestCollectServiceCatalogUsesCachedRowsAndMarksTimedOutHost(t *testing.T) {
-	host := HostRecord{Alias: "pc", ID: "pc-id"}
+	host := HostRecord{MachineName: "pc", ID: "pc-id"}
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	cache := &serviceCatalogTestCache{rows: map[string][]storage.CachedService{
 		host.ID: {{
@@ -76,13 +76,13 @@ func TestCollectServiceCatalogUsesCachedRowsAndMarksTimedOutHost(t *testing.T) {
 	if len(rows) != 1 || !rows[0].Stale || rows[0].Live || rows[0].Health() != "offline/stale" {
 		t.Fatalf("cached rows = %#v", rows)
 	}
-	if !errors.Is(diagnostics[host.Alias], context.DeadlineExceeded) {
+	if !errors.Is(diagnostics[host.ID], context.DeadlineExceeded) {
 		t.Fatalf("diagnostics = %#v", diagnostics)
 	}
 }
 
 func TestCollectServiceCatalogSuccessfulEmptyListClearsCacheWithoutFalseTimeout(t *testing.T) {
-	host := HostRecord{Alias: "pc", ID: "pc-id"}
+	host := HostRecord{MachineName: "pc", ID: "pc-id"}
 	cache := &serviceCatalogTestCache{rows: map[string][]storage.CachedService{
 		host.ID: {{HostID: hostID(host), Service: meshserve.Service{Name: "old", Kind: meshserve.Proxy, Target: "3000"}, ObservedAt: time.Now().UTC()}},
 	}}
@@ -105,7 +105,7 @@ func TestCollectServiceCatalogSuccessfulEmptyListClearsCacheWithoutFalseTimeout(
 }
 
 func TestCollectServiceCatalogBoundsCacheLoadAndTreatsSaveFailureAsWarning(t *testing.T) {
-	host := HostRecord{Alias: "pc", ID: "pc-id"}
+	host := HostRecord{MachineName: "pc", ID: "pc-id"}
 	blocking := &serviceCatalogTestCache{load: func(ctx context.Context) error {
 		<-ctx.Done()
 		return ctx.Err()
@@ -128,14 +128,14 @@ func TestCollectServiceCatalogBoundsCacheLoadAndTreatsSaveFailureAsWarning(t *te
 		t.Fatalf("live rows = %#v, error %v", rows, err)
 	}
 	var warning catalogCacheWarning
-	if !errors.As(diagnostics[host.Alias], &warning) || len(unavailableServiceAliases(diagnostics)) != 0 {
+	if !errors.As(diagnostics[host.ID], &warning) || len(unavailableServiceAliases(diagnostics)) != 0 {
 		t.Fatalf("cache diagnostic = %#v", diagnostics)
 	}
 }
 
 func TestCollectServiceCatalogRejectsMergedRowsAboveGlobalBound(t *testing.T) {
-	full := HostRecord{Alias: "full", ID: "full-id"}
-	extra := HostRecord{Alias: "extra", ID: "extra-id"}
+	full := HostRecord{MachineName: "full", ID: "full-id"}
+	extra := HostRecord{MachineName: "extra", ID: "extra-id"}
 	rows := make([]storage.CachedService, storage.MaximumCachedServices)
 	for index := range rows {
 		rows[index] = storage.CachedService{
@@ -157,7 +157,7 @@ func TestCollectServiceCatalogRejectsMergedRowsAboveGlobalBound(t *testing.T) {
 }
 
 func TestCollectServiceCatalogMarksPublicHealthUnknownWithoutEdgeStatus(t *testing.T) {
-	host := HostRecord{Alias: "pc", ID: "pc-id"}
+	host := HostRecord{MachineName: "pc", ID: "pc-id"}
 	cache := &serviceCatalogTestCache{}
 	rows, diagnostics, err := CollectServiceCatalog(context.Background(), []HostRecord{host}, time.Second,
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {

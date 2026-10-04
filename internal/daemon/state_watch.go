@@ -35,6 +35,7 @@ type stateSubscriber struct {
 	seq     uint64
 }
 type stateBroker struct {
+	host         *protocol.HostInfo
 	projection   chan struct{}
 	dirty        map[storage.SessionID]bool
 	revisions    map[storage.SessionID]uint64
@@ -271,6 +272,10 @@ func (b *stateBroker) take(sub *stateSubscriber) []protocol.Control {
 func (b *stateBroker) snapshotLocked(sub *stateSubscriber) *protocol.StateSnapshot {
 	sub.seq++
 	snapshot := &protocol.StateSnapshot{Seq: sub.seq, Current: b.currentLocked(sub).Sections}
+	if sub.topics[protocol.TopicHost] && b.host != nil {
+		host := cloneState(*b.host)
+		snapshot.Host = &host
+	}
 	if sub.topics[protocol.TopicSessions] {
 		snapshot.Memory = cloneState(b.memory)
 		for id, reading := range snapshot.Memory {
@@ -303,7 +308,7 @@ func (b *stateBroker) current(sub *stateSubscriber) *protocol.StateCurrent {
 }
 func (b *stateBroker) currentLocked(sub *stateSubscriber) *protocol.StateCurrent {
 	sections := map[string]protocol.Observation{}
-	for _, topic := range []string{protocol.TopicSessions, protocol.TopicServices} {
+	for _, topic := range []string{protocol.TopicHost, protocol.TopicSessions, protocol.TopicServices} {
 		if !sub.topics[topic] {
 			continue
 		}

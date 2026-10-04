@@ -81,7 +81,7 @@ func (a *application) noteTerminalBinding(cmd *cobra.Command, hosts []HostRecord
 	where := binding.SessionID
 	for _, host := range hosts {
 		if binding.HostID != "" && host.ID == binding.HostID {
-			where = binding.SessionID + " on " + host.Alias
+			where = binding.SessionID + " on " + HostLabel(host)
 			break
 		}
 	}

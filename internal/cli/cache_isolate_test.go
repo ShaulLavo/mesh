@@ -8,7 +8,7 @@ import (
 
 func TestCachedServicePreservesIsolationAcrossReopen(t *testing.T) {
 	t.Setenv("MESH_STATE_DIR", t.TempDir())
-	host := HostRecord{ID: "host-1", Alias: "pc", MeshIdentity: "identity-1"}
+	host := HostRecord{ID: "host-1", MachineName: "pc", MeshIdentity: "identity-1"}
 	for _, isolated := range []bool{true, false} {
 		checkCachedServiceIsolation(t, host, isolated)
 	}

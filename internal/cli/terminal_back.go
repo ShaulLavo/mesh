@@ -141,7 +141,7 @@ func describeBoundSession(binding TerminalBinding) string {
 	if err == nil {
 		for _, host := range hosts {
 			if host.ID == binding.HostID {
-				return "session " + binding.SessionID + " on " + host.Alias
+				return "session " + binding.SessionID + " on " + HostLabel(host)
 			}
 		}
 	}

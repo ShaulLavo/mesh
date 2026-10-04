@@ -23,7 +23,7 @@ func firstCoordinatorFleet(t *testing.T) (string, update.Host, update.Fleet, str
 	if err != nil {
 		t.Fatal(err)
 	}
-	fleet := scopedUpdateFleet("remote only", []update.Host{{ID: remote.ID, Alias: "laptop", Endpoint: "ws://laptop.invalid/mesh"}})
+	fleet := scopedUpdateFleet("remote only", []update.Host{{ID: remote.ID, MachineName: "laptop", Endpoint: "ws://laptop.invalid/mesh"}})
 	file := filepath.Join(t.TempDir(), "fleet.json")
 	saveUpdateTestFleet(t, file, fleet)
 	return stateDir, local, fleet, file
@@ -33,7 +33,7 @@ func legacyCoordinatorInfo(local update.Host, host update.Host, output any) erro
 	if host.ID == local.ID {
 		return &update.RemoteError{Problem: `daemon: unknown control "update.control"`}
 	}
-	*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
+	*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 	return nil
 }
 

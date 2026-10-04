@@ -19,7 +19,12 @@ func (m dashboardModel) privacyDisplay() dashboardModel {
 	m.hosts = append([]cli.DashboardHostView(nil), m.hosts...)
 	for i := range m.hosts {
 		h := &m.hosts[i]
-		h.Host.Alias = mask.Value("host", h.Host.Alias)
+		if h.Host.MachineName == "" {
+			h.Host.MachineName = mask.Value("host-id", h.Host.ID)
+		} else {
+			h.Host.MachineName = mask.Value("host", h.Host.MachineName)
+		}
+		h.Host.NameSuffix = mask.Value("host-id", h.Host.NameSuffix)
 		h.Problem = mask.Value("error", h.Problem)
 		h.Sessions.Rows = append([]cli.DashboardSession(nil), h.Sessions.Rows...)
 		for j := range h.Sessions.Rows {

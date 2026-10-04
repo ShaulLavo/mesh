@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"bytes"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -176,5 +178,32 @@ func TestNoIdentityHintOnlyWhenNoKeyWasOffered(t *testing.T) {
 	refused := errors.New("ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain")
 	if hint := noIdentityHint(refused); hint != "" {
 		t.Fatalf("hint when a key was offered = %q, want none", hint)
+	}
+}
+
+func TestResolvedSSHProfilePinIsCheckedBeforeConnection(t *testing.T) {
+	pin := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+	other := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{2}, 32))
+	resolver := func() sshConfigResolver {
+		return resolverFrom(map[string]string{"work/HostName": "100.64.0.7", "work/User": "fixture"})
+	}
+	opts := Options{Target: "work", StateDir: t.TempDir(), ResolveIdentity: func(target string) (string, error) {
+		if target != "100.64.0.7" {
+			t.Fatalf("pin lookup preceded external SSH profile resolution: %s", target)
+		}
+		return pin, nil
+	}}
+	normalized, err := normalizeOptions(t.Context(), opts, resolver)
+	if err != nil || normalized.expectedIdentity != pin || normalized.target.host != "100.64.0.7" {
+		t.Fatalf("resolved pin: %+v, %v", normalized, err)
+	}
+	opts.ExpectedIdentity = other
+	if _, err := normalizeOptions(t.Context(), opts, resolver); err == nil {
+		t.Fatal("SSH profile redirected a previously pinned destination")
+	}
+	opts.ExpectedIdentity = ""
+	opts.ResolveIdentity = func(string) (string, error) { return "", errors.New("ambiguous address") }
+	if _, err := normalizeOptions(t.Context(), opts, resolver); err == nil {
+		t.Fatal("ambiguous resolved target admitted bootstrap")
 	}
 }

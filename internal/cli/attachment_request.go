@@ -64,7 +64,7 @@ func (a *application) prepareAttachment(cmd *cobra.Command, request attachReques
 		return options, display, nil
 	}
 	if resolved.remote.State != worker.StateRunning && resolved.remote.State != worker.StateDetached {
-		return AttachOptions{}, "", stoppedSessionError(resolved.remote.ID, resolved.host.Alias, resolved.remote.State)
+		return AttachOptions{}, "", stoppedSessionError(resolved.remote.ID, HostLabel(*resolved.host), resolved.remote.State)
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), wakeIntentTimeout)
 	conn, err := openVerifiedHost(ctx, *resolved.host, a.intentDialer(cmd.ErrOrStderr()))
@@ -75,7 +75,7 @@ func (a *application) prepareAttachment(cmd *cobra.Command, request attachReques
 	options.Conn = conn
 	options.HostID = resolved.host.ID
 	options.SessionID = resolved.remote.ID
-	display = resolved.remote.ID + " on " + resolved.host.Alias
+	display = resolved.remote.ID + " on " + HostLabel(*resolved.host)
 	return options, display, nil
 }
 

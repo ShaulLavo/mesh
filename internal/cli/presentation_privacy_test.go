@@ -18,7 +18,7 @@ import (
 
 func TestPrivateServiceTableMasksOnlyPresentation(t *testing.T) {
 	mask := privacy.New()
-	rows := []ServiceCatalogRow{{Host: HostRecord{Alias: "private-machine", Endpoint: "wss://machine.example.ts.net/socket"}, Live: true,
+	rows := []ServiceCatalogRow{{Host: HostRecord{MachineName: "private-machine", Endpoint: "wss://machine.example.ts.net/socket"}, Live: true,
 		Service: protocol.ServiceInfo{Name: "private-route", DisplayName: "Secret Site", Kind: "files", Target: "/home/owner/private-project", Healthy: true}}}
 	original := rows[0]
 	var output bytes.Buffer
@@ -65,7 +65,7 @@ func TestPrivateServicePortsAndDiagnostics(t *testing.T) {
 	if !strings.Contains(output.String(), "private-machine") || strings.Contains(output.String(), "secret-token") || !strings.Contains(output.String(), "unavailable") {
 		t.Fatalf("diagnostics = %s", output.String())
 	}
-	rows := []ServiceCatalogRow{{Host: HostRecord{ID: "id", Alias: "private-machine"}, Service: protocol.ServiceInfo{Name: "private-route", PublicName: "secret.example"}}, {Host: HostRecord{ID: "id", Alias: "private-machine"}, Service: protocol.ServiceInfo{Name: "private-route/admin"}}}
+	rows := []ServiceCatalogRow{{Host: HostRecord{ID: "id", MachineName: "private-machine"}, Service: protocol.ServiceInfo{Name: "private-route", PublicName: "secret.example"}}, {Host: HostRecord{ID: "id", MachineName: "private-machine"}, Service: protocol.ServiceInfo{Name: "private-route/admin"}}}
 	output.Reset()
 	if err := writeServiceShadowWarnings(&output, rows, mask); err != nil {
 		t.Fatal(err)
@@ -278,7 +278,7 @@ func TestPrivateTunnelClaimAndReleasePreserveSignedNames(t *testing.T) {
 func TestPrivatePublicConfirmationRetainsUsefulTarget(t *testing.T) {
 	mask := privacy.New()
 	confirmation := PublicConfirmation{
-		Host:      HostRecord{Alias: "recording-owner@pc"},
+		Host:      HostRecord{MachineName: "recording-owner@pc"},
 		Service:   protocol.ServiceInfo{Kind: "files", Target: "/home/private-person/site"},
 		FileCount: 3,
 		URL:       "https://pc.example.ts.net/site/page?view=owner",
@@ -297,7 +297,7 @@ func TestPrivatePublicConfirmationRetainsUsefulTarget(t *testing.T) {
 			t.Fatalf("confirmation lost %q: %s", useful, output.String())
 		}
 	}
-	if confirmation.Service.Target != "/home/private-person/site" || confirmation.Host.Alias != "recording-owner@pc" {
+	if confirmation.Service.Target != "/home/private-person/site" || confirmation.Host.MachineName != "recording-owner@pc" {
 		t.Fatal("confirmation mutated original facts")
 	}
 }

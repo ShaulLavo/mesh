@@ -48,7 +48,6 @@ const (
 type AddRequest struct {
 	AllowRoot            bool
 	Target               string
-	Alias                string
 	TailscaleAuthKeyFile string
 	// IdentityFile names the key to adopt with, for a host the ssh config
 	// says nothing about.
@@ -59,8 +58,9 @@ type AddRequest struct {
 // BootstrapResult separates the durable address-book entry from metadata about
 // the bootstrap operation that produced it.
 type BootstrapResult struct {
-	Host              HostRecord
-	AlreadyConfigured bool
+	AuthenticatedIdentity string
+	Host                  HostRecord
+	AlreadyConfigured     bool
 }
 
 // BootstrapFunc installs a host and returns its verified address-book record.
@@ -99,9 +99,9 @@ type PickerInput struct {
 	// picker's output. Each available snapshot was captured before the picker
 	// wrote its first frame.
 	ContainingSessions []PickerContainingSession
-	// OpenHostAlias keeps the session browser on this host after waking it and
-	// refreshing the catalog. An empty alias opens the host list.
-	OpenHostAlias string
+	// OpenHostID keeps the session browser on this host after waking it and
+	// refreshing the catalog. An empty host ID opens the host list.
+	OpenHostID string
 }
 
 // PickerContainingSession pairs one exact mirrored terminal with the last
@@ -141,7 +141,7 @@ const (
 // PickerSessionActionRequest names one session mutation without exposing host
 // connection details to the picker.
 type PickerSessionActionRequest struct {
-	HostAlias string
+	HostID    string
 	SessionID string
 	Action    PickerSessionAction
 }
@@ -150,10 +150,10 @@ type PickerSessionActionRequest struct {
 type PickerSessionActionFunc func(context.Context, PickerSessionActionRequest) error
 
 // PickerInspectRequest identifies one highlighted session and bounds the
-// preview it may return. The host alias is resolved against the same catalog
+// preview it may return. The machine name or exact host ID is resolved against the same catalog
 // that the picker displays, so the UI never handles connection details.
 type PickerInspectRequest struct {
-	HostAlias   string
+	HostID      string
 	SessionID   string
 	PreviewCols int
 	PreviewRows int
@@ -189,8 +189,9 @@ type PickerInspectFunc func(context.Context, PickerInspectRequest) (SessionInspe
 
 // PickerSelection tells the CLI which normal action to run after T09 exits.
 type PickerSelection struct {
+	Local          bool
 	ReviewUpdate   bool
-	HostAlias      string
+	HostID         string
 	SessionID      string
 	New            bool
 	Wake           bool
@@ -206,9 +207,11 @@ type WindowInput struct {
 	Sessions     []protocol.SessionInfo
 	Inspect      PickerInspectFunc
 	Action       PickerSessionActionFunc
-	HostAlias    string
+	MachineName  string
+	NameRevision uint64
+	NameVerified bool
 	HostID       string
-	HostAliases  map[string]string
+	HostNames    map[string]string
 }
 
 type WindowSelection struct {
@@ -412,7 +415,7 @@ func (a *application) runRoot(cmd *cobra.Command, args []string, resume bool, de
 	}
 	if len(args) == 0 {
 		if resume {
-			return errors.New("--resume needs a host alias")
+			return errors.New("--resume needs a machine name or exact host ID")
 		}
 		a.noteTerminalBinding(cmd, hosts)
 		return a.runPicker(cmd, hosts, detachKey, raw)
@@ -429,10 +432,10 @@ func (a *application) runRoot(cmd *cobra.Command, args []string, resume bool, de
 		return a.runHost(cmd, *target.Host, resume, command, detachKey, raw)
 	}
 	if resume {
-		return errors.New("--resume needs a host alias, not a session ID")
+		return errors.New("--resume needs a machine name or exact host ID, not a session ID")
 	}
 	if len(args) != 1 {
-		return fmt.Errorf("a session ID does not accept a command; use a host alias before --")
+		return fmt.Errorf("a session ID does not accept a command; use a machine name or exact host ID before --")
 	}
 	resolved, err := a.resolveSession(cmd.Context(), hosts, target.SessionID)
 	if err != nil {
@@ -445,7 +448,7 @@ func (a *application) runPicker(cmd *cobra.Command, hosts []HostRecord, detachKe
 	return a.runPickerOpen(cmd, hosts, detachKey, raw, "")
 }
 
-func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, detachKey string, raw bool, openHostAlias string) error {
+func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, detachKey string, raw bool, openHostID string) error {
 	if a.dependencies.Picker == nil {
 		return errors.New("the interactive picker is not installed yet; run mesh <host> or mesh <session-id>")
 	}
@@ -453,7 +456,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 	if err != nil {
 		return fmt.Errorf("locate picker state directory: %w", err)
 	}
-	hosts, _ = withoutThisHost(stateDir, hosts)
+	hosts, _ = withoutThisHost(cmd.Context(), stateDir, hosts)
 	cache := &SQLiteCatalogCache{}
 	if len(hosts) > 0 {
 		cache, err = OpenCatalogCache(cmd.Context())
@@ -463,10 +466,10 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 	}
 	defer cache.Close() //nolint:errcheck // command result takes precedence
 	refreshSessions := func(ctx context.Context, alias string) (HostSessions, error) {
-		if alias == localHostAlias {
-			return localPickerCatalog()
+		if alias == localHostID() {
+			return localPickerCatalog(ctx)
 		}
-		host, err := hostWithAlias(hosts, alias)
+		host, err := resolveHostTarget(hosts, alias)
 		if err != nil {
 			return HostSessions{}, err
 		}
@@ -480,11 +483,11 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 	var containingSessions []PickerContainingSession
 	containmentCaptured := false
 	for {
-		local, err := localPickerCatalog()
+		local, err := localPickerCatalog(cmd.Context())
 		if err != nil {
 			return err
 		}
-		hosts, _ = withoutThisHost(stateDir, hosts)
+		hosts, _ = withoutThisHost(cmd.Context(), stateDir, hosts)
 		catalog := []HostSessions{local}
 		for _, host := range hosts {
 			cached, cacheErr := cache.Load(cmd.Context(), host)
@@ -499,12 +502,12 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 		pickerState := newPickerState(pickerContext, a.dependencies.DialControl)
 		pickerState.cache = cache
 		refreshHost := func(ctx context.Context, alias string) (PickerHostSnapshot, error) {
-			if alias == localHostAlias {
+			if alias == localHostID() {
 				pickerState.close()
-				local, err := localPickerCatalog()
+				local, err := localPickerCatalog(ctx)
 				return PickerHostSnapshot{Sessions: local}, err
 			}
-			host, err := hostWithAlias(hosts, alias)
+			host, err := resolveHostTarget(hosts, alias)
 			if err != nil {
 				return PickerHostSnapshot{}, err
 			}
@@ -539,7 +542,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 				pickerState.close()
 				return CollectHostSessions(ctx, hosts, defaultCatalogTimeout, a.queryHost, cache)
 			},
-			OpenHostAlias:      openHostAlias,
+			OpenHostID:         openHostID,
 			ContainingSessions: clonePickerContainingSessions(containingSessions),
 			Refresh: func(ctx context.Context, alias string) (PickerHostSnapshot, error) {
 				if !pickerOperations.begin(ctx) {
@@ -560,10 +563,10 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 					return SessionInspection{}, context.Canceled
 				}
 				defer pickerOperations.done()
-				if request.HostAlias == localHostAlias {
+				if request.HostID == localHostID() {
 					return inspectLocalSession(ctx, request)
 				}
-				host, err := hostWithAlias(hosts, request.HostAlias)
+				host, err := resolveHostTarget(hosts, request.HostID)
 				if err != nil {
 					return SessionInspection{}, err
 				}
@@ -583,7 +586,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 			return a.runUpdatePreview(cmd.Context())
 		}
 		if selection.SessionID != "" {
-			if selection.HostAlias == localHostAlias {
+			if selection.HostID == localHostID() {
 				current, err := Find(selection.SessionID)
 				if err != nil {
 					return err
@@ -594,16 +597,16 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 				return a.attachPickerSession(cmd, resolvedSession{local: &current}, selection.TakeOver, detachKey, raw, containingIdentities)
 			}
 			selectionCatalog := catalog
-			if selection.HostAlias != "" {
+			if selection.HostID != "" {
 				refreshContext, cancel := context.WithTimeout(cmd.Context(), 2*defaultCatalogTimeout)
-				refreshed, refreshErr := refreshSessions(refreshContext, selection.HostAlias)
+				refreshed, refreshErr := refreshSessions(refreshContext, selection.HostID)
 				cancel()
 				if refreshErr != nil {
 					return refreshErr
 				}
 				selectionCatalog = []HostSessions{refreshed}
 			}
-			resolved, err := findCatalogSession(selectionCatalog, selection.SessionID, selection.HostAlias)
+			resolved, err := findCatalogSession(selectionCatalog, selection.SessionID, selection.HostID)
 			if err != nil {
 				return err
 			}
@@ -612,11 +615,17 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 			}
 			return a.attachPickerSession(cmd, resolved, selection.TakeOver, detachKey, raw, containingIdentities)
 		}
-		if selection.HostAlias == "" {
+		if selection.New && selection.Local {
+			if selection.HostID != local.Host.ID {
+				return errors.New("local picker selection names another host")
+			}
+			return a.startWindowSession(cmd, detachKey, raw)
+		}
+		if selection.HostID == "" {
 			return nil
 		}
 		if !selection.New && !selection.Wake {
-			refreshed, err := refreshSessions(cmd.Context(), selection.HostAlias)
+			refreshed, err := refreshSessions(cmd.Context(), selection.HostID)
 			if err != nil {
 				return err
 			}
@@ -638,21 +647,21 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 				}
 				return err
 			}
-			return fmt.Errorf("%s has no detached sessions; select an in-use session to take over", selection.HostAlias)
+			return fmt.Errorf("%s has no detached sessions; select an in-use session to take over", selection.HostID)
 		}
-		if selection.HostAlias == localHostAlias {
+		if selection.HostID == localHostID() {
 			return a.startWindowSession(cmd, detachKey, raw)
 		}
-		host, err := hostWithAlias(hosts, selection.HostAlias)
+		host, err := resolveHostTarget(hosts, selection.HostID)
 		if err != nil {
 			return err
 		}
 		if selection.Wake {
-			openHostAlias = selection.HostAlias
+			openHostID = selection.HostID
 			if err := a.wakeHost(cmd.Context(), host, cmd.ErrOrStderr()); err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "woke %s; refreshing hosts\n", a.privacy.Value("host", host.Alias)); err != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "woke %s; refreshing hosts\n", a.privacy.Value("host", HostLabel(host))); err != nil {
 				return err
 			}
 			continue
@@ -710,7 +719,7 @@ func (a *application) capturePickerContainingSessions(
 		pending++
 		go func() {
 			value, err := inspectLocalSession(ctx, PickerInspectRequest{
-				HostAlias: host.Alias, SessionID: identity.SessionID,
+				HostID: host.ID, SessionID: identity.SessionID,
 				PreviewCols: protocol.MaxInspectionPreviewCols, PreviewRows: protocol.MaxInspectionPreviewRows,
 			})
 			results <- captureResult{index: index, value: value, err: err}
@@ -768,7 +777,7 @@ func copyPreviewLines(source []protocol.PreviewLine) []protocol.PreviewLine {
 }
 
 func validatePickerSelection(selection PickerSelection) error {
-	if selection.ReviewUpdate && (selection.SessionID != "" || selection.New || selection.Wake || selection.HostAlias != "" || selection.Relaunch || selection.TakeOver || selection.RecoveryAction != "") {
+	if selection.ReviewUpdate && (selection.SessionID != "" || selection.New || selection.Wake || selection.HostID != "" || selection.Relaunch || selection.TakeOver || selection.RecoveryAction != "") {
 		return errors.New("picker update selection cannot be combined with a session action")
 	}
 	if selection.SessionID != "" && (selection.New || selection.Wake) {
@@ -777,8 +786,8 @@ func validatePickerSelection(selection PickerSelection) error {
 	if selection.New && selection.Wake {
 		return errors.New("picker selection cannot combine new and wake")
 	}
-	if (selection.New || selection.Wake) && selection.HostAlias == "" {
-		return errors.New("picker new and wake selections require a host alias")
+	if (selection.New && !selection.Local || selection.Wake) && selection.HostID == "" {
+		return errors.New("picker selection requires an exact host ID")
 	}
 	return nil
 }
@@ -828,12 +837,12 @@ func (a *application) runHostWithContainment(
 		// A live session always wins: it costs nothing to reattach, while a
 		// wake starts the agent again. Only an otherwise empty host wakes.
 		if row, ok := latestHibernated(rows); ok {
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "resuming hibernated %s conversation %s on %s…\n", row.Hibernated.Provider, row.ID, a.privacy.Value("host", host.Alias)); err != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "resuming hibernated %s conversation %s on %s…\n", row.Hibernated.Provider, row.ID, a.privacy.Value("host", HostLabel(host))); err != nil {
 				return err
 			}
 			return a.recoverSession(cmd, resolvedSession{host: &host, remote: row}, recovery.ActionDefault, detachKey, raw, false)
 		}
-		return fmt.Errorf("host %s has no active sessions", host.Alias)
+		return fmt.Errorf("host %s has no active sessions", HostLabel(host))
 	}
 	// No command means the host's own shell. Sending defaultShell() here would
 	// name a path on this machine: /bin/zsh on a Mac does not exist on an Arch
@@ -847,7 +856,7 @@ func (a *application) runHostWithContainment(
 	}
 	// "session X on pc" reads like one was found. `mesh pc` always creates,
 	// and `mesh pc -r` is the one that attaches to an existing session.
-	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "new session %s on %s\n", id, a.privacy.Value("host", host.Alias)); err != nil {
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "new session %s on %s\n", id, a.privacy.Value("host", HostLabel(host))); err != nil {
 		return err
 	}
 	initial := uint64(0)
@@ -900,7 +909,7 @@ func (a *application) resolveSession(ctx context.Context, hosts []HostRecord, id
 	if err != nil {
 		return resolvedSession{}, fmt.Errorf("locate session resolution state directory: %w", err)
 	}
-	hosts, _ = withoutThisHost(stateDir, hosts)
+	hosts, _ = withoutThisHost(ctx, stateDir, hosts)
 
 	if len(hosts) == 0 {
 		if !foundLocally {
@@ -921,7 +930,7 @@ func (a *application) resolveSession(ctx context.Context, hosts []HostRecord, id
 	remote, remoteErr := findCatalogSession(catalog, id, "")
 	switch {
 	case foundLocally && remoteErr == nil:
-		return resolvedSession{}, fmt.Errorf("session %s is both on this host and on %s; name the host to choose", strings.ToUpper(id), remote.host.Alias)
+		return resolvedSession{}, fmt.Errorf("session %s is both on this host and on %s; name the host to choose", strings.ToUpper(id), HostLabel(*remote.host))
 	case foundLocally:
 		return resolvedSession{local: &local}, nil
 	default:
@@ -929,10 +938,10 @@ func (a *application) resolveSession(ctx context.Context, hosts []HostRecord, id
 	}
 }
 
-func findCatalogSession(catalog []HostSessions, id, hostAlias string) (resolvedSession, error) {
+func findCatalogSession(catalog []HostSessions, id, hostID string) (resolvedSession, error) {
 	var matches []resolvedSession
 	for _, result := range catalog {
-		if hostAlias != "" && !strings.EqualFold(result.Host.Alias, hostAlias) {
+		if hostID != "" && result.Host.ID != hostID {
 			continue
 		}
 		for _, row := range result.Sessions {
@@ -950,7 +959,7 @@ func findCatalogSession(catalog []HostSessions, id, hostAlias string) (resolvedS
 	default:
 		aliases := make([]string, len(matches))
 		for i, match := range matches {
-			aliases[i] = match.host.Alias
+			aliases[i] = HostLabel(*match.host)
 		}
 		sort.Strings(aliases)
 		return resolvedSession{}, fmt.Errorf("session %s exists on multiple hosts: %s", strings.ToUpper(id), strings.Join(aliases, ", "))
@@ -986,14 +995,13 @@ func (a *application) attachResolvedWithContainment(
 	return a.attach(cmd, attachRequest{target: resolved, options: options})
 }
 
-func (a *application) queryHost(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
-	return listRemoteHost(ctx, host, a.dependencies.DialControl)
+func (a *application) queryHost(ctx context.Context, host *HostRecord) ([]protocol.SessionInfo, error) {
+	return listRemoteDeclaredHost(ctx, host, a.dependencies.DialControl)
 }
 
 func (a *application) addCommand() *cobra.Command {
 	var (
 		allowRoot            bool
-		alias                string
 		tailscaleAuthKeyFile string
 		yes                  bool
 		identityFile         string
@@ -1006,19 +1014,11 @@ func (a *application) addCommand() *cobra.Command {
 			if len(args) == 0 {
 				return a.addTargetUsage(cmd)
 			}
-			selected := alias
-			if selected == "" {
-				selected = aliasFromTarget(args[0])
-			}
-			selected, err := ValidateHostAlias(selected)
-			if err != nil {
-				return err
-			}
 			if a.dependencies.Bootstrap == nil {
 				return errors.New("SSH bootstrap support is unavailable in this build")
 			}
 			result, err := a.dependencies.Bootstrap(cmd.Context(), AddRequest{
-				Target: args[0], Alias: selected, IdentityFile: identityFile, AllowRoot: allowRoot,
+				Target: args[0], IdentityFile: identityFile, AllowRoot: allowRoot,
 				TailscaleAuthKeyFile: tailscaleAuthKeyFile,
 				Yes:                  yes,
 			})
@@ -1026,17 +1026,10 @@ func (a *application) addCommand() *cobra.Command {
 				return err
 			}
 			record := result.Host
-			record.Alias = selected
-			if current := existingAliasFor(record.ID, selected); current != "" {
-				rename, err := a.confirmRename(cmd, current, selected)
-				if err != nil {
-					return err
-				}
-				if !rename {
-					record.Alias = current
-					selected = current
-				}
+			if err := cacheBootstrapName(cmd.Context(), record, result.AuthenticatedIdentity); err != nil {
+				return err
 			}
+			selected := HostLabel(record)
 			if err := SaveHost(record); err != nil {
 				return fmt.Errorf("save host %s: %w", selected, err)
 			}
@@ -1053,7 +1046,6 @@ func (a *application) addCommand() *cobra.Command {
 		},
 	}
 	command.Flags().BoolVar(&allowRoot, "allow-root", false, "acknowledge that approving this device grants root access")
-	command.Flags().StringVar(&alias, "alias", "", "local name for the host")
 	command.Flags().StringVar(&tailscaleAuthKeyFile, "tailscale-auth-key-file", "", "read a Tailscale auth key from this local file")
 	command.Flags().BoolVar(&yes, "yes", false, "approve remote Tailscale installation and user lingering changes")
 	command.Flags().StringVar(&identityFile, "identity-file", "", "SSH private key to adopt with, when ~/.ssh/config names none")
@@ -1070,14 +1062,14 @@ func (a *application) wakeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			host, err := hostWithAlias(hosts, args[0])
+			host, err := resolveHostTarget(hosts, args[0])
 			if err != nil {
 				return err
 			}
 			if err := a.wakeHost(cmd.Context(), host, cmd.ErrOrStderr()); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "woke %s\n", a.privacy.Value("host", host.Alias))
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "woke %s\n", a.privacy.Value("host", HostLabel(host)))
 			return err
 		},
 	}
@@ -1085,31 +1077,15 @@ func (a *application) wakeCommand() *cobra.Command {
 	return command
 }
 
-func hostWithAlias(hosts []HostRecord, alias string) (HostRecord, error) {
-	for _, host := range hosts {
-		if strings.EqualFold(host.Alias, alias) {
-			return host, nil
-		}
+func resolveHostTarget(hosts []HostRecord, value string) (HostRecord, error) {
+	target, err := ResolveArgument(value, hosts)
+	if err != nil {
+		return HostRecord{}, err
 	}
-	return HostRecord{}, fmt.Errorf("unknown host alias %q", alias)
-}
-
-func aliasFromTarget(target string) string {
-	host := target
-	if at := strings.LastIndexByte(host, '@'); at >= 0 {
-		host = host[at+1:]
+	if target.Host == nil {
+		return HostRecord{}, fmt.Errorf("%q names a session; use a declared machine name or exact host ID", value)
 	}
-	if strings.HasPrefix(host, "[") {
-		if closeBracket := strings.IndexByte(host, ']'); closeBracket > 0 {
-			host = host[1:closeBracket]
-		}
-	} else if colon := strings.LastIndexByte(host, ':'); colon > 0 && strings.Count(host, ":") == 1 {
-		host = host[:colon]
-	}
-	if dot := strings.IndexByte(host, '.'); dot > 0 {
-		host = host[:dot]
-	}
-	return host
+	return *target.Host, nil
 }
 
 func (a *application) listCommand() *cobra.Command {
@@ -1145,7 +1121,11 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 		if err != nil {
 			return err
 		}
-		hidden, err := writeSessionList(cmd.OutOrStdout(), a.dependencies.Now(), []HostSessions{{Host: HostRecord{Alias: "local"}, Sessions: rows}}, view)
+		owner, err := localNameRecord(cmd.Context(), stateDir)
+		if err != nil {
+			return err
+		}
+		hidden, err := writeSessionList(cmd.OutOrStdout(), a.dependencies.Now(), []HostSessions{{Host: owner, Sessions: rows}}, view)
 		return reportHiddenSessions(cmd.ErrOrStderr(), hidden, err)
 	}
 	hosts, err := LoadHosts()
@@ -1153,7 +1133,11 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 		return err
 	}
 	localRows, localErr := localSessionRowsWithDaemonMemory(cmd.Context(), stateDir)
-	hosts, selfAlias := withoutThisHost(stateDir, hosts)
+	owner, err := localNameRecord(cmd.Context(), stateDir)
+	if err != nil {
+		return err
+	}
+	hosts = withoutOwnerHost(hosts, owner)
 	if len(hosts) == 0 {
 		if localErr != nil {
 			return localErr
@@ -1174,24 +1158,25 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	// this, adopting one remote host hid every local session from `mesh ls`
 	// while its worker kept running.
 	if localErr != nil {
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: local sessions unavailable: %s\n", a.privacy.Value("host", selfAlias), safeRemoteText(a.privacy.Value("error", localErr.Error()))); err != nil {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: local sessions unavailable: %s\n", a.privacy.Value("host", HostLabel(owner)), safeRemoteText(a.privacy.Value("error", localErr.Error()))); err != nil {
 			return err
 		}
 	}
 	if len(localRows) > 0 {
-		results = append([]HostSessions{{Host: HostRecord{Alias: selfAlias}, Sessions: localRows}}, results...)
+		results = append([]HostSessions{{Host: owner, Local: true, Sessions: localRows}}, results...)
 	}
+	projectCatalogHostNames(results)
 	hidden, err := writeSessionList(cmd.OutOrStdout(), a.dependencies.Now(), results, view)
 	if err := reportHiddenSessions(cmd.ErrOrStderr(), hidden, err); err != nil {
 		return err
 	}
 	for _, result := range results {
 		if result.Err != nil {
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %s; cached rows are stale\n", a.privacy.Value("host", result.Host.Alias), safeRemoteText(a.privacy.Value("error", result.Err.Error()))); err != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %s; cached rows are stale\n", a.privacy.Value("host", HostLabel(result.Host)), safeRemoteText(a.privacy.Value("error", result.Err.Error()))); err != nil {
 				return err
 			}
 		} else if result.CacheErr != nil {
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: live results could not be cached: %s\n", a.privacy.Value("host", result.Host.Alias), safeRemoteText(a.privacy.Value("error", result.CacheErr.Error()))); err != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: live results could not be cached: %s\n", a.privacy.Value("host", HostLabel(result.Host)), safeRemoteText(a.privacy.Value("error", result.CacheErr.Error()))); err != nil {
 				return err
 			}
 		}
@@ -1317,12 +1302,16 @@ func writeSessionList(output io.Writer, now time.Time, hosts []HostSessions, vie
 	var rows []listRow
 	hidden, columns := 0, listColumns{}
 	for _, result := range hosts {
+		label := HostLabel(result.Host)
+		if result.Host.MachineName != "" && (!result.Host.NameVerified || result.Stale) {
+			label += retainedNameSuffix
+		}
 		for _, current := range result.Sessions {
 			if !view.shows(current) {
 				hidden++
 				continue
 			}
-			rows = append(rows, listRow{host: result.Host.Alias, session: current, stale: result.Stale})
+			rows = append(rows, listRow{host: label, session: current, stale: result.Stale})
 			columns.cache = columns.cache || result.Stale
 			columns.title = columns.title || sessionTitle(current) != ""
 		}
@@ -1647,7 +1636,7 @@ func (a *application) removeSession(cmd *cobra.Command, hosts []HostRecord, id s
 		return forgetLocalSession(cmd.Context(), *resolved.local)
 	}
 	if resolved.remote.State == string(storage.StateRunning) || resolved.remote.State == string(storage.StateDetached) {
-		return fmt.Errorf("session %s on %s is still %s; kill it before removing it", resolved.remote.ID, resolved.host.Alias, resolved.remote.State)
+		return fmt.Errorf("session %s on %s is still %s; kill it before removing it", resolved.remote.ID, HostLabel(*resolved.host), resolved.remote.State)
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), 12*time.Second)
 	defer cancel()
@@ -1679,7 +1668,7 @@ func (a *application) runSessionControl(cmd *cobra.Command, id, controlType, sig
 		}
 	} else {
 		if resolved.remote.State != string(storage.StateRunning) && resolved.remote.State != string(storage.StateDetached) {
-			return fmt.Errorf("session %s on %s is already %s", resolved.remote.ID, resolved.host.Alias, resolved.remote.State)
+			return fmt.Errorf("session %s on %s is already %s", resolved.remote.ID, HostLabel(*resolved.host), resolved.remote.State)
 		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), 12*time.Second)
 		err = controlRemoteSession(ctx, *resolved.host, a.dependencies.DialHost, resolved.remote.ID, controlType, signal)
@@ -1859,10 +1848,6 @@ func ageAt(now, created time.Time) string {
 	}
 }
 
-// localHostAlias labels the disk-backed catalog even when an address-book alias
-// also names this machine.
-const localHostAlias = "this host"
-
 // localSessionRows renders this machine's sessions in the same shape the remote
 // fan-out returns, so one listing can carry both.
 func localSessionRows() ([]protocol.SessionInfo, error) {
@@ -1931,10 +1916,10 @@ func (a *application) pickerSessionAction(ctx context.Context, hosts []HostRecor
 	if ctx == nil {
 		return errors.New("picker session action with nil context")
 	}
-	if request.HostAlias == localHostAlias {
+	if request.HostID == localHostID() {
 		return a.localPickerSessionAction(ctx, request)
 	}
-	host, err := hostWithAlias(hosts, request.HostAlias)
+	host, err := resolveHostTarget(hosts, request.HostID)
 	if err != nil {
 		return err
 	}

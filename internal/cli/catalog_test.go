@@ -26,9 +26,9 @@ func (c *memoryCatalogCache) Save(_ context.Context, host HostRecord, _ []protoc
 
 func TestCollectHostSessionsUsesCacheWithoutWaitingPastDeadline(t *testing.T) {
 	hosts := []HostRecord{
-		{Alias: "fast", ID: "host-fast"},
-		{Alias: "offline", ID: "host-offline"},
-		{Alias: "stuck", ID: "host-stuck"},
+		{MachineName: "fast", ID: "host-fast"},
+		{MachineName: "offline", ID: "host-offline"},
+		{MachineName: "stuck", ID: "host-stuck"},
 	}
 	created := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
 	cache := &memoryCatalogCache{rows: map[string][]protocol.SessionInfo{
@@ -37,8 +37,8 @@ func TestCollectHostSessionsUsesCacheWithoutWaitingPastDeadline(t *testing.T) {
 	}}
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	query := func(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
-		switch host.Alias {
+	query := func(ctx context.Context, host *HostRecord) ([]protocol.SessionInfo, error) {
+		switch host.MachineName {
 		case "fast":
 			return []protocol.SessionInfo{{ID: "LIVE", HostID: host.ID, Command: []string{"bash"}, State: "running", CreatedAt: created}}, nil
 		case "offline":
@@ -62,7 +62,7 @@ func TestCollectHostSessionsUsesCacheWithoutWaitingPastDeadline(t *testing.T) {
 	}
 	byAlias := make(map[string]HostSessions, len(got))
 	for _, result := range got {
-		byAlias[result.Host.Alias] = result
+		byAlias[result.Host.MachineName] = result
 	}
 	if byAlias["fast"].Stale || len(byAlias["fast"].Sessions) != 1 {
 		t.Fatalf("fast result = %#v", byAlias["fast"])

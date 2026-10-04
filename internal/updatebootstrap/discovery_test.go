@@ -16,7 +16,7 @@ import (
 )
 
 type discoveryHost struct {
-	Alias             string         `json:"alias"`
+	MachineName       string         `json:"machineName,omitempty"`
 	Endpoint          string         `json:"endpoint"`
 	ID                string         `json:"id,omitempty"`
 	MeshIdentity      string         `json:"meshIdentity,omitempty"`
@@ -78,6 +78,7 @@ func discoverHost(host *discoveryHost) error {
 	if info.Type != protocol.TypeHostInfoResult || info.Host == nil {
 		return errors.New("endpoint did not return Mesh host information")
 	}
+	host.MachineName = info.Host.MachineName
 	host.ID, host.MeshIdentity, host.Build, host.RecoverySupported = info.Host.ID, info.Host.MeshIdentity, info.Host.Build, info.Host.RecoverySupported
 	sessions, err := remoteExchange(conn, protocol.Control{Type: protocol.TypeList, RequestID: "read-only-session-count"})
 	if err != nil {

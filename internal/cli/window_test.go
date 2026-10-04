@@ -47,15 +47,15 @@ func TestPickerStartsWithLocalCatalogBeforeRemoteDiscovery(t *testing.T) {
 		DialHost: host.dial, DialControl: host.dial,
 		Picker: func(ctx context.Context, input PickerInput) (PickerSelection, error) {
 			called = true
-			if len(host.recorded()) != 0 || len(input.Hosts) != 2 || !input.Hosts[0].Local || input.Hosts[0].Host.Alias != localHostAlias {
+			if len(host.recorded()) != 0 || len(input.Hosts) != 2 || !input.Hosts[0].Local || input.Hosts[0].Host.MachineName != localHostID() {
 				t.Fatalf("picker did not receive local catalog before network: %#v, events %v", input.Hosts, host.recorded())
 			}
-			local, err := input.Refresh(ctx, localHostAlias)
+			local, err := input.Refresh(ctx, localHostID())
 			if err != nil || !local.Sessions.Local || len(host.recorded()) != 0 {
 				t.Fatalf("local refresh used remote discovery: %#v, %v", local, err)
 			}
 			loaded, err := input.LoadHosts(ctx)
-			if err != nil || len(loaded) != 1 || loaded[0].Host.Alias != "pc" || loaded[0].Stale {
+			if err != nil || len(loaded) != 1 || loaded[0].Host.MachineName != "pc" || loaded[0].Stale {
 				t.Fatalf("async catalog = %#v, %v", loaded, err)
 			}
 			return PickerSelection{}, nil
@@ -72,7 +72,7 @@ func TestPickerResumeNeverTakesAnAttachedSession(t *testing.T) {
 			host := setupCommandTestHost(t)
 			host.sessionState = state
 			_, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial, Picker: func(context.Context, PickerInput) (PickerSelection, error) {
-				return PickerSelection{HostAlias: "pc"}, nil
+				return PickerSelection{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}, nil
 			}}, "--raw")
 			if state == worker.StateRunning {
 				if err == nil || !strings.Contains(err.Error(), "no detached sessions") {
@@ -98,7 +98,7 @@ func TestLegacyPickerExplicitRestartUsesRecordedCommandAndDirectory(t *testing.T
 			}
 			_, _, err := executeCommand(t, Dependencies{DialHost: host.dial, DialControl: host.dial,
 				Picker: func(context.Context, PickerInput) (PickerSelection, error) {
-					return PickerSelection{HostAlias: "pc", SessionID: "7K3D", Relaunch: true, RecoveryAction: recovery.ActionCommand}, nil
+					return PickerSelection{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D", Relaunch: true, RecoveryAction: recovery.ActionCommand}, nil
 				},
 			}, "--raw")
 			if fail {

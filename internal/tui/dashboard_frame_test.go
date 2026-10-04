@@ -12,7 +12,7 @@ import (
 
 func TestDashboardHostBurstPublishesOneCompleteClockFrame(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	input := cli.DashboardInput{Hosts: []cli.DashboardHost{{ID: "host", Alias: "pc"}}, Wall: true}
+	input := cli.DashboardInput{Hosts: []cli.DashboardHost{{ID: "host", MachineName: "pc"}}, Wall: true}
 	model := newDashboard(input, now)
 	next, _ := model.Update(tea.WindowSizeMsg{Width: 160, Height: 45})
 	model = next.(dashboardModel)
@@ -47,7 +47,7 @@ func TestDashboardRetainedViewDoesNotAllocatePerCall(t *testing.T) {
 func TestDashboardUnknownServicesStayOutOfAttention(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	model := newDashboard(cli.DashboardInput{}, now)
-	model.hosts = []cli.DashboardHostView{{Host: cli.DashboardHost{Alias: "pi"}, Connection: cli.StateReachable, LastReply: now, Services: cli.DashboardCatalog[cli.DashboardService]{ObservedAt: now, Total: 1, Unknown: 1, Rows: []cli.DashboardService{{Name: "legacy", State: "unknown", HealthUnknown: true}}}}}
+	model.hosts = []cli.DashboardHostView{{Host: cli.DashboardHost{MachineName: "pi"}, Connection: cli.StateReachable, LastReply: now, Services: cli.DashboardCatalog[cli.DashboardService]{ObservedAt: now, Total: 1, Unknown: 1, Rows: []cli.DashboardService{{Name: "legacy", State: "unknown", HealthUnknown: true}}}}}
 	if totals := model.totals(); totals.ready != 0 || totals.failed != 0 || totals.unknown != 1 {
 		t.Fatalf("unknown totals: %+v", totals)
 	}

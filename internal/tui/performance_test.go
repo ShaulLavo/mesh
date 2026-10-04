@@ -18,7 +18,7 @@ func benchmarkPicker(b *testing.B) (model, cli.PickerHostSnapshot) {
 		rows[index] = protocol.SessionInfo{ID: fmt.Sprintf("%04d", index), HostID: "bench-host",
 			State: "detached", Command: []string{"bash"}, Cwd: "/work/projects/mesh", CreatedAt: time.Unix(1700000000, 0)}
 	}
-	host := cli.HostSessions{Host: cli.HostRecord{ID: "bench-host", Alias: "bench"}, Sessions: rows}
+	host := cli.HostSessions{Host: cli.HostRecord{ID: "bench-host", MachineName: "bench"}, Sessions: rows}
 	current := newPickerModel(context.Background(), cli.PickerInput{Hosts: []cli.HostSessions{host}}, time.Unix(1700000060, 0))
 	updated, _ := current.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	current = updated.(model)
@@ -31,7 +31,7 @@ func benchmarkPicker(b *testing.B) (model, cli.PickerHostSnapshot) {
 
 func BenchmarkPickerUnchangedCatalog20(b *testing.B) {
 	current, snapshot := benchmarkPicker(b)
-	message := catalogRefreshResultMsg{epoch: current.catalogEpoch, hostAlias: "bench", snapshot: snapshot}
+	message := catalogRefreshResultMsg{epoch: current.catalogEpoch, hostID: "bench", snapshot: snapshot}
 	b.ReportAllocs()
 	for b.Loop() {
 		current, _ = current.applyCatalogRefresh(message)

@@ -51,6 +51,17 @@ def check_gate(ci, recovery):
     assert "source_sha: ${{ github.sha }}" in publication
 
 
+def without_gate_dependency(ci, dependency):
+    gate = job(ci, "gate")
+    needed = re.search(r"^    needs: \[(.+)\]$", gate, re.M)
+    assert needed
+    dependencies = [name.strip() for name in needed.group(1).split(",")]
+    assert dependencies.count(dependency) == 1
+    remaining = ", ".join(name for name in dependencies if name != dependency)
+    mutated_gate = gate[:needed.start(1)] + remaining + gate[needed.end(1):]
+    return ci.replace(gate, mutated_gate, 1)
+
+
 def main():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
     recovery = (ROOT / ".github/workflows/helper-recovery.yml").read_text()
@@ -58,10 +69,11 @@ def main():
     # These mutations preserve a superficially present helper job while cutting
     # the dependency or allowing a failing/skipped native aggregate to publish.
     for mutated in (
-        ci.replace("auth-cutover, helper-recovery,", "auth-cutover,"),
+        without_gate_dependency(ci, "helper-recovery"),
         ci.replace("$HELPER_RECOVERY == success && ", ""),
         ci.replace("name: Required native helper recovery", "name: Required native helper recovery\n    if: false"),
     ):
+        assert mutated != ci, "publication negative control did not change CI source"
         try:
             check_gate(mutated, recovery)
         except AssertionError:

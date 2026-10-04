@@ -103,10 +103,14 @@ func (a sshApplication) nextAttachment(ctx context.Context, client sshd.Session,
 	if err := validatePickerSelection(selected); err != nil {
 		return nil, err
 	}
-	if selected.HostAlias == "" && selected.SessionID == "" {
+	if selected.HostID == "" && selected.SessionID == "" {
 		return nil, nil
 	}
-	if selected.HostAlias != localHostAlias || selected.Wake {
+	owner, err := declaredSocketHost(ctx, a.socket)
+	if err != nil {
+		return nil, err
+	}
+	if selected.HostID != owner.ID || selected.Wake {
 		return nil, errors.New("SSH can select only sessions on this host")
 	}
 	if selected.New {
@@ -147,13 +151,13 @@ func (a sshApplication) pick(ctx context.Context, picker PickerFunc) (PickerSele
 		gate.stopAndWait()
 	}()
 	return picker(pickerContext, PickerInput{
-		Hosts: []HostSessions{catalog}, OpenHostAlias: localHostAlias,
+		Hosts: []HostSessions{catalog}, OpenHostID: catalog.Host.ID,
 		Refresh: func(ctx context.Context, alias string) (PickerHostSnapshot, error) {
 			if !gate.begin(ctx) {
 				return PickerHostSnapshot{}, context.Canceled
 			}
 			defer gate.done()
-			if alias != localHostAlias {
+			if alias != catalog.Host.ID {
 				return PickerHostSnapshot{}, errors.New("SSH can refresh only this host")
 			}
 			current, err := a.catalog(ctx)
@@ -183,9 +187,9 @@ func (a sshApplication) catalog(parent context.Context) (HostSessions, error) {
 	if err != nil {
 		return HostSessions{}, err
 	}
-	host := HostRecord{Alias: localHostAlias}
-	if len(rows) > 0 {
-		host.ID = rows[0].HostID
+	host, err := declaredSocketHost(ctx, a.socket)
+	if err != nil {
+		return HostSessions{}, err
 	}
 	return HostSessions{Local: true, Host: host, Sessions: rows}, nil
 }
@@ -202,7 +206,11 @@ func (a sshApplication) request(parent context.Context, timeout time.Duration, r
 }
 
 func (a sshApplication) inspect(ctx context.Context, request PickerInspectRequest) (SessionInspection, error) {
-	if request.HostAlias != localHostAlias {
+	owner, err := declaredSocketHost(ctx, a.socket)
+	if err != nil {
+		return SessionInspection{}, err
+	}
+	if request.HostID != owner.ID {
 		return SessionInspection{}, errors.New("SSH can inspect only this host")
 	}
 	if err := protocol.ValidateInspectDimensions(request.PreviewCols, request.PreviewRows); err != nil {
@@ -215,11 +223,15 @@ func (a sshApplication) inspect(ctx context.Context, request PickerInspectReques
 	if err != nil {
 		return SessionInspection{}, err
 	}
-	return validateInspectionResponse(HostRecord{Alias: localHostAlias}, request.SessionID, request.PreviewCols, request.PreviewRows, response)
+	return validateInspectionResponse(owner, request.SessionID, request.PreviewCols, request.PreviewRows, response)
 }
 
 func (a sshApplication) action(ctx context.Context, request PickerSessionActionRequest) error {
-	if request.HostAlias != localHostAlias {
+	owner, err := declaredSocketHost(ctx, a.socket)
+	if err != nil {
+		return err
+	}
+	if request.HostID != owner.ID {
 		return errors.New("SSH can change only sessions on this host")
 	}
 	switch request.Action {

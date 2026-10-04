@@ -221,17 +221,26 @@ func (a *application) addTargetUsage(cmd *cobra.Command) error {
 	hosts, _ := LoadHosts()
 	adopted := make(map[string]string, len(hosts)*2)
 	for _, host := range hosts {
-		adopted[host.Alias] = host.Alias
+		if host.MachineName != "" {
+			adopted[host.MachineName] = HostLabel(host)
+		}
+		if host.TailscaleName != "" {
+			adopted[host.TailscaleName] = HostLabel(host)
+		}
 		for _, address := range host.Addresses {
-			adopted[address] = host.Alias
+			adopted[address] = HostLabel(host)
 		}
 	}
 
 	var first string
 	for _, entry := range sshConfigHosts() {
 		line := fmt.Sprintf("  %-20s %s", SafeTerminalText(entry.Alias), SafeTerminalText(entry.HostName))
-		if alias, ok := adopted[entry.Alias]; ok {
-			line += "   already added as " + SafeTerminalText(alias)
+		label, ok := adopted[entry.HostName]
+		if !ok {
+			label, ok = adopted[entry.Alias]
+		}
+		if ok {
+			line += "   already added as " + SafeTerminalText(label)
 		} else if first == "" {
 			first = entry.Alias
 		}
@@ -254,8 +263,8 @@ func (a *application) addTargetUsage(cmd *cobra.Command) error {
 				name = name[:index]
 			}
 			line := fmt.Sprintf("  %-20s %s", SafeTerminalText(name), peer.Addrs[0])
-			if alias, ok := adopted[peer.Addrs[0]]; ok {
-				line += "   already added as " + SafeTerminalText(alias)
+			if label, ok := adopted[peer.Addrs[0]]; ok {
+				line += "   already added as " + SafeTerminalText(label)
 			} else if !peer.Online {
 				line += "   offline"
 			}

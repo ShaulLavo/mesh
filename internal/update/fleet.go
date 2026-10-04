@@ -19,11 +19,11 @@ import (
 const MaximumHosts = 256
 
 type Host struct {
-	ID        string           `json:"id"`
-	Alias     string           `json:"alias"`
-	Endpoint  string           `json:"endpoint"`
-	Platform  release.Platform `json:"platform"`
-	DependsOn []string         `json:"dependsOn,omitempty"`
+	ID          string           `json:"id"`
+	MachineName string           `json:"-"`
+	Endpoint    string           `json:"endpoint"`
+	Platform    release.Platform `json:"platform"`
+	DependsOn   []string         `json:"dependsOn,omitempty"`
 }
 
 type Fleet struct {
@@ -45,9 +45,7 @@ func (h Host) Validate() error {
 	if _, err := PublicKey(h.ID); err != nil {
 		return err
 	}
-	if h.Alias == "" || len(h.Alias) > 128 || strings.ContainsAny(h.Alias, "\x00\r\n\t") {
-		return errors.New("update: invalid host alias")
-	}
+
 	u, err := url.Parse(h.Endpoint)
 	if err != nil || u.User != nil || u.Fragment != "" {
 		return errors.New("update: invalid host endpoint")
@@ -75,15 +73,14 @@ func (f Fleet) Validate() error {
 		return errors.New("update: fleet must contain between 1 and 256 hosts")
 	}
 	ids := make(map[string]bool, len(f.Members))
-	aliases := make(map[string]bool, len(f.Members))
 	for _, host := range f.Members {
 		if err := host.Validate(); err != nil {
-			return fmt.Errorf("update: fleet member %q: %w", host.Alias, err)
+			return fmt.Errorf("update: fleet member %q: %w", host.Label(), err)
 		}
-		if ids[host.ID] || aliases[host.Alias] {
-			return errors.New("update: duplicate fleet identity or alias")
+		if ids[host.ID] {
+			return errors.New("update: duplicate fleet identity")
 		}
-		ids[host.ID], aliases[host.Alias] = true, true
+		ids[host.ID] = true
 	}
 	_, err := f.Order("")
 	return err
@@ -133,7 +130,7 @@ func (f Fleet) Order(coordinator string) ([]Host, error) {
 func addDependencies(h Host, hosts map[string]Host, edges map[string]map[string]bool, incoming map[string]int) error {
 	for _, dependency := range h.DependsOn {
 		if dependency == h.ID || hosts[dependency].ID == "" {
-			return fmt.Errorf("update: host %s has an unresolved route dependency", h.Alias)
+			return fmt.Errorf("update: host %s has an unresolved route dependency", h.Label())
 		}
 		if !edges[h.ID][dependency] {
 			edges[h.ID][dependency] = true
@@ -173,4 +170,12 @@ func CacheDir() (string, error) {
 		return "", err
 	}
 	return base + "/mesh/updates", nil
+}
+
+// Label is presentation only; fleet membership and persistence use stable identity.
+func (h Host) Label() string {
+	if h.MachineName != "" {
+		return h.MachineName
+	}
+	return h.ID
 }

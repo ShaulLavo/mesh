@@ -74,7 +74,7 @@ func pickerServiceAction(ctx context.Context, hosts []HostRecord, dial HostDiale
 		return result, open(ctx, address)
 	}
 	if row.Service.Run == nil {
-		return result, fmt.Errorf("route /%s on %s has no --run command", request.ServiceName, host.Alias)
+		return result, fmt.Errorf("route /%s on %s has no --run command", request.ServiceName, HostLabel(host))
 	}
 	stopCtx, cancel := context.WithTimeout(ctx, serviceMutationTimeout)
 	stopped, err := pickerMutateService(stopCtx, host, dial, request.ServiceName, protocol.TypeServiceStop)
@@ -99,6 +99,7 @@ func pickerServiceAction(ctx context.Context, hosts []HostRecord, dial HostDiale
 func pickerServiceHost(hosts []HostRecord, id string) (HostRecord, error) {
 	for _, host := range hosts {
 		if host.ID == id {
+			host.local = host.local || host.ID == localHostID() && host.MeshIdentity == host.ID
 			return host, nil
 		}
 	}
@@ -111,7 +112,7 @@ func pickerServiceRow(host HostRecord, snapshot remoteServiceSnapshot, name stri
 			return row, nil
 		}
 	}
-	return ServiceCatalogRow{}, fmt.Errorf("route /%s is no longer served on %s", name, host.Alias)
+	return ServiceCatalogRow{}, fmt.Errorf("route /%s is no longer served on %s", name, HostLabel(host))
 }
 
 func pickerMutateService(ctx context.Context, host HostRecord, dial HostDialer, name, kind string) (protocol.ServiceInfo, error) {
@@ -123,14 +124,14 @@ func pickerMutateService(ctx context.Context, host HostRecord, dial HostDialer, 
 		return protocol.ServiceInfo{}, remoteServiceResponseError(host, kind, response)
 	}
 	if response.Type != protocol.TypeOK || response.ServiceName != name || response.Service == nil || response.Service.Name != name {
-		return protocol.ServiceInfo{}, fmt.Errorf("host %s returned an invalid %s acknowledgement", host.Alias, kind)
+		return protocol.ServiceInfo{}, fmt.Errorf("host %s returned an invalid %s acknowledgement", HostLabel(host), kind)
 	}
 	return validateRemoteService(*response.Service)
 }
 
 func pickerReachableURL(row ServiceCatalogRow) (string, error) {
-	if row.Service.LocalOnly && row.Host.Alias != localHostAlias {
-		return "", fmt.Errorf("route :%s is reachable on %s itself", row.Service.Name, row.Host.Alias)
+	if row.Service.LocalOnly && !row.Host.local {
+		return "", fmt.Errorf("route :%s is reachable on %s itself", row.Service.Name, HostLabel(row.Host))
 	}
 	address := row.URL()
 	parsed, err := url.Parse(address)

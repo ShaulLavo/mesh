@@ -188,7 +188,7 @@ func (a *application) runClientOnlyUpdate(ctx context.Context, environment updat
 			state = update.Newer
 		}
 		run := update.Run{Fleet: preview.Fleet, Release: preview.Release, Targets: []update.Target{{Host: environment.local, State: state, Build: &current}}}
-		return printUpdateRun(output.out, run, options.json, output.privacy)
+		return printDeclaredUpdateRun(ctx, output.out, run, options.json, options.details, output.privacy)
 	}
 	if err := preview.Release.Allows(current); err != nil {
 		return err
@@ -276,7 +276,7 @@ func observeClientOnlyUpdate(ctx context.Context, stateDir string, status update
 	for !installationFinished(status.Phase) {
 		select {
 		case <-ctx.Done():
-			if err := printUpdateRun(output.out, runFromInstallation(status), structured, output.privacy); err != nil {
+			if err := printDeclaredUpdateRun(ctx, output.out, runFromInstallation(status), structured, output.details, output.privacy); err != nil {
 				return err
 			}
 			return statusError{code: 2}
@@ -288,7 +288,7 @@ func observeClientOnlyUpdate(ctx context.Context, stateDir string, status update
 		}
 	}
 	run := runFromInstallation(status)
-	if err := printUpdateRun(output.out, run, structured, output.privacy); err != nil {
+	if err := printDeclaredUpdateRun(ctx, output.out, run, structured, output.details, output.privacy); err != nil {
 		return err
 	}
 	return updateExit(run.ExitCode())

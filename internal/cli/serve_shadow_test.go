@@ -34,9 +34,9 @@ func TestServePrintsRegistrationShadowWarning(t *testing.T) {
 }
 
 func TestServiceShadowWarningsStayOnTheirOwnHost(t *testing.T) {
-	public := ServiceCatalogRow{Host: HostRecord{ID: "pc", Alias: "pc"}, Live: true,
+	public := ServiceCatalogRow{Host: HostRecord{ID: "pc", MachineName: "pc"}, Live: true,
 		Service: protocol.ServiceInfo{Name: "blog", PublicName: "blog.shaulavo.dev"}}
-	private := ServiceCatalogRow{Host: HostRecord{ID: "pi", Alias: "pi"}, Live: true,
+	private := ServiceCatalogRow{Host: HostRecord{ID: "pi", MachineName: "pi"}, Live: true,
 		Service: protocol.ServiceInfo{Name: "blog/admin"}}
 	var output bytes.Buffer
 	if err := writeServiceShadowWarnings(&output, []ServiceCatalogRow{public, private}); err != nil {

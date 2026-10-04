@@ -52,7 +52,7 @@ func TestInvalidAttachFlagsDoNotCreateSession(t *testing.T) {
 				case "picker restart":
 					host.sessionState = worker.StateInterrupted
 					deps.Picker = func(context.Context, PickerInput) (PickerSelection, error) {
-						return PickerSelection{HostAlias: "pc", SessionID: "7K3D", Relaunch: true, RecoveryAction: recovery.ActionCommand}, nil
+						return PickerSelection{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D", Relaunch: true, RecoveryAction: recovery.ActionCommand}, nil
 					}
 					args = nil
 				}

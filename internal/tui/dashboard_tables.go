@@ -59,11 +59,11 @@ func (m dashboardModel) sessionRow(host cli.DashboardHostView, session cli.Dashb
 		if cached {
 			state = m.paint(dashboardCachedStyle).Render("cached " + catalogSessionState(session.State))
 		}
-		return m.usageSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), id, name, state, activity, width, hostWidth)
+		return m.usageSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Label())), id, name, state, activity, width, hostWidth)
 	}
-	text := dashboardSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias)), id, name, state, activity, observedAge, width, hostWidth)
+	text := dashboardSessionColumns(m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Label())), id, name, state, activity, observedAge, width, hostWidth)
 	if cached {
-		text = m.paint(dashboardCachedStyle).Render(dashboardSessionColumns(safeText(host.Host.Alias), id, name, state, activity, observedAge, width, hostWidth))
+		text = m.paint(dashboardCachedStyle).Render(dashboardSessionColumns(safeText(host.Host.Label()), id, name, state, activity, observedAge, width, hostWidth))
 	}
 	return text
 }
@@ -73,12 +73,12 @@ func (m dashboardModel) sessionHostWidth(width int) int {
 		if len(host.Sessions.Rows) == 0 {
 			continue
 		}
-		hostWidth = max(hostWidth, ansi.StringWidth(safeText(host.Host.Alias)))
+		hostWidth = max(hostWidth, ansi.StringWidth(safeText(host.Host.Label())))
 	}
 	if m.usageEnabled {
 		return min(hostWidth, max(4, min(20, width-18)))
 	}
-	// Bound long aliases while leaving room for session context on small terminals.
+	// Bound long machine names while leaving room for session context on small terminals.
 	return min(hostWidth, max(4, min(20, width/4)))
 }
 func dashboardSessionColumns(host, id, name, state, command, age string, width, hostWidth int) string {
@@ -91,7 +91,7 @@ func (m dashboardModel) serviceRows(host cli.DashboardHostView, width int) []das
 		m.serviceHostWidth = m.usageServiceHostWidth()
 	}
 	var rows []dashboardSummaryRow
-	hostLabel := m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Alias))
+	hostLabel := m.paint(dashboardTitleStyle).Bold(false).Render(safeText(host.Host.Label()))
 	age := dashboardAge(m.now, host.Services.ObservedAt)
 	for _, service := range host.Services.Rows {
 		state := m.serviceState(host, service)
@@ -288,7 +288,7 @@ func (m dashboardModel) attentionForWidth(width int) dashboardAttention {
 			continue
 		}
 		total++
-		text := m.paint(dashboardFailureStyle).Render(safeText(host.Host.Alias)+" · "+string(host.Connection)) + " · last reply " + m.paint(dashboardCachedStyle).Render(dashboardAge(m.now, host.LastReply))
+		text := m.paint(dashboardFailureStyle).Render(safeText(host.Host.Label())+" · "+string(host.Connection)) + " · last reply " + m.paint(dashboardCachedStyle).Render(dashboardAge(m.now, host.LastReply))
 		groups = append(groups, strings.Split(ansi.Wrap(text, max(1, width-4), ""), "\n"))
 	}
 	return dashboardAttention{width: width, total: total, groups: groups}
@@ -323,11 +323,11 @@ func (m dashboardModel) serviceAttention(host cli.DashboardHostView, service cli
 		problem = "reason unavailable"
 	}
 	if m.usageEnabled {
-		identity := safeText(host.Host.Alias) + "/" + safeText(service.Name) + " · " + state
+		identity := safeText(host.Host.Label()) + "/" + safeText(service.Name) + " · " + state
 		lines := []string{m.paint(dashboardFailureStyle).Render(identity)}
 		return append(lines, strings.Split(ansi.Wrap(m.paint(dashboardFailureStyle).Render(problem), max(1, width-4), ""), "\n")...)
 	}
-	text := safeText(host.Host.Alias) + "/" + safeText(service.Name) + " · " + state + " · " + problem
+	text := safeText(host.Host.Label()) + "/" + safeText(service.Name) + " · " + state + " · " + problem
 	return strings.Split(ansi.Wrap(m.paint(dashboardFailureStyle).Render(text), max(1, width-4), ""), "\n")
 }
 
@@ -338,7 +338,7 @@ func (m dashboardModel) cachedSessionRows(width, budget, hostWidth int) ([]strin
 		if !dashboardSessionsCached(host, m.now) || host.Sessions.Total == 0 || budget-len(rows) < 2 {
 			continue
 		}
-		rows = append(rows, m.paint(dashboardCachedStyle).Render("cached · "+safeText(host.Host.Alias)+" · catalog "+dashboardAge(m.now, host.Sessions.ObservedAt)+" old · not counted as live"))
+		rows = append(rows, m.paint(dashboardCachedStyle).Render("cached · "+safeText(host.Host.Label())+" · catalog "+dashboardAge(m.now, host.Sessions.ObservedAt)+" old · not counted as live"))
 		available := min(len(host.Sessions.Rows), budget-len(rows))
 		for _, session := range host.Sessions.Rows[:available] {
 			rows = append(rows, m.sessionRow(host, session, width, hostWidth))
@@ -356,7 +356,7 @@ func (m dashboardModel) moreSessionDetail(selected []int) string {
 		if detail != "" {
 			detail += " · "
 		}
-		detail += fmt.Sprintf("%d more on %s", host.Sessions.Total-selected[index], safeText(host.Host.Alias))
+		detail += fmt.Sprintf("%d more on %s", host.Sessions.Total-selected[index], safeText(host.Host.Label()))
 	}
 	return detail
 }

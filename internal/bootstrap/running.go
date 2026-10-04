@@ -41,11 +41,13 @@ func probeRunningDaemon(ctx context.Context, normalized normalizedOptions, deps 
 	if err != nil || validateVerifiedHost(host, peer.Name) != nil {
 		return Result{}, false
 	}
-	if normalized.expectedIdentity != "" && host.MeshIdentity != normalized.expectedIdentity {
+	if host.ID != normalized.expectedIdentity || host.MeshIdentity != normalized.expectedIdentity {
 		return Result{}, false
 	}
 	return Result{
-		Wake:               host.Wake,
+		AuthenticatedIdentity: normalized.expectedIdentity,
+		Wake:                  host.Wake,
+		MachineName:           host.MachineName, NameRevision: host.NameRevision,
 		ID:                 host.ID,
 		MeshIdentity:       host.MeshIdentity,
 		TailscaleName:      peer.Name,

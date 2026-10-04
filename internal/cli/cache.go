@@ -101,7 +101,7 @@ func (c *SQLiteCatalogCache) Save(ctx context.Context, host HostRecord, rows []p
 	observed := make([]storage.Session, len(rows))
 	for i, row := range rows {
 		if row.HostID != host.ID {
-			return fmt.Errorf("host %s listed a session for a different host", host.Alias)
+			return fmt.Errorf("host %s listed a session for a different host", HostLabel(host))
 		}
 		observed[i] = storage.Session{
 			ID:                 storage.SessionID(row.ID),
@@ -159,7 +159,7 @@ func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, 
 	for index, row := range rows {
 		validated, err := validateRemoteService(row)
 		if err != nil {
-			return fmt.Errorf("cache host %s service: %w", host.Alias, err)
+			return fmt.Errorf("cache host %s service: %w", HostLabel(host), err)
 		}
 		services[index] = storage.CachedService{
 			HostID: storage.HostID(host.ID), PrivateName: privateName,
@@ -174,14 +174,13 @@ func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, 
 }
 
 func cachedHost(host HostRecord, observedAt time.Time) storage.Host {
-	alias := host.Alias
 	var tailscaleName *string
 	if host.TailscaleName != "" {
 		name := host.TailscaleName
 		tailscaleName = &name
 	}
 	return storage.Host{
-		ID: storage.HostID(host.ID), Alias: &alias, MeshIdentity: host.MeshIdentity,
+		ID: storage.HostID(host.ID), MeshIdentity: host.MeshIdentity,
 		TailscaleName: tailscaleName, LastSeenAt: observedAt,
 	}
 }

@@ -56,6 +56,7 @@ type Target struct {
 }
 
 type Run struct {
+	archive              *operationArchive
 	CoordinatorSetup     bool             `json:"coordinatorSetup,omitempty"`
 	SetupExecutable      string           `json:"setupExecutable,omitempty"`
 	SetupBuild           *release.Build   `json:"setupBuild,omitempty"`
@@ -182,7 +183,7 @@ func (s *Store) Start(coordinator string, fleet Fleet, manifest release.Manifest
 			return Run{}, err
 		}
 		existing.UpdatedAt = time.Now().UTC()
-		return existing, writeJSON(s.path(existing.ID), existing)
+		return existing, writeOperation(s.path(existing.ID), existing)
 	}
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -206,11 +207,12 @@ func (s *Store) Read(id string) (Run, error) {
 	if !ValidRunID(id) {
 		return Run{}, errors.New("update: invalid run ID")
 	}
-	var run Run
-	if err := readJSON(s.path(id), &run); err != nil {
+	var record operationRecord
+	if err := readJSON(s.path(id), &record); err != nil {
 		return Run{}, err
 	}
-	if run.ID != id || run.Release.Digest() != run.ReleaseDigest || run.Fleet.Digest() != run.Membership {
+	run := record.Run
+	if run.ID != id || run.Release.Digest() != run.ReleaseDigest || run.approvedMembership() != run.Membership {
 		return Run{}, errors.New("update: saved operation identity or digest does not match")
 	}
 	if err := validateRunMembership(run); err != nil {
@@ -235,7 +237,7 @@ func validateRunMembership(run Run) error {
 	}
 	for _, target := range run.Targets {
 		host, exists := members[target.Host.ID]
-		if !exists || host.Alias != target.Host.Alias || host.Endpoint != target.Host.Endpoint || host.Platform != target.Host.Platform || !slices.Equal(host.DependsOn, target.Host.DependsOn) {
+		if !exists || host.Endpoint != target.Host.Endpoint || host.Platform != target.Host.Platform || !slices.Equal(host.DependsOn, target.Host.DependsOn) {
 			return errors.New("update: target differs from approved fleet membership")
 		}
 		delete(members, target.Host.ID)
@@ -273,14 +275,18 @@ func (s *Store) Change(id string, apply func(*Run) error) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
+	approval := run.approvalIdentity()
 	if err := apply(&run); err != nil {
 		return Run{}, err
+	}
+	if approval != run.approvalIdentity() {
+		return Run{}, errors.New("update: progress changed original operation approval")
 	}
 	if err := validateRunMembership(run); err != nil {
 		return Run{}, err
 	}
 	run.UpdatedAt = time.Now().UTC()
-	return run, writeJSON(s.path(id), run)
+	return run, writeOperation(s.path(id), run)
 }
 
 func (s *Store) Cancel(id string) (Run, error) {

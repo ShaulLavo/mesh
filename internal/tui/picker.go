@@ -68,8 +68,8 @@ func newPickerModel(ctx context.Context, catalog cli.PickerInput, now time.Time)
 		}] = state
 	}
 	current.rememberContainingSessionSnapshots()
-	if catalog.OpenHostAlias != "" {
-		current.openHostSessions(catalog.OpenHostAlias)
+	if catalog.OpenHostID != "" {
+		current.openHostSessions(catalog.OpenHostID)
 	}
 	return current
 }
@@ -81,7 +81,7 @@ func (m *model) rememberContainingSessionSnapshots() {
 				continue
 			}
 			m.rememberSessionSummary(
-				inspectionTarget{hostAlias: current.alias, sessionID: key.sessionID},
+				inspectionTarget{hostID: current.id, sessionID: key.sessionID},
 				*containing.snapshot,
 			)
 		}
@@ -142,8 +142,9 @@ func hostCatalog(input cli.PickerInput) []host {
 		if catalog.Local {
 			route = "this host"
 		}
-		hosts[index] = host{id: catalog.Host.ID, alias: catalog.Host.Alias, route: route, stale: catalog.Stale, local: catalog.Local, sessions: orderSessionsByActivity(sessions)}
+		hosts[index] = host{record: catalog.Host, id: catalog.Host.ID, machineName: cli.HostLabel(catalog.Host), route: route, nameStale: catalog.Host.MachineName != "" && (!catalog.Host.NameVerified || catalog.Stale), stale: catalog.Stale, local: catalog.Local, sessions: orderSessionsByActivity(sessions)}
 	}
+	projectPickerNames(hosts)
 	sort.SliceStable(hosts, func(i, j int) bool { return hosts[i].local && !hosts[j].local })
 	return hosts
 }
@@ -171,14 +172,34 @@ func cliSelection(selected selection) cli.PickerSelection {
 	case cancelSelection:
 		return cli.PickerSelection{}
 	case attachSelection:
-		return cli.PickerSelection{HostAlias: selected.hostAlias, SessionID: selected.sessionID, Relaunch: selected.relaunch, TakeOver: selected.takeOver, RecoveryAction: selected.recoveryAction}
+		return cli.PickerSelection{HostID: selected.hostID, SessionID: selected.sessionID, Relaunch: selected.relaunch, TakeOver: selected.takeOver, RecoveryAction: selected.recoveryAction}
 	case newSelection:
-		return cli.PickerSelection{HostAlias: selected.hostAlias, New: true}
+		return cli.PickerSelection{HostID: selected.hostID, Local: selected.local, New: true}
 	case resumeSelection:
-		return cli.PickerSelection{HostAlias: selected.hostAlias}
+		return cli.PickerSelection{HostID: selected.hostID}
 	case wakeSelection:
-		return cli.PickerSelection{HostAlias: selected.hostAlias, Wake: true}
+		return cli.PickerSelection{HostID: selected.hostID, Wake: true}
 	default:
 		panic(fmt.Sprintf("tui: unknown picker selection %T", selected))
+	}
+}
+
+func projectPickerNames(hosts []host) {
+	records := make([]cli.HostRecord, 0, len(hosts))
+	for _, host := range hosts {
+		if host.record.ID != "" {
+			records = append(records, host.record)
+		}
+	}
+	cli.ProjectHostNames(records)
+	byID := make(map[string]cli.HostRecord, len(records))
+	for _, record := range records {
+		byID[record.ID] = record
+	}
+	for index := range hosts {
+		if record, ok := byID[hosts[index].id]; ok {
+			hosts[index].record = record
+			hosts[index].machineName = cli.HostLabel(record)
+		}
 	}
 }

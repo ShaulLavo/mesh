@@ -10,7 +10,7 @@ import (
 )
 
 type sessionActionTarget struct {
-	hostAlias string
+	hostID    string
 	sessionID string
 }
 
@@ -55,13 +55,13 @@ func (m *model) startSessionAction(action cli.PickerSessionAction) tea.Cmd {
 	}
 
 	m.actionSeq++
-	target := sessionActionTarget{hostAlias: currentHost.alias, sessionID: currentSession.id}
+	target := sessionActionTarget{hostID: currentHost.id, sessionID: currentSession.id}
 	m.sessionAction = sessionActionState{target: target, action: action, generation: m.actionSeq, phase: sessionActionRunning}
 	m.notice = fmt.Sprintf("%s %s…", sessionActionProgress(action), currentSession.id)
 	requestContext, cancel := context.WithCancel(m.ctx)
 	m.cancelAction = cancel
 	act := m.act
-	request := cli.PickerSessionActionRequest{HostAlias: target.hostAlias, SessionID: target.sessionID, Action: action}
+	request := cli.PickerSessionActionRequest{HostID: target.hostID, SessionID: target.sessionID, Action: action}
 	generation := m.actionSeq
 	return func() tea.Msg {
 		defer cancel()

@@ -28,8 +28,8 @@ func TestPickerCatalogOmitsSelfAdoptedHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	self := fixture.host
-	self.ID, self.MeshIdentity, self.Alias = local.ID, local.ID, "home"
-	if err := SaveHost(self); err != nil {
+	self.ID, self.MeshIdentity, self.MachineName = local.ID, local.ID, "home"
+	if err := saveNamedTestHost(t, self); err != nil {
 		t.Fatal(err)
 	}
 	called := false
@@ -43,11 +43,11 @@ func TestPickerCatalogOmitsSelfAdoptedHost(t *testing.T) {
 		},
 		Picker: func(ctx context.Context, input PickerInput) (PickerSelection, error) {
 			called = true
-			if len(input.Hosts) != 2 || !input.Hosts[0].Local || input.Hosts[0].Host.ID != local.ID || input.Hosts[1].Host.Alias != "pc" {
+			if len(input.Hosts) != 2 || !input.Hosts[0].Local || input.Hosts[0].Host.ID != local.ID || input.Hosts[1].Host.MachineName != "pc" {
 				t.Errorf("picker hosts = %+v, want this host and pc only", input.Hosts)
 			}
 			remote, err := input.LoadHosts(ctx)
-			if err != nil || len(remote) != 1 || remote[0].Host.Alias != "pc" {
+			if err != nil || len(remote) != 1 || remote[0].Host.MachineName != "pc" {
 				t.Errorf("picker remote hosts = %+v, %v, want pc only", remote, err)
 			}
 			return PickerSelection{}, nil
@@ -73,7 +73,7 @@ func TestResolutionOmitsSelfWhenSessionIsNotLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	self := fixture.host
-	self.ID, self.MeshIdentity, self.Alias = local.ID, local.ID, "home"
+	self.ID, self.MeshIdentity, self.MachineName = local.ID, local.ID, "home"
 	app := &application{dependencies: Dependencies{DialControl: func(ctx context.Context, host HostRecord) (transport.Conn, error) {
 		if host.ID == local.ID {
 			t.Error("resolution queried self for a session missing locally")
@@ -82,7 +82,7 @@ func TestResolutionOmitsSelfWhenSessionIsNotLocal(t *testing.T) {
 		return fixture.dial(ctx, host)
 	}}}
 	resolved, err := app.resolveSession(t.Context(), []HostRecord{self, fixture.host}, "7K3D")
-	if err != nil || resolved.host == nil || resolved.host.Alias != "pc" {
+	if err != nil || resolved.host == nil || resolved.host.MachineName != "pc" {
 		t.Fatalf("resolved = %+v, %v, want remote pc", resolved, err)
 	}
 }
@@ -94,12 +94,12 @@ func TestSelfHostFilterRequiresBothIdentityFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	hosts := []HostRecord{
-		{Alias: "self", ID: self.ID, MeshIdentity: self.ID},
-		{Alias: "different-key", ID: self.ID, MeshIdentity: "other-key"},
-		{Alias: "different-id", ID: "other-id", MeshIdentity: self.ID},
+		{MachineName: "self", ID: self.ID, MeshIdentity: self.ID},
+		{MachineName: "different-key", ID: self.ID, MeshIdentity: "other-key"},
+		{MachineName: "different-id", ID: "other-id", MeshIdentity: self.ID},
 	}
-	remote, alias := withoutThisHost(stateDir, hosts)
-	if alias != "self" || len(remote) != 2 || remote[0].Alias != hosts[1].Alias || remote[1].Alias != hosts[2].Alias {
+	remote, alias := withoutThisHost(t.Context(), stateDir, hosts)
+	if alias != self.ID || len(remote) != 2 || remote[0].MachineName != hosts[1].MachineName || remote[1].MachineName != hosts[2].MachineName {
 		t.Fatalf("filtered = %+v, alias %q, want both mismatched identities retained", remote, alias)
 	}
 }

@@ -258,7 +258,7 @@ func TestRevokedDeviceCanReconnectOnlyThroughSignedUpdater(t *testing.T) {
 		t.Fatalf("ordinary update-only dial: connection=%v error=%v", denied, err)
 	}
 	var result string
-	target := update.Host{ID: host.ID, Alias: "fixture", Endpoint: "ws" + server.URL[4:]}
+	target := update.Host{ID: host.ID, MachineName: "fixture", Endpoint: "ws" + server.URL[4:]}
 	if err := (update.Client{ID: actor.ID, Key: actorKey}).Call(ctx, target, "info", nil, &result); err != nil {
 		t.Fatal(err)
 	}

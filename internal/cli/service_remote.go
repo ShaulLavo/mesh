@@ -40,34 +40,34 @@ func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer,
 		return protocol.ServicePreview{}, "", remoteServiceResponseError(host, "service preview", response)
 	}
 	if response.Type != protocol.TypeServicePreviewed || response.ServicePreview == nil {
-		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned an invalid service preview", host.Alias)
+		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned an invalid service preview", HostLabel(host))
 	}
 	preview := *response.ServicePreview
 	if _, err := validateRemoteService(preview.Service); err != nil {
-		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned an invalid service preview: %w", host.Alias, err)
+		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned an invalid service preview: %w", HostLabel(host), err)
 	}
 	if preview.FileCount > meshserve.MaximumPreviewEntries {
-		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned an invalid service file count", host.Alias)
+		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned an invalid service file count", HostLabel(host))
 	}
 	if preview.Service.Kind == string(meshserve.Proxy) && preview.FileCount != 0 {
-		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned files for a proxy preview", host.Alias)
+		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned files for a proxy preview", HostLabel(host))
 	}
 	if service.DisplayName != "" && preview.Service.DisplayName != service.DisplayName {
-		return protocol.ServicePreview{}, "", fmt.Errorf("host %s did not preserve the display name; update Mesh there first", host.Alias)
+		return protocol.ServicePreview{}, "", fmt.Errorf("host %s did not preserve the display name; update Mesh there first", HostLabel(host))
 	}
 	if preview.Service.Name != service.Name || preview.Service.PublicName != service.PublicName || preview.Service.WakeOnRequest != service.WakeOnRequest || preview.Service.Isolate != service.Isolate || service.Kind != "" && preview.Service.Kind != service.Kind {
-		return protocol.ServicePreview{}, "", fmt.Errorf("host %s changed service semantics in its preview", host.Alias)
+		return protocol.ServicePreview{}, "", fmt.Errorf("host %s changed service semantics in its preview", HostLabel(host))
 	}
 	if err := validatePreviewInference(service, preview.Service); err != nil {
-		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned an invalid service preview: %w", host.Alias, err)
+		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned an invalid service preview: %w", HostLabel(host), err)
 	}
 	if !sameDemandDefinition(service, preview.Service) {
 		if (service.Run != nil || len(service.Listens) > 0) && preview.Service.Run == nil && len(preview.Service.Listens) == 0 {
 			// An older daemon drops fields it does not know and would
 			// otherwise serve a plain proxy to a port nothing listens on.
-			return protocol.ServicePreview{}, "", fmt.Errorf("host %s does not support --run or --listen; update Mesh there first", host.Alias)
+			return protocol.ServicePreview{}, "", fmt.Errorf("host %s does not support --run or --listen; update Mesh there first", HostLabel(host))
 		}
-		return protocol.ServicePreview{}, "", fmt.Errorf("host %s changed the listeners or launch recipe in its preview", host.Alias)
+		return protocol.ServicePreview{}, "", fmt.Errorf("host %s changed the listeners or launch recipe in its preview", HostLabel(host))
 	}
 	return preview, info.PrivateName, nil
 }
@@ -93,19 +93,20 @@ func upsertRemoteService(ctx context.Context, host HostRecord, dial HostDialer, 
 		return remoteServicePublication{}, remoteServiceResponseError(host, "service publication", response)
 	}
 	if response.Type != protocol.TypeServiceUpserted || response.Service == nil {
-		return remoteServicePublication{}, fmt.Errorf("host %s returned an invalid service publication acknowledgement", host.Alias)
+		return remoteServicePublication{}, fmt.Errorf("host %s returned an invalid service publication acknowledgement", HostLabel(host))
 	}
 	acknowledged, err := validateRemoteService(*response.Service)
 	if err != nil {
 		return remoteServicePublication{}, err
 	}
 	if !sameServiceDefinition(acknowledged, preview.Service) {
-		return remoteServicePublication{}, fmt.Errorf("host %s acknowledged a different service definition", host.Alias)
+		return remoteServicePublication{}, fmt.Errorf("host %s acknowledged a different service definition", HostLabel(host))
 	}
 	return remoteServicePublication{Service: acknowledged, PrivateName: info.PrivateName, Warning: response.Message}, nil
 }
 
 type remoteServiceSnapshot struct {
+	Host                   HostRecord
 	PrivateName            string
 	Services               []protocol.ServiceInfo
 	ServiceHealthSupported bool
@@ -120,7 +121,7 @@ func listRemoteServices(ctx context.Context, host HostRecord, dial HostDialer) (
 		return remoteServiceSnapshot{}, remoteServiceResponseError(host, "service list", response)
 	}
 	if response.Type != protocol.TypeServiceListed || len(response.Services) > meshserve.MaximumServices {
-		return remoteServiceSnapshot{}, fmt.Errorf("host %s returned an invalid service list", host.Alias)
+		return remoteServiceSnapshot{}, fmt.Errorf("host %s returned an invalid service list", HostLabel(host))
 	}
 	services := make([]protocol.ServiceInfo, len(response.Services))
 	seen := make(map[string]struct{}, len(response.Services))
@@ -128,19 +129,23 @@ func listRemoteServices(ctx context.Context, host HostRecord, dial HostDialer) (
 	for index, candidate := range response.Services {
 		service, err := validateRemoteService(candidate)
 		if err != nil {
-			return remoteServiceSnapshot{}, fmt.Errorf("host %s returned an invalid service list: %w", host.Alias, err)
+			return remoteServiceSnapshot{}, fmt.Errorf("host %s returned an invalid service list: %w", HostLabel(host), err)
 		}
 		if _, exists := seen[service.Name]; exists {
-			return remoteServiceSnapshot{}, fmt.Errorf("host %s returned duplicate service %s", host.Alias, service.Name)
+			return remoteServiceSnapshot{}, fmt.Errorf("host %s returned duplicate service %s", HostLabel(host), service.Name)
 		}
 		if index > 0 && service.Name <= previous {
-			return remoteServiceSnapshot{}, fmt.Errorf("host %s returned services out of canonical order", host.Alias)
+			return remoteServiceSnapshot{}, fmt.Errorf("host %s returned services out of canonical order", HostLabel(host))
 		}
 		seen[service.Name] = struct{}{}
 		previous = service.Name
 		services[index] = service
 	}
-	return remoteServiceSnapshot{PrivateName: info.PrivateName, Services: services, ServiceHealthSupported: info.ServiceHealthSupported}, nil
+	host.NameVerified = info.MachineName != ""
+	if host.NameVerified {
+		host.MachineName, host.NameRevision = info.MachineName, info.NameRevision
+	}
+	return remoteServiceSnapshot{Host: host, PrivateName: info.PrivateName, Services: services, ServiceHealthSupported: info.ServiceHealthSupported}, nil
 }
 
 func deleteRemoteService(ctx context.Context, host HostRecord, dial HostDialer, name string) error {
@@ -155,7 +160,7 @@ func deleteRemoteService(ctx context.Context, host HostRecord, dial HostDialer, 
 		return remoteServiceResponseError(host, "service deletion", response)
 	}
 	if response.Type != protocol.TypeServiceDeleted || response.ServiceName != name {
-		return fmt.Errorf("host %s returned an invalid service deletion acknowledgement", host.Alias)
+		return fmt.Errorf("host %s returned an invalid service deletion acknowledgement", HostLabel(host))
 	}
 	return nil
 }
@@ -185,24 +190,24 @@ func listRemoteEdge(ctx context.Context, host HostRecord, dial HostDialer) ([]pr
 			return nil, remoteServiceResponseError(host, "public edge list", response)
 		}
 		if response.Type != protocol.TypeEdgeListed || len(response.EdgeRoutes) > edgeListPageSize {
-			return nil, fmt.Errorf("host %s returned an invalid public edge page", host.Alias)
+			return nil, fmt.Errorf("host %s returned an invalid public edge page", HostLabel(host))
 		}
 		for _, route := range response.EdgeRoutes {
 			if err := validateRemoteEdgeRoute(route); err != nil {
-				return nil, fmt.Errorf("host %s returned an invalid public edge route: %w", host.Alias, err)
+				return nil, fmt.Errorf("host %s returned an invalid public edge route: %w", HostLabel(host), err)
 			}
 			key := route.PublicName + "\x00" + route.ServiceName
 			if _, exists := seen[key]; exists {
-				return nil, fmt.Errorf("host %s returned a duplicate public edge route", host.Alias)
+				return nil, fmt.Errorf("host %s returned a duplicate public edge route", HostLabel(host))
 			}
 			if previousKey != "" && key <= previousKey {
-				return nil, fmt.Errorf("host %s returned public edge routes out of canonical order", host.Alias)
+				return nil, fmt.Errorf("host %s returned public edge routes out of canonical order", HostLabel(host))
 			}
 			seen[key] = struct{}{}
 			previousKey = key
 			routes = append(routes, route)
 			if len(routes) > maximumEdgeRoutes {
-				return nil, fmt.Errorf("host %s public edge list exceeds %d routes", host.Alias, maximumEdgeRoutes)
+				return nil, fmt.Errorf("host %s public edge list exceeds %d routes", HostLabel(host), maximumEdgeRoutes)
 			}
 		}
 		next := response.EdgeNextCursor
@@ -210,11 +215,11 @@ func listRemoteEdge(ctx context.Context, host HostRecord, dial HostDialer) ([]pr
 			return routes, nil
 		}
 		if next == cursor || len(next) > 786 || len(response.EdgeRoutes) == 0 {
-			return nil, fmt.Errorf("host %s returned an invalid public edge cursor", host.Alias)
+			return nil, fmt.Errorf("host %s returned an invalid public edge cursor", HostLabel(host))
 		}
 		cursor = next
 	}
-	return nil, fmt.Errorf("host %s public edge list did not terminate", host.Alias)
+	return nil, fmt.Errorf("host %s public edge list did not terminate", HostLabel(host))
 }
 
 func remoteServiceRequest(ctx context.Context, host HostRecord, dial HostDialer, request protocol.Control, expectedPrivateName *string) (protocol.Control, protocol.HostInfo, error) {
@@ -227,7 +232,7 @@ func remoteServiceRequest(ctx context.Context, host HostRecord, dial HostDialer,
 	}
 	defer conn.Close() //nolint:errcheck // request result is authoritative
 	if expectedPrivateName != nil && info.PrivateName != *expectedPrivateName {
-		return protocol.Control{}, protocol.HostInfo{}, fmt.Errorf("host %s private name changed after preview", host.Alias)
+		return protocol.Control{}, protocol.HostInfo{}, fmt.Errorf("host %s private name changed after preview", HostLabel(host))
 	}
 	requestID, err := newDaemonRequestID()
 	if err != nil {
@@ -299,7 +304,7 @@ func validateRemoteEdgeRoute(route protocol.EdgeRouteInfo) error {
 
 func remoteServiceResponseError(host HostRecord, operation string, response protocol.Control) error {
 	detail := safeRemoteText(response.Message)
-	base := fmt.Sprintf("host %s rejected %s", host.Alias, operation)
+	base := fmt.Sprintf("host %s rejected %s", HostLabel(host), operation)
 	switch response.ErrorCode {
 	case protocol.ErrorCodeCredentialsFound:
 		if detail == "" {

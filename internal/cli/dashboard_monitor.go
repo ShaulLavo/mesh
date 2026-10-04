@@ -64,7 +64,7 @@ func (m *dashboardMonitor) startReaders(ctx context.Context, publish func(Dashbo
 }
 
 func (m *dashboardMonitor) watchHost(ctx context.Context, record HostRecord, retained DashboardHostView, updates chan<- DashboardHostView) error {
-	request := protocol.StateWatch{Topics: []string{protocol.TopicSessions, protocol.TopicServices, protocol.TopicMetrics}, MetricsEveryMillis: 2000}
+	request := protocol.StateWatch{Topics: []string{protocol.TopicHost, protocol.TopicSessions, protocol.TopicServices, protocol.TopicMetrics}, MetricsEveryMillis: 2000}
 	return m.watcher.watch(ctx, record, request, func(state StateView) {
 		next := projectDashboardState(retained.Host, state)
 		if state.Sections[protocol.TopicSessions].ReceivedAt.IsZero() {

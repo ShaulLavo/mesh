@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/shaul/mesh/internal/agentresume"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/procmem"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/worker"
@@ -52,7 +53,7 @@ type gcEntry struct {
 }
 
 func (e gcEntry) label() string {
-	return e.row.ID + " on " + e.host.Alias
+	return e.row.ID + " on " + HostLabel(e.host)
 }
 
 func (a *application) gcCommand() *cobra.Command {
@@ -121,15 +122,11 @@ func (a *application) runGC(cmd *cobra.Command, idle time.Duration, shells, yes 
 // gcCatalog is the ls catalog minus rows that came from cache: a stale row
 // describes a host gc cannot reach, and acting on it would only fail.
 func (a *application) gcCatalog(cmd *cobra.Command, hosts []HostRecord) ([]HostSessions, error) {
-	var catalog []HostSessions
-	local, err := localSessionRowsMeasured(procmem.Snapshot())
+	catalog, err := a.localGCCatalog(cmd)
 	if err != nil {
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "this host: local sessions unavailable: %s\n", safeRemoteText(a.privacy.Value("error", err.Error()))); err != nil {
-			return nil, err
-		}
-	} else {
-		catalog = append(catalog, HostSessions{Local: true, Host: HostRecord{Alias: localHostAlias}, Sessions: local})
+		return nil, err
 	}
+
 	if len(hosts) == 0 {
 		return catalog, nil
 	}
@@ -151,11 +148,31 @@ func (a *application) gcCatalog(cmd *cobra.Command, hosts []HostRecord) ([]HostS
 		if result.Err != nil {
 			reason = safeRemoteText(a.privacy.Value("error", result.Err.Error()))
 		}
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %s; its sessions were not considered\n", a.privacy.Value("host", result.Host.Alias), reason); err != nil {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: unavailable: %s; its sessions were not considered\n", a.privacy.Value("host", HostLabel(result.Host)), reason); err != nil {
 			return nil, err
 		}
 	}
 	return catalog, nil
+}
+
+func (a *application) localGCCatalog(cmd *cobra.Command) ([]HostSessions, error) {
+	local, err := localSessionRowsMeasured(procmem.Snapshot())
+	if err != nil {
+		_, writeErr := fmt.Fprintf(cmd.ErrOrStderr(), "this host: local sessions unavailable: %s\n", safeRemoteText(a.privacy.Value("error", err.Error())))
+		if writeErr != nil {
+			return nil, fmt.Errorf("report local GC availability: %w", writeErr)
+		}
+		return nil, nil
+	}
+	stateDir, err := paths.StateDir()
+	if err != nil {
+		return nil, fmt.Errorf("locate local GC state: %w", err)
+	}
+	owner, err := localNameRecord(cmd.Context(), stateDir)
+	if err != nil {
+		return nil, err
+	}
+	return []HostSessions{{Local: true, Host: owner, Sessions: local}}, nil
 }
 
 // planGC lists every detached session idle for at least policy.idle, with
@@ -185,8 +202,8 @@ func planGC(policy gcPolicy, catalog []HostSessions) []gcEntry {
 		if entries[i].row.MemoryBytes != entries[j].row.MemoryBytes {
 			return entries[i].row.MemoryBytes > entries[j].row.MemoryBytes
 		}
-		if entries[i].host.Alias != entries[j].host.Alias {
-			return entries[i].host.Alias < entries[j].host.Alias
+		if entries[i].host.MachineName != entries[j].host.MachineName {
+			return entries[i].host.MachineName < entries[j].host.MachineName
 		}
 		return entries[i].row.ID < entries[j].row.ID
 	})
@@ -284,7 +301,7 @@ func writeGCPlan(output io.Writer, entries []gcEntry, masks ...*privacy.Mask) er
 	}
 	for _, entry := range entries {
 		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			SafeTerminalText(mask.Value("host", entry.host.Alias)), mask.Value("session", entry.row.ID), formatBytes(entry.row.MemoryBytes),
+			SafeTerminalText(mask.Value("host", HostLabel(entry.host))), mask.Value("session", entry.row.ID), formatBytes(entry.row.MemoryBytes),
 			compactDuration(entry.idle), privateGCActionText(mask, entry), gcWhat(entry.row, mask),
 		); err != nil {
 			return err
@@ -357,7 +374,7 @@ func (a *application) applyGCPlan(cmd *cobra.Command, policy gcPolicy, entries [
 		if entry.action == gcKill {
 			verb = "killed"
 		}
-		if _, err := fmt.Fprintf(output, "%s %s\n", verb, SafeTerminalText(a.privacy.Value("session", entry.row.ID)+" on "+a.privacy.Value("host", entry.host.Alias))); err != nil {
+		if _, err := fmt.Fprintf(output, "%s %s\n", verb, SafeTerminalText(a.privacy.Value("session", entry.row.ID)+" on "+a.privacy.Value("host", HostLabel(entry.host)))); err != nil {
 			return err
 		}
 	}
@@ -405,7 +422,7 @@ func (a *application) confirmIdleShell(ctx context.Context, policy gcPolicy, ent
 		err        error
 	)
 	if entry.local {
-		inspection, err = inspectLocalSession(ctx, PickerInspectRequest{HostAlias: localHostAlias, SessionID: entry.row.ID, PreviewCols: 1, PreviewRows: 1})
+		inspection, err = inspectLocalSession(ctx, PickerInspectRequest{HostID: localHostID(), SessionID: entry.row.ID, PreviewCols: 1, PreviewRows: 1})
 	} else {
 		inspection, err = inspectRemoteSession(ctx, entry.host, a.dependencies.DialHost, entry.row.ID, 1, 1)
 	}

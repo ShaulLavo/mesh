@@ -30,7 +30,7 @@ func TestProgramRestoresTerminalBeforeSelectionReturns(t *testing.T) {
 	if !ok {
 		t.Fatalf("final model has type %T", final)
 	}
-	if finished.selection != (attachSelection{hostAlias: "pc", sessionID: "7K3D"}) {
+	if finished.selection != (attachSelection{hostID: "pc", sessionID: "7K3D"}) {
 		t.Fatalf("selection = %#v", finished.selection)
 	}
 	_, _ = io.WriteString(output, attachStarted)

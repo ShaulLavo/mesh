@@ -16,14 +16,14 @@ func TestPickerRendersLocalBeforeLoadingRemoteHosts(t *testing.T) {
 	calls := 0
 	input := cli.PickerInput{
 		Hosts: []cli.HostSessions{
-			{Host: cli.HostRecord{ID: "pc-id", Alias: "pc"}, Stale: true},
-			{Host: cli.HostRecord{ID: "laptop-id", Alias: "laptop"}, Local: true, Sessions: []protocol.SessionInfo{{ID: "7K3D", State: "detached"}}},
+			{Host: cli.HostRecord{ID: "pc-id", MachineName: "pc"}, Stale: true},
+			{Host: cli.HostRecord{ID: "laptop-id", MachineName: "laptop"}, Local: true, Sessions: []protocol.SessionInfo{{ID: "7K3D", State: "detached"}}},
 		},
 		LoadHosts: func(context.Context) ([]cli.HostSessions, error) {
 			calls++
 			return []cli.HostSessions{
-				{Host: cli.HostRecord{ID: "laptop-id", Alias: "laptop"}, Local: true, Sessions: []protocol.SessionInfo{{ID: "WRONG", State: "running"}}},
-				{Host: cli.HostRecord{ID: "pc-id", Alias: "pc"}, Sessions: []protocol.SessionInfo{{ID: "91AZ", State: "running"}}},
+				{Host: cli.HostRecord{ID: "laptop-id", MachineName: "laptop"}, Local: true, Sessions: []protocol.SessionInfo{{ID: "WRONG", State: "running"}}},
+				{Host: cli.HostRecord{ID: "pc-id", MachineName: "pc"}, Sessions: []protocol.SessionInfo{{ID: "91AZ", State: "running"}}},
 			}, nil
 		},
 	}
@@ -47,18 +47,18 @@ func TestPickerRendersLocalBeforeLoadingRemoteHosts(t *testing.T) {
 func TestDelayedCatalogPreservesOpenHostAndCurrentSelection(t *testing.T) {
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts: []cli.HostSessions{
-			{Host: cli.HostRecord{ID: "laptop-id", Alias: "laptop"}, Local: true},
-			{Host: cli.HostRecord{ID: "pc-id", Alias: "pc"}, Sessions: []protocol.SessionInfo{{ID: "91AZ", State: "detached"}}},
+			{Host: cli.HostRecord{ID: "laptop-id", MachineName: "laptop"}, Local: true},
+			{Host: cli.HostRecord{ID: "pc-id", MachineName: "pc"}, Sessions: []protocol.SessionInfo{{ID: "91AZ", State: "detached"}}},
 		},
-		OpenHostAlias: "pc",
+		OpenHostID: "pc-id",
 	}, pickerTestNow)
 	updated, _ := current.Update(hostCatalogLoadedMsg{hosts: []cli.HostSessions{
-		{Host: cli.HostRecord{ID: "pc-id", Alias: "pc"}, Sessions: []protocol.SessionInfo{{ID: "7K3D", State: "detached"}}},
-		{Host: cli.HostRecord{ID: "pi-id", Alias: "pi"}},
+		{Host: cli.HostRecord{ID: "pc-id", MachineName: "pc"}, Sessions: []protocol.SessionInfo{{ID: "7K3D", State: "detached"}}},
+		{Host: cli.HostRecord{ID: "pi-id", MachineName: "pi"}},
 	}})
 	current = updated.(model)
-	if current.screen != sessionScreen || current.currentHost().alias != "pc" || current.selectedSessionID() != "91AZ" || len(current.hosts) != 3 {
-		t.Fatalf("delayed catalog moved selection: host %q, session %q, hosts %d", current.currentHost().alias, current.selectedSessionID(), len(current.hosts))
+	if current.screen != sessionScreen || current.currentHost().machineName != "pc" || current.selectedSessionID() != "91AZ" || len(current.hosts) != 3 {
+		t.Fatalf("delayed catalog moved selection: host %q, session %q, hosts %d", current.currentHost().machineName, current.selectedSessionID(), len(current.hosts))
 	}
 }
 
@@ -75,8 +75,8 @@ func TestPickerRelaunchAndExplicitTakeoverSelection(t *testing.T) {
 	} {
 		t.Run(test.state, func(t *testing.T) {
 			current := newPickerModel(context.Background(), cli.PickerInput{
-				Hosts:         []cli.HostSessions{{Host: cli.HostRecord{Alias: "laptop"}, Local: true, Sessions: []protocol.SessionInfo{{ID: "7K3D", State: test.state}}}},
-				OpenHostAlias: "laptop",
+				Hosts:      []cli.HostSessions{{Host: cli.HostRecord{ID: "laptop", MachineName: "laptop"}, Local: true, Sessions: []protocol.SessionInfo{{ID: "7K3D", State: test.state}}}},
+				OpenHostID: "laptop",
 			}, pickerTestNow)
 			view := ansi.Strip(current.View().Content)
 			if !strings.Contains(view, test.footer) {
@@ -97,20 +97,20 @@ func TestNestedSessionLabelsResolveHostAndContainingSession(t *testing.T) {
 	remote := protocol.SessionIdentity{HostID: "pc-id", SessionID: "91AZ"}
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts: []cli.HostSessions{
-			{Host: cli.HostRecord{ID: local.HostID, Alias: "laptop"}, Local: true, Sessions: []protocol.SessionInfo{{ID: local.SessionID, State: "running"}}},
-			{Host: cli.HostRecord{ID: remote.HostID, Alias: "pc"}, Sessions: []protocol.SessionInfo{{ID: remote.SessionID, State: "running"}}},
+			{Host: cli.HostRecord{ID: local.HostID, MachineName: "laptop"}, Local: true, Sessions: []protocol.SessionInfo{{ID: local.SessionID, State: "running"}}},
+			{Host: cli.HostRecord{ID: remote.HostID, MachineName: "pc"}, Sessions: []protocol.SessionInfo{{ID: remote.SessionID, State: "running"}}},
 		},
 		ContainingSessions: []cli.PickerContainingSession{
 			{Identity: remote},
 			{Identity: local, Snapshot: &cli.SessionInspection{Nested: []protocol.SessionIdentity{remote}}},
 		},
-		OpenHostAlias: "laptop",
+		OpenHostID: local.HostID,
 	}, pickerTestNow)
 	current.refreshSessionDelegate()
 	if view := ansi.Strip(current.View().Content); !strings.Contains(view, "on pc/91AZ") {
 		t.Fatalf("local nested label missing:\n%s", view)
 	}
-	current.openHostSessions("pc")
+	current.openHostSessions(remote.HostID)
 	current.refreshSessionDelegate()
 	if view := ansi.Strip(current.View().Content); !strings.Contains(view, "via 7K3D") || !strings.Contains(view, "enter take over") {
 		t.Fatalf("remote containment label missing:\n%s", view)

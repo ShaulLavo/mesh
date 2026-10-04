@@ -106,7 +106,7 @@ func TestDashboardDisk160x45Evidence(t *testing.T) {
 	model := dashboardPerformanceFixture()
 	for index := range model.hosts {
 		host := &model.hosts[index]
-		if host.Host.Alias != "pc" && host.Host.Alias != "pi" {
+		if host.Host.MachineName != "pc" && host.Host.MachineName != "pi" {
 			continue
 		}
 		host.Disk.Value.ReadBytesPerSecond = 999e6

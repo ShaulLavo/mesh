@@ -10,7 +10,7 @@ import (
 )
 
 const getHost = `-- name: GetHost :one
-SELECT id, alias, mesh_identity, tailscale_name, last_seen_at
+SELECT id, mesh_identity, tailscale_name, last_seen_at
 FROM hosts
 WHERE id = ?
 `
@@ -20,7 +20,6 @@ func (q *Queries) GetHost(ctx context.Context, id string) (Host, error) {
 	var i Host
 	err := row.Scan(
 		&i.ID,
-		&i.Alias,
 		&i.MeshIdentity,
 		&i.TailscaleName,
 		&i.LastSeenAt,
@@ -29,7 +28,7 @@ func (q *Queries) GetHost(ctx context.Context, id string) (Host, error) {
 }
 
 const listHosts = `-- name: ListHosts :many
-SELECT id, alias, mesh_identity, tailscale_name, last_seen_at
+SELECT id, mesh_identity, tailscale_name, last_seen_at
 FROM hosts
 ORDER BY last_seen_at DESC, id
 `
@@ -45,7 +44,6 @@ func (q *Queries) ListHosts(ctx context.Context) ([]Host, error) {
 		var i Host
 		if err := rows.Scan(
 			&i.ID,
-			&i.Alias,
 			&i.MeshIdentity,
 			&i.TailscaleName,
 			&i.LastSeenAt,
@@ -66,22 +64,19 @@ func (q *Queries) ListHosts(ctx context.Context) ([]Host, error) {
 const upsertHost = `-- name: UpsertHost :one
 INSERT INTO hosts (
     id,
-    alias,
     mesh_identity,
     tailscale_name,
     last_seen_at
-) VALUES (?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
-    alias = excluded.alias,
     mesh_identity = excluded.mesh_identity,
     tailscale_name = excluded.tailscale_name,
     last_seen_at = excluded.last_seen_at
-RETURNING id, alias, mesh_identity, tailscale_name, last_seen_at
+RETURNING id, mesh_identity, tailscale_name, last_seen_at
 `
 
 type UpsertHostParams struct {
 	ID            string
-	Alias         *string
 	MeshIdentity  string
 	TailscaleName *string
 	LastSeenAt    int64
@@ -90,7 +85,6 @@ type UpsertHostParams struct {
 func (q *Queries) UpsertHost(ctx context.Context, arg UpsertHostParams) (Host, error) {
 	row := q.db.QueryRowContext(ctx, upsertHost,
 		arg.ID,
-		arg.Alias,
 		arg.MeshIdentity,
 		arg.TailscaleName,
 		arg.LastSeenAt,
@@ -98,7 +92,6 @@ func (q *Queries) UpsertHost(ctx context.Context, arg UpsertHostParams) (Host, e
 	var i Host
 	err := row.Scan(
 		&i.ID,
-		&i.Alias,
 		&i.MeshIdentity,
 		&i.TailscaleName,
 		&i.LastSeenAt,

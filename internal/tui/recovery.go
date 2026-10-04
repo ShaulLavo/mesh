@@ -60,7 +60,7 @@ func (m *model) selectRecoveryAction(key string) (bool, tea.Cmd) {
 		return true, nil
 	}
 	if m.currentHost().stale {
-		m.notice = m.currentHost().alias + " is offline; wake it first"
+		m.notice = m.currentHost().machineName + " is offline; wake it first"
 		return true, nil
 	}
 	action := recovery.ActionShell
@@ -70,7 +70,7 @@ func (m *model) selectRecoveryAction(key string) (bool, tea.Cmd) {
 	if key == "a" {
 		action = recovery.ActionAgent
 	}
-	m.selection = attachSelection{hostAlias: m.currentHost().alias, sessionID: current.id, relaunch: true, recoveryAction: action}
+	m.selection = attachSelection{hostID: m.currentHost().id, sessionID: current.id, relaunch: true, recoveryAction: action}
 	return true, tea.Quit
 }
 
@@ -78,7 +78,7 @@ func (m model) savedDetailsFor(current session) inspectionDetails {
 	if !current.recoveryDetailsOmitted {
 		return savedRecoveryDetails(current)
 	}
-	if m.inspection.hasValue && m.inspection.target.sessionID == current.id && m.inspection.target.hostAlias == m.currentHost().alias && m.inspection.value.Recovery != nil {
+	if m.inspection.hasValue && m.inspection.target.sessionID == current.id && m.inspection.target.hostID == m.currentHost().id && m.inspection.value.Recovery != nil {
 		current.recovery = m.inspection.value.Recovery
 		return savedRecoveryDetails(current)
 	}

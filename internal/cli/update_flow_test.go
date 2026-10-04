@@ -28,7 +28,7 @@ func updateFlowFixture(t *testing.T, current bool) (Dependencies, update.Host, *
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = SaveHost(HostRecord{Alias: alias, ID: alias, MeshIdentity: host.ID, Endpoint: "ws://" + alias + ".invalid/mesh"}); err != nil {
+		if err = saveNamedTestHost(t, HostRecord{MachineName: alias, NameRevision: 1, ID: host.ID, MeshIdentity: host.ID, Endpoint: "ws://" + alias + ".invalid/mesh"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -51,7 +51,7 @@ func updateFlowFixture(t *testing.T, current bool) (Dependencies, update.Host, *
 		if current {
 			build.Version, build.Digest = manifest.Version, manifest.Artifacts[2].BinarySHA256
 		}
-		*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: build, Workers: []updateinstall.Worker{{ID: "retained", Protocol: 1, Build: &release.Build{Version: "v0.1.149"}}}}}
+		*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: build, Workers: []updateinstall.Worker{{ID: "retained", Protocol: 1, Build: &release.Build{Version: "v0.1.149"}}}}}
 		return nil
 	})
 	return Dependencies{UpdateRelease: release.Client{BaseURL: server.URL, HTTPClient: server.Client()}, UpdateCaller: caller}, local, mutations
@@ -110,8 +110,12 @@ func TestUpdateFlowDefaultDoesNotDefineFleet(t *testing.T) {
 }
 
 func TestUpdateFlowRemoteAuthorizationIsNotFailure(t *testing.T) {
-	dependencies, _, _ := updateFlowFixture(t, false)
-	text, _, err := executeCommand(t, dependencies, "update", "--host", "local", "--host", "pc", "--host", "pi", "--check")
+	dependencies, local, _ := updateFlowFixture(t, false)
+	hosts, err := LoadHosts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _, err := executeCommand(t, dependencies, "update", "--host", local.ID, "--host", hosts[0].ID, "--host", hosts[1].ID, "--check")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +222,7 @@ func TestUpdateFlowDefaultApprovalOnlySubmitsLocalPlan(t *testing.T) {
 			return errors.New("default contacted another machine")
 		}
 		if action == "info" {
-			*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
+			*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 			return nil
 		}
 		if action != "plan" {
@@ -308,7 +312,7 @@ func TestUpdateFlowChecksDoNotPromiseSessionChanges(t *testing.T) {
 
 func TestUpdateFlowGenuineFailureRemainsFailure(t *testing.T) {
 	var output bytes.Buffer
-	target := update.Target{Host: update.Host{Alias: "pc"}, State: update.Failed, Problem: "invalid update signature"}
+	target := update.Target{Host: update.Host{MachineName: "pc"}, State: update.Failed, Problem: "invalid update signature"}
 	if err := printUpdateTargets(&output, []update.Target{target}, updateTestManifest()); err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +328,7 @@ func TestUpdateFlowStartedUpdateSessionGrammar(t *testing.T) {
 			client, _ := updateTestRelease(t)
 			caller := updateCallFunc(func(_ context.Context, host update.Host, action string, input, output any) error {
 				if action == "info" {
-					*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
+					*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 					return nil
 				}
 				run := update.Run{ID: strings.Repeat("a", 32), Release: updateTestSupportedManifest(), Targets: []update.Target{{Host: local, State: update.Pending}}}

@@ -107,7 +107,7 @@ func TestDashboardGeometryCacheAcrossRetainedModelMessages(t *testing.T) {
 	model = dashboardCheckCachedFrame(t, model)
 	previous := model.View().Content
 	host := model.hosts[1]
-	host.Host.Alias = "changed alias"
+	host.Host.MachineName = "changed machineName"
 	host.Services.Rows = []cli.DashboardService{{Name: "new", State: "ready"}}
 	host.Services.Total = 1
 	next, _ := model.Update(dashboardHostMsg(host))

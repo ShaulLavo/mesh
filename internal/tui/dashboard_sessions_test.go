@@ -25,7 +25,7 @@ func TestDashboardLiveSessionNamesRefreshAndRetainStaleFacts(t *testing.T) {
 	}}
 	model := newDashboard(input, time.Now())
 	model.width, model.height = 160, 48
-	host := cli.DashboardHostView{Host: cli.DashboardHost{ID: "pc", Alias: "pc"}, Connection: cli.StateReachable, LastReply: model.now,
+	host := cli.DashboardHostView{Host: cli.DashboardHost{ID: "pc", MachineName: "pc"}, Connection: cli.StateReachable, LastReply: model.now,
 		Sessions: cli.DashboardCatalog[cli.DashboardSession]{Total: 1, ObservedAt: model.now, Rows: []cli.DashboardSession{{ID: "7K3D", Name: "mesh", State: "detached", Command: "sh -c wrapper"}}}}
 	model.hosts = []cli.DashboardHostView{host}
 	command := model.inspectSessions()

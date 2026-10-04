@@ -40,7 +40,7 @@ func TestHelperRecoveryCompletedRetryMetadataIsInert(t *testing.T) {
 	root, local := setupUpdateCLI(t)
 	_, second := setupUpdateCLI(t)
 	_, third := setupUpdateCLI(t)
-	second.Alias, third.Alias = "second", "third"
+	second.MachineName, third.MachineName = "second", "third"
 	store, err := update.OpenStore(root)
 	if err != nil {
 		t.Fatal(err)

@@ -50,7 +50,7 @@ func TestPickerServiceRefreshUsesOnlyTheSelectedHostsCache(t *testing.T) {
 }
 
 func TestPickerServiceRefreshDistinguishesCachedEmptyAndUnavailable(t *testing.T) {
-	host := HostRecord{Alias: "pc", ID: "host-id", MeshIdentity: "host-key"}
+	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
 	offline := func(context.Context, HostRecord) (transport.Conn, error) {
 		return nil, errors.New("offline")
 	}

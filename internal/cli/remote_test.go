@@ -57,7 +57,7 @@ func (c *inspectResponseConn) WriteFrame(frame protocol.Frame) error {
 func (c *inspectResponseConn) Close() error { return nil }
 
 func TestValidateHostInfoRejectsAChangedIdentity(t *testing.T) {
-	host := HostRecord{Alias: "pc", ID: "expected-id", MeshIdentity: "expected-key"}
+	host := HostRecord{MachineName: "pc", ID: "expected-id", MeshIdentity: "expected-key"}
 	err := validateHostInfo(host, protocol.HostInfo{ID: "other-id", MeshIdentity: "other-key"})
 	if err == nil || !strings.Contains(err.Error(), "identity") || !strings.Contains(err.Error(), "pc") {
 		t.Fatalf("validateHostInfo error = %v, want named identity error", err)
@@ -103,7 +103,7 @@ func TestListRemoteHostUsesWebSocketAndVerifiesIdentity(t *testing.T) {
 	}))
 	defer server.Close()
 
-	host := HostRecord{Alias: "pc", ID: hostID, MeshIdentity: hostID, Endpoint: "ws" + strings.TrimPrefix(server.URL, "http")}
+	host := HostRecord{MachineName: "pc", ID: hostID, MeshIdentity: hostID, Endpoint: "ws" + strings.TrimPrefix(server.URL, "http")}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	got, err := listRemoteHost(ctx, host, dialHost)
@@ -175,7 +175,7 @@ func TestInspectRemoteSessionRejectsInvalidResponses(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			host := HostRecord{Alias: "pc", ID: "host-id", MeshIdentity: "host-key"}
+			host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
 			conn := newInspectResponseConn(host, func(protocol.Control) protocol.Control { return test.response })
 			_, err := inspectRemoteSession(
 				context.Background(),
@@ -193,7 +193,7 @@ func TestInspectRemoteSessionRejectsInvalidResponses(t *testing.T) {
 }
 
 func TestInspectRemoteSessionValidatesRequestBeforeDial(t *testing.T) {
-	host := HostRecord{Alias: "pc", ID: "host-id", MeshIdentity: "host-key"}
+	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
 	dialed := false
 	_, err := inspectRemoteSession(
 		context.Background(),

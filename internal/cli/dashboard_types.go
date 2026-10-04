@@ -26,8 +26,13 @@ type DashboardInput struct {
 }
 
 type DashboardHost struct {
-	ID, Alias string
-	Local     bool
+	ID, MachineName string
+	Local           bool
+	NameVerified    bool
+	NameConflict    bool
+	NamePriority    bool
+	NameSuffix      string
+	NameRevision    uint64
 }
 type DashboardMeasurement[T any] struct {
 	State      string
@@ -72,6 +77,8 @@ type DashboardHostView struct {
 	Problem            string
 	MetricsUnsupported bool
 	LastReply          time.Time
+	NameObservedAt     time.Time
+	NameFailing        bool
 	CPU                DashboardMeasurement[float64]
 	RAM                DashboardMeasurement[DashboardMemory]
 	Temperature        DashboardMeasurement[DashboardTemperature]
@@ -85,4 +92,17 @@ type DashboardHostView struct {
 	Uptime             DashboardMeasurement[uint64]
 	Sessions           DashboardCatalog[DashboardSession]
 	Services           DashboardCatalog[DashboardService]
+}
+
+func (h DashboardHostView) NameLabel(now time.Time) string {
+	record := HostRecord{ID: h.Host.ID, MachineName: h.Host.MachineName, NameConflict: h.Host.NameConflict, NamePriority: h.Host.NamePriority, NameSuffix: h.Host.NameSuffix}
+	label := HostLabel(record)
+	if h.Host.MachineName != "" && (!h.Host.NameVerified || h.Connection != StateReachable || h.NameFailing || h.NameObservedAt.IsZero() || now.Sub(h.NameObservedAt) >= 30*time.Second || now.Sub(h.LastReply) >= 30*time.Second) {
+		label += retainedNameSuffix
+	}
+	return label
+}
+
+func (h DashboardHost) Label() string {
+	return HostLabel(HostRecord{ID: h.ID, MachineName: h.MachineName, NameConflict: h.NameConflict, NamePriority: h.NamePriority, NameSuffix: h.NameSuffix})
 }

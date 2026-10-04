@@ -88,7 +88,7 @@ func resolvedLabel(resolved resolvedSession) string {
 	if resolved.local != nil {
 		return resolved.local.ID
 	}
-	return resolved.remote.ID + " on " + resolved.host.Alias
+	return resolved.remote.ID + " on " + HostLabel(*resolved.host)
 }
 
 func resolvedHibernation(resolved resolvedSession) *recovery.Hibernation {
@@ -148,10 +148,10 @@ func (a *application) hibernateByID(cmd *cobra.Command, hosts []HostRecord, id s
 		return err
 	}
 	if Hibernation(resolved.remote) != nil {
-		return fmt.Errorf("session %s on %s is already hibernated", resolved.remote.ID, resolved.host.Alias)
+		return fmt.Errorf("session %s on %s is already hibernated", resolved.remote.ID, HostLabel(*resolved.host))
 	}
 	if !liveState(resolved.remote.State) {
-		return fmt.Errorf("session %s on %s is %s", resolved.remote.ID, resolved.host.Alias, resolved.remote.State)
+		return fmt.Errorf("session %s on %s is %s", resolved.remote.ID, HostLabel(*resolved.host), resolved.remote.State)
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), 12*time.Second)
 	defer cancel()
@@ -187,7 +187,7 @@ func hibernateLocal(s Session, idle time.Duration) error {
 }
 
 func hibernateRemote(ctx context.Context, host HostRecord, dial HostDialer, sessionID string, idle time.Duration) error {
-	label := sessionID + " on " + host.Alias
+	label := sessionID + " on " + HostLabel(host)
 	response, err := remoteSessionControl(ctx, host, dial, protocol.Control{
 		Type: protocol.TypeHibernate, SessionID: sessionID, HibernateIdleMillis: idle.Milliseconds(),
 	})
@@ -197,13 +197,13 @@ func hibernateRemote(ctx context.Context, host HostRecord, dial HostDialer, sess
 	switch response.Type {
 	case protocol.TypeOK:
 		if response.SessionID != sessionID {
-			return fmt.Errorf("host %s acknowledged a different session", host.Alias)
+			return fmt.Errorf("host %s acknowledged a different session", HostLabel(host))
 		}
 		return nil
 	case protocol.TypeError:
 		return hibernationRefused(label, response.Message)
 	default:
-		return fmt.Errorf("host %s returned an unexpected %s response", host.Alias, protocol.TypeHibernate)
+		return fmt.Errorf("host %s returned an unexpected %s response", HostLabel(host), protocol.TypeHibernate)
 	}
 }
 
@@ -342,7 +342,7 @@ func (a *application) reread(ctx context.Context, resolved resolvedSession) (res
 		return resolvedSession{local: &current}, current.Liveness == LivenessGone, nil
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, remoteConnectTimeout)
-	rows, err := a.queryHost(queryCtx, *resolved.host)
+	rows, err := a.queryHost(queryCtx, resolved.host)
 	cancel()
 	if err != nil {
 		return resolvedSession{}, false, err

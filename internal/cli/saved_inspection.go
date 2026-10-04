@@ -12,7 +12,7 @@ import (
 
 func savedInspection(host HostRecord, sessionID string, record recovery.Record) (SessionInspection, error) {
 	if record.SessionID != sessionID || host.ID != "" && record.HostID != host.ID {
-		return SessionInspection{}, fmt.Errorf("host %s returned a checkpoint for a different session", host.Alias)
+		return SessionInspection{}, fmt.Errorf("host %s returned a checkpoint for a different session", HostLabel(host))
 	}
 	// Launch-only recovery has no checkpoint timestamp; validate its remaining
 	// fields with a temporary timestamp without changing the displayed record.
@@ -21,10 +21,10 @@ func savedInspection(host HostRecord, sessionID string, record recovery.Record) 
 		checked.CheckpointAt = time.Now()
 	}
 	if err := recovery.Validate(checked); err != nil {
-		return SessionInspection{}, fmt.Errorf("host %s returned an invalid saved inspection: %w", host.Alias, err)
+		return SessionInspection{}, fmt.Errorf("host %s returned an invalid saved inspection: %w", HostLabel(host), err)
 	}
 	if !slices.Equal(protocol.RecoveryPreview(record).Lines, record.Lines) {
-		return SessionInspection{}, fmt.Errorf("host %s returned an oversized saved preview", host.Alias)
+		return SessionInspection{}, fmt.Errorf("host %s returned an oversized saved preview", HostLabel(host))
 	}
 	return SessionInspection{Recovery: &record}, nil
 }

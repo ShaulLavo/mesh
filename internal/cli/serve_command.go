@@ -136,7 +136,7 @@ type serveFlags struct {
 	readySet         bool
 }
 
-func (a *application) runServe(cmd *cobra.Command, hostAlias, target string, flags serveFlags) error {
+func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags serveFlags) error {
 	if target == "" {
 		return errors.New("TARGET is empty")
 	}
@@ -144,7 +144,7 @@ func (a *application) runServe(cmd *cobra.Command, hostAlias, target string, fla
 	if err != nil {
 		return err
 	}
-	host, err := hostWithAlias(hosts, hostAlias)
+	host, err := resolveHostTarget(hosts, hostID)
 	if err != nil {
 		return err
 	}
@@ -218,13 +218,13 @@ func (a *application) runServe(cmd *cobra.Command, hostAlias, target string, fla
 	}
 	if publication.Warning != "" {
 		for warning := range strings.SplitSeq(publication.Warning, "\n") {
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s: %s\n", safeTableCell(a.privacy.Value("host", host.Alias)), serviceDiagnostic(a.privacy, warning)); err != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s: %s\n", safeTableCell(a.privacy.Value("host", HostLabel(host))), serviceDiagnostic(a.privacy, warning)); err != nil {
 				return fmt.Errorf("write service shadow warning: %w", err)
 			}
 		}
 	}
 	persisted := publication.Service
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "serving %s on %s (%s -> %s)\n", a.privacy.Value("url", serviceURL(host, publication.PrivateName, persisted)), a.privacy.Value("host", host.Alias), persisted.Kind, privateServiceTarget(a.privacy, persisted))
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "serving %s on %s (%s -> %s)\n", a.privacy.Value("url", serviceURL(host, publication.PrivateName, persisted)), a.privacy.Value("host", HostLabel(host)), persisted.Kind, privateServiceTarget(a.privacy, persisted))
 	if err != nil || persisted.Run == nil {
 		return err
 	}
@@ -282,7 +282,7 @@ func (a *application) runServeList(cmd *cobra.Command, timeout time.Duration) er
 
 func (a *application) unserveCommand() *cobra.Command {
 	var (
-		hostAlias string
+		hostID    string
 		localEdge bool
 		timeout   time.Duration
 	)
@@ -292,24 +292,24 @@ func (a *application) unserveCommand() *cobra.Command {
 		Args:  exactArgs(1, "the route to remove", "mesh unserve blog.shaulavo.dev"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if localEdge {
-				return a.runLocalTunnelRelease(cmd, args[0], hostAlias)
+				return a.runLocalTunnelRelease(cmd, args[0], hostID)
 			}
 			if !strings.HasPrefix(args[0], "/") && !strings.HasPrefix(args[0], ":") {
-				return a.runTunnelRelease(cmd, args[0], hostAlias)
+				return a.runTunnelRelease(cmd, args[0], hostID)
 			}
 			if timeout <= 0 || timeout > maximumServiceListTimeout {
 				return fmt.Errorf("--timeout must be between 1ns and %s", maximumServiceListTimeout)
 			}
-			return a.runUnserve(cmd, args[0], hostAlias, timeout)
+			return a.runUnserve(cmd, args[0], hostID, timeout)
 		},
 	}
-	command.Flags().StringVar(&hostAlias, "host", "", "host alias when more than one host owns ROUTE")
+	command.Flags().StringVar(&hostID, "host", "", "machine name or exact host ID when more than one host owns ROUTE")
 	command.Flags().BoolVar(&localEdge, "local-edge", false, "release a tunnel reservation through this edge's local daemon socket")
 	command.Flags().DurationVar(&timeout, "timeout", defaultServiceListTimeout, "hard deadline for ownership discovery")
 	return command
 }
 
-func (a *application) runUnserve(cmd *cobra.Command, route, hostAlias string, timeout time.Duration) error {
+func (a *application) runUnserve(cmd *cobra.Command, route, hostID string, timeout time.Duration) error {
 	name, err := serviceNameFromRoute(route)
 	if err != nil {
 		return err
@@ -319,7 +319,7 @@ func (a *application) runUnserve(cmd *cobra.Command, route, hostAlias string, ti
 		return err
 	}
 	defer cache.Close() //nolint:errcheck // command result takes precedence
-	selected, rows, err := a.resolveServiceOwner(cmd, cache, route, name, hostAlias, timeout)
+	selected, rows, err := a.resolveServiceOwner(cmd, cache, route, name, hostID, timeout)
 	if err != nil {
 		return err
 	}
@@ -343,25 +343,25 @@ func (a *application) runUnserve(cmd *cobra.Command, route, hostAlias string, ti
 			return err
 		}
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "unserved %s on %s\n", a.privacy.Value("route", route), a.privacy.Value("host", selected.Host.Alias))
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "unserved %s on %s\n", a.privacy.Value("route", route), a.privacy.Value("host", HostLabel(selected.Host)))
 	return err
 }
 
 // resolveServiceOwner finds the one live host that serves name. It refuses
 // when several hosts serve it, or when an unavailable host makes that
 // impossible to rule out, unless --host names the owner.
-func (a *application) resolveServiceOwner(cmd *cobra.Command, cache *SQLiteCatalogCache, route, name, hostAlias string, timeout time.Duration) (ServiceCatalogRow, []ServiceCatalogRow, error) {
+func (a *application) resolveServiceOwner(cmd *cobra.Command, cache *SQLiteCatalogCache, route, name, hostID string, timeout time.Duration) (ServiceCatalogRow, []ServiceCatalogRow, error) {
 	hosts, err := LoadHosts()
 	if err != nil {
 		return ServiceCatalogRow{}, nil, err
 	}
-	explicitHost := hostAlias != ""
+	explicitHost := hostID != ""
 	if explicitHost {
-		selected, err := hostWithAlias(hosts, hostAlias)
+		selected, err := resolveHostTarget(hosts, hostID)
 		if err != nil {
 			return ServiceCatalogRow{}, nil, err
 		}
-		hostAlias = selected.Alias
+		hostID = selected.ID
 		hosts = []HostRecord{selected}
 	}
 	rows, diagnostics, err := CollectServiceCatalog(cmd.Context(), hosts, timeout,
@@ -371,7 +371,7 @@ func (a *application) resolveServiceOwner(cmd *cobra.Command, cache *SQLiteCatal
 	if err != nil {
 		return ServiceCatalogRow{}, nil, err
 	}
-	candidates := catalogCandidates(rows, name, hostAlias)
+	candidates := catalogCandidates(rows, name, hostID)
 	if !explicitHost && len(candidates) <= 1 {
 		if aliases := unavailableServiceAliases(diagnostics); len(aliases) > 0 {
 			return ServiceCatalogRow{}, nil, fmt.Errorf("could not prove %s has one owner because these hosts are unavailable: %s; choose an owner with --host", route, strings.Join(aliases, ", "))
@@ -380,7 +380,7 @@ func (a *application) resolveServiceOwner(cmd *cobra.Command, cache *SQLiteCatal
 	if len(candidates) == 0 {
 		if explicitHost {
 			if aliases := unavailableServiceAliases(diagnostics); len(aliases) > 0 {
-				return ServiceCatalogRow{}, nil, fmt.Errorf("host %s is unavailable; could not determine whether it serves %s", hostAlias, route)
+				return ServiceCatalogRow{}, nil, fmt.Errorf("host %s is unavailable; could not determine whether it serves %s", hostID, route)
 			}
 			candidates = []ServiceCatalogRow{{
 				Host: hosts[0], PrivateName: livePrivateName(rows, hosts[0].ID), Live: true,
@@ -392,14 +392,14 @@ func (a *application) resolveServiceOwner(cmd *cobra.Command, cache *SQLiteCatal
 	if len(candidates) > 1 {
 		aliases := make([]string, len(candidates))
 		for index, candidate := range candidates {
-			aliases[index] = candidate.Host.Alias
+			aliases[index] = HostLabel(candidate.Host)
 		}
 		sort.Strings(aliases)
 		return ServiceCatalogRow{}, nil, fmt.Errorf("route %s is served by multiple hosts (%s); choose one with --host", route, strings.Join(aliases, ", "))
 	}
 	selected := candidates[0]
 	if !selected.Live {
-		return ServiceCatalogRow{}, nil, fmt.Errorf("host %s is offline; refusing to act on %s", selected.Host.Alias, route)
+		return ServiceCatalogRow{}, nil, fmt.Errorf("host %s is offline; refusing to act on %s", HostLabel(selected.Host), route)
 	}
 	return selected, rows, nil
 }
@@ -519,7 +519,7 @@ func writePublicConfirmation(output io.Writer, confirmation PublicConfirmation, 
 	if confirmation.TunnelClaim {
 		question = "Reserve this hostname for an internet tunnel?"
 	}
-	if _, err := fmt.Fprintf(output, "%s\n  Host: %s\n", question, mask.Value("host", confirmation.Host.Alias)); err != nil {
+	if _, err := fmt.Fprintf(output, "%s\n  Host: %s\n", question, mask.Value("host", HostLabel(confirmation.Host))); err != nil {
 		return fmt.Errorf("show public confirmation host: %w", err)
 	}
 	if err := writePublicConfirmationTarget(output, confirmation, mask); err != nil {
@@ -594,7 +594,7 @@ func writeServiceShadowWarnings(output io.Writer, rows []ServiceCatalogRow, mask
 			cached = " (cached)"
 		}
 		for _, shadow := range meshserve.PrivateRouteShadows(services) {
-			if _, err := fmt.Fprintf(output, "warning: %s%s: %s\n", safeTableCell(mask.Value("host", row.Host.Alias)), cached, serviceDiagnostic(mask, shadow.Message())); err != nil {
+			if _, err := fmt.Fprintf(output, "warning: %s%s: %s\n", safeTableCell(mask.Value("host", HostLabel(row.Host))), cached, serviceDiagnostic(mask, shadow.Message())); err != nil {
 				return fmt.Errorf("write service shadow warning: %w", err)
 			}
 		}
@@ -631,7 +631,7 @@ func writeServiceTable(output io.Writer, rows []ServiceCatalogRow, mask *privacy
 	}
 	for _, row := range rows {
 		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			safeTableCell(mask.Value("route", serviceRoute(row.Service))), safeTableCell(mask.Value("name", serviceDisplayName(row.Service))), safeTableCell(mask.Value("host", row.Host.Alias)), safeTableCell(row.Service.Kind), privateServiceTarget(mask, row.Service),
+			safeTableCell(mask.Value("route", serviceRoute(row.Service))), safeTableCell(mask.Value("name", serviceDisplayName(row.Service))), safeTableCell(mask.Value("host", HostLabel(row.Host))), safeTableCell(row.Service.Kind), privateServiceTarget(mask, row.Service),
 			safeTableCell(row.Scope()), safeTableCell(row.State()), safeTableCell(row.Health()), safeTableCell(mask.Value("url", row.URL()))); err != nil {
 			return fmt.Errorf("write service table: %w", err)
 		}

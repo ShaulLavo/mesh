@@ -30,9 +30,9 @@ func setupTunnelCLI(t *testing.T) (HostRecord, ed25519.PrivateKey, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := HostRecord{Alias: "vps", ID: edge.ID, MeshIdentity: edge.ID,
+	host := HostRecord{MachineName: "vps", ID: edge.ID, MeshIdentity: edge.ID,
 		TailscaleName: "vps.example.ts.net", Endpoint: "ws://100.64.0.2:7337/mesh"}
-	if err := SaveHost(host); err != nil {
+	if err := saveNamedTestHost(t, host); err != nil {
 		t.Fatal(err)
 	}
 	return host, key, stateDir
@@ -243,4 +243,13 @@ func TestTunnelClaimRejectsNamesAndMissingIdentityBeforeSend(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(stateDir, "identity.key")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("claim recreated missing identity: %v", err)
 	}
+}
+
+func sendTunnelMutation(ctx context.Context, host HostRecord, dial HostDialer, mutation tunnel.Mutation) (tunnel.Ack, error) {
+	conn, _, err := openVerifiedHostInfo(ctx, host, dial)
+	if err != nil {
+		return tunnel.Ack{}, err
+	}
+	defer conn.Close() //nolint:errcheck // mutation result decides the outcome
+	return sendVerifiedTunnelMutation(ctx, host, conn, mutation)
 }

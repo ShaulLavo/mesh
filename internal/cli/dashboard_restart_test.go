@@ -170,7 +170,7 @@ func TestDashboardInstalledTargetRequiresCommittedMatchingImage(t *testing.T) {
 }
 
 func TestDashboardWatchPublishesVerifiedBuildWithSnapshot(t *testing.T) {
-	host := HostRecord{ID: "local", Alias: "local", MeshIdentity: "identity"}
+	host := HostRecord{ID: "local", MachineName: "local", MeshIdentity: "identity"}
 	build := release.Build{Digest: "new"}
 	dial := reviewControlDial(t, func(host HostRecord, request protocol.Control) *protocol.Control {
 		if request.Type == protocol.TypeHostInfo {
@@ -200,7 +200,7 @@ func TestDashboardWatchPublishesVerifiedBuildWithSnapshot(t *testing.T) {
 }
 
 func TestDashboardFailedWatchSetupClearsRetainedBuild(t *testing.T) {
-	host := HostRecord{ID: "local", Alias: "local", MeshIdentity: "identity"}
+	host := HostRecord{ID: "local", MachineName: "local", MeshIdentity: "identity"}
 	build := release.Build{Digest: "new"}
 	dial := reviewControlDial(t, func(host HostRecord, request protocol.Control) *protocol.Control {
 		if request.Type == protocol.TypeHostInfo {

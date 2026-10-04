@@ -71,9 +71,9 @@ pipe session (section 3.5).
 
 | Existing surface | Reuse or constraint |
 | --- | --- |
-| [`internal/cli/config.go`](../../internal/cli/config.go) | `HostRecord` owns alias, stable ID, pinned Mesh identity, and connection information. `hosts.json` is versioned and rejects unknown fields. Do not create a second address book or put profiles into this file. `reservedAliases` does not contain `hosts`, `inspect`, `profile`, `session`, or `skill`. |
+| [`internal/cli/config.go`](../../internal/cli/config.go) | `HostRecord` persists stable ID, pinned Mesh identity, and connection information. Destination-owned names and revisions come from authenticated declarations in the separate claim cache. `hosts.json` is versioned; obsolete viewer labels are discarded on an ordinary write. Do not create a second address book or put profiles into this file. |
 | [`internal/cli/catalog.go`](../../internal/cli/catalog.go) | Concurrent host queries fall back to cached session rows and mark them `Stale`. Extend this pattern, not the meaning of a cached observation. |
-| [`internal/cli/command.go`](../../internal/cli/command.go) | Human CLI routing, session inspection, and create/attach boundaries. Bare names can be hosts or sessions; new commands can collide with saved aliases. |
+| [`internal/cli/command.go`](../../internal/cli/command.go) | Human CLI routing, session inspection, and create/attach boundaries. Bare names can be hosts or sessions; declared machine names must be command-safe; exact IDs disambiguate collisions. |
 | [`internal/protocol/control.go`](../../internal/protocol/control.go) | `host.info`, session list/create/inspect/logs, lifecycle controls, services, stable error codes, a session `Label`, and bounded log tails (`MaxLogTail`, 1 MiB). Extend the shared protocol rather than opening another control server. |
 | [`internal/protocol/state.go`](../../internal/protocol/state.go) | `state.watch` streams host state and `host.metrics`. Version one of this plan uses finite reads; profile revisions can join the watch snapshot later. |
 | [`internal/daemon/lifecycle.go`](../../internal/daemon/lifecycle.go) | Creation deduplicates request IDs by digest in an expiring in-memory map. That is not a durable receipt across daemon restarts. Log reads are bounded tails, not a cursor API. |
@@ -296,8 +296,8 @@ cross-machine ordering or authorization. Use profile revisions for update order
 and client receipt time for cache freshness.
 
 Cache host context separately from `hosts.json`, following the catalog cache
-boundary. Cache keys include stable host ID and pinned identity, not alias, IP, or
-a raw filename supplied by a peer. Alias changes preserve context; an identity
+boundary. Cache keys include stable host ID and pinned identity, not display name, IP, or
+a raw filename supplied by a peer. Destination renames preserve context; an identity
 change requires explicit re-adoption and cannot inherit the old profile silently.
 Reject profile revision regression for the same identity and report it rather than
 erasing a newer known warning.
@@ -900,8 +900,8 @@ Use isolated state directories and test processes. Preserve the owner's sessions
 | --- | --- |
 | No hosts / uninitialized local installation | Valid empty/uninitialized result; no bootstrap side effects. |
 | Host offline, timeout, or partial protocol support | Bounded response, explicit freshness/unsupported state, no implicit wake. |
-| Old alias collides with a new command | Config still loads; `mesh --host ALIAS` targets it; no automatic rename. |
-| Alias renamed / address reused / identity changed | Notes follow pinned identity, never a recycled name or IP. |
+| Retained name collides with another owner | Bare-name targeting refuses ambiguity and prints exact IDs. |
+| Destination renamed / address reused / identity changed | Notes follow pinned identity, never a recycled name or IP. |
 | Two profile editors / interrupted profile write | One CAS winner; conflict or previous valid profile survives. |
 | Fleet profile from an untrusted signer, tampered, or replayed | Rejected; replica unchanged; status names the cause. |
 | Two fleet writers from one revision / member offline for days | Conflict reported and visible; later write converges; offline member catches up or shows `stale`, never woken. |

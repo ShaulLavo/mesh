@@ -407,11 +407,9 @@ func openTestStore(t *testing.T) *Store {
 }
 
 func testHost(id HostID) Host {
-	alias := "alias-" + string(id)
 	tailscaleName := string(id) + ".example.ts.net"
 	return Host{
 		ID:            id,
-		Alias:         &alias,
 		MeshIdentity:  "identity-" + string(id),
 		TailscaleName: &tailscaleName,
 		LastSeenAt:    testTime(0),

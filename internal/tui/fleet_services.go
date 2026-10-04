@@ -26,19 +26,20 @@ type pickerServicesFailedMsg struct{ err error }
 type serviceTarget struct{ hostID, route string }
 
 type serviceItem struct {
-	target    serviceTarget
-	hostAlias string
-	website   servedWebsite
+	target      serviceTarget
+	machineName string
+	local       bool
+	website     servedWebsite
 }
 
 func (item serviceItem) FilterValue() string {
-	return item.hostAlias + " " + item.website.name + " " + item.website.route
+	return item.machineName + " " + item.website.name + " " + item.website.route
 }
 
 func mainItemKey(item list.Item) serviceTarget {
 	switch item := item.(type) {
 	case hostItem:
-		return serviceTarget{item.host.id + "|" + item.host.alias, ""}
+		return serviceTarget{item.host.id, ""}
 	case serviceItem:
 		return item.target
 	default:
@@ -84,8 +85,8 @@ func (m model) applyServices(update cli.PickerServicesUpdate) (model, tea.Cmd) {
 
 	}
 	if update.Problem != "" {
-		m.notice = update.Host.Alias + " services: " + update.Problem
-	} else if strings.HasPrefix(m.notice, update.Host.Alias+" services: ") {
+		m.notice = cli.HostLabel(update.Host) + " services: " + update.Problem
+	} else if strings.HasPrefix(m.notice, cli.HostLabel(update.Host)+" services: ") {
 		m.notice = ""
 	}
 	if m.screen != hostScreen {
@@ -154,7 +155,7 @@ func (delegate hostDelegate) serviceColumns(browser list.Model) (int, int) {
 			continue
 		}
 		nameWidth = max(nameWidth, ansi.StringWidth(delegate.serviceName(item)))
-		hostWidth = max(hostWidth, ansi.StringWidth(safeText(delegate.privacy.Value("host", item.hostAlias))))
+		hostWidth = max(hostWidth, ansi.StringWidth(safeText(delegate.privacy.Value("host", item.machineName))))
 		stateWidth = max(stateWidth, ansi.StringWidth(item.website.state))
 		if item.website.stale {
 			stateWidth = max(stateWidth, ansi.StringWidth(item.website.state)+len(" cached"))
@@ -187,7 +188,7 @@ func (delegate hostDelegate) renderService(output io.Writer, browser list.Model,
 	}
 	paint := dashboard.paint(role)
 	nameWidth, hostWidth := delegate.serviceColumns(browser)
-	host := safeText(delegate.privacy.Value("host", item.hostAlias))
+	host := safeText(delegate.privacy.Value("host", item.machineName))
 	row := cursor + paint.Render("●") + " " + cell(delegate.styles.item(selected).Render(delegate.serviceName(item)), nameWidth) + "  " + cell(delegate.styles.muted.Render(host), hostWidth) + "  " + paint.Render(safeText(state))
 	start, _ := browser.Paginator.GetSliceBounds(len(browser.Items()))
 	previousService := false
@@ -206,7 +207,7 @@ func (delegate hostDelegate) renderService(output io.Writer, browser list.Model,
 
 func (delegate hostDelegate) serviceDetail(item serviceItem) string {
 	address := item.website.url
-	if item.website.row.Service.LocalOnly && item.hostAlias != "this host" {
+	if item.website.row.Service.LocalOnly && !item.local {
 		address = ":" + item.website.route + " on host"
 	}
 	detail := safeText(delegate.privacy.Value("url", address))

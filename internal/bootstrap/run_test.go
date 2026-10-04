@@ -29,6 +29,7 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 	var steps []Step
 	foundVariant := ""
 	deps := dependencies{
+		destination:  func(context.Context, remoteHost) (string, error) { return hostID, nil },
 		localTailnet: func(context.Context) error { return nil },
 		servingPeer:  noServingPeer,
 		sshConfig:    noSSHConfig,
@@ -89,7 +90,7 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 	if gotInstall.BinaryPath != "/tmp/mesh-linux-arm64" || gotInstall.AuthorizedKey != "ssh-ed25519 adopter" || gotInstall.DaemonPort != DefaultPort || gotInstall.SSHPort != DefaultSSHPort {
 		t.Fatalf("install request = %#v", gotInstall)
 	}
-	wantSteps := []Step{StepConnect, StepDetect, StepDiscover, StepDiscover, StepTransfer, StepInstall, StepVerify}
+	wantSteps := []Step{StepConnect, StepDetect, StepDiscover, StepDiscover, StepTransfer, StepInstall, StepVerify, StepVerify, StepVerify}
 	if !reflect.DeepEqual(steps, wantSteps) {
 		t.Fatalf("steps = %v, want %v", steps, wantSteps)
 	}
@@ -251,6 +252,7 @@ func TestRunDiscardsResultContainingAuthKey(t *testing.T) {
 	}}
 	hostID := base64.RawURLEncoding.EncodeToString(make([]byte, ed25519.PublicKeySize))
 	deps := dependencies{
+		destination:  func(context.Context, remoteHost) (string, error) { return hostID, nil },
 		localTailnet: func(context.Context) error { return nil },
 		servingPeer:  noServingPeer,
 		sshConfig:    noSSHConfig,

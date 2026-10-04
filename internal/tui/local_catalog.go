@@ -31,11 +31,11 @@ func (m model) applyLoadedHosts(message hostCatalogLoadedMsg) (model, tea.Cmd) {
 		return m, nil
 	}
 	selectedKey := mainItemKey(m.list.SelectedItem())
-	selectedAlias := ""
+	selectedHostID := ""
 	if m.screen == sessionScreen {
-		selectedAlias = m.currentHost().alias
+		selectedHostID = m.currentHost().id
 	} else if selected, ok := m.list.SelectedItem().(hostItem); ok {
-		selectedAlias = selected.host.alias
+		selectedHostID = selected.host.id
 	}
 	merged := cloneHosts(m.hosts)
 	for _, loaded := range hostCatalog(cli.PickerInput{Hosts: message.hosts}) {
@@ -44,10 +44,10 @@ func (m model) applyLoadedHosts(message hostCatalogLoadedMsg) (model, tea.Cmd) {
 		}
 		found := false
 		for index := range merged {
-			if merged[index].alias == loaded.alias {
+			if merged[index].id == loaded.id {
 				// The local list and an open session screen already have their own
 				// current reader. A delayed network catalog cannot replace them.
-				if !merged[index].local && (m.screen != sessionScreen || merged[index].alias != selectedAlias) {
+				if !merged[index].local && (m.screen != sessionScreen || merged[index].id != selectedHostID) {
 					loaded.served, loaded.servedKnown, loaded.servedStale = merged[index].served, merged[index].servedKnown, merged[index].servedStale
 					merged[index] = loaded
 				}
@@ -83,7 +83,7 @@ func (m model) selectedSessionAttached() bool {
 func (m model) hostNames() map[string]string {
 	names := make(map[string]string, len(m.hosts))
 	for _, current := range m.hosts {
-		names[current.id] = current.alias
+		names[current.id] = current.machineName
 	}
 	return names
 }
@@ -124,7 +124,7 @@ func (m model) sessionViaLabels() map[string]string {
 	}
 	for target, summary := range m.summaries {
 		for _, outer := range m.hosts {
-			if !outer.local || outer.alias != target.hostAlias {
+			if !outer.local || outer.id != target.hostID {
 				continue
 			}
 			for _, nested := range summary.nested {

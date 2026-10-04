@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
@@ -125,9 +124,11 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 	if err != nil {
 		return nil, nil, fmt.Errorf("load cached services: %w", err)
 	}
+	observedHosts := make(map[string]HostRecord, len(hosts))
 	rowsByHost := make(map[string][]ServiceCatalogRow, len(hosts))
 	rowCount := 0
 	for _, host := range hosts {
+		observedHosts[host.ID] = host
 		rowsByHost[host.ID] = cachedServiceCatalogRows(host, cached[host.ID])
 		rowCount += len(rowsByHost[host.ID])
 	}
@@ -181,13 +182,17 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 			wantServices--
 			completedServices[result.host.ID] = true
 			if result.err != nil {
-				diagnostics[result.host.Alias] = result.err
+				diagnostics[result.host.ID] = result.err
 				continue
 			}
 			newCount := rowCount - len(rowsByHost[result.host.ID]) + len(result.snapshot.Services)
 			if newCount > storage.MaximumCachedServices {
 				return nil, nil, fmt.Errorf("service catalog exceeds %d rows", storage.MaximumCachedServices)
 			}
+			if result.snapshot.Host.ID != "" {
+				result.host = result.snapshot.Host
+			}
+			observedHosts[result.host.ID] = result.host
 			live := liveServiceCatalogRows(result.host, result.snapshot)
 			rowsByHost[result.host.ID] = live
 			rowCount = newCount
@@ -208,12 +213,12 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 		case result := <-edgeResults:
 			wantEdges--
 			if result.err == nil {
-				edgeSnapshots[result.host.Alias] = result.routes
+				edgeSnapshots[result.host.ID] = result.routes
 			}
 		case result := <-cacheResults:
 			wantCacheWrites--
 			if result.err != nil && operationCtx.Err() == nil {
-				diagnostics[result.host.Alias] = catalogCacheWarning{err: result.err}
+				diagnostics[result.host.ID] = catalogCacheWarning{err: result.err}
 			}
 		case <-operationCtx.Done():
 			wantServices = 0
@@ -240,13 +245,26 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 				return nil, nil, fmt.Errorf("service catalog exceeds %d rows", storage.MaximumCachedServices)
 			}
 		}
-		if _, exists := diagnostics[host.Alias]; !exists && !completedServices[host.ID] {
-			diagnostics[host.Alias] = context.DeadlineExceeded
+		if _, exists := diagnostics[host.ID]; !exists && !completedServices[host.ID] {
+			diagnostics[host.ID] = context.DeadlineExceeded
 		}
 	}
+	projected := make([]HostRecord, 0, len(hosts))
+	for _, host := range hosts {
+		current := observedHosts[host.ID]
+		projected = append(projected, current)
+	}
+	ProjectHostNames(projected)
+	byID := make(map[string]HostRecord, len(projected))
+	for _, host := range projected {
+		byID[host.ID] = host
+	}
+	for index := range rows {
+		rows[index].Host = byID[rows[index].Host.ID]
+	}
 	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].Host.Alias != rows[j].Host.Alias {
-			return rows[i].Host.Alias < rows[j].Host.Alias
+		if rows[i].Host.MachineName != rows[j].Host.MachineName {
+			return rows[i].Host.MachineName < rows[j].Host.MachineName
 		}
 		return rows[i].Service.Name < rows[j].Service.Name
 	})
@@ -302,13 +320,13 @@ func firstEdgeSnapshot(snapshots map[string][]protocol.EdgeRouteInfo) map[string
 	return result
 }
 
-func catalogCandidates(rows []ServiceCatalogRow, route, hostAlias string) []ServiceCatalogRow {
+func catalogCandidates(rows []ServiceCatalogRow, route, hostID string) []ServiceCatalogRow {
 	candidates := make([]ServiceCatalogRow, 0)
 	for _, row := range rows {
 		if row.Service.Name != route {
 			continue
 		}
-		if hostAlias != "" && !strings.EqualFold(row.Host.Alias, hostAlias) {
+		if hostID != "" && row.Host.ID != hostID {
 			continue
 		}
 		candidates = append(candidates, row)

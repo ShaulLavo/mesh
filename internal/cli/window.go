@@ -42,7 +42,7 @@ func (a *application) runWindow(cmd *cobra.Command, take bool, detachKey string,
 		return nil
 	}
 	for {
-		local, err := localPickerCatalog()
+		local, err := localPickerCatalog(cmd.Context())
 		if err != nil {
 			return err
 		}
@@ -72,14 +72,14 @@ func (a *application) runWindow(cmd *cobra.Command, take bool, detachKey string,
 		if err != nil {
 			return err
 		}
-		aliases := map[string]string{local.Host.ID: localHostAlias}
+		aliases := map[string]string{local.Host.ID: HostLabel(local.Host)}
 		for _, host := range hosts {
-			aliases[host.ID] = host.Alias
+			aliases[host.ID] = HostLabel(host)
 		}
 		selection, err := a.dependencies.WindowPicker(cmd.Context(), WindowInput{
 			Privacy:      a.privacy,
 			UpdateNotice: a.pickerUpdateNotice(),
-			Sessions:     rows, HostAlias: localHostAlias, HostID: local.Host.ID, HostAliases: aliases,
+			Sessions:     rows, MachineName: local.Host.MachineName, NameRevision: local.Host.NameRevision, NameVerified: local.Host.NameVerified, HostID: local.Host.ID, HostNames: aliases,
 			Inspect: inspectLocalSession,
 			Action: func(ctx context.Context, request PickerSessionActionRequest) error {
 				return a.localPickerSessionAction(ctx, request)
@@ -92,7 +92,7 @@ func (a *application) runWindow(cmd *cobra.Command, take bool, detachKey string,
 		case selection.ReviewUpdate:
 			return a.runUpdatePreview(cmd.Context())
 		case selection.FullPicker:
-			return a.runPickerOpen(cmd, hosts, detachKey, raw, localHostAlias)
+			return a.runPickerOpen(cmd, hosts, detachKey, raw, localHostID())
 		case selection.New:
 			return a.startWindowSession(cmd, detachKey, raw)
 		case selection.SessionID != "":
@@ -133,7 +133,7 @@ func (a *application) legacyRelaunchSession(cmd *cobra.Command, resolved resolve
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), remoteCreateTimeout)
 	defer cancel()
-	rows, err := a.queryHost(ctx, *resolved.host)
+	rows, err := a.queryHost(ctx, resolved.host)
 	if err != nil {
 		return err
 	}
@@ -146,7 +146,7 @@ func (a *application) legacyRelaunchSession(cmd *cobra.Command, resolved resolve
 		}
 	}
 	if old == nil || old.State != worker.StateInterrupted {
-		return fmt.Errorf("session %s on %s is no longer interrupted", resolved.remote.ID, resolved.host.Alias)
+		return fmt.Errorf("session %s on %s is no longer interrupted", resolved.remote.ID, HostLabel(*resolved.host))
 	}
 	cols, height := terminalSize(a.dependencies.Stdout)
 	id, err := createRemoteSessionInDirectory(ctx, *resolved.host, a.dependencies.DialHost, old.Command, old.Cwd, cols, height)
@@ -281,7 +281,7 @@ func (a *application) createLocalSession(cmd *cobra.Command, command []string, c
 	return Session{Meta: worker.Meta{ID: id, Command: command, Cwd: cwd}, Dir: dir, Liveness: LivenessAlive}, socket, nil
 }
 
-func localPickerCatalog() (HostSessions, error) {
+func localPickerCatalog(ctx context.Context) (HostSessions, error) {
 	rows, err := localSessionRows()
 	if err != nil {
 		return HostSessions{}, err
@@ -290,14 +290,14 @@ func localPickerCatalog() (HostSessions, error) {
 	if err != nil {
 		return HostSessions{}, err
 	}
-	host, err := existingLocalIdentity(stateDir)
+	host, err := localNameRecord(ctx, stateDir)
 	if err != nil {
-		return HostSessions{}, fmt.Errorf("load local identity: %w", err)
+		return HostSessions{}, err
 	}
 	for i := range rows {
 		rows[i].HostID = host.ID
 	}
-	return HostSessions{Local: true, Host: HostRecord{Alias: localHostAlias, ID: host.ID}, Sessions: rows}, nil
+	return HostSessions{Local: true, Host: host, Sessions: rows}, nil
 }
 
 func inspectLocalSession(parent context.Context, request PickerInspectRequest) (SessionInspection, error) {
@@ -332,7 +332,7 @@ func inspectLocalSession(parent context.Context, request PickerInspectRequest) (
 	if err != nil {
 		return SessionInspection{}, err
 	}
-	return validateInspectionResponse(HostRecord{Alias: localHostAlias}, request.SessionID, request.PreviewCols, request.PreviewRows, response)
+	return validateInspectionResponse(HostRecord{MachineName: localHostLabel(parent)}, request.SessionID, request.PreviewCols, request.PreviewRows, response)
 }
 
 func (a *application) localPickerSessionAction(ctx context.Context, request PickerSessionActionRequest) error {
