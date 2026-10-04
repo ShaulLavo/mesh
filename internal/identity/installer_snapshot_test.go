@@ -68,7 +68,7 @@ func checkInstallerRejectedSnapshot(t *testing.T, platform, kind string) {
 	}
 	output, commandErr := installerPlatformGrantCommand(t, platform, home, bin, script, public).CombinedOutput()
 	if commandErr == nil {
-		t.Fatalf("installer accepted policy symlink: %s", output)
+		t.Fatalf("installer accepted unsafe %s policy: %s", kind, output)
 	}
 	if !strings.Contains(string(output), "cannot approve the adopter device key") {
 		t.Fatalf("installer failed outside the managed approval boundary: %s", output)
