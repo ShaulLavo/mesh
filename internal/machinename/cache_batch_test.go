@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -41,6 +42,10 @@ func TestClaimCacheBatchSettlesOnePublicationBarrier(t *testing.T) {
 func TestClaimCacheBatchFailedBarrierReturnsNoClaims(t *testing.T) {
 	directory := t.TempDir()
 	claim := cacheFixtureClaim(t, "destination", 7)
+	other := cacheFixtureClaim(t, "other", 1)
+	if _, err := RememberClaim(t.Context(), directory, other.ID, other); err != nil {
+		t.Fatal(err)
+	}
 	failure := errors.New("fixture failed batch publication barrier")
 	failPublished := func(root *os.Root) error {
 		if filepath.Base(root.Name()) == cacheDirectory {
@@ -51,12 +56,32 @@ func TestClaimCacheBatchFailedBarrierReturnsNoClaims(t *testing.T) {
 	if changed, err := rememberClaimWithSync(t.Context(), directory, claim.ID, claim, failPublished); changed || !errors.Is(err, failure) {
 		t.Fatalf("uncertain publication acknowledged: %t %v", changed, err)
 	}
-	if claims, err := cachedClaimsWithSync(directory, []string{claim.ID}, failPublished); claims != nil || !errors.Is(err, failure) {
+	owners := []string{other.ID, claim.ID}
+	if claims, err := cachedClaimsWithSync(directory, owners, failPublished); claims != nil || !errors.Is(err, failure) {
 		t.Fatalf("batch exposed uncertain publication: %+v %v", claims, err)
 	}
-	claims, err := CachedClaims(directory, []string{claim.ID})
-	if err != nil || claims[claim.ID] != claim {
+	claims, err := CachedClaims(directory, owners)
+	if err != nil || claims[claim.ID] != claim || claims[other.ID] != other {
 		t.Fatalf("batch failed to settle visible publication: %+v %v", claims, err)
+	}
+}
+
+func TestClaimCacheBatchMissingOwners(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "missing")
+	claim := cacheFixtureClaim(t, "destination", 1)
+	if claims, err := CachedClaims(directory, []string{claim.ID}); err != nil || len(claims) != 0 {
+		t.Fatalf("missing cache: %+v %v", claims, err)
+	}
+	if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cache read created configuration directory: %v", err)
+	}
+	if _, err := RememberClaim(t.Context(), directory, claim.ID, claim); err != nil {
+		t.Fatal(err)
+	}
+	other := cacheFixtureClaim(t, "other", 1)
+	claims, err := CachedClaims(directory, []string{claim.ID, other.ID, claim.ID})
+	if err != nil || len(claims) != 1 || claims[claim.ID] != claim {
+		t.Fatalf("missing/duplicate owners: %+v %v", claims, err)
 	}
 }
 
@@ -75,5 +100,60 @@ func TestClaimCacheBatchFailureReturnsNoPartialClaims(t *testing.T) {
 	}
 	if claims, err := CachedClaims(directory, []string{claim.ID, other.ID}); claims != nil || err == nil {
 		t.Fatalf("corrupt record returned partial claims: %+v %v", claims, err)
+	}
+}
+
+func TestClaimCacheBatchConcurrentRevisionsStayFresh(t *testing.T) {
+	directory := t.TempDir()
+	initial := []Claim{cacheFixtureClaim(t, "first", 1), cacheFixtureClaim(t, "second", 1)}
+	owners := []string{initial[0].ID, initial[1].ID}
+	for _, claim := range initial {
+		if _, err := RememberClaim(t.Context(), directory, claim.ID, claim); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := make(chan struct{})
+	var writers sync.WaitGroup
+	for _, claim := range initial {
+		writers.Go(func() {
+			<-start
+			writeBatchFixtureRevisions(t, directory, claim)
+		})
+	}
+	close(start)
+	previous := map[string]uint64{}
+	for range 32 {
+		claims, err := CachedClaims(directory, owners)
+		if err != nil {
+			t.Error(err)
+			break
+		}
+		checkBatchFixtureRevisions(t, owners, claims, previous)
+	}
+	writers.Wait()
+	claims, err := CachedClaims(directory, owners)
+	if err != nil || claims[owners[0]].Revision != 16 || claims[owners[1]].Revision != 16 {
+		t.Fatalf("batch missed final concurrent revisions: %+v %v", claims, err)
+	}
+}
+
+func checkBatchFixtureRevisions(t *testing.T, owners []string, claims map[string]Claim, previous map[string]uint64) {
+	t.Helper()
+	for _, owner := range owners {
+		if claims[owner].ID != owner || claims[owner].Revision < previous[owner] {
+			t.Errorf("batch lost owner/revision: %+v previous=%d", claims[owner], previous[owner])
+		}
+		previous[owner] = claims[owner].Revision
+	}
+}
+
+func writeBatchFixtureRevisions(t *testing.T, directory string, claim Claim) {
+	t.Helper()
+	for revision := uint64(2); revision <= 16; revision++ {
+		claim.Revision = revision
+		if _, err := RememberClaim(t.Context(), directory, claim.ID, claim); err != nil {
+			t.Error(err)
+			return
+		}
 	}
 }

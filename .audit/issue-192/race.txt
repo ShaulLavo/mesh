@@ -1,0 +1,52 @@
+ok  	github.com/shaul/mesh/cmd/mesh	4.853s
+?   	github.com/shaul/mesh/db	[no test files]
+?   	github.com/shaul/mesh/db/migrations	[no test files]
+ok  	github.com/shaul/mesh/examples/tailnet-gateway	1.286s
+?   	github.com/shaul/mesh/integration/helpers	[no test files]
+?   	github.com/shaul/mesh/integration/helpers/control-client	[no test files]
+?   	github.com/shaul/mesh/integration/helpers/dashboard-screen	[no test files]
+ok  	github.com/shaul/mesh/internal/agentresume	3.029s
+ok  	github.com/shaul/mesh/internal/apppill	1.227s
+ok  	github.com/shaul/mesh/internal/apps	29.647s
+ok  	github.com/shaul/mesh/internal/bootstrap	2.213s
+ok  	github.com/shaul/mesh/internal/cli	199.475s
+ok  	github.com/shaul/mesh/internal/daemon	59.521s
+ok  	github.com/shaul/mesh/internal/dnsname	8.574s
+ok  	github.com/shaul/mesh/internal/edge	5.501s
+ok  	github.com/shaul/mesh/internal/hostmetrics	11.349s
+ok  	github.com/shaul/mesh/internal/identity	5.857s
+ok  	github.com/shaul/mesh/internal/inhibit	1.156s
+?   	github.com/shaul/mesh/internal/inspection	[no test files]
+ok  	github.com/shaul/mesh/internal/machinename	15.259s
+ok  	github.com/shaul/mesh/internal/paths	1.010s
+ok  	github.com/shaul/mesh/internal/privacy	1.037s
+ok  	github.com/shaul/mesh/internal/procmem	1.074s
+ok  	github.com/shaul/mesh/internal/protocol	1.057s
+ok  	github.com/shaul/mesh/internal/recovery	16.714s
+ok  	github.com/shaul/mesh/internal/release	8.409s
+ok  	github.com/shaul/mesh/internal/release/cmd/manifest	1.349s
+ok  	github.com/shaul/mesh/internal/serve	1.179s
+ok  	github.com/shaul/mesh/internal/session	1.119s
+ok  	github.com/shaul/mesh/internal/sockdiag	1.045s
+ok  	github.com/shaul/mesh/internal/sshd	16.353s
+ok  	github.com/shaul/mesh/internal/sshfs	1.350s
+ok  	github.com/shaul/mesh/internal/storage	23.355s
+?   	github.com/shaul/mesh/internal/storage/sqlc	[no test files]
+ok  	github.com/shaul/mesh/internal/tailnet	4.035s
+ok  	github.com/shaul/mesh/internal/terminal	2.207s
+ok  	github.com/shaul/mesh/internal/testenv	1.009s
+ok  	github.com/shaul/mesh/internal/transport	1.603s
+ok  	github.com/shaul/mesh/internal/tui	17.202s
+ok  	github.com/shaul/mesh/internal/tunnel	1.583s
+ok  	github.com/shaul/mesh/internal/update	23.370s
+ok  	github.com/shaul/mesh/internal/updatebootstrap	6.903s
+ok  	github.com/shaul/mesh/internal/updategate	1.266s
+ok  	github.com/shaul/mesh/internal/updateinstall	83.840s
+ok  	github.com/shaul/mesh/internal/updatenotice	3.878s
+ok  	github.com/shaul/mesh/internal/usagefeed	1.154s
+ok  	github.com/shaul/mesh/internal/wake	8.160s
+ok  	github.com/shaul/mesh/internal/wakeclient	7.453s
+ok  	github.com/shaul/mesh/internal/webauth	1.428s
+ok  	github.com/shaul/mesh/internal/worker	11.716s
+?   	github.com/shaul/mesh/scripts/fixtures/tls-probe	[no test files]
+ok  	github.com/shaul/mesh/scripts/install	9.352s

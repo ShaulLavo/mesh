@@ -1,0 +1,2 @@
+ok  	github.com/shaul/mesh/internal/machinename	5.756s
+ok  	github.com/shaul/mesh/internal/cli	172.093s

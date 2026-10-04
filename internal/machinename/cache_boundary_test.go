@@ -40,7 +40,7 @@ func TestReviewerCacheReadRefusesDerivedDirectorySymlink(t *testing.T) {
 	if err := os.Symlink(outside, cache); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CachedClaim(root, claim.ID); err == nil {
+	if _, err := readCacheFixtureClaim(root, claim.ID); err == nil {
 		t.Fatal("read a cache claim through an escaping derived-directory symlink")
 	}
 }
@@ -167,7 +167,7 @@ func TestClaimCacheRefusesContainedRecordAndLockSymlinks(t *testing.T) {
 				t.Fatal("accepted a contained final-file symlink")
 			}
 			if extension == ".json" {
-				if _, err := CachedClaim(directory, claim.ID); err == nil {
+				if _, err := readCacheFixtureClaim(directory, claim.ID); err == nil {
 					t.Fatal("reader accepted a contained record symlink")
 				}
 			}

@@ -1,0 +1,38 @@
+[wave-heavy] 'issue192 baseline' is waiting: 3 job(s) ahead in the queue
+[wave-heavy] started 'issue192 baseline' on local after 27s: finite jobs drained; 2 server(s) running; 11761 MiB free covers 3072 MiB
+goos: linux
+goarch: amd64
+pkg: github.com/shaul/mesh/internal/cli
+cpu: Intel(R) Core(TM) i7-14700K
+BenchmarkLoadHostsClaimCache/hosts-1/writers-false-28         	      20	     46236 ns/op
+BenchmarkLoadHostsClaimCache/hosts-1/writers-false-28         	      20	     42120 ns/op
+BenchmarkLoadHostsClaimCache/hosts-1/writers-false-28         	      20	     88725 ns/op
+BenchmarkLoadHostsClaimCache/hosts-1/writers-false-28         	      20	     44621 ns/op
+BenchmarkLoadHostsClaimCache/hosts-1/writers-false-28         	      20	     47603 ns/op
+BenchmarkLoadHostsClaimCache/hosts-1/writers-true-28          	      20	     45987 ns/op
+BenchmarkLoadHostsClaimCache/hosts-1/writers-true-28          	      20	    106026 ns/op
+BenchmarkLoadHostsClaimCache/hosts-1/writers-true-28          	      20	     99601 ns/op
+BenchmarkLoadHostsClaimCache/hosts-1/writers-true-28          	      20	    102580 ns/op
+BenchmarkLoadHostsClaimCache/hosts-1/writers-true-28          	      20	     46343 ns/op
+BenchmarkLoadHostsClaimCache/hosts-10/writers-false-28        	      20	    390371 ns/op
+BenchmarkLoadHostsClaimCache/hosts-10/writers-false-28        	      20	    355346 ns/op
+BenchmarkLoadHostsClaimCache/hosts-10/writers-false-28        	      20	    349974 ns/op
+BenchmarkLoadHostsClaimCache/hosts-10/writers-false-28        	      20	    362644 ns/op
+BenchmarkLoadHostsClaimCache/hosts-10/writers-false-28        	      20	    359288 ns/op
+BenchmarkLoadHostsClaimCache/hosts-10/writers-true-28         	      20	    957753 ns/op
+BenchmarkLoadHostsClaimCache/hosts-10/writers-true-28         	      20	   1194702 ns/op
+BenchmarkLoadHostsClaimCache/hosts-10/writers-true-28         	      20	   1123818 ns/op
+BenchmarkLoadHostsClaimCache/hosts-10/writers-true-28         	      20	   1133364 ns/op
+BenchmarkLoadHostsClaimCache/hosts-10/writers-true-28         	      20	   1216067 ns/op
+BenchmarkLoadHostsClaimCache/hosts-100/writers-false-28       	      20	   4410869 ns/op
+BenchmarkLoadHostsClaimCache/hosts-100/writers-false-28       	      20	   3457220 ns/op
+BenchmarkLoadHostsClaimCache/hosts-100/writers-false-28       	      20	   3580894 ns/op
+BenchmarkLoadHostsClaimCache/hosts-100/writers-false-28       	      20	   4124058 ns/op
+BenchmarkLoadHostsClaimCache/hosts-100/writers-false-28       	      20	   4090724 ns/op
+BenchmarkLoadHostsClaimCache/hosts-100/writers-true-28        	      20	  10727290 ns/op
+BenchmarkLoadHostsClaimCache/hosts-100/writers-true-28        	      20	  11407225 ns/op
+BenchmarkLoadHostsClaimCache/hosts-100/writers-true-28        	      20	  10497638 ns/op
+BenchmarkLoadHostsClaimCache/hosts-100/writers-true-28        	      20	  11248661 ns/op
+BenchmarkLoadHostsClaimCache/hosts-100/writers-true-28        	      20	  11033641 ns/op
+PASS
+ok  	github.com/shaul/mesh/internal/cli	48.121s

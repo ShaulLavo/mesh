@@ -26,6 +26,15 @@ func cacheFixtureClaim(t *testing.T, name string, revision uint64) Claim {
 	return Claim{ID: host.ID, MachineName: name, Revision: revision}
 }
 
+func readCacheFixtureClaim(directory, owner string) (Claim, error) {
+	return readCacheFixtureClaimWithSync(directory, owner, syncCacheRoot)
+}
+
+func readCacheFixtureClaimWithSync(directory, owner string, syncRoot func(*os.Root) error) (Claim, error) {
+	claims, err := cachedClaimsWithSync(directory, []string{owner}, syncRoot)
+	return claims[owner], err
+}
+
 func TestClaimCacheRevisionReplayEquivocationAndRestart(t *testing.T) {
 	dir := t.TempDir()
 	claim := cacheFixtureClaim(t, "destination", 7)
@@ -55,7 +64,7 @@ func TestClaimCacheRevisionReplayEquivocationAndRestart(t *testing.T) {
 	if _, err := RememberClaim(context.Background(), dir, claim.ID, claim); err != nil {
 		t.Fatal(err)
 	}
-	got, err := CachedClaim(dir, claim.ID)
+	got, err := readCacheFixtureClaim(dir, claim.ID)
 	if err != nil || got != claim {
 		t.Fatalf("reopened cache: %+v err=%v", got, err)
 	}
@@ -112,11 +121,11 @@ func TestClaimCacheConcurrentWritersKeepHighestRevision(t *testing.T) {
 		})
 	}
 	writers.Wait()
-	got, err := CachedClaim(dir, claim.ID)
+	got, err := readCacheFixtureClaim(dir, claim.ID)
 	if err != nil || got.Revision != 8 {
 		t.Fatalf("highest committed claim lost: %+v err=%v", got, err)
 	}
-	got, err = CachedClaim(dir, other.ID)
+	got, err = readCacheFixtureClaim(dir, other.ID)
 	if err != nil || got != other {
 		t.Fatalf("independent destination changed: %+v err=%v", got, err)
 	}
@@ -236,7 +245,7 @@ func TestClaimPartitionsConvergeWithDeterministicConflicts(t *testing.T) {
 	if _, err := RememberClaim(context.Background(), left, b.ID, b); err != nil {
 		t.Fatal(err)
 	}
-	old, err := CachedClaim(right, b.ID)
+	old, err := readCacheFixtureClaim(right, b.ID)
 	if err != nil || old.Revision != 1 {
 		t.Fatalf("offline owner claim invented: %+v %v", old, err)
 	}
@@ -244,7 +253,7 @@ func TestClaimPartitionsConvergeWithDeterministicConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, dir := range []string{left, right} {
-		current, err := CachedClaim(dir, b.ID)
+		current, err := readCacheFixtureClaim(dir, b.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -281,7 +290,7 @@ func TestClaimCacheCreatesNestedConfigurationAndFollowsSelectedRoot(t *testing.T
 			if _, err := RememberClaim(t.Context(), directory, claim.ID, claim); err != nil {
 				t.Fatal(err)
 			}
-			if cached, err := CachedClaim(directory, claim.ID); err != nil || cached != claim {
+			if cached, err := readCacheFixtureClaim(directory, claim.ID); err != nil || cached != claim {
 				t.Fatalf("configured root failed to retain its claim: %+v %v", cached, err)
 			}
 		})

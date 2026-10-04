@@ -15,43 +15,50 @@ import (
 
 const cacheDirectory = "machine-names"
 
-func CachedClaim(directory, owner string) (Claim, error) {
-	return cachedClaimWithSync(directory, owner, syncCacheRoot)
-}
-
-// CachedClaims returns durable observations for the requested authenticated owners.
+// CachedClaims reads durable observations through one anchored directory.
+// Missing owners are omitted; any error discards the entire batch.
 func CachedClaims(directory string, owners []string) (map[string]Claim, error) {
 	return cachedClaimsWithSync(directory, owners, syncCacheRoot)
 }
 
 func cachedClaimsWithSync(directory string, owners []string, syncRoot func(*os.Root) error) (map[string]Claim, error) {
-	claims := make(map[string]Claim, len(owners))
-	for _, owner := range owners {
-		claim, err := cachedClaimWithSync(directory, owner, syncRoot)
-		if err != nil {
-			return nil, err
-		}
-		claims[owner] = claim
-	}
-	return claims, nil
-}
-
-func cachedClaimWithSync(directory, owner string, syncRoot func(*os.Root) error) (Claim, error) {
 	if directory == "" {
-		return Claim{}, errors.New("machine name cache directory is empty")
+		return nil, errors.New("machine name cache directory is empty")
 	}
-	if _, err := identity.IdentityKey(owner); err != nil {
-		return Claim{}, fmt.Errorf("cached machine name identity: %w", err)
+	for _, owner := range owners {
+		if _, err := identity.IdentityKey(owner); err != nil {
+			return nil, fmt.Errorf("cached machine name identity: %w", err)
+		}
+	}
+	claims := make(map[string]Claim, len(owners))
+	if len(owners) == 0 {
+		return claims, nil
 	}
 	root, err := openCacheDirectory(directory, false, syncRoot)
 	if errors.Is(err, os.ErrNotExist) {
-		return Claim{}, nil
+		return claims, nil
 	}
 	if err != nil {
-		return Claim{}, err
+		return nil, err
 	}
 	defer root.Close() //nolint:errcheck // anchored cache descriptor cleanup
-	return readCachedClaim(root, owner, syncRoot)
+	for _, owner := range owners {
+		claim, err := readCachedClaim(root, owner, func(*os.Root) error { return nil })
+		if err != nil {
+			return nil, err
+		}
+		if claim.ID != "" {
+			claims[owner] = claim
+		}
+	}
+	// Settle after all reads so visible replacements with failed publication syncs are covered.
+	if len(claims) == 0 {
+		return claims, nil
+	}
+	if err := syncRoot(root); err != nil {
+		return nil, err
+	}
+	return claims, nil
 }
 
 func readCachedClaim(root *os.Root, owner string, syncRoot func(*os.Root) error) (Claim, error) {

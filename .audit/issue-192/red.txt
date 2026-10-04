@@ -1,0 +1,11 @@
+[wave-heavy] started 'issue192 failed first' on local after 0s: 8283 MiB free covers 1536 MiB
+=== RUN   TestClaimCacheBatchSettlesOnePublicationBarrier
+    cache_batch_test.go:37: batch publication barriers=3, want 1 after all records
+--- FAIL: TestClaimCacheBatchSettlesOnePublicationBarrier (0.16s)
+=== RUN   TestClaimCacheBatchFailedBarrierReturnsNoClaims
+--- PASS: TestClaimCacheBatchFailedBarrierReturnsNoClaims (0.08s)
+=== RUN   TestClaimCacheBatchFailureReturnsNoPartialClaims
+--- PASS: TestClaimCacheBatchFailureReturnsNoPartialClaims (0.11s)
+FAIL
+FAIL	github.com/shaul/mesh/internal/machinename	0.347s
+FAIL

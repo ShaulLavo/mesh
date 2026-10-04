@@ -11,12 +11,13 @@ import (
 )
 
 func BenchmarkLoadHostsClaimCache(b *testing.B) {
-	for _, count := range []int{1, 10, 100} {
-		for _, writers := range []bool{false, true} {
-			b.Run(fmt.Sprintf("hosts-%d/writers-%t", count, writers), func(b *testing.B) {
-				benchmarkLoadHostsClaimCache(b, count, writers)
-			})
-		}
+	for _, fixture := range []struct {
+		count   int
+		writers bool
+	}{{1, false}, {1, true}, {10, false}, {10, true}, {100, false}, {100, true}} {
+		b.Run(fmt.Sprintf("hosts-%d/writers-%t", fixture.count, fixture.writers), func(b *testing.B) {
+			benchmarkLoadHostsClaimCache(b, fixture.count, fixture.writers)
+		})
 	}
 }
 
@@ -41,10 +42,12 @@ func benchmarkLoadHostsClaimCache(b *testing.B, count int, writers bool) {
 	stop, done := make(chan struct{}), make(chan struct{})
 	errors := make(chan error, 8)
 	var workers sync.WaitGroup
+	writerCount := 0
 	if writers {
-		for i := range min(count, 8) {
-			workers.Go(func() { benchmarkCacheWriter(b, directory, claims[i], stop, errors) })
-		}
+		writerCount = min(count, 8)
+	}
+	for i := range writerCount {
+		workers.Go(func() { benchmarkCacheWriter(b, directory, claims[i], stop, errors) })
 	}
 	go func() { workers.Wait(); close(done) }()
 	b.ResetTimer()

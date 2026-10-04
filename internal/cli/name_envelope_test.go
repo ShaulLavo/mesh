@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 )
@@ -43,7 +42,7 @@ func TestReviewerMixedStateEnvelopeCannotAdmitName(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cached, err := machinename.CachedClaim(filepath.Dir(path), f.host.ID)
+			cached, err := readNameCacheFixtureClaim(filepath.Dir(path), f.host.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,7 +75,7 @@ func TestReviewerMixedPollEnvelopeCannotAdmitName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cached, err := machinename.CachedClaim(filepath.Dir(path), f.host.ID)
+	cached, err := readNameCacheFixtureClaim(filepath.Dir(path), f.host.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +174,7 @@ func TestReviewerMixedHostInfoEnvelopeCannotAdmitName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cached, err := machinename.CachedClaim(filepath.Dir(path), f.host.ID)
+	cached, err := readNameCacheFixtureClaim(filepath.Dir(path), f.host.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
