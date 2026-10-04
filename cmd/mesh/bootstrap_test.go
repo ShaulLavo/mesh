@@ -24,10 +24,17 @@ import (
 	"github.com/shaul/mesh/internal/transport"
 )
 
-func TestBootstrapFuncPinsExistingIdentityAndMapsResult(t *testing.T) {
+func isolateBootstrapState(t *testing.T) string {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	stateDir := t.TempDir()
 	t.Setenv("MESH_STATE_DIR", stateDir)
+	return stateDir
+}
+
+func TestBootstrapFuncPinsExistingIdentityAndMapsResult(t *testing.T) {
+	stateDir := isolateBootstrapState(t)
 	identity := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	if err := cli.SaveHost(cli.HostRecord{
 		MachineName: "pc", ID: identity, MeshIdentity: identity,
@@ -84,8 +91,7 @@ func TestSudoPasswordPromptRefusesNonTerminalInput(t *testing.T) {
 }
 
 func TestBootstrapFuncReadsAuthKeyAndYesApprovesWithoutPrompt(t *testing.T) {
-	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
-	t.Setenv("MESH_STATE_DIR", t.TempDir())
+	isolateBootstrapState(t)
 	keyPath := t.TempDir() + "/tailscale.key"
 	const secret = "tskey-auth-bootstrap-fixture" //nolint:gosec // inert sentinel proves the adapter does not record the key
 	if err := os.WriteFile(keyPath, []byte("  "+secret+"\n"), 0o600); err != nil {
@@ -194,6 +200,7 @@ func TestCommandDependenciesWireBootstrapAndPicker(t *testing.T) {
 }
 
 func TestPromptedAuthKeyIsRedactedLikeAFileKey(t *testing.T) {
+	isolateBootstrapState(t)
 	const secret = "tskey-pasted-not-from-a-file" //nolint:gosec // inert sentinel verifies output redaction
 	identity := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	var output bytes.Buffer
@@ -225,6 +232,7 @@ func TestPromptedAuthKeyIsRedactedLikeAFileKey(t *testing.T) {
 }
 
 func TestBootstrapPassesTheTargetThroughUntouched(t *testing.T) {
+	isolateBootstrapState(t)
 	// The user must be decided after ~/.ssh/config is read. Prepending the
 	// local username here made `mesh add pi` connect as whoever was typing,
 	// beating a `User pi` the config already had right.
@@ -297,9 +305,7 @@ func TestBootstrapPinResolutionRefusesDuplicateNamesAndAddresses(t *testing.T) {
 func TestBootstrapKnownOwnerNameRequiresCurrentAuthenticatedDeclarationBeforeRunner(t *testing.T) {
 	for _, mode := range []string{"available", "renamed", "unavailable"} {
 		t.Run(mode, func(t *testing.T) {
-			t.Setenv("MESH_CONFIG_DIR", t.TempDir())
-			stateDir := t.TempDir()
-			t.Setenv("MESH_STATE_DIR", stateDir)
+			stateDir := isolateBootstrapState(t)
 			client, _, err := identity.LoadOrCreate(stateDir)
 			if err != nil {
 				t.Fatal(err)
