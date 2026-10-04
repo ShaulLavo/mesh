@@ -91,6 +91,7 @@ func TestExtensionOptionsCannotReplaceSecurityBoundary(t *testing.T) {
 		wish.WithKeyboardInteractiveAuth(func(charmssh.Context, gossh.KeyboardInteractiveChallenge) bool { return true }),
 		wish.WithPublicKeyAuth(func(charmssh.Context, charmssh.PublicKey) bool { return true }),
 		func(server *charmssh.Server) error {
+			server.HandshakeTimeout = time.Hour
 			server.ServerConfigCallback = func(charmssh.Context) *gossh.ServerConfig {
 				return &gossh.ServerConfig{NoClientAuth: true}
 			}
@@ -102,6 +103,9 @@ func TestExtensionOptionsCannotReplaceSecurityBoundary(t *testing.T) {
 	}
 	if server.Addr != "127.0.0.1:2222" || server.PasswordHandler != nil || server.KeyboardInteractiveHandler != nil || server.ServerConfigCallback == nil {
 		t.Fatalf("security-sensitive server fields were replaced: %#v", server)
+	}
+	if server.HandshakeTimeout != loginGrace {
+		t.Fatal("extension option replaced the login grace deadline")
 	}
 	securityConfig := server.ServerConfigCallback(nil)
 	if securityConfig.NoClientAuth || securityConfig.VerifiedPublicKeyCallback == nil || securityConfig.PasswordCallback != nil || securityConfig.KeyboardInteractiveCallback != nil {

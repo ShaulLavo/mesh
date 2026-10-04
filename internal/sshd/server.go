@@ -253,6 +253,8 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 	if grace == 0 {
 		grace = loginGrace
 	}
+	// The SSH transport replaces deadlines supplied by ConnCallback.
+	server.HandshakeTimeout = grace
 	server.ConnCallback = func(ctx charmssh.Context, conn net.Conn) net.Conn {
 		_ = conn.SetDeadline(time.Now().Add(grace))
 		graced := &gracedConn{Conn: conn}
