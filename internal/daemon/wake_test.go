@@ -93,7 +93,7 @@ func testWakeController(t *testing.T) (*wakeController, *wake.Authority, *atomic
 	if err != nil {
 		t.Fatal(err)
 	}
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	cache, err := wake.NewCache(stateDir)
 	if err != nil {
 		t.Fatal(err)

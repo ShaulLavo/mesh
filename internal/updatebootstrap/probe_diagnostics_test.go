@@ -13,6 +13,7 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/testenv"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -36,13 +37,7 @@ func TestProbeWorkerResponseSucceedsWithoutChangingMetadata(t *testing.T) {
 
 func probeFixtureDir(t *testing.T) string {
 	t.Helper()
-	// Unix sockets have a short pathname limit, including the test name.
-	root, err := os.MkdirTemp("", "m-probe-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	return root
+	return testenv.SocketTempDir(t)
 }
 
 func probeWorkerResponse(t *testing.T, respond bool) {

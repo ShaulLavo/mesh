@@ -37,7 +37,7 @@ func TestRunKeepsReservedTCPListenersUntilBinding(t *testing.T) {
 		return nil, readyErr
 	}
 	err := run(t.Context(), Config{
-		StateDir: t.TempDir(), TailnetPort: controlPort, HTTPSPort: httpsPort,
+		StateDir: compactSocketTempDir(t), TailnetPort: controlPort, HTTPSPort: httpsPort,
 		CertificateRenewerID: signerID, TailscaleServe: true,
 	}, options)
 	if !errors.Is(err, readyErr) {
