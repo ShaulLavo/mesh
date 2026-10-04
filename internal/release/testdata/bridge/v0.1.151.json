@@ -1,0 +1,261 @@
+{
+  "schema": 1,
+  "version": "v0.1.151",
+  "commit": "cd7e90a2ab21f843b96dbd90eea71488d52914fd",
+  "artifacts": [
+    {
+      "platform": {
+        "os": "darwin",
+        "arch": "arm64"
+      },
+      "archive": "mesh_darwin_arm64.tar.gz",
+      "sha256": "e6d03c7777a05ec9dc35fd6923e476adc37b4ebfaa34b3beef19ab39cfec3a1a",
+      "binarySha256": "26591bb2bf9cdb036aca4e4b5b22da3b98805be2e15b15d6cb0a8c11c9b71d2f"
+    },
+    {
+      "platform": {
+        "os": "linux",
+        "arch": "amd64"
+      },
+      "archive": "mesh_linux_amd64.tar.gz",
+      "sha256": "174110d7f41e134923f152a3789c09350b5ed26e8f3b89def35c47fbb75b4d94",
+      "binarySha256": "a19820523f1e5641789b18dee257e0ed84a934a3a1b620547533fd886bcad566"
+    },
+    {
+      "platform": {
+        "os": "linux",
+        "arch": "arm64"
+      },
+      "archive": "mesh_linux_arm64.tar.gz",
+      "sha256": "2d4c8480a78309e5d638fe58370970907a3e63858e4b6821dc91e758171b663b",
+      "binarySha256": "eddedde0d0bf34c2483b854258b6dde0bab53e0c96696b6fa2fa360c087b4c79"
+    }
+  ],
+  "compatibility": {
+    "stateReadMin": 10,
+    "stateReadMax": 10,
+    "stateWrite": 10,
+    "workerMin": 1,
+    "workerMax": 1,
+    "workerWrite": 1,
+    "journalVersion": 1,
+    "transitions": [
+      {
+        "fromDigest": "5ebd42449ef87f4dad70650f53b9b54081ccb908d9454e3b3e59c718ca1d471e",
+        "toDigest": "a19820523f1e5641789b18dee257e0ed84a934a3a1b620547533fd886bcad566",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "proof": "10dca6aebdff84702a90d74281b8b3e6bd5e6a7e6e55b616fd6726f94417ab4c"
+      },
+      {
+        "fromDigest": "22d6960e1ece957ab68958a454a7a1338de970a92722a973b2fb095247d1a14e",
+        "toDigest": "26591bb2bf9cdb036aca4e4b5b22da3b98805be2e15b15d6cb0a8c11c9b71d2f",
+        "platform": {
+          "os": "darwin",
+          "arch": "arm64"
+        },
+        "proof": "2bd7d04d71de96752617396cdf689f598ec69fb1366f977f39d8b045d36d3520"
+      },
+      {
+        "fromDigest": "7f0269b65168423fc8242791a8417cdbd253d5ac8422c694854f5111b2298c08",
+        "toDigest": "a19820523f1e5641789b18dee257e0ed84a934a3a1b620547533fd886bcad566",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "proof": "3ed9dee6d65647dd2929e2448e73cc6237e448cc85dc04789e5aa43834449b25"
+      },
+      {
+        "fromDigest": "885c17aec133b59ac425a6da1e04964b940e7dcdcf4a2b9c7c581e542a1c4fc2",
+        "toDigest": "a19820523f1e5641789b18dee257e0ed84a934a3a1b620547533fd886bcad566",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "proof": "4d64d7aa8b05fa70576f7d5c7bbe33ac787474cb099e20e76663cb1b9bbd74b7"
+      },
+      {
+        "fromDigest": "5deceb8954915b510fff34eeb10549503fb1640c60ff73138198afaf0b0b588d",
+        "toDigest": "eddedde0d0bf34c2483b854258b6dde0bab53e0c96696b6fa2fa360c087b4c79",
+        "platform": {
+          "os": "linux",
+          "arch": "arm64"
+        },
+        "proof": "52f5395997fa9d7e3b947a9ada098ba9fb735a35bf9c0fbd0e17f18f856d1712"
+      },
+      {
+        "fromDigest": "8f7c7df16dd3df58621293b88421d6567f8c19152248c32f779498ee766998a6",
+        "toDigest": "eddedde0d0bf34c2483b854258b6dde0bab53e0c96696b6fa2fa360c087b4c79",
+        "platform": {
+          "os": "linux",
+          "arch": "arm64"
+        },
+        "proof": "551df5ee8329c1f73414fbfd6fa056ad515fe1bf3aa5872c9edb8cec2292da96"
+      },
+      {
+        "fromDigest": "846625cf6976b333620716ff3d5ff0276774fc7d32d92ceda42363bfd338b42c",
+        "toDigest": "26591bb2bf9cdb036aca4e4b5b22da3b98805be2e15b15d6cb0a8c11c9b71d2f",
+        "platform": {
+          "os": "darwin",
+          "arch": "arm64"
+        },
+        "proof": "6063d4731543628cffb388b18eb799b17055842e5b88e2671a0754331467c1c5"
+      },
+      {
+        "fromDigest": "c71fbaa312f124f5b5014ceee2bc9af2dcf61f0fa732aa424bb283dd026f7012",
+        "toDigest": "eddedde0d0bf34c2483b854258b6dde0bab53e0c96696b6fa2fa360c087b4c79",
+        "platform": {
+          "os": "linux",
+          "arch": "arm64"
+        },
+        "proof": "6a7f007885113c48c64af40642383505344eef76fb9cb57b3ea568eef14e09dd"
+      },
+      {
+        "fromDigest": "8a0c4f5ce2d0183f3eedb2686515840edb01029f2741a6dab984863db31772ef",
+        "toDigest": "26591bb2bf9cdb036aca4e4b5b22da3b98805be2e15b15d6cb0a8c11c9b71d2f",
+        "platform": {
+          "os": "darwin",
+          "arch": "arm64"
+        },
+        "proof": "71e7c66283bcee3bb419ab852f87469f85d1429e8ff989cd059a13ece0e0a38a"
+      },
+      {
+        "fromDigest": "7fb75f5db6513e69a0a912be94718c06fc1488be55a6de65f65e791c971b776a",
+        "toDigest": "a19820523f1e5641789b18dee257e0ed84a934a3a1b620547533fd886bcad566",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "proof": "7ace00e0e1117a346abad659e62d2133286a3082fedb9c297f9985346c3883d8"
+      },
+      {
+        "fromDigest": "78866e3a5124220c5ea3163d6493953412f58792b392441880ecbf19ed4389a6",
+        "toDigest": "26591bb2bf9cdb036aca4e4b5b22da3b98805be2e15b15d6cb0a8c11c9b71d2f",
+        "platform": {
+          "os": "darwin",
+          "arch": "arm64"
+        },
+        "proof": "87d3f50a382f141b7e84bbbb9d6acb6a2f3769ef71d39064d8bd1e121b82f1b6"
+      },
+      {
+        "fromDigest": "2b87c89e3a695ccfdaecc26c3312c61499767ede65175a468c1ffdf6a884a9b1",
+        "toDigest": "26591bb2bf9cdb036aca4e4b5b22da3b98805be2e15b15d6cb0a8c11c9b71d2f",
+        "platform": {
+          "os": "darwin",
+          "arch": "arm64"
+        },
+        "proof": "8de4f5272645343e4d89c1cde239a2c4d56e3330eaaf068b3df52ef46a76ec48"
+      },
+      {
+        "fromDigest": "a65ff8249562ce3d94c16b966b20e3d8565cb86233bcec9c656136582bfff5ae",
+        "toDigest": "eddedde0d0bf34c2483b854258b6dde0bab53e0c96696b6fa2fa360c087b4c79",
+        "platform": {
+          "os": "linux",
+          "arch": "arm64"
+        },
+        "proof": "91cdf306528d67b6a50e4b50d87f02b85b800ba9abcdc8427505ce17de9951a2"
+      },
+      {
+        "fromDigest": "77f0b1093a2815e0c4c5344be3c1810b8915633fea1ed107e5776d2682691327",
+        "toDigest": "eddedde0d0bf34c2483b854258b6dde0bab53e0c96696b6fa2fa360c087b4c79",
+        "platform": {
+          "os": "linux",
+          "arch": "arm64"
+        },
+        "proof": "b32346f0d11fbc5f6f4f5930e167a2774a7b072797928d927da29d730d457366"
+      },
+      {
+        "fromDigest": "f9547d565c29876fd7084cb83c27605af595f7a5ceccd51340aa16634c37cf0e",
+        "toDigest": "a19820523f1e5641789b18dee257e0ed84a934a3a1b620547533fd886bcad566",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "proof": "b99924c36feb63ecf7f99e47f209e08f550be82a8268ba839210ca5677f0d2db"
+      },
+      {
+        "fromDigest": "401038df2ba4dc3559edcf63cf3e7f4808b3e9cf590a75d8beac2465e98e4668",
+        "toDigest": "26591bb2bf9cdb036aca4e4b5b22da3b98805be2e15b15d6cb0a8c11c9b71d2f",
+        "platform": {
+          "os": "darwin",
+          "arch": "arm64"
+        },
+        "proof": "bcdc9b9621ed4d7018a499e7ca7fd6e7eb17a2f4bd3f10376f89f67582674112"
+      },
+      {
+        "fromDigest": "787f3475a25f4ffe34e68260ea80a767532e7392b2c37fbb0284e5c66cd89bed",
+        "toDigest": "eddedde0d0bf34c2483b854258b6dde0bab53e0c96696b6fa2fa360c087b4c79",
+        "platform": {
+          "os": "linux",
+          "arch": "arm64"
+        },
+        "proof": "c5bd5152c5131d24de98403740412937b06674bc6138caf8a8f8fbc3a6039b95"
+      },
+      {
+        "fromDigest": "64962a50be1b2b918f20d04076f520d830c8b2d6add3cd1fd8ec08af23bc63af",
+        "toDigest": "eddedde0d0bf34c2483b854258b6dde0bab53e0c96696b6fa2fa360c087b4c79",
+        "platform": {
+          "os": "linux",
+          "arch": "arm64"
+        },
+        "proof": "cbd32f1df2b8e9d96c1d6a9fa6fd5454a745f4248673200e966e40704a489b79"
+      },
+      {
+        "fromDigest": "de5c86866fefe30bbdeeeee8096091e6129364490404f0a398464665bf94438e",
+        "toDigest": "a19820523f1e5641789b18dee257e0ed84a934a3a1b620547533fd886bcad566",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "proof": "cc4544f9338e2f42f93b712df2b2e810371966d9b112ab7e77ce49c0c4b836ea"
+      },
+      {
+        "fromDigest": "ff0bb62b4ae33b0844eeca825a248c2b14fe616cff06e043a252821a1af92cbf",
+        "toDigest": "26591bb2bf9cdb036aca4e4b5b22da3b98805be2e15b15d6cb0a8c11c9b71d2f",
+        "platform": {
+          "os": "darwin",
+          "arch": "arm64"
+        },
+        "proof": "cee03f3103d61fb1d79421e0247de58502007de90949de6890b57153cfc88a2b"
+      },
+      {
+        "fromDigest": "aaa04a82eb601759e0300e0f1327bbe6dd34ad10d60651c15aef93b32a46609d",
+        "toDigest": "eddedde0d0bf34c2483b854258b6dde0bab53e0c96696b6fa2fa360c087b4c79",
+        "platform": {
+          "os": "linux",
+          "arch": "arm64"
+        },
+        "proof": "d25d82559eb7c57c4175292c417a9c21a5d61b0be992102f7949efb9d8f0c900"
+      },
+      {
+        "fromDigest": "a62dbff876e186b3f63333111791b58ae0a0c8a2d5b181a40d60fb8e51a632d8",
+        "toDigest": "a19820523f1e5641789b18dee257e0ed84a934a3a1b620547533fd886bcad566",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "proof": "f7b7393e7e5bff2db31e52707627d461f4b5a948dcac1e1339b3a4a1c3fe8786"
+      },
+      {
+        "fromDigest": "417b143bf22f21dbe6e4dd7d269e1f673947934e886df1aa2e1a35a47073e744",
+        "toDigest": "a19820523f1e5641789b18dee257e0ed84a934a3a1b620547533fd886bcad566",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "proof": "f7d41e1e6b52179178feb8411810b8ea1b240e3610dc827df121988af6e3621e"
+      },
+      {
+        "fromDigest": "cd53740306cd8c69b3e16550c97a922b14faecac005cfc28851a7c43036e6304",
+        "toDigest": "26591bb2bf9cdb036aca4e4b5b22da3b98805be2e15b15d6cb0a8c11c9b71d2f",
+        "platform": {
+          "os": "darwin",
+          "arch": "arm64"
+        },
+        "proof": "ff78c3468dabd0d7475d22dd601e719529148c9ecc89d764e7f046463b03b3c5"
+      }
+    ]
+  }
+}
