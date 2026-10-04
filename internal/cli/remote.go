@@ -99,11 +99,16 @@ func validateHostWake(host protocol.HostInfo) error {
 func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
 	setupCtx, cancelSetup := context.WithTimeout(ctx, budget.Setup)
 	conn, err := openVerifiedHost(setupCtx, host, dial)
+	setupErr := setupCtx.Err()
 	cancelSetup()
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close() //nolint:errcheck // the request result is authoritative
+	// Best-effort wake caching can exhaust setup after identity verification.
+	if setupErr != nil {
+		return nil, fmt.Errorf("set up host %s: %w", host.Alias, setupErr)
+	}
 	requestID, err := newDaemonRequestID()
 	if err != nil {
 		return nil, err
