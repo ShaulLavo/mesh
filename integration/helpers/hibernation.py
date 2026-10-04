@@ -5,11 +5,12 @@ import json
 import sys
 import tempfile
 import time
+import terminal_window
 
 sys.dont_write_bytecode = True
 from agent_recovery import create, record, recover, setup
 from mesh_control import round_trip
-from terminal_window import PROMPT, Fixture, Terminal, eventually, require, run_outside_containing_session
+from terminal_window import Fixture, Terminal, eventually, require, run_outside_containing_session
 
 IDLE_SECONDS = 2
 
@@ -55,7 +56,7 @@ def idle_policy(fixture):
     shell = create_shell(fixture)
     require(listing(fixture)[shell].get("memoryBytes", 0) > 0, "new live shell reported no memory after an empty list")
     attach_and_detach(fixture, agent, b"AGENT_READY_idle-conversation")
-    attach_and_detach(fixture, shell, PROMPT)
+    attach_and_detach(fixture, shell, terminal_window.PROMPT)
 
     eventually(lambda: listing(fixture)[agent].get("hibernated"), "idle agent was not hibernated", timeout=IDLE_SECONDS * 4)
     row = listing(fixture)[agent]
