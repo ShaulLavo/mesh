@@ -141,3 +141,81 @@ func reviewerUnsafeCacheFile(t *testing.T, record, lock, kind string) {
 		t.Fatal(err)
 	}
 }
+
+func TestClaimCacheRefusesContainedRecordAndLockSymlinks(t *testing.T) {
+	for _, extension := range []string{".json", ".lock"} {
+		t.Run(extension, func(t *testing.T) {
+			directory := t.TempDir()
+			claim := cacheFixtureClaim(t, "destination", 1)
+			if _, err := RememberClaim(t.Context(), directory, claim.ID, claim); err != nil {
+				t.Fatal(err)
+			}
+			root, err := os.OpenRoot(filepath.Join(directory, cacheDirectory))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close() //nolint:errcheck // fixture directory descriptor cleanup
+			filename := claim.ID + extension
+			if err := root.Rename(filename, "contained-original"+extension); err != nil {
+				t.Fatal(err)
+			}
+			if err := root.Symlink("contained-original"+extension, filename); err != nil {
+				t.Fatal(err)
+			}
+			claim.Revision++
+			if _, err := RememberClaim(t.Context(), directory, claim.ID, claim); err == nil {
+				t.Fatal("accepted a contained final-file symlink")
+			}
+			if extension == ".json" {
+				if _, err := CachedClaim(directory, claim.ID); err == nil {
+					t.Fatal("reader accepted a contained record symlink")
+				}
+			}
+		})
+	}
+}
+
+func TestClaimCacheConcurrentInitialLockCreationSharesInode(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Mkdir(filepath.Join(directory, cacheDirectory), 0700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(filepath.Join(directory, cacheDirectory))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close() //nolint:errcheck // fixture directory descriptor cleanup
+	start := make(chan struct{})
+	results := make(chan *os.File, 64)
+	for range cap(results) {
+		go func() {
+			<-start
+			file, err := openPrivateCacheFile(root, "destination.lock", os.O_RDWR, true)
+			if err != nil {
+				t.Error(err)
+			}
+			results <- file
+		}()
+	}
+	close(start)
+	var first os.FileInfo
+	for range cap(results) {
+		file := <-results
+		if file == nil {
+			continue
+		}
+		info, err := file.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first == nil {
+			first = info
+		}
+		if !os.SameFile(first, info) {
+			t.Error("concurrent lock creation opened different lock inodes")
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

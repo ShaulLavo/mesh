@@ -38,7 +38,7 @@ func cachedClaimWithSync(directory, owner string, syncRoot func(*os.Root) error)
 }
 
 func readCachedClaim(root *os.Root, owner string, syncRoot func(*os.Root) error) (Claim, error) {
-	file, err := root.OpenFile(owner+".json", os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	file, err := openPrivateCacheFile(root, owner+".json", os.O_RDONLY, false)
 	if errors.Is(err, os.ErrNotExist) {
 		return Claim{}, nil
 	}
@@ -84,7 +84,7 @@ func rememberClaimWithSync(ctx context.Context, directory, owner string, next Cl
 		return false, err
 	}
 	defer root.Close() //nolint:errcheck // anchored cache descriptor cleanup
-	lock, err := root.OpenFile(owner+".lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
+	lock, err := openPrivateCacheFile(root, owner+".lock", os.O_RDWR, true)
 	if err != nil {
 		return false, fmt.Errorf("open machine name cache lock: %w", err)
 	}
@@ -218,4 +218,35 @@ func openCacheAncestor(directory string) (*os.Root, string, error) {
 		}
 		return root, ancestor, nil
 	}
+}
+
+func openPrivateCacheFile(root *os.Root, filename string, flag int, create bool) (*os.File, error) {
+	if create {
+		// Exclusive creation avoids Darwin's contended O_CREATE open path and never follows links.
+		file, err := root.OpenFile(filename, flag|os.O_CREATE|os.O_EXCL|syscall.O_NONBLOCK, 0o600)
+		if err == nil {
+			return file, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("create private cache file: %w", err)
+		}
+	}
+	info, err := root.Lstat(filename)
+	if err != nil {
+		return nil, fmt.Errorf("inspect private cache file: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return nil, errors.New("machine name cache requires regular files with permissions 0600")
+	}
+	// Root.OpenFile resolves contained links even when its caller passes O_NOFOLLOW.
+	file, err := root.OpenFile(filename, flag|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open private cache file: %w", err)
+	}
+	actual, err := file.Stat()
+	if err != nil || !os.SameFile(info, actual) {
+		_ = file.Close()
+		return nil, errors.New("machine name cache file changed while opening")
+	}
+	return file, nil
 }
