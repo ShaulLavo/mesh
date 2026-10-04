@@ -267,7 +267,9 @@ sys.exit(data["status"])
         unit = labels[label]
         process = self.processes.get(unit)
         if action == "print":
-            return (0, "fixture service running\n") if process and process.poll() is None else (1, "not loaded\n")
+            if process and process.poll() is None:
+                return 0, "fixture service running\n"
+            return 113, f'Bad request.\nCould not find service "{label}" in domain for user gui: {os.getuid()}\n'
         if action == "bootout":
             self.stop(unit)
         else:

@@ -268,7 +268,8 @@ sys.exit(result["status"])
         if process and process.poll() is None:
             return 0, (f"fixture = {{\n\tstate = running\n\tpid = {process.pid}\n"
                        "\tresource coalition = {\n\t\tstate = active\n\t}\n}\n")
-        return 1, "not loaded\n"
+        label = "dev.shaulavo.mesh-update-helper" if unit == "helper" else "dev.shaulavo.mesh"
+        return 113, f'Bad request.\nCould not find service "{label}" in domain for user gui: {os.getuid()}\n'
 
     def start(self, unit):
         with LOCK:
