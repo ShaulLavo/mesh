@@ -178,5 +178,23 @@ class CutoverEventsTest(unittest.TestCase):
             self.cutover(target)
 
 
+class CutoverTerminalArgumentsTest(unittest.TestCase):
+    def test_remote_identity_follows_option_delimiter(self):
+        tree = ast.parse(SOURCE.read_text(), filename=str(SOURCE))
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "Terminal"
+                 and isinstance(node.args[0], ast.List)
+                 and any(isinstance(item, ast.Attribute) and item.attr == "id" for item in node.args[0].elts)]
+        self.assertEqual(len(calls), 3)
+        for call in calls:
+            with self.subTest(line=call.lineno):
+                arguments = call.args[0].elts
+                self.assertEqual(len(arguments), 4)
+                self.assertEqual([item.value for item in arguments[1:3] if isinstance(item, ast.Constant)],
+                                 ["-r", "--"])
+                self.assertIsInstance(arguments[3], ast.Attribute)
+                self.assertEqual(arguments[3].attr, "id")
+
+
 if __name__ == "__main__":
     unittest.main()

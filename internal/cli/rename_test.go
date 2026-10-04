@@ -2,15 +2,19 @@ package cli
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/pem"
 	"fmt"
-	"github.com/shaul/mesh/internal/identity"
-	"github.com/shaul/mesh/internal/protocol"
-	"github.com/shaul/mesh/internal/transport"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/machinename"
-	"path/filepath"
+	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/transport"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestRenameHostChangesAuthenticatedDestinationOnly(t *testing.T) {
@@ -45,8 +49,17 @@ func TestRenameHostChangesAuthenticatedDestinationOnly(t *testing.T) {
 }
 
 func TestOwnMachineRenameNeedsNoSelfAdoption(t *testing.T) {
-	for _, useName := range []bool{false, true} {
-		t.Run(fmt.Sprint(useName), func(t *testing.T) {
+	for _, fixture := range []struct {
+		name    string
+		seed    byte
+		useName bool
+	}{
+		{name: "nondash-id", seed: 0},
+		{name: "leading-dash-id", seed: 41},
+		{name: "nondash-name", seed: 0, useName: true},
+		{name: "leading-dash-name", seed: 41, useName: true},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
 			t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 			var owner identity.Host
 			calls := 0
@@ -78,16 +91,27 @@ func TestOwnMachineRenameNeedsNoSelfAdoption(t *testing.T) {
 			})
 			stateDir := filepath.Dir(socket)
 			t.Setenv("MESH_STATE_DIR", stateDir)
-			var err error
-			owner, _, err = identity.LoadOrCreate(stateDir)
+			// These seeds produce real public-key IDs on both sides of the option boundary.
+			private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{fixture.seed}, ed25519.SeedSize))
+			block, err := ssh.MarshalPrivateKey(private, "")
 			if err != nil {
 				t.Fatal(err)
 			}
+			if err := os.WriteFile(filepath.Join(stateDir, "identity.key"), pem.EncodeToMemory(block), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			owner, err = identity.Load(stateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(owner.ID, "-") != (fixture.seed == 41) || !bytes.Equal(owner.PublicKey, private.Public().(ed25519.PublicKey)) {
+				t.Fatal("fixture did not load the exact cryptographic identity and ID shape")
+			}
 			target := owner.ID
-			if useName {
+			if fixture.useName {
 				target = "local-own"
 			}
-			out, _, err := executeCommand(t, Dependencies{}, "rename", target, "local-new")
+			out, _, err := executeCommand(t, Dependencies{}, "rename", "--", target, "local-new")
 			if err != nil {
 				t.Fatalf("own rename without address-book entry: %v", err)
 			}

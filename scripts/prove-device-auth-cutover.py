@@ -546,7 +546,7 @@ try:
     print("PASS 12 directed authenticated reconnects after explicit grants and pins", flush=True)
     for index, host in enumerate(hosts):
         peer = hosts[(index + 1) % len(hosts)]
-        terminal = Terminal([str(host.binary), peer.id, "-r"], host.environment, host.root, timeout=8)
+        terminal = Terminal([str(host.binary), "-r", "--", peer.id], host.environment, host.root, timeout=8)
         host.terminals.append(terminal)
         terminal.expect(PROMPT)
         start = len(terminal.drain())
@@ -556,7 +556,7 @@ try:
         host.terminals.remove(terminal)
     print("PASS all four original sessions reattach remotely with unchanged shell PIDs", flush=True)
     controller, destination = hosts[:2]
-    retained = Terminal([str(controller.binary), destination.id, "-r"], controller.environment, controller.root, timeout=8)
+    retained = Terminal([str(controller.binary), "-r", "--", destination.id], controller.environment, controller.root, timeout=8)
     controller.terminals.append(retained)
     retained.expect(PROMPT)
     # A reconnecting CLI may use the new grant. DialOnce probes keep the old socket
@@ -582,7 +582,7 @@ try:
     retained.close()
     controller.terminals.remove(retained)
     destination.command("device", "approve", "--allow-root", "--", controller.id)
-    fresh = Terminal([str(controller.binary), destination.id, "-r"], controller.environment, controller.root, timeout=8)
+    fresh = Terminal([str(controller.binary), "-r", "--", destination.id], controller.environment, controller.root, timeout=8)
     controller.terminals.append(fresh)
     fresh.expect(PROMPT)
     fresh.close()
