@@ -206,14 +206,28 @@ func (c *Coordinator) observeBuild(run Run, index int, info Info) (bool, error) 
 		return false, fmt.Errorf("observe target artifact: %w", err)
 	}
 	if build.Digest == artifact.BinarySHA256 {
-		return true, c.record(run.ID, index, func(t *Target) { t.State = Updated; t.Build = &build; t.Workers = info.Health.Workers; t.Problem = "" })
+		return true, c.record(run.ID, index, func(t *Target) {
+			t.State = Updated
+			t.Build = &build
+			t.Workers = info.Health.Workers
+			t.Problem = ""
+			t.RetryPending = false
+			t.BootstrapRetry = false
+		})
 	}
 	comparison, err := release.CompareVersions(build.Version, run.Release.Version)
 	if err == nil && comparison > 0 {
 		if err := compatibleNewerBuild(build, run.Release.Compatibility); err != nil {
 			return false, err
 		}
-		return true, c.record(run.ID, index, func(t *Target) { t.State = Newer; t.Build = &build; t.Workers = info.Health.Workers; t.Problem = "" })
+		return true, c.record(run.ID, index, func(t *Target) {
+			t.State = Newer
+			t.Build = &build
+			t.Workers = info.Health.Workers
+			t.Problem = ""
+			t.RetryPending = false
+			t.BootstrapRetry = false
+		})
 	}
 	return false, nil
 }

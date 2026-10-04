@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,5 +148,101 @@ func TestReplayedRetryAfterSecondRollbackDoesNotReactivate(t *testing.T) {
 	resumed := resumeRetryStep(t, c, run.ID)
 	if !resumed.Stopped || resumed.Targets[0].State != Failed || resumed.Targets[0].RetryPending || len(remote.tokens) != 1 {
 		t.Fatalf("same retry token reactivated after failure: %+v tokens=%v", resumed, remote.tokens)
+	}
+}
+
+func TestObservedCompletionClearsPendingRetry(t *testing.T) {
+	for _, state := range []State{Updated, Newer} {
+		t.Run(string(state), func(t *testing.T) { observedCompletionClearsPendingRetry(t, state) })
+	}
+}
+
+func TestObservedCompletionClearsBootstrapRetry(t *testing.T) {
+	for _, state := range []State{Updated, Newer} {
+		t.Run(string(state), func(t *testing.T) { observedCompletionClearsBootstrapRetry(t, state) })
+	}
+}
+
+func observedCompletionClearsBootstrapRetry(t *testing.T, state State) {
+	t.Helper()
+	f := newLegacyFixture(t)
+	f.step()
+	f.receipt(updateinstall.RolledBack)
+	f.step()
+	approved, err := f.c.Retry(context.Background(), f.run.ID)
+	if err != nil || !approved.Targets[0].BootstrapRetry {
+		t.Fatalf("bootstrap retry was not pending: %+v %v", approved, err)
+	}
+	host := f.run.Targets[0].Host.ID
+	info := f.remote.info[host]
+	artifact, err := f.run.Release.Artifact(info.Health.Build.Platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Health.Build.Digest = artifact.BinarySHA256
+	info.Health.Build.Version = f.run.Release.Version
+	if state == Newer {
+		info.Health.Build.Digest = strings.Repeat("e", 64)
+		info.Health.Build.Version = "v0.3.0"
+	}
+	f.remote.info[host] = info
+	if err := f.c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := f.c.Store.Read(f.run.ID)
+	if err != nil || !completed.Done() || completed.Targets[0].State != state || completed.Targets[0].BootstrapRetry || completed.Targets[0].BootstrapRetryToken != approved.Targets[0].BootstrapRetryToken {
+		t.Fatalf("completion retained bootstrap retry or changed its token: %+v %v", completed, err)
+	}
+	if len(f.commands) != 2 || f.remote.stages != 0 {
+		t.Fatalf("completion dispatched work: commands=%d stages=%d", len(f.commands), f.remote.stages)
+	}
+}
+
+func observedCompletionClearsPendingRetry(t *testing.T, state State) {
+	t.Helper()
+	c, remote, run := testCoordinator(t, 1)
+	if err := c.fail(run.ID, 0, errors.New("target failed before staging")); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := c.Retry(context.Background(), run.ID)
+	if err != nil || !approved.Targets[0].RetryPending || approved.Targets[0].RetryToken != 1 {
+		t.Fatalf("retry was not pending: %+v %v", approved, err)
+	}
+	host := run.Targets[0].Host.ID
+	info := remote.info[host]
+	artifact, err := run.Release.Artifact(info.Health.Build.Platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Health.Build.Digest = artifact.BinarySHA256
+	info.Health.Build.Version = run.Release.Version
+	if state == Newer {
+		info.Health.Build.Digest = strings.Repeat("e", 64)
+		info.Health.Build.Version = "v0.3.0"
+	}
+	remote.info[host] = info
+	if err := c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := c.Store.Read(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := completed.Targets[0]
+	if target.State != state || !completed.Done() || target.RetryPending || target.RetryToken != 1 {
+		t.Fatalf("completion retained pending retry or changed its token: %+v", target)
+	}
+	if _, err := c.Retry(context.Background(), run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := c.Store.Read(run.ID)
+	if err != nil || replayed.Targets[0].RetryPending || replayed.Targets[0].RetryToken != 1 || !replayed.Done() {
+		t.Fatalf("completed retry reactivated: %+v %v", replayed, err)
+	}
+	if remote.stages != 0 || len(remote.grants) != 0 {
+		t.Fatalf("completed target received work: stages=%d grants=%v", remote.stages, remote.grants)
 	}
 }
