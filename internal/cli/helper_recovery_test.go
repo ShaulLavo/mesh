@@ -134,6 +134,72 @@ func TestHelperRecoveryRejectsCoordinatorSetup(t *testing.T) {
 	}
 }
 
+func TestHelperRecoveryAfterCancellingPendingRetry(t *testing.T) {
+	for _, state := range []update.State{update.Failed, update.Cancelled} {
+		t.Run(string(state), func(t *testing.T) { helperRecoveryAfterCancellingPendingRetry(t, state, false, false, false) })
+	}
+}
+
+func TestHelperRecoveryAfterCancellationPreservesOwnership(t *testing.T) {
+	for _, state := range []update.State{update.Pending, update.Offline, update.Staged, update.Granted} {
+		t.Run(string(state), func(t *testing.T) { helperRecoveryAfterCancellingPendingRetry(t, state, false, false, false) })
+	}
+	t.Run("issued-grant", func(t *testing.T) { helperRecoveryAfterCancellingPendingRetry(t, update.Failed, true, false, false) })
+	t.Run("coordinator-setup", func(t *testing.T) { helperRecoveryAfterCancellingPendingRetry(t, update.Failed, false, true, false) })
+	t.Run("bootstrap-retry", func(t *testing.T) { helperRecoveryAfterCancellingPendingRetry(t, update.Failed, false, false, true) })
+}
+
+func helperRecoveryAfterCancellingPendingRetry(t *testing.T, state update.State, grant, setup, bootstrap bool) {
+	t.Helper()
+	root, host := setupUpdateCLI(t)
+	store, err := update.OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.Start(host.ID, scopedUpdateFleet("cancelled-retry-fixture", []update.Host{host}), updateTestManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Change(run.ID, func(run *update.Run) error {
+		run.CoordinatorSetup = setup
+		run.Stopped = true
+		target := &run.Targets[0]
+		target.State, target.Grant = state, grant
+		target.RetryPending, target.BootstrapRetry = true, bootstrap
+		target.RetryToken, target.BootstrapRetryToken = 7, 9
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Cancel(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := store.Read(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := cancelled.Targets[0]
+	if !cancelled.Cancel || !cancelled.Stopped || target.RetryToken != 7 || target.BootstrapRetryToken != 9 || target.State != state || target.Grant != grant || cancelled.CoordinatorSetup != setup {
+		t.Fatalf("cancellation retained retry intent or changed ownership/history: %+v", cancelled)
+	}
+	before := helperRecoveryRunBytes(t, root, run.ID)
+	status := updateinstall.Status{Settings: updateinstall.Settings{StateDir: root}, Request: updateinstall.Request{TargetID: host.ID}}
+	err = checkHelperRecoveryApprovals(t.Context(), status)
+	allowed := (state == update.Failed || state == update.Cancelled) && !grant && !setup && !bootstrap
+	if allowed != (err == nil) {
+		t.Fatalf("cancelled approval boundary allowed=%v, error=%v", allowed, err)
+	}
+	if target.RetryPending || target.BootstrapRetry != bootstrap {
+		t.Fatalf("cancelled run retained pending retry flags: %+v", target)
+	}
+	if string(helperRecoveryRunBytes(t, root, run.ID)) != string(before) {
+		t.Fatal("helper recovery changed the cancelled run")
+	}
+	if _, err = store.Retry(run.ID); err == nil {
+		t.Fatal("cancelled retry reactivated without a new approval")
+	}
+}
+
 func helperRecoveryRunBytes(t *testing.T, stateDir, runID string) []byte {
 	t.Helper()
 	root, err := os.OpenRoot(filepath.Join(stateDir, "updates", "runs"))
