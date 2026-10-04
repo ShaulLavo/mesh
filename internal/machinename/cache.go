@@ -99,7 +99,8 @@ func rememberClaimWithSync(ctx context.Context, directory, owner string, next Cl
 	if err := lockCache(ctx, lock); err != nil {
 		return false, err
 	}
-	current, err := readCachedClaim(root, owner, syncRoot)
+	// A replacement's final publication barrier also settles the superseded entry.
+	current, err := readCachedClaim(root, owner, func(*os.Root) error { return nil })
 	if err != nil {
 		return false, err
 	}
@@ -108,7 +109,7 @@ func rememberClaimWithSync(ctx context.Context, directory, owner string, next Cl
 		return false, err
 	}
 	if !changed {
-		return false, nil
+		return false, syncRoot(root)
 	}
 	if err := ctx.Err(); err != nil {
 		return false, fmt.Errorf("publish cached machine name: %w", err)
