@@ -16,16 +16,17 @@ func (m dashboardModel) usageSummaries(budget int) []string {
 	}
 	// Hidden accounts cannot claim graph rows when the renderer measures summary height.
 	budget = min(budget, 17)
-	remaining := m.width - 56
+	rightWidth := m.usagePanelWidth()
+	remaining := m.width - rightWidth - 2
 	leftWidth := remaining * 57 / 104
 	centerWidth := remaining - leftWidth
 	left := m.summary(false, leftWidth, budget)
 	attention := m.attention(centerWidth, min(7, max(0, budget-10)))
 	center := m.summary(true, centerWidth, budget-len(attention))
 	center = append(center, attention...)
-	right := m.usagePanel(54, budget, false)
+	right := m.usagePanel(rightWidth, budget, false)
 	fleet := dashboardJoinPanels(left, center, leftWidth, centerWidth)
-	return dashboardJoinPanels(fleet, right, m.width-55, 54)
+	return dashboardJoinPanels(fleet, right, m.width-rightWidth-1, rightWidth)
 }
 
 func (m dashboardModel) usageAttentionGroup(group []string, width, budget int) []string {
@@ -157,4 +158,8 @@ func (m dashboardModel) usageFooter() string {
 		}
 	}
 	return dashboardAlign(cadence, frame, m.width)
+}
+
+func (m dashboardModel) usagePanelWidth() int {
+	return max(54, (m.width-2)/3)
 }
