@@ -205,7 +205,7 @@ func TestRecoveryFallbackAndCorruptRecordStayVisible(t *testing.T) {
 	row.Recovery, row.RecoveryError = nil, "unsupported checkpoint version"
 	current = recoveryPicker(row)
 	view := ansi.Strip(current.View().Content)
-	if !strings.Contains(view, "unsupported checkpoint version") || !strings.Contains(view, "Previous output unavailable") || !strings.Contains(view, "launch-only") {
+	if !strings.Contains(view, "unsupported checkpoint version") || !strings.Contains(view, "Previous output unavailable") || !strings.Contains(view, "launch directory") {
 		t.Fatalf("corrupt record hidden:\n%s", view)
 	}
 }
@@ -217,7 +217,7 @@ func TestLaunchOnlyRecoveryDoesNotInventCheckpointTime(t *testing.T) {
 	row.Recovery.Restart = &recovery.Command{Argv: []string{"make", "serve"}, Cwd: row.Cwd}
 	current := recoveryPicker(row)
 	view := ansi.Strip(current.View().Content)
-	for _, expected := range []string{"launch-only", "Previous output unavailable", "make serve"} {
+	for _, expected := range []string{"launch directory", "Previous output unavailable", "make serve"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("missing %q:\n%s", expected, view)
 		}
@@ -283,7 +283,7 @@ func TestWatchPendingRecoveryMetadataKeepsExplicitInspection(t *testing.T) {
 	row.RecoveryDetailsOmitted = true
 	current := recoveryPicker(row)
 	view := ansi.Strip(current.View().Content)
-	if !strings.Contains(view, "Loading session metadata") || strings.Contains(view, "No checkpoint was saved") {
+	if !strings.Contains(view, "Loading saved session details") || strings.Contains(view, "No output was saved") {
 		t.Fatalf("pending metadata looked complete:\n%s", view)
 	}
 	current.inspection.hasValue = true

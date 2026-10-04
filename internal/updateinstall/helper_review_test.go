@@ -59,7 +59,7 @@ func TestUpgradeHelperReceiptAuthorityAfterLaterCommit(t *testing.T) {
 					t.Fatal("retry replaced authoritative newer receipt")
 				}
 				var receipt HelperInstallation
-				if err = readJSON(helperRecord(f.cfg.StateDir), &receipt); err != nil || receipt != got {
+				if err = readHelperInstallation(t.Context(), f.cfg.StateDir, &receipt); err != nil || receipt != got {
 					t.Fatalf("receipt differs: %v", err)
 				}
 				link, err := os.Readlink(launcher)
@@ -95,7 +95,7 @@ func TestPrepareHelperCommitsReceiptBeforeLauncher(t *testing.T) {
 		t.Fatal("launcher rename unexpectedly replaced directory")
 	}
 	var receipt HelperInstallation
-	if err = readJSON(helperRecord(f.cfg.StateDir), &receipt); err != nil || receipt != candidate {
+	if err = readHelperInstallation(t.Context(), f.cfg.StateDir, &receipt); err != nil || receipt != candidate {
 		t.Fatalf("failed launcher promotion lost receipt authority: %v", err)
 	}
 	if err = os.Remove(launcher); err != nil {
@@ -266,7 +266,7 @@ func TestUpgradeHelperPromotionBoundaries(t *testing.T) {
 					t.Fatalf("interrupted promotion at %s failed: %v", boundary, err)
 				}
 				var receipt HelperInstallation
-				if err = readJSON(helperRecord(f.cfg.StateDir), &receipt); err != nil || receipt != got {
+				if err = readHelperInstallation(t.Context(), f.cfg.StateDir, &receipt); err != nil || receipt != got {
 					t.Fatalf("recovered receipt differs: %v", err)
 				}
 				link, err := os.Readlink(filepath.Join(transactionDir(f.cfg.StateDir), "helper", "current"))

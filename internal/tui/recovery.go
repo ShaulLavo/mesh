@@ -84,14 +84,16 @@ func (m model) savedDetailsFor(current session) inspectionDetails {
 	}
 	details := savedRecoveryDetails(current)
 	if current.recoveryPending {
-		details.output = "Loading session metadata"
-		details.screenStatus = "Loading session metadata"
-		details.preview = []string{"Loading session metadata…"}
+		details.output = "Loading saved session details"
+		details.screenStatus = "Loading saved session details"
+		details.preview = []string{"Loading saved session details…"}
 		return details
 	}
+	details.output = "Loading previous output"
 	details.screenStatus = "Loading previous output"
 	details.preview = []string{"Loading saved preview…"}
 	if m.inspection.kind == inspectionFailed || m.inspection.kind == inspectionUnavailable {
+		details.output = "saved output unavailable"
 		details.screenStatus = "Previous output unavailable"
 		details.preview = []string{safeText(m.inspection.problem)}
 	}
@@ -102,13 +104,14 @@ func savedRecoveryDetails(current session) inspectionDetails {
 	details := inspectionDetails{
 		directoryLabel: "saved path", directory: safeText(current.cwd),
 		foreground: "ended", title: "unavailable", attachment: sessionStateLabel(current),
-		output: "checkpoint unavailable", screenStatus: "Previous output unavailable",
-		preview: []string{"No checkpoint was saved. Recovery uses the launch directory."},
+		output: "no saved output", screenStatus: "Previous output unavailable",
+		preview: []string{"No output was saved. Recovery opens the launch directory."},
 	}
 	if current.recovery == nil {
-		details.directorySource = "launch-only"
+		details.directorySource = "launch directory"
 		if current.recoveryError != "" {
-			details.preview = []string{safeText(current.recoveryError)}
+			details.output = "saved output unavailable"
+			details.preview = []string{safeText(current.recoveryError), "Recovery opens the launch directory."}
 		}
 		return details
 	}
@@ -119,9 +122,9 @@ func savedRecoveryDetails(current session) inspectionDetails {
 		details.directorySource += " fallback"
 	}
 	details.title = safeText(saved.Title)
-	details.output = "launch-only recovery"
+	details.output = "opens launch directory"
 	if saved.CheckpointAt.IsZero() {
-		details.directorySource = "launch-only"
+		details.directorySource = "launch directory"
 	} else {
 		details.output = "saved " + saved.CheckpointAt.Format(time.RFC3339)
 		details.screenStatus = "Previous output · " + saved.CheckpointAt.Format(time.RFC3339)
@@ -130,7 +133,7 @@ func savedRecoveryDetails(current session) inspectionDetails {
 			details.preview[index] = safeText(line)
 		}
 		if len(details.preview) == 0 {
-			details.preview = []string{"No output was saved at this checkpoint."}
+			details.preview = []string{"No output was saved at this time."}
 		}
 	}
 	if saved.Restart != nil {
@@ -163,7 +166,7 @@ func (m model) recoveryHints(current session, action string) string {
 	if canResumeAgent(current) {
 		return m.styles.hints(hint{"enter", action}, hint{"a", "Resume conversation"}, hint{"s", "Open shell"}, hint{"space", "output"}, hint{"esc", "hosts"})
 	}
-	return m.styles.hints(hint{"enter", action}, hint{"s", "Open shell"}, hint{"c", "Restart command"}, hint{"space", "output"}, hint{"x", "forget"}, hint{"esc", "hosts"})
+	return m.styles.hints(hint{"enter", action}, hint{"s", "Open shell"}, hint{"c", "Restart command"}, hint{"space", "output"}, hint{"x", forgetLabel}, hint{"esc", "hosts"})
 }
 
 func cloneRecovery(source *recovery.Record) *recovery.Record {

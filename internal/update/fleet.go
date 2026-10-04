@@ -159,13 +159,6 @@ func ReadFleet(path string) (Fleet, error) {
 	return fleet, fleet.Validate()
 }
 
-func SaveFleet(path string, fleet Fleet) error {
-	if err := fleet.Validate(); err != nil {
-		return err
-	}
-	return writeJSON(path, fleet)
-}
-
 func IsLocal(h Host) bool { return strings.HasPrefix(h.Endpoint, "unix:") }
 
 func CacheDir() (string, error) {

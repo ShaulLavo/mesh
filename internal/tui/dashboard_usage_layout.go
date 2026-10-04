@@ -139,9 +139,9 @@ func (m dashboardModel) usageAwaitingTraffic() bool {
 }
 
 func (m dashboardModel) usageFooter() string {
-	cadence := "metrics 2s · catalogs change-driven · history 2m · AI bars used 0–100% · │ elapsed pace"
+	cadence := "readings every 2s · lists update on change · history 2m · AI bars 0–100% used · │ time elapsed"
 	if m.width < 140 || m.height < 40 {
-		cadence = "metrics 2s · AI used/left · history 2m"
+		cadence = "readings every 2s · AI used/left · history 2m"
 		if m.usageAwaitingTraffic() {
 			cadence = "AI used/left · reset passed · awaiting traffic"
 		}
@@ -149,7 +149,7 @@ func (m dashboardModel) usageFooter() string {
 	if m.ascii {
 		cadence = strings.ReplaceAll(cadence, "│", "|")
 	}
-	frame := "frame " + m.now.Format("15:04:05")
+	frame := "updated " + m.now.Format("15:04:05")
 	for _, host := range m.hosts {
 		if host.Host.Local {
 			frame += " on " + safeText(host.Host.Label())

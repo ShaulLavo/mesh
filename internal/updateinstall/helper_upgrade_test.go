@@ -156,7 +156,7 @@ func TestUpgradeHelperNormalUpgrade(t *testing.T) {
 					t.Fatal(err)
 				}
 				var record HelperInstallation
-				if err = readJSON(helperRecord(f.cfg.StateDir), &record); err != nil || record != got {
+				if err = readHelperInstallation(t.Context(), f.cfg.StateDir, &record); err != nil || record != got {
 					t.Fatalf("promoted helper receipt = %+v, %v", record, err)
 				}
 				link, err := os.Readlink(filepath.Join(transactionDir(f.cfg.StateDir), "helper", "current"))

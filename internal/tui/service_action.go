@@ -30,6 +30,21 @@ func serviceActionLabel(action cli.PickerServiceAction) string {
 	}
 }
 
+func serviceActionFailureLabel(action cli.PickerServiceAction) string {
+	switch action {
+	case cli.PickerStopService:
+		return "Could not stop"
+	case cli.PickerRestartService:
+		return "Could not restart"
+	case cli.PickerPingService:
+		return "Could not check"
+	case cli.PickerOpenService:
+		return "Could not open"
+	default:
+		return "Could not complete service action"
+	}
+}
+
 func (m *model) handleServiceKey(key tea.KeyPressMsg) (bool, tea.Cmd) {
 	selected, ok := m.list.SelectedItem().(serviceItem)
 	if !ok {
@@ -78,7 +93,7 @@ func (m model) applyServiceAction(message serviceActionResultMsg) model {
 	feedback := m.serviceFeedback[target]
 	website := m.serviceWebsite(target)
 	if message.err != nil {
-		feedback = "Failed: " + message.err.Error()
+		feedback = serviceActionFailureLabel(message.request.Action) + ": " + message.err.Error()
 		if website != nil {
 			m.serviceFeedback[target] = feedback
 		}

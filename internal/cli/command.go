@@ -234,6 +234,8 @@ type Dependencies struct {
 	UpdateBootstrap        func(context.Context, updatebootstrap.Request, updatebootstrap.Config) (updateinstall.Status, error)
 	UpdateRelease          release.Client
 	UpdateCaller           update.Caller
+	UpdateBuild            func() release.Build
+	UpdateInspect          func(context.Context, string) (updatebootstrap.Observation, error)
 	SSHSessionHandler      sshd.SessionHandlerFactory
 	Bootstrap              BootstrapFunc
 	Wake                   WakeFunc
@@ -1130,7 +1132,11 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 		return err
 	}
 	localRows, localErr := localSessionRowsWithDaemonMemory(cmd.Context(), stateDir)
-	hosts, selfLabel := withoutThisHost(cmd.Context(), stateDir, hosts)
+	owner, err := localNameRecord(cmd.Context(), stateDir)
+	if err != nil {
+		return err
+	}
+	hosts = withoutOwnerHost(hosts, owner)
 	if len(hosts) == 0 {
 		if localErr != nil {
 			return localErr
@@ -1151,13 +1157,14 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 	// this, adopting one remote host hid every local session from `mesh ls`
 	// while its worker kept running.
 	if localErr != nil {
-		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: local sessions unavailable: %s\n", a.privacy.Value("host", selfLabel), safeRemoteText(a.privacy.Value("error", localErr.Error()))); err != nil {
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: local sessions unavailable: %s\n", a.privacy.Value("host", HostLabel(owner)), safeRemoteText(a.privacy.Value("error", localErr.Error()))); err != nil {
 			return err
 		}
 	}
 	if len(localRows) > 0 {
-		results = append([]HostSessions{{Host: HostRecord{MachineName: selfLabel}, Sessions: localRows}}, results...)
+		results = append([]HostSessions{{Host: owner, Local: true, Sessions: localRows}}, results...)
 	}
+	projectCatalogHostNames(results)
 	hidden, err := writeSessionList(cmd.OutOrStdout(), a.dependencies.Now(), results, view)
 	if err := reportHiddenSessions(cmd.ErrOrStderr(), hidden, err); err != nil {
 		return err

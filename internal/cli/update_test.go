@@ -32,15 +32,42 @@ func updateTestManifest() release.Manifest {
 	return manifest
 }
 
+func updateTestBuild() release.Build {
+	return release.Build{Version: "v0.1.0", Digest: strings.Repeat("d", 64), Platform: release.CurrentPlatform(), StateVersion: 1, WorkerProtocol: 1, UpdateProtocol: 1}
+}
+
+func saveUpdateTestFleet(t *testing.T, path string, fleet update.Fleet) {
+	t.Helper()
+	if err := fleet.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(fleet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func updateTestRelease(t *testing.T) (release.Client, *atomic.Int32) {
 	t.Helper()
 	requests := new(atomic.Int32)
+	manifest := updateTestSupportedManifest()
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		_ = json.NewEncoder(w).Encode(updateTestManifest())
+		_ = json.NewEncoder(w).Encode(manifest)
 	}))
 	t.Cleanup(server.Close)
 	return release.Client{BaseURL: server.URL, HTTPClient: server.Client()}, requests
+}
+
+func updateTestSupportedManifest() release.Manifest {
+	manifest := updateTestManifest()
+	for _, artifact := range manifest.Artifacts {
+		manifest.Compatibility.Transitions = append(manifest.Compatibility.Transitions, release.Transition{Platform: artifact.Platform, FromDigest: strings.Repeat("d", 64), ToDigest: artifact.BinarySHA256, Proof: strings.Repeat("e", 64)})
+	}
+	return manifest
 }
 
 func setupUpdateCLI(t *testing.T) (string, update.Host) {
@@ -108,9 +135,7 @@ func TestUpdateKeepsOfflineMembersAndSubmitsOnePinnedPlan(t *testing.T) {
 	remote := update.Host{ID: remoteIdentity.ID, MachineName: "laptop", Endpoint: "ws://laptop.invalid/mesh"}
 	fleet := scopedUpdateFleet("test", []update.Host{local, remote})
 	file := filepath.Join(t.TempDir(), "fleet.json")
-	if err := update.SaveFleet(file, fleet); err != nil {
-		t.Fatal(err)
-	}
+	saveUpdateTestFleet(t, file, fleet)
 	client, _ := updateTestRelease(t)
 	var plans atomic.Int32
 	caller := updateCallFunc(func(_ context.Context, host update.Host, action string, input, output any) error {
@@ -118,7 +143,7 @@ func TestUpdateKeepsOfflineMembersAndSubmitsOnePinnedPlan(t *testing.T) {
 			if host.ID == remote.ID {
 				return context.DeadlineExceeded
 			}
-			*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: release.Build{Version: "v0.1.0"}}}
+			*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 			return nil
 		}
 		if action != "plan" {
@@ -126,7 +151,7 @@ func TestUpdateKeepsOfflineMembersAndSubmitsOnePinnedPlan(t *testing.T) {
 		}
 		plans.Add(1)
 		plan := input.(update.Plan)
-		if plan.Fleet.Digest() != fleet.Digest() || plan.Manifest.Digest() != updateTestManifest().Digest() {
+		if plan.Fleet.Digest() != fleet.Digest() || plan.Manifest.Digest() != updateTestSupportedManifest().Digest() {
 			return errors.New("plan lost approved membership or release")
 		}
 		*output.(*update.Run) = update.Run{ID: strings.Repeat("a", 32), Fleet: plan.Fleet, Release: plan.Manifest, Targets: []update.Target{{Host: local, State: update.Updated}, {Host: remote, State: update.Offline}}}
@@ -172,10 +197,13 @@ func TestVersionJSONAndHiddenHelperValidationAreQuiet(t *testing.T) {
 func TestWorkerUpdateReportDoesNotClaimOldSessionsWereUpgraded(t *testing.T) {
 	workers := []updateinstall.Worker{{ID: "old", Build: &release.Build{Version: "v0.1.0"}}, {ID: "unknown"}, {ID: "current", Build: &release.Build{Version: "v0.2.0"}}}
 	text := workerUpdateSummary(workers, updateTestManifest())
-	for _, want := range []string{"3 running sessions preserved", "1 use older workers", "1 worker versions unknown"} {
+	for _, want := range []string{"3 running sessions", "1 using an older Mesh version", "1 with unknown Mesh version"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("worker summary lacks %q: %s", want, text)
 		}
+	}
+	if strings.Contains(text, "preserved") || strings.Contains(text, "upgraded") {
+		t.Fatalf("inventory promises changes: %s", text)
 	}
 }
 

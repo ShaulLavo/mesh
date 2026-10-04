@@ -8,7 +8,7 @@
 [2m│[m [2mstarted in  [m /home/shaul/src/mesh                                            [2m│[m
 [2m│[m [2mforeground  [m [2munavailable[m                                                     [2m│[m
 [2m│[m [2mlaunched    [m claude --dangerously-skip-permissions                           [2m│[m
-[2m│[m [2mactivity    [m catalog detached  ·  last output unavailable  ·  started 4m ago [2m│[m
+[2m│[m [2mactivity    [m listed detached  ·  last output unavailable  ·  started 4m ago  [2m│[m
 [2m├─ [m[1;38;2;255;184;108mlive view unavailable[m[2m ──────────────────────────────────────────────────────┤[m
 [2m│[m [38;2;216;222;233mLive view is unavailable in this client.[m                                     [2m│[m
 [2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
@@ -21,4 +21,4 @@
 [2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
 [2m│[m [38;2;216;222;233m[m                                                                             [2m│[m
 [2m└──────────────────────────────────────────────────────────────────────────────┘[m
-[1;38;2;196;167;255m↑/↓[m  [1;38;2;196;167;255menter[m [2mattach[m  [1;38;2;196;167;255mspace[m [2mscreen[m  [1;38;2;196;167;255mn[m [2mnew[m  [1;38;2;196;167;255mr[m [2mresume[m  [1;38;2;196;167;255mk[m [2mkill[m  [1;38;2;196;167;255mx[m [2mrm[m  [1;38;2;196;167;255mesc[m [2mhosts[m
+[1;38;2;196;167;255m↑/↓[m  [1;38;2;196;167;255menter[m [2mattach[m  [1;38;2;196;167;255mspace[m [2mscreen[m  [1;38;2;196;167;255mn[m [2mnew[m  [1;38;2;196;167;255mr[m [2mresume[m  [1;38;2;196;167;255mk[m [2mend[m  [1;38;2;196;167;255mx[m [2mforget[m  [1;38;2;196;167;255mesc[m [2mhosts[m

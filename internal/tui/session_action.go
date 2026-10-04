@@ -57,7 +57,7 @@ func (m *model) startSessionAction(action cli.PickerSessionAction) tea.Cmd {
 	m.actionSeq++
 	target := sessionActionTarget{hostID: currentHost.id, sessionID: currentSession.id}
 	m.sessionAction = sessionActionState{target: target, action: action, generation: m.actionSeq, phase: sessionActionRunning}
-	m.notice = fmt.Sprintf("%s %s...", sessionActionProgress(action), currentSession.id)
+	m.notice = fmt.Sprintf("%s %s…", sessionActionProgress(action), currentSession.id)
 	requestContext, cancel := context.WithCancel(m.ctx)
 	m.cancelAction = cancel
 	act := m.act
@@ -77,10 +77,10 @@ func (m model) applySessionAction(message sessionActionResultMsg) (model, tea.Cm
 	m.cancelAction = nil
 	if message.err != nil {
 		m.sessionAction.phase = sessionActionReconcilingFailure
-		m.notice = fmt.Sprintf("%s %s failed: %s", sessionActionVerb(message.action), message.target.sessionID, m.privacy.Value("error", message.err.Error()))
+		m.notice = fmt.Sprintf("Could not %s %s: %s", sessionActionVerb(message.action), message.target.sessionID, m.privacy.Value("error", message.err.Error()))
 	} else {
 		m.sessionAction.phase = sessionActionReconcilingSuccess
-		m.notice = fmt.Sprintf("%s %s; refreshing...", sessionActionCompleted(message.action), message.target.sessionID)
+		m.notice = fmt.Sprintf("%s %s; refreshing…", sessionActionCompleted(message.action), message.target.sessionID)
 	}
 	return m, m.restartCatalogRefreshLoop()
 }
@@ -121,11 +121,11 @@ func sessionActionBusy(action sessionActionState) bool {
 func sessionActionNotice(action sessionActionState) string {
 	switch action.phase {
 	case sessionActionRunning:
-		return fmt.Sprintf("%s %s...", sessionActionProgress(action.action), action.target.sessionID)
+		return fmt.Sprintf("%s %s…", sessionActionProgress(action.action), action.target.sessionID)
 	case sessionActionReconcilingSuccess:
-		return fmt.Sprintf("%s %s; refreshing...", sessionActionCompleted(action.action), action.target.sessionID)
+		return fmt.Sprintf("%s %s; refreshing…", sessionActionCompleted(action.action), action.target.sessionID)
 	case sessionActionReconcilingFailure:
-		return fmt.Sprintf("%s %s failed; checking current state...", sessionActionVerb(action.action), action.target.sessionID)
+		return fmt.Sprintf("Could not %s %s; checking its state…", sessionActionVerb(action.action), action.target.sessionID)
 	default:
 		return ""
 	}
@@ -143,9 +143,9 @@ func (m *model) invalidateSessionAction() {
 func sessionActionVerb(action cli.PickerSessionAction) string {
 	switch action {
 	case cli.PickerKillSession:
-		return "kill"
+		return "end session"
 	case cli.PickerRemoveSession:
-		return "remove"
+		return "forget session"
 	default:
 		return "session action"
 	}
@@ -154,9 +154,9 @@ func sessionActionVerb(action cli.PickerSessionAction) string {
 func sessionActionProgress(action cli.PickerSessionAction) string {
 	switch action {
 	case cli.PickerKillSession:
-		return "Killing"
+		return "Ending session"
 	case cli.PickerRemoveSession:
-		return "Removing"
+		return "Forgetting session"
 	default:
 		return "Updating"
 	}
@@ -165,9 +165,9 @@ func sessionActionProgress(action cli.PickerSessionAction) string {
 func sessionActionCompleted(action cli.PickerSessionAction) string {
 	switch action {
 	case cli.PickerKillSession:
-		return "Killed"
+		return "Ended session"
 	case cli.PickerRemoveSession:
-		return "Removed"
+		return "Forgot session"
 	default:
 		return "Updated"
 	}

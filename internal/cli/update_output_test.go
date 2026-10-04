@@ -77,7 +77,7 @@ func TestDeclaredUpdateTargetsUseRetainedOwnerClaimsWithoutChangingOperation(t *
 	}
 	var out bytes.Buffer
 	run := update.Run{ID: "fixture-run", Targets: targets}
-	if err := printDeclaredUpdateRun(t.Context(), &out, run, false); err != nil {
+	if err := printDeclaredUpdateRun(t.Context(), &out, run, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "last known name") || strings.Contains(out.String(), "obsolete-viewer") {
@@ -94,7 +94,7 @@ func TestStructuredUpdateOutputNeedsNoNamingConfiguration(t *testing.T) {
 	t.Setenv("MESH_CONFIG_DIR", invalid)
 	var out bytes.Buffer
 	run := update.Run{ID: "fixture-run", Targets: []update.Target{{Host: update.Host{ID: "exact-id", MachineName: "ephemeral"}}}}
-	if err := printDeclaredUpdateRun(t.Context(), &out, run, true); err != nil {
+	if err := printDeclaredUpdateRun(t.Context(), &out, run, true, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "exact-id") || strings.Contains(out.String(), "ephemeral") {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"debug/buildinfo"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -16,7 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func peerImage(conn net.Conn) (executableImage, error) {
+func peerImage(ctx context.Context, conn net.Conn) (executableImage, error) {
 	socket, ok := conn.(syscall.Conn)
 	if !ok {
 		return executableImage{}, errors.New("bootstrap requires a local Unix socket")
@@ -33,11 +34,15 @@ func peerImage(conn net.Conn) (executableImage, error) {
 	if probeErr != nil {
 		return executableImage{}, probeErr
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	return processImage(ctx, pid)
+}
+
+func processImage(ctx context.Context, pid int) (executableImage, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "lsof", "-a", "-p", strconv.Itoa(pid), "-d", "txt", "-F", "finD").Output() //nolint:gosec // fixed tool and flags; decimal PID is obtained from LOCAL_PEERPID
+	output, err := exec.CommandContext(ctx, "lsof", "-a", "-p", strconv.Itoa(pid), "-d", "txt", "-F", "finD").Output() //nolint:gosec // fixed tool and flags; PID comes from the Unix peer or service manager
 	if err != nil {
-		return executableImage{}, err
+		return executableImage{}, fmt.Errorf("inspect mapped process image: %w", errors.Join(ctx.Err(), err))
 	}
 	return parseMappedMeshImage(string(output), pid)
 }

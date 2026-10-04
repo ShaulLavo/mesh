@@ -7,13 +7,12 @@ import (
 	"os"
 
 	"github.com/shaul/mesh/internal/identity"
-	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
-func previewFirstCoordinator(ctx context.Context, environment updateEnvironment, preview updatePreview) (updatePreview, error) {
+func previewFirstCoordinator(ctx context.Context, a *application, environment updateEnvironment, preview updatePreview) (updatePreview, error) {
 	if preview.ClientOnly || environment.coordinator.ID != environment.local.ID {
 		return preview, nil
 	}
@@ -26,13 +25,17 @@ func previewFirstCoordinator(ctx context.Context, environment updateEnvironment,
 	}
 	added := local.Host.ID == ""
 	if added {
-		local = inspectUpdateTargets(ctx, environment.client, []update.Host{environment.local})[0]
+		targets, reviews := inspectUpdateTargets(ctx, environment.client, []update.Host{environment.local})
+		local = targets[0]
+		for id, review := range reviews {
+			preview.Reviews[id] = review
+		}
 	}
 	if local.State == update.Offline && localDaemonAbsent(ctx, environment.stateDir) {
 		preview.CoordinatorSetup = true
 		local.State = update.Bootstrap
 		local.Problem = "Approval installs a supervised local daemon and helper, preserves existing service configuration, and resumes this exact fleet operation."
-		build := release.Current()
+		build := a.currentUpdateBuild()
 		local.Build = &build
 		if executable, err := os.Executable(); err == nil {
 			if migrationErr := coordinatorSetupMigration(executable, build, preview.Release); migrationErr != nil {
@@ -44,11 +47,14 @@ func previewFirstCoordinator(ctx context.Context, environment updateEnvironment,
 	if local.State != update.Bootstrap && !preview.CoordinatorSetup {
 		return preview, nil
 	}
+	if !preview.CoordinatorSetup {
+		local = a.reviewLocalSource(ctx, environment.stateDir, local)
+	}
 	preview.CoordinatorBootstrap, preview.CoordinatorAdded = true, added
 	if added {
 		preview.Fleet.Members = append(append([]update.Host(nil), preview.Fleet.Members...), environment.local)
 		preview.Targets = append(preview.Targets, local)
-	} else if preview.CoordinatorSetup {
+	} else {
 		for index := range preview.Targets {
 			if preview.Targets[index].Host.ID == local.Host.ID {
 				preview.Targets[index] = local
@@ -96,7 +102,7 @@ func (a *application) bootstrapApprovedCoordinator(ctx context.Context, environm
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			if printErr := printDeclaredUpdateRun(ctx, output.out, run, options.json, output.privacy); printErr != nil {
+			if printErr := printDeclaredUpdateRun(ctx, output.out, run, options.json, options.details, output.privacy); printErr != nil {
 				return printErr
 			}
 			return statusError{code: 2}
@@ -108,7 +114,7 @@ func (a *application) bootstrapApprovedCoordinator(ctx context.Context, environm
 		if recordErr != nil {
 			return recordErr
 		}
-		if printErr := printDeclaredUpdateRun(ctx, output.out, run, options.json, output.privacy); printErr != nil {
+		if printErr := printDeclaredUpdateRun(ctx, output.out, run, options.json, options.details, output.privacy); printErr != nil {
 			return printErr
 		}
 		return statusError{code: 1}
@@ -271,7 +277,7 @@ func (a *application) operateFirstCoordinator(ctx context.Context, environment u
 	if err != nil {
 		return err
 	}
-	if err := printDeclaredUpdateRun(ctx, output.out, run, structured, output.privacy); err != nil {
+	if err := printDeclaredUpdateRun(ctx, output.out, run, structured, output.details, output.privacy); err != nil {
 		return err
 	}
 	return updateExit(run.ExitCode())

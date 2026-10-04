@@ -131,14 +131,7 @@ func CollectHostSessions(parent context.Context, hosts []HostRecord, timeout tim
 	if err := parent.Err(); err != nil {
 		return nil, fmt.Errorf("collect host sessions: %w", err)
 	}
-	projected := make([]HostRecord, len(out))
-	for i := range out {
-		projected[i] = out[i].Host
-	}
-	ProjectHostNames(projected)
-	for i := range out {
-		out[i].Host = projected[i]
-	}
+	projectCatalogHostNames(out)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Host.MachineName < out[j].Host.MachineName })
 	return out, nil
 }
@@ -168,4 +161,15 @@ func cloneRecoveryRecord(record *recovery.Record) *recovery.Record {
 	var cloned recovery.Record
 	_ = json.Unmarshal(data, &cloned)
 	return &cloned
+}
+
+func projectCatalogHostNames(catalog []HostSessions) {
+	hosts := make([]HostRecord, len(catalog))
+	for i := range catalog {
+		hosts[i] = catalog[i].Host
+	}
+	ProjectHostNames(hosts)
+	for i := range catalog {
+		catalog[i].Host = hosts[i]
+	}
 }

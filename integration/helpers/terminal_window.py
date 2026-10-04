@@ -353,10 +353,15 @@ class Fixture:
         self.validate_destinations()
         (self.config / "hosts.json").write_text(json.dumps({
             "version": 1,
-            "hosts": [{"alias": "pc", "id": self.remote_id, "meshIdentity": response["host"]["meshIdentity"],
+            "hosts": [{"id": self.remote_id, "meshIdentity": response["host"]["meshIdentity"],
                        "tailscaleName": "pc.fixture.test", "addresses": ["127.0.0.1"],
                        "endpoint": f"ws://127.0.0.1:{port}/mesh"}],
         }))
+        subprocess.run([self.binary, "serve", "ls"],
+                       env=self.environment, capture_output=True, check=True, timeout=5)
+        claim = json.loads((self.config / "machine-names" / (self.remote_id + ".json")).read_text())
+        require(claim["id"] == self.remote_id and claim["machineName"] == response["host"]["machineName"],
+                "authenticated service read did not adopt the destination declaration")
 
     def nested(self):
         self.start_remote()

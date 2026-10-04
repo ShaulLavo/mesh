@@ -1,6 +1,6 @@
 # Update Mesh
 
-Run `mesh update` to review and update the machines in your saved fleet. Mesh
+Run `mesh update` to review this machine, or the machines in an explicitly saved fleet. Mesh
 pins one release for the operation and keeps progress on the coordinator. You
 can close the command while it runs. Offline machines remain pending and retry
 the same release when they return.
@@ -14,15 +14,15 @@ mesh update retry RUN
 mesh update cancel RUN
 ```
 
-The first interactive update shows this machine and the hosts in its local
-address book. Confirm that this is your complete fleet before saving it. If a
-machine is missing, include it in a fleet file before approving the update.
+With no saved fleet, the interactive command and `--check` review this machine
+only. They never create a fleet from address-book entries or save one during
+approval. Use an explicit fleet file to choose a group, including offline members.
 An address book on one machine does not establish the membership of your mesh.
 
 ## Choose the machines
 
 ```bash
-mesh update --all                 # the saved fleet; also the default
+mesh update --all                 # the explicitly saved fleet
 mesh update --local               # only this installation
 mesh update --host server --host laptop
 mesh update --fleet ./fleet.json
@@ -32,7 +32,20 @@ mesh update --fleet ./fleet.json --yes --json
 
 `--yes` requires a saved fleet, an explicit fleet file, or a narrower selection.
 It does not create a fleet from whatever happens to be reachable. `--check`
-prints the proposed scope and available release without installing it.
+prints the selected scope and release without installing it. `--details` shows
+release identifiers, build metadata, and update checks. `--json` preserves
+machine-readable identifiers and the original rejection causes.
+
+An exact installed release needs no update operation. A compatible newer
+installation is kept. Approval is blocked when a checked installation lacks a
+tested direct transition, requires recovery, or has unsupported metadata,
+protocols, journal format, or running-session protocols. The preview gives one
+scoped review action; it does not guess an intermediate release tag. A missing
+local daemon still requires verification of the executing CLI and its update
+history before offering helper installation. Unknown legacy sources and failed
+authentication checks cannot authorize bootstrap. Unreachable members stay in
+an explicitly selected fleet for later inspection; authorization refusals and
+responding peers with invalid messages block approval.
 
 The default fleet file is `fleet.json` beside `hosts.json`. `MESH_CONFIG_DIR`
 changes this directory. A fleet lists stable Mesh public identities and explicit

@@ -8,6 +8,7 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/update"
+	"github.com/shaul/mesh/internal/worker"
 	"os"
 	"path/filepath"
 	"strings"
@@ -276,4 +277,54 @@ func readNamingFixtureFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return contents
+}
+
+func TestMixedSessionListKeepsOwnDeclarationProvenance(t *testing.T) {
+	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+	var owner identity.Host
+	socket, done := startDaemonControlServer(t, 2, func(conn transport.Conn, request protocol.Control) error {
+		response := protocol.Control{RequestID: request.RequestID}
+		switch request.Type {
+		case protocol.TypeList:
+			response.Type = protocol.TypeListed
+		case protocol.TypeHostInfo:
+			response.Type, response.Host = protocol.TypeHostInfoResult, &protocol.HostInfo{ID: owner.ID, MeshIdentity: owner.ID, MachineName: "destination", NameRevision: 2}
+		default:
+			return fmt.Errorf("unexpected mixed-list control %s", request.Type)
+		}
+		return writeDaemonControl(conn, response)
+	})
+	stateDir := filepath.Dir(socket)
+	t.Setenv("MESH_STATE_DIR", stateDir)
+	var err error
+	owner, _, err = identity.LoadOrCreate(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeLocalSessionDir(t, "70C7", worker.StateExited)
+	remote := namedDestinationPeer(t)
+	remote.host.MachineName, remote.host.NameRevision = "destination", 1
+	if err := saveNamedTestHost(t, remote.host); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := executeCommand(t, Dependencies{}, "ls", "--all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "70C7") {
+			continue
+		}
+		if !strings.Contains(line, "conflict") || strings.Contains(line, "last known name") {
+			t.Fatalf("mixed list lost actual own conflict/provenance: %s", line)
+		}
+	}
+	if !strings.Contains(out, "70C7") {
+		t.Fatal("mixed list lost own session")
+	}
+	hosts, err := LoadHosts()
+	if err != nil || len(hosts) != 1 || hosts[0].ID != remote.host.ID {
+		t.Fatal("mixed list created self adoption")
+	}
+	awaitDaemonServer(t, done)
 }

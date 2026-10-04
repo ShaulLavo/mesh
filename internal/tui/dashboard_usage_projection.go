@@ -53,7 +53,7 @@ func projectUsageAccount(account usagefeed.Account, first bool) dashboardUsageAc
 	result := dashboardUsageAccount{Account: account, first: first}
 	result.Windows = nil
 	for _, window := range account.Windows {
-		if strings.HasPrefix(window.ID, "model:") || !usageWindowHasReading(window) {
+		if !usageWindowHasReading(window) {
 			continue
 		}
 		if len(result.Windows) == 2 {

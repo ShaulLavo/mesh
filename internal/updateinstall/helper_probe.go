@@ -30,11 +30,11 @@ func (c *helperMetadataCapture) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-func helperMetadataOutput(ctx context.Context, executable string) ([]byte, error) {
+func helperCommandOutput(ctx context.Context, executable string, args ...string) ([]byte, error) {
 	probe, cancel := context.WithCancel(ctx)
 	defer cancel()
 	capture := &helperMetadataCapture{data: make([]byte, 0, helperMetadataLimit), cancel: cancel}
-	command := exec.CommandContext(probe, executable, "version", "--json") //nolint:gosec // verified local helper image
+	command := exec.CommandContext(probe, executable, args...) //nolint:gosec // verified local helper image and fixed build/journal probe arguments
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	command.WaitDelay = 50 * time.Millisecond
 	command.Stdout, command.Stderr = capture, capture

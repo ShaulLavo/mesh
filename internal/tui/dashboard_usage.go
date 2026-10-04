@@ -17,6 +17,8 @@ const (
 	usageExhausted  = "exhausted"
 	usageCooldown   = "cooldown"
 	usageDisabled   = "disabled"
+	usageWaiting    = "Waiting"
+	usageRotating   = "rotating"
 )
 
 func (m dashboardModel) usagePanel(width, budget int, compact bool) []string {
@@ -63,7 +65,7 @@ func (m dashboardModel) usageIdentity(account dashboardUsageAccount, width int, 
 	}
 	identity := prefix + account.Label + " · " + usagePlan(account.Plan)
 	badge := usageRouting(account.Account)
-	if badge != "" && !compact {
+	if badge != "" && badge != usageWaiting && !compact {
 		identity += " · " + badge
 	}
 	if account.extraWindows > 0 {
@@ -83,10 +85,17 @@ func (m dashboardModel) usageIdentity(account dashboardUsageAccount, width int, 
 	if compact {
 		identity = strings.TrimLeft(identity, " ")
 	}
+	if badge == usageWaiting {
+		// Reserve parking and age together so compact identities retain both facts.
+		age = badge + " · " + age
+	}
 	return dashboardAlign(identity, " "+age, width)
 }
 
 func usageRouting(account usagefeed.Account) string {
+	if account.State == usageDisabled && account.Routing.Mode == usageRotating && account.Routing.Active != nil && !*account.Routing.Active && account.Cooldown == nil {
+		return usageWaiting
+	}
 	if account.State == usageDisabled || account.State == usageCooldown {
 		return account.State
 	}
@@ -96,8 +105,8 @@ func usageRouting(account usagefeed.Account) string {
 	if account.Routing.LastServedAt != nil {
 		return "last served"
 	}
-	if account.Routing.Mode == "rotating" {
-		return "rotating"
+	if account.Routing.Mode == usageRotating {
+		return usageRotating
 	}
 	return ""
 }
@@ -119,6 +128,10 @@ func (m dashboardModel) usageAccountWindows(account dashboardUsageAccount, width
 		if !usageWindowHasReading(window) {
 			continue
 		}
+		if model, scoped := usageWindowModel(window); scoped {
+			result = append(result, dashboardFit("Model · "+model, width))
+			window.Label = strings.TrimPrefix(window.Label, model+" ")
+		}
 		showAge := !usageSameSeen(window.LastSeenAt, account.LastSeenAt)
 		if compact {
 			result = append(result, m.usageCompactWindow(window, width, showAge))
@@ -128,7 +141,7 @@ func (m dashboardModel) usageAccountWindows(account dashboardUsageAccount, width
 	}
 	credits := usageCredits(account.Credits)
 	if len(result) == 0 {
-		return []string{usageEmptySummary(account.State, credits, width)}
+		return []string{usageEmptySummary(account.Account, credits, width)}
 	}
 	if credits != "" {
 		result = append([]string{credits}, result...)
@@ -137,10 +150,14 @@ func (m dashboardModel) usageAccountWindows(account dashboardUsageAccount, width
 	return result
 }
 
-func usageEmptySummary(state, credits string, width int) string {
+func usageEmptySummary(account usagefeed.Account, credits string, width int) string {
+	badge := usageRouting(account)
 	summary := "No reading yet · waits for traffic"
-	if state == usageDisabled {
+	if badge == usageDisabled {
 		summary = "Out of rotation · no reading"
+	}
+	if badge == usageWaiting {
+		summary = usageWaiting + " · no reading"
 	}
 	if credits == "" {
 		return summary
@@ -149,10 +166,19 @@ func usageEmptySummary(state, credits string, width int) string {
 		return summary + " · " + credits
 	}
 	summary = "Awaiting traffic"
-	if state == usageDisabled {
+	if badge == usageDisabled {
 		summary = "Out of rotation"
 	}
+	if badge == usageWaiting {
+		summary = "no reading"
+	}
 	return summary + " · " + credits
+}
+
+func usageWindowModel(window usagefeed.Window) (string, bool) {
+	value, scoped := strings.CutPrefix(window.ID, "model:")
+	model, _, _ := strings.Cut(value, ":")
+	return model, scoped
 }
 
 func usageSameSeen(left, right *time.Time) bool {
@@ -369,10 +395,14 @@ func (m dashboardModel) usageVisible(budget int, compact bool) (int, int) {
 }
 
 func usageAccountRows(account dashboardUsageAccount, compact bool) int {
-	readings := 0
+	readings, scopes := 0, 0
 	for _, window := range account.Windows {
-		if usageWindowHasReading(window) {
-			readings++
+		if !usageWindowHasReading(window) {
+			continue
+		}
+		readings++
+		if _, scoped := usageWindowModel(window); scoped {
+			scopes++
 		}
 	}
 	if readings == 0 {
@@ -382,7 +412,7 @@ func usageAccountRows(account dashboardUsageAccount, compact bool) int {
 	if compact {
 		windowRows = 1
 	}
-	rows := 1 + windowRows*readings
+	rows := 1 + windowRows*readings + scopes
 	if usageCredits(account.Credits) != "" {
 		rows++
 	}

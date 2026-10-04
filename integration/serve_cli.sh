@@ -274,7 +274,6 @@ with open(hosts_path, "w", encoding="utf-8") as output:
     json.dump({
         "version": 1,
         "hosts": [{
-            "alias": "pc",
             "id": origin_id,
             "meshIdentity": origin_id,
             "tailscaleName": origin[0],
@@ -290,6 +289,9 @@ CLI=(env "MESH_STATE_DIR=$CLIENT_STATE" "MESH_CONFIG_DIR=$CLIENT_CONFIG" NO_COLO
 
 start_edge "$TEST_ROOT/edge.log"
 start_origin "$TEST_ROOT/origin.log"
+"${CLI[@]}" ls --all --timeout 1s >"$TEST_ROOT/name-adoption.out" 2>&1 || fail "adopt origin declaration"
+[ -s "$CLIENT_CONFIG/machine-names/$ORIGIN_ID.json" ] || fail "origin declaration was not authenticated"
+
 
 BACKEND_PORT_FILE="$TEST_ROOT/backend.port"
 BLOCK_FILE="$TEST_ROOT/backend-block.ready"
@@ -428,7 +430,7 @@ grep -Eq "^/files[[:space:]]+files[[:space:]]+pc[[:space:]]+files.*offline/stale
   "$TEST_ROOT/list-offline.out" || fail "offline cache lost the private fallback URL: $(<"$TEST_ROOT/list-offline.out")"
 grep -Eq "^/api[[:space:]]+CLI Proxy[[:space:]]+pc[[:space:]]+proxy.*offline/stale" \
   "$TEST_ROOT/list-offline.out" || fail "offline cache lost the display name: $(<"$TEST_ROOT/list-offline.out")"
-grep -Fq 'pc: unavailable' "$TEST_ROOT/list-offline.err" ||
+grep -Fq "$ORIGIN_ID: unavailable" "$TEST_ROOT/list-offline.err" ||
   fail "offline service list omitted its host diagnostic: $(<"$TEST_ROOT/list-offline.err")"
 
 start_origin "$TEST_ROOT/origin-restarted.log"

@@ -159,7 +159,7 @@ class ServiceHandler(socketserver.StreamRequestHandler):
                 elif action in ("start", "enable"):
                     host.start(unit)
                 elif action == "restart" and "--no-block" in args:
-                    threading.Timer(0.2, host.restart, args=[unit]).start()
+                    host.queue_restart(unit)
                 else:
                     raise RuntimeError("unsupported fixture service action")
         except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
@@ -227,6 +227,7 @@ sys.exit(data["status"])
             self.plist.write_text(template)
             self.service_plists = {"mesh.service": self.plist}
         self.processes = {}
+        self.restarts = []
         self.logs = []
         self.terminals = []
         self.workers = []
@@ -270,7 +271,7 @@ sys.exit(data["status"])
         if action == "bootout":
             self.stop(unit)
         else:
-            threading.Timer(0.2, self.restart, args=[unit]).start()
+            self.queue_restart(unit)
         return 0, ""
 
     def start(self, unit):
@@ -311,6 +312,12 @@ sys.exit(data["status"])
     def restart(self, unit):
         self.stop(unit)
         self.start(unit)
+
+    def queue_restart(self, unit):
+        restart = threading.Timer(0.2, self.restart, args=[unit])
+        with LOCK:
+            self.restarts.append(restart)
+            restart.start()
 
     def control(self, kind):
         return round_trip(str(self.state / "daemon.sock"), {"type": kind, "requestId": "cutover-proof"})
@@ -466,6 +473,14 @@ for server in (proxy, services):
 hosts = []
 
 
+def wait_for_restarts():
+    with LOCK:
+        pending = [restart for host in hosts for restart in host.restarts]
+    for restart in pending:
+        restart.join(timeout=10)
+        require(not restart.is_alive(), "fixture service restart did not finish")
+
+
 def local_cutover(host, target):
     prior_id = host.id
     before = len(EVENTS)
@@ -481,6 +496,7 @@ def local_cutover(host, target):
     host.check_retained()
     host.prove_loaded_image(target)
     host.check_io()
+    wait_for_restarts()
     touched = {row["host"] for row in EVENTS[before:] if row["kind"] in ("start", "stop")}
     require(touched == {host.name}, "local update changed another installation: " + repr(touched))
     print("PASS real local cutover", host.name, target["version"], "worker", host.worker_pid, "shell", host.shell_pid, flush=True)
@@ -518,7 +534,7 @@ try:
                 continue
             host.command("device", "approve", "--allow-root", "--", peer.id)
             host.command("update", "trust", "--", peer.id)
-            peers.append({"id": peer.id, "meshIdentity": peer.mesh_identity, "addresses": ["127.0.0.1"], "alias": peer.name, "endpoint": f"ws://127.0.0.1:{peer.port}/mesh"})
+            peers.append({"id": peer.id, "meshIdentity": peer.mesh_identity, "addresses": ["127.0.0.1"], "endpoint": f"ws://127.0.0.1:{peer.port}/mesh"})
         (host.config / "hosts.json").write_text(json.dumps({"version": 1, "hosts": peers}))
     for host in hosts:
         listing = host.command("ls").stdout
@@ -528,7 +544,7 @@ try:
     print("PASS 12 directed authenticated reconnects after explicit grants and pins", flush=True)
     for index, host in enumerate(hosts):
         peer = hosts[(index + 1) % len(hosts)]
-        terminal = Terminal([str(host.binary), peer.name, "-r"], host.environment, host.root, timeout=8)
+        terminal = Terminal([str(host.binary), peer.id, "-r"], host.environment, host.root, timeout=8)
         host.terminals.append(terminal)
         terminal.expect(PROMPT)
         start = len(terminal.drain())
@@ -538,7 +554,7 @@ try:
         host.terminals.remove(terminal)
     print("PASS all four original sessions reattach remotely with unchanged shell PIDs", flush=True)
     controller, destination = hosts[:2]
-    retained = Terminal([str(controller.binary), destination.name, "-r"], controller.environment, controller.root, timeout=8)
+    retained = Terminal([str(controller.binary), destination.id, "-r"], controller.environment, controller.root, timeout=8)
     controller.terminals.append(retained)
     retained.expect(PROMPT)
     # A reconnecting CLI may use the new grant. DialOnce probes keep the old socket
@@ -564,7 +580,7 @@ try:
     retained.close()
     controller.terminals.remove(retained)
     destination.command("device", "approve", "--allow-root", "--", controller.id)
-    fresh = Terminal([str(controller.binary), destination.name, "-r"], controller.environment, controller.root, timeout=8)
+    fresh = Terminal([str(controller.binary), destination.id, "-r"], controller.environment, controller.root, timeout=8)
     controller.terminals.append(fresh)
     fresh.expect(PROMPT)
     fresh.close()
@@ -574,7 +590,7 @@ try:
     coordinator = hosts[0]
     fleet_file = coordinator.root / "fleet.json"
     fleet_file.write_text(json.dumps({"version": 1, "name": "four-disposable-hosts", "revision": 1,
-        "members": [{"id": host.id, "alias": host.name, "endpoint":
+        "members": [{"id": host.id, "endpoint":
            "unix:" + str(host.state / "daemon.sock") if host is coordinator else f"ws://127.0.0.1:{host.port}/mesh",
             "platform": OLD_BUILD["platform"]} for host in hosts]}))
     coordinator.command("update", "--fleet", str(fleet_file), "--version", FLEET_BUILD["version"], "--yes", "--json", timeout=120)
