@@ -11,7 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode"
 
 	"golang.org/x/sys/unix"
 )
@@ -24,28 +26,56 @@ func retireClientAliases(ctx context.Context) error {
 }
 
 func retireClientAliasesWithSettlement(ctx context.Context, settle func(*os.File) error) error {
-	return withClientConfigLock(ctx, false, func(dir *os.File, path string) error {
-		contents, err := readClientConfig(dir)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("read host config %s: %w", path, err)
-		}
-		next, changed, err := withoutClientAliases(contents)
-		if err != nil {
-			return fmt.Errorf("retire obsolete host config fields %s: %w; correct this file and retry", path, err)
-		}
-		if _, err := parseHostConfig(next, path); err != nil {
+	ready, err := clientConfigCanRetire(ctx)
+	if err != nil || !ready {
+		return err
+	}
+	path, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	dir, err := openClientConfigDirectory(filepath.Dir(path), false)
+	if err != nil || dir == nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	next, changed, err := readClientRetirement(dir, path)
+	if err != nil || next == nil {
+		return err
+	}
+	if !changed {
+		// A visible rename may need directory settlement after an earlier failure.
+		// Unchanged reads need no writer lock or directory write permission.
+		return settle(dir)
+	}
+	return withClientConfigLock(ctx, false, func(locked *os.File, path string) error {
+		next, changed, err := readClientRetirement(locked, path)
+		if err != nil || next == nil {
 			return err
 		}
 		if !changed {
-			// A previous rename may be visible after directory sync failed. Settle it
-			// before reporting success, even when the obsolete fields are already gone.
-			return settle(dir)
+			return settle(locked)
 		}
-		return publishClientConfig(dir, next, settle)
+		return publishClientConfig(locked, next, settle)
 	})
+}
+
+func readClientRetirement(dir *os.File, path string) ([]byte, bool, error) {
+	contents, err := readClientConfig(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read host config %s: %w", path, err)
+	}
+	next, changed, err := withoutClientAliases(contents)
+	if err != nil {
+		return nil, false, fmt.Errorf("retire obsolete host config fields %s: %w; correct this file and retry", path, err)
+	}
+	if _, err := parseHostConfig(next, path); err != nil {
+		return nil, false, err
+	}
+	return next, changed, nil
 }
 
 func withoutClientAliases(contents []byte) ([]byte, bool, error) {
@@ -68,12 +98,9 @@ func withoutClientAliases(contents []byte) ([]byte, bool, error) {
 	if err := json.Unmarshal(object["hosts"], &hosts); err != nil {
 		return nil, false, fmt.Errorf("host array: %w", err)
 	}
-	changed := false
-	for _, host := range hosts {
-		if _, exists := host["alias"]; exists {
-			delete(host, "alias")
-			changed = true
-		}
+	changed, err := removeHostAliases(hosts)
+	if err != nil {
+		return nil, false, err
 	}
 	if !changed {
 		return contents, false, nil
@@ -88,6 +115,27 @@ func withoutClientAliases(contents []byte) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("encode retired host config: %w", err)
 	}
 	return append(next, '\n'), true, nil
+}
+
+func removeHostAliases(hosts []map[string]json.RawMessage) (bool, error) {
+	changed := false
+	for _, host := range hosts {
+		value, exists := host["alias"]
+		if !exists {
+			continue
+		}
+		value = bytes.TrimSpace(value)
+		if len(value) == 0 || value[0] != '"' {
+			return false, errors.New("obsolete host alias must be a JSON string")
+		}
+		var obsolete string
+		if err := json.Unmarshal(value, &obsolete); err != nil {
+			return false, fmt.Errorf("decode obsolete host alias string: %w", err)
+		}
+		delete(host, "alias")
+		changed = true
+	}
+	return changed, nil
 }
 
 func checkConfigJSON(decoder *json.Decoder, depth int) error {
@@ -125,11 +173,28 @@ func checkConfigKey(decoder *json.Decoder, keys map[string]bool) error {
 		return fmt.Errorf("read configuration key: %w", err)
 	}
 	name, ok := key.(string)
-	if !ok || keys[name] {
-		return errors.New("configuration contains duplicate object keys")
+	if !ok {
+		return errors.New("configuration object key must be a string")
 	}
-	keys[name] = true
+	folded := foldConfigKey(name)
+	if keys[folded] {
+		return errors.New("configuration contains duplicate or case-ambiguous object keys")
+	}
+	keys[folded] = true
 	return nil
+}
+
+func foldConfigKey(name string) string {
+	// encoding/json matches struct fields by Unicode simple folding as well as case.
+	return strings.Map(func(r rune) rune {
+		folded := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < folded {
+				folded = next
+			}
+		}
+		return folded
+	}, name)
 }
 
 func withClientConfigLock(ctx context.Context, create bool, operation func(*os.File, string) error) error {

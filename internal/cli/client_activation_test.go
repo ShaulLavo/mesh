@@ -10,18 +10,17 @@ import (
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
-func TestVersionClientRetirementActivationBoundary(t *testing.T) {
+func TestVersionMetadataPreservesRetainedConfiguration(t *testing.T) {
 	for _, example := range []struct {
 		name       string
 		phase      updateinstall.Phase
 		clientOnly bool
 		installed  bool
-		retired    bool
 	}{
 		{name: "accepted-client", phase: updateinstall.Accepted, clientOnly: true, installed: true},
 		{name: "staged-client", phase: updateinstall.Staged, clientOnly: true, installed: true},
 		{name: "validating-staged-image", phase: updateinstall.Validating, clientOnly: true},
-		{name: "validating-installed-client", phase: updateinstall.Validating, clientOnly: true, installed: true, retired: true},
+		{name: "validating-installed-client", phase: updateinstall.Validating, clientOnly: true, installed: true},
 		{name: "validating-daemon-metadata", phase: updateinstall.Validating, installed: true},
 		{name: "committed-client-metadata", phase: updateinstall.Committed, clientOnly: true, installed: true},
 	} {
@@ -48,8 +47,8 @@ func TestVersionClientRetirementActivationBoundary(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if bytes.Contains(after, []byte(`"alias"`)) == example.retired {
-				t.Fatal("client retirement crossed its installed validation boundary")
+			if !bytes.Equal(after, obsoleteConfigFixture()) {
+				t.Fatal("metadata changed retained client configuration")
 			}
 		})
 	}
@@ -71,7 +70,7 @@ func TestVersionMetadataDoesNotCreateOrRetireState(t *testing.T) {
 	}
 }
 
-func TestVersionInstalledValidationRefusesUnknownConfig(t *testing.T) {
+func TestVersionMetadataPreservesInvalidClientConfig(t *testing.T) {
 	contents := []byte(`{"version":1,"hosts":[],"unexpected":true}`)
 	path := writeClientConfigFixture(t, contents)
 	state := t.TempDir()
@@ -81,8 +80,8 @@ func TestVersionInstalledValidationRefusesUnknownConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeClientActivationJournal(t, state, updateinstall.Status{Schema: 1, Phase: updateinstall.Validating, Settings: updateinstall.Settings{StateDir: state, Executable: executable, ClientOnly: true}})
-	if _, _, err := executeCommand(t, Dependencies{}, "version", "--json"); err == nil {
-		t.Fatal("installed-client validation ignored unknown configuration")
+	if _, _, err := executeCommand(t, Dependencies{}, "version", "--json"); err != nil {
+		t.Fatalf("metadata probe read client configuration: %v", err)
 	}
 	after, err := readClientConfigTestFile(path)
 	if err != nil || !bytes.Equal(after, contents) {

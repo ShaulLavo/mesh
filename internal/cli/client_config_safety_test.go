@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/updateinstall"
 	"golang.org/x/sys/unix"
 )
 
@@ -22,6 +23,7 @@ func obsoleteConfigFixture() []byte {
 func writeClientConfigFixture(t *testing.T, contents []byte) string {
 	t.Helper()
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+	t.Setenv("MESH_STATE_DIR", t.TempDir())
 	path, err := ConfigPath()
 	if err != nil {
 		t.Fatal(err)
@@ -173,6 +175,9 @@ func TestClientRetirementLockCancellation(t *testing.T) {
 
 func TestClientRetirementDirectorySettlementFailure(t *testing.T) {
 	path := writeClientConfigFixture(t, obsoleteConfigFixture())
+	state := t.TempDir()
+	t.Setenv("MESH_STATE_DIR", state)
+	writeClientActivationJournal(t, state, updateinstall.Status{Schema: 1, Phase: updateinstall.Committed, Settings: updateinstall.Settings{StateDir: state}})
 	failure := errors.New("injected directory durability failure")
 	settlements := 0
 	settle := func(*os.File) error { settlements++; return failure }
@@ -183,6 +188,10 @@ func TestClientRetirementDirectorySettlementFailure(t *testing.T) {
 		after, err := readClientConfigTestFile(path)
 		if err != nil || bytes.Contains(after, []byte(`"alias"`)) {
 			t.Fatal("published deletion was not visible at the failed settlement boundary")
+		}
+		status, err := updateinstall.Read(state)
+		if err != nil || status.Phase != updateinstall.Committed {
+			t.Fatalf("postcommit activation failure changed the update result: %v", err)
 		}
 	}
 	if settlements != 2 {
