@@ -135,7 +135,9 @@ check_source_contract() {
   contains .github/workflows/ci.yml 'version: v2.18.0'
   contains .github/workflows/ci.yml 'Complete CI gate'
   contains .github/workflows/ci.yml 'uses: ./.github/workflows/release.yml'
-  contains .github/workflows/ci.yml 'default_branch'
+  contains .github/workflows/ci.yml "python3 scripts/check-default-branch.py '\${{ github.repository }}'"
+  contains .github/workflows/ci.yml 'python3 scripts/test-check-default-branch.py'
+  contains scripts/check-default-branch.py '"--jq", ".default_branch"'
   contains .github/workflows/ci.yml 'refs/heads/main'
   does_not_contain .github/workflows/ci.yml '      - master'
   contains .github/workflows/release.yml 'workflow_call:'
