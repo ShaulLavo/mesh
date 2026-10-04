@@ -263,10 +263,11 @@ sys.exit(result["status"])
     def query(self, unit):
         if time.monotonic() < self.departing.get(unit, 0):
             event("delayed-removal", host=self.name, unit=unit)
-            return 0, "state = exiting\n"
+            return 0, "fixture = {\n\tstate = exiting\n}\n"
         process = self.processes.get(unit)
         if process and process.poll() is None:
-            return 0, f"state = running\npid = {process.pid}\n"
+            return 0, (f"fixture = {{\n\tstate = running\n\tpid = {process.pid}\n"
+                       "\tresource coalition = {\n\t\tstate = active\n\t}\n}\n")
         return 1, "not loaded\n"
 
     def start(self, unit):
