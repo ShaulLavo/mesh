@@ -15,6 +15,12 @@ func dashboardReading[T any](metric cli.DashboardMeasurement[T], host cli.Dashbo
 	if host.MetricsUnsupported {
 		return "--"
 	}
+	if metric.State == cli.DashboardMeasurementPending {
+		if metric.Failing {
+			return statusUnavailable
+		}
+		return cli.DashboardMeasurementPending
+	}
 	if metric.State == dashboardUnsupported {
 		return dashboardUnsupported
 	}

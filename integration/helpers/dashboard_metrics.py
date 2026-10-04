@@ -5,11 +5,13 @@ import argparse
 import copy
 import json
 import os
+import re
 import socket
 import subprocess
 import tempfile
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 from dashboard import render
@@ -22,6 +24,10 @@ UPGRADE = "Update mesh for GPU, disk and temperatures"
 WAITING = "Waiting for metrics…"
 
 
+def has_metrics(text):
+    return bool(re.search(r"CPU [0-9]+%.*RAM [0-9.]+", text))
+
+
 def capture(terminal, screen, predicate, evidence, name):
     deadline = time.monotonic() + 8
     text = ""
@@ -29,14 +35,19 @@ def capture(terminal, screen, predicate, evidence, name):
         terminal.drain()
         text = render(screen, terminal.output, 80, 24).decode()
         if predicate(text):
-            if evidence:
-                evidence.mkdir(parents=True, exist_ok=True)
-                (evidence / f"{name}.ansi").write_bytes(terminal.output)
-                (evidence / f"{name}.txt").write_text(text + "\n")
+            save(evidence, name, terminal, text)
             return text
         assert terminal.poll() is None, "dashboard exited before the expected screen"
         time.sleep(0.05)
     raise AssertionError(f"{name} never rendered:\n{text}")
+
+
+def save(evidence, name, terminal, text):
+    if not evidence:
+        return
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / f"{name}.ansi").write_bytes(terminal.output)
+    (evidence / f"{name}.txt").write_text(text + "\n")
 
 
 class Producer:
@@ -75,41 +86,51 @@ class Producer:
         except (AssertionError, KeyError, ValueError) as error:
             self.errors.append(repr(error))
 
+    def snapshot(self):
+        snapshot = {"seq": 1, "host": self.info, "sessions": [], "services": [],
+                    "current": {topic: {"ageMillis": 0} for topic in
+                                ("host", "sessions", "services", "metrics")}}
+        if self.mode == "legacy":
+            self.metrics["performanceVersion"] = 0
+            for key in ("gpu", "disk", "network", "cores", "battery", "temperatures"):
+                self.metrics.pop(key, None)
+            snapshot["metrics"] = self.metrics
+        if self.mode == "failed":
+            snapshot["current"]["metrics"]["failing"] = True
+        return snapshot
+
     def respond(self, connection):
         while not self.stop.is_set():
             request, _ = read(connection)
-            kind = request["type"]
-            response = {"type": kind, "requestId": request.get("requestId", "")}
-            if kind == "host.info":
-                response.update(type="host.info.result", host=self.info)
-            elif kind == "state.watch" and self.mode != "unsupported":
-                snapshot = {"seq": 1, "host": self.info, "sessions": [], "services": [],
-                            "current": {topic: {"ageMillis": 0} for topic in
-                                        ("host", "sessions", "services", "metrics")}}
-                if self.mode == "legacy":
-                    self.metrics["performanceVersion"] = 0
-                    for key in ("gpu", "disk", "network", "cores", "battery", "temperatures"):
-                        self.metrics.pop(key, None)
-                    snapshot["metrics"] = self.metrics
-                if self.mode == "failed":
-                    snapshot["current"]["metrics"]["failing"] = True
-                response.update(type="state.snapshot", stateSnapshot=snapshot)
-                send(connection, response)
-                self.release.wait(8)
-                if self.mode == "current" and not self.stop.is_set():
-                    send(connection, {"type": "state.event", "stateEvent": {
-                        "seq": 2, "kind": "metrics", "payload": {"metrics": self.metrics}}})
-                self.stop.wait(8)
+            if self.reply(connection, request):
                 return
-            elif kind in ("state.watch", "host.metrics"):
-                response.update(type="error", message=f'daemon: unknown control "{kind}"')
-            elif kind == "session.list":
-                response.update(type="session.listed", sessions=[])
-            elif kind == "service.list":
-                response.update(type="service.listed", services=[])
-            else:
-                raise AssertionError(f"unexpected fixture request {kind}")
+
+    def reply(self, connection, request):
+        kind = request["type"]
+        response = {"type": kind, "requestId": request.get("requestId", "")}
+        if kind == "host.info":
+            response.update(type="host.info.result", host=self.info)
+        elif kind == "state.watch" and self.mode == "error":
+            response.update(type="error", message="permission denied")
+        elif kind == "state.watch" and self.mode != "unsupported":
+            response.update(type="state.snapshot", stateSnapshot=self.snapshot())
             send(connection, response)
+            self.release.wait(8)
+            if self.mode == "current" and not self.stop.is_set():
+                send(connection, {"type": "state.event", "stateEvent": {
+                    "seq": 2, "kind": "metrics", "payload": {"metrics": self.metrics}}})
+            self.stop.wait(8)
+            return True
+        elif kind in ("state.watch", "host.metrics"):
+            response.update(type="error", message=f'daemon: unknown control "{kind}"')
+        elif kind == "session.list":
+            response.update(type="session.listed", sessions=[])
+        elif kind == "service.list":
+            response.update(type="service.listed", services=[])
+        else:
+            raise AssertionError(f"unexpected fixture request {kind}")
+        send(connection, response)
+        return False
 
     def close(self):
         self.stop.set()
@@ -128,6 +149,65 @@ class Producer:
         assert not self.errors, self.errors
 
 
+def wait_socket(daemon, path):
+    deadline = time.monotonic() + 8
+    while not Path(path).exists():
+        assert daemon.poll() is None and time.monotonic() < deadline
+        time.sleep(0.05)
+
+
+def stop_daemon(daemon):
+    if daemon.poll() is None:
+        daemon.terminate()
+    daemon.wait(timeout=8)
+
+
+def native_fixture(binary, screen, evidence, root, environment, path):
+    with (root / "daemon.log").open("wb") as log, ExitStack() as stack:
+        daemon = subprocess.Popen([binary, "daemon", "--tailnet-port", "0", "--ssh-port", "0"],
+                                  env=environment, stdout=log, stderr=log)
+        stack.callback(stop_daemon, daemon)
+        wait_socket(daemon, path)
+        info = round_trip(path, {"type": "host.info", "requestId": "fixture-info"})["host"]
+        terminal = Terminal([binary, "dashboard", "--wall"], environment, root)
+        stack.callback(terminal.close)
+        text = capture(terminal, screen, has_metrics, evidence, "native-current")
+        assert WAITING not in text and UPGRADE not in text, text
+        metrics = round_trip(path, {"type": "host.metrics", "requestId": "fixture-metrics"})["metrics"]
+        assert metrics["performanceVersion"] > 0
+        return info, metrics
+
+
+def controlled_fixture(binary, screen, evidence, root, environment, path, info, metrics, mode):
+    with ExitStack() as stack:
+        producer = Producer(path, info, metrics, mode)
+        stack.callback(Path(path).unlink, missing_ok=True)
+        stack.callback(producer.close)
+        terminal = Terminal([binary, "dashboard", "--wall"], environment, root)
+        stack.callback(terminal.close)
+        if mode == "error":
+            text = capture(terminal, screen, lambda text: "Metrics unavailable" in text,
+                           evidence, "watch-error")
+            assert "permission denied" in text and WAITING not in text and UPGRADE not in text, text
+            return
+        text = capture(terminal, screen, lambda text: "reachable 1" in text and
+                       "sessions 0 live" in text, evidence, f"{mode}-initial")
+        if mode == "current":
+            assert UPGRADE not in text, f"current producer startup asked for an upgrade:\n{text}"
+            assert WAITING in text and "CPU pending" in text, text
+            producer.release.set()
+            text = capture(terminal, screen, has_metrics, evidence, "current-received")
+            assert WAITING not in text and UPGRADE not in text, text
+        elif mode == "legacy":
+            assert UPGRADE in text and WAITING not in text, text
+        elif mode == "unsupported":
+            text = capture(terminal, screen, lambda text: "needs mesh v0.1.114+" in text,
+                           evidence, "unsupported-confirmed")
+            assert WAITING not in text and "CPU pending" not in text, text
+        else:
+            assert "Metrics unavailable" in text and WAITING not in text and UPGRADE not in text, text
+
+
 def prove(binary, screen, evidence):
     check_environment()
     with tempfile.TemporaryDirectory(prefix="dashboard-metrics-", dir=os.environ.get("TMPDIR")) as temporary:
@@ -142,54 +222,15 @@ def prove(binary, screen, evidence):
                            MESH_CONFIG_DIR=str(root / "config"), TERM="xterm-256color",
                            PATH=str(tools) + os.pathsep + os.environ["PATH"])
         path = str(state / "daemon.sock")
-        with (root / "daemon.log").open("wb") as log:
-            daemon = subprocess.Popen([binary, "daemon", "--tailnet-port", "0", "--ssh-port", "0"],
-                                      env=environment, stdout=log, stderr=log)
-            terminal = None
-            try:
-                deadline = time.monotonic() + 8
-                while not Path(path).exists():
-                    assert daemon.poll() is None and time.monotonic() < deadline
-                    time.sleep(0.05)
-                info = round_trip(path, {"type": "host.info", "requestId": "fixture-info"})["host"]
-                terminal = Terminal([binary, "dashboard", "--wall"], environment, root)
-                capture(terminal, screen, lambda text: "CPU " in text and "DISK" in text,
-                        evidence, "native-current")
-                metrics = round_trip(path, {"type": "host.metrics", "requestId": "fixture-metrics"})["metrics"]
-                assert metrics["performanceVersion"] > 0
-            finally:
-                if terminal:
-                    terminal.close()
-                daemon.terminate()
-                daemon.wait(timeout=8)
+        info, metrics = native_fixture(binary, screen, evidence, root, environment, path)
         Path(path).unlink(missing_ok=True)
-        for mode in ("legacy", "unsupported", "current", "failed"):
-            producer = Producer(path, info, metrics, mode)
-            terminal = Terminal([binary, "dashboard", "--wall"], environment, root)
-            try:
-                text = capture(terminal, screen, lambda text: "reachable 1" in text and
-                               "sessions 0 live" in text, evidence, f"{mode}-initial")
-                if mode == "current":
-                    assert UPGRADE not in text, f"current producer startup asked for an upgrade:\n{text}"
-                    assert WAITING in text and "CPU pending" in text, text
-                    producer.release.set()
-                    text = capture(terminal, screen, lambda text: "DISK" in text,
-                                   evidence, "current-received")
-                    assert WAITING not in text and UPGRADE not in text, text
-                elif mode == "legacy":
-                    assert UPGRADE in text and WAITING not in text, text
-                elif mode == "unsupported":
-                    text = capture(terminal, screen, lambda text: "needs mesh v0.1.114+" in text,
-                                   evidence, "unsupported-confirmed")
-                    assert WAITING not in text and "CPU pending" not in text, text
-                else:
-                    assert "Metrics unavailable" in text and WAITING not in text and UPGRADE not in text, text
-            finally:
-                terminal.close()
-                producer.close()
-                Path(path).unlink(missing_ok=True)
-        print(json.dumps({"passed": ["native-current", "current-pending", "current-received",
-                                     "legacy", "unsupported", "failed"], "columns": 80, "rows": 24}))
+        for mode in ("legacy", "unsupported", "current", "failed", "error"):
+            controlled_fixture(binary, screen, evidence, root, environment, path, info, metrics, mode)
+        result = {"passed": ["native-current", "current-pending", "current-received",
+                             "legacy", "unsupported", "failed", "watch-error"], "columns": 80, "rows": 24}
+        if evidence:
+            (evidence / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+        print(json.dumps(result))
 
 
 def main():
