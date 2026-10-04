@@ -409,17 +409,21 @@ func TestHelperRecoverySettlesOnlyGenuineRollbackRestoration(t *testing.T) {
 
 func TestHelperRecoverySlowImageVerificationPreservesReadinessBudget(t *testing.T) {
 	f := newFailedRollbackRecoveryFixture(t)
+	// Delay the external image's self-hash result without replacing Mesh verification.
 	binary := []byte(strings.Replace(string(testExecutable("v0.3.0")),
 		"digest=${digest%% *}", "sleep 0.4\n  digest=${digest%% *}", 1))
 	binary = []byte(strings.Replace(string(binary), "health=$2",
 		"if [ \"$1\" = update-helper ]; then exit 0; fi\nhealth=$2", 1))
 	f.publishHelperImage(t, "v0.3.0", binary)
 	originalProbe := f.request.Probe
+	checkedReadiness := false
 	f.request.Probe = func(ctx context.Context, installed HelperInstallation) (int, error) {
-		if installed.Digest == f.request.Digest {
+		if installed.Digest == f.request.Digest && !checkedReadiness {
+			checkedReadiness = true
 			deadline, ok := ctx.Deadline()
-			if !ok || time.Until(deadline) < f.engine.cfg.HealthTimeout/2 {
-				t.Error("image verification consumed the helper readiness budget")
+			remaining := time.Until(deadline)
+			if !ok || remaining < f.engine.cfg.HealthTimeout/2 || remaining > f.engine.cfg.HealthTimeout {
+				t.Errorf("helper readiness budget = %s, want a fresh %s", remaining, f.engine.cfg.HealthTimeout)
 			}
 		}
 		return originalProbe(ctx, installed)
