@@ -22,18 +22,18 @@ func TestDashboardUsageWholeCredits(t *testing.T) {
 		want    string
 	}{
 		{"absent", nil, ""},
-		{"zero", &usagefeed.Credits{}, ""},
-		{"rounds to zero", &usagefeed.Credits{Balance: 0.4}, ""},
-		{"fraction", &usagefeed.Credits{Balance: 62113.897503}, "credits 62,114"},
-		{"round down", &usagefeed.Credits{Balance: 12.4}, "credits 12"},
-		{"half credit", &usagefeed.Credits{Balance: 12.5}, "credits 13"},
-		{"group carry", &usagefeed.Credits{Balance: 999.5}, "credits 1,000"},
-		{"million", &usagefeed.Credits{Balance: 1234567.8}, "credits 1,234,568"},
-		{"unlimited", &usagefeed.Credits{Unlimited: true}, "credits unlimited"},
+		{"zero", &usagefeed.Credits{}, "Credits 0"},
+		{"fraction below one", &usagefeed.Credits{Balance: 0.4}, "Credits 0.40"},
+		{"fraction", &usagefeed.Credits{Balance: 62113.897503}, "Credits 62,113.90"},
+		{"round down", &usagefeed.Credits{Balance: 12.4}, "Credits 12.40"},
+		{"half credit", &usagefeed.Credits{Balance: 12.5}, "Credits 12.50"},
+		{"group carry", &usagefeed.Credits{Balance: 999.5}, "Credits 999.50"},
+		{"million", &usagefeed.Credits{Balance: 1234567.8}, "Credits 1,234,567.80"},
+		{"unlimited", &usagefeed.Credits{Unlimited: true}, "Credits unlimited"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := usageCredits(test.credits); got != test.want {
-				t.Errorf("credits = %q, want %q", got, test.want)
+				t.Errorf("Credits = %q, want %q", got, test.want)
 			}
 			for _, compact := range []bool{false, true} {
 				model := usageFixture(t, "normal")
@@ -55,7 +55,7 @@ func TestDashboardUsageWholeCredits(t *testing.T) {
 				}
 				account.Windows = nil
 				empty := strings.Join(model.usageAccountWindows(account, 50, compact), "\n")
-				if (test.want != "") != strings.Contains(empty, "credits ") {
+				if (test.want != "") != strings.Contains(empty, "Credits ") {
 					t.Errorf("empty summary credit visibility = %q", empty)
 				}
 			}
@@ -98,14 +98,15 @@ func TestDashboardUsageMetadataSpacing(t *testing.T) {
 	model.profile = colorprofile.TrueColor
 	seen := model.now.Add(-3 * time.Minute)
 	for _, label := range []string{"Account", "利用者", "\x1b[1mAccount\x1b[0m"} {
-		account := dashboardUsageAccount{Account: usagefeed.Account{Provider: "codex", Label: label, Plan: "pro", LastSeenAt: &seen}, first: true, extraWindows: 1}
+		account := dashboardUsageAccount{Account: usagefeed.Account{Provider: "codex", Label: label, Plan: "pro", LastSeenAt: &seen, CheckedAt: &seen}, first: true, extraWindows: 1}
 		identity := "Codex · " + ansi.Strip(label) + " · Pro · +1 window"
-		age := "seen 3m"
+		age := "checked 3m"
 		for _, compact := range []bool{false, true} {
 			for _, width := range []int{36, 50, ansi.StringWidth(identity + age), ansi.StringWidth(identity+age) + 1} {
 				line := model.usageIdentity(account, width, compact)
 				plain := ansi.Strip(line)
-				if ansi.StringWidth(line) != width || !strings.HasSuffix(plain, " "+age) {
+				showCheck := !compact || ansi.StringWidth(identity+" "+age) <= width
+				if ansi.StringWidth(line) != width || showCheck && !strings.HasSuffix(plain, " "+age) {
 					t.Errorf("compact=%v width=%d metadata needs a reserved gap: %q", compact, width, plain)
 				}
 				if width >= ansi.StringWidth(identity+" "+age) && !strings.Contains(plain, "+1 window") {
@@ -122,13 +123,13 @@ func TestDashboardUsageWindowMetadataSpacing(t *testing.T) {
 	for _, compact := range []bool{false, true} {
 		line := model.usageCompactWindow(window, 36, true)
 		if !compact {
-			lines := model.usageWindowLines(window, ansi.StringWidth("Waiting for normal trafficseen —"), true)
+			lines := model.usageWindowLines(window, ansi.StringWidth("Waiting for normal trafficread —"), true)
 			if !strings.HasPrefix(lines[0], "Session No data yet") {
 				t.Errorf("empty label/value joined: %q", lines[0])
 			}
 			line = lines[1]
 		}
-		if !strings.HasSuffix(line, " seen —") {
+		if !strings.HasSuffix(line, " read —") {
 			t.Errorf("compact=%v empty window age joined: %q", compact, line)
 		}
 	}
@@ -136,9 +137,9 @@ func TestDashboardUsageWindowMetadataSpacing(t *testing.T) {
 	window.Label = "Session"
 	seen, reset := model.now.Add(-3*time.Minute), model.now.Add(-time.Minute)
 	window.LastSeenAt, window.ResetsAt = &seen, &reset
-	width := ansi.StringWidth("reset passed · awaiting trafficseen 3m")
+	width := ansi.StringWidth("reset passed · awaiting trafficread 3m")
 	lines := model.usageWindowLines(window, width, true)
-	if !strings.HasSuffix(ansi.Strip(lines[1]), " seen 3m") || ansi.StringWidth(lines[1]) != width {
+	if !strings.HasSuffix(ansi.Strip(lines[1]), " read 3m") || ansi.StringWidth(lines[1]) != width {
 		t.Errorf("expired window metadata joined or overflowed: %q", ansi.Strip(lines[1]))
 	}
 }
@@ -182,7 +183,7 @@ func TestDashboardUsageFregatV1Format(t *testing.T) {
 				if strings.Contains(panel, "Session5%") || strings.Contains(panel, "Session20%") {
 					t.Errorf("producer label/value joined: compact=%v\n%s", compact, panel)
 				}
-				if !strings.Contains(panel, "Session 5%") || !strings.Contains(panel, "Weekly") {
+				if !strings.Contains(strings.Join(strings.Fields(panel), " "), "5-hour 5%") || !strings.Contains(panel, "Weekly") {
 					t.Errorf("producer allowance lost: compact=%v\n%s", compact, panel)
 				}
 				if compact {
@@ -195,7 +196,7 @@ func TestDashboardUsageFregatV1Format(t *testing.T) {
 			}
 			if *usageEvidenceDirectory != "" {
 				seen := model.now.Add(-3 * time.Minute)
-				account := dashboardUsageAccount{Account: usagefeed.Account{Provider: "codex", Label: "Fixture", Plan: "pro", LastSeenAt: &seen}, first: true, extraWindows: 1}
+				account := dashboardUsageAccount{Account: usagefeed.Account{Provider: "codex", Label: "Fixture", Plan: "pro", LastSeenAt: &seen, CheckedAt: &seen}, first: true, extraWindows: 1}
 				frame := model.usageIdentity(account, 41, false) + "\n" + model.usageIdentity(account, 42, false)
 				writeFrameEvidence(t, "metadata-spacing", frame, 42, 2, model.palette)
 			}
@@ -207,7 +208,7 @@ func TestDashboardUsageFregatV1Format(t *testing.T) {
 					model.width, model.height = 80, 24
 				}
 				panel := ansi.Strip(strings.Join(model.usagePanel(100, 60, compact), "\n"))
-				if !strings.Contains(panel, "credits 62,114") || strings.Contains(panel, "credits 0") || strings.Contains(panel, ".897503") {
+				if !strings.Contains(panel, "Credits 62,113.90") || strings.Contains(panel, ".897503") {
 					t.Errorf("producer credit presentation: compact=%v\n%s", compact, panel)
 				}
 				if *usageEvidenceDirectory != "" {

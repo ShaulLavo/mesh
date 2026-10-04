@@ -131,10 +131,10 @@ func TestDashboardUsageCredits(t *testing.T) {
 		want  string
 	}{
 		{nil, ""},
-		{&usagefeed.Credits{Balance: 62500}, "credits 62,500"},
-		{&usagefeed.Credits{Unlimited: true}, "credits unlimited"},
-		{&usagefeed.Credits{}, ""},
-		{&usagefeed.Credits{Balance: 1234.5}, "credits 1,235"},
+		{&usagefeed.Credits{Balance: 62500}, "Credits 62,500"},
+		{&usagefeed.Credits{Unlimited: true}, "Credits unlimited"},
+		{&usagefeed.Credits{}, "Credits 0"},
+		{&usagefeed.Credits{Balance: 1234.5}, "Credits 1,234.50"},
 	} {
 		for _, fixture := range []string{"normal", "no-data"} {
 			for _, compact := range []bool{false, true} {

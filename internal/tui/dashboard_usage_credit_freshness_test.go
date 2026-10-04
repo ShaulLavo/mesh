@@ -13,8 +13,7 @@ import (
 func TestDashboardUsageCreditFreshness(t *testing.T) {
 	for _, size := range [][2]int{{172, 46}, {344, 92}, {80, 24}} {
 		model := usageFixture(t, "credits-accounts")
-		refreshWallFleetFixture(&model)
-		model.now = time.Date(2026, 10, 4, 15, 45, 0, 0, time.UTC)
+		refreshWallFleetFixture(&model, time.Date(2026, 10, 4, 15, 45, 0, 0, time.UTC))
 		model.width, model.height = size[0], size[1]
 		frame := model.render()
 		assertFits(t, frame, model.width, model.height)
@@ -27,7 +26,7 @@ func TestDashboardUsageCreditFreshness(t *testing.T) {
 				t.Errorf("size %v missing %q", size, want)
 			}
 		}
-		if strings.Contains(plain, "Session 3%") || strings.Contains(plain, "seen 2m") {
+		if strings.Contains(plain, "Session 3%") || strings.Contains(plain, "read 2m") {
 			t.Errorf("ambiguous check/quota labels:\n%s", plain)
 		}
 	}

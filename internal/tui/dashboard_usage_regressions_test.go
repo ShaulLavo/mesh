@@ -90,7 +90,7 @@ func TestDashboardUsageReviewRegressions(t *testing.T) {
 		a.Windows[1].LastSeenAt = &old
 		got := ansi.Strip(strings.Join(m.usageAccountWindows(a, 50, false), "\n"))
 		t.Logf("fresh differing age:\n%s", got)
-		if !strings.Contains(got, "seen 10m") {
+		if !strings.Contains(got, "read 10m") {
 			t.Error("fresh Weekly independent age omitted")
 		}
 		old = m.now.Add(-18 * time.Minute)

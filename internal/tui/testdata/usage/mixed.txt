@@ -1,17 +1,17 @@
 ┌AI plans · 4 accounts · passive ─────────────────── ┐
-│ Codex · paused · Pro · disabled             seen — │
+│ Codex · paused · Pro · disabled          checked — │
 │ Out of rotation · no quota reading                 │
-│         waiting · Pro                       seen — │
+│         waiting · Pro                    checked — │
 │ No quota reading · waits for traffic               │
-│         metered · Pro · last served        seen 1m │
-│ credits 62,500                                     │
-│ 5h      42% used · 58% left · resets 1h 32m        │
-│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪ ● OK                  │
+│         metered · Pro · last served     checked 0s │
+│ Credits 62,500                                     │
+│ 5-hour  42% used · 58% left · resets 1h 32m        │
+│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪ ● OK          read 1m │
 │ Weekly  54% used · 46% left · resets 4d 9h         │
-│ ▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● OK                  │
-│         historic · Pro · cooldown        stale 18m │
-│ 5h      100% used · 0% left · resets 38m           │
-│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● exhausted           │
+│ ▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● OK          read 1m │
+│         historic · Pro · cooldown       checked 0s │
+│ 5-hour  100% used · 0% left · resets 38m           │
+│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● exhausted stale 18m │
 │ Weekly  97% used · 3% left · resets 2d 6h          │
-│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● high                │
+│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● high      stale 18m │
 └────────────────────────────────────────────────────┘
