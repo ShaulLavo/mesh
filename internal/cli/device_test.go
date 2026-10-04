@@ -2,12 +2,40 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/shaul/mesh/internal/identity"
 	"golang.org/x/crypto/ssh"
 )
+
+func TestDeviceApprovalJSONReportsManagedPolicyChange(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("MESH_STATE_DIR", state)
+	actor, _, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []bool{true, false} {
+		var output bytes.Buffer
+		command := deviceCommand()
+		command.SetArgs([]string{"approve", "--allow-root", "--json", "--", actor.ID})
+		command.SetOut(&output)
+		if err := command.ExecuteContext(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		var result struct {
+			Changed bool `json:"changed"`
+		}
+		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Changed != expected {
+			t.Fatalf("approval changed=%v, want %v", result.Changed, expected)
+		}
+	}
+}
 
 func TestInstallerPublicKeyApprovalPreservesIdempotentGrant(t *testing.T) {
 	state := t.TempDir()

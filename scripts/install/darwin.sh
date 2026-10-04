@@ -32,7 +32,6 @@ binary_dir=$HOME/.local/bin
 agent_dir=$HOME/Library/LaunchAgents
 binary_path=$binary_dir/mesh
 plist_path=$agent_dir/dev.shaulavo.mesh.plist
-authorized_keys=$state_dir/authorized_keys
 activation_pending=$state_dir/activation.pending
 
 umask 077
@@ -72,20 +71,13 @@ elif authorized_key=$(printf '%s' "$authorized_key_b64" | base64 -D 2>/dev/null)
 else
 	fail service_install "cannot decode the adopter public key"
 fi
-auth_tmp=$state_dir/.authorized_keys.$$
-if [ -f "$authorized_keys" ]; then
-	awk '1' "$authorized_keys" >"$auth_tmp" || fail service_install "cannot read $authorized_keys"
-else
-	: >"$auth_tmp"
-fi
-# The snapshot reports activation changes only; the CLI owns every grant mutation.
-MESH_STATE_DIR="$state_dir" "$binary_path" device approve --allow-root --public-key -- "$authorized_key" >/dev/null ||
+approval_result=$(MESH_STATE_DIR="$state_dir" "$binary_path" device approve --allow-root --public-key --json -- "$authorized_key") ||
 	fail service_install "cannot approve the adopter device key"
-if ! cmp -s "$auth_tmp" "$authorized_keys"; then
-	mark_activation_pending
-	changed=1
-fi
-rm -f "$auth_tmp"
+case "$approval_result" in
+	'{"changed":true}') mark_activation_pending; changed=1 ;;
+	'{"changed":false}') ;;
+	*) fail service_install "device approval returned an invalid change result" ;;
+esac
 
 plist_tmp=$agent_dir/.dev.shaulavo.mesh.plist.$$
 if printf '%s' "$service_b64" | base64 -d >"$plist_tmp" 2>/dev/null; then
