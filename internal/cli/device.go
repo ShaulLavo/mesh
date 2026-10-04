@@ -25,7 +25,7 @@ type deviceIdentity struct {
 
 func deviceCommand() *cobra.Command {
 	command := &cobra.Command{Use: "device", Short: "Approve device keys for this daemon's OS account"}
-	command.AddCommand(deviceIdentityCommand(), deviceGrantCommand(true), deviceGrantCommand(false))
+	command.AddCommand(deviceIdentityCommand(), deviceGrantCommand(true), deviceGrantCommand(false), checkedApprovalCommand(), approveFleetCommand())
 	return command
 }
 

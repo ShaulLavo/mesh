@@ -12,6 +12,10 @@ import (
 )
 
 func activateClientConfig(command *cobra.Command) error {
+	switch command.Name() {
+	case "approve-checked", "approve-fleet":
+		return nil
+	}
 	top := command
 	for top.Parent() != nil && top.Parent().Parent() != nil {
 		top = top.Parent()
