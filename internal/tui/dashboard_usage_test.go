@@ -190,7 +190,7 @@ func TestDashboardUsageNoDataFailureAndExtraWindows(t *testing.T) {
 	}
 	model = usageFixture(t, "no-data")
 	got = ansi.Strip(strings.Join(model.usagePanel(54, 17, false), "\n"))
-	for _, want := range []string{"Claude · shaul9191 · Max", "Codex · shaul9191 · Pro", "shaul.lavochkin · Pro", "seen —", "No reading yet · waits for traffic"} {
+	for _, want := range []string{"Claude · shaul9191 · Max", "Codex · shaul9191 · Pro", "shaul.lavochkin · Pro", "seen —", "No quota reading · waits for traffic"} {
 		if !strings.Contains(got, want) {
 			t.Fatal("missing", want, got)
 		}
@@ -412,7 +412,7 @@ func TestDashboardUsageCompactFactsStayVisible(t *testing.T) {
 	window := model.usage.accounts[0].Windows[0]
 	old := model.now.Add(-18 * time.Minute)
 	window.LastSeenAt = &old
-	if line := model.usageCompactWindow(window, 36, true); !strings.Contains(line, "stale 18m") || !strings.Contains(line, "OK") {
+	if line := model.usageCompactWindow(window, 36, true); !strings.Contains(line, "stale 18m") || !strings.Contains(line, "20%") {
 		t.Fatal("independent compact window age lost", line)
 	}
 	window = model.usage.accounts[0].Windows[1]
