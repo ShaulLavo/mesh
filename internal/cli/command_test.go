@@ -1356,7 +1356,7 @@ func setupCommandTestHost(t *testing.T) *commandTestHost {
 	return host
 }
 
-func executeCommand(t *testing.T, dependencies Dependencies, args ...string) (string, string, error) {
+func prepareCommandEnvironment(t *testing.T) {
 	t.Helper()
 	if os.Getenv("MESH_CONFIG_DIR") == "" {
 		t.Setenv("MESH_CONFIG_DIR", t.TempDir())
@@ -1364,6 +1364,11 @@ func executeCommand(t *testing.T, dependencies Dependencies, args ...string) (st
 	if os.Getenv("MESH_STATE_DIR") == "" {
 		t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
 	}
+}
+
+func executeCommand(t *testing.T, dependencies Dependencies, args ...string) (string, string, error) {
+	t.Helper()
+	prepareCommandEnvironment(t)
 	if dependencies.Containment == nil {
 		dependencies.Containment = func(context.Context) []protocol.SessionIdentity { return nil }
 	}
