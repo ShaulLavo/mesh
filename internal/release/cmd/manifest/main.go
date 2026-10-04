@@ -29,22 +29,7 @@ type options struct {
 	output        string
 }
 
-type receipt struct {
-	Schema                       int              `json:"schema"`
-	Platform                     release.Platform `json:"platform"`
-	FromDigest                   string           `json:"fromDigest"`
-	ToDigest                     string           `json:"toDigest"`
-	StateReadMin                 int              `json:"stateReadMin"`
-	StateReadMax                 int              `json:"stateReadMax"`
-	StateWrite                   int              `json:"stateWrite"`
-	WorkerMin                    int              `json:"workerMin"`
-	WorkerMax                    int              `json:"workerMax"`
-	WorkerWrite                  int              `json:"workerWrite"`
-	JournalVersion               int              `json:"journalVersion"`
-	RetainedOpenedCandidateState bool             `json:"retainedOpenedCandidateState"`
-	SessionsPreserved            bool             `json:"sessionsPreserved"`
-	RecoveryRecordsPreserved     bool             `json:"recoveryRecordsPreserved"`
-}
+type receipt = release.TransitionReceipt
 
 func main() {
 	var config options
@@ -180,28 +165,18 @@ func verifyProofs(directory string, compatibility release.Compatibility) error {
 
 func verifyProof(directory string, transition release.Transition, compatibility release.Compatibility) (receipt, error) {
 	path := filepath.Join(directory, transition.Proof+".json")
-	digest, err := hashFile(path)
+	file, err := os.Open(path) //nolint:gosec // content-addressed proof under the selected directory
 	if err != nil {
 		return receipt{}, fmt.Errorf("manifest: read transition proof %s: %w", transition.Proof, err)
 	}
-	if digest != transition.Proof {
-		return receipt{}, fmt.Errorf("manifest: transition proof file hashes to %s, want %s", digest, transition.Proof)
+	defer file.Close() //nolint:errcheck // bounded read result is authoritative
+	data, err := io.ReadAll(io.LimitReader(file, maximumInputSize+1))
+	if err != nil || len(data) > maximumInputSize {
+		return receipt{}, errors.Join(err, errors.New("manifest: cannot read bounded transition proof"))
 	}
-	var proof receipt
-	if err := decodeFile(path, &proof); err != nil {
-		return receipt{}, fmt.Errorf("manifest: decode transition proof: %w", err)
-	}
-	if proof.Schema != 1 || proof.Platform != transition.Platform || proof.FromDigest != transition.FromDigest || proof.ToDigest != transition.ToDigest {
-		return receipt{}, errors.New("manifest: transition proof identity does not match its transition")
-	}
-	if proof.StateReadMin <= 0 || proof.StateReadMin > compatibility.StateReadMax || proof.StateReadMax != compatibility.StateReadMax || proof.StateWrite != compatibility.StateWrite {
-		return receipt{}, errors.New("manifest: transition proof state evidence differs from declared compatibility")
-	}
-	if proof.WorkerMin <= 0 || proof.WorkerMin > compatibility.WorkerMax || proof.WorkerMax != compatibility.WorkerMax || proof.WorkerWrite != compatibility.WorkerWrite || proof.JournalVersion != compatibility.JournalVersion {
-		return receipt{}, errors.New("manifest: transition proof protocol evidence differs from declared compatibility")
-	}
-	if !proof.RetainedOpenedCandidateState || !proof.SessionsPreserved || !proof.RecoveryRecordsPreserved {
-		return receipt{}, errors.New("manifest: transition proof did not pass every rollback check")
+	proof, err := release.VerifyTransitionReceipt(data, transition, compatibility)
+	if err != nil {
+		return receipt{}, fmt.Errorf("manifest: verify transition proof: %w", err)
 	}
 	return proof, nil
 }

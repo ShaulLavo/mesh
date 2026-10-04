@@ -26,6 +26,9 @@ func projectDashboardState(host DashboardHost, state StateView) DashboardHostVie
 	view.Sessions = projectDashboardSessions(state.Sessions, state.Sections[protocol.TopicSessions])
 	view.Services = projectDashboardServices(state.Services, state.Sections[protocol.TopicServices], state.ServiceHealthSupported)
 	if state.Metrics == nil {
+		view.CPU.State, view.RAM.State, view.Temperature.State, view.Uptime.State = DashboardMeasurementPending, DashboardMeasurementPending, DashboardMeasurementPending, DashboardMeasurementPending
+		failing := state.Sections[protocol.TopicMetrics].Observation.Failing
+		view.CPU.Failing, view.RAM.Failing, view.Temperature.Failing, view.Uptime.Failing = failing, failing, failing, failing
 		return view
 	}
 	metrics := state.Metrics

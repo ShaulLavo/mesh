@@ -36,6 +36,9 @@ type DashboardHost struct {
 	NameSuffix      string
 	NameRevision    uint64
 }
+
+const DashboardMeasurementPending = "pending"
+
 type DashboardMeasurement[T any] struct {
 	State      string
 	Value      T

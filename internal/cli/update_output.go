@@ -54,12 +54,35 @@ func printUpdatePreview(output io.Writer, preview updatePreview, structured, det
 		}
 	}
 
-	if err := printUpdateTargets(output, updateReviewDisplayTargets(preview), preview.Release, mask); err != nil {
+	if err := printUpdatePreviewTargets(output, preview, mask); err != nil {
 		return err
 	}
 	if preview.ApprovalProblem != "" {
 		_, err := fmt.Fprintln(output, SafeTerminalText(mask.Text(preview.ApprovalProblem)))
 		return err
+	}
+	return nil
+}
+
+func printUpdatePreviewTargets(output io.Writer, preview updatePreview, mask *privacy.Mask) error {
+	if err := printUpdateTargets(output, updateReviewDisplayTargets(preview), preview.Release, mask); err != nil {
+		return err
+	}
+	for _, target := range preview.Targets {
+		review := preview.Reviews[target.Host.ID]
+		var lines []string
+		if review.Cause != "" {
+			lines = append(lines, review.Cause)
+		}
+		if review.Bridge != nil {
+			lines = append(lines, fmt.Sprintf("Verified next hop: Mesh %s · release digest %s", review.Bridge.Version, review.Bridge.Digest()))
+		}
+		if len(lines) == 0 {
+			continue
+		}
+		if _, err := fmt.Fprintln(output, SafeTerminalText(mask.Text(strings.Join(lines, "\n")))); err != nil {
+			return fmt.Errorf("print update bridge evidence: %w", err)
+		}
 	}
 	return nil
 }

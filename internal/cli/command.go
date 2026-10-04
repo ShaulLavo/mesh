@@ -237,6 +237,7 @@ type Dependencies struct {
 	UpdateCaller           update.Caller
 	UpdateBuild            func() release.Build
 	UpdateInspect          func(context.Context, string) (updatebootstrap.Observation, error)
+	UpdateBridgePreflight  func(context.Context, string, update.Target, release.Manifest) error
 	SSHSessionHandler      sshd.SessionHandlerFactory
 	Bootstrap              BootstrapFunc
 	Wake                   WakeFunc

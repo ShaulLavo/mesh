@@ -69,7 +69,7 @@ func TestClaimCacheChangedWriterDoesNotSettleSupersededRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("highest revision lost to superseded-record barrier: %v", err)
 	}
-	got, readErr := CachedClaim(directory, claim.ID)
+	got, readErr := readCacheFixtureClaim(directory, claim.ID)
 	if readErr != nil || got != latest {
 		t.Fatalf("highest committed claim: %+v %v", got, readErr)
 	}
@@ -108,7 +108,7 @@ func TestClaimCacheWriterSettlesVisibleFailedPublication(t *testing.T) {
 			if len(observed) != 1 || observed[0] != revision {
 				t.Fatalf("writer barrier did not settle the final record: %v", observed)
 			}
-			if got, err := cachedClaimWithSync(directory, claim.ID, failPublished); got != (Claim{}) || !errors.Is(err, failure) {
+			if got, err := readCacheFixtureClaimWithSync(directory, claim.ID, failPublished); got != (Claim{}) || !errors.Is(err, failure) {
 				t.Fatalf("reader acknowledged uncertain retry: %+v %v", got, err)
 			}
 			var settled int
@@ -121,7 +121,7 @@ func TestClaimCacheWriterSettlesVisibleFailedPublication(t *testing.T) {
 			if changed, err := rememberClaimWithSync(t.Context(), directory, claim.ID, next, settle); changed || err != nil || settled != 1 {
 				t.Fatalf("unchanged retry failed to settle publication: %t %v barriers=%d", changed, err, settled)
 			}
-			if got, err := CachedClaim(directory, claim.ID); got != next || err != nil {
+			if got, err := readCacheFixtureClaim(directory, claim.ID); got != next || err != nil {
 				t.Fatalf("recovered publication: %+v %v", got, err)
 			}
 		})
