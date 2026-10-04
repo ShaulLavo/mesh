@@ -42,7 +42,7 @@ func testFleet(t *testing.T, count int) Fleet {
 	fleet := Fleet{Version: 1, Name: "test", Revision: 1}
 	for index := range count {
 		id, _ := testIdentity(t)
-		fleet.Members = append(fleet.Members, Host{ID: id, Alias: fmt.Sprintf("host-%d", index), Endpoint: fmt.Sprintf("ws://host-%d:7337/mesh", index), Platform: release.Platform{OS: "linux", Arch: "amd64"}})
+		fleet.Members = append(fleet.Members, Host{ID: id, MachineName: fmt.Sprintf("host-%d", index), Endpoint: fmt.Sprintf("ws://host-%d:7337/mesh", index), Platform: release.Platform{OS: "linux", Arch: "amd64"}})
 	}
 	return fleet
 }

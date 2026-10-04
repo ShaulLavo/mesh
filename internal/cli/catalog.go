@@ -30,7 +30,7 @@ type HostQueryBudget struct {
 }
 
 // HostQuery fetches one authoritative host catalog within its phase budgets.
-type HostQuery func(context.Context, HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error)
+type HostQuery func(context.Context, *HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error)
 
 // CatalogCache stores the last authoritative catalog for offline display.
 // Implementations must honor context cancellation and permit concurrent calls.
@@ -46,6 +46,7 @@ const (
 
 type hostQueryResult struct {
 	index    int
+	host     HostRecord
 	sessions []protocol.SessionInfo
 	err      error
 }
@@ -73,8 +74,8 @@ func CollectHostSessions(parent context.Context, hosts []HostRecord, budget Host
 	for i, host := range hosts {
 		i, host := i, host
 		go func() {
-			sessions, err := query(ctx, host, budget)
-			results <- hostQueryResult{index: i, sessions: sessions, err: err}
+			sessions, err := query(ctx, &host, budget)
+			results <- hostQueryResult{index: i, host: host, sessions: sessions, err: err}
 		}()
 	}
 
@@ -95,7 +96,7 @@ func CollectHostSessions(parent context.Context, hosts []HostRecord, budget Host
 			defer cacheCancel()
 			rows, err := cache.Load(cacheCtx, hosts[index])
 			if err != nil {
-				out[index].Err = errors.Join(queryErr, fmt.Errorf("load cache host %s: %w", hosts[index].Alias, err))
+				out[index].Err = errors.Join(queryErr, fmt.Errorf("load cache host %s: %w", HostLabel(hosts[index]), err))
 			} else {
 				out[index].Sessions = cloneSessionInfo(rows)
 			}
@@ -108,6 +109,7 @@ func CollectHostSessions(parent context.Context, hosts []HostRecord, budget Host
 				continue
 			}
 			delete(pending, result.index)
+			out[result.index].Host = result.host
 			if result.err == nil {
 				out[result.index].Sessions = cloneSessionInfo(result.sessions)
 				cacheWG.Add(1)
@@ -116,7 +118,7 @@ func CollectHostSessions(parent context.Context, hosts []HostRecord, budget Host
 					cacheCtx, cacheCancel := context.WithTimeout(ctx, catalogCacheWriteTimeout)
 					defer cacheCancel()
 					if err := cache.Save(cacheCtx, hosts[index], rows); err != nil {
-						out[index].CacheErr = fmt.Errorf("cache host %s: %w", hosts[index].Alias, err)
+						out[index].CacheErr = fmt.Errorf("cache host %s: %w", HostLabel(hosts[index]), err)
 					}
 				}(result.index, cloneSessionInfo(result.sessions))
 				continue
@@ -134,7 +136,8 @@ func CollectHostSessions(parent context.Context, hosts []HostRecord, budget Host
 	if err := parent.Err(); err != nil {
 		return nil, fmt.Errorf("collect host sessions: %w", err)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Host.Alias < out[j].Host.Alias })
+	projectCatalogHostNames(out)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Host.MachineName < out[j].Host.MachineName })
 	return out, nil
 }
 
@@ -163,4 +166,15 @@ func cloneRecoveryRecord(record *recovery.Record) *recovery.Record {
 	var cloned recovery.Record
 	_ = json.Unmarshal(data, &cloned)
 	return &cloned
+}
+
+func projectCatalogHostNames(catalog []HostSessions) {
+	hosts := make([]HostRecord, len(catalog))
+	for i := range catalog {
+		hosts[i] = catalog[i].Host
+	}
+	ProjectHostNames(hosts)
+	for i := range catalog {
+		catalog[i].Host = hosts[i]
+	}
 }

@@ -308,7 +308,7 @@ class Fixture:
         match = eventually(lambda: pattern.search(terminal.drain()[start:]), "shell did not report its session identity")
         return match[1].decode(), int(match[2])
 
-    def start_remote(self):
+    def start_remote(self, initial_binary=None):
         self.validate_destinations()
         bindir = self.root / "bin"
         bindir.mkdir()
@@ -330,7 +330,7 @@ class Fixture:
         }
         self.daemon_log = open(self.root / "daemon.log", "wb")
         self.daemon = subprocess.Popen(
-            [self.binary, "daemon", "--tailnet-port", str(port), "--ssh-port", "0", *self.daemon_args],
+            [str(initial_binary or self.binary), "daemon", "--tailnet-port", str(port), "--ssh-port", "0", *self.daemon_args],
             env=environment, stdin=subprocess.DEVNULL, stdout=self.daemon_log, stderr=subprocess.STDOUT,
         )
         eventually(lambda: (self.remote / "daemon.sock").exists(), "remote daemon did not create its socket")
@@ -353,10 +353,19 @@ class Fixture:
         self.validate_destinations()
         (self.config / "hosts.json").write_text(json.dumps({
             "version": 1,
-            "hosts": [{"alias": "pc", "id": self.remote_id, "meshIdentity": response["host"]["meshIdentity"],
+            "hosts": [{"id": self.remote_id, "meshIdentity": response["host"]["meshIdentity"],
                        "tailscaleName": "pc.fixture.test", "addresses": ["127.0.0.1"],
                        "endpoint": f"ws://127.0.0.1:{port}/mesh"}],
         }))
+        if initial_binary is None:
+            self.adopt_remote_name(response["host"])
+
+    def adopt_remote_name(self, host):
+        subprocess.run([self.binary, "serve", "ls"],
+                       env=self.environment, capture_output=True, check=True, timeout=5)
+        claim = json.loads((self.config / "machine-names" / (self.remote_id + ".json")).read_text())
+        require(claim["id"] == self.remote_id and claim["machineName"] == host["machineName"],
+                "authenticated service read did not adopt the destination declaration")
 
     def nested(self):
         self.start_remote()

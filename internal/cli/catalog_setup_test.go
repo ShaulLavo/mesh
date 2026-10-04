@@ -15,6 +15,7 @@ import (
 
 	"github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
@@ -68,6 +69,10 @@ func TestListCatalogBudgetStartsAfterAuthenticatedSetup(t *testing.T) {
 					t.Fatal("cache did not settle authoritative host session states")
 				}
 			}
+			hosts, err := LoadHosts()
+			if err != nil || len(hosts) != 1 || hosts[0].ID != host.ID || hosts[0].MachineName != "fixture" || hosts[0].NameRevision != 1 {
+				t.Fatal("listing lost the authenticated destination declaration", err)
+			}
 			t.Logf("setup delay=%s, native authoritative rows=%d, stale diagnostics=0", test.delay, len(rows)-1)
 		})
 	}
@@ -78,6 +83,9 @@ func nativeCatalogHost(t *testing.T, setupDelay, replyDelay time.Duration, ended
 	state := compactSocketTempDir(t)
 	host, key, err := identity.LoadOrCreate(state)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := machinename.Open(t.Context(), state, host.ID, "fixture"); err != nil {
 		t.Fatal(err)
 	}
 	client, _, err := identity.LoadOrCreate(os.Getenv("MESH_STATE_DIR"))
@@ -160,7 +168,7 @@ func nativeCatalogHost(t *testing.T, setupDelay, replyDelay time.Duration, ended
 		})
 	}))
 	t.Cleanup(server.Close)
-	return HostRecord{Alias: "fixture", ID: host.ID, MeshIdentity: host.ID, TailscaleName: "fixture.example.ts.net", Addresses: []string{"127.0.0.1"}, Endpoint: "ws" + strings.TrimPrefix(server.URL, "http") + "/mesh"}
+	return HostRecord{MachineName: "cached-fixture", ID: host.ID, MeshIdentity: host.ID, TailscaleName: "fixture.example.ts.net", Addresses: []string{"127.0.0.1"}, Endpoint: "ws" + strings.TrimPrefix(server.URL, "http") + "/mesh"}
 }
 
 func relayCatalogFrames(target, source transport.Conn) error {

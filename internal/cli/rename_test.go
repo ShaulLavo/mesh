@@ -2,61 +2,134 @@ package cli
 
 import (
 	"bytes"
-	"encoding/base64"
+	"fmt"
+	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/transport"
+	"strings"
 	"testing"
+
+	"github.com/shaul/mesh/internal/machinename"
+	"path/filepath"
 )
 
-func TestRenameHost(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("MESH_CONFIG_DIR", dir)
-
-	identity := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
-	other := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
-	for alias, id := range map[string]string{"omarchy": identity, "pi": other} {
-		if err := SaveHost(HostRecord{
-			Alias: alias, ID: id, MeshIdentity: id,
-			Endpoint: "ws://127.0.0.1:7337/mesh",
-		}); err != nil {
-			t.Fatal(err)
-		}
+func TestRenameHostChangesAuthenticatedDestinationOnly(t *testing.T) {
+	f := namedDestination(t)
+	if err := SaveHost(f.host); err != nil {
+		t.Fatal(err)
 	}
-
-	renamed, err := RenameHost("omarchy", "pc")
-	if err != nil {
-		t.Fatalf("RenameHost() = %v", err)
-	}
-	if renamed.Alias != "pc" {
-		t.Fatalf("alias = %q", renamed.Alias)
-	}
-
-	hosts, err := LoadHosts()
+	path, err := ConfigPath()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The old name must be gone, not left beside the new one: SaveHost matches
-	// on identity and would otherwise keep both.
-	var names []string
-	for _, host := range hosts {
-		names = append(names, host.Alias)
+	before := readNamingFixtureFile(t, path)
+	claim, err := RenameHost(t.Context(), f.host, "work-pc", dialControlHost)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(hosts) != 2 {
-		t.Fatalf("hosts = %v, want two", names)
+	if claim.ID != f.host.ID || claim.MachineName != "work-pc" || claim.Revision != 2 || f.names.Current() != claim {
+		t.Fatal("rename did not change destination-owned declaration")
 	}
-	for _, host := range hosts {
-		if host.Alias == "omarchy" {
-			t.Fatalf("the old name survived: %v", names)
-		}
+	after := readNamingFixtureFile(t, path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("rename rewrote addresses or dashboard settings")
 	}
+	cached, err := machinename.CachedClaim(filepath.Dir(path), f.host.ID)
+	if err != nil || cached != claim {
+		t.Fatalf("authenticated owner cache: %+v, %v", cached, err)
+	}
+	retry, err := RenameHost(t.Context(), f.host, "work-pc", dialControlHost)
+	if err != nil || retry != claim {
+		t.Fatalf("same-name retry: %+v, %v", retry, err)
+	}
+}
 
-	// A name in use by another host is refused rather than colliding.
-	if _, err := RenameHost("pc", "pi"); err == nil {
-		t.Fatal("renaming onto another host's name was allowed")
+func TestOwnMachineRenameNeedsNoSelfAdoption(t *testing.T) {
+	for _, useName := range []bool{false, true} {
+		t.Run(fmt.Sprint(useName), func(t *testing.T) {
+			t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+			var owner identity.Host
+			calls := 0
+			socket, done := startDaemonControlServer(t, 2, func(conn transport.Conn, request protocol.Control) error {
+				calls++
+				if request.Type != protocol.TypeHostInfo {
+					return fmt.Errorf("unexpected own control %s", request.Type)
+				}
+				info := protocol.HostInfo{ID: owner.ID, MeshIdentity: owner.ID, MachineName: "local-own", NameRevision: 1}
+				if err := writeDaemonControl(conn, protocol.Control{Type: protocol.TypeHostInfoResult, RequestID: request.RequestID, Host: &info}); err != nil {
+					return err
+				}
+				if calls == 1 {
+					return nil
+				}
+				frame, err := conn.ReadFrame()
+				if err != nil {
+					return fmt.Errorf("read own rename fixture: %w", err)
+				}
+				rename, err := protocol.DecodeControl(frame.Payload)
+				if err != nil {
+					return fmt.Errorf("decode own rename fixture: %w", err)
+				}
+				if rename.Type != protocol.TypeHostRename || rename.Rename == nil || rename.Rename.TargetID != owner.ID || rename.Rename.MachineName != "local-new" || rename.Rename.ExpectedRevision != 1 {
+					return fmt.Errorf("rename did not preserve exact owner and revision")
+				}
+				info.MachineName, info.NameRevision = "local-new", 2
+				return writeDaemonControl(conn, protocol.Control{Type: protocol.TypeHostRenamed, RequestID: rename.RequestID, Host: &info})
+			})
+			stateDir := filepath.Dir(socket)
+			t.Setenv("MESH_STATE_DIR", stateDir)
+			var err error
+			owner, _, err = identity.LoadOrCreate(stateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := owner.ID
+			if useName {
+				target = "local-own"
+			}
+			out, _, err := executeCommand(t, Dependencies{}, "rename", target, "local-new")
+			if err != nil {
+				t.Fatalf("own rename without address-book entry: %v", err)
+			}
+			if !strings.Contains(out, "local-new (revision 2)") {
+				t.Fatalf("own rename result: %s", out)
+			}
+			hosts, err := LoadHosts()
+			if err != nil || len(hosts) != 0 {
+				t.Fatalf("rename invented self adoption: %+v, %v", hosts, err)
+			}
+			awaitDaemonServer(t, done)
+		})
 	}
-	// Renaming to the same name is not an error.
-	if _, err := RenameHost("pc", "pc"); err != nil {
-		t.Fatalf("renaming to the same name = %v", err)
+}
+
+func TestRemoteRenameRefusesActualOwnNameBeforeRenameEffect(t *testing.T) {
+	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+	var owner identity.Host
+	socket, done := startDaemonCreateServer(t, func(conn transport.Conn, request protocol.Control) error {
+		if request.Type != protocol.TypeHostInfo {
+			return fmt.Errorf("unexpected own effect %s", request.Type)
+		}
+		return writeDaemonControl(conn, protocol.Control{Type: protocol.TypeHostInfoResult, RequestID: request.RequestID, Host: &protocol.HostInfo{ID: owner.ID, MeshIdentity: owner.ID, MachineName: "local-own", NameRevision: 1}})
+	})
+	stateDir := filepath.Dir(socket)
+	t.Setenv("MESH_STATE_DIR", stateDir)
+	var err error
+	owner, _, err = identity.LoadOrCreate(stateDir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := RenameHost("nonexistent", "x"); err == nil {
-		t.Fatal("renaming an unknown host was allowed")
+	remote := namedDestinationPeer(t)
+	before := remote.names.Current()
+	if _, err := RenameHost(t.Context(), remote.host, "local-own", dialControlHost); err == nil || !strings.Contains(err.Error(), "already claimed") {
+		t.Fatalf("remote rename ignored actual own name: %v", err)
 	}
+	if remote.names.Current() != before {
+		t.Fatal("refused collision changed destination declaration")
+	}
+	hosts, err := LoadHosts()
+	if err != nil || len(hosts) != 0 {
+		t.Fatalf("collision query invented self adoption: %+v %v", hosts, err)
+	}
+	awaitDaemonServer(t, done)
 }

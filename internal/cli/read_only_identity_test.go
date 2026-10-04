@@ -88,7 +88,7 @@ func runReadOnlyIdentityOperation(t *testing.T, operation, dir string) error {
 			if len(input.Hosts) != 1 || !input.Hosts[0].Local || input.Hosts[0].Host.ID != "" {
 				t.Errorf("first-run catalog = %+v, want local host without identity", input.Hosts)
 			}
-			if _, err := input.Refresh(ctx, localHostAlias); err != nil {
+			if _, err := input.Refresh(ctx, localHostID()); err != nil {
 				t.Error(err)
 			}
 			if hosts, err := input.LoadHosts(ctx); err != nil || len(hosts) != 0 {

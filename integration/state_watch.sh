@@ -4,6 +4,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 set -euo pipefail
 
 : "${MESH:?state_watch requires the verification binary}"
+python3 "$(dirname -- "${BASH_SOURCE[0]}")/helpers/test_state_watch.py"
 T=$(mktemp -d)
 export MESH_STATE_DIR="$T/state"
 DAEMON=""

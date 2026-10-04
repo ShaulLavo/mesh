@@ -12,7 +12,6 @@ import (
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
-const updateLocalAlias = "local"
 const updateReviewRecovery = "recovery"
 const updateReviewJournal = "journal"
 const updateMacOS = "darwin"
@@ -161,7 +160,7 @@ func updateTargetLocation(target update.Target) string {
 		}
 		return "this machine"
 	}
-	return target.Host.Alias
+	return target.Host.Label()
 }
 
 func updateTargetReviewAction(target update.Target, review updateTargetReview) string {
@@ -169,12 +168,12 @@ func updateTargetReviewAction(target update.Target, review updateTargetReview) s
 		if update.IsLocal(target.Host) {
 			return "Run mesh update status to review recovery on " + updateTargetLocation(target) + "."
 		}
-		return "Run mesh update status on " + target.Host.Alias + " to review recovery."
+		return "Run mesh update status on " + target.Host.Label() + " to review recovery."
 	}
 	if update.IsLocal(target.Host) {
 		return "Run mesh update --local --check to review " + updateTargetLocation(target) + " before updating."
 	}
-	return "Run mesh update --local --check on " + target.Host.Alias + " before updating."
+	return "Run mesh update --local --check on " + target.Host.Label() + " before updating."
 }
 
 func updatePreviewCurrent(preview updatePreview) bool {

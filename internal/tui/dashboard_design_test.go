@@ -72,7 +72,7 @@ func dashboardDesignFixture(count int) dashboardModel {
 	aliases := []string{"pc", "pi", "vps", "macbook", "build", "edge"}
 	commands := []string{"codex", "bun run dev", "journalctl -fu mesh", "nvim draft.md", "go test ./...", "bash"}
 	for i := range count {
-		alias := aliases[i]
+		machineName := aliases[i]
 		cpu := []float64{34, 3, 6, 12, 42, 12}[i]
 		totalGiB := []uint64{64, 4, 4, 16, 32, 8}[i]
 		usedGiB := []float64{18.2, 0.7, 1.1, 8, 8, 1.8}[i]
@@ -85,7 +85,7 @@ func dashboardDesignFixture(count int) dashboardModel {
 			metricsAt = now.Add(-2 * time.Second)
 			catalogAt = now.Add(-4 * time.Second)
 		}
-		host := cli.DashboardHostView{Host: cli.DashboardHost{ID: alias, Alias: alias, Local: i == 1}, Connection: cli.StateReachable, LastReply: now,
+		host := cli.DashboardHostView{Host: cli.DashboardHost{ID: machineName, MachineName: machineName, Local: i == 1}, Connection: cli.StateReachable, LastReply: now,
 			CPU:         cli.DashboardMeasurement[float64]{State: statusAvailable, Value: cpu, Sample: "instance/60", Segment: 1, MeasuredAt: metricsAt},
 			RAM:         cli.DashboardMeasurement[cli.DashboardMemory]{State: statusAvailable, Value: cli.DashboardMemory{TotalBytes: totalGiB << 30, AvailableBytes: (totalGiB << 30) - uint64(math.Ceil(usedGiB*(1<<30))), Estimate: "Linux MemAvailable estimate"}, Sample: "instance/60", Segment: 1, MeasuredAt: metricsAt},
 			Temperature: cli.DashboardMeasurement[cli.DashboardTemperature]{State: statusAvailable, Value: cli.DashboardTemperature{Sensor: "cpu", Celsius: []float64{58, 44, 0, 40, 61, 38}[i]}, Sample: "temp/1", MeasuredAt: now},
@@ -173,7 +173,7 @@ func dashboardDesignFixture(count int) dashboardModel {
 			history.cpu = append(history.cpu, dashboardPoint{at: at, sample: fmt.Sprint(n), segment: 1, value: value})
 			history.ram = append(history.ram, dashboardPoint{at: at, sample: fmt.Sprint(n), segment: 1, value: dashboardMemoryPercent(host.RAM.Value) - float64(59-n)/180})
 		}
-		model.history[alias] = history
+		model.history[machineName] = history
 	}
 	return model
 }
@@ -286,6 +286,6 @@ func TestDashboardCompactKeepsLiveRowsBeforeCachedGroups(t *testing.T) {
 	assertFits(t, model.render(), 80, 24)
 }
 
-func dashboardFixtureHost(model dashboardModel, alias string) cli.DashboardHostView {
-	return model.hosts[slices.IndexFunc(model.hosts, func(host cli.DashboardHostView) bool { return host.Host.Alias == alias })]
+func dashboardFixtureHost(model dashboardModel, machineName string) cli.DashboardHostView {
+	return model.hosts[slices.IndexFunc(model.hosts, func(host cli.DashboardHostView) bool { return host.Host.MachineName == machineName })]
 }

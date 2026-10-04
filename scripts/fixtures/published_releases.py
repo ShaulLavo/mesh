@@ -3,14 +3,22 @@ import hashlib
 import io
 import itertools
 import json
+import socket
 import ssl
+import subprocess
+import sys
 import tarfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 VERSIONS = ("v0.1.149", "v0.1.151", "v0.1.159")
 ORIGIN = "https://github.com/ShaulLavo/mesh/releases/download/"
 COMPATIBILITY_FIELDS = ("stateReadMin", "stateReadMax", "stateWrite", "workerMin", "workerMax", "workerWrite", "journalVersion")
+DOWNLOAD_BUDGET = 60
+DOWNLOAD_BACKOFF = (0.25, 0.5)
+DOWNLOAD_WORKER = (sys.executable, str(Path(__file__).resolve()))
 
 
 def digest(data):
@@ -18,10 +26,64 @@ def digest(data):
 
 
 def download(address, maximum):
+    deadline = time.monotonic() + DOWNLOAD_BUDGET
+    for attempt in range(len(DOWNLOAD_BACKOFF) + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("published release acquisition exceeded its total deadline")
+        # Socket timeouts cannot bound blocking DNS or repeated response reads.
+        with subprocess.Popen((*DOWNLOAD_WORKER, address, str(maximum), str(remaining)),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE) as worker:
+            try:
+                data, failure = worker.communicate(timeout=max(0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired as error:
+                worker.kill()
+                worker.communicate()
+                raise TimeoutError("published release acquisition exceeded its total deadline") from error
+        if worker.returncode == 0:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("published release acquisition exceeded its total deadline")
+            return data
+        detail = failure.decode(errors="replace").strip()
+        if worker.returncode != 75 or attempt == len(DOWNLOAD_BACKOFF):
+            raise RuntimeError(f"published release acquisition failed: {detail}")
+        delay = DOWNLOAD_BACKOFF[attempt]
+        if deadline - time.monotonic() <= delay:
+            raise TimeoutError("published release acquisition exceeded its total deadline")
+        time.sleep(delay)
+
+
+def download_worker(address, maximum, timeout):
+    try:
+        data = download_once(address, int(maximum), float(timeout))
+    except Exception as error:
+        cause = error
+        while isinstance(cause, urllib.error.URLError) and not isinstance(cause, urllib.error.HTTPError):
+            cause = cause.reason
+        transient = isinstance(cause, ConnectionResetError)
+        if isinstance(cause, socket.gaierror):
+            transient = cause.errno in (socket.EAI_AGAIN, socket.EAI_NONAME)
+        if isinstance(cause, urllib.error.HTTPError):
+            transient = cause.geturl().startswith("https://") and cause.code in (500, 502, 503, 504)
+            cause.close()
+        print(f"{type(error).__name__}: {error}", file=sys.stderr)
+        raise SystemExit(75 if transient else 1) from error
+    sys.stdout.buffer.write(data)
+
+
+class HTTPSRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, address):
+        if not address.startswith("https://"):
+            response.close()
+            raise RuntimeError("published release redirected outside HTTPS")
+        return super().redirect_request(request, response, code, message, headers, address)
+
+
+def download_once(address, maximum, timeout):
     # Fixture proxies and certificate files belong to children, never public acquisition.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
-        urllib.request.HTTPSHandler(context=ssl.create_default_context()))
-    with opener.open(address, timeout=60) as response:
+        urllib.request.HTTPSHandler(context=ssl.create_default_context()), HTTPSRedirectHandler())
+    with opener.open(address, timeout=timeout) as response:
         if not response.url.startswith("https://"):
             raise RuntimeError("published release redirected outside HTTPS")
         data = response.read(maximum + 1)
@@ -34,12 +96,7 @@ def fetch(root, version, name, maximum, fetcher):
     if Path(name).name != name:
         raise RuntimeError("published asset name is not a basename")
     path = root / version / name
-    if not path.exists():
-        data = fetcher(ORIGIN + version + "/" + name, maximum)
-        if len(data) > maximum:
-            raise RuntimeError("published release asset exceeds its size limit")
-        path.write_bytes(data)
-    data = path.read_bytes()
+    data = path.read_bytes() if path.exists() else fetcher(ORIGIN + version + "/" + name, maximum)
     if len(data) > maximum:
         raise RuntimeError("published release asset exceeds its size limit")
     return data
@@ -79,6 +136,7 @@ def joined_receipt(data, transition, compatibility):
 def acquire(root, platform, fetcher=download):
     root = Path(root)
     releases = []
+    executables = {}
     evidence = {"acquisition": "ordinary system-trusted public GitHub HTTPS", "archives": [], "bridges": []}
     for version in VERSIONS:
         (root / version).mkdir(parents=True, exist_ok=True)
@@ -95,8 +153,7 @@ def acquire(root, platform, fetcher=download):
             evidence["archives"].append({"version": version, **artifact})
             if artifact["platform"] == platform:
                 executable = root / version / "mesh"
-                executable.write_bytes(binary)
-                executable.chmod(0o755)
+                executables[executable] = binary
         if executable is None:
             raise RuntimeError("published release has no native platform artifact")
         releases.append({"manifest": manifest, "files": files, "executable": executable})
@@ -118,5 +175,16 @@ def acquire(root, platform, fetcher=download):
             target["files"][name] = data
             evidence["bridges"].append({"fromVersion": previous["manifest"]["version"],
                 "toVersion": target["manifest"]["version"], **transition})
+    # Publish cached inputs only after the complete bridge chain verifies.
+    for row in releases:
+        for name, data in row["files"].items():
+            (root / row["manifest"]["version"] / name).write_bytes(data)
+    for executable, binary in executables.items():
+        executable.write_bytes(binary)
+        executable.chmod(0o755)
     (root / "verified.json").write_text(json.dumps(evidence, indent=2) + "\n")
     return releases
+
+
+if __name__ == "__main__":
+    download_worker(*sys.argv[1:])

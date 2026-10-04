@@ -23,6 +23,6 @@ func (m *dashboardModel) sortHosts() {
 		if order := cmp.Compare(m.ramTotals[b.Host.ID], m.ramTotals[a.Host.ID]); order != 0 {
 			return order
 		}
-		return strings.Compare(a.Host.Alias, b.Host.Alias)
+		return strings.Compare(a.Host.MachineName, b.Host.MachineName)
 	})
 }

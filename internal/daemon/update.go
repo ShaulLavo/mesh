@@ -119,7 +119,7 @@ func (u *updateController) info(ctx context.Context) (update.Info, error) {
 	if err != nil {
 		return update.Info{}, err
 	}
-	info := update.Info{Health: observed.Health}
+	info := update.Info{Health: observed.Health, AcceptsIdentityFleet: true}
 	status, err := updateinstall.Read(u.stateDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return info, err

@@ -31,7 +31,7 @@ func TestUpdatePlanRetriesAcknowledgeRPC(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
-	host := Host{ID: id, Alias: "local", Endpoint: "unix://" + listener.Addr().String(), Platform: release.CurrentPlatform()}
+	host := Host{ID: id, MachineName: "local", Endpoint: "unix://" + listener.Addr().String(), Platform: release.CurrentPlatform()}
 	manifest := testManifest()
 	contents, _ := json.Marshal(manifest)
 	var calls atomic.Int32

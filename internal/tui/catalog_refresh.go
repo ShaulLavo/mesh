@@ -20,10 +20,10 @@ type catalogRefreshTickMsg struct {
 }
 
 type catalogRefreshResultMsg struct {
-	epoch     uint64
-	hostAlias string
-	snapshot  cli.PickerHostSnapshot
-	err       error
+	epoch    uint64
+	hostID   string
+	snapshot cli.PickerHostSnapshot
+	err      error
 }
 
 func (m *model) restartSessionScreenLoops() tea.Cmd {
@@ -53,19 +53,19 @@ func (m *model) refreshSelectedHost(epoch uint64) tea.Cmd {
 		return nil
 	}
 	m.stopCatalogRefresh()
-	hostAlias := m.currentHost().alias
+	hostID := m.currentHost().id
 	requestContext, cancel := context.WithTimeout(m.ctx, catalogRefreshTimeout)
 	m.cancelRefresh = cancel
 	refresh := m.refresh
 	return func() tea.Msg {
 		defer cancel()
-		snapshot, err := refresh(requestContext, hostAlias)
-		return catalogRefreshResultMsg{epoch: epoch, hostAlias: hostAlias, snapshot: snapshot, err: err}
+		snapshot, err := refresh(requestContext, hostID)
+		return catalogRefreshResultMsg{epoch: epoch, hostID: hostID, snapshot: snapshot, err: err}
 	}
 }
 
 func (m model) applyCatalogRefresh(message catalogRefreshResultMsg) (model, tea.Cmd) {
-	if m.screen != sessionScreen || message.epoch != m.catalogEpoch || message.hostAlias != m.currentHost().alias {
+	if m.screen != sessionScreen || message.epoch != m.catalogEpoch || message.hostID != m.currentHost().id {
 		return m, nil
 	}
 	m.cancelRefresh = nil
@@ -83,9 +83,13 @@ func (m model) applyCatalogRefresh(message catalogRefreshResultMsg) (model, tea.
 	if actionConfirmed || sessionCatalogChanged(previousHost, refreshedHost) && m.sessionAction.phase == sessionActionIdle {
 		m.notice = ""
 	}
+	m.hosts[m.selectedHost].record = refreshedHost.record
+	m.hosts[m.selectedHost].machineName = refreshedHost.machineName
 	m.hosts[m.selectedHost].sessions = refreshedHost.sessions
 	m.hosts[m.selectedHost].stale = refreshedHost.stale
-	m.pruneSessionSummaries(message.hostAlias, refreshedHost.sessions)
+	m.hosts[m.selectedHost].nameStale = refreshedHost.nameStale
+	projectPickerNames(m.hosts)
+	m.pruneSessionSummaries(message.hostID, refreshedHost.sessions)
 	if services := message.snapshot.Services; services != nil {
 		websites := servedWebsites(services.Rows, services.Stale)
 		m.hosts[m.selectedHost].served = websites

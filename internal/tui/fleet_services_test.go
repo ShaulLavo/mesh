@@ -23,8 +23,8 @@ import (
 
 func TestFleetServicesAppearOnMain(t *testing.T) {
 	current := newModel([]host{
-		{id: "alpha", alias: "alpha", served: []servedWebsite{{name: "Fregat dev", url: "https://alpha.example.test/dev", health: "healthy"}}, servedKnown: true},
-		{id: "beta", alias: "beta", served: []servedWebsite{{name: "CLI Proxy", url: "https://beta.example.test/ai", health: "healthy"}}, servedKnown: true},
+		{id: "alpha", machineName: "alpha", served: []servedWebsite{{name: "Fregat dev", url: "https://alpha.example.test/dev", health: "healthy"}}, servedKnown: true},
+		{id: "beta", machineName: "beta", served: []servedWebsite{{name: "CLI Proxy", url: "https://beta.example.test/ai", health: "healthy"}}, servedKnown: true},
 	}, pickerTestNow)
 	frame := ansi.Strip(current.View().Content)
 	for _, want := range []string{"Fregat dev", "CLI Proxy", "Services"} {
@@ -36,11 +36,11 @@ func TestFleetServicesAppearOnMain(t *testing.T) {
 
 func fleetPickerFixture() model {
 	current := newPickerModel(context.Background(), cli.PickerInput{Hosts: []cli.HostSessions{
-		{Host: cli.HostRecord{ID: "alpha", Alias: "alpha"}, Local: true}, {Host: cli.HostRecord{ID: "beta", Alias: "beta"}},
+		{Host: cli.HostRecord{ID: "alpha", MachineName: "alpha"}, Local: true}, {Host: cli.HostRecord{ID: "beta", MachineName: "beta"}},
 	}}, pickerTestNow)
 	for _, host := range current.hosts {
 		service := protocol.ServiceInfo{Name: "dev", DisplayName: "Fregat dev", Kind: "proxy", Target: "3000", Healthy: true, Run: &protocol.ServiceRun{Command: "fixture"}, Demand: &protocol.ServiceDemand{State: protocol.DemandRunning}}
-		current, _ = current.applyServices(cli.PickerServicesUpdate{Host: cli.HostRecord{ID: host.id, Alias: host.alias}, Catalog: cli.PickerServiceCatalog{Rows: []cli.ServiceCatalogRow{{Host: cli.HostRecord{ID: host.id, Alias: host.alias, Endpoint: "wss://" + host.alias + ".example.test/control/ws"}, Service: service, Live: true}}}})
+		current, _ = current.applyServices(cli.PickerServicesUpdate{Host: cli.HostRecord{ID: host.id, MachineName: host.machineName}, Catalog: cli.PickerServiceCatalog{Rows: []cli.ServiceCatalogRow{{Host: cli.HostRecord{ID: host.id, MachineName: host.machineName, Endpoint: "wss://" + host.machineName + ".example.test/control/ws"}, Service: service, Live: true}}}})
 	}
 	current.list.Select(3)
 	current.resizeList()
@@ -50,19 +50,19 @@ func fleetPickerFixture() model {
 func TestFleetServiceWatchKeepsSelectionAcrossInsertionAndHostLoad(t *testing.T) {
 	current := fleetPickerFixture()
 	selected := mainItemKey(current.list.SelectedItem())
-	updated := cli.PickerServicesUpdate{Host: cli.HostRecord{ID: "alpha", Alias: "alpha"}, Catalog: cli.PickerServiceCatalog{Rows: []cli.ServiceCatalogRow{
-		{Host: cli.HostRecord{ID: "alpha", Alias: "alpha"}, Service: protocol.ServiceInfo{Name: "aaa", DisplayName: "New route", Healthy: true}, Live: true},
-		{Host: cli.HostRecord{ID: "alpha", Alias: "alpha"}, Service: protocol.ServiceInfo{Name: "dev", Healthy: true}, Live: true},
+	updated := cli.PickerServicesUpdate{Host: cli.HostRecord{ID: "alpha", MachineName: "alpha"}, Catalog: cli.PickerServiceCatalog{Rows: []cli.ServiceCatalogRow{
+		{Host: cli.HostRecord{ID: "alpha", MachineName: "alpha"}, Service: protocol.ServiceInfo{Name: "aaa", DisplayName: "New route", Healthy: true}, Live: true},
+		{Host: cli.HostRecord{ID: "alpha", MachineName: "alpha"}, Service: protocol.ServiceInfo{Name: "dev", Healthy: true}, Live: true},
 	}}}
 	current, _ = current.applyServices(updated)
 	if got := mainItemKey(current.list.SelectedItem()); got != selected {
 		t.Fatalf("watch moved selection %+v -> %+v", selected, got)
 	}
-	current, _ = current.applyLoadedHosts(hostCatalogLoadedMsg{hosts: []cli.HostSessions{{Host: cli.HostRecord{ID: "beta", Alias: "beta"}}}})
+	current, _ = current.applyLoadedHosts(hostCatalogLoadedMsg{hosts: []cli.HostSessions{{Host: cli.HostRecord{ID: "beta", MachineName: "beta"}}}})
 	if got := mainItemKey(current.list.SelectedItem()); got != selected || len(current.list.Items()) != 5 {
 		t.Fatalf("host load lost service selection %+v, rows %d", got, len(current.list.Items()))
 	}
-	current, _ = current.applyServices(cli.PickerServicesUpdate{Host: cli.HostRecord{ID: "beta", Alias: "beta"}})
+	current, _ = current.applyServices(cli.PickerServicesUpdate{Host: cli.HostRecord{ID: "beta", MachineName: "beta"}})
 	if len(current.list.Items()) != 4 || current.list.Index() >= 4 {
 		t.Fatalf("removed selection out of bounds %d", current.list.Index())
 	}
@@ -394,7 +394,7 @@ func TestFleetServiceFailureVisibleWithoutTerminatingPicker(t *testing.T) {
 	if !strings.Contains(frame, "fixture health check refused") || current.selection != nil || current.pendingService != nil {
 		t.Fatalf("failure closed picker:\n%s", frame)
 	}
-	next, _ = current.Update(pickerServicesMsg{Host: cli.HostRecord{ID: "beta", Alias: "beta"}, Catalog: cli.PickerServiceCatalog{Stale: true, Rows: []cli.ServiceCatalogRow{current.hosts[1].served[0].row}}, Problem: "fixture offline"})
+	next, _ = current.Update(pickerServicesMsg{Host: cli.HostRecord{ID: "beta", MachineName: "beta"}, Catalog: cli.PickerServiceCatalog{Stale: true, Rows: []cli.ServiceCatalogRow{current.hosts[1].served[0].row}}, Problem: "fixture offline"})
 	current = next.(model)
 	if frame = ansi.Strip(current.View().Content); !strings.Contains(frame, "fixture offline") || !strings.Contains(frame, "cached") || current.selection != nil {
 		t.Fatalf("watch failure hidden:\n%s", frame)
@@ -474,7 +474,7 @@ func TestFleetServiceProgramCancelsAndJoinsWatcher(t *testing.T) {
 	current := newModel(pickerFixture(), pickerTestNow)
 	current.watchServices = func(ctx context.Context, publish func(cli.PickerServicesUpdate)) error {
 		close(started)
-		publish(cli.PickerServicesUpdate{Host: cli.HostRecord{ID: "fixture", Alias: "fixture"}})
+		publish(cli.PickerServicesUpdate{Host: cli.HostRecord{ID: "fixture", MachineName: "fixture"}})
 		<-ctx.Done()
 		close(exited)
 		return nil

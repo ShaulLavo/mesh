@@ -29,7 +29,7 @@ func TestDashboardEnvironmentPrivacyKeepsCurrentExecutable(t *testing.T) {
 			t.Fatal("environment-only dashboard lost its privacy policy")
 		}
 		input.Watch = func(_ context.Context, publish func(DashboardHostView)) error {
-			publish(DashboardHostView{Host: DashboardHost{ID: "local", Alias: "workstation", Local: true}, Build: release.Build{Digest: "older-installed-image"}, Connection: StateReachable, LastReply: time.Now()})
+			publish(DashboardHostView{Host: DashboardHost{ID: "local", MachineName: "workstation", Local: true}, Build: release.Build{Digest: "older-installed-image"}, Connection: StateReachable, LastReply: time.Now()})
 			return nil
 		}
 		restart := dashboardRestart{current: release.Build{Digest: "privacy-capable-image"},
@@ -50,7 +50,7 @@ func TestDashboardEnvironmentPrivacyKeepsCurrentExecutable(t *testing.T) {
 			}
 			return next.Watch(ctx, func(view DashboardHostView) {
 				updates++
-				if view.Host.Alias != "workstation" || view.Build.Digest != "older-installed-image" {
+				if view.Host.MachineName != "workstation" || view.Build.Digest != "older-installed-image" {
 					t.Fatal("skipped restart discarded ordinary host observations")
 				}
 				if !strings.Contains(view.Notice, "restart skipped in privacy mode") || strings.ContainsAny(view.Notice, "\r\n") {

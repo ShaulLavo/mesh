@@ -14,7 +14,7 @@ import (
 )
 
 func LocalHost(stateDir, id string) Host {
-	return Host{ID: id, Alias: "local", Endpoint: (&url.URL{Scheme: "unix", Path: filepath.Join(stateDir, "daemon.sock")}).String(), Platform: release.CurrentPlatform()}
+	return Host{ID: id, Endpoint: (&url.URL{Scheme: "unix", Path: filepath.Join(stateDir, "daemon.sock")}).String(), Platform: release.CurrentPlatform()}
 }
 
 func LocalProbe(stateDir string) updateinstall.Probe { return updatebootstrap.Probe(stateDir) }

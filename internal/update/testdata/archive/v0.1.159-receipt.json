@@ -1,0 +1,25 @@
+{
+  "version": "v0.1.159",
+  "platform": {
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "build": {
+    "version": "v0.1.159",
+    "commit": "05f43a218fb810e66e99762c5b841c23171cc6b6",
+    "digest": "245dfd6223cbdb74877722248eec9bb782e4d9c58fbf157176792aeb6e23f8ae",
+    "platform": {
+      "os": "linux",
+      "arch": "amd64"
+    },
+    "modified": false,
+    "stateVersion": 10,
+    "workerProtocol": 1,
+    "updateProtocol": 1
+  },
+  "manifestSha256": "6729308c41761d7da29fe0ba739f858149f27c5247522ab8f309351b6fe4de4c",
+  "archiveSha256": "a2846af746546e6fa493932b4ea89bcefb48743b14f485bcf75f58237a649254",
+  "runSha256": "f6ed445f6d9bb30653c9112542123ccbfda6474f8db147d1d9049485112fe3f0",
+  "creation": "unchanged published daemon, signed local update plan, controlled TLS release descriptor; no installation performed",
+  "candidatePublishedTransition": false
+}

@@ -1,22 +1,23 @@
 package cli
 
 import (
+	"github.com/shaul/mesh/internal/machinename"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestValidateHostAliasRejectsSessionIDs(t *testing.T) {
-	_, err := ValidateHostAlias("7k3d")
+func TestValidateHostIDRejectsSessionIDs(t *testing.T) {
+	_, err := machinename.Normalize("7k3d")
 	if err == nil || !strings.Contains(err.Error(), "session ID") {
-		t.Fatalf("ValidateHostAlias(7k3d) error = %v, want session ID explanation", err)
+		t.Fatalf("machinename.Normalize(7k3d) error = %v, want session ID explanation", err)
 	}
 }
 
-func TestValidateHostAliasRejectsReservedCommands(t *testing.T) {
+func TestValidateHostIDRejectsReservedCommands(t *testing.T) {
 	for _, alias := range []string{"private-names", "serve", "unserve"} {
-		if _, err := ValidateHostAlias(alias); err == nil || !strings.Contains(err.Error(), "Mesh command") {
+		if _, err := machinename.Normalize(alias); err == nil || !strings.Contains(err.Error(), "Mesh command") {
 			t.Fatalf("%s alias error = %v", alias, err)
 		}
 	}
@@ -27,9 +28,9 @@ func TestHostConfigRoundTripReplacesSameHostAtomically(t *testing.T) {
 	t.Setenv("MESH_CONFIG_DIR", configDir)
 
 	first := HostRecord{
-		Alias:         "pc",
-		ID:            "host-key",
-		MeshIdentity:  "host-key",
+		MachineName:   "pc",
+		ID:            "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+		MeshIdentity:  "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
 		TailscaleName: "pc.tail.example",
 		Addresses:     []string{"100.64.0.2"},
 		Endpoint:      "ws://100.64.0.2:7777/mesh",
@@ -60,16 +61,16 @@ func TestHostConfigRoundTripReplacesSameHostAtomically(t *testing.T) {
 	}
 }
 
-func TestResolveArgumentReportsHostSessionAmbiguity(t *testing.T) {
-	_, err := ResolveArgument("7k3d", []HostRecord{{Alias: "7k3d"}})
-	if err == nil || !strings.Contains(err.Error(), "host alias") || !strings.Contains(err.Error(), "session ID") {
-		t.Fatalf("ResolveArgument collision error = %v", err)
+func TestSessionShapedInputRemainsASessionTarget(t *testing.T) {
+	target, err := ResolveArgument("7k3d", nil)
+	if err != nil || target.SessionID != "7K3D" || target.Host != nil {
+		t.Fatalf("session argument = %+v, %v", target, err)
 	}
 }
 
 func TestResolveArgumentNamesBothPossibilitiesOnMiss(t *testing.T) {
-	_, err := ResolveArgument("missing", []HostRecord{{Alias: "pc"}})
-	if err == nil || !strings.Contains(err.Error(), "host alias") || !strings.Contains(err.Error(), "session ID") {
+	_, err := ResolveArgument("missing", []HostRecord{{MachineName: "pc"}})
+	if err == nil || !strings.Contains(err.Error(), "exact host ID") || !strings.Contains(err.Error(), "session ID") {
 		t.Fatalf("ResolveArgument miss error = %v", err)
 	}
 }

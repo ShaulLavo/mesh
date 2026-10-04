@@ -196,8 +196,9 @@ func (m *dashboardModel) receive(view cli.DashboardHostView) {
 	}
 	for index, host := range m.hosts {
 		if host.Host.ID == view.Host.ID {
-			view.Host = host.Host
+			view.Host.Local = host.Host.Local
 			m.hosts[index] = view
+			m.projectNames()
 			m.remember(view)
 			m.rememberRAMTotal(view)
 			return
@@ -222,4 +223,15 @@ func (m dashboardModel) View() tea.View {
 		}
 	}
 	return view
+}
+
+func (m *dashboardModel) projectNames() {
+	records := make([]cli.HostRecord, len(m.hosts))
+	for i, view := range m.hosts {
+		records[i] = cli.HostRecord{ID: view.Host.ID, MachineName: view.Host.MachineName, NameRevision: view.Host.NameRevision}
+	}
+	cli.ProjectHostNames(records)
+	for i, record := range records {
+		m.hosts[i].Host.NameConflict, m.hosts[i].Host.NamePriority, m.hosts[i].Host.NameSuffix = record.NameConflict, record.NamePriority, record.NameSuffix
+	}
 }

@@ -19,7 +19,7 @@ func TestDashboardUsageConfigRoundTrip(t *testing.T) {
 			if err := writeHostConfig(config); err != nil {
 				t.Fatal(err)
 			}
-			if err := SaveHost(HostRecord{Alias: "pc", ID: "host-key", MeshIdentity: "host-key", Endpoint: "ws://100.64.0.2:7777/mesh"}); err != nil {
+			if err := SaveHost(HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", Endpoint: "ws://100.64.0.2:7777/mesh"}); err != nil {
 				t.Fatal(err)
 			}
 			loaded, err := loadHostConfig()

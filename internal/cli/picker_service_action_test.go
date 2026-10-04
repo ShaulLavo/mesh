@@ -19,7 +19,7 @@ func pickerActionFixtureService() protocol.ServiceInfo {
 }
 
 func TestPickerServiceActionsRouteToExactHostAndSettle(t *testing.T) {
-	hosts := []HostRecord{{ID: "first", Alias: "alpha", MeshIdentity: "a"}, {ID: "second", Alias: "beta", MeshIdentity: "b", Endpoint: "wss://beta.example.test/control/ws"}}
+	hosts := []HostRecord{{ID: "first", MachineName: "alpha", MeshIdentity: "a"}, {ID: "second", MachineName: "beta", MeshIdentity: "b", Endpoint: "wss://beta.example.test/control/ws"}}
 	for _, action := range []PickerServiceAction{PickerStopService, PickerRestartService, PickerPingService, PickerOpenService} {
 		t.Run(serviceActionTestName(action), func(t *testing.T) {
 			calls := []string{}
@@ -90,7 +90,7 @@ func serviceActionTestName(action PickerServiceAction) string {
 }
 
 func TestPickerServiceOpenUsesInvokingMachineURL(t *testing.T) {
-	host := HostRecord{ID: "host", Alias: "alpha", MeshIdentity: "key", Endpoint: "wss://alpha.example.test/control/ws"}
+	host := HostRecord{ID: "host", MachineName: "alpha", MeshIdentity: "key", Endpoint: "wss://alpha.example.test/control/ws"}
 	for _, example := range []struct {
 		name    string
 		service protocol.ServiceInfo
@@ -118,7 +118,7 @@ func TestPickerServiceOpenUsesInvokingMachineURL(t *testing.T) {
 			}
 		})
 	}
-	local := ServiceCatalogRow{Host: HostRecord{Alias: localHostAlias}, Service: protocol.ServiceInfo{Name: "5173", LocalOnly: true}}
+	local := ServiceCatalogRow{Host: HostRecord{ID: localHostID(), MeshIdentity: localHostID(), local: true}, Service: protocol.ServiceInfo{Name: "5173", LocalOnly: true}}
 	if address, err := pickerReachableURL(local); err != nil || address != "http://127.0.0.1:5173/" {
 		t.Fatalf("local loopback %q, %v", address, err)
 	}
@@ -145,7 +145,7 @@ func TestPickerURLFakesSelectOSAndExposeFailure(t *testing.T) {
 }
 
 func TestPickerServiceActionsKeepIdentityPinAndRejectBadAcknowledgement(t *testing.T) {
-	host := HostRecord{ID: "host", Alias: "alpha", MeshIdentity: "key"}
+	host := HostRecord{ID: "host", MachineName: "alpha", MeshIdentity: "key"}
 	for _, mode := range []string{"wrong host", "wrong route", "no run", "restart failure", "missing route"} {
 		t.Run(mode, func(t *testing.T) {
 			service := pickerActionFixtureService()
@@ -191,7 +191,7 @@ func TestPickerServiceActionsKeepIdentityPinAndRejectBadAcknowledgement(t *testi
 }
 
 func TestPickerServicePingUnhealthyIsASettledResult(t *testing.T) {
-	host := HostRecord{ID: "host", Alias: "alpha", MeshIdentity: "key"}
+	host := HostRecord{ID: "host", MachineName: "alpha", MeshIdentity: "key"}
 	service := pickerActionFixtureService()
 	service.Healthy = false
 	service.Problem = "fixture refused"
@@ -217,7 +217,7 @@ func TestPickerServiceActionsRejectUnknownHostAndAction(t *testing.T) {
 }
 
 func TestPickerPingHonorsVerifiedHealthCapability(t *testing.T) {
-	host := HostRecord{ID: "alpha", Alias: "alpha", MeshIdentity: "a"}
+	host := HostRecord{ID: "alpha", MachineName: "alpha", MeshIdentity: "a"}
 	for _, example := range []struct {
 		name               string
 		supported, unknown bool

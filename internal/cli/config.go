@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/usagefeed"
 )
@@ -23,17 +25,16 @@ const (
 	maximumConfiguredHosts = 256
 )
 
-var reservedAliases = map[string]struct{}{
-	"add": {}, "app": {}, "attach": {}, "back": {}, "completion": {}, "daemon": {}, "gc": {}, "help": {}, "hibernate": {},
-	"kill": {}, "rm": {}, "remove": {}, "rename": {}, "mv": {}, "list": {}, "local": {}, "logs": {}, "ls": {}, "man": {},
-	"recover": {}, "recovery-command": {}, "shell-init": {}, "shell-update": {}, "agent": {}, "agent-hook": {}, "agent-resume": {}, "private-names": {}, "serve": {}, "session-worker": {}, "sig": {}, "signal": {}, "unserve": {}, "wake": {},
-	"device": {}, "update": {}, "version": {}, "update-helper": {}, "update-notice-check": {}, "update-bootstrap": {},
-	"update-bootstrap-status": {}, "dashboard": {},
-}
-
 // HostRecord is the local address book entry for one adopted Mesh host.
 type HostRecord struct {
-	Alias         string   `json:"alias"`
+	MachineName   string `json:"-"`
+	NameRevision  uint64 `json:"-"`
+	NameVerified  bool   `json:"-"`
+	NameConflict  bool   `json:"-"`
+	NamePriority  bool   `json:"-"`
+	NameSuffix    string `json:"-"`
+	local         bool
+	targetName    string
 	ID            string   `json:"id"`
 	MeshIdentity  string   `json:"meshIdentity"`
 	TailscaleName string   `json:"tailscaleName,omitempty"`
@@ -81,35 +82,30 @@ func TailscaleAuthKeyPath() (string, error) {
 	return filepath.Join(filepath.Dir(config), "tailscale-auth-key"), nil
 }
 
-// ValidateHostAlias normalizes a host alias and rejects names the CLI cannot
-// distinguish from a command or a session ID.
-func ValidateHostAlias(value string) (string, error) {
-	alias := strings.ToLower(strings.TrimSpace(value))
-	if alias == "" {
-		return "", errors.New("host alias is empty")
-	}
-	if len(alias) > 63 {
-		return "", fmt.Errorf("host alias %q is longer than 63 characters", value)
-	}
-	for i, character := range []byte(alias) {
-		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-' && i > 0 && i < len(alias)-1 {
-			continue
-		}
-		return "", fmt.Errorf("host alias %q must contain lowercase letters, digits, or interior hyphens", value)
-	}
-	if _, exists := reservedAliases[alias]; exists {
-		return "", fmt.Errorf("host alias %q is a Mesh command; choose another alias", alias)
-	}
-	if _, err := session.ParseID(alias); err == nil {
-		return "", fmt.Errorf("host alias %q looks like a session ID; choose another alias", alias)
-	}
-	return alias, nil
-}
-
 // LoadHosts reads and validates the local host address book.
 func LoadHosts() ([]HostRecord, error) {
 	config, err := loadHostConfig()
-	return config.Hosts, err
+	if err != nil {
+		return nil, err
+	}
+	path, err := ConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	for i := range config.Hosts {
+		host := &config.Hosts[i]
+		if _, err := identity.IdentityKey(host.ID); err != nil {
+			continue
+		}
+		claim, err := machinename.CachedClaim(filepath.Dir(path), host.ID)
+		if err != nil {
+			return nil, fmt.Errorf("load cached machine name: %w", err)
+		}
+		host.MachineName, host.NameRevision = claim.MachineName, claim.Revision
+	}
+	ProjectHostNames(config.Hosts)
+	sortHosts(config.Hosts)
+	return config.Hosts, nil
 }
 
 func loadHostConfig() (hostConfig, error) {
@@ -128,7 +124,7 @@ func loadHostConfig() (hostConfig, error) {
 	decoder.DisallowUnknownFields()
 	var config hostConfig
 	if err := decoder.Decode(&config); err != nil {
-		return hostConfig{}, fmt.Errorf("parse host config %s: %w", path, err)
+		return hostConfig{}, fmt.Errorf("parse host config %s: %w; remove the unrecognized field from this file and retry", path, err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {
@@ -146,21 +142,16 @@ func validateHostConfig(config hostConfig, path string) (hostConfig, error) {
 	if len(config.Hosts) > maximumConfiguredHosts {
 		return hostConfig{}, fmt.Errorf("parse host config %s: host count %d exceeds %d", path, len(config.Hosts), maximumConfiguredHosts)
 	}
-	aliases := make(map[string]string, len(config.Hosts))
-	identities := make(map[string]string, len(config.Hosts))
-	for i := range config.Hosts {
-		host, err := validateHostRecord(config.Hosts[i])
+	identities := make(map[string]bool, len(config.Hosts))
+	for i, record := range config.Hosts {
+		host, err := validateHostRecord(record)
 		if err != nil {
 			return hostConfig{}, fmt.Errorf("parse host config %s: host %d: %w", path, i+1, err)
 		}
-		if prior := aliases[host.Alias]; prior != "" {
-			return hostConfig{}, fmt.Errorf("parse host config %s: alias %q is used by hosts %s and %s", path, host.Alias, prior, host.ID)
+		if identities[host.ID] {
+			return hostConfig{}, fmt.Errorf("parse host config %s: duplicate host ID %q", path, host.ID)
 		}
-		if prior := identities[host.ID]; prior != "" {
-			return hostConfig{}, fmt.Errorf("parse host config %s: host ID %s has aliases %q and %q", path, host.ID, prior, host.Alias)
-		}
-		aliases[host.Alias] = host.ID
-		identities[host.ID] = host.Alias
+		identities[host.ID] = true
 		config.Hosts[i] = host
 	}
 	if config.Dashboard != nil && config.Dashboard.UsageFeedURL != "" {
@@ -185,12 +176,9 @@ func SaveHost(record HostRecord) error {
 	hosts := config.Hosts
 	replaced := false
 	for i, existing := range hosts {
-		switch {
-		case existing.ID == host.ID:
+		if existing.ID == host.ID {
 			hosts[i] = host
 			replaced = true
-		case existing.Alias == host.Alias:
-			return fmt.Errorf("host alias %q already belongs to host %s", host.Alias, existing.ID)
 		}
 	}
 	if !replaced {
@@ -202,30 +190,25 @@ func SaveHost(record HostRecord) error {
 }
 
 func validateHostRecord(record HostRecord) (HostRecord, error) {
-	alias, err := ValidateHostAlias(record.Alias)
-	if err != nil {
-		return HostRecord{}, err
-	}
-	record.Alias = alias
 	record.ID = strings.TrimSpace(record.ID)
 	record.MeshIdentity = strings.TrimSpace(record.MeshIdentity)
 	record.TailscaleName = strings.TrimSpace(record.TailscaleName)
 	record.Endpoint = strings.TrimSpace(record.Endpoint)
 	if record.ID == "" {
-		return HostRecord{}, fmt.Errorf("host %q has no stable ID", alias)
+		return HostRecord{}, fmt.Errorf("host %q has no stable ID", record.ID)
 	}
 	if record.MeshIdentity == "" {
-		return HostRecord{}, fmt.Errorf("host %q has no Mesh identity", alias)
+		return HostRecord{}, fmt.Errorf("host %q has no Mesh identity", record.ID)
 	}
 	endpoint, err := url.Parse(record.Endpoint)
 	if err != nil || (endpoint.Scheme != "ws" && endpoint.Scheme != "wss") || endpoint.Host == "" || endpoint.Path == "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
-		return HostRecord{}, fmt.Errorf("host %q has invalid WebSocket endpoint %q", alias, record.Endpoint)
+		return HostRecord{}, fmt.Errorf("host %q has invalid WebSocket endpoint %q", record.ID, record.Endpoint)
 	}
 	record.Addresses = append([]string(nil), record.Addresses...)
 	for i := range record.Addresses {
 		record.Addresses[i] = strings.TrimSpace(record.Addresses[i])
 		if _, err := netip.ParseAddr(record.Addresses[i]); err != nil {
-			return HostRecord{}, fmt.Errorf("host %q has invalid Tailscale address %q: %w", alias, record.Addresses[i], err)
+			return HostRecord{}, fmt.Errorf("host %q has invalid Tailscale address %q: %w", record.ID, record.Addresses[i], err)
 		}
 	}
 	return record, nil
@@ -277,14 +260,14 @@ func writeHostConfig(config hostConfig) error {
 
 func sortHosts(hosts []HostRecord) {
 	sort.Slice(hosts, func(i, j int) bool {
-		if hosts[i].Alias != hosts[j].Alias {
-			return hosts[i].Alias < hosts[j].Alias
+		if hosts[i].MachineName != hosts[j].MachineName {
+			return hosts[i].MachineName < hosts[j].MachineName
 		}
 		return hosts[i].ID < hosts[j].ID
 	})
 }
 
-// ArgumentTarget is either a host alias or a syntactically valid session ID.
+// ArgumentTarget is either a machine name or exact host ID or a syntactically valid session ID.
 type ArgumentTarget struct {
 	Host      *HostRecord
 	SessionID string
@@ -292,23 +275,17 @@ type ArgumentTarget struct {
 
 // ResolveArgument classifies the root command's positional argument.
 func ResolveArgument(value string, hosts []HostRecord) (ArgumentTarget, error) {
-	var matched *HostRecord
-	for i := range hosts {
-		if strings.EqualFold(hosts[i].Alias, value) {
-			host := hosts[i]
-			matched = &host
-			break
+	for _, host := range hosts {
+		if value != "" && value == host.ID {
+			return ArgumentTarget{Host: &host}, nil
 		}
 	}
-	id, idErr := session.ParseID(value)
-	if matched != nil && idErr == nil {
-		return ArgumentTarget{}, fmt.Errorf("%q is both host alias %q and session ID %s; rename the host alias", value, matched.Alias, id)
+	if target, matched, err := resolveDeclaredArgument(value, hosts); matched || err != nil {
+		return target, err
 	}
-	if matched != nil {
-		return ArgumentTarget{Host: matched}, nil
-	}
-	if idErr == nil {
+	id, err := session.ParseID(value)
+	if err == nil {
 		return ArgumentTarget{SessionID: id}, nil
 	}
-	return ArgumentTarget{}, fmt.Errorf("%q is neither a known host alias nor a session ID", value)
+	return ArgumentTarget{}, fmt.Errorf("%q is neither a declared machine name, exact host ID nor a session ID", value)
 }

@@ -21,7 +21,7 @@ func TestSessionSummaryRefreshIsBoundedToVisibleLiveRows(t *testing.T) {
 	}
 	sessions[2].state = "exited"
 	requests := make(chan cli.PickerInspectRequest, len(sessions))
-	current := newInspectingModel(context.Background(), []host{{alias: "pc", sessions: sessions}}, func(_ context.Context, request cli.PickerInspectRequest) (cli.SessionInspection, error) {
+	current := newInspectingModel(context.Background(), []host{{id: "pc", machineName: "pc", sessions: sessions}}, func(_ context.Context, request cli.PickerInspectRequest) (cli.SessionInspection, error) {
 		requests <- request
 		return cli.SessionInspection{ObservedAt: pickerTestNow}, nil
 	}, pickerTestNow)
@@ -38,7 +38,7 @@ func TestSessionSummaryRefreshIsBoundedToVisibleLiveRows(t *testing.T) {
 	got := make([]string, 0, len(requests))
 	for len(requests) > 0 {
 		request := <-requests
-		if request.PreviewCols != 1 || request.PreviewRows != 1 || request.HostAlias != "pc" {
+		if request.PreviewCols != 1 || request.PreviewRows != 1 || request.HostID != "pc" {
 			t.Fatalf("summary request = %#v", request)
 		}
 		got = append(got, request.SessionID)
@@ -57,7 +57,7 @@ func TestSessionSummaryRefreshSkipsEveryNestedContainingSession(t *testing.T) {
 	requests := make(chan cli.PickerInspectRequest, 8)
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts: []cli.HostSessions{{
-			Host: cli.HostRecord{ID: "host-a", Alias: "pc"},
+			Host: cli.HostRecord{ID: "host-a", MachineName: "pc"},
 			Sessions: []protocol.SessionInfo{
 				{ID: "5J2P", HostID: "host-a", State: "detached", CreatedAt: pickerTestNow},
 				{ID: "7K3D", HostID: "host-a", State: "detached", CreatedAt: pickerTestNow},
@@ -116,8 +116,8 @@ func TestSessionSummaryRefreshSkipsEveryNestedContainingSession(t *testing.T) {
 }
 
 func TestSessionSummaryFailuresKeepLastGoodLabelsAndCatalogRemovalPrunesThem(t *testing.T) {
-	target := inspectionTarget{hostAlias: "pc", sessionID: "7K3D"}
-	current := newModel([]host{{alias: "pc", sessions: []session{{id: target.sessionID, state: "detached"}}}}, pickerTestNow)
+	target := inspectionTarget{hostID: "pc", sessionID: "7K3D"}
+	current := newModel([]host{{id: "pc", machineName: "pc", sessions: []session{{id: target.sessionID, state: "detached"}}}}, pickerTestNow)
 	current.enterSessions(0)
 	current.rememberSessionSummary(target, cli.SessionInspection{
 		CurrentDirectory:  "/work/mesh",
@@ -125,7 +125,7 @@ func TestSessionSummaryFailuresKeepLastGoodLabelsAndCatalogRemovalPrunesThem(t *
 	})
 	current.summarySeq = 4
 	current = current.applySessionSummaries(sessionSummariesResultMsg{
-		hostAlias: "pc", generation: current.summarySeq,
+		hostID: "pc", generation: current.summarySeq,
 	})
 	if got := current.summaries[target]; got.currentDirectory != "/work/mesh" || got.foregroundCommand != "claude" {
 		t.Fatalf("failed refresh discarded last good summary: %#v", got)
@@ -139,7 +139,7 @@ func TestSessionSummaryFailuresKeepLastGoodLabelsAndCatalogRemovalPrunesThem(t *
 
 func TestSessionSummaryPollingContinuesWhenTheSelectedSessionHasEnded(t *testing.T) {
 	current := newInspectingModel(context.Background(), []host{{
-		alias: "pc",
+		id: "pc", machineName: "pc",
 		sessions: []session{
 			{id: "DONE", state: "exited"},
 			{id: "LIVE", state: "detached"},
@@ -160,9 +160,9 @@ func TestSessionSummaryPollingContinuesWhenTheSelectedSessionHasEnded(t *testing
 }
 
 func TestSessionSummaryPollingKeepsATimerWhenOtherRowsAreFresh(t *testing.T) {
-	target := inspectionTarget{hostAlias: "pc", sessionID: "LIVE"}
+	target := inspectionTarget{hostID: "pc", sessionID: "LIVE"}
 	current := newInspectingModel(context.Background(), []host{{
-		alias: "pc",
+		id: "pc", machineName: "pc",
 		sessions: []session{
 			{id: "DONE", state: "exited"},
 			{id: target.sessionID, state: "detached"},
@@ -190,7 +190,7 @@ func TestSessionSummaryPollingKeepsATimerWhenOtherRowsAreFresh(t *testing.T) {
 
 func TestSessionSummaryPollingKeepsATimerWhileABatchIsInFlight(t *testing.T) {
 	current := newInspectingModel(context.Background(), []host{{
-		alias: "pc",
+		id: "pc", machineName: "pc",
 		sessions: []session{
 			{id: "DONE", state: "exited"},
 			{id: "LIVE", state: "detached"},
@@ -209,7 +209,7 @@ func TestSessionSummaryPollingKeepsATimerWhileABatchIsInFlight(t *testing.T) {
 
 func TestSessionSummaryRefreshReusesFreshObservations(t *testing.T) {
 	current := newInspectingModel(context.Background(), []host{{
-		alias: "pc",
+		id: "pc", machineName: "pc",
 		sessions: []session{
 			{id: "SELECTED", state: "detached"},
 			{id: "VISIBLE", state: "detached"},
@@ -241,7 +241,7 @@ func TestSessionSummaryRefreshCapsConcurrentInspections(t *testing.T) {
 	started := make(chan struct{}, len(sessions))
 	var active atomic.Int32
 	var maximum atomic.Int32
-	current := newInspectingModel(context.Background(), []host{{alias: "pc", sessions: sessions}}, func(context.Context, cli.PickerInspectRequest) (cli.SessionInspection, error) {
+	current := newInspectingModel(context.Background(), []host{{id: "pc", machineName: "pc", sessions: sessions}}, func(context.Context, cli.PickerInspectRequest) (cli.SessionInspection, error) {
 		count := active.Add(1)
 		for previous := maximum.Load(); count > previous && !maximum.CompareAndSwap(previous, count); previous = maximum.Load() {
 		}

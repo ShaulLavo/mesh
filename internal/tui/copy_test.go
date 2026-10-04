@@ -26,7 +26,7 @@ func TestCopyDashboardExplainsRefresh(t *testing.T) {
 }
 
 func TestCopyPickerInspectionRetainsDiagnostic(t *testing.T) {
-	m := newModel([]host{{alias: "pc", sessions: []session{{id: "7K3D", state: "detached", cwd: "/fixture/project", command: []string{"bash"}, createdAt: pickerTestNow}}}}, pickerTestNow)
+	m := newModel([]host{{id: "copy-owner", machineName: "pc", sessions: []session{{id: "7K3D", state: "detached", cwd: "/fixture/project", command: []string{"bash"}, createdAt: pickerTestNow}}}}, pickerTestNow)
 	m.showSessions()
 	m.inspection = inspectionState{kind: inspectionFailed, problem: "fixture connection refused"}
 	_, current, ok := m.currentSession()
@@ -62,7 +62,7 @@ func TestCopySessionActionsDescribeOutcome(t *testing.T) {
 		{cli.PickerKillSession, "Ending session 7K3D…", "Ended session 7K3D; refreshing…", "Could not end session 7K3D; checking its state…"},
 		{cli.PickerRemoveSession, "Forgetting session 7K3D…", "Forgot session 7K3D; refreshing…", "Could not forget session 7K3D; checking its state…"},
 	} {
-		state := sessionActionState{target: sessionActionTarget{hostAlias: "pc", sessionID: "7K3D"}, action: action.action, phase: sessionActionRunning}
+		state := sessionActionState{target: sessionActionTarget{hostID: "pc", sessionID: "7K3D"}, action: action.action, phase: sessionActionRunning}
 		for _, stage := range []struct {
 			phase sessionActionPhase
 			want  string
@@ -83,7 +83,7 @@ func TestCopyPickerFooterUsesPlainActionsAtNarrowWidths(t *testing.T) {
 	for _, state := range []string{"detached", "running"} {
 		for _, width := range []int{52, 64, 80} {
 			t.Run(fmt.Sprintf("%s/%d", state, width), func(t *testing.T) {
-				m := newModel([]host{{alias: "pc", sessions: []session{{id: "7K3D", state: state, cwd: "/fixture/project", command: []string{"bash"}, createdAt: pickerTestNow}}}}, pickerTestNow)
+				m := newModel([]host{{id: "copy-owner", machineName: "pc", sessions: []session{{id: "7K3D", state: state, cwd: "/fixture/project", command: []string{"bash"}, createdAt: pickerTestNow}}}}, pickerTestNow)
 				m.showSessions()
 				m = updateModel(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
 				footer := ansi.Strip(m.footer(m.currentHost()))
@@ -113,7 +113,7 @@ func TestCopyPickerEndAndForgetKeepKeys(t *testing.T) {
 			{'x', "exited", cli.PickerRemoveSession},
 		} {
 			t.Run(fmt.Sprintf("%c/%d", action.key, width), func(t *testing.T) {
-				m := newModel([]host{{alias: "pc", sessions: []session{{id: "7K3D", state: action.state, cwd: "/fixture/project", command: []string{"bash"}, createdAt: pickerTestNow}}}}, pickerTestNow)
+				m := newModel([]host{{id: "copy-owner", machineName: "pc", sessions: []session{{id: "7K3D", state: action.state, cwd: "/fixture/project", command: []string{"bash"}, createdAt: pickerTestNow}}}}, pickerTestNow)
 				var request cli.PickerSessionActionRequest
 				m.act = func(_ context.Context, got cli.PickerSessionActionRequest) error {
 					request = got
@@ -126,7 +126,7 @@ func TestCopyPickerEndAndForgetKeepKeys(t *testing.T) {
 					t.Fatal("session key did not produce its action")
 				}
 				_ = command()
-				if request.Action != action.want || request.HostAlias != "pc" || request.SessionID != "7K3D" {
+				if request.Action != action.want || request.HostID != "copy-owner" || request.SessionID != "7K3D" {
 					t.Fatalf("session key changed its target or action: %+v", request)
 				}
 				assertFits(t, updated.(model).View().Content, width, 24)
@@ -136,7 +136,7 @@ func TestCopyPickerEndAndForgetKeepKeys(t *testing.T) {
 }
 
 func TestCopyPickerForgetRefusalNamesEndKey(t *testing.T) {
-	m := newModel([]host{{alias: "pc", sessions: []session{{id: "7K3D", state: "detached"}}}}, pickerTestNow)
+	m := newModel([]host{{id: "copy-owner", machineName: "pc", sessions: []session{{id: "7K3D", state: "detached"}}}}, pickerTestNow)
 	m.showSessions()
 	updated, command := m.Update(runeKey('x'))
 	m = updated.(model)
@@ -173,7 +173,7 @@ func TestCopyRecoveryDistinguishesAbsentAndUnreadableOutput(t *testing.T) {
 }
 
 func TestCopyRecoveryDetailsWaitDoesNotClaimAbsence(t *testing.T) {
-	m := newModel([]host{{alias: "pc", sessions: []session{{id: "7K3D", state: "interrupted", cwd: "/fixture/project", recoveryDetailsOmitted: true}}}}, pickerTestNow)
+	m := newModel([]host{{id: "copy-owner", machineName: "pc", sessions: []session{{id: "7K3D", state: "interrupted", cwd: "/fixture/project", recoveryDetailsOmitted: true}}}}, pickerTestNow)
 	m.showSessions()
 	_, selected, ok := m.currentSession()
 	if !ok {

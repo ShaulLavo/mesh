@@ -219,7 +219,7 @@ func (a *application) resolveSavedTarget(ctx context.Context, target recovery.Ta
 		if host.ID != target.HostID {
 			continue
 		}
-		rows, err := a.queryHost(ctx, host, HostQueryBudget{Setup: remoteConnectTimeout, Reply: remoteConnectTimeout})
+		rows, err := a.queryHost(ctx, &host, HostQueryBudget{Setup: remoteConnectTimeout, Reply: remoteConnectTimeout})
 		if err != nil {
 			return resolvedSession{}, err
 		}
@@ -234,7 +234,7 @@ func exactRecoveryTarget(host HostRecord, rows []protocol.SessionInfo, id string
 			return resolvedSession{host: &host, remote: row}, nil
 		}
 	}
-	return resolvedSession{}, fmt.Errorf("session %s is missing on %s", id, host.Alias)
+	return resolvedSession{}, fmt.Errorf("session %s is missing on %s", id, HostLabel(host))
 }
 
 func (a *application) recoveryCommandCommand() *cobra.Command {

@@ -26,7 +26,7 @@ func TestAbsentCoordinatorPreviewAddsExplicitSetupWithoutInstalling(t *testing.T
 		if host.ID == local.ID {
 			return os.ErrNotExist
 		}
-		*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
+		*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 		return nil
 	})
 	stdout, _, err := executeCommand(t, Dependencies{UpdateBuild: updateTestBuild, UpdateRelease: client, UpdateCaller: caller}, "update", "--fleet", file, "--check", "--json")
@@ -54,7 +54,7 @@ func TestAbsentCoordinatorPersistsApprovalBeforeHelperInstallation(t *testing.T)
 			if host.ID == local.ID {
 				return os.ErrNotExist
 			}
-			*output.(*update.Info) = update.Info{Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
+			*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: updateinstall.Health{HostID: host.ID, Build: updateTestBuild()}}
 			return nil
 		}
 		if action != "status" || !installed {
@@ -148,7 +148,7 @@ func TestOlderCoordinatorSetupPersistsReceiptBeforeDaemonCanReconcile(t *testing
 	}
 	c.Remote = updateCallFunc(func(_ context.Context, _ update.Host, action string, _, output any) error {
 		if action == "info" {
-			*output.(*update.Info) = update.Info{Health: health, Installation: &receipt}
+			*output.(*update.Info) = update.Info{AcceptsIdentityFleet: true, Health: health, Installation: &receipt}
 			return nil
 		}
 		if action == "grant" {

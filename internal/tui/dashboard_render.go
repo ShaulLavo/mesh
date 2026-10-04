@@ -146,6 +146,21 @@ func dashboardServicesCached(host cli.DashboardHostView, now time.Time) bool {
 	return host.Connection != cli.StateReachable || host.Services.Stale(now, host.LastReply)
 }
 func (m dashboardModel) fleetRow(host cli.DashboardHostView) string {
+	if host.Host.NameConflict {
+		text := "ID " + safeText(m.privacy.Value("host-id", host.Host.ID)) + " · conflict"
+		if host.Host.NamePriority {
+			text += " priority"
+		}
+		return text + " · " + safeText(host.NameLabel(m.now))
+	}
+	if host.NameLabel(m.now) != host.Host.Label() {
+		state := string(host.Connection)
+		if host.Connection == cli.StateUnreachable || host.Connection == cli.StateRefused {
+			state = m.paint(dashboardFailureStyle).Render(state)
+		}
+		return safeText(host.NameLabel(m.now)) + " · " + state
+	}
+
 	cpu := m.metricValue(host.CPU, host, fmt.Sprintf("%.0f%%", host.CPU.Value))
 	memory := m.ramValue(host)
 	if strings.Contains(ansi.Strip(memory), "stale") {
@@ -156,12 +171,12 @@ func (m dashboardModel) fleetRow(host cli.DashboardHostView) string {
 	counts := m.catalogCounts(host)
 	state := string(host.Connection)
 	if host.MetricsUnsupported {
-		return dashboardFit(safeText(host.Host.Alias), 11) + " " + dashboardMetricsUpgrade + " · " + counts
+		return dashboardFit(safeText(host.Host.Label()), 11) + " " + dashboardMetricsUpgrade + " · " + counts
 	}
 	if host.Connection == cli.StateUnreachable || host.Connection == cli.StateRefused {
 		state = m.paint(dashboardFailureStyle).Render(state)
 	}
-	return dashboardFit(safeText(host.Host.Alias), 11) + " " + dashboardFit(state, 12) + " " + dashboardFit(cpu, 10) + " " + dashboardFit(memory, 14) + " " + counts
+	return dashboardFit(safeText(host.Host.Label()), 11) + " " + dashboardFit(state, 12) + " " + dashboardFit(cpu, 10) + " " + dashboardFit(memory, 14) + " " + counts
 }
 func (m dashboardModel) hostTitle(host cli.DashboardHostView) string {
 	mark := "●"
@@ -172,7 +187,7 @@ func (m dashboardModel) hostTitle(host cli.DashboardHostView) string {
 	if host.Connection != cli.StateReachable {
 		state = m.paint(dashboardCachedStyle).Render(mark + " " + string(host.Connection))
 	}
-	title := m.paint(dashboardTitleStyle).Render(safeText(host.Host.Alias)) + " · " + state
+	title := m.paint(dashboardTitleStyle).Render(safeText(host.NameLabel(m.now))) + " · " + state
 	if host.MetricsUnsupported {
 		title += " · " + dashboardMetricsUpgrade
 	}
@@ -237,7 +252,7 @@ func (m dashboardModel) footer() string {
 	frame := "updated " + m.now.Format("15:04:05")
 	for _, host := range m.hosts {
 		if host.Host.Local {
-			frame += " on " + safeText(host.Host.Alias)
+			frame += " on " + safeText(host.NameLabel(m.now))
 			break
 		}
 	}

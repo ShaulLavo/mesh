@@ -164,7 +164,7 @@ with open(status_path, "w", encoding="utf-8") as output:
     }, output)
 with open(hosts_path, "w", encoding="utf-8") as output:
     json.dump({"version": 1, "hosts": [{
-        "alias": "pc", "id": origin_id, "meshIdentity": origin_id, "tailscaleName": "pc.fixture.test",
+        "id": origin_id, "meshIdentity": origin_id, "tailscaleName": "pc.fixture.test",
         "addresses": ["127.0.0.11"], "endpoint": f"ws://127.0.0.11:{control_port}/mesh",
     }]}, output)
 os.chmod(hosts_path, 0o600)
@@ -172,6 +172,9 @@ PY
 CLI=(env "MESH_STATE_DIR=$CLIENT_STATE" "MESH_CONFIG_DIR=$CLIENT_CONFIG" NO_COLOR=1 "$MESH_INTEGRATION")
 
 start_origin
+
+"${CLI[@]}" ls --all --timeout 1s >"$TEST_ROOT/name-adoption.out" 2>&1 || fail "adopt origin declaration"
+[ -s "$CLIENT_CONFIG/machine-names/$ORIGIN_ID.json" ] || fail "origin declaration was not authenticated"
 
 # --- Declare the route. Nothing runs until something connects. -------------
 # pc is another machine to this client, so the directory is given, not

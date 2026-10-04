@@ -31,8 +31,8 @@ func TestPickerOrdersByLastAttachmentWithCreationFallback(t *testing.T) {
 	}
 	for _, stale := range []bool{false, true} {
 		current := newPickerModel(context.Background(), cli.PickerInput{
-			Hosts:         []cli.HostSessions{{Host: cli.HostRecord{Alias: "pc"}, Sessions: rows, Stale: stale}},
-			OpenHostAlias: "pc",
+			Hosts:      []cli.HostSessions{{Host: cli.HostRecord{ID: "pc", MachineName: "pc"}, Sessions: rows, Stale: stale}},
+			OpenHostID: "pc",
 		}, pickerTestNow)
 		assertSessionOrder(t, current, "USED", "NEW", "OLD")
 		if current.selectedSessionID() != "USED" || rows[0].ID != "OLD" {
@@ -44,16 +44,16 @@ func TestPickerOrdersByLastAttachmentWithCreationFallback(t *testing.T) {
 func TestPickerRefreshReordersWithoutChangingSelectedSession(t *testing.T) {
 	old := protocol.SessionInfo{ID: "OLD", State: "detached", CreatedAt: pickerTestNow.Add(-time.Hour)}
 	recent := protocol.SessionInfo{ID: "RECENT", State: "detached", CreatedAt: pickerTestNow}
-	host := cli.HostRecord{Alias: "pc"}
+	host := cli.HostRecord{ID: "pc", MachineName: "pc"}
 	current := newPickerModel(context.Background(), cli.PickerInput{
-		Hosts: []cli.HostSessions{{Host: host, Sessions: []protocol.SessionInfo{old, recent}}}, OpenHostAlias: "pc",
+		Hosts: []cli.HostSessions{{Host: host, Sessions: []protocol.SessionInfo{old, recent}}}, OpenHostID: "pc",
 	}, pickerTestNow)
 	current.list.Select(1)
 	attached := pickerTestNow.Add(time.Hour)
 	old.LastAttachedAt, old.State = &attached, "running"
 	added := protocol.SessionInfo{ID: "ADDED", State: "detached", CreatedAt: attached.Add(-time.Minute)}
 	current, _ = current.applyCatalogRefresh(catalogRefreshResultMsg{
-		epoch: current.catalogEpoch, hostAlias: host.Alias,
+		epoch: current.catalogEpoch, hostID: host.MachineName,
 		snapshot: cli.PickerHostSnapshot{Sessions: cli.HostSessions{Host: host, Sessions: []protocol.SessionInfo{added, old, recent}}},
 	})
 	assertSessionOrder(t, current, "OLD", "ADDED", "RECENT")
@@ -71,11 +71,11 @@ func TestPickerRefreshReordersWithoutChangingSelectedSession(t *testing.T) {
 func TestPickerRecencyOrdersPreviousRecoveryAttemptsByTheirOwnUpdate(t *testing.T) {
 	attached := pickerTestNow
 	current := newPickerModel(context.Background(), cli.PickerInput{
-		Hosts: []cli.HostSessions{{Host: cli.HostRecord{Alias: "pc"}, Sessions: []protocol.SessionInfo{
+		Hosts: []cli.HostSessions{{Host: cli.HostRecord{ID: "pc", MachineName: "pc"}, Sessions: []protocol.SessionInfo{
 			{ID: "OTHER", State: "detached", CreatedAt: pickerTestNow.Add(-time.Minute)},
 			{ID: "OLD", State: "interrupted", ReplacementID: "REPLACEMENT", CreatedAt: pickerTestNow.Add(-time.Hour)},
 			{ID: "REPLACEMENT", State: "detached", CreatedAt: pickerTestNow.Add(-time.Minute), LastAttachedAt: &attached},
-		}}}, OpenHostAlias: "pc",
+		}}}, OpenHostID: "pc",
 	}, pickerTestNow)
 	assertSessionOrder(t, current, "REPLACEMENT", "OTHER", "OLD")
 	if !current.currentHost().sessions[2].previousAttempt {
@@ -92,14 +92,14 @@ func TestPickerOrdersByCheckpointAcrossStatesAndRefreshes(t *testing.T) {
 		{ID: "EXITED", State: "exited", CreatedAt: pickerTestNow.Add(-2 * time.Hour),
 			Recovery: &recovery.Record{CheckpointAt: pickerTestNow.Add(-30 * time.Minute)}},
 	}
-	host := cli.HostRecord{Alias: "pc"}
+	host := cli.HostRecord{ID: "pc", MachineName: "pc"}
 	current := newPickerModel(context.Background(), cli.PickerInput{
-		Hosts: []cli.HostSessions{{Host: host, Sessions: rows}}, OpenHostAlias: host.Alias,
+		Hosts: []cli.HostSessions{{Host: host, Sessions: rows}}, OpenHostID: host.MachineName,
 	}, pickerTestNow)
 	assertSessionOrder(t, current, "OLD", "NEW", "EXITED")
 	rows[2].Recovery.CheckpointAt = pickerTestNow.Add(time.Minute)
 	current, _ = current.applyCatalogRefresh(catalogRefreshResultMsg{
-		epoch: current.catalogEpoch, hostAlias: host.Alias,
+		epoch: current.catalogEpoch, hostID: host.MachineName,
 		snapshot: cli.PickerHostSnapshot{Sessions: cli.HostSessions{Host: host, Sessions: rows}},
 	})
 	assertSessionOrder(t, current, "EXITED", "OLD", "NEW")

@@ -33,7 +33,7 @@ func assertPrivateFrame(t *testing.T, frame string) {
 func privacyPickerFixture() model {
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Privacy: privacy.New(),
-		Hosts:   []cli.HostSessions{{Host: cli.HostRecord{ID: "real-host-id", Alias: privateHost}, Sessions: []protocol.SessionInfo{{ID: "7K3D", State: "detached", Cwd: privatePath, Command: []string{"/usr/bin/bash", "secret-argument"}, CreatedAt: pickerTestNow}}, Local: true}},
+		Hosts:   []cli.HostSessions{{Host: cli.HostRecord{ID: "real-host-id", MachineName: privateHost}, Sessions: []protocol.SessionInfo{{ID: "7K3D", State: "detached", Cwd: privatePath, Command: []string{"/usr/bin/bash", "secret-argument"}, CreatedAt: pickerTestNow}}, Local: true}},
 	}, pickerTestNow)
 	current.width, current.height = 110, 32
 	current.resizeList()
@@ -89,7 +89,7 @@ func TestPrivacyPickerFramesAndOriginalSelection(t *testing.T) {
 	}
 	current.handleKey(key(tea.KeyEnter))
 	selected, ok := current.selection.(attachSelection)
-	if !ok || selected.hostAlias != privateHost || selected.sessionID != "7K3D" {
+	if !ok || selected.hostID != "real-host-id" || selected.sessionID != "7K3D" {
 		t.Fatalf("masked action target: %#v", current.selection)
 	}
 }
@@ -106,7 +106,7 @@ func TestPrivacySavedPreviewAndWindow(t *testing.T) {
 	if !strings.Contains(frame, privacyPreviewPlaceholder) {
 		t.Fatal("saved preview not withheld")
 	}
-	window := newWindowModel(context.Background(), cli.WindowInput{Privacy: privacy.New(), HostID: "real-host-id", HostAlias: privateHost, Sessions: []protocol.SessionInfo{{ID: "7K3D", State: "detached", Cwd: privatePath, Command: []string{"bash", "secret-argument"}}}}, pickerTestNow)
+	window := newWindowModel(context.Background(), cli.WindowInput{Privacy: privacy.New(), MachineName: privateHost, HostID: "real-host-id", Sessions: []protocol.SessionInfo{{ID: "7K3D", State: "detached", Cwd: privatePath, Command: []string{"bash", "secret-argument"}}}}, pickerTestNow)
 	window.picker.inspection = current.inspection
 	window.resize()
 	assertPrivateFrame(t, window.View().Content)
@@ -117,7 +117,7 @@ func TestPrivacyDashboardRenderedFrames(t *testing.T) {
 	current.privacy = privacy.New()
 	for i := range current.hosts {
 		h := &current.hosts[i]
-		h.Host.Alias = fmt.Sprintf("%s-%d", privateHost, i+1)
+		h.Host.MachineName = fmt.Sprintf("%s-%d", privateHost, i+1)
 		h.Sessions.Rows = []cli.DashboardSession{{ID: "7K3D", Name: fmt.Sprintf("%s %d", privateTitle, i+1), Label: fmt.Sprintf("%s %d", privateTitle, i+1), Command: "/usr/bin/bash secret-argument", State: "detached"}}
 		h.Sessions.Total = 1
 		h.Services.Rows = []cli.DashboardService{{Name: fmt.Sprintf("api-preview-%d", i%2+1), State: "failed", Problem: "secret-error https://private@example.test", Failed: true}}
@@ -133,7 +133,7 @@ func TestPrivacyDashboardRenderedFrames(t *testing.T) {
 	current.sessionSummaries = map[dashboardSessionTarget]sessionLiveSummary{{current.hosts[0].Host.ID, "7K3D"}: {currentDirectory: privatePath, terminalTitle: privateTitle, foregroundCommand: "bash secret-argument", receivedAt: current.now}}
 	before := append([]cli.DashboardHostView(nil), current.hosts...)
 	display := current.privacyDisplay()
-	if display.hosts[0].Host.Alias != current.hosts[0].Host.Alias || display.hosts[0].Sessions.Rows[0].Label != current.hosts[0].Sessions.Rows[0].Label || display.hosts[0].Services.Rows[0].Name != current.hosts[0].Services.Rows[0].Name {
+	if display.hosts[0].Host.MachineName != current.hosts[0].Host.MachineName || display.hosts[0].Sessions.Rows[0].Label != current.hosts[0].Sessions.Rows[0].Label || display.hosts[0].Services.Rows[0].Name != current.hosts[0].Services.Rows[0].Name {
 		t.Fatal("privacy hid plain host/session/service names")
 	}
 	if display.hosts[0].CPU != current.hosts[0].CPU || display.usage.accounts[0].Plan != current.usage.accounts[0].Plan || display.usage.accounts[0].Provider != current.usage.accounts[0].Provider {
@@ -158,7 +158,7 @@ func TestPrivacyDashboardRenderedFrames(t *testing.T) {
 	if !reflect.DeepEqual(current.hosts, before) || current.usage.accounts[0].Label != "private-account-1" {
 		t.Fatal("dashboard render mutated source data")
 	}
-	if current.visibleSessionTargets()[dashboardSessionTarget{current.hosts[0].Host.ID, "7K3D"}].HostAlias != privateHost+"-1" {
+	if current.visibleSessionTargets()[dashboardSessionTarget{current.hosts[0].Host.ID, "7K3D"}].HostID != current.hosts[0].Host.ID {
 		t.Fatal("dashboard inspection target was masked")
 	}
 	plain := current
@@ -170,7 +170,7 @@ func TestPrivacyDashboardRenderedFrames(t *testing.T) {
 
 func TestPrivacyInputOverridesEnvironment(t *testing.T) {
 	t.Setenv("MESH_PRIVACY", "true")
-	input := cli.PickerInput{Hosts: []cli.HostSessions{{Host: cli.HostRecord{Alias: privateHost}}}}
+	input := cli.PickerInput{Hosts: []cli.HostSessions{{Host: cli.HostRecord{MachineName: privateHost}}}}
 	current := newPickerModel(context.Background(), input, pickerTestNow)
 	if !strings.Contains(current.View().Content, privateHost) {
 		t.Fatal("nil input privacy was overridden by environment")
@@ -229,9 +229,9 @@ func TestPrivacyDashboardRestartNotice(t *testing.T) {
 
 func TestPrivacyMetadataFragmentsRetainLabels(t *testing.T) {
 	current := privacyPickerFixture()
-	current.hosts[0].alias = "private-owner@" + privateHost
+	current.hosts[0].machineName = "private-owner@" + privateHost
 	current.enterSessions(0)
-	current.inspection = inspectionState{kind: inspectionReady, hasValue: true, target: inspectionTarget{current.hosts[0].alias, "7K3D"}, value: cli.SessionInspection{
+	current.inspection = inspectionState{kind: inspectionReady, hasValue: true, target: inspectionTarget{current.hosts[0].machineName, "7K3D"}, value: cli.SessionInspection{
 		CurrentDirectory:  privatePath,
 		TerminalTitle:     privateTitle + " " + privatePath + " 12345678-1234-1234-1234-123456789abc",
 		ForegroundCommand: "/usr/bin/bash secret-argument", Preview: []string{privateScreen},
@@ -277,7 +277,7 @@ func TestPrivacyPickerActionErrorNotice(t *testing.T) {
 			current.privacy = nil
 		}
 		current.enterSessions(0)
-		target := sessionActionTarget{hostAlias: privateHost, sessionID: "7K3D"}
+		target := sessionActionTarget{hostID: privateHost, sessionID: "7K3D"}
 		current.sessionAction = sessionActionState{target: target, action: cli.PickerKillSession, phase: sessionActionRunning, generation: 1}
 		current, _ = current.applySessionAction(sessionActionResultMsg{target: target, action: cli.PickerKillSession, generation: 1, err: errors.New(secret)})
 		frame := ansi.Strip(current.View().Content)
@@ -288,7 +288,7 @@ func TestPrivacyPickerActionErrorNotice(t *testing.T) {
 			t.Fatalf("enabled=%v: error policy incorrect: %s", enabled, frame)
 		}
 		if enabled && !strings.Contains(frame, "error-") {
-			t.Fatalf("opaque error alias missing: %s", frame)
+			t.Fatalf("opaque error machineName missing: %s", frame)
 		}
 	}
 }
@@ -296,12 +296,12 @@ func TestPrivacyPickerActionErrorNotice(t *testing.T) {
 func TestPrivacyWindowForgetErrorNotice(t *testing.T) {
 	const secret = "arbitrary-private-provider-error"
 	for _, enabled := range []bool{false, true} {
-		input := cli.WindowInput{HostID: "real-host-id", HostAlias: privateHost, Sessions: []protocol.SessionInfo{{ID: "7K3D", State: "detached", Command: []string{"bash"}}}}
+		input := cli.WindowInput{MachineName: privateHost, HostID: "real-host-id", Sessions: []protocol.SessionInfo{{ID: "7K3D", State: "detached", Command: []string{"bash"}}}}
 		if enabled {
 			input.Privacy = privacy.New()
 		}
 		current := newWindowModel(context.Background(), input, pickerTestNow)
-		target := sessionActionTarget{hostAlias: privateHost, sessionID: "7K3D"}
+		target := sessionActionTarget{hostID: privateHost, sessionID: "7K3D"}
 		current.picker.sessionAction = sessionActionState{target: target, action: cli.PickerRemoveSession, phase: sessionActionRunning, generation: 1}
 		updated, _ := current.applyForget(sessionActionResultMsg{target: target, action: cli.PickerRemoveSession, generation: 1, err: errors.New(secret)})
 		frame := ansi.Strip(updated.(windowModel).View().Content)
@@ -312,7 +312,29 @@ func TestPrivacyWindowForgetErrorNotice(t *testing.T) {
 			t.Fatalf("enabled=%v: error policy incorrect: %s", enabled, frame)
 		}
 		if enabled && !strings.Contains(frame, "error-") {
-			t.Fatalf("opaque error alias missing: %s", frame)
+			t.Fatalf("opaque error machineName missing: %s", frame)
+		}
+	}
+}
+
+func TestPrivateNamingFramesMaskUnknownAndConflictingExactIDs(t *testing.T) {
+	for _, conflict := range []bool{false, true} {
+		current := newDashboard(cli.DashboardInput{Privacy: privacy.New(), Hosts: []cli.DashboardHost{{ID: "private-owner-exact-id", MachineName: "", NameSuffix: "exact-id", NameConflict: conflict}}}, pickerTestNow)
+		if conflict {
+			current.hosts[0].Host.MachineName = "private-owner-name"
+		}
+		for _, size := range [][2]int{{80, 24}, {160, 48}} {
+			updated, _ := current.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+			current = updated.(dashboardModel)
+			frame := current.View().Content
+			for _, secret := range []string{"private-owner-exact-id", "exact-id"} {
+				if strings.Contains(frame, secret) {
+					t.Fatalf("identity presentation bypasses privacy: %s", ansi.Strip(frame))
+				}
+			}
+			if current.hosts[0].Host.ID != "private-owner-exact-id" {
+				t.Fatal("privacy changed real owner identity")
+			}
 		}
 	}
 }

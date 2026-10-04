@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/shaul/mesh/internal/machinename"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 func gcRow(id, state string, detachedAgo, quietAgo time.Duration, agent bool) protocol.SessionInfo {
 	now := commandTestTime
 	row := protocol.SessionInfo{
-		ID: id, HostID: "host-id", Command: []string{"bash"}, Cwd: "/work", State: state,
+		ID: id, HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", Command: []string{"bash"}, Cwd: "/work", State: state,
 		CreatedAt: now.Add(-72 * time.Hour), MemoryBytes: 100 << 20,
 		Recovery: &recovery.Record{LastOutputAt: now.Add(-quietAgo)},
 	}
@@ -67,9 +68,9 @@ func TestPlanGCSelectsIdleDetachedSessions(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			policy := gcPolicy{now: commandTestTime, idle: idle, shells: test.shells}
 			if test.containing {
-				policy.containing = []protocol.SessionIdentity{{HostID: "other-host", SessionID: "M1M1"}, {HostID: "host-id", SessionID: test.row.ID}}
+				policy.containing = []protocol.SessionIdentity{{HostID: "other-host", SessionID: "M1M1"}, {HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: test.row.ID}}
 			}
-			entries := planGC(policy, []HostSessions{{Host: HostRecord{Alias: "pc", ID: "host-id"}, Sessions: []protocol.SessionInfo{test.row}}})
+			entries := planGC(policy, []HostSessions{{Host: HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}, Sessions: []protocol.SessionInfo{test.row}}})
 			if test.want == "" {
 				if len(entries) != 0 {
 					t.Fatalf("planned %#v, want the session left alone", entries)
@@ -90,9 +91,9 @@ func TestPlanGCSkipsStaleHostsAndDuplicateEntries(t *testing.T) {
 	row := gcRow("A5A5", worker.StateDetached, 7*time.Hour, 8*time.Hour, true)
 	policy := gcPolicy{now: commandTestTime, idle: 6 * time.Hour}
 	entries := planGC(policy, []HostSessions{
-		{Local: true, Host: HostRecord{Alias: localHostAlias}, Sessions: []protocol.SessionInfo{row}},
-		{Host: HostRecord{Alias: "self", ID: "host-id"}, Sessions: []protocol.SessionInfo{row}},
-		{Host: HostRecord{Alias: "offline", ID: "other"}, Stale: true, Sessions: []protocol.SessionInfo{{ID: "B1B1", HostID: "other", State: worker.StateDetached, CreatedAt: commandTestTime.Add(-72 * time.Hour)}}},
+		{Local: true, Host: HostRecord{MachineName: localHostLabel(t.Context())}, Sessions: []protocol.SessionInfo{row}},
+		{Host: HostRecord{MachineName: "self", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}, Sessions: []protocol.SessionInfo{row}},
+		{Host: HostRecord{MachineName: "offline", ID: "other"}, Stale: true, Sessions: []protocol.SessionInfo{{ID: "B1B1", HostID: "other", State: worker.StateDetached, CreatedAt: commandTestTime.Add(-72 * time.Hour)}}},
 	})
 	if len(entries) != 1 || !entries[0].local {
 		t.Fatalf("plan = %#v, want one local entry", entries)
@@ -167,8 +168,8 @@ func TestGCRechecksAShellBeforeKillingIt(t *testing.T) {
 
 func TestReclaimCommandsReserveAliases(t *testing.T) {
 	for _, name := range []string{"gc", "hibernate"} {
-		if _, err := ValidateHostAlias(name); err == nil {
-			t.Fatalf("host alias %q would be shadowed by its command", name)
+		if _, err := machinename.Normalize(name); err == nil {
+			t.Fatalf("machine name or exact host ID %q would be shadowed by its command", name)
 		}
 	}
 }

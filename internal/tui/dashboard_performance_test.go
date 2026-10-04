@@ -24,9 +24,11 @@ func dashboardPerformanceFixture() dashboardModel {
 	sessionCounts := []int{10, 3, 1, 2}
 	for i := range model.hosts {
 		host := &model.hosts[i]
-		host.Host.Alias = aliases[i]
+		host.Host.MachineName = aliases[i]
 		host.Connection = cli.StateReachable
 		host.LastReply = model.now
+		host.Host.NameVerified = true
+		host.NameObservedAt = model.now
 		host.PerformanceVersion = 1
 		host.CPU.MeasuredAt = model.now
 		host.RAM.MeasuredAt = model.now
@@ -141,8 +143,8 @@ func TestDashboardPerformanceDesignEvidence(t *testing.T) {
 	if !strings.Contains(rows[3+model.cardsHeight()], "Hosts 4 / 4") {
 		t.Fatalf("host grid changed table budget: %s", rows[3+model.cardsHeight()])
 	}
-	for _, alias := range []string{"pi", "vps"} {
-		host := dashboardFixtureHost(model, alias)
+	for _, machineName := range []string{"pi", "vps"} {
+		host := dashboardFixtureHost(model, machineName)
 		card := ansi.Strip(strings.Join(model.card(host, 79), "\n"))
 		if strings.Contains(card, "GPU") || strings.Contains(card, "BAT") || strings.Contains(card, "VRAM") {
 			t.Fatalf("absent hardware takes space: %s", card)
@@ -174,6 +176,8 @@ func TestDashboardPerformanceOfflineAndStaleFacts(t *testing.T) {
 	host := dashboardFixtureHost(model, "shauls-macbook-air")
 	host.Connection = cli.StateUnreachable
 	host.LastReply = model.now.Add(-32 * time.Minute)
+	host.Host.NameVerified = true
+	host.NameObservedAt = host.LastReply
 	view := ansi.Strip(strings.Join(model.card(host, 79), "\n"))
 	for _, hidden := range []string{"GPU", "BAT", "DISK", "NET", "RAM", "CPU", "VRAM", "stale 0s"} {
 		if strings.Contains(view, hidden) {

@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,7 +22,14 @@ func TestWatchPickerActualControlTransportNeverWakes(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			fixture := setupCommandTestHost(t)
 			auth, hostID := controlFixtureAuthentication(t)
-			fixture.host.MeshIdentity = hostID
+			fixture.host.ID, fixture.host.MeshIdentity = hostID, hostID
+			path, err := ConfigPath()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
 			var recoveryDials, wakes, lists, inspections, probes atomic.Int32
 			rejected := make(chan struct{}, 4)
 			serve := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +52,7 @@ func TestWatchPickerActualControlTransportNeverWakes(t *testing.T) {
 								id = "other-host"
 							}
 							response.Type = protocol.TypeHostInfoResult
-							response.Host = &protocol.HostInfo{ID: id, MeshIdentity: fixture.host.MeshIdentity}
+							response.Host = &protocol.HostInfo{ID: id, MeshIdentity: fixture.host.MeshIdentity, MachineName: fixture.host.MachineName, NameRevision: 1}
 						case protocol.TypeStateWatch:
 							probes.Add(1)
 							response.Type = protocol.TypeStateSnapshot
@@ -87,10 +95,10 @@ func TestWatchPickerActualControlTransportNeverWakes(t *testing.T) {
 			}))
 			defer serve.Close()
 			fixture.host.Endpoint = "ws" + strings.TrimPrefix(serve.URL, "http") + "/control/ws"
-			if err := SaveHost(fixture.host); err != nil {
+			if err := saveNamedTestHost(t, fixture.host); err != nil {
 				t.Fatal(err)
 			}
-			_, _, err := executeCommand(t, Dependencies{
+			_, _, err = executeCommand(t, Dependencies{
 				DialControl: dialControlHost,
 				DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
 					recoveryDials.Add(1)
@@ -109,7 +117,7 @@ func TestWatchPickerActualControlTransportNeverWakes(t *testing.T) {
 							}
 						}()
 					}
-					result, refreshErr := input.Refresh(refresh, fixture.host.Alias)
+					result, refreshErr := input.Refresh(refresh, fixture.host.ID)
 					if mode == "generic-error" || mode == "wrong-identity" {
 						if refreshErr == nil && !result.Sessions.Stale {
 							t.Error("refused host published fresh rows")
@@ -122,7 +130,7 @@ func TestWatchPickerActualControlTransportNeverWakes(t *testing.T) {
 					if result.Sessions.Sessions[0].MemoryBytes != 0 {
 						t.Fatal("expired session memory became fresh through duration overflow")
 					}
-					inspection, inspectErr := input.Inspect(refresh, PickerInspectRequest{HostAlias: fixture.host.Alias, SessionID: "7K3D", PreviewCols: 80, PreviewRows: 24})
+					inspection, inspectErr := input.Inspect(refresh, PickerInspectRequest{HostID: fixture.host.ID, SessionID: "7K3D", PreviewCols: 80, PreviewRows: 24})
 					if inspectErr != nil || len(inspection.Preview) != 1 || inspection.Preview[0] != "explicit preview" {
 						t.Fatalf("explicit preview = %+v, %v", inspection, inspectErr)
 					}

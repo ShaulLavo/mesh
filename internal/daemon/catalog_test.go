@@ -57,7 +57,6 @@ func TestNewCatalogValidatesConfig(t *testing.T) {
 		{name: "empty Mesh identity", mutate: func(cfg *CatalogConfig) { cfg.Host.MeshIdentity = " " }},
 		{name: "zero last seen time", mutate: func(cfg *CatalogConfig) { cfg.Host.LastSeenAt = time.Time{} }},
 		{name: "pre-epoch last seen time", mutate: func(cfg *CatalogConfig) { cfg.Host.LastSeenAt = time.UnixMilli(-1) }},
-		{name: "empty alias", mutate: func(cfg *CatalogConfig) { cfg.Host.Alias = &empty }},
 		{name: "empty Tailscale name", mutate: func(cfg *CatalogConfig) { cfg.Host.TailscaleName = &empty }},
 		{name: "nil store", mutate: func(cfg *CatalogConfig) { cfg.Store = nil }},
 		{name: "nil probe", mutate: func(cfg *CatalogConfig) { cfg.Probe = nil }},
@@ -615,11 +614,9 @@ func TestCatalogReconcileRefreshesHostObservationTime(t *testing.T) {
 }
 
 func catalogTestHost(lastSeenAt time.Time) storage.Host {
-	alias := "local"
 	tailscaleName := "host.example.ts.net"
 	return storage.Host{
 		ID:            "host-id",
-		Alias:         &alias,
 		MeshIdentity:  "mesh-identity",
 		TailscaleName: &tailscaleName,
 		LastSeenAt:    lastSeenAt,
@@ -668,9 +665,8 @@ func TestCatalogConstructorCopiesHostStrings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	*host.Alias = "changed"
 	*host.TailscaleName = "changed.example.ts.net"
-	if *catalog.host.Alias != "local" || *catalog.host.TailscaleName != "host.example.ts.net" {
+	if *catalog.host.TailscaleName != "host.example.ts.net" {
 		t.Fatalf("catalog host changed through caller pointers: %#v", catalog.host)
 	}
 }

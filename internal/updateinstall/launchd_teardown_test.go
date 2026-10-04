@@ -26,7 +26,10 @@ print)
         fi
         rm "$state/outgoing" "$state/loaded"
     fi
-    [ -f "$state/loaded" ]
+    if [ ! -f "$state/loaded" ]; then
+        printf 'Bad request.\nCould not find service "dev.fixture.mesh" in domain for user gui: 123\n' >&2
+        exit 113
+    fi
     ;;
 bootout)
     printf '2\n' >"$state/outgoing"

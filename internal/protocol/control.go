@@ -40,6 +40,8 @@ const (
 	TypeRemove             = "session.remove"
 	TypeLogged             = "session.logged"
 	TypeHostInfo           = "host.info"
+	TypeHostRename         = "host.rename"
+	TypeHostRenamed        = "host.renamed"
 	TypeServicePreview     = "service.preview"
 	TypeServicePreviewed   = "service.previewed"
 	TypeServiceUpsert      = "service.upsert"
@@ -148,8 +150,17 @@ func (s SessionInfo) LastActiveAt() time.Time {
 	return latest
 }
 
+// HostRename uses an exact destination and the caller's last observed revision.
+type HostRename struct {
+	TargetID         string `json:"targetId"`
+	MachineName      string `json:"machineName"`
+	ExpectedRevision uint64 `json:"expectedRevision"`
+}
+
 // HostInfo is the transport representation of one daemon's identity.
 type HostInfo struct {
+	MachineName            string         `json:"machineName,omitempty"`
+	NameRevision           uint64         `json:"nameRevision,omitempty"`
 	Build                  *release.Build `json:"build,omitempty"`
 	UpdateSupported        bool           `json:"updateSupported,omitempty"`
 	RecoverySupported      bool           `json:"recoverySupported,omitempty"`
@@ -302,6 +313,7 @@ type Control struct {
 	ShellPID             int                   `json:"shellPid,omitempty"`
 	ShellDirectory       string                `json:"shellDirectory,omitempty"`
 	ShellExecutable      string                `json:"shellExecutable,omitempty"`
+	Rename               *HostRename           `json:"rename,omitempty"`
 	Type                 string                `json:"type"`
 	RequestID            string                `json:"requestId,omitempty"`
 	SessionID            string                `json:"sessionId,omitempty"`

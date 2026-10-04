@@ -55,12 +55,19 @@ func configuredWakeEndpoints(context.Context) ([]string, error) {
 }
 
 func wakeTarget(host HostRecord) wakeclient.Target {
-	return wakeclient.Target{ID: host.ID, Name: host.Alias, Endpoint: host.Endpoint}
+	return wakeclient.Target{ID: host.ID, Name: host.MachineName, Endpoint: host.Endpoint}
 }
 
 func (a *application) wakeHost(ctx context.Context, host HostRecord, output io.Writer) error {
 	ctx, cancel := context.WithTimeout(ctx, wakeConnectTimeout)
 	defer cancel()
+	if host.targetName != "" {
+		conn, _, err := openVerifiedHostInfo(ctx, host, a.dependencies.DialControl)
+		if err != nil {
+			return err
+		}
+		_ = conn.Close()
+	}
 	if a.dependencies.Wake != nil {
 		return a.dependencies.Wake(ctx, host)
 	}
@@ -70,13 +77,13 @@ func (a *application) wakeHost(ctx context.Context, host HostRecord, output io.W
 	}
 	result, err := client.Wake(ctx, wakeTarget(host))
 	if err != nil {
-		return fmt.Errorf("wake host %s: %w", host.Alias, err)
+		return fmt.Errorf("wake host %s: %w", HostLabel(host), err)
 	}
 	if result.AlreadyOnline {
-		_, err = fmt.Fprintf(output, "%s is already online\n", a.privacy.Value("host", host.Alias))
+		_, err = fmt.Fprintf(output, "%s is already online\n", a.privacy.Value("host", HostLabel(host)))
 		return err
 	}
-	_, err = fmt.Fprintf(output, "wake packet for %s sent by %s\n", a.privacy.Value("host", host.Alias), a.privacy.Value("host", result.Sender))
+	_, err = fmt.Fprintf(output, "wake packet for %s sent by %s\n", a.privacy.Value("host", HostLabel(host)), a.privacy.Value("host", result.Sender))
 	return err
 }
 

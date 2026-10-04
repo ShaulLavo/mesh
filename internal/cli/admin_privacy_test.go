@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -25,7 +24,7 @@ func TestPrivateGCPlanPreservesAuthoritativeEntries(t *testing.T) {
 	row.Command = []string{"/home/owner/bin/bash", "-c", "echo secret-argument"}
 	row.Label = "dev-route owner@machine"
 	row.Recovery.Title = "Debug frontend /home/owner/private-project"
-	entries := []gcEntry{{host: HostRecord{Alias: "build-box owner@machine"}, row: row, idle: 8 * time.Hour, action: gcLeave, notes: []string{row.Label, "plain shell"}}}
+	entries := []gcEntry{{host: HostRecord{MachineName: "build-box owner@machine"}, row: row, idle: 8 * time.Hour, action: gcLeave, notes: []string{row.Label, "plain shell"}}}
 	before, err := json.Marshal(entries[0].row)
 	if err != nil {
 		t.Fatal(err)
@@ -54,26 +53,25 @@ func TestPrivateGCPlanPreservesAuthoritativeEntries(t *testing.T) {
 	}
 }
 
-func TestPrivateRenameUsesRealAliasesForControl(t *testing.T) {
-	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
-	t.Setenv("MESH_PRIVACY", "false")
-	id := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
-	if err := SaveHost(HostRecord{Alias: "private-old", ID: id, MeshIdentity: id, Endpoint: "ws://127.0.0.1:7337/mesh"}); err != nil {
+func TestPrivateRenameUsesExactOwnerIdentityForControl(t *testing.T) {
+	f := namedDestination(t)
+	f.host.MachineName, f.host.NameRevision = "destination", 1
+	if err := saveNamedTestHost(t, f.host); err != nil {
 		t.Fatal(err)
 	}
-	command := NewCommand(Dependencies{})
+	command := NewCommand(Dependencies{DialControl: dialControlHost})
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetErr(&output)
-	command.SetArgs([]string{"--privacy", "rename", "private-old", "private-new"})
+	command.SetArgs([]string{"--privacy", "rename", "destination", "private-new"})
 	if err := command.ExecuteContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if output.String() != "renamed private-old to private-new\n" {
+	if !strings.Contains(output.String(), "to private-new (revision 2)") || strings.Contains(output.String(), f.host.ID) {
 		t.Fatalf("rename display = %s", &output)
 	}
 	hosts, err := LoadHosts()
-	if err != nil || len(hosts) != 1 || hosts[0].Alias != "private-new" || hosts[0].ID != id {
+	if err != nil || len(hosts) != 1 || hosts[0].MachineName != "private-new" || hosts[0].ID != f.host.ID {
 		t.Fatalf("rename control values = %#v, %v", hosts, err)
 	}
 }
@@ -193,7 +191,7 @@ func TestPrivateAgentDoctorMasksSettingsPathAndErrors(t *testing.T) {
 
 func TestPrivateUpdateHumanDisplayLeavesMachineJSONRaw(t *testing.T) {
 	mask := privacy.New()
-	run := update.Run{ID: "12345678-1234-1234-1234-123456789abc", Release: release.Manifest{Version: "v0.1.52"}, Problem: "private-freeform-problem", Targets: []update.Target{{Host: update.Host{Alias: "build-box owner@machine"}, State: update.Updated, Problem: "private-target-problem"}}}
+	run := update.Run{ID: "12345678-1234-1234-1234-123456789abc", Release: release.Manifest{Version: "v0.1.52"}, Problem: "private-freeform-problem", Targets: []update.Target{{Host: update.Host{MachineName: "build-box owner@machine"}, State: update.Updated, Problem: "private-target-problem"}}}
 	preview := updatePreview{Fleet: update.Fleet{Name: "development"}, Release: run.Release, Targets: run.Targets, OutsideFleet: []string{"offline-box", "100.64.0.9"}}
 	var output bytes.Buffer
 	if err := printUpdatePreview(&output, preview, false, false, mask); err != nil {

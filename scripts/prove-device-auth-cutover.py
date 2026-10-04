@@ -267,7 +267,9 @@ sys.exit(data["status"])
         unit = labels[label]
         process = self.processes.get(unit)
         if action == "print":
-            return (0, "fixture service running\n") if process and process.poll() is None else (1, "not loaded\n")
+            if process and process.poll() is None:
+                return 0, "fixture service running\n"
+            return 113, f'Bad request.\nCould not find service "{label}" in domain for user gui: {os.getuid()}\n'
         if action == "bootout":
             self.stop(unit)
         else:
@@ -534,7 +536,7 @@ try:
                 continue
             host.command("device", "approve", "--allow-root", "--", peer.id)
             host.command("update", "trust", "--", peer.id)
-            peers.append({"id": peer.id, "meshIdentity": peer.mesh_identity, "addresses": ["127.0.0.1"], "alias": peer.name, "endpoint": f"ws://127.0.0.1:{peer.port}/mesh"})
+            peers.append({"id": peer.id, "meshIdentity": peer.mesh_identity, "addresses": ["127.0.0.1"], "endpoint": f"ws://127.0.0.1:{peer.port}/mesh"})
         (host.config / "hosts.json").write_text(json.dumps({"version": 1, "hosts": peers}))
     for host in hosts:
         listing = host.command("ls").stdout
@@ -544,7 +546,7 @@ try:
     print("PASS 12 directed authenticated reconnects after explicit grants and pins", flush=True)
     for index, host in enumerate(hosts):
         peer = hosts[(index + 1) % len(hosts)]
-        terminal = Terminal([str(host.binary), peer.name, "-r"], host.environment, host.root, timeout=8)
+        terminal = Terminal([str(host.binary), peer.id, "-r"], host.environment, host.root, timeout=8)
         host.terminals.append(terminal)
         terminal.expect(PROMPT)
         start = len(terminal.drain())
@@ -554,7 +556,7 @@ try:
         host.terminals.remove(terminal)
     print("PASS all four original sessions reattach remotely with unchanged shell PIDs", flush=True)
     controller, destination = hosts[:2]
-    retained = Terminal([str(controller.binary), destination.name, "-r"], controller.environment, controller.root, timeout=8)
+    retained = Terminal([str(controller.binary), destination.id, "-r"], controller.environment, controller.root, timeout=8)
     controller.terminals.append(retained)
     retained.expect(PROMPT)
     # A reconnecting CLI may use the new grant. DialOnce probes keep the old socket
@@ -580,7 +582,7 @@ try:
     retained.close()
     controller.terminals.remove(retained)
     destination.command("device", "approve", "--allow-root", "--", controller.id)
-    fresh = Terminal([str(controller.binary), destination.name, "-r"], controller.environment, controller.root, timeout=8)
+    fresh = Terminal([str(controller.binary), destination.id, "-r"], controller.environment, controller.root, timeout=8)
     controller.terminals.append(fresh)
     fresh.expect(PROMPT)
     fresh.close()
@@ -590,7 +592,7 @@ try:
     coordinator = hosts[0]
     fleet_file = coordinator.root / "fleet.json"
     fleet_file.write_text(json.dumps({"version": 1, "name": "four-disposable-hosts", "revision": 1,
-        "members": [{"id": host.id, "alias": host.name, "endpoint":
+        "members": [{"id": host.id, "endpoint":
            "unix:" + str(host.state / "daemon.sock") if host is coordinator else f"ws://127.0.0.1:{host.port}/mesh",
             "platform": OLD_BUILD["platform"]} for host in hosts]}))
     coordinator.command("update", "--fleet", str(fleet_file), "--version", FLEET_BUILD["version"], "--yes", "--json", timeout=120)

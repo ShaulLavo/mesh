@@ -11,7 +11,7 @@ import (
 
 func TestDashboardLegacyMetricFeedExplainsUpgradeOnce(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	host := cli.DashboardHostView{Host: cli.DashboardHost{ID: "legacy", Alias: "mac"}, Connection: cli.StateReachable, LastReply: now, MetricsUnsupported: true}
+	host := cli.DashboardHostView{Host: cli.DashboardHost{ID: "legacy", MachineName: "mac"}, Connection: cli.StateReachable, LastReply: now, MetricsUnsupported: true}
 	host.CPU.State, host.RAM.State, host.Temperature.State, host.Uptime.State = "unsupported", "unsupported", "unsupported", "unsupported"
 	host.Sessions.ObservedAt, host.Services.ObservedAt = now, now
 	for _, size := range [][2]int{{160, 48}, {80, 24}} {

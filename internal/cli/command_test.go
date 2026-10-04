@@ -19,6 +19,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/spf13/cobra"
 
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
@@ -130,7 +131,7 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 		response.Type = protocol.TypeHostInfoResult
 		response.Host = &protocol.HostInfo{
 			ServiceHealthSupported: true, ID: c.host.host.ID, MeshIdentity: c.host.host.MeshIdentity, TailscaleName: c.host.host.TailscaleName,
-			PrivateName: "pc.mesh.shaulavo.dev", RecoverySupported: c.host.recoverTo != "",
+			MachineName: c.host.host.MachineName, NameRevision: 1, PrivateName: "pc.mesh.shaulavo.dev", RecoverySupported: c.host.recoverTo != "",
 		}
 	case protocol.TypeStateWatch:
 		response.Type = protocol.TypeError
@@ -454,7 +455,7 @@ func TestPublicServeConfirmationUsesRemoteFactsAndYesOnlySkipsPrompt(t *testing.
 	confirmations := 0
 	confirm := func(_ context.Context, confirmation PublicConfirmation) (bool, error) {
 		confirmations++
-		if confirmation.Host.Alias != "pc" || confirmation.Service.Target != "/home/alice/site" || confirmation.FileCount != 17 || confirmation.URL != "https://blog.shaulavo.dev/blog" {
+		if confirmation.Host.MachineName != "pc" || confirmation.Service.Target != "/home/alice/site" || confirmation.FileCount != 17 || confirmation.URL != "https://blog.shaulavo.dev/blog" {
 			t.Fatalf("confirmation = %#v", confirmation)
 		}
 		return true, nil
@@ -510,8 +511,8 @@ func TestProtocolSessionTableLabelsEscapesAndBoundsLaunchDirectory(t *testing.T)
 	var output bytes.Buffer
 	malicious := "ATTACKER\tFAKE\nROW\x1b[31m\u202e" + strings.Repeat("x", 10_000)
 	err := writeProtocolSessions(&output, commandTestTime, []HostSessions{{
-		Host: HostRecord{Alias: "pc"}, Sessions: []protocol.SessionInfo{{
-			ID: "7K3D", HostID: "host-id", Command: []string{malicious}, Cwd: malicious, State: "running", CreatedAt: commandTestTime,
+		Host: HostRecord{MachineName: "pc"}, Sessions: []protocol.SessionInfo{{
+			ID: "7K3D", HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", Command: []string{malicious}, Cwd: malicious, State: "running", CreatedAt: commandTestTime,
 		}},
 	}})
 	if err != nil {
@@ -571,7 +572,7 @@ func TestTerminalPublicConfirmationCancelsWithoutLeakingARead(t *testing.T) {
 	}
 	defer master.Close()   //nolint:errcheck // test resource cleanup
 	defer terminal.Close() //nolint:errcheck // test resource cleanup
-	confirmation := PublicConfirmation{Host: HostRecord{Alias: "pc"}, Service: protocol.ServiceInfo{Kind: "proxy", Target: "3000"}, URL: "https://app.shaulavo.dev/api"}
+	confirmation := PublicConfirmation{Host: HostRecord{MachineName: "pc"}, Service: protocol.ServiceInfo{Kind: "proxy", Target: "3000"}, URL: "https://app.shaulavo.dev/api"}
 	for iteration := 0; iteration < 8; iteration++ {
 		output := newPromptTestWriter()
 		confirm := terminalPublicConfirmation(terminal, output)
@@ -650,10 +651,10 @@ func TestUnserveRefusesAmbiguityAndHostFlagSelectsLiveOwner(t *testing.T) {
 	pc := setupCommandTestHost(t)
 	pc.services = []protocol.ServiceInfo{{Name: "blog", Kind: "proxy", Target: "3000", Healthy: true}}
 	pi := &commandTestHost{host: HostRecord{
-		Alias: "pi", ID: "pi-id", MeshIdentity: "pi-key", TailscaleName: "pi.example.ts.net",
+		MachineName: "pi", ID: "TtDmx0kB31OzmXgw0xIAH-XcG1uwTVZhge6sbvluolc", MeshIdentity: "TtDmx0kB31OzmXgw0xIAH-XcG1uwTVZhge6sbvluolc", TailscaleName: "pi.example.ts.net",
 		Addresses: []string{"100.64.0.3"}, Endpoint: "ws://100.64.0.3:7777/mesh",
 	}, services: []protocol.ServiceInfo{{Name: "blog", Kind: "proxy", Target: "4000", Healthy: true}}}
-	if err := SaveHost(pi.host); err != nil {
+	if err := saveNamedTestHost(t, pi.host); err != nil {
 		t.Fatal(err)
 	}
 	dial := func(ctx context.Context, host HostRecord) (transport.Conn, error) {
@@ -678,10 +679,10 @@ func TestUnserveRequiresHostWhenAnotherOwnerCannotBeQueried(t *testing.T) {
 	pc := setupCommandTestHost(t)
 	pc.services = []protocol.ServiceInfo{{Name: "blog", Kind: "proxy", Target: "3000", Healthy: true}}
 	pi := HostRecord{
-		Alias: "pi", ID: "pi-id", MeshIdentity: "pi-key", TailscaleName: "pi.example.ts.net",
+		MachineName: "pi", ID: "TtDmx0kB31OzmXgw0xIAH-XcG1uwTVZhge6sbvluolc", MeshIdentity: "TtDmx0kB31OzmXgw0xIAH-XcG1uwTVZhge6sbvluolc", TailscaleName: "pi.example.ts.net",
 		Addresses: []string{"100.64.0.3"}, Endpoint: "ws://100.64.0.3:7777/mesh",
 	}
-	if err := SaveHost(pi); err != nil {
+	if err := saveNamedTestHost(t, pi); err != nil {
 		t.Fatal(err)
 	}
 	dial := func(ctx context.Context, host HostRecord) (transport.Conn, error) {
@@ -702,11 +703,11 @@ func TestUnserveRequiresHostWhenAnotherOwnerCannotBeQueried(t *testing.T) {
 }
 
 func TestUnserveDoesNotClaimExplicitOfflineHostLacksRoute(t *testing.T) {
-	setupCommandTestHost(t)
+	host := setupCommandTestHost(t)
 	_, _, err := executeCommand(t, Dependencies{DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
 		return nil, errors.New("offline")
 	}}, "unserve", "/blog", "--host", "pc", "--timeout", "20ms")
-	if err == nil || !strings.Contains(err.Error(), "host pc is unavailable") {
+	if err == nil || !strings.Contains(err.Error(), "host "+host.host.ID+" is unavailable") {
 		t.Fatalf("explicit offline host error = %v", err)
 	}
 }
@@ -737,36 +738,36 @@ func TestAddSavesVerifiedHostAndReportsConvergedRerun(t *testing.T) {
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	bootstrapCalls := 0
 	bootstrapHost := HostRecord{
-		ID: "host-id", MeshIdentity: "mesh-identity", TailscaleName: "pc.example.ts.net",
+		MachineName: "pc", NameRevision: 1, ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", TailscaleName: "pc.example.ts.net",
 		Addresses: []string{"100.64.0.2"}, Endpoint: "ws://100.64.0.2:7337/mesh",
 	}
 	bootstrap := func(_ context.Context, request AddRequest) (BootstrapResult, error) {
 		bootstrapCalls++
-		if request.Target != "alice@pc.example.ts.net" || request.Alias != "pc" {
+		if request.Target != "alice@pc.example.ts.net" {
 			t.Fatalf("add request = %#v", request)
 		}
-		return BootstrapResult{Host: bootstrapHost, AlreadyConfigured: bootstrapCalls > 1}, nil
+		return BootstrapResult{AuthenticatedIdentity: bootstrapHost.MeshIdentity, Host: bootstrapHost, AlreadyConfigured: bootstrapCalls > 1}, nil
 	}
 
 	stdout, _, err := executeCommand(t, Dependencies{Bootstrap: bootstrap}, "add", "alice@pc.example.ts.net")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "added pc (host-id)") {
+	if !strings.Contains(stdout, "added pc (khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE)") {
 		t.Fatalf("first add output = %q", stdout)
 	}
 	stdout, _, err = executeCommand(t, Dependencies{Bootstrap: bootstrap}, "add", "alice@pc.example.ts.net")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "pc was already up to date (host-id)") {
+	if !strings.Contains(stdout, "pc was already up to date (khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE)") {
 		t.Fatalf("second add output = %q", stdout)
 	}
 	hosts, err := LoadHosts()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hosts) != 1 || hosts[0].Alias != "pc" || hosts[0].Endpoint != bootstrapHost.Endpoint {
+	if len(hosts) != 1 || hosts[0].MachineName != "pc" || hosts[0].Endpoint != bootstrapHost.Endpoint {
 		t.Fatalf("saved hosts = %#v", hosts)
 	}
 }
@@ -776,16 +777,16 @@ func TestAddPassesTailscaleProvisioningFlagsToBootstrap(t *testing.T) {
 	called := false
 	bootstrap := func(_ context.Context, request AddRequest) (BootstrapResult, error) {
 		called = true
-		if request.Target != "alice@pi" || request.Alias != "garden" || request.TailscaleAuthKeyFile != "./tailnet.key" || !request.Yes {
+		if request.Target != "alice@pi" || request.TailscaleAuthKeyFile != "./tailnet.key" || !request.Yes {
 			t.Fatalf("add request = %#v", request)
 		}
-		return BootstrapResult{Host: HostRecord{
-			ID: "host-id", MeshIdentity: "mesh-identity", TailscaleName: "pi.example.ts.net",
+		return BootstrapResult{AuthenticatedIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", Host: HostRecord{
+			MachineName: "garden", NameRevision: 1, ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", TailscaleName: "pi.example.ts.net",
 			Addresses: []string{"100.64.0.8"}, Endpoint: "ws://100.64.0.8:7337/mesh",
 		}}, nil
 	}
 	_, _, err := executeCommand(t, Dependencies{Bootstrap: bootstrap},
-		"add", "alice@pi", "--alias", "garden", "--tailscale-auth-key-file", "./tailnet.key", "--yes")
+		"add", "alice@pi", "--tailscale-auth-key-file", "./tailnet.key", "--yes")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -814,7 +815,7 @@ func TestPickerWakeRefreshesAndRejectsImpossibleSelections(t *testing.T) {
 	for _, invalid := range []PickerSelection{
 		{SessionID: "7K3D", New: true},
 		{SessionID: "7K3D", Wake: true},
-		{HostAlias: "pc", New: true, Wake: true},
+		{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", New: true, Wake: true},
 		{Wake: true},
 	} {
 		if err := validatePickerSelection(invalid); err == nil {
@@ -830,11 +831,11 @@ func TestPickerWakeRefreshesAndRejectsImpossibleSelections(t *testing.T) {
 		},
 		Picker: func(_ context.Context, input PickerInput) (PickerSelection, error) {
 			pickerCalls++
-			if len(input.Hosts) != 2 || !input.Hosts[0].Local || input.Hosts[0].Host.Alias != localHostAlias || input.Hosts[1].Host.Alias != "pc" {
+			if len(input.Hosts) != 2 || !input.Hosts[0].Local || input.Hosts[0].Host.MachineName != localHostID() || input.Hosts[1].Host.MachineName != "pc" {
 				t.Fatalf("picker input = %#v", input)
 			}
 			if pickerCalls == 1 {
-				return PickerSelection{HostAlias: "pc", Wake: true}, nil
+				return PickerSelection{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", Wake: true}, nil
 			}
 			return PickerSelection{}, nil
 		},
@@ -875,10 +876,10 @@ func TestPickerSessionActionsTargetOneHostWithoutReopening(t *testing.T) {
 			pc := setupCommandTestHost(t)
 			pc.sessionState = test.state
 			pi := &commandTestHost{host: HostRecord{
-				Alias: "pi", ID: "pi-id", MeshIdentity: "pi-key", TailscaleName: "pi.example.ts.net",
+				MachineName: "pi", ID: "TtDmx0kB31OzmXgw0xIAH-XcG1uwTVZhge6sbvluolc", MeshIdentity: "TtDmx0kB31OzmXgw0xIAH-XcG1uwTVZhge6sbvluolc", TailscaleName: "pi.example.ts.net",
 				Addresses: []string{"100.64.0.3"}, Endpoint: "ws://100.64.0.3:7777/mesh",
 			}, sessionState: test.state}
-			if err := SaveHost(pi.host); err != nil {
+			if err := saveNamedTestHost(t, pi.host); err != nil {
 				t.Fatal(err)
 			}
 			dial := func(ctx context.Context, record HostRecord) (transport.Conn, error) {
@@ -899,7 +900,7 @@ func TestPickerSessionActionsTargetOneHostWithoutReopening(t *testing.T) {
 						t.Fatal("picker received no in-panel session action")
 					}
 					err := input.Action(ctx, PickerSessionActionRequest{
-						HostAlias: "pc", SessionID: "7K3D", Action: test.action,
+						HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D", Action: test.action,
 					})
 					return PickerSelection{}, err
 				},
@@ -927,7 +928,7 @@ func TestPickerSessionActionsTargetOneHostWithoutReopening(t *testing.T) {
 }
 
 func TestPickerSessionActionRejectsInvalidBoundaryInputBeforeDialing(t *testing.T) {
-	host := HostRecord{Alias: "pc", ID: "host-id"}
+	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
 	dials := 0
 	app := &application{dependencies: Dependencies{DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
 		dials++
@@ -938,10 +939,10 @@ func TestPickerSessionActionRejectsInvalidBoundaryInputBeforeDialing(t *testing.
 		ctx     context.Context
 		request PickerSessionActionRequest
 	}{
-		{name: "nil context", request: PickerSessionActionRequest{HostAlias: "pc", SessionID: "7K3D", Action: PickerKillSession}},
-		{name: "unknown host", ctx: context.Background(), request: PickerSessionActionRequest{HostAlias: "pi", SessionID: "7K3D", Action: PickerKillSession}},
-		{name: "invalid session", ctx: context.Background(), request: PickerSessionActionRequest{HostAlias: "pc", SessionID: "bad", Action: PickerKillSession}},
-		{name: "unknown action", ctx: context.Background(), request: PickerSessionActionRequest{HostAlias: "pc", SessionID: "7K3D", Action: PickerSessionAction(99)}},
+		{name: "nil context", request: PickerSessionActionRequest{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D", Action: PickerKillSession}},
+		{name: "unknown host", ctx: context.Background(), request: PickerSessionActionRequest{HostID: "pi", SessionID: "7K3D", Action: PickerKillSession}},
+		{name: "invalid session", ctx: context.Background(), request: PickerSessionActionRequest{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "bad", Action: PickerKillSession}},
+		{name: "unknown action", ctx: context.Background(), request: PickerSessionActionRequest{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D", Action: PickerSessionAction(99)}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := app.pickerSessionAction(test.ctx, []HostRecord{host}, test.request); err == nil {
@@ -970,7 +971,7 @@ func TestPickerReceivesLiveSessionInspector(t *testing.T) {
 			}
 			var inspectErr error
 			got, inspectErr = input.Inspect(ctx, PickerInspectRequest{
-				HostAlias: "pc", SessionID: "7K3D", PreviewCols: 73, PreviewRows: 5,
+				HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D", PreviewCols: 73, PreviewRows: 5,
 			})
 			return PickerSelection{}, inspectErr
 		},
@@ -1005,16 +1006,16 @@ func TestPickerKeepsRemoteContainingScreensUnavailableWithoutWaitingForNetwork(t
 	inner := setupCommandTestHost(t)
 	inner.sessionID = "7K3D"
 	middle := &commandTestHost{host: HostRecord{
-		Alias: "pi", ID: "middle-host", MeshIdentity: "middle-key", TailscaleName: "pi.example.ts.net",
+		MachineName: "pi", ID: "gHMarzbZE9_xvJompBvv7awovxmWmOvN4FMEqcHAvGg", MeshIdentity: "gHMarzbZE9_xvJompBvv7awovxmWmOvN4FMEqcHAvGg", TailscaleName: "pi.example.ts.net",
 		Addresses: []string{"100.64.0.3"}, Endpoint: "ws://100.64.0.3:7777/mesh",
 	}, sessionID: "91AZ"}
 	outer := &commandTestHost{host: HostRecord{
-		Alias: "mac", ID: "outer-host", MeshIdentity: "outer-key", TailscaleName: "mac.example.ts.net",
+		MachineName: "mac", ID: "MToonnAmc5k7lU1H_66-UANQVx_NfncGcpmFsRdRNt0", MeshIdentity: "MToonnAmc5k7lU1H_66-UANQVx_NfncGcpmFsRdRNt0", TailscaleName: "mac.example.ts.net",
 		Addresses: []string{"100.64.0.4"}, Endpoint: "ws://100.64.0.4:7777/mesh",
 	}, sessionID: "Q8ME"}
 	hosts := []*commandTestHost{inner, middle, outer}
 	for _, current := range hosts[1:] {
-		if err := SaveHost(current.host); err != nil {
+		if err := saveNamedTestHost(t, current.host); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1094,7 +1095,7 @@ func TestPickerNeverCapturesContainingSessionAfterItsFirstFrame(t *testing.T) {
 				t.Fatal("picker captured its own already-rendered screen on a later pass")
 			}
 			if pickerCalls == 1 {
-				return PickerSelection{HostAlias: "pc", Wake: true}, nil
+				return PickerSelection{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", Wake: true}, nil
 			}
 			return PickerSelection{}, nil
 		},
@@ -1115,10 +1116,10 @@ func TestPickerReceivesLiveCatalogRefresh(t *testing.T) {
 	host := setupCommandTestHost(t)
 	host.services = []protocol.ServiceInfo{{Name: "blog", Kind: "proxy", Target: "3000", Healthy: true}}
 	pi := &commandTestHost{host: HostRecord{
-		Alias: "pi", ID: "pi-id", MeshIdentity: "pi-key", TailscaleName: "pi.example.ts.net",
+		MachineName: "pi", ID: "TtDmx0kB31OzmXgw0xIAH-XcG1uwTVZhge6sbvluolc", MeshIdentity: "TtDmx0kB31OzmXgw0xIAH-XcG1uwTVZhge6sbvluolc", TailscaleName: "pi.example.ts.net",
 		Addresses: []string{"100.64.0.3"}, Endpoint: "ws://100.64.0.3:7777/mesh",
 	}}
-	if err := SaveHost(pi.host); err != nil {
+	if err := saveNamedTestHost(t, pi.host); err != nil {
 		t.Fatal(err)
 	}
 	dial := func(ctx context.Context, record HostRecord) (transport.Conn, error) {
@@ -1144,14 +1145,14 @@ func TestPickerReceivesLiveCatalogRefresh(t *testing.T) {
 			}
 			host.sessionState = "detached"
 			var refreshErr error
-			refreshed, refreshErr = input.Refresh(ctx, "pc")
+			refreshed, refreshErr = input.Refresh(ctx, host.host.ID)
 			return PickerSelection{}, refreshErr
 		},
 	}, []string{}...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if refreshed.Sessions.Host.Alias != "pc" || refreshed.Sessions.Stale || len(refreshed.Sessions.Sessions) != 1 || refreshed.Sessions.Sessions[0].State != "detached" {
+	if refreshed.Sessions.Host.MachineName != "pc" || refreshed.Sessions.Stale || len(refreshed.Sessions.Sessions) != 1 || refreshed.Sessions.Sessions[0].State != "detached" {
 		t.Fatalf("refreshed catalog = %#v", refreshed)
 	}
 	if refreshed.Services == nil || refreshed.Services.Stale || len(refreshed.Services.Rows) != 1 ||
@@ -1174,14 +1175,14 @@ func TestPickerCanAttachASessionDiscoveredByLiveRefresh(t *testing.T) {
 		DialControl: host.dial,
 		Picker: func(ctx context.Context, input PickerInput) (PickerSelection, error) {
 			host.sessionID = "91AZ"
-			refreshed, err := input.Refresh(ctx, "pc")
+			refreshed, err := input.Refresh(ctx, host.host.ID)
 			if err != nil {
 				return PickerSelection{}, err
 			}
 			if len(refreshed.Sessions.Sessions) != 1 || refreshed.Sessions.Sessions[0].ID != "91AZ" {
 				t.Fatalf("refreshed sessions = %#v, want 91AZ", refreshed.Sessions.Sessions)
 			}
-			return PickerSelection{HostAlias: "pc", SessionID: "91AZ", TakeOver: true}, nil
+			return PickerSelection{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "91AZ", TakeOver: true}, nil
 		},
 	}, "--raw")
 	if err != nil {
@@ -1216,7 +1217,7 @@ func TestPickerAttachPreservesTheValidatedContainingPath(t *testing.T) {
 			return containing[:1]
 		},
 		Picker: func(context.Context, PickerInput) (PickerSelection, error) {
-			return PickerSelection{HostAlias: "pc", SessionID: "7K3D", TakeOver: true}, nil
+			return PickerSelection{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D", TakeOver: true}, nil
 		},
 	}, "--raw")
 	if err != nil {
@@ -1244,7 +1245,7 @@ func TestPickerRefusesAttachingToAContainingSessionBeforeDial(t *testing.T) {
 			return protocol.CloneSessionIdentities(containing)
 		},
 		Picker: func(context.Context, PickerInput) (PickerSelection, error) {
-			return PickerSelection{HostAlias: "pc", SessionID: "7K3D", TakeOver: true}, nil
+			return PickerSelection{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D", TakeOver: true}, nil
 		},
 	}, "--raw")
 	if err == nil || !strings.Contains(err.Error(), "already contains this terminal") {
@@ -1257,7 +1258,7 @@ func TestPickerRefusesAttachingToAContainingSessionBeforeDial(t *testing.T) {
 
 func TestAttachRefusesAContainingRemoteTargetWithoutDialingAnOldWorker(t *testing.T) {
 	dials := 0
-	host := HostRecord{ID: "host-a", Alias: "pc"}
+	host := HostRecord{ID: "host-a", MachineName: "pc"}
 	app := &application{dependencies: Dependencies{
 		DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
 			dials++
@@ -1304,7 +1305,7 @@ func TestPickerNewSessionPropagatesTheValidatedContainingPath(t *testing.T) {
 			return containing[:1]
 		},
 		Picker: func(context.Context, PickerInput) (PickerSelection, error) {
-			return PickerSelection{HostAlias: "pc", New: true}, nil
+			return PickerSelection{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", New: true}, nil
 		},
 	}, "--raw")
 	if err != nil {
@@ -1330,7 +1331,7 @@ func TestPickerReturnsBeforeRawAttachStarts(t *testing.T) {
 		DialHost: host.dial, DialControl: host.dial,
 		Picker: func(context.Context, PickerInput) (PickerSelection, error) {
 			pickerReturned = true
-			return PickerSelection{HostAlias: "pc", SessionID: "7K3D", TakeOver: true}, nil
+			return PickerSelection{HostID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", SessionID: "7K3D", TakeOver: true}, nil
 		},
 	}, "--raw")
 	if err != nil {
@@ -1346,10 +1347,10 @@ func setupCommandTestHost(t *testing.T) *commandTestHost {
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
 	host := &commandTestHost{host: HostRecord{
-		Alias: "pc", ID: "host-id", MeshIdentity: "host-key", TailscaleName: "pc.example.ts.net",
+		MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", TailscaleName: "pc.example.ts.net",
 		Addresses: []string{"100.64.0.2"}, Endpoint: "ws://100.64.0.2:7777/mesh",
 	}}
-	if err := SaveHost(host.host); err != nil {
+	if err := saveNamedTestHost(t, host.host); err != nil {
 		t.Fatal(err)
 	}
 	return host
@@ -1524,4 +1525,27 @@ func TestKillDoesNotRefuseOnAMissedLivenessProbe(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "already exited") {
 		t.Fatalf("kill on an exited session = %v, want refusal", err)
 	}
+}
+
+func saveNamedTestHost(t *testing.T, host HostRecord) error {
+	t.Helper()
+	if err := SaveHost(host); err != nil {
+		return err
+	}
+	if host.MachineName == "" {
+		return nil
+	}
+	path, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	revision := host.NameRevision
+	if revision == 0 {
+		revision = 1
+	}
+	_, err = machinename.RememberClaim(t.Context(), filepath.Dir(path), host.ID, machinename.Claim{ID: host.ID, MachineName: host.MachineName, Revision: revision})
+	if err != nil {
+		return fmt.Errorf("save fixture declaration: %w", err)
+	}
+	return nil
 }

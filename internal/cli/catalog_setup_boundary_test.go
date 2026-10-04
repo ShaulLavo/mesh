@@ -76,8 +76,8 @@ func TestListCatalogRejectsSetupExpiredDuringWakeCacheSettlement(t *testing.T) {
 			}
 			budget := HostQueryBudget{Setup: test.setup, Reply: time.Second}
 			rows, err := CollectHostSessions(t.Context(), []HostRecord{host}, budget,
-				func(ctx context.Context, host HostRecord, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
-					return listRemoteHost(ctx, host, dial, budget)
+				func(ctx context.Context, host *HostRecord, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
+					return listRemoteDeclaredHost(ctx, host, dial, budget)
 				}, cache)
 			if err != nil || len(rows) != 1 || observed == nil || !observed.hostInfo.Load() {
 				t.Fatal("native authenticated host.info control unavailable", err)
@@ -86,7 +86,7 @@ func TestListCatalogRejectsSetupExpiredDuringWakeCacheSettlement(t *testing.T) {
 				t.Fatal("catalog setup retained an open connection after return")
 			}
 			if !test.expired {
-				if rows[0].Stale || rows[0].Err != nil || len(rows[0].Sessions) != 1 || rows[0].Sessions[0].ID != "7K3D" || observed.lists.Load() != 1 {
+				if rows[0].Host.ID != host.ID || rows[0].Host.MachineName != "fixture" || rows[0].Host.NameRevision != 1 || !rows[0].Host.NameVerified || rows[0].Stale || rows[0].Err != nil || len(rows[0].Sessions) != 1 || rows[0].Sessions[0].ID != "7K3D" || observed.lists.Load() != 1 {
 					t.Fatal("healthy setup lost native catalog or retained connection", rows[0].Err)
 				}
 				t.Log("healthy retained transport returns native catalog despite best-effort wake cache contention")
@@ -97,6 +97,9 @@ func TestListCatalogRejectsSetupExpiredDuringWakeCacheSettlement(t *testing.T) {
 			}
 			if !rows[0].Stale || !errors.Is(rows[0].Err, context.DeadlineExceeded) || observed.lists.Load() != 0 {
 				t.Fatalf("expired setup admitted catalog: stale=%v deadline=%v list requests=%d", rows[0].Stale, errors.Is(rows[0].Err, context.DeadlineExceeded), observed.lists.Load())
+			}
+			if rows[0].Host.ID != host.ID || rows[0].Host.MachineName != host.MachineName || rows[0].Host.NameRevision != host.NameRevision || rows[0].Host.NameVerified != host.NameVerified {
+				t.Fatal("expired setup published a fresh destination declaration")
 			}
 			stored, err := cache.Load(t.Context(), host)
 			if err != nil {

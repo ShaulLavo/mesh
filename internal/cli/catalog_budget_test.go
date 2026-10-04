@@ -56,8 +56,8 @@ func TestCatalogDeadlineBoundsCacheSave(t *testing.T) {
 			}}
 			go func() {
 				defer close(finished)
-				rows, err := CollectHostSessions(context.Background(), []HostRecord{{Alias: "pc", ID: "pc"}}, HostQueryBudget{Reply: timeout},
-					func(context.Context, HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error) {
+				rows, err := CollectHostSessions(context.Background(), []HostRecord{{MachineName: "pc", ID: "pc"}}, HostQueryBudget{Reply: timeout},
+					func(context.Context, *HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error) {
 						return []protocol.SessionInfo{{ID: "LIVE"}}, nil
 					}, cache)
 				done <- catalogCollection{rows: rows, err: err}
@@ -90,13 +90,13 @@ func TestCatalogDeadlineBoundsCacheLoad(t *testing.T) {
 				}
 			}}
 			hosts := []HostRecord{
-				{Alias: "a", ID: "a"}, {Alias: "b", ID: "b"}, {Alias: "c", ID: "c"},
-				{Alias: "d", ID: "d"}, {Alias: "e", ID: "e"}, {Alias: "f", ID: "f"},
+				{MachineName: "a", ID: "a"}, {MachineName: "b", ID: "b"}, {MachineName: "c", ID: "c"},
+				{MachineName: "d", ID: "d"}, {MachineName: "e", ID: "e"}, {MachineName: "f", ID: "f"},
 			}
 			go func() {
 				defer close(finished)
 				rows, err := CollectHostSessions(context.Background(), hosts, HostQueryBudget{Reply: 40 * time.Millisecond},
-					func(ctx context.Context, _ HostRecord, _ HostQueryBudget) ([]protocol.SessionInfo, error) {
+					func(ctx context.Context, _ *HostRecord, _ HostQueryBudget) ([]protocol.SessionInfo, error) {
 						if waitForDeadline {
 							<-ctx.Done()
 							return nil, ctx.Err()
@@ -137,8 +137,8 @@ func TestCatalogParentCancellationJoinsCacheWork(t *testing.T) {
 			}
 			done := make(chan catalogCollection, 1)
 			go func() {
-				rows, err := CollectHostSessions(parent, []HostRecord{{Alias: "pc", ID: "pc"}}, HostQueryBudget{Reply: 2 * time.Second},
-					func(context.Context, HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error) {
+				rows, err := CollectHostSessions(parent, []HostRecord{{MachineName: "pc", ID: "pc"}}, HostQueryBudget{Reply: 2 * time.Second},
+					func(context.Context, *HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error) {
 						if write {
 							return nil, nil
 						}
@@ -181,8 +181,8 @@ func TestCatalogSuccessfulEmptyQueryDoesNotLoadStaleRows(t *testing.T) {
 			return cacheErr
 		},
 	}
-	rows, err := CollectHostSessions(context.Background(), []HostRecord{{Alias: "pc", ID: "pc"}}, HostQueryBudget{Reply: time.Second},
-		func(context.Context, HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error) { return nil, nil }, cache)
+	rows, err := CollectHostSessions(context.Background(), []HostRecord{{MachineName: "pc", ID: "pc"}}, HostQueryBudget{Reply: time.Second},
+		func(context.Context, *HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error) { return nil, nil }, cache)
 	if err != nil || len(rows) != 1 || rows[0].Stale || rows[0].Err != nil || len(rows[0].Sessions) != 0 || !errors.Is(rows[0].CacheErr, cacheErr) {
 		t.Fatalf("empty authoritative catalog = %#v, %v", rows, err)
 	}
@@ -201,8 +201,8 @@ func TestCatalogDeadlineAllowsFreshCacheReadBudget(t *testing.T) {
 		}
 		return []protocol.SessionInfo{{ID: "OLD1"}}, nil
 	}}
-	rows, err := CollectHostSessions(context.Background(), []HostRecord{{Alias: "pc", ID: "pc"}}, HostQueryBudget{Reply: 20 * time.Millisecond},
-		func(ctx context.Context, _ HostRecord, _ HostQueryBudget) ([]protocol.SessionInfo, error) {
+	rows, err := CollectHostSessions(context.Background(), []HostRecord{{MachineName: "pc", ID: "pc"}}, HostQueryBudget{Reply: 20 * time.Millisecond},
+		func(ctx context.Context, _ *HostRecord, _ HostQueryBudget) ([]protocol.SessionInfo, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}, cache)
@@ -221,8 +221,8 @@ func TestCatalogPhaseBudgetsBoundUncooperativeQuery(t *testing.T) {
 	}}
 	done := make(chan catalogCollection, 1)
 	go func() {
-		rows, err := CollectHostSessions(t.Context(), []HostRecord{{Alias: "fixture", ID: "fixture"}}, budget,
-			func(ctx context.Context, _ HostRecord, actual HostQueryBudget) ([]protocol.SessionInfo, error) {
+		rows, err := CollectHostSessions(t.Context(), []HostRecord{{MachineName: "fixture", ID: "fixture"}}, budget,
+			func(ctx context.Context, _ *HostRecord, actual HostQueryBudget) ([]protocol.SessionInfo, error) {
 				defer close(finished)
 				if actual != budget {
 					t.Error("collector changed phase budgets")

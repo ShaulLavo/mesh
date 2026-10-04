@@ -341,9 +341,6 @@ func validateCatalogConfig(cfg CatalogConfig) error {
 	if strings.TrimSpace(cfg.Host.MeshIdentity) == "" {
 		return fmt.Errorf("daemon: catalog host %s has an empty Mesh identity", cfg.Host.ID)
 	}
-	if cfg.Host.Alias != nil && *cfg.Host.Alias == "" {
-		return fmt.Errorf("daemon: catalog host %s has an empty alias", cfg.Host.ID)
-	}
 	if cfg.Host.TailscaleName != nil && *cfg.Host.TailscaleName == "" {
 		return fmt.Errorf("daemon: catalog host %s has an empty Tailscale name", cfg.Host.ID)
 	}
@@ -370,7 +367,6 @@ func validContext(ctx context.Context) error {
 }
 
 func cloneHost(host storage.Host) storage.Host {
-	host.Alias = cloneCatalogString(host.Alias)
 	host.TailscaleName = cloneCatalogString(host.TailscaleName)
 	return host
 }

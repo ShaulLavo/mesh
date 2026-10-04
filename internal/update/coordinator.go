@@ -22,8 +22,9 @@ type Operation struct {
 	RetryToken uint64 `json:"retryToken,omitempty"`
 }
 type Info struct {
-	Health       updateinstall.Health  `json:"health"`
-	Installation *updateinstall.Status `json:"installation,omitempty"`
+	AcceptsIdentityFleet bool                  `json:"acceptsIdentityFleet"`
+	Health               updateinstall.Health  `json:"health"`
+	Installation         *updateinstall.Status `json:"installation,omitempty"`
 }
 
 type Caller interface {

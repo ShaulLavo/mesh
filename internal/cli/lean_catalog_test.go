@@ -36,7 +36,7 @@ func TestLeanClientAcceptsFullCatalogFromOldDaemon(t *testing.T) {
 
 func TestSavedInspectionRejectsWrongOwnerAndOversizedPreview(t *testing.T) {
 	saved := recovery.Record{Version: recovery.Version, HostID: "host", SessionID: "7K3D", CheckpointAt: commandTestTime, Shell: "/bin/sh", ShellDirectory: "/work", DirectorySource: recovery.DirectoryShell, Command: []string{"sh"}, Lines: []string{"same preview"}}
-	host := HostRecord{ID: "host", Alias: "pc"}
+	host := HostRecord{ID: "host", MachineName: "pc"}
 	inspected, err := savedInspection(host, "7K3D", saved)
 	if err != nil || !slices.Equal(inspected.Recovery.Lines, saved.Lines) {
 		t.Fatalf("saved preview = %+v, %v", inspected, err)

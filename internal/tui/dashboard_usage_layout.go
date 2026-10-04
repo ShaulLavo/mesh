@@ -78,7 +78,7 @@ func (m dashboardModel) usageServiceHostWidth() int {
 			m.renderWork.serviceWidthVisits++
 		}
 		if len(entry.Services.Rows) > 0 {
-			hostWidth = max(hostWidth, ansi.StringWidth(entry.Host.Alias))
+			hostWidth = max(hostWidth, ansi.StringWidth(entry.Host.Label()))
 		}
 	}
 	return min(hostWidth, 11)
@@ -152,7 +152,7 @@ func (m dashboardModel) usageFooter() string {
 	frame := "updated " + m.now.Format("15:04:05")
 	for _, host := range m.hosts {
 		if host.Host.Local {
-			frame += " on " + safeText(host.Host.Alias)
+			frame += " on " + safeText(host.Host.Label())
 			break
 		}
 	}

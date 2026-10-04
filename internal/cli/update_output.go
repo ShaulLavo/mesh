@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
@@ -33,7 +34,7 @@ func printUpdatePreview(output io.Writer, preview updatePreview, structured, det
 	if _, err := fmt.Fprintf(output, "Mesh %s · commit %s\nRelease digest: %s\nFleet %s revision %d · %d machines\n", preview.Release.Version, preview.Release.Commit, preview.ReleaseDigest, SafeTerminalText(mask.Value("fleet", preview.Fleet.Name)), preview.Fleet.Revision, len(preview.Fleet.Members)); err != nil {
 		return err
 	}
-	if len(preview.Fleet.Members) == 1 && preview.Fleet.Members[0].Alias == updateLocalAlias {
+	if len(preview.Fleet.Members) == 1 && update.IsLocal(preview.Fleet.Members[0]) {
 		_, _ = fmt.Fprintln(output, "This machine only.")
 	}
 	if len(preview.OutsideFleet) > 0 {
@@ -68,7 +69,7 @@ func printUpdateTargets(output io.Writer, targets []update.Target, manifest rele
 	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
 	for _, target := range targets {
 		build := updateTargetBuildText(target)
-		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s%s\n", SafeTerminalText(mask.Value("host", target.Host.Alias)), SafeTerminalText(updateTargetLabel(target)), SafeTerminalText(mask.Text(build)), workerUpdateSummary(target.Workers, manifest)); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s%s\n", SafeTerminalText(mask.Value("host", target.Host.Label())), SafeTerminalText(updateTargetLabel(target)), SafeTerminalText(mask.Text(build)), workerUpdateSummary(target.Workers, manifest)); err != nil {
 			return err
 		}
 		if len(target.InterruptedWorkers) > 0 {
@@ -157,7 +158,7 @@ func observeUpdate(ctx context.Context, environment updateEnvironment, run updat
 	for !updateObservationSettled(run) {
 		select {
 		case <-ctx.Done():
-			if err := printUpdateRunMode(output.out, run, structured, output.details, output.privacy); err != nil {
+			if err := printDeclaredUpdateRun(ctx, output.out, run, structured, output.details, output.privacy); err != nil {
 				return err
 			}
 			return statusError{code: 2}
@@ -173,7 +174,7 @@ func observeUpdate(ctx context.Context, environment updateEnvironment, run updat
 			run = local
 		}
 	}
-	if err := printUpdateRunMode(output.out, run, structured, output.details, output.privacy); err != nil {
+	if err := printDeclaredUpdateRun(ctx, output.out, run, structured, output.details, output.privacy); err != nil {
 		return err
 	}
 	return updateExit(run.ExitCode())
@@ -212,6 +213,51 @@ func privateUpdateHosts(mask *privacy.Mask, hosts []string) string {
 		labels[i] = mask.Value("host", host)
 	}
 	return SafeTerminalText(strings.Join(labels, ", "))
+}
+
+func printDeclaredUpdateRun(ctx context.Context, output io.Writer, run update.Run, structured, details bool, masks ...*privacy.Mask) error {
+	if !structured {
+		targets, err := declaredUpdateTargets(ctx, run.Targets)
+		if err != nil {
+			return err
+		}
+		run.Targets = targets
+	}
+	return printUpdateRunMode(output, run, structured, details, masks...)
+}
+
+func declaredUpdateTargets(ctx context.Context, targets []update.Target) ([]update.Target, error) {
+	hosts, err := LoadHosts()
+	if err != nil {
+		return nil, err
+	}
+	stateDir, err := paths.StateDir()
+	if err != nil {
+		return nil, fmt.Errorf("locate updater naming state: %w", err)
+	}
+	local, err := localNameRecord(ctx, stateDir)
+	if err != nil {
+		return nil, err
+	}
+	known := withOwnerClaim(hosts, local)
+	ProjectHostNames(known)
+	labels := make(map[string]string, len(known))
+	for _, host := range known {
+		if host.MachineName == "" {
+			continue
+		}
+		label := HostLabel(host)
+		if !host.NameVerified {
+			label += retainedNameSuffix
+		}
+		labels[host.ID] = label
+	}
+	displayed := make([]update.Target, len(targets))
+	copy(displayed, targets)
+	for index := range displayed {
+		displayed[index].Host.MachineName = labels[displayed[index].Host.ID]
+	}
+	return displayed, nil
 }
 
 func updateTargetBuildText(target update.Target) string {

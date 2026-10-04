@@ -14,12 +14,12 @@ import (
 )
 
 func TestPickerFleetServicesWatchUsesCatalogAndPinnedStateWatch(t *testing.T) {
-	hosts := []HostRecord{{ID: "alpha", Alias: "alpha", MeshIdentity: "a"}, {ID: "beta", Alias: "beta", MeshIdentity: "b"}}
+	hosts := []HostRecord{{ID: "alpha", MachineName: "alpha", MeshIdentity: "a"}, {ID: "beta", MachineName: "beta", MeshIdentity: "b"}}
 	var watches, lists atomic.Int32
 	dial := reviewControlDial(t, func(host HostRecord, request protocol.Control) *protocol.Control {
 		switch request.Type {
 		case protocol.TypeHostInfo:
-			return &protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity, PrivateName: host.Alias + ".mesh.shaulavo.dev", ServiceHealthSupported: true}}
+			return &protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity, PrivateName: host.MachineName + ".mesh.shaulavo.dev", ServiceHealthSupported: true}}
 		case protocol.TypeStateWatch:
 			watches.Add(1)
 			if len(request.Watch.Topics) != 1 || request.Watch.Topics[0] != protocol.TopicServices {
@@ -41,7 +41,7 @@ func TestPickerFleetServicesWatchUsesCatalogAndPinnedStateWatch(t *testing.T) {
 			return
 		}
 		row := update.Catalog.Rows[0]
-		if row.URL() != "https://"+update.Host.Alias+".mesh.shaulavo.dev/dev" || row.Service.DisplayName != "Fregat dev" || row.Host.ID != update.Host.ID {
+		if row.URL() != "https://"+update.Host.MachineName+".mesh.shaulavo.dev/dev" || row.Service.DisplayName != "Fregat dev" || row.Host.ID != update.Host.ID {
 			t.Errorf("fleet row %+v", row)
 		}
 		fresh[update.Host.ID] = true
@@ -55,7 +55,7 @@ func TestPickerFleetServicesWatchUsesCatalogAndPinnedStateWatch(t *testing.T) {
 }
 
 func TestPickerFleetServicesWatchRetainsOfflineCacheAndReportsFailure(t *testing.T) {
-	host := HostRecord{ID: "alpha", Alias: "alpha", MeshIdentity: "a"}
+	host := HostRecord{ID: "alpha", MachineName: "alpha", MeshIdentity: "a"}
 	cache := &pickerServiceCacheStub{rows: []storage.CachedService{{HostID: storage.HostID(host.ID), PrivateName: "alpha.example.test", Service: meshserve.Service{Name: "dev", DisplayName: "Fregat dev", Kind: meshserve.Proxy, Target: "3000"}, Healthy: true}}}
 	var calls atomic.Int32
 	dial := func(context.Context, HostRecord) (transport.Conn, error) {
@@ -81,7 +81,7 @@ func TestPickerFleetServicesWatchRetainsOfflineCacheAndReportsFailure(t *testing
 }
 
 func TestPickerFleetServicesWatchCachesAuthoritativeEmpty(t *testing.T) {
-	host := HostRecord{ID: "alpha", Alias: "alpha", MeshIdentity: "a"}
+	host := HostRecord{ID: "alpha", MachineName: "alpha", MeshIdentity: "a"}
 	cache := &pickerServiceCacheStub{rows: []storage.CachedService{{HostID: storage.HostID(host.ID), Service: meshserve.Service{Name: "old", Kind: meshserve.Proxy, Target: "3000"}}}}
 	dial := reviewControlDial(t, func(host HostRecord, request protocol.Control) *protocol.Control {
 		if request.Type == protocol.TypeStateWatch {
@@ -148,7 +148,7 @@ func TestPickerServiceCallbacksWiredAndExpiredAfterReturn(t *testing.T) {
 }
 
 func TestPickerCachedLocalOnlyRoutePreservesScope(t *testing.T) {
-	host := HostRecord{ID: "alpha", Alias: "alpha", Endpoint: "wss://alpha.example.test/control/ws"}
+	host := HostRecord{ID: "alpha", MachineName: "alpha", Endpoint: "wss://alpha.example.test/control/ws"}
 	rows := cachedServiceCatalogRows(host, []storage.CachedService{{Service: meshserve.Service{Name: "5173", Kind: meshserve.Proxy, Target: "3000", LocalOnly: true}}})
 	if len(rows) != 1 || rows[0].Scope() != "local" {
 		t.Fatalf("cached loopback became a fleet URL: %+v", rows)
@@ -159,7 +159,7 @@ func TestPickerCachedLocalOnlyRoutePreservesScope(t *testing.T) {
 }
 
 func TestPickerFleetServicesMissingProducerHealthIsUnknown(t *testing.T) {
-	host := HostRecord{ID: "alpha", Alias: "alpha", MeshIdentity: "a"}
+	host := HostRecord{ID: "alpha", MachineName: "alpha", MeshIdentity: "a"}
 	dial := reviewControlDial(t, func(host HostRecord, request protocol.Control) *protocol.Control {
 		if request.Type == protocol.TypeStateWatch {
 			return &protocol.Control{Type: protocol.TypeStateSnapshot, StateSnapshot: &protocol.StateSnapshot{Seq: 1, Services: []protocol.ServiceInfo{

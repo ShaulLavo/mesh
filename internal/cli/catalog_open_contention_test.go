@@ -50,7 +50,7 @@ func TestCatalogOpenContentionKeepsAnOptionalCache(t *testing.T) {
 	if result.err != nil || result.cache == nil {
 		t.Fatalf("cache open must remain nonfatal during contention: %#v", result)
 	}
-	host := HostRecord{ID: "host-pc", Alias: "pc"}
+	host := HostRecord{ID: "host-pc", MachineName: "pc"}
 	rows, err := result.cache.Load(t.Context(), host)
 	var busy *sqlite.Error
 	if len(rows) != 0 || !errors.As(err, &busy) || busy.Code()&0xff != 5 {
@@ -85,7 +85,7 @@ func TestCatalogOpenContentionKeepsServiceFanoutLive(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	hosts := []HostRecord{{ID: "host-pc", Alias: "pc"}, {ID: "host-pi", Alias: "pi"}}
+	hosts := []HostRecord{{ID: "host-pc", MachineName: "pc"}, {ID: "qLbsc6bxf2DLhLKs2gwZRWw1rlAlmU5yU3vUyjhSBBQ", MachineName: "pi"}}
 	rows, diagnostics, err := CollectServiceCatalog(t.Context(), hosts, 40*time.Millisecond,
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {
 			return remoteServiceSnapshot{Services: []protocol.ServiceInfo{{Name: "api", Kind: "proxy", Target: "3000", Healthy: true}}}, nil
@@ -117,10 +117,10 @@ func TestCatalogOpenContentionKeepsServiceFanoutLive(t *testing.T) {
 func TestConcurrentListCommandsSurviveCatalogOpenContention(t *testing.T) {
 	host := setupCommandTestHost(t)
 	other := &commandTestHost{host: host.host}
-	other.host.Alias = "pi"
-	other.host.ID = "host-pi"
-	other.host.MeshIdentity = "identity-pi"
-	if err := SaveHost(other.host); err != nil {
+	other.host.MachineName = "pi"
+	other.host.ID = "qLbsc6bxf2DLhLKs2gwZRWw1rlAlmU5yU3vUyjhSBBQ"
+	other.host.MeshIdentity = "qLbsc6bxf2DLhLKs2gwZRWw1rlAlmU5yU3vUyjhSBBQ"
+	if err := saveNamedTestHost(t, other.host); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := identity.LoadOrCreate(os.Getenv("MESH_STATE_DIR")); err != nil {

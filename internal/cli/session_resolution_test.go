@@ -24,11 +24,11 @@ func TestLocalSessionWithAdoptedSelfAliasIsNotAmbiguous(t *testing.T) {
 	}
 	writeLocalSessionDir(t, "BVMX", worker.StateExited)
 	stdout, _, err := executeCommand(t, Dependencies{DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
-		t.Error("local host alias was queried as another machine")
+		t.Error("local machine name or exact host ID was queried as another machine")
 		return nil, errors.New("self queried")
 	},
 		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
-			t.Error("local host alias was queried as another machine")
+			t.Error("local machine name or exact host ID was queried as another machine")
 			return nil, errors.New("self queried")
 		},
 	}, "logs", "BVMX")

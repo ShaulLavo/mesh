@@ -168,7 +168,7 @@ fixtures = {
         "origins": [{"identity": client_id, "displayAlias": "client", "tailscaleName": "client.fixture.test",
                      "controlPort": int(control_port), "websocketPath": "/mesh"}],
     },
-    "config/hosts.json": {"version": 1, "hosts": [{"alias": "vps", "id": edge_id, "meshIdentity": edge_id,
+    "config/hosts.json": {"version": 1, "hosts": [{"id": edge_id, "meshIdentity": edge_id,
         "tailscaleName": "127.0.0.21", "endpoint": f"ws://127.0.0.21:{control_port}/mesh"}]},
 }
 for path, value in fixtures.items():
@@ -183,10 +183,10 @@ ssh_options=(-F /dev/null -p "$ssh_port" -o BatchMode=yes -o ConnectTimeout=1
   -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 
 start_edge
-cli serve claim vps blog.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'CLI create claim'
+cli serve claim "$edge_id" blog.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'CLI create claim'
 expect_404
-cli serve claim vps blog.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'same-owner convergent claim'
-if env MESH_STATE_DIR="$other_state" MESH_CONFIG_DIR="$config_dir" "$mesh" serve claim vps blog.shaulavo.dev --yes >"$test_root/command.log" 2>&1; then
+cli serve claim "$edge_id" blog.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'same-owner convergent claim'
+if env MESH_STATE_DIR="$other_state" MESH_CONFIG_DIR="$config_dir" "$mesh" serve claim "$edge_id" blog.shaulavo.dev --yes >"$test_root/command.log" 2>&1; then
   fail 'another authorized owner displaced the durable claim'
 fi
 start_forward
@@ -201,7 +201,7 @@ done
 for port in 0 81; do
   expect_forward_refused "$client_state/identity.key" "blog.shaulavo.dev:$port:localhost:$backend_port"
 done
-if cli unserve blog.shaulavo.dev --host vps >"$test_root/command.log" 2>&1; then
+if cli unserve blog.shaulavo.dev --host "$edge_id" >"$test_root/command.log" 2>&1; then
   fail 'owner release accepted an active tunnel'
 fi
 [[ $(request /) == MESH_REVERSE_TUNNEL_BODY ]] || fail 'refused mutation disturbed the active forward'
@@ -231,23 +231,23 @@ wait_inactive
 # Revocation preserves reservations but blocks new activation and creation.
 cat "$other_state/identity.key.pub" >"$edge_state/authorized_keys"
 expect_forward_refused "$client_state/identity.key" "blog.shaulavo.dev:80:localhost:$backend_port"
-if cli serve claim vps revoked.shaulavo.dev --yes >"$test_root/command.log" 2>&1; then
+if cli serve claim "$edge_id" revoked.shaulavo.dev --yes >"$test_root/command.log" 2>&1; then
   fail 'revoked owner created a reservation'
 fi
-if cli unserve blog.shaulavo.dev --host vps >"$test_root/command.log" 2>&1; then
+if cli unserve blog.shaulavo.dev --host "$edge_id" >"$test_root/command.log" 2>&1; then
   fail 'revoked device withdrew an edge reservation'
 fi
 env MESH_STATE_DIR="$edge_state" "$mesh" unserve blog.shaulavo.dev --local-edge >"$test_root/command.log" 2>&1 || fail 'destination-local recovery could not release revoked claim'
 expect_404
 
 cat "$client_state/identity.key.pub" "$other_state/identity.key.pub" >"$edge_state/authorized_keys"
-cli serve claim vps recovery.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'create recovery reservation'
+cli serve claim "$edge_id" recovery.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'create recovery reservation'
 rm "$client_state/identity.key"
 rm "$edge_state/authorized_keys"
 env MESH_STATE_DIR="$edge_state" "$mesh" unserve recovery.shaulavo.dev --local-edge >"$test_root/command.log" 2>&1 || fail 'Unix socket recovery with missing authorization state'
 expect_404 recovery.shaulavo.dev
 cat "$other_state/identity.key.pub" >"$edge_state/authorized_keys"
 chmod 0600 "$edge_state/authorized_keys"
-env MESH_STATE_DIR="$other_state" MESH_CONFIG_DIR="$config_dir" "$mesh" serve claim vps recovery.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'local recovery did not release hostname ownership'
+env MESH_STATE_DIR="$other_state" MESH_CONFIG_DIR="$config_dir" "$mesh" serve claim "$edge_id" recovery.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'local recovery did not release hostname ownership'
 
 echo 'PASS: stock CLI and OpenSSH reserved, activated, refused invalid forwards, disconnected, restarted, denied revoked controls, and recovered through the Unix socket'

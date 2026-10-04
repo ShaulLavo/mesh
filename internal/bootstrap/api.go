@@ -136,6 +136,8 @@ type Options struct {
 	Release          ReleaseOptions
 	StateDir         string
 	ExpectedIdentity string
+	// ResolveIdentity looks up the destination after the external SSH profile resolves.
+	ResolveIdentity  func(string) (string, error)
 	TailscaleAuthKey []byte
 	// TailscaleAuthKeyPrompt is asked for a key only when the remote host needs
 	// one and TailscaleAuthKey is empty, so an interactive run never has to
@@ -157,14 +159,17 @@ type Options struct {
 
 // Result is the host observation proved by the remote daemon itself.
 type Result struct {
-	Wake               *wake.Grant
-	ID                 string
-	MeshIdentity       string
-	TailscaleName      string
-	TailscaleAddresses []string
-	Endpoint           string
-	Platform           Platform
-	AlreadyConfigured  bool
+	AuthenticatedIdentity string
+	MachineName           string
+	NameRevision          uint64
+	Wake                  *wake.Grant
+	ID                    string
+	MeshIdentity          string
+	TailscaleName         string
+	TailscaleAddresses    []string
+	Endpoint              string
+	Platform              Platform
+	AlreadyConfigured     bool
 }
 
 // Run converges an SSH-reachable machine on a running Mesh service, proves its

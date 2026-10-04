@@ -251,8 +251,8 @@ func validateServiceDemand(demand *protocol.ServiceDemand) error {
 
 func (a *application) serveStartStopCommand(start bool) *cobra.Command {
 	var (
-		hostAlias string
-		timeout   time.Duration
+		hostID  string
+		timeout time.Duration
 	)
 	use, short := "stop ROUTE", "Stop an on-demand route now; the next connection starts it again"
 	if start {
@@ -266,15 +266,15 @@ func (a *application) serveStartStopCommand(start bool) *cobra.Command {
 			if timeout <= 0 || timeout > maximumServiceListTimeout {
 				return fmt.Errorf("--timeout must be between 1ns and %s", maximumServiceListTimeout)
 			}
-			return a.runServeStartStop(cmd, args[0], hostAlias, timeout, start)
+			return a.runServeStartStop(cmd, args[0], hostID, timeout, start)
 		},
 	}
-	command.Flags().StringVar(&hostAlias, "host", "", "host alias when more than one host owns ROUTE")
+	command.Flags().StringVar(&hostID, "host", "", "machine name or exact host ID when more than one host owns ROUTE")
 	command.Flags().DurationVar(&timeout, "timeout", defaultServiceListTimeout, "hard deadline for ownership discovery")
 	return command
 }
 
-func (a *application) runServeStartStop(cmd *cobra.Command, route, hostAlias string, timeout time.Duration, start bool) error {
+func (a *application) runServeStartStop(cmd *cobra.Command, route, hostID string, timeout time.Duration, start bool) error {
 	name, err := serviceNameFromRoute(route)
 	if err != nil {
 		return err
@@ -284,12 +284,12 @@ func (a *application) runServeStartStop(cmd *cobra.Command, route, hostAlias str
 		return err
 	}
 	defer cache.Close() //nolint:errcheck // command result takes precedence
-	selected, _, err := a.resolveServiceOwner(cmd, cache, route, name, hostAlias, timeout)
+	selected, _, err := a.resolveServiceOwner(cmd, cache, route, name, hostID, timeout)
 	if err != nil {
 		return err
 	}
 	if selected.Service.Name != "" && selected.Service.Run == nil {
-		return fmt.Errorf("route %s on %s has no --run command", route, selected.Host.Alias)
+		return fmt.Errorf("route %s on %s has no --run command", route, HostLabel(selected.Host))
 	}
 	requestType, operation, wait := protocol.TypeServiceStop, "service stop", serviceMutationTimeout
 	if start {
@@ -308,7 +308,7 @@ func (a *application) runServeStartStop(cmd *cobra.Command, route, hostAlias str
 		return remoteServiceResponseError(selected.Host, operation, response)
 	}
 	if response.Type != protocol.TypeOK || response.ServiceName != name || response.Service == nil {
-		return fmt.Errorf("host %s returned an invalid %s acknowledgement", selected.Host.Alias, operation)
+		return fmt.Errorf("host %s returned an invalid %s acknowledgement", HostLabel(selected.Host), operation)
 	}
 	status, err := validateRemoteService(*response.Service)
 	if err != nil {
@@ -319,6 +319,6 @@ func (a *application) runServeStartStop(cmd *cobra.Command, route, hostAlias str
 	if status.Demand != nil && status.Demand.SessionID != "" && state != protocol.DemandStopped {
 		state += ", session " + safeTableCell(a.privacy.Value("session", status.Demand.SessionID))
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s on %s: %s\n", a.privacy.Value("route", route), a.privacy.Value("host", selected.Host.Alias), state)
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s on %s: %s\n", a.privacy.Value("route", route), a.privacy.Value("host", HostLabel(selected.Host)), state)
 	return err
 }

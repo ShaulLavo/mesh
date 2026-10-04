@@ -15,7 +15,7 @@ import (
 )
 
 func TestPickerSessionActionsStayInTheOpenPanel(t *testing.T) {
-	host := cli.HostRecord{Alias: "pc", ID: "host-id"}
+	host := cli.HostRecord{MachineName: "pc", ID: "pc"}
 	for _, test := range []struct {
 		name         string
 		key          rune
@@ -100,7 +100,7 @@ func TestPickerSessionActionsStayInTheOpenPanel(t *testing.T) {
 			if repeatedCommand != nil || actionCalls != 1 {
 				t.Fatalf("repeated action during reconciliation returned command nil %t after %d calls", repeatedCommand == nil, actionCalls)
 			}
-			if request != (cli.PickerSessionActionRequest{HostAlias: "pc", SessionID: "7K3D", Action: test.action}) {
+			if request != (cli.PickerSessionActionRequest{HostID: "pc", SessionID: "7K3D", Action: test.action}) {
 				t.Fatalf("action request = %#v", request)
 			}
 			updated, _ = acted.Update(catalogRefreshMessage(t, refreshCommand))
@@ -122,7 +122,7 @@ func TestPickerSessionActionsStayInTheOpenPanel(t *testing.T) {
 				t.Fatalf("refreshed list moved to page %d cursor %d, want %d/%d", refreshed.list.Paginator.Page, refreshed.list.Cursor(), startPage, startCursor)
 			}
 			late := catalogRefreshResultMsg{
-				epoch: preActionEpoch, hostAlias: "pc",
+				epoch: preActionEpoch, hostID: "pc",
 				snapshot: cli.PickerHostSnapshot{Sessions: initial, Services: &cli.PickerServiceCatalog{}},
 			}
 			updated, command := refreshed.Update(late)
@@ -134,7 +134,7 @@ func TestPickerSessionActionsStayInTheOpenPanel(t *testing.T) {
 }
 
 func TestRemovingTheOnlySessionLeavesAnEmptyLivePanel(t *testing.T) {
-	host := cli.HostRecord{Alias: "pc", ID: "host-id"}
+	host := cli.HostRecord{MachineName: "pc", ID: "pc"}
 	initial := cli.HostSessions{Host: host, Sessions: []protocol.SessionInfo{{
 		ID: "7K3D", HostID: host.ID, State: "exited", CreatedAt: pickerTestNow,
 	}}}
@@ -161,7 +161,7 @@ func TestRemovingTheOnlySessionLeavesAnEmptyLivePanel(t *testing.T) {
 }
 
 func TestLateSessionActionResultCannotFinishANewerActionForTheSameTarget(t *testing.T) {
-	host := cli.HostRecord{Alias: "pc", ID: "host-id"}
+	host := cli.HostRecord{MachineName: "pc", ID: "pc"}
 	current := newPickerModel(context.Background(), cli.PickerInput{
 		Hosts: []cli.HostSessions{{Host: host, Sessions: []protocol.SessionInfo{{
 			ID: "7K3D", HostID: host.ID, State: "detached", CreatedAt: pickerTestNow,
@@ -195,7 +195,7 @@ func TestLateSessionActionResultCannotFinishANewerActionForTheSameTarget(t *test
 }
 
 func TestLeavingSessionPanelCancelsAnInFlightActionAndIgnoresItsResult(t *testing.T) {
-	host := cli.HostRecord{Alias: "pc", ID: "host-id"}
+	host := cli.HostRecord{MachineName: "pc", ID: "pc"}
 	started := make(chan struct{})
 	canceled := make(chan struct{})
 	current := newPickerModel(context.Background(), cli.PickerInput{
@@ -235,7 +235,7 @@ func TestLeavingSessionPanelCancelsAnInFlightActionAndIgnoresItsResult(t *testin
 }
 
 func TestPickerSessionActionFailureStaysVisibleAndKeepsRefreshing(t *testing.T) {
-	host := cli.HostRecord{Alias: "pc", ID: "host-id"}
+	host := cli.HostRecord{MachineName: "pc", ID: "pc"}
 	sessions := cli.HostSessions{Host: host, Sessions: []protocol.SessionInfo{{
 		ID: "7K3D", HostID: host.ID, State: "detached", CreatedAt: pickerTestNow,
 	}}}

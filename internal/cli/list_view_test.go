@@ -11,11 +11,11 @@ import (
 )
 
 func listViewRows() []HostSessions {
-	return []HostSessions{{Host: HostRecord{Alias: "pc"}, Sessions: []protocol.SessionInfo{
+	return []HostSessions{{Host: HostRecord{MachineName: "pc"}, Sessions: []protocol.SessionInfo{
 		{ID: "L1VE", Command: []string{"bash"}, Cwd: "/work", State: worker.StateDetached, CreatedAt: commandTestTime},
 		{ID: "D0NE", Command: []string{"bash"}, Cwd: "/work", State: worker.StateExited, CreatedAt: commandTestTime},
 		{ID: "L0ST", Command: []string{"bash"}, Cwd: "/work", State: worker.StateInterrupted, CreatedAt: commandTestTime},
-		hibernatedRow("SL3P", "host-id", commandTestTime),
+		hibernatedRow("SL3P", "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", commandTestTime),
 	}}}
 }
 
@@ -40,7 +40,7 @@ func TestSessionListHidesEndedSessionsUnlessAll(t *testing.T) {
 }
 
 func TestSessionListCutsLongCommandsToTheTerminal(t *testing.T) {
-	rows := []HostSessions{{Host: HostRecord{Alias: "pc"}, Sessions: []protocol.SessionInfo{
+	rows := []HostSessions{{Host: HostRecord{MachineName: "pc"}, Sessions: []protocol.SessionInfo{
 		{ID: "L0NG", Command: []string{"bash", "-ic", strings.Repeat("for id in abc; ", 60)}, Cwd: "/work", State: worker.StateRunning, CreatedAt: commandTestTime},
 	}}}
 	var output bytes.Buffer
@@ -63,11 +63,11 @@ func TestListOmitsThisHostFromTheFanOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hosts, alias := withoutThisHost(stateDir, []HostRecord{{Alias: "omarchy", ID: self.ID, MeshIdentity: self.ID}, {Alias: "mac", ID: "mac-id"}})
-	if alias != "omarchy" || len(hosts) != 1 || hosts[0].Alias != "mac" {
+	hosts, alias := withoutThisHost(t.Context(), stateDir, []HostRecord{{MachineName: "omarchy", ID: self.ID, MeshIdentity: self.ID}, {MachineName: "mac", ID: "mac-id"}})
+	if alias != self.ID || len(hosts) != 1 || hosts[0].MachineName != "mac" {
 		t.Fatalf("withoutThisHost = %+v, %q", hosts, alias)
 	}
-	if _, alias := withoutThisHost(stateDir, []HostRecord{{Alias: "mac", ID: "mac-id"}}); alias != localHostAlias {
+	if _, alias := withoutThisHost(t.Context(), stateDir, []HostRecord{{MachineName: "mac", ID: "mac-id"}}); alias != self.ID {
 		t.Fatalf("unadopted self alias = %q", alias)
 	}
 }
