@@ -55,17 +55,13 @@ func TestDeviceCommandsPublishSuccessfulIdentityAndGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"identity"}, {"approve", "--allow-root", "--", host.ID}, {"revoke", "--", host.ID}} {
-		var output bytes.Buffer
-		command := deviceCommand()
-		command.SetArgs(args)
-		command.SetOut(&output)
-		command.SetErr(&output)
-		if err := command.ExecuteContext(t.Context()); err != nil {
-			t.Fatalf("%v failed: %v (%s)", args, err, output.String())
+	for _, args := range [][]string{{"device", "identity"}, {"device", "approve", "--allow-root", host.ID}, {"device", "revoke", host.ID}} {
+		output, _, err := executeCommand(t, Dependencies{}, args...)
+		if err != nil {
+			t.Fatalf("%v failed: %v (%s)", args, err, output)
 		}
-		if output.Len() == 0 || strings.Contains(output.String(), "%!w") {
-			t.Fatalf("invalid device result: %q", output.String())
+		if output == "" || strings.Contains(output, "%!w") {
+			t.Fatalf("invalid device result: %q", output)
 		}
 	}
 	if identity.GrantedIdentity(state, host.ID) {

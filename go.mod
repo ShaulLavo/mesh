@@ -36,6 +36,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/shirou/gopsutil/v4 v4.26.9
 	github.com/spf13/cobra v1.9.1
+	github.com/spf13/pflag v1.0.6
 	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.48.0
@@ -81,7 +82,6 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sahilm/fuzzy v0.1.3 // indirect
 	github.com/sethvargo/go-retry v0.4.0 // indirect
-	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
