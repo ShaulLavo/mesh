@@ -21,7 +21,7 @@ import (
 )
 
 func TestRunRestoresPersistedServicesOnRestart(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("survived restart"), 0o600); err != nil {
 		t.Fatal(err)
@@ -173,7 +173,7 @@ func TestRunServesLocalClientsWhenTailnetDiscoveryFails(t *testing.T) {
 }
 
 func TestRunPublishesBootInterruptedSession(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	sessionsDir := filepath.Join(stateDir, sessionsDirectoryName)
 	dir := filepath.Join(sessionsDir, "7K3D")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -229,7 +229,7 @@ func TestRunPublishesBootInterruptedSession(t *testing.T) {
 }
 
 func TestRunLosingDaemonCannotMutateCatalog(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	firstOptions := runOptions{
@@ -285,7 +285,7 @@ func TestRunRejectsPiCredentialsInPublicEdgeRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = run(context.Background(), Config{
-		StateDir: t.TempDir(), EdgeConfig: configPath, PrivateNamesConfig: filepath.Join(t.TempDir(), "must-not-be-read.json"),
+		StateDir: compactSocketTempDir(t), EdgeConfig: configPath, PrivateNamesConfig: filepath.Join(t.TempDir(), "must-not-be-read.json"),
 	}, runOptions{
 		now: func() time.Time { return catalogTestTime }, bootID: func() string { return "boot" },
 		discoverSelf: func(context.Context) (tailnet.Peer, error) { return tailnet.Peer{}, nil }, reconcileInterval: time.Hour,

@@ -43,7 +43,7 @@ func TestServiceControllerMutatesDurableAndLiveRegistry(t *testing.T) {
 	}
 	assertServiceResponse(t, registry, "/site/", http.StatusOK, "live")
 	persisted, err := store.GetService(context.Background(), "site")
-	if err != nil || persisted.Target != root || persisted.PublicName != "site.shaulavo.dev" {
+	if err != nil || persisted.Target != canonicalServiceRoot(t, root) || persisted.PublicName != "site.shaulavo.dev" {
 		t.Fatalf("persisted service = %#v, %v", persisted, err)
 	}
 
@@ -161,7 +161,7 @@ func TestServiceControllerPreviewsRemoteRelativeTargetAndRescansBeforeUpsert(t *
 	if err != nil || !handled || response.Type != protocol.TypeServicePreviewed || response.ServicePreview == nil {
 		t.Fatalf("preview = %#v, handled %v, error %v", response, handled, err)
 	}
-	if response.ServicePreview.Service.Target != root || response.ServicePreview.Service.Kind != string(meshserve.Static) || response.ServicePreview.FileCount != 1 {
+	if response.ServicePreview.Service.Target != canonicalServiceRoot(t, root) || response.ServicePreview.Service.Kind != string(meshserve.Static) || response.ServicePreview.FileCount != 1 {
 		t.Fatalf("preview payload = %#v", response.ServicePreview)
 	}
 	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("TOKEN=secret"), 0o600); err != nil {
@@ -741,4 +741,13 @@ func TestServiceLabelOnlyChangesDurableDisplayName(t *testing.T) {
 	if _, _, err := controller.HandleControl(ctx, protocol.Control{Type: protocol.TypeServiceLabel, RequestID: "missing", ServiceName: "missing", ServiceDisplayName: "Missing"}); err == nil {
 		t.Fatal("label created a missing route")
 	}
+}
+
+func canonicalServiceRoot(t *testing.T, root string) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }

@@ -230,13 +230,16 @@ func TestClientConfigWriteFailurePreservesFile(t *testing.T) {
 func TestClientConfigWritersSerializeReadModifyWrite(t *testing.T) {
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	var workers sync.WaitGroup
+	start := make(chan struct{})
 	for _, id := range []string{"first", "second", "third", "fourth"} {
 		workers.Go(func() {
+			<-start
 			if err := SaveHost(HostRecord{ID: id, MeshIdentity: id, Endpoint: "ws://127.0.0.1:7777/mesh"}); err != nil {
 				t.Error(err)
 			}
 		})
 	}
+	close(start)
 	workers.Wait()
 	hosts, err := LoadHosts()
 	if err != nil || len(hosts) != 4 {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/testenv"
 )
 
 func testRequest() Request {
@@ -123,7 +124,7 @@ esac
 }
 
 func TestLegacyInspectorReadsExistingSchemaWithoutMigrating(t *testing.T) {
-	state := t.TempDir()
+	state := testenv.SocketTempDir(t)
 	createLegacyDatabase(t, state)
 	build := release.Current()
 	listener, err := net.Listen("unix", filepath.Join(state, "daemon.sock"))
@@ -162,7 +163,7 @@ func TestLegacyInspectorReadsExistingSchemaWithoutMigrating(t *testing.T) {
 }
 
 func TestReadOnlyInspectionNeverCreatesMissingDatabase(t *testing.T) {
-	state := t.TempDir()
+	state := testenv.SocketTempDir(t)
 	if _, err := readStateVersion(context.Background(), state); err == nil {
 		t.Fatal("missing state accepted")
 	}

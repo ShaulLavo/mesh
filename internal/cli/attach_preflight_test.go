@@ -268,11 +268,7 @@ func TestHostResumeUsesMostRecentlyActiveSession(t *testing.T) {
 
 func startAttachTestDaemon(t *testing.T, handle func(protocol.Control) protocol.Control) {
 	t.Helper()
-	state, err := os.MkdirTemp("", "mesh-wave-u-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(state) })
+	state := compactSocketTempDir(t)
 	t.Setenv("MESH_STATE_DIR", state)
 	listener, err := net.Listen("unix", meshdaemon.SocketPath(state))
 	if err != nil {

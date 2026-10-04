@@ -4,31 +4,21 @@ import (
 	"context"
 	"errors"
 	"net"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/testenv"
 	"github.com/shaul/mesh/internal/transport"
 )
 
 func compactSocketTempDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp(os.TempDir(), "c-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Error(err)
-		}
-	})
-	return dir
+	return testenv.SocketTempDir(t)
 }
 
 func TestSocketFixturesBindAndDetectAbsentDaemonUnderLongScratchRoot(t *testing.T) {
-	callerRoot := os.TempDir()
 	stateDir := compactSocketTempDir(t)
 	socket := daemon.SocketPath(stateDir)
 	if len(socket) > 103 {
@@ -52,7 +42,8 @@ func TestSocketFixturesBindAndDetectAbsentDaemonUnderLongScratchRoot(t *testing.
 		t.Fatal(err)
 	}
 	awaitDaemonServer(t, done)
-	if filepath.Dir(stateDir) != callerRoot {
-		t.Fatalf("socket fixture %q is not directly under caller scratch root %q", stateDir, callerRoot)
+	canonical, err := filepath.EvalSymlinks(stateDir)
+	if err != nil || canonical != stateDir {
+		t.Fatalf("socket fixture %q is not canonical: %q, %v", stateDir, canonical, err)
 	}
 }

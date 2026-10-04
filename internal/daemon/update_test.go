@@ -18,7 +18,7 @@ import (
 )
 
 func TestUpdateHealthAndAuthorizationUseRunningDaemon(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := compactSocketTempDir(t)
 	host, key, err := identity.LoadOrCreate(stateDir)
 	if err != nil {
 		t.Fatal(err)

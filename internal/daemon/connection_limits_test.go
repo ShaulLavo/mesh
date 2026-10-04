@@ -26,9 +26,9 @@ func TestControlConnectionCapsRefuseWithoutDisruptingClients(t *testing.T) {
 			var listeners []net.Listener
 			if network == "Tailnet" {
 				listener, port := newTCPListener(t, "127.0.0.1:0")
-				other, _ := newTCPListener(t, fmt.Sprintf("127.0.0.2:%d", port))
+				other, _ := newTCPListener(t, fmt.Sprintf("[::1]:%d", port))
 				listeners = append(listeners, listener, other)
-				cfg.TailnetAddrs = []string{"127.0.0.1", "127.0.0.2"}
+				cfg.TailnetAddrs = []string{"127.0.0.1", "::1"}
 				cfg.TailnetPort = port
 				cfg.WebSocketPath = "/mesh"
 				endpoint := "ws://" + listener.Addr().String() + "/mesh"

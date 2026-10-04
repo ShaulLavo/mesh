@@ -1112,9 +1112,9 @@ func (a *application) listCommand() *cobra.Command {
 }
 
 func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.Duration, view listView) error {
-	stateDir, err := paths.StateDir()
+	stateDir, err := paths.StateDirPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("locate session list state directory: %w", err)
 	}
 	if viaDaemon {
 		ctx, cancel := context.WithTimeout(cmd.Context(), localQueryTimeout)
@@ -1863,7 +1863,7 @@ func localSessionRowsMeasured(memory procmem.Table) ([]protocol.SessionInfo, err
 	if err != nil {
 		return nil, err
 	}
-	stateDir, err := paths.StateDir()
+	stateDir, err := paths.StateDirPath()
 	if err != nil {
 		return nil, fmt.Errorf("locate local catalog state directory: %w", err)
 	}

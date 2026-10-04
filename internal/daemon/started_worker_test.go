@@ -59,7 +59,7 @@ func TestLabelledLaunchFailureAfterStartKeepsWorkerIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionsDir := t.TempDir()
+	sessionsDir := compactSocketTempDir(t)
 	lifecycle := mustLifecycle(t, lifecycleConfig{
 		Catalog:     &lifecycleTestCatalog{},
 		Connector:   failingLifecycleConnector(),

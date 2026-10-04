@@ -394,7 +394,7 @@ func TestServeHTTPSUsesLoopbackServicesOnlyAndHotReloads(t *testing.T) {
 	}, func(context.Context, transport.Conn) error {
 		return errors.New("terminal handler reached from HTTPS")
 	}, listener)
-	waitForTCPRuntime(t, net.JoinHostPort("127.0.0.1", fmt.Sprint(port)))
+	waitForTCPRuntime(t, net.JoinHostPort("127.0.0.1", fmt.Sprint(port)), done)
 	if connection, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.2", fmt.Sprint(port)), 100*time.Millisecond); err == nil {
 		_ = connection.Close()
 		t.Fatal("HTTPS listener accepted a non-configured loopback address")
@@ -462,7 +462,7 @@ func TestServeReportsPartialTailnetBindFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runRuntime(t, ctx, ListenerConfig{
 		StateDir:      stateDir,
-		TailnetAddrs:  []string{"127.0.0.1", "127.0.0.2"},
+		TailnetAddrs:  []string{"127.0.0.1", "::1"},
 		TailnetPort:   port,
 		WebSocketPath: "/mesh",
 		ReportError:   func(err error) { reports <- err },
@@ -476,7 +476,7 @@ func TestServeReportsPartialTailnetBindFailure(t *testing.T) {
 	case <-time.After(runtimeTestTimeout):
 		t.Fatal("partial tailnet bind failure was not reported")
 	}
-	waitForHTTPStatus(t, fmt.Sprintf("http://127.0.0.2:%d/wrong", port), http.StatusNotFound)
+	waitForHTTPStatus(t, fmt.Sprintf("http://[::1]:%d/wrong", port), http.StatusNotFound)
 
 	cancel()
 	if err := waitRuntime(t, done); err != nil {
@@ -1243,7 +1243,7 @@ func waitSignal(t *testing.T, signal <-chan struct{}, description string) {
 
 func newTCPListener(t *testing.T, address string) (net.Listener, uint16) {
 	t.Helper()
-	listener, err := net.Listen("tcp4", address)
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1268,7 +1268,8 @@ func useTCPListeners(listeners ...net.Listener) func(string, string) (net.Listen
 
 func waitForHTTPStatus(t *testing.T, url string, want int) {
 	t.Helper()
-	client := &http.Client{Timeout: 200 * time.Millisecond}
+	client := &http.Client{Timeout: 200 * time.Millisecond, Transport: &http.Transport{}}
+	t.Cleanup(client.CloseIdleConnections)
 	deadline := time.Now().Add(runtimeTestTimeout)
 	for {
 		response, err := client.Get(url)
@@ -1285,17 +1286,34 @@ func waitForHTTPStatus(t *testing.T, url string, want int) {
 	}
 }
 
-func waitForTCPRuntime(t *testing.T, address string) {
+func waitForTCPRuntime(t *testing.T, address string, done <-chan error) {
 	t.Helper()
-	deadline := time.Now().Add(runtimeTestTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), runtimeTestTimeout)
+	defer cancel()
+	if err := awaitTCPRuntime(ctx, address, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func awaitTCPRuntime(ctx context.Context, address string, done <-chan error) error {
+	client := &http.Client{Timeout: 100 * time.Millisecond, Transport: &http.Transport{}}
+	defer client.CloseIdleConnections()
 	for {
-		connection, err := net.DialTimeout("tcp4", address, 100*time.Millisecond)
-		if err == nil {
-			_ = connection.Close()
-			return
+		select {
+		case err := <-done:
+			return errors.Join(errors.New("runtime stopped before HTTP readiness"), err)
+		case <-ctx.Done():
+			return fmt.Errorf("HTTP listener %s did not start: %w", address, ctx.Err())
+		default:
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("TCP listener %s did not start: %v", address, err)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/", nil)
+		if err != nil {
+			return fmt.Errorf("create HTTP readiness request: %w", err)
+		}
+		response, err := client.Do(request)
+		if err == nil {
+			_ = response.Body.Close()
+			return nil
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

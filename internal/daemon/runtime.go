@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/tailnet"
@@ -767,12 +768,18 @@ type ownedUnixListener struct {
 }
 
 func listenDaemonUnix(socketPath string) (*ownedUnixListener, error) {
+	if err := paths.ValidateSocketPath(socketPath); err != nil {
+		return nil, fmt.Errorf("daemon: %w", err)
+	}
 	if err := removeStaleUnixSocket(socketPath); err != nil {
 		return nil, err
 	}
 	temporary, err := reserveTemporarySocketPath(socketPath)
 	if err != nil {
 		return nil, err
+	}
+	if err := paths.ValidateSocketPath(temporary); err != nil {
+		return nil, fmt.Errorf("daemon: temporary socket: %w", err)
 	}
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: temporary, Net: "unix"})
 	if err != nil {

@@ -11,7 +11,7 @@ import (
 )
 
 func TestUnixWorkerProbeConnectsAndCloses(t *testing.T) {
-	listener, err := net.Listen("unix", filepath.Join(t.TempDir(), "worker.sock"))
+	listener, err := net.Listen("unix", filepath.Join(compactSocketTempDir(t), "worker.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}

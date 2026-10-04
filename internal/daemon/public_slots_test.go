@@ -133,7 +133,7 @@ func TestPublicSlotsEvictOldestIdleConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener := newBoundedPublicListener(base, 2)
+	listener := newBoundedPublicListener(&publicSourceListener{Listener: base}, 2)
 	idle := make(chan struct{}, 3)
 	server := &http.Server{ReadHeaderTimeout: httpReadHeaderTimeout, ConnState: func(c net.Conn, state http.ConnState) {
 		listener.connState(c, state)
@@ -150,13 +150,13 @@ func TestPublicSlotsEvictOldestIdleConnection(t *testing.T) {
 	}
 	defer func() { _ = first.Close() }()
 	waitSignal(t, idle, "first idle connection")
-	second, err := publicSlotRequest(base.Addr().String(), "127.0.0.2")
+	second, err := publicSlotRequest(base.Addr().String(), "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = second.Close() }()
 	waitSignal(t, idle, "second idle connection")
-	third, err := publicSlotRequest(base.Addr().String(), "127.0.0.3")
+	third, err := publicSlotRequest(base.Addr().String(), "127.0.0.1")
 	if err != nil {
 		t.Fatalf("new source was not admitted to full idle pool: %v", err)
 	}
@@ -534,4 +534,18 @@ func TestPublicLateProxyExpiryPreservesAdmittedConnection(t *testing.T) {
 	if !admitted {
 		t.Fatal("a late authentication deadline closed an admitted source")
 	}
+}
+
+type publicSourceListener struct {
+	net.Listener
+	accepted byte
+}
+
+func (l *publicSourceListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, fmt.Errorf("accept fixture public source: %w", err)
+	}
+	l.accepted++
+	return publicAddressedConn{Conn: conn, address: &net.TCPAddr{IP: net.IPv4(198, 51, 100, l.accepted), Port: 1234}}, nil
 }

@@ -58,11 +58,15 @@ func (s Session) State() string {
 
 // List returns every session this host knows about, most recently updated first.
 func List() ([]Session, error) {
-	root, err := paths.SessionsDir()
+	stateDir, err := paths.StateDirPath()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("locate sessions state directory: %w", err)
 	}
+	root := filepath.Join(stateDir, "s")
 	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) && sessionDirectoryAbsent(root) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read sessions: %w", err)
 	}
@@ -92,6 +96,21 @@ func List() ([]Session, error) {
 		}
 	}
 	return out, nil
+}
+
+func sessionDirectoryAbsent(path string) bool {
+	for {
+		_, err := os.Lstat(path)
+		if !errors.Is(err, os.ErrNotExist) {
+			info, err := os.Stat(path)
+			return err == nil && info.IsDir()
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return false
+		}
+		path = parent
+	}
 }
 
 type sessionListingRow struct {

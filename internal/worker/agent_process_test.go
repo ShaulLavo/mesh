@@ -138,7 +138,7 @@ func exchangeAgentTestControl(conn net.Conn, request protocol.Control) (protocol
 }
 
 func TestAgentAcknowledgementSurvivesKilledWorkerAndFreshReader(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "7K3D")
+	dir := filepath.Join(testenv.SocketTempDir(t), "7K3D")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
