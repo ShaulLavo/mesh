@@ -262,10 +262,12 @@ jobs:
         with:
           version: v2.18.0
           args: release --snapshot --clean
+      - name: Verify default-branch failure fixtures
+        run: python3 scripts/test-check-default-branch.py
       - name: Require main as the repository default branch
         env:
           GH_TOKEN: ${{ github.token }}
-        run: test "$(gh api 'repos/${{ github.repository }}' --jq .default_branch)" = main
+        run: python3 scripts/check-default-branch.py '${{ github.repository }}'
       - name: Verify release and installer contracts
         run: ./scripts/check-packaging.sh dist
 
