@@ -147,6 +147,11 @@ func openCacheDirectory(directory string, create bool, syncRoot func(*os.Root) e
 	if err != nil {
 		return nil, err
 	}
+	// A previously created configuration ancestor may be visible after its parent sync failed.
+	if err := settleCacheAncestors(ancestor, syncRoot); err != nil {
+		_ = root.Close()
+		return nil, err
+	}
 	relative, err := filepath.Rel(ancestor, filepath.Join(absolute, cacheDirectory))
 	if err != nil {
 		_ = root.Close()
@@ -249,4 +254,28 @@ func openPrivateCacheFile(root *os.Root, filename string, flag int, create bool)
 		return nil, errors.New("machine name cache file changed while opening")
 	}
 	return file, nil
+}
+
+func settleCacheAncestors(directory string, syncRoot func(*os.Root) error) error {
+	physical, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return fmt.Errorf("resolve cache ancestor entries: %w", err)
+	}
+	seen := make(map[string]bool)
+	// The selected spelling can contain a caller-owned symlink; sync its entry and the target ancestry.
+	for _, path := range []string{directory, physical} {
+		for parent := filepath.Dir(path); !seen[parent]; parent = filepath.Dir(parent) {
+			seen[parent] = true
+			root, err := os.OpenRoot(parent)
+			if err != nil {
+				return fmt.Errorf("open cache ancestor parent: %w", err)
+			}
+			err = syncRoot(root)
+			_ = root.Close()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

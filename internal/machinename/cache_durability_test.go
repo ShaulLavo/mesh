@@ -15,8 +15,10 @@ func TestClaimCacheDirectoryCreationBarriers(t *testing.T) {
 			directory := filepath.Join(selected, "configuration")
 			claim := cacheFixtureClaim(t, "destination", 7)
 			failure := errors.New("fixture parent directory sync failure")
+			var failedParents []string
 			syncRoot := func(root *os.Root) error {
 				if _, err := root.Lstat(component); err == nil {
+					failedParents = append(failedParents, root.Name())
 					return failure
 				}
 				return syncCacheRoot(root)
@@ -26,6 +28,15 @@ func TestClaimCacheDirectoryCreationBarriers(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(directory, cacheDirectory, claim.ID+".json")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("failed creation published a claim: %v", err)
+			}
+			if component != cacheDirectory {
+				if changed, err := rememberClaimWithSync(t.Context(), directory, claim.ID, claim, syncRoot); changed || !errors.Is(err, failure) {
+					t.Fatalf("recovery skipped the original failed parent barrier: %t %v", changed, err)
+				}
+				if len(failedParents) != 2 || failedParents[0] != failedParents[1] {
+					t.Fatalf("recovery did not revisit the same failed naming parent: %v", failedParents)
+				}
+				t.Logf("creation and recovery both refused at parent %s", failedParents[0])
 			}
 			if changed, err := RememberClaim(t.Context(), directory, claim.ID, claim); !changed || err != nil {
 				t.Fatalf("creation recovery: %t %v", changed, err)
