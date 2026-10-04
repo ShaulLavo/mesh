@@ -60,6 +60,7 @@ func projectUsageAccount(account usagefeed.Account, first bool) dashboardUsageAc
 			result.extraWindows++
 			continue
 		}
+		window.Label = usageWindowLabel(window.ID)
 		result.Windows = append(result.Windows, window)
 	}
 	return result
@@ -87,5 +88,14 @@ func usageAccountWindow(id string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func usageWindowLabel(id string) string {
+	switch id {
+	case "five_hour", "session":
+		return "5-hour"
+	default:
+		return "Weekly"
 	}
 }

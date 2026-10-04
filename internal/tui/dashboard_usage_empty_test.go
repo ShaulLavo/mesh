@@ -131,10 +131,10 @@ func TestDashboardUsageCredits(t *testing.T) {
 		want  string
 	}{
 		{nil, ""},
-		{&usagefeed.Credits{Balance: 62500}, "credits 62,500"},
-		{&usagefeed.Credits{Unlimited: true}, "credits unlimited"},
-		{&usagefeed.Credits{}, ""},
-		{&usagefeed.Credits{Balance: 1234.5}, "credits 1,235"},
+		{&usagefeed.Credits{Balance: 62500}, "Credits 62,500"},
+		{&usagefeed.Credits{Unlimited: true}, "Credits unlimited"},
+		{&usagefeed.Credits{}, "Credits 0"},
+		{&usagefeed.Credits{Balance: 1234.5}, "Credits 1,234.50"},
 	} {
 		for _, fixture := range []string{"normal", "no-data"} {
 			for _, compact := range []bool{false, true} {
@@ -186,7 +186,7 @@ func TestDashboardUsageHistoricCompactIdentityAndWindow(t *testing.T) {
 	model := usageFixture(t, "historic")
 	model.width, model.height = 80, 24
 	frame := ansi.Strip(model.render())
-	if strings.Count(frame, "Weekly 100%/0% resets 3d22h used up") != 2 || strings.Count(frame, "stale 1d") != 2 {
+	if strings.Count(frame, "Weekly 100% used reset 3d22h old 1d") != 2 || strings.Count(frame, "old 1d") != 2 {
 		t.Fatal("historic label, used-up status, countdown or actual age clipped", frame)
 	}
 }
@@ -212,7 +212,7 @@ func TestDashboardUsageReviewIndependentHistoricCompact(t *testing.T) {
 	}
 	model.width, model.height = 80, 24
 	got := ansi.Strip(model.render())
-	if strings.Count(got, "Weekly used up resets 3d22h stale 1d") != 2 {
+	if strings.Count(got, "Weekly 100% used reset 3d22h old 1d") != 2 {
 		t.Fatal("independent historic identity, reset, exhaustion or age clipped", got)
 	}
 }
@@ -226,7 +226,7 @@ func TestDashboardUsageReviewCompactStatusAndAge(t *testing.T) {
 	}{
 		{name: "warning", status: "warning", word: "high", age: "stale 1d", used: &warning, seen: 24 * time.Hour},
 		{name: "unknown-reset", status: usageUnknown, word: "no quota", age: "stale ?"},
-		{name: "exhausted-25h", status: usageExhausted, word: "spent", age: "stale 1d1h", used: &exhausted, seen: 25 * time.Hour},
+		{name: "exhausted-25h", status: usageExhausted, word: "100% used", age: "old1d1h", used: &exhausted, seen: 25 * time.Hour},
 		{name: "unknown-25h", status: usageUnknown, word: "no quota", age: "old 1d1h", seen: 25 * time.Hour},
 		{name: "allowed-25h", status: "allowed", word: "20%", age: "old 1d1h", used: &allowed, seen: 25 * time.Hour},
 	} {
@@ -241,7 +241,7 @@ func TestDashboardUsageReviewCompactStatusAndAge(t *testing.T) {
 			}
 			line := ansi.Strip(model.usageCompactWindow(window, 36, true))
 			reset := "resets 3d22h"
-			if test.name == "unknown-25h" || test.name == "allowed-25h" {
+			if test.name == "unknown-25h" || test.name == "allowed-25h" || test.name == "exhausted-25h" || test.name == "warning" {
 				reset = "reset 3d22h"
 			}
 			for _, fact := range []string{"Weekly", reset, test.word, test.age} {

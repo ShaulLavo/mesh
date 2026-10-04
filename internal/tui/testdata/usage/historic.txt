@@ -1,10 +1,10 @@
 ┌AI plans · 2 accounts · passive ─────────────────── ┐
-│ Codex · paused-pro · Pro · disabled       stale 1d │
-│ credits 62,500                                     │
+│ Codex · paused-pro · Pro · disabled     checked 0s │
+│ Credits 62,500                                     │
 │ Weekly  100% used · 0% left · resets 3d 22h        │
-│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● exhausted           │
-│         unlimited-pro · Pro · disabled    stale 1d │
-│ credits unlimited                                  │
+│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● exhausted  stale 1d │
+│         unlimited-pro · Pro · disabled  checked 0s │
+│ Credits unlimited                                  │
 │ Weekly  100% used · 0% left · resets 3d 22h        │
-│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● exhausted           │
+│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● exhausted  stale 1d │
 └────────────────────────────────────────────────────┘

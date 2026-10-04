@@ -12,7 +12,7 @@ import (
 func TestDashboardUsageWallAccounts(t *testing.T) {
 	for _, size := range [][2]int{{160, 45}, {172, 46}, {344, 92}} {
 		model := usageFixture(t, "wall-accounts")
-		refreshWallFleetFixture(&model)
+		refreshWallFleetFixture(&model, time.Date(2026, 10, 4, 13, 0, 0, 0, time.UTC))
 		model.width, model.height = size[0], size[1]
 		if model.usagePanelWidth() < model.width*30/100 {
 			t.Errorf("AI panel width %d is too narrow at %v", model.usagePanelWidth(), size)
@@ -39,9 +39,9 @@ func TestDashboardUsageWallAccounts(t *testing.T) {
 	}
 }
 
-func refreshWallFleetFixture(model *dashboardModel) {
+func refreshWallFleetFixture(model *dashboardModel, now time.Time) {
 	previous := model.now
-	model.now = time.Date(2026, 10, 4, 13, 0, 0, 0, time.UTC)
+	model.now = now
 	for _, host := range model.hosts {
 		host.LastReply, host.NameObservedAt = model.now, model.now
 		host.CPU.MeasuredAt, host.RAM.MeasuredAt, host.Uptime.MeasuredAt = model.now, model.now, model.now
@@ -78,7 +78,7 @@ func refreshWallFleetFixture(model *dashboardModel) {
 
 func TestDashboardUsageLastReadingLabel(t *testing.T) {
 	model := usageFixture(t, "wall-accounts")
-	refreshWallFleetFixture(&model)
+	refreshWallFleetFixture(&model, time.Date(2026, 10, 4, 13, 0, 0, 0, time.UTC))
 	account := model.usage.accounts[1]
 	for _, compact := range []bool{false, true} {
 		got := ansi.Strip(strings.Join(model.usageAccountWindows(account, 50, compact), "\n"))
@@ -91,7 +91,7 @@ func TestDashboardUsageLastReadingLabel(t *testing.T) {
 func TestDashboardUsageWallPreservesFleetFailure(t *testing.T) {
 	for _, size := range [][2]int{{172, 46}, {344, 92}} {
 		model := usageFixture(t, "wall-accounts")
-		refreshWallFleetFixture(&model)
+		refreshWallFleetFixture(&model, time.Date(2026, 10, 4, 13, 0, 0, 0, time.UTC))
 		host := model.hosts[0]
 		host.Services.Rows[0].Failed = true
 		host.Services.Rows[0].State = "unhealthy"

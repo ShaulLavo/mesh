@@ -185,12 +185,12 @@ func TestDashboardUsageNoDataFailureAndExtraWindows(t *testing.T) {
 	model := usageFixture(t, "normal")
 	model.usageFailing = true
 	got := ansi.Strip(strings.Join(model.usagePanel(54, 17, false), "\n"))
-	if !strings.Contains(got, "feed unavailable") || !strings.Contains(got, "seen 2m") || strings.Contains(got, "stale 2m") || !strings.Contains(got, "20% used") {
+	if !strings.Contains(got, "feed unavailable") || !strings.Contains(got, "read 2m") || strings.Contains(got, "stale 2m") || !strings.Contains(got, "20% used") {
 		t.Fatal(got)
 	}
 	model = usageFixture(t, "no-data")
 	got = ansi.Strip(strings.Join(model.usagePanel(54, 17, false), "\n"))
-	for _, want := range []string{"Claude · shaul9191 · Max", "Codex · shaul9191 · Pro", "shaul.lavochkin · Pro", "seen —", "No quota reading · waits for traffic"} {
+	for _, want := range []string{"Claude · shaul9191 · Max", "Codex · shaul9191 · Pro", "shaul.lavochkin · Pro", "checked —", "No quota reading · waits for traffic"} {
 		if !strings.Contains(got, want) {
 			t.Fatal("missing", want, got)
 		}
@@ -216,7 +216,7 @@ func TestDashboardUsageMixedWindowAgeAndPublicationAge(t *testing.T) {
 	account.Windows[1].LastSeenAt = &old
 	got := ansi.Strip(strings.Join(model.usagePanel(54, 17, false), "\n"))
 	lines := strings.Split(got, "\n")
-	if !strings.Contains(lines[1], "seen 2m") || !strings.Contains(lines[3], "│") || strings.Contains(lines[5], "│▪") || !strings.Contains(lines[5], "stale 18m") {
+	if !strings.Contains(lines[1], "checked 0s") || !strings.Contains(lines[3], "read 2m") || !strings.Contains(lines[3], "│") || strings.Contains(lines[5], "│▪") || !strings.Contains(lines[5], "stale 18m") {
 		t.Fatal(got)
 	}
 	result := usagefeed.Result{Snapshot: &usagefeed.Snapshot{SchemaVersion: 1, GeneratedAt: model.now.Add(time.Hour), Accounts: []usagefeed.Account{account.Account}}, Revision: 1}
@@ -401,7 +401,7 @@ func TestDashboardUsageCompactFactsStayVisible(t *testing.T) {
 	model := usageFixture(t, "normal")
 	model.width, model.height = 80, 24
 	plain := ansi.Strip(model.render())
-	for _, want := range []string{"used/left", "100%/0%", "97%/3%", "38m exhausted", "2d6h high", "stale 18m"} {
+	for _, want := range []string{"used/left", "100% used", "97% high", "reset 38m", "reset 2d6h", "stale 18m"} {
 		if !strings.Contains(plain, want) {
 			t.Fatal("compact facts missing", want, plain)
 		}

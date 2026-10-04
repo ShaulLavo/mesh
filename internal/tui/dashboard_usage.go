@@ -26,16 +26,20 @@ func (m dashboardModel) usagePanel(width, budget int, compact bool) []string {
 	if budget < 3 {
 		return nil
 	}
-	visible, _ := m.usageVisible(budget, compact)
+	windowCompact := m.usagePanelCompact(budget, compact)
+	visible, _ := m.usageVisible(budget, windowCompact)
 	body := []string{}
 	for _, account := range m.usage.accounts[:visible] {
 		body = append(body, m.usageIdentity(account, width-4, compact))
-		body = append(body, m.usageAccountWindows(account, width-4, compact)...)
+		body = append(body, m.usageAccountWindows(account, width-4, windowCompact)...)
 	}
 
 	label := fmt.Sprintf("AI plans · %d accounts · passive", m.usage.total)
 	if compact {
 		label = fmt.Sprintf("AI plans · %d · used/left", m.usage.total)
+	}
+	if windowCompact && !compact {
+		label = fmt.Sprintf("AI plans · %d accounts · used/left", m.usage.total)
 	}
 	if visible < m.usage.total {
 		label = fmt.Sprintf("AI plans · %d/%d accounts · %d omitted", visible, m.usage.total, m.usage.total-visible)
@@ -76,12 +80,9 @@ func (m dashboardModel) usageIdentity(account dashboardUsageAccount, width int, 
 		}
 		identity += fmt.Sprintf(" · +%d %s", account.extraWindows, unit)
 	}
-	age := usageAge(m.now, account.LastSeenAt)
-	for _, window := range account.Windows {
-		if usageWindowHasReading(window) && usageHistoricSource(window.Source) && usageSameSeen(window.LastSeenAt, account.LastSeenAt) {
-			age = m.usageWindowAge(window)
-			break
-		}
+	age := "checked —"
+	if account.CheckedAt != nil {
+		age = "checked " + dashboardAge(m.now, *account.CheckedAt)
 	}
 	if compact {
 		identity = strings.TrimLeft(identity, " ")
@@ -89,6 +90,12 @@ func (m dashboardModel) usageIdentity(account dashboardUsageAccount, width int, 
 	if badge == usageWaiting {
 		// Reserve parking and age together so compact identities retain both facts.
 		age = badge + " · " + age
+	}
+	if compact && ansi.StringWidth(identity+" "+age) > width {
+		age = ""
+		if badge == usageWaiting {
+			age = badge
+		}
 	}
 	return dashboardAlign(identity, " "+age, width)
 }
@@ -114,9 +121,9 @@ func usageRouting(account usagefeed.Account) string {
 
 func usageAge(now time.Time, seen *time.Time) string {
 	if seen == nil {
-		return "seen —"
+		return "read —"
 	}
-	prefix := "seen "
+	prefix := "read "
 	if now.Sub(*seen) >= usageStaleAfter {
 		prefix = "stale "
 	}
@@ -129,7 +136,7 @@ func (m dashboardModel) usageAccountWindows(account dashboardUsageAccount, width
 		if !usageWindowHasReading(window) {
 			continue
 		}
-		showAge := !usageSameSeen(window.LastSeenAt, account.LastSeenAt)
+		showAge := true
 		if compact {
 			result = append(result, m.usageCompactWindow(window, width, showAge))
 			continue
@@ -170,13 +177,6 @@ func usageEmptySummary(account usagefeed.Account, credits string, width int) str
 		summary = "no quota reading"
 	}
 	return summary + " · " + credits
-}
-
-func usageSameSeen(left, right *time.Time) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return left.Equal(*right)
 }
 
 func (m dashboardModel) usageWindowLines(window usagefeed.Window, width int, showAge bool) []string {
@@ -333,6 +333,9 @@ func usageCompactHistory(label, facts, ratio, reset, word, age string, width int
 	if ansi.StringWidth(label+" "+facts) <= width {
 		return facts
 	}
+	if reading := usageCompactReadingHistory(label, facts, ratio, reset, word, age, width); reading != "" {
+		return reading
+	}
 	if strings.HasSuffix(facts, " passed "+age) || word == "OK" || word == usageReading {
 		facts = ratio + " resets " + reset + " " + age
 	} else {
@@ -358,6 +361,36 @@ func usageCompactHistory(label, facts, ratio, reset, word, age string, width int
 	}
 	status := strings.NewReplacer(usageExhausted, "spent", usageUnknown, "?").Replace(word)
 	return status + " resets " + reset + " " + compactAge
+}
+
+func usageCompactReadingHistory(label, facts, ratio, reset, word, age string, width int) string {
+	if !(word == usageExhausted && strings.HasPrefix(ratio, "100%/") || word == "high" && !strings.HasPrefix(ratio, "—")) {
+		return ""
+	}
+	resetLabel := "reset " + reset
+	if strings.Contains(facts, " used up ") {
+		resetLabel = "reset passed"
+	}
+	used, _, _ := strings.Cut(ratio, "/")
+	if word == usageExhausted {
+		word = "used"
+	}
+	return usageCompactQuotaHistory(label, used+" "+word, resetLabel, age, width)
+}
+
+func usageCompactQuotaHistory(label, reading, resetLabel, age string, width int) string {
+	prefix := reading + " " + resetLabel + " "
+	facts := prefix + age
+	if ansi.StringWidth(label+" "+facts) <= width {
+		return facts
+	}
+	age = strings.ReplaceAll(strings.ReplaceAll(age, "d ", "d"), "h ", "h")
+	age = strings.Replace(age, "stale ", "old ", 1)
+	facts = prefix + age
+	if ansi.StringWidth(label+" "+facts) <= width {
+		return facts
+	}
+	return prefix + strings.Replace(age, "old ", "old", 1)
 }
 
 func usageWindowHasReading(window usagefeed.Window) bool {
@@ -387,17 +420,29 @@ func usageCredits(credits *usagefeed.Credits) string {
 		return ""
 	}
 	if credits.Unlimited {
-		return "credits unlimited"
+		return "Credits unlimited"
 	}
-	balance := math.Round(credits.Balance)
-	if balance == 0 {
-		return ""
+	if credits.Balance > 0 && credits.Balance < 0.01 {
+		return "Credits <0.01"
 	}
-	value := strconv.FormatFloat(balance, 'f', 0, 64)
-	for position := len(value) - 3; position > 0; position -= 3 {
-		value = value[:position] + "," + value[position:]
+	value := strconv.FormatFloat(credits.Balance, 'f', 2, 64)
+	whole, fraction, _ := strings.Cut(value, ".")
+	for position := len(whole) - 3; position > 0; position -= 3 {
+		whole = whole[:position] + "," + whole[position:]
 	}
-	return "credits " + value
+	if fraction != "00" {
+		whole += "." + fraction
+	}
+	return "Credits " + whole
+}
+
+func (m dashboardModel) usagePanelCompact(budget int, compact bool) bool {
+	if compact {
+		return true
+	}
+	expanded, _ := m.usageVisible(budget, false)
+	compressed, _ := m.usageVisible(budget, true)
+	return expanded < m.usage.total && compressed == m.usage.total
 }
 
 func (m dashboardModel) usageVisible(budget int, compact bool) (int, int) {

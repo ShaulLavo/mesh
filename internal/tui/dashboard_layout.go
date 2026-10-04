@@ -51,7 +51,7 @@ func (m dashboardModel) summariesHeight(budget int) int {
 	if !m.usageEnabled {
 		return max(left, right)
 	}
-	_, usage := m.usageVisible(budget, false)
+	_, usage := m.usageVisible(budget, m.usagePanelCompact(budget, false))
 	return max(left, right, usage)
 }
 

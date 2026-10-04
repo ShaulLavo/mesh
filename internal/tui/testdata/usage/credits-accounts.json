@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-04T15:45:00.000Z",
+  "accounts": [
+    {
+      "id": "account-1",
+      "provider": "codex",
+      "label": "account-1",
+      "plan": "pro",
+      "checkedAt": "2026-10-04T15:43:00.000Z",
+      "lastSeenAt": "2026-10-04T15:43:00.000Z",
+      "state": "disabled",
+      "source": "proxy-state",
+      "routing": {
+        "mode": "rotating",
+        "active": false,
+        "lastServedAt": null
+      },
+      "windows": [
+        {
+          "id": "weekly",
+          "label": "Weekly",
+          "usedPercent": 100,
+          "resetsAt": "2026-10-09T21:14:55.000Z",
+          "windowMinutes": 10080,
+          "status": "warning",
+          "lastSeenAt": "2026-10-04T14:22:41.245Z",
+          "source": "passive-header"
+        },
+        {
+          "id": "model:gpt-6.1-sol:weekly",
+          "label": "gpt-6.1-sol Weekly",
+          "usedPercent": 90,
+          "resetsAt": "2026-10-09T21:14:56.000Z",
+          "windowMinutes": 10080,
+          "status": "unknown",
+          "lastSeenAt": "2026-10-03T23:18:27.857Z",
+          "source": "proxy-state"
+        },
+        {
+          "id": "cliproxy-passive-cache:weekly",
+          "label": "cliproxy-passive-cache Weekly",
+          "usedPercent": 90,
+          "resetsAt": "2026-10-09T21:14:56.000Z",
+          "windowMinutes": 10080,
+          "status": "unknown",
+          "lastSeenAt": "2026-10-03T23:18:27.857Z",
+          "source": "proxy-state"
+        }
+      ],
+      "cooldown": null,
+      "credits": {
+        "balance": 54708.8922325,
+        "unlimited": false
+      }
+    },
+    {
+      "id": "account-2",
+      "provider": "claude",
+      "label": "account-2",
+      "plan": "max",
+      "checkedAt": "2026-10-04T15:43:00.000Z",
+      "lastSeenAt": "2026-10-04T15:43:00.000Z",
+      "state": "unknown",
+      "source": "passive-header",
+      "routing": {
+        "mode": "unknown",
+        "active": null,
+        "lastServedAt": null
+      },
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "Session",
+          "usedPercent": 3,
+          "resetsAt": "2026-10-04T16:00:00.476Z",
+          "windowMinutes": 300,
+          "status": "unknown",
+          "lastSeenAt": "2026-10-04T11:46:59.584Z",
+          "source": "passive-header"
+        },
+        {
+          "id": "seven_day",
+          "label": "Weekly",
+          "usedPercent": 100,
+          "resetsAt": "2026-10-07T17:00:00.495Z",
+          "windowMinutes": 10080,
+          "status": "unknown",
+          "lastSeenAt": "2026-10-04T10:51:22.605Z",
+          "source": "passive-header"
+        },
+        {
+          "id": "seven_day_fable",
+          "label": "Weekly \u00b7 Fable",
+          "usedPercent": 1,
+          "resetsAt": "2026-10-07T17:00:00.477Z",
+          "windowMinutes": 10080,
+          "status": "unknown",
+          "lastSeenAt": "2026-10-04T11:46:58.782Z",
+          "source": "passive-header"
+        }
+      ],
+      "cooldown": null
+    },
+    {
+      "id": "account-3",
+      "provider": "codex",
+      "label": "account-3",
+      "plan": "Pro",
+      "checkedAt": "2026-10-04T15:43:00.000Z",
+      "lastSeenAt": "2026-10-04T15:43:00.000Z",
+      "state": "unknown",
+      "source": "proxy-state",
+      "routing": {
+        "mode": "rotating",
+        "active": true,
+        "lastServedAt": null
+      },
+      "windows": [
+        {
+          "id": "model:gpt-6.1-sol:weekly",
+          "label": "gpt-6.1-sol Weekly",
+          "usedPercent": 43,
+          "resetsAt": "2026-10-11T03:42:31.000Z",
+          "windowMinutes": 10080,
+          "status": "unknown",
+          "lastSeenAt": "2026-10-04T12:31:59.061Z",
+          "source": "proxy-state"
+        },
+        {
+          "id": "weekly",
+          "label": "Weekly",
+          "usedPercent": 43,
+          "resetsAt": "2026-10-11T03:42:31.000Z",
+          "windowMinutes": 10080,
+          "status": "unknown",
+          "lastSeenAt": "2026-10-04T12:31:59.061Z",
+          "source": "proxy-state"
+        }
+      ],
+      "cooldown": null,
+      "credits": {
+        "balance": 0,
+        "unlimited": false
+      }
+    }
+  ]
+}
