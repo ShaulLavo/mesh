@@ -28,10 +28,20 @@ git -C "$repo_root" archive "$baseline" | tar -x -C "$root/baseline"
 (cd "$root/baseline" && go build -trimpath -o "$root/baseline-mesh" ./cmd/mesh)
 (cd "$repo_root" && go build -trimpath -o "$root/candidate-mesh" ./cmd/mesh)
 (cd "$repo_root" && go build -trimpath -o "$root/control-client" ./integration/helpers/control-client)
-printf 'nativePlatform=%s\nbaselineSource=%s\ncandidateSource=%s\npublishedReleaseTransition=false\nreaderCutoverComplete=false\n' \
-  "$platform" "$baseline" "$(git -C "$repo_root" rev-parse HEAD)" > "$output/source.txt"
+candidate=$(git -C "$repo_root" rev-parse HEAD)
+candidate_dirty=$(git -C "$repo_root" status --porcelain | wc -l | tr -d ' ')
+printf 'nativePlatform=%s\nbaselineSource=%s\ncandidateSource=%s\ncandidateDirtyCount=%s\nupgradeCatalogSourceBaseline=%s\nfreshCandidateCatalogOldDaemonReadable=false\npublishedReleaseTransition=false\nreaderCutoverComplete=false\n' \
+  "$platform" "$baseline" "$candidate" "$candidate_dirty" "$baseline" > "$output/source.txt"
+mkdir -p "$output/fresh-candidate"
 TMPDIR="$root" python3 "$repo_root/integration/helpers/machine_naming.py" "$root/candidate-mesh" \
-  --control-client "$root/control-client" --baseline "$root/baseline-mesh" --evidence "$output" > "$output/proof.txt" 2>&1 || {
+  --control-client "$root/control-client" --candidate-source "$candidate" --evidence "$output/fresh-candidate" \
+  > "$output/fresh-candidate/proof.txt" 2>&1 || {
+    cat "$output/fresh-candidate/proof.txt" >&2
+    exit 1
+  }
+TMPDIR="$root" python3 "$repo_root/integration/helpers/machine_naming.py" "$root/candidate-mesh" \
+  --control-client "$root/control-client" --baseline "$root/baseline-mesh" --baseline-source "$baseline" \
+  --candidate-source "$candidate" --evidence "$output" > "$output/proof.txt" 2>&1 || {
     cat "$output/proof.txt" >&2
     exit 1
   }

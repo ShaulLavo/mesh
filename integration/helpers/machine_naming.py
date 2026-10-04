@@ -13,6 +13,7 @@ import tempfile
 
 from mesh_control import receive, round_trip
 from recovery_transactions import build_control_client
+from naming_transition import RetainedCatalog, image_digest
 from terminal_window import Fixture, Terminal, PROMPT, eventually, require
 
 
@@ -90,28 +91,52 @@ def terminal_marker(fixture, terminal, marker, session_identity):
 
 
 def prove(fixture, args):
-    fixture.start_remote()
+    fixture.start_remote(initial_binary=args.baseline)
     host = json.loads((fixture.config / "hosts.json").read_text())["hosts"][0]
     port = int(host["endpoint"].split(":")[-1].split("/")[0])
     info_request = {"type": "host.info", "requestId": "naming-baseline"}
     local_socket = str(fixture.remote / "daemon.sock")
-    initial = round_trip(local_socket, info_request)["host"]
-    require(initial.get("machineName") == "pc" and initial.get("nameRevision") == 1,
-            "destination host.info lacks a persisted machine-owned name and revision")
     if args.control_client:
         (fixture.root / "control-client").symlink_to(Path(args.control_client).resolve())
     else:
         build_control_client(fixture)
-    require(remote_request(fixture, host, info_request)["host"] == initial,
-            "authenticated device and destination disagree on initial claim")
-    terminal = Terminal([fixture.binary, "pc"], fixture.environment, fixture.root)
+    source_binary = args.baseline or fixture.binary
+    source_environment = destination_environment(fixture) if args.baseline else fixture.environment
+    source_target = "local" if args.baseline else "pc"
+    terminal = Terminal([source_binary, source_target], source_environment, fixture.root)
     fixture.terminals.append(terminal)
     terminal.expect(PROMPT)
     shell_identity = fixture.shell_identity(terminal)
     session_id, shell_pid = shell_identity
     worker_pid = int(subprocess.check_output(["ps", "-o", "ppid=", "-p", str(shell_pid)]))
+    retained = RetainedCatalog(fixture, session_id, shell_pid, worker_pid, source_binary)
+    require(("alias" in retained.initial["hostColumns"]) == bool(args.baseline),
+            "fixture catalog provenance differs from the selected initialization source")
+    initialized = round_trip(local_socket, info_request)["host"]
+    require(remote_request(fixture, host, info_request)["host"] == initialized,
+            "authenticated device disagrees with the initializing destination image")
+    terminal_marker(fixture, terminal, "INITIAL_SOURCE_IO", shell_identity)
+    phases = [retained.observe("baseline-initialized" if args.baseline else "fresh-candidate",
+                               source_binary, initialized)]
+    if args.baseline:
+        terminal.send(b"\x1d")
+        terminal.expect_exit()
+        terminal.close()
+        fixture.terminals.remove(terminal)
+        fixture.stop_daemon()
+        start_replacement(fixture, fixture.binary, port)
+        fixture.adopt_remote_name(round_trip(local_socket, info_request)["host"])
+        terminal = Terminal([fixture.binary, session_id], fixture.environment, fixture.root)
+        fixture.terminals.append(terminal)
+        terminal.expect(PROMPT)
+    initial = round_trip(local_socket, info_request)["host"]
+    require(initial.get("machineName") == "pc" and initial.get("nameRevision") == 1,
+            "destination host.info lacks a persisted machine-owned name and revision")
+    require(remote_request(fixture, host, info_request)["host"] == initial,
+            "authenticated device and destination disagree on initial claim")
     metadata = (fixture.remote / "s" / session_id / "meta.json").read_bytes()
     terminal_marker(fixture, terminal, "BEFORE_NAME_IO", shell_identity)
+    phases.append(retained.observe("candidate-before-rename", fixture.binary, initial))
     watch_connection, snapshot = watch(fixture)
     try:
         require(snapshot["type"] == "state.snapshot" and snapshot["stateSnapshot"]["host"]["machineName"] == "pc",
@@ -164,6 +189,7 @@ def prove(fixture, args):
         terminal_marker(fixture, terminal, "AFTER_NAME_IO", shell_identity)
         os.kill(worker_pid, 0)
         require((fixture.remote / "s" / session_id / "meta.json").read_bytes() == metadata, "rename changed retained worker metadata")
+        phases.append(retained.observe("candidate-after-rename", fixture.binary, first_claim))
         terminal.send(b"\x1d")
         terminal.expect_exit()
         terminal.close()
@@ -176,8 +202,17 @@ def prove(fixture, args):
             legacy = round_trip(local_socket, info_request)["host"]
             require(legacy["id"] == first_claim["id"], "source baseline changed host identity")
             require(name_path.read_bytes() == saved_name, "source baseline rewrote new name state")
-            os.kill(shell_pid, 0)
-            os.kill(worker_pid, 0)
+            require(remote_request(fixture, host, info_request)["host"] == legacy,
+                    "authenticated baseline read changed the pinned destination")
+            restored = Terminal([args.baseline, session_id], destination_environment(fixture), fixture.root)
+            fixture.terminals.append(restored)
+            restored.expect(PROMPT)
+            terminal_marker(fixture, restored, "RESTORED_BASELINE_IO", shell_identity)
+            phases.append(retained.observe("baseline-restored", args.baseline, legacy))
+            restored.send(b"\x1d")
+            restored.expect_exit()
+            restored.close()
+            fixture.terminals.remove(restored)
             fixture.stop_daemon()
         start_replacement(fixture, fixture.binary, port)
         require(round_trip(local_socket, info_request)["host"] == first_claim, "restart or source transition lost committed name")
@@ -200,6 +235,7 @@ def prove(fixture, args):
         resumed.expect(PROMPT)
         terminal_marker(fixture, resumed, "RECONNECTED_NAME_IO", shell_identity)
         os.kill(worker_pid, 0)
+        phases.append(retained.observe("candidate-restored", fixture.binary, final))
         if args.evidence:
             output = Path(args.evidence)
             output.mkdir(parents=True, exist_ok=True)
@@ -211,6 +247,18 @@ def prove(fixture, args):
                       "inputOutputBeforeAfterReconnect": True, "unauthorizedAndUpdaterDenied": True,
                       "wrongPinAndTargetDenied": True, "destinationWatchConverged": True,
                       "sourceBaselineTransition": bool(args.baseline), "publishedReleaseTransition": False,
+                      "upgradeCatalogSourceBaseline": args.baseline_source,
+                      "freshCandidateCatalogOldDaemonReadable": False,
+                      "freshCandidateCatalogOldDaemonReadabilityEvidence":
+                          "preserved diagnostic: authenticated baseline rejected candidate-created alias-free schema10; "
+                          "this fresh-candidate path does not restart baseline",
+                      "catalogInitializedByBaseline": bool(args.baseline),
+                      "initialCatalogHostColumns": retained.initial["hostColumns"],
+                      "sourceImages": {"baseline": {"source": args.baseline_source,
+                                                    "digest": image_digest(args.baseline)} if args.baseline else None,
+                                       "candidate": {"source": args.candidate_source,
+                                                     "digest": image_digest(fixture.binary)}},
+                      "retainedWorkerCreatedByBaseline": bool(args.baseline), "phases": phases,
                       "readerCutoverComplete": False}
             (output / "checks.txt").write_text(json.dumps(result, indent=2) + "\n")
         print("PASS: destination name/revision, full-device authorization, forgery/target rejection, durable retry/restart, concurrent rename, watch reconnect, retained worker/shell/session I/O")
@@ -223,8 +271,12 @@ def main():
     parser.add_argument("binary")
     parser.add_argument("--control-client")
     parser.add_argument("--baseline")
+    parser.add_argument("--baseline-source")
+    parser.add_argument("--candidate-source")
     parser.add_argument("--evidence")
     args = parser.parse_args()
+    if args.baseline and not re.fullmatch(r"[0-9a-f]{40}", args.baseline_source or ""):
+        parser.error("--baseline requires its exact authenticated --baseline-source")
     with tempfile.TemporaryDirectory(prefix="mesh-name-") as directory:
         fixture = Fixture(args.binary, Path(directory))
         try:
