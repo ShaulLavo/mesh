@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -54,6 +55,14 @@ func TestResolveArgumentRefusesKnownNameConflictAndKeepsExactIDs(t *testing.T) {
 	}
 }
 
+func readNameCacheFixtureClaim(directory, owner string) (machinename.Claim, error) {
+	claims, err := machinename.CachedClaims(directory, []string{owner})
+	if err != nil {
+		return machinename.Claim{}, fmt.Errorf("read fixture machine name: %w", err)
+	}
+	return claims[owner], nil
+}
+
 func TestStateNameGapReplayAndMixedPayloadCannotPoisonCacheOrView(t *testing.T) {
 	f := namedDestination(t)
 	if _, _, err := f.names.Rename(t.Context(), f.host.ID, "renamed", 1); err != nil {
@@ -98,7 +107,7 @@ func TestStateNameGapReplayAndMixedPayloadCannotPoisonCacheOrView(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cached, err := machinename.CachedClaim(filepath.Dir(path), f.host.ID)
+	cached, err := readNameCacheFixtureClaim(filepath.Dir(path), f.host.ID)
 	if err != nil || cached != declaredName(info) {
 		t.Fatalf("rejected event changed cached claim: %+v %v", cached, err)
 	}
@@ -193,7 +202,7 @@ func TestAuthenticatedOwnerCannotDeclareAnotherCryptographicIdentity(t *testing.
 	if !reflect.DeepEqual(view, before) {
 		t.Fatal("foreign polled claim changed view")
 	}
-	cached, err := machinename.CachedClaim(filepath.Dir(path), other.ID)
+	cached, err := readNameCacheFixtureClaim(filepath.Dir(path), other.ID)
 	if err != nil || cached != original {
 		t.Fatalf("foreign claim changed owner cache: %+v %v", cached, err)
 	}

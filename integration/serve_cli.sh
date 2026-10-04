@@ -430,7 +430,7 @@ grep -Eq "^/files[[:space:]]+files[[:space:]]+pc[[:space:]]+files.*offline/stale
   "$TEST_ROOT/list-offline.out" || fail "offline cache lost the private fallback URL: $(<"$TEST_ROOT/list-offline.out")"
 grep -Eq "^/api[[:space:]]+CLI Proxy[[:space:]]+pc[[:space:]]+proxy.*offline/stale" \
   "$TEST_ROOT/list-offline.out" || fail "offline cache lost the display name: $(<"$TEST_ROOT/list-offline.out")"
-grep -Fq "$ORIGIN_ID: unavailable" "$TEST_ROOT/list-offline.err" ||
+grep -Fq -- "$ORIGIN_ID: unavailable" "$TEST_ROOT/list-offline.err" ||
   fail "offline service list omitted its host diagnostic: $(<"$TEST_ROOT/list-offline.err")"
 
 start_origin "$TEST_ROOT/origin-restarted.log"

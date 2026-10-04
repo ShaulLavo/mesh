@@ -128,9 +128,13 @@ func loadPrivateKey(path string) (ed25519.PrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read identity key %s: %w", path, err)
 	}
+	return parsePrivateKey(contents, path)
+}
+
+func parsePrivateKey(contents []byte, path string) (ed25519.PrivateKey, error) {
 	block, rest := pem.Decode(contents)
 	if block == nil || block.Type != "OPENSSH PRIVATE KEY" || len(bytes.TrimSpace(rest)) != 0 {
-		return nil, fmt.Errorf("parse identity key %s: not an OpenSSH private key; delete it and Mesh will mint a new identity", path)
+		return nil, fmt.Errorf("parse identity key %s: not an OpenSSH private key", path)
 	}
 	parsed, err := ssh.ParseRawPrivateKey(contents)
 	if err != nil {

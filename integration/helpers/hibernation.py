@@ -7,6 +7,7 @@ import tempfile
 import time
 
 sys.dont_write_bytecode = True
+import terminal_window  # noqa: E402 - keep fixture helpers bytecode-free
 from agent_recovery import create, record, recover, setup
 from mesh_control import round_trip
 from terminal_window import Fixture, Terminal, eventually, require, run_outside_containing_session
@@ -38,7 +39,7 @@ def attach_and_detach(fixture, session_id, ready):
 def create_shell(fixture):
     response = round_trip(str(fixture.remote / "daemon.sock"), {
         "type": "session.create", "requestId": "create-shell",
-        "command": ["/bin/bash", "--norc", "-i"], "cwd": str(fixture.root),
+        "command": [str(fixture.helpers / "window_shell.sh")], "cwd": str(fixture.root),
     })
     require(response.get("type") == "session.created", f"create shell failed: {response}")
     return response["sessionId"]
@@ -55,7 +56,7 @@ def idle_policy(fixture):
     shell = create_shell(fixture)
     require(listing(fixture)[shell].get("memoryBytes", 0) > 0, "new live shell reported no memory after an empty list")
     attach_and_detach(fixture, agent, b"AGENT_READY_idle-conversation")
-    attach_and_detach(fixture, shell, b"$")
+    attach_and_detach(fixture, shell, terminal_window.PROMPT)
 
     eventually(lambda: listing(fixture)[agent].get("hibernated"), "idle agent was not hibernated", timeout=IDLE_SECONDS * 4)
     row = listing(fixture)[agent]
