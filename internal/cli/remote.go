@@ -65,6 +65,10 @@ func openVerifiedHostInfo(ctx context.Context, host HostRecord, dial HostDialer)
 		_ = conn.Close()
 		return nil, protocol.HostInfo{}, err
 	}
+	if err := validateNameEnvelope(response); err != nil {
+		_ = conn.Close()
+		return nil, protocol.HostInfo{}, err
+	}
 	if err := rememberHostName(verifyCtx, host, *response.Host); err != nil {
 		_ = conn.Close()
 		return nil, protocol.HostInfo{}, err
