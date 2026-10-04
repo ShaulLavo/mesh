@@ -1,6 +1,7 @@
 """Public archive identities and joined historical bridge receipts."""
 import io
 import json
+import os
 import socket
 import ssl
 import sys
@@ -183,7 +184,8 @@ class ControlledOpener:
         attempt = len(state["attempts"])
         state["attempts"].append(time.monotonic())
         state["timeouts"].append(timeout)
-        state["trusted"] = all(handler.proxies == {} for handler in self.handlers
+        state["workerPID"] = os.getpid()
+        state["trusted"] = len(self.handlers) == 2 and all(handler.proxies == {} for handler in self.handlers
             if isinstance(handler, urllib.request.ProxyHandler)) and all(
             handler._context.verify_mode == ssl.CERT_REQUIRED and handler._context.check_hostname
             for handler in self.handlers if isinstance(handler, urllib.request.HTTPSHandler))
@@ -193,6 +195,8 @@ class ControlledOpener:
             raise urllib.error.URLError(socket.gaierror(socket.EAI_NONAME, "fixture DNS failure"))
         if kind == "nested-dns":
             raise urllib.error.URLError(urllib.error.URLError(socket.gaierror(socket.EAI_AGAIN, "fixture DNS failure")))
+        if kind == "dns-permanent":
+            raise urllib.error.URLError(socket.gaierror(socket.EAI_FAMILY, "fixture unsupported address family"))
         if kind == "reset":
             raise urllib.error.URLError(ConnectionResetError("fixture connection reset"))
         if kind == "tls":
@@ -263,16 +267,16 @@ published.download_worker(*sys.argv[1:])
         self.assertEqual(len(attempts), 3)
         self.assertGreaterEqual(attempts[1] - attempts[0], 0.02)
         self.assertGreaterEqual(attempts[2] - attempts[1], 0.04)
-        self.assertEqual(list(root.rglob("*.*")), [])
+        self.assertFalse(any(path.is_file() for path in root.rglob("*")))
 
     def test_permanent_http_tls_redirect_and_size_failures_are_not_retried(self):
-        for kind in ("http-400", "http-403", "http-404", "http-429", "http-501", "http-505", "tls", "redirect", "oversize"):
+        for kind in ("http-400", "http-403", "http-404", "http-429", "http-501", "http-505", "tls", "dns-permanent", "redirect", "oversize"):
             with self.subTest(kind=kind):
                 with self.assertRaises(Exception):
                     self.download([kind, "good"])
                 self.assertEqual(len(self.state()["attempts"]), 1)
                 self.assertTrue(self.state()["trusted"])
-                expected_closed = 0 if kind == "tls" else 1
+                expected_closed = 0 if kind in ("tls", "dns-permanent") else 1
                 self.assertEqual(self.state().get("closed", 0), expected_closed)
 
     def test_total_budget_bounds_stalled_dns_and_response_read(self):
@@ -284,6 +288,8 @@ published.download_worker(*sys.argv[1:])
                     self.download([kind])
                 self.assertLess(time.monotonic() - started, 0.8)
                 self.assertEqual(len(self.state()["attempts"]), 1)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(self.state()["workerPID"], 0)
                 state = self.control.read_bytes()
                 time.sleep(0.05)
                 self.assertEqual(self.control.read_bytes(), state)
