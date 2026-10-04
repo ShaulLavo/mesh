@@ -1,0 +1,331 @@
+{
+  "id": "8a7fea6b4e919be80aea6a90679f5d35",
+  "coordinator": "18DrrJ6R46Qcz09fNTDK9Km6G2_pNRcEWSb2HD8s2_s",
+  "fleet": {
+    "version": 1,
+    "name": "published-archive-fixture",
+    "revision": 1,
+    "members": [
+      {
+        "id": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "alias": "archive-worker",
+        "endpoint": "ws://127.0.0.1:1/mesh",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "dependsOn": [
+          "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+        ]
+      },
+      {
+        "id": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "alias": "archive-router",
+        "endpoint": "ws://127.0.0.1:1/mesh",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        }
+      }
+    ]
+  },
+  "membership": "7f97c881a6acf0113212f8d29687b5fb8e8c304453f4ef8f69e2b738539d1000",
+  "release": {
+    "schema": 1,
+    "version": "v0.1.167",
+    "commit": "b692306eec9066dd5eb8b3c7c51f0c4fe1fe3cf5",
+    "artifacts": [
+      {
+        "platform": {
+          "os": "darwin",
+          "arch": "arm64"
+        },
+        "archive": "mesh_darwin_arm64.tar.gz",
+        "sha256": "d72421abfc5b1e87a3fa9a057fdbc25346657cc955672591c03a370e8efb288a",
+        "binarySha256": "7764df42c1938f10af01ef4892f25cfadb1f3e5ef2403aa4ed0ce57a8f2b8549"
+      },
+      {
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "archive": "mesh_linux_amd64.tar.gz",
+        "sha256": "5c9bd40daa1dac9023e5415b9c1f3b8333729af49974d519be943cea2526f5d1",
+        "binarySha256": "8d512231e6b7c07e6a3573f362254d67bdae3a5feb8efcf0649da13330783300"
+      },
+      {
+        "platform": {
+          "os": "linux",
+          "arch": "arm64"
+        },
+        "archive": "mesh_linux_arm64.tar.gz",
+        "sha256": "70e508272b4d229385a62f8e07244242c4c173be0e4d5485940c7c47b699c4dc",
+        "binarySha256": "4f7b1d4889af84aa574b9830d423efd503f9ffcbefb5ac59007d9ee56c44a5c1"
+      }
+    ],
+    "compatibility": {
+      "stateReadMin": 10,
+      "stateReadMax": 10,
+      "stateWrite": 10,
+      "workerMin": 1,
+      "workerMax": 1,
+      "workerWrite": 1,
+      "journalVersion": 1,
+      "transitions": [
+        {
+          "fromDigest": "c67ad28193732faaa14cba338b71dbb94cdedb2fccce49c4be6e5a96123281a6",
+          "toDigest": "8d512231e6b7c07e6a3573f362254d67bdae3a5feb8efcf0649da13330783300",
+          "platform": {
+            "os": "linux",
+            "arch": "amd64"
+          },
+          "proof": "049831ec2faf9569fe0e6d057f655e8e3e45826e3e09d9b8a059d8ba24e4728a"
+        },
+        {
+          "fromDigest": "bb3414ddbc2acb57d2b948d1d8080a409865c5bebabc08a5761c5106db898a2a",
+          "toDigest": "7764df42c1938f10af01ef4892f25cfadb1f3e5ef2403aa4ed0ce57a8f2b8549",
+          "platform": {
+            "os": "darwin",
+            "arch": "arm64"
+          },
+          "proof": "083bd6537456113cbc72f0cd0367e6429cee5343d0d7f1888137b9a37a159f95"
+        },
+        {
+          "fromDigest": "a0b12896df6c4f633ca250d805a6a220e7319eb5a920eb04da20d64b2024fa7e",
+          "toDigest": "7764df42c1938f10af01ef4892f25cfadb1f3e5ef2403aa4ed0ce57a8f2b8549",
+          "platform": {
+            "os": "darwin",
+            "arch": "arm64"
+          },
+          "proof": "0e0a46eef53b795ceae6112fd1aae8d8a9e56112554f3790a8a9d26bb6b60034"
+        },
+        {
+          "fromDigest": "397d864aff2e148a23adc982c7714a103e40857238d8399691c1e9a842b7ca23",
+          "toDigest": "8d512231e6b7c07e6a3573f362254d67bdae3a5feb8efcf0649da13330783300",
+          "platform": {
+            "os": "linux",
+            "arch": "amd64"
+          },
+          "proof": "16e672bb451379e9ee072c82be723de0d9bd156faf115117bef825c5029b8403"
+        },
+        {
+          "fromDigest": "6d884ec390d3f3bb7aeeb3850b259a01634509d9c8a6cbad6377eb4806644706",
+          "toDigest": "8d512231e6b7c07e6a3573f362254d67bdae3a5feb8efcf0649da13330783300",
+          "platform": {
+            "os": "linux",
+            "arch": "amd64"
+          },
+          "proof": "1fb7dfd1b9684dfc61954d9ba39a45c4b129ec2a6e3503e9e69cd62db8531d58"
+        },
+        {
+          "fromDigest": "29b917821f7d190148e83d1e9a29ad04e12383b1041504e55c9cbf20a5c01157",
+          "toDigest": "4f7b1d4889af84aa574b9830d423efd503f9ffcbefb5ac59007d9ee56c44a5c1",
+          "platform": {
+            "os": "linux",
+            "arch": "arm64"
+          },
+          "proof": "24c4b8a81f1757b54389693798db097320cb749735130bd9534688aead208cd7"
+        },
+        {
+          "fromDigest": "7673f5ead2b70b126b7575490b67a4d854913350cbc339539f41f1c5867ad5b3",
+          "toDigest": "8d512231e6b7c07e6a3573f362254d67bdae3a5feb8efcf0649da13330783300",
+          "platform": {
+            "os": "linux",
+            "arch": "amd64"
+          },
+          "proof": "4d42928f732a756c9f7c28ffc9986a44b0eb8ddb2d2940bfc5ba1258e7692cb1"
+        },
+        {
+          "fromDigest": "91abea4817e68c318c561e00d474dafc43272b4691a825e3c952792c69e398d6",
+          "toDigest": "7764df42c1938f10af01ef4892f25cfadb1f3e5ef2403aa4ed0ce57a8f2b8549",
+          "platform": {
+            "os": "darwin",
+            "arch": "arm64"
+          },
+          "proof": "5b8d048692985bfb26f4bbdc2bf04b2deeaaca802750316cada3480991e2fd31"
+        },
+        {
+          "fromDigest": "cb0a47fe9864b2b1b07bdc629ee3543230c51fa5c581de1a334b2a618757408c",
+          "toDigest": "4f7b1d4889af84aa574b9830d423efd503f9ffcbefb5ac59007d9ee56c44a5c1",
+          "platform": {
+            "os": "linux",
+            "arch": "arm64"
+          },
+          "proof": "66acbbbfaea7325cd7b8372f3f067a4ed50df18dbcdccc3a06617d9628d90b36"
+        },
+        {
+          "fromDigest": "245dfd6223cbdb74877722248eec9bb782e4d9c58fbf157176792aeb6e23f8ae",
+          "toDigest": "8d512231e6b7c07e6a3573f362254d67bdae3a5feb8efcf0649da13330783300",
+          "platform": {
+            "os": "linux",
+            "arch": "amd64"
+          },
+          "proof": "733c45114d94be488dd1ba6a1df6640cb19bae598042aba5d7cdfcad65ddb88d"
+        },
+        {
+          "fromDigest": "74c38dd4f879f5b8df0ce216a1a1813dd8e9d19263ebb3e95ba7a00de4995430",
+          "toDigest": "4f7b1d4889af84aa574b9830d423efd503f9ffcbefb5ac59007d9ee56c44a5c1",
+          "platform": {
+            "os": "linux",
+            "arch": "arm64"
+          },
+          "proof": "82f9df4f9197c274243d70cd2550e38f07de9fc8baf5bb132ee68a58192b3ec4"
+        },
+        {
+          "fromDigest": "92e1b9a8513de35bc3099463ef8bcd904b0e2cc925ac44c85f846e0172892ac7",
+          "toDigest": "7764df42c1938f10af01ef4892f25cfadb1f3e5ef2403aa4ed0ce57a8f2b8549",
+          "platform": {
+            "os": "darwin",
+            "arch": "arm64"
+          },
+          "proof": "8cf9efec584d07a9de72f30b67da2cf184e56264351a40259d85d20a642729ac"
+        },
+        {
+          "fromDigest": "b5458bcc5e224866ce33e9a37b3d1c83051023743769638f814158cd4c13c79d",
+          "toDigest": "7764df42c1938f10af01ef4892f25cfadb1f3e5ef2403aa4ed0ce57a8f2b8549",
+          "platform": {
+            "os": "darwin",
+            "arch": "arm64"
+          },
+          "proof": "9273244f5f27fb5fd97099b39c56a127cee30df1cae92dc01e3d44ce6f83cbab"
+        },
+        {
+          "fromDigest": "01c512769e98637afcd7f82a496ae3ef52fb3851931e4c919d78651ed6fb12c3",
+          "toDigest": "4f7b1d4889af84aa574b9830d423efd503f9ffcbefb5ac59007d9ee56c44a5c1",
+          "platform": {
+            "os": "linux",
+            "arch": "arm64"
+          },
+          "proof": "9f0b5728e93200f7648ad03e73a09763b2e1417e85d3e09bf66ddf22cfa31940"
+        },
+        {
+          "fromDigest": "132ac1f4c94fcc8cceab593bb6169c77abae570004deebb52d9259c68f853f7f",
+          "toDigest": "7764df42c1938f10af01ef4892f25cfadb1f3e5ef2403aa4ed0ce57a8f2b8549",
+          "platform": {
+            "os": "darwin",
+            "arch": "arm64"
+          },
+          "proof": "a065dc40191cfb6752601da3b5de368a9258e47438dce4814407566a23b58065"
+        },
+        {
+          "fromDigest": "71bdf0841ecb7ccd602e42801e6b5fb8e8a24f6c366d2cbe6c041987d546a03b",
+          "toDigest": "7764df42c1938f10af01ef4892f25cfadb1f3e5ef2403aa4ed0ce57a8f2b8549",
+          "platform": {
+            "os": "darwin",
+            "arch": "arm64"
+          },
+          "proof": "a895164410e25f7e4e2ad09ff2ec70f2b07382878397663c02de6d81d5d2d865"
+        },
+        {
+          "fromDigest": "67bc60df2e2ce4f6304c30af9cf2cb2d40c447eaf6ba8822825e75f93c8b6c9b",
+          "toDigest": "8d512231e6b7c07e6a3573f362254d67bdae3a5feb8efcf0649da13330783300",
+          "platform": {
+            "os": "linux",
+            "arch": "amd64"
+          },
+          "proof": "a8ffbe3f3a699d224210b94610654cf4c11c5c69fd84c9585373bcee3f7c8daf"
+        },
+        {
+          "fromDigest": "601384bcb86be6b27808cef5ebf6a278378faba215042a310742bac908d716b0",
+          "toDigest": "8d512231e6b7c07e6a3573f362254d67bdae3a5feb8efcf0649da13330783300",
+          "platform": {
+            "os": "linux",
+            "arch": "amd64"
+          },
+          "proof": "aa32440fa33bef2c0f33e63779f2e5f56e821f9b94d9c7cb19ebf39a53023aef"
+        },
+        {
+          "fromDigest": "9ccd99145e04284aad8e7367fad3b15a864536f7ebf4bf99ce0ac977bf36227d",
+          "toDigest": "4f7b1d4889af84aa574b9830d423efd503f9ffcbefb5ac59007d9ee56c44a5c1",
+          "platform": {
+            "os": "linux",
+            "arch": "arm64"
+          },
+          "proof": "ac7d7823b248ce42190f5d7d1dd0e44533f3eec40c440faa69e87927e5f9e2ba"
+        },
+        {
+          "fromDigest": "99bcf5b3b0a940dc1099d49ea6e877ee37a6e1c89955db19a388e7e0bb926b56",
+          "toDigest": "4f7b1d4889af84aa574b9830d423efd503f9ffcbefb5ac59007d9ee56c44a5c1",
+          "platform": {
+            "os": "linux",
+            "arch": "arm64"
+          },
+          "proof": "baaa38322e2559f3e461bf8a008c563161decef919fc9a48d0c12a4b21932022"
+        },
+        {
+          "fromDigest": "9c18a1b15bd86b6fa1544c8a80401d1792a7fd265a7e429413a328871e86b9d3",
+          "toDigest": "8d512231e6b7c07e6a3573f362254d67bdae3a5feb8efcf0649da13330783300",
+          "platform": {
+            "os": "linux",
+            "arch": "amd64"
+          },
+          "proof": "be9a243d4f40652c500db4e005fc1707f3d80bc3e54ce8f9d3230805570da827"
+        },
+        {
+          "fromDigest": "1c7884a16ca64d0d0e027c744cb66617519a96ff176488f16eb985dcfa243bd1",
+          "toDigest": "4f7b1d4889af84aa574b9830d423efd503f9ffcbefb5ac59007d9ee56c44a5c1",
+          "platform": {
+            "os": "linux",
+            "arch": "arm64"
+          },
+          "proof": "d389d5d6907020b81a28afea9566aef815768e9b8fecc1f29d2e3731c00c4a64"
+        },
+        {
+          "fromDigest": "fb97759c7b7b03d4fcacad7d754eae97d89bc9352e01a8940493a735dc107f12",
+          "toDigest": "4f7b1d4889af84aa574b9830d423efd503f9ffcbefb5ac59007d9ee56c44a5c1",
+          "platform": {
+            "os": "linux",
+            "arch": "arm64"
+          },
+          "proof": "f6ca09f7603b69d5c701518ae78e7691a2803eb77edb1273d8c5cb994c5b351a"
+        },
+        {
+          "fromDigest": "949a3b730b26c9ea014eb88c98fa73edac68de5ea02354a30ab093e2df9f297a",
+          "toDigest": "7764df42c1938f10af01ef4892f25cfadb1f3e5ef2403aa4ed0ce57a8f2b8549",
+          "platform": {
+            "os": "darwin",
+            "arch": "arm64"
+          },
+          "proof": "fb2b295bc28e4eaf8a3c0938e2fd924761bf52549f2a276f4bdbca059e4db94d"
+        }
+      ]
+    }
+  },
+  "releaseDigest": "2b99fef9c7c692b84139502f9052cdedb872d63eeff42c16bb14a24453f13be9",
+  "targets": [
+    {
+      "host": {
+        "id": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "alias": "archive-worker",
+        "endpoint": "ws://127.0.0.1:1/mesh",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        },
+        "dependsOn": [
+          "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+        ]
+      },
+      "state": "pending",
+      "retryAt": "0001-01-01T00:00:00Z"
+    },
+    {
+      "host": {
+        "id": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "alias": "archive-router",
+        "endpoint": "ws://127.0.0.1:1/mesh",
+        "platform": {
+          "os": "linux",
+          "arch": "amd64"
+        }
+      },
+      "state": "pending",
+      "retryAt": "0001-01-01T00:00:00Z"
+    }
+  ],
+  "createdAt": "2026-10-04T03:40:32.079203579Z",
+  "updatedAt": "2026-10-04T03:40:32.079203579Z",
+  "stopped": false,
+  "cancel": false,
+  "cached": false
+}
