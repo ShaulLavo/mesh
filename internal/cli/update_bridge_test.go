@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
+	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
@@ -67,6 +69,14 @@ func TestUpdatePublishedBridgeGuidance(t *testing.T) {
 	}
 }
 
+func TestUpdateBridgeInteractiveStillRequiresSeparateStep(t *testing.T) {
+	dependencies, _ := publishedBridgeFixture(t)
+	text, err := interactiveUpdateFlow(t, dependencies, "y\n", "update", "--local", "--version", "v0.1.159")
+	if err == nil || strings.Contains(text, "[y/N]") || !strings.Contains(text, "Update in steps: first run mesh update --local --version v0.1.151 on this Mac.") {
+		t.Fatalf("interactive direct approval = %s, %v", text, err)
+	}
+}
+
 func TestUpdatePublishedBridgeStillBlocksDirectApproval(t *testing.T) {
 	dependencies, local := publishedBridgeFixture(t)
 	text, _, err := executeCommand(t, dependencies, "update", "--local", "--version", "v0.1.159", "--yes", "--json")
@@ -82,5 +92,110 @@ func TestUpdatePublishedBridgeStillBlocksDirectApproval(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(strings.TrimPrefix(local.Endpoint, "unix://")), "updates", "runs")); !errors.Is(err, os.ErrNotExist) { //nolint:gosec // fixture state directory
 		t.Fatalf("guidance created an operation: %v", err)
+	}
+}
+
+func TestUpdateBridgeReadinessAndRecoveryTakePriority(t *testing.T) {
+	for _, scenario := range []string{"helper recovery", "service prerequisite", "rollback failed", "modified build", "worker protocol"} {
+		t.Run(scenario, func(t *testing.T) {
+			dependencies, _ := publishedBridgeFixture(t)
+			preflights := 0
+			dependencies.UpdateBridgePreflight = func(context.Context, string, update.Target, release.Manifest) error {
+				preflights++
+				return errors.New("fixture " + scenario + " requires owner review")
+			}
+			caller := dependencies.UpdateCaller
+			dependencies.UpdateCaller = updateCallFunc(func(ctx context.Context, host update.Host, action string, input, output any) error {
+				if err := caller.Call(ctx, host, action, input, output); err != nil {
+					return fmt.Errorf("inspect fixture bridge source: %w", err)
+				}
+				info := output.(*update.Info)
+				if scenario == "rollback failed" {
+					info.Installation = &updateinstall.Status{Phase: updateinstall.RollbackFailed}
+				}
+				if scenario == "modified build" {
+					info.Health.Build.Modified = true
+				}
+				if scenario == "worker protocol" {
+					info.Health.Workers = []updateinstall.Worker{{Protocol: 0}}
+				}
+				return nil
+			})
+			text, _, err := executeCommand(t, dependencies, "update", "--local", "--version", "v0.1.159", "--check", "--details")
+			if err != nil || strings.Contains(text, "Update in steps") {
+				t.Fatalf("unsafe bridge suggestion: %s, %v", text, err)
+			}
+			if scenario == "rollback failed" && (!strings.Contains(text, "review recovery") || preflights != 0) {
+				t.Fatal("bridge discovery superseded recovery")
+			}
+			if (scenario == "modified build" || scenario == "worker protocol") && preflights != 0 {
+				t.Fatal("inadmissible source reached helper preflight")
+			}
+		})
+	}
+}
+
+func TestUpdateBridgeRemoteRequiresDestinationReview(t *testing.T) {
+	dependencies, _ := publishedBridgeFixture(t)
+	remote := namedDestinationPeer(t)
+	if err := saveNamedTestHost(t, remote.host); err != nil {
+		t.Fatal(err)
+	}
+	dependencies.UpdateBridgePreflight = func(context.Context, string, update.Target, release.Manifest) error {
+		t.Fatal("remote guidance borrowed local helper readiness")
+		return nil
+	}
+	text, _, err := executeCommand(t, dependencies, "update", "--host", remote.host.ID, "--version", "v0.1.159", "--check")
+	if err != nil || strings.Contains(text, "Update in steps") || !strings.Contains(text, "Run mesh update --local --check on ") {
+		t.Fatalf("remote destination action = %s, %v", text, err)
+	}
+}
+
+func TestUpdateBridgeDetailsContainVerifiedEvidence(t *testing.T) {
+	dependencies, _ := publishedBridgeFixture(t)
+	text, _, err := executeCommand(t, dependencies, "update", "--local", "--version", "v0.1.159", "--check", "--details")
+	if err != nil || !strings.Contains(text, "Verified next hop: Mesh v0.1.151") || !strings.Contains(text, "no tested darwin/arm64 transition") {
+		t.Fatalf("bridge details missing: %s, %v", text, err)
+	}
+}
+
+func TestUpdateBridgeArchiveProofDoesNotSupplyHelperReadiness(t *testing.T) {
+	dependencies, local := publishedBridgeFixture(t)
+	var info update.Info
+	if err := dependencies.UpdateCaller.Call(t.Context(), local, "info", nil, &info); err != nil {
+		t.Fatal(err)
+	}
+	dependencies.UpdateBridgePreflight = nil
+	dependencies.UpdateInspect = func(context.Context, string) (updatebootstrap.Observation, error) {
+		return updatebootstrap.Observation{Executable: filepath.Join(t.TempDir(), "mesh"), Health: info.Health}, nil
+	}
+	text, _, err := executeCommand(t, dependencies, "update", "--local", "--version", "v0.1.159", "--check")
+	if err != nil || strings.Contains(text, "Update in steps") || !strings.Contains(text, "could not establish a tested runnable update path") || !strings.Contains(text, "--local --check") {
+		t.Fatalf("archive-only readiness guidance = %s, %v", text, err)
+	}
+}
+
+func TestUpdateBridgeBootstrapKeepsItsOwner(t *testing.T) {
+	for _, clientOnly := range []bool{true, false} {
+		dependencies, local := publishedBridgeFixture(t)
+		var info update.Info
+		if err := dependencies.UpdateCaller.Call(t.Context(), local, "info", nil, &info); err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := dependencies.UpdateRelease.Manifest(t.Context(), "v0.1.159")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dependencies.UpdateBridgePreflight = func(context.Context, string, update.Target, release.Manifest) error {
+			t.Fatal("bootstrap borrowed readiness from a different installation owner")
+			return nil
+		}
+		preview := prepareUpdateApproval(updatePreview{Release: manifest, ClientOnly: clientOnly, CoordinatorBootstrap: !clientOnly,
+			Targets: []update.Target{{Host: local, State: update.Pending, Build: &info.Health.Build}}})
+		a := application{dependencies: dependencies}
+		preview = a.reviewUpdateBridges(t.Context(), updateEnvironment{local: local}, preview)
+		if preview.ApprovalProblem == "" || strings.Contains(preview.ApprovalProblem, "Update in steps") {
+			t.Fatal("bootstrap transition was authorized through bridge discovery")
+		}
 	}
 }
