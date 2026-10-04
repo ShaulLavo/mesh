@@ -126,6 +126,14 @@ jobs:
       - name: Verify native authentication regressions
         run: |
           go test -race -count=1 -timeout=180s -run 'Test(QueriedKeyMustNotOwnAuthenticatedSSHGrant|BootstrapReapprovalMustNotHealBareGrant|BootstrapMustSerializeWithDeviceRevocation|GrantLockMustRespectHandshakeCancellation|ManagedGrantWriterBoundsLockContention|GrantPolicyRejectsSpecialFilesWithoutBlocking|PublishedGrantSurvivesOtherAndIdempotentWriterContention|GrantContentionReleasesRealControlSlotBeforeUnlock|UpdaterPolicyFIFOReleasesRealControlSlot|UpdaterPolicyUnsafeSnapshotsRejectRealTLS|DarwinInstallerLaunchdActivation)$' ./internal/identity ./internal/transport ./internal/sshd ./internal/daemon ./scripts/install
+      - name: Verify native pinned-fleet enrollment
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/device-enrollment-test.log"
+          go test -race -count=1 -timeout=180s -v -run '^Test(CheckedApproval|ApproveFleet)' ./internal/cli | tee "$output"
+          command grep -Fq -- '--- PASS: TestCheckedApprovalNativeBindingAndIdempotency ' "$output"
+          command grep -Fq -- '--- PASS: TestApproveFleetSystemSSHRequiresExistingHostKeyTrust ' "$output"
+          bash integration/device_enrollment.sh
       - name: Verify Darwin retains its mapped executable
         if: matrix.platform == 'darwin/arm64'
         run: |
@@ -143,6 +151,7 @@ jobs:
           path: |
             ${{ runner.temp }}/auth-cutover
             ${{ runner.temp }}/darwin-mapped-executable-test.log
+            ${{ runner.temp }}/device-enrollment-test.log
           retention-days: 7
 
   machine-naming:

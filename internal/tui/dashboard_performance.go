@@ -13,6 +13,26 @@ import (
 
 const dashboardPerformanceUpgrade = "Update mesh for GPU, disk and temperatures"
 
+func dashboardPerformanceAdvice(host cli.DashboardHostView) string {
+	if host.Connection != cli.StateReachable || host.MetricsUnsupported {
+		return ""
+	}
+	if host.CPU.State == cli.DashboardMeasurementPending {
+		if !host.CPU.Failing {
+			return "Waiting for metrics…"
+		}
+		advice := "Metrics unavailable"
+		if host.Problem != "" {
+			advice += " · " + safeText(strings.TrimPrefix(host.Problem, "cli: daemon rejected state watch: "))
+		}
+		return advice
+	}
+	if host.PerformanceVersion == 0 {
+		return dashboardPerformanceUpgrade
+	}
+	return ""
+}
+
 func dashboardPresent[T any](metric cli.DashboardMeasurement[T]) bool {
 	return metric.State == statusAvailable && metric.Sample != "" && !metric.MeasuredAt.IsZero()
 }
@@ -123,8 +143,8 @@ func (m dashboardModel) ioLine(host cli.DashboardHostView, leftWidth, rightWidth
 	if host.Connection != cli.StateReachable || host.MetricsUnsupported {
 		return ""
 	}
-	if host.PerformanceVersion == 0 {
-		return m.paint(dashboardCachedStyle).Render(dashboardPerformanceUpgrade)
+	if advice := dashboardPerformanceAdvice(host); advice != "" {
+		return m.paint(dashboardCachedStyle).Render(advice)
 	}
 	left, right := "", ""
 	if dashboardOptionalPresent(host.Disk) {
@@ -230,7 +250,7 @@ func (m dashboardModel) compactHost(host cli.DashboardHostView) []string {
 	}
 	second := "    "
 	if name != host.Host.Label() {
-		second += "last known name  "
+		second += "cached name  "
 	}
 	if dashboardOptionalPresent(host.Disk) {
 		disk := host.Disk.Value
@@ -245,9 +265,7 @@ func (m dashboardModel) compactHost(host cli.DashboardHostView) []string {
 		second += dashboardPerformanceReading(m, *host.Network, host, 10*time.Second, "NET ↓ "+dashboardCompactRate(net.ReceiveBytesPerSecond)+" ↑ "+dashboardCompactRate(net.SendBytesPerSecond)) + "  "
 	}
 	second += strings.Join(m.temperatureValues(host), "  ")
-	if host.PerformanceVersion == 0 {
-		second += dashboardPerformanceUpgrade
-	}
+	second += dashboardPerformanceAdvice(host)
 	return []string{dashboardAlign(first, up, m.width), dashboardFit(second, m.width)}
 }
 

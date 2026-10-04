@@ -39,9 +39,24 @@ machine-readable identifiers and the original rejection causes.
 An exact installed release needs no update operation. A compatible newer
 installation is kept. Approval is blocked when a checked installation lacks a
 tested direct transition, requires recovery, or has unsupported metadata,
-protocols, journal format, or running-session protocols. The preview gives one
-scoped review action; it does not guess an intermediate release tag. A missing
-local daemon still requires verification of the executing CLI and its update
+protocols, journal format, or running-session protocols. For a missing direct
+transition, a local review searches at most 32 published release entries for one
+intermediate release. The search has a ten-second budget and verifies both exact
+transitions against their content-addressed rollback receipts. The next hop's
+version comes from its published manifest.
+
+Mesh suggests `mesh update --local --version VERSION` only after checking the
+existing daemon installation, settled update history, service preservation
+settings, helper receipt and launcher, helper journal support, and the helper's
+running executable. The helper must already be at least as new as the next hop.
+The preview keeps the direct update blocked and does not install intermediates.
+Run the suggested command on the named destination to review that single step.
+Remote targets, first-updater bootstrap, and client-only installations need a
+local review before Mesh can establish bridge readiness. If discovery or
+readiness fails, the preview says so and gives one scoped review action.
+`--details` and `--json` include the original rejection and discovery evidence.
+
+A missing local daemon still requires verification of the executing CLI and its update
 history before offering helper installation. Unknown legacy sources and failed
 authentication checks cannot authorize bootstrap. Unreachable members stay in
 an explicitly selected fleet for later inspection; authorization refusals and
@@ -51,8 +66,10 @@ The default fleet file is `fleet.json` beside `hosts.json`. `MESH_CONFIG_DIR`
 changes this directory. A fleet lists stable Mesh public identities and explicit
 connection addresses. Names come from the destination declaration and stay out
 of fleet membership and saved operation records. Human output marks retained
-names as "last known name". A bare-name selection requires a fresh authenticated
-reply; an exact ID can select an offline member:
+names as "cached name" when the current output has no fresh verification of the
+owner's declaration. Update states such as pending or failed describe the update
+operation separately. A bare-name selection requires a fresh authenticated reply;
+an exact ID can select an offline member:
 
 ```json
 {

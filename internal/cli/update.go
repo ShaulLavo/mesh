@@ -145,6 +145,7 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	}
 	preview = reviewLocalUpdateJournal(preview, environment.stateDir, environment.local)
 	preview = prepareUpdateApproval(preview)
+	preview = a.reviewUpdateBridges(ctx, environment, preview)
 	if !options.json {
 		preview.Targets, err = declaredUpdateTargets(ctx, preview.Targets)
 		if err != nil {

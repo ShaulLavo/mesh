@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/shaul/mesh/internal/identity"
-	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 	"golang.org/x/crypto/ssh"
@@ -38,7 +37,7 @@ func TestRenameHostChangesAuthenticatedDestinationOnly(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("rename rewrote addresses or dashboard settings")
 	}
-	cached, err := machinename.CachedClaim(filepath.Dir(path), f.host.ID)
+	cached, err := readNameCacheFixtureClaim(filepath.Dir(path), f.host.ID)
 	if err != nil || cached != claim {
 		t.Fatalf("authenticated owner cache: %+v, %v", cached, err)
 	}
@@ -111,7 +110,7 @@ func TestOwnMachineRenameNeedsNoSelfAdoption(t *testing.T) {
 			if fixture.useName {
 				target = "local-own"
 			}
-			out, _, err := executeCommand(t, Dependencies{}, "rename", "--", target, "local-new")
+			out, _, err := executeCommand(t, Dependencies{}, "rename", target, "local-new")
 			if err != nil {
 				t.Fatalf("own rename without address-book entry: %v", err)
 			}

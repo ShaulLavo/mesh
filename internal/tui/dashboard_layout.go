@@ -51,7 +51,7 @@ func (m dashboardModel) summariesHeight(budget int) int {
 	if !m.usageEnabled {
 		return max(left, right)
 	}
-	_, usage := m.usageVisible(budget, false)
+	_, usage := m.usageVisible(budget, m.usagePanelCompact(budget, false))
 	return max(left, right, usage)
 }
 
@@ -97,7 +97,7 @@ func (m dashboardModel) serviceSummaryHeight(budget int) int {
 
 func (m dashboardModel) summaryAttentionWidth() int {
 	if m.usageEnabled {
-		remaining := m.width - 56
+		remaining := m.width - m.usagePanelWidth() - 2
 		return remaining - remaining*57/104
 	}
 	return m.width - (m.width-1)*3/5 - 1

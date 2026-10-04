@@ -1,8 +1,8 @@
 ┌AI plans · 3 accounts · passive ─────────────────── ┐
-│ Claude · shaul9191 · Max                    seen — │
-│ No reading yet · waits for traffic                 │
-│ Codex · shaul9191 · Pro                     seen — │
-│ No reading yet · waits for traffic                 │
-│         shaul.lavochkin · Pro               seen — │
-│ No reading yet · waits for traffic                 │
+│ Claude · shaul9191 · Max                 checked — │
+│ No quota reading · waits for traffic               │
+│ Codex · shaul9191 · Pro                  checked — │
+│ No quota reading · waits for traffic               │
+│         shaul.lavochkin · Pro            checked — │
+│ No quota reading · waits for traffic               │
 └────────────────────────────────────────────────────┘

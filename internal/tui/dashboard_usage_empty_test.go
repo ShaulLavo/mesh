@@ -22,9 +22,9 @@ func TestDashboardUsageEmptyAccounts(t *testing.T) {
 					model.usage = projectDashboardUsage(&usagefeed.Snapshot{Accounts: []usagefeed.Account{account}})
 					rows := model.usagePanel(54, 17, compact)
 					got := ansi.Strip(strings.Join(rows, "\n"))
-					want := "No reading yet · waits for traffic"
+					want := "No quota reading · waits for traffic"
 					if state == "disabled" {
-						want = "Out of rotation · no reading"
+						want = "Out of rotation · no quota reading"
 					}
 					if len(rows) != 4 || !strings.Contains(got, want) {
 						t.Errorf("one identity and one empty summary required: %d rows\n%s", len(rows), got)
@@ -62,7 +62,7 @@ func TestDashboardUsageEmptyRowsGoToDataAccounts(t *testing.T) {
 		if len(rows) != budget || strings.Contains(got, "omitted") {
 			t.Errorf("freed rows must admit all data accounts (compact=%v):\n%s", compact, got)
 		}
-		for _, want := range []string{"reading-0", "reading-1", "reading-2", "exhausted", "Out of rotation · no reading"} {
+		for _, want := range []string{"reading-0", "reading-1", "reading-2", "exhausted", "Out of rotation · no quota reading"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("compact=%v missing %q\n%s", compact, want, got)
 			}
@@ -88,7 +88,7 @@ func TestDashboardUsageHistoricDisabledWindow(t *testing.T) {
 				t.Errorf("compact=%v missing %q\n%s", compact, want, got)
 			}
 		}
-		if strings.Contains(got, "No data") || strings.Contains(got, "no reading") || strings.Contains(got, "│▪") {
+		if strings.Contains(got, "No data") || strings.Contains(got, "no quota reading") || strings.Contains(got, "│▪") {
 			t.Errorf("historic reading lost or pace refilled: %s", got)
 		}
 	}
@@ -131,10 +131,10 @@ func TestDashboardUsageCredits(t *testing.T) {
 		want  string
 	}{
 		{nil, ""},
-		{&usagefeed.Credits{Balance: 62500}, "credits 62,500"},
-		{&usagefeed.Credits{Unlimited: true}, "credits unlimited"},
-		{&usagefeed.Credits{}, ""},
-		{&usagefeed.Credits{Balance: 1234.5}, "credits 1,235"},
+		{&usagefeed.Credits{Balance: 62500}, "Credits 62,500"},
+		{&usagefeed.Credits{Unlimited: true}, "Credits unlimited"},
+		{&usagefeed.Credits{}, "Credits 0"},
+		{&usagefeed.Credits{Balance: 1234.5}, "Credits 1,234.50"},
 	} {
 		for _, fixture := range []string{"normal", "no-data"} {
 			for _, compact := range []bool{false, true} {
@@ -186,7 +186,7 @@ func TestDashboardUsageHistoricCompactIdentityAndWindow(t *testing.T) {
 	model := usageFixture(t, "historic")
 	model.width, model.height = 80, 24
 	frame := ansi.Strip(model.render())
-	if strings.Count(frame, "Weekly 100%/0% resets 3d22h used up") != 2 || strings.Count(frame, "stale 1d") != 2 {
+	if strings.Count(frame, "Weekly 100% used reset 3d22h old 1d") != 2 || strings.Count(frame, "old 1d") != 2 {
 		t.Fatal("historic label, used-up status, countdown or actual age clipped", frame)
 	}
 }
@@ -199,7 +199,7 @@ func TestDashboardUsageReviewReadableWindowProjection(t *testing.T) {
 	projected := projectUsageAccount(account, true)
 	model.usage = dashboardUsage{accounts: []dashboardUsageAccount{projected}, total: 1}
 	got := ansi.Strip(strings.Join(model.usagePanel(54, 17, false), "\n"))
-	if !strings.Contains(got, "Weekly  66% used") || strings.Contains(got, "No reading") || projected.extraWindows != 0 {
+	if !strings.Contains(got, "Weekly  66% used") || strings.Contains(got, "No quota reading") || projected.extraWindows != 0 {
 		t.Fatal("unobserved windows hid a real reading", got, projected.extraWindows)
 	}
 }
@@ -212,7 +212,7 @@ func TestDashboardUsageReviewIndependentHistoricCompact(t *testing.T) {
 	}
 	model.width, model.height = 80, 24
 	got := ansi.Strip(model.render())
-	if strings.Count(got, "Weekly used up resets 3d22h stale 1d") != 2 {
+	if strings.Count(got, "Weekly 100% used reset 3d22h old 1d") != 2 {
 		t.Fatal("independent historic identity, reset, exhaustion or age clipped", got)
 	}
 }
@@ -225,10 +225,10 @@ func TestDashboardUsageReviewCompactStatusAndAge(t *testing.T) {
 		seen                    time.Duration
 	}{
 		{name: "warning", status: "warning", word: "high", age: "stale 1d", used: &warning, seen: 24 * time.Hour},
-		{name: "unknown-reset", status: usageUnknown, word: "unknown", age: "stale ?"},
-		{name: "exhausted-25h", status: usageExhausted, word: "spent", age: "stale 1d1h", used: &exhausted, seen: 25 * time.Hour},
-		{name: "unknown-25h", status: usageUnknown, word: "?", age: "stale 1d1h", seen: 25 * time.Hour},
-		{name: "allowed-25h", status: "allowed", word: "OK", age: "stale 1d1h", used: &allowed, seen: 25 * time.Hour},
+		{name: "unknown-reset", status: usageUnknown, word: "no quota", age: "stale ?"},
+		{name: "exhausted-25h", status: usageExhausted, word: "100% used", age: "old1d1h", used: &exhausted, seen: 25 * time.Hour},
+		{name: "unknown-25h", status: usageUnknown, word: "no quota", age: "old 1d1h", seen: 25 * time.Hour},
+		{name: "allowed-25h", status: "allowed", word: "20%", age: "old 1d1h", used: &allowed, seen: 25 * time.Hour},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			model := usageFixture(t, "historic")
@@ -240,7 +240,11 @@ func TestDashboardUsageReviewCompactStatusAndAge(t *testing.T) {
 				window.LastSeenAt = &seen
 			}
 			line := ansi.Strip(model.usageCompactWindow(window, 36, true))
-			for _, fact := range []string{"Weekly", "resets 3d22h", test.word, test.age} {
+			reset := "resets 3d22h"
+			if test.name == "unknown-25h" || test.name == "allowed-25h" || test.name == "exhausted-25h" || test.name == "warning" {
+				reset = "reset 3d22h"
+			}
+			for _, fact := range []string{"Weekly", reset, test.word, test.age} {
 				if !strings.Contains(line, fact) {
 					t.Fatalf("missing %q in compact history %q", fact, line)
 				}
@@ -286,12 +290,12 @@ func TestDashboardUsageAccountAndModelScopes(t *testing.T) {
 		model := usageFixture(t, "model-scoped")
 		rows := model.usagePanel(54, 17, compact)
 		got := ansi.Strip(strings.Join(rows, "\n"))
-		wantRows := 8
+		wantRows := 5
 		if compact {
-			wantRows = 6
+			wantRows = 4
 		}
-		if len(rows) != wantRows || strings.Count(got, "66%") != 2 || !strings.Contains(got, "Weekly") || !strings.Contains(got, "Model · gpt-6.1-sol") || strings.Contains(got, "5h") {
-			t.Fatal("account-wide and model-specific allowances need distinct displays", got)
+		if len(rows) != wantRows || strings.Count(got, "66%") != 1 || !strings.Contains(got, "Weekly") || strings.Contains(got, "Model") || strings.Contains(got, "5h") {
+			t.Fatal("account panel must show only the aggregate allowance", got)
 		}
 	}
 }

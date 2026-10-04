@@ -26,7 +26,7 @@ func TestOwnerNameObservationWatchProjectionKeepsIndependentFreshness(t *testing
 		if projected.Host.MachineName != "fixture-owner" || projected.Host.NameRevision != 2 || !projected.Host.NameVerified {
 			t.Fatal("watch projection lost the owner declaration")
 		}
-		if strings.Contains(projected.NameLabel(now), "last known name") != retained {
+		if strings.Contains(projected.NameLabel(now), "cached name") != retained {
 			t.Fatalf("owner observation label retained=%v, want %v", projected.NameLabel(now), retained)
 		}
 	}
@@ -57,4 +57,38 @@ func TestOwnerNameObservationWatchProjectionKeepsIndependentFreshness(t *testing
 	view.Connection = StateReachable
 	now = now.Add(31 * time.Second)
 	assertLabel(true)
+}
+
+func TestCachedNameKeepsObservationAndConnectionSeparate(t *testing.T) {
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	fresh := DashboardHostView{Host: DashboardHost{ID: "owner", MachineName: "garden", NameVerified: true}, Connection: StateReachable, LastReply: now, NameObservedAt: now}
+	cases := []struct {
+		name   string
+		change func(*DashboardHostView)
+		cached bool
+	}{
+		{name: "fresh authenticated", change: func(*DashboardHostView) {}},
+		{name: "retained unverified", change: func(h *DashboardHostView) { h.Host.NameVerified = false }, cached: true},
+		{name: "fresh reply old name", change: func(h *DashboardHostView) { h.NameObservedAt = now.Add(-31 * time.Second) }, cached: true},
+		{name: "missing name observation", change: func(h *DashboardHostView) { h.NameObservedAt = time.Time{} }, cached: true},
+		{name: "failed name observation", change: func(h *DashboardHostView) { h.NameFailing = true }, cached: true},
+		{name: "connecting", change: func(h *DashboardHostView) { h.Connection = StateConnecting }, cached: true},
+		{name: "unreachable", change: func(h *DashboardHostView) { h.Connection = StateUnreachable }, cached: true},
+		{name: "identity refused", change: func(h *DashboardHostView) { h.Connection = StateRefused }, cached: true},
+		{name: "fresh name old reply", change: func(h *DashboardHostView) { h.LastReply = now.Add(-31 * time.Second) }, cached: true},
+	}
+	for _, test := range cases {
+		host := fresh
+		test.change(&host)
+		want := "garden"
+		if test.cached {
+			want += " · cached name"
+		}
+		if got := host.NameLabel(now); got != want {
+			t.Errorf("%s: label %q, want %q", test.name, got, want)
+		}
+		if host.Connection == "" || host.Host.MachineName != "garden" {
+			t.Errorf("%s: fixture lost connection or owner declaration", test.name)
+		}
+	}
 }

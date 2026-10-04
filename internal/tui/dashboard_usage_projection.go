@@ -53,13 +53,14 @@ func projectUsageAccount(account usagefeed.Account, first bool) dashboardUsageAc
 	result := dashboardUsageAccount{Account: account, first: first}
 	result.Windows = nil
 	for _, window := range account.Windows {
-		if !usageWindowHasReading(window) {
+		if !usageWindowHasReading(window) || !usageAccountWindow(window.ID) {
 			continue
 		}
 		if len(result.Windows) == 2 {
 			result.extraWindows++
 			continue
 		}
+		window.Label = usageWindowLabel(window.ID)
 		result.Windows = append(result.Windows, window)
 	}
 	return result
@@ -79,4 +80,22 @@ func usagePlan(value string) string {
 		return value
 	}
 	return dashboardUsageTitle(strings.ToLower(value))
+}
+
+func usageAccountWindow(id string) bool {
+	switch id {
+	case "five_hour", "session", "weekly", "seven_day":
+		return true
+	default:
+		return false
+	}
+}
+
+func usageWindowLabel(id string) string {
+	switch id {
+	case "five_hour", "session":
+		return "5-hour"
+	default:
+		return "Weekly"
+	}
 }
