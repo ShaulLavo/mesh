@@ -441,6 +441,10 @@ func Run(cfg Config) (int, error) {
 	if len(cfg.Command) == 0 {
 		return 0, errors.New("worker: no command")
 	}
+	sockPath := paths.Socket(cfg.Dir)
+	if err := paths.ValidateSocketPath(sockPath); err != nil {
+		return 0, fmt.Errorf("worker: %w", err)
+	}
 	sid, err := protocol.NewSessionID(cfg.ID)
 	if err != nil {
 		return 0, err
@@ -524,7 +528,6 @@ func Run(cfg Config) (int, error) {
 		return 0, err
 	}
 
-	sockPath := paths.Socket(cfg.Dir)
 	_ = os.Remove(sockPath) // a stale socket from a dead worker is not a conflict
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
