@@ -207,7 +207,7 @@ func withClientConfigLock(ctx context.Context, create bool, operation func(*os.F
 		return err
 	}
 	defer func() { _ = dir.Close() }()
-	lock, err := openClientConfigFile(dir, ".hosts.lock", unix.O_RDWR|unix.O_CREAT, 0o600)
+	lock, err := openClientConfigLockFile(dir)
 	if err != nil {
 		return fmt.Errorf("open host config writer lock: %w", err)
 	}
@@ -220,6 +220,14 @@ func withClientConfigLock(ctx context.Context, create bool, operation func(*os.F
 		return fmt.Errorf("host config operation cancelled: %w", err)
 	}
 	return operation(dir, path)
+}
+
+func openClientConfigLockFile(dir *os.File) (*os.File, error) {
+	file, err := openClientConfigFile(dir, ".hosts.lock", unix.O_RDWR|unix.O_CREAT|unix.O_EXCL, 0o600)
+	if !errors.Is(err, unix.EEXIST) {
+		return file, err
+	}
+	return openClientConfigFile(dir, ".hosts.lock", unix.O_RDWR, 0)
 }
 
 func openClientConfigDirectory(directory string, create bool) (*os.File, error) {
