@@ -45,6 +45,27 @@ def watch(path, topics):
     return connection, read(connection)[0]
 
 
+def observe_idle(connection, initial, seconds):
+    started = time.monotonic()
+    idle_bytes = 0
+    observed = False
+    while time.monotonic() - started < seconds:
+        message, size = read(connection)
+        idle_bytes += size
+        if message["type"] == "state.current":
+            for section in message["stateCurrent"]["sections"].values():
+                assert not section.get("failing", False), section
+                assert section["ageMillis"] < 30000, section
+            observed = True
+            if time.monotonic() - started >= seconds - 0.25:
+                break
+    elapsed = time.monotonic() - started
+    connection.close()
+    assert observed, "unchanged catalog received no current confirmation"
+    assert idle_bytes / elapsed < 1000, (idle_bytes, elapsed)
+    return idle_bytes, elapsed
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("socket")
@@ -117,23 +138,7 @@ def main():
         time.sleep(0.05)
     assert initial["type"] == "state.snapshot", "subscriber reservation leaked"
     assert all(row["name"] != service["name"] for row in initial["stateSnapshot"].get("services", []))
-    started = time.monotonic()
-    idle_bytes = 0
-    observed = False
-    while time.monotonic() - started < args.seconds:
-        message, size = read(connection)
-        idle_bytes += size
-        if message["type"] == "state.current":
-            for section in message["stateCurrent"]["sections"].values():
-                assert not section.get("failing", False), section
-                assert section["ageMillis"] < 30000, section
-            observed = True
-            if time.monotonic() - started >= args.seconds - 0.25:
-                break
-    elapsed = time.monotonic() - started
-    connection.close()
-    assert observed, "unchanged catalog received no current confirmation"
-    assert idle_bytes / elapsed < 1000, (idle_bytes, elapsed)
+    idle_bytes, elapsed = observe_idle(connection, initial, args.seconds)
     print(json.dumps({"metricsIdleBytes": metrics_bytes, "metricsIdleSeconds": round(metrics_elapsed, 3), "metricsIdleBytesPerSecond": round(metrics_bytes / metrics_elapsed, 3), "idleBytes": idle_bytes, "idleSeconds": round(elapsed, 3), "idleBytesPerSecond": round(idle_bytes / elapsed, 3), "sessionDeliverySeconds": round(latency, 3), "subscriberRelease": True, "adapterRAM": ram}, sort_keys=True))
 
 
