@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -31,12 +32,18 @@ func TestOwnerNameDashboardCellEvidence(t *testing.T) {
 				ticked, _ := model.Update(dashboardTickMsg(now))
 				model = ticked.(dashboardModel)
 				view := model.View().Content
+				if *usageEvidenceDirectory != "" {
+					if err := os.MkdirAll(*usageEvidenceDirectory, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					writeFrameEvidence(t, fmt.Sprintf("names-%d-%s", size[0], stage), view, size[0], size[1], model.palette)
+				}
 				assertFits(t, view, size[0], size[1])
 				fmt.Printf("\nBEGIN_OWNER_NAMES_%d_%s\n%s\nEND_OWNER_NAMES_%d_%s\n", size[0], stage, view, size[0], stage)
 				return ansi.Strip(view)
 			}
 			fresh := render("FRESH", pickerTestNow)
-			if !strings.Contains(fresh, "local-own") || !strings.Contains(fresh, "garden") || strings.Contains(fresh, "last known name") {
+			if !strings.Contains(fresh, "local-own") || !strings.Contains(fresh, "garden") || strings.Contains(fresh, "cached name") {
 				t.Fatal("fresh destination names are not observable")
 			}
 			localIndex := 0
@@ -62,7 +69,7 @@ func TestOwnerNameDashboardCellEvidence(t *testing.T) {
 				t.Fatal("rename changed own-card identity or deterministic priority")
 			}
 			stale := render("RETAINED", pickerTestNow.Add(time.Minute))
-			if !strings.Contains(stale, "last known name") {
+			if !strings.Contains(stale, "cached name") {
 				t.Fatal("retained name freshness is not visible")
 			}
 			changed = model.hosts[localIndex]
@@ -102,6 +109,37 @@ func TestOwnerRenamePreservesPickerSelectionAndActionIdentity(t *testing.T) {
 		selected, ok := current.selection.(attachSelection)
 		if !ok || selected.hostID != "stable-local" || selected.sessionID != "7K3D" {
 			t.Fatalf("rename changed action destination: %#v", current.selection)
+		}
+	}
+}
+
+func TestCachedNamePickerEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		verified bool
+		stale    bool
+		cached   bool
+	}{
+		{name: "fresh", verified: true},
+		{name: "unverified", cached: true},
+		{name: "offline", verified: true, stale: true, cached: true},
+	} {
+		input := cli.PickerInput{Hosts: []cli.HostSessions{{Host: cli.HostRecord{ID: "stable-owner", MachineName: "garden", NameRevision: 1, NameVerified: test.verified}, Stale: test.stale, Sessions: []protocol.SessionInfo{{ID: "7K3D", HostID: "stable-owner", State: "running", CreatedAt: pickerTestNow}}}}}
+		current := newModel(hostCatalog(input), pickerTestNow)
+		current = updateModel(t, current, tea.WindowSizeMsg{Width: 80, Height: 24})
+		frame := current.View().Content
+		assertFits(t, frame, 80, 24)
+		if strings.Contains(ansi.Strip(frame), "cached name") != test.cached {
+			t.Errorf("%s: cached name state missing: %s", test.name, ansi.Strip(frame))
+		}
+		if *usageEvidenceDirectory != "" {
+			writeFrameEvidence(t, "picker-name-"+test.name, frame, 80, 24, dashboardTheme("oled"))
+		}
+		current = updateModel(t, current, key(tea.KeyEnter))
+		current = updateModel(t, current, key(tea.KeyEnter))
+		selected, ok := current.selection.(attachSelection)
+		if !ok || selected.hostID != "stable-owner" || selected.sessionID != "7K3D" {
+			t.Errorf("%s: cached wording changed action destination: %#v", test.name, current.selection)
 		}
 	}
 }

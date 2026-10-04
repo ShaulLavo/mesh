@@ -13,7 +13,7 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 )
 
-const retainedNameSuffix = " · last known name"
+const retainedNameSuffix = " · cached name"
 
 // HostLabel never substitutes OS or viewer labels for an owner's declaration.
 func HostLabel(host HostRecord) string {
