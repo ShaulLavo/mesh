@@ -69,6 +69,55 @@ exec /bin/sh -c "$9"
             time.sleep(0.02)
         original_config = (config / "hosts.json").read_bytes()
         original_key = (source / "identity.key").read_bytes()
+
+        def snapshot(*directories):
+            result = {}
+            paths = []
+            for directory in directories:
+                paths.extend([directory, *directory.rglob("*")])
+            for path in paths:
+                if not path.exists():
+                    result[str(path)] = None
+                    continue
+                result[str(path)] = (path.stat().st_mode, path.read_bytes() if path.is_file() else None)
+            return result
+
+        original_administration = administration.read_bytes()
+        absent = root / "absent-state"
+        for legacy in (False, True):
+            book = json.loads(original_config)
+            if legacy:
+                book["hosts"][0]["alias"] = "obsolete"
+            (config / "hosts.json").write_text(json.dumps(book))
+            for mode, refused in (("--check", False), ("--check", True), ("--yes", True)):
+                account = target["account"] + "-wrong-account" if refused else target["account"]
+                selected_state = absent if refused else destination
+                before = snapshot(config, source, destination, absent)
+                checked = subprocess.run([binary, "device", "approve-checked", "--account", account,
+                                          "--state-dir", str(selected_state), "--destination", pin,
+                                          mode, "--allow-root", "--", source_id],
+                                         env=environment | {"MESH_STATE_DIR": str(selected_state)},
+                                         capture_output=True, text=True, timeout=10)
+                assert checked.returncode == (1 if refused else 0), checked.stderr
+                if refused:
+                    assert "local account does not match the expected daemon account" in checked.stderr
+                assert snapshot(config, source, destination, absent) == before, "checked enrollment changed fixture files/directories"
+                mapping = json.loads(original_administration)
+                mapping["fixture-host"]["account"] = account
+                administration.write_text(json.dumps(mapping))
+                before = snapshot(config, source, destination, absent)
+                fleet = subprocess.run([binary, "device", "approve-fleet", "--admin-map", str(administration),
+                                        mode, "--allow-root", "--", "fixture-host"],
+                                       env=environment, capture_output=True, text=True, timeout=10)
+                assert fleet.returncode == (0 if not refused and not legacy else 1), fleet.stderr
+                if legacy:
+                    assert 'unknown field "alias"' in fleet.stderr, fleet.stderr
+                elif refused:
+                    assert "local account does not match the expected daemon account" in fleet.stderr, fleet.stderr
+                assert snapshot(config, source, destination, absent) == before, "fleet enrollment changed fixture files/directories"
+        (config / "hosts.json").write_bytes(original_config)
+        administration.write_bytes(original_administration)
+        ssh_log.write_text("")
         preview = command(source, "device", "approve-fleet", "--admin-map", str(administration),
                           "--check", "fixture-host")
         assert "fixture-host: approval available" in preview.stdout, preview.stdout
@@ -87,7 +136,7 @@ exec /bin/sh -c "$9"
         assert (config / "hosts.json").read_bytes() == original_config, "enrollment rewrote source pins"
         assert (source / "identity.key").read_bytes() == original_key, "enrollment replaced source key"
         assert ssh_log.read_text().count("'--yes'") == 2, "unexpected apply sequence"
-        print("PASS: built CLI enrolls one-way pin through fixture SSH and native daemon; preview is read-only; repeated approval preserves grant")
+        print("PASS: built CLI enrolls one-way pin through fixture SSH and native daemon; root checks and refusals preserve current/legacy files and directories; preview is read-only; repeated approval preserves grant")
     finally:
         daemon.terminate()
         daemon.wait(timeout=8)

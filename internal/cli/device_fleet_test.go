@@ -94,10 +94,10 @@ exec /bin/sh -c "$9"
 
 func executeFleetFixture(t *testing.T, fixture fleetFixture, mode string) (string, error) {
 	t.Helper()
-	args := []string{"approve-fleet", "--admin-map", fixture.MapPath, mode, "--allow-root"}
+	args := []string{"device", "approve-fleet", "--admin-map", fixture.MapPath, mode, "--allow-root"}
 	args = append(args, fixture.Labels...)
 	var output bytes.Buffer
-	command := deviceCommand()
+	command := NewCommand(Dependencies{})
 	command.SetArgs(args)
 	command.SetOut(&output)
 	command.SetErr(&output)

@@ -33,8 +33,8 @@ func TestApprovalFixtureProcess(t *testing.T) {
 			if arg != "--" {
 				continue
 			}
-			command := deviceCommand()
-			command.SetArgs(os.Args[index+2:])
+			command := NewCommand(Dependencies{})
+			command.SetArgs(os.Args[index+1:])
 			command.SilenceUsage, command.SilenceErrors = true, true
 			if err := command.ExecuteContext(t.Context()); err != nil {
 				_, _ = os.Stderr.WriteString(err.Error())
@@ -233,6 +233,8 @@ func snapshotApprovalFiles(t *testing.T, root string) string {
 		if err != nil {
 			return fmt.Errorf("inspect fixture entry: %w", err)
 		}
+		name := strings.TrimPrefix(path, root)
+		files[name] = info.Mode().String()
 		if !info.Mode().IsRegular() {
 			return nil
 		}
@@ -240,7 +242,7 @@ func snapshotApprovalFiles(t *testing.T, root string) string {
 		if err != nil {
 			return fmt.Errorf("read fixture entry: %w", err)
 		}
-		files[strings.TrimPrefix(path, root)] = string(contents)
+		files[name] += string(contents)
 		return nil
 	})
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
