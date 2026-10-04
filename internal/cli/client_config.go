@@ -288,7 +288,7 @@ func openClientConfigFile(dir *os.File, name string, flags int, mode uint32) (*o
 	// Legacy readable books need no write access; tighten writable books through
 	// the validated descriptor without changing their contents or inode.
 	if stat.Mode&0o022 != 0 {
-		if err := unix.Fchmod(fd, stat.Mode&0o700); err != nil {
+		if err := file.Chmod(os.FileMode(stat.Mode & 0o700)); err != nil {
 			_ = file.Close()
 			return nil, fmt.Errorf("restrict host config write permissions: %w", err)
 		}
