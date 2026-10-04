@@ -33,7 +33,7 @@ func main() {
 	if version := release.Metadata().Version; version != "" {
 		options = append(options, fang.WithVersion(version))
 	}
-	err := fang.Execute(context.Background(), root, options...)
+	err := fang.Execute(context.Background(), root.Command, options...)
 	if err == nil {
 		return
 	}

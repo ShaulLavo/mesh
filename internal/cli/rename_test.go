@@ -111,7 +111,7 @@ func TestOwnMachineRenameNeedsNoSelfAdoption(t *testing.T) {
 			if fixture.useName {
 				target = "local-own"
 			}
-			out, _, err := executeCommand(t, Dependencies{}, "rename", "--", target, "local-new")
+			out, _, err := executeCommand(t, Dependencies{}, "rename", target, "local-new")
 			if err != nil {
 				t.Fatalf("own rename without address-book entry: %v", err)
 			}
