@@ -26,10 +26,6 @@ func retireClientAliases(ctx context.Context) error {
 }
 
 func retireClientAliasesWithSettlement(ctx context.Context, settle func(*os.File) error) error {
-	ready, err := clientConfigCanRetire(ctx)
-	if err != nil || !ready {
-		return err
-	}
 	path, err := ConfigPath()
 	if err != nil {
 		return err
@@ -47,6 +43,10 @@ func retireClientAliasesWithSettlement(ctx context.Context, settle func(*os.File
 		// A visible rename may need directory settlement after an earlier failure.
 		// Unchanged reads need no writer lock or directory write permission.
 		return settle(dir)
+	}
+	ready, err := clientConfigCanRetire(ctx)
+	if err != nil || !ready {
+		return err
 	}
 	return withClientConfigLock(ctx, false, func(locked *os.File, path string) error {
 		next, changed, err := readClientRetirement(locked, path)

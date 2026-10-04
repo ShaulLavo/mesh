@@ -107,6 +107,27 @@ func TestClientRetirementReadOnlyCurrentBook(t *testing.T) {
 	}
 }
 
+func TestClientRetirementCurrentBookIgnoresUnrelatedUpdateError(t *testing.T) {
+	before := []byte(`{"version":1,"hosts":[]}`)
+	path := writeClientConfigFixture(t, before)
+	state := t.TempDir()
+	t.Setenv("MESH_STATE_DIR", state)
+	journal := filepath.Join(state, "update", "installation.json")
+	if err := os.Mkdir(filepath.Dir(journal), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(journal, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := executeCommand(t, Dependencies{}, "shell-init", "bash"); err != nil {
+		t.Fatalf("unchanged configuration consulted unrelated update state: %v", err)
+	}
+	after, err := readClientConfigTestFile(path)
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatal("read-only activation changed configuration")
+	}
+}
+
 func TestClientRetirementWaitsForUpdateCommit(t *testing.T) {
 	for _, phase := range []updateinstall.Phase{updateinstall.Accepted, updateinstall.Staged, updateinstall.Granted, updateinstall.Activating, updateinstall.Validating, updateinstall.RollingBack, updateinstall.RolledBack, updateinstall.RollbackFailed, updateinstall.Cancelled, updateinstall.Failed, updateinstall.Committed} {
 		t.Run(string(phase), func(t *testing.T) {
