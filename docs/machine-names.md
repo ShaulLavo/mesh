@@ -1,7 +1,9 @@
 # Machine names
 
 Each Mesh destination owns one machine name and a monotonically increasing
-revision. An authenticated `host.info` reply or host state observation supplies
+revision. The daemon creates its first declaration at startup from the local
+Tailscale name or hostname. `mesh rename` changes that existing declaration.
+An authenticated `host.info` reply or host state observation supplies
 that declaration to a viewer. The destination's own card reads the local daemon
 through its trusted socket; displaying it creates no self-adoption record.
 
@@ -41,9 +43,16 @@ show the full identities. Priority identifies the deterministic projection;
 it grants no authority to target an ambiguous name.
 
 Cached claims retain the last authenticated owner name. Lists, picker views,
-dashboard cards, and update output mark retained declarations as "last known
-name" when they lack a current verification. Older revisions and a different
-name at the same revision are refused.
+dashboard cards, and update output show "cached name" when the displayed
+name lacks a current verification. The destination still owns that declaration.
+Fresh verified views show the name alone.
+
+Name freshness and connectivity are separate. A reachable machine can have a
+cached name while its name observation is missing, failing, or at least 30
+seconds old. The dashboard also marks the name as cached when the last reply
+is at least 30 seconds old or the connection is connecting, unreachable, or
+refused. Metrics and catalog ages describe their own observations.
+Older revisions and a different name at the same revision are refused.
 
 There is no central naming authority. Viewers with different received claims
 can show different retained names during a partition. A rename can refuse a

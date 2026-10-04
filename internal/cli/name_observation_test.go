@@ -74,7 +74,7 @@ func TestCachedNameKeepsObservationAndConnectionSeparate(t *testing.T) {
 		{name: "failed name observation", change: func(h *DashboardHostView) { h.NameFailing = true }, cached: true},
 		{name: "connecting", change: func(h *DashboardHostView) { h.Connection = StateConnecting }, cached: true},
 		{name: "unreachable", change: func(h *DashboardHostView) { h.Connection = StateUnreachable }, cached: true},
-		{name: "authorization refused", change: func(h *DashboardHostView) { h.Connection = StateRefused }, cached: true},
+		{name: "identity refused", change: func(h *DashboardHostView) { h.Connection = StateRefused }, cached: true},
 		{name: "fresh name old reply", change: func(h *DashboardHostView) { h.LastReply = now.Add(-31 * time.Second) }, cached: true},
 	}
 	for _, test := range cases {

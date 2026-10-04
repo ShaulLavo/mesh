@@ -51,8 +51,10 @@ The default fleet file is `fleet.json` beside `hosts.json`. `MESH_CONFIG_DIR`
 changes this directory. A fleet lists stable Mesh public identities and explicit
 connection addresses. Names come from the destination declaration and stay out
 of fleet membership and saved operation records. Human output marks retained
-names as "last known name". A bare-name selection requires a fresh authenticated
-reply; an exact ID can select an offline member:
+names as "cached name" when the current output has no fresh verification of the
+owner's declaration. Update states such as pending or failed describe the update
+operation separately. A bare-name selection requires a fresh authenticated reply;
+an exact ID can select an offline member:
 
 ```json
 {
