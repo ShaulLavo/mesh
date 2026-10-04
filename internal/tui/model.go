@@ -731,7 +731,7 @@ func (delegate hostDelegate) Render(output io.Writer, browser list.Model, index 
 		row += "  " + cell(delegate.styles.muted.Render(safeText(delegate.privacy.Value("route", item.host.route))), routeWidth)
 	}
 	if item.host.nameStale {
-		status += delegate.styles.muted.Render("  ·  last known name")
+		status += delegate.styles.muted.Render("  ·  cached name")
 	}
 	row += "  " + status
 	_, _ = fmt.Fprint(output, truncate(row, browser.Width()))

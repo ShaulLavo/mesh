@@ -1,8 +1,8 @@
 ┌AI plans · 4 accounts · passive ─────────────────── ┐
 │ Codex · paused · Pro · disabled             seen — │
-│ Out of rotation · no reading                       │
+│ Out of rotation · no quota reading                 │
 │         waiting · Pro                       seen — │
-│ No reading yet · waits for traffic                 │
+│ No quota reading · waits for traffic               │
 │         metered · Pro · last served        seen 1m │
 │ credits 62,500                                     │
 │ 5h      42% used · 58% left · resets 1h 32m        │

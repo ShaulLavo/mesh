@@ -200,10 +200,10 @@ func TestLeaveKeyCannotShadowDefaultInnerDetach(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := &application{}
-	if _, err := app.attachmentOptions(command, "", false); err == nil {
+	if _, err := app.attachmentOptions(command.Command, "", false); err == nil {
 		t.Fatal("leave-all was allowed to shadow the default detach key")
 	}
-	if _, err := app.attachmentOptions(command, "", true); err != nil {
+	if _, err := app.attachmentOptions(command.Command, "", true); err != nil {
 		t.Fatalf("raw input should ignore key collisions: %v", err)
 	}
 }
