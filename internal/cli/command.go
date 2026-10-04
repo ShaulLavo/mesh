@@ -540,7 +540,7 @@ func (a *application) runPickerOpen(cmd *cobra.Command, hosts []HostRecord, deta
 				}
 				defer pickerOperations.done()
 				pickerState.close()
-				return CollectHostSessions(ctx, hosts, defaultCatalogTimeout, a.queryHost, cache)
+				return CollectHostSessions(ctx, hosts, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout}, a.queryHost, cache)
 			},
 			OpenHostID:         openHostID,
 			ContainingSessions: clonePickerContainingSessions(containingSessions),
@@ -818,7 +818,7 @@ func (a *application) runHostWithContainment(
 	}
 	if resume {
 		ctx, cancel := context.WithTimeout(cmd.Context(), wakeIntentTimeout)
-		rows, err := listRemoteHost(ctx, host, a.intentDialer(cmd.ErrOrStderr()))
+		rows, err := listRemoteHost(ctx, host, a.intentDialer(cmd.ErrOrStderr()), HostQueryBudget{Setup: wakeIntentTimeout, Reply: remoteConnectTimeout})
 		cancel()
 		if err != nil {
 			return err
@@ -923,7 +923,7 @@ func (a *application) resolveSession(ctx context.Context, hosts []HostRecord, id
 		return resolvedSession{}, err
 	}
 	defer cache.Close() //nolint:errcheck // lookup result takes precedence
-	catalog, err := CollectHostSessions(ctx, hosts, defaultCatalogTimeout, a.queryHost, cache)
+	catalog, err := CollectHostSessions(ctx, hosts, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout}, a.queryHost, cache)
 	if err != nil {
 		return resolvedSession{}, err
 	}
@@ -995,8 +995,8 @@ func (a *application) attachResolvedWithContainment(
 	return a.attach(cmd, attachRequest{target: resolved, options: options})
 }
 
-func (a *application) queryHost(ctx context.Context, host *HostRecord) ([]protocol.SessionInfo, error) {
-	return listRemoteDeclaredHost(ctx, host, a.dependencies.DialControl)
+func (a *application) queryHost(ctx context.Context, host *HostRecord, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
+	return listRemoteDeclaredHost(ctx, host, a.dependencies.DialControl, budget)
 }
 
 func (a *application) addCommand() *cobra.Command {
@@ -1105,7 +1105,7 @@ func (a *application) listCommand() *cobra.Command {
 	}
 	command.Flags().BoolVarP(&all, "all", "a", false, "include exited and interrupted sessions")
 	command.Flags().BoolVar(&viaDaemon, "daemon", false, "read only the local daemon catalog")
-	command.Flags().DurationVar(&timeout, "timeout", defaultCatalogTimeout, "maximum wait for the host fan-out")
+	command.Flags().DurationVar(&timeout, "timeout", defaultCatalogTimeout, "maximum wait for each host catalog reply after authenticated setup")
 	return command
 }
 
@@ -1150,7 +1150,7 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 		return err
 	}
 	defer cache.Close() //nolint:errcheck // command result takes precedence
-	results, err := CollectHostSessions(cmd.Context(), hosts, timeout, a.queryHost, cache)
+	results, err := CollectHostSessions(cmd.Context(), hosts, HostQueryBudget{Setup: remoteConnectTimeout, Reply: timeout}, a.queryHost, cache)
 	if err != nil {
 		return err
 	}

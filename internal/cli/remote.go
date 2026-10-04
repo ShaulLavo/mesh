@@ -113,25 +113,32 @@ func validateHostWake(host protocol.HostInfo) error {
 	return wake.ValidateGrant(*host.Wake, time.Now())
 }
 
-func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer) ([]protocol.SessionInfo, error) {
-	return listRemoteDeclaredHost(ctx, &host, dial)
+func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
+	return listRemoteDeclaredHost(ctx, &host, dial, budget)
 }
 
-func listRemoteDeclaredHost(ctx context.Context, host *HostRecord, dial HostDialer) ([]protocol.SessionInfo, error) {
-	conn, info, err := openVerifiedHostInfo(ctx, *host, dial)
+func listRemoteDeclaredHost(ctx context.Context, host *HostRecord, dial HostDialer, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
+	setupCtx, cancelSetup := context.WithTimeout(ctx, budget.Setup)
+	conn, info, err := openVerifiedHostInfo(setupCtx, *host, dial)
+	setupErr := setupCtx.Err()
+	cancelSetup()
 	if err != nil {
 		return nil, err
+	}
+	defer conn.Close() //nolint:errcheck // the request result is authoritative
+	// Best-effort wake caching can exhaust setup after identity verification.
+	if setupErr != nil {
+		return nil, fmt.Errorf("set up host %s: %w", HostLabel(*host), setupErr)
 	}
 	host.NameVerified = info.MachineName != ""
 	if host.NameVerified {
 		host.MachineName, host.NameRevision = info.MachineName, info.NameRevision
 	}
-	defer conn.Close() //nolint:errcheck // the request result is authoritative
 	requestID, err := newDaemonRequestID()
 	if err != nil {
 		return nil, err
 	}
-	queryCtx, cancelQuery := context.WithTimeout(ctx, remoteConnectTimeout)
+	queryCtx, cancelQuery := context.WithTimeout(ctx, budget.Reply)
 	defer cancelQuery()
 	response, err := controlRequest(queryCtx, conn, protocol.Control{Type: protocol.TypeList, RequestID: requestID, Lean: true})
 	if err != nil {

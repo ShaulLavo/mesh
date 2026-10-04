@@ -147,7 +147,7 @@ func TestPolledLegacyOwnerRetainsCachedNameAsUnverified(t *testing.T) {
 
 func TestAuthenticatedOwnerCannotDeclareAnotherCryptographicIdentity(t *testing.T) {
 	f := namedDestination(t)
-	if _, err := listRemoteHost(t.Context(), f.host, dialControlHost); err != nil {
+	if _, err := listRemoteHost(t.Context(), f.host, dialControlHost, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout}); err != nil {
 		t.Fatalf("legitimate named B/B: %v", err)
 	}
 	other, _, err := identity.LoadOrCreate(t.TempDir())
@@ -167,7 +167,7 @@ func TestAuthenticatedOwnerCannotDeclareAnotherCryptographicIdentity(t *testing.
 	f.reported.Store(&forged)
 	expected := f.host
 	expected.ID = other.ID
-	if _, err := listRemoteHost(t.Context(), expected, dialControlHost); err == nil {
+	if _, err := listRemoteHost(t.Context(), expected, dialControlHost, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout}); err == nil {
 		t.Fatal("authenticated owner admitted a claim for another cryptographic ID")
 	}
 	if f.operations.Load() != 1 {

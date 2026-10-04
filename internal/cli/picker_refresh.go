@@ -18,7 +18,7 @@ type pickerCatalogCache interface {
 }
 
 func (a *application) refreshPickerSessions(ctx context.Context, host HostRecord, cache CatalogCache) (HostSessions, error) {
-	refreshed, err := CollectHostSessions(ctx, []HostRecord{host}, defaultCatalogTimeout, a.queryHost, cache)
+	refreshed, err := CollectHostSessions(ctx, []HostRecord{host}, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout}, a.queryHost, cache)
 	if err != nil {
 		return HostSessions{}, err
 	}

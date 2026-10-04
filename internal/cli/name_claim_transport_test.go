@@ -178,7 +178,7 @@ func TestAuthenticatedNameCachePreservesAddressBookAndStopsStaleTarget(t *testin
 	if _, _, err := f.names.Rename(t.Context(), f.host.ID, "renamed", 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := listRemoteHost(t.Context(), *target.Host, dialControlHost); err == nil || f.operations.Load() != 0 {
+	if _, err := listRemoteHost(t.Context(), *target.Host, dialControlHost, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout}); err == nil || f.operations.Load() != 0 {
 		t.Fatalf("stale name executed a command: err=%v operations=%d", err, f.operations.Load())
 	}
 	hosts, err = LoadHosts()
@@ -359,10 +359,10 @@ func TestAuthenticatedNameTargetRechecksNewlyKnownConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = conn.Close()
-	if _, err := listRemoteHost(t.Context(), *target.Host, dialControlHost); err == nil || f.operations.Load() != 0 {
+	if _, err := listRemoteHost(t.Context(), *target.Host, dialControlHost, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout}); err == nil || f.operations.Load() != 0 {
 		t.Fatalf("newly known collision executed a named command: err=%v operations=%d", err, f.operations.Load())
 	}
-	if _, err := listRemoteHost(t.Context(), f.host, dialControlHost); err != nil || f.operations.Load() != 1 {
+	if _, err := listRemoteHost(t.Context(), f.host, dialControlHost, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout}); err != nil || f.operations.Load() != 1 {
 		t.Fatalf("exact-ID target failed during conflict: err=%v operations=%d", err, f.operations.Load())
 	}
 }

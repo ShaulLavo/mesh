@@ -106,7 +106,7 @@ func TestListRemoteHostUsesWebSocketAndVerifiesIdentity(t *testing.T) {
 	host := HostRecord{MachineName: "pc", ID: hostID, MeshIdentity: hostID, Endpoint: "ws" + strings.TrimPrefix(server.URL, "http")}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	got, err := listRemoteHost(ctx, host, dialHost)
+	got, err := listRemoteHost(ctx, host, dialHost, HostQueryBudget{Setup: remoteConnectTimeout, Reply: remoteConnectTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}

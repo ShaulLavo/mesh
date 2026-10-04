@@ -225,13 +225,13 @@ func TestBareRemoteNameRefusesKnownOwnMachineCollisionBeforeEffects(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := listRemoteHost(t.Context(), *target.Host, dialControlHost); err == nil || !strings.Contains(err.Error(), "shared by hosts") {
+	if _, err := listRemoteHost(t.Context(), *target.Host, dialControlHost, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout}); err == nil || !strings.Contains(err.Error(), "shared by hosts") {
 		t.Fatalf("own collision not refused: %v", err)
 	}
 	if remote.operations.Load() != 0 {
 		t.Fatal("ambiguous name reached a session operation")
 	}
-	if _, err := listRemoteHost(t.Context(), remote.host, dialControlHost); err != nil {
+	if _, err := listRemoteHost(t.Context(), remote.host, dialControlHost, HostQueryBudget{Setup: remoteConnectTimeout, Reply: defaultCatalogTimeout}); err != nil {
 		t.Fatalf("exact owner after conflict: %v", err)
 	}
 	if remote.operations.Load() != 1 {

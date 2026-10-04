@@ -23,8 +23,14 @@ type HostSessions struct {
 	CacheErr error
 }
 
-// HostQuery fetches one authoritative host catalog.
-type HostQuery func(context.Context, *HostRecord) ([]protocol.SessionInfo, error)
+// HostQueryBudget separates authenticated connection setup from the catalog reply.
+type HostQueryBudget struct {
+	Setup time.Duration
+	Reply time.Duration
+}
+
+// HostQuery fetches one authoritative host catalog within its phase budgets.
+type HostQuery func(context.Context, *HostRecord, HostQueryBudget) ([]protocol.SessionInfo, error)
 
 // CatalogCache stores the last authoritative catalog for offline display.
 // Implementations must honor context cancellation and permit concurrent calls.
@@ -45,16 +51,15 @@ type hostQueryResult struct {
 	err      error
 }
 
-// CollectHostSessions queries all hosts concurrently under a shared deadline,
-// even if a broken query implementation ignores context cancellation. Cache
-// writes fit within that deadline; stale fallback reads get a separate bounded
-// budget so the network deadline cannot prevent offline display.
-func CollectHostSessions(parent context.Context, hosts []HostRecord, timeout time.Duration, query HostQuery, cache CatalogCache) ([]HostSessions, error) {
+// CollectHostSessions caps fan-out at the sum of the per-host phase budgets,
+// including queries that ignore cancellation. Cache writes share that cap;
+// stale reads get a fresh budget so expired queries can still display offline rows.
+func CollectHostSessions(parent context.Context, hosts []HostRecord, budget HostQueryBudget, query HostQuery, cache CatalogCache) ([]HostSessions, error) {
 	if parent == nil {
 		return nil, errors.New("collect host sessions with nil context")
 	}
-	if timeout <= 0 {
-		return nil, errors.New("collect host sessions with non-positive timeout")
+	if budget.Setup < 0 || budget.Reply <= 0 || budget.Setup+budget.Reply < budget.Reply {
+		return nil, errors.New("collect host sessions with invalid phase budgets")
 	}
 	if query == nil || cache == nil {
 		return nil, errors.New("collect host sessions with incomplete dependencies")
@@ -62,14 +67,14 @@ func CollectHostSessions(parent context.Context, hosts []HostRecord, timeout tim
 	if err := parent.Err(); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	ctx, cancel := context.WithTimeout(parent, budget.Setup+budget.Reply)
 	defer cancel()
 
 	results := make(chan hostQueryResult, len(hosts))
 	for i, host := range hosts {
 		i, host := i, host
 		go func() {
-			sessions, err := query(ctx, &host)
+			sessions, err := query(ctx, &host, budget)
 			results <- hostQueryResult{index: i, host: host, sessions: sessions, err: err}
 		}()
 	}

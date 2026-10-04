@@ -133,7 +133,7 @@ func (a *application) legacyRelaunchSession(cmd *cobra.Command, resolved resolve
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), remoteCreateTimeout)
 	defer cancel()
-	rows, err := a.queryHost(ctx, resolved.host)
+	rows, err := a.queryHost(ctx, resolved.host, HostQueryBudget{Setup: remoteConnectTimeout, Reply: remoteConnectTimeout})
 	if err != nil {
 		return err
 	}
