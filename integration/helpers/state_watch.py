@@ -46,19 +46,31 @@ def watch(path, topics):
 
 
 def observe_idle(connection, initial, seconds):
+    snapshot = initial["stateSnapshot"]
+    assert set(snapshot["current"]) == {"sessions", "services"}, snapshot
+    seq = snapshot["seq"]
     started = time.monotonic()
     idle_bytes = 0
     observed = False
     while time.monotonic() - started < seconds:
         message, size = read(connection)
         idle_bytes += size
-        if message["type"] == "state.current":
-            for section in message["stateCurrent"]["sections"].values():
-                assert not section.get("failing", False), section
-                assert section["ageMillis"] < 30000, section
-            observed = True
-            if time.monotonic() - started >= seconds - 0.25:
-                break
+        assert message["type"] in ("state.event", "state.current"), message
+        content = message.get("stateEvent", message.get("stateCurrent"))
+        assert content["seq"] == seq + 1, (seq, content)
+        seq = content["seq"]
+        current = message.get("stateCurrent")
+        if current is None:
+            continue
+        # A memory event can arrive before the heartbeat at the observation deadline.
+        assert current["seq"] == seq, (seq, current)
+        assert set(current["sections"]) == set(snapshot["current"]), current
+        for section in current["sections"].values():
+            assert not section.get("failing", False), section
+            assert 0 <= section["ageMillis"] < 30000, section
+        observed = True
+        if time.monotonic() - started >= seconds - 0.25:
+            break
     elapsed = time.monotonic() - started
     connection.close()
     assert observed, "unchanged catalog received no current confirmation"
