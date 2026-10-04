@@ -330,7 +330,7 @@ old_daemon=$!
 wait_for_daemon "$old_binary" "$old_daemon" || fail "retained daemon could not reopen candidate-written state: $(cat "$test_root/old-rollback.log")"
 [[ $(read_state_version) == "$candidate_written_state" ]] || fail 'retained daemon changed candidate-written schema'
 mesh "$old_binary" ls --daemon | grep -Fq "$session" || fail 'retained daemon lost the live session after candidate writes'
-mesh "$candidate_binary" ls --daemon --all | grep -Fq "$saved_session" || fail 'retained daemon lost saved recovery session after candidate writes'
+mesh "$old_binary" ls --daemon --all | grep -Fq "$saved_session" || fail 'retained daemon lost saved recovery session after candidate writes'
 assert_session_processes
 mkfifo "$test_root/rollback-input"
 mesh "$old_binary" attach "$session" --daemon --detach-key=ctrl+] <"$test_root/rollback-input" >"$test_root/rollback.out" 2>"$test_root/rollback.err" &
