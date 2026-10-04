@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,6 +49,44 @@ func TestLaunchdStopStartsCandidateAfterImmediateRemoval(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "bootstrapped")); err != nil {
 		t.Fatalf("Start skipped candidate bootstrap after immediate removal: %v", err)
+	}
+}
+
+func TestLaunchdStopRejectsUnexpectedPrintFailures(t *testing.T) {
+	for _, mode := range []string{"inspect-failed", "removal-failed"} {
+		t.Run(mode, func(t *testing.T) {
+			service, root := launchdRemovalFixture(t, mode)
+			err := service.Stop(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "query refused") {
+				t.Fatalf("unexpected print failure accepted: %v", err)
+			}
+			_, err = os.Stat(filepath.Join(root, "bootout"))
+			if mode == "inspect-failed" && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed inspection received bootout: %v", err)
+			}
+		})
+	}
+}
+
+func TestLaunchdStartRejectsUnexpectedPrintFailure(t *testing.T) {
+	service, root := launchdRemovalFixture(t, "inspect-failed")
+	err := service.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "query refused") {
+		t.Fatalf("unexpected print failure accepted: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(root, "bootstrapped")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed inspection received bootstrap: %v", err)
+	}
+}
+
+func TestLaunchdStopRejectsMissingLaunchctl(t *testing.T) {
+	service, root := launchdRemovalFixture(t, "removed")
+	if err := os.Remove(filepath.Join(root, "launchctl")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	if err := service.Stop(context.Background()); !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("missing launchctl accepted: %v", err)
 	}
 }
 
@@ -113,9 +152,20 @@ state=$MESH_TEST_LAUNCHD_STATE
 mode=$MESH_TEST_LAUNCHD_MODE
 case "$1" in
 print)
-    [ -f "$state/loaded" ] || exit 1
+    if [ "$mode" = inspect-failed ]; then
+        printf 'query refused\n' >&2
+        exit 113
+    fi
+    if [ ! -f "$state/loaded" ]; then
+        printf 'Bad request.\nCould not find service "dev.fixture.mesh" in domain for user gui: 123\n' >&2
+        exit 113
+    fi
     if [ -f "$state/bootout" ]; then
         : >"$state/polled"
+        if [ "$mode" = removal-failed ]; then
+            printf 'query refused\n' >&2
+            exit 113
+        fi
         if [ "$mode" = blocked-print ]; then
             exec sleep 10
         fi
