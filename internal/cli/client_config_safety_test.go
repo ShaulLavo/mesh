@@ -85,7 +85,7 @@ func TestClientRetirementInvalidInputUnchanged(t *testing.T) {
 }
 
 func TestClientRetirementUnsafeFilesUnchanged(t *testing.T) {
-	for _, kind := range []string{"symlink", "hardlink", "public", "fifo", "unsafe-directory", "unsafe-lock"} {
+	for _, kind := range []string{"symlink", "hardlink", "fifo", "unsafe-directory", "unsafe-lock", "public-lock"} {
 		t.Run(kind, func(t *testing.T) {
 			contents := obsoleteConfigFixture()
 			path := writeClientConfigFixture(t, contents)
@@ -103,11 +103,6 @@ func TestClientRetirementUnsafeFilesUnchanged(t *testing.T) {
 				if err := link(preserved, path); err != nil {
 					t.Fatal(err)
 				}
-			case "public":
-				if err := os.Chmod(path, 0o644); err != nil { //nolint:gosec // deliberate unsafe fixture must be refused
-
-					t.Fatal(err)
-				}
 			case "fifo":
 				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
@@ -122,6 +117,14 @@ func TestClientRetirementUnsafeFilesUnchanged(t *testing.T) {
 				}
 			case "unsafe-lock":
 				if err := os.Symlink(path, filepath.Join(filepath.Dir(path), ".hosts.lock")); err != nil {
+					t.Fatal(err)
+				}
+			case "public-lock":
+				lock := filepath.Join(filepath.Dir(path), ".hosts.lock")
+				if err := os.WriteFile(lock, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(lock, 0o644); err != nil { //nolint:gosec // writer locks must remain private even with a legacy readable address book
 					t.Fatal(err)
 				}
 			}

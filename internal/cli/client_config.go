@@ -279,10 +279,19 @@ func openClientConfigFile(dir *os.File, name string, flags int, mode uint32) (*o
 		_ = file.Close()
 		return nil, fmt.Errorf("inspect host config file: %w", err)
 	}
-	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o077 != 0 || stat.Nlink != 1 { //nolint:gosec // the OS defines effective UIDs as unsigned 32-bit values
+	privateWriter := name != hostConfigName && stat.Mode&0o077 != 0
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) || stat.Nlink != 1 || privateWriter { //nolint:gosec // the OS defines effective UIDs as unsigned 32-bit values
 
 		_ = file.Close()
-		return nil, errors.New("host config files must be private regular files owned by this user with one link")
+		return nil, errors.New("host config files must be regular files owned by this user with one link; writer files must be private")
+	}
+	// Legacy readable books need no write access; tighten writable books through
+	// the validated descriptor without changing their contents or inode.
+	if stat.Mode&0o022 != 0 {
+		if err := file.Chmod(os.FileMode(stat.Mode & 0o700)); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("restrict host config write permissions: %w", err)
+		}
 	}
 	return file, nil
 }
