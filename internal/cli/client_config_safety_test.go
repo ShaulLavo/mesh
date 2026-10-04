@@ -85,7 +85,7 @@ func TestClientRetirementInvalidInputUnchanged(t *testing.T) {
 }
 
 func TestClientRetirementUnsafeFilesUnchanged(t *testing.T) {
-	for _, kind := range []string{"symlink", "hardlink", "public", "fifo", "unsafe-directory", "unsafe-lock"} {
+	for _, kind := range []string{"symlink", "hardlink", "fifo", "unsafe-directory", "unsafe-lock"} {
 		t.Run(kind, func(t *testing.T) {
 			contents := obsoleteConfigFixture()
 			path := writeClientConfigFixture(t, contents)
@@ -101,11 +101,6 @@ func TestClientRetirementUnsafeFilesUnchanged(t *testing.T) {
 					link = os.Link
 				}
 				if err := link(preserved, path); err != nil {
-					t.Fatal(err)
-				}
-			case "public":
-				if err := os.Chmod(path, 0o644); err != nil { //nolint:gosec // deliberate unsafe fixture must be refused
-
 					t.Fatal(err)
 				}
 			case "fifo":

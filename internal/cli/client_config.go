@@ -279,10 +279,11 @@ func openClientConfigFile(dir *os.File, name string, flags int, mode uint32) (*o
 		_ = file.Close()
 		return nil, fmt.Errorf("inspect host config file: %w", err)
 	}
-	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) || stat.Mode&0o077 != 0 || stat.Nlink != 1 { //nolint:gosec // the OS defines effective UIDs as unsigned 32-bit values
+	// Existing address books may have broader permissions; new writes use 0600.
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) || stat.Nlink != 1 { //nolint:gosec // the OS defines effective UIDs as unsigned 32-bit values
 
 		_ = file.Close()
-		return nil, errors.New("host config files must be private regular files owned by this user with one link")
+		return nil, errors.New("host config files must be regular files owned by this user with one link")
 	}
 	return file, nil
 }
