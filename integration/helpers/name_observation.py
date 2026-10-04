@@ -105,11 +105,15 @@ def prove(binary, screen, evidence):
                 observation = current(frames[-1])
                 assert observation and observation["ageMillis"] < 30000 and not observation.get("failing", False), observation
                 assert "last known name" not in unchanged, "healthy unchanged owner observation became retained"
+                paused_at = time.monotonic()
                 daemon.send_signal(signal.SIGSTOP)
                 stopped = True
                 dashboard_until(terminal, lambda data: b"last known name" in data, screen, timeout=38)
+                time.sleep(max(0, 31 - (time.monotonic() - paused_at)))
+                terminal.drain()
                 retained = save(evidence, "source-paused-retained", terminal, screen, frames)
                 assert "last known name" in retained
+                paused_seconds = time.monotonic() - paused_at
                 daemon.send_signal(signal.SIGCONT)
                 stopped = False
                 deadline = time.monotonic() + 15
@@ -117,9 +121,9 @@ def prove(binary, screen, evidence):
                     message = read_watch(connection)
                     frames.append(message)
                     observation = current(message)
-                    if observation and observation["ageMillis"] < 30000 and not observation.get("failing", False):
-                        break
                     assert time.monotonic() < deadline, "resumed owner watch did not renew its observation"
+                    if observation and observation["ageMillis"] < 2000 and not observation.get("failing", False):
+                        break
                 dashboard_until(terminal, lambda data: b"fixture-owner" in data and b"last known name" not in data,
                                 screen, timeout=15)
                 renewed = save(evidence, "source-resumed-fresh", terminal, screen, frames)
@@ -130,7 +134,7 @@ def prove(binary, screen, evidence):
                 save(evidence, "disconnected-retained", terminal, screen, frames)
                 assert (state / "machine-name.json").read_bytes() == durable
                 result = {"platform": os.uname().sysname, "transport": "fixture-owned Unix socket",
-                          "unchangedSeconds": unchanged_seconds,
+                          "unchangedSeconds": unchanged_seconds, "sourcePausedSeconds": paused_seconds,
                           "durableSHA256": hashlib.sha256(durable).hexdigest(),
                           "nameRevision": declaration["nameRevision"], "watchFrames": len(frames),
                           "lastHealthyHostObservation": observation,
