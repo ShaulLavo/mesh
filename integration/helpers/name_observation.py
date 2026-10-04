@@ -89,9 +89,9 @@ def prove(binary, screen, evidence):
                 assert current(initial)["ageMillis"] < 30000 and not current(initial).get("failing", False)
                 terminal = Terminal([binary, "dashboard", "--wall"], environment, root)
                 dashboard_until(terminal, lambda data: b"fixture-owner" in data and b"reachable 1" in data
-                                and b"last known name" not in data, screen)
+                                and b"cached name" not in data, screen)
                 fresh = save(evidence, "known-good", terminal, screen, frames)
-                assert "last known name" not in fresh, "fresh owner name is not observable"
+                assert "cached name" not in fresh, "fresh owner name is not observable"
                 started = time.monotonic()
                 while time.monotonic() - started < 32:
                     message = read_watch(connection)
@@ -104,15 +104,15 @@ def prove(binary, screen, evidence):
                 unchanged = save(evidence, "unchanged-past-threshold", terminal, screen, frames)
                 observation = current(frames[-1])
                 assert observation and observation["ageMillis"] < 30000 and not observation.get("failing", False), observation
-                assert "last known name" not in unchanged, "healthy unchanged owner observation became retained"
+                assert "cached name" not in unchanged, "healthy unchanged owner observation became retained"
                 paused_at = time.monotonic()
                 daemon.send_signal(signal.SIGSTOP)
                 stopped = True
-                dashboard_until(terminal, lambda data: b"last known name" in data, screen, timeout=38)
+                dashboard_until(terminal, lambda data: b"cached name" in data, screen, timeout=38)
                 time.sleep(max(0, 31 - (time.monotonic() - paused_at)))
                 terminal.drain()
                 retained = save(evidence, "source-paused-retained", terminal, screen, frames)
-                assert "last known name" in retained
+                assert "cached name" in retained
                 paused_seconds = time.monotonic() - paused_at
                 daemon.send_signal(signal.SIGCONT)
                 stopped = False
@@ -124,13 +124,13 @@ def prove(binary, screen, evidence):
                     assert time.monotonic() < deadline, "resumed owner watch did not renew its observation"
                     if observation and observation["ageMillis"] < 2000 and not observation.get("failing", False):
                         break
-                dashboard_until(terminal, lambda data: b"fixture-owner" in data and b"last known name" not in data,
+                dashboard_until(terminal, lambda data: b"fixture-owner" in data and b"cached name" not in data,
                                 screen, timeout=15)
                 renewed = save(evidence, "source-resumed-fresh", terminal, screen, frames)
-                assert "last known name" not in renewed
+                assert "cached name" not in renewed
                 daemon.terminate()
                 daemon.wait(timeout=8)
-                dashboard_until(terminal, lambda data: b"last known name" in data, screen)
+                dashboard_until(terminal, lambda data: b"cached name" in data, screen)
                 save(evidence, "disconnected-retained", terminal, screen, frames)
                 assert (state / "machine-name.json").read_bytes() == durable
                 result = {"platform": os.uname().sysname, "transport": "fixture-owned Unix socket",

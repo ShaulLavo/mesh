@@ -61,7 +61,7 @@ func TestDeclaredUpdateTargetsUseRetainedOwnerClaimsWithoutChangingOperation(t *
 		t.Fatal(err)
 	}
 	for _, target := range shown[:2] {
-		if !strings.Contains(target.Host.Label(), "garden [") || !strings.Contains(target.Host.Label(), "conflict") || !strings.Contains(target.Host.Label(), "last known name") {
+		if !strings.Contains(target.Host.Label(), "garden [") || !strings.Contains(target.Host.Label(), "conflict") || !strings.Contains(target.Host.Label(), "cached name") {
 			t.Fatalf("retained declaration status: %q", target.Host.Label())
 		}
 	}
@@ -80,7 +80,7 @@ func TestDeclaredUpdateTargetsUseRetainedOwnerClaimsWithoutChangingOperation(t *
 	if err := printDeclaredUpdateRun(t.Context(), &out, run, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "last known name") || strings.Contains(out.String(), "obsolete-viewer") {
+	if !strings.Contains(out.String(), "cached name") || strings.Contains(out.String(), "obsolete-viewer") {
 		t.Fatalf("status uses persisted viewer label: %s", &out)
 	}
 }

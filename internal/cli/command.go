@@ -264,8 +264,8 @@ type application struct {
 }
 
 // NewCommand builds the complete non-picker CLI. Fang decorates and executes
-// the returned Cobra command in cmd/mesh.
-func NewCommand(dependencies Dependencies) *cobra.Command {
+// its embedded Cobra command in cmd/mesh.
+func NewCommand(dependencies Dependencies) *Command {
 	if dependencies.DialHost == nil {
 		dependencies.DialHost = dialHost
 	}
@@ -392,7 +392,7 @@ func NewCommand(dependencies Dependencies) *cobra.Command {
 	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), deviceCommand(), versionCommand())...)
 	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand())
 	protectPrivacyErrors(root, &privacyEnabled)
-	return root
+	return identityArgumentCommand(root)
 }
 
 type statusError struct{ code int }
