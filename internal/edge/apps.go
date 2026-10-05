@@ -31,14 +31,17 @@ func (r *Registry) AcquireApp(request *http.Request, owner string) (func(), erro
 		return nil, err
 	}
 	client := r.AppClientIP(request)
-	if !client.IsValid() || !r.clients.Acquire(client) {
-		return nil, errors.New("edge: app client concurrency limit exceeded")
+	if !client.IsValid() {
+		return nil, errors.New("edge: app client address is unvalidated")
+	}
+	if !r.clients.Acquire(client) {
+		return nil, fmt.Errorf("edge: app client concurrency limit exceeded: %w", apps.ErrCapacity)
 	}
 	select {
 	case r.global <- struct{}{}:
 	default:
 		r.clients.Release(client)
-		return nil, errors.New("edge: app global concurrency limit exceeded")
+		return nil, fmt.Errorf("edge: app global concurrency limit exceeded: %w", apps.ErrCapacity)
 	}
 	r.budgetsMu.Lock()
 	budget := r.budgets[owner]
@@ -52,7 +55,7 @@ func (r *Registry) AcquireApp(request *http.Request, owner string) (func(), erro
 	default:
 		<-r.global
 		r.clients.Release(client)
-		return nil, errors.New("edge: app origin concurrency limit exceeded")
+		return nil, fmt.Errorf("edge: app origin concurrency limit exceeded: %w", apps.ErrCapacity)
 	}
 	request.Body = &inboundRequestBody{ReadCloser: http.MaxBytesReader(nil, request.Body, r.requestBodyLimit)}
 	var once sync.Once

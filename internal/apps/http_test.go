@@ -2,12 +2,17 @@ package apps
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -445,4 +450,281 @@ func TestAppReturnRejectsOtherOrigins(t *testing.T) {
 			t.Fatalf("accepted outside return %q as %q", value, got)
 		}
 	}
+}
+
+func TestStaticAppAssetBurstWaitsForCapacity(t *testing.T) {
+	f := newAppFixture(t)
+	source := t.TempDir()
+	for index := range 10 {
+		path := filepath.Join(source, fmt.Sprintf("image-%d.svg", index))
+		if err := os.WriteFile(path, []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1"/></svg>`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upload, digest := uploadSource(t, f, source)
+	result, err := f.origin.Handle(context.Background(), Request{Action: "create", Kind: "static", UploadID: upload, Digest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := *result.App
+	owner := pairedOwner(t, f)
+	viewRequest := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+app.ID, nil)
+	viewRequest.AddCookie(owner)
+	redirect, nonce := privateViewRedirect(t, f, viewRequest)
+	consume := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, redirect.Header().Get("Location"), nil)
+	request.AddCookie(nonce)
+	f.edge.ServeHost(consume, request, app.ID+"."+Domain)
+	view := cookieNamed(t, consume, webauth.ViewCookie)
+	entered := make(chan struct{}, 10)
+	finish := make(chan struct{}, 10)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		select {
+		case <-finish:
+		case <-r.Context().Done():
+			return
+		}
+		if !f.origin.ServeHTTP(w, r) {
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(origin.Close)
+	t.Cleanup(func() { close(finish) })
+	endpoint, err := netip.ParseAddrPort(strings.TrimPrefix(origin.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.edge.config.Resolve = func(context.Context, string) (netip.AddrPort, error) { return endpoint, nil }
+	f.edge.slots = make(chan struct{}, 8)
+	responses := make(chan *httptest.ResponseRecorder, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	var requests sync.WaitGroup
+	t.Cleanup(func() { cancel(); requests.Wait() })
+	for index := range 10 {
+		requests.Add(1)
+		go func() {
+			defer requests.Done()
+			request := httptest.NewRequest(http.MethodGet, URL(app.ID)+fmt.Sprintf("/image-%d.svg", index), nil).WithContext(ctx)
+			request.AddCookie(view)
+			response := httptest.NewRecorder()
+			f.edge.ServeHost(response, request, app.ID+"."+Domain)
+			responses <- response
+		}()
+	}
+	for range 8 {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("asset requests did not reach origin")
+		}
+	}
+	select {
+	case response := <-responses:
+		t.Fatalf("asset burst rejected before capacity returned: %d %s", response.Code, response.Body.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+	for range 10 {
+		finish <- struct{}{}
+	}
+	for range 10 {
+		response := receiveBurstResponse(t, responses)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "<svg") {
+			t.Fatalf("asset: %d %s", response.Code, response.Body.String())
+		}
+	}
+
+	if len(f.edge.slots) != 0 {
+		t.Fatal("burst leaked active slots")
+	}
+}
+
+func waitForCapacityWaiter(t *testing.T, e *Edge) {
+	t.Helper()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for len(e.capacityWaiters) == 0 {
+		select {
+		case <-deadline.C:
+			t.Fatal("request did not enter bounded queue")
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestStaticCapacityCancellationReturnsWaiter(t *testing.T) {
+	f := newAppFixture(t)
+	for range cap(f.edge.slots) {
+		f.edge.slots <- struct{}{}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request := httptest.NewRequest(http.MethodGet, "/asset.svg", nil).WithContext(ctx)
+	done := make(chan error, 1)
+	go func() { _, err := f.edge.acquire(request, Record{Kind: "static"}); done <- err }()
+	waitForCapacityWaiter(t, f.edge)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancel result: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled queue did not return")
+	}
+	if len(f.edge.capacityWaiters) != 0 || len(f.edge.slots) != cap(f.edge.slots) {
+		t.Fatal("cancellation leaked or consumed capacity")
+	}
+}
+
+func TestStaticCapacityDeadlineAndTimeout(t *testing.T) {
+	for _, duration := range []time.Duration{50 * time.Millisecond, 10 * time.Second} {
+		t.Run(duration.String(), func(t *testing.T) { checkStaticCapacityDeadline(t, duration) })
+	}
+}
+
+func checkStaticCapacityDeadline(t *testing.T, duration time.Duration) {
+	t.Helper()
+	f := newAppFixture(t)
+	f.edge.config.Acquire = func(*http.Request, string) (func(), error) { return nil, ErrCapacity }
+	ctx, cancel := context.WithTimeout(context.Background(), duration)
+	defer cancel()
+	started := time.Now()
+	_, err := f.edge.acquire(httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), Record{Kind: "static"})
+	expected := error(ErrCapacity)
+	if duration < capacityWaitTimeout {
+		expected = context.DeadlineExceeded
+	}
+	if !errors.Is(err, expected) {
+		t.Fatalf("deadline result: %v", err)
+	}
+	if duration > capacityWaitTimeout && time.Since(started) > capacityWaitTimeout+time.Second {
+		t.Fatal("queue exceeded local deadline")
+	}
+	if len(f.edge.capacityWaiters) != 0 {
+		t.Fatal("deadline leaked waiter")
+	}
+}
+
+func TestStaticCapacityQueueExhaustionHasRetryAfter(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
+		t.Fatal(err)
+	}
+	for range cap(f.edge.slots) {
+		f.edge.slots <- struct{}{}
+	}
+	for range cap(f.edge.capacityWaiters) {
+		f.edge.capacityWaiters <- struct{}{}
+	}
+	response := httptest.NewRecorder()
+	f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID)+"/asset.svg", nil), app.ID+"."+Domain)
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "1" {
+		t.Fatalf("exhaustion: %d %v", response.Code, response.Header())
+	}
+	if len(f.edge.capacityWaiters) != cap(f.edge.capacityWaiters) || len(f.edge.slots) != cap(f.edge.slots) {
+		t.Fatal("overflow changed capacity")
+	}
+}
+
+func TestStaticCapacityDoesNotRetryPermanentOrIneligibleRequests(t *testing.T) {
+	f := newAppFixture(t)
+	var calls atomic.Int64
+	permanent := errors.New("invalid request")
+	f.edge.config.Acquire = func(*http.Request, string) (func(), error) { calls.Add(1); return nil, permanent }
+	_, err := f.edge.acquire(httptest.NewRequest(http.MethodGet, "/", nil), Record{Kind: "static"})
+	if !errors.Is(err, permanent) || calls.Load() != 1 {
+		t.Fatal("permanent admission error retried")
+	}
+	f.edge.config.Acquire = func(*http.Request, string) (func(), error) { return nil, ErrCapacity }
+	cases := []struct {
+		kind, method, upgrade string
+		body                  int64
+	}{
+		{kind: "server", method: http.MethodGet},
+		{kind: "static", method: http.MethodPost},
+		{kind: "static", method: http.MethodGet, upgrade: "websocket"},
+		{kind: "static", method: http.MethodGet, body: 1},
+		{kind: "static", method: http.MethodHead, body: -1},
+	}
+	for _, entry := range cases {
+		request := httptest.NewRequest(entry.method, "/", nil)
+		request.ContentLength = entry.body
+		request.Header.Set("Upgrade", entry.upgrade)
+		started := time.Now()
+		_, err := f.edge.acquire(request, Record{Kind: entry.kind})
+		if !errors.Is(err, ErrCapacity) || time.Since(started) > time.Second {
+			t.Fatalf("ineligible request waited: %+v %v", entry, err)
+		}
+	}
+}
+
+func TestStaticCapacityReleasesRacedCancellation(t *testing.T) {
+	f := newAppFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var releases int
+	f.edge.config.Acquire = func(*http.Request, string) (func(), error) {
+		cancel()
+		return func() { releases++ }, nil
+	}
+	_, err := f.edge.acquire(httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), Record{Kind: "static"})
+	if !errors.Is(err, context.Canceled) || releases != 1 {
+		t.Fatalf("canceled success: err=%v releases=%d", err, releases)
+	}
+}
+
+func TestStaticCapacityRechecksPrivateAccessAfterWait(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
+		t.Fatal(err)
+	}
+	forwarded := networkOrigin(t, f)
+	var available atomic.Bool
+	var releases atomic.Int64
+	f.edge.config.Acquire = func(*http.Request, string) (func(), error) {
+		if !available.Load() {
+			return nil, ErrCapacity
+		}
+		return func() { releases.Add(1) }, nil
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		response := httptest.NewRecorder()
+		f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID), nil).WithContext(ctx), app.ID+"."+Domain)
+		done <- response
+	}()
+	waitForCapacityWaiter(t, f.edge)
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "private", ID: app.ID}); err != nil {
+		t.Fatal(err)
+	}
+	available.Store(true)
+	select {
+	case response := <-done:
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("stale public access: %d %s", response.Code, response.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued access did not settle")
+	}
+	if forwarded.Load() != 0 || releases.Load() != 1 || len(f.edge.capacityWaiters) != 0 {
+		t.Fatal("stale authorization reached origin or leaked capacity")
+	}
+}
+
+func receiveBurstResponse(t *testing.T, responses <-chan *httptest.ResponseRecorder) *httptest.ResponseRecorder {
+	t.Helper()
+	select {
+	case response := <-responses:
+		return response
+	case <-time.After(5 * time.Second):
+		t.Fatal("asset queue did not drain")
+	}
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"io"
 	"net"
@@ -23,6 +24,7 @@ import (
 )
 
 const admissionLifetime = 30 * time.Second
+const staticKind = "static"
 const returnQueryKey = "return"
 
 type admission struct {
@@ -142,22 +144,15 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		return true
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, MaxArchive)
-	if e.config.Acquire != nil {
-		release, err := e.config.Acquire(r, app.Owner)
-		if err != nil {
-			http.Error(w, "app busy", http.StatusServiceUnavailable)
-			return true
+	releaseCapacity, err := e.acquire(r, app)
+	if err != nil {
+		if errors.Is(err, ErrCapacity) {
+			w.Header().Set("Retry-After", "1")
 		}
-		defer release()
-	} else {
-		select {
-		case e.slots <- struct{}{}:
-			defer func() { <-e.slots }()
-		default:
-			http.Error(w, "app busy", http.StatusServiceUnavailable)
-			return true
-		}
+		http.Error(w, "app busy", http.StatusServiceUnavailable)
+		return true
 	}
+	defer releaseCapacity()
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	endpoint, err := e.config.Resolve(ctx, app.Owner)
 	cancel()
@@ -858,4 +853,69 @@ func appReturn(id, value string) string {
 		target.Path = "/"
 	}
 	return target.String()
+}
+
+func (e *Edge) acquire(r *http.Request, app Record) (func(), error) {
+	release, err := e.tryAcquire(r, app.Owner)
+	if !errors.Is(err, ErrCapacity) {
+		return release, err
+	}
+	if app.Kind != staticKind || (r.Method != http.MethodGet && r.Method != http.MethodHead) || r.ContentLength != 0 || r.Header.Get("Upgrade") != "" {
+		return nil, err
+	}
+	select {
+	case e.capacityWaiters <- struct{}{}:
+	default:
+		return nil, ErrCapacity
+	}
+	defer func() { <-e.capacityWaiters }()
+	waitCtx, cancel := context.WithTimeout(r.Context(), capacityWaitTimeout)
+	defer cancel()
+	ticker := time.NewTicker(capacityRetryInterval)
+	defer ticker.Stop()
+	// Shared service requests release these budgets too. Polling observes every
+	// release without coupling the service and tunnel paths to this static queue.
+	for waitCtx.Err() == nil {
+		select {
+		case <-waitCtx.Done():
+		case <-ticker.C:
+		}
+		if waitCtx.Err() != nil {
+			break
+		}
+		release, err = e.tryAcquire(r, app.Owner)
+		if !errors.Is(err, ErrCapacity) {
+			return release, err
+		}
+	}
+	if err := r.Context().Err(); err != nil {
+		return nil, fmt.Errorf("app: capacity wait canceled: %w", err)
+	}
+	return nil, ErrCapacity
+}
+
+func (e *Edge) tryAcquire(r *http.Request, owner string) (func(), error) {
+	if err := r.Context().Err(); err != nil {
+		return nil, fmt.Errorf("app: capacity acquisition canceled: %w", err)
+	}
+	var release func()
+	var err error
+	if e.config.Acquire != nil {
+		release, err = e.config.Acquire(r, owner)
+	} else {
+		select {
+		case e.slots <- struct{}{}:
+		default:
+			return nil, ErrCapacity
+		}
+		release = sync.OnceFunc(func() { <-e.slots })
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := r.Context().Err(); err != nil {
+		release()
+		return nil, fmt.Errorf("app: request canceled after capacity acquisition: %w", err)
+	}
+	return release, nil
 }
