@@ -1342,10 +1342,15 @@ func TestPickerReturnsBeforeRawAttachStarts(t *testing.T) {
 	}
 }
 
-func setupCommandTestHost(t *testing.T) *commandTestHost {
+func setupLocalCommandTest(t *testing.T) {
 	t.Helper()
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
+}
+
+func setupCommandTestHost(t *testing.T) *commandTestHost {
+	t.Helper()
+	setupLocalCommandTest(t)
 	host := &commandTestHost{host: HostRecord{
 		MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", TailscaleName: "pc.example.ts.net",
 		Addresses: []string{"100.64.0.2"}, Endpoint: "ws://100.64.0.2:7777/mesh",
@@ -1512,7 +1517,7 @@ func TestLocalSessionsStayReachableAfterAdoptingAHost(t *testing.T) {
 }
 
 func TestKillDoesNotRefuseOnAMissedLivenessProbe(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
 	dir, err := paths.SessionDir("PR0B")
 	if err != nil {
