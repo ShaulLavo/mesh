@@ -83,7 +83,7 @@ func (c *serviceController) healthMatches(rows map[string]protocol.ServiceInfo, 
 	}
 	for _, service := range registered {
 		row, found := rows[service.Name]
-		if !found || !service.Equal(serviceFromInfo(row)) || !reflect.DeepEqual(row.Demand, c.demand.Status(service.Name)) {
+		if !found || !service.Equal(serviceFromInfo(row)) || !sameDemandHealth(row.Demand, c.demand.Status(service.Name)) {
 			return false
 		}
 	}
@@ -97,8 +97,18 @@ func (c *serviceController) publishedServiceHealth(service meshserve.Service) pr
 		return row
 	}
 	observed, found := c.observedHealth[service.Name]
-	if found && service.Equal(serviceFromInfo(observed)) && reflect.DeepEqual(row.Demand, observed.Demand) {
+	if found && service.Equal(serviceFromInfo(observed)) && sameDemandHealth(row.Demand, observed.Demand) {
 		row.Healthy, row.Problem, row.HealthUnknown = observed.Healthy, observed.Problem, false
 	}
 	return row
+}
+
+func sameDemandHealth(a, b *protocol.ServiceDemand) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	left, right := *a, *b
+	// Connection counts change during traffic without changing the probe's service identity.
+	left.Connections, right.Connections = 0, 0
+	return reflect.DeepEqual(left, right)
 }
