@@ -15,6 +15,9 @@ import (
 
 const maximumSSHRateEntries = 1024
 
+// RateLimitMessage accompanies exit 1 when admission refuses a session before its handler runs.
+const RateLimitMessage = "rate limit exceeded, please try again later"
+
 type sshRateEntry struct {
 	address string
 	limiter *rate.Limiter
@@ -34,7 +37,7 @@ func secureMiddleware(handler charmssh.Handler) charmssh.Handler {
 		pty, _, _ := current.Pty()
 		log.Printf("sshd: connect user=%q remote=%s command=%q term=%q size=%dx%d", current.User(), current.RemoteAddr(), current.RawCommand(), pty.Term, pty.Window.Width, pty.Window.Height)
 		if !limiter.allow(current.RemoteAddr()) {
-			_, _ = fmt.Fprintln(current.Stderr(), "rate limit exceeded, please try again later")
+			_, _ = fmt.Fprintln(current.Stderr(), RateLimitMessage)
 			_ = current.Exit(1)
 			_ = current.Close()
 			return
