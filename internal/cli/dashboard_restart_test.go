@@ -143,20 +143,23 @@ func TestDashboardInstalledTargetRequiresCommittedMatchingImage(t *testing.T) {
 		}
 	}
 	save()
-	if target, err := dashboardInstalledTarget(root, "local", build); target != "" || err != nil {
+	if target, err := dashboardInstalledTarget(root, "local", build, path); target != "" || err != nil {
 		t.Fatalf("validating daemon triggered restart: %q %v", target, err)
 	}
 	status.Phase = updateinstall.Committed
 	save()
-	if target, err := dashboardInstalledTarget(root, "local", build); target != path || err != nil {
+	if target, err := dashboardInstalledTarget(root, "local", build, path); target != path || err != nil {
 		t.Fatalf("committed target: %q %v", target, err)
 	}
-	if target, err := dashboardInstalledTarget(root, "remote", build); target != "" || err != nil {
+	if target, err := dashboardInstalledTarget(root, "local", build, ""); target != "" || err != nil {
+		t.Fatalf("unknown executable triggered restart: %q %v", target, err)
+	}
+	if target, err := dashboardInstalledTarget(root, "remote", build, path); target != "" || err != nil {
 		t.Fatalf("remote host triggered restart: %q %v", target, err)
 	}
 	status.Settings.Executable = status.Candidate
 	save()
-	if _, err := dashboardInstalledTarget(root, "local", build); err == nil {
+	if _, err := dashboardInstalledTarget(root, "local", build, path); err == nil {
 		t.Fatal("staging path accepted")
 	}
 	status.Settings.Executable = path
@@ -263,7 +266,7 @@ func TestDashboardReplacementDuringTerminalCleanupSkipsExec(t *testing.T) {
 	}
 	runs := 0
 	restart := dashboardRestart{current: release.Build{Digest: "old"},
-		installed: func(build release.Build) (string, error) { return dashboardInstalledTarget(root, "local", build) },
+		installed: func(build release.Build) (string, error) { return dashboardInstalledTarget(root, "local", build, path) },
 		exec: func(ctx context.Context, build release.Build, _ string, _, _ []string) error {
 			return updateinstall.WithCommittedExecutable(ctx, root, "local", build, func(string) error { t.Fatal("executed replacement before its healthy commit"); return nil })
 		},
@@ -294,5 +297,36 @@ func TestDashboardReplacementDuringTerminalCleanupSkipsExec(t *testing.T) {
 	})
 	if err != nil || runs != 2 {
 		t.Fatalf("replacement handoff: runs=%d err=%v", runs, err)
+	}
+}
+
+func TestDashboardKeepsUnmanagedExecutableAfterHealthyDaemonObservation(t *testing.T) {
+	root, installed, build := dashboardLockedInstallation(t)
+	currentPath, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Clean(currentPath) == filepath.Clean(installed) {
+		t.Fatal("test process unexpectedly executes the managed fixture")
+	}
+	observations, executions := 0, 0
+	restart := dashboardRestart{current: release.Current(),
+		installed: func(build release.Build) (string, error) {
+			return dashboardInstalledTarget(root, "local", build, currentPath)
+		},
+		exec: func(context.Context, release.Build, string, []string, []string) error {
+			executions++
+			return nil
+		},
+	}
+	input := DashboardInput{Watch: func(_ context.Context, publish func(DashboardHostView)) error {
+		publish(DashboardHostView{Host: DashboardHost{Local: true}, Build: build, Connection: StateReachable, LastReply: time.Now()})
+		return nil
+	}}
+	err = restart.run(t.Context(), input, func(ctx context.Context, input DashboardInput) error {
+		return input.Watch(ctx, func(DashboardHostView) { observations++ })
+	})
+	if err != nil || executions != 0 || observations != 1 {
+		t.Fatalf("unmanaged dashboard handoff: observations=%d executions=%d err=%v", observations, executions, err)
 	}
 }

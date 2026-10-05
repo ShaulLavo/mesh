@@ -94,6 +94,10 @@ func (a *application) runConfiguredDashboard(ctx context.Context, wall bool, ove
 	if a.dependencies.Dashboard == nil {
 		return errors.New("dashboard terminal view is unavailable")
 	}
+	currentExecutable, executableErr := os.Executable()
+	if executableErr != nil {
+		currentExecutable = ""
+	}
 	theme, err := dashboardConfiguredTheme(override)
 	if err != nil {
 		return err
@@ -134,7 +138,7 @@ func (a *application) runConfiguredDashboard(ctx context.Context, wall bool, ove
 			})
 		},
 		installed: func(build release.Build) (string, error) {
-			return dashboardInstalledTarget(filepath.Dir(socket), localID, build)
+			return dashboardInstalledTarget(filepath.Dir(socket), localID, build, currentExecutable)
 		},
 	}
 	return restart.run(ctx, input, func(run context.Context, next DashboardInput) error {

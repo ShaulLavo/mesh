@@ -27,7 +27,7 @@ func TestDashboardRestartRecoversAfterInstallationLockSettlement(t *testing.T) {
 	cleaned, attempts, executions := false, 0, 0
 	argv, env := []string{"mesh", "dashboard", "--wall"}, []string{"TERM=linux", "KEEP=value"}
 	restart := dashboardRestart{current: release.Build{Digest: "old"}, argv: argv, env: env,
-		installed: func(build release.Build) (string, error) { return dashboardInstalledTarget(root, "local", build) },
+		installed: func(build release.Build) (string, error) { return dashboardInstalledTarget(root, "local", build, path) },
 		exec: func(ctx context.Context, selected release.Build, selectedPath string, args, environment []string) error {
 			attempts++
 			if !cleaned {
@@ -146,7 +146,7 @@ func TestDashboardInstallationLockRetryBoundsAndRevalidation(t *testing.T) {
 			var wait sync.WaitGroup
 			defer func() { close(done); wait.Wait() }()
 			restart := dashboardRestart{current: release.Build{Digest: "old"},
-				installed: func(build release.Build) (string, error) { return dashboardInstalledTarget(root, "local", build) },
+				installed: func(build release.Build) (string, error) { return dashboardInstalledTarget(root, "local", build, path) },
 				exec: func(ctx context.Context, selected release.Build, selectedPath string, _, _ []string) error {
 					attempts++
 					if !cleaned {
