@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func controlTestListener(t *testing.T, socket string) <-chan protocol.Control {
 }
 
 func TestRemoveRefusesAndKeepsALiveLocalSession(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "L1VE", worker.StateRunning)
 	dir, err := paths.SessionDir("L1VE")
 	if err != nil {
@@ -77,7 +78,7 @@ func TestRemoveRefusesAndKeepsALiveLocalSession(t *testing.T) {
 func TestRemoveDoesNotDeleteOnAMissedLivenessProbe(t *testing.T) {
 	for _, state := range []string{worker.StateRunning, worker.StateExited} {
 		t.Run(state, func(t *testing.T) {
-			setupCommandTestHost(t)
+			setupLocalCommandTest(t)
 			writeLocalSessionDir(t, "PR0B", state)
 			setWorkerProbe(t, func(string) error { return context.DeadlineExceeded })
 			stdout, _, err := executeCommand(t, Dependencies{}, "rm", "PR0B")
@@ -103,7 +104,7 @@ type controlTestProbe struct{}
 func (controlTestProbe) Probe(context.Context, string) error { return syscall.ENOENT }
 
 func TestLocalRemoveRetiresDurableCatalog(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "7K3D", worker.StateExited)
 	ctx := context.Background()
 	store, err := storage.Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
@@ -148,35 +149,44 @@ func TestLocalRemoveRetiresDurableCatalog(t *testing.T) {
 
 func TestSignalNormalisesName(t *testing.T) {
 	const term = "term"
-	for _, test := range []struct{ name, want string }{
-		{"TERM", term}, {term, term}, {"SIGTERM", term}, {"SigHup", "hup"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			setupCommandTestHost(t)
-			writeLocalSessionDir(t, "L1VE", worker.StateRunning)
-			dir, err := paths.SessionDir("L1VE")
-			if err != nil {
-				t.Fatal(err)
-			}
-			received := controlTestListener(t, paths.Socket(dir))
-			setWorkerProbe(t, func(string) error { return nil })
-			if _, _, err := executeCommand(t, Dependencies{}, "sig", "L1VE", test.name); err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case request := <-received:
-				if request.Type != protocol.TypeSignal || request.Signal != test.want {
-					t.Fatalf("signal request = %+v, want %s", request, test.want)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("signal did not reach worker")
-			}
-		})
+	for _, entry := range []struct{ name, want string }{{"TERM", term}, {term, term}, {"SIGTERM", term}, {"SigHup", "hup"}} {
+		t.Run(entry.name, func(t *testing.T) { checkLocalSignalName(t, entry.name, entry.want) })
+	}
+}
+
+func checkLocalSignalName(t *testing.T, name, want string) {
+	t.Helper()
+	setupLocalCommandTest(t)
+	writeLocalSessionDir(t, "L1VE", worker.StateRunning)
+	dir, err := paths.SessionDir("L1VE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := controlTestListener(t, paths.Socket(dir))
+	setWorkerProbe(t, func(string) error { return nil })
+	var remoteDials atomic.Int64
+	dependencies := Dependencies{DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
+		remoteDials.Add(1)
+		return nil, errors.New("unexpected remote fixture dial")
+	}}
+	if _, _, err := executeCommand(t, dependencies, "sig", "L1VE", name); err != nil {
+		t.Fatal(err)
+	}
+	if remoteDials.Load() != 0 {
+		t.Fatalf("local signal fixture attempted %d unrelated remote dials", remoteDials.Load())
+	}
+	select {
+	case request := <-received:
+		if request.Type != protocol.TypeSignal || request.Signal != want {
+			t.Fatalf("signal request=%+v, want %s", request, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("signal did not reach worker")
 	}
 }
 
 func TestSignalRejectsUnknownBeforeLocalProbe(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "L1VE", worker.StateRunning)
 	dir, err := paths.SessionDir("L1VE")
 	if err != nil {
@@ -214,7 +224,7 @@ func TestSignalRejectsUnknownBeforeRemoteDial(t *testing.T) {
 }
 
 func TestListPreservesStateOnAnUnknownProbe(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
 	setWorkerProbe(t, func(string) error { return context.DeadlineExceeded })
 	current, err := Find("PR0B")
@@ -224,7 +234,7 @@ func TestListPreservesStateOnAnUnknownProbe(t *testing.T) {
 }
 
 func TestListRereadsExitedMetadataAfterDefinitiveProbe(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
 	setWorkerProbe(t, func(string) error {
 		writeLocalSessionDir(t, "PR0B", worker.StateExited)
@@ -237,7 +247,7 @@ func TestListRereadsExitedMetadataAfterDefinitiveProbe(t *testing.T) {
 }
 
 func TestAwaitHibernatedDoesNotEndOnAnUnknownProbe(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
 	calls := 0
 	setWorkerProbe(t, func(string) error {
@@ -283,7 +293,7 @@ func TestUnsupportedSignalNamesComeFromWorkerTable(t *testing.T) {
 }
 
 func TestUnknownProbeDoesNotAutoRecoverOnAttach(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
 	dir, err := paths.SessionDir("PR0B")
 	if err != nil {
@@ -314,7 +324,7 @@ func TestUnknownProbeDoesNotAutoRecoverOnAttach(t *testing.T) {
 }
 
 func TestControlErrorOnUnknownProbePreservesWorkerFailure(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
 	setWorkerProbe(t, func(string) error { return context.DeadlineExceeded })
 	_, _, err := executeCommand(t, Dependencies{}, "kill", "PR0B")
@@ -324,7 +334,7 @@ func TestControlErrorOnUnknownProbePreservesWorkerFailure(t *testing.T) {
 }
 
 func TestRemoveOfflineRequiresAFreshDefinitiveProbe(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
 	calls := 0
 	setWorkerProbe(t, func(string) error {
@@ -351,7 +361,7 @@ func TestRemoveOfflineRequiresAFreshDefinitiveProbe(t *testing.T) {
 }
 
 func TestLatestDoesNotSkipAnUnknownLiveSession(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "PR0B", worker.StateDetached)
 	setWorkerProbe(t, func(string) error { return context.DeadlineExceeded })
 	current, err := Latest()
@@ -361,7 +371,7 @@ func TestLatestDoesNotSkipAnUnknownLiveSession(t *testing.T) {
 }
 
 func TestLogsAttemptsTheWorkerOnAnUnknownProbe(t *testing.T) {
-	setupCommandTestHost(t)
+	setupLocalCommandTest(t)
 	writeLocalSessionDir(t, "PR0B", worker.StateRunning)
 	setWorkerProbe(t, func(string) error { return context.DeadlineExceeded })
 	stdout, _, err := executeCommand(t, Dependencies{}, "logs", "PR0B")
