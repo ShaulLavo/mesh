@@ -155,9 +155,12 @@ func (b *stateBroker) serviceDemandChanged(next protocol.ServiceInfo, retiring b
 			return
 		}
 		demand := next.Demand
+		healthChanged := !sameDemandHealth(row.Demand, demand)
 		next = row
 		next.Demand = demand
-		next.Healthy, next.Problem, next.HealthUnknown = false, "", true
+		if healthChanged {
+			next.Healthy, next.Problem, next.HealthUnknown = false, "", true
+		}
 	}
 	if !exists && len(b.services) >= meshserve.MaximumServices || exists && reflect.DeepEqual(row, next) {
 		return
