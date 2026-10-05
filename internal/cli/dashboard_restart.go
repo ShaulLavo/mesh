@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/shaul/mesh/internal/release"
@@ -107,7 +108,7 @@ func dashboardChangedBuild(view DashboardHostView, current release.Build) bool {
 	return view.Host.Local && view.Connection == StateReachable && !view.LastReply.IsZero() && current.Digest != "" && view.Build.Digest != "" && view.Build.Digest != current.Digest
 }
 
-func dashboardInstalledTarget(stateDir, localID string, build release.Build) (string, error) {
+func dashboardInstalledTarget(stateDir, localID string, build release.Build, executingPath string) (string, error) {
 	status, err := updateinstall.Read(stateDir)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
@@ -118,6 +119,9 @@ func dashboardInstalledTarget(stateDir, localID string, build release.Build) (st
 	path, err := updateinstall.CommittedExecutable(status, localID, build)
 	if err != nil {
 		return "", fmt.Errorf("dashboard installed target: %w", err)
+	}
+	if path == "" || executingPath == "" || filepath.Clean(path) != filepath.Clean(executingPath) {
+		return "", nil
 	}
 	return path, nil
 }
