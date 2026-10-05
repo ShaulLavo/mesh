@@ -90,8 +90,14 @@ jobs:
           long=$(mktemp -d "$RUNNER_TEMP/mesh-socket-portability-long-scratch-root.XXXXXX")
           trap 'rm -rf -- "$short" "$long"' EXIT
           ln -s "$long" "$short/alias"
-          TMPDIR="$short/alias/" MESH_SHORT_TMP="$short" go test -race -count=1 -timeout=180s ./internal/daemon ./internal/cli ./internal/worker ./internal/updatebootstrap ./internal/paths ./internal/testenv
+          TMPDIR="$short/alias/" MESH_SHORT_TMP="$short" go test -race -count=1 -timeout=180s -json ./internal/daemon ./internal/cli ./internal/worker ./internal/updatebootstrap ./internal/paths ./internal/testenv | tee "$RUNNER_TEMP/native-socket-results.jsonl"
           MESH_SHORT_TMP="$short" python3 scripts/test-helper-recovery-paths.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: native-socket-results-${{ matrix.runner }}
+          path: ${{ runner.temp }}/native-socket-results.jsonl
+          retention-days: 7
 
   auth-cutover:
     name: Device auth cutover (${{ matrix.platform }})
@@ -311,13 +317,14 @@ jobs:
   gate:
     name: Complete CI gate
     if: always()
-    needs: [app-pill, test, auth-cutover, machine-naming, helper-recovery, lint, gates, vulnerability, packaging]
+    needs: [app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, lint, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every CI job
         env:
           APP_PILL: ${{ needs.app-pill.result }}
           TEST: ${{ needs.test.result }}
+          SOCKET_PORTABILITY: ${{ needs.socket-portability.result }}
           AUTH_CUTOVER: ${{ needs.auth-cutover.result }}
           MACHINE_NAMING: ${{ needs.machine-naming.result }}
           HELPER_RECOVERY: ${{ needs.helper-recovery.result }}
@@ -326,7 +333,7 @@ jobs:
           VULNERABILITY: ${{ needs.vulnerability.result }}
           PACKAGING: ${{ needs.packaging.result }}
         run: |
-          [[ $APP_PILL == success && $TEST == success && $AUTH_CUTOVER == success && $MACHINE_NAMING == success && $HELPER_RECOVERY == success && $LINT == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
+          [[ $APP_PILL == success && $TEST == success && $SOCKET_PORTABILITY == success && $AUTH_CUTOVER == success && $MACHINE_NAMING == success && $HELPER_RECOVERY == success && $LINT == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
 
   publish:
     name: Publish tested main commit
