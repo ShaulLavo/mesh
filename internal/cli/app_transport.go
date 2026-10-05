@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	appspkg "github.com/shaul/mesh/internal/apps"
@@ -168,18 +169,48 @@ func dialAppSSH(ctx context.Context, host HostRecord, stateDir string, port uint
 	_ = raw.SetDeadline(time.Time{})
 	return ssh.NewClient(conn, chans, requests), nil
 }
+
+const appSSHAdmissionAttempts = 10
+const appSSHAdmissionDelay = 100 * time.Millisecond
+
+var errAppSSHRateLimited = errors.New(sshd.RateLimitMessage)
+
 func remoteAppRequest(ctx context.Context, client *ssh.Client, r appspkg.Request) (appspkg.Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	stopConnection := context.AfterFunc(ctx, func() { _ = client.Close() })
 	defer stopConnection()
+	for attempt := range appSSHAdmissionAttempts {
+		if err := ctx.Err(); err != nil {
+			return appspkg.Result{}, fmt.Errorf("app SSH request canceled: %w", err)
+		}
+		result, err := remoteAppRequestOnce(ctx, client, r)
+		if !errors.Is(err, errAppSSHRateLimited) {
+			return result, err
+		}
+		if attempt == appSSHAdmissionAttempts-1 {
+			return appspkg.Result{}, fmt.Errorf("app SSH admission refused after %d attempts: %w", appSSHAdmissionAttempts, err)
+		}
+		timer := time.NewTimer(appSSHAdmissionDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return appspkg.Result{}, fmt.Errorf("app SSH admission wait canceled: %w", ctx.Err())
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	return appspkg.Result{}, errAppSSHRateLimited
+}
+
+func remoteAppRequestOnce(ctx context.Context, client *ssh.Client, r appspkg.Request) (appspkg.Result, error) {
 	data, err := json.Marshal(r)
 	if err != nil {
-		return appspkg.Result{}, err
+		return appspkg.Result{}, fmt.Errorf("encode app SSH request: %w", err)
 	}
 	session, err := client.NewSession()
 	if err != nil {
-		return appspkg.Result{}, err
+		return appspkg.Result{}, fmt.Errorf("open app SSH session: %w", err)
 	}
 	defer session.Close() //nolint:errcheck // RPC result decides the outcome
 	stop := context.AfterFunc(ctx, func() { _ = session.Close() })
@@ -191,6 +222,10 @@ func remoteAppRequest(ctx context.Context, client *ssh.Client, r appspkg.Request
 	session.Stdout = &out
 	session.Stderr = &stderr
 	if err = session.Run("app"); err != nil {
+		var exit *ssh.ExitError
+		if errors.As(err, &exit) && exit.ExitStatus() == 1 && strings.TrimSpace(stderr.String()) == sshd.RateLimitMessage {
+			return appspkg.Result{}, fmt.Errorf("app SSH request: %w: %w", errAppSSHRateLimited, err)
+		}
 		return appspkg.Result{}, fmt.Errorf("app SSH request: %w: %s", err, safeRemoteText(stderr.String()))
 	}
 	var reply appSSHReply

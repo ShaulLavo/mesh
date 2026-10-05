@@ -12,15 +12,19 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	appspkg "github.com/shaul/mesh/internal/apps"
+	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/sshd"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -289,4 +293,153 @@ func TestAppDownloadRefusesArchiveMixedFromTwoSnapshots(t *testing.T) {
 	if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("mixed archive published: %v", err)
 	}
+}
+
+func appSSHFixture(t *testing.T, handler sshd.SessionHandler) *ssh.Client {
+	t.Helper()
+	devicePublic, deviceKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, hostKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := identity.ApproveDevice(root, base64.RawURLEncoding.EncodeToString(devicePublic)); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- sshd.Serve(ctx, sshd.Config{Addr: address, HostKey: hostKey, AuthorizedKeys: filepath.Join(root, "authorized_keys"), Handler: handler})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		var serveErr error
+		select {
+		case serveErr = <-done:
+		case <-time.After(time.Second):
+			t.Error("owned SSH server did not stop")
+		}
+		if serveErr != nil {
+			t.Error(serveErr)
+		}
+	})
+	signer, err := ssh.NewSignerFromKey(deviceKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostSigner, err := ssh.NewSignerFromKey(hostKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := &ssh.ClientConfig{User: "mesh", Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.FixedHostKey(hostSigner.PublicKey()), Timeout: time.Second}
+	deadline := time.Now().Add(3 * time.Second)
+	var client *ssh.Client
+	for time.Now().Before(deadline) {
+		client, err = ssh.Dial("tcp", address, config)
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if client == nil {
+		t.Fatalf("owned SSH fixture never became ready: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+func TestAppSSHChunkBurstBacksOffAdmission(t *testing.T) {
+	var handled atomic.Int64
+	client := appSSHFixture(t, func(ctx context.Context, session sshd.Session) (int, error) {
+		var request appspkg.Request
+		if err := json.NewDecoder(session.AppInput).Decode(&request); err != nil {
+			return 1, fmt.Errorf("decode fixture app request: %w", err)
+		}
+		expected := handled.Add(1) - 1
+		if request.Action != "upload.chunk" || request.Offset != expected {
+			return 1, errors.New("chunk executed out of order or more than once")
+		}
+		return 0, json.NewEncoder(session.Out).Encode(appSSHReply{})
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for index := range 32 {
+		_, err := remoteAppRequest(ctx, client, appspkg.Request{Action: "upload.chunk", UploadID: strings.Repeat("a", 43), Offset: int64(index), Data: []byte{1}})
+		if err != nil {
+			t.Fatalf("chunk%d/%d: %v", index, 32, err)
+		}
+	}
+	if handled.Load() != 32 {
+		t.Fatalf("handler executed%d chunks", handled.Load())
+	}
+}
+
+func TestAppSSHAdmissionRetriesAreFinite(t *testing.T) {
+	var calls atomic.Int64
+	client := appSSHFixture(t, func(_ context.Context, session sshd.Session) (int, error) {
+		calls.Add(1)
+		return sshFixtureExit(session.Err, 1, sshd.RateLimitMessage)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := remoteAppRequest(ctx, client, appspkg.Request{Action: "list"})
+	if !errors.Is(err, errAppSSHRateLimited) || calls.Load() != int64(appSSHAdmissionAttempts) {
+		t.Fatalf("refusal: calls=%d err=%v", calls.Load(), err)
+	}
+}
+
+func TestAppSSHAdmissionWaitHonorsCallerDeadline(t *testing.T) {
+	var calls atomic.Int64
+	client := appSSHFixture(t, func(_ context.Context, session sshd.Session) (int, error) {
+		calls.Add(1)
+		return sshFixtureExit(session.Err, 1, sshd.RateLimitMessage)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	_, err := remoteAppRequest(ctx, client, appspkg.Request{Action: "list"})
+	if !errors.Is(err, context.DeadlineExceeded) || calls.Load() >= int64(appSSHAdmissionAttempts) {
+		t.Fatalf("deadline: calls=%d err=%v", calls.Load(), err)
+	}
+}
+
+func TestAppSSHDoesNotRetryOperationFailures(t *testing.T) {
+	t.Run("application error", func(t *testing.T) { checkAppSSHOperationFailure(t, 0, "", sshd.RateLimitMessage) })
+	t.Run("different exit", func(t *testing.T) { checkAppSSHOperationFailure(t, 2, sshd.RateLimitMessage, "") })
+	t.Run("different message", func(t *testing.T) {
+		checkAppSSHOperationFailure(t, 1, sshd.RateLimitMessage+" during application execution", "")
+	})
+}
+
+func checkAppSSHOperationFailure(t *testing.T, status int, stderr, rpcError string) {
+	t.Helper()
+	var calls atomic.Int64
+	client := appSSHFixture(t, func(_ context.Context, session sshd.Session) (int, error) {
+		calls.Add(1)
+		if stderr != "" {
+			return sshFixtureExit(session.Err, status, stderr)
+		}
+		return status, json.NewEncoder(session.Out).Encode(appSSHReply{Error: rpcError})
+	})
+	_, err := remoteAppRequest(context.Background(), client, appspkg.Request{Action: "create"})
+	if err == nil || errors.Is(err, errAppSSHRateLimited) || calls.Load() != 1 {
+		t.Fatalf("operation retried: calls=%d err=%v", calls.Load(), err)
+	}
+}
+
+func sshFixtureExit(output io.Writer, status int, message string) (int, error) {
+	if _, err := io.WriteString(output, message+"\n"); err != nil {
+		return status, fmt.Errorf("write fixture SSH rejection: %w", err)
+	}
+	return status, nil
 }
