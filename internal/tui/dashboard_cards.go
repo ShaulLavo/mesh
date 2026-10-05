@@ -69,7 +69,7 @@ func (m dashboardModel) cardWithGPU(host cli.DashboardHostView, width int, gpuRo
 	cpuValue := m.coloredPercent(host.CPU, host, m.paint(dashboardCPUStyle))
 	ramMetric := cli.DashboardMeasurement[float64]{State: host.RAM.State, Value: dashboardMemoryPercent(host.RAM.Value), Sample: host.RAM.Sample, MeasuredAt: host.RAM.MeasuredAt, Failing: host.RAM.Failing}
 	ramPercent := m.coloredPercent(ramMetric, host, m.paint(dashboardRAMStyle))
-	label := dashboardAlign(m.paint(dashboardMutedStyle).Render("CPU ")+m.coreStrip(host, max(0, plotWidth-8)), cpuValue, plotWidth) + "  " + dashboardAlign(m.paint(dashboardMutedStyle).Render("RAM ")+m.ramValue(host), ramPercent, inner-plotWidth-2)
+	label := dashboardAlign(m.paint(dashboardMutedStyle).Render("CPU ")+m.coreStrip(host, max(0, plotWidth-8)), " "+cpuValue, plotWidth) + "  " + dashboardAlign(m.paint(dashboardMutedStyle).Render("RAM ")+m.ramValue(host), " "+ramPercent, inner-plotWidth-2)
 	meter := m.segmentedMeter(host.CPU, m.now, live, plotWidth, m.ascii, dashboardCPUStyle) + "  " + m.segmentedMeter(ramMetric, m.now, live, inner-plotWidth-2, m.ascii, dashboardRAMStyle)
 	history := m.history[host.Host.ID]
 	if host.MetricsUnsupported {

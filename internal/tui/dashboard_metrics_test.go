@@ -2,9 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/hostmetrics"
@@ -49,5 +53,54 @@ func TestDashboardFirstMetricsAdvice(t *testing.T) {
 				t.Fatalf("received unavailable metrics confused with waiting or legacy: %s", view)
 			}
 		})
+	}
+}
+
+func TestDashboardHardwareMetricSeparation(t *testing.T) {
+	cases := []struct {
+		name    string
+		width   int
+		profile colorprofile.Profile
+		ascii   bool
+	}{
+		{"unicode-70", 70, colorprofile.TrueColor, false},
+		{"unicode-79", 79, colorprofile.TrueColor, false},
+		{"unicode-99", 99, colorprofile.TrueColor, false},
+		{"ansi-70", 70, colorprofile.ANSI, true},
+		{"ansi-79", 79, colorprofile.ANSI, true},
+		{"ansi-99", 99, colorprofile.ANSI, true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			assertHardwareMetricSeparation(t, test.width, test.profile, test.ascii)
+		})
+	}
+}
+
+func assertHardwareMetricSeparation(t *testing.T, width int, profile colorprofile.Profile, ascii bool) {
+	t.Helper()
+	model := usageFixture(t, "normal")
+	model.profile, model.ascii = profile, ascii
+	model.width, model.height = width*2+1, 48
+	host := model.hosts[0]
+	host.CPU.MeasuredAt = model.now.Add(-12*time.Hour - 28*time.Minute)
+	host.RAM.MeasuredAt = host.CPU.MeasuredAt
+	model.hosts[0] = host
+	card := model.cardWithGPU(host, width, false, 4)
+	assertFits(t, strings.Join(card, "\n"), width, len(card))
+	inner := width - 4
+	plotWidth := (inner - 2) / 2
+	label := card[1]
+	separated := regexp.MustCompile(`\s[0-9]+%(?:\s|$)`)
+	cpu := ansi.Strip(ansi.Cut(label, 2, 2+plotWidth))
+	ram := ansi.Strip(ansi.Cut(label, 4+plotWidth, width-2))
+	if *usageEvidenceDirectory != "" {
+		if err := os.MkdirAll(*usageEvidenceDirectory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeUsageEvidence(t, fmt.Sprintf("hardware-%d-%d-%t", width, profile, ascii), model)
+	}
+	if !separated.MatchString(cpu) || !separated.MatchString(ram) {
+		t.Fatalf("hardware values need a visible separator: CPU %q, RAM %q", cpu, ram)
 	}
 }
