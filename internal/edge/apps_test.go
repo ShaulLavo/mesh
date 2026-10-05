@@ -3,6 +3,7 @@ package edge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -174,6 +175,8 @@ func TestAppAcquireSharesClientAndOriginBudgetsWithServiceProxy(t *testing.T) {
 	if release, err := registry.AcquireApp(appBudgetRequest("198.51.100.1"), owner); err == nil {
 		release()
 		t.Fatal("app bypassed per-client limit")
+	} else if !errors.Is(err, apps.ErrCapacity) {
+		t.Fatalf("client error is not retryable capacity: %v", err)
 	}
 	releases[0]()
 	releases[0]()
@@ -192,6 +195,8 @@ func TestAppAcquireSharesClientAndOriginBudgetsWithServiceProxy(t *testing.T) {
 	if release, err := registry.AcquireApp(appBudgetRequest("203.0.113.1"), owner); err == nil {
 		release()
 		t.Fatal("app bypassed per-origin limit")
+	} else if !errors.Is(err, apps.ErrCapacity) {
+		t.Fatalf("origin error is not retryable capacity: %v", err)
 	}
 	if len(registry.global) != maximumConcurrentPerOrigin || registry.clients.active[netip.MustParseAddr("203.0.113.1")] != 0 {
 		t.Fatal("origin-capacity rejection leaked global or client capacity")
@@ -215,6 +220,8 @@ func TestAppGlobalBudgetRejectionRollsBackClientCapacity(t *testing.T) {
 		if release, err := registry.AcquireApp(appBudgetRequest(client.String()), owner); err == nil {
 			release()
 			t.Fatal("app bypassed global budget")
+		} else if !errors.Is(err, apps.ErrCapacity) {
+			t.Fatalf("global error is not retryable capacity: %v", err)
 		}
 	}
 	if registry.clients.active[client] != 0 {
@@ -242,6 +249,8 @@ func TestAppAcquireRejectsUnvalidatedClientWithoutBudgetLeak(t *testing.T) {
 	if release, err := registry.AcquireApp(request, owner); err == nil {
 		release()
 		t.Fatal("unvalidated forwarding header became client identity")
+	} else if errors.Is(err, apps.ErrCapacity) {
+		t.Fatal("invalid identity classified as retryable capacity")
 	}
 	if len(registry.global) != 0 || len(registry.budgets) != 0 {
 		t.Fatal("failed admission leaked concurrency budget")
@@ -270,5 +279,23 @@ func TestCoalescedAppConnectionRequestsRetryBeforeAuthorization(t *testing.T) {
 	registry.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent || calls != 1 {
 		t.Fatal("dedicated management connection was rejected")
+	}
+}
+
+func TestAppAcquireValidationErrorsArePermanent(t *testing.T) {
+	registry := testRegistry(t, ModeDirectTLS, time.Now())
+	t.Cleanup(registry.Close)
+	owner, _ := testIdentity(t)
+	request := appBudgetRequest("198.51.100.1")
+	request.ContentLength = registry.requestBodyLimit + 1
+	_, bodyErr := registry.AcquireApp(request, owner)
+	_, ownerErr := registry.AcquireApp(appBudgetRequest("198.51.100.1"), "invalid")
+	for _, err := range []error{bodyErr, ownerErr} {
+		if err == nil || errors.Is(err, apps.ErrCapacity) {
+			t.Fatalf("invalid boundary error: %v", err)
+		}
+	}
+	if len(registry.global) != 0 || len(registry.budgets) != 0 {
+		t.Fatal("validation consumed capacity")
 	}
 }

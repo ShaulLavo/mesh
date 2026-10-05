@@ -46,7 +46,13 @@ type atomicNameStore interface {
 	ReserveAppNameAndState(context.Context, string, string, string, []byte) error
 }
 
+// ErrCapacity identifies transient concurrency saturation without retrying invalid requests.
+var ErrCapacity = errors.New("app: concurrency capacity exhausted")
+
 const activityPersistSlack = time.Minute
+const maximumCapacityWaiters = 128
+const capacityWaitTimeout = 5 * time.Second
+const capacityRetryInterval = 25 * time.Millisecond
 
 type edgeRuntime struct {
 	mu        sync.Mutex
@@ -66,15 +72,16 @@ type edgeMutation struct {
 }
 
 type Edge struct {
-	pendingRetire map[string]Record
-	runtime       atomic.Pointer[map[string]*edgeRuntime]
-	transports    proxyTransports
-	mu            sync.Mutex
-	config        EdgeConfig
-	state         edgeState
-	identity      string
-	auth          *webauth.Service
-	slots         chan struct{}
+	pendingRetire   map[string]Record
+	runtime         atomic.Pointer[map[string]*edgeRuntime]
+	transports      proxyTransports
+	mu              sync.Mutex
+	config          EdgeConfig
+	state           edgeState
+	identity        string
+	auth            *webauth.Service
+	slots           chan struct{}
+	capacityWaiters chan struct{}
 }
 type edgeReply struct {
 	RequestID string `json:"requestId"`
@@ -89,7 +96,7 @@ func NewEdge(ctx context.Context, c EdgeConfig) (*Edge, error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	e := &Edge{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), slots: make(chan struct{}, 128), state: edgeState{Apps: map[string]Record{}, Owners: map[string]ownerState{}}}
+	e := &Edge{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), slots: make(chan struct{}, 128), capacityWaiters: make(chan struct{}, maximumCapacityWaiters), state: edgeState{Apps: map[string]Record{}, Owners: map[string]ownerState{}}}
 	if err := load(ctx, c.Store, "apps.edge", &e.state); err != nil {
 		return nil, err
 	}
