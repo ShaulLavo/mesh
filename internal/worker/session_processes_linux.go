@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -15,11 +16,8 @@ import (
 // processes than fit is refused rather than half attributed.
 const cgroupProcsLimit = 256 << 10
 
-// SessionProcesses lists the live processes of the session whose command is
-// leader. A worker that moved into its own systemd scope (IsolateSession) has
-// every descendant in that cgroup, including ones that left the kernel session
-// with setsid. Without a scope, the members of the kernel session the command
-// leads are the closest answer; a process that daemonized out of it is missed.
+// SessionProcesses combines kernel session members that survive cgroup moves
+// with private Mesh scope members retained across setsid.
 func SessionProcesses(id string, leader int) ([]int, error) {
 	if leader <= 1 {
 		return nil, fmt.Errorf("session %s: invalid command process %d", id, leader)
@@ -28,10 +26,19 @@ func SessionProcesses(id string, leader int) ([]int, error) {
 	if err != nil {
 		return nil, fmt.Errorf("session %s: read command cgroup: %w", id, err)
 	}
-	if path, ok := sessionScopePath(id, string(cgroup)); ok {
-		return scopeProcesses(id, path)
+	members, err := kernelSessionMembers(id, leader)
+	if err != nil {
+		return nil, err
 	}
-	return kernelSessionMembers(id, leader)
+	if path, ok := sessionScopePath(id, string(cgroup)); ok {
+		scope, err := scopeProcesses(id, path)
+		if err != nil {
+			return nil, err
+		}
+		members = append(members, scope...)
+	}
+	slices.Sort(members)
+	return slices.Compact(members), nil
 }
 
 // sessionScopePath returns the session's own scope from a /proc/PID/cgroup

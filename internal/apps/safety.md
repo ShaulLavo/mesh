@@ -15,3 +15,10 @@ of filesystem space available. On Linux, paths under `/work` and `/data` require
 those exact SSD mountpoints to be mounted. A symlink cannot silently redirect a
 configured data-SSD path onto another filesystem. These checks use filesystem
 free space; `/work`'s VDO logical capacity is not its physical SSD capacity.
+
+On Linux, a listener belongs to an app when its owner UID matches Mesh's user
+and its socket is held by a process in the app's kernel session or private Mesh
+scope. A supervisor can move a server to another systemd scope while preserving
+its kernel session. Children that use `setsid` remain attributable inside the
+private Mesh scope. A server that leaves both groups requires a launcher that
+keeps one of these identities.
