@@ -178,7 +178,7 @@ func TestDashboardInstallationLockRetryBoundsAndRevalidation(t *testing.T) {
 					if scenario == "cancel" {
 						cancel()
 					}
-					handoff, stop := context.WithTimeout(ctx, timeout)
+					handoff, stop := dashboardInstallationHandoffContext(ctx, scenario, attempts, timeout)
 					defer stop()
 					err := updateinstall.WithCommittedExecutable(handoff, root, "local", selected, func(installed string) error {
 						if installed != selectedPath {
@@ -277,6 +277,14 @@ func TestDashboardInstallationLockRetryBoundsAndRevalidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Callback errors use the existing handoff bound after lock acquisition settles.
+func dashboardInstallationHandoffContext(ctx context.Context, scenario string, attempts int, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if attempts != 2 || (scenario != "exec-failure" && scenario != "exec-deadline") {
+		return context.WithTimeout(ctx, timeout)
+	}
+	return ctx, func() {}
 }
 
 func TestDashboardRestartHandoffHasOneBoundedSettlementRetry(t *testing.T) {
