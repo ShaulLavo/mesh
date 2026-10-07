@@ -178,7 +178,11 @@ func TestDashboardInstallationLockRetryBoundsAndRevalidation(t *testing.T) {
 					if scenario == "cancel" {
 						cancel()
 					}
-					handoff, stop := context.WithTimeout(ctx, timeout)
+					handoff, stop := ctx, func() {}
+					// Callback errors use the existing handoff bound after lock acquisition settles.
+					if attempts != 2 || (scenario != "exec-failure" && scenario != "exec-deadline") {
+						handoff, stop = context.WithTimeout(ctx, timeout)
+					}
 					defer stop()
 					err := updateinstall.WithCommittedExecutable(handoff, root, "local", selected, func(installed string) error {
 						if installed != selectedPath {
