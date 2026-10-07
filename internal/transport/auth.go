@@ -24,10 +24,13 @@ import (
 )
 
 const AuthProtocol = "mesh-control-tls-v1"
+const ControlAuthenticationHeader = "Mesh-Control-Authentication-Required"
 const handshakeTimeout = 5 * time.Second
 const handshakeByteLimit = 64 << 10
 
 var ErrAuthentication = errors.New("transport: Mesh peer authentication failed")
+
+var ErrControlAuthenticationRequired = errors.New("transport: destination requires Mesh control authentication")
 
 var ErrAuthenticationRequired = errors.New("transport: peer requires a control-authentication upgrade")
 

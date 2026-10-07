@@ -142,14 +142,9 @@ func dialSocket(ctx context.Context, url string, opts websocket.DialOptions, kee
 	}
 	ws, response, err := websocket.Dial(ctx, url, &opts) //nolint:bodyclose // websocket.Dial owns and closes its HTTP response body
 	if err != nil {
-		if response != nil {
-			if limit, parseErr := strconv.Atoi(response.Header.Get(ControlConnectionLimitHeader)); response.StatusCode == http.StatusServiceUnavailable && parseErr == nil && limit > 0 {
-				return nil, fmt.Errorf("transport: dial %s: Tailnet control connection cap (%d) reached: %w", url, limit, err)
-			}
-			return nil, fmt.Errorf("transport: dial %s: HTTP %s: %w", url, response.Status, err)
-		}
-		return nil, fmt.Errorf("transport: dial %s: %w", url, err)
+		return nil, dialFailure(url, response, err)
 	}
+
 	if auth == nil {
 		return newSocketConn(ws, keepAlive), nil //nolint:contextcheck // connected sockets outlive the bounded dialing context
 	}
@@ -162,6 +157,19 @@ func dialSocket(ctx context.Context, url string, opts websocket.DialOptions, kee
 		return nil, err
 	}
 	return newSecureSocketConn(ws, secure, keepAlive), nil //nolint:contextcheck // connected sockets outlive the bounded dialing context
+}
+
+func dialFailure(url string, response *http.Response, err error) error {
+	if response == nil {
+		return fmt.Errorf("transport: dial %s: %w", url, err)
+	}
+	if response.StatusCode == http.StatusUpgradeRequired && response.Header.Get(ControlAuthenticationHeader) == AuthProtocol {
+		return fmt.Errorf("%w: dial %s: HTTP %s: %w", ErrControlAuthenticationRequired, url, response.Status, err)
+	}
+	if limit, parseErr := strconv.Atoi(response.Header.Get(ControlConnectionLimitHeader)); response.StatusCode == http.StatusServiceUnavailable && parseErr == nil && limit > 0 {
+		return fmt.Errorf("transport: dial %s: Tailnet control connection cap (%d) reached: %w", url, limit, err)
+	}
+	return fmt.Errorf("transport: dial %s: HTTP %s: %w", url, response.Status, err)
 }
 
 func (c *reconnectingConn) ReadFrame() (protocol.Frame, error) {
@@ -384,7 +392,7 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 		if link != nil {
 			_ = link.Close()
 		}
-		if errors.Is(err, ErrAuthentication) || errors.Is(err, ErrAuthenticationRequired) {
+		if errors.Is(err, ErrAuthentication) || errors.Is(err, ErrAuthenticationRequired) || errors.Is(err, ErrControlAuthenticationRequired) {
 			return connectionRef{}, err
 		}
 		if !recovered && attempt >= 2 && !now().Before(nextRecovery) {
