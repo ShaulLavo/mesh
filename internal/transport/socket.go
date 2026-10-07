@@ -368,6 +368,7 @@ func acceptSocket(w http.ResponseWriter, r *http.Request, opts ServeOptions, kee
 			return nil, AuthenticatedPeer{}, err
 		}
 		if !containsAuthProtocol(r) {
+			w.Header().Set(ControlAuthenticationHeader, AuthProtocol)
 			http.Error(w, "Mesh control authentication required", http.StatusUpgradeRequired)
 			return nil, AuthenticatedPeer{}, ErrAuthenticationRequired
 		}
