@@ -97,8 +97,6 @@ func checkUpdateJournal(stateDir string) error {
 }
 
 func runUpdateHelper(ctx context.Context, stateDir string, diagnostic io.Writer) error {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
 	lastProblem := ""
 	for ctx.Err() == nil {
 		err := updateHelperStep(ctx, stateDir)
@@ -109,10 +107,12 @@ func runUpdateHelper(ctx context.Context, stateDir string, diagnostic io.Writer)
 		if err == nil {
 			lastProblem = ""
 		}
+		timer := time.NewTimer(time.Second)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil
-		case <-ticker.C:
+		case <-timer.C:
 		}
 	}
 	return nil
