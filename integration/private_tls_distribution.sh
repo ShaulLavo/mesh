@@ -2,7 +2,11 @@
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 # Signed private-name bundles bind the name to the certificate transcript.
 # Staging stays non-serving, and host.info exposes the name only after Mesh
-# verifies the raw Tailscale Serve ingress route.
+# verifies the authenticated Tailscale Serve ingress route.
+if [[ $(uname -s) != Linux ]]; then
+  echo "SKIP: private PROXY ingress requires Linux socket UID authentication"
+  exit 0
+fi
 set -uo pipefail
 
 if [ -z "${MESH:-}" ]; then
@@ -237,8 +241,21 @@ PY
 }
 
 served_fingerprint() {
-  openssl s_client -connect "127.0.0.1:$HTTPS_PORT" -servername "$PRIVATE_NAME" -showcerts </dev/null 2>/dev/null |
-    openssl x509 -noout -fingerprint -sha256 2>/dev/null
+  python3 - "$HTTPS_PORT" "$PRIVATE_NAME" <<'PYPROBE'
+import hashlib
+import socket
+import ssl
+import sys
+
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+context.check_hostname = False
+context.verify_mode = ssl.CERT_NONE
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=2) as connection:
+    connection.sendall(b"PROXY TCP4 100.64.0.9 127.0.0.1 40000 443\r\n")
+    with context.wrap_socket(connection, server_hostname=sys.argv[2]) as secured:
+        digest = hashlib.sha256(secured.getpeercert(binary_form=True)).hexdigest().upper()
+        print("sha256 Fingerprint=" + ":".join(digest[i:i+2] for i in range(0, len(digest), 2)))
+PYPROBE
 }
 
 mkdir -p "$MESH_STATE_DIR"
@@ -292,7 +309,7 @@ mkdir -p "$SITE_ROOT"
 printf PRIVATE_TLS_MARKER >"$SITE_ROOT/index.html"
 
 printf '{}\n' >"$TAILSCALE_STATUS"
-if "$MESH" daemon --https-port "$HTTPS_PORT" --certificate-renewer-id "$RENEWER_ID" >"$TEST_ROOT/missing-forward.log" 2>&1; then
+if "$MESH" daemon --tailscale-serve-proxy-protocol --https-port "$HTTPS_PORT" --certificate-renewer-id "$RENEWER_ID" >"$TEST_ROOT/missing-forward.log" 2>&1; then
   fail "daemon accepted private HTTPS without a Tailscale Serve forward"
 fi
 REMEDIATION="tailscale serve --bg --yes --tcp=443 tcp://127.0.0.1:$HTTPS_PORT"
@@ -300,8 +317,8 @@ MISSING_FORWARD_DIAGNOSTIC=$(tr '\n' ' ' <"$TEST_ROOT/missing-forward.log" | tr 
 grep -F "$REMEDIATION" <<<"$MISSING_FORWARD_DIAGNOSTIC" >/dev/null ||
   fail "missing-forward diagnostic omitted $REMEDIATION: $(<"$TEST_ROOT/missing-forward.log")"
 
-printf '{"TCP":{"443":{"TCPForward":"127.0.0.1:%s"}}}\n' "$HTTPS_PORT" >"$TAILSCALE_STATUS"
-"$MESH" daemon --https-port "$HTTPS_PORT" --certificate-renewer-id "$RENEWER_ID" >"$TEST_ROOT/daemon.log" 2>&1 &
+printf '{"TCP":{"443":{"TCPForward":"127.0.0.1:%s","ProxyProtocol":1}}}\n' "$HTTPS_PORT" >"$TAILSCALE_STATUS"
+"$MESH" daemon --tailscale-serve-proxy-protocol --https-port "$HTTPS_PORT" --certificate-renewer-id "$RENEWER_ID" >"$TEST_ROOT/daemon.log" 2>&1 &
 DAEMON_PID=$!
 wait_for_socket || fail "daemon did not start: $(<"$TEST_ROOT/daemon.log")"
 upsert_service || fail "service upsert"
@@ -322,10 +339,10 @@ EXPECTED_ONE=$(openssl x509 -in "$TEST_ROOT/live-one.crt" -noout -fingerprint -s
 [ "$(served_fingerprint)" = "$EXPECTED_ONE" ] || fail "first live certificate was not served"
 LIVE_PRIVATE_NAME=$(host_private_name) || fail "query host.info after live distribution"
 [ "$LIVE_PRIVATE_NAME" = "$PRIVATE_NAME" ] || fail "verified private name was $LIVE_PRIVATE_NAME"
-BODY=$(curl --noproxy '*' --fail --silent --max-time 2 --cacert "$TEST_ROOT/live-one.crt" \
+BODY=$(curl --haproxy-clientip 100.64.0.9 --noproxy '*' --fail --silent --max-time 2 --cacert "$TEST_ROOT/live-one.crt" \
   --resolve "$PRIVATE_NAME:$HTTPS_PORT:127.0.0.1" "https://$PRIVATE_NAME:$HTTPS_PORT/site/") || fail "HTTPS service request"
 [ "$BODY" = PRIVATE_TLS_MARKER ] || fail "HTTPS service body was $BODY"
-TERMINAL_STATUS=$(curl --noproxy '*' --silent --max-time 2 --cacert "$TEST_ROOT/live-one.crt" \
+TERMINAL_STATUS=$(curl --haproxy-clientip 100.64.0.9 --noproxy '*' --silent --max-time 2 --cacert "$TEST_ROOT/live-one.crt" \
   --resolve "$PRIVATE_NAME:$HTTPS_PORT:127.0.0.1" \
   --header 'Connection: Upgrade' --header 'Upgrade: websocket' \
   --output /dev/null --write-out '%{http_code}' "https://$PRIVATE_NAME:$HTTPS_PORT/mesh") || fail "HTTPS terminal isolation request"
@@ -344,13 +361,13 @@ kill "$DAEMON_PID" || fail "stop fixture daemon"
 wait "$DAEMON_PID" || true
 DAEMON_PID=""
 rm -- "$MESH_CONFIG_DIR/domains.json"
-"$MESH" daemon --https-port "$HTTPS_PORT" --certificate-renewer-id "$RENEWER_ID" >"$TEST_ROOT/migrated.log" 2>&1 &
+"$MESH" daemon --tailscale-serve-proxy-protocol --https-port "$HTTPS_PORT" --certificate-renewer-id "$RENEWER_ID" >"$TEST_ROOT/migrated.log" 2>&1 &
 DAEMON_PID=$!
 wait_for_socket || fail "pre-policy restart failed: $(<"$TEST_ROOT/migrated.log")"
 [ -f "$MESH_CONFIG_DIR/domains.json" ] || fail "policy migration was not persisted"
 [ "$(served_fingerprint)" = "$EXPECTED_TWO" ] || fail "migration changed the certificate slot"
 [ "$(host_private_name)" = "$PRIVATE_NAME" ] || fail "migration lost the pinned private name"
-BODY=$(curl --noproxy '*' --fail --silent --max-time 2 --cacert "$TEST_ROOT/live-two.crt" \
+BODY=$(curl --haproxy-clientip 100.64.0.9 --noproxy '*' --fail --silent --max-time 2 --cacert "$TEST_ROOT/live-two.crt" \
   --resolve "$PRIVATE_NAME:$HTTPS_PORT:127.0.0.1" "https://$PRIVATE_NAME:$HTTPS_PORT/site/") || fail "migrated HTTPS service request"
 [ "$BODY" = PRIVATE_TLS_MARKER ] || fail "migration lost the existing service route"
 

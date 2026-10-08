@@ -35,6 +35,7 @@ import (
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/testenv"
 	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
@@ -156,7 +157,7 @@ func verifyDeploymentTransition(t *testing.T, oldPath, candidatePath string, old
 	if err := os.Mkdir(bin, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '{\"TCP\":{\"443\":{\"TCPForward\":\"127.0.0.1:%d\"}}}'\n", port)
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '{\"TCP\":{\"443\":{\"TCPForward\":\"127.0.0.1:%d\",\"ProxyProtocol\":1}}}'\n", port)
 	if err := os.WriteFile(filepath.Join(bin, "tailscale"), []byte(script), 0o700); err != nil { //nolint:gosec // read or write only files owned by this isolated executable-transition fixture
 		t.Fatal(err)
 	} //nolint:gosec // executable fixture replaces external Tailscale
@@ -173,7 +174,7 @@ func verifyDeploymentTransition(t *testing.T, oldPath, candidatePath string, old
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	service := &deploymentService{executable: installed, arguments: []string{"daemon", "--https-port", strconv.Itoa(port), "--certificate-renewer-id", renewer.ID}, log: log,
+	service := &deploymentService{executable: installed, arguments: []string{"daemon", "--https-port", strconv.Itoa(port), "--tailscale-serve-proxy-protocol", "--certificate-renewer-id", renewer.ID}, log: log,
 		environment: append(testenv.ForProcess(root), "MESH_STATE_DIR="+state, "MESH_CONFIG_DIR="+config, "PATH="+bin+":"+os.Getenv("PATH"))}
 	if err := service.Start(t.Context()); err != nil {
 		t.Fatal(err)
@@ -283,7 +284,16 @@ func verifyOldDeploymentURL(t *testing.T, port int, certificate []byte) {
 		t.Fatal("fixture certificate rejected")
 	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		connection, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err != nil {
+			return nil, fmt.Errorf("connect private deployment fixture: %w", err)
+		}
+		source := &net.TCPAddr{IP: net.ParseIP("100.64.0.9"), Port: 40000}
+		if err := tailnet.WriteProxyHeader(connection, source, connection.RemoteAddr()); err != nil {
+			_ = connection.Close()
+			return nil, fmt.Errorf("forward deployment fixture client: %w", err)
+		}
+		return connection, nil
 	}}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}

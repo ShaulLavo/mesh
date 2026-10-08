@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -43,10 +44,19 @@ func appHost(host string) bool {
 	return strings.Trim(label, "0123456789abcdefghjkmnpqrstvwxyz") == ""
 }
 
+func verifiedClient(client net.Conn) bool {
+	verified, ok := client.(interface{ Authenticated() bool })
+	if !ok || !verified.Authenticated() {
+		return false
+	}
+	source, err := netip.ParseAddrPort(client.RemoteAddr().String())
+	return err == nil && !source.Addr().IsLoopback() && !source.Addr().IsUnspecified()
+}
+
 func bridge(client net.Conn, privateAddress, appAddress string, ownerAccess bool) {
 	defer func() { _ = client.Close() }()
-	if ownerAccess {
-		_ = client.RemoteAddr()
+	if ownerAccess && !verifiedClient(client) {
+		return
 	}
 	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
 	var captured bytes.Buffer
@@ -61,6 +71,9 @@ func bridge(client net.Conn, privateAddress, appAddress string, ownerAccess bool
 		return
 	}
 	target := privateAddress
+	if !appHost(host) && !ownerAccess {
+		return
+	}
 	if appHost(host) {
 		target = appAddress
 	}
@@ -70,7 +83,7 @@ func bridge(client net.Conn, privateAddress, appAddress string, ownerAccess bool
 	}
 	defer func() { _ = upstream.Close() }()
 	_ = upstream.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	if ownerAccess && appHost(host) {
+	if ownerAccess {
 		if err := tailnet.WriteProxyHeader(upstream, client.RemoteAddr(), upstream.RemoteAddr()); err != nil {
 			return
 		}
@@ -93,7 +106,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:8446", "loopback listener for Tailscale TCP/443")
 	privateAddress := flag.String("private", "127.0.0.1:8443", "existing private Mesh TLS listener")
 	appAddress := flag.String("apps", "127.0.0.1:8445", "temporary-app edge TLS listener")
-	ownerAccess := flag.Bool("tailnet-owner-access", false, "require Tailscale Serve PROXY v1 and forward device addresses to the app edge")
+	ownerAccess := flag.Bool("tailnet-owner-access", false, "require Tailscale Serve PROXY v1 and forward device addresses to both TLS backends")
 	domains := flag.String("domains", "", "deployment domain policy JSON file")
 	flag.Parse()
 	if *domains == "" {

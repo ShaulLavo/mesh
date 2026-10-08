@@ -130,8 +130,8 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if cfg.HTTPSPort != 0 && (opts.verifyServeForward == nil || opts.tailscaleTimeout <= 0) {
 		return errors.New("daemon: incomplete private HTTPS forwarding dependencies")
 	}
-	if cfg.TailscaleServeProxyProtocol && (cfg.TailscaleServePort == 0 || cfg.TailscaleServePort == cfg.HTTPSPort) {
-		return errors.New("daemon: Tailscale PROXY metadata requires a separate gateway port")
+	if cfg.TailscaleServeProxyProtocol && cfg.HTTPSPort == 0 {
+		return errors.New("daemon: Tailscale PROXY metadata requires private HTTPS")
 	}
 	if cfg.TailscaleServePort != 0 && cfg.HTTPSPort == 0 {
 		return errors.New("daemon: a Tailscale Serve gateway requires private HTTPS")
@@ -567,6 +567,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		WebSocketPath:              cfg.WebSocketPath,
 		HTTPHandler:                appOriginHandler(appLocal, serviceRegistry),
 		HTTPSPort:                  cfg.HTTPSPort,
+		HTTPSProxyProtocol:         cfg.TailscaleServeProxyProtocol,
 		TLSConfig:                  certificateRuntime.OriginTLS,
 		PublicListenAddress:        publicListenAddress,
 		PublicHTTPHandler:          publicHTTPHandler,
