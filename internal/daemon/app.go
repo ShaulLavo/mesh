@@ -361,10 +361,19 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	var publicCertificatePin string
 	if publicEdgeConfig != nil {
 		waker := &edgeWakeAdapter{client: power.client, origins: publicEdgeConfig.Origins, resolve: edge.TailscaleWakeResolver(discoverAllPeers)}
+		var networkOwners func(context.Context, netip.Addr) ([]string, error)
+		if publicEdgeConfig.TailnetOwnerAccess {
+			origins := make(map[string]string, len(publicEdgeConfig.Origins))
+			for _, origin := range publicEdgeConfig.Origins {
+				origins[origin.TailscaleName] = origin.Identity
+			}
+			networkOwners = tailnet.OwnerResolver(origins)
+		}
 		edgeRegistry, err = edge.NewRegistry(edge.HandlerConfig{
 			Mode: publicEdgeConfig.Mode, ReservedPath: cfg.WebSocketPath,
-			Waker:  waker,
-			Logger: log.New(edgeReportWriter{reporter: reporter}, "", 0),
+			Waker:           waker,
+			Logger:          log.New(edgeReportWriter{reporter: reporter}, "", 0),
+			RateLimitExempt: networkOwnerRateExemption(networkOwners),
 		})
 		if err != nil {
 			return fmt.Errorf("daemon: configure public edge handler: %w", err)
@@ -382,14 +391,6 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		allowed := make(map[string]bool, len(publicEdgeConfig.Origins))
 		for _, origin := range publicEdgeConfig.Origins {
 			allowed[origin.Identity] = true
-		}
-		var networkOwners func(context.Context, netip.Addr) ([]string, error)
-		if publicEdgeConfig.TailnetOwnerAccess {
-			origins := make(map[string]string, len(publicEdgeConfig.Origins))
-			for _, origin := range publicEdgeConfig.Origins {
-				origins[origin.TailscaleName] = origin.Identity
-			}
-			networkOwners = tailnet.OwnerResolver(origins)
 		}
 		appPublic, err = apps.NewEdge(daemonCtx, apps.EdgeConfig{
 			ViewHostReady: func(host string) bool { return certificateRuntime.viewHostReady(host, opts.now()) },
