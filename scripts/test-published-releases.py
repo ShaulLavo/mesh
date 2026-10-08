@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import ssl
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -228,13 +229,25 @@ class BoundedDownloadTest(unittest.TestCase):
         self.control = self.root / "control.json"
         self.worker = self.root / "external-provider.py"
         source = Path(__file__).resolve()
+        self.ready = self.root / "ready"
+        self.gate = self.root / "gate"
         self.worker.write_text(f'''import runpy
 import sys
+import time
 from pathlib import Path
+if sys.argv[1] == "--slow-start":
+    time.sleep(1)
+    del sys.argv[1]
 sys.path.insert(0, {str(source.parent)!r})
 from fixtures import published_releases as published
 provider = runpy.run_path({str(source)!r}, run_name="external_fetch_fixture")
 published.urllib.request.build_opener = lambda *handlers: provider["ControlledOpener"](Path({str(self.control)!r}), handlers)
+context = published.ssl.create_default_context()
+published.ssl.create_default_context = lambda: context
+if Path({str(self.gate)!r}).exists():
+    Path({str(self.ready)!r}).touch()
+    while Path({str(self.gate)!r}).exists():
+        time.sleep(0.005)
 published.download_worker(*sys.argv[1:])
 ''')
         self.addCleanup(patch.stopall)
@@ -250,6 +263,30 @@ published.download_worker(*sys.argv[1:])
     def download(self, outcomes):
         self.control.write_text(json.dumps({"outcomes": outcomes, "attempts": [], "timeouts": []}))
         return published.download(published.ORIGIN + "fixture", 64)
+
+    def ready_worker(self):
+        # Phase tests start their short budget after imports and trust-store loading.
+        self.ready.unlink(missing_ok=True)
+        self.gate.touch()
+        worker = subprocess.Popen((*published.DOWNLOAD_WORKER, published.ORIGIN + "fixture", "64",
+            str(published.DOWNLOAD_BUDGET)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        def cleanup():
+            if worker.poll() is None:
+                worker.kill()
+            worker.communicate()
+        self.addCleanup(cleanup)
+        deadline = time.monotonic() + 10
+        while not self.ready.exists():
+            self.assertIsNone(worker.poll(), "fixture worker exited before readiness")
+            self.assertLess(time.monotonic(), deadline, "fixture worker startup exceeded 10 seconds")
+            time.sleep(0.005)
+        return worker
+
+    def release_worker(self, worker):
+        def launch(*args, **kwargs):
+            self.gate.unlink()
+            return worker
+        return patch.object(published.subprocess, "Popen", side_effect=launch)
 
     def test_known_good_trusted_download_closes_response(self):
         self.assertEqual(self.download(["good"]), b"verified fixture bytes")
@@ -301,8 +338,9 @@ published.download_worker(*sys.argv[1:])
         patch.object(published, "DOWNLOAD_BUDGET", 0.3, create=True).start()
         for kind in ("stall-open", "stall-read"):
             with self.subTest(kind=kind):
+                worker = self.ready_worker()
                 started = time.monotonic()
-                with self.assertRaisesRegex(TimeoutError, "total deadline"):
+                with self.release_worker(worker), self.assertRaisesRegex(TimeoutError, "total deadline"):
                     self.download([kind])
                 self.assertLess(time.monotonic() - started, 0.8)
                 self.assertEqual(len(self.state()["attempts"]), 1)
@@ -312,11 +350,33 @@ published.download_worker(*sys.argv[1:])
                 time.sleep(0.05)
                 self.assertEqual(self.control.read_bytes(), state)
 
+    def test_worker_startup_consumes_total_budget(self):
+        patch.object(published, "DOWNLOAD_BUDGET", 0.3, create=True).start()
+        command = (*published.DOWNLOAD_WORKER, "--slow-start")
+        workers = []
+        popen = subprocess.Popen
+        def launch(*args, **kwargs):
+            worker = popen(*args, **kwargs)
+            workers.append(worker)
+            return worker
+        started = time.monotonic()
+        with patch.object(published, "DOWNLOAD_WORKER", command), \
+                patch.object(published.subprocess, "Popen", side_effect=launch), \
+                self.assertRaisesRegex(TimeoutError, "total deadline"):
+            self.download(["good"])
+        self.assertLess(time.monotonic() - started, 0.8)
+        self.assertEqual(self.state()["attempts"], [])
+        self.assertEqual(len(workers), 1)
+        self.assertIsNotNone(workers[0].poll())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(workers[0].pid, 0)
+
     def test_backoff_cannot_escape_total_budget(self):
         patch.object(published, "DOWNLOAD_BUDGET", 0.3, create=True).start()
         patch.object(published, "DOWNLOAD_BACKOFF", (1, 1), create=True).start()
+        worker = self.ready_worker()
         started = time.monotonic()
-        with self.assertRaisesRegex(TimeoutError, "total deadline"):
+        with self.release_worker(worker), self.assertRaisesRegex(TimeoutError, "total deadline"):
             self.download(["dns", "good"])
         self.assertLess(time.monotonic() - started, 0.8)
         self.assertEqual(len(self.state()["attempts"]), 1)
