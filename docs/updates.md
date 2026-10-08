@@ -218,8 +218,8 @@ workers continue running.
 Each update keeps the replaced executable beside the installed one so a failed
 activation can restore it. The latest update's copy stays after it succeeds.
 Copies from earlier updates are removed when the next update commits or starts.
-On macOS, a copy stays while a running session still uses it, because Mesh
-identifies that session's executable through the copy.
+A copy stays while a running session still uses it, because macOS identifies
+that session's executable through the copy.
 
 If the machine itself reboots during installation, the helper resumes its
 durable transaction and waits for the daemon to start. Processes from the prior

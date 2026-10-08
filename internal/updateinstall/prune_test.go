@@ -28,16 +28,17 @@ func assertExists(t *testing.T, path string, want bool) {
 	}
 }
 
-func withWorkerImageLinks(t *testing.T, needed bool) {
+// newPruneFixture reports the worker's build the way the real probe does.
+func newPruneFixture(t *testing.T) *fixture {
 	t.Helper()
-	prior := workerImagesNeedLinks
-	workerImagesNeedLinks = needed
-	t.Cleanup(func() { workerImagesNeedLinks = prior })
+	f := newFixture(t)
+	build := f.request.Current
+	f.manager.worker.Build = &build
+	return f
 }
 
 func TestStagingPrunesImagesFromFinishedTransactions(t *testing.T) {
-	withWorkerImageLinks(t, false)
-	f := newFixture(t)
+	f := newPruneFixture(t)
 	dir := filepath.Dir(f.engine.cfg.Executable)
 	stale := []string{".mesh-update-op-27.previous", ".mesh-update-op-28.previous", ".mesh-update-op-28.candidate"}
 	for _, name := range stale {
@@ -50,7 +51,11 @@ func TestStagingPrunesImagesFromFinishedTransactions(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, ".mesh-update-dir.previous"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	// The fixture worker still executes the original build.
+	workerImage := filepath.Join(dir, ".mesh-update-op-26.previous")
+	writeImage(t, workerImage, testExecutable("v0.1.0"))
 	status := f.stage()
+	assertExists(t, workerImage, true)
 	for _, name := range stale {
 		assertExists(t, filepath.Join(dir, name), false)
 	}
@@ -62,8 +67,7 @@ func TestStagingPrunesImagesFromFinishedTransactions(t *testing.T) {
 }
 
 func TestCommitPrunesEarlierImagesAndKeepsCurrentRollbackImage(t *testing.T) {
-	withWorkerImageLinks(t, false)
-	f := newFixture(t)
+	f := newPruneFixture(t)
 	dir := filepath.Dir(f.engine.cfg.Executable)
 	f.stage()
 	// Images that appear after staging, for example from a crashed older
@@ -86,8 +90,7 @@ func TestCommitPrunesEarlierImagesAndKeepsCurrentRollbackImage(t *testing.T) {
 }
 
 func TestRollbackKeepsTheRestoredImage(t *testing.T) {
-	withWorkerImageLinks(t, false)
-	f := newFixture(t)
+	f := newPruneFixture(t)
 	f.stage()
 	f.manager.failCandidate = true
 	if _, err := f.engine.Grant(context.Background(), f.request.ID, 1); err != nil {
@@ -103,7 +106,7 @@ func TestRollbackKeepsTheRestoredImage(t *testing.T) {
 	}
 }
 
-func TestPruneKeepsImagesThatLiveWorkersExecuteWhenLinksProveThem(t *testing.T) {
+func TestPruneKeepsImagesThatLiveWorkersExecute(t *testing.T) {
 	dir := t.TempDir()
 	running, idle := []byte("mesh v0.1.180"), []byte("mesh v0.1.190")
 	runningPath, idlePath := filepath.Join(dir, ".mesh-update-op-a.previous"), filepath.Join(dir, ".mesh-update-op-b.previous")
@@ -117,7 +120,6 @@ func TestPruneKeepsImagesThatLiveWorkersExecuteWhenLinksProveThem(t *testing.T) 
 	}
 	worker := Worker{ID: "session-1", PID: 1, Protocol: 1, Build: &release.Build{Digest: digestBytes(running)}}
 
-	withWorkerImageLinks(t, true)
 	reset()
 	if err := pruneTransactionImages(dir, current, Health{Workers: []Worker{worker}}); err != nil {
 		t.Fatal(err)
@@ -135,20 +137,9 @@ func TestPruneKeepsImagesThatLiveWorkersExecuteWhenLinksProveThem(t *testing.T) 
 	assertExists(t, runningPath, true)
 	assertExists(t, idlePath, true)
 	assertExists(t, candidatePath, false)
-
-	// Linux identifies workers through /proc, so names are not needed.
-	withWorkerImageLinks(t, false)
-	reset()
-	if err := pruneTransactionImages(dir, current, Health{Workers: []Worker{worker}}); err != nil {
-		t.Fatal(err)
-	}
-	assertExists(t, runningPath, false)
-	assertExists(t, idlePath, false)
-	assertExists(t, current.Previous, true)
 }
 
 func TestPruneLeavesSymlinkedImagesAlone(t *testing.T) {
-	withWorkerImageLinks(t, false)
 	dir := t.TempDir()
 	target := filepath.Join(t.TempDir(), "mesh")
 	writeImage(t, target, []byte("mesh"))

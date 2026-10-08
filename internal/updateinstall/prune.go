@@ -6,22 +6,17 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 )
 
 var transactionImagePattern = regexp.MustCompile(`^\.mesh-update-[A-Za-z0-9][A-Za-z0-9_-]{0,95}\.(previous|candidate)$`)
 
-// macOS proves a retained worker's executable through lsof, which resolves a
-// loaded vnode only while some hard link still names it. Linux reads
-// /proc/<pid>/exe, which works after every link is gone.
-var workerImagesNeedLinks = runtime.GOOS == "darwin"
-
 // pruneTransactionImages removes rollback and candidate images left beside the
 // executable by earlier, finished transactions. Every update names its own pair,
 // so without this each update leaves a full copy of the replaced binary behind.
-// The files named by current stay. On macOS, a rollback image that a live session
-// worker still executes also stays until that worker exits.
+// The files named by current stay. A rollback image that a live session worker
+// still executes also stays until that worker exits: macOS can prove a retained
+// worker's executable only through a hard link that still names it.
 func pruneTransactionImages(dir string, current Status, health Health) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -52,7 +47,7 @@ func pruneTransactionImages(dir string, current Status, health Health) error {
 }
 
 func staleImage(path string, executing map[string]bool, known bool) (bool, error) {
-	if !strings.HasSuffix(path, ".previous") || !workerImagesNeedLinks {
+	if !strings.HasSuffix(path, ".previous") {
 		return true, nil
 	}
 	if !known {
