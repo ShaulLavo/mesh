@@ -8,6 +8,7 @@ if [[ -z ${MESH:-} ]]; then
   go build -o "$MESH" ./cmd/mesh
 fi
 python3 - "$MESH" <<'PY'
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -57,6 +58,14 @@ exec /bin/sh -c "$9"
         "target": "fixture-admin", "account": target["account"],
         "stateDir": str(destination), "binary": binary,
     }}))
+    # The daemon checks releases asynchronously. Keep that unrelated writer and
+    # its network request outside the enrollment fixture's byte-for-byte oracle.
+    notice = destination / "update-notice"
+    notice.mkdir(mode=0o700)
+    (notice / "notice.json").write_text(json.dumps({
+        "nextAttempt": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+    }))
+    (notice / "refresh.lock").touch(mode=0o600)
     log = (root / "daemon.log").open("w")
     daemon = subprocess.Popen([binary, "daemon"], stdout=log, stderr=log,
                               env=environment | {"MESH_STATE_DIR": str(destination),
@@ -82,6 +91,12 @@ exec /bin/sh -c "$9"
                 result[str(path)] = (path.stat().st_mode, path.read_bytes() if path.is_file() else None)
             return result
 
+        def assert_unchanged(before, operation):
+            after = snapshot(config, source, destination, absent)
+            changed = sorted(path for path in before.keys() | after.keys()
+                             if before.get(path) != after.get(path))
+            assert after == before, f"{operation} changed fixture files/directories: {changed}"
+
         original_administration = administration.read_bytes()
         absent = root / "absent-state"
         for legacy in (False, True):
@@ -101,7 +116,7 @@ exec /bin/sh -c "$9"
                 assert checked.returncode == (1 if refused else 0), checked.stderr
                 if refused:
                     assert "local account does not match the expected daemon account" in checked.stderr
-                assert snapshot(config, source, destination, absent) == before, "checked enrollment changed fixture files/directories"
+                assert_unchanged(before, "checked enrollment")
                 mapping = json.loads(original_administration)
                 mapping["fixture-host"]["account"] = account
                 administration.write_text(json.dumps(mapping))
@@ -114,7 +129,7 @@ exec /bin/sh -c "$9"
                     assert 'unknown field "alias"' in fleet.stderr, fleet.stderr
                 elif refused:
                     assert "local account does not match the expected daemon account" in fleet.stderr, fleet.stderr
-                assert snapshot(config, source, destination, absent) == before, "fleet enrollment changed fixture files/directories"
+                assert_unchanged(before, "fleet enrollment")
         (config / "hosts.json").write_bytes(original_config)
         administration.write_bytes(original_administration)
         ssh_log.write_text("")
