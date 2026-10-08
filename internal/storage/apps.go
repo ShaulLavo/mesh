@@ -60,10 +60,10 @@ func validateAppStateKey(key string) error {
 	return nil
 }
 
-// ReserveAppName shares the write reservation with services and tunnels.
+// ReserveAppNames shares the write reservation with services and tunnels.
 // Active owner retries converge; retired names can never become active again.
-func (s *Store) ReserveAppName(ctx context.Context, publicName, ownerID string) error {
-	if err := validateAppNameOwner(publicName, ownerID); err != nil {
+func (s *Store) ReserveAppNames(ctx context.Context, publicNames []string, ownerID string) error {
+	if err := validateAppNames(publicNames, ownerID); err != nil {
 		return err
 	}
 	tx, err := s.beginTunnelWrite(ctx)
@@ -71,18 +71,32 @@ func (s *Store) ReserveAppName(ctx context.Context, publicName, ownerID string) 
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // commit decides the transaction outcome
-	if err := reserveAppName(ctx, tx, publicName, ownerID); err != nil {
-		return err
+	for _, name := range publicNames {
+		if err := reserveAppName(ctx, tx, name, ownerID); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("storage: commit app name: %w", err)
+		return fmt.Errorf("storage: commit app names: %w", err)
 	}
 	return nil
 }
 
-// ReserveAppNameAndState commits an allocated name and its app record together.
-func (s *Store) ReserveAppNameAndState(ctx context.Context, publicName, ownerID, key string, data []byte) error {
-	if err := validateAppNameOwner(publicName, ownerID); err != nil {
+func validateAppNames(names []string, owner string) error {
+	if len(names) == 0 || len(names) > 8 {
+		return errors.New("storage: app name count is outside 1..8")
+	}
+	for _, name := range names {
+		if err := validateAppNameOwner(name, owner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReserveAppNamesAndState commits every deployment alias and app state together.
+func (s *Store) ReserveAppNamesAndState(ctx context.Context, publicNames []string, ownerID, key string, data []byte) error {
+	if err := validateAppNames(publicNames, ownerID); err != nil {
 		return err
 	}
 	if err := validateAppState(key, data); err != nil {
@@ -93,8 +107,10 @@ func (s *Store) ReserveAppNameAndState(ctx context.Context, publicName, ownerID,
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // commit decides the transaction outcome
-	if err := reserveAppName(ctx, tx, publicName, ownerID); err != nil {
-		return err
+	for _, publicName := range publicNames {
+		if err := reserveAppName(ctx, tx, publicName, ownerID); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, saveAppStateSQL, key, data); err != nil {
 		return fmt.Errorf("storage: save allocated app state: %w", err)

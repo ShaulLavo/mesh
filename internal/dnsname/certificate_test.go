@@ -19,12 +19,12 @@ import (
 
 func TestBundleStorePublishesComplete0600Versions(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	store, err := NewBundleStore(filepath.Join(t.TempDir(), "certificates"), WildcardName)
+	store, err := NewBundleStore(filepath.Join(t.TempDir(), "certificates"), WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.now = func() time.Time { return now }
-	certificatePEM, keyPEM := testCertificate(t, 1, WildcardName, now.Add(-time.Hour), now.Add(90*24*time.Hour))
+	certificatePEM, keyPEM := testCertificate(t, 1, WildcardName(), now.Add(-time.Hour), now.Add(90*24*time.Hour))
 	bundle, err := store.Install(certificatePEM, keyPEM)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestBundleStorePublishesComplete0600Versions(t *testing.T) {
 
 func TestBundleStoreRejectsLoosePermissions(t *testing.T) {
 	root := t.TempDir()
-	store, err := NewBundleStore(root, WildcardName)
+	store, err := NewBundleStore(root, WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestReadSecureFileRejectsSymlinkAndOversizedDescriptor(t *testing.T) {
 
 func TestCertificateSourceHotReloads(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	store, err := NewBundleStore(t.TempDir(), WildcardName)
+	store, err := NewBundleStore(t.TempDir(), WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,12 +113,12 @@ func TestCertificateSourceHotReloads(t *testing.T) {
 	if _, err := source.GetCertificate(nil); !errors.Is(err, ErrNoCertificate) {
 		t.Fatalf("empty source error = %v", err)
 	}
-	firstCert, firstKey := testCertificate(t, 1, WildcardName, now.Add(-time.Hour), now.Add(90*24*time.Hour))
+	firstCert, firstKey := testCertificate(t, 1, WildcardName(), now.Add(-time.Hour), now.Add(90*24*time.Hour))
 	first, err := source.Install(firstCert, firstKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondCert, secondKey := testCertificate(t, 2, WildcardName, now.Add(-time.Hour), now.Add(90*24*time.Hour))
+	secondCert, secondKey := testCertificate(t, 2, WildcardName(), now.Add(-time.Hour), now.Add(90*24*time.Hour))
 	second, err := source.Install(secondCert, secondKey)
 	if err != nil {
 		t.Fatal(err)
@@ -135,12 +135,12 @@ func TestCertificateSourceHotReloads(t *testing.T) {
 func TestCertificateSourceStartsEmptyWhenPersistedCertificateExpired(t *testing.T) {
 	root := t.TempDir()
 	installedAt := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	store, err := NewBundleStore(root, WildcardName)
+	store, err := NewBundleStore(root, WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.now = func() time.Time { return installedAt }
-	certificatePEM, keyPEM := testCertificate(t, 1, WildcardName, installedAt.Add(-time.Hour), installedAt.Add(time.Hour))
+	certificatePEM, keyPEM := testCertificate(t, 1, WildcardName(), installedAt.Add(-time.Hour), installedAt.Add(time.Hour))
 	if _, err := store.Install(certificatePEM, keyPEM); err != nil {
 		t.Fatal(err)
 	}
@@ -154,14 +154,14 @@ func TestCertificateSourceStartsEmptyWhenPersistedCertificateExpired(t *testing.
 	}
 }
 
-func testCertificate(t *testing.T, serial int64, name string, notBefore, notAfter time.Time) ([]byte, []byte) {
+func testCertificate(t *testing.T, serial int64, name string, notBefore, notAfter time.Time, additionalNames ...string) ([]byte, []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, DNSNames: []string{name},
+		SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, DNSNames: append([]string{name}, additionalNames...),
 		NotBefore: notBefore, NotAfter: notAfter, KeyUsage: x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true,
 	}

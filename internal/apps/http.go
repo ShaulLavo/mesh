@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/apppill"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/webauth"
 )
@@ -43,7 +44,7 @@ func downloadAllowed(r *http.Request) bool {
 		return false
 	}
 	origin := r.Header.Get("Origin")
-	return origin == "" || origin == ManagementOrigin
+	return origin == "" || origin == managementOrigin(r)
 }
 
 func (e *Edge) refuseView(w http.ResponseWriter, r *http.Request, id string) {
@@ -60,8 +61,8 @@ func (e *Edge) refuseView(w http.ResponseWriter, r *http.Request, id string) {
 	legacy := (r.Method == http.MethodGet || r.Method == http.MethodHead) && origin == "" &&
 		r.Header.Get("Sec-Fetch-Site") == "" && r.Header.Get("Sec-Fetch-Mode") == "" && r.Header.Get("Sec-Fetch-Dest") == "" &&
 		!strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
-	if (origin == "" || origin == URL(id)) && (serve.TopLevelNavigation(r) || legacy) {
-		http.Redirect(w, r, ManagementOrigin+"/view?id="+id, http.StatusSeeOther)
+	if (origin == "" || origin == appOrigin(r, id)) && (serve.TopLevelNavigation(r) || legacy) {
+		http.Redirect(w, r, managementOrigin(r)+"/view?id="+id, http.StatusSeeOther) //nolint:gosec // managementOrigin selects only configured domains; id is validated.
 	} else {
 		http.Error(w, "App is private. Open it from Mesh.", http.StatusForbidden)
 	}
@@ -69,11 +70,14 @@ func (e *Edge) refuseView(w http.ResponseWriter, r *http.Request, id string) {
 
 func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bool {
 	r = e.authenticateNetwork(r)
-	if name == ManagementHost {
+	if label, _, accepted := domainpolicy.Label(name, false); accepted && label == "apps" {
 		e.management(w, r)
 		return true
 	}
-	id := strings.TrimSuffix(name, "."+Domain)
+	id, _, accepted := domainpolicy.Label(name, false)
+	if !accepted {
+		return false
+	}
 	if !ValidID(id) {
 		return false
 	}
@@ -87,15 +91,26 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		return true
 	}
 	if r.URL.Path == "/.mesh-app/view-start" && r.Method == http.MethodGet {
+		destination := appReturn(r, id, r.URL.Query().Get(returnQueryKey))
+		target, _ := url.Parse(destination)
+		if target.Host != name {
+			http.Error(w, "Open the view link on its app host", http.StatusBadRequest)
+			return true
+		}
+		manager, _ := url.Parse(viewManagerOrigin(r))
+		if !e.viewHostReady(target.Host) || !e.viewHostReady(manager.Host) {
+			http.Error(w, "Install the deployment certificate to open a private view", http.StatusServiceUnavailable)
+			return true
+		}
 		nonceHash, err := e.auth.BeginView(w)
 		if err != nil {
 			http.Error(w, "Cannot start private view", http.StatusServiceUnavailable)
 			return true
 		}
-		query := url.Values{"id": {id}, "view_nonce": {nonceHash}, returnQueryKey: {appReturn(id, r.URL.Query().Get(returnQueryKey))}}
+		query := url.Values{"id": {id}, "view_nonce": {nonceHash}, returnQueryKey: {destination}}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		http.Redirect(w, r, ManagementOrigin+"/view?"+query.Encode(), http.StatusSeeOther)
+		http.Redirect(w, r, viewManagerOrigin(r)+"/view?"+query.Encode(), http.StatusSeeOther) //nolint:gosec // managementOrigin selects only configured domains; query values are escaped.
 		return true
 	}
 	if !exists || app.Status != "active" {
@@ -118,7 +133,7 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		clean := r.URL.Query()
 		clean.Del("mesh_view")
 		r.URL.RawQuery = clean.Encode()
-		http.Redirect(w, r, appReturn(id, URL(id)+r.URL.RequestURI()), http.StatusSeeOther) //nolint:gosec // appReturn fixes this consumed ticket redirect to the app host.
+		http.Redirect(w, r, appReturn(r, id, appOrigin(r, id)+r.URL.RequestURI()), http.StatusSeeOther) //nolint:gosec // appReturn fixes this consumed ticket redirect to the app host.
 		return true
 	}
 	viewer, _ := e.auth.ViewSession(r.Context(), r, id)
@@ -127,7 +142,7 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		if !owner {
 			owner = viewer.Owner == app.Owner
 		}
-		if !owner || !serve.AmbientOwnerAllowed(r, URL(id), serve.RequireWebSocketOrigin) {
+		if !owner || !serve.AmbientOwnerAllowed(r, appOrigin(r, id), serve.RequireWebSocketOrigin) {
 			e.refuseView(w, r, id)
 			return true
 		}
@@ -232,7 +247,7 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 			}}
 		}
 		viewer, _ := e.auth.ViewSession(r.Context(), r, id)
-		return apppill.Inject(response, apppill.Config{AppID: id, ManagementOrigin: ManagementOrigin, Private: app.Visibility == "private", Owns: networkOwns(r, app.Owner) || viewer.Owner == app.Owner})
+		return apppill.Inject(response, apppill.Config{AppID: id, AppHost: name, ManagementOrigin: managementOrigin(r), Private: app.Visibility == "private", Owns: networkOwns(r, app.Owner) || viewer.Owner == app.Owner})
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		if app.Visibility == "private" {
@@ -400,7 +415,7 @@ func (s *activeStream) Close() error {
 	return err
 }
 
-var page = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh temporary apps</title><style>body{font:16px system-ui;background:#101214;color:#eef0f2;margin:0;padding:24px}main{max-width:680px;margin:auto}a{color:#9ddcff}button,a.button{border:0;border-radius:999px;background:#e9edf2;color:#101214;padding:10px 16px;cursor:pointer;display:inline-block;text-decoration:none}code{font-size:16px;overflow-wrap:anywhere}.pill{display:flex;align-items:center;gap:10px;padding:8px;flex-wrap:wrap}small{color:#bcc4cb}form{display:inline}body.frame{padding:0;border-radius:999px}.error{color:#ffbab4}</style></head><body class="{{if .Frame}}frame{{end}}"><main>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Code}}<h1>Pair this browser</h1><p>Approve from the Mesh host that owns the app:</p><code>mesh app browser approve HOST {{.Code}}</code><p>Code: <strong>{{.Code}}</strong></p><p>Expires in 10 minutes.</p><p id="pair-status" role="status">Waiting for approval. This page will continue automatically.</p><button id="check-approval" type="button">Check now</button><p><a id="restart-pair" href="/pair" hidden>Get a new code</a></p>{{else if .PairStart}}<h1>Pair this browser</h1><p>Start pairing, then approve the code on the Mesh host that owns your app.</p><form method="post" action="/pair"><input type="hidden" name="return" value="{{.Return}}"><button>Start pairing</button></form>{{else if .Frame}}<div class="pill"><strong>Mesh</strong><small>{{.App.Visibility}}</small><a href="{{.URL}}" target="_blank" rel="noopener">Share</a>{{if .Owns}}<a href="/confirm?id={{.App.ID}}&action={{.Toggle}}" target="_blank" rel="noopener">Make {{.Toggle}}</a><a href="/confirm?id={{.App.ID}}&action=renew" target="_blank" rel="noopener">Renew</a><a href="/download?id={{.App.ID}}" target="_blank" rel="noopener">Download</a><a href="/confirm?id={{.App.ID}}&action=delete" target="_blank" rel="noopener">Delete</a>{{else}}<a href="/pair" target="_blank" rel="noopener">Pair browser</a>{{end}}</div>{{else if .Confirm}}<h1>{{.Confirm}} {{.App.ID}}</h1><p>Owner controls for <a href="{{.URL}}">{{.URL}}</a>.</p><form id="confirm-form" method="post" action="/action"><input type="hidden" name="id" value="{{.App.ID}}"><input type="hidden" name="action" value="{{.Confirm}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="return" value="{{.Return}}">{{if or (eq .Confirm "public") (eq .Confirm "delete")}}<p><label>Type {{.App.ID}} to confirm <input id="confirm-id" name="confirmation" autocomplete="off" required></label></p>{{end}}<p><small>Read the change, then move the pointer or use the keyboard to enable confirmation.</small></p><button id="confirm-action" disabled>Confirm {{.Confirm}}</button></form>{{else}}<h1>Temporary apps</h1><p>Apps expire after 24 hours without app traffic. Expiry deletes their managed source, data and server.</p>{{range .Apps}}<p><a href="/view?id={{.ID}}">{{.ID}}.shaulavo.dev</a> · {{.Visibility}} · {{.Status}}<br><small>Expires {{.ExpiresAt}}</small></p>{{end}}<a href="/pair">Pair another owner</a>{{end}}</main>{{if .Frame}}<script>parent.postMessage({type:'mesh-app-status',visibility:{{.App.Visibility}},owns:{{.Owns}},deadline:{{.App.ExpiresAt.Format "2006-01-02T15:04:05Z07:00"}}},{{.Parent}})</script>{{end}}{{if .Code}}<script>
+var page = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh temporary apps</title><style>body{font:16px system-ui;background:#101214;color:#eef0f2;margin:0;padding:24px}main{max-width:680px;margin:auto}a{color:#9ddcff}button,a.button{border:0;border-radius:999px;background:#e9edf2;color:#101214;padding:10px 16px;cursor:pointer;display:inline-block;text-decoration:none}code{font-size:16px;overflow-wrap:anywhere}.pill{display:flex;align-items:center;gap:10px;padding:8px;flex-wrap:wrap}small{color:#bcc4cb}form{display:inline}body.frame{padding:0;border-radius:999px}.error{color:#ffbab4}</style></head><body class="{{if .Frame}}frame{{end}}"><main>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Code}}<h1>Pair this browser</h1><p>Approve from the Mesh host that owns the app:</p><code>mesh app browser approve HOST {{.Code}}</code><p>Code: <strong>{{.Code}}</strong></p><p>Expires in 10 minutes.</p><p id="pair-status" role="status">Waiting for approval. This page will continue automatically.</p><button id="check-approval" type="button">Check now</button><p><a id="restart-pair" href="/pair" hidden>Get a new code</a></p>{{else if .PairStart}}<h1>Pair this browser</h1><p>Start pairing, then approve the code on the Mesh host that owns your app.</p><form method="post" action="/pair"><input type="hidden" name="return" value="{{.Return}}"><button>Start pairing</button></form>{{else if .Frame}}<div class="pill"><strong>Mesh</strong><small>{{.App.Visibility}}</small><a href="{{.URL}}" target="_blank" rel="noopener">Share</a>{{if .Owns}}<a href="/confirm?id={{.App.ID}}&action={{.Toggle}}" target="_blank" rel="noopener">Make {{.Toggle}}</a><a href="/confirm?id={{.App.ID}}&action=renew" target="_blank" rel="noopener">Renew</a><a href="/download?id={{.App.ID}}" target="_blank" rel="noopener">Download</a><a href="/confirm?id={{.App.ID}}&action=delete" target="_blank" rel="noopener">Delete</a>{{else}}<a href="/pair" target="_blank" rel="noopener">Pair browser</a>{{end}}</div>{{else if .Confirm}}<h1>{{.Confirm}} {{.App.ID}}</h1><p>Owner controls for <a href="{{.URL}}">{{.URL}}</a>.</p><form id="confirm-form" method="post" action="/action"><input type="hidden" name="id" value="{{.App.ID}}"><input type="hidden" name="action" value="{{.Confirm}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="return" value="{{.Return}}">{{if or (eq .Confirm "public") (eq .Confirm "delete")}}<p><label>Type {{.App.ID}} to confirm <input id="confirm-id" name="confirmation" autocomplete="off" required></label></p>{{end}}<p><small>Read the change, then move the pointer or use the keyboard to enable confirmation.</small></p><button id="confirm-action" disabled>Confirm {{.Confirm}}</button></form>{{else}}<h1>Temporary apps</h1><p>Apps expire after 24 hours without app traffic. Expiry deletes their managed source, data and server.</p>{{range .Apps}}<p><a href="/view?id={{.ID}}">https://{{.ID}}.{{$.Domain}}</a> · {{.Visibility}} · {{.Status}}<br><small>Expires {{.ExpiresAt}}</small></p>{{end}}<a href="/pair">Pair another owner</a>{{end}}</main>{{if .Frame}}<script>parent.postMessage({type:'mesh-app-status',visibility:{{.App.Visibility}},owns:{{.Owns}},deadline:{{.App.ExpiresAt.Format "2006-01-02T15:04:05Z07:00"}}},{{.Parent}})</script>{{end}}{{if .Code}}<script>
 const checkButton = document.getElementById('check-approval');
 const status = document.getElementById('pair-status');
 const expiresAt = performance.now() + {{.PairLifetimeMS}};
@@ -478,6 +493,7 @@ resetActivation();
 </script>{{end}}</body></html>`))
 
 type pageData struct {
+	Domain                                                  string
 	Error, Code, Return, URL, Toggle, Confirm, CSRF, Parent string
 	Frame, Owns, PairStart                                  bool
 	PairLifetimeMS                                          int64
@@ -508,7 +524,7 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, cookieErr := r.Cookie(webauth.PairCookie); cookieErr == nil {
 		if _, promoteErr := e.auth.Promote(r.Context(), w, r); promoteErr == nil {
-			http.Redirect(w, r, ManagementOrigin+managementReturn(r), http.StatusSeeOther)
+			http.Redirect(w, r, managementOrigin(r)+managementReturn(r), http.StatusSeeOther) //nolint:gosec // managementOrigin is configured; managementReturn permits only fixed local paths.
 			return
 		}
 	}
@@ -550,14 +566,20 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "App expired", http.StatusGone)
 				return
 			}
-			destination := appReturn(id, r.URL.Query().Get(returnQueryKey))
+			destination := appReturn(r, id, r.URL.Query().Get(returnQueryKey))
 			if app.Visibility == "public" || networkOwns(r, app.Owner) {
 				http.Redirect(w, r, destination, http.StatusSeeOther) //nolint:gosec // appReturn fixes the destination to this registry-owned app host.
 				return
 			}
+			target, _ := url.Parse(destination)
+			managerHost, _ := serve.CanonicalHost(r.Host)
+			if !e.viewHostReady(target.Host) || !e.viewHostReady(managerHost) {
+				http.Error(w, "Install the deployment certificate to open a private view", http.StatusServiceUnavailable)
+				return
+			}
 			nonceHash := r.URL.Query().Get("view_nonce")
 			if nonceHash == "" {
-				challenge := URL(id) + "/.mesh-app/view-start?" + url.Values{returnQueryKey: {destination}}.Encode()
+				challenge := target.Scheme + "://" + target.Host + "/.mesh-app/view-start?" + url.Values{returnQueryKey: {destination}, "manager_domain": {managementOrigin(r)}}.Encode()
 				http.Redirect(w, r, challenge, http.StatusSeeOther) //nolint:gosec // URL uses the registry-owned app ID; only the escaped return query is supplied by the caller.
 				return
 			}
@@ -566,7 +588,6 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Cannot issue private view", http.StatusForbidden)
 				return
 			}
-			target, _ := url.Parse(destination)
 			query := target.Query()
 			query.Set("mesh_view", ticket)
 			target.RawQuery = query.Encode()
@@ -579,9 +600,9 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				http.NotFound(w, r)
 				return
 			}
-			policy := strings.Replace(w.Header().Get("Content-Security-Policy"), "form-action 'self'", "form-action 'self' "+URL(id), 1)
+			policy := strings.Replace(w.Header().Get("Content-Security-Policy"), "form-action 'self'", "form-action 'self' "+appOrigin(r, id), 1)
 			w.Header().Set("Content-Security-Policy", policy)
-			render(w, pageData{Confirm: action, App: app, CSRF: session.CSRF, URL: URL(id), Return: appReturn(id, r.URL.Query().Get(returnQueryKey))})
+			render(w, pageData{Confirm: action, App: app, CSRF: session.CSRF, URL: appOrigin(r, id), Return: appReturn(r, id, r.URL.Query().Get(returnQueryKey))})
 			return
 		}
 	}
@@ -597,7 +618,9 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	e.mu.Unlock()
-	render(w, pageData{Apps: apps})
+	host, _ := serve.CanonicalHost(r.Host)
+	_, domain, _ := domainpolicy.Label(host, false)
+	render(w, pageData{Apps: apps, Domain: domain})
 }
 func (e *Edge) pairPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
@@ -611,7 +634,7 @@ func (e *Edge) pairPage(w http.ResponseWriter, r *http.Request) {
 	}
 	destination := pairingReturn(r.URL.Query().Get(returnQueryKey))
 	if _, err := e.auth.Promote(r.Context(), w, r); err == nil {
-		http.Redirect(w, r, ManagementOrigin+destination, http.StatusSeeOther) //nolint:gosec // pairingReturn permits only local paths on this fixed management origin.
+		http.Redirect(w, r, managementOrigin(r)+destination, http.StatusSeeOther) //nolint:gosec // pairingReturn permits only local paths on this fixed management origin.
 		return
 	}
 	pair, err := e.auth.Pending(r.Context(), r)
@@ -623,7 +646,7 @@ func (e *Edge) pairPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *Edge) startPairing(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Origin") != ManagementOrigin {
+	if r.Header.Get("Origin") != managementOrigin(r) {
 		http.Error(w, "Start pairing from Mesh", http.StatusForbidden)
 		return
 	}
@@ -698,13 +721,13 @@ func (e *Edge) frame(w http.ResponseWriter, r *http.Request) {
 	if app.Visibility == "private" {
 		toggle = "public"
 	}
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors "+URL(id))
-	render(w, pageData{Frame: true, App: app, Owns: owns, URL: URL(id), Toggle: toggle, Parent: URL(id)})
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors "+appOrigin(r, id))
+	render(w, pageData{Frame: true, App: app, Owns: owns, URL: appOrigin(r, id), Toggle: toggle, Parent: appOrigin(r, id)})
 }
 func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
 	session, err := e.browser(r)
 	if err == nil {
-		err = webauth.ValidateSessionMutation(r, ManagementOrigin, session)
+		err = webauth.ValidateSessionMutation(r, managementOrigin(r), session)
 	}
 	if err != nil {
 		http.Error(w, "Owner authorization required", http.StatusForbidden)
@@ -751,7 +774,7 @@ func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Change failed", http.StatusServiceUnavailable)
 		return
 	}
-	destination := "/view?" + url.Values{"id": {id}, returnQueryKey: {appReturn(id, r.PostForm.Get(returnQueryKey))}}.Encode()
+	destination := "/view?" + url.Values{"id": {id}, returnQueryKey: {appReturn(r, id, r.PostForm.Get(returnQueryKey))}}.Encode()
 	if action == "delete" {
 		destination = "/"
 	}
@@ -776,7 +799,7 @@ func (e *Edge) downloadSource(w http.ResponseWriter, r *http.Request, app Record
 		return
 	}
 	now := e.config.Now()
-	proof, err := Sign("mesh-app/admission/v1", app.Owner, app.Generation, admission{ID: app.ID, Generation: app.Generation, Method: "GET", URI: "/", Host: app.ID + "." + Domain, Until: now.Add(admissionLifetime), Download: true}, e.config.Key, now)
+	proof, err := Sign("mesh-app/admission/v1", app.Owner, app.Generation, admission{ID: app.ID, Generation: app.Generation, Method: "GET", URI: "/", Host: app.ID + "." + Domain(), Until: now.Add(admissionLifetime), Download: true}, e.config.Key, now)
 	if err != nil {
 		http.Error(w, "Download unavailable", http.StatusServiceUnavailable)
 		return
@@ -840,13 +863,13 @@ func managementReturn(r *http.Request) string {
 }
 
 // appReturn accepts only a page belonging to the app being managed.
-func appReturn(id, value string) string {
-	fallback := URL(id) + "/"
+func appReturn(r *http.Request, id, value string) string {
+	fallback := appOrigin(r, id) + "/"
 	if len(value) > 4096 || strings.ContainsAny(value, "\r\n\\") {
 		return fallback
 	}
 	target, err := url.Parse(value)
-	if err != nil || target.Scheme != "https" || target.Host != id+"."+Domain || target.User != nil || target.Opaque != "" {
+	if err != nil || target.Scheme != "https" || !acceptedAppHost(target.Host, id) || target.User != nil || target.Opaque != "" {
 		return fallback
 	}
 	if target.Path == "" {
@@ -918,4 +941,44 @@ func (e *Edge) tryAcquire(r *http.Request, owner string) (func(), error) {
 		return nil, fmt.Errorf("app: request canceled after capacity acquisition: %w", err)
 	}
 	return release, nil
+}
+
+func managementOrigin(r *http.Request) string {
+	host, ok := serve.CanonicalHost(r.Host)
+	if ok {
+		if _, domain, accepted := domainpolicy.Label(host, false); accepted {
+			return "https://apps." + domain
+		}
+	}
+	return ManagementOrigin()
+}
+func appOrigin(r *http.Request, id string) string {
+	host, ok := serve.CanonicalHost(r.Host)
+	if ok {
+		if _, domain, accepted := domainpolicy.Label(host, false); accepted {
+			return "https://" + id + "." + domain
+		}
+	}
+	return URL(id)
+}
+func acceptedAppHost(host, id string) bool {
+	label, _, ok := domainpolicy.Label(host, false)
+	return ok && label == id
+}
+
+// The challenge may run on another accepted app domain. Return to the
+// authenticated manager without sharing its host-only browser cookie.
+func viewManagerOrigin(r *http.Request) string {
+	origin := r.URL.Query().Get("manager_domain")
+	for _, domain := range domainpolicy.Domains() {
+		if origin == "https://apps."+domain {
+			return origin
+		}
+	}
+	return managementOrigin(r)
+}
+
+func (e *Edge) viewHostReady(host string) bool {
+	_, _, accepted := domainpolicy.Label(host, false)
+	return accepted && e.config.ViewHostReady != nil && e.config.ViewHostReady(host)
 }

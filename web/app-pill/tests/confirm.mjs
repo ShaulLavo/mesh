@@ -7,7 +7,7 @@ const playwright = await import(process.env.MESH_PLAYWRIGHT_MODULE
   ? pathToFileURL(process.env.MESH_PLAYWRIGHT_MODULE).href : 'playwright');
 const directory = process.argv[2];
 assert(directory, 'Generate rendered pages with MESH_CONFIRM_BROWSER_DIR and TestConfirmationBrowserPages');
-const manager = 'https://apps.shaulavo.dev';
+const manager = 'https://apps.mesh.test';
 
 async function fixtureContext(browser, options = {}) {
   const context = await browser.newContext(options);

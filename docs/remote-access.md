@@ -1,19 +1,22 @@
 # Reach sessions over SSH
 
+The examples use `new.example` from the configured
+[deployment domains](deployment-domains.md). Replace it with your domain.
+
 Installed hosts expose Mesh sessions through public-key-only SSH on Tailnet
 port 2222. Add the port and your authorized Mesh key to `~/.ssh/config`:
 
 ```sshconfig
-Host *.mesh.shaulavo.dev
+Host *.mesh.new.example
     Port 2222
     IdentityFile ~/.local/state/mesh/identity.key
     IdentitiesOnly yes
 ```
 
 ```bash
-ssh pc.mesh.shaulavo.dev          # picker on this host
-ssh -t pc.mesh.shaulavo.dev 7K3D  # attach a specific session
-ssh pc.mesh.shaulavo.dev ls       # list sessions without a terminal
+ssh pc.mesh.new.example          # picker on this host
+ssh -t pc.mesh.new.example 7K3D  # attach a specific session
+ssh pc.mesh.new.example ls       # list sessions without a terminal
 ```
 
 Press `ctrl+]` to return to the picker. Closing SSH leaves the session running.
@@ -25,9 +28,9 @@ SFTP and SCP. A service at `/files` uses that same path over SSH:
 
 ```bash
 mesh serve pc /srv/shared --at /files --files  # directory already on pc
-sftp -P 2222 pc.mesh.shaulavo.dev             # browse /files
-scp -P 2222 pc.mesh.shaulavo.dev:/files/report.pdf .
-scp -O -P 2222 pc.mesh.shaulavo.dev:/files/report.pdf .  # legacy SCP protocol
+sftp -P 2222 pc.mesh.new.example             # browse /files
+scp -P 2222 pc.mesh.new.example:/files/report.pdf .
+scp -O -P 2222 pc.mesh.new.example:/files/report.pdf .  # legacy SCP protocol
 ```
 
 The SFTP root lists the declared directory services. Proxy services are omitted;
@@ -46,6 +49,6 @@ serving host and survives later publications. Changing it keeps the route, ports
 and running process.
 
 To reach an app on your current machine from outside the tailnet, reserve a
-hostname with `mesh serve claim vps blog.shaulavo.dev`, then connect a named
+hostname with `mesh serve claim vps blog.new.example`, then connect a named
 SSH reverse forward. See [Reach a local app through the public edge](reverse-tunnels.md)
 for the exact identity and SSH command. Disconnecting returns the hostname to 404.

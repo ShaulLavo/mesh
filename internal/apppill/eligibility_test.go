@@ -160,7 +160,7 @@ func TestInjectProxyUnsupportedDocumentsRemainAvailable(t *testing.T) {
 				document = append([]byte{0x28, 0xb5, 0x2f, 0xfd, 0x20, 0x2a, 0x51, 0x01, 0x00}, document...)
 			}
 			proxy := pillProxy(t, document, tc.contentType, tc.encoding)
-			request := httptest.NewRequest(http.MethodGet, "https://zzzz.shaulavo.dev/", nil)
+			request := httptest.NewRequest(http.MethodGet, "https://zzzz.mesh.test/", nil)
 			request.Header.Set("Accept-Encoding", browserEncodings)
 			result := httptest.NewRecorder()
 			proxy.ServeHTTP(result, request)

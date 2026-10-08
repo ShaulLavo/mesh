@@ -24,7 +24,7 @@ type PublicCertificateManagerConfig struct {
 	PassTimeout   time.Duration
 }
 
-// PublicCertificateManager renews *.shaulavo.dev and distributes it only to
+// PublicCertificateManager renews the configured public wildcard and distributes it only to
 // the pinned direct-TLS edge. It is scheduled independently from private DNS.
 type PublicCertificateManager struct {
 	renewer       CertificateRenewer

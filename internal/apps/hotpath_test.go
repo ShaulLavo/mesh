@@ -52,7 +52,7 @@ func TestAdmissionActivityWriteBudget(t *testing.T) {
 	for range 50 {
 		f.now = f.now.Add(time.Second)
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID)+"/index.html", nil), app.ID+"."+Domain)
+		f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID)+"/index.html", nil), app.ID+"."+Domain())
 		if response.Code != http.StatusOK {
 			t.Fatalf("status %d: %s", response.Code, response.Body.String())
 		}
@@ -112,7 +112,7 @@ func TestActivityRestartDeadlineSlack(t *testing.T) {
 }
 func viewCookie(t *testing.T, f *appFixture, owner *http.Cookie, id string) *http.Cookie {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+id, nil)
+	r := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/view?id="+id, nil)
 	r.AddCookie(owner)
 	nonceResponse := httptest.NewRecorder()
 	nonceHash, err := f.edge.auth.BeginView(nonceResponse)
@@ -126,7 +126,7 @@ func viewCookie(t *testing.T, f *appFixture, owner *http.Cookie, id string) *htt
 	consume := httptest.NewRecorder()
 	consumeRequest := httptest.NewRequest(http.MethodGet, URL(id)+"/?mesh_view="+ticket, nil)
 	consumeRequest.AddCookie(cookieNamed(t, nonceResponse, webauth.ViewNonceCookie))
-	f.edge.ServeHost(consume, consumeRequest, id+"."+Domain)
+	f.edge.ServeHost(consume, consumeRequest, id+"."+Domain())
 	return cookieNamed(t, consume, webauth.ViewCookie)
 }
 func TestBrowserRevocationIsolatesInflight(t *testing.T) {
@@ -147,7 +147,7 @@ func TestBrowserRevocationIsolatesInflight(t *testing.T) {
 		return admitted
 	}
 	revoked, other, public := admit(firstView), admit(secondView), admit(nil)
-	r := httptest.NewRequest(http.MethodGet, ManagementOrigin, nil)
+	r := httptest.NewRequest(http.MethodGet, ManagementOrigin(), nil)
 	r.AddCookie(first)
 	browser, err := f.edge.auth.Browser(context.Background(), r)
 	if err != nil {
@@ -217,7 +217,7 @@ func TestProxyConnectionsAreReused(t *testing.T) {
 	f.edge.config.Resolve = func(context.Context, string) (netip.AddrPort, error) { return endpoint, nil }
 	for range 20 {
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID)+"/asset", nil), app.ID+"."+Domain)
+		f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID)+"/asset", nil), app.ID+"."+Domain())
 		if response.Code != http.StatusOK || response.Body.String() != "upstream" {
 			t.Fatalf("proxy response = %d %q", response.Code, response.Body.String())
 		}
@@ -350,10 +350,10 @@ func TestRevokedViewIsRecheckedAfterOriginResolution(t *testing.T) {
 		defer close(done)
 		r := httptest.NewRequest(http.MethodGet, URL(app.ID), nil)
 		r.AddCookie(view)
-		f.edge.ServeHost(response, r, app.ID+"."+Domain)
+		f.edge.ServeHost(response, r, app.ID+"."+Domain())
 	}()
 	<-entered
-	r := httptest.NewRequest(http.MethodGet, ManagementOrigin, nil)
+	r := httptest.NewRequest(http.MethodGet, ManagementOrigin(), nil)
 	r.AddCookie(owner)
 	browser, err := f.edge.auth.Browser(context.Background(), r)
 	if err != nil {

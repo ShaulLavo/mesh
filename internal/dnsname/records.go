@@ -8,16 +8,11 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+
+	"github.com/shaul/mesh/internal/domainpolicy"
 )
 
 const (
-	// Zone is the authoritative DNS zone used by Mesh.
-	Zone = "shaulavo.dev"
-	// PrivateZone contains direct tailnet-only origin names.
-	PrivateZone = "mesh." + Zone
-	// WildcardName is the certificate name installed on private origins.
-	WildcardName = "*." + PrivateZone
-
 	ManagedARecordComment   = "mesh:private-origin"
 	ManagedTXTRecordComment = "mesh:acme-dns01"
 	DefaultRecordTTL        = 60
@@ -64,6 +59,7 @@ type Provider interface {
 
 // HostAddress binds one private DNS label to its current tailnet IPv4 address.
 type HostAddress struct {
+	Domain  string
 	Name    string
 	Address netip.Addr
 }
@@ -85,7 +81,7 @@ func ReconcileHostA(ctx context.Context, provider Provider, host HostAddress) (R
 	if provider == nil {
 		return Record{}, errors.New("dnsname: reconcile host with nil provider")
 	}
-	name, err := privateHostName(host.Name)
+	name, err := privateHostNameInDomain(host.Name, host.Domain)
 	if err != nil {
 		return Record{}, err
 	}
@@ -197,11 +193,23 @@ func CleanupTXT(ctx context.Context, provider Provider, challenge ChallengeRecor
 	return nil
 }
 
-func privateHostName(label string) (string, error) {
+func privateHostName(label string) (string, error) { return privateHostNameInDomain(label, Zone()) }
+
+func privateHostNameInDomain(label, domain string) (string, error) {
+	if domain == "" {
+		domain = Zone()
+	}
+	if !slices.Contains(domainpolicy.Domains(), domain) {
+		return "", errors.New("dnsname: private host domain is not configured")
+	}
 	if err := validateDNSLabel(label); err != nil {
 		return "", fmt.Errorf("dnsname: invalid private host name: %w", err)
 	}
-	return label + "." + PrivateZone, nil
+	name := label + ".mesh." + domain
+	if len(name) > 253 {
+		return "", errors.New("dnsname: private host name exceeds DNS length")
+	}
+	return name, nil
 }
 
 func canonicalDNSName(name string) (string, error) {
@@ -247,3 +255,7 @@ func recordMatches(record Record, desired RecordInput) bool {
 	return record.Type == desired.Type && record.Name == desired.Name && record.Content == desired.Content &&
 		record.TTL == desired.TTL && record.Proxied == desired.Proxied && record.Comment == desired.Comment
 }
+
+func Zone() string               { return domainpolicy.Primary() }
+func WildcardName() string       { return domainpolicy.Wildcard(Zone(), true) }
+func PublicWildcardName() string { return domainpolicy.Wildcard(Zone(), false) }

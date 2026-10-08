@@ -209,7 +209,7 @@ func serveStatus(t *testing.T, f *appFixture, app Record) int {
 
 func serveResponse(t *testing.T, f *appFixture, app Record) (int, string) {
 	t.Helper()
-	proof, err := Sign("mesh-app/admission/v1", identityFor(f.ownerKey), 1, admission{ID: app.ID, Generation: app.Generation, Method: http.MethodGet, URI: "/", Host: app.ID + "." + Domain, Until: f.now.Add(30 * time.Second)}, f.edgeKey, f.now)
+	proof, err := Sign("mesh-app/admission/v1", identityFor(f.ownerKey), 1, admission{ID: app.ID, Generation: app.Generation, Method: http.MethodGet, URI: "/", Host: app.ID + "." + Domain(), Until: f.now.Add(30 * time.Second)}, f.edgeKey, f.now)
 	if err != nil {
 		t.Fatal(err)
 	}

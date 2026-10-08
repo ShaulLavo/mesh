@@ -27,7 +27,7 @@ func TestSignedBundleBindsTargetSignerCertificateAndKey(t *testing.T) {
 	signerID, signer := testEd25519Identity(t)
 	targetID, _ := testEd25519Identity(t)
 	bundle := testBundle(t, 1, now, now.Add(90*24*time.Hour))
-	signed, err := SignBundle(bundle, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
+	signed, err := SignBundle(bundle, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.mesh.test", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,12 +104,12 @@ func TestInstallerIsIdempotentRejectsRollbackAndAllowsEqualExpiryRotation(t *tes
 	signerID, signer := testEd25519Identity(t)
 	targetID, _ := testEd25519Identity(t)
 	root := t.TempDir()
-	store, err := NewBundleStore(filepath.Join(root, "live"), WildcardName)
+	store, err := NewBundleStore(filepath.Join(root, "live"), WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.now = func() time.Time { return now }
-	stagingStore, err := NewBundleStore(filepath.Join(root, "staging"), WildcardName)
+	stagingStore, err := NewBundleStore(filepath.Join(root, "staging"), WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestInstallerIsIdempotentRejectsRollbackAndAllowsEqualExpiryRotation(t *tes
 	}
 
 	first := testBundle(t, 1, now, now.Add(90*24*time.Hour))
-	firstSigned, err := SignBundle(first, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
+	firstSigned, err := SignBundle(first, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.mesh.test", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestInstallerIsIdempotentRejectsRollbackAndAllowsEqualExpiryRotation(t *tes
 	}
 
 	earlier := testBundle(t, 2, now, now.Add(60*24*time.Hour))
-	earlierSigned, err := SignBundle(earlier, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
+	earlierSigned, err := SignBundle(earlier, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.mesh.test", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestInstallerIsIdempotentRejectsRollbackAndAllowsEqualExpiryRotation(t *tes
 	}
 
 	rotation := testBundle(t, 3, now, first.NotAfter)
-	rotationSigned, err := SignBundle(rotation, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
+	rotationSigned, err := SignBundle(rotation, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.mesh.test", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,12 +174,12 @@ func TestInstallerPersistsStagingWithoutChangingLiveCertificate(t *testing.T) {
 	signerID, signer := testEd25519Identity(t)
 	targetID, _ := testEd25519Identity(t)
 	root := t.TempDir()
-	liveStore, err := NewBundleStore(filepath.Join(root, "live"), WildcardName)
+	liveStore, err := NewBundleStore(filepath.Join(root, "live"), WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
 	liveStore.now = func() time.Time { return now }
-	stagingStore, err := NewBundleStore(filepath.Join(root, "staging"), WildcardName)
+	stagingStore, err := NewBundleStore(filepath.Join(root, "staging"), WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestInstallerPersistsStagingWithoutChangingLiveCertificate(t *testing.T) {
 	}
 
 	live := testBundle(t, 10, now, now.Add(90*24*time.Hour))
-	liveSigned, err := SignBundle(live, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
+	liveSigned, err := SignBundle(live, targetID, ProfilePrivateOrigin, EnvironmentLive, "pc.mesh.mesh.test", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestInstallerPersistsStagingWithoutChangingLiveCertificate(t *testing.T) {
 		t.Fatalf("live install changed = %v, error = %v", changed, err)
 	}
 	staging := testBundle(t, 20, now, now.Add(91*24*time.Hour))
-	stagingSigned, err := SignBundle(staging, targetID, ProfilePrivateOrigin, EnvironmentStaging, "pc.mesh.shaulavo.dev", signer)
+	stagingSigned, err := SignBundle(staging, targetID, ProfilePrivateOrigin, EnvironmentStaging, "pc.mesh.mesh.test", signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,12 +248,12 @@ func TestInstallerRejectsCorrectlySignedBundleForAnotherProfile(t *testing.T) {
 	signerID, signer := testEd25519Identity(t)
 	targetID, _ := testEd25519Identity(t)
 	root := t.TempDir()
-	liveStore, err := NewBundleStore(filepath.Join(root, "live"), WildcardName)
+	liveStore, err := NewBundleStore(filepath.Join(root, "live"), WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
 	liveStore.now = func() time.Time { return now }
-	stagingStore, err := NewBundleStore(filepath.Join(root, "staging"), WildcardName)
+	stagingStore, err := NewBundleStore(filepath.Join(root, "staging"), WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,8 +273,8 @@ func TestInstallerRejectsCorrectlySignedBundleForAnotherProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	certificatePEM, keyPEM := testCertificate(t, 99, PublicWildcardName, now.Add(-time.Hour), now.Add(90*24*time.Hour))
-	publicBundle, err := ValidateBundle(certificatePEM, keyPEM, PublicWildcardName, now)
+	certificatePEM, keyPEM := testCertificate(t, 99, PublicWildcardName(), now.Add(-time.Hour), now.Add(90*24*time.Hour))
+	publicBundle, err := ValidateBundle(certificatePEM, keyPEM, PublicWildcardName(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,8 +313,8 @@ func TestDistributorPinsOriginIdentityAndSignedInstall(t *testing.T) {
 		},
 	})
 	targets := []OriginTarget{
-		{Name: "desktop", PrivateName: "desktop.mesh.shaulavo.dev", Endpoint: "ws://100.64.0.1:7337/mesh", Identity: firstID},
-		{Name: "laptop", PrivateName: "laptop.mesh.shaulavo.dev", Endpoint: "ws://100.64.0.2:7337/mesh", Identity: secondID},
+		{Name: "desktop", PrivateName: "desktop.mesh.mesh.test", Endpoint: "ws://100.64.0.1:7337/mesh", Identity: firstID},
+		{Name: "laptop", PrivateName: "laptop.mesh.mesh.test", Endpoint: "ws://100.64.0.2:7337/mesh", Identity: secondID},
 	}
 	callerBundle := bundle
 	callerBundle.Fingerprint = "stale-caller-fingerprint"
@@ -530,8 +530,8 @@ func mustTestDistributor(t *testing.T, config DistributorConfig) *Distributor {
 
 func testBundle(t *testing.T, serial int64, now, notAfter time.Time) Bundle {
 	t.Helper()
-	certificatePEM, privateKeyPEM := testCertificate(t, serial, WildcardName, now.Add(-time.Hour), notAfter)
-	bundle, err := ValidateBundle(certificatePEM, privateKeyPEM, WildcardName, now)
+	certificatePEM, privateKeyPEM := testCertificate(t, serial, WildcardName(), now.Add(-time.Hour), notAfter)
+	bundle, err := ValidateBundle(certificatePEM, privateKeyPEM, WildcardName(), now)
 	if err != nil {
 		t.Fatal(err)
 	}

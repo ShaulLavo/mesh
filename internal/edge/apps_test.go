@@ -26,7 +26,7 @@ func TestAppRoutingSurvivesSnapshotReplacementAndConsumesTombstones(t *testing.T
 	calls := 0
 	registry.SetAppHandler(appHandlerFunc(func(w http.ResponseWriter, r *http.Request, name string) bool {
 		calls++
-		if name != "7k3d.shaulavo.dev" {
+		if name != "7k3d.mesh.test" {
 			return false
 		}
 		http.Error(w, "expired", http.StatusGone)
@@ -36,12 +36,12 @@ func TestAppRoutingSurvivesSnapshotReplacementAndConsumesTombstones(t *testing.T
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	registry.ServeHTTP(response, publicRequest(http.MethodGet, "7k3d.shaulavo.dev", "/api/data"))
+	registry.ServeHTTP(response, publicRequest(http.MethodGet, "7k3d.mesh.test", "/api/data"))
 	if calls != 1 || response.Code != http.StatusGone {
 		t.Fatalf("app routing lost: calls=%d response=%d", calls, response.Code)
 	}
 	response = httptest.NewRecorder()
-	registry.ServeHTTP(response, publicRequest(http.MethodGet, "other.shaulavo.dev", "/api/data"))
+	registry.ServeHTTP(response, publicRequest(http.MethodGet, "other.mesh.test", "/api/data"))
 	if calls != 2 || response.Code != http.StatusNotFound {
 		t.Fatalf("app fallthrough: calls=%d response=%d", calls, response.Code)
 	}
@@ -52,11 +52,11 @@ func TestAppRoutingCannotBypassPublicEntranceChecks(t *testing.T) {
 	t.Cleanup(registry.Close)
 	calls := 0
 	registry.SetAppHandler(appHandlerFunc(func(w http.ResponseWriter, r *http.Request, name string) bool { calls++; return true }))
-	plain := publicRequest(http.MethodGet, "7k3d.shaulavo.dev", "/")
+	plain := publicRequest(http.MethodGet, "7k3d.mesh.test", "/")
 	plain.TLS = nil
 	registry.ServeHTTP(httptest.NewRecorder(), plain)
-	wrongSNI := publicRequest(http.MethodGet, "7k3d.shaulavo.dev", "/")
-	wrongSNI.TLS.ServerName = "other.shaulavo.dev"
+	wrongSNI := publicRequest(http.MethodGet, "7k3d.mesh.test", "/")
+	wrongSNI.TLS.ServerName = "other.mesh.test"
 	registry.ServeHTTP(httptest.NewRecorder(), wrongSNI)
 	registry.ServeHTTP(httptest.NewRecorder(), publicRequest(http.MethodGet, "7k3d.other.dev", "/"))
 	if calls != 0 {
@@ -68,7 +68,7 @@ func TestAppWholeHostCanServeTerminalNamedPaths(t *testing.T) {
 	registry := testRegistry(t, ModeDirectTLS, time.Now())
 	t.Cleanup(registry.Close)
 	registry.SetAppHandler(appHandlerFunc(func(w http.ResponseWriter, r *http.Request, name string) bool {
-		if name != "7k3d.shaulavo.dev" {
+		if name != "7k3d.mesh.test" {
 			return false
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -76,12 +76,12 @@ func TestAppWholeHostCanServeTerminalNamedPaths(t *testing.T) {
 	}))
 	for _, path := range []string{"/mesh", "/m%65sh/control"} {
 		appResponse := httptest.NewRecorder()
-		registry.ServeHTTP(appResponse, publicRequest(http.MethodGet, "7k3d.shaulavo.dev", path))
+		registry.ServeHTTP(appResponse, publicRequest(http.MethodGet, "7k3d.mesh.test", path))
 		if appResponse.Code != http.StatusNoContent {
 			t.Fatalf("app path %s intercepted: %d", path, appResponse.Code)
 		}
 		ordinaryResponse := httptest.NewRecorder()
-		registry.ServeHTTP(ordinaryResponse, publicRequest(http.MethodGet, "other.shaulavo.dev", path))
+		registry.ServeHTTP(ordinaryResponse, publicRequest(http.MethodGet, "other.mesh.test", path))
 		if ordinaryResponse.Code != http.StatusNotFound {
 			t.Fatalf("ordinary terminal path %s exposed: %d", path, ordinaryResponse.Code)
 		}
@@ -154,7 +154,7 @@ func TestAppAcquireSharesClientAndOriginBudgetsWithServiceProxy(t *testing.T) {
 	t.Cleanup(registry.Close)
 	owner, _ := testIdentity(t)
 	if err := registry.Replace([]PublishedRoute{{
-		Route:  Route{PublicName: "service.shaulavo.dev", ServiceName: "app"},
+		Route:  Route{PublicName: "service.mesh.test", ServiceName: "app"},
 		Origin: testResolvedOrigin(owner, netip.MustParseAddrPort("127.0.0.1:9"), now),
 	}}); err != nil {
 		t.Fatal(err)
@@ -202,7 +202,7 @@ func TestAppAcquireSharesClientAndOriginBudgetsWithServiceProxy(t *testing.T) {
 		t.Fatal("origin-capacity rejection leaked global or client capacity")
 	}
 	response := httptest.NewRecorder()
-	registry.ServeHTTP(response, publicRequest(http.MethodGet, "service.shaulavo.dev", "/app"))
+	registry.ServeHTTP(response, publicRequest(http.MethodGet, "service.mesh.test", "/app"))
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("service did not share saturated origin budget: %d", response.Code)
 	}
@@ -266,15 +266,15 @@ func TestCoalescedAppConnectionRequestsRetryBeforeAuthorization(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 		return true
 	}))
-	request := publicRequest(http.MethodGet, apps.ManagementHost, "/frame?id=7k3d")
+	request := publicRequest(http.MethodGet, apps.ManagementHost(), "/frame?id=7k3d")
 	request.ProtoMajor = 2
-	request.TLS.ServerName = "7k3d.shaulavo.dev"
+	request.TLS.ServerName = "7k3d.mesh.test"
 	response := httptest.NewRecorder()
 	registry.ServeHTTP(response, request)
 	if response.Code != http.StatusMisdirectedRequest || calls != 0 {
 		t.Fatalf("coalesced connection = %d, calls=%d; browser needs a 421 to reconnect", response.Code, calls)
 	}
-	request.TLS.ServerName = apps.ManagementHost
+	request.TLS.ServerName = apps.ManagementHost()
 	response = httptest.NewRecorder()
 	registry.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent || calls != 1 {

@@ -47,7 +47,7 @@ func testTunnelRecoveryBoundary(t *testing.T, local bool) {
 	client := newServerTestConn()
 	done := make(chan error, 1)
 	go func() { done <- server.Handle(ctx, client) }()
-	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeTunnelRecover, RequestID: "recover", TunnelName: "blog.shaulavo.dev"}))
+	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeTunnelRecover, RequestID: "recover", TunnelName: "blog.mesh.test"}))
 	response := decodeServerControl(t, client.nextWrite(t))
 	if local && (response.Type != protocol.TypeTunnelRecovered || probe.recovered.Load() != 1) {
 		t.Fatalf("Unix recovery = %#v, calls=%d", response, probe.recovered.Load())

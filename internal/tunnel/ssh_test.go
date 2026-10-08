@@ -162,7 +162,7 @@ func (c *sshReadGate) unblock() {
 }
 
 func TestSSHChannelBudgetWaitsForPeerClose(t *testing.T) {
-	const name = "blog.shaulavo.dev"
+	const name = "blog.mesh.test"
 	f := newSSHFixture(t, time.Second, name)
 	var gate *sshReadGate
 	conn, channels := f.clientWithConn(t, true, func(raw net.Conn) net.Conn {
@@ -230,10 +230,10 @@ func sendForward(t *testing.T, conn gossh.Conn, kind, hostname string, port uint
 }
 
 func TestSSHForwardValidationAndCancellation(t *testing.T) {
-	const name = "blog.shaulavo.dev"
+	const name = "blog.mesh.test"
 	f := newSSHFixture(t, time.Second, name)
 	conn, _ := f.client(t, true)
-	for _, bad := range []string{"", "blog", "*", "*.shaulavo.dev", "localhost", "127.0.0.1", "::1", "other.shaulavo.dev", "blog.other.dev", "BLOG.shaulavo.dev"} {
+	for _, bad := range []string{"", "blog", "*", "*.mesh.test", "localhost", "127.0.0.1", "::1", "other.mesh.test", "blog.other.dev", "BLOG.mesh.test"} {
 		if sendForward(t, conn, "tcpip-forward", bad, 80) {
 			t.Fatalf("accepted %q", bad)
 		}
@@ -271,7 +271,7 @@ func TestSSHForwardValidationAndCancellation(t *testing.T) {
 func TestSSHForwardLimitAcrossConnections(t *testing.T) {
 	names := make([]string, MaximumForwardsPerKey+1)
 	for index := range names {
-		names[index] = fmt.Sprintf("f%d.shaulavo.dev", index)
+		names[index] = fmt.Sprintf("f%d.mesh.test", index)
 	}
 	f := newSSHFixture(t, time.Second, names...)
 	first, _ := f.client(t, true)
@@ -297,7 +297,7 @@ func TestSSHForwardLimitAcrossConnections(t *testing.T) {
 }
 
 func TestSSHKeepaliveExpiresWithoutReply(t *testing.T) {
-	const name = "blog.shaulavo.dev"
+	const name = "blog.mesh.test"
 	f := newSSHFixture(t, 20*time.Millisecond, name)
 	conn, _ := f.client(t, false)
 	started := time.Now()
@@ -311,7 +311,7 @@ func TestSSHKeepaliveExpiresWithoutReply(t *testing.T) {
 }
 
 func TestSSHKeepaliveRepliesPreserveForward(t *testing.T) {
-	const name = "blog.shaulavo.dev"
+	const name = "blog.mesh.test"
 	f := newSSHFixture(t, 10*time.Millisecond, name)
 	conn, _ := f.client(t, true)
 	if !sendForward(t, conn, "tcpip-forward", name, 80) {
@@ -324,7 +324,7 @@ func TestSSHKeepaliveRepliesPreserveForward(t *testing.T) {
 }
 
 func TestSSHDisconnectStartsEveryReleaseBeforeWaiting(t *testing.T) {
-	names := []string{"first.shaulavo.dev", "second.shaulavo.dev"}
+	names := []string{"first.mesh.test", "second.mesh.test"}
 	f := newSSHFixture(t, time.Second, names...)
 	conn, _ := f.client(t, true)
 	for _, name := range names {
@@ -352,7 +352,7 @@ func TestSSHDisconnectStartsEveryReleaseBeforeWaiting(t *testing.T) {
 }
 
 func TestSSHDialCancellationPreservesStalledChannelOpen(t *testing.T) {
-	const name = "blog.shaulavo.dev"
+	const name = "blog.mesh.test"
 	f := newSSHFixture(t, 10*time.Millisecond, name)
 	conn, channels := f.client(t, true)
 	if !sendForward(t, conn, "tcpip-forward", name, 80) {
@@ -379,7 +379,7 @@ func TestSSHDialCancellationPreservesStalledChannelOpen(t *testing.T) {
 }
 
 func TestSSHStalledChannelOpenExpiresWithoutKeepaliveReply(t *testing.T) {
-	const name = "blog.shaulavo.dev"
+	const name = "blog.mesh.test"
 	f := newSSHFixture(t, 20*time.Millisecond, name)
 	conn, channels := f.client(t, false)
 	if !sendForward(t, conn, "tcpip-forward", name, 80) {
@@ -419,7 +419,7 @@ func TestSSHStalledChannelOpenExpiresWithoutKeepaliveReply(t *testing.T) {
 }
 
 func TestSSHChannelBudgetDeadlinesAndBackpressure(t *testing.T) {
-	const name = "blog.shaulavo.dev"
+	const name = "blog.mesh.test"
 	f := newSSHFixture(t, time.Second, name)
 	conn, channels := f.client(t, true)
 	if !sendForward(t, conn, "tcpip-forward", name, 80) {
@@ -482,7 +482,7 @@ func TestStockSSHNoSessionReverseForward(t *testing.T) {
 	if err != nil {
 		t.Skip("stock ssh unavailable")
 	}
-	const name = "blog.shaulavo.dev"
+	const name = "blog.mesh.test"
 	f := newSSHFixture(t, time.Second, name)
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "from laptop") }))
 	t.Cleanup(origin.Close)

@@ -91,3 +91,7 @@ how to move an existing fleet to authenticated controls.
 - [macos](docs/macos.md), quarantine and file access
 - [development](docs/development.md), gates, hooks and the integration suite
 - [status](docs/plan/02-status.md) and [task briefs](docs/tasks/)
+
+Deployment names and parallel domain migrations are configured in
+[`domains.json`](docs/deployment-domains.md). Existing installations create
+the policy from their deployment state on startup when the file is missing.

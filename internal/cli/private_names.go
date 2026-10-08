@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/spf13/cobra"
 )
 
 // PrivateNamesRequest is one explicit staging or live reconciliation pass.
@@ -40,14 +39,19 @@ func reconcilePrivateNames(ctx context.Context, request PrivateNamesRequest) err
 	if err != nil {
 		return err
 	}
-	operations := 1
-	if runtime.PublicManager != nil {
+	operations := 0
+	for _, entry := range runtime.All() {
 		operations++
+		if entry.PublicManager != nil {
+			operations++
+		}
 	}
 	results := make(chan error, operations)
-	go func() { results <- runtime.Manager.RunOnce(ctx, request.Force) }()
-	if runtime.PublicManager != nil {
-		go func() { results <- runtime.PublicManager.RunOnce(ctx, request.Force) }()
+	for _, entry := range runtime.All() {
+		go func() { results <- entry.Manager.RunOnce(ctx, request.Force) }()
+		if entry.PublicManager != nil {
+			go func() { results <- entry.PublicManager.RunOnce(ctx, request.Force) }()
+		}
 	}
 	var result error
 	for range operations {

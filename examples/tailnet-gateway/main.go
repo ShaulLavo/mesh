@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/tailnet"
 )
 
@@ -28,11 +29,15 @@ func (c helloConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 func (c helloConn) Write(p []byte) (int, error) { return len(p), nil }
 
 func appHost(host string) bool {
-	if host == "apps.shaulavo.dev" {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	label, _, ok := domainpolicy.Label(host, false)
+	if !ok {
+		return false
+	}
+	if label == "apps" {
 		return true
 	}
-	label, ok := strings.CutSuffix(host, ".shaulavo.dev")
-	if !ok || len(label) != 4 {
+	if len(label) != 4 {
 		return false
 	}
 	return strings.Trim(label, "0123456789abcdefghjkmnpqrstvwxyz") == ""
@@ -89,7 +94,17 @@ func main() {
 	privateAddress := flag.String("private", "127.0.0.1:8443", "existing private Mesh TLS listener")
 	appAddress := flag.String("apps", "127.0.0.1:8445", "temporary-app edge TLS listener")
 	ownerAccess := flag.Bool("tailnet-owner-access", false, "require Tailscale Serve PROXY v1 and forward device addresses to the app edge")
+	domains := flag.String("domains", "", "deployment domain policy JSON file")
 	flag.Parse()
+	if *domains == "" {
+		log.Fatal("deployment domain policy is required")
+	}
+	if err := domainpolicy.Initialize(*domains); err != nil {
+		log.Fatal(err)
+	}
+	if domainpolicy.Primary() == "" {
+		log.Fatal("deployment domain policy must contain a primary domain")
+	}
 	var allowedUIDs []uint32
 	if *ownerAccess {
 		var err error

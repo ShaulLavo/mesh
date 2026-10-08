@@ -14,7 +14,7 @@ func TestWaitForTXTRequiresEveryAuthoritativeServer(t *testing.T) {
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := WaitForTXT(ctx, observer, Zone, "_acme-challenge.mesh.shaulavo.dev", "wanted", time.Millisecond); err != nil {
+	if err := WaitForTXT(ctx, observer, Zone(), "_acme-challenge.mesh.mesh.test", "wanted", time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	if observer.calls != 2 {
@@ -26,7 +26,7 @@ func TestWaitForTXTStopsAtContextBound(t *testing.T) {
 	observer := &sequenceObserver{err: errors.New("DNS unavailable")}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()
-	err := WaitForTXT(ctx, observer, Zone, "_acme-challenge.mesh.shaulavo.dev", "wanted", time.Millisecond)
+	err := WaitForTXT(ctx, observer, Zone(), "_acme-challenge.mesh.mesh.test", "wanted", time.Millisecond)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want deadline", err)
 	}

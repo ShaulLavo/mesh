@@ -8,6 +8,8 @@ if [ -z "${MESH:-}" ]; then
 fi
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/mesh-app-contract.XXXXXX")
 export MESH_STATE_DIR="$TEST_ROOT/state"
+mkdir -p "$TEST_ROOT/config"
+cp "$MESH_CONFIG_DIR/domains.json" "$TEST_ROOT/config/domains.json"
 export MESH_CONFIG_DIR="$TEST_ROOT/config"
 DAEMON=""
 

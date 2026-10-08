@@ -33,7 +33,7 @@ func TestServeDemandFlags(t *testing.T) {
 		"cwd without run":  func(f *serveFlags) string { f.run, f.cwdSet = "", true; return "5173" },
 		"idle without run": func(f *serveFlags) string { f.run, f.idleSet = "", true; return "5173" },
 		"directory target": func(f *serveFlags) string { return "./site" },
-		"public":           func(f *serveFlags) string { f.publicName = "dev.shaulavo.dev"; return "5173" },
+		"public":           func(f *serveFlags) string { f.publicName = "dev.mesh.test"; return "5173" },
 		"bad listen":       func(f *serveFlags) string { f.listens = []string{"5173:15173"}; return "5173" },
 		"self listen":      func(f *serveFlags) string { f.listens = []string{"5173=5173"}; return "5173" },
 		"bad env":          func(f *serveFlags) string { f.env = []string{"NOVALUE"}; return "5173" },

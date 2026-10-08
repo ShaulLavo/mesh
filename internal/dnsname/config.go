@@ -10,9 +10,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/tailnet"
 )
 
@@ -35,26 +38,30 @@ const (
 // PrivateNamesConfig is the validated, non-secret Pi configuration. TokenFile
 // points to a separate exact-0600 file and never contains the token itself.
 type PrivateNamesConfig struct {
-	ZoneID       string
-	TokenFile    string
-	ACMEEmail    string
-	DirectoryURL string
-	Environment  RenewalEnvironment
-	AcceptTerms  bool
-	Interval     time.Duration
-	Origins      []PrivateOrigin
-	PublicEdge   *PublicEdgeTarget
+	Domain            string
+	AdditionalConfigs []string
+	ZoneID            string
+	TokenFile         string
+	ACMEEmail         string
+	DirectoryURL      string
+	Environment       RenewalEnvironment
+	AcceptTerms       bool
+	Interval          time.Duration
+	Origins           []PrivateOrigin
+	PublicEdge        *PublicEdgeTarget
 }
 
 type privateNamesConfigFile struct {
-	ZoneID       string            `json:"zoneId"`
-	TokenFile    string            `json:"tokenFile"`
-	ACMEEmail    string            `json:"acmeEmail"`
-	DirectoryURL string            `json:"directoryUrl"`
-	AcceptTerms  bool              `json:"acceptTerms"`
-	Interval     string            `json:"interval"`
-	Origins      []PrivateOrigin   `json:"origins"`
-	PublicEdge   *PublicEdgeTarget `json:"publicEdge"`
+	Domain            string            `json:"domain"`
+	AdditionalConfigs []string          `json:"additionalConfigs,omitempty"`
+	ZoneID            string            `json:"zoneId"`
+	TokenFile         string            `json:"tokenFile"`
+	ACMEEmail         string            `json:"acmeEmail"`
+	DirectoryURL      string            `json:"directoryUrl"`
+	AcceptTerms       bool              `json:"acceptTerms"`
+	Interval          string            `json:"interval"`
+	Origins           []PrivateOrigin   `json:"origins"`
+	PublicEdge        *PublicEdgeTarget `json:"publicEdge"`
 }
 
 // LoadPrivateNamesConfig strictly parses one Pi configuration file without
@@ -90,6 +97,20 @@ func LoadPrivateNamesConfig(configPath string) (PrivateNamesConfig, error) {
 	}
 	if err := requireJSONEOF(decoder); err != nil {
 		return PrivateNamesConfig{}, fmt.Errorf("dnsname: parse private-names config %s: %w", configPath, err)
+	}
+	if raw.Domain == "" {
+		raw.Domain = Zone()
+	}
+	if !slices.Contains(domainpolicy.Domains(), raw.Domain) {
+		return PrivateNamesConfig{}, errors.New("dnsname: renewal domain is not configured")
+	}
+	if len(raw.AdditionalConfigs) > 7 {
+		return PrivateNamesConfig{}, errors.New("dnsname: too many additional renewal configurations")
+	}
+	for _, path := range raw.AdditionalConfigs {
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+			return PrivateNamesConfig{}, errors.New("dnsname: additional config must be a clean absolute path")
+		}
 	}
 	interval := defaultRenewalInterval
 	if raw.Interval != "" {
@@ -133,7 +154,7 @@ func LoadPrivateNamesConfig(configPath string) (PrivateNamesConfig, error) {
 		publicEdge = &copyTarget
 	}
 	return PrivateNamesConfig{
-		ZoneID: raw.ZoneID, TokenFile: raw.TokenFile, ACMEEmail: raw.ACMEEmail, DirectoryURL: raw.DirectoryURL, Environment: environment,
+		Domain: raw.Domain, AdditionalConfigs: slices.Clone(raw.AdditionalConfigs), ZoneID: raw.ZoneID, TokenFile: raw.TokenFile, ACMEEmail: raw.ACMEEmail, DirectoryURL: raw.DirectoryURL, Environment: environment,
 		AcceptTerms: raw.AcceptTerms, Interval: interval, Origins: append([]PrivateOrigin(nil), raw.Origins...), PublicEdge: publicEdge,
 	}, nil
 }
@@ -194,6 +215,7 @@ type PrivateNamesRuntimeOptions struct {
 
 // PrivateNamesRuntime is one fully wired operational reconciliation loop.
 type PrivateNamesRuntime struct {
+	Additional    []*PrivateNamesRuntime
 	Manager       *PrivateNamesManager
 	PublicManager *PublicCertificateManager
 	Environment   RenewalEnvironment
@@ -203,10 +225,51 @@ type PrivateNamesRuntime struct {
 // NewPrivateNamesRuntime wires Cloudflare, authoritative DNS observation,
 // Let's Encrypt, Tailscale discovery, and bounded origin distribution.
 func NewPrivateNamesRuntime(configPath string, options PrivateNamesRuntimeOptions) (*PrivateNamesRuntime, error) {
-	config, err := LoadPrivateNamesConfig(configPath)
+	return newPrivateNamesRuntime(configPath, options, map[string]bool{}, map[string]bool{})
+}
+
+func newPrivateNamesRuntime(configPath string, options PrivateNamesRuntimeOptions, paths, domains map[string]bool) (*PrivateNamesRuntime, error) {
+	absolute, err := filepath.Abs(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("dnsname: resolve renewal configuration: %w", err)
+	}
+	if paths[absolute] || len(paths) >= 8 {
+		return nil, errors.New("dnsname: repeated or excessive renewal configuration")
+	}
+	paths[absolute] = true
+	config, err := LoadPrivateNamesConfig(absolute)
 	if err != nil {
 		return nil, err
 	}
+	if domains[config.Domain] {
+		return nil, errors.New("dnsname: duplicate renewal domain")
+	}
+	domains[config.Domain] = true
+
+	runtime, err := configuredPrivateNamesRuntime(config, options)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range config.AdditionalConfigs {
+		additional, err := newPrivateNamesRuntime(path, options, paths, domains)
+		if err != nil {
+			return nil, err
+		}
+		runtime.Additional = append(runtime.Additional, additional)
+	}
+	return runtime, nil
+}
+
+type renewalActors struct {
+	config       PrivateNamesConfig
+	options      PrivateNamesRuntimeOptions
+	environment  RenewalEnvironment
+	stateDir     string
+	directoryURL string
+	provider     Provider
+}
+
+func configuredPrivateNamesRuntime(config PrivateNamesConfig, options PrivateNamesRuntimeOptions) (*PrivateNamesRuntime, error) {
 	directoryURL := config.DirectoryURL
 	if options.DirectoryURL != "" {
 		directoryURL = options.DirectoryURL
@@ -230,62 +293,109 @@ func NewPrivateNamesRuntime(configPath string, options PrivateNamesRuntimeOption
 	if err != nil {
 		return nil, err
 	}
-	environmentState := filepath.Join(stateDir, "private-names", string(environment))
-	issuer, err := NewIssuer(IssuerConfig{
-		DirectoryURL: directoryURL, Email: config.ACMEEmail, StateDir: environmentState, Name: WildcardName,
-		AcceptTerms: config.AcceptTerms || options.AcceptTerms,
-		Solver:      DNS01Solver{Provider: provider, Observer: AuthoritativeObserver{}, Zone: Zone},
-	})
+	if options.DiscoverSelf == nil {
+		options.DiscoverSelf = tailnet.Self
+	}
+	if options.DiscoverPeers == nil {
+		options.DiscoverPeers = tailnet.Peers
+	}
+	actors := renewalActors{config: config, options: options, environment: environment, stateDir: stateDir, directoryURL: directoryURL, provider: provider}
+	issuer, err := actors.issuer(ProfilePrivateOrigin)
 	if err != nil {
 		return nil, err
 	}
-	var distributor CertificateDistributor
-	if options.Distribute {
-		distributor, err = NewDistributor(DistributorConfig{Profile: ProfilePrivateOrigin, Signer: options.Signer, Environment: environment})
-		if err != nil {
-			return nil, err
-		}
-	}
-	discoverSelf := options.DiscoverSelf
-	if discoverSelf == nil {
-		discoverSelf = tailnet.Self
-	}
-	discoverPeers := options.DiscoverPeers
-	if discoverPeers == nil {
-		discoverPeers = tailnet.Peers
+	distributor, err := actors.distributor(ProfilePrivateOrigin)
+	if err != nil {
+		return nil, err
 	}
 	manager, err := NewPrivateNamesManager(PrivateNamesManagerConfig{
-		Provider: provider, Renewer: issuer, Distributor: distributor, Origins: config.Origins,
-		DiscoverSelf: discoverSelf, DiscoverPeers: discoverPeers,
+		Domain: config.Domain, Provider: provider, Renewer: issuer, Distributor: distributor, Origins: config.Origins,
+		DiscoverSelf: options.DiscoverSelf, DiscoverPeers: options.DiscoverPeers,
 	})
 	if err != nil {
 		return nil, err
 	}
-	var publicManager *PublicCertificateManager
-	if config.PublicEdge != nil {
-		publicState := filepath.Join(stateDir, "public-edge", string(environment))
-		publicIssuer, err := NewIssuer(IssuerConfig{
-			DirectoryURL: directoryURL, Email: config.ACMEEmail, StateDir: publicState, Name: PublicWildcardName,
-			AcceptTerms: config.AcceptTerms || options.AcceptTerms,
-			Solver:      DNS01Solver{Provider: provider, Observer: AuthoritativeObserver{}, Zone: Zone},
-		})
-		if err != nil {
-			return nil, err
-		}
-		var publicDistributor CertificateDistributor
-		if options.Distribute {
-			publicDistributor, err = NewDistributor(DistributorConfig{Profile: ProfilePublicEdge, Signer: options.Signer, Environment: environment})
-			if err != nil {
-				return nil, err
-			}
-		}
-		publicManager, err = NewPublicCertificateManager(PublicCertificateManagerConfig{
-			Renewer: publicIssuer, Distributor: publicDistributor, Target: *config.PublicEdge,
-			DiscoverSelf: discoverSelf, DiscoverPeers: discoverPeers,
-		})
-		if err != nil {
-			return nil, err
-		}
+	publicManager, err := actors.publicManager()
+	if err != nil {
+		return nil, err
 	}
 	return &PrivateNamesRuntime{Manager: manager, PublicManager: publicManager, Environment: environment, Interval: config.Interval}, nil
+}
+
+func (a renewalActors) issuer(profile CertificateProfile) (*Issuer, error) {
+	purpose := string(profile)
+	if profile == ProfilePrivateOrigin {
+		purpose = "private-names"
+	}
+	return NewIssuer(IssuerConfig{
+		DirectoryURL: a.directoryURL, Email: a.config.ACMEEmail,
+		StateDir:    renewalState(a.stateDir, purpose, a.config.Domain, a.environment),
+		Name:        domainpolicy.Wildcard(a.config.Domain, profile == ProfilePrivateOrigin),
+		AcceptTerms: a.config.AcceptTerms || a.options.AcceptTerms,
+		Solver:      DNS01Solver{Provider: a.provider, Observer: AuthoritativeObserver{}, Zone: a.config.Domain},
+	})
+}
+func (a renewalActors) distributor(profile CertificateProfile) (CertificateDistributor, error) {
+	if !a.options.Distribute {
+		return nil, nil
+	}
+	return NewDistributor(DistributorConfig{Name: domainpolicy.Wildcard(a.config.Domain, profile == ProfilePrivateOrigin), Profile: profile, Signer: a.options.Signer, Environment: a.environment})
+}
+func (a renewalActors) publicManager() (*PublicCertificateManager, error) {
+	if a.config.PublicEdge == nil {
+		return nil, nil
+	}
+	issuer, err := a.issuer(ProfilePublicEdge)
+	if err != nil {
+		return nil, err
+	}
+	distributor, err := a.distributor(ProfilePublicEdge)
+	if err != nil {
+		return nil, err
+	}
+	return NewPublicCertificateManager(PublicCertificateManagerConfig{
+		Renewer: issuer, Distributor: distributor, Target: *a.config.PublicEdge,
+		DiscoverSelf: a.options.DiscoverSelf, DiscoverPeers: a.options.DiscoverPeers,
+	})
+}
+
+func renewalState(root, purpose, domain string, environment RenewalEnvironment) string {
+	if domain == domainpolicy.Current().LegacyCertificateDomain {
+		return filepath.Join(root, purpose, string(environment))
+	}
+	return filepath.Join(root, purpose, "domains", domain, string(environment))
+}
+
+func (r *PrivateNamesRuntime) All() []*PrivateNamesRuntime {
+	result := []*PrivateNamesRuntime{r}
+	for _, additional := range r.Additional {
+		result = append(result, additional.All()...)
+	}
+	return result
+}
+
+func (r *PrivateNamesRuntime) Run(ctx context.Context, public bool, report func(error)) error {
+	var group sync.WaitGroup
+	results := make(chan error, len(r.All()))
+	for _, runtime := range r.All() {
+		if public && runtime.PublicManager == nil {
+			continue
+		}
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			if public {
+				results <- runtime.PublicManager.Run(ctx, runtime.Interval, report)
+				return
+			}
+			results <- runtime.Manager.Run(ctx, runtime.Interval, report)
+		}()
+	}
+	group.Wait()
+	close(results)
+	var combined error
+	for err := range results {
+		combined = errors.Join(combined, err)
+	}
+	return combined
 }

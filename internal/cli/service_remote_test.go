@@ -67,17 +67,17 @@ func serviceRemoteDial(host HostRecord, handler func(protocol.Control) protocol.
 
 func TestRemoteServiceBoundaryRejectsChangedPreviewAndAcknowledgement(t *testing.T) {
 	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
-	requested := protocol.ServiceInfo{Name: "blog", Target: "./site", PublicName: "blog.shaulavo.dev"}
+	requested := protocol.ServiceInfo{Name: "blog", Target: "./site", PublicName: "blog.mesh.test"}
 	_, _, err := previewRemoteService(context.Background(), host, serviceRemoteDial(host, func(protocol.Control) protocol.Control {
 		return protocol.Control{Type: protocol.TypeServicePreviewed, ServicePreview: &protocol.ServicePreview{
-			Service: protocol.ServiceInfo{Name: "other", Kind: "static", Target: "/home/me/site", PublicName: "blog.shaulavo.dev"},
+			Service: protocol.ServiceInfo{Name: "other", Kind: "static", Target: "/home/me/site", PublicName: "blog.mesh.test"},
 		}}
 	}), requested, false)
 	if err == nil || !strings.Contains(err.Error(), "changed service semantics") {
 		t.Fatalf("changed preview error = %v", err)
 	}
 
-	preview := protocol.ServicePreview{Service: protocol.ServiceInfo{Name: "blog", Kind: "static", Target: "/home/me/site", PublicName: "blog.shaulavo.dev"}}
+	preview := protocol.ServicePreview{Service: protocol.ServiceInfo{Name: "blog", Kind: "static", Target: "/home/me/site", PublicName: "blog.mesh.test"}}
 	_, err = upsertRemoteService(context.Background(), host, serviceRemoteDial(host, func(protocol.Control) protocol.Control {
 		ack := preview.Service
 		ack.Target = "/home/me/other"
@@ -172,11 +172,11 @@ func TestRemoteServiceAndEdgeListsRequireCanonicalOrder(t *testing.T) {
 		page++
 		if page == 1 {
 			return protocol.Control{Type: protocol.TypeEdgeListed, EdgeRoutes: []protocol.EdgeRouteInfo{{
-				PublicName: "z.shaulavo.dev", ServiceName: "z", DisplayAlias: "pc", LastSeenAt: time.Now().UTC(), Online: true,
+				PublicName: "z.mesh.test", ServiceName: "z", DisplayAlias: "pc", LastSeenAt: time.Now().UTC(), Online: true,
 			}}, EdgeNextCursor: "next"}
 		}
 		return protocol.Control{Type: protocol.TypeEdgeListed, EdgeRoutes: []protocol.EdgeRouteInfo{{
-			PublicName: "a.shaulavo.dev", ServiceName: "a", DisplayAlias: "pc", LastSeenAt: time.Now().UTC(), Online: true,
+			PublicName: "a.mesh.test", ServiceName: "a", DisplayAlias: "pc", LastSeenAt: time.Now().UTC(), Online: true,
 		}}}
 	}))
 	if err == nil || !strings.Contains(err.Error(), "canonical order") {

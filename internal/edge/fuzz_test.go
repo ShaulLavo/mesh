@@ -11,14 +11,14 @@ import (
 
 func FuzzCanonicalPublicHost(f *testing.F) {
 	for _, seed := range []string{
-		"app.shaulavo.dev", "app.shaulavo.dev:1", "app.shaulavo.dev:80", "app.shaulavo.dev:443", "app.shaulavo.dev:65535",
-		strings.Repeat("a", 63) + ".shaulavo.dev", ":443", "[app.shaulavo.dev]:443", "APP.shaulavo.dev", "app.shaulavo.dev.",
-		"shaulavo.dev", "a.b.shaulavo.dev", "mesh.shaulavo.dev", "*.shaulavo.dev", "-app.shaulavo.dev", "app-.shaulavo.dev",
-		"app_name.shaulavo.dev", "café.shaulavo.dev", "app.shaulavo.dev:", "app.shaulavo.dev:0", "app.shaulavo.dev:00",
-		"app.shaulavo.dev:+1", "app.shaulavo.dev:-1", "app.shaulavo.dev:65536", "app.shaulavo.dev:99999999999999999999",
-		"app.shaulavo.dev:http", "app.shaulavo.dev: 443", "192.0.2.1", "[2001:db8::1]:443", "user@app.shaulavo.dev",
-		"app.shaulavo.dev/path", "app.shaulavo.dev\\path", "app.shaulavo.dev\r\nInjected: true", "app.shaulavo.dev\x00",
-		"app.shaulavo.dev,other.shaulavo.dev", string([]byte{0xff, '.', 's', 'h', 'a', 'u', 'l', 'a', 'v', 'o', '.', 'd', 'e', 'v'}),
+		"app.mesh.test", "app.mesh.test:1", "app.mesh.test:80", "app.mesh.test:443", "app.mesh.test:65535",
+		strings.Repeat("a", 63) + ".mesh.test", ":443", "[app.mesh.test]:443", "APP.mesh.test", "app.mesh.test.",
+		"mesh.test", "a.b.mesh.test", "mesh.mesh.test", "*.mesh.test", "-app.mesh.test", "app-.mesh.test",
+		"app_name.mesh.test", "café.mesh.test", "app.mesh.test:", "app.mesh.test:0", "app.mesh.test:00",
+		"app.mesh.test:+1", "app.mesh.test:-1", "app.mesh.test:65536", "app.mesh.test:99999999999999999999",
+		"app.mesh.test:http", "app.mesh.test: 443", "192.0.2.1", "[2001:db8::1]:443", "user@app.mesh.test",
+		"app.mesh.test/path", "app.mesh.test\\path", "app.mesh.test\r\nInjected: true", "app.mesh.test\x00",
+		"app.mesh.test,other.mesh.test", string([]byte{0xff, '.', 's', 'h', 'a', 'u', 'l', 'a', 'v', 'o', '.', 'd', 'e', 'v'}),
 	} {
 		f.Add(seed)
 	}

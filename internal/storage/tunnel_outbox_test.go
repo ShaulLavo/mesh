@@ -25,7 +25,7 @@ func TestTunnelOutboxRetainsAmbiguousAndMismatchedAttempts(t *testing.T) {
 	target, _ := storageEdgeIdentity(t)
 	_, key := storageEdgeIdentity(t)
 	var first tunnel.Mutation
-	_, err := store.DeliverTunnelMutation(ctx, target, key, tunnel.Create, "retry.shaulavo.dev", func(_ context.Context, mutation tunnel.Mutation) (tunnel.Ack, error) {
+	_, err := store.DeliverTunnelMutation(ctx, target, key, tunnel.Create, "retry.mesh.test", func(_ context.Context, mutation tunnel.Mutation) (tunnel.Ack, error) {
 		first = mutation
 		return tunnel.Ack{}, errors.New("connection lost after send")
 	})
@@ -69,14 +69,14 @@ func TestTunnelOutboxDefinitiveRefusalDoesNotBlockRelease(t *testing.T) {
 	store := openTunnelTestStore(t)
 	target, _ := storageEdgeIdentity(t)
 	_, key := storageEdgeIdentity(t)
-	_, err := store.DeliverTunnelMutation(ctx, target, key, tunnel.Create, "refused.shaulavo.dev", func(_ context.Context, mutation tunnel.Mutation) (tunnel.Ack, error) {
+	_, err := store.DeliverTunnelMutation(ctx, target, key, tunnel.Create, "refused.mesh.test", func(_ context.Context, mutation tunnel.Mutation) (tunnel.Ack, error) {
 		return tunnel.Ack{}, io.ErrUnexpectedEOF
 	})
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatal(err)
 	}
 	var sent []tunnel.Mutation
-	ack, err := store.DeliverTunnelMutation(ctx, target, key, tunnel.Release, "owned.shaulavo.dev", func(_ context.Context, mutation tunnel.Mutation) (tunnel.Ack, error) {
+	ack, err := store.DeliverTunnelMutation(ctx, target, key, tunnel.Release, "owned.mesh.test", func(_ context.Context, mutation tunnel.Mutation) (tunnel.Ack, error) {
 		sent = append(sent, mutation)
 		ack := ackTestTunnel(t, mutation)
 		if mutation.Action == tunnel.Create {
@@ -87,7 +87,7 @@ func TestTunnelOutboxDefinitiveRefusalDoesNotBlockRelease(t *testing.T) {
 	if err != nil || ack.Sequence != 2 || len(sent) != 2 || sent[0].Action != tunnel.Create || sent[1].Action != tunnel.Release {
 		t.Fatalf("release following pending refusal = %+v, %v, %+v", ack, err, sent)
 	}
-	ack, err = store.DeliverTunnelMutation(ctx, target, key, tunnel.Create, "again.shaulavo.dev", func(_ context.Context, mutation tunnel.Mutation) (tunnel.Ack, error) {
+	ack, err = store.DeliverTunnelMutation(ctx, target, key, tunnel.Create, "again.mesh.test", func(_ context.Context, mutation tunnel.Mutation) (tunnel.Ack, error) {
 		ack := ackTestTunnel(t, mutation)
 		ack.Error = tunnel.ErrCapacity.Error()
 		return ack, nil
@@ -95,7 +95,7 @@ func TestTunnelOutboxDefinitiveRefusalDoesNotBlockRelease(t *testing.T) {
 	if err == nil || ack.Sequence != 3 || ack.Error != tunnel.ErrCapacity.Error() {
 		t.Fatalf("current refusal = %+v, %v", ack, err)
 	}
-	ack, err = store.DeliverTunnelMutation(ctx, target, key, tunnel.Release, "owned.shaulavo.dev", func(_ context.Context, mutation tunnel.Mutation) (tunnel.Ack, error) {
+	ack, err = store.DeliverTunnelMutation(ctx, target, key, tunnel.Release, "owned.mesh.test", func(_ context.Context, mutation tunnel.Mutation) (tunnel.Ack, error) {
 		return ackTestTunnel(t, mutation), nil
 	})
 	if err != nil || ack.Sequence != 4 {
@@ -116,9 +116,9 @@ func TestTunnelOutboxProcessesSerializeAndRecoverKilledSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = store.Close()
-	first, firstRecords := startTunnelWorker(t, ctx, path, "hold", "first.shaulavo.dev")
+	first, firstRecords := startTunnelWorker(t, ctx, path, "hold", "first.mesh.test")
 	original := receiveTunnelWorkerMutation(t, ctx, firstRecords)
-	second, secondRecords := startTunnelWorker(t, ctx, path, "finish", "second.shaulavo.dev")
+	second, secondRecords := startTunnelWorker(t, ctx, path, "finish", "second.mesh.test")
 	select {
 	case early := <-secondRecords:
 		t.Fatalf("second process sent before first released stream lock: %s", early)
@@ -137,7 +137,7 @@ func TestTunnelOutboxProcessesSerializeAndRecoverKilledSend(t *testing.T) {
 	if err := json.Unmarshal(successorBytes, &successor); err != nil {
 		t.Fatal(err)
 	}
-	if successor.Sequence != 2 || successor.PublicName != "second.shaulavo.dev" {
+	if successor.Sequence != 2 || successor.PublicName != "second.mesh.test" {
 		t.Fatalf("successor = %+v", successor)
 	}
 	if err := second.Wait(); err != nil {

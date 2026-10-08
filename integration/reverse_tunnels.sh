@@ -67,20 +67,20 @@ cli() {
 
 request() {
   curl --noproxy '*' --silent --show-error --max-time 1 \
-    --header "Host: ${2:-blog.shaulavo.dev}" \
+    --header "Host: ${2:-blog.mesh.test}" \
     --header 'X-Forwarded-For: 203.0.113.77' --header 'X-Forwarded-Proto: https' \
     "http://127.0.0.1:$public_port${1:-/}" "${@:3}"
 }
 
 expect_404() {
   local status
-  status=$(request / "${1:-blog.shaulavo.dev}" --output /dev/null --write-out '%{http_code}') || fail 'inactive route request failed'
+  status=$(request / "${1:-blog.mesh.test}" --output /dev/null --write-out '%{http_code}') || fail 'inactive route request failed'
   [[ $status == 404 ]] || fail "inactive hostname returned $status, want 404"
 }
 
 wait_inactive() {
   for _ in {1..60}; do
-    [[ $(request / blog.shaulavo.dev --output /dev/null --write-out '%{http_code}' 2>/dev/null) == 404 ]] && return 0
+    [[ $(request / blog.mesh.test --output /dev/null --write-out '%{http_code}' 2>/dev/null) == 404 ]] && return 0
     sleep 0.02
   done
   fail 'disconnect left a published tunnel route'
@@ -92,7 +92,7 @@ start_edge() {
   edge_pid=$!
   for _ in {1..100}; do
     alive "$edge_pid" || fail 'edge daemon exited during startup'
-    if [[ -S $edge_state/daemon.sock ]] && request / blog.shaulavo.dev --output /dev/null 2>/dev/null; then
+    if [[ -S $edge_state/daemon.sock ]] && request / blog.mesh.test --output /dev/null 2>/dev/null; then
       return 0
     fi
     sleep 0.03
@@ -102,7 +102,7 @@ start_edge() {
 
 start_forward() {
   ssh "${ssh_options[@]}" -M -S "$test_root/ssh-control" -i "$client_state/identity.key" -N \
-    -R "blog.shaulavo.dev:80:localhost:$backend_port" mesh@127.0.0.21 >"$test_root/ssh.out" 2>"$test_root/ssh.log" &
+    -R "blog.mesh.test:80:localhost:$backend_port" mesh@127.0.0.21 >"$test_root/ssh.out" 2>"$test_root/ssh.log" &
   ssh_pid=$!
   for _ in {1..100}; do
     alive "$ssh_pid" || fail 'stock ssh -N -R exited before activation'
@@ -123,6 +123,7 @@ for tool in go python3 curl ssh ssh-keygen timeout; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 mkdir -p "$edge_state" "$client_state" "$other_state" "$config_dir" "$test_root/bin" "$test_root/site"
+cp "$MESH_CONFIG_DIR/domains.json" "$config_dir/domains.json"
 chmod 0700 "$edge_state" "$client_state" "$other_state"
 ln -s "$repo_root/integration/helpers/fake_tailscale" "$test_root/bin/tailscale"
 if [[ -z ${MESH_INTEGRATION_BINARY:-} ]]; then
@@ -185,30 +186,30 @@ ssh_options=(-F /dev/null -p "$ssh_port" -o BatchMode=yes -o ConnectTimeout=1
   -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
 
 start_edge
-cli serve claim "$edge_id" blog.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'CLI create claim'
+cli serve claim "$edge_id" blog.mesh.test --yes >"$test_root/command.log" 2>&1 || fail 'CLI create claim'
 expect_404
-cli serve claim "$edge_id" blog.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'same-owner convergent claim'
-if env MESH_STATE_DIR="$other_state" MESH_CONFIG_DIR="$config_dir" "$mesh" serve claim "$edge_id" blog.shaulavo.dev --yes >"$test_root/command.log" 2>&1; then
+cli serve claim "$edge_id" blog.mesh.test --yes >"$test_root/command.log" 2>&1 || fail 'same-owner convergent claim'
+if env MESH_STATE_DIR="$other_state" MESH_CONFIG_DIR="$config_dir" "$mesh" serve claim "$edge_id" blog.mesh.test --yes >"$test_root/command.log" 2>&1; then
   fail 'another authorized owner displaced the durable claim'
 fi
 start_forward
-[[ $(request /mesh blog.shaulavo.dev --output /dev/null --write-out '%{http_code}') == 404 ]] || fail 'terminal route crossed the edge'
-expect_forward_refused "$client_state/identity.key" "blog.shaulavo.dev:80:localhost:$backend_port"
-expect_forward_refused "$client_state/identity.key" "unclaimed.shaulavo.dev:80:localhost:$backend_port"
-expect_forward_refused "$other_state/identity.key" "blog.shaulavo.dev:80:localhost:$backend_port"
-expect_forward_refused "$test_root/unauthorized.key" "blog.shaulavo.dev:80:localhost:$backend_port"
-for bind in blog '*.shaulavo.dev' 127.0.0.1; do
+[[ $(request /mesh blog.mesh.test --output /dev/null --write-out '%{http_code}') == 404 ]] || fail 'terminal route crossed the edge'
+expect_forward_refused "$client_state/identity.key" "blog.mesh.test:80:localhost:$backend_port"
+expect_forward_refused "$client_state/identity.key" "unclaimed.mesh.test:80:localhost:$backend_port"
+expect_forward_refused "$other_state/identity.key" "blog.mesh.test:80:localhost:$backend_port"
+expect_forward_refused "$test_root/unauthorized.key" "blog.mesh.test:80:localhost:$backend_port"
+for bind in blog '*.mesh.test' 127.0.0.1; do
   expect_forward_refused "$client_state/identity.key" "$bind:80:localhost:$backend_port"
 done
 for port in 0 81; do
-  expect_forward_refused "$client_state/identity.key" "blog.shaulavo.dev:$port:localhost:$backend_port"
+  expect_forward_refused "$client_state/identity.key" "blog.mesh.test:$port:localhost:$backend_port"
 done
-if cli unserve blog.shaulavo.dev --host "$edge_id" >"$test_root/command.log" 2>&1; then
+if cli unserve blog.mesh.test --host "$edge_id" >"$test_root/command.log" 2>&1; then
   fail 'owner release accepted an active tunnel'
 fi
 [[ $(request /) == MESH_REVERSE_TUNNEL_BODY ]] || fail 'refused mutation disturbed the active forward'
 ssh "${ssh_options[@]}" -S "$test_root/ssh-control" -O cancel \
-  -R "blog.shaulavo.dev:80:localhost:$backend_port" mesh@127.0.0.21 >"$test_root/command.log" 2>&1 || fail 'stock SSH cancellation'
+  -R "blog.mesh.test:80:localhost:$backend_port" mesh@127.0.0.21 >"$test_root/command.log" 2>&1 || fail 'stock SSH cancellation'
 expect_404
 alive "$ssh_pid" || fail 'cancelling a forward closed its SSH connection'
 stop_process "$ssh_pid"
@@ -232,24 +233,24 @@ wait_inactive
 
 # Revocation preserves reservations but blocks new activation and creation.
 cat "$other_state/identity.key.pub" >"$edge_state/authorized_keys"
-expect_forward_refused "$client_state/identity.key" "blog.shaulavo.dev:80:localhost:$backend_port"
-if cli serve claim "$edge_id" revoked.shaulavo.dev --yes >"$test_root/command.log" 2>&1; then
+expect_forward_refused "$client_state/identity.key" "blog.mesh.test:80:localhost:$backend_port"
+if cli serve claim "$edge_id" revoked.mesh.test --yes >"$test_root/command.log" 2>&1; then
   fail 'revoked owner created a reservation'
 fi
-if cli unserve blog.shaulavo.dev --host "$edge_id" >"$test_root/command.log" 2>&1; then
+if cli unserve blog.mesh.test --host "$edge_id" >"$test_root/command.log" 2>&1; then
   fail 'revoked device withdrew an edge reservation'
 fi
-env MESH_STATE_DIR="$edge_state" "$mesh" unserve blog.shaulavo.dev --local-edge >"$test_root/command.log" 2>&1 || fail 'destination-local recovery could not release revoked claim'
+env MESH_STATE_DIR="$edge_state" "$mesh" unserve blog.mesh.test --local-edge >"$test_root/command.log" 2>&1 || fail 'destination-local recovery could not release revoked claim'
 expect_404
 
 cat "$client_state/identity.key.pub" "$other_state/identity.key.pub" >"$edge_state/authorized_keys"
-cli serve claim "$edge_id" recovery.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'create recovery reservation'
+cli serve claim "$edge_id" recovery.mesh.test --yes >"$test_root/command.log" 2>&1 || fail 'create recovery reservation'
 rm "$client_state/identity.key"
 rm "$edge_state/authorized_keys"
-env MESH_STATE_DIR="$edge_state" "$mesh" unserve recovery.shaulavo.dev --local-edge >"$test_root/command.log" 2>&1 || fail 'Unix socket recovery with missing authorization state'
-expect_404 recovery.shaulavo.dev
+env MESH_STATE_DIR="$edge_state" "$mesh" unserve recovery.mesh.test --local-edge >"$test_root/command.log" 2>&1 || fail 'Unix socket recovery with missing authorization state'
+expect_404 recovery.mesh.test
 cat "$other_state/identity.key.pub" >"$edge_state/authorized_keys"
 chmod 0600 "$edge_state/authorized_keys"
-env MESH_STATE_DIR="$other_state" MESH_CONFIG_DIR="$config_dir" "$mesh" serve claim "$edge_id" recovery.shaulavo.dev --yes >"$test_root/command.log" 2>&1 || fail 'local recovery did not release hostname ownership'
+env MESH_STATE_DIR="$other_state" MESH_CONFIG_DIR="$config_dir" "$mesh" serve claim "$edge_id" recovery.mesh.test --yes >"$test_root/command.log" 2>&1 || fail 'local recovery did not release hostname ownership'
 
 echo 'PASS: stock CLI and OpenSSH reserved, activated, refused invalid forwards, disconnected, restarted, denied revoked controls, and recovered through the Unix socket'

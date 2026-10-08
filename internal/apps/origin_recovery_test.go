@@ -35,7 +35,7 @@ func TestSetupDoesNotBlockOtherApps(t *testing.T) {
 		mutationDone <- err
 	}()
 	<-workers.entered
-	proof, err := Sign("mesh-app/admission/v1", identityFor(f.ownerKey), 1, admission{ID: first.ID, Generation: first.Generation, Method: http.MethodGet, URI: "/", Host: first.ID + "." + Domain, Until: f.now.Add(30 * time.Second)}, f.edgeKey, f.now)
+	proof, err := Sign("mesh-app/admission/v1", identityFor(f.ownerKey), 1, admission{ID: first.ID, Generation: first.Generation, Method: http.MethodGet, URI: "/", Host: first.ID + "." + Domain(), Until: f.now.Add(30 * time.Second)}, f.edgeKey, f.now)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,12 +24,11 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/acme"
-
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/transport"
+	"golang.org/x/crypto/acme"
 )
 
 func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *testing.T) {
@@ -38,7 +37,7 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 	signerID, signer := composedIdentity(t)
 
 	originState := compactSocketTempDir(t)
-	liveStore, err := dnsname.NewBundleStore(filepath.Join(originState, "live"), dnsname.WildcardName)
+	liveStore, err := dnsname.NewBundleStore(filepath.Join(originState, "live"), dnsname.WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +49,7 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	stagingStore, err := dnsname.NewBundleStore(filepath.Join(originState, "staging"), dnsname.WildcardName)
+	stagingStore, err := dnsname.NewBundleStore(filepath.Join(originState, "staging"), dnsname.WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,9 +100,9 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 	}
 	issuer, err := dnsname.NewIssuer(dnsname.IssuerConfig{
 		DirectoryURL: dnsname.LetsEncryptStagingURL, Email: "owner@example.com", StateDir: filepath.Join(t.TempDir(), "issuer"),
-		Name: dnsname.WildcardName, AcceptTerms: true, Timeout: 2 * time.Second, Now: func() time.Time { return now },
+		Name: dnsname.WildcardName(), AcceptTerms: true, Timeout: 2 * time.Second, Now: func() time.Time { return now },
 		Solver: dnsname.DNS01Solver{
-			Provider: provider, Observer: composedTXTObserver{api: cloudflareAPI}, Zone: dnsname.Zone,
+			Provider: provider, Observer: composedTXTObserver{api: cloudflareAPI}, Zone: dnsname.Zone(),
 			PropagationTimeout: time.Second, PollInterval: time.Millisecond,
 		},
 		NewClient: func(crypto.Signer) dnsname.ACMEClient {
@@ -150,11 +149,11 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 		t.Fatal(err)
 	}
 
-	addressRecords := cloudflareAPI.recordsFor("origin.mesh.shaulavo.dev", "A")
+	addressRecords := cloudflareAPI.recordsFor("origin.mesh.mesh.test", "A")
 	if len(addressRecords) != 1 || addressRecords[0].Content != "100.64.0.9" || addressRecords[0].Proxied || addressRecords[0].Comment != dnsname.ManagedARecordComment {
 		t.Fatalf("composed A records = %#v", addressRecords)
 	}
-	if records := cloudflareAPI.recordsFor("_acme-challenge.mesh.shaulavo.dev", "TXT"); len(records) != 0 {
+	if records := cloudflareAPI.recordsFor("_acme-challenge.mesh.mesh.test", "TXT"); len(records) != 0 {
 		t.Fatalf("DNS-01 records after exact cleanup = %#v", records)
 	}
 	staged, err := stagingStore.Load()
@@ -300,7 +299,7 @@ func (*composedACME) GetReg(context.Context, string) (*acme.Account, error) {
 }
 
 func (*composedACME) AuthorizeOrder(_ context.Context, identifiers []acme.AuthzID, _ ...acme.OrderOption) (*acme.Order, error) {
-	if len(identifiers) != 1 || identifiers[0].Type != "dns" || identifiers[0].Value != dnsname.WildcardName {
+	if len(identifiers) != 1 || identifiers[0].Type != "dns" || identifiers[0].Value != dnsname.WildcardName() {
 		return nil, fmt.Errorf("unexpected identifiers %#v", identifiers)
 	}
 	return &acme.Order{URI: "order", AuthzURLs: []string{"authorization"}}, nil
@@ -309,7 +308,7 @@ func (*composedACME) AuthorizeOrder(_ context.Context, identifiers []acme.AuthzI
 func (*composedACME) GetAuthorization(context.Context, string) (*acme.Authorization, error) {
 	return &acme.Authorization{
 		URI: "authorization", Status: acme.StatusPending,
-		Identifier: acme.AuthzID{Type: "dns", Value: dnsname.PrivateZone}, Wildcard: true,
+		Identifier: acme.AuthzID{Type: "dns", Value: "mesh." + dnsname.Zone()}, Wildcard: true,
 		Challenges: []*acme.Challenge{{Type: "dns-01", Token: "challenge-token"}},
 	}, nil
 }
@@ -317,7 +316,7 @@ func (*composedACME) GetAuthorization(context.Context, string) (*acme.Authorizat
 func (*composedACME) DNS01ChallengeRecord(string) (string, error) { return "authoritative-value", nil }
 
 func (c *composedACME) Accept(context.Context, *acme.Challenge) (*acme.Challenge, error) {
-	records := c.api.recordsFor("_acme-challenge.mesh.shaulavo.dev", "TXT")
+	records := c.api.recordsFor("_acme-challenge.mesh.mesh.test", "TXT")
 	for _, record := range records {
 		value, err := strconv.Unquote(record.Content)
 		if err == nil && value == "authoritative-value" && record.Comment == dnsname.ManagedTXTRecordComment {
@@ -352,7 +351,7 @@ func (c *composedACME) CreateOrderCert(_ context.Context, _ string, csrDER []byt
 		return nil, "", err
 	}
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1200), Subject: pkix.Name{CommonName: dnsname.WildcardName}, DNSNames: request.DNSNames,
+		SerialNumber: big.NewInt(1200), Subject: pkix.Name{CommonName: dnsname.WildcardName()}, DNSNames: request.DNSNames,
 		NotBefore: c.now.Add(-time.Hour), NotAfter: c.now.Add(90 * 24 * time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}

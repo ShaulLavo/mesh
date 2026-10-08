@@ -142,10 +142,10 @@ func checkStaticAssetBurst(t *testing.T, service bool) {
 		}()
 	}
 	defer func() { cancel(); requests.Wait() }()
-	initialHost := app.ID + "." + apps.Domain
+	initialHost := app.ID + "." + apps.Domain()
 	initialPrefix := ""
 	if service {
-		initialHost = "service.shaulavo.dev"
+		initialHost = "service.mesh.test"
 		initialPrefix = "/assets"
 		now := time.Now()
 		err := registry.Replace([]edge.PublishedRoute{{
@@ -168,8 +168,8 @@ func checkStaticAssetBurst(t *testing.T, service bool) {
 			t.Fatal("first eight assets did not reach origin")
 		}
 	}
-	launch(8, app.ID+"."+apps.Domain, "")
-	launch(9, app.ID+"."+apps.Domain, "")
+	launch(8, app.ID+"."+apps.Domain(), "")
+	launch(9, app.ID+"."+apps.Domain(), "")
 	select {
 	case response := <-responses:
 		t.Fatalf("normal asset burst rejected: %d %s", response.Code, response.Body.String())

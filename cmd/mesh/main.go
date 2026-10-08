@@ -6,15 +6,23 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/charmbracelet/fang"
-
 	"github.com/shaul/mesh/internal/cli"
+	"github.com/shaul/mesh/internal/domainpolicy"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/release"
 )
 
 func main() {
+	if err := initializeDeployment(os.Args[1:]); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
 	root := cli.NewCommand(commandDependencies())
 	if plainAgentCommand(os.Args[1:]) {
 		finishAgentCommand(os.Args[1], root.ExecuteContext(context.Background()))
@@ -67,4 +75,66 @@ func finishAgentCommand(name string, err error) {
 	}
 	_, _ = fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
+}
+
+func entryCommand(args []string) string {
+	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		if args[0] == "--leave-key" {
+			if len(args) < 2 {
+				return ""
+			}
+			args = args[2:]
+			continue
+		}
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
+}
+
+func namingCommand(args []string) bool {
+	command := entryCommand(args)
+	return command != "device" && !plainAgentCommand([]string{command})
+}
+
+func deploymentRequested(args []string) bool {
+	switch entryCommand(args) {
+	case "app", "serve", "unserve", "private-names":
+		return true
+	case "daemon":
+		for _, arg := range args {
+			if arg == "--https-port" || arg == "--edge" || arg == "--private-names-config" || strings.HasPrefix(arg, "--https-port=") || strings.HasPrefix(arg, "--edge=") || strings.HasPrefix(arg, "--private-names-config=") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func initializeDeployment(args []string) error {
+	if !namingCommand(args) {
+		return nil
+	}
+	config, err := cli.ConfigPath()
+	if err != nil {
+		return fmt.Errorf("deployment configuration: %w", err)
+	}
+	state, err := paths.StateDirPath()
+	if err != nil {
+		return fmt.Errorf("deployment state: %w", err)
+	}
+	path := filepath.Join(filepath.Dir(config), "domains.json")
+	var policyErr error
+	switch entryCommand(args) {
+	case "ls", "list":
+		policyErr = domainpolicy.InitializeReadOnlyDeployment(path, state)
+	default:
+		policyErr = domainpolicy.InitializeDeployment(path, state, deploymentRequested(args))
+	}
+	if policyErr != nil {
+		return fmt.Errorf("initialize deployment policy: %w", policyErr)
+	}
+	return nil
 }

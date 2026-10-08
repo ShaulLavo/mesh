@@ -162,7 +162,7 @@ func NewIssuer(config IssuerConfig) (*Issuer, error) {
 		return nil, errors.New("dnsname: ACME state directory is empty")
 	}
 	if config.Name == "" {
-		config.Name = WildcardName
+		config.Name = WildcardName()
 	}
 	if _, err := certificateProbeName(config.Name); err != nil {
 		return nil, err
@@ -309,7 +309,7 @@ func (i *Issuer) Renew(ctx context.Context, force bool) (bundle Bundle, renewed 
 	}
 	certificatePEM := make([]byte, 0)
 	for _, certificate := range certificateDER {
-		certificatePEM = append(certificatePEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate})...)
+		certificatePEM = append(certificatePEM, pem.EncodeToMemory(&pem.Block{Type: certificatePEMType, Bytes: certificate})...)
 	}
 	privateKeyPEM, err := marshalPrivateKey(certificateKey)
 	if err != nil {

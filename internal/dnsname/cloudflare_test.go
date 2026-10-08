@@ -46,10 +46,10 @@ func TestCloudflareUsesCurrentRecordEndpointsAndBearerToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := provider.ListRecords(ctx, "pc.mesh.shaulavo.dev", RecordA); err != nil {
+	if _, err := provider.ListRecords(ctx, "pc.mesh.mesh.test", RecordA); err != nil {
 		t.Fatal(err)
 	}
-	input := RecordInput{Type: RecordTXT, Name: "_acme-challenge.mesh.shaulavo.dev", Content: "challenge", TTL: 60, Comment: ManagedTXTRecordComment}
+	input := RecordInput{Type: RecordTXT, Name: "_acme-challenge.mesh.mesh.test", Content: "challenge", TTL: 60, Comment: ManagedTXTRecordComment}
 	created, err := provider.CreateRecord(ctx, input)
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +78,7 @@ func TestCloudflareUsesCurrentRecordEndpointsAndBearerToken(t *testing.T) {
 			t.Fatalf("path = %q", request.Path)
 		}
 	}
-	if requests[0].Query.Get("name.exact") != "pc.mesh.shaulavo.dev" || requests[0].Query.Get("type") != "A" {
+	if requests[0].Query.Get("name.exact") != "pc.mesh.mesh.test" || requests[0].Query.Get("type") != "A" {
 		t.Fatalf("list query = %#v", requests[0].Query)
 	}
 	if requests[1].Body.Content != `"challenge"` || requests[1].Body.Proxied || requests[1].Body.Comment != ManagedTXTRecordComment {
@@ -103,7 +103,7 @@ func TestCloudflareBoundsAndRedactsFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = provider.ListRecords(context.Background(), "pc.mesh.shaulavo.dev", RecordA)
+			_, err = provider.ListRecords(context.Background(), "pc.mesh.mesh.test", RecordA)
 			if err == nil || !contains(err.Error(), "request failed") {
 				t.Fatalf("failure = %v", err)
 			}
@@ -122,7 +122,7 @@ func TestCloudflareNeverLeaksMalformedRecordFields(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"success": true,
 			"result": []cloudflareRecord{{
-				ID: marker + strings.Repeat("x", 512), Type: "A", Name: "pc.mesh.shaulavo.dev", Content: "100.64.0.8",
+				ID: marker + strings.Repeat("x", 512), Type: "A", Name: "pc.mesh.mesh.test", Content: "100.64.0.8",
 			}},
 			"result_info": map[string]int{"page": 1, "total_pages": 1},
 		})
@@ -132,7 +132,7 @@ func TestCloudflareNeverLeaksMalformedRecordFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = provider.ListRecords(context.Background(), "pc.mesh.shaulavo.dev", RecordA)
+	_, err = provider.ListRecords(context.Background(), "pc.mesh.mesh.test", RecordA)
 	if err == nil {
 		t.Fatal("malformed record response succeeded")
 	}
@@ -189,7 +189,7 @@ func TestCloudflareNeverForwardsBearerTokenAcrossRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.ListRecords(context.Background(), "pc.mesh.shaulavo.dev", RecordA); err == nil {
+	if _, err := provider.ListRecords(context.Background(), "pc.mesh.mesh.test", RecordA); err == nil {
 		t.Fatal("redirect response succeeded")
 	}
 	if destinationCalls != 0 {
@@ -198,7 +198,7 @@ func TestCloudflareNeverForwardsBearerTokenAcrossRedirect(t *testing.T) {
 }
 
 func TestCloudflareRejectsMalformedListRecordsBeforeMutation(t *testing.T) {
-	name := "pc.mesh.shaulavo.dev"
+	name := "pc.mesh.mesh.test"
 	base := cloudflareRecord{
 		ID: "record-id", Type: string(RecordA), Name: name, Content: "100.64.0.2",
 		TTL: DefaultRecordTTL, Proxied: false, Comment: ManagedARecordComment,
@@ -211,7 +211,7 @@ func TestCloudflareRejectsMalformedListRecordsBeforeMutation(t *testing.T) {
 		{name: "oversized ID", mutate: func(record *cloudflareRecord) { record.ID = strings.Repeat("a", cloudflareRecordIDMax+1) }},
 		{name: "non-canonical ID", mutate: func(record *cloudflareRecord) { record.ID = "record/id" }},
 		{name: "wrong type", mutate: func(record *cloudflareRecord) { record.Type = string(RecordTXT) }},
-		{name: "wrong name", mutate: func(record *cloudflareRecord) { record.Name = "other.mesh.shaulavo.dev" }},
+		{name: "wrong name", mutate: func(record *cloudflareRecord) { record.Name = "other.mesh.mesh.test" }},
 		{name: "non-canonical name", mutate: func(record *cloudflareRecord) { record.Name += "." }},
 	}
 	for _, test := range tests {
@@ -246,7 +246,7 @@ func TestCloudflareRejectsMalformedListRecordsBeforeMutation(t *testing.T) {
 
 func TestCloudflareRejectsMismatchedMutationResponses(t *testing.T) {
 	input := RecordInput{
-		Type: RecordA, Name: "pc.mesh.shaulavo.dev", Content: "100.64.0.3", TTL: DefaultRecordTTL,
+		Type: RecordA, Name: "pc.mesh.mesh.test", Content: "100.64.0.3", TTL: DefaultRecordTTL,
 		Comment: ManagedARecordComment,
 	}
 	base := cloudflareRecord{
@@ -258,7 +258,7 @@ func TestCloudflareRejectsMismatchedMutationResponses(t *testing.T) {
 		mutate func(*cloudflareRecord)
 	}{
 		{name: "type", mutate: func(record *cloudflareRecord) { record.Type = string(RecordTXT) }},
-		{name: "name", mutate: func(record *cloudflareRecord) { record.Name = "other.mesh.shaulavo.dev" }},
+		{name: "name", mutate: func(record *cloudflareRecord) { record.Name = "other.mesh.mesh.test" }},
 		{name: "content", mutate: func(record *cloudflareRecord) { record.Content = "100.64.0.4" }},
 		{name: "ownership", mutate: func(record *cloudflareRecord) { record.Comment = "human" }},
 		{name: "proxy", mutate: func(record *cloudflareRecord) { record.Proxied = true }},
@@ -336,7 +336,7 @@ func TestCloudflareRejectsRepeatedPagesAndDuplicateIDsBeforeMutation(t *testing.
 					id = test.secondRecordID
 				}
 				record := cloudflareRecord{
-					ID: id, Type: string(RecordA), Name: "pc.mesh.shaulavo.dev", Content: "100.64.0.2",
+					ID: id, Type: string(RecordA), Name: "pc.mesh.mesh.test", Content: "100.64.0.2",
 					TTL: DefaultRecordTTL, Comment: ManagedARecordComment,
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{
@@ -386,7 +386,7 @@ func TestListRecordsAcceptsEmptyCloudflareListing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := provider.ListRecords(context.Background(), "pc.mesh.shaulavo.dev", RecordA)
+	records, err := provider.ListRecords(context.Background(), "pc.mesh.mesh.test", RecordA)
 	if err != nil {
 		t.Fatalf("empty listing rejected: %v", err)
 	}

@@ -33,13 +33,13 @@ func TestRegistryRoutesLongestPrefixAndPreservesEscapedRequest(t *testing.T) {
 	registry := testRegistry(t, ModeDirectTLS, now)
 	defer registry.Close()
 	if err := registry.Replace([]PublishedRoute{
-		{Route: Route{PublicName: "app.shaulavo.dev", ServiceName: "app"}, Origin: testResolvedOrigin(originID, endpoint, now)},
-		{Route: Route{PublicName: "app.shaulavo.dev", ServiceName: "app/admin"}, Origin: testResolvedOrigin(originID, endpoint, now)},
+		{Route: Route{PublicName: "app.mesh.test", ServiceName: "app"}, Origin: testResolvedOrigin(originID, endpoint, now)},
+		{Route: Route{PublicName: "app.mesh.test", ServiceName: "app/admin"}, Origin: testResolvedOrigin(originID, endpoint, now)},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	request := publicRequest(http.MethodGet, "app.shaulavo.dev", "/app/admin/a%2Fb?q=secret%2Fvalue")
+	request := publicRequest(http.MethodGet, "app.mesh.test", "/app/admin/a%2Fb?q=secret%2Fvalue")
 	request.RemoteAddr = "[2001:db8:1:2::1234]:4321"
 	request.Header.Set("Forwarded", "for=attacker")
 	request.Header.Set("X-Forwarded-For", "203.0.113.8")
@@ -56,7 +56,7 @@ func TestRegistryRoutesLongestPrefixAndPreservesEscapedRequest(t *testing.T) {
 	if gotHeaders.Get("Forwarded") != "" || gotHeaders.Get("X-Forwarded-For") != "2001:db8:1:2::1234" {
 		t.Fatalf("untrusted forwarding headers survived: %#v", gotHeaders)
 	}
-	if gotHeaders.Get("X-Forwarded-Proto") != "https" || gotHeaders.Get("X-Forwarded-Host") != "app.shaulavo.dev" {
+	if gotHeaders.Get("X-Forwarded-Proto") != "https" || gotHeaders.Get("X-Forwarded-Host") != "app.mesh.test" {
 		t.Fatalf("rebuilt forwarding headers = %#v", gotHeaders)
 	}
 }
@@ -74,12 +74,12 @@ func TestProxyModeTrustsOnlyLoopbackForwardedScheme(t *testing.T) {
 	registry.forwarderTrusted = func(*http.Request) bool { return true }
 	defer registry.Close()
 	if err := registry.Replace([]PublishedRoute{{
-		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app"},
+		Route:  Route{PublicName: "app.mesh.test", ServiceName: "app"},
 		Origin: testResolvedOrigin(originID, testHTTPServerEndpoint(t, backend), now),
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	request := publicRequest(http.MethodGet, "app.shaulavo.dev", "/app")
+	request := publicRequest(http.MethodGet, "app.mesh.test", "/app")
 	request.RemoteAddr = "127.0.0.1:12345"
 	request.Header.Set("X-Forwarded-Proto", "https")
 	request.Header.Set("X-Forwarded-For", "198.51.100.8")
@@ -89,7 +89,7 @@ func TestProxyModeTrustsOnlyLoopbackForwardedScheme(t *testing.T) {
 		t.Fatalf("proxy response = %d, scheme did not survive", recorder.Code)
 	}
 
-	request = publicRequest(http.MethodGet, "app.shaulavo.dev", "/app")
+	request = publicRequest(http.MethodGet, "app.mesh.test", "/app")
 	request.RemoteAddr = "203.0.113.9:12345"
 	recorder = httptest.NewRecorder()
 	registry.ServeHTTP(recorder, request)
@@ -103,16 +103,16 @@ func TestRegistryHardReservesTerminalAndRejectsMalformedPublicRequests(t *testin
 	originID, _ := testIdentity(t)
 	registry := testRegistry(t, ModeDirectTLS, now)
 	if err := registry.Replace([]PublishedRoute{{
-		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app"},
+		Route:  Route{PublicName: "app.mesh.test", ServiceName: "app"},
 		Origin: testResolvedOrigin(originID, netip.MustParseAddrPort("127.0.0.1:9"), now),
 	}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, target := range []struct{ host, path string }{
-		{"app.shaulavo.dev", "/mesh"}, {"app.shaulavo.dev", "/mesh/control"},
-		{"app.shaulavo.dev", "/m%65sh"}, {"app.shaulavo.dev", "/m%2565sh/control"},
-		{"app.shaulavo.dev", "/m%252565sh/control"}, {"app.shaulavo.dev", "/m%25252565sh/control"},
-		{"mesh.shaulavo.dev", "/app"}, {"shaulavo.dev", "/app"}, {"a.b.shaulavo.dev", "/app"},
+		{"app.mesh.test", "/mesh"}, {"app.mesh.test", "/mesh/control"},
+		{"app.mesh.test", "/m%65sh"}, {"app.mesh.test", "/m%2565sh/control"},
+		{"app.mesh.test", "/m%252565sh/control"}, {"app.mesh.test", "/m%25252565sh/control"},
+		{"mesh.mesh.test", "/app"}, {"mesh.test", "/app"}, {"a.b.mesh.test", "/app"},
 	} {
 		request := publicRequest(http.MethodGet, target.host, target.path)
 		recorder := httptest.NewRecorder()
@@ -121,28 +121,28 @@ func TestRegistryHardReservesTerminalAndRejectsMalformedPublicRequests(t *testin
 			t.Fatalf("%s%s = %d, want 404", target.host, target.path, recorder.Code)
 		}
 	}
-	request := publicRequest(http.MethodConnect, "app.shaulavo.dev", "/app")
+	request := publicRequest(http.MethodConnect, "app.mesh.test", "/app")
 	recorder := httptest.NewRecorder()
 	registry.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("CONNECT = %d, want 404", recorder.Code)
 	}
-	request = publicRequest(http.MethodGet, "app.shaulavo.dev", "/app")
+	request = publicRequest(http.MethodGet, "app.mesh.test", "/app")
 	request.URL.Scheme = "http"
-	request.URL.Host = "app.shaulavo.dev"
+	request.URL.Host = "app.mesh.test"
 	recorder = httptest.NewRecorder()
 	registry.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("absolute form = %d, want 404", recorder.Code)
 	}
-	request = publicRequest(http.MethodGet, "app.shaulavo.dev", "/app")
-	request.TLS.ServerName = "other.shaulavo.dev"
+	request = publicRequest(http.MethodGet, "app.mesh.test", "/app")
+	request.TLS.ServerName = "other.mesh.test"
 	recorder = httptest.NewRecorder()
 	registry.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("mismatched SNI = %d, want 404", recorder.Code)
 	}
-	request = publicRequest(http.MethodGet, "app.shaulavo.dev", "/app")
+	request = publicRequest(http.MethodGet, "app.mesh.test", "/app")
 	request.TLS = nil
 	recorder = httptest.NewRecorder()
 	registry.ServeHTTP(recorder, request)
@@ -162,14 +162,14 @@ func TestRegistryHardReservesConfiguredTerminalPathWithoutBlockingOtherEscapes(t
 	}
 	defer registry.Close()
 	if err := registry.Replace([]PublishedRoute{{
-		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "control"},
+		Route:  Route{PublicName: "app.mesh.test", ServiceName: "control"},
 		Origin: testResolvedOrigin(originID, netip.MustParseAddrPort("127.0.0.1:9"), now),
 	}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, target := range []string{"/control/ws", "/control/ws/terminal", "/control%2fws", "/control%252fws/terminal"} {
 		recorder := httptest.NewRecorder()
-		registry.ServeHTTP(recorder, publicRequest(http.MethodGet, "app.shaulavo.dev", target))
+		registry.ServeHTTP(recorder, publicRequest(http.MethodGet, "app.mesh.test", target))
 		if recorder.Code != http.StatusNotFound {
 			t.Fatalf("configured terminal path %q = %d, want 404", target, recorder.Code)
 		}
@@ -188,12 +188,12 @@ func TestOfflineResponseIsSafeAndEscapesDisplayAlias(t *testing.T) {
 	originID, _ := testIdentity(t)
 	registry := testRegistry(t, ModeDirectTLS, now)
 	if err := registry.Replace([]PublishedRoute{{
-		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "internal/path"},
+		Route:  Route{PublicName: "app.mesh.test", ServiceName: "internal/path"},
 		Origin: ResolvedOrigin{Identity: originID, DisplayAlias: "Desk <one>", LastSeenAt: now.Add(-time.Minute)},
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	request := publicRequest(http.MethodGet, "app.shaulavo.dev", "/internal/path")
+	request := publicRequest(http.MethodGet, "app.mesh.test", "/internal/path")
 	recorder := httptest.NewRecorder()
 	registry.ServeHTTP(recorder, request)
 	body := recorder.Body.String()
@@ -220,11 +220,11 @@ func TestProxyDialFailureReturnsPromptSafeBadGateway(t *testing.T) {
 	originID, _ := testIdentity(t)
 	registry := testRegistry(t, ModeDirectTLS, now)
 	if err := registry.Replace([]PublishedRoute{{
-		Route: Route{PublicName: "app.shaulavo.dev", ServiceName: "app"}, Origin: testResolvedOrigin(originID, endpoint, now),
+		Route: Route{PublicName: "app.mesh.test", ServiceName: "app"}, Origin: testResolvedOrigin(originID, endpoint, now),
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	request := publicRequest(http.MethodGet, "app.shaulavo.dev", "/app")
+	request := publicRequest(http.MethodGet, "app.mesh.test", "/app")
 	recorder := httptest.NewRecorder()
 	started := time.Now()
 	registry.ServeHTTP(recorder, request)
@@ -371,19 +371,19 @@ func TestRegistryRequestBodyBoundsDoNotChangeOriginLiveness(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := registry.Replace([]PublishedRoute{{
-		Route: Route{PublicName: "app.shaulavo.dev", ServiceName: "app"}, Origin: testResolvedOrigin(originID, endpoint, now),
+		Route: Route{PublicName: "app.mesh.test", ServiceName: "app"}, Origin: testResolvedOrigin(originID, endpoint, now),
 	}}); err != nil {
 		t.Fatal(err)
 	}
 
-	known := publicRequestWithBody(http.MethodPost, "app.shaulavo.dev", "/app", strings.NewReader("123456789"))
+	known := publicRequestWithBody(http.MethodPost, "app.mesh.test", "/app", strings.NewReader("123456789"))
 	recorder := httptest.NewRecorder()
 	registry.ServeHTTP(recorder, known)
 	if recorder.Code != http.StatusRequestEntityTooLarge || dials.Load() != 0 {
 		t.Fatalf("known overflow = %d with %d dials", recorder.Code, dials.Load())
 	}
 
-	chunked := publicRequestWithBody(http.MethodPost, "app.shaulavo.dev", "/app", strings.NewReader("123456789"))
+	chunked := publicRequestWithBody(http.MethodPost, "app.mesh.test", "/app", strings.NewReader("123456789"))
 	chunked.ContentLength = -1
 	recorder = httptest.NewRecorder()
 	registry.ServeHTTP(recorder, chunked)
@@ -391,7 +391,7 @@ func TestRegistryRequestBodyBoundsDoNotChangeOriginLiveness(t *testing.T) {
 		t.Fatalf("chunked overflow = %d %q", recorder.Code, recorder.Body.String())
 	}
 
-	normal := publicRequest(http.MethodGet, "app.shaulavo.dev", "/app")
+	normal := publicRequest(http.MethodGet, "app.mesh.test", "/app")
 	recorder = httptest.NewRecorder()
 	registry.ServeHTTP(recorder, normal)
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "healthy" {
@@ -410,12 +410,12 @@ func TestRegistryReturnsRequestTimeoutForInboundBodyDeadline(t *testing.T) {
 	registry := testRegistry(t, ModeDirectTLS, now)
 	defer registry.Close()
 	if err := registry.Replace([]PublishedRoute{{
-		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app"},
+		Route:  Route{PublicName: "app.mesh.test", ServiceName: "app"},
 		Origin: testResolvedOrigin(originID, testHTTPServerEndpoint(t, backend), now),
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	request := publicRequest(http.MethodPost, "app.shaulavo.dev", "/app")
+	request := publicRequest(http.MethodPost, "app.mesh.test", "/app")
 	request.Body = timeoutReadCloser{}
 	request.ContentLength = -1
 	response := httptest.NewRecorder()
@@ -453,7 +453,7 @@ func TestRegistryProxiesWebSocketUpgrade(t *testing.T) {
 	registry := testRegistry(t, ModeDirectTLS, now)
 	defer registry.Close()
 	if err := registry.Replace([]PublishedRoute{{
-		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app"},
+		Route:  Route{PublicName: "app.mesh.test", ServiceName: "app"},
 		Origin: testResolvedOrigin(originID, testHTTPServerEndpoint(t, backend), now),
 	}}); err != nil {
 		t.Fatal(err)
@@ -473,7 +473,7 @@ func TestRegistryProxiesWebSocketUpgrade(t *testing.T) {
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	connection, response, err := websocket.Dial(ctx, "wss://app.shaulavo.dev:"+edgePort+"/app/socket", &websocket.DialOptions{HTTPClient: httpClient}) //nolint:bodyclose // websocket.Dial owns and closes its HTTP response body
+	connection, response, err := websocket.Dial(ctx, "wss://app.mesh.test:"+edgePort+"/app/socket", &websocket.DialOptions{HTTPClient: httpClient}) //nolint:bodyclose // websocket.Dial owns and closes its HTTP response body
 	if response != nil && response.Body != nil {
 		defer response.Body.Close() //nolint:errcheck // test cleanup
 	}
@@ -505,7 +505,7 @@ func TestRegistryBoundsConcurrentRequestsPerClient(t *testing.T) {
 	registry := testRegistry(t, ModeDirectTLS, now)
 	defer registry.Close()
 	if err := registry.Replace([]PublishedRoute{{
-		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app"},
+		Route:  Route{PublicName: "app.mesh.test", ServiceName: "app"},
 		Origin: testResolvedOrigin(originID, testHTTPServerEndpoint(t, backend), now),
 	}}); err != nil {
 		t.Fatal(err)
@@ -514,7 +514,7 @@ func TestRegistryBoundsConcurrentRequestsPerClient(t *testing.T) {
 	for range maximumConcurrentPerClient + 1 {
 		go func() {
 			recorder := httptest.NewRecorder()
-			registry.ServeHTTP(recorder, publicRequest(http.MethodGet, "app.shaulavo.dev", "/app"))
+			registry.ServeHTTP(recorder, publicRequest(http.MethodGet, "app.mesh.test", "/app"))
 			results <- recorder.Code
 		}()
 	}
@@ -546,7 +546,7 @@ func TestRegistryRetainsPerOriginAndGlobalBudgetsAcrossReplacement(t *testing.T)
 	originID, _ := testIdentity(t)
 	registry := testRegistry(t, ModeDirectTLS, now)
 	published := []PublishedRoute{{
-		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app"},
+		Route:  Route{PublicName: "app.mesh.test", ServiceName: "app"},
 		Origin: testResolvedOrigin(originID, netip.MustParseAddrPort("127.0.0.1:9"), now),
 	}}
 	if err := registry.Replace(published); err != nil {
@@ -568,13 +568,13 @@ func TestRegistryRetainsPerOriginAndGlobalBudgetsAcrossReplacement(t *testing.T)
 }
 
 func TestCanonicalPublicHostAndForwardedIP(t *testing.T) {
-	host, forwarded, err := canonicalPublicHost("app.shaulavo.dev:443")
-	if err != nil || host != "app.shaulavo.dev" || forwarded != "app.shaulavo.dev:443" {
+	host, forwarded, err := canonicalPublicHost("app.mesh.test:443")
+	if err != nil || host != "app.mesh.test" || forwarded != "app.mesh.test:443" {
 		t.Fatalf("canonical host = %q %q, %v", host, forwarded, err)
 	}
 	for _, invalid := range []string{
-		"APP.shaulavo.dev", "app.shaulavo.dev:0", "app.shaulavo.dev:0443", "app.shaulavo.dev:65536",
-		"user@app.shaulavo.dev", ":443", "[app.shaulavo.dev]:443",
+		"APP.mesh.test", "app.mesh.test:0", "app.mesh.test:0443", "app.mesh.test:65536",
+		"user@app.mesh.test", ":443", "[app.mesh.test]:443",
 	} {
 		if _, _, err := canonicalPublicHost(invalid); err == nil {
 			t.Fatalf("invalid host %q accepted", invalid)
@@ -607,9 +607,9 @@ func TestListCursorProgressesAcrossHeartbeatOnlyReplacement(t *testing.T) {
 	build := func(lastSeen time.Time) []PublishedRoute {
 		origin := testResolvedOrigin(originID, endpoint, lastSeen)
 		return []PublishedRoute{
-			{Route: Route{PublicName: "app.shaulavo.dev", ServiceName: "a"}, Origin: origin},
-			{Route: Route{PublicName: "app.shaulavo.dev", ServiceName: "b"}, Origin: origin},
-			{Route: Route{PublicName: "app.shaulavo.dev", ServiceName: "c"}, Origin: origin},
+			{Route: Route{PublicName: "app.mesh.test", ServiceName: "a"}, Origin: origin},
+			{Route: Route{PublicName: "app.mesh.test", ServiceName: "b"}, Origin: origin},
+			{Route: Route{PublicName: "app.mesh.test", ServiceName: "c"}, Origin: origin},
 		}
 	}
 	if err := registry.Replace(build(now)); err != nil {
@@ -641,7 +641,7 @@ func TestWakeWaitsForFreshAuthenticatedGeneration(t *testing.T) {
 	var registry *Registry
 	waker := wakerFunc(func(context.Context, string) error {
 		return registry.Replace([]PublishedRoute{{
-			Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app", WakeOnRequest: true},
+			Route:  Route{PublicName: "app.mesh.test", ServiceName: "app", WakeOnRequest: true},
 			Origin: testResolvedOrigin(originID, testHTTPServerEndpoint(t, backend), now),
 		}})
 	})
@@ -651,13 +651,13 @@ func TestWakeWaitsForFreshAuthenticatedGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := registry.Replace([]PublishedRoute{{
-		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app", WakeOnRequest: true},
+		Route:  Route{PublicName: "app.mesh.test", ServiceName: "app", WakeOnRequest: true},
 		Origin: ResolvedOrigin{Identity: originID, DisplayAlias: "Desktop", LastSeenAt: now.Add(-time.Minute)},
 	}}); err != nil {
 		t.Fatal(err)
 	}
 	recorder := httptest.NewRecorder()
-	registry.ServeHTTP(recorder, publicRequest(http.MethodGet, "app.shaulavo.dev", "/app"))
+	registry.ServeHTTP(recorder, publicRequest(http.MethodGet, "app.mesh.test", "/app"))
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "awake" {
 		t.Fatalf("wake response = %d %q", recorder.Code, recorder.Body.String())
 	}
@@ -673,7 +673,7 @@ func TestWakeTimeoutOrOwnershipTransferCannotDispatch(t *testing.T) {
 			waker := wakerFunc(func(context.Context, string) error {
 				if replace {
 					return registry.Replace([]PublishedRoute{{
-						Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app", WakeOnRequest: true},
+						Route:  Route{PublicName: "app.mesh.test", ServiceName: "app", WakeOnRequest: true},
 						Origin: testResolvedOrigin(secondID, netip.MustParseAddrPort("127.0.0.1:9"), now),
 					}})
 				}
@@ -685,13 +685,13 @@ func TestWakeTimeoutOrOwnershipTransferCannotDispatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := registry.Replace([]PublishedRoute{{
-				Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app", WakeOnRequest: true},
+				Route:  Route{PublicName: "app.mesh.test", ServiceName: "app", WakeOnRequest: true},
 				Origin: ResolvedOrigin{Identity: firstID, DisplayAlias: "Desktop", LastSeenAt: now.Add(-time.Minute)},
 			}}); err != nil {
 				t.Fatal(err)
 			}
 			recorder := httptest.NewRecorder()
-			registry.ServeHTTP(recorder, publicRequest(http.MethodGet, "app.shaulavo.dev", "/app"))
+			registry.ServeHTTP(recorder, publicRequest(http.MethodGet, "app.mesh.test", "/app"))
 			if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "Desktop") {
 				t.Fatalf("wake timeout response = %d %q", recorder.Code, recorder.Body.String())
 			}

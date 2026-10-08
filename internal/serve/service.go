@@ -18,14 +18,14 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/shaul/mesh/internal/domainpolicy"
 )
 
 const (
 	// ReservedPrefix is the default Mesh WebSocket protocol path. Service routes
 	// may not overlap the configured protocol path.
 	ReservedPrefix = "/mesh"
-	// PublicDomain is the only public DNS zone Mesh routes may name.
-	PublicDomain = "shaulavo.dev"
 	// MaximumServices bounds one origin snapshot and its service.list frame.
 	MaximumServices = 256
 	// MaximumServiceNameBytes bounds a canonical route name.
@@ -360,13 +360,9 @@ func validatePublicName(name string) error {
 	if len(name) > 253 || name != strings.ToLower(name) || strings.HasSuffix(name, ".") {
 		return fmt.Errorf("public name %q is not a canonical hostname", name)
 	}
-	suffix := "." + PublicDomain
-	if !strings.HasSuffix(name, suffix) {
-		return fmt.Errorf("public name %q is not one label below %s", name, PublicDomain)
-	}
-	label := strings.TrimSuffix(name, suffix)
-	if label == "" || strings.Contains(label, ".") {
-		return fmt.Errorf("public name %q is not one label below %s", name, PublicDomain)
+	label, _, accepted := domainpolicy.Label(name, false)
+	if !accepted {
+		return fmt.Errorf("public name %q is outside configured deployment domains", name)
 	}
 	if ReservedLabel(label) {
 		return fmt.Errorf("public name %q is reserved for private naming", name)

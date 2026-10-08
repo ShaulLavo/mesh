@@ -19,7 +19,7 @@ func TestCertificateControllerInstallsAndAcknowledgesBundle(t *testing.T) {
 	want := dnsname.SignedBundle{
 		Profile:     dnsname.ProfilePrivateOrigin,
 		Environment: dnsname.EnvironmentStaging,
-		TargetID:    "origin", SignerID: "renewer", PrivateName: "pc.mesh.shaulavo.dev", CertificatePEM: []byte("certificate"),
+		TargetID:    "origin", SignerID: "renewer", PrivateName: "pc.mesh.mesh.test", CertificatePEM: []byte("certificate"),
 		PrivateKeyPEM: []byte("private-key"), Signature: []byte("signature"),
 	}
 	installer := &certificateInstallerStub{bundle: dnsname.Bundle{Fingerprint: "fingerprint"}}
@@ -39,7 +39,7 @@ func TestCertificateControllerInstallsAndAcknowledgesBundle(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatalf("handled = %v, error = %v", handled, err)
 	}
-	if response.Type != protocol.TypeCertificateInstalled || response.RequestID != "certificate-1" || response.CertificateFingerprint != "fingerprint" || response.CertificateEnvironment != "staging" || response.CertificateProfile != "private-origin" || response.CertificatePrivateName != "pc.mesh.shaulavo.dev" {
+	if response.Type != protocol.TypeCertificateInstalled || response.RequestID != "certificate-1" || response.CertificateFingerprint != "fingerprint" || response.CertificateEnvironment != "staging" || response.CertificateProfile != "private-origin" || response.CertificatePrivateName != "pc.mesh.mesh.test" {
 		t.Fatalf("response = %#v", response)
 	}
 	if !reflect.DeepEqual(installer.got, want) {
@@ -141,8 +141,8 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 		t.Fatalf("certificate controller = %T", runtime.Controller)
 	}
 	now := time.Now().UTC()
-	publicCertificate, publicKey := daemonTestNamedCertificate(t, 801, now, dnsname.PublicWildcardName)
-	publicBundle, err := dnsname.ValidateBundle(publicCertificate, publicKey, dnsname.PublicWildcardName, now)
+	publicCertificate, publicKey := daemonTestNamedCertificate(t, 801, now, dnsname.PublicWildcardName())
+	publicBundle, err := dnsname.ValidateBundle(publicCertificate, publicKey, dnsname.PublicWildcardName(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,12 +171,12 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 		t.Fatalf("public live certificate was not hot-published: %v", err)
 	}
 
-	privateCertificate, privateKey := daemonTestNamedCertificate(t, 802, now, dnsname.WildcardName)
-	privateBundle, err := dnsname.ValidateBundle(privateCertificate, privateKey, dnsname.WildcardName, now)
+	privateCertificate, privateKey := daemonTestNamedCertificate(t, 802, now, dnsname.WildcardName())
+	privateBundle, err := dnsname.ValidateBundle(privateCertificate, privateKey, dnsname.WildcardName(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateLive, err := dnsname.SignBundle(privateBundle, target.ID, dnsname.ProfilePrivateOrigin, dnsname.EnvironmentLive, "pc.mesh.shaulavo.dev", privateSigner)
+	privateLive, err := dnsname.SignBundle(privateBundle, target.ID, dnsname.ProfilePrivateOrigin, dnsname.EnvironmentLive, "pc.mesh.mesh.test", privateSigner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 		t.Fatalf("private name was exposed before ingress readiness: %q", got)
 	}
 	runtime.PrivateNameReady()
-	if got := runtime.PrivateName(); got != "pc.mesh.shaulavo.dev" {
+	if got := runtime.PrivateName(); got != "pc.mesh.mesh.test" {
 		t.Fatalf("private name after ingress readiness = %q", got)
 	}
 	restarted, err := configureCertificates(certificateRuntimeConfig{
@@ -205,7 +205,7 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 		t.Fatalf("restarted private name was exposed before ingress readiness: %q", got)
 	}
 	restarted.PrivateNameReady()
-	if got := restarted.PrivateName(); got != "pc.mesh.shaulavo.dev" {
+	if got := restarted.PrivateName(); got != "pc.mesh.mesh.test" {
 		t.Fatalf("restarted private name after ingress readiness = %q", got)
 	}
 	for _, path := range []string{

@@ -8,7 +8,7 @@ func TestCanonicalHost(t *testing.T) {
 		want      string
 	}{
 		{authority: "PC.EXAMPLE.TS.NET.:443", want: "pc.example.ts.net"},
-		{authority: "APP.SHAULAVO.DEV.:12000", want: "app.shaulavo.dev"},
+		{authority: "APP.MESH.TEST.:12000", want: "app.mesh.test"},
 		{authority: "LOCALHOST.", want: "localhost"},
 		{authority: "127.99.12.34:12000", want: "127.99.12.34"},
 		{authority: "[::1]:12000", want: "::1"},
@@ -24,8 +24,8 @@ func TestCanonicalHost(t *testing.T) {
 	}
 	for _, authority := range []string{
 		"", "localhost:", "localhost:bad", "localhost:0", "localhost:65536",
-		"[localhost]:443", "[127.0.0.1]:443", "[::1%lo]:443", "app.shaulavo.dev..",
-		"app.shaulavo.dev/path", "attacker@app.shaulavo.dev", "app.shaulavo.dev ",
+		"[localhost]:443", "[127.0.0.1]:443", "[::1%lo]:443", "app.mesh.test..",
+		"app.mesh.test/path", "attacker@app.mesh.test", "app.mesh.test ",
 	} {
 		t.Run(authority, func(t *testing.T) {
 			if got, ok := CanonicalHost(authority); ok {

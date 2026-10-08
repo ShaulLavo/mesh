@@ -35,13 +35,13 @@ func TestTailnetOwnerCanViewAndToggleWithoutPairing(t *testing.T) {
 		return r
 	}
 	view := httptest.NewRecorder()
-	f.edge.ServeHost(view, request(URL(app.ID)+"/", ownerIP.String()), app.ID+"."+Domain)
+	f.edge.ServeHost(view, request(URL(app.ID)+"/", ownerIP.String()), app.ID+"."+Domain())
 	if view.Code != http.StatusOK || len(view.Result().Cookies()) != 0 {
 		t.Fatalf("Tailnet owner cannot view privately without cookies: %d", view.Code)
 	}
 	for _, visibility := range []string{"private", "public"} {
 		frame := httptest.NewRecorder()
-		f.edge.ServeHost(frame, request(ManagementOrigin+"/frame?id="+app.ID, ownerIP.String()), ManagementHost)
+		f.edge.ServeHost(frame, request(ManagementOrigin()+"/frame?id="+app.ID, ownerIP.String()), ManagementHost())
 		if !regexp.MustCompile(`owns:\s*true\b`).MatchString(frame.Body.String()) {
 			t.Fatal("fresh owner browser is missing controls")
 		}
@@ -50,44 +50,44 @@ func TestTailnetOwnerCanViewAndToggleWithoutPairing(t *testing.T) {
 			action = "private"
 		}
 		confirm := httptest.NewRecorder()
-		f.edge.ServeHost(confirm, request(ManagementOrigin+"/confirm?id="+app.ID+"&action="+action, ownerIP.String()), ManagementHost)
+		f.edge.ServeHost(confirm, request(ManagementOrigin()+"/confirm?id="+app.ID+"&action="+action, ownerIP.String()), ManagementHost())
 		csrf := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(confirm.Body.String())
 		if len(csrf) != 2 {
 			t.Fatal("owner was asked to pair instead of confirming")
 		}
 		form := url.Values{"id": {app.ID}, "action": {action}, "csrf": {csrf[1]}, "confirmation": {app.ID}}
 		post := func(ip, origin string) *httptest.ResponseRecorder {
-			r := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
+			r := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/action", strings.NewReader(form.Encode()))
 			r.RemoteAddr = ip + ":12345"
 			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			r.Header.Set("Origin", origin)
 			r.Header.Set("X-Forwarded-For", ownerIP.String())
 			w := httptest.NewRecorder()
-			f.edge.ServeHost(w, r, ManagementHost)
+			f.edge.ServeHost(w, r, ManagementHost())
 			return w
 		}
-		if post("203.0.113.1", ManagementOrigin).Code < 400 || post("100.64.0.3", ManagementOrigin).Code < 400 || post(ownerIP.String(), "https://attacker.test").Code < 400 {
+		if post("203.0.113.1", ManagementOrigin()).Code < 400 || post("100.64.0.3", ManagementOrigin()).Code < 400 || post(ownerIP.String(), "https://attacker.test").Code < 400 {
 			t.Fatal("visitor, spoofed IP, or cross-origin page acquired owner authority")
 		}
-		if got := post(ownerIP.String(), ManagementOrigin); got.Code != http.StatusSeeOther {
+		if got := post(ownerIP.String(), ManagementOrigin()); got.Code != http.StatusSeeOther {
 			t.Fatalf("owner toggle failed: %d %s", got.Code, got.Body.String())
 		}
 		if action == "public" {
 			visitor := httptest.NewRecorder()
-			f.edge.ServeHost(visitor, request(ManagementOrigin+"/frame?id="+app.ID, "203.0.113.1"), ManagementHost)
+			f.edge.ServeHost(visitor, request(ManagementOrigin()+"/frame?id="+app.ID, "203.0.113.1"), ManagementHost())
 			if !regexp.MustCompile(`owns:\s*false\b`).MatchString(visitor.Body.String()) {
 				t.Fatal("public visitor was given owner controls")
 			}
 		}
 	}
 	privateVisitor := httptest.NewRecorder()
-	f.edge.ServeHost(privateVisitor, request(URL(app.ID)+"/", "100.64.0.3"), app.ID+"."+Domain)
+	f.edge.ServeHost(privateVisitor, request(URL(app.ID)+"/", "100.64.0.3"), app.ID+"."+Domain())
 	if privateVisitor.Code != http.StatusSeeOther {
 		t.Fatal("unrecognized device viewed private app")
 	}
 	recognize = false
 	lost := httptest.NewRecorder()
-	f.edge.ServeHost(lost, request(URL(app.ID)+"/", ownerIP.String()), app.ID+"."+Domain)
+	f.edge.ServeHost(lost, request(URL(app.ID)+"/", ownerIP.String()), app.ID+"."+Domain())
 	if lost.Code != http.StatusSeeOther {
 		t.Fatal("automatic authority survived losing Tailnet identity")
 	}
@@ -102,7 +102,7 @@ func TestNetworkRecognitionPreservesExistingBrowserGrants(t *testing.T) {
 	f := newAppFixture(t)
 	cookie := pairedOwner(t, f)
 	networkOwner := identityFor(f.otherKey)
-	r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/", nil)
+	r := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/", nil)
 	r.AddCookie(cookie)
 	r = r.WithContext(context.WithValue(r.Context(), networkSessionKey{}, webauth.Session{Owners: []string{networkOwner}, CSRF: "network-csrf"}))
 	session, err := f.edge.browser(r)

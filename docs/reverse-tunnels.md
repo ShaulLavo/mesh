@@ -1,5 +1,8 @@
 # Reach a local app through the public edge
 
+The examples use `new.example` from the configured
+[deployment domains](deployment-domains.md). Replace it with your domain.
+
 Use a reverse tunnel to reach an app running on your current machine from
 outside the tailnet. The app stays on that machine. Disconnecting SSH removes
 its public route.
@@ -14,12 +17,12 @@ for the SSH connection.
 Reserve the exact hostname you want to use:
 
 ```bash
-mesh serve claim vps blog.shaulavo.dev
+mesh serve claim vps blog.new.example
 ```
 
 Read the public confirmation and accept it. Use `--yes` to skip the prompt.
 Cancelling creates no reservation. A hostname must contain exactly one label
-below `shaulavo.dev`; short names and wildcards are refused.
+below an accepted deployment domain; short names and wildcards are refused.
 
 A claim reserves the whole hostname, including every path. It cannot overlap
 an existing public service. The claim alone returns HTTP 404.
@@ -32,10 +35,10 @@ Start your app on local port 3000, then run:
 mesh_identity="${MESH_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/mesh}/identity.key"
 ssh -N -o ExitOnForwardFailure=yes -o IdentitiesOnly=yes -i "$mesh_identity" \
 	-p 2222 \
-	-R blog.shaulavo.dev:80:localhost:3000 vps.mesh.shaulavo.dev
+	-R blog.new.example:80:localhost:3000 vps.mesh.new.example
 ```
 
-Open `https://blog.shaulavo.dev`. The hostname in `-R` must exactly match the
+Open `https://blog.new.example`. The hostname in `-R` must exactly match the
 claim. Port `80` identifies the existing HTTP front door; SSH does not open
 a listener at that hostname and port. Change `3000` to your app's local port.
 
@@ -53,7 +56,7 @@ within 60 seconds.
 Disconnect its active SSH forward, then release the reservation:
 
 ```bash
-mesh unserve blog.shaulavo.dev --host vps
+mesh unserve blog.new.example --host vps
 ```
 
 Release requires the claiming identity's signature. Removing that identity
@@ -63,7 +66,7 @@ owner can still release an inactive claim.
 If you lose the claiming key, run this on the edge itself:
 
 ```bash
-mesh unserve blog.shaulavo.dev --local-edge
+mesh unserve blog.new.example --local-edge
 ```
 
 Recovery uses the local daemon socket and also stops an active forward. The

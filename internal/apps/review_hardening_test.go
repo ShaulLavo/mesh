@@ -40,7 +40,7 @@ func TestStoredReservedAppRestartAndCleanup(t *testing.T) {
 			if err = f.edgeStore.SaveAppState(context.Background(), "apps.edge", edgeRaw); err != nil {
 				t.Fatal(err)
 			}
-			if err = f.edgeStore.ReserveAppName(context.Background(), "mesh."+Domain, record.Owner); err != nil {
+			if err = f.edgeStore.ReserveAppNames(context.Background(), []string{"mesh." + Domain()}, record.Owner); err != nil {
 				t.Fatal(err)
 			}
 			f.origin.state.Apps[record.ID] = localApp{Record: record, Root: workspace, Phase: "running", Session: "legacy-worker"}
@@ -157,7 +157,7 @@ func TestCanonicalBogusTicketHasUniformReadOnlyWork(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, URL("7k3d")+"/?mesh_view="+strings.Repeat("A", 43), nil)
 			request.AddCookie(&http.Cookie{Name: webauth.ViewNonceCookie, Value: strings.Repeat("A", 43), Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 			response := httptest.NewRecorder()
-			if !f.edge.ServeHost(response, request, "7k3d."+Domain) || response.Code != http.StatusForbidden {
+			if !f.edge.ServeHost(response, request, "7k3d."+Domain()) || response.Code != http.StatusForbidden {
 				t.Fatal("unexpected refusal")
 			}
 			if baseline == "" {

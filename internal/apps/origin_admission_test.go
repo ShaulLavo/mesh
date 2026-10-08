@@ -36,7 +36,7 @@ func signedAdmissionRequest(t *testing.T, f *appFixture, app Record, until time.
 	t.Helper()
 	proof, err := Sign("mesh-app/admission/v1", identityFor(f.ownerKey), app.Generation, admission{
 		ID: app.ID, Generation: app.Generation, Method: http.MethodGet, URI: "/",
-		Host: app.ID + "." + Domain, Until: until, Download: download,
+		Host: app.ID + "." + Domain(), Until: until, Download: download,
 	}, f.edgeKey, f.now)
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestOriginAdmissionFloodIsolatedFromOtherAppsAndOwner(t *testing.T) {
 	}
 	t.Run("unrelated public app", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		if !f.edge.ServeHost(w, httptest.NewRequest(http.MethodGet, URL(other.ID)+"/", nil), other.ID+"."+Domain) || w.Code != http.StatusOK {
+		if !f.edge.ServeHost(w, httptest.NewRequest(http.MethodGet, URL(other.ID)+"/", nil), other.ID+"."+Domain()) || w.Code != http.StatusOK {
 			t.Fatalf("unrelated public app returned %d, want 200", w.Code)
 		}
 		if !strings.Contains(w.Body.String(), "original page") {
@@ -109,7 +109,7 @@ func TestOriginAdmissionFloodIsolatedFromOtherAppsAndOwner(t *testing.T) {
 			return []string{identityFor(f.ownerKey)}, nil
 		}
 		w := httptest.NewRecorder()
-		if !f.edge.ServeHost(w, httptest.NewRequest(http.MethodGet, URL(private.ID)+"/", nil), private.ID+"."+Domain) || w.Code != http.StatusOK {
+		if !f.edge.ServeHost(w, httptest.NewRequest(http.MethodGet, URL(private.ID)+"/", nil), private.ID+"."+Domain()) || w.Code != http.StatusOK {
 			t.Fatalf("owner private app returned %d, want 200", w.Code)
 		}
 		if !strings.Contains(w.Body.String(), "original page") {
@@ -133,7 +133,7 @@ func TestOriginAdmissionFloodIsolatedFromOtherAppsAndOwner(t *testing.T) {
 	})
 	t.Run("browser-visible overload", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		if !f.edge.ServeHost(w, httptest.NewRequest(http.MethodGet, URL(flooded.ID)+"/", nil), flooded.ID+"."+Domain) {
+		if !f.edge.ServeHost(w, httptest.NewRequest(http.MethodGet, URL(flooded.ID)+"/", nil), flooded.ID+"."+Domain()) {
 			t.Fatal("edge did not handle flooded app")
 		}
 		if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "1" {

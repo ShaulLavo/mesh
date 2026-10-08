@@ -12,6 +12,7 @@ import (
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/testdomains"
 )
 
 // startedWorkerVariable makes the test binary stand in for a session-worker
@@ -24,7 +25,10 @@ func TestMain(m *testing.M) {
 		runStartedWorkerFixture(os.Args[1:])
 		return
 	}
-	os.Exit(m.Run())
+	cleanupDomains := testdomains.Setup()
+	code := m.Run()
+	cleanupDomains()
+	os.Exit(code)
 }
 
 func runStartedWorkerFixture(args []string) {

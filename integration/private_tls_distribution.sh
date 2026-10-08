@@ -15,7 +15,7 @@ done
 
 TEST_ROOT=$(mktemp -d)
 export MESH_STATE_DIR="$TEST_ROOT/state"
-PRIVATE_NAME=pc.mesh.shaulavo.dev
+PRIVATE_NAME=pc.mesh.mesh.test
 DAEMON_PID=""
 
 cleanup() {
@@ -66,8 +66,8 @@ create_certificate() {
   local certificate=$2
   local private_key=$3
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -sha256 -nodes -days 30 \
-    -set_serial "$serial" -subj '/CN=*.mesh.shaulavo.dev' \
-    -addext 'subjectAltName=DNS:*.mesh.shaulavo.dev' \
+    -set_serial "$serial" -subj '/CN=*.mesh.mesh.test' \
+    -addext 'subjectAltName=DNS:*.mesh.mesh.test' \
     -keyout "$private_key" -out "$certificate" >/dev/null 2>&1 || fail "generate certificate $serial"
 }
 
@@ -337,5 +337,21 @@ EXPECTED_TWO=$(openssl x509 -in "$TEST_ROOT/live-two.crt" -noout -fingerprint -s
 [ "$EXPECTED_ONE" != "$EXPECTED_TWO" ] || fail "test certificates have the same fingerprint"
 [ "$(served_fingerprint)" = "$EXPECTED_TWO" ] || fail "live certificate did not hot-rotate"
 kill -0 "$DAEMON_PID" 2>/dev/null || fail "daemon restarted or exited during certificate rotation"
+
+# Pre-policy installations keep their certificate/name stores and routes when
+# the replacement executable first starts with no domains.json.
+kill "$DAEMON_PID" || fail "stop fixture daemon"
+wait "$DAEMON_PID" || true
+DAEMON_PID=""
+rm -- "$MESH_CONFIG_DIR/domains.json"
+"$MESH" daemon --https-port "$HTTPS_PORT" --certificate-renewer-id "$RENEWER_ID" >"$TEST_ROOT/migrated.log" 2>&1 &
+DAEMON_PID=$!
+wait_for_socket || fail "pre-policy restart failed: $(<"$TEST_ROOT/migrated.log")"
+[ -f "$MESH_CONFIG_DIR/domains.json" ] || fail "policy migration was not persisted"
+[ "$(served_fingerprint)" = "$EXPECTED_TWO" ] || fail "migration changed the certificate slot"
+[ "$(host_private_name)" = "$PRIVATE_NAME" ] || fail "migration lost the pinned private name"
+BODY=$(curl --noproxy '*' --fail --silent --max-time 2 --cacert "$TEST_ROOT/live-two.crt" \
+  --resolve "$PRIVATE_NAME:$HTTPS_PORT:127.0.0.1" "https://$PRIVATE_NAME:$HTTPS_PORT/site/") || fail "migrated HTTPS service request"
+[ "$BODY" = PRIVATE_TLS_MARKER ] || fail "migration lost the existing service route"
 
 echo "PASS: v3 verified private ingress, bound the private name, and hot-rotated live TLS"

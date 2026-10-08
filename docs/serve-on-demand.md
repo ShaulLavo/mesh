@@ -1,5 +1,8 @@
 # Serve a dev server on demand
 
+The examples use `new.example` from the configured
+[deployment domains](deployment-domains.md). Replace it with your domain.
+
 An on-demand route names the command behind a port. Mesh starts that command as
 a session when the first connection arrives, and stops it once no connection has
 been open for the idle window. Agents, browsers and scripts on the host all share
@@ -29,7 +32,7 @@ Point the dev server at the upstream ports (15173 and 13001 here), bound to
 A route with no `--at`, or with `--at :5173`, is reached only through its
 listeners. It is named by the listener port it is reached on, `:5173`: TARGET,
 or the first `--listen` port when TARGET is left out. With `--at /dev`, the
-route is `/dev`, and a request to `https://pc.mesh.shaulavo.dev/dev/` starts it
+route is `/dev`, and a request to `https://pc.mesh.new.example/dev/` starts it
 too. When TARGET is one of the listener ports, the tailnet path forwards
 straight to that listener's upstream.
 

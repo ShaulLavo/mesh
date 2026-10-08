@@ -28,7 +28,7 @@ func TestServiceControllerMutatesDurableAndLiveRegistry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("live"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service := protocol.ServiceInfo{DisplayName: "Site", Name: "site", Kind: "static", Target: root, PublicName: "site.shaulavo.dev"}
+	service := protocol.ServiceInfo{DisplayName: "Site", Name: "site", Kind: "static", Target: root, PublicName: "site.mesh.test"}
 
 	response, handled, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type:      protocol.TypeServiceUpsert,
@@ -43,7 +43,7 @@ func TestServiceControllerMutatesDurableAndLiveRegistry(t *testing.T) {
 	}
 	assertServiceResponse(t, registry, "/site/", http.StatusOK, "live")
 	persisted, err := store.GetService(context.Background(), "site")
-	if err != nil || persisted.Target != canonicalServiceRoot(t, root) || persisted.PublicName != "site.shaulavo.dev" {
+	if err != nil || persisted.Target != canonicalServiceRoot(t, root) || persisted.PublicName != "site.mesh.test" {
 		t.Fatalf("persisted service = %#v, %v", persisted, err)
 	}
 
@@ -62,7 +62,7 @@ func TestServiceControllerMutatesDurableAndLiveRegistry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(updatedRoot, "index.html"), []byte("updated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	updated := protocol.ServiceInfo{Name: "site", Kind: "static", Target: updatedRoot, PublicName: "site.shaulavo.dev"}
+	updated := protocol.ServiceInfo{Name: "site", Kind: "static", Target: updatedRoot, PublicName: "site.mesh.test"}
 	response, handled, err = controller.HandleControl(context.Background(), protocol.Control{
 		Type:      protocol.TypeServiceUpsert,
 		RequestID: "upsert-2",
@@ -154,7 +154,7 @@ func TestServiceControllerPreviewsRemoteRelativeTargetAndRescansBeforeUpsert(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := protocol.ServiceInfo{Name: "site", Target: "./site", PublicName: "site.shaulavo.dev"}
+	definition := protocol.ServiceInfo{Name: "site", Target: "./site", PublicName: "site.mesh.test"}
 	response, handled, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeServicePreview, RequestID: "preview", Service: &definition,
 	})
@@ -210,7 +210,7 @@ func TestServiceControllerRefusesResolvedTargetChangedAfterPreview(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requested := protocol.ServiceInfo{Name: "site", Target: "./site", PublicName: "site.shaulavo.dev"}
+	requested := protocol.ServiceInfo{Name: "site", Target: "./site", PublicName: "site.mesh.test"}
 	response, _, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeServicePreview, RequestID: "preview", Service: &requested,
 	})
@@ -237,7 +237,7 @@ func TestServiceControllerRefusesResolvedTargetChangedAfterPreview(t *testing.T)
 func TestServiceControllerRequiresUnserveBeforeChangingPublicName(t *testing.T) {
 	store, registry, controller := newServiceControllerTest(t, "/mesh")
 	root := t.TempDir()
-	public := protocol.ServiceInfo{Name: "site", Kind: "static", Target: root, PublicName: "site.shaulavo.dev"}
+	public := protocol.ServiceInfo{Name: "site", Kind: "static", Target: root, PublicName: "site.mesh.test"}
 	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeServiceUpsert, RequestID: "create", Service: &public,
 	}); err != nil {
@@ -245,7 +245,7 @@ func TestServiceControllerRequiresUnserveBeforeChangingPublicName(t *testing.T) 
 	}
 	for _, replacement := range []protocol.ServiceInfo{
 		{Name: "site", Kind: "static", Target: root},
-		{Name: "site", Kind: "static", Target: root, PublicName: "other.shaulavo.dev"},
+		{Name: "site", Kind: "static", Target: root, PublicName: "other.mesh.test"},
 	} {
 		if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
 			Type: protocol.TypeServiceUpsert, RequestID: "replace", Service: &replacement,
@@ -254,7 +254,7 @@ func TestServiceControllerRequiresUnserveBeforeChangingPublicName(t *testing.T) 
 		}
 	}
 	persisted, err := store.GetService(context.Background(), "site")
-	if err != nil || persisted.PublicName != "site.shaulavo.dev" || registry.Services()[0].PublicName != "site.shaulavo.dev" {
+	if err != nil || persisted.PublicName != "site.mesh.test" || registry.Services()[0].PublicName != "site.mesh.test" {
 		t.Fatalf("persisted = %#v, registry = %#v, error %v", persisted, registry.Services(), err)
 	}
 }
@@ -302,7 +302,7 @@ func TestClientServerRoutesProoflessAndProofBearingEdgeListWhenColocated(t *test
 		t.Fatal(err)
 	}
 	publisher := &recordingServicePublisher{listed: []protocol.EdgeRouteInfo{{
-		PublicName: "app.shaulavo.dev", ServiceName: "app", DisplayAlias: "Desktop", LastSeenAt: time.Now().UTC(),
+		PublicName: "app.mesh.test", ServiceName: "app", DisplayAlias: "Desktop", LastSeenAt: time.Now().UTC(),
 	}}}
 	services, err := newServiceController(context.Background(), t.TempDir(), store, serviceRegistry, publisher)
 	if err != nil {
@@ -385,7 +385,7 @@ func TestPublicServiceUpsertRollsBackDurablyAndCompensatesEdge(t *testing.T) {
 			}
 			defer base.Close() //nolint:errcheck // test cleanup
 			prior, err := base.UpsertService(context.Background(), meshserve.Service{
-				Name: "app", Kind: meshserve.Proxy, Target: "8080", PublicName: "old.shaulavo.dev",
+				Name: "app", Kind: meshserve.Proxy, Target: "8080", PublicName: "old.mesh.test",
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -406,7 +406,7 @@ func TestPublicServiceUpsertRollsBackDurablyAndCompensatesEdge(t *testing.T) {
 			broker := newStateBroker(1, time.Now)
 			controller.onCommitted = broker.servicesCommitted
 			controller.publishCommitted()
-			candidate := protocol.ServiceInfo{Name: "app", Kind: "proxy", Target: "8081", PublicName: "old.shaulavo.dev"}
+			candidate := protocol.ServiceInfo{Name: "app", Kind: "proxy", Target: "8081", PublicName: "old.mesh.test"}
 			if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
 				Type: protocol.TypeServiceUpsert, RequestID: "public-update", Service: &candidate,
 			}); err == nil {
@@ -432,7 +432,7 @@ func TestServiceDeleteRetryRepublishesAndEdgeListIsForwardedOnlyWhenConfigured(t
 	}
 	defer store.Close() //nolint:errcheck // test cleanup
 	persisted, err := store.UpsertService(context.Background(), meshserve.Service{
-		Name: "app", Kind: meshserve.Proxy, Target: "3000", PublicName: "app.shaulavo.dev",
+		Name: "app", Kind: meshserve.Proxy, Target: "3000", PublicName: "app.mesh.test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -441,7 +441,7 @@ func TestServiceDeleteRetryRepublishesAndEdgeListIsForwardedOnlyWhenConfigured(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	publisher := &recordingServicePublisher{failFirst: true, listed: []protocol.EdgeRouteInfo{{PublicName: "app.shaulavo.dev", ServiceName: "app", DisplayAlias: "Desktop", LastSeenAt: time.Now().UTC()}}}
+	publisher := &recordingServicePublisher{failFirst: true, listed: []protocol.EdgeRouteInfo{{PublicName: "app.mesh.test", ServiceName: "app", DisplayAlias: "Desktop", LastSeenAt: time.Now().UTC()}}}
 	controller, err := newServiceController(context.Background(), t.TempDir(), store, registry, publisher)
 	if err != nil {
 		t.Fatal(err)
@@ -491,7 +491,7 @@ func TestServiceControllerBlocksPublicTransitionWhileDurableCatalogIsUnknown(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := protocol.ServiceInfo{Name: "site", Kind: "proxy", Target: "3000", PublicName: "first.shaulavo.dev"}
+	first := protocol.ServiceInfo{Name: "site", Kind: "proxy", Target: "3000", PublicName: "first.mesh.test"}
 	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeServiceUpsert, RequestID: "first", Service: &first,
 	}); err == nil {
@@ -501,7 +501,7 @@ func TestServiceControllerBlocksPublicTransitionWhileDurableCatalogIsUnknown(t *
 		t.Fatalf("ambiguous state registry = %#v, catalogUnknown = %v, unsynced = %v", registry.Services(), controller.catalogUnknown, controller.unsynced)
 	}
 	second := first
-	second.PublicName = "second.shaulavo.dev"
+	second.PublicName = "second.mesh.test"
 	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeServiceUpsert, RequestID: "blocked", Service: &second,
 	}); err == nil || !strings.Contains(err.Error(), "not synchronized") {
@@ -552,7 +552,7 @@ func TestServiceControllerPublishesProxyWhoseUpstreamIsDown(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
-	service := protocol.ServiceInfo{Name: "app", Kind: "proxy", Target: port, PublicName: "app.shaulavo.dev", WakeOnRequest: true}
+	service := protocol.ServiceInfo{Name: "app", Kind: "proxy", Target: port, PublicName: "app.mesh.test", WakeOnRequest: true}
 
 	// Health is display-only: a down upstream must not keep the route off the edge.
 	response, _, err := controller.HandleControl(context.Background(), protocol.Control{

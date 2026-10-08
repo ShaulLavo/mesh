@@ -17,14 +17,13 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/spf13/cobra"
-
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
+	"github.com/spf13/cobra"
 )
 
 var commandTestTime = time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
@@ -131,7 +130,7 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 		response.Type = protocol.TypeHostInfoResult
 		response.Host = &protocol.HostInfo{
 			ServiceHealthSupported: true, ID: c.host.host.ID, MeshIdentity: c.host.host.MeshIdentity, TailscaleName: c.host.host.TailscaleName,
-			MachineName: c.host.host.MachineName, NameRevision: 1, PrivateName: "pc.mesh.shaulavo.dev", RecoverySupported: c.host.recoverTo != "",
+			MachineName: c.host.host.MachineName, NameRevision: 1, PrivateName: "pc.mesh.mesh.test", RecoverySupported: c.host.recoverTo != "",
 		}
 	case protocol.TypeStateWatch:
 		response.Type = protocol.TypeError
@@ -437,7 +436,7 @@ func TestServeCommandPreviewsThenPublishesCanonicalService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "serving https://pc.mesh.shaulavo.dev/api on pc (proxy -> 3000)") {
+	if !strings.Contains(stdout, "serving https://pc.mesh.mesh.test/api on pc (proxy -> 3000)") {
 		t.Fatalf("serve output = %q", stdout)
 	}
 	if got := host.recorded(); !slices.Equal(got, []string{
@@ -455,17 +454,17 @@ func TestPublicServeConfirmationUsesRemoteFactsAndYesOnlySkipsPrompt(t *testing.
 	confirmations := 0
 	confirm := func(_ context.Context, confirmation PublicConfirmation) (bool, error) {
 		confirmations++
-		if confirmation.Host.MachineName != "pc" || confirmation.Service.Target != "/home/alice/site" || confirmation.FileCount != 17 || confirmation.URL != "https://blog.shaulavo.dev/blog" {
+		if confirmation.Host.MachineName != "pc" || confirmation.Service.Target != "/home/alice/site" || confirmation.FileCount != 17 || confirmation.URL != "https://blog.mesh.test/blog" {
 			t.Fatalf("confirmation = %#v", confirmation)
 		}
 		return true, nil
 	}
 	stdout, _, err := executeCommand(t, Dependencies{DialControl: host.dial, ConfirmPublic: confirm},
-		"serve", "pc", "./site", "--at", "/blog", "--public", "blog.shaulavo.dev")
+		"serve", "pc", "./site", "--at", "/blog", "--public", "blog.mesh.test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if confirmations != 1 || !strings.Contains(stdout, "https://blog.shaulavo.dev/blog") {
+	if confirmations != 1 || !strings.Contains(stdout, "https://blog.mesh.test/blog") {
 		t.Fatalf("confirmations = %d, output %q", confirmations, stdout)
 	}
 	_, _, err = executeCommand(t, Dependencies{
@@ -474,7 +473,7 @@ func TestPublicServeConfirmationUsesRemoteFactsAndYesOnlySkipsPrompt(t *testing.
 			t.Fatal("--yes called confirmation adapter")
 			return false, nil
 		},
-	}, "serve", "pc", "./site", "--at", "/blog", "--public", "blog.shaulavo.dev", "--yes")
+	}, "serve", "pc", "./site", "--at", "/blog", "--public", "blog.mesh.test", "--yes")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +571,7 @@ func TestTerminalPublicConfirmationCancelsWithoutLeakingARead(t *testing.T) {
 	}
 	defer master.Close()   //nolint:errcheck // test resource cleanup
 	defer terminal.Close() //nolint:errcheck // test resource cleanup
-	confirmation := PublicConfirmation{Host: HostRecord{MachineName: "pc"}, Service: protocol.ServiceInfo{Kind: "proxy", Target: "3000"}, URL: "https://app.shaulavo.dev/api"}
+	confirmation := PublicConfirmation{Host: HostRecord{MachineName: "pc"}, Service: protocol.ServiceInfo{Kind: "proxy", Target: "3000"}, URL: "https://app.mesh.test/api"}
 	for iteration := 0; iteration < 8; iteration++ {
 		output := newPromptTestWriter()
 		confirm := terminalPublicConfirmation(terminal, output)
@@ -624,10 +623,10 @@ func TestServeListPrintsActualPrivateAndPublicURLs(t *testing.T) {
 	host := setupCommandTestHost(t)
 	host.services = []protocol.ServiceInfo{
 		{Name: "api", Kind: "proxy", Target: "3000", Healthy: true},
-		{Name: "blog", Kind: "static", Target: "/home/alice/site", PublicName: "blog.shaulavo.dev", Healthy: true},
+		{Name: "blog", Kind: "static", Target: "/home/alice/site", PublicName: "blog.mesh.test", Healthy: true},
 	}
 	host.edgeRoutes = []protocol.EdgeRouteInfo{{
-		PublicName: "blog.shaulavo.dev", ServiceName: "blog", DisplayAlias: "pc", LastSeenAt: commandTestTime, Online: true,
+		PublicName: "blog.mesh.test", ServiceName: "blog", DisplayAlias: "pc", LastSeenAt: commandTestTime, Online: true,
 	}}
 	for _, listCommand := range []string{"ls", "list"} {
 		t.Run(listCommand, func(t *testing.T) {
@@ -637,7 +636,7 @@ func TestServeListPrintsActualPrivateAndPublicURLs(t *testing.T) {
 			}
 			for _, want := range []string{
 				"ROUTE", "HOST", "KIND", "TARGET", "SCOPE", "HEALTH", "URL",
-				"https://pc.mesh.shaulavo.dev/api", "https://blog.shaulavo.dev/blog", "tailnet", "public", "healthy",
+				"https://pc.mesh.mesh.test/api", "https://blog.mesh.test/blog", "tailnet", "public", "healthy",
 			} {
 				if !strings.Contains(stdout, want) {
 					t.Fatalf("serve %s output %q does not contain %q", listCommand, stdout, want)
@@ -729,7 +728,7 @@ func TestUnserveExplicitAbsentRetryPreservesAuthenticatedPrivateName(t *testing.
 		t.Fatal(err)
 	}
 	got := rows[host.host.ID]
-	if len(got) != 1 || got[0].Service.Name != "api" || got[0].PrivateName != "pc.mesh.shaulavo.dev" {
+	if len(got) != 1 || got[0].Service.Name != "api" || got[0].PrivateName != "pc.mesh.mesh.test" {
 		t.Fatalf("cached services after absent retry = %#v", got)
 	}
 }
@@ -1156,7 +1155,7 @@ func TestPickerReceivesLiveCatalogRefresh(t *testing.T) {
 		t.Fatalf("refreshed catalog = %#v", refreshed)
 	}
 	if refreshed.Services == nil || refreshed.Services.Stale || len(refreshed.Services.Rows) != 1 ||
-		refreshed.Services.Rows[0].URL() != "https://pc.mesh.shaulavo.dev/blog" ||
+		refreshed.Services.Rows[0].URL() != "https://pc.mesh.mesh.test/blog" ||
 		refreshed.Services.Rows[0].Health() != "healthy" {
 		t.Fatalf("refreshed services = %#v", refreshed.Services)
 	}

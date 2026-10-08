@@ -36,7 +36,7 @@ func TestAppProxyNegotiatesSupportedEncodingWithZstdPreferringOrigin(t *testing.
 	request := httptest.NewRequest(http.MethodGet, URL(app.ID), nil)
 	request.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 	result := httptest.NewRecorder()
-	f.edge.ServeHost(result, request, app.ID+"."+Domain)
+	f.edge.ServeHost(result, request, app.ID+"."+Domain())
 	if result.Code != http.StatusOK || result.Header().Get("Content-Encoding") != "" || !strings.Contains(result.Body.String(), "data-mesh-app=") {
 		t.Fatalf("zstd-preferring origin lost pill: status=%d, encoding=%q", result.Code, result.Header().Get("Content-Encoding"))
 	}

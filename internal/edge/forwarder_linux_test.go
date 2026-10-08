@@ -46,7 +46,7 @@ func TestProxyForwardedIdentityUsesLiveSocketOwner(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				request.Host = "app.shaulavo.dev"
+				request.Host = "app.mesh.test"
 				request.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i+1))
 				request.Header.Set("X-Forwarded-Proto", "https")
 				response, err := server.Client().Do(request)

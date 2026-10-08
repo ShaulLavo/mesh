@@ -46,7 +46,7 @@ func checkGateway(t *testing.T, metadata bool) {
 		}
 		return
 	}
-	hosts := []string{"apps.shaulavo.dev", "5yfw.shaulavo.dev", "omarchy.mesh.shaulavo.dev", "longer.shaulavo.dev", "iiii.shaulavo.dev"}
+	hosts := []string{"apps.mesh.test", "5yfw.mesh.test", "omarchy.mesh.mesh.test", "longer.mesh.test", "iiii.mesh.test"}
 	certificate, roots := gatewayCertificate(t, hosts)
 	backend := func(name string) *httptest.Server {
 		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +124,7 @@ func checkGatewayRequest(t *testing.T, address, host string, version uint16, roo
 		t.Fatal(err)
 	}
 	target := "private"
-	if host == "apps.shaulavo.dev" || host == "5yfw.shaulavo.dev" {
+	if host == "apps.mesh.test" || host == "5yfw.mesh.test" {
 		target = "apps"
 	}
 	if response.TLS.Version != version || body != target+":"+host+":"+payload {
@@ -154,4 +154,25 @@ func gatewayCertificate(t *testing.T, hosts []string) (tls.Certificate, *x509.Ce
 	roots := x509.NewCertPool()
 	roots.AddCert(leaf)
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: private, Leaf: leaf}, roots
+}
+
+func TestAppHostAcceptsBothConfiguredDomains(t *testing.T) {
+	for _, host := range []string{"apps.mesh.test", "7k3d.mesh.test", "apps.old.test", "7k3d.old.test"} {
+		if !appHost(host) {
+			t.Fatalf("configured app host rejected: %s", host)
+		}
+	}
+	for _, host := range []string{"apps.other.test", "7k3d.old.test.evil", "pc.mesh.old.test"} {
+		if appHost(host) {
+			t.Fatalf("unconfigured app host accepted: %s", host)
+		}
+	}
+}
+
+func TestAppHostCanonicalSNI(t *testing.T) {
+	for _, host := range []string{"APPS.OLD.TEST.", "7K3D.MESH.TEST."} {
+		if !appHost(host) {
+			t.Fatalf("canonical app SNI missed: %s", host)
+		}
+	}
 }

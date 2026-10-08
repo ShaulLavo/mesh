@@ -13,12 +13,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-
 	"github.com/shaul/mesh/internal/serve"
 )
 
 func TestAmbientOwnerAllowed(t *testing.T) {
-	const origin = "https://7k3d.shaulavo.dev"
+	const origin = "https://7k3d.mesh.test"
 	for _, tc := range []struct {
 		name, method, site, mode, dest, origin, upgrade string
 		want                                            bool
@@ -48,7 +47,7 @@ func TestAmbientOwnerAllowed(t *testing.T) {
 		{name: "curl POST", method: "POST", want: true},
 		{name: "legacy same-origin POST", method: "POST", origin: origin, want: true},
 		{name: "legacy foreign POST", method: "POST", origin: "https://attacker.example"},
-		{name: "legacy sibling PUT", method: "PUT", origin: "https://zzzz.shaulavo.dev"},
+		{name: "legacy sibling PUT", method: "PUT", origin: "https://zzzz.mesh.test"},
 		{name: "legacy null origin", method: "DELETE", origin: "null"},
 		{name: "same-origin no-referrer form", method: "POST", site: "same-origin", mode: "navigate", dest: "document", origin: "null", want: true},
 		{name: "cross-site null origin", method: "POST", site: "cross-site", mode: "navigate", dest: "document", origin: "null"},
@@ -128,7 +127,7 @@ func TestPrivateAppAllowsIntentionalOwnerRequests(t *testing.T) {
 					r.Header.Set("Sec-Fetch-Dest", tc.dest)
 					r.Header.Set("Origin", tc.origin)
 					w := httptest.NewRecorder()
-					f.edge.ServeHost(w, r, app.ID+"."+Domain)
+					f.edge.ServeHost(w, r, app.ID+"."+Domain())
 					if w.Code != http.StatusOK || forwarded.Load() != before+1 {
 						t.Fatalf("owner request status=%d, upstream hits=%d; want 200 and one", w.Code, forwarded.Load()-before)
 					}
@@ -183,19 +182,19 @@ func TestPrivateAppWebSocketRequiresOwnOrigin(t *testing.T) {
 				if credential == "network" {
 					r.RemoteAddr = "100.64.0.2:4444"
 				}
-				f.edge.ServeHost(w, r, app.ID+"."+Domain)
+				f.edge.ServeHost(w, r, app.ID+"."+Domain())
 			}))
 			defer front.Close()
-			for _, origin := range []string{URL(app.ID), "https://zzzz.shaulavo.dev", "https://attacker.example", "null", ""} {
+			for _, origin := range []string{URL(app.ID), "https://zzzz.mesh.test", "https://attacker.example", "null", ""} {
 				r := httptest.NewRequest(http.MethodGet, URL(app.ID)+"/socket", nil)
 				authenticate(r)
 				r.Header.Set("Origin", origin)
 				r.Header.Set("Sec-Fetch-Site", map[string]string{
-					URL(app.ID):                 "same-origin",
-					"https://zzzz.shaulavo.dev": "same-site",
-					"https://attacker.example":  "cross-site",
-					"null":                      "same-origin",
-					"":                          "same-origin",
+					URL(app.ID):                "same-origin",
+					"https://zzzz.mesh.test":   "same-site",
+					"https://attacker.example": "cross-site",
+					"null":                     "same-origin",
+					"":                         "same-origin",
 				}[origin])
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				before := forwarded.Load()
@@ -250,7 +249,7 @@ func TestPublicAppDoesNotApplyAmbientOwnerGate(t *testing.T) {
 		r.Header.Set("Sec-Fetch-Site", "cross-site")
 		r.Header.Set("Origin", "https://attacker.example")
 		w := httptest.NewRecorder()
-		f.edge.ServeHost(w, r, app.ID+"."+Domain)
+		f.edge.ServeHost(w, r, app.ID+"."+Domain())
 		if w.Code != http.StatusOK || w.Header().Get("Cross-Origin-Resource-Policy") != "cross-origin" || w.Header().Get("X-Frame-Options") != "" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors *") || strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'self'") {
 			t.Fatalf("public app behavior changed: %d %v", w.Code, w.Header())
 		}
@@ -278,7 +277,7 @@ func TestPrivateAppPreservesStricterFramingOnWire(t *testing.T) {
 			authenticate(r)
 			r.Header.Set("Sec-Fetch-Site", "same-origin")
 			w := httptest.NewRecorder()
-			f.edge.ServeHost(w, r, app.ID+"."+Domain)
+			f.edge.ServeHost(w, r, app.ID+"."+Domain())
 			if w.Code != http.StatusOK || w.Header().Get("X-Frame-Options") != "DENY" || w.Header().Get("Cross-Origin-Resource-Policy") != "same-origin" {
 				t.Fatalf("private response policies = %d %v", w.Code, w.Header())
 			}
@@ -308,9 +307,9 @@ func TestPrivateAppGateRechecksVisibilityAtAdmission(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, URL(app.ID)+"/api", nil)
 	authenticate(r)
 	r.Header.Set("Sec-Fetch-Site", "same-site")
-	r.Header.Set("Origin", "https://zzzz.shaulavo.dev")
+	r.Header.Set("Origin", "https://zzzz.mesh.test")
 	w := httptest.NewRecorder()
-	f.edge.ServeHost(w, r, app.ID+"."+Domain)
+	f.edge.ServeHost(w, r, app.ID+"."+Domain())
 	if w.Code != http.StatusForbidden || forwarded.Load() != 0 {
 		t.Fatalf("visibility race bypassed private gate: status=%d, upstream hits=%d", w.Code, forwarded.Load())
 	}

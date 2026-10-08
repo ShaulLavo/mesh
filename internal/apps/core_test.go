@@ -43,22 +43,31 @@ func (s *memoryAppStore) SaveAppState(_ context.Context, key string, value []byt
 	s.values[key] = append([]byte(nil), value...)
 	return nil
 }
-func (s *memoryAppStore) ReserveAppName(_ context.Context, name, owner string) error {
+func (s *memoryAppStore) ReserveAppNames(_ context.Context, names []string, owner string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if existing, ok := s.names[name]; ok && existing != owner {
-		return errors.New("collision")
+	for _, name := range names {
+		if existing, ok := s.names[name]; ok && (existing != owner || s.inactive[name]) {
+			return errors.New("collision")
+		}
 	}
-	s.names[name] = owner
+	for _, name := range names {
+		s.names[name] = owner
+	}
 	return nil
 }
-func (s *memoryAppStore) ReserveAppNameAndState(_ context.Context, name, owner, key string, value []byte) error {
+
+func (s *memoryAppStore) ReserveAppNamesAndState(_ context.Context, names []string, owner, key string, value []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if existing, ok := s.names[name]; ok && (existing != owner || s.inactive[name]) {
-		return errors.New("collision")
+	for _, name := range names {
+		if existing, ok := s.names[name]; ok && (existing != owner || s.inactive[name]) {
+			return errors.New("collision")
+		}
 	}
-	s.names[name] = owner
+	for _, name := range names {
+		s.names[name] = owner
+	}
 	s.values[key] = append([]byte(nil), value...)
 	return nil
 }
@@ -166,7 +175,7 @@ func newAppFixture(t *testing.T) *appFixture {
 }
 func (f *appFixture) openEdge(t *testing.T) *Edge {
 	t.Helper()
-	e, err := NewEdge(context.Background(), EdgeConfig{Store: f.edgeStore, Key: f.edgeKey, Allowed: map[string]bool{identityFor(f.ownerKey): true, identityFor(f.otherKey): true}, Resolve: func(context.Context, string) (netip.AddrPort, error) {
+	e, err := NewEdge(context.Background(), EdgeConfig{ViewHostReady: func(string) bool { return true }, Store: f.edgeStore, Key: f.edgeKey, Allowed: map[string]bool{identityFor(f.ownerKey): true, identityFor(f.otherKey): true}, Resolve: func(context.Context, string) (netip.AddrPort, error) {
 		return netip.MustParseAddrPort("127.0.0.1:9090"), nil
 	}, Now: func() time.Time { return f.now }})
 	if err != nil {
@@ -274,7 +283,7 @@ func TestAppTrafficAndExactDeadline(t *testing.T) {
 	if err := f.edge.Sweep(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	exists, err := f.edgeStore.AppNameExists(context.Background(), app.ID+"."+Domain)
+	exists, err := f.edgeStore.AppNameExists(context.Background(), app.ID+"."+Domain())
 	if err != nil || !exists {
 		t.Fatal("expired URL became recyclable")
 	}
@@ -541,7 +550,7 @@ func TestHTTPPrivateGatePublicVisitorAndAnonymousManagement(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := created.App.ID
-	host := id + "." + Domain
+	host := id + "." + Domain()
 	var forwarded atomic.Int64
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		forwarded.Add(1)
@@ -571,7 +580,7 @@ func TestHTTPPrivateGatePublicVisitorAndAnonymousManagement(t *testing.T) {
 			if result.Code != http.StatusForbidden {
 				t.Fatalf("private websocket status %d", result.Code)
 			}
-		} else if result.Code != http.StatusSeeOther || !strings.HasPrefix(result.Header().Get("Location"), ManagementOrigin+"/view") {
+		} else if result.Code != http.StatusSeeOther || !strings.HasPrefix(result.Header().Get("Location"), ManagementOrigin()+"/view") {
 			t.Fatalf("private %s status %d", path, result.Code)
 		}
 		if strings.Contains(result.Body.String(), "original page") {
@@ -594,11 +603,11 @@ func TestHTTPPrivateGatePublicVisitorAndAnonymousManagement(t *testing.T) {
 	}
 	for _, action := range []string{"private", "public", "renew", "delete"} {
 		body := url.Values{"id": {id}, "action": {action}, "csrf": {"forged"}}.Encode()
-		request := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(body))
+		request := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/action", strings.NewReader(body))
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		request.Header.Set("Origin", URL(id))
 		result := httptest.NewRecorder()
-		f.edge.ServeHost(result, request, ManagementHost)
+		f.edge.ServeHost(result, request, ManagementHost())
 		if result.Code != http.StatusUnauthorized && result.Code != http.StatusForbidden {
 			t.Fatalf("anonymous %s status %d", action, result.Code)
 		}
@@ -608,7 +617,7 @@ func TestHTTPPrivateGatePublicVisitorAndAnonymousManagement(t *testing.T) {
 		t.Fatal("anonymous visitor mutated app")
 	}
 	result = httptest.NewRecorder()
-	f.edge.ServeHost(result, httptest.NewRequest(http.MethodGet, ManagementOrigin+"/frame?id="+id, nil), ManagementHost)
+	f.edge.ServeHost(result, httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/frame?id="+id, nil), ManagementHost())
 	if result.Code != 200 || !strings.Contains(result.Body.String(), "Pair browser") || strings.Contains(result.Body.String(), "Make private") || strings.Contains(result.Body.String(), "action=delete") {
 		t.Fatalf("visitor frame exposed owner controls: %d %s", result.Code, result.Body.String())
 	}

@@ -41,7 +41,7 @@ func TestPickerServiceRefreshUsesOnlyTheSelectedHostsCache(t *testing.T) {
 	if cache.loadedHost.ID != host.host.ID {
 		t.Fatalf("loaded cache for host %q, want %q", cache.loadedHost.ID, host.host.ID)
 	}
-	if refreshed == nil || refreshed.Stale || len(refreshed.Rows) != 1 || refreshed.Rows[0].URL() != "https://pc.mesh.shaulavo.dev/blog" {
+	if refreshed == nil || refreshed.Stale || len(refreshed.Rows) != 1 || refreshed.Rows[0].URL() != "https://pc.mesh.mesh.test/blog" {
 		t.Fatalf("live service refresh = %#v", refreshed)
 	}
 	if len(cache.saved) != 1 || cache.saved[0].Name != "blog" {
@@ -77,7 +77,7 @@ func TestPickerServiceRefreshDistinguishesCachedEmptyAndUnavailable(t *testing.T
 func TestPickerServiceRefreshTreatsLiveEmptyAsAuthoritative(t *testing.T) {
 	host := setupCommandTestHost(t)
 	cache := &pickerServiceCacheStub{rows: []storage.CachedService{{
-		HostID: storage.HostID(host.host.ID), PrivateName: "pc.mesh.shaulavo.dev",
+		HostID: storage.HostID(host.host.ID), PrivateName: "pc.mesh.mesh.test",
 		Service: meshserve.Service{Name: "old", Kind: meshserve.Proxy, Target: "3000"},
 	}}}
 	app := &application{dependencies: Dependencies{DialControl: host.dial}}

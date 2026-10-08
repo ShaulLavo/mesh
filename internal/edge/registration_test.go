@@ -30,7 +30,7 @@ func TestControllerPersistsBeforePublishAndIdempotentReplayDoesNotRefresh(t *tes
 		},
 		func(context.Context, netip.AddrPort, OriginConfig) error { pins.Add(1); return nil },
 	)
-	snapshot := signedRegistrationSnapshot(t, edgeID, originID, originKey, 1, now, []Route{{PublicName: "app.shaulavo.dev", ServiceName: "app"}})
+	snapshot := signedRegistrationSnapshot(t, edgeID, originID, originKey, 1, now, []Route{{PublicName: "app.mesh.test", ServiceName: "app"}})
 	response, handled, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeEdgeRegister, RequestID: "register-1", EdgeSnapshot: pointerProtocolSnapshot(snapshot),
 	})
@@ -60,7 +60,7 @@ func TestControllerRestoresVerifiedClaimsOfflineAndFailsClosed(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	edgeID, _ := testIdentity(t)
 	originID, originKey := testIdentity(t)
-	snapshot := signedRegistrationSnapshot(t, edgeID, originID, originKey, 1, now, []Route{{PublicName: "app.shaulavo.dev", ServiceName: "app"}})
+	snapshot := signedRegistrationSnapshot(t, edgeID, originID, originKey, 1, now, []Route{{PublicName: "app.mesh.test", ServiceName: "app"}})
 	digest, err := VerifySnapshot(snapshot, edgeID, originID)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestControllerRechecksFreshnessAfterPinAndClearsRoutesAfterPostCommitFailur
 		},
 	)
 	controller.now = func() time.Time { return currentTime }
-	expiring := signedRegistrationSnapshot(t, edgeID, originID, originKey, 1, issuedAt, []Route{{PublicName: "app.shaulavo.dev", ServiceName: "app"}})
+	expiring := signedRegistrationSnapshot(t, edgeID, originID, originKey, 1, issuedAt, []Route{{PublicName: "app.mesh.test", ServiceName: "app"}})
 	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeEdgeRegister, RequestID: "expired-during-pin", EdgeSnapshot: pointerProtocolSnapshot(expiring),
 	}); err == nil || len(state.origins) != 0 {
@@ -118,7 +118,7 @@ func TestControllerRechecksFreshnessAfterPinAndClearsRoutesAfterPostCommitFailur
 
 	currentTime = issuedAt
 	controller.pin = func(context.Context, netip.AddrPort, OriginConfig) error { return nil }
-	accepted := signedRegistrationSnapshot(t, edgeID, originID, originKey, 2, issuedAt, []Route{{PublicName: "app.shaulavo.dev", ServiceName: "app"}})
+	accepted := signedRegistrationSnapshot(t, edgeID, originID, originKey, 2, issuedAt, []Route{{PublicName: "app.mesh.test", ServiceName: "app"}})
 	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeEdgeRegister, RequestID: "accepted", EdgeSnapshot: pointerProtocolSnapshot(accepted),
 	}); err != nil {
@@ -148,17 +148,17 @@ func TestControllerReconcilesAmbiguousApplyBeforeReturning(t *testing.T) {
 		},
 		func(context.Context, netip.AddrPort, OriginConfig) error { return nil },
 	)
-	first := signedRegistrationSnapshot(t, edgeID, originID, key, 1, now, []Route{{PublicName: "app.shaulavo.dev", ServiceName: "app"}})
+	first := signedRegistrationSnapshot(t, edgeID, originID, key, 1, now, []Route{{PublicName: "app.mesh.test", ServiceName: "app"}})
 	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{Type: protocol.TypeEdgeRegister, RequestID: "first", EdgeSnapshot: pointerProtocolSnapshot(first)}); err != nil {
 		t.Fatal(err)
 	}
 	state.commitThenError = true
-	replacement := signedRegistrationSnapshot(t, edgeID, originID, key, 2, now.Add(time.Second), []Route{{PublicName: "new.shaulavo.dev", ServiceName: "app"}})
+	replacement := signedRegistrationSnapshot(t, edgeID, originID, key, 2, now.Add(time.Second), []Route{{PublicName: "new.mesh.test", ServiceName: "app"}})
 	request := protocol.Control{Type: protocol.TypeEdgeRegister, RequestID: "replace", EdgeSnapshot: pointerProtocolSnapshot(replacement)}
 	if _, _, err := controller.HandleControl(context.Background(), request); err == nil {
 		t.Fatal("ambiguous Apply error was hidden")
 	}
-	if len(registry.Status()) != 1 || registry.Status()[0].PublicName != "new.shaulavo.dev" || !registry.Status()[0].Online {
+	if len(registry.Status()) != 1 || registry.Status()[0].PublicName != "new.mesh.test" || !registry.Status()[0].Online {
 		t.Fatalf("ambiguous committed replacement did not converge online: %#v", registry.Status())
 	}
 	state.commitThenError = false
@@ -217,8 +217,8 @@ func TestControllerSerializesOneOriginWithoutBlockingAnother(t *testing.T) {
 		func(context.Context, netip.AddrPort, OriginConfig) error { return nil },
 	)
 	requests := []protocol.Control{
-		{Type: protocol.TypeEdgeRegister, RequestID: "first", EdgeSnapshot: pointerProtocolSnapshot(signedRegistrationSnapshot(t, edgeID, firstID, firstKey, 1, now, []Route{{PublicName: "first.shaulavo.dev", ServiceName: "app"}}))},
-		{Type: protocol.TypeEdgeRegister, RequestID: "second", EdgeSnapshot: pointerProtocolSnapshot(signedRegistrationSnapshot(t, edgeID, secondID, secondKey, 1, now, []Route{{PublicName: "second.shaulavo.dev", ServiceName: "app"}}))},
+		{Type: protocol.TypeEdgeRegister, RequestID: "first", EdgeSnapshot: pointerProtocolSnapshot(signedRegistrationSnapshot(t, edgeID, firstID, firstKey, 1, now, []Route{{PublicName: "first.mesh.test", ServiceName: "app"}}))},
+		{Type: protocol.TypeEdgeRegister, RequestID: "second", EdgeSnapshot: pointerProtocolSnapshot(signedRegistrationSnapshot(t, edgeID, secondID, secondKey, 1, now, []Route{{PublicName: "second.mesh.test", ServiceName: "app"}}))},
 	}
 	done := make(chan error, 2)
 	for _, request := range requests {
@@ -241,7 +241,7 @@ func TestControllerSerializesOneOriginWithoutBlockingAnother(t *testing.T) {
 		<-release
 		return netip.MustParseAddrPort("100.64.0.8:7337"), nil
 	}
-	next := protocol.Control{Type: protocol.TypeEdgeRegister, RequestID: "duplicate-a", EdgeSnapshot: pointerProtocolSnapshot(signedRegistrationSnapshot(t, edgeID, firstID, firstKey, 2, now.Add(time.Second), []Route{{PublicName: "first.shaulavo.dev", ServiceName: "app"}}))}
+	next := protocol.Control{Type: protocol.TypeEdgeRegister, RequestID: "duplicate-a", EdgeSnapshot: pointerProtocolSnapshot(signedRegistrationSnapshot(t, edgeID, firstID, firstKey, 2, now.Add(time.Second), []Route{{PublicName: "first.mesh.test", ServiceName: "app"}}))}
 	duplicate := next
 	duplicate.RequestID = "duplicate-b"
 	done = make(chan error, 1)
@@ -393,7 +393,7 @@ func TestRevokedOriginIsDroppedInsteadOfFailingTheEdge(t *testing.T) {
 		id   string
 		key  ed25519.PrivateKey
 		name string
-	}{{keptID, keptKey, "kept.shaulavo.dev"}, {revokedID, revokedKey, "revoked.shaulavo.dev"}} {
+	}{{keptID, keptKey, "kept.mesh.test"}, {revokedID, revokedKey, "revoked.mesh.test"}} {
 		snapshot := signedRegistrationSnapshot(t, edgeID, origin.id, origin.key, 1, now, []Route{{PublicName: origin.name, ServiceName: "app"}})
 		digest, err := VerifySnapshot(snapshot, edgeID, origin.id)
 		if err != nil {
@@ -426,7 +426,7 @@ func TestRevokedOriginIsDroppedInsteadOfFailingTheEdge(t *testing.T) {
 	if len(status) != 1 {
 		t.Fatalf("published routes = %#v, want only the kept origin", status)
 	}
-	if status[0].PublicName != "kept.shaulavo.dev" {
-		t.Fatalf("published route = %q, want kept.shaulavo.dev", status[0].PublicName)
+	if status[0].PublicName != "kept.mesh.test" {
+		t.Fatalf("published route = %q, want kept.mesh.test", status[0].PublicName)
 	}
 }

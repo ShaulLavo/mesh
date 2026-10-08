@@ -30,13 +30,13 @@ func ambientOwnerRequest(t *testing.T, f *appFixture, app Record, credential str
 		return func(r *http.Request) { r.RemoteAddr = ownerIP.String() + ":4444" }
 	}
 	owner := pairedOwner(t, f)
-	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+app.ID, nil)
+	request := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/view?id="+app.ID, nil)
 	request.AddCookie(owner)
 	redirect, nonce := privateViewRedirect(t, f, request)
 	consume := httptest.NewRecorder()
 	consumeRequest := httptest.NewRequest(http.MethodGet, redirect.Header().Get("Location"), nil)
 	consumeRequest.AddCookie(nonce)
-	f.edge.ServeHost(consume, consumeRequest, app.ID+"."+Domain)
+	f.edge.ServeHost(consume, consumeRequest, app.ID+"."+Domain())
 	view := cookieNamed(t, consume, webauth.ViewCookie)
 	return func(r *http.Request) { r.AddCookie(view) }
 }
@@ -47,11 +47,11 @@ func TestPrivateAppRejectsAmbientOwnerFromOtherPages(t *testing.T) {
 			name, method, site, mode, dest, origin, upgrade string
 		}{
 			{name: "cross-site subresource", method: http.MethodGet, site: "cross-site", mode: "no-cors", dest: "image", origin: "https://attacker.example"},
-			{name: "same-site subresource", method: http.MethodGet, site: "same-site", mode: "cors", dest: "empty", origin: "https://zzzz.shaulavo.dev"},
+			{name: "same-site subresource", method: http.MethodGet, site: "same-site", mode: "cors", dest: "empty", origin: "https://zzzz.mesh.test"},
 			{name: "cross-site iframe", method: http.MethodGet, site: "cross-site", mode: "navigate", dest: "iframe"},
 			{name: "same-site iframe", method: http.MethodGet, site: "same-site", mode: "navigate", dest: "iframe"},
 			{name: "cross-site form POST", method: http.MethodPost, site: "cross-site", mode: "navigate", dest: "document", origin: "https://attacker.example"},
-			{name: "same-site POST", method: http.MethodPost, site: "same-site", mode: "cors", dest: "empty", origin: "https://zzzz.shaulavo.dev"},
+			{name: "same-site POST", method: http.MethodPost, site: "same-site", mode: "cors", dest: "empty", origin: "https://zzzz.mesh.test"},
 			{name: "legacy cross-origin GET", method: http.MethodGet, origin: "https://attacker.example"},
 			{name: "legacy cross-origin HEAD", method: http.MethodHead, origin: "https://attacker.example"},
 			{name: "legacy cross-origin OPTIONS", method: http.MethodOptions, origin: "https://attacker.example"},
@@ -86,7 +86,7 @@ func TestPrivateAppRejectsAmbientOwnerFromOtherPages(t *testing.T) {
 					r.Header.Set("Upgrade", tc.upgrade)
 				}
 				w := httptest.NewRecorder()
-				f.edge.ServeHost(w, r, app.ID+"."+Domain)
+				f.edge.ServeHost(w, r, app.ID+"."+Domain())
 				if w.Code != http.StatusForbidden || forwarded.Load() != 0 || resolved.Load() != 0 {
 					t.Fatalf("private request status=%d, upstream hits=%d, resolutions=%d; want 403 and zero", w.Code, forwarded.Load(), resolved.Load())
 				}
@@ -108,7 +108,7 @@ func TestPrivateAppAdmissionRejectsAmbientOwnerFromOtherPages(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, URL(app.ID)+"/api/delete-everything", strings.NewReader("confirm=yes"))
 			authenticate(r)
 			r.Header.Set("Sec-Fetch-Site", "same-site")
-			r.Header.Set("Origin", "https://zzzz.shaulavo.dev")
+			r.Header.Set("Origin", "https://zzzz.mesh.test")
 			r = f.edge.authenticateNetwork(r)
 			_, _, release, err := f.edge.admit(r, app.ID)
 			if release != nil {

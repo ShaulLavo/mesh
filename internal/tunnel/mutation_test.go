@@ -12,7 +12,7 @@ import (
 )
 
 func TestCanonicalGolden(t *testing.T) {
-	m := Mutation{Action: Create, TargetID: KeyID(bytes.Repeat([]byte{'a'}, 32)), ClaimantID: KeyID(bytes.Repeat([]byte{'b'}, 32)), Sequence: 0x0102030405060708, PublicName: "blog.shaulavo.dev"}
+	m := Mutation{Action: Create, TargetID: KeyID(bytes.Repeat([]byte{'a'}, 32)), ClaimantID: KeyID(bytes.Repeat([]byte{'b'}, 32)), Sequence: 0x0102030405060708, PublicName: "blog.mesh.test"}
 	canonical, err := Canonical(m)
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestCanonicalGolden(t *testing.T) {
 func TestMutationBindsEveryDomainField(t *testing.T) {
 	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{1}, ed25519.SeedSize))
 	edgeID := KeyID(bytes.Repeat([]byte{2}, ed25519.PublicKeySize))
-	m, err := Sign(key, edgeID, Create, "blog.shaulavo.dev", 1)
+	m, err := Sign(key, edgeID, Create, "blog.mesh.test", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestMutationBindsEveryDomainField(t *testing.T) {
 		"edge":      func(m *Mutation) { m.TargetID = KeyID(bytes.Repeat([]byte{3}, 32)) },
 		"owner":     func(m *Mutation) { m.ClaimantID = KeyID(bytes.Repeat([]byte{4}, 32)) },
 		"sequence":  func(m *Mutation) { m.Sequence++ },
-		"hostname":  func(m *Mutation) { m.PublicName = "other.shaulavo.dev" },
+		"hostname":  func(m *Mutation) { m.PublicName = "other.mesh.test" },
 		"signature": func(m *Mutation) { m.Signature = append([]byte(nil), m.Signature...); m.Signature[0] ^= 1 },
 	}
 	for name, mutate := range cases {
@@ -66,20 +66,20 @@ func TestMutationBindsEveryDomainField(t *testing.T) {
 func TestMutationRejectsInvalidDomain(t *testing.T) {
 	key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 	id := KeyID(key.Public().(ed25519.PublicKey))
-	for _, name := range []string{"", "blog", "*.shaulavo.dev", "localhost", "127.0.0.1", "::1", "shaulavo.dev", "two.labels.shaulavo.dev", "Blog.shaulavo.dev", "blog.shaulavo.dev.", strings.Repeat("a", 4096)} {
+	for _, name := range []string{"", "blog", "*.mesh.test", "localhost", "127.0.0.1", "::1", "mesh.test", "two.labels.mesh.test", "Blog.mesh.test", "blog.mesh.test.", strings.Repeat("a", 4096)} {
 		if _, err := Sign(key, id, Create, name, 1); err == nil {
 			t.Fatalf("accepted hostname %q", name)
 		}
 	}
 	for _, sequence := range []uint64{0, math.MaxInt64 + 1, math.MaxUint64} {
-		if _, err := Sign(key, id, Create, "blog.shaulavo.dev", sequence); err == nil {
+		if _, err := Sign(key, id, Create, "blog.mesh.test", sequence); err == nil {
 			t.Fatalf("accepted sequence %d", sequence)
 		}
 	}
-	if _, err := Sign(key, id, Create, "blog.shaulavo.dev", math.MaxInt64); err != nil {
+	if _, err := Sign(key, id, Create, "blog.mesh.test", math.MaxInt64); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Sign(nil, id, Create, "blog.shaulavo.dev", 1); err == nil {
+	if _, err := Sign(nil, id, Create, "blog.mesh.test", 1); err == nil {
 		t.Fatal("accepted missing private key")
 	}
 }

@@ -162,7 +162,7 @@ func TestCollectServiceCatalogMarksPublicHealthUnknownWithoutEdgeStatus(t *testi
 	rows, diagnostics, err := CollectServiceCatalog(context.Background(), []HostRecord{host}, time.Second,
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {
 			return remoteServiceSnapshot{ServiceHealthSupported: true, Services: []protocol.ServiceInfo{{
-				Name: "blog", Kind: "proxy", Target: "3000", PublicName: "blog.shaulavo.dev", Healthy: true,
+				Name: "blog", Kind: "proxy", Target: "3000", PublicName: "blog.mesh.test", Healthy: true,
 			}}}, nil
 		}, func(context.Context, HostRecord) ([]protocol.EdgeRouteInfo, error) {
 			return nil, errors.New("edge offline")
@@ -183,7 +183,7 @@ func TestServiceURLPrefersSignedNameAndUsesVerifiedControlEndpointFallback(t *te
 		privateName string
 		want        string
 	}{
-		{name: "signed name", host: HostRecord{Endpoint: "ws://100.64.0.2:7337/mesh"}, privateName: "pc.mesh.shaulavo.dev", want: "https://pc.mesh.shaulavo.dev/blog"},
+		{name: "signed name", host: HostRecord{Endpoint: "ws://100.64.0.2:7337/mesh"}, privateName: "pc.mesh.mesh.test", want: "https://pc.mesh.mesh.test/blog"},
 		{name: "plain IPv4 endpoint", host: HostRecord{Endpoint: "ws://100.64.0.2:7337/control/ws"}, want: "http://100.64.0.2:7337/blog"},
 		{name: "TLS IPv6 endpoint", host: HostRecord{Endpoint: "wss://[fd7a:115c:a1e0::2]:7337/mesh"}, want: "https://[fd7a:115c:a1e0::2]:7337/blog"},
 		{name: "unsupported endpoint", host: HostRecord{Endpoint: "http://100.64.0.2:7337/mesh"}, want: "unavailable"},

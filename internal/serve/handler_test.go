@@ -276,7 +276,7 @@ func TestProxyPreservesForwardingMetadataOnlyFromPinnedPeer(t *testing.T) {
 	}
 	pinned := netip.MustParseAddr("100.64.0.2")
 	registry, err := NewRegistryWithReservedPrefix(
-		[]Service{{Name: "api", Kind: Proxy, Target: port, PublicName: "app.shaulavo.dev"}},
+		[]Service{{Name: "api", Kind: Proxy, Target: port, PublicName: "app.mesh.test"}},
 		ReservedPrefix,
 		func(address netip.Addr) bool { return address == pinned },
 	)
@@ -284,7 +284,7 @@ func TestProxyPreservesForwardingMetadataOnlyFromPinnedPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "http://app.shaulavo.dev/api/value", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://app.mesh.test/api/value", nil)
 	request.RemoteAddr = "100.64.0.2:43120"
 	request.Header.Set("X-Forwarded-For", "203.0.113.77")
 	request.Header.Set("X-Forwarded-Proto", "https")
@@ -295,11 +295,11 @@ func TestProxyPreservesForwardingMetadataOnlyFromPinnedPeer(t *testing.T) {
 	}
 	trusted := <-observed
 	if trusted.Get("X-Forwarded-For") != "203.0.113.77" || trusted.Get("X-Forwarded-Proto") != "https" ||
-		trusted.Get("X-Forwarded-Host") != "app.shaulavo.dev" || trusted.Get("X-Forwarded-Prefix") != "/api" {
+		trusted.Get("X-Forwarded-Host") != "app.mesh.test" || trusted.Get("X-Forwarded-Prefix") != "/api" {
 		t.Fatalf("trusted forwarding metadata = %#v", trusted)
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "http://app.shaulavo.dev/api/value", nil)
+	request = httptest.NewRequest(http.MethodGet, "http://app.mesh.test/api/value", nil)
 	request.RemoteAddr = "100.64.0.3:43120"
 	request.Header.Set("Forwarded", "for=attacker")
 	request.Header.Set("X-Forwarded-For", "198.51.100.8")
@@ -313,7 +313,7 @@ func TestProxyPreservesForwardingMetadataOnlyFromPinnedPeer(t *testing.T) {
 		t.Fatalf("untrusted forwarding metadata = %#v", untrusted)
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "http://app.shaulavo.dev/api/value", nil)
+	request = httptest.NewRequest(http.MethodGet, "http://app.mesh.test/api/value", nil)
 	request.RemoteAddr = "100.64.0.2:43120"
 	request.Header.Add("X-Forwarded-For", "203.0.113.77")
 	request.Header.Add("X-Forwarded-For", "198.51.100.8")

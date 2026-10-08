@@ -219,6 +219,7 @@ EDGE_PROXY_PORT=${PORTS[1]}
 
 EDGE_STATUS="$TEST_ROOT/edge-status.json"
 ORIGIN_STATUS="$TEST_ROOT/origin-status.json"
+cp "$MESH_CONFIG_DIR/domains.json" "$CLIENT_CONFIG/domains.json"
 EDGE_CONFIG="$TEST_ROOT/edge.json"
 ORIGIN_TARGET="$TEST_ROOT/origin-target.json"
 python3 - "$EDGE_STATUS" "$ORIGIN_STATUS" "$EDGE_CONFIG" "$ORIGIN_TARGET" \
@@ -342,7 +343,7 @@ curl --noproxy '*' --fail --silent --max-time 2 \
   grep -Fq DOWNLOAD_MARKER || fail "private top-level navigation did not reach the files route"
 
 python3 "$CONFIRM_FIXTURE" -- "${CLI[@]}" serve pc ./site --at /blog \
-  --public blog.shaulavo.dev >"$TEST_ROOT/public-prompt.out" 2>&1 ||
+  --public blog.mesh.test >"$TEST_ROOT/public-prompt.out" 2>&1 ||
   fail "interactive public publication: $(<"$TEST_ROOT/public-prompt.out")"
 grep -Fq 'Publish this service to the internet?' "$TEST_ROOT/public-prompt.out" ||
   fail "public mutation did not require explicit confirmation"
@@ -350,26 +351,26 @@ grep -Fq "Resolved path: $ORIGIN_HOME/site" "$TEST_ROOT/public-prompt.out" ||
   fail "confirmation omitted the origin-resolved path: $(<"$TEST_ROOT/public-prompt.out")"
 grep -Fq 'Files: 2' "$TEST_ROOT/public-prompt.out" ||
   fail "confirmation omitted the origin file count: $(<"$TEST_ROOT/public-prompt.out")"
-grep -Fq 'URL: https://blog.shaulavo.dev/blog' "$TEST_ROOT/public-prompt.out" ||
+grep -Fq 'URL: https://blog.mesh.test/blog' "$TEST_ROOT/public-prompt.out" ||
   fail "confirmation omitted the exact public URL: $(<"$TEST_ROOT/public-prompt.out")"
-grep -Fq "serving https://blog.shaulavo.dev/blog on pc (static -> $ORIGIN_HOME/site)" "$TEST_ROOT/public-prompt.out" ||
+grep -Fq "serving https://blog.mesh.test/blog on pc (static -> $ORIGIN_HOME/site)" "$TEST_ROOT/public-prompt.out" ||
   fail "confirmed publication did not wait for its acknowledgement"
-wait_for_public_body blog.shaulavo.dev /blog/ SERVE_CLI_PUBLIC_MARKER ||
+wait_for_public_body blog.mesh.test /blog/ SERVE_CLI_PUBLIC_MARKER ||
   fail "confirmed public route did not reach the real origin"
-[ "$(edge_request blog.shaulavo.dev /blog/ --header 'Origin: https://attacker.example' --header 'Sec-Fetch-Site: cross-site')" = SERVE_CLI_PUBLIC_MARKER ] ||
+[ "$(edge_request blog.mesh.test /blog/ --header 'Origin: https://attacker.example' --header 'Sec-Fetch-Site: cross-site')" = SERVE_CLI_PUBLIC_MARKER ] ||
   fail "cross-site public service behavior changed"
 
 "${CLI[@]}" serve pc "$TEST_ROOT/files" --at /blog/admin --files \
   >"$TEST_ROOT/nested-private.out" 2>"$TEST_ROOT/nested-private.err" ||
   fail "publish nested private directory: $(<"$TEST_ROOT/nested-private.err")"
-SHADOW_WARNING='private route /blog/admin shadows public route https://blog.shaulavo.dev/blog at /blog/admin; public requests there return 404'
+SHADOW_WARNING='private route /blog/admin shadows public route https://blog.mesh.test/blog at /blog/admin; public requests there return 404'
 grep -Fq "warning: pc: $SHADOW_WARNING" "$TEST_ROOT/nested-private.err" ||
   fail "registration omitted the private-route shadow warning: $(<"$TEST_ROOT/nested-private.err")"
-NESTED_PUBLIC_STATUS=$(edge_request blog.shaulavo.dev /blog/admin/download.txt --output /dev/null --write-out '%{http_code}') ||
+NESTED_PUBLIC_STATUS=$(edge_request blog.mesh.test /blog/admin/download.txt --output /dev/null --write-out '%{http_code}') ||
   fail "query nested private route through the public edge"
 [ "$NESTED_PUBLIC_STATUS" = 404 ] ||
   fail "public edge exposed nested private route with status $NESTED_PUBLIC_STATUS"
-NESTED_DIRECT_PUBLIC_STATUS=$(curl --noproxy '*' --silent --max-time 2 --header 'Host: blog.shaulavo.dev' \
+NESTED_DIRECT_PUBLIC_STATUS=$(curl --noproxy '*' --silent --max-time 2 --header 'Host: blog.mesh.test' \
   --output /dev/null --write-out '%{http_code}' "http://127.0.0.11:$CONTROL_PORT/blog/admin/download.txt") ||
   fail "query nested private route with a direct public Host"
 [ "$NESTED_DIRECT_PUBLIC_STATUS" = 404 ] ||
@@ -377,7 +378,7 @@ NESTED_DIRECT_PUBLIC_STATUS=$(curl --noproxy '*' --silent --max-time 2 --header 
 [ "$(curl --noproxy '*' --fail --silent --max-time 2 "http://127.0.0.11:$CONTROL_PORT/blog/admin/download.txt")" = DOWNLOAD_MARKER ] ||
   fail "nested private service did not serve through the Tailnet listener"
 
-if "${CLI[@]}" serve pc "$TEST_ROOT/secret" --at /secret --public secret.shaulavo.dev --yes \
+if "${CLI[@]}" serve pc "$TEST_ROOT/secret" --at /secret --public secret.mesh.test --yes \
   >"$TEST_ROOT/secret-refused.out" 2>"$TEST_ROOT/secret-refused.err"; then
   fail "--yes bypassed the public credential scan"
 fi
@@ -385,18 +386,18 @@ grep -Fqi 'credential' "$TEST_ROOT/secret-refused.err" ||
   fail "credential refusal was not explained: $(<"$TEST_ROOT/secret-refused.err")"
 grep -Fq '.env' "$TEST_ROOT/secret-refused.err" ||
   fail "credential refusal omitted the matched remote path: $(<"$TEST_ROOT/secret-refused.err")"
-SECRET_STATUS=$(edge_request secret.shaulavo.dev /secret/ --output /dev/null --write-out '%{http_code}') ||
+SECRET_STATUS=$(edge_request secret.mesh.test /secret/ --output /dev/null --write-out '%{http_code}') ||
   fail "query rejected credential route"
 [ "$SECRET_STATUS" = 404 ] || fail "rejected credential route remained public with status $SECRET_STATUS"
 
-"${CLI[@]}" serve pc "$TEST_ROOT/secret" --at /secret --public secret.shaulavo.dev --yes \
+"${CLI[@]}" serve pc "$TEST_ROOT/secret" --at /secret --public secret.mesh.test --yes \
   --allow-credentials >"$TEST_ROOT/secret-allowed.out" 2>"$TEST_ROOT/secret-allowed.err" ||
   fail "explicit credential override: $(<"$TEST_ROOT/secret-allowed.err")"
 grep -Fq 'credential-like entries are explicitly allowed' "$TEST_ROOT/secret-allowed.err" ||
   fail "credential override was not visibly acknowledged"
-grep -Fq 'serving https://secret.shaulavo.dev/secret on pc' "$TEST_ROOT/secret-allowed.out" ||
+grep -Fq 'serving https://secret.mesh.test/secret on pc' "$TEST_ROOT/secret-allowed.out" ||
   fail "credential override omitted the public URL: $(<"$TEST_ROOT/secret-allowed.out")"
-wait_for_public_body secret.shaulavo.dev /secret/ SECRET_PUBLIC_MARKER ||
+wait_for_public_body secret.mesh.test /secret/ SECRET_PUBLIC_MARKER ||
   fail "explicitly approved credential directory did not become reachable"
 
 "${CLI[@]}" serve label /api 'CLI Proxy' --host pc >"$TEST_ROOT/label.out" 2>"$TEST_ROOT/label.err" ||
@@ -408,13 +409,13 @@ grep -Fq "warning: pc: $SHADOW_WARNING" "$TEST_ROOT/list-live.err" ||
   fail "live list omitted the private-route shadow warning: $(<"$TEST_ROOT/list-live.err")"
 grep -Eq '^ROUTE[[:space:]]+NAME[[:space:]]+HOST[[:space:]]+KIND[[:space:]]+TARGET[[:space:]]+SCOPE[[:space:]]+STATE[[:space:]]+HEALTH[[:space:]]+URL$' \
   "$TEST_ROOT/list-live.out" || fail "service list header is incomplete: $(<"$TEST_ROOT/list-live.out")"
-grep -Eq "^/blog[[:space:]]+blog[[:space:]]+pc[[:space:]]+static[[:space:]]+$ORIGIN_HOME/site[[:space:]]+public[[:space:]]+-[[:space:]]+healthy[[:space:]]+https://blog\.shaulavo\.dev/blog$" \
+grep -Eq "^/blog[[:space:]]+blog[[:space:]]+pc[[:space:]]+static[[:space:]]+$ORIGIN_HOME/site[[:space:]]+public[[:space:]]+-[[:space:]]+healthy[[:space:]]+https://blog\.mesh\.test/blog$" \
   "$TEST_ROOT/list-live.out" || fail "live list omitted the public static URL: $(<"$TEST_ROOT/list-live.out")"
 grep -Eq "^/files[[:space:]]+files[[:space:]]+pc[[:space:]]+files[[:space:]]+$TEST_ROOT/files[[:space:]]+tailnet[[:space:]]+-[[:space:]]+healthy[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/files$" \
   "$TEST_ROOT/list-live.out" || fail "live list omitted the private fallback URL: $(<"$TEST_ROOT/list-live.out")"
 grep -Eq "^/api[[:space:]]+CLI Proxy[[:space:]]+pc[[:space:]]+proxy[[:space:]]+${BACKEND_PORT}[[:space:]]+tailnet[[:space:]]+-[[:space:]]+healthy[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/api$" \
   "$TEST_ROOT/list-live.out" || fail "live list omitted the proxy fallback URL: $(<"$TEST_ROOT/list-live.out")"
-grep -Eq "^/secret[[:space:]]+secret[[:space:]]+pc[[:space:]]+static[[:space:]]+$TEST_ROOT/secret[[:space:]]+public[[:space:]]+-[[:space:]]+healthy[[:space:]]+https://secret\.shaulavo\.dev/secret$" \
+grep -Eq "^/secret[[:space:]]+secret[[:space:]]+pc[[:space:]]+static[[:space:]]+$TEST_ROOT/secret[[:space:]]+public[[:space:]]+-[[:space:]]+healthy[[:space:]]+https://secret\.mesh\.test/secret$" \
   "$TEST_ROOT/list-live.out" || fail "live list omitted the approved public URL: $(<"$TEST_ROOT/list-live.out")"
 
 stop_process "$ORIGIN_PID"
@@ -424,7 +425,7 @@ timeout --kill-after=1s 3s "${CLI[@]}" serve ls --timeout 150ms \
   fail "offline service list exceeded its hard deadline: $(<"$TEST_ROOT/list-offline.err")"
 grep -Fq "warning: pc (cached): $SHADOW_WARNING" "$TEST_ROOT/list-offline.err" ||
   fail "cached list omitted the private-route shadow warning: $(<"$TEST_ROOT/list-offline.err")"
-grep -Eq '^/blog[[:space:]]+blog[[:space:]]+pc[[:space:]]+static.*offline/stale[[:space:]]+https://blog\.shaulavo\.dev/blog$' \
+grep -Eq '^/blog[[:space:]]+blog[[:space:]]+pc[[:space:]]+static.*offline/stale[[:space:]]+https://blog\.mesh\.test/blog$' \
   "$TEST_ROOT/list-offline.out" || fail "offline cache lost the public URL: $(<"$TEST_ROOT/list-offline.out")"
 grep -Eq "^/files[[:space:]]+files[[:space:]]+pc[[:space:]]+files.*offline/stale[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/files$" \
   "$TEST_ROOT/list-offline.out" || fail "offline cache lost the private fallback URL: $(<"$TEST_ROOT/list-offline.out")"
@@ -434,14 +435,14 @@ grep -Fq -- "$ORIGIN_ID: unavailable" "$TEST_ROOT/list-offline.err" ||
   fail "offline service list omitted its host diagnostic: $(<"$TEST_ROOT/list-offline.err")"
 
 start_origin "$TEST_ROOT/origin-restarted.log"
-wait_for_public_body blog.shaulavo.dev /blog/ SERVE_CLI_PUBLIC_MARKER ||
+wait_for_public_body blog.mesh.test /blog/ SERVE_CLI_PUBLIC_MARKER ||
   fail "origin restart did not restore public liveness"
 
 "${CLI[@]}" unserve /blog --timeout 800ms >"$TEST_ROOT/unserve.out" 2>"$TEST_ROOT/unserve.err" ||
   fail "unserve acknowledged public withdrawal: $(<"$TEST_ROOT/unserve.err")"
 grep -Fq 'unserved /blog on pc' "$TEST_ROOT/unserve.out" ||
   fail "unserve output omitted the route owner: $(<"$TEST_ROOT/unserve.out")"
-WITHDRAWN_STATUS=$(edge_request blog.shaulavo.dev /blog/ --output /dev/null --write-out '%{http_code}') ||
+WITHDRAWN_STATUS=$(edge_request blog.mesh.test /blog/ --output /dev/null --write-out '%{http_code}') ||
   fail "query withdrawn public route"
 [ "$WITHDRAWN_STATUS" = 404 ] ||
   fail "unserve returned before edge withdrawal; public status was $WITHDRAWN_STATUS"

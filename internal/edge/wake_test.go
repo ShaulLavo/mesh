@@ -57,7 +57,7 @@ func TestFreshHeartbeatDoesNotPreventWakeBeforeHTTPBodyIsSent(t *testing.T) {
 	originID, _ := testIdentity(t)
 	endpoint := testHTTPServerEndpoint(t, backend)
 	publication := []PublishedRoute{{
-		Route:  Route{PublicName: "app.shaulavo.dev", ServiceName: "app", WakeOnRequest: true},
+		Route:  Route{PublicName: "app.mesh.test", ServiceName: "app", WakeOnRequest: true},
 		Origin: testResolvedOrigin(originID, endpoint, now),
 	}}
 	body := &wakeTrackedReader{reader: strings.NewReader("one mutation")}
@@ -90,7 +90,7 @@ func TestFreshHeartbeatDoesNotPreventWakeBeforeHTTPBodyIsSent(t *testing.T) {
 	if err := registry.Replace(publication); err != nil {
 		t.Fatal(err)
 	}
-	request := publicRequestWithBody(http.MethodPost, "app.shaulavo.dev", "/app", body)
+	request := publicRequestWithBody(http.MethodPost, "app.mesh.test", "/app", body)
 	request.ContentLength = int64(len("one mutation"))
 	response := httptest.NewRecorder()
 	registry.ServeHTTP(response, request)
@@ -136,8 +136,8 @@ func TestSleepingOriginsDoNotConsumeHealthyUpstreamCapacity(t *testing.T) {
 	defer registry.Close()
 	now := time.Now()
 	if err := registry.Replace([]PublishedRoute{
-		{Route: Route{PublicName: "app.shaulavo.dev", ServiceName: "asleep", WakeOnRequest: true}, Origin: ResolvedOrigin{Identity: asleepID, DisplayAlias: "Sleeping", LastSeenAt: now}},
-		{Route: Route{PublicName: "app.shaulavo.dev", ServiceName: "healthy", WakeOnRequest: true}, Origin: testResolvedOrigin(healthyID, testHTTPServerEndpoint(t, backend), now)},
+		{Route: Route{PublicName: "app.mesh.test", ServiceName: "asleep", WakeOnRequest: true}, Origin: ResolvedOrigin{Identity: asleepID, DisplayAlias: "Sleeping", LastSeenAt: now}},
+		{Route: Route{PublicName: "app.mesh.test", ServiceName: "healthy", WakeOnRequest: true}, Origin: testResolvedOrigin(healthyID, testHTTPServerEndpoint(t, backend), now)},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -163,12 +163,12 @@ func TestSleepingOriginsDoNotConsumeHealthyUpstreamCapacity(t *testing.T) {
 		t.Fatalf("sleeping origins hold %d upstream permits", active)
 	}
 	healthy := httptest.NewRecorder()
-	registry.ServeHTTP(healthy, publicRequest(http.MethodGet, "app.shaulavo.dev", "/healthy"))
+	registry.ServeHTTP(healthy, publicRequest(http.MethodGet, "app.mesh.test", "/healthy"))
 	if healthy.Code != http.StatusOK || healthy.Body.String() != "healthy" {
 		t.Fatalf("healthy origin while wakes wait = %d %q", healthy.Code, healthy.Body.String())
 	}
 	excess := httptest.NewRecorder()
-	registry.ServeHTTP(excess, publicRequest(http.MethodGet, "app.shaulavo.dev", "/asleep"))
+	registry.ServeHTTP(excess, publicRequest(http.MethodGet, "app.mesh.test", "/asleep"))
 	if excess.Code != http.StatusServiceUnavailable {
 		t.Fatalf("excess wake waiter status = %d", excess.Code)
 	}
@@ -176,7 +176,7 @@ func TestSleepingOriginsDoNotConsumeHealthyUpstreamCapacity(t *testing.T) {
 
 func serveSleepingTestRequest(registry *Registry, index int, done chan<- struct{}) {
 	defer func() { done <- struct{}{} }()
-	request := publicRequest(http.MethodGet, "app.shaulavo.dev", "/asleep")
+	request := publicRequest(http.MethodGet, "app.mesh.test", "/asleep")
 	request.RemoteAddr = fmt.Sprintf("198.51.100.%d:5000", index+1)
 	registry.ServeHTTP(httptest.NewRecorder(), request)
 }
@@ -207,7 +207,7 @@ func testWakePublication(t *testing.T, publishTarget bool) {
 	otherConfig := testOriginConfig(otherID)
 	otherConfig.TailscaleName = "other.example.ts.net"
 	state := newMemoryStateStore()
-	targetRoutes := []Route{{PublicName: "app.shaulavo.dev", ServiceName: "app", WakeOnRequest: true}}
+	targetRoutes := []Route{{PublicName: "app.mesh.test", ServiceName: "app", WakeOnRequest: true}}
 	var awake atomic.Bool
 	var controller *Controller
 	registry, err := NewRegistry(HandlerConfig{
@@ -246,7 +246,7 @@ func testWakePublication(t *testing.T, publishTarget bool) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	registry.ServeHTTP(response, publicRequest(http.MethodPost, "app.shaulavo.dev", "/app"))
+	registry.ServeHTTP(response, publicRequest(http.MethodPost, "app.mesh.test", "/app"))
 	if !publishTarget {
 		if received.Load() != 0 || response.Code != http.StatusBadGateway {
 			t.Fatalf("another origin's publication dispatched %d HTTP requests; status = %d", received.Load(), response.Code)

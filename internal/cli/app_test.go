@@ -83,7 +83,7 @@ func TestAppCreateUploadsCallerSourceWithOffsetsAndDigest(t *testing.T) {
 	if err = json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.URL != "https://7k3d.shaulavo.dev" || result.App.Visibility != "private" {
+	if result.URL != "https://7k3d.mesh.test" || result.App.Visibility != "private" {
 		t.Fatalf("output: %s", out)
 	}
 	gz, err := gzip.NewReader(bytes.NewReader(archive))

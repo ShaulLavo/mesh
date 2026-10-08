@@ -3,6 +3,8 @@ package edge
 import (
 	"net/http"
 	"strings"
+
+	"github.com/shaul/mesh/internal/domainpolicy"
 )
 
 func (r *Registry) filterPublicCookies(response *http.Response) error {
@@ -38,8 +40,10 @@ func sharedParentCookie(value string) bool {
 		}
 		domain = strings.Trim(strings.TrimSpace(domain), "\"")
 		domain = strings.Trim(domain, ".")
-		if strings.EqualFold(domain, "shaulavo.dev") {
-			return true
+		for _, parent := range domainpolicy.Domains() {
+			if strings.EqualFold(domain, parent) {
+				return true
+			}
 		}
 	}
 	return false

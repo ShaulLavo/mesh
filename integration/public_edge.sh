@@ -149,7 +149,7 @@ start_origin_two() {
 
 proxy_curl() {
   curl --noproxy '*' --silent --max-time 4 \
-    --header 'Host: app.shaulavo.dev' \
+    --header 'Host: app.mesh.test' \
     --header 'X-Forwarded-For: 203.0.113.77' \
     --header 'X-Forwarded-Proto: https' \
     "$@"
@@ -157,7 +157,7 @@ proxy_curl() {
 
 direct_curl() {
   curl --noproxy '*' --silent --max-time 4 --cacert "$LIVE_CERT" \
-    --resolve "app.shaulavo.dev:$DIRECT_PORT:127.0.0.1" "$@"
+    --resolve "app.mesh.test:$DIRECT_PORT:127.0.0.1" "$@"
 }
 
 wait_for_proxy_marker() {
@@ -171,7 +171,7 @@ wait_for_proxy_marker() {
 
 wait_for_direct_marker() {
   for _ in $(seq 40); do
-    body=$(direct_curl "https://app.shaulavo.dev:$DIRECT_PORT/site/" 2>/dev/null) &&
+    body=$(direct_curl "https://app.mesh.test:$DIRECT_PORT/site/" 2>/dev/null) &&
       [ "$body" = PUBLIC_EDGE_ORIGIN_ONE ] && return 0
     sleep 0.05
   done
@@ -222,7 +222,7 @@ PY
 }
 
 served_fingerprint() {
-  { openssl s_client -connect "127.0.0.1:$DIRECT_PORT" -servername app.shaulavo.dev -showcerts </dev/null 2>/dev/null || true; } |
+  { openssl s_client -connect "127.0.0.1:$DIRECT_PORT" -servername app.mesh.test -showcerts </dev/null 2>/dev/null || true; } |
     openssl x509 -noout -fingerprint -sha256 2>/dev/null || true
 }
 
@@ -412,16 +412,16 @@ start_origin_one "$TEST_ROOT/origin-one.log"
 start_origin_two "$TEST_ROOT/origin-two.log"
 
 python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert -- "$ORIGIN_ONE_STATE/daemon.sock" site static \
-  "$TEST_ROOT/origin-one-site" app.shaulavo.dev >/dev/null || fail "publish static service"
+  "$TEST_ROOT/origin-one-site" app.mesh.test >/dev/null || fail "publish static service"
 python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert -- "$ORIGIN_ONE_STATE/daemon.sock" bridge proxy \
-  "$BACKEND_PORT" app.shaulavo.dev >/dev/null || fail "publish proxy service"
+  "$BACKEND_PORT" app.mesh.test >/dev/null || fail "publish proxy service"
 wait_for_proxy_marker || fail "proxy edge did not reach the first origin: $(cat "$TEST_ROOT/edge-proxy.log")"
 
 python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert --wake -- \
-  "$ORIGIN_ONE_STATE/daemon.sock" wake static "$TEST_ROOT/origin-one-site" wake.shaulavo.dev >/dev/null ||
+  "$ORIGIN_ONE_STATE/daemon.sock" wake static "$TEST_ROOT/origin-one-site" wake.mesh.test >/dev/null ||
   fail "publish wake-enabled public route"
 WAKE_STATUS=$(curl --noproxy '*' --silent --max-time 2 --output /dev/null --write-out '%{http_code}' \
-  --header 'Host: wake.shaulavo.dev' --header 'X-Forwarded-For: 203.0.113.77' \
+  --header 'Host: wake.mesh.test' --header 'X-Forwarded-For: 203.0.113.77' \
   --header 'X-Forwarded-Proto: https' "http://127.0.0.1:$PROXY_PORT/wake/") ||
   fail "wake-enabled route request"
 [ "$WAKE_STATUS" = 200 ] || fail "online wake-enabled route returned status $WAKE_STATUS"
@@ -433,16 +433,16 @@ printf '%s\n' "$HEADER_BODY" | grep -q '^xfp=https$' ||
   fail "trusted X-Forwarded-Proto did not reach the service: $HEADER_BODY"
 printf '%s\n' "$HEADER_BODY" | grep -q '^xff=203\.0\.113\.77' ||
   fail "trusted client address did not reach the service: $HEADER_BODY"
-python3 "$HTTP_FIXTURE" client 127.0.0.1 "$PROXY_PORT" app.shaulavo.dev /bridge/socket --proxy >/dev/null ||
+python3 "$HTTP_FIXTURE" client 127.0.0.1 "$PROXY_PORT" app.mesh.test /bridge/socket --proxy >/dev/null ||
   fail "proxy WebSocket stream"
 
 MALFORMED_STATUS=$(curl --noproxy '*' --silent --max-time 2 --output /dev/null --write-out '%{http_code}' \
-  --header 'Host: app.shaulavo.dev' --header 'X-Forwarded-For: 203.0.113.1' \
+  --header 'Host: app.mesh.test' --header 'X-Forwarded-For: 203.0.113.1' \
   --header 'X-Forwarded-For: 203.0.113.2' --header 'X-Forwarded-Proto: https' \
   "http://127.0.0.1:$PROXY_PORT/site/") || fail "malformed forwarded-header request"
 [ "$MALFORMED_STATUS" = 404 ] || fail "repeated forwarded header returned $MALFORMED_STATUS, want 404"
 MALFORMED_STATUS=$(curl --noproxy '*' --silent --max-time 2 --output /dev/null --write-out '%{http_code}' \
-  --header 'Host: app.shaulavo.dev' --header 'X-Forwarded-For: not-an-ip' \
+  --header 'Host: app.mesh.test' --header 'X-Forwarded-For: not-an-ip' \
   --header 'X-Forwarded-Proto: https' "http://127.0.0.1:$PROXY_PORT/site/") ||
   fail "invalid forwarded-address request"
 [ "$MALFORMED_STATUS" = 404 ] || fail "invalid forwarded address returned $MALFORMED_STATUS, want 404"
@@ -451,7 +451,7 @@ TERMINAL_STATUS=$(proxy_curl --output /dev/null --write-out '%{http_code}' \
 [ "$TERMINAL_STATUS" = 404 ] || fail "encoded terminal path returned $TERMINAL_STATUS, want 404"
 
 python3 "$CONTROL_FIXTURE" --expect-type error --expect-code edge.route_collision upsert -- \
-  "$ORIGIN_TWO_STATE/daemon.sock" site static "$TEST_ROOT/origin-two-site" app.shaulavo.dev >/dev/null ||
+  "$ORIGIN_TWO_STATE/daemon.sock" site static "$TEST_ROOT/origin-two-site" app.mesh.test >/dev/null ||
   fail "refuse route collision"
 [ "$(proxy_curl "http://127.0.0.1:$PROXY_PORT/site/")" = PUBLIC_EDGE_ORIGIN_ONE ] ||
   fail "collision displaced the first origin"
@@ -485,7 +485,7 @@ DELETE_STATUS=$(proxy_curl --output /dev/null --write-out '%{http_code}' \
 python3 "$CONTROL_FIXTURE" --expect-type service.deleted delete -- "$ORIGIN_ONE_STATE/daemon.sock" site >/dev/null ||
   fail "repeat absent service delete"
 python3 "$CONTROL_FIXTURE" --expect-type service.upserted upsert -- "$ORIGIN_ONE_STATE/daemon.sock" site static \
-  "$TEST_ROOT/origin-one-site" app.shaulavo.dev >/dev/null || fail "restore static service for direct TLS"
+  "$TEST_ROOT/origin-one-site" app.mesh.test >/dev/null || fail "restore static service for direct TLS"
 wait_for_proxy_marker || fail "restored service did not republish"
 
 stop_process "$ORIGIN_ONE_PID"
@@ -504,7 +504,7 @@ STAGING_SIGNATURE="$TEST_ROOT/public-staging.signature"
 LIVE_CERT="$TEST_ROOT/public-live.crt"
 LIVE_KEY="$TEST_ROOT/public-live.key"
 LIVE_SIGNATURE="$TEST_ROOT/public-live.signature"
-create_certificate 401 '*.shaulavo.dev' "$STAGING_CERT" "$STAGING_KEY"
+create_certificate 401 '*.mesh.test' "$STAGING_CERT" "$STAGING_KEY"
 sign_bundle public-edge staging "$STAGING_CERT" "$STAGING_KEY" "$STAGING_SIGNATURE"
 python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install -- "$EDGE_STATE/daemon.sock" \
   public-edge staging "$EDGE_ID" "$RENEWER_ID" "$STAGING_CERT" "$STAGING_KEY" "$STAGING_SIGNATURE" >/dev/null ||
@@ -515,7 +515,7 @@ python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install -- "$EDGE
   fail "staging public certificate entered the live slot"
 [ -z "$(served_fingerprint)" ] || fail "staging public certificate became serving"
 
-create_certificate 402 '*.shaulavo.dev' "$LIVE_CERT" "$LIVE_KEY"
+create_certificate 402 '*.mesh.test' "$LIVE_CERT" "$LIVE_KEY"
 sign_bundle public-edge live "$LIVE_CERT" "$LIVE_KEY" "$LIVE_SIGNATURE"
 python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install -- "$EDGE_STATE/daemon.sock" public-edge live \
   "$EDGE_ID" "$RENEWER_ID" "$LIVE_CERT" "$LIVE_KEY" "$LIVE_SIGNATURE" >/dev/null ||
@@ -527,7 +527,7 @@ EXPECTED_FINGERPRINT=$(openssl x509 -in "$LIVE_CERT" -noout -fingerprint -sha256
 STAGING_TWO_CERT="$TEST_ROOT/public-staging-two.crt"
 STAGING_TWO_KEY="$TEST_ROOT/public-staging-two.key"
 STAGING_TWO_SIGNATURE="$TEST_ROOT/public-staging-two.signature"
-create_certificate 403 '*.shaulavo.dev' "$STAGING_TWO_CERT" "$STAGING_TWO_KEY"
+create_certificate 403 '*.mesh.test' "$STAGING_TWO_CERT" "$STAGING_TWO_KEY"
 sign_bundle public-edge staging "$STAGING_TWO_CERT" "$STAGING_TWO_KEY" "$STAGING_TWO_SIGNATURE"
 python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install -- "$EDGE_STATE/daemon.sock" public-edge staging \
   "$EDGE_ID" "$RENEWER_ID" "$STAGING_TWO_CERT" "$STAGING_TWO_KEY" "$STAGING_TWO_SIGNATURE" >/dev/null ||
@@ -538,7 +538,7 @@ python3 "$CONTROL_FIXTURE" --expect-type certificate.installed install -- "$EDGE
 PRIVATE_CERT="$TEST_ROOT/private.crt"
 PRIVATE_KEY="$TEST_ROOT/private.key"
 PRIVATE_SIGNATURE="$TEST_ROOT/private.signature"
-create_certificate 404 '*.mesh.shaulavo.dev' "$PRIVATE_CERT" "$PRIVATE_KEY"
+create_certificate 404 '*.mesh.mesh.test' "$PRIVATE_CERT" "$PRIVATE_KEY"
 sign_bundle private-origin live "$PRIVATE_CERT" "$PRIVATE_KEY" "$PRIVATE_SIGNATURE"
 python3 "$CONTROL_FIXTURE" --expect-type error install -- "$EDGE_STATE/daemon.sock" private-origin live \
   "$EDGE_ID" "$RENEWER_ID" "$PRIVATE_CERT" "$PRIVATE_KEY" "$PRIVATE_SIGNATURE" >/dev/null ||
@@ -549,26 +549,26 @@ python3 "$CONTROL_FIXTURE" --expect-type error install -- "$EDGE_STATE/daemon.so
   fail "profile mismatch changed the direct listener certificate"
 
 DIRECT_OFFLINE_STATUS=$(direct_curl --output /dev/null --write-out '%{http_code}' \
-  "https://app.shaulavo.dev:$DIRECT_PORT/site/") || fail "direct restored-claim request"
+  "https://app.mesh.test:$DIRECT_PORT/site/") || fail "direct restored-claim request"
 [ "$DIRECT_OFFLINE_STATUS" = 502 ] ||
   fail "direct edge restored claim as $DIRECT_OFFLINE_STATUS before a fresh heartbeat"
 start_origin_one "$TEST_ROOT/origin-one-direct.log"
 wait_for_direct_marker || fail "direct edge did not restore origin liveness"
-DIRECT_HEADER_BODY=$(direct_curl "https://app.shaulavo.dev:$DIRECT_PORT/bridge/headers") ||
+DIRECT_HEADER_BODY=$(direct_curl "https://app.mesh.test:$DIRECT_PORT/bridge/headers") ||
   fail "direct header request"
 printf '%s\n' "$DIRECT_HEADER_BODY" | grep -q '^xfp=https$' ||
   fail "direct TLS scheme did not reach the service: $DIRECT_HEADER_BODY"
-python3 "$HTTP_FIXTURE" client 127.0.0.1 "$DIRECT_PORT" app.shaulavo.dev /bridge/socket \
+python3 "$HTTP_FIXTURE" client 127.0.0.1 "$DIRECT_PORT" app.mesh.test /bridge/socket \
   --ca "$LIVE_CERT" >/dev/null || fail "direct-TLS WebSocket stream"
 DIRECT_TERMINAL_STATUS=$(direct_curl --output /dev/null --write-out '%{http_code}' \
-  "https://app.shaulavo.dev:$DIRECT_PORT/%256d%2565%2573%2568") ||
+  "https://app.mesh.test:$DIRECT_PORT/%256d%2565%2573%2568") ||
   fail "direct terminal isolation request"
 [ "$DIRECT_TERMINAL_STATUS" = 404 ] ||
   fail "direct encoded terminal path returned $DIRECT_TERMINAL_STATUS"
 
 rm -f -- "$BLOCK_READY"
 direct_curl --output "$TEST_ROOT/killed-origin.out" --write-out '%{http_code}' \
-  "https://app.shaulavo.dev:$DIRECT_PORT/bridge/block" >"$TEST_ROOT/killed-origin.status" &
+  "https://app.mesh.test:$DIRECT_PORT/bridge/block" >"$TEST_ROOT/killed-origin.status" &
 KILLED_CLIENT_PID=$!
 wait_for_file "$BLOCK_READY" || fail "mid-request backend was not reached"
 kill -9 "$ORIGIN_ONE_PID" 2>/dev/null || fail "kill origin during request"

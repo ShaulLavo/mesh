@@ -23,6 +23,8 @@ import (
 	"time"
 )
 
+const certificatePEMType = "CERTIFICATE"
+
 const (
 	maximumCertificatePEM = 1 << 20
 	maximumPrivateKeyPEM  = 64 << 10
@@ -237,7 +239,7 @@ func ValidateBundle(certificatePEM, privateKeyPEM []byte, expectedName string, n
 	}
 	for rest := certificatePEM; len(bytes.TrimSpace(rest)) > 0; {
 		block, remainder := pem.Decode(rest)
-		if block == nil || block.Type != "CERTIFICATE" {
+		if block == nil || block.Type != certificatePEMType {
 			return Bundle{}, errors.New("dnsname: certificate chain contains non-certificate PEM data")
 		}
 		rest = remainder

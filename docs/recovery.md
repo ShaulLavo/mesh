@@ -1,5 +1,8 @@
 # Recover a workspace
 
+The examples use `new.example` from the configured
+[deployment domains](deployment-domains.md). Replace it with your domain.
+
 Select an interrupted session in the picker to open a shell in its saved
 directory. An interrupted program shows **Open shell**. Its recorded command runs
 only when you select **Restart command** with `c`.
@@ -32,8 +35,8 @@ host, it reports the exact host and session to connect to directly. Select
 the SSH host. You can recover a local SSH-host session directly:
 
 ```bash
-ssh -t pc.mesh.shaulavo.dev recover 7K3D
-ssh -t pc.mesh.shaulavo.dev recover 7K3D --command
+ssh -t pc.mesh.new.example recover 7K3D
+ssh -t pc.mesh.new.example recover 7K3D --command
 ```
 
 To open a shell on the original session's host, select `s` in the picker or run:

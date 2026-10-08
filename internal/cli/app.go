@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/term"
 	appspkg "github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/bootstrap"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/spf13/cobra"
 )
@@ -35,6 +36,17 @@ type appOutput struct {
 func (a *application) appCommand() *cobra.Command {
 	flags := &appOutput{sshPort: uint(bootstrap.DefaultSSHPort)}
 	cmd := &cobra.Command{Use: "app", Short: "Create and manage disposable websites", Example: "  mesh app create pc ./site\n  mesh app create local ./backend --run 'bun run start' --port 3000\n  mesh app public pc 7k3d\n  mesh app browser approve pc CODE"}
+	cmd.PersistentPreRunE = func(command *cobra.Command, args []string) error {
+		if root := command.Root(); root.PersistentPreRunE != nil {
+			if err := root.PersistentPreRunE(command, args); err != nil {
+				return fmt.Errorf("app: configure client: %w", err)
+			}
+		}
+		if domainpolicy.Primary() == "" {
+			return errors.New("app: configure domains.json before managing websites")
+		}
+		return nil
+	}
 	cmd.PersistentFlags().BoolVar(&flags.json, "json", false, "print machine-readable results")
 	cmd.PersistentFlags().UintVar(&flags.sshPort, "ssh-port", uint(bootstrap.DefaultSSHPort), "Mesh SSH port for remote app hosts")
 	cmd.AddCommand(a.appCreateCommand(flags, false), a.appCreateCommand(flags, true), a.appListCommand(flags), a.appDownloadCommand(flags))

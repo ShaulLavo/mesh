@@ -5,8 +5,10 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/edge"
@@ -99,6 +101,7 @@ type certificateRuntime struct {
 	OriginTLS        *tls.Config
 	PublicTLS        *tls.Config
 	PrivateName      func() string
+	PrivateNames     func() []string
 	PrivateNameReady func()
 }
 
@@ -129,8 +132,8 @@ func configureCertificates(config certificateRuntimeConfig) (certificateRuntime,
 	installers := make(map[dnsname.CertificateProfile]certificateInstaller, 2)
 	runtime := certificateRuntime{}
 	if config.OriginHTTPSPort != 0 {
-		installer, tlsConfig, privateName, privateNameReady, err := configureCertificateProfile(
-			filepath.Join(config.StateDir, privateTLSDirectoryName), dnsname.WildcardName,
+		installer, tlsConfig, privateName, privateNameReady, err := configureCertificateDomains(
+			filepath.Join(config.StateDir, privateTLSDirectoryName),
 			dnsname.ProfilePrivateOrigin, config.TargetID, config.OriginRenewerID,
 		)
 		if err != nil {
@@ -139,11 +142,12 @@ func configureCertificates(config certificateRuntimeConfig) (certificateRuntime,
 		installers[dnsname.ProfilePrivateOrigin] = installer
 		runtime.OriginTLS = tlsConfig
 		runtime.PrivateName = privateName
+		runtime.PrivateNames = installer.(*certificateDomains).privateNames
 		runtime.PrivateNameReady = privateNameReady
 	}
 	if config.PublicMode == edge.ModeDirectTLS {
-		installer, tlsConfig, _, _, err := configureCertificateProfile(
-			filepath.Join(config.StateDir, certificateDirectoryName, string(dnsname.ProfilePublicEdge)), dnsname.PublicWildcardName,
+		installer, tlsConfig, _, _, err := configureCertificateDomains(
+			filepath.Join(config.StateDir, certificateDirectoryName, string(dnsname.ProfilePublicEdge)),
 			dnsname.ProfilePublicEdge, config.TargetID, config.PublicCertificatePin,
 		)
 		if err != nil {
@@ -198,4 +202,16 @@ func configureCertificateProfile(root, name string, profile dnsname.CertificateP
 		markPrivateNameReady = privateName.MarkIngressReady
 	}
 	return installer, &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: source.GetCertificate}, currentPrivateName, markPrivateNameReady, nil
+}
+
+func (c certificateRuntime) viewHostReady(host string, now time.Time) bool {
+	if _, _, accepted := domainpolicy.Label(host, false); !accepted || c.PublicTLS == nil {
+		return false
+	}
+	certificate, err := c.PublicTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: host})
+	if err != nil || certificate == nil || certificate.Leaf == nil {
+		return false
+	}
+	leaf := certificate.Leaf
+	return !now.Before(leaf.NotBefore) && now.Before(leaf.NotAfter) && leaf.VerifyHostname(host) == nil
 }

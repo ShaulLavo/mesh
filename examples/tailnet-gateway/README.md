@@ -1,16 +1,17 @@
 # Share Tailnet HTTPS between Mesh and temporary apps
 
 This optional gateway forwards TLS without decrypting it. Tailscale TCP/443
-connects to the gateway on `127.0.0.1:8446`. ClientHello SNI selects the backend:
+connects to the gateway on `127.0.0.1:8446`. ClientHello SNI selects the backend using the accepted domains in
+[`domains.json`](../../docs/deployment-domains.md):
 
-- `apps.shaulavo.dev` and four-character app names go to `127.0.0.1:8445`.
+- `apps.new.example` and four-character app names on every configured domain go to `127.0.0.1:8445`.
 - Other hostnames go to the existing private Mesh listener on `127.0.0.1:8443`.
 
 Build and run the gateway on the Mesh host:
 
 ```sh
-go build -o /work/mesh/tls-gateway ./examples/tailnet-gateway
-/work/mesh/tls-gateway --tailnet-owner-access
+go build -o ./tls-gateway ./examples/tailnet-gateway
+./tls-gateway --domains "$HOME/.config/mesh/domains.json" --tailnet-owner-access
 ```
 
 Configure the private Mesh daemon with its existing HTTPS certificate options
@@ -20,7 +21,7 @@ Configure the temporary-app edge with `mode: "direct-tls"`,
 `listenAddress: "127.0.0.1:8445"`, `tailnetOwnerAccess: true`, and its certificate
 renewer identity.
 The certificate renewer must issue and deliver a certificate covering
-`*.shaulavo.dev` to that edge. Existing private Mesh certificates stay on the
+`*.new.example` to that edge. Existing private Mesh certificates stay on the
 private backend. The gateway stores no certificates or browser credentials.
 
 Point the management and app DNS names at the host's Tailnet IP. Clients need
@@ -59,6 +60,8 @@ Mac origin hosts and routing with manual browser pairing remain supported.
 
 For routing with manual browser pairing, omit all three owner-access settings.
 
+The required `--domains` flag selects the same naming policy used by the backends.
+During migration it routes both configured domains at once.
 The gateway accepts `--listen`, `--private`, and `--apps` to override these ports.
 It bounds the ClientHello size and handshake/connect times. This example is for
 Tailnet hosting; it does not configure an internet-facing deployment.

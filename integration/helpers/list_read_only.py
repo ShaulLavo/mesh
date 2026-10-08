@@ -7,9 +7,9 @@ binary, scratch = sys.argv[1], Path(sys.argv[2])
 book_bytes = b'{"version":1,"hosts":[]}'
 
 
-def listing(state, config):
+def listing(state, config, command="ls"):
     environment = dict(os.environ, MESH_STATE_DIR=str(state), MESH_CONFIG_DIR=str(config))
-    return subprocess.run([binary, "ls"], env=environment, capture_output=True, text=True, timeout=5)
+    return subprocess.run([binary, command], env=environment, capture_output=True, text=True, timeout=5)
 
 
 def fixture(name):
@@ -35,12 +35,16 @@ def empty_listing(name, parent_mode, existing_state):
         result = listing(state, config)
         assert result.returncode == 0, f"{name}: exit {result.returncode}: {result.stderr}"
         assert result.stdout.strip() == "no live sessions on this host", result.stdout
+        alias = listing(state, config, "list")
+        assert alias.returncode == 0, f"{name}: list alias exit {alias.returncode}: {alias.stderr}"
+        assert alias.stdout == result.stdout, f"{name}: list alias output changed"
         assert state.exists() == existing_state, f"{name}: listing created absent state"
         assert not (state / "s").exists(), f"{name}: listing created sessions directory"
         after = book.stat()
         assert book.read_bytes() == book_bytes
         assert (before.st_ino, before.st_mode) == (after.st_ino, after.st_mode)
         assert not (config / ".hosts.lock").exists()
+        assert not (config / "domains.json").exists(), f"{name}: listing published deployment policy"
     finally:
         root.chmod(0o700)
         config.chmod(0o700)

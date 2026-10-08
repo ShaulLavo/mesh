@@ -11,7 +11,7 @@ func TestServeIsolateFlagReachesTheHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "serving https://pc.mesh.shaulavo.dev/app on pc (proxy -> 3000)") {
+	if !strings.Contains(stdout, "serving https://pc.mesh.mesh.test/app on pc (proxy -> 3000)") {
 		t.Fatalf("serve output = %q", stdout)
 	}
 	host.mu.Lock()
