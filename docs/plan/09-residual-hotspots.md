@@ -139,6 +139,18 @@ Heavy commands use `bun /work/platform-production/heavy/current/run.js` with the
 appropriate `light`, `suite`, `build`, or `bench` class. No bypass or shared-tree
 builds. Any development server takes an explicit free `--port`.
 
+## Transport comparison baseline
+
+Approved investigation, 2026-10-08. This section owns [#246](https://github.com/ShaulLavo/mesh/issues/246) after Plan 336 Track H closeout. The issue established no direct-socket advantage over SSH. Existing Plan 08 findings are historical; check current main before treating them as defects. Coordinate product, persistence, security and terminal compatibility with [Plan 11](11-session-contract-and-boundaries.md).
+
+- [ ] Reuse `scripts/bench/`, `internal/transport/batch.go`, `internal/transport/transport.go` and current state-watch controls. Record source, tool versions, hardware, terminal, workload, prediction settings and actual direct/relayed network path. Separate core session costs from optional catalogs, metrics and dashboards.
+- [ ] Compare native Mesh, Mesh's SSH front door, SSH plus tmux and Mosh plus tmux under equivalent persistence and output requirements. Begin with an ordinary low-latency fixture, then separately authorized delay/loss, output-heavy and low-resource cases. Measure input-to-visible-output latency distributions, reconnect/current-screen recovery time, CPU, memory, network bytes, storage writes and startup cost. No production network fault injection is authorized here.
+- [ ] Check input loss, duplication and terminal fidelity beside timing. Use Plan 11's corpus before evaluating Mosh as an optional front door to host-local Mesh. Pin the Mosh revision and review licensing before code reuse.
+- [ ] Rank the smallest supported experiments. Optimizing the existing WebSocket path, separating optional background work, a Mosh composition or making no transport change are possible outcomes. Protocol replacement, UDP, QUIC and compression remain undecided.
+- [ ] Preserve #78's unrelated fixture-SIGKILL uncertainty under [Plan 07](07-quality-and-security-wave.md#historical-fixture-failures). Do not restart its reproduction campaign or use it as evidence of a production transport defect.
+
+Acceptance is a reproducible comparative baseline and ranked experiment sequence, with resource use and correctness accompanying each latency result. Missing measurements require this bounded baseline, not abandonment of performance work. Existing Gate 0 ownership, isolated-state and separate live-host authorization rules apply.
+
 ## Unit 1. Move whole-width VT rows
 
 The current bottleneck is data layout. `Buffer.DeleteLineArea` visits every cell
