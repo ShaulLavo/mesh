@@ -37,6 +37,31 @@ func TestCachePutContextCancelsBlockedLock(t *testing.T) {
 	}
 }
 
+func TestCachePutSkipsIdenticalGrant(t *testing.T) {
+	cache, err := NewCache(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := testGrant(t)
+	if err := cache.Put(grant); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(cache.path(grant.TargetID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Put(grant); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(cache.path(grant.TargetID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("identical grant replaced the cached file")
+	}
+}
+
 func TestCanceledSenderDoesNotWaitForCacheLock(t *testing.T) {
 	stateDir := t.TempDir()
 	sender, err := NewSenderWithOptions(stateDir, SenderOptions{Discover: func(context.Context) (NIC, error) { t.Fatal("discovery after canceled cache write"); return NIC{}, nil }})
