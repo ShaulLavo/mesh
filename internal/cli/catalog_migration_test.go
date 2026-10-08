@@ -83,7 +83,7 @@ func TestConcurrentCatalogOpenersKeepFreshMigrationsOptional(t *testing.T) {
 	}
 }
 
-func TestCatalogMigrationFailureProducesOneOptionalWarning(t *testing.T) {
+func TestCatalogMigrationDivergenceRemainsFatal(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv("MESH_STATE_DIR", stateDir)
 	seedCatalogMigrationHistory(t, stateDir)
@@ -91,28 +91,22 @@ func TestCatalogMigrationFailureProducesOneOptionalWarning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A stale migration snapshot tries to create a table another opener created.
+	// Unrecorded schema changes are permanent divergence, not a competing commit.
 	if _, err := db.ExecContext(t.Context(), "CREATE TABLE hosts (id TEXT)"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	cache, err := OpenCatalogCache(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := cache.Close(); err != nil {
-			t.Error(err)
+	for range 3 {
+		cache, err := OpenCatalogCache(t.Context())
+		if cache != nil {
+			t.Cleanup(func() { _ = cache.Close() })
 		}
-	}()
-	host := HostRecord{ID: "host-pc", MachineName: "pc"}
-	if rows, err := cache.LoadServices(t.Context(), host); len(rows) != 0 || !errors.Is(err, storage.ErrAdvisoryMigrationUnavailable) {
-		t.Fatalf("cache warning = %#v, %v, want unavailable migration", rows, err)
-	}
-	if rows, err := cache.LoadServices(t.Context(), host); len(rows) != 0 || err != nil {
-		t.Fatalf("migration warning repeated = %#v, %v", rows, err)
+		var partial *goose.PartialError
+		if cache != nil || !errors.As(err, &partial) || errors.Is(err, storage.ErrAdvisoryMigrationUnavailable) {
+			t.Fatalf("divergent cache migration = %v, cache = %#v, want original fatal error", err, cache)
+		}
 	}
 	store, err := storage.Open(t.Context(), filepath.Join(stateDir, catalogDatabaseName))
 	if store != nil {

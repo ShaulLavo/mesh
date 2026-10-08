@@ -24,7 +24,7 @@ const (
 	sqliteMaxOpenConns = 4
 )
 
-// ErrAdvisoryMigrationUnavailable marks a failed optional-cache migration.
+// ErrAdvisoryMigrationUnavailable marks a migration committed by another opener.
 // Authoritative opens still return the original migration error.
 var ErrAdvisoryMigrationUnavailable = errors.New("advisory cache migration unavailable")
 
@@ -284,15 +284,23 @@ func migrate(ctx context.Context, db *sql.DB, advisory bool) error {
 		return fmt.Errorf("create Goose provider: %w", err)
 	}
 	if _, err := provider.Up(ctx); err != nil {
-		var partial *goose.PartialError
-		// Goose can apply a stale migration list after another opener commits.
-		// Cache failures stay diagnostic-only; the daemon still fails its open.
-		if advisory && errors.As(err, &partial) {
+		if advisory && isAdvisoryMigrationRace(ctx, provider, err) {
 			return fmt.Errorf("%w: %w", ErrAdvisoryMigrationUnavailable, err)
 		}
 		return fmt.Errorf("apply Goose migrations: %w", err)
 	}
 	return nil
+}
+
+func isAdvisoryMigrationRace(ctx context.Context, provider *goose.Provider, err error) bool {
+	var partial *goose.PartialError
+	if !errors.As(err, &partial) {
+		return false
+	}
+	// Goose commits the version and schema together. A recorded version proves
+	// another opener won; missing history keeps permanent schema failures fatal.
+	version, readErr := provider.GetDBVersion(ctx)
+	return readErr == nil && version >= partial.Failed.Source.Version
 }
 
 func ensureAdvisoryVersionTable(ctx context.Context, db *sql.DB) error {
