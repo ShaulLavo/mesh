@@ -35,7 +35,11 @@ That historical default is `shaulavo.dev`. Configure `domains.json` to choose
 another domain for a new deployment.
 
 A fresh native-only installation works with no policy. Detached workers, agent
-helpers, version inspection, and update helpers stay independent of this file.
+helpers, native device enrollment, version inspection, and update helpers stay
+independent of this file. Session listing through `mesh ls` or `mesh list` loads
+the configured policy or infers legacy names in memory. Listing keeps deployment
+configuration and state files unchanged, including read-only configuration
+directories.
 Invalid policy stops ordinary commands before they start a listener or validate
 service caches. Managed updates and direct executable replacement both migrate
 on the new daemon's startup.

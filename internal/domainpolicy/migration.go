@@ -21,6 +21,15 @@ const legacyDeploymentDomain = "shaulavo.dev"
 // InitializeDeployment preserves pre-policy deployments before listeners or
 // service caches validate names. Native-only installations need no policy.
 func InitializeDeployment(path, stateDir string, deploymentRequested bool) error {
+	return initializeDeploymentPolicy(path, stateDir, deploymentRequested, true)
+}
+
+// InitializeReadOnlyDeployment infers legacy names without changing any files.
+func InitializeReadOnlyDeployment(path, stateDir string) error {
+	return initializeDeploymentPolicy(path, stateDir, false, false)
+}
+
+func initializeDeploymentPolicy(path, stateDir string, deploymentRequested, persist bool) error {
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		return Initialize(path)
 	}
@@ -29,13 +38,9 @@ func InitializeDeployment(path, stateDir string, deploymentRequested bool) error
 		return err
 	}
 	if domain == "" && !present && !deploymentRequested {
-		for _, evidence := range []string{filepath.Join(stateDir, "mesh.db"), filepath.Join(filepath.Dir(path), "hosts.json")} {
-			if _, err := os.Stat(evidence); err == nil {
-				present = true
-				break
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("domain policy: inspect existing installation: %w", err)
-			}
+		present, err = existingInstallation(path, stateDir)
+		if err != nil {
+			return err
 		}
 		if !present {
 			return nil
@@ -47,6 +52,9 @@ func InitializeDeployment(path, stateDir string, deploymentRequested bool) error
 	policy := Policy{Primary: domain, LegacyCertificateDomain: domain}
 	if err := policy.Validate(); err != nil {
 		return err
+	}
+	if !persist {
+		return installPolicy(policy)
 	}
 	if err := publishMigration(path, policy); err != nil {
 		return err
@@ -253,4 +261,15 @@ func requireLegacyLayout(stateDir string) error {
 		}
 	}
 	return nil
+}
+
+func existingInstallation(path, stateDir string) (bool, error) {
+	for _, evidence := range []string{filepath.Join(stateDir, "mesh.db"), filepath.Join(filepath.Dir(path), "hosts.json")} {
+		if _, err := os.Stat(evidence); err == nil {
+			return true, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("domain policy: inspect existing installation: %w", err)
+		}
+	}
+	return false, nil
 }

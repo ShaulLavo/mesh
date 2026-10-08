@@ -110,6 +110,10 @@ func Initialize(path string) error {
 	if err != nil {
 		return err
 	}
+	return installPolicy(policy)
+}
+
+func installPolicy(policy Policy) error {
 	installed := false
 	initialize.Do(func() { active = policy; installed = true })
 	if !installed {

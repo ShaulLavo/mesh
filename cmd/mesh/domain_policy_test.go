@@ -14,7 +14,7 @@ import (
 )
 
 func TestNamingCommandKeepsNativeSessionsIndependent(t *testing.T) {
-	for _, command := range []string{"session-worker", "version", "update"} {
+	for _, command := range []string{"session-worker", "version", "update", "device"} {
 		if namingCommand([]string{command}) {
 			t.Fatalf("native command reads deployment policy: %s", command)
 		}
@@ -32,13 +32,16 @@ func TestNamingCommandHandlesRootFlags(t *testing.T) {
 			t.Fatalf("missed naming command: %v", args)
 		}
 	}
+	if namingCommand([]string{"--privacy", "device", "approve-checked"}) {
+		t.Fatal("native enrollment reads deployment policy behind root flags")
+	}
 	if !namingCommand([]string{"--privacy", "spawn", "serve"}) {
 		t.Fatal("spawn skips deployment policy")
 	}
 }
 
 func TestPickerLoadsDeploymentPolicy(t *testing.T) {
-	for _, args := range [][]string{nil, {"--privacy"}, {"ls"}, {"spawn", "serve"}} {
+	for _, args := range [][]string{nil, {"--privacy"}, {"ls"}, {"list"}, {"spawn", "serve"}} {
 		if !namingCommand(args) {
 			t.Fatalf("entry skips deployment policy: %v", args)
 		}

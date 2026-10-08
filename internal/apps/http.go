@@ -572,7 +572,8 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			target, _ := url.Parse(destination)
-			if !e.viewHostReady(target.Host) || !e.viewHostReady(r.Host) {
+			managerHost, _ := serve.CanonicalHost(r.Host)
+			if !e.viewHostReady(target.Host) || !e.viewHostReady(managerHost) {
 				http.Error(w, "Install the deployment certificate to open a private view", http.StatusServiceUnavailable)
 				return
 			}

@@ -206,3 +206,21 @@ func TestViewStartRequiresInstalledManagerCertificate(t *testing.T) {
 		t.Fatalf("uncertified manager challenge: %d %s", response.Code, response.Header().Get("Location"))
 	}
 }
+
+func TestPrivateViewCanonicalizesManagerHost(t *testing.T) {
+	for _, host := range []string{"apps.mesh.test:443", "Apps.Mesh.Test", "apps.mesh.test."} {
+		t.Run(host, func(t *testing.T) {
+			f := newAppFixture(t)
+			app := createStaticApp(t, f)
+			owner := pairedOwner(t, f)
+			f.edge.config.ViewHostReady = func(host string) bool { return host == ManagementHost() || host == app.ID+".mesh.test" }
+			request := httptest.NewRequest(http.MethodGet, "https://"+host+"/view?id="+app.ID, nil)
+			request.AddCookie(owner)
+			response := httptest.NewRecorder()
+			f.edge.ServeHost(response, request, ManagementHost())
+			if response.Code != http.StatusSeeOther || !strings.HasPrefix(response.Header().Get("Location"), URL(app.ID)+"/.mesh-app/view-start?") {
+				t.Fatalf("canonical manager view: %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}

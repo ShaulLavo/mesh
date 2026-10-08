@@ -95,7 +95,8 @@ func entryCommand(args []string) string {
 }
 
 func namingCommand(args []string) bool {
-	return !plainAgentCommand([]string{entryCommand(args)})
+	command := entryCommand(args)
+	return command != "device" && !plainAgentCommand([]string{command})
 }
 
 func deploymentRequested(args []string) bool {
@@ -124,8 +125,16 @@ func initializeDeployment(args []string) error {
 	if err != nil {
 		return fmt.Errorf("deployment state: %w", err)
 	}
-	if err := domainpolicy.InitializeDeployment(filepath.Join(filepath.Dir(config), "domains.json"), state, deploymentRequested(args)); err != nil {
-		return fmt.Errorf("initialize deployment policy: %w", err)
+	path := filepath.Join(filepath.Dir(config), "domains.json")
+	var policyErr error
+	switch entryCommand(args) {
+	case "ls", "list":
+		policyErr = domainpolicy.InitializeReadOnlyDeployment(path, state)
+	default:
+		policyErr = domainpolicy.InitializeDeployment(path, state, deploymentRequested(args))
+	}
+	if policyErr != nil {
+		return fmt.Errorf("initialize deployment policy: %w", policyErr)
 	}
 	return nil
 }

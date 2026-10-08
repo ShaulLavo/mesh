@@ -210,3 +210,71 @@ func seedLegacyCertificate(t *testing.T, slot, wildcard string) {
 		t.Fatal(err)
 	}
 }
+
+func TestReadOnlyDeploymentInfersWithoutPublishing(t *testing.T) {
+	for _, source := range []string{"private-name", "catalog", "fresh", "policy-era", "configured"} {
+		t.Run(source, func(t *testing.T) {
+			active = Policy{}
+			initialize = sync.Once{}
+			t.Cleanup(func() { active = Policy{}; initialize = sync.Once{} })
+			state := t.TempDir()
+			config := t.TempDir()
+			path := filepath.Join(config, "domains.json")
+			expected := ""
+			switch source {
+			case "private-name":
+				expected = "other.test"
+				slot := filepath.Join(state, "private-tls", "live")
+				if err := os.MkdirAll(slot, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(slot, "private-name"), []byte("host.mesh."+expected+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "catalog":
+				expected = legacyDeploymentDomain
+				if err := os.WriteFile(filepath.Join(config, "hosts.json"), []byte(`{"version":1,"hosts":[]}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "configured":
+				expected = "other.test"
+				if err := os.WriteFile(path, []byte(`{"primary":"other.test"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "policy-era":
+				seedPolicySlots(t, filepath.Join(state, "private-tls"), "slots")
+			}
+			if err := os.Chmod(config, 0o500); err != nil { //nolint:gosec // test-owned directory needs owner read and traversal while refusing writes
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := os.Chmod(config, 0o700); err != nil { //nolint:gosec // restore owner access to the isolated directory for test cleanup
+					t.Error(err)
+				}
+			})
+			err := InitializeReadOnlyDeployment(path, state)
+			if source == "policy-era" {
+				var missing *MissingPolicyError
+				if !errors.As(err, &missing) {
+					t.Fatalf("read-only recovery error: %v", err)
+				}
+			} else if err != nil || Primary() != expected {
+				t.Fatalf("read-only policy: %+v %v", Current(), err)
+			}
+			if _, err := os.Stat(path); source != "configured" && !os.IsNotExist(err) {
+				t.Fatalf("read-only entry published policy: %v", err)
+			}
+			entries, err := os.ReadDir(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectedEntries := 0
+			if source == "catalog" || source == "configured" {
+				expectedEntries = 1
+			}
+			if len(entries) != expectedEntries {
+				t.Fatalf("read-only configuration changed: %v", entries)
+			}
+		})
+	}
+}
