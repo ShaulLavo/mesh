@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/andybalholm/brotli"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"golang.org/x/net/html"
 )
 
@@ -85,6 +86,7 @@ func StripRequestCookies(request *http.Request) {
 type Config struct {
 	AppID            string
 	ManagementOrigin string
+	AppHost          string
 	Private          bool
 	Owns             bool
 }
@@ -109,6 +111,14 @@ func Inject(resp *http.Response, config Config) error {
 	}
 	if !validAppID(appID) {
 		return errors.New("apppill: invalid app ID")
+	}
+	appHost := config.AppHost
+	if appHost == "" {
+		appHost = appID + "." + domainpolicy.Primary()
+	}
+	label, _, accepted := domainpolicy.Label(appHost, false)
+	if !accepted || label != appID {
+		return errors.New("apppill: invalid app host")
 	}
 	nonceBytes := make([]byte, 18)
 	if _, err := rand.Read(nonceBytes); err != nil {
@@ -135,7 +145,7 @@ func Inject(resp *http.Response, config Config) error {
 		policies := resp.Header.Values(key)
 		resp.Header.Del(key)
 		for _, policy := range policies {
-			resp.Header.Add(key, permitControl(policy, appID+".shaulavo.dev", managerOrigin, nonce))
+			resp.Header.Add(key, permitControl(policy, appHost, managerOrigin, nonce))
 		}
 	}
 	for _, key := range []string{"Content-Length", "Content-Encoding", "ETag", "Last-Modified", "Content-MD5", "Digest", "Content-Digest", "Accept-Ranges"} {
@@ -148,7 +158,7 @@ func Inject(resp *http.Response, config Config) error {
 	pipe, writer := io.Pipe()
 	resp.Body = &transformedBody{PipeReader: pipe, source: source, decoder: decoder}
 	go func() {
-		err := transform(reader, writer, script, appID+".shaulavo.dev", managerOrigin, nonce)
+		err := transform(reader, writer, script, appHost, managerOrigin, nonce)
 		if decoder != nil {
 			_ = decoder.Close()
 		}

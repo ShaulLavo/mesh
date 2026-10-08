@@ -98,27 +98,27 @@ func TestPrivateHTTPHostAllowlist(t *testing.T) {
 		{name: "MagicDNS short name", host: "pc", allowed: true},
 		{name: "MagicDNS case and dot", host: "PC.EXAMPLE.TS.NET.:7337", allowed: true},
 		{name: "other MagicDNS host", host: "other.example.ts.net"},
-		{name: "private name", host: "pc.mesh.shaulavo.dev", allowed: true},
-		{name: "private external TLS port", host: "pc.mesh.shaulavo.dev:443", allowed: true},
-		{name: "unused private subdomain", host: "blog.pc.mesh.shaulavo.dev"},
-		{name: "nested private route subdomain", host: "nested.blog.pc.mesh.shaulavo.dev"},
-		{name: "private name suffix attack", host: "evilpc.mesh.shaulavo.dev"},
-		{name: "other private host", host: "other.mesh.shaulavo.dev"},
-		{name: "private base wildcard", host: "mesh.shaulavo.dev"},
-		{name: "public pinned edge", host: "blog.shaulavo.dev", edge: true, allowed: true},
-		{name: "public pinned edge external port", host: "blog.shaulavo.dev:443", edge: true, allowed: true},
-		{name: "public pinned edge case and dot", host: "BLOG.SHAULAVO.DEV.:443", edge: true, allowed: true},
-		{name: "public untrusted peer", host: "blog.shaulavo.dev"},
-		{name: "public apex", host: "shaulavo.dev", edge: true},
-		{name: "nested public name", host: "nested.blog.shaulavo.dev", edge: true},
+		{name: "private name", host: "pc.mesh.mesh.test", allowed: true},
+		{name: "private external TLS port", host: "pc.mesh.mesh.test:443", allowed: true},
+		{name: "unused private subdomain", host: "blog.pc.mesh.mesh.test"},
+		{name: "nested private route subdomain", host: "nested.blog.pc.mesh.mesh.test"},
+		{name: "private name suffix attack", host: "evilpc.mesh.mesh.test"},
+		{name: "other private host", host: "other.mesh.mesh.test"},
+		{name: "private base wildcard", host: "mesh.mesh.test"},
+		{name: "public pinned edge", host: "blog.mesh.test", edge: true, allowed: true},
+		{name: "public pinned edge external port", host: "blog.mesh.test:443", edge: true, allowed: true},
+		{name: "public pinned edge case and dot", host: "BLOG.MESH.TEST.:443", edge: true, allowed: true},
+		{name: "public untrusted peer", host: "blog.mesh.test"},
+		{name: "public apex", host: "mesh.test", edge: true},
+		{name: "nested public name", host: "nested.blog.mesh.test", edge: true},
 		{name: "attacker", host: "rebind.attacker.example:7337"},
 		{name: "attacker from edge", host: "rebind.attacker.example:7337", edge: true},
-		{name: "malformed port", host: "pc.mesh.shaulavo.dev:bad"},
-		{name: "empty port", host: "pc.mesh.shaulavo.dev:"},
-		{name: "oversized port", host: "pc.mesh.shaulavo.dev:65536"},
-		{name: "invalid DNS label", host: "bad_.pc.mesh.shaulavo.dev"},
-		{name: "empty DNS label", host: "pc..mesh.shaulavo.dev"},
-		{name: "userinfo", host: "attacker@pc.mesh.shaulavo.dev"},
+		{name: "malformed port", host: "pc.mesh.mesh.test:bad"},
+		{name: "empty port", host: "pc.mesh.mesh.test:"},
+		{name: "oversized port", host: "pc.mesh.mesh.test:65536"},
+		{name: "invalid DNS label", host: "bad_.pc.mesh.mesh.test"},
+		{name: "empty DNS label", host: "pc..mesh.mesh.test"},
+		{name: "userinfo", host: "attacker@pc.mesh.mesh.test"},
 	}
 	for _, surface := range []string{"tailnet HTTP", "loopback HTTPS"} {
 		t.Run(surface, func(t *testing.T) {
@@ -134,7 +134,7 @@ func TestPrivateHTTPHostAllowlist(t *testing.T) {
 						httpHosts: httpHostPolicy{
 							tailnetAddrs: []netip.Addr{netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("fd7a:115c:a1e0::1")},
 							tailnetNames: []string{"pc.example.ts.net", "pc"},
-							privateName:  func() string { return "pc.mesh.shaulavo.dev" },
+							privateName:  func() string { return "pc.mesh.mesh.test" },
 							trustPublicEdgeForwarding: func(address netip.Addr) bool {
 								return test.edge && address == netip.MustParseAddr("127.0.0.1")
 							},
@@ -156,7 +156,7 @@ func TestPrivateHTTPHostAllowlist(t *testing.T) {
 						t.Fatal(err)
 					}
 					request.Host = test.host
-					request.Header.Set("X-Forwarded-Host", "pc.mesh.shaulavo.dev")
+					request.Header.Set("X-Forwarded-Host", "pc.mesh.mesh.test")
 					request.Header.Set("X-Forwarded-For", "100.64.0.9")
 					response, err := server.Client().Do(request)
 					if err != nil {
@@ -191,11 +191,11 @@ func TestPrivateHTTPHostPolicyUsesCurrentIdentity(t *testing.T) {
 			return pinned != nil && *pinned == address
 		},
 	}
-	request := httptest.NewRequest(http.MethodGet, "http://pc.mesh.shaulavo.dev/files/", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://pc.mesh.mesh.test/files/", nil)
 	if policy.accepts(request) {
 		t.Fatal("accepted private name before ingress was ready")
 	}
-	name := "pc.mesh.shaulavo.dev"
+	name := "pc.mesh.mesh.test"
 	privateName.Store(&name)
 	if !policy.accepts(request) {
 		t.Fatal("installed private name was not accepted without a restart")
@@ -204,7 +204,7 @@ func TestPrivateHTTPHostPolicyUsesCurrentIdentity(t *testing.T) {
 	if policy.accepts(request) {
 		t.Fatal("accepted private name after it was withdrawn")
 	}
-	request.Host, request.RemoteAddr = "blog.shaulavo.dev", "100.64.0.9:40000"
+	request.Host, request.RemoteAddr = "blog.mesh.test", "100.64.0.9:40000"
 	if policy.accepts(request) {
 		t.Fatal("accepted public name before the edge was pinned")
 	}
@@ -293,9 +293,9 @@ func TestPrivateHTTPRejectsBeforeProxyAndDemand(t *testing.T) {
 func TestPrivateRequestHostRejectsMalformedAuthorities(t *testing.T) {
 	for _, authority := range []string{
 		"", "[fd7a:115c:a1e0::1%lo]", "[fd7a:115c:a1e0::1%lo]:7337", "fd7a:115c:a1e0::1%lo",
-		"[100.64.0.1]", "[pc.mesh.shaulavo.dev]", "pc.mesh.shaulavo.dev:0", "pc.mesh.shaulavo.dev:+7337",
-		"pc.mesh.shaulavo.dev ", " pc.mesh.shaulavo.dev", "pc.mesh.shaulavo.dev..", "-bad.pc.mesh.shaulavo.dev",
-		strings.Repeat("a", 64) + ".pc.mesh.shaulavo.dev", "pc.mesh.shaulavo.dev/path", "pc.mesh.shaulavo.dev#fragment",
+		"[100.64.0.1]", "[pc.mesh.mesh.test]", "pc.mesh.mesh.test:0", "pc.mesh.mesh.test:+7337",
+		"pc.mesh.mesh.test ", " pc.mesh.mesh.test", "pc.mesh.mesh.test..", "-bad.pc.mesh.mesh.test",
+		strings.Repeat("a", 64) + ".pc.mesh.mesh.test", "pc.mesh.mesh.test/path", "pc.mesh.mesh.test#fragment",
 	} {
 		t.Run(authority, func(t *testing.T) {
 			if host, ok := meshserve.CanonicalHost(authority); ok {
@@ -317,7 +317,7 @@ func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 	done := runRuntime(t, ctx, ListenerConfig{
 		StateDir: compactSocketTempDir(t), TailnetPort: port, TailnetAddrs: []string{"127.0.0.1", "::1"}, WebSocketPath: "/mesh",
 		TailnetNames: []string{"pc.example.ts.net", "pc"},
-		PrivateName:  func() string { return "pc.mesh.shaulavo.dev" },
+		PrivateName:  func() string { return "pc.mesh.mesh.test" },
 		TrustPublicEdgeForwarding: func(address netip.Addr) bool {
 			return address == netip.MustParseAddr("127.0.0.1")
 		},
@@ -335,8 +335,8 @@ func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 		{host: "100.64.0.2", want: http.StatusMisdirectedRequest},
 		{host: "pc.example.ts.net", want: http.StatusNoContent},
 		{host: "pc", want: http.StatusNoContent},
-		{host: "pc.mesh.shaulavo.dev:443", want: http.StatusNoContent},
-		{host: "blog.shaulavo.dev:443", want: http.StatusNoContent},
+		{host: "pc.mesh.mesh.test:443", want: http.StatusNoContent},
+		{host: "blog.mesh.test:443", want: http.StatusNoContent},
 		{host: "rebind.attacker.example:7337", want: http.StatusMisdirectedRequest},
 	} {
 		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(int(port))+"/service", nil)

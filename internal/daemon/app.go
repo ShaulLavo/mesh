@@ -557,6 +557,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		TailnetAddrs:               controlAddrs,
 		TailnetNames:               tailnetNames,
 		PrivateName:                certificateRuntime.PrivateName,
+		PrivateNames:               certificateRuntime.PrivateNames,
 		TrustPublicEdgeForwarding:  trustPublicEdgeForwarding,
 		TailnetPort:                cfg.TailnetPort,
 		WebSocketPath:              cfg.WebSocketPath,
@@ -670,7 +671,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		case <-daemonCtx.Done():
 			return
 		}
-		if err := privateNamesRuntime.Manager.Run(daemonCtx, privateNamesRuntime.Interval, func(err error) {
+		if err := privateNamesRuntime.Run(daemonCtx, false, func(err error) {
 			reporter.report(fmt.Errorf("daemon: reconcile private names: %w", err))
 		}); err != nil && daemonCtx.Err() == nil {
 			reporter.report(fmt.Errorf("daemon: private-names loop: %w", err))
@@ -679,7 +680,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	publicCertificateDone := make(chan struct{})
 	go func() {
 		defer close(publicCertificateDone)
-		if privateNamesRuntime == nil || privateNamesRuntime.PublicManager == nil {
+		if privateNamesRuntime == nil {
 			return
 		}
 		select {
@@ -687,7 +688,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		case <-daemonCtx.Done():
 			return
 		}
-		if err := privateNamesRuntime.PublicManager.Run(daemonCtx, privateNamesRuntime.Interval, func(err error) {
+		if err := privateNamesRuntime.Run(daemonCtx, true, func(err error) {
 			reporter.report(fmt.Errorf("daemon: reconcile public certificate: %w", err))
 		}); err != nil && daemonCtx.Err() == nil {
 			reporter.report(fmt.Errorf("daemon: public-certificate loop: %w", err))

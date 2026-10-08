@@ -129,7 +129,7 @@ func TestViewCredentialMutationDuringOriginResolution(t *testing.T) {
 			request.AddCookie(view)
 			resolve := f.edge.config.Resolve
 			f.edge.config.Resolve = func(ctx context.Context, identity string) (netip.AddrPort, error) {
-				management := httptest.NewRequest(http.MethodGet, ManagementOrigin, nil)
+				management := httptest.NewRequest(http.MethodGet, ManagementOrigin(), nil)
 				management.AddCookie(owner)
 				switch mutation {
 				case "replace":
@@ -173,7 +173,7 @@ func TestViewCredentialMutationDuringOriginResolution(t *testing.T) {
 				return resolve(ctx, identity)
 			}
 			response := httptest.NewRecorder()
-			f.edge.ServeHost(response, request, app.ID+"."+Domain)
+			f.edge.ServeHost(response, request, app.ID+"."+Domain())
 			t.Logf("%s during resolution: status=%d forwards=%d", mutation, response.Code, forwarded.Load())
 			if response.Code != http.StatusForbidden || forwarded.Load() != 0 {
 				t.Fatalf("invalidated view reached origin: status=%d forwards=%d", response.Code, forwarded.Load())

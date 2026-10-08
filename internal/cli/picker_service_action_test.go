@@ -98,7 +98,7 @@ func TestPickerServiceOpenUsesInvokingMachineURL(t *testing.T) {
 		fail    bool
 	}{
 		{name: "tailnet", service: protocol.ServiceInfo{Name: "dev", Kind: "proxy", Target: "3000", Healthy: true}, want: "https://alpha.example.test/dev"},
-		{name: "public", service: protocol.ServiceInfo{Name: "dev", PublicName: "public.shaulavo.dev", Kind: "proxy", Target: "3000", Healthy: true}, want: "https://public.shaulavo.dev/dev"},
+		{name: "public", service: protocol.ServiceInfo{Name: "dev", PublicName: "public.mesh.test", Kind: "proxy", Target: "3000", Healthy: true}, want: "https://public.mesh.test/dev"},
 		{name: "remote loopback", service: protocol.ServiceInfo{Name: "5173", Kind: "proxy", Target: "3000", LocalOnly: true, Listens: []protocol.ServiceListen{{Public: 5173, Upstream: 3000}}, Healthy: true}, fail: true},
 	} {
 		t.Run(example.name, func(t *testing.T) {

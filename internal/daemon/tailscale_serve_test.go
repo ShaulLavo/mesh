@@ -199,7 +199,7 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 		probeCtx, probeCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(t, stateDir))
 		probeCancel()
-		if probeErr == nil && privateName == "pc.mesh.shaulavo.dev" {
+		if probeErr == nil && privateName == "pc.mesh.mesh.test" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -327,7 +327,7 @@ func checkOperatorManagedServeForward(t *testing.T, gatewayPort uint16) {
 		// The socket answers before the private name is published, so a probe
 		// that merely succeeds is not the condition to wait for. Waiting on the
 		// wrong one made this fail on a loaded runner and never here.
-		if err == nil && privateName == "pc.mesh.shaulavo.dev" {
+		if err == nil && privateName == "pc.mesh.mesh.test" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -618,11 +618,11 @@ func installRunTestPrivateName(t *testing.T, stateDir string, httpsPort uint16) 
 	}
 	now := time.Now().UTC()
 	certificate, privateKey := daemonTestCertificate(t, 991, now)
-	bundle, err := dnsname.ValidateBundle(certificate, privateKey, dnsname.WildcardName, now)
+	bundle, err := dnsname.ValidateBundle(certificate, privateKey, dnsname.WildcardName(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := dnsname.SignBundle(bundle, target.ID, dnsname.ProfilePrivateOrigin, dnsname.EnvironmentLive, "pc.mesh.shaulavo.dev", signer)
+	signed, err := dnsname.SignBundle(bundle, target.ID, dnsname.ProfilePrivateOrigin, dnsname.EnvironmentLive, "pc.mesh.mesh.test", signer)
 	if err != nil {
 		t.Fatal(err)
 	}

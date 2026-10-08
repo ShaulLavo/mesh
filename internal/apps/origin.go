@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	meshserve "github.com/shaul/mesh/internal/serve"
 	"io"
 	"io/fs"
 	"net/http"
@@ -22,6 +21,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	meshserve "github.com/shaul/mesh/internal/serve"
 )
 
 type Workers interface {
@@ -2139,7 +2140,7 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 	if r.URL.RawQuery != "" {
 		rawURI += "?" + r.URL.RawQuery
 	}
-	if !storedID(admission.ID) || admission.Method != r.Method || admission.URI != rawURI || !now.Before(admission.Until) || admission.Until.After(proof.IssuedAt.Add(admissionLifetime)) || admission.Host != admission.ID+"."+Domain {
+	if !storedID(admission.ID) || admission.Method != r.Method || admission.URI != rawURI || !now.Before(admission.Until) || admission.Until.After(proof.IssuedAt.Add(admissionLifetime)) || !acceptedAppHost(admission.Host, admission.ID) {
 		http.NotFound(w, r)
 		return true
 	}

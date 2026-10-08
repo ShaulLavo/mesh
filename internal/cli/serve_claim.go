@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
-
 	"github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
@@ -17,6 +15,7 @@ import (
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/tunnel"
+	"github.com/spf13/cobra"
 )
 
 func (a *application) serveClaimCommand() *cobra.Command {
@@ -24,7 +23,7 @@ func (a *application) serveClaimCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "claim EDGE FULLNAME",
 		Short: "Reserve an exact public hostname for an SSH reverse tunnel",
-		Args:  exactArgs(2, "an edge and full public hostname", "mesh serve claim vps blog.shaulavo.dev"),
+		Args:  exactArgs(2, "an edge and full public hostname", "mesh serve claim vps blog.mesh.test"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runTunnelClaim(cmd, args[0], args[1], yes)
 		},

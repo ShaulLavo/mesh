@@ -18,7 +18,7 @@ func TestManagementReturnReconstructsAllowedPaths(t *testing.T) {
 		name, path, opaque, query, wantPath string
 	}{
 		{name: "root", path: "/", wantPath: "/"},
-		{name: "view", path: "/view", query: "id=7k3d&return=https%3A%2F%2F7k3d.shaulavo.dev%2F", wantPath: "/view"},
+		{name: "view", path: "/view", query: "id=7k3d&return=https%3A%2F%2F7k3d.mesh.test%2F", wantPath: "/view"},
 		{name: "confirm", path: "/confirm", query: "action=delete&id=7k3d", wantPath: "/confirm"},
 		{name: "encoded query", path: "/view", query: "id=7k3d&x=%2F%2Fattacker.example&x=a%26b%3Dc&y=%0D%0A", wantPath: "/view"},
 		{name: "opaque representation", path: "/view", opaque: "//attacker.example", query: "id=7k3d", wantPath: "/view"},
@@ -27,7 +27,7 @@ func TestManagementReturnReconstructsAllowedPaths(t *testing.T) {
 		{name: "oversized query", path: "/view", query: strings.Repeat("x", 4097), wantPath: "/"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/", nil)
+			r := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/", nil)
 			r.URL.Path, r.URL.Opaque, r.URL.RawQuery = tc.path, tc.opaque, tc.query
 			got, err := url.Parse(managementReturn(r))
 			if err != nil || got.IsAbs() || got.Host != "" || got.Opaque != "" || got.Path != tc.wantPath {
@@ -43,7 +43,7 @@ func TestManagementReturnReconstructsAllowedPaths(t *testing.T) {
 func TestPairingPromotionRedirectUsesCanonicalManagementOrigin(t *testing.T) {
 	f := newAppFixture(t)
 	begin := httptest.NewRecorder()
-	f.edge.ServeHost(begin, pairingStartRequest("/"), ManagementHost)
+	f.edge.ServeHost(begin, pairingStartRequest("/"), ManagementHost())
 	code := regexp.MustCompile(`Code: <strong>([a-z0-9-]+)</strong>`).FindStringSubmatch(begin.Body.String())
 	if len(code) != 2 {
 		t.Fatal("missing pairing code")
@@ -54,9 +54,9 @@ func TestPairingPromotionRedirectUsesCanonicalManagementOrigin(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "https://attacker.example/view?id=7k3d&return=%2F%2Fattacker.example", nil)
 	r.AddCookie(cookieNamed(t, begin, webauth.PairCookie))
 	promote := httptest.NewRecorder()
-	f.edge.ServeHost(promote, r, ManagementHost)
+	f.edge.ServeHost(promote, r, ManagementHost())
 	target, err := url.Parse(promote.Header().Get("Location"))
-	if err != nil || promote.Code != http.StatusSeeOther || target.Scheme != "https" || target.Host != ManagementHost || target.Path != "/view" || !reflect.DeepEqual(target.Query(), r.URL.Query()) {
+	if err != nil || promote.Code != http.StatusSeeOther || target.Scheme != "https" || target.Host != ManagementHost() || target.Path != "/view" || !reflect.DeepEqual(target.Query(), r.URL.Query()) {
 		t.Fatalf("pairing redirect = %d %v, %v", promote.Code, target, err)
 	}
 }

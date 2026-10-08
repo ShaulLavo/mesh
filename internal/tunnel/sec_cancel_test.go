@@ -17,8 +17,8 @@ func TestSecurityCallerCancellationDoesNotStopHealthyForward(t *testing.T) {
 			name = "late acceptance"
 		}
 		t.Run(name, func(t *testing.T) {
-			const hostname = "blog.shaulavo.dev"
-			const sibling = "other.shaulavo.dev"
+			const hostname = "blog.mesh.test"
+			const sibling = "other.mesh.test"
 			f := newSSHFixture(t, time.Second, hostname, sibling)
 			conn, channels := f.client(t, true)
 			for _, forward := range []string{hostname, sibling} {

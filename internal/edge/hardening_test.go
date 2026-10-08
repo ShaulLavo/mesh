@@ -15,7 +15,7 @@ func TestUnknownLoopbackSenderCannotRotateQuotaWithXFF(t *testing.T) {
 	registry := testRegistry(t, ModeProxy, time.Now())
 	defer registry.Close()
 	for i := 0; i <= maximumRequestsPerMinute; i++ {
-		request := publicRequest(http.MethodGet, "app.shaulavo.dev", "/")
+		request := publicRequest(http.MethodGet, "app.mesh.test", "/")
 		request.RemoteAddr = "127.0.0.1:12345"
 		request.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i+1))
 		request.Header.Set("X-Forwarded-Proto", "https")
@@ -36,19 +36,19 @@ func TestPublicProxiesDropSharedParentCookies(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				for _, cookie := range []string{
-					"evil=1; Domain=shaulavo.dev; Path=/",
-					"evil=2; dOmAiN = .SHAULAVO.DEV; Path=/",
-					"evil=3; Domain=\"shaulavo.dev\"; Path=/",
-					"evil=4; Domain=shaulavo.dev; Domain=docs.shaulavo.dev; Path=/",
+					"evil=1; Domain=mesh.test; Path=/",
+					"evil=2; dOmAiN = .MESH.TEST; Path=/",
+					"evil=3; Domain=\"mesh.test\"; Path=/",
+					"evil=4; Domain=mesh.test; Domain=docs.mesh.test; Path=/",
 					"host=ok; Path=/; Secure; HttpOnly; SameSite=Lax",
-					"scoped=ok; Domain=docs.shaulavo.dev; Secure; HttpOnly; SameSite=Lax",
+					"scoped=ok; Domain=docs.mesh.test; Secure; HttpOnly; SameSite=Lax",
 				} {
 					w.Header().Add("Set-Cookie", cookie)
 				}
 				w.WriteHeader(http.StatusNoContent)
 			}))
 			defer backend.Close()
-			name := "docs.shaulavo.dev"
+			name := "docs.mesh.test"
 			requestPath := "/docs/"
 			registry := testRegistry(t, ModeDirectTLS, time.Now())
 			defer registry.Close()

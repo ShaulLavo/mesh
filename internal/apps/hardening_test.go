@@ -25,7 +25,7 @@ func TestAppIDsRejectServeReservedLabels(t *testing.T) {
 	if !ValidID("7k3d") {
 		t.Fatal("ordinary app ID rejected")
 	}
-	if serve.ValidatePublicName("mesh."+Domain) == nil {
+	if serve.ValidatePublicName("mesh."+Domain()) == nil {
 		t.Fatal("private namespace no longer reserved")
 	}
 }
@@ -52,7 +52,7 @@ func TestUnavailableAppHostsHaveUniformResponses(t *testing.T) {
 					f.edge.mu.Unlock()
 				case "unknown":
 					f.edgeStore.mu.Lock()
-					delete(f.edgeStore.names, app.ID+"."+Domain)
+					delete(f.edgeStore.names, app.ID+"."+Domain())
 					f.edgeStore.mu.Unlock()
 				}
 				method := http.MethodGet
@@ -69,7 +69,7 @@ func TestUnavailableAppHostsHaveUniformResponses(t *testing.T) {
 					r.Header.Set("Sec-Fetch-Site", "cross-site")
 				}
 				w := httptest.NewRecorder()
-				if !f.edge.ServeHost(w, r, app.ID+"."+Domain) {
+				if !f.edge.ServeHost(w, r, app.ID+"."+Domain()) {
 					t.Errorf("%s fell through", state)
 					continue
 				}
@@ -97,7 +97,7 @@ func TestNetworkCSRFTokensUseSeparateKeyAndExpire(t *testing.T) {
 	f.edge.config.ClientIP = func(*http.Request) netip.Addr { return ip }
 	f.edge.config.NetworkOwners = func(context.Context, netip.Addr) ([]string, error) { return []string{owner}, nil }
 	token := func() string {
-		r := f.edge.authenticateNetwork(httptest.NewRequest(http.MethodGet, ManagementOrigin+"/", nil))
+		r := f.edge.authenticateNetwork(httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/", nil))
 		s, err := f.edge.browser(r)
 		if err != nil {
 			t.Fatal(err)
@@ -115,18 +115,18 @@ func TestNetworkCSRFTokensUseSeparateKeyAndExpire(t *testing.T) {
 	if fresh == old {
 		t.Error("CSRF token did not expire across time buckets")
 	}
-	mutation := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", nil)
-	mutation.Header.Set("Origin", ManagementOrigin)
+	mutation := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/action", nil)
+	mutation.Header.Set("Origin", ManagementOrigin())
 	mutation.Header.Set("X-Mesh-CSRF", old)
 	session, err := f.edge.browser(f.edge.authenticateNetwork(mutation))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if webauth.ValidateSessionMutation(mutation, ManagementOrigin, session) == nil {
+	if webauth.ValidateSessionMutation(mutation, ManagementOrigin(), session) == nil {
 		t.Fatal("expired network CSRF authorized a mutation")
 	}
 	mutation.Header.Set("X-Mesh-CSRF", fresh)
-	if err := webauth.ValidateSessionMutation(mutation, ManagementOrigin, session); err != nil {
+	if err := webauth.ValidateSessionMutation(mutation, ManagementOrigin(), session); err != nil {
 		t.Fatalf("fresh network CSRF rejected: %v", err)
 	}
 }
@@ -135,13 +135,13 @@ func TestDownloadRefusesCrossSiteTopLevelNavigation(t *testing.T) {
 	f := newAppFixture(t)
 	app := createStaticApp(t, f)
 	owner := pairedOwner(t, f)
-	r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/download?id="+app.ID, nil)
+	r := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/download?id="+app.ID, nil)
 	r.AddCookie(owner)
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	r.Header.Set("Sec-Fetch-Mode", "navigate")
 	r.Header.Set("Sec-Fetch-Dest", "document")
 	w := httptest.NewRecorder()
-	f.edge.ServeHost(w, r, ManagementHost)
+	f.edge.ServeHost(w, r, ManagementHost())
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "Owner authorization required") {
 		t.Fatalf("cross-site download got %d %q", w.Code, w.Body.String())
 	}
@@ -151,7 +151,7 @@ func TestPrivateViewTicketCannotBeUsedWithoutBrowserNonce(t *testing.T) {
 	f := newAppFixture(t)
 	app := createStaticApp(t, f)
 	owner := pairedOwner(t, f)
-	r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+app.ID, nil)
+	r := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/view?id="+app.ID, nil)
 	r.AddCookie(owner)
 	redirect, nonce := privateViewRedirect(t, f, r)
 	target := redirect.Header().Get("Location")
@@ -159,14 +159,14 @@ func TestPrivateViewTicketCannotBeUsedWithoutBrowserNonce(t *testing.T) {
 		t.Fatalf("view ticket missing: %s", target)
 	}
 	consume := httptest.NewRecorder()
-	f.edge.ServeHost(consume, httptest.NewRequest(http.MethodGet, target, nil), app.ID+"."+Domain)
+	f.edge.ServeHost(consume, httptest.NewRequest(http.MethodGet, target, nil), app.ID+"."+Domain())
 	if consume.Code != http.StatusForbidden {
 		t.Fatalf("stolen view URL got %d", consume.Code)
 	}
 	legitimate := httptest.NewRequest(http.MethodGet, target, nil)
 	legitimate.AddCookie(nonce)
 	accepted := httptest.NewRecorder()
-	f.edge.ServeHost(accepted, legitimate, app.ID+"."+Domain)
+	f.edge.ServeHost(accepted, legitimate, app.ID+"."+Domain())
 	if accepted.Code != http.StatusSeeOther {
 		t.Fatalf("bound browser could not consume ticket: %d %s", accepted.Code, accepted.Body.String())
 	}
@@ -175,7 +175,7 @@ func TestPrivateViewTicketCannotBeUsedWithoutBrowserNonce(t *testing.T) {
 func privateViewRedirect(t *testing.T, f *appFixture, management *http.Request) (*httptest.ResponseRecorder, *http.Cookie) {
 	t.Helper()
 	first := httptest.NewRecorder()
-	f.edge.ServeHost(first, management, ManagementHost)
+	f.edge.ServeHost(first, management, ManagementHost())
 	challenge := httptest.NewRequest(http.MethodGet, first.Header().Get("Location"), nil)
 	start := httptest.NewRecorder()
 	f.edge.ServeHost(start, challenge, challenge.URL.Host)
@@ -185,7 +185,7 @@ func privateViewRedirect(t *testing.T, f *appFixture, management *http.Request) 
 		resume.AddCookie(cookie)
 	}
 	response := httptest.NewRecorder()
-	f.edge.ServeHost(response, resume, ManagementHost)
+	f.edge.ServeHost(response, resume, ManagementHost())
 	return response, nonce
 }
 
@@ -195,11 +195,11 @@ func TestOwnerDownloadAllowsIntentionalRequests(t *testing.T) {
 	networkOrigin(t, f)
 	owner := pairedOwner(t, f)
 	for _, site := range []string{"same-origin", "none", ""} {
-		r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/download?id="+app.ID, nil)
+		r := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/download?id="+app.ID, nil)
 		r.AddCookie(owner)
 		r.Header.Set("Sec-Fetch-Site", site)
 		w := httptest.NewRecorder()
-		f.edge.ServeHost(w, r, ManagementHost)
+		f.edge.ServeHost(w, r, ManagementHost())
 		if w.Code != http.StatusOK || w.Body.Len() == 0 {
 			t.Errorf("intentional download site=%q got %d", site, w.Code)
 		}

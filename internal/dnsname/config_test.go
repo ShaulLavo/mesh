@@ -98,7 +98,7 @@ func TestPrivateNamesRuntimeRequiresSecureTokenAndSeparatesEnvironments(t *testi
 	}
 	livePublicIssuer := live.PublicManager.renewer.(*Issuer)
 	stagingPublicIssuer := staging.PublicManager.renewer.(*Issuer)
-	if livePublicIssuer.config.Name != PublicWildcardName || stagingPublicIssuer.config.Name != PublicWildcardName ||
+	if livePublicIssuer.config.Name != PublicWildcardName() || stagingPublicIssuer.config.Name != PublicWildcardName() ||
 		!strings.HasSuffix(livePublicIssuer.config.StateDir, "/public-edge/live") || !strings.HasSuffix(stagingPublicIssuer.config.StateDir, "/public-edge/staging") ||
 		livePublicIssuer.config.StateDir == stagingPublicIssuer.config.StateDir {
 		t.Fatalf("public issuer state = live %#v staging %#v", livePublicIssuer.config, stagingPublicIssuer.config)
@@ -113,7 +113,7 @@ func TestPrivateNamesRuntimeRequiresSecureTokenAndSeparatesEnvironments(t *testi
 		t.Fatalf("staging distributor environment = %q", got)
 	}
 	publicDistributor := stagingWithDistribution.PublicManager.distributor.(*Distributor)
-	if publicDistributor.profile != ProfilePublicEdge || publicDistributor.environment != EnvironmentStaging || publicDistributor.expectedName != PublicWildcardName {
+	if publicDistributor.profile != ProfilePublicEdge || publicDistributor.environment != EnvironmentStaging || publicDistributor.expectedName != PublicWildcardName() {
 		t.Fatalf("public distributor = %#v", publicDistributor)
 	}
 
@@ -184,4 +184,51 @@ func testPrivateIdentity(t *testing.T) ed25519.PrivateKey {
 		t.Fatal(err)
 	}
 	return privateKey
+}
+
+func TestRenewalDomainOverlapKeepsZonesAndStateSeparate(t *testing.T) {
+	root := t.TempDir()
+	options := PrivateNamesRuntimeOptions{StateDir: filepath.Join(root, "state")}
+	identity := testIdentityID(t)
+	write := func(directory, domain, zone, extra string) string {
+		t.Helper()
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		token := filepath.Join(directory, "token")
+		if err := os.WriteFile(token, []byte("fixture-token\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return writePrivateNamesConfig(t, directory, fmt.Sprintf(`{"domain":%q,"zoneId":%q,"tokenFile":%q,"acmeEmail":"owner@example.com","acceptTerms":true,"directoryUrl":%q,"origins":[{"name":"pc","tailscaleName":"pc.example.ts.net","identity":%q,"controlPort":7337,"websocketPath":"/mesh"}]%s}`, domain, zone, token, LetsEncryptProductionURL, identity, extra))
+	}
+	old := write(filepath.Join(root, "old"), "old.test", "old-zone", "")
+	primary := write(filepath.Join(root, "primary"), "mesh.test", "primary-zone", fmt.Sprintf(`,"additionalConfigs":[%q]`, old))
+	runtime, err := NewPrivateNamesRuntime(primary, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := runtime.All()
+	if len(all) != 2 {
+		t.Fatalf("runtime count %d", len(all))
+	}
+	for index, domain := range []string{"mesh.test", "old.test"} {
+		manager := all[index].Manager
+		issuer := manager.renewer.(*Issuer)
+		solver := issuer.config.Solver.(DNS01Solver)
+		if manager.domain != domain || solver.Zone != domain || issuer.config.Name != "*.mesh."+domain {
+			t.Fatalf("domain mixup: %s %s %s", manager.domain, solver.Zone, issuer.config.Name)
+		}
+	}
+	if all[0].Manager.renewer.(*Issuer).config.StateDir == all[1].Manager.renewer.(*Issuer).config.StateDir {
+		t.Fatal("zones share ACME state")
+	}
+	duplicate := write(filepath.Join(root, "duplicate"), "mesh.test", "duplicate-zone", "")
+	primary = write(filepath.Join(root, "primary"), "mesh.test", "primary-zone", fmt.Sprintf(`,"additionalConfigs":[%q]`, duplicate))
+	if _, err := NewPrivateNamesRuntime(primary, options); err == nil {
+		t.Fatal("duplicate renewal domain accepted")
+	}
+	primary = write(filepath.Join(root, "primary"), "mesh.test", "primary-zone", fmt.Sprintf(`,"additionalConfigs":[%q]`, primary))
+	if _, err := NewPrivateNamesRuntime(primary, options); err == nil {
+		t.Fatal("cyclic renewal graph accepted")
+	}
 }

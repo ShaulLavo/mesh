@@ -5,9 +5,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/url"
@@ -15,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 )
@@ -36,15 +39,14 @@ type CertificateProfile string
 const (
 	ProfilePrivateOrigin CertificateProfile = "private-origin"
 	ProfilePublicEdge    CertificateProfile = "public-edge"
-	PublicWildcardName                      = "*.shaulavo.dev"
 )
 
 func certificateNameForProfile(profile CertificateProfile) (string, error) {
 	switch profile {
 	case ProfilePrivateOrigin:
-		return WildcardName, nil
+		return WildcardName(), nil
 	case ProfilePublicEdge:
-		return PublicWildcardName, nil
+		return PublicWildcardName(), nil
 	default:
 		return "", fmt.Errorf("dnsname: unsupported certificate profile %q", profile)
 	}
@@ -101,23 +103,7 @@ func SignBundle(bundle Bundle, targetID string, profile CertificateProfile, envi
 // VerifySignedBundle verifies the exact target and renewer pins before
 // parsing and validating the certificate bundle.
 func VerifySignedBundle(signed SignedBundle, targetID, signerID string, now time.Time) (Bundle, error) {
-	if len(signed.CertificatePEM) == 0 || len(signed.CertificatePEM) > maximumCertificatePEM {
-		return Bundle{}, fmt.Errorf("dnsname: distributed certificate PEM size %d is outside 1..%d", len(signed.CertificatePEM), maximumCertificatePEM)
-	}
-	if len(signed.PrivateKeyPEM) == 0 || len(signed.PrivateKeyPEM) > maximumPrivateKeyPEM {
-		return Bundle{}, fmt.Errorf("dnsname: distributed private key PEM size %d is outside 1..%d", len(signed.PrivateKeyPEM), maximumPrivateKeyPEM)
-	}
-	if len(signed.Signature) != ed25519.SignatureSize {
-		return Bundle{}, fmt.Errorf("dnsname: distributed signature size %d, want %d", len(signed.Signature), ed25519.SignatureSize)
-	}
-	if err := validateRenewalEnvironment(signed.Environment); err != nil {
-		return Bundle{}, err
-	}
-	expectedName, err := certificateNameForProfile(signed.Profile)
-	if err != nil {
-		return Bundle{}, err
-	}
-	if err := validateCertificatePrivateName(signed.Profile, signed.PrivateName); err != nil {
+	if err := validateSignedEnvelope(signed); err != nil {
 		return Bundle{}, err
 	}
 	if signed.TargetID != targetID {
@@ -140,7 +126,36 @@ func VerifySignedBundle(signed SignedBundle, targetID, signerID string, now time
 	if !ed25519.Verify(publicKey, digest[:], signed.Signature) {
 		return Bundle{}, errors.New("dnsname: distributed certificate signature is invalid")
 	}
+	expectedName, err := CertificateName(signed.Profile, signed.CertificatePEM)
+	if err != nil {
+		return Bundle{}, err
+	}
+	if signed.PrivateName != "" && !strings.HasSuffix(signed.PrivateName, strings.TrimPrefix(expectedName, "*")) {
+		return Bundle{}, errors.New("dnsname: private name does not match distributed certificate")
+	}
 	return ValidateBundle(signed.CertificatePEM, signed.PrivateKeyPEM, expectedName, now)
+}
+
+func validateSignedEnvelope(signed SignedBundle) error {
+	if len(signed.CertificatePEM) == 0 || len(signed.CertificatePEM) > maximumCertificatePEM {
+		return fmt.Errorf("dnsname: distributed certificate PEM size %d is outside 1..%d", len(signed.CertificatePEM), maximumCertificatePEM)
+	}
+	if len(signed.PrivateKeyPEM) == 0 || len(signed.PrivateKeyPEM) > maximumPrivateKeyPEM {
+		return fmt.Errorf("dnsname: distributed private key PEM size %d is outside 1..%d", len(signed.PrivateKeyPEM), maximumPrivateKeyPEM)
+	}
+	if len(signed.Signature) != ed25519.SignatureSize {
+		return fmt.Errorf("dnsname: distributed signature size %d, want %d", len(signed.Signature), ed25519.SignatureSize)
+	}
+	if err := validateRenewalEnvironment(signed.Environment); err != nil {
+		return err
+	}
+	if _, err := certificateNameForProfile(signed.Profile); err != nil {
+		return err
+	}
+	if err := validateCertificatePrivateName(signed.Profile, signed.PrivateName); err != nil {
+		return err
+	}
+	return nil
 }
 
 func certificateDigest(profile CertificateProfile, environment RenewalEnvironment, targetID, signerID, privateName string, certificatePEM, privateKeyPEM []byte) ([sha256.Size]byte, error) {
@@ -265,6 +280,11 @@ func (i *Installer) Install(signed SignedBundle) (Bundle, bool, error) {
 	if err != nil {
 		return Bundle{}, false, err
 	}
+	if signed.Environment == EnvironmentLive && signed.PrivateName != "" && i.privateName != nil {
+		if err := i.privateName.validateInstall(signed.PrivateName); err != nil {
+			return Bundle{}, false, err
+		}
+	}
 	var currentFingerprint string
 	var currentNotAfter time.Time
 	var install func([]byte, []byte) (Bundle, error)
@@ -329,6 +349,7 @@ type OriginDial func(context.Context, string) (transport.Conn, error)
 // DistributorConfig bounds certificate fan-out from the renewer.
 type DistributorConfig struct {
 	Profile     CertificateProfile
+	Name        string
 	Signer      ed25519.PrivateKey
 	Environment RenewalEnvironment
 	Dial        OriginDial
@@ -362,6 +383,12 @@ func NewDistributor(config DistributorConfig) (*Distributor, error) {
 	expectedName, err := certificateNameForProfile(config.Profile)
 	if err != nil {
 		return nil, err
+	}
+	if config.Name != "" {
+		if !acceptedCertificateName(config.Profile, config.Name) {
+			return nil, errors.New("dnsname: distributor name is outside configured domains")
+		}
+		expectedName = config.Name
 	}
 	if config.Concurrency == 0 {
 		config.Concurrency = defaultDistributionLimit
@@ -574,4 +601,55 @@ func randomRequestID() (string, error) {
 		return "", fmt.Errorf("dnsname: create random request ID: %w", err)
 	}
 	return hex.EncodeToString(value[:]), nil
+}
+
+func acceptedCertificateName(profile CertificateProfile, name string) bool {
+	if profile != ProfilePrivateOrigin && profile != ProfilePublicEdge {
+		return false
+	}
+	for _, domain := range domainpolicy.Domains() {
+		if domainpolicy.Wildcard(domain, profile == ProfilePrivateOrigin) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// CertificateName selects an accepted profile slot. Signature verification and
+// key/validity checks still run before an installer can publish the bundle.
+func CertificateName(profile CertificateProfile, contents []byte) (string, error) {
+	if len(contents) == 0 || len(contents) > maximumCertificatePEM {
+		return "", errors.New("dnsname: certificate size is outside bounds")
+	}
+	block, _ := pem.Decode(contents)
+	if block == nil || block.Type != certificatePEMType {
+		return "", errors.New("dnsname: missing leaf certificate")
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("dnsname: parse leaf: %w", err)
+	}
+	name := ""
+	for _, candidate := range leaf.DNSNames {
+		if !acceptedCertificateName(profile, candidate) {
+			continue
+		}
+		if name != "" && name != candidate {
+			return "", errors.New("dnsname: certificate covers multiple configured slots")
+		}
+		name = candidate
+	}
+	if name == "" {
+		return "", errors.New("dnsname: certificate has no accepted profile name")
+	}
+	return name, nil
+}
+
+func (i *Installer) PinnedPrivateName() (string, error) {
+	if i.privateName == nil {
+		return "", nil
+	}
+	i.privateName.mu.Lock()
+	defer i.privateName.mu.Unlock()
+	return i.privateName.readPersisted()
 }

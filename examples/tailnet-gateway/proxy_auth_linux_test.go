@@ -40,7 +40,7 @@ func TestGatewayRejectsDisallowedForwarderBeforeBackendDial(t *testing.T) {
 	if _, err := io.WriteString(client, "PROXY TCP4 100.64.0.2 127.0.0.1 40000 443\r\n"); err != nil {
 		t.Fatal(err)
 	}
-	tlsClient := tls.Client(client, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: "apps.shaulavo.dev"})
+	tlsClient := tls.Client(client, &tls.Config{MinVersion: tls.VersionTLS12, ServerName: "apps.mesh.test"})
 	if err := tlsClient.Handshake(); err == nil {
 		t.Fatal("disallowed forwarder completed TLS through gateway")
 	}

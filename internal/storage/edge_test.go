@@ -28,8 +28,8 @@ func TestEdgeSnapshotsAreAtomicIdempotentAndRetainClaims(t *testing.T) {
 	firstID, firstKey := storageEdgeIdentity(t)
 	secondID, secondKey := storageEdgeIdentity(t)
 	first := storageSignedSnapshot(t, edgeID, firstID, firstKey, 1, now, []edge.Route{
-		{PublicName: "app.shaulavo.dev", ServiceName: "app"},
-		{PublicName: "app.shaulavo.dev", ServiceName: "app/v2", WakeOnRequest: true},
+		{PublicName: "app.mesh.test", ServiceName: "app"},
+		{PublicName: "app.mesh.test", ServiceName: "app/v2", WakeOnRequest: true},
 	})
 	firstDigest := storageSnapshotDigest(t, first, edgeID, firstID)
 	receivedAt := now.Add(time.Second)
@@ -59,7 +59,7 @@ func TestEdgeSnapshotsAreAtomicIdempotentAndRetainClaims(t *testing.T) {
 		t.Fatalf("equal-different error = %v", err)
 	}
 
-	colliding := storageSignedSnapshot(t, edgeID, secondID, secondKey, 1, now, []edge.Route{{PublicName: "app.shaulavo.dev", ServiceName: "app"}})
+	colliding := storageSignedSnapshot(t, edgeID, secondID, secondKey, 1, now, []edge.Route{{PublicName: "app.mesh.test", ServiceName: "app"}})
 	if err := store.ApplyEdgeSnapshot(ctx, colliding, storageSnapshotDigest(t, colliding, edgeID, secondID), now); !errors.Is(err, edge.ErrRouteCollision) {
 		t.Fatalf("collision error = %v", err)
 	}

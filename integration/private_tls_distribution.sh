@@ -15,7 +15,7 @@ done
 
 TEST_ROOT=$(mktemp -d)
 export MESH_STATE_DIR="$TEST_ROOT/state"
-PRIVATE_NAME=pc.mesh.shaulavo.dev
+PRIVATE_NAME=pc.mesh.mesh.test
 DAEMON_PID=""
 
 cleanup() {
@@ -66,8 +66,8 @@ create_certificate() {
   local certificate=$2
   local private_key=$3
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -sha256 -nodes -days 30 \
-    -set_serial "$serial" -subj '/CN=*.mesh.shaulavo.dev' \
-    -addext 'subjectAltName=DNS:*.mesh.shaulavo.dev' \
+    -set_serial "$serial" -subj '/CN=*.mesh.mesh.test' \
+    -addext 'subjectAltName=DNS:*.mesh.mesh.test' \
     -keyout "$private_key" -out "$certificate" >/dev/null 2>&1 || fail "generate certificate $serial"
 }
 

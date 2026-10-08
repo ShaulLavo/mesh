@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/shaul/mesh/internal/domainpolicy"
 )
 
 const (
@@ -68,6 +70,9 @@ func (s *PrivateNameSource) loadLocked() error {
 			return nil
 		}
 		return err
+	}
+	if name != "" && !strings.HasSuffix(name, strings.TrimPrefix(s.liveStore.expectedName, "*")) {
+		return errors.New("dnsname: private name does not match certificate slot")
 	}
 	if name == "" {
 		s.current.Store(nil)
@@ -132,6 +137,9 @@ func (s *PrivateNameSource) Install(name string) error {
 	if err := ValidatePrivateName(name); err != nil {
 		return err
 	}
+	if !strings.HasSuffix(name, strings.TrimPrefix(s.liveStore.expectedName, "*")) {
+		return errors.New("dnsname: private name does not match certificate slot")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	existing, err := s.readPersisted()
@@ -157,16 +165,14 @@ func (s *PrivateNameSource) publish(name string) {
 	s.current.Store(&copyName)
 }
 
-// ValidatePrivateName requires one canonical label below mesh.shaulavo.dev.
+// ValidatePrivateName accepts a canonical host in a configured private namespace.
 func ValidatePrivateName(name string) error {
-	suffix := "." + PrivateZone
-	if name == "" || len(name) > maximumPrivateNameBytes || strings.TrimSpace(name) != name || !strings.HasSuffix(name, suffix) {
-		return errors.New("dnsname: private name must be one canonical label below mesh.shaulavo.dev")
+	label, _, accepted := domainpolicy.Label(name, true)
+	if !accepted || len(name) > maximumPrivateNameBytes {
+		return errors.New("dnsname: private name is outside configured namespaces")
 	}
-	label := strings.TrimSuffix(name, suffix)
-	canonical, err := privateHostName(label)
-	if err != nil || canonical != name {
-		return errors.New("dnsname: private name must be one canonical label below mesh.shaulavo.dev")
+	if err := validateDNSLabel(label); err != nil {
+		return err
 	}
 	return nil
 }
@@ -186,4 +192,23 @@ func validateCertificatePrivateName(profile CertificateProfile, name string) err
 	default:
 		return fmt.Errorf("dnsname: unsupported certificate profile %q", profile)
 	}
+}
+
+func (s *PrivateNameSource) validateInstall(name string) error {
+	if err := ValidatePrivateName(name); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(name, strings.TrimPrefix(s.liveStore.expectedName, "*")) {
+		return errors.New("dnsname: private name does not match certificate slot")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, err := s.readPersisted()
+	if err != nil {
+		return err
+	}
+	if existing != "" && existing != name {
+		return fmt.Errorf("dnsname: private name is already pinned to %s; reset and re-adopt the origin before renaming it", existing)
+	}
+	return nil
 }

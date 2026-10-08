@@ -16,11 +16,10 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/muesli/cancelreader"
-	"github.com/spf13/cobra"
-
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -76,7 +75,7 @@ func (a *application) serveCommand() *cobra.Command {
 			if len(args) == 1 && len(listens) > 0 {
 				return nil
 			}
-			return exactArgs(2, "a host and something to serve", "mesh serve pc ./site --at blog.shaulavo.dev")(cmd, args)
+			return exactArgs(2, "a host and something to serve", "mesh serve pc ./site --at blog.mesh.test")(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := ""
@@ -101,7 +100,7 @@ func (a *application) serveCommand() *cobra.Command {
 	command.Flags().StringVar(&displayName, "label", "", "display name shown in service lists")
 	command.Flags().StringVar(&route, "at", "", "route path, such as /blog")
 	command.Flags().BoolVar(&files, "files", false, "enable directory listings")
-	command.Flags().StringVar(&publicName, "public", "", "exact public hostname under shaulavo.dev")
+	command.Flags().StringVar(&publicName, "public", "", "exact public hostname under a configured deployment domain")
 	command.Flags().BoolVar(&wakeOnRequest, "wake-on-request", false, "ask the public edge to wake this origin")
 	command.Flags().BoolVar(&isolate, "isolate", false, "send cross-origin isolation headers so the page can use SharedArrayBuffer")
 	command.Flags().BoolVar(&yes, "yes", false, "skip the public confirmation prompt")
@@ -289,7 +288,7 @@ func (a *application) unserveCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "unserve ROUTE",
 		Short: "Remove one service and wait for public withdrawal",
-		Args:  exactArgs(1, "the route to remove", "mesh unserve blog.shaulavo.dev"),
+		Args:  exactArgs(1, "the route to remove", "mesh unserve blog.mesh.test"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if localEdge {
 				return a.runLocalTunnelRelease(cmd, args[0], hostID)

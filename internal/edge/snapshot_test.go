@@ -19,10 +19,10 @@ func TestSnapshotSignatureBindsCompleteCanonicalState(t *testing.T) {
 	edgeID, _ := testIdentity(t)
 	originID, originKey := testIdentity(t)
 	snapshot := NewSnapshot(edgeID, originID, 7, now, now.Add(5*time.Minute), []Route{
-		{PublicName: "web.shaulavo.dev", ServiceName: "docs", WakeOnRequest: true},
-		{PublicName: "api.shaulavo.dev", ServiceName: "v1"},
+		{PublicName: "web.mesh.test", ServiceName: "docs", WakeOnRequest: true},
+		{PublicName: "api.mesh.test", ServiceName: "v1"},
 	})
-	if snapshot.Routes[0].PublicName != "api.shaulavo.dev" {
+	if snapshot.Routes[0].PublicName != "api.mesh.test" {
 		t.Fatalf("routes are not canonical: %#v", snapshot.Routes)
 	}
 	signed, err := SignSnapshot(snapshot, originKey, now)
@@ -40,7 +40,7 @@ func TestSnapshotSignatureBindsCompleteCanonicalState(t *testing.T) {
 		"sequence":  func(candidate *Snapshot) { candidate.Sequence++ },
 		"issued":    func(candidate *Snapshot) { candidate.IssuedAt = candidate.IssuedAt.Add(time.Second) },
 		"expires":   func(candidate *Snapshot) { candidate.ExpiresAt = candidate.ExpiresAt.Add(time.Second) },
-		"public":    func(candidate *Snapshot) { candidate.Routes[0].PublicName = "new.shaulavo.dev" },
+		"public":    func(candidate *Snapshot) { candidate.Routes[0].PublicName = "new.mesh.test" },
 		"service":   func(candidate *Snapshot) { candidate.Routes[0].ServiceName = "v2" },
 		"wake":      func(candidate *Snapshot) { candidate.Routes[0].WakeOnRequest = true },
 		"signature": func(candidate *Snapshot) { candidate.Signature[0] ^= 1 },
@@ -60,7 +60,7 @@ func TestSnapshotRejectsNoncanonicalAndUnboundedState(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	edgeID, _ := testIdentity(t)
 	originID, key := testIdentity(t)
-	valid := NewSnapshot(edgeID, originID, 1, now, now.Add(5*time.Minute), []Route{{PublicName: "app.shaulavo.dev", ServiceName: "app"}})
+	valid := NewSnapshot(edgeID, originID, 1, now, now.Add(5*time.Minute), []Route{{PublicName: "app.mesh.test", ServiceName: "app"}})
 
 	cases := map[string]func(*Snapshot){
 		"zero sequence":  func(snapshot *Snapshot) { snapshot.Sequence = 0 },
@@ -74,13 +74,13 @@ func TestSnapshotRejectsNoncanonicalAndUnboundedState(t *testing.T) {
 			snapshot.ExpiresAt = now.Add(-time.Minute)
 		},
 		"long TTL":       func(snapshot *Snapshot) { snapshot.ExpiresAt = now.Add(16 * time.Minute) },
-		"apex":           func(snapshot *Snapshot) { snapshot.Routes[0].PublicName = "shaulavo.dev" },
-		"nested":         func(snapshot *Snapshot) { snapshot.Routes[0].PublicName = "a.b.shaulavo.dev" },
-		"private name":   func(snapshot *Snapshot) { snapshot.Routes[0].PublicName = "mesh.shaulavo.dev" },
+		"apex":           func(snapshot *Snapshot) { snapshot.Routes[0].PublicName = "mesh.test" },
+		"nested":         func(snapshot *Snapshot) { snapshot.Routes[0].PublicName = "a.b.mesh.test" },
+		"private name":   func(snapshot *Snapshot) { snapshot.Routes[0].PublicName = "mesh.mesh.test" },
 		"terminal":       func(snapshot *Snapshot) { snapshot.Routes[0].ServiceName = "mesh" },
 		"terminal child": func(snapshot *Snapshot) { snapshot.Routes[0].ServiceName = "mesh/control" },
 		"unsorted": func(snapshot *Snapshot) {
-			snapshot.Routes = []Route{{PublicName: "z.shaulavo.dev", ServiceName: "z"}, {PublicName: "a.shaulavo.dev", ServiceName: "a"}}
+			snapshot.Routes = []Route{{PublicName: "z.mesh.test", ServiceName: "z"}, {PublicName: "a.mesh.test", ServiceName: "a"}}
 		},
 		"duplicate": func(snapshot *Snapshot) { snapshot.Routes = append(snapshot.Routes, snapshot.Routes[0]) },
 		"large name": func(snapshot *Snapshot) {
@@ -100,7 +100,7 @@ func TestSnapshotRejectsNoncanonicalAndUnboundedState(t *testing.T) {
 	tooMany := cloneSnapshot(valid)
 	tooMany.Routes = make([]Route, MaximumRoutes+1)
 	for index := range tooMany.Routes {
-		tooMany.Routes[index] = Route{PublicName: "app.shaulavo.dev", ServiceName: strings.Repeat("a", index/26) + string(rune('a'+index%26))}
+		tooMany.Routes[index] = Route{PublicName: "app.mesh.test", ServiceName: strings.Repeat("a", index/26) + string(rune('a'+index%26))}
 	}
 	if _, err := SignSnapshot(tooMany, key, now); err == nil {
 		t.Fatal("too many routes signed")
@@ -114,7 +114,7 @@ func TestMaximalRegistrationAndListPageFitOneBoundedFrame(t *testing.T) {
 	routes := make([]Route, MaximumRoutes)
 	for index := range routes {
 		routes[index] = Route{
-			PublicName:    strings.Repeat("a", 63) + ".shaulavo.dev",
+			PublicName:    strings.Repeat("a", 63) + ".mesh.test",
 			ServiceName:   fmt.Sprintf("%03d%s", index, strings.Repeat("a", maximumServiceNameBytes-3)),
 			WakeOnRequest: index%2 == 0,
 		}

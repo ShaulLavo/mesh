@@ -21,7 +21,7 @@ func TestInspectServiceResolvesRemoteHomeAndInfersKind(t *testing.T) {
 	}
 
 	preview, err := InspectService(context.Background(), home, Service{
-		Name: "blog", Target: "./site", PublicName: "blog.shaulavo.dev",
+		Name: "blog", Target: "./site", PublicName: "blog.mesh.test",
 	}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestInspectServiceFindsCredentialsThroughInRootSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	service := Service{Name: "site", Kind: Static, Target: root, PublicName: "site.shaulavo.dev"}
+	service := Service{Name: "site", Kind: Static, Target: root, PublicName: "site.mesh.test"}
 	_, err := InspectService(context.Background(), home, service, false)
 	if !errors.Is(err, ErrCredentialsFound) || !strings.Contains(err.Error(), `.env`) {
 		t.Fatalf("credential error = %v", err)
@@ -99,7 +99,7 @@ func TestInspectServiceChecksResolvedRootName(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := InspectService(context.Background(), home, Service{
-		Name: "keys", Target: link, PublicName: "keys.shaulavo.dev",
+		Name: "keys", Target: link, PublicName: "keys.mesh.test",
 	}, false)
 	if !errors.Is(err, ErrCredentialsFound) || !strings.Contains(err.Error(), ".ssh") {
 		t.Fatalf("resolved root credential error = %v", err)
@@ -115,7 +115,7 @@ func TestInspectServiceRejectsCredentialLikeAncestors(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err := InspectService(context.Background(), home, Service{
-				Name: "site", Target: root, PublicName: "site.shaulavo.dev",
+				Name: "site", Target: root, PublicName: "site.mesh.test",
 			}, false)
 			if !errors.Is(err, ErrCredentialsFound) {
 				t.Fatalf("credential ancestor %s error = %v", relative, err)
@@ -143,7 +143,7 @@ func TestInspectServiceFailsClosedOnSymlinkCycleAndSpecialFile(t *testing.T) {
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	service := Service{Name: "site", Kind: Static, Target: root, PublicName: "site.shaulavo.dev"}
+	service := Service{Name: "site", Kind: Static, Target: root, PublicName: "site.mesh.test"}
 	loop := filepath.Join(root, "loop")
 	if err := os.Symlink("loop", loop); err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestInspectServiceFailsClosedOnUnsafeOrUnboundedTrees(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
 		t.Fatal(err)
 	}
-	service := Service{Name: "site", Kind: Static, Target: root, PublicName: "site.shaulavo.dev"}
+	service := Service{Name: "site", Kind: Static, Target: root, PublicName: "site.mesh.test"}
 	if _, err := InspectService(context.Background(), home, service, true); !errors.Is(err, ErrOutsideRoot) {
 		t.Fatalf("outside-root symlink error = %v", err)
 	}

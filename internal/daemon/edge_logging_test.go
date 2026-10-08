@@ -107,11 +107,11 @@ func TestProductionEdgeSinkPreservesCategoryBehindBlockedOperator(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = registry.Replace([]edge.PublishedRoute{{Route: edge.Route{PublicName: "docs.shaulavo.dev", ServiceName: "docs"}, Origin: edge.ResolvedOrigin{Identity: origin.ID, DisplayAlias: "fixture", Endpoint: netip.MustParseAddrPort("127.0.0.1:9"), Online: true, OnlineUntil: now.Add(time.Minute), LastSeenAt: now}}}); err != nil {
+	if err = registry.Replace([]edge.PublishedRoute{{Route: edge.Route{PublicName: "docs.mesh.test", ServiceName: "docs"}, Origin: edge.ResolvedOrigin{Identity: origin.ID, DisplayAlias: "fixture", Endpoint: netip.MustParseAddrPort("127.0.0.1:9"), Online: true, OnlineUntil: now.Add(time.Minute), LastSeenAt: now}}}); err != nil {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodGet, "/docs/", nil)
-	request.Host = "docs.shaulavo.dev"
+	request.Host = "docs.mesh.test"
 	request.RemoteAddr = "192.0.2.1:1234"
 	request.TLS = &tls.ConnectionState{ServerName: request.Host}
 	registry.ServeHTTP(httptest.NewRecorder(), request)

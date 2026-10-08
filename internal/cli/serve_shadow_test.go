@@ -8,7 +8,7 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 )
 
-const shadowTestWarning = "private route /blog/admin shadows public route https://blog.shaulavo.dev/blog at /blog/admin; public requests there return 404"
+const shadowTestWarning = "private route /blog/admin shadows public route https://blog.mesh.test/blog at /blog/admin; public requests there return 404"
 
 func TestServePrintsRegistrationShadowWarning(t *testing.T) {
 	host := setupCommandTestHost(t)
@@ -35,7 +35,7 @@ func TestServePrintsRegistrationShadowWarning(t *testing.T) {
 
 func TestServiceShadowWarningsStayOnTheirOwnHost(t *testing.T) {
 	public := ServiceCatalogRow{Host: HostRecord{ID: "pc", MachineName: "pc"}, Live: true,
-		Service: protocol.ServiceInfo{Name: "blog", PublicName: "blog.shaulavo.dev"}}
+		Service: protocol.ServiceInfo{Name: "blog", PublicName: "blog.mesh.test"}}
 	private := ServiceCatalogRow{Host: HostRecord{ID: "pi", MachineName: "pi"}, Live: true,
 		Service: protocol.ServiceInfo{Name: "blog/admin"}}
 	var output bytes.Buffer
@@ -58,7 +58,7 @@ func TestServiceShadowWarningsStayOnTheirOwnHost(t *testing.T) {
 func TestServeListWarnsAboutPrivateRouteShadowing(t *testing.T) {
 	host := setupCommandTestHost(t)
 	host.services = []protocol.ServiceInfo{
-		{Name: "blog", Kind: "proxy", Target: "3000", PublicName: "blog.shaulavo.dev", Healthy: true},
+		{Name: "blog", Kind: "proxy", Target: "3000", PublicName: "blog.mesh.test", Healthy: true},
 		{Name: "blog/admin", Kind: "proxy", Target: "4000", Healthy: true},
 	}
 	for _, command := range []string{"ls", "list"} {

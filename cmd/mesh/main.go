@@ -6,15 +6,27 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/charmbracelet/fang"
-
 	"github.com/shaul/mesh/internal/cli"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/release"
 )
 
 func main() {
+	if namingCommand(os.Args[1:]) {
+		config, err := cli.ConfigPath()
+		if err == nil {
+			err = domainpolicy.Initialize(filepath.Join(filepath.Dir(config), "domains.json"))
+		}
+		if err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
 	root := cli.NewCommand(commandDependencies())
 	if plainAgentCommand(os.Args[1:]) {
 		finishAgentCommand(os.Args[1], root.ExecuteContext(context.Background()))
@@ -67,4 +79,26 @@ func finishAgentCommand(name string, err error) {
 	}
 	_, _ = fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
+}
+
+func namingCommand(args []string) bool {
+	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		if args[0] == "--leave-key" {
+			if len(args) < 2 {
+				return false
+			}
+			args = args[2:]
+			continue
+		}
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "daemon", "serve", "unserve", "app", "private-names":
+		return true
+	default:
+		return false
+	}
 }

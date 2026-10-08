@@ -59,7 +59,7 @@ func TestPrivateAppEdgeErrorsRetainIsolationHeaders(t *testing.T) {
 				f.edge.config.Resolve = func(context.Context, string) (netip.AddrPort, error) { return endpoint, nil }
 			}
 			w := httptest.NewRecorder()
-			f.edge.ServeHost(w, r, app.ID+"."+Domain)
+			f.edge.ServeHost(w, r, app.ID+"."+Domain())
 			if w.Code != tc.code {
 				t.Fatalf("private error status=%d; want %d", w.Code, tc.code)
 			}

@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { chromium, webkit } from 'playwright';
 
 const assets = new URL('../../../internal/apppill/assets/', import.meta.url);
-const manager = 'https://apps.shaulavo.dev';
+const manager = 'https://apps.mesh.test';
 const artifacts = process.env.MESH_PILL_ARTIFACTS_DIR;
 if (artifacts) await mkdir(resolve(artifacts), { recursive: true });
 
@@ -89,7 +89,7 @@ async function checkLinkDrag(page, pill) {
     window.dispatchEvent(new PointerEvent('pointermove', { clientX: bounds.x + 60, clientY: bounds.y - 60 }));
     const dragged = shadow.querySelector('.shell').getBoundingClientRect();
     window.dispatchEvent(new MessageEvent('message', {
-      origin: 'https://apps.shaulavo.dev', source: shadow.querySelector('iframe').contentWindow,
+      origin: 'https://apps.mesh.test', source: shadow.querySelector('iframe').contentWindow,
       data: { type: 'mesh-app-status', visibility: 'public', owns: true },
     }));
     await new Promise(resolve => requestAnimationFrame(resolve));
@@ -164,7 +164,7 @@ async function checkInteractions(browser, name, reducedMotion) {
     await page.evaluate(() => {
       for (const message of [
         { origin: location.origin, source: window, data: { type: 'mesh-app-status', visibility: 'private', owns: true } },
-        { origin: 'https://apps.shaulavo.dev', source: window, data: { type: 'mesh-app-status', visibility: 'private', owns: true } },
+        { origin: 'https://apps.mesh.test', source: window, data: { type: 'mesh-app-status', visibility: 'private', owns: true } },
       ]) window.dispatchEvent(new MessageEvent('message', message));
     });
     assert.equal(await pill.locator('[aria-label="Make private"]').count(), 1, 'App messages must not impersonate the owner frame');

@@ -99,6 +99,7 @@ type certificateRuntime struct {
 	OriginTLS        *tls.Config
 	PublicTLS        *tls.Config
 	PrivateName      func() string
+	PrivateNames     func() []string
 	PrivateNameReady func()
 }
 
@@ -129,8 +130,8 @@ func configureCertificates(config certificateRuntimeConfig) (certificateRuntime,
 	installers := make(map[dnsname.CertificateProfile]certificateInstaller, 2)
 	runtime := certificateRuntime{}
 	if config.OriginHTTPSPort != 0 {
-		installer, tlsConfig, privateName, privateNameReady, err := configureCertificateProfile(
-			filepath.Join(config.StateDir, privateTLSDirectoryName), dnsname.WildcardName,
+		installer, tlsConfig, privateName, privateNameReady, err := configureCertificateDomains(
+			filepath.Join(config.StateDir, privateTLSDirectoryName),
 			dnsname.ProfilePrivateOrigin, config.TargetID, config.OriginRenewerID,
 		)
 		if err != nil {
@@ -139,11 +140,12 @@ func configureCertificates(config certificateRuntimeConfig) (certificateRuntime,
 		installers[dnsname.ProfilePrivateOrigin] = installer
 		runtime.OriginTLS = tlsConfig
 		runtime.PrivateName = privateName
+		runtime.PrivateNames = installer.(*certificateDomains).privateNames
 		runtime.PrivateNameReady = privateNameReady
 	}
 	if config.PublicMode == edge.ModeDirectTLS {
-		installer, tlsConfig, _, _, err := configureCertificateProfile(
-			filepath.Join(config.StateDir, certificateDirectoryName, string(dnsname.ProfilePublicEdge)), dnsname.PublicWildcardName,
+		installer, tlsConfig, _, _, err := configureCertificateDomains(
+			filepath.Join(config.StateDir, certificateDirectoryName, string(dnsname.ProfilePublicEdge)),
 			dnsname.ProfilePublicEdge, config.TargetID, config.PublicCertificatePin,
 		)
 		if err != nil {

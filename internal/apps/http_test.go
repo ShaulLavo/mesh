@@ -22,9 +22,9 @@ import (
 
 func pairingStartRequest(destination string) *http.Request {
 	form := url.Values{"return": {destination}}
-	r := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/pair", strings.NewReader(form.Encode()))
+	r := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/pair", strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.Header.Set("Origin", ManagementOrigin)
+	r.Header.Set("Origin", ManagementOrigin())
 	return r
 }
 
@@ -41,7 +41,7 @@ func cookieNamed(t *testing.T, response *httptest.ResponseRecorder, name string)
 func pairedOwner(t *testing.T, f *appFixture) *http.Cookie {
 	t.Helper()
 	begin := httptest.NewRecorder()
-	f.edge.ServeHost(begin, pairingStartRequest("/"), ManagementHost)
+	f.edge.ServeHost(begin, pairingStartRequest("/"), ManagementHost())
 	matched := regexp.MustCompile(`Code: <strong>([a-z0-9-]+)</strong>`).FindStringSubmatch(begin.Body.String())
 	if len(matched) != 2 {
 		t.Fatalf("missing reachable approval code: %s", begin.Body.String())
@@ -50,9 +50,9 @@ func pairedOwner(t *testing.T, f *appFixture) *http.Cookie {
 		t.Fatal(err)
 	}
 	promote := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/", nil)
+	request := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/", nil)
 	request.AddCookie(cookieNamed(t, begin, webauth.PairCookie))
-	f.edge.ServeHost(promote, request, ManagementHost)
+	f.edge.ServeHost(promote, request, ManagementHost())
 	if promote.Code != http.StatusSeeOther {
 		t.Fatalf("approval did not promote browser: %d %s", promote.Code, promote.Body.String())
 	}
@@ -66,7 +66,7 @@ func pairedOwner(t *testing.T, f *appFixture) *http.Cookie {
 func TestPairingPollPreservesCodeAndPromotesAfterApproval(t *testing.T) {
 	f := newAppFixture(t)
 	begin := httptest.NewRecorder()
-	f.edge.ServeHost(begin, pairingStartRequest("/view?id=7k3d"), ManagementHost)
+	f.edge.ServeHost(begin, pairingStartRequest("/view?id=7k3d"), ManagementHost())
 	matched := regexp.MustCompile(`Code: <strong>([a-z0-9-]+)</strong>`).FindStringSubmatch(begin.Body.String())
 	if len(matched) != 2 {
 		t.Fatal("pairing page is missing its approval code")
@@ -80,10 +80,10 @@ func TestPairingPollPreservesCodeAndPromotesAfterApproval(t *testing.T) {
 	}
 	pair := cookieNamed(t, begin, webauth.PairCookie)
 	poll := func(cookie *http.Cookie) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair/status", nil)
+		r := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/pair/status", nil)
 		r.AddCookie(cookie)
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, r, ManagementHost)
+		f.edge.ServeHost(response, r, ManagementHost())
 		return response
 	}
 	for range 3 {
@@ -103,7 +103,7 @@ func TestPairingPollPreservesCodeAndPromotesAfterApproval(t *testing.T) {
 	if !owner.Secure || !owner.HttpOnly || owner.Domain != "" {
 		t.Fatal("approval poll issued an unsafe cookie")
 	}
-	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/", nil)
+	request := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/", nil)
 	request.AddCookie(owner)
 	session, err := f.edge.auth.Browser(context.Background(), request)
 	if err != nil || !session.Owns(identityFor(f.ownerKey)) {
@@ -120,22 +120,22 @@ func TestPairingPollPreservesCodeAndPromotesAfterApproval(t *testing.T) {
 func TestPairingPollRejectsExpiredAndUnboundBrowsers(t *testing.T) {
 	f := newAppFixture(t)
 	begin := httptest.NewRecorder()
-	f.edge.ServeHost(begin, pairingStartRequest("/"), ManagementHost)
+	f.edge.ServeHost(begin, pairingStartRequest("/"), ManagementHost())
 	pair := cookieNamed(t, begin, webauth.PairCookie)
 	f.now = f.now.Add(10 * time.Minute)
 	for _, cookie := range []*http.Cookie{nil, pair} {
-		request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair/status", nil)
+		request := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/pair/status", nil)
 		if cookie != nil {
 			request.AddCookie(cookie)
 		}
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, request, ManagementHost)
+		f.edge.ServeHost(response, request, ManagementHost())
 		if response.Code != http.StatusGone || len(response.Result().Cookies()) != 0 {
 			t.Fatalf("invalid pairing poll = %d", response.Code)
 		}
 	}
 	response := httptest.NewRecorder()
-	f.edge.ServeHost(response, httptest.NewRequest(http.MethodPost, ManagementOrigin+"/pair/status", nil), ManagementHost)
+	f.edge.ServeHost(response, httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/pair/status", nil), ManagementHost())
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("unsupported poll method = %d", response.Code)
 	}
@@ -147,16 +147,16 @@ func TestPairingAnotherOwnerRequiresItsOwnApproval(t *testing.T) {
 	request := pairingStartRequest("/")
 	request.AddCookie(owner)
 	begin := httptest.NewRecorder()
-	f.edge.ServeHost(begin, request, ManagementHost)
+	f.edge.ServeHost(begin, request, ManagementHost())
 	pair := cookieNamed(t, begin, webauth.PairCookie)
 	poll := func(includePair bool) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/pair/status", nil)
+		r := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/pair/status", nil)
 		r.AddCookie(owner)
 		if includePair {
 			r.AddCookie(pair)
 		}
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, r, ManagementHost)
+		f.edge.ServeHost(response, r, ManagementHost())
 		return response
 	}
 	if poll(false).Code != http.StatusGone || poll(true).Code != http.StatusAccepted {
@@ -173,7 +173,7 @@ func TestPairingAnotherOwnerRequiresItsOwnApproval(t *testing.T) {
 	if approved.Code != http.StatusOK {
 		t.Fatalf("second owner approval rejected: %d", approved.Code)
 	}
-	r := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/", nil)
+	r := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/", nil)
 	r.AddCookie(cookieNamed(t, approved, webauth.OwnerCookie))
 	session, err := f.edge.auth.Browser(context.Background(), r)
 	if err != nil || !session.Owns(identityFor(f.ownerKey)) || !session.Owns(identityFor(f.otherKey)) {
@@ -223,12 +223,12 @@ func TestPillFrameReportsBrowserOwnership(t *testing.T) {
 	owner := pairedOwner(t, f)
 	check := func(t *testing.T, cookie *http.Cookie, owns string) {
 		t.Helper()
-		request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/frame?id="+app.ID, nil)
+		request := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/frame?id="+app.ID, nil)
 		if cookie != nil {
 			request.AddCookie(cookie)
 		}
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, request, ManagementHost)
+		f.edge.ServeHost(response, request, ManagementHost())
 		if response.Code != http.StatusOK || !regexp.MustCompile(`owns:\s*`+owns+`\b`).MatchString(response.Body.String()) {
 			t.Fatalf("incorrect pill ownership: %d %s", response.Code, response.Body.String())
 		}
@@ -245,7 +245,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 	app := createStaticApp(t, f)
 	forwarded := networkOrigin(t, f)
 	owner := pairedOwner(t, f)
-	viewRequest := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+app.ID, nil)
+	viewRequest := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/view?id="+app.ID, nil)
 	viewRequest.AddCookie(owner)
 	viewRedirect, nonce := privateViewRedirect(t, f, viewRequest)
 	if viewRedirect.Code != http.StatusSeeOther || !strings.HasPrefix(viewRedirect.Header().Get("Location"), URL(app.ID)+"/?mesh_view=") {
@@ -255,7 +255,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 	consume := httptest.NewRecorder()
 	consumeRequest := httptest.NewRequest(http.MethodGet, grantURL, nil)
 	consumeRequest.AddCookie(nonce)
-	f.edge.ServeHost(consume, consumeRequest, app.ID+"."+Domain)
+	f.edge.ServeHost(consume, consumeRequest, app.ID+"."+Domain())
 	if consume.Code != http.StatusSeeOther || strings.Contains(consume.Header().Get("Location"), "mesh_view") {
 		t.Fatal("did not consume and strip private ticket")
 	}
@@ -264,14 +264,14 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 		t.Fatal("unsafe private-view cookie")
 	}
 	replay := httptest.NewRecorder()
-	f.edge.ServeHost(replay, httptest.NewRequest(http.MethodGet, grantURL, nil), app.ID+"."+Domain)
+	f.edge.ServeHost(replay, httptest.NewRequest(http.MethodGet, grantURL, nil), app.ID+"."+Domain())
 	if replay.Code != 403 {
 		t.Fatalf("ticket replay accepted: %d", replay.Code)
 	}
 	leakedCookieRequest := httptest.NewRequest(http.MethodGet, URL(app.ID), nil)
 	leakedCookieRequest.AddCookie(owner)
 	denied := httptest.NewRecorder()
-	f.edge.ServeHost(denied, leakedCookieRequest, app.ID+"."+Domain)
+	f.edge.ServeHost(denied, leakedCookieRequest, app.ID+"."+Domain())
 	if denied.Code != 303 || forwarded.Load() != 0 {
 		t.Fatal("management cookie granted app viewing")
 	}
@@ -279,7 +279,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 	request.AddCookie(view)
 	request.AddCookie(owner)
 	result := httptest.NewRecorder()
-	f.edge.ServeHost(result, request, app.ID+"."+Domain)
+	f.edge.ServeHost(result, request, app.ID+"."+Domain())
 	if result.Code != 200 || !strings.Contains(result.Body.String(), "original page") || !strings.Contains(result.Body.String(), `data-mesh-private="true"`) || !strings.Contains(result.Body.String(), `data-mesh-owns="true"`) {
 		t.Fatalf("owner private content missing: %d %s", result.Code, result.Body.String())
 	}
@@ -292,7 +292,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 		request := httptest.NewRequest(http.MethodGet, URL(app.ID)+path, nil)
 		request.AddCookie(view)
 		asset := httptest.NewRecorder()
-		f.edge.ServeHost(asset, request, app.ID+"."+Domain)
+		f.edge.ServeHost(asset, request, app.ID+"."+Domain())
 		if asset.Code != 200 || asset.Body.Len() == 0 {
 			t.Fatalf("owner asset %s unavailable", path)
 		}
@@ -301,31 +301,31 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 	if err != nil || !unchanged.ExpiresAt.Equal(deadline.ExpiresAt) {
 		t.Fatal("control assets renewed lifetime")
 	}
-	authRequest := httptest.NewRequest(http.MethodGet, ManagementOrigin, nil)
+	authRequest := httptest.NewRequest(http.MethodGet, ManagementOrigin(), nil)
 	authRequest.AddCookie(owner)
 	session, err := f.edge.auth.Browser(context.Background(), authRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, origin := range []string{URL(app.ID), "https://other.shaulavo.dev"} {
+	for _, origin := range []string{URL(app.ID), "https://other.mesh.test"} {
 		form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}}
-		forged := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
+		forged := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/action", strings.NewReader(form.Encode()))
 		forged.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		forged.Header.Set("Origin", origin)
 		forged.AddCookie(owner)
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, forged, ManagementHost)
+		f.edge.ServeHost(response, forged, ManagementHost())
 		if response.Code != 403 {
 			t.Fatalf("sibling-origin mutation status %d", response.Code)
 		}
 	}
 	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}}
-	mutation := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
+	mutation := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/action", strings.NewReader(form.Encode()))
 	mutation.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	mutation.Header.Set("Origin", ManagementOrigin)
+	mutation.Header.Set("Origin", ManagementOrigin())
 	mutation.AddCookie(owner)
 	changed := httptest.NewRecorder()
-	f.edge.ServeHost(changed, mutation, ManagementHost)
+	f.edge.ServeHost(changed, mutation, ManagementHost())
 	if changed.Code != 303 {
 		t.Fatalf("owner mutation rejected: %d %s", changed.Code, changed.Body.String())
 	}
@@ -357,7 +357,7 @@ func TestPublicRequestBlockedByPrivacyChangeDuringOriginResolution(t *testing.T)
 	finished := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID), nil), app.ID+"."+Domain)
+		f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID), nil), app.ID+"."+Domain())
 		finished <- response
 	}()
 	select {
@@ -385,10 +385,10 @@ func TestVisibilityConfirmationPreservesBrowserOriginAndReturn(t *testing.T) {
 	app := createStaticApp(t, f)
 	cookie := pairedOwner(t, f)
 	destination := URL(app.ID) + "/colors?palette=rose%20water#favorites"
-	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/confirm?id="+app.ID+"&action=public&return="+url.QueryEscape(destination), nil)
+	request := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/confirm?id="+app.ID+"&action=public&return="+url.QueryEscape(destination), nil)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
-	f.edge.ServeHost(response, request, ManagementHost)
+	f.edge.ServeHost(response, request, ManagementHost())
 	if response.Header().Get("Referrer-Policy") != "same-origin" {
 		t.Fatal("confirmation suppresses the Origin header needed by its own POST")
 	}
@@ -403,16 +403,16 @@ func TestVisibilityConfirmationPreservesBrowserOriginAndReturn(t *testing.T) {
 		t.Fatal(err)
 	}
 	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}, "return": {destination}}
-	post := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
+	post := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/action", strings.NewReader(form.Encode()))
 	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	post.Header.Set("Origin", ManagementOrigin)
+	post.Header.Set("Origin", ManagementOrigin())
 	post.AddCookie(cookie)
 	changed := httptest.NewRecorder()
-	f.edge.ServeHost(changed, post, ManagementHost)
-	view := httptest.NewRequest(http.MethodGet, ManagementOrigin+changed.Header().Get("Location"), nil)
+	f.edge.ServeHost(changed, post, ManagementHost())
+	view := httptest.NewRequest(http.MethodGet, ManagementOrigin()+changed.Header().Get("Location"), nil)
 	view.AddCookie(cookie)
 	back := httptest.NewRecorder()
-	f.edge.ServeHost(back, view, ManagementHost)
+	f.edge.ServeHost(back, view, ManagementHost())
 	if back.Header().Get("Location") != destination {
 		t.Fatalf("returned to %q, want %q", back.Header().Get("Location"), destination)
 	}
@@ -423,7 +423,7 @@ func TestPrivateViewReturnPreservesPageAcrossTicketExchange(t *testing.T) {
 	app := createStaticApp(t, f)
 	cookie := pairedOwner(t, f)
 	destination := URL(app.ID) + "/colors?palette=rose%20water#favorites"
-	request := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+app.ID+"&return="+url.QueryEscape(destination), nil)
+	request := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/view?id="+app.ID+"&return="+url.QueryEscape(destination), nil)
 	request.AddCookie(cookie)
 	response, nonce := privateViewRedirect(t, f, request)
 	target, err := url.Parse(response.Header().Get("Location"))
@@ -436,7 +436,7 @@ func TestPrivateViewReturnPreservesPageAcrossTicketExchange(t *testing.T) {
 	wireTarget.RawFragment = ""
 	consumeRequest := httptest.NewRequest(http.MethodGet, wireTarget.String(), nil)
 	consumeRequest.AddCookie(nonce)
-	f.edge.ServeHost(consume, consumeRequest, app.ID+"."+Domain)
+	f.edge.ServeHost(consume, consumeRequest, app.ID+"."+Domain())
 	clean, err := url.Parse(consume.Header().Get("Location"))
 	if err != nil || clean.Path != "/colors" || clean.Query().Get("palette") != "rose water" || clean.Query().Get("mesh_view") != "" {
 		t.Fatalf("ticket cleanup lost its app page: %s", clean)
@@ -444,9 +444,10 @@ func TestPrivateViewReturnPreservesPageAcrossTicketExchange(t *testing.T) {
 }
 
 func TestAppReturnRejectsOtherOrigins(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, ManagementOrigin(), nil)
 	fallback := URL("7k3d") + "/"
-	for _, value := range []string{"https://evil.test/", "//evil.test/", "https://7k3d.shaulavo.dev@evil.test/", "https://7k3d.shaulavo.dev.evil.test/", "https://other.shaulavo.dev/", "http://7k3d.shaulavo.dev/", "https://7k3d.shaulavo.dev\\evil.test/", "https://7k3d.shaulavo.dev/\r\nLocation: https://evil.test"} {
-		if got := appReturn("7k3d", value); got != fallback {
+	for _, value := range []string{"https://evil.test/", "//evil.test/", "https://7k3d.mesh.test@evil.test/", "https://7k3d.mesh.test.evil.test/", "https://other.mesh.test/", "http://7k3d.mesh.test/", "https://7k3d.mesh.test\\evil.test/", "https://7k3d.mesh.test/\r\nLocation: https://evil.test"} {
+		if got := appReturn(request, "7k3d", value); got != fallback {
 			t.Fatalf("accepted outside return %q as %q", value, got)
 		}
 	}
@@ -468,13 +469,13 @@ func TestStaticAppAssetBurstWaitsForCapacity(t *testing.T) {
 	}
 	app := *result.App
 	owner := pairedOwner(t, f)
-	viewRequest := httptest.NewRequest(http.MethodGet, ManagementOrigin+"/view?id="+app.ID, nil)
+	viewRequest := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/view?id="+app.ID, nil)
 	viewRequest.AddCookie(owner)
 	redirect, nonce := privateViewRedirect(t, f, viewRequest)
 	consume := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, redirect.Header().Get("Location"), nil)
 	request.AddCookie(nonce)
-	f.edge.ServeHost(consume, request, app.ID+"."+Domain)
+	f.edge.ServeHost(consume, request, app.ID+"."+Domain())
 	view := cookieNamed(t, consume, webauth.ViewCookie)
 	entered := make(chan struct{}, 10)
 	finish := make(chan struct{}, 10)
@@ -508,7 +509,7 @@ func TestStaticAppAssetBurstWaitsForCapacity(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, URL(app.ID)+fmt.Sprintf("/image-%d.svg", index), nil).WithContext(ctx)
 			request.AddCookie(view)
 			response := httptest.NewRecorder()
-			f.edge.ServeHost(response, request, app.ID+"."+Domain)
+			f.edge.ServeHost(response, request, app.ID+"."+Domain())
 			responses <- response
 		}()
 	}
@@ -621,7 +622,7 @@ func TestStaticCapacityQueueExhaustionHasRetryAfter(t *testing.T) {
 		f.edge.capacityWaiters <- struct{}{}
 	}
 	response := httptest.NewRecorder()
-	f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID)+"/asset.svg", nil), app.ID+"."+Domain)
+	f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID)+"/asset.svg", nil), app.ID+"."+Domain())
 	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "1" {
 		t.Fatalf("exhaustion: %d %v", response.Code, response.Header())
 	}
@@ -697,7 +698,7 @@ func TestStaticCapacityRechecksPrivateAccessAfterWait(t *testing.T) {
 	defer cancel()
 	go func() {
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID), nil).WithContext(ctx), app.ID+"."+Domain)
+		f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID), nil).WithContext(ctx), app.ID+"."+Domain())
 		done <- response
 	}()
 	waitForCapacityWaiter(t, f.edge)

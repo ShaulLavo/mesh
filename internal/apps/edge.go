@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/webauth"
 )
@@ -43,7 +44,7 @@ type ownerState struct {
 	Error    string `json:"error,omitempty"`
 }
 type atomicNameStore interface {
-	ReserveAppNameAndState(context.Context, string, string, string, []byte) error
+	ReserveAppNamesAndState(context.Context, []string, string, string, []byte) error
 }
 
 // ErrCapacity identifies transient concurrency saturation without retrying invalid requests.
@@ -90,6 +91,9 @@ type edgeReply struct {
 }
 
 func NewEdge(ctx context.Context, c EdgeConfig) (*Edge, error) {
+	if domainpolicy.Primary() == "" {
+		return nil, errors.New("app: deployment domain is required")
+	}
 	if c.Store == nil || len(c.Key) != ed25519.PrivateKeySize || c.Resolve == nil {
 		return nil, errors.New("app: missing edge dependencies")
 	}
@@ -103,8 +107,8 @@ func NewEdge(ctx context.Context, c EdgeConfig) (*Edge, error) {
 	if e.state.Apps == nil || e.state.Owners == nil || len(e.state.Apps) > 16384 {
 		return nil, errors.New("app: invalid durable edge state")
 	}
-	if err := c.Store.ReserveAppName(ctx, ManagementHost, e.identity); err != nil {
-		return nil, fmt.Errorf("app: reserve management host: %w", err)
+	if err := c.Store.ReserveAppNames(ctx, appNames(ManagementHost()), e.identity); err != nil {
+		return nil, fmt.Errorf("app: reserve management hosts: %w", err)
 	}
 	auth, err := webauth.New(c.Store, c.Now)
 	if err != nil {
@@ -112,10 +116,8 @@ func NewEdge(ctx context.Context, c EdgeConfig) (*Edge, error) {
 	}
 	e.auth = auth
 	e.pendingRetire = map[string]Record{}
-	for id, app := range e.state.Apps {
-		if app.Status != "active" {
-			e.pendingRetire[id] = app
-		}
+	if err := e.reserveExistingApps(ctx); err != nil {
+		return nil, err
 	}
 	e.publishRuntime(e.state, nil)
 	context.AfterFunc(ctx, e.Close)
@@ -199,7 +201,7 @@ func (e *Edge) persist(ctx context.Context, next *edgeMutation) error {
 		return fmt.Errorf("app: encode edge state: %w", err)
 	}
 	if next.pendingName != "" {
-		err = e.config.Store.(atomicNameStore).ReserveAppNameAndState(ctx, next.pendingName, next.pendingOwner, "apps.edge", b)
+		err = e.config.Store.(atomicNameStore).ReserveAppNamesAndState(ctx, appNames(next.pendingName), next.pendingOwner, "apps.edge", b)
 	} else {
 		err = e.config.Store.SaveAppState(ctx, "apps.edge", b)
 	}
@@ -229,9 +231,14 @@ func (e *Edge) persist(ctx context.Context, next *edgeMutation) error {
 func (e *Edge) retireLocked(ctx context.Context, apps []Record) error {
 	var errs []error
 	for _, app := range apps {
-		if err := e.config.Store.SetAppNameInactive(ctx, app.ID+"."+Domain, app.Owner); err != nil {
-			errs = append(errs, fmt.Errorf("app %s: retire name: %w", app.ID, err))
-		} else {
+		var failed bool
+		for _, domain := range domainpolicy.Domains() {
+			if err := e.config.Store.SetAppNameInactive(ctx, app.ID+"."+domain, app.Owner); err != nil {
+				errs = append(errs, fmt.Errorf("app %s: retire name: %w", app.ID, err))
+				failed = true
+			}
+		}
+		if !failed {
 			delete(e.pendingRetire, app.ID)
 		}
 	}
@@ -403,12 +410,12 @@ func (e *Edge) allocate(ctx context.Context, next *edgeMutation, owner, kind str
 		if _, exists := next.state.Apps[id]; exists {
 			continue
 		}
-		if exists, err := e.config.Store.AppNameExists(ctx, id+"."+Domain); err != nil {
+		if exists, err := e.nameAllocated(ctx, id); err != nil {
 			return Result{}, err
 		} else if exists {
 			continue
 		}
-		next.pendingName = id + "." + Domain
+		next.pendingName = id + "." + Domain()
 		next.pendingOwner = owner
 		app := Record{ID: id, Owner: owner, Kind: kind, Visibility: "private", Status: "active", Cleanup: "pending", ExpiresAt: e.config.Now().UTC().Add(IdleTTL), Generation: 1, LeaseUntil: e.config.Now().Add(LeaseTTL)}
 		next.state.Apps[id] = app
@@ -633,4 +640,43 @@ func (e *Edge) inspectPairing(ctx context.Context, code string) (Result, error) 
 		return Result{}, fmt.Errorf("app: inspect browser pairing: %w", err)
 	}
 	return Result{Pairing: &info}, nil
+}
+
+func appNames(primaryName string) []string {
+	label, _, accepted := domainpolicy.Label(primaryName, false)
+	if !accepted {
+		return nil
+	}
+	var names []string
+	for _, domain := range domainpolicy.Domains() {
+		names = append(names, label+"."+domain)
+	}
+	return names
+}
+
+func (e *Edge) nameAllocated(ctx context.Context, id string) (bool, error) {
+	for _, domain := range domainpolicy.Domains() {
+		exists, err := e.config.Store.AppNameExists(ctx, id+"."+domain)
+		if err != nil {
+			return false, fmt.Errorf("app: check deployment reservation: %w", err)
+		}
+		if exists {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (e *Edge) reserveExistingApps(ctx context.Context) error {
+	for id, app := range e.state.Apps {
+		if app.Status == "active" {
+			if err := e.config.Store.ReserveAppNames(ctx, appNames(id+"."+Domain()), app.Owner); err != nil {
+				return fmt.Errorf("app: reserve deployment aliases: %w", err)
+			}
+		}
+		if app.Status != "active" {
+			e.pendingRetire[id] = app
+		}
+	}
+	return nil
 }

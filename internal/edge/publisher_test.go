@@ -26,15 +26,15 @@ func TestPublisherRetriesExactPendingAndSupersedesChangedDesiredState(t *testing
 	}{
 		{
 			name:            "same desired retries exact sequence",
-			second:          []serve.Service{{Name: "app", PublicName: "app.shaulavo.dev"}},
+			second:          []serve.Service{{Name: "app", PublicName: "app.mesh.test"}},
 			wantSequences:   []uint64{1, 1, 1, 2},
-			wantFinalRoutes: []Route{{PublicName: "app.shaulavo.dev", ServiceName: "app"}},
+			wantFinalRoutes: []Route{{PublicName: "app.mesh.test", ServiceName: "app"}},
 		},
 		{
 			name:            "changed desired compensates at higher sequence",
-			second:          []serve.Service{{Name: "new", PublicName: "new.shaulavo.dev"}},
+			second:          []serve.Service{{Name: "new", PublicName: "new.mesh.test"}},
 			wantSequences:   []uint64{1, 1, 2},
-			wantFinalRoutes: []Route{{PublicName: "new.shaulavo.dev", ServiceName: "new"}},
+			wantFinalRoutes: []Route{{PublicName: "new.mesh.test", ServiceName: "new"}},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -62,7 +62,7 @@ func TestPublisherRetriesExactPendingAndSupersedesChangedDesiredState(t *testing
 					return protocol.Control{}, fmt.Errorf("unexpected request %q", request.Type)
 				}
 			})
-			first := []serve.Service{{Name: "app", PublicName: "app.shaulavo.dev"}}
+			first := []serve.Service{{Name: "app", PublicName: "app.mesh.test"}}
 			if err := publisher.Converge(context.Background(), first); err == nil {
 				t.Fatal("ambiguous registration unexpectedly succeeded")
 			}
@@ -104,7 +104,7 @@ func TestPublisherSupersedesExpiredPendingAndClassifiesSafeErrors(t *testing.T) 
 		}
 		return response, nil
 	})
-	services := []serve.Service{{Name: "app", PublicName: "app.shaulavo.dev"}}
+	services := []serve.Service{{Name: "app", PublicName: "app.mesh.test"}}
 	if err := publisher.Converge(context.Background(), services); !errors.Is(err, ErrRouteCollision) {
 		t.Fatalf("collision error = %v", err)
 	}
@@ -134,7 +134,7 @@ func TestRoutesFromServicesBoundsOnlyPublicRoutes(t *testing.T) {
 	for index := range services {
 		services[index] = serve.Service{Name: fmt.Sprintf("private-%03d", index)}
 	}
-	services = append(services, serve.Service{Name: "app", PublicName: "app.shaulavo.dev"})
+	services = append(services, serve.Service{Name: "app", PublicName: "app.mesh.test"})
 	routes, err := routesFromServices(services)
 	if err != nil || len(routes) != 1 || routes[0].ServiceName != "app" {
 		t.Fatalf("public routes = %#v, error = %v", routes, err)
@@ -178,7 +178,7 @@ func TestPublisherPublishesDataPlaneTrustOnlyAfterHostIdentityPin(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.Converge(context.Background(), []serve.Service{{Name: "app", PublicName: "app.shaulavo.dev"}}); err != nil {
+	if err := publisher.Converge(context.Background(), []serve.Service{{Name: "app", PublicName: "app.mesh.test"}}); err != nil {
 		t.Fatal(err)
 	}
 	if fmt.Sprint(pinned) != "[100.64.0.2]" {
@@ -205,7 +205,7 @@ func TestPublisherPublishesDataPlaneTrustOnlyAfterHostIdentityPin(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.Converge(context.Background(), []serve.Service{{Name: "app", PublicName: "app.shaulavo.dev"}}); err == nil {
+	if err := publisher.Converge(context.Background(), []serve.Service{{Name: "app", PublicName: "app.mesh.test"}}); err == nil {
 		t.Fatal("publisher accepted the wrong host identity")
 	}
 	if len(pinned) != 0 {
@@ -216,8 +216,8 @@ func TestPublisherPublishesDataPlaneTrustOnlyAfterHostIdentityPin(t *testing.T) 
 func TestPublisherListPagePinsSignsAndValidatesCanonicalPage(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	state := &publisherMemoryOutbox{}
-	cursor := encodeListCursor("app.shaulavo.dev", "/a")
-	next := encodeListCursor("app.shaulavo.dev", "/c")
+	cursor := encodeListCursor("app.mesh.test", "/a")
+	next := encodeListCursor("app.mesh.test", "/c")
 	publisher := testPublisher(t, now, state, func(request protocol.Control) (protocol.Control, error) {
 		switch request.Type {
 		case protocol.TypeHostInfo:
@@ -233,7 +233,7 @@ func TestPublisherListPagePinsSignsAndValidatesCanonicalPage(t *testing.T) {
 			return protocol.Control{
 				Type: protocol.TypeEdgeListed, RequestID: request.RequestID, EdgeNextCursor: next,
 				EdgeRoutes: []protocol.EdgeRouteInfo{
-					listedRoute("app.shaulavo.dev", "b", now), listedRoute("app.shaulavo.dev", "c", now),
+					listedRoute("app.mesh.test", "b", now), listedRoute("app.mesh.test", "c", now),
 				},
 			}, nil
 		default:
@@ -248,24 +248,24 @@ func TestPublisherListPagePinsSignsAndValidatesCanonicalPage(t *testing.T) {
 
 func TestPublisherListPageRejectsMalformedPinnedResponses(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	cursor := encodeListCursor("app.shaulavo.dev", "/b")
+	cursor := encodeListCursor("app.mesh.test", "/b")
 	cases := map[string]protocol.Control{
 		"before cursor": {
-			Type: protocol.TypeEdgeListed, EdgeRoutes: []protocol.EdgeRouteInfo{listedRoute("app.shaulavo.dev", "a", now)},
+			Type: protocol.TypeEdgeListed, EdgeRoutes: []protocol.EdgeRouteInfo{listedRoute("app.mesh.test", "a", now)},
 		},
 		"unordered": {
 			Type: protocol.TypeEdgeListed, EdgeRoutes: []protocol.EdgeRouteInfo{
-				listedRoute("app.shaulavo.dev", "d", now), listedRoute("app.shaulavo.dev", "c", now),
+				listedRoute("app.mesh.test", "d", now), listedRoute("app.mesh.test", "c", now),
 			},
 		},
 		"duplicate": {
 			Type: protocol.TypeEdgeListed, EdgeRoutes: []protocol.EdgeRouteInfo{
-				listedRoute("app.shaulavo.dev", "c", now), listedRoute("app.shaulavo.dev", "c", now),
+				listedRoute("app.mesh.test", "c", now), listedRoute("app.mesh.test", "c", now),
 			},
 		},
 		"wrong next cursor": {
-			Type: protocol.TypeEdgeListed, EdgeRoutes: []protocol.EdgeRouteInfo{listedRoute("app.shaulavo.dev", "c", now)},
-			EdgeNextCursor: encodeListCursor("app.shaulavo.dev", "/d"),
+			Type: protocol.TypeEdgeListed, EdgeRoutes: []protocol.EdgeRouteInfo{listedRoute("app.mesh.test", "c", now)},
+			EdgeNextCursor: encodeListCursor("app.mesh.test", "/d"),
 		},
 		"remote error is secret": {Type: protocol.TypeError, Message: "ATTACKER\r\n100.64.0.9"},
 	}

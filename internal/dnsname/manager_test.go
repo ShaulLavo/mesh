@@ -44,8 +44,8 @@ func TestPrivateNamesManagerReconcilesSelfAndPeersAndAlwaysDistributes(t *testin
 		t.Fatalf("provider creates = %d, records = %#v", provider.creates, provider.records)
 	}
 	wantAddresses := map[string]string{
-		"pi.mesh.shaulavo.dev":      "100.64.0.9",
-		"desktop.mesh.shaulavo.dev": "100.80.0.2",
+		"pi.mesh.mesh.test":      "100.64.0.9",
+		"desktop.mesh.mesh.test": "100.80.0.2",
 	}
 	for _, record := range provider.records {
 		if record.Content != wantAddresses[record.Name] || record.Proxied || record.Comment != ManagedARecordComment {
@@ -53,8 +53,8 @@ func TestPrivateNamesManagerReconcilesSelfAndPeersAndAlwaysDistributes(t *testin
 		}
 	}
 	wantTargets := []OriginTarget{
-		{Name: "pi", PrivateName: "pi.mesh.shaulavo.dev", Endpoint: "ws://100.64.0.9:7337/mesh", Identity: piID},
-		{Name: "desktop", PrivateName: "desktop.mesh.shaulavo.dev", Endpoint: "ws://100.80.0.2:7447/control/ws", Identity: desktopID},
+		{Name: "pi", PrivateName: "pi.mesh.mesh.test", Endpoint: "ws://100.64.0.9:7337/mesh", Identity: piID},
+		{Name: "desktop", PrivateName: "desktop.mesh.mesh.test", Endpoint: "ws://100.80.0.2:7447/control/ws", Identity: desktopID},
 	}
 	if len(distributor.calls) != 1 || !reflect.DeepEqual(distributor.calls[0], wantTargets) {
 		t.Fatalf("distribution calls = %#v, want %#v", distributor.calls, wantTargets)
@@ -186,7 +186,7 @@ func TestPrivateNamesManagerUsesPeerTargetsWhenSelfDiscoveryFails(t *testing.T) 
 	if renewer.calls != 1 || provider.creates != 1 {
 		t.Fatalf("renew calls = %d, provider creates = %d", renewer.calls, provider.creates)
 	}
-	want := [][]OriginTarget{{{Name: "desktop", PrivateName: "desktop.mesh.shaulavo.dev", Endpoint: "ws://100.80.0.2:7447/control/ws", Identity: desktopID}}}
+	want := [][]OriginTarget{{{Name: "desktop", PrivateName: "desktop.mesh.mesh.test", Endpoint: "ws://100.80.0.2:7447/control/ws", Identity: desktopID}}}
 	if !reflect.DeepEqual(distributor.calls, want) {
 		t.Fatalf("partial discovery distributions = %#v, want %#v", distributor.calls, want)
 	}

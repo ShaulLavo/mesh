@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/tailnet"
 )
 
@@ -54,6 +55,7 @@ type CertificateDistributor interface {
 // PrivateNamesManagerConfig supplies the stateful actors and boundary
 // discovery functions shared by one reconciliation loop.
 type PrivateNamesManagerConfig struct {
+	Domain        string
 	Provider      Provider
 	Renewer       CertificateRenewer
 	Distributor   CertificateDistributor
@@ -66,6 +68,7 @@ type PrivateNamesManagerConfig struct {
 // PrivateNamesManager converges private records, a wildcard certificate, and
 // origin installs. It owns no timer until Run is called.
 type PrivateNamesManager struct {
+	domain        string
 	provider      Provider
 	renewer       CertificateRenewer
 	distributor   CertificateDistributor
@@ -79,6 +82,12 @@ type PrivateNamesManager struct {
 // NewPrivateNamesManager validates the complete desired origin set before any
 // discovery, DNS, ACME, or network operation.
 func NewPrivateNamesManager(config PrivateNamesManagerConfig) (*PrivateNamesManager, error) {
+	if config.Domain == "" {
+		config.Domain = Zone()
+	}
+	if !slices.Contains(domainpolicy.Domains(), config.Domain) {
+		return nil, errors.New("dnsname: renewal domain is not configured")
+	}
 	if config.Provider == nil {
 		return nil, errors.New("dnsname: private-names provider is nil")
 	}
@@ -118,7 +127,7 @@ func NewPrivateNamesManager(config PrivateNamesManagerConfig) (*PrivateNamesMana
 		seenIdentities[origin.Identity] = struct{}{}
 	}
 	return &PrivateNamesManager{
-		provider: config.Provider, renewer: config.Renewer, distributor: config.Distributor,
+		domain: config.Domain, provider: config.Provider, renewer: config.Renewer, distributor: config.Distributor,
 		origins:      append([]PrivateOrigin(nil), config.Origins...),
 		discoverSelf: config.DiscoverSelf, discoverPeers: config.DiscoverPeers,
 		passTimeout: config.PassTimeout, wait: waitForReconcile,
@@ -177,10 +186,10 @@ func (m *PrivateNamesManager) RunOnce(ctx context.Context, forceRenewal bool) er
 			continue
 		}
 		privateName := ""
-		if _, err := ReconcileHostA(ctx, m.provider, HostAddress{Name: origin.Name, Address: address}); err != nil {
+		if _, err := ReconcileHostA(ctx, m.provider, HostAddress{Name: origin.Name, Address: address, Domain: m.domain}); err != nil {
 			passErrors = append(passErrors, fmt.Errorf("dnsname: origin %s: %w", origin.Name, err))
 		} else {
-			privateName, _ = privateHostName(origin.Name)
+			privateName, _ = privateHostNameInDomain(origin.Name, m.domain)
 		}
 		targets = append(targets, OriginTarget{
 			Name: origin.Name, PrivateName: privateName, Identity: origin.Identity,

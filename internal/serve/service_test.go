@@ -8,7 +8,7 @@ import (
 )
 
 func TestNormalizeRetainsExplicitPublicName(t *testing.T) {
-	for _, name := range []string{"", "blog.shaulavo.dev", "my-blog.shaulavo.dev"} {
+	for _, name := range []string{"", "blog.mesh.test", "my-blog.mesh.test"} {
 		t.Run(name, func(t *testing.T) {
 			service, err := Normalize(Service{Name: "site", Kind: Proxy, Target: "3000", PublicName: name})
 			if err != nil {
@@ -23,19 +23,19 @@ func TestNormalizeRetainsExplicitPublicName(t *testing.T) {
 
 func TestNormalizeRejectsInvalidPublicName(t *testing.T) {
 	invalid := []string{
-		"shaulavo.dev",
-		"api.blog.shaulavo.dev",
-		"mesh.shaulavo.dev",
-		"*.shaulavo.dev",
-		"BLOG.shaulavo.dev",
-		"blog.shaulavo.dev.",
-		"shaulavo.dev.example.com",
-		"notshaulavo.dev",
-		"bad_.shaulavo.dev",
-		"-bad.shaulavo.dev",
-		"bad-.shaulavo.dev",
-		"bad..shaulavo.dev",
-		strings.Repeat("a", 64) + ".shaulavo.dev",
+		"mesh.test",
+		"api.blog.mesh.test",
+		"mesh.mesh.test",
+		"*.mesh.test",
+		"BLOG.mesh.test",
+		"blog.mesh.test.",
+		"mesh.test.example.com",
+		"notmesh.test",
+		"bad_.mesh.test",
+		"-bad.mesh.test",
+		"bad-.mesh.test",
+		"bad..mesh.test",
+		strings.Repeat("a", 64) + ".mesh.test",
 	}
 	for _, name := range invalid {
 		t.Run(name, func(t *testing.T) {
@@ -63,7 +63,7 @@ func TestCheckServiceReportsUnreachableProxyUpstream(t *testing.T) {
 			port := closedLoopbackPort(t)
 			// A wake route is not excused: wake-on-request wakes the origin
 			// host, and a probe only runs while that host is already awake.
-			service := Service{Name: "app", Kind: Proxy, Target: port, PublicName: "app.shaulavo.dev", WakeOnRequest: wake}
+			service := Service{Name: "app", Kind: Proxy, Target: port, PublicName: "app.mesh.test", WakeOnRequest: wake}
 
 			status := CheckService(t.Context(), service)
 			want := "upstream 127.0.0.1:" + port + " unreachable: connect: connection refused"

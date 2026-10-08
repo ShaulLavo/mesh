@@ -25,7 +25,7 @@ func TestInjectHTMLPreservesAppAndPermitsOnlyControlAssets(t *testing.T) {
 	resp.Header.Add("Content-Security-Policy", "script-src 'unsafe-inline'")
 	resp.Header.Set("ETag", `"original"`)
 	resp.Header.Set("Content-Length", "200")
-	if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err != nil {
+	if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.mesh.test"}); err != nil {
 		t.Fatal(err)
 	}
 	body, err := io.ReadAll(resp.Body)
@@ -33,7 +33,7 @@ func TestInjectHTMLPreservesAppAndPermitsOnlyControlAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(body)
-	for _, want := range []string{`<script nonce="app">window.app = 1</script>`, `<div id="root">hello</div>`, `data-mesh-app="7k3d"`, `data-mesh-manager="https://apps.shaulavo.dev"`, `script-src-elem &#39;nonce-app&#39; https://7k3d.shaulavo.dev/.mesh-app/pill.js`} {
+	for _, want := range []string{`<script nonce="app">window.app = 1</script>`, `<div id="root">hello</div>`, `data-mesh-app="7k3d"`, `data-mesh-manager="https://apps.mesh.test"`, `script-src-elem &#39;nonce-app&#39; https://7k3d.mesh.test/.mesh-app/pill.js`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %s", want, text)
 		}
@@ -45,7 +45,7 @@ func TestInjectHTMLPreservesAppAndPermitsOnlyControlAssets(t *testing.T) {
 	if len(policies) != 2 {
 		t.Fatal("lost multiple policies")
 	}
-	if !strings.Contains(policies[0], "connect-src https://api.example") || !strings.Contains(policies[0], "frame-src https://apps.shaulavo.dev") {
+	if !strings.Contains(policies[0], "connect-src https://api.example") || !strings.Contains(policies[0], "frame-src https://apps.mesh.test") {
 		t.Fatal("CSP lost original policy or control permission")
 	}
 	if !strings.Contains(policies[1], "script-src-elem 'unsafe-inline'") {
@@ -77,7 +77,7 @@ func TestInjectCompressedDocuments(t *testing.T) {
 			defer func() { _ = resp.Body.Close() }()
 			resp.Body = io.NopCloser(bytes.NewReader(compressed.Bytes()))
 			resp.Header.Set("Content-Encoding", encoding)
-			if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err != nil {
+			if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.mesh.test"}); err != nil {
 				t.Fatal(err)
 			}
 			content, err := io.ReadAll(resp.Body)
@@ -97,7 +97,7 @@ func TestInjectNonHTMLUntouched(t *testing.T) {
 	original := resp.Body
 	resp.Header.Set("ETag", `"json"`)
 	resp.Header.Set("Content-Encoding", "gzip")
-	if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err != nil {
+	if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.mesh.test"}); err != nil {
 		t.Fatal(err)
 	}
 	if resp.Body != original || resp.Header.Get("ETag") != `"json"` || resp.Header.Get("Content-Encoding") != "gzip" {
@@ -110,7 +110,7 @@ func TestInjectStreamsBeforeUpstreamCompletes(t *testing.T) {
 	resp := response("", "text/html")
 	defer func() { _ = resp.Body.Close() }()
 	resp.Body = input
-	if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err != nil {
+	if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.mesh.test"}); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = output.Close() }()
@@ -147,7 +147,7 @@ func TestInjectPassesUnsupportedEncodingThrough(t *testing.T) {
 				resp.Header.Set("Content-Encoding", "zstd")
 			}
 			original := resp.Body
-			if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err != nil {
+			if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.mesh.test"}); err != nil {
 				t.Fatalf("unsupported encoding blocked the response: %v", err)
 			}
 			if resp.Body != original {
@@ -158,7 +158,7 @@ func TestInjectPassesUnsupportedEncodingThrough(t *testing.T) {
 }
 
 func TestStripMeshCookiesPreservesApplicationCookies(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "https://7k3d.shaulavo.dev/", nil)
+	request := httptest.NewRequest(http.MethodGet, "https://7k3d.mesh.test/", nil)
 	request.Header.Set("Cookie", "__Host-mesh-view=secret; app=session; __Host-mesh-session=owner")
 	StripRequestCookies(request)
 	if request.Header.Get("Cookie") != "app=session" {
@@ -195,18 +195,18 @@ func TestAssetServesEmbeddedControlAndReservesPrefix(t *testing.T) {
 }
 
 func TestStrictDynamicAllowsInjectedNonceWithoutRemovingPolicy(t *testing.T) {
-	policy := permitControl("default-src 'none'; script-src 'nonce-app' 'strict-dynamic'; style-src 'unsafe-inline'", "7k3d.shaulavo.dev", "https://apps.shaulavo.dev", "mesh")
-	if !strings.Contains(policy, "script-src-elem 'nonce-app' 'strict-dynamic' https://7k3d.shaulavo.dev/.mesh-app/pill.js 'nonce-mesh'") {
+	policy := permitControl("default-src 'none'; script-src 'nonce-app' 'strict-dynamic'; style-src 'unsafe-inline'", "7k3d.mesh.test", "https://apps.mesh.test", "mesh")
+	if !strings.Contains(policy, "script-src-elem 'nonce-app' 'strict-dynamic' https://7k3d.mesh.test/.mesh-app/pill.js 'nonce-mesh'") {
 		t.Fatal(policy)
 	}
-	if !strings.Contains(policy, "style-src-elem 'unsafe-inline' https://7k3d.shaulavo.dev/.mesh-app/pill.css") {
+	if !strings.Contains(policy, "style-src-elem 'unsafe-inline' https://7k3d.mesh.test/.mesh-app/pill.css") {
 		t.Fatal(policy)
 	}
 }
 
 func TestCommaSeparatedPoliciesEachPermitControl(t *testing.T) {
-	policy := permitControl("default-src 'none', default-src 'self'; script-src 'nonce-app'", "7k3d.shaulavo.dev", "https://apps.shaulavo.dev", "mesh")
-	if strings.Count(policy, "https://7k3d.shaulavo.dev/.mesh-app/pill.js") != 2 || strings.Count(policy, "frame-src") != 2 {
+	policy := permitControl("default-src 'none', default-src 'self'; script-src 'nonce-app'", "7k3d.mesh.test", "https://apps.mesh.test", "mesh")
+	if strings.Count(policy, "https://7k3d.mesh.test/.mesh-app/pill.js") != 2 || strings.Count(policy, "frame-src") != 2 {
 		t.Fatal(policy)
 	}
 }

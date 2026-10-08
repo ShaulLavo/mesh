@@ -7,7 +7,7 @@ import { chromium, webkit } from 'playwright';
 const assets = process.env.MESH_PILL_ASSETS ? new URL(`file://${resolve(process.env.MESH_PILL_ASSETS)}/`) : new URL('../../../internal/apppill/assets/', import.meta.url);
 const artifacts = process.env.MESH_PILL_ARTIFACTS_DIR;
 if (artifacts) await mkdir(resolve(artifacts), { recursive: true });
-const manager = 'https://apps.shaulavo.dev';
+const manager = 'https://apps.mesh.test';
 const script = await readFile(new URL('pill.js', assets));
 const stylesheet = await readFile(new URL('pill.css', assets));
 const DOT_LINE = 38;

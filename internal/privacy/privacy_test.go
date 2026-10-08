@@ -120,9 +120,9 @@ func TestIdentifiersInsidePathsAndRoutes(t *testing.T) {
 		{"url", "https://" + uuid + ".ts.net/project", "https://" + m.Value("uuid", uuid) + ".<tailnet>/project"},
 		{"url", uuid + ".ts.net/project", m.Value("uuid", uuid) + ".<tailnet>/project"},
 		{"url", "https://private.example/with%20space/" + uuid + "/" + ipv4, "https://<domain>/with%20space/" + m.Value("uuid", uuid) + "/" + m.Value("ip", ipv4)},
-		{"route", "omarchy.mesh.shaulavo.dev/ai", "<domain>/ai"},
-		{"route", "omarchy.mesh.shaulavo.dev/ai/" + uuid, "<domain>/ai/" + m.Value("uuid", uuid)},
-		{"url", "omarchy.mesh.shaulavo.dev:8443/ai?token=secret#private", "<domain>:8443/ai"},
+		{"route", "omarchy.mesh.mesh.test/ai", "<domain>/ai"},
+		{"route", "omarchy.mesh.mesh.test/ai/" + uuid, "<domain>/ai/" + m.Value("uuid", uuid)},
+		{"url", "omarchy.mesh.mesh.test:8443/ai?token=secret#private", "<domain>:8443/ai"},
 		{"url", "machine.tail1234.ts.net/ai", "machine.<tailnet>/ai"},
 	} {
 		if got := m.Value(tt.kind, tt.input); got != tt.want {

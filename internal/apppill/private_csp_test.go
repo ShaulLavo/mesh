@@ -16,7 +16,7 @@ func TestPrivateFramingPolicyIntersectsWithAppPolicies(t *testing.T) {
 		{name: "HTML without CSP", kind: "text/html", status: http.StatusOK},
 		{name: "HTML permits all ancestors", kind: "text/html", status: http.StatusOK, policies: []string{"default-src 'self'; frame-ancestors *"}},
 		{name: "HTML denies every ancestor", kind: "text/html", status: http.StatusOK, policies: []string{"default-src 'none'; frame-ancestors 'none'"}},
-		{name: "HTML permits only sibling", kind: "text/html", status: http.StatusOK, policies: []string{"frame-ancestors https://zzzz.shaulavo.dev"}},
+		{name: "HTML permits only sibling", kind: "text/html", status: http.StatusOK, policies: []string{"frame-ancestors https://zzzz.mesh.test"}},
 		{name: "HTML multiple policies", kind: "text/html", status: http.StatusOK, policies: []string{"frame-ancestors 'none'", "default-src 'self'; frame-ancestors *"}},
 		{name: "HTML comma separated policies", kind: "text/html", status: http.StatusOK, policies: []string{"frame-ancestors 'none', frame-ancestors *"}},
 		{name: "JSON without CSP", kind: "application/json", status: http.StatusOK},
@@ -31,7 +31,7 @@ func TestPrivateFramingPolicyIntersectsWithAppPolicies(t *testing.T) {
 			for _, policy := range tc.policies {
 				resp.Header.Add("Content-Security-Policy", policy)
 			}
-			if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev", Private: true}); err != nil {
+			if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.mesh.test", Private: true}); err != nil {
 				t.Fatal(err)
 			}
 			defer func() { _ = resp.Body.Close() }()
@@ -67,7 +67,7 @@ func TestPrivateFramingPolicyIntersectsWithAppPolicies(t *testing.T) {
 							switch fields[0] {
 							case "frame-src":
 								restrictsFrames = true
-								permitsManager = containsSource(fields[1:], "https://apps.shaulavo.dev")
+								permitsManager = containsSource(fields[1:], "https://apps.mesh.test")
 							case "child-src", "default-src":
 								restrictsFrames = true
 							}
@@ -85,7 +85,7 @@ func TestPrivateFramingPolicyIntersectsWithAppPolicies(t *testing.T) {
 func TestPublicFramingPolicyUnchanged(t *testing.T) {
 	for _, kind := range []string{"text/html", "application/json"} {
 		resp := response("<html><body>public app</body></html>", kind)
-		if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.shaulavo.dev"}); err != nil {
+		if err := Inject(resp, Config{AppID: "7k3d", ManagementOrigin: "https://apps.mesh.test"}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := io.ReadAll(resp.Body); err != nil {

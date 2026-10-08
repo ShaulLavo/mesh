@@ -214,7 +214,7 @@ func protectedTestOrigin(t *testing.T, store *storage.Store, registry *meshserve
 
 func TestAppCreationRejectsExistingDormantProxyAndListenerAliases(t *testing.T) {
 	store, registry, _ := newServiceControllerTest(t, "/mesh")
-	service := meshserve.Service{Name: "alias", Kind: meshserve.Proxy, Target: "31337", PublicName: "alias.shaulavo.dev", Listens: []meshserve.Listen{{Public: 31338, Upstream: 31339}}}
+	service := meshserve.Service{Name: "alias", Kind: meshserve.Proxy, Target: "31337", PublicName: "alias.mesh.test", Listens: []meshserve.Listen{{Public: 31338, Upstream: 31339}}}
 	if err := registry.Replace([]meshserve.Service{service}); err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func TestServiceAppGuardRejectsOwnedPortsAndFileRootsBeforePersistence(t *testin
 	origin, _ := protectedTestOrigin(t, store, registry, managed, 31337)
 	controller.guard = appServiceGuard(origin)
 	definitions := []meshserve.Service{
-		{Name: "alias", Kind: meshserve.Proxy, Target: "31337", PublicName: "alias.shaulavo.dev"},
+		{Name: "alias", Kind: meshserve.Proxy, Target: "31337", PublicName: "alias.mesh.test"},
 		{Name: "alias", Kind: meshserve.Proxy, Target: "31400", Listens: []meshserve.Listen{{Public: 31337, Upstream: 31401}}},
 		{Name: "alias", Kind: meshserve.Proxy, Target: "31400", Listens: []meshserve.Listen{{Public: 31401, Upstream: 31337}}},
 		{Name: "alias", Kind: meshserve.Files, Target: parent},

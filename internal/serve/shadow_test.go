@@ -6,7 +6,7 @@ import (
 )
 
 func TestPrivateRouteShadows(t *testing.T) {
-	public := Service{Name: "blog", PublicName: "blog.shaulavo.dev"}
+	public := Service{Name: "blog", PublicName: "blog.mesh.test"}
 	private := Service{Name: "blog/admin"}
 	for _, test := range []struct {
 		name     string
@@ -17,7 +17,7 @@ func TestPrivateRouteShadows(t *testing.T) {
 		{name: "private parent", services: []Service{{Name: "blog"}, private}},
 		{name: "path segment boundary", services: []Service{public, {Name: "blogging/admin"}}},
 		{name: "public child", services: []Service{public, {Name: "blog/admin", PublicName: public.PublicName}}},
-		{name: "other public child", services: []Service{public, {Name: "blog/admin", PublicName: "admin.shaulavo.dev"}}},
+		{name: "other public child", services: []Service{public, {Name: "blog/admin", PublicName: "admin.mesh.test"}}},
 		{name: "listener only", services: []Service{{Name: "3000", PublicName: public.PublicName}, {Name: "3000/admin", LocalOnly: true}}},
 		{name: "private ancestor does not shadow child", services: []Service{{Name: "blog"}, {Name: "blog/admin", PublicName: public.PublicName}}},
 		{name: "all public ancestors", services: []Service{private, {Name: "blog/admin/sub"}, public}, want: []PrivateRouteShadow{

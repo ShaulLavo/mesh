@@ -103,11 +103,11 @@ func TestEdgeAdmissionUsesOneSigningTime(t *testing.T) {
 			f.edge.config.Now = func() time.Time {
 				return f.now.Add(-time.Duration(calls.Add(1)) * time.Nanosecond)
 			}
-			host := app.ID + "." + Domain
+			host := app.ID + "." + Domain()
 			target := URL(app.ID) + "/"
 			if download {
-				host = ManagementHost
-				target = ManagementOrigin + "/download?id=" + app.ID
+				host = ManagementHost()
+				target = ManagementOrigin() + "/download?id=" + app.ID
 			}
 			w := httptest.NewRecorder()
 			if !f.edge.ServeHost(w, httptest.NewRequest(http.MethodGet, target, nil), host) {

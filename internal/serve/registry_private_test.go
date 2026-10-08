@@ -35,7 +35,7 @@ func TestRegistryPrivateCrossSitePOST(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Host = "pc.mesh.shaulavo.dev"
+	request.Host = "pc.mesh.mesh.test"
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("Origin", "https://attacker.example")
 	request.Header.Set("Sec-Fetch-Site", "cross-site")
@@ -57,8 +57,8 @@ func TestRegistryBrowserRequests(t *testing.T) {
 		tls, public bool
 	}{
 		{name: "tailnet HTTP", host: "100.64.0.1:7337"},
-		{name: "private HTTPS", host: "pc.mesh.shaulavo.dev", tls: true},
-		{name: "public HTTPS", host: "app.shaulavo.dev", tls: true, public: true},
+		{name: "private HTTPS", host: "pc.mesh.mesh.test", tls: true},
+		{name: "public HTTPS", host: "app.mesh.test", tls: true, public: true},
 	} {
 		t.Run(scope.name, func(t *testing.T) {
 			var hits atomic.Int32
@@ -78,7 +78,7 @@ func TestRegistryBrowserRequests(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			registry, err := NewRegistry([]Service{{Name: "api", Kind: Proxy, Target: port, PublicName: "app.shaulavo.dev"}})
+			registry, err := NewRegistry([]Service{{Name: "api", Kind: Proxy, Target: port, PublicName: "app.mesh.test"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,7 +99,7 @@ func TestRegistryBrowserRequests(t *testing.T) {
 				allow                                  bool
 			}{
 				{name: "cross-site POST", method: "POST", site: "cross-site", origin: "https://attacker.example"},
-				{name: "same-site sibling POST", method: "POST", site: "same-site", origin: "https://sibling.shaulavo.dev"},
+				{name: "same-site sibling POST", method: "POST", site: "same-site", origin: "https://sibling.mesh.test"},
 				{name: "cross-site POST without Origin", method: "POST", site: "cross-site"},
 				{name: "same-origin fetch", method: "POST", site: "same-origin", origin: ownOrigin, allow: true},
 				{name: "same-origin GET without Origin", method: "GET", site: "same-origin", allow: true},
@@ -175,7 +175,7 @@ func TestRegistryPrivateGatePrecedesRouteHandlers(t *testing.T) {
 				}
 				gate := &fakeGate{err: errString("unexpected on-demand start")}
 				registry.SetDemandGate(gate, nil)
-				request := httptest.NewRequest(http.MethodPost, "https://pc.mesh.shaulavo.dev"+path, nil)
+				request := httptest.NewRequest(http.MethodPost, "https://pc.mesh.mesh.test"+path, nil)
 				request.Header.Set("Origin", "https://attacker.example")
 				request.Header.Set("Sec-Fetch-Site", "cross-site")
 				response := httptest.NewRecorder()
@@ -190,9 +190,9 @@ func TestRegistryPrivateGatePrecedesRouteHandlers(t *testing.T) {
 
 func TestRegistryWebSocketOrigins(t *testing.T) {
 	for _, public := range []bool{false, true} {
-		host := "pc.mesh.shaulavo.dev"
+		host := "pc.mesh.mesh.test"
 		if public {
-			host = "app.shaulavo.dev"
+			host = "app.mesh.test"
 		}
 		t.Run(host, func(t *testing.T) {
 			var hits atomic.Int32
@@ -218,13 +218,13 @@ func TestRegistryWebSocketOrigins(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			registry, err := NewRegistry([]Service{{Name: "api", Kind: Proxy, Target: port, PublicName: "app.shaulavo.dev"}})
+			registry, err := NewRegistry([]Service{{Name: "api", Kind: Proxy, Target: port, PublicName: "app.mesh.test"}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			front := httptest.NewTLSServer(registry)
 			defer front.Close()
-			for _, origin := range []string{"https://" + host, "https://sibling.shaulavo.dev", "https://attacker.example", "null", ""} {
+			for _, origin := range []string{"https://" + host, "https://sibling.mesh.test", "https://attacker.example", "null", ""} {
 				name := origin
 				if name == "" {
 					name = "headerless client"
@@ -237,10 +237,10 @@ func TestRegistryWebSocketOrigins(t *testing.T) {
 					if origin != "" {
 						headers.Set("Origin", origin)
 						headers.Set("Sec-Fetch-Site", map[string]string{
-							"https://" + host:              "same-origin",
-							"https://sibling.shaulavo.dev": "same-site",
-							"https://attacker.example":     "cross-site",
-							"null":                         "same-origin",
+							"https://" + host:           "same-origin",
+							"https://sibling.mesh.test": "same-site",
+							"https://attacker.example":  "cross-site",
+							"null":                      "same-origin",
 						}[origin])
 					}
 					conn, response, err := websocket.Dial(ctx, "wss"+strings.TrimPrefix(front.URL, "https")+"/api/socket", &websocket.DialOptions{

@@ -21,7 +21,7 @@ func TestStoreServiceLifecycleSurvivesReopen(t *testing.T) {
 		DisplayName:   "Blog assets",
 		Kind:          meshserve.Files,
 		Target:        root,
-		PublicName:    "blog.shaulavo.dev",
+		PublicName:    "blog.mesh.test",
 		WakeOnRequest: true,
 	}
 
@@ -62,7 +62,7 @@ func TestStoreServiceLifecycleSurvivesReopen(t *testing.T) {
 
 	updated := want
 	updated.Kind = meshserve.Static
-	updated.PublicName = "site.shaulavo.dev"
+	updated.PublicName = "site.mesh.test"
 	updated.WakeOnRequest = false
 	if _, err := store.UpsertService(ctx, updated); err != nil {
 		t.Fatal(err)

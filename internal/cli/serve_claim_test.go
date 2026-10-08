@@ -44,7 +44,7 @@ func TestTunnelClaimCancellationDoesNotAllocateOrSend(t *testing.T) {
 	stdout, _, err := executeCommand(t, Dependencies{
 		ConfirmPublic: func(_ context.Context, confirmation PublicConfirmation) (bool, error) {
 			confirmations++
-			if !confirmation.TunnelClaim || confirmation.URL != "https://blog.shaulavo.dev" || confirmation.Host.ID != host.ID || confirmation.Service.Name != "" {
+			if !confirmation.TunnelClaim || confirmation.URL != "https://blog.mesh.test" || confirmation.Host.ID != host.ID || confirmation.Service.Name != "" {
 				t.Errorf("confirmation = %#v", confirmation)
 			}
 			return false, nil
@@ -53,7 +53,7 @@ func TestTunnelClaimCancellationDoesNotAllocateOrSend(t *testing.T) {
 			t.Error("cancelled claim dialed the edge")
 			return nil, errors.New("unexpected dial")
 		},
-	}, "serve", "claim", "vps", "blog.shaulavo.dev")
+	}, "serve", "claim", "vps", "blog.mesh.test")
 	if err != nil || confirmations != 1 || !strings.Contains(stdout, "cancelled") {
 		t.Fatalf("output=%q confirmations=%d error=%v", stdout, confirmations, err)
 	}
@@ -84,16 +84,16 @@ func TestTunnelClaimYesAndOwnerReleaseUseLocalIdentity(t *testing.T) {
 			return protocol.Control{Type: protocol.TypeTunnelClaimed, TunnelAck: &tunnel.Ack{Sequence: mutation.Sequence, Digest: digest}}
 		}),
 	}
-	stdout, _, err := executeCommand(t, dependencies, "serve", "claim", "vps", "blog.shaulavo.dev", "--yes")
+	stdout, _, err := executeCommand(t, dependencies, "serve", "claim", "vps", "blog.mesh.test", "--yes")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"blog.shaulavo.dev", "ssh -N", "ExitOnForwardFailure=yes", "IdentitiesOnly=yes", "-p 2222", filepath.Join(stateDir, "identity.key"), "blog.shaulavo.dev:80:localhost:3000", host.TailscaleName} {
+	for _, required := range []string{"blog.mesh.test", "ssh -N", "ExitOnForwardFailure=yes", "IdentitiesOnly=yes", "-p 2222", filepath.Join(stateDir, "identity.key"), "blog.mesh.test:80:localhost:3000", host.TailscaleName} {
 		if !strings.Contains(stdout, required) {
 			t.Errorf("output %q omits %q", stdout, required)
 		}
 	}
-	if _, _, err := executeCommand(t, dependencies, "unserve", "blog.shaulavo.dev", "--host", "vps"); err != nil {
+	if _, _, err := executeCommand(t, dependencies, "unserve", "blog.mesh.test", "--host", "vps"); err != nil {
 		t.Fatal(err)
 	}
 	if len(mutations) != 2 || mutations[0].Action != tunnel.Create || mutations[1].Action != tunnel.Release || mutations[1].Sequence != mutations[0].Sequence+1 {
@@ -103,7 +103,7 @@ func TestTunnelClaimYesAndOwnerReleaseUseLocalIdentity(t *testing.T) {
 
 func TestTunnelRemoteAcknowledgementAndEdgePin(t *testing.T) {
 	host, key, _ := setupTunnelCLI(t)
-	mutation, err := tunnel.Sign(key, host.ID, tunnel.Create, "blog.shaulavo.dev", 1)
+	mutation, err := tunnel.Sign(key, host.ID, tunnel.Create, "blog.mesh.test", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,11 +156,11 @@ func TestTunnelCommandRetriesUnacknowledgedMutationExactly(t *testing.T) {
 		}
 		return protocol.Control{Type: protocol.TypeTunnelClaimed, TunnelAck: &tunnel.Ack{Sequence: mutation.Sequence, Digest: digest}}
 	})}
-	_, _, err := executeCommand(t, dependencies, "serve", "claim", "vps", "blog.shaulavo.dev", "--yes")
+	_, _, err := executeCommand(t, dependencies, "serve", "claim", "vps", "blog.mesh.test", "--yes")
 	if err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("mismatched acknowledgement error=%v", err)
 	}
-	if _, _, err := executeCommand(t, dependencies, "serve", "claim", "vps", "blog.shaulavo.dev", "--yes"); err != nil {
+	if _, _, err := executeCommand(t, dependencies, "serve", "claim", "vps", "blog.mesh.test", "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	if len(attempts) != 2 || !reflect.DeepEqual(attempts[0], attempts[1]) {
@@ -188,11 +188,11 @@ func TestTunnelDefinitiveRefusalDoesNotStrandOwnerRelease(t *testing.T) {
 		}
 		return protocol.Control{Type: protocol.TypeTunnelClaimed, TunnelAck: &ack}
 	})}
-	_, _, err := executeCommand(t, dependencies, "serve", "claim", "vps", "blog.shaulavo.dev", "--yes")
+	_, _, err := executeCommand(t, dependencies, "serve", "claim", "vps", "blog.mesh.test", "--yes")
 	if err == nil || !strings.Contains(err.Error(), "owner no longer authorized") || strings.ContainsAny(err.Error(), "\n\x1b") {
 		t.Fatalf("refusal error=%v", err)
 	}
-	if _, _, err := executeCommand(t, dependencies, "unserve", "blog.shaulavo.dev", "--host", "vps"); err != nil {
+	if _, _, err := executeCommand(t, dependencies, "unserve", "blog.mesh.test", "--host", "vps"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(actions, []tunnel.Action{tunnel.Create, tunnel.Release}) {
@@ -202,7 +202,7 @@ func TestTunnelDefinitiveRefusalDoesNotStrandOwnerRelease(t *testing.T) {
 
 func TestTunnelLocalReleaseUsesOnlyUnixSocket(t *testing.T) {
 	socket, done := startDaemonCreateServer(t, func(conn transport.Conn, request protocol.Control) error {
-		if request.Type != protocol.TypeTunnelRecover || request.TunnelName != "blog.shaulavo.dev" || request.TunnelMutation != nil {
+		if request.Type != protocol.TypeTunnelRecover || request.TunnelName != "blog.mesh.test" || request.TunnelMutation != nil {
 			return fmt.Errorf("unexpected local recovery request %#v", request)
 		}
 		return writeDaemonControl(conn, protocol.Control{Type: protocol.TypeTunnelRecovered, RequestID: request.RequestID, TunnelName: request.TunnelName})
@@ -214,12 +214,12 @@ func TestTunnelLocalReleaseUsesOnlyUnixSocket(t *testing.T) {
 			t.Error("local recovery dialed a remote host")
 			return nil, errors.New("unexpected remote dial")
 		},
-	}, "unserve", "blog.shaulavo.dev", "--local-edge")
-	if err != nil || !strings.Contains(stdout, "released blog.shaulavo.dev on the local edge") {
+	}, "unserve", "blog.mesh.test", "--local-edge")
+	if err != nil || !strings.Contains(stdout, "released blog.mesh.test on the local edge") {
 		t.Fatalf("output=%q error=%v", stdout, err)
 	}
 	awaitDaemonServer(t, done)
-	_, _, err = executeCommand(t, Dependencies{}, "unserve", "blog.shaulavo.dev", "--local-edge", "--host", "vps")
+	_, _, err = executeCommand(t, Dependencies{}, "unserve", "blog.mesh.test", "--local-edge", "--host", "vps")
 	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
 		t.Fatalf("combined local and remote flags error=%v", err)
 	}
@@ -227,7 +227,7 @@ func TestTunnelLocalReleaseUsesOnlyUnixSocket(t *testing.T) {
 
 func TestTunnelClaimRejectsNamesAndMissingIdentityBeforeSend(t *testing.T) {
 	_, _, stateDir := setupTunnelCLI(t)
-	for _, name := range []string{"blog", "*.shaulavo.dev", "127.0.0.1", "shaulavo.dev", "nested.blog.shaulavo.dev"} {
+	for _, name := range []string{"blog", "*.mesh.test", "127.0.0.1", "mesh.test", "nested.blog.mesh.test"} {
 		_, _, err := executeCommand(t, Dependencies{}, "serve", "claim", "vps", name, "--yes")
 		if err == nil {
 			t.Errorf("accepted invalid hostname %q", name)
@@ -236,7 +236,7 @@ func TestTunnelClaimRejectsNamesAndMissingIdentityBeforeSend(t *testing.T) {
 	if err := os.Remove(filepath.Join(stateDir, "identity.key")); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := executeCommand(t, Dependencies{}, "serve", "claim", "vps", "blog.shaulavo.dev", "--yes")
+	_, _, err := executeCommand(t, Dependencies{}, "serve", "claim", "vps", "blog.mesh.test", "--yes")
 	if err == nil || !strings.Contains(err.Error(), "load local Mesh identity") {
 		t.Fatalf("missing identity error=%v", err)
 	}

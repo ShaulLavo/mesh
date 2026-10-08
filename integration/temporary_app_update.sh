@@ -137,7 +137,7 @@ start_edge
 start_origin
 
 app_curl() {
-  curl --noproxy '*' --silent --show-error --max-time 3 --header "Host: $APP_ID.shaulavo.dev" \
+  curl --noproxy '*' --silent --show-error --max-time 3 --header "Host: $APP_ID.mesh.test" \
     --header 'X-Forwarded-For: 203.0.113.77' --header 'X-Forwarded-Proto: https' "$@"
 }
 APP_ENDPOINT="http://127.0.0.1:$PROXY_PORT"

@@ -20,7 +20,7 @@ import (
 	"github.com/shaul/mesh/internal/tunnel"
 )
 
-const proxyTunnelName = "blog.shaulavo.dev"
+const proxyTunnelName = "blog.mesh.test"
 
 type proxyTunnelState struct{ claim tunnel.Claim }
 

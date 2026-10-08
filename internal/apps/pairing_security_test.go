@@ -26,9 +26,9 @@ func (s *countingPairStore) SaveAppState(ctx context.Context, key string, raw []
 }
 
 func pairingRequest(method, path, source string, cookies ...*http.Cookie) *http.Request {
-	r := httptest.NewRequest(method, ManagementOrigin+path, nil)
+	r := httptest.NewRequest(method, ManagementOrigin()+path, nil)
 	r.RemoteAddr = source + ":1234"
-	r.Header.Set("Origin", ManagementOrigin)
+	r.Header.Set("Origin", ManagementOrigin())
 	r.Header.Set("User-Agent", "Mozilla/5.0 TestBrowser/1.0")
 	for _, cookie := range cookies {
 		r.AddCookie(cookie)
@@ -49,14 +49,14 @@ func TestAnonymousGETFloodLeavesPairingAvailableWithoutWrites(t *testing.T) {
 	store.writes = 0
 	for range 256 {
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, pairingRequest(http.MethodGet, "/", "192.0.2.1"), ManagementHost)
+		f.edge.ServeHost(response, pairingRequest(http.MethodGet, "/", "192.0.2.1"), ManagementHost())
 		if response.Code != http.StatusOK {
 			t.Fatalf("anonymous GET returned %d", response.Code)
 		}
 	}
 	for _, path := range []string{"/pair", "/view?id=7k3d", "/confirm?id=7k3d&action=public"} {
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, pairingRequest(http.MethodGet, path, "192.0.2.1"), ManagementHost)
+		f.edge.ServeHost(response, pairingRequest(http.MethodGet, path, "192.0.2.1"), ManagementHost())
 		if len(response.Result().Cookies()) != 0 {
 			t.Fatalf("GET %s allocated a pair cookie", path)
 		}
@@ -65,7 +65,7 @@ func TestAnonymousGETFloodLeavesPairingAvailableWithoutWrites(t *testing.T) {
 		t.Fatalf("anonymous GETs made %d durable writes", store.writes)
 	}
 	legitimate := httptest.NewRecorder()
-	f.edge.ServeHost(legitimate, pairingRequest(http.MethodPost, "/pair", "192.0.2.2"), ManagementHost)
+	f.edge.ServeHost(legitimate, pairingRequest(http.MethodPost, "/pair", "192.0.2.2"), ManagementHost())
 	if legitimate.Code != http.StatusOK {
 		t.Fatalf("legitimate pairing after 256 anonymous GETs = %d, want 200", legitimate.Code)
 	}
@@ -78,7 +78,7 @@ func TestAnonymousGETFloodLeavesPairingAvailableWithoutWrites(t *testing.T) {
 func TestExplicitPairingPreservesCodeOnGETAndChecksOrigin(t *testing.T) {
 	f := newAppFixture(t)
 	begin := httptest.NewRecorder()
-	f.edge.ServeHost(begin, pairingRequest(http.MethodPost, "/pair", "192.0.2.1"), ManagementHost)
+	f.edge.ServeHost(begin, pairingRequest(http.MethodPost, "/pair", "192.0.2.1"), ManagementHost())
 	if begin.Code != http.StatusOK {
 		t.Fatalf("explicit pairing = %d, want 200", begin.Code)
 	}
@@ -90,17 +90,17 @@ func TestExplicitPairingPreservesCodeOnGETAndChecksOrigin(t *testing.T) {
 	for range 10 {
 		r := pairingRequest(http.MethodGet, "/pair", "192.0.2.1", cookieNamed(t, begin, webauth.PairCookie))
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, r, ManagementHost)
+		f.edge.ServeHost(response, r, ManagementHost())
 		got := codePattern.FindStringSubmatch(response.Body.String())
 		if len(got) != 2 || got[1] != code[1] {
 			t.Fatal("repeated GET changed pending pair")
 		}
 	}
-	for _, origin := range []string{"", "https://evil.example", "https://7k3d.shaulavo.dev"} {
+	for _, origin := range []string{"", "https://evil.example", "https://7k3d.mesh.test"} {
 		r := pairingRequest(http.MethodPost, "/pair", "192.0.2.2")
 		r.Header.Set("Origin", origin)
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, r, ManagementHost)
+		f.edge.ServeHost(response, r, ManagementHost())
 		if response.Code != http.StatusForbidden || len(response.Result().Cookies()) != 0 {
 			t.Fatalf("pairing origin %q = %d", origin, response.Code)
 		}
@@ -113,7 +113,7 @@ func TestPairingInspectionReportsTrustedSourceBrowserAndAge(t *testing.T) {
 	begin := httptest.NewRecorder()
 	r := pairingRequest(http.MethodPost, "/pair", "127.0.0.1")
 	r.Header.Set("X-Forwarded-For", "203.0.113.66")
-	f.edge.ServeHost(begin, r, ManagementHost)
+	f.edge.ServeHost(begin, r, ManagementHost())
 	code := regexp.MustCompile(`Code: <strong>([a-z0-9-]+)</strong>`).FindStringSubmatch(begin.Body.String())
 	if len(code) != 2 {
 		t.Fatal("missing pending code")
@@ -143,7 +143,7 @@ func TestConfirmationStartsInertAndCannotBeFramed(t *testing.T) {
 	cookie := pairedOwner(t, f)
 	r := pairingRequest(http.MethodGet, "/confirm?id="+app.ID+"&action=public", "192.0.2.1", cookie)
 	response := httptest.NewRecorder()
-	f.edge.ServeHost(response, r, ManagementHost)
+	f.edge.ServeHost(response, r, ManagementHost())
 	if !strings.Contains(response.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
 		t.Fatal("confirm can be framed")
 	}
@@ -170,12 +170,12 @@ func TestPublicAndDeleteRequireServerConfirmation(t *testing.T) {
 			}
 			for _, confirmation := range []string{"", "wrong", app.ID} {
 				form := url.Values{"id": {app.ID}, "action": {action}, "csrf": {session.CSRF}, "confirmation": {confirmation}}
-				request := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
-				request.Header.Set("Origin", ManagementOrigin)
+				request := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/action", strings.NewReader(form.Encode()))
+				request.Header.Set("Origin", ManagementOrigin())
 				request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 				request.AddCookie(cookie)
 				response := httptest.NewRecorder()
-				f.edge.ServeHost(response, request, ManagementHost)
+				f.edge.ServeHost(response, request, ManagementHost())
 				if confirmation != app.ID {
 					if response.Code != http.StatusBadRequest {
 						t.Fatalf("confirmation %q returned %d, want 400", confirmation, response.Code)

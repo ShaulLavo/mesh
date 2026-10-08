@@ -1,5 +1,8 @@
 # Temporary apps
 
+The examples use `new.example` from the configured
+[deployment domains](deployment-domains.md). Replace it with your domain.
+
 Create a website from a local source directory on an enrolled Mesh origin:
 
 ```sh
@@ -28,10 +31,10 @@ For a dependency-free server example with shared SQLite favorites, see
 Use `local` for this machine. Remote operations use the origin's authenticated
 Mesh SSH service, default port 2222. `--ssh-port` selects a different configured
 port. The origin needs `--public-edge-target`; its identity must be in the edge's
-origin allowlist. The edge reserves `apps.shaulavo.dev` for management. Existing
+origin allowlist. The edge reserves `apps.new.example` for management. Existing
 wildcard DNS, HTTPS, and trusted front-door forwarding must cover these names.
 
-Creation returns a short URL such as `https://7k3d.shaulavo.dev`, initially private.
+Creation returns a short URL such as `https://7k3d.new.example`, initially private.
 Source is copied; your input directory remains yours. Mesh excludes environment
 files, credentials and generated dependency/cache directories, rejects links and
 unsafe archive paths, and limits source to 64 MiB and 10,000 files. Dependency
@@ -58,7 +61,7 @@ or Make private button without pairing. Public visitors get no owner authority.
 This check runs on requests to both private and public apps.
 
 For deployments without automatic Tailnet access, private apps send you to
-`https://apps.shaulavo.dev`. Click **Start pairing** to get a one-use code; simply
+`https://apps.new.example`. Click **Start pairing** to get a one-use code; simply
 opening or refreshing the page does not allocate one. Approve on the owner host:
 
 ```sh

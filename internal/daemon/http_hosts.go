@@ -13,6 +13,7 @@ type httpHostPolicy struct {
 	tailnetAddrs              []netip.Addr
 	tailnetNames              []string
 	privateName               func() string
+	privateNames              func() []string
 	trustPublicEdgeForwarding func(netip.Addr) bool
 }
 
@@ -41,15 +42,14 @@ func (p httpHostPolicy) accepts(request *http.Request) bool {
 	if host == "localhost" {
 		return true
 	}
-	for _, name := range p.tailnetNames {
-		if canonical, ok := meshserve.CanonicalHost(name); ok && host == canonical {
-			return true
-		}
+	if matchesHTTPName(host, p.tailnetNames) {
+		return true
 	}
-	if p.privateName != nil {
-		if name, ok := meshserve.CanonicalHost(p.privateName()); ok && host == name {
-			return true
-		}
+	if p.privateNames != nil && matchesHTTPName(host, p.privateNames()) {
+		return true
+	}
+	if p.privateName != nil && matchesHTTPName(host, []string{p.privateName()}) {
+		return true
 	}
 	if p.trustPublicEdgeForwarding == nil || meshserve.ValidatePublicName(host) != nil {
 		return false
@@ -64,4 +64,13 @@ func boundHTTPAddresses(listeners []net.Listener) []netip.Addr {
 		addresses = append(addresses, listener.Addr().(*net.TCPAddr).AddrPort().Addr().Unmap())
 	}
 	return addresses
+}
+
+func matchesHTTPName(host string, names []string) bool {
+	for _, name := range names {
+		if canonical, ok := meshserve.CanonicalHost(name); ok && host == canonical {
+			return true
+		}
+	}
+	return false
 }

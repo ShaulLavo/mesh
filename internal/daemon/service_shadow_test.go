@@ -26,7 +26,7 @@ func TestServiceRegistrationWarnsWhenPrivateRouteShadowsPublicParent(t *testing.
 				}
 			}
 			services := []protocol.ServiceInfo{
-				{Name: "blog", Kind: "static", Target: publicRoot, PublicName: "blog.shaulavo.dev"},
+				{Name: "blog", Kind: "static", Target: publicRoot, PublicName: "blog.mesh.test"},
 				{Name: "blog/admin", Kind: "static", Target: privateRoot},
 			}
 			if privateFirst {
@@ -43,16 +43,16 @@ func TestServiceRegistrationWarnsWhenPrivateRouteShadowsPublicParent(t *testing.
 					t.Errorf("first registration has a shadow warning: %q", response.Message)
 				}
 				if index == 1 {
-					for _, want := range []string{"private route /blog/admin", "shadows public route https://blog.shaulavo.dev/blog", "404"} {
+					for _, want := range []string{"private route /blog/admin", "shadows public route https://blog.mesh.test/blog", "404"} {
 						if !strings.Contains(response.Message, want) {
 							t.Errorf("registration warning %q does not contain %q", response.Message, want)
 						}
 					}
 				}
 			}
-			assertServiceResponse(t, registry, "https://blog.shaulavo.dev/blog/", http.StatusOK, "public")
-			assertServiceResponse(t, registry, "https://blog.shaulavo.dev/blog/admin/", http.StatusNotFound, "404 page not found\n")
-			assertServiceResponse(t, registry, "http://pc.mesh.shaulavo.dev/blog/admin/", http.StatusOK, "private")
+			assertServiceResponse(t, registry, "https://blog.mesh.test/blog/", http.StatusOK, "public")
+			assertServiceResponse(t, registry, "https://blog.mesh.test/blog/admin/", http.StatusNotFound, "404 page not found\n")
+			assertServiceResponse(t, registry, "http://pc.mesh.mesh.test/blog/admin/", http.StatusOK, "private")
 		})
 	}
 }

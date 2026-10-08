@@ -30,12 +30,12 @@ func (s *failingEdgeStore) SaveAppState(ctx context.Context, key string, value [
 	return s.memoryAppStore.SaveAppState(ctx, key, value)
 }
 
-func (s *failingEdgeStore) ReserveAppNameAndState(ctx context.Context, name, owner, key string, value []byte) error {
-	s.attemptedName = name
+func (s *failingEdgeStore) ReserveAppNamesAndState(ctx context.Context, names []string, owner, key string, value []byte) error {
+	s.attemptedName = names[0]
 	if s.fail {
 		return errEdgeSave
 	}
-	return s.memoryAppStore.ReserveAppNameAndState(ctx, name, owner, key, value)
+	return s.memoryAppStore.ReserveAppNamesAndState(ctx, names, owner, key, value)
 }
 
 func edgeStateBytes(t *testing.T, e *Edge) []byte {
@@ -92,7 +92,7 @@ func TestEdgeSweepIsolatesUnfreeableApp(t *testing.T) {
 	f := newAppFixture(t)
 	bad := f.operation(t, Request{Action: "allocate", Kind: "static"}).App
 	good := f.operation(t, Request{Action: "allocate", Kind: "static"}).App
-	delete(f.edgeStore.names, bad.ID+"."+Domain)
+	delete(f.edgeStore.names, bad.ID+"."+Domain())
 	f.now = f.now.Add(12 * time.Hour)
 	healthy := f.operation(t, Request{Action: "allocate", Kind: "static"}).App
 	f.operation(t, Request{Action: "activate", ID: healthy.ID})
@@ -107,7 +107,7 @@ func TestEdgeSweepIsolatesUnfreeableApp(t *testing.T) {
 			t.Errorf("sweep did not expire app %s: %#v", id, app)
 		}
 	}
-	if !f.edgeStore.inactive[good.ID+"."+Domain] {
+	if !f.edgeStore.inactive[good.ID+"."+Domain()] {
 		t.Error("sweep did not retire the other expired app's name")
 	}
 	if app, exists, err := f.edge.lookup(context.Background(), healthy.ID, false); err != nil || !exists || app.Status != "active" {
@@ -147,12 +147,12 @@ func TestEdgeFailedMutationPreservesStateAndRequests(t *testing.T) {
 					}
 				} else {
 					form := url.Values{"id": {app.ID}, "action": {action}, "csrf": {"fixture-csrf"}, "confirmation": {app.ID}}
-					r := httptest.NewRequest(http.MethodPost, ManagementOrigin+"/action", strings.NewReader(form.Encode()))
+					r := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/action", strings.NewReader(form.Encode()))
 					r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-					r.Header.Set("Origin", ManagementOrigin)
+					r.Header.Set("Origin", ManagementOrigin())
 					r = r.WithContext(context.WithValue(r.Context(), networkSessionKey{}, webauth.Session{Owners: []string{app.Owner}, CSRF: "fixture-csrf"}))
 					w := httptest.NewRecorder()
-					f.edge.ServeHost(w, r, ManagementHost)
+					f.edge.ServeHost(w, r, ManagementHost())
 					if w.Code != http.StatusServiceUnavailable {
 						t.Fatalf("mutation status = %d, want failed save", w.Code)
 					}
@@ -163,7 +163,7 @@ func TestEdgeFailedMutationPreservesStateAndRequests(t *testing.T) {
 				if admitted.Context().Err() != nil {
 					t.Error("failed mutation canceled a live request")
 				}
-				if f.edgeStore.inactive[app.ID+"."+Domain] {
+				if f.edgeStore.inactive[app.ID+"."+Domain()] {
 					t.Error("failed mutation retired the app name")
 				}
 			})
@@ -184,7 +184,7 @@ func TestEdgeFailedAllocationCanRetrySameRequest(t *testing.T) {
 	if err != nil || result.App == nil {
 		t.Fatalf("retry failed: %#v %v", result, err)
 	}
-	if exists, err := store.AppNameExists(context.Background(), result.App.ID+"."+Domain); err != nil || !exists {
+	if exists, err := store.AppNameExists(context.Background(), result.App.ID+"."+Domain()); err != nil || !exists {
 		t.Fatalf("retry acknowledged an unreserved app: exists=%v error=%v", exists, err)
 	}
 	f.edge = f.openEdge(t)
@@ -241,7 +241,7 @@ func TestEdgeFailedExpirySaveLeavesLiveState(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(storedBefore, storedAfter) {
 				t.Errorf("failed expiry save changed durable state: %v", err)
 			}
-			if admitted.Context().Err() != nil || f.edgeStore.inactive[app.ID+"."+Domain] || len(f.edge.pendingRetire) != 0 {
+			if admitted.Context().Err() != nil || f.edgeStore.inactive[app.ID+"."+Domain()] || len(f.edge.pendingRetire) != 0 {
 				t.Error("failed expiry save canceled a request or retired a name")
 			}
 		})
@@ -251,20 +251,20 @@ func TestEdgeFailedExpirySaveLeavesLiveState(t *testing.T) {
 func TestEdgeNameRetirementRetriesAcrossRestartAndCleanup(t *testing.T) {
 	f := newAppFixture(t)
 	app := f.operation(t, Request{Action: "allocate", Kind: "static"}).App
-	delete(f.edgeStore.names, app.ID+"."+Domain)
+	delete(f.edgeStore.names, app.ID+"."+Domain())
 	f.now = app.ExpiresAt
 	if err := f.edge.Sweep(context.Background()); err == nil || !strings.Contains(err.Error(), app.ID) {
 		t.Fatalf("sweep did not report failed name retirement: %v", err)
 	}
 	f.operation(t, Request{Action: "cleanup", ID: app.ID})
 	f.edge = f.openEdge(t)
-	if err := f.edgeStore.ReserveAppName(context.Background(), app.ID+"."+Domain, app.Owner); err != nil {
+	if err := f.edgeStore.ReserveAppNames(context.Background(), []string{app.ID + "." + Domain()}, app.Owner); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.edge.Sweep(context.Background()); err != nil {
 		t.Fatalf("retirement did not recover: %v", err)
 	}
-	if !f.edgeStore.inactive[app.ID+"."+Domain] || len(f.edge.pendingRetire) != 0 {
+	if !f.edgeStore.inactive[app.ID+"."+Domain()] || len(f.edge.pendingRetire) != 0 {
 		t.Fatal("recovered name retirement remained pending")
 	}
 }
@@ -275,7 +275,7 @@ func TestEdgeAllocationRejectsNonAtomicStore(t *testing.T) {
 	if _, err := f.exchange(t, f.signed(t, Request{Action: "allocate", Kind: "static"})); err == nil || !strings.Contains(err.Error(), "atomic") {
 		t.Fatalf("non-atomic allocation error = %v", err)
 	}
-	if len(f.edge.state.Apps) != 0 || len(f.edgeStore.names) != 1 {
+	if len(f.edge.state.Apps) != 0 || len(f.edgeStore.names) != 2 {
 		t.Fatal("non-atomic allocation changed apps or name reservations")
 	}
 }

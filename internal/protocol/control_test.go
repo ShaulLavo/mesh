@@ -50,7 +50,7 @@ func TestHostInfoControlRoundTrip(t *testing.T) {
 			ID:            "host-public-key",
 			MeshIdentity:  "host-public-key",
 			TailscaleName: "desktop.example.ts.net",
-			PrivateName:   "desktop.mesh.shaulavo.dev",
+			PrivateName:   "desktop.mesh.mesh.test",
 		},
 	}
 
@@ -99,7 +99,7 @@ func TestServiceControlRoundTrip(t *testing.T) {
 			Name:       "blog",
 			Kind:       "static",
 			Target:     "/srv/blog",
-			PublicName: "blog.shaulavo.dev",
+			PublicName: "blog.mesh.test",
 			Healthy:    true,
 		},
 		Services: []ServiceInfo{{
@@ -111,7 +111,7 @@ func TestServiceControlRoundTrip(t *testing.T) {
 			Problem:       "root unavailable",
 		}},
 		ServicePreview: &ServicePreview{
-			Service:   ServiceInfo{Name: "blog", Kind: "static", Target: "/home/me/site", PublicName: "blog.shaulavo.dev"},
+			Service:   ServiceInfo{Name: "blog", Kind: "static", Target: "/home/me/site", PublicName: "blog.mesh.test"},
 			FileCount: 42,
 		},
 	}
@@ -134,7 +134,7 @@ func TestMaximalServiceListFitsOneBoundedFrame(t *testing.T) {
 	for index := range services {
 		services[index] = ServiceInfo{
 			Name: fmt.Sprintf("%03d%s", index, strings.Repeat("a", 509)), Kind: "static",
-			Target: "/" + strings.Repeat("x", 2047), PublicName: "service.shaulavo.dev",
+			Target: "/" + strings.Repeat("x", 2047), PublicName: "service.mesh.test",
 			Problem: strings.Repeat("p", 256),
 		}
 	}
@@ -161,7 +161,7 @@ func TestCertificateControlRoundTrip(t *testing.T) {
 			Environment:    "staging",
 			TargetID:       "origin-key",
 			SignerID:       "renewer-key",
-			PrivateName:    "desktop.mesh.shaulavo.dev",
+			PrivateName:    "desktop.mesh.mesh.test",
 			CertificatePEM: []byte("certificate"),
 			PrivateKeyPEM:  []byte("private-key"),
 			Signature:      []byte("signature"),
@@ -169,7 +169,7 @@ func TestCertificateControlRoundTrip(t *testing.T) {
 		CertificateFingerprint: "sha256-fingerprint",
 		CertificateEnvironment: "staging",
 		CertificateProfile:     "private-origin",
-		CertificatePrivateName: "desktop.mesh.shaulavo.dev",
+		CertificatePrivateName: "desktop.mesh.mesh.test",
 	}
 
 	payload, err := want.Encode()
@@ -191,10 +191,10 @@ func TestEdgeRegistrationControlRoundTrip(t *testing.T) {
 		Type: TypeEdgeRegister, RequestID: "edge-1",
 		EdgeSnapshot: &EdgeSnapshot{
 			TargetID: "edge", OriginID: "origin", Sequence: 9, IssuedAt: now, ExpiresAt: now.Add(5 * time.Minute),
-			Routes: []EdgeRoute{{PublicName: "app.shaulavo.dev", ServiceName: "app", WakeOnRequest: true}}, Signature: []byte("signature"),
+			Routes: []EdgeRoute{{PublicName: "app.mesh.test", ServiceName: "app", WakeOnRequest: true}}, Signature: []byte("signature"),
 		},
 		EdgeSequence: 9, EdgeDigest: "digest",
-		EdgeRoutes: []EdgeRouteInfo{{PublicName: "app.shaulavo.dev", ServiceName: "app", DisplayAlias: "Desktop", LastSeenAt: now, Online: true}},
+		EdgeRoutes: []EdgeRouteInfo{{PublicName: "app.mesh.test", ServiceName: "app", DisplayAlias: "Desktop", LastSeenAt: now, Online: true}},
 	}
 	payload, err := want.Encode()
 	if err != nil {

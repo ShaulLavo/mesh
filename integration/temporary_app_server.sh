@@ -153,7 +153,7 @@ grep -qx server "$TEST_ROOT/source.list" || fail 'downloaded archive misses the 
 [ -z "$(find "$WORKLOAD/apps/$APP_ID" -mindepth 1 -maxdepth 1 ! -name 'source-*')" ] || fail 'download left an archive in the app directory'
 
 app_curl() {
-  curl --noproxy '*' --silent --show-error --max-time 3 --header "Host: $APP_ID.shaulavo.dev" \
+  curl --noproxy '*' --silent --show-error --max-time 3 --header "Host: $APP_ID.mesh.test" \
     --header 'X-Forwarded-For: 203.0.113.77' --header 'X-Forwarded-Proto: https' "$@"
 }
 APP_ENDPOINT="http://127.0.0.1:$PROXY_PORT"
@@ -163,7 +163,7 @@ if grep -Eq 'APP_LABELLED_WORKER|"pid"' "$TEST_ROOT/private.body"; then
   fail 'private backend bytes escaped'
 fi
 python3 "$REPO_ROOT/integration/helpers/mesh_control.py" --expect-type error upsert \
-  "$ORIGIN_STATE/daemon.sock" alias proxy "$BACKEND_PORT" alias.shaulavo.dev >"$TEST_ROOT/alias.out" || fail 'app port alias refusal'
+  "$ORIGIN_STATE/daemon.sock" alias proxy "$BACKEND_PORT" alias.mesh.test >"$TEST_ROOT/alias.out" || fail 'app port alias refusal'
 grep -Eq 'app-owned port' "$TEST_ROOT/alias.out" || fail 'ordinary public proxy bypassed private app gate'
 python3 "$REPO_ROOT/integration/helpers/mesh_control.py" --expect-type error upsert \
   "$ORIGIN_STATE/daemon.sock" source-alias files "$WORKLOAD" '' >"$TEST_ROOT/source-alias.out" || fail 'app source alias refusal'
@@ -175,7 +175,7 @@ grep -Eq '/.mesh-app/' "$TEST_ROOT/index.html" || fail 'floating pill missing'
 app_curl --fail "$APP_ENDPOINT/api" >"$TEST_ROOT/api.json" || fail 'public API'
 app_curl --fail "$APP_ENDPOINT/mesh" >"$TEST_ROOT/mesh.json" || fail 'whole-host /mesh API'
 app_curl --fail --location "$APP_ENDPOINT/redirect" >"$TEST_ROOT/redirect.json" || fail 'root-relative redirect'
-python3 "$REPO_ROOT/integration/helpers/public_http_fixture.py" client 127.0.0.1 "$PROXY_PORT" "$APP_ID.shaulavo.dev" /socket --proxy >"$TEST_ROOT/socket.out" || fail 'HTTP app WebSocket'
+python3 "$REPO_ROOT/integration/helpers/public_http_fixture.py" client 127.0.0.1 "$PROXY_PORT" "$APP_ID.mesh.test" /socket --proxy >"$TEST_ROOT/socket.out" || fail 'HTTP app WebSocket'
 
 python3 - "$TEST_ROOT" "$WORKLOAD" <<'PY'
 import json, os, sys
@@ -293,7 +293,7 @@ else:
 if not os.path.isfile(source_binary):
     raise SystemExit('delete removed caller source')
 with sqlite3.connect(edge_db) as database:
-    retired = database.execute('SELECT active FROM app_names WHERE public_name = ?', (app_id + '.shaulavo.dev',)).fetchone()
+    retired = database.execute('SELECT active FROM app_names WHERE public_name = ?', (app_id + '.mesh.test',)).fetchone()
     if retired != (0,):
         raise SystemExit(f'used hostname not retained: {retired}')
 PY

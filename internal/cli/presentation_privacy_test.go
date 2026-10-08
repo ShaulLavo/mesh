@@ -168,7 +168,7 @@ func TestPrivateAppJSONMutationUsesOriginalControlData(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.App.Status != "active" || result.App.Visibility != "public" || result.URL != privacy.New().Value("url", "https://7k3d.shaulavo.dev") {
+	if result.App.Status != "active" || result.App.Visibility != "public" || result.URL != privacy.New().Value("url", "https://7k3d.mesh.test") {
 		t.Fatalf("result shape changed: %s", output)
 	}
 }
@@ -238,7 +238,7 @@ func TestPrivateTunnelClaimAndReleasePreserveSignedNames(t *testing.T) {
 			t.Fatalf("unexpected control: %+v", request)
 		}
 		mutation := *request.TunnelMutation
-		if mutation.PublicName != "secret.shaulavo.dev" {
+		if mutation.PublicName != "secret.mesh.test" {
 			t.Fatalf("masked signed hostname: %+v", mutation)
 		}
 		digest, err := tunnel.Verify(mutation, host.ID)
@@ -248,14 +248,14 @@ func TestPrivateTunnelClaimAndReleasePreserveSignedNames(t *testing.T) {
 		actions = append(actions, mutation.Action)
 		return protocol.Control{Type: protocol.TypeTunnelClaimed, TunnelAck: &tunnel.Ack{Sequence: mutation.Sequence, Digest: digest}}
 	})}
-	output, _, err := executeCommand(t, deps, "--privacy", "serve", "claim", "vps", "secret.shaulavo.dev", "--yes")
+	output, _, err := executeCommand(t, deps, "--privacy", "serve", "claim", "vps", "secret.mesh.test", "--yes")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(output, host.TailscaleName) {
 		t.Fatalf("claim leaked private DNS: %s", output)
 	}
-	for _, value := range []string{"secret.shaulavo.dev", " on vps", mask.Value("path", stateDir+"/identity.key"), mask.Value("host", host.TailscaleName)} {
+	for _, value := range []string{"secret.mesh.test", " on vps", mask.Value("path", stateDir+"/identity.key"), mask.Value("host", host.TailscaleName)} {
 		if !strings.Contains(output, value) {
 			t.Fatalf("claim lost usable summary %q: %s", value, output)
 		}
@@ -263,11 +263,11 @@ func TestPrivateTunnelClaimAndReleasePreserveSignedNames(t *testing.T) {
 	if !strings.Contains(output, "ssh -N") || !strings.Contains(output, "2222") {
 		t.Fatalf("claim summary lost safe details: %s", output)
 	}
-	output, _, err = executeCommand(t, deps, "--privacy", "unserve", "secret.shaulavo.dev", "--host", "vps")
+	output, _, err = executeCommand(t, deps, "--privacy", "unserve", "secret.mesh.test", "--host", "vps")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output, "secret.shaulavo.dev") || !strings.Contains(output, " on vps") {
+	if !strings.Contains(output, "secret.mesh.test") || !strings.Contains(output, " on vps") {
 		t.Fatalf("release lost useful names: %s", output)
 	}
 	if len(actions) != 2 || actions[0] != tunnel.Create || actions[1] != tunnel.Release {

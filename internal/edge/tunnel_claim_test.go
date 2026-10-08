@@ -125,7 +125,7 @@ func claimTestSend(t *testing.T, c *Controller, m tunnel.Mutation) tunnel.Ack {
 
 func claimTestSign(t *testing.T, key ed25519.PrivateKey, id string, action tunnel.Action, sequence uint64) tunnel.Mutation {
 	t.Helper()
-	m, err := tunnel.Sign(key, id, action, "blog.shaulavo.dev", sequence)
+	m, err := tunnel.Sign(key, id, action, "blog.mesh.test", sequence)
 	if err != nil {
 		t.Fatal(err)
 	}

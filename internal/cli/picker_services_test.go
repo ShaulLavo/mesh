@@ -19,7 +19,7 @@ func TestPickerFleetServicesWatchUsesCatalogAndPinnedStateWatch(t *testing.T) {
 	dial := reviewControlDial(t, func(host HostRecord, request protocol.Control) *protocol.Control {
 		switch request.Type {
 		case protocol.TypeHostInfo:
-			return &protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity, PrivateName: host.MachineName + ".mesh.shaulavo.dev", ServiceHealthSupported: true}}
+			return &protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity, PrivateName: host.MachineName + ".mesh.mesh.test", ServiceHealthSupported: true}}
 		case protocol.TypeStateWatch:
 			watches.Add(1)
 			if len(request.Watch.Topics) != 1 || request.Watch.Topics[0] != protocol.TopicServices {
@@ -41,7 +41,7 @@ func TestPickerFleetServicesWatchUsesCatalogAndPinnedStateWatch(t *testing.T) {
 			return
 		}
 		row := update.Catalog.Rows[0]
-		if row.URL() != "https://"+update.Host.MachineName+".mesh.shaulavo.dev/dev" || row.Service.DisplayName != "Fregat dev" || row.Host.ID != update.Host.ID {
+		if row.URL() != "https://"+update.Host.MachineName+".mesh.mesh.test/dev" || row.Service.DisplayName != "Fregat dev" || row.Host.ID != update.Host.ID {
 			t.Errorf("fleet row %+v", row)
 		}
 		fresh[update.Host.ID] = true

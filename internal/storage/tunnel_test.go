@@ -20,7 +20,7 @@ func TestTunnelReplayOwnershipAndRecovery(t *testing.T) {
 	target, _ := storageEdgeIdentity(t)
 	owner, key := storageEdgeIdentity(t)
 	_, otherKey := storageEdgeIdentity(t)
-	create := signedTunnelMutation(t, key, target, tunnel.Create, "blog.shaulavo.dev", 1)
+	create := signedTunnelMutation(t, key, target, tunnel.Create, "blog.mesh.test", 1)
 	if err := applyTestTunnel(store, create); err != nil {
 		t.Fatal(err)
 	}
@@ -81,20 +81,20 @@ func TestTunnelPerKeyCapacityAllowsRelease(t *testing.T) {
 	target, _ := storageEdgeIdentity(t)
 	_, key := storageEdgeIdentity(t)
 	for i := range tunnel.MaximumClaimsPerKey {
-		mutation := signedTunnelMutation(t, key, target, tunnel.Create, fmt.Sprintf("site%d.shaulavo.dev", i), uint64(i+1))
+		mutation := signedTunnelMutation(t, key, target, tunnel.Create, fmt.Sprintf("site%d.mesh.test", i), uint64(i+1))
 		if err := applyTestTunnel(store, mutation); err != nil {
 			t.Fatal(err)
 		}
 	}
-	overflow := signedTunnelMutation(t, key, target, tunnel.Create, "overflow.shaulavo.dev", 33)
+	overflow := signedTunnelMutation(t, key, target, tunnel.Create, "overflow.mesh.test", 33)
 	if err := applyTestTunnel(store, overflow); !errors.Is(err, tunnel.ErrCapacity) {
 		t.Fatalf("33rd claim = %v", err)
 	}
-	convergent := signedTunnelMutation(t, key, target, tunnel.Create, "site0.shaulavo.dev", 34)
+	convergent := signedTunnelMutation(t, key, target, tunnel.Create, "site0.mesh.test", 34)
 	if err := applyTestTunnel(store, convergent); err != nil {
 		t.Fatalf("same claim at capacity = %v", err)
 	}
-	release := signedTunnelMutation(t, key, target, tunnel.Release, "site0.shaulavo.dev", 35)
+	release := signedTunnelMutation(t, key, target, tunnel.Release, "site0.mesh.test", 35)
 	if err := applyTestTunnel(store, release); err != nil {
 		t.Fatalf("release at capacity = %v", err)
 	}
@@ -109,7 +109,7 @@ func TestTunnelClaimantCapacityPreservesOwnerReleaseAndRecovery(t *testing.T) {
 	store := openTunnelTestStore(t)
 	target, _ := storageEdgeIdentity(t)
 	owner, key := storageEdgeIdentity(t)
-	claim := signedTunnelMutation(t, key, target, tunnel.Create, "owner.shaulavo.dev", 1)
+	claim := signedTunnelMutation(t, key, target, tunnel.Create, "owner.mesh.test", 1)
 	if err := applyTestTunnel(store, claim); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestTunnelClaimantCapacityPreservesOwnerReleaseAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, newcomer := storageEdgeIdentity(t)
-	mutation := signedTunnelMutation(t, newcomer, target, tunnel.Create, "new.shaulavo.dev", 1)
+	mutation := signedTunnelMutation(t, newcomer, target, tunnel.Create, "new.mesh.test", 1)
 	if err := applyTestTunnel(store, mutation); !errors.Is(err, tunnel.ErrCapacity) {
 		t.Fatalf("new claimant at capacity = %v", err)
 	}
@@ -149,26 +149,26 @@ func TestTunnelCombinedRouteCapacityInBothDirections(t *testing.T) {
 	origin, originKey := storageEdgeIdentity(t)
 	_, key := storageEdgeIdentity(t)
 	now := time.Now().UTC()
-	base := storageSignedSnapshot(t, target, origin, originKey, 1, now, []edge.Route{{PublicName: "origin.shaulavo.dev", ServiceName: "app"}})
+	base := storageSignedSnapshot(t, target, origin, originKey, 1, now, []edge.Route{{PublicName: "origin.mesh.test", ServiceName: "app"}})
 	if err := store.ApplyEdgeSnapshot(ctx, base, storageSnapshotDigest(t, base, target, origin), now); err != nil {
 		t.Fatal(err)
 	}
 	_, err := store.db.ExecContext(ctx, `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x < ?)
         INSERT INTO edge_routes (origin_id, public_name, service_name, wake_on_request)
-        SELECT ?, 'bulk.shaulavo.dev', 'p' || x, 0 FROM n`, edge.MaximumTotalRoutes-2, origin)
+        SELECT ?, 'bulk.mesh.test', 'p' || x, 0 FROM n`, edge.MaximumTotalRoutes-2, origin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	claim := signedTunnelMutation(t, key, target, tunnel.Create, "last.shaulavo.dev", 1)
+	claim := signedTunnelMutation(t, key, target, tunnel.Create, "last.mesh.test", 1)
 	if err := applyTestTunnel(store, claim); err != nil {
 		t.Fatalf("last combined slot = %v", err)
 	}
-	overflow := signedTunnelMutation(t, key, target, tunnel.Create, "overflow.shaulavo.dev", 2)
+	overflow := signedTunnelMutation(t, key, target, tunnel.Create, "overflow.mesh.test", 2)
 	if err := applyTestTunnel(store, overflow); !errors.Is(err, tunnel.ErrCapacity) {
 		t.Fatalf("combined overflow = %v", err)
 	}
 	secondOrigin, secondKey := storageEdgeIdentity(t)
-	snapshot := storageSignedSnapshot(t, target, secondOrigin, secondKey, 1, now, []edge.Route{{PublicName: "other.shaulavo.dev", ServiceName: "app"}})
+	snapshot := storageSignedSnapshot(t, target, secondOrigin, secondKey, 1, now, []edge.Route{{PublicName: "other.mesh.test", ServiceName: "app"}})
 	if err := store.ApplyEdgeSnapshot(ctx, snapshot, storageSnapshotDigest(t, snapshot, target, secondOrigin), now); !errors.Is(err, tunnel.ErrCapacity) {
 		t.Fatalf("T13 combined overflow = %v", err)
 	}
@@ -198,9 +198,9 @@ func TestTunnelAndNonRootEdgePublicationRace(t *testing.T) {
 	origin, originKey := storageEdgeIdentity(t)
 	_, key := storageEdgeIdentity(t)
 	now := time.Now().UTC()
-	snapshot := storageSignedSnapshot(t, target, origin, originKey, 1, now, []edge.Route{{PublicName: "race.shaulavo.dev", ServiceName: "nested/path"}})
+	snapshot := storageSignedSnapshot(t, target, origin, originKey, 1, now, []edge.Route{{PublicName: "race.mesh.test", ServiceName: "nested/path"}})
 	digest := storageSnapshotDigest(t, snapshot, target, origin)
-	claim := signedTunnelMutation(t, key, target, tunnel.Create, "race.shaulavo.dev", 1)
+	claim := signedTunnelMutation(t, key, target, tunnel.Create, "race.mesh.test", 1)
 	start := make(chan struct{})
 	results := make(chan error, 2)
 	var workers sync.WaitGroup

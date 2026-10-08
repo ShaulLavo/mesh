@@ -28,7 +28,7 @@ func TestIssuerBoundsACMEResponses(t *testing.T) {
 	}))
 	defer server.Close()
 	issuer, err := NewIssuer(IssuerConfig{
-		DirectoryURL: server.URL, Email: "owner@example.com", StateDir: t.TempDir(), Name: WildcardName,
+		DirectoryURL: server.URL, Email: "owner@example.com", StateDir: t.TempDir(), Name: WildcardName(),
 		AcceptTerms: true, Solver: &fakeSolver{}, HTTPClient: server.Client(),
 	})
 	if err != nil {
@@ -78,7 +78,7 @@ func TestIssuerUsesModernOrderFlowAndCleansChallenge(t *testing.T) {
 	fake := &fakeACME{t: t, now: now}
 	issuer, err := NewIssuer(IssuerConfig{
 		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: filepath.Join(t.TempDir(), "staging"),
-		Name: WildcardName, AcceptTerms: true, Solver: solver, Now: func() time.Time { return now }, Random: rand.Reader,
+		Name: WildcardName(), AcceptTerms: true, Solver: solver, Now: func() time.Time { return now }, Random: rand.Reader,
 		NewClient: func(crypto.Signer) ACMEClient { return fake },
 	})
 	if err != nil {
@@ -98,7 +98,7 @@ func TestIssuerUsesModernOrderFlowAndCleansChallenge(t *testing.T) {
 	if !reflect.DeepEqual(solver.calls, []string{"present", "wait", "cleanup"}) {
 		t.Fatalf("solver calls = %#v", solver.calls)
 	}
-	if solver.record.Name != "_acme-challenge.mesh.shaulavo.dev" || solver.record.Value != "txt-token" {
+	if solver.record.Name != "_acme-challenge.mesh.mesh.test" || solver.record.Value != "txt-token" {
 		t.Fatalf("challenge record = %#v", solver.record)
 	}
 
@@ -112,7 +112,7 @@ func TestIssuerCleansChallengeAfterPropagationFailure(t *testing.T) {
 	solver := &fakeSolver{waitErr: errors.New("not propagated")}
 	fake := &fakeACME{t: t, now: now}
 	issuer, err := NewIssuer(IssuerConfig{
-		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: t.TempDir(), Name: WildcardName,
+		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: t.TempDir(), Name: WildcardName(),
 		AcceptTerms: true, Solver: solver, Now: func() time.Time { return now }, Random: rand.Reader,
 		NewClient: func(crypto.Signer) ACMEClient { return fake },
 	})
@@ -133,7 +133,7 @@ func TestIssuerSerializesOverlappingRenewals(t *testing.T) {
 	firstACME := &fakeACME{t: t, now: now}
 	stateDir := t.TempDir()
 	issuer, err := NewIssuer(IssuerConfig{
-		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: stateDir, Name: WildcardName,
+		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: stateDir, Name: WildcardName(),
 		AcceptTerms: true, Solver: solver, Now: func() time.Time { return now }, Random: rand.Reader,
 		NewClient: func(crypto.Signer) ACMEClient { return firstACME },
 	})
@@ -142,7 +142,7 @@ func TestIssuerSerializesOverlappingRenewals(t *testing.T) {
 	}
 	secondACME := &fakeACME{t: t, now: now}
 	secondIssuer, err := NewIssuer(IssuerConfig{
-		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: stateDir, Name: WildcardName,
+		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: stateDir, Name: WildcardName(),
 		AcceptTerms: true, Solver: &fakeSolver{}, Now: func() time.Time { return now }, Random: rand.Reader,
 		NewClient: func(crypto.Signer) ACMEClient { return secondACME },
 	})
@@ -190,7 +190,7 @@ func TestIssuerRenewsExpiredPersistedCertificate(t *testing.T) {
 	solver := &fakeSolver{}
 	fake := &fakeACME{t: t, now: currentTime}
 	issuer, err := NewIssuer(IssuerConfig{
-		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: t.TempDir(), Name: WildcardName,
+		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: t.TempDir(), Name: WildcardName(),
 		AcceptTerms: true, Solver: solver, Now: func() time.Time { return currentTime }, Random: rand.Reader,
 		NewClient: func(crypto.Signer) ACMEClient { return fake },
 	})
@@ -221,7 +221,7 @@ func TestIssuerReturnsUsableCurrentBundleWhenRenewalFails(t *testing.T) {
 	currentTime := now
 	fake := &fakeACME{t: t, now: now}
 	issuer, err := NewIssuer(IssuerConfig{
-		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: t.TempDir(), Name: WildcardName,
+		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: t.TempDir(), Name: WildcardName(),
 		AcceptTerms: true, Solver: &fakeSolver{}, Now: func() time.Time { return currentTime }, Random: rand.Reader,
 		NewClient: func(crypto.Signer) ACMEClient { return fake },
 	})
@@ -247,7 +247,7 @@ func TestIssuerBoundsNeverCompletingACMEOrder(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	fake := &fakeACME{t: t, now: now, blockAuthorize: true}
 	issuer, err := NewIssuer(IssuerConfig{
-		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: t.TempDir(), Name: WildcardName,
+		DirectoryURL: LetsEncryptStagingURL, Email: "owner@example.com", StateDir: t.TempDir(), Name: WildcardName(),
 		AcceptTerms: true, Solver: &fakeSolver{}, Now: func() time.Time { return now }, Random: rand.Reader,
 		Timeout: 50 * time.Millisecond, NewClient: func(crypto.Signer) ACMEClient { return fake },
 	})
@@ -318,7 +318,7 @@ func (c *fakeACME) AuthorizeOrder(ctx context.Context, identifiers []acme.AuthzI
 	if c.authorizeErr != nil {
 		return nil, c.authorizeErr
 	}
-	if len(identifiers) != 1 || identifiers[0].Value != WildcardName {
+	if len(identifiers) != 1 || identifiers[0].Value != WildcardName() {
 		c.t.Fatalf("identifiers = %#v", identifiers)
 	}
 	return &acme.Order{URI: "order", AuthzURLs: []string{"authorization"}}, nil
@@ -327,7 +327,7 @@ func (c *fakeACME) AuthorizeOrder(ctx context.Context, identifiers []acme.AuthzI
 func (c *fakeACME) GetAuthorization(context.Context, string) (*acme.Authorization, error) {
 	c.calls = append(c.calls, "get-authorization")
 	return &acme.Authorization{
-		URI: "authorization", Status: acme.StatusPending, Identifier: acme.AuthzID{Type: "dns", Value: PrivateZone}, Wildcard: true,
+		URI: "authorization", Status: acme.StatusPending, Identifier: acme.AuthzID{Type: "dns", Value: "mesh." + Zone()}, Wildcard: true,
 		Challenges: []*acme.Challenge{{Type: "dns-01", Token: "token"}},
 	}, nil
 }
@@ -370,7 +370,7 @@ func (c *fakeACME) CreateOrderCert(_ context.Context, _ string, csrDER []byte, _
 		return nil, "", err
 	}
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(42), Subject: pkix.Name{CommonName: WildcardName}, DNSNames: request.DNSNames,
+		SerialNumber: big.NewInt(42), Subject: pkix.Name{CommonName: WildcardName()}, DNSNames: request.DNSNames,
 		NotBefore: c.now.Add(-time.Hour), NotAfter: c.now.Add(90 * 24 * time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}

@@ -31,7 +31,7 @@ func TestAppOriginHandlerRejectsPublicAccessToNestedPrivateService(t *testing.T)
 			}
 			store, registry, _ := newServiceControllerTest(t, "/mesh")
 			if err := registry.Replace([]meshserve.Service{
-				{Name: "app", Kind: meshserve.Proxy, Target: port, PublicName: "app.shaulavo.dev"},
+				{Name: "app", Kind: meshserve.Proxy, Target: port, PublicName: "app.mesh.test"},
 				{Name: "app/admin", Kind: meshserve.Proxy, Target: port},
 			}); err != nil {
 				t.Fatal(err)
@@ -47,8 +47,8 @@ func TestAppOriginHandlerRejectsPublicAccessToNestedPrivateService(t *testing.T)
 				wantStatus int
 				wantHits   int32
 			}{
-				{host: "app.shaulavo.dev", wantStatus: http.StatusNotFound},
-				{host: "pc.mesh.shaulavo.dev", wantStatus: http.StatusOK, wantHits: 1},
+				{host: "app.mesh.test", wantStatus: http.StatusNotFound},
+				{host: "pc.mesh.mesh.test", wantStatus: http.StatusOK, wantHits: 1},
 			} {
 				request, err := http.NewRequest(http.MethodGet, server.URL+"/app/admin/secrets", nil)
 				if err != nil {

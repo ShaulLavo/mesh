@@ -16,13 +16,15 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/webauth"
 )
 
-const Domain = "shaulavo.dev"
-const ManagementHost = "apps." + Domain
-const ManagementOrigin = "https://" + ManagementHost
+func Domain() string           { return domainpolicy.Primary() }
+func ManagementHost() string   { return "apps." + Domain() }
+func ManagementOrigin() string { return "https://" + ManagementHost() }
+
 const IdleTTL = 24 * time.Hour
 
 // LeaseTTL is a variable only so integration builds can let a lease lapse
@@ -41,7 +43,7 @@ func ValidID(id string) bool {
 // Stored IDs predate allocation reservations; syntax still confines their filesystem paths.
 func storedID(id string) bool { return idPattern.MatchString(id) }
 
-func URL(id string) string { return "https://" + id + "." + Domain }
+func URL(id string) string { return "https://" + id + "." + Domain() }
 
 type Request struct {
 	Action     string   `json:"action"`
@@ -113,7 +115,7 @@ type StateStore interface {
 }
 type NameStore interface {
 	StateStore
-	ReserveAppName(context.Context, string, string) error
+	ReserveAppNames(context.Context, []string, string) error
 	AppNameExists(context.Context, string) (bool, error)
 	SetAppNameInactive(context.Context, string, string) error
 }

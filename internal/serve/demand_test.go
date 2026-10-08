@@ -54,7 +54,7 @@ func TestNormalizeOnDemandRoute(t *testing.T) {
 func TestNormalizeRefusesBadOnDemandRoutes(t *testing.T) {
 	cases := map[string]func(*Service){
 		"directory with listeners": func(s *Service) { s.Kind = Static; s.Target = "/srv" },
-		"public on-demand":         func(s *Service) { s.PublicName = "dev.shaulavo.dev" },
+		"public on-demand":         func(s *Service) { s.PublicName = "dev.mesh.test" },
 		"duplicate listener":       func(s *Service) { s.Listens[1].Public = 3001 },
 		"listener is an upstream":  func(s *Service) { s.Listens[1].Public = 13001 },
 		"zero port":                func(s *Service) { s.Listens[0].Upstream = 0 },

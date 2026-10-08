@@ -17,7 +17,7 @@ func TestReconcileHostAConvergesManagedRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Name != "pc.mesh.shaulavo.dev" || created.Content != "100.88.7.9" || created.Proxied || created.Comment != ManagedARecordComment {
+	if created.Name != "pc.mesh.mesh.test" || created.Content != "100.88.7.9" || created.Proxied || created.Comment != ManagedARecordComment {
 		t.Fatalf("created record = %#v", created)
 	}
 	if _, err := ReconcileHostA(context.Background(), provider, host); err != nil {
@@ -38,7 +38,7 @@ func TestReconcileHostAConvergesManagedRecord(t *testing.T) {
 }
 
 func TestReconcileHostARefusesUnmanagedRecordWithoutWrites(t *testing.T) {
-	provider := &memoryProvider{records: []Record{{ID: "human", Type: RecordA, Name: "pc.mesh.shaulavo.dev", Content: "192.0.2.1"}}}
+	provider := &memoryProvider{records: []Record{{ID: "human", Type: RecordA, Name: "pc.mesh.mesh.test", Content: "192.0.2.1"}}}
 	_, err := ReconcileHostA(context.Background(), provider, HostAddress{Name: "pc", Address: netip.MustParseAddr("100.88.7.9")})
 	if err == nil {
 		t.Fatal("unmanaged record was overwritten")
@@ -62,10 +62,10 @@ func TestReconcileHostARejectsNonTailnetAddresses(t *testing.T) {
 
 func TestTXTChallengeCleanupDeletesOnlyExactManagedRecord(t *testing.T) {
 	provider := &memoryProvider{records: []Record{
-		{ID: "human", Type: RecordTXT, Name: "_acme-challenge.mesh.shaulavo.dev", Content: "keep"},
-		{ID: "other", Type: RecordTXT, Name: "_acme-challenge.mesh.shaulavo.dev", Content: "other", Comment: ManagedTXTRecordComment},
+		{ID: "human", Type: RecordTXT, Name: "_acme-challenge.mesh.mesh.test", Content: "keep"},
+		{ID: "other", Type: RecordTXT, Name: "_acme-challenge.mesh.mesh.test", Content: "other", Comment: ManagedTXTRecordComment},
 	}}
-	challenge, err := PresentTXT(context.Background(), provider, "_acme-challenge.mesh.shaulavo.dev", "wanted")
+	challenge, err := PresentTXT(context.Background(), provider, "_acme-challenge.mesh.mesh.test", "wanted")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,8 +76,8 @@ func TestTXTChallengeCleanupDeletesOnlyExactManagedRecord(t *testing.T) {
 		t.Fatalf("retry cleanup: %v", err)
 	}
 	want := []Record{
-		{ID: "human", Type: RecordTXT, Name: "_acme-challenge.mesh.shaulavo.dev", Content: "keep"},
-		{ID: "other", Type: RecordTXT, Name: "_acme-challenge.mesh.shaulavo.dev", Content: "other", Comment: ManagedTXTRecordComment},
+		{ID: "human", Type: RecordTXT, Name: "_acme-challenge.mesh.mesh.test", Content: "keep"},
+		{ID: "other", Type: RecordTXT, Name: "_acme-challenge.mesh.mesh.test", Content: "other", Comment: ManagedTXTRecordComment},
 	}
 	if !reflect.DeepEqual(provider.records, want) {
 		t.Fatalf("records after cleanup = %#v, want %#v", provider.records, want)
@@ -85,7 +85,7 @@ func TestTXTChallengeCleanupDeletesOnlyExactManagedRecord(t *testing.T) {
 }
 
 func TestPresentTXTAdoptsOnlyExactManagedComment(t *testing.T) {
-	name := "_acme-challenge.mesh.shaulavo.dev"
+	name := "_acme-challenge.mesh.mesh.test"
 	provider := &memoryProvider{records: []Record{{
 		ID: "unmanaged", Type: RecordTXT, Name: name, Content: "wanted", Comment: "human note",
 	}}}

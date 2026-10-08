@@ -369,7 +369,7 @@ func TestServeWebSocketUsesExactAddressAndPath(t *testing.T) {
 
 func TestServeHTTPSUsesLoopbackServicesOnlyAndHotReloads(t *testing.T) {
 	listener, port := newTCPListener(t, "127.0.0.1:0")
-	store, err := dnsname.NewBundleStore(filepath.Join(t.TempDir(), "tls"), dnsname.WildcardName)
+	store, err := dnsname.NewBundleStore(filepath.Join(t.TempDir(), "tls"), dnsname.WildcardName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestServeHTTPSUsesLoopbackServicesOnlyAndHotReloads(t *testing.T) {
 		StateDir: stateDir, HTTPSPort: port, WebSocketPath: "/mesh",
 		TLSConfig:   &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: source.GetCertificate},
 		HTTPHandler: services,
-		PrivateName: func() string { return "probe.mesh.shaulavo.dev" },
+		PrivateName: func() string { return "probe.mesh.mesh.test" },
 	}, func(context.Context, transport.Conn) error {
 		return errors.New("terminal handler reached from HTTPS")
 	}, listener)
@@ -894,7 +894,7 @@ func TestPublicServerTimesOutIncompleteProxiedBody(t *testing.T) {
 	}
 	defer registry.Close()
 	if err := registry.Replace([]edge.PublishedRoute{{
-		Route: edge.Route{PublicName: "app.shaulavo.dev", ServiceName: "app"},
+		Route: edge.Route{PublicName: "app.mesh.test", ServiceName: "app"},
 		Origin: edge.ResolvedOrigin{
 			Identity: origin.ID, DisplayAlias: "Desktop", Endpoint: netip.MustParseAddrPort(strings.TrimPrefix(backend.URL, "http://")),
 			LastSeenAt: now, OnlineUntil: now.Add(time.Hour), Online: true,
@@ -922,7 +922,7 @@ func TestPublicServerTimesOutIncompleteProxiedBody(t *testing.T) {
 	}
 	defer connection.Close() //nolint:errcheck // test cleanup
 	_ = connection.SetDeadline(time.Now().Add(runtimeTestTimeout))
-	if _, err := io.WriteString(connection, "POST /app HTTP/1.1\r\nHost: app.shaulavo.dev\r\nContent-Length: 10\r\nX-Forwarded-For: 198.51.100.1\r\nX-Forwarded-Proto: https\r\n\r\na"); err != nil {
+	if _, err := io.WriteString(connection, "POST /app HTTP/1.1\r\nHost: app.mesh.test\r\nContent-Length: 10\r\nX-Forwarded-For: 198.51.100.1\r\nX-Forwarded-Proto: https\r\n\r\na"); err != nil {
 		t.Fatal(err)
 	}
 	status, err := bufio.NewReader(connection).ReadString('\n')
@@ -1023,7 +1023,7 @@ func TestPublicServerRejectsOversizedHeadersBeforeHandler(t *testing.T) {
 	}
 	defer connection.Close() //nolint:errcheck // test cleanup
 	_ = connection.SetDeadline(time.Now().Add(runtimeTestTimeout))
-	request := "GET / HTTP/1.1\r\nHost: app.shaulavo.dev\r\nX-Oversized: " + strings.Repeat("a", maximumPublicHeaderBytes+(8<<10)) + "\r\n\r\n"
+	request := "GET / HTTP/1.1\r\nHost: app.mesh.test\r\nX-Oversized: " + strings.Repeat("a", maximumPublicHeaderBytes+(8<<10)) + "\r\n\r\n"
 	if _, err := io.WriteString(connection, request); err != nil {
 		t.Fatal(err)
 	}
@@ -1326,7 +1326,7 @@ func assertHTTPSCertificateAndRoute(t *testing.T, port uint16, certificatePEM []
 		t.Fatal("append HTTPS test root")
 	}
 	address := net.JoinHostPort("127.0.0.1", fmt.Sprint(port))
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: "probe.mesh.shaulavo.dev"}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: "probe.mesh.mesh.test"}
 	connection, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", address, tlsConfig)
 	if err != nil {
 		t.Fatal(err)
@@ -1344,7 +1344,7 @@ func assertHTTPSCertificateAndRoute(t *testing.T, port uint16, certificatePEM []
 		},
 	}
 	client := &http.Client{Transport: transport, Timeout: time.Second}
-	response, err := client.Get(fmt.Sprintf("https://probe.mesh.shaulavo.dev:%d/service", port))
+	response, err := client.Get(fmt.Sprintf("https://probe.mesh.mesh.test:%d/service", port))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1360,7 +1360,7 @@ func assertHTTPSCertificateAndRoute(t *testing.T, port uint16, certificatePEM []
 	}
 	_ = response.Body.Close()
 
-	response, err = client.Get(fmt.Sprintf("https://probe.mesh.shaulavo.dev:%d/mesh", port))
+	response, err = client.Get(fmt.Sprintf("https://probe.mesh.mesh.test:%d/mesh", port))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1370,7 +1370,7 @@ func assertHTTPSCertificateAndRoute(t *testing.T, port uint16, certificatePEM []
 	}
 	_ = response.Body.Close()
 
-	response, err = client.Get(fmt.Sprintf("https://probe.mesh.shaulavo.dev:%d/m%%65sh", port))
+	response, err = client.Get(fmt.Sprintf("https://probe.mesh.mesh.test:%d/m%%65sh", port))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1383,7 +1383,7 @@ func assertHTTPSCertificateAndRoute(t *testing.T, port uint16, certificatePEM []
 }
 
 func daemonTestCertificate(t *testing.T, serial int64, now time.Time) ([]byte, []byte) {
-	return daemonTestNamedCertificate(t, serial, now, dnsname.WildcardName)
+	return daemonTestNamedCertificate(t, serial, now, dnsname.WildcardName())
 }
 
 func daemonTestNamedCertificate(t *testing.T, serial int64, now time.Time, name string) ([]byte, []byte) {
