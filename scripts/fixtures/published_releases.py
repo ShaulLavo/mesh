@@ -10,6 +10,7 @@ import sys
 import tarfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -17,7 +18,10 @@ VERSIONS = ("v0.1.149", "v0.1.151", "v0.1.159")
 ORIGIN = "https://github.com/ShaulLavo/mesh/releases/download/"
 COMPATIBILITY_FIELDS = ("stateReadMin", "stateReadMax", "stateWrite", "workerMin", "workerMax", "workerWrite", "journalVersion")
 DOWNLOAD_BUDGET = 60
-DOWNLOAD_BACKOFF = (0.25, 0.5)
+# GitHub release 5xx bursts outlast sub-second backoff. Capping each attempt lets a
+# stalled connection be retried; later attempts use only the remaining total budget.
+ATTEMPT_LIMIT = 20
+DOWNLOAD_BACKOFF = (2, 6)
 DOWNLOAD_WORKER = (sys.executable, str(Path(__file__).resolve()))
 
 
@@ -26,31 +30,50 @@ def digest(data):
 
 
 def download(address, maximum):
+    asset = describe(address)
     deadline = time.monotonic() + DOWNLOAD_BUDGET
-    for attempt in range(len(DOWNLOAD_BACKOFF) + 1):
+    attempts = len(DOWNLOAD_BACKOFF) + 1
+    for attempt in range(1, attempts + 1):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError("published release acquisition exceeded its total deadline")
-        # Socket timeouts cannot bound blocking DNS or repeated response reads.
-        with subprocess.Popen((*DOWNLOAD_WORKER, address, str(maximum), str(remaining)),
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE) as worker:
-            try:
-                data, failure = worker.communicate(timeout=max(0, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired as error:
-                worker.kill()
-                worker.communicate()
-                raise TimeoutError("published release acquisition exceeded its total deadline") from error
-        if worker.returncode == 0:
+            raise TimeoutError(f"published release acquisition of {asset} exceeded its total deadline")
+        data, detail, transient, stalled = download_attempt(address, maximum, min(deadline, time.monotonic() + ATTEMPT_LIMIT))
+        if data is not None:
             if time.monotonic() >= deadline:
-                raise TimeoutError("published release acquisition exceeded its total deadline")
+                raise TimeoutError(f"published release acquisition of {asset} exceeded its total deadline")
             return data
-        detail = failure.decode(errors="replace").strip()
-        if worker.returncode != 75 or attempt == len(DOWNLOAD_BACKOFF):
-            raise RuntimeError(f"published release acquisition failed: {detail}")
-        delay = DOWNLOAD_BACKOFF[attempt]
+        failure = f"{asset} after {attempt} attempt{'s' if attempt > 1 else ''}: {detail}"
+        if stalled and (attempt == attempts or time.monotonic() >= deadline):
+            raise TimeoutError(f"published release acquisition exceeded its total deadline for {failure}")
+        if not transient or attempt == attempts:
+            raise RuntimeError(f"published release acquisition failed for {failure}")
+        delay = DOWNLOAD_BACKOFF[attempt - 1]
         if deadline - time.monotonic() <= delay:
-            raise TimeoutError("published release acquisition exceeded its total deadline")
+            raise TimeoutError(f"published release acquisition exceeded its total deadline for {failure}")
         time.sleep(delay)
+
+
+def describe(address):
+    parts = urllib.parse.urlsplit(address)
+    return f"{'/'.join(parts.path.split('/')[-2:])} from {parts.hostname}"
+
+
+def download_attempt(address, maximum, end):
+    limit = end - time.monotonic()
+    # Socket timeouts cannot bound blocking DNS or repeated response reads.
+    with subprocess.Popen((*DOWNLOAD_WORKER, address, str(maximum), str(limit)),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE) as worker:
+        try:
+            # Launch time counts against the attempt, so the wait is measured after Popen returns.
+            data, failure = worker.communicate(timeout=max(0, end - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            worker.kill()
+            worker.communicate()
+            # A stalled attempt is retried while the total budget can still fit another one.
+            return None, f"attempt stalled past {limit:.1f} s", True, True
+    if worker.returncode == 0:
+        return data, None, False, False
+    return None, failure.decode(errors="replace").strip(), worker.returncode == 75, False
 
 
 def download_worker(address, maximum, timeout):
@@ -60,13 +83,14 @@ def download_worker(address, maximum, timeout):
         cause = error
         while isinstance(cause, urllib.error.URLError) and not isinstance(cause, urllib.error.HTTPError):
             cause = cause.reason
-        transient = isinstance(cause, ConnectionResetError)
+        transient = isinstance(cause, (ConnectionResetError, TimeoutError))
         if isinstance(cause, socket.gaierror):
             transient = cause.errno in (socket.EAI_AGAIN, socket.EAI_NONAME)
         if isinstance(cause, urllib.error.HTTPError):
             transient = cause.geturl().startswith("https://") and cause.code in (500, 502, 503, 504)
             cause.close()
-        print(f"{type(error).__name__}: {error}", file=sys.stderr)
+        source = f" ({urllib.parse.urlsplit(cause.geturl()).hostname})" if isinstance(cause, urllib.error.HTTPError) else ""
+        print(f"{type(error).__name__}: {error}{source}", file=sys.stderr)
         raise SystemExit(75 if transient else 1) from error
     sys.stdout.buffer.write(data)
 

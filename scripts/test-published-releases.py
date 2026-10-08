@@ -1,13 +1,16 @@
 """Public archive identities and joined historical bridge receipts."""
+import http.server
 import io
 import json
 import os
+import shutil
 import socket
 import ssl
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
@@ -200,6 +203,10 @@ class ControlledOpener:
             raise urllib.error.URLError(socket.gaierror(socket.EAI_FAMILY, "fixture unsupported address family"))
         if kind == "reset":
             raise urllib.error.URLError(ConnectionResetError("fixture connection reset"))
+        if kind == "timeout":
+            raise TimeoutError("fixture socket timeout")
+        if kind == "wrapped-timeout":
+            raise urllib.error.URLError(TimeoutError("fixture socket timeout"))
         if kind == "tls":
             raise urllib.error.URLError(ssl.SSLCertVerificationError("fixture certificate rejected"))
         if kind in ("redirect-reset", "https-redirect"):
@@ -301,7 +308,7 @@ published.download_worker(*sys.argv[1:])
         self.assertTrue(self.state()["trusted"])
 
     def test_transient_dns_reset_and_eligible_server_failures_recover(self):
-        for kind in ("dns", "nested-dns", "reset", "partial-reset", "http-500", "http-502", "http-503", "http-504"):
+        for kind in ("dns", "nested-dns", "reset", "partial-reset", "timeout", "wrapped-timeout", "http-500", "http-502", "http-503", "http-504"):
             with self.subTest(kind=kind):
                 self.assertEqual(self.download([kind, "good"]), b"verified fixture bytes")
                 attempts = self.state()["attempts"]
@@ -371,6 +378,19 @@ published.download_worker(*sys.argv[1:])
         with self.assertRaises(ProcessLookupError):
             os.kill(workers[0].pid, 0)
 
+    def test_worker_launch_consumes_total_budget(self):
+        patch.object(published, "DOWNLOAD_BUDGET", 0.2, create=True).start()
+        popen = subprocess.Popen
+        def slow_launch(*args, **kwargs):
+            worker = popen(*args, **kwargs)
+            time.sleep(0.3)
+            return worker
+        started = time.monotonic()
+        with patch.object(published.subprocess, "Popen", side_effect=slow_launch), \
+                self.assertRaisesRegex(TimeoutError, "total deadline"):
+            self.download(["stall-open"])
+        self.assertLess(time.monotonic() - started, 0.45)
+
     def test_backoff_cannot_escape_total_budget(self):
         patch.object(published, "DOWNLOAD_BUDGET", 0.3, create=True).start()
         patch.object(published, "DOWNLOAD_BACKOFF", (1, 1), create=True).start()
@@ -380,6 +400,109 @@ published.download_worker(*sys.argv[1:])
             self.download(["dns", "good"])
         self.assertLess(time.monotonic() - started, 0.6)
         self.assertEqual(len(self.state()["attempts"]), 1)
+
+
+class LocalReleaseServer:
+    """A real HTTPS server that answers each request with the next scripted outcome."""
+
+    def __init__(self, root):
+        self.root = root
+        self.outcomes = []
+        self.requests = []
+        (root / "server.cnf").write_text("[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
+            "[dn]\nCN=127.0.0.1\n[ext]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n"
+            "extendedKeyUsage=serverAuth\n")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "server.key",
+            "-out", "server.pem", "-days", "1", "-config", "server.cnf"], cwd=root, check=True, capture_output=True, timeout=30)
+        server = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                server.requests.append(time.monotonic())
+                outcome = server.outcomes[min(len(server.requests), len(server.outcomes)) - 1]
+                if outcome == "stall":
+                    time.sleep(8)
+                    return
+                body = b"verified fixture bytes" if outcome == 200 else b"fixture failure"
+                self.send_response(outcome)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(root / "server.pem", root / "server.key")
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.httpd.daemon_threads = True
+        self.httpd.socket = context.wrap_socket(self.httpd.socket, server_side=True)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        self.address = f"https://127.0.0.1:{self.httpd.server_address[1]}/ShaulLavo/mesh/releases/download/v0.1.151/mesh_linux_amd64.tar.gz"
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.thread.join(timeout=5)
+
+
+@unittest.skipUnless(shutil.which("openssl"), "openssl is required to issue the local HTTPS certificate")
+class LocalServerRetryTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.server = LocalReleaseServer(root)
+        self.addCleanup(self.server.close)
+        source = Path(__file__).resolve()
+        worker = root / "trusted-worker.py"
+        # The worker keeps production acquisition and trusts only the local certificate.
+        worker.write_text(f'''import ssl
+import sys
+sys.path.insert(0, {str(source.parent)!r})
+from fixtures import published_releases as published
+context = ssl.create_default_context(cafile={str(root / "server.pem")!r})
+published.ssl.create_default_context = lambda: context
+published.download_worker(*sys.argv[1:])
+''')
+        self.addCleanup(patch.stopall)
+        patch.object(published, "DOWNLOAD_WORKER", (sys.executable, str(worker))).start()
+        patch.object(published, "DOWNLOAD_BUDGET", 20.0).start()
+        patch.object(published, "ATTEMPT_LIMIT", 3.0).start()
+        patch.object(published, "DOWNLOAD_BACKOFF", (0.1, 0.2)).start()
+
+    def download(self, outcomes):
+        self.server.outcomes = outcomes
+        started = time.monotonic()
+        try:
+            return published.download(self.server.address, 64)
+        finally:
+            self.elapsed = time.monotonic() - started
+
+    def test_server_error_then_success_recovers(self):
+        self.assertEqual(self.download([500, 200]), b"verified fixture bytes")
+        self.assertEqual(len(self.server.requests), 2)
+        self.assertGreaterEqual(self.server.requests[1] - self.server.requests[0], 0.1)
+
+    def test_stalled_attempt_is_retried_within_budget(self):
+        self.assertEqual(self.download(["stall", 200]), b"verified fixture bytes")
+        self.assertEqual(len(self.server.requests), 2)
+        self.assertLess(self.elapsed, published.DOWNLOAD_BUDGET)
+
+    def test_persistent_server_error_fails_after_every_attempt_within_budget(self):
+        with self.assertRaises(RuntimeError) as failure:
+            self.download([500])
+        self.assertEqual(len(self.server.requests), len(published.DOWNLOAD_BACKOFF) + 1)
+        self.assertLess(self.elapsed, published.DOWNLOAD_BUDGET)
+        message = str(failure.exception)
+        for detail in ("v0.1.151/mesh_linux_amd64.tar.gz", "127.0.0.1", "after 3 attempts", "HTTP Error 500"):
+            self.assertIn(detail, message)
+
+    def test_missing_asset_fails_without_retry(self):
+        with self.assertRaisesRegex(RuntimeError, r"v0\.1\.151/mesh_linux_amd64\.tar\.gz from 127\.0\.0\.1 after 1 attempt: .*HTTP Error 404"):
+            self.download([404, 200])
+        self.assertEqual(len(self.server.requests), 1)
 
 
 if __name__ == "__main__":
