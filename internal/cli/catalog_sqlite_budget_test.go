@@ -34,6 +34,10 @@ func holdCatalogWriter(t *testing.T, stateDir string) func() {
 			t.Error(err)
 		}
 	})
+	// Match the daemon so contention reaches schema writes, not a journal-mode switch.
+	if _, err := conn.ExecContext(t.Context(), "PRAGMA journal_mode=WAL"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := conn.ExecContext(t.Context(), "BEGIN IMMEDIATE"); err != nil {
 		t.Fatal(err)
 	}
