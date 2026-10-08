@@ -37,7 +37,7 @@ def download(address, maximum):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"published release acquisition of {asset} exceeded its total deadline")
-        data, detail, transient, stalled = download_attempt(address, maximum, min(remaining, ATTEMPT_LIMIT))
+        data, detail, transient, stalled = download_attempt(address, maximum, min(deadline, time.monotonic() + ATTEMPT_LIMIT))
         if data is not None:
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"published release acquisition of {asset} exceeded its total deadline")
@@ -58,12 +58,14 @@ def describe(address):
     return f"{'/'.join(parts.path.split('/')[-2:])} from {parts.hostname}"
 
 
-def download_attempt(address, maximum, limit):
+def download_attempt(address, maximum, end):
+    limit = end - time.monotonic()
     # Socket timeouts cannot bound blocking DNS or repeated response reads.
     with subprocess.Popen((*DOWNLOAD_WORKER, address, str(maximum), str(limit)),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE) as worker:
         try:
-            data, failure = worker.communicate(timeout=limit)
+            # Launch time counts against the attempt, so the wait is measured after Popen returns.
+            data, failure = worker.communicate(timeout=max(0, end - time.monotonic()))
         except subprocess.TimeoutExpired:
             worker.kill()
             worker.communicate()

@@ -374,6 +374,19 @@ published.download_worker(*sys.argv[1:])
         with self.assertRaises(ProcessLookupError):
             os.kill(workers[0].pid, 0)
 
+    def test_worker_launch_consumes_total_budget(self):
+        patch.object(published, "DOWNLOAD_BUDGET", 0.2, create=True).start()
+        popen = subprocess.Popen
+        def slow_launch(*args, **kwargs):
+            worker = popen(*args, **kwargs)
+            time.sleep(0.3)
+            return worker
+        started = time.monotonic()
+        with patch.object(published.subprocess, "Popen", side_effect=slow_launch), \
+                self.assertRaisesRegex(TimeoutError, "total deadline"):
+            self.download(["stall-open"])
+        self.assertLess(time.monotonic() - started, 0.45)
+
     def test_backoff_cannot_escape_total_budget(self):
         patch.object(published, "DOWNLOAD_BUDGET", 0.3, create=True).start()
         patch.object(published, "DOWNLOAD_BACKOFF", (1, 1), create=True).start()
@@ -407,7 +420,7 @@ class LocalReleaseServer:
                 server.requests.append(time.monotonic())
                 outcome = server.outcomes[min(len(server.requests), len(server.outcomes)) - 1]
                 if outcome == "stall":
-                    time.sleep(3)
+                    time.sleep(8)
                     return
                 body = b"verified fixture bytes" if outcome == 200 else b"fixture failure"
                 self.send_response(outcome)
@@ -451,8 +464,8 @@ published.download_worker(*sys.argv[1:])
 ''')
         self.addCleanup(patch.stopall)
         patch.object(published, "DOWNLOAD_WORKER", (sys.executable, str(worker))).start()
-        patch.object(published, "DOWNLOAD_BUDGET", 10.0).start()
-        patch.object(published, "ATTEMPT_LIMIT", 1.5).start()
+        patch.object(published, "DOWNLOAD_BUDGET", 20.0).start()
+        patch.object(published, "ATTEMPT_LIMIT", 3.0).start()
         patch.object(published, "DOWNLOAD_BACKOFF", (0.1, 0.2)).start()
 
     def download(self, outcomes):
