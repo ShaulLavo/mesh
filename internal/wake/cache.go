@@ -76,7 +76,7 @@ func (c *Cache) PutContext(ctx context.Context, grant Grant) error {
 		if err := validateCurrentPolicy(prior, grant); err != nil {
 			return err
 		}
-		if grant.Revision == prior.Revision && (grant.IssuedAt.Before(prior.IssuedAt) || grant.ExpiresAt.Before(prior.ExpiresAt)) {
+		if supersededOrStored(prior, grant) {
 			return ctx.Err()
 		}
 	}
@@ -120,6 +120,19 @@ func cachedIdentity(name string) string {
 		return ""
 	}
 	return id
+}
+
+// supersededOrStored reports whether a same-revision grant is older than or
+// identical to the cached one. Rewriting an identical grant would churn the
+// state directory on every daemon sync.
+func supersededOrStored(prior, next Grant) bool {
+	if next.Revision != prior.Revision {
+		return false
+	}
+	if next.IssuedAt.Before(prior.IssuedAt) || next.ExpiresAt.Before(prior.ExpiresAt) {
+		return true
+	}
+	return next.IssuedAt.Equal(prior.IssuedAt) && next.ExpiresAt.Equal(prior.ExpiresAt)
 }
 
 func validateCurrentPolicy(prior, next Grant) error {
