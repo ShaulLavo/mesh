@@ -506,12 +506,12 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 func serviceOnlyHTTPSHandler(cfg listenerConfig) http.Handler {
 	services := privateHTTPHandler(cfg.httpHandler, cfg.httpHosts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		source, err := netip.ParseAddrPort(r.RemoteAddr)
+		if err != nil || source.Addr().IsLoopback() || source.Addr().IsUnspecified() {
+			http.Error(w, "verified client address required", http.StatusForbidden)
+			return
+		}
 		if cfg.httpsProxyProtocol {
-			source, err := netip.ParseAddrPort(r.RemoteAddr)
-			if err != nil || source.Addr().IsLoopback() || source.Addr().IsUnspecified() {
-				http.Error(w, "verified client address required", http.StatusForbidden)
-				return
-			}
 			// PROXY describes the TLS client, even when that device is also a public edge.
 			r = r.Clone(r.Context())
 			r.Header.Del("X-Forwarded-For")

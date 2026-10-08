@@ -367,7 +367,7 @@ func TestServeWebSocketUsesExactAddressAndPath(t *testing.T) {
 	}
 }
 
-func TestServeHTTPSUsesLoopbackServicesOnlyAndHotReloads(t *testing.T) {
+func TestServeHTTPSRejectsRawLoopbackServicesAndHotReloads(t *testing.T) {
 	listener, port := newTCPListener(t, "127.0.0.1:0")
 	store, err := dnsname.NewBundleStore(filepath.Join(t.TempDir(), "tls"), dnsname.WildcardName())
 	if err != nil {
@@ -1348,15 +1348,15 @@ func assertHTTPSCertificateAndRoute(t *testing.T, port uint16, certificatePEM []
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusOK || response.Header.Get("X-Mesh-Route") != "service" {
+	if response.StatusCode != http.StatusForbidden || response.Header.Get("X-Mesh-Route") != "" {
 		t.Fatalf("HTTPS /service status = %d, route = %q", response.StatusCode, response.Header.Get("X-Mesh-Route"))
 	}
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(body) != "/service" {
-		t.Fatalf("HTTPS /service body = %q, want service path", body)
+	if string(body) != "verified client address required\n" {
+		t.Fatalf("HTTPS /service body = %q, want verified-address refusal", body)
 	}
 	_ = response.Body.Close()
 
@@ -1364,7 +1364,7 @@ func assertHTTPSCertificateAndRoute(t *testing.T, port uint16, certificatePEM []
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusNotFound || response.Header.Get("X-Mesh-Route") != "" {
+	if response.StatusCode != http.StatusForbidden || response.Header.Get("X-Mesh-Route") != "" {
 		_ = response.Body.Close()
 		t.Fatalf("HTTPS reserved /mesh status = %d, route = %q", response.StatusCode, response.Header.Get("X-Mesh-Route"))
 	}
@@ -1374,7 +1374,7 @@ func assertHTTPSCertificateAndRoute(t *testing.T, port uint16, certificatePEM []
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusNotFound || response.Header.Get("X-Mesh-Route") != "" {
+	if response.StatusCode != http.StatusForbidden || response.Header.Get("X-Mesh-Route") != "" {
 		_ = response.Body.Close()
 		t.Fatalf("HTTPS encoded reserved path status = %d, route = %q", response.StatusCode, response.Header.Get("X-Mesh-Route"))
 	}

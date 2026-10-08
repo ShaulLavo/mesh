@@ -65,13 +65,13 @@ Mac origin hosts and routing with manual browser pairing remain supported.
 For app routing with manual browser pairing, omit the owner-access settings.
 Private routes through this gateway still require verified source metadata; use
 `--tailnet-owner-access` on the gateway and `--tailscale-serve-proxy-protocol`
-on the private daemon. Automatic owner access on the app edge is independently
-optional.
+on the private daemon. The app edge must also enable `tailnetOwnerAccess` so
+it consumes the gateway’s PROXY headers.
 
 For direct Tailnet TCP/443 forwarding to the private listener on 8443, enable
 `--tailscale-serve-proxy-protocol` on the daemon and PROXY v1 in Tailscale Serve.
-The original raw-TLS configuration remains available without that option for
-non-gateway deployments. Public-edge HTTP forwarding and the direct Tailnet
+Raw-TLS loopback requests without verified source metadata receive HTTP 403
+and never reach private services. Public-edge HTTP forwarding and the direct Tailnet
 HTTP/control listener keep their existing trust policies.
 
 Deploy the daemon and rebuilt gateway together. An old gateway sends raw TLS to

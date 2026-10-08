@@ -20,12 +20,13 @@ import (
 
 func TestPrivateProxyListenerPreservesClientAndFailsClosed(t *testing.T) {
 	for _, tt := range []struct {
-		name, header, want              string
-		disallowed, rejected, forbidden bool
+		name, header, want                   string
+		disallowed, rejected, forbidden, raw bool
 	}{
 		{name: "direct Serve IPv4", header: "PROXY TCP4 100.92.135.44 127.0.0.1 40000 8443\r\n", want: "100.92.135.44"},
 		{name: "gateway IPv6", header: "PROXY TCP6 fd7a:115c:a1e0::1 ::1 40000 8443\r\n", want: "fd7a:115c:a1e0::1"},
 		{name: "missing metadata", rejected: true},
+		{name: "raw TLS option disabled", raw: true, forbidden: true},
 		{name: "malformed metadata", header: "PROXY UNKNOWN\r\n", rejected: true},
 		{name: "wrong UID", header: "PROXY TCP4 100.92.135.44 127.0.0.1 40000 8443\r\n", disallowed: true, rejected: true},
 		{name: "loopback source", header: "PROXY TCP4 127.0.0.1 127.0.0.1 40000 8443\r\n", forbidden: true},
@@ -55,7 +56,7 @@ func TestPrivateProxyListenerPreservesClientAndFailsClosed(t *testing.T) {
 			}
 			roots := x509.NewCertPool()
 			roots.AppendCertsFromPEM(certPEM)
-			cfg := ListenerConfig{StateDir: t.TempDir(), HTTPSPort: httpsPort, HTTPSProxyProtocol: true, WebSocketPath: "/ws",
+			cfg := ListenerConfig{StateDir: t.TempDir(), HTTPSPort: httpsPort, HTTPSProxyProtocol: !tt.raw, WebSocketPath: "/ws",
 				PrivateName: func() string { return "host.example.test" }, HTTPHandler: services,
 				TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil }},
 			}
@@ -64,7 +65,7 @@ func TestPrivateProxyListenerPreservesClientAndFailsClosed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !normalized.httpsProxyProtocol {
+			if normalized.httpsProxyProtocol == tt.raw {
 				t.Fatal("private PROXY setting was lost")
 			}
 			if tt.disallowed {

@@ -39,6 +39,9 @@ func TestPrivateHTTPRejectsRebindingHost(t *testing.T) {
 					webSocketPath: "/mesh", httpHandler: appOriginHandler(nil, registry), httpsPort: 7337,
 				})
 			}
+			if surface == "loopback HTTPS" {
+				handler = verifiedHostPolicyClient(handler)
+			}
 			server := httptest.NewUnstartedServer(handler)
 			if surface == "loopback HTTPS" {
 				server.StartTLS()
@@ -136,13 +139,20 @@ func TestPrivateHTTPHostAllowlist(t *testing.T) {
 							tailnetNames: []string{"pc.example.ts.net", "pc"},
 							privateName:  func() string { return "pc.mesh.mesh.test" },
 							trustPublicEdgeForwarding: func(address netip.Addr) bool {
-								return test.edge && address == netip.MustParseAddr("127.0.0.1")
+								peer := "127.0.0.1"
+								if surface == "loopback HTTPS" {
+									peer = "100.64.0.9"
+								}
+								return test.edge && address == netip.MustParseAddr(peer)
 							},
 						},
 					}
 					handler := newWebSocketServer(context.Background(), cfg, newConnectionGroup(echoOneFrame)).Handler
 					if surface == "loopback HTTPS" {
 						handler = serviceOnlyHTTPSHandler(cfg)
+					}
+					if surface == "loopback HTTPS" {
+						handler = verifiedHostPolicyClient(handler)
 					}
 					server := httptest.NewUnstartedServer(handler)
 					if surface == "loopback HTTPS" {
@@ -472,4 +482,12 @@ func TestServePrivateHTTPUsesListenerAuthorities(t *testing.T) {
 			t.Fatalf("Host %q returned %d, want %d", test.host, response.StatusCode, test.want)
 		}
 	}
+}
+
+// Host-policy fixtures use the source already authenticated by the TLS listener.
+func verifiedHostPolicyClient(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "100.64.0.9:40000"
+		handler.ServeHTTP(w, r)
+	})
 }
