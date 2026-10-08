@@ -23,32 +23,42 @@ func TestCatalogOpenContentionKeepsAnOptionalCache(t *testing.T) {
 		cache *SQLiteCatalogCache
 		err   error
 	}
-	done := make(chan openedCatalog, 1)
-	finished := make(chan struct{})
-	var opened *SQLiteCatalogCache
+	done := make(chan openedCatalog, 2)
+	opened := make([]*SQLiteCatalogCache, 2)
+	var openers sync.WaitGroup
 	t.Cleanup(func() {
 		release()
-		<-finished
-		if opened != nil {
-			if err := opened.Close(); err != nil {
+		openers.Wait()
+		for _, cache := range opened {
+			if cache == nil {
+				continue
+			}
+			if err := cache.Close(); err != nil {
 				t.Error(err)
 			}
 		}
 	})
-	go func() {
-		defer close(finished)
-		cache, err := OpenCatalogCache(context.Background())
-		opened = cache
-		done <- openedCatalog{cache: cache, err: err}
-	}()
-	var result openedCatalog
-	select {
-	case result = <-done:
-	case <-time.After(300 * time.Millisecond):
-		t.Fatal("opening the optional cache waited on another SQLite writer")
+	for index := range opened {
+		openers.Add(1)
+		go func() {
+			defer openers.Done()
+			cache, err := OpenCatalogCache(context.Background())
+			opened[index] = cache
+			done <- openedCatalog{cache: cache, err: err}
+		}()
 	}
-	if result.err != nil || result.cache == nil {
-		t.Fatalf("cache open must remain nonfatal during contention: %#v", result)
+	timer := time.NewTimer(300 * time.Millisecond)
+	defer timer.Stop()
+	var result openedCatalog
+	for range opened {
+		select {
+		case result = <-done:
+			if result.err != nil || result.cache == nil {
+				t.Fatalf("cache open must remain nonfatal during contention: %#v", result)
+			}
+		case <-timer.C:
+			t.Fatal("opening the optional cache waited on another SQLite writer")
+		}
 	}
 	host := HostRecord{ID: "host-pc", MachineName: "pc"}
 	rows, err := result.cache.Load(t.Context(), host)
@@ -151,7 +161,9 @@ func TestConcurrentListCommandsSurviveCatalogOpenContention(t *testing.T) {
 			done <- commandResult{stdout: stdout, stderr: stderr, err: err}
 		}()
 	}
-	timer := time.NewTimer(300 * time.Millisecond)
+	// Whole commands also settle configuration and machine-name directories.
+	// Cache-only tests keep the 300 ms bound; this stays below SQLite's 5 s writer wait.
+	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
 	for range 2 {
 		select {
@@ -161,6 +173,9 @@ func TestConcurrentListCommandsSurviveCatalogOpenContention(t *testing.T) {
 			}
 			if warnings := strings.Count(result.stderr, "live results could not be cached"); warnings != 1 {
 				t.Fatalf("cache warnings = %d, want one per command: %q", warnings, result.stderr)
+			}
+			if !strings.Contains(result.stderr, "SQLITE_BUSY") {
+				t.Fatalf("cache warning = %q, want SQLITE_BUSY", result.stderr)
 			}
 		case <-timer.C:
 			t.Fatal("concurrent list commands waited on the optional cache writer lock")

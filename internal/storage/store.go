@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/database"
 	_ "modernc.org/sqlite"
 
 	"github.com/shaul/mesh/db/migrations"
@@ -59,7 +60,7 @@ func open(ctx context.Context, databasePath, busyTimeout string) (*Store, error)
 		_ = db.Close()
 		return nil, fmt.Errorf("storage: connect to %s: %w", databasePath, err)
 	}
-	if err := migrate(ctx, db); err != nil {
+	if err := migrate(ctx, db, busyTimeout == "0"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("storage: migrate %s: %w", databasePath, err)
 	}
@@ -266,13 +267,48 @@ func sessionsFromRows(rows []dbsqlc.Session, operation string) ([]Session, error
 	return sessions, nil
 }
 
-func migrate(ctx context.Context, db *sql.DB) error {
+func migrate(ctx context.Context, db *sql.DB, advisory bool) error {
+	if advisory {
+		// Goose retries missing version-table creation even with SQLite's writer wait disabled.
+		if err := ensureAdvisoryVersionTable(ctx, db); err != nil {
+			return fmt.Errorf("initialize advisory migration history: %w", err)
+		}
+	}
 	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations.Files)
 	if err != nil {
 		return fmt.Errorf("create Goose provider: %w", err)
 	}
 	if _, err := provider.Up(ctx); err != nil {
 		return fmt.Errorf("apply Goose migrations: %w", err)
+	}
+	return nil
+}
+
+func ensureAdvisoryVersionTable(ctx context.Context, db *sql.DB) error {
+	store, err := database.NewStore(database.DialectSQLite3, goose.DefaultTablename)
+	if err != nil {
+		return fmt.Errorf("create migration history store: %w", err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration history setup: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var exists bool
+	if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)", goose.DefaultTablename).Scan(&exists); err != nil {
+		return fmt.Errorf("check migration history table: %w", err)
+	}
+	if exists {
+		return nil
+	}
+	if err := store.CreateVersionTable(ctx, tx); err != nil {
+		return fmt.Errorf("create migration history table: %w", err)
+	}
+	if err := store.Insert(ctx, tx, database.InsertRequest{Version: 0}); err != nil {
+		return fmt.Errorf("record initial migration version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration history setup: %w", err)
 	}
 	return nil
 }

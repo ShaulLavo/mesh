@@ -7,6 +7,35 @@ import (
 	"testing"
 )
 
+func TestOpenAdvisoryAppliesPendingMigrationsWithExistingHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mesh.db")
+	db, err := sql.Open(sqliteDriver, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := ensureAdvisoryVersionTable(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		store, err := OpenAdvisory(t.Context(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertMigrationVersion(t, store, 11)
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var initialVersions int
+	if err := db.QueryRowContext(t.Context(), "SELECT count(*) FROM goose_db_version WHERE version_id = 0").Scan(&initialVersions); err != nil {
+		t.Fatal(err)
+	}
+	if initialVersions != 1 {
+		t.Fatalf("initial migration rows = %d, want 1", initialVersions)
+	}
+}
+
 func TestOpenBusyTimeoutAppliesToEveryPoolConnection(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -27,6 +56,7 @@ func TestOpenBusyTimeoutAppliesToEveryPoolConnection(t *testing.T) {
 				}
 			})
 			assertSQLiteSettings(t, store)
+			assertMigrationVersion(t, store, 11)
 			connections := make([]*sql.Conn, 0, sqliteMaxOpenConns)
 			t.Cleanup(func() {
 				for _, conn := range connections {
