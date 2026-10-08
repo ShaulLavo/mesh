@@ -91,7 +91,7 @@ func (a *application) serveCommand() *cobra.Command {
 				return err
 			}
 			return a.runServe(cmd, args[0], target, serveFlags{
-				route: route, displayName: displayName, files: files, publicName: publicName, privateHost: privateHost,
+				route: route, displayName: displayName, files: files, publicName: publicName, privateHost: privateHost, privateHostSet: cmd.Flags().Changed("private-host"),
 				wakeOnRequest: wakeOnRequest, isolate: isolate, yes: yes, allowCredentials: allowCredentials,
 				run: run, cwd: cwd, env: env, listens: listens, idle: idle, readyTimeout: readyTimeout,
 				cwdSet: cmd.Flags().Changed("cwd"), idleSet: cmd.Flags().Changed("idle"),
@@ -119,6 +119,7 @@ func (a *application) serveCommand() *cobra.Command {
 }
 
 type serveFlags struct {
+	privateHostSet   bool
 	route            string
 	displayName      string
 	files            bool
@@ -154,6 +155,10 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 	demand, err := serveDemandFromFlags(target, flags, isThisHost(host))
 	if err != nil {
 		return err
+	}
+	flags.privateHost = strings.ToLower(flags.privateHost)
+	if flags.privateHost != "" && domainpolicy.Primary() == "" {
+		return errors.New("--private-host requires a deployment domain in domains.json")
 	}
 	if flags.privateHost != "" && !strings.Contains(flags.privateHost, ".") {
 		flags.privateHost += "." + domainpolicy.Primary()
@@ -191,6 +196,13 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 		DisplayName: flags.displayName,
 		Name:        name, Kind: kind, Target: target, PublicName: flags.publicName, PrivateHost: flags.privateHost, WakeOnRequest: flags.wakeOnRequest,
 		Isolate: flags.isolate, Listens: demand.listens, Run: demand.run, LocalOnly: localOnly,
+	}
+	if !flags.privateHostSet && flags.privateHost == "" {
+		inherited, err := a.existingPrivateHost(cmd.Context(), host, name)
+		if err != nil {
+			return err
+		}
+		requested.PrivateHost = inherited
 	}
 	previewCtx, cancelPreview := context.WithTimeout(cmd.Context(), serviceMutationTimeout)
 	preview, privateName, err := previewRemoteService(previewCtx, host, a.dependencies.DialControl, requested, flags.allowCredentials)

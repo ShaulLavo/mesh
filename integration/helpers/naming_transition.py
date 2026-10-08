@@ -36,7 +36,7 @@ def catalog_snapshot(state, session_id):
 
 
 def private_host_migration(previous, current):
-    if previous["schemaVersion"] != 10 or current["schemaVersion"] != 11:
+    if current["schemaVersion"] <= previous["schemaVersion"]:
         return False
     normalized = []
     changed = set()

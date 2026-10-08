@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 
 from machine_naming import printed_marker
-from naming_transition import RetainedCatalog, catalog_snapshot, image_digest
+from naming_transition import RetainedCatalog, catalog_snapshot, image_digest, private_host_migration
 
 
 class PrintedMarkerTest(unittest.TestCase):
@@ -119,6 +119,15 @@ class RetainedCatalogTest(unittest.TestCase):
         self.observe()
         self.host["build"] = self.host["build"] | {"stateVersion": 10}
         self.observe()
+
+    def test_private_host_migration_uses_shape_without_fixed_versions(self):
+        previous = catalog_snapshot(self.fixture.remote, "7K3D")
+        with sqlite3.connect(self.database) as database:
+            database.execute("ALTER TABLE services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
+            database.execute("ALTER TABLE cached_services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
+        current = catalog_snapshot(self.fixture.remote, "7K3D")
+        self.assertTrue(private_host_migration(previous | {"schemaVersion": 30}, current | {"schemaVersion": 31}))
+        self.assertFalse(private_host_migration(previous | {"schemaVersion": 30}, current | {"schemaVersion": 30}))
 
     def test_private_host_migration_refuses_unrelated_schema_change(self):
         with sqlite3.connect(self.database) as database:

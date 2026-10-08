@@ -108,9 +108,9 @@ func TestMigrationRejectsMalformedLegacyState(t *testing.T) {
 
 func TestMigrationRejectsMissingPolicyWithDomainSlots(t *testing.T) {
 	for _, fixture := range []struct{ profile, entry string }{
-		{"private-tls", "slots"}, {"certificates/public-edge", "slots"},
-		{"private-tls", "empty"}, {"certificates/public-edge", "empty"},
-		{"private-tls", "symlink"}, {"certificates/public-edge", "file"},
+		{"private-tls", "slots"}, {"certificates/public-edge", "slots"}, {"certificates/private-service", "slots"},
+		{"private-tls", "empty"}, {"certificates/public-edge", "empty"}, {"certificates/private-service", "empty"},
+		{"private-tls", "symlink"}, {"certificates/public-edge", "file"}, {"certificates/private-service", "symlink"}, {"certificates/private-service", "file"},
 	} {
 		t.Run(fixture.profile+"/"+fixture.entry, func(t *testing.T) {
 			active = Policy{}

@@ -13,6 +13,16 @@ func (r *Registry) HasPrivateHost(host string) bool {
 	return snapshot != nil && snapshot.privateHosts[host] != nil
 }
 
+// SetPrivateHostReady configures the certificate check before serving requests.
+// Each redirect checks again so renewal and expiry take effect without rebuilding routes.
+func (r *Registry) SetPrivateHostReady(ready func(string) bool) {
+	r.privateHostReady = ready
+}
+
+func (r *Registry) privateHostCertificateReady(host string) bool {
+	return r.privateHostReady != nil && r.privateHostReady(host)
+}
+
 func redirectLegacyMount(root http.Handler, prefix string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		escaped := request.URL.EscapedPath()
@@ -24,7 +34,7 @@ func redirectLegacyMount(root http.Handler, prefix string) http.Handler {
 		if request.URL.RawQuery != "" {
 			target += "?" + request.URL.RawQuery
 		}
-		http.Redirect(w, request, target, http.StatusPermanentRedirect) //nolint:gosec // The target has exactly one leading slash and retains only an escaped path and query.
+		http.Redirect(w, request, target, http.StatusTemporaryRedirect) //nolint:gosec // The target has exactly one leading slash and retains only an escaped path and query.
 	})
 }
 
@@ -42,7 +52,7 @@ func ValidatePrivateServiceHost(host string) error {
 	return nil
 }
 
-func redirectPrivateHostNavigation(inner http.Handler, prefix, host string) http.Handler {
+func redirectPrivateHostNavigation(inner http.Handler, prefix, host string, ready func(string) bool) http.Handler {
 	if host == "" {
 		return inner
 	}
@@ -50,7 +60,7 @@ func redirectPrivateHostNavigation(inner http.Handler, prefix, host string) http
 		safeMethod := request.Method == http.MethodGet || request.Method == http.MethodHead
 		mountRoot := request.URL.Path == prefix || request.URL.Path == prefix+"/"
 		navigation := strings.Contains(request.Header.Get("Accept"), "text/html")
-		if !safeMethod || !mountRoot && !navigation {
+		if !safeMethod || !mountRoot && !navigation || request.Header.Get("Upgrade") != "" || !ready(host) {
 			inner.ServeHTTP(w, request)
 			return
 		}

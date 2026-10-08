@@ -212,11 +212,19 @@ func configureCertificateProfile(root, name string, profile dnsname.CertificateP
 	return installer, &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: source.GetCertificate}, currentPrivateName, markPrivateNameReady, nil
 }
 
+func (c certificateRuntime) privateServiceHostReady(host string, now time.Time) bool {
+	return certificateHostReady(c.OriginTLS, host, now)
+}
+
 func (c certificateRuntime) viewHostReady(host string, now time.Time) bool {
-	if _, _, accepted := domainpolicy.Label(host, false); !accepted || c.PublicTLS == nil {
+	return certificateHostReady(c.PublicTLS, host, now)
+}
+
+func certificateHostReady(config *tls.Config, host string, now time.Time) bool {
+	if _, _, accepted := domainpolicy.Label(host, false); !accepted || config == nil {
 		return false
 	}
-	certificate, err := c.PublicTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: host})
+	certificate, err := config.GetCertificate(&tls.ClientHelloInfo{ServerName: host})
 	if err != nil || certificate == nil || certificate.Leaf == nil {
 		return false
 	}

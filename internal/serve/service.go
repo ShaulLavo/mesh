@@ -86,6 +86,7 @@ type ServiceStatus struct {
 type Registry struct {
 	reservedPrefix        string
 	trustForwardedHeaders func(netip.Addr) bool
+	privateHostReady      func(string) bool
 	snapshot              atomic.Pointer[registrySnapshot]
 	gate                  atomic.Pointer[demandGate]
 }
@@ -326,7 +327,7 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 			}
 			snapshot.privateHosts[normalized.PrivateHost] = redirectLegacyMount(root, prefix)
 		}
-		snapshot.routes = append(snapshot.routes, serviceRoute{prefix: prefix, publicName: normalized.PublicName, handler: redirectPrivateHostNavigation(handler, prefix, normalized.PrivateHost)})
+		snapshot.routes = append(snapshot.routes, serviceRoute{prefix: prefix, publicName: normalized.PublicName, handler: redirectPrivateHostNavigation(handler, prefix, normalized.PrivateHost, r.privateHostCertificateReady)})
 	}
 	sort.Slice(snapshot.services, func(i, j int) bool {
 		return snapshot.services[i].Name < snapshot.services[j].Name

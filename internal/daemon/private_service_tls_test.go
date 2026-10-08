@@ -24,6 +24,9 @@ func TestPrivateServiceCertificateIsPinnedAndSeparateFromPublicEdge(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	if runtime.privateServiceHostReady("fregat.mesh.test", time.Now()) {
+		t.Fatal("service host ready without installed certificate")
+	}
 	installer := runtime.Controller.(*certificateController).installers[dnsname.ProfilePrivateService]
 	now := time.Now().UTC()
 	certificate, key := daemonTestNamedCertificate(t, 990, now, "*.mesh.test")
@@ -45,9 +48,18 @@ func TestPrivateServiceCertificateIsPinnedAndSeparateFromPublicEdge(t *testing.T
 	if _, _, err := installer.Install(signed); err != nil {
 		t.Fatal(err)
 	}
+	if !runtime.privateServiceHostReady("fregat.mesh.test", now) {
+		t.Fatal("installed private service certificate not ready")
+	}
+	if runtime.privateServiceHostReady("fregat.attacker.invalid", now) || runtime.privateServiceHostReady("fregat.mesh.test", bundle.NotAfter.Add(time.Second)) {
+		t.Fatal("invalid or expired private service certificate ready")
+	}
 	restarted, err := configureCertificates(config)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !restarted.privateServiceHostReady("fregat.mesh.test", now) {
+		t.Fatal("restored certificate not ready")
 	}
 	got, err := restarted.OriginTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: "fregat.mesh.test"})
 	if err != nil {

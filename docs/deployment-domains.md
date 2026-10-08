@@ -144,9 +144,15 @@ address. It installs a `*.<domain>` certificate in the origin's separate
 `private-service` slot, signed by the pinned renewer for the exact origin
 identity. Public-edge certificates cannot install into that slot. Existing
 private-origin certificate stores and `*.mesh.<domain>` names stay unchanged.
+Each service origin holds the private key for the domain's wildcard certificate.
+Trust those origins to protect every name in that domain, including public app
+names. Profile pins protect certificate installation; they do not narrow what a
+wildcard certificate can authenticate.
 Restart the configured renewer daemon or run `mesh private-names reconcile`
 with its existing config and explicit `--live --accept-tos` flags to apply the
-new names. The CLI flag alone does not create DNS records. Removing a served
+new names. The CLI flag alone does not create DNS records.
+Re-running `mesh serve` preserves the route's private hostname when the flag is
+omitted. Use `--private-host=` to clear it explicitly. Removing a served
 route removes its HTTP hostname; separately remove its `serviceNames` entry
 and DNS record when retiring the name.
 
@@ -155,7 +161,10 @@ names to the private origin listener. It has no service-specific proxy table.
 
 Old links on the short host, such as `/platform/chat?id=1`, redirect to
 `/chat?id=1`. Page navigation on the original private path redirects to the
-short hostname. Non-navigation API requests on the old mount keep their
+short hostname once the origin has an installed, valid certificate for it.
+Until then, page requests continue using the original mount. These redirects
+use temporary status 307 so browser caches allow a corrected destination.
+Non-navigation API requests on the old mount keep their
 existing path proxy behavior. Browser storage and pairing belong to an origin;
 a newly opened short hostname may need pairing even while old API clients
 continue working.

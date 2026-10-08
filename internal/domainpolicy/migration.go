@@ -252,7 +252,7 @@ func mergeLegacyDomain(current, candidate string) (string, error) {
 }
 
 func requireLegacyLayout(stateDir string) error {
-	for _, profile := range []string{"private-tls", filepath.Join("certificates", "public-edge")} {
+	for _, profile := range []string{"private-tls", filepath.Join("certificates", "public-edge"), filepath.Join("certificates", "private-service")} {
 		root := filepath.Join(stateDir, profile)
 		if _, err := os.Lstat(filepath.Join(root, "domains")); err == nil {
 			return &MissingPolicyError{Profile: root}
