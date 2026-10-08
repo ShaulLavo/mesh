@@ -203,6 +203,10 @@ class ControlledOpener:
             raise urllib.error.URLError(socket.gaierror(socket.EAI_FAMILY, "fixture unsupported address family"))
         if kind == "reset":
             raise urllib.error.URLError(ConnectionResetError("fixture connection reset"))
+        if kind == "timeout":
+            raise TimeoutError("fixture socket timeout")
+        if kind == "wrapped-timeout":
+            raise urllib.error.URLError(TimeoutError("fixture socket timeout"))
         if kind == "tls":
             raise urllib.error.URLError(ssl.SSLCertVerificationError("fixture certificate rejected"))
         if kind in ("redirect-reset", "https-redirect"):
@@ -304,7 +308,7 @@ published.download_worker(*sys.argv[1:])
         self.assertTrue(self.state()["trusted"])
 
     def test_transient_dns_reset_and_eligible_server_failures_recover(self):
-        for kind in ("dns", "nested-dns", "reset", "partial-reset", "http-500", "http-502", "http-503", "http-504"):
+        for kind in ("dns", "nested-dns", "reset", "partial-reset", "timeout", "wrapped-timeout", "http-500", "http-502", "http-503", "http-504"):
             with self.subTest(kind=kind):
                 self.assertEqual(self.download([kind, "good"]), b"verified fixture bytes")
                 attempts = self.state()["attempts"]

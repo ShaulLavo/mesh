@@ -19,7 +19,7 @@ ORIGIN = "https://github.com/ShaulLavo/mesh/releases/download/"
 COMPATIBILITY_FIELDS = ("stateReadMin", "stateReadMax", "stateWrite", "workerMin", "workerMax", "workerWrite", "journalVersion")
 DOWNLOAD_BUDGET = 60
 # GitHub release 5xx bursts outlast sub-second backoff. Capping each attempt lets a
-# stalled connection be retried; three attempts and both waits fit the total budget.
+# stalled connection be retried; later attempts use only the remaining total budget.
 ATTEMPT_LIMIT = 20
 DOWNLOAD_BACKOFF = (2, 6)
 DOWNLOAD_WORKER = (sys.executable, str(Path(__file__).resolve()))
@@ -83,7 +83,7 @@ def download_worker(address, maximum, timeout):
         cause = error
         while isinstance(cause, urllib.error.URLError) and not isinstance(cause, urllib.error.HTTPError):
             cause = cause.reason
-        transient = isinstance(cause, ConnectionResetError)
+        transient = isinstance(cause, (ConnectionResetError, TimeoutError))
         if isinstance(cause, socket.gaierror):
             transient = cause.errno in (socket.EAI_AGAIN, socket.EAI_NONAME)
         if isinstance(cause, urllib.error.HTTPError):
