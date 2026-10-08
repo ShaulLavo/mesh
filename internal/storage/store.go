@@ -4,6 +4,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -22,6 +23,10 @@ const (
 	sqliteBusyTimeout  = "5000"
 	sqliteMaxOpenConns = 4
 )
+
+// ErrAdvisoryMigrationUnavailable marks a migration committed by another opener.
+// Authoritative opens still return the original migration error.
+var ErrAdvisoryMigrationUnavailable = errors.New("advisory cache migration unavailable")
 
 // Store owns one SQLite connection pool. Close it when the daemon stops.
 type Store struct {
@@ -274,14 +279,28 @@ func migrate(ctx context.Context, db *sql.DB, advisory bool) error {
 			return fmt.Errorf("initialize advisory migration history: %w", err)
 		}
 	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations.Files)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations.Files, goose.WithTableName(goose.DefaultTablename))
 	if err != nil {
 		return fmt.Errorf("create Goose provider: %w", err)
 	}
 	if _, err := provider.Up(ctx); err != nil {
+		if advisory && isAdvisoryMigrationRace(ctx, provider, err) {
+			return fmt.Errorf("%w: %w", ErrAdvisoryMigrationUnavailable, err)
+		}
 		return fmt.Errorf("apply Goose migrations: %w", err)
 	}
 	return nil
+}
+
+func isAdvisoryMigrationRace(ctx context.Context, provider *goose.Provider, err error) bool {
+	var partial *goose.PartialError
+	if !errors.As(err, &partial) {
+		return false
+	}
+	// Goose commits the version and schema together. A recorded version proves
+	// another opener won; missing history keeps permanent schema failures fatal.
+	version, readErr := provider.GetDBVersion(ctx)
+	return readErr == nil && version >= partial.Failed.Source.Version
 }
 
 func ensureAdvisoryVersionTable(ctx context.Context, db *sql.DB) error {

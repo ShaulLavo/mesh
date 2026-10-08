@@ -40,7 +40,8 @@ func OpenCatalogCache(ctx context.Context) (*SQLiteCatalogCache, error) {
 			return nil, fmt.Errorf("open catalog cache: %w", ctx.Err())
 		}
 		var sqliteErr *sqlite.Error
-		if !errors.As(err, &sqliteErr) || (sqliteErr.Code()&0xff != sqlite3.SQLITE_BUSY && sqliteErr.Code()&0xff != sqlite3.SQLITE_LOCKED) {
+		busy := errors.As(err, &sqliteErr) && (sqliteErr.Code()&0xff == sqlite3.SQLITE_BUSY || sqliteErr.Code()&0xff == sqlite3.SQLITE_LOCKED)
+		if !busy && !errors.Is(err, storage.ErrAdvisoryMigrationUnavailable) {
 			return nil, fmt.Errorf("open catalog cache: %w", err)
 		}
 		// Another command can own schema setup. Live queries must still run;
