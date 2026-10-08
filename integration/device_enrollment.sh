@@ -84,7 +84,11 @@ exec /bin/sh -c "$9"
             paths = []
             for directory in directories:
                 paths.extend([directory, *directory.rglob("*")])
+            # The live daemon publishes wake state independently of enrollment.
+            wake_state = destination / "wake"
             for path in paths:
+                if path == wake_state or wake_state in path.parents:
+                    continue
                 if not path.exists():
                     result[str(path)] = None
                     continue
