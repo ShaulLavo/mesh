@@ -7,7 +7,9 @@ if [[ -z ${MESH:-} ]]; then
   MESH="$root/mesh"
   go build -o "$MESH" ./cmd/mesh
 fi
-python3 - "$MESH" <<'PY'
+helpers=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/helpers" && pwd)
+python3 "$helpers/enrollment_snapshot_test.py"
+python3 - "$MESH" "$helpers" <<'PY'
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -16,6 +18,10 @@ import subprocess
 import sys
 import tempfile
 import time
+
+sys.path.insert(0, sys.argv[2])
+from enrollment_snapshot import assert_unchanged, snapshot
+from mesh_control import request_id, round_trip
 
 binary = str(Path(sys.argv[1]).resolve())
 with tempfile.TemporaryDirectory(prefix="m175-") as directory:
@@ -76,26 +82,15 @@ exec /bin/sh -c "$9"
             if daemon.poll() is not None or time.monotonic() >= deadline:
                 raise RuntimeError("native fixture daemon did not start")
             time.sleep(0.02)
+        # Socket publication precedes serving; a reply proves startup reached the
+        # control handler before the filesystem baseline is collected.
+        response = round_trip(str(destination / "daemon.sock"), {
+            "type": "host.info", "requestId": request_id("enrollment-ready"),
+        })
+        assert response["type"] == "host.info.result", response
+        assert response["host"]["meshIdentity"] == pin, response
         original_config = (config / "hosts.json").read_bytes()
         original_key = (source / "identity.key").read_bytes()
-
-        def snapshot(*directories):
-            result = {}
-            paths = []
-            for directory in directories:
-                paths.extend([directory, *directory.rglob("*")])
-            for path in paths:
-                if not path.exists():
-                    result[str(path)] = None
-                    continue
-                result[str(path)] = (path.stat().st_mode, path.read_bytes() if path.is_file() else None)
-            return result
-
-        def assert_unchanged(before, operation):
-            after = snapshot(config, source, destination, absent)
-            changed = sorted(path for path in before.keys() | after.keys()
-                             if before.get(path) != after.get(path))
-            assert after == before, f"{operation} changed fixture files/directories: {changed}"
 
         original_administration = administration.read_bytes()
         absent = root / "absent-state"
@@ -116,7 +111,8 @@ exec /bin/sh -c "$9"
                 assert checked.returncode == (1 if refused else 0), checked.stderr
                 if refused:
                     assert "local account does not match the expected daemon account" in checked.stderr
-                assert_unchanged(before, "checked enrollment")
+                assert_unchanged(before, snapshot(config, source, destination, absent),
+                                 f"checked enrollment ({legacy=}, {mode=}, {refused=})")
                 mapping = json.loads(original_administration)
                 mapping["fixture-host"]["account"] = account
                 administration.write_text(json.dumps(mapping))
@@ -129,7 +125,8 @@ exec /bin/sh -c "$9"
                     assert 'unknown field "alias"' in fleet.stderr, fleet.stderr
                 elif refused:
                     assert "local account does not match the expected daemon account" in fleet.stderr, fleet.stderr
-                assert_unchanged(before, "fleet enrollment")
+                assert_unchanged(before, snapshot(config, source, destination, absent),
+                                 f"fleet enrollment ({legacy=}, {mode=}, {refused=})")
         (config / "hosts.json").write_bytes(original_config)
         administration.write_bytes(original_administration)
         ssh_log.write_text("")
