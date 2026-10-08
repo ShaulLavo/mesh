@@ -46,7 +46,7 @@ func checkGateway(t *testing.T, metadata bool) {
 		}
 		return
 	}
-	hosts := []string{"apps.mesh.test", "5yfw.mesh.test", "omarchy.mesh.mesh.test", "longer.mesh.test", "iiii.mesh.test"}
+	hosts := []string{"apps.mesh.test", "5yfw.mesh.test", "omarchy.mesh.mesh.test", "longer.mesh.test", "iiii.mesh.test", "fregat.mesh.test"}
 	certificate, roots := gatewayCertificate(t, hosts)
 	backend := func(name string) *httptest.Server {
 		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
