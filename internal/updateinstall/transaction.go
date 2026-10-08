@@ -179,6 +179,7 @@ func (e *Engine) validate(ctx context.Context, status Status) (Status, error) {
 	if err = e.save(&status); err != nil {
 		return status, err
 	}
+	e.pruneImages(status, health)
 	return status, updategate.Clear(e.cfg.StateDir, status.Request.ID)
 }
 
