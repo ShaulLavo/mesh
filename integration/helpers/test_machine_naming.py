@@ -52,6 +52,8 @@ class RetainedCatalogTest(unittest.TestCase):
         with sqlite3.connect(self.database) as database:
             database.executescript("""
                 CREATE TABLE hosts (id TEXT, alias TEXT);
+                CREATE TABLE services (name TEXT);
+                CREATE TABLE cached_services (name TEXT);
                 CREATE TABLE sessions (id TEXT, host_id TEXT, command TEXT, cwd TEXT,
                                        created_at INTEGER, state TEXT);
                 CREATE TABLE goose_db_version (version_id INTEGER, is_applied INTEGER);
@@ -102,6 +104,27 @@ class RetainedCatalogTest(unittest.TestCase):
     def test_same_version_changed_schema_is_refused(self):
         with sqlite3.connect(self.database) as database:
             database.execute("ALTER TABLE hosts DROP COLUMN alias")
+        with self.assertRaisesRegex(RuntimeError, "schema"):
+            self.observe()
+
+    def test_private_host_migration_preserves_catalog_and_worker(self):
+        with sqlite3.connect(self.database) as database:
+            database.execute("ALTER TABLE services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
+            database.execute("ALTER TABLE cached_services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
+            database.execute("INSERT INTO goose_db_version VALUES (11, 1)")
+        self.host["build"] = self.host["build"] | {"stateVersion": 11}
+        receipt = self.observe()
+        self.assertEqual(receipt["catalogSchemaVersion"], 11)
+        self.assertEqual(receipt["workerBuild"]["stateVersion"], 10)
+        self.observe()
+
+    def test_private_host_migration_refuses_unrelated_schema_change(self):
+        with sqlite3.connect(self.database) as database:
+            database.execute("ALTER TABLE services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
+            database.execute("ALTER TABLE cached_services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
+            database.execute("ALTER TABLE hosts DROP COLUMN alias")
+            database.execute("INSERT INTO goose_db_version VALUES (11, 1)")
+        self.host["build"] = self.host["build"] | {"stateVersion": 11}
         with self.assertRaisesRegex(RuntimeError, "schema"):
             self.observe()
 

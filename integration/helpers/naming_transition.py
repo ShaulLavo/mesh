@@ -3,6 +3,7 @@ from contextlib import closing
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -34,6 +35,23 @@ def catalog_snapshot(state, session_id):
             "schema": schema, "hostColumns": columns, "immutableSessionRows": rows}
 
 
+def private_host_migration(previous, current):
+    if previous["schemaVersion"] != 10 or current["schemaVersion"] != 11:
+        return False
+    normalized = []
+    changed = set()
+    for kind, name, table, sql in current["schema"]:
+        if kind == "table" and name in ("services", "cached_services"):
+            stripped, count = re.subn(r",\s*private_host TEXT NOT NULL DEFAULT ''", "", sql)
+            if count != 1:
+                return False
+            sql = stripped
+            changed.add(name)
+        normalized.append((kind, name, table, sql))
+    return changed == {"services", "cached_services"} and current | {
+        "schemaVersion": previous["schemaVersion"], "schema": normalized} == previous
+
+
 class RetainedCatalog:
     def __init__(self, fixture, session_id, shell_pid, worker_pid, worker_binary):
         self.fixture = fixture
@@ -54,6 +72,8 @@ class RetainedCatalog:
 
     def observe(self, phase, daemon_binary, host):
         current = catalog_snapshot(self.fixture.remote, self.session_id)
+        if private_host_migration(self.initial, current):
+            self.initial = current
         require(current == self.initial, "source hop replaced catalog inode, schema or immutable session rows")
         require(all(path.read_bytes() == contents for path, contents in self.credentials.items()),
                 "source hop changed existing device credentials or approved grant policy")
