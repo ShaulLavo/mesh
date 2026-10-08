@@ -12,6 +12,7 @@ Related execution homes:
 
 - [Plan 07](07-quality-and-security-wave.md#historical-fixture-failures) retains historical fixture failures separately. Passing controls do not establish their causes.
 - [Plan 09](09-residual-hotspots.md#transport-comparison-baseline) owns #246's comparative measurements. Measurements and the compatibility corpus below gate interaction experiments.
+- [Plan 12](12-deployment-domain.md) executes #241's deployment-domain configuration and the owner-approved parallel migration to `sprockt.dev`. Its credential and route checks gate live changes.
 - [Fregat Plan 290](https://github.com/ShaulLavo/fregat/blob/main/plans/290-mesh-device-authorization.md) owns device authorization. Native control already uses TLS 1.3, pinned device keys and grants in `internal/transport/auth.go`; its custom verifier must be assessed as a whole.
 - [Fregat Plan 291](https://github.com/ShaulLavo/fregat/blob/main/plans/291-mesh-private-services.md) owns retiring public temporary-app sharing. Ordinary explicitly named public services remain supported.
 - [Fregat Plan 292](https://github.com/ShaulLavo/fregat/blob/main/plans/292-mesh-zerotier.md) owns the approved alternate-network integration. This investigation does not replace its contract.
