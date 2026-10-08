@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"crypto/tls"
 	"net"
 	"net/http"
 	"sync"
@@ -35,10 +36,18 @@ func (c *newHTTPConnections) connState(connection net.Conn, state http.ConnState
 		return
 	}
 	if c.shuttingDown {
-		_ = connection.Close()
+		closeNewHTTPConnection(connection)
 		return
 	}
 	c.pending[connection] = struct{}{}
+}
+
+func closeNewHTTPConnection(connection net.Conn) {
+	// An unread TLS connection needs no close-notify write during shutdown.
+	if secure, ok := connection.(*tls.Conn); ok {
+		connection = secure.NetConn()
+	}
+	_ = connection.Close()
 }
 
 func (c *newHTTPConnections) closeNew() {
@@ -46,6 +55,6 @@ func (c *newHTTPConnections) closeNew() {
 	defer c.mu.Unlock()
 	c.shuttingDown = true
 	for connection := range c.pending {
-		_ = connection.Close()
+		closeNewHTTPConnection(connection)
 	}
 }

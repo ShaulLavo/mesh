@@ -116,6 +116,43 @@ func TestNewHTTPConnectionsCloseLatePreconnectsAndChainHook(t *testing.T) {
 	}
 }
 
+func TestNewHTTPConnectionsCloseTLSWithoutWaitingForPeer(t *testing.T) {
+	certificatePEM, keyPEM := daemonTestCertificate(t, 124, time.Now())
+	certificate, err := tls.X509KeyPair(certificatePEM, keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, peer := net.Pipe()
+	t.Cleanup(func() { _ = connection.Close() })
+	t.Cleanup(func() { _ = peer.Close() })
+	secure := tls.Server(connection, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, SessionTicketsDisabled: true})
+	client := tls.Client(peer, &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}) //nolint:gosec // Self-signed pipe fixture.
+	ctx, cancel := context.WithTimeout(t.Context(), runtimeTestTimeout)
+	defer cancel()
+	handshake := make(chan error, 1)
+	go func() { handshake <- secure.HandshakeContext(ctx) }()
+	if err := client.HandshakeContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-handshake; err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{ReadHeaderTimeout: httpReadHeaderTimeout}
+	connections := trackNewHTTPConnections(server)
+	server.ConnState(secure, http.StateNew)
+	closed := make(chan struct{})
+	go func() {
+		connections.closeNew()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("TLS shutdown waited for the peer to read close-notify")
+	}
+	server.ConnState(secure, http.StateClosed)
+}
+
 func TestNewHTTPConnectionsPreserveActiveRequests(t *testing.T) {
 	server := &http.Server{ReadHeaderTimeout: httpReadHeaderTimeout}
 	connections := trackNewHTTPConnections(server)
