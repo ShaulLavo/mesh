@@ -79,6 +79,7 @@ type HandlerConfig struct {
 	RequestBodyLimit int64
 	WakeTimeout      time.Duration
 	Logger           *log.Logger
+	RateLimitExempt  func(context.Context, netip.Addr) bool
 }
 
 // ResolvedOrigin combines durable safe display state with an edge-resolved
@@ -135,6 +136,7 @@ type Registry struct {
 	logger           *eventLogger
 	reservedPath     string
 	forwarderTrusted func(*http.Request) bool
+	rateLimitExempt  func(context.Context, netip.Addr) bool
 }
 
 type AppHandler interface {
@@ -231,6 +233,7 @@ func NewRegistry(config HandlerConfig) (*Registry, error) {
 		wakeTimeout:      config.WakeTimeout,
 		logger:           newEventLogger(config.Logger, config.Now),
 		reservedPath:     config.ReservedPath,
+		rateLimitExempt:  config.RateLimitExempt,
 		forwarderTrusted: trustedLoopbackForwarder,
 	}
 	registry.snapshot.Store(&proxySnapshot{})
@@ -465,7 +468,8 @@ func (r *Registry) ServeHTTP(response http.ResponseWriter, request *http.Request
 		// Unverified metadata cannot become downstream identity or scheme.
 		removeForwarded(request.Header)
 	}
-	if !r.rate.Allow(clientIP, r.now().UTC()) {
+	exempt := r.rateLimitExempt != nil && r.rateLimitExempt(request.Context(), clientIP)
+	if !exempt && !r.rate.Allow(clientIP, r.now().UTC()) {
 		r.logger.Printf("edge event=rate-limit client=%s host=%s", clientIP, publicName)
 		http.Error(response, "request limit exceeded", http.StatusTooManyRequests)
 		return

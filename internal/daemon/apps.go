@@ -31,6 +31,18 @@ type appEdge interface {
 	Exchange(context.Context, apps.Signed) (apps.Signed, error)
 }
 
+func networkOwnerRateExemption(resolve func(context.Context, netip.Addr) ([]string, error)) func(context.Context, netip.Addr) bool {
+	if resolve == nil {
+		return nil
+	}
+	return func(ctx context.Context, address netip.Addr) bool {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		owners, err := resolve(ctx, address)
+		return err == nil && len(owners) != 0
+	}
+}
+
 type appController struct {
 	origin appOrigin
 	edge   appEdge
