@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestPrivateHostRootAndLegacyMount(t *testing.T) {
+func TestPrivateHostRootWithdrawsMachineMount(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, r.URL.RequestURI()+"|"+r.Header.Get("X-Forwarded-Prefix")) //nolint:gosec // The fixture echoes routing metadata for assertions; no browser renders it.
 	}))
@@ -21,16 +21,15 @@ func TestPrivateHostRootAndLegacyMount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry.SetPrivateHostReady(func(string) bool { return true })
 	for _, tc := range []struct {
 		host, path, origin, want string
 		code                     int
 	}{
 		{"fregat.mesh.test", "/assets/app.js?v=1", "", "/assets/app.js?v=1|/", 200},
-		{"pc.mesh.mesh.test", "/platform/release", "", "/release|/platform", 200},
+		{"pc.mesh.mesh.test", "/platform/release", "", "", 404},
 		{"fregat.mesh.test", "/platform/release?x=1", "", "/release?x=1", 307},
 		{"fregat.mesh.test", "/platform//attacker.invalid", "", "/attacker.invalid", 307},
-		{"pc.mesh.mesh.test", "/platform?x=1", "", "https://fregat.mesh.test/?x=1", 307},
+		{"pc.mesh.mesh.test", "/platform?x=1", "", "", 404},
 		{"fregat.mesh.test", "/mutate", "https://attacker.invalid", "", 403},
 		{"other.mesh.test", "/release", "", "", 404},
 	} {
@@ -95,50 +94,60 @@ func TestPrivateHostStaticAndCanonicalSNI(t *testing.T) {
 	}
 }
 
-func TestPrivateHostNavigationWaitsForCertificate(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+func TestPrivateHostWithdrawnMountBlocksParentFallback(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	defer upstream.Close()
 	_, port, _ := net.SplitHostPort(upstream.Listener.Addr().String())
-	registry, err := NewRegistry([]Service{{Name: "platform", Kind: Proxy, Target: port, PrivateHost: "fregat.mesh.test"}})
+	registry, err := NewRegistry([]Service{
+		{Name: "apps", Kind: Proxy, Target: port},
+		{Name: "apps/platform", Kind: Proxy, Target: port, PrivateHost: "fregat.mesh.test"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	check := func(want int) {
-		t.Helper()
-		for _, path := range []string{"/platform", "/platform/", "/platform/workspace?x=1"} {
-			request := httptest.NewRequest(http.MethodGet, "https://pc.mesh.mesh.test"+path, nil)
-			request.Header.Set("Accept", "text/html")
-			response := httptest.NewRecorder()
-			registry.ServeHTTP(response, request)
-			expected := want
-			if path == "/platform" && want == http.StatusOK {
-				expected = http.StatusPermanentRedirect
-			}
-			if response.Code != expected {
-				t.Fatalf("%s: status %d, want %d", path, response.Code, expected)
-			}
-			if expected == http.StatusPermanentRedirect && response.Header().Get("Location") != "/platform/" {
-				t.Fatal("unready mount left the existing origin")
-			}
+	for _, path := range []string{"/apps/platform", "/apps/platform/", "/apps/platform/release?x=1"} {
+		request := httptest.NewRequest(http.MethodGet, "https://pc.mesh.mesh.test"+path, nil)
+		request.Header.Set("Accept", "text/html")
+		response := httptest.NewRecorder()
+		registry.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound || response.Header().Get("Location") != "" {
+			t.Fatalf("%s: status %d, redirect %q", path, response.Code, response.Header().Get("Location"))
 		}
 	}
-	check(http.StatusOK)
-	ready := false
-	registry.SetPrivateHostReady(func(host string) bool { return ready && host == "fregat.mesh.test" })
-	check(http.StatusOK)
-	ready = true
-	check(http.StatusTemporaryRedirect)
-	request := httptest.NewRequest(http.MethodGet, "https://pc.mesh.mesh.test/platform/", nil)
-	request.Header.Set("Accept", "text/html")
-	request.Header.Set("Upgrade", "websocket")
-	request.Header.Set("Connection", "Upgrade")
+	request := httptest.NewRequest(http.MethodGet, "https://pc.mesh.mesh.test/apps/other", nil)
 	response := httptest.NewRecorder()
 	registry.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("upgrade redirected: %d", response.Code)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("parent status = %d", response.Code)
 	}
-	ready = false
-	check(http.StatusOK)
+}
+
+func TestPrivateHostWithdrawnMountNeverStartsService(t *testing.T) {
+	service := onDemand()
+	service.PrivateHost = "console.mesh.test"
+	registry, err := NewRegistry([]Service{service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := &fakeGate{err: errString("upstream not started")}
+	registry.SetDemandGate(gate, nil)
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost} {
+		request := httptest.NewRequest(method, "https://pc.mesh.mesh.test/"+service.Name+"/socket", nil)
+		request.Header.Set("Accept", "text/html")
+		request.Header.Set("Upgrade", "websocket")
+		request.Header.Set("Connection", "Upgrade")
+		response := httptest.NewRecorder()
+		registry.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound || len(gate.entered) != 0 || response.Header().Get("Location") != "" {
+			t.Fatalf("%s: status %d, starts %v, redirect %q", method, response.Code, gate.entered, response.Header().Get("Location"))
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "https://console.mesh.test/socket", nil)
+	response := httptest.NewRecorder()
+	registry.ServeHTTP(response, request)
+	if response.Code != http.StatusBadGateway || len(gate.entered) != 1 || gate.entered[0] != service.Name {
+		t.Fatalf("short host: status %d, starts %v", response.Code, gate.entered)
+	}
 }
 
 func TestServiceEqualityIncludesPrivateHost(t *testing.T) {

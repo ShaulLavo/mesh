@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -19,9 +20,13 @@ func TestServePrivateHostReachesOriginAndCatalog(t *testing.T) {
 	if len(host.services) != 1 || host.services[0].PrivateHost != "fregat.mesh.test" || host.services[0].Name != "platform" {
 		t.Fatalf("services = %#v", host.services)
 	}
-	rows := serviceAliasRows([]ServiceCatalogRow{{Host: HostRecord{}, PrivateName: "pc.mesh.mesh.test", Service: host.services[0]}})
-	if len(rows) != 2 || serviceRoute(rows[0].Service) != "/" || rows[0].URL() != "https://fregat.mesh.test/" || rows[1].URL() != "https://pc.mesh.mesh.test/platform" {
-		t.Fatalf("catalog aliases = %#v", rows)
+	rows := []ServiceCatalogRow{{Host: HostRecord{}, PrivateName: "pc.mesh.mesh.test", Service: host.services[0]}}
+	var table bytes.Buffer
+	if err := writeServiceTable(&table, rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	if serviceRoute(rows[0].Service) != "/" || rows[0].URL() != "https://fregat.mesh.test/" || strings.Contains(table.String(), "pc.mesh.mesh.test/platform") || strings.Count(table.String(), "https://fregat.mesh.test/") != 1 {
+		t.Fatalf("catalog = %s", table.String())
 	}
 }
 

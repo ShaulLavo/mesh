@@ -86,7 +86,6 @@ type ServiceStatus struct {
 type Registry struct {
 	reservedPrefix        string
 	trustForwardedHeaders func(netip.Addr) bool
-	privateHostReady      func(string) bool
 	snapshot              atomic.Pointer[registrySnapshot]
 	gate                  atomic.Pointer[demandGate]
 }
@@ -310,7 +309,11 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 		if routed.Kind == Proxy {
 			routed.Target = routed.UpstreamPort()
 		}
-		handler, err := handlerForNormalizedService(routed, prefix, r.trustForwardedHeaders)
+		handlerPrefix := prefix
+		if normalized.PrivateHost != "" {
+			handlerPrefix = "/"
+		}
+		handler, err := handlerForNormalizedService(routed, handlerPrefix, r.trustForwardedHeaders)
 		if err != nil {
 			return nil, err
 		}
@@ -318,16 +321,11 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 			handler = r.gatedHandler(normalized.Name, handler)
 		}
 		if normalized.PrivateHost != "" {
-			root, err := handlerForNormalizedService(routed, "/", r.trustForwardedHeaders)
-			if err != nil {
-				return nil, err
-			}
-			if normalized.Demand != nil {
-				root = r.gatedHandler(normalized.Name, root)
-			}
-			snapshot.privateHosts[normalized.PrivateHost] = redirectLegacyMount(root, prefix)
+			snapshot.privateHosts[normalized.PrivateHost] = redirectLegacyMount(handler, prefix)
+			// Reserve the old path so a parent route cannot expose it again.
+			handler = http.NotFoundHandler()
 		}
-		snapshot.routes = append(snapshot.routes, serviceRoute{prefix: prefix, publicName: normalized.PublicName, handler: redirectPrivateHostNavigation(handler, prefix, normalized.PrivateHost, r.privateHostCertificateReady)})
+		snapshot.routes = append(snapshot.routes, serviceRoute{prefix: prefix, publicName: normalized.PublicName, handler: handler})
 	}
 	sort.Slice(snapshot.services, func(i, j int) bool {
 		return snapshot.services[i].Name < snapshot.services[j].Name

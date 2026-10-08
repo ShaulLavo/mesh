@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 	"github.com/shaul/mesh/internal/tailnet"
 )
 
-func TestRunWiresPrivateHostRedirectCertificateReadiness(t *testing.T) {
+func TestRunWithdrawsPrivateHostMachineMountWithAndWithoutCertificate(t *testing.T) {
 	state := compactSocketTempDir(t)
 	target, _, err := identity.LoadOrCreate(state)
 	if err != nil {
@@ -28,7 +29,7 @@ func TestRunWiresPrivateHostRedirectCertificateReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("legacy available"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("short host available"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := storage.Open(t.Context(), filepath.Join(state, databaseName))
@@ -60,10 +61,7 @@ func TestRunWiresPrivateHostRedirectCertificateReadiness(t *testing.T) {
 			})
 		}()
 		url := fmt.Sprintf("http://127.0.0.1:%d/platform/", port)
-		want := http.StatusOK
-		if ready {
-			want = http.StatusTemporaryRedirect
-		}
+		want := http.StatusNotFound
 		client := &http.Client{Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		deadline := time.Now().Add(runtimeTestTimeout)
 		var matched bool
@@ -74,10 +72,7 @@ func TestRunWiresPrivateHostRedirectCertificateReadiness(t *testing.T) {
 				continue
 			}
 			_ = response.Body.Close()
-			matched = response.StatusCode == want
-			if ready && response.Header.Get("Location") != "https://fregat.mesh.test/" {
-				matched = false
-			}
+			matched = response.StatusCode == want && response.Header.Get("Location") == "" && privateHostRootAvailable(client, port)
 			if matched {
 				break
 			}
@@ -112,4 +107,19 @@ func installReadinessCertificate(t *testing.T, config certificateRuntimeConfig, 
 		t.Fatal(err)
 	}
 
+}
+
+func privateHostRootAvailable(client *http.Client, port uint16) bool {
+	request, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/", port), nil)
+	if err != nil {
+		return false
+	}
+	request.Host = "fregat.mesh.test"
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, err := io.ReadAll(response.Body)
+	return err == nil && response.StatusCode == http.StatusOK && string(body) == "short host available"
 }

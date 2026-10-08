@@ -212,10 +212,6 @@ func configureCertificateProfile(root, name string, profile dnsname.CertificateP
 	return installer, &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: source.GetCertificate}, currentPrivateName, markPrivateNameReady, nil
 }
 
-func (c certificateRuntime) privateServiceHostReady(host string, now time.Time) bool {
-	return certificateHostReady(c.OriginTLS, host, now)
-}
-
 func (c certificateRuntime) viewHostReady(host string, now time.Time) bool {
 	return certificateHostReady(c.PublicTLS, host, now)
 }
