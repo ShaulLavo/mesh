@@ -111,9 +111,24 @@ The daemon's HTTP listener will host more than this WebSocket endpoint: step 8
 mounts served sites and file browsers on it (T11). Reserve a path prefix for the
 Mesh protocol now rather than assuming the listener is yours alone.
 
-## Out of scope
+## Security boundary
 
-Tailscale address discovery (T06) and authentication beyond "we are on the
-tailnet." D23 records the resulting security boundary: this listener is
-plaintext, and its confidentiality, integrity, and admission come from
-Tailscale.
+T05 originally left authentication beyond Tailnet membership out of scope.
+The direct terminal WebSocket and shared plaintext HTTP listener relied on
+Tailscale WireGuard and ACLs for confidentiality, integrity, and admission.
+Tailscale address discovery remains in [T06](T06-host-identity.md).
+
+[D23](../plan/01-decisions.md#d23--mesh-keys-authorize-network-controls) now
+requires pinned-key TLS 1.3 inside the direct terminal WebSocket's binary stream.
+Both peers prove possession of their Ed25519 Mesh keys. The client checks its
+owner-controlled destination pin, and the daemon checks approved device grants
+in `authorized_keys`. Tailnet membership and discovery grant no device access.
+Removing a grant denies new admissions and retires active control connections;
+detached workers keep running. [Device enrollment](../device-enrollment.md)
+describes how a trusted system SSH administration connection approves grants
+on selected pinned hosts.
+
+This inner TLS layer leaves the shared outer HTTP listener and service URLs
+unchanged. Tailscale still protects Tailnet traffic and restricts reachability.
+[HTTP service policy](../plan/03-serving.md), canonical private HTTPS, and the
+control endpoint's browser-Origin refusal remain separate boundaries.

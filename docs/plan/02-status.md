@@ -324,9 +324,20 @@ A final operational and lint review closed six more findings:
 13. An unversioned development build could silently download `latest` during a
     cross-platform `mesh add`. It now reuses an exact local executable or sibling
     artifact and otherwise refuses to guess a release version.
-14. Direct terminal WebSockets and Tailnet-only HTTP services intentionally rely
-    on Tailscale WireGuard and ACLs instead of a second TLS layer. D23 records
-    that security boundary and its exposure cost.
+14. The earlier security boundary relied on Tailscale WireGuard and ACLs for
+    direct terminal WebSockets and Tailnet-only HTTP services.
+    [D23](01-decisions.md#d23--mesh-keys-authorize-network-controls) now requires
+    pinned-key TLS 1.3 inside the terminal WebSocket's binary stream. Both peers
+    prove possession of their Ed25519 Mesh keys. The client checks its destination
+    pin, and the daemon checks approved device grants in `authorized_keys`.
+    [Device enrollment](../device-enrollment.md) approves grants on selected
+    pinned hosts through a trusted system SSH administration connection.
+    Tailnet membership and discovery grant no device access. Grant removal
+    denies new admissions and retires active control connections while detached
+    workers keep running. The shared outer HTTP listener and service URLs stay
+    unchanged. Tailscale reachability, [HTTP service policy](03-serving.md),
+    canonical private HTTPS, and browser-Origin refusal remain separate
+    boundaries.
 15. The Tailscale Serve setup command already ran when requested, but startup did
     not verify operator-managed state. Every private-HTTPS start now requires an
     exact persistent raw TCP/443 forward and rejects TLS/HTTP handling, PROXY
