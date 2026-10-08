@@ -237,6 +237,12 @@ regardless. The optional direct-TLS edge also uses DNS-01 for
 `*.shaulavo.dev`. The two certificate profiles use separate state and cannot
 install into each other's serving slot.
 
+The direct-TLS public edge offers HTTP/1.1 so each hostname gets its own
+connection. Safari can display a 421 response when HTTP/2 reuses a wildcard
+certificate connection across hosts. The edge still requires Host to match
+TLS SNI, and mismatched HTTP/2 requests receive an empty 421. A separate TLS
+front door controls its own browser-facing protocols.
+
 **An offline origin returns 502, honestly.** No silent staleness. T13 keeps
 `--wake-on-request` behind a bounded interface. T19 supplies the wake client:
 the target must allow wake, and a sender must be awake on its LAN. The edge
@@ -320,8 +326,7 @@ and server pauses between reads do not charge the client's budget. Once a
 response starts or upgrades, body deadlines are cleared. HTTP/1 enables
 full-duplex handling so an early response is not blocked by implicit body
 draining. After a non-hijacked handler finishes, the final body drain is bounded
-again. An HTTP/2 body timeout affects its stream, not other streams on the same
-connection. Very slow client uploads below the minimum eventually time out.
+again. Very slow client uploads below the minimum eventually time out.
 
 These limits are not a distributed denial-of-service defense. Sixteen IPv4
 addresses, or sixteen /64s from one wider IPv6 allocation, can still fill the

@@ -245,6 +245,11 @@ func serveBoundListeners(
 			BaseContext: func(net.Listener) context.Context { return ctx }, TLSConfig: normalized.publicTLSConfig,
 			ErrorLog: log.New(io.Discard, "", 0),
 		}
+		if normalized.publicTLSConfig != nil {
+			// Safari can render a 421 instead of retrying a coalesced connection.
+			publicServer.Protocols = new(http.Protocols)
+			publicServer.Protocols.SetHTTP1(true)
+		}
 	}
 	var listenerWG sync.WaitGroup
 	fatal := make(chan error, 1)
