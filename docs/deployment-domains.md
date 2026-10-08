@@ -116,7 +116,9 @@ mesh serve desktop 3301 --at /platform --private-host fregat --isolate
 With `primary: "new.example"`, this publishes `https://fregat.new.example/`.
 `--private-host` accepts a label or a full hostname in an accepted domain. When
 `--at` is omitted, the hostname label becomes the route key. `mesh serve ls`
-shows both the root hostname and the original private path mount.
+shows the root hostname. The original machine path returns 404, including API
+and WebSocket requests. The route key still identifies the service for commands
+such as `mesh serve stop /platform` and `mesh unserve /platform`.
 
 The service stays on the origin's tailnet listener. The public edge receives no
 service publication. Existing proxy, files, static, on-demand, and isolation
@@ -127,8 +129,9 @@ app identifiers are reserved.
 
 For an existing route, configure `serviceNames` first. Reconcile its owned DNS
 record, install the private-service certificate, and check the hostname through
-the deployment gateway. Then publish the route with `--private-host`. This order
-keeps the old page URL available throughout setup.
+the deployment gateway. Then publish the route with `--private-host`. Publishing
+retires the original machine path, so verify DNS and the certificate before
+changing an existing route.
 
 Configure DNS ownership separately on the certificate renewer. Add
 `serviceNames` to the corresponding origin in its private-name JSON file:
@@ -165,14 +168,9 @@ The TLS gateway needs the deployment's `--domains` policy and forwards these
 names to the private origin listener. It has no service-specific proxy table.
 
 Old links on the short host, such as `/platform/chat?id=1`, redirect to
-`/chat?id=1`. Page navigation on the original private path redirects to the
-short hostname once the origin has an installed, valid certificate for it.
-Until then, page requests continue using the original mount. These redirects
-use temporary status 307 so browser caches allow a corrected destination.
-Non-navigation API requests on the old mount keep their
-existing path proxy behavior. Browser storage and pairing belong to an origin;
-a newly opened short hostname may need pairing even while old API clients
-continue working.
+`/chat?id=1` with temporary status 307. The original machine path is retired
+for pages, API requests and WebSockets. Browser storage and pairing belong to
+an origin, so opening the short hostname may need pairing.
 
 ## App overlap
 
