@@ -125,6 +125,11 @@ private-service checks as path mounts. A hostname belongs to one service and
 cannot overlap a public service. `mesh`, `apps`, and four-character temporary
 app identifiers are reserved.
 
+For an existing route, configure `serviceNames` first. Reconcile its owned DNS
+record, install the private-service certificate, and check the hostname through
+the deployment gateway. Then publish the route with `--private-host`. This order
+keeps the old page URL available throughout setup.
+
 Configure DNS ownership separately on the certificate renewer. Add
 `serviceNames` to the corresponding origin in its private-name JSON file:
 

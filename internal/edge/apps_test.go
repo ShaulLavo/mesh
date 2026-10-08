@@ -271,8 +271,8 @@ func TestCoalescedAppConnectionRequestsRetryBeforeAuthorization(t *testing.T) {
 	request.TLS.ServerName = "7k3d.mesh.test"
 	response := httptest.NewRecorder()
 	registry.ServeHTTP(response, request)
-	if response.Code != http.StatusMisdirectedRequest || calls != 0 {
-		t.Fatalf("coalesced connection = %d, calls=%d; browser needs a 421 to reconnect", response.Code, calls)
+	if response.Code != http.StatusMisdirectedRequest || response.Body.Len() != 0 || calls != 0 {
+		t.Fatalf("coalesced connection = %d, body=%q, calls=%d; want an empty 421 before dispatch", response.Code, response.Body.String(), calls)
 	}
 	request.TLS.ServerName = apps.ManagementHost()
 	response = httptest.NewRecorder()
