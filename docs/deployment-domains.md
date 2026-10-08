@@ -1,6 +1,7 @@
 # Deployment domains
 
-Mesh reads `domains.json` beside `hosts.json` for the daemon and naming commands.
+Mesh reads `domains.json` beside `hosts.json` before the interactive picker and
+ordinary client commands start.
 `MESH_CONFIG_DIR` selects that directory. Otherwise Mesh uses
 `$XDG_CONFIG_HOME/mesh` or `~/.config/mesh`.
 
@@ -18,10 +19,23 @@ domain after its own signed certificate and name have been installed.
 Configuration is immutable during a process lifetime. Restart each affected
 process after changing it.
 
-A missing policy leaves native sessions available and disables deployment names.
-HTTPS listeners and app edges require a configured domain. Native session
-commands and detached workers do not read this file. Invalid policy stops a
-naming command before it starts a listener.
+Existing installations upgrade automatically when this file is missing. Startup
+reads the deployment domain from the existing private name and certificate
+stores, then writes a mode-0600 policy with that domain as both `primary` and
+`legacyCertificateDomain`. This keeps the existing URLs and certificate paths.
+The migration preserves any policy already on disk, including one published by
+a concurrent startup.
+
+An existing catalog or address book, or a command that enables deployment names,
+uses the pre-policy release domain when certificate and name state are absent.
+That historical default is `shaulavo.dev`. Configure `domains.json` to choose
+another domain for a new deployment.
+
+A fresh native-only installation works with no policy. Detached workers, agent
+helpers, version inspection, and update helpers stay independent of this file.
+Invalid policy stops ordinary commands before they start a listener or validate
+service caches. Managed updates and direct executable replacement both migrate
+on the new daemon's startup.
 
 Use canonical lowercase DNS names. Mesh accepts at most eight domains and rejects
 duplicates, parent/child overlaps, IP addresses, unknown JSON fields, and files
@@ -94,14 +108,16 @@ Retirement marks every configured alias inactive.
 
 Requests keep their own domain for the injected app controls, management pages,
 pairing redirects, origin checks, and return URLs. A return URL must name the same
-app ID on an accepted domain. Parent-domain cookies are stripped for every
-accepted domain. Signed admissions retain their target hostname, URI, method,
+app ID on an accepted domain. Private view challenges set the browser nonce on
+the destination app domain, then return to the authenticated manager to issue
+the ticket. Browser cookies remain host-only. Parent-domain cookies are stripped
+for every accepted domain. Signed admissions retain their target hostname, URI, method,
 owner identity, and generation checks.
 
 ## Roll out without losing remote access
 
 1. Back up affected configuration files and inspect DNS in both zones.
-2. Set an explicit policy for the existing domain before deploying this source.
+2. Deploy this source and check the policy created for the existing domain.
 3. Add the destination alias on origins, app edges, renewers, and gateways.
 4. Install destination DNS and certificates while keeping old renewals active.
 5. Check both domains for private services and disposable apps.

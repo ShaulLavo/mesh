@@ -13,20 +13,16 @@ import (
 	"github.com/charmbracelet/fang"
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/domainpolicy"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/release"
 )
 
 func main() {
-	if namingCommand(os.Args[1:]) {
-		config, err := cli.ConfigPath()
-		if err == nil {
-			err = domainpolicy.Initialize(filepath.Join(filepath.Dir(config), "domains.json"))
-		}
-		if err != nil {
-			_, _ = fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
+	if err := initializeDeployment(os.Args[1:]); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
+
 	root := cli.NewCommand(commandDependencies())
 	if plainAgentCommand(os.Args[1:]) {
 		finishAgentCommand(os.Args[1], root.ExecuteContext(context.Background()))
@@ -81,11 +77,11 @@ func finishAgentCommand(name string, err error) {
 	os.Exit(1)
 }
 
-func namingCommand(args []string) bool {
+func entryCommand(args []string) string {
 	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
 		if args[0] == "--leave-key" {
 			if len(args) < 2 {
-				return false
+				return ""
 			}
 			args = args[2:]
 			continue
@@ -93,12 +89,43 @@ func namingCommand(args []string) bool {
 		args = args[1:]
 	}
 	if len(args) == 0 {
-		return false
+		return ""
 	}
-	switch args[0] {
-	case "daemon", "serve", "unserve", "app", "private-names":
+	return args[0]
+}
+
+func namingCommand(args []string) bool {
+	return !plainAgentCommand([]string{entryCommand(args)})
+}
+
+func deploymentRequested(args []string) bool {
+	switch entryCommand(args) {
+	case "app", "serve", "unserve", "private-names":
 		return true
-	default:
-		return false
+	case "daemon":
+		for _, arg := range args {
+			if arg == "--https-port" || arg == "--edge" || arg == "--private-names-config" || strings.HasPrefix(arg, "--https-port=") || strings.HasPrefix(arg, "--edge=") || strings.HasPrefix(arg, "--private-names-config=") {
+				return true
+			}
+		}
 	}
+	return false
+}
+
+func initializeDeployment(args []string) error {
+	if !namingCommand(args) {
+		return nil
+	}
+	config, err := cli.ConfigPath()
+	if err != nil {
+		return fmt.Errorf("deployment configuration: %w", err)
+	}
+	state, err := paths.StateDirPath()
+	if err != nil {
+		return fmt.Errorf("deployment state: %w", err)
+	}
+	if err := domainpolicy.InitializeDeployment(filepath.Join(filepath.Dir(config), "domains.json"), state, deploymentRequested(args)); err != nil {
+		return fmt.Errorf("initialize deployment policy: %w", err)
+	}
+	return nil
 }

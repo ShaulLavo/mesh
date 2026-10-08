@@ -3,7 +3,9 @@ package apps
 import (
 	"context"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -109,5 +111,46 @@ func TestAliasManagerListAndFrameKeepRequestDomain(t *testing.T) {
 		if path != "/" && !strings.Contains(response.Header().Get("Content-Security-Policy"), "frame-ancestors https://"+app.ID+".old.test") {
 			t.Fatal("alias frame policy points at another domain")
 		}
+	}
+}
+
+func TestPrivateAliasReturnConsumesTicketWithHostOnlyCookies(t *testing.T) {
+	for _, domain := range []string{"mesh.test", "old.test"} {
+		t.Run(domain, func(t *testing.T) {
+			f := newAppFixture(t)
+			app := createStaticApp(t, f)
+			owner := pairedOwner(t, f)
+			jar, err := cookiejar.New(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager, _ := url.Parse(ManagementOrigin())
+			jar.SetCookies(manager, []*http.Cookie{owner})
+			destination := "https://" + app.ID + "." + domain + "/page?x=1"
+			current := ManagementOrigin() + "/view?" + url.Values{"id": {app.ID}, "return": {destination}}.Encode()
+			for step := 0; step < 4; step++ {
+				request := httptest.NewRequest(http.MethodGet, current, nil)
+				for _, cookie := range jar.Cookies(request.URL) {
+					request.AddCookie(cookie)
+				}
+				response := httptest.NewRecorder()
+				if !f.edge.ServeHost(response, request, request.URL.Hostname()) {
+					t.Fatal("redirect left deployment")
+				}
+				if response.Code != http.StatusSeeOther {
+					t.Fatalf("step %d %s: %d %s", step, current, response.Code, response.Body.String())
+				}
+				for _, cookie := range response.Result().Cookies() {
+					if cookie.Domain != "" {
+						t.Fatal("view flow widened a cookie's domain")
+					}
+				}
+				jar.SetCookies(request.URL, response.Result().Cookies())
+				current = response.Header().Get("Location")
+			}
+			if current != destination {
+				t.Fatalf("consumed return: %s", current)
+			}
+		})
 	}
 }

@@ -99,7 +99,7 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		query := url.Values{"id": {id}, "view_nonce": {nonceHash}, returnQueryKey: {appReturn(r, id, r.URL.Query().Get(returnQueryKey))}}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		http.Redirect(w, r, managementOrigin(r)+"/view?"+query.Encode(), http.StatusSeeOther) //nolint:gosec // managementOrigin selects only configured domains; query values are escaped.
+		http.Redirect(w, r, viewManagerOrigin(r)+"/view?"+query.Encode(), http.StatusSeeOther) //nolint:gosec // managementOrigin selects only configured domains; query values are escaped.
 		return true
 	}
 	if !exists || app.Status != "active" {
@@ -562,7 +562,8 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 			}
 			nonceHash := r.URL.Query().Get("view_nonce")
 			if nonceHash == "" {
-				challenge := appOrigin(r, id) + "/.mesh-app/view-start?" + url.Values{returnQueryKey: {destination}}.Encode()
+				target, _ := url.Parse(destination)
+				challenge := target.Scheme + "://" + target.Host + "/.mesh-app/view-start?" + url.Values{returnQueryKey: {destination}, "manager_domain": {managementOrigin(r)}}.Encode()
 				http.Redirect(w, r, challenge, http.StatusSeeOther) //nolint:gosec // URL uses the registry-owned app ID; only the escaped return query is supplied by the caller.
 				return
 			}
@@ -948,4 +949,16 @@ func appOrigin(r *http.Request, id string) string {
 func acceptedAppHost(host, id string) bool {
 	label, _, ok := domainpolicy.Label(host, false)
 	return ok && label == id
+}
+
+// The challenge may run on another accepted app domain. Return to the
+// authenticated manager without sharing its host-only browser cookie.
+func viewManagerOrigin(r *http.Request) string {
+	origin := r.URL.Query().Get("manager_domain")
+	for _, domain := range domainpolicy.Domains() {
+		if origin == "https://apps."+domain {
+			return origin
+		}
+	}
+	return managementOrigin(r)
 }

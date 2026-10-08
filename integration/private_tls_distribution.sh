@@ -338,4 +338,20 @@ EXPECTED_TWO=$(openssl x509 -in "$TEST_ROOT/live-two.crt" -noout -fingerprint -s
 [ "$(served_fingerprint)" = "$EXPECTED_TWO" ] || fail "live certificate did not hot-rotate"
 kill -0 "$DAEMON_PID" 2>/dev/null || fail "daemon restarted or exited during certificate rotation"
 
+# Pre-policy installations keep their certificate/name stores and routes when
+# the replacement executable first starts with no domains.json.
+kill "$DAEMON_PID" || fail "stop fixture daemon"
+wait "$DAEMON_PID" || true
+DAEMON_PID=""
+rm -- "$MESH_CONFIG_DIR/domains.json"
+"$MESH" daemon --https-port "$HTTPS_PORT" --certificate-renewer-id "$RENEWER_ID" >"$TEST_ROOT/migrated.log" 2>&1 &
+DAEMON_PID=$!
+wait_for_socket || fail "pre-policy restart failed: $(<"$TEST_ROOT/migrated.log")"
+[ -f "$MESH_CONFIG_DIR/domains.json" ] || fail "policy migration was not persisted"
+[ "$(served_fingerprint)" = "$EXPECTED_TWO" ] || fail "migration changed the certificate slot"
+[ "$(host_private_name)" = "$PRIVATE_NAME" ] || fail "migration lost the pinned private name"
+BODY=$(curl --noproxy '*' --fail --silent --max-time 2 --cacert "$TEST_ROOT/live-two.crt" \
+  --resolve "$PRIVATE_NAME:$HTTPS_PORT:127.0.0.1" "https://$PRIVATE_NAME:$HTTPS_PORT/site/") || fail "migrated HTTPS service request"
+[ "$BODY" = PRIVATE_TLS_MARKER ] || fail "migration lost the existing service route"
+
 echo "PASS: v3 verified private ingress, bound the private name, and hot-rotated live TLS"
