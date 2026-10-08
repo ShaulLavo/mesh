@@ -91,12 +91,23 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		return true
 	}
 	if r.URL.Path == "/.mesh-app/view-start" && r.Method == http.MethodGet {
+		destination := appReturn(r, id, r.URL.Query().Get(returnQueryKey))
+		target, _ := url.Parse(destination)
+		if target.Host != name {
+			http.Error(w, "Open the view link on its app host", http.StatusBadRequest)
+			return true
+		}
+		manager, _ := url.Parse(viewManagerOrigin(r))
+		if !e.viewHostReady(target.Host) || !e.viewHostReady(manager.Host) {
+			http.Error(w, "Install the deployment certificate to open a private view", http.StatusServiceUnavailable)
+			return true
+		}
 		nonceHash, err := e.auth.BeginView(w)
 		if err != nil {
 			http.Error(w, "Cannot start private view", http.StatusServiceUnavailable)
 			return true
 		}
-		query := url.Values{"id": {id}, "view_nonce": {nonceHash}, returnQueryKey: {appReturn(r, id, r.URL.Query().Get(returnQueryKey))}}
+		query := url.Values{"id": {id}, "view_nonce": {nonceHash}, returnQueryKey: {destination}}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		http.Redirect(w, r, viewManagerOrigin(r)+"/view?"+query.Encode(), http.StatusSeeOther) //nolint:gosec // managementOrigin selects only configured domains; query values are escaped.
@@ -560,9 +571,13 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, destination, http.StatusSeeOther) //nolint:gosec // appReturn fixes the destination to this registry-owned app host.
 				return
 			}
+			target, _ := url.Parse(destination)
+			if !e.viewHostReady(target.Host) || !e.viewHostReady(r.Host) {
+				http.Error(w, "Install the deployment certificate to open a private view", http.StatusServiceUnavailable)
+				return
+			}
 			nonceHash := r.URL.Query().Get("view_nonce")
 			if nonceHash == "" {
-				target, _ := url.Parse(destination)
 				challenge := target.Scheme + "://" + target.Host + "/.mesh-app/view-start?" + url.Values{returnQueryKey: {destination}, "manager_domain": {managementOrigin(r)}}.Encode()
 				http.Redirect(w, r, challenge, http.StatusSeeOther) //nolint:gosec // URL uses the registry-owned app ID; only the escaped return query is supplied by the caller.
 				return
@@ -572,7 +587,6 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Cannot issue private view", http.StatusForbidden)
 				return
 			}
-			target, _ := url.Parse(destination)
 			query := target.Query()
 			query.Set("mesh_view", ticket)
 			target.RawQuery = query.Encode()
@@ -961,4 +975,9 @@ func viewManagerOrigin(r *http.Request) string {
 		}
 	}
 	return managementOrigin(r)
+}
+
+func (e *Edge) viewHostReady(host string) bool {
+	_, _, accepted := domainpolicy.Label(host, false)
+	return accepted && e.config.ViewHostReady != nil && e.config.ViewHostReady(host)
 }

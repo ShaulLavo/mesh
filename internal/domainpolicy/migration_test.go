@@ -1,10 +1,20 @@
 package domainpolicy
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
+	"errors"
+	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestDeploymentMigrationPreservesExistingState(t *testing.T) {
@@ -62,7 +72,9 @@ func TestMigrationPreservesExistingPolicy(t *testing.T) {
 	if err := os.WriteFile(path, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := InitializeDeployment(path, t.TempDir(), true); err != nil {
+	state := t.TempDir()
+	seedPolicySlots(t, filepath.Join(state, "private-tls"), "slots")
+	if err := InitializeDeployment(path, state, true); err != nil {
 		t.Fatal(err)
 	}
 	if Primary() != "new.example" {
@@ -91,5 +103,110 @@ func TestMigrationRejectsMalformedLegacyState(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("rejected migration wrote policy: %v", err)
+	}
+}
+
+func TestMigrationRejectsMissingPolicyWithDomainSlots(t *testing.T) {
+	for _, fixture := range []struct{ profile, entry string }{
+		{"private-tls", "slots"}, {"certificates/public-edge", "slots"},
+		{"private-tls", "empty"}, {"certificates/public-edge", "empty"},
+		{"private-tls", "symlink"}, {"certificates/public-edge", "file"},
+	} {
+		t.Run(fixture.profile+"/"+fixture.entry, func(t *testing.T) {
+			active = Policy{}
+			initialize = sync.Once{}
+			t.Cleanup(func() { active = Policy{}; initialize = sync.Once{} })
+			state := t.TempDir()
+			root := filepath.Join(state, fixture.profile)
+			seedPolicySlots(t, root, fixture.entry)
+			path := filepath.Join(t.TempDir(), "domains.json")
+			err := InitializeDeployment(path, state, false)
+			var missing *MissingPolicyError
+			if !errors.As(err, &missing) || missing.Profile != root || !strings.Contains(err.Error(), "restore domains.json") {
+				t.Fatalf("missing policy recovery: %v", err)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("rejected migration published policy: %v", err)
+			}
+		})
+	}
+}
+
+func seedPolicySlots(t *testing.T, root, entry string) {
+	t.Helper()
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "domains")
+	switch entry {
+	case "slots":
+		slot := filepath.Join(path, "new.test", "live")
+		if err := os.MkdirAll(slot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(slot, "private-name"), []byte("host.mesh.new.test\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	case "empty":
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	case "symlink":
+		if err := os.Symlink(filepath.Join(root, "missing"), path); err != nil {
+			t.Fatal(err)
+		}
+	case "file":
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMigrationInfersCertificateDomainWithoutPrivateName(t *testing.T) {
+	for _, profile := range []string{"private-tls", "certificates/public-edge"} {
+		t.Run(profile, func(t *testing.T) {
+			active = Policy{}
+			initialize = sync.Once{}
+			t.Cleanup(func() { active = Policy{}; initialize = sync.Once{} })
+			state := t.TempDir()
+			expected := "other.test"
+			wildcard := "*." + expected
+			if profile == "private-tls" {
+				wildcard = "*.mesh." + expected
+			}
+			seedLegacyCertificate(t, filepath.Join(state, profile, "live"), wildcard)
+			path := filepath.Join(t.TempDir(), "domains.json")
+			if err := InitializeDeployment(path, state, false); err != nil {
+				t.Fatal(err)
+			}
+			if Primary() != expected || Current().LegacyCertificateDomain != expected {
+				t.Fatalf("certificate-only policy: %+v", Current())
+			}
+		})
+	}
+}
+
+func seedLegacyCertificate(t *testing.T, slot, wildcard string) {
+	t.Helper()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Expired certificates still identify legacy storage during recovery.
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{wildcard}, NotBefore: time.Unix(1, 0), NotAfter: time.Unix(2, 0)}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(der)
+	fingerprint := hex.EncodeToString(digest[:])
+	if err := os.MkdirAll(filepath.Join(slot, fingerprint), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(slot, fingerprint, "fullchain.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(slot, "current"), []byte(fingerprint+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -96,6 +96,9 @@ func TestPublicCertificateDomainsKeepStagingSeparate(t *testing.T) {
 		t.Fatal(err)
 	}
 	installer := runtime.Controller.(*certificateController).installers[dnsname.ProfilePublicEdge]
+	if runtime.viewHostReady("7k3d.mesh.test", time.Now()) || runtime.viewHostReady("7k3d.old.test", time.Now()) {
+		t.Fatal("empty certificate slots enabled private views")
+	}
 	now := time.Now().UTC()
 	for index, domain := range []string{"mesh.test", "old.test"} {
 		wildcard := "*." + domain
@@ -114,6 +117,9 @@ func TestPublicCertificateDomainsKeepStagingSeparate(t *testing.T) {
 		if _, err := runtime.PublicTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: "apps." + domain}); err == nil {
 			t.Fatal("staging reached live TLS")
 		}
+		if runtime.viewHostReady("7k3d."+domain, now) {
+			t.Fatal("staging certificate enabled private views")
+		}
 		live, err := dnsname.SignBundle(bundle, target.ID, dnsname.ProfilePublicEdge, dnsname.EnvironmentLive, "", signer)
 		if err != nil {
 			t.Fatal(err)
@@ -127,15 +133,30 @@ func TestPublicCertificateDomainsKeepStagingSeparate(t *testing.T) {
 		if _, _, err := installer.Install(live); err != nil {
 			t.Fatal(err)
 		}
+		if !runtime.viewHostReady("7k3d."+domain, now) {
+			t.Fatal("live certificate installation did not enable private views")
+		}
+		if index == 0 && runtime.viewHostReady("7k3d.old.test", now) {
+			t.Fatal("primary certificate enabled an empty alias slot")
+		}
+	}
+	if runtime.viewHostReady("7k3d.other.test", now) || (certificateRuntime{}).viewHostReady("7k3d.mesh.test", now) {
+		t.Fatal("unconfigured host or proxy runtime enabled private views")
 	}
 	restarted, err := configureCertificates(config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, domain := range []string{"mesh.test", "old.test"} {
+		if !restarted.viewHostReady("7k3d."+domain, now) {
+			t.Fatal("installed certificate did not enable private views after restart")
+		}
 		cert, err := restarted.PublicTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: "7k3d." + domain})
 		if err != nil {
 			t.Fatal(err)
+		}
+		if restarted.viewHostReady("7k3d."+domain, cert.Leaf.NotAfter) || restarted.viewHostReady("7k3d."+domain, cert.Leaf.NotBefore.Add(-time.Second)) {
+			t.Fatal("certificate outside its validity enabled private views")
 		}
 		if err := cert.Leaf.VerifyHostname("7k3d." + domain); err != nil {
 			t.Fatal(err)

@@ -5,8 +5,10 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/edge"
@@ -200,4 +202,16 @@ func configureCertificateProfile(root, name string, profile dnsname.CertificateP
 		markPrivateNameReady = privateName.MarkIngressReady
 	}
 	return installer, &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: source.GetCertificate}, currentPrivateName, markPrivateNameReady, nil
+}
+
+func (c certificateRuntime) viewHostReady(host string, now time.Time) bool {
+	if _, _, accepted := domainpolicy.Label(host, false); !accepted || c.PublicTLS == nil {
+		return false
+	}
+	certificate, err := c.PublicTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: host})
+	if err != nil || certificate == nil || certificate.Leaf == nil {
+		return false
+	}
+	leaf := certificate.Leaf
+	return !now.Before(leaf.NotBefore) && now.Before(leaf.NotAfter) && leaf.VerifyHostname(host) == nil
 }

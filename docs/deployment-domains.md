@@ -24,7 +24,10 @@ reads the deployment domain from the existing private name and certificate
 stores, then writes a mode-0600 policy with that domain as both `primary` and
 `legacyCertificateDomain`. This keeps the existing URLs and certificate paths.
 The migration preserves any policy already on disk, including one published by
-a concurrent startup.
+a concurrent startup. When per-domain certificate slots already exist and the
+policy is missing, startup stops with a recovery error. Restore `domains.json`
+from the deployment configuration backup before starting ordinary commands.
+`mesh update` remains available during recovery.
 
 An existing catalog or address book, or a command that enables deployment names,
 uses the pre-policy release domain when certificate and name state are absent.
@@ -110,7 +113,14 @@ Requests keep their own domain for the injected app controls, management pages,
 pairing redirects, origin checks, and return URLs. A return URL must name the same
 app ID on an accepted domain. Private view challenges set the browser nonce on
 the destination app domain, then return to the authenticated manager to issue
-the ticket. Browser cookies remain host-only. Parent-domain cookies are stripped
+the ticket. The challenge return host must match the app host that sets the
+nonce. Private browser grants require currently valid, installed live public-edge
+certificates for both the app and its manager. Alias configuration and staging
+certificates alone leave grants disabled. Certificate renewal enables grants
+without restarting the edge. Proxy mode keeps grants disabled because its
+external TLS terminator has no installed certificate slot in Mesh; use the
+direct-TLS listener for private browser views. Public apps and Tailnet owner
+access keep their existing behavior. Browser cookies remain host-only. Parent-domain cookies are stripped
 for every accepted domain. Signed admissions retain their target hostname, URI, method,
 owner identity, and generation checks.
 

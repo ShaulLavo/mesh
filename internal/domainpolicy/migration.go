@@ -54,7 +54,19 @@ func InitializeDeployment(path, stateDir string, deploymentRequested bool) error
 	return Initialize(path)
 }
 
+// MissingPolicyError identifies state whose primary and aliases need recovery.
+type MissingPolicyError struct {
+	Profile string
+}
+
+func (e *MissingPolicyError) Error() string {
+	return fmt.Sprintf("domain policy: per-domain certificate slots exist in %s; restore domains.json from the deployment configuration backup", e.Profile)
+}
+
 func persistedDomain(stateDir string) (string, bool, error) {
+	if err := requireLegacyLayout(stateDir); err != nil {
+		return "", false, err
+	}
 	domain, err := persistedPrivateDomain(stateDir)
 	if err != nil {
 		return "", false, err
@@ -229,4 +241,16 @@ func mergeLegacyDomain(current, candidate string) (string, error) {
 		return "", errors.New("domain policy: legacy certificate domains disagree")
 	}
 	return candidate, nil
+}
+
+func requireLegacyLayout(stateDir string) error {
+	for _, profile := range []string{"private-tls", filepath.Join("certificates", "public-edge")} {
+		root := filepath.Join(stateDir, profile)
+		if _, err := os.Lstat(filepath.Join(root, "domains")); err == nil {
+			return &MissingPolicyError{Profile: root}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("domain policy: inspect per-domain certificate slots: %w", err)
+		}
+	}
+	return nil
 }

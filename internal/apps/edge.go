@@ -23,6 +23,9 @@ import (
 )
 
 type EdgeConfig struct {
+	// ViewHostReady checks the currently installed live certificate for a host.
+	// An absent callback keeps private browser grants disabled.
+	ViewHostReady func(string) bool
 	Acquire       func(*http.Request, string) (func(), error)
 	ClientIP      func(*http.Request) netip.Addr
 	NetworkOwners func(context.Context, netip.Addr) ([]string, error)

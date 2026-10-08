@@ -175,7 +175,7 @@ func newAppFixture(t *testing.T) *appFixture {
 }
 func (f *appFixture) openEdge(t *testing.T) *Edge {
 	t.Helper()
-	e, err := NewEdge(context.Background(), EdgeConfig{Store: f.edgeStore, Key: f.edgeKey, Allowed: map[string]bool{identityFor(f.ownerKey): true, identityFor(f.otherKey): true}, Resolve: func(context.Context, string) (netip.AddrPort, error) {
+	e, err := NewEdge(context.Background(), EdgeConfig{ViewHostReady: func(string) bool { return true }, Store: f.edgeStore, Key: f.edgeKey, Allowed: map[string]bool{identityFor(f.ownerKey): true, identityFor(f.otherKey): true}, Resolve: func(context.Context, string) (netip.AddrPort, error) {
 		return netip.MustParseAddrPort("127.0.0.1:9090"), nil
 	}, Now: func() time.Time { return f.now }})
 	if err != nil {

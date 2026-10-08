@@ -154,3 +154,55 @@ func TestPrivateAliasReturnConsumesTicketWithHostOnlyCookies(t *testing.T) {
 		})
 	}
 }
+
+func TestViewStartRequiresItsOwnReturnHost(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	destination := "https://" + app.ID + ".mesh.test/"
+	request := httptest.NewRequest(http.MethodGet, "https://"+app.ID+".old.test/.mesh-app/view-start?return="+url.QueryEscape(destination), nil)
+	response := httptest.NewRecorder()
+	f.edge.ServeHost(response, request, request.URL.Hostname())
+	if response.Code != http.StatusBadRequest || len(response.Result().Cookies()) != 0 {
+		t.Fatalf("cross-host challenge: %d %s", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestPrivateViewRejectsChosenNonceWithoutDomainCertificate(t *testing.T) {
+	for _, unavailable := range []string{"callback", "alias", "manager"} {
+		t.Run(unavailable, func(t *testing.T) {
+			f := newAppFixture(t)
+			f.edge.config.ViewHostReady = nil
+			if unavailable != "callback" {
+				f.edge.config.ViewHostReady = func(host string) bool {
+					if unavailable == "manager" {
+						return host != ManagementHost()
+					}
+					return !strings.HasSuffix(host, ".old.test")
+				}
+			}
+			app := createStaticApp(t, f)
+			owner := pairedOwner(t, f)
+			destination := "https://" + app.ID + ".old.test/"
+			request := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/view?"+url.Values{"id": {app.ID}, "return": {destination}, "view_nonce": {strings.Repeat("a", 64)}}.Encode(), nil)
+			request.AddCookie(owner)
+			response := httptest.NewRecorder()
+			f.edge.ServeHost(response, request, ManagementHost())
+			if response.Code != http.StatusServiceUnavailable || response.Header().Get("Location") != "" {
+				t.Fatalf("uncertified nonce redirect: %d %s", response.Code, response.Header().Get("Location"))
+			}
+		})
+	}
+}
+
+func TestViewStartRequiresInstalledManagerCertificate(t *testing.T) {
+	f := newAppFixture(t)
+	app := createStaticApp(t, f)
+	f.edge.config.ViewHostReady = func(host string) bool { return host != ManagementHost() }
+	destination := "https://" + app.ID + ".old.test/"
+	request := httptest.NewRequest(http.MethodGet, destination+".mesh-app/view-start?"+url.Values{"return": {destination}, "manager_domain": {ManagementOrigin()}}.Encode(), nil)
+	response := httptest.NewRecorder()
+	f.edge.ServeHost(response, request, request.URL.Hostname())
+	if response.Code != http.StatusServiceUnavailable || len(response.Result().Cookies()) != 0 || response.Header().Get("Location") != "" {
+		t.Fatalf("uncertified manager challenge: %d %s", response.Code, response.Header().Get("Location"))
+	}
+}

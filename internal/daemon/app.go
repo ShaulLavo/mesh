@@ -351,6 +351,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	var edgeRegistry *edge.Registry
 	var appPublic *apps.Edge
+	var certificateRuntime certificateRuntime
 	var tunnelForwarder tunnel.Activator
 	var edgeControl controlHandler = disabledEdgeController{}
 	var publicListenAddress string
@@ -391,7 +392,8 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			networkOwners = tailnet.OwnerResolver(origins)
 		}
 		appPublic, err = apps.NewEdge(daemonCtx, apps.EdgeConfig{
-			Store: store, Key: meshPrivateKey, Allowed: allowed, Now: opts.now,
+			ViewHostReady: func(host string) bool { return certificateRuntime.viewHostReady(host, opts.now()) },
+			Store:         store, Key: meshPrivateKey, Allowed: allowed, Now: opts.now,
 			Resolve: appResolver(publicEdgeConfig.Origins, edge.TailscaleResolver(discoverAllPeers), waker.pin),
 			Acquire: edgeRegistry.AcquireApp, ClientIP: edgeRegistry.AppClientIP, NetworkOwners: networkOwners,
 		})
@@ -432,7 +434,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
-	certificateRuntime, err := configureCertificates(certificateRuntimeConfig{
+	certificateRuntime, err = configureCertificates(certificateRuntimeConfig{
 		StateDir: stateDir, TargetID: meshHost.ID, OriginHTTPSPort: cfg.HTTPSPort,
 		OriginRenewerID: cfg.CertificateRenewerID, PublicMode: publicMode, PublicCertificatePin: publicCertificatePin,
 	})
