@@ -342,7 +342,7 @@ published.download_worker(*sys.argv[1:])
                 started = time.monotonic()
                 with self.release_worker(worker), self.assertRaisesRegex(TimeoutError, "total deadline"):
                     self.download([kind])
-                self.assertLess(time.monotonic() - started, 0.8)
+                self.assertLess(time.monotonic() - started, 0.6)
                 self.assertEqual(len(self.state()["attempts"]), 1)
                 with self.assertRaises(ProcessLookupError):
                     os.kill(self.state()["workerPID"], 0)
@@ -378,7 +378,7 @@ published.download_worker(*sys.argv[1:])
         started = time.monotonic()
         with self.release_worker(worker), self.assertRaisesRegex(TimeoutError, "total deadline"):
             self.download(["dns", "good"])
-        self.assertLess(time.monotonic() - started, 0.8)
+        self.assertLess(time.monotonic() - started, 0.6)
         self.assertEqual(len(self.state()["attempts"]), 1)
 
 
