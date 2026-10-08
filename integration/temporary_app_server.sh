@@ -200,7 +200,8 @@ kill -TERM "$ORIGIN_PID"
 wait "$ORIGIN_PID" || fail 'origin shutdown'
 ORIGIN_PID=""
 start_origin
-app_curl --fail "$APP_ENDPOINT/api" >"$TEST_ROOT/restarted.json" || fail 'app after origin restart'
+# The control socket opens before app maintenance renews the retained worker.
+app_curl --fail --retry 5 --retry-delay 1 --retry-max-time 5 "$APP_ENDPOINT/api" >"$TEST_ROOT/restarted.json" || fail 'app after origin restart'
 python3 - "$TEST_ROOT/api.json" "$TEST_ROOT/restarted.json" <<'PY'
 import json, sys
 with open(sys.argv[1]) as source:

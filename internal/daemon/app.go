@@ -442,9 +442,6 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
-	serviceRegistry.SetPrivateHostReady(func(host string) bool {
-		return certificateRuntime.privateServiceHostReady(host, opts.now())
-	})
 	var privateNamesRuntime *dnsname.PrivateNamesRuntime
 	if cfg.PrivateNamesConfig != "" {
 		privateNamesRuntime, err = dnsname.NewPrivateNamesRuntime(cfg.PrivateNamesConfig, dnsname.PrivateNamesRuntimeOptions{

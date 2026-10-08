@@ -654,7 +654,7 @@ func writeServiceTable(output io.Writer, rows []ServiceCatalogRow, mask *privacy
 	if _, err := fmt.Fprintln(writer, "ROUTE\tNAME\tHOST\tKIND\tTARGET\tSCOPE\tSTATE\tHEALTH\tURL"); err != nil {
 		return fmt.Errorf("write service table: %w", err)
 	}
-	for _, row := range serviceAliasRows(rows) {
+	for _, row := range rows {
 		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			safeTableCell(mask.Value("route", serviceRoute(row.Service))), safeTableCell(mask.Value("name", serviceDisplayName(row.Service))), safeTableCell(mask.Value("host", HostLabel(row.Host))), safeTableCell(row.Service.Kind), privateServiceTarget(mask, row.Service),
 			safeTableCell(row.Scope()), safeTableCell(row.State()), safeTableCell(row.Health()), safeTableCell(mask.Value("url", row.URL()))); err != nil {
