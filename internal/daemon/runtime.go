@@ -239,6 +239,7 @@ func serveBoundListeners(
 			BaseContext:       func(net.Listener) context.Context { return ctx },
 			TLSConfig:         normalized.tlsConfig,
 		}
+		trackNewHTTPConnections(httpsServer)
 	}
 	var publicServer *http.Server
 	if publicListener != nil {
@@ -257,6 +258,7 @@ func serveBoundListeners(
 			publicServer.Protocols = new(http.Protocols)
 			publicServer.Protocols.SetHTTP1(true)
 		}
+		trackNewHTTPConnections(publicServer)
 	}
 	var listenerWG sync.WaitGroup
 	fatal := make(chan error, 1)
@@ -607,6 +609,7 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 		ReadHeaderTimeout: httpReadHeaderTimeout,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
+	trackNewHTTPConnections(server.Server)
 	return server
 }
 
