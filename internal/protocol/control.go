@@ -180,6 +180,7 @@ type ServiceInfo struct {
 	Kind          string `json:"kind"`
 	Target        string `json:"target"`
 	PublicName    string `json:"publicName,omitempty"`
+	PrivateHost   string `json:"privateHost,omitempty"`
 	WakeOnRequest bool   `json:"wakeOnRequest,omitempty"`
 	Isolate       bool   `json:"isolate,omitempty"`
 	Healthy       bool   `json:"healthy"`

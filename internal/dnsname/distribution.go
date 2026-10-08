@@ -31,21 +31,22 @@ const (
 	maximumDistributionTargets = 256
 )
 
-// CertificateProfile identifies the only two certificate purposes Mesh may
+// CertificateProfile identifies the certificate purposes Mesh may
 // distribute. A profile is part of the signed transcript and selects both the
 // expected DNS name and the install slot.
 type CertificateProfile string
 
 const (
-	ProfilePrivateOrigin CertificateProfile = "private-origin"
-	ProfilePublicEdge    CertificateProfile = "public-edge"
+	ProfilePrivateOrigin  CertificateProfile = "private-origin"
+	ProfilePublicEdge     CertificateProfile = "public-edge"
+	ProfilePrivateService CertificateProfile = "private-service"
 )
 
 func certificateNameForProfile(profile CertificateProfile) (string, error) {
 	switch profile {
 	case ProfilePrivateOrigin:
 		return WildcardName(), nil
-	case ProfilePublicEdge:
+	case ProfilePublicEdge, ProfilePrivateService:
 		return PublicWildcardName(), nil
 	default:
 		return "", fmt.Errorf("dnsname: unsupported certificate profile %q", profile)
@@ -252,9 +253,9 @@ func NewInstaller(config InstallerConfig) (*Installer, error) {
 		if config.PrivateName == nil {
 			return nil, errors.New("dnsname: private-origin installer requires a private-name source")
 		}
-	case ProfilePublicEdge:
+	case ProfilePublicEdge, ProfilePrivateService:
 		if config.PrivateName != nil {
-			return nil, errors.New("dnsname: public-edge installer must not configure a private-name source")
+			return nil, fmt.Errorf("dnsname: %s installer must not configure a private-name source", config.Profile)
 		}
 	}
 	if config.Now == nil {
@@ -604,7 +605,7 @@ func randomRequestID() (string, error) {
 }
 
 func acceptedCertificateName(profile CertificateProfile, name string) bool {
-	if profile != ProfilePrivateOrigin && profile != ProfilePublicEdge {
+	if profile != ProfilePrivateOrigin && profile != ProfilePublicEdge && profile != ProfilePrivateService {
 		return false
 	}
 	for _, domain := range domainpolicy.Domains() {

@@ -189,11 +189,8 @@ func TestRegistryPrivateGatePrecedesRouteHandlers(t *testing.T) {
 }
 
 func TestRegistryWebSocketOrigins(t *testing.T) {
-	for _, public := range []bool{false, true} {
-		host := "pc.mesh.mesh.test"
-		if public {
-			host = "app.mesh.test"
-		}
+	for _, host := range []string{"pc.mesh.mesh.test", "app.mesh.test", "console.mesh.test"} {
+		public := host == "app.mesh.test"
 		t.Run(host, func(t *testing.T) {
 			var hits atomic.Int32
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -218,7 +215,14 @@ func TestRegistryWebSocketOrigins(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			registry, err := NewRegistry([]Service{{Name: "api", Kind: Proxy, Target: port, PublicName: "app.mesh.test"}})
+			service := Service{Name: "api", Kind: Proxy, Target: port, PublicName: "app.mesh.test"}
+			requestPath := "/api/socket"
+			if host == "console.mesh.test" {
+				service.PublicName = ""
+				service.PrivateHost = host
+				requestPath = "/socket"
+			}
+			registry, err := NewRegistry([]Service{service})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -243,7 +247,7 @@ func TestRegistryWebSocketOrigins(t *testing.T) {
 							"null":                      "same-origin",
 						}[origin])
 					}
-					conn, response, err := websocket.Dial(ctx, "wss"+strings.TrimPrefix(front.URL, "https")+"/api/socket", &websocket.DialOptions{
+					conn, response, err := websocket.Dial(ctx, "wss"+strings.TrimPrefix(front.URL, "https")+requestPath, &websocket.DialOptions{
 						HTTPClient: front.Client(), Host: host, HTTPHeader: headers,
 					})
 					if response != nil && response.Body != nil {

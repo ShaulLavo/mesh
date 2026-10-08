@@ -28,7 +28,7 @@ def catalog_snapshot(state, session_id):
         columns = [row[1] for row in database.execute("PRAGMA table_info(hosts)")]
         rows = database.execute("SELECT id, host_id, command, cwd, created_at FROM sessions "
                                 "WHERE id = ? AND state IN ('running', 'detached') ORDER BY host_id", (session_id,)).fetchall()
-    require(version == 10, "retained catalog schema version differs from the source contract")
+    require(isinstance(version, int) and version > 0, "retained catalog schema version is absent or invalid")
     require(len(rows) == 1, "retained active session is absent or duplicated in the catalog")
     return {"device": stat.st_dev, "inode": stat.st_ino, "schemaVersion": version,
             "schema": schema, "hostColumns": columns, "immutableSessionRows": rows}
@@ -44,6 +44,8 @@ class RetainedCatalog:
         self.credentials = {path: path.read_bytes() for path in (
             fixture.remote / "identity.key", fixture.remote / "authorized_keys", fixture.local / "identity.key")}
         self.worker_build = json.loads(self.metadata_path().read_text())["build"]
+        require(self.initial["schemaVersion"] == self.worker_build["stateVersion"],
+                "retained catalog schema version differs from the source contract")
         require(self.worker_build["digest"] == image_digest(worker_binary),
                 "retained worker was not created by the selected source image")
 
@@ -62,7 +64,7 @@ class RetainedCatalog:
         parent = int(subprocess.check_output(["ps", "-o", "ppid=", "-p", str(self.shell_pid)]))
         require(parent == self.worker_pid, "retained shell moved to another worker")
         digest = image_digest(daemon_binary)
-        require(host["build"]["digest"] == digest and host["build"]["stateVersion"] == 10,
+        require(host["build"]["digest"] == digest and host["build"]["stateVersion"] == self.initial["schemaVersion"],
                 "destination did not run the selected daemon image and state contract")
         require(host["id"] == host["meshIdentity"] == self.initial["immutableSessionRows"][0][1],
                 "source hop changed the retained session's cryptographic destination")

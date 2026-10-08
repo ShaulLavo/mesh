@@ -70,6 +70,7 @@ type ListenerConfig struct {
 	TailnetNames               []string
 	PrivateName                func() string
 	PrivateNames               func() []string
+	PrivateServiceHost         func(string) bool
 	TrustPublicEdgeForwarding  func(netip.Addr) bool
 	TailnetPort                uint16
 	WebSocketPath              string
@@ -415,6 +416,7 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 			tailnetNames:              append([]string(nil), cfg.TailnetNames...),
 			privateName:               cfg.PrivateName,
 			privateNames:              cfg.PrivateNames,
+			privateServiceHost:        cfg.PrivateServiceHost,
 			trustPublicEdgeForwarding: cfg.TrustPublicEdgeForwarding,
 		},
 	}

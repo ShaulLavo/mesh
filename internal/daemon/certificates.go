@@ -5,12 +5,12 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/shaul/mesh/internal/domainpolicy"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/shaul/mesh/internal/dnsname"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/protocol"
 )
@@ -37,7 +37,7 @@ func newCertificateController(installers map[dnsname.CertificateProfile]certific
 		if installer == nil {
 			return nil, errors.New("daemon: nil certificate installer")
 		}
-		if profile != dnsname.ProfilePrivateOrigin && profile != dnsname.ProfilePublicEdge {
+		if profile != dnsname.ProfilePrivateOrigin && profile != dnsname.ProfilePublicEdge && profile != dnsname.ProfilePrivateService {
 			return nil, errors.New("daemon: unsupported certificate installer profile")
 		}
 		copyInstallers[profile] = installer
@@ -140,7 +140,15 @@ func configureCertificates(config certificateRuntimeConfig) (certificateRuntime,
 			return certificateRuntime{}, err
 		}
 		installers[dnsname.ProfilePrivateOrigin] = installer
-		runtime.OriginTLS = tlsConfig
+		shortInstaller, shortTLS, _, _, err := configureCertificateDomains(
+			filepath.Join(config.StateDir, certificateDirectoryName, string(dnsname.ProfilePrivateService)),
+			dnsname.ProfilePrivateService, config.TargetID, config.OriginRenewerID,
+		)
+		if err != nil {
+			return certificateRuntime{}, err
+		}
+		installers[dnsname.ProfilePrivateService] = shortInstaller
+		runtime.OriginTLS = privateServiceTLS(tlsConfig, shortTLS)
 		runtime.PrivateName = privateName
 		runtime.PrivateNames = installer.(*certificateDomains).privateNames
 		runtime.PrivateNameReady = privateNameReady

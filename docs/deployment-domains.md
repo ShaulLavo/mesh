@@ -105,6 +105,61 @@ at most eight files, one per domain, and rejects repeated paths and cycles.
 Tokens remain separate exact-0600 files. No live DNS or ACME operation runs
 until the configured renewal command or daemon starts it.
 
+## Private service hosts
+
+A served route can have a private hostname at its root:
+
+```sh
+mesh serve desktop 3301 --at /platform --private-host fregat --isolate
+```
+
+With `primary: "new.example"`, this publishes `https://fregat.new.example/`.
+`--private-host` accepts a label or a full hostname in an accepted domain. When
+`--at` is omitted, the hostname label becomes the route key. `mesh serve ls`
+shows both the root hostname and the original private path mount.
+
+The service stays on the origin's tailnet listener. The public edge receives no
+service publication. Existing proxy, files, static, on-demand, and isolation
+options apply to the root hostname too. Cross-origin requests use the same
+private-service checks as path mounts. A hostname belongs to one service and
+cannot overlap a public service. `mesh`, `apps`, and four-character temporary
+app identifiers are reserved.
+
+Configure DNS ownership separately on the certificate renewer. Add
+`serviceNames` to the corresponding origin in its private-name JSON file:
+
+```json
+{
+  "name": "desktop",
+  "serviceNames": ["fregat"],
+  "tailscaleName": "desktop.example.ts.net",
+  "identity": "ORIGIN_IDENTITY",
+  "controlPort": 7337,
+  "websocketPath": "/mesh"
+}
+```
+
+The renewer creates unproxied A records pointing to that origin's Tailscale IPv4
+address. It installs a `*.<domain>` certificate in the origin's separate
+`private-service` slot, signed by the pinned renewer for the exact origin
+identity. Public-edge certificates cannot install into that slot. Existing
+private-origin certificate stores and `*.mesh.<domain>` names stay unchanged.
+Restart the configured renewer daemon or run `mesh private-names reconcile`
+with its existing config and explicit `--live --accept-tos` flags to apply the
+new names. The CLI flag alone does not create DNS records. Removing a served
+route removes its HTTP hostname; separately remove its `serviceNames` entry
+and DNS record when retiring the name.
+
+The TLS gateway needs the deployment's `--domains` policy and forwards these
+names to the private origin listener. It has no service-specific proxy table.
+
+Old links on the short host, such as `/platform/chat?id=1`, redirect to
+`/chat?id=1`. Page navigation on the original private path redirects to the
+short hostname. Non-navigation API requests on the old mount keep their
+existing path proxy behavior. Browser storage and pairing belong to an origin;
+a newly opened short hostname may need pairing even while old API clients
+continue working.
+
 ## App overlap
 
 An app ID reserves its name in every accepted domain under the same owner.

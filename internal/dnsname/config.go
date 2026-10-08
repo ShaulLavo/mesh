@@ -215,11 +215,12 @@ type PrivateNamesRuntimeOptions struct {
 
 // PrivateNamesRuntime is one fully wired operational reconciliation loop.
 type PrivateNamesRuntime struct {
-	Additional    []*PrivateNamesRuntime
-	Manager       *PrivateNamesManager
-	PublicManager *PublicCertificateManager
-	Environment   RenewalEnvironment
-	Interval      time.Duration
+	Additional     []*PrivateNamesRuntime
+	Manager        *PrivateNamesManager
+	PublicManager  *PublicCertificateManager
+	ServiceManager *PrivateNamesManager
+	Environment    RenewalEnvironment
+	Interval       time.Duration
 }
 
 // NewPrivateNamesRuntime wires Cloudflare, authoritative DNS observation,
@@ -319,7 +320,11 @@ func configuredPrivateNamesRuntime(config PrivateNamesConfig, options PrivateNam
 	if err != nil {
 		return nil, err
 	}
-	return &PrivateNamesRuntime{Manager: manager, PublicManager: publicManager, Environment: environment, Interval: config.Interval}, nil
+	serviceManager, err := actors.serviceManager()
+	if err != nil {
+		return nil, err
+	}
+	return &PrivateNamesRuntime{Manager: manager, PublicManager: publicManager, ServiceManager: serviceManager, Environment: environment, Interval: config.Interval}, nil
 }
 
 func (a renewalActors) issuer(profile CertificateProfile) (*Issuer, error) {
@@ -359,6 +364,30 @@ func (a renewalActors) publicManager() (*PublicCertificateManager, error) {
 	})
 }
 
+func (a renewalActors) serviceManager() (*PrivateNamesManager, error) {
+	var origins []PrivateOrigin
+	for _, origin := range a.config.Origins {
+		if len(origin.ServiceNames) != 0 {
+			origins = append(origins, origin)
+		}
+	}
+	if len(origins) == 0 {
+		return nil, nil
+	}
+	issuer, err := a.issuer(ProfilePrivateService)
+	if err != nil {
+		return nil, err
+	}
+	distributor, err := a.distributor(ProfilePrivateService)
+	if err != nil {
+		return nil, err
+	}
+	return NewPrivateNamesManager(PrivateNamesManagerConfig{
+		Domain: a.config.Domain, ServiceHosts: true, Provider: a.provider, Renewer: issuer,
+		Distributor: distributor, Origins: origins, DiscoverSelf: a.options.DiscoverSelf, DiscoverPeers: a.options.DiscoverPeers,
+	})
+}
+
 func renewalState(root, purpose, domain string, environment RenewalEnvironment) string {
 	if domain == domainpolicy.Current().LegacyCertificateDomain {
 		return filepath.Join(root, purpose, string(environment))
@@ -376,10 +405,14 @@ func (r *PrivateNamesRuntime) All() []*PrivateNamesRuntime {
 
 func (r *PrivateNamesRuntime) Run(ctx context.Context, public bool, report func(error)) error {
 	var group sync.WaitGroup
-	results := make(chan error, len(r.All()))
+	results := make(chan error, 2*len(r.All()))
 	for _, runtime := range r.All() {
 		if public && runtime.PublicManager == nil {
 			continue
+		}
+		if !public && runtime.ServiceManager != nil {
+			group.Add(1)
+			go func() { defer group.Done(); results <- runtime.ServiceManager.Run(ctx, runtime.Interval, report) }()
 		}
 		group.Add(1)
 		go func() {

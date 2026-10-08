@@ -45,7 +45,7 @@ func TestAppMigrationUpgradesExistingTunnelStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertMigrationVersion(t, store, 10)
+	assertMigrationVersion(t, store, 11)
 	restored, err := store.TunnelClaim(ctx, claim.PublicName)
 	if err != nil || restored.ClaimantID != owner {
 		t.Fatalf("migration lost existing tunnel: %+v, %v", restored, err)

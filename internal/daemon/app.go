@@ -560,6 +560,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		TailnetNames:               tailnetNames,
 		PrivateName:                certificateRuntime.PrivateName,
 		PrivateNames:               certificateRuntime.PrivateNames,
+		PrivateServiceHost:         serviceRegistry.HasPrivateHost,
 		TrustPublicEdgeForwarding:  trustPublicEdgeForwarding,
 		TailnetPort:                cfg.TailnetPort,
 		WebSocketPath:              cfg.WebSocketPath,

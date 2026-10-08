@@ -25,11 +25,12 @@ const (
 // PrivateOrigin maps one stable private DNS label and Mesh identity to its
 // current Tailscale peer and direct control listener.
 type PrivateOrigin struct {
-	Name          string `json:"name"`
-	TailscaleName string `json:"tailscaleName"`
-	Identity      string `json:"identity"`
-	ControlPort   uint16 `json:"controlPort"`
-	WebSocketPath string `json:"websocketPath"`
+	Name          string   `json:"name"`
+	ServiceNames  []string `json:"serviceNames,omitempty"`
+	TailscaleName string   `json:"tailscaleName"`
+	Identity      string   `json:"identity"`
+	ControlPort   uint16   `json:"controlPort"`
+	WebSocketPath string   `json:"websocketPath"`
 }
 
 // PublicEdgeTarget is the one identity-pinned VPS certificate recipient. It
@@ -56,6 +57,7 @@ type CertificateDistributor interface {
 // discovery functions shared by one reconciliation loop.
 type PrivateNamesManagerConfig struct {
 	Domain        string
+	ServiceHosts  bool
 	Provider      Provider
 	Renewer       CertificateRenewer
 	Distributor   CertificateDistributor
@@ -69,6 +71,7 @@ type PrivateNamesManagerConfig struct {
 // origin installs. It owns no timer until Run is called.
 type PrivateNamesManager struct {
 	domain        string
+	serviceHosts  bool
 	provider      Provider
 	renewer       CertificateRenewer
 	distributor   CertificateDistributor
@@ -109,6 +112,7 @@ func NewPrivateNamesManager(config PrivateNamesManagerConfig) (*PrivateNamesMana
 	seenNames := make(map[string]struct{}, len(config.Origins))
 	seenTailscaleNames := make(map[string]struct{}, len(config.Origins))
 	seenIdentities := make(map[string]struct{}, len(config.Origins))
+	seenServices := make(map[string]struct{})
 	for index, origin := range config.Origins {
 		if err := validatePrivateOrigin(origin); err != nil {
 			return nil, fmt.Errorf("dnsname: private origin %d: %w", index, err)
@@ -122,13 +126,23 @@ func NewPrivateNamesManager(config PrivateNamesManagerConfig) (*PrivateNamesMana
 		if _, found := seenIdentities[origin.Identity]; found {
 			return nil, fmt.Errorf("dnsname: private origin %d duplicates identity %q", index, origin.Identity)
 		}
+		for _, label := range origin.ServiceNames {
+			if _, duplicate := seenServices[label]; duplicate {
+				return nil, errors.New("dnsname: duplicate private service name")
+			}
+			seenServices[label] = struct{}{}
+		}
 		seenNames[origin.Name] = struct{}{}
 		seenTailscaleNames[origin.TailscaleName] = struct{}{}
 		seenIdentities[origin.Identity] = struct{}{}
 	}
+	origins := slices.Clone(config.Origins)
+	for index := range origins {
+		origins[index].ServiceNames = slices.Clone(origins[index].ServiceNames)
+	}
 	return &PrivateNamesManager{
-		domain: config.Domain, provider: config.Provider, renewer: config.Renewer, distributor: config.Distributor,
-		origins:      append([]PrivateOrigin(nil), config.Origins...),
+		domain: config.Domain, serviceHosts: config.ServiceHosts, provider: config.Provider, renewer: config.Renewer, distributor: config.Distributor,
+		origins:      origins,
 		discoverSelf: config.DiscoverSelf, discoverPeers: config.DiscoverPeers,
 		passTimeout: config.PassTimeout, wait: waitForReconcile,
 	}, nil
@@ -175,6 +189,9 @@ func (m *PrivateNamesManager) RunOnce(ctx context.Context, forceRenewal bool) er
 
 	targets := make([]OriginTarget, 0, len(m.origins))
 	for _, origin := range m.origins {
+		if m.serviceHosts && len(origin.ServiceNames) == 0 {
+			continue
+		}
 		peer, exists := peersByName[origin.TailscaleName]
 		if !exists {
 			passErrors = append(passErrors, fmt.Errorf("dnsname: origin %s: Tailscale peer %s is absent", origin.Name, origin.TailscaleName))
@@ -186,7 +203,13 @@ func (m *PrivateNamesManager) RunOnce(ctx context.Context, forceRenewal bool) er
 			continue
 		}
 		privateName := ""
-		if _, err := ReconcileHostA(ctx, m.provider, HostAddress{Name: origin.Name, Address: address, Domain: m.domain}); err != nil {
+		if m.serviceHosts {
+			for _, label := range origin.ServiceNames {
+				if _, err := ReconcileHostA(ctx, m.provider, HostAddress{Name: label, Address: address, Domain: m.domain, Service: true}); err != nil {
+					passErrors = append(passErrors, fmt.Errorf("dnsname: private service %s: %w", label, err))
+				}
+			}
+		} else if _, err := ReconcileHostA(ctx, m.provider, HostAddress{Name: origin.Name, Address: address, Domain: m.domain}); err != nil {
 			passErrors = append(passErrors, fmt.Errorf("dnsname: origin %s: %w", origin.Name, err))
 		} else {
 			privateName, _ = privateHostNameInDomain(origin.Name, m.domain)
@@ -269,6 +292,19 @@ func waitForReconcile(ctx context.Context, delay time.Duration) bool {
 func validatePrivateOrigin(origin PrivateOrigin) error {
 	if _, err := privateHostName(origin.Name); err != nil {
 		return err
+	}
+	if len(origin.ServiceNames) > 256 {
+		return errors.New("dnsname: too many private service names")
+	}
+	seen := make(map[string]bool)
+	for _, label := range origin.ServiceNames {
+		if _, err := privateServiceNameInDomain(label, Zone()); err != nil {
+			return err
+		}
+		if seen[label] {
+			return errors.New("dnsname: duplicate private service name")
+		}
+		seen[label] = true
 	}
 	return validateCertificateTarget(origin.TailscaleName, origin.Identity, origin.ControlPort, origin.WebSocketPath)
 }

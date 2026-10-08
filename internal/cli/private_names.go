@@ -45,12 +45,18 @@ func reconcilePrivateNames(ctx context.Context, request PrivateNamesRequest) err
 		if entry.PublicManager != nil {
 			operations++
 		}
+		if entry.ServiceManager != nil {
+			operations++
+		}
 	}
 	results := make(chan error, operations)
 	for _, entry := range runtime.All() {
 		go func() { results <- entry.Manager.RunOnce(ctx, request.Force) }()
 		if entry.PublicManager != nil {
 			go func() { results <- entry.PublicManager.RunOnce(ctx, request.Force) }()
+		}
+		if entry.ServiceManager != nil {
+			go func() { results <- entry.ServiceManager.RunOnce(ctx, request.Force) }()
 		}
 	}
 	var result error

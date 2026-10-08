@@ -14,6 +14,7 @@ type httpHostPolicy struct {
 	tailnetNames              []string
 	privateName               func() string
 	privateNames              func() []string
+	privateServiceHost        func(string) bool
 	trustPublicEdgeForwarding func(netip.Addr) bool
 }
 
@@ -49,6 +50,9 @@ func (p httpHostPolicy) accepts(request *http.Request) bool {
 		return true
 	}
 	if p.privateName != nil && matchesHTTPName(host, []string{p.privateName()}) {
+		return true
+	}
+	if p.privateServiceHost != nil && p.privateServiceHost(host) {
 		return true
 	}
 	if p.trustPublicEdgeForwarding == nil || meshserve.ValidatePublicName(host) != nil {
