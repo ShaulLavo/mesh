@@ -62,7 +62,7 @@ func TestRunWithdrawsPrivateHostMachineMountWithAndWithoutCertificate(t *testing
 		}()
 		url := fmt.Sprintf("http://127.0.0.1:%d/platform/", port)
 		want := http.StatusNotFound
-		client := &http.Client{Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client := &http.Client{Transport: &http.Transport{}, Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		deadline := time.Now().Add(runtimeTestTimeout)
 		var matched bool
 		for time.Now().Before(deadline) {
@@ -78,6 +78,9 @@ func TestRunWithdrawsPrivateHostMachineMountWithAndWithoutCertificate(t *testing
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
+		// A speculative dial can leave a connection that has sent no request.
+		// Close the fixture's pool before the server starts graceful shutdown.
+		client.CloseIdleConnections()
 		cancel()
 		if err := waitRuntime(t, done); err != nil {
 			t.Fatal(err)
