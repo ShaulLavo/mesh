@@ -215,6 +215,12 @@ checks it against the current database. It does not restore an old database
 snapshot. New worker creation is briefly gated during validation; existing
 workers continue running.
 
+Each update keeps the replaced executable beside the installed one so a failed
+activation can restore it. The latest update's copy stays after it succeeds.
+Copies from earlier updates are removed when the next update commits or starts.
+A copy stays while a running session still uses it, because macOS identifies
+that session's executable through the copy.
+
 If the machine itself reboots during installation, the helper resumes its
 durable transaction and waits for the daemon to start. Processes from the prior
 boot cannot survive. The result lists those sessions as interrupted and keeps

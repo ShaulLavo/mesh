@@ -102,7 +102,15 @@ func (e *Engine) accept(ctx context.Context, request Request) (Status, error) {
 	dir := filepath.Dir(e.cfg.Executable)
 	status := Status{Schema: 1, Phase: Accepted, Request: request, Settings: e.settings(), Original: health,
 		Candidate: filepath.Join(dir, ".mesh-update-"+request.ID+".candidate"), Previous: filepath.Join(dir, ".mesh-update-"+request.ID+".previous")}
+	e.pruneImages(status, health)
 	return status, e.save(&status)
+}
+
+// pruneImages clears images from finished transactions. A leftover image only
+// costs disk space, so a failed removal never fails the update; the next
+// transaction tries again.
+func (e *Engine) pruneImages(current Status, health Health) {
+	_ = pruneTransactionImages(filepath.Dir(e.cfg.Executable), current, health)
 }
 
 func validateRequest(request Request) error {
