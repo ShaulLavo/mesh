@@ -4,6 +4,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -22,6 +23,10 @@ const (
 	sqliteBusyTimeout  = "5000"
 	sqliteMaxOpenConns = 4
 )
+
+// ErrAdvisoryMigrationUnavailable marks a failed optional-cache migration.
+// Authoritative opens still return the original migration error.
+var ErrAdvisoryMigrationUnavailable = errors.New("advisory cache migration unavailable")
 
 // Store owns one SQLite connection pool. Close it when the daemon stops.
 type Store struct {
@@ -274,11 +279,17 @@ func migrate(ctx context.Context, db *sql.DB, advisory bool) error {
 			return fmt.Errorf("initialize advisory migration history: %w", err)
 		}
 	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations.Files)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations.Files, goose.WithTableName(goose.DefaultTablename))
 	if err != nil {
 		return fmt.Errorf("create Goose provider: %w", err)
 	}
 	if _, err := provider.Up(ctx); err != nil {
+		var partial *goose.PartialError
+		// Goose can apply a stale migration list after another opener commits.
+		// Cache failures stay diagnostic-only; the daemon still fails its open.
+		if advisory && errors.As(err, &partial) {
+			return fmt.Errorf("%w: %w", ErrAdvisoryMigrationUnavailable, err)
+		}
 		return fmt.Errorf("apply Goose migrations: %w", err)
 	}
 	return nil

@@ -17,68 +17,75 @@ import (
 )
 
 func TestCatalogOpenContentionKeepsAnOptionalCache(t *testing.T) {
-	t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
-	release := holdCatalogWriter(t, os.Getenv("MESH_STATE_DIR"))
-	type openedCatalog struct {
-		cache *SQLiteCatalogCache
-		err   error
-	}
-	done := make(chan openedCatalog, 2)
-	opened := make([]*SQLiteCatalogCache, 2)
-	var openers sync.WaitGroup
-	t.Cleanup(func() {
-		release()
-		openers.Wait()
-		for _, cache := range opened {
-			if cache == nil {
-				continue
+	for name, existingHistory := range map[string]bool{"new database": false, "pending migrations": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
+			if existingHistory {
+				seedCatalogMigrationHistory(t, os.Getenv("MESH_STATE_DIR"))
 			}
-			if err := cache.Close(); err != nil {
-				t.Error(err)
+			release := holdCatalogWriter(t, os.Getenv("MESH_STATE_DIR"))
+			type openedCatalog struct {
+				cache *SQLiteCatalogCache
+				err   error
 			}
-		}
-	})
-	for index := range opened {
-		openers.Add(1)
-		go func() {
-			defer openers.Done()
-			cache, err := OpenCatalogCache(context.Background())
-			opened[index] = cache
-			done <- openedCatalog{cache: cache, err: err}
-		}()
-	}
-	timer := time.NewTimer(300 * time.Millisecond)
-	defer timer.Stop()
-	var result openedCatalog
-	for range opened {
-		select {
-		case result = <-done:
-			if result.err != nil || result.cache == nil {
-				t.Fatalf("cache open must remain nonfatal during contention: %#v", result)
+			done := make(chan openedCatalog, 2)
+			opened := make([]*SQLiteCatalogCache, 2)
+			var openers sync.WaitGroup
+			t.Cleanup(func() {
+				release()
+				openers.Wait()
+				for _, cache := range opened {
+					if cache == nil {
+						continue
+					}
+					if err := cache.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			})
+			for index := range opened {
+				openers.Add(1)
+				go func() {
+					defer openers.Done()
+					cache, err := OpenCatalogCache(context.Background())
+					opened[index] = cache
+					done <- openedCatalog{cache: cache, err: err}
+				}()
 			}
-		case <-timer.C:
-			t.Fatal("opening the optional cache waited on another SQLite writer")
-		}
-	}
-	host := HostRecord{ID: "host-pc", MachineName: "pc"}
-	rows, err := result.cache.Load(t.Context(), host)
-	var busy *sqlite.Error
-	if len(rows) != 0 || !errors.As(err, &busy) || busy.Code()&0xff != 5 {
-		t.Fatalf("missing-cache warning = %#v, %v, want SQLITE_BUSY", rows, err)
-	}
-	if err := result.cache.Save(t.Context(), host, nil); err != nil {
-		t.Fatalf("cache open warning repeated on save: %v", err)
-	}
-	services, err := result.cache.LoadAllServices(t.Context())
-	if err != nil || len(services) != 0 {
-		t.Fatalf("optional service cache blocks live fan-out: %#v, %v", services, err)
-	}
-	servicesForHost, err := result.cache.LoadServices(t.Context(), host)
-	if err != nil || len(servicesForHost) != 0 {
-		t.Fatalf("cache open warning repeated on service read: %#v, %v", servicesForHost, err)
-	}
-	if err := result.cache.SaveServices(t.Context(), host, "", nil); err != nil {
-		t.Fatalf("cache open warning repeated on service save: %v", err)
+			timer := time.NewTimer(300 * time.Millisecond)
+			defer timer.Stop()
+			var result openedCatalog
+			for range opened {
+				select {
+				case result = <-done:
+					if result.err != nil || result.cache == nil {
+						t.Fatalf("cache open must remain nonfatal during contention: %#v", result)
+					}
+				case <-timer.C:
+					t.Fatal("opening the optional cache waited on another SQLite writer")
+				}
+			}
+			host := HostRecord{ID: "host-pc", MachineName: "pc"}
+			rows, err := result.cache.Load(t.Context(), host)
+			var busy *sqlite.Error
+			if len(rows) != 0 || !errors.As(err, &busy) || busy.Code()&0xff != 5 {
+				t.Fatalf("missing-cache warning = %#v, %v, want SQLITE_BUSY", rows, err)
+			}
+			if err := result.cache.Save(t.Context(), host, nil); err != nil {
+				t.Fatalf("cache open warning repeated on save: %v", err)
+			}
+			services, err := result.cache.LoadAllServices(t.Context())
+			if err != nil || len(services) != 0 {
+				t.Fatalf("optional service cache blocks live fan-out: %#v, %v", services, err)
+			}
+			servicesForHost, err := result.cache.LoadServices(t.Context(), host)
+			if err != nil || len(servicesForHost) != 0 {
+				t.Fatalf("cache open warning repeated on service read: %#v, %v", servicesForHost, err)
+			}
+			if err := result.cache.SaveServices(t.Context(), host, "", nil); err != nil {
+				t.Fatalf("cache open warning repeated on service save: %v", err)
+			}
+		})
 	}
 }
 
