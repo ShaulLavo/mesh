@@ -56,6 +56,7 @@ type Service struct {
 	Kind          Kind
 	Target        string
 	PublicName    string
+	PrivateHost   string
 	WakeOnRequest bool
 	// Isolate sends the cross-origin isolation headers with every response,
 	// which is what browsers require before they enable SharedArrayBuffer.
@@ -85,13 +86,15 @@ type ServiceStatus struct {
 type Registry struct {
 	reservedPrefix        string
 	trustForwardedHeaders func(netip.Addr) bool
+	privateHostReady      func(string) bool
 	snapshot              atomic.Pointer[registrySnapshot]
 	gate                  atomic.Pointer[demandGate]
 }
 
 type registrySnapshot struct {
-	services []Service
-	routes   []serviceRoute
+	services     []Service
+	routes       []serviceRoute
+	privateHosts map[string]http.Handler
 }
 
 type serviceRoute struct {
@@ -234,6 +237,10 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		http.NotFound(w, request)
 		return
 	}
+	if handler := snapshot.privateHosts[host]; handler != nil {
+		servePrivateHost(w, request, host, handler)
+		return
+	}
 	publicRequest := host != "" && validatePublicName(host) == nil
 	requestPath := request.URL.EscapedPath()
 	for _, route := range snapshot.routes {
@@ -260,9 +267,11 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 	}
 	seen := make(map[string]struct{}, len(services))
 	listeners := make(map[uint16]string)
+	hosts := make(map[string]bool)
 	snapshot := &registrySnapshot{
-		services: make([]Service, 0, len(services)),
-		routes:   make([]serviceRoute, 0, len(services)),
+		services:     make([]Service, 0, len(services)),
+		routes:       make([]serviceRoute, 0, len(services)),
+		privateHosts: make(map[string]http.Handler),
 	}
 	for _, service := range services {
 		normalized, err := normalizeService(service)
@@ -273,6 +282,16 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 			return nil, fmt.Errorf("serve: duplicate service route %q", normalized.Name)
 		}
 		seen[normalized.Name] = struct{}{}
+		for _, host := range []string{normalized.PrivateHost, normalized.PublicName} {
+			if host == "" {
+				continue
+			}
+			private := normalized.PrivateHost == host
+			if priorPrivate, exists := hosts[host]; exists && (private || priorPrivate) {
+				return nil, fmt.Errorf("serve: private host %q overlaps another service", host)
+			}
+			hosts[host] = private
+		}
 		for _, listen := range normalized.Listens {
 			if owner, taken := listeners[listen.Public]; taken {
 				return nil, fmt.Errorf("serve: routes %s and %s both listen on port %d", owner, normalized.Route(), listen.Public)
@@ -298,7 +317,17 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 		if normalized.Demand != nil {
 			handler = r.gatedHandler(normalized.Name, handler)
 		}
-		snapshot.routes = append(snapshot.routes, serviceRoute{prefix: prefix, publicName: normalized.PublicName, handler: handler})
+		if normalized.PrivateHost != "" {
+			root, err := handlerForNormalizedService(routed, "/", r.trustForwardedHeaders)
+			if err != nil {
+				return nil, err
+			}
+			if normalized.Demand != nil {
+				root = r.gatedHandler(normalized.Name, root)
+			}
+			snapshot.privateHosts[normalized.PrivateHost] = redirectLegacyMount(root, prefix)
+		}
+		snapshot.routes = append(snapshot.routes, serviceRoute{prefix: prefix, publicName: normalized.PublicName, handler: redirectPrivateHostNavigation(handler, prefix, normalized.PrivateHost, r.privateHostCertificateReady)})
 	}
 	sort.Slice(snapshot.services, func(i, j int) bool {
 		return snapshot.services[i].Name < snapshot.services[j].Name
@@ -321,6 +350,9 @@ func normalizeService(service Service) (Service, error) {
 	}
 	if err := validatePublicName(service.PublicName); err != nil {
 		return Service{}, fmt.Errorf("serve: service %q: %w", service.Name, err)
+	}
+	if err := validatePrivateHostService(service); err != nil {
+		return Service{}, err
 	}
 	if len(service.Target) > MaximumServiceTargetBytes {
 		return Service{}, fmt.Errorf("serve: service %q target exceeds %d bytes", service.Name, MaximumServiceTargetBytes)

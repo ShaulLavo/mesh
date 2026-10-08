@@ -177,6 +177,9 @@ func sameDemandDefinition(requested, returned protocol.ServiceInfo) bool {
 }
 
 func serviceRoute(service protocol.ServiceInfo) string {
+	if service.PrivateHost != "" {
+		return "/"
+	}
 	if service.LocalOnly {
 		return ":" + service.Name
 	}

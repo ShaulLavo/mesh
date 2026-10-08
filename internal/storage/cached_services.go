@@ -148,7 +148,7 @@ func cachedServiceParams(cached CachedService) (dbsqlc.UpsertCachedServiceParams
 	return dbsqlc.UpsertCachedServiceParams{
 		DisplayName: service.DisplayName,
 		HostID:      string(cached.HostID), PrivateName: cached.PrivateName, Name: service.Name, Kind: string(service.Kind), Target: service.Target,
-		PublicName: service.PublicName, WakeOnRequest: boolInt64(service.WakeOnRequest), Healthy: boolInt64(cached.Healthy),
+		PrivateHost: service.PrivateHost, PublicName: service.PublicName, WakeOnRequest: boolInt64(service.WakeOnRequest), Healthy: boolInt64(cached.Healthy),
 		Problem: cached.Problem, ObservedAt: observedAt, Isolate: boolInt64(service.Isolate),
 	}, nil
 }
@@ -170,7 +170,7 @@ func cachedServiceFromRow(row dbsqlc.CachedService) (CachedService, error) {
 		HostID: HostID(row.HostID), PrivateName: row.PrivateName,
 		Service: meshserve.Service{
 			DisplayName: row.DisplayName, Name: row.Name, Kind: meshserve.Kind(row.Kind), Target: row.Target,
-			PublicName: row.PublicName, WakeOnRequest: wake, Isolate: isolate,
+			PrivateHost: row.PrivateHost, PublicName: row.PublicName, WakeOnRequest: wake, Isolate: isolate,
 		},
 		Healthy: healthy, Problem: row.Problem, ObservedAt: time.UnixMilli(row.ObservedAt).UTC(),
 	}

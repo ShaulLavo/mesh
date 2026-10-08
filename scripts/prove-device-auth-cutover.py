@@ -83,7 +83,7 @@ def publish(binary, previous):
                             "proof": digest(b"disposable fixture transition")})
         RELEASES[f"/ShaulLavo/mesh/releases/download/{build['version']}/{name}"] = archive
     manifest = {"schema": 1, "version": build["version"], "commit": build["commit"], "artifacts": artifacts,
-                "compatibility": {"stateReadMin": build["stateVersion"], "stateReadMax": build["stateVersion"],
+                "compatibility": {"stateReadMin": min(previous["stateVersion"], build["stateVersion"]), "stateReadMax": build["stateVersion"],
                     "stateWrite": build["stateVersion"], "workerMin": 1, "workerMax": 1, "workerWrite": 1,
                     "journalVersion": 1, "transitions": transitions}}
     RELEASES[f"/ShaulLavo/mesh/releases/download/{build['version']}/mesh-release.json"] = json.dumps(manifest).encode()

@@ -15,6 +15,8 @@ func TestServePrintsRegistrationShadowWarning(t *testing.T) {
 	service := protocol.ServiceInfo{Name: "blog/admin", Kind: "proxy", Target: "3000"}
 	dial := serviceRemoteDial(host.host, func(request protocol.Control) protocol.Control {
 		switch request.Type {
+		case protocol.TypeServiceList:
+			return protocol.Control{Type: protocol.TypeServiceListed}
 		case protocol.TypeServicePreview:
 			return protocol.Control{Type: protocol.TypeServicePreviewed, ServicePreview: &protocol.ServicePreview{Service: service}}
 		case protocol.TypeServiceUpsert:

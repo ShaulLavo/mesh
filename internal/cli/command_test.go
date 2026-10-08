@@ -440,6 +440,7 @@ func TestServeCommandPreviewsThenPublishesCanonicalService(t *testing.T) {
 		t.Fatalf("serve output = %q", stdout)
 	}
 	if got := host.recorded(); !slices.Equal(got, []string{
+		protocol.TypeHostInfo, protocol.TypeServiceList,
 		protocol.TypeHostInfo, protocol.TypeServicePreview,
 		protocol.TypeHostInfo, protocol.TypeServiceUpsert,
 	}) {

@@ -184,9 +184,9 @@ func validateCertificatePrivateName(profile CertificateProfile, name string) err
 			return nil
 		}
 		return ValidatePrivateName(name)
-	case ProfilePublicEdge:
+	case ProfilePublicEdge, ProfilePrivateService:
 		if name != "" {
-			return errors.New("dnsname: public-edge certificate must not carry a private name")
+			return fmt.Errorf("dnsname: %s certificate must not carry a private name", profile)
 		}
 		return nil
 	default:

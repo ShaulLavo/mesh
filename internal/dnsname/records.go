@@ -60,6 +60,7 @@ type Provider interface {
 // HostAddress binds one private DNS label to its current tailnet IPv4 address.
 type HostAddress struct {
 	Domain  string
+	Service bool
 	Name    string
 	Address netip.Addr
 }
@@ -82,6 +83,9 @@ func ReconcileHostA(ctx context.Context, provider Provider, host HostAddress) (R
 		return Record{}, errors.New("dnsname: reconcile host with nil provider")
 	}
 	name, err := privateHostNameInDomain(host.Name, host.Domain)
+	if host.Service {
+		name, err = privateServiceNameInDomain(host.Name, host.Domain)
+	}
 	if err != nil {
 		return Record{}, err
 	}

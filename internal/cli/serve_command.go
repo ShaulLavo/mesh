@@ -16,6 +16,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/muesli/cancelreader"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
@@ -48,6 +49,7 @@ func (a *application) serveCommand() *cobra.Command {
 		displayName      string
 		files            bool
 		publicName       string
+		privateHost      string
 		wakeOnRequest    bool
 		isolate          bool
 		yes              bool
@@ -89,7 +91,7 @@ func (a *application) serveCommand() *cobra.Command {
 				return err
 			}
 			return a.runServe(cmd, args[0], target, serveFlags{
-				route: route, displayName: displayName, files: files, publicName: publicName,
+				route: route, displayName: displayName, files: files, publicName: publicName, privateHost: privateHost, privateHostSet: cmd.Flags().Changed("private-host"),
 				wakeOnRequest: wakeOnRequest, isolate: isolate, yes: yes, allowCredentials: allowCredentials,
 				run: run, cwd: cwd, env: env, listens: listens, idle: idle, readyTimeout: readyTimeout,
 				cwdSet: cmd.Flags().Changed("cwd"), idleSet: cmd.Flags().Changed("idle"),
@@ -100,6 +102,7 @@ func (a *application) serveCommand() *cobra.Command {
 	command.Flags().StringVar(&displayName, "label", "", "display name shown in service lists")
 	command.Flags().StringVar(&route, "at", "", "route path, such as /blog")
 	command.Flags().BoolVar(&files, "files", false, "enable directory listings")
+	command.Flags().StringVar(&privateHost, "private-host", "", "private hostname at the root, using a label or a configured deployment hostname")
 	command.Flags().StringVar(&publicName, "public", "", "exact public hostname under a configured deployment domain")
 	command.Flags().BoolVar(&wakeOnRequest, "wake-on-request", false, "ask the public edge to wake this origin")
 	command.Flags().BoolVar(&isolate, "isolate", false, "send cross-origin isolation headers so the page can use SharedArrayBuffer")
@@ -116,10 +119,12 @@ func (a *application) serveCommand() *cobra.Command {
 }
 
 type serveFlags struct {
+	privateHostSet   bool
 	route            string
 	displayName      string
 	files            bool
 	publicName       string
+	privateHost      string
 	wakeOnRequest    bool
 	isolate          bool
 	yes              bool
@@ -151,6 +156,17 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 	if err != nil {
 		return err
 	}
+	flags.privateHost = strings.ToLower(flags.privateHost)
+	if flags.privateHost != "" && domainpolicy.Primary() == "" {
+		return errors.New("--private-host requires a deployment domain in domains.json")
+	}
+	if flags.privateHost != "" && !strings.Contains(flags.privateHost, ".") {
+		flags.privateHost += "." + domainpolicy.Primary()
+	}
+	if flags.privateHost != "" && flags.route == "" {
+		label, _, _ := domainpolicy.Label(flags.privateHost, false)
+		flags.route = "/" + label
+	}
 	name, localOnly, err := serveRouteName(flags.route, target, demand.listens)
 	if err != nil {
 		return err
@@ -178,8 +194,15 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 	}
 	requested := protocol.ServiceInfo{
 		DisplayName: flags.displayName,
-		Name:        name, Kind: kind, Target: target, PublicName: flags.publicName, WakeOnRequest: flags.wakeOnRequest,
+		Name:        name, Kind: kind, Target: target, PublicName: flags.publicName, PrivateHost: flags.privateHost, WakeOnRequest: flags.wakeOnRequest,
 		Isolate: flags.isolate, Listens: demand.listens, Run: demand.run, LocalOnly: localOnly,
+	}
+	if !flags.privateHostSet && flags.privateHost == "" {
+		inherited, err := a.existingPrivateHost(cmd.Context(), host, name)
+		if err != nil {
+			return err
+		}
+		requested.PrivateHost = inherited
 	}
 	previewCtx, cancelPreview := context.WithTimeout(cmd.Context(), serviceMutationTimeout)
 	preview, privateName, err := previewRemoteService(previewCtx, host, a.dependencies.DialControl, requested, flags.allowCredentials)
@@ -458,6 +481,9 @@ func serviceURL(host HostRecord, privateName string, service protocol.ServiceInf
 		// Reachable only from the host itself.
 		return "http://127.0.0.1:" + service.Name + "/"
 	}
+	if service.PrivateHost != "" {
+		return "https://" + service.PrivateHost + "/"
+	}
 	if service.PublicName != "" {
 		return "https://" + service.PublicName + "/" + service.Name
 	}
@@ -628,7 +654,7 @@ func writeServiceTable(output io.Writer, rows []ServiceCatalogRow, mask *privacy
 	if _, err := fmt.Fprintln(writer, "ROUTE\tNAME\tHOST\tKIND\tTARGET\tSCOPE\tSTATE\tHEALTH\tURL"); err != nil {
 		return fmt.Errorf("write service table: %w", err)
 	}
-	for _, row := range rows {
+	for _, row := range serviceAliasRows(rows) {
 		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			safeTableCell(mask.Value("route", serviceRoute(row.Service))), safeTableCell(mask.Value("name", serviceDisplayName(row.Service))), safeTableCell(mask.Value("host", HostLabel(row.Host))), safeTableCell(row.Service.Kind), privateServiceTarget(mask, row.Service),
 			safeTableCell(row.Scope()), safeTableCell(row.State()), safeTableCell(row.Health()), safeTableCell(mask.Value("url", row.URL()))); err != nil {

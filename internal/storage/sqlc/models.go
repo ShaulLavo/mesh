@@ -28,6 +28,7 @@ type CachedService struct {
 	ObservedAt    int64
 	Isolate       int64
 	DisplayName   string
+	PrivateHost   string
 }
 
 type EdgeOutbox struct {
@@ -74,6 +75,7 @@ type Service struct {
 	Demand        string
 	LocalOnly     int64
 	DisplayName   string
+	PrivateHost   string
 }
 
 type Session struct {

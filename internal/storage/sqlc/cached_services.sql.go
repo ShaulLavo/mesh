@@ -32,7 +32,7 @@ func (q *Queries) DeleteCachedServicesForHost(ctx context.Context, hostID string
 }
 
 const listCachedServices = `-- name: ListCachedServices :many
-SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate, display_name
+SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate, display_name, private_host
 FROM cached_services
 ORDER BY host_id, name
 LIMIT 8193
@@ -60,6 +60,7 @@ func (q *Queries) ListCachedServices(ctx context.Context) ([]CachedService, erro
 			&i.ObservedAt,
 			&i.Isolate,
 			&i.DisplayName,
+			&i.PrivateHost,
 		); err != nil {
 			return nil, err
 		}
@@ -75,7 +76,7 @@ func (q *Queries) ListCachedServices(ctx context.Context) ([]CachedService, erro
 }
 
 const listCachedServicesForHost = `-- name: ListCachedServicesForHost :many
-SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate, display_name
+SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate, display_name, private_host
 FROM cached_services
 WHERE host_id = ?
 ORDER BY name
@@ -103,6 +104,7 @@ func (q *Queries) ListCachedServicesForHost(ctx context.Context, hostID string) 
 			&i.ObservedAt,
 			&i.Isolate,
 			&i.DisplayName,
+			&i.PrivateHost,
 		); err != nil {
 			return nil, err
 		}
@@ -125,18 +127,20 @@ INSERT INTO cached_services (
     kind,
     target,
     public_name,
+    private_host,
     wake_on_request,
     healthy,
     problem,
     observed_at,
     isolate,
     display_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (host_id, name) DO UPDATE SET
 	private_name = excluded.private_name,
     kind = excluded.kind,
     target = excluded.target,
     public_name = excluded.public_name,
+    private_host = excluded.private_host,
     wake_on_request = excluded.wake_on_request,
     healthy = excluded.healthy,
     problem = excluded.problem,
@@ -152,6 +156,7 @@ type UpsertCachedServiceParams struct {
 	Kind          string
 	Target        string
 	PublicName    string
+	PrivateHost   string
 	WakeOnRequest int64
 	Healthy       int64
 	Problem       string
@@ -168,6 +173,7 @@ func (q *Queries) UpsertCachedService(ctx context.Context, arg UpsertCachedServi
 		arg.Kind,
 		arg.Target,
 		arg.PublicName,
+		arg.PrivateHost,
 		arg.WakeOnRequest,
 		arg.Healthy,
 		arg.Problem,

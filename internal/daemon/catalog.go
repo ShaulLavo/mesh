@@ -462,7 +462,7 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 }
 
 func hasRecoveryHistory(dir string) bool {
-	if _, err := os.Lstat(filepath.Join(dir, "recovery.lock")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(dir, "recovery.lock")); !errors.Is(err, os.ErrNotExist) { //nolint:gosec // The caller supplies a catalog session directory; this adds a constant filename.
 		return true
 	}
 	return hasSavedRecovery(dir)
@@ -472,7 +472,7 @@ func hasSavedRecovery(dir string) bool {
 	// Presence protects damaged and unsupported records too. A failed lookup
 	// cannot establish that a session has no recovery data worth retaining.
 	for _, name := range []string{"recovery.json", "recovery-intent.json", "recovery-command.json"} {
-		if _, err := os.Lstat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) { //nolint:gosec // The caller supplies a catalog session directory; name comes from the constant list above.
 			return true
 		}
 	}

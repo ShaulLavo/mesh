@@ -19,7 +19,7 @@ func TestReplaceCachedServicesIsCompleteAndDurable(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	host := Host{ID: "host-1", MeshIdentity: "identity-1", LastSeenAt: now}
 	rows := []CachedService{
-		{HostID: host.ID, Service: meshserve.Service{DisplayName: "API service", Name: "api", Kind: meshserve.Proxy, Target: "3000"}, Healthy: true, ObservedAt: now},
+		{HostID: host.ID, Service: meshserve.Service{DisplayName: "API service", Name: "api", Kind: meshserve.Proxy, Target: "3000", PrivateHost: "api.mesh.test"}, Healthy: true, ObservedAt: now},
 		{HostID: host.ID, Service: meshserve.Service{Name: "blog", Kind: meshserve.Static, Target: "/srv/blog", PublicName: "blog.mesh.test"}, Problem: "root unavailable", ObservedAt: now},
 	}
 	if err := store.ReplaceCachedServices(ctx, host, rows); err != nil {
@@ -37,7 +37,7 @@ func TestReplaceCachedServicesIsCompleteAndDurable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].Service.Name != "api" || got[0].Service.DisplayName != "API service" || got[1].Service.PublicName != "blog.mesh.test" || got[1].Problem != "root unavailable" {
+	if len(got) != 2 || got[0].Service.Name != "api" || got[0].Service.DisplayName != "API service" || got[0].Service.PrivateHost != "api.mesh.test" || got[1].Service.PublicName != "blog.mesh.test" || got[1].Problem != "root unavailable" {
 		t.Fatalf("cached services = %#v", got)
 	}
 	if err := store.ReplaceCachedServices(ctx, host, nil); err != nil {

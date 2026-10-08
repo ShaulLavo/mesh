@@ -55,7 +55,7 @@ func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer,
 	if service.DisplayName != "" && preview.Service.DisplayName != service.DisplayName {
 		return protocol.ServicePreview{}, "", fmt.Errorf("host %s did not preserve the display name; update Mesh there first", HostLabel(host))
 	}
-	if preview.Service.Name != service.Name || preview.Service.PublicName != service.PublicName || preview.Service.WakeOnRequest != service.WakeOnRequest || preview.Service.Isolate != service.Isolate || service.Kind != "" && preview.Service.Kind != service.Kind {
+	if preview.Service.Name != service.Name || preview.Service.PrivateHost != service.PrivateHost || preview.Service.PublicName != service.PublicName || preview.Service.WakeOnRequest != service.WakeOnRequest || preview.Service.Isolate != service.Isolate || service.Kind != "" && preview.Service.Kind != service.Kind {
 		return protocol.ServicePreview{}, "", fmt.Errorf("host %s changed service semantics in its preview", HostLabel(host))
 	}
 	if err := validatePreviewInference(service, preview.Service); err != nil {

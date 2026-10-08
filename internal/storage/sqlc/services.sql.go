@@ -23,7 +23,7 @@ func (q *Queries) DeleteService(ctx context.Context, name string) (int64, error)
 }
 
 const getService = `-- name: GetService :one
-SELECT name, kind, target, public_name, wake_on_request, isolate, listens, demand, local_only, display_name
+SELECT name, kind, target, public_name, wake_on_request, isolate, listens, demand, local_only, display_name, private_host
 FROM services
 WHERE name = ?
 `
@@ -42,12 +42,13 @@ func (q *Queries) GetService(ctx context.Context, name string) (Service, error) 
 		&i.Demand,
 		&i.LocalOnly,
 		&i.DisplayName,
+		&i.PrivateHost,
 	)
 	return i, err
 }
 
 const listServices = `-- name: ListServices :many
-SELECT name, kind, target, public_name, wake_on_request, isolate, listens, demand, local_only, display_name
+SELECT name, kind, target, public_name, wake_on_request, isolate, listens, demand, local_only, display_name, private_host
 FROM services
 ORDER BY name
 `
@@ -72,6 +73,7 @@ func (q *Queries) ListServices(ctx context.Context) ([]Service, error) {
 			&i.Demand,
 			&i.LocalOnly,
 			&i.DisplayName,
+			&i.PrivateHost,
 		); err != nil {
 			return nil, err
 		}
@@ -92,24 +94,26 @@ INSERT INTO services (
     kind,
     target,
     public_name,
+    private_host,
     wake_on_request,
     isolate,
     listens,
     demand,
     local_only,
     display_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (name) DO UPDATE SET
     kind = excluded.kind,
     target = excluded.target,
     public_name = excluded.public_name,
+    private_host = excluded.private_host,
     wake_on_request = excluded.wake_on_request,
     isolate = excluded.isolate,
     listens = excluded.listens,
     demand = excluded.demand,
     display_name = excluded.display_name,
     local_only = excluded.local_only
-RETURNING name, kind, target, public_name, wake_on_request, isolate, listens, demand, local_only, display_name
+RETURNING name, kind, target, public_name, wake_on_request, isolate, listens, demand, local_only, display_name, private_host
 `
 
 type UpsertServiceParams struct {
@@ -117,6 +121,7 @@ type UpsertServiceParams struct {
 	Kind          string
 	Target        string
 	PublicName    string
+	PrivateHost   string
 	WakeOnRequest int64
 	Isolate       int64
 	Listens       string
@@ -131,6 +136,7 @@ func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) (S
 		arg.Kind,
 		arg.Target,
 		arg.PublicName,
+		arg.PrivateHost,
 		arg.WakeOnRequest,
 		arg.Isolate,
 		arg.Listens,
@@ -150,6 +156,7 @@ func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) (S
 		&i.Demand,
 		&i.LocalOnly,
 		&i.DisplayName,
+		&i.PrivateHost,
 	)
 	return i, err
 }
