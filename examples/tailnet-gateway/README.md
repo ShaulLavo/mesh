@@ -70,7 +70,7 @@ it consumes the gateway’s PROXY headers.
 
 For direct Tailnet TCP/443 forwarding to the private listener on 8443, enable
 `--tailscale-serve-proxy-protocol` on the daemon and PROXY v1 in Tailscale Serve.
-Raw-TLS loopback requests without verified source metadata receive HTTP 403
+Private HTTPS requests without authenticated PROXY ingress receive HTTP 403
 and never reach private services. Public-edge HTTP forwarding and the direct Tailnet
 HTTP/control listener keep their existing trust policies.
 

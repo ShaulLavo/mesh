@@ -36,7 +36,7 @@ func TestPrivateHTTPRejectsRebindingHost(t *testing.T) {
 				}, newConnectionGroup(echoOneFrame)).Handler
 			} else {
 				handler = serviceOnlyHTTPSHandler(listenerConfig{
-					webSocketPath: "/mesh", httpHandler: appOriginHandler(nil, registry), httpsPort: 7337,
+					webSocketPath: "/mesh", httpHandler: appOriginHandler(nil, registry), httpsPort: 7337, httpsProxyProtocol: true,
 				})
 			}
 			if surface == "loopback HTTPS" {
@@ -129,7 +129,7 @@ func TestPrivateHTTPHostAllowlist(t *testing.T) {
 				t.Run(test.name, func(t *testing.T) {
 					var dispatches atomic.Int32
 					cfg := listenerConfig{
-						webSocketPath: "/mesh", tailnetPort: 7337, httpsPort: 7337,
+						webSocketPath: "/mesh", tailnetPort: 7337, httpsPort: 7337, httpsProxyProtocol: true,
 						httpHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 							dispatches.Add(1)
 							w.WriteHeader(http.StatusNoContent)
@@ -268,7 +268,7 @@ func TestPrivateHTTPRejectsBeforeProxyAndDemand(t *testing.T) {
 	gate := &hostPolicyDemandGate{}
 	registry.SetDemandGate(gate, nil)
 	cfg := listenerConfig{
-		webSocketPath: "/mesh", httpHandler: appOriginHandler(nil, registry), tailnetPort: 7337, httpsPort: 7337,
+		webSocketPath: "/mesh", httpHandler: appOriginHandler(nil, registry), tailnetPort: 7337, httpsPort: 7337, httpsProxyProtocol: true,
 		httpHosts: httpHostPolicy{tailnetAddrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}},
 	}
 	for _, handler := range []http.Handler{
@@ -371,7 +371,7 @@ func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 }
 
 func TestPrivateHTTPDoesNotReplaceWebSocketOriginRefusal(t *testing.T) {
-	cfg := listenerConfig{webSocketPath: "/mesh", tailnetPort: 7337, httpsPort: 443}
+	cfg := listenerConfig{webSocketPath: "/mesh", tailnetPort: 7337, httpsPort: 443, httpsProxyProtocol: true}
 	request := httptest.NewRequest(http.MethodGet, "http://rebind.attacker.example:7337/mesh", nil)
 	request.Header.Set("Origin", "http://rebind.attacker.example:7337")
 	request.Header.Set("Connection", "Upgrade")
@@ -490,4 +490,21 @@ func verifiedHostPolicyClient(handler http.Handler) http.Handler {
 		r.RemoteAddr = "100.64.0.9:40000"
 		handler.ServeHTTP(w, r)
 	})
+}
+
+func TestPrivateHTTPSRejectsUnauthenticatedNonLoopbackSource(t *testing.T) {
+	for _, address := range []string{"100.64.0.9:40000", "[fd7a:115c:a1e0::1]:40000", "192.0.2.1:40000"} {
+		t.Run(address, func(t *testing.T) {
+			var dispatches int
+			cfg := listenerConfig{httpHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { dispatches++ })}
+			request := httptest.NewRequest(http.MethodGet, "https://host.example.test/platform/pairing/status", nil)
+			request.RemoteAddr = address
+			request.Header.Set("X-Forwarded-For", "127.0.0.1")
+			response := httptest.NewRecorder()
+			serviceOnlyHTTPSHandler(cfg).ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden || dispatches != 0 {
+				t.Fatalf("unauthenticated source status=%d dispatches=%d", response.Code, dispatches)
+			}
+		})
+	}
 }
