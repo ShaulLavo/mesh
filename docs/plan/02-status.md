@@ -238,6 +238,8 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 
 ## Next
 
+Approved 2026-10-08: [session contract and deployment boundaries](11-session-contract-and-boundaries.md) owns the remaining Mesh product, lifecycle, terminal-fidelity, reconnect and authority discussions transferred by Plan 336 Track H. [Plan 07's historical fixture failures](07-quality-and-security-wave.md#historical-fixture-failures) retain unresolved recurrence investigations. [Plan 09's transport comparison baseline](09-residual-hotspots.md#transport-comparison-baseline) owns comparative performance evidence. [Fregat Plan 296](https://github.com/ShaulLavo/fregat/blob/main/plans/296-mesh-update-recovery.md#remaining-helper-readiness-and-idle-cpu) owns helper readiness and Pi CPU verification. Tracker closure transfers execution ownership; it does not establish a causal fix.
+
 Approved: [temporary apps with short URLs](06-temporary-apps.md) is implemented
 for PR review. [T29](../tasks/T29-temporary-apps.md) records architecture, build and
 validation. Production rollout and actual Safari-device verification remain
