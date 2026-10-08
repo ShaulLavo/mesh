@@ -32,10 +32,14 @@ pairing remains available for them. Other accounts and internet visitors receive
 no automatic owner permissions. HTTPS works for both visitors and owners.
 
 Tailscale Serve supplies the device address through PROXY v1. The gateway consumes
-that header and sends it only to the app backend; private Mesh TLS stays unchanged.
+that header and sends it to both TLS backends. The private listener requires
+`--tailscale-serve-proxy-protocol` and authenticates the local forwarder before TLS.
+It rejects loopback and unspecified client addresses before dispatching a service.
+The service proxy replaces caller-supplied forwarding headers with the verified
+client address. Without verified metadata, the gateway closes private routes.
 The edge checks Tailscale's local device inventory, cached for at most five seconds,
 on each request. It does not issue a browser grant that survives leaving the tailnet.
-HTTP forwarding headers never identify an owner. Both PROXY listeners require a
+HTTP forwarding headers never identify an owner. All PROXY listeners require a
 header and authenticate the loopback forwarder's socket UID through an exact-tuple
 Linux `NETLINK_SOCK_DIAG` query. Neither lookup nor startup enumerates the host's
 TCP sockets. Only root and the Mesh process UID may forward source addresses.
@@ -58,7 +62,22 @@ mismatches fail startup instead of silently refusing all traffic. On macOS and
 other unsupported platforms, these owner-access settings also fail startup.
 Mac origin hosts and routing with manual browser pairing remain supported.
 
-For routing with manual browser pairing, omit all three owner-access settings.
+For app routing with manual browser pairing, omit the owner-access settings.
+Private routes through this gateway still require verified source metadata; use
+`--tailnet-owner-access` on the gateway and `--tailscale-serve-proxy-protocol`
+on the private daemon. Automatic owner access on the app edge is independently
+optional.
+
+For direct Tailnet TCP/443 forwarding to the private listener on 8443, enable
+`--tailscale-serve-proxy-protocol` on the daemon and PROXY v1 in Tailscale Serve.
+The original raw-TLS configuration remains available without that option for
+non-gateway deployments. Public-edge HTTP forwarding and the direct Tailnet
+HTTP/control listener keep their existing trust policies.
+
+Deploy the daemon and rebuilt gateway together. An old gateway sends raw TLS to
+the private backend and is rejected by the new PROXY listener; a new gateway
+sends PROXY metadata that an old raw-TLS backend rejects. Neither mismatch falls
+back to a loopback client address.
 
 The required `--domains` flag selects the same naming policy used by the backends.
 During migration it routes both configured domains at once.

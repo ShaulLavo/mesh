@@ -1763,7 +1763,7 @@ func (a *application) daemonCommand() *cobra.Command {
 	command.Flags().StringVar(&publicEdgeTarget, "public-edge-target", "", "pinned public-edge target config file")
 	command.Flags().StringVar(&appDataRoot, "app-data-root", "", "managed temporary app workload root; Linux defaults to /work/mesh/apps")
 	command.Flags().UintVar(&tailscaleServePort, "tailscale-serve-port", 0, "loopback TLS gateway port; zero forwards directly to --https-port")
-	command.Flags().BoolVar(&tailscaleServeProxy, "tailscale-serve-proxy-protocol", false, "send PROXY v1 device metadata to a trusted loopback TLS gateway")
+	command.Flags().BoolVar(&tailscaleServeProxy, "tailscale-serve-proxy-protocol", false, "require verified PROXY v1 client addresses for private HTTPS and Tailscale Serve")
 	command.Flags().BoolVar(&tailscaleServe, "tailscale-serve", false, "persist raw Tailscale TCP/443 forwarding to the HTTPS port")
 	command.Flags().DurationVar(&hibernateIdle, "hibernate-idle", 0, "stop a Codex or Claude conversation after its session is detached and quiet this long, resuming it on attach; zero disables")
 	return command

@@ -50,7 +50,7 @@ func checkGateway(t *testing.T, metadata bool) {
 	certificate, roots := gatewayCertificate(t, hosts)
 	backend := func(name string) *httptest.Server {
 		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if metadata && name == "apps" && r.RemoteAddr != "100.64.0.2:12345" {
+			if metadata && r.RemoteAddr != "100.64.0.2:12345" {
 				t.Errorf("lost verified device address: %s", r.RemoteAddr)
 			}
 			body, err := io.ReadAll(r.Body)
@@ -62,7 +62,7 @@ func checkGateway(t *testing.T, metadata bool) {
 			_ = json.NewEncoder(w).Encode(name + ":" + r.TLS.ServerName + ":" + string(body))
 		}))
 		server.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}
-		if metadata && name == "apps" {
+		if metadata {
 			server.Listener = tailnet.ProxyListener{Listener: server.Listener, AllowedUIDs: []uint32{proxyTestUID(t)}}
 		}
 		server.StartTLS()
@@ -115,6 +115,13 @@ func checkGatewayRequest(t *testing.T, address, host string, version uint16, roo
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
 	payload := strings.Repeat("encrypted body ", 8192)
 	response, err := client.Post("https://"+host+"/", "text/plain", strings.NewReader(payload))
+	if !metadata && !appHost(host) {
+		if err == nil {
+			_ = response.Body.Close()
+			t.Fatal("private gateway route accepted unverified client metadata")
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("TLS %x for %s: %v", version, host, err)
 	}

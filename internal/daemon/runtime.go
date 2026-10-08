@@ -55,7 +55,9 @@ var ErrDaemonAlreadyRunning = errors.New("daemon: already running")
 // ListenerConfig identifies the local daemon socket and optional Tailnet HTTP
 // listeners. TailnetPort and WebSocketPath are required when TailnetAddrs is
 // non-empty. HTTPSPort binds a service-only TLS listener to loopback and
-// requires TLSConfig.GetCertificate. HTTPHandler receives HTTPS requests and
+// requires TLSConfig.GetCertificate. HTTPSProxyProtocol requires a UID-verified
+// loopback PROXY v1 forwarder and a non-loopback client address.
+// HTTPHandler receives HTTPS requests and
 // Tailnet HTTP requests outside WebSocketPath, after the Host policy accepts a
 // bound IP, TailnetNames entry, current PrivateName, or a public name from
 // TrustPublicEdgeForwarding. ReportError receives non-fatal listener errors and
@@ -76,6 +78,7 @@ type ListenerConfig struct {
 	WebSocketPath              string
 	HTTPHandler                http.Handler
 	HTTPSPort                  uint16
+	HTTPSProxyProtocol         bool
 	TLSConfig                  *tls.Config
 	TailnetOwnerAccess         bool
 	PublicListenAddress        string
@@ -97,6 +100,7 @@ type listenerConfig struct {
 	httpHandler                http.Handler
 	httpHosts                  httpHostPolicy
 	httpsPort                  uint16
+	httpsProxyProtocol         bool
 	tlsConfig                  *tls.Config
 	tailnetOwnerAccess         bool
 	proxyForwarderUIDs         []uint32
@@ -226,6 +230,9 @@ func serveBoundListeners(
 	server := newWebSocketServer(ctx, normalized, tailnetConnections)
 	var httpsServer *http.Server
 	if httpsListener != nil {
+		if normalized.httpsProxyProtocol {
+			httpsListener = tailnet.ProxyListener{Listener: httpsListener, AllowedUIDs: normalized.proxyForwarderUIDs}
+		}
 		httpsServer = &http.Server{
 			Handler:           serviceOnlyHTTPSHandler(normalized),
 			ReadHeaderTimeout: httpReadHeaderTimeout,
@@ -349,11 +356,11 @@ func serveBoundListeners(
 }
 
 func validateTailnetOwnerAccess(cfg ListenerConfig) ([]uint32, error) {
-	if !cfg.TailnetOwnerAccess {
+	if !cfg.TailnetOwnerAccess && !cfg.HTTPSProxyProtocol {
 		return nil, nil
 	}
 	address, err := netip.ParseAddrPort(cfg.PublicListenAddress)
-	if err != nil || !address.Addr().IsLoopback() || cfg.PublicTLSConfig == nil {
+	if cfg.TailnetOwnerAccess && (err != nil || !address.Addr().IsLoopback() || cfg.PublicTLSConfig == nil) {
 		return nil, errors.New("daemon: Tailnet owner access requires a loopback public TLS listener")
 	}
 	uids, err := tailnet.ProxyForwarderUIDs()
@@ -405,6 +412,7 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		webSocketPath:              cfg.WebSocketPath,
 		httpHandler:                cfg.HTTPHandler,
 		httpsPort:                  cfg.HTTPSPort,
+		httpsProxyProtocol:         cfg.HTTPSProxyProtocol,
 		publicListenAddress:        cfg.PublicListenAddress,
 		tailnetOwnerAccess:         cfg.TailnetOwnerAccess,
 		publicHTTPHandler:          cfg.PublicHTTPHandler,
@@ -498,6 +506,17 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 func serviceOnlyHTTPSHandler(cfg listenerConfig) http.Handler {
 	services := privateHTTPHandler(cfg.httpHandler, cfg.httpHosts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if cfg.httpsProxyProtocol {
+			source, err := netip.ParseAddrPort(r.RemoteAddr)
+			if err != nil || source.Addr().IsLoopback() || source.Addr().IsUnspecified() {
+				http.Error(w, "verified client address required", http.StatusForbidden)
+				return
+			}
+			// PROXY describes the TLS client, even when that device is also a public edge.
+			r = r.Clone(r.Context())
+			r.Header.Del("X-Forwarded-For")
+			r.Header.Del("X-Forwarded-Proto")
+		}
 		if r.URL.EscapedPath() == cfg.webSocketPath || r.URL.Path == cfg.webSocketPath {
 			http.NotFound(w, r)
 			return
