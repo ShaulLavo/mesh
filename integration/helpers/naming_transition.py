@@ -84,7 +84,7 @@ class RetainedCatalog:
         parent = int(subprocess.check_output(["ps", "-o", "ppid=", "-p", str(self.shell_pid)]))
         require(parent == self.worker_pid, "retained shell moved to another worker")
         digest = image_digest(daemon_binary)
-        require(host["build"]["digest"] == digest and host["build"]["stateVersion"] == self.initial["schemaVersion"],
+        require(host["build"]["digest"] == digest and host["build"]["stateVersion"] in {self.worker_build["stateVersion"], self.initial["schemaVersion"]},
                 "destination did not run the selected daemon image and state contract")
         require(host["id"] == host["meshIdentity"] == self.initial["immutableSessionRows"][0][1],
                 "source hop changed the retained session's cryptographic destination")

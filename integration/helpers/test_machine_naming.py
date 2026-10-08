@@ -117,6 +117,8 @@ class RetainedCatalogTest(unittest.TestCase):
         self.assertEqual(receipt["catalogSchemaVersion"], 11)
         self.assertEqual(receipt["workerBuild"]["stateVersion"], 10)
         self.observe()
+        self.host["build"] = self.host["build"] | {"stateVersion": 10}
+        self.observe()
 
     def test_private_host_migration_refuses_unrelated_schema_change(self):
         with sqlite3.connect(self.database) as database:
