@@ -63,7 +63,7 @@ dump_diagnostics() {
   local path
   for path in "$test_root/client.err" "$test_root/client.out" "$test_root/old-first.log" \
     "$test_root/candidate.err" "$test_root/candidate.out" "$test_root/candidate.log" \
-    "$test_root/rollback.err" "$test_root/rollback.out" "$test_root/old-rollback.log" \
+    "$test_root/restart.err" "$test_root/restart.out" "$test_root/candidate-restart.log" \
     "$state"/s/*/worker.log; do
     [[ -s $path ]] || continue
     printf '%s (last 4096 bytes):\n' "$path" >&2
@@ -325,33 +325,33 @@ exec 4>&-
 stop_daemon "$candidate_daemon" "$candidate_binary"
 candidate_daemon=''
 
-env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$old_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/old-rollback.log" 2>&1 &
-old_daemon=$!
-wait_for_daemon "$old_binary" "$old_daemon" || fail "retained daemon could not reopen candidate-written state: $(cat "$test_root/old-rollback.log")"
-[[ $(read_state_version) == "$candidate_written_state" ]] || fail 'retained daemon changed candidate-written schema'
-mesh "$old_binary" ls --daemon | grep -Fq "$session" || fail 'retained daemon lost the live session after candidate writes'
-mesh "$old_binary" ls --daemon --all | grep -Fq "$saved_session" || fail 'retained daemon lost saved recovery session after candidate writes'
+env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$candidate_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/candidate-restart.log" 2>&1 &
+candidate_daemon=$!
+wait_for_daemon "$candidate_binary" "$candidate_daemon" || fail "candidate restart could not reopen candidate-written state: $(cat "$test_root/candidate-restart.log")"
+[[ $(read_state_version) == "$candidate_written_state" ]] || fail 'candidate restart changed candidate-written schema'
+mesh "$candidate_binary" ls --daemon | grep -Fq "$session" || fail 'candidate restart lost the live session after candidate writes'
+mesh "$candidate_binary" ls --daemon --all | grep -Fq "$saved_session" || fail 'candidate restart lost saved recovery session after candidate writes'
 assert_session_processes
-mkfifo "$test_root/rollback-input"
-mesh "$old_binary" attach "$session" --daemon --detach-key=ctrl+] <"$test_root/rollback-input" >"$test_root/rollback.out" 2>"$test_root/rollback.err" &
+mkfifo "$test_root/restart-input"
+mesh "$candidate_binary" attach "$session" --daemon --detach-key=ctrl+] <"$test_root/restart-input" >"$test_root/restart.out" 2>"$test_root/restart.err" &
 client=$!
-exec 5>"$test_root/rollback-input"
-send_token 5 "RETAINED_ROLLBACK_$session"
-wait_for_token "$test_root/rollback.out" "RETAINED_ROLLBACK_$session" || fail 'retained daemon could not exchange data after rollback'
+exec 5>"$test_root/restart-input"
+send_token 5 "CANDIDATE_RESTART_$session"
+wait_for_token "$test_root/restart.out" "CANDIDATE_RESTART_$session" || fail 'candidate restart could not exchange data after restart'
 assert_session_processes
-assert_live_recovery || fail 'retained daemon did not accept worker checkpoint after rollback'
+assert_live_recovery || fail 'candidate restart did not accept worker checkpoint after restart'
 recovery_after=$(sha256sum "$state/s/$saved_session/recovery.json" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$state/s/$saved_session/recovery.json" | awk '{print $1}')
-[[ $recovery_after == "$recovery_before" ]] || fail 'recovery record changed across candidate and retained daemon startups'
+[[ $recovery_after == "$recovery_before" ]] || fail 'recovery record changed across candidate upgrade and restart'
 printf '\035' >&5
 exec 5>&-
-wait_for_exit "$client" || fail 'rollback client did not detach'
+wait_for_exit "$client" || fail 'restart client did not detach'
 wait "$client" 2>/dev/null || true
 client=''
-mesh "$old_binary" kill "$session" >/dev/null
+mesh "$candidate_binary" kill "$session" >/dev/null
 shell_pid=''
 worker_pid=''
-stop_daemon "$old_daemon" "$old_binary"
-old_daemon=''
+stop_daemon "$candidate_daemon" "$candidate_binary"
+candidate_daemon=''
 
 from_digest=$(sha256sum "$old_binary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$old_binary" | awk '{print $1}')
 to_digest=$(sha256sum "$candidate_binary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$candidate_binary" | awk '{print $1}')
@@ -377,7 +377,7 @@ receipt = {
     "workerMax": int(sys.argv[9]),
     "workerWrite": int(sys.argv[9]),
     "journalVersion": 1,
-    "retainedOpenedCandidateState": True,
+    "candidateOpenedRetainedState": True,
     "sessionsPreserved": True,
     "recoveryRecordsPreserved": True,
 }

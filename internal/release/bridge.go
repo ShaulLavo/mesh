@@ -32,7 +32,7 @@ type TransitionReceipt struct {
 	WorkerMax                    int      `json:"workerMax"`
 	WorkerWrite                  int      `json:"workerWrite"`
 	JournalVersion               int      `json:"journalVersion"`
-	RetainedOpenedCandidateState bool     `json:"retainedOpenedCandidateState"`
+	CandidateOpenedRetainedState bool     `json:"candidateOpenedRetainedState"`
 	SessionsPreserved            bool     `json:"sessionsPreserved"`
 	RecoveryRecordsPreserved     bool     `json:"recoveryRecordsPreserved"`
 }
@@ -194,8 +194,8 @@ func VerifyTransitionReceipt(data []byte, transition Transition, compatibility C
 	if proof.WorkerMin <= 0 || proof.WorkerMin > compatibility.WorkerMax || proof.WorkerMax != compatibility.WorkerMax || proof.WorkerWrite != compatibility.WorkerWrite || proof.JournalVersion != compatibility.JournalVersion {
 		return proof, errors.New("release: transition receipt protocol evidence differs from declared compatibility")
 	}
-	if !proof.RetainedOpenedCandidateState || !proof.SessionsPreserved || !proof.RecoveryRecordsPreserved {
-		return proof, errors.New("release: transition receipt did not pass every rollback check")
+	if !proof.CandidateOpenedRetainedState || !proof.SessionsPreserved || !proof.RecoveryRecordsPreserved {
+		return proof, errors.New("release: transition receipt did not pass every forward transition check")
 	}
 	return proof, nil
 }

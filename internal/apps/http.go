@@ -200,7 +200,7 @@ func (e *Registry) ServeHost(w http.ResponseWriter, r *http.Request, name string
 		if request.URL.RawPath != "" {
 			request.URL.RawPath = "/.mesh-app/origin/" + id + request.URL.RawPath
 		}
-		request.Host = name
+		request.Host = endpoint.String()
 		stripRequestCookies(request)
 		request.Header.Set("X-Mesh-App-Admission", base64.RawURLEncoding.EncodeToString(encoded))
 		request.Header.Set("X-Forwarded-Proto", "https")
@@ -351,7 +351,7 @@ func (p *wsActivity) feed(b []byte) bool {
 
 type activeStream struct {
 	io.ReadWriteCloser
-	edge               *Registry
+	registry           *Registry
 	app                Record
 	incoming, outgoing wsActivity
 	once               sync.Once
@@ -361,7 +361,7 @@ type activeStream struct {
 }
 
 func (e *Registry) watchStream(app Record, rw io.ReadWriteCloser) *activeStream {
-	stream := &activeStream{ReadWriteCloser: rw, edge: e, app: app, done: make(chan struct{})}
+	stream := &activeStream{ReadWriteCloser: rw, registry: e, app: app, done: make(chan struct{})}
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -389,7 +389,7 @@ func (s *activeStream) touch(active bool) {
 	if time.Since(s.last) < time.Second {
 		return
 	}
-	_, _, _ = s.edge.activity(context.Background(), s.app)
+	_, _, _ = s.registry.activity(context.Background(), s.app)
 	s.last = time.Now()
 }
 func (s *activeStream) Read(b []byte) (int, error) {

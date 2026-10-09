@@ -27,7 +27,7 @@ func TestWakeCrossesWebSocketAndHonorsTargetRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}

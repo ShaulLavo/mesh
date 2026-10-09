@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/dnsname"
-	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 )
@@ -76,7 +76,7 @@ func TestClientServerDispatchesCertificateInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, controller)
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,21 +97,21 @@ func TestClientServerDispatchesCertificateInstall(t *testing.T) {
 	}
 }
 
-func TestConfigureCertificatesKeepsProxyModeCertificateFree(t *testing.T) {
+func TestConfigureCertificatesWithoutHTTPSCreatesNoCertificates(t *testing.T) {
 	stateDir := t.TempDir()
-	runtime, err := configureCertificates(certificateRuntimeConfig{StateDir: stateDir, PublicMode: edge.ModeProxy})
+	runtime, err := configureCertificates(certificateRuntimeConfig{StateDir: stateDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.OriginTLS != nil || runtime.PublicTLS != nil {
-		t.Fatalf("proxy TLS runtime = origin %v public %v", runtime.OriginTLS, runtime.PublicTLS)
+	if runtime.OriginTLS != nil || runtime.AppRegistryTLS != nil {
+		t.Fatalf("disabled TLS runtime = origin %v service %v", runtime.OriginTLS, runtime.AppRegistryTLS)
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, certificateDirectoryName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("proxy mode touched public certificate state: %v", err)
+		t.Fatalf("disabled runtime touched certificate state: %v", err)
 	}
 }
 
-func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
+func TestConfigureCertificatesSharesPrivateServiceSourceWithRegistry(t *testing.T) {
 	target, _, err := identity.LoadOrCreate(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -120,55 +120,63 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicRenewer, publicSigner, err := identity.LoadOrCreate(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
 	stateDir := t.TempDir()
 	runtime, err := configureCertificates(certificateRuntimeConfig{
 		StateDir: stateDir, TargetID: target.ID,
 		OriginHTTPSPort: 8443, OriginRenewerID: privateRenewer.ID,
-		PublicMode: edge.ModeDirectTLS, PublicCertificatePin: publicRenewer.ID,
+		AppRegistryRenewerID: privateRenewer.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.OriginTLS == nil || runtime.PublicTLS == nil || runtime.OriginTLS.GetCertificate == nil || runtime.PublicTLS.GetCertificate == nil {
-		t.Fatal("combined runtime did not construct both independent TLS sources")
+	if runtime.OriginTLS == nil || runtime.AppRegistryTLS == nil || runtime.OriginTLS.GetCertificate == nil || runtime.AppRegistryTLS.GetCertificate == nil {
+		t.Fatal("combined runtime did not construct origin and registry TLS sources")
 	}
 	controller, ok := runtime.Controller.(*certificateController)
 	if !ok {
 		t.Fatalf("certificate controller = %T", runtime.Controller)
 	}
 	now := time.Now().UTC()
-	publicCertificate, publicKey := daemonTestNamedCertificate(t, 801, now, dnsname.PublicWildcardName())
-	publicBundle, err := dnsname.ValidateBundle(publicCertificate, publicKey, dnsname.PublicWildcardName(), now)
+	serviceCertificate, serviceKey := daemonTestNamedCertificate(t, 801, now, dnsname.ServiceWildcardName())
+	serviceBundle, err := dnsname.ValidateBundle(serviceCertificate, serviceKey, dnsname.ServiceWildcardName(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicStaging, err := dnsname.SignBundle(publicBundle, target.ID, dnsname.ProfilePublicEdge, dnsname.EnvironmentStaging, "", publicSigner)
+	serviceStaging, err := dnsname.SignBundle(serviceBundle, target.ID, dnsname.ProfilePrivateService, dnsname.EnvironmentStaging, "", privateSigner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := controller.installers[dnsname.ProfilePublicEdge].Install(publicStaging); err != nil {
+	if _, _, err := controller.installers[dnsname.ProfilePrivateService].Install(serviceStaging); err != nil {
 		t.Fatal(err)
 	}
-	publicStagingPath := filepath.Join(stateDir, certificateDirectoryName, string(dnsname.ProfilePublicEdge), string(dnsname.EnvironmentStaging))
-	if info, err := os.Stat(publicStagingPath); err != nil || !info.IsDir() {
-		t.Fatalf("public staging slot %s: %v", publicStagingPath, err)
+	serviceStagingPath := filepath.Join(stateDir, certificateDirectoryName, string(dnsname.ProfilePrivateService), string(dnsname.EnvironmentStaging))
+	if info, err := os.Stat(serviceStagingPath); err != nil || !info.IsDir() {
+		t.Fatalf("service staging slot %s: %v", serviceStagingPath, err)
 	}
-	if _, err := runtime.PublicTLS.GetCertificate(nil); !errors.Is(err, dnsname.ErrNoCertificate) {
-		t.Fatalf("public staging certificate entered live TLS source: %v", err)
+	if _, err := runtime.AppRegistryTLS.GetCertificate(nil); !errors.Is(err, dnsname.ErrNoCertificate) {
+		t.Fatalf("service staging certificate entered live TLS source: %v", err)
 	}
-	publicLive, err := dnsname.SignBundle(publicBundle, target.ID, dnsname.ProfilePublicEdge, dnsname.EnvironmentLive, "", publicSigner)
+	serviceLive, err := dnsname.SignBundle(serviceBundle, target.ID, dnsname.ProfilePrivateService, dnsname.EnvironmentLive, "", privateSigner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := controller.installers[dnsname.ProfilePublicEdge].Install(publicLive); err != nil {
+	if _, _, err := controller.installers[dnsname.ProfilePrivateService].Install(serviceLive); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.PublicTLS.GetCertificate(nil); err != nil {
-		t.Fatalf("public live certificate was not hot-published: %v", err)
+	if _, err := runtime.AppRegistryTLS.GetCertificate(nil); err != nil {
+		t.Fatalf("service live certificate was not hot-published: %v", err)
+	}
+
+	originShort, err := runtime.OriginTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: "fregat.mesh.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registryShort, err := runtime.AppRegistryTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: "7k3d.mesh.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if originShort != registryShort {
+		t.Fatal("origin and registry did not share the private-service TLS source")
 	}
 
 	privateCertificate, privateKey := daemonTestNamedCertificate(t, 802, now, dnsname.WildcardName())
@@ -196,7 +204,6 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 	restarted, err := configureCertificates(certificateRuntimeConfig{
 		StateDir: stateDir, TargetID: target.ID,
 		OriginHTTPSPort: 8443, OriginRenewerID: privateRenewer.ID,
-		PublicMode: edge.ModeProxy,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +217,7 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 	}
 	for _, path := range []string{
 		filepath.Join(stateDir, privateTLSDirectoryName, string(dnsname.EnvironmentLive)),
-		filepath.Join(stateDir, certificateDirectoryName, string(dnsname.ProfilePublicEdge), string(dnsname.EnvironmentLive)),
+		filepath.Join(stateDir, certificateDirectoryName, string(dnsname.ProfilePrivateService), string(dnsname.EnvironmentLive)),
 	} {
 		if info, err := os.Stat(path); err != nil || !info.IsDir() {
 			t.Fatalf("certificate slot %s: %v", path, err)
@@ -218,11 +225,12 @@ func TestConfigureCertificatesSeparatesPrivateAndPublicProfiles(t *testing.T) {
 	}
 }
 
-func TestConfigureCertificatesRejectsIncompleteDirectTLSProfile(t *testing.T) {
+func TestConfigureCertificatesRejectsInvalidRegistryAndConflictingPins(t *testing.T) {
 	for name, config := range map[string]certificateRuntimeConfig{
-		"missing pin": {StateDir: t.TempDir(), PublicMode: edge.ModeDirectTLS},
-		"invalid pin": {StateDir: t.TempDir(), TargetID: "invalid", PublicMode: edge.ModeDirectTLS, PublicCertificatePin: "invalid"},
-		"proxy pin":   {StateDir: t.TempDir(), PublicMode: edge.ModeProxy, PublicCertificatePin: "invalid"},
+		"invalid registry pin":  {StateDir: t.TempDir(), TargetID: "invalid", AppRegistryRenewerID: "invalid"},
+		"conflicting signers":   {StateDir: t.TempDir(), OriginHTTPSPort: 8443, OriginRenewerID: "origin", AppRegistryRenewerID: "registry"},
+		"origin without HTTPS":  {StateDir: t.TempDir(), OriginRenewerID: "origin"},
+		"origin without signer": {StateDir: t.TempDir(), OriginHTTPSPort: 8443},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := configureCertificates(config); err == nil {

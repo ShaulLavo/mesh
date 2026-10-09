@@ -116,7 +116,7 @@ while [ ! -e "$3" ]; do sleep 0.01; done
 		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
 		SessionsDir: sessionsDir,
 	})
-	server, err := newClientServer(lifecycle, connector, disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, connector, noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,11 +2,12 @@ package cli
 
 import (
 	"context"
+	"time"
+
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/usagefeed"
-	"time"
 )
 
 type DashboardFunc func(context.Context, DashboardInput) error

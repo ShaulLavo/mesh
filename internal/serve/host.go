@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// CanonicalHost keeps listener identity checks and public route selection on
+// CanonicalHost keeps private listener identity checks and routing on
 // the same authority: DNS case, root dots, and forwarding ports are not identity.
 // Malformed authorities and scoped IPv6 literals have no canonical Host.
 func CanonicalHost(authority string) (string, bool) {

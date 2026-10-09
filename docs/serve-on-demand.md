@@ -14,7 +14,7 @@ mesh serve pc --run 'bun run dev:web' --cwd ~/projects/app \
 ```
 
 Point the dev server at the upstream ports (15173 and 13001 here), bound to
-`127.0.0.1`. Clients use the public ports (5173 and 3001). Mesh binds those on
+`127.0.0.1`. Clients use the listener ports (5173 and 3001). Mesh binds those on
 `127.0.0.1` and proxies HTTP and WebSocket traffic from each one to its upstream.
 
 ## The route
@@ -36,8 +36,7 @@ route is `/dev`, and a request to `https://pc.mesh.new.example/dev/` starts it
 too. When TARGET is one of the listener ports, the tailnet path forwards
 straight to that listener's upstream.
 
-`--run` cannot be combined with `--public`. A route that starts a process when
-someone on the internet opens a URL would be a different kind of exposure.
+On-demand routes are private, like every Mesh service.
 
 ## What happens
 

@@ -108,10 +108,10 @@ func TestPrivateHTTPHostAllowlist(t *testing.T) {
 		{name: "private name suffix attack", host: "evilpc.mesh.mesh.test"},
 		{name: "other private host", host: "other.mesh.mesh.test"},
 		{name: "private base wildcard", host: "mesh.mesh.test"},
-		{name: "public pinned edge", host: "blog.mesh.test", edge: true, allowed: true},
-		{name: "public pinned edge external port", host: "blog.mesh.test:443", edge: true, allowed: true},
-		{name: "public pinned edge case and dot", host: "BLOG.MESH.TEST.:443", edge: true, allowed: true},
-		{name: "public untrusted peer", host: "blog.mesh.test"},
+		{name: "unregistered app host", host: "blog.mesh.test", edge: true},
+		{name: "unregistered app host external port", host: "blog.mesh.test:443", edge: true},
+		{name: "unregistered app host case and dot", host: "BLOG.MESH.TEST.:443", edge: true},
+		{name: "unregistered app host from peer", host: "blog.mesh.test"},
 		{name: "public apex", host: "mesh.test", edge: true},
 		{name: "nested public name", host: "nested.blog.mesh.test", edge: true},
 		{name: "attacker", host: "rebind.attacker.example:7337"},
@@ -138,13 +138,6 @@ func TestPrivateHTTPHostAllowlist(t *testing.T) {
 							tailnetAddrs: []netip.Addr{netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("fd7a:115c:a1e0::1")},
 							tailnetNames: []string{"pc.example.ts.net", "pc"},
 							privateName:  func() string { return "pc.mesh.mesh.test" },
-							trustPublicEdgeForwarding: func(address netip.Addr) bool {
-								peer := "127.0.0.1"
-								if surface == "loopback HTTPS" {
-									peer = "100.64.0.9"
-								}
-								return test.edge && address == netip.MustParseAddr(peer)
-							},
 						},
 					}
 					handler := newWebSocketServer(context.Background(), cfg, newConnectionGroup(echoOneFrame)).Handler
@@ -188,17 +181,12 @@ func TestPrivateHTTPHostAllowlist(t *testing.T) {
 
 func TestPrivateHTTPHostPolicyUsesCurrentIdentity(t *testing.T) {
 	var privateName atomic.Pointer[string]
-	var edgeAddress atomic.Pointer[netip.Addr]
 	policy := httpHostPolicy{
 		privateName: func() string {
 			if name := privateName.Load(); name != nil {
 				return *name
 			}
 			return ""
-		},
-		trustPublicEdgeForwarding: func(address netip.Addr) bool {
-			pinned := edgeAddress.Load()
-			return pinned != nil && *pinned == address
 		},
 	}
 	request := httptest.NewRequest(http.MethodGet, "http://pc.mesh.mesh.test/files/", nil)
@@ -216,26 +204,9 @@ func TestPrivateHTTPHostPolicyUsesCurrentIdentity(t *testing.T) {
 	}
 	request.Host, request.RemoteAddr = "blog.mesh.test", "100.64.0.9:40000"
 	if policy.accepts(request) {
-		t.Fatal("accepted public name before the edge was pinned")
+		t.Fatal("unconfigured app host accepted from a Tailnet peer")
 	}
-	edge := netip.MustParseAddr("100.64.0.9")
-	edgeAddress.Store(&edge)
-	if !policy.accepts(request) {
-		t.Fatal("pinned edge was not accepted without a restart")
-	}
-	request.RemoteAddr = "[::ffff:100.64.0.9]:40000"
-	if !policy.accepts(request) {
-		t.Fatal("IPv4-mapped immediate edge address was not accepted")
-	}
-	request.RemoteAddr = "not-an-address"
-	if policy.accepts(request) {
-		t.Fatal("accepted public name with an invalid immediate peer")
-	}
-	edgeAddress.Store(nil)
-	request.RemoteAddr = "100.64.0.9:40000"
-	if policy.accepts(request) {
-		t.Fatal("accepted public name after the edge pin was withdrawn")
-	}
+
 }
 
 type hostPolicyDemandGate struct {
@@ -328,11 +299,8 @@ func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 		StateDir: compactSocketTempDir(t), TailnetPort: port, TailnetAddrs: []string{"127.0.0.1", "::1"}, WebSocketPath: "/mesh",
 		TailnetNames: []string{"pc.example.ts.net", "pc"},
 		PrivateName:  func() string { return "pc.mesh.mesh.test" },
-		TrustPublicEdgeForwarding: func(address netip.Addr) bool {
-			return address == netip.MustParseAddr("127.0.0.1")
-		},
-		ReportError: func(err error) { t.Log(err) },
-		HTTPHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
+		ReportError:  func(err error) { t.Log(err) },
+		HTTPHandler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
 	}, echoOneFrame, listener)
 	waitForTCPRuntime(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))), done)
 	for _, test := range []struct {
@@ -346,7 +314,7 @@ func TestServePrivateHTTPUsesBoundAuthorities(t *testing.T) {
 		{host: "pc.example.ts.net", want: http.StatusNoContent},
 		{host: "pc", want: http.StatusNoContent},
 		{host: "pc.mesh.mesh.test:443", want: http.StatusNoContent},
-		{host: "blog.mesh.test:443", want: http.StatusNoContent},
+		{host: "blog.mesh.test:443", want: http.StatusMisdirectedRequest},
 		{host: "rebind.attacker.example:7337", want: http.StatusMisdirectedRequest},
 	} {
 		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(int(port))+"/service", nil)

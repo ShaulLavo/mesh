@@ -10,7 +10,7 @@ import (
 	"github.com/shaul/mesh/internal/identity"
 )
 
-func TestPrivateServiceCertificateIsPinnedAndSeparateFromPublicEdge(t *testing.T) {
+func TestPrivateServiceCertificateIsPinnedAndRejectsRemovedProfile(t *testing.T) {
 	target, _, err := identity.LoadOrCreate(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -34,16 +34,14 @@ func TestPrivateServiceCertificateIsPinnedAndSeparateFromPublicEdge(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	public, err := dnsname.SignBundle(bundle, target.ID, dnsname.ProfilePublicEdge, dnsname.EnvironmentLive, "", signer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := installer.Install(public); err == nil {
-		t.Fatal("public edge profile installed in private service slot")
-	}
 	signed, err := dnsname.SignBundle(bundle, target.ID, dnsname.ProfilePrivateService, dnsname.EnvironmentLive, "", signer)
 	if err != nil {
 		t.Fatal(err)
+	}
+	removed := signed
+	removed.Profile = dnsname.CertificateProfile("public-edge")
+	if _, _, err := installer.Install(removed); err == nil {
+		t.Fatal("removed profile installed in private service slot")
 	}
 	if _, _, err := installer.Install(signed); err != nil {
 		t.Fatal(err)

@@ -12,7 +12,7 @@ import struct
 import subprocess
 
 from mesh_control import round_trip
-from public_http_fixture import MARKER, receive_frame, receive_headers
+from http_fixture import MARKER, receive_frame, receive_headers
 
 
 def run(*arguments):
@@ -60,7 +60,7 @@ def configure(root, pid):
         '-sha256', '-nodes', '-days', '30', '-subj', '/CN=*.mesh.test',
         '-addext', 'subjectAltName=DNS:*.mesh.test', '-keyout', str(root / 'tls.key'),
         '-out', str(root / 'tls.pem'))
-    nodes = {'e': ('edge.app.test', '127.0.0.1'), 'o': ('origin.app.test', '127.0.0.21')}
+    nodes = {'e': ('registry.app.test', '127.0.0.1'), 'o': ('origin.app.test', '127.0.0.21')}
     for key, (name, address) in nodes.items():
         peers = {peer: {'DNSName': peer_name + '.', 'TailscaleIPs': [peer_address], 'Online': True, 'UserID': 1}
                  for peer, (peer_name, peer_address) in nodes.items() if peer != key}
@@ -68,8 +68,8 @@ def configure(root, pid):
         peers['other-user'] = {'DNSName': 'outsider.app.test.', 'TailscaleIPs': ['100.64.0.10'], 'Online': True, 'UserID': 2}
         status = {'BackendState': 'Running', 'Self': {'DNSName': name + '.', 'TailscaleIPs': [address], 'Online': True, 'UserID': 1}, 'Peer': peers}
         (root / (key + '-status.json')).write_text(json.dumps(status))
-    origin = {'identity': identity(root, 'o'), 'displayAlias': 'app origin', 'tailscaleName': nodes['o'][0], 'controlPort': control, 'websocketPath': '/mesh'}
-    (root / 'edge.json').write_text(json.dumps({'mode': 'direct-tls', 'tailnetOwnerAccess': True,
+    origin = {'identity': identity(root, 'o'), 'tailscaleName': nodes['o'][0], 'controlPort': control, 'websocketPath': '/mesh'}
+    (root / 'registry.json').write_text(json.dumps({
         'listenAddress': f'127.0.0.1:{proxy}', 'certificateRenewerId': renewer_id, 'origins': [origin]}))
     (root / 'target.json').write_text(json.dumps({'identity': identity(root, 'e'), 'tailscaleName': nodes['e'][0], 'controlPort': control, 'websocketPath': '/mesh'}))
 
@@ -77,7 +77,7 @@ def configure(root, pid):
 def install(root):
     target_id, signer_id = identity(root, 'e'), (root / 'renewer.id').read_text()
     certificate, private_key = (root / 'tls.pem').read_bytes(), (root / 'tls.key').read_bytes()
-    fields = [b'mesh/certificate-bundle/v3', b'public-edge', b'live', target_id.encode(), signer_id.encode(), b'', certificate, private_key]
+    fields = [b'mesh/certificate-bundle/v3', b'private-service', b'live', target_id.encode(), signer_id.encode(), b'', certificate, private_key]
     digest = hashlib.sha256()
     for field in fields:
         digest.update(struct.pack('>Q', len(field)))
@@ -86,7 +86,7 @@ def install(root):
     signature = run('openssl', 'pkeyutl', '-sign', '-rawin', '-inkey', str(root / 'renewer.key'), '-in', str(root / 'tls.digest'))
     response = round_trip(str(root / 'e' / 'daemon.sock'), {
         'type': 'certificate.install', 'requestId': 'integration-private-app-tls',
-        'certificate': {'profile': 'public-edge', 'environment': 'live', 'targetId': target_id, 'signerId': signer_id,
+        'certificate': {'profile': 'private-service', 'environment': 'live', 'targetId': target_id, 'signerId': signer_id,
             'certificatePem': base64.b64encode(certificate).decode(), 'privateKeyPem': base64.b64encode(private_key).decode(),
             'signature': base64.b64encode(signature).decode()}})
     if response.get('type') != 'certificate.installed' or not response.get('certificateFingerprint'):

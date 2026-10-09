@@ -55,7 +55,7 @@ type ACMEClient interface {
 }
 
 // ChallengeSolver owns DNS-01 presentation, authoritative propagation, and
-// exact cleanup. T13 can reuse it for public-name orders.
+// exact cleanup for private wildcard orders.
 type ChallengeSolver interface {
 	Present(context.Context, string, string) (ChallengeRecord, error)
 	Wait(context.Context, ChallengeRecord) error

@@ -73,7 +73,7 @@ func TestPrivateNamesStagingComposesACMECloudflareAndWebSocketDistribution(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientServer, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, certificateControl)
+	clientServer, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, certificateControl)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -64,7 +64,7 @@ type DemandGate interface {
 // Equal reports whether two services have the same definition.
 func (s Service) Equal(other Service) bool {
 	return s.DisplayName == other.DisplayName && s.Name == other.Name && s.Kind == other.Kind && s.Target == other.Target &&
-		s.PublicName == other.PublicName && s.PrivateHost == other.PrivateHost && s.WakeOnRequest == other.WakeOnRequest &&
+		s.PrivateHost == other.PrivateHost &&
 		s.Isolate == other.Isolate && s.LocalOnly == other.LocalOnly &&
 		slices.Equal(s.Listens, other.Listens) && s.Demand.Equal(other.Demand)
 }
@@ -147,12 +147,7 @@ func normalizeDemand(service Service) (Service, error) {
 	if service.Demand == nil {
 		return service, nil
 	}
-	if service.PublicName != "" {
-		// A public on-demand route would let anyone on the internet start a
-		// process here. That is a different exposure from publishing one that
-		// already runs, and it needs its own decision.
-		return Service{}, fmt.Errorf("serve: service %q: an on-demand route cannot be public", service.Name)
-	}
+
 	demand, err := normalizeRecipe(service.Name, *service.Demand)
 	if err != nil {
 		return Service{}, err

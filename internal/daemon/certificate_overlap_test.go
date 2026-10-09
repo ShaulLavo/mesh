@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/dnsname"
-	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/identity"
 )
 
@@ -81,7 +80,7 @@ func TestPrivateCertificatesAndPinnedNamesSurviveDomainOverlap(t *testing.T) {
 	}
 }
 
-func TestPublicCertificateDomainsKeepStagingSeparate(t *testing.T) {
+func TestAppRegistryCertificateDomainsKeepStagingSeparate(t *testing.T) {
 	target, _, err := identity.LoadOrCreate(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -90,12 +89,12 @@ func TestPublicCertificateDomainsKeepStagingSeparate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := certificateRuntimeConfig{StateDir: t.TempDir(), TargetID: target.ID, PublicMode: edge.ModeDirectTLS, PublicCertificatePin: renewer.ID}
+	config := certificateRuntimeConfig{StateDir: t.TempDir(), TargetID: target.ID, AppRegistryRenewerID: renewer.ID}
 	runtime, err := configureCertificates(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	installer := runtime.Controller.(*certificateController).installers[dnsname.ProfilePublicEdge]
+	installer := runtime.Controller.(*certificateController).installers[dnsname.ProfilePrivateService]
 	if runtime.viewHostReady("7k3d.mesh.test", time.Now()) || runtime.viewHostReady("7k3d.old.test", time.Now()) {
 		t.Fatal("empty certificate slots enabled private views")
 	}
@@ -107,20 +106,20 @@ func TestPublicCertificateDomainsKeepStagingSeparate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		staged, err := dnsname.SignBundle(bundle, target.ID, dnsname.ProfilePublicEdge, dnsname.EnvironmentStaging, "", signer)
+		staged, err := dnsname.SignBundle(bundle, target.ID, dnsname.ProfilePrivateService, dnsname.EnvironmentStaging, "", signer)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err := installer.Install(staged); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := runtime.PublicTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: "apps." + domain}); err == nil {
+		if _, err := runtime.AppRegistryTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: "apps." + domain}); err == nil {
 			t.Fatal("staging reached live TLS")
 		}
 		if runtime.viewHostReady("7k3d."+domain, now) {
 			t.Fatal("staging certificate enabled private views")
 		}
-		live, err := dnsname.SignBundle(bundle, target.ID, dnsname.ProfilePublicEdge, dnsname.EnvironmentLive, "", signer)
+		live, err := dnsname.SignBundle(bundle, target.ID, dnsname.ProfilePrivateService, dnsname.EnvironmentLive, "", signer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -151,7 +150,7 @@ func TestPublicCertificateDomainsKeepStagingSeparate(t *testing.T) {
 		if !restarted.viewHostReady("7k3d."+domain, now) {
 			t.Fatal("installed certificate did not enable private views after restart")
 		}
-		cert, err := restarted.PublicTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: "7k3d." + domain})
+		cert, err := restarted.AppRegistryTLS.GetCertificate(&tls.ClientHelloInfo{ServerName: "7k3d." + domain})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -4,14 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/domainpolicy"
-	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/protocol"
 )
 
@@ -37,7 +35,7 @@ func newCertificateController(installers map[dnsname.CertificateProfile]certific
 		if installer == nil {
 			return nil, errors.New("daemon: nil certificate installer")
 		}
-		if profile != dnsname.ProfilePrivateOrigin && profile != dnsname.ProfilePublicEdge && profile != dnsname.ProfilePrivateService {
+		if profile != dnsname.ProfilePrivateOrigin && profile != dnsname.ProfilePrivateService {
 			return nil, errors.New("daemon: unsupported certificate installer profile")
 		}
 		copyInstallers[profile] = installer
@@ -92,14 +90,13 @@ type certificateRuntimeConfig struct {
 	TargetID             string
 	OriginHTTPSPort      uint16
 	OriginRenewerID      string
-	PublicMode           edge.Mode
-	PublicCertificatePin string
+	AppRegistryRenewerID string
 }
 
 type certificateRuntime struct {
 	Controller       controlHandler
 	OriginTLS        *tls.Config
-	PublicTLS        *tls.Config
+	AppRegistryTLS   *tls.Config
 	PrivateName      func() string
 	PrivateNames     func() []string
 	PrivateNameReady func()
@@ -112,21 +109,8 @@ func configureCertificates(config certificateRuntimeConfig) (certificateRuntime,
 	if config.OriginHTTPSPort != 0 && strings.TrimSpace(config.OriginRenewerID) == "" {
 		return certificateRuntime{}, errors.New("daemon: HTTPS port requires a pinned certificate renewer ID")
 	}
-	switch config.PublicMode {
-	case "":
-		if config.PublicCertificatePin != "" {
-			return certificateRuntime{}, errors.New("daemon: public certificate pin requires public edge mode")
-		}
-	case edge.ModeProxy:
-		if config.PublicCertificatePin != "" {
-			return certificateRuntime{}, errors.New("daemon: proxy edge mode must not configure public certificates")
-		}
-	case edge.ModeDirectTLS:
-		if strings.TrimSpace(config.PublicCertificatePin) == "" {
-			return certificateRuntime{}, errors.New("daemon: direct public TLS requires a pinned certificate renewer ID")
-		}
-	default:
-		return certificateRuntime{}, fmt.Errorf("daemon: unsupported public certificate mode %q", config.PublicMode)
+	if config.OriginHTTPSPort != 0 && config.AppRegistryRenewerID != "" && config.OriginRenewerID != config.AppRegistryRenewerID {
+		return certificateRuntime{}, errors.New("daemon: origin and app registry require the same private-service certificate renewer ID")
 	}
 
 	installers := make(map[dnsname.CertificateProfile]certificateInstaller, 2)
@@ -140,30 +124,32 @@ func configureCertificates(config certificateRuntimeConfig) (certificateRuntime,
 			return certificateRuntime{}, err
 		}
 		installers[dnsname.ProfilePrivateOrigin] = installer
-		shortInstaller, shortTLS, _, _, err := configureCertificateDomains(
-			filepath.Join(config.StateDir, certificateDirectoryName, string(dnsname.ProfilePrivateService)),
-			dnsname.ProfilePrivateService, config.TargetID, config.OriginRenewerID,
-		)
-		if err != nil {
-			return certificateRuntime{}, err
-		}
-		installers[dnsname.ProfilePrivateService] = shortInstaller
-		runtime.OriginTLS = privateServiceTLS(tlsConfig, shortTLS)
+		runtime.OriginTLS = tlsConfig
 		runtime.PrivateName = privateName
 		runtime.PrivateNames = installer.(*certificateDomains).privateNames
 		runtime.PrivateNameReady = privateNameReady
 	}
-	if config.PublicMode == edge.ModeDirectTLS {
+	serviceRenewerID := config.OriginRenewerID
+	if config.AppRegistryRenewerID != "" {
+		serviceRenewerID = config.AppRegistryRenewerID
+	}
+	if serviceRenewerID != "" {
 		installer, tlsConfig, _, _, err := configureCertificateDomains(
-			filepath.Join(config.StateDir, certificateDirectoryName, string(dnsname.ProfilePublicEdge)),
-			dnsname.ProfilePublicEdge, config.TargetID, config.PublicCertificatePin,
+			filepath.Join(config.StateDir, certificateDirectoryName, string(dnsname.ProfilePrivateService)),
+			dnsname.ProfilePrivateService, config.TargetID, serviceRenewerID,
 		)
 		if err != nil {
 			return certificateRuntime{}, err
 		}
-		installers[dnsname.ProfilePublicEdge] = installer
-		runtime.PublicTLS = tlsConfig
+		installers[dnsname.ProfilePrivateService] = installer
+		if runtime.OriginTLS != nil {
+			runtime.OriginTLS = privateServiceTLS(runtime.OriginTLS, tlsConfig)
+		}
+		if config.AppRegistryRenewerID != "" {
+			runtime.AppRegistryTLS = tlsConfig
+		}
 	}
+
 	if len(installers) == 0 {
 		runtime.Controller = disabledCertificateController{}
 		return runtime, nil
@@ -213,7 +199,7 @@ func configureCertificateProfile(root, name string, profile dnsname.CertificateP
 }
 
 func (c certificateRuntime) viewHostReady(host string, now time.Time) bool {
-	return certificateHostReady(c.PublicTLS, host, now)
+	return certificateHostReady(c.AppRegistryTLS, host, now)
 }
 
 func certificateHostReady(config *tls.Config, host string, now time.Time) bool {

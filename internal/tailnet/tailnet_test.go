@@ -323,3 +323,27 @@ func assertPeer(t *testing.T, got, want Peer) {
 		t.Fatalf("peer = %#v, want %#v", got, want)
 	}
 }
+
+func TestRunningSelfIsReachableWithoutRemotePeerOnlineHint(t *testing.T) {
+	for _, online := range []string{"", "false", "true"} {
+		t.Run(online, func(t *testing.T) { verifyRunningSelfHint(t, online) })
+	}
+}
+
+func verifyRunningSelfHint(t *testing.T, online string) {
+	t.Helper()
+	field := ""
+	if online != "" {
+		field = `,"Online":` + online
+	}
+	status := []byte(`{"BackendState":"Running","Self":{"DNSName":"self.example.ts.net.","TailscaleIPs":["100.77.94.94"]` + field + `},"Peer":{"other":{"DNSName":"other.example.ts.net.","TailscaleIPs":["100.64.0.2"],"Online":false}}}`)
+	client := NewClient(runFunc(func(context.Context, string, ...string) ([]byte, []byte, error) { return status, nil, nil }))
+	self, err := client.Self(t.Context())
+	if err != nil || !self.Online {
+		t.Fatalf("running local backend marked unreachable: %+v %v", self, err)
+	}
+	peers, err := client.Peers(t.Context())
+	if err != nil || len(peers) != 1 || peers[0].Online {
+		t.Fatalf("remote offline hint changed: %+v %v", peers, err)
+	}
+}

@@ -98,7 +98,7 @@ func TestStartupSweepSparesAnotherOriginsLiveStaging(t *testing.T) {
 	<-entered
 	// Another origin, with its own state, starts on the same workload root
 	// while the first is between unpacking and the rename.
-	if _, err := NewOrigin(context.Background(), OriginConfig{Store: newMemoryAppStore(), Key: f.otherKey, EdgeIdentity: identityFor(f.edgeKey), Exchange: f.edge.Exchange, Workers: &fakeWorkers{}, DataRoot: f.root, Now: func() time.Time { return f.now }}); err != nil {
+	if _, err := NewOrigin(context.Background(), OriginConfig{Store: newMemoryAppStore(), Key: f.otherKey, RegistryIdentity: identityFor(f.edgeKey), Exchange: f.edge.Exchange, Workers: &fakeWorkers{}, DataRoot: f.root, Now: func() time.Time { return f.now }}); err != nil {
 		t.Fatal(err)
 	}
 	close(release)

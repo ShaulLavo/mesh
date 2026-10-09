@@ -109,7 +109,7 @@ jobs:
           scripts/finalize-release.sh "$VERSION" "$SOURCE" "$VERSION" "$RUNNER_TEMP/cask/mesh.rb"
 
   prove-transition:
-    name: Prove rollback compatibility (${{ matrix.platform }})
+    name: Prove forward upgrade and restart (${{ matrix.platform }})
     needs: [reserve, build]
     if: needs.reserve.outputs.action == 'publish'
     strategy:
@@ -157,7 +157,7 @@ jobs:
           scripts/prepare-release-baselines.sh \
             "$VERSION" "$PREVIOUS_TAG" "$PLATFORM" "$BASELINE_ASSETS" \
             "$RUNNER_TEMP/retained" "$RUNNER_TEMP/retained.list"
-      - name: Exercise candidate state and retained rollback
+      - name: Exercise retained state and candidate restart
         env:
           PLATFORM: ${{ matrix.platform }}
         run: |

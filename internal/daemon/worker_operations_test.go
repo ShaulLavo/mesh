@@ -214,7 +214,7 @@ func TestClientServerBoundsSilentWorkerOnUnixConnection(t *testing.T) {
 					Host: storage.Host{ID: "host-a", MeshIdentity: "mesh-key"}, SessionsDir: "/state/s",
 					OperationTimeout: testWorkerOperationTimeout,
 				})
-				server, err := newClientServer(lifecycle, connector, disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
+				server, err := newClientServer(lifecycle, connector, noServiceControl{}, disabledCertificateController{})
 				if err != nil {
 					t.Fatal(err)
 				}

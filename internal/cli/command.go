@@ -249,13 +249,13 @@ type Dependencies struct {
 	ReconcilePrivateNames  PrivateNamesFunc
 	DialHost               HostDialer
 	DialControl            HostDialer
-	ConfirmPublic          ConfirmPublicFunc
-	Containment            ContainmentFunc
-	OpenURL                func(context.Context, string) error
-	Now                    func() time.Time
-	Stdin                  *os.File
-	Stdout                 *os.File
-	Stderr                 *os.File
+
+	Containment ContainmentFunc
+	OpenURL     func(context.Context, string) error
+	Now         func() time.Time
+	Stdin       *os.File
+	Stdout      *os.File
+	Stderr      *os.File
 }
 
 type application struct {
@@ -300,10 +300,7 @@ func NewCommand(dependencies Dependencies) *Command {
 	if dependencies.Stderr == nil {
 		dependencies.Stderr = os.Stderr
 	}
-	defaultPublicConfirmation := dependencies.ConfirmPublic == nil
-	if defaultPublicConfirmation {
-		dependencies.ConfirmPublic = terminalPublicConfirmation(dependencies.Stdin, dependencies.Stderr)
-	}
+
 	app := &application{dependencies: dependencies}
 	privacyEnabled := privacy.EnabledFromEnv()
 
@@ -368,9 +365,7 @@ func NewCommand(dependencies Dependencies) *Command {
 		} else {
 			app.privacy = nil
 		}
-		if defaultPublicConfirmation {
-			app.dependencies.ConfirmPublic = terminalPublicConfirmation(dependencies.Stdin, dependencies.Stderr, app.privacy)
-		}
+
 		return activateClientConfig(cmd)
 	}
 
@@ -1689,16 +1684,16 @@ func (a *application) runSessionControl(cmd *cobra.Command, id, controlType, sig
 
 func (a *application) daemonCommand() *cobra.Command {
 	var (
-		port                   uint
-		sshPort                uint
-		path                   string
-		httpsPort              uint
-		tailscaleServePort     uint
-		tailscaleServeProxy    bool
-		certificateRenewer     string
-		privateNamesConfig     string
-		edgeConfig             string
-		publicEdgeTarget       string
+		port                uint
+		sshPort             uint
+		path                string
+		httpsPort           uint
+		tailscaleServePort  uint
+		tailscaleServeProxy bool
+		certificateRenewer  string
+		privateNamesConfig  string
+
+		appRegistryConfig      string
 		appRegistryTarget      string
 		appDataRoot            string
 		tailscaleServe         bool
@@ -1743,7 +1738,8 @@ func (a *application) daemonCommand() *cobra.Command {
 				TailnetConnectionLimit: tailnetConnectionLimit,
 				StateDir:               stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
-				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget, AppRegistryTarget: appRegistryTarget, AppDataRoot: appDataRoot,
+				AppRegistryConfig: appRegistryConfig, AppRegistryTarget: appRegistryTarget, AppDataRoot: appDataRoot,
+
 				TailscaleServe: tailscaleServe, TailscaleServePort: uint16(tailscaleServePort), TailscaleServeProxyProtocol: tailscaleServeProxy, HibernateIdle: hibernateIdle,
 				ReportError: func(err error) {
 					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %s\n", a.privacy.Value("error", err.Error()))
@@ -1760,8 +1756,8 @@ func (a *application) daemonCommand() *cobra.Command {
 	command.Flags().UintVar(&httpsPort, "https-port", 0, "loopback HTTPS service port; zero disables HTTPS")
 	command.Flags().StringVar(&certificateRenewer, "certificate-renewer-id", "", "pinned Mesh identity allowed to install certificates")
 	command.Flags().StringVar(&privateNamesConfig, "private-names-config", "", "Pi private-name reconciliation config file")
-	command.Flags().StringVar(&edgeConfig, "edge", "", "public-edge runtime and origin allowlist config file")
-	command.Flags().StringVar(&publicEdgeTarget, "public-edge-target", "", "pinned public-edge target config file")
+
+	command.Flags().StringVar(&appRegistryConfig, "app-registry-config", "", "private HTTPS app registry and origin allowlist config file")
 	command.Flags().StringVar(&appRegistryTarget, "app-registry-target", "", "pinned private app registry config file")
 	command.Flags().StringVar(&appDataRoot, "app-data-root", "", "managed temporary app workload root; Linux defaults to /work/mesh/apps")
 	command.Flags().UintVar(&tailscaleServePort, "tailscale-serve-port", 0, "loopback TLS gateway port; zero forwards directly to --https-port")

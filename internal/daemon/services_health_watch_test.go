@@ -43,7 +43,7 @@ func TestWatchServiceHealthMatchesRealRoutesAndChanges(t *testing.T) {
 	controller.onCommitted = broker.servicesCommitted
 	controller.publishCommitted()
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, controller, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), controller, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}

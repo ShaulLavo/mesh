@@ -4,13 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"fmt"
-	"net/netip"
-	"net/url"
 	"sync"
 	"time"
 
-	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/wake"
@@ -202,34 +198,4 @@ func (w *wakeController) sync(ctx context.Context, advertise bool) {
 	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	_ = w.client.Publish(bounded, *grant)
-}
-
-type edgeWakeAdapter struct {
-	client  *wakeclient.Client
-	origins []edge.OriginConfig
-	resolve edge.ResolveOrigin
-}
-
-func (w *edgeWakeAdapter) Wake(ctx context.Context, id string) error {
-	for _, origin := range w.origins {
-		if origin.Identity != id {
-			continue
-		}
-		endpoint, err := w.resolve(ctx, origin)
-		if err != nil {
-			return err
-		}
-		_, err = w.client.Wake(ctx, wakeTarget(origin, endpoint))
-		return err
-	}
-	return fmt.Errorf("wake origin %s is not configured", id)
-}
-
-func (w *edgeWakeAdapter) pin(ctx context.Context, endpoint netip.AddrPort, origin edge.OriginConfig) error {
-	return w.client.Refresh(ctx, wakeTarget(origin, endpoint))
-}
-
-func wakeTarget(origin edge.OriginConfig, endpoint netip.AddrPort) wakeclient.Target {
-	return wakeclient.Target{ID: origin.Identity, Name: origin.TailscaleName,
-		Endpoint: (&url.URL{Scheme: "ws", Host: endpoint.String(), Path: origin.WebSocketPath}).String()}
 }

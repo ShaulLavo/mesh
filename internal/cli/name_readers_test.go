@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/worker"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
 
 	"github.com/shaul/mesh/internal/machinename"
 )

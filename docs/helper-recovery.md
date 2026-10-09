@@ -137,7 +137,12 @@ unit-test logs even when the historical process harness has not started.
 one fixed helper as an explicitly unpublished source fixture. The harness reuses
 `fixtures.published_releases.acquire` for unchanged actual v149/v151/v159 archives,
 descriptors and joined transition receipts, and `fixtures.tls` for child-only
-certificate controls. It never changes host trust or installed services.
+certificate controls. Archive acquisition checks the original receipt hash,
+transition identity, platform, state and worker declarations, and preserved
+session and recovery facts. It does not certify archived receipts under the
+current publication contract. Current release receipts and bridge admission
+require the current candidate-opening marker. The harness never changes host trust
+or installed services.
 
 The wrapper uses `/tmp` independently of the runner's `TMPDIR`, matching the
 existing authentication proof. `MESH_SHORT_TMP` selects an explicit fixture base.

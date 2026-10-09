@@ -14,9 +14,7 @@ The Approved [temporary-app plan](06-temporary-apps.md) adds a separate
 the older D22 boundary without changing ordinary serving behavior.
 
 Public temporary apps, public serving and VPS-edge reverse tunnels are removed.
-Public hosting belongs to Brine on `shaulavo.dev`. Public-edge sections below
-record the former implementation and are superseded by this decision; they are
-not current deployment instructions or optional Mesh features. See the
+Public hosting belongs to Brine on `shaulavo.dev`. See the
 [superseding decision note](01-decisions.md).
 
 ## Private names and access
@@ -52,8 +50,6 @@ GET or HEAD. Where browsers send Fetch Metadata, including private HTTPS and
 loopback HTTP, the gate refuses same-site sibling fetches, cross-site fetches,
 frames, and unknown Fetch Metadata values unless they are top-level GET/HEAD
 visits. A refused service request returns `cross-site request to private service`.
-The former public-Host exception is historical and superseded by the
-2026-10-08 public-feature removal.
 
 Browsers generally omit Fetch Metadata on ordinary plaintext tailnet HTTP
 such as `http://100.x:7337` or `http://pc:7337`. Without those headers, every
@@ -153,27 +149,12 @@ Accepted authorities are:
   labels below that name are not aliases: neither the private certificate nor
   the managed DNS records cover them. Machine names route services by path;
   configured short service names use their hostname root.
-- Historical, superseded 2026-10-08: a canonical one-label public name accepted by `serve.ValidatePublicName`,
-  only when the immediate TCP peer matches the identity-verified public edge's
-  pinned address through `trustPublicEdgeForwarding`. Forwarding headers do not
-  establish trust. This admits a public authority; the downstream dispatcher
-  still owns which route that authority may serve.
-
-The listener guard and service registry use the same `serve.CanonicalHost`
-helper: DNS names compare case-insensitively and may have a trailing root dot.
-Public-name variants therefore remain public during route selection and cannot
-fall through to private nested routes. An optional authority port must be
-numeric and in range, but does not participate
-in the Host identity decision. Tailscale Serve, the public edge, and port
-forwards can preserve an external authority port that differs from the internal
-listener. IPv6 zones, malformed authorities, the public apex, and nested public
-names are refused.
-
-Historical public-edge behavior (superseded 2026-10-08): public-name traffic was refused until a
-successful edge publication establishes the pin. After a failed initial sync,
-the next scheduled attempt is a minute later. The connection's immediate
-source address must match that pin; both edge resolvers currently prefer IPv4.
-The loopback integration fixtures do not prove a deployed address-family match.
+The listener guard and service registry use `serve.CanonicalHost`. DNS names
+compare case-insensitively and may have a trailing root dot. An authority port
+must be numeric and in range; it does not participate in Host identity.
+Unknown authorities return 421 before routing or on-demand startup. Private
+app forwarding uses the numeric origin endpoint as its wire Host and restores
+the app's verified signed Host at the app handler.
 
 Service WebSocket upgrades follow the same Host policy as service HTTP. The
 WebSocket control path retains its separate browser Origin refusal. The
@@ -193,7 +174,7 @@ m serve ls
 m unserve /blog
 ```
 
-Serving is Tailnet-only. The former `--public` workflow is superseded.
+Serving is Tailnet-only.
 
 ## Decisions
 
@@ -213,88 +194,6 @@ Serving and temporary apps are Tailnet-only. Public hosting belongs to Brine on
 
 ## Explicitly not in step 8
 
-Arbitrary TCP tunnels, per-service authentication beyond public or tailnet,
+Arbitrary TCP tunnels, per-service authentication beyond Tailnet admission,
 multi-user access control, the tidy `mesh.sprockt.dev/<name>` alias, and anything
 resembling a build or deploy pipeline.
-
-## The apex is not Mesh's — historical evidence, 2026-08-29
-
-`shaulavo.dev` serves nothing today. When the site arrives it will not be served
-by Mesh, so the edge is designed to sit behind the front door rather than be it.
-
-The practical consequence: **the Mesh edge must not assume it owns port 443.**
-Whatever serves the site owns it, terminates TLS, and reverse-proxies the Mesh
-routes to the edge on a local port. The edge respects `X-Forwarded-Proto` so
-generated links stay `https`.
-
-That also means TLS for public names may not be Mesh's job at all. If Caddy or
-nginx fronts the VPS, it already holds those certificates and the edge just
-speaks plain HTTP on localhost. The DNS-01 plumbing does not disappear, because
-the private `*.mesh.shaulavo.dev` wildcard still needs it (T12), but T13 gets
-noticeably smaller.
-
-Where the site will live is undecided as of 2026-08-29. The candidates map onto
-the two arrangements cleanly, so T13 is not blocked on choosing:
-
-| Host | Where the site runs | What the Mesh edge does |
-|---|---|---|
-| Coolify | on the VPS | plain HTTP behind Coolify's Traefik, which owns 443 |
-| Cloudflare Workers | off the VPS | edge can own 443 |
-| Vercel | off the VPS | edge can own 443 |
-
-One practical note if it turns out to be Coolify: it brings Docker, Postgres,
-Redis and Traefik onto the same VPS that runs the Mesh daemon and whatever
-terminal sessions are attached to it. Check the box has headroom before
-committing, because a session dying under memory pressure is exactly the failure
-Mesh exists to prevent.
-
-If it turns out to be Cloudflare, the public Mesh routes could sit behind
-Cloudflare too, which hides the VPS address and absorbs abuse. The tradeoff is
-that Cloudflare terminates TLS and therefore sees that traffic. Worth deciding
-deliberately rather than by default.
-
-## Public connection limits — historical, superseded 2026-10-08
-
-The public listener admits at most 512 connections. Each direct IPv4 peer or
-IPv6 /64 may hold at most 32, one sixteenth of that pool. Authenticated PROXY
-sources use the same quota. HTTP forwarding headers never establish a
-connection identity. Without PROXY, a loopback peer represents the local front
-door rather than one visitor, so it has no per-source quota. Caddy, nginx, or
-another such front door must enforce per-client connection limits itself.
-Its upstream sockets still share Mesh's global cap.
-
-PROXY authentication has a separate pool of 32 pending sockets and a fixed
-two-second deadline. Local forwarders send their headers immediately. A full
-pending pool waits rather than bypassing authentication. Invalid headers and
-disallowed forwarder UIDs close without consuming an admitted slot or evicting
-an authenticated connection.
-
-HTTP headers have five seconds and idle keep-alives have 30 seconds. At the
-global cap, an under-quota newcomer evicts the oldest idle keep-alive. Active
-responses and hijacked WebSockets are never evicted. If no idle socket exists,
-Mesh closes the newcomer instead of waiting for an active slot.
-
-Request bodies get a 30-second idle allowance and a sustained minimum of
-16 KiB/s, measured only during body reads. Origin wake-up, on-demand startup,
-and server pauses between reads do not charge the client's budget. Once a
-response starts or upgrades, body deadlines are cleared. HTTP/1 enables
-full-duplex handling so an early response is not blocked by implicit body
-draining. After a non-hijacked handler finishes, the final body drain is bounded
-again. Very slow client uploads below the minimum eventually time out.
-
-These limits are not a distributed denial-of-service defense. Sixteen IPv4
-addresses, or sixteen /64s from one wider IPv6 allocation, can still fill the
-pool with active responses or half-open connections. There is no wider-prefix
-aggregate quota or response write-progress timeout. A front door must provide
-those additional abuse controls when needed.
-
-## The browser is not the only file client
-
-`files` services render HTML listings, which exist for people holding a browser
-and nothing else. Step 9 mounts the same declared roots over SFTP, where they
-open in Finder, Nautilus and Files on Android with keys already on the machine
-(D19).
-
-One declaration, two front doors. Nothing here changes: T11 still owns what is
-served and to whom, and T16 reuses its root resolver rather than inventing a
-second answer. See `docs/plan/04-ssh.md`.

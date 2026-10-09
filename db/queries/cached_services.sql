@@ -9,22 +9,18 @@ INSERT INTO cached_services (
     name,
     kind,
     target,
-    public_name,
     private_host,
-    wake_on_request,
     healthy,
     problem,
     observed_at,
     isolate,
     display_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (host_id, name) DO UPDATE SET
 	private_name = excluded.private_name,
     kind = excluded.kind,
     target = excluded.target,
-    public_name = excluded.public_name,
     private_host = excluded.private_host,
-    wake_on_request = excluded.wake_on_request,
     healthy = excluded.healthy,
     problem = excluded.problem,
     observed_at = excluded.observed_at,
@@ -32,13 +28,13 @@ ON CONFLICT (host_id, name) DO UPDATE SET
     isolate = excluded.isolate;
 
 -- name: ListCachedServicesForHost :many
-SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate, display_name, private_host
+SELECT host_id, private_name, name, kind, target, healthy, problem, observed_at, isolate, display_name, private_host
 FROM cached_services
 WHERE host_id = ?
 ORDER BY name;
 
 -- name: ListCachedServices :many
-SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate, display_name, private_host
+SELECT host_id, private_name, name, kind, target, healthy, problem, observed_at, isolate, display_name, private_host
 FROM cached_services
 ORDER BY host_id, name
 LIMIT 8193;

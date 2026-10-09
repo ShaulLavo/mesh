@@ -4,20 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/dnsname"
-	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/inhibit"
@@ -26,7 +22,6 @@ import (
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/tailnet"
-	"github.com/shaul/mesh/internal/tunnel"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -57,8 +52,7 @@ type Config struct {
 	TailscaleServeProxyProtocol bool
 	CertificateRenewerID        string
 	PrivateNamesConfig          string
-	EdgeConfig                  string
-	PublicEdgeTarget            string
+	AppRegistryConfig           string
 	AppRegistryTarget           string
 	AppDataRoot                 string
 	TailscaleServe              bool
@@ -160,34 +154,23 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err := validateWebSocketPath(cfg.WebSocketPath); err != nil {
 		return err
 	}
-	var publicEdgeConfig *edge.RuntimeConfig
-	if cfg.EdgeConfig != "" {
-		loaded, err := edge.LoadRuntimeConfig(cfg.EdgeConfig)
+	var registryConfig *apps.RegistryHostConfig
+	if cfg.AppRegistryConfig != "" {
+		loaded, err := apps.LoadRegistryConfig(cfg.AppRegistryConfig)
 		if err != nil {
-			return fmt.Errorf("daemon: configure public edge: %w", err)
+			return fmt.Errorf("daemon: configure private app registry: %w", err)
 		}
-		publicEdgeConfig = &loaded
+		registryConfig = &loaded
 	}
-	var publicEdgeTarget *edge.TargetConfig
-	if cfg.PublicEdgeTarget != "" {
-		loaded, err := edge.LoadTargetConfig(cfg.PublicEdgeTarget)
-		if err != nil {
-			return fmt.Errorf("daemon: configure public edge publisher: %w", err)
-		}
-		publicEdgeTarget = &loaded
-	}
-	var appRegistryTarget *edge.TargetConfig
+	var appRegistryTarget *apps.Peer
 	if cfg.AppRegistryTarget != "" {
-		loaded, err := edge.LoadTargetConfig(cfg.AppRegistryTarget)
+		loaded, err := apps.LoadTargetConfig(cfg.AppRegistryTarget)
 		if err != nil {
 			return fmt.Errorf("daemon: configure private app registry target: %w", err)
 		}
 		appRegistryTarget = &loaded
 	}
-	if publicEdgeConfig != nil && cfg.PrivateNamesConfig != "" {
-		return errors.New("daemon: public edge mode cannot load the Pi-only private-names configuration")
-	}
-	networkRoles := publicEdgeConfig != nil || publicEdgeTarget != nil || appRegistryTarget != nil
+	networkRoles := registryConfig != nil || appRegistryTarget != nil
 	requiresStableTailnetControl := cfg.TailscaleServe || networkRoles
 	if networkRoles && opts.discoverPeers == nil {
 		return errors.New("daemon: configured registry roles require Tailscale peer discovery")
@@ -245,11 +228,11 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			return nil, errors.Join(selfErr, peersErr)
 		}
 		if selfErr != nil {
-			reporter.report(fmt.Errorf("daemon: discover local Tailscale peer for public edge: %w", selfErr))
+			reporter.report(fmt.Errorf("daemon: discover local Tailscale peer for private registry: %w", selfErr))
 			return peers, nil
 		}
 		if peersErr != nil {
-			reporter.report(fmt.Errorf("daemon: discover remote Tailscale peers for public edge: %w", peersErr))
+			reporter.report(fmt.Errorf("daemon: discover remote Tailscale peers for private registry: %w", peersErr))
 			return []tailnet.Peer{self}, nil
 		}
 		return append([]tailnet.Peer{self}, peers...), nil
@@ -265,7 +248,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 				disabledListeners = "Tailnet control and SSH listeners"
 			}
 		}
-		// Bound discovery always, not only for the public-networking roles. A
+		// Bound discovery always, not only for the registry roles. A
 		// wedged tailscale binary here blocks after the daemon lock is held and
 		// before the Unix socket exists, so the host looks started, refuses a
 		// second daemon, and answers nothing.
@@ -281,7 +264,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 				return nil
 			}
 			if requiresStableTailnetControl {
-				return fmt.Errorf("daemon: discover Tailscale addresses required by configured public networking: %w", discoverErr)
+				return fmt.Errorf("daemon: discover Tailscale addresses required by configured private registry networking: %w", discoverErr)
 			}
 			reporter.report(fmt.Errorf("daemon: %s disabled: %w", disabledListeners, discoverErr))
 		} else {
@@ -297,7 +280,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			}
 			if len(tailnetAddrs) == 0 {
 				if requiresStableTailnetControl {
-					return errors.New("daemon: configured public networking requires at least one discovered Tailscale address")
+					return errors.New("daemon: configured private registry networking requires at least one discovered Tailscale address")
 				}
 				reporter.report(fmt.Errorf("daemon: %s disabled: this host has no Tailscale addresses", disabledListeners))
 			}
@@ -347,121 +330,51 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("daemon: restore services: %w", err)
 	}
-	var pinnedPublicEdge atomic.Pointer[netip.Addr]
-	var pinnedAppRegistry atomic.Pointer[netip.Addr]
-	var trustPublicEdgeForwarding func(netip.Addr) bool
-	if publicEdgeTarget != nil || appRegistryTarget != nil {
-		trustPublicEdgeForwarding = func(address netip.Addr) bool {
-			pinned := pinnedPublicEdge.Load()
-			appPinned := pinnedAppRegistry.Load()
-			return pinned != nil && *pinned == address.Unmap() || appPinned != nil && *appPinned == address.Unmap()
-		}
-	}
-	serviceRegistry, err := meshserve.NewRegistryWithReservedPrefix(services, cfg.WebSocketPath, trustPublicEdgeForwarding)
+	serviceRegistry, err := meshserve.NewRegistryWithReservedPrefix(services, cfg.WebSocketPath)
 	if err != nil {
 		return fmt.Errorf("daemon: restore services: %w", err)
 	}
-	var edgeRegistry *edge.Registry
 	var appRegistry *apps.Registry
 	var certificateRuntime certificateRuntime
-	var tunnelForwarder tunnel.Activator
-	var edgeControl controlHandler = disabledEdgeController{}
-	var publicListenAddress string
-	var tailnetOwnerAccess bool
-	var publicHTTPHandler http.Handler
-	var publicMode edge.Mode
-	var publicCertificatePin string
-	if publicEdgeConfig != nil {
-		waker := &edgeWakeAdapter{client: power.client, origins: publicEdgeConfig.Origins, resolve: edge.TailscaleWakeResolver(discoverAllPeers)}
-		var networkOwners func(context.Context, netip.Addr) ([]string, error)
-		if publicEdgeConfig.TailnetOwnerAccess {
-			origins := make(map[string]string, len(publicEdgeConfig.Origins))
-			for _, origin := range publicEdgeConfig.Origins {
-				origins[origin.TailscaleName] = origin.Identity
-			}
-			networkOwners = tailnet.OwnerResolver(origins)
-		}
-		edgeRegistry, err = edge.NewRegistry(edge.HandlerConfig{
-			Mode: publicEdgeConfig.Mode, ReservedPath: cfg.WebSocketPath,
-			Waker:           waker,
-			Logger:          log.New(edgeReportWriter{reporter: reporter}, "", 0),
-			RateLimitExempt: networkOwnerRateExemption(networkOwners),
-		})
-		if err != nil {
-			return fmt.Errorf("daemon: configure public edge handler: %w", err)
-		}
-		defer edgeRegistry.Close()
-		controller, err := edge.NewController(daemonCtx, edge.ControllerConfig{
-			TunnelState: store, AuthorizeTunnel: sshd.Authorizer(filepath.Join(stateDir, "authorized_keys")),
-			TargetID: meshHost.ID, Origins: publicEdgeConfig.Origins, State: store, Registry: edgeRegistry,
-			Resolve: edge.TailscaleResolver(discoverAllPeers), Pin: waker.pin, Now: opts.now,
-		})
-		if err != nil {
-			return fmt.Errorf("daemon: configure public edge registration: %w", err)
-		}
-		edgeControl = controller
-		allowed := make(map[string]bool, len(publicEdgeConfig.Origins))
-		for _, origin := range publicEdgeConfig.Origins {
+	var appRegistryHTTPHandler http.Handler
+	var appRegistryListenAddress, appRegistryRenewerID string
+	if registryConfig != nil {
+		origins := make(map[string]string, len(registryConfig.Origins))
+		allowed := make(map[string]bool, len(registryConfig.Origins))
+		for _, origin := range registryConfig.Origins {
+			origins[origin.TailscaleName] = origin.Identity
 			allowed[origin.Identity] = true
 		}
+		networkOwners := tailnet.OwnerResolver(origins)
 		appRegistry, err = apps.NewRegistry(daemonCtx, apps.RegistryConfig{
 			ViewHostReady: func(host string) bool { return certificateRuntime.viewHostReady(host, opts.now()) },
 			Store:         store, Key: meshPrivateKey, Allowed: allowed, Now: opts.now,
-			Resolve:  appResolver(publicEdgeConfig.Origins, edge.TailscaleResolver(discoverAllPeers), waker.pin),
+			Resolve:  appResolver(registryConfig.Origins, apps.TailscaleResolver(discoverAllPeers), apps.ControlPinner(nil)),
 			ClientIP: appClientAddress, NetworkOwners: networkOwners,
 		})
 		if err != nil {
 			return fmt.Errorf("daemon: configure private app registry: %w", err)
 		}
-		publicHTTPHandler = privateAppsHTTPHandler(appRegistry, edgeRegistry, networkOwners, publicEdgeConfig.TailnetOwnerAccess)
-		tunnelForwarder = controller
-		defer controller.CloseTunnels()
-		stopTunnelShutdown := context.AfterFunc(daemonCtx, controller.CloseTunnels)
-		defer stopTunnelShutdown()
-		publicListenAddress = publicEdgeConfig.ListenAddress
-		tailnetOwnerAccess = publicEdgeConfig.TailnetOwnerAccess
-		publicMode = publicEdgeConfig.Mode
-		publicCertificatePin = publicEdgeConfig.CertificateRenewerID
+		appRegistryHTTPHandler = privateAppsHTTPHandler(appRegistry, networkOwners)
+		appRegistryListenAddress = registryConfig.ListenAddress
+		appRegistryRenewerID = registryConfig.CertificateRenewerID
 	}
-	var publication servicePublisher = disabledServicePublisher{}
-	var appPublisher *edge.Publisher
-	if publicEdgeTarget != nil {
-		publisher, err := edge.NewPublisher(edge.PublisherConfig{
-			Signer: meshPrivateKey, Target: *publicEdgeTarget, State: store,
-			Resolve: edge.TailscaleTargetResolver(discoverAllPeers), Now: opts.now, RequestTimeout: 5 * time.Second,
-			OnPinned: func(address netip.Addr) {
-				canonical := address.Unmap()
-				pinnedPublicEdge.Store(&canonical)
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("daemon: configure public edge publisher: %w", err)
-		}
-		publication = publisher
-	}
+	var appClient *apps.RegistryClient
 	if appRegistryTarget != nil {
-		appPublisher, err = edge.NewPublisher(edge.PublisherConfig{
-			Signer: meshPrivateKey, Target: *appRegistryTarget, State: store,
-			Resolve: edge.TailscaleTargetResolver(discoverAllPeers), Now: opts.now, RequestTimeout: 5 * time.Second,
-			OnPinned: func(address netip.Addr) {
-				canonical := address.Unmap()
-				pinnedAppRegistry.Store(&canonical)
-			},
-		})
+		appClient, err = apps.NewRegistryClient(apps.RegistryClientConfig{Key: meshPrivateKey, Target: *appRegistryTarget, Peers: discoverAllPeers, Now: opts.now, RequestTimeout: 5 * time.Second})
 		if err != nil {
 			return fmt.Errorf("daemon: configure private app registry client: %w", err)
 		}
 	}
-
 	state := newStateBroker(cfg.SubscriberLimit, opts.now)
 	metrics := hostmetrics.New()
-	serviceControl, err := newServiceController(daemonCtx, homeDir, store, serviceRegistry, publication)
+	serviceControl, err := newServiceController(daemonCtx, homeDir, store, serviceRegistry)
 	if err != nil {
 		return err
 	}
 	certificateRuntime, err = configureCertificates(certificateRuntimeConfig{
 		StateDir: stateDir, TargetID: meshHost.ID, OriginHTTPSPort: cfg.HTTPSPort,
-		OriginRenewerID: cfg.CertificateRenewerID, PublicMode: publicMode, PublicCertificatePin: publicCertificatePin,
+		OriginRenewerID: cfg.CertificateRenewerID, AppRegistryRenewerID: appRegistryRenewerID,
 	})
 	if err != nil {
 		return err
@@ -523,10 +436,10 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	state.hostChanged(lifecycle.declaredHostInfo())
 	var appLocal *apps.Origin
-	if appPublisher != nil {
+	if appClient != nil {
 		appLocal, err = apps.NewOrigin(daemonCtx, apps.OriginConfig{
-			Store: store, Key: meshPrivateKey, EdgeIdentity: appRegistryTarget.Identity,
-			Exchange: appPublisher.AppRegistryExchange, Workers: appWorkers{lifecycle: lifecycle},
+			Store: store, Key: meshPrivateKey, RegistryIdentity: appRegistryTarget.Identity,
+			Exchange: appClient.Exchange, Workers: appWorkers{lifecycle: lifecycle},
 			DataRoot: appDataRoot(cfg.AppDataRoot, stateDir), Now: opts.now, CheckHosting: checkAppHosting(serviceRegistry),
 		})
 		if err != nil {
@@ -543,7 +456,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	// client can ask about them.
 	demand.Sync(serviceRegistry.Services())
 	serviceControl.publishCommitted()
-	server, err := newClientServer(lifecycle, connector, edgeControl, serviceControl, certificateRuntime.Controller)
+	server, err := newClientServer(lifecycle, connector, serviceControl, certificateRuntime.Controller)
 	if err != nil {
 		return err
 	}
@@ -586,17 +499,15 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		PrivateName:                certificateRuntime.PrivateName,
 		PrivateNames:               certificateRuntime.PrivateNames,
 		PrivateServiceHost:         serviceRegistry.HasPrivateHost,
-		TrustPublicEdgeForwarding:  trustPublicEdgeForwarding,
 		TailnetPort:                cfg.TailnetPort,
 		WebSocketPath:              cfg.WebSocketPath,
 		HTTPHandler:                appOriginHandler(appLocal, serviceRegistry),
 		HTTPSPort:                  cfg.HTTPSPort,
 		HTTPSProxyProtocol:         cfg.TailscaleServeProxyProtocol,
 		TLSConfig:                  certificateRuntime.OriginTLS,
-		PublicListenAddress:        publicListenAddress,
-		PublicHTTPHandler:          publicHTTPHandler,
-		PublicTLSConfig:            certificateRuntime.PublicTLS,
-		TailnetOwnerAccess:         tailnetOwnerAccess,
+		AppRegistryListenAddress:   appRegistryListenAddress,
+		AppRegistryHTTPHandler:     appRegistryHTTPHandler,
+		AppRegistryTLSConfig:       certificateRuntime.AppRegistryTLS,
 		RequireAllTailnetListeners: requiresStableTailnetControl,
 		ReportError:                reporter.report,
 	}, server.Handle)
@@ -613,7 +524,6 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		}
 		for _, address := range sshAddrs {
 			listener.sshConfigs = append(listener.sshConfigs, sshd.Config{
-				Tunnels:        tunnelForwarder,
 				Handler:        sessionHandler,
 				Services:       serviceRegistry,
 				HostKey:        meshPrivateKey,
@@ -700,44 +610,13 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		case <-daemonCtx.Done():
 			return
 		}
-		if err := privateNamesRuntime.Run(daemonCtx, false, func(err error) {
+		if err := privateNamesRuntime.Run(daemonCtx, func(err error) {
 			reporter.report(fmt.Errorf("daemon: reconcile private names: %w", err))
 		}); err != nil && daemonCtx.Err() == nil {
 			reporter.report(fmt.Errorf("daemon: private-names loop: %w", err))
 		}
 	}()
-	publicCertificateDone := make(chan struct{})
-	go func() {
-		defer close(publicCertificateDone)
-		if privateNamesRuntime == nil {
-			return
-		}
-		select {
-		case <-listenersReady:
-		case <-daemonCtx.Done():
-			return
-		}
-		if err := privateNamesRuntime.Run(daemonCtx, true, func(err error) {
-			reporter.report(fmt.Errorf("daemon: reconcile public certificate: %w", err))
-		}); err != nil && daemonCtx.Err() == nil {
-			reporter.report(fmt.Errorf("daemon: public-certificate loop: %w", err))
-		}
-	}()
-	publicHeartbeatDone := make(chan struct{})
-	go func() {
-		defer close(publicHeartbeatDone)
-		if !publication.Enabled() {
-			return
-		}
-		select {
-		case <-listenersReady:
-		case <-daemonCtx.Done():
-			return
-		}
-		serviceControl.RunPublicHeartbeat(daemonCtx, func(err error) {
-			reporter.report(fmt.Errorf("daemon: reconcile public edge routes: %w", err))
-		})
-	}()
+
 	appsDone := make(chan struct{})
 	go func() {
 		defer close(appsDone)
@@ -745,7 +624,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}()
 	tailnetMonitorDone := make(chan error, 1)
 	// Watch Tailnet addresses whenever a listener depends on them, not only for
-	// the public-networking roles. Startup discovery is one shot: if tailscaled
+	// the registry roles. Startup discovery is one shot: if tailscaled
 	// was not up yet, the tailnet control and SSH listeners were never created
 	// for the life of the process, while the daemon kept serving the Unix
 	// socket and so looked healthy to both systemd and launchd. The shipped
@@ -792,8 +671,6 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	<-demandDone
 	<-hibernated
 	<-privateNamesDone
-	<-publicCertificateDone
-	<-publicHeartbeatDone
 	<-appsDone
 	return errors.Join(serveErr, <-tailnetMonitorDone)
 }
@@ -814,16 +691,4 @@ func reconcilePeriodically(ctx context.Context, catalog *Catalog, interval time.
 			}
 		}
 	}
-}
-
-type edgeReportWriter struct{ reporter *errorReporter }
-
-func (w edgeReportWriter) Write(contents []byte) (int, error) {
-	message := strings.TrimSpace(string(contents))
-	if message != "" && w.reporter != nil {
-		// The edge already owns bounded category queues; a second lossy queue
-		// would hide both important events and its dropped-count summaries.
-		w.reporter.fn(fmt.Errorf("daemon: public edge: %s", message))
-	}
-	return len(contents), nil
 }

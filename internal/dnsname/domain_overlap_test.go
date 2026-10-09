@@ -53,12 +53,12 @@ func TestCertificateSlotRejectsUnconfiguredOrAmbiguousSANs(t *testing.T) {
 	now := time.Now()
 	for _, names := range [][]string{{"*.other.test"}, {"*.mesh.test", "*.old.test"}} {
 		certificate, _ := testCertificate(t, 992, names[0], now.Add(-time.Hour), now.Add(time.Hour), names[1:]...)
-		if _, err := CertificateName(ProfilePublicEdge, certificate); err == nil {
+		if _, err := CertificateName(ProfilePrivateService, certificate); err == nil {
 			t.Fatalf("accepted SANs: %v", names)
 		}
 	}
 	certificate, _ := testCertificate(t, 993, "*.old.test", now.Add(-time.Hour), now.Add(time.Hour))
-	if name, err := CertificateName(ProfilePublicEdge, certificate); err != nil || name != "*.old.test" {
+	if name, err := CertificateName(ProfilePrivateService, certificate); err != nil || name != "*.old.test" {
 		t.Fatalf("alias certificate slot: %s %v", name, err)
 	}
 	if _, err := CertificateName(ProfilePrivateOrigin, certificate); err == nil {

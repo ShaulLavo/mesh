@@ -4,59 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/pressly/goose/v3"
-	"github.com/shaul/mesh/db/migrations"
-	"github.com/shaul/mesh/internal/edge"
-	"github.com/shaul/mesh/internal/tunnel"
 )
-
-func TestAppMigrationUpgradesExistingTunnelStore(t *testing.T) {
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "mesh.db")
-	store, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	owner, key := storageEdgeIdentity(t)
-	target, _ := storageEdgeIdentity(t)
-	claim := signedTunnelMutation(t, key, target, tunnel.Create, "existing.mesh.test", 1)
-	if err := applyTestTunnel(store, claim); err != nil {
-		t.Fatal(err)
-	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, store.db, migrations.Files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := provider.DownTo(ctx, 8); err != nil {
-		t.Fatal(err)
-	}
-	assertMigrationVersion(t, store, 8)
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	store, err = Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertMigrationVersion(t, store, 12)
-	restored, err := store.TunnelClaim(ctx, claim.PublicName)
-	if err != nil || restored.ClaimantID != owner {
-		t.Fatalf("migration lost existing tunnel: %+v, %v", restored, err)
-	}
-	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SaveAppState(ctx, "edge", []byte(`{"private":true}`)); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestAppStateAndRetiredNamesSurviveRestart(t *testing.T) {
 	ctx := context.Background()
@@ -66,8 +19,8 @@ func TestAppStateAndRetiredNamesSurviveRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	owner, _ := storageEdgeIdentity(t)
-	other, _ := storageEdgeIdentity(t)
+	owner := storageAppIdentity(t)
+	other := storageAppIdentity(t)
 	state := []byte(`{"apps":[{"id":"7k3d","private":true}]}`)
 	missing, err := store.LoadAppState(ctx, "edge")
 	if err != nil || missing != nil {
@@ -87,10 +40,10 @@ func TestAppStateAndRetiredNamesSurviveRestart(t *testing.T) {
 	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner); err != nil {
 		t.Fatalf("active owner retry = %v", err)
 	}
-	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, other); !errors.Is(err, tunnel.ErrCollision) {
+	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, other); !errors.Is(err, ErrAppNameCollision) {
 		t.Fatalf("different owner = %v", err)
 	}
-	if err := store.SetAppNameInactive(ctx, "7k3d.mesh.test", other); !errors.Is(err, tunnel.ErrCollision) {
+	if err := store.SetAppNameInactive(ctx, "7k3d.mesh.test", other); !errors.Is(err, ErrAppNameCollision) {
 		t.Fatalf("different owner retirement = %v", err)
 	}
 	if err := store.SetAppNameInactive(ctx, "7k3d.mesh.test", owner); err != nil {
@@ -114,7 +67,7 @@ func TestAppStateAndRetiredNamesSurviveRestart(t *testing.T) {
 	if err != nil || !exists {
 		t.Fatalf("retired name disappeared: %v, %v", exists, err)
 	}
-	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner); !errors.Is(err, tunnel.ErrCollision) {
+	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner); !errors.Is(err, ErrAppNameCollision) {
 		t.Fatalf("retired name resurrected = %v", err)
 	}
 	if err := store.ReserveAppNames(ctx, []string{"apps.mesh.test"}, owner); err != nil {
@@ -122,188 +75,10 @@ func TestAppStateAndRetiredNamesSurviveRestart(t *testing.T) {
 	}
 }
 
-func TestAppNamesBlockTunnelAndSnapshotEvenAfterRetirement(t *testing.T) {
-	ctx := context.Background()
-	store := openTunnelTestStore(t)
-	target, _ := storageEdgeIdentity(t)
-	owner, key := storageEdgeIdentity(t)
-	now := time.Now().UTC()
-	for index, name := range []string{"7k3d.mesh.test", "apps.mesh.test"} {
-		if err := store.ReserveAppNames(ctx, []string{name}, owner); err != nil {
-			t.Fatal(err)
-		}
-		assertAppPublicationBlocked(t, store, target, owner, key, name, uint64(index+1), now)
-		if err := store.SetAppNameInactive(ctx, name, owner); err != nil {
-			t.Fatal(err)
-		}
-		assertAppPublicationBlocked(t, store, target, owner, key, name, uint64(index+3), now)
-	}
-}
-
-func TestAppsRespectExistingServiceAndTunnelNames(t *testing.T) {
-	ctx := context.Background()
-	store := openTunnelTestStore(t)
-	target, _ := storageEdgeIdentity(t)
-	owner, key := storageEdgeIdentity(t)
-	now := time.Now().UTC()
-	snapshot := storageSignedSnapshot(t, target, owner, key, 1, now, []edge.Route{{PublicName: "7k3d.mesh.test", ServiceName: "nested/path"}})
-	if err := store.ApplyEdgeSnapshot(ctx, snapshot, storageSnapshotDigest(t, snapshot, target, owner), now); err != nil {
-		t.Fatal(err)
-	}
-	mutation := signedTunnelMutation(t, key, target, tunnel.Create, "apps.mesh.test", 1)
-	if err := applyTestTunnel(store, mutation); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"7k3d.mesh.test", "apps.mesh.test"} {
-		if err := store.ReserveAppNames(ctx, []string{name}, owner); !errors.Is(err, tunnel.ErrCollision) {
-			t.Fatalf("existing name %s = %v", name, err)
-		}
-	}
-}
-
-func TestAppNameBlocksOwnerSnapshotRefreshWithoutChangingExistingRoutes(t *testing.T) {
-	ctx := context.Background()
-	store := openTunnelTestStore(t)
-	owner, key := storageEdgeIdentity(t)
-	target, _ := storageEdgeIdentity(t)
-	now := time.Now().UTC()
-	initial := storageSignedSnapshot(t, target, owner, key, 1, now, []edge.Route{{PublicName: "existing.mesh.test", ServiceName: "app"}})
-	if err := store.ApplyEdgeSnapshot(ctx, initial, storageSnapshotDigest(t, initial, target, owner), now); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner); err != nil {
-		t.Fatal(err)
-	}
-	refresh := storageSignedSnapshot(t, target, owner, key, 2, now.Add(time.Second), []edge.Route{
-		{PublicName: "existing.mesh.test", ServiceName: "new"},
-		{PublicName: "7k3d.mesh.test", ServiceName: "nested/path"},
-	})
-	if err := store.ApplyEdgeSnapshot(ctx, refresh, storageSnapshotDigest(t, refresh, target, owner), now.Add(time.Second)); !errors.Is(err, edge.ErrRouteCollision) {
-		t.Fatalf("owner snapshot claimed app name: %v", err)
-	}
-	state, err := store.LoadEdgeState(ctx)
-	if err != nil || len(state) != 1 {
-		t.Fatalf("restored state = %+v, %v", state, err)
-	}
-	if state[0].Snapshot.Sequence != 1 || len(state[0].Snapshot.Routes) != 1 || state[0].Snapshot.Routes[0].ServiceName != "app" {
-		t.Fatalf("rejected refresh modified prior state: %+v", state[0])
-	}
-}
-
-func assertAppPublicationBlocked(t *testing.T, store *Store, target, owner string, key ed25519.PrivateKey, name string, sequence uint64, now time.Time) {
-	t.Helper()
-	mutation := signedTunnelMutation(t, key, target, tunnel.Create, name, sequence)
-	if err := applyTestTunnel(store, mutation); !errors.Is(err, tunnel.ErrCollision) {
-		t.Fatalf("tunnel at reserved %s = %v", name, err)
-	}
-	snapshot := storageSignedSnapshot(t, target, owner, key, sequence, now, []edge.Route{{PublicName: name, ServiceName: "nested/path"}})
-	if err := store.ApplyEdgeSnapshot(context.Background(), snapshot, storageSnapshotDigest(t, snapshot, target, owner), now); !errors.Is(err, edge.ErrRouteCollision) {
-		t.Fatalf("snapshot at reserved %s = %v", name, err)
-	}
-}
-
-func TestAppReservationRacesOtherHostnameClaims(t *testing.T) {
-	for _, contender := range []string{"app", "tunnel", "snapshot"} {
-		t.Run(contender, func(t *testing.T) { raceAppReservation(t, contender) })
-	}
-}
-
-func raceAppReservation(t *testing.T, contender string) {
-	t.Helper()
-	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "mesh.db")
-	first, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = first.Close() })
-	second, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = second.Close() })
-	owner, _ := storageEdgeIdentity(t)
-	other, key := storageEdgeIdentity(t)
-	target, _ := storageEdgeIdentity(t)
-	name := "7k3d.mesh.test"
-	now := time.Now().UTC()
-	mutation := signedTunnelMutation(t, key, target, tunnel.Create, name, 1)
-	snapshot := storageSignedSnapshot(t, target, other, key, 1, now, []edge.Route{{PublicName: name, ServiceName: "nested/path"}})
-	digest := storageSnapshotDigest(t, snapshot, target, other)
-	action := func() error { return second.ReserveAppNames(ctx, []string{name}, other) }
-	if contender == "tunnel" {
-		action = func() error { return applyTestTunnel(second, mutation) }
-	}
-	if contender == "snapshot" {
-		action = func() error { return second.ApplyEdgeSnapshot(ctx, snapshot, digest, now) }
-	}
-	start := make(chan struct{})
-	results := make(chan error, 2)
-	go func() { <-start; results <- first.ReserveAppNames(ctx, []string{name}, owner) }()
-	go func() { <-start; results <- action() }()
-	close(start)
-	firstResult, secondResult := <-results, <-results
-	if (firstResult == nil) == (secondResult == nil) {
-		t.Fatalf("expected one hostname winner: %v, %v", firstResult, secondResult)
-	}
-	loser := errors.Join(firstResult, secondResult)
-	if !errors.Is(loser, tunnel.ErrCollision) && !errors.Is(loser, edge.ErrRouteCollision) {
-		t.Fatalf("loser was not collision: %v", loser)
-	}
-}
-
-func TestAppCapacityIsSharedAndCleanupReclaimsOnlyActiveCapacity(t *testing.T) {
-	ctx := context.Background()
-	store := openTunnelTestStore(t)
-	owner, key := storageEdgeIdentity(t)
-	target, _ := storageEdgeIdentity(t)
-	_, err := store.db.ExecContext(ctx, `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x < ?)
-        INSERT INTO app_names(public_name, owner_id, active) SELECT 'bulk' || x || '.mesh.test', ?, 1 FROM n`, edge.MaximumTotalRoutes-1, owner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner); err != nil {
-		t.Fatalf("last slot = %v", err)
-	}
-	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner); err != nil {
-		t.Fatalf("idempotent reserve at capacity = %v", err)
-	}
-	if err := store.ReserveAppNames(ctx, []string{"overflow.mesh.test"}, owner); !errors.Is(err, tunnel.ErrCapacity) {
-		t.Fatalf("app overflow = %v", err)
-	}
-	mutation := signedTunnelMutation(t, key, target, tunnel.Create, "tunnel.mesh.test", 1)
-	if err := applyTestTunnel(store, mutation); !errors.Is(err, tunnel.ErrCapacity) {
-		t.Fatalf("tunnel bypassed app capacity: %v", err)
-	}
-	now := time.Now().UTC()
-	snapshot := storageSignedSnapshot(t, target, owner, key, 1, now, []edge.Route{{PublicName: "service.mesh.test", ServiceName: "app"}})
-	if err := store.ApplyEdgeSnapshot(ctx, snapshot, storageSnapshotDigest(t, snapshot, target, owner), now); !errors.Is(err, tunnel.ErrCapacity) {
-		t.Fatalf("snapshot bypassed app capacity: %v", err)
-	}
-	if err := store.SetAppNameInactive(ctx, "7k3d.mesh.test", owner); err != nil {
-		t.Fatalf("cleanup at capacity = %v", err)
-	}
-	if err := applyTestTunnel(store, mutation); err != nil {
-		t.Fatalf("cleanup did not free active slot: %v", err)
-	}
-	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner); !errors.Is(err, tunnel.ErrCollision) {
-		t.Fatalf("retired name reused = %v", err)
-	}
-	if err := store.DeleteTunnelClaim(ctx, mutation.PublicName); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ApplyEdgeSnapshot(ctx, snapshot, storageSnapshotDigest(t, snapshot, target, owner), now); err != nil {
-		t.Fatalf("snapshot after cleanup = %v", err)
-	}
-	if err := store.ReserveAppNames(ctx, []string{"overflow.mesh.test"}, owner); !errors.Is(err, tunnel.ErrCapacity) {
-		t.Fatalf("app ignored service capacity: %v", err)
-	}
-}
-
 func TestAppStorageRejectsInvalidBoundaryValues(t *testing.T) {
-	store := openTunnelTestStore(t)
+	store := openTestStore(t)
 	ctx := context.Background()
-	owner, _ := storageEdgeIdentity(t)
+	owner := storageAppIdentity(t)
 	for _, name := range []string{"../apps", "APPS.mesh.test", "https://7k3d.mesh.test"} {
 		if err := store.ReserveAppNames(ctx, []string{name}, owner); err == nil {
 			t.Fatalf("invalid name %q accepted", name)
@@ -319,9 +94,9 @@ func TestAppStorageRejectsInvalidBoundaryValues(t *testing.T) {
 
 func TestAllocatedAppStateAndNameCommitTogether(t *testing.T) {
 	ctx := context.Background()
-	store := openTunnelTestStore(t)
-	owner, _ := storageEdgeIdentity(t)
-	other, _ := storageEdgeIdentity(t)
+	store := openTestStore(t)
+	owner := storageAppIdentity(t)
+	other := storageAppIdentity(t)
 	name := "7k3d.mesh.test"
 	initial := []byte(`{"apps":{"7k3d":{"visibility":"private"}}}`)
 	if err := store.ReserveAppNamesAndState(ctx, []string{name}, owner, "apps.edge", initial); err != nil {
@@ -335,18 +110,18 @@ func TestAllocatedAppStateAndNameCommitTogether(t *testing.T) {
 	if err != nil || !bytes.Equal(loaded, initial) {
 		t.Fatalf("allocated state missing: %q, %v", loaded, err)
 	}
-	updated := []byte(`{"apps":{"7k3d":{"visibility":"public"}}}`)
+	updated := []byte(`{"apps":{"7k3d":{"visibility":"private","generation":2}}}`)
 	if err := store.ReserveAppNamesAndState(ctx, []string{name}, owner, "apps.edge", updated); err != nil {
 		t.Fatalf("exact owner name retry: %v", err)
 	}
-	if err := store.ReserveAppNamesAndState(ctx, []string{name}, other, "apps.edge", initial); !errors.Is(err, tunnel.ErrCollision) {
+	if err := store.ReserveAppNamesAndState(ctx, []string{name}, other, "apps.edge", initial); !errors.Is(err, ErrAppNameCollision) {
 		t.Fatalf("wrong owner overwrote allocation: %v", err)
 	}
 	assertAppStateBytes(t, store, updated)
 	if err := store.SetAppNameInactive(ctx, name, owner); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ReserveAppNamesAndState(ctx, []string{name}, owner, "apps.edge", initial); !errors.Is(err, tunnel.ErrCollision) {
+	if err := store.ReserveAppNamesAndState(ctx, []string{name}, owner, "apps.edge", initial); !errors.Is(err, ErrAppNameCollision) {
 		t.Fatalf("retired name resurrected: %v", err)
 	}
 	assertAppStateBytes(t, store, updated)
@@ -354,8 +129,8 @@ func TestAllocatedAppStateAndNameCommitTogether(t *testing.T) {
 
 func TestAllocatedAppStateFailureRollsBackNewName(t *testing.T) {
 	ctx := context.Background()
-	store := openTunnelTestStore(t)
-	owner, _ := storageEdgeIdentity(t)
+	store := openTestStore(t)
+	owner := storageAppIdentity(t)
 	initial := []byte(`{"apps":{}}`)
 	if err := store.SaveAppState(ctx, "apps.edge", initial); err != nil {
 		t.Fatal(err)
@@ -382,30 +157,6 @@ func TestAllocatedAppStateFailureRollsBackNewName(t *testing.T) {
 	}
 }
 
-func TestAllocatedAppCollisionLeavesStateUnchanged(t *testing.T) {
-	ctx := context.Background()
-	store := openTunnelTestStore(t)
-	owner, key := storageEdgeIdentity(t)
-	target, _ := storageEdgeIdentity(t)
-	initial := []byte(`{"apps":{}}`)
-	if err := store.SaveAppState(ctx, "apps.edge", initial); err != nil {
-		t.Fatal(err)
-	}
-	name := "7k3d.mesh.test"
-	claim := signedTunnelMutation(t, key, target, tunnel.Create, name, 1)
-	if err := applyTestTunnel(store, claim); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ReserveAppNamesAndState(ctx, []string{name}, owner, "apps.edge", []byte(`{"apps":{"7k3d":{}}}`)); !errors.Is(err, tunnel.ErrCollision) {
-		t.Fatalf("existing tunnel collision = %v", err)
-	}
-	assertAppStateBytes(t, store, initial)
-	exists, err := store.AppNameExists(ctx, name)
-	if err != nil || exists {
-		t.Fatalf("collision left app name: %v, %v", exists, err)
-	}
-}
-
 func assertAppStateBytes(t *testing.T, store *Store, want []byte) {
 	t.Helper()
 	got, err := store.LoadAppState(context.Background(), "apps.edge")
@@ -416,13 +167,13 @@ func assertAppStateBytes(t *testing.T, store *Store, want []byte) {
 
 func TestAppAliasConflictRollsBackNamesAndState(t *testing.T) {
 	ctx := context.Background()
-	store := openTunnelTestStore(t)
-	owner, _ := storageEdgeIdentity(t)
-	other, _ := storageEdgeIdentity(t)
+	store := openTestStore(t)
+	owner := storageAppIdentity(t)
+	other := storageAppIdentity(t)
 	if err := store.ReserveAppNames(ctx, []string{"7k3d.old.test"}, other); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ReserveAppNamesAndState(ctx, []string{"7k3d.mesh.test", "7k3d.old.test"}, owner, "edge", []byte(`{"apps":[]}`)); !errors.Is(err, tunnel.ErrCollision) {
+	if err := store.ReserveAppNamesAndState(ctx, []string{"7k3d.mesh.test", "7k3d.old.test"}, owner, "edge", []byte(`{"apps":[]}`)); !errors.Is(err, ErrAppNameCollision) {
 		t.Fatalf("conflict: %v", err)
 	}
 	exists, err := store.AppNameExists(ctx, "7k3d.mesh.test")
@@ -437,17 +188,106 @@ func TestAppAliasConflictRollsBackNamesAndState(t *testing.T) {
 
 func TestAppAliasAdoptionConflictRollsBackWholeSet(t *testing.T) {
 	ctx := context.Background()
-	store := openTunnelTestStore(t)
-	owner, _ := storageEdgeIdentity(t)
-	other, _ := storageEdgeIdentity(t)
+	store := openTestStore(t)
+	owner := storageAppIdentity(t)
+	other := storageAppIdentity(t)
 	if err := store.ReserveAppNames(ctx, []string{"7k3d.old.test"}, other); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test", "7k3d.old.test"}, owner); !errors.Is(err, tunnel.ErrCollision) {
+	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test", "7k3d.old.test"}, owner); !errors.Is(err, ErrAppNameCollision) {
 		t.Fatalf("alias conflict: %v", err)
 	}
 	exists, err := store.AppNameExists(ctx, "7k3d.mesh.test")
 	if err != nil || exists {
 		t.Fatalf("partial adoption: %v %v", exists, err)
+	}
+}
+
+func storageAppIdentity(t *testing.T) string {
+	t.Helper()
+	public, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(public)
+}
+
+func TestAppReservationRacesOtherOwners(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "mesh.db")
+	first, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = first.Close() })
+	second, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	owner := storageAppIdentity(t)
+	other := storageAppIdentity(t)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() { <-start; results <- first.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner) }()
+	go func() { <-start; results <- second.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, other) }()
+	close(start)
+	firstResult, secondResult := <-results, <-results
+	if (firstResult == nil) == (secondResult == nil) {
+		t.Fatalf("expected one hostname winner: %v, %v", firstResult, secondResult)
+	}
+	if loser := errors.Join(firstResult, secondResult); !errors.Is(loser, ErrAppNameCollision) {
+		t.Fatalf("loser was not collision: %v", loser)
+	}
+}
+
+func TestAppCapacityCleanupRetainsNameTombstones(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	owner := storageAppIdentity(t)
+	_, err := store.db.ExecContext(ctx, `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x < 8191)
+        INSERT INTO app_names(hostname, owner_id, active) SELECT 'bulk' || x || '.mesh.test', ?, 1 FROM n`, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner); err != nil {
+		t.Fatalf("last slot: %v", err)
+	}
+	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner); err != nil {
+		t.Fatalf("retry at capacity: %v", err)
+	}
+	if err := store.ReserveAppNames(ctx, []string{"overflow.mesh.test"}, owner); !errors.Is(err, ErrAppNameCapacity) {
+		t.Fatalf("overflow: %v", err)
+	}
+	if err := store.SetAppNameInactive(ctx, "7k3d.mesh.test", owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, owner); !errors.Is(err, ErrAppNameCollision) {
+		t.Fatalf("retired name reused: %v", err)
+	}
+	if err := store.ReserveAppNames(ctx, []string{"overflow.mesh.test"}, owner); err != nil {
+		t.Fatalf("retirement did not free capacity: %v", err)
+	}
+}
+
+func TestAllocatedAppCollisionLeavesStateUnchanged(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	owner := storageAppIdentity(t)
+	other := storageAppIdentity(t)
+	initial := []byte(`{"apps":{}}`)
+	if err := store.SaveAppState(ctx, "apps.edge", initial); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReserveAppNames(ctx, []string{"7k3d.mesh.test"}, other); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReserveAppNamesAndState(ctx, []string{"new.mesh.test", "7k3d.mesh.test"}, owner, "apps.edge", []byte(`{"apps":{"7k3d":{}}}`)); !errors.Is(err, ErrAppNameCollision) {
+		t.Fatalf("existing owner collision: %v", err)
+	}
+	assertAppStateBytes(t, store, initial)
+	exists, err := store.AppNameExists(ctx, "new.mesh.test")
+	if err != nil || exists {
+		t.Fatalf("collision leaked new name: %v, %v", exists, err)
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,7 +19,7 @@ import (
 )
 
 func TestHandlerForNormalizedServiceRejectsUnknownKind(t *testing.T) {
-	_, err := handlerForNormalizedService(Service{Name: "broken", Kind: Kind("unknown"), Target: "3000"}, "/broken", nil)
+	_, err := handlerForNormalizedService(Service{Name: "broken", Kind: Kind("unknown"), Target: "3000"}, "/broken")
 	if err == nil || !strings.Contains(err.Error(), "unsupported kind") {
 		t.Fatalf("unknown service kind error = %v", err)
 	}
@@ -259,7 +258,7 @@ func TestProxyForwardsPathHeadersAndStreams(t *testing.T) {
 	close(release)
 }
 
-func TestProxyPreservesForwardingMetadataOnlyFromPinnedPeer(t *testing.T) {
+func TestProxyDerivesForwardingMetadataFromPrivateIngress(t *testing.T) {
 	observed := make(chan http.Header, 3)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		observed <- request.Header.Clone()
@@ -274,11 +273,9 @@ func TestProxyPreservesForwardingMetadataOnlyFromPinnedPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pinned := netip.MustParseAddr("100.64.0.2")
 	registry, err := NewRegistryWithReservedPrefix(
-		[]Service{{Name: "api", Kind: Proxy, Target: port, PublicName: "app.mesh.test"}},
+		[]Service{{Name: "api", Kind: Proxy, Target: port}},
 		ReservedPrefix,
-		func(address netip.Addr) bool { return address == pinned },
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -291,10 +288,10 @@ func TestProxyPreservesForwardingMetadataOnlyFromPinnedPeer(t *testing.T) {
 	response := httptest.NewRecorder()
 	registry.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent {
-		t.Fatalf("trusted edge response = %d", response.Code)
+		t.Fatalf("private ingress response = %d", response.Code)
 	}
 	trusted := <-observed
-	if trusted.Get("X-Forwarded-For") != "203.0.113.77" || trusted.Get("X-Forwarded-Proto") != "https" ||
+	if trusted.Get("X-Forwarded-For") != "100.64.0.2" || trusted.Get("X-Forwarded-Proto") != "http" ||
 		trusted.Get("X-Forwarded-Host") != "app.mesh.test" || trusted.Get("X-Forwarded-Prefix") != "/api" {
 		t.Fatalf("trusted forwarding metadata = %#v", trusted)
 	}
@@ -395,7 +392,7 @@ func TestRegistryUsesLongestRouteAndReservesProtocolPrefix(t *testing.T) {
 	if _, err := NewRegistry([]Service{{Name: "mesh/site", Kind: Static, Target: outer}}); err == nil {
 		t.Fatal("service under the reserved protocol prefix succeeded")
 	}
-	custom, err := NewRegistryWithReservedPrefix([]Service{{Name: "mesh/site", Kind: Static, Target: outer}}, "/control/ws", nil)
+	custom, err := NewRegistryWithReservedPrefix([]Service{{Name: "mesh/site", Kind: Static, Target: outer}}, "/control/ws")
 	if err != nil {
 		t.Fatalf("service outside the configured protocol prefix: %v", err)
 	}

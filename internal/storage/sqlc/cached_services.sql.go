@@ -32,7 +32,7 @@ func (q *Queries) DeleteCachedServicesForHost(ctx context.Context, hostID string
 }
 
 const listCachedServices = `-- name: ListCachedServices :many
-SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate, display_name, private_host
+SELECT host_id, private_name, name, kind, target, healthy, problem, observed_at, isolate, display_name, private_host
 FROM cached_services
 ORDER BY host_id, name
 LIMIT 8193
@@ -53,8 +53,6 @@ func (q *Queries) ListCachedServices(ctx context.Context) ([]CachedService, erro
 			&i.Name,
 			&i.Kind,
 			&i.Target,
-			&i.PublicName,
-			&i.WakeOnRequest,
 			&i.Healthy,
 			&i.Problem,
 			&i.ObservedAt,
@@ -76,7 +74,7 @@ func (q *Queries) ListCachedServices(ctx context.Context) ([]CachedService, erro
 }
 
 const listCachedServicesForHost = `-- name: ListCachedServicesForHost :many
-SELECT host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at, isolate, display_name, private_host
+SELECT host_id, private_name, name, kind, target, healthy, problem, observed_at, isolate, display_name, private_host
 FROM cached_services
 WHERE host_id = ?
 ORDER BY name
@@ -97,8 +95,6 @@ func (q *Queries) ListCachedServicesForHost(ctx context.Context, hostID string) 
 			&i.Name,
 			&i.Kind,
 			&i.Target,
-			&i.PublicName,
-			&i.WakeOnRequest,
 			&i.Healthy,
 			&i.Problem,
 			&i.ObservedAt,
@@ -126,22 +122,18 @@ INSERT INTO cached_services (
     name,
     kind,
     target,
-    public_name,
     private_host,
-    wake_on_request,
     healthy,
     problem,
     observed_at,
     isolate,
     display_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (host_id, name) DO UPDATE SET
 	private_name = excluded.private_name,
     kind = excluded.kind,
     target = excluded.target,
-    public_name = excluded.public_name,
     private_host = excluded.private_host,
-    wake_on_request = excluded.wake_on_request,
     healthy = excluded.healthy,
     problem = excluded.problem,
     observed_at = excluded.observed_at,
@@ -150,19 +142,17 @@ ON CONFLICT (host_id, name) DO UPDATE SET
 `
 
 type UpsertCachedServiceParams struct {
-	HostID        string
-	PrivateName   string
-	Name          string
-	Kind          string
-	Target        string
-	PublicName    string
-	PrivateHost   string
-	WakeOnRequest int64
-	Healthy       int64
-	Problem       string
-	ObservedAt    int64
-	Isolate       int64
-	DisplayName   string
+	HostID      string
+	PrivateName string
+	Name        string
+	Kind        string
+	Target      string
+	PrivateHost string
+	Healthy     int64
+	Problem     string
+	ObservedAt  int64
+	Isolate     int64
+	DisplayName string
 }
 
 func (q *Queries) UpsertCachedService(ctx context.Context, arg UpsertCachedServiceParams) error {
@@ -172,9 +162,7 @@ func (q *Queries) UpsertCachedService(ctx context.Context, arg UpsertCachedServi
 		arg.Name,
 		arg.Kind,
 		arg.Target,
-		arg.PublicName,
 		arg.PrivateHost,
-		arg.WakeOnRequest,
 		arg.Healthy,
 		arg.Problem,
 		arg.ObservedAt,

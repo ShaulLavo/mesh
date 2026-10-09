@@ -24,11 +24,11 @@ func proxyTestUID(t *testing.T) uint32 {
 	return 0
 }
 
-func TestTailnetOwnerAccessValidatesPeerUIDSupportAtStartup(t *testing.T) {
+func TestAppRegistryValidatesPeerUIDSupportAtStartup(t *testing.T) {
 	cfg := ListenerConfig{
-		StateDir: t.TempDir(), PublicListenAddress: "127.0.0.1:8445", TailnetOwnerAccess: true,
-		PublicHTTPHandler: http.NotFoundHandler(),
-		PublicTLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		StateDir: t.TempDir(), AppRegistryListenAddress: "127.0.0.1:8445",
+		AppRegistryHTTPHandler: http.NotFoundHandler(),
+		AppRegistryTLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return nil, nil
 		}},
 	}
@@ -38,12 +38,7 @@ func TestTailnetOwnerAccessValidatesPeerUIDSupportAtStartup(t *testing.T) {
 		if err != nil || !slices.Equal(normalized.proxyForwarderUIDs, []uint32{0, proxyTestUID(t)}) {
 			t.Fatalf("owner access allow-list = %v, %v", normalized.proxyForwarderUIDs, err)
 		}
-	} else if err == nil || !strings.Contains(err.Error(), "enable Tailnet owner access") || !strings.Contains(err.Error(), runtime.GOOS) {
+	} else if err == nil || !strings.Contains(err.Error(), "configure private HTTPS forwarders") || !strings.Contains(err.Error(), runtime.GOOS) {
 		t.Fatalf("unsupported owner access startup = %v", err)
-	}
-	cfg.TailnetOwnerAccess = false
-	normalized, err = validateListenerConfig(context.Background(), cfg, handler)
-	if err != nil || len(normalized.proxyForwarderUIDs) != 0 {
-		t.Fatalf("manual browser pairing listener = %v, %v", normalized.proxyForwarderUIDs, err)
 	}
 }

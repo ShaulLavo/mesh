@@ -49,7 +49,7 @@ type RecordInput struct {
 	Comment string
 }
 
-// Provider is the DNS mechanism shared by private names and the public edge.
+// Provider is the DNS mechanism for private names and certificate challenges.
 type Provider interface {
 	ListRecords(context.Context, string, RecordType) ([]Record, error)
 	CreateRecord(context.Context, RecordInput) (Record, error)
@@ -260,6 +260,6 @@ func recordMatches(record Record, desired RecordInput) bool {
 		record.TTL == desired.TTL && record.Proxied == desired.Proxied && record.Comment == desired.Comment
 }
 
-func Zone() string               { return domainpolicy.Primary() }
-func WildcardName() string       { return domainpolicy.Wildcard(Zone(), true) }
-func PublicWildcardName() string { return domainpolicy.Wildcard(Zone(), false) }
+func Zone() string                { return domainpolicy.Primary() }
+func WildcardName() string        { return domainpolicy.Wildcard(Zone(), true) }
+func ServiceWildcardName() string { return domainpolicy.Wildcard(Zone(), false) }

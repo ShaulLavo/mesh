@@ -218,7 +218,7 @@
           "os": "darwin",
           "arch": "arm64"
         },
-        "proof": "cee03f3103d61fb1d79421e0247de58502007de90949de6890b57153cfc88a2b"
+        "proof": "8dda36b83d5f097a5297f2788762a6d443006b3c13a53755ae65f8f222e082e6"
       },
       {
         "fromDigest": "aaa04a82eb601759e0300e0f1327bbe6dd34ad10d60651c15aef93b32a46609d",

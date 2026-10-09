@@ -187,7 +187,7 @@ func TestWatchSubscriberCapIndependentAcrossActualTransports(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), runtimeTestTimeout)
 			defer cancel()
 			lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-			server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
+			server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, disabledCertificateController{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -315,7 +315,7 @@ func TestHostMetricsOneShotWarmsAcrossDemandStopStart(t *testing.T) {
 func TestWatchRejectsTerminalUsedConnectionAndPreservesAttachment(t *testing.T) {
 	client, worker := newServerTestConn(), newServerTestConn()
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, newServerTestConnector(worker), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, newServerTestConnector(worker), noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +354,7 @@ func TestWatchRejectsTerminalUsedConnectionAndPreservesAttachment(t *testing.T) 
 func TestWatchRejectsTerminalModeChangeAndKeepsStream(t *testing.T) {
 	client := newServerTestConn()
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestWatchRejectsTerminalModeChangeAndKeepsStream(t *testing.T) {
 	if initial.Type != protocol.TypeStateSnapshot {
 		t.Fatal(initial)
 	}
-	for _, kind := range []string{protocol.TypeAttach, protocol.TypeTunnelRecover} {
+	for _, kind := range []string{protocol.TypeAttach} {
 		client.pushRead(serverControlFrame(t, protocol.Control{Type: kind, SessionID: "7K3D", RequestID: "incompatible"}))
 		refused := decodeServerControl(t, client.nextWrite(t))
 		if refused.Type != protocol.TypeError || refused.RequestID != "incompatible" {

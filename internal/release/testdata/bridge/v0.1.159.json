@@ -119,7 +119,7 @@
           "os": "darwin",
           "arch": "arm64"
         },
-        "proof": "6c17e5388adcd15b4d82039029fec8a72f908dd07d7c190a95e411b2a1169034"
+        "proof": "54d13c1d74cb6235cfbeef2bbe89cc270a97c2e62b0075588c24908bdd46cb59"
       },
       {
         "fromDigest": "aa0278f87f0387a15581fe1f7f4da4e194f3a30f6a31db7e834b00d77cf03b55",

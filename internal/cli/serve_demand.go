@@ -101,9 +101,7 @@ func serveDemandFromFlags(target string, flags serveFlags, localHost bool) (serv
 	if flags.run == "" {
 		return demand, nil
 	}
-	if flags.publicName != "" {
-		return serveDemand{}, errors.New("--run cannot be combined with --public: a request from the internet would start a process on the host")
-	}
+
 	cwd := flags.cwd
 	switch {
 	case !flags.cwdSet && !localHost:

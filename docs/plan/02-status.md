@@ -61,7 +61,7 @@ power-loss acceptance remains an operator check.
   inspection; live service controls and restart restoration (T11, T14)
 - `internal/dnsname` — Cloudflare-owned private A/TXT reconciliation, bounded
   RFC 8555 DNS-01 issuance, atomic live/staging wildcard state, signed origin
-  and private-name distribution, public-edge certificate isolation, and
+  and private-name distribution, private app registry certificate isolation, and
   supervised Tailscale address rebinding (T12, T13, T14)
 - `internal/edge` — signed complete route snapshots, durable ownership and
   liveness, authenticated status pages, fuzzed Host parsing, bounded

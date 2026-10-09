@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/apps"
-	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/worker"
@@ -29,18 +28,6 @@ type appOrigin interface {
 
 type appRegistry interface {
 	Exchange(context.Context, apps.Signed) (apps.Signed, error)
-}
-
-func networkOwnerRateExemption(resolve func(context.Context, netip.Addr) ([]string, error)) func(context.Context, netip.Addr) bool {
-	if resolve == nil {
-		return nil
-	}
-	return func(ctx context.Context, address netip.Addr) bool {
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-		owners, err := resolve(ctx, address)
-		return err == nil && len(owners) != 0
-	}
 }
 
 type appController struct {
@@ -277,8 +264,8 @@ func appOriginHandler(origin *apps.Origin, fallback http.Handler) http.Handler {
 	})
 }
 
-func appResolver(origins []edge.OriginConfig, resolve edge.ResolveOrigin, pin edge.PinOrigin) func(context.Context, string) (netip.AddrPort, error) {
-	byID := make(map[string]edge.OriginConfig, len(origins))
+func appResolver(origins []apps.Peer, resolve func(context.Context, apps.Peer) (netip.AddrPort, error), pin func(context.Context, netip.AddrPort, apps.Peer) error) func(context.Context, string) (netip.AddrPort, error) {
+	byID := make(map[string]apps.Peer, len(origins))
 	for _, origin := range origins {
 		byID[origin.Identity] = origin
 	}
@@ -293,8 +280,8 @@ func appResolver(origins []edge.OriginConfig, resolve edge.ResolveOrigin, pin ed
 		if err != nil {
 			return netip.AddrPort{}, err
 		}
-		if err := edge.ValidateAppOriginEndpoint(endpoint, origin.ControlPort); err != nil {
-			return netip.AddrPort{}, err
+		if err := apps.ValidateOriginEndpoint(endpoint, origin.ControlPort); err != nil {
+			return netip.AddrPort{}, fmt.Errorf("app: resolve origin endpoint: %w", err)
 		}
 		if err := pin(bounded, endpoint, origin); err != nil {
 			return netip.AddrPort{}, err

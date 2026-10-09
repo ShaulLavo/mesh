@@ -60,8 +60,8 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
-      - name: Check private app boundary
-        run: scripts/check-private-app-boundary.sh
+      - name: Check private hosting boundary
+        run: scripts/check-private-hosting-boundary.sh
       - name: Vet
         run: go vet ./...
       - name: Race tests

@@ -106,7 +106,7 @@ func TestCatalogOpenContentionKeepsServiceFanoutLive(t *testing.T) {
 	rows, diagnostics, err := CollectServiceCatalog(t.Context(), hosts, 40*time.Millisecond,
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {
 			return remoteServiceSnapshot{Services: []protocol.ServiceInfo{{Name: "api", Kind: "proxy", Target: "3000", Healthy: true}}}, nil
-		}, nil, cache)
+		}, cache)
 	if err != nil || len(rows) != len(hosts) {
 		t.Fatalf("live service fan-out = %#v, %v", rows, err)
 	}

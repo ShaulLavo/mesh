@@ -10,15 +10,15 @@ import (
 // are the daemon's to report, so a client cannot set them.
 func ServiceFromInfo(info ServiceInfo) meshserve.Service {
 	service := meshserve.Service{
-		Name:          info.Name,
-		DisplayName:   info.DisplayName,
-		Kind:          meshserve.Kind(info.Kind),
-		Target:        info.Target,
-		PublicName:    info.PublicName,
-		PrivateHost:   info.PrivateHost,
-		WakeOnRequest: info.WakeOnRequest,
-		Isolate:       info.Isolate,
-		LocalOnly:     info.LocalOnly,
+		Name:        info.Name,
+		DisplayName: info.DisplayName,
+		Kind:        meshserve.Kind(info.Kind),
+		Target:      info.Target,
+
+		PrivateHost: info.PrivateHost,
+
+		Isolate:   info.Isolate,
+		LocalOnly: info.LocalOnly,
 	}
 	for _, listen := range info.Listens {
 		service.Listens = append(service.Listens, meshserve.Listen{
@@ -41,15 +41,15 @@ func ServiceFromInfo(info ServiceInfo) meshserve.Service {
 // health or demand state.
 func ServiceDefinitionInfo(service meshserve.Service) ServiceInfo {
 	info := ServiceInfo{
-		Name:          service.Name,
-		DisplayName:   service.DisplayName,
-		Kind:          string(service.Kind),
-		Target:        service.Target,
-		PublicName:    service.PublicName,
-		PrivateHost:   service.PrivateHost,
-		WakeOnRequest: service.WakeOnRequest,
-		Isolate:       service.Isolate,
-		LocalOnly:     service.LocalOnly,
+		Name:        service.Name,
+		DisplayName: service.DisplayName,
+		Kind:        string(service.Kind),
+		Target:      service.Target,
+
+		PrivateHost: service.PrivateHost,
+
+		Isolate:   service.Isolate,
+		LocalOnly: service.LocalOnly,
 	}
 	for _, listen := range service.Listens {
 		info.Listens = append(info.Listens, ServiceListen{Public: int(listen.Public), Upstream: int(listen.Upstream)})

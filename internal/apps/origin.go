@@ -35,14 +35,14 @@ type Workers interface {
 	Processes(context.Context, string) ([]int, error)
 }
 type OriginConfig struct {
-	CheckHosting func(int, string) error
-	Store        StateStore
-	Key          ed25519.PrivateKey
-	EdgeIdentity string
-	Exchange     func(context.Context, Signed) (Signed, error)
-	Workers      Workers
-	DataRoot     string
-	Now          func() time.Time
+	CheckHosting     func(int, string) error
+	Store            StateStore
+	Key              ed25519.PrivateKey
+	RegistryIdentity string
+	Exchange         func(context.Context, Signed) (Signed, error)
+	Workers          Workers
+	DataRoot         string
+	Now              func() time.Time
 }
 type localApp struct {
 	Commit *commitIntent `json:"commit,omitempty"`
@@ -523,12 +523,12 @@ func (o *Origin) edge(ctx context.Context, q Request) (Result, error) {
 		return Result{}, err
 	}
 	defer o.unlockExchange()
-	return o.edgeLocked(ctx, q)
+	return o.registryLocked(ctx, q)
 }
 
-// edgeLocked requires the exchange slot, which makes its holder the only writer of
+// registryLocked requires the exchange slot, which makes its holder the only writer of
 // Pending and Sequence; mu covers only the writes and their persistence.
-func (o *Origin) edgeLocked(ctx context.Context, q Request) (Result, error) {
+func (o *Origin) registryLocked(ctx context.Context, q Request) (Result, error) {
 	if o.state.Pending != nil {
 		pending := *o.state.Pending
 		result, err := o.settle(ctx, pending)
@@ -542,7 +542,7 @@ func (o *Origin) edgeLocked(ctx context.Context, q Request) (Result, error) {
 	}
 	o.mu.Lock()
 	o.state.Sequence++
-	s, err := Sign("mesh-app/request/v1", o.config.EdgeIdentity, o.state.Sequence, q, o.config.Key, o.config.Now())
+	s, err := Sign("mesh-app/request/v1", o.config.RegistryIdentity, o.state.Sequence, q, o.config.Key, o.config.Now())
 	if err == nil {
 		o.state.Pending = &s
 		err = o.persist(ctx)
@@ -562,7 +562,7 @@ func (o *Origin) settle(ctx context.Context, s Signed) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := response.Verify("mesh-app/response/v1", o.identity, o.config.EdgeIdentity, o.config.Now()); err != nil {
+	if err := response.Verify("mesh-app/response/v1", o.identity, o.config.RegistryIdentity, o.config.Now()); err != nil {
 		return Result{}, err
 	}
 	var reply registryReply
@@ -869,7 +869,7 @@ func (o *Origin) allocate(ctx context.Context, q Request, digest string) (contex
 		return ctx, localApp{}, nil, err
 	}
 	defer o.unlockExchange()
-	result, err := o.edgeLocked(ctx, Request{Action: "allocate", Kind: q.Kind})
+	result, err := o.registryLocked(ctx, Request{Action: "allocate", Kind: q.Kind})
 	if err != nil {
 		return ctx, localApp{}, nil, err
 	}
@@ -1611,7 +1611,7 @@ func (o *Origin) renewLeases(ctx context.Context) (map[string]Record, error) {
 		return nil, fmt.Errorf("app: sync leases with private registry: %w", err)
 	}
 	defer o.unlockExchange()
-	result, err := o.edgeLocked(ctx, Request{Action: "sync"})
+	result, err := o.registryLocked(ctx, Request{Action: "sync"})
 	var unsaved *unsavedReply
 	if err != nil && !errors.As(err, &unsaved) {
 		return nil, fmt.Errorf("app: sync leases with private registry: %w", err)
@@ -2123,7 +2123,7 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 	}
 	now := o.config.Now()
 	var proof Signed
-	if err := decode(token, &proof); err != nil || proof.Verify("mesh-app/admission/v1", o.identity, o.config.EdgeIdentity, now) != nil {
+	if err := decode(token, &proof); err != nil || proof.Verify("mesh-app/admission/v1", o.identity, o.config.RegistryIdentity, now) != nil {
 		http.NotFound(w, r)
 		return true
 	}

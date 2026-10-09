@@ -12,8 +12,6 @@ import (
 	"testing"
 
 	"github.com/shaul/mesh/internal/identity"
-	"github.com/shaul/mesh/internal/paths"
-	"github.com/shaul/mesh/internal/tunnel"
 	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
@@ -156,33 +154,6 @@ func TestPublishedCoordinatorRefusalPrecedesPlan(t *testing.T) {
 				t.Fatalf("published coordinator guidance/effect: err=%v plans=%d", err, plans.Load())
 			}
 		})
-	}
-}
-
-func TestTunnelStaleNameCannotPersistSignedAttempt(t *testing.T) {
-	f := namedDestination(t)
-	f.host.MachineName, f.host.NameRevision = "destination", 1
-	if err := saveNamedTestHost(t, f.host); err != nil {
-		t.Fatal(err)
-	}
-	host, err := resolveHostTarget([]HostRecord{f.host}, "destination")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.names.Rename(t.Context(), f.host.ID, "renamed", 1); err != nil {
-		t.Fatal(err)
-	}
-	a := application{dependencies: Dependencies{DialControl: dialControlHost}}
-	_, err = a.deliverTunnelMutation(t.Context(), host, tunnel.Create, "fixture.example.test")
-	if err == nil {
-		t.Fatal("stale tunnel name reached signed effect")
-	}
-	stateDir, err := paths.StateDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(stateDir, catalogDatabaseName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale name created durable tunnel outbox/catalog: %v", err)
 	}
 }
 

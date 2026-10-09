@@ -10,12 +10,12 @@ fi
 
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/au.XXXXXX")
-EDGE_STATE="$TEST_ROOT/e"
+REGISTRY_STATE="$TEST_ROOT/e"
 ORIGIN_STATE="$TEST_ROOT/o"
 WORKLOAD="$TEST_ROOT/w"
 SOURCE="$TEST_ROOT/src"
 MESH_APP=${MESH_INTEGRATION_BINARY:-$TEST_ROOT/mesh}
-EDGE_PID=""
+REGISTRY_PID=""
 ORIGIN_PID=""
 APP_ID=""
 UPDATE_CLIENT=""
@@ -24,10 +24,10 @@ cleanup() {
   if [ -n "$APP_ID" ] && [ -n "$ORIGIN_PID" ]; then
     MESH_STATE_DIR="$ORIGIN_STATE" timeout 5s "$MESH_APP" app delete local "$APP_ID" >/dev/null 2>&1 || true
   fi
-  for pid in "$UPDATE_CLIENT" "$ORIGIN_PID" "$EDGE_PID"; do
+  for pid in "$UPDATE_CLIENT" "$ORIGIN_PID" "$REGISTRY_PID"; do
     [ -z "$pid" ] || kill -TERM "$pid" 2>/dev/null || true
   done
-  for pid in "$ORIGIN_PID" "$EDGE_PID"; do
+  for pid in "$ORIGIN_PID" "$REGISTRY_PID"; do
     [ -z "$pid" ] || wait "$pid" 2>/dev/null || true
   done
   python3 - "$ORIGIN_STATE/s" <<'PY'
@@ -48,25 +48,25 @@ trap cleanup EXIT
 
 fail() {
   echo "FAIL: $*" >&2
-  for log in "$TEST_ROOT/edge.log" "$TEST_ROOT/origin.log"; do
+  for log in "$TEST_ROOT/registry.log" "$TEST_ROOT/origin.log"; do
     [ ! -f "$log" ] || tail -20 "$log" >&2
   done
   exit 1
 }
 
-mkdir -p "$TEST_ROOT/bin" "$EDGE_STATE" "$ORIGIN_STATE" "$SOURCE"
+mkdir -p "$TEST_ROOT/bin" "$REGISTRY_STATE" "$ORIGIN_STATE" "$SOURCE"
 ln -s "$REPO_ROOT/integration/helpers/fake_tailscale" "$TEST_ROOT/bin/tailscale"
 if [ -z "${MESH_INTEGRATION_BINARY:-}" ]; then
   (cd "$REPO_ROOT" && go build -tags mesh_integration -o "$MESH_APP" ./cmd/mesh) || fail 'build integration Mesh'
 fi
 (cd "$REPO_ROOT" && go build -o "$SOURCE/server" ./integration/helpers/temporary_app_server.go) || fail 'build HTTP server fixture'
 
-for state in "$EDGE_STATE" "$ORIGIN_STATE"; do
+for state in "$REGISTRY_STATE" "$ORIGIN_STATE"; do
   ssh-keygen -q -t ed25519 -N '' -C '' -f "$state/identity.key" || fail 'create fixture identity'
 done
-cat "$ORIGIN_STATE/identity.key.pub" >"$EDGE_STATE/authorized_keys"
-cat "$EDGE_STATE/identity.key.pub" >"$ORIGIN_STATE/authorized_keys"
-chmod 0600 "$EDGE_STATE/authorized_keys" "$ORIGIN_STATE/authorized_keys"
+cat "$ORIGIN_STATE/identity.key.pub" >"$REGISTRY_STATE/authorized_keys"
+cat "$REGISTRY_STATE/identity.key.pub" >"$ORIGIN_STATE/authorized_keys"
+chmod 0600 "$REGISTRY_STATE/authorized_keys" "$ORIGIN_STATE/authorized_keys"
 
 private_app_fixture configure "$TEST_ROOT" "$$" || fail 'fixture configuration'
 mapfile -t PORTS <"$TEST_ROOT/ports"
@@ -91,15 +91,15 @@ start_origin() {
   wait_for_socket "$ORIGIN_PID" "$ORIGIN_STATE/daemon.sock" || fail 'origin startup'
 }
 
-start_edge() {
-  env MESH_STATE_DIR="$EDGE_STATE" MESH_FAKE_TAILSCALE_STATUS="$TEST_ROOT/e-status.json" PATH="$TEST_ROOT/bin:$PATH" \
-    "$MESH_APP" daemon --tailnet-port "$CONTROL_PORT" --edge "$TEST_ROOT/edge.json" >>"$TEST_ROOT/edge.log" 2>&1 &
-  EDGE_PID=$!
-  wait_for_socket "$EDGE_PID" "$EDGE_STATE/daemon.sock" || fail 'edge startup'
+start_registry() {
+  env MESH_STATE_DIR="$REGISTRY_STATE" MESH_FAKE_TAILSCALE_STATUS="$TEST_ROOT/e-status.json" PATH="$TEST_ROOT/bin:$PATH" \
+    "$MESH_APP" daemon --tailnet-port "$CONTROL_PORT" --app-registry-config "$TEST_ROOT/registry.json" >>"$TEST_ROOT/registry.log" 2>&1 &
+  REGISTRY_PID=$!
+  wait_for_socket "$REGISTRY_PID" "$REGISTRY_STATE/daemon.sock" || fail 'registry startup'
   private_app_fixture install "$TEST_ROOT" || fail 'install private app HTTPS certificate'
 }
 
-start_edge
+start_registry
 start_origin
 
 json_field() {

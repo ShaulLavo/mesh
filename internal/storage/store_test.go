@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shaul/mesh/internal/release"
 )
 
 func TestOpenAppliesMigrationsIdempotently(t *testing.T) {
@@ -20,7 +22,7 @@ func TestOpenAppliesMigrationsIdempotently(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSQLiteSettings(t, first)
-	assertMigrationVersion(t, first, 12)
+	assertCurrentMigrationVersion(t, first)
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +38,7 @@ func TestOpenAppliesMigrationsIdempotently(t *testing.T) {
 		t.Fatalf("reopen migrated database: %v", err)
 	}
 	t.Cleanup(func() { _ = second.Close() })
-	assertMigrationVersion(t, second, 12)
+	assertCurrentMigrationVersion(t, second)
 	var applied int
 	if err := second.db.QueryRowContext(ctx, `
 		SELECT count(*)
@@ -370,8 +372,9 @@ func assertSQLiteSettings(t *testing.T, store *Store) {
 	}
 }
 
-func assertMigrationVersion(t *testing.T, store *Store, want int64) {
+func assertCurrentMigrationVersion(t *testing.T, store *Store) {
 	t.Helper()
+	want := int64(release.CurrentStateVersion)
 	var got int64
 	if err := store.db.QueryRow(`SELECT max(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&got); err != nil {
 		t.Fatal(err)

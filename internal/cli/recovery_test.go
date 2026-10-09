@@ -3,11 +3,12 @@ package cli
 import (
 	"context"
 	"fmt"
-	"github.com/shaul/mesh/internal/machinename"
 	"io"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/shaul/mesh/internal/machinename"
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"

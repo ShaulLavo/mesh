@@ -65,7 +65,7 @@ Related execution homes:
 [#126](https://github.com/ShaulLavo/mesh/issues/126) reported v0.1.139 accepting a healthy public static route while public DNS returned a tailnet address and TLS served the private wildcard certificate. The private route returned HTTP 200. The public route was withdrawn. This distinguishes app health from public reachability but does not identify the configuration cause. Plan 291 preserves ordinary public services, so this finding survives removal of public temporary apps.
 
 - [ ] Define separate origin readiness, route registration, DNS reachability and TLS validation observations for ordinary public services. Use local resolver, TLS and edge fixtures to reproduce the wrong-address/wrong-certificate combination. Do not probe or repair the old live route without authorization.
-- [ ] Decide the narrow warning or status correction after that reproduction. Verify private routes remain healthy and a public hostname is never called externally reachable merely because its origin responds. Preserve the public-edge TLS contract in `docs/tasks/T13-public-edge.md`.
+- [ ] Decide the narrow warning or status correction after that reproduction. Verify private routes remain healthy and readiness reflects the private listener and installed certificate. Public hosting has been removed.
 
 ### External Gallery listener
 

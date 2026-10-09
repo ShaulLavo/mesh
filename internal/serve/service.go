@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/netip"
 	"path"
 	"path/filepath"
 	"sort"
@@ -18,8 +17,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/shaul/mesh/internal/domainpolicy"
 )
 
 const (
@@ -51,13 +48,13 @@ const (
 
 // Service is one durable route on an origin host.
 type Service struct {
-	DisplayName   string
-	Name          string
-	Kind          Kind
-	Target        string
-	PublicName    string
-	PrivateHost   string
-	WakeOnRequest bool
+	DisplayName string
+	Name        string
+	Kind        Kind
+	Target      string
+
+	PrivateHost string
+
 	// Isolate sends the cross-origin isolation headers with every response,
 	// which is what browsers require before they enable SharedArrayBuffer.
 	// Off by default because the embedder policy also blocks cross-origin
@@ -84,10 +81,9 @@ type ServiceStatus struct {
 // Registry routes requests to a complete service snapshot. Replace publishes a
 // new snapshot atomically, so in-flight requests keep using the old handlers.
 type Registry struct {
-	reservedPrefix        string
-	trustForwardedHeaders func(netip.Addr) bool
-	snapshot              atomic.Pointer[registrySnapshot]
-	gate                  atomic.Pointer[demandGate]
+	reservedPrefix string
+	snapshot       atomic.Pointer[registrySnapshot]
+	gate           atomic.Pointer[demandGate]
 }
 
 type registrySnapshot struct {
@@ -97,9 +93,8 @@ type registrySnapshot struct {
 }
 
 type serviceRoute struct {
-	prefix     string
-	publicName string
-	handler    http.Handler
+	prefix  string
+	handler http.Handler
 }
 
 // Normalize validates service and resolves directory targets to absolute paths.
@@ -112,12 +107,6 @@ func ValidateName(name string) error {
 	return validateRouteName(name)
 }
 
-// ValidatePublicName checks that name is empty or exactly one canonical DNS
-// label below the public Mesh zone.
-func ValidatePublicName(name string) error {
-	return validatePublicName(name)
-}
-
 // ReservedPrefix returns the protocol path this registry keeps free of services.
 func (r *Registry) ReservedPrefix() string {
 	return r.reservedPrefix
@@ -125,17 +114,16 @@ func (r *Registry) ReservedPrefix() string {
 
 // NewRegistry builds a registry from one complete service list.
 func NewRegistry(services []Service) (*Registry, error) {
-	return NewRegistryWithReservedPrefix(services, ReservedPrefix, nil)
+	return NewRegistryWithReservedPrefix(services, ReservedPrefix)
 }
 
 // NewRegistryWithReservedPrefix builds a registry that refuses any service
-// route overlapping the daemon protocol path. trustForwardedHeaders may trust
-// canonical forwarding metadata only from a separately authenticated peer.
-func NewRegistryWithReservedPrefix(services []Service, reservedPrefix string, trustForwardedHeaders func(netip.Addr) bool) (*Registry, error) {
+// route overlapping the daemon protocol path.
+func NewRegistryWithReservedPrefix(services []Service, reservedPrefix string) (*Registry, error) {
 	if err := validatePrefix(reservedPrefix); err != nil {
 		return nil, fmt.Errorf("serve: invalid reserved prefix: %w", err)
 	}
-	registry := &Registry{reservedPrefix: reservedPrefix, trustForwardedHeaders: trustForwardedHeaders}
+	registry := &Registry{reservedPrefix: reservedPrefix}
 	if err := registry.Replace(services); err != nil {
 		return nil, err
 	}
@@ -224,7 +212,7 @@ func upstreamAddress(port string) string {
 }
 
 // ServeHTTP dispatches by longest path prefix and returns 404 for unknown paths.
-// A private nested mount must not become public through a parent fallback.
+// A private nested mount must not be reachable through a parent fallback.
 func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	snapshot := r.snapshot.Load()
 	if snapshot == nil {
@@ -240,17 +228,13 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		servePrivateHost(w, request, host, handler)
 		return
 	}
-	publicRequest := host != "" && validatePublicName(host) == nil
 	requestPath := request.URL.EscapedPath()
 	for _, route := range snapshot.routes {
 		if requestPath != route.prefix && !strings.HasPrefix(requestPath, route.prefix+"/") {
 			continue
 		}
-		if publicRequest && (route.publicName == "" || route.publicName != host) {
-			http.NotFound(w, request)
-			return
-		}
-		if !publicRequest && !AmbientOwnerAllowed(request, privateRequestOrigin(request), AllowOriginlessWebSocket) {
+
+		if !AmbientOwnerAllowed(request, privateRequestOrigin(request), AllowOriginlessWebSocket) {
 			http.Error(w, "cross-site request to private service", http.StatusForbidden)
 			return
 		}
@@ -281,7 +265,7 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 			return nil, fmt.Errorf("serve: duplicate service route %q", normalized.Name)
 		}
 		seen[normalized.Name] = struct{}{}
-		for _, host := range []string{normalized.PrivateHost, normalized.PublicName} {
+		for _, host := range []string{normalized.PrivateHost} {
 			if host == "" {
 				continue
 			}
@@ -313,7 +297,7 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 		if normalized.PrivateHost != "" {
 			handlerPrefix = "/"
 		}
-		handler, err := handlerForNormalizedService(routed, handlerPrefix, r.trustForwardedHeaders)
+		handler, err := handlerForNormalizedService(routed, handlerPrefix)
 		if err != nil {
 			return nil, err
 		}
@@ -325,7 +309,7 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 			// Reserve the old path so a parent route cannot expose it again.
 			handler = http.NotFoundHandler()
 		}
-		snapshot.routes = append(snapshot.routes, serviceRoute{prefix: prefix, publicName: normalized.PublicName, handler: handler})
+		snapshot.routes = append(snapshot.routes, serviceRoute{prefix: prefix, handler: handler})
 	}
 	sort.Slice(snapshot.services, func(i, j int) bool {
 		return snapshot.services[i].Name < snapshot.services[j].Name
@@ -346,9 +330,7 @@ func normalizeService(service Service) (Service, error) {
 	if err := validateRouteName(service.Name); err != nil {
 		return Service{}, err
 	}
-	if err := validatePublicName(service.PublicName); err != nil {
-		return Service{}, fmt.Errorf("serve: service %q: %w", service.Name, err)
-	}
+
 	if err := validatePrivateHostService(service); err != nil {
 		return Service{}, err
 	}
@@ -380,37 +362,8 @@ func normalizeService(service Service) (Service, error) {
 	return normalizeDemand(service)
 }
 
-// ReservedLabel identifies public labels owned by Mesh rather than a service.
+// ReservedLabel identifies labels owned by Mesh rather than a service.
 func ReservedLabel(label string) bool { return label == "mesh" }
-
-func validatePublicName(name string) error {
-	if name == "" {
-		return nil
-	}
-	if len(name) > 253 || name != strings.ToLower(name) || strings.HasSuffix(name, ".") {
-		return fmt.Errorf("public name %q is not a canonical hostname", name)
-	}
-	label, _, accepted := domainpolicy.Label(name, false)
-	if !accepted {
-		return fmt.Errorf("public name %q is outside configured deployment domains", name)
-	}
-	if ReservedLabel(label) {
-		return fmt.Errorf("public name %q is reserved for private naming", name)
-	}
-	for _, label := range strings.Split(name, ".") {
-		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return fmt.Errorf("public name %q has an invalid DNS label", name)
-		}
-		for _, character := range label {
-			letter := character >= 'a' && character <= 'z'
-			digit := character >= '0' && character <= '9'
-			if !letter && !digit && character != '-' {
-				return fmt.Errorf("public name %q has an invalid DNS label", name)
-			}
-		}
-	}
-	return nil
-}
 
 func validateRouteName(name string) error {
 	if len(name) > MaximumServiceNameBytes {

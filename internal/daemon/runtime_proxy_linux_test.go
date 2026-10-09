@@ -16,18 +16,18 @@ import (
 	"github.com/shaul/mesh/internal/transport"
 )
 
-func TestPublicOwnerAccessListenerAuthenticatesBeforeTLS(t *testing.T) {
+func TestAppRegistryOwnerAccessListenerAuthenticatesBeforeTLS(t *testing.T) {
 	for _, allowed := range []bool{false, true} {
 		name := "disallowed"
 		if allowed {
 			name = "allowed"
 		}
 		t.Run(name, func(t *testing.T) {
-			publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+			appRegistryListener, err := net.Listen("tcp4", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = publicListener.Close() })
+			t.Cleanup(func() { _ = appRegistryListener.Close() })
 			unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
@@ -43,12 +43,12 @@ func TestPublicOwnerAccessListenerAuthenticatesBeforeTLS(t *testing.T) {
 				t.Fatal("test certificate could not be trusted")
 			}
 			cfg := ListenerConfig{
-				StateDir: t.TempDir(), PublicListenAddress: publicListener.Addr().String(), TailnetOwnerAccess: true,
-				PublicHTTPHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				StateDir: t.TempDir(), AppRegistryListenAddress: appRegistryListener.Addr().String(),
+				AppRegistryHTTPHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("X-Test-Remote-Addr", r.RemoteAddr)
 					w.WriteHeader(http.StatusNoContent)
 				}),
-				PublicTLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+				AppRegistryTLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 					return &cert, nil
 				}},
 			}
@@ -63,7 +63,7 @@ func TestPublicOwnerAccessListenerAuthenticatesBeforeTLS(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan error, 1)
 			go func() {
-				done <- serveBoundListeners(ctx, cancel, normalized, handler, unixListener, nil, nil, publicListener)
+				done <- serveBoundListeners(ctx, cancel, normalized, handler, unixListener, nil, nil, appRegistryListener)
 			}()
 			t.Cleanup(func() {
 				cancel()
@@ -71,7 +71,7 @@ func TestPublicOwnerAccessListenerAuthenticatesBeforeTLS(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			client, err := net.Dial("tcp4", publicListener.Addr().String())
+			client, err := net.Dial("tcp4", appRegistryListener.Addr().String())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -106,19 +106,19 @@ func TestPublicOwnerAccessListenerAuthenticatesBeforeTLS(t *testing.T) {
 	}
 }
 
-func TestPublicProxyAuthenticationPoolExpiresStalledHeaders(t *testing.T) {
+func TestAppRegistryProxyAuthenticationPoolExpiresStalledHeaders(t *testing.T) {
 	base, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener := newBoundedPublicListener(base, maximumPublicConnections)
+	listener := newBoundedAppRegistryListener(base, maximumAppRegistryConnections)
 	listener.proxyUIDs = []uint32{proxyTestUID(t)}
 	server := &http.Server{ReadHeaderTimeout: httpReadHeaderTimeout, ConnState: listener.connState,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Close(); _ = listener.closeActive() })
-	stalled := make([]net.Conn, 0, maximumPublicAuthenticating)
-	for range maximumPublicAuthenticating {
+	stalled := make([]net.Conn, 0, maximumAppRegistryAuthenticating)
+	for range maximumAppRegistryAuthenticating {
 		connection, err := net.Dial("tcp4", base.Addr().String())
 		if err != nil {
 			t.Fatal(err)
@@ -131,7 +131,7 @@ func TestPublicProxyAuthenticationPoolExpiresStalledHeaders(t *testing.T) {
 		listener.mu.Lock()
 		pending := len(listener.active)
 		listener.mu.Unlock()
-		if pending == maximumPublicAuthenticating {
+		if pending == maximumAppRegistryAuthenticating {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -144,7 +144,7 @@ func TestPublicProxyAuthenticationPoolExpiresStalledHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = connection.Close() }()
-	_ = connection.SetDeadline(time.Now().Add(publicProxyHeaderTimeout + time.Second))
+	_ = connection.SetDeadline(time.Now().Add(appRegistryProxyHeaderTimeout + time.Second))
 	if _, err := io.WriteString(connection, "PROXY TCP4 198.51.100.2 127.0.0.1 40000 443\r\nGET / HTTP/1.1\r\nHost: app.example.test\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -161,12 +161,12 @@ func TestPublicProxyAuthenticationPoolExpiresStalledHeaders(t *testing.T) {
 	}
 }
 
-func TestPublicProxyQuotaUsesAuthenticatedSource(t *testing.T) {
+func TestAppRegistryProxyQuotaUsesAuthenticatedSource(t *testing.T) {
 	base, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener := newBoundedPublicListener(base, maximumPublicConnections)
+	listener := newBoundedAppRegistryListener(base, maximumAppRegistryConnections)
 	listener.proxyUIDs = []uint32{proxyTestUID(t)}
 	server := &http.Server{ReadHeaderTimeout: httpReadHeaderTimeout, ConnState: listener.connState,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -175,7 +175,7 @@ func TestPublicProxyQuotaUsesAuthenticatedSource(t *testing.T) {
 		})}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Close(); _ = listener.closeActive() })
-	for i := range maximumPublicSourceConnections + 2 {
+	for i := range maximumAppRegistrySourceConnections + 2 {
 		connection, err := net.Dial("tcp4", base.Addr().String())
 		if err != nil {
 			t.Fatal(err)
@@ -183,14 +183,14 @@ func TestPublicProxyQuotaUsesAuthenticatedSource(t *testing.T) {
 		t.Cleanup(func() { _ = connection.Close() })
 		_ = connection.SetDeadline(time.Now().Add(time.Second))
 		source := "198.51.100.1"
-		if i == maximumPublicSourceConnections+1 {
+		if i == maximumAppRegistrySourceConnections+1 {
 			source = "198.51.100.2"
 		}
 		if _, err := fmt.Fprintf(connection, "PROXY TCP4 %s 127.0.0.1 40000 443\r\nGET / HTTP/1.1\r\nHost: app.example.test\r\n\r\n", source); err != nil {
 			t.Fatal(err)
 		}
 		response, err := http.ReadResponse(bufio.NewReader(connection), &http.Request{Method: http.MethodGet})
-		if i == maximumPublicSourceConnections {
+		if i == maximumAppRegistrySourceConnections {
 			if err == nil {
 				_ = response.Body.Close()
 				t.Fatal("over-share authenticated source was admitted")
@@ -207,12 +207,12 @@ func TestPublicProxyQuotaUsesAuthenticatedSource(t *testing.T) {
 	}
 }
 
-func TestPublicFailedProxyDoesNotEvictAuthenticatedIdle(t *testing.T) {
+func TestAppRegistryFailedProxyDoesNotEvictAuthenticatedIdle(t *testing.T) {
 	base, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener := newBoundedPublicListener(base, 1)
+	listener := newBoundedAppRegistryListener(base, 1)
 	listener.proxyUIDs = []uint32{proxyTestUID(t)}
 	idle := make(chan struct{}, 2)
 	closed := make(chan struct{}, 2)
@@ -266,12 +266,12 @@ func TestPublicFailedProxyDoesNotEvictAuthenticatedIdle(t *testing.T) {
 	}
 }
 
-func TestPublicDisallowedProxyNeverAdmits(t *testing.T) {
+func TestAppRegistryDisallowedProxyNeverAdmits(t *testing.T) {
 	base, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	listener := newBoundedPublicListener(base, 1)
+	listener := newBoundedAppRegistryListener(base, 1)
 	listener.proxyUIDs = []uint32{proxyTestUID(t) + 1}
 	t.Cleanup(func() { _ = listener.Close(); _ = listener.closeActive() })
 	peer, err := net.Dial("tcp4", base.Addr().String())
@@ -290,5 +290,24 @@ func TestPublicDisallowedProxyNeverAdmits(t *testing.T) {
 	listener.mu.Unlock()
 	if admitted != 0 || pending {
 		t.Fatalf("disallowed forwarder admitted=%d pending=%t, want 0 and false", admitted, pending)
+	}
+}
+
+func TestAppRegistryListenerRejectsUnprotectedRoles(t *testing.T) {
+	getter := func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, nil }
+	cases := []ListenerConfig{
+		{AppRegistryListenAddress: "0.0.0.0:443", AppRegistryHTTPHandler: http.NotFoundHandler(), AppRegistryTLSConfig: &tls.Config{GetCertificate: getter}},
+		{AppRegistryListenAddress: "203.0.113.4:443", AppRegistryHTTPHandler: http.NotFoundHandler(), AppRegistryTLSConfig: &tls.Config{GetCertificate: getter}},
+		{AppRegistryListenAddress: "127.0.0.1:8445", AppRegistryHTTPHandler: http.NotFoundHandler()},
+		{AppRegistryListenAddress: "127.0.0.1:8445", AppRegistryTLSConfig: &tls.Config{GetCertificate: getter}},
+		{AppRegistryListenAddress: "127.0.0.1:8445", AppRegistryHTTPHandler: http.NotFoundHandler(), AppRegistryTLSConfig: &tls.Config{}},
+		{AppRegistryListenAddress: "127.0.0.1:8445", AppRegistryHTTPHandler: http.NotFoundHandler(), AppRegistryTLSConfig: &tls.Config{MinVersion: tls.VersionTLS11, GetCertificate: getter}}, //nolint:gosec // old-TLS rejection fixture
+		{AppRegistryHTTPHandler: http.NotFoundHandler(), AppRegistryTLSConfig: &tls.Config{GetCertificate: getter}},
+	}
+	for index, cfg := range cases {
+		cfg.StateDir = t.TempDir()
+		if _, err := validateListenerConfig(context.Background(), cfg, func(context.Context, transport.Conn) error { return nil }); err == nil {
+			t.Fatalf("unprotected app registry config %d accepted", index)
+		}
 	}
 }

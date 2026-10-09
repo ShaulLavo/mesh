@@ -32,7 +32,7 @@ func ValidatePrivateServiceHost(host string) error {
 	if host == "" {
 		return fmt.Errorf("serve: private service host is empty")
 	}
-	if err := validatePublicName(host); err != nil {
+	if err := ValidateDeploymentHost(host); err != nil {
 		return err
 	}
 	label, _, _ := domainpolicy.Label(host, false)
@@ -58,7 +58,7 @@ func validatePrivateHostService(service Service) error {
 	if service.PrivateHost == "" {
 		return nil
 	}
-	if service.PublicName != "" || service.LocalOnly {
+	if service.LocalOnly {
 		return fmt.Errorf("serve: private host requires a tailnet-only service")
 	}
 	if err := ValidatePrivateServiceHost(service.PrivateHost); err != nil {

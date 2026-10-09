@@ -17,7 +17,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,8 +28,6 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/shaul/mesh/internal/dnsname"
-	"github.com/shaul/mesh/internal/edge"
-	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 )
@@ -735,12 +734,13 @@ func TestServeBoundListenersForcesStuckServiceRequestClosed(t *testing.T) {
 	}
 }
 
-func TestPublicServerGivesInFlightRequestShutdownGrace(t *testing.T) {
+func TestAppRegistryServerGivesInFlightRequestShutdownGrace(t *testing.T) {
+	registryTLS := appRegistryTestTLS(t)
 	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	appRegistryListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		_ = unixListener.Close()
 		t.Fatal(err)
@@ -755,17 +755,18 @@ func TestPublicServerGivesInFlightRequestShutdownGrace(t *testing.T) {
 			runCtx, cancel,
 			listenerConfig{
 				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: time.Second,
-				publicHTTPHandler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				appRegistryTLSConfig: registryTLS, proxyForwarderUIDs: []uint32{proxyTestUID(t)},
+				appRegistryHTTPHandler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 					close(requestStarted)
 					<-releaseRequest
 					response.WriteHeader(http.StatusNoContent)
 				}),
 			},
-			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, publicListener,
+			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, appRegistryListener,
 		)
 	}()
 	go func() {
-		response, err := (&http.Client{Timeout: runtimeTestTimeout}).Get("http://" + publicListener.Addr().String() + "/stream")
+		response, err := appRegistryTestClient(t, registryTLS).Get("https://" + appRegistryListener.Addr().String() + "/stream")
 		if response != nil {
 			if response.StatusCode != http.StatusNoContent && err == nil {
 				err = fmt.Errorf("status %d", response.StatusCode)
@@ -774,11 +775,11 @@ func TestPublicServerGivesInFlightRequestShutdownGrace(t *testing.T) {
 		}
 		clientDone <- err
 	}()
-	waitSignal(t, requestStarted, "public request startup")
+	waitSignal(t, requestStarted, "app registry request startup")
 	cancel()
 	select {
 	case err := <-done:
-		t.Fatalf("public server returned before the request completed: %v", err)
+		t.Fatalf("app registry server returned before the request completed: %v", err)
 	case <-time.After(25 * time.Millisecond):
 	}
 	close(releaseRequest)
@@ -790,12 +791,13 @@ func TestPublicServerGivesInFlightRequestShutdownGrace(t *testing.T) {
 	}
 }
 
-func TestPublicServerClosesHijackedWebSocketOnShutdown(t *testing.T) {
+func TestAppRegistryServerClosesHijackedWebSocketOnShutdown(t *testing.T) {
+	registryTLS := appRegistryTestTLS(t)
 	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	appRegistryListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		_ = unixListener.Close()
 		t.Fatal(err)
@@ -810,24 +812,25 @@ func TestPublicServerClosesHijackedWebSocketOnShutdown(t *testing.T) {
 			runCtx, cancel,
 			listenerConfig{
 				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: time.Second,
-				publicReadTimeout: 200 * time.Millisecond,
-				publicHTTPHandler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				appRegistryReadTimeout: 200 * time.Millisecond,
+				appRegistryTLSConfig:   registryTLS, proxyForwarderUIDs: []uint32{proxyTestUID(t)},
+				appRegistryHTTPHandler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 					connection, acceptErr := websocket.Accept(response, request, nil)
 					if acceptErr != nil {
 						close(handlerDone)
 						return
 					}
 					close(hijacked)
-					_, _, _ = connection.Read(context.Background())
+					_, _, _ = connection.Read(context.WithoutCancel(request.Context()))
 					close(handlerDone)
 				}),
 			},
-			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, publicListener,
+			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, appRegistryListener,
 		)
 	}()
 	ctx, stop := context.WithTimeout(context.Background(), runtimeTestTimeout)
 	defer stop()
-	connection, response, err := websocket.Dial(ctx, "ws://"+publicListener.Addr().String()+"/socket", nil)
+	connection, response, err := websocket.Dial(ctx, "wss://"+appRegistryListener.Addr().String()+"/socket", &websocket.DialOptions{HTTPClient: appRegistryTestClient(t, registryTLS)})
 	if response != nil && response.Body != nil {
 		defer response.Body.Close() //nolint:errcheck // test cleanup
 	}
@@ -840,14 +843,14 @@ func TestPublicServerClosesHijackedWebSocketOnShutdown(t *testing.T) {
 		_, _, readErr := connection.Read(ctx)
 		clientReadDone <- readErr
 	}()
-	waitSignal(t, hijacked, "public WebSocket upgrade")
+	waitSignal(t, hijacked, "app registry WebSocket upgrade")
 	select {
 	case <-time.After(250 * time.Millisecond):
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
 	if err := connection.Ping(ctx); err != nil {
-		t.Fatalf("public WebSocket stopped after the HTTP read timeout: %v", err)
+		t.Fatalf("app registry WebSocket stopped after the HTTP read timeout: %v", err)
 	}
 	cancel()
 	if err := waitRuntime(t, done); err != nil {
@@ -856,24 +859,25 @@ func TestPublicServerClosesHijackedWebSocketOnShutdown(t *testing.T) {
 	select {
 	case <-handlerDone:
 	case <-time.After(runtimeTestTimeout):
-		t.Fatal("hijacked public WebSocket handler did not unblock")
+		t.Fatal("hijacked app registry WebSocket handler did not unblock")
 	}
 	select {
 	case readErr := <-clientReadDone:
 		if readErr == nil {
-			t.Fatal("public WebSocket remained open after daemon shutdown")
+			t.Fatal("app registry WebSocket remained open after daemon shutdown")
 		}
 	case <-time.After(runtimeTestTimeout):
-		t.Fatal("public WebSocket client did not observe daemon shutdown")
+		t.Fatal("app registry WebSocket client did not observe daemon shutdown")
 	}
 }
 
-func TestPublicServerTimesOutIncompleteProxiedBody(t *testing.T) {
+func TestAppRegistryServerTimesOutIncompleteProxiedBody(t *testing.T) {
+	registryTLS := appRegistryTestTLS(t)
 	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	appRegistryListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		_ = unixListener.Close()
 		t.Fatal(err)
@@ -883,24 +887,10 @@ func TestPublicServerTimesOutIncompleteProxiedBody(t *testing.T) {
 		response.WriteHeader(http.StatusNoContent)
 	}))
 	defer backend.Close()
-	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	origin, _, err := identity.LoadOrCreate(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	registry, err := edge.NewRegistry(edge.HandlerConfig{Mode: edge.ModeProxy, Now: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer registry.Close()
-	if err := registry.Replace([]edge.PublishedRoute{{
-		Route: edge.Route{PublicName: "app.mesh.test", ServiceName: "app"},
-		Origin: edge.ResolvedOrigin{
-			Identity: origin.ID, DisplayAlias: "Desktop", Endpoint: netip.MustParseAddrPort(strings.TrimPrefix(backend.URL, "http://")),
-			LastSeenAt: now, OnlineUntil: now.Add(time.Hour), Online: true,
-		},
-	}}); err != nil {
-		t.Fatal(err)
+	target, _ := url.Parse(backend.URL)
+	registry := httputil.NewSingleHostReverseProxy(target)
+	registry.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+		http.Error(w, "App origin is unavailable.", http.StatusServiceUnavailable)
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -910,13 +900,14 @@ func TestPublicServerTimesOutIncompleteProxiedBody(t *testing.T) {
 			runCtx, cancel,
 			listenerConfig{
 				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: time.Second,
-				publicReadTimeout: 100 * time.Millisecond,
-				publicHTTPHandler: registry,
+				appRegistryReadTimeout: 100 * time.Millisecond,
+				appRegistryTLSConfig:   registryTLS, proxyForwarderUIDs: []uint32{proxyTestUID(t)},
+				appRegistryHTTPHandler: registry,
 			},
-			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, publicListener,
+			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, appRegistryListener,
 		)
 	}()
-	connection, err := net.DialTimeout("tcp4", publicListener.Addr().String(), time.Second)
+	connection, err := appRegistryTestDialTLS(t.Context(), appRegistryListener.Addr().String(), registryTLS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +917,7 @@ func TestPublicServerTimesOutIncompleteProxiedBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, err := bufio.NewReader(connection).ReadString('\n')
-	if err != nil || !strings.Contains(status, " 408 ") {
+	if err != nil || !strings.Contains(status, " 503 ") {
 		t.Fatalf("incomplete-body response = %q, %v", status, err)
 	}
 	cancel()
@@ -935,12 +926,13 @@ func TestPublicServerTimesOutIncompleteProxiedBody(t *testing.T) {
 	}
 }
 
-func TestPublicReadTimeoutDoesNotStopStreamingResponse(t *testing.T) {
+func TestAppRegistryReadTimeoutDoesNotStopStreamingResponse(t *testing.T) {
+	registryTLS := appRegistryTestTLS(t)
 	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	appRegistryListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		_ = unixListener.Close()
 		t.Fatal(err)
@@ -959,18 +951,19 @@ func TestPublicReadTimeoutDoesNotStopStreamingResponse(t *testing.T) {
 			runCtx, cancel,
 			listenerConfig{
 				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: time.Second,
-				publicReadTimeout: 100 * time.Millisecond,
-				publicHTTPHandler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				appRegistryReadTimeout: 100 * time.Millisecond,
+				appRegistryTLSConfig:   registryTLS, proxyForwarderUIDs: []uint32{proxyTestUID(t)},
+				appRegistryHTTPHandler: http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 					_, _ = io.WriteString(response, "first\n")
 					response.(http.Flusher).Flush()
 					<-release
 					_, _ = io.WriteString(response, "second\n")
 				}),
 			},
-			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, publicListener,
+			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, appRegistryListener,
 		)
 	}()
-	response, err := (&http.Client{Timeout: runtimeTestTimeout}).Get("http://" + publicListener.Addr().String() + "/stream")
+	response, err := appRegistryTestClient(t, registryTLS).Get("https://" + appRegistryListener.Addr().String() + "/stream")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -994,12 +987,13 @@ func TestPublicReadTimeoutDoesNotStopStreamingResponse(t *testing.T) {
 	}
 }
 
-func TestPublicServerRejectsOversizedHeadersBeforeHandler(t *testing.T) {
+func TestAppRegistryServerRejectsOversizedHeadersBeforeHandler(t *testing.T) {
+	registryTLS := appRegistryTestTLS(t)
 	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	appRegistryListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		_ = unixListener.Close()
 		t.Fatal(err)
@@ -1012,18 +1006,19 @@ func TestPublicServerRejectsOversizedHeadersBeforeHandler(t *testing.T) {
 			runCtx, cancel,
 			listenerConfig{
 				webSocketPath: "/mesh", reporter: newErrorReporter(nil), shutdownTimeout: time.Second,
-				publicHTTPHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { handlerCalled <- struct{}{} }),
+				appRegistryTLSConfig: registryTLS, proxyForwarderUIDs: []uint32{proxyTestUID(t)},
+				appRegistryHTTPHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { handlerCalled <- struct{}{} }),
 			},
-			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, publicListener,
+			func(context.Context, transport.Conn) error { return nil }, unixListener, nil, nil, appRegistryListener,
 		)
 	}()
-	connection, err := net.DialTimeout("tcp4", publicListener.Addr().String(), time.Second)
+	connection, err := appRegistryTestDialTLS(t.Context(), appRegistryListener.Addr().String(), registryTLS)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer connection.Close() //nolint:errcheck // test cleanup
 	_ = connection.SetDeadline(time.Now().Add(runtimeTestTimeout))
-	request := "GET / HTTP/1.1\r\nHost: app.mesh.test\r\nX-Oversized: " + strings.Repeat("a", maximumPublicHeaderBytes+(8<<10)) + "\r\n\r\n"
+	request := "GET / HTTP/1.1\r\nHost: app.mesh.test\r\nX-Oversized: " + strings.Repeat("a", maximumAppRegistryHeaderBytes+(8<<10)) + "\r\n\r\n"
 	if _, err := io.WriteString(connection, request); err != nil {
 		t.Fatal(err)
 	}
@@ -1033,7 +1028,7 @@ func TestPublicServerRejectsOversizedHeadersBeforeHandler(t *testing.T) {
 	}
 	select {
 	case <-handlerCalled:
-		t.Fatal("oversized header reached the public handler")
+		t.Fatal("oversized header reached the app registry handler")
 	default:
 	}
 	cancel()
@@ -1042,16 +1037,16 @@ func TestPublicServerRejectsOversizedHeadersBeforeHandler(t *testing.T) {
 	}
 }
 
-func TestBoundedPublicListenerRejectsFullActivePool(t *testing.T) {
-	base := &queuedPublicListener{
+func TestBoundedAppRegistryListenerRejectsFullActivePool(t *testing.T) {
+	base := &queuedAppRegistryListener{
 		connections: make(chan net.Conn, 3), accepted: make(chan struct{}, 8), closed: make(chan struct{}),
 	}
 	for i := range 3 {
 		server, peer := net.Pipe()
-		base.connections <- publicAddressedConn{Conn: server, address: &net.TCPAddr{IP: net.IPv4(127, 0, 0, byte(i+1)), Port: 1234}}
+		base.connections <- appRegistryAddressedConn{Conn: server, address: &net.TCPAddr{IP: net.IPv4(127, 0, 0, byte(i+1)), Port: 1234}}
 		t.Cleanup(func() { _ = peer.Close() })
 	}
-	listener := newBoundedPublicListener(base, 2)
+	listener := newBoundedAppRegistryListener(base, 2)
 	t.Cleanup(func() { _ = listener.Close(); _ = listener.closeActive() })
 	first, err := listener.Accept()
 	if err != nil {
@@ -1088,21 +1083,21 @@ func TestBoundedPublicListenerRejectsFullActivePool(t *testing.T) {
 	}
 }
 
-type publicAddressedConn struct {
+type appRegistryAddressedConn struct {
 	net.Conn
 	address net.Addr
 }
 
-func (c publicAddressedConn) RemoteAddr() net.Addr { return c.address }
+func (c appRegistryAddressedConn) RemoteAddr() net.Addr { return c.address }
 
-type queuedPublicListener struct {
+type queuedAppRegistryListener struct {
 	connections chan net.Conn
 	accepted    chan struct{}
 	closed      chan struct{}
 	closeOnce   sync.Once
 }
 
-func (l *queuedPublicListener) Accept() (net.Conn, error) {
+func (l *queuedAppRegistryListener) Accept() (net.Conn, error) {
 	l.accepted <- struct{}{}
 	select {
 	case connection := <-l.connections:
@@ -1112,12 +1107,12 @@ func (l *queuedPublicListener) Accept() (net.Conn, error) {
 	}
 }
 
-func (l *queuedPublicListener) Close() error {
+func (l *queuedAppRegistryListener) Close() error {
 	l.closeOnce.Do(func() { close(l.closed) })
 	return nil
 }
 
-func (*queuedPublicListener) Addr() net.Addr { return &net.TCPAddr{} }
+func (*queuedAppRegistryListener) Addr() net.Addr { return &net.TCPAddr{} }
 
 type failingListener struct {
 	err error

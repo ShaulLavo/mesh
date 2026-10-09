@@ -107,8 +107,6 @@ func New(stateDir string, opts Options) (*Client, error) {
 		}, flights: make(map[string]*flight)}, nil
 }
 
-func (c *Client) Remember(grant wake.Grant) error { return c.cache.Put(grant) }
-
 // Refresh learns current permission over an identity-pinned connection.
 func (c *Client) Refresh(ctx context.Context, target Target) error {
 	host, _, err := c.exchange(ctx, target.Endpoint, target.ID, protocol.Control{})

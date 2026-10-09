@@ -1,10 +1,11 @@
 package cli
 
 import (
-	"github.com/shaul/mesh/internal/machinename"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/shaul/mesh/internal/machinename"
 
 	"github.com/shaul/mesh/internal/agentresume"
 	"github.com/shaul/mesh/internal/protocol"

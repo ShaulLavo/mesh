@@ -89,7 +89,20 @@ func verifyPickerServiceCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cache.Close() //nolint:errcheck // isolated test cache
-	if err := cache.SaveServices(t.Context(), cli.HostRecord{ID: host.ID, MeshIdentity: host.ID}, "pc.mesh.mesh.test", []protocol.ServiceInfo{{Name: "site", Kind: "static", Target: t.TempDir(), PublicName: "blog.mesh.test", Healthy: true}}); err != nil {
+	if err := cache.SaveServices(t.Context(), cli.HostRecord{ID: host.ID, MeshIdentity: host.ID}, "pc.mesh.mesh.test", []protocol.ServiceInfo{{Name: "site", Kind: "static", Target: t.TempDir(), Healthy: true}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPrivateAppDaemonRequestsDeploymentPolicy(t *testing.T) {
+	for _, flag := range []string{"--app-registry-config", "--app-registry-target"} {
+		for _, args := range [][]string{{"daemon", flag, "/tmp/config.json"}, {"daemon", flag + "=/tmp/config.json"}} {
+			if !deploymentRequested(args) {
+				t.Fatalf("private app role skips policy: %v", args)
+			}
+		}
+	}
+	if deploymentRequested([]string{"daemon", "--edge=/tmp/config.json"}) {
+		t.Fatal("removed public role initializes deployment")
 	}
 }

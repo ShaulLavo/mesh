@@ -63,7 +63,7 @@ func TestGenerateRequiresContentAddressedPassingTransitionProof(t *testing.T) {
 		FromDigest: from, ToDigest: to,
 		StateReadMin: 5, StateReadMax: 7, StateWrite: 7,
 		WorkerMin: 1, WorkerMax: 1, WorkerWrite: 1, JournalVersion: 1,
-		RetainedOpenedCandidateState: true, SessionsPreserved: true, RecoveryRecordsPreserved: true,
+		CandidateOpenedRetainedState: true, SessionsPreserved: true, RecoveryRecordsPreserved: true,
 	}
 	proofContents, err := json.Marshal(proof)
 	if err != nil {
@@ -123,7 +123,7 @@ func TestGenerateDerivesCompatibilityMinimaFromHeterogeneousProofs(t *testing.T)
 			FromDigest: strings.Repeat(string(rune('b'+index)), 64), ToDigest: to,
 			StateReadMin: evidence.state, StateReadMax: 7, StateWrite: 7,
 			WorkerMin: evidence.worker, WorkerMax: 3, WorkerWrite: 3, JournalVersion: 1,
-			RetainedOpenedCandidateState: true, SessionsPreserved: true, RecoveryRecordsPreserved: true,
+			CandidateOpenedRetainedState: true, SessionsPreserved: true, RecoveryRecordsPreserved: true,
 		}
 		proofContents, err := json.Marshal(proof)
 		if err != nil {
@@ -169,7 +169,7 @@ func TestVerifyProofRejectsEvidenceOutsideCandidateEnvelope(t *testing.T) {
 		FromDigest: strings.Repeat("b", 64), ToDigest: strings.Repeat("c", 64),
 		StateReadMin: 4, StateReadMax: 7, StateWrite: 7,
 		WorkerMin: 1, WorkerMax: 3, WorkerWrite: 3, JournalVersion: 1,
-		RetainedOpenedCandidateState: true, SessionsPreserved: true, RecoveryRecordsPreserved: true,
+		CandidateOpenedRetainedState: true, SessionsPreserved: true, RecoveryRecordsPreserved: true,
 	}
 	compatibility := release.Compatibility{
 		StateReadMin: 4, StateReadMax: 7, StateWrite: 7,
