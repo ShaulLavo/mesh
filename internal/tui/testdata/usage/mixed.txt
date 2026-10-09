@@ -6,9 +6,9 @@
 │         metered · Pro · last served     checked 0s │
 │ Credits 62,500                                     │
 │ 5-hour  42% used · 58% left · resets 1h 32m        │
-│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪ ● OK          read 1m │
+│ ▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● OK          read 1m │
 │ Weekly  54% used · 46% left · resets 4d 9h         │
-│ ▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● OK          read 1m │
+│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪│▪▪▪▪▪▪▪▪▪▪ ● OK          read 1m │
 │         historic · Pro · cooldown       checked 0s │
 │ 5-hour  100% used · 0% left · resets 38m           │
 │ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● exhausted stale 18m │

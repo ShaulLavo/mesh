@@ -181,6 +181,55 @@ func TestDashboardUsageWindowFacts(t *testing.T) {
 	}
 }
 
+func TestDashboardUsageAllowanceDrains(t *testing.T) {
+	model := usageFixture(t, "normal")
+	model.ascii = true
+	window := model.usage.accounts[0].Windows[0]
+	window.WindowMinutes = nil
+	for _, test := range []struct {
+		used float64
+		want string
+	}{
+		{0, "############################"},
+		{50, "##############--------------"},
+		{100, "----------------------------"},
+	} {
+		window.UsedPercent = &test.used
+		_, role := usageStatus(window)
+		if got := ansi.Strip(model.usageMeter(window, role)); got != test.want {
+			t.Errorf("%g%% used: meter %q, want %q", test.used, got, test.want)
+		}
+	}
+	window.UsedPercent = nil
+	if got := ansi.Strip(model.usageMeter(window, dashboardMutedStyle)); got != "----------------------------" {
+		t.Errorf("unknown allowance: %q", got)
+	}
+}
+
+func TestDashboardUsageTimeGuideDrains(t *testing.T) {
+	model := usageFixture(t, "normal")
+	window := model.usage.accounts[0].Windows[0]
+	minutes := 60.0
+	window.WindowMinutes = &minutes
+	for _, test := range []struct {
+		remaining time.Duration
+		want      int
+	}{
+		{time.Hour, 27},
+		{30 * time.Minute, 14},
+		{time.Minute, 0},
+	} {
+		reset := model.now.Add(test.remaining)
+		window.ResetsAt = &reset
+		if got := model.usagePace(window); got != test.want {
+			t.Errorf("%s remaining: guide %d, want %d", test.remaining, got, test.want)
+		}
+	}
+	if footer := model.usageFooter(); !strings.Contains(footer, "AI bars 0–100% left") || !strings.Contains(footer, "time remaining") {
+		t.Fatal(footer)
+	}
+}
+
 func TestDashboardUsageNoDataFailureAndExtraWindows(t *testing.T) {
 	model := usageFixture(t, "normal")
 	model.usageFailing = true

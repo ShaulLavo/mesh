@@ -186,3 +186,8 @@ lands (D21).
 
 The extension point is the daemon protocol. Anything built later calls Mesh
 exactly like the CLI does.
+
+Keeping enrolled machines current is Approved in
+[14: fleet auto updates](14-fleet-auto-updates.md). It extends T26 with automatic
+release installation, verified catch-up steps, deployment configuration delivery
+and visible fleet drift.
