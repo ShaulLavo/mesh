@@ -17,7 +17,8 @@ import (
 func TestProxyForwardedIdentityUsesLiveSocketOwner(t *testing.T) {
 	for _, mode := range []string{"allowed", "disallowed", "unknown"} {
 		t.Run(mode, func(t *testing.T) {
-			registry := testRegistry(t, ModeProxy, time.Now())
+			now := time.Now()
+			registry := testRegistry(t, ModeProxy, now)
 			defer registry.Close()
 			if mode != "allowed" {
 				registry.forwarderTrusted = func(r *http.Request) bool {
@@ -33,16 +34,22 @@ func TestProxyForwardedIdentityUsesLiveSocketOwner(t *testing.T) {
 					})
 				}
 			}
-			registry.SetAppHandler(appHandlerFunc(func(w http.ResponseWriter, r *http.Request, _ string) bool {
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-				ip := r.Context().Value(proxyClientIPKey{}).(netip.Addr)
-				_, _ = fmt.Fprint(w, html.EscapeString(fmt.Sprintf("%s %s", ip, registry.forwardedScheme(r))))
-				return true
+				_, _ = fmt.Fprint(w, html.EscapeString(r.Header.Get("X-Forwarded-For")+" "+r.Header.Get("X-Forwarded-Proto")))
 			}))
+			defer backend.Close()
+			originID, _ := testIdentity(t)
+			if err := registry.Replace([]PublishedRoute{{
+				Route:  Route{PublicName: "app.mesh.test", ServiceName: "app"},
+				Origin: testResolvedOrigin(originID, testHTTPServerEndpoint(t, backend), now),
+			}}); err != nil {
+				t.Fatal(err)
+			}
 			server := httptest.NewServer(registry)
 			defer server.Close()
 			for i := 0; i <= maximumRequestsPerMinute; i++ {
-				request, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+				request, err := http.NewRequest(http.MethodGet, server.URL+"/app", nil)
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -42,7 +42,7 @@ func TestAnonymousGETFloodLeavesPairingAvailableWithoutWrites(t *testing.T) {
 	config := f.edge.config
 	config.Store = store
 	var err error
-	f.edge, err = NewEdge(context.Background(), config)
+	f.edge, err = NewRegistry(context.Background(), config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestAnonymousGETFloodLeavesPairingAvailableWithoutWrites(t *testing.T) {
 			t.Fatalf("anonymous GET returned %d", response.Code)
 		}
 	}
-	for _, path := range []string{"/pair", "/view?id=7k3d", "/confirm?id=7k3d&action=public"} {
+	for _, path := range []string{"/pair", "/view?id=7k3d", "/confirm?id=7k3d&action=delete"} {
 		response := httptest.NewRecorder()
 		f.edge.ServeHost(response, pairingRequest(http.MethodGet, path, "192.0.2.1"), ManagementHost())
 		if len(response.Result().Cookies()) != 0 {
@@ -141,13 +141,13 @@ func TestConfirmationStartsInertAndCannotBeFramed(t *testing.T) {
 	f := newAppFixture(t)
 	app := createStaticApp(t, f)
 	cookie := pairedOwner(t, f)
-	r := pairingRequest(http.MethodGet, "/confirm?id="+app.ID+"&action=public", "192.0.2.1", cookie)
+	r := pairingRequest(http.MethodGet, "/confirm?id="+app.ID+"&action=delete", "192.0.2.1", cookie)
 	response := httptest.NewRecorder()
 	f.edge.ServeHost(response, r, ManagementHost())
 	if !strings.Contains(response.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
 		t.Fatal("confirm can be framed")
 	}
-	if !regexp.MustCompile(`<button[^>]*\bdisabled\b[^>]*>Confirm public</button>`).MatchString(response.Body.String()) {
+	if !regexp.MustCompile(`<button[^>]*\bdisabled\b[^>]*>Confirm delete</button>`).MatchString(response.Body.String()) {
 		t.Fatal("confirm button is active immediately")
 	}
 	for _, guard := range []string{"document.hasFocus()", "visibilitychange", "pointermove", "keydown", "750"} {
@@ -157,8 +157,8 @@ func TestConfirmationStartsInertAndCannotBeFramed(t *testing.T) {
 	}
 }
 
-func TestPublicAndDeleteRequireServerConfirmation(t *testing.T) {
-	for _, action := range []string{"public", "delete"} {
+func TestDeleteRequiresServerConfirmation(t *testing.T) {
+	for _, action := range []string{"delete"} {
 		t.Run(action, func(t *testing.T) {
 			f := newAppFixture(t)
 			app := createStaticApp(t, f)
@@ -181,7 +181,7 @@ func TestPublicAndDeleteRequireServerConfirmation(t *testing.T) {
 						t.Fatalf("confirmation %q returned %d, want 400", confirmation, response.Code)
 					}
 					unchanged := f.edge.state.Apps[app.ID]
-					if unchanged.Visibility != "private" || unchanged.Status != "active" {
+					if unchanged.Status != "active" {
 						t.Fatal("unconfirmed mutation changed app")
 					}
 					continue
@@ -190,9 +190,6 @@ func TestPublicAndDeleteRequireServerConfirmation(t *testing.T) {
 					t.Fatalf("exact confirmation returned %d", response.Code)
 				}
 				changed := f.edge.state.Apps[app.ID]
-				if action == "public" && changed.Visibility != "public" {
-					t.Fatal("public confirmation did not apply")
-				}
 				if action == "delete" && changed.Status == "active" {
 					t.Fatal("delete confirmation did not apply")
 				}

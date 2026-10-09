@@ -9,8 +9,8 @@ import (
 )
 
 func TestConfirmationBrowserPages(t *testing.T) {
-	const public, private, renew, remove = "public", "private", "renew", "delete"
-	for _, action := range []string{public, private, renew, remove} {
+	const renew, remove = "renew", "delete"
+	for _, action := range []string{renew, remove} {
 		t.Run(action, func(t *testing.T) {
 			response := httptest.NewRecorder()
 			render(response, pageData{Confirm: action, App: Record{ID: "7k3d"}, CSRF: "test-csrf", URL: URL("7k3d"), Return: URL("7k3d") + "/"})

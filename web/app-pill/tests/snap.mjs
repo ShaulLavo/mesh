@@ -3,11 +3,11 @@ import { createServer } from 'node:http';
 import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { chromium, webkit } from 'playwright';
+import { fixturePage } from './fixture.mjs';
 
 const assets = process.env.MESH_PILL_ASSETS ? new URL(`file://${resolve(process.env.MESH_PILL_ASSETS)}/`) : new URL('../../../internal/apppill/assets/', import.meta.url);
 const artifacts = process.env.MESH_PILL_ARTIFACTS_DIR;
 if (artifacts) await mkdir(resolve(artifacts), { recursive: true });
-const manager = 'https://apps.mesh.test';
 const script = await readFile(new URL('pill.js', assets));
 const stylesheet = await readFile(new URL('pill.css', assets));
 const DOT_LINE = 38;
@@ -17,17 +17,17 @@ const GAP = 16;
 let origin;
 const server = createServer((request, response) => {
   response.setHeader('Cache-Control', 'no-store');
-  if (request.url === '/.mesh-app/pill.js') { response.setHeader('Content-Type', 'application/javascript'); response.end(script); return; }
-  if (request.url === '/.mesh-app/pill.css') { response.setHeader('Content-Type', 'text/css'); response.end(stylesheet); return; }
+  if (request.url === '/pill.js') { response.setHeader('Content-Type', 'application/javascript'); response.end(script); return; }
+  if (request.url === '/pill.css') { response.setHeader('Content-Type', 'text/css'); response.end(stylesheet); return; }
   response.setHeader('Content-Type', 'text/html; charset=utf-8');
-  response.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-test'; style-src ${origin}/.mesh-app/pill.css; frame-src ${manager}`);
-  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script defer nonce="test" data-mesh-app="7k3d" data-mesh-manager="${manager}" src="/.mesh-app/pill.js"></script></head><body><h1>Mesh pill snap harness</h1></body></html>`);
+  response.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-test'; style-src ${origin}/pill.css`);
+  response.end(fixturePage());
 });
 await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolveListen); });
 origin = `http://127.0.0.1:${server.address().port}`;
 
 const measure = page => page.evaluate(() => {
-  const root = document.querySelector('mesh-app-pill').shadowRoot;
+  const root = document.querySelector('floating-pill').shadowRoot;
   const viewport = { left: visualViewport.offsetLeft, top: visualViewport.offsetTop, right: visualViewport.offsetLeft + visualViewport.width, bottom: visualViewport.offsetTop + visualViewport.height };
   const gaps = element => {
     const box = element.getBoundingClientRect();
@@ -50,10 +50,10 @@ const measure = page => page.evaluate(() => {
 
 const settle = page => page.waitForTimeout(450);
 const center = async page => { const { shell } = await measure(page); return { x: shell.x, y: shell.y }; };
-// Expanded drags start on the chevron so no link or copy action sits under the pointer.
+// Expanded drags start on the dot so no action sits under the pointer.
 const grip = async (page, expanded) => {
   if (!expanded) return center(page);
-  const box = await page.locator('mesh-app-pill .dot-target').boundingBox();
+  const box = await page.locator('floating-pill .dot-target').boundingBox();
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 };
 const targets = (size) => ({ top: { x: size.width / 2, y: 4 }, bottom: { x: size.width / 2, y: size.height - 4 }, left: { x: 4, y: size.height / 2 }, right: { x: size.width - 4, y: size.height / 2 } });
@@ -72,7 +72,7 @@ async function drag(page, edge, expanded, size) {
 // A fake clock fixes the release velocity at 15px per 8ms, whatever the machine's load.
 async function flick(page, edge, expanded) {
   await page.evaluate(({ edge, expanded }) => {
-    const root = document.querySelector('mesh-app-pill').shadowRoot;
+    const root = document.querySelector('floating-pill').shadowRoot;
     const target = root.querySelector('.dot-target');
     const bounds = target.getBoundingClientRect();
     const now = performance.now;
@@ -97,7 +97,7 @@ async function flick(page, edge, expanded) {
 }
 
 async function keyboardDock(page, edge, expanded) {
-  await page.locator('mesh-app-pill .dot-target').focus();
+  await page.locator('floating-pill .dot-target').focus();
   await page.keyboard.press(`Alt+${{ top: 'ArrowUp', bottom: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight' }[edge]}`);
   await settle(page);
 }
@@ -105,7 +105,7 @@ async function keyboardDock(page, edge, expanded) {
 async function setExpanded(page, expanded) {
   const { closed } = await measure(page);
   if (closed === !expanded) return;
-  await page.locator('mesh-app-pill .dot-target').click();
+  await page.locator('floating-pill .dot-target').click();
   await settle(page);
 }
 
@@ -116,9 +116,8 @@ async function checkOrientation(browser, engine, orientation, size) {
     page.setDefaultTimeout(5000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    await page.route(`${manager}/**`, route => route.abort());
     await page.goto(origin);
-    await page.locator('mesh-app-pill .shell').waitFor();
+    await page.locator('floating-pill .shell').waitFor();
     await settle(page);
     for (const expanded of [false, true]) {
       const state = expanded ? 'expanded' : 'collapsed';
@@ -135,7 +134,7 @@ async function checkOrientation(browser, engine, orientation, size) {
         await keyboardDock(page, edge, expanded); await record('keyboard');
         await page.setViewportSize({ width: size.width - 1, height: size.height }); await settle(page);
         await page.setViewportSize(size); await settle(page); await record('resize');
-        await page.reload(); await page.locator('mesh-app-pill .shell').waitFor(); await settle(page);
+        await page.reload(); await page.locator('floating-pill .shell').waitFor(); await settle(page);
         await setExpanded(page, expanded); await record('reload');
         const label = `${engine} ${orientation} ${state} ${edge}`;
         const [, first] = rests[0];
@@ -181,24 +180,23 @@ async function checkOrientation(browser, engine, orientation, size) {
   }
 }
 
-const ownerFrame = route => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: `<!doctype html><script>parent.postMessage({type:'mesh-app-status',visibility:'public',owns:true},${JSON.stringify(origin)})</script>` });
 const anchorOf = page => page.evaluate(() => {
-  const box = document.querySelector('mesh-app-pill').shadowRoot.querySelector('.dot-target').getBoundingClientRect();
+  const box = document.querySelector('floating-pill').shadowRoot.querySelector('.dot-target').getBoundingClientRect();
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 });
-const isOpen = async page => (await page.locator('mesh-app-pill .dot-target').getAttribute('aria-expanded')) === 'true';
+const isOpen = async page => (await page.locator('floating-pill .dot-target').getAttribute('aria-expanded')) === 'true';
 const near = (a, b) => Math.abs(a.x - b.x) <= 1.5 && Math.abs(a.y - b.y) <= 1.5;
 // Holds the pill's running transitions, so a tap lands at a known moment of the motion.
 // Already held ones stay where they are; rewinding them would resize the pill under the test.
 const hold = (page, at) => page.evaluate(at => {
-  for (const animation of document.querySelector('mesh-app-pill').shadowRoot.querySelector('.shell').getAnimations({ subtree: true })) {
+  for (const animation of document.querySelector('floating-pill').shadowRoot.querySelector('.shell').getAnimations({ subtree: true })) {
     if (animation.playState !== 'running') continue;
     animation.pause();
     if (at !== undefined) animation.currentTime = at;
   }
 }, at);
 const release = page => page.evaluate(() => {
-  for (const animation of document.querySelector('mesh-app-pill').shadowRoot.querySelector('.shell').getAnimations({ subtree: true })) animation.play();
+  for (const animation of document.querySelector('floating-pill').shadowRoot.querySelector('.shell').getAnimations({ subtree: true })) animation.play();
 });
 
 async function checkAnchoring(browser, engine, reducedMotion) {
@@ -208,26 +206,25 @@ async function checkAnchoring(browser, engine, reducedMotion) {
     page.setDefaultTimeout(5000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    const confirms = [];
-    page.on('request', request => { if (new URL(request.url()).pathname === '/confirm') confirms.push(request.url()); });
-    await page.route(`${manager}/**`, ownerFrame);
+    const navigations = [];
+    page.on('request', request => { if (new URL(request.url()).pathname === '/details') navigations.push(request.url()); });
     await page.goto(origin);
     const label = `${engine} ${reducedMotion}`;
-    const dot = page.locator('mesh-app-pill .dot-target');
+    const dot = page.locator('floating-pill .dot-target');
     const collapse = dot;
     await dot.click();
-    await page.locator('mesh-app-pill').getByRole('link', { name: 'Make private' }).waitFor();
+    await page.locator('floating-pill').getByRole('link', { name: 'Open details' }).waitFor();
     await collapse.click();
     await settle(page);
 
     for (const [edge, ratio] of [['bottom', 0], ['bottom', 1], ['top', 0], ['top', 1], ['left', 0], ['left', 1], ['right', 0], ['right', 1]]) {
-      await page.evaluate(dock => localStorage.setItem('mesh-app-pill-position', JSON.stringify(dock)), { edge, ratio });
+      await page.evaluate(dock => localStorage.setItem('floating-pill-position', JSON.stringify(dock)), { edge, ratio });
       await page.reload();
       await dot.waitFor();
       await settle(page);
       const before = await anchorOf(page);
       await dot.click();
-      await page.locator('mesh-app-pill').getByRole('link', { name: 'Make private' }).waitFor();
+      await page.locator('floating-pill').getByRole('link', { name: 'Open details' }).waitFor();
       await settle(page);
       assert(near(await anchorOf(page), before), `${label} ${edge} ${ratio}: opening moved the dot from ${JSON.stringify(before)} to ${JSON.stringify(await anchorOf(page))}`);
       const grip = await collapse.boundingBox();
@@ -251,12 +248,12 @@ async function checkAnchoring(browser, engine, reducedMotion) {
       assert(near(await anchorOf(page), before), `${label} ${edge} ${ratio}: the dot moved after reload`);
     }
 
-    await page.evaluate(() => localStorage.setItem('mesh-app-pill-position', JSON.stringify({ edge: 'bottom', ratio: 0.5 })));
+    await page.evaluate(() => localStorage.setItem('floating-pill-position', JSON.stringify({ edge: 'bottom', ratio: 0.5 })));
     await page.reload();
     await dot.waitFor();
     await settle(page);
     await dot.click();
-    await page.locator('mesh-app-pill').getByRole('link', { name: 'Make private' }).waitFor();
+    await page.locator('floating-pill').getByRole('link', { name: 'Open details' }).waitFor();
     await collapse.click();
     await settle(page);
     if (reducedMotion !== 'reduce') {
@@ -291,15 +288,15 @@ async function checkAnchoring(browser, engine, reducedMotion) {
     await hold(page);
     await page.touchscreen.tap(center.x, center.y);
     await settle(page);
-    assert.deepEqual(confirms, [], `${label}: a quick second tap must not activate an action that is still appearing`);
+    assert.deepEqual(navigations, [], `${label}: a quick second tap must not activate an action that is still appearing`);
     assert.equal(await isOpen(page), false, `${label}: a quick second tap reverses the morph`);
     await release(page);
     await settle(page);
     await page.touchscreen.tap(center.x, center.y);
     await settle(page);
-    const lock = await page.locator('mesh-app-pill').getByRole('link', { name: 'Make private' }).boundingBox();
-    await page.touchscreen.tap(lock.x + lock.width / 2, lock.y + lock.height / 2);
-    await page.waitForURL(`${manager}/confirm?**`);
+    const link = await page.locator('floating-pill').getByRole('link', { name: 'Open details' }).boundingBox();
+    await page.touchscreen.tap(link.x + link.width / 2, link.y + link.height / 2);
+    await page.waitForURL(`${origin}/details`);
     assert.deepEqual(errors, [], 'The pill must not throw browser errors');
     console.log(`${label}: corner drags keep the dot, a tap mid-snap keeps the anchor, and a quick second tap reverses the morph`);
   } finally {

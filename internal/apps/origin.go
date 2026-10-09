@@ -565,7 +565,7 @@ func (o *Origin) settle(ctx context.Context, s Signed) (Result, error) {
 	if err := response.Verify("mesh-app/response/v1", o.identity, o.config.EdgeIdentity, o.config.Now()); err != nil {
 		return Result{}, err
 	}
-	var reply edgeReply
+	var reply registryReply
 	if err := decode(response.Body, &reply); err != nil {
 		return Result{}, err
 	}
@@ -604,7 +604,7 @@ func (o *Origin) Handle(ctx context.Context, q Request) (Result, error) {
 		return o.create(ctx, q)
 	case "download":
 		return o.download(ctx, q)
-	case "list", "public", "private", "renew", "browser.inspect", "browser.approve", "browser.list", "browser.revoke":
+	case "list", "renew", "browser.inspect", "browser.approve", "browser.list", "browser.revoke":
 		return o.edge(ctx, q)
 	case "inspect":
 		return o.inspect(ctx, q)

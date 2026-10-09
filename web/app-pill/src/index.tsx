@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, onCleanup, onMount, For, type JSX } from 'solid-js';
 import { render } from 'solid-js/web';
 import './pill.css';
 import { DOT_TARGET, confine, dockFromRelease, dotLeads, isHorizontalEdge, placeDot, placePill, type Box, type Dock, type Insets, type Point } from './dock';
@@ -11,9 +11,9 @@ const DOT_RING_RADIUS = 11;
 // The open clip extends past the pill so its shadow is not cut off.
 const OPEN_CLIP = 'inset(-16px round 38px)';
 
-function loadDock(): Dock {
+function loadDock(storageKey: string): Dock {
   try {
-    const value: unknown = JSON.parse(localStorage.getItem('mesh-app-pill-position') ?? 'null');
+    const value: unknown = JSON.parse(localStorage.getItem(storageKey) ?? 'null');
     if (typeof value !== 'object' || value === null || !('edge' in value) || !('ratio' in value)) return { edge: 'bottom', ratio: .5 };
     const { edge, ratio } = value;
     if ((edge === 'top' || edge === 'bottom' || edge === 'left' || edge === 'right') && typeof ratio === 'number' && Number.isFinite(ratio)) return { edge, ratio: Math.max(0, Math.min(1, ratio)) };
@@ -21,15 +21,34 @@ function loadDock(): Dock {
   return { edge: 'bottom', ratio: .5 };
 }
 
-type Access = { visibility: 'public' | 'private'; owns: boolean };
+type ActionPresentation = { id: string; label: string; title?: string; content?: JSX.Element };
+export type FloatingPillAction = ActionPresentation & (
+  | { kind: 'button'; onSelect: () => void }
+  | { kind: 'link'; href: string; target?: '_self' | '_blank' }
+);
+export type FloatingPillProps = {
+  actions: readonly FloatingPillAction[];
+  stylesheetHref: string;
+  label?: string;
+  storageKey?: string;
+};
+
+function Action(props: { action: FloatingPillAction; dragAware: ReturnType<typeof createDrag>['dragAware'] }) {
+  const action = props.action;
+  if (action.kind === 'link') return <a class="action" data-action={action.id} draggable={false} href={action.href}
+    target={action.target} rel="noopener noreferrer" aria-label={action.label} title={action.title ?? action.label}
+    onClick={props.dragAware()}>{action.content ?? action.label.slice(0, 1)}</a>;
+  return <button class="action" data-action={action.id} type="button" aria-label={action.label}
+    title={action.title ?? action.label} onClick={props.dragAware(action.onSelect)}>{action.content ?? action.label.slice(0, 1)}</button>;
+}
 type Layout = { dot: Point; pill: Point; pillWidth: number; pillHeight: number };
 
-function Pill(props: { appID: string; manager: string; nonce: string; initialAccess: Access | undefined }) {
+export function FloatingPill(props: FloatingPillProps) {
+  const storageKey = props.storageKey ?? 'floating-pill-position';
   const [collapsed, setCollapsed] = createSignal(true);
-  const [dock, setDock] = createSignal(loadDock());
+  const [dock, setDock] = createSignal(loadDock(storageKey));
   const [layout, setLayout] = createSignal<Layout>({ dot: { x: -1000, y: -1000 }, pill: { x: -1000, y: -1000 }, pillWidth: 0, pillHeight: 0 });
   const [position, setPosition] = createSignal<Point>({ x: -1000, y: -1000 });
-  const [copyState, setCopyState] = createSignal<'idle' | 'copied' | 'failed'>('idle');
   const [snapping, setSnapping] = createSignal(false);
   const [resizing, setResizing] = createSignal(false);
   const [keyboardMotion, setKeyboardMotion] = createSignal(false);
@@ -37,13 +56,10 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
   const [animated, setAnimated] = createSignal(false);
   // Until the opening morph lands, the actions appearing beside the dot ignore pointers, so a quick second tap stays on the dot.
   const [revealed, setRevealed] = createSignal(false);
-  const [access, setAccess] = createSignal<Access | undefined>(props.initialAccess);
   let shell: HTMLDivElement | undefined;
   let morph: HTMLDivElement | undefined;
   let dotButton: HTMLButtonElement | undefined;
-  let frame: HTMLIFrameElement | undefined;
   let safe: HTMLDivElement | undefined;
-  let copyTimer: ReturnType<typeof setTimeout> | undefined;
   let snapTimer: ReturnType<typeof setTimeout> | undefined;
   let revealTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -83,7 +99,7 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
     return `inset(${y - r}px ${pillWidth - x - r}px ${pillHeight - y - r}px ${x - r}px round ${r}px)`;
   };
   const saveDock = () => {
-    try { localStorage.setItem('mesh-app-pill-position', JSON.stringify(dock())); } catch { /* Storage is optional. */ }
+    try { localStorage.setItem(storageKey, JSON.stringify(dock())); } catch { /* Storage is optional. */ }
   };
   const drag = createDrag({
     element: () => shell,
@@ -124,13 +140,7 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
     }
     if (open) revealTimer = setTimeout(reveal, REVEAL_FALLBACK_MS);
   };
-  const copy = async () => {
-    clearTimeout(copyTimer);
-    try { await navigator.clipboard.writeText(location.origin); setCopyState('copied'); }
-    catch { setCopyState('failed'); }
-    copyTimer = setTimeout(() => setCopyState('idle'), 1800);
-  };
-  createEffect(() => { collapsed(); access(); dock(); queueMicrotask(redock); });
+  createEffect(() => { collapsed(); props.actions; dock(); queueMicrotask(redock); });
   onMount(() => {
     const abort = new AbortController();
     const { signal } = abort;
@@ -150,21 +160,7 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
     window.addEventListener('resize', updateViewport, { signal, passive: true });
     window.visualViewport?.addEventListener('resize', updateViewport, { signal, passive: true });
     window.visualViewport?.addEventListener('scroll', updateViewport, { signal, passive: true });
-    const refreshAccess = () => {
-      if (!frame) return;
-      frame.src = `${props.manager}/frame?id=${encodeURIComponent(props.appID)}`;
-    };
-    window.addEventListener('focus', refreshAccess, { signal });
-    window.addEventListener('pageshow', refreshAccess, { signal });
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAccess(); }, { signal });
-    window.addEventListener('message', event => {
-      if (event.origin !== props.manager || event.source !== frame?.contentWindow) return;
-      const value: unknown = event.data;
-      if (typeof value !== 'object' || value === null || !('type' in value) || value.type !== 'mesh-app-status' || !('visibility' in value)) return;
-      if (!('owns' in value) || typeof value.owns !== 'boolean') return;
-      if (value.visibility === 'public' || value.visibility === 'private') setAccess({ visibility: value.visibility, owns: value.owns });
-    }, { signal });
-    onCleanup(() => { abort.abort(); observer.disconnect(); clearTimeout(copyTimer); clearTimeout(snapTimer); clearTimeout(revealTimer); clearTimeout(viewportTimer); cancelAnimationFrame(viewportFrame); });
+    onCleanup(() => { abort.abort(); observer.disconnect(); clearTimeout(snapTimer); clearTimeout(revealTimer); clearTimeout(viewportTimer); cancelAnimationFrame(viewportFrame); });
     redock();
   });
   const keyboard = (event: KeyboardEvent) => {
@@ -176,63 +172,34 @@ function Pill(props: { appID: string; manager: string; nonce: string; initialAcc
     event.preventDefault(); setDock({ edge: next, ratio: dock().ratio }); redock(); saveDock();
   };
   return <>
-    <link rel="stylesheet" href="/.mesh-app/pill.css"/><div class="safe" ref={safe}/>
-    <div ref={shell} class="shell" role="toolbar" aria-label="Mesh app controls"
+    <link rel="stylesheet" href={props.stylesheetHref}/><div class="safe" ref={safe}/>
+    <div ref={shell} class="shell" role="toolbar" aria-label={props.label ?? "Floating controls"}
       classList={{ closed: collapsed(), vertical: !isHorizontalEdge(dock().edge), dragging: drag.isDragging(), snapping: snapping(), animated: animated(), revealed: revealed(), resizing: resizing(), keyboard: keyboardMotion() }}
       style={{ transform: `translate3d(${position().x}px,${position().y}px,0)`, width: `${box().width}px`, height: `${box().height}px` }} onKeyDown={keyboard}
       onPointerDown={event => { setKeyboardMotion(false); drag.handlePointerDown(event); }}>
-      <button ref={dotButton} class="dot-target" type="button" aria-label={collapsed() ? 'Open Mesh controls. Drag to move; Alt and arrow keys to dock.' : 'Close Mesh controls'} aria-expanded={!collapsed()}
+      <button ref={dotButton} class="dot-target" type="button" aria-label={collapsed() ? `Open ${props.label ?? 'floating controls'}. Drag to move; Alt and arrow keys to dock.` : `Close ${props.label ?? 'floating controls'}`} aria-expanded={!collapsed()}
         style={{ left: `${offsets().dot.x}px`, top: `${offsets().dot.y}px` }} onClick={drag.dragAware(() => setOpen(collapsed()))}><span class="dot"/></button>
       <div ref={morph} class="morph" inert={collapsed()} aria-hidden={collapsed()} onTransitionEnd={event => { if (event.target === morph) reveal(); }} onTransitionCancel={event => { if (event.target === morph) reveal(); }} style={{ left: `${offsets().pill.x}px`, top: `${offsets().pill.y}px`, 'clip-path': clip() }}>
         <div class="panel" classList={{ trailing: !dotLeads(dock()) }}>
           <span class="dot-slot"/>
           <div class="controls">
-            <button class="action" classList={{ copied: copyState() === 'copied' }} aria-label={copyState() === 'copied' ? 'Link copied' : 'Copy link'} title={copyState() === 'copied' ? 'Copied' : 'Copy link'} onClick={drag.dragAware(() => void copy())}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <Show when={copyState() === 'copied'} fallback={<><path d="M10 13a5 5 0 0 0 7 .2l3-3a5 5 0 0 0-7-7l-2 2"/><path d="M14 11a5 5 0 0 0-7-.2l-3 3a5 5 0 0 0 7 7l2-2"/></>}><path d="m5 12 4 4L19 6"/></Show>
-              </svg>
-            </button>
-            <Show when={access()}>{current => {
-              const action = () => current().visibility === 'public' ? 'private' : 'public';
-              const label = () => current().owns ? `Make ${action()}` : 'Pair owner browser';
-              let link: HTMLAnchorElement | undefined;
-              const destination = () => current().owns ? `${props.manager}/confirm?id=${encodeURIComponent(props.appID)}&action=${action()}&return=${encodeURIComponent(location.href)}` : `${props.manager}/pair`;
-              const refreshLink = () => { if (link) link.href = destination(); };
-              return <a ref={link} class="action" draggable={false} href={destination()} onPointerDown={refreshLink} rel="noopener noreferrer" aria-label={label()} title={label()} onClick={drag.dragAware(refreshLink)}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d={current().visibility === 'private' ? 'M8 10V7a4 4 0 0 1 8 0v3' : 'M8 10V7a4 4 0 0 1 8 0'}/><path d="M12 14v3"/></svg>
-              </a>;
-            }}</Show>
+            <For each={props.actions}>{action => <Action action={action} dragAware={drag.dragAware}/>}</For>
           </div>
         </div>
       </div>
-      <span class="sr-only" role="status">{copyState() === 'copied' ? 'Link copied' : ''}</span>
-      <Show when={copyState() === 'failed'}><span class="copy-error" role="status">Couldn’t copy. Tap to try again.</span></Show>
-      <Show when={!collapsed()}><iframe ref={frame} class="auth-frame" hidden aria-hidden="true" tabIndex={-1} title="Mesh browser authorization" src={`${props.manager}/frame?id=${encodeURIComponent(props.appID)}`} referrerPolicy="no-referrer"/></Show>
     </div>
   </>;
 
 }
 
-function mount() {
-  const script = document.querySelector('script[data-mesh-app][data-mesh-manager]');
-  if (!(script instanceof HTMLScriptElement) || document.querySelector('[data-mesh-pill-host]')) return;
-  const appID = script.dataset.meshApp;
-  const value = script.dataset.meshManager;
-  if (!appID || !value) return;
-  const initialAccess: Access | undefined = script.dataset.meshPrivate === undefined ? undefined : {
-    visibility: script.dataset.meshPrivate === 'true' ? 'private' : 'public', owns: script.dataset.meshOwns === 'true',
-  };
-  const config = { appID, nonce: script.nonce ?? '', initialAccess };
-  const manager = new URL(value);
-  if (manager.protocol !== 'https:' && !(manager.protocol === 'http:' && manager.hostname === 'localhost')) return;
-  const host = document.createElement('mesh-app-pill');
-  host.setAttribute('data-mesh-pill-host', '');
+export function mountFloatingPill(options: FloatingPillProps & { parent?: HTMLElement }): () => void {
+  const host = document.createElement('floating-pill');
+  host.setAttribute('data-floating-pill-host', '');
   host.style.all = 'initial';
   host.style.position = 'fixed';
   host.style.zIndex = '2147483647';
   host.style.pointerEvents = 'none';
-  document.documentElement.append(host);
-  render(() => <Pill appID={config.appID} manager={manager.origin} nonce={config.nonce} initialAccess={config.initialAccess}/>, host.attachShadow({ mode: 'open' }));
+  (options.parent ?? document.documentElement).append(host);
+  const dispose = render(() => <FloatingPill {...options}/>, host.attachShadow({ mode: 'open' }));
+  return () => { dispose(); host.remove(); };
 }
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true });
-else mount();

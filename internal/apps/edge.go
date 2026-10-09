@@ -22,7 +22,7 @@ import (
 	"github.com/shaul/mesh/internal/webauth"
 )
 
-type EdgeConfig struct {
+type RegistryConfig struct {
 	// ViewHostReady checks the currently installed live certificate for a host.
 	// An absent callback keeps private browser grants disabled.
 	ViewHostReady func(string) bool
@@ -35,7 +35,7 @@ type EdgeConfig struct {
 	Resolve       func(context.Context, string) (netip.AddrPort, error)
 	Now           func() time.Time
 }
-type edgeState struct {
+type registryState struct {
 	Apps   map[string]Record     `json:"apps"`
 	Owners map[string]ownerState `json:"owners"`
 }
@@ -58,57 +58,56 @@ const maximumCapacityWaiters = 128
 const capacityWaitTimeout = 5 * time.Second
 const capacityRetryInterval = 25 * time.Millisecond
 
-type edgeRuntime struct {
+type appRuntime struct {
 	mu        sync.Mutex
 	record    atomic.Pointer[Record]
 	persisted atomic.Int64
 	inflight  map[string]admittedRequest
 }
 
-type edgeMutation struct {
-	locked         map[string]*edgeRuntime
-	state          edgeState
-	pendingName    string
-	pendingOwner   string
-	cancelAll      []string
-	cancelVisitors []string
-	retireNames    []Record
+type registryMutation struct {
+	locked       map[string]*appRuntime
+	state        registryState
+	pendingName  string
+	pendingOwner string
+	cancelAll    []string
+	retireNames  []Record
 }
 
-type Edge struct {
+type Registry struct {
 	pendingRetire   map[string]Record
-	runtime         atomic.Pointer[map[string]*edgeRuntime]
+	runtime         atomic.Pointer[map[string]*appRuntime]
 	transports      proxyTransports
 	mu              sync.Mutex
-	config          EdgeConfig
-	state           edgeState
+	config          RegistryConfig
+	state           registryState
 	identity        string
 	auth            *webauth.Service
 	slots           chan struct{}
 	capacityWaiters chan struct{}
 }
-type edgeReply struct {
+type registryReply struct {
 	RequestID string `json:"requestId"`
 	Result    Result `json:"result"`
 	Error     string `json:"error,omitempty"`
 }
 
-func NewEdge(ctx context.Context, c EdgeConfig) (*Edge, error) {
+func NewRegistry(ctx context.Context, c RegistryConfig) (*Registry, error) {
 	if domainpolicy.Primary() == "" {
 		return nil, errors.New("app: deployment domain is required")
 	}
 	if c.Store == nil || len(c.Key) != ed25519.PrivateKeySize || c.Resolve == nil {
-		return nil, errors.New("app: missing edge dependencies")
+		return nil, errors.New("app: missing registry dependencies")
 	}
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	e := &Edge{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), slots: make(chan struct{}, 128), capacityWaiters: make(chan struct{}, maximumCapacityWaiters), state: edgeState{Apps: map[string]Record{}, Owners: map[string]ownerState{}}}
+	e := &Registry{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), slots: make(chan struct{}, 128), capacityWaiters: make(chan struct{}, maximumCapacityWaiters), state: registryState{Apps: map[string]Record{}, Owners: map[string]ownerState{}}}
 	if err := load(ctx, c.Store, "apps.edge", &e.state); err != nil {
 		return nil, err
 	}
 	if e.state.Apps == nil || e.state.Owners == nil || len(e.state.Apps) > 16384 {
-		return nil, errors.New("app: invalid durable edge state")
+		return nil, errors.New("app: invalid durable registry state")
 	}
 	if err := c.Store.ReserveAppNames(ctx, appNames(ManagementHost()), e.identity); err != nil {
 		return nil, fmt.Errorf("app: reserve management hosts: %w", err)
@@ -129,8 +128,8 @@ func NewEdge(ctx context.Context, c EdgeConfig) (*Edge, error) {
 
 // Cached replies and published records are immutable. Activity replaces only its
 // app's record; cold mutations merge those deadlines into the durable snapshot.
-func (e *Edge) next() *edgeMutation {
-	next := &edgeMutation{state: edgeState{Apps: maps.Clone(e.state.Apps), Owners: maps.Clone(e.state.Owners)}, locked: map[string]*edgeRuntime{}}
+func (e *Registry) next() *registryMutation {
+	next := &registryMutation{state: registryState{Apps: maps.Clone(e.state.Apps), Owners: maps.Clone(e.state.Owners)}, locked: map[string]*appRuntime{}}
 	for id, app := range next.state.Apps {
 		if rt := (*e.runtime.Load())[id]; rt != nil {
 			current := rt.record.Load()
@@ -142,7 +141,7 @@ func (e *Edge) next() *edgeMutation {
 	}
 	return next
 }
-func (next *edgeMutation) lockApp(e *Edge, id string) {
+func (next *registryMutation) lockApp(e *Registry, id string) {
 	if next.locked[id] != nil {
 		return
 	}
@@ -159,21 +158,21 @@ func (next *edgeMutation) lockApp(e *Edge, id string) {
 		next.state.Apps[id] = app
 	}
 }
-func (next *edgeMutation) unlock() {
+func (next *registryMutation) unlock() {
 	for _, rt := range next.locked {
 		rt.mu.Unlock()
 	}
 }
 
-func (e *Edge) publishRuntime(state edgeState, locked map[string]*edgeRuntime) {
-	runtimes := map[string]*edgeRuntime{}
+func (e *Registry) publishRuntime(state registryState, locked map[string]*appRuntime) {
+	runtimes := map[string]*appRuntime{}
 	if previous := e.runtime.Load(); previous != nil {
 		runtimes = maps.Clone(*previous)
 	}
 	for id, app := range state.Apps {
 		rt := runtimes[id]
 		if rt == nil {
-			rt = &edgeRuntime{}
+			rt = &appRuntime{}
 			runtimes[id] = rt
 		}
 		if locked[id] == nil {
@@ -198,10 +197,10 @@ func (e *Edge) publishRuntime(state edgeState, locked map[string]*edgeRuntime) {
 	e.runtime.Store(&runtimes)
 }
 
-func (e *Edge) persist(ctx context.Context, next *edgeMutation) error {
+func (e *Registry) persist(ctx context.Context, next *registryMutation) error {
 	b, err := json.Marshal(next.state)
 	if err != nil {
-		return fmt.Errorf("app: encode edge state: %w", err)
+		return fmt.Errorf("app: encode registry state: %w", err)
 	}
 	if next.pendingName != "" {
 		err = e.config.Store.(atomicNameStore).ReserveAppNamesAndState(ctx, appNames(next.pendingName), next.pendingOwner, "apps.edge", b)
@@ -209,7 +208,7 @@ func (e *Edge) persist(ctx context.Context, next *edgeMutation) error {
 		err = e.config.Store.SaveAppState(ctx, "apps.edge", b)
 	}
 	if err != nil {
-		return fmt.Errorf("app: persist edge state: %w", err)
+		return fmt.Errorf("app: persist registry state: %w", err)
 	}
 	e.state = next.state
 	e.publishRuntime(next.state, next.locked)
@@ -219,19 +218,12 @@ func (e *Edge) persist(ctx context.Context, next *edgeMutation) error {
 	for _, id := range next.cancelAll {
 		e.cancelLocked(id)
 	}
-	for _, id := range next.cancelVisitors {
-		rt := (*e.runtime.Load())[id]
-		if rt == nil {
-			continue
-		}
-		rt.cancelWhere(func(request admittedRequest) bool { return !request.owner })
-	}
 	return nil
 }
 
 // Retirement follows the state commit so a failed save cannot revoke a live app.
 // Sweep reports failures and retries them without blocking another app's request.
-func (e *Edge) retireLocked(ctx context.Context, apps []Record) error {
+func (e *Registry) retireLocked(ctx context.Context, apps []Record) error {
 	var errs []error
 	for _, app := range apps {
 		var failed bool
@@ -248,12 +240,21 @@ func (e *Edge) retireLocked(ctx context.Context, apps []Record) error {
 	return errors.Join(errs...)
 }
 
-func (e *Edge) Exchange(ctx context.Context, s Signed) (Signed, error) {
+func (e *Registry) Exchange(ctx context.Context, s Signed) (Signed, error) {
 	if !e.config.Allowed[s.Owner] {
 		return Signed{}, errors.New("app: owner is not allowed")
 	}
 	if err := s.Verify("mesh-app/request/v1", e.identity, s.Owner, e.config.Now()); err != nil {
 		return Signed{}, err
+	}
+	var operation struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(s.Body, &operation); err != nil {
+		return Signed{}, fmt.Errorf("app: decode operation: %w", err)
+	}
+	if operation.Action == "public" || operation.Action == "private" {
+		return Sign("mesh-app/response/v1", s.Owner, s.Sequence, registryReply{RequestID: s.ID, Error: "app: unsupported operation"}, e.config.Key, e.config.Now())
 	}
 	var request Request
 	if err := decode(s.Body, &request); err != nil {
@@ -264,7 +265,7 @@ func (e *Edge) Exchange(ctx context.Context, s Signed) (Signed, error) {
 	owner := e.state.Owners[s.Owner]
 	digest := digestBytes(s.Body)
 	if s.Sequence == owner.Sequence && s.ID == owner.ID && digest == owner.Digest {
-		return Sign("mesh-app/response/v1", s.Owner, s.Sequence, edgeReply{RequestID: s.ID, Result: owner.Result, Error: owner.Error}, e.config.Key, e.config.Now())
+		return Sign("mesh-app/response/v1", s.Owner, s.Sequence, registryReply{RequestID: s.ID, Result: owner.Result, Error: owner.Error}, e.config.Key, e.config.Now())
 	}
 	if s.Sequence <= owner.Sequence {
 		return Signed{}, errors.New("app: stale owner sequence")
@@ -281,9 +282,9 @@ func (e *Edge) Exchange(ctx context.Context, s Signed) (Signed, error) {
 		return Signed{}, err
 	}
 	_ = e.retireLocked(ctx, next.retireNames)
-	return Sign("mesh-app/response/v1", s.Owner, s.Sequence, edgeReply{RequestID: s.ID, Result: result, Error: errorText}, e.config.Key, e.config.Now())
+	return Sign("mesh-app/response/v1", s.Owner, s.Sequence, registryReply{RequestID: s.ID, Result: result, Error: errorText}, e.config.Key, e.config.Now())
 }
-func (e *Edge) apply(ctx context.Context, next *edgeMutation, owner string, q Request) (Result, error) {
+func (e *Registry) apply(ctx context.Context, next *registryMutation, owner string, q Request) (Result, error) {
 	e.expireLocked(next)
 	switch q.Action {
 	case "allocate":
@@ -351,14 +352,6 @@ func (e *Edge) apply(ctx context.Context, next *edgeMutation, owner string, q Re
 			return Result{}, errors.New("app: app expired")
 		}
 		app.ExpiresAt = e.config.Now().UTC().Add(IdleTTL)
-	case "public", "private":
-		if app.Status != "active" {
-			return Result{}, errors.New("app: app expired")
-		}
-		if app.Visibility != q.Action && q.Action == "private" {
-			next.cancelVisitors = append(next.cancelVisitors, app.ID)
-		}
-		app.Visibility = q.Action
 	case "delete":
 		next.cancelAll = append(next.cancelAll, app.ID)
 		app.Status = "deleted"
@@ -371,13 +364,13 @@ func (e *Edge) apply(ctx context.Context, next *edgeMutation, owner string, q Re
 		}
 		app = Record{ID: app.ID, Owner: app.Owner, Status: app.Status, Cleanup: "complete"}
 	default:
-		return Result{}, errors.New("app: unknown edge operation")
+		return Result{}, errors.New("app: unknown registry operation")
 	}
 	next.state.Apps[app.ID] = app
 	app.LeaseUntil = minTime(app.ExpiresAt, e.config.Now().Add(LeaseTTL))
 	return Result{App: &app}, nil
 }
-func (e *Edge) allocate(ctx context.Context, next *edgeMutation, owner, kind string) (Result, error) {
+func (e *Registry) allocate(ctx context.Context, next *registryMutation, owner, kind string) (Result, error) {
 	if _, ok := e.config.Store.(atomicNameStore); !ok {
 		return Result{}, errors.New("app: allocation requires atomic name and state storage")
 	}
@@ -420,7 +413,7 @@ func (e *Edge) allocate(ctx context.Context, next *edgeMutation, owner, kind str
 		}
 		next.pendingName = id + "." + Domain()
 		next.pendingOwner = owner
-		app := Record{ID: id, Owner: owner, Kind: kind, Visibility: "private", Status: "active", Cleanup: "pending", ExpiresAt: e.config.Now().UTC().Add(IdleTTL), Generation: 1, LeaseUntil: e.config.Now().Add(LeaseTTL)}
+		app := Record{ID: id, Owner: owner, Kind: kind, Status: "active", Cleanup: "pending", ExpiresAt: e.config.Now().UTC().Add(IdleTTL), Generation: 1, LeaseUntil: e.config.Now().Add(LeaseTTL)}
 		next.state.Apps[id] = app
 		return Result{App: &app}, nil
 	}
@@ -432,12 +425,12 @@ func minTime(a, b time.Time) time.Time {
 	}
 	return b
 }
-func (e *Edge) expireLocked(next *edgeMutation) {
+func (e *Registry) expireLocked(next *registryMutation) {
 	for id := range next.state.Apps {
 		e.expireAppLocked(next, id)
 	}
 }
-func (e *Edge) expireAppLocked(next *edgeMutation, id string) {
+func (e *Registry) expireAppLocked(next *registryMutation, id string) {
 	app, ok := next.state.Apps[id]
 	if !ok || app.Status != "active" || e.config.Now().Before(app.ExpiresAt) {
 		return
@@ -456,7 +449,7 @@ func (e *Edge) expireAppLocked(next *edgeMutation, id string) {
 	next.retireNames = append(next.retireNames, app)
 }
 
-func (e *Edge) Sweep(ctx context.Context) error {
+func (e *Registry) Sweep(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	next := e.next()
@@ -470,7 +463,7 @@ func (e *Edge) Sweep(ctx context.Context) error {
 	}
 	return e.retireLocked(ctx, next.retireNames)
 }
-func (e *Edge) lookup(ctx context.Context, id string, touch bool) (Record, bool, error) {
+func (e *Registry) lookup(ctx context.Context, id string, touch bool) (Record, bool, error) {
 	rt := (*e.runtime.Load())[id]
 	if rt == nil {
 		return Record{}, false, nil
@@ -485,7 +478,7 @@ func (e *Edge) lookup(ctx context.Context, id string, touch bool) (Record, bool,
 	return app, true, nil
 }
 
-func (e *Edge) activity(ctx context.Context, admitted Record) (Record, bool, error) {
+func (e *Registry) activity(ctx context.Context, admitted Record) (Record, bool, error) {
 	rt := (*e.runtime.Load())[admitted.ID]
 	if rt == nil {
 		return Record{}, false, nil
@@ -504,7 +497,7 @@ func (e *Edge) activity(ctx context.Context, admitted Record) (Record, bool, err
 	return e.flushIfDue(ctx, rt, app)
 }
 
-func (rt *edgeRuntime) proposeActivity(app Record, deadline time.Time) Record {
+func (rt *appRuntime) proposeActivity(app Record, deadline time.Time) Record {
 	app.ExpiresAt = maxTime(app.ExpiresAt, deadline)
 	bounded := app
 	// A failed or pending save must not publish more activity than restart can lose.
@@ -520,14 +513,14 @@ func maxTime(a, b time.Time) time.Time {
 	return b
 }
 
-func (e *Edge) flushIfDue(ctx context.Context, rt *edgeRuntime, app Record) (Record, bool, error) {
+func (e *Registry) flushIfDue(ctx context.Context, rt *appRuntime, app Record) (Record, bool, error) {
 	if app.Status == "active" && app.ExpiresAt.Sub(time.Unix(0, rt.persisted.Load())) >= activityPersistSlack {
 		return e.flushActivity(ctx, app, false)
 	}
 	return app, true, nil
 }
 
-func (e *Edge) flushActivity(ctx context.Context, proposed Record, expire bool) (Record, bool, error) {
+func (e *Registry) flushActivity(ctx context.Context, proposed Record, expire bool) (Record, bool, error) {
 	id := proposed.ID
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -558,11 +551,10 @@ func (e *Edge) flushActivity(ctx context.Context, proposed Record, expire bool) 
 
 type admittedRequest struct {
 	cancel    context.CancelFunc
-	owner     bool
 	browserID string
 }
 
-func (rt *edgeRuntime) cancelWhere(match func(admittedRequest) bool) {
+func (rt *appRuntime) cancelWhere(match func(admittedRequest) bool) {
 	for token, request := range rt.inflight {
 		if match(request) {
 			request.cancel()
@@ -573,16 +565,16 @@ func (rt *edgeRuntime) cancelWhere(match func(admittedRequest) bool) {
 		rt.inflight = nil
 	}
 }
-func (e *Edge) cancelLocked(id string) {
+func (e *Registry) cancelLocked(id string) {
 	if rt := (*e.runtime.Load())[id]; rt != nil {
 		rt.cancelWhere(func(admittedRequest) bool { return true })
 	}
 }
-func (e *Edge) revokeBrowser(ctx context.Context, owner, browserID string) error {
+func (e *Registry) revokeBrowser(ctx context.Context, owner, browserID string) error {
 	if err := e.auth.Revoke(ctx, owner, browserID); err != nil {
 		return fmt.Errorf("app: revoke browser %s for owner %s: %w", browserID, owner, err)
 	}
-	// Revocation is already durable in webauth even if the subsequent edge save fails.
+	// Revocation is already durable in webauth even if the subsequent registry save fails.
 	for _, rt := range *e.runtime.Load() {
 		if rt.record.Load().Owner == owner {
 			rt.cancelWhere(func(request admittedRequest) bool { return request.browserID == browserID })
@@ -591,7 +583,7 @@ func (e *Edge) revokeBrowser(ctx context.Context, owner, browserID string) error
 	return nil
 }
 
-func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(), error) {
+func (e *Registry) admit(r *http.Request, id string) (Record, *http.Request, func(), error) {
 	rt := (*e.runtime.Load())[id]
 	if rt == nil {
 		return Record{}, nil, nil, errors.New("app unavailable")
@@ -607,8 +599,8 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 		return Record{}, nil, nil, errors.New("app unavailable")
 	}
 	viewer, _ := e.auth.ViewSession(r.Context(), r, id)
-	owner := serve.AmbientOwnerAllowed(r, URL(id), serve.RequireWebSocketOrigin) && (viewer.Owner == app.Owner || networkOwns(r, app.Owner))
-	if app.Visibility == "private" && !owner {
+	owner := serve.AmbientOwnerAllowed(r, appOrigin(r, id), serve.RequireWebSocketOrigin) && (viewer.Owner == app.Owner || networkOwns(r, app.Owner))
+	if !owner {
 		rt.mu.Unlock()
 		return Record{}, nil, nil, errors.New("app private")
 	}
@@ -619,7 +611,7 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 	if rt.inflight == nil {
 		rt.inflight = map[string]admittedRequest{}
 	}
-	rt.inflight[token] = admittedRequest{cancel: cancel, owner: owner, browserID: viewer.BrowserID}
+	rt.inflight[token] = admittedRequest{cancel: cancel, browserID: viewer.BrowserID}
 	rt.mu.Unlock()
 	release := func() {
 		cancel()
@@ -637,7 +629,22 @@ func (e *Edge) admit(r *http.Request, id string) (Record, *http.Request, func(),
 	return app, r.WithContext(ctx), release, nil
 }
 
-func (e *Edge) inspectPairing(ctx context.Context, code string) (Result, error) {
+func (e *Registry) HasHost(host string) bool {
+	label, _, accepted := domainpolicy.Label(host, false)
+	if !accepted {
+		return false
+	}
+	if label == managementLabel {
+		return true
+	}
+	runtimes := e.runtime.Load()
+	if runtimes == nil {
+		return false
+	}
+	return (*runtimes)[label] != nil
+}
+
+func (e *Registry) inspectPairing(ctx context.Context, code string) (Result, error) {
 	info, err := e.auth.Inspect(ctx, code)
 	if err != nil {
 		return Result{}, fmt.Errorf("app: inspect browser pairing: %w", err)
@@ -657,7 +664,7 @@ func appNames(primaryName string) []string {
 	return names
 }
 
-func (e *Edge) nameAllocated(ctx context.Context, id string) (bool, error) {
+func (e *Registry) nameAllocated(ctx context.Context, id string) (bool, error) {
 	for _, domain := range domainpolicy.Domains() {
 		exists, err := e.config.Store.AppNameExists(ctx, id+"."+domain)
 		if err != nil {
@@ -670,7 +677,7 @@ func (e *Edge) nameAllocated(ctx context.Context, id string) (bool, error) {
 	return false, nil
 }
 
-func (e *Edge) reserveExistingApps(ctx context.Context) error {
+func (e *Registry) reserveExistingApps(ctx context.Context) error {
 	for id, app := range e.state.Apps {
 		if app.Status == "active" {
 			if err := e.config.Store.ReserveAppNames(ctx, appNames(id+"."+Domain()), app.Owner); err != nil {

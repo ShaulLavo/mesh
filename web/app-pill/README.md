@@ -1,8 +1,40 @@
-# Mesh app pill
+# Reusable floating pill
 
-The widget source and browser fixtures are retained for reuse in another project.
-Mesh does not inject this control into temporary apps or serve its widget assets.
-The Go transformer remains available here as preserved code and test fixtures.
+This folder preserves the floating UI control for use in another project. Mesh
+loads no widget on temporary apps and serves no widget routes. The component
+has no Mesh ownership, browser pairing, sharing or visibility operations.
+
+## Use the component
+
+The source exports `FloatingPill`, `FloatingPillAction`, `FloatingPillProps` and
+`mountFloatingPill`. Actions belong to the caller. Each action has `id`, `label`,
+optional `title` and optional JSX `content`, plus either `kind: 'button'` with
+`onSelect`, or `kind: 'link'` with `href` and optional `target`.
+
+The IIFE bundle exposes `FloatingPill.mountFloatingPill`:
+
+```js
+const dispose = FloatingPill.mountFloatingPill({
+  stylesheetHref: '/assets/pill.css',
+  label: 'Editor tools',
+  storageKey: 'editor-toolbar-position',
+  actions: [
+    { id: 'save', kind: 'button', label: 'Save', content: '✓', onSelect: saveDocument },
+    { id: 'help', kind: 'link', label: 'Help', content: '?', href: '/help' },
+  ],
+});
+
+// Remove the component and its event listeners when its owner unmounts.
+dispose();
+```
+
+Loading `pill.js` alone does not mount anything. The mount function creates a
+`floating-pill` host with an open Shadow DOM and returns its disposal callback.
+`stylesheetHref` selects the caller's stylesheet URL. `label` defaults to
+"Floating controls" and `storageKey` defaults to `floating-pill-position`.
+Callers with multiple controls can give each one a separate storage key.
+
+## Interaction and build
 
 The standalone Solid control mounts in a Shadow DOM. It is a floating dot; tapping the
 dot grows a pill of actions out of it, and tapping the dot again folds them away.
@@ -31,19 +63,15 @@ The bundle retains the MIT notices for Solid and React Grab from `third_party`.
 ## Browser verification
 
 Playwright is pinned as a development dependency for repeatable interaction
-checks. The harness starts an ephemeral loopback HTTP server, serves the actual
-compiled assets under a strict CSP, and tests Chromium and WebKit with normal
-and reduced motion. It checks the collapsed dot, expansion, mouse dragging,
-synthetic touch dragging, keyboard docking, stored position, management-frame
-status messages, and rejection of messages from an incorrect origin or window.
+checks. The harness starts an ephemeral loopback HTTP server, mounts the actual
+compiled control under a strict CSP, and tests Chromium and WebKit with normal
+and reduced motion. It checks the collapsed dot, expansion, caller actions,
+mouse and touch dragging, keyboard docking, stored position, explicit mounting
+and disposal. No authorization iframe or network API belongs to this component.
 
-The frame is a labelled mock. Its messages exercise the retained control's
-protocol for reuse; Mesh no longer serves that frame or its widget routes.
-Private app admission and lifecycle recovery have separate Go tests:
-
-```sh
-go test -race ./internal/apps ./internal/apppill ./internal/webauth
-```
+The dormant Go transformer and its archive/encoding fixtures remain in
+`internal/apppill`. Its browser fixture explicitly mounts the generic component;
+inserting a loader into a document does not reconnect it to Mesh apps.
 
 Use previously installed browser binaries on this Linux host:
 

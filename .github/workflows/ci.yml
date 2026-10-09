@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   app-pill:
-    name: Solid app pill
+    name: Reusable floating pill
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,6 +60,8 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
+      - name: Check private app boundary
+        run: scripts/check-private-app-boundary.sh
       - name: Vet
         run: go vet ./...
       - name: Race tests

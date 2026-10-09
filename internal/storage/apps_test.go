@@ -45,7 +45,7 @@ func TestAppMigrationUpgradesExistingTunnelStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertMigrationVersion(t, store, 11)
+	assertMigrationVersion(t, store, 12)
 	restored, err := store.TunnelClaim(ctx, claim.PublicName)
 	if err != nil || restored.ClaimantID != owner {
 		t.Fatalf("migration lost existing tunnel: %+v, %v", restored, err)
@@ -360,7 +360,7 @@ func TestAllocatedAppStateFailureRollsBackNewName(t *testing.T) {
 	if err := store.SaveAppState(ctx, "apps.edge", initial); err != nil {
 		t.Fatal(err)
 	}
-	_, err := store.db.ExecContext(ctx, `CREATE TRIGGER reject_app_state BEFORE UPDATE ON app_state
+	_, err := store.db.ExecContext(ctx, `CREATE TRIGGER reject_app_state BEFORE UPDATE ON private_app_state
         WHEN NEW.key = 'apps.edge' BEGIN SELECT RAISE(FAIL, 'state persistence failed'); END`)
 	if err != nil {
 		t.Fatal(err)

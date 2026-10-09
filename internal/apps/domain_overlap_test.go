@@ -95,21 +95,18 @@ func TestAppReturnKeepsNormalizedAliasAndRequestFallback(t *testing.T) {
 	}
 }
 
-func TestAliasManagerListAndFrameKeepRequestDomain(t *testing.T) {
+func TestAliasManagerListKeepsRequestDomain(t *testing.T) {
 	f := newAppFixture(t)
 	app := createStaticApp(t, f)
 	networkOrigin(t, f)
 	authenticate := ambientOwnerRequest(t, f, app, "network")
-	for _, path := range []string{"/", "/frame?id=" + app.ID} {
+	for _, path := range []string{"/"} {
 		request := httptest.NewRequest(http.MethodGet, "https://apps.old.test"+path, nil)
 		authenticate(request)
 		response := httptest.NewRecorder()
 		f.edge.ServeHost(response, request, "apps.old.test")
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "https://"+app.ID+".old.test") || strings.Contains(response.Body.String(), "https://"+app.ID+".mesh.test") {
 			t.Fatalf("alias manager page %s: %d %s", path, response.Code, response.Body.String())
-		}
-		if path != "/" && !strings.Contains(response.Header().Get("Content-Security-Policy"), "frame-ancestors https://"+app.ID+".old.test") {
-			t.Fatal("alias frame policy points at another domain")
 		}
 	}
 }

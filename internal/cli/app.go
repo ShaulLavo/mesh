@@ -36,6 +36,8 @@ type appOutput struct {
 func (a *application) appCommand() *cobra.Command {
 	flags := &appOutput{sshPort: uint(bootstrap.DefaultSSHPort)}
 	cmd := &cobra.Command{Use: "app", Short: "Create and manage disposable websites", Example: "  mesh app create pc ./site\n  mesh app create local ./backend --run 'bun run start' --port 3000\n  mesh app browser approve pc CODE"}
+	cmd.Args = cobra.NoArgs
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error { return cmd.Help() }
 	cmd.PersistentPreRunE = func(command *cobra.Command, args []string) error {
 		if root := command.Root(); root.PersistentPreRunE != nil {
 			if err := root.PersistentPreRunE(command, args); err != nil {

@@ -1,4 +1,4 @@
-# Share Tailnet HTTPS between Mesh and temporary apps
+# Route private HTTPS to Mesh services and temporary apps
 
 This optional gateway forwards TLS without decrypting it. Tailscale TCP/443
 connects to the gateway on `127.0.0.1:8446`. ClientHello SNI selects the backend using the accepted domains in
@@ -17,19 +17,22 @@ go build -o ./tls-gateway ./examples/tailnet-gateway
 Configure the private Mesh daemon with its existing HTTPS certificate options
 and `--https-port=8443 --tailscale-serve --tailscale-serve-port=8446` plus
 `--tailscale-serve-proxy-protocol`.
-Configure the temporary-app edge with `mode: "direct-tls"`,
+Configure the private app registry with `mode: "direct-tls"`,
 `listenAddress: "127.0.0.1:8445"`, `tailnetOwnerAccess: true`, and its certificate
 renewer identity.
 The certificate renewer must issue and deliver a certificate covering
-`*.new.example` to that edge. Existing private Mesh certificates stay on the
+`*.new.example` to that registry. Existing private Mesh certificates stay on the
 private backend. The gateway stores no certificates or browser credentials.
 
 Point the management and app DNS names at the host's Tailnet IP. Clients need
-Tailnet access, even for apps whose visibility is public. Your devices receive
-owner controls automatically when their Tailscale account matches the app's
-configured origin device. Tagged devices do not identify a person, so browser
-pairing remains available for them. Other accounts and internet visitors receive
-no automatic owner permissions. HTTPS works for both visitors and owners.
+Tailnet access and verified private HTTPS ingress. Temporary apps have no public
+visibility or sharing controls. The registry resolves the source device through
+Tailscale's local inventory before any browser grant is considered. Devices with
+no mapped owner, including tagged devices, cannot enter the private app manager.
+Your devices receive owner authorization when their Tailscale account matches a
+configured origin device. Pairing remains an owner-management tool inside this
+private boundary. Internet clients, loopback clients and spoofed forwarding
+headers cannot enter it.
 
 Tailscale Serve supplies the device address through PROXY v1. The gateway consumes
 that header and sends it to both TLS backends. The private listener requires
@@ -37,7 +40,7 @@ that header and sends it to both TLS backends. The private listener requires
 It rejects loopback and unspecified client addresses before dispatching a service.
 The service proxy replaces caller-supplied forwarding headers with the verified
 client address. Without verified metadata, the gateway closes private routes.
-The edge checks Tailscale's local device inventory, cached for at most five seconds,
+The registry checks Tailscale's local device inventory, cached for at most five seconds,
 on each request. It does not issue a browser grant that survives leaving the tailnet.
 HTTP forwarding headers never identify an owner. All PROXY listeners require a
 header and authenticate the loopback forwarder's socket UID through an exact-tuple
@@ -54,19 +57,17 @@ the trusted `tailscaled` socket.
 Rebuild and restart this gateway when deploying changes to its authentication.
 `mesh update` updates Mesh, not this separately built gateway.
 
-Automatic Tailnet owner access requires Linux on the edge and gateway, with
+Private app ingress requires Linux on the registry and gateway, with
 kernel `INET_DIAG` support and its `tcp_diag` handler. Any sandbox must allow
 `NETLINK_SOCK_DIAG`. Startup looks up an owned loopback connection and requires
 its UID to match the Mesh process. Missing handlers, blocked diagnostics, and UID
 mismatches fail startup instead of silently refusing all traffic. On macOS and
 other unsupported platforms, these owner-access settings also fail startup.
-Mac origin hosts and routing with manual browser pairing remain supported.
+Mac origin hosts remain supported behind the private Linux registry.
 
-For app routing with manual browser pairing, omit the owner-access settings.
-Private routes through this gateway still require verified source metadata; use
-`--tailnet-owner-access` on the gateway and `--tailscale-serve-proxy-protocol`
-on the private daemon. The app edge must also enable `tailnetOwnerAccess` so
-it consumes the gateway’s PROXY headers.
+Temporary-app routing requires `--tailnet-owner-access` on this gateway and
+`tailnetOwnerAccess: true` on the app registry's direct-TLS configuration. Apps
+are unavailable through proxy/plaintext or public-only configurations.
 
 For direct Tailnet TCP/443 forwarding to the private listener on 8443, enable
 `--tailscale-serve-proxy-protocol` on the daemon and PROXY v1 in Tailscale Serve.
