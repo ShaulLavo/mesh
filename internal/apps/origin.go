@@ -1608,13 +1608,13 @@ func (o *Origin) renewLeases(ctx context.Context) (map[string]Record, error) {
 	ctx, cancel := context.WithTimeout(ctx, maintenanceBudget)
 	defer cancel()
 	if err := o.lockExchange(ctx); err != nil {
-		return nil, fmt.Errorf("app: sync leases with edge: %w", err)
+		return nil, fmt.Errorf("app: sync leases with private registry: %w", err)
 	}
 	defer o.unlockExchange()
 	result, err := o.edgeLocked(ctx, Request{Action: "sync"})
 	var unsaved *unsavedReply
 	if err != nil && !errors.As(err, &unsaved) {
-		return nil, fmt.Errorf("app: sync leases with edge: %w", err)
+		return nil, fmt.Errorf("app: sync leases with private registry: %w", err)
 	}
 	records := make(map[string]Record, len(result.Apps))
 	o.mu.Lock()

@@ -35,7 +35,12 @@ or failure.
 Use `local` for this machine. Remote operations use the origin's authenticated
 Mesh SSH service, default port 2222. `--ssh-port` selects a different configured
 port. The owner host sends signed lifecycle operations to its configured app
-registry. App and management names must resolve to the private Tailnet ingress,
+registry. Configure its daemon with `--app-registry-target /path/to/registry.json`.
+The file pins the registry identity, Tailnet name, control port, and WebSocket
+path. Private app maintenance runs independently of ordinary public services;
+`--public-edge-target` configures only explicitly published services.
+
+App and management names must resolve to the private Tailnet ingress,
 with HTTPS certificates covering them. See the
 [Tailnet gateway example](../examples/tailnet-gateway/README.md).
 

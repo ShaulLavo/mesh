@@ -1699,6 +1699,7 @@ func (a *application) daemonCommand() *cobra.Command {
 		privateNamesConfig     string
 		edgeConfig             string
 		publicEdgeTarget       string
+		appRegistryTarget      string
 		appDataRoot            string
 		tailscaleServe         bool
 		hibernateIdle          time.Duration
@@ -1742,7 +1743,7 @@ func (a *application) daemonCommand() *cobra.Command {
 				TailnetConnectionLimit: tailnetConnectionLimit,
 				StateDir:               stateDir, TailnetPort: uint16(port), SSHPort: uint16(sshPort), WebSocketPath: path, HTTPSPort: uint16(httpsPort),
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
-				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget, AppDataRoot: appDataRoot,
+				EdgeConfig: edgeConfig, PublicEdgeTarget: publicEdgeTarget, AppRegistryTarget: appRegistryTarget, AppDataRoot: appDataRoot,
 				TailscaleServe: tailscaleServe, TailscaleServePort: uint16(tailscaleServePort), TailscaleServeProxyProtocol: tailscaleServeProxy, HibernateIdle: hibernateIdle,
 				ReportError: func(err error) {
 					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %s\n", a.privacy.Value("error", err.Error()))
@@ -1761,6 +1762,7 @@ func (a *application) daemonCommand() *cobra.Command {
 	command.Flags().StringVar(&privateNamesConfig, "private-names-config", "", "Pi private-name reconciliation config file")
 	command.Flags().StringVar(&edgeConfig, "edge", "", "public-edge runtime and origin allowlist config file")
 	command.Flags().StringVar(&publicEdgeTarget, "public-edge-target", "", "pinned public-edge target config file")
+	command.Flags().StringVar(&appRegistryTarget, "app-registry-target", "", "pinned private app registry config file")
 	command.Flags().StringVar(&appDataRoot, "app-data-root", "", "managed temporary app workload root; Linux defaults to /work/mesh/apps")
 	command.Flags().UintVar(&tailscaleServePort, "tailscale-serve-port", 0, "loopback TLS gateway port; zero forwards directly to --https-port")
 	command.Flags().BoolVar(&tailscaleServeProxy, "tailscale-serve-proxy-protocol", false, "require verified PROXY v1 client addresses for private HTTPS and Tailscale Serve")

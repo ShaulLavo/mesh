@@ -73,7 +73,7 @@ func (c *appController) HandleControl(ctx context.Context, q protocol.Control) (
 		return response, true, errors.New("app: owner operations require the host's local Unix socket")
 	}
 	if c.origin == nil {
-		return response, true, errors.New("app: configure --public-edge-target on the owner host")
+		return response, true, errors.New("app: configure --app-registry-target on the owner host")
 	}
 	var request apps.Request
 	if err := decodeAppControl(q.App, &request); err != nil {
@@ -345,7 +345,7 @@ func syncApps(ctx context.Context, origin *apps.Origin, registry *apps.Registry,
 	// safety stops a cancelled context after a slow lease exchange.
 	if origin != nil {
 		if err := origin.Sync(ctx); err != nil && ctx.Err() == nil {
-			reporter.report(fmt.Errorf("daemon: reconcile temporary apps: %w", err))
+			reporter.report(fmt.Errorf("daemon: reconcile private temporary apps: %w", err))
 		}
 	}
 }
