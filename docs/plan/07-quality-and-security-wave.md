@@ -220,6 +220,7 @@ First bounded follow-up:
 3. Run one isolated control for each path, with `GOCACHE=/work/cache/go-build`, `GOMODCACHE=/work/cache/go/pkg/mod`, and the pinned Go toolchain on `PATH`:
 
    ```bash
+   mkdir -p /work/tmp/mesh-pill-check/scratch
    TMPDIR=/work/tmp/mesh-pill-check/scratch GOTMPDIR=/work/tmp/mesh-pill-check/scratch \
    MESH="$recovery_evidence/mesh" bun /work/platform-production/heavy/current/run.js \
      --class suite recovery-races-same-path -- timeout 60s bash integration/recovery_races.sh
