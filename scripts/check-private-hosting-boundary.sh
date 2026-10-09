@@ -2,6 +2,12 @@
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
+for retired in internal/edge internal/tunnel integration/fixtures/public-edge-renewer.pem; do
+  if [[ -e "$retired" ]]; then
+    printf 'FAIL: retired public hosting source remains: %s\n' "$retired" >&2
+    exit 1
+  fi
+done
 if rg -n 'internal/(edge|tunnel)|PublicEdgeTarget|ProfilePublicEdge|ConfirmPublic|TypeEdge(Register|List)|TypeTunnelClaim|json:"publicName|json:"wakeOnRequest|AppRegistryExchange|trustPublicEdgeForwarding' cmd internal --glob '*.go' --glob '!**/*_test.go' --glob '!**/apppill/**'; then
   echo 'FAIL: Mesh retains a public hosting dependency or contract' >&2
   exit 1
