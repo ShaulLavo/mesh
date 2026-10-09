@@ -108,7 +108,7 @@ func (s *BundleStore) Install(certificatePEM, privateKeyPEM []byte) (Bundle, err
 		}
 		bundle = existing
 	}
-	if err := writeAtomicFile(filepath.Join(s.root, currentBundleFile), []byte(bundle.Fingerprint+"\n"), 0o600); err != nil {
+	if err := writeAtomicFile(filepath.Join(s.root, currentBundleFile), []byte(bundle.Fingerprint+"\n")); err != nil {
 		return Bundle{}, fmt.Errorf("dnsname: publish certificate version %s: %w", bundle.Fingerprint, err)
 	}
 	if err := s.removeOldVersions(bundle.Fingerprint); err != nil {
@@ -438,7 +438,7 @@ func publishExclusiveFile(path string, contents []byte, mode os.FileMode) error 
 	return syncDirectory(directory)
 }
 
-func writeAtomicFile(path string, contents []byte, mode os.FileMode) error {
+func writeAtomicFile(path string, contents []byte) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return err
@@ -449,7 +449,7 @@ func writeAtomicFile(path string, contents []byte, mode os.FileMode) error {
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath) //nolint:errcheck // best-effort cleanup after atomic replacement
-	if err := temporary.Chmod(mode); err != nil {
+	if err := temporary.Chmod(0o600); err != nil {
 		_ = temporary.Close()
 		return err
 	}

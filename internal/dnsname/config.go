@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,7 @@ type PrivateNamesConfig struct {
 	Domain            string
 	AdditionalConfigs []string
 	ZoneID            string
+	ZoneDomain        string // Explicitly binds credentials to Domain when they change.
 	TokenFile         string
 	ACMEEmail         string
 	DirectoryURL      string
@@ -55,6 +57,7 @@ type privateNamesConfigFile struct {
 	Domain            string            `json:"domain"`
 	AdditionalConfigs []string          `json:"additionalConfigs,omitempty"`
 	ZoneID            string            `json:"zoneId"`
+	ZoneDomain        string            `json:"zoneDomain,omitempty"`
 	TokenFile         string            `json:"tokenFile"`
 	ACMEEmail         string            `json:"acmeEmail"`
 	DirectoryURL      string            `json:"directoryUrl"`
@@ -103,6 +106,9 @@ func LoadPrivateNamesConfig(configPath string) (PrivateNamesConfig, error) {
 	}
 	if !slices.Contains(domainpolicy.Domains(), raw.Domain) {
 		return PrivateNamesConfig{}, errors.New("dnsname: renewal domain is not configured")
+	}
+	if raw.ZoneDomain != "" && raw.ZoneDomain != raw.Domain {
+		return PrivateNamesConfig{}, fmt.Errorf("dnsname: zoneDomain %q does not match renewal domain %q; restore the matching domain and credentials in %s", raw.ZoneDomain, raw.Domain, configPath)
 	}
 	if len(raw.AdditionalConfigs) > 7 {
 		return PrivateNamesConfig{}, errors.New("dnsname: too many additional renewal configurations")
@@ -154,7 +160,7 @@ func LoadPrivateNamesConfig(configPath string) (PrivateNamesConfig, error) {
 		publicEdge = &copyTarget
 	}
 	return PrivateNamesConfig{
-		Domain: raw.Domain, AdditionalConfigs: slices.Clone(raw.AdditionalConfigs), ZoneID: raw.ZoneID, TokenFile: raw.TokenFile, ACMEEmail: raw.ACMEEmail, DirectoryURL: raw.DirectoryURL, Environment: environment,
+		Domain: raw.Domain, AdditionalConfigs: slices.Clone(raw.AdditionalConfigs), ZoneID: raw.ZoneID, ZoneDomain: raw.ZoneDomain, TokenFile: raw.TokenFile, ACMEEmail: raw.ACMEEmail, DirectoryURL: raw.DirectoryURL, Environment: environment,
 		AcceptTerms: raw.AcceptTerms, Interval: interval, Origins: append([]PrivateOrigin(nil), raw.Origins...), PublicEdge: publicEdge,
 	}, nil
 }
@@ -251,6 +257,9 @@ func newPrivateNamesRuntime(configPath string, options PrivateNamesRuntimeOption
 	if err != nil {
 		return nil, err
 	}
+	if err := bindRenewalCredentials(absolute, options.StateDir, config); err != nil {
+		return nil, err
+	}
 	for _, path := range config.AdditionalConfigs {
 		additional, err := newPrivateNamesRuntime(path, options, paths, domains)
 		if err != nil {
@@ -259,6 +268,66 @@ func newPrivateNamesRuntime(configPath string, options PrivateNamesRuntimeOption
 		runtime.Additional = append(runtime.Additional, additional)
 	}
 	return runtime, nil
+}
+
+type renewalCredentialBinding struct {
+	Domain string `json:"domain"`
+	ZoneID string `json:"zoneId"`
+}
+
+// A config path identifies the renewal job across primary-domain and credential
+// changes. Keying by domain or zone ID would lose the previous pair on a change.
+func renewalCredentialBindingPath(configPath, stateDir string) string {
+	digest := sha256.Sum256([]byte(configPath))
+	return filepath.Join(stateDir, "private-names", "zone-bindings", fmt.Sprintf("%x.json", digest))
+}
+
+func bindRenewalCredentials(configPath, stateDir string, config PrivateNamesConfig) error {
+	path := renewalCredentialBindingPath(configPath, stateDir)
+	desired := renewalCredentialBinding{Domain: config.Domain, ZoneID: config.ZoneID}
+	encoded, err := json.Marshal(desired)
+	if err != nil {
+		return fmt.Errorf("dnsname: encode renewal credential binding: %w", err)
+	}
+	contents, err := readSecureFile(path, privateNamesConfigMaximum)
+	if errors.Is(err, os.ErrNotExist) {
+		// Preserve DNS-Write-only legacy tokens: the first pair comes from local
+		// configuration, without a Zone Read API call or a new token scope.
+		err = publishExclusiveFile(path, encoded, 0o600)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("dnsname: record renewal credential binding for %s: %w", configPath, err)
+		}
+		// Another initializer won publication; compare against its complete pair.
+		contents, err = readSecureFile(path, privateNamesConfigMaximum)
+	}
+	if err != nil {
+		return fmt.Errorf("dnsname: read renewal credential binding for %s: %w", configPath, err)
+	}
+	var previous renewalCredentialBinding
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&previous); err != nil {
+		return fmt.Errorf("dnsname: parse renewal credential binding %s: %w", path, err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return fmt.Errorf("dnsname: parse renewal credential binding %s: %w", path, err)
+	}
+	if previous.Domain == "" || previous.ZoneID == "" {
+		return fmt.Errorf("dnsname: renewal credential binding %s is incomplete; restore it from the configuration backup", path)
+	}
+	if previous == desired {
+		return nil
+	}
+	if config.ZoneDomain != config.Domain {
+		return fmt.Errorf("dnsname: renewal credentials changed for %s; restore the previous domain and zone ID, or set zoneDomain to %q after checking the zone ID belongs to that domain", configPath, config.Domain)
+	}
+	if err := writeAtomicFile(path, encoded); err != nil {
+		return fmt.Errorf("dnsname: replace renewal credential binding for %s: %w", configPath, err)
+	}
+	return nil
 }
 
 type renewalActors struct {

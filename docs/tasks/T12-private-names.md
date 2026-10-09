@@ -142,28 +142,40 @@ processes and are not signaled or reaped by this restart.
 
 ## Pi configuration
 
-Create one Cloudflare API token with DNS Write permission restricted to the
-`sprockt.dev` zone. Store it only on the Pi as a regular 0600 file. The file
-contains the token and one optional trailing newline, with no other whitespace.
+Configure the deployment policy and explicit renewal domains **before selecting
+DNS credentials or starting reconciliation**. Changing a token or zone ID does
+not migrate the deployment domain.
 
-For the `shaul` service user:
+1. Back up the renewer's and every origin's configuration and certificate state.
+   Inspect `domains.json` beside `hosts.json` for each service user; honor
+   `MESH_CONFIG_DIR` or `XDG_CONFIG_HOME` when set. A fresh deployment uses a
+   mode-0600 policy containing `{"primary":"sprockt.dev"}` on the renewer and
+   every origin.
+2. For an existing deployment, preserve its current primary and
+   `legacyCertificateDomain`; add `sprockt.dev` as an alias on the renewer,
+   origins and any gateway. Keep existing aliases. Existing policy can retain
+   the legacy domain even when only an address book or catalog exists. Follow
+   [the safe overlap rollout](../deployment-domains.md#roll-out-without-losing-remote-access)
+   and [certificate-slot rules](../deployment-domains.md#certificate-slots).
+   Restart affected processes to load the expanded policy. Change the primary
+   only after destination DNS, certificates and both sets of URLs verify.
+3. Give each renewal file an explicit `domain` matching its zone. Set the
+   existing renewal file's domain to its preserved domain **before changing
+   the policy's primary**. Keep its zone ID, token, renewal loop and legacy
+   certificate paths unchanged. Prepare a separate destination renewal file
+   as shown below. During overlap, add the existing renewal file's absolute
+   path to the new file's `additionalConfigs`; do not introduce a cycle.
 
-```bash
-install -d -m 0700 /home/shaul/.config/mesh
-install -m 0600 /dev/null /home/shaul/.config/mesh/cloudflare.token
-read -rsp 'Cloudflare API token: ' mesh_cloudflare_token
-printf '\n'
-printf '%s\n' "$mesh_cloudflare_token" > /home/shaul/.config/mesh/cloudflare.token
-unset mesh_cloudflare_token
-chmod 0600 /home/shaul/.config/mesh/cloudflare.token
-```
-
-Create `/home/shaul/.config/mesh/private-names-live.json` with mode 0600:
+Prepare `/home/shaul/.config/mesh/private-names-sprockt-live.json` with mode 0600.
+Its explicit domain is required here even if the policy already uses that
+primary. Replace the zone placeholder with the ID for `sprockt.dev`:
 
 ```json
 {
-  "zoneId": "<CLOUDFLARE_ZONE_ID>",
-  "tokenFile": "/home/shaul/.config/mesh/cloudflare.token",
+  "domain": "sprockt.dev",
+  "zoneDomain": "sprockt.dev",
+  "zoneId": "<SPROCKT_DEV_CLOUDFLARE_ZONE_ID>",
+  "tokenFile": "/home/shaul/.config/mesh/cloudflare-sprockt.token",
   "acmeEmail": "<ACME_ACCOUNT_EMAIL>",
   "directoryUrl": "https://acme-v02.api.letsencrypt.org/directory",
   "acceptTerms": true,
@@ -186,6 +198,34 @@ Create `/home/shaul/.config/mesh/private-names-live.json` with mode 0600:
   ]
 }
 ```
+
+After policy and renewal domains are configured, create a Cloudflare API token
+with DNS Write permission restricted to `sprockt.dev`. Store it
+only on the Pi in the destination-specific regular 0600 file below. Keep the old
+zone's credentials and files during overlap. If this destination token file
+already exists, inspect its ownership and configuration before replacing it.
+The token file contains the token and one optional trailing newline, with no
+other whitespace.
+
+For the `shaul` service user:
+
+```bash
+install -d -m 0700 /home/shaul/.config/mesh
+install -m 0600 /dev/null /home/shaul/.config/mesh/cloudflare-sprockt.token
+read -rsp 'Cloudflare API token for sprockt.dev: ' mesh_cloudflare_token
+printf '\n'
+printf '%s\n' "$mesh_cloudflare_token" > /home/shaul/.config/mesh/cloudflare-sprockt.token
+unset mesh_cloudflare_token
+chmod 0600 /home/shaul/.config/mesh/cloudflare-sprockt.token
+```
+
+Verify that the configured zone ID names `sprockt.dev` before enabling renewal.
+`zoneDomain` declares that the credentials belong to the explicit renewal domain;
+Mesh checks the declaration locally and records the domain/zone-ID pair for that
+renewal-config path. A later domain or zone-ID change needs a matching explicit
+`zoneDomain` to rebind. See [renewal credential bindings](../deployment-domains.md#renewal-credential-bindings)
+for the first-upgrade limitation. Do not change the existing zone's token or zone
+ID to establish the destination.
 
 The two accepted `directoryUrl` values are the exact Let's Encrypt production
 and staging directory URLs. The runtime derives the state environment from that
@@ -220,7 +260,7 @@ mesh daemon --tailnet-port=7337 --websocket-path=/mesh --https-port=8443 --certi
 The Pi uses the same origin options and adds its unattended configuration:
 
 ```bash
-mesh daemon --tailnet-port=7337 --websocket-path=/mesh --https-port=8443 --certificate-renewer-id=<PI_MESH_IDENTITY> --tailscale-serve --private-names-config=/home/shaul/.config/mesh/private-names-live.json
+mesh daemon --tailnet-port=7337 --websocket-path=/mesh --https-port=8443 --certificate-renewer-id=<PI_MESH_IDENTITY> --tailscale-serve --private-names-config=/home/shaul/.config/mesh/private-names-sprockt-live.json
 ```
 
 For the installed systemd user service, preserve T08's unit and add a drop-in
@@ -233,7 +273,7 @@ ExecStart=
 ExecStart=%h/.local/bin/mesh daemon --tailnet-port=7337 --websocket-path=/mesh --https-port=8443 --certificate-renewer-id=<PI_MESH_IDENTITY> --tailscale-serve
 ```
 
-Add `--private-names-config=/home/shaul/.config/mesh/private-names-live.json` to
+Add `--private-names-config=/home/shaul/.config/mesh/private-names-sprockt-live.json` to
 the Pi's `ExecStart`. Then run:
 
 ```bash
@@ -284,7 +324,7 @@ renewal lock serializes them. `--staging` overrides the config's directory URL
 with the exact staging URL and uses only staging state and origin slots:
 
 ```bash
-mesh private-names reconcile --config /home/shaul/.config/mesh/private-names-live.json --staging --force --accept-tos
+mesh private-names reconcile --config /home/shaul/.config/mesh/private-names-sprockt-live.json --staging --force --accept-tos
 ```
 
 Confirm every configured origin received staging state under
@@ -295,7 +335,7 @@ certificate returned by the HTTPS listener, which reads only
 After staging succeeds, issue and distribute production:
 
 ```bash
-mesh private-names reconcile --config /home/shaul/.config/mesh/private-names-live.json --live --force --accept-tos
+mesh private-names reconcile --config /home/shaul/.config/mesh/private-names-sprockt-live.json --live --force --accept-tos
 ```
 
 From a tailnet device, verify the standard private URL and certificate:

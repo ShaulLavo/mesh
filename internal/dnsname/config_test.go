@@ -1,9 +1,13 @@
 package dnsname
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -230,5 +234,192 @@ func TestRenewalDomainOverlapKeepsZonesAndStateSeparate(t *testing.T) {
 	primary = write(filepath.Join(root, "primary"), "mesh.test", "primary-zone", fmt.Sprintf(`,"additionalConfigs":[%q]`, primary))
 	if _, err := NewPrivateNamesRuntime(primary, options); err == nil {
 		t.Fatal("cyclic renewal graph accepted")
+	}
+}
+
+func credentialBindingFixture(t *testing.T) (string, string, PrivateNamesRuntimeOptions) {
+	t.Helper()
+	root := t.TempDir()
+	token := filepath.Join(root, "token")
+	if err := os.WriteFile(token, []byte("dns-write-only-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	contents := fmt.Sprintf(`{"zoneId":"legacy-zone","tokenFile":%q,"acmeEmail":"owner@example.com","acceptTerms":true,"directoryUrl":%q,"origins":[{"name":"pc","tailscaleName":"pc.example.ts.net","identity":%q,"controlPort":7337,"websocketPath":"/mesh"}]}`, token, LetsEncryptProductionURL, testIdentityID(t))
+	return writePrivateNamesConfig(t, root, contents), contents, PrivateNamesRuntimeOptions{StateDir: filepath.Join(root, "state")}
+}
+
+func TestRenewalCredentialBindingRejectsDomainOrZoneChanges(t *testing.T) {
+	for _, change := range []string{"domain with stale zone", "zone with inherited domain"} {
+		t.Run(change, func(t *testing.T) {
+			path, original, options := credentialBindingFixture(t)
+			if _, err := NewPrivateNamesRuntime(path, options); err != nil {
+				t.Fatal(err)
+			}
+			changed := strings.Replace(original, `{`, `{"domain":"old.test",`, 1)
+			if change == "zone with inherited domain" {
+				changed = strings.Replace(original, "legacy-zone", "destination-zone", 1)
+			}
+			writePrivateNamesConfig(t, filepath.Dir(path), changed)
+			if _, err := NewPrivateNamesRuntime(path, options); err == nil || !strings.Contains(err.Error(), "zoneDomain") {
+				t.Fatalf("changed credentials accepted without explicit zoneDomain binding: %v", err)
+			}
+		})
+	}
+}
+
+func TestRenewalCredentialBindingPreservesDNSWriteOnlyLegacyConfig(t *testing.T) {
+	path, _, options := credentialBindingFixture(t)
+	var records []cloudflareRecord
+	created := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/client/v4/zones/legacy-zone/dns_records" && r.URL.Path != "/client/v4/zones/legacy-zone/dns_records/challenge-id" {
+			t.Errorf("DNS-Write-only token was used for metadata request: %s", r.URL.Path)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			pages := 0
+			if len(records) != 0 {
+				pages = 1
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "result": records, "result_info": map[string]int{"page": 1, "total_pages": pages}})
+		case http.MethodPost:
+			var input cloudflareRecordBody
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			created++
+			records = []cloudflareRecord{{ID: "challenge-id", Type: input.Type, Name: input.Name, Content: input.Content, TTL: input.TTL, Comment: input.Comment}}
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "result": records[0]})
+		case http.MethodDelete:
+			records = nil
+			_, _ = w.Write([]byte(`{"success":true,"result":{"id":"challenge-id"}}`))
+		default:
+			t.Errorf("unexpected DNS operation: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer server.Close()
+	for range 2 {
+		runtime, err := NewPrivateNamesRuntime(path, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		provider := runtime.Manager.provider.(*Cloudflare)
+		// Redirect only this fixture's transport; runtime construction stays offline.
+		provider.base, _ = provider.base.Parse(server.URL)
+		provider.client = server.Client()
+		solver := runtime.Manager.renewer.(*Issuer).config.Solver.(DNS01Solver)
+		challenge, err := solver.Present(context.Background(), "_acme-challenge.mesh."+Zone(), "challenge-value")
+		if err != nil {
+			t.Fatalf("legacy renewal DNS challenge: %v", err)
+		}
+		if err := solver.Cleanup(context.Background(), challenge); err != nil {
+			t.Fatalf("legacy renewal challenge cleanup: %v", err)
+		}
+	}
+	if created != 2 || len(records) != 0 {
+		t.Fatalf("legacy renewal DNS passes = %d, retained records = %v", created, records)
+	}
+}
+
+func TestRenewalCredentialBindingRequiresMatchingZoneDomainToRebind(t *testing.T) {
+	path, original, options := credentialBindingFixture(t)
+	if _, err := NewPrivateNamesRuntime(path, options); err != nil {
+		t.Fatal(err)
+	}
+	changed := strings.Replace(original, `{`, `{"domain":"old.test","zoneDomain":"mesh.test",`, 1)
+	writePrivateNamesConfig(t, filepath.Dir(path), changed)
+	if _, err := NewPrivateNamesRuntime(path, options); err == nil || !strings.Contains(err.Error(), "does not match renewal domain") {
+		t.Fatalf("mismatched explicit binding error = %v", err)
+	}
+	changed = strings.Replace(changed, `"zoneDomain":"mesh.test"`, `"zoneDomain":"old.test"`, 1)
+	changed = strings.Replace(changed, "legacy-zone", "destination-zone", 1)
+	writePrivateNamesConfig(t, filepath.Dir(path), changed)
+	if _, err := NewPrivateNamesRuntime(path, options); err != nil {
+		t.Fatalf("explicit rebind: %v", err)
+	}
+	bindingPath := renewalCredentialBindingPath(path, options.StateDir)
+	binding := readTestFile(t, bindingPath)
+	if binding != `{"domain":"old.test","zoneId":"destination-zone"}` {
+		t.Fatalf("persisted binding = %s", binding)
+	}
+	info, err := os.Stat(bindingPath)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("binding permissions = %v, %v", info, err)
+	}
+	// The explicit field can be removed after publication; the recorded pair
+	// remains authoritative on the next process start.
+	changed = strings.Replace(changed, `"zoneDomain":"old.test",`, "", 1)
+	writePrivateNamesConfig(t, filepath.Dir(path), changed)
+	if _, err := NewPrivateNamesRuntime(path, options); err != nil {
+		t.Fatalf("unchanged rebound config: %v", err)
+	}
+	writePrivateNamesConfig(t, filepath.Dir(path), original)
+	if _, err := NewPrivateNamesRuntime(path, options); err == nil {
+		t.Fatal("previous credentials silently replaced the rebound pair")
+	}
+}
+
+func TestRenewalCredentialBindingChecksDeclaredDomainOnFirstUse(t *testing.T) {
+	for _, declaration := range []string{"old.test", "Mesh.test", " mesh.test"} {
+		t.Run(declaration, func(t *testing.T) {
+			path, original, options := credentialBindingFixture(t)
+			writePrivateNamesConfig(t, filepath.Dir(path), strings.Replace(original, `{`, fmt.Sprintf(`{"zoneDomain":%q,`, declaration), 1))
+			if _, err := NewPrivateNamesRuntime(path, options); err == nil || !strings.Contains(err.Error(), "zoneDomain") {
+				t.Fatalf("inherited domain accepted mismatched declaration: %v", err)
+			}
+			if _, err := os.Stat(options.StateDir); !os.IsNotExist(err) {
+				t.Fatalf("failed config wrote renewal state: %v", err)
+			}
+		})
+	}
+	path, original, options := credentialBindingFixture(t)
+	writePrivateNamesConfig(t, filepath.Dir(path), strings.Replace(original, `{`, `{"zoneDomain":"mesh.test",`, 1))
+	if _, err := NewPrivateNamesRuntime(path, options); err != nil {
+		t.Fatalf("matching inherited-domain declaration: %v", err)
+	}
+}
+
+func TestRenewalCredentialBindingFailsClosedOnDamagedState(t *testing.T) {
+	for _, damage := range []string{"invalid JSON", "missing fields", "unknown field", "multiple values", "loose mode", "symlink"} {
+		t.Run(damage, func(t *testing.T) {
+			path, original, options := credentialBindingFixture(t)
+			if _, err := NewPrivateNamesRuntime(path, options); err != nil {
+				t.Fatal(err)
+			}
+			// Explicit rebind cannot turn unreadable or corrupt history into a
+			// fresh installation.
+			writePrivateNamesConfig(t, filepath.Dir(path), strings.Replace(original, `{`, `{"zoneDomain":"mesh.test",`, 1))
+			bindingPath := renewalCredentialBindingPath(path, options.StateDir)
+			switch damage {
+			case "loose mode":
+				if err := os.Chmod(bindingPath, 0o644); err != nil { //nolint:gosec // deliberate insecure-mode fixture
+					t.Fatal(err)
+				}
+			case "symlink":
+				backup := bindingPath + ".backup"
+				if err := os.Rename(bindingPath, backup); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(backup, bindingPath); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				contents := map[string]string{
+					"invalid JSON": "{", "missing fields": `{}`, "unknown field": `{"domain":"mesh.test","zoneId":"legacy-zone","extra":true}`,
+					"multiple values": `{"domain":"mesh.test","zoneId":"legacy-zone"}{}`,
+				}[damage]
+				if err := os.WriteFile(bindingPath, []byte(contents), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := NewPrivateNamesRuntime(path, options); err == nil || !strings.Contains(err.Error(), "renewal credential binding") {
+				t.Fatalf("damaged binding was accepted: %v", err)
+			}
+		})
 	}
 }

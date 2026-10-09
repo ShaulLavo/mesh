@@ -153,7 +153,7 @@ func (s *PrivateNameSource) Install(name string) error {
 		s.publish(name)
 		return nil
 	}
-	if err := writeAtomicFile(s.path, []byte(name+"\n"), 0o600); err != nil {
+	if err := writeAtomicFile(s.path, []byte(name+"\n")); err != nil {
 		return fmt.Errorf("dnsname: persist private name: %w", err)
 	}
 	s.publish(name)

@@ -81,6 +81,7 @@ Each private-name renewal file may set `domain` and `additionalConfigs`:
 ```json
 {
   "domain": "new.example",
+  "zoneDomain": "new.example",
   "additionalConfigs": ["/absolute/path/private-names-old.json"],
   "zoneId": "NEW_ZONE_ID",
   "tokenFile": "/absolute/path/new-zone.token",
@@ -99,7 +100,15 @@ Each private-name renewal file may set `domain` and `additionalConfigs`:
 }
 ```
 
-The second file uses `domain: "old.example"` and that zone's ID and token path.
+The second file uses `domain: "old.example"`, `zoneDomain: "old.example"`, and
+that zone's ID and token path.
+Configure accepted domains on the renewer and every recipient before selecting
+new-zone credentials. During migration, set an explicit `domain` in both renewal
+files, including the existing one, before changing the policy's primary. An
+omitted domain inherits the primary; changing credentials alone does not change
+that domain. Preserve the old renewal file and token during overlap, and use a
+separate destination token path. Keep `legacyCertificateDomain` unchanged until
+the old domain is safely retired.
 Use the existing `publicEdge` recipient field in each file when distributing
 public certificates too. The example's identity and zone placeholders must be
 replaced before running it.
@@ -110,6 +119,32 @@ zones. Daemon renewal runs the loops concurrently. The combined graph permits
 at most eight files, one per domain, and rejects repeated paths and cycles.
 Tokens remain separate exact-0600 files. No live DNS or ACME operation runs
 until the configured renewal command or daemon starts it.
+
+## Renewal credential bindings
+
+Set `zoneDomain` in new renewal configurations to the domain served by their
+Cloudflare zone ID and token. It is an optional flat JSON string, separate from
+`domain`. Mesh requires it to match the effective renewal domain: the explicit
+`domain`, or the policy primary when `domain` is omitted. Mesh performs this
+check locally; it makes no provider zone-discovery calls. DNS-Write-only tokens
+remain supported. The declaration is the operator's confirmation of the zone,
+not proof that Cloudflare maps a given zone ID to that name.
+
+On the first renewal runtime setup, Mesh saves the effective domain and
+zone ID for that absolute renewal-config path. Bindings live below
+`<StateDir>/private-names/zone-bindings`, in mode-0600 files within a mode-0700
+directory. Subsequent changes to the domain or `zoneId` are refused unless an
+explicit `zoneDomain` matches the effective domain and authorizes rebinding.
+A token change alone keeps the same domain and zone ID. Preserve this state
+with deployment backups; a new config path has no earlier binding.
+
+**First-upgrade limitation:** a legacy configuration with no `zoneDomain` and no
+saved binding is accepted and records its current pair. If its zone ID was
+already swapped before the first runtime setup, Mesh cannot detect that mismatch
+without provider discovery. Inspect existing domain/zone pairs and set matching explicit
+`domain` and `zoneDomain` values before changing credentials. Keep the old zone's
+renewal and token in their existing files during overlap; create a separate
+configuration and credentials for the destination.
 
 ## Private service hosts
 
