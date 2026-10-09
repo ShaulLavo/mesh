@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -268,66 +267,6 @@ func newPrivateNamesRuntime(configPath string, options PrivateNamesRuntimeOption
 		runtime.Additional = append(runtime.Additional, additional)
 	}
 	return runtime, nil
-}
-
-type renewalCredentialBinding struct {
-	Domain string `json:"domain"`
-	ZoneID string `json:"zoneId"`
-}
-
-// A config path identifies the renewal job across primary-domain and credential
-// changes. Keying by domain or zone ID would lose the previous pair on a change.
-func renewalCredentialBindingPath(configPath, stateDir string) string {
-	digest := sha256.Sum256([]byte(configPath))
-	return filepath.Join(stateDir, "private-names", "zone-bindings", fmt.Sprintf("%x.json", digest))
-}
-
-func bindRenewalCredentials(configPath, stateDir string, config PrivateNamesConfig) error {
-	path := renewalCredentialBindingPath(configPath, stateDir)
-	desired := renewalCredentialBinding{Domain: config.Domain, ZoneID: config.ZoneID}
-	encoded, err := json.Marshal(desired)
-	if err != nil {
-		return fmt.Errorf("dnsname: encode renewal credential binding: %w", err)
-	}
-	contents, err := readSecureFile(path, privateNamesConfigMaximum)
-	if errors.Is(err, os.ErrNotExist) {
-		// Preserve DNS-Write-only legacy tokens: the first pair comes from local
-		// configuration, without a Zone Read API call or a new token scope.
-		err = publishExclusiveFile(path, encoded, 0o600)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("dnsname: record renewal credential binding for %s: %w", configPath, err)
-		}
-		// Another initializer won publication; compare against its complete pair.
-		contents, err = readSecureFile(path, privateNamesConfigMaximum)
-	}
-	if err != nil {
-		return fmt.Errorf("dnsname: read renewal credential binding for %s: %w", configPath, err)
-	}
-	var previous renewalCredentialBinding
-	decoder := json.NewDecoder(bytes.NewReader(contents))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&previous); err != nil {
-		return fmt.Errorf("dnsname: parse renewal credential binding %s: %w", path, err)
-	}
-	if err := requireJSONEOF(decoder); err != nil {
-		return fmt.Errorf("dnsname: parse renewal credential binding %s: %w", path, err)
-	}
-	if previous.Domain == "" || previous.ZoneID == "" {
-		return fmt.Errorf("dnsname: renewal credential binding %s is incomplete; restore it from the configuration backup", path)
-	}
-	if previous == desired {
-		return nil
-	}
-	if config.ZoneDomain != config.Domain {
-		return fmt.Errorf("dnsname: renewal credentials changed for %s; restore the previous domain and zone ID, or set zoneDomain to %q after checking the zone ID belongs to that domain", configPath, config.Domain)
-	}
-	if err := writeAtomicFile(path, encoded); err != nil {
-		return fmt.Errorf("dnsname: replace renewal credential binding for %s: %w", configPath, err)
-	}
-	return nil
 }
 
 type renewalActors struct {

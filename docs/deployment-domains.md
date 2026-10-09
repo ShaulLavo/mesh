@@ -138,6 +138,16 @@ explicit `zoneDomain` matches the effective domain and authorizes rebinding.
 A token change alone keeps the same domain and zone ID. Preserve this state
 with deployment backups; a new config path has no earlier binding.
 
+Readers and writers use the same per-binding cross-process lock. Mesh resolves
+symlinked state-directory ancestors to the physical binding directory before
+locking and publication. Publication syncs a temporary file in that directory,
+renames it into place, then syncs the physical directory and its ancestors
+through the filesystem root before setup succeeds. Existing identical bindings also pass file and directory sync barriers
+under that lock, repairing an earlier interrupted publication. A sync error
+stops renewal setup; another initializer cannot accept a visible file while its
+publisher is still completing the durability barriers. Keep the stable lock
+file in place across retries and process restarts.
+
 **First-upgrade limitation:** a legacy configuration with no `zoneDomain` and no
 saved binding is accepted and records its current pair. If its zone ID was
 already swapped before the first runtime setup, Mesh cannot detect that mismatch
@@ -145,6 +155,33 @@ without provider discovery. Inspect existing domain/zone pairs and set matching 
 `domain` and `zoneDomain` values before changing credentials. Keep the old zone's
 renewal and token in their existing files during overlap; create a separate
 configuration and credentials for the destination.
+
+### Recovering damaged binding state
+
+A corrupt or unreadable binding stops renewal setup, including explicit
+rebinding. Restore the indicated binding file from a known-good deployment
+backup with its original owner and mode `0600`.
+
+If no usable backup exists, recovery is an explicit operator action:
+
+1. Stop every renewal process sharing this state directory. Preserve the current
+   configuration and the damaged file named by the error. Keep lock files in
+   place; deleting a lock file can let processes acquire different locks.
+2. Independently verify the intended DNS zone name, its zone ID and the token's
+   scope. Check that the renewal domain is accepted by the deployment policy.
+   Keep old aliases and `legacyCertificateDomain` during migration. Do not infer
+   the intended zone from the damaged binding or an inherited primary alone.
+3. Set explicit matching `domain` and `zoneDomain` in the renewal configuration,
+   with the verified zone ID and token. Archive only the indicated damaged
+   binding outside `zone-bindings`; keep the archive for diagnosis. Do not
+   remove the binding directory, other bindings, lock files or certificate state.
+4. Start the configured renewer and confirm setup succeeds before using the
+   resulting DNS records or certificates. Keep the corrected configuration and
+   newly recorded binding in the deployment backup.
+
+Archiving a binding removes its history. This procedure requires independent
+zone verification and the explicit declaration; it is not an automatic retry
+or a way to bypass an unexplained credential mismatch.
 
 ## Private service hosts
 
