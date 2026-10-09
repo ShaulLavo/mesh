@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 
 from machine_naming import printed_marker
-from naming_transition import RetainedCatalog, catalog_snapshot, image_digest, private_host_migration, private_app_state_migration
+from naming_transition import RetainedCatalog, catalog_snapshot, image_digest
 
 
 class PrintedMarkerTest(unittest.TestCase):
@@ -109,68 +109,48 @@ class RetainedCatalogTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "schema"):
             self.observe()
 
-    def test_private_host_migration_preserves_catalog_and_worker(self):
+    def advance_schema(self, version=28):
         with sqlite3.connect(self.database) as database:
-            database.execute("ALTER TABLE services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
-            database.execute("ALTER TABLE cached_services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
-            database.execute("INSERT INTO goose_db_version VALUES (11, 1)")
-        self.host["build"] = self.host["build"] | {"stateVersion": 11}
-        receipt = self.observe()
-        self.assertEqual(receipt["catalogSchemaVersion"], 11)
-        self.assertEqual(receipt["workerBuild"]["stateVersion"], 10)
-        self.observe()
-        self.host["build"] = self.host["build"] | {"stateVersion": 10}
-        self.observe()
-
-    def test_private_host_migration_uses_shape_without_fixed_versions(self):
-        previous = catalog_snapshot(self.fixture.remote, "7K3D")
-        with sqlite3.connect(self.database) as database:
-            database.execute("ALTER TABLE services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
-            database.execute("ALTER TABLE cached_services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
-        current = catalog_snapshot(self.fixture.remote, "7K3D")
-        self.assertTrue(private_host_migration(previous | {"schemaVersion": 30}, current | {"schemaVersion": 31}))
-        self.assertFalse(private_host_migration(previous | {"schemaVersion": 30}, current | {"schemaVersion": 30}))
-
-    def test_private_host_migration_refuses_unrelated_schema_change(self):
-        with sqlite3.connect(self.database) as database:
-            database.execute("ALTER TABLE services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
-            database.execute("ALTER TABLE cached_services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
             database.execute("ALTER TABLE hosts DROP COLUMN alias")
-            database.execute("INSERT INTO goose_db_version VALUES (11, 1)")
-        self.host["build"] = self.host["build"] | {"stateVersion": 11}
-        with self.assertRaisesRegex(RuntimeError, "schema"):
-            self.observe()
-
-    def migrate_private_apps(self):
-        with sqlite3.connect(self.database) as database:
-            database.execute("ALTER TABLE services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
-            database.execute("ALTER TABLE cached_services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
             database.execute("ALTER TABLE app_state RENAME TO private_app_state")
-            database.execute("INSERT INTO goose_db_version VALUES (12, 1)")
-        self.host["build"] = self.host["build"] | {"stateVersion": 12}
+            database.execute("INSERT INTO goose_db_version VALUES (?, 1)", (version,))
+        self.host["build"] = self.host["build"] | {"stateVersion": version}
 
-    def test_private_app_migration_preserves_state_catalog_and_worker(self):
-        previous = catalog_snapshot(self.fixture.remote, "7K3D")
-        self.migrate_private_apps()
-        current = catalog_snapshot(self.fixture.remote, "7K3D")
-        self.assertTrue(private_app_state_migration(previous, current))
+    def test_forward_schema_preserves_catalog_state_and_worker(self):
+        self.advance_schema()
         receipt = self.observe()
-        self.assertEqual(receipt["catalogSchemaVersion"], 12)
+        self.assertEqual(receipt["catalogSchemaVersion"], self.host["build"]["stateVersion"])
         self.assertEqual(receipt["workerBuild"]["stateVersion"], 10)
         self.assertTrue(receipt["appStatePreserved"])
         self.observe()
 
-    def test_private_app_migration_refuses_changed_app_data(self):
-        self.migrate_private_apps()
+    def test_forward_schema_must_match_target_report(self):
+        self.advance_schema()
+        self.host["build"] = self.host["build"] | {"stateVersion": 27}
+        with self.assertRaisesRegex(RuntimeError, "state contract"):
+            self.observe()
+
+    def test_forward_schema_still_refuses_changed_app_bytes(self):
+        self.advance_schema()
         with sqlite3.connect(self.database) as database:
             database.execute("UPDATE private_app_state SET data = ?", (b"changed state",))
+        with self.assertRaisesRegex(RuntimeError, "app state"):
+            self.observe()
+
+    def test_restart_schema_cannot_change_without_new_version(self):
+        self.advance_schema()
+        self.observe()
+        with sqlite3.connect(self.database) as database:
+            database.execute("DROP TABLE cached_services")
         with self.assertRaisesRegex(RuntimeError, "schema"):
             self.observe()
 
-    def test_private_app_migration_refuses_other_schema_changes(self):
-        self.migrate_private_apps()
+    def test_schema_cannot_move_backward(self):
+        self.advance_schema()
+        self.observe()
         with sqlite3.connect(self.database) as database:
-            database.execute("ALTER TABLE hosts DROP COLUMN alias")
+            database.execute("DELETE FROM goose_db_version WHERE version_id = 28")
+        self.host["build"] = self.host["build"] | {"stateVersion": 10}
         with self.assertRaisesRegex(RuntimeError, "schema"):
             self.observe()
 

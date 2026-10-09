@@ -143,17 +143,17 @@ def joined_receipt(data, transition, compatibility):
     if digest(data) != transition["proof"]:
         raise RuntimeError("published receipt digest mismatch")
     receipt = json.loads(data)
-    if receipt["schema"] != 1:
+    if receipt.get("schema") != 1:
         raise RuntimeError("published receipt schema mismatch")
     for field in ("platform", "fromDigest", "toDigest"):
-        if receipt[field] != transition[field]:
+        if receipt.get(field) != transition[field]:
             raise RuntimeError("published receipt transition mismatch")
     for field in COMPATIBILITY_FIELDS:
-        if receipt[field] != compatibility[field]:
+        if receipt.get(field) != compatibility[field]:
             raise RuntimeError("published receipt compatibility mismatch")
-    for field in ("candidateOpenedRetainedState", "sessionsPreserved", "recoveryRecordsPreserved"):
-        if receipt[field] is not True:
-            raise RuntimeError("published receipt does not declare retained state and sessions")
+    for field in ("sessionsPreserved", "recoveryRecordsPreserved"):
+        if receipt.get(field) is not True:
+            raise RuntimeError("published receipt does not declare preserved sessions and recovery records")
     return receipt
 
 

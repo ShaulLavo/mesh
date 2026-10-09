@@ -87,6 +87,8 @@ func (c *Client) Self(ctx context.Context) (Peer, error) {
 	if err != nil {
 		return Peer{}, err
 	}
+	// status accepts only a running local backend; Online describes remote peers.
+	peer.Online = true
 	return peer, nil
 }
 

@@ -30,7 +30,7 @@ git -C "$repo_root" archive "$baseline" | tar -x -C "$root/baseline"
 (cd "$repo_root" && go build -trimpath -o "$root/control-client" ./integration/helpers/control-client)
 candidate=$(git -C "$repo_root" rev-parse HEAD)
 candidate_dirty=$(git -C "$repo_root" status --porcelain | wc -l | tr -d ' ')
-printf 'nativePlatform=%s\nbaselineSource=%s\ncandidateSource=%s\ncandidateDirtyCount=%s\nupgradeCatalogSourceBaseline=%s\nfreshCandidateCatalogOldDaemonReadable=false\npublishedReleaseTransition=false\nreaderProofScope=selected-native-reader-regressions\n' \
+printf 'nativePlatform=%s\nbaselineSource=%s\ncandidateSource=%s\ncandidateDirtyCount=%s\nupgradeCatalogSourceBaseline=%s\ncandidateRestartedRetainedState=true\npublishedReleaseTransition=false\nreaderProofScope=selected-native-reader-regressions\n' \
   "$platform" "$baseline" "$candidate" "$candidate_dirty" "$baseline" > "$output/source.txt"
 mkdir -p "$output/fresh-candidate"
 TMPDIR="$root" python3 "$repo_root/integration/helpers/machine_naming.py" "$root/candidate-mesh" \

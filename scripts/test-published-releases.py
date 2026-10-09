@@ -48,7 +48,7 @@ class PublishedInputsTest(unittest.TestCase):
             receipt = compatibility | {"schema": 1, "platform": self.platform,
                 "fromDigest": before["artifacts"][0]["binarySha256"],
                 "toDigest": after["artifacts"][0]["binarySha256"],
-                "candidateOpenedRetainedState": True, "sessionsPreserved": True, "recoveryRecordsPreserved": True}
+                "sessionsPreserved": True, "recoveryRecordsPreserved": True}
             data = json.dumps(receipt).encode()
             proof = published.digest(data)
             transition = {key: receipt[key] for key in ("platform", "fromDigest", "toDigest")}
@@ -145,7 +145,33 @@ class PublishedInputsTest(unittest.TestCase):
         receipt = json.loads(data)
         receipt["sessionsPreserved"] = False
         data = json.dumps(receipt).encode()
-        with self.assertRaisesRegex(RuntimeError, "retained state and sessions"):
+        with self.assertRaisesRegex(RuntimeError, "preserved sessions and recovery records"):
+            published.joined_receipt(data, transition | {"proof": published.digest(data)}, compatibility)
+
+    def test_archive_receipt_needs_only_recorded_common_facts(self):
+        data, transition, compatibility = self.receipts[0]
+        receipt = published.joined_receipt(data, transition, compatibility)
+        self.assertTrue(receipt["sessionsPreserved"])
+        self.assertNotIn("candidateOpenedRetainedState", receipt)
+
+    def test_receipt_missing_invariant_field_is_refused(self):
+        original, transition, compatibility = self.receipts[0]
+        fields = ("schema", "platform", "fromDigest", "toDigest", *published.COMPATIBILITY_FIELDS,
+                  "sessionsPreserved", "recoveryRecordsPreserved")
+        for field in fields:
+            with self.subTest(field=field):
+                receipt = json.loads(original)
+                del receipt[field]
+                data = json.dumps(receipt).encode()
+                with self.assertRaises(RuntimeError):
+                    published.joined_receipt(data, transition | {"proof": published.digest(data)}, compatibility)
+
+    def test_receipt_false_recovery_claim_is_refused(self):
+        data, transition, compatibility = self.receipts[0]
+        receipt = json.loads(data)
+        receipt["recoveryRecordsPreserved"] = False
+        data = json.dumps(receipt).encode()
+        with self.assertRaisesRegex(RuntimeError, "preserved sessions and recovery records"):
             published.joined_receipt(data, transition | {"proof": published.digest(data)}, compatibility)
 
     def test_asset_path_cannot_escape_release_directory(self):

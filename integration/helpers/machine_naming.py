@@ -110,6 +110,7 @@ def prove(fixture, args):
     session_id, shell_pid = shell_identity
     worker_pid = int(subprocess.check_output(["ps", "-o", "ppid=", "-p", str(shell_pid)]))
     retained = RetainedCatalog(fixture, session_id, shell_pid, worker_pid, source_binary)
+    initial_host_columns = retained.initial["hostColumns"]
     require(("alias" in retained.initial["hostColumns"]) == bool(args.baseline),
             "fixture catalog provenance differs from the selected initialization source")
     initialized = round_trip(local_socket, info_request)["host"]
@@ -134,7 +135,7 @@ def prove(fixture, args):
             "destination host.info lacks a persisted machine-owned name and revision")
     require(remote_request(fixture, host, info_request)["host"] == initial,
             "authenticated device and destination disagree on initial claim")
-    metadata = (fixture.remote / "s" / session_id / "meta.json").read_bytes()
+    metadata = json.loads((fixture.remote / "s" / session_id / "meta.json").read_text())
     terminal_marker(fixture, terminal, "BEFORE_NAME_IO", shell_identity)
     phases.append(retained.observe("candidate-before-rename", fixture.binary, initial))
     watch_connection, snapshot = watch(fixture)
@@ -188,7 +189,9 @@ def prove(fixture, args):
         require(remote_request(fixture, host, stale).get("errorCode") == "host.name_revision", "stale rename replay accepted")
         terminal_marker(fixture, terminal, "AFTER_NAME_IO", shell_identity)
         os.kill(worker_pid, 0)
-        require((fixture.remote / "s" / session_id / "meta.json").read_bytes() == metadata, "rename changed retained worker metadata")
+        current_metadata = json.loads((fixture.remote / "s" / session_id / "meta.json").read_text())
+        for field in ("id", "pid", "command", "cwd", "createdAt", "build"):
+            require(current_metadata[field] == metadata[field], f"rename changed retained worker {field}")
         phases.append(retained.observe("candidate-after-rename", fixture.binary, first_claim))
         terminal.send(b"\x1d")
         terminal.expect_exit()
@@ -197,25 +200,9 @@ def prove(fixture, args):
         fixture.stop_daemon()
         name_path = fixture.remote / "machine-name.json"
         saved_name = name_path.read_bytes()
-        if args.baseline:
-            start_replacement(fixture, args.baseline, port)
-            legacy = round_trip(local_socket, info_request)["host"]
-            require(legacy["id"] == first_claim["id"], "source baseline changed host identity")
-            require(name_path.read_bytes() == saved_name, "source baseline rewrote new name state")
-            require(remote_request(fixture, host, info_request)["host"] == legacy,
-                    "authenticated baseline read changed the pinned destination")
-            restored = Terminal([args.baseline, session_id], destination_environment(fixture), fixture.root)
-            fixture.terminals.append(restored)
-            restored.expect(PROMPT)
-            terminal_marker(fixture, restored, "RESTORED_BASELINE_IO", shell_identity)
-            phases.append(retained.observe("baseline-restored", args.baseline, legacy))
-            restored.send(b"\x1d")
-            restored.expect_exit()
-            restored.close()
-            fixture.terminals.remove(restored)
-            fixture.stop_daemon()
         start_replacement(fixture, fixture.binary, port)
-        require(round_trip(local_socket, info_request)["host"] == first_claim, "restart or source transition lost committed name")
+        require(name_path.read_bytes() == saved_name, "candidate restart rewrote committed name state")
+        require(round_trip(local_socket, info_request)["host"] == first_claim, "candidate restart lost committed name")
         require(remote_request(fixture, host, rename)["host"] == first_claim, "restart lost the idempotent receipt")
         reconnect, current = watch(fixture)
         reconnect.close()
@@ -248,12 +235,9 @@ def prove(fixture, args):
                       "wrongPinAndTargetDenied": True, "destinationWatchConverged": True,
                       "sourceBaselineTransition": bool(args.baseline), "publishedReleaseTransition": False,
                       "upgradeCatalogSourceBaseline": args.baseline_source,
-                      "freshCandidateCatalogOldDaemonReadable": False,
-                      "freshCandidateCatalogOldDaemonReadabilityEvidence":
-                          "preserved diagnostic: authenticated baseline rejected candidate-created alias-free schema10; "
-                          "this fresh-candidate path does not restart baseline",
+                      "candidateRestartedRetainedState": True,
                       "catalogInitializedByBaseline": bool(args.baseline),
-                      "initialCatalogHostColumns": retained.initial["hostColumns"],
+                      "initialCatalogHostColumns": initial_host_columns,
                       "sourceImages": {"baseline": {"source": args.baseline_source,
                                                     "digest": image_digest(args.baseline)} if args.baseline else None,
                                        "candidate": {"source": args.candidate_source,

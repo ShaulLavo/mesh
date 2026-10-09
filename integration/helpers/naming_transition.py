@@ -3,7 +3,6 @@ from contextlib import closing
 import hashlib
 import json
 import os
-import re
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -39,50 +38,6 @@ def catalog_snapshot(state, session_id):
             "schema": schema, "hostColumns": columns, "immutableSessionRows": rows, "appState": app_state}
 
 
-def private_host_migration(previous, current):
-    if current["schemaVersion"] <= previous["schemaVersion"]:
-        return False
-    normalized = []
-    changed = set()
-    for kind, name, table, sql in current["schema"]:
-        if kind == "table" and name in ("services", "cached_services"):
-            stripped, count = re.subn(r",\s*private_host TEXT NOT NULL DEFAULT ''", "", sql)
-            if count != 1:
-                return False
-            sql = stripped
-            changed.add(name)
-        normalized.append((kind, name, table, sql))
-    return changed == {"services", "cached_services"} and current | {
-        "schemaVersion": previous["schemaVersion"], "schema": normalized} == previous
-
-
-def private_app_state_migration(previous, current):
-    if current["schemaVersion"] <= previous["schemaVersion"]:
-        return False
-    normalized = []
-    changed = 0
-    for row in current["schema"]:
-        restored, migrated = legacy_app_schema(row)
-        if restored is None:
-            return False
-        normalized.append(restored)
-        changed += migrated
-    candidate = current | {"schema": sorted(normalized)}
-    return changed == 1 and (candidate | {"schemaVersion": previous["schemaVersion"]} == previous
-                            or private_host_migration(previous, candidate))
-
-
-def legacy_app_schema(row):
-    kind, name, table, sql = row
-    if kind != "table" or name != table or name != "private_app_state":
-        return row, False
-    sql, count = re.subn(r'\ACREATE TABLE (?:"private_app_state"|private_app_state)(?=\s|\()',
-                         "CREATE TABLE app_state", sql)
-    if count != 1:
-        return None, False
-    return (kind, "app_state", "app_state", sql), True
-
-
 class RetainedCatalog:
     def __init__(self, fixture, session_id, shell_pid, worker_pid, worker_binary):
         self.fixture = fixture
@@ -103,9 +58,14 @@ class RetainedCatalog:
 
     def observe(self, phase, daemon_binary, host):
         current = catalog_snapshot(self.fixture.remote, self.session_id)
-        if private_host_migration(self.initial, current) or private_app_state_migration(self.initial, current):
-            self.initial = current
-        require(current == self.initial, "source hop replaced catalog inode, schema or immutable session rows")
+        require((current["device"], current["inode"]) == (self.initial["device"], self.initial["inode"]),
+                "source hop replaced catalog inode")
+        require(current["immutableSessionRows"] == self.initial["immutableSessionRows"],
+                "source hop changed immutable session rows")
+        require(current["appState"] == self.initial["appState"], "source hop changed retained app state")
+        require(current["schemaVersion"] >= self.initial["schemaVersion"], "source hop moved catalog schema backward")
+        if current["schemaVersion"] == self.initial["schemaVersion"]:
+            require(current["schema"] == self.initial["schema"], "source hop changed schema without a new version")
         require(all(path.read_bytes() == contents for path, contents in self.credentials.items()),
                 "source hop changed existing device credentials or approved grant policy")
         metadata = json.loads(self.metadata_path().read_text())
@@ -115,10 +75,11 @@ class RetainedCatalog:
         parent = int(subprocess.check_output(["ps", "-o", "ppid=", "-p", str(self.shell_pid)]))
         require(parent == self.worker_pid, "retained shell moved to another worker")
         digest = image_digest(daemon_binary)
-        require(host["build"]["digest"] == digest and host["build"]["stateVersion"] in {self.worker_build["stateVersion"], self.initial["schemaVersion"]},
+        require(host["build"]["digest"] == digest and host["build"]["stateVersion"] == current["schemaVersion"],
                 "destination did not run the selected daemon image and state contract")
         require(host["id"] == host["meshIdentity"] == self.initial["immutableSessionRows"][0][1],
                 "source hop changed the retained session's cryptographic destination")
+        self.initial = current
         return {"phase": phase, "daemonBuild": host["build"], "workerBuild": self.worker_build,
                 "catalogDevice": current["device"], "catalogInode": current["inode"],
                 "catalogSchemaVersion": current["schemaVersion"], "catalogHostColumns": current["hostColumns"],
