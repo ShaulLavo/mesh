@@ -41,7 +41,7 @@ require_version() {
 }
 require_tool go
 require_tool gofmt
-require_version golangci-lint 'version 2\.13\.2([[:space:]]|$)'
+require_version golangci-lint 'version 2\.14\.0([[:space:]]|$)'
 require_version shellcheck '^version: 0\.11\.0$'
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/mesh-gates.XXXXXX")

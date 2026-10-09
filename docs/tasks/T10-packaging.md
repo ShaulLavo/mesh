@@ -82,7 +82,7 @@ reboot still stops workers, and daemon reconciliation reports those sessions as
 
 CI pins checkout v7.0.1, setup-go v7.0.0, GoReleaser Action v7.2.3, and
 golangci-lint Action v9.3.0 to immutable commit SHAs with version comments. It
-also pins golangci-lint v2.13.2 and govulncheck v1.7.0. The release validation
+also pins golangci-lint v2.14.0 and govulncheck v1.7.0. The release validation
 job has read-only repository access; only its dependent publication job can
 write release contents. CI runs `go test -race ./...`, every
 `integration/*.sh`, `go vet`, golangci-lint v2, govulncheck, a GoReleaser
