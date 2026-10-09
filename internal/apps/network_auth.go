@@ -15,7 +15,7 @@ import (
 
 type networkSessionKey struct{}
 
-func (e *Edge) authenticateNetwork(r *http.Request) *http.Request {
+func (e *Registry) authenticateNetwork(r *http.Request) *http.Request {
 	if e.config.NetworkOwners == nil || e.config.ClientIP == nil {
 		return r
 	}
@@ -49,7 +49,7 @@ func (e *Edge) authenticateNetwork(r *http.Request) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), networkSessionKey{}, session))
 }
 
-func (e *Edge) browser(r *http.Request) (webauth.Session, error) {
+func (e *Registry) browser(r *http.Request) (webauth.Session, error) {
 	if session, ok := r.Context().Value(networkSessionKey{}).(webauth.Session); ok {
 		paired, err := e.auth.Browser(r.Context(), r)
 		if err == nil {

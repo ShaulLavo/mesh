@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -231,34 +230,6 @@ func TestPrivateAppWebSocketRequiresOwnOrigin(t *testing.T) {
 	}
 }
 
-func TestPublicAppDoesNotApplyAmbientOwnerGate(t *testing.T) {
-	f := newAppFixture(t)
-	app := createStaticApp(t, f)
-	forwarded := networkOrigin(t, f)
-	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
-		t.Fatal(err)
-	}
-	ambientAppBackend(t, f, app.ID, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		w.Header().Set("Cross-Origin-Resource-Policy", "cross-origin")
-		w.Header().Set("Content-Security-Policy", "frame-ancestors *")
-		_, _ = io.WriteString(w, "<html><body>public app</body></html>")
-	})
-	for _, method := range []string{http.MethodGet, http.MethodPost} {
-		r := httptest.NewRequest(method, URL(app.ID)+"/", nil)
-		r.Header.Set("Sec-Fetch-Site", "cross-site")
-		r.Header.Set("Origin", "https://attacker.example")
-		w := httptest.NewRecorder()
-		f.edge.ServeHost(w, r, app.ID+"."+Domain())
-		if w.Code != http.StatusOK || w.Header().Get("Cross-Origin-Resource-Policy") != "cross-origin" || w.Header().Get("X-Frame-Options") != "" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors *") || strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'self'") {
-			t.Fatalf("public app behavior changed: %d %v", w.Code, w.Header())
-		}
-	}
-	if forwarded.Load() != 2 {
-		t.Fatalf("public requests upstream hits=%d; want two", forwarded.Load())
-	}
-}
-
 func TestPrivateAppPreservesStricterFramingOnWire(t *testing.T) {
 	for _, kind := range []string{"text/html", "application/json"} {
 		t.Run(kind, func(t *testing.T) {
@@ -286,60 +257,5 @@ func TestPrivateAppPreservesStricterFramingOnWire(t *testing.T) {
 				t.Fatalf("private CSP intersection = %q", policies)
 			}
 		})
-	}
-}
-
-func TestPrivateAppGateRechecksVisibilityAtAdmission(t *testing.T) {
-	f := newAppFixture(t)
-	app := createStaticApp(t, f)
-	forwarded := networkOrigin(t, f)
-	authenticate := ambientOwnerRequest(t, f, app, "network")
-	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
-		t.Fatal(err)
-	}
-	resolve := f.edge.config.Resolve
-	f.edge.config.Resolve = func(ctx context.Context, owner string) (netip.AddrPort, error) {
-		if _, err := f.origin.Handle(ctx, Request{Action: "private", ID: app.ID}); err != nil {
-			return netip.AddrPort{}, err
-		}
-		return resolve(ctx, owner)
-	}
-	r := httptest.NewRequest(http.MethodPost, URL(app.ID)+"/api", nil)
-	authenticate(r)
-	r.Header.Set("Sec-Fetch-Site", "same-site")
-	r.Header.Set("Origin", "https://zzzz.mesh.test")
-	w := httptest.NewRecorder()
-	f.edge.ServeHost(w, r, app.ID+"."+Domain())
-	if w.Code != http.StatusForbidden || forwarded.Load() != 0 {
-		t.Fatalf("visibility race bypassed private gate: status=%d, upstream hits=%d", w.Code, forwarded.Load())
-	}
-}
-
-func TestPublicCrossPageOwnerRequestIsRevokedWhenMadePrivate(t *testing.T) {
-	for _, credential := range []string{"network", "view cookie"} {
-		for _, site := range []string{"same-site", "same-origin"} {
-			t.Run(credential+"/"+site, func(t *testing.T) {
-				f := newAppFixture(t)
-				app := createStaticApp(t, f)
-				authenticate := ambientOwnerRequest(t, f, app, credential)
-				if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
-					t.Fatal(err)
-				}
-				r := httptest.NewRequest(http.MethodGet, URL(app.ID)+"/stream", nil)
-				authenticate(r)
-				r.Header.Set("Sec-Fetch-Site", site)
-				_, admitted, release, err := f.edge.admit(f.edge.authenticateNetwork(r), app.ID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer release()
-				if _, err := f.origin.Handle(context.Background(), Request{Action: "private", ID: app.ID}); err != nil {
-					t.Fatal(err)
-				}
-				if revoked := admitted.Context().Err() != nil; revoked != (site == "same-site") {
-					t.Fatalf("request revoked=%v for %s", revoked, site)
-				}
-			})
-		}
 	}
 }

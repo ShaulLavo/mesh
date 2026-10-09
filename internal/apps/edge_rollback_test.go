@@ -38,7 +38,7 @@ func (s *failingEdgeStore) ReserveAppNamesAndState(ctx context.Context, names []
 	return s.memoryAppStore.ReserveAppNamesAndState(ctx, names, owner, key, value)
 }
 
-func edgeStateBytes(t *testing.T, e *Edge) []byte {
+func registryStateBytes(t *testing.T, e *Registry) []byte {
 	t.Helper()
 	b, err := json.Marshal(e.state)
 	if err != nil {
@@ -51,12 +51,12 @@ func TestEdgeFailedAllocationLeavesNoPhantom(t *testing.T) {
 	f := newAppFixture(t)
 	store := &failingEdgeStore{memoryAppStore: f.edgeStore, fail: true}
 	f.edge.config.Store = store
-	before := edgeStateBytes(t, f.edge)
+	before := registryStateBytes(t, f.edge)
 	request := f.signed(t, Request{Action: "allocate", Kind: "static"})
 	if _, err := f.edge.Exchange(context.Background(), request); !errors.Is(err, errEdgeSave) {
 		t.Fatalf("allocation error = %v, want failed save", err)
 	}
-	if after := edgeStateBytes(t, f.edge); !reflect.DeepEqual(before, after) {
+	if after := registryStateBytes(t, f.edge); !reflect.DeepEqual(before, after) {
 		t.Errorf("failed allocation changed live state: apps=%d owners=%d", len(f.edge.state.Apps), len(f.edge.state.Owners))
 	}
 	if exists, err := store.AppNameExists(context.Background(), store.attemptedName); err != nil || exists {
@@ -66,7 +66,6 @@ func TestEdgeFailedAllocationLeavesNoPhantom(t *testing.T) {
 	f.now = f.now.Add(12 * time.Hour)
 	healthy := f.operation(t, Request{Action: "allocate", Kind: "static"}).App
 	f.operation(t, Request{Action: "activate", ID: healthy.ID})
-	f.operation(t, Request{Action: "public", ID: healthy.ID})
 	f.now = f.now.Add(13 * time.Hour)
 	if err := f.edge.Sweep(context.Background()); err != nil {
 		t.Errorf("sweep after phantom deadline: %v", err)
@@ -74,7 +73,7 @@ func TestEdgeFailedAllocationLeavesNoPhantom(t *testing.T) {
 	if app, exists, err := f.edge.lookup(context.Background(), healthy.ID, false); err != nil || !exists || app.Status != "active" {
 		t.Errorf("healthy lookup after phantom deadline: status=%s exists=%v error=%v", app.Status, exists, err)
 	}
-	_, _, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(healthy.ID), nil), healthy.ID)
+	_, _, release, err := f.edge.admit(ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(healthy.ID), nil)), healthy.ID)
 	if err != nil {
 		t.Errorf("healthy admission after phantom deadline: %v", err)
 	} else {
@@ -96,7 +95,6 @@ func TestEdgeSweepIsolatesUnfreeableApp(t *testing.T) {
 	f.now = f.now.Add(12 * time.Hour)
 	healthy := f.operation(t, Request{Action: "allocate", Kind: "static"}).App
 	f.operation(t, Request{Action: "activate", ID: healthy.ID})
-	f.operation(t, Request{Action: "public", ID: healthy.ID})
 	f.now = f.now.Add(12 * time.Hour)
 	err := f.edge.Sweep(context.Background())
 	if err == nil || !strings.Contains(err.Error(), bad.ID) {
@@ -113,7 +111,7 @@ func TestEdgeSweepIsolatesUnfreeableApp(t *testing.T) {
 	if app, exists, err := f.edge.lookup(context.Background(), healthy.ID, false); err != nil || !exists || app.Status != "active" {
 		t.Errorf("unfreeable app broke healthy lookup: status=%s exists=%v error=%v", app.Status, exists, err)
 	}
-	_, _, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(healthy.ID), nil), healthy.ID)
+	_, _, release, err := f.edge.admit(ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(healthy.ID), nil)), healthy.ID)
 	if err != nil {
 		t.Errorf("unfreeable app broke healthy admission: %v", err)
 	} else {
@@ -126,18 +124,17 @@ func TestEdgeSweepIsolatesUnfreeableApp(t *testing.T) {
 
 func TestEdgeFailedMutationPreservesStateAndRequests(t *testing.T) {
 	for _, surface := range []string{"exchange", "http"} {
-		for _, action := range []string{"private", "delete", "renew"} {
+		for _, action := range []string{"delete", "renew"} {
 			t.Run(surface+"/"+action, func(t *testing.T) {
 				f := newAppFixture(t)
 				app := f.operation(t, Request{Action: "allocate", Kind: "static"}).App
 				f.operation(t, Request{Action: "activate", ID: app.ID})
-				f.operation(t, Request{Action: "public", ID: app.ID})
-				_, admitted, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(app.ID), nil), app.ID)
+				_, admitted, release, err := f.edge.admit(ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(app.ID), nil)), app.ID)
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer release()
-				before := edgeStateBytes(t, f.edge)
+				before := registryStateBytes(t, f.edge)
 				store := &failingEdgeStore{memoryAppStore: f.edgeStore, fail: true}
 				f.edge.config.Store = store
 				f.now = f.now.Add(time.Hour)
@@ -157,7 +154,7 @@ func TestEdgeFailedMutationPreservesStateAndRequests(t *testing.T) {
 						t.Fatalf("mutation status = %d, want failed save", w.Code)
 					}
 				}
-				if after := edgeStateBytes(t, f.edge); !reflect.DeepEqual(before, after) {
+				if after := registryStateBytes(t, f.edge); !reflect.DeepEqual(before, after) {
 					t.Error("failed mutation changed live state")
 				}
 				if admitted.Context().Err() != nil {
@@ -200,8 +197,7 @@ func TestEdgeFailedExpirySaveLeavesLiveState(t *testing.T) {
 			f := newAppFixture(t)
 			app := f.operation(t, Request{Action: "allocate", Kind: "static"}).App
 			f.operation(t, Request{Action: "activate", ID: app.ID})
-			f.operation(t, Request{Action: "public", ID: app.ID})
-			_, admitted, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(app.ID), nil), app.ID)
+			_, admitted, release, err := f.edge.admit(ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(app.ID), nil)), app.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -209,9 +205,8 @@ func TestEdgeFailedExpirySaveLeavesLiveState(t *testing.T) {
 			f.now = f.now.Add(time.Hour)
 			healthy := f.operation(t, Request{Action: "allocate", Kind: "static"}).App
 			f.operation(t, Request{Action: "activate", ID: healthy.ID})
-			f.operation(t, Request{Action: "public", ID: healthy.ID})
 			f.now = app.ExpiresAt
-			before := edgeStateBytes(t, f.edge)
+			before := registryStateBytes(t, f.edge)
 			storedBefore, err := f.edgeStore.LoadAppState(context.Background(), "apps.edge")
 			if err != nil {
 				t.Fatal(err)
@@ -223,7 +218,7 @@ func TestEdgeFailedExpirySaveLeavesLiveState(t *testing.T) {
 			case "lookup":
 				_, _, err = f.edge.lookup(context.Background(), app.ID, false)
 			case "admission":
-				_, _, release, admitErr := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(healthy.ID), nil), healthy.ID)
+				_, _, release, admitErr := f.edge.admit(ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(healthy.ID), nil)), healthy.ID)
 				if release != nil {
 					release()
 				}
@@ -234,7 +229,7 @@ func TestEdgeFailedExpirySaveLeavesLiveState(t *testing.T) {
 			if !errors.Is(err, errEdgeSave) {
 				t.Errorf("expiry save error = %v, want failed save", err)
 			}
-			if after := edgeStateBytes(t, f.edge); !reflect.DeepEqual(before, after) {
+			if after := registryStateBytes(t, f.edge); !reflect.DeepEqual(before, after) {
 				t.Error("failed expiry save changed live state")
 			}
 			storedAfter, err := f.edgeStore.LoadAppState(context.Background(), "apps.edge")

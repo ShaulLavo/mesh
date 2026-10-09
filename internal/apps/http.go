@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/shaul/mesh/internal/apppill"
 	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/webauth"
@@ -47,7 +46,7 @@ func downloadAllowed(r *http.Request) bool {
 	return origin == "" || origin == managementOrigin(r)
 }
 
-func (e *Edge) refuseView(w http.ResponseWriter, r *http.Request, id string) {
+func (e *Registry) refuseView(w http.ResponseWriter, r *http.Request, id string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
@@ -68,9 +67,9 @@ func (e *Edge) refuseView(w http.ResponseWriter, r *http.Request, id string) {
 	}
 }
 
-func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bool {
+func (e *Registry) ServeHost(w http.ResponseWriter, r *http.Request, name string) bool {
 	r = e.authenticateNetwork(r)
-	if label, _, accepted := domainpolicy.Label(name, false); accepted && label == "apps" {
+	if label, _, accepted := domainpolicy.Label(name, false); accepted && label == managementLabel {
 		e.management(w, r)
 		return true
 	}
@@ -119,12 +118,10 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	privateAtLookup := app.Visibility == "private"
-	if privateAtLookup {
-		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
-		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
-		w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
-	}
+	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
+
 	if ticket := r.URL.Query().Get("mesh_view"); ticket != "" {
 		if err := e.auth.ConsumeView(r.Context(), w, r, ticket, id); err != nil {
 			http.Error(w, "View link expired. Open it again from Mesh.", http.StatusForbidden)
@@ -137,17 +134,17 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 		return true
 	}
 	viewer, _ := e.auth.ViewSession(r.Context(), r, id)
-	if app.Visibility == "private" {
-		owner := networkOwns(r, app.Owner)
-		if !owner {
-			owner = viewer.Owner == app.Owner
-		}
-		if !owner || !serve.AmbientOwnerAllowed(r, appOrigin(r, id), serve.RequireWebSocketOrigin) {
-			e.refuseView(w, r, id)
-			return true
-		}
+	owner := networkOwns(r, app.Owner)
+	if !owner {
+		owner = viewer.Owner == app.Owner
 	}
-	if apppill.Asset(w, r) {
+	if !owner || !serve.AmbientOwnerAllowed(r, appOrigin(r, id), serve.RequireWebSocketOrigin) {
+		e.refuseView(w, r, id)
+		return true
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/.mesh-app/") {
+		http.NotFound(w, r)
 		return true
 	}
 	if !app.Ready {
@@ -204,8 +201,7 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 			request.URL.RawPath = "/.mesh-app/origin/" + id + request.URL.RawPath
 		}
 		request.Host = name
-		request.Header.Set("Accept-Encoding", "identity, gzip;q=0.8, br;q=0.8")
-		apppill.StripRequestCookies(request)
+		stripRequestCookies(request)
 		request.Header.Set("X-Mesh-App-Admission", base64.RawURLEncoding.EncodeToString(encoded))
 		request.Header.Set("X-Forwarded-Proto", "https")
 		request.Header.Set("X-Forwarded-Host", name)
@@ -226,13 +222,13 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 	}
 	proxy.Transport = e.transports.forEndpoint(endpoint)
 	proxy.ModifyResponse = func(response *http.Response) error {
-		apppill.StripCookies(response.Header)
-		if app.Visibility == "private" {
-			response.Header.Set("Cross-Origin-Resource-Policy", "same-origin")
-			if !strings.EqualFold(strings.TrimSpace(response.Header.Get("X-Frame-Options")), "DENY") {
-				response.Header.Set("X-Frame-Options", "SAMEORIGIN")
-			}
+		stripCookies(response.Header)
+		response.Header.Set("Cross-Origin-Resource-Policy", "same-origin")
+		response.Header.Add("Content-Security-Policy", "frame-ancestors 'self'")
+		if !strings.EqualFold(strings.TrimSpace(response.Header.Get("X-Frame-Options")), "DENY") {
+			response.Header.Set("X-Frame-Options", "SAMEORIGIN")
 		}
+
 		if response.StatusCode == http.StatusSwitchingProtocols {
 			if rw, ok := response.Body.(io.ReadWriteCloser); ok {
 				stream := e.watchStream(app, rw)
@@ -246,23 +242,20 @@ func (e *Edge) ServeHost(w http.ResponseWriter, r *http.Request, name string) bo
 				}
 			}}
 		}
-		viewer, _ := e.auth.ViewSession(r.Context(), r, id)
-		return apppill.Inject(response, apppill.Config{AppID: id, AppHost: name, ManagementOrigin: managementOrigin(r), Private: app.Visibility == "private", Owns: networkOwns(r, app.Owner) || viewer.Owner == app.Owner})
+		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		if app.Visibility == "private" {
-			w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
-			w.Header().Set("X-Frame-Options", "SAMEORIGIN")
-			w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
-		}
+		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'self'")
+
 		http.Error(w, "App origin is unavailable.", http.StatusServiceUnavailable)
 	}
-	if privateAtLookup {
-		// Duplicate CORP values invalidate the browser's resource policy.
-		w.Header().Del("Cross-Origin-Resource-Policy")
-		w.Header().Del("X-Frame-Options")
-		w.Header().Del("Content-Security-Policy")
-	}
+	// Duplicate CORP values invalidate the browser's resource policy.
+	w.Header().Del("Cross-Origin-Resource-Policy")
+	w.Header().Del("X-Frame-Options")
+	w.Header().Del("Content-Security-Policy")
+
 	proxy.ServeHTTP(w, r)
 	return true
 }
@@ -358,7 +351,7 @@ func (p *wsActivity) feed(b []byte) bool {
 
 type activeStream struct {
 	io.ReadWriteCloser
-	edge               *Edge
+	edge               *Registry
 	app                Record
 	incoming, outgoing wsActivity
 	once               sync.Once
@@ -367,7 +360,7 @@ type activeStream struct {
 	mu                 sync.Mutex
 }
 
-func (e *Edge) watchStream(app Record, rw io.ReadWriteCloser) *activeStream {
+func (e *Registry) watchStream(app Record, rw io.ReadWriteCloser) *activeStream {
 	stream := &activeStream{ReadWriteCloser: rw, edge: e, app: app, done: make(chan struct{})}
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -415,7 +408,7 @@ func (s *activeStream) Close() error {
 	return err
 }
 
-var page = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh temporary apps</title><style>body{font:16px system-ui;background:#101214;color:#eef0f2;margin:0;padding:24px}main{max-width:680px;margin:auto}a{color:#9ddcff}button,a.button{border:0;border-radius:999px;background:#e9edf2;color:#101214;padding:10px 16px;cursor:pointer;display:inline-block;text-decoration:none}code{font-size:16px;overflow-wrap:anywhere}.pill{display:flex;align-items:center;gap:10px;padding:8px;flex-wrap:wrap}small{color:#bcc4cb}form{display:inline}body.frame{padding:0;border-radius:999px}.error{color:#ffbab4}</style></head><body class="{{if .Frame}}frame{{end}}"><main>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Code}}<h1>Pair this browser</h1><p>Approve from the Mesh host that owns the app:</p><code>mesh app browser approve HOST {{.Code}}</code><p>Code: <strong>{{.Code}}</strong></p><p>Expires in 10 minutes.</p><p id="pair-status" role="status">Waiting for approval. This page will continue automatically.</p><button id="check-approval" type="button">Check now</button><p><a id="restart-pair" href="/pair" hidden>Get a new code</a></p>{{else if .PairStart}}<h1>Pair this browser</h1><p>Start pairing, then approve the code on the Mesh host that owns your app.</p><form method="post" action="/pair"><input type="hidden" name="return" value="{{.Return}}"><button>Start pairing</button></form>{{else if .Frame}}<div class="pill"><strong>Mesh</strong><small>{{.App.Visibility}}</small><a href="{{.URL}}" target="_blank" rel="noopener">Share</a>{{if .Owns}}<a href="/confirm?id={{.App.ID}}&action={{.Toggle}}" target="_blank" rel="noopener">Make {{.Toggle}}</a><a href="/confirm?id={{.App.ID}}&action=renew" target="_blank" rel="noopener">Renew</a><a href="/download?id={{.App.ID}}" target="_blank" rel="noopener">Download</a><a href="/confirm?id={{.App.ID}}&action=delete" target="_blank" rel="noopener">Delete</a>{{else}}<a href="/pair" target="_blank" rel="noopener">Pair browser</a>{{end}}</div>{{else if .Confirm}}<h1>{{.Confirm}} {{.App.ID}}</h1><p>Owner controls for <a href="{{.URL}}">{{.URL}}</a>.</p><form id="confirm-form" method="post" action="/action"><input type="hidden" name="id" value="{{.App.ID}}"><input type="hidden" name="action" value="{{.Confirm}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="return" value="{{.Return}}">{{if or (eq .Confirm "public") (eq .Confirm "delete")}}<p><label>Type {{.App.ID}} to confirm <input id="confirm-id" name="confirmation" autocomplete="off" required></label></p>{{end}}<p><small>Read the change, then move the pointer or use the keyboard to enable confirmation.</small></p><button id="confirm-action" disabled>Confirm {{.Confirm}}</button></form>{{else}}<h1>Temporary apps</h1><p>Apps expire after 24 hours without app traffic. Expiry deletes their managed source, data and server.</p>{{range .Apps}}<p><a href="/view?id={{.ID}}">https://{{.ID}}.{{$.Domain}}</a> · {{.Visibility}} · {{.Status}}<br><small>Expires {{.ExpiresAt}}</small></p>{{end}}<a href="/pair">Pair another owner</a>{{end}}</main>{{if .Frame}}<script>parent.postMessage({type:'mesh-app-status',visibility:{{.App.Visibility}},owns:{{.Owns}},deadline:{{.App.ExpiresAt.Format "2006-01-02T15:04:05Z07:00"}}},{{.Parent}})</script>{{end}}{{if .Code}}<script>
+var page = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh temporary apps</title><style>body{font:16px system-ui;background:#101214;color:#eef0f2;margin:0;padding:24px}main{max-width:680px;margin:auto}a{color:#9ddcff}button,a.button{border:0;border-radius:999px;background:#e9edf2;color:#101214;padding:10px 16px;cursor:pointer;display:inline-block;text-decoration:none}code{font-size:16px;overflow-wrap:anywhere}small{color:#bcc4cb}form{display:inline}.error{color:#ffbab4}</style></head><body><main>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Code}}<h1>Pair this browser</h1><p>Approve from the Mesh host that owns the app:</p><code>mesh app browser approve HOST {{.Code}}</code><p>Code: <strong>{{.Code}}</strong></p><p>Expires in 10 minutes.</p><p id="pair-status" role="status">Waiting for approval. This page will continue automatically.</p><button id="check-approval" type="button">Check now</button><p><a id="restart-pair" href="/pair" hidden>Get a new code</a></p>{{else if .PairStart}}<h1>Pair this browser</h1><p>Start pairing, then approve the code on the Mesh host that owns your app.</p><form method="post" action="/pair"><input type="hidden" name="return" value="{{.Return}}"><button>Start pairing</button></form>{{else if .Confirm}}<h1>{{.Confirm}} {{.App.ID}}</h1><p>Owner controls for <a href="{{.URL}}">{{.URL}}</a>.</p><form id="confirm-form" method="post" action="/action"><input type="hidden" name="id" value="{{.App.ID}}"><input type="hidden" name="action" value="{{.Confirm}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="return" value="{{.Return}}">{{if eq .Confirm "delete"}}<p><label>Type {{.App.ID}} to confirm <input id="confirm-id" name="confirmation" autocomplete="off" required></label></p>{{end}}<p><small>Read the change, then move the pointer or use the keyboard to enable confirmation.</small></p><button id="confirm-action" disabled>Confirm {{.Confirm}}</button></form>{{else}}<h1>Temporary apps</h1><p>Apps expire after 24 hours without app traffic. Expiry deletes their managed source, data and server.</p>{{range .Apps}}<p><a href="/view?id={{.ID}}">https://{{.ID}}.{{$.Domain}}</a> · {{.Status}}<br><small>Expires {{.ExpiresAt}}</small>{{if eq .Status "active"}}<br><a href="/download?id={{.ID}}">Download source</a> · <a href="/confirm?id={{.ID}}&action=renew">Renew</a> · <a href="/confirm?id={{.ID}}&action=delete">Delete</a>{{end}}</p>{{end}}<a href="/pair">Pair another owner</a>{{end}}</main>{{if .Code}}<script>
 const checkButton = document.getElementById('check-approval');
 const status = document.getElementById('pair-status');
 const expiresAt = performance.now() + {{.PairLifetimeMS}};
@@ -493,12 +486,12 @@ resetActivation();
 </script>{{end}}</body></html>`))
 
 type pageData struct {
-	Domain                                                  string
-	Error, Code, Return, URL, Toggle, Confirm, CSRF, Parent string
-	Frame, Owns, PairStart                                  bool
-	PairLifetimeMS                                          int64
-	App                                                     Record
-	Apps                                                    []Record
+	Domain                                  string
+	Error, Code, Return, URL, Confirm, CSRF string
+	PairStart                               bool
+	PairLifetimeMS                          int64
+	App                                     Record
+	Apps                                    []Record
 }
 
 func render(w http.ResponseWriter, data pageData) {
@@ -506,7 +499,13 @@ func render(w http.ResponseWriter, data pageData) {
 	w.Header().Set("Cache-Control", "no-store")
 	_ = page.Execute(w, data)
 }
-func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
+func (e *Registry) management(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/", "/pair", "/pair/status", "/action", "/view", "/download", "/confirm":
+	default:
+		http.NotFound(w, r)
+		return
+	}
 	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
@@ -518,10 +517,7 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 		e.pairPage(w, r)
 		return
 	}
-	if r.URL.Path == "/frame" {
-		e.frame(w, r)
-		return
-	}
+
 	if _, cookieErr := r.Cookie(webauth.PairCookie); cookieErr == nil {
 		if _, promoteErr := e.auth.Promote(r.Context(), w, r); promoteErr == nil {
 			http.Redirect(w, r, managementOrigin(r)+managementReturn(r), http.StatusSeeOther) //nolint:gosec // managementOrigin is configured; managementReturn permits only fixed local paths.
@@ -567,7 +563,7 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			destination := appReturn(r, id, r.URL.Query().Get(returnQueryKey))
-			if app.Visibility == "public" || networkOwns(r, app.Owner) {
+			if networkOwns(r, app.Owner) {
 				http.Redirect(w, r, destination, http.StatusSeeOther) //nolint:gosec // appReturn fixes the destination to this registry-owned app host.
 				return
 			}
@@ -596,7 +592,7 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.URL.Path == "/confirm" {
 			action := r.URL.Query().Get("action")
-			if action != "public" && action != "private" && action != "delete" && action != "renew" {
+			if action != "delete" && action != "renew" {
 				http.NotFound(w, r)
 				return
 			}
@@ -622,7 +618,7 @@ func (e *Edge) management(w http.ResponseWriter, r *http.Request) {
 	_, domain, _ := domainpolicy.Label(host, false)
 	render(w, pageData{Apps: apps, Domain: domain})
 }
-func (e *Edge) pairPage(w http.ResponseWriter, r *http.Request) {
+func (e *Registry) pairPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -645,7 +641,7 @@ func (e *Edge) pairPage(w http.ResponseWriter, r *http.Request) {
 	render(w, pageData{Code: pair.Code, Return: destination, PairLifetimeMS: max(0, pair.ExpiresAt.Sub(e.config.Now()).Milliseconds())})
 }
 
-func (e *Edge) startPairing(w http.ResponseWriter, r *http.Request) {
+func (e *Registry) startPairing(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Origin") != managementOrigin(r) {
 		http.Error(w, "Start pairing from Mesh", http.StatusForbidden)
 		return
@@ -678,7 +674,7 @@ func pairingReturn(value string) string {
 	return managementReturn(&http.Request{URL: target})
 }
 
-func (e *Edge) pairStatus(w http.ResponseWriter, r *http.Request) {
+func (e *Registry) pairStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -700,31 +696,7 @@ func (e *Edge) pairStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	http.Error(w, "Approval check unavailable", http.StatusServiceUnavailable)
 }
-func (e *Edge) frame(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		http.NotFound(w, r)
-		return
-	}
-	id := r.URL.Query().Get("id")
-	app, exists, err := e.lookup(r.Context(), id, false)
-	if err != nil || !exists {
-		http.NotFound(w, r)
-		return
-	}
-	session, _ := e.browser(r)
-	owns := session.Owns(app.Owner)
-	if app.Visibility == "private" && !owns {
-		http.NotFound(w, r)
-		return
-	}
-	toggle := "private"
-	if app.Visibility == "private" {
-		toggle = "public"
-	}
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors "+appOrigin(r, id))
-	render(w, pageData{Frame: true, App: app, Owns: owns, URL: appOrigin(r, id), Toggle: toggle, Parent: appOrigin(r, id)})
-}
-func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
+func (e *Registry) mutate(w http.ResponseWriter, r *http.Request) {
 	session, err := e.browser(r)
 	if err == nil {
 		err = webauth.ValidateSessionMutation(r, managementOrigin(r), session)
@@ -739,11 +711,11 @@ func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.FormValue("id")
 	action := r.FormValue("action")
-	if action != "public" && action != "private" && action != "delete" && action != "renew" {
+	if action != "delete" && action != "renew" {
 		http.Error(w, "Invalid action", http.StatusBadRequest)
 		return
 	}
-	if (action == "public" || action == "delete") && r.PostForm.Get("confirmation") != id {
+	if action == "delete" && r.PostForm.Get("confirmation") != id {
 		http.Error(w, "Type the app ID to confirm this change", http.StatusBadRequest)
 		return
 	}
@@ -781,7 +753,7 @@ func (e *Edge) mutate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, destination, http.StatusSeeOther)
 }
 
-func (e *Edge) downloadSource(w http.ResponseWriter, r *http.Request, app Record) {
+func (e *Registry) downloadSource(w http.ResponseWriter, r *http.Request, app Record) {
 	if app.Status != "active" {
 		http.Error(w, "App expired", http.StatusGone)
 		return
@@ -878,7 +850,7 @@ func appReturn(r *http.Request, id, value string) string {
 	return target.String()
 }
 
-func (e *Edge) acquire(r *http.Request, app Record) (func(), error) {
+func (e *Registry) acquire(r *http.Request, app Record) (func(), error) {
 	release, err := e.tryAcquire(r, app.Owner)
 	if !errors.Is(err, ErrCapacity) {
 		return release, err
@@ -917,7 +889,7 @@ func (e *Edge) acquire(r *http.Request, app Record) (func(), error) {
 	return nil, ErrCapacity
 }
 
-func (e *Edge) tryAcquire(r *http.Request, owner string) (func(), error) {
+func (e *Registry) tryAcquire(r *http.Request, owner string) (func(), error) {
 	if err := r.Context().Err(); err != nil {
 		return nil, fmt.Errorf("app: capacity acquisition canceled: %w", err)
 	}
@@ -978,7 +950,7 @@ func viewManagerOrigin(r *http.Request) string {
 	return managementOrigin(r)
 }
 
-func (e *Edge) viewHostReady(host string) bool {
+func (e *Registry) viewHostReady(host string) bool {
 	_, _, accepted := domainpolicy.Label(host, false)
 	return accepted && e.config.ViewHostReady != nil && e.config.ViewHostReady(host)
 }

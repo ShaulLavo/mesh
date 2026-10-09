@@ -10,7 +10,6 @@ const assets = new URL('internal/apppill/assets/', root);
 const script = await readFile(new URL('pill.js', assets));
 const stylesheet = await readFile(new URL('pill.css', assets));
 let fixtures;
-let frameLoads = 0;
 const server = createServer((request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   if (request.url === '/.mesh-app/pill.js') {
@@ -19,10 +18,6 @@ const server = createServer((request, response) => {
   } else if (request.url === '/.mesh-app/pill.css') {
     response.setHeader('Content-Type', 'text/css');
     response.end(stylesheet);
-  } else if (request.url.startsWith('/frame?')) {
-    frameLoads++;
-    response.setHeader('Content-Type', 'text/html');
-    response.end(`<script>parent.postMessage({type:'mesh-app-status',visibility:'public',owns:true},'http://127.0.0.1:${server.address().port}')</script>`);
   } else {
     response.setHeader('Content-Type', 'text/html; charset=utf-8');
     response.end(fixtures[request.url.slice(1)] ?? 'not found');
@@ -58,13 +53,19 @@ try {
   const page = await browser.newPage();
   page.setDefaultTimeout(5000);
   await page.goto(`${origin}/hoisted-csp`);
-  const pill = page.locator('mesh-app-pill');
-  await pill.getByRole('button', { name: /^Open Mesh controls/ }).click();
-  await pill.getByRole('link', { name: 'Make private', exact: true }).waitFor();
-  assert.equal(frameLoads, 1, 'Hoisted CSP must allow the actual management frame to load');
+  assert.equal(await page.locator('floating-pill').count(), 0, 'An archived injected loader stays dormant');
+  await page.evaluate(() => FloatingPill.mountFloatingPill({
+    stylesheetHref: '/.mesh-app/pill.css',
+    actions: [{ id: 'example', kind: 'button', label: 'Example action', onSelect: () => { window.exampleSelected = true; } }],
+  }));
+  const pill = page.locator('floating-pill');
+  await pill.getByRole('button', { name: /^Open floating controls/ }).click();
+  await pill.getByRole('button', { name: 'Example action', exact: true }).click();
+  assert.equal(await page.evaluate(() => window.exampleSelected), true);
+  assert.equal(await page.locator('iframe').count(), 0, 'The generic control needs no management frame');
   assert.equal(await page.locator('script[data-mesh-app]').evaluate(node => node.parentElement.tagName), 'HEAD');
   await page.close();
-  console.log('Chromium: CSP meta after </head> permits management frame and owner controls');
+  console.log('Chromium: CSP meta after </head> permits explicit generic control mounting');
 } finally {
   if (browser) await browser.close();
   await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

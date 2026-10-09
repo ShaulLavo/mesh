@@ -2,6 +2,11 @@
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 set -uo pipefail
 export PYTHONDONTWRITEBYTECODE=1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/private_app_fixture.sh" || exit 1
+if [[ $(uname -s) != Linux ]]; then
+  echo "SKIP: private app PROXY ingress requires Linux socket UID authentication"
+  exit 0
+fi
 
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/au.XXXXXX")
@@ -63,47 +68,7 @@ cat "$ORIGIN_STATE/identity.key.pub" >"$EDGE_STATE/authorized_keys"
 cat "$EDGE_STATE/identity.key.pub" >"$ORIGIN_STATE/authorized_keys"
 chmod 0600 "$EDGE_STATE/authorized_keys" "$ORIGIN_STATE/authorized_keys"
 
-python3 - "$TEST_ROOT" "$$" <<'PY' || fail 'fixture configuration'
-import base64, json, os, socket, sys
-root, pid = sys.argv[1:]
-
-def identity(state):
-    with open(os.path.join(root, state, 'identity.key.pub')) as source:
-        blob = base64.b64decode(source.read().split()[1])
-    return base64.urlsafe_b64encode(blob[-32:]).decode().rstrip('=')
-
-held, ports = [], []
-base = 25000 + int(pid) % 700 * 32
-for offset in range(700 * 32):
-    port = 25000 + (base - 25000 + offset) % (700 * 32)
-    listener = socket.socket()
-    try:
-        listener.bind(('127.0.0.1', port))
-    except OSError:
-        listener.close()
-        continue
-    held.append(listener)
-    ports.append(port)
-    if len(ports) == 3:
-        break
-if len(ports) != 3:
-    raise SystemExit('no fixture ports')
-control, proxy, backend = ports
-with open(os.path.join(root, 'ports'), 'w') as output:
-    output.write('\n'.join(map(str, ports)) + '\n')
-nodes = {'e': ('edge.app.test', '127.0.0.1'), 'o': ('origin.app.test', '127.0.0.21')}
-for key, (name, address) in nodes.items():
-    peers = {peer: {'DNSName': peer_name + '.', 'TailscaleIPs': [peer_address], 'Online': True}
-             for peer, (peer_name, peer_address) in nodes.items() if peer != key}
-    status = {'BackendState': 'Running', 'Self': {'DNSName': name + '.', 'TailscaleIPs': [address], 'Online': True}, 'Peer': peers}
-    with open(os.path.join(root, key + '-status.json'), 'w') as output:
-        json.dump(status, output)
-origin = {'identity': identity('o'), 'displayAlias': 'app origin', 'tailscaleName': nodes['o'][0], 'controlPort': control, 'websocketPath': '/mesh'}
-with open(os.path.join(root, 'edge.json'), 'w') as output:
-    json.dump({'mode': 'proxy', 'listenAddress': f'127.0.0.1:{proxy}', 'origins': [origin]}, output)
-with open(os.path.join(root, 'target.json'), 'w') as output:
-    json.dump({'identity': identity('e'), 'tailscaleName': nodes['e'][0], 'controlPort': control, 'websocketPath': '/mesh'}, output)
-PY
+private_app_fixture configure "$TEST_ROOT" "$$" || fail 'fixture configuration'
 mapfile -t PORTS <"$TEST_ROOT/ports"
 CONTROL_PORT=${PORTS[0]}
 PROXY_PORT=${PORTS[1]}
@@ -131,16 +96,12 @@ start_edge() {
     "$MESH_APP" daemon --tailnet-port "$CONTROL_PORT" --edge "$TEST_ROOT/edge.json" >>"$TEST_ROOT/edge.log" 2>&1 &
   EDGE_PID=$!
   wait_for_socket "$EDGE_PID" "$EDGE_STATE/daemon.sock" || fail 'edge startup'
+  private_app_fixture install "$TEST_ROOT" || fail 'install private app HTTPS certificate'
 }
 
 start_edge
 start_origin
 
-app_curl() {
-  curl --noproxy '*' --silent --show-error --max-time 3 --header "Host: $APP_ID.mesh.test" \
-    --header 'X-Forwarded-For: 203.0.113.77' --header 'X-Forwarded-Proto: https' "$@"
-}
-APP_ENDPOINT="http://127.0.0.1:$PROXY_PORT"
 json_field() {
   python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$@"
 }
@@ -165,7 +126,8 @@ workspaces() {
 
 MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app create local "$SOURCE" --run './server' --port "$BACKEND_PORT" --json >"$TEST_ROOT/create.json" || fail 'create HTTP app'
 APP_ID=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["app"]["id"])' "$TEST_ROOT/create.json") || fail 'creation result'
-MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app public local "$APP_ID" --json >/dev/null || fail 'publish app'
+APP_ENDPOINT="$(app_endpoint)"
+private_app_denies_outsiders || fail 'private app owner authorization'
 app_curl --fail "$APP_ENDPOINT/api" >"$TEST_ROOT/before.json" || fail 'app before update'
 OLD_PID=$(json_field "$TEST_ROOT/before.json" pid)
 OLD_CWD=$(json_field "$TEST_ROOT/before.json" cwd)

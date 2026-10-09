@@ -80,7 +80,7 @@ func TestPrivateServicePortsAndDiagnostics(t *testing.T) {
 
 func TestPrivateAppPresentationWithholdsPayloads(t *testing.T) {
 	mask := privacy.New()
-	app := appspkg.Record{ID: "7k3d", Owner: "private-owner", Status: "active", Visibility: "private"}
+	app := appspkg.Record{ID: "7k3d", Owner: "private-owner", Status: "active"}
 	result := appspkg.Result{App: &app, Runtime: &appspkg.RuntimeInfo{Problem: "unrecognizable-secret", Failure: &appspkg.SetupFailure{Error: "secret-error", Output: "secret-build-output"}}}
 	var output bytes.Buffer
 	if err := writeAppResult(&output, "private-machine", result, false, mask); err != nil {
@@ -150,11 +150,11 @@ func TestPrivateAppJSONMutationUsesOriginalControlData(t *testing.T) {
 	called := false
 	output, _, err := executeCommand(t, Dependencies{AppRequest: func(_ context.Context, host string, request appspkg.Request) (appspkg.Result, error) {
 		called = true
-		if host != "private-machine" || request.ID != "7k3d" || request.Action != "public" {
+		if host != "private-machine" || request.ID != "7k3d" || request.Action != "renew" {
 			t.Fatalf("masked control data: %s %+v", host, request)
 		}
-		return appspkg.Result{App: &appspkg.Record{ID: "7k3d", Owner: "private-owner", Status: "active", Visibility: "public"}}, nil
-	}}, "--privacy", "app", "public", "private-machine", "7k3d", "--json")
+		return appspkg.Result{App: &appspkg.Record{ID: "7k3d", Owner: "private-owner", Status: "active"}}, nil
+	}}, "--privacy", "app", "renew", "private-machine", "7k3d", "--json")
 	if err != nil || !called {
 		t.Fatalf("mutation = %v, called %t", err, called)
 	}
@@ -168,7 +168,7 @@ func TestPrivateAppJSONMutationUsesOriginalControlData(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.App.Status != "active" || result.App.Visibility != "public" || result.URL != privacy.New().Value("url", "https://7k3d.mesh.test") {
+	if result.App.Status != "active" || result.URL != privacy.New().Value("url", "https://7k3d.mesh.test") {
 		t.Fatalf("result shape changed: %s", output)
 	}
 }

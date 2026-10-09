@@ -7,7 +7,11 @@ Tailnet. Private machine names use `<host>.mesh.sprockt.dev`; configured short
 service names, such as `fregat.sprockt.dev`, serve at the hostname root.
 The owner’s private services are `https://fregat.sprockt.dev/`,
 `https://ai.sprockt.dev/` and `https://comfy.sprockt.dev/`. Their old machine-path
-aliases are retired. [Temporary apps](06-temporary-apps.md) remain private.
+aliases are retired.
+
+The Approved [temporary-app plan](06-temporary-apps.md) adds a separate
+`mesh app` capability for private disposable websites. D30 narrows
+the older D22 boundary without changing ordinary serving behavior.
 
 Public temporary apps, public serving and VPS-edge reverse tunnels are removed.
 Public hosting belongs to Brine on `shaulavo.dev`. Public-edge sections below

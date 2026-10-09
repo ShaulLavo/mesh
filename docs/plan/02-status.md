@@ -5,7 +5,7 @@
 > belongs to Brine on `shaulavo.dev`. Public-edge/T13/T18 descriptions and checks
 > below record former shipped behavior, not current supported features.
 
-Updated 2026-09-30 for the Approved temporary-app implementation. Existing completion
+Updated 2026-10-09 for private temporary apps and dormant reusable widget source. Existing completion
 and verification dates remain unchanged.
 
 ## Done
@@ -245,8 +245,8 @@ task list, which is how step 6 stayed unbuilt while every task was green.
 
 Approved 2026-10-08: [session contract and deployment boundaries](11-session-contract-and-boundaries.md) owns the remaining Mesh product, lifecycle, terminal-fidelity, reconnect and authority discussions transferred by Plan 336 Track H. [Plan 07's historical fixture failures](07-quality-and-security-wave.md#historical-fixture-failures) retain unresolved recurrence investigations. [Plan 09's transport comparison baseline](09-residual-hotspots.md#transport-comparison-baseline) owns comparative performance evidence. [Fregat Plan 296](https://github.com/ShaulLavo/fregat/blob/main/plans/296-mesh-update-recovery.md#remaining-helper-readiness-and-idle-cpu) owns helper readiness and Pi CPU verification. Tracker closure transfers execution ownership; it does not establish a causal fix.
 
-Approved: [temporary apps with short URLs](06-temporary-apps.md) is implemented
-for PR review. [T29](../tasks/T29-temporary-apps.md) records architecture, build and
+Approved: [private temporary apps with short URLs](06-temporary-apps.md) remove
+sharing APIs, public app dispatch and injected widgets. [T29](../tasks/T29-temporary-apps.md) records architecture, build and
 validation. Production rollout and actual Safari-device verification remain
 pending deployment. D30 records the authorized scope change from D22.
 

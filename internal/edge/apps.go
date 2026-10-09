@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/netip"
-	"sync"
 
 	"github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/protocol"
@@ -17,60 +15,9 @@ func ValidateAppOriginEndpoint(endpoint netip.AddrPort, controlPort uint16) erro
 	return validateOriginEndpoint(endpoint, controlPort)
 }
 
-// AppClientIP returns only the address validated by the public entrance.
-func (r *Registry) AppClientIP(request *http.Request) netip.Addr {
-	address, _ := request.Context().Value(proxyClientIPKey{}).(netip.Addr)
-	return address
-}
-
-func (r *Registry) AcquireApp(request *http.Request, owner string) (func(), error) {
-	if request.ContentLength > r.requestBodyLimit {
-		return nil, errors.New("edge: app request body too large")
-	}
-	if _, err := parseIdentity("app owner", owner); err != nil {
-		return nil, err
-	}
-	client := r.AppClientIP(request)
-	if !client.IsValid() {
-		return nil, errors.New("edge: app client address is unvalidated")
-	}
-	if !r.clients.Acquire(client) {
-		return nil, fmt.Errorf("edge: app client concurrency limit exceeded: %w", apps.ErrCapacity)
-	}
-	select {
-	case r.global <- struct{}{}:
-	default:
-		r.clients.Release(client)
-		return nil, fmt.Errorf("edge: app global concurrency limit exceeded: %w", apps.ErrCapacity)
-	}
-	r.budgetsMu.Lock()
-	budget := r.budgets[owner]
-	if budget == nil {
-		budget = make(chan struct{}, maximumConcurrentPerOrigin)
-		r.budgets[owner] = budget
-	}
-	r.budgetsMu.Unlock()
-	select {
-	case budget <- struct{}{}:
-	default:
-		<-r.global
-		r.clients.Release(client)
-		return nil, fmt.Errorf("edge: app origin concurrency limit exceeded: %w", apps.ErrCapacity)
-	}
-	request.Body = &inboundRequestBody{ReadCloser: http.MaxBytesReader(nil, request.Body, r.requestBodyLimit)}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			<-budget
-			<-r.global
-			r.clients.Release(client)
-		})
-	}, nil
-}
-
-// AppExchange sends a pre-signed operation through the configured pinned edge.
+// AppRegistryExchange sends a pre-signed operation through the configured pinned edge.
 // This method never signs a caller's operation.
-func (p *Publisher) AppExchange(ctx context.Context, signed apps.Signed) (apps.Signed, error) {
+func (p *Publisher) AppRegistryExchange(ctx context.Context, signed apps.Signed) (apps.Signed, error) {
 	if ctx == nil {
 		return apps.Signed{}, errors.New("edge: nil app context")
 	}
@@ -111,14 +58,14 @@ func (p *Publisher) AppExchange(ctx context.Context, signed apps.Signed) (apps.S
 	if err != nil {
 		return apps.Signed{}, err
 	}
-	response, err := registrationRoundTrip(operationCtx, connection, protocol.Control{Type: protocol.TypeAppEdge, RequestID: requestID, App: payload})
+	response, err := registrationRoundTrip(operationCtx, connection, protocol.Control{Type: protocol.TypeAppRegistry, RequestID: requestID, App: payload})
 	if err != nil {
 		return apps.Signed{}, err
 	}
 	if response.Type == protocol.TypeError {
 		return apps.Signed{}, fmt.Errorf("edge: app operation rejected: %s", response.Message)
 	}
-	if response.Type != protocol.TypeAppEdge {
+	if response.Type != protocol.TypeAppRegistry {
 		return apps.Signed{}, errors.New("edge: invalid app exchange response")
 	}
 	var reply apps.Signed

@@ -36,8 +36,8 @@ func TestAdmissionCacheRejectsStaleTimeAfterUnrelatedExpiry(t *testing.T) {
 
 func TestOriginAdmissionClockRollbackDoesNotReopenReplay(t *testing.T) {
 	f := newAppFixture(t)
-	app := createAdmissionApp(t, f, true)
-	other := createAdmissionApp(t, f, true)
+	app := createAdmissionApp(t, f)
+	other := createAdmissionApp(t, f)
 	deadline := f.now.Add(30 * time.Second)
 	r := signedAdmissionRequest(t, f, app, deadline, false)
 	if w := serveAdmission(t, f.origin, r); w.Code != http.StatusOK {
@@ -69,7 +69,7 @@ func TestEdgeAdmissionUsesOneSigningTime(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			f := newAppFixture(t)
-			app := createAdmissionApp(t, f, true)
+			app := createAdmissionApp(t, f)
 			forwarded := make(chan Signed, 1)
 			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				encoded, err := base64.RawURLEncoding.DecodeString(r.Header.Get("X-Mesh-App-Admission"))

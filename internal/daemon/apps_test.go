@@ -57,10 +57,10 @@ func TestAppOwnerControlRequiresUnixContextBeforeDecodingOrSigning(t *testing.T)
 
 func TestAppEdgeControlAcceptsSignedTransportWithoutOwnerRPC(t *testing.T) {
 	public := &testAppEdge{}
-	controller := &appController{edge: public}
-	request := protocol.Control{Type: protocol.TypeAppEdge, RequestID: "signed", App: json.RawMessage(`{"domain":"mesh-app/request/v1","owner":"owner"}`)}
+	controller := &appController{registry: public}
+	request := protocol.Control{Type: protocol.TypeAppRegistry, RequestID: "signed", App: json.RawMessage(`{"domain":"mesh-app/request/v1","owner":"owner"}`)}
 	response, handled, err := controller.HandleControl(context.Background(), request)
-	if !handled || err != nil || public.calls != 1 || response.Type != protocol.TypeAppEdge {
+	if !handled || err != nil || public.calls != 1 || response.Type != protocol.TypeAppRegistry {
 		t.Fatalf("edge dispatch: response=%+v handled=%v error=%v calls=%d", response, handled, err, public.calls)
 	}
 	request.Type = protocol.TypeAppRequest

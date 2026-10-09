@@ -21,8 +21,10 @@ import (
 	"github.com/shaul/mesh/internal/webauth"
 )
 
+const managementLabel = "apps"
+
 func Domain() string           { return domainpolicy.Primary() }
-func ManagementHost() string   { return "apps." + Domain() }
+func ManagementHost() string   { return managementLabel + "." + Domain() }
 func ManagementOrigin() string { return "https://" + ManagementHost() }
 
 const IdleTTL = 24 * time.Hour
@@ -37,7 +39,7 @@ const ChunkSize = 256 << 10
 var idPattern = regexp.MustCompile(`^[0123456789abcdefghjkmnpqrstvwxyz]{4}$`)
 
 func ValidID(id string) bool {
-	return storedID(id) && id != "apps" && !serve.ReservedLabel(id)
+	return storedID(id) && id != managementLabel && !serve.ReservedLabel(id)
 }
 
 // Stored IDs predate allocation reservations; syntax still confines their filesystem paths.
@@ -46,21 +48,20 @@ func storedID(id string) bool { return idPattern.MatchString(id) }
 func URL(id string) string { return "https://" + id + "." + Domain() }
 
 type Request struct {
-	Action     string   `json:"action"`
-	ID         string   `json:"id,omitempty"`
-	Path       string   `json:"path,omitempty"`
-	Kind       string   `json:"kind,omitempty"`
-	Command    string   `json:"command,omitempty"`
-	Setup      string   `json:"setup,omitempty"`
-	Port       int      `json:"port,omitempty"`
-	Env        []string `json:"env,omitempty"`
-	UploadID   string   `json:"uploadId,omitempty"`
-	Data       []byte   `json:"data,omitempty"`
-	Digest     string   `json:"digest,omitempty"`
-	Code       string   `json:"code,omitempty"`
-	BrowserID  string   `json:"browserId,omitempty"`
-	Visibility string   `json:"visibility,omitempty"`
-	Offset     int64    `json:"offset,omitempty"`
+	Action    string   `json:"action"`
+	ID        string   `json:"id,omitempty"`
+	Path      string   `json:"path,omitempty"`
+	Kind      string   `json:"kind,omitempty"`
+	Command   string   `json:"command,omitempty"`
+	Setup     string   `json:"setup,omitempty"`
+	Port      int      `json:"port,omitempty"`
+	Env       []string `json:"env,omitempty"`
+	UploadID  string   `json:"uploadId,omitempty"`
+	Data      []byte   `json:"data,omitempty"`
+	Digest    string   `json:"digest,omitempty"`
+	Code      string   `json:"code,omitempty"`
+	BrowserID string   `json:"browserId,omitempty"`
+	Offset    int64    `json:"offset,omitempty"`
 }
 
 type Record struct {
@@ -68,7 +69,6 @@ type Record struct {
 	ID         string    `json:"id"`
 	Owner      string    `json:"owner"`
 	Kind       string    `json:"kind"`
-	Visibility string    `json:"visibility"`
 	Status     string    `json:"status"`
 	Cleanup    string    `json:"cleanup"`
 	ExpiresAt  time.Time `json:"expiresAt"`

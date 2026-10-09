@@ -1,6 +1,42 @@
-# Mesh app pill
+# Reusable floating pill
 
-The Solid control mounts in an app's Shadow DOM. It is a floating dot; tapping the
+This folder preserves the floating UI control for use in another project. Mesh
+loads no widget on temporary apps and serves no widget routes. The component
+has no Mesh ownership, browser pairing, sharing or visibility operations.
+
+## Use the component
+
+The source exports `FloatingPill`, `FloatingPillAction`, `FloatingPillProps` and
+`mountFloatingPill`. Actions belong to the caller. Each action has `id`, `label`,
+optional `title` and optional JSX `content`, plus either `kind: 'button'` with
+`onSelect`, or `kind: 'link'` with `href` and optional `target`.
+
+The IIFE bundle exposes `FloatingPill.mountFloatingPill`:
+
+```js
+const dispose = FloatingPill.mountFloatingPill({
+  stylesheetHref: '/assets/pill.css',
+  label: 'Editor tools',
+  storageKey: 'editor-toolbar-position',
+  actions: [
+    { id: 'save', kind: 'button', label: 'Save', content: '✓', onSelect: saveDocument },
+    { id: 'help', kind: 'link', label: 'Help', content: '?', href: '/help' },
+  ],
+});
+
+// Remove the component and its event listeners when its owner unmounts.
+dispose();
+```
+
+Loading `pill.js` alone does not mount anything. The mount function creates a
+`floating-pill` host with an open Shadow DOM and returns its disposal callback.
+`stylesheetHref` selects the caller's stylesheet URL. `label` defaults to
+"Floating controls" and `storageKey` defaults to `floating-pill-position`.
+Callers with multiple controls can give each one a separate storage key.
+
+## Interaction and build
+
+The standalone Solid control mounts in a Shadow DOM. It is a floating dot; tapping the
 dot grows a pill of actions out of it, and tapping the dot again folds them away.
 `src/dock.ts` owns placement. The open pill is a row of 44px touch targets, the
 dot's and one per action. One rule puts the dot's center 38px from the safe edge
@@ -8,8 +44,8 @@ dot's and one per action. One rule puts the dot's center 38px from the safe edge
 the pill's end cap and the actions toward the middle of the edge. Every path uses it: load, drag, flick,
 viewport change, keyboard and toggle. `src/drag.ts` adapts React Grab's drag
 gesture. The
-browser build embeds `pill.js` and `pill.css` in the Go binary; installed Mesh
-hosts need neither Node nor Playwright.
+browser build writes `pill.js` and `pill.css` for the preserved Go transformer.
+Runtime app routing does not load this bundle or expose the management frame.
 
 Use Node 24 or newer and the pinned pnpm version from `packageManager`:
 
@@ -27,18 +63,15 @@ The bundle retains the MIT notices for Solid and React Grab from `third_party`.
 ## Browser verification
 
 Playwright is pinned as a development dependency for repeatable interaction
-checks. The harness starts an ephemeral loopback HTTP server, serves the actual
-compiled assets under a strict CSP, and tests Chromium and WebKit with normal
-and reduced motion. It checks the collapsed dot, expansion, mouse dragging,
-synthetic touch dragging, keyboard docking, stored position, management-frame
-status messages, and rejection of messages from an incorrect origin or window.
+checks. The harness starts an ephemeral loopback HTTP server, mounts the actual
+compiled control under a strict CSP, and tests Chromium and WebKit with normal
+and reduced motion. It checks the collapsed dot, expansion, caller actions,
+mouse and touch dragging, keyboard docking, stored position, explicit mounting
+and disposal. No authorization iframe or network API belongs to this component.
 
-The frame is a labelled mock. Browser approval, private view tickets, ownership,
-CSRF, signed origin forwarding, and lifecycle recovery have separate Go tests:
-
-```sh
-go test -race ./internal/apps ./internal/apppill ./internal/webauth
-```
+The dormant Go transformer and its archive/encoding fixtures remain in
+`internal/apppill`. Its browser fixture explicitly mounts the generic component;
+inserting a loader into a document does not reconnect it to Mesh apps.
 
 Use previously installed browser binaries on this Linux host:
 

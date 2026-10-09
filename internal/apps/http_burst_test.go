@@ -20,17 +20,10 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/apps"
-	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/storage"
 )
 
-func TestStaticAssetBurstThroughSharedRegistry(t *testing.T) {
-	t.Run("app", func(t *testing.T) { checkStaticAssetBurst(t, false) })
-	t.Run("service", func(t *testing.T) { checkStaticAssetBurst(t, true) })
-}
-
-func checkStaticAssetBurst(t *testing.T, service bool) {
-	t.Helper()
+func TestPrivateStaticAssetBurstWaitsForCapacity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	store, err := storage.Open(ctx, filepath.Join(t.TempDir(), "edge.db"))
@@ -42,11 +35,6 @@ func checkStaticAssetBurst(t *testing.T, service bool) {
 			t.Error(err)
 		}
 	}()
-	registry, err := edge.NewRegistry(edge.HandlerConfig{Mode: edge.ModeDirectTLS})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer registry.Close()
 	edgePublic, edgeKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -89,16 +77,27 @@ func checkStaticAssetBurst(t *testing.T, service bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	appEdge, err := apps.NewEdge(ctx, apps.EdgeConfig{
+	capacity := make(chan struct{}, 8)
+	appEdge, err := apps.NewRegistry(ctx, apps.RegistryConfig{
 		Store: store, Key: edgeKey, Allowed: map[string]bool{base64.RawURLEncoding.EncodeToString(ownerPublic): true},
-		Acquire: registry.AcquireApp, ClientIP: registry.AppClientIP,
+		Acquire: func(*http.Request, string) (func(), error) {
+			select {
+			case capacity <- struct{}{}:
+				return func() { <-capacity }, nil
+			default:
+				return nil, apps.ErrCapacity
+			}
+		},
+		ClientIP: func(*http.Request) netip.Addr { return netip.MustParseAddr("100.64.0.2") },
+		NetworkOwners: func(context.Context, netip.Addr) ([]string, error) {
+			return []string{base64.RawURLEncoding.EncodeToString(ownerPublic)}, nil
+		},
 		Resolve: func(context.Context, string) (netip.AddrPort, error) { return endpoint, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer appEdge.Close()
-	registry.SetAppHandler(appEdge)
 	var sequence uint64
 	operation := func(request apps.Request) apps.Result {
 		t.Helper()
@@ -125,7 +124,6 @@ func checkStaticAssetBurst(t *testing.T, service bool) {
 	}
 	app := operation(apps.Request{Action: "allocate", Kind: "static"}).App
 	operation(apps.Request{Action: "activate", ID: app.ID})
-	operation(apps.Request{Action: "public", ID: app.ID})
 	responses := make(chan *httptest.ResponseRecorder, 10)
 	var requests sync.WaitGroup
 	launch := func(index int, host, prefix string) {
@@ -137,25 +135,13 @@ func checkStaticAssetBurst(t *testing.T, service bool) {
 			request.RemoteAddr = "198.51.100.1:12345"
 			request.TLS = &tls.ConnectionState{ServerName: host}
 			response := httptest.NewRecorder()
-			registry.ServeHTTP(response, request)
+			appEdge.ServeHost(response, request, host)
 			responses <- response
 		}()
 	}
 	defer func() { cancel(); requests.Wait() }()
 	initialHost := app.ID + "." + apps.Domain()
 	initialPrefix := ""
-	if service {
-		initialHost = "service.mesh.test"
-		initialPrefix = "/assets"
-		now := time.Now()
-		err := registry.Replace([]edge.PublishedRoute{{
-			Route:  edge.Route{PublicName: initialHost, ServiceName: "assets"},
-			Origin: edge.ResolvedOrigin{Identity: base64.RawURLEncoding.EncodeToString(ownerPublic), DisplayAlias: "Static assets", Endpoint: endpoint, SnapshotSequence: 1, Online: true, OnlineUntil: now.Add(time.Minute), LastSeenAt: now},
-		}})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
 	for index := range 8 {
 		launch(index, initialHost, initialPrefix)
 	}

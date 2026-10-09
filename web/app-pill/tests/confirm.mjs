@@ -20,7 +20,7 @@ async function fixtureContext(browser, options = {}) {
       const form = new URLSearchParams(request.postData());
       assert.equal(form.get('id'), '7k3d');
       assert.equal(form.get('csrf'), 'test-csrf');
-      if (['public', 'delete'].includes(form.get('action'))) {
+      if (form.get('action') === 'delete') {
         assert.equal(form.get('confirmation'), '7k3d');
       }
       submissions++;
@@ -96,7 +96,7 @@ async function verifyDesktop(browser) {
     await page.getByText('Confirmed', { exact: true }).waitFor();
     assert.equal(submissions(), 1);
 
-    for (const action of ['public', 'delete']) {
+    for (const action of ['delete']) {
       await page.goto(`${manager}/confirm?id=7k3d&action=${action}`);
       const confirm = page.getByRole('button', { name: `Confirm ${action}` });
       await page.locator('#confirm-id').fill('wrong');
@@ -107,7 +107,7 @@ async function verifyDesktop(browser) {
       await confirm.click();
       await page.getByText('Confirmed', { exact: true }).waitFor();
     }
-    assert.equal(submissions(), 3);
+    assert.equal(submissions(), 2);
   } finally {
     await context.close();
   }
@@ -116,10 +116,10 @@ async function verifyDesktop(browser) {
 async function verifyMobile(browser, device) {
   const { context, page, submissions } = await fixtureContext(browser, playwright.devices[device]);
   try {
-    for (const action of ['renew', 'private', 'public', 'delete']) {
+    for (const action of ['renew', 'delete']) {
       await page.goto(`${manager}/confirm?id=7k3d&action=${action}`);
       const button = page.getByRole('button', { name: `Confirm ${action}` });
-      if (['public', 'delete'].includes(action)) await page.locator('#confirm-id').fill('7k3d');
+      if (action === 'delete') await page.locator('#confirm-id').fill('7k3d');
       const bounds = await button.boundingBox();
       assert(bounds);
       const tap = () => page.touchscreen.tap(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);

@@ -26,13 +26,17 @@ def catalog_snapshot(state, session_id):
         schema = database.execute("SELECT type, name, tbl_name, sql FROM sqlite_master "
                                   "WHERE sql IS NOT NULL ORDER BY type, name").fetchall()
         version = database.execute("SELECT max(version_id) FROM goose_db_version WHERE is_applied = 1").fetchone()[0]
+        tables = {row[1] for row in schema if row[0] == "table"}
+        app_query = ("SELECT key, data FROM private_app_state ORDER BY key" if "private_app_state" in tables
+                     else "SELECT key, data FROM app_state ORDER BY key")
+        app_state = database.execute(app_query).fetchall() if tables & {"app_state", "private_app_state"} else []
         columns = [row[1] for row in database.execute("PRAGMA table_info(hosts)")]
         rows = database.execute("SELECT id, host_id, command, cwd, created_at FROM sessions "
                                 "WHERE id = ? AND state IN ('running', 'detached') ORDER BY host_id", (session_id,)).fetchall()
     require(isinstance(version, int) and version > 0, "retained catalog schema version is absent or invalid")
     require(len(rows) == 1, "retained active session is absent or duplicated in the catalog")
     return {"device": stat.st_dev, "inode": stat.st_ino, "schemaVersion": version,
-            "schema": schema, "hostColumns": columns, "immutableSessionRows": rows}
+            "schema": schema, "hostColumns": columns, "immutableSessionRows": rows, "appState": app_state}
 
 
 def private_host_migration(previous, current):
@@ -50,6 +54,33 @@ def private_host_migration(previous, current):
         normalized.append((kind, name, table, sql))
     return changed == {"services", "cached_services"} and current | {
         "schemaVersion": previous["schemaVersion"], "schema": normalized} == previous
+
+
+def private_app_state_migration(previous, current):
+    if current["schemaVersion"] <= previous["schemaVersion"]:
+        return False
+    normalized = []
+    changed = 0
+    for row in current["schema"]:
+        restored, migrated = legacy_app_schema(row)
+        if restored is None:
+            return False
+        normalized.append(restored)
+        changed += migrated
+    candidate = current | {"schema": sorted(normalized)}
+    return changed == 1 and (candidate | {"schemaVersion": previous["schemaVersion"]} == previous
+                            or private_host_migration(previous, candidate))
+
+
+def legacy_app_schema(row):
+    kind, name, table, sql = row
+    if kind != "table" or name != table or name != "private_app_state":
+        return row, False
+    sql, count = re.subn(r'\ACREATE TABLE (?:"private_app_state"|private_app_state)(?=\s|\()',
+                         "CREATE TABLE app_state", sql)
+    if count != 1:
+        return None, False
+    return (kind, "app_state", "app_state", sql), True
 
 
 class RetainedCatalog:
@@ -72,7 +103,7 @@ class RetainedCatalog:
 
     def observe(self, phase, daemon_binary, host):
         current = catalog_snapshot(self.fixture.remote, self.session_id)
-        if private_host_migration(self.initial, current):
+        if private_host_migration(self.initial, current) or private_app_state_migration(self.initial, current):
             self.initial = current
         require(current == self.initial, "source hop replaced catalog inode, schema or immutable session rows")
         require(all(path.read_bytes() == contents for path, contents in self.credentials.items()),
@@ -93,5 +124,5 @@ class RetainedCatalog:
                 "catalogSchemaVersion": current["schemaVersion"], "catalogHostColumns": current["hostColumns"],
                 "catalogSchemaDigest": hashlib.sha256(json.dumps(current["schema"]).encode()).hexdigest(),
                 "immutableSessionFields": ["id", "host_id", "command", "cwd", "created_at"],
-                "immutableActiveSessionPreserved": True, "existingCredentialsPreserved": True,
+                "immutableActiveSessionPreserved": True, "existingCredentialsPreserved": True, "appStatePreserved": True,
                 "freshInputOutput": True}

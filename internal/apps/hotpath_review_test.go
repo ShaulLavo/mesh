@@ -29,13 +29,13 @@ func TestFailedActivityFlushKeepsRestartLagBounded(t *testing.T) {
 	for _, surface := range []string{"admission", "stream"} {
 		t.Run(surface, func(t *testing.T) {
 			f := newAppFixture(t)
-			app := publicStaticApp(t, f)
+			app := createStaticApp(t, f)
 			activity := func() error {
 				if surface == "stream" {
 					_, _, err := f.edge.activity(context.Background(), app)
 					return err
 				}
-				_, _, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(app.ID), nil), app.ID)
+				_, _, release, err := f.edge.admit(ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(app.ID), nil)), app.ID)
 				if release != nil {
 					release()
 				}
@@ -90,13 +90,13 @@ func TestFailedActivityFlushKeepsRestartLagBounded(t *testing.T) {
 
 func TestPendingActivityFlushKeepsRuntimeWithinDurabilitySlack(t *testing.T) {
 	f := newAppFixture(t)
-	app := publicStaticApp(t, f)
+	app := createStaticApp(t, f)
 	f.now = f.now.Add(3 * time.Minute)
 	store := &pausedActivityStore{memoryAppStore: f.edgeStore, entered: make(chan struct{}), release: make(chan struct{})}
 	f.edge.config.Store = store
 	done := make(chan error, 1)
 	go func() {
-		_, _, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(app.ID), nil), app.ID)
+		_, _, release, err := f.edge.admit(ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(app.ID), nil)), app.ID)
 		if release != nil {
 			release()
 		}

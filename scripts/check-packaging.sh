@@ -104,7 +104,7 @@ check_source_contract() {
   contains .github/workflows/ci.yml './scripts/verify.sh'
   contains .github/workflows/ci.yml 'govulncheck@v1.7.0'
   contains .github/workflows/ci.yml 'golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0'
-  contains .github/workflows/ci.yml 'version: v2.13.2'
+  contains .github/workflows/ci.yml 'version: v2.14.0'
   # The linters must be enabled AND still doing their job. Grepping for names
   # under `enable:` misses the settings that decide what they actually check: a
   # staticcheck.checks list without `all`, or an exclusions rule covering

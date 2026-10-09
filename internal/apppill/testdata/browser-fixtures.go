@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/shaul/mesh/internal/apppill"
+	"github.com/shaul/mesh/internal/testdomains"
 )
 
 func main() {
@@ -19,6 +20,8 @@ func main() {
 }
 
 func fixtures() error {
+	cleanup := testdomains.Setup()
+	defer cleanup()
 	large := strings.Repeat("a", 300<<10)
 	documents := map[string]string{
 		"hoisted-csp": `<html><head><title>app</title></head><meta http-equiv="Content-Security-Policy" content="default-src 'self'"><body>app</body></html>`,

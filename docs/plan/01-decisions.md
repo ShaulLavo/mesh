@@ -379,32 +379,35 @@ Pre-picker containment capture is local only. Remote containing identities keep
 an unavailable frozen preview, because waiting for their screen delays startup
 and capturing it after rendering can record the picker itself.
 
-## D30 — Temporary apps have an owned lifecycle
+## D30 — Temporary apps have a private, owned lifecycle
 
-Status: Approved, 2026-09-30. See [the execution plan](06-temporary-apps.md).
+Status: Approved. Updated 2026-10-09. See [the execution plan](06-temporary-apps.md).
 
-Mesh adds `mesh app` for disposable static websites and HTTP servers. Allocate
-four-character hostnames such as `7k3d.shaulavo.dev` with an atomic edge-wide
-reservation. Start owner-only. The origin host's Mesh identity owns the app;
-explicit browser pairing grants that identity's management permissions.
+Mesh provides `mesh app` for disposable static websites and HTTP servers with
+four-character URLs. Every temporary app requires HTTPS, verified Tailnet
+access and owner authorization. Sharing and visibility operations are removed.
+Ordinary explicitly named public services and SSH reverse tunnels keep their
+separate contracts.
 
-Everyone who can view an app gets the floating Solid pill. Public visitors
-receive visitor controls. The owner can change visibility, renew, download
-source, and delete. Enforce permissions on the server and isolate owner
-credentials from arbitrary app code.
+The origin owns source, managed workspaces and labelled workers. A private app
+registry owns allocation, browser grants, traffic deadlines and signed lifecycle
+acknowledgements. Name reservations preserve old identities and prevent a deleted
+app's hostname from being reassigned to an ordinary service.
 
 Admitted app traffic extends a 24-hour inactivity deadline. Expiry revokes
-access, stops the app, and deletes its managed workspace and local data.
-Retain the used hostname so old links cannot open an unrelated future app.
-An offline origin completes pending cleanup when it returns.
+access, stops the app and deletes its managed workspace and local data. Original
+source remains untouched. Offline origins complete cleanup after reconnecting.
+Updates and daemon restarts preserve app IDs, URLs, files and worker ownership.
 
-This is an explicit scope change from D22. App name allocation is also a scoped
-exception to D15's manually typed names; public visibility still requires an
-explicit owner action. D20's ordinary SSH tunnel contract remains unchanged.
-Private apps use authenticated access on their eventual shared hostname, which
-is distinct from D13's tailnet-only service names.
+Keep the generic floating pill source for another project. Mesh does not mount
+the widget, inject its loader, serve widget assets or expose its management frame.
+The standalone manager retains source download, renewal, deletion and pairing.
 
-Terminal sessions retain host ownership and direct transport. Existing `serve`
-routes and tunnels retain their lifecycles. This feature uses the current
-process model and does not promise OS sandbox containment or a general build
-and deployment pipeline.
+State schema 12 preserves all app-state bytes in `private_app_state`. Older app
+readers cannot read that table after an executable rollback. Downgrading a
+nonempty app-state store is refused. Registry and origin upgrades use the new
+`app.registry` control operation and must be coordinated within the app lease.
+
+This supersedes public temporary-app sharing in the original D30 and Fregat
+Plan 291. Terminal sessions retain direct host-to-host transport. The app
+runtime keeps the existing process model and does not provide OS sandboxing.

@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   app-pill:
-    name: Solid app pill
+    name: Reusable floating pill
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,6 +60,8 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
+      - name: Check private app boundary
+        run: scripts/check-private-app-boundary.sh
       - name: Vet
         run: go vet ./...
       - name: Race tests
@@ -223,7 +225,7 @@ jobs:
           cache: true
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.13.2
+          version: v2.14.0
           args: --enable-only=bodyclose,errcheck,gosec,govet,ineffassign,staticcheck,unused
 
   gates:
@@ -240,7 +242,7 @@ jobs:
           cache: true
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.13.2
+          version: v2.14.0
           install-only: true
       - name: Verify CI download failure fixtures
         run: python3 scripts/test-ci-downloads.py
