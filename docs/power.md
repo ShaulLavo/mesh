@@ -43,6 +43,5 @@ longer hold the host awake. Linux needs working `systemd-inhibit` authorization;
 `caffeinate`. Unavailable inhibition logs once and leaves sessions usable. Forced
 sleep, loss of power, and reboot can still interrupt sessions.
 
-For a published service, enable `--wake-on-request` when serving it. The target
-must also allow waking, and an awake sender must remain on its LAN. The edge
-waits for the target and a fresh service publication before forwarding traffic.
+Mesh does not wake a sleeping machine from an HTTP request. Use `mesh wake`
+before opening a private service on a sleeping host.
