@@ -106,19 +106,38 @@ func TestClaimCacheConcurrentWritersKeepHighestRevision(t *testing.T) {
 	dir := t.TempDir()
 	claim := cacheFixtureClaim(t, "destination", 1)
 	other := cacheFixtureClaim(t, "other", 1)
-	if _, err := RememberClaim(context.Background(), dir, other.ID, other); err != nil {
+	if _, err := RememberClaim(t.Context(), dir, other.ID, other); err != nil {
 		t.Fatal(err)
 	}
+	lock, err := os.OpenFile(filepath.Join(dir, cacheDirectory, claim.ID+".lock"), os.O_CREATE|os.O_RDWR, 0600) //nolint:gosec // private fixture lock
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close() //nolint:errcheck // fixture descriptor cleanup releases lock
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	timedOut := make(chan struct{}, 1)
 	var writers sync.WaitGroup
 	for revision := uint64(1); revision <= 8; revision++ {
 		writers.Go(func() {
 			next := claim
 			next.Revision = revision
-			_, err := RememberClaim(context.Background(), dir, next.ID, next)
+			err := rememberConcurrentClaim(ctx, dir, next, timedOut)
 			if err != nil && !errors.Is(err, ErrReplay) {
 				t.Errorf("concurrent claim revision %d: %v", revision, err)
 			}
 		})
+	}
+	select {
+	case <-timedOut:
+	case <-ctx.Done():
+		t.Error("contended writer never reached its admission deadline")
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
 	}
 	writers.Wait()
 	got, err := readCacheFixtureClaim(dir, claim.ID)
@@ -128,6 +147,20 @@ func TestClaimCacheConcurrentWritersKeepHighestRevision(t *testing.T) {
 	got, err = readCacheFixtureClaim(dir, other.ID)
 	if err != nil || got != other {
 		t.Fatalf("independent destination changed: %+v err=%v", got, err)
+	}
+}
+
+// Lock admission is bounded separately from the revision ordering this fixture proves.
+func rememberConcurrentClaim(ctx context.Context, directory string, claim Claim, timedOut chan<- struct{}) error {
+	for {
+		_, err := RememberClaim(ctx, directory, claim.ID, claim)
+		if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+			return err
+		}
+		select {
+		case timedOut <- struct{}{}:
+		default:
+		}
 	}
 }
 
