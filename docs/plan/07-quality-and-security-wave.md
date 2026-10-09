@@ -107,7 +107,7 @@ least two Sol runs (different prompts: one attacker-led, one code-led) and one O
 |---|---|
 | **Temporary apps (first)** | Private Tailnet URLs: process isolation from the host and other apps, filesystem reach of app workspaces, owner recognition and browser pairing, name reservation, expiry cleanup and resource limits. The 2026-10-08 removal supersedes public/private switching and live pill injection; probe old sharing paths to prove they stay removed. |
 | Private serving; retired public edge | Authentication, request limits, Host handling, TLS, private DNS and serve-on-demand startup. Public serving and VPS-edge tunnels were removed on 2026-10-08; verify obsolete entry points cannot expose content. |
-| SSH front door | Auth, sessions over SSH, SFTP/SCP path containment and read-only guarantees, named reverse tunnels and claim lifetime |
+| SSH front door | Auth, sessions over SSH, SFTP/SCP path containment and read-only guarantees, and rejection of retired reverse forwarding |
 | Transport | WebSocket auth and resume, replay ring bounds, frame limits, relay backpressure, protocol parsing of hostile frames |
 | Local daemon and workers | Socket permissions, cross-user access, attach/steal authorization, signal and kill scope, `meta.json` trust, containment paths |
 | Agent hooks and recovery | Hook identity (the 2026-09-25 hijack: inherited `MESH_AGENT_*` env let child processes overwrite saved ids), resume targets, env leakage into child sessions |

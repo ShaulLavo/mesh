@@ -14,7 +14,7 @@ Related execution homes:
 - [Plan 09](09-residual-hotspots.md#transport-comparison-baseline) owns #246's comparative measurements. Measurements and the compatibility corpus below gate interaction experiments.
 - [Plan 12](12-deployment-domain.md) executes #241's deployment-domain configuration and the owner-approved parallel migration to `sprockt.dev`. Its credential and route checks gate live changes.
 - [Fregat Plan 290](https://github.com/ShaulLavo/fregat/blob/main/plans/290-mesh-device-authorization.md) owns device authorization. Native control already uses TLS 1.3, pinned device keys and grants in `internal/transport/auth.go`; its custom verifier must be assessed as a whole.
-- [Fregat Plan 291](https://github.com/ShaulLavo/fregat/blob/main/plans/291-mesh-private-services.md) owns retiring public temporary-app sharing. Ordinary explicitly named public services remain supported.
+- [Fregat Plan 291](https://github.com/ShaulLavo/fregat/blob/main/plans/291-mesh-private-services.md) owns retiring all public hosting. Services and temporary apps are private.
 - [Fregat Plan 292](https://github.com/ShaulLavo/fregat/blob/main/plans/292-mesh-zerotier.md) owns the approved alternate-network integration. This investigation does not replace its contract.
 - [Fregat Plan 296](https://github.com/ShaulLavo/fregat/blob/main/plans/296-mesh-update-recovery.md) owns remaining helper activation readiness and Pi idle-CPU verification.
 - [Fregat Plan 302](https://github.com/ShaulLavo/fregat/blob/main/plans/302-mesh-private-app-observability.md) owns private-app output, startup phases and caller-side URL lookup warnings.
@@ -57,15 +57,14 @@ Related execution homes:
 
 - [ ] For #245, produce a principal/capability map for observation, terminal input, process creation/kill, update administration and publishing. Show the OS-account authority behind each operation. Keep read-only observers and update administrators distinct from full terminal control.
 - [ ] Verify enrollment, changed-key refusal, revocation and retirement across native control and SSH, including retained workers and already-admitted work. Reuse Plan 290's controls. Test fixtures first; no credential, grant or public-exposure changes follow from this plan alone.
-- [ ] Assess whether public-serving separation creates a real permission boundary. An extra process with the same powerful credentials is insufficient. Rank demonstrated defects separately from hardening opportunities.
+- [x] Retire the public-serving separation investigation. Public hosting and its separate process are removed. The private control and browser authorization boundaries remain in scope.
 - [ ] Correct documentation drift against current source. `docs/tasks/T05-websocket-transport.md` and item 14 in `docs/plan/02-status.md` retain the earlier Tailscale-only description, while `internal/transport/auth.go` implements pinned-key TLS 1.3. Update historical wording without claiming that all audit questions are resolved.
 
-### Public route reachability
+### Historical public route reachability
 
-[#126](https://github.com/ShaulLavo/mesh/issues/126) reported v0.1.139 accepting a healthy public static route while public DNS returned a tailnet address and TLS served the private wildcard certificate. The private route returned HTTP 200. The public route was withdrawn. This distinguishes app health from public reachability but does not identify the configuration cause. Plan 291 preserves ordinary public services, so this finding survives removal of public temporary apps.
+[#126](https://github.com/ShaulLavo/mesh/issues/126) reported v0.1.139 accepting a healthy public static route while public DNS returned a tailnet address and TLS served the private wildcard certificate. The private route returned HTTP 200. The public route was withdrawn. The original configuration cause was not established.
 
-- [ ] Define separate origin readiness, route registration, DNS reachability and TLS validation observations for ordinary public services. Use local resolver, TLS and edge fixtures to reproduce the wrong-address/wrong-certificate combination. Do not probe or repair the old live route without authorization.
-- [ ] Decide the narrow warning or status correction after that reproduction. Verify private routes remain healthy and readiness reflects the private listener and installed certificate. Public hosting has been removed.
+- [x] Retire the public DNS, route publication, and edge reproduction work. All public hosting is removed. Current private readiness checks still verify the private listener and installed certificate.
 
 ### External Gallery listener
 

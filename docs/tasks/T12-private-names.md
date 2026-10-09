@@ -53,11 +53,11 @@ profile, environment, target identity, signer identity, private name,
 certificate bytes, and private-key bytes. A `private-origin` private name is
 either empty or exactly one canonical label below `mesh.sprockt.dev`; the Pi
 sets it only after the corresponding A-record reconciliation succeeds. A
-`public-edge` bundle must carry an empty private name. The origin bounds all
+`private-service` bundle must carry an empty private name. The origin bounds all
 fields before cryptographic work, verifies both identity pins, checks the key
-and `*.mesh.sprockt.dev` SAN, and rejects a bundle with a strictly earlier
-expiry. An installer accepts only its configured profile, so a `public-edge`
-bundle cannot enter a private-origin slot. Legacy v1 and v2 transcripts are not
+and configured wildcard SAN, and rejects a bundle with a strictly earlier
+expiry. An installer accepts only its configured profile. Public certificate
+profiles are removed. Legacy v1 and v2 transcripts are not
 accepted. An exact replay is a no-op. A different certificate with the same
 expiry remains valid for emergency key rotation.
 

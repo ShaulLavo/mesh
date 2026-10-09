@@ -386,8 +386,8 @@ Status: Approved. Updated 2026-10-09. See [the execution plan](06-temporary-apps
 Mesh provides `mesh app` for disposable static websites and HTTP servers with
 four-character URLs. Every temporary app requires HTTPS, verified Tailnet
 access and owner authorization. Sharing and visibility operations are removed.
-Ordinary explicitly named public services and SSH reverse tunnels keep their
-separate contracts.
+Ordinary services are private too. Public service hosting and SSH reverse
+tunnels are removed.
 
 The origin owns source, managed workspaces and labelled workers. A private app
 registry owns allocation, browser grants, traffic deadlines and signed lifecycle
