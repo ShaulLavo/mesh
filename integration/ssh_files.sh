@@ -93,7 +93,7 @@ for service in files site proxy; do
   [[ $service != site ]] || kind=static
   [[ $service != proxy ]] || target=12345
   "${control[@]}" --expect-type service.upserted upsert -- \
-    "$state/daemon.sock" "$service" "$kind" "$target" "" >/dev/null
+    "$state/daemon.sock" "$service" "$kind" "$target" >/dev/null
 done
 
 cat >"$test_root/download.batch" <<BATCH

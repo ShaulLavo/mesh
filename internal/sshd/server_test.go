@@ -591,3 +591,22 @@ func (c *fakeContext) LocalAddr() net.Addr                { return nil }
 func (c *fakeContext) Permissions() *charmssh.Permissions { return nil }
 
 var _ charmssh.Context = (*fakeContext)(nil)
+
+func TestSSHRejectsReversePortForwarding(t *testing.T) {
+	authorized := generatePrivateKey(t)
+	server := mustServer(t, Config{HostKey: generatePrivateKey(t), AuthorizedKeys: writeAuthorizedKeys(t, authorized, 0600), Addr: "127.0.0.1:2222"})
+	address := testsession.Listen(t, server)
+	client, err := gossh.Dial("tcp", address, clientConfig(t, authorized, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close() //nolint:errcheck // fixture cleanup
+	payload := gossh.Marshal(struct {
+		BindAddress string
+		BindPort    uint32
+	}{BindAddress: "127.0.0.1", BindPort: 54321})
+	accepted, _, err := client.SendRequest("tcpip-forward", true, payload)
+	if err != nil || accepted {
+		t.Fatalf("reverse forwarding accepted=%t error=%v", accepted, err)
+	}
+}

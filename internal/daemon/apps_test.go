@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/shaul/mesh/internal/apps"
-	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
@@ -82,24 +81,24 @@ func TestAppControlRejectsUnknownAndTrailingFields(t *testing.T) {
 }
 
 func TestAppResolverPinsExactConfiguredIdentityAndNumericEndpoint(t *testing.T) {
-	origin := edge.OriginConfig{Identity: "exact-owner", ControlPort: 7337}
+	origin := apps.Peer{Identity: "exact-owner", ControlPort: 7337}
 	endpoint := netip.MustParseAddrPort("100.64.0.2:7337")
 	resolved, pinned := 0, 0
-	resolve := func(_ context.Context, got edge.OriginConfig) (netip.AddrPort, error) {
+	resolve := func(_ context.Context, got apps.Peer) (netip.AddrPort, error) {
 		resolved++
 		if got.Identity != origin.Identity {
 			t.Fatal("resolved unexpected origin")
 		}
 		return endpoint, nil
 	}
-	pin := func(_ context.Context, gotEndpoint netip.AddrPort, got edge.OriginConfig) error {
+	pin := func(_ context.Context, gotEndpoint netip.AddrPort, got apps.Peer) error {
 		pinned++
 		if got.Identity != origin.Identity || gotEndpoint != endpoint {
 			t.Fatal("pinned unexpected origin")
 		}
 		return nil
 	}
-	resolver := appResolver([]edge.OriginConfig{origin}, resolve, pin)
+	resolver := appResolver([]apps.Peer{origin}, resolve, pin)
 	if _, err := resolver(context.Background(), "other-owner"); err == nil || resolved != 0 || pinned != 0 {
 		t.Fatalf("unconfigured origin reached transport: %v, %d, %d", err, resolved, pinned)
 	}
@@ -116,7 +115,7 @@ func TestAppResolverPinsExactConfiguredIdentityAndNumericEndpoint(t *testing.T) 
 	}
 	endpoint = netip.MustParseAddrPort("100.64.0.2:7337")
 	pinError := errors.New("wrong host identity")
-	resolver = appResolver([]edge.OriginConfig{origin}, resolve, func(context.Context, netip.AddrPort, edge.OriginConfig) error { return pinError })
+	resolver = appResolver([]apps.Peer{origin}, resolve, func(context.Context, netip.AddrPort, apps.Peer) error { return pinError })
 	if _, err := resolver(context.Background(), origin.Identity); !errors.Is(err, pinError) {
 		t.Fatalf("pin failure ignored: %v", err)
 	}
@@ -145,7 +144,7 @@ func testClientServerAppDispatch(t *testing.T, local bool) {
 	t.Helper()
 	client := newServerTestConn()
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +213,7 @@ func protectedTestOrigin(t *testing.T, store *storage.Store, registry *meshserve
 
 func TestAppCreationRejectsExistingDormantProxyAndListenerAliases(t *testing.T) {
 	store, registry, _ := newServiceControllerTest(t, "/mesh")
-	service := meshserve.Service{Name: "alias", Kind: meshserve.Proxy, Target: "31337", PublicName: "alias.mesh.test", Listens: []meshserve.Listen{{Public: 31338, Upstream: 31339}}}
+	service := meshserve.Service{Name: "alias", Kind: meshserve.Proxy, Target: "31337", Listens: []meshserve.Listen{{Public: 31338, Upstream: 31339}}}
 	if err := registry.Replace([]meshserve.Service{service}); err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +274,7 @@ func TestServiceAppGuardRejectsOwnedPortsAndFileRootsBeforePersistence(t *testin
 	origin, _ := protectedTestOrigin(t, store, registry, managed, 31337)
 	controller.guard = appServiceGuard(origin)
 	definitions := []meshserve.Service{
-		{Name: "alias", Kind: meshserve.Proxy, Target: "31337", PublicName: "alias.mesh.test"},
+		{Name: "alias", Kind: meshserve.Proxy, Target: "31337"},
 		{Name: "alias", Kind: meshserve.Proxy, Target: "31400", Listens: []meshserve.Listen{{Public: 31337, Upstream: 31401}}},
 		{Name: "alias", Kind: meshserve.Proxy, Target: "31400", Listens: []meshserve.Listen{{Public: 31401, Upstream: 31337}}},
 		{Name: "alias", Kind: meshserve.Files, Target: parent},

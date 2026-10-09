@@ -185,6 +185,9 @@ func networkOrigin(t *testing.T, f *appFixture) *atomic.Int64 {
 	count := &atomic.Int64{}
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count.Add(1)
+		if _, err := netip.ParseAddrPort(r.Host); err != nil {
+			t.Errorf("registry forwarded non-numeric wire Host %q", r.Host)
+		}
 		if strings.Contains(r.Header.Get("Cookie"), "__Host-mesh") {
 			t.Error("forwarded Mesh cookie to app origin")
 		}

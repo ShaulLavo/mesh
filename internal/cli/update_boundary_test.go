@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/coder/websocket"
 	"math/big"
 	"net"
 	"net/http"
@@ -20,6 +19,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"

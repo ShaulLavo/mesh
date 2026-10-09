@@ -28,12 +28,12 @@ func TestCertificatePrivateNameIsProfileBoundAndSignatureCovered(t *testing.T) {
 		t.Fatal("nested private name was signed")
 	}
 
-	certificatePEM, keyPEM := testCertificate(t, 2, PublicWildcardName(), now.Add(-time.Hour), now.Add(24*time.Hour))
-	publicBundle, err := ValidateBundle(certificatePEM, keyPEM, PublicWildcardName(), now)
+	certificatePEM, keyPEM := testCertificate(t, 2, ServiceWildcardName(), now.Add(-time.Hour), now.Add(24*time.Hour))
+	publicBundle, err := ValidateBundle(certificatePEM, keyPEM, ServiceWildcardName(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := SignBundle(publicBundle, targetID, ProfilePublicEdge, EnvironmentLive, "pc.mesh.mesh.test", signer); err == nil || !strings.Contains(err.Error(), "must not") {
+	if _, err := SignBundle(publicBundle, targetID, ProfilePrivateService, EnvironmentLive, "pc.mesh.mesh.test", signer); err == nil || !strings.Contains(err.Error(), "must not") {
 		t.Fatalf("public private-name error = %v", err)
 	}
 }

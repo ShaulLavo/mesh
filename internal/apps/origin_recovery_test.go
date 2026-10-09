@@ -139,7 +139,7 @@ func testActivationRetry(t *testing.T, action string, restart bool) {
 
 func restartAppOrigin(t *testing.T, f *appFixture) {
 	t.Helper()
-	restarted, err := NewOrigin(context.Background(), OriginConfig{Store: f.originStore, Key: f.ownerKey, EdgeIdentity: identityFor(f.edgeKey), Exchange: f.edge.Exchange, Workers: f.workers, DataRoot: f.root, Now: func() time.Time { return f.now }})
+	restarted, err := NewOrigin(context.Background(), OriginConfig{Store: f.originStore, Key: f.ownerKey, RegistryIdentity: identityFor(f.edgeKey), Exchange: f.edge.Exchange, Workers: f.workers, DataRoot: f.root, Now: func() time.Time { return f.now }})
 	if err != nil {
 		t.Fatal(err)
 	}

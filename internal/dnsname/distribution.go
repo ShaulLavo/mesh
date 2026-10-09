@@ -38,7 +38,6 @@ type CertificateProfile string
 
 const (
 	ProfilePrivateOrigin  CertificateProfile = "private-origin"
-	ProfilePublicEdge     CertificateProfile = "public-edge"
 	ProfilePrivateService CertificateProfile = "private-service"
 )
 
@@ -46,8 +45,8 @@ func certificateNameForProfile(profile CertificateProfile) (string, error) {
 	switch profile {
 	case ProfilePrivateOrigin:
 		return WildcardName(), nil
-	case ProfilePublicEdge, ProfilePrivateService:
-		return PublicWildcardName(), nil
+	case ProfilePrivateService:
+		return ServiceWildcardName(), nil
 	default:
 		return "", fmt.Errorf("dnsname: unsupported certificate profile %q", profile)
 	}
@@ -253,7 +252,7 @@ func NewInstaller(config InstallerConfig) (*Installer, error) {
 		if config.PrivateName == nil {
 			return nil, errors.New("dnsname: private-origin installer requires a private-name source")
 		}
-	case ProfilePublicEdge, ProfilePrivateService:
+	case ProfilePrivateService:
 		if config.PrivateName != nil {
 			return nil, fmt.Errorf("dnsname: %s installer must not configure a private-name source", config.Profile)
 		}
@@ -605,7 +604,7 @@ func randomRequestID() (string, error) {
 }
 
 func acceptedCertificateName(profile CertificateProfile, name string) bool {
-	if profile != ProfilePrivateOrigin && profile != ProfilePublicEdge && profile != ProfilePrivateService {
+	if profile != ProfilePrivateOrigin && profile != ProfilePrivateService {
 		return false
 	}
 	for _, domain := range domainpolicy.Domains() {

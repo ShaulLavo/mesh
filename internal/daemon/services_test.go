@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,8 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shaul/mesh/internal/edge"
-	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/storage"
@@ -28,7 +26,7 @@ func TestServiceControllerMutatesDurableAndLiveRegistry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("live"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service := protocol.ServiceInfo{DisplayName: "Site", Name: "site", Kind: "static", Target: root, PublicName: "site.mesh.test"}
+	service := protocol.ServiceInfo{DisplayName: "Site", Name: "site", Kind: "static", Target: root}
 
 	response, handled, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type:      protocol.TypeServiceUpsert,
@@ -43,7 +41,7 @@ func TestServiceControllerMutatesDurableAndLiveRegistry(t *testing.T) {
 	}
 	assertServiceResponse(t, registry, "/site/", http.StatusOK, "live")
 	persisted, err := store.GetService(context.Background(), "site")
-	if err != nil || persisted.Target != canonicalServiceRoot(t, root) || persisted.PublicName != "site.mesh.test" {
+	if err != nil || persisted.Target != canonicalServiceRoot(t, root) {
 		t.Fatalf("persisted service = %#v, %v", persisted, err)
 	}
 
@@ -62,7 +60,7 @@ func TestServiceControllerMutatesDurableAndLiveRegistry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(updatedRoot, "index.html"), []byte("updated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	updated := protocol.ServiceInfo{Name: "site", Kind: "static", Target: updatedRoot, PublicName: "site.mesh.test"}
+	updated := protocol.ServiceInfo{Name: "site", Kind: "static", Target: updatedRoot}
 	response, handled, err = controller.HandleControl(context.Background(), protocol.Control{
 		Type:      protocol.TypeServiceUpsert,
 		RequestID: "upsert-2",
@@ -132,58 +130,6 @@ func TestServiceControllerRejectsConfiguredProtocolRouteBeforeWriting(t *testing
 	}
 }
 
-func TestServiceControllerPreviewsRemoteRelativeTargetAndRescansBeforeUpsert(t *testing.T) {
-	home := t.TempDir()
-	root := filepath.Join(home, "site")
-	if err := os.Mkdir(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("safe"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "mesh.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close() //nolint:errcheck // test cleanup
-	registry, err := meshserve.NewRegistry(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	controller, err := newServiceController(context.Background(), home, store, registry, acceptingServicePublisher{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	definition := protocol.ServiceInfo{Name: "site", Target: "./site", PublicName: "site.mesh.test"}
-	response, handled, err := controller.HandleControl(context.Background(), protocol.Control{
-		Type: protocol.TypeServicePreview, RequestID: "preview", Service: &definition,
-	})
-	if err != nil || !handled || response.Type != protocol.TypeServicePreviewed || response.ServicePreview == nil {
-		t.Fatalf("preview = %#v, handled %v, error %v", response, handled, err)
-	}
-	if response.ServicePreview.Service.Target != canonicalServiceRoot(t, root) || response.ServicePreview.Service.Kind != string(meshserve.Static) || response.ServicePreview.FileCount != 1 {
-		t.Fatalf("preview payload = %#v", response.ServicePreview)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("TOKEN=secret"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err = controller.HandleControl(context.Background(), protocol.Control{
-		Type: protocol.TypeServiceUpsert, RequestID: "upsert", Service: &definition,
-	})
-	if !errors.Is(err, meshserve.ErrCredentialsFound) || clientErrorCode(err) != protocol.ErrorCodeCredentialsFound {
-		t.Fatalf("post-preview credential error = %v, code %q", err, clientErrorCode(err))
-	}
-	if len(registry.Services()) != 0 {
-		t.Fatalf("rejected service reached registry: %#v", registry.Services())
-	}
-	response, _, err = controller.HandleControl(context.Background(), protocol.Control{
-		Type: protocol.TypeServiceUpsert, RequestID: "override", Service: &definition, AllowCredentials: true,
-	})
-	if err != nil || response.Type != protocol.TypeServiceUpserted {
-		t.Fatalf("explicit override response = %#v, error %v", response, err)
-	}
-}
-
 func TestServiceControllerRefusesResolvedTargetChangedAfterPreview(t *testing.T) {
 	home := t.TempDir()
 	first := filepath.Join(home, "first")
@@ -206,11 +152,11 @@ func TestServiceControllerRefusesResolvedTargetChangedAfterPreview(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller, err := newServiceController(context.Background(), home, store, registry, acceptingServicePublisher{})
+	controller, err := newServiceController(context.Background(), home, store, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requested := protocol.ServiceInfo{Name: "site", Target: "./site", PublicName: "site.mesh.test"}
+	requested := protocol.ServiceInfo{Name: "site", Target: "./site"}
 	response, _, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeServicePreview, RequestID: "preview", Service: &requested,
 	})
@@ -234,37 +180,12 @@ func TestServiceControllerRefusesResolvedTargetChangedAfterPreview(t *testing.T)
 	}
 }
 
-func TestServiceControllerRequiresUnserveBeforeChangingPublicName(t *testing.T) {
-	store, registry, controller := newServiceControllerTest(t, "/mesh")
-	root := t.TempDir()
-	public := protocol.ServiceInfo{Name: "site", Kind: "static", Target: root, PublicName: "site.mesh.test"}
-	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
-		Type: protocol.TypeServiceUpsert, RequestID: "create", Service: &public,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	for _, replacement := range []protocol.ServiceInfo{
-		{Name: "site", Kind: "static", Target: root},
-		{Name: "site", Kind: "static", Target: root, PublicName: "other.mesh.test"},
-	} {
-		if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
-			Type: protocol.TypeServiceUpsert, RequestID: "replace", Service: &replacement,
-		}); err == nil || !strings.Contains(err.Error(), "requires unserve first") {
-			t.Fatalf("public replacement error = %v", err)
-		}
-	}
-	persisted, err := store.GetService(context.Background(), "site")
-	if err != nil || persisted.PublicName != "site.mesh.test" || registry.Services()[0].PublicName != "site.mesh.test" {
-		t.Fatalf("persisted = %#v, registry = %#v, error %v", persisted, registry.Services(), err)
-	}
-}
-
 func TestClientServerHandlesServiceRequestAndResponse(t *testing.T) {
 	_, registry, controller := newServiceControllerTest(t, "/mesh")
 	root := t.TempDir()
 	client := newServerTestConn()
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, controller, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), controller, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,243 +212,6 @@ func TestClientServerHandlesServiceRequestAndResponse(t *testing.T) {
 	}
 }
 
-func TestClientServerRoutesProoflessAndProofBearingEdgeListWhenColocated(t *testing.T) {
-	store, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "mesh.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close() //nolint:errcheck // test cleanup
-	serviceRegistry, err := meshserve.NewRegistry(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	publisher := &recordingServicePublisher{listed: []protocol.EdgeRouteInfo{{
-		PublicName: "app.mesh.test", ServiceName: "app", DisplayAlias: "Desktop", LastSeenAt: time.Now().UTC(),
-	}}}
-	services, err := newServiceController(context.Background(), t.TempDir(), store, serviceRegistry, publisher)
-	if err != nil {
-		t.Fatal(err)
-	}
-	edgeHost, _, err := identity.LoadOrCreate(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	originHost, _, err := identity.LoadOrCreate(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	edgeRegistry, err := edge.NewRegistry(edge.HandlerConfig{Mode: edge.ModeProxy})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer edgeRegistry.Close()
-	edgeController, err := edge.NewController(context.Background(), edge.ControllerConfig{
-		TargetID: edgeHost.ID,
-		Origins: []edge.OriginConfig{{
-			Identity: originHost.ID, DisplayAlias: "Desktop", TailscaleName: "origin.example.ts.net", ControlPort: 7337, WebSocketPath: "/mesh",
-		}},
-		State: store, Registry: edgeRegistry,
-		Resolve: func(context.Context, edge.OriginConfig) (netip.AddrPort, error) {
-			return netip.MustParseAddrPort("100.64.0.8:7337"), nil
-		},
-		Pin: func(context.Context, netip.AddrPort, edge.OriginConfig) error { return nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), edgeController, services, disabledCertificateController{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := newServerTestConn()
-	done := make(chan error, 1)
-	go func() { done <- server.Handle(context.Background(), client) }()
-	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeEdgeList, RequestID: "local-list", EdgeLimit: 10}))
-	response := decodeServerControl(t, client.nextWrite(t))
-	if response.Type != protocol.TypeEdgeListed || len(response.EdgeRoutes) != 1 {
-		t.Fatalf("proofless local edge.list response = %#v", response)
-	}
-	client.pushRead(serverControlFrame(t, protocol.Control{
-		Type: protocol.TypeEdgeList, RequestID: "inbound-list", EdgeLimit: 10, EdgeListProof: &protocol.EdgeListProof{},
-	}))
-	response = decodeServerControl(t, client.nextWrite(t))
-	if response.Type != protocol.TypeError {
-		t.Fatalf("proof-bearing inbound edge.list response = %#v", response)
-	}
-	publisher.mu.Lock()
-	listCalls := publisher.listCalls
-	publisher.mu.Unlock()
-	if listCalls != 1 {
-		t.Fatalf("origin publisher list calls = %d, proof-bearing request reached service controller", listCalls)
-	}
-	client.pushReadError(context.Canceled)
-	if err := waitServerResult(t, done, "co-located edge list server"); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestPublicServiceUpsertRollsBackDurablyAndCompensatesEdge(t *testing.T) {
-	for _, test := range []struct {
-		name                   string
-		failStoreRollback      bool
-		commitThenFailRollback bool
-		wantTarget             string
-	}{
-		{name: "durable rollback succeeds", wantTarget: "8080"},
-		{name: "durable rollback fails", failStoreRollback: true, wantTarget: "8081"},
-		{name: "durable rollback commit is reloaded", commitThenFailRollback: true, wantTarget: "8080"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			base, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "mesh.db"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer base.Close() //nolint:errcheck // test cleanup
-			prior, err := base.UpsertService(context.Background(), meshserve.Service{
-				Name: "app", Kind: meshserve.Proxy, Target: "8080", PublicName: "old.mesh.test",
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			registry, err := meshserve.NewRegistry([]meshserve.Service{prior})
-			if err != nil {
-				t.Fatal(err)
-			}
-			store := &rollbackFailureStore{
-				serviceStore: base, failRollback: test.failStoreRollback,
-				commitThenFailRollback: test.commitThenFailRollback,
-			}
-			publisher := &recordingServicePublisher{failFirst: true}
-			controller, err := newServiceController(context.Background(), t.TempDir(), store, registry, publisher)
-			if err != nil {
-				t.Fatal(err)
-			}
-			broker := newStateBroker(1, time.Now)
-			controller.onCommitted = broker.servicesCommitted
-			controller.publishCommitted()
-			candidate := protocol.ServiceInfo{Name: "app", Kind: "proxy", Target: "8081", PublicName: "old.mesh.test"}
-			if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
-				Type: protocol.TypeServiceUpsert, RequestID: "public-update", Service: &candidate,
-			}); err == nil {
-				t.Fatal("unacknowledged public update succeeded")
-			}
-			persisted, err := base.GetService(context.Background(), "app")
-			if err != nil || persisted.Target != test.wantTarget || registry.Services()[0].Target != test.wantTarget {
-				t.Fatalf("persisted = %#v, live = %#v, error = %v", persisted, registry.Services(), err)
-			}
-			assertWatchCommittedService(t, broker, test.wantTarget)
-			calls := publisher.snapshot()
-			if len(calls) != 2 || calls[0][0].Target != "8081" || calls[1][0].Target != test.wantTarget {
-				t.Fatalf("edge convergence calls = %#v", calls)
-			}
-		})
-	}
-}
-
-func TestServiceDeleteRetryRepublishesAndEdgeListIsForwardedOnlyWhenConfigured(t *testing.T) {
-	store, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "mesh.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close() //nolint:errcheck // test cleanup
-	persisted, err := store.UpsertService(context.Background(), meshserve.Service{
-		Name: "app", Kind: meshserve.Proxy, Target: "3000", PublicName: "app.mesh.test",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	registry, err := meshserve.NewRegistry([]meshserve.Service{persisted})
-	if err != nil {
-		t.Fatal(err)
-	}
-	publisher := &recordingServicePublisher{failFirst: true, listed: []protocol.EdgeRouteInfo{{PublicName: "app.mesh.test", ServiceName: "app", DisplayAlias: "Desktop", LastSeenAt: time.Now().UTC()}}}
-	controller, err := newServiceController(context.Background(), t.TempDir(), store, registry, publisher)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
-		Type: protocol.TypeServiceDelete, RequestID: "delete", ServiceName: "app",
-	}); err == nil {
-		t.Fatal("delete with lost edge acknowledgement succeeded")
-	}
-	if _, err := store.GetService(context.Background(), "app"); !errors.Is(err, sql.ErrNoRows) || len(registry.Services()) != 0 {
-		t.Fatalf("first delete durable error = %v, registry = %#v", err, registry.Services())
-	}
-	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
-		Type: protocol.TypeServiceDelete, RequestID: "delete-retry", ServiceName: "app",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(publisher.snapshot()) != 3 {
-		t.Fatalf("delete convergence calls = %d, want failed delete + recovery + retry", len(publisher.snapshot()))
-	}
-	response, handled, err := controller.HandleControl(context.Background(), protocol.Control{Type: protocol.TypeEdgeList, RequestID: "edge-list", EdgeLimit: 10})
-	if err != nil || !handled || len(response.EdgeRoutes) != 1 || response.Type != protocol.TypeEdgeListed {
-		t.Fatalf("edge list = %#v, handled %v, error %v", response, handled, err)
-	}
-	disabled, err := newServiceController(context.Background(), t.TempDir(), store, registry, disabledServicePublisher{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, handled, err := disabled.HandleControl(context.Background(), protocol.Control{Type: protocol.TypeEdgeList}); handled || err != nil {
-		t.Fatalf("disabled edge list handled = %v, error = %v", handled, err)
-	}
-}
-
-func TestServiceControllerBlocksPublicTransitionWhileDurableCatalogIsUnknown(t *testing.T) {
-	base, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "mesh.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer base.Close() //nolint:errcheck // test cleanup
-	registry, err := meshserve.NewRegistry(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := &ambiguousUpsertStore{serviceStore: base, listFailures: 2}
-	publisher := &recordingServicePublisher{}
-	controller, err := newServiceController(context.Background(), t.TempDir(), store, registry, publisher)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := protocol.ServiceInfo{Name: "site", Kind: "proxy", Target: "3000", PublicName: "first.mesh.test"}
-	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
-		Type: protocol.TypeServiceUpsert, RequestID: "first", Service: &first,
-	}); err == nil {
-		t.Fatal("ambiguous post-commit upsert succeeded")
-	}
-	if len(registry.Services()) != 0 || !controller.catalogUnknown || !controller.unsynced {
-		t.Fatalf("ambiguous state registry = %#v, catalogUnknown = %v, unsynced = %v", registry.Services(), controller.catalogUnknown, controller.unsynced)
-	}
-	second := first
-	second.PublicName = "second.mesh.test"
-	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
-		Type: protocol.TypeServiceUpsert, RequestID: "blocked", Service: &second,
-	}); err == nil || !strings.Contains(err.Error(), "not synchronized") {
-		t.Fatalf("mutation while catalog unknown error = %v", err)
-	}
-	persisted, err := base.GetService(context.Background(), "site")
-	if err != nil || persisted.PublicName != first.PublicName {
-		t.Fatalf("durable service after blocked transition = %#v, error %v", persisted, err)
-	}
-	store.mu.Lock()
-	store.listFailures = 0
-	store.mu.Unlock()
-	if _, _, err := controller.HandleControl(context.Background(), protocol.Control{
-		Type: protocol.TypeServiceUpsert, RequestID: "recovered", Service: &second,
-	}); err == nil || !strings.Contains(err.Error(), "requires unserve first") {
-		t.Fatalf("transition after catalog recovery error = %v", err)
-	}
-	if got := registry.Services(); len(got) != 1 || got[0].PublicName != first.PublicName {
-		t.Fatalf("registry after recovery = %#v", got)
-	}
-	calls := publisher.snapshot()
-	if len(calls) != 1 || len(calls[0]) != 1 || calls[0][0].PublicName != first.PublicName {
-		t.Fatalf("edge recovery snapshots = %#v", calls)
-	}
-}
-
 func TestServiceControllerPublishesProxyWhoseUpstreamIsDown(t *testing.T) {
 	store, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "mesh.db"))
 	if err != nil {
@@ -538,8 +222,7 @@ func TestServiceControllerPublishesProxyWhoseUpstreamIsDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publisher := &recordingServicePublisher{}
-	controller, err := newServiceController(context.Background(), t.TempDir(), store, registry, publisher)
+	controller, err := newServiceController(context.Background(), t.TempDir(), store, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,18 +235,15 @@ func TestServiceControllerPublishesProxyWhoseUpstreamIsDown(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
-	service := protocol.ServiceInfo{Name: "app", Kind: "proxy", Target: port, PublicName: "app.mesh.test", WakeOnRequest: true}
+	service := protocol.ServiceInfo{Name: "app", Kind: "proxy", Target: port}
 
-	// Health is display-only: a down upstream must not keep the route off the edge.
+	// Health is display-only: a down upstream must not keep the route unregistered.
 	response, _, err := controller.HandleControl(context.Background(), protocol.Control{
 		Type: protocol.TypeServiceUpsert, RequestID: "upsert", Service: &service,
 	})
 	want := "upstream " + address + " unreachable: connect: connection refused"
 	if err != nil || response.Service == nil || response.Service.Healthy || response.Service.Problem != want {
 		t.Fatalf("upsert response = %#v, error = %v, want unhealthy with %q", response, err, want)
-	}
-	if calls := publisher.snapshot(); len(calls) != 1 || len(calls[0]) != 1 || calls[0][0].Name != "app" {
-		t.Fatalf("edge convergence calls = %#v, want the route published", calls)
 	}
 
 	listener, err = net.Listen("tcp", address)
@@ -586,30 +266,15 @@ func newServiceControllerTest(t *testing.T, reservedPrefix string) (*storage.Sto
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	registry, err := meshserve.NewRegistryWithReservedPrefix(nil, reservedPrefix, nil)
+	registry, err := meshserve.NewRegistryWithReservedPrefix(nil, reservedPrefix)
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller, err := newServiceController(context.Background(), t.TempDir(), store, registry, acceptingServicePublisher{})
+	controller, err := newServiceController(context.Background(), t.TempDir(), store, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return store, registry, controller
-}
-
-type acceptingServicePublisher struct{}
-
-func (acceptingServicePublisher) Enabled() bool { return true }
-func (acceptingServicePublisher) Converge(context.Context, []meshserve.Service) error {
-	return nil
-}
-
-type rollbackFailureStore struct {
-	serviceStore
-	mu                     sync.Mutex
-	upserts                int
-	failRollback           bool
-	commitThenFailRollback bool
 }
 
 type ambiguousUpsertStore struct {
@@ -639,62 +304,6 @@ func (s *ambiguousUpsertStore) ListServices(ctx context.Context) ([]meshserve.Se
 		return nil, errors.New("injected durable catalog failure")
 	}
 	return s.serviceStore.ListServices(ctx)
-}
-
-func (s *rollbackFailureStore) UpsertService(ctx context.Context, service meshserve.Service) (meshserve.Service, error) {
-	s.mu.Lock()
-	s.upserts++
-	call := s.upserts
-	s.mu.Unlock()
-	if s.failRollback && call == 2 {
-		return meshserve.Service{}, errors.New("injected durable rollback failure")
-	}
-	persisted, err := s.serviceStore.UpsertService(ctx, service)
-	if s.commitThenFailRollback && call == 2 && err == nil {
-		return persisted, errors.New("injected post-commit rollback failure")
-	}
-	return persisted, err
-}
-
-type recordingServicePublisher struct {
-	mu        sync.Mutex
-	failFirst bool
-	calls     [][]meshserve.Service
-	listed    []protocol.EdgeRouteInfo
-	listCalls int
-}
-
-func (*recordingServicePublisher) Enabled() bool { return true }
-
-func (p *recordingServicePublisher) Converge(_ context.Context, services []meshserve.Service) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.calls = append(p.calls, append([]meshserve.Service(nil), services...))
-	if p.failFirst {
-		p.failFirst = false
-		return errors.New("injected lost edge acknowledgement")
-	}
-	return nil
-}
-
-func (p *recordingServicePublisher) ListPage(context.Context, string, int) ([]protocol.EdgeRouteInfo, string, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.listCalls++
-	return append([]protocol.EdgeRouteInfo(nil), p.listed...), "", nil
-}
-
-func (p *recordingServicePublisher) snapshot() [][]meshserve.Service {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	result := make([][]meshserve.Service, len(p.calls))
-	for index := range p.calls {
-		result[index] = append([]meshserve.Service(nil), p.calls[index]...)
-	}
-	return result
-}
-func (acceptingServicePublisher) ListPage(context.Context, string, int) ([]protocol.EdgeRouteInfo, string, error) {
-	return nil, "", nil
 }
 
 func assertServiceResponse(t *testing.T, handler http.Handler, target string, wantStatus int, wantBody string) {
@@ -750,4 +359,41 @@ func canonicalServiceRoot(t *testing.T, root string) string {
 		t.Fatal(err)
 	}
 	return canonical
+}
+
+func TestPrivateServiceReconcilesAmbiguousStoreCommit(t *testing.T) {
+	for _, failures := range []int{0, 2} {
+		t.Run(fmt.Sprint(failures), func(t *testing.T) { verifyPrivateServiceAmbiguousCommit(t, failures) })
+	}
+}
+
+func verifyPrivateServiceAmbiguousCommit(t *testing.T, failures int) {
+	t.Helper()
+	store, registry, _ := newServiceControllerTest(t, "/mesh")
+	flaky := &ambiguousUpsertStore{serviceStore: store, listFailures: failures}
+	controller, err := newServiceController(t.Context(), t.TempDir(), flaky, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := newStateBroker(DefaultSubscriberLimit, time.Now)
+	controller.onCommitted = broker.servicesCommitted
+	service := protocol.ServiceInfo{Name: "app", Kind: "proxy", Target: "29999"}
+	_, _, err = controller.HandleControl(t.Context(), protocol.Control{Type: protocol.TypeServiceUpsert, RequestID: "ambiguous", Service: &service})
+	if err == nil || !strings.Contains(err.Error(), "post-commit") {
+		t.Fatalf("ambiguous commit error: %v", err)
+	}
+	if failures > 0 && len(registry.Services()) != 0 {
+		t.Fatal("unavailable durable catalog retained speculative routing")
+	}
+	var response protocol.Control
+	for range 3 {
+		response, _, err = controller.HandleControl(t.Context(), protocol.Control{Type: protocol.TypeServiceList, RequestID: "recover"})
+		if err == nil {
+			break
+		}
+	}
+	if err != nil || len(response.Services) != 1 || response.Services[0].Target != "29999" {
+		t.Fatalf("recovered private route: %+v %v", response, err)
+	}
+	assertWatchCommittedService(t, broker, "29999")
 }

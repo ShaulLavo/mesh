@@ -42,7 +42,7 @@ tested direct transition, requires recovery, or has unsupported metadata,
 protocols, journal format, or running-session protocols. For a missing direct
 transition, a local review searches at most 32 published release entries for one
 intermediate release. The search has a ten-second budget and verifies both exact
-transitions against their content-addressed rollback receipts. The next hop's
+transitions against their content-addressed forward transition receipts. The next hop's
 version comes from its published manifest.
 
 Mesh suggests `mesh update --local --version VERSION` only after checking the
@@ -283,8 +283,11 @@ reserved draft before publication starts. Name it
 `baseline_OS_ARCH_SHA256.bin`, using `linux_amd64`, `linux_arm64`, or
 `darwin_arm64` and the executable's lowercase SHA256. Reservation freezes that
 asset list. The native platform job verifies the hash and exercises the same
-state, retained-session, and rollback checks as published baselines. Failed
-proofs block publication. A published manifest is not extended afterward.
+forward upgrade, retained-session, saved-recovery, and candidate restart checks
+as published baselines. Failed proofs block publication. Receipts certify the
+candidate opening retained state and restarting with preserved sessions and
+recovery records. They provide no guarantee that a retained executable can reopen
+a newer schema. A published manifest is not extended afterward.
 
 Publishing makes an update available for review. Fleet activation follows the
 approval recorded by `mesh update`; an available release does not silently

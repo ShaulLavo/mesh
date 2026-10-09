@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestTransitionFixtureRollbackSavedRecovery(t *testing.T) {
+func TestTransitionFixtureCandidateRestartSavedRecovery(t *testing.T) {
 	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("release transition fixture requires bash")
@@ -17,28 +17,28 @@ func TestTransitionFixtureRollbackSavedRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const diagnostic = "retained daemon lost saved recovery session after candidate writes"
+	const diagnostic = "candidate restart lost saved recovery session after candidate writes"
 	var assertion string
 	for line := range strings.SplitSeq(string(fixture), "\n") {
 		if !strings.Contains(line, diagnostic) {
 			continue
 		}
 		if assertion != "" {
-			t.Fatal("rollback saved-recovery assertion must be unique")
+			t.Fatal("candidate restart saved-recovery assertion must be unique")
 		}
 		assertion = line
 	}
 	if assertion == "" {
-		t.Fatal("rollback saved-recovery assertion is missing")
+		t.Fatal("candidate restart saved-recovery assertion is missing")
 	}
 	root := t.TempDir()
 	old := filepath.Join(root, "retained-cli")
 	candidate := filepath.Join(root, "candidate-cli")
-	// The restored daemon accepts its retained CLI; the candidate CLI rejects its older declaration.
-	if err := os.WriteFile(old, []byte("#!/bin/sh\n[ \"$*\" = 'ls --daemon --all' ] || exit 2\n[ \"$MESH_FIXTURE_SAVED\" = present ] || exit 0\nprintf '0000\\n'\n"), 0o700); err != nil { //nolint:gosec // owner-only executable CLI fixture beneath t.TempDir
+	// The restarted candidate inventories its saved recovery; the retained CLI must not run.
+	if err := os.WriteFile(candidate, []byte("#!/bin/sh\n[ \"$*\" = 'ls --daemon --all' ] || exit 2\n[ \"$MESH_FIXTURE_SAVED\" = present ] || exit 0\nprintf '0000\\n'\n"), 0o700); err != nil { //nolint:gosec // owner-only executable CLI fixture beneath t.TempDir
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(candidate, []byte("#!/bin/sh\nexit 3\n"), 0o700); err != nil { //nolint:gosec // owner-only executable CLI fixture beneath t.TempDir
+	if err := os.WriteFile(old, []byte("#!/bin/sh\nexit 3\n"), 0o700); err != nil { //nolint:gosec // owner-only executable CLI fixture beneath t.TempDir
 		t.Fatal(err)
 	}
 	for _, state := range []string{"present", "missing"} {
@@ -48,7 +48,7 @@ func TestTransitionFixtureRollbackSavedRecovery(t *testing.T) {
 			command.Env = append(os.Environ(), "MESH_FIXTURE_SAVED="+state)
 			output, err := command.CombinedOutput()
 			if state == "present" && err != nil {
-				t.Fatalf("restored CLI could not verify saved recovery: %v\n%s", err, output)
+				t.Fatalf("restarted candidate could not verify saved recovery: %v\n%s", err, output)
 			}
 			if state == "present" {
 				return

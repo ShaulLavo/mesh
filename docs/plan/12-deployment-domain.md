@@ -36,7 +36,7 @@ Required credential: a Cloudflare API token with Zone Read and DNS Edit for `spr
 
 Source inspection used Mesh main `ae78899508ace2bf37be48101b04fda5c7275e17`. Operator paths below identify the existing deployment; they must not become defaults in repository commands.
 
-### Source and callers
+### Source and callers recorded at baseline
 
 | Location | Current dependency | Required change |
 | --- | --- | --- |
@@ -55,15 +55,24 @@ Source inspection used Mesh main `ae78899508ace2bf37be48101b04fda5c7275e17`. Ope
 | `examples/tailnet-gateway/main.go` | SNI dispatch for `apps.shaulavo.dev` and four-character app labels | Load the same policy or explicit domain arguments. Dispatch both zones to the proper backends during overlap. |
 | `examples/tailnet-gateway/README.md` | Deployment instructions | Document configuration and parallel rollout. |
 
-Inventory command, run from the checkout:
+Current inventory commands, run from the checkout:
 
 ```sh
 rg -n 'shaulavo\.dev|sprockt\.dev' internal examples integration web docs
-rg -n 'PublicDomain|PublicWildcardName|PrivateZone|WildcardName|ManagementHost|ManagementOrigin' internal examples
+rg -n 'ServiceWildcardName|PrivateZone|WildcardName|ManagementHost|ManagementOrigin' internal examples
 ```
 
-The first command also finds domain fixtures in `internal/{serve,daemon,dnsname,apps,apppill,edge,cli,tunnel,storage,protocol,privacy,tui}`, `examples/tailnet-gateway` and `web/app-pill/tests`. Integration callers include `serve_cli.sh`, `reverse_tunnels.sh`, `temporary_app_server.sh`, `temporary_app_update.sh`, `public_edge.sh` and `private_tls_distribution.sh`. Move executable fixtures to an explicit test domain with per-test configuration. Test isolation must not depend on an owner's configuration file.
+Current domain fixtures live in `internal/{serve,daemon,dnsname,apps,apppill,cli,storage,protocol,privacy,tui}`,
+`examples/tailnet-gateway` and `web/app-pill/tests`. Integration callers include
+`serve_cli.sh`, `temporary_app_server.sh`, `temporary_app_update.sh` and
+`private_tls_distribution.sh`. They use explicit test domains with isolated
+configuration. The public HTTP and reverse-tunnel suites have been removed.
 
+The baseline table above records the former implementation. Current certificate
+ownership uses `private-origin` and `private-service`; `AppRegistry` in private
+renewal configuration receives the service wildcard without owning A records.
+The app registry starts with `--app-registry-config`; its private client has no
+service publication or route snapshot capability.
 Historical documentation occurs in plans 00, 01, 03, 04, 06, 10 and 11; task documents T11 through T18 and T29; and the temporary-app, serve-on-demand, reverse-tunnel, remote-access and recovery guides. Update active instructions. Keep historical evidence labelled with the domain it actually measured.
 
 ### Owner configuration and services

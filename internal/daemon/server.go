@@ -10,14 +10,11 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/shaul/mesh/internal/edge"
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
-	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/transport"
-	"github.com/shaul/mesh/internal/tunnel"
 	"github.com/shaul/mesh/internal/updategate"
 )
 
@@ -28,7 +25,6 @@ type clientServer struct {
 	metrics      *hostmetrics.Sampler
 	lifecycle    *lifecycle
 	workers      WorkerConnector
-	edge         controlHandler
 	services     controlHandler
 	certificates controlHandler
 	wake         *wakeController
@@ -40,21 +36,12 @@ type controlHandler interface {
 	HandleControl(context.Context, protocol.Control) (protocol.Control, bool, error)
 }
 
-type disabledEdgeController struct{}
-
-func (disabledEdgeController) HandleControl(context.Context, protocol.Control) (protocol.Control, bool, error) {
-	return protocol.Control{}, false, nil
-}
-
-func newClientServer(lifecycle *lifecycle, workers WorkerConnector, edge, services, certificates controlHandler) (*clientServer, error) {
+func newClientServer(lifecycle *lifecycle, workers WorkerConnector, services, certificates controlHandler) (*clientServer, error) {
 	if lifecycle == nil {
 		return nil, fmt.Errorf("daemon: nil client lifecycle")
 	}
 	if workers == nil {
 		return nil, fmt.Errorf("daemon: nil client worker connector")
-	}
-	if edge == nil {
-		return nil, fmt.Errorf("daemon: nil public edge controller")
 	}
 	if services == nil {
 		return nil, fmt.Errorf("daemon: nil service controller")
@@ -62,7 +49,7 @@ func newClientServer(lifecycle *lifecycle, workers WorkerConnector, edge, servic
 	if certificates == nil {
 		return nil, fmt.Errorf("daemon: nil certificate controller")
 	}
-	return &clientServer{lifecycle: lifecycle, workers: workers, edge: edge, services: services, certificates: certificates}, nil
+	return &clientServer{lifecycle: lifecycle, workers: workers, services: services, certificates: certificates}, nil
 }
 
 // Handle serves one client until it disconnects or ctx is cancelled. This is
@@ -114,12 +101,6 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			}
 			continue
 		}
-		if request.Type == protocol.TypeTunnelClaim && len(frame.Payload) > tunnel.MaximumFrameBytes {
-			if err := writeClientRequestError(relay, request, errors.New("tunnel: claim frame exceeds 4 KiB")); err != nil {
-				return err
-			}
-			continue
-		}
 
 		if request.Type == protocol.TypeStateWatch && s.state != nil {
 			if terminalUsed {
@@ -137,13 +118,6 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			continue
 		}
 		response, lifecycleHandled, requestErr := s.lifecycle.HandleControl(ctx, request)
-		if !lifecycleHandled && request.Type == protocol.TypeTunnelRecover {
-			response, requestErr = s.recoverTunnel(ctx, request)
-			lifecycleHandled = true
-		}
-		if !lifecycleHandled {
-			response, lifecycleHandled, requestErr = s.edge.HandleControl(ctx, request)
-		}
 		if !lifecycleHandled && s.apps != nil {
 			response, lifecycleHandled, requestErr = s.apps.HandleControl(ctx, request)
 		}
@@ -234,16 +208,6 @@ func clientErrorCode(err error) string {
 		return "host.name_revision"
 	case errors.Is(err, machinename.ErrTarget):
 		return "host.name_target"
-	case errors.Is(err, edge.ErrRouteCollision):
-		return protocol.ErrorCodeEdgeRouteCollision
-	case errors.Is(err, edge.ErrStaleSequence):
-		return protocol.ErrorCodeEdgeStaleSequence
-	case errors.Is(err, edge.ErrSequenceConflict):
-		return protocol.ErrorCodeEdgeConflict
-	case errors.Is(err, edge.ErrWakeUnavailable):
-		return protocol.ErrorCodeEdgeWakeUnavailable
-	case errors.Is(err, meshserve.ErrCredentialsFound):
-		return protocol.ErrorCodeCredentialsFound
 	default:
 		return ""
 	}

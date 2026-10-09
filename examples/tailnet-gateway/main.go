@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -50,12 +51,12 @@ func verifiedClient(client net.Conn) bool {
 		return false
 	}
 	source, err := netip.ParseAddrPort(client.RemoteAddr().String())
-	return err == nil && !source.Addr().IsLoopback() && !source.Addr().IsUnspecified()
+	return err == nil && (netip.MustParsePrefix("100.64.0.0/10").Contains(source.Addr().Unmap()) || netip.MustParsePrefix("fd7a:115c:a1e0::/48").Contains(source.Addr()))
 }
 
-func bridge(client net.Conn, privateAddress, appAddress string, ownerAccess bool) {
+func bridge(client net.Conn, privateAddress, appAddress string) {
 	defer func() { _ = client.Close() }()
-	if ownerAccess && !verifiedClient(client) {
+	if !verifiedClient(client) {
 		return
 	}
 	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -71,9 +72,6 @@ func bridge(client net.Conn, privateAddress, appAddress string, ownerAccess bool
 		return
 	}
 	target := privateAddress
-	if !appHost(host) && !ownerAccess {
-		return
-	}
 	if appHost(host) {
 		target = appAddress
 	}
@@ -83,10 +81,8 @@ func bridge(client net.Conn, privateAddress, appAddress string, ownerAccess bool
 	}
 	defer func() { _ = upstream.Close() }()
 	_ = upstream.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	if ownerAccess {
-		if err := tailnet.WriteProxyHeader(upstream, client.RemoteAddr(), upstream.RemoteAddr()); err != nil {
-			return
-		}
+	if err := tailnet.WriteProxyHeader(upstream, client.RemoteAddr(), upstream.RemoteAddr()); err != nil {
+		return
 	}
 	if _, err := io.Copy(upstream, &captured); err != nil {
 		return
@@ -102,11 +98,20 @@ func bridge(client net.Conn, privateAddress, appAddress string, ownerAccess bool
 	_, _ = io.Copy(client, upstream)
 }
 
+func validateGatewayAddresses(listen, private, apps string) error {
+	for _, endpoint := range [][2]string{{"listen", listen}, {"private", private}, {"apps", apps}} {
+		address, err := netip.ParseAddrPort(endpoint[1])
+		if err != nil || address.String() != endpoint[1] || address.Port() == 0 || address.Addr().Zone() != "" || !address.Addr().Unmap().IsLoopback() {
+			return fmt.Errorf("gateway: %s address must be a canonical numeric loopback address with a non-zero port", endpoint[0])
+		}
+	}
+	return nil
+}
+
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8446", "loopback listener for Tailscale TCP/443")
 	privateAddress := flag.String("private", "127.0.0.1:8443", "existing private Mesh TLS listener")
-	appAddress := flag.String("apps", "127.0.0.1:8445", "temporary-app edge TLS listener")
-	ownerAccess := flag.Bool("tailnet-owner-access", false, "require Tailscale Serve PROXY v1 and forward device addresses to both TLS backends")
+	appAddress := flag.String("apps", "127.0.0.1:8445", "private app registry TLS listener")
 	domains := flag.String("domains", "", "deployment domain policy JSON file")
 	flag.Parse()
 	if *domains == "" {
@@ -118,26 +123,23 @@ func main() {
 	if domainpolicy.Primary() == "" {
 		log.Fatal("deployment domain policy must contain a primary domain")
 	}
-	var allowedUIDs []uint32
-	if *ownerAccess {
-		var err error
-		allowedUIDs, err = tailnet.ProxyForwarderUIDs()
-		if err != nil {
-			log.Fatal(err)
-		}
+	if err := validateGatewayAddresses(*listen, *privateAddress, *appAddress); err != nil {
+		log.Fatal(err)
+	}
+	allowedUIDs, err := tailnet.ProxyForwarderUIDs()
+	if err != nil {
+		log.Fatal(err)
 	}
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if *ownerAccess {
-		listener = tailnet.ProxyListener{Listener: listener, AllowedUIDs: allowedUIDs}
-	}
+	listener = tailnet.ProxyListener{Listener: listener, AllowedUIDs: allowedUIDs}
 	for {
 		client, err := listener.Accept()
 		if err != nil {
 			log.Fatal(err)
 		}
-		go bridge(client, *privateAddress, *appAddress, *ownerAccess)
+		go bridge(client, *privateAddress, *appAddress)
 	}
 }

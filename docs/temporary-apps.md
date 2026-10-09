@@ -37,8 +37,8 @@ Mesh SSH service, default port 2222. `--ssh-port` selects a different configured
 port. The owner host sends signed lifecycle operations to its configured app
 registry. Configure its daemon with `--app-registry-target /path/to/registry.json`.
 The file pins the registry identity, Tailnet name, control port, and WebSocket
-path. Private app maintenance runs independently of ordinary public services;
-`--public-edge-target` configures only explicitly published services.
+path. Private app maintenance uses its own authenticated registry connection. Mesh
+has no public service publisher or public gateway target.
 
 App and management names must resolve to the private Tailnet ingress,
 with HTTPS certificates covering them. See the
@@ -149,4 +149,5 @@ management routes. See the [widget source guide](../web/app-pill/README.md).
 
 Public sharing commands and APIs have been removed. Existing app source files
 are preserved when upgrading; former sharing metadata cannot enable internet
-access. Ordinary named public services and SSH tunnels keep their own behavior.
+access. Private named services keep their own routes. Public service publishing and
+SSH reverse tunnels are removed.

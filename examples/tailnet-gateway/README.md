@@ -11,17 +11,17 @@ Build and run the gateway on the Mesh host:
 
 ```sh
 go build -o ./tls-gateway ./examples/tailnet-gateway
-./tls-gateway --domains "$HOME/.config/mesh/domains.json" --tailnet-owner-access
+./tls-gateway --domains "$HOME/.config/mesh/domains.json"
 ```
 
 Configure the private Mesh daemon with its existing HTTPS certificate options
 and `--https-port=8443 --tailscale-serve --tailscale-serve-port=8446` plus
 `--tailscale-serve-proxy-protocol`.
-Configure the private app registry with `mode: "direct-tls"`,
-`listenAddress: "127.0.0.1:8445"`, `tailnetOwnerAccess: true`, and its certificate
-renewer identity.
-The certificate renewer must issue and deliver a certificate covering
-`*.new.example` to that registry. Existing private Mesh certificates stay on the
+Configure the private app registry through `--app-registry-config` with
+`listenAddress: "127.0.0.1:8445"`, `certificateRenewerId`, and an `origins`
+allowlist of identity-pinned peers. The listener always requires authenticated
+Tailnet PROXY ingress. The renewer's `appRegistry` recipient distributes a
+private-service certificate covering `*.new.example` to that registry. Existing private Mesh certificates stay on the
 private backend. The gateway stores no certificates or browser credentials.
 
 Point the management and app DNS names at the host's Tailnet IP. Clients need
@@ -62,23 +62,24 @@ kernel `INET_DIAG` support and its `tcp_diag` handler. Any sandbox must allow
 `NETLINK_SOCK_DIAG`. Startup looks up an owned loopback connection and requires
 its UID to match the Mesh process. Missing handlers, blocked diagnostics, and UID
 mismatches fail startup instead of silently refusing all traffic. On macOS and
-other unsupported platforms, these owner-access settings also fail startup.
+other unsupported platforms, authenticated app ingress also fails startup.
 Mac origin hosts remain supported behind the private Linux registry.
 
-Temporary-app routing requires `--tailnet-owner-access` on this gateway and
-`tailnetOwnerAccess: true` on the app registry's direct-TLS configuration. Apps
-are unavailable through proxy/plaintext or public-only configurations.
+The gateway always requires UID-verified PROXY ingress and a Tailnet client
+address. Its listener and both backend addresses must be canonical numeric
+loopback endpoints with nonzero ports. The app registry uses `--app-registry-config` with a loopback `listenAddress`, a
+pinned `certificateRenewerId`, and an origin allowlist. Its TLS listener always
+requires authenticated PROXY ingress and a Tailnet owner. The registry has no
+plaintext or public mode.
 
 For direct Tailnet TCP/443 forwarding to the private listener on 8443, enable
 `--tailscale-serve-proxy-protocol` on the daemon and PROXY v1 in Tailscale Serve.
 Private HTTPS requests without authenticated PROXY ingress receive HTTP 403
-and never reach private services. Public-edge HTTP forwarding and the direct Tailnet
-HTTP/control listener keep their existing trust policies.
+and never reach private services. The direct Tailnet HTTP/control listener
+keeps its existing Host and browser-request checks.
 
-Deploy the daemon and rebuilt gateway together. An old gateway sends raw TLS to
-the private backend and is rejected by the new PROXY listener; a new gateway
-sends PROXY metadata that an old raw-TLS backend rejects. Neither mismatch falls
-back to a loopback client address.
+Deploy the daemon and rebuilt gateway together. The gateway supplies verified
+client addresses to each private TLS backend.
 
 The required `--domains` flag selects the same naming policy used by the backends.
 During migration it routes both configured domains at once.

@@ -15,7 +15,7 @@ import (
 
 const (
 	ManifestSchema        = 1
-	CurrentStateVersion   = 12
+	CurrentStateVersion   = 13
 	CurrentWorkerProtocol = 1
 	CurrentUpdateProtocol = 1
 	CurrentJournalVersion = 1
@@ -59,7 +59,7 @@ type Artifact struct {
 	BinarySHA256 string   `json:"binarySha256"`
 }
 
-// Transition records an exact rollback-compatibility proof between executables.
+// Transition records an exact forward-upgrade proof between executables.
 type Transition struct {
 	FromDigest string   `json:"fromDigest"`
 	ToDigest   string   `json:"toDigest"`

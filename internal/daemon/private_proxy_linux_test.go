@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +42,7 @@ func TestPrivateProxyListenerPreservesClientAndFailsClosed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			services, err := serve.NewRegistryWithReservedPrefix([]serve.Service{{Name: "platform", Kind: serve.Proxy, Target: port}}, "/ws", func(netip.Addr) bool { return true })
+			services, err := serve.NewRegistryWithReservedPrefix([]serve.Service{{Name: "platform", Kind: serve.Proxy, Target: port}}, "/ws")
 			if err != nil {
 				t.Fatal(err)
 			}

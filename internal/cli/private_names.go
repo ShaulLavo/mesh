@@ -41,20 +41,20 @@ func reconcilePrivateNames(ctx context.Context, request PrivateNamesRequest) err
 	}
 	operations := 0
 	for _, entry := range runtime.All() {
-		operations++
-		if entry.PublicManager != nil {
+		if entry.Manager != nil {
 			operations++
 		}
+
 		if entry.ServiceManager != nil {
 			operations++
 		}
 	}
 	results := make(chan error, operations)
 	for _, entry := range runtime.All() {
-		go func() { results <- entry.Manager.RunOnce(ctx, request.Force) }()
-		if entry.PublicManager != nil {
-			go func() { results <- entry.PublicManager.RunOnce(ctx, request.Force) }()
+		if entry.Manager != nil {
+			go func() { results <- entry.Manager.RunOnce(ctx, request.Force) }()
 		}
+
 		if entry.ServiceManager != nil {
 			go func() { results <- entry.ServiceManager.RunOnce(ctx, request.Force) }()
 		}

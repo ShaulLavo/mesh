@@ -22,7 +22,7 @@ func TestOpenAdvisoryAppliesPendingMigrationsWithExistingHistory(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertMigrationVersion(t, store, 12)
+		assertCurrentMigrationVersion(t, store)
 		if err := store.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -56,7 +56,7 @@ func TestOpenBusyTimeoutAppliesToEveryPoolConnection(t *testing.T) {
 				}
 			})
 			assertSQLiteSettings(t, store)
-			assertMigrationVersion(t, store, 12)
+			assertCurrentMigrationVersion(t, store)
 			connections := make([]*sql.Conn, 0, sqliteMaxOpenConns)
 			t.Cleanup(func() {
 				for _, conn := range connections {

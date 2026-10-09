@@ -26,9 +26,9 @@ for path in sorted(args.proofs.glob("*.json")):
     if receipt.get("schema") != 1:
         fail(f"{path.name} has unsupported schema")
     if not all(receipt.get(field) is True for field in (
-        "retainedOpenedCandidateState", "sessionsPreserved", "recoveryRecordsPreserved"
+        "candidateOpenedRetainedState", "sessionsPreserved", "recoveryRecordsPreserved"
     )):
-        fail(f"{path.name} did not pass every rollback check")
+        fail(f"{path.name} did not pass every forward transition check")
     for field in (
         "stateReadMin", "stateReadMax", "stateWrite", "workerMin",
         "workerMax", "workerWrite", "journalVersion",

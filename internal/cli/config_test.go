@@ -3,11 +3,12 @@ package cli
 import (
 	"context"
 	"errors"
-	"github.com/shaul/mesh/internal/machinename"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/shaul/mesh/internal/machinename"
 )
 
 func TestValidateHostIDRejectsSessionIDs(t *testing.T) {

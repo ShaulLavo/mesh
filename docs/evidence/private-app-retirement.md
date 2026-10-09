@@ -29,16 +29,15 @@ no production dependency on the preserved HTML transformer or widget assets.
 
 ## Storage boundary
 
-Removing visibility from the JSON contract alone would make an older binary
-interpret missing visibility as public. Schema 12 atomically renames `app_state`
-to `private_app_state`, preserving every byte and the app-name reservations.
-Previous readers cannot read the private table. A downgrade with any retained
-app or browser state is refused inside the SQL transaction.
+Private app state stays in `private_app_state`. The registry keeps app-name
+reservations and inactive tombstones. Public route, snapshot, outbox and tunnel
+tables are removed. App allocation reserves a database write before checking
+names, then commits names and app state together.
 
-Registry and origin binaries must be upgraded together within the existing
-lease lifetime. Current binaries keep private URLs, original source, managed
-workspaces and worker identities. Restore an earlier executable only alongside
-its matching prior state backup; a schema-12 app store does not reopen sharing.
+The private app registry uses a dedicated loopback TLS listener with authenticated
+Tailnet PROXY ingress. Its live wildcard certificate uses the private-service
+profile shared with named private services. Renewal configuration names the
+registry with `appRegistry`; it does not write a DNS record for that recipient.
 
 ## Verification
 
@@ -58,14 +57,6 @@ HTTP servers and WebSockets. They also cover static bytes, source downloads,
 renewal, registry/origin restarts, expiry, rejected sharing commands and outside
 clients with forged headers and cookies.
 
-Run the previous-reader regression against the prior installed executable:
-
-```sh
-MESH=/path/to/candidate \
-  bash integration/private_app_previous_reader.sh /path/to/previous
-```
-
-The storage regression additionally checks exact migrated bytes, refused legacy
-SQL and transactional refusal of a nonempty downgrade. The generic widget's
+The generic widget's
 browser checks cover Chromium and WebKit, normal and reduced motion, touch and
 mouse input, every docking edge, viewport changes and explicit mount/disposal.

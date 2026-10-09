@@ -53,12 +53,11 @@ func TestRegistryPrivateCrossSitePOST(t *testing.T) {
 
 func TestRegistryBrowserRequests(t *testing.T) {
 	for _, scope := range []struct {
-		name, host  string
-		tls, public bool
+		name, host string
+		tls        bool
 	}{
 		{name: "tailnet HTTP", host: "100.64.0.1:7337"},
 		{name: "private HTTPS", host: "pc.mesh.mesh.test", tls: true},
-		{name: "public HTTPS", host: "app.mesh.test", tls: true, public: true},
 	} {
 		t.Run(scope.name, func(t *testing.T) {
 			var hits atomic.Int32
@@ -78,7 +77,7 @@ func TestRegistryBrowserRequests(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			registry, err := NewRegistry([]Service{{Name: "api", Kind: Proxy, Target: port, PublicName: "app.mesh.test"}})
+			registry, err := NewRegistry([]Service{{Name: "api", Kind: Proxy, Target: port}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -145,7 +144,7 @@ func TestRegistryBrowserRequests(t *testing.T) {
 					defer func() { _ = response.Body.Close() }()
 					_, _ = io.Copy(io.Discard, response.Body)
 					wantStatus, wantHits := http.StatusForbidden, int32(0)
-					if scope.public || tc.allow {
+					if tc.allow {
 						wantStatus, wantHits = http.StatusNoContent, 1
 					}
 					if response.StatusCode != wantStatus || hits.Load()-before != wantHits {
@@ -190,7 +189,6 @@ func TestRegistryPrivateGatePrecedesRouteHandlers(t *testing.T) {
 
 func TestRegistryWebSocketOrigins(t *testing.T) {
 	for _, host := range []string{"pc.mesh.mesh.test", "app.mesh.test", "console.mesh.test"} {
-		public := host == "app.mesh.test"
 		t.Run(host, func(t *testing.T) {
 			var hits atomic.Int32
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -215,10 +213,9 @@ func TestRegistryWebSocketOrigins(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			service := Service{Name: "api", Kind: Proxy, Target: port, PublicName: "app.mesh.test"}
+			service := Service{Name: "api", Kind: Proxy, Target: port}
 			requestPath := "/api/socket"
 			if host == "console.mesh.test" {
-				service.PublicName = ""
 				service.PrivateHost = host
 				requestPath = "/socket"
 			}
@@ -253,7 +250,7 @@ func TestRegistryWebSocketOrigins(t *testing.T) {
 					if response != nil && response.Body != nil {
 						defer func() { _ = response.Body.Close() }()
 					}
-					if !public && origin != "" && origin != "https://"+host {
+					if origin != "" && origin != "https://"+host {
 						if err == nil {
 							_ = conn.CloseNow()
 							t.Fatal("cross-origin WebSocket was accepted")

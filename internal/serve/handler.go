@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
-	"net"
 	"net/http"
 	"net/http/httputil"
-	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -44,10 +42,10 @@ func Handler(service Service, prefix string) (http.Handler, error) {
 	if err := validatePrefix(prefix); err != nil {
 		return nil, err
 	}
-	return handlerForNormalizedService(normalized, prefix, nil)
+	return handlerForNormalizedService(normalized, prefix)
 }
 
-func handlerForNormalizedService(service Service, prefix string, trustForwardedHeaders func(netip.Addr) bool) (http.Handler, error) {
+func handlerForNormalizedService(service Service, prefix string) (http.Handler, error) {
 	var handler http.Handler
 	switch service.Kind {
 	case Static:
@@ -59,7 +57,7 @@ func handlerForNormalizedService(service Service, prefix string, trustForwardedH
 			serveFiles(w, request, service.Target, prefix, relative)
 		})
 	case Proxy:
-		handler = proxyHandler(service.Target, prefix, trustForwardedHeaders, service.Isolate)
+		handler = proxyHandler(service.Target, prefix, service.Isolate)
 	default:
 		return nil, fmt.Errorf("serve: service %q has unsupported kind %q", service.Name, service.Kind)
 	}
@@ -267,7 +265,7 @@ func mountedURL(prefix, logicalPath string, directory bool) string {
 	return result
 }
 
-func proxyHandler(port, prefix string, trustForwardedHeaders func(netip.Addr) bool, isolate bool) http.Handler {
+func proxyHandler(port, prefix string, isolate bool) http.Handler {
 	target := &url.URL{Scheme: "http", Host: upstreamAddress(port)}
 	var modifyResponse func(*http.Response) error
 	if isolate {
@@ -279,17 +277,11 @@ func proxyHandler(port, prefix string, trustForwardedHeaders func(netip.Addr) bo
 	proxy := &httputil.ReverseProxy{
 		ModifyResponse: modifyResponse,
 		Rewrite: func(request *httputil.ProxyRequest) {
-			forwardedFor, forwardedProto, trusted := trustedForwardingMetadata(request.In, trustForwardedHeaders)
 			request.SetURL(target)
 			request.Out.Host = request.In.Host
 			removeForwardedHeaders(request.Out.Header)
-			if trusted {
-				request.Out.Header.Set("X-Forwarded-For", forwardedFor)
-				request.Out.Header.Set("X-Forwarded-Host", request.In.Host)
-				request.Out.Header.Set("X-Forwarded-Proto", forwardedProto)
-			} else {
-				request.SetXForwarded()
-			}
+
+			request.SetXForwarded()
 			request.Out.Header.Set("X-Forwarded-Prefix", prefix)
 		},
 		FlushInterval: -1,
@@ -321,34 +313,6 @@ func proxyHandler(port, prefix string, trustForwardedHeaders func(netip.Addr) bo
 		proxied.URL.RawPath = relative
 		proxy.ServeHTTP(w, proxied)
 	})
-}
-
-func trustedForwardingMetadata(request *http.Request, trust func(netip.Addr) bool) (string, string, bool) {
-	if trust == nil {
-		return "", "", false
-	}
-	host, _, err := net.SplitHostPort(request.RemoteAddr)
-	if err != nil {
-		return "", "", false
-	}
-	immediate, err := netip.ParseAddr(host)
-	if err != nil || !trust(immediate.Unmap()) {
-		return "", "", false
-	}
-	forwardedForValues := request.Header.Values("X-Forwarded-For")
-	forwardedProtoValues := request.Header.Values("X-Forwarded-Proto")
-	if len(forwardedForValues) != 1 || len(forwardedProtoValues) != 1 || strings.Contains(forwardedForValues[0], ",") {
-		return "", "", false
-	}
-	forwardedFor, err := netip.ParseAddr(forwardedForValues[0])
-	if err != nil || forwardedFor.Zone() != "" || forwardedFor.Unmap().String() != forwardedForValues[0] {
-		return "", "", false
-	}
-	forwardedProto := forwardedProtoValues[0]
-	if forwardedProto != "http" && forwardedProto != "https" {
-		return "", "", false
-	}
-	return forwardedForValues[0], forwardedProto, true
 }
 
 func removeForwardedHeaders(header http.Header) {

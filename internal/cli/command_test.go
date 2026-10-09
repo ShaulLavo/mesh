@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/creack/pty"
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
@@ -43,8 +42,6 @@ type commandTestHost struct {
 	action       protocol.Control
 	services     []protocol.ServiceInfo
 	previewRoot  string
-	previewFiles uint64
-	edgeRoutes   []protocol.EdgeRouteInfo
 	// listRows replaces the single default row when set.
 	listRows func() []protocol.SessionInfo
 	// recoverTo answers session.recover with this replacement and makes the
@@ -259,7 +256,7 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 			}
 		}
 		response.Type = protocol.TypeServicePreviewed
-		response.ServicePreview = &protocol.ServicePreview{Service: preview, FileCount: c.host.previewFiles}
+		response.ServicePreview = &protocol.ServicePreview{Service: preview}
 	case protocol.TypeServiceUpsert:
 		if request.ServicePreview == nil {
 			return errors.New("service upsert omitted preview")
@@ -309,11 +306,6 @@ func (c *commandTestConn) WriteFrame(frame protocol.Frame) error {
 		c.host.mu.Unlock()
 		response.Type = protocol.TypeServiceDeleted
 		response.ServiceName = request.ServiceName
-	case protocol.TypeEdgeList:
-		c.host.mu.Lock()
-		response.EdgeRoutes = append([]protocol.EdgeRouteInfo(nil), c.host.edgeRoutes...)
-		c.host.mu.Unlock()
-		response.Type = protocol.TypeEdgeListed
 	default:
 		return errors.New("unexpected command test control " + request.Type)
 	}
@@ -448,38 +440,6 @@ func TestServeCommandPreviewsThenPublishesCanonicalService(t *testing.T) {
 	}
 }
 
-func TestPublicServeConfirmationUsesRemoteFactsAndYesOnlySkipsPrompt(t *testing.T) {
-	host := setupCommandTestHost(t)
-	host.previewRoot = "/home/alice/site"
-	host.previewFiles = 17
-	confirmations := 0
-	confirm := func(_ context.Context, confirmation PublicConfirmation) (bool, error) {
-		confirmations++
-		if confirmation.Host.MachineName != "pc" || confirmation.Service.Target != "/home/alice/site" || confirmation.FileCount != 17 || confirmation.URL != "https://blog.mesh.test/blog" {
-			t.Fatalf("confirmation = %#v", confirmation)
-		}
-		return true, nil
-	}
-	stdout, _, err := executeCommand(t, Dependencies{DialControl: host.dial, ConfirmPublic: confirm},
-		"serve", "pc", "./site", "--at", "/blog", "--public", "blog.mesh.test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if confirmations != 1 || !strings.Contains(stdout, "https://blog.mesh.test/blog") {
-		t.Fatalf("confirmations = %d, output %q", confirmations, stdout)
-	}
-	_, _, err = executeCommand(t, Dependencies{
-		DialControl: host.dial,
-		ConfirmPublic: func(context.Context, PublicConfirmation) (bool, error) {
-			t.Fatal("--yes called confirmation adapter")
-			return false, nil
-		},
-	}, "serve", "pc", "./site", "--at", "/blog", "--public", "blog.mesh.test", "--yes")
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestServeCommandRejectsMeaninglessFlagsBeforeDial(t *testing.T) {
 	host := setupCommandTestHost(t)
 	for _, args := range [][]string{
@@ -561,89 +521,6 @@ func TestSessionListDiagnosticsCannotInjectTerminalControls(t *testing.T) {
 	}
 	if strings.ContainsAny(stderr, "\r\x1b") || strings.ContainsRune(stderr, '\u202e') || strings.Count(stderr, "\n") != 1 || len(stderr) > maximumRemoteErrorBytes+200 {
 		t.Fatalf("unsafe list diagnostic = %q (%d bytes)", stderr, len(stderr))
-	}
-}
-
-func TestTerminalPublicConfirmationCancelsWithoutLeakingARead(t *testing.T) {
-	t.Setenv("TERM", "dumb")
-	master, terminal, err := pty.Open()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer master.Close()   //nolint:errcheck // test resource cleanup
-	defer terminal.Close() //nolint:errcheck // test resource cleanup
-	confirmation := PublicConfirmation{Host: HostRecord{MachineName: "pc"}, Service: protocol.ServiceInfo{Kind: "proxy", Target: "3000"}, URL: "https://app.mesh.test/api"}
-	for iteration := 0; iteration < 8; iteration++ {
-		output := newPromptTestWriter()
-		confirm := terminalPublicConfirmation(terminal, output)
-		ctx, cancel := context.WithCancel(context.Background())
-		result := make(chan error, 1)
-		go func() {
-			_, confirmErr := confirm(ctx, confirmation)
-			result <- confirmErr
-		}()
-		output.wait(t)
-		cancel()
-		select {
-		case confirmErr := <-result:
-			if !errors.Is(confirmErr, context.Canceled) {
-				t.Fatalf("cancelled confirmation %d error = %v", iteration, confirmErr)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("cancelled confirmation %d remained blocked", iteration)
-		}
-	}
-
-	output := newPromptTestWriter()
-	result := make(chan struct {
-		confirmed bool
-		err       error
-	}, 1)
-	go func() {
-		confirmed, confirmErr := terminalPublicConfirmation(terminal, output)(context.Background(), confirmation)
-		result <- struct {
-			confirmed bool
-			err       error
-		}{confirmed: confirmed, err: confirmErr}
-	}()
-	output.wait(t)
-	if _, err := master.Write([]byte("yes\n")); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case got := <-result:
-		if got.err != nil || !got.confirmed {
-			t.Fatalf("confirmation after cancellations = %v, %v", got.confirmed, got.err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("confirmation read was consumed by a leaked prompt")
-	}
-}
-
-func TestServeListPrintsActualPrivateAndPublicURLs(t *testing.T) {
-	host := setupCommandTestHost(t)
-	host.services = []protocol.ServiceInfo{
-		{Name: "api", Kind: "proxy", Target: "3000", Healthy: true},
-		{Name: "blog", Kind: "static", Target: "/home/alice/site", PublicName: "blog.mesh.test", Healthy: true},
-	}
-	host.edgeRoutes = []protocol.EdgeRouteInfo{{
-		PublicName: "blog.mesh.test", ServiceName: "blog", DisplayAlias: "pc", LastSeenAt: commandTestTime, Online: true,
-	}}
-	for _, listCommand := range []string{"ls", "list"} {
-		t.Run(listCommand, func(t *testing.T) {
-			stdout, _, err := executeCommand(t, Dependencies{DialControl: host.dial, Now: func() time.Time { return commandTestTime }}, "serve", listCommand)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, want := range []string{
-				"ROUTE", "HOST", "KIND", "TARGET", "SCOPE", "HEALTH", "URL",
-				"https://pc.mesh.mesh.test/api", "https://blog.mesh.test/blog", "tailnet", "public", "healthy",
-			} {
-				if !strings.Contains(stdout, want) {
-					t.Fatalf("serve %s output %q does not contain %q", listCommand, stdout, want)
-				}
-			}
-		})
 	}
 }
 
@@ -1399,34 +1276,6 @@ func executeCommand(t *testing.T, dependencies Dependencies, args ...string) (st
 	command.SetArgs(args)
 	err = command.ExecuteContext(context.Background())
 	return readCommandFile(t, stdout), readCommandFile(t, stderr), err
-}
-
-type promptTestWriter struct {
-	mu    sync.Mutex
-	text  bytes.Buffer
-	ready chan struct{}
-	once  sync.Once
-}
-
-func newPromptTestWriter() *promptTestWriter { return &promptTestWriter{ready: make(chan struct{})} }
-
-func (w *promptTestWriter) Write(contents []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	written, err := w.text.Write(contents)
-	if strings.Contains(w.text.String(), "Continue? [y/N]") {
-		w.once.Do(func() { close(w.ready) })
-	}
-	return written, err
-}
-
-func (w *promptTestWriter) wait(t *testing.T) {
-	t.Helper()
-	select {
-	case <-w.ready:
-	case <-time.After(time.Second):
-		t.Fatal("confirmation prompt was not written")
-	}
 }
 
 func readCommandFile(t *testing.T, file *os.File) string {

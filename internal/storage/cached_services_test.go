@@ -20,7 +20,7 @@ func TestReplaceCachedServicesIsCompleteAndDurable(t *testing.T) {
 	host := Host{ID: "host-1", MeshIdentity: "identity-1", LastSeenAt: now}
 	rows := []CachedService{
 		{HostID: host.ID, Service: meshserve.Service{DisplayName: "API service", Name: "api", Kind: meshserve.Proxy, Target: "3000", PrivateHost: "api.mesh.test"}, Healthy: true, ObservedAt: now},
-		{HostID: host.ID, Service: meshserve.Service{Name: "blog", Kind: meshserve.Static, Target: "/srv/blog", PublicName: "blog.mesh.test"}, Problem: "root unavailable", ObservedAt: now},
+		{HostID: host.ID, Service: meshserve.Service{Name: "blog", Kind: meshserve.Static, Target: "/srv/blog"}, Problem: "root unavailable", ObservedAt: now},
 	}
 	if err := store.ReplaceCachedServices(ctx, host, rows); err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestReplaceCachedServicesIsCompleteAndDurable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].Service.Name != "api" || got[0].Service.DisplayName != "API service" || got[0].Service.PrivateHost != "api.mesh.test" || got[1].Service.PublicName != "blog.mesh.test" || got[1].Problem != "root unavailable" {
+	if len(got) != 2 || got[0].Service.Name != "api" || got[0].Service.DisplayName != "API service" || got[0].Service.PrivateHost != "api.mesh.test" || got[1].Service.Name != "blog" || got[1].Problem != "root unavailable" {
 		t.Fatalf("cached services = %#v", got)
 	}
 	if err := store.ReplaceCachedServices(ctx, host, nil); err != nil {
@@ -87,9 +87,9 @@ func TestReplaceCachedServicesRollsBackAtGlobalBound(t *testing.T) {
 			SELECT 1 UNION ALL SELECT value + 1 FROM entries WHERE value < 8192
 		)
 		INSERT INTO cached_services (
-			host_id, private_name, name, kind, target, public_name, wake_on_request, healthy, problem, observed_at
+			host_id, private_name, name, kind, target, healthy, problem, observed_at
 		)
-		SELECT 'seed', '', printf('r%04d', value), 'proxy', '3000', '', 0, 1, '', 1 FROM entries;
+		SELECT 'seed', '', printf('r%04d', value), 'proxy', '3000', 1, '', 1 FROM entries;
 	`); err != nil {
 		t.Fatal(err)
 	}

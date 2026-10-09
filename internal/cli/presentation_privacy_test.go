@@ -12,7 +12,6 @@ import (
 	appspkg "github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/protocol"
-	"github.com/shaul/mesh/internal/tunnel"
 	"github.com/spf13/cobra"
 )
 
@@ -64,14 +63,6 @@ func TestPrivateServicePortsAndDiagnostics(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "private-machine") || strings.Contains(output.String(), "secret-token") || !strings.Contains(output.String(), "unavailable") {
 		t.Fatalf("diagnostics = %s", output.String())
-	}
-	rows := []ServiceCatalogRow{{Host: HostRecord{ID: "id", MachineName: "private-machine"}, Service: protocol.ServiceInfo{Name: "private-route", PublicName: "secret.example"}}, {Host: HostRecord{ID: "id", MachineName: "private-machine"}, Service: protocol.ServiceInfo{Name: "private-route/admin"}}}
-	output.Reset()
-	if err := writeServiceShadowWarnings(&output, rows, mask); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(output.String(), "private-route") || strings.Contains(output.String(), "secret.example") || !strings.Contains(output.String(), "[details withheld]") {
-		t.Fatalf("shadow warning = %s", output.String())
 	}
 	if got := privateServiceCommand(mask, "echo arbitrary-secret"); strings.Contains(got, "secret") {
 		t.Fatalf("command leaked: %s", got)
@@ -226,78 +217,5 @@ func TestPrivateServiceLabelPreservesAction(t *testing.T) {
 	}
 	if host.services[0].Name != "private-route" || host.services[0].DisplayName != "Secret Site" {
 		t.Fatalf("label control data changed: %+v", host.services)
-	}
-}
-
-func TestPrivateTunnelClaimAndReleasePreserveSignedNames(t *testing.T) {
-	host, _, stateDir := setupTunnelCLI(t)
-	mask := privacy.New()
-	var actions []tunnel.Action
-	deps := Dependencies{DialControl: serviceRemoteDial(host, func(request protocol.Control) protocol.Control {
-		if request.Type != protocol.TypeTunnelClaim || request.TunnelMutation == nil {
-			t.Fatalf("unexpected control: %+v", request)
-		}
-		mutation := *request.TunnelMutation
-		if mutation.PublicName != "secret.mesh.test" {
-			t.Fatalf("masked signed hostname: %+v", mutation)
-		}
-		digest, err := tunnel.Verify(mutation, host.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		actions = append(actions, mutation.Action)
-		return protocol.Control{Type: protocol.TypeTunnelClaimed, TunnelAck: &tunnel.Ack{Sequence: mutation.Sequence, Digest: digest}}
-	})}
-	output, _, err := executeCommand(t, deps, "--privacy", "serve", "claim", "vps", "secret.mesh.test", "--yes")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(output, host.TailscaleName) {
-		t.Fatalf("claim leaked private DNS: %s", output)
-	}
-	for _, value := range []string{"secret.mesh.test", " on vps", mask.Value("path", stateDir+"/identity.key"), mask.Value("host", host.TailscaleName)} {
-		if !strings.Contains(output, value) {
-			t.Fatalf("claim lost usable summary %q: %s", value, output)
-		}
-	}
-	if !strings.Contains(output, "ssh -N") || !strings.Contains(output, "2222") {
-		t.Fatalf("claim summary lost safe details: %s", output)
-	}
-	output, _, err = executeCommand(t, deps, "--privacy", "unserve", "secret.mesh.test", "--host", "vps")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output, "secret.mesh.test") || !strings.Contains(output, " on vps") {
-		t.Fatalf("release lost useful names: %s", output)
-	}
-	if len(actions) != 2 || actions[0] != tunnel.Create || actions[1] != tunnel.Release {
-		t.Fatalf("actions = %+v", actions)
-	}
-}
-
-func TestPrivatePublicConfirmationRetainsUsefulTarget(t *testing.T) {
-	mask := privacy.New()
-	confirmation := PublicConfirmation{
-		Host:      HostRecord{MachineName: "recording-owner@pc"},
-		Service:   protocol.ServiceInfo{Kind: "files", Target: "/home/private-person/site"},
-		FileCount: 3,
-		URL:       "https://pc.example.ts.net/site/page?view=owner",
-	}
-	var output bytes.Buffer
-	if err := writePublicConfirmation(&output, confirmation, mask); err != nil {
-		t.Fatal(err)
-	}
-	for _, private := range []string{"recording-owner", "private-person", "example.ts.net"} {
-		if strings.Contains(output.String(), private) {
-			t.Fatalf("confirmation leaked %q: %s", private, output.String())
-		}
-	}
-	for _, useful := range []string{"pc", "~/site", "Files: 3", "https://", "/site/page", "Continue? [y/N]"} {
-		if !strings.Contains(output.String(), useful) {
-			t.Fatalf("confirmation lost %q: %s", useful, output.String())
-		}
-	}
-	if confirmation.Service.Target != "/home/private-person/site" || confirmation.Host.MachineName != "recording-owner@pc" {
-		t.Fatal("confirmation mutated original facts")
 	}
 }

@@ -21,7 +21,6 @@ import (
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/sshfs"
-	"github.com/shaul/mesh/internal/tunnel"
 )
 
 const (
@@ -29,10 +28,8 @@ const (
 	helloCommand          = "hello"
 	helloMessage          = "mesh ssh ready\n"
 
-	// maximumConnections caps concurrent SSH connections, the way
-	// maximumPublicConnections caps the public HTTP edge. The daemon shares one
-	// descriptor table across the Unix socket, SQLite, HTTPS and the edge, so an
-	// unbounded SSH listener is a way to starve all of them.
+	// SSH, private HTTPS and workers share one descriptor table.
+	// An unbounded SSH listener could starve all of them.
 	maximumConnections = 256
 )
 
@@ -138,7 +135,6 @@ func (c *boundedConn) Close() error {
 // Config identifies one concrete SSH listener and its authentication state.
 // Addr must include both the discovered Tailnet address and the SSH port.
 type Config struct {
-	Tunnels        tunnel.Activator
 	HostKey        ed25519.PrivateKey
 	AuthorizedKeys string
 	Addr           string
@@ -147,7 +143,6 @@ type Config struct {
 }
 
 type normalizedConfig struct {
-	tunnels        tunnel.Activator
 	loginGrace     time.Duration
 	hostKey        ed25519.PrivateKey
 	authorizedKeys string
@@ -227,7 +222,7 @@ func validateConfig(ctx context.Context, cfg Config) (normalizedConfig, error) {
 	if addr.Port() == 0 || addr.Addr().IsUnspecified() || addr.Addr().IsMulticast() {
 		return normalizedConfig{}, fmt.Errorf("sshd: listen address %q is not a concrete IP endpoint", cfg.Addr)
 	}
-	return normalizedConfig{hostKey: hostKey, authorizedKeys: authorizedKeys, addr: addr, handler: cfg.Handler, services: cfg.Services, tunnels: cfg.Tunnels}, nil
+	return normalizedConfig{hostKey: hostKey, authorizedKeys: authorizedKeys, addr: addr, handler: cfg.Handler, services: cfg.Services}, nil
 }
 
 func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server, error) {
@@ -242,7 +237,7 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 		}
 	}
 
-	// Extension options are trusted to add handlers, not to weaken the public
+	// Extension options are trusted to add handlers, not to weaken the authentication
 	// boundary. Reassert every security-sensitive field after applying them.
 	server.Addr = cfg.addr.String()
 	server.HostSigners = []charmssh.Signer{signer}
@@ -274,11 +269,6 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 		files = sshfs.New(cfg.services)
 	}
 	configureSessions(server, cfg.handler, handler, files)
-	if cfg.tunnels != nil {
-		if err := server.SetOption(tunnel.SSHOption(cfg.tunnels)); err != nil {
-			return nil, fmt.Errorf("sshd: configure reverse tunnels: %w", err)
-		}
-	}
 	return server, nil
 }
 
@@ -297,18 +287,6 @@ func (cfg normalizedConfig) signedConfig(ctx charmssh.Context) *gossh.ServerConf
 	}}
 }
 
-// Authorizer checks the current managed file on every reservation or activation.
-func Authorizer(path string) func(string) bool {
-	return func(id string) bool {
-		key, err := tunnel.PublicKey(id)
-		if err != nil {
-			return false
-		}
-		public, err := gossh.NewPublicKey(key)
-		return err == nil && isAuthorized(path, public)
-	}
-}
-
 func marshalHostKey(private ed25519.PrivateKey) ([]byte, gossh.Signer, error) {
 	block, err := gossh.MarshalPrivateKey(private, "Mesh host identity")
 	if err != nil {
@@ -324,10 +302,6 @@ func marshalHostKey(private ed25519.PrivateKey) ([]byte, gossh.Signer, error) {
 
 func helloHandler(session charmssh.Session) {
 	_, _ = io.WriteString(session, helloMessage)
-}
-
-func isAuthorized(path string, presented charmssh.PublicKey) bool {
-	return identity.Granted(path, presented)
 }
 
 func normalCloseError(err error) error {

@@ -2,8 +2,7 @@
 
 Mesh is Tailnet-only on `sprockt.dev`. The owner removed public temporary apps,
 public serving and VPS-edge tunnels on 2026-10-08. Public hosting belongs to
-Brine on `shaulavo.dev`. Old `public-edge` profile and option names below are
-compatibility identifiers for certificate/routing state, not internet exposure.
+Brine on `shaulavo.dev`. Mesh has private-origin and private-service certificate profiles.
 
 Mesh reads `domains.json` beside `hosts.json` before the interactive picker and
 ordinary client commands start.
@@ -57,9 +56,10 @@ permissions and perform no DNS writes by themselves.
 
 ## Certificate slots
 
-Private and public profiles have separate stores for every accepted domain.
-Private certificates cover `*.mesh.<domain>`; public edge certificates cover
-`*.<domain>`. SNI chooses the matching slot. An unknown SNI is rejected.
+Private-origin and private-service profiles have separate stores for every
+accepted domain. Machine certificates cover `*.mesh.<domain>`; service and app
+registry certificates cover `*.<domain>`. SNI chooses the matching slot. An
+unknown SNI is rejected.
 
 For an existing installation, `legacyCertificateDomain` identifies the domain
 whose installed certificates and renewal state already occupy the original
@@ -73,6 +73,34 @@ HTTP names. Every installed private domain keeps the same pinned host label,
 such as `desktop.mesh.new.example` and `desktop.mesh.old.example`. A different
 label is rejected, including concurrent installs. Signer and target identities
 are still checked for every bundle.
+
+## Private app registry
+
+Start the registry daemon with `--app-registry-config /absolute/path/apps.json`.
+Its strict configuration declares a loopback TLS listener and origin peers:
+
+```json
+{
+  "listenAddress": "127.0.0.1:8445",
+  "certificateRenewerId": "RENEWER_IDENTITY",
+  "origins": [
+    {
+      "identity": "ORIGIN_IDENTITY",
+      "tailscaleName": "desktop.example.ts.net",
+      "controlPort": 7337,
+      "websocketPath": "/mesh"
+    }
+  ]
+}
+```
+
+The listener requires authenticated Tailnet PROXY ingress. It serves known app
+and management hosts after resolving the Tailnet owner. Ordinary services stay
+on their origin's private listener. Configure the origin's
+`--app-registry-target` with the registry identity, Tailscale name, control port
+and WebSocket path. The registry certificate uses the private-service install
+slot even when the registry has no private-origin HTTPS listener. If one daemon
+runs both roles, both roles must pin the same certificate renewer.
 
 ## Renewal for both zones
 
@@ -109,9 +137,20 @@ omitted domain inherits the primary; changing credentials alone does not change
 that domain. Preserve the old renewal file and token during overlap, and use a
 separate destination token path. Keep `legacyCertificateDomain` unchanged until
 the old domain is safely retired.
-Use the existing `publicEdge` recipient field in each file when distributing
-public certificates too. The example's identity and zone placeholders must be
-replaced before running it.
+For private app HTTPS, add an `appRegistry` recipient to each renewal file:
+
+```json
+"appRegistry": {
+  "tailscaleName": "registry.example.ts.net",
+  "identity": "REGISTRY_IDENTITY",
+  "controlPort": 7338,
+  "websocketPath": "/mesh"
+}
+```
+
+The registry receives the same private-service wildcard as service origins.
+This recipient creates no A records. A recipient-only renewal file can omit
+`origins`. Replace identity and zone placeholders before running the command.
 
 Each zone gets its own DNS solver, ACME account state, renewal loop, and signed
 certificate distributor. `private-names reconcile` processes all configured
@@ -198,11 +237,10 @@ shows the root hostname. The original machine path returns 404, including API
 and WebSocket requests. The route key still identifies the service for commands
 such as `mesh serve stop /platform` and `mesh unserve /platform`.
 
-The service stays on the origin's tailnet listener. The public edge receives no
-service publication. Existing proxy, files, static, on-demand, and isolation
+The service stays on the origin's tailnet listener. Existing proxy, files,
+static, on-demand, and isolation
 options apply to the root hostname too. Cross-origin requests use the same
-private-service checks as path mounts. A hostname belongs to one service and
-cannot overlap a public service. `mesh`, `apps`, and four-character temporary
+private-service checks as path mounts. A hostname belongs to one service. `mesh`, `apps`, and four-character temporary
 app identifiers are reserved.
 
 For an existing route, configure `serviceNames` first. Reconcile its owned DNS
@@ -228,10 +266,10 @@ Configure DNS ownership separately on the certificate renewer. Add
 The renewer creates unproxied A records pointing to that origin's Tailscale IPv4
 address. It installs a `*.<domain>` certificate in the origin's separate
 `private-service` slot, signed by the pinned renewer for the exact origin
-identity. Public-edge certificates cannot install into that slot. Existing
+identity. Only private-service signed bundles can install into that slot. Existing
 private-origin certificate stores and `*.mesh.<domain>` names stay unchanged.
 Each service origin holds the private key for the domain's wildcard certificate.
-Trust those origins to protect every name in that domain, including public app
+Trust those origins to protect every name in that domain, including private app
 names. Profile pins protect certificate installation; they do not narrow what a
 wildcard certificate can authenticate.
 Restart the configured renewer daemon or run `mesh private-names reconcile`
@@ -258,18 +296,16 @@ collisions roll back the whole creation. Startup adopts aliases for existing
 active apps under their recorded owner and stops on a conflicting reservation.
 Retirement marks every configured alias inactive.
 
-Requests keep their own domain for the injected app controls, management pages,
+Requests keep their own domain for management pages,
 pairing redirects, origin checks, and return URLs. A return URL must name the same
 app ID on an accepted domain. Private view challenges set the browser nonce on
 the destination app domain, then return to the authenticated manager to issue
 the ticket. The challenge return host must match the app host that sets the
-nonce. Private browser grants require currently valid, installed live public-edge
+nonce. Private browser grants require currently valid, installed live private-service
 certificates for both the app and its manager. Alias configuration and staging
 certificates alone leave grants disabled. Certificate renewal enables grants
-without restarting the edge. Proxy mode keeps grants disabled because its
-external TLS terminator has no installed certificate slot in Mesh; use the
-direct-TLS listener for private browser views. Public apps and Tailnet owner
-access keep their existing behavior. Browser cookies remain host-only. Parent-domain cookies are stripped
+without restarting the registry. The app registry uses a loopback TLS listener
+behind authenticated Tailnet PROXY ingress. Browser cookies remain host-only. Parent-domain cookies are stripped
 for every accepted domain. Signed admissions retain their target hostname, URI, method,
 owner identity, and generation checks.
 
@@ -277,7 +313,7 @@ owner identity, and generation checks.
 
 1. Back up affected configuration files and inspect DNS in both zones.
 2. Deploy this source and check the policy created for the existing domain.
-3. Add the destination alias on origins, app edges, renewers, and gateways.
+3. Add the destination alias on origins, app registries, renewers, and gateways.
 4. Install destination DNS and certificates while keeping old renewals active.
 5. Check both domains for private services and disposable apps.
 6. Change the primary, then update consumers after both paths work.

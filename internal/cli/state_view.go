@@ -4,14 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/shaul/mesh/internal/hostmetrics"
-	"github.com/shaul/mesh/internal/machinename"
-	"github.com/shaul/mesh/internal/protocol"
-	"github.com/shaul/mesh/internal/release"
 	"maps"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/shaul/mesh/internal/hostmetrics"
+	"github.com/shaul/mesh/internal/machinename"
+	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/release"
 )
 
 var ErrStateGap = errors.New("state watch sequence gap")

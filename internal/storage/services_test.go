@@ -17,12 +17,10 @@ func TestStoreServiceLifecycleSurvivesReopen(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "mesh.db")
 	root := t.TempDir()
 	want := meshserve.Service{
-		Name:          "blog/assets",
-		DisplayName:   "Blog assets",
-		Kind:          meshserve.Files,
-		Target:        root,
-		PublicName:    "blog.mesh.test",
-		WakeOnRequest: true,
+		Name:        "blog/assets",
+		DisplayName: "Blog assets",
+		Kind:        meshserve.Files,
+		Target:      root,
 	}
 
 	store, err := Open(ctx, databasePath)
@@ -62,8 +60,7 @@ func TestStoreServiceLifecycleSurvivesReopen(t *testing.T) {
 
 	updated := want
 	updated.Kind = meshserve.Static
-	updated.PublicName = "site.mesh.test"
-	updated.WakeOnRequest = false
+	updated.PrivateHost = "site.mesh.test"
 	if _, err := store.UpsertService(ctx, updated); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +89,7 @@ func TestStoreRejectsInvalidServicesBeforeWriting(t *testing.T) {
 		{Name: "bad", Kind: meshserve.Kind("other"), Target: root},
 		{Name: "bad", Kind: meshserve.Proxy, Target: "0"},
 		{Name: "bad", Kind: meshserve.Proxy, Target: "65536"},
-		{Name: "bad", Kind: meshserve.Proxy, Target: "3000", PublicName: "example.com"},
+		{Name: "bad", Kind: meshserve.Proxy, Target: "3000", PrivateHost: "../fregat"},
 	}
 	for _, service := range invalid {
 		if _, err := store.UpsertService(ctx, service); err == nil {

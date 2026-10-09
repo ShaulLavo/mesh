@@ -15,14 +15,12 @@ type privateAppRouter interface {
 }
 
 type privateAppsHandler struct {
-	apps     privateAppRouter
-	ordinary http.Handler
-	owners   func(context.Context, netip.Addr) ([]string, error)
-	enabled  bool
+	apps   privateAppRouter
+	owners func(context.Context, netip.Addr) ([]string, error)
 }
 
-func privateAppsHTTPHandler(apps privateAppRouter, ordinary http.Handler, owners func(context.Context, netip.Addr) ([]string, error), enabled bool) http.Handler {
-	return &privateAppsHandler{apps: apps, ordinary: ordinary, owners: owners, enabled: enabled}
+func privateAppsHTTPHandler(apps privateAppRouter, owners func(context.Context, netip.Addr) ([]string, error)) http.Handler {
+	return &privateAppsHandler{apps: apps, owners: owners}
 }
 
 func appClientAddress(request *http.Request) netip.Addr {
@@ -36,10 +34,10 @@ func appClientAddress(request *http.Request) netip.Addr {
 func (h *privateAppsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host, valid := meshserve.CanonicalHost(r.Host)
 	if !valid || !h.apps.HasHost(host) {
-		h.ordinary.ServeHTTP(w, r)
+		http.NotFound(w, r)
 		return
 	}
-	if !h.enabled || r.TLS == nil {
+	if r.TLS == nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -57,7 +55,7 @@ func (h *privateAppsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// enabled is set only for the TLS listener whose PROXY source is authenticated.
+// The TLS listener authenticates the PROXY source before this handler runs.
 // Forwarded headers and browser cookies never establish private ingress.
 func (h *privateAppsHandler) admitted(r *http.Request) bool {
 	if h.owners == nil {
@@ -75,9 +73,6 @@ func (h *privateAppsHandler) admitted(r *http.Request) bool {
 
 func (h *privateAppsHandler) Close() {
 	if closer, ok := h.apps.(interface{ Close() }); ok {
-		closer.Close()
-	}
-	if closer, ok := h.ordinary.(interface{ Close() }); ok {
 		closer.Close()
 	}
 }

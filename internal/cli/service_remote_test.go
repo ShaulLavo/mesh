@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
@@ -67,22 +66,22 @@ func serviceRemoteDial(host HostRecord, handler func(protocol.Control) protocol.
 
 func TestRemoteServiceBoundaryRejectsChangedPreviewAndAcknowledgement(t *testing.T) {
 	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
-	requested := protocol.ServiceInfo{Name: "blog", Target: "./site", PublicName: "blog.mesh.test"}
+	requested := protocol.ServiceInfo{Name: "blog", Target: "./site"}
 	_, _, err := previewRemoteService(context.Background(), host, serviceRemoteDial(host, func(protocol.Control) protocol.Control {
 		return protocol.Control{Type: protocol.TypeServicePreviewed, ServicePreview: &protocol.ServicePreview{
-			Service: protocol.ServiceInfo{Name: "other", Kind: "static", Target: "/home/me/site", PublicName: "blog.mesh.test"},
+			Service: protocol.ServiceInfo{Name: "other", Kind: "static", Target: "/home/me/site"},
 		}}
-	}), requested, false)
+	}), requested)
 	if err == nil || !strings.Contains(err.Error(), "changed service semantics") {
 		t.Fatalf("changed preview error = %v", err)
 	}
 
-	preview := protocol.ServicePreview{Service: protocol.ServiceInfo{Name: "blog", Kind: "static", Target: "/home/me/site", PublicName: "blog.mesh.test"}}
+	preview := protocol.ServicePreview{Service: protocol.ServiceInfo{Name: "blog", Kind: "static", Target: "/home/me/site"}}
 	_, err = upsertRemoteService(context.Background(), host, serviceRemoteDial(host, func(protocol.Control) protocol.Control {
 		ack := preview.Service
 		ack.Target = "/home/me/other"
 		return protocol.Control{Type: protocol.TypeServiceUpserted, Service: &ack}
-	}), requested, preview, "", false)
+	}), requested, preview, "")
 	if err == nil || !strings.Contains(err.Error(), "different service definition") {
 		t.Fatalf("changed acknowledgement error = %v", err)
 	}
@@ -102,7 +101,7 @@ func TestRemoteServiceBoundaryPinsInferredKindAndCanonicalPort(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			_, _, err := previewRemoteService(context.Background(), host, serviceRemoteDial(host, func(protocol.Control) protocol.Control {
 				return protocol.Control{Type: protocol.TypeServicePreviewed, ServicePreview: &protocol.ServicePreview{Service: test.returned}}
-			}), test.requested, false)
+			}), test.requested)
 			if err == nil || !strings.Contains(err.Error(), "invalid service preview") {
 				t.Fatalf("malicious inference error = %v", err)
 			}
@@ -117,7 +116,7 @@ func TestRemoteServiceBoundaryDoesNotEchoOversizedInvalidFields(t *testing.T) {
 		return protocol.Control{Type: protocol.TypeServicePreviewed, ServicePreview: &protocol.ServicePreview{
 			Service: protocol.ServiceInfo{Name: "site", Kind: marker, Target: "/srv/site"},
 		}}
-	}), protocol.ServiceInfo{Name: "site", Target: "./site"}, false)
+	}), protocol.ServiceInfo{Name: "site", Target: "./site"})
 	if err == nil || strings.Contains(err.Error(), "ATTACKER") || len(err.Error()) > 1024 {
 		t.Fatalf("oversized invalid service error = %q (%d bytes)", err, len(err.Error()))
 	}
@@ -154,35 +153,6 @@ func (c *failingCLIConn) ReadFrame() (protocol.Frame, error) {
 	return protocol.Frame{}, c.readErr
 }
 func (*failingCLIConn) Close() error { return nil }
-
-func TestRemoteServiceAndEdgeListsRequireCanonicalOrder(t *testing.T) {
-	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
-	_, err := listRemoteServices(context.Background(), host, serviceRemoteDial(host, func(protocol.Control) protocol.Control {
-		return protocol.Control{Type: protocol.TypeServiceListed, Services: []protocol.ServiceInfo{
-			{Name: "z", Kind: "proxy", Target: "3000", Healthy: true},
-			{Name: "a", Kind: "proxy", Target: "3001", Healthy: true},
-		}}
-	}))
-	if err == nil || !strings.Contains(err.Error(), "canonical order") {
-		t.Fatalf("unordered service list error = %v", err)
-	}
-
-	page := 0
-	_, err = listRemoteEdge(context.Background(), host, serviceRemoteDial(host, func(request protocol.Control) protocol.Control {
-		page++
-		if page == 1 {
-			return protocol.Control{Type: protocol.TypeEdgeListed, EdgeRoutes: []protocol.EdgeRouteInfo{{
-				PublicName: "z.mesh.test", ServiceName: "z", DisplayAlias: "pc", LastSeenAt: time.Now().UTC(), Online: true,
-			}}, EdgeNextCursor: "next"}
-		}
-		return protocol.Control{Type: protocol.TypeEdgeListed, EdgeRoutes: []protocol.EdgeRouteInfo{{
-			PublicName: "a.mesh.test", ServiceName: "a", DisplayAlias: "pc", LastSeenAt: time.Now().UTC(), Online: true,
-		}}}
-	}))
-	if err == nil || !strings.Contains(err.Error(), "canonical order") {
-		t.Fatalf("unordered edge pages error = %v", err)
-	}
-}
 
 func TestRemoteServiceErrorTextIsBoundedAndSingleLine(t *testing.T) {
 	host := HostRecord{MachineName: "pc"}

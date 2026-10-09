@@ -9,7 +9,6 @@ import (
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/release"
-	"github.com/shaul/mesh/internal/tunnel"
 	"github.com/shaul/mesh/internal/wake"
 )
 
@@ -51,14 +50,6 @@ const (
 	TypeServiceStart       = "service.start"
 	TypeServiceStop        = "service.stop"
 	TypeCertificateInstall = "certificate.install"
-	TypeEdgeRegister       = "edge.register"
-	TypeEdgeRegistered     = "edge.registered"
-	TypeEdgeList           = "edge.list"
-	TypeEdgeListed         = "edge.listed"
-	TypeTunnelClaim        = "tunnel.claim"
-	TypeTunnelClaimed      = "tunnel.claimed"
-	TypeTunnelRecover      = "tunnel.recover"
-	TypeTunnelRecovered    = "tunnel.recovered"
 
 	TypeHostInfoResult       = "host.info.result"
 	TypeServiceUpserted      = "service.upserted"
@@ -68,16 +59,6 @@ const (
 	TypeCertificateInstalled = "certificate.installed"
 	TypeOK                   = "ok"
 	TypeError                = "error"
-)
-
-// Stable machine-readable control error codes. Error Message remains for
-// humans and must never be used for trust or control flow.
-const (
-	ErrorCodeEdgeRouteCollision  = "edge.route_collision"
-	ErrorCodeEdgeStaleSequence   = "edge.stale_sequence"
-	ErrorCodeEdgeConflict        = "edge.sequence_conflict"
-	ErrorCodeEdgeWakeUnavailable = "edge.wake_unavailable"
-	ErrorCodeCredentialsFound    = "service.credentials_found"
 )
 
 // Log request limits keep one JSON control response below MaxPayload after
@@ -175,13 +156,13 @@ type HostInfo struct {
 // ServiceInfo is the transport representation of one origin service and its
 // current health. The daemon ignores Healthy and Problem in client definitions.
 type ServiceInfo struct {
-	DisplayName   string `json:"displayName,omitempty"`
-	Name          string `json:"name"`
-	Kind          string `json:"kind"`
-	Target        string `json:"target"`
-	PublicName    string `json:"publicName,omitempty"`
-	PrivateHost   string `json:"privateHost,omitempty"`
-	WakeOnRequest bool   `json:"wakeOnRequest,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Target      string `json:"target"`
+
+	PrivateHost string `json:"privateHost,omitempty"`
+
 	Isolate       bool   `json:"isolate,omitempty"`
 	Healthy       bool   `json:"healthy"`
 	HealthUnknown bool   `json:"healthUnknown,omitempty"`
@@ -232,10 +213,9 @@ type ServiceDemand struct {
 }
 
 // ServicePreview is the origin-authoritative interpretation of a requested
-// service before mutation. FileCount is populated for public directories.
+// private service before mutation.
 type ServicePreview struct {
-	Service   ServiceInfo `json:"service"`
-	FileCount uint64      `json:"fileCount"`
+	Service ServiceInfo `json:"service"`
 }
 
 // CertificateInstall is a certificate bundle signed by the configured
@@ -249,44 +229,6 @@ type CertificateInstall struct {
 	CertificatePEM []byte `json:"certificatePem"`
 	PrivateKeyPEM  []byte `json:"privateKeyPem"`
 	Signature      []byte `json:"signature"`
-}
-
-// EdgeRoute is one signed public route. An origin endpoint is deliberately
-// absent; the edge resolves it from its pinned allowlist.
-type EdgeRoute struct {
-	PublicName    string `json:"publicName"`
-	ServiceName   string `json:"serviceName"`
-	WakeOnRequest bool   `json:"wakeOnRequest,omitempty"`
-}
-
-// EdgeSnapshot is one origin's complete signed public desired state.
-type EdgeSnapshot struct {
-	TargetID  string      `json:"targetId"`
-	OriginID  string      `json:"originId"`
-	Sequence  uint64      `json:"sequence"`
-	IssuedAt  time.Time   `json:"issuedAt"`
-	ExpiresAt time.Time   `json:"expiresAt"`
-	Routes    []EdgeRoute `json:"routes"`
-	Signature []byte      `json:"signature"`
-}
-
-// EdgeRouteInfo is the safe status returned by edge.list.
-type EdgeRouteInfo struct {
-	PublicName    string    `json:"publicName"`
-	ServiceName   string    `json:"serviceName"`
-	WakeOnRequest bool      `json:"wakeOnRequest,omitempty"`
-	DisplayAlias  string    `json:"displayAlias"`
-	LastSeenAt    time.Time `json:"lastSeenAt"`
-	Online        bool      `json:"online"`
-}
-
-// EdgeListProof authenticates one bounded edge.list page request. Its
-// signature covers the request ID, cursor, limit, target, origin, and time.
-type EdgeListProof struct {
-	TargetID  string    `json:"targetId"`
-	OriginID  string    `json:"originId"`
-	IssuedAt  time.Time `json:"issuedAt"`
-	Signature []byte    `json:"signature"`
 }
 
 // Control is the envelope for every JSON control message. Unused fields are
@@ -381,7 +323,6 @@ type Control struct {
 	Service            *ServiceInfo    `json:"service,omitempty"`
 	Services           []ServiceInfo   `json:"services,omitempty"`
 	ServicePreview     *ServicePreview `json:"servicePreview,omitempty"`
-	AllowCredentials   bool            `json:"allowCredentials,omitempty"`
 
 	// Certificate distribution
 	Certificate            *CertificateInstall `json:"certificate,omitempty"`
@@ -389,19 +330,6 @@ type Control struct {
 	CertificateEnvironment string              `json:"certificateEnvironment,omitempty"`
 	CertificateProfile     string              `json:"certificateProfile,omitempty"`
 	CertificatePrivateName string              `json:"certificatePrivateName,omitempty"`
-
-	// Public edge registration and safe status.
-	EdgeSnapshot   *EdgeSnapshot    `json:"edgeSnapshot,omitempty"`
-	EdgeSequence   uint64           `json:"edgeSequence,omitempty"`
-	EdgeDigest     string           `json:"edgeDigest,omitempty"`
-	EdgeRoutes     []EdgeRouteInfo  `json:"edgeRoutes,omitempty"`
-	EdgeCursor     string           `json:"edgeCursor,omitempty"`
-	EdgeNextCursor string           `json:"edgeNextCursor,omitempty"`
-	EdgeLimit      int              `json:"edgeLimit,omitempty"`
-	EdgeListProof  *EdgeListProof   `json:"edgeListProof,omitempty"`
-	TunnelMutation *tunnel.Mutation `json:"tunnelMutation,omitempty"`
-	TunnelAck      *tunnel.Ack      `json:"tunnelAck,omitempty"`
-	TunnelName     string           `json:"tunnelName,omitempty"`
 
 	// Error
 	ErrorCode string `json:"errorCode,omitempty"`

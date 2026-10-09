@@ -56,9 +56,7 @@ func TestPrivateHostRootWithdrawsMachineMount(t *testing.T) {
 func TestPrivateHostConflicts(t *testing.T) {
 	for _, services := range [][]Service{
 		{{Name: "one", Kind: Proxy, Target: "3301", PrivateHost: "fregat.mesh.test"}, {Name: "two", Kind: Proxy, Target: "3302", PrivateHost: "fregat.mesh.test"}},
-		{{Name: "one", Kind: Proxy, Target: "3301", PrivateHost: "fregat.mesh.test", PublicName: "one.mesh.test"}},
 		{{Name: "one", Kind: Proxy, Target: "3301", PrivateHost: "fregat.attacker.invalid"}},
-		{{Name: "one", Kind: Proxy, Target: "3301", PrivateHost: "fregat.mesh.test"}, {Name: "two", Kind: Proxy, Target: "3302", PublicName: "fregat.mesh.test"}},
 		{{Name: "one", Kind: Proxy, Target: "3301", PrivateHost: "apps.mesh.test"}},
 		{{Name: "one", Kind: Proxy, Target: "3301", PrivateHost: "abcd.mesh.test"}},
 	} {

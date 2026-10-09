@@ -66,7 +66,7 @@ func TestCollectServiceCatalogUsesCachedRowsAndMarksTimedOutHost(t *testing.T) {
 		func(ctx context.Context, _ HostRecord) (remoteServiceSnapshot, error) {
 			<-ctx.Done()
 			return remoteServiceSnapshot{}, ctx.Err()
-		}, nil, cache)
+		}, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestCollectServiceCatalogSuccessfulEmptyListClearsCacheWithoutFalseTimeout(
 	rows, diagnostics, err := CollectServiceCatalog(context.Background(), []HostRecord{host}, time.Second,
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {
 			return remoteServiceSnapshot{}, nil
-		}, nil, cache)
+		}, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestCollectServiceCatalogBoundsCacheLoadAndTreatsSaveFailureAsWarning(t *te
 	}}
 	started := time.Now()
 	if _, _, err := CollectServiceCatalog(context.Background(), []HostRecord{host}, 15*time.Millisecond,
-		func(context.Context, HostRecord) (remoteServiceSnapshot, error) { return remoteServiceSnapshot{}, nil }, nil, blocking); err == nil {
+		func(context.Context, HostRecord) (remoteServiceSnapshot, error) { return remoteServiceSnapshot{}, nil }, blocking); err == nil {
 		t.Fatal("blocked cache load succeeded")
 	}
 	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
@@ -123,7 +123,7 @@ func TestCollectServiceCatalogBoundsCacheLoadAndTreatsSaveFailureAsWarning(t *te
 	rows, diagnostics, err := CollectServiceCatalog(context.Background(), []HostRecord{host}, time.Second,
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {
 			return remoteServiceSnapshot{Services: []protocol.ServiceInfo{{Name: "api", Kind: "proxy", Target: "3000", Healthy: true}}}, nil
-		}, nil, cache)
+		}, cache)
 	if err != nil || len(rows) != 1 || !rows[0].Live {
 		t.Fatalf("live rows = %#v, error %v", rows, err)
 	}
@@ -150,28 +150,9 @@ func TestCollectServiceCatalogRejectsMergedRowsAboveGlobalBound(t *testing.T) {
 				return remoteServiceSnapshot{}, errors.New("offline")
 			}
 			return remoteServiceSnapshot{Services: []protocol.ServiceInfo{{Name: "api", Kind: "proxy", Target: "3000", Healthy: true}}}, nil
-		}, nil, cache)
+		}, cache)
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("merged bound error = %v", err)
-	}
-}
-
-func TestCollectServiceCatalogMarksPublicHealthUnknownWithoutEdgeStatus(t *testing.T) {
-	host := HostRecord{MachineName: "pc", ID: "pc-id"}
-	cache := &serviceCatalogTestCache{}
-	rows, diagnostics, err := CollectServiceCatalog(context.Background(), []HostRecord{host}, time.Second,
-		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {
-			return remoteServiceSnapshot{ServiceHealthSupported: true, Services: []protocol.ServiceInfo{{
-				Name: "blog", Kind: "proxy", Target: "3000", PublicName: "blog.mesh.test", Healthy: true,
-			}}}, nil
-		}, func(context.Context, HostRecord) ([]protocol.EdgeRouteInfo, error) {
-			return nil, errors.New("edge offline")
-		}, cache)
-	if err != nil || len(diagnostics) != 0 || len(rows) != 1 {
-		t.Fatalf("catalog rows = %#v, diagnostics = %#v, error = %v", rows, diagnostics, err)
-	}
-	if rows[0].Health() != "edge-unknown" || rows[0].EdgeKnown {
-		t.Fatalf("public row without edge status = %#v, health %q", rows[0], rows[0].Health())
 	}
 }
 

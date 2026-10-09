@@ -151,7 +151,7 @@ def joined_receipt(data, transition, compatibility):
     for field in COMPATIBILITY_FIELDS:
         if receipt[field] != compatibility[field]:
             raise RuntimeError("published receipt compatibility mismatch")
-    for field in ("retainedOpenedCandidateState", "sessionsPreserved", "recoveryRecordsPreserved"):
+    for field in ("candidateOpenedRetainedState", "sessionsPreserved", "recoveryRecordsPreserved"):
         if receipt[field] is not True:
             raise RuntimeError("published receipt does not declare retained state and sessions")
     return receipt

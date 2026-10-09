@@ -10,12 +10,11 @@ import (
 )
 
 type httpHostPolicy struct {
-	tailnetAddrs              []netip.Addr
-	tailnetNames              []string
-	privateName               func() string
-	privateNames              func() []string
-	privateServiceHost        func(string) bool
-	trustPublicEdgeForwarding func(netip.Addr) bool
+	tailnetAddrs       []netip.Addr
+	tailnetNames       []string
+	privateName        func() string
+	privateNames       func() []string
+	privateServiceHost func(string) bool
 }
 
 func privateHTTPHandler(handler http.Handler, policy httpHostPolicy) http.Handler {
@@ -55,11 +54,7 @@ func (p httpHostPolicy) accepts(request *http.Request) bool {
 	if p.privateServiceHost != nil && p.privateServiceHost(host) {
 		return true
 	}
-	if p.trustPublicEdgeForwarding == nil || meshserve.ValidatePublicName(host) != nil {
-		return false
-	}
-	peer, err := netip.ParseAddrPort(request.RemoteAddr)
-	return err == nil && p.trustPublicEdgeForwarding(peer.Addr().Unmap())
+	return false
 }
 
 func boundHTTPAddresses(listeners []net.Listener) []netip.Addr {

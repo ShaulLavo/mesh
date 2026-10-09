@@ -16,6 +16,7 @@ scratch=$(mktemp -d "${TMPDIR:-/tmp}/mesh-proof.XXXXXX")
 trap 'rm -rf -- "$scratch"' EXIT
 export MESH_PROOF_BINARY
 MESH_PROOF_BINARY=$(realpath "$MESH")
+export MESH_PROOF_STARTS="$scratch/starts"
 export MESH_PROOF_CHECKPOINT="$scratch/checkpoint.json"
 export MESH_SHORT_TMP=${MESH_SHORT_TMP:-/tmp}
 cat >"$scratch/candidate" <<'WRAPPER'
@@ -28,6 +29,9 @@ import os
 from pathlib import Path
 import subprocess
 
+starts = Path(os.environ["MESH_PROOF_STARTS"])
+count = int(starts.read_text()) + 1 if starts.exists() else 1
+starts.write_text(str(count))
 state = Path(os.environ["MESH_STATE_DIR"])
 workers = list((state / "s").glob("*/sock"))
 assert len(workers) == 1, workers
@@ -42,7 +46,7 @@ assert after != before, "retained worker did not publish a new checkpoint"
 record = json.loads(after)
 assert record["restart"]["argv"][1] == "checkpoint while daemon is stopped", record
 Path(os.environ["MESH_PROOF_CHECKPOINT"]).write_bytes(after)
-if os.environ.get("MESH_PROOF_CORRUPT_SAVED") == "1":
+if os.environ.get("MESH_PROOF_CORRUPT_SAVED") == "1" and count == 2:
     saved = [path for path in (state / "s").glob("*/recovery.json")
              if not (path.parent / "sock").exists()]
     assert len(saved) == 1, saved
@@ -66,16 +70,18 @@ import sys
 proofs = list(Path(sys.argv[1]).glob("*.json"))
 assert len(proofs) == 1, proofs
 receipt = json.loads(proofs[0].read_bytes())
+assert receipt["candidateOpenedRetainedState"], receipt
 assert receipt["sessionsPreserved"] and receipt["recoveryRecordsPreserved"], receipt
 PY
+rm -f -- "$MESH_PROOF_STARTS"
 if MESH_PROOF_CORRUPT_SAVED=1 "$repo_root/scripts/prove-release-transition.sh" \
   "$MESH_PROOF_BINARY" "$scratch/candidate" "$platform" "$scratch/corrupt-proofs" \
   >"$scratch/corrupt.log" 2>&1; then
   echo 'FAIL: release proof accepted a changed saved checkpoint' >&2
   exit 1
 fi
-grep -Fq 'transition proof: recovery record changed across candidate and retained daemon startups' "$scratch/corrupt.log" || {
+grep -Fq 'transition proof: recovery record changed across candidate upgrade and restart' "$scratch/corrupt.log" || {
   cat "$scratch/corrupt.log" >&2
   exit 1
 }
-echo 'PASS: rollback proof permits live checkpoints and rejects changes to saved recovery'
+echo 'PASS: forward upgrade and restart proof permits live checkpoints and rejects changed saved recovery'

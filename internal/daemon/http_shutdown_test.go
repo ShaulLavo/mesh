@@ -16,7 +16,7 @@ import (
 )
 
 func TestServeBoundListenersClosesPreconnectsDuringShutdown(t *testing.T) {
-	for _, surface := range []string{"tailnet", "tailnet-partial", "https", "https-handshake", "public", "public-tls", "public-tls-handshake"} {
+	for _, surface := range []string{"tailnet", "tailnet-partial", "https", "https-handshake", "app-proxy", "app-tls", "app-tls-handshake"} {
 		t.Run(surface, func(t *testing.T) {
 			unixListener, _ := newTCPListener(t, "127.0.0.1:0")
 			listener, _ := newTCPListener(t, "127.0.0.1:0")
@@ -30,29 +30,34 @@ func TestServeBoundListenersClosesPreconnectsDuringShutdown(t *testing.T) {
 			requests := make(chan struct{}, 1)
 			config := listenerConfig{httpHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests <- struct{}{} }), webSocketPath: "/mesh", shutdownTimeout: httpShutdownTimeout, reporter: newErrorReporter(nil)}
 			var tailnetListeners []net.Listener
-			var httpsListener, publicListener net.Listener
+			var httpsListener, appRegistryListener net.Listener
 			switch surface {
 			case "tailnet", "tailnet-partial":
 				tailnetListeners = []net.Listener{observed}
 			case "https", "https-handshake":
 				httpsListener, config.tlsConfig = observed, tlsConfig
-			case "public":
-				publicListener = observed
-			case "public-tls", "public-tls-handshake":
-				publicListener, config.publicTLSConfig = observed, tlsConfig
+			case "app-proxy", "app-tls", "app-tls-handshake":
+				appRegistryListener, config.appRegistryTLSConfig = observed, tlsConfig
+				config.appRegistryHTTPHandler = config.httpHandler
+				config.proxyForwarderUIDs = []uint32{proxyTestUID(t)}
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			done := make(chan error, 1)
 			go func() {
-				done <- serveBoundListeners(ctx, cancel, config, func(context.Context, transport.Conn) error { return nil }, unixListener, tailnetListeners, httpsListener, publicListener)
+				done <- serveBoundListeners(ctx, cancel, config, func(context.Context, transport.Conn) error { return nil }, unixListener, tailnetListeners, httpsListener, appRegistryListener)
 			}()
 			peer, err := net.DialTimeout("tcp", listener.Addr().String(), runtimeTestTimeout)
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = peer.Close() })
-			if surface == "https" || surface == "public-tls" {
+			if surface == "app-tls" || surface == "app-tls-handshake" {
+				if _, err := io.WriteString(peer, "PROXY TCP4 100.64.0.2 127.0.0.1 40000 443\r\n"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if surface == "https" || surface == "app-tls" {
 				secure := tls.Client(peer, &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}) //nolint:gosec // Self-signed loopback fixture.
 				handshakeCtx, stopHandshake := context.WithTimeout(t.Context(), runtimeTestTimeout)
 				defer stopHandshake()

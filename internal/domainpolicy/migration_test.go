@@ -137,9 +137,9 @@ func TestMigrationRejectsMalformedLegacyState(t *testing.T) {
 
 func TestMigrationRejectsMissingPolicyWithDomainSlots(t *testing.T) {
 	for _, fixture := range []struct{ profile, entry string }{
-		{"private-tls", "slots"}, {"certificates/public-edge", "slots"}, {"certificates/private-service", "slots"},
-		{"private-tls", "empty"}, {"certificates/public-edge", "empty"}, {"certificates/private-service", "empty"},
-		{"private-tls", "symlink"}, {"certificates/public-edge", "file"}, {"certificates/private-service", "symlink"}, {"certificates/private-service", "file"},
+		{"private-tls", "slots"}, {"certificates/private-service", "slots"}, {"certificates/private-service", "slots"},
+		{"private-tls", "empty"}, {"certificates/private-service", "empty"}, {"certificates/private-service", "empty"},
+		{"private-tls", "symlink"}, {"certificates/private-service", "file"}, {"certificates/private-service", "symlink"}, {"certificates/private-service", "file"},
 	} {
 		t.Run(fixture.profile+"/"+fixture.entry, func(t *testing.T) {
 			active = Policy{}
@@ -192,7 +192,7 @@ func seedPolicySlots(t *testing.T, root, entry string) {
 }
 
 func TestMigrationInfersCertificateDomainWithoutPrivateName(t *testing.T) {
-	for _, profile := range []string{"private-tls", "certificates/public-edge"} {
+	for _, profile := range []string{"private-tls", "certificates/private-service"} {
 		t.Run(profile, func(t *testing.T) {
 			active = Policy{}
 			initialize = sync.Once{}

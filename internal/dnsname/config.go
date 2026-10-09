@@ -49,21 +49,21 @@ type PrivateNamesConfig struct {
 	AcceptTerms       bool
 	Interval          time.Duration
 	Origins           []PrivateOrigin
-	PublicEdge        *PublicEdgeTarget
+	AppRegistry       *CertificateRecipient
 }
 
 type privateNamesConfigFile struct {
-	Domain            string            `json:"domain"`
-	AdditionalConfigs []string          `json:"additionalConfigs,omitempty"`
-	ZoneID            string            `json:"zoneId"`
-	ZoneDomain        string            `json:"zoneDomain,omitempty"`
-	TokenFile         string            `json:"tokenFile"`
-	ACMEEmail         string            `json:"acmeEmail"`
-	DirectoryURL      string            `json:"directoryUrl"`
-	AcceptTerms       bool              `json:"acceptTerms"`
-	Interval          string            `json:"interval"`
-	Origins           []PrivateOrigin   `json:"origins"`
-	PublicEdge        *PublicEdgeTarget `json:"publicEdge"`
+	Domain            string                `json:"domain"`
+	AdditionalConfigs []string              `json:"additionalConfigs,omitempty"`
+	ZoneID            string                `json:"zoneId"`
+	ZoneDomain        string                `json:"zoneDomain,omitempty"`
+	TokenFile         string                `json:"tokenFile"`
+	ACMEEmail         string                `json:"acmeEmail"`
+	DirectoryURL      string                `json:"directoryUrl"`
+	AcceptTerms       bool                  `json:"acceptTerms"`
+	Interval          string                `json:"interval"`
+	Origins           []PrivateOrigin       `json:"origins"`
+	AppRegistry       *CertificateRecipient `json:"appRegistry"`
 }
 
 // LoadPrivateNamesConfig strictly parses one Pi configuration file without
@@ -140,27 +140,31 @@ func LoadPrivateNamesConfig(configPath string) (PrivateNamesConfig, error) {
 	if strings.TrimSpace(raw.ACMEEmail) == "" || strings.TrimSpace(raw.ACMEEmail) != raw.ACMEEmail || strings.ContainsAny(raw.ACMEEmail, "\r\n") {
 		return PrivateNamesConfig{}, errors.New("dnsname: ACME account email is empty or invalid")
 	}
-	if len(raw.Origins) == 0 || len(raw.Origins) > maximumDistributionTargets {
-		return PrivateNamesConfig{}, fmt.Errorf("dnsname: private origin count %d is outside 1..%d", len(raw.Origins), maximumDistributionTargets)
+	targetCount := len(raw.Origins)
+	if raw.AppRegistry != nil {
+		targetCount++
+	}
+	if targetCount == 0 || targetCount > maximumDistributionTargets {
+		return PrivateNamesConfig{}, fmt.Errorf("dnsname: private certificate target count %d is outside 1..%d", targetCount, maximumDistributionTargets)
 	}
 	for index, origin := range raw.Origins {
 		if err := validatePrivateOrigin(origin); err != nil {
 			return PrivateNamesConfig{}, fmt.Errorf("dnsname: private origin %d: %w", index, err)
 		}
 	}
-	if raw.PublicEdge != nil {
-		if err := validatePublicEdgeTarget(*raw.PublicEdge); err != nil {
-			return PrivateNamesConfig{}, fmt.Errorf("dnsname: public edge: %w", err)
+	if raw.AppRegistry != nil {
+		if err := validateCertificateRecipient(*raw.AppRegistry); err != nil {
+			return PrivateNamesConfig{}, fmt.Errorf("dnsname: app registry: %w", err)
 		}
 	}
-	var publicEdge *PublicEdgeTarget
-	if raw.PublicEdge != nil {
-		copyTarget := *raw.PublicEdge
-		publicEdge = &copyTarget
+	var appRegistry *CertificateRecipient
+	if raw.AppRegistry != nil {
+		copyTarget := *raw.AppRegistry
+		appRegistry = &copyTarget
 	}
 	return PrivateNamesConfig{
 		Domain: raw.Domain, AdditionalConfigs: slices.Clone(raw.AdditionalConfigs), ZoneID: raw.ZoneID, ZoneDomain: raw.ZoneDomain, TokenFile: raw.TokenFile, ACMEEmail: raw.ACMEEmail, DirectoryURL: raw.DirectoryURL, Environment: environment,
-		AcceptTerms: raw.AcceptTerms, Interval: interval, Origins: append([]PrivateOrigin(nil), raw.Origins...), PublicEdge: publicEdge,
+		AcceptTerms: raw.AcceptTerms, Interval: interval, Origins: append([]PrivateOrigin(nil), raw.Origins...), AppRegistry: appRegistry,
 	}, nil
 }
 
@@ -222,7 +226,6 @@ type PrivateNamesRuntimeOptions struct {
 type PrivateNamesRuntime struct {
 	Additional     []*PrivateNamesRuntime
 	Manager        *PrivateNamesManager
-	PublicManager  *PublicCertificateManager
 	ServiceManager *PrivateNamesManager
 	Environment    RenewalEnvironment
 	Interval       time.Duration
@@ -309,22 +312,7 @@ func configuredPrivateNamesRuntime(config PrivateNamesConfig, options PrivateNam
 		options.DiscoverPeers = tailnet.Peers
 	}
 	actors := renewalActors{config: config, options: options, environment: environment, stateDir: stateDir, directoryURL: directoryURL, provider: provider}
-	issuer, err := actors.issuer(ProfilePrivateOrigin)
-	if err != nil {
-		return nil, err
-	}
-	distributor, err := actors.distributor(ProfilePrivateOrigin)
-	if err != nil {
-		return nil, err
-	}
-	manager, err := NewPrivateNamesManager(PrivateNamesManagerConfig{
-		Domain: config.Domain, Provider: provider, Renewer: issuer, Distributor: distributor, Origins: config.Origins,
-		DiscoverSelf: options.DiscoverSelf, DiscoverPeers: options.DiscoverPeers,
-	})
-	if err != nil {
-		return nil, err
-	}
-	publicManager, err := actors.publicManager()
+	manager, err := actors.originManager()
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +320,7 @@ func configuredPrivateNamesRuntime(config PrivateNamesConfig, options PrivateNam
 	if err != nil {
 		return nil, err
 	}
-	return &PrivateNamesRuntime{Manager: manager, PublicManager: publicManager, ServiceManager: serviceManager, Environment: environment, Interval: config.Interval}, nil
+	return &PrivateNamesRuntime{Manager: manager, ServiceManager: serviceManager, Environment: environment, Interval: config.Interval}, nil
 }
 
 func (a renewalActors) issuer(profile CertificateProfile) (*Issuer, error) {
@@ -354,22 +342,26 @@ func (a renewalActors) distributor(profile CertificateProfile) (CertificateDistr
 	}
 	return NewDistributor(DistributorConfig{Name: domainpolicy.Wildcard(a.config.Domain, profile == ProfilePrivateOrigin), Profile: profile, Signer: a.options.Signer, Environment: a.environment})
 }
-func (a renewalActors) publicManager() (*PublicCertificateManager, error) {
-	if a.config.PublicEdge == nil {
+func (a renewalActors) originManager() (*PrivateNamesManager, error) {
+	if len(a.config.Origins) == 0 {
 		return nil, nil
 	}
-	issuer, err := a.issuer(ProfilePublicEdge)
+	issuer, err := a.issuer(ProfilePrivateOrigin)
 	if err != nil {
 		return nil, err
 	}
-	distributor, err := a.distributor(ProfilePublicEdge)
+	distributor, err := a.distributor(ProfilePrivateOrigin)
 	if err != nil {
 		return nil, err
 	}
-	return NewPublicCertificateManager(PublicCertificateManagerConfig{
-		Renewer: issuer, Distributor: distributor, Target: *a.config.PublicEdge,
+	manager, err := NewPrivateNamesManager(PrivateNamesManagerConfig{
+		Domain: a.config.Domain, Provider: a.provider, Renewer: issuer, Distributor: distributor, Origins: a.config.Origins,
 		DiscoverSelf: a.options.DiscoverSelf, DiscoverPeers: a.options.DiscoverPeers,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return manager, nil
 }
 
 func (a renewalActors) serviceManager() (*PrivateNamesManager, error) {
@@ -379,7 +371,7 @@ func (a renewalActors) serviceManager() (*PrivateNamesManager, error) {
 			origins = append(origins, origin)
 		}
 	}
-	if len(origins) == 0 {
+	if len(origins) == 0 && a.config.AppRegistry == nil {
 		return nil, nil
 	}
 	issuer, err := a.issuer(ProfilePrivateService)
@@ -391,7 +383,7 @@ func (a renewalActors) serviceManager() (*PrivateNamesManager, error) {
 		return nil, err
 	}
 	return NewPrivateNamesManager(PrivateNamesManagerConfig{
-		Domain: a.config.Domain, ServiceHosts: true, Provider: a.provider, Renewer: issuer,
+		Domain: a.config.Domain, ServiceHosts: true, AppRegistry: a.config.AppRegistry, Provider: a.provider, Renewer: issuer,
 		Distributor: distributor, Origins: origins, DiscoverSelf: a.options.DiscoverSelf, DiscoverPeers: a.options.DiscoverPeers,
 	})
 }
@@ -411,26 +403,17 @@ func (r *PrivateNamesRuntime) All() []*PrivateNamesRuntime {
 	return result
 }
 
-func (r *PrivateNamesRuntime) Run(ctx context.Context, public bool, report func(error)) error {
+func (r *PrivateNamesRuntime) Run(ctx context.Context, report func(error)) error {
 	var group sync.WaitGroup
 	results := make(chan error, 2*len(r.All()))
 	for _, runtime := range r.All() {
-		if public && runtime.PublicManager == nil {
-			continue
-		}
-		if !public && runtime.ServiceManager != nil {
-			group.Add(1)
-			go func() { defer group.Done(); results <- runtime.ServiceManager.Run(ctx, runtime.Interval, report) }()
-		}
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			if public {
-				results <- runtime.PublicManager.Run(ctx, runtime.Interval, report)
-				return
+		managers := []*PrivateNamesManager{runtime.Manager, runtime.ServiceManager}
+		for _, manager := range managers {
+			if manager == nil {
+				continue
 			}
-			results <- runtime.Manager.Run(ctx, runtime.Interval, report)
-		}()
+			group.Go(func() { results <- manager.Run(ctx, runtime.Interval, report) })
+		}
 	}
 	group.Wait()
 	close(results)

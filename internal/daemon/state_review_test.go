@@ -151,7 +151,7 @@ func TestWatchReviewID9PipelinedWriterHandoff(t *testing.T) {
 	}
 	gate := &reviewWriterGate{Conn: peer, entered: make(chan struct{}), release: make(chan struct{}), concurrent: make(chan struct{})}
 	lifecycle := mustServerTestLifecycle(t, &serverTestCatalog{}, failingServerTestConnector())
-	server, err := newClientServer(lifecycle, failingServerTestConnector(), disabledEdgeController{}, noServiceControl{}, disabledCertificateController{})
+	server, err := newClientServer(lifecycle, failingServerTestConnector(), noServiceControl{}, disabledCertificateController{})
 	if err != nil {
 		t.Fatal(err)
 	}

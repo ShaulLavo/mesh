@@ -48,7 +48,7 @@ class PublishedInputsTest(unittest.TestCase):
             receipt = compatibility | {"schema": 1, "platform": self.platform,
                 "fromDigest": before["artifacts"][0]["binarySha256"],
                 "toDigest": after["artifacts"][0]["binarySha256"],
-                "retainedOpenedCandidateState": True, "sessionsPreserved": True, "recoveryRecordsPreserved": True}
+                "candidateOpenedRetainedState": True, "sessionsPreserved": True, "recoveryRecordsPreserved": True}
             data = json.dumps(receipt).encode()
             proof = published.digest(data)
             transition = {key: receipt[key] for key in ("platform", "fromDigest", "toDigest")}

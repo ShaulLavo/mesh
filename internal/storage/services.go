@@ -22,17 +22,17 @@ func (s *Store) UpsertService(ctx context.Context, service meshserve.Service) (m
 		return meshserve.Service{}, fmt.Errorf("storage: upsert service %s: %w", normalized.Name, err)
 	}
 	row, err := s.queries.UpsertService(ctx, dbsqlc.UpsertServiceParams{
-		Name:          normalized.Name,
-		DisplayName:   normalized.DisplayName,
-		Kind:          string(normalized.Kind),
-		Target:        normalized.Target,
-		PublicName:    normalized.PublicName,
-		PrivateHost:   normalized.PrivateHost,
-		WakeOnRequest: boolInt64(normalized.WakeOnRequest),
-		Isolate:       boolInt64(normalized.Isolate),
-		Listens:       listens,
-		Demand:        demand,
-		LocalOnly:     boolInt64(normalized.LocalOnly),
+		Name:        normalized.Name,
+		DisplayName: normalized.DisplayName,
+		Kind:        string(normalized.Kind),
+		Target:      normalized.Target,
+
+		PrivateHost: normalized.PrivateHost,
+
+		Isolate:   boolInt64(normalized.Isolate),
+		Listens:   listens,
+		Demand:    demand,
+		LocalOnly: boolInt64(normalized.LocalOnly),
 	})
 	if err != nil {
 		return meshserve.Service{}, fmt.Errorf("storage: upsert service %s: %w", normalized.Name, err)
@@ -85,10 +85,7 @@ func (s *Store) DeleteService(ctx context.Context, name string) error {
 }
 
 func serviceFromRow(row dbsqlc.Service) (meshserve.Service, error) {
-	wakeOnRequest, err := sqliteBool("wake_on_request", row.WakeOnRequest)
-	if err != nil {
-		return meshserve.Service{}, fmt.Errorf("storage: decode service %s: %w", row.Name, err)
-	}
+
 	isolate, err := sqliteBool("isolate", row.Isolate)
 	if err != nil {
 		return meshserve.Service{}, fmt.Errorf("storage: decode service %s: %w", row.Name, err)
@@ -98,15 +95,15 @@ func serviceFromRow(row dbsqlc.Service) (meshserve.Service, error) {
 		return meshserve.Service{}, fmt.Errorf("storage: decode service %s: %w", row.Name, err)
 	}
 	service := meshserve.Service{
-		Name:          row.Name,
-		DisplayName:   row.DisplayName,
-		Kind:          meshserve.Kind(row.Kind),
-		Target:        row.Target,
-		PublicName:    row.PublicName,
-		PrivateHost:   row.PrivateHost,
-		WakeOnRequest: wakeOnRequest,
-		Isolate:       isolate,
-		LocalOnly:     localOnly,
+		Name:        row.Name,
+		DisplayName: row.DisplayName,
+		Kind:        meshserve.Kind(row.Kind),
+		Target:      row.Target,
+
+		PrivateHost: row.PrivateHost,
+
+		Isolate:   isolate,
+		LocalOnly: localOnly,
 	}
 	if err := decodeDemand(row.Listens, row.Demand, &service); err != nil {
 		return meshserve.Service{}, fmt.Errorf("storage: decode service %s: %w", row.Name, err)

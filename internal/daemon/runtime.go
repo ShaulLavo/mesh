@@ -31,13 +31,13 @@ const (
 	daemonSocketName = "daemon.sock"
 	daemonLockName   = "daemon.lock"
 
-	staleSocketProbeTimeout  = 200 * time.Millisecond
-	httpReadHeaderTimeout    = 5 * time.Second
-	publicReadTimeout        = 30 * time.Second
-	httpShutdownTimeout      = 2 * time.Second
-	maximumPublicConnections = 512
-	maximumPublicHeaderBytes = 64 << 10
-	connectionRefusalTimeout = 100 * time.Millisecond
+	staleSocketProbeTimeout       = 200 * time.Millisecond
+	httpReadHeaderTimeout         = 5 * time.Second
+	appRegistryReadTimeout        = 30 * time.Second
+	httpShutdownTimeout           = 2 * time.Second
+	maximumAppRegistryConnections = 512
+	maximumAppRegistryHeaderBytes = 64 << 10
+	connectionRefusalTimeout      = 100 * time.Millisecond
 
 	// These budgets are independent; the Tailnet budget spans every bound address.
 	DefaultUnixConnectionLimit    = 128
@@ -59,8 +59,8 @@ var ErrDaemonAlreadyRunning = errors.New("daemon: already running")
 // loopback PROXY v1 forwarder and a non-loopback client address.
 // HTTPHandler receives HTTPS requests and
 // Tailnet HTTP requests outside WebSocketPath, after the Host policy accepts a
-// bound IP, TailnetNames entry, current PrivateName, or a public name from
-// TrustPublicEdgeForwarding. ReportError receives non-fatal listener errors and
+// bound IP, TailnetNames entry, current PrivateName or private service host.
+// ReportError receives non-fatal listener errors and
 // may be nil. RequireAllTailnetListeners turns any
 // discovered-address bind failure into a startup failure. Zero connection caps
 // select the defaults; negative caps are rejected.
@@ -73,17 +73,15 @@ type ListenerConfig struct {
 	PrivateName                func() string
 	PrivateNames               func() []string
 	PrivateServiceHost         func(string) bool
-	TrustPublicEdgeForwarding  func(netip.Addr) bool
 	TailnetPort                uint16
 	WebSocketPath              string
 	HTTPHandler                http.Handler
 	HTTPSPort                  uint16
 	HTTPSProxyProtocol         bool
 	TLSConfig                  *tls.Config
-	TailnetOwnerAccess         bool
-	PublicListenAddress        string
-	PublicHTTPHandler          http.Handler
-	PublicTLSConfig            *tls.Config
+	AppRegistryListenAddress   string
+	AppRegistryHTTPHandler     http.Handler
+	AppRegistryTLSConfig       *tls.Config
 	RequireAllTailnetListeners bool
 	ReportError                func(error)
 }
@@ -102,12 +100,11 @@ type listenerConfig struct {
 	httpsPort                  uint16
 	httpsProxyProtocol         bool
 	tlsConfig                  *tls.Config
-	tailnetOwnerAccess         bool
 	proxyForwarderUIDs         []uint32
-	publicListenAddress        string
-	publicHTTPHandler          http.Handler
-	publicTLSConfig            *tls.Config
-	publicReadTimeout          time.Duration
+	appRegistryListenAddress   string
+	appRegistryHTTPHandler     http.Handler
+	appRegistryTLSConfig       *tls.Config
+	appRegistryReadTimeout     time.Duration
 	requireAllTailnetListeners bool
 	shutdownTimeout            time.Duration
 	reporter                   *errorReporter
@@ -176,9 +173,9 @@ func serveListeners(ctx context.Context, cancel context.CancelFunc, normalized l
 			return errors.Join(fmt.Errorf("daemon: bind HTTPS loopback listener: %w", err), errors.Join(closeErrors...))
 		}
 	}
-	var publicListener net.Listener
-	if normalized.publicListenAddress != "" {
-		publicListener, err = normalized.listen("tcp", normalized.publicListenAddress)
+	var appRegistryListener net.Listener
+	if normalized.appRegistryListenAddress != "" {
+		appRegistryListener, err = normalized.listen("tcp", normalized.appRegistryListenAddress)
 		if err != nil {
 			closeErrors := []error{unixListener.Close()}
 			for _, listener := range tailnetListeners {
@@ -187,16 +184,16 @@ func serveListeners(ctx context.Context, cancel context.CancelFunc, normalized l
 			if httpsListener != nil {
 				closeErrors = append(closeErrors, httpsListener.Close())
 			}
-			return errors.Join(fmt.Errorf("daemon: bind public edge listener: %w", err), errors.Join(closeErrors...))
+			return errors.Join(fmt.Errorf("daemon: bind private app registry listener: %w", err), errors.Join(closeErrors...))
 		}
 	}
-	return serveBoundListeners(ctx, cancel, normalized, handler, unixListener, tailnetListeners, httpsListener, publicListener)
+	return serveBoundListeners(ctx, cancel, normalized, handler, unixListener, tailnetListeners, httpsListener, appRegistryListener)
 }
 
-// Listener teardown stops public producers before this flush; early failures
+// Listener teardown stops app producers before this flush; early failures
 // also flush before the general reporter is retired.
 func closeListenerDiagnostics(config listenerConfig) {
-	if registry, ok := config.publicHTTPHandler.(interface{ Close() }); ok {
+	if registry, ok := config.appRegistryHTTPHandler.(interface{ Close() }); ok {
 		registry.Close()
 	}
 	config.reporter.shutdown()
@@ -210,16 +207,14 @@ func serveBoundListeners(
 	unixListener net.Listener,
 	tailnetListeners []net.Listener,
 	httpsListener net.Listener,
-	publicListener net.Listener,
+	appRegistryListener net.Listener,
 ) error {
 	defer closeListenerDiagnostics(normalized)
-	var boundedPublic *boundedPublicListener
-	if publicListener != nil {
-		boundedPublic = newBoundedPublicListener(publicListener, maximumPublicConnections)
-		publicListener = boundedPublic
-		if normalized.tailnetOwnerAccess {
-			boundedPublic.proxyUIDs = append([]uint32{}, normalized.proxyForwarderUIDs...)
-		}
+	var boundedAppRegistry *boundedAppRegistryListener
+	if appRegistryListener != nil {
+		boundedAppRegistry = newBoundedAppRegistryListener(appRegistryListener, maximumAppRegistryConnections)
+		appRegistryListener = boundedAppRegistry
+		boundedAppRegistry.proxyUIDs = append([]uint32{}, normalized.proxyForwarderUIDs...)
 	}
 	// Failed discovery binds must not establish non-loopback IP authorities.
 	normalized.httpHosts.tailnetAddrs = boundHTTPAddresses(tailnetListeners)
@@ -241,24 +236,22 @@ func serveBoundListeners(
 		}
 		trackNewHTTPConnections(httpsServer)
 	}
-	var publicServer *http.Server
-	if publicListener != nil {
-		readTimeout := normalized.publicReadTimeout
+	var appRegistryServer *http.Server
+	if appRegistryListener != nil {
+		readTimeout := normalized.appRegistryReadTimeout
 		if readTimeout == 0 {
-			readTimeout = publicReadTimeout
+			readTimeout = appRegistryReadTimeout
 		}
-		publicServer = &http.Server{
-			Handler: guardPublicBody(normalized.publicHTTPHandler, readTimeout), ReadHeaderTimeout: httpReadHeaderTimeout,
-			ConnState: boundedPublic.connState, ConnContext: publicConnectionContext, IdleTimeout: readTimeout, MaxHeaderBytes: maximumPublicHeaderBytes,
-			BaseContext: func(net.Listener) context.Context { return ctx }, TLSConfig: normalized.publicTLSConfig,
+		appRegistryServer = &http.Server{
+			Handler: guardAppRegistryBody(normalized.appRegistryHTTPHandler, readTimeout), ReadHeaderTimeout: httpReadHeaderTimeout,
+			ConnState: boundedAppRegistry.connState, ConnContext: appRegistryConnectionContext, IdleTimeout: readTimeout, MaxHeaderBytes: maximumAppRegistryHeaderBytes,
+			BaseContext: func(net.Listener) context.Context { return ctx }, TLSConfig: normalized.appRegistryTLSConfig,
 			ErrorLog: log.New(io.Discard, "", 0),
 		}
-		if normalized.publicTLSConfig != nil {
-			// Safari can render a 421 instead of retrying a coalesced connection.
-			publicServer.Protocols = new(http.Protocols)
-			publicServer.Protocols.SetHTTP1(true)
-		}
-		trackNewHTTPConnections(publicServer)
+		// Safari can render a 421 instead of retrying a coalesced connection.
+		appRegistryServer.Protocols = new(http.Protocols)
+		appRegistryServer.Protocols.SetHTTP1(true)
+		trackNewHTTPConnections(appRegistryServer)
 	}
 	var listenerWG sync.WaitGroup
 	fatal := make(chan error, 1)
@@ -291,17 +284,12 @@ func serveBoundListeners(
 			}
 		})
 	}
-	if publicServer != nil {
+	if appRegistryServer != nil {
 		listenerWG.Go(func() {
-			var serveErr error
-			if normalized.publicTLSConfig != nil {
-				serveErr = publicServer.ServeTLS(publicListener, "", "")
-			} else {
-				serveErr = publicServer.Serve(publicListener)
-			}
+			serveErr := appRegistryServer.ServeTLS(appRegistryListener, "", "")
 			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) && ctx.Err() == nil {
 				select {
-				case fatal <- fmt.Errorf("daemon: serve public edge on %s: %w", publicListener.Addr(), serveErr):
+				case fatal <- fmt.Errorf("daemon: serve private app registry on %s: %w", appRegistryListener.Addr(), serveErr):
 				default:
 				}
 			}
@@ -350,11 +338,11 @@ func serveBoundListeners(
 			closeErr = errors.Join(closeErr, fmt.Errorf("daemon: close HTTPS server: %w", err))
 		}
 	}
-	if publicServer != nil {
-		if err := shutdownHTTPServer(publicServer, normalized.shutdownTimeout); err != nil {
-			closeErr = errors.Join(closeErr, fmt.Errorf("daemon: close public edge server: %w", err))
+	if appRegistryServer != nil {
+		if err := shutdownHTTPServer(appRegistryServer, normalized.shutdownTimeout); err != nil {
+			closeErr = errors.Join(closeErr, fmt.Errorf("daemon: close private app registry server: %w", err))
 		}
-		closeErr = errors.Join(closeErr, boundedPublic.closeActive())
+		closeErr = errors.Join(closeErr, boundedAppRegistry.closeActive())
 	}
 	listenerWG.Wait()
 	connections.wait()
@@ -362,17 +350,13 @@ func serveBoundListeners(
 	return errors.Join(runErr, closeErr)
 }
 
-func validateTailnetOwnerAccess(cfg ListenerConfig) ([]uint32, error) {
-	if !cfg.TailnetOwnerAccess && !cfg.HTTPSProxyProtocol {
+func validateProxyForwarders(cfg ListenerConfig) ([]uint32, error) {
+	if cfg.AppRegistryListenAddress == "" && !cfg.HTTPSProxyProtocol {
 		return nil, nil
-	}
-	address, err := netip.ParseAddrPort(cfg.PublicListenAddress)
-	if cfg.TailnetOwnerAccess && (err != nil || !address.Addr().IsLoopback() || cfg.PublicTLSConfig == nil) {
-		return nil, errors.New("daemon: Tailnet owner access requires a loopback public TLS listener")
 	}
 	uids, err := tailnet.ProxyForwarderUIDs()
 	if err != nil {
-		return nil, fmt.Errorf("daemon: enable Tailnet owner access: %w", err)
+		return nil, fmt.Errorf("daemon: configure private HTTPS forwarders: %w", err)
 	}
 	return uids, nil
 }
@@ -420,48 +404,29 @@ func validateListenerConfig(ctx context.Context, cfg ListenerConfig, handler tra
 		httpHandler:                cfg.HTTPHandler,
 		httpsPort:                  cfg.HTTPSPort,
 		httpsProxyProtocol:         cfg.HTTPSProxyProtocol,
-		publicListenAddress:        cfg.PublicListenAddress,
-		tailnetOwnerAccess:         cfg.TailnetOwnerAccess,
-		publicHTTPHandler:          cfg.PublicHTTPHandler,
-		publicReadTimeout:          publicReadTimeout,
+		appRegistryListenAddress:   cfg.AppRegistryListenAddress,
+		appRegistryHTTPHandler:     cfg.AppRegistryHTTPHandler,
+		appRegistryReadTimeout:     appRegistryReadTimeout,
 		requireAllTailnetListeners: cfg.RequireAllTailnetListeners,
 		shutdownTimeout:            httpShutdownTimeout,
 		reporter:                   newErrorReporter(cfg.ReportError),
 		httpHosts: httpHostPolicy{
-			tailnetNames:              append([]string(nil), cfg.TailnetNames...),
-			privateName:               cfg.PrivateName,
-			privateNames:              cfg.PrivateNames,
-			privateServiceHost:        cfg.PrivateServiceHost,
-			trustPublicEdgeForwarding: cfg.TrustPublicEdgeForwarding,
+			tailnetNames:       append([]string(nil), cfg.TailnetNames...),
+			privateName:        cfg.PrivateName,
+			privateNames:       cfg.PrivateNames,
+			privateServiceHost: cfg.PrivateServiceHost,
 		},
 	}
-	normalized.proxyForwarderUIDs, err = validateTailnetOwnerAccess(cfg)
+	normalized.proxyForwarderUIDs, err = validateProxyForwarders(cfg)
 	if err != nil {
 		return listenerConfig{}, err
 	}
 	if cfg.HTTPSPort == 0 && cfg.TLSConfig != nil {
 		return listenerConfig{}, errors.New("daemon: TLS config requires a non-zero HTTPS port")
 	}
-	if cfg.PublicListenAddress == "" {
-		if cfg.PublicHTTPHandler != nil || cfg.PublicTLSConfig != nil {
-			return listenerConfig{}, errors.New("daemon: public edge handler or TLS config requires a listen address")
-		}
-	} else {
-		if cfg.PublicHTTPHandler == nil {
-			return listenerConfig{}, errors.New("daemon: public edge listener requires an HTTP handler")
-		}
-		if cfg.PublicTLSConfig != nil {
-			if cfg.PublicTLSConfig.GetCertificate == nil {
-				return listenerConfig{}, errors.New("daemon: public TLS listener requires GetCertificate")
-			}
-			normalized.publicTLSConfig = cfg.PublicTLSConfig.Clone()
-			if normalized.publicTLSConfig.MinVersion == 0 {
-				normalized.publicTLSConfig.MinVersion = tls.VersionTLS12
-			}
-			if normalized.publicTLSConfig.MinVersion < tls.VersionTLS12 {
-				return listenerConfig{}, errors.New("daemon: public TLS listener requires TLS 1.2 or newer")
-			}
-		}
+	normalized.appRegistryTLSConfig, err = validateAppRegistryTLS(cfg)
+	if err != nil {
+		return listenerConfig{}, err
 	}
 	if cfg.HTTPSPort != 0 {
 		if cfg.HTTPHandler == nil {
@@ -518,7 +483,7 @@ func serviceOnlyHTTPSHandler(cfg listenerConfig) http.Handler {
 			http.Error(w, "verified client address required", http.StatusForbidden)
 			return
 		}
-		// PROXY describes the TLS client, even when that device is also a public edge.
+		// PROXY describes the authenticated TLS client.
 		r = r.Clone(r.Context())
 		r.Header.Del("X-Forwarded-For")
 		r.Header.Del("X-Forwarded-Proto")
@@ -968,4 +933,28 @@ func (r *errorReporter) shutdown() {
 		return
 	}
 	r.close.Do(func() { close(r.done) })
+}
+
+func validateAppRegistryTLS(cfg ListenerConfig) (*tls.Config, error) {
+	if cfg.AppRegistryListenAddress == "" {
+		if cfg.AppRegistryHTTPHandler != nil || cfg.AppRegistryTLSConfig != nil {
+			return nil, errors.New("daemon: app registry handler or TLS requires a listen address")
+		}
+		return nil, nil
+	}
+	address, err := netip.ParseAddrPort(cfg.AppRegistryListenAddress)
+	if err != nil || !address.Addr().IsLoopback() || address.Addr().Zone() != "" || address.Port() == 0 || address.String() != cfg.AppRegistryListenAddress {
+		return nil, errors.New("daemon: app registry requires a canonical loopback listen address")
+	}
+	if cfg.AppRegistryHTTPHandler == nil || cfg.AppRegistryTLSConfig == nil || cfg.AppRegistryTLSConfig.GetCertificate == nil {
+		return nil, errors.New("daemon: app registry requires an HTTP handler and TLS GetCertificate")
+	}
+	config := cfg.AppRegistryTLSConfig.Clone()
+	if config.MinVersion == 0 {
+		config.MinVersion = tls.VersionTLS12
+	}
+	if config.MinVersion < tls.VersionTLS12 {
+		return nil, errors.New("daemon: app registry requires TLS 1.2 or newer")
+	}
+	return config, nil
 }

@@ -1,21 +1,17 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
-	"github.com/charmbracelet/x/term"
-	"github.com/muesli/cancelreader"
 	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/protocol"
@@ -29,37 +25,22 @@ const (
 	serviceMutationTimeout    = 30 * time.Second
 )
 
-// PublicConfirmation contains the exact origin-authoritative facts shown
-// before a public mutation.
-type PublicConfirmation struct {
-	TunnelClaim         bool
-	Host                HostRecord
-	Service             protocol.ServiceInfo
-	FileCount           uint64
-	URL                 string
-	CredentialsOverride bool
-}
-
-// ConfirmPublicFunc returns true only after explicit human confirmation.
-type ConfirmPublicFunc func(context.Context, PublicConfirmation) (bool, error)
-
 func (a *application) serveCommand() *cobra.Command {
 	var (
-		route            string
-		displayName      string
-		files            bool
-		publicName       string
-		privateHost      string
-		wakeOnRequest    bool
-		isolate          bool
-		yes              bool
-		allowCredentials bool
-		run              string
-		cwd              string
-		env              []string
-		listens          []string
-		idle             time.Duration
-		readyTimeout     time.Duration
+		route       string
+		displayName string
+		files       bool
+
+		privateHost string
+
+		isolate bool
+
+		run          string
+		cwd          string
+		env          []string
+		listens      []string
+		idle         time.Duration
+		readyTimeout time.Duration
 	)
 	command := &cobra.Command{
 		Use:   "serve",
@@ -91,8 +72,7 @@ func (a *application) serveCommand() *cobra.Command {
 				return err
 			}
 			return a.runServe(cmd, args[0], target, serveFlags{
-				route: route, displayName: displayName, files: files, publicName: publicName, privateHost: privateHost, privateHostSet: cmd.Flags().Changed("private-host"),
-				wakeOnRequest: wakeOnRequest, isolate: isolate, yes: yes, allowCredentials: allowCredentials,
+				route: route, displayName: displayName, files: files, privateHost: privateHost, privateHostSet: cmd.Flags().Changed("private-host"), isolate: isolate,
 				run: run, cwd: cwd, env: env, listens: listens, idle: idle, readyTimeout: readyTimeout,
 				cwdSet: cmd.Flags().Changed("cwd"), idleSet: cmd.Flags().Changed("idle"),
 				readySet: cmd.Flags().Changed("ready-timeout"),
@@ -103,41 +83,39 @@ func (a *application) serveCommand() *cobra.Command {
 	command.Flags().StringVar(&route, "at", "", "route path, such as /blog")
 	command.Flags().BoolVar(&files, "files", false, "enable directory listings")
 	command.Flags().StringVar(&privateHost, "private-host", "", "private hostname at the root, using a label or a configured deployment hostname")
-	command.Flags().StringVar(&publicName, "public", "", "exact public hostname under a configured deployment domain")
-	command.Flags().BoolVar(&wakeOnRequest, "wake-on-request", false, "ask the public edge to wake this origin")
+
 	command.Flags().BoolVar(&isolate, "isolate", false, "send cross-origin isolation headers so the page can use SharedArrayBuffer")
-	command.Flags().BoolVar(&yes, "yes", false, "skip the public confirmation prompt")
-	command.Flags().BoolVar(&allowCredentials, "allow-credentials", false, "allow credential-like names in a public directory")
+
 	command.Flags().StringVar(&run, "run", "", "command that serves the port; started on the first connection, stopped when idle")
 	command.Flags().StringVar(&cwd, "cwd", "", "directory --run starts in (default: this directory)")
 	command.Flags().StringArrayVar(&env, "env", nil, "KEY=VALUE added to the environment of --run (repeatable)")
 	command.Flags().StringArrayVar(&listens, "listen", nil, "PUBLIC=UPSTREAM: proxy 127.0.0.1:PUBLIC on the host to 127.0.0.1:UPSTREAM (repeatable)")
 	command.Flags().DurationVar(&idle, "idle", meshserve.DefaultIdle, "stop --run after no connection has been open this long")
 	command.Flags().DurationVar(&readyTimeout, "ready-timeout", meshserve.DefaultReadyTimeout, "how long a starting --run holds connections before failing them")
-	command.AddCommand(a.serveListCommand(), a.serveLabelCommand(), a.serveClaimCommand(), a.serveStartStopCommand(true), a.serveStartStopCommand(false))
+	command.AddCommand(a.serveListCommand(), a.serveLabelCommand(), a.serveStartStopCommand(true), a.serveStartStopCommand(false))
+
 	return command
 }
 
 type serveFlags struct {
-	privateHostSet   bool
-	route            string
-	displayName      string
-	files            bool
-	publicName       string
-	privateHost      string
-	wakeOnRequest    bool
-	isolate          bool
-	yes              bool
-	allowCredentials bool
-	run              string
-	cwd              string
-	env              []string
-	listens          []string
-	idle             time.Duration
-	readyTimeout     time.Duration
-	cwdSet           bool
-	idleSet          bool
-	readySet         bool
+	privateHostSet bool
+	route          string
+	displayName    string
+	files          bool
+
+	privateHost string
+
+	isolate bool
+
+	run          string
+	cwd          string
+	env          []string
+	listens      []string
+	idle         time.Duration
+	readyTimeout time.Duration
+	cwdSet       bool
+	idleSet      bool
+	readySet     bool
 }
 
 func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags serveFlags) error {
@@ -171,20 +149,7 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 	if err != nil {
 		return err
 	}
-	if flags.publicName != "" {
-		if err := meshserve.ValidatePublicName(flags.publicName); err != nil {
-			return err
-		}
-	} else {
-		switch {
-		case flags.allowCredentials:
-			return errors.New("--allow-credentials requires --public")
-		case flags.wakeOnRequest:
-			return errors.New("--wake-on-request requires --public")
-		case flags.yes:
-			return errors.New("--yes is only meaningful with --public")
-		}
-	}
+
 	if flags.files && numericCLIServiceTarget(target) {
 		return errors.New("--files cannot be combined with a numeric proxy target")
 	}
@@ -194,7 +159,7 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 	}
 	requested := protocol.ServiceInfo{
 		DisplayName: flags.displayName,
-		Name:        name, Kind: kind, Target: target, PublicName: flags.publicName, PrivateHost: flags.privateHost, WakeOnRequest: flags.wakeOnRequest,
+		Name:        name, Kind: kind, Target: target, PrivateHost: flags.privateHost,
 		Isolate: flags.isolate, Listens: demand.listens, Run: demand.run, LocalOnly: localOnly,
 	}
 	if !flags.privateHostSet && flags.privateHost == "" {
@@ -205,35 +170,14 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 		requested.PrivateHost = inherited
 	}
 	previewCtx, cancelPreview := context.WithTimeout(cmd.Context(), serviceMutationTimeout)
-	preview, privateName, err := previewRemoteService(previewCtx, host, a.dependencies.DialControl, requested, flags.allowCredentials)
+	preview, privateName, err := previewRemoteService(previewCtx, host, a.dependencies.DialControl, requested)
 	cancelPreview()
 	if err != nil {
 		return err
 	}
-	serviceAddress := serviceURL(host, privateName, preview.Service)
-	if preview.Service.PublicName != "" {
-		confirmation := PublicConfirmation{
-			Host: host, Service: preview.Service, FileCount: preview.FileCount,
-			URL: serviceAddress, CredentialsOverride: flags.allowCredentials,
-		}
-		if flags.allowCredentials {
-			if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "warning: credential-like entries are explicitly allowed for this publication"); err != nil {
-				return err
-			}
-		}
-		if !flags.yes {
-			confirmed, err := a.dependencies.ConfirmPublic(cmd.Context(), confirmation)
-			if err != nil {
-				return err
-			}
-			if !confirmed {
-				_, err := fmt.Fprintln(cmd.OutOrStdout(), "publication cancelled")
-				return err
-			}
-		}
-	}
+
 	mutationCtx, cancelMutation := context.WithTimeout(cmd.Context(), serviceMutationTimeout)
-	publication, err := upsertRemoteService(mutationCtx, host, a.dependencies.DialControl, requested, preview, privateName, flags.allowCredentials)
+	publication, err := upsertRemoteService(mutationCtx, host, a.dependencies.DialControl, requested, preview, privateName)
 	cancelMutation()
 	if err != nil {
 		return err
@@ -269,7 +213,7 @@ func (a *application) serveListCommand() *cobra.Command {
 			return a.runServeList(cmd, timeout)
 		},
 	}
-	command.Flags().DurationVar(&timeout, "timeout", defaultServiceListTimeout, "hard deadline for live host and edge queries")
+	command.Flags().DurationVar(&timeout, "timeout", defaultServiceListTimeout, "hard deadline for live host queries")
 	return command
 }
 
@@ -287,16 +231,12 @@ func (a *application) runServeList(cmd *cobra.Command, timeout time.Duration) er
 		func(ctx context.Context, host HostRecord) (remoteServiceSnapshot, error) {
 			return listRemoteServices(ctx, host, a.dependencies.DialControl)
 		},
-		func(ctx context.Context, host HostRecord) ([]protocol.EdgeRouteInfo, error) {
-			return listRemoteEdge(ctx, host, a.dependencies.DialControl)
-		}, cache)
+
+		cache)
 	if err != nil {
 		return err
 	}
 	if err := writeServiceDiagnostics(cmd.ErrOrStderr(), diagnostics, a.privacy); err != nil {
-		return err
-	}
-	if err := writeServiceShadowWarnings(cmd.ErrOrStderr(), rows, a.privacy); err != nil {
 		return err
 	}
 	return writeServiceTable(cmd.OutOrStdout(), rows, a.privacy)
@@ -304,21 +244,16 @@ func (a *application) runServeList(cmd *cobra.Command, timeout time.Duration) er
 
 func (a *application) unserveCommand() *cobra.Command {
 	var (
-		hostID    string
-		localEdge bool
-		timeout   time.Duration
+		hostID string
+
+		timeout time.Duration
 	)
 	command := &cobra.Command{
 		Use:   "unserve ROUTE",
-		Short: "Remove one service and wait for public withdrawal",
+		Short: "Remove one private service",
 		Args:  exactArgs(1, "the route to remove", "mesh unserve blog.mesh.test"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if localEdge {
-				return a.runLocalTunnelRelease(cmd, args[0], hostID)
-			}
-			if !strings.HasPrefix(args[0], "/") && !strings.HasPrefix(args[0], ":") {
-				return a.runTunnelRelease(cmd, args[0], hostID)
-			}
+
 			if timeout <= 0 || timeout > maximumServiceListTimeout {
 				return fmt.Errorf("--timeout must be between 1ns and %s", maximumServiceListTimeout)
 			}
@@ -326,7 +261,7 @@ func (a *application) unserveCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&hostID, "host", "", "machine name or exact host ID when more than one host owns ROUTE")
-	command.Flags().BoolVar(&localEdge, "local-edge", false, "release a tunnel reservation through this edge's local daemon socket")
+
 	command.Flags().DurationVar(&timeout, "timeout", defaultServiceListTimeout, "hard deadline for ownership discovery")
 	return command
 }
@@ -389,7 +324,7 @@ func (a *application) resolveServiceOwner(cmd *cobra.Command, cache *SQLiteCatal
 	rows, diagnostics, err := CollectServiceCatalog(cmd.Context(), hosts, timeout,
 		func(ctx context.Context, host HostRecord) (remoteServiceSnapshot, error) {
 			return listRemoteServices(ctx, host, a.dependencies.DialControl)
-		}, nil, cache)
+		}, cache)
 	if err != nil {
 		return ServiceCatalogRow{}, nil, err
 	}
@@ -484,9 +419,7 @@ func serviceURL(host HostRecord, privateName string, service protocol.ServiceInf
 	if service.PrivateHost != "" {
 		return "https://" + service.PrivateHost + "/"
 	}
-	if service.PublicName != "" {
-		return "https://" + service.PublicName + "/" + service.Name
-	}
+
 	if privateName != "" {
 		return "https://" + privateName + "/" + service.Name
 	}
@@ -518,113 +451,6 @@ func numericCLIServiceTarget(value string) bool {
 		}
 	}
 	return true
-}
-
-func terminalPublicConfirmation(input *os.File, output io.Writer, masks ...*privacy.Mask) ConfirmPublicFunc {
-	mask := presentationMask(masks)
-	return func(ctx context.Context, confirmation PublicConfirmation) (bool, error) {
-		if ctx == nil {
-			return false, errors.New("nil public confirmation context")
-		}
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		if input == nil || !term.IsTerminal(input.Fd()) {
-			return false, errors.New("public publication needs an interactive terminal or --yes")
-		}
-		if err := writePublicConfirmation(output, confirmation, mask); err != nil {
-			return false, err
-		}
-		return readPublicConfirmation(ctx, input)
-	}
-}
-
-func writePublicConfirmation(output io.Writer, confirmation PublicConfirmation, mask *privacy.Mask) error {
-	question := "Publish this service to the internet?"
-	if confirmation.TunnelClaim {
-		question = "Reserve this hostname for an internet tunnel?"
-	}
-	if _, err := fmt.Fprintf(output, "%s\n  Host: %s\n", question, mask.Value("host", HostLabel(confirmation.Host))); err != nil {
-		return fmt.Errorf("show public confirmation host: %w", err)
-	}
-	if err := writePublicConfirmationTarget(output, confirmation, mask); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(output, "  URL: %s\n", mask.Value("url", confirmation.URL)); err != nil {
-		return fmt.Errorf("show public confirmation URL: %w", err)
-	}
-	if confirmation.CredentialsOverride {
-		if _, err := fmt.Fprintln(output, "  Credential check: explicitly overridden"); err != nil {
-			return fmt.Errorf("show public confirmation override: %w", err)
-		}
-	}
-	if _, err := fmt.Fprint(output, "Continue? [y/N] "); err != nil {
-		return fmt.Errorf("show public confirmation prompt: %w", err)
-	}
-	return nil
-}
-
-func writePublicConfirmationTarget(output io.Writer, confirmation PublicConfirmation, mask *privacy.Mask) error {
-	var err error
-	switch {
-	case confirmation.TunnelClaim:
-		_, err = fmt.Fprintln(output, "  Exposure: public while your SSH forward is connected")
-	case confirmation.Service.Kind == string(meshserve.Proxy):
-		_, err = fmt.Fprintf(output, "  Target: port %s\n", safeTableCell(confirmation.Service.Target))
-	default:
-		_, err = fmt.Fprintf(output, "  Resolved path: %s\n  Files: %d\n", safeTableCell(mask.Value("path", confirmation.Service.Target)), confirmation.FileCount)
-	}
-	if err != nil {
-		return fmt.Errorf("show public confirmation target: %w", err)
-	}
-	return nil
-}
-
-func readPublicConfirmation(ctx context.Context, input *os.File) (bool, error) {
-	reader, err := cancelreader.NewReader(input)
-	if err != nil {
-		return false, fmt.Errorf("prepare public confirmation: %w", err)
-	}
-	defer reader.Close() //nolint:errcheck // prompt result is authoritative
-	stopCancellation := context.AfterFunc(ctx, func() { reader.Cancel() })
-	answer, err := bufio.NewReader(reader).ReadString('\n')
-	stopCancellation()
-	if err := ctx.Err(); err != nil {
-		return false, fmt.Errorf("read public confirmation: %w", err)
-	}
-	if errors.Is(err, cancelreader.ErrCanceled) {
-		return false, context.Canceled
-	}
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("read public confirmation: %w", err)
-	}
-	answer = strings.ToLower(strings.TrimSpace(answer))
-	return answer == "y" || answer == "yes", nil
-}
-
-func writeServiceShadowWarnings(output io.Writer, rows []ServiceCatalogRow, masks ...*privacy.Mask) error {
-	mask := presentationMask(masks)
-	byHost := make(map[string][]meshserve.Service)
-	for _, row := range rows {
-		byHost[row.Host.ID] = append(byHost[row.Host.ID], protocol.ServiceFromInfo(row.Service))
-	}
-	for _, row := range rows {
-		services, ok := byHost[row.Host.ID]
-		if !ok {
-			continue
-		}
-		delete(byHost, row.Host.ID)
-		cached := ""
-		if !row.Live {
-			cached = " (cached)"
-		}
-		for _, shadow := range meshserve.PrivateRouteShadows(services) {
-			if _, err := fmt.Fprintf(output, "warning: %s%s: %s\n", safeTableCell(mask.Value("host", HostLabel(row.Host))), cached, serviceDiagnostic(mask, shadow.Message())); err != nil {
-				return fmt.Errorf("write service shadow warning: %w", err)
-			}
-		}
-	}
-	return nil
 }
 
 func writeServiceDiagnostics(output io.Writer, diagnostics map[string]error, masks ...*privacy.Mask) error {

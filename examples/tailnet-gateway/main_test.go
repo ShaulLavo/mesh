@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"fmt"
 	"io"
 	"math"
 	"math/big"
@@ -34,15 +33,9 @@ func proxyTestUID(t *testing.T) uint32 {
 }
 
 func TestGatewayPreservesTLSAndRoutesByServerName(t *testing.T) {
-	for _, metadata := range []bool{false, true} {
-		t.Run(fmt.Sprint(metadata), func(t *testing.T) { checkGateway(t, metadata) })
-	}
-}
-
-func checkGateway(t *testing.T, metadata bool) {
-	if metadata && runtime.GOOS != "linux" {
+	if runtime.GOOS != "linux" {
 		if _, err := tailnet.ProxyForwarderUIDs(); err == nil {
-			t.Fatal("owner access enabled without peer UID authentication")
+			t.Fatal("private gateway enabled without peer UID authentication")
 		}
 		return
 	}
@@ -50,7 +43,7 @@ func checkGateway(t *testing.T, metadata bool) {
 	certificate, roots := gatewayCertificate(t, hosts)
 	backend := func(name string) *httptest.Server {
 		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if metadata && r.RemoteAddr != "100.64.0.2:12345" {
+			if r.RemoteAddr != "100.64.0.2:12345" {
 				t.Errorf("lost verified device address: %s", r.RemoteAddr)
 			}
 			body, err := io.ReadAll(r.Body)
@@ -62,9 +55,7 @@ func checkGateway(t *testing.T, metadata bool) {
 			_ = json.NewEncoder(w).Encode(name + ":" + r.TLS.ServerName + ":" + string(body))
 		}))
 		server.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}
-		if metadata {
-			server.Listener = tailnet.ProxyListener{Listener: server.Listener, AllowedUIDs: []uint32{proxyTestUID(t)}}
-		}
+		server.Listener = tailnet.ProxyListener{Listener: server.Listener, AllowedUIDs: []uint32{proxyTestUID(t)}}
 		server.StartTLS()
 		t.Cleanup(server.Close)
 		return server
@@ -75,35 +66,33 @@ func checkGateway(t *testing.T, metadata bool) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
-	if metadata {
-		listener = tailnet.ProxyListener{Listener: listener, AllowedUIDs: []uint32{proxyTestUID(t)}}
-	}
-	go acceptGateway(listener, private.Listener.Addr().String(), apps.Listener.Addr().String(), metadata)
+	listener = tailnet.ProxyListener{Listener: listener, AllowedUIDs: []uint32{proxyTestUID(t)}}
+	go acceptGateway(listener, private.Listener.Addr().String(), apps.Listener.Addr().String())
 	for _, version := range []uint16{tls.VersionTLS12, tls.VersionTLS13} {
 		for _, host := range hosts {
-			checkGatewayRequest(t, listener.Addr().String(), host, version, roots, metadata)
+			checkGatewayRequest(t, listener.Addr().String(), host, version, roots)
 		}
 	}
 }
 
-func acceptGateway(listener net.Listener, private, apps string, metadata bool) {
+func acceptGateway(listener net.Listener, private, apps string) {
 	for {
 		client, err := listener.Accept()
 		if err != nil {
 			return
 		}
-		go bridge(client, private, apps, metadata)
+		go bridge(client, private, apps)
 	}
 }
 
-func checkGatewayRequest(t *testing.T, address, host string, version uint16, roots *x509.CertPool, metadata bool) {
+func checkGatewayRequest(t *testing.T, address, host string, version uint16, roots *x509.CertPool) {
 	t.Helper()
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{MinVersion: version, MaxVersion: version, RootCAs: roots},
 	}
 	transport.DialContext = func(_ context.Context, _, _ string) (net.Conn, error) {
 		connection, err := net.DialTimeout("tcp", address, time.Second)
-		if err == nil && metadata {
+		if err == nil {
 			_, err = io.WriteString(connection, "PROXY TCP4 100.64.0.2 127.0.0.1 12345 443\r\n")
 			if err != nil {
 				_ = connection.Close()
@@ -115,13 +104,7 @@ func checkGatewayRequest(t *testing.T, address, host string, version uint16, roo
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
 	payload := strings.Repeat("encrypted body ", 8192)
 	response, err := client.Post("https://"+host+"/", "text/plain", strings.NewReader(payload))
-	if !metadata && !appHost(host) {
-		if err == nil {
-			_ = response.Body.Close()
-			t.Fatal("private gateway route accepted unverified client metadata")
-		}
-		return
-	}
+
 	if err != nil {
 		t.Fatalf("TLS %x for %s: %v", version, host, err)
 	}
@@ -180,6 +163,63 @@ func TestAppHostCanonicalSNI(t *testing.T) {
 	for _, host := range []string{"APPS.OLD.TEST.", "7K3D.MESH.TEST."} {
 		if !appHost(host) {
 			t.Fatalf("canonical app SNI missed: %s", host)
+		}
+	}
+}
+
+type gatewaySourceConn struct {
+	net.Conn
+	source        net.Addr
+	authenticated bool
+}
+
+func (c gatewaySourceConn) RemoteAddr() net.Addr { return c.source }
+func (c gatewaySourceConn) Authenticated() bool  { return c.authenticated }
+
+func TestVerifiedClientRequiresTailnetSource(t *testing.T) {
+	for name, source := range map[string]string{
+		"Tailnet IPv4": "100.64.0.2:12345",
+		"Tailnet IPv6": "[fd7a:115c:a1e0::2]:12345",
+		"public":       "203.0.113.2:12345",
+		"loopback":     "127.0.0.1:12345",
+		"unspecified":  "0.0.0.0:12345",
+	} {
+		t.Run(name, func(t *testing.T) {
+			address, err := net.ResolveTCPAddr("tcp", source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := gatewaySourceConn{source: address, authenticated: true}
+			want := strings.HasPrefix(name, "Tailnet")
+			if verifiedClient(client) != want {
+				t.Fatalf("verified source %s accepted = %v, want %v", source, verifiedClient(client), want)
+			}
+			client.authenticated = false
+			if verifiedClient(client) {
+				t.Fatal("unverified source accepted")
+			}
+		})
+	}
+}
+
+func TestGatewayAddressesRequireCanonicalLoopbackEndpoints(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:8446", "127.255.254.1:8446", "[::1]:8446", "[::ffff:127.0.0.1]:8446"} {
+		if err := validateGatewayAddresses(address, address, address); err != nil {
+			t.Fatalf("loopback address %q rejected: %v", address, err)
+		}
+	}
+	for _, address := range []string{"0.0.0.0:8446", ":8446", "203.0.113.2:8446", "[2001:db8::2]:8446", "100.64.0.2:8446", "[fd7a:115c:a1e0::2]:8446", "localhost:8446", "127.0.0.1:0", "127.0.0.1:08446", "[::1%eth0]:8446", "127.0.0.1"} {
+		assertGatewayRejectsAddress(t, address)
+	}
+}
+
+func assertGatewayRejectsAddress(t *testing.T, address string) {
+	t.Helper()
+	for index, role := range []string{"listen", "private", "apps"} {
+		endpoints := []string{"127.0.0.1:8446", "127.0.0.1:8443", "127.0.0.1:8445"}
+		endpoints[index] = address
+		if err := validateGatewayAddresses(endpoints[0], endpoints[1], endpoints[2]); err == nil {
+			t.Fatalf("%s accepted noncanonical/nonloopback endpoint %q", role, address)
 		}
 	}
 }

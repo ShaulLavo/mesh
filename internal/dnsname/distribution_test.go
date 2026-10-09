@@ -43,7 +43,7 @@ func TestSignedBundleBindsTargetSignerCertificateAndKey(t *testing.T) {
 	otherSigner, _ := testEd25519Identity(t)
 	for name, mutate := range map[string]func(*SignedBundle) (string, string){
 		"profile": func(candidate *SignedBundle) (string, string) {
-			candidate.Profile = ProfilePublicEdge
+			candidate.Profile = CertificateProfile("removed-profile")
 			return targetID, signerID
 		},
 		"environment": func(candidate *SignedBundle) (string, string) {
@@ -273,12 +273,12 @@ func TestInstallerRejectsCorrectlySignedBundleForAnotherProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	certificatePEM, keyPEM := testCertificate(t, 99, PublicWildcardName(), now.Add(-time.Hour), now.Add(90*24*time.Hour))
-	publicBundle, err := ValidateBundle(certificatePEM, keyPEM, PublicWildcardName(), now)
+	certificatePEM, keyPEM := testCertificate(t, 99, ServiceWildcardName(), now.Add(-time.Hour), now.Add(90*24*time.Hour))
+	publicBundle, err := ValidateBundle(certificatePEM, keyPEM, ServiceWildcardName(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := SignBundle(publicBundle, targetID, ProfilePublicEdge, EnvironmentLive, "", signer)
+	signed, err := SignBundle(publicBundle, targetID, ProfilePrivateService, EnvironmentLive, "", signer)
 	if err != nil {
 		t.Fatal(err)
 	}

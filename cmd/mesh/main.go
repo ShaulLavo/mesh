@@ -104,11 +104,7 @@ func deploymentRequested(args []string) bool {
 	case "app", "serve", "unserve", "private-names":
 		return true
 	case "daemon":
-		for _, arg := range args {
-			if arg == "--https-port" || arg == "--edge" || arg == "--private-names-config" || strings.HasPrefix(arg, "--https-port=") || strings.HasPrefix(arg, "--edge=") || strings.HasPrefix(arg, "--private-names-config=") {
-				return true
-			}
-		}
+		return daemonRequestsDeployment(args)
 	}
 	return false
 }
@@ -137,4 +133,22 @@ func initializeDeployment(args []string) error {
 		return fmt.Errorf("initialize deployment policy: %w", policyErr)
 	}
 	return nil
+}
+
+func daemonRequestsDeployment(args []string) bool {
+	for _, arg := range args {
+		name, _, _ := strings.Cut(arg, "=")
+		if deploymentFlag(name) {
+			return true
+		}
+	}
+	return false
+}
+func deploymentFlag(name string) bool {
+	switch name {
+	case "--https-port", "--private-names-config", "--app-registry-config", "--app-registry-target":
+		return true
+	default:
+		return false
+	}
 }

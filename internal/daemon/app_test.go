@@ -274,27 +274,6 @@ func TestRunLosingDaemonCannotMutateCatalog(t *testing.T) {
 	}
 }
 
-func TestRunRejectsPiCredentialsInPublicEdgeRole(t *testing.T) {
-	originHost, _, err := identity.LoadOrCreate(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(t.TempDir(), "edge.json")
-	contents := fmt.Sprintf(`{"mode":"proxy","origins":[{"identity":%q,"displayAlias":"origin","tailscaleName":"origin.example.ts.net","controlPort":7337,"websocketPath":"/mesh"}]}`, originHost.ID)
-	if err := os.WriteFile(configPath, []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	err = run(context.Background(), Config{
-		StateDir: compactSocketTempDir(t), EdgeConfig: configPath, PrivateNamesConfig: filepath.Join(t.TempDir(), "must-not-be-read.json"),
-	}, runOptions{
-		now: func() time.Time { return catalogTestTime }, bootID: func() string { return "boot" },
-		discoverSelf: func(context.Context) (tailnet.Peer, error) { return tailnet.Peer{}, nil }, reconcileInterval: time.Hour,
-	})
-	if err == nil || !strings.Contains(err.Error(), "Pi-only") {
-		t.Fatalf("Run error = %v, want role-boundary rejection", err)
-	}
-}
-
 func TestRunShutdownDoesNotWaitForBlockedErrorSink(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

@@ -15,6 +15,8 @@ import (
 	"github.com/shaul/mesh/internal/tailnet"
 )
 
+var tailnetIPv6Prefix = netip.MustParsePrefix("fd7a:115c:a1e0::/48")
+
 const (
 	defaultReconcileTimeout = 25 * time.Minute
 	maximumReconcileTimeout = time.Hour
@@ -33,10 +35,8 @@ type PrivateOrigin struct {
 	WebSocketPath string   `json:"websocketPath"`
 }
 
-// PublicEdgeTarget is the one identity-pinned VPS certificate recipient. It
-// deliberately carries no DNS record name; public A records remain outside
-// Mesh ownership.
-type PublicEdgeTarget struct {
+// CertificateRecipient receives the private service wildcard without owning DNS records.
+type CertificateRecipient struct {
 	TailscaleName string `json:"tailscaleName"`
 	Identity      string `json:"identity"`
 	ControlPort   uint16 `json:"controlPort"`
@@ -62,6 +62,7 @@ type PrivateNamesManagerConfig struct {
 	Renewer       CertificateRenewer
 	Distributor   CertificateDistributor
 	Origins       []PrivateOrigin
+	AppRegistry   *CertificateRecipient
 	DiscoverSelf  func(context.Context) (tailnet.Peer, error)
 	DiscoverPeers func(context.Context) ([]tailnet.Peer, error)
 	PassTimeout   time.Duration
@@ -76,6 +77,7 @@ type PrivateNamesManager struct {
 	renewer       CertificateRenewer
 	distributor   CertificateDistributor
 	origins       []PrivateOrigin
+	appRegistry   *CertificateRecipient
 	discoverSelf  func(context.Context) (tailnet.Peer, error)
 	discoverPeers func(context.Context) ([]tailnet.Peer, error)
 	passTimeout   time.Duration
@@ -106,8 +108,18 @@ func NewPrivateNamesManager(config PrivateNamesManagerConfig) (*PrivateNamesMana
 	if config.PassTimeout <= 0 || config.PassTimeout > maximumReconcileTimeout {
 		return nil, fmt.Errorf("dnsname: private-names pass timeout %s is outside (0,%s]", config.PassTimeout, maximumReconcileTimeout)
 	}
-	if len(config.Origins) == 0 || len(config.Origins) > maximumDistributionTargets {
-		return nil, fmt.Errorf("dnsname: private origin count %d is outside 1..%d", len(config.Origins), maximumDistributionTargets)
+	targetCount := len(config.Origins)
+	if config.AppRegistry != nil {
+		if !config.ServiceHosts {
+			return nil, errors.New("dnsname: app registry requires private-service certificate renewal")
+		}
+		if err := validateCertificateRecipient(*config.AppRegistry); err != nil {
+			return nil, err
+		}
+		targetCount++
+	}
+	if targetCount == 0 || targetCount > maximumDistributionTargets {
+		return nil, fmt.Errorf("dnsname: private certificate target count %d is outside 1..%d", targetCount, maximumDistributionTargets)
 	}
 	seenNames := make(map[string]struct{}, len(config.Origins))
 	seenTailscaleNames := make(map[string]struct{}, len(config.Origins))
@@ -136,13 +148,21 @@ func NewPrivateNamesManager(config PrivateNamesManagerConfig) (*PrivateNamesMana
 		seenTailscaleNames[origin.TailscaleName] = struct{}{}
 		seenIdentities[origin.Identity] = struct{}{}
 	}
+	if err := validateRegistryRecipientOverlap(config.AppRegistry, config.Origins); err != nil {
+		return nil, err
+	}
 	origins := slices.Clone(config.Origins)
 	for index := range origins {
 		origins[index].ServiceNames = slices.Clone(origins[index].ServiceNames)
 	}
+	var appRegistry *CertificateRecipient
+	if config.AppRegistry != nil {
+		copyTarget := *config.AppRegistry
+		appRegistry = &copyTarget
+	}
 	return &PrivateNamesManager{
 		domain: config.Domain, serviceHosts: config.ServiceHosts, provider: config.Provider, renewer: config.Renewer, distributor: config.Distributor,
-		origins:      origins,
+		origins: origins, appRegistry: appRegistry,
 		discoverSelf: config.DiscoverSelf, discoverPeers: config.DiscoverPeers,
 		passTimeout: config.PassTimeout, wait: waitForReconcile,
 	}, nil
@@ -218,6 +238,15 @@ func (m *PrivateNamesManager) RunOnce(ctx context.Context, forceRenewal bool) er
 			Name: origin.Name, PrivateName: privateName, Identity: origin.Identity,
 			Endpoint: "ws://" + netip.AddrPortFrom(address, origin.ControlPort).String() + origin.WebSocketPath,
 		})
+	}
+
+	if m.appRegistry != nil {
+		target, targetErr := appRegistryCertificateTarget(*m.appRegistry, peersByName)
+		if targetErr != nil {
+			passErrors = append(passErrors, targetErr)
+		} else if !slices.ContainsFunc(targets, func(existing OriginTarget) bool { return existing.Identity == target.Identity }) {
+			targets = append(targets, target)
+		}
 	}
 
 	bundle, _, err := m.renewer.Renew(ctx, forceRenewal)
@@ -309,7 +338,7 @@ func validatePrivateOrigin(origin PrivateOrigin) error {
 	return validateCertificateTarget(origin.TailscaleName, origin.Identity, origin.ControlPort, origin.WebSocketPath)
 }
 
-func validatePublicEdgeTarget(target PublicEdgeTarget) error {
+func validateCertificateRecipient(target CertificateRecipient) error {
 	return validateCertificateTarget(target.TailscaleName, target.Identity, target.ControlPort, target.WebSocketPath)
 }
 
@@ -356,4 +385,64 @@ func wrapOptionalError(prefix string, err error) error {
 		return nil
 	}
 	return fmt.Errorf("%s: %w", prefix, err)
+}
+
+func validateRegistryRecipientOverlap(registry *CertificateRecipient, origins []PrivateOrigin) error {
+	if registry == nil {
+		return nil
+	}
+	for _, origin := range origins {
+		sameIdentity := registry.Identity == origin.Identity
+		sameEndpoint := registry.TailscaleName == origin.TailscaleName && registry.ControlPort == origin.ControlPort && registry.WebSocketPath == origin.WebSocketPath
+		if sameIdentity && !sameEndpoint {
+			return errors.New("dnsname: app registry has conflicting endpoints for a service origin identity")
+		}
+		if sameEndpoint && !sameIdentity {
+			return errors.New("dnsname: app registry has a conflicting identity pin for a service origin endpoint")
+		}
+	}
+	return nil
+}
+
+func appRegistryCertificateTarget(recipient CertificateRecipient, peers map[string]tailnet.Peer) (OriginTarget, error) {
+	peer, exists := peers[recipient.TailscaleName]
+	if !exists {
+		return OriginTarget{}, errors.New("dnsname: app registry Tailscale peer is absent or ambiguous")
+	}
+	if !peer.Online {
+		return OriginTarget{}, errors.New("dnsname: app registry is offline in Tailscale")
+	}
+	address, err := certificateRecipientAddress(peer.Addrs)
+	if err != nil {
+		return OriginTarget{}, fmt.Errorf("dnsname: app registry: %w", err)
+	}
+	return OriginTarget{Name: "app-registry", Identity: recipient.Identity,
+		Endpoint: "ws://" + netip.AddrPortFrom(address, recipient.ControlPort).String() + recipient.WebSocketPath}, nil
+}
+func certificateRecipientAddress(values []string) (netip.Addr, error) {
+	addresses := make([]netip.Addr, 0, len(values))
+	for _, value := range values {
+		address, err := netip.ParseAddr(value)
+		if err != nil {
+			return netip.Addr{}, errors.New("Tailscale returned a malformed certificate recipient address")
+		}
+		address = address.Unmap()
+		if !tailnetIPv4Prefix.Contains(address) && !tailnetIPv6Prefix.Contains(address) {
+			return netip.Addr{}, errors.New("Tailscale returned a certificate recipient address outside its ranges")
+		}
+		addresses = append(addresses, address)
+	}
+	if len(addresses) == 0 {
+		return netip.Addr{}, errors.New("certificate recipient has no Tailscale address")
+	}
+	slices.SortFunc(addresses, func(left, right netip.Addr) int {
+		if left.Is4() != right.Is4() {
+			if left.Is4() {
+				return -1
+			}
+			return 1
+		}
+		return left.Compare(right)
+	})
+	return addresses[0], nil
 }

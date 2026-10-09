@@ -48,8 +48,6 @@ def main():
     upsert.add_argument("name")
     upsert.add_argument("kind", choices=("static", "files", "proxy"))
     upsert.add_argument("target")
-    upsert.add_argument("public_name")
-    upsert.add_argument("--wake", action="store_true")
 
     delete = subparsers.add_parser("delete")
     delete.add_argument("socket")
@@ -74,8 +72,6 @@ def main():
                 "name": args.name,
                 "kind": args.kind,
                 "target": args.target,
-                "publicName": args.public_name,
-                "wakeOnRequest": args.wake,
             },
         }
         socket_path = args.socket

@@ -104,8 +104,8 @@ func TestAdvisoryMigrationRaceRequiresCommittedHistory(t *testing.T) {
 		t.Fatalf("committed competing migration was classified as permanent: %v", lostRace)
 	}
 	version, err := loser.GetDBVersion(ctx)
-	if err != nil || version != 12 {
-		t.Fatalf("committed migration version = %d, %v, want 12", version, err)
+	if err != nil || version != 13 {
+		t.Fatalf("committed migration version = %d, %v, want 13", version, err)
 	}
 	var tables int
 	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'hosts'").Scan(&tables); err != nil || tables != 1 {

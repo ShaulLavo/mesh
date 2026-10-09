@@ -166,7 +166,7 @@ func newAppFixture(t *testing.T) *appFixture {
 		*key = private
 	}
 	f.edge = f.openEdge(t)
-	origin, err := NewOrigin(context.Background(), OriginConfig{Store: f.originStore, Key: f.ownerKey, EdgeIdentity: identityFor(f.edgeKey), Exchange: f.edge.Exchange, Workers: f.workers, DataRoot: f.root, Now: func() time.Time { return f.now }})
+	origin, err := NewOrigin(context.Background(), OriginConfig{Store: f.originStore, Key: f.ownerKey, RegistryIdentity: identityFor(f.edgeKey), Exchange: f.edge.Exchange, Workers: f.workers, DataRoot: f.root, Now: func() time.Time { return f.now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +634,7 @@ func TestAmbiguousCreateAllocationRecoversAcrossOriginRestart(t *testing.T) {
 		t.Fatal("did not exercise ambiguous allocation")
 	}
 	f.now = f.now.Add(5 * time.Minute)
-	restarted, err := NewOrigin(context.Background(), OriginConfig{Store: f.originStore, Key: f.ownerKey, EdgeIdentity: identityFor(f.edgeKey), Exchange: f.edge.Exchange, Workers: f.workers, DataRoot: f.root, Now: func() time.Time { return f.now }})
+	restarted, err := NewOrigin(context.Background(), OriginConfig{Store: f.originStore, Key: f.ownerKey, RegistryIdentity: identityFor(f.edgeKey), Exchange: f.edge.Exchange, Workers: f.workers, DataRoot: f.root, Now: func() time.Time { return f.now }})
 	if err != nil {
 		t.Fatal(err)
 	}

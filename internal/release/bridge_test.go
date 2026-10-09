@@ -19,7 +19,7 @@ import (
 func historicalBridgeFixture(t *testing.T) (map[string][]byte, Build, Manifest) {
 	t.Helper()
 	assets := make(map[string][]byte)
-	for _, name := range []string{"v0.1.151.json", "v0.1.159.json", "cee03f3103d61fb1d79421e0247de58502007de90949de6890b57153cfc88a2b.json", "6c17e5388adcd15b4d82039029fec8a72f908dd07d7c190a95e411b2a1169034.json"} {
+	for _, name := range []string{"v0.1.151.json", "v0.1.159.json", "8dda36b83d5f097a5297f2788762a6d443006b3c13a53755ae65f8f222e082e6.json", "54d13c1d74cb6235cfbeef2bbe89cc270a97c2e62b0075588c24908bdd46cb59.json"} {
 		data, err := os.ReadFile(filepath.Join("testdata", "bridge", name)) //nolint:gosec // checked-in public release fixtures
 		if err != nil {
 			t.Fatal(err)
@@ -90,9 +90,9 @@ func mutateBridgeEvidence(t *testing.T, scenario string, assets map[string][]byt
 	t.Helper()
 	switch scenario {
 	case "missing first receipt":
-		delete(assets, "cee03f3103d61fb1d79421e0247de58502007de90949de6890b57153cfc88a2b.json")
+		delete(assets, "8dda36b83d5f097a5297f2788762a6d443006b3c13a53755ae65f8f222e082e6.json")
 	case "altered second receipt":
-		assets["6c17e5388adcd15b4d82039029fec8a72f908dd07d7c190a95e411b2a1169034.json"] = []byte(`{}`)
+		assets["54d13c1d74cb6235cfbeef2bbe89cc270a97c2e62b0075588c24908bdd46cb59.json"] = []byte(`{}`)
 	case "wrong platform":
 		build.Platform = Platform{OS: "linux", Arch: "arm64"}
 	case "wrong source digest":
@@ -171,7 +171,7 @@ func TestBridgeUsesDiscoveredManifestVersion(t *testing.T) {
 }
 
 func TestVerifyTransitionReceiptRejectsContentAddressedFalseClaims(t *testing.T) {
-	for _, field := range []string{"schema", "platform", "fromDigest", "toDigest", "stateReadMin", "stateReadMax", "stateWrite", "workerMin", "workerMax", "workerWrite", "journalVersion", "retainedOpenedCandidateState", "sessionsPreserved", "recoveryRecordsPreserved", "unknownField"} {
+	for _, field := range []string{"schema", "platform", "fromDigest", "toDigest", "stateReadMin", "stateReadMax", "stateWrite", "workerMin", "workerMax", "workerWrite", "journalVersion", "candidateOpenedRetainedState", "sessionsPreserved", "recoveryRecordsPreserved", "unknownField"} {
 		t.Run(field, func(t *testing.T) {
 			assets, build, _ := historicalBridgeFixture(t)
 			hop, err := decodeManifest(assets["v0.1.151.json"])

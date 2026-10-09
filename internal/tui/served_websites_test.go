@@ -123,19 +123,6 @@ func TestCompactPickerKeepsDetailsAlongsideServedWebsites(t *testing.T) {
 	assertFits(t, current.View().Content, 52, 16)
 }
 
-func TestPublicWebsiteDoesNotClaimReachabilityWithoutEdgeStatus(t *testing.T) {
-	host := cli.HostRecord{MachineName: "pc", ID: "pc"}
-	websites := servedWebsites([]cli.ServiceCatalogRow{{
-		Host: host, Live: true,
-		Service: protocol.ServiceInfo{
-			Name: "blog", Kind: "proxy", Target: "3000", PublicName: "site.example.com", Healthy: true,
-		},
-	}}, false)
-	if len(websites) != 1 || websites[0].health != "edge-unknown" {
-		t.Fatalf("public website health = %#v, want edge-unknown", websites)
-	}
-}
-
 func servedWebsiteSnapshot(host cli.HostRecord, sessions cli.HostSessions, services ...protocol.ServiceInfo) cli.PickerHostSnapshot {
 	rows := make([]cli.ServiceCatalogRow, len(services))
 	for index, service := range services {

@@ -91,28 +91,27 @@ func TestLogsControlRoundTrip(t *testing.T) {
 
 func TestServiceControlRoundTrip(t *testing.T) {
 	want := Control{
-		Type:             TypeServicePreviewed,
-		RequestID:        "service-list-1",
-		ServiceName:      "blog",
-		AllowCredentials: true,
+		Type:        TypeServicePreviewed,
+		RequestID:   "service-list-1",
+		ServiceName: "blog",
+
 		Service: &ServiceInfo{
-			Name:       "blog",
-			Kind:       "static",
-			Target:     "/srv/blog",
-			PublicName: "blog.mesh.test",
-			Healthy:    true,
+			Name:   "blog",
+			Kind:   "static",
+			Target: "/srv/blog",
+
+			Healthy: true,
 		},
 		Services: []ServiceInfo{{
-			Name:          "files",
-			Kind:          "files",
-			Target:        "/srv/files",
-			WakeOnRequest: true,
-			Healthy:       false,
-			Problem:       "root unavailable",
+			Name:   "files",
+			Kind:   "files",
+			Target: "/srv/files",
+
+			Healthy: false,
+			Problem: "root unavailable",
 		}},
 		ServicePreview: &ServicePreview{
-			Service:   ServiceInfo{Name: "blog", Kind: "static", Target: "/home/me/site", PublicName: "blog.mesh.test"},
-			FileCount: 42,
+			Service: ServiceInfo{Name: "blog", Kind: "static", Target: "/home/me/site"},
 		},
 	}
 
@@ -134,7 +133,7 @@ func TestMaximalServiceListFitsOneBoundedFrame(t *testing.T) {
 	for index := range services {
 		services[index] = ServiceInfo{
 			Name: fmt.Sprintf("%03d%s", index, strings.Repeat("a", 509)), Kind: "static",
-			Target: "/" + strings.Repeat("x", 2047), PublicName: "service.mesh.test",
+			Target:  "/" + strings.Repeat("x", 2047),
 			Problem: strings.Repeat("p", 256),
 		}
 	}
@@ -172,30 +171,6 @@ func TestCertificateControlRoundTrip(t *testing.T) {
 		CertificatePrivateName: "desktop.mesh.mesh.test",
 	}
 
-	payload, err := want.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := DecodeControl(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("decoded control = %#v, want %#v", got, want)
-	}
-}
-
-func TestEdgeRegistrationControlRoundTrip(t *testing.T) {
-	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	want := Control{
-		Type: TypeEdgeRegister, RequestID: "edge-1",
-		EdgeSnapshot: &EdgeSnapshot{
-			TargetID: "edge", OriginID: "origin", Sequence: 9, IssuedAt: now, ExpiresAt: now.Add(5 * time.Minute),
-			Routes: []EdgeRoute{{PublicName: "app.mesh.test", ServiceName: "app", WakeOnRequest: true}}, Signature: []byte("signature"),
-		},
-		EdgeSequence: 9, EdgeDigest: "digest",
-		EdgeRoutes: []EdgeRouteInfo{{PublicName: "app.mesh.test", ServiceName: "app", DisplayAlias: "Desktop", LastSeenAt: now, Online: true}},
-	}
 	payload, err := want.Encode()
 	if err != nil {
 		t.Fatal(err)

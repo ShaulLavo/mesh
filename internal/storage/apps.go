@@ -8,8 +8,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/shaul/mesh/internal/edge"
-	"github.com/shaul/mesh/internal/tunnel"
+	"github.com/shaul/mesh/internal/serve"
 )
 
 const maximumAppStateBytes = 16 << 20
@@ -60,18 +59,18 @@ func validateAppStateKey(key string) error {
 	return nil
 }
 
-// ReserveAppNames shares the write reservation with services and tunnels.
+// ReserveAppNames takes a write reservation before inspecting app ownership.
 // Active owner retries converge; retired names can never become active again.
-func (s *Store) ReserveAppNames(ctx context.Context, publicNames []string, ownerID string) error {
-	if err := validateAppNames(publicNames, ownerID); err != nil {
+func (s *Store) ReserveAppNames(ctx context.Context, hostnames []string, ownerID string) error {
+	if err := validateAppNames(hostnames, ownerID); err != nil {
 		return err
 	}
-	tx, err := s.beginTunnelWrite(ctx)
+	tx, err := s.beginAppWrite(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // commit decides the transaction outcome
-	for _, name := range publicNames {
+	for _, name := range hostnames {
 		if err := reserveAppName(ctx, tx, name, ownerID); err != nil {
 			return err
 		}
@@ -95,20 +94,20 @@ func validateAppNames(names []string, owner string) error {
 }
 
 // ReserveAppNamesAndState commits every deployment alias and app state together.
-func (s *Store) ReserveAppNamesAndState(ctx context.Context, publicNames []string, ownerID, key string, data []byte) error {
-	if err := validateAppNames(publicNames, ownerID); err != nil {
+func (s *Store) ReserveAppNamesAndState(ctx context.Context, hostnames []string, ownerID, key string, data []byte) error {
+	if err := validateAppNames(hostnames, ownerID); err != nil {
 		return err
 	}
 	if err := validateAppState(key, data); err != nil {
 		return err
 	}
-	tx, err := s.beginTunnelWrite(ctx)
+	tx, err := s.beginAppWrite(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // commit decides the transaction outcome
-	for _, publicName := range publicNames {
-		if err := reserveAppName(ctx, tx, publicName, ownerID); err != nil {
+	for _, hostname := range hostnames {
+		if err := reserveAppName(ctx, tx, hostname, ownerID); err != nil {
 			return err
 		}
 	}
@@ -121,20 +120,20 @@ func (s *Store) ReserveAppNamesAndState(ctx context.Context, publicNames []strin
 	return nil
 }
 
-func reserveAppName(ctx context.Context, tx *sql.Tx, publicName, ownerID string) error {
+func reserveAppName(ctx context.Context, tx *sql.Tx, hostname, ownerID string) error {
 	var currentOwner string
 	var active bool
-	err := tx.QueryRowContext(ctx, "SELECT owner_id, active FROM app_names WHERE public_name = ?", publicName).Scan(&currentOwner, &active)
+	err := tx.QueryRowContext(ctx, "SELECT owner_id, active FROM app_names WHERE hostname = ?", hostname).Scan(&currentOwner, &active)
 	if err == nil {
 		return existingAppName(currentOwner, ownerID, active)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("storage: inspect app name: %w", err)
 	}
-	if err := checkNewAppName(ctx, tx, publicName); err != nil {
+	if err := checkAppNameCapacity(ctx, tx); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO app_names (public_name, owner_id, active) VALUES (?, ?, 1)", publicName, ownerID); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO app_names (hostname, owner_id, active) VALUES (?, ?, 1)", hostname, ownerID); err != nil {
 		return fmt.Errorf("storage: reserve app name: %w", err)
 	}
 	return nil
@@ -142,50 +141,39 @@ func reserveAppName(ctx context.Context, tx *sql.Tx, publicName, ownerID string)
 
 func existingAppName(currentOwner, ownerID string, active bool) error {
 	if currentOwner != ownerID || !active {
-		return tunnel.ErrCollision
+		return ErrAppNameCollision
 	}
 	return nil
 }
 
-func checkNewAppName(ctx context.Context, tx *sql.Tx, publicName string) error {
-	var collision bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM edge_routes WHERE public_name = ?)
-        OR EXISTS (SELECT 1 FROM tunnel_claims WHERE public_name = ?)`, publicName, publicName).Scan(&collision)
-	if err != nil {
-		return fmt.Errorf("storage: inspect app name collision: %w", err)
-	}
-	if collision {
-		return tunnel.ErrCollision
-	}
-	var combined int
-	err = tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM app_names WHERE active = 1) +
-        (SELECT count(*) FROM tunnel_claims) + (SELECT count(*) FROM edge_routes)`).Scan(&combined)
-	if err != nil {
+func checkAppNameCapacity(ctx context.Context, tx *sql.Tx) error {
+	var count int
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM app_names WHERE active = 1").Scan(&count); err != nil {
 		return fmt.Errorf("storage: inspect app capacity: %w", err)
 	}
-	if combined >= edge.MaximumTotalRoutes {
-		return tunnel.ErrCapacity
+	if count >= 8192 {
+		return ErrAppNameCapacity
 	}
 	return nil
 }
 
-func (s *Store) AppNameExists(ctx context.Context, publicName string) (bool, error) {
-	if err := tunnel.ValidateHostname(publicName); err != nil {
-		return false, err
+func (s *Store) AppNameExists(ctx context.Context, hostname string) (bool, error) {
+	if err := serve.ValidateDeploymentHost(hostname); err != nil {
+		return false, fmt.Errorf("storage: validate app hostname: %w", err)
 	}
 	var exists bool
-	err := s.db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM app_names WHERE public_name = ?)", publicName).Scan(&exists)
+	err := s.db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM app_names WHERE hostname = ?)", hostname).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("storage: inspect app name: %w", err)
 	}
 	return exists, nil
 }
 
-func (s *Store) SetAppNameInactive(ctx context.Context, publicName, ownerID string) error {
-	if err := validateAppNameOwner(publicName, ownerID); err != nil {
+func (s *Store) SetAppNameInactive(ctx context.Context, hostname, ownerID string) error {
+	if err := validateAppNameOwner(hostname, ownerID); err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, "UPDATE app_names SET active = 0 WHERE public_name = ? AND owner_id = ?", publicName, ownerID)
+	result, err := s.db.ExecContext(ctx, "UPDATE app_names SET active = 0 WHERE hostname = ? AND owner_id = ?", hostname, ownerID)
 	if err != nil {
 		return fmt.Errorf("storage: retire app name: %w", err)
 	}
@@ -194,18 +182,34 @@ func (s *Store) SetAppNameInactive(ctx context.Context, publicName, ownerID stri
 		return fmt.Errorf("storage: inspect retired app name: %w", err)
 	}
 	if changed == 0 {
-		return tunnel.ErrCollision
+		return ErrAppNameCollision
 	}
 	return nil
 }
 
-func validateAppNameOwner(publicName, ownerID string) error {
-	if err := tunnel.ValidateHostname(publicName); err != nil {
-		return err
+func validateAppNameOwner(hostname, ownerID string) error {
+	if err := serve.ValidateDeploymentHost(hostname); err != nil {
+		return fmt.Errorf("storage: validate app hostname: %w", err)
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(ownerID)
 	if err != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != ownerID {
 		return errors.New("storage: app owner must be a canonical Ed25519 identity")
 	}
 	return nil
+}
+
+var ErrAppNameCollision = errors.New("storage: app hostname is already reserved")
+var ErrAppNameCapacity = errors.New("storage: app hostname capacity reached")
+
+// Acquire the write reservation before reading ownership so concurrent creators have one winner.
+func (s *Store) beginAppWrite(ctx context.Context) (*sql.Tx, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("storage: begin app transaction: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE app_names SET active = active WHERE 0"); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("storage: reserve app write transaction: %w", err)
+	}
+	return tx, nil
 }

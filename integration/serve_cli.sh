@@ -1,31 +1,27 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
-# The product CLI publishes services through identity-pinned real daemons.
-# This fixture has no T12 certificate or Tailscale Serve, so private services
-# use the verified control endpoint while public URLs remain canonical HTTPS.
+# The CLI creates private services through an identity-pinned real daemon.
+# Without private TLS this fixture uses the verified control endpoint.
 set -uo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 export NO_COLOR=1
 
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-HTTP_FIXTURE="$REPO_ROOT/integration/helpers/public_http_fixture.py"
-CONFIRM_FIXTURE="$REPO_ROOT/integration/helpers/confirm_public_serve.py"
+HTTP_FIXTURE="$REPO_ROOT/integration/helpers/http_fixture.py"
 TEST_ROOT=$(mktemp -d)
 MESH_INTEGRATION=${MESH_INTEGRATION_BINARY:-$TEST_ROOT/mesh-integration}
-EDGE_STATE="$TEST_ROOT/edge-state"
 ORIGIN_STATE="$TEST_ROOT/origin-state"
 ORIGIN_HOME="$TEST_ROOT/origin-home"
 CLIENT_STATE="$TEST_ROOT/client-state"
 CLIENT_CONFIG="$TEST_ROOT/client-config"
-EDGE_PID=""
 ORIGIN_PID=""
 BACKEND_PID=""
 
 cleanup() {
-  for pid in "$ORIGIN_PID" "$EDGE_PID" "$BACKEND_PID"; do
+  for pid in "$ORIGIN_PID" "$BACKEND_PID"; do
     [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
   done
-  for pid in "$ORIGIN_PID" "$EDGE_PID" "$BACKEND_PID"; do
+  for pid in "$ORIGIN_PID" "$BACKEND_PID"; do
     [ -z "$pid" ] || wait "$pid" 2>/dev/null || true
   done
   rm -rf -- "$TEST_ROOT"
@@ -111,43 +107,21 @@ stop_process() {
   wait "$pid" 2>/dev/null || true
 }
 
-start_edge() {
-  local log=$1
-  env MESH_STATE_DIR="$EDGE_STATE" MESH_FAKE_TAILSCALE_STATUS="$EDGE_STATUS" PATH="$TEST_ROOT/bin:$PATH" \
-    "$MESH_INTEGRATION" daemon --tailnet-port "$CONTROL_PORT" --websocket-path /mesh \
-    --edge "$EDGE_CONFIG" >"$log" 2>&1 &
-  EDGE_PID=$!
-  wait_for_socket "$EDGE_PID" "$EDGE_STATE/daemon.sock" "$log" || fail "edge daemon did not start"
-  wait_for_tcp "$EDGE_PID" 127.0.0.1 "$EDGE_PROXY_PORT" || fail "edge proxy listener did not start"
-}
-
 start_origin() {
   local log=$1
   env HOME="$ORIGIN_HOME" MESH_STATE_DIR="$ORIGIN_STATE" MESH_FAKE_TAILSCALE_STATUS="$ORIGIN_STATUS" \
     PATH="$TEST_ROOT/bin:$PATH" \
     "$MESH_INTEGRATION" daemon --tailnet-port "$CONTROL_PORT" --websocket-path /mesh \
-    --public-edge-target "$ORIGIN_TARGET" >"$log" 2>&1 &
+    >"$log" 2>&1 &
   ORIGIN_PID=$!
   wait_for_socket "$ORIGIN_PID" "$ORIGIN_STATE/daemon.sock" "$log" || fail "origin daemon did not start"
   wait_for_tcp "$ORIGIN_PID" 127.0.0.11 "$CONTROL_PORT" || fail "origin Tailnet listener did not start"
 }
 
-edge_request() {
-  local host=$1
-  local path=$2
-  shift 2
-  curl --noproxy '*' --silent --max-time 2 \
-    --header "Host: $host" --header 'X-Forwarded-For: 203.0.113.77' \
-    --header 'X-Forwarded-Proto: https' "$@" "http://127.0.0.1:$EDGE_PROXY_PORT$path"
-}
-
-wait_for_public_body() {
-  local host=$1
-  local path=$2
-  local expected=$3
-  local body
+wait_for_private_body() {
+  local path=$1 expected=$2 body
   for _ in $(seq 60); do
-    body=$(edge_request "$host" "$path" 2>/dev/null) && [ "$body" = "$expected" ] && return 0
+    body=$(curl --noproxy '*' --silent --max-time 2 "http://127.0.0.11:$CONTROL_PORT$path") && [ "$body" = "$expected" ] && return 0
     sleep 0.05
   done
   return 1
@@ -157,33 +131,25 @@ for tool in curl go openssl python3 timeout; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 
-mkdir -p "$TEST_ROOT/bin" "$EDGE_STATE" "$ORIGIN_STATE" "$ORIGIN_HOME/site/assets" \
-  "$CLIENT_STATE" "$CLIENT_CONFIG" "$TEST_ROOT/files" "$TEST_ROOT/secret"
+mkdir -p "$TEST_ROOT/bin" "$ORIGIN_STATE" "$ORIGIN_HOME/site/assets" \
+  "$CLIENT_STATE" "$CLIENT_CONFIG" "$TEST_ROOT/files"
 ln -s "$REPO_ROOT/integration/helpers/fake_tailscale" "$TEST_ROOT/bin/tailscale"
-printf 'SERVE_CLI_PUBLIC_MARKER' >"$ORIGIN_HOME/site/index.html"
+printf 'SERVE_CLI_PRIVATE_MARKER' >"$ORIGIN_HOME/site/index.html"
 printf 'SECOND_FILE' >"$ORIGIN_HOME/site/assets/data.txt"
 printf 'DOWNLOAD_MARKER' >"$TEST_ROOT/files/download.txt"
-printf 'SECRET_PUBLIC_MARKER' >"$TEST_ROOT/secret/index.html"
-printf 'DO_NOT_PUBLISH' >"$TEST_ROOT/secret/.env"
 
 if [[ -z ${MESH_INTEGRATION_BINARY:-} ]]; then
   (cd "$REPO_ROOT" && go build -tags mesh_integration -o "$MESH_INTEGRATION" ./cmd/mesh) ||
     fail "build tagged Mesh binary"
 fi
 
-for state in "$EDGE_STATE" "$ORIGIN_STATE"; do
-  ssh-keygen -q -t ed25519 -N "" -C "" -f "$state/identity.key" >/dev/null 2>&1 || fail "generate daemon identity"
-  rm -f "$state/identity.key.pub"
-  chmod 0600 "$state/identity.key"
-done
-EDGE_ID=$(identity_id "$EDGE_STATE/identity.key") || fail "derive edge identity"
+ssh-keygen -q -t ed25519 -N "" -C "" -f "$ORIGIN_STATE/identity.key" >/dev/null 2>&1 || fail "generate daemon identity"
+rm -f "$ORIGIN_STATE/identity.key.pub"
+chmod 0600 "$ORIGIN_STATE/identity.key"
 ORIGIN_ID=$(identity_id "$ORIGIN_STATE/identity.key") || fail "derive origin identity"
 
 CLIENT_ID=$(env MESH_STATE_DIR="$CLIENT_STATE" "$MESH_INTEGRATION" device identity --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])') || fail "create fixture client"
-for id in "$CLIENT_ID" "$EDGE_ID"; do
-  env MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_INTEGRATION" device approve --allow-root -- "$id" >/dev/null || fail "approve fixture origin client"
-done
-env MESH_STATE_DIR="$EDGE_STATE" "$MESH_INTEGRATION" device approve --allow-root -- "$ORIGIN_ID" >/dev/null || fail "approve fixture publisher"
+env MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_INTEGRATION" device approve --allow-root -- "$CLIENT_ID" >/dev/null || fail "approve fixture origin client"
 mapfile -t PORTS < <(python3 - "$$" "2" <<'PY'
 import os, socket, sys
 
@@ -215,80 +181,22 @@ PY
 )
 [ "${#PORTS[@]}" -eq 2 ] || fail "allocate fixture ports"
 CONTROL_PORT=${PORTS[0]}
-EDGE_PROXY_PORT=${PORTS[1]}
 
-EDGE_STATUS="$TEST_ROOT/edge-status.json"
 ORIGIN_STATUS="$TEST_ROOT/origin-status.json"
 cp "$MESH_CONFIG_DIR/domains.json" "$CLIENT_CONFIG/domains.json"
-EDGE_CONFIG="$TEST_ROOT/edge.json"
-ORIGIN_TARGET="$TEST_ROOT/origin-target.json"
-python3 - "$EDGE_STATUS" "$ORIGIN_STATUS" "$EDGE_CONFIG" "$ORIGIN_TARGET" \
-  "$CLIENT_CONFIG/hosts.json" "$EDGE_ID" "$ORIGIN_ID" "$CONTROL_PORT" "$EDGE_PROXY_PORT" <<'PY'
-import json
-import os
-import sys
-
-(
-    edge_status, origin_status, edge_config, origin_target, hosts_path,
-    edge_id, origin_id, control_port, proxy_port,
-) = sys.argv[1:]
-control_port = int(control_port)
-
-edge = ("edge.fixture.test", "127.0.0.1")
-origin = ("pc.fixture.test", "127.0.0.11")
-
-def status(self_node, peer_node):
-    self_name, self_address = self_node
-    peer_name, peer_address = peer_node
-    return {
-        "BackendState": "Running",
-        "Self": {"DNSName": self_name + ".", "TailscaleIPs": [self_address], "Online": True},
-        "Peer": {
-            "peer": {"DNSName": peer_name + ".", "TailscaleIPs": [peer_address], "Online": True},
-        },
-    }
-
-with open(edge_status, "w", encoding="utf-8") as output:
-    json.dump(status(edge, origin), output, separators=(",", ":"))
-with open(origin_status, "w", encoding="utf-8") as output:
-    json.dump(status(origin, edge), output, separators=(",", ":"))
-with open(edge_config, "w", encoding="utf-8") as output:
-    json.dump({
-        "mode": "proxy",
-        "listenAddress": f"127.0.0.1:{proxy_port}",
-        "origins": [{
-            "identity": origin_id,
-            "displayAlias": "pc",
-            "tailscaleName": origin[0],
-            "controlPort": control_port,
-            "websocketPath": "/mesh",
-        }],
-    }, output, separators=(",", ":"))
-with open(origin_target, "w", encoding="utf-8") as output:
-    json.dump({
-        "identity": edge_id,
-        "tailscaleName": edge[0],
-        "controlPort": control_port,
-        "websocketPath": "/mesh",
-    }, output, separators=(",", ":"))
-with open(hosts_path, "w", encoding="utf-8") as output:
-    json.dump({
-        "version": 1,
-        "hosts": [{
-            "id": origin_id,
-            "meshIdentity": origin_id,
-            "tailscaleName": origin[0],
-            "addresses": [origin[1]],
-            "endpoint": f"ws://{origin[1]}:{control_port}/mesh",
-        }],
-    }, output, separators=(",", ":"))
-    output.write("\n")
+python3 - "$ORIGIN_STATUS" "$CLIENT_CONFIG/hosts.json" "$ORIGIN_ID" "$CONTROL_PORT" <<'PYCONFIG'
+import json, os, sys
+status_path, hosts_path, origin_id, control_port = sys.argv[1:]
+name, address = "pc.fixture.test", "127.0.0.11"
+with open(status_path, "w") as output:
+    json.dump({"BackendState":"Running", "Self":{"DNSName":name+".","TailscaleIPs":[address],"Online":True},"Peer":{}}, output)
+with open(hosts_path, "w") as output:
+    json.dump({"version":1,"hosts":[{"id":origin_id,"meshIdentity":origin_id,"tailscaleName":name,"addresses":[address],"endpoint":f"ws://{address}:{control_port}/mesh"}]}, output)
 os.chmod(hosts_path, 0o600)
-PY
+PYCONFIG
 
 CLI=(env "MESH_STATE_DIR=$CLIENT_STATE" "MESH_CONFIG_DIR=$CLIENT_CONFIG" NO_COLOR=1 "$MESH_INTEGRATION")
 
-start_edge "$TEST_ROOT/edge.log"
 start_origin "$TEST_ROOT/origin.log"
 "${CLI[@]}" ls --all --timeout 1s >"$TEST_ROOT/name-adoption.out" 2>&1 || fail "adopt origin declaration"
 [ -s "$CLIENT_CONFIG/machine-names/$ORIGIN_ID.json" ] || fail "origin declaration was not authenticated"
@@ -305,7 +213,7 @@ BACKEND_PORT=$(<"$BACKEND_PORT_FILE")
   fail "publish private static directory: $(<"$TEST_ROOT/private-static.err")"
 grep -Fq "serving http://127.0.0.11:$CONTROL_PORT/blog on pc (static -> $ORIGIN_HOME/site)" "$TEST_ROOT/private-static.out" ||
   fail "private static success omitted its verified fallback URL: $(<"$TEST_ROOT/private-static.out")"
-[ "$(curl --noproxy '*' --fail --silent --max-time 2 "http://127.0.0.11:$CONTROL_PORT/blog/")" = SERVE_CLI_PUBLIC_MARKER ] ||
+[ "$(curl --noproxy '*' --fail --silent --max-time 2 "http://127.0.0.11:$CONTROL_PORT/blog/")" = SERVE_CLI_PRIVATE_MARKER ] ||
   fail "private static service did not serve through the Tailnet listener"
 
 "${CLI[@]}" serve pc "$TEST_ROOT/files" --at /files --files >"$TEST_ROOT/files.out" 2>"$TEST_ROOT/files.err" ||
@@ -342,91 +250,41 @@ curl --noproxy '*' --fail --silent --max-time 2 \
   "http://127.0.0.11:$CONTROL_PORT/files/download.txt" |
   grep -Fq DOWNLOAD_MARKER || fail "private top-level navigation did not reach the files route"
 
-python3 "$CONFIRM_FIXTURE" -- "${CLI[@]}" serve pc ./site --at /blog \
-  --public blog.mesh.test >"$TEST_ROOT/public-prompt.out" 2>&1 ||
-  fail "interactive public publication: $(<"$TEST_ROOT/public-prompt.out")"
-grep -Fq 'Publish this service to the internet?' "$TEST_ROOT/public-prompt.out" ||
-  fail "public mutation did not require explicit confirmation"
-grep -Fq "Resolved path: $ORIGIN_HOME/site" "$TEST_ROOT/public-prompt.out" ||
-  fail "confirmation omitted the origin-resolved path: $(<"$TEST_ROOT/public-prompt.out")"
-grep -Fq 'Files: 2' "$TEST_ROOT/public-prompt.out" ||
-  fail "confirmation omitted the origin file count: $(<"$TEST_ROOT/public-prompt.out")"
-grep -Fq 'URL: https://blog.mesh.test/blog' "$TEST_ROOT/public-prompt.out" ||
-  fail "confirmation omitted the exact public URL: $(<"$TEST_ROOT/public-prompt.out")"
-grep -Fq "serving https://blog.mesh.test/blog on pc (static -> $ORIGIN_HOME/site)" "$TEST_ROOT/public-prompt.out" ||
-  fail "confirmed publication did not wait for its acknowledgement"
-wait_for_public_body blog.mesh.test /blog/ SERVE_CLI_PUBLIC_MARKER ||
-  fail "confirmed public route did not reach the real origin"
-[ "$(edge_request blog.mesh.test /blog/ --header 'Origin: https://attacker.example' --header 'Sec-Fetch-Site: cross-site')" = SERVE_CLI_PUBLIC_MARKER ] ||
-  fail "cross-site public service behavior changed"
-
-"${CLI[@]}" serve pc "$TEST_ROOT/files" --at /blog/admin --files \
-  >"$TEST_ROOT/nested-private.out" 2>"$TEST_ROOT/nested-private.err" ||
-  fail "publish nested private directory: $(<"$TEST_ROOT/nested-private.err")"
-SHADOW_WARNING='private route /blog/admin shadows public route https://blog.mesh.test/blog at /blog/admin; public requests there return 404'
-grep -Fq "warning: pc: $SHADOW_WARNING" "$TEST_ROOT/nested-private.err" ||
-  fail "registration omitted the private-route shadow warning: $(<"$TEST_ROOT/nested-private.err")"
-NESTED_PUBLIC_STATUS=$(edge_request blog.mesh.test /blog/admin/download.txt --output /dev/null --write-out '%{http_code}') ||
-  fail "query nested private route through the public edge"
-[ "$NESTED_PUBLIC_STATUS" = 404 ] ||
-  fail "public edge exposed nested private route with status $NESTED_PUBLIC_STATUS"
-NESTED_DIRECT_PUBLIC_STATUS=$(curl --noproxy '*' --silent --max-time 2 --header 'Host: blog.mesh.test' \
-  --output /dev/null --write-out '%{http_code}' "http://127.0.0.11:$CONTROL_PORT/blog/admin/download.txt") ||
-  fail "query nested private route with a direct public Host"
-[ "$NESTED_DIRECT_PUBLIC_STATUS" = 404 ] ||
-  fail "direct public Host exposed nested private route with status $NESTED_DIRECT_PUBLIC_STATUS"
-[ "$(curl --noproxy '*' --fail --silent --max-time 2 "http://127.0.0.11:$CONTROL_PORT/blog/admin/download.txt")" = DOWNLOAD_MARKER ] ||
-  fail "nested private service did not serve through the Tailnet listener"
-
-if "${CLI[@]}" serve pc "$TEST_ROOT/secret" --at /secret --public secret.mesh.test --yes \
-  >"$TEST_ROOT/secret-refused.out" 2>"$TEST_ROOT/secret-refused.err"; then
-  fail "--yes bypassed the public credential scan"
+"${CLI[@]}" serve pc ./site --at /blog >"$TEST_ROOT/blog.out" 2>"$TEST_ROOT/blog.err" ||
+  fail "register home-relative static directory: $(<"$TEST_ROOT/blog.err")"
+grep -Fq "serving http://127.0.0.11:$CONTROL_PORT/blog on pc (static -> $ORIGIN_HOME/site)" "$TEST_ROOT/blog.out" ||
+  fail "static success omitted the origin-resolved path or verified URL"
+wait_for_private_body /blog/ SERVE_CLI_PRIVATE_MARKER || fail "static route did not reach the origin"
+"${CLI[@]}" serve pc "$TEST_ROOT/files" --at /blog/admin --files >"$TEST_ROOT/nested.out" 2>"$TEST_ROOT/nested.err" || fail "register nested private directory"
+[ "$(curl --noproxy '*' --fail --silent --max-time 2 "http://127.0.0.11:$CONTROL_PORT/blog/admin/download.txt")" = DOWNLOAD_MARKER ] || fail "nested private route failed"
+if "${CLI[@]}" serve pc ./site --public blog.mesh.test >"$TEST_ROOT/removed.out" 2>"$TEST_ROOT/removed.err"; then
+  fail "removed public publication flag succeeded"
 fi
-grep -Fqi 'credential' "$TEST_ROOT/secret-refused.err" ||
-  fail "credential refusal was not explained: $(<"$TEST_ROOT/secret-refused.err")"
-grep -Fq '.env' "$TEST_ROOT/secret-refused.err" ||
-  fail "credential refusal omitted the matched remote path: $(<"$TEST_ROOT/secret-refused.err")"
-SECRET_STATUS=$(edge_request secret.mesh.test /secret/ --output /dev/null --write-out '%{http_code}') ||
-  fail "query rejected credential route"
-[ "$SECRET_STATUS" = 404 ] || fail "rejected credential route remained public with status $SECRET_STATUS"
-
-"${CLI[@]}" serve pc "$TEST_ROOT/secret" --at /secret --public secret.mesh.test --yes \
-  --allow-credentials >"$TEST_ROOT/secret-allowed.out" 2>"$TEST_ROOT/secret-allowed.err" ||
-  fail "explicit credential override: $(<"$TEST_ROOT/secret-allowed.err")"
-grep -Fq 'credential-like entries are explicitly allowed' "$TEST_ROOT/secret-allowed.err" ||
-  fail "credential override was not visibly acknowledged"
-grep -Fq 'serving https://secret.mesh.test/secret on pc' "$TEST_ROOT/secret-allowed.out" ||
-  fail "credential override omitted the public URL: $(<"$TEST_ROOT/secret-allowed.out")"
-wait_for_public_body secret.mesh.test /secret/ SECRET_PUBLIC_MARKER ||
-  fail "explicitly approved credential directory did not become reachable"
+grep -Fq 'unknown flag: --public' "$TEST_ROOT/removed.err" || fail "removed flag was not rejected by CLI"
+UNKNOWN_HOST_STATUS=$(curl --noproxy '*' --silent --max-time 2 --header 'Host: blog.mesh.test' --output /dev/null --write-out '%{http_code}' "http://127.0.0.11:$CONTROL_PORT/blog/") || fail "query unknown Host"
+[ "$UNKNOWN_HOST_STATUS" = 421 ] || fail "unknown Host reached a private route"
 
 "${CLI[@]}" serve label /api 'CLI Proxy' --host pc >"$TEST_ROOT/label.out" 2>"$TEST_ROOT/label.err" ||
   fail "label existing service: $(<"$TEST_ROOT/label.err")"
 
 "${CLI[@]}" serve ls --timeout 800ms >"$TEST_ROOT/list-live.out" 2>"$TEST_ROOT/list-live.err" ||
   fail "list live services: $(<"$TEST_ROOT/list-live.err")"
-grep -Fq "warning: pc: $SHADOW_WARNING" "$TEST_ROOT/list-live.err" ||
-  fail "live list omitted the private-route shadow warning: $(<"$TEST_ROOT/list-live.err")"
 grep -Eq '^ROUTE[[:space:]]+NAME[[:space:]]+HOST[[:space:]]+KIND[[:space:]]+TARGET[[:space:]]+SCOPE[[:space:]]+STATE[[:space:]]+HEALTH[[:space:]]+URL$' \
   "$TEST_ROOT/list-live.out" || fail "service list header is incomplete: $(<"$TEST_ROOT/list-live.out")"
-grep -Eq "^/blog[[:space:]]+blog[[:space:]]+pc[[:space:]]+static[[:space:]]+$ORIGIN_HOME/site[[:space:]]+public[[:space:]]+-[[:space:]]+healthy[[:space:]]+https://blog\.mesh\.test/blog$" \
-  "$TEST_ROOT/list-live.out" || fail "live list omitted the public static URL: $(<"$TEST_ROOT/list-live.out")"
+grep -Eq "^/blog[[:space:]]+blog[[:space:]]+pc[[:space:]]+static[[:space:]]+$ORIGIN_HOME/site[[:space:]]+tailnet[[:space:]]+-[[:space:]]+healthy[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/blog$" \
+  "$TEST_ROOT/list-live.out" || fail "live list omitted the static fallback URL: $(<"$TEST_ROOT/list-live.out")"
 grep -Eq "^/files[[:space:]]+files[[:space:]]+pc[[:space:]]+files[[:space:]]+$TEST_ROOT/files[[:space:]]+tailnet[[:space:]]+-[[:space:]]+healthy[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/files$" \
   "$TEST_ROOT/list-live.out" || fail "live list omitted the private fallback URL: $(<"$TEST_ROOT/list-live.out")"
 grep -Eq "^/api[[:space:]]+CLI Proxy[[:space:]]+pc[[:space:]]+proxy[[:space:]]+${BACKEND_PORT}[[:space:]]+tailnet[[:space:]]+-[[:space:]]+healthy[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/api$" \
   "$TEST_ROOT/list-live.out" || fail "live list omitted the proxy fallback URL: $(<"$TEST_ROOT/list-live.out")"
-grep -Eq "^/secret[[:space:]]+secret[[:space:]]+pc[[:space:]]+static[[:space:]]+$TEST_ROOT/secret[[:space:]]+public[[:space:]]+-[[:space:]]+healthy[[:space:]]+https://secret\.mesh\.test/secret$" \
-  "$TEST_ROOT/list-live.out" || fail "live list omitted the approved public URL: $(<"$TEST_ROOT/list-live.out")"
 
 stop_process "$ORIGIN_PID"
 ORIGIN_PID=""
 timeout --kill-after=1s 3s "${CLI[@]}" serve ls --timeout 150ms \
   >"$TEST_ROOT/list-offline.out" 2>"$TEST_ROOT/list-offline.err" ||
   fail "offline service list exceeded its hard deadline: $(<"$TEST_ROOT/list-offline.err")"
-grep -Fq "warning: pc (cached): $SHADOW_WARNING" "$TEST_ROOT/list-offline.err" ||
-  fail "cached list omitted the private-route shadow warning: $(<"$TEST_ROOT/list-offline.err")"
-grep -Eq '^/blog[[:space:]]+blog[[:space:]]+pc[[:space:]]+static.*offline/stale[[:space:]]+https://blog\.mesh\.test/blog$' \
-  "$TEST_ROOT/list-offline.out" || fail "offline cache lost the public URL: $(<"$TEST_ROOT/list-offline.out")"
+grep -Eq "^/blog[[:space:]]+blog[[:space:]]+pc[[:space:]]+static.*offline/stale[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/blog$" \
+  "$TEST_ROOT/list-offline.out" || fail "offline cache lost the static fallback URL: $(<"$TEST_ROOT/list-offline.out")"
 grep -Eq "^/files[[:space:]]+files[[:space:]]+pc[[:space:]]+files.*offline/stale[[:space:]]+http://127\.0\.0\.11:$CONTROL_PORT/files$" \
   "$TEST_ROOT/list-offline.out" || fail "offline cache lost the private fallback URL: $(<"$TEST_ROOT/list-offline.out")"
 grep -Eq "^/api[[:space:]]+CLI Proxy[[:space:]]+pc[[:space:]]+proxy.*offline/stale" \
@@ -435,20 +293,16 @@ grep -Fq -- "$ORIGIN_ID: unavailable" "$TEST_ROOT/list-offline.err" ||
   fail "offline service list omitted its host diagnostic: $(<"$TEST_ROOT/list-offline.err")"
 
 start_origin "$TEST_ROOT/origin-restarted.log"
-wait_for_public_body blog.mesh.test /blog/ SERVE_CLI_PUBLIC_MARKER ||
-  fail "origin restart did not restore public liveness"
+wait_for_private_body /blog/ SERVE_CLI_PRIVATE_MARKER ||
+  fail "origin restart did not restore the static route"
 
 "${CLI[@]}" unserve /blog --timeout 800ms >"$TEST_ROOT/unserve.out" 2>"$TEST_ROOT/unserve.err" ||
-  fail "unserve acknowledged public withdrawal: $(<"$TEST_ROOT/unserve.err")"
+  fail "unserve private service: $(<"$TEST_ROOT/unserve.err")"
 grep -Fq 'unserved /blog on pc' "$TEST_ROOT/unserve.out" ||
   fail "unserve output omitted the route owner: $(<"$TEST_ROOT/unserve.out")"
-WITHDRAWN_STATUS=$(edge_request blog.mesh.test /blog/ --output /dev/null --write-out '%{http_code}') ||
-  fail "query withdrawn public route"
-[ "$WITHDRAWN_STATUS" = 404 ] ||
-  fail "unserve returned before edge withdrawal; public status was $WITHDRAWN_STATUS"
 PRIVATE_WITHDRAWN_STATUS=$(curl --noproxy '*' --silent --max-time 2 --output /dev/null --write-out '%{http_code}' \
   "http://127.0.0.11:$CONTROL_PORT/blog/") || fail "query withdrawn private route"
 [ "$PRIVATE_WITHDRAWN_STATUS" = 404 ] ||
   fail "unserve left the origin route reachable with status $PRIVATE_WITHDRAWN_STATUS"
 
-echo "PASS: serve CLI publishes, confirms, scans, lists offline, and waits for public withdrawal"
+echo "PASS: private serve CLI creates, lists offline, restores, removes, and rejects public publication"

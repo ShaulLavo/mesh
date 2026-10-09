@@ -5,56 +5,23 @@
 package sqlc
 
 type AppName struct {
-	PublicName string
-	OwnerID    string
-	Active     int64
-}
-
-type AppState struct {
-	Key  string
-	Data []byte
+	Hostname string
+	OwnerID  string
+	Active   int64
 }
 
 type CachedService struct {
-	HostID        string
-	PrivateName   string
-	Name          string
-	Kind          string
-	Target        string
-	PublicName    string
-	WakeOnRequest int64
-	Healthy       int64
-	Problem       string
-	ObservedAt    int64
-	Isolate       int64
-	DisplayName   string
-	PrivateHost   string
-}
-
-type EdgeOutbox struct {
-	TargetID     string
-	Sequence     int64
-	Digest       string
-	SnapshotJson []byte
-	Acknowledged int64
-}
-
-type EdgeRoute struct {
-	OriginID      string
-	PublicName    string
-	ServiceName   string
-	WakeOnRequest int64
-}
-
-type EdgeSnapshot struct {
-	OriginID   string
-	TargetID   string
-	Sequence   int64
-	Digest     string
-	IssuedAt   int64
-	ExpiresAt  int64
-	LastSeenAt int64
-	Signature  []byte
+	HostID      string
+	PrivateName string
+	Name        string
+	Kind        string
+	Target      string
+	Healthy     int64
+	Problem     string
+	ObservedAt  int64
+	Isolate     int64
+	DisplayName string
+	PrivateHost string
 }
 
 type Host struct {
@@ -64,18 +31,21 @@ type Host struct {
 	LastSeenAt    int64
 }
 
+type PrivateAppState struct {
+	Key  string
+	Data []byte
+}
+
 type Service struct {
-	Name          string
-	Kind          string
-	Target        string
-	PublicName    string
-	WakeOnRequest int64
-	Isolate       int64
-	Listens       string
-	Demand        string
-	LocalOnly     int64
-	DisplayName   string
-	PrivateHost   string
+	Name        string
+	Kind        string
+	Target      string
+	Isolate     int64
+	Listens     string
+	Demand      string
+	LocalOnly   int64
+	DisplayName string
+	PrivateHost string
 }
 
 type Session struct {
@@ -88,26 +58,4 @@ type Session struct {
 	LastAttachedAt     *int64
 	ExitCode           *int64
 	LastOutputSequence int64
-}
-
-type TunnelClaim struct {
-	PublicName string
-	ClaimantID string
-}
-
-type TunnelHighwater struct {
-	ClaimantID string
-	Sequence   int64
-	Digest     string
-}
-
-type TunnelOutbox struct {
-	TargetID   string
-	ClaimantID string
-	Sequence   int64
-	Action     *string
-	PublicName *string
-	Canonical  []byte
-	Digest     *string
-	Signature  []byte
 }

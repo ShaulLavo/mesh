@@ -25,7 +25,7 @@ func TestAppIDsRejectServeReservedLabels(t *testing.T) {
 	if !ValidID("7k3d") {
 		t.Fatal("ordinary app ID rejected")
 	}
-	if serve.ValidatePublicName("mesh."+Domain()) == nil {
+	if serve.ValidateDeploymentHost("mesh."+Domain()) == nil {
 		t.Fatal("private namespace no longer reserved")
 	}
 }

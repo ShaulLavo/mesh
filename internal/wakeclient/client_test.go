@@ -412,7 +412,7 @@ func TestWakeRejectsDisabledTargetPermission(t *testing.T) {
 	client, _, _ := fixtureClient(t)
 	grant := fixtureGrant(t, false)
 	target := Target{ID: grant.TargetID, Name: "pc", Endpoint: "ws://pc/mesh"}
-	if err := client.Remember(grant); err != nil {
+	if err := client.cache.Put(grant); err != nil {
 		t.Fatal(err)
 	}
 	client.exchange = func(context.Context, string, string, protocol.Control) (protocol.HostInfo, protocol.Control, error) {
@@ -481,7 +481,7 @@ func fixtureClient(t *testing.T) (*Client, wake.Grant, Target) {
 func rememberedClient(t *testing.T) (*Client, wake.Grant, Target) {
 	t.Helper()
 	client, grant, target := fixtureClient(t)
-	if err := client.Remember(grant); err != nil {
+	if err := client.cache.Put(grant); err != nil {
 		t.Fatal(err)
 	}
 	return client, grant, target
