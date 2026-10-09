@@ -1,5 +1,9 @@
 # Step 9 — The SSH front door
 
+Current scope: private SSH sessions and SFTP on the Tailnet. Public-edge tunnel
+requirements and their acceptance checks below are superseded by the
+2026-10-08 removal; see [the decision note](01-decisions.md).
+
 Mesh already has a transport. This is not that. `internal/transport` carries
 Mesh protocol frames between Mesh daemons and stays the way hosts talk to each
 other.
@@ -11,20 +15,20 @@ else's desktop, a box you have not installed anything on. Mesh cannot be there.
 
 So the SSH server is a *front door for people*, never a transport for daemons.
 
-## The three doors
+## Sessions and files; historical tunnel design
 
 ### Sessions
 
 ```
-ssh pc.mesh.shaulavo.dev              # picker, then attach
-ssh -t pc.mesh.shaulavo.dev 7K3D      # straight into one session
-ssh pc.mesh.shaulavo.dev ls           # one-shot, scriptable, no PTY
+ssh pc.mesh.sprockt.dev              # picker, then attach
+ssh -t pc.mesh.sprockt.dev 7K3D      # straight into one session
+ssh pc.mesh.sprockt.dev ls           # one-shot, scriptable, no PTY
 ```
 
 These short commands assume this client configuration:
 
 ```sshconfig
-Host *.mesh.shaulavo.dev
+Host *.mesh.sprockt.dev
     Port 2222
     IdentityFile ~/.local/state/mesh/identity.key
     IdentitiesOnly yes
@@ -41,7 +45,7 @@ we chose not to need.
 
 ### Files
 
-`sftp -P 2222 pi.mesh.shaulavo.dev` browses a machine's served roots. An
+`sftp -P 2222 pi.mesh.sprockt.dev` browses a machine's served roots. An
 SFTP-capable file manager can connect with the same host, port, and authorized
 key. The client configuration above removes the need for `-P 2222`.
 
@@ -63,11 +67,14 @@ parent traversal, symlinks outside that root, and writes are refused. Modern SCP
 uses the SFTP subsystem; `-O` selects Wish's legacy SCP handler:
 
 ```bash
-scp -P 2222 pi.mesh.shaulavo.dev:/blog/index.html .
-scp -O -P 2222 -r pi.mesh.shaulavo.dev:/blog ./blog-copy
+scp -P 2222 pi.mesh.sprockt.dev:/blog/index.html .
+scp -O -P 2222 -r pi.mesh.sprockt.dev:/blog ./blog-copy
 ```
 
-### Tunnels
+### Tunnels — superseded, 2026-10-08
+
+Mesh public serving and VPS-edge reverse tunnels are removed. This section is
+historical; public hosting belongs to Brine on `shaulavo.dev`.
 
 An explicit inactive claim reserves the public hostname; `ssh -R` then publishes
 a port from wherever you are through the VPS edge:
@@ -124,7 +131,7 @@ the Charm SSH server. Wish v2 supplies SCP middleware; `pkg/sftp` supplies the
 SFTP subsystem. Wish v2 and `charm.land/ssh` keep legacy Bubble Tea terminal
 queries out of process initialization, preserving silent hook startup.
 
-## Scoping the tunnel exception
+## Scoping the tunnel exception — historical, superseded 2026-10-08
 
 The overview says step 8 "does not open the door to arbitrary tunnels" and that
 line stays true. A remote forward here is:

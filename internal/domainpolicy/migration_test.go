@@ -18,7 +18,7 @@ import (
 )
 
 func TestDeploymentMigrationPreservesExistingState(t *testing.T) {
-	for _, source := range []string{"private-name", "requested", "catalog"} {
+	for _, source := range []string{"private-name", "requested", "catalog", "requested-hosts"} {
 		t.Run(source, func(t *testing.T) {
 			active = Policy{}
 			initialize = sync.Once{}
@@ -36,12 +36,19 @@ func TestDeploymentMigrationPreservesExistingState(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(slot, "private-name"), []byte("pc.mesh.old.example\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-			case "catalog":
+			case "requested-hosts":
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(filepath.Dir(path), "hosts.json"), []byte(`{"version":1,"hosts":[]}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "catalog", "requested":
 				if err := os.WriteFile(filepath.Join(state, "mesh.db"), nil, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if err := InitializeDeployment(path, state, source == "requested"); err != nil {
+			if err := InitializeDeployment(path, state, strings.HasPrefix(source, "requested")); err != nil {
 				t.Fatal(err)
 			}
 			if Primary() != expected || Current().LegacyCertificateDomain != expected {
@@ -52,6 +59,28 @@ func TestDeploymentMigrationPreservesExistingState(t *testing.T) {
 				t.Fatalf("policy permissions: %v %v", info, err)
 			}
 		})
+	}
+}
+
+func TestFreshDeploymentUsesCurrentDomain(t *testing.T) {
+	active = Policy{}
+	initialize = sync.Once{}
+	t.Cleanup(func() { active = Policy{}; initialize = sync.Once{} })
+	path := filepath.Join(t.TempDir(), "config", "domains.json")
+	state := t.TempDir()
+	if err := InitializeDeployment(path, state, true); err != nil {
+		t.Fatal(err)
+	}
+	if policy := Current(); policy.Primary != "sprockt.dev" || policy.LegacyCertificateDomain != "" || len(policy.Aliases) != 0 {
+		t.Fatalf("fresh deployment policy: %+v", policy)
+	}
+	active = Policy{}
+	initialize = sync.Once{}
+	if err := InitializeDeployment(path, state, true); err != nil {
+		t.Fatal(err)
+	}
+	if policy := Current(); policy.Primary != "sprockt.dev" || policy.LegacyCertificateDomain != "" {
+		t.Fatalf("reloaded fresh policy: %+v", policy)
 	}
 }
 

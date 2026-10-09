@@ -1,5 +1,9 @@
 # T13 — Public edge on the VPS
 
+> Superseded, 2026-10-08: Mesh public serving and VPS-edge reverse tunnels are
+> removed. Mesh is tailnet-only on `sprockt.dev`; public hosting belongs to Brine
+> on `shaulavo.dev`. The specification below is historical, not operating guidance.
+
 **Status:** done · **Blocked by:** nothing · **Owns:** `internal/edge/`
 
 ## Goal

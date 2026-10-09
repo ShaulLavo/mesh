@@ -140,11 +140,10 @@ interfaces so API churn stays contained.
 7. **Packaging** — systemd, launchd, GoReleaser, Actions, Homebrew Cask, installer,
    VHS demos, race tests, protocol fuzzing, govulncheck, golangci-lint v2.
 8. **Serving** — static sites, file browsers and local-port proxies. Private on
-   the tailnet at `<host>.mesh.shaulavo.dev`, and optionally public under
-   `shaulavo.dev` through the VPS edge. See `docs/plan/03-serving.md`.
+   the tailnet at `<host>.mesh.sprockt.dev`, with short private service names
+   such as `fregat.sprockt.dev`. Public hosting belongs to Brine. See `docs/plan/03-serving.md`.
 9. **SSH front door** — a Charm SSH server per host so any machine with `ssh` reaches
-   a session, mounts served roots over SFTP, or publishes a port through the edge
-   with `ssh -R`. Not a transport; the client that already exists everywhere.
+   a session or mounts served roots over SFTP. Not a transport; the client that already exists everywhere.
    See `docs/plan/04-ssh.md`.
 10. **Mesh as your terminal** — every window is a session, local or not.
     `mesh --window` as the terminal's command, this host first in the picker,
@@ -162,7 +161,9 @@ knowledge: providers still own their conversations, tools, and authentication.
 
 Temporary websites are now Approved as a separate `mesh app` capability. See
 [the execution plan](06-temporary-apps.md) and D30 for short URLs, owner-only
-creation, public sharing, a floating pill, and deletion after 24 quiet hours.
+creation, private Tailnet access, and deletion after 24 quiet hours.
+Public sharing, the live floating pill and public serving were removed on
+2026-10-08; preserved widget source remains available for reuse.
 That supersedes D22's exclusion of disposable previews. Ordinary Mesh serving
 still exposes existing directories and ports, with its current lifecycle.
 A general build and deployment pipeline remains outside this work.

@@ -6,9 +6,9 @@
 ## Goal
 
 ```
-ssh pc.mesh.shaulavo.dev              # picker, then attach
-ssh -t pc.mesh.shaulavo.dev 7K3D      # straight into one session
-ssh pc.mesh.shaulavo.dev ls           # one-shot, scriptable, no PTY
+ssh pc.mesh.sprockt.dev              # picker, then attach
+ssh -t pc.mesh.sprockt.dev 7K3D      # straight into one session
+ssh pc.mesh.sprockt.dev ls           # one-shot, scriptable, no PTY
 ```
 
 These commands assume the D24 client configuration sets `Port 2222`.

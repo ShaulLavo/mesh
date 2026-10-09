@@ -52,7 +52,7 @@ plan. This consumer implementation makes no installed runtime changes, proxy
 restarts or provider calls.
 
 A dedicated sanitized directory is served through a **tailnet-only isolated
-static route**, for example `https://omarchy.mesh.shaulavo.dev/ai-usage/v1.json`.
+static route**, for example `https://omarchy.mesh.sprockt.dev/ai-usage/v1.json`.
 This example route is not provisioned by the consumer implementation. It is separate from the
 on-demand `/ai` backend and keeps serving the last file while inference sleeps.
 Static serving belongs to the existing Mesh daemon, not a new collector service.

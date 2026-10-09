@@ -1,21 +1,21 @@
-# T12 — Private names and certificates for `mesh.shaulavo.dev`
+# T12 — Private names and certificates for `mesh.sprockt.dev`
 
 **Status:** complete · **Blocked by:** nothing (T11 and T06 landed) · **Owns:**
 `internal/dnsname/`
 
 ## Goal
 
-`https://pc.mesh.shaulavo.dev/blog` works from a tailnet device with a
+`https://pc.mesh.sprockt.dev/blog` works from a tailnet device with a
 publicly trusted certificate. The request travels directly to the origin. An
 internet client can resolve the name to a tailnet address but cannot route to
 it.
 
 ## Architecture
 
-Cloudflare is authoritative for `shaulavo.dev`. One zone-scoped DNS Write API
+Cloudflare is authoritative for `sprockt.dev`. One zone-scoped DNS Write API
 token lives on the always-on Pi. Other origins never receive that token. The Pi
 reconciles an unproxied A record for each configured origin, obtains one
-`*.mesh.shaulavo.dev` certificate from Let's Encrypt with DNS-01, and sends the
+`*.mesh.sprockt.dev` certificate from Let's Encrypt with DNS-01, and sends the
 certificate to identity-pinned origin daemons.
 
 The DNS reconciler accepts only IPv4 addresses in Tailscale's
@@ -51,11 +51,11 @@ Each origin pins the Pi's Mesh Ed25519 identity. Distribution first calls
 The Pi then signs the v3 domain-separated transcript over length-prefixed
 profile, environment, target identity, signer identity, private name,
 certificate bytes, and private-key bytes. A `private-origin` private name is
-either empty or exactly one canonical label below `mesh.shaulavo.dev`; the Pi
+either empty or exactly one canonical label below `mesh.sprockt.dev`; the Pi
 sets it only after the corresponding A-record reconciliation succeeds. A
 `public-edge` bundle must carry an empty private name. The origin bounds all
 fields before cryptographic work, verifies both identity pins, checks the key
-and `*.mesh.shaulavo.dev` SAN, and rejects a bundle with a strictly earlier
+and `*.mesh.sprockt.dev` SAN, and rejects a bundle with a strictly earlier
 expiry. An installer accepts only its configured profile, so a `public-edge`
 bundle cannot enter a private-origin slot. Legacy v1 and v2 transcripts are not
 accepted. An exact replay is a no-op. A different certificate with the same
@@ -143,7 +143,7 @@ processes and are not signaled or reaped by this restart.
 ## Pi configuration
 
 Create one Cloudflare API token with DNS Write permission restricted to the
-`shaulavo.dev` zone. Store it only on the Pi as a regular 0600 file. The file
+`sprockt.dev` zone. Store it only on the Pi as a regular 0600 file. The file
 contains the token and one optional trailing newline, with no other whitespace.
 
 For the `shaul` service user:
@@ -301,7 +301,7 @@ mesh private-names reconcile --config /home/shaul/.config/mesh/private-names-liv
 From a tailnet device, verify the standard private URL and certificate:
 
 ```bash
-curl -v https://pc.mesh.shaulavo.dev/blog
+curl -v https://pc.mesh.sprockt.dev/blog
 ```
 
 Verify the A record is unproxied, carries comment `mesh:private-origin`, and
@@ -323,7 +323,7 @@ the tailnet, but it is still topology information. Split DNS would conceal it
 at the cost of client-specific resolver configuration. The direct, zero-client-
 configuration design is the deliberate choice here.
 
-Every origin receives the same private key for `*.mesh.shaulavo.dev`.
+Every origin receives the same private key for `*.mesh.sprockt.dev`.
 Compromise of any one origin can therefore impersonate every private hostname
 until the wildcard certificate is revoked and rotated. This blast radius is
 accepted to keep one ACME order and renewal path while ensuring the Cloudflare

@@ -1,5 +1,10 @@
 # Deployment domains
 
+Mesh is Tailnet-only on `sprockt.dev`. The owner removed public temporary apps,
+public serving and VPS-edge tunnels on 2026-10-08. Public hosting belongs to
+Brine on `shaulavo.dev`. Old `public-edge` profile and option names below are
+compatibility identifiers for certificate/routing state, not internet exposure.
+
 Mesh reads `domains.json` beside `hosts.json` before the interactive picker and
 ordinary client commands start.
 `MESH_CONFIG_DIR` selects that directory. Otherwise Mesh uses
@@ -29,10 +34,11 @@ policy is missing, startup stops with a recovery error. Restore `domains.json`
 from the deployment configuration backup before starting ordinary commands.
 `mesh update` remains available during recovery.
 
-An existing catalog or address book, or a command that enables deployment names,
-uses the pre-policy release domain when certificate and name state are absent.
-That historical default is `shaulavo.dev`. Configure `domains.json` to choose
-another domain for a new deployment.
+An existing catalog or address book uses the pre-policy release domain when
+certificate and name state are absent. That compatibility default is
+`shaulavo.dev`. Existing private-name and certificate state takes precedence.
+A fresh installation that requests deployment names defaults to `sprockt.dev`
+without a legacy certificate domain. Configure `domains.json` for another domain.
 
 A fresh native-only installation works with no policy. Detached workers, agent
 helpers, native device enrollment, version inspection, and update helpers stay

@@ -4,7 +4,7 @@
 
 ## Goal
 
-`sftp -P 2222 pi.mesh.shaulavo.dev` browses that machine's served roots.
+`sftp -P 2222 pi.mesh.sprockt.dev` browses that machine's served roots.
 SFTP-capable file managers and `scp` use the same roots. An SSH configuration
 that sets D24's port removes the need for `-P 2222`.
 
@@ -99,9 +99,9 @@ SCP uses Wish v2's middleware with the same confined filesystem. Both modern
 `scp`, which uses SFTP, and `scp -O` use the declared service paths:
 
 ```bash
-sftp -P 2222 pi.mesh.shaulavo.dev
-scp -P 2222 pi.mesh.shaulavo.dev:/blog/index.html .
-scp -O -P 2222 -r pi.mesh.shaulavo.dev:/blog ./blog-copy
+sftp -P 2222 pi.mesh.sprockt.dev
+scp -P 2222 pi.mesh.sprockt.dev:/blog/index.html .
+scp -O -P 2222 -r pi.mesh.sprockt.dev:/blog ./blog-copy
 ```
 
 These commands require the authorized identity configured as described in the

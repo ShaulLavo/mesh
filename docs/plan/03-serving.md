@@ -1,41 +1,32 @@
-# Step 8 — Serving
+# Step 8 — Private serving
 
-Mesh already knows which of your machines are up and how to reach them. Serving
-adds one verb: publish something from a machine, privately on the tailnet or
-publicly on the internet.
+Status: Approved, updated for the 2026-10-08 public-feature removal.
 
-This plan covers ordinary serving: three service types and two front doors.
-The Approved [temporary-app plan](06-temporary-apps.md) adds a separate
-`mesh app` capability for disposable websites and public sharing. D30 narrows
-the older D22 boundary without changing ordinary serving behavior.
+Mesh serves static directories, file listings and local-port proxies on the
+Tailnet. Private machine names use `<host>.mesh.sprockt.dev`; configured short
+service names, such as `fregat.sprockt.dev`, serve at the hostname root.
+The owner’s private services are `https://fregat.sprockt.dev/`,
+`https://ai.sprockt.dev/` and `https://comfy.sprockt.dev/`. Their old machine-path
+aliases are retired. [Temporary apps](06-temporary-apps.md) remain private.
 
-Publishing here is rarer than it sounds. The common case is a directory or a
-local port you want to reach from your phone on the tailnet. Reaching the public
-internet at all is the exception, which is why D15 makes you name it.
+Public temporary apps, public serving and VPS-edge reverse tunnels are removed.
+Public hosting belongs to Brine on `shaulavo.dev`. Public-edge sections below
+record the former implementation and are superseded by this decision; they are
+not current deployment instructions or optional Mesh features. See the
+[superseding decision note](01-decisions.md).
 
-Public exposure stays in the plan. It is worth having for the occasional app on
-the desktop that someone outside the tailnet needs to hit, and DNS-01 is already
-built for the private side, so the marginal cost is the edge itself. Being rare
-is an argument for keeping that edge small, not for dropping it.
+## Private names and access
 
-## Two names, two audiences
-
-| | `<host>.mesh.shaulavo.dev` | `<name>.shaulavo.dev` |
+| Name | Audience | Routing |
 |---|---|---|
-| Audience | tailnet only | the internet |
-| Resolves to | tailnet `100.x` addresses | the VPS public IP |
-| Reached by | direct, host to host | through the VPS edge |
-| Default | yes | needs `--public` |
+| `<host>.mesh.sprockt.dev` | Tailnet devices | Direct to the host; services use declared paths |
+| A configured service name such as `fregat.sprockt.dev` | Tailnet devices | The service uses the hostname root |
+| `<id>.sprockt.dev` | Authorized Tailnet app viewers | Private app ingress and registry admission |
 
-`mesh.shaulavo.dev` is the private namespace. Its per-host DNS records point at
-tailnet addresses, so they resolve to something reachable only from the
-tailnet. Everyone else gets an address they cannot route to.
-
-For a canonical public Host, the origin serves only the longest matching route
-published under that Host. A nested private route or a route published under
-another hostname returns 404 before proxying or starting an on-demand process,
-without falling back to a public parent. Private tailnet Hosts keep the existing
-longest-prefix routing, including requests from the public edge host.
+Names resolve to private Tailnet ingress. Publicly trusted HTTPS certificates
+provide browser trust; they do not grant internet access. Private machine Hosts
+use longest-prefix route matching. Configured short service names use only their
+hostname root; retired machine-path aliases do not expose those services.
 
 Private service requests share a browser-request policy with private apps.
 An `Origin` different from the request's own origin returns 403 before any
@@ -57,8 +48,8 @@ GET or HEAD. Where browsers send Fetch Metadata, including private HTTPS and
 loopback HTTP, the gate refuses same-site sibling fetches, cross-site fetches,
 frames, and unknown Fetch Metadata values unless they are top-level GET/HEAD
 visits. A refused service request returns `cross-site request to private service`.
-Canonical public Hosts retain their existing behavior because the owner
-explicitly published those services.
+The former public-Host exception is historical and superseded by the
+2026-10-08 public-feature removal.
 
 Browsers generally omit Fetch Metadata on ordinary plaintext tailnet HTTP
 such as `http://100.x:7337` or `http://pc:7337`. Without those headers, every
@@ -77,7 +68,7 @@ clients and top-level GET navigation remain allowed, so upstream applications
 must keep GET read-only and protect their own mutations.
 
 Certificates work anyway. Let's Encrypt DNS-01 validates by publishing a TXT
-record, never by connecting to the host, so `*.mesh.shaulavo.dev` gets a real
+record, never by connecting to the host, so `*.mesh.sprockt.dev` gets a real
 publicly trusted certificate despite the per-host records pointing at
 unroutable addresses. No custom CA, no browser warnings, no per-device trust
 store surgery.
@@ -105,36 +96,23 @@ retains the process output.
 
 ## Where it lands
 
-```
-Tailnet                                    Internet
-   │                                          │
-   ▼                                          ▼
-pc.mesh.shaulavo.dev                 blog.shaulavo.dev
-(A → tailnet addresses)     (A → VPS public IP)
-   │                                          │
-   │  direct, no proxy                        ▼
-   │                              VPS · TLS front door
-   │                                  · mesh daemon, edge mode
-   │                                  · routes to origins
-   │                                          │
-   └──────────────┬───────────────────────────┘
-                  ▼
-        Desktop · daemon        Pi · daemon
-        /blog  static           /files  files
-        /api   proxy :3000
-```
+A Tailnet device opens a private HTTPS name. Machine service traffic reaches the
+origin host, which serves a directory, file listing or loopback proxy. Configured
+short service names select the service at its hostname root. Private app ingress
+checks Tailnet identity and app admission before forwarding to its owner origin.
+Terminal traffic remains direct between hosts.
 
 ## Reaching the private name
 
-Two ways to make `mesh.shaulavo.dev` resolve, and they can coexist:
+Two ways to make `mesh.sprockt.dev` resolve, and they can coexist:
 
-**Per-host, direct.** `pc.mesh.shaulavo.dev` and `pi.mesh.shaulavo.dev` are A records
+**Per-host, direct.** `pc.mesh.sprockt.dev` and `pi.mesh.sprockt.dev` are A records
 holding each machine's tailnet address. Services appear at
-`pc.mesh.shaulavo.dev/blog`. Nothing proxies, nothing is a single point of failure,
+`pc.mesh.sprockt.dev/blog`. Nothing proxies, nothing is a single point of failure,
 and this keeps the "traffic goes directly to the destination machine" invariant
 completely intact. This is the default.
 
-**Tidy alias.** `mesh.shaulavo.dev/blog` with no machine in the URL requires
+**Tidy alias.** `mesh.sprockt.dev/blog` with no machine in the URL requires
 something always-on to route by path, which means the Pi. That makes the Pi a
 tailnet web router, and if the Pi is down every tidy URL is down while every
 per-host URL keeps working.
@@ -165,12 +143,13 @@ Accepted authorities are:
   short name is the only accepted name whose safety depends on the client's
   resolver using MagicDNS rather than a hostile LAN resolver. These names are
   captured at startup; a MagicDNS rename needs a daemon restart to take effect.
-- Exactly the current certificate-backed private name published by
-  `certificateRuntime.PrivateName()`. It becomes accepted only after ingress
+- Certificate-backed private names published by
+  the certificate runtime. Each becomes accepted only after ingress
   is ready and stops being accepted if the source withdraws it. Additional
   labels below that name are not aliases: neither the private certificate nor
-  the managed DNS records cover them. Private services route by path.
-- A canonical one-label public name accepted by `serve.ValidatePublicName`,
+  the managed DNS records cover them. Machine names route services by path;
+  configured short service names use their hostname root.
+- Historical, superseded 2026-10-08: a canonical one-label public name accepted by `serve.ValidatePublicName`,
   only when the immediate TCP peer matches the identity-verified public edge's
   pinned address through `trustPublicEdgeForwarding`. Forwarding headers do not
   establish trust. This admits a public authority; the downstream dispatcher
@@ -186,7 +165,7 @@ forwards can preserve an external authority port that differs from the internal
 listener. IPv6 zones, malformed authorities, the public apex, and nested public
 names are refused.
 
-Public-name traffic, including app-origin requests, is refused until a
+Historical public-edge behavior (superseded 2026-10-08): public-name traffic was refused until a
 successful edge publication establishes the pin. After a failed initial sync,
 the next scheduled attempt is a minute later. The connection's immediate
 source address must match that pin; both edge resolvers currently prefer IPv4.
@@ -202,57 +181,28 @@ uses HTTP.
 ## The CLI
 
 ```bash
-m serve pc ./site --at /blog                # pc.mesh.shaulavo.dev/blog
+m serve pc ./site --at /blog                # pc.mesh.sprockt.dev/blog
 m serve pc 3000 --at /api                   # proxy a local port, tailnet only
 m serve pc ./app --at /app --isolate        # add COOP/COEP so the page gets SharedArrayBuffer
 m serve pi /mnt/data --at /files --files
-m serve pc ./site --at /blog --public blog.shaulavo.dev
 m serve ls
 m unserve /blog
 ```
 
-Private is the default and needs no extra words. Public names are typed out in
-full, every time, because that is the irreversible one.
+Serving is Tailnet-only. The former `--public` workflow is superseded.
 
 ## Decisions
 
-**The VPS is the public edge, and nothing else is.** It already has a public IP
-and is already on the tailnet. Origin machines never open a port to the internet.
-
-This is a scoped exception to "traffic goes directly to the destination machine".
-That invariant protects terminal sessions, where a proxy would be a liability.
-Public web traffic crosses a public edge by definition. Terminal traffic still
-never transits the VPS.
-
-**Mesh never claims the `shaulavo.dev` apex.** That is your site, not Mesh's. Every
-public route is named explicitly per service. Mesh will refuse to bind a public
-name it was not told to bind. D16 narrows D15's explicit-name rule: typing the
-apex does not authorize Mesh to serve it.
-
-**Tailnet-only by default.** Serving a directory is one keystroke from publishing
-your home folder.
-
-**Wildcard certificates from day one.** `*.mesh.shaulavo.dev` needs DNS-01
-regardless. The optional direct-TLS edge also uses DNS-01 for
-`*.shaulavo.dev`. The two certificate profiles use separate state and cannot
-install into each other's serving slot.
-
-The direct-TLS public edge offers HTTP/1.1 so each hostname gets its own
-connection. Safari can display a 421 response when HTTP/2 reuses a wildcard
-certificate connection across hosts. The edge still requires Host to match
-TLS SNI, and mismatched HTTP/2 requests receive an empty 421. A separate TLS
-front door controls its own browser-facing protocols.
-
-**An offline origin returns 502, honestly.** No silent staleness. T13 keeps
-`--wake-on-request` behind a bounded interface. T19 supplies the wake client:
-the target must allow wake, and a sender must be awake on its LAN. The edge
-waits up to 90 seconds for the target and a fresh service publication.
+Serving and temporary apps are Tailnet-only. Public hosting belongs to Brine on
+`shaulavo.dev`. Former public-edge design decisions are preserved in
+[the decision history](01-decisions.md) and
+[the superseded T13 specification](../tasks/T13-public-edge.md).
 
 ## Tasks
 
 - `T11-serving-core.md` — service types, registry, origin-side serving
-- `T12-private-names.md` — DNS and TLS for `mesh.shaulavo.dev`, per-host routing
-- `T13-public-edge.md` — VPS edge mode, public routes on `shaulavo.dev`
+- `T12-private-names.md` — DNS and TLS for `mesh.sprockt.dev`, per-host routing
+- `T13-public-edge.md` — historical VPS edge spec, superseded 2026-10-08
 - `T14-serve-cli.md` — `m serve`, `m unserve`, `m serve ls`
 - `T28-serve-on-demand.md` — a proxy route that starts its command on the first
   connection and stops it when idle
@@ -260,10 +210,10 @@ waits up to 90 seconds for the target and a fresh service publication.
 ## Explicitly not in step 8
 
 Arbitrary TCP tunnels, per-service authentication beyond public or tailnet,
-multi-user access control, the tidy `mesh.shaulavo.dev/<name>` alias, and anything
+multi-user access control, the tidy `mesh.sprockt.dev/<name>` alias, and anything
 resembling a build or deploy pipeline.
 
-## The apex is not Mesh's
+## The apex is not Mesh's — historical evidence, 2026-08-29
 
 `shaulavo.dev` serves nothing today. When the site arrives it will not be served
 by Mesh, so the edge is designed to sit behind the front door rather than be it.
@@ -299,7 +249,7 @@ Cloudflare too, which hides the VPS address and absorbs abuse. The tradeoff is
 that Cloudflare terminates TLS and therefore sees that traffic. Worth deciding
 deliberately rather than by default.
 
-## Public connection limits
+## Public connection limits — historical, superseded 2026-10-08
 
 The public listener admits at most 512 connections. Each direct IPv4 peer or
 IPv6 /64 may hold at most 32, one sixteenth of that pool. Authenticated PROXY

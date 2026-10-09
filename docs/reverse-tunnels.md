@@ -1,5 +1,9 @@
 # Reach a local app through the public edge
 
+> Superseded, 2026-10-08: Mesh public serving and VPS-edge reverse tunnels are
+> removed. Mesh is tailnet-only on `sprockt.dev`; public hosting belongs to Brine
+> on `shaulavo.dev`. The specification below is historical, not operating guidance.
+
 The examples use `new.example` from the configured
 [deployment domains](deployment-domains.md). Replace it with your domain.
 
