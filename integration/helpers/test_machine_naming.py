@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 
 from machine_naming import printed_marker
-from naming_transition import RetainedCatalog, catalog_snapshot, image_digest, private_host_migration
+from naming_transition import RetainedCatalog, catalog_snapshot, image_digest, private_host_migration, private_app_state_migration
 
 
 class PrintedMarkerTest(unittest.TestCase):
@@ -54,6 +54,8 @@ class RetainedCatalogTest(unittest.TestCase):
                 CREATE TABLE hosts (id TEXT, alias TEXT);
                 CREATE TABLE services (name TEXT);
                 CREATE TABLE cached_services (name TEXT);
+                CREATE TABLE app_state (key TEXT PRIMARY KEY, data BLOB);
+                INSERT INTO app_state VALUES ('apps.edge', x'6b65707420617070206279746573');
                 CREATE TABLE sessions (id TEXT, host_id TEXT, command TEXT, cwd TEXT,
                                        created_at INTEGER, state TEXT);
                 CREATE TABLE goose_db_version (version_id INTEGER, is_applied INTEGER);
@@ -136,6 +138,39 @@ class RetainedCatalogTest(unittest.TestCase):
             database.execute("ALTER TABLE hosts DROP COLUMN alias")
             database.execute("INSERT INTO goose_db_version VALUES (11, 1)")
         self.host["build"] = self.host["build"] | {"stateVersion": 11}
+        with self.assertRaisesRegex(RuntimeError, "schema"):
+            self.observe()
+
+    def migrate_private_apps(self):
+        with sqlite3.connect(self.database) as database:
+            database.execute("ALTER TABLE services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
+            database.execute("ALTER TABLE cached_services ADD COLUMN private_host TEXT NOT NULL DEFAULT ''")
+            database.execute("ALTER TABLE app_state RENAME TO private_app_state")
+            database.execute("INSERT INTO goose_db_version VALUES (12, 1)")
+        self.host["build"] = self.host["build"] | {"stateVersion": 12}
+
+    def test_private_app_migration_preserves_state_catalog_and_worker(self):
+        previous = catalog_snapshot(self.fixture.remote, "7K3D")
+        self.migrate_private_apps()
+        current = catalog_snapshot(self.fixture.remote, "7K3D")
+        self.assertTrue(private_app_state_migration(previous, current))
+        receipt = self.observe()
+        self.assertEqual(receipt["catalogSchemaVersion"], 12)
+        self.assertEqual(receipt["workerBuild"]["stateVersion"], 10)
+        self.assertTrue(receipt["appStatePreserved"])
+        self.observe()
+
+    def test_private_app_migration_refuses_changed_app_data(self):
+        self.migrate_private_apps()
+        with sqlite3.connect(self.database) as database:
+            database.execute("UPDATE private_app_state SET data = ?", (b"changed state",))
+        with self.assertRaisesRegex(RuntimeError, "schema"):
+            self.observe()
+
+    def test_private_app_migration_refuses_other_schema_changes(self):
+        self.migrate_private_apps()
+        with sqlite3.connect(self.database) as database:
+            database.execute("ALTER TABLE hosts DROP COLUMN alias")
         with self.assertRaisesRegex(RuntimeError, "schema"):
             self.observe()
 

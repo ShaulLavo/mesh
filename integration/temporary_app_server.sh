@@ -2,6 +2,11 @@
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
 set -uo pipefail
 export PYTHONDONTWRITEBYTECODE=1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/private_app_fixture.sh" || exit 1
+if [[ $(uname -s) != Linux ]]; then
+  echo "SKIP: private app PROXY ingress requires Linux socket UID authentication"
+  exit 0
+fi
 
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/as.XXXXXX")
@@ -63,48 +68,7 @@ cat "$ORIGIN_STATE/identity.key.pub" >"$EDGE_STATE/authorized_keys"
 cat "$EDGE_STATE/identity.key.pub" >"$ORIGIN_STATE/authorized_keys"
 chmod 0600 "$EDGE_STATE/authorized_keys" "$ORIGIN_STATE/authorized_keys"
 
-python3 - "$TEST_ROOT" "$$" <<'PY'
-import base64, json, os, socket, sys
-root, pid = sys.argv[1:]
-
-def identity(state):
-    with open(os.path.join(root, state, 'identity.key.pub')) as source:
-        blob = base64.b64decode(source.read().split()[1])
-    return base64.urlsafe_b64encode(blob[-32:]).decode().rstrip('=')
-
-held, ports = [], []
-base = 25000 + int(pid) % 700 * 32
-for offset in range(700 * 32):
-    port = 25000 + (base - 25000 + offset) % (700 * 32)
-    listener = socket.socket()
-    try:
-        listener.bind(('127.0.0.1', port))
-    except OSError:
-        listener.close()
-        continue
-    held.append(listener)
-    ports.append(port)
-    if len(ports) == 3:
-        break
-if len(ports) != 3:
-    raise SystemExit('no fixture ports')
-control, proxy, backend = ports
-with open(os.path.join(root, 'ports'), 'w') as output:
-    output.write('\n'.join(map(str, ports)) + '\n')
-nodes = {'e': ('edge.app.test', '127.0.0.1'), 'o': ('origin.app.test', '127.0.0.21')}
-for key, (name, address) in nodes.items():
-    peers = {peer: {'DNSName': peer_name + '.', 'TailscaleIPs': [peer_address], 'Online': True}
-             for peer, (peer_name, peer_address) in nodes.items() if peer != key}
-    status = {'BackendState': 'Running', 'Self': {'DNSName': name + '.', 'TailscaleIPs': [address], 'Online': True}, 'Peer': peers}
-    with open(os.path.join(root, key + '-status.json'), 'w') as output:
-        json.dump(status, output)
-origin = {'identity': identity('o'), 'displayAlias': 'app origin', 'tailscaleName': nodes['o'][0], 'controlPort': control, 'websocketPath': '/mesh'}
-with open(os.path.join(root, 'edge.json'), 'w') as output:
-    json.dump({'mode': 'proxy', 'listenAddress': f'127.0.0.1:{proxy}', 'origins': [origin]}, output)
-with open(os.path.join(root, 'target.json'), 'w') as output:
-    json.dump({'identity': identity('e'), 'tailscaleName': nodes['e'][0], 'controlPort': control, 'websocketPath': '/mesh'}, output)
-PY
-[ $? -eq 0 ] || fail 'fixture configuration'
+private_app_fixture configure "$TEST_ROOT" "$$" || fail 'fixture configuration'
 mapfile -t PORTS <"$TEST_ROOT/ports"
 CONTROL_PORT=${PORTS[0]}
 PROXY_PORT=${PORTS[1]}
@@ -132,6 +96,7 @@ start_edge() {
     "$MESH_APP" daemon --tailnet-port "$CONTROL_PORT" --edge "$TEST_ROOT/edge.json" >>"$TEST_ROOT/edge.log" 2>&1 &
   EDGE_PID=$!
   wait_for_socket "$EDGE_PID" "$EDGE_STATE/daemon.sock" || fail 'edge startup'
+  private_app_fixture install "$TEST_ROOT" || fail 'install private app HTTPS certificate'
 }
 
 start_edge
@@ -142,7 +107,7 @@ APP_ID=$(python3 - "$TEST_ROOT/create.json" <<'PY'
 import json, sys
 with open(sys.argv[1]) as source:
     app = json.load(source)['app']
-if app['visibility'] != 'private' or app['kind'] != 'server' or not app['ready']:
+if 'visibility' in app or app['kind'] != 'server' or not app['ready']:
     raise SystemExit(f'invalid new app: {app}')
 print(app['id'])
 PY
@@ -152,30 +117,22 @@ tar -tzf "$TEST_ROOT/source.tar.gz" >"$TEST_ROOT/source.list" || fail 'downloade
 grep -qx server "$TEST_ROOT/source.list" || fail 'downloaded archive misses the app source'
 [ -z "$(find "$WORKLOAD/apps/$APP_ID" -mindepth 1 -maxdepth 1 ! -name 'source-*')" ] || fail 'download left an archive in the app directory'
 
-app_curl() {
-  curl --noproxy '*' --silent --show-error --max-time 3 --header "Host: $APP_ID.mesh.test" \
-    --header 'X-Forwarded-For: 203.0.113.77' --header 'X-Forwarded-Proto: https' "$@"
-}
-APP_ENDPOINT="http://127.0.0.1:$PROXY_PORT"
-PRIVATE_STATUS=$(app_curl -o "$TEST_ROOT/private.body" -w '%{http_code}' "$APP_ENDPOINT/api") || fail 'private gate request'
-[ "$PRIVATE_STATUS" = 303 ] || fail "private app returned $PRIVATE_STATUS"
-if grep -Eq 'APP_LABELLED_WORKER|"pid"' "$TEST_ROOT/private.body"; then
-  fail 'private backend bytes escaped'
-fi
+APP_ENDPOINT="$(app_endpoint)"
+private_app_denies_outsiders || fail 'private app owner authorization'
+private_app_rejects_sharing_commands || fail 'removed sharing commands'
 python3 "$REPO_ROOT/integration/helpers/mesh_control.py" --expect-type error upsert \
   "$ORIGIN_STATE/daemon.sock" alias proxy "$BACKEND_PORT" alias.mesh.test >"$TEST_ROOT/alias.out" || fail 'app port alias refusal'
 grep -Eq 'app-owned port' "$TEST_ROOT/alias.out" || fail 'ordinary public proxy bypassed private app gate'
 python3 "$REPO_ROOT/integration/helpers/mesh_control.py" --expect-type error upsert \
   "$ORIGIN_STATE/daemon.sock" source-alias files "$WORKLOAD" '' >"$TEST_ROOT/source-alias.out" || fail 'app source alias refusal'
 grep -Eq 'managed app directories' "$TEST_ROOT/source-alias.out" || fail 'ordinary file route exposed private app source'
-MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app public local "$APP_ID" --json >"$TEST_ROOT/public.json" || fail 'publish app'
-app_curl --fail "$APP_ENDPOINT/" >"$TEST_ROOT/index.html" || fail 'public HTML'
+app_curl --fail "$APP_ENDPOINT/" >"$TEST_ROOT/index.html" || fail 'private HTML'
 grep -Eq 'APP_LABELLED_WORKER' "$TEST_ROOT/index.html" || fail 'server HTML missing'
-grep -Eq '/.mesh-app/' "$TEST_ROOT/index.html" || fail 'floating pill missing'
-app_curl --fail "$APP_ENDPOINT/api" >"$TEST_ROOT/api.json" || fail 'public API'
+if grep -Eq '/.mesh-app/' "$TEST_ROOT/index.html"; then fail 'Mesh injected a widget into app HTML'; fi
+app_curl --fail "$APP_ENDPOINT/api" >"$TEST_ROOT/api.json" || fail 'private API'
 app_curl --fail "$APP_ENDPOINT/mesh" >"$TEST_ROOT/mesh.json" || fail 'whole-host /mesh API'
 app_curl --fail --location "$APP_ENDPOINT/redirect" >"$TEST_ROOT/redirect.json" || fail 'root-relative redirect'
-python3 "$REPO_ROOT/integration/helpers/public_http_fixture.py" client 127.0.0.1 "$PROXY_PORT" "$APP_ID.mesh.test" /socket --proxy >"$TEST_ROOT/socket.out" || fail 'HTTP app WebSocket'
+private_app_fixture websocket "$TEST_ROOT" "$PROXY_PORT" "$APP_ID" >"$TEST_ROOT/socket.out" || fail 'HTTP app WebSocket'
 
 python3 - "$TEST_ROOT" "$WORKLOAD" <<'PY'
 import json, os, sys
@@ -233,7 +190,18 @@ sleep 4
 app_curl --fail "$APP_ENDPOINT/api" >"$TEST_ROOT/during-setup.json" || fail "app lease lapsed while another app ran setup"
 wait "$SLOW_CREATE" || fail "slow-setup app creation: $(cat "$TEST_ROOT/slow.err")"
 SLOW_ID=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["app"]["id"])' "$TEST_ROOT/slow.json") || fail 'slow app result'
-MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app delete local "$SLOW_ID" --json >/dev/null || fail 'delete slow-setup app'
+SERVER_APP_ID="$APP_ID"
+APP_ID="$SLOW_ID"
+app_curl --fail "$(app_endpoint)/" >"$TEST_ROOT/static.html" || fail 'private static HTML'
+cmp "$SLOW_SOURCE/index.html" "$TEST_ROOT/static.html" || fail 'static HTML changed or gained a widget'
+WIDGET_STATUS=$(app_curl -o "$TEST_ROOT/widget.body" -w '%{http_code}' "$(app_endpoint)/.mesh-app/pill.js") || fail 'retired widget asset request'
+[ "$WIDGET_STATUS" = 404 ] || fail "retired widget asset returned $WIDGET_STATUS"
+private_app_denies_outsiders / || fail 'static app owner authorization'
+MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app renew local "$SLOW_ID" --json >"$TEST_ROOT/static-renew.json" || fail 'renew private static app'
+MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app download local "$SLOW_ID" "$TEST_ROOT/static-source.tar.gz" --json >/dev/null || fail 'download static source'
+tar -xOzf "$TEST_ROOT/static-source.tar.gz" index.html >"$TEST_ROOT/static-source.html" || fail 'read downloaded static source'
+cmp "$SLOW_SOURCE/index.html" "$TEST_ROOT/static-source.html" || fail 'download changed static source'
+APP_ID="$SERVER_APP_ID"
 
 # With the edge gone nothing renews the lease. Once it lapses the origin stops the
 # app's worker, keeps its files, and leaves ordinary sessions alone.
@@ -274,6 +242,10 @@ for _ in $(seq 100); do
 done
 [ -n "$RECOVERED" ] && [ "$RECOVERED" != "$APP_PID" ] || fail 'app did not restart once the edge renewed its lease'
 cp "$TEST_ROOT/recovered.json" "$TEST_ROOT/api.json"
+APP_ID="$SLOW_ID"
+app_curl --fail "$(app_endpoint)/" >"$TEST_ROOT/static-restarted.html" || fail 'static app after registry restart'
+cmp "$SLOW_SOURCE/index.html" "$TEST_ROOT/static-restarted.html" || fail 'registry restart changed static HTML'
+APP_ID="$SERVER_APP_ID"
 
 MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app delete local "$APP_ID" --json >"$TEST_ROOT/deleted.json" || fail 'delete running app'
 DELETED_STATUS=$(app_curl -o "$TEST_ROOT/deleted.body" -w '%{http_code}' "$APP_ENDPOINT/api") || fail 'deleted host request'
@@ -301,4 +273,20 @@ PY
 [ $? -eq 0 ] || fail 'process and payload cleanup'
 APP_ID=""
 kill -0 "$ORDINARY_PID" 2>/dev/null || fail 'app deletion killed an ordinary session'
-echo 'PASS: labelled HTTP app worker downloads its source without leaving an archive, serves HTML/API/redirects/WebSockets, survives daemon restart, keeps its lease through another app'"'"'s setup, stops when its lease lapses without touching ordinary sessions, restarts when the edge returns, and deletes its managed payload'
+# Advance the stored static deadline with the registry stopped, avoiding a 24-hour wait.
+kill -TERM "$EDGE_PID"
+wait "$EDGE_PID" || fail 'registry shutdown before static expiry'
+EDGE_PID=""
+private_app_fixture expire "$TEST_ROOT" "$SLOW_ID" || fail 'expire persisted static deadline'
+start_edge
+APP_ID="$SLOW_ID"
+EXPIRED_STATUS=$(app_curl -o "$TEST_ROOT/expired.body" -w '%{http_code}' "$(app_endpoint)/") || fail 'expired static request'
+[ "$EXPIRED_STATUS" = 303 ] || fail "expired static app returned $EXPIRED_STATUS"
+for _ in $(seq 100); do
+  [ ! -e "$WORKLOAD/apps/$SLOW_ID" ] && break
+  sleep 0.1
+done
+[ ! -e "$WORKLOAD/apps/$SLOW_ID" ] || fail 'expired static app kept its managed source'
+[ -f "$SLOW_SOURCE/index.html" ] || fail 'static expiry deleted caller source'
+APP_ID=""
+echo 'PASS: owner-only static app preserves HTML/source, renews, survives registry restart and expires with cleanup; labelled HTTP app worker downloads its source without leaving an archive, serves HTML/API/redirects/WebSockets, survives daemon restart, keeps its lease through another app'"'"'s setup, stops when its lease lapses without touching ordinary sessions, restarts when the edge returns, and deletes its managed payload'

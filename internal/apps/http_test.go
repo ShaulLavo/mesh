@@ -214,32 +214,6 @@ func createStaticApp(t *testing.T, f *appFixture) Record {
 	return *result.App
 }
 
-func TestPillFrameReportsBrowserOwnership(t *testing.T) {
-	f := newAppFixture(t)
-	app := createStaticApp(t, f)
-	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
-		t.Fatal(err)
-	}
-	owner := pairedOwner(t, f)
-	check := func(t *testing.T, cookie *http.Cookie, owns string) {
-		t.Helper()
-		request := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/frame?id="+app.ID, nil)
-		if cookie != nil {
-			request.AddCookie(cookie)
-		}
-		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, request, ManagementHost())
-		if response.Code != http.StatusOK || !regexp.MustCompile(`owns:\s*`+owns+`\b`).MatchString(response.Body.String()) {
-			t.Fatalf("incorrect pill ownership: %d %s", response.Code, response.Body.String())
-		}
-		if strings.Contains(response.Body.String(), owner.Value) {
-			t.Fatal("pill frame leaked owner credential")
-		}
-	}
-	t.Run("visitor", func(t *testing.T) { check(t, nil, "false") })
-	t.Run("owner", func(t *testing.T) { check(t, owner, "true") })
-}
-
 func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 	f := newAppFixture(t)
 	app := createStaticApp(t, f)
@@ -280,7 +254,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 	request.AddCookie(owner)
 	result := httptest.NewRecorder()
 	f.edge.ServeHost(result, request, app.ID+"."+Domain())
-	if result.Code != 200 || !strings.Contains(result.Body.String(), "original page") || !strings.Contains(result.Body.String(), `data-mesh-private="true"`) || !strings.Contains(result.Body.String(), `data-mesh-owns="true"`) {
+	if result.Code != 200 || result.Body.String() != "original page" {
 		t.Fatalf("owner private content missing: %d %s", result.Code, result.Body.String())
 	}
 	deadline, _, err := f.edge.lookup(context.Background(), app.ID, false)
@@ -293,8 +267,8 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 		request.AddCookie(view)
 		asset := httptest.NewRecorder()
 		f.edge.ServeHost(asset, request, app.ID+"."+Domain())
-		if asset.Code != 200 || asset.Body.Len() == 0 {
-			t.Fatalf("owner asset %s unavailable", path)
+		if asset.Code != http.StatusNotFound {
+			t.Fatalf("retired widget asset %s still served: %d", path, asset.Code)
 		}
 	}
 	unchanged, _, err := f.edge.lookup(context.Background(), app.ID, false)
@@ -308,7 +282,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, origin := range []string{URL(app.ID), "https://other.mesh.test"} {
-		form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}}
+		form := url.Values{"id": {app.ID}, "action": {"renew"}, "csrf": {session.CSRF}, "confirmation": {app.ID}}
 		forged := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/action", strings.NewReader(form.Encode()))
 		forged.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		forged.Header.Set("Origin", origin)
@@ -319,7 +293,7 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 			t.Fatalf("sibling-origin mutation status %d", response.Code)
 		}
 	}
-	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}}
+	form := url.Values{"id": {app.ID}, "action": {"renew"}, "csrf": {session.CSRF}, "confirmation": {app.ID}}
 	mutation := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/action", strings.NewReader(form.Encode()))
 	mutation.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	mutation.Header.Set("Origin", ManagementOrigin())
@@ -330,62 +304,17 @@ func TestPairedBrowserPrivateViewAndTrustedMutation(t *testing.T) {
 		t.Fatalf("owner mutation rejected: %d %s", changed.Code, changed.Body.String())
 	}
 	actual, _, err := f.edge.lookup(context.Background(), app.ID, false)
-	if err != nil || actual.Visibility != "public" {
+	if err != nil || !actual.ExpiresAt.Equal(f.now.Add(IdleTTL)) {
 		t.Fatal("trusted owner did not gain authority")
 	}
 }
 
-func TestPublicRequestBlockedByPrivacyChangeDuringOriginResolution(t *testing.T) {
-	f := newAppFixture(t)
-	app := createStaticApp(t, f)
-	forwarded := networkOrigin(t, f)
-	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
-		t.Fatal(err)
-	}
-	resolve := f.edge.config.Resolve
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	f.edge.config.Resolve = func(ctx context.Context, owner string) (netip.AddrPort, error) {
-		close(entered)
-		select {
-		case <-release:
-			return resolve(ctx, owner)
-		case <-ctx.Done():
-			return netip.AddrPort{}, ctx.Err()
-		}
-	}
-	finished := make(chan *httptest.ResponseRecorder, 1)
-	go func() {
-		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID), nil), app.ID+"."+Domain())
-		finished <- response
-	}()
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("request did not reach resolve")
-	}
-	if _, err := f.origin.Handle(context.Background(), Request{Action: "private", ID: app.ID}); err != nil {
-		close(release)
-		t.Fatal(err)
-	}
-	close(release)
-	select {
-	case response := <-finished:
-		if response.Code != 403 || forwarded.Load() != 0 {
-			t.Fatalf("stale public request forwarded: status %d, count %d", response.Code, forwarded.Load())
-		}
-	case <-time.After(time.Second):
-		t.Fatal("request stuck after privacy change")
-	}
-}
-
-func TestVisibilityConfirmationPreservesBrowserOriginAndReturn(t *testing.T) {
+func TestRenewalConfirmationPreservesBrowserOriginAndReturn(t *testing.T) {
 	f := newAppFixture(t)
 	app := createStaticApp(t, f)
 	cookie := pairedOwner(t, f)
 	destination := URL(app.ID) + "/colors?palette=rose%20water#favorites"
-	request := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/confirm?id="+app.ID+"&action=public&return="+url.QueryEscape(destination), nil)
+	request := httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/confirm?id="+app.ID+"&action=renew&return="+url.QueryEscape(destination), nil)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
 	f.edge.ServeHost(response, request, ManagementHost())
@@ -402,7 +331,7 @@ func TestVisibilityConfirmationPreservesBrowserOriginAndReturn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	form := url.Values{"id": {app.ID}, "action": {"public"}, "csrf": {session.CSRF}, "confirmation": {app.ID}, "return": {destination}}
+	form := url.Values{"id": {app.ID}, "action": {"renew"}, "csrf": {session.CSRF}, "confirmation": {app.ID}, "return": {destination}}
 	post := httptest.NewRequest(http.MethodPost, ManagementOrigin()+"/action", strings.NewReader(form.Encode()))
 	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	post.Header.Set("Origin", ManagementOrigin())
@@ -413,7 +342,7 @@ func TestVisibilityConfirmationPreservesBrowserOriginAndReturn(t *testing.T) {
 	view.AddCookie(cookie)
 	back := httptest.NewRecorder()
 	f.edge.ServeHost(back, view, ManagementHost())
-	if back.Header().Get("Location") != destination {
+	if !strings.Contains(back.Header().Get("Location"), url.QueryEscape(destination)) {
 		t.Fatalf("returned to %q, want %q", back.Header().Get("Location"), destination)
 	}
 }
@@ -540,7 +469,7 @@ func TestStaticAppAssetBurstWaitsForCapacity(t *testing.T) {
 	}
 }
 
-func waitForCapacityWaiter(t *testing.T, e *Edge) {
+func waitForCapacityWaiter(t *testing.T, e *Registry) {
 	t.Helper()
 	deadline := time.NewTimer(time.Second)
 	defer deadline.Stop()
@@ -612,9 +541,6 @@ func checkStaticCapacityDeadline(t *testing.T, duration time.Duration) {
 func TestStaticCapacityQueueExhaustionHasRetryAfter(t *testing.T) {
 	f := newAppFixture(t)
 	app := createStaticApp(t, f)
-	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
-		t.Fatal(err)
-	}
 	for range cap(f.edge.slots) {
 		f.edge.slots <- struct{}{}
 	}
@@ -622,7 +548,7 @@ func TestStaticCapacityQueueExhaustionHasRetryAfter(t *testing.T) {
 		f.edge.capacityWaiters <- struct{}{}
 	}
 	response := httptest.NewRecorder()
-	f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID)+"/asset.svg", nil), app.ID+"."+Domain())
+	f.edge.ServeHost(response, ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(app.ID)+"/asset.svg", nil)), app.ID+"."+Domain())
 	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "1" {
 		t.Fatalf("exhaustion: %d %v", response.Code, response.Header())
 	}
@@ -681,10 +607,15 @@ func TestStaticCapacityReleasesRacedCancellation(t *testing.T) {
 func TestStaticCapacityRechecksPrivateAccessAfterWait(t *testing.T) {
 	f := newAppFixture(t)
 	app := createStaticApp(t, f)
-	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
+	forwarded := networkOrigin(t, f)
+	owner := pairedOwner(t, f)
+	view := viewCookie(t, f, owner, app.ID)
+	auth := httptest.NewRequest(http.MethodGet, ManagementOrigin(), nil)
+	auth.AddCookie(owner)
+	browser, err := f.edge.auth.Browser(context.Background(), auth)
+	if err != nil {
 		t.Fatal(err)
 	}
-	forwarded := networkOrigin(t, f)
 	var available atomic.Bool
 	var releases atomic.Int64
 	f.edge.config.Acquire = func(*http.Request, string) (func(), error) {
@@ -698,18 +629,20 @@ func TestStaticCapacityRechecksPrivateAccessAfterWait(t *testing.T) {
 	defer cancel()
 	go func() {
 		response := httptest.NewRecorder()
-		f.edge.ServeHost(response, httptest.NewRequest(http.MethodGet, URL(app.ID), nil).WithContext(ctx), app.ID+"."+Domain())
+		request := httptest.NewRequest(http.MethodGet, URL(app.ID), nil).WithContext(ctx)
+		request.AddCookie(view)
+		f.edge.ServeHost(response, request, app.ID+"."+Domain())
 		done <- response
 	}()
 	waitForCapacityWaiter(t, f.edge)
-	if _, err := f.origin.Handle(context.Background(), Request{Action: "private", ID: app.ID}); err != nil {
+	if _, err := f.origin.Handle(context.Background(), Request{Action: "browser.revoke", BrowserID: browser.ID}); err != nil {
 		t.Fatal(err)
 	}
 	available.Store(true)
 	select {
 	case response := <-done:
 		if response.Code != http.StatusForbidden {
-			t.Fatalf("stale public access: %d %s", response.Code, response.Body.String())
+			t.Fatalf("revoked owner access: %d %s", response.Code, response.Body.String())
 		}
 	case <-time.After(time.Second):
 		t.Fatal("queued access did not settle")

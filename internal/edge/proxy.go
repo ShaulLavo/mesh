@@ -112,8 +112,6 @@ type RouteStatus struct {
 
 // Registry atomically publishes a complete public route table.
 type Registry struct {
-	appMu            sync.RWMutex
-	apps             AppHandler
 	tunnelsMu        sync.RWMutex
 	tunnels          map[string]*tunnelRoute
 	mode             Mode
@@ -137,24 +135,6 @@ type Registry struct {
 	reservedPath     string
 	forwarderTrusted func(*http.Request) bool
 	rateLimitExempt  func(context.Context, netip.Addr) bool
-}
-
-type AppHandler interface {
-	ServeHost(http.ResponseWriter, *http.Request, string) bool
-}
-
-// SetAppHandler installs independent whole-host app routing.
-func (r *Registry) SetAppHandler(handler AppHandler) {
-	r.appMu.Lock()
-	defer r.appMu.Unlock()
-	r.apps = handler
-}
-
-func (r *Registry) serveApp(response http.ResponseWriter, request *http.Request, publicName string) bool {
-	r.appMu.RLock()
-	handler := r.apps
-	r.appMu.RUnlock()
-	return handler != nil && handler.ServeHost(response, request, publicName)
 }
 
 type proxySnapshot struct {
@@ -404,18 +384,6 @@ func decodeListCursor(cursor string) (string, string, error) {
 	return parts[0], "/" + parts[1], nil
 }
 
-func (r *Registry) publishedHost(name string) bool {
-	if r.findTunnel(name) != nil {
-		return true
-	}
-	for _, route := range r.snapshot.Load().routes {
-		if route.publicName == name {
-			return true
-		}
-	}
-	return false
-}
-
 // ServeHTTP rejects malformed public requests before route lookup.
 func (r *Registry) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodConnect || request.URL.IsAbs() || request.URL.Opaque != "" {
@@ -476,9 +444,6 @@ func (r *Registry) ServeHTTP(response http.ResponseWriter, request *http.Request
 	}
 	request = request.WithContext(context.WithValue(request.Context(), proxyClientIPKey{}, clientIP))
 	request.Host = forwardedHost
-	if !r.publishedHost(publicName) && r.serveApp(response, request, publicName) {
-		return
-	}
 	if reservedTerminalPath(request.URL, r.reservedPath) {
 		r.logger.Print("edge event=reserved-terminal-path")
 		http.NotFound(response, request)

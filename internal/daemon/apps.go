@@ -27,7 +27,7 @@ type appOrigin interface {
 	Handle(context.Context, apps.Request) (apps.Result, error)
 }
 
-type appEdge interface {
+type appRegistry interface {
 	Exchange(context.Context, apps.Signed) (apps.Signed, error)
 }
 
@@ -44,27 +44,27 @@ func networkOwnerRateExemption(resolve func(context.Context, netip.Addr) ([]stri
 }
 
 type appController struct {
-	origin appOrigin
-	edge   appEdge
+	origin   appOrigin
+	registry appRegistry
 }
 
 func (c *appController) HandleControl(ctx context.Context, q protocol.Control) (protocol.Control, bool, error) {
-	if q.Type != protocol.TypeAppRequest && q.Type != protocol.TypeAppEdge {
+	if q.Type != protocol.TypeAppRequest && q.Type != protocol.TypeAppRegistry {
 		return protocol.Control{}, false, nil
 	}
 	response := protocol.Control{Type: protocol.TypeAppResult, RequestID: q.RequestID}
-	if q.Type == protocol.TypeAppEdge {
-		response.Type = protocol.TypeAppEdge
-		if c.edge == nil {
-			return response, true, errors.New("app: this host is not a public edge")
+	if q.Type == protocol.TypeAppRegistry {
+		response.Type = protocol.TypeAppRegistry
+		if c.registry == nil {
+			return response, true, errors.New("app: this host is not a private app registry")
 		}
 		var signed apps.Signed
 		if err := decodeAppControl(q.App, &signed); err != nil {
 			return response, true, err
 		}
-		reply, err := c.edge.Exchange(ctx, signed)
+		reply, err := c.registry.Exchange(ctx, signed)
 		if err != nil {
-			return response, true, err
+			return response, true, fmt.Errorf("app: registry operation: %w", err)
 		}
 		response.App, err = json.Marshal(reply)
 		return response, true, err
@@ -307,8 +307,8 @@ func appResolver(origins []edge.OriginConfig, resolve edge.ResolveOrigin, pin ed
 // It is a variable only so integration builds can shorten it with the lease.
 var appSyncInterval = 20 * time.Second
 
-func runAppMaintenance(ctx context.Context, ready <-chan struct{}, origin *apps.Origin, public *apps.Edge, reporter *errorReporter) {
-	if origin == nil && public == nil {
+func runAppMaintenance(ctx context.Context, ready <-chan struct{}, origin *apps.Origin, registry *apps.Registry, reporter *errorReporter) {
+	if origin == nil && registry == nil {
 		return
 	}
 	select {
@@ -316,7 +316,7 @@ func runAppMaintenance(ctx context.Context, ready <-chan struct{}, origin *apps.
 		return
 	case <-ready:
 	}
-	syncApps(ctx, origin, public, reporter)
+	syncApps(ctx, origin, registry, reporter)
 	ticker := time.NewTicker(appSyncInterval)
 	defer ticker.Stop()
 	expiryTicker := time.NewTicker(time.Minute)
@@ -328,16 +328,16 @@ func runAppMaintenance(ctx context.Context, ready <-chan struct{}, origin *apps.
 		case <-ticker.C:
 			syncApps(ctx, origin, nil, reporter)
 		case <-expiryTicker.C:
-			syncApps(ctx, nil, public, reporter)
+			syncApps(ctx, nil, registry, reporter)
 		}
 	}
 }
 
-func syncApps(ctx context.Context, origin *apps.Origin, public *apps.Edge, reporter *errorReporter) {
+func syncApps(ctx context.Context, origin *apps.Origin, registry *apps.Registry, reporter *errorReporter) {
 	bounded, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if public != nil {
-		if err := public.Sweep(bounded); err != nil && ctx.Err() == nil {
+	if registry != nil {
+		if err := registry.Sweep(bounded); err != nil && ctx.Err() == nil {
 			reporter.report(fmt.Errorf("daemon: expire temporary apps: %w", err))
 		}
 	}

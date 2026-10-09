@@ -350,7 +350,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return fmt.Errorf("daemon: restore services: %w", err)
 	}
 	var edgeRegistry *edge.Registry
-	var appPublic *apps.Edge
+	var appRegistry *apps.Registry
 	var certificateRuntime certificateRuntime
 	var tunnelForwarder tunnel.Activator
 	var edgeControl controlHandler = disabledEdgeController{}
@@ -392,23 +392,22 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		for _, origin := range publicEdgeConfig.Origins {
 			allowed[origin.Identity] = true
 		}
-		appPublic, err = apps.NewEdge(daemonCtx, apps.EdgeConfig{
+		appRegistry, err = apps.NewRegistry(daemonCtx, apps.RegistryConfig{
 			ViewHostReady: func(host string) bool { return certificateRuntime.viewHostReady(host, opts.now()) },
 			Store:         store, Key: meshPrivateKey, Allowed: allowed, Now: opts.now,
-			Resolve: appResolver(publicEdgeConfig.Origins, edge.TailscaleResolver(discoverAllPeers), waker.pin),
-			Acquire: edgeRegistry.AcquireApp, ClientIP: edgeRegistry.AppClientIP, NetworkOwners: networkOwners,
+			Resolve:  appResolver(publicEdgeConfig.Origins, edge.TailscaleResolver(discoverAllPeers), waker.pin),
+			ClientIP: appClientAddress, NetworkOwners: networkOwners,
 		})
 		if err != nil {
-			return fmt.Errorf("daemon: configure temporary app edge: %w", err)
+			return fmt.Errorf("daemon: configure private app registry: %w", err)
 		}
-		edgeRegistry.SetAppHandler(appPublic)
+		publicHTTPHandler = privateAppsHTTPHandler(appRegistry, edgeRegistry, networkOwners, publicEdgeConfig.TailnetOwnerAccess)
 		tunnelForwarder = controller
 		defer controller.CloseTunnels()
 		stopTunnelShutdown := context.AfterFunc(daemonCtx, controller.CloseTunnels)
 		defer stopTunnelShutdown()
 		publicListenAddress = publicEdgeConfig.ListenAddress
 		tailnetOwnerAccess = publicEdgeConfig.TailnetOwnerAccess
-		publicHTTPHandler = edgeRegistry
 		publicMode = publicEdgeConfig.Mode
 		publicCertificatePin = publicEdgeConfig.CertificateRenewerID
 	}
@@ -502,7 +501,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if appPublisher != nil {
 		appLocal, err = apps.NewOrigin(daemonCtx, apps.OriginConfig{
 			Store: store, Key: meshPrivateKey, EdgeIdentity: publicEdgeTarget.Identity,
-			Exchange: appPublisher.AppExchange, Workers: appWorkers{lifecycle: lifecycle},
+			Exchange: appPublisher.AppRegistryExchange, Workers: appWorkers{lifecycle: lifecycle},
 			DataRoot: appDataRoot(cfg.AppDataRoot, stateDir), Now: opts.now, CheckHosting: checkAppHosting(serviceRegistry),
 		})
 		if err != nil {
@@ -539,8 +538,8 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if appLocal != nil {
 		appControl.origin = appLocal
 	}
-	if appPublic != nil {
-		appControl.edge = appPublic
+	if appRegistry != nil {
+		appControl.registry = appRegistry
 	}
 	server.apps = appControl
 	updates, err := newUpdateController(stateDir, meshHost.ID, meshPrivateKey)
@@ -717,7 +716,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	appsDone := make(chan struct{})
 	go func() {
 		defer close(appsDone)
-		runAppMaintenance(daemonCtx, listenersReady, appLocal, appPublic, reporter)
+		runAppMaintenance(daemonCtx, listenersReady, appLocal, appRegistry, reporter)
 	}()
 	tailnetMonitorDone := make(chan error, 1)
 	// Watch Tailnet addresses whenever a listener depends on them, not only for

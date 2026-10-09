@@ -43,12 +43,12 @@ fi
 grep -Eq -- '--run requires --port' "$TEST_ROOT/invalid.err" || fail "port error unclear: $(cat "$TEST_ROOT/invalid.err")"
 
 if "$MESH" app create local "$TEST_ROOT/source" >"$TEST_ROOT/create.out" 2>"$TEST_ROOT/create.err"; then
-  fail 'app accepted without a configured public edge'
+  fail 'app accepted without a configured private app registry'
 fi
 grep -Eq -- '--public-edge-target' "$TEST_ROOT/create.err" || fail "edge configuration error unclear: $(cat "$TEST_ROOT/create.err")"
 
 if "$MESH" app list local --json >"$TEST_ROOT/list.out" 2>"$TEST_ROOT/list.err"; then
-  fail 'app list accepted without a configured public edge'
+  fail 'app list accepted without a configured private app registry'
 fi
 grep -Eq -- '--public-edge-target' "$TEST_ROOT/list.err" || fail "list error unclear: $(cat "$TEST_ROOT/list.err")"
 
@@ -60,7 +60,7 @@ import sys
 
 database_path, source_path, workload_path = sys.argv[1:]
 with sqlite3.connect(database_path) as database:
-    for table in ('app_state', 'app_names', 'sessions'):
+    for table in ('private_app_state', 'app_names', 'sessions'):
         count = database.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
         if count:
             raise SystemExit(f'failed app creation left {count} records in {table}')
@@ -75,4 +75,4 @@ PY
 kill -TERM "$DAEMON"
 wait "$DAEMON" || fail 'daemon did not stop cleanly'
 DAEMON=""
-echo 'PASS: temporary app CLI requires explicit recipes and an enabled edge without creating workloads'
+echo 'PASS: temporary app CLI requires explicit recipes and an enabled private app registry without creating workloads'

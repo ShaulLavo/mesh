@@ -16,19 +16,14 @@ import (
 	"time"
 )
 
-func createAdmissionApp(t *testing.T, f *appFixture, public bool) Record {
+func createAdmissionApp(t *testing.T, f *appFixture) Record {
 	t.Helper()
 	uploadID, digest := uploadSource(t, f, sourceFixture(t))
 	result, err := f.origin.Handle(context.Background(), Request{Action: "create", Kind: "static", UploadID: uploadID, Digest: digest})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if public {
-		result, err = f.origin.Handle(context.Background(), Request{Action: "public", ID: result.App.ID})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+
 	return *result.App
 }
 
@@ -76,9 +71,9 @@ func fillViewAdmissions(t *testing.T, f *appFixture, app Record) *http.Request {
 
 func TestOriginAdmissionFloodIsolatedFromOtherAppsAndOwner(t *testing.T) {
 	f := newAppFixture(t)
-	flooded := createAdmissionApp(t, f, true)
-	other := createAdmissionApp(t, f, true)
-	private := createAdmissionApp(t, f, false)
+	flooded := createAdmissionApp(t, f)
+	other := createAdmissionApp(t, f)
+	private := createAdmissionApp(t, f)
 	first := fillViewAdmissions(t, f, flooded)
 
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,13 +89,13 @@ func TestOriginAdmissionFloodIsolatedFromOtherAppsAndOwner(t *testing.T) {
 	f.edge.config.Resolve = func(context.Context, string) (netip.AddrPort, error) {
 		return netip.ParseAddrPort(endpoint.Host)
 	}
-	t.Run("unrelated public app", func(t *testing.T) {
+	t.Run("unrelated app", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		if !f.edge.ServeHost(w, httptest.NewRequest(http.MethodGet, URL(other.ID)+"/", nil), other.ID+"."+Domain()) || w.Code != http.StatusOK {
-			t.Fatalf("unrelated public app returned %d, want 200", w.Code)
+		if !f.edge.ServeHost(w, ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(other.ID)+"/", nil)), other.ID+"."+Domain()) || w.Code != http.StatusOK {
+			t.Fatalf("unrelated app returned %d, want 200", w.Code)
 		}
 		if !strings.Contains(w.Body.String(), "original page") {
-			t.Fatal("unrelated public app did not serve its content")
+			t.Fatal("unrelated app did not serve its content")
 		}
 	})
 	t.Run("owner private app", func(t *testing.T) {
@@ -209,7 +204,7 @@ func TestAdmissionCacheBoundedUnderFlood(t *testing.T) {
 
 func TestOriginAdmissionExpiresAtItsOwnDeadline(t *testing.T) {
 	f := newAppFixture(t)
-	app := createAdmissionApp(t, f, true)
+	app := createAdmissionApp(t, f)
 	base := f.now
 	long := signedAdmissionRequest(t, f, app, base.Add(30*time.Second), false)
 	if w := serveAdmission(t, f.origin, long); w.Code != http.StatusOK {
@@ -250,7 +245,7 @@ func TestOriginAdmissionExpiresAtItsOwnDeadline(t *testing.T) {
 
 func TestOriginAdmissionDownloadCapacityDoesNotBlockViews(t *testing.T) {
 	f := newAppFixture(t)
-	app := createAdmissionApp(t, f, true)
+	app := createAdmissionApp(t, f)
 	var first *http.Request
 	for i := range maxDownloadAdmissions {
 		r := signedAdmissionRequest(t, f, app, f.now.Add(30*time.Second), true)
@@ -288,7 +283,7 @@ func TestOriginAdmissionRejectsInvalidRoutesAndLongDeadlinesWithoutCaching(t *te
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newAppFixture(t)
-			app := createAdmissionApp(t, f, true)
+			app := createAdmissionApp(t, f)
 			tc.change(f, &app)
 			w := serveAdmission(t, f.origin, signedAdmissionRequest(t, f, app, f.now.Add(tc.until), false))
 			if w.Code != tc.status {
@@ -303,7 +298,7 @@ func TestOriginAdmissionRejectsInvalidRoutesAndLongDeadlinesWithoutCaching(t *te
 
 func TestOriginAdmissionConcurrentReplay(t *testing.T) {
 	f := newAppFixture(t)
-	app := createAdmissionApp(t, f, true)
+	app := createAdmissionApp(t, f)
 	r := signedAdmissionRequest(t, f, app, f.now.Add(30*time.Second), false)
 	var wg sync.WaitGroup
 	results := make(chan int, 32)

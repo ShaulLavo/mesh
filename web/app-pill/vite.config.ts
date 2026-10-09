@@ -23,7 +23,7 @@ export default defineConfig({
     emptyOutDir: true,
     lib: {
       entry: 'src/index.tsx',
-      name: 'MeshAppPill',
+      name: 'FloatingPill',
       cssFileName: 'pill',
       formats: ['iife'],
       fileName: () => 'pill.js',

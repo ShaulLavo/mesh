@@ -6,7 +6,7 @@ publicly on the internet.
 
 This plan covers ordinary serving: three service types and two front doors.
 The Approved [temporary-app plan](06-temporary-apps.md) adds a separate
-`mesh app` capability for disposable websites and public sharing. D30 narrows
+`mesh app` capability for private disposable websites. D30 narrows
 the older D22 boundary without changing ordinary serving behavior.
 
 Publishing here is rarer than it sounds. The common case is a directory or a

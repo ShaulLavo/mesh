@@ -49,7 +49,7 @@ func (p *proxyTransports) close() {
 		delete(p.entries, key)
 	}
 }
-func (e *Edge) Close() { e.transports.close() }
+func (e *Registry) Close() { e.transports.close() }
 
 type appHandler struct {
 	http.Handler

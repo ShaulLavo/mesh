@@ -1,31 +1,38 @@
 package apps
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-func TestAppProxyNegotiatesSupportedEncodingWithZstdPreferringOrigin(t *testing.T) {
+func TestAppProxyPreservesCompressedHTMLWithoutWidget(t *testing.T) {
 	f := newAppFixture(t)
 	app := createStaticApp(t, f)
-	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: app.ID}); err != nil {
+	var body bytes.Buffer
+	compressed := gzip.NewWriter(&body)
+	if _, err := compressed.Write([]byte("<html><head></head><body>app</body></html>")); err != nil {
+		t.Fatal(err)
+	}
+	if err := compressed.Close(); err != nil {
 		t.Fatal(err)
 	}
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		accepted := r.Header.Get("Accept-Encoding")
-		if accepted != "identity, gzip;q=0.8, br;q=0.8" {
-			t.Errorf("upstream negotiation=%q, want supported encodings with identity preferred", accepted)
+		if accepted := r.Header.Get("Accept-Encoding"); accepted != "gzip, deflate, br, zstd" {
+			t.Errorf("upstream negotiation changed: %q", accepted)
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if strings.Contains(accepted, "zstd") {
-			w.Header().Set("Content-Encoding", "zstd")
-			_, _ = w.Write([]byte{0x28, 0xb5, 0x2f, 0xfd, 0x20, 0x2a, 0x51, 0x01, 0x00})
-		}
-		_, _ = w.Write([]byte("<html><head></head><body>app</body></html>"))
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Length", strconv.Itoa(body.Len()))
+		w.Header().Set("Content-Security-Policy", "default-src 'none'")
+		w.Header().Set("ETag", `"app-html"`)
+		_, _ = w.Write(body.Bytes())
 	}))
 	t.Cleanup(origin.Close)
 	endpoint, err := netip.ParseAddrPort(strings.TrimPrefix(origin.URL, "http://"))
@@ -36,8 +43,13 @@ func TestAppProxyNegotiatesSupportedEncodingWithZstdPreferringOrigin(t *testing.
 	request := httptest.NewRequest(http.MethodGet, URL(app.ID), nil)
 	request.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 	result := httptest.NewRecorder()
-	f.edge.ServeHost(result, request, app.ID+"."+Domain())
-	if result.Code != http.StatusOK || result.Header().Get("Content-Encoding") != "" || !strings.Contains(result.Body.String(), "data-mesh-app=") {
-		t.Fatalf("zstd-preferring origin lost pill: status=%d, encoding=%q", result.Code, result.Header().Get("Content-Encoding"))
+	f.edge.ServeHost(result, ownerRequest(f, request), app.ID+"."+Domain())
+	if result.Code != http.StatusOK || !bytes.Equal(result.Body.Bytes(), body.Bytes()) {
+		t.Fatalf("compressed HTML changed: status=%d body=%q", result.Code, result.Body.Bytes())
+	}
+	for key, want := range map[string]string{"Content-Encoding": "gzip", "Content-Length": strconv.Itoa(body.Len()), "Content-Security-Policy": "default-src 'none'", "ETag": `"app-html"`} {
+		if got := result.Header().Get(key); got != want {
+			t.Errorf("%s changed: got %q, want %q", key, got, want)
+		}
 	}
 }

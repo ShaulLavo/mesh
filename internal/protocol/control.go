@@ -17,7 +17,7 @@ import (
 const (
 	TypeAppRequest         = "app.request"
 	TypeAppResult          = "app.result"
-	TypeAppEdge            = "app.edge"
+	TypeAppRegistry        = "app.registry"
 	TypeAttach             = "session.attach"
 	TypeAttachDetached     = "session.attach-detached"
 	TypeAttached           = "session.attached"

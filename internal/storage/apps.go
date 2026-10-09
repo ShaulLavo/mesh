@@ -13,7 +13,7 @@ import (
 )
 
 const maximumAppStateBytes = 16 << 20
-const saveAppStateSQL = `INSERT INTO app_state (key, data) VALUES (?, ?)
+const saveAppStateSQL = `INSERT INTO private_app_state (key, data) VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET data = excluded.data`
 
 // LoadAppState returns nil for an absent role state. App domain code owns the JSON schema.
@@ -22,7 +22,7 @@ func (s *Store) LoadAppState(ctx context.Context, key string) ([]byte, error) {
 		return nil, err
 	}
 	var data []byte
-	err := s.db.QueryRowContext(ctx, "SELECT data FROM app_state WHERE key = ?", key).Scan(&data)
+	err := s.db.QueryRowContext(ctx, "SELECT data FROM private_app_state WHERE key = ?", key).Scan(&data)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

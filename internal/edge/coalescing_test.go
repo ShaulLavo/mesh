@@ -18,18 +18,27 @@ import (
 )
 
 func TestCoalescedHTTP2ConnectionRejectsSecondHostBeforeDispatch(t *testing.T) {
-	registry := testRegistry(t, ModeDirectTLS, time.Now())
+	now := time.Now()
+	registry := testRegistry(t, ModeDirectTLS, now)
 	t.Cleanup(registry.Close)
 	var calls atomic.Int32
-	registry.SetAppHandler(appHandlerFunc(func(w http.ResponseWriter, r *http.Request, name string) bool {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if name == "ce8z.mesh.test" {
+		if r.Header.Get("X-Forwarded-Host") == "ce8z.mesh.test" {
 			http.NotFound(w, r)
-			return true
+			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-		return true
 	}))
+	t.Cleanup(backend.Close)
+	originID, _ := testIdentity(t)
+	endpoint := testHTTPServerEndpoint(t, backend)
+	if err := registry.Replace([]PublishedRoute{
+		{Route: Route{PublicName: "saha.mesh.test", ServiceName: "app"}, Origin: testResolvedOrigin(originID, endpoint, now)},
+		{Route: Route{PublicName: "ce8z.mesh.test", ServiceName: "app"}, Origin: testResolvedOrigin(originID, endpoint, now)},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewUnstartedServer(registry)
 	server.EnableHTTP2 = true
 	server.TLS = &tls.Config{Certificates: []tls.Certificate{coalescingCertificate(t)}}
@@ -61,7 +70,7 @@ func TestCoalescedHTTP2ConnectionRejectsSecondHostBeforeDispatch(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		r, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/", nil)
+		r, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/app", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

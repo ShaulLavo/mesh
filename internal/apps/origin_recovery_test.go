@@ -184,10 +184,7 @@ func TestInterruptedUpdatePreservesNewRevision(t *testing.T) {
 	f := newAppFixture(t)
 	original := createStaticApp(t, f)
 	oldRoot := f.origin.state.Apps[original.ID].Root
-	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: original.ID}); err != nil {
-		t.Fatal(err)
-	}
-	_, inflight, release, err := f.edge.admit(httptest.NewRequest(http.MethodGet, URL(original.ID), nil), original.ID)
+	_, inflight, release, err := f.edge.admit(ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(original.ID), nil)), original.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

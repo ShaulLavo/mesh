@@ -23,7 +23,7 @@ func TestStoredReservedAppRestartAndCleanup(t *testing.T) {
 	for _, action := range []string{"delete", "expiry"} {
 		t.Run(action, func(t *testing.T) {
 			f := newAppFixture(t)
-			record := Record{ID: "mesh", Owner: identityFor(f.ownerKey), Kind: "server", Status: "active", Visibility: "private", Cleanup: "pending", Generation: 1, ExpiresAt: f.now.Add(time.Hour), LeaseUntil: f.now.Add(LeaseTTL)}
+			record := Record{ID: "mesh", Owner: identityFor(f.ownerKey), Kind: "server", Status: "active", Cleanup: "pending", Generation: 1, ExpiresAt: f.now.Add(time.Hour), LeaseUntil: f.now.Add(LeaseTTL)}
 			workspace := filepath.Join(f.root, "apps", "mesh", "source")
 			if err := os.MkdirAll(workspace, 0700); err != nil {
 				t.Fatal(err)
@@ -87,7 +87,7 @@ func TestStoredReservedAppRestartAndCleanup(t *testing.T) {
 				t.Fatal("new allocation still allows reserved ID")
 			}
 			for range 16 {
-				next := &edgeMutation{state: edgeState{Apps: map[string]Record{}, Owners: map[string]ownerState{}}}
+				next := &registryMutation{state: registryState{Apps: map[string]Record{}, Owners: map[string]ownerState{}}}
 				allocated, err := f.edge.allocate(context.Background(), next, record.Owner, "static")
 				if err != nil || allocated.App == nil || !ValidID(allocated.App.ID) {
 					t.Fatalf("new allocation accepted a reserved ID: %#v %v", allocated, err)
@@ -143,7 +143,7 @@ func TestCanonicalBogusTicketHasUniformReadOnlyWork(t *testing.T) {
 		f.edge.mu.Lock()
 		f.edge.state.Apps = map[string]Record{}
 		if state != "unknown" {
-			record := Record{ID: "7k3d", Status: "active", Visibility: "private", ExpiresAt: f.now.Add(time.Hour)}
+			record := Record{ID: "7k3d", Status: "active", ExpiresAt: f.now.Add(time.Hour)}
 			if state == "expired" {
 				record.Status = "expired"
 			}

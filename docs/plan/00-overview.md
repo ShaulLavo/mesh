@@ -162,7 +162,9 @@ knowledge: providers still own their conversations, tools, and authentication.
 
 Temporary websites are now Approved as a separate `mesh app` capability. See
 [the execution plan](06-temporary-apps.md) and D30 for short URLs, owner-only
-creation, public sharing, a floating pill, and deletion after 24 quiet hours.
+access through verified Tailnet HTTPS and deletion after 24 quiet hours.
+Sharing controls and injected widgets are removed; the widget source remains
+available for reuse.
 That supersedes D22's exclusion of disposable previews. Ordinary Mesh serving
 still exposes existing directories and ports, with its current lifecycle.
 A general build and deployment pipeline remains outside this work.

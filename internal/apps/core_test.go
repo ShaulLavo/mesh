@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/shaul/mesh/internal/webauth"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -141,7 +142,7 @@ func (w *fakeWorkers) Processes(_ context.Context, session string) ([]int, error
 }
 
 type appFixture struct {
-	edge                        *Edge
+	edge                        *Registry
 	origin                      *Origin
 	edgeStore, originStore      *memoryAppStore
 	workers                     *fakeWorkers
@@ -173,9 +174,9 @@ func newAppFixture(t *testing.T) *appFixture {
 	t.Cleanup(origin.Close)
 	return f
 }
-func (f *appFixture) openEdge(t *testing.T) *Edge {
+func (f *appFixture) openEdge(t *testing.T) *Registry {
 	t.Helper()
-	e, err := NewEdge(context.Background(), EdgeConfig{ViewHostReady: func(string) bool { return true }, Store: f.edgeStore, Key: f.edgeKey, Allowed: map[string]bool{identityFor(f.ownerKey): true, identityFor(f.otherKey): true}, Resolve: func(context.Context, string) (netip.AddrPort, error) {
+	e, err := NewRegistry(context.Background(), RegistryConfig{ViewHostReady: func(string) bool { return true }, Store: f.edgeStore, Key: f.edgeKey, Allowed: map[string]bool{identityFor(f.ownerKey): true, identityFor(f.otherKey): true}, Resolve: func(context.Context, string) (netip.AddrPort, error) {
 		return netip.MustParseAddrPort("127.0.0.1:9090"), nil
 	}, Now: func() time.Time { return f.now }})
 	if err != nil {
@@ -202,7 +203,7 @@ func (f *appFixture) exchange(t *testing.T, s Signed) (Result, error) {
 	if err := response.Verify("mesh-app/response/v1", s.Owner, identityFor(f.edgeKey), f.now); err != nil {
 		t.Fatal(err)
 	}
-	var reply edgeReply
+	var reply registryReply
 	if err := json.Unmarshal(response.Body, &reply); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +231,7 @@ func TestSignedAppAllocationSurvivesLostAcknowledgementAndRestart(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.App == nil || first.App.Visibility != "private" || !first.App.ExpiresAt.Equal(f.now.Add(IdleTTL)) {
+	if first.App == nil || !first.App.ExpiresAt.Equal(f.now.Add(IdleTTL)) {
 		t.Fatalf("unsafe initial app: %#v", first.App)
 	}
 	f.edge = f.openEdge(t)
@@ -245,7 +246,7 @@ func TestSignedAppAllocationSurvivesLostAcknowledgementAndRestart(t *testing.T) 
 	if len(listed.Apps) != 1 {
 		t.Fatalf("allocated %d apps", len(listed.Apps))
 	}
-	conflict, err := Sign("mesh-app/request/v1", identityFor(f.edgeKey), request.Sequence, Request{Action: "public", ID: first.App.ID}, f.ownerKey, f.now)
+	conflict, err := Sign("mesh-app/request/v1", identityFor(f.edgeKey), request.Sequence, Request{Action: "renew", ID: first.App.ID}, f.ownerKey, f.now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,33 +290,25 @@ func TestAppTrafficAndExactDeadline(t *testing.T) {
 	}
 }
 
-func TestOtherAuthorizedHostCannotManagePublicOrPrivateApp(t *testing.T) {
+func TestOtherAuthorizedHostCannotManageApp(t *testing.T) {
 	f := newAppFixture(t)
 	app := f.operation(t, Request{Action: "allocate", Kind: "static"}).App
-	sequence := uint64(0)
-	for _, visibility := range []string{"private", "public"} {
-		f.operation(t, Request{Action: visibility, ID: app.ID})
-		before, _, err := f.edge.lookup(context.Background(), app.ID, false)
+	before, _, err := f.edge.lookup(context.Background(), app.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for sequence, action := range []string{"renew", "delete", "cleanup", "activate", "inspect"} {
+		request, err := Sign("mesh-app/request/v1", identityFor(f.edgeKey), uint64(sequence+1), Request{Action: action, ID: app.ID}, f.otherKey, f.now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, action := range []string{"public", "private", "renew", "delete", "cleanup", "activate", "inspect"} {
-			sequence++
-			request, err := Sign("mesh-app/request/v1", identityFor(f.edgeKey), sequence, Request{Action: action, ID: app.ID}, f.otherKey, f.now)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := f.exchange(t, request); err == nil {
-				t.Fatalf("other host authorized %s for %s app", action, visibility)
-			}
+		if _, err := f.exchange(t, request); err == nil {
+			t.Fatalf("other host authorized %s", action)
 		}
-		after, _, err := f.edge.lookup(context.Background(), app.ID, false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(before, after) {
-			t.Fatal("unauthorized operations changed app")
-		}
+	}
+	after, _, err := f.edge.lookup(context.Background(), app.ID, false)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatal("unauthorized operations changed app")
 	}
 }
 
@@ -379,13 +372,12 @@ func TestOriginPartitionStopsOwnedWorkersAtLeaseDeadline(t *testing.T) {
 	}
 }
 
-func TestOwnerRenewalPreservesIdentityAndVisibility(t *testing.T) {
+func TestOwnerRenewalPreservesIdentity(t *testing.T) {
 	f := newAppFixture(t)
 	app := f.operation(t, Request{Action: "allocate", Kind: "static"}).App
-	f.operation(t, Request{Action: "public", ID: app.ID})
 	f.now = f.now.Add(time.Hour)
 	renewed := f.operation(t, Request{Action: "renew", ID: app.ID}).App
-	if renewed.ID != app.ID || renewed.Owner != app.Owner || renewed.Visibility != "public" || !renewed.ExpiresAt.Equal(f.now.Add(IdleTTL)) {
+	if renewed.ID != app.ID || renewed.Owner != app.Owner || !renewed.ExpiresAt.Equal(f.now.Add(IdleTTL)) {
 		t.Fatalf("renewed app %#v", renewed)
 	}
 }
@@ -442,7 +434,7 @@ func TestExpiryDeletesManagedCopyAndLocalDataPreservingOtherAppAndSource(t *test
 		t.Fatal(err)
 	}
 	app := created.App
-	if app.Visibility != "private" || !app.Ready {
+	if !app.Ready {
 		t.Fatalf("created app not private/ready: %#v", app)
 	}
 	workspace := f.origin.state.Apps[app.ID].Root
@@ -542,7 +534,7 @@ func TestRejectedUpdatePreservesWorkingApp(t *testing.T) {
 	}
 }
 
-func TestHTTPPrivateGatePublicVisitorAndAnonymousManagement(t *testing.T) {
+func TestHTTPPrivateGateAndAnonymousManagement(t *testing.T) {
 	f := newAppFixture(t)
 	uploadID, digest := uploadSource(t, f, sourceFixture(t))
 	created, err := f.origin.Handle(context.Background(), Request{Action: "create", Kind: "static", UploadID: uploadID, Digest: digest})
@@ -591,15 +583,12 @@ func TestHTTPPrivateGatePublicVisitorAndAnonymousManagement(t *testing.T) {
 	if err != nil || !current.ExpiresAt.Equal(before) || forwarded.Load() != 0 {
 		t.Fatalf("rejected visits touched origin/deadline: %#v, forwarded=%d", current, forwarded.Load())
 	}
-	if _, err := f.origin.Handle(context.Background(), Request{Action: "public", ID: id}); err != nil {
-		t.Fatal(err)
-	}
 	if err := f.origin.Sync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	result := httptest.NewRecorder()
-	if !f.edge.ServeHost(result, httptest.NewRequest(http.MethodGet, URL(id)+"/", nil), host) || result.Code != 200 || !strings.Contains(result.Body.String(), "original page") || !strings.Contains(result.Body.String(), "data-mesh-app") {
-		t.Fatalf("public app unavailable: %d %s", result.Code, result.Body.String())
+	if !f.edge.ServeHost(result, ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(id)+"/", nil)), host) || result.Code != 200 || result.Body.String() != "original page" {
+		t.Fatalf("owner app unavailable: %d %s", result.Code, result.Body.String())
 	}
 	for _, action := range []string{"private", "public", "renew", "delete"} {
 		body := url.Values{"id": {id}, "action": {action}, "csrf": {"forged"}}.Encode()
@@ -613,14 +602,15 @@ func TestHTTPPrivateGatePublicVisitorAndAnonymousManagement(t *testing.T) {
 		}
 	}
 	current, _, err = f.edge.lookup(context.Background(), id, false)
-	if err != nil || current.Visibility != "public" || current.Status != "active" {
+	if err != nil || current.Status != "active" {
 		t.Fatal("anonymous visitor mutated app")
 	}
 	result = httptest.NewRecorder()
 	f.edge.ServeHost(result, httptest.NewRequest(http.MethodGet, ManagementOrigin()+"/frame?id="+id, nil), ManagementHost())
-	if result.Code != 200 || !strings.Contains(result.Body.String(), "Pair browser") || strings.Contains(result.Body.String(), "Make private") || strings.Contains(result.Body.String(), "action=delete") {
-		t.Fatalf("visitor frame exposed owner controls: %d %s", result.Code, result.Body.String())
+	if result.Code != http.StatusNotFound {
+		t.Fatalf("retired widget frame still served: %d", result.Code)
 	}
+
 }
 
 func TestAmbiguousCreateAllocationRecoversAcrossOriginRestart(t *testing.T) {
@@ -660,4 +650,8 @@ func TestAmbiguousCreateAllocationRecoversAcrossOriginRestart(t *testing.T) {
 	if len(listed.Apps) != 1 || listed.Apps[0].ID != recovered.App.ID || !recovered.App.Ready {
 		t.Fatalf("ambiguous retry duplicated app: %#v", listed.Apps)
 	}
+}
+
+func ownerRequest(f *appFixture, request *http.Request) *http.Request {
+	return request.WithContext(context.WithValue(request.Context(), networkSessionKey{}, webauth.Session{Owners: []string{identityFor(f.ownerKey)}}))
 }

@@ -14,12 +14,10 @@
 .dot{width:14px;height:14px;border-radius:50%;background:#a5b4fc;box-shadow:0 2px 12px #0009,0 0 0 4px var(--panel-bg);transition:box-shadow 220ms var(--ease-drawer),transform 160ms cubic-bezier(.23,1,.32,1)}
 .shell:not(.closed) .dot{box-shadow:0 0 0 #0000,0 0 0 4px var(--panel-bg)}
 .dot-target:active .dot{transform:scale(.9);transition-duration:100ms}
-.action{display:grid;place-items:center;flex:none;width:44px;height:44px;border-radius:50%;color:#a7a7a7;cursor:pointer;touch-action:manipulation;transition:color 100ms ease}.action svg{width:22px;height:22px;transition:transform 100ms var(--ease-drawer)}.action.copied{color:#86efac}
+.action{display:grid;place-items:center;flex:none;width:44px;height:44px;border-radius:50%;color:#a7a7a7;cursor:pointer;touch-action:manipulation;transition:color 100ms ease}.action svg{width:22px;height:22px;transition:transform 100ms var(--ease-drawer)}
 .action:active svg{transform:scale(.96);transition-duration:60ms}
-.auth-frame{display:none!important}.safe{position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+.safe{position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
 button:focus-visible,a:focus-visible{outline:2px solid #a5b4fc;outline-offset:-6px;border-radius:50%}
-.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.copy-error{position:absolute;bottom:calc(100% + 8px);right:0;background:var(--panel-bg);border-radius:8px;padding:8px 10px;font:12px/1.4 system-ui;white-space:nowrap;color:#fff;box-shadow:var(--panel-shadow)}
 @media(hover:hover) and (pointer:fine){.action:hover{color:#fff}.action:hover svg{transform:scale(1.05)}.dot-target:hover .dot{transform:scale(1.15)}.dot-target:hover:active .dot{transform:scale(1.05)}}
 @media(prefers-reduced-motion:reduce){.shell,.shell.snapping:not(.resizing):not(.keyboard),.shell *{transition:none!important;animation:none!important}
 .morph{clip-path:none!important}.closed .morph{opacity:0}.animated .morph{transition:opacity 150ms ease,visibility 0s!important}.animated.closed .morph{transition:opacity 150ms ease,visibility 0s linear 150ms!important}
