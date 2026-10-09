@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,9 @@ import (
 func TestServeBoundListenersClosesPreconnectsDuringShutdown(t *testing.T) {
 	for _, surface := range []string{"tailnet", "tailnet-partial", "https", "https-handshake", "app-proxy", "app-tls", "app-tls-handshake"} {
 		t.Run(surface, func(t *testing.T) {
+			if strings.HasPrefix(surface, "app-") {
+				requireAppRegistryProxy(t)
+			}
 			unixListener, _ := newTCPListener(t, "127.0.0.1:0")
 			listener, _ := newTCPListener(t, "127.0.0.1:0")
 			observed := &shutdownReadListener{Listener: listener, reading: make(chan struct{}), closing: make(chan struct{}), tlsReady: make(chan struct{})}

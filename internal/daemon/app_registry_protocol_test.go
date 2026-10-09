@@ -13,6 +13,7 @@ import (
 )
 
 func TestAppRegistryTLSOffersHTTP1ForSeparateHostConnections(t *testing.T) {
+	requireAppRegistryProxy(t)
 	unixListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

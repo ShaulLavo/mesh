@@ -8,12 +8,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"testing"
 	"time"
 )
 
 func appRegistryTestTLS(t *testing.T) *tls.Config {
 	t.Helper()
+	requireAppRegistryProxy(t)
 	certPEM, keyPEM := daemonTestNamedCertificate(t, 17, time.Now(), "*.mesh.test")
 	certificate, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
@@ -70,4 +72,11 @@ func appRegistryTestClientTLS(serverTLS *tls.Config) (*tls.Config, error) {
 	roots := x509.NewCertPool()
 	roots.AddCert(certificate)
 	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: "app.mesh.test"}, nil
+}
+
+func requireAppRegistryProxy(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("private registry HTTPS requires Linux socket UID authentication")
+	}
 }
