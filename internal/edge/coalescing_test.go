@@ -9,13 +9,12 @@ import (
 	"crypto/x509"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"golang.org/x/net/http2"
 )
 
 func TestCoalescedHTTP2ConnectionRejectsSecondHostBeforeDispatch(t *testing.T) {
@@ -38,27 +37,27 @@ func TestCoalescedHTTP2ConnectionRejectsSecondHostBeforeDispatch(t *testing.T) {
 	t.Cleanup(server.Close)
 	roots := x509.NewCertPool()
 	roots.AddCert(server.Certificate())
-	transport := &http2.Transport{}
-	connect := func(host string) *http2.ClientConn {
+	protocols := new(http.Protocols)
+	protocols.SetHTTP2(true)
+	transport := &http.Transport{
+		Protocols:       protocols,
+		TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return new(net.Dialer).DialContext(ctx, network, server.Listener.Addr().String())
+		},
+	}
+	connect := func(host string) *http.ClientConn {
 		t.Helper()
-		connection, err := tls.Dial("tcp", server.Listener.Addr().String(), &tls.Config{
-			RootCAs: roots, ServerName: host, NextProtos: []string{"h2"}, MinVersion: tls.VersionTLS12,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = connection.Close() })
-		if connection.ConnectionState().NegotiatedProtocol != "h2" {
-			t.Fatal("test connection did not negotiate HTTP/2")
-		}
-		client, err := transport.NewClientConn(connection)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		client, err := transport.NewClientConn(ctx, "https", host+":443")
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = client.Close() })
 		return client
 	}
-	request := func(client *http2.ClientConn, host string, want int, wantCalls int32) {
+	request := func(client *http.ClientConn, host string, want int, wantCalls int32) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

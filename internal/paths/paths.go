@@ -28,6 +28,7 @@ func StateDir() (string, error) {
 		return "", fmt.Errorf("resolve state dir %s: %w", base, err)
 	}
 	base = absolute
+	// #nosec G703 -- The operator selects this state root through local environment configuration.
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return "", fmt.Errorf("create state dir: %w", err)
 	}
