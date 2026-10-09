@@ -489,6 +489,8 @@ func Run(cfg Config) (int, error) {
 	// xpty assigns the slave to the child's stdin, so Ctty 0 names it, and
 	// Setctty requires Setsid because only a session leader may acquire one.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	// Complete build identity before the child can await worker registration.
+	build := buildPointer()
 	if err := startSession(pty, cmd); err != nil {
 		return 0, fmt.Errorf("worker: start %s: %w", cfg.Command[0], err)
 	}
@@ -513,7 +515,7 @@ func Run(cfg Config) (int, error) {
 	}
 
 	meta := Meta{
-		Build:         buildPointer(),
+		Build:         build,
 		ID:            cfg.ID,
 		PID:           cmd.Process.Pid,
 		Command:       cfg.Command,
