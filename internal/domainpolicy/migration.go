@@ -37,19 +37,24 @@ func initializeDeploymentPolicy(path, stateDir string, deploymentRequested, pers
 	if err != nil {
 		return err
 	}
-	if domain == "" && !present && !deploymentRequested {
+	if domain == "" && !present {
 		present, err = existingInstallation(path, stateDir)
 		if err != nil {
 			return err
 		}
-		if !present {
+		if !present && !deploymentRequested {
 			return nil
 		}
 	}
-	if domain == "" {
-		domain = legacyDeploymentDomain
+	// Only a fresh deployment request chooses the current namespace.
+	// Existing installations retain their inferred legacy policy.
+	policy := Policy{Primary: "sprockt.dev"}
+	if present {
+		if domain == "" {
+			domain = legacyDeploymentDomain
+		}
+		policy = Policy{Primary: domain, LegacyCertificateDomain: domain}
 	}
-	policy := Policy{Primary: domain, LegacyCertificateDomain: domain}
 	if err := policy.Validate(); err != nil {
 		return err
 	}

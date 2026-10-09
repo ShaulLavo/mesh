@@ -1,5 +1,10 @@
 # T11 — Serving core
 
+> Updated scope, 2026-10-08: ordinary serving is Tailnet-only on `sprockt.dev`.
+> Public-name fields, public-directory confirmation, edge publication and their
+> old verification checks below are historical and superseded by the public-feature
+> removal. Public hosting belongs to Brine on `shaulavo.dev`.
+
 **Status:** complete · **Blocked by:** nothing (T04 landed) · **Owns:** `internal/serve/`
 
 ## Goal

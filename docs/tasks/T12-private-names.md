@@ -1,21 +1,21 @@
-# T12 — Private names and certificates for `mesh.shaulavo.dev`
+# T12 — Private names and certificates for `mesh.sprockt.dev`
 
 **Status:** complete · **Blocked by:** nothing (T11 and T06 landed) · **Owns:**
 `internal/dnsname/`
 
 ## Goal
 
-`https://pc.mesh.shaulavo.dev/blog` works from a tailnet device with a
+`https://pc.mesh.sprockt.dev/blog` works from a tailnet device with a
 publicly trusted certificate. The request travels directly to the origin. An
 internet client can resolve the name to a tailnet address but cannot route to
 it.
 
 ## Architecture
 
-Cloudflare is authoritative for `shaulavo.dev`. One zone-scoped DNS Write API
+Cloudflare is authoritative for `sprockt.dev`. One zone-scoped DNS Write API
 token lives on the always-on Pi. Other origins never receive that token. The Pi
 reconciles an unproxied A record for each configured origin, obtains one
-`*.mesh.shaulavo.dev` certificate from Let's Encrypt with DNS-01, and sends the
+`*.mesh.sprockt.dev` certificate from Let's Encrypt with DNS-01, and sends the
 certificate to identity-pinned origin daemons.
 
 The DNS reconciler accepts only IPv4 addresses in Tailscale's
@@ -51,11 +51,11 @@ Each origin pins the Pi's Mesh Ed25519 identity. Distribution first calls
 The Pi then signs the v3 domain-separated transcript over length-prefixed
 profile, environment, target identity, signer identity, private name,
 certificate bytes, and private-key bytes. A `private-origin` private name is
-either empty or exactly one canonical label below `mesh.shaulavo.dev`; the Pi
+either empty or exactly one canonical label below `mesh.sprockt.dev`; the Pi
 sets it only after the corresponding A-record reconciliation succeeds. A
 `public-edge` bundle must carry an empty private name. The origin bounds all
 fields before cryptographic work, verifies both identity pins, checks the key
-and `*.mesh.shaulavo.dev` SAN, and rejects a bundle with a strictly earlier
+and `*.mesh.sprockt.dev` SAN, and rejects a bundle with a strictly earlier
 expiry. An installer accepts only its configured profile, so a `public-edge`
 bundle cannot enter a private-origin slot. Legacy v1 and v2 transcripts are not
 accepted. An exact replay is a no-op. A different certificate with the same
@@ -142,28 +142,40 @@ processes and are not signaled or reaped by this restart.
 
 ## Pi configuration
 
-Create one Cloudflare API token with DNS Write permission restricted to the
-`shaulavo.dev` zone. Store it only on the Pi as a regular 0600 file. The file
-contains the token and one optional trailing newline, with no other whitespace.
+Configure the deployment policy and explicit renewal domains **before selecting
+DNS credentials or starting reconciliation**. Changing a token or zone ID does
+not migrate the deployment domain.
 
-For the `shaul` service user:
+1. Back up the renewer's and every origin's configuration and certificate state.
+   Inspect `domains.json` beside `hosts.json` for each service user; honor
+   `MESH_CONFIG_DIR` or `XDG_CONFIG_HOME` when set. A fresh deployment uses a
+   mode-0600 policy containing `{"primary":"sprockt.dev"}` on the renewer and
+   every origin.
+2. For an existing deployment, preserve its current primary and
+   `legacyCertificateDomain`; add `sprockt.dev` as an alias on the renewer,
+   origins and any gateway. Keep existing aliases. Existing policy can retain
+   the legacy domain even when only an address book or catalog exists. Follow
+   [the safe overlap rollout](../deployment-domains.md#roll-out-without-losing-remote-access)
+   and [certificate-slot rules](../deployment-domains.md#certificate-slots).
+   Restart affected processes to load the expanded policy. Change the primary
+   only after destination DNS, certificates and both sets of URLs verify.
+3. Give each renewal file an explicit `domain` matching its zone. Set the
+   existing renewal file's domain to its preserved domain **before changing
+   the policy's primary**. Keep its zone ID, token, renewal loop and legacy
+   certificate paths unchanged. Prepare a separate destination renewal file
+   as shown below. During overlap, add the existing renewal file's absolute
+   path to the new file's `additionalConfigs`; do not introduce a cycle.
 
-```bash
-install -d -m 0700 /home/shaul/.config/mesh
-install -m 0600 /dev/null /home/shaul/.config/mesh/cloudflare.token
-read -rsp 'Cloudflare API token: ' mesh_cloudflare_token
-printf '\n'
-printf '%s\n' "$mesh_cloudflare_token" > /home/shaul/.config/mesh/cloudflare.token
-unset mesh_cloudflare_token
-chmod 0600 /home/shaul/.config/mesh/cloudflare.token
-```
-
-Create `/home/shaul/.config/mesh/private-names-live.json` with mode 0600:
+Prepare `/home/shaul/.config/mesh/private-names-sprockt-live.json` with mode 0600.
+Its explicit domain is required here even if the policy already uses that
+primary. Replace the zone placeholder with the ID for `sprockt.dev`:
 
 ```json
 {
-  "zoneId": "<CLOUDFLARE_ZONE_ID>",
-  "tokenFile": "/home/shaul/.config/mesh/cloudflare.token",
+  "domain": "sprockt.dev",
+  "zoneDomain": "sprockt.dev",
+  "zoneId": "<SPROCKT_DEV_CLOUDFLARE_ZONE_ID>",
+  "tokenFile": "/home/shaul/.config/mesh/cloudflare-sprockt.token",
   "acmeEmail": "<ACME_ACCOUNT_EMAIL>",
   "directoryUrl": "https://acme-v02.api.letsencrypt.org/directory",
   "acceptTerms": true,
@@ -186,6 +198,34 @@ Create `/home/shaul/.config/mesh/private-names-live.json` with mode 0600:
   ]
 }
 ```
+
+After policy and renewal domains are configured, create a Cloudflare API token
+with DNS Write permission restricted to `sprockt.dev`. Store it
+only on the Pi in the destination-specific regular 0600 file below. Keep the old
+zone's credentials and files during overlap. If this destination token file
+already exists, inspect its ownership and configuration before replacing it.
+The token file contains the token and one optional trailing newline, with no
+other whitespace.
+
+For the `shaul` service user:
+
+```bash
+install -d -m 0700 /home/shaul/.config/mesh
+install -m 0600 /dev/null /home/shaul/.config/mesh/cloudflare-sprockt.token
+read -rsp 'Cloudflare API token for sprockt.dev: ' mesh_cloudflare_token
+printf '\n'
+printf '%s\n' "$mesh_cloudflare_token" > /home/shaul/.config/mesh/cloudflare-sprockt.token
+unset mesh_cloudflare_token
+chmod 0600 /home/shaul/.config/mesh/cloudflare-sprockt.token
+```
+
+Verify that the configured zone ID names `sprockt.dev` before enabling renewal.
+`zoneDomain` declares that the credentials belong to the explicit renewal domain;
+Mesh checks the declaration locally and records the domain/zone-ID pair for that
+renewal-config path. A later domain or zone-ID change needs a matching explicit
+`zoneDomain` to rebind. See [renewal credential bindings](../deployment-domains.md#renewal-credential-bindings)
+for the first-upgrade limitation. Do not change the existing zone's token or zone
+ID to establish the destination.
 
 The two accepted `directoryUrl` values are the exact Let's Encrypt production
 and staging directory URLs. The runtime derives the state environment from that
@@ -220,7 +260,7 @@ mesh daemon --tailnet-port=7337 --websocket-path=/mesh --https-port=8443 --certi
 The Pi uses the same origin options and adds its unattended configuration:
 
 ```bash
-mesh daemon --tailnet-port=7337 --websocket-path=/mesh --https-port=8443 --certificate-renewer-id=<PI_MESH_IDENTITY> --tailscale-serve --private-names-config=/home/shaul/.config/mesh/private-names-live.json
+mesh daemon --tailnet-port=7337 --websocket-path=/mesh --https-port=8443 --certificate-renewer-id=<PI_MESH_IDENTITY> --tailscale-serve --private-names-config=/home/shaul/.config/mesh/private-names-sprockt-live.json
 ```
 
 For the installed systemd user service, preserve T08's unit and add a drop-in
@@ -233,7 +273,7 @@ ExecStart=
 ExecStart=%h/.local/bin/mesh daemon --tailnet-port=7337 --websocket-path=/mesh --https-port=8443 --certificate-renewer-id=<PI_MESH_IDENTITY> --tailscale-serve
 ```
 
-Add `--private-names-config=/home/shaul/.config/mesh/private-names-live.json` to
+Add `--private-names-config=/home/shaul/.config/mesh/private-names-sprockt-live.json` to
 the Pi's `ExecStart`. Then run:
 
 ```bash
@@ -284,7 +324,7 @@ renewal lock serializes them. `--staging` overrides the config's directory URL
 with the exact staging URL and uses only staging state and origin slots:
 
 ```bash
-mesh private-names reconcile --config /home/shaul/.config/mesh/private-names-live.json --staging --force --accept-tos
+mesh private-names reconcile --config /home/shaul/.config/mesh/private-names-sprockt-live.json --staging --force --accept-tos
 ```
 
 Confirm every configured origin received staging state under
@@ -295,13 +335,13 @@ certificate returned by the HTTPS listener, which reads only
 After staging succeeds, issue and distribute production:
 
 ```bash
-mesh private-names reconcile --config /home/shaul/.config/mesh/private-names-live.json --live --force --accept-tos
+mesh private-names reconcile --config /home/shaul/.config/mesh/private-names-sprockt-live.json --live --force --accept-tos
 ```
 
 From a tailnet device, verify the standard private URL and certificate:
 
 ```bash
-curl -v https://pc.mesh.shaulavo.dev/blog
+curl -v https://pc.mesh.sprockt.dev/blog
 ```
 
 Verify the A record is unproxied, carries comment `mesh:private-origin`, and
@@ -323,7 +363,7 @@ the tailnet, but it is still topology information. Split DNS would conceal it
 at the cost of client-specific resolver configuration. The direct, zero-client-
 configuration design is the deliberate choice here.
 
-Every origin receives the same private key for `*.mesh.shaulavo.dev`.
+Every origin receives the same private key for `*.mesh.sprockt.dev`.
 Compromise of any one origin can therefore impersonate every private hostname
 until the wildcard certificate is revoked and rotated. This blast radius is
 accepted to keep one ACME order and renewal path while ensuring the Cloudflare

@@ -108,7 +108,7 @@ uses this exact key selection:
 
 ```bash
 ssh -p 2222 -o IdentitiesOnly=yes \
-  -i "${MESH_STATE_DIR}/identity.key" host.mesh.shaulavo.dev hello
+  -i "${MESH_STATE_DIR}/identity.key" host.mesh.sprockt.dev hello
 ```
 
 The script rejects an unrelated key and a client with no key. It compares the

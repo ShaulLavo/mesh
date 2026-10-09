@@ -6,7 +6,18 @@ Owner decision: "We can move the mesh to sprockt." Mesh names move from `shaulav
 
 This plan executes the domain part of [#241](https://github.com/ShaulLavo/mesh/issues/241), retained in [11-session-contract-and-boundaries.md](11-session-contract-and-boundaries.md). It preserves all six session invariants in `CLAUDE.md`.
 
-## Execution state
+## Current policy, 2026-10-08
+
+Mesh is Tailnet-only on `sprockt.dev`. Public temporary apps, public serving and
+VPS-edge reverse tunnels are removed. Public hosting belongs to Brine on
+`shaulavo.dev`; Mesh must preserve that zone’s website records and services.
+The owner’s current private service URLs are `https://fregat.sprockt.dev/`,
+`https://ai.sprockt.dev/` and `https://comfy.sprockt.dev/`. Their old machine-path
+aliases are retired. The dated inspection and original cutover sequence below
+remain evidence of the starting state, not an inventory of today’s deployment.
+Use [deployment-domains.md](../deployment-domains.md) for current configuration.
+
+## Execution state — baseline recorded 2026-10-08
 
 - [x] Inventory source, local configuration, authoritative DNS, deployed certificates and active routes.
 - [x] Test existing Cloudflare token visibility without exposing the token.
@@ -17,11 +28,11 @@ This plan executes the domain part of [#241](https://github.com/ShaulLavo/mesh/i
 - [ ] Back up and update owner configuration and operating instructions.
 - [ ] Verify owner-machine callers, then retire only the old Mesh records.
 
-No live configuration, DNS records, certificates, binaries or services have changed. On 2026-10-08, the existing token returned the active `shaulavo.dev` zone from `GET /client/v4/zones?name=shaulavo.dev`. The same request for `sprockt.dev` returned `success: true` with an empty result. Shared nameservers do not establish token access to both zones.
+At the baseline inspection, no live configuration, DNS records, certificates, binaries or services had changed. On 2026-10-08, the existing token returned the active `shaulavo.dev` zone from `GET /client/v4/zones?name=shaulavo.dev`. The same request for `sprockt.dev` returned `success: true` with an empty result. Shared nameservers do not establish token access to both zones.
 
 Required credential: a Cloudflare API token with Zone Read and DNS Edit for `sprockt.dev`. Retain access to `shaulavo.dev` during overlap, either on the same token or through a separate zone-specific token. Verify the destination zone ID and read its records before writing anything. Do not commit the token, account details or credential file contents.
 
-## Inventory
+## Inventory — baseline recorded 2026-10-08
 
 Source inspection used Mesh main `ae78899508ace2bf37be48101b04fda5c7275e17`. Operator paths below identify the existing deployment; they must not become defaults in repository commands.
 
@@ -96,15 +107,19 @@ Installed private certificate SAN is `*.mesh.shaulavo.dev`, valid until 2026-12-
 
 Inspect destination DNS before deciding which records to add. Preserve unmanaged destination records. DNS-only tailnet A records are the observed deployment model; this decision does not authorize public exposure of private services.
 
-## Configuration contract
+## Configuration contract — current names, private access
 
-Model deployment names as validated policy, separate from host/session identity. The configuration supplies a primary public zone, its derived private namespace, and explicit additional accepted zones during migration. Credential configuration pairs each managed zone name with its zone ID and token-file reference. Defaults come from operator configuration, with personal domains removed from core source. An unconfigured machine must still create and attach native terminal sessions.
+Model deployment names as validated policy, separate from host/session identity. The configuration supplies a primary deployment zone, its derived private namespace, and explicit additional accepted zones during migration. Credential configuration pairs each managed zone name with its zone ID and token-file reference. Defaults come from operator configuration, with personal domains removed from core source. An unconfigured machine must still create and attach native terminal sessions.
 
-Reject uppercase, wildcard, URL, IP, empty-label and malformed zone inputs at the configuration boundary. Derive public app names, management names, private origin names, DNS challenges and certificate requirements from that same policy. Keep public one-label validation, reserved labels and private tailnet address restrictions. Avoid mutable global naming changes after listeners start.
+Reject uppercase, wildcard, URL, IP, empty-label and malformed zone inputs at the configuration boundary. Derive private app names, management names, private origin names, DNS challenges and certificate requirements from that same policy. Keep one-label app validation, reserved labels and private tailnet address restrictions. Avoid mutable global naming changes after listeners start.
 
 Do not deploy a primary-domain-only patch against this live state. The existing certificate slots and persisted private name support one domain; merely replacing a constant would invalidate old certificates, pinned private names and app host checks. Parallel acceptance must be implemented and verified first. Name pinning may accept a second domain for the same origin only through explicit migration policy; unrelated renames still fail.
 
-## Cutover order and checks
+## Original cutover order and checks — baseline recorded 2026-10-08
+
+The machine-path URLs and public-edge terminology in this original checklist
+are superseded. Current service checks use the short private roots above.
+Retained app routing components do not grant public access.
 
 1. Obtain and verify destination zone access. Capture destination DNS inventory. Leave both DNS zones untouched if credentials are missing or insufficient.
 2. Implement the configuration contract in an isolated worktree. Add failing tests before implementation for a non-personal domain. Cover DNS records, private-name pinning, certificate SAN/profile validation, URL generation, app admissions, CSP, redirects, parent cookies and gateway SNI dispatch. Run focused race tests, `go vet`, and relevant integration scripts through host heavy-job admission. Use fixture DNS/ACME, with no live-provider calls in tests.
@@ -119,10 +134,10 @@ Do not deploy a primary-domain-only patch against this live state. The existing 
 11. Retire old Mesh records only after every required new route and caller passes. Match each exact name, type, address and ownership comment against the recorded inventory. Re-list records immediately before deletion. Stop if ownership or content differs. Never select the apex or records added by the website lane. Keep config backups, migration evidence and old certificates until rollback is no longer needed.
 12. Remove old-domain listener acceptance and renewal after retirement is confirmed. Delete obsolete migration APIs/config acceptance as one source change, with retained-primary regression tests. Update current guides, leaving historical evidence intact.
 
-## Rollback and completion
+## Rollback and completion — original baseline obligations
 
 At each live step, failure means stop advancing. Preserve or restore the old listener, certificate and gateway path before changing any caller. Restore only this lane's backed-up configuration values, never another session's later changes. Destination records can remain unused while old names serve traffic. Do not delete the old DNS to force adoption.
 
-The intended Fregat instance URL is `https://omarchy.mesh.sprockt.dev/platform/`. It is unverified and must not be advertised as live yet. The current verified Fregat URL remains `https://omarchy.mesh.shaulavo.dev/platform/`.
+At the baseline inspection, the intended Fregat URL was `https://omarchy.mesh.sprockt.dev/platform/` and the verified URL was `https://omarchy.mesh.shaulavo.dev/platform/`. Both machine-path entry points are now retired; the current private URL is `https://fregat.sprockt.dev/`.
 
 Completion requires a per-route old/new verification matrix, TLS SANs, DNS ownership evidence, preserved terminal IDs, backup manifest, caller checks and the exact retired records. Until those checks pass, all four inventoried old Mesh A records remain. The `shaulavo.dev` apex stays permanently with the website lane.

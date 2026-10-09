@@ -48,7 +48,7 @@ with `mesh serve label :5173 'Fregat dev' --host pc`. The label is stored on the
 serving host and survives later publications. Changing it keeps the route, ports,
 and running process.
 
-To reach an app on your current machine from outside the tailnet, reserve a
-hostname with `mesh serve claim vps blog.new.example`, then connect a named
-SSH reverse forward. See [Reach a local app through the public edge](reverse-tunnels.md)
-for the exact identity and SSH command. Disconnecting returns the hostname to 404.
+Mesh services and apps are Tailnet-only. Connect the viewing device to Tailscale
+and use the private HTTPS URL. Public serving and VPS-edge reverse tunnels were
+removed on 2026-10-08; public hosting belongs to Brine on `shaulavo.dev`.
+The [reverse-tunnel guide](reverse-tunnels.md) is retained as historical evidence.

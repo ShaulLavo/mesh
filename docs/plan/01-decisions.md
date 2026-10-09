@@ -114,6 +114,12 @@ is lost. That is the right trade: the alternative is a session that never ends.
 
 ## D13 — Two names: `mesh.shaulavo.dev` is private, `shaulavo.dev` is public
 
+> Superseding owner decision, 2026-10-08: Mesh is tailnet-only on `sprockt.dev`.
+> Public temporary apps, public serving and VPS-edge reverse tunnels are removed;
+> public hosting belongs to Brine on `shaulavo.dev`. This supersedes the domain and
+> public-exposure parts of D13–D16, D20 and D30 below. Their original text is kept
+> as decision history. Current app behavior is in [06-temporary-apps.md](06-temporary-apps.md).
+
 `mesh.shaulavo.dev` resolves to tailnet addresses and is reachable only from the
 tailnet. Public services are published under `shaulavo.dev` through the VPS edge,
 and only when explicitly named.

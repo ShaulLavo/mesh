@@ -1,5 +1,9 @@
 # T18 — Reverse tunnels through the edge
 
+> Superseded, 2026-10-08: Mesh public serving and VPS-edge reverse tunnels are
+> removed. Mesh is tailnet-only on `sprockt.dev`; public hosting belongs to Brine
+> on `shaulavo.dev`. The specification below is historical, not operating guidance.
+
 **Status:** done · **Blocked by:** nothing · **Owns:**
 `internal/tunnel/`, `internal/cli/serve_claim.go`, `internal/edge/tunnel_claim.go`
 

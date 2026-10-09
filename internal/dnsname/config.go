@@ -41,6 +41,7 @@ type PrivateNamesConfig struct {
 	Domain            string
 	AdditionalConfigs []string
 	ZoneID            string
+	ZoneDomain        string // Explicitly binds credentials to Domain when they change.
 	TokenFile         string
 	ACMEEmail         string
 	DirectoryURL      string
@@ -55,6 +56,7 @@ type privateNamesConfigFile struct {
 	Domain            string            `json:"domain"`
 	AdditionalConfigs []string          `json:"additionalConfigs,omitempty"`
 	ZoneID            string            `json:"zoneId"`
+	ZoneDomain        string            `json:"zoneDomain,omitempty"`
 	TokenFile         string            `json:"tokenFile"`
 	ACMEEmail         string            `json:"acmeEmail"`
 	DirectoryURL      string            `json:"directoryUrl"`
@@ -103,6 +105,9 @@ func LoadPrivateNamesConfig(configPath string) (PrivateNamesConfig, error) {
 	}
 	if !slices.Contains(domainpolicy.Domains(), raw.Domain) {
 		return PrivateNamesConfig{}, errors.New("dnsname: renewal domain is not configured")
+	}
+	if raw.ZoneDomain != "" && raw.ZoneDomain != raw.Domain {
+		return PrivateNamesConfig{}, fmt.Errorf("dnsname: zoneDomain %q does not match renewal domain %q; restore the matching domain and credentials in %s", raw.ZoneDomain, raw.Domain, configPath)
 	}
 	if len(raw.AdditionalConfigs) > 7 {
 		return PrivateNamesConfig{}, errors.New("dnsname: too many additional renewal configurations")
@@ -154,7 +159,7 @@ func LoadPrivateNamesConfig(configPath string) (PrivateNamesConfig, error) {
 		publicEdge = &copyTarget
 	}
 	return PrivateNamesConfig{
-		Domain: raw.Domain, AdditionalConfigs: slices.Clone(raw.AdditionalConfigs), ZoneID: raw.ZoneID, TokenFile: raw.TokenFile, ACMEEmail: raw.ACMEEmail, DirectoryURL: raw.DirectoryURL, Environment: environment,
+		Domain: raw.Domain, AdditionalConfigs: slices.Clone(raw.AdditionalConfigs), ZoneID: raw.ZoneID, ZoneDomain: raw.ZoneDomain, TokenFile: raw.TokenFile, ACMEEmail: raw.ACMEEmail, DirectoryURL: raw.DirectoryURL, Environment: environment,
 		AcceptTerms: raw.AcceptTerms, Interval: interval, Origins: append([]PrivateOrigin(nil), raw.Origins...), PublicEdge: publicEdge,
 	}, nil
 }
@@ -249,6 +254,9 @@ func newPrivateNamesRuntime(configPath string, options PrivateNamesRuntimeOption
 
 	runtime, err := configuredPrivateNamesRuntime(config, options)
 	if err != nil {
+		return nil, err
+	}
+	if err := bindRenewalCredentials(absolute, options.StateDir, config); err != nil {
 		return nil, err
 	}
 	for _, path := range config.AdditionalConfigs {

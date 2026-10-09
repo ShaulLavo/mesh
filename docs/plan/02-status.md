@@ -1,5 +1,10 @@
 # Status
 
+> Scope update, 2026-10-08: Mesh is Tailnet-only on `sprockt.dev`. Public temporary
+> apps, public serving and VPS-edge reverse tunnels are removed; public hosting
+> belongs to Brine on `shaulavo.dev`. Public-edge/T13/T18 descriptions and checks
+> below record former shipped behavior, not current supported features.
+
 Updated 2026-10-09 for private temporary apps and dormant reusable widget source. Existing completion
 and verification dates remain unchanged.
 

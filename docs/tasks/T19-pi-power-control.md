@@ -1,5 +1,9 @@
 # T19: Wake and sleep inhibition
 
+> Scope update, 2026-10-08: private wake and power controls remain in Mesh.
+> Public-edge adapters and public-service wake checks below are historical;
+> public serving and VPS-edge tunnels are removed. Mesh is Tailnet-only.
+
 Status: complete. Verified 2026-09-05.
 
 ## Contract

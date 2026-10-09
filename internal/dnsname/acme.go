@@ -417,7 +417,7 @@ func (i *Issuer) persistAccount(account *acme.Account) error {
 		return fmt.Errorf("dnsname: encode ACME account state: %w", err)
 	}
 	contents = append(contents, '\n')
-	if err := writeAtomicFile(filepath.Join(i.config.StateDir, "account.json"), contents, 0o600); err != nil {
+	if err := writeAtomicFile(filepath.Join(i.config.StateDir, "account.json"), contents); err != nil {
 		return fmt.Errorf("dnsname: persist ACME account: %w", err)
 	}
 	return nil

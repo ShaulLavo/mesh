@@ -1,5 +1,10 @@
 # T14 — `mesh serve`
 
+> Updated scope, 2026-10-08: ordinary serving is Tailnet-only on `sprockt.dev`.
+> Public-name fields, public-directory confirmation, edge publication and their
+> old verification checks below are historical and superseded by the public-feature
+> removal. Public hosting belongs to Brine on `shaulavo.dev`.
+
 **Status:** done · **Depends on:** T11, T12, T13, T07 · **Primary owner:** `internal/cli/`
 
 ## User interface
@@ -8,15 +13,13 @@
 mesh serve pc ./site --at /blog
 mesh serve pc 3000 --at /api
 mesh serve pi /mnt/data --at /files --files
-mesh serve pc ./site --at /blog --public blog.shaulavo.dev
 mesh serve ls                         # `serve list` is an alias
 mesh unserve /blog
 mesh unserve /blog --host pc         # resolve duplicate route names
 ```
 
 A numeric target is a proxy port. A directory is static unless `--files` is
-set. The CLI never infers a public hostname. The user must type the complete
-one-label `*.shaulavo.dev` name.
+set. Services are available only on the Tailnet.
 
 `mesh serve ls` prints `ROUTE`, `HOST`, `KIND`, `TARGET`, `SCOPE`, `HEALTH`, and
 `URL`. It queries adopted hosts concurrently under one hard deadline, replaces
@@ -31,7 +34,7 @@ display-only and never withholds a route from the public edge. A
 and a live row means the host is already awake.
 
 The preferred private URL uses the canonical private name authenticated through
-T12, for example `https://pc.mesh.shaulavo.dev/blog`. The Pi adds that name to
+T12, for example `https://pc.mesh.sprockt.dev/blog`. The Pi adds that name to
 the signed live `private-origin` certificate install only after its A record is
 reconciled. The origin persists the name beside the valid live certificate and
 returns it from `host.info` only after Tailscale Serve has configured tailnet
@@ -45,7 +48,7 @@ The cached service snapshot retains the last authenticated private name for
 offline listing. A private name is stable for the adopted identity; an operator
 must reset its private-name state and re-adopt it before an intentional rename.
 
-## Public-directory boundary
+## Public-directory boundary — historical, superseded 2026-10-08
 
 The origin daemon resolves relative targets against its own user's home
 directory. It returns the canonical path and a bounded file count through

@@ -1,5 +1,10 @@
 # Deployment domains
 
+Mesh is Tailnet-only on `sprockt.dev`. The owner removed public temporary apps,
+public serving and VPS-edge tunnels on 2026-10-08. Public hosting belongs to
+Brine on `shaulavo.dev`. Old `public-edge` profile and option names below are
+compatibility identifiers for certificate/routing state, not internet exposure.
+
 Mesh reads `domains.json` beside `hosts.json` before the interactive picker and
 ordinary client commands start.
 `MESH_CONFIG_DIR` selects that directory. Otherwise Mesh uses
@@ -29,10 +34,11 @@ policy is missing, startup stops with a recovery error. Restore `domains.json`
 from the deployment configuration backup before starting ordinary commands.
 `mesh update` remains available during recovery.
 
-An existing catalog or address book, or a command that enables deployment names,
-uses the pre-policy release domain when certificate and name state are absent.
-That historical default is `shaulavo.dev`. Configure `domains.json` to choose
-another domain for a new deployment.
+An existing catalog or address book uses the pre-policy release domain when
+certificate and name state are absent. That compatibility default is
+`shaulavo.dev`. Existing private-name and certificate state takes precedence.
+A fresh installation that requests deployment names defaults to `sprockt.dev`
+without a legacy certificate domain. Configure `domains.json` for another domain.
 
 A fresh native-only installation works with no policy. Detached workers, agent
 helpers, native device enrollment, version inspection, and update helpers stay
@@ -75,6 +81,7 @@ Each private-name renewal file may set `domain` and `additionalConfigs`:
 ```json
 {
   "domain": "new.example",
+  "zoneDomain": "new.example",
   "additionalConfigs": ["/absolute/path/private-names-old.json"],
   "zoneId": "NEW_ZONE_ID",
   "tokenFile": "/absolute/path/new-zone.token",
@@ -93,7 +100,15 @@ Each private-name renewal file may set `domain` and `additionalConfigs`:
 }
 ```
 
-The second file uses `domain: "old.example"` and that zone's ID and token path.
+The second file uses `domain: "old.example"`, `zoneDomain: "old.example"`, and
+that zone's ID and token path.
+Configure accepted domains on the renewer and every recipient before selecting
+new-zone credentials. During migration, set an explicit `domain` in both renewal
+files, including the existing one, before changing the policy's primary. An
+omitted domain inherits the primary; changing credentials alone does not change
+that domain. Preserve the old renewal file and token during overlap, and use a
+separate destination token path. Keep `legacyCertificateDomain` unchanged until
+the old domain is safely retired.
 Use the existing `publicEdge` recipient field in each file when distributing
 public certificates too. The example's identity and zone placeholders must be
 replaced before running it.
@@ -104,6 +119,69 @@ zones. Daemon renewal runs the loops concurrently. The combined graph permits
 at most eight files, one per domain, and rejects repeated paths and cycles.
 Tokens remain separate exact-0600 files. No live DNS or ACME operation runs
 until the configured renewal command or daemon starts it.
+
+## Renewal credential bindings
+
+Set `zoneDomain` in new renewal configurations to the domain served by their
+Cloudflare zone ID and token. It is an optional flat JSON string, separate from
+`domain`. Mesh requires it to match the effective renewal domain: the explicit
+`domain`, or the policy primary when `domain` is omitted. Mesh performs this
+check locally; it makes no provider zone-discovery calls. DNS-Write-only tokens
+remain supported. The declaration is the operator's confirmation of the zone,
+not proof that Cloudflare maps a given zone ID to that name.
+
+On the first renewal runtime setup, Mesh saves the effective domain and
+zone ID for that absolute renewal-config path. Bindings live below
+`<StateDir>/private-names/zone-bindings`, in mode-0600 files within a mode-0700
+directory. Subsequent changes to the domain or `zoneId` are refused unless an
+explicit `zoneDomain` matches the effective domain and authorizes rebinding.
+A token change alone keeps the same domain and zone ID. Preserve this state
+with deployment backups; a new config path has no earlier binding.
+
+Readers and writers use the same per-binding cross-process lock. Mesh resolves
+symlinked state-directory ancestors to the physical binding directory before
+locking and publication. Publication syncs a temporary file in that directory,
+renames it into place, then syncs the physical directory and its ancestors
+through the filesystem root before setup succeeds. Existing identical bindings also pass file and directory sync barriers
+under that lock, repairing an earlier interrupted publication. A sync error
+stops renewal setup; another initializer cannot accept a visible file while its
+publisher is still completing the durability barriers. Keep the stable lock
+file in place across retries and process restarts.
+
+**First-upgrade limitation:** a legacy configuration with no `zoneDomain` and no
+saved binding is accepted and records its current pair. If its zone ID was
+already swapped before the first runtime setup, Mesh cannot detect that mismatch
+without provider discovery. Inspect existing domain/zone pairs and set matching explicit
+`domain` and `zoneDomain` values before changing credentials. Keep the old zone's
+renewal and token in their existing files during overlap; create a separate
+configuration and credentials for the destination.
+
+### Recovering damaged binding state
+
+A corrupt or unreadable binding stops renewal setup, including explicit
+rebinding. Restore the indicated binding file from a known-good deployment
+backup with its original owner and mode `0600`.
+
+If no usable backup exists, recovery is an explicit operator action:
+
+1. Stop every renewal process sharing this state directory. Preserve the current
+   configuration and the damaged file named by the error. Keep lock files in
+   place; deleting a lock file can let processes acquire different locks.
+2. Independently verify the intended DNS zone name, its zone ID and the token's
+   scope. Check that the renewal domain is accepted by the deployment policy.
+   Keep old aliases and `legacyCertificateDomain` during migration. Do not infer
+   the intended zone from the damaged binding or an inherited primary alone.
+3. Set explicit matching `domain` and `zoneDomain` in the renewal configuration,
+   with the verified zone ID and token. Archive only the indicated damaged
+   binding outside `zone-bindings`; keep the archive for diagnosis. Do not
+   remove the binding directory, other bindings, lock files or certificate state.
+4. Start the configured renewer and confirm setup succeeds before using the
+   resulting DNS records or certificates. Keep the corrected configuration and
+   newly recorded binding in the deployment backup.
+
+Archiving a binding removes its history. This procedure requires independent
+zone verification and the explicit declaration; it is not an automatic retry
+or a way to bypass an unexplained credential mismatch.
 
 ## Private service hosts
 
