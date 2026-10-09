@@ -64,7 +64,7 @@ func TestAppCreateUploadsCallerSourceWithOffsetsAndDigest(t *testing.T) {
 				t.Fatalf("invalid creation: %#v", r)
 			}
 			created = true
-			return appspkg.Result{App: &appspkg.Record{ID: "7k3d", Owner: "owner", Kind: "server", Visibility: "private", Status: "active", ExpiresAt: time.Now().Add(24 * time.Hour)}}, nil
+			return appspkg.Result{App: &appspkg.Record{ID: "7k3d", Owner: "owner", Kind: "server", Status: "active", ExpiresAt: time.Now().Add(24 * time.Hour)}}, nil
 		default:
 			t.Fatalf("unexpected %s", r.Action)
 			return appspkg.Result{}, nil
@@ -83,7 +83,7 @@ func TestAppCreateUploadsCallerSourceWithOffsetsAndDigest(t *testing.T) {
 	if err = json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.URL != "https://7k3d.mesh.test" || result.App.Visibility != "private" {
+	if result.URL != "https://7k3d.mesh.test" {
 		t.Fatalf("output: %s", out)
 	}
 	gz, err := gzip.NewReader(bytes.NewReader(archive))
@@ -141,8 +141,6 @@ func TestAppCLIManagementAndUpdateMapping(t *testing.T) {
 		code    string
 		browser string
 	}{
-		{[]string{"app", "public", "pc", "7k3d"}, "public", "7k3d", "", ""},
-		{[]string{"app", "private", "pc", "7k3d"}, "private", "7k3d", "", ""},
 		{[]string{"app", "renew", "pc", "7k3d"}, "renew", "7k3d", "", ""},
 		{[]string{"app", "delete", "pc", "7k3d"}, "delete", "7k3d", "", ""},
 		{[]string{"app", "info", "pc", "7k3d"}, "inspect", "7k3d", "", ""},
@@ -169,6 +167,20 @@ func TestAppCLIManagementAndUpdateMapping(t *testing.T) {
 				t.Fatalf("command: called=%t err=%v", called, err)
 			}
 		})
+	}
+}
+
+func TestAppCLIRejectsRemovedSharingCommands(t *testing.T) {
+	prepareCommandEnvironment(t)
+	dependencies := Dependencies{AppRequest: func(context.Context, string, appspkg.Request) (appspkg.Result, error) {
+		t.Fatal("removed sharing command contacted a host")
+		return appspkg.Result{}, nil
+	}}
+	for _, operation := range []string{"public", "private"} {
+		_, _, err := executeCommand(t, dependencies, "app", operation, "pc", "7k3d")
+		if err == nil || !strings.Contains(err.Error(), "unknown command") {
+			t.Fatalf("removed %s command: %v", operation, err)
+		}
 	}
 }
 func TestAppDownloadIsAtomicAndDoesNotOverwrite(t *testing.T) {

@@ -38,15 +38,11 @@ func testAppFileUpload(t *testing.T, operation, image string) {
 	t.Setenv("TMP", staging)
 	t.Setenv("TEMP", staging)
 	var archive []byte
-	visibility := "private"
-	if operation == "update" {
-		visibility = "public"
-	}
 	deps := Dependencies{AppRequest: func(_ context.Context, host string, request appspkg.Request) (appspkg.Result, error) {
 		if host != "pc" {
 			t.Fatalf("wrong host: %s", host)
 		}
-		return appFileRequest(t, operation, visibility, request, &archive)
+		return appFileRequest(t, operation, request, &archive)
 	}}
 	args := []string{"app", operation, "pc"}
 	if operation == "update" {
@@ -64,8 +60,8 @@ func testAppFileUpload(t *testing.T, operation, image string) {
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.URL != appspkg.URL("7k3d") || result.App.Visibility != visibility {
-		t.Fatalf("changed URL or visibility: %s", out)
+	if result.URL != appspkg.URL("7k3d") {
+		t.Fatalf("changed URL: %s", out)
 	}
 	files := appFileArchive(t, archive)
 	if !strings.Contains(files["index.html"], `<img src="0-image.png"`) || files["0-image.png"] != "image" {
@@ -77,7 +73,7 @@ func testAppFileUpload(t *testing.T, operation, image string) {
 	}
 }
 
-func appFileRequest(t *testing.T, operation, visibility string, request appspkg.Request, archive *[]byte) (appspkg.Result, error) {
+func appFileRequest(t *testing.T, operation string, request appspkg.Request, archive *[]byte) (appspkg.Result, error) {
 	t.Helper()
 	switch request.Action {
 	case "upload.begin":
@@ -89,7 +85,7 @@ func appFileRequest(t *testing.T, operation, visibility string, request appspkg.
 		if request.Kind != "static" || (operation == "update" && request.ID != "7k3d") {
 			t.Fatalf("wrong request: %#v", request)
 		}
-		return appspkg.Result{App: &appspkg.Record{ID: "7k3d", Visibility: visibility, ExpiresAt: time.Now().Add(24 * time.Hour)}}, nil
+		return appspkg.Result{App: &appspkg.Record{ID: "7k3d", ExpiresAt: time.Now().Add(24 * time.Hour)}}, nil
 	default:
 		t.Fatalf("unexpected operation: %s", request.Action)
 		return appspkg.Result{}, nil

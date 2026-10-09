@@ -1,6 +1,10 @@
 # Mesh app pill
 
-The Solid control mounts in an app's Shadow DOM. It is a floating dot; tapping the
+The widget source and browser fixtures are retained for reuse in another project.
+Mesh does not inject this control into temporary apps or serve its widget assets.
+The Go transformer remains available here as preserved code and test fixtures.
+
+The standalone Solid control mounts in a Shadow DOM. It is a floating dot; tapping the
 dot grows a pill of actions out of it, and tapping the dot again folds them away.
 `src/dock.ts` owns placement. The open pill is a row of 44px touch targets, the
 dot's and one per action. One rule puts the dot's center 38px from the safe edge
@@ -8,8 +12,8 @@ dot's and one per action. One rule puts the dot's center 38px from the safe edge
 the pill's end cap and the actions toward the middle of the edge. Every path uses it: load, drag, flick,
 viewport change, keyboard and toggle. `src/drag.ts` adapts React Grab's drag
 gesture. The
-browser build embeds `pill.js` and `pill.css` in the Go binary; installed Mesh
-hosts need neither Node nor Playwright.
+browser build writes `pill.js` and `pill.css` for the preserved Go transformer.
+Runtime app routing does not load this bundle or expose the management frame.
 
 Use Node 24 or newer and the pinned pnpm version from `packageManager`:
 
@@ -33,8 +37,9 @@ and reduced motion. It checks the collapsed dot, expansion, mouse dragging,
 synthetic touch dragging, keyboard docking, stored position, management-frame
 status messages, and rejection of messages from an incorrect origin or window.
 
-The frame is a labelled mock. Browser approval, private view tickets, ownership,
-CSRF, signed origin forwarding, and lifecycle recovery have separate Go tests:
+The frame is a labelled mock. Its messages exercise the retained control's
+protocol for reuse; Mesh no longer serves that frame or its widget routes.
+Private app admission and lifecycle recovery have separate Go tests:
 
 ```sh
 go test -race ./internal/apps ./internal/apppill ./internal/webauth

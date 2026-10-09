@@ -35,7 +35,7 @@ type appOutput struct {
 
 func (a *application) appCommand() *cobra.Command {
 	flags := &appOutput{sshPort: uint(bootstrap.DefaultSSHPort)}
-	cmd := &cobra.Command{Use: "app", Short: "Create and manage disposable websites", Example: "  mesh app create pc ./site\n  mesh app create local ./backend --run 'bun run start' --port 3000\n  mesh app public pc 7k3d\n  mesh app browser approve pc CODE"}
+	cmd := &cobra.Command{Use: "app", Short: "Create and manage disposable websites", Example: "  mesh app create pc ./site\n  mesh app create local ./backend --run 'bun run start' --port 3000\n  mesh app browser approve pc CODE"}
 	cmd.PersistentPreRunE = func(command *cobra.Command, args []string) error {
 		if root := command.Root(); root.PersistentPreRunE != nil {
 			if err := root.PersistentPreRunE(command, args); err != nil {
@@ -50,7 +50,7 @@ func (a *application) appCommand() *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&flags.json, "json", false, "print machine-readable results")
 	cmd.PersistentFlags().UintVar(&flags.sshPort, "ssh-port", uint(bootstrap.DefaultSSHPort), "Mesh SSH port for remote app hosts")
 	cmd.AddCommand(a.appCreateCommand(flags, false), a.appCreateCommand(flags, true), a.appListCommand(flags), a.appDownloadCommand(flags))
-	for _, operation := range []string{"inspect", "public", "private", "renew", "delete"} {
+	for _, operation := range []string{"inspect", "renew", "delete"} {
 		cmd.AddCommand(a.appActionCommand(flags, operation))
 	}
 	browser := &cobra.Command{Use: "browser", Short: "Approve and revoke owner browsers"}
@@ -394,9 +394,9 @@ func writeAppResult(w io.Writer, host string, result appspkg.Result, asJSON bool
 
 	if result.Apps != nil {
 		table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(table, "ID\tVISIBILITY\tSTATE\tEXPIRES\tURL")
+		_, _ = fmt.Fprintln(table, "ID\tSTATE\tEXPIRES\tURL")
 		for _, app := range result.Apps {
-			_, _ = fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\n", mask.Value("app", app.ID), app.Visibility, app.Status, app.ExpiresAt.Format("2006-01-02 15:04 MST"), mask.Value("url", appspkg.URL(app.ID)))
+			_, _ = fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", mask.Value("app", app.ID), app.Status, app.ExpiresAt.Format("2006-01-02 15:04 MST"), mask.Value("url", appspkg.URL(app.ID)))
 		}
 		return table.Flush()
 	}
@@ -470,7 +470,7 @@ func writeOneApp(w io.Writer, host string, app appspkg.Record, masks ...*privacy
 			return fmt.Errorf("show private app ID: %w", err)
 		}
 	}
-	_, err := fmt.Fprintf(w, "%s\nhost: %s\nowner: %s\nvisibility: %s\nstate: %s\nexpires: %s\n", mask.Value("url", appspkg.URL(app.ID)), SafeTerminalText(mask.Value("host", host)), SafeTerminalText(mask.Value("owner", app.Owner)), SafeTerminalText(app.Visibility), SafeTerminalText(app.Status), app.ExpiresAt.Format("2006-01-02 15:04:05 MST"))
+	_, err := fmt.Fprintf(w, "%s\nhost: %s\nowner: %s\nstate: %s\nexpires: %s\n", mask.Value("url", appspkg.URL(app.ID)), SafeTerminalText(mask.Value("host", host)), SafeTerminalText(mask.Value("owner", app.Owner)), SafeTerminalText(app.Status), app.ExpiresAt.Format("2006-01-02 15:04:05 MST"))
 	return err
 }
 
