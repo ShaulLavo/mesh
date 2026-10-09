@@ -366,6 +366,10 @@ catalogs, picker actions, and remote controls.
 
 ## Rules for anyone picking up a task
 
+Approved follow-up: [14: keep the fleet current](14-fleet-auto-updates.md).
+The October 9 Pi incident was repaired live. Automatic enrollment, release
+tracking, verified catch-up and deployment configuration delivery remain open.
+
 - Read `CLAUDE.md` and `docs/plan/01-decisions.md` first.
 - All integration scripts must still pass. Add one if you add behaviour worth
   protecting.

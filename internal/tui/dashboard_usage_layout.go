@@ -140,7 +140,7 @@ func (m dashboardModel) usageAwaitingTraffic() bool {
 }
 
 func (m dashboardModel) usageFooter() string {
-	cadence := "readings every 2s · lists update on change · history 2m · AI bars 0–100% used · │ time elapsed"
+	cadence := "readings every 2s · lists update on change · history 2m · AI bars 0–100% left · │ time remaining"
 	if m.width < 140 || m.height < 40 {
 		cadence = "readings every 2s · AI used/left · history 2m"
 		if m.usageAwaitingTraffic() {

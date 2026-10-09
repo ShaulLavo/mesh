@@ -145,7 +145,14 @@ shows the short account name, plan, observed routing badge where available, and
 `seen` / `stale` age. The two visible windows per account are **5h** and **Weekly**:
 
 1. Window label, `% used`, `% left`, and `resets <countdown>`.
-2. The full 28-cell used-share meter, status dot and `OK` / `high` / `exhausted`.
+2. The 28-cell remaining-allowance meter, status dot and `OK` / `high` / `exhausted`.
+
+The owner's October 9 change makes the meter behave like a battery: 0% used
+shows a full bar, 50% used shows half a bar, and 100% used shows an empty bar.
+The pace guide shows the fraction of the window's time remaining and moves
+left as the reset approaches. The footer names both quantities. Unknown quota
+stays unknown, and passed resets keep the previous reading until new evidence
+arrives. Provider snapshots continue to report `usedPercent`.
 
 The normal sample shows Claude Max `shaul9191` at 20% / 66%, Codex Pro
 `shaul9191` at 42% / 54% with `last served`, and Codex Pro `shaul.lavochkin`
@@ -181,12 +188,12 @@ the approved PNGs specify the 160×45 wall, not unverified smaller layouts.
 Each window is a ratio against its own allowance. Use the existing 28-cell `▪`
 meter; percentages are never summed into a pool.
 
-- OLED: green below 75%, amber at ≥75%, red when exhausted. Use each theme's
+- OLED: green below 75% used, amber at ≥75% used, red when exhausted. Use each theme's
   existing `good`, `cached` and `failure` semantic roles, not account colors.
   The status dot and `OK`, `high`, `exhausted` words duplicate color encoding.
 - Numbers and status words use the existing text role; only meter marks and
   status dots use status colors. Tracks and graph fills stay recessive.
-- The pale `│` is elapsed share: `100 × (1 − (reset − now)/windowLength)`,
+- The pale `│` is time remaining: `100 × (reset − now)/windowLength`,
   clamped to 0–100. It is an even-use guide, not predicted request capacity.
   Hide it for stale, exhausted, reset-passed or unknown-length observations.
 - `seen 2m` ages the actual upstream observation. `stale 18m` preserves the

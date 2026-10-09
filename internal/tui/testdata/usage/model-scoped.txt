@@ -1,5 +1,5 @@
 ┌AI plans · 1 accounts · passive ─────────────────── ┐
 │ Codex · weekly-sample · Pro             checked 0s │
 │ Weekly  66% used · 34% left · resets 7h            │
-│ ▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪│▪ ● OK          read 2m │
+│ ▪│▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪▪ ● OK          read 2m │
 └────────────────────────────────────────────────────┘

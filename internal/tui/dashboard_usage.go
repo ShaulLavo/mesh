@@ -257,7 +257,7 @@ func (m dashboardModel) usageDot() string {
 func (m dashboardModel) usageMeter(window usagefeed.Window, role dashboardStyle) string {
 	filled := 0
 	if window.UsedPercent != nil {
-		filled = int(math.Round(*window.UsedPercent / 100 * 28))
+		filled = int(math.Round((100 - *window.UsedPercent) / 100 * 28))
 	}
 	marker := m.usagePace(window)
 	glyph, track, pace := "▪", "▪", "│"
@@ -284,8 +284,8 @@ func (m dashboardModel) usagePace(window usagefeed.Window) int {
 	if usageHistoricSource(window.Source) || window.Status == usageUnknown || word == usageExhausted || word == usageUnknown || window.LastSeenAt == nil || m.now.Sub(*window.LastSeenAt) >= usageStaleAfter || window.WindowMinutes == nil || window.ResetsAt == nil || !window.ResetsAt.After(m.now) {
 		return -1
 	}
-	elapsed := 1 - window.ResetsAt.Sub(m.now).Minutes() / *window.WindowMinutes
-	return min(27, max(0, int(min(1.0, max(0.0, elapsed))*28)))
+	remaining := window.ResetsAt.Sub(m.now).Minutes() / *window.WindowMinutes
+	return min(27, max(0, int(min(1.0, max(0.0, remaining))*28)))
 }
 
 func (m dashboardModel) usageCompactWindow(window usagefeed.Window, width int, showAge bool) string {
