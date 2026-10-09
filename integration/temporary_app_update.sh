@@ -86,7 +86,7 @@ wait_for_socket() {
 
 start_origin() {
   env MESH_STATE_DIR="$ORIGIN_STATE" MESH_FAKE_TAILSCALE_STATUS="$TEST_ROOT/o-status.json" PATH="$TEST_ROOT/bin:$PATH" \
-    "$MESH_APP" daemon --tailnet-port "$CONTROL_PORT" --public-edge-target "$TEST_ROOT/target.json" --app-data-root "$WORKLOAD" >"$TEST_ROOT/origin.log" 2>&1 &
+    "$MESH_APP" daemon --tailnet-port "$CONTROL_PORT" --app-registry-target "$TEST_ROOT/target.json" --app-data-root "$WORKLOAD" >"$TEST_ROOT/origin.log" 2>&1 &
   ORIGIN_PID=$!
   wait_for_socket "$ORIGIN_PID" "$ORIGIN_STATE/daemon.sock" || fail 'origin startup'
 }

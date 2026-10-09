@@ -86,7 +86,7 @@ wait_for_socket() {
 
 start_origin() {
   env MESH_STATE_DIR="$ORIGIN_STATE" MESH_FAKE_TAILSCALE_STATUS="$TEST_ROOT/o-status.json" PATH="$TEST_ROOT/bin:$PATH" \
-    "$MESH_APP" daemon --tailnet-port "$CONTROL_PORT" --public-edge-target "$TEST_ROOT/target.json" --app-data-root "$WORKLOAD" >"$TEST_ROOT/origin.log" 2>&1 &
+    "$MESH_APP" daemon --tailnet-port "$CONTROL_PORT" --app-registry-target "$TEST_ROOT/target.json" --app-data-root "$WORKLOAD" >"$TEST_ROOT/origin.log" 2>&1 &
   ORIGIN_PID=$!
   wait_for_socket "$ORIGIN_PID" "$ORIGIN_STATE/daemon.sock" || fail 'origin startup'
 }
@@ -102,6 +102,19 @@ start_edge() {
 start_edge
 start_origin
 
+check_private_registry_publication() {
+  python3 - "$ORIGIN_STATE/mesh.db" "$EDGE_STATE/mesh.db" <<'PYDATA'
+import sqlite3
+import sys
+for path in sys.argv[1:]:
+    with sqlite3.connect(path) as database:
+        for table in ('edge_outbox', 'edge_snapshots', 'edge_routes'):
+            count, = database.execute(f'SELECT count(*) FROM {table}').fetchone()
+            if count:
+                raise SystemExit(f'private apps published ordinary public state in {table}: {count}')
+PYDATA
+}
+
 MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app create local "$SOURCE" --run './server' --setup 'printf setup-complete >setup.txt' --port "$BACKEND_PORT" --json >"$TEST_ROOT/create.json" || fail 'create HTTP app'
 APP_ID=$(python3 - "$TEST_ROOT/create.json" <<'PY'
 import json, sys
@@ -116,6 +129,8 @@ MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app download local "$APP_ID" "$TEST_R
 tar -tzf "$TEST_ROOT/source.tar.gz" >"$TEST_ROOT/source.list" || fail 'downloaded archive is not a tarball'
 grep -qx server "$TEST_ROOT/source.list" || fail 'downloaded archive misses the app source'
 [ -z "$(find "$WORKLOAD/apps/$APP_ID" -mindepth 1 -maxdepth 1 ! -name 'source-*')" ] || fail 'download left an archive in the app directory'
+
+check_private_registry_publication || fail 'private registry enabled public publication'
 
 APP_ENDPOINT="$(app_endpoint)"
 private_app_denies_outsiders || fail 'private app owner authorization'
@@ -277,6 +292,7 @@ kill -0 "$ORDINARY_PID" 2>/dev/null || fail 'app deletion killed an ordinary ses
 kill -TERM "$EDGE_PID"
 wait "$EDGE_PID" || fail 'registry shutdown before static expiry'
 EDGE_PID=""
+check_private_registry_publication || fail 'private maintenance created public publication'
 private_app_fixture expire "$TEST_ROOT" "$SLOW_ID" || fail 'expire persisted static deadline'
 start_edge
 APP_ID="$SLOW_ID"

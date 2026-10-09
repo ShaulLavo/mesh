@@ -59,6 +59,7 @@ type Config struct {
 	PrivateNamesConfig          string
 	EdgeConfig                  string
 	PublicEdgeTarget            string
+	AppRegistryTarget           string
 	AppDataRoot                 string
 	TailscaleServe              bool
 	// HibernateIdle stops a registered agent once its session has been
@@ -175,18 +176,27 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		}
 		publicEdgeTarget = &loaded
 	}
+	var appRegistryTarget *edge.TargetConfig
+	if cfg.AppRegistryTarget != "" {
+		loaded, err := edge.LoadTargetConfig(cfg.AppRegistryTarget)
+		if err != nil {
+			return fmt.Errorf("daemon: configure private app registry target: %w", err)
+		}
+		appRegistryTarget = &loaded
+	}
 	if publicEdgeConfig != nil && cfg.PrivateNamesConfig != "" {
 		return errors.New("daemon: public edge mode cannot load the Pi-only private-names configuration")
 	}
-	requiresStableTailnetControl := cfg.TailscaleServe || publicEdgeConfig != nil || publicEdgeTarget != nil
-	if (publicEdgeConfig != nil || publicEdgeTarget != nil) && opts.discoverPeers == nil {
-		return errors.New("daemon: public edge roles require Tailscale peer discovery")
+	networkRoles := publicEdgeConfig != nil || publicEdgeTarget != nil || appRegistryTarget != nil
+	requiresStableTailnetControl := cfg.TailscaleServe || networkRoles
+	if networkRoles && opts.discoverPeers == nil {
+		return errors.New("daemon: configured registry roles require Tailscale peer discovery")
 	}
 	if requiresStableTailnetControl && (opts.tailnetPollInterval <= 0 || opts.tailnetDiscoveryTimeout <= 0) {
 		return errors.New("daemon: stable Tailnet control requires positive discovery and monitor timeouts")
 	}
-	if (publicEdgeConfig != nil || publicEdgeTarget != nil) && cfg.TailnetPort == 0 {
-		return errors.New("daemon: public edge roles require a non-zero Tailnet control port")
+	if networkRoles && cfg.TailnetPort == 0 {
+		return errors.New("daemon: configured registry roles require a non-zero Tailnet control port")
 	}
 
 	if cfg.SubscriberLimit < 0 {
@@ -338,11 +348,13 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return fmt.Errorf("daemon: restore services: %w", err)
 	}
 	var pinnedPublicEdge atomic.Pointer[netip.Addr]
+	var pinnedAppRegistry atomic.Pointer[netip.Addr]
 	var trustPublicEdgeForwarding func(netip.Addr) bool
-	if publicEdgeTarget != nil {
+	if publicEdgeTarget != nil || appRegistryTarget != nil {
 		trustPublicEdgeForwarding = func(address netip.Addr) bool {
 			pinned := pinnedPublicEdge.Load()
-			return pinned != nil && *pinned == address.Unmap()
+			appPinned := pinnedAppRegistry.Load()
+			return pinned != nil && *pinned == address.Unmap() || appPinned != nil && *appPinned == address.Unmap()
 		}
 	}
 	serviceRegistry, err := meshserve.NewRegistryWithReservedPrefix(services, cfg.WebSocketPath, trustPublicEdgeForwarding)
@@ -426,8 +438,21 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			return fmt.Errorf("daemon: configure public edge publisher: %w", err)
 		}
 		publication = publisher
-		appPublisher = publisher
 	}
+	if appRegistryTarget != nil {
+		appPublisher, err = edge.NewPublisher(edge.PublisherConfig{
+			Signer: meshPrivateKey, Target: *appRegistryTarget, State: store,
+			Resolve: edge.TailscaleTargetResolver(discoverAllPeers), Now: opts.now, RequestTimeout: 5 * time.Second,
+			OnPinned: func(address netip.Addr) {
+				canonical := address.Unmap()
+				pinnedAppRegistry.Store(&canonical)
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("daemon: configure private app registry client: %w", err)
+		}
+	}
+
 	state := newStateBroker(cfg.SubscriberLimit, opts.now)
 	metrics := hostmetrics.New()
 	serviceControl, err := newServiceController(daemonCtx, homeDir, store, serviceRegistry, publication)
@@ -500,7 +525,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	var appLocal *apps.Origin
 	if appPublisher != nil {
 		appLocal, err = apps.NewOrigin(daemonCtx, apps.OriginConfig{
-			Store: store, Key: meshPrivateKey, EdgeIdentity: publicEdgeTarget.Identity,
+			Store: store, Key: meshPrivateKey, EdgeIdentity: appRegistryTarget.Identity,
 			Exchange: appPublisher.AppRegistryExchange, Workers: appWorkers{lifecycle: lifecycle},
 			DataRoot: appDataRoot(cfg.AppDataRoot, stateDir), Now: opts.now, CheckHosting: checkAppHosting(serviceRegistry),
 		})

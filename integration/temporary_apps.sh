@@ -45,12 +45,12 @@ grep -Eq -- '--run requires --port' "$TEST_ROOT/invalid.err" || fail "port error
 if "$MESH" app create local "$TEST_ROOT/source" >"$TEST_ROOT/create.out" 2>"$TEST_ROOT/create.err"; then
   fail 'app accepted without a configured private app registry'
 fi
-grep -Eq -- '--public-edge-target' "$TEST_ROOT/create.err" || fail "edge configuration error unclear: $(cat "$TEST_ROOT/create.err")"
+grep -Eq -- '--app-registry-target' "$TEST_ROOT/create.err" || fail "edge configuration error unclear: $(cat "$TEST_ROOT/create.err")"
 
 if "$MESH" app list local --json >"$TEST_ROOT/list.out" 2>"$TEST_ROOT/list.err"; then
   fail 'app list accepted without a configured private app registry'
 fi
-grep -Eq -- '--public-edge-target' "$TEST_ROOT/list.err" || fail "list error unclear: $(cat "$TEST_ROOT/list.err")"
+grep -Eq -- '--app-registry-target' "$TEST_ROOT/list.err" || fail "list error unclear: $(cat "$TEST_ROOT/list.err")"
 
 "$MESH" ls >"$TEST_ROOT/sessions.out" || fail 'ordinary daemon stopped accepting controls'
 python3 - "$MESH_STATE_DIR/mesh.db" "$TEST_ROOT/source/index.html" "$TEST_ROOT/workload" <<'PY'
