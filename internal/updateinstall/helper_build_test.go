@@ -33,7 +33,7 @@ func TestUpgradeHelperRealBuildContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspace, artifacts := t.TempDir(), t.TempDir()
-	module := "module github.com/shaul/mesh/internal/updateinstall/helperfixture\n\ngo 1.27.0\n\nrequire github.com/shaul/mesh v0.0.0\nreplace github.com/shaul/mesh => " + strconv.Quote(root) + "\n"
+	module := "module github.com/shaul/mesh/internal/updateinstall/helperfixture\n\ngo 1.27.2\n\nrequire github.com/shaul/mesh v0.0.0\nreplace github.com/shaul/mesh => " + strconv.Quote(root) + "\n"
 	for name, data := range map[string][]byte{"go.mod": []byte(module), "main.go": source} {
 		if err = os.WriteFile(filepath.Join(workspace, name), data, 0600); err != nil {
 			t.Fatal(err)

@@ -13,7 +13,7 @@ mise install
 lefthook install
 ```
 
-`mise.toml` pins Go 1.27.0, golangci-lint 2.13.2, ShellCheck 0.11.0, Lefthook
+`mise.toml` pins Go 1.27.2, golangci-lint 2.14.0, ShellCheck 0.11.0, Lefthook
 2.1.15, and Ruff 0.16.9. Use `mise exec -- lefthook install` if your shell does
 not activate mise. CI verifies the ShellCheck, Ruff, and Lefthook release checksums.
 Lefthook is a development tool, not a Go module dependency.
