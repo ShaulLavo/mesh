@@ -169,12 +169,68 @@ Approved follow-up, 2026-10-08. Plan 336 Track H transfers these reports into th
 | [#197](https://github.com/ShaulLavo/mesh/issues/197) | Unmodified `a207f0e` control 2 displayed an interrupted-session picker, then missed a fresh prompt at 4s. Output was nonempty, unlike #194. The worker log was removed by normal cleanup. | Preserve relaunch selection, worker identity/startup and PTY receipts at `relaunch_interrupted()` on recurrence. Keep freshness and retained-process identity checks. |
 | [#238](https://github.com/ShaulLavo/mesh/issues/238) | `TestAttachConcurrentWriterPrefillsLargePipe` on `ff65d8d` failed `F_SETPIPE_SZ` requesting 128 KiB before attach. Later unchanged capacity probes and focused test passed. Current test still requires enlargement. | Capture owned pipe capacity and user pipe-page availability on recurrence, with a known-good capacity control. Distinguish fixture admission from production attach. User-page pressure is a hypothesis, not a measured cause. |
 | [#252](https://github.com/ShaulLavo/mesh/issues/252) | macOS 15 CI cancellation `after_acknowledgement` passed in 120.26s, then the CLI package hit 180s. The one-second post-cancellation assertion passed. Unchanged retry and first merged-main native run passed; that main case took 0.04s. | On recurrence, retain stage timestamps or a native execution trace across setup, stack inspection, cancellation and cleanup. The inspected wake bound was 110s. Preserve cancellation, relay-leak and no-worker-signal assertions. |
+| [2026-10-09 recovery fixture](#recovery-races-child-start-failure-2026-10-09) | One local full suite failed the `race-source` worker's child startup on `facabc5`, Go 1.27.2. An isolated run passed with an earlier Go 1.27.1 integration binary and a different temporary path. The child errno was removed by fixture cleanup. | Retain worker evidence, then compare two bounded isolated runs with the same Go 1.27.2 normal binary and different temporary paths. Binary, toolchain, path, and load effects remain unresolved. |
 
 - [ ] Keep each row as an independent pending investigation. The linked issue bodies/comments retain exact original commands, source hashes and evidence locations. Read them before reproducing; no common cause is established.
 - [ ] Establish that observation works on a known-good owned fixture before interpreting a missing event. Retain failure receipts before fixture cleanup, with argument/environment privacy.
 - [ ] At a genuine recurrence, attribute the failing operation and add its narrow fail-first regression. Use the approved heavy-job runner and owned state. Do not raise deadlines, weaken assertions, skip cases, change host settings or broadly retry to make a gate green.
 - [ ] Do not restart the original broad campaigns merely to close tracker entries. Existing bounded controls reached their stopping points. Native investigations run only on an authorized available host; this closeout makes no Mac execution claim.
 - [ ] Record the demonstrated cause, repair and focused verification beside the owning row when it is completed. Until then, issue closure means execution ownership transferred here, never that the bug was fixed or disproved.
+
+### Recovery races child-start failure, 2026-10-09
+
+Approved follow-up. Source: `facabc511852ae66a08bacae2f61dabfe40fd6d6`, the private-app branch later delivered through [PR #285](https://github.com/ShaulLavo/mesh/pull/285). One local `scripts/verify.sh` run failed `integration/recovery_races.sh`; every other integration passed. The suite used Go 1.27.2 and built fresh normal and `mesh_integration` binaries. `recovery_races.sh` received the normal binary. The outer integration deadline was 60s; the reported 5s deadline belongs to worker readiness.
+
+The recorded invocation ran from `/work/worktrees/mesh/disconnect-app-pill`:
+
+```bash
+GOCACHE=/work/cache/go-build GOMODCACHE=/work/cache/go/pkg/mod \
+GOTMPDIR=/work/tmp/mesh-pill-check/scratch TMPDIR=/work/tmp/mesh-pill-check/scratch \
+MISE_DATA_DIR=/work/cache/mise MISE_CACHE_DIR=/work/cache/mise/cache \
+MISE_DOWNLOADS_DIR=/work/cache/mise/downloads MESH_INTEGRATION_TIMEOUT=60s \
+bun /work/platform-production/heavy/current/run.js --class suite \
+  mesh-private-complete-integrations -- scripts/verify.sh
+```
+
+The heavy-job receipt in `/work/platform-production/heavy-jobs/2026-10-09.jsonl` ended at `2026-10-09T08:29:12.003Z`, exit 1, after 230038ms. The retained failure was:
+
+```text
+FAIL: create failed: {'type': 'error', 'requestId': 'race-source', 'message': 'daemon: session.create: launch worker WE3D: readiness (see /work/tmp/mesh-pill-check/scratch/mesh-recovery-_6s_0goo/remote/s/WE3D/worker.log): worker is still publishing state (elapsed=5.006441284s deadline=2026-10-09T08:28:14.014907002Z phase=launch-marker-present workerPID=1987186 workerAlive=false metaState=unknown startupLog=child-start-failed)'}
+```
+
+The immediate isolated control used `MESH=/work/tmp/mesh-pill-check/mesh-integration bash integration/recovery_races.sh` through the suite-class heavy runner. Its receipt, `mesh-recovery-races-recheck`, ended at `2026-10-09T08:31:41.369Z`, exit 0, after 976ms. That executable was an earlier Go 1.27.1 build with the `mesh_integration` tag, and the control used the default temporary path. It does not isolate the full suite's binary, toolchain, temporary path, or concurrency. PR #285's [Go 1.27.2 CI race and full integration checks](https://github.com/ShaulLavo/mesh/actions/runs/37904070707/job/113733182166) also passed. No cause is established by these passing controls.
+
+The fixture removed its temporary directory and worker log. At `integration/helpers/recovery_transactions.py:238`, the exception handler prints terminal and daemon output but omits individual worker logs before cleanup. `internal/worker/memory.go:50` preserves numeric child errno when available; `startupLog=child-start-failed` alone does not retain that errno or identify a failing syscall.
+
+First bounded follow-up:
+
+1. In an isolated checkout, retain `remote/s/*/worker.log`, metadata, launch markers, owned process identity, and fixture startup timestamps before `fixture.close()` and temporary-directory cleanup. Sanitize arguments and environment values. Confirm this capture on a known-good owned fixture.
+2. Use source `facabc511852ae66a08bacae2f61dabfe40fd6d6` and the Go 1.27.2 executable at `/work/cache/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.2.linux-amd64/bin/go`. Build one normal binary under an owned `/work/tmp` evidence directory through the heavy runner. Record `go version -m` and its SHA-256. Use that same binary for both commands below; do not substitute the older tagged control binary.
+
+   ```bash
+   recovery_evidence=$(mktemp -d /work/tmp/mesh-recovery-races-XXXXXX)
+   export PATH="/work/cache/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.2.linux-amd64/bin:$PATH"
+   export GOCACHE=/work/cache/go-build GOMODCACHE=/work/cache/go/pkg/mod
+   bun /work/platform-production/heavy/current/run.js --class build \
+     recovery-races-control-build -- go build -o "$recovery_evidence/mesh" ./cmd/mesh
+   go version -m "$recovery_evidence/mesh"
+   sha256sum "$recovery_evidence/mesh"
+   ```
+
+3. Run one isolated control for each path, with `GOCACHE=/work/cache/go-build`, `GOMODCACHE=/work/cache/go/pkg/mod`, and the pinned Go toolchain on `PATH`:
+
+   ```bash
+   TMPDIR=/work/tmp/mesh-pill-check/scratch GOTMPDIR=/work/tmp/mesh-pill-check/scratch \
+   MESH="$recovery_evidence/mesh" bun /work/platform-production/heavy/current/run.js \
+     --class suite recovery-races-same-path -- timeout 60s bash integration/recovery_races.sh
+   TMPDIR=/tmp GOTMPDIR=/work/tmp/mesh-pill-check/scratch \
+   MESH="$recovery_evidence/mesh" bun /work/platform-production/heavy/current/run.js \
+     --class suite recovery-races-short-path -- timeout 60s bash integration/recovery_races.sh
+   ```
+
+4. On recurrence, read the retained child-start errno and path first. Distinguish child launch failure from a worker that remains alive but cannot publish metadata or a socket. Use the owned process and resource receipts to assess load, process limits, and path effects. Attribute a pre-exec syscall only with a retained syscall trace. Neither the source path nor the load is a demonstrated cause yet.
+
+Keep this item open until a bounded reproduction establishes the cause and a focused regression proves its repair. Preserve readiness and recovery assertions and their deadlines. No new issue or broad reproduction campaign is required for this recorded follow-up.
 
 ## Done when
 
