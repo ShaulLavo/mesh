@@ -14,8 +14,7 @@ size changes are visible in review.
 - A self-update downloads about 8.6 MB instead of 11.3 MB.
 - CI fails when the binary exceeds its budget, or when code turns off the
   linker's removal of unused methods (finding 1).
-- Startup, `mesh update`, update bootstrap and old-client upgrades behave as
-  before.
+- Startup, `mesh update` and update bootstrap keep their current behavior.
 
 ## Execution state
 
@@ -186,20 +185,20 @@ the measured size plus 1%.
 
 - `.goreleaser.yaml`: publish `mesh_<os>_<arch>.tar.xz` next to the existing
   `.tar.gz`. If one archive entry cannot emit both formats, add a second entry
-  with its own id. Keep `.tar.gz` indefinitely, because every installed Mesh
-  before this change asks for that name (`internal/release/release.go:298`).
+  with its own id. Keep `.tar.gz` for installer hosts without an xz decoder and
+  for Homebrew.
 - Checksums, the release manifest (`scripts/generate-release-manifest.sh`,
   `scripts/assemble-release-compatibility.py`) and release reservation cover
   both archives.
-- `internal/release`: prefer `.tar.xz` when the release lists it and fall back
-  to `.tar.gz`. Use the same checksum verification and download retry for both.
+- `internal/release`: download `.tar.xz`. Preserve checksum verification and
+  download retry handling.
   Add `github.com/ulikunitz/xz` and put the size trade (finding 2) in the
   task brief, as `CLAUDE.md` requires for new dependencies.
 - `internal/updatebootstrap` and `scripts/install.sh`: use `.tar.xz` when `xz`
   is on the host and `.tar.gz` otherwise. Homebrew keeps `.tar.gz`.
 
-Risk: a client that fetches `.tar.xz` from a release missing it. The fallback
-covers this, and a test serves a release with only `.tar.gz`.
+Require both archives in the release manifest and packaging checks. Test
+installer archive selection on hosts with and without an xz decoder.
 
 ### Step 4. Record the result
 
@@ -219,9 +218,8 @@ go vet ./...
 
 Self-update and startup:
 
-- `scripts/check-updates.sh` and `scripts/prove-release-transition.sh` pass.
-  For step 3, add a transition test with three releases: v0.1.211 (gzip only)
-  updates to the first xz release, which updates to a later xz release.
+- `scripts/check-updates.sh` and `scripts/prove-release-transition.sh` pass
+  for releases built with the current archive contract.
 - An update-bootstrap run on a host with `xz` and on one without it.
 - `mesh version` startup stays within 1 ms of the 3 ms baseline over 50 runs.
 - A daemon restart keeps running sessions attached (`verify.sh` covers this).
