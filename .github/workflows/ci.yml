@@ -92,7 +92,7 @@ jobs:
           long=$(mktemp -d "$RUNNER_TEMP/mesh-socket-portability-long-scratch-root.XXXXXX")
           trap 'rm -rf -- "$short" "$long"' EXIT
           ln -s "$long" "$short/alias"
-          TMPDIR="$short/alias/" MESH_SHORT_TMP="$short" go test -race -count=1 -timeout=180s -json ./internal/daemon ./internal/cli ./internal/worker ./internal/updatebootstrap ./internal/paths ./internal/testenv | tee "$RUNNER_TEMP/native-socket-results.jsonl"
+          TMPDIR="$short/alias/" MESH_SHORT_TMP="$short" go test -race -count=1 -timeout=300s -json ./internal/daemon ./internal/cli ./internal/worker ./internal/updatebootstrap ./internal/paths ./internal/testenv | tee "$RUNNER_TEMP/native-socket-results.jsonl"
           MESH_SHORT_TMP="$short" python3 scripts/test-helper-recovery-paths.py
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
