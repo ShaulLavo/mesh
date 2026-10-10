@@ -370,6 +370,9 @@ Approved follow-up: [14: keep the fleet current](14-fleet-auto-updates.md).
 The October 9 Pi incident was repaired live. Automatic enrollment, release
 tracking, verified catch-up and deployment configuration delivery remain open.
 
+Approved for later: [15: preview a worktree from a link](15-worktree-previews.md).
+It starts when the owner says Fregat has left its greenfield phase.
+
 - Read `CLAUDE.md` and `docs/plan/01-decisions.md` first.
 - All integration scripts must still pass. Add one if you add behaviour worth
   protecting.
