@@ -392,7 +392,7 @@ func TestDecoderRejectsMultipleJSONValues(t *testing.T) {
 func uploadSource(t *testing.T, f *appFixture, source string) (string, string) {
 	t.Helper()
 	var archive bytes.Buffer
-	digest, err := Pack(context.Background(), source, &archive)
+	digest, err := Pack(context.Background(), source, &archive, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

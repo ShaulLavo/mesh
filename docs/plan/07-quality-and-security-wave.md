@@ -233,6 +233,63 @@ First bounded follow-up:
 
 Keep this item open until a bounded reproduction establishes the cause and a focused regression proves its repair. Preserve readiness and recovery assertions and their deadlines. No new issue or broad reproduction campaign is required for this recorded follow-up.
 
+## Local verification follow-up, 2026-10-10
+
+Status: Approved. Found while verifying temporary-app size limits in
+[PR #294](https://github.com/ShaulLavo/mesh/pull/294), source `30eceb5`, based on
+`7a77d1a`. Go 1.27.2, Linux. Retained output is under
+`/work/reports/mesh-app-size-20261010/`.
+
+The app-specific race checks and the real-daemon 65 MiB create/update/restart/serve/
+download integration passed. The full quality gates passed. The full race suite
+and integration suite reported these separate failures in unchanged paths:
+
+- `TestCheckedApprovalRestrictedKeysAndConcurrentWriters` failed twice, in the
+  full race suite and a bounded isolated rerun, at
+  `internal/cli/device_approval_test.go:328` with
+  `identity: grants writer contention exceeded 250ms: resource temporarily unavailable`.
+  The test launches four approval writers. Inspect the lock deadline in
+  `internal/identity/grants.go:181` and measure lock hold time during policy
+  publication before choosing a repair. Preserve the bounded lock and
+  restricted-key assertions.
+- `integration/temporary_app_update.sh` failed three runs that reached recovery,
+  including an isolated 60-second rerun, at line 160 with
+  `FAIL: recovery left the interrupted setup worker running`.
+  Inspect `internal/apps/origin.go:1345`, `resolveCandidate`, and its worker-stop
+  adapter. The fixture removes logs and worker metadata on exit. On the next
+  reproduction retain the setup PID, `/proc/<pid>/stat`, candidate workspace count,
+  and origin/worker logs before cleanup. Establish whether the worker is running,
+  blocked or a zombie before changing recovery or the assertion.
+- The full CLI race package reached its 10-minute package deadline while
+  `TestUpdateFlowRemoteAuthorizationIsNotFailure` had just started. Its stack
+  was in `os.File.Sync` called by `internal/identity/identity.go:91`.
+  `TestIssuerBoundsNeverCompletingACMEOrder` exceeded its one-second assertion
+  by 24 ms. `TestHelperRecoveryRollbackDeadlineKeepsGenuineReceipt` reported
+  `start helper build probe: context deadline exceeded; started=false`.
+  Those three targeted tests passed in the isolated rerun. Concurrent workload
+  and storage timing are possibilities, not established causes. Do not widen
+  production or fixture deadlines without measuring the affected path.
+
+Run the narrow reproductions from the source checkout, with a short scratch root
+on the workload SSD:
+
+```sh
+mkdir -p /work/tmp/mesh-verification-followup
+TMPDIR=/work/tmp/mesh-verification-followup MESH_SHORT_TMP=/work/tmp/mesh-verification-followup \
+go test -race -count=1 -timeout=180s ./internal/cli \
+  -run '^TestCheckedApprovalRestrictedKeysAndConcurrentWriters$'
+go build -tags mesh_integration -o /work/tmp/mesh-verification-followup/mesh ./cmd/mesh
+TMPDIR=/work/tmp/mesh-verification-followup MESH_SHORT_TMP=/work/tmp/mesh-verification-followup \
+MESH_INTEGRATION_BINARY=/work/tmp/mesh-verification-followup/mesh \
+timeout 60s bash integration/temporary_app_update.sh
+```
+
+The same full integration run exposed a separate benchmark fixture race:
+its cancellation signal interrupted `timer.start()` before the exception handler
+was active. [PR #295](https://github.com/ShaulLavo/mesh/pull/295) moves that call
+inside the existing handler. The complete benchmark harness integration passed
+with the repair, including cancellation cleanup. No new issue was opened.
+
 ## Done when
 
 - Gates run in pre-commit and CI; the baseline is empty or every remaining entry has a reason.

@@ -48,20 +48,21 @@ func storedID(id string) bool { return idPattern.MatchString(id) }
 func URL(id string) string { return "https://" + id + "." + Domain() }
 
 type Request struct {
-	Action    string   `json:"action"`
-	ID        string   `json:"id,omitempty"`
-	Path      string   `json:"path,omitempty"`
-	Kind      string   `json:"kind,omitempty"`
-	Command   string   `json:"command,omitempty"`
-	Setup     string   `json:"setup,omitempty"`
-	Port      int      `json:"port,omitempty"`
-	Env       []string `json:"env,omitempty"`
-	UploadID  string   `json:"uploadId,omitempty"`
-	Data      []byte   `json:"data,omitempty"`
-	Digest    string   `json:"digest,omitempty"`
-	Code      string   `json:"code,omitempty"`
-	BrowserID string   `json:"browserId,omitempty"`
-	Offset    int64    `json:"offset,omitempty"`
+	MaxBytes  SizeLimit `json:"maxBytes,omitempty"`
+	Action    string    `json:"action"`
+	ID        string    `json:"id,omitempty"`
+	Path      string    `json:"path,omitempty"`
+	Kind      string    `json:"kind,omitempty"`
+	Command   string    `json:"command,omitempty"`
+	Setup     string    `json:"setup,omitempty"`
+	Port      int       `json:"port,omitempty"`
+	Env       []string  `json:"env,omitempty"`
+	UploadID  string    `json:"uploadId,omitempty"`
+	Data      []byte    `json:"data,omitempty"`
+	Digest    string    `json:"digest,omitempty"`
+	Code      string    `json:"code,omitempty"`
+	BrowserID string    `json:"browserId,omitempty"`
+	Offset    int64     `json:"offset,omitempty"`
 }
 
 type Record struct {
@@ -99,6 +100,7 @@ type SetupFailure struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 type Result struct {
+	MaxBytes SizeLimit            `json:"maxBytes,omitempty"`
 	Pairing  *webauth.PairingInfo `json:"pairing,omitempty"`
 	Runtime  *RuntimeInfo         `json:"runtime,omitempty"`
 	App      *Record              `json:"app,omitempty"`

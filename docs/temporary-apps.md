@@ -47,8 +47,23 @@ with HTTPS certificates covering them. See the
 Creation returns a short URL such as `https://7k3d.new.example`. Source is
 copied; your input directory remains yours. Mesh excludes environment files,
 credentials and generated dependency/cache directories, rejects links and
-unsafe archive paths, and limits source to 64 MiB and 10,000 files. Dependency
-installation requires an explicit setup command in the managed copy.
+unsafe archive paths, and defaults to a 64 MiB byte limit and 10,000 files.
+Dependency installation requires an explicit setup command in the managed copy.
+
+Use `--max-size` on create or update to set the byte limit for that upload:
+
+```sh
+mesh app create pc ./site --max-size 2GiB
+mesh app update pc 7k3d ./site --max-size unlimited
+```
+
+The limit applies to both the compressed archive and total expanded file bytes.
+Accepts integer bytes, decimal units such as `500MB`, and binary units such as
+`512MiB` or `2GiB`. `0` and `unlimited` remove the byte limit. The 10,000-file
+limit still applies. Repeat the option on updates that need more than the default.
+Mesh saves the selected limit with the managed source; CLI and browser downloads
+use it automatically. Source and transfer archives stay on disk, and the CLI
+streams upload chunks from a temporary file in `TMPDIR`.
 
 Server commands must bind only `127.0.0.1` or `::1`, on a free port from 1024 to
 65535. Mesh supplies `PORT` and `HOST=127.0.0.1`, but the server must use a

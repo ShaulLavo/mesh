@@ -239,7 +239,7 @@ func TestArchiveSizeLimitAgreesAcrossLayers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, packErr := Pack(context.Background(), source, io.Discard)
+	_, packErr := Pack(context.Background(), source, io.Discard, 0)
 	begun, err := f.origin.Handle(context.Background(), Request{Action: "upload.begin"})
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestArchiveSizeLimitAgreesAcrossLayers(t *testing.T) {
 	if err := os.Truncate(oversized, MaxArchive+1); err != nil {
 		t.Fatal(err)
 	}
-	unpackErr := unpack(oversized, t.TempDir(), "")
+	unpackErr := unpack(oversized, t.TempDir(), "", 0)
 	sameError(t, "compressed", map[string]error{"pack": packErr, "upload": uploadErr, "unpack": unpackErr})
 }
 
@@ -264,7 +264,7 @@ func TestExpandedSizeLimitAgreesBetweenPackAndUnpack(t *testing.T) {
 	if err := os.Truncate(filepath.Join(source, "big"), MaxArchive+1); err != nil {
 		t.Fatal(err)
 	}
-	_, packErr := Pack(context.Background(), source, io.Discard)
+	_, packErr := Pack(context.Background(), source, io.Discard, 0)
 	var archive bytes.Buffer
 	gz := gzip.NewWriter(&archive)
 	tw := tar.NewWriter(gz)
@@ -278,7 +278,7 @@ func TestExpandedSizeLimitAgreesBetweenPackAndUnpack(t *testing.T) {
 	if err := os.WriteFile(path, archive.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
-	unpackErr := unpack(path, t.TempDir(), digestBytes(archive.Bytes()))
+	unpackErr := unpack(path, t.TempDir(), digestBytes(archive.Bytes()), 0)
 	if errors.Is(unpackErr, io.ErrUnexpectedEOF) {
 		t.Fatalf("unpack read past the limit before refusing: %v", unpackErr)
 	}

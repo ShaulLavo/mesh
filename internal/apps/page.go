@@ -20,12 +20,13 @@ type showSource struct {
 }
 
 type showCopy struct {
+	limit SizeLimit
 	bytes int64
 	files int
 }
 
 // PreparePage stages selected files as a gallery or an HTML site for the normal app upload.
-func PreparePage(ctx context.Context, files []string) (directory string, err error) {
+func PreparePage(ctx context.Context, files []string, limit SizeLimit) (directory string, err error) {
 	sources, err := showSources(files)
 	if err != nil {
 		return "", err
@@ -39,7 +40,7 @@ func PreparePage(ctx context.Context, files []string) (directory string, err err
 			_ = os.RemoveAll(directory)
 		}
 	}()
-	err = writeShow(ctx, directory, sources)
+	err = writeShow(ctx, directory, sources, limit)
 	return directory, err
 }
 
@@ -81,8 +82,8 @@ func inspectShowSource(file string) (showSource, error) {
 	return source, nil
 }
 
-func writeShow(ctx context.Context, directory string, sources []showSource) error {
-	copier := &showCopy{}
+func writeShow(ctx context.Context, directory string, sources []showSource, limit SizeLimit) error {
+	copier := &showCopy{limit: limit}
 	if len(sources) == 1 && (sources[0].dir || showHTML(sources[0].name)) {
 		destination := directory
 		if !sources[0].dir {
@@ -90,7 +91,7 @@ func writeShow(ctx context.Context, directory string, sources []showSource) erro
 		}
 		return copier.asset(ctx, sources[0], destination)
 	}
-	page, err := showPageWithAssets(sources)
+	page, err := showPageWithAssets(sources, limit)
 	if err != nil {
 		return err
 	}
@@ -118,7 +119,7 @@ func showHTML(name string) bool {
 	return ext == ".html" || ext == ".htm"
 }
 
-func showPageWithAssets(sources []showSource) (int, error) {
+func showPageWithAssets(sources []showSource, limit SizeLimit) (int, error) {
 	page := -1
 	names := make(map[string]bool, len(sources))
 	for i, source := range sources {
@@ -137,7 +138,7 @@ func showPageWithAssets(sources []showSource) (int, error) {
 	if page < 0 {
 		return -1, nil
 	}
-	content, err := readShowPage(sources[page].path)
+	content, err := readShowPage(sources[page].path, limit)
 	if err != nil {
 		return -1, err
 	}
@@ -149,17 +150,17 @@ func showPageWithAssets(sources []showSource) (int, error) {
 	return page, nil
 }
 
-func readShowPage(file string) ([]byte, error) {
+func readShowPage(file string, limit SizeLimit) ([]byte, error) {
 	f, err := os.Open(file) //nolint:gosec // Read the explicitly selected HTML file; size is bounded before staging.
 	if err != nil {
 		return nil, fmt.Errorf("app: open HTML page: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, MaxArchive+1))
+	data, err := io.ReadAll(limit.Reader(f))
 	if err != nil {
 		return nil, fmt.Errorf("app: read HTML page: %w", err)
 	}
-	if len(data) > MaxArchive {
+	if limit.Exceeded(int64(len(data))) {
 		return nil, errSourceTooLarge
 	}
 	return data, nil
@@ -256,7 +257,7 @@ func (c *showCopy) file(ctx context.Context, root *os.Root, name, destination st
 	}
 	c.bytes += info.Size()
 	c.files++
-	if c.bytes > MaxArchive || c.files > maxSourceFiles {
+	if c.limit.Exceeded(c.bytes) || c.files > maxSourceFiles {
 		return errSourceTooLarge
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
