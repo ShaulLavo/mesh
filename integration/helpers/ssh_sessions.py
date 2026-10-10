@@ -80,9 +80,7 @@ def exercise(fixture):
     require(fixture.shell_identity(remote) == (session_id, shell_pid), "SSH attached a different process")
     local.expect_exit()
     remote.resize(101, 37)
-    start = len(remote.drain())
-    remote.send("printf '__SIZE__'; stty size\n")
-    remote.expect(b"__SIZE__37 101", since=start)
+    remote.expect_size(101, 37)
 
     for _ in range(3):
         start = len(remote.drain())
