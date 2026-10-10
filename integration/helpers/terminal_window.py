@@ -127,6 +127,11 @@ class Terminal:
         fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         os.kill(self.pid, signal.SIGWINCH)
 
+    def expect_size(self, cols, rows):
+        start = len(self.drain())
+        self.send(f'until [ "$(stty size)" = "{rows} {cols}" ]; do sleep .01; done; printf "__SIZE__"; stty size\n')
+        self.expect(f"__SIZE__{rows} {cols}", since=start)
+
     def close(self):
         self.crash()
         os.close(self.master)
@@ -453,13 +458,9 @@ def nested_detach(fixture):
 def nested_resize(fixture):
     terminal, _, _, _, _ = fixture.nested()
     terminal.resize(109, 37)
-    start = len(terminal.drain())
-    terminal.send('until [ "$(stty size)" = "37 109" ]; do sleep .01; done; printf "__SIZE__"; stty size\n')
-    terminal.expect(b"__SIZE__37 109", since=start)
+    terminal.expect_size(109, 37)
     terminal.resize(80, 24)
-    start = len(terminal.drain())
-    terminal.send('until [ "$(stty size)" = "24 80" ]; do sleep .01; done; printf "__SIZE__"; stty size\n')
-    terminal.expect(b"__SIZE__24 80", since=start)
+    terminal.expect_size(80, 24)
 
 
 def window_death(fixture):
