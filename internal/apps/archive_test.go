@@ -60,7 +60,7 @@ func TestUnpackRefusesTraversalCredentialsAndLinks(t *testing.T) {
 				header.Size = int64(len(data))
 			}
 			archive, digest := maliciousArchive(t, header, data)
-			if err := unpack(archive, dest, digest); err == nil {
+			if err := unpack(archive, dest, digest, 0); err == nil {
 				t.Fatalf("accepted unsafe entry %#v", header)
 			}
 			original, err := os.ReadFile(outside) //nolint:gosec // Test reads its own sentinel to prove archive traversal did not overwrite it.
@@ -84,7 +84,7 @@ func TestPackLeavesSourcePristineAndDropsGeneratedOrSecretInputs(t *testing.T) {
 		}
 	}
 	var archive bytes.Buffer
-	digest, err := Pack(context.Background(), source, &archive)
+	digest, err := Pack(context.Background(), source, &archive, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestPackLeavesSourcePristineAndDropsGeneratedOrSecretInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := t.TempDir()
-	if err := unpack(upload, dest, digest); err != nil {
+	if err := unpack(upload, dest, digest, 0); err != nil {
 		t.Fatal(err)
 	}
 	for name, data := range files {
@@ -125,7 +125,7 @@ func TestPackRefusesCredentialsAndSymlinks(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(source, name), []byte("secret"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Pack(context.Background(), source, io.Discard); err == nil {
+			if _, err := Pack(context.Background(), source, io.Discard, 0); err == nil {
 				t.Fatal("silently selected unsafe source")
 			}
 		})
@@ -138,7 +138,7 @@ func TestPackRefusesCredentialsAndSymlinks(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(source, "linked")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Pack(context.Background(), source, io.Discard); err == nil {
+	if _, err := Pack(context.Background(), source, io.Discard, 0); err == nil {
 		t.Fatal("followed source symlink")
 	}
 }
@@ -146,7 +146,7 @@ func TestPackRefusesCredentialsAndSymlinks(t *testing.T) {
 func TestUnpackRejectsDigestMismatchAndDuplicateEntries(t *testing.T) {
 	header := &tar.Header{Name: "index.html", Typeflag: tar.TypeReg, Mode: 0600, Size: 2}
 	archive, _ := maliciousArchive(t, header, []byte("ok"))
-	if err := unpack(archive, t.TempDir(), strings.Repeat("0", 64)); err == nil {
+	if err := unpack(archive, t.TempDir(), strings.Repeat("0", 64), 0); err == nil {
 		t.Fatal("accepted altered upload")
 	}
 	var packed bytes.Buffer
@@ -170,7 +170,7 @@ func TestUnpackRejectsDigestMismatchAndDuplicateEntries(t *testing.T) {
 	if err := os.WriteFile(archive, packed.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := unpack(archive, t.TempDir(), digestBytes(packed.Bytes())); err == nil {
+	if err := unpack(archive, t.TempDir(), digestBytes(packed.Bytes()), 0); err == nil {
 		t.Fatal("silently overwrote duplicate archive entry")
 	}
 }

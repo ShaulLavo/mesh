@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -25,6 +24,7 @@ import (
 
 type appFlags struct {
 	command, setup string
+	maxSize        string
 	port           int
 	env            []string
 }
@@ -61,7 +61,7 @@ func (a *application) appCommand() *cobra.Command {
 	return cmd
 }
 func (a *application) appCreateCommand(output *appOutput, update bool) *cobra.Command {
-	flags := &appFlags{}
+	flags := &appFlags{maxSize: "64MiB"}
 	verb, use, n := "create", "create HOST SOURCE...", 2
 	if update {
 		verb, use, n = "update", "update HOST ID SOURCE...", 3
@@ -80,6 +80,7 @@ func (a *application) appCreateCommand(output *appOutput, update bool) *cobra.Co
 		}
 		return a.publishAppSources(cmd, args[0], args[n-1:], request, output)
 	}}
+	cmd.Flags().StringVar(&flags.maxSize, "max-size", "64MiB", "maximum compressed and expanded source size, e.g. 1GiB; 0 or unlimited removes the byte limit")
 	cmd.Flags().StringVar(&flags.command, "run", "", "explicit HTTP server command; omit for static files")
 	cmd.Flags().StringVar(&flags.setup, "setup", "", "explicit setup command in the managed workspace")
 	cmd.Flags().IntVar(&flags.port, "port", 0, "HTTP server port; required with --run")
@@ -99,7 +100,7 @@ func (a *application) publishAppSources(cmd *cobra.Command, host string, sources
 	if request.Kind == "server" || request.Setup != "" {
 		return errors.New("--run and --setup require a single source directory")
 	}
-	directory, err := appspkg.PreparePage(cmd.Context(), sources)
+	directory, err := appspkg.PreparePage(cmd.Context(), sources, request.MaxBytes)
 	if err != nil {
 		return fmt.Errorf("app: prepare page: %w", err)
 	}
@@ -119,7 +120,11 @@ func (a *application) publishApp(cmd *cobra.Command, host, directory string, req
 	return writeAppResult(cmd.OutOrStdout(), host, result, output.json, a.privacy)
 }
 func (f appFlags) recipe() (appspkg.Request, error) {
-	r := appspkg.Request{Kind: "static", Command: f.command, Setup: f.setup, Port: f.port, Env: f.env}
+	limit, err := appspkg.ParseSizeLimit(f.maxSize)
+	if err != nil {
+		return appspkg.Request{}, fmt.Errorf("app: source size limit: %w", err)
+	}
+	r := appspkg.Request{MaxBytes: limit, Kind: "static", Command: f.command, Setup: f.setup, Port: f.port, Env: f.env}
 	if f.command != "" {
 		r.Kind = "server"
 	}
@@ -258,26 +263,37 @@ func uploadApp(ctx context.Context, transport appTransport, directory string, re
 	if err != nil {
 		return appspkg.Result{}, err
 	}
-	// Pack refuses an archive over the limit the host enforces.
-	archive := &bytes.Buffer{}
-	digest, err := appspkg.Pack(ctx, root, archive)
+	archive, err := os.CreateTemp("", "mesh-app-upload-*.tar.gz")
 	if err != nil {
-		return appspkg.Result{}, err
+		return appspkg.Result{}, fmt.Errorf("app: create transfer archive: %w", err)
 	}
-	begin, err := transport.request(ctx, appspkg.Request{Action: "upload.begin"})
+	defer os.Remove(archive.Name()) //nolint:errcheck // Disposable transfer file.
+	defer archive.Close()           //nolint:errcheck // Read and write errors determine the transfer outcome.
+	digest, err := appspkg.Pack(ctx, root, archive, request.MaxBytes)
+	if err != nil {
+		return appspkg.Result{}, fmt.Errorf("app: pack source: %w", err)
+	}
+	begin, err := transport.request(ctx, appspkg.Request{Action: "upload.begin", MaxBytes: request.MaxBytes})
 	if err != nil {
 		return appspkg.Result{}, err
 	}
 	if len(begin.UploadID) != 43 {
 		return appspkg.Result{}, errors.New("host returned an invalid upload identifier")
 	}
-	reader := bytes.NewReader(archive.Bytes())
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		return appspkg.Result{}, fmt.Errorf("app: rewind transfer archive: %w", err)
+	}
 	var offset int64
-	for reader.Len() > 0 {
-		chunk := make([]byte, min(appspkg.ChunkSize, reader.Len()))
-		if _, err = io.ReadFull(reader, chunk); err != nil {
-			return appspkg.Result{}, err
+	buffer := make([]byte, appspkg.ChunkSize)
+	for {
+		n, readErr := io.ReadFull(archive, buffer)
+		if errors.Is(readErr, io.EOF) {
+			break
 		}
+		if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+			return appspkg.Result{}, fmt.Errorf("app: read transfer archive: %w", readErr)
+		}
+		chunk := buffer[:n]
 		_, err = transport.request(ctx, appspkg.Request{Action: "upload.chunk", UploadID: begin.UploadID, Offset: offset, Data: chunk})
 		if err != nil {
 			return appspkg.Result{}, err
@@ -308,6 +324,10 @@ func (a *application) appDownloadCommand(output *appOutput) *cobra.Command {
 		return err
 	}}
 }
+func validAppDownloadChunk(result appspkg.Result, offset int64) bool {
+	return result.MaxBytes.Valid() && len(result.Data) <= appspkg.ChunkSize && result.MaxBytes.Allows(offset, int64(len(result.Data)))
+}
+
 func downloadApp(ctx context.Context, transport appTransport, id, dest string) error {
 	absolute, err := filepath.Abs(dest)
 	if err != nil {
@@ -320,12 +340,14 @@ func downloadApp(ctx context.Context, transport appTransport, id, dest string) e
 	defer os.Remove(tmp.Name()) //nolint:errcheck // remove the unlinked transfer file
 	defer tmp.Close()           //nolint:errcheck // checked before publishing the file
 	var offset int64
+	var limit appspkg.SizeLimit
 	for {
 		result, err := transport.request(ctx, appspkg.Request{Action: "download", ID: id, Offset: offset})
 		if err != nil {
 			return err
 		}
-		if len(result.Data) > appspkg.ChunkSize || offset+int64(len(result.Data)) > appspkg.MaxArchive {
+		limit = result.MaxBytes
+		if !validAppDownloadChunk(result, offset) {
 			return errors.New("download exceeds app archive limit")
 		}
 		if len(result.Data) == 0 && !result.Done {
@@ -342,7 +364,7 @@ func downloadApp(ctx context.Context, transport appTransport, id, dest string) e
 	if err = tmp.Sync(); err != nil {
 		return err
 	}
-	if err = checkDownloadedArchive(tmp); err != nil {
+	if err = checkDownloadedArchive(tmp, limit); err != nil {
 		return fmt.Errorf("app %s download is not one intact archive, perhaps because its source changed during the transfer; run it again: %w", id, err)
 	}
 	if err = tmp.Close(); err != nil {
@@ -355,7 +377,7 @@ func downloadApp(ctx context.Context, transport appTransport, id, dest string) e
 // checkDownloadedArchive reads the archive through gzip, whose checksum fails
 // when the host served chunks from two different snapshots. Expansion is
 // bounded so a host cannot make the check itself unbounded work.
-func checkDownloadedArchive(f *os.File) error {
+func checkDownloadedArchive(f *os.File, limit appspkg.SizeLimit) error {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind download: %w", err)
 	}
@@ -363,12 +385,12 @@ func checkDownloadedArchive(f *os.File) error {
 	if err != nil {
 		return fmt.Errorf("read download: %w", err)
 	}
-	limit := int64(2 * appspkg.MaxArchive)
-	n, err := io.Copy(io.Discard, io.LimitReader(gz, limit+1))
+	expansion := limit.ArchiveExpansion()
+	n, err := io.Copy(io.Discard, expansion.Reader(gz))
 	if err != nil {
 		return fmt.Errorf("read download: %w", err)
 	}
-	if n > limit {
+	if expansion.Exceeded(n) {
 		return errors.New("download expands past the source limit")
 	}
 	return nil

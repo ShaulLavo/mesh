@@ -798,7 +798,7 @@ func (e *Registry) downloadSource(w http.ResponseWriter, r *http.Request, app Re
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+app.ID+`.tar.gz"`)
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = io.Copy(w, io.LimitReader(response.Body, MaxArchive+1))
+	_, _ = io.Copy(w, response.Body)
 }
 
 func managementReturn(r *http.Request) string {

@@ -23,7 +23,7 @@ func pageFile(t *testing.T, root, name, content string) string {
 
 func preparedPage(t *testing.T, files ...string) string {
 	t.Helper()
-	directory, err := PreparePage(context.Background(), files)
+	directory, err := PreparePage(context.Background(), files, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestPreparePageRefusesUnsafeFilesAndCleansFailedStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, files := range [][]string{nil, {link}, {site}, {pageFile(t, root, ".env", "secret")}, {pageFile(t, root, "private.key", "secret")}, {filepath.Join(root, "missing")}} {
-		if _, err := PreparePage(context.Background(), files); err == nil {
+		if _, err := PreparePage(context.Background(), files, 0); err == nil {
 			t.Fatalf("accepted unsafe selection: %v", files)
 		}
 	}
@@ -135,12 +135,12 @@ func TestPreparePageUsesAppSourceExclusionsAndLimits(t *testing.T) {
 	if err := os.Truncate(large, MaxArchive+1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PreparePage(context.Background(), []string{large}); !errors.Is(err, errSourceTooLarge) {
+	if _, err := PreparePage(context.Background(), []string{large}, 0); !errors.Is(err, errSourceTooLarge) {
 		t.Fatalf("oversized source accepted: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := PreparePage(ctx, []string{filepath.Join(root, "index.html")}); !errors.Is(err, context.Canceled) {
+	if _, err := PreparePage(ctx, []string{filepath.Join(root, "index.html")}, 0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled preparation accepted: %v", err)
 	}
 }

@@ -45,7 +45,8 @@ type OriginConfig struct {
 	Now              func() time.Time
 }
 type localApp struct {
-	Commit *commitIntent `json:"commit,omitempty"`
+	MaxBytes SizeLimit     `json:"maxBytes,omitempty"`
+	Commit   *commitIntent `json:"commit,omitempty"`
 	// Candidate is an update being prepared beside this ready app. It stays
 	// optional so a state written with one still loads in an older binary.
 	Candidate *updateCandidate `json:"candidate,omitempty"`
@@ -81,11 +82,12 @@ type updateCandidate struct {
 	Replacing bool `json:"replacing,omitempty"`
 }
 type appRoute struct {
-	Handler *appHandler
-	Record  Record
-	Root    string
-	Port    int
-	Phase   string
+	MaxBytes SizeLimit
+	Handler  *appHandler
+	Record   Record
+	Root     string
+	Port     int
+	Phase    string
 	// Upstream is the one address a server app may be proxied to; invalid
 	// means it is not served.
 	Upstream netip.AddrPort
@@ -104,6 +106,7 @@ type serving struct {
 	fault string
 }
 type upload struct {
+	MaxBytes  SizeLimit `json:"maxBytes,omitempty"`
 	ID        string    `json:"id"`
 	Size      int64     `json:"size"`
 	ExpiresAt time.Time `json:"expiresAt"`
@@ -357,7 +360,7 @@ func (o *Origin) publishRoutes() {
 // follows the address alone.
 func cachedAppRoute(app localApp, old appRoute, verified serving) appRoute {
 	upstream := verified.upstream
-	route := appRoute{Record: app.Record, Root: app.Root, Port: app.Port, Phase: app.Phase, Upstream: upstream, upstreamInode: verified.inode}
+	route := appRoute{MaxBytes: app.MaxBytes, Record: app.Record, Root: app.Root, Port: app.Port, Phase: app.Phase, Upstream: upstream, upstreamInode: verified.inode}
 	switch {
 	case app.Phase != "ready" || app.Record.Status != "active":
 	case old.Handler != nil && old.Root == app.Root && old.Port == app.Port && old.Record.Kind == app.Record.Kind && old.Record.Revision == app.Record.Revision && old.Upstream == upstream && old.upstreamInode == verified.inode:
@@ -593,11 +596,14 @@ type unsavedReply struct{ err error }
 func (e *unsavedReply) Error() string { return "app: save edge acknowledgement: " + e.err.Error() }
 func (e *unsavedReply) Unwrap() error { return e.err }
 func (o *Origin) Handle(ctx context.Context, q Request) (Result, error) {
+	if !q.MaxBytes.Valid() {
+		return Result{}, errors.New("app: invalid size limit")
+	}
 	switch q.Action {
 	case "upload.begin":
 		o.mu.Lock()
 		defer o.mu.Unlock()
-		return o.beginUpload(ctx)
+		return o.beginUpload(ctx, q.MaxBytes)
 	case "upload.chunk":
 		return o.appendUpload(ctx, q)
 	case "create", "update":
@@ -670,7 +676,7 @@ func (o *Origin) uploadPath(id string) string {
 }
 
 // beginUpload requires mu; it only creates an empty file.
-func (o *Origin) beginUpload(ctx context.Context) (Result, error) {
+func (o *Origin) beginUpload(ctx context.Context, limit SizeLimit) (Result, error) {
 	if err := o.ensureRoot(); err != nil {
 		return Result{}, err
 	}
@@ -688,7 +694,7 @@ func (o *Origin) beginUpload(ctx context.Context) (Result, error) {
 	if err = f.Close(); err != nil {
 		return Result{}, err
 	}
-	o.state.Uploads[id] = upload{ID: id, ExpiresAt: o.config.Now().Add(time.Hour)}
+	o.state.Uploads[id] = upload{ID: id, MaxBytes: limit, ExpiresAt: o.config.Now().Add(time.Hour)}
 	if err := o.persist(ctx); err != nil {
 		return Result{}, err
 	}
@@ -709,7 +715,7 @@ func (o *Origin) appendUpload(ctx context.Context, q Request) (Result, error) {
 	if len(q.Data) > ChunkSize || q.Offset < 0 {
 		return Result{}, errors.New("app: upload chunk exceeds limit")
 	}
-	if q.Offset+int64(len(q.Data)) > MaxArchive {
+	if !u.MaxBytes.Allows(q.Offset, int64(len(q.Data))) {
 		return Result{}, ErrArchiveTooLarge
 	}
 	f, err := os.OpenFile(o.uploadPath(u.ID), os.O_RDWR, 0600)
@@ -874,7 +880,7 @@ func (o *Origin) allocate(ctx context.Context, q Request, digest string) (contex
 		return ctx, localApp{}, nil, err
 	}
 	id := result.App.ID
-	local := localApp{Record: *result.App, Root: filepath.Join(o.config.DataRoot, "apps", id, "source-"+q.UploadID), Command: q.Command, Port: q.Port, Env: q.Env, Phase: "preparing", Commit: &commitIntent{UploadID: q.UploadID, Digest: digest}}
+	local := localApp{MaxBytes: q.MaxBytes, Record: *result.App, Root: filepath.Join(o.config.DataRoot, "apps", id, "source-"+q.UploadID), Command: q.Command, Port: q.Port, Env: q.Env, Phase: "preparing", Commit: &commitIntent{UploadID: q.UploadID, Digest: digest}}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	opCtx, release := o.claimLocked(ctx, "app "+id, q.Action)
@@ -903,7 +909,7 @@ func (o *Origin) stageUpdate(ctx context.Context, q Request, digest string) (loc
 	if !ok {
 		return localApp{}, localApp{}, errors.New("app: managed workspace missing")
 	}
-	local := localApp{Record: *result.App, Root: filepath.Join(o.config.DataRoot, "apps", q.ID, "source-"+q.UploadID), Command: q.Command, Port: q.Port, Env: q.Env, Phase: "preparing"}
+	local := localApp{MaxBytes: q.MaxBytes, Record: *result.App, Root: filepath.Join(o.config.DataRoot, "apps", q.ID, "source-"+q.UploadID), Command: q.Command, Port: q.Port, Env: q.Env, Phase: "preparing"}
 	local.Commit = &commitIntent{UploadID: q.UploadID, Digest: digest, PreviousRoot: previous.Root}
 	return local, previous, nil
 }
@@ -954,6 +960,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 	prior, receipted := o.state.Receipts[q.UploadID]
 	pending, hasPending := o.pendingCommitLocked(q.UploadID)
 	current, exists := o.state.Apps[q.ID]
+	uploaded := o.state.Uploads[q.UploadID]
 	o.mu.Unlock()
 	if receipted {
 		if prior.Digest != digest {
@@ -991,6 +998,9 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 			return Result{}, err
 		}
 	}
+	if q.MaxBytes != uploaded.MaxBytes {
+		return Result{}, errors.New("app: source size limit differs from upload")
+	}
 	if err := validateRecipe(q); err != nil {
 		return Result{}, err
 	}
@@ -1012,7 +1022,7 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		}
 		held.release()
 	}()
-	if err := unpack(o.uploadPath(q.UploadID), staging, q.Digest); err != nil {
+	if err := unpack(o.uploadPath(q.UploadID), staging, q.Digest, uploaded.MaxBytes); err != nil {
 		return Result{}, err
 	}
 	var local, previous localApp
@@ -1864,6 +1874,7 @@ func (o *Origin) expireUploads(ctx context.Context) error {
 // the same source shares the snapshot, and a reader finishing never closes it:
 // only idle time, the app's deletion or the origin closing does.
 type downloadArchive struct {
+	limit    SizeLimit
 	source   string
 	file     *os.File
 	lastRead time.Time
@@ -1882,7 +1893,7 @@ const maxAppDownloads = 2
 // packUnnamed packs an app's source into a file unlinked as soon as it exists.
 // The random name is created exclusively, so a planted symlink or hard link is
 // never written through, and no exit or crash can leave the archive behind.
-func (o *Origin) packUnnamed(ctx context.Context, id, root string) (*os.File, error) {
+func (o *Origin) packUnnamed(ctx context.Context, id, root string, limit SizeLimit) (*os.File, error) {
 	f, err := os.CreateTemp(filepath.Join(o.config.DataRoot, "apps", id), ".download-*")
 	if err != nil {
 		return nil, fmt.Errorf("app %s: create download archive: %w", id, err)
@@ -1890,13 +1901,13 @@ func (o *Origin) packUnnamed(ctx context.Context, id, root string) (*os.File, er
 	if err := os.Remove(f.Name()); err != nil {
 		return nil, errors.Join(fmt.Errorf("app %s: unlink download archive: %w", id, err), f.Close())
 	}
-	if _, err := Pack(ctx, root, f); err != nil {
+	if _, err := Pack(ctx, root, f, limit); err != nil {
 		return nil, errors.Join(fmt.Errorf("app %s: pack download: %w", id, err), f.Close())
 	}
 	return f, nil
 }
 func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
-	if q.Offset < 0 || q.Offset > MaxArchive {
+	if q.Offset < 0 {
 		return Result{}, errors.New("app: invalid download offset")
 	}
 	ctx, release, err := o.beginOp(ctx, "app "+q.ID, "download")
@@ -1915,7 +1926,7 @@ func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 		return Result{}, errors.Join(err, errors.New("app: app expired"))
 	}
 	if q.Offset == 0 {
-		if err := o.snapshotDownload(ctx, q.ID, a.Root); err != nil {
+		if err := o.snapshotDownload(ctx, q.ID, a.Root, a.MaxBytes); err != nil {
 			return Result{}, err
 		}
 	}
@@ -1924,7 +1935,7 @@ func (o *Origin) download(ctx context.Context, q Request) (Result, error) {
 
 // snapshotDownload makes sure a snapshot of the app's current source exists,
 // reusing one another download still reads. The caller owns the app.
-func (o *Origin) snapshotDownload(ctx context.Context, id, source string) error {
+func (o *Origin) snapshotDownload(ctx context.Context, id, source string, limit SizeLimit) error {
 	o.mu.Lock()
 	for _, d := range o.downloads[id] {
 		if d.source == source {
@@ -1933,13 +1944,13 @@ func (o *Origin) snapshotDownload(ctx context.Context, id, source string) error 
 		}
 	}
 	o.mu.Unlock()
-	f, err := o.packUnnamed(ctx, id, source)
+	f, err := o.packUnnamed(ctx, id, source, limit)
 	if err != nil {
 		return err
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.downloads[id] = append(o.downloads[id], &downloadArchive{source: source, file: f, lastRead: o.config.Now()})
+	o.downloads[id] = append(o.downloads[id], &downloadArchive{limit: limit, source: source, file: f, lastRead: o.config.Now()})
 	kept := o.downloads[id]
 	for len(kept) > maxAppDownloads {
 		oldest := 0
@@ -1978,7 +1989,7 @@ func (o *Origin) readDownload(id, source string, offset int64) (Result, error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		return Result{}, fmt.Errorf("app %s: read download: %w", id, err)
 	}
-	return Result{Data: b[:n], Done: errors.Is(err, io.EOF) || n < ChunkSize}, nil
+	return Result{MaxBytes: d.limit, Data: b[:n], Done: errors.Is(err, io.EOF) || n < ChunkSize}, nil
 }
 
 // releaseDownloadsLocked closes an app's snapshots; it requires mu.
@@ -2193,7 +2204,7 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (o *Origin) configCheckSourceDownload(w http.ResponseWriter, r *http.Request, app appRoute) error {
-	f, err := o.packUnnamed(r.Context(), app.Record.ID, app.Root)
+	f, err := o.packUnnamed(r.Context(), app.Record.ID, app.Root, app.MaxBytes)
 	if err != nil {
 		return err
 	}

@@ -149,3 +149,49 @@ func TestAppFilesRejectServerRecipesAndCleanFailedUpload(t *testing.T) {
 		t.Fatalf("failed upload retained staging files: %v %v", entries, err)
 	}
 }
+
+func TestAppMaxSizeTravelsWithCreateAndUpdate(t *testing.T) {
+	prepareCommandEnvironment(t)
+	file := filepath.Join(t.TempDir(), "clip.webm")
+	if err := os.WriteFile(file, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(file, appspkg.MaxArchive+1); err != nil {
+		t.Fatal(err)
+	}
+	staging := t.TempDir()
+	t.Setenv("TMPDIR", staging)
+	for _, operation := range []string{"create", "update"} {
+		testAppMaxSize(t, operation, file)
+	}
+	entries, err := os.ReadDir(staging)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("retained transfer files: %v %v", entries, err)
+	}
+}
+
+func testAppMaxSize(t *testing.T, operation, file string) {
+	t.Helper()
+	args := []string{"app", operation, "pc"}
+	if operation == "update" {
+		args = append(args, "7k3d")
+	}
+	args = append(args, file)
+	calls := 0
+	deps := Dependencies{AppRequest: func(_ context.Context, _ string, q appspkg.Request) (appspkg.Result, error) {
+		calls++
+		if q.Action == "upload.begin" || q.Action == operation {
+			if q.MaxBytes != -1 {
+				t.Fatalf("size limit lost on %s: %d", q.Action, q.MaxBytes)
+			}
+		}
+		return appspkg.Result{UploadID: strings.Repeat("a", 43)}, nil
+	}}
+	if _, _, err := executeCommand(t, deps, args...); err == nil || calls != 0 {
+		t.Fatalf("default limit allowed large file: calls=%d err=%v", calls, err)
+	}
+	args = append(args, "--max-size", "unlimited")
+	if _, _, err := executeCommand(t, deps, args...); err != nil || calls < 3 {
+		t.Fatalf("unlimited upload: calls=%d err=%v", calls, err)
+	}
+}

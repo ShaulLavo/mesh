@@ -30,24 +30,25 @@ func secretName(name string) bool {
 }
 
 // ErrArchiveTooLarge is what pack, upload and unpack all return for a
-// compressed archive over MaxArchive, so an owner sees one limit wherever the
+// compressed archive over its configured size limit, so an owner sees one limit wherever the
 // archive is refused.
-var ErrArchiveTooLarge = errors.New("app: source archive exceeds 64 MiB compressed")
+var ErrArchiveTooLarge = errors.New("app: source archive exceeds size limit; increase --max-size")
 
 // errSourceTooLarge is pack's and unpack's shared refusal of the expanded
-// source: MaxArchive bytes of file contents or maxSourceFiles files.
-var errSourceTooLarge = errors.New("app: source exceeds 64 MiB or 10000 files")
+// source: the configured byte limit or maxSourceFiles files.
+var errSourceTooLarge = errors.New("app: source exceeds size limit or 10000 files; increase --max-size for larger files")
 
 const maxSourceFiles = 10000
 
-// archiveLimit refuses the write that would take the archive past MaxArchive.
+// archiveLimit refuses the write that would take the archive past its limit.
 type archiveLimit struct {
 	w       io.Writer
 	written int64
+	limit   SizeLimit
 }
 
 func (l *archiveLimit) Write(p []byte) (int, error) {
-	if l.written+int64(len(p)) > MaxArchive {
+	if !l.limit.Allows(l.written, int64(len(p))) {
 		return 0, ErrArchiveTooLarge
 	}
 	n, err := l.w.Write(p)
@@ -59,7 +60,7 @@ func (l *archiveLimit) Write(p []byte) (int, error) {
 }
 
 // Pack copies source, excluding environment files, credentials and generated dependencies.
-func Pack(ctx context.Context, dir string, w io.Writer) (string, error) {
+func Pack(ctx context.Context, dir string, w io.Writer, limit SizeLimit) (string, error) {
 	canonical, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return "", err
@@ -79,7 +80,7 @@ func Pack(ctx context.Context, dir string, w io.Writer) (string, error) {
 	}
 	defer func() { _ = root.Close() }()
 	h := sha256.New()
-	gz := gzip.NewWriter(&archiveLimit{w: io.MultiWriter(w, h)})
+	gz := gzip.NewWriter(&archiveLimit{w: io.MultiWriter(w, h), limit: limit})
 	tw := tar.NewWriter(gz)
 	var total int64
 	count := 0
@@ -109,9 +110,12 @@ func Pack(ctx context.Context, dir string, w io.Writer) (string, error) {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("app: unsupported source file %s", name)
 		}
+		if info.Size() > (1<<63-1)-total {
+			return errSourceTooLarge
+		}
 		total += info.Size()
 		count++
-		if total > MaxArchive || count > maxSourceFiles {
+		if limit.Exceeded(total) || count > maxSourceFiles {
 			return errSourceTooLarge
 		}
 		if err := tw.WriteHeader(&tar.Header{Name: filepath.ToSlash(name), Mode: int64(info.Mode().Perm()), Size: info.Size()}); err != nil {
@@ -139,7 +143,7 @@ func Pack(ctx context.Context, dir string, w io.Writer) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func unpack(archive, dir, digest string) error {
+func unpack(archive, dir, digest string, limit SizeLimit) error {
 	f, err := os.Open(archive) //nolint:gosec // Archive is the origin-owned upload path, never a visitor-supplied filename.
 	if err != nil {
 		return err
@@ -149,11 +153,11 @@ func unpack(archive, dir, digest string) error {
 	if err != nil {
 		return err
 	}
-	if info.Size() > MaxArchive {
+	if limit.Exceeded(info.Size()) {
 		return ErrArchiveTooLarge
 	}
 	h := sha256.New()
-	if _, err = io.Copy(h, io.LimitReader(f, MaxArchive+1)); err != nil {
+	if _, err = io.Copy(h, limit.Reader(f)); err != nil {
 		return err
 	}
 	if hex.EncodeToString(h.Sum(nil)) != digest {
@@ -190,12 +194,12 @@ func unpack(archive, dir, digest string) error {
 		if header.Typeflag != tar.TypeReg && header.Typeflag != byte(0) {
 			return errors.New("app: archive links and special files are forbidden")
 		}
-		total += header.Size
-		count++
-		if header.Size < 0 {
+		if header.Size < 0 || header.Size > (1<<63-1)-total {
 			return errors.New("app: unsafe archive entry size")
 		}
-		if total > MaxArchive || count > maxSourceFiles {
+		total += header.Size
+		count++
+		if limit.Exceeded(total) || count > maxSourceFiles {
 			return errSourceTooLarge
 		}
 		if err := root.MkdirAll(path.Dir(clean), 0700); err != nil {
