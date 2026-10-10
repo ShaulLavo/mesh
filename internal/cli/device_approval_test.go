@@ -325,7 +325,7 @@ func TestCheckedApprovalRestrictedKeysAndConcurrentWriters(t *testing.T) {
 	}
 	for range 4 {
 		if err := <-results; err != nil {
-			t.Fatal(err)
+			t.Error(err)
 		}
 	}
 	grants, err := identity.DeviceGrants(path)
