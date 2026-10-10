@@ -53,9 +53,9 @@ def fixture(binary, parent, mode):
         if mode == "cancel":
             previous = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
             timer = threading.Timer(0.001, signal_self, args=(signal.SIGTERM, "fault-fixture-cancellation"))
-            timer.start()
             try:
                 try:
+                    timer.start()
                     raise KeyboardInterrupt("cancel after creating a session")
                 finally:
                     bench.cleanup(state, sessions, daemon, binary)
