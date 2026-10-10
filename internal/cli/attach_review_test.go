@@ -159,9 +159,16 @@ func TestCancelledAttachmentBindingDependsOnAcknowledgement(t *testing.T) {
 					Terminal: fakeTerminal(key), Containment: func(context.Context) []protocol.SessionIdentity { return nil }})
 				command.SetArgs([]string{"pc", "-r", "--raw"})
 				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
 				done := make(chan error, 1)
-				go func() { done <- command.ExecuteContext(ctx) }()
+				finished := make(chan struct{})
+				t.Cleanup(func() {
+					cancel()
+					<-finished
+				})
+				go func() {
+					defer close(finished)
+					done <- command.ExecuteContext(ctx)
+				}()
 				var attachment *bindingCancelConn
 				select {
 				case attachment = <-ready:

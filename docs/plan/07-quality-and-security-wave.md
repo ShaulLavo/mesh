@@ -273,6 +273,18 @@ and integration suite reported these separate failures in unchanged paths:
 Run the narrow reproductions from the source checkout, with a short scratch root
 on the workload SSD:
 
+Verification on source `bfa4697`, Go 1.27.2, Linux, repeated the approval writer
+failure once at `internal/cli/device_approval_test.go:328`. The command was
+`TMPDIR=/work/tmp/mesh-ci-20261010 GOCACHE=/work/cache/go-build GOTMPDIR=/work/tmp/mesh-ci-20261010/go-tmp go test -race -count=1 -timeout=10m -json ./internal/cli`.
+It finished in 434.245s. Output is retained in
+`/work/reports/mesh-ci-20261010/cli-local-retry.jsonl`. The same run exposed an
+attachment fixture cleanup race after `attachment did not start`: cleanup closed
+the input while the command read its file descriptor in
+`internal/cli/update_notice.go:68`. The fixture now cancels and waits for its
+command before closing files. Ten focused race runs and a forced early setup
+failure control verified the cleanup. The approval writer follow-up remains open;
+its production lock deadline is unchanged.
+
 ```sh
 mkdir -p /work/tmp/mesh-verification-followup
 TMPDIR=/work/tmp/mesh-verification-followup MESH_SHORT_TMP=/work/tmp/mesh-verification-followup \
