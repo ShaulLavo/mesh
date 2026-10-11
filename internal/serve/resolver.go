@@ -56,7 +56,7 @@ type resolvedRootPath struct {
 }
 
 func resolveRootPath(root, requestPath string) (resolvedRootPath, error) {
-	decoded, err := decodeRequestPath(requestPath)
+	decoded, err := DecodeRequestPath(requestPath)
 	if err != nil {
 		return resolvedRootPath{}, err
 	}
@@ -117,7 +117,7 @@ func resolveWithinRoot(rootPath, relative, requestPath string) (resolvedRootPath
 // returned metadata describes the returned file descriptor. The caller must
 // close the file.
 func OpenRootEntry(root, requestPath string) (*os.File, fs.FileInfo, error) {
-	decoded, err := decodeRequestPath(requestPath)
+	decoded, err := DecodeRequestPath(requestPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -252,7 +252,9 @@ func openRootedPath(root *os.Root, relative, display string) (*os.File, fs.FileI
 	return file, info, nil
 }
 
-func decodeRequestPath(value string) (string, error) {
+// DecodeRequestPath percent-decodes a request path until it stops changing,
+// the decoding static lookups apply before opening a file.
+func DecodeRequestPath(value string) (string, error) {
 	decoded := value
 	for decodings := 0; ; decodings++ {
 		if strings.IndexByte(decoded, 0) >= 0 {
@@ -260,7 +262,7 @@ func decodeRequestPath(value string) (string, error) {
 		}
 		next, err := url.PathUnescape(decoded)
 		if err != nil {
-			return "", fmt.Errorf("%w: malformed URL escape: %v", ErrInvalidPath, err)
+			return "", fmt.Errorf("%w: malformed URL escape: %w", ErrInvalidPath, err)
 		}
 		if next == decoded {
 			return decoded, nil
