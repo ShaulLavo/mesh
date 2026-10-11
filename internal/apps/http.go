@@ -196,11 +196,9 @@ func (e *Registry) ServeHost(w http.ResponseWriter, r *http.Request, name string
 	proxy.Rewrite = func(out *httputil.ProxyRequest) {
 		out.SetURL(target)
 		request := out.Out
-		if app.Kind == string(serve.Static) {
-			// Static handlers ignore queries; preserve even malformed ones so
-			// proxy query cleanup cannot change the signed admission URI.
-			request.URL.RawQuery = r.URL.RawQuery
-		}
+		// Proxy query cleanup re-encodes malformed queries; restore the exact
+		// bytes so the origin sees the signed admission URI and apps get what the client sent.
+		request.URL.RawQuery = r.URL.RawQuery
 		request.URL.Path = "/.mesh-app/origin/" + id + request.URL.Path
 		if request.URL.RawPath != "" {
 			request.URL.RawPath = "/.mesh-app/origin/" + id + request.URL.RawPath

@@ -177,7 +177,7 @@ func serveFiles(w http.ResponseWriter, request *http.Request, root, prefix, rela
 		return
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	decoded, err := decodeRequestPath(relative)
+	decoded, err := DecodeRequestPath(relative)
 	if err != nil {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return

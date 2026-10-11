@@ -75,3 +75,43 @@ func TestOriginAdmissionBindsEmptyQueryMarker(t *testing.T) {
 		t.Fatalf("modified admission returned %d, want 404", w.Code)
 	}
 }
+
+func TestStaticAppRefusesEncodedSecretNames(t *testing.T) {
+	f := newAppFixture(t)
+	app := createAdmissionApp(t, f)
+	root := (*f.origin.routes.Load())[app.ID].Root
+	// Upload strips these names; write them directly so only the origin filter stands between them and a request.
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{".env", "id_rsa", ".git/config"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !f.origin.ServeHTTP(w, r) {
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(origin.Close)
+	endpoint, err := url.Parse(origin.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.edge.config.Resolve = func(context.Context, string) (netip.AddrPort, error) {
+		return netip.ParseAddrPort(endpoint.Host)
+	}
+	for _, target := range []string{
+		"/.env", "/%2eenv", "/%252eenv", "/%25252eenv", "/id_rsa", "/id%255frsa", "/.git/config", "/%252egit/config", "/%252egit%252fconfig",
+	} {
+		t.Run(target, func(t *testing.T) {
+			r := ownerRequest(f, httptest.NewRequest(http.MethodGet, URL(app.ID)+target, nil))
+			w := httptest.NewRecorder()
+			f.edge.ServeHost(w, r, app.ID+"."+Domain())
+			if w.Code != http.StatusNotFound && w.Code != http.StatusBadRequest {
+				t.Fatalf("secret path %s returned %d %q", target, w.Code, w.Body.String())
+			}
+		})
+	}
+}

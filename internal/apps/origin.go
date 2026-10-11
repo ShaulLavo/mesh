@@ -2189,8 +2189,10 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 	request.URL.RawPath = original
 	request.Host = admission.Host
 	if app.Record.Kind == "static" {
-		name := strings.TrimPrefix(request.URL.Path, "/")
-		if excluded(name) || secretName(name) {
+		// Static lookup decodes until stable, so the filter checks the same name.
+		name, err := meshserve.DecodeRequestPath(request.URL.Path)
+		name = strings.TrimPrefix(name, "/")
+		if err != nil || excluded(name) || secretName(name) {
 			http.NotFound(w, request)
 			return true
 		}
