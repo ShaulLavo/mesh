@@ -2148,7 +2148,7 @@ func (o *Origin) ServeHTTP(w http.ResponseWriter, r *http.Request) bool {
 		original = "/"
 	}
 	rawURI := original
-	if r.URL.RawQuery != "" {
+	if r.URL.ForceQuery || r.URL.RawQuery != "" {
 		rawURI += "?" + r.URL.RawQuery
 	}
 	if !storedID(admission.ID) || admission.Method != r.Method || admission.URI != rawURI || !now.Before(admission.Until) || admission.Until.After(proof.IssuedAt.Add(admissionLifetime)) || !acceptedAppHost(admission.Host, admission.ID) {
