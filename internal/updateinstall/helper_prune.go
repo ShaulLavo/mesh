@@ -66,6 +66,14 @@ func retainedHelperDigests(stateDir, dir, installedDigest string) (map[string]bo
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	if err == nil {
+		if err := status.Request.Manifest.Validate(); err != nil {
+			return nil, fmt.Errorf("validate helper installation reference: %w", err)
+		}
+		if !helperDigestPattern.MatchString(status.Request.Current.Digest) {
+			return nil, errors.New("helper installation source digest is missing or invalid")
+		}
+	}
 	keep[status.Request.Current.Digest] = true
 	// A helper can still execute its old image while its replacement starts.
 	if executable, err := os.Executable(); err == nil && within(dir, executable) {

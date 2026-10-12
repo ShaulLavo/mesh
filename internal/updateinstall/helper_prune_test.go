@@ -1,6 +1,7 @@
 package updateinstall
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,9 +10,10 @@ import (
 
 func TestHelperUpdatesRetainCurrentAndOnePriorImage(t *testing.T) {
 	f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
-	var installed HelperInstallation
+	installed := f.prior
 	for i := range 12 {
 		f.commit(t, fmt.Sprintf("v0.1.%d", 171+i), "")
+		setPruneSource(t, f, installed.Digest)
 		var err error
 		installed, err = UpgradeHelper(t.Context(), f.cfg)
 		if err != nil {
@@ -61,6 +63,7 @@ func TestHelperPruneKeepsPendingActivationAndInstallationSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.commit(t, "v0.1.172", "")
+	setPruneSource(t, f, f.prior.Digest)
 	if _, err := stageHelperImage(t.Context(), f.cfg, digestBytes(mustReadImage(t, f.cfg.Executable))); err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +71,33 @@ func TestHelperPruneKeepsPendingActivationAndInstallationSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertExists(t, pending.Executable, true)
+	assertExists(t, f.prior.Executable, true)
+}
+
+func setPruneSource(t *testing.T, f helperUpgradeFixture, digest string) {
+	t.Helper()
+	status, err := Read(f.cfg.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status.Request.Current.Digest = digest
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(journalPath(f.cfg.StateDir), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHelperPruneRejectsIncompleteInstallation(t *testing.T) {
+	f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
+	if err := atomicWrite(journalPath(f.cfg.StateDir), []byte(`{"schema":1}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := pruneHelperImages(f.cfg.StateDir, f.prior.Digest); err == nil {
+		t.Fatal("incomplete installation metadata permitted helper cleanup")
+	}
 	assertExists(t, f.prior.Executable, true)
 }
 

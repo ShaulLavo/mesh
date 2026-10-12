@@ -37,6 +37,9 @@ func PruneCache(ctx context.Context, stateDir, cacheDir string) error {
 		return fmt.Errorf("read installation cache references: %w", err)
 	}
 	if err == nil {
+		if err := installation.Request.Manifest.Validate(); err != nil {
+			return fmt.Errorf("validate installation cache reference: %w", err)
+		}
 		keep[installation.Request.Manifest.Digest()] = true
 	}
 	if err := release.PruneCache(ctx, cacheDir, keep); err != nil {
