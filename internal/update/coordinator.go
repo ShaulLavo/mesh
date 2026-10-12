@@ -40,6 +40,7 @@ type Coordinator struct {
 	Release        release.Client
 	CacheDir       string
 	Download       func(context.Context, release.Manifest, release.Platform, string) (string, error)
+	lastCachePrune time.Time
 }
 
 func (c *Coordinator) Start(ctx context.Context, plan Plan) (Run, error) {
@@ -90,6 +91,12 @@ func (c *Coordinator) Step(ctx context.Context) error {
 		if err := c.stepRun(ctx, run); err != nil {
 			return err
 		}
+	}
+	if time.Since(c.lastCachePrune) >= time.Minute {
+		if err := c.pruneCache(ctx); err != nil {
+			return err
+		}
+		c.lastCachePrune = time.Now()
 	}
 	return nil
 }

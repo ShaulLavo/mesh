@@ -214,16 +214,15 @@ func (e *Engine) stage(ctx context.Context, status Status) (Status, error) {
 	if err := checkMount(e.cfg.RequiredMount); err != nil {
 		return status, err
 	}
-	path, err := e.cfg.Client.Download(ctx, status.Request.Manifest, status.Request.Current.Platform, e.cfg.CacheDir)
-	if err != nil {
-		return status, err
-	}
 	artifact, err := status.Request.Manifest.Artifact(status.Request.Current.Platform)
 	if err != nil {
 		return status, err
 	}
-	if err = durableCopy(ctx, path, status.Candidate, artifact.BinarySHA256); err != nil {
-		return status, err
+	err = e.cfg.Client.WithExecutable(ctx, status.Request.Manifest, status.Request.Current.Platform, e.cfg.CacheDir, func(path string) error {
+		return durableCopy(ctx, path, status.Candidate, artifact.BinarySHA256)
+	})
+	if err != nil {
+		return status, fmt.Errorf("stage release executable: %w", err)
 	}
 	if err = durableLink(e.cfg.Executable, status.Previous, status.Request.Current.Digest); err != nil {
 		return status, err

@@ -255,6 +255,12 @@ MESH_UPDATE_REQUIRED_MOUNT=/work mesh update --local
 Set these variables in a coordinator or target daemon's service environment
 when that daemon owns the update. The helper retains the approved installation
 settings across restarts. Pending operations keep their pinned artifacts.
+Finished fleet operations release their old download directories. Mesh keeps
+the latest installation's download and every unfinished operation's artifacts.
+Cache cleanup waits until an installer finishes copying a downloaded image.
+The helper keeps its current image, pending activation, installation source,
+the images named before the latest promotion, and one spare image for recovery. Obsolete helper copies are removed after a
+successful helper preparation or upgrade.
 
 An update requires an official release manifest with verified artifact hashes,
 compatible state and worker protocols, and a tested transition from the actual
