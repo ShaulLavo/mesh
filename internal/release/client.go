@@ -109,6 +109,29 @@ func (c Client) latestTag(ctx context.Context, client *http.Client, baseURL stri
 
 // Download stores a verified executable in a content-addressed cache directory.
 func (c Client) Download(ctx context.Context, manifest Manifest, platform Platform, cacheDirectory string) (string, error) {
+	unlock, err := lockCache(ctx, cacheDirectory)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	return c.download(ctx, manifest, platform, cacheDirectory)
+}
+
+// WithExecutable keeps the cache image leased until the consumer has copied it.
+func (c Client) WithExecutable(ctx context.Context, manifest Manifest, platform Platform, cacheDirectory string, consume func(string) error) error {
+	unlock, err := lockCache(ctx, cacheDirectory)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	path, err := c.download(ctx, manifest, platform, cacheDirectory)
+	if err != nil {
+		return err
+	}
+	return consume(path)
+}
+
+func (c Client) download(ctx context.Context, manifest Manifest, platform Platform, cacheDirectory string) (string, error) {
 	artifact, err := manifest.Artifact(platform)
 	if err != nil {
 		return "", err

@@ -160,7 +160,13 @@ func updateHelperStep(ctx context.Context, stateDir string) error {
 	}
 	kind, domain := helperUpgradeService(status.Settings)
 	_, err = updateinstall.UpgradeHelper(ctx, updateinstall.HelperConfig{StateDir: stateDir, Executable: status.Settings.Executable, Kind: kind, Domain: domain})
-	return err
+	if err != nil {
+		return fmt.Errorf("upgrade committed update helper: %w", err)
+	}
+	if err := update.PruneCache(ctx, stateDir, status.Settings.CacheDir); err != nil {
+		return fmt.Errorf("clean committed update cache: %w", err)
+	}
+	return nil
 }
 
 func helperUpgradeService(settings updateinstall.Settings) (string, string) {

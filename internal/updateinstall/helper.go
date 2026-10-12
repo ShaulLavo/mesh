@@ -38,7 +38,11 @@ func PrepareHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 		return HelperInstallation{}, err
 	}
 	defer unlock(lock)
-	return prepareHelper(ctx, cfg, false, "")
+	installed, err := prepareHelper(ctx, cfg, false, "")
+	if err == nil {
+		_ = pruneHelperImages(cfg.StateDir, installed.Digest)
+	}
+	return installed, err
 }
 
 func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approvedDigest string) (HelperInstallation, error) {
@@ -61,6 +65,14 @@ func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approved
 	if !filepath.IsAbs(cfg.ServiceDir) {
 		return HelperInstallation{}, errors.New("helper service directory must be absolute")
 	}
+	var current HelperInstallation
+	currentErr := readHelperInstallation(ctx, cfg.StateDir, &current)
+	if currentErr == nil && !upgrade {
+		return current, verifyFile(current.Executable, current.Digest)
+	}
+	if currentErr != nil && !errors.Is(currentErr, os.ErrNotExist) {
+		return HelperInstallation{}, currentErr
+	}
 	digest := approvedDigest
 	if digest == "" {
 		var err error
@@ -79,14 +91,6 @@ func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approved
 		return installed, err
 	}
 	installed.ServicePath = filepath.Join(cfg.ServiceDir, name)
-	var current HelperInstallation
-	currentErr := readHelperInstallation(ctx, cfg.StateDir, &current)
-	if currentErr == nil && !upgrade {
-		return current, verifyFile(current.Executable, current.Digest)
-	}
-	if currentErr != nil && !errors.Is(currentErr, os.ErrNotExist) {
-		return installed, currentErr
-	}
 	if currentErr != nil {
 		existing, readErr := readMetadata(ctx, cfg.ServiceDir, name, false)
 		if readErr == nil && !bytes.Equal(existing, []byte(data)) {
@@ -171,6 +175,18 @@ func UpgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 		return HelperInstallation{}, err
 	}
 	defer unlock(lock)
+	priorLink, _ := os.Readlink(filepath.Join(transactionDir(cfg.StateDir), "helper", "current"))
+	priorPending, _ := os.ReadFile(helperActivationRecord(cfg.StateDir)) //nolint:gosec // fixed helper activation metadata
+	var prior HelperInstallation
+	_ = readHelperInstallation(ctx, cfg.StateDir, &prior)
+	installed, err := upgradeHelper(ctx, cfg)
+	if err == nil {
+		_ = pruneHelperImages(cfg.StateDir, installed.Digest, prior.Digest, filepath.Base(filepath.Dir(priorLink)), string(priorPending))
+	}
+	return installed, err
+}
+
+func upgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, error) {
 	status, err := Read(cfg.StateDir)
 	if err != nil {
 		return HelperInstallation{}, err
