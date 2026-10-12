@@ -405,17 +405,39 @@ published.download_worker(*sys.argv[1:])
             os.kill(workers[0].pid, 0)
 
     def test_worker_launch_consumes_total_budget(self):
+        self.assert_launch_budget(0.3, 0)
+
+    def test_worker_launch_reduces_remaining_wait_budget(self):
+        self.assert_launch_budget(0.125, 0.075)
+
+    def assert_launch_budget(self, launch_elapsed, remaining):
         patch.object(published, "DOWNLOAD_BUDGET", 0.2, create=True).start()
-        popen = subprocess.Popen
+        worker = self.ready_worker()
+        now = [100.0]
+        communicate = worker.communicate
+
         def slow_launch(*args, **kwargs):
-            worker = popen(*args, **kwargs)
-            time.sleep(0.3)
+            now[0] += launch_elapsed
             return worker
-        started = time.monotonic()
-        with patch.object(published.subprocess, "Popen", side_effect=slow_launch), \
+
+        def wait(*args, **kwargs):
+            now[0] += kwargs.get("timeout", 0)
+            return communicate(*args, **kwargs)
+
+        # Readiness excludes interpreter startup; the gate holds a real worker until it is killed.
+        with patch.object(published.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(published.subprocess, "Popen", side_effect=slow_launch) as launch, \
+                patch.object(worker, "communicate", side_effect=wait) as waited, \
                 self.assertRaisesRegex(TimeoutError, "total deadline"):
             self.download(["stall-open"])
-        self.assertLess(time.monotonic() - started, 0.45)
+        launch.assert_called_once()
+        self.assertEqual(waited.call_count, 2)
+        self.assertAlmostEqual(waited.call_args_list[0].kwargs["timeout"], remaining)
+        self.assertEqual(waited.call_args_list[1].kwargs, {})
+        self.assertEqual(self.state()["attempts"], [])
+        self.assertIsNotNone(worker.poll())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(worker.pid, 0)
 
     def test_backoff_cannot_escape_total_budget(self):
         patch.object(published, "DOWNLOAD_BUDGET", 0.3, create=True).start()
