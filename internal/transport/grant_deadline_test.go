@@ -37,21 +37,31 @@ func TestGrantLockMustRespectHandshakeCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	entered := make(chan struct{})
+	admission := make(chan struct{})
 	returned := make(chan struct{})
 	var enteredOnce sync.Once
-	auth := &Authentication{Key: hostKey, Authorize: func(id string) bool {
-		enteredOnce.Do(func() { close(entered) })
-		return identity.GrantedIdentity(state, id)
-	}}
+	var admissionOnce sync.Once
+	release := func() { admissionOnce.Do(func() { close(admission) }) }
+	var dispatched bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
+		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
-		_ = ServeWithOptions(w, r.WithContext(ctx), ServeOptions{Auth: auth}, func(context.Context, Conn) error { return errors.New("fixture should not dispatch") })
+		auth := &Authentication{Key: hostKey, Authorize: func(id string) bool {
+			enteredOnce.Do(func() { close(entered) })
+			<-admission
+			// Cancel at grant admission so TLS setup cannot spend the fixture's cancellation budget.
+			cancel()
+			return identity.GrantedIdentity(state, id)
+		}}
+		_ = ServeWithOptions(w, r.WithContext(ctx), ServeOptions{Auth: auth}, func(context.Context, Conn) error {
+			dispatched = true
+			return errors.New("fixture should not dispatch")
+		})
 		close(returned)
 	}))
 	// Release the policy lock before server.Close, even when the assertion fails.
-	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); server.Close() }()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer func() { release(); _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); server.Close() }()
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	dial := make(chan error, 1)
 	go func() {
@@ -63,15 +73,30 @@ func TestGrantLockMustRespectHandshakeCancellation(t *testing.T) {
 	}()
 	select {
 	case <-entered:
+	case err := <-dial:
+		t.Fatalf("fixture failed before reaching locked authorizer: %v", err)
 	case <-ctx.Done():
 		t.Fatal("fixture never reached locked authorizer")
 	}
 	// A published approval remains valid while a writer holds its own mutation lock.
-	// Admission may succeed or cancel, but it must release the handler before unlock.
-	<-dial
+	// Cancellation must release both peer and handler before unlock.
+	completion, stop := context.WithTimeout(ctx, time.Second)
+	defer stop()
+	release()
+	select {
+	case err := <-dial:
+		if !errors.Is(err, ErrAuthentication) {
+			t.Fatalf("canceled grant admission returned %v; want authentication failure", err)
+		}
+	case <-completion.Done():
+		t.Fatal("handshake cancellation retained peer behind locked authorizer")
+	}
 	select {
 	case <-returned:
-	case <-ctx.Done():
+	case <-completion.Done():
 		t.Fatal("handshake cancellation closed peer but retained server handler/control slot behind blocking grant flock")
+	}
+	if dispatched {
+		t.Fatal("canceled grant admission dispatched a handler")
 	}
 }
