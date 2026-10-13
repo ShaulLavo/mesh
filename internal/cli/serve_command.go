@@ -12,7 +12,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/protocol"
@@ -423,10 +422,12 @@ func serviceURL(host HostRecord, privateName string, service protocol.ServiceInf
 	}
 
 	if privateName != "" {
-		if dnsname.ValidatePrivateName(privateName) != nil {
+		website, err := url.Parse("https://" + privateName)
+		if err != nil || website.Host != privateName || website.Hostname() != privateName || website.User != nil || website.Path != "" || website.RawQuery != "" || website.ForceQuery || website.Fragment != "" {
 			return unavailableServiceURL
 		}
-		return "https://" + privateName + "/" + service.Name
+		website.Path = "/" + service.Name
+		return website.String()
 	}
 	endpoint, err := url.Parse(host.Endpoint)
 	if err != nil || endpoint.User != nil || endpoint.Host == "" || endpoint.RawPath != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
