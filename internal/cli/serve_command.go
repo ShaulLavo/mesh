@@ -23,6 +23,7 @@ const (
 	defaultServiceListTimeout = 2 * time.Second
 	maximumServiceListTimeout = 30 * time.Second
 	serviceMutationTimeout    = 30 * time.Second
+	unavailableServiceURL     = "unavailable"
 )
 
 func (a *application) serveCommand() *cobra.Command {
@@ -421,11 +422,16 @@ func serviceURL(host HostRecord, privateName string, service protocol.ServiceInf
 	}
 
 	if privateName != "" {
-		return "https://" + privateName + "/" + service.Name
+		website, err := url.Parse("https://" + privateName)
+		if err != nil || website.Host != privateName || website.Hostname() != privateName || website.User != nil || website.Path != "" || website.RawQuery != "" || website.ForceQuery || website.Fragment != "" {
+			return unavailableServiceURL
+		}
+		website.Path = "/" + service.Name
+		return website.String()
 	}
 	endpoint, err := url.Parse(host.Endpoint)
 	if err != nil || endpoint.User != nil || endpoint.Host == "" || endpoint.RawPath != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
-		return "unavailable"
+		return unavailableServiceURL
 	}
 	switch endpoint.Scheme {
 	case "ws":
@@ -433,7 +439,7 @@ func serviceURL(host HostRecord, privateName string, service protocol.ServiceInf
 	case "wss":
 		endpoint.Scheme = "https"
 	default:
-		return "unavailable"
+		return unavailableServiceURL
 	}
 	endpoint.Path = "/" + service.Name
 	endpoint.RawPath = ""
