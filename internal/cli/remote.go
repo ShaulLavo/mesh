@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
@@ -96,11 +95,6 @@ func validateHostInfo(expected HostRecord, actual protocol.HostInfo) error {
 	if actual.Wake != nil {
 		if err := validateHostWake(actual); err != nil {
 			return fmt.Errorf("host %s returned invalid wake permission: %w", HostLabel(expected), err)
-		}
-	}
-	if actual.PrivateName != "" {
-		if err := dnsname.ValidatePrivateName(actual.PrivateName); err != nil {
-			return fmt.Errorf("host %s returned an invalid private name", HostLabel(expected))
 		}
 	}
 	return nil

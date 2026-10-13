@@ -81,7 +81,7 @@ func TestListRemoteHostUsesWebSocketAndVerifiesIdentity(t *testing.T) {
 			}
 			if err := conn.WriteFrame(mustCommandControlFrame(protocol.Control{
 				Type: protocol.TypeHostInfoResult, RequestID: identityRequest.RequestID,
-				Host: &protocol.HostInfo{ID: hostID, MeshIdentity: hostID},
+				Host: &protocol.HostInfo{ID: hostID, MeshIdentity: hostID, PrivateName: "pc.other-domain.test"},
 			})); err != nil {
 				return err
 			}

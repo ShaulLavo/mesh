@@ -165,6 +165,8 @@ func TestServiceURLPrefersSignedNameAndUsesVerifiedControlEndpointFallback(t *te
 		want        string
 	}{
 		{name: "signed name", host: HostRecord{Endpoint: "ws://100.64.0.2:7337/mesh"}, privateName: "pc.mesh.mesh.test", want: "https://pc.mesh.mesh.test/blog"},
+		{name: "unconfigured website hostname", host: HostRecord{Endpoint: "ws://100.64.0.2:7337/mesh"}, privateName: "pc.other-domain.test", want: "unavailable"},
+		{name: "malformed website hostname", host: HostRecord{Endpoint: "ws://100.64.0.2:7337/mesh"}, privateName: "pc.mesh.mesh.test/other", want: "unavailable"},
 		{name: "plain IPv4 endpoint", host: HostRecord{Endpoint: "ws://100.64.0.2:7337/control/ws"}, want: "http://100.64.0.2:7337/blog"},
 		{name: "TLS IPv6 endpoint", host: HostRecord{Endpoint: "wss://[fd7a:115c:a1e0::2]:7337/mesh"}, want: "https://[fd7a:115c:a1e0::2]:7337/blog"},
 		{name: "unsupported endpoint", host: HostRecord{Endpoint: "http://100.64.0.2:7337/mesh"}, want: "unavailable"},
