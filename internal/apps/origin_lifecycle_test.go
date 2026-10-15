@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -439,5 +440,71 @@ func TestInterruptedUpdateRefusesChangedRecipeAfterRecovery(t *testing.T) {
 	_, err := f.origin.Handle(context.Background(), q)
 	if err == nil || !strings.Contains(err.Error(), "conflicts") || !strings.Contains(err.Error(), app.ID) || !strings.Contains(err.Error(), upload) {
 		t.Fatalf("changed recipe was accepted after recovery rolled the attempt back: %v", err)
+	}
+}
+
+// exitingServerWorkers starts the "crash" command as a server that exits at
+// once with output, as a server that fails to load its state does.
+type exitingServerWorkers struct {
+	*serverWorkers
+	crashed string
+}
+
+func (w *exitingServerWorkers) Start(ctx context.Context, label, command, root string, env []string) (string, error) {
+	if command != "crash" {
+		// Fake session IDs follow the label, so a restarted server reuses the
+		// crashed one's ID.
+		w.mu.Lock()
+		w.crashed = ""
+		w.mu.Unlock()
+		return w.serverWorkers.Start(ctx, label, command, root, env)
+	}
+	id, err := w.fakeWorkers.Start(ctx, label, command, root, env)
+	w.mu.Lock()
+	w.crashed = id
+	w.mu.Unlock()
+	return id, err
+}
+func (w *exitingServerWorkers) Processes(ctx context.Context, session string) ([]int, error) {
+	w.mu.Lock()
+	crashed := w.crashed
+	w.mu.Unlock()
+	if session == crashed {
+		return nil, fmt.Errorf("list app processes: session %s: %w", session, ErrSessionEnded)
+	}
+	return w.serverWorkers.Processes(ctx, session)
+}
+func (w *exitingServerWorkers) Wait(ctx context.Context, session string) (int, error) {
+	w.mu.Lock()
+	crashed := w.crashed
+	w.mu.Unlock()
+	if session == crashed {
+		return 1, nil
+	}
+	return w.serverWorkers.Wait(ctx, session)
+}
+func (w *exitingServerWorkers) Output(context.Context, string) string {
+	return "loading state\nerror: state file is corrupt\n"
+}
+
+func TestUpdateReportsReplacementServerExit(t *testing.T) {
+	f := newAppFixture(t)
+	workers := &exitingServerWorkers{serverWorkers: newServerWorkers(t, f)}
+	f.origin.config.Workers = workers
+	port := freePort(t)
+	app := createServerAppOn(t, f, port)
+	upload, digest := uploadSource(t, f, updatedSourceFixture(t))
+	_, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: app.ID, Kind: "server", Command: "crash", Port: port, UploadID: upload, Digest: digest})
+	if err == nil {
+		t.Fatal("update to a crashing server reported success")
+	}
+	if !strings.Contains(err.Error(), "server exited 1") || !strings.Contains(err.Error(), "error: state file is corrupt") {
+		t.Fatalf("update error hides the server's exit: %v", err)
+	}
+	if strings.Contains(err.Error(), "worker session ended") {
+		t.Fatalf("update error shows the listing failure: %v", err)
+	}
+	if !workers.alive(t, "app "+app.ID) {
+		t.Fatalf("rollback did not keep app %s's previous server", app.ID)
 	}
 }
