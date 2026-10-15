@@ -120,6 +120,9 @@ func (w appWorkers) Processes(_ context.Context, id string) ([]int, error) {
 		return nil, fmt.Errorf("session %s: no command process recorded", id)
 	}
 	processes, err := worker.SessionProcesses(id, meta.PID)
+	if errors.Is(err, worker.ErrCommandGone) {
+		return nil, fmt.Errorf("session %s: %w", id, apps.ErrSessionEnded)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list app processes: %w", err)
 	}

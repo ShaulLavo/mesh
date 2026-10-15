@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // cgroupProcsLimit bounds one scope's cgroup.procs; an app session with more
@@ -22,8 +24,10 @@ func SessionProcesses(id string, leader int) ([]int, error) {
 	if leader <= 1 {
 		return nil, fmt.Errorf("session %s: invalid command process %d", id, leader)
 	}
+	// A command that exits between the caller's check and this read leaves no
+	// /proc entry; its session may still hold children, so keep looking.
 	cgroup, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", leader))
-	if err != nil {
+	if err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ESRCH) {
 		return nil, fmt.Errorf("session %s: read command cgroup: %w", id, err)
 	}
 	members, err := kernelSessionMembers(id, leader)
@@ -88,7 +92,7 @@ func kernelSessionMembers(id string, leader int) ([]int, error) {
 		}
 	}
 	if len(members) == 0 {
-		return nil, errors.New("session " + id + ": command process is gone")
+		return nil, fmt.Errorf("session %s: %w", id, ErrCommandGone)
 	}
 	return members, nil
 }

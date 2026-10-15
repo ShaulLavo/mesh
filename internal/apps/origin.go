@@ -31,9 +31,15 @@ type Workers interface {
 	Find(context.Context, string) (string, bool, error)
 	Forget(context.Context, string)
 	// Processes names the live processes of a worker's session, so the origin
-	// can tell an app's own listeners from another program's.
+	// can tell an app's own listeners from another program's. It returns an
+	// error wrapping ErrSessionEnded once the session's command has exited.
 	Processes(context.Context, string) ([]int, error)
 }
+
+// ErrSessionEnded means a worker's command exited, so its session has no
+// processes left to list.
+var ErrSessionEnded = errors.New("app: worker session ended")
+
 type OriginConfig struct {
 	CheckHosting     func(int, string) error
 	Store            StateStore
@@ -1270,6 +1276,9 @@ func (o *Origin) awaitServer(ctx context.Context, id, session string, port int) 
 			o.setServing(id, serving{upstream: verified.Address, inode: verified.Inode})
 			return nil
 		}
+		if errors.Is(err, ErrSessionEnded) {
+			return fmt.Errorf("app %s: %w", id, o.serverExit(ctx, session))
+		}
 		if !errors.Is(err, errNoListener) {
 			return fmt.Errorf("app %s: %w", id, err)
 		}
@@ -1279,6 +1288,23 @@ func (o *Origin) awaitServer(ctx context.Context, id, session string, port int) 
 		case <-ticker.C:
 		}
 	}
+}
+
+// serverExit explains a server that exited before it listened, with its exit
+// status and last output, so the owner sees why without reading worker logs.
+func (o *Origin) serverExit(ctx context.Context, session string) error {
+	err := errors.New("app: server exited during startup")
+	if waiter, ok := o.config.Workers.(interface {
+		Wait(context.Context, string) (int, error)
+	}); ok {
+		if code, waitErr := waiter.Wait(ctx, session); waitErr == nil {
+			err = fmt.Errorf("app: server exited %d during startup", code)
+		}
+	}
+	if output := o.workerOutput(ctx, session); output != "" {
+		err = fmt.Errorf("%w; last server output:\n%s", err, output)
+	}
+	return err
 }
 func (o *Origin) checkServer(ctx context.Context, session string, port int) (listenerSocket, error) {
 	return checkServerListener(ctx, port, func() ([]int, error) { return o.config.Workers.Processes(ctx, session) })
@@ -1390,16 +1416,7 @@ func (o *Origin) removeWorkload(path string) error {
 func (o *Origin) recordSetupFailure(ctx context.Context, id, uploadID, session string, cause error) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maintenanceBudget)
 	defer cancel()
-	var output string
-	if source, ok := o.config.Workers.(interface {
-		Output(context.Context, string) string
-	}); ok {
-		output = source.Output(ctx, session)
-	}
-	if len(output) > maxFailureOutput {
-		output = output[len(output)-maxFailureOutput:]
-	}
-	output = strings.ToValidUTF8(output, "")
+	output := o.workerOutput(ctx, session)
 	o.mu.Lock()
 	if o.state.Failures == nil {
 		o.state.Failures = map[string]SetupFailure{}
@@ -1423,6 +1440,22 @@ func (o *Origin) recordSetupFailure(ctx context.Context, id, uploadID, session s
 		cause = errors.Join(cause, fmt.Errorf("save setup failure: %w", saveErr))
 	}
 	return cause
+}
+
+// workerOutput is the bounded tail of a worker's output, or empty where the
+// workers cannot show it.
+func (o *Origin) workerOutput(ctx context.Context, session string) string {
+	source, ok := o.config.Workers.(interface {
+		Output(context.Context, string) string
+	})
+	if !ok {
+		return ""
+	}
+	output := source.Output(ctx, session)
+	if len(output) > maxFailureOutput {
+		output = output[len(output)-maxFailureOutput:]
+	}
+	return strings.ToValidUTF8(output, "")
 }
 
 // stop ends only the app's own labelled workers; ordinary sessions never carry
