@@ -545,6 +545,13 @@ def relaunch_interrupted(fixture, old_id, old_metadata):
     return terminal, session_id, shell_pid
 
 
+def wait_for_forgotten_session(fixture, session_id):
+    # The daemon publishes catalog retirement before removing the directory.
+    eventually(lambda: session_id not in fixture.local_listing() and session_id not in fixture.daemon_listing()
+               and not (fixture.local / "s" / session_id).exists(),
+               "x did not finish forgetting the interrupted session")
+
+
 def window_relaunch(fixture):
     project = fixture.root / "recorded-project"
     project.mkdir()
@@ -585,9 +592,7 @@ def window_relaunch(fixture):
     forgotten.expect("interrupted")
     forgotten.expect(restored_id)
     forgotten.send(b"x")
-    eventually(lambda: restored_id not in fixture.local_listing() and restored_id not in fixture.daemon_listing(),
-               "x did not forget the interrupted session locally and in the daemon")
-    require(not (fixture.local / "s" / restored_id).exists(), "x left the forgotten session directory")
+    wait_for_forgotten_session(fixture, restored_id)
     forgotten.send(b"\x1b")
     forgotten.expect_exit()
 
