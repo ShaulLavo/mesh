@@ -11,6 +11,39 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+const maximumAdditionalDevices = 256
+
+func normalizeAdditionalDeviceIdentities(stateDir string, selected []string) ([]string, error) {
+	if len(selected) > maximumAdditionalDevices {
+		return nil, fmt.Errorf("bootstrap: at most %d additional controllers may be selected", maximumAdditionalDevices)
+	}
+	identities := make([]string, 0, len(selected))
+	seen := make(map[string]bool, len(selected))
+	for _, id := range selected {
+		if _, err := identity.IdentityKey(id); err != nil {
+			return nil, fmt.Errorf("bootstrap: selected controller %q: %w", id, err)
+		}
+		if !seen[id] {
+			identities = append(identities, id)
+			seen[id] = true
+		}
+	}
+	if len(identities) == 0 {
+		return nil, nil
+	}
+	source, _, err := identity.LoadOrCreate(stateDir)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap: load source controller: %w", err)
+	}
+	additional := identities[:0]
+	for _, id := range identities {
+		if id != source.ID {
+			additional = append(additional, id)
+		}
+	}
+	return additional, nil
+}
+
 func remoteAccount(ctx context.Context, remote remoteHost) (string, error) {
 	stdout, stderr, err := remote.Run(ctx, "id -u; id -un", nil)
 	if err != nil {

@@ -6,8 +6,8 @@ fail() {
 	exit 1
 }
 
-if [ "$#" -ne 6 ]; then
-	fail service_install "macOS installer requires binary, control port, SSH port, WebSocket path, authorized key, and service asset"
+if [ "$#" -lt 6 ]; then
+	fail service_install "macOS installer requires binary, control port, SSH port, WebSocket path, authorized key, service asset, and optional controller IDs"
 fi
 
 source_binary=$1
@@ -16,6 +16,7 @@ ssh_port=$3
 websocket_path=$4
 authorized_key_b64=$5
 service_b64=$6
+shift 6
 
 # An empty source binary means the adopter checked the digest and skipped the
 # upload; there is nothing staged to clean up.
@@ -71,13 +72,21 @@ elif authorized_key=$(printf '%s' "$authorized_key_b64" | base64 -D 2>/dev/null)
 else
 	fail service_install "cannot decode the adopter public key"
 fi
-approval_result=$(MESH_STATE_DIR="$state_dir" "$binary_path" device approve --allow-root --public-key --json -- "$authorized_key") ||
-	fail service_install "cannot approve the adopter device key"
-case "$approval_result" in
-	'{"changed":true}') mark_activation_pending; changed=1 ;;
-	'{"changed":false}') ;;
-	*) fail service_install "device approval returned an invalid change result" ;;
-esac
+approve_device() {
+	approval_failure=$1
+	shift
+	approval_result=$(MESH_STATE_DIR="$state_dir" "$binary_path" device approve --allow-root --json "$@") ||
+		fail service_install "$approval_failure"
+	case "$approval_result" in
+		'{"changed":true}') mark_activation_pending; changed=1 ;;
+		'{"changed":false}') ;;
+		*) fail service_install "device approval returned an invalid change result" ;;
+	esac
+}
+approve_device "cannot approve the adopter device key" --public-key -- "$authorized_key"
+for controller in "$@"; do
+	approve_device "cannot approve the selected controller key" -- "$controller"
+done
 
 plist_tmp=$agent_dir/.dev.shaulavo.mesh.plist.$$
 if printf '%s' "$service_b64" | base64 -d >"$plist_tmp" 2>/dev/null; then

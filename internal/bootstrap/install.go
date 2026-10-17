@@ -17,13 +17,14 @@ import (
 )
 
 type installRequest struct {
-	Platform      Platform
-	BinaryPath    string
-	AuthorizedKey string
-	DaemonPort    uint16
-	SSHPort       uint16
-	WebSocketPath string
-	Progress      func(Event)
+	Platform                   Platform
+	BinaryPath                 string
+	AuthorizedKey              string
+	AdditionalDeviceIdentities []string
+	DaemonPort                 uint16
+	SSHPort                    uint16
+	WebSocketPath              string
+	Progress                   func(Event)
 }
 
 func (r installRequest) progress(event Event) {
@@ -54,7 +55,7 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 
 	authorizedKey := base64.StdEncoding.EncodeToString([]byte(request.AuthorizedKey))
 	serviceAsset := base64.StdEncoding.EncodeToString([]byte(service))
-	command := strings.Join([]string{
+	arguments := []string{
 		"/bin/sh -s --",
 		shellQuote(remoteBinary),
 		shellQuote(strconv.Itoa(int(request.DaemonPort))),
@@ -62,7 +63,11 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 		shellQuote(request.WebSocketPath),
 		shellQuote(authorizedKey),
 		shellQuote(serviceAsset),
-	}, " ")
+	}
+	for _, id := range request.AdditionalDeviceIdentities {
+		arguments = append(arguments, shellQuote(id))
+	}
+	command := strings.Join(arguments, " ")
 	stdout, stderr, err := remote.Run(ctx, command, strings.NewReader(script))
 	combined := string(stdout) + "\n" + string(stderr)
 	if err != nil {

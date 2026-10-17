@@ -30,6 +30,7 @@ type clientServer struct {
 	wake         *wakeController
 	updates      controlHandler
 	apps         controlHandler
+	fleet        controlHandler
 }
 
 type controlHandler interface {
@@ -120,6 +121,9 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		response, lifecycleHandled, requestErr := s.lifecycle.HandleControl(ctx, request)
 		if !lifecycleHandled && s.apps != nil {
 			response, lifecycleHandled, requestErr = s.apps.HandleControl(ctx, request)
+		}
+		if !lifecycleHandled && s.fleet != nil {
+			response, lifecycleHandled, requestErr = s.fleet.HandleControl(ctx, request)
 		}
 		if !lifecycleHandled {
 			response, lifecycleHandled, requestErr = s.services.HandleControl(ctx, request)

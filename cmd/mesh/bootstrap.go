@@ -119,16 +119,17 @@ func newBootstrapFunc(run bootstrapRunner, ui bootstrapUI) cli.BootstrapFunc {
 		}
 
 		result, err := run(ctx, bootstrap.Options{
-			Target:                 request.Target,
-			AllowRoot:              request.AllowRoot,
-			StateDir:               stateDir,
-			ExpectedIdentity:       expected,
-			ResolveIdentity:        func(resolved string) (string, error) { return identityForTarget(hosts, resolved) },
-			TailscaleAuthKey:       authKey,
-			TailscaleAuthKeyPrompt: authKeyPrompt(ui),
-			LocalTailscaleSetup:    localTailscaleSetup(ui),
-			ConfirmProvision:       confirmProvision,
-			SudoPassword:           sudoPasswordPrompt(ui),
+			Target:                     request.Target,
+			AllowRoot:                  request.AllowRoot,
+			StateDir:                   stateDir,
+			ExpectedIdentity:           expected,
+			AdditionalDeviceIdentities: request.AdditionalDeviceIdentities,
+			ResolveIdentity:            func(resolved string) (string, error) { return identityForTarget(hosts, resolved) },
+			TailscaleAuthKey:           authKey,
+			TailscaleAuthKeyPrompt:     authKeyPrompt(ui),
+			LocalTailscaleSetup:        localTailscaleSetup(ui),
+			ConfirmProvision:           confirmProvision,
+			SudoPassword:               sudoPasswordPrompt(ui),
 			SSH: bootstrap.SSHOptions{
 				IdentityFiles:  identityFiles(request.IdentityFile),
 				Password:       passwordPrompt(ui),

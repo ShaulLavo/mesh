@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,12 +66,15 @@ func TestBootstrapFuncPinsExistingIdentityAndMapsResult(t *testing.T) {
 		username: func() (string, error) { return "alice", nil },
 	})
 
-	result, err := bootstrapFunc(context.Background(), cli.AddRequest{Target: "100.64.0.1"})
+	result, err := bootstrapFunc(context.Background(), cli.AddRequest{Target: "100.64.0.1", AdditionalDeviceIdentities: []string{"selected-controller"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if captured.Target != "100.64.0.1" || captured.StateDir != stateDir || captured.ExpectedIdentity != identity {
 		t.Fatalf("bootstrap options = %#v", captured)
+	}
+	if !slices.Equal(captured.AdditionalDeviceIdentities, []string{"selected-controller"}) {
+		t.Fatalf("selected controller options = %v", captured.AdditionalDeviceIdentities)
 	}
 	if captured.SSH.Password == nil || captured.SSH.Passphrase == nil || captured.SSH.ConfirmHostKey == nil || captured.ConfirmProvision == nil || captured.SudoPassword == nil {
 		t.Fatalf("SSH prompt callbacks = %#v, want all callbacks", captured.SSH)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,10 @@ import (
 )
 
 func TestRootAccountRequiresExplicitAcknowledgementBeforeInstallation(t *testing.T) {
+	controller, _, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, allow := range []bool{false, true} {
 		t.Run(map[bool]string{false: "denied", true: "acknowledged"}[allow], func(t *testing.T) {
 			stopped := errors.New("fixture stopped after account approval")
@@ -39,11 +44,11 @@ func TestRootAccountRequiresExplicitAcknowledgementBeforeInstallation(t *testing
 				},
 				authorizedKey: func(string) (string, error) { return "", nil }, now: time.Now,
 			}
-			_, err := run(context.Background(), Options{Target: "root@fixture.invalid", StateDir: t.TempDir(), AllowRoot: allow}, deps)
+			_, err := run(context.Background(), Options{Target: "root@fixture.invalid", StateDir: t.TempDir(), AllowRoot: allow, AdditionalDeviceIdentities: []string{controller.ID}}, deps)
 			if allow && !errors.Is(err, stopped) {
 				t.Fatalf("acknowledged root did not reach platform probe: %v", err)
 			}
-			if !allow && (err == nil || !strings.Contains(err.Error(), "--allow-root") || errors.Is(err, stopped)) {
+			if !allow && (err == nil || !strings.Contains(err.Error(), "--allow-root") || !strings.Contains(err.Error(), "every selected fleet controller") || errors.Is(err, stopped)) {
 				t.Fatalf("root approval bypassed: %v", err)
 			}
 		})
@@ -71,5 +76,41 @@ func TestDestinationIdentityComesFromTrustedSSH(t *testing.T) {
 	got, err := trustedDestinationIdentity(context.Background(), remote)
 	if err != nil || got != host.ID {
 		t.Fatalf("destination pin=%q, %v", got, err)
+	}
+}
+
+func TestAdditionalControllerValidationPrecedesRemoteAccess(t *testing.T) {
+	valid, _, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, selected := range map[string][]string{
+		"empty": {""}, "malformed": {"not-a-key"}, "noncanonical": {valid.ID + "="},
+		"invalid after valid": {valid.ID, "invalid"},
+		"too many":            slices.Repeat([]string{valid.ID}, maximumAdditionalDevices+1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := run(t.Context(), Options{Target: "root@fixture.invalid", StateDir: t.TempDir(), AdditionalDeviceIdentities: selected}, dependencies{
+				connect: func(context.Context, target, SSHOptions) (remoteHost, error) {
+					t.Fatal("invalid selection reached SSH")
+					return nil, nil
+				},
+			})
+			assertDiagnosticCode(t, err, DiagnosticIdentity)
+		})
+	}
+}
+
+func TestAdditionalControllerLimitAndSelectionDoNotMutateCaller(t *testing.T) {
+	state := t.TempDir()
+	source, _, err := identity.LoadOrCreate(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := slices.Repeat([]string{source.ID}, maximumAdditionalDevices)
+	before := slices.Clone(selected)
+	got, err := normalizeAdditionalDeviceIdentities(state, selected)
+	if err != nil || len(got) != 0 || !slices.Equal(selected, before) {
+		t.Fatalf("source deduplication = %v, %v; selection changed=%t", got, err, !slices.Equal(selected, before))
 	}
 }

@@ -46,9 +46,10 @@ const (
 
 // AddRequest is the CLI-owned input to the SSH bootstrap adapter.
 type AddRequest struct {
-	AllowRoot            bool
-	Target               string
-	TailscaleAuthKeyFile string
+	AdditionalDeviceIdentities []string
+	AllowRoot                  bool
+	Target                     string
+	TailscaleAuthKeyFile       string
 	// IdentityFile names the key to adopt with, for a host the ssh config
 	// says nothing about.
 	IdentityFile string
@@ -383,7 +384,7 @@ func NewCommand(dependencies Dependencies) *Command {
 		inGroup(groupSessions, app.listCommand(), app.attachCommand(), app.localCommand(),
 			app.logsCommand(), app.killCommand(), app.hibernateCommand(), app.gcCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand(), app.agentCommand(), app.backCommand())...,
 	)
-	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.sshCommand(), app.renameCommand(), app.wakeCommand(), app.dashboardCommand())...)
+	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.sshCommand(), app.renameCommand(), app.wakeCommand(), app.dashboardCommand(), app.fleetCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand(), app.appCommand())...)
 	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), deviceCommand(), versionCommand())...)
 	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand())
@@ -417,7 +418,7 @@ func (a *application) runRoot(cmd *cobra.Command, args []string, resume bool, de
 		a.noteTerminalBinding(cmd, hosts)
 		return a.runPicker(cmd, hosts, detachKey, raw)
 	}
-	target, err := ResolveArgument(args[0], hosts)
+	target, err := resolveArgumentWithRefresh(cmd.Context(), args[0], hosts, a.dependencies.DialControl)
 	if err != nil {
 		return err
 	}
@@ -1014,8 +1015,13 @@ func (a *application) addCommand() *cobra.Command {
 			if a.dependencies.Bootstrap == nil {
 				return errors.New("SSH bootstrap support is unavailable in this build")
 			}
+			devices, err := fleetDeviceIdentities()
+			if err != nil {
+				return err
+			}
 			result, err := a.dependencies.Bootstrap(cmd.Context(), AddRequest{
-				Target: args[0], IdentityFile: identityFile, AllowRoot: allowRoot,
+				AdditionalDeviceIdentities: devices,
+				Target:                     args[0], IdentityFile: identityFile, AllowRoot: allowRoot,
 				TailscaleAuthKeyFile: tailscaleAuthKeyFile,
 				Yes:                  yes,
 			})
@@ -1042,7 +1048,7 @@ func (a *application) addCommand() *cobra.Command {
 			return err
 		},
 	}
-	command.Flags().BoolVar(&allowRoot, "allow-root", false, "acknowledge that approving this device grants root access")
+	command.Flags().BoolVar(&allowRoot, "allow-root", false, "acknowledge that this device and trusted sharing devices receive root access")
 	command.Flags().StringVar(&tailscaleAuthKeyFile, "tailscale-auth-key-file", "", "read a Tailscale auth key from this local file")
 	command.Flags().BoolVar(&yes, "yes", false, "approve remote Tailscale installation and user lingering changes")
 	command.Flags().StringVar(&identityFile, "identity-file", "", "SSH private key to adopt with, when ~/.ssh/config names none")
@@ -1730,7 +1736,12 @@ func (a *application) daemonCommand() *cobra.Command {
 			}
 			stopUpdateNotices := startUpdateNoticeChecks(cmd.Context(), stateDir)
 			defer stopUpdateNotices()
+			sharing, err := configuredFleetService(stateDir)
+			if err != nil {
+				return err
+			}
 			return meshdaemon.Run(cmd.Context(), meshdaemon.Config{
+				FleetShare:             sharing,
 				SSHSessionHandler:      a.dependencies.SSHSessionHandler,
 				WakePeerIdentity:       configuredWakeIdentity,
 				SubscriberLimit:        subscriberLimit,
