@@ -78,7 +78,7 @@ func TestWorkerProbeAcceptsModernInspectionAndExactLegacyAcknowledgement(t *test
 }
 
 func TestWorkerProbeSkipsKilledWorker(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "7K3D")
+	dir := filepath.Join(probeFixtureDir(t), "7K3D")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}

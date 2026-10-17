@@ -47,7 +47,7 @@ func TestCatalogUnchangedPassDoesNotWriteSQLite(t *testing.T) {
 }
 
 func TestRunPersistsLastSeenAtOnShutdown(t *testing.T) {
-	state := t.TempDir()
+	state := compactSocketTempDir(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	var millis atomic.Int64
