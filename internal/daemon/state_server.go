@@ -49,7 +49,15 @@ func (s *clientServer) streamState(ctx context.Context, conn transport.Conn, req
 		readStateRequests(lifetime, conn, requests, cancel)
 	}()
 	defer func() { cancel(); <-readerDone }()
-	if err := writeState(lifetime, conn, protocol.Control{Type: protocol.TypeStateSnapshot, RequestID: requestID, StateSnapshot: initial}); err != nil {
+	read := func() (protocol.Frame, error) {
+		select {
+		case frame := <-requests:
+			return frame, nil
+		case <-lifetime.Done():
+			return protocol.Frame{}, lifetime.Err()
+		}
+	}
+	if err := writeStatePages(lifetime, conn, read, protocol.Control{Type: protocol.TypeStateSnapshot, RequestID: requestID, StateSnapshot: initial}); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(10 * time.Second)
@@ -59,15 +67,15 @@ func (s *clientServer) streamState(ctx context.Context, conn transport.Conn, req
 		case <-lifetime.Done():
 			return nil
 		case frame := <-requests:
-			if err := writeState(lifetime, conn, s.stateRequest(lifetime, frame)); err != nil {
+			if err := writeStatePages(lifetime, conn, read, s.stateRequest(lifetime, frame)); err != nil {
 				return err
 			}
 		case <-sub.wake:
-			if err := writeStateBatch(lifetime, conn, s.state.take(sub)); err != nil {
+			if err := writeStateBatch(lifetime, conn, read, s.state.take(sub)); err != nil {
 				return err
 			}
 		case <-ticker.C:
-			if err := writeState(lifetime, conn, protocol.Control{Type: protocol.TypeStateCurrent, StateCurrent: s.state.current(sub)}); err != nil {
+			if err := writeStatePages(lifetime, conn, read, protocol.Control{Type: protocol.TypeStateCurrent, StateCurrent: s.state.current(sub)}); err != nil {
 				return err
 			}
 		}
@@ -76,25 +84,36 @@ func (s *clientServer) streamState(ctx context.Context, conn transport.Conn, req
 func (s *clientServer) writeStateError(ctx context.Context, conn transport.Conn, request protocol.Control, err error) error {
 	return writeState(ctx, conn, protocol.Control{Type: protocol.TypeError, RequestID: request.RequestID, ErrorCode: clientErrorCode(err), Message: err.Error()})
 }
-func writeStateBatch(ctx context.Context, conn transport.Conn, messages []protocol.Control) error {
+func writeStateBatch(ctx context.Context, conn transport.Conn, read func() (protocol.Frame, error), messages []protocol.Control) error {
 	for _, message := range messages {
-		if err := writeState(ctx, conn, message); err != nil {
+		if err := writeStatePages(ctx, conn, read, message); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 func writeState(ctx context.Context, conn transport.Conn, message protocol.Control) error {
-	frame, err := encodeClientControl(message)
+	return writeStatePages(ctx, conn, conn.ReadFrame, message)
+}
+func writeStatePages(ctx context.Context, conn transport.Conn, read func() (protocol.Frame, error), message protocol.Control) error {
+	frames, err := protocol.ControlFrames(message)
 	if err != nil {
-		return err
+		frames, err = protocol.ControlFrames(protocol.Control{Type: protocol.TypeError, RequestID: message.RequestID, Message: err.Error()})
+		if err != nil {
+			return fmt.Errorf("daemon: encode state response: %w", err)
+		}
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	stop := context.AfterFunc(writeCtx, func() { _ = conn.Close() })
 	defer stop()
-	if err := conn.WriteFrame(frame); err != nil {
-		return fmt.Errorf("daemon: write %s: %w", message.Type, err)
+	for i, frame := range frames {
+		if err := continueClientCatalog(read, conn.WriteFrame, message, i); err != nil {
+			return err
+		}
+		if err := conn.WriteFrame(frame); err != nil {
+			return fmt.Errorf("daemon: write %s: %w", message.Type, err)
+		}
 	}
 	if err := writeCtx.Err(); err != nil {
 		return fmt.Errorf("daemon: write %s deadline: %w", message.Type, err)

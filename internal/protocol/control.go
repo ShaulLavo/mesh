@@ -29,6 +29,7 @@ const (
 	TypeCreated            = "session.created"
 	TypeList               = "session.list"
 	TypeListed             = "session.listed"
+	TypeCatalogContinue    = "catalog.continue"
 	TypeInspect            = "session.inspect"
 	TypeInspected          = "session.inspected"
 	TypeContainment        = "session.containment"
@@ -310,6 +311,8 @@ type Control struct {
 	// catalog for older clients; older daemons ignore this additive option.
 	Lean       bool          `json:"lean,omitempty"`
 	Sessions   []SessionInfo `json:"sessions,omitempty"`
+	More       bool          `json:"more,omitempty"`
+	Page       int           `json:"page,omitempty"`
 	Host       *HostInfo     `json:"host,omitempty"`
 	FleetHosts []FleetHost   `json:"fleetHosts,omitempty"`
 

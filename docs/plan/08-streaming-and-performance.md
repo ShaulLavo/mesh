@@ -60,6 +60,26 @@ existing 10-second sampler instead of rescanning.
 Gate: a 20-session `session.list` lean payload is measured and recorded against
 the full one; the picker shows identical previews.
 
+The 2026-10-17 UpCloud report exposed another catalog size limit. Even lean
+inventories include full command arguments. One JSON reply can exceed the
+4 MiB frame limit, which previously closed the connection with an EOF.
+
+`session.listed` and `state.snapshot` now split large inventories into numbered
+pages from one frozen result. `more: true` requests a `catalog.continue` credit
+before the next page. Credits bind the request ID, next page, and snapshot
+sequence. Each frame stays within 4 MiB, and a paused reader cannot fill the
+8 MiB transport queue. Clients publish and cache the result after the final
+page, preserving all session metadata. Disconnects discard partial results.
+A single session that exceeds the frame limit returns a structured error with
+its session ID.
+
+The native regression reproduces the original EOF with 168 ended sessions
+whose command arguments total 5.25 MiB. Coverage also exercises a 13.1 MiB
+inventory with a paused reader, another connection's host query, cancellation,
+large watch snapshots and resync, updater observations, and the exact frame
+boundary. The UpCloud reporter already removed its disposable sessions;
+verification does not delete or grow the live catalog.
+
 ### 3. Watch protocol
 
 Add one additive control, `state.watch`, carried on an ordinary control

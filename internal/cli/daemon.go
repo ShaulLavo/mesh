@@ -121,16 +121,9 @@ func controlRequest(ctx context.Context, conn transport.Conn, request protocol.C
 	if err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload}); err != nil {
 		return protocol.Control{}, daemonOperationError(ctx, "write "+request.Type+" request", err)
 	}
-	frame, err := conn.ReadFrame()
+	response, err := protocol.ReadControl(conn.ReadFrame, conn.WriteFrame)
 	if err != nil {
 		return protocol.Control{}, daemonOperationError(ctx, "read "+request.Type+" response", err)
-	}
-	if frame.Kind != protocol.KindControl {
-		return protocol.Control{}, fmt.Errorf("cli: %s response has frame kind %d, want control", request.Type, frame.Kind)
-	}
-	response, err := protocol.DecodeControl(frame.Payload)
-	if err != nil {
-		return protocol.Control{}, presentError("cli: decode "+request.Type+" response", err)
 	}
 	if response.RequestID != request.RequestID {
 		return protocol.Control{}, fmt.Errorf("cli: %s response has a mismatched request ID", request.Type)

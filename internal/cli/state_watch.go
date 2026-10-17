@@ -187,14 +187,7 @@ func stateConnectionError(err error) StateConnection {
 
 func readStateStream(ctx context.Context, host HostRecord, conn transport.Conn, view *StateView, transit time.Duration, publish func(StateView)) error {
 	for ctx.Err() == nil {
-		frame, err := conn.ReadFrame()
-		if err != nil {
-			return fmt.Errorf("read host state: %w", err)
-		}
-		if frame.Kind != protocol.KindControl {
-			return errors.New("state watch received terminal data")
-		}
-		response, err := protocol.DecodeControl(frame.Payload)
+		response, err := protocol.ReadControl(conn.ReadFrame, conn.WriteFrame)
 		if err != nil {
 			return fmt.Errorf("read host state: %w", err)
 		}

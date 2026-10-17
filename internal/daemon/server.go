@@ -154,17 +154,45 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			continue
 		}
 
-		responseFrame, err := encodeClientControl(response)
+		responseFrames, err := protocol.ControlFrames(response)
 		if err != nil {
 			if err := writeClientRequestError(relay, request, err); err != nil {
 				return clientOperationError(ctx, fmt.Sprintf("report %s encoding error", request.Type), err)
 			}
 			continue
 		}
-		if err := relay.enqueueResponse(responseFrame); err != nil {
+		if err := writeClientResponse(ctx, client, relay, responseFrames, response); err != nil {
 			return clientOperationError(ctx, fmt.Sprintf("write %s response", request.Type), err)
 		}
 	}
+}
+
+func writeClientResponse(ctx context.Context, conn transport.Conn, relay *clientRelay, frames []protocol.Frame, response protocol.Control) error {
+	if len(frames) == 1 {
+		return relay.enqueueResponse(frames[0])
+	}
+	write := func(frame protocol.Frame) error { return relay.writeResponse(ctx, frame) }
+	for i, frame := range frames {
+		if err := continueClientCatalog(conn.ReadFrame, write, response, i); err != nil {
+			return err
+		}
+		if err := relay.writeResponse(ctx, frame); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func continueClientCatalog(read func() (protocol.Frame, error), write func(protocol.Frame) error, response protocol.Control, page int) error {
+	err := protocol.AwaitCatalogContinuation(read, response, page)
+	if err == nil {
+		return nil
+	}
+	frame, encodeErr := encodeClientControl(protocol.Control{Type: protocol.TypeError, RequestID: response.RequestID, Message: err.Error()})
+	if encodeErr != nil {
+		return errors.Join(err, encodeErr)
+	}
+	return errors.Join(err, write(frame))
 }
 
 func requestMetadata(frame protocol.Frame) protocol.Control {

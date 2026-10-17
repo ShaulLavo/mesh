@@ -495,6 +495,10 @@ func (r *clientRelay) forward(lane *relayLane, frame protocol.Frame) error {
 }
 
 func (r *clientRelay) enqueueOutput(frame protocol.Frame) error {
+	return r.enqueueOutputWritten(frame, nil)
+}
+
+func (r *clientRelay) enqueueOutputWritten(frame protocol.Frame, written chan error) error {
 	queued := cloneFrame(frame)
 	payload := queued.Kind == protocol.KindData || queued.Kind == protocol.KindSnapshot
 	bytes := len(queued.Payload)
@@ -517,7 +521,7 @@ func (r *clientRelay) enqueueOutput(frame protocol.Frame) error {
 		return errRelayOutputQueueFull
 	}
 	select {
-	case r.output <- relayOutput{frame: queued}:
+	case r.output <- relayOutput{frame: queued, written: written}:
 		r.outputBytes += bytes
 		if payload {
 			r.outputFrames++
@@ -549,6 +553,9 @@ func (r *clientRelay) writeClientLoop() {
 			frame := queued.frame
 			err := r.client.WriteFrame(frame)
 			r.releaseOutput(frame)
+			if queued.written != nil {
+				queued.written <- err
+			}
 			if err != nil {
 				go func() { _ = r.Close() }()
 				return
@@ -721,6 +728,25 @@ func cloneFrame(frame protocol.Frame) protocol.Frame {
 type relayOutput struct {
 	frame   protocol.Frame
 	drained chan struct{}
+	written chan error
+}
+
+func (r *clientRelay) writeResponse(ctx context.Context, frame protocol.Frame) error {
+	written := make(chan error, 1)
+	r.sendMu.Lock()
+	err := r.enqueueOutputWritten(frame, written)
+	r.sendMu.Unlock()
+	if err != nil {
+		return err
+	}
+	select {
+	case err := <-written:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("daemon: wait for catalog write: %w", ctx.Err())
+	case <-r.lifetime.Done():
+		return errRelayClosed
+	}
 }
 
 // A control-only connection hands off after all queued replies leave its writer.

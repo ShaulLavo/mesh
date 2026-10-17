@@ -80,6 +80,11 @@ func TestListCatalogBudgetStartsAfterAuthenticatedSetup(t *testing.T) {
 
 func nativeCatalogHost(t *testing.T, setupDelay, replyDelay time.Duration, ended bool) HostRecord {
 	t.Helper()
+	return nativeCatalogHostWithSessions(t, setupDelay, replyDelay, ended, 0)
+}
+
+func nativeCatalogHostWithSessions(t *testing.T, setupDelay, replyDelay time.Duration, ended bool, count int) HostRecord {
+	t.Helper()
 	state := compactSocketTempDir(t)
 	host, key, err := identity.LoadOrCreate(state)
 	if err != nil {
@@ -106,6 +111,18 @@ func nativeCatalogHost(t *testing.T, setupDelay, replyDelay time.Duration, ended
 			t.Fatal(err)
 		}
 	}
+	for i := range count {
+		dir := filepath.Join(state, "s", fmt.Sprintf("%04d", i))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		code := 0
+		now := time.Now()
+		command := []string{"sh", "-c", strings.Repeat("x", 32<<10)}
+		if err := worker.WriteMeta(dir, worker.Meta{ID: fmt.Sprintf("%04d", i), Command: command, Cwd: state, PID: os.Getpid(), State: worker.StateExited, CreatedAt: now, ExitedAt: &now, ExitCode: &code}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- daemon.Run(ctx, daemon.Config{StateDir: state}) }()
@@ -122,6 +139,9 @@ func nativeCatalogHost(t *testing.T, setupDelay, replyDelay time.Duration, ended
 	})
 	socket := daemon.SocketPath(state)
 	deadline := time.Now().Add(3 * time.Second)
+	if count > 0 {
+		deadline = time.Now().Add(15 * time.Second)
+	}
 	for {
 		conn, err := net.DialTimeout("unix", socket, 50*time.Millisecond)
 		if err == nil {
