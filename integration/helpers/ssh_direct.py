@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Exercise ephemeral Mesh SSH with real PTYs and forced transport loss."""
-import base64
 import json
 import os
 from pathlib import Path
@@ -83,6 +82,11 @@ def exercise(fixture):
     terminal.send("exit 9\n")
     terminal.expect_exit()
     require(terminal.status == 9, f"PTY exit code={terminal.status}")
+
+    terminal = Terminal(command + ["--", "sh", "-c", "stty -onlcr; printf '\\n'"], fixture.environment, fixture.root)
+    fixture.terminals.append(terminal)
+    terminal.expect_exit()
+    require(terminal.status == 0 and terminal.drain() == b"\n", f"PTY bytes were rewritten: {terminal.output!r}")
 
     # A caller-only terminal definition must be installed in the destination account.
     source = fixture.root / "caller-terminfo"

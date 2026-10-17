@@ -30,10 +30,17 @@ mesh                # pick a host and a session
 mesh pc             # new session on pc
 mesh pc -r          # back to the latest one
 mesh pc -- htop     # run one thing there
+mesh ssh pc        # shell that ends when its connection closes
+mesh ssh pc -- df -h # quick command without a saved session
 mesh add user@host  # put mesh on another machine
 ```
 
-`ctrl+]` detaches. the command keeps running
+`ctrl+]` detaches a persistent session. the command keeps running
+
+`mesh ssh HOST [-- command...]` uses the host's private Mesh SSH listener and
+existing device approvals. Its shell or command ends when the connection closes,
+with no saved session or reconnection. Command arguments are passed directly; use
+`mesh ssh pc -- sh -c 'command | other-command'` for remote shell syntax.
 
 ## device access
 
@@ -60,8 +67,8 @@ admitted after revocation are denied immediately; previously admitted work may
 finish. Connections bind the approved key line's incarnation; revoking and
 immediately reapproving that key retires old attachments and permits new ones.
 Idle SSH and control connections close when the next 250 ms grant check observes
-revocation. Commands and their detached workers remain available to other approved
-devices. Existing update-administrator grants are managed separately.
+revocation. Persistent commands and their detached workers remain available to other approved
+devices. A `mesh ssh` command ends when its device grant is revoked. Existing update-administrator grants are managed separately.
 An unknown or changed destination key requires explicit re-enrollment through
 system SSH; a discovery result never replaces the saved key.
 

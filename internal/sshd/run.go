@@ -15,6 +15,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/shaul/mesh/internal/terminal"
 	"github.com/shaul/mesh/internal/terminfo"
+	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 )
 
@@ -55,8 +56,7 @@ func runProcess(channel charmssh.Session, state *windowState, request RunRequest
 			<-inputDone
 		}
 	}()
-	ctx, cancel := context.WithCancel(channel.Context())
-	defer cancel()
+	ctx := channel.Context()
 	command, err := prepareProcess(ctx, state, request)
 	if err != nil {
 		return 1, err
@@ -67,13 +67,13 @@ func runProcess(channel charmssh.Session, state *windowState, request RunRequest
 	}
 	defer input.Close()  //nolint:errcheck // process result owns the exit status
 	defer writer.Close() //nolint:errcheck // release relay on every exit
-
 	var master *os.File
 	if state != nil {
 		size := state.size()
 		master, err = pty.StartWithSize(command, &pty.Winsize{Cols: uint16(size.Cols), Rows: uint16(size.Rows)}) //nolint:gosec // dimensions were checked at the SSH boundary
 	} else {
-		command.Stdin, command.Stdout, command.Stderr = input, channel, channel.Stderr()
+		raw := channel.Context().Value(channelKey{}).(gossh.Channel)
+		command.Stdin, command.Stdout, command.Stderr = input, raw, raw.Stderr()
 		err = command.Start()
 	}
 	if err != nil {
@@ -87,7 +87,10 @@ func runProcess(channel charmssh.Session, state *windowState, request RunRequest
 	go func() { defer close(inputRelayDone); relayProcessInput(channel, writer, master) }()
 	outputDone := make(chan struct{})
 	if master != nil {
-		go func() { defer close(outputDone); _, _ = io.Copy(channel, master) }()
+		go func() {
+			defer close(outputDone)
+			_, _ = io.Copy(channel.Context().Value(channelKey{}).(gossh.Channel), master)
+		}()
 	} else {
 		close(outputDone)
 	}
@@ -95,11 +98,10 @@ func runProcess(channel charmssh.Session, state *windowState, request RunRequest
 	signals := make(chan charmssh.Signal, 16)
 	channel.Signals(signals)
 	defer channel.Signals(nil)
-	stopDisconnect := context.AfterFunc(channel.Context(), func() { _ = channel.Close(); killProcess(command.Process.Pid, master) })
-	defer stopDisconnect()
-	go watchProcess(ctx, command, master, state, signals, finished)
+	completed := make(chan struct{})
+	go watchProcess(ctx, channel, command, master, state, signals, completed, finished)
 	err = command.Wait()
-	cancel()
+	close(completed)
 	<-finished
 	_ = writer.Close()
 	<-outputDone
@@ -156,17 +158,25 @@ func relayProcessInput(channel charmssh.Session, writer, master *os.File) {
 	_ = writer.Close()
 }
 
-func watchProcess(ctx context.Context, command *exec.Cmd, master *os.File, state *windowState, signals <-chan charmssh.Signal, done chan<- struct{}) {
+func watchProcess(ctx context.Context, channel charmssh.Session, command *exec.Cmd, master *os.File, state *windowState, signals <-chan charmssh.Signal, completed <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
 	for {
 		select {
+		case <-completed:
+			return
+		default:
+		}
+		select {
+		case <-completed:
+			return
 		case <-ctx.Done():
-			signalProcess(command.Process.Pid, master, syscall.SIGKILL)
-			_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-
+			_ = channel.Close()
+			if command.Process.Signal(syscall.Signal(0)) == nil {
+				killProcess(command.Process.Pid, master)
+			}
 			return
 		case sig := <-signals:
-			if value, ok := processSignals[sig]; ok {
+			if value, ok := processSignals[sig]; ok && command.Process.Signal(syscall.Signal(0)) == nil {
 				signalProcess(command.Process.Pid, master, value)
 			}
 		case _, open := <-windowChanges(state):
