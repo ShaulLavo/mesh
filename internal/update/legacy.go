@@ -49,18 +49,14 @@ func Exchange(ctx context.Context, host Host, request protocol.Control) (protoco
 	if err = conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload}); err != nil {
 		return protocol.Control{}, err
 	}
-	frame, err := conn.ReadFrame()
+	response, err := protocol.ReadControl(conn.ReadFrame, conn.WriteFrame)
 	if err != nil {
-		return protocol.Control{}, err
-	}
-	response, err := protocol.DecodeControl(frame.Payload)
-	if err != nil {
-		return response, err
+		return protocol.Control{}, fmt.Errorf("legacy update response: %w", err)
 	}
 	if response.Type == protocol.TypeError {
 		return response, &RemoteError{Problem: response.Message}
 	}
-	if frame.Kind != protocol.KindControl || response.RequestID != request.RequestID {
+	if response.RequestID != request.RequestID {
 		return response, errors.New("legacy update response request mismatch")
 	}
 	return response, nil
