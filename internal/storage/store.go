@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	sqliteDriver       = "sqlite"
-	sqliteBusyTimeout  = "5000"
-	sqliteMaxOpenConns = 4
+	sqliteDriver           = "sqlite"
+	sqliteBusyTimeout      = "5000"
+	sqliteCacheBusyTimeout = "150"
+	sqliteMaxOpenConns     = 4
 )
 
 // ErrAdvisoryMigrationUnavailable marks a migration committed by another opener.
@@ -41,17 +42,17 @@ type Store struct {
 // Open opens databasePath, applies every pending migration, and returns a Store.
 // The caller owns the parent state directory and supplies its path explicitly.
 func Open(ctx context.Context, databasePath string) (*Store, error) {
-	return open(ctx, databasePath, sqliteBusyTimeout)
+	return open(ctx, databasePath, sqliteBusyTimeout, sqliteBusyTimeout, false)
 }
 
-// OpenAdvisory skips lock contention instead of delaying authoritative work.
-// The DSN applies the policy to every connection opened by the pool.
+// OpenAdvisory skips migration lock contention without delaying authoritative work.
+// After migrations, every pooled connection gets a short bounded write timeout.
 func OpenAdvisory(ctx context.Context, databasePath string) (*Store, error) {
-	return open(ctx, databasePath, "0")
+	return open(ctx, databasePath, sqliteCacheBusyTimeout, "0", true)
 }
 
-func open(ctx context.Context, databasePath, busyTimeout string) (*Store, error) {
-	dsn, err := sqliteDSN(databasePath, busyTimeout)
+func open(ctx context.Context, databasePath, busyTimeout, migrationBusyTimeout string, advisory bool) (*Store, error) {
+	dsn, err := sqliteDSN(databasePath, migrationBusyTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -65,11 +66,38 @@ func open(ctx context.Context, databasePath, busyTimeout string) (*Store, error)
 		_ = db.Close()
 		return nil, fmt.Errorf("storage: connect to %s: %w", databasePath, err)
 	}
-	if err := migrate(ctx, db, busyTimeout == "0"); err != nil {
+	if err := migrate(ctx, db, advisory); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("storage: migrate %s: %w", databasePath, err)
 	}
+	if busyTimeout != migrationBusyTimeout {
+		db, err = reopen(ctx, db, databasePath, busyTimeout)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &Store{db: db, queries: dbsqlc.New(db), path: databasePath}, nil
+}
+
+func reopen(ctx context.Context, migrationDB *sql.DB, databasePath, busyTimeout string) (*sql.DB, error) {
+	if err := migrationDB.Close(); err != nil {
+		return nil, fmt.Errorf("storage: close migration connection %s: %w", databasePath, err)
+	}
+	dsn, err := sqliteDSN(databasePath, busyTimeout)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open(sqliteDriver, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("storage: reopen %s: %w", databasePath, err)
+	}
+	db.SetMaxOpenConns(sqliteMaxOpenConns)
+	db.SetMaxIdleConns(sqliteMaxOpenConns)
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("storage: reconnect to %s: %w", databasePath, err)
+	}
+	return db, nil
 }
 
 // Close releases every database handle. It is safe to call more than once.
