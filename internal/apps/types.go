@@ -18,6 +18,7 @@ import (
 
 	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/serve"
+	"github.com/shaul/mesh/internal/transfer"
 	"github.com/shaul/mesh/internal/webauth"
 )
 
@@ -34,7 +35,7 @@ const IdleTTL = 24 * time.Hour
 var LeaseTTL = 3 * time.Minute
 
 const MaxArchive = 64 << 20
-const ChunkSize = 256 << 10
+const ChunkSize = transfer.ChunkSize
 
 var idPattern = regexp.MustCompile(`^[0123456789abcdefghjkmnpqrstvwxyz]{4}$`)
 

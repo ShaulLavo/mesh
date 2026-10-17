@@ -384,7 +384,7 @@ func NewCommand(dependencies Dependencies) *Command {
 		inGroup(groupSessions, app.listCommand(), app.attachCommand(), app.localCommand(),
 			app.logsCommand(), app.killCommand(), app.hibernateCommand(), app.gcCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand(), app.agentCommand(), app.backCommand())...,
 	)
-	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.sshCommand(), app.renameCommand(), app.wakeCommand(), app.dashboardCommand(), app.fleetCommand())...)
+	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.sshCommand(), app.copyCommand(), app.renameCommand(), app.wakeCommand(), app.dashboardCommand(), app.fleetCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand(), app.appCommand())...)
 	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), deviceCommand(), versionCommand())...)
 	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand())
