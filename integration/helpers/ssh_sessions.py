@@ -37,7 +37,7 @@ class SSHFixture(Fixture):
         self.environment.update({"MESH_FAKE_TAILSCALE_STATUS": str(status),
                                  "PATH": str(bin_dir) + os.pathsep + self.environment["PATH"]})
         self.daemon_log = open(self.root / "daemon.log", "ab")
-        self.daemon = subprocess.Popen([self.binary, "daemon", "--ssh-port", str(self.port)],
+        self.daemon = subprocess.Popen([self.binary, "daemon", "--tailnet-port", "0", "--ssh-port", str(self.port)],
                                        env=self.environment, stdin=subprocess.DEVNULL,
                                        stdout=self.daemon_log, stderr=subprocess.STDOUT)
         eventually(self.listening, "SSH daemon did not listen")

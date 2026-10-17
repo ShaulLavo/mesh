@@ -221,7 +221,7 @@ func TestAppSSHChecksExactMeshHostIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callback, err := appHostKeyCallback(base64.RawURLEncoding.EncodeToString(public))
+	callback, err := meshSSHHostKeyCallback(base64.RawURLEncoding.EncodeToString(public))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestAppSSHChecksExactMeshHostIdentity(t *testing.T) {
 	if err = callback("pc:2222", &net.TCPAddr{}, key); err == nil {
 		t.Fatal("different Mesh host accepted")
 	}
-	if _, err = appHostKeyCallback("missing pin"); err == nil {
+	if _, err = meshSSHHostKeyCallback("missing pin"); err == nil {
 		t.Fatal("missing Mesh pin accepted")
 	}
 }
