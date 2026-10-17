@@ -80,6 +80,13 @@ large watch snapshots and resync, updater observations, and the exact frame
 boundary. The UpCloud reporter already removed its disposable sessions;
 verification does not delete or grow the live catalog.
 
+The snapshot writer applies its existing five-second bound to each page and
+continuation credit. Acknowledged pages can take more than five seconds in
+total while the reader keeps progressing. Missing credits still close the
+connection and release its subscriber, and the caller's outer deadline still
+bounds the complete operation. Bulk correctness fixtures follow readiness and
+test lifetime; separate budget tests assert timeouts explicitly.
+
 ### 3. Watch protocol
 
 Add one additive control, `state.watch`, carried on an ordinary control

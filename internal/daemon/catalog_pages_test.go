@@ -22,11 +22,12 @@ func TestLargeWatchResyncUsesSingleReaderAndReleasesSubscriber(t *testing.T) {
 	}
 	server := &clientServer{state: broker, metrics: hostmetrics.New()}
 	client, peer := catalogPipe(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	done := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
-		done <- server.serveState(ctx, peer, protocol.Control{Type: protocol.TypeStateWatch, RequestID: "large", Watch: &protocol.StateWatch{Topics: []string{protocol.TopicSessions}}})
+		defer close(done)
+		_ = server.serveState(ctx, peer, protocol.Control{Type: protocol.TypeStateWatch, RequestID: "large", Watch: &protocol.StateWatch{Topics: []string{protocol.TopicSessions}}})
 	}()
 	t.Cleanup(func() { _ = client.Close(); _ = peer.Close(); <-done })
 	first, err := client.ReadFrame()
@@ -50,7 +51,7 @@ func TestLargeWatchResyncUsesSingleReaderAndReleasesSubscriber(t *testing.T) {
 		return client.ReadFrame()
 	}
 	initial, err := protocol.ReadControl(read, client.WriteFrame)
-	if err != nil || len(initial.StateSnapshot.Sessions) != 168 {
+	if err != nil || initial.StateSnapshot == nil || len(initial.StateSnapshot.Sessions) != 168 {
 		t.Fatal("initial snapshot lost rows", err)
 	}
 	resync, err := protocol.ReadControl(client.ReadFrame, client.WriteFrame)
@@ -63,9 +64,8 @@ func TestLargeWatchResyncUsesSingleReaderAndReleasesSubscriber(t *testing.T) {
 	}
 	_ = client.Close()
 	select {
-	case err := <-done:
-		done <- err
-	case <-ctx.Done():
+	case <-done:
+	case <-time.After(runtimeTestTimeout):
 		t.Fatal("resync reader retained subscriber after disconnect")
 	}
 	sub, _, err := broker.subscribe(protocol.StateWatch{Topics: []string{protocol.TopicServices}})
