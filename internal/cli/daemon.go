@@ -13,6 +13,7 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/terminfo"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -107,6 +108,9 @@ func daemonControlRequest(ctx context.Context, socketPath string, request protoc
 }
 
 func controlRequest(ctx context.Context, conn transport.Conn, request protocol.Control) (protocol.Control, error) {
+	if request.Type == protocol.TypeCreate || request.Type == protocol.TypeRecover {
+		request.Terminfo = terminfo.Capture(ctx, request.Term)
+	}
 	payload, err := request.Encode()
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("cli: encode %s request: %w", request.Type, err)

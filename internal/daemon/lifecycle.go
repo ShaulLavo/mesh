@@ -25,6 +25,7 @@ import (
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
+	"github.com/shaul/mesh/internal/terminfo"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/updategate"
 	"github.com/shaul/mesh/internal/worker"
@@ -256,6 +257,9 @@ func creationDefaults(cfg lifecycleConfig) (lifecycleConfig, error) {
 // left to clientRelay, and unknown controls are left to the caller to reject.
 func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control) (protocol.Control, bool, error) {
 	if request.Type == protocol.TypeCreate || request.Type == protocol.TypeRecover {
+		if err := terminfo.Install(ctx, request.Term, request.Terminfo); err != nil {
+			return protocol.Control{}, true, fmt.Errorf("daemon: prepare terminal: %w", err)
+		}
 		if err := updategate.Check(filepath.Dir(l.sessionsDir)); err != nil {
 			return protocol.Control{}, true, err
 		}

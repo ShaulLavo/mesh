@@ -17,6 +17,7 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/terminal"
+	"github.com/shaul/mesh/internal/terminfo"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -247,6 +248,8 @@ func attachWithTerminal(ctx context.Context, opts AttachOptions, terminal Attach
 	stopContext := closeAttachmentOnCancel(ctx, conn)
 	defer stopContext()
 	request := attachmentRequest(opts, terminal.Size)
+	request.Term = clientTerm()
+	request.Terminfo = terminfo.Capture(ctx, request.Term)
 	request.NestingSupported = keys.dynamic
 	if err := send(controlFrame(request)); err != nil {
 		if ctx.Err() != nil {
