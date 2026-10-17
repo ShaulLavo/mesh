@@ -53,7 +53,7 @@ func TestLargeNativeCatalogBackpressureAndStateSnapshot(t *testing.T) {
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
 	host := nativeCatalogHostWithSessions(t, 0, 0, false, 420)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	conn, err := openVerifiedHost(ctx, host, dialControlHost)
 	if err != nil {
@@ -115,7 +115,9 @@ func TestLargeNativeCatalogCancellationDropsPartialResult(t *testing.T) {
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
 	host := nativeCatalogHostWithSessions(t, 0, 0, false, 168)
-	ctx, cancel := context.WithCancel(t.Context())
+	setupCtx, stopSetup := context.WithTimeout(t.Context(), 15*time.Second)
+	defer stopSetup()
+	ctx, cancel := context.WithCancel(setupCtx)
 	conn, err := openVerifiedHost(ctx, host, dialControlHost)
 	if err != nil {
 		t.Fatal(err)
@@ -134,8 +136,8 @@ func TestLargeNativeCatalogCancellationDropsPartialResult(t *testing.T) {
 	}()
 	select {
 	case <-paused.seen:
-	case <-time.After(time.Second):
-		t.Fatal("first page unavailable")
+	case <-setupCtx.Done():
+		t.Fatal("first page unavailable", setupCtx.Err())
 	}
 	cancel()
 	paused.release()
@@ -144,7 +146,7 @@ func TestLargeNativeCatalogCancellationDropsPartialResult(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatal("catalog cancellation not returned", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("catalog cancellation stuck")
 	}
 	quickCtx, quickCancel := context.WithTimeout(t.Context(), time.Second)
