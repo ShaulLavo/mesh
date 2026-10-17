@@ -21,34 +21,34 @@ func TestReadonlyDirectoryAndExistingDirectoryParent(t *testing.T) {
 	if err := os.Mkdir(readonly, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(readonly, "index0.txt"), []byte("readonly contents"), 0640); err != nil {
+	if err := os.WriteFile(filepath.Join(readonly, "index0.txt"), []byte("readonly contents"), 0640); err != nil { //nolint:gosec // Fixture permissions verify that copy preserves ordinary and executable modes.
 		t.Fatal(err)
 	}
-	if err := os.Chmod(readonly, 0555); err != nil {
+	if err := os.Chmod(readonly, 0555); err != nil { //nolint:gosec // Directory permission fixtures exercise read-only source and destination parents.
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(readonly, 0700) })
+	t.Cleanup(func() { _ = os.Chmod(readonly, 0700) }) //nolint:gosec // Directory permission fixtures exercise read-only source and destination parents.
 	parent := t.TempDir()
 	destination := filepath.Join(parent, "destination")
 	if err := os.Mkdir(destination, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(parent, 0555); err != nil {
+	if err := os.Chmod(parent, 0555); err != nil { //nolint:gosec // Directory permission fixtures exercise read-only source and destination parents.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = os.Chmod(parent, 0700)
-		_ = os.Chmod(filepath.Join(destination, filepath.Base(source), "readonly"), 0700)
+		_ = os.Chmod(parent, 0700)                                                        //nolint:gosec // Directory permission fixtures exercise read-only source and destination parents.
+		_ = os.Chmod(filepath.Join(destination, filepath.Base(source), "readonly"), 0700) //nolint:gosec // Directory permission fixtures exercise read-only source and destination parents.
 	})
 	info := receivePacked(t, source, destination)
 	target := filepath.Join(destination, info.Name)
-	if data, err := os.ReadFile(filepath.Join(target, "readonly", "index0.txt")); err != nil || string(data) != "readonly contents" {
+	if data, err := os.ReadFile(filepath.Join(target, "readonly", "index0.txt")); err != nil || string(data) != "readonly contents" { //nolint:gosec // Read the test-owned copied fixture to verify read-only directory handling.
 		t.Fatalf("readonly copy = %q, %v", data, err)
 	}
 	if err := os.WriteFile(filepath.Join(target, "preserved"), []byte("keep"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(filepath.Join(target, "readonly"), 0700); err != nil {
+	if err := os.Chmod(filepath.Join(target, "readonly"), 0700); err != nil { //nolint:gosec // Directory permission fixtures exercise read-only source and destination parents.
 		t.Fatal(err)
 	}
 	receivePacked(t, source, destination)
@@ -60,7 +60,7 @@ func TestReadonlyDirectoryAndExistingDirectoryParent(t *testing.T) {
 
 func TestPackReceiveLargeBinary(t *testing.T) {
 	root := t.TempDir()
-	source, err := os.Create(filepath.Join(root, "binary"))
+	source, err := os.Create(filepath.Join(root, "binary")) //nolint:gosec // The binary fixture and destination are inside this test-owned temporary directory.
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestPackReceiveLargeBinary(t *testing.T) {
 			state ^= state << 13
 			state ^= state >> 17
 			state ^= state << 5
-			buffer[index] = byte(state)
+			buffer[index] = byte(state & 0xff)
 		}
 		if _, err := io.MultiWriter(source, hash).Write(buffer); err != nil {
 			t.Fatal(err)
@@ -101,7 +101,7 @@ func TestPackReceiveLargeBinary(t *testing.T) {
 	if err := Receive(context.Background(), archive, info, destination); err != nil {
 		t.Fatal(err)
 	}
-	result, err := os.Open(destination)
+	result, err := os.Open(destination) //nolint:gosec // The binary fixture and destination are inside this test-owned temporary directory.
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,10 +232,11 @@ func rawArchive(t *testing.T, entries []archiveTestEntry) (*os.File, Info) {
 		if err := writer.WriteHeader(header); err != nil {
 			t.Fatal(err)
 		}
-		if entry.kind == tar.TypeReg {
-			if _, err := writer.Write([]byte(entry.data)); err != nil {
-				t.Fatal(err)
-			}
+		if entry.kind != tar.TypeReg {
+			continue
+		}
+		if _, err := writer.Write([]byte(entry.data)); err != nil {
+			t.Fatal(err)
 		}
 	}
 	if err := writer.Close(); err != nil {
@@ -297,19 +298,19 @@ func receivePacked(t *testing.T, source, destination string) Info {
 
 func TestPackReceiveDirectoryPreservesFilesModesAndMerge(t *testing.T) {
 	source := t.TempDir()
-	if err := os.Mkdir(filepath.Join(source, "empty"), 0755); err != nil {
+	if err := os.Mkdir(filepath.Join(source, "empty"), 0755); err != nil { //nolint:gosec // Fixture directory permissions must survive the copy.
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(source, ".git"), 0755); err != nil {
+	if err := os.Mkdir(filepath.Join(source, ".git"), 0755); err != nil { //nolint:gosec // Fixture directory permissions must survive the copy.
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(source, ".git", "config"), []byte("git"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "payload"), []byte("payload"), 0640); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "payload"), []byte("payload"), 0640); err != nil { //nolint:gosec // Fixture permissions verify that copy preserves ordinary and executable modes.
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "run"), []byte("run"), 0751); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "run"), []byte("run"), 0751); err != nil { //nolint:gosec // Fixture permissions verify that copy preserves ordinary and executable modes.
 		t.Fatal(err)
 	}
 	destination := t.TempDir()
@@ -321,8 +322,11 @@ func TestPackReceiveDirectoryPreservesFilesModesAndMerge(t *testing.T) {
 		}
 	}
 	runInfo, err := os.Stat(filepath.Join(target, "run"))
-	if err != nil || runInfo.Mode().Perm() != 0751 {
-		t.Fatalf("run mode = %v, %v", runInfo.Mode().Perm(), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runInfo.Mode().Perm() != 0751 {
+		t.Fatalf("run mode = %v", runInfo.Mode().Perm())
 	}
 	if err := os.WriteFile(filepath.Join(target, "keep"), []byte("keep"), 0600); err != nil {
 		t.Fatal(err)
@@ -336,7 +340,7 @@ func TestPackReceiveDirectoryPreservesFilesModesAndMerge(t *testing.T) {
 func TestReceiveFileUsesCpDestinationRulesAndAtomicOverwrite(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "value.txt")
-	if err := os.WriteFile(source, []byte("new"), 0750); err != nil {
+	if err := os.WriteFile(source, []byte("new"), 0750); err != nil { //nolint:gosec // Fixture permissions verify that copy preserves ordinary and executable modes.
 		t.Fatal(err)
 	}
 	destination := filepath.Join(root, "destination")
@@ -344,14 +348,14 @@ func TestReceiveFileUsesCpDestinationRulesAndAtomicOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	receivePacked(t, source, destination)
-	if data, err := os.ReadFile(filepath.Join(destination, "value.txt")); err != nil || string(data) != "new" {
+	if data, err := os.ReadFile(filepath.Join(destination, "value.txt")); err != nil || string(data) != "new" { //nolint:gosec // Read the test-owned destination to verify cp placement and replacement.
 		t.Fatalf("destination file = %q, %v", data, err)
 	}
 	if err := os.WriteFile(filepath.Join(destination, "value.txt"), []byte("old"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	receivePacked(t, source, destination)
-	if data, err := os.ReadFile(filepath.Join(destination, "value.txt")); err != nil || string(data) != "new" {
+	if data, err := os.ReadFile(filepath.Join(destination, "value.txt")); err != nil || string(data) != "new" { //nolint:gosec // Read the test-owned destination to verify cp placement and replacement.
 		t.Fatalf("overwritten file = %q, %v", data, err)
 	}
 	exact := filepath.Join(root, "renamed.txt")
@@ -367,7 +371,7 @@ func TestReceiveRejectsDigestTraversalAndDestinationSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	archive, info := packedFile(t, source)
-	defer func() { _ = archive.Close() }()
+	defer func(file *os.File) { _ = file.Close() }(archive)
 	info.Digest = strings.Repeat("0", sha256.Size*2)
 	destination := filepath.Join(t.TempDir(), "destination")
 	if err := Receive(context.Background(), archive, info, destination); err == nil {
@@ -389,7 +393,7 @@ func TestReceiveRejectsDigestTraversalAndDestinationSymlinks(t *testing.T) {
 	if err := Receive(context.Background(), archive, info, link); err == nil {
 		t.Fatal("followed destination symlink")
 	}
-	if data, err := os.ReadFile(outside); err != nil || string(data) != "outside" {
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "outside" { //nolint:gosec // Read the test-owned sentinel to prove the destination link was refused.
 		t.Fatalf("symlink target changed: %q, %v", data, err)
 	}
 }
@@ -441,7 +445,7 @@ func TestArchiveDigestIsCompressedBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = io.Copy(io.Discard, gzipReader)
+	_, err = io.Copy(io.Discard, io.LimitReader(gzipReader, 1024*1024))
 	if err != nil {
 		t.Fatal(err)
 	}
