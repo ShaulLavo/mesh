@@ -2,12 +2,14 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -67,7 +69,7 @@ func connectSSH(ctx context.Context, remoteTarget target, opts SSHOptions) (remo
 		return nil, err
 	}
 	defer closeAuth()
-	hostKeyCallback, err := loadHostKeyCallback(ctx, opts)
+	hostKeyCallback, hostKeyAlgorithms, err := loadHostKeyCallback(ctx, remoteTarget.address(), opts)
 	if err != nil {
 		return nil, err
 	}
@@ -96,9 +98,10 @@ func connectSSH(ctx context.Context, remoteTarget target, opts SSHOptions) (remo
 	pauser.conn = networkConnection
 
 	clientConnection, channels, requests, err := ssh.NewClientConn(networkConnection, remoteTarget.address(), &ssh.ClientConfig{
-		User:            remoteTarget.user,
-		Auth:            authMethods,
-		HostKeyCallback: pauser.hostKeyCallback(hostKeyCallback),
+		User:              remoteTarget.user,
+		Auth:              authMethods,
+		HostKeyCallback:   pauser.hostKeyCallback(hostKeyCallback),
+		HostKeyAlgorithms: hostKeyAlgorithms,
 	})
 	if err != nil {
 		_ = networkConnection.Close()
@@ -207,12 +210,12 @@ func loadSigner(ctx context.Context, identityFile string, prompt func(context.Co
 	return signer, nil
 }
 
-func loadHostKeyCallback(ctx context.Context, opts SSHOptions) (ssh.HostKeyCallback, error) {
+func loadHostKeyCallback(ctx context.Context, address string, opts SSHOptions) (ssh.HostKeyCallback, []string, error) {
 	knownHostsPath := opts.KnownHostsPath
 	if knownHostsPath == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return nil, diagnostic(DiagnosticSSHHostKey, fmt.Errorf("locate ~/.ssh/known_hosts: %w", err))
+			return nil, nil, diagnostic(DiagnosticSSHHostKey, fmt.Errorf("locate ~/.ssh/known_hosts: %w", err))
 		}
 		knownHostsPath = filepath.Join(home, ".ssh", "known_hosts")
 	}
@@ -220,7 +223,11 @@ func loadHostKeyCallback(ctx context.Context, opts SSHOptions) (ssh.HostKeyCallb
 	var knownCallback ssh.HostKeyCallback
 	knownCallback, err := knownhosts.New(knownHostsPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, diagnostic(DiagnosticSSHHostKey, fmt.Errorf("read known hosts %s: %w", knownHostsPath, err))
+		return nil, nil, diagnostic(DiagnosticSSHHostKey, fmt.Errorf("read known hosts %s: %w", knownHostsPath, err))
+	}
+	algorithms, err := preferredHostKeyAlgorithms(knownCallback, address)
+	if err != nil {
+		return nil, nil, diagnostic(DiagnosticSSHHostKey, err)
 	}
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 		if knownCallback != nil {
@@ -252,7 +259,48 @@ func loadHostKeyCallback(ctx context.Context, opts SSHOptions) (ssh.HostKeyCallb
 			return diagnostic(DiagnosticSSHHostKey, err)
 		}
 		return nil
-	}, nil
+	}, algorithms, nil
+}
+
+func preferredHostKeyAlgorithms(callback ssh.HostKeyCallback, address string) ([]string, error) {
+	if callback == nil {
+		return nil, nil
+	}
+	// knownhosts exposes matching keys through KeyError, including hashed hosts
+	// and nonstandard ports. Probe with an inert key to use that same matcher.
+	probe, err := ssh.NewPublicKey(make(ed25519.PublicKey, ed25519.PublicKeySize))
+	if err != nil {
+		return nil, fmt.Errorf("create known-host algorithm probe: %w", err)
+	}
+	err = callback(address, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 22}, probe)
+	knownTypes := make(map[string]bool)
+	var mismatch *knownhosts.KeyError
+	if errors.As(err, &mismatch) {
+		for _, known := range mismatch.Want {
+			knownTypes[known.Key.Type()] = true
+		}
+	} else if err == nil {
+		knownTypes[probe.Type()] = true
+	}
+	if len(knownTypes) == 0 {
+		return nil, nil
+	}
+	algorithms := ssh.SupportedAlgorithms().HostKeys
+	algorithms = append(algorithms, ssh.InsecureAlgorithms().HostKeys...)
+	slices.SortStableFunc(algorithms, func(a, b string) int {
+		return hostKeyPreference(b, knownTypes) - hostKeyPreference(a, knownTypes)
+	})
+	return algorithms, nil
+}
+
+func hostKeyPreference(algorithm string, knownTypes map[string]bool) int {
+	if algorithm == ssh.KeyAlgoRSASHA256 || algorithm == ssh.KeyAlgoRSASHA512 {
+		algorithm = ssh.KeyAlgoRSA
+	}
+	if knownTypes[algorithm] {
+		return 1
+	}
+	return 0
 }
 
 func appendKnownHost(knownHostsPath, hostname string, key ssh.PublicKey) error {

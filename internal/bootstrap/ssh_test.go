@@ -3,7 +3,9 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
@@ -50,6 +52,88 @@ func TestConnectSSHAuthenticatesAndRunsCommands(t *testing.T) {
 	if err := remote.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+}
+
+func TestConnectSSHPrefersTrustedHostKeyAlgorithm(t *testing.T) {
+	t.Parallel()
+	clientPrivate, clientPublic := generateSSHKey(t)
+	alternate, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alternateSigner, err := ssh.NewSignerFromKey(alternate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startSSHTestServer(t, clientPublic, alternateSigner)
+	remoteTarget, err := parseTarget("shaul@" + server.address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownHostsPath := writeKnownHost(t, knownhosts.HashHostname(knownhosts.Normalize(server.address)), server.hostKey)
+	remote, err := connectSSH(context.Background(), remoteTarget, SSHOptions{
+		KnownHostsPath: knownHostsPath,
+		IdentityFiles:  []string{writeSSHIdentity(t, clientPrivate)},
+		ConfirmHostKey: func(context.Context, HostKey) (bool, error) {
+			t.Error("prompted for an already trusted host")
+			return false, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("connectSSH() error = %v", err)
+	}
+	if err := remote.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPreferredHostKeyAlgorithmsMatchesExactHostAndPort(t *testing.T) {
+	t.Parallel()
+	_, key := generateSSHKey(t)
+	path := writeKnownHost(t, "bootstrap-fixture.invalid:22", key)
+	callback, err := knownhosts.New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		address string
+		known   bool
+	}{
+		{"bootstrap-fixture.invalid:22", true},
+		{"bootstrap-fixture.invalid:2222", false},
+		{"other-fixture.invalid:22", false},
+	} {
+		algorithms, err := preferredHostKeyAlgorithms(callback, test.address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !test.known && len(algorithms) != 0 {
+			t.Fatalf("unrelated host inherited algorithms %v", algorithms)
+		}
+		if test.known && (len(algorithms) == 0 || algorithms[0] != ssh.KeyAlgoED25519) {
+			t.Fatalf("trusted algorithm was not preferred: %v", algorithms)
+		}
+	}
+}
+
+func TestConnectSSHRejectsChangedTrustedHostKey(t *testing.T) {
+	t.Parallel()
+	clientPrivate, clientPublic := generateSSHKey(t)
+	server := startSSHTestServer(t, clientPublic)
+	_, wrongKey := generateSSHKey(t)
+	remoteTarget, err := parseTarget("shaul@" + server.address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = connectSSH(context.Background(), remoteTarget, SSHOptions{
+		KnownHostsPath: writeKnownHost(t, server.address, wrongKey),
+		IdentityFiles:  []string{writeSSHIdentity(t, clientPrivate)},
+		ConfirmHostKey: func(context.Context, HostKey) (bool, error) {
+			t.Error("prompted to bypass a changed key")
+			return true, nil
+		},
+	})
+	assertDiagnosticCode(t, err, DiagnosticSSHHostKey)
 }
 
 func TestSSHRemoteEnforcesRequestedOutputLimit(t *testing.T) {
@@ -215,7 +299,7 @@ type sshTestServer struct {
 	wg       sync.WaitGroup
 }
 
-func startSSHTestServer(t *testing.T, authorized ssh.PublicKey) *sshTestServer {
+func startSSHTestServer(t *testing.T, authorized ssh.PublicKey, additionalHostKeys ...ssh.Signer) *sshTestServer {
 	t.Helper()
 	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -234,6 +318,9 @@ func startSSHTestServer(t *testing.T, authorized ssh.PublicKey) *sshTestServer {
 		},
 	}
 	config.AddHostKey(hostSigner)
+	for _, signer := range additionalHostKeys {
+		config.AddHostKey(signer)
+	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
