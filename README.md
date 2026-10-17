@@ -65,6 +65,10 @@ devices. Existing update-administrator grants are managed separately.
 An unknown or changed destination key requires explicit re-enrollment through
 system SSH; a discovery result never replaces the saved key.
 
+Enroll personal devices once with `mesh fleet trust HOST --yes` on each device to
+share new connections and approve those devices on newly added servers automatically.
+[Connection sharing](docs/fleet-sharing.md) describes setup, offline behavior and revocation.
+
 For explicit approval across existing pinned hosts, run `mesh device approve-fleet`
 on the source. [Pinned-fleet enrollment](docs/device-enrollment.md) describes the
 read-only preview and administration map.

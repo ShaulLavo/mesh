@@ -76,19 +76,20 @@ func defaultDependencies() dependencies {
 }
 
 type normalizedOptions struct {
-	target           target
-	binary           binarySelection
-	stateDir         string
-	expectedIdentity string
-	tailscaleAuthKey []byte
-	confirmProvision ConfirmProvisionFunc
-	sudoPassword     SudoPasswordFunc
-	ssh              SSHOptions
-	daemonPort       uint16
-	sshPort          uint16
-	webSocketPath    string
-	verifyTimeout    time.Duration
-	progress         func(Event)
+	target                     target
+	binary                     binarySelection
+	stateDir                   string
+	expectedIdentity           string
+	additionalDeviceIdentities []string
+	tailscaleAuthKey           []byte
+	confirmProvision           ConfirmProvisionFunc
+	sudoPassword               SudoPasswordFunc
+	ssh                        SSHOptions
+	daemonPort                 uint16
+	sshPort                    uint16
+	webSocketPath              string
+	verifyTimeout              time.Duration
+	progress                   func(Event)
 }
 
 func run(ctx context.Context, opts Options, deps dependencies) (result Result, resultErr error) {
@@ -161,7 +162,7 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		// back only here keeps SSH the way a bare machine is adopted. The SSH
 		// failure is the one reported if this finds nothing, because a host that
 		// is not running Mesh needed that connection.
-		if alreadyServing {
+		if alreadyServing && len(normalized.additionalDeviceIdentities) == 0 {
 			normalized.progress(Event{Step: StepVerify, Detail: "already serving Mesh, adopted over the tailnet"})
 			return running, nil
 		}
@@ -179,7 +180,7 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 			return Result{}, err
 		}
 		if account == "root" && !opts.AllowRoot {
-			return Result{}, errors.New("bootstrap: approving this device grants root access; repeat mesh add with --allow-root to acknowledge it")
+			return Result{}, errors.New("bootstrap: approving this device and every selected fleet controller grants root access; repeat mesh add with --allow-root to acknowledge it")
 		}
 		normalized.progress(Event{Step: StepConnect, Detail: "destination account " + account})
 	}
@@ -239,13 +240,14 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 
 	normalized.progress(Event{Step: StepInstall, Detail: "mesh service"})
 	unchanged, err := deps.install(ctx, remote, installRequest{
-		Platform:      platform,
-		BinaryPath:    binary.path,
-		AuthorizedKey: authorizedKey,
-		DaemonPort:    normalized.daemonPort,
-		SSHPort:       normalized.sshPort,
-		WebSocketPath: normalized.webSocketPath,
-		Progress:      normalized.progress,
+		Platform:                   platform,
+		BinaryPath:                 binary.path,
+		AuthorizedKey:              authorizedKey,
+		AdditionalDeviceIdentities: normalized.additionalDeviceIdentities,
+		DaemonPort:                 normalized.daemonPort,
+		SSHPort:                    normalized.sshPort,
+		WebSocketPath:              normalized.webSocketPath,
+		Progress:                   normalized.progress,
 	})
 	if err != nil {
 		return Result{}, err
@@ -409,6 +411,10 @@ func normalizeOptions(ctx context.Context, opts Options, loadSSHConfig func() ss
 			return normalizedOptions{}, diagnostic(DiagnosticIdentity, fmt.Errorf("pinned identity %q is not an Ed25519 host ID", opts.ExpectedIdentity))
 		}
 	}
+	additionalDevices, err := normalizeAdditionalDeviceIdentities(opts.StateDir, opts.AdditionalDeviceIdentities)
+	if err != nil {
+		return normalizedOptions{}, diagnostic(DiagnosticIdentity, err)
+	}
 	port := opts.DaemonPort
 	if port == 0 {
 		port = DefaultPort
@@ -457,17 +463,18 @@ func normalizeOptions(ctx context.Context, opts Options, loadSSHConfig func() ss
 			version:      opts.Release.Version,
 			httpClient:   opts.Release.HTTPClient,
 		},
-		stateDir:         opts.StateDir,
-		expectedIdentity: opts.ExpectedIdentity,
-		tailscaleAuthKey: authKey,
-		confirmProvision: opts.ConfirmProvision,
-		sudoPassword:     opts.SudoPassword,
-		ssh:              opts.SSH,
-		daemonPort:       port,
-		sshPort:          sshPort,
-		webSocketPath:    webSocketPath,
-		verifyTimeout:    verifyTimeout,
-		progress:         progress,
+		stateDir:                   opts.StateDir,
+		expectedIdentity:           opts.ExpectedIdentity,
+		additionalDeviceIdentities: additionalDevices,
+		tailscaleAuthKey:           authKey,
+		confirmProvision:           opts.ConfirmProvision,
+		sudoPassword:               opts.SudoPassword,
+		ssh:                        opts.SSH,
+		daemonPort:                 port,
+		sshPort:                    sshPort,
+		webSocketPath:              webSocketPath,
+		verifyTimeout:              verifyTimeout,
+		progress:                   progress,
 	}, nil
 }
 

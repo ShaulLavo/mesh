@@ -14,6 +14,7 @@ import (
 
 	"github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/dnsname"
+	"github.com/shaul/mesh/internal/fleetshare"
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/inhibit"
@@ -38,6 +39,7 @@ const (
 // TailnetPort and SSHPort values disable their corresponding listeners. Zero
 // connection caps select the defaults for Unix and Tailnet independently.
 type Config struct {
+	FleetShare                  *fleetshare.Service
 	SubscriberLimit             int
 	UnixConnectionLimit         int
 	TailnetConnectionLimit      int
@@ -459,6 +461,12 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	server, err := newClientServer(lifecycle, connector, serviceControl, certificateRuntime.Controller)
 	if err != nil {
 		return err
+	}
+	if cfg.FleetShare != nil {
+		server.fleet = cfg.FleetShare
+		sharingDone := make(chan struct{})
+		go func() { defer close(sharingDone); cfg.FleetShare.Run(daemonCtx) }()
+		defer func() { cancelDaemon(); <-sharingDone }()
 	}
 	projectionDone := make(chan struct{})
 	go func() { defer close(projectionDone); state.runProjection(daemonCtx, lifecycle) }()
