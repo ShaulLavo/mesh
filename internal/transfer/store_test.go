@@ -29,14 +29,14 @@ func TestStoreUploadPublishesOnlyCompleteVerifiedArchive(t *testing.T) {
 	initial := Info{Name: info.Name, Directory: info.Directory}
 	storeRequest(t, store, Request{Action: "upload.begin", Path: dest, Info: initial})
 	storeRequest(t, store, Request{Action: "upload.chunk", Data: archive.Bytes()})
-	if got, _ := os.ReadFile(dest); string(got) != "old content" {
+	if got := readStoreFile(t, dest); string(got) != "old content" {
 		t.Fatalf("destination changed before commit: %q", got)
 	}
 	result := storeRequest(t, store, Request{Action: "upload.commit", Info: info, Size: int64(archive.Len())})
 	if !result.Done || store.active != nil {
 		t.Fatalf("commit did not finish and release: %+v", result)
 	}
-	if got, _ := os.ReadFile(dest); string(got) != "new content" {
+	if got := readStoreFile(t, dest); string(got) != "new content" {
 		t.Fatalf("destination after commit: %q", got)
 	}
 	assertNoTransferFiles(t, root)
@@ -68,7 +68,7 @@ func testInvalidUpload(t *testing.T, name string) {
 	if _, err := stage.Stat(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("staging file was not closed: %v", err)
 	}
-	if got, _ := os.ReadFile(dest); string(got) != "original" {
+	if got := readStoreFile(t, dest); string(got) != "original" {
 		t.Fatalf("failed upload changed destination: %q", got)
 	}
 	assertNoTransferFiles(t, root)
@@ -123,7 +123,7 @@ func TestStoreDownloadStreamsVerifiedArchiveAndReleasesProducer(t *testing.T) {
 	if err := Receive(t.Context(), archive, result.Info, filepath.Join(root, "received")); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(filepath.Join(root, "received")); string(got) != "download payload" {
+	if got := readStoreFile(t, filepath.Join(root, "received")); string(got) != "download payload" {
 		t.Fatalf("received payload = %q", got)
 	}
 	assertNoTransferFiles(t, root)
@@ -214,6 +214,15 @@ func writeStoreFile(t *testing.T, name string, data []byte) {
 	if err := os.WriteFile(name, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func readStoreFile(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(name) //nolint:gosec // name is a test-owned path under t.TempDir.
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func assertNoTransferFiles(t *testing.T, root string) {

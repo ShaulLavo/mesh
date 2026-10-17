@@ -51,12 +51,14 @@ destination directory receives the source basename; otherwise the destination is
 the exact new path. Existing files are replaced atomically, directory contents
 merge, and destination-only files stay. Copies preserve dotfiles, empty
 directories and permission bits. Symbolic links and special files are refused.
-The transfer creates no saved session and removes unfinished data on disconnect.
+The transfer creates no saved session and removes temporary data on disconnect.
+An interrupted directory merge can retain files that already finished copying.
 Files being edited while copied have ordinary `cp` consistency; stop writers
 first when the source needs to be a consistent checkout or build artifact.
 The receiver stages the compressed archive and extracted files on the destination
-filesystem, so allow roughly twice the copy size in free space, plus any file
-being replaced. Memory stays bounded as the sender streams. A forcibly killed
+filesystem. Allow twice the copy size in free space, plus the largest file when
+merging into an existing directory. Existing destination files occupy space until
+their replacements are ready. Memory stays bounded as the sender streams. A forcibly killed
 receiver can leave a `.mesh-copy-stage-PID-*` directory beside the destination.
 These directories contain disposable copy data; remove one after confirming its
 receiver has stopped and no copy is using it.

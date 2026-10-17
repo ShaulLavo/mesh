@@ -31,11 +31,11 @@ func OpenSource(ctx context.Context, source string, recursive bool) (*Source, er
 		return nil, errors.New("transfer: nil source context")
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("transfer source context: %w", err)
 	}
 	absolute, err := filepath.Abs(source)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("transfer source absolute path: %w", err)
 	}
 	stat, err := os.Lstat(absolute)
 	if err != nil {
@@ -69,7 +69,9 @@ func (s *Source) produce(ctx context.Context, path string, writer *io.PipeWriter
 
 // Read reads the archive stream. The caller should call Finish after EOF to
 // obtain its digest and Close on every path to join the producer.
-func (s *Source) Read(data []byte) (int, error) { return s.reader.Read(data) }
+func (s *Source) Read(data []byte) (int, error) {
+	return s.reader.Read(data) //nolint:wrapcheck // io.ReadFull requires the reader's exact io.EOF sentinel.
+}
 
 // Finish waits for the producer and returns its complete archive metadata.
 // It is intended to follow reading EOF; calling it while unread data remains

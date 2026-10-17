@@ -289,7 +289,7 @@ func uploadApp(ctx context.Context, transport appTransport, directory string, re
 		return err
 	})
 	if err != nil {
-		return appspkg.Result{}, err
+		return appspkg.Result{}, fmt.Errorf("app: upload archive: %w", err)
 	}
 	request.UploadID = begin.UploadID
 	request.Digest = digest
@@ -342,7 +342,7 @@ func downloadApp(ctx context.Context, transport appTransport, id, dest string) e
 		return transfer.Chunk{Data: result.Data, Done: result.Done}, nil
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("app: download archive: %w", err)
 	}
 	if err = tmp.Sync(); err != nil {
 		return err

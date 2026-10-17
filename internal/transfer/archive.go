@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 const transferBufferSize = 64 * 1024
@@ -58,144 +59,156 @@ func Temporary(destination string) (*os.File, error) {
 // needed to place it at a destination. Source links and special files are
 // refused so an archive has only the two portable entry kinds copy supports.
 func Pack(ctx context.Context, source string, out io.Writer) (Info, error) {
+	abs, stat, err := inspectSource(source)
+	if err != nil {
+		return Info{}, err
+	}
+	hash := sha256.New()
+	buffered := bufio.NewWriterSize(io.MultiWriter(out, hash), transferBufferSize)
+	compressed := gzip.NewWriter(buffered)
+	writer := tar.NewWriter(compressed)
+	packErr := packSource(ctx, abs, stat, writer)
+	closeErr := errors.Join(writer.Close(), compressed.Close(), buffered.Flush())
+	if err := errors.Join(packErr, closeErr); err != nil {
+		return Info{}, err
+	}
+	return Info{Name: filepath.Base(abs), Directory: stat.IsDir(), Digest: hex.EncodeToString(hash.Sum(nil))}, nil
+}
+
+func inspectSource(source string) (string, fs.FileInfo, error) {
 	abs, err := filepath.Abs(source)
 	if err != nil {
-		return Info{}, fmt.Errorf("transfer source path: %w", err)
+		return "", nil, fmt.Errorf("transfer source path: %w", err)
 	}
 	stat, err := os.Lstat(abs)
 	if err != nil {
-		return Info{}, fmt.Errorf("transfer source %s: %w", source, err)
-	}
-	if stat.Mode()&os.ModeSymlink != 0 {
-		return Info{}, fmt.Errorf("transfer source %s is a symbolic link", source)
+		return "", nil, fmt.Errorf("transfer source %s: %w", source, err)
 	}
 	if !stat.IsDir() && !stat.Mode().IsRegular() {
-		return Info{}, fmt.Errorf("transfer source %s is not a regular file or directory", source)
+		return "", nil, fmt.Errorf("transfer source %s is not a regular file or directory", source)
 	}
-	name := filepath.Base(abs)
-	if !validPeerName(name) {
-		return Info{}, fmt.Errorf("transfer source name %q is unsafe", name)
+	if !validPeerName(filepath.Base(abs)) {
+		return "", nil, fmt.Errorf("transfer source name %q is unsafe", filepath.Base(abs))
 	}
-
-	hash := sha256.New()
-	buffered := bufio.NewWriterSize(io.MultiWriter(out, hash), transferBufferSize)
-	gzipWriter := gzip.NewWriter(buffered)
-	tarWriter := tar.NewWriter(gzipWriter)
-	closeArchive := func() error {
-		return errors.Join(tarWriter.Close(), gzipWriter.Close(), buffered.Flush())
-	}
-	if stat.IsDir() {
-		root, err := os.OpenRoot(abs)
-		if err != nil {
-			return Info{}, fmt.Errorf("transfer open source %s: %w", source, err)
-		}
-		openedRoot, statErr := root.Stat(".")
-		if statErr != nil || !openedRoot.IsDir() || !os.SameFile(stat, openedRoot) {
-			_ = root.Close()
-			_ = closeArchive()
-			return Info{}, fmt.Errorf("transfer source %s changed while opening", source)
-		}
-		walkErr := packDirectory(ctx, root, stat.Mode().Perm(), tarWriter)
-		closeErr := closeArchive()
-		rootErr := root.Close()
-		if err := errors.Join(walkErr, closeErr, rootErr); err != nil {
-			return Info{}, err
-		}
-	} else {
-		if err := checkContext(ctx); err != nil {
-			_ = closeArchive()
-			return Info{}, err
-		}
-		if err := writeRegular(ctx, tarWriter, ".", stat); err != nil {
-			_ = closeArchive()
-			return Info{}, err
-		}
-		file, err := os.Open(abs)
-		if err != nil {
-			_ = closeArchive()
-			return Info{}, fmt.Errorf("transfer open source %s: %w", source, err)
-		}
-		openedStat, statErr := file.Stat()
-		if statErr != nil || !openedStat.Mode().IsRegular() || !os.SameFile(stat, openedStat) || openedStat.Size() != stat.Size() {
-			_ = file.Close()
-			_ = closeArchive()
-			return Info{}, fmt.Errorf("transfer source %s changed while opening", source)
-		}
-		copyErr := copyWithContext(ctx, tarWriter, file, stat.Size())
-		closeErr := file.Close()
-		archiveErr := closeArchive()
-		if err := errors.Join(copyErr, closeErr, archiveErr); err != nil {
-			return Info{}, err
-		}
-	}
-	return Info{Name: name, Directory: stat.IsDir(), Digest: hex.EncodeToString(hash.Sum(nil))}, nil
+	return abs, stat, nil
 }
 
-func packDirectory(ctx context.Context, root *os.Root, mode fs.FileMode, writer *tar.Writer) error {
-	if err := writeDirectory(ctx, writer, ".", mode); err != nil {
+func packSource(ctx context.Context, source string, stat fs.FileInfo, writer *tar.Writer) error {
+	if !stat.IsDir() {
+		return packSourceFile(ctx, source, stat, writer)
+	}
+	root, err := os.OpenRoot(source)
+	if err != nil {
+		return fmt.Errorf("transfer open source directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	opened, err := root.Stat(".")
+	if err != nil {
+		return fmt.Errorf("transfer stat source directory: %w", err)
+	}
+	if !opened.IsDir() || !os.SameFile(stat, opened) {
+		return errors.New("transfer source directory changed while opening")
+	}
+	if err := writeDirectory(ctx, writer, ".", stat.Mode().Perm()); err != nil {
 		return err
 	}
-	return fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
-		}
-		if err := checkContext(ctx); err != nil {
-			return err
+			return fmt.Errorf("transfer walk source %s: %w", name, walkErr)
 		}
 		if name == "." {
 			return nil
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("transfer source entry %s is a symbolic link", name)
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return fmt.Errorf("transfer stat source entry %s: %w", name, err)
-		}
-		name = filepath.ToSlash(name)
-		if info.IsDir() {
-			return writeDirectory(ctx, writer, name, info.Mode().Perm())
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("transfer source entry %s is not a regular file or directory", name)
-		}
-		if err := writeRegular(ctx, writer, name, info); err != nil {
-			return err
-		}
-		file, err := root.Open(name)
-		if err != nil {
-			return fmt.Errorf("transfer open source entry %s: %w", name, err)
-		}
-		openedInfo, statErr := file.Stat()
-		if statErr != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) || openedInfo.Size() != info.Size() {
-			_ = file.Close()
-			return fmt.Errorf("transfer source entry %s changed while opening", name)
-		}
-		copyErr := copyWithContext(ctx, writer, file, info.Size())
-		closeErr := file.Close()
-		return errors.Join(copyErr, closeErr)
+		return packDirectoryEntry(ctx, root, writer, name, entry)
 	})
+	if err != nil {
+		return fmt.Errorf("transfer pack source directory: %w", err)
+	}
+	return nil
+}
+
+func packSourceFile(ctx context.Context, source string, stat fs.FileInfo, writer *tar.Writer) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(source, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // source is the explicitly selected local path; opened identity is checked before reading.
+	if err != nil {
+		return fmt.Errorf("transfer open source file: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	if err := checkOpenedFile(file, stat); err != nil {
+		return err
+	}
+	if err := writeRegular(ctx, writer, ".", stat); err != nil {
+		return err
+	}
+	return copyWithContext(ctx, writer, file, stat.Size())
+}
+
+func packDirectoryEntry(ctx context.Context, root *os.Root, writer *tar.Writer, name string, entry fs.DirEntry) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	stat, err := entry.Info()
+	if err != nil {
+		return fmt.Errorf("transfer stat source entry %s: %w", name, err)
+	}
+	if stat.IsDir() {
+		return writeDirectory(ctx, writer, name, stat.Mode().Perm())
+	}
+	if !stat.Mode().IsRegular() {
+		return fmt.Errorf("transfer source entry %s is not a regular file or directory", name)
+	}
+	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return fmt.Errorf("transfer open source entry %s: %w", name, err)
+	}
+	defer func() { _ = file.Close() }()
+	if err := checkOpenedFile(file, stat); err != nil {
+		return err
+	}
+	if err := writeRegular(ctx, writer, name, stat); err != nil {
+		return err
+	}
+	return copyWithContext(ctx, writer, file, stat.Size())
+}
+
+func checkOpenedFile(file *os.File, previous fs.FileInfo) error {
+	opened, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("transfer stat opened file: %w", err)
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(previous, opened) || opened.Size() != previous.Size() {
+		return errors.New("transfer source file changed while opening")
+	}
+	return nil
 }
 
 func writeDirectory(ctx context.Context, writer *tar.Writer, name string, mode fs.FileMode) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	return writer.WriteHeader(&tar.Header{Name: filepath.ToSlash(name), Typeflag: tar.TypeDir, Mode: int64(mode.Perm())})
+	if err := writer.WriteHeader(&tar.Header{Name: filepath.ToSlash(name), Typeflag: tar.TypeDir, Mode: int64(mode.Perm())}); err != nil {
+		return fmt.Errorf("transfer write directory header %s: %w", name, err)
+	}
+	return nil
 }
 
 func writeRegular(ctx context.Context, writer *tar.Writer, name string, info fs.FileInfo) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	return writer.WriteHeader(&tar.Header{Name: filepath.ToSlash(name), Typeflag: tar.TypeReg, Mode: int64(info.Mode().Perm()), Size: info.Size()})
+	if err := writer.WriteHeader(&tar.Header{Name: filepath.ToSlash(name), Typeflag: tar.TypeReg, Mode: int64(info.Mode().Perm()), Size: info.Size()}); err != nil {
+		return fmt.Errorf("transfer write file header %s: %w", name, err)
+	}
+	return nil
 }
 
 func copyWithContext(ctx context.Context, dst io.Writer, src io.Reader, size int64) error {
 	reader := contextReader{ctx: ctx, reader: io.LimitReader(src, size)}
 	written, err := io.Copy(dst, reader)
 	if err != nil {
-		return err
+		return fmt.Errorf("transfer copy bytes: %w", err)
 	}
 	if written != size {
 		return fmt.Errorf("transfer source changed while reading: copied %d of %d bytes", written, size)
@@ -239,7 +252,7 @@ func Receive(ctx context.Context, archive *os.File, info Info, destination strin
 	if err != nil {
 		return err
 	}
-	stage, err := os.MkdirTemp(parent, ".mesh-copy-stage-*")
+	stage, err := os.MkdirTemp(parent, fmt.Sprintf(".mesh-copy-stage-%d-*", os.Getpid()))
 	if err != nil {
 		return fmt.Errorf("transfer create staging directory: %w", err)
 	}
@@ -249,7 +262,7 @@ func Receive(ctx context.Context, archive *os.File, info Info, destination strin
 			_ = os.RemoveAll(stage)
 		}
 	}()
-	rootMode, err := extractArchive(ctx, archive, info, stage)
+	modes, err := extractArchive(ctx, archive, info, stage)
 	if err != nil {
 		return err
 	}
@@ -257,9 +270,9 @@ func Receive(ctx context.Context, archive *os.File, info Info, destination strin
 		return err
 	}
 	if info.Directory {
-		return publishDirectory(ctx, stage, target, destinationExists, info.Name, rootMode, &keepStage)
+		return publishDirectory(ctx, stage, target, destinationExists, info.Name, modes, &keepStage)
 	}
-	return publishFile(ctx, stage, target, destinationExists, &keepStage)
+	return publishFile(ctx, stage, target, destinationExists, modes["."])
 }
 
 func archiveSize(file *os.File) int64 {
@@ -275,134 +288,132 @@ func resolveDestination(destination, name string) (string, string, bool, error) 
 	if err != nil {
 		return "", "", false, fmt.Errorf("transfer destination path: %w", err)
 	}
-	parent := filepath.Dir(abs)
-	canonicalParent, err := filepath.EvalSymlinks(parent)
+	parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
 	if err != nil {
-		return "", "", false, fmt.Errorf("transfer destination parent %s: %w", parent, err)
+		return "", "", false, fmt.Errorf("transfer destination parent: %w", err)
 	}
-	parentInfo, err := os.Stat(canonicalParent)
-	if err != nil || !parentInfo.IsDir() {
-		return "", "", false, fmt.Errorf("transfer destination parent %s is not a directory", canonicalParent)
-	}
-	info, err := os.Lstat(filepath.Join(canonicalParent, filepath.Base(abs)))
-	if err == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
-			return "", "", false, fmt.Errorf("transfer destination %s is a symbolic link", destination)
-		}
-		if info.IsDir() {
-			target := filepath.Join(canonicalParent, filepath.Base(abs), name)
-			targetInfo, targetErr := os.Lstat(target)
-			if targetErr == nil {
-				if targetInfo.Mode()&os.ModeSymlink != 0 {
-					return "", "", false, fmt.Errorf("transfer destination target %s is a symbolic link", target)
-				}
-				if targetInfo.IsDir() {
-				} else if !targetInfo.Mode().IsRegular() {
-					return "", "", false, fmt.Errorf("transfer destination target %s is not a regular file or directory", target)
-				}
-				return canonicalParent, target, true, nil
-			}
-			if !errors.Is(targetErr, fs.ErrNotExist) {
-				return "", "", false, fmt.Errorf("transfer inspect destination target %s: %w", target, targetErr)
-			}
-			return canonicalParent, target, false, nil
-		}
-		if !info.Mode().IsRegular() {
-			return "", "", false, fmt.Errorf("transfer destination %s is not a regular file or directory", destination)
-		}
-		return canonicalParent, filepath.Join(canonicalParent, filepath.Base(abs)), true, nil
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		return "", "", false, fmt.Errorf("transfer inspect destination %s: %w", destination, err)
-	}
-	return canonicalParent, filepath.Join(canonicalParent, filepath.Base(abs)), false, nil
-}
-
-func extractArchive(ctx context.Context, archive *os.File, info Info, stage string) (fs.FileMode, error) {
-	gzipReader, err := gzip.NewReader(archive)
+	root, err := os.OpenRoot(parent)
 	if err != nil {
-		return 0, fmt.Errorf("transfer open gzip archive: %w", err)
-	}
-	defer func() { _ = gzipReader.Close() }()
-	root, err := os.OpenRoot(stage)
-	if err != nil {
-		return 0, fmt.Errorf("transfer open staging directory: %w", err)
+		return "", "", false, fmt.Errorf("transfer open destination parent: %w", err)
 	}
 	defer func() { _ = root.Close() }()
-	reader := tar.NewReader(gzipReader)
-	seen := make(map[string]bool)
-	directoryModes := make(map[string]fs.FileMode)
-	rootSeen := false
-	var rootMode fs.FileMode
+	target := filepath.Base(abs)
+	stat, err := inspectDestination(root, target)
+	if err != nil {
+		return "", "", false, err
+	}
+	if stat == nil {
+		return parent, filepath.Join(parent, target), false, nil
+	}
+	if !stat.IsDir() {
+		return parent, filepath.Join(parent, target), true, nil
+	}
+	target = filepath.Join(target, name)
+	stat, err = inspectDestination(root, target)
+	if err != nil {
+		return "", "", false, err
+	}
+	return filepath.Dir(filepath.Join(parent, target)), filepath.Join(parent, target), stat != nil, nil
+}
+
+func inspectDestination(root *os.Root, name string) (fs.FileInfo, error) {
+	stat, err := root.Lstat(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("transfer inspect destination %s: %w", name, err)
+	}
+	if !stat.IsDir() && !stat.Mode().IsRegular() {
+		return nil, fmt.Errorf("transfer destination %s is not a regular file or directory", name)
+	}
+	return stat, nil
+}
+
+type archiveExtractor struct {
+	ctx       context.Context
+	root      *os.Root
+	directory bool
+	seen      map[string]bool
+	modes     map[string]fs.FileMode
+}
+
+func extractArchive(ctx context.Context, archive *os.File, info Info, stage string) (map[string]fs.FileMode, error) {
+	compressed, err := gzip.NewReader(archive)
+	if err != nil {
+		return nil, fmt.Errorf("transfer open gzip archive: %w", err)
+	}
+	defer func() { _ = compressed.Close() }()
+	root, err := os.OpenRoot(stage)
+	if err != nil {
+		return nil, fmt.Errorf("transfer open staging directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	extractor := archiveExtractor{ctx: ctx, root: root, directory: info.Directory, seen: make(map[string]bool), modes: make(map[string]fs.FileMode)}
+	reader := tar.NewReader(compressed)
 	for {
 		if err := checkContext(ctx); err != nil {
-			return 0, err
+			return nil, err
 		}
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
-			if !rootSeen {
-				return 0, errors.New("transfer archive has no root entry")
-			}
-			if info.Directory {
-				if err := finalizeDirectoryModes(root, directoryModes); err != nil {
-					return 0, err
-				}
-			}
-			return rootMode, nil
+			break
 		}
 		if err != nil {
-			return 0, fmt.Errorf("transfer read archive entry: %w", err)
+			return nil, fmt.Errorf("transfer read archive entry: %w", err)
 		}
-		name := filepath.ToSlash(header.Name)
-		if err := validateArchiveName(name); err != nil {
-			return 0, err
-		}
-		if seen[name] {
-			return 0, fmt.Errorf("transfer archive repeats entry %q", name)
-		}
-		seen[name] = true
-		if name == "." {
-			if rootSeen {
-				return 0, errors.New("transfer archive repeats root entry")
-			}
-			rootSeen = true
-			if info.Directory {
-				if header.Typeflag != tar.TypeDir {
-					return 0, errors.New("transfer directory archive has a non-directory root")
-				}
-				rootMode = safeMode(fs.FileMode(header.Mode))
-				continue
-			}
-			if !isRegularHeader(header) {
-				return 0, errors.New("transfer file archive has a non-regular root")
-			}
-			if err := extractRegular(ctx, root, "payload", reader, header); err != nil {
-				return 0, err
-			}
-			rootMode = safeMode(fs.FileMode(header.Mode))
-			continue
-		}
-		if !info.Directory {
-			return 0, errors.New("transfer file archive contains extra entries")
-		}
-		if header.Typeflag == tar.TypeDir {
-			mode := safeMode(fs.FileMode(header.Mode))
-			if err := makeDirectory(root, name, mode); err != nil {
-				return 0, err
-			}
-			directoryModes[name] = mode
-			continue
-		}
-		if !isRegularHeader(header) {
-			return 0, fmt.Errorf("transfer archive entry %q is not a regular file or directory", name)
-		}
-		if err := extractRegular(ctx, root, name, reader, header); err != nil {
-			return 0, err
+		if err := extractor.entry(reader, header); err != nil {
+			return nil, err
 		}
 	}
+	if !extractor.seen["."] {
+		return nil, errors.New("transfer archive has no root entry")
+	}
+	if _, err := io.Copy(io.Discard, contextReader{ctx: ctx, reader: compressed}); err != nil {
+		return nil, fmt.Errorf("transfer validate gzip footer: %w", err)
+	}
+	return extractor.modes, nil
 }
 
-func makeDirectory(root *os.Root, name string, mode fs.FileMode) error {
+func (e *archiveExtractor) entry(reader io.Reader, header *tar.Header) error {
+	name := header.Name
+	if err := validateArchiveName(name); err != nil {
+		return err
+	}
+	if e.seen[name] {
+		return fmt.Errorf("transfer archive repeats entry %q", name)
+	}
+	e.seen[name] = true
+	e.modes[name] = fs.FileMode(header.Mode & 0777)
+	if name == "." {
+		return e.rootEntry(reader, header)
+	}
+	if !e.directory {
+		return errors.New("transfer file archive contains extra entries")
+	}
+	if header.Typeflag == tar.TypeDir {
+		return makeDirectory(e.root, name)
+	}
+	if !isRegularHeader(header) {
+		return fmt.Errorf("transfer archive entry %q is not a regular file or directory", name)
+	}
+	return extractRegular(e.ctx, e.root, name, reader, header)
+}
+
+func (e *archiveExtractor) rootEntry(reader io.Reader, header *tar.Header) error {
+	if e.directory {
+		if header.Typeflag != tar.TypeDir {
+			return errors.New("transfer directory archive has a non-directory root")
+		}
+		return nil
+	}
+	if !isRegularHeader(header) {
+		return errors.New("transfer file archive has a non-regular root")
+	}
+	return extractRegular(e.ctx, e.root, "payload", reader, header)
+}
+
+func makeDirectory(root *os.Root, name string) error {
 	if err := root.MkdirAll(path.Dir(name), 0700); err != nil {
 		return fmt.Errorf("transfer create archive parent for %q: %w", name, err)
 	}
@@ -421,6 +432,15 @@ func finalizeDirectoryModes(root *os.Root, modes map[string]fs.FileMode) error {
 		ordered = append(ordered, name)
 	}
 	slices.SortFunc(ordered, func(left, right string) int {
+		if left == right {
+			return 0
+		}
+		if left == "." {
+			return 1
+		}
+		if right == "." {
+			return -1
+		}
 		return strings.Count(right, "/") - strings.Count(left, "/")
 	})
 	for _, name := range ordered {
@@ -438,7 +458,7 @@ func extractRegular(ctx context.Context, root *os.Root, name string, reader io.R
 	if err := root.MkdirAll(path.Dir(name), 0700); err != nil {
 		return fmt.Errorf("transfer create archive parent for %q: %w", name, err)
 	}
-	file, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, safeMode(fs.FileMode(header.Mode)))
+	file, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("transfer create archive file %q: %w", name, err)
 	}
@@ -447,39 +467,16 @@ func extractRegular(ctx context.Context, root *os.Root, name string, reader io.R
 	if err := errors.Join(copyErr, closeErr); err != nil {
 		return fmt.Errorf("transfer extract archive file %q: %w", name, err)
 	}
-	if err := root.Chmod(name, safeMode(fs.FileMode(header.Mode))); err != nil {
-		return fmt.Errorf("transfer set archive file mode %q: %w", name, err)
-	}
 	return nil
 }
 
-func publishDirectory(ctx context.Context, stage, target string, destinationExists bool, name string, mode fs.FileMode, keepStage *bool) error {
+func publishDirectory(ctx context.Context, stage, target string, destinationExists bool, name string, modes map[string]fs.FileMode, keepStage *bool) error {
 	if !destinationExists {
-		if err := checkContext(ctx); err != nil {
-			return err
-		}
-		if err := os.Rename(stage, target); err != nil {
-			return fmt.Errorf("transfer publish directory %s: %w", target, err)
-		}
-		if err := os.Chmod(target, mode); err != nil {
-			return fmt.Errorf("transfer set directory target mode %s: %w", target, err)
-		}
-		*keepStage = true
-		return nil
+		return publishNewDirectory(ctx, stage, target, modes, keepStage)
 	}
-	info, err := os.Lstat(target)
-	if err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return fmt.Errorf("transfer destination entry %s conflicts with directory %s", target, name)
-		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("transfer inspect directory target %s: %w", target, err)
-	} else if err := os.Mkdir(target, 0700); err != nil {
-		return fmt.Errorf("transfer create directory target %s: %w", target, err)
-	}
-	root, err := os.OpenRoot(target)
+	root, err := openExistingDirectory(target, name)
 	if err != nil {
-		return fmt.Errorf("transfer open directory target %s: %w", target, err)
+		return err
 	}
 	defer func() { _ = root.Close() }()
 	if err := validateMerge(ctx, root, stage, "."); err != nil {
@@ -488,53 +485,86 @@ func publishDirectory(ctx context.Context, stage, target string, destinationExis
 	if err := mergeTree(ctx, root, stage, "."); err != nil {
 		return err
 	}
-	if err := root.Chmod(".", mode); err != nil {
-		return fmt.Errorf("transfer set directory target mode %s: %w", target, err)
-	}
-	return nil
+	return finalizeDirectoryModes(root, modes)
 }
 
-func publishFile(ctx context.Context, stage, target string, destinationExists bool, keepStage *bool) error {
+func openExistingDirectory(target, name string) (*os.Root, error) {
+	info, err := os.Lstat(target)
+	if err != nil {
+		return nil, fmt.Errorf("transfer inspect directory target %s: %w", target, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("transfer destination entry %s conflicts with directory %s", target, name)
+	}
+	parent, err := os.OpenRoot(filepath.Dir(target))
+	if err != nil {
+		return nil, fmt.Errorf("transfer open directory target parent: %w", err)
+	}
+	defer func() { _ = parent.Close() }()
+	root, err := parent.OpenRoot(filepath.Base(target))
+	if err != nil {
+		return nil, fmt.Errorf("transfer open directory target %s: %w", target, err)
+	}
+	opened, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, opened) {
+		_ = root.Close()
+		return nil, errors.New("transfer destination directory changed while opening")
+	}
+	return root, nil
+}
+
+func publishNewDirectory(ctx context.Context, stage, target string, modes map[string]fs.FileMode, keepStage *bool) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	parent, err := os.OpenRoot(filepath.Dir(stage))
+	if err != nil {
+		return fmt.Errorf("transfer open directory publication parent: %w", err)
+	}
+	defer func() { _ = parent.Close() }()
+	relative, err := filepath.Rel(filepath.Dir(stage), target)
+	if err != nil {
+		return fmt.Errorf("transfer directory publication path: %w", err)
+	}
+	root, err := parent.OpenRoot(filepath.Base(stage))
+	if err != nil {
+		return fmt.Errorf("transfer open staged publication directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if err := parent.Rename(filepath.Base(stage), relative); err != nil {
+		return fmt.Errorf("transfer publish directory %s: %w", target, err)
+	}
+	*keepStage = true
+	return finalizeDirectoryModes(root, modes)
+}
+
+func publishFile(ctx context.Context, stage, target string, destinationExists bool, mode fs.FileMode) error {
+	parent, err := os.OpenRoot(filepath.Dir(stage))
+	if err != nil {
+		return fmt.Errorf("transfer open file publication parent: %w", err)
+	}
+	defer func() { _ = parent.Close() }()
+	relative, err := filepath.Rel(filepath.Dir(stage), target)
+	if err != nil {
+		return fmt.Errorf("transfer file publication path: %w", err)
+	}
 	if destinationExists {
-		info, err := os.Lstat(target)
+		info, err := parent.Lstat(relative)
 		if err != nil {
 			return fmt.Errorf("transfer inspect file target %s: %w", target, err)
 		}
-		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() || !info.Mode().IsRegular() {
+		if !info.Mode().IsRegular() {
 			return fmt.Errorf("transfer file target %s is not a regular file", target)
 		}
 	}
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(target), ".mesh-copy-file-*")
-	if err != nil {
-		return fmt.Errorf("transfer create file target temporary: %w", err)
-	}
-	tempName := temp.Name()
-	defer func() { _ = os.Remove(tempName) }()
-	source, err := os.Open(filepath.Join(stage, "payload"))
-	if err != nil {
-		_ = temp.Close()
-		return fmt.Errorf("transfer open staged file: %w", err)
-	}
-	copyErr := copyWithContext(ctx, temp, source, fileSize(source))
-	closeSourceErr := source.Close()
-	closeTempErr := temp.Close()
-	if err := errors.Join(copyErr, closeSourceErr, closeTempErr); err != nil {
-		return fmt.Errorf("transfer write file target temporary: %w", err)
-	}
-	mode, err := os.Stat(filepath.Join(stage, "payload"))
-	if err != nil {
-		return fmt.Errorf("transfer stat staged file: %w", err)
-	}
-	if err := os.Chmod(tempName, safeMode(mode.Mode())); err != nil {
+	payload := filepath.Join(filepath.Base(stage), "payload")
+	if err := parent.Chmod(payload, mode); err != nil {
 		return fmt.Errorf("transfer set file target mode: %w", err)
 	}
-	if err := checkContext(ctx); err != nil {
-		return err
-	}
-	if err := os.Rename(tempName, target); err != nil {
+	if err := parent.Rename(payload, relative); err != nil {
 		return fmt.Errorf("transfer publish file %s: %w", target, err)
 	}
 	return nil
@@ -549,37 +579,29 @@ func validateMerge(ctx context.Context, root *os.Root, stage, relative string) e
 		return fmt.Errorf("transfer read staged directory %s: %w", relative, err)
 	}
 	for _, entry := range entries {
-		name := entry.Name()
-		rel := name
-		if relative != "." {
-			rel = path.Join(relative, name)
+		rel := path.Join(relative, entry.Name())
+		if err := validateMergeEntry(ctx, root, stage, rel, entry); err != nil {
+			return err
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("transfer staging entry %s is a symbolic link", rel)
-		}
-		info, err := root.Lstat(rel)
-		if errors.Is(err, fs.ErrNotExist) {
-			if entry.IsDir() {
-				if err := validateMerge(ctx, root, stage, rel); err != nil {
-					return err
-				}
-			}
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("transfer inspect merge target %s: %w", rel, err)
-		}
+	}
+	return nil
+}
+
+func validateMergeEntry(ctx context.Context, root *os.Root, stage, relative string, entry fs.DirEntry) error {
+	info, err := root.Lstat(relative)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("transfer inspect merge target %s: %w", relative, err)
+	}
+	if info != nil {
 		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("transfer merge target %s is a symbolic link", rel)
+			return fmt.Errorf("transfer merge target %s is a symbolic link", relative)
 		}
-		if entry.IsDir() != info.IsDir() {
-			return fmt.Errorf("transfer merge target %s conflicts with source", rel)
+		if entry.IsDir() != info.IsDir() || (!info.IsDir() && !info.Mode().IsRegular()) {
+			return fmt.Errorf("transfer merge target %s conflicts with source", relative)
 		}
-		if entry.IsDir() {
-			if err := validateMerge(ctx, root, stage, rel); err != nil {
-				return err
-			}
-		}
+	}
+	if entry.IsDir() {
+		return validateMerge(ctx, root, stage, relative)
 	}
 	return nil
 }
@@ -593,32 +615,22 @@ func mergeTree(ctx context.Context, root *os.Root, stage, relative string) error
 		return fmt.Errorf("transfer read staged directory %s: %w", relative, err)
 	}
 	for _, entry := range entries {
-		name := entry.Name()
-		rel := name
-		if relative != "." {
-			rel = path.Join(relative, name)
-		}
-		if entry.IsDir() {
-			entryInfo, infoErr := entry.Info()
-			if infoErr != nil {
-				return fmt.Errorf("transfer stat staged directory %s: %w", rel, infoErr)
-			}
-			if err := root.Mkdir(rel, 0700); err != nil && !errors.Is(err, fs.ErrExist) {
-				return fmt.Errorf("transfer create merge directory %s: %w", rel, err)
-			}
-			if err := mergeTree(ctx, root, stage, rel); err != nil {
-				return err
-			}
-			if err := root.Chmod(rel, safeMode(entryInfo.Mode())); err != nil {
-				return fmt.Errorf("transfer set merge directory mode %s: %w", rel, err)
-			}
-			continue
-		}
-		if err := mergeFile(ctx, root, stage, rel, entry); err != nil {
+		rel := path.Join(relative, entry.Name())
+		if err := mergeEntry(ctx, root, stage, rel, entry); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func mergeEntry(ctx context.Context, root *os.Root, stage, relative string, entry fs.DirEntry) error {
+	if !entry.IsDir() {
+		return mergeFile(ctx, root, stage, relative, entry)
+	}
+	if err := root.Mkdir(relative, 0700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("transfer create merge directory %s: %w", relative, err)
+	}
+	return mergeTree(ctx, root, stage, relative)
 }
 
 func mergeFile(ctx context.Context, root *os.Root, stage, relative string, entry os.DirEntry) error {
@@ -626,7 +638,7 @@ func mergeFile(ctx context.Context, root *os.Root, stage, relative string, entry
 	if err != nil {
 		return fmt.Errorf("transfer stat staged merge file %s: %w", relative, err)
 	}
-	source, err := os.Open(filepath.Join(stage, relative))
+	source, err := os.Open(filepath.Join(stage, relative)) //nolint:gosec // stage is receiver-owned and relative names came from the validated archive tree.
 	if err != nil {
 		return fmt.Errorf("transfer open staged merge file %s: %w", relative, err)
 	}
@@ -659,18 +671,6 @@ func mergeFile(ctx context.Context, root *os.Root, stage, relative string, entry
 	}
 }
 
-func rejectSymlinks(root string) error {
-	return filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("transfer destination contains symbolic link %s", name)
-		}
-		return nil
-	})
-}
-
 func validateArchiveName(name string) error {
 	if name == "." {
 		return nil
@@ -694,7 +694,7 @@ func validDigest(digest string) bool {
 }
 
 func isRegularHeader(header *tar.Header) bool {
-	return header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA
+	return header.Typeflag == tar.TypeReg || header.Typeflag == byte(0)
 }
 
 func safeMode(mode fs.FileMode) fs.FileMode {
@@ -713,7 +713,10 @@ func checkContext(ctx context.Context) error {
 	if ctx == nil {
 		return nil
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("transfer interrupted: %w", err)
+	}
+	return nil
 }
 
 type contextReader struct {
@@ -725,5 +728,5 @@ func (r contextReader) Read(p []byte) (int, error) {
 	if err := checkContext(r.ctx); err != nil {
 		return 0, err
 	}
-	return r.reader.Read(p)
+	return r.reader.Read(p) //nolint:wrapcheck // io.Reader must preserve EOF identity for io.Copy and tar readers.
 }

@@ -192,7 +192,7 @@ func (c *copyTestConn) WriteFrame(frame protocol.Frame) error {
 	}
 	request, err := protocol.DecodeControl(frame.Payload)
 	if err != nil {
-		return err
+		return fmt.Errorf("decode fixture copy control: %w", err)
 	}
 	c.remote.mu.Lock()
 	c.remote.events = append(c.remote.events, request.Type)
@@ -217,36 +217,42 @@ func (c *copyTestConn) response(request protocol.Control) (protocol.Control, err
 	}
 	var payload transfer.Request
 	if err := json.Unmarshal(request.Copy, &payload); err != nil {
-		return response, err
+		return response, fmt.Errorf("decode fixture copy payload: %w", err)
 	}
 	result, err := c.store.Handle(context.Background(), payload)
 	if err != nil {
 		response.Type, response.Message = protocol.TypeError, err.Error()
-		return response, nil
+		return response, nil //nolint:nilerr // Return the encoded daemon error response to the client.
 	}
 	if c.remote.mutate != nil {
 		c.remote.mutate(payload, &result)
 	}
 	response.Type = protocol.TypeCopyResult
 	response.Copy, err = json.Marshal(result)
-	return response, err
+	if err != nil {
+		return response, fmt.Errorf("encode fixture copy result: %w", err)
+	}
+	return response, nil
 }
 
 func (c *copyTestConn) Close() error {
 	c.close.Do(func() { close(c.done) })
-	return c.store.Close()
+	if err := c.store.Close(); err != nil {
+		return fmt.Errorf("close fixture copy store: %w", err)
+	}
+	return nil
 }
 
 func writeCopyTestFile(t *testing.T, path, contents string, mode os.FileMode) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(contents), mode); err != nil {
+	if err := os.WriteFile(path, []byte(contents), mode); err != nil { //nolint:gosec // Write a fixture path selected by the test.
 		t.Fatal(err)
 	}
 }
 
 func assertCopyTestFile(t *testing.T, path, contents string, mode os.FileMode) {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Read the test-selected destination to verify copied contents.
 	if err != nil || string(data) != contents {
 		t.Fatalf("read %s = %q, %v, want %q", path, data, err, contents)
 	}

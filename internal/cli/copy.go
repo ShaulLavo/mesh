@@ -131,7 +131,7 @@ func uploadCopy(ctx context.Context, conn transport.Conn, source, destination st
 		return err
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("upload copy archive: %w", err)
 	}
 	info, err := stream.Finish()
 	if err != nil {
@@ -166,10 +166,13 @@ func downloadCopy(ctx context.Context, conn transport.Conn, source, destination 
 		return transfer.Chunk{Data: chunk.Data, Done: chunk.Done}, nil
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("download copy archive: %w", err)
 	}
 	if received != final.Size || result.Info.Name != final.Info.Name || result.Info.Directory != final.Info.Directory {
 		return errors.New("copy download returned inconsistent source metadata")
 	}
-	return transfer.Receive(ctx, archive, final.Info, destination)
+	if err := transfer.Receive(ctx, archive, final.Info, destination); err != nil {
+		return fmt.Errorf("receive copy archive: %w", err)
+	}
+	return nil
 }

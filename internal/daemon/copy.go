@@ -29,10 +29,18 @@ func (c *copyController) HandleControl(ctx context.Context, request protocol.Con
 	}
 	result, err := c.store.Handle(ctx, operation)
 	if err != nil {
-		return response, true, err
+		return response, true, fmt.Errorf("daemon: copy %s: %w", operation.Action, err)
 	}
 	response.Copy, err = json.Marshal(result)
-	return response, true, err
+	if err != nil {
+		return response, true, fmt.Errorf("daemon: encode copy result: %w", err)
+	}
+	return response, true, nil
 }
 
-func (c *copyController) Close() error { return c.store.Close() }
+func (c *copyController) Close() error {
+	if err := c.store.Close(); err != nil {
+		return fmt.Errorf("daemon: close transfer store: %w", err)
+	}
+	return nil
+}

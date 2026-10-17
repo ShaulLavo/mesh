@@ -67,7 +67,7 @@ func (s *Store) Handle(ctx context.Context, request Request) (result Result, err
 		return Result{}, errors.New("transfer: nil context")
 	}
 	if err := ctx.Err(); err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("transfer request context: %w", err)
 	}
 	if s.closed {
 		return Result{}, errors.New("transfer: store closed")
@@ -153,7 +153,7 @@ func (s *Store) uploadCommitLocked(ctx context.Context, request Request) (Result
 		return Result{}, fmt.Errorf("transfer: sync upload: %w", err)
 	}
 	if _, err := op.file.Seek(0, io.SeekStart); err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("transfer rewind upload: %w", err)
 	}
 	if err := Receive(ctx, op.file, request.Info, op.path); err != nil {
 		return Result{}, err
@@ -193,7 +193,7 @@ func (s *Store) downloadChunkLocked(request Request) (Result, error) {
 	data := make([]byte, ChunkSize)
 	n, readErr := io.ReadFull(op.source, data)
 	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
-		return Result{}, readErr
+		return Result{}, fmt.Errorf("transfer read download snapshot: %w", readErr)
 	}
 	data = data[:n]
 	if int64(n) > math.MaxInt64-op.offset {
