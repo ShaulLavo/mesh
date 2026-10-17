@@ -105,16 +105,24 @@ start_origin
 json_field() {
   python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$@"
 }
+process_is() {
+  PYTHONPATH="$REPO_ROOT/integration/helpers" python3 - "$1" "$2" <<'PY'
+import sys
+from failed_fixture import process_identity
+actual = "running" if process_identity(int(sys.argv[1])) is not None else "stopped"
+raise SystemExit(0 if actual == sys.argv[2] else 1)
+PY
+}
 # setup_pid prints the PID of the live setup worker for the app, if any.
 setup_pid() {
-  python3 - "$ORIGIN_STATE/s" "app-setup $APP_ID" <<'PY'
-import glob, json, os, sys
+  PYTHONPATH="$REPO_ROOT/integration/helpers" python3 - "$ORIGIN_STATE/s" "app-setup $APP_ID" <<'PY'
+import glob, json, sys
+from failed_fixture import process_identity
 for path in glob.glob(sys.argv[1] + '/*/meta.json'):
     try:
         with open(path) as source:
             meta = json.load(source)
-        if meta.get('label') == sys.argv[2] and meta.get('pid', 0) > 1:
-            os.kill(meta['pid'], 0)
+        if meta.get('label') == sys.argv[2] and meta.get('pid', 0) > 1 and process_identity(meta['pid']) is not None:
             print(meta['pid'])
     except (OSError, ValueError):
         pass
@@ -147,17 +155,17 @@ done
 kill -KILL "$ORIGIN_PID"
 wait "$ORIGIN_PID" 2>/dev/null
 ORIGIN_PID=""
-kill -0 "$OLD_PID" 2>/dev/null || fail 'origin crash killed the serving app worker'
-kill -0 "$SETUP_PID" 2>/dev/null || fail 'origin crash ended the setup worker before recovery could'
+process_is "$OLD_PID" running || fail 'origin crash killed the serving app worker'
+process_is "$SETUP_PID" running || fail 'origin crash ended the setup worker before recovery could'
 start_origin
 wait "$UPDATE_CLIENT" 2>/dev/null && fail 'update reported success although its daemon crashed'
 UPDATE_CLIENT=""
 
 for _ in $(seq 100); do
-  ! kill -0 "$SETUP_PID" 2>/dev/null && [ "$(workspaces)" = 1 ] && break
+  process_is "$SETUP_PID" stopped && [ "$(workspaces)" = 1 ] && break
   sleep 0.1
 done
-kill -0 "$SETUP_PID" 2>/dev/null && fail 'recovery left the interrupted setup worker running'
+process_is "$SETUP_PID" stopped || fail 'recovery left the interrupted setup worker running'
 [ "$(workspaces)" = 1 ] || fail 'recovery left the candidate workspace'
 app_curl --fail "$APP_ENDPOINT/api" >"$TEST_ROOT/recovered.json" || fail 'app after recovery'
 [ "$(json_field "$TEST_ROOT/recovered.json" pid)" = "$OLD_PID" ] || fail 'recovery replaced the serving app worker'
@@ -170,7 +178,7 @@ NEW_PID=$(json_field "$TEST_ROOT/after.json" pid)
 NEW_CWD=$(json_field "$TEST_ROOT/after.json" cwd)
 [ "$NEW_PID" != "$OLD_PID" ] && [ "$NEW_CWD" != "$OLD_CWD" ] || fail 'update did not replace the app worker'
 [ "$(cat "$NEW_CWD/setup.txt" 2>/dev/null)" = updated ] || fail 'update served without its setup'
-kill -0 "$OLD_PID" 2>/dev/null && fail 'previous app worker survived its replacement'
+process_is "$OLD_PID" stopped || fail 'previous app worker survived its replacement'
 [ ! -e "$OLD_CWD" ] || fail 'previous workspace survived the update'
 [ "$(workspaces)" = 1 ] || fail 'update left extra workspaces'
 

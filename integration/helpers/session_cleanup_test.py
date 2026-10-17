@@ -25,11 +25,15 @@ class SessionCleanupTest(unittest.TestCase):
         try:
             descriptor = os.pidfd_open(child.pid)
             self.assertIsNotNone(process_identity(child.pid))
+            self.assertEqual(self.app_update_process_status(child.pid, "running"), 0)
+            self.assertEqual(self.app_update_process_status(child.pid, "stopped"), 1)
             child.stdin.close()
             self.assertTrue(select.select([descriptor], [], [], 2)[0], "child did not exit")
             os.kill(child.pid, 0)
             self.assertEqual(Path(f"/proc/{child.pid}/stat").read_text().rsplit(")", 1)[1].split()[0], "Z")
             self.assertIsNone(process_identity(child.pid))
+            self.assertEqual(self.app_update_process_status(child.pid, "running"), 1)
+            self.assertEqual(self.app_update_process_status(child.pid, "stopped"), 0)
         finally:
             if descriptor is not None:
                 os.close(descriptor)
@@ -37,6 +41,16 @@ class SessionCleanupTest(unittest.TestCase):
             if child.poll() is None:
                 child.kill()
             child.wait(timeout=2)
+
+    def app_update_process_status(self, pid, state):
+        entry = (HELPERS.parent / "temporary_app_update.sh").read_text()
+        start = entry.index("process_is() {")
+        predicate = entry[start:entry.index("\n}", start) + 2]
+        result = subprocess.run(["bash", "-c", predicate + '\nprocess_is "$1" "$2"', "fixture", str(pid), state],
+                                env=os.environ | {"REPO_ROOT": str(HELPERS.parent.parent)},
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+        self.assertEqual(result.stderr, "")
+        return result.returncode
 
     def test_client_cleanup_waits_for_final_worker_writes(self):
         self.check_final_worker_writes("client_signal_detaches.sh")
