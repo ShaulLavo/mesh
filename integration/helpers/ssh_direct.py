@@ -34,6 +34,9 @@ def exercise(fixture):
                                 input=b"input", env=fixture.environment, capture_output=True, timeout=4)
         require((result.returncode, result.stdout, result.stderr) == (7, b"inputtail", b"error"),
                 f"command/EOF/status {index}: {result}")
+    exact = subprocess.run(command + ["--", "printf", "<%s>", "two words", "'quoted'", ""],
+                           env=fixture.environment, capture_output=True, timeout=4)
+    require(exact.returncode == 0 and exact.stdout == b"<two words><'quoted'><>", f"argv changed: {exact}")
     shell = subprocess.run(command, input=b"printf 'no-pty-shell\\n'\nexit 0\n", env=dict(fixture.environment, SHELL="/bin/sh"),
                            capture_output=True, timeout=4)
     # The destination account's configured shell is the fixture's interactive bash wrapper.
@@ -75,13 +78,34 @@ def exercise(fixture):
     terminal.expect_size(80, 24)
     terminal.resize(101, 37)
     terminal.expect_size(101, 37)
-    terminal.send("sleep 120\n")
+    foreground = fixture.root / "foreground-pid"
+    terminal.send(f"sh -c 'echo $$ > {foreground}; exec sleep 120'\n")
+    eventually(foreground.exists, "foreground job did not start")
+    foreground_pid = int(foreground.read_text())
     terminal.send(b"\x03")
+    eventually(lambda: not alive(foreground_pid), "Ctrl-C did not end the foreground job")
     terminal.send("printf '__INTERRUPTED__\\n'\n")
     terminal.expect("__INTERRUPTED__")
     terminal.send("exit 9\n")
     terminal.expect_exit()
     require(terminal.status == 9, f"PTY exit code={terminal.status}")
+
+    terminal = Terminal(command, fixture.environment, fixture.root)
+    fixture.terminals.append(terminal)
+    terminal.expect(PROMPT)
+    marker = fixture.root / "interactive-pids"
+    terminal.send(f"sleep 120 & printf '%s %s\\n' $$ $! > {marker}; wait\n")
+    eventually(marker.exists, "interactive job did not start")
+    pids = [int(value) for value in marker.read_text().split()]
+    try:
+        terminal.crash()
+        eventually(lambda: not any(alive(pid) for pid in pids), f"interactive disconnect left jobs: {pids}")
+    finally:
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     terminal = Terminal(command + ["--", "sh", "-c", "stty -onlcr; printf '\\n'"], fixture.environment, fixture.root)
     fixture.terminals.append(terminal)

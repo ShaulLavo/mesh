@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	charmssh "charm.land/ssh"
 	"github.com/creack/pty"
@@ -171,9 +172,7 @@ func watchProcess(ctx context.Context, channel charmssh.Session, command *exec.C
 			return
 		case <-ctx.Done():
 			_ = channel.Close()
-			if command.Process.Signal(syscall.Signal(0)) == nil {
-				killProcess(command.Process.Pid, master)
-			}
+			hangupProcess(command.Process, master, completed)
 			return
 		case sig := <-signals:
 			if value, ok := processSignals[sig]; ok && command.Process.Signal(syscall.Signal(0)) == nil {
@@ -219,10 +218,23 @@ func signalProcess(pid int, master *os.File, signal syscall.Signal) {
 	_ = syscall.Kill(-group, signal)
 }
 
-func killProcess(pid int, master *os.File) {
-	signalProcess(pid, master, syscall.SIGKILL)
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
+func hangupProcess(process *os.Process, master *os.File, completed <-chan struct{}) {
+	if process.Signal(syscall.Signal(0)) == nil {
+		signalProcess(process.Pid, master, syscall.SIGHUP)
+		_ = syscall.Kill(-process.Pid, syscall.SIGHUP)
+	}
 	if master != nil {
 		_ = master.Close()
+	}
+	timer := time.NewTimer(500 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-completed:
+		return
+	case <-timer.C:
+		if process.Signal(syscall.Signal(0)) == nil {
+			_ = syscall.Kill(-process.Pid, syscall.SIGKILL)
+			_ = process.Kill()
+		}
 	}
 }
