@@ -61,7 +61,7 @@ func (a *application) openApps(ctx context.Context, hostID string, port uint16) 
 	if err := verifyNamedHost(ctx, host, a.dependencies.DialControl); err != nil {
 		return appTransport{}, err
 	}
-	client, err := dialAppSSH(ctx, host, stateDir, port)
+	client, err := dialMeshSSH(ctx, host, stateDir, port)
 	if err != nil {
 		return appTransport{}, err
 	}
@@ -125,19 +125,19 @@ func (a sshApplication) runApp(ctx context.Context, client sshd.Session) (int, e
 	return 0, nil
 }
 
-func appHostKeyCallback(expected string) (ssh.HostKeyCallback, error) {
+func meshSSHHostKeyCallback(expected string) (ssh.HostKeyCallback, error) {
 	key, err := base64.RawURLEncoding.DecodeString(expected)
 	if err != nil || len(key) != ed25519.PublicKeySize {
-		return nil, errors.New("app SSH requires the adopted host's pinned Mesh identity")
+		return nil, errors.New("SSH requires the adopted host's pinned Mesh identity")
 	}
 	public, err := ssh.NewPublicKey(ed25519.PublicKey(key))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read pinned SSH host identity: %w", err)
 	}
 	return ssh.FixedHostKey(public), nil
 }
-func dialAppSSH(ctx context.Context, host HostRecord, stateDir string, port uint16) (*ssh.Client, error) {
-	callback, err := appHostKeyCallback(host.MeshIdentity)
+func dialMeshSSH(ctx context.Context, host HostRecord, stateDir string, port uint16) (*ssh.Client, error) {
+	callback, err := meshSSHHostKeyCallback(host.MeshIdentity)
 	if err != nil {
 		return nil, err
 	}
@@ -147,16 +147,16 @@ func dialAppSSH(ctx context.Context, host HostRecord, stateDir string, port uint
 	}
 	signer, err := ssh.NewSignerFromKey(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("prepare SSH device signer: %w", err)
 	}
 	endpoint, err := url.Parse(host.Endpoint)
 	if err != nil || endpoint.Hostname() == "" {
-		return nil, errors.New("app host has an invalid endpoint")
+		return nil, errors.New("SSH host has an invalid endpoint")
 	}
 	address := net.JoinHostPort(endpoint.Hostname(), strconv.Itoa(int(port)))
 	raw, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", address)
 	if err != nil {
-		return nil, fmt.Errorf("connect app host %s: %w", HostLabel(host), err)
+		return nil, fmt.Errorf("connect SSH host %s: %w", HostLabel(host), err)
 	}
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	defer stop()
@@ -164,7 +164,7 @@ func dialAppSSH(ctx context.Context, host HostRecord, stateDir string, port uint
 	conn, chans, requests, err := ssh.NewClientConn(raw, address, &ssh.ClientConfig{User: "mesh", Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: callback})
 	if err != nil {
 		_ = raw.Close()
-		return nil, fmt.Errorf("authenticate app host %s: %w", HostLabel(host), err)
+		return nil, fmt.Errorf("authenticate SSH host %s: %w", HostLabel(host), err)
 	}
 	_ = raw.SetDeadline(time.Time{})
 	return ssh.NewClient(conn, chans, requests), nil

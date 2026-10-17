@@ -223,6 +223,15 @@ func handleSession(channel charmssh.Session, application SessionHandler, health 
 		_ = channel.Exit(0)
 		return
 	}
+	if strings.HasPrefix(raw, "run ") && application != nil {
+		request, err := parseRun(raw)
+		if err != nil {
+			finishSession(channel, 2, err)
+			return
+		}
+		_, _ = runProcess(channel, state, request)
+		return
+	}
 	command, err := parseCommand(raw, state != nil, application != nil)
 	if err != nil {
 		finishSession(channel, 2, err)

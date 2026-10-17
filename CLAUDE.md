@@ -15,6 +15,11 @@ machines. Read `docs/plan/00-overview.md` before changing anything structural, a
    resurrect RAM.
 6. Each host is authoritative for its own sessions. There is no central database.
 
+The explicit `mesh ssh HOST [-- command...]` mode owns an ordinary process for
+one SSH connection. It ends on disconnect and creates no persistent session,
+worker, replay, or recovery state. The session invariants above apply to the
+default persistent mode.
+
 ## Conventions
 
 - Go 1.27. `gofmt` clean, `go vet ./...` clean, `go test -race ./...` green.

@@ -33,6 +33,10 @@ Non-negotiable invariants, repeated in `CLAUDE.md` because they are the product:
 - Rebooting a host kills its processes. Mesh reports those sessions as
   `interrupted`.
 
+The explicit `mesh ssh HOST [-- command...]` mode is a connection-owned shell
+or command. It ends on disconnect and creates no saved session. The persistent
+session contract above continues to apply to the default mode.
+
 ## CLI
 
 ```bash
