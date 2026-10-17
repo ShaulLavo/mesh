@@ -65,9 +65,13 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 
 	client := conn
 	relay := newClientRelay(client, s.workers, s.lifecycle.operationTimeout)
+	copySession := newCopyController()
 	stopCancellation := context.AfterFunc(ctx, func() { _ = client.Close() })
 	defer func() {
 		stopCancellation()
+		if closeErr := copySession.Close(); closeErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("daemon: close copy transfer: %w", closeErr))
+		}
 		if closeErr := relay.Close(); closeErr != nil && !onlyNormalClientErrors(closeErr) {
 			resultErr = errors.Join(resultErr, fmt.Errorf("daemon: close client relay: %w", closeErr))
 		}
@@ -118,7 +122,10 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			}
 			continue
 		}
-		response, lifecycleHandled, requestErr := s.lifecycle.HandleControl(ctx, request)
+		response, lifecycleHandled, requestErr := copySession.HandleControl(ctx, request)
+		if !lifecycleHandled {
+			response, lifecycleHandled, requestErr = s.lifecycle.HandleControl(ctx, request)
+		}
 		if !lifecycleHandled && s.apps != nil {
 			response, lifecycleHandled, requestErr = s.apps.HandleControl(ctx, request)
 		}

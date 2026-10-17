@@ -7,14 +7,37 @@ import select
 import shlex
 import signal
 import subprocess
+import sys
 import tempfile
 import unittest
+
+from failed_fixture import process_identity
 
 
 HELPERS = Path(__file__).resolve().parent
 
 
 class SessionCleanupTest(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "Linux process identity contract")
+    def test_process_identity_distinguishes_live_child_from_unreaped_zombie(self):
+        child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read(1)"], stdin=subprocess.PIPE)
+        descriptor = None
+        try:
+            descriptor = os.pidfd_open(child.pid)
+            self.assertIsNotNone(process_identity(child.pid))
+            child.stdin.close()
+            self.assertTrue(select.select([descriptor], [], [], 2)[0], "child did not exit")
+            os.kill(child.pid, 0)
+            self.assertEqual(Path(f"/proc/{child.pid}/stat").read_text().rsplit(")", 1)[1].split()[0], "Z")
+            self.assertIsNone(process_identity(child.pid))
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            child.stdin.close()
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=2)
+
     def test_client_cleanup_waits_for_final_worker_writes(self):
         self.check_final_worker_writes("client_signal_detaches.sh")
 

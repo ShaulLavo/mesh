@@ -265,18 +265,15 @@ APP_ID="$SERVER_APP_ID"
 MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_APP" app delete local "$APP_ID" --json >"$TEST_ROOT/deleted.json" || fail 'delete running app'
 DELETED_STATUS=$(app_curl -o "$TEST_ROOT/deleted.body" -w '%{http_code}' "$APP_ENDPOINT/api") || fail 'deleted host request'
 [ "$DELETED_STATUS" = 303 ] || fail "deleted host returned $DELETED_STATUS"
-python3 - "$TEST_ROOT/api.json" "$SOURCE/server" "$REGISTRY_STATE/mesh.db" "$APP_ID" <<'PY'
+PYTHONPATH="$REPO_ROOT/integration/helpers" python3 - "$TEST_ROOT/api.json" "$SOURCE/server" "$REGISTRY_STATE/mesh.db" "$APP_ID" <<'PY'
 import json, os, sqlite3, sys
+from failed_fixture import process_identity
 api_path, source_binary, registry_db, app_id = sys.argv[1:]
 with open(api_path) as source:
     app = json.load(source)
 if os.path.exists(app['cwd']):
     raise SystemExit('deleted app workspace remains')
-try:
-    os.kill(app['pid'], 0)
-except ProcessLookupError:
-    pass
-else:
+if process_identity(app['pid']) is not None:
     raise SystemExit('deleted app process remains')
 if not os.path.isfile(source_binary):
     raise SystemExit('delete removed caller source')

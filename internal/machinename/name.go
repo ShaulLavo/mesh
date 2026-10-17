@@ -15,7 +15,7 @@ var reservedNames = map[string]struct{}{
 	"kill": {}, "rm": {}, "remove": {}, "rename": {}, "mv": {}, "list": {}, "local": {}, "logs": {}, "ls": {}, "man": {},
 	"recover": {}, "recovery-command": {}, "shell-init": {}, "shell-update": {}, "agent": {}, "agent-hook": {}, "agent-resume": {}, "private-names": {}, "serve": {}, "session-worker": {}, "sig": {}, "signal": {}, "unserve": {}, "wake": {},
 	"device": {}, "update": {}, "version": {}, "update-helper": {}, "update-notice-check": {}, "update-bootstrap": {},
-	"update-bootstrap-status": {}, "dashboard": {}, "ssh": {}, "fleet": {},
+	"update-bootstrap-status": {}, "dashboard": {}, "ssh": {}, "fleet": {}, "cp": {},
 }
 
 // Claim is one destination's durable declaration, indexed by its stable identity.

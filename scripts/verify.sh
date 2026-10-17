@@ -9,7 +9,7 @@ test_timeout=${MESH_INTEGRATION_TIMEOUT:-30s}
 # Large app transfers also sync hundreds of chunks to disk. These need the
 # slow budget independently of ordinary session tests.
 slow_test_timeout=${MESH_INTEGRATION_SLOW_TIMEOUT:-600s}
-slow_tests=" packaging_contract.sh name_observation.sh temporary_app_size.sh "
+slow_tests=" packaging_contract.sh name_observation.sh temporary_app_size.sh copy_files.sh "
 integration_jobs=${MESH_INTEGRATION_JOBS:-}
 if [[ -z $integration_jobs ]]; then
   integration_jobs=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
