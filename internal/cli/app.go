@@ -19,6 +19,7 @@ import (
 	"github.com/shaul/mesh/internal/bootstrap"
 	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/privacy"
+	"github.com/shaul/mesh/internal/transfer"
 	"github.com/spf13/cobra"
 )
 
@@ -283,22 +284,12 @@ func uploadApp(ctx context.Context, transport appTransport, directory string, re
 	if _, err := archive.Seek(0, io.SeekStart); err != nil {
 		return appspkg.Result{}, fmt.Errorf("app: rewind transfer archive: %w", err)
 	}
-	var offset int64
-	buffer := make([]byte, appspkg.ChunkSize)
-	for {
-		n, readErr := io.ReadFull(archive, buffer)
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) {
-			return appspkg.Result{}, fmt.Errorf("app: read transfer archive: %w", readErr)
-		}
-		chunk := buffer[:n]
-		_, err = transport.request(ctx, appspkg.Request{Action: "upload.chunk", UploadID: begin.UploadID, Offset: offset, Data: chunk})
-		if err != nil {
-			return appspkg.Result{}, err
-		}
-		offset += int64(len(chunk))
+	err = transfer.Upload(ctx, archive, func(sendCtx context.Context, offset int64, chunk []byte) error {
+		_, err := transport.request(sendCtx, appspkg.Request{Action: "upload.chunk", UploadID: begin.UploadID, Offset: offset, Data: chunk})
+		return err
+	})
+	if err != nil {
+		return appspkg.Result{}, fmt.Errorf("app: upload archive: %w", err)
 	}
 	request.UploadID = begin.UploadID
 	request.Digest = digest
@@ -324,10 +315,6 @@ func (a *application) appDownloadCommand(output *appOutput) *cobra.Command {
 		return err
 	}}
 }
-func validAppDownloadChunk(result appspkg.Result, offset int64) bool {
-	return result.MaxBytes.Valid() && len(result.Data) <= appspkg.ChunkSize && result.MaxBytes.Allows(offset, int64(len(result.Data)))
-}
-
 func downloadApp(ctx context.Context, transport appTransport, id, dest string) error {
 	absolute, err := filepath.Abs(dest)
 	if err != nil {
@@ -339,27 +326,23 @@ func downloadApp(ctx context.Context, transport appTransport, id, dest string) e
 	}
 	defer os.Remove(tmp.Name()) //nolint:errcheck // remove the unlinked transfer file
 	defer tmp.Close()           //nolint:errcheck // checked before publishing the file
-	var offset int64
 	var limit appspkg.SizeLimit
-	for {
-		result, err := transport.request(ctx, appspkg.Request{Action: "download", ID: id, Offset: offset})
+	_, err = transfer.Download(ctx, tmp, func(receiveCtx context.Context, offset int64) (transfer.Chunk, error) {
+		result, err := transport.request(receiveCtx, appspkg.Request{Action: "download", ID: id, Offset: offset})
 		if err != nil {
-			return err
+			return transfer.Chunk{}, err
 		}
 		limit = result.MaxBytes
-		if !validAppDownloadChunk(result, offset) {
-			return errors.New("download exceeds app archive limit")
+		if !result.MaxBytes.Valid() || len(result.Data) > appspkg.ChunkSize || !result.MaxBytes.Allows(offset, int64(len(result.Data))) {
+			return transfer.Chunk{}, errors.New("download exceeds app archive limit")
 		}
 		if len(result.Data) == 0 && !result.Done {
-			return errors.New("host returned a stalled app download")
+			return transfer.Chunk{}, errors.New("host returned a stalled app download")
 		}
-		if _, err = tmp.Write(result.Data); err != nil {
-			return err
-		}
-		offset += int64(len(result.Data))
-		if result.Done {
-			break
-		}
+		return transfer.Chunk{Data: result.Data, Done: result.Done}, nil
+	})
+	if err != nil {
+		return fmt.Errorf("app: download archive: %w", err)
 	}
 	if err = tmp.Sync(); err != nil {
 		return err

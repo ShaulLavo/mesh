@@ -51,6 +51,8 @@ const (
 	TypeServiceStart       = "service.start"
 	TypeServiceStop        = "service.stop"
 	TypeCertificateInstall = "certificate.install"
+	TypeCopyRequest        = "copy.request"
+	TypeCopyResult         = "copy.result"
 
 	TypeHostInfoResult       = "host.info.result"
 	TypeServiceUpserted      = "service.upserted"
@@ -236,6 +238,7 @@ type CertificateInstall struct {
 // omitted so messages stay readable on the wire during debugging.
 type Control struct {
 	App                  json.RawMessage       `json:"app,omitempty"`
+	Copy                 json.RawMessage       `json:"copy,omitempty"`
 	Update               json.RawMessage       `json:"update,omitempty"`
 	AgentLaunch          *agentresume.Launch   `json:"agentLaunch,omitempty"`
 	AgentEvent           *agentresume.Event    `json:"agentEvent,omitempty"`

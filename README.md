@@ -32,6 +32,8 @@ mesh pc -r          # back to the latest one
 mesh pc -- htop     # run one thing there
 mesh ssh pc        # shell that ends when its connection closes
 mesh ssh pc -- df -h # quick command without a saved session
+mesh cp file pc:/tmp/file # copy through the existing Mesh connection
+mesh cp -r pc:/tmp/results ./results # download a directory
 mesh add user@host  # put mesh on another machine
 ```
 
@@ -41,6 +43,25 @@ mesh add user@host  # put mesh on another machine
 existing device approvals. Its shell or command ends when the connection closes,
 with no saved session or reconnection. Command arguments are passed directly; use
 `mesh ssh pc -- sh -c 'command | other-command'` for remote shell syntax.
+
+`mesh cp SOURCE DESTINATION` copies files between this machine and an enrolled
+host using the same device approval and pinned host identity as commands. Use
+`HOST:/absolute/path` for the remote path and `-r` for directories. An existing
+destination directory receives the source basename; otherwise the destination is
+the exact new path. Existing files are replaced atomically, directory contents
+merge, and destination-only files stay. Copies preserve dotfiles, empty
+directories and permission bits. Symbolic links and special files are refused.
+The transfer creates no saved session and removes temporary data on disconnect.
+An interrupted directory merge can retain files that already finished copying.
+Files being edited while copied have ordinary `cp` consistency; stop writers
+first when the source needs to be a consistent checkout or build artifact.
+The receiver stages the compressed archive and extracted files on the destination
+filesystem. Allow twice the copy size in free space, plus the largest file when
+merging into an existing directory. Existing destination files occupy space until
+their replacements are ready. Memory stays bounded as the sender streams. A forcibly killed
+receiver can leave a `.mesh-copy-stage-PID-*` directory beside the destination.
+These directories contain disposable copy data; remove one after confirming its
+receiver has stopped and no copy is using it.
 
 ## device access
 
