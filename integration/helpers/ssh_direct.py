@@ -135,6 +135,11 @@ def exercise(fixture):
 
 
 def main():
+    def interrupted(signum, _frame):
+        raise TimeoutError(f"SSH fixture interrupted by signal {signum}")
+    signal.signal(signal.SIGALRM, interrupted)
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.alarm(25)
     with tempfile.TemporaryDirectory(prefix="ms-ssh-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp")) as root:
         fixture = SSHFixture(sys.argv[1], root)
         try:
@@ -147,6 +152,7 @@ def main():
                 print(f"terminal {terminal.pid}: {terminal.drain()[-3000:]!r}", file=sys.stderr)
             raise
         finally:
+            signal.alarm(0)
             fixture.close()
 
 
