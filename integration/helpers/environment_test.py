@@ -9,10 +9,30 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from terminal_window import Fixture, Terminal
+from terminal_window import Fixture, Terminal, wait_for_forgotten_session
+
+
+class ForgetCompletionTest(unittest.TestCase):
+    def test_catalog_retirement_waits_for_directory_removal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory)
+            session_dir = local / "s" / "7K3D"
+            session_dir.mkdir(parents=True)
+            catalog_reads = []
+
+            def local_listing():
+                catalog_reads.append(True)
+                return ""
+
+            fixture = SimpleNamespace(local=local, local_listing=local_listing, daemon_listing=lambda: {})
+            with patch("terminal_window.time.sleep", side_effect=lambda _: session_dir.rmdir()):
+                wait_for_forgotten_session(fixture, "7K3D")
+            self.assertFalse(session_dir.exists())
+            self.assertGreaterEqual(len(catalog_reads), 2)
 
 
 class TerminalDrainTest(unittest.TestCase):
