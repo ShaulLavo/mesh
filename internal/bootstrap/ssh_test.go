@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -107,12 +108,67 @@ func TestPreferredHostKeyAlgorithmsMatchesExactHostAndPort(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		algorithms = slices.DeleteFunc(algorithms, func(algorithm string) bool {
+			return strings.HasSuffix(algorithm, "-cert-v01@openssh.com")
+		})
 		if !test.known && len(algorithms) != 0 {
 			t.Fatalf("unrelated host inherited algorithms %v", algorithms)
 		}
 		if test.known && (len(algorithms) == 0 || algorithms[0] != ssh.KeyAlgoED25519) {
 			t.Fatalf("trusted algorithm was not preferred: %v", algorithms)
 		}
+	}
+}
+
+func TestConnectSSHAcceptsCertificateFromTrustedAuthority(t *testing.T) {
+	t.Parallel()
+	clientPrivate, clientPublic := generateSSHKey(t)
+	caPrivate, caPublic := generateSSHKey(t)
+	caSigner, err := ssh.NewSignerFromKey(caPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostPrivate, hostPublic := generateSSHKey(t)
+	hostSigner, err := ssh.NewSignerFromKey(hostPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &ssh.Certificate{
+		Key:             hostPublic,
+		CertType:        ssh.HostCert,
+		ValidPrincipals: []string{"127.0.0.1"},
+		ValidBefore:     ssh.CertTimeInfinity,
+	}
+	if err := certificate.SignCert(rand.Reader, caSigner); err != nil {
+		t.Fatal(err)
+	}
+	certificateSigner, err := ssh.NewCertSigner(certificate, hostSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startSSHTestServer(t, clientPublic, certificateSigner)
+	remoteTarget, err := parseTarget("shaul@" + server.address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
+	line := "@cert-authority " + knownhosts.Line([]string{knownhosts.Normalize(server.address)}, caPublic) + "\n"
+	if err := os.WriteFile(knownHostsPath, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	remote, err := connectSSH(context.Background(), remoteTarget, SSHOptions{
+		KnownHostsPath: knownHostsPath,
+		IdentityFiles:  []string{writeSSHIdentity(t, clientPrivate)},
+		ConfirmHostKey: func(context.Context, HostKey) (bool, error) {
+			t.Error("prompted for a host with a trusted certificate")
+			return false, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("connectSSH() error = %v", err)
+	}
+	if err := remote.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

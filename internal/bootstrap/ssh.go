@@ -294,6 +294,10 @@ func preferredHostKeyAlgorithms(callback ssh.HostKeyCallback, address string) ([
 }
 
 func hostKeyPreference(algorithm string, knownTypes map[string]bool) int {
+	// A trusted CA authorizes certificates, not the server's raw key.
+	if strings.HasSuffix(algorithm, "-cert-v01@openssh.com") {
+		return 2
+	}
 	if algorithm == ssh.KeyAlgoRSASHA256 || algorithm == ssh.KeyAlgoRSASHA512 {
 		algorithm = ssh.KeyAlgoRSA
 	}
