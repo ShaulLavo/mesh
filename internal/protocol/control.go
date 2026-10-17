@@ -281,8 +281,9 @@ type Control struct {
 	PreviewRows int      `json:"previewRows,omitempty"`
 	Command     []string `json:"command,omitempty"`
 	Cwd         string   `json:"cwd,omitempty"`
-	Term        string   `json:"term,omitempty"`  // client's TERM; a session without one is not a terminal
-	Depth       int      `json:"depth,omitempty"` // nesting level of the session being created
+	Terminfo    []byte   `json:"terminfo,omitempty"` // resolved ncurses source for Term
+	Term        string   `json:"term,omitempty"`     // client's TERM; a session without one is not a terminal
+	Depth       int      `json:"depth,omitempty"`    // nesting level of the session being created
 	// ContainingSessions is ordered from the client process's immediate Mesh
 	// session outward. Attach carries the upstream path; a containment response
 	// prepends the worker that answered it.

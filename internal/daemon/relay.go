@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/terminfo"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -132,6 +133,9 @@ func (r *clientRelay) HandleFrame(ctx context.Context, frame protocol.Frame) (bo
 		}
 		switch message.Type {
 		case protocol.TypeAttach, protocol.TypeAttachDetached:
+			if err := terminfo.Install(ctx, message.Term, message.Terminfo); err != nil {
+				return true, fmt.Errorf("daemon: prepare terminal: %w", err)
+			}
 			id, err := relayControlSessionID(message)
 			if err != nil {
 				return true, err
