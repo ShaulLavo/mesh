@@ -43,7 +43,7 @@ func TestOpenBusyTimeoutAppliesToEveryPoolConnection(t *testing.T) {
 		want int
 	}{
 		{name: "authoritative", open: Open, want: 5000},
-		{name: "advisory", open: OpenAdvisory, want: 0},
+		{name: "advisory", open: OpenAdvisory, want: 150},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, err := test.open(t.Context(), filepath.Join(t.TempDir(), "mesh.db"))
