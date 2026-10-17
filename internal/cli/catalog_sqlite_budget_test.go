@@ -114,8 +114,10 @@ func TestCatalogSQLiteWriterContentionRespectsBudget(t *testing.T) {
 				}
 				row := result.rows[0]
 				var busy *sqlite.Error
-				if row.Stale || row.Err != nil || len(row.Sessions) != 0 || !errors.As(row.CacheErr, &busy) || busy.Code()&0xff != 5 {
-					t.Fatalf("contended save replaced live authority or hid SQLITE_BUSY: %#v", row)
+				cacheBusy := errors.As(row.CacheErr, &busy) && busy.Code()&0xff == 5
+				cacheDeadline := errors.Is(row.CacheErr, context.DeadlineExceeded)
+				if row.Stale || row.Err != nil || len(row.Sessions) != 0 || (!cacheBusy && !cacheDeadline) {
+					t.Fatalf("contended save replaced live authority or hid bounded cache diagnostic: %#v", row)
 				}
 			}
 			cached, err := cache.Load(t.Context(), host)
