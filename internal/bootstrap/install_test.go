@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -19,6 +20,7 @@ func TestInstallRemoteStreamsBinaryAndReportsUnchanged(t *testing.T) {
 	t.Parallel()
 
 	binaryPath := writeTestBinary(t, []byte("binary contents"))
+	selected := []string{"first-controller", "second-controller"}
 	call := 0
 	remote := &stubRemote{run: func(command string, stdin io.Reader) ([]byte, []byte, error) {
 		call++
@@ -53,6 +55,9 @@ func TestInstallRemoteStreamsBinaryAndReportsUnchanged(t *testing.T) {
 			if !bytes.Contains(script, []byte("systemctl --user")) || !strings.Contains(command, "'"+encodedService+"'") {
 				t.Fatalf("installer command = %q", command)
 			}
+			if !slices.Equal(strings.Fields(command)[9:], []string{shellQuote(selected[0]), shellQuote(selected[1])}) {
+				t.Fatalf("selected installer controller arguments = %q", command)
+			}
 			return []byte("MESH_INSTALL_RESULT=unchanged\n"), nil, nil
 		case 5:
 			if !strings.HasPrefix(command, "rm -f -- '/tmp/mesh-bootstrap.") {
@@ -65,12 +70,13 @@ func TestInstallRemoteStreamsBinaryAndReportsUnchanged(t *testing.T) {
 		}
 	}}
 	unchanged, err := installRemote(context.Background(), remote, installRequest{
-		Platform:      Platform{OS: Linux, Arch: AMD64},
-		BinaryPath:    binaryPath,
-		AuthorizedKey: "ssh-ed25519 adopter",
-		DaemonPort:    7337,
-		SSHPort:       2222,
-		WebSocketPath: "/mesh",
+		Platform:                   Platform{OS: Linux, Arch: AMD64},
+		BinaryPath:                 binaryPath,
+		AuthorizedKey:              "ssh-ed25519 adopter",
+		AdditionalDeviceIdentities: selected,
+		DaemonPort:                 7337,
+		SSHPort:                    2222,
+		WebSocketPath:              "/mesh",
 	})
 	if err != nil || !unchanged {
 		t.Fatalf("installRemote() unchanged = %v, error = %v", unchanged, err)

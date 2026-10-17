@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/transport"
 )
@@ -26,6 +27,15 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 		return []byte("Linux\naarch64\n"), nil, nil
 	}}
 	hostID := base64.RawURLEncoding.EncodeToString(make([]byte, ed25519.PublicKeySize))
+	state := t.TempDir()
+	source, _, err := identity.LoadOrCreate(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, _, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	var gotInstall installRequest
 	var steps []Step
 	foundVariant := ""
@@ -73,8 +83,9 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 	}
 
 	result, err := run(context.Background(), Options{
-		Target:   "shaul@bootstrap-fixture.invalid",
-		StateDir: t.TempDir(),
+		Target:                     "shaul@bootstrap-fixture.invalid",
+		StateDir:                   state,
+		AdditionalDeviceIdentities: []string{source.ID, controller.ID, controller.ID},
 		Progress: func(event Event) {
 			steps = append(steps, event.Step)
 			if event.Detail == "found headless Tailscale daemon" {
@@ -90,6 +101,9 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 	}
 	if gotInstall.BinaryPath != "/tmp/mesh-linux-arm64" || gotInstall.AuthorizedKey != "ssh-ed25519 adopter" || gotInstall.DaemonPort != DefaultPort || gotInstall.SSHPort != DefaultSSHPort {
 		t.Fatalf("install request = %#v", gotInstall)
+	}
+	if !reflect.DeepEqual(gotInstall.AdditionalDeviceIdentities, []string{controller.ID}) {
+		t.Fatalf("selected controller grants = %v", gotInstall.AdditionalDeviceIdentities)
 	}
 	wantSteps := []Step{StepConnect, StepDetect, StepDiscover, StepDiscover, StepTransfer, StepInstall, StepVerify, StepVerify, StepVerify}
 	if !reflect.DeepEqual(steps, wantSteps) {
@@ -474,12 +488,28 @@ func TestRunAdoptsAPinnedHostAlreadyServingMeshWhenSSHFails(t *testing.T) {
 		authorizedKey: func(string) (string, error) { return "ssh-ed25519 adopter", nil },
 		now:           time.Now,
 	}
-	result, err := run(context.Background(), Options{Target: "shaul@mac", StateDir: t.TempDir(), ExpectedIdentity: hostID}, deps)
+	state := t.TempDir()
+	source, _, err := identity.LoadOrCreate(state)
 	if err != nil {
-		t.Fatalf("run() error = %v", err)
+		t.Fatal(err)
 	}
-	if result.ID != hostID || result.TailscaleName != "mac.tail.example" || !result.AlreadyConfigured {
-		t.Fatalf("result = %#v", result)
+	controller, _, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, selected := range map[string][]string{"source only": {source.ID}, "additional controller": {controller.ID}, "no additional controller": nil} {
+		t.Run(name, func(t *testing.T) {
+			result, err := run(context.Background(), Options{Target: "shaul@mac", StateDir: state, ExpectedIdentity: hostID, AdditionalDeviceIdentities: selected}, deps)
+			if name == "additional controller" {
+				if !errors.Is(err, sshRefused) || result.AlreadyConfigured {
+					t.Fatalf("missing additional grant reported success: result=%#v error=%v", result, err)
+				}
+				return
+			}
+			if err != nil || result.ID != hostID || !result.AlreadyConfigured {
+				t.Fatalf("existing grant adoption: result=%#v error=%v", result, err)
+			}
+		})
 	}
 }
 

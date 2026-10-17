@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The fixture environment must not depend on the developer's agent setup."""
 
+import errno
 import os
 from pathlib import Path
 import shlex
@@ -11,7 +12,32 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from terminal_window import Fixture
+from terminal_window import Fixture, Terminal
+
+
+class TerminalDrainTest(unittest.TestCase):
+    def terminal(self):
+        terminal = Terminal.__new__(Terminal)
+        terminal.master = 23
+        terminal.output = bytearray()
+        return terminal
+
+    def test_closed_pty_during_automatic_reply_preserves_output(self):
+        terminal = self.terminal()
+        output = b"\x1b[cfinished\r\n"
+        with patch("terminal_window.select.select", side_effect=[([23], [], []), ([], [], [])]), \
+                patch("terminal_window.os.read", return_value=output), \
+                patch("terminal_window.os.write", side_effect=OSError(errno.EIO, "PTY closed")):
+            self.assertEqual(terminal.drain(), output)
+
+    def test_automatic_reply_preserves_other_write_failures(self):
+        terminal = self.terminal()
+        with patch("terminal_window.select.select", return_value=([23], [], [])), \
+                patch("terminal_window.os.read", return_value=b"\x1b[c"), \
+                patch("terminal_window.os.write", side_effect=OSError(errno.EBADF, "bad descriptor")):
+            with self.assertRaises(OSError) as raised:
+                terminal.drain()
+        self.assertEqual(raised.exception.errno, errno.EBADF)
 
 
 class FixtureEnvironmentTest(unittest.TestCase):

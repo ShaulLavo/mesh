@@ -136,6 +136,9 @@ type Options struct {
 	Release          ReleaseOptions
 	StateDir         string
 	ExpectedIdentity string
+	// AdditionalDeviceIdentities explicitly selects other controllers to grant
+	// this destination account's control and SSH access alongside this device.
+	AdditionalDeviceIdentities []string
 	// ResolveIdentity looks up the destination after the external SSH profile resolves.
 	ResolveIdentity  func(string) (string, error)
 	TailscaleAuthKey []byte

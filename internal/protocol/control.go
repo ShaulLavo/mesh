@@ -308,9 +308,10 @@ type Control struct {
 	// List / host info
 	// Lean omits display-independent recovery details. Absent keeps the full
 	// catalog for older clients; older daemons ignore this additive option.
-	Lean     bool          `json:"lean,omitempty"`
-	Sessions []SessionInfo `json:"sessions,omitempty"`
-	Host     *HostInfo     `json:"host,omitempty"`
+	Lean       bool          `json:"lean,omitempty"`
+	Sessions   []SessionInfo `json:"sessions,omitempty"`
+	Host       *HostInfo     `json:"host,omitempty"`
+	FleetHosts []FleetHost   `json:"fleetHosts,omitempty"`
 
 	// Inspect
 	Inspection *SessionInspection `json:"inspection,omitempty"`

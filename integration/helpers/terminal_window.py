@@ -80,8 +80,16 @@ class Terminal:
             )
             for query, response in replies:
                 if query in chunk:
-                    self.send(response)
+                    self._reply(response)
         return bytes(self.output)
+
+    def _reply(self, contents):
+        try:
+            self.send(contents)
+        except OSError as error:
+            # Buffered queries can outlive the PTY slave during teardown.
+            if error.errno != errno.EIO:
+                raise
 
     def send(self, contents):
         if isinstance(contents, str):

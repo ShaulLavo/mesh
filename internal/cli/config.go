@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/shaul/mesh/internal/fleetshare"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/session"
@@ -90,6 +91,14 @@ func LoadHosts() ([]HostRecord, error) {
 		return nil, err
 	}
 	path, err := ConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	shared, err := fleetshare.Hosts(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("load shared connections: %w", err)
+	}
+	config.Hosts, err = withSharedConnections(config.Hosts, shared)
 	if err != nil {
 		return nil, err
 	}
