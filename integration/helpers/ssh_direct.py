@@ -2,7 +2,6 @@
 """Exercise ephemeral Mesh SSH with real PTYs and forced transport loss."""
 import json
 import os
-from pathlib import Path
 import signal
 import subprocess
 import sys
