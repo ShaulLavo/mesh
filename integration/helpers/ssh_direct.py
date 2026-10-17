@@ -112,10 +112,17 @@ def exercise(fixture):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="mesh-ssh-direct-") as root:
+    with tempfile.TemporaryDirectory(prefix="ms-ssh-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp")) as root:
         fixture = SSHFixture(sys.argv[1], root)
         try:
             exercise(fixture)
+        except Exception:
+            if fixture.daemon_log is not None:
+                fixture.daemon_log.flush()
+                print((fixture.root / "daemon.log").read_text(), file=sys.stderr)
+            for terminal in fixture.terminals:
+                print(f"terminal {terminal.pid}: {terminal.drain()[-3000:]!r}", file=sys.stderr)
+            raise
         finally:
             fixture.close()
 
