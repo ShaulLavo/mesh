@@ -18,6 +18,8 @@ const (
 	bridgeReleaseLimit = 32
 	bridgeTimeout      = 10 * time.Second
 	OfficialHistoryAPI = "https://api.github.com/repos/ShaulLavo/mesh/releases?per_page=32"
+	// History includes the same release metadata as the latest endpoint for every entry.
+	maximumHistoryReply = bridgeReleaseLimit * maximumLatestReply
 )
 
 type TransitionReceipt struct {
@@ -85,7 +87,7 @@ func (c Client) bridgeTags(ctx context.Context, client *http.Client, base, insta
 	if address == "" {
 		return nil, errors.New("release: release history is unavailable for this origin")
 	}
-	data, err := downloadBytes(ctx, client, address, maximumManifest)
+	data, err := downloadBytes(ctx, client, address, maximumHistoryReply)
 	if err != nil {
 		return nil, err
 	}

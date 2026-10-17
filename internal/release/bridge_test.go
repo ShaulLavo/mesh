@@ -83,6 +83,15 @@ func TestBridgeHistoryHasAnAggregateMetadataBudget(t *testing.T) {
 	}
 }
 
+func TestBridgeRejectsHistoryBeyondMetadataBudget(t *testing.T) {
+	assets, build, target := historicalBridgeFixture(t)
+	history := `[{"tag_name":"v0.1.151","body":"` + strings.Repeat("x", maximumHistoryReply) + `"}]`
+	client, requests := bridgeOrigin(t, assets, history)
+	if _, err := client.Bridge(t.Context(), build, target); err == nil || !strings.Contains(err.Error(), "exceeds") || requests.Load() != 1 {
+		t.Fatalf("oversized history: requests %d, %v", requests.Load(), err)
+	}
+}
+
 func TestBridgeRejectsUnverifiedEvidence(t *testing.T) {
 	for _, scenario := range []string{"missing first receipt", "altered second receipt", "wrong platform", "wrong source digest", "unknown version", "modified build", "state outside exact receipt", "tag mismatch", "unsupported journal", "draft", "prerelease"} {
 		t.Run(scenario, func(t *testing.T) {
