@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -99,6 +100,52 @@ func TestRunCompletesEveryBoundaryAndReturnsVerifiedHost(t *testing.T) {
 	}
 	if remote.closed != 1 {
 		t.Fatalf("remote close count = %d", remote.closed)
+	}
+}
+
+func TestRunVerificationTimeoutStartsAfterIdentityAndProgress(t *testing.T) {
+	t.Parallel()
+	const timeout = 20 * time.Millisecond
+	remote := &stubRemote{run: func(string, io.Reader) ([]byte, []byte, error) { return []byte("Linux\nx86_64\n"), nil, nil }}
+	hostID := base64.RawURLEncoding.EncodeToString(make([]byte, ed25519.PublicKeySize))
+	deps := dependencies{
+		localTailnet: func(context.Context) error { return nil }, servingPeer: noServingPeer, sshConfig: noSSHConfig,
+		connect: func(context.Context, target, SSHOptions) (remoteHost, error) { return remote, nil },
+		resolveBinary: func(context.Context, binarySelection, Platform) (resolvedBinary, error) {
+			return resolvedBinary{path: "/tmp/mesh", cleanup: func() {}}, nil
+		},
+		checkClock:    func(context.Context, remoteHost, time.Time) error { return nil },
+		authorizedKey: func(string) (string, error) { return "ssh-ed25519 adopter", nil },
+		install:       func(context.Context, remoteHost, installRequest) (bool, error) { return true, nil },
+		discover: func(context.Context, remoteHost) (tailscaleObservation, error) {
+			return tailscaleObservation{State: tailscaleRunning, Tailnet: tailnetObservation{Name: "pc.tail.example", Addresses: []string{"100.64.0.1"}}}, nil
+		},
+		provision: func(_ context.Context, _ remoteHost, request provisionRequest) (provisionResult, error) {
+			return provisionResult{Tailnet: request.Observation.Tailnet}, nil
+		},
+		destination: func(context.Context, remoteHost) (string, error) { time.Sleep(2 * timeout); return hostID, nil },
+		verify: func(ctx context.Context, _ []string, _ uint16, _ string, _ *transport.Authentication) (verifiedHost, string, error) {
+			if err := ctx.Err(); err != nil {
+				return verifiedHost{}, "", fmt.Errorf("verification context: %w", err)
+			}
+			deadline, ok := ctx.Deadline()
+			if !ok || time.Until(deadline) > timeout {
+				t.Fatal("WebSocket verification lacks its timeout")
+			}
+			return verifiedHost{ID: hostID, MeshIdentity: hostID, TailscaleName: "pc.tail.example"}, "ws://100.64.0.1:7337/mesh", nil
+		},
+		now: time.Now,
+	}
+	_, err := run(context.Background(), Options{
+		Target: "shaul@pc", StateDir: t.TempDir(), VerifyTimeout: timeout,
+		Progress: func(event Event) {
+			if event.Step == StepVerify {
+				time.Sleep(2 * timeout)
+			}
+		},
+	}, deps)
+	if err != nil {
+		t.Fatalf("slow preparation consumed verification timeout: %v", err)
 	}
 }
 

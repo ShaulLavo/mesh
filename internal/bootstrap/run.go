@@ -251,8 +251,6 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		return Result{}, err
 	}
 
-	verifyCtx, cancelVerify := context.WithTimeout(ctx, normalized.verifyTimeout)
-	defer cancelVerify()
 	normalized.progress(Event{Step: StepVerify, Detail: "direct WebSocket connection"})
 	pin := normalized.expectedIdentity
 	if deps.destination != nil {
@@ -275,6 +273,8 @@ func run(ctx context.Context, opts Options, deps dependencies) (result Result, r
 		}
 	}
 	auth := &transport.Authentication{Key: key, ExpectedIdentity: pin}
+	verifyCtx, cancelVerify := context.WithTimeout(ctx, normalized.verifyTimeout)
+	defer cancelVerify()
 	host, endpoint, err := deps.verify(verifyCtx, tailnet.Addresses, normalized.daemonPort, normalized.webSocketPath, auth)
 	if err != nil {
 		return Result{}, err
