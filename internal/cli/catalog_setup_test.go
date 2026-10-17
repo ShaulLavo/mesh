@@ -124,34 +124,37 @@ func nativeCatalogHostWithSessions(t *testing.T, setupDelay, replyDelay time.Dur
 		}
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- daemon.Run(ctx, daemon.Config{StateDir: state}) }()
+	done := make(chan struct{})
+	var runErr error
+	go func() {
+		defer close(done)
+		runErr = daemon.Run(ctx, daemon.Config{StateDir: state})
+	}()
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case err := <-done:
-			if err != nil {
-				t.Error(err)
+		case <-done:
+			if runErr != nil {
+				t.Error(runErr)
 			}
 		case <-time.After(3 * time.Second):
 			t.Error("native catalog daemon did not stop")
 		}
 	})
 	socket := daemon.SocketPath(state)
-	deadline := time.Now().Add(3 * time.Second)
-	if count > 0 {
-		deadline = time.Now().Add(15 * time.Second)
-	}
 	for {
 		conn, err := net.DialTimeout("unix", socket, 50*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
 			break
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("native catalog daemon socket unavailable")
+		select {
+		case <-done:
+			t.Fatal("native catalog daemon stopped before readiness", runErr)
+		case <-ctx.Done():
+			t.Fatal("native catalog daemon did not become ready", ctx.Err())
+		case <-time.After(time.Millisecond):
 		}
-		time.Sleep(time.Millisecond)
 	}
 	auth := &transport.Authentication{Key: key, Authorize: func(id string) bool { return identity.GrantedIdentity(state, id) }}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

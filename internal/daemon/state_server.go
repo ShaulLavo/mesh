@@ -103,20 +103,28 @@ func writeStatePages(ctx context.Context, conn transport.Conn, read func() (prot
 			return fmt.Errorf("daemon: encode state response: %w", err)
 		}
 	}
+	for i, frame := range frames {
+		if err := writeStatePage(ctx, conn, read, message, frame, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeStatePage(ctx context.Context, conn transport.Conn, read func() (protocol.Frame, error), message protocol.Control, frame protocol.Frame, page int) error {
 	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	stop := context.AfterFunc(writeCtx, func() { _ = conn.Close() })
 	defer stop()
-	for i, frame := range frames {
-		if err := continueClientCatalog(read, conn.WriteFrame, message, i); err != nil {
-			return err
-		}
-		if err := conn.WriteFrame(frame); err != nil {
-			return fmt.Errorf("daemon: write %s: %w", message.Type, err)
-		}
+	err := continueClientCatalog(read, conn.WriteFrame, message, page)
+	if err == nil {
+		err = conn.WriteFrame(frame)
 	}
 	if err := writeCtx.Err(); err != nil {
 		return fmt.Errorf("daemon: write %s deadline: %w", message.Type, err)
+	}
+	if err != nil {
+		return fmt.Errorf("daemon: write %s: %w", message.Type, err)
 	}
 	return nil
 }
