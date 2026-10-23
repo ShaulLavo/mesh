@@ -1,6 +1,6 @@
 module github.com/shaul/mesh
 
-go 1.27.2
+go 1.27.3
 
 replace charm.land/wish/v2 => ./third_party/wish
 
