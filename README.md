@@ -35,7 +35,7 @@ mesh runs terminal sessions on the machines in your tailnet and opens any of the
 
 ## quick start
 
-1. install. you need [tailscale](https://tailscale.com/) on every machine that should talk to another
+1. install. mesh connects machines over [tailscale](https://tailscale.com/), so every machine that should talk to another needs it
 
    ```bash
    # mac, Apple silicon
@@ -70,27 +70,25 @@ mesh runs terminal sessions on the machines in your tailnet and opens any of the
 
 ## what you can do
 
-| to | run | guide |
-|---|---|---|
-| run one command on another machine | `mesh pc -- htop` | [getting started](docs/getting-started.md) |
-| open a shell that ends with its connection | `mesh ssh pc` | [CLI reference](docs/reference/cli.md) |
-| copy files through the mesh connection | `mesh cp file pc:/tmp/file` | [copy files](docs/guides/copy-files.md) |
-| reach a session from a phone or any ssh client | any ssh client, port 2222 | [remote access](docs/guides/remote-access.md) |
-| make every terminal window a session | `mesh --window` | [terminals](docs/guides/terminals.md) |
-| watch every machine, session and agent | `mesh dashboard` | [dashboard](docs/guides/dashboard.md) |
-| reopen an agent conversation after a crash | `mesh agent setup claude --install` | [agent recovery](docs/guides/agent-recovery.md) |
-| free memory from idle agents | automatic, or `mesh hibernate ID` | [hibernation](docs/guides/hibernation.md) |
-| restore sessions after a reboot | the picker | [workspace recovery](docs/guides/recovery.md) |
-| serve a dev server or folder on your tailnet | `mesh serve pc 5173 --at /dev` | [serve on demand](docs/guides/serve-on-demand.md) |
-| host a disposable website | `mesh app create pc ./site` | [temporary apps](docs/guides/temporary-apps.md) |
-| wake a sleeping machine | `mesh wake pc` | [wake](docs/guides/power.md) |
-| update every machine | `mesh update` | [updates](docs/guides/updates.md) |
-| let another device control a host | `mesh device approve` | [approve devices](docs/guides/approve-devices.md) |
-| record or share your screen safely | `mesh --privacy` | [privacy mode](docs/guides/privacy.md) |
+- run one command on another machine: `mesh pc -- htop`. [getting started](docs/getting-started.md)
+- open a shell that ends with its connection: `mesh ssh pc`. [CLI reference](docs/reference/cli.md)
+- copy files through the mesh connection: `mesh cp file pc:/tmp/file`. [copy files](docs/guides/copy-files.md)
+- reach a session from a phone or any ssh client on port 2222. [remote access](docs/guides/remote-access.md)
+- make every terminal window a session: `mesh --window`. [terminals](docs/guides/terminals.md)
+- watch every machine, session and agent: `mesh dashboard`. [dashboard](docs/guides/dashboard.md)
+- reopen an agent conversation after a crash: `mesh agent setup claude --install`. [agent recovery](docs/guides/agent-recovery.md)
+- free memory from idle agents, automatically or with `mesh hibernate ID`. [hibernation](docs/guides/hibernation.md)
+- restore sessions after a reboot from the picker. [workspace recovery](docs/guides/recovery.md)
+- serve a dev server or folder on your tailnet: `mesh serve pc 5173 --at /dev`. [serve on demand](docs/guides/serve-on-demand.md)
+- host a disposable website: `mesh app create pc ./site`. [temporary apps](docs/guides/temporary-apps.md)
+- wake a sleeping machine: `mesh wake pc`. [wake](docs/guides/power.md)
+- update every machine: `mesh update`. [updates](docs/guides/updates.md)
+- let another device control a host: `mesh device approve`. [approve devices](docs/guides/approve-devices.md)
+- record or share your screen safely: `mesh --privacy`. [privacy mode](docs/guides/privacy.md)
 
 ## how it works
 
-every machine runs `mesh daemon`. When the daemon creates a session it starts a detached `mesh session-worker`, which owns one PTY, the process on it, a 4 MiB replay ring and the rendered screen. A client attaches to a worker through the daemon. After a dropped connection the client reconnects, and the worker replays what it missed or sends a fresh screen if the ring has moved on. Tailscale supplies the network. Mesh supplies sessions, reconnection and the picker. [Architecture](docs/concepts/architecture.md) has the full picture, and [docs/adr](docs/adr/) records why it is shaped this way.
+every machine runs `mesh daemon`. when the daemon creates a session it starts a detached `mesh session-worker`, which owns one PTY, the process on it, a 4 MiB replay ring and the rendered screen. a client attaches to a worker through the daemon. after a dropped connection the client reconnects, and the worker replays what it missed or sends a fresh screen if the ring has moved on. tailscale supplies the network. mesh supplies sessions, reconnection and the picker. [Architecture](docs/concepts/architecture.md) has the full picture, and [docs/adr](docs/adr/) records why it is shaped this way.
 
 ## docs
 
@@ -100,13 +98,10 @@ every machine runs `mesh daemon`. When the daemon creates a session it starts a 
 
 pre-1.0, on [v0.1.x releases](https://github.com/ShaulLavo/mesh/releases) that arrive often. Commands, flags and the daemon protocol can change between releases, so run `mesh update` on every machine together.
 
-| platform | support |
-|---|---|
-| macOS, Apple silicon | release builds, tested in CI |
-| macOS, Intel | not supported, the installer refuses it |
-| Linux amd64 and arm64 | release builds, tested in CI |
-| Windows | not supported |
-
+- macOS, Apple silicon: release builds, tested in CI
+- macOS, Intel: not supported, the installer refuses it
+- Linux amd64 and arm64: release builds, tested in CI
+- Windows: not supported
 - a reboot kills a host's processes. mesh reports those sessions as `interrupted` and can reopen their directory, shell history and last screen. [workspace recovery](docs/guides/recovery.md) has the details
 - serving and temporary apps are private to your tailnet. mesh does not host anything publicly
 - macOS builds are ad-hoc signed, so file-access approvals can need renewing after an update. See [macOS](docs/guides/macos.md)

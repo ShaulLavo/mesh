@@ -24,13 +24,11 @@ These six rules are in `CLAUDE.md` because they are the product:
 
 ## The parts
 
-| Part | Command | Job |
-|---|---|---|
-| Client | `mesh`, `mesh dashboard` | Picks a host and session, attaches, sends keys, draws output. Holds no session state. |
-| Daemon | `mesh daemon` | One per host. Creates workers, finds them again after a restart, serves WebSocket and SSH, keeps the SQLite catalog `mesh.db`. |
-| Worker | `mesh session-worker` | One per session. Owns the PTY and the process on it, a replay ring, and the rendered screen. Listens on a Unix socket in `s/<ID>/sock`. |
+- **Client** (`mesh`, `mesh dashboard`): picks a host and session, attaches, sends keys, draws output. It holds no session state.
+- **Daemon** (`mesh daemon`): one per host. Creates workers, finds them again after a restart, serves WebSocket and SSH, and keeps the SQLite catalog `mesh.db`.
+- **Worker** (`mesh session-worker`): one per session. Owns the PTY and the process on it, a replay ring, and the rendered screen. Listens on a Unix socket in `s/<ID>/sock`.
 
-The daemon starts each worker detached with `Setsid`. A worker writes `meta.json` into its own directory under the state directory (`~/.local/state/mesh/s/<ID>/` by default), and the daemon finds workers again by scanning that directory. We chose a directory scan over `systemd-run --scope` because macOS needs the same mechanism, and one code path beats two.
+The daemon starts each worker detached with `Setsid`. A worker writes `meta.json` into its own directory under the state directory (`~/.local/state/mesh/s/<ID>/` by default), and the daemon finds workers again by scanning that directory. We chose a directory scan over `systemd-run --scope` because macOS needs the same mechanism, so one code path serves both.
 
 A session ID is four characters from a base-32 alphabet without `I`, `L`, `O` and `U`, so you can read one aloud.
 
@@ -73,11 +71,9 @@ State is derived, not stored. A worker whose socket answers is running. A socket
 
 ## How clients reach a host
 
-| Path | Port | Used by |
-|---|---|---|
-| Unix socket | none | The daemon and the local CLI talking to workers. |
-| WebSocket | 7337, path `/mesh` | The `mesh` client between hosts. One socket carries many sessions. TLS 1.3 runs inside it, with Mesh device keys. |
-| SSH | 2222 | Any SSH client. A phone with Tailscale and an SSH client is a complete Mesh client. |
+- **Unix socket**, no port: the daemon and the local CLI talking to workers.
+- **WebSocket**, port 7337, path `/mesh`: the `mesh` client between hosts. One socket carries many sessions. TLS 1.3 runs inside it, with Mesh device keys.
+- **SSH**, port 2222: any SSH client. A phone with Tailscale and an SSH client is a complete Mesh client.
 
 All three use the same frame format (`kind:1 | length:4 | payload`), defined in `internal/protocol`. The WebSocket has compression off, and the client reconnects with backoff.
 
@@ -87,19 +83,17 @@ Port 2222 sits beside the system SSH server on 22 because a user service cannot 
 
 ## Where to read the code
 
-| Path | What it holds |
-|---|---|
-| `internal/protocol` | The wire format. Transport-agnostic. A change here touches every component. |
-| `internal/session` | Output ring, session IDs. |
-| `internal/worker` | `mesh session-worker`: the PTY, its socket, attach and steal, snapshots. |
-| `internal/terminal` | Rendered screens for reattach and previews. |
-| `internal/daemon` | Worker discovery, relay, lifecycle. |
-| `internal/transport` | WebSocket with reconnect and resume. |
-| `internal/sshd`, `internal/sshfs` | The SSH front door, read-only SFTP and SCP. |
-| `internal/identity` | The host key, an Ed25519 key shared by WebSocket and SSH. |
-| `internal/cli`, `cmd/mesh` | Commands, attach, discovery. |
-| `internal/tui` | The picker and the dashboard. |
-| `internal/recovery`, `internal/agentresume` | Workspace and agent conversation recovery. |
+- `internal/protocol`: the wire format. Transport-agnostic. A change here touches every component.
+- `internal/session`: output ring, session IDs.
+- `internal/worker`: `mesh session-worker`, the PTY, its socket, attach and steal, snapshots.
+- `internal/terminal`: rendered screens for reattach and previews.
+- `internal/daemon`: worker discovery, relay, lifecycle.
+- `internal/transport`: WebSocket with reconnect and resume.
+- `internal/sshd`, `internal/sshfs`: the SSH front door, read-only SFTP and SCP.
+- `internal/identity`: the host key, an Ed25519 key shared by WebSocket and SSH.
+- `internal/cli`, `cmd/mesh`: commands, attach, discovery.
+- `internal/tui`: the picker and the dashboard.
+- `internal/recovery`, `internal/agentresume`: workspace and agent conversation recovery.
 
 ## Decisions behind this shape
 
