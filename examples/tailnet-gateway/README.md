@@ -2,7 +2,7 @@
 
 This optional gateway forwards TLS without decrypting it. Tailscale TCP/443
 connects to the gateway on `127.0.0.1:8446`. ClientHello SNI selects the backend using the accepted domains in
-[`domains.json`](../../docs/deployment-domains.md):
+[`domains.json`](../../docs/reference/deployment-domains.md):
 
 - `apps.new.example` and four-character app names on every configured domain go to `127.0.0.1:8445`.
 - Other hostnames go to the existing private Mesh listener on `127.0.0.1:8443`.

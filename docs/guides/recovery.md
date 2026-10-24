@@ -1,7 +1,7 @@
 # Recover a workspace
 
 The examples use `new.example` from the configured
-[deployment domains](deployment-domains.md). Replace it with your domain.
+[deployment domains](../reference/deployment-domains.md). Replace it with your domain.
 
 Select an interrupted session in the picker to open a shell in its saved
 directory. An interrupted program shows **Open shell**. Its recorded command runs
@@ -116,8 +116,8 @@ remains visible as unavailable recovery details.
 ## Provider conversations
 
 Shell recovery does not resume a Codex or Claude conversation automatically.
-[Provider compatibility](reference/agent-recovery-compatibility.md) records the offline
-probe and remaining live checks for T25. Provider transcripts and authentication
+[Agent recovery compatibility](../reference/agent-recovery-compatibility.md) lists the probed
+provider versions and the checks that remain open. Provider transcripts and authentication
 remain with each provider on the host where it ran.
 
 ## Power-loss acceptance

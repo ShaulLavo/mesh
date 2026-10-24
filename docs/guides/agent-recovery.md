@@ -7,7 +7,7 @@ in the recorded project directory with its exact saved ID.
 
 Mesh accepts Claude Code 2.1.261 and Codex CLI 0.153.4, the natively probed
 versions, and later releases in the same major line. Codex is supported with its
-direct TUI. Check the [compatibility report](reference/agent-recovery-compatibility.md) for
+direct TUI. Check the [compatibility report](../reference/agent-recovery-compatibility.md) for
 observed behavior and limits. A resumed conversation still counts as verified
 only when the provider's own hook reports the saved ID, so a later release that
 changed its hooks shows as unverified rather than silently succeeding. Provider histories and authentication must remain available
@@ -161,5 +161,5 @@ mesh agent setup codex --uninstall
 Uninstall preserves unrelated provider settings and hooks. It does not delete
 provider histories or existing Mesh recovery records. See
 [workspace recovery](recovery.md) for previous output, older attempts, and host
-recovery, and the [compatibility report](reference/agent-recovery-compatibility.md) for the
+recovery, and the [compatibility report](../reference/agent-recovery-compatibility.md) for the
 native probe and unverified lifecycle cases.

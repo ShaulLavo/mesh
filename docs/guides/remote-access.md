@@ -1,7 +1,7 @@
 # Reach sessions over SSH
 
 The examples use `new.example` from the configured
-[deployment domains](deployment-domains.md). Replace it with your domain.
+[deployment domains](../reference/deployment-domains.md). Replace it with your domain.
 
 Installed hosts expose Mesh sessions through public-key-only SSH on Tailnet
 port 2222. Add the port and your authorized Mesh key to `~/.ssh/config`:

@@ -1,5 +1,21 @@
 # Development
 
+Mesh is a Go module (`go 1.27.3`). Read [Architecture](concepts/architecture.md) before you change anything structural, and the matching [ADR](adr/README.md) before you reopen a design choice.
+
+## Build and test
+
+```bash
+go build -o mesh ./cmd/mesh
+go mod tidy -diff
+go test -race ./...
+go vet ./...
+./scripts/verify.sh
+```
+
+`scripts/verify.sh` is the integration suite. Any change to session lifecycle, attach or kill must keep it green, and behavior that needs protection gets a new script in `integration/`.
+
+## Quality gates and hooks
+
 Run `./scripts/gates.sh` for formatting, vet, golangci-lint, deadcode, ShellCheck,
 Ruff, and the bootstrap and terminal dependency contracts. Go analysis targets
 Linux/amd64 with CGO disabled so the checked-in baseline is independent of the
@@ -64,3 +80,13 @@ settings do not reach tests. Fixtures set any provider or proxy settings they
 need. Standalone agent scripts also scrub inherited settings and pin Python
 through their shared fixture. Use the verifier to isolate the full shell-script
 environment.
+
+## Docs
+
+`docs/reference/cli.md` is generated. After you change a command, flag or help text, regenerate it:
+
+```bash
+python3 scripts/gen-cli-reference.py > docs/reference/cli.md
+```
+
+Record a decision whose reason is not obvious from the code in `docs/adr/`. Working notes belong in `.internal/`, not `docs/`.

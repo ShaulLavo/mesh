@@ -1,4 +1,4 @@
-# Mesh — working agreement
+# Mesh working agreement
 
 Mesh gives you direct, resumable terminal sessions across your Tailscale-connected
 machines. Read `docs/concepts/architecture.md` before changing anything structural,
@@ -35,20 +35,32 @@ default persistent mode.
 go mod tidy -diff
 go test -race ./...
 go vet ./...
+./scripts/gates.sh
 ./scripts/verify.sh
 ```
 
 `scripts/verify.sh` builds one temporary binary and runs all integration scripts
 concurrently. Each script uses a separate state directory. Any change to session
 lifecycle, attach, or kill must keep all scripts passing. Add a script for new
-behavior that needs protection.
+behavior that needs protection. `scripts/gates.sh` runs the lint baseline; see
+`docs/development.md` before editing `.gates/baseline.json`.
 
 ## Layout
 
-- `internal/protocol` — the wire format. Transport agnostic; shared by the Unix
-  socket and (later) the WebSocket. Changing it affects every component.
-- `internal/session` — session state primitives (output ring, IDs).
-- `internal/worker` — `mesh session-worker`: one PTY, one process, one socket.
-- `internal/cli` — the client half: attach, discovery, spawn, control.
-- `internal/paths` — where state lives on disk.
-- `cmd/mesh` — mode dispatch.
+`docs/concepts/architecture.md` maps the main packages. The ones most changes touch:
+
+- `internal/protocol`: the wire format, shared by the Unix socket, the WebSocket
+  and SSH. Changing it affects every component.
+- `internal/session`: session state primitives (output ring, IDs).
+- `internal/worker`: `mesh session-worker`: one PTY, one process, one socket.
+- `internal/cli`: the client half: attach, discovery, spawn, control.
+- `internal/paths`: where state lives on disk.
+- `cmd/mesh`: mode dispatch.
+
+## Docs
+
+- `docs/reference/cli.md` is generated. After changing a command or its help text, run
+  `python3 scripts/gen-cli-reference.py > docs/reference/cli.md`.
+- `docs/` holds user and contributor docs only. Put plans, task notes, audits and
+  measurements in `.internal/` and never link to `.internal/` from `docs/` or the README.
+- Record a design choice with a non-obvious reason as `docs/adr/NNN-title.md`.

@@ -320,7 +320,7 @@ owner identity, and generation checks.
 7. Retire only old Mesh records after all owner machines and URLs have passed.
 
 Build the optional gateway with its `--domains` path. It must use the same accepted
-domains as its backends. See [the gateway guide](../examples/tailnet-gateway/README.md).
+domains as its backends. See [the gateway guide](../../examples/tailnet-gateway/README.md).
 Deployment changes require credentials for both zones during overlap. Preserve
 unrelated records, including the old apex and website routes. Source changes
 alone do not migrate a running installation.

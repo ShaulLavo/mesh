@@ -6,7 +6,7 @@ pairing and WebSocket upgrades require HTTPS and a verified Tailnet connection.
 Browser grants do not make an app reachable from the internet.
 
 The examples use `new.example` from the configured
-[deployment domains](deployment-domains.md). Replace it with your domain.
+[deployment domains](../reference/deployment-domains.md). Replace it with your domain.
 
 ## Create and update
 
@@ -42,7 +42,7 @@ has no public service publisher or public gateway target.
 
 App and management names must resolve to the private Tailnet ingress,
 with HTTPS certificates covering them. See the
-[Tailnet gateway example](../examples/tailnet-gateway/README.md).
+[Tailnet gateway example](../../examples/tailnet-gateway/README.md).
 
 Creation returns a short URL such as `https://7k3d.new.example`. Source is
 copied; your input directory remains yours. Mesh excludes environment files,
@@ -78,7 +78,7 @@ absolute workload directory. Mesh checks data SSD mounts and requires at least
 the managed copy and are deleted with it.
 
 For a dependency-free server example with shared SQLite favorites, see
-[A little color room](../examples/palette-server/README.md).
+[A little color room](../../examples/palette-server/README.md).
 
 ## Open a private app
 
@@ -160,7 +160,7 @@ origin stops it after its lease lapses and retains the managed copy for another
 The floating pill's source, generated assets, Go transformer and interaction
 fixtures remain in `web/app-pill` and `internal/apppill` for reuse in another
 project. Temporary apps do not inject it, serve its assets or expose widget
-management routes. See the [widget source guide](../web/app-pill/README.md).
+management routes. See the [widget source guide](../../web/app-pill/README.md).
 
 Public sharing commands and APIs have been removed. Existing app source files
 are preserved when upgrading; former sharing metadata cannot enable internet

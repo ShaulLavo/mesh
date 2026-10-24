@@ -2,127 +2,115 @@
 
 every terminal on every machine you own, from wherever you are
 
-![](docs/assets/mesh.gif)
+[![CI](https://github.com/ShaulLavo/mesh/actions/workflows/ci.yml/badge.svg)](https://github.com/ShaulLavo/mesh/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/ShaulLavo/mesh)](https://github.com/ShaulLavo/mesh/releases)
 
-mesh runs terminal sessions on the machines in your tailnet and opens any of them from any other, or from your phone. a session lives on its host. close the laptop, switch networks, restart the daemon, and the command keeps running until you come back to it
+![Recording: mesh pi -- ping 1.1.1.1 starts a session on the host pi, then the picker lists the hosts and the detached ping session with a live preview.](docs/assets/mesh.gif)
 
-built for running claude code and codex across a desktop, a laptop, a pi and a vps: agents keep working while you're away, you pick them up from whatever is in your hand, and one screen shows what every machine and every agent is doing
-
-## try it
-
-mac
-
-```bash
-brew tap ShaulLavo/mesh https://github.com/ShaulLavo/mesh
-brew install --cask ShaulLavo/mesh/mesh
+```console
+$ mesh local -- sh -c 'echo build finished; sleep 600'
+new session ETRG
+build finished
+                                   (press ctrl+])
+detached from ETRG, still running
+$ mesh ls
+ID    STATE     AGE  IDLE  MEM  STARTED IN  COMMAND
+ETRG  detached  2s   2s    -    /tmp        sh -c echo build finished; sleep 600
+$ mesh local -r
+resuming ETRG
 ```
 
-linux
+mesh runs terminal sessions on the machines in your tailnet and opens any of them from any other, or from your phone. a session lives on its host, so closing the laptop, switching networks or restarting the daemon does not stop the command
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/ShaulLavo/mesh/main/scripts/install.sh | sh
-```
+- **built for agents.** run claude code and codex on a desktop, a laptop, a pi and a vps. they keep working while you're away, and you pick them up from whatever is in your hand
+- **one screen for everything.** the picker and `mesh dashboard` show every machine, session and agent in one place
+- **direct.** terminal traffic goes from your client to the host over tailscale. nothing relays it
 
-then
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture.dark.svg">
+  <img alt="A laptop CLI and a phone SSH client reach the mesh daemon on each host inside the tailnet. On each host the daemon talks to one session-worker per session over a Unix socket, and each worker owns that session's PTY." src="docs/assets/architecture.light.svg">
+</picture>
 
-```bash
-mesh                # pick a host and a session
-mesh pc             # new session on pc
-mesh pc -r          # back to the latest one
-mesh pc -- htop     # run one thing there
-mesh ssh pc        # shell that ends when its connection closes
-mesh ssh pc -- df -h # quick command without a saved session
-mesh cp file pc:/tmp/file # copy through the existing Mesh connection
-mesh cp -r pc:/tmp/results ./results # download a directory
-mesh add user@host  # put mesh on another machine
-```
+*each session is its own worker process. the daemon only coordinates, so it can restart without touching a session.*
 
-`ctrl+]` detaches a persistent session. the command keeps running
+## quick start
 
-`mesh ssh HOST [-- command...]` uses the host's private Mesh SSH listener and
-existing device approvals. Its shell or command ends when the connection closes,
-with no saved session or reconnection. Command arguments are passed directly; use
-`mesh ssh pc -- sh -c 'command | other-command'` for remote shell syntax.
+1. install. you need [tailscale](https://tailscale.com/) on every machine that should talk to another
 
-`mesh cp SOURCE DESTINATION` copies files between this machine and an enrolled
-host using the same device approval and pinned host identity as commands. Use
-`HOST:/absolute/path` for the remote path and `-r` for directories. An existing
-destination directory receives the source basename; otherwise the destination is
-the exact new path. Existing files are replaced atomically, directory contents
-merge, and destination-only files stay. Copies preserve dotfiles, empty
-directories and permission bits. Symbolic links and special files are refused.
-The transfer creates no saved session and removes temporary data on disconnect.
-An interrupted directory merge can retain files that already finished copying.
-Files being edited while copied have ordinary `cp` consistency; stop writers
-first when the source needs to be a consistent checkout or build artifact.
-The receiver stages the compressed archive and extracted files on the destination
-filesystem. Allow twice the copy size in free space, plus the largest file when
-merging into an existing directory. Existing destination files occupy space until
-their replacements are ready. Memory stays bounded as the sender streams. A forcibly killed
-receiver can leave a `.mesh-copy-stage-PID-*` directory beside the destination.
-These directories contain disposable copy data; remove one after confirming its
-receiver has stopped and no copy is using it.
+   ```bash
+   # mac, Apple silicon
+   brew tap ShaulLavo/mesh https://github.com/ShaulLavo/mesh
+   brew install --cask ShaulLavo/mesh/mesh
+   mesh daemon install      # the cask installs the command, not the daemon
 
-## device access
+   # linux, amd64 or arm64 (installs and starts the user daemon)
+   curl -fsSL https://raw.githubusercontent.com/ShaulLavo/mesh/main/scripts/install.sh | sh
+   ```
 
-Network controls use mutual TLS 1.3 with each device's existing Mesh identity.
-`mesh add user@host` obtains the destination key through authenticated system SSH
-and approves this device for that destination's daemon account. Discovery supplies
-addresses; an existing pin is required for adoption when system SSH is unavailable.
+   the linux installer asks for confirmation through [gum](https://github.com/charmbracelet/gum) v2. run `curl -fsSL https://raw.githubusercontent.com/ShaulLavo/mesh/main/scripts/install.sh | MESH_INSTALL_YES=1 sh` to skip the prompt and the gum requirement
 
-An approved device can run commands, inspect sessions and manage services as the
-OS account running the destination daemon. Root approval requires
-`mesh add root@host --allow-root` or an explicit destination-local approval:
+2. try a session on this machine first. it needs no network. `ctrl+]` detaches and the shell keeps running
 
-```bash
-mesh device identity --json
-mesh device approve -- DEVICE_PUBLIC_ID
-mesh device approve --allow-root -- DEVICE_PUBLIC_ID  # destination runs as root
-mesh device revoke -- DEVICE_PUBLIC_ID
-```
+   ```bash
+   mesh local    # new shell session
+   mesh ls       # it is still there after ctrl+]
+   mesh local -r # back in
+   ```
 
-Run approval and revocation on the destination through trusted system SSH or its
-local terminal. Compare the identity and SHA256 fingerprint through that trusted
-channel before approval. Grant mutation and frame admission share a lock: frames
-admitted after revocation are denied immediately; previously admitted work may
-finish. Connections bind the approved key line's incarnation; revoking and
-immediately reapproving that key retires old attachments and permits new ones.
-Idle SSH and control connections close when the next 250 ms grant check observes
-revocation. Persistent commands and their detached workers remain available to other approved
-devices. A `mesh ssh` command ends when its device grant is revoked. Existing update-administrator grants are managed separately.
-An unknown or changed destination key requires explicit re-enrollment through
-system SSH; a discovery result never replaces the saved key.
+3. put mesh on a second machine, then run things there
 
-Enroll personal devices once with `mesh fleet trust HOST --yes` on each device to
-share new connections and approve those devices on newly added servers automatically.
-[Connection sharing](docs/fleet-sharing.md) describes setup, offline behavior and revocation.
+   ```bash
+   mesh add user@pc     # installs mesh over ssh, and tailscale if needed
+   mesh pc              # new session on pc
+   mesh pc -r           # back to the latest one
+   mesh                 # pick a host and a session
+   ```
 
-For explicit approval across existing pinned hosts, run `mesh device approve-fleet`
-on the source. [Pinned-fleet enrollment](docs/device-enrollment.md) describes the
-read-only preview and administration map.
+[getting started](docs/getting-started.md) walks through all of it.
 
-A daemon upgrade preserves retained workers. [Independent local upgrade and device enrollment](docs/updates.md#cross-the-control-authentication-cutover) explain
-how to move an existing fleet to authenticated controls.
+## what you can do
 
-## what's in it
+| to | run | guide |
+|---|---|---|
+| run one command on another machine | `mesh pc -- htop` | [getting started](docs/getting-started.md) |
+| open a shell that ends with its connection | `mesh ssh pc` | [CLI reference](docs/reference/cli.md) |
+| copy files through the mesh connection | `mesh cp file pc:/tmp/file` | [copy files](docs/guides/copy-files.md) |
+| reach a session from a phone or any ssh client | any ssh client, port 2222 | [remote access](docs/guides/remote-access.md) |
+| make every terminal window a session | `mesh --window` | [terminals](docs/guides/terminals.md) |
+| watch every machine, session and agent | `mesh dashboard` | [dashboard](docs/guides/dashboard.md) |
+| reopen an agent conversation after a crash | `mesh agent setup claude --install` | [agent recovery](docs/guides/agent-recovery.md) |
+| free memory from idle agents | automatic, or `mesh hibernate ID` | [hibernation](docs/guides/hibernation.md) |
+| restore sessions after a reboot | the picker | [workspace recovery](docs/guides/recovery.md) |
+| serve a dev server or folder on your tailnet | `mesh serve pc 5173 --at /dev` | [serve on demand](docs/guides/serve-on-demand.md) |
+| host a disposable website | `mesh app create pc ./site` | [temporary apps](docs/guides/temporary-apps.md) |
+| wake a sleeping machine | `mesh wake pc` | [wake](docs/guides/power.md) |
+| update every machine | `mesh update` | [updates](docs/guides/updates.md) |
+| let another device control a host | `mesh device approve` | [approve devices](docs/guides/approve-devices.md) |
+| record or share your screen safely | `mesh --privacy` | [privacy mode](docs/guides/privacy.md) |
 
-- **sessions.** each one is a process on its host with its screen kept in memory. attach from anywhere and it redraws where you left it. the picker lists every host and session with a live view of each screen
-- **agents.** `mesh agent setup claude --install` (or `codex`) records every conversation, so a session reopens its exact conversation after a crash. idle agents hibernate to give their memory back and resume when you attach. [recovery](docs/agent-recovery.md), [hibernation](docs/hibernation.md)
-- **dashboard.** `mesh dashboard` is cpu, ram, gpu, disk, network, temperatures and battery for every machine, what each session is doing, service health, and how much of each claude and codex plan is left. `--wall` is the hands-free version for a tv. ours runs on a pi. six themes. [dashboard](docs/dashboard.md)
-- **crash recovery.** after a reboot, sessions come back as interrupted with their directory, shell history and last screen, ready to relaunch with one key. [workspace recovery](docs/recovery.md)
-- **machine names.** each destination owns its name and revision. authenticated replies update the name on every viewer; exact host identities keep commands unambiguous. [machine names](docs/machine-names.md)
-- **serving.** `mesh serve` puts a port, a folder or a static site at a private https url on your tailnet. a dev server can start on its first request and stop once idle. `mesh app create` turns files or a folder into a private short-lived website without injected controls. All hosted services and temporary apps require Tailnet access. [on demand](docs/serve-on-demand.md), [temporary apps](docs/temporary-apps.md)
-- **ssh.** every host answers ssh on port 2222 with the picker, its sessions, and read-only sftp and scp of what it serves. any ssh client works, phones included. [remote access](docs/remote-access.md)
-- **fleet.** `mesh add user@host` installs mesh, and tailscale if needed, over ssh. `mesh update` rolls one release across every machine, and offline ones catch up when they return. [updates](docs/updates.md)
-- **power.** `mesh wake pc` wakes a sleeping machine through an awake neighbor on its lan, and a host with running sessions stays awake. [wake](docs/power.md)
-- **privacy.** `mesh --privacy`, or `MESH_PRIVACY=1` for a whole shell, masks account names, home directories, ids, ips and private domains while host, session and service names and every stat stay readable. made for recording and screen sharing, this gif included. [privacy](docs/privacy.md)
-- **terminal windows.** set your terminal's command to `mesh --window` and every window's shell outlives the window. [setup](docs/terminals.md)
+## how it works
 
-## more
+every machine runs `mesh daemon`. When the daemon creates a session it starts a detached `mesh session-worker`, which owns one PTY, the process on it, a 4 MiB replay ring and the rendered screen. A client attaches to a worker through the daemon. After a dropped connection the client reconnects, and the worker replays what it missed or sends a fresh screen if the ring has moved on. Tailscale supplies the network. Mesh supplies sessions, reconnection and the picker. [Architecture](docs/concepts/architecture.md) has the full picture, and [docs/adr](docs/adr/) records why it is shaped this way.
 
-- [macos](docs/macos.md), quarantine and file access
-- [development](docs/development.md), gates, hooks and the integration suite
+## docs
 
-Deployment names and parallel domain migrations are configured in
-[`domains.json`](docs/deployment-domains.md). Existing installations create
-the policy from their deployment state on startup when the file is missing.
+[getting started](docs/getting-started.md) · [guides](docs/README.md#guides) · [concepts](docs/concepts/architecture.md) · [reference](docs/README.md#reference) · [troubleshooting](docs/troubleshooting.md) · [ADRs](docs/adr/) · [development](docs/development.md)
+
+## status
+
+pre-1.0, on [v0.1.x releases](https://github.com/ShaulLavo/mesh/releases) that arrive often. Commands, flags and the daemon protocol can change between releases, so run `mesh update` on every machine together.
+
+| platform | support |
+|---|---|
+| macOS, Apple silicon | release builds, tested in CI |
+| macOS, Intel | not supported, the installer refuses it |
+| Linux amd64 and arm64 | release builds, tested in CI |
+| Windows | not supported |
+
+- a reboot kills a host's processes. mesh reports those sessions as `interrupted` and can reopen their directory, shell history and last screen. [workspace recovery](docs/guides/recovery.md) has the details
+- serving and temporary apps are private to your tailnet. mesh does not host anything publicly
+- macOS builds are ad-hoc signed, so file-access approvals can need renewing after an update. See [macOS](docs/guides/macos.md)
+
+## license and contributing
+
+no license file is published yet. [docs/development.md](docs/development.md) covers setup, gates and tests.

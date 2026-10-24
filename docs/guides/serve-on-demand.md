@@ -1,7 +1,7 @@
 # Serve a dev server on demand
 
 The examples use `new.example` from the configured
-[deployment domains](deployment-domains.md). Replace it with your domain.
+[deployment domains](../reference/deployment-domains.md). Replace it with your domain.
 
 An on-demand route names the command behind a port. Mesh starts that command as
 a session when the first connection arrives, and stops it once no connection has
