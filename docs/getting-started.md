@@ -4,7 +4,7 @@ In this tutorial you start a session, detach from it, and come back to find the 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/usage.dark.svg">
-  <img alt="Three steps: start a session with mesh pc, close the lid so the connection closes, then reattach with mesh pc -r from any machine. The session on pc keeps running the whole time." src="assets/usage.light.svg">
+  <img alt="Three steps: start a session with mesh pc, close the lid so the connection closes, then reattach with mesh pc -r from another approved machine. The session on pc keeps running the whole time." src="assets/usage.light.svg">
 </picture>
 
 *The connection comes and goes. The session stays on its host.*
@@ -97,11 +97,13 @@ A session on another machine announces its host. The ID differs each time:
 new session EE9N on pc
 ```
 
-Open any other machine that has Mesh and reattach:
+Open another machine that has Mesh and reattach:
 
 ```bash
 mesh pc -r
 ```
+
+`mesh add` approved only the laptop. A third machine is denied until `pc` approves its key, and it must pin `pc`'s key. The direct route is `mesh add user@pc` from the third machine, which needs its own SSH login to `pc`. Otherwise print its ID with `mesh device identity`, compare it over a trusted channel, and run `mesh device approve -- DEVICE_PUBLIC_ID` on `pc`. The third machine still needs a saved connection to `pc`, which [connection sharing](guides/fleet-sharing.md) can supply. See [Approve a device](guides/approve-devices.md). A phone or other SSH client needs the same approval: [Reach sessions over SSH](guides/remote-access.md).
 
 Run `mesh` with no arguments to pick a host and session from a list instead.
 
