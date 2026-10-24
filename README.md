@@ -2,7 +2,7 @@
 
 every terminal on every machine you own, from wherever you are
 
-![](docs/images/mesh.gif)
+![](docs/assets/mesh.gif)
 
 mesh runs terminal sessions on the machines in your tailnet and opens any of them from any other, or from your phone. a session lives on its host. close the laptop, switch networks, restart the daemon, and the command keeps running until you come back to it
 
@@ -122,7 +122,6 @@ how to move an existing fleet to authenticated controls.
 
 - [macos](docs/macos.md), quarantine and file access
 - [development](docs/development.md), gates, hooks and the integration suite
-- [status](docs/plan/02-status.md) and [task briefs](docs/tasks/)
 
 Deployment names and parallel domain migrations are configured in
 [`domains.json`](docs/deployment-domains.md). Existing installations create

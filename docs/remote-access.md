@@ -51,4 +51,3 @@ and running process.
 Mesh services and apps are Tailnet-only. Connect the viewing device to Tailscale
 and use the private HTTPS URL. Public serving and VPS-edge reverse tunnels were
 removed on 2026-10-08; public hosting belongs to Brine on `shaulavo.dev`.
-The [reverse-tunnel guide](reverse-tunnels.md) is retained as historical evidence.

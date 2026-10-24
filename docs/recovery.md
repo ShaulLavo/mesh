@@ -116,7 +116,7 @@ remains visible as unavailable recovery details.
 ## Provider conversations
 
 Shell recovery does not resume a Codex or Claude conversation automatically.
-[Provider compatibility](agent-recovery-compatibility.md) records the offline
+[Provider compatibility](reference/agent-recovery-compatibility.md) records the offline
 probe and remaining live checks for T25. Provider transcripts and authentication
 remain with each provider on the host where it ran.
 

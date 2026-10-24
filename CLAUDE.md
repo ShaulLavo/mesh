@@ -1,8 +1,8 @@
 # Mesh — working agreement
 
 Mesh gives you direct, resumable terminal sessions across your Tailscale-connected
-machines. Read `docs/plan/00-overview.md` before changing anything structural, and
-`docs/plan/01-decisions.md` before re-litigating a design choice.
+machines. Read `docs/concepts/architecture.md` before changing anything structural,
+and the matching file in `docs/adr/` before re-litigating a design choice.
 
 ## Invariants (do not break these)
 

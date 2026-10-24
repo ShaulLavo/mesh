@@ -85,9 +85,9 @@ administrative workflows outside those views.
 
 These production-renderer frames use invented fleet identities.
 
-![Dashboard with privacy mode](images/privacy/privacy-dashboard.png)
+![Dashboard with privacy mode](assets/privacy-dashboard.png)
 
-![Picker and inspector with privacy mode](images/privacy/privacy-picker.png)
+![Picker and inspector with privacy mode](assets/privacy-picker.png)
 
 Regenerate before/after evidence with
 `scripts/render-privacy-fixture.sh /work/tmp/mesh-privacy-mask-evidence`.

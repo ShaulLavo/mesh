@@ -77,7 +77,7 @@ Optional `--commit` and `--go-version` assertions must match verified production
 source and the embedded compiler (`go1.27.0` spelling). A dirty production
 snapshot has its own input hash and no claimed production revision. Host,
 architecture, kernel, timestamp and windows remain observation metadata.
-The committed `results/origin-main-9e3f62b/` measurements use production source at
+The measurements kept in `.internal/bench-results/origin-main-9e3f62b/` use production source at
 `9e3f62b56405bdda7a90a32b0acfe3d628fd9208`; only test/harness files were added when
 those measurements were collected. Later main integrations do not change that
 pin or relabel the results. Reviewer-observed ordinary SHA256s and embedded

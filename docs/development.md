@@ -63,6 +63,4 @@ trust, and an absolute netrc path for dependency downloads. Those build-only
 settings do not reach tests. Fixtures set any provider or proxy settings they
 need. Standalone agent scripts also scrub inherited settings and pin Python
 through their shared fixture. Use the verifier to isolate the full shell-script
-environment. See the
-[implementation status](plan/02-status.md) and [task briefs](tasks/)
-for the design and build order.
+environment.
