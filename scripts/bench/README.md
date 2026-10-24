@@ -38,7 +38,7 @@ The Pi run cross-builds locally, transfers to `/tmp/mesh-m5-XXXXXX`, measures
 0/5/20 sessions, collects JSON and Markdown, verifies no scratch processes remain,
 and removes that directory. Its 300-second timeout sends TERM first so Python can
 clean up; an independent EXIT cleanup covers interrupted SSH connections. Keep
-runs short: the Pi also drives the owner's TV.
+runs short: the Pi also drives a TV.
 
 Defaults: 3-second settlement, 30-second idle window, five repeated list/CLI/attach
 samples, a 1 MiB ANSI build-log burst on the first worker. The workload prints
@@ -56,12 +56,12 @@ SQLite writes are committed WAL transactions and page frames, sampled at 5 Hz
 from the WAL-index's committed frame count. Header salts detect checkpoint/reset;
 stale/uncommitted tails are excluded. Frames are page writes, not SQL statement
 counts or bytes reaching the SD card. Rates are extrapolated from the recorded
-window; this is a baseline, not plan 08's ten-minute persistence or hour-long
-watch-soak gate. Very fast complete WAL resets between observations can be missed.
+window; this is a short baseline, not a ten-minute persistence or hour-long
+watch-soak measurement. Very fast complete WAL resets between observations can be missed.
 The committed Pi run uses `/tmp` on tmpfs; WAL counts measure logical persistence
 activity, and the timings do not characterize SD-card latency or wear.
 
-`--list-fields '{"someAdditiveOption":true}'` lets another lane compare a lean
+`--list-fields '{"someAdditiveOption":true}'` lets you compare a lean
 catalog without changing this baseline's full-list request. `build.sh` captures
 production compilation-input hashes before and after building, and fails if they
 change. Its receipt records executable SHA256, all embedded build settings

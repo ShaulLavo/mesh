@@ -1,8 +1,6 @@
 # Deployment domains
 
-Mesh is Tailnet-only on `sprockt.dev`. The owner removed public temporary apps,
-public serving and VPS-edge tunnels on 2026-10-08. Public hosting belongs to
-Brine on `shaulavo.dev`. Mesh has private-origin and private-service certificate profiles.
+Mesh is Tailnet-only on `sprockt.dev`. It has no public temporary apps, public serving or VPS-edge tunnels. Public hosting belongs to Brine on `shaulavo.dev`. Mesh has private-origin and private-service certificate profiles.
 
 Mesh reads `domains.json` beside `hosts.json` before the interactive picker and
 ordinary client commands start.

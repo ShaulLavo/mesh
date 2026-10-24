@@ -145,8 +145,8 @@ a key does not signal its retained worker processes.
 The control protocol requires authenticated peers. There is no raw signed-update
 fallback. During this cutover, mixed-version network sessions, service controls,
 certificates, wake requests and fleet update reconciliation can fail. Local Unix
-controls and ordinary service URLs remain available. The owner accepts this short
-mixed-version interval and updates each host independently through system SSH.
+controls and ordinary service URLs remain available. Update each host
+independently through system SSH to keep that interval short.
 
 For the omarchy/macbook-air/pi/vps fleet, use this account-local sequence:
 
