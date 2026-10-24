@@ -113,4 +113,4 @@ pre-1.0, on [v0.1.x releases](https://github.com/ShaulLavo/mesh/releases) that a
 
 ## license and contributing
 
-no license file is published yet. [docs/development.md](docs/development.md) covers setup, gates and tests.
+mesh ships without a license file. [docs/development.md](docs/development.md) covers setup, gates and tests. Report security issues through [SECURITY.md](SECURITY.md).
