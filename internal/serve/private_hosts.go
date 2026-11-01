@@ -3,7 +3,6 @@ package serve
 import (
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/shaul/mesh/internal/domainpolicy"
@@ -11,16 +10,7 @@ import (
 
 func (r *Registry) HasPrivateHost(host string) bool {
 	snapshot := r.snapshot.Load()
-	private, ok := snapshotPrivateRoute(snapshot, host)
-	return ok && private.handler != nil
-}
-
-func snapshotPrivateRoute(snapshot *registrySnapshot, host string) (privateServiceRoute, bool) {
-	if snapshot == nil {
-		return privateServiceRoute{}, false
-	}
-	private, ok := snapshot.privateHosts[host]
-	return private, ok
+	return snapshot != nil && snapshot.privateHosts[host] != nil
 }
 
 func redirectLegacyMount(root http.Handler, prefix string) http.Handler {
@@ -52,32 +42,20 @@ func ValidatePrivateServiceHost(host string) error {
 	return nil
 }
 
-func servePrivateHost(w http.ResponseWriter, request *http.Request, host string, private privateServiceRoute) {
+func servePrivateHost(w http.ResponseWriter, request *http.Request, host string, handler http.Handler) {
 	if request.TLS != nil && request.TLS.ServerName != "" && strings.ToLower(strings.TrimSuffix(request.TLS.ServerName, ".")) != host {
 		http.Error(w, "Misdirected Request", http.StatusMisdirectedRequest)
 		return
 	}
-	if len(request.Header.Values("Origin")) > 1 {
-		http.Error(w, "multiple Origin headers are forbidden", http.StatusForbidden)
-		return
-	}
-	if !trustedOriginAllowed(request, private.trustedOrigins) && !AmbientOwnerAllowed(request, privateRequestOrigin(request), AllowOriginlessWebSocket) {
+	if !AmbientOwnerAllowed(request, privateRequestOrigin(request), AllowOriginlessWebSocket) {
 		http.Error(w, "cross-site request to private service", http.StatusForbidden)
 		return
 	}
-	private.handler.ServeHTTP(w, request)
-}
-
-func trustedOriginAllowed(request *http.Request, trustedOrigins []string) bool {
-	origin := request.Header.Get("Origin")
-	return origin != "" && slices.Contains(trustedOrigins, origin)
+	handler.ServeHTTP(w, request)
 }
 
 func validatePrivateHostService(service Service) error {
 	if service.PrivateHost == "" {
-		if len(service.TrustedOrigins) > 0 {
-			return fmt.Errorf("serve: trusted origins require a private host")
-		}
 		return nil
 	}
 	if service.LocalOnly {

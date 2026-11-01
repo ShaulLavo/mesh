@@ -32,7 +32,7 @@ func (q *Queries) DeleteCachedServicesForHost(ctx context.Context, hostID string
 }
 
 const listCachedServices = `-- name: ListCachedServices :many
-SELECT host_id, private_name, name, kind, target, healthy, problem, observed_at, isolate, display_name, private_host, trusted_origins
+SELECT host_id, private_name, name, kind, target, healthy, problem, observed_at, isolate, display_name, private_host
 FROM cached_services
 ORDER BY host_id, name
 LIMIT 8193
@@ -59,7 +59,6 @@ func (q *Queries) ListCachedServices(ctx context.Context) ([]CachedService, erro
 			&i.Isolate,
 			&i.DisplayName,
 			&i.PrivateHost,
-			&i.TrustedOrigins,
 		); err != nil {
 			return nil, err
 		}
@@ -75,7 +74,7 @@ func (q *Queries) ListCachedServices(ctx context.Context) ([]CachedService, erro
 }
 
 const listCachedServicesForHost = `-- name: ListCachedServicesForHost :many
-SELECT host_id, private_name, name, kind, target, healthy, problem, observed_at, isolate, display_name, private_host, trusted_origins
+SELECT host_id, private_name, name, kind, target, healthy, problem, observed_at, isolate, display_name, private_host
 FROM cached_services
 WHERE host_id = ?
 ORDER BY name
@@ -102,7 +101,6 @@ func (q *Queries) ListCachedServicesForHost(ctx context.Context, hostID string) 
 			&i.Isolate,
 			&i.DisplayName,
 			&i.PrivateHost,
-			&i.TrustedOrigins,
 		); err != nil {
 			return nil, err
 		}
@@ -129,9 +127,8 @@ INSERT INTO cached_services (
     problem,
     observed_at,
     isolate,
-    display_name,
-    trusted_origins
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    display_name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (host_id, name) DO UPDATE SET
 	private_name = excluded.private_name,
     kind = excluded.kind,
@@ -141,23 +138,21 @@ ON CONFLICT (host_id, name) DO UPDATE SET
     problem = excluded.problem,
     observed_at = excluded.observed_at,
     display_name = excluded.display_name,
-    isolate = excluded.isolate,
-    trusted_origins = excluded.trusted_origins
+    isolate = excluded.isolate
 `
 
 type UpsertCachedServiceParams struct {
-	HostID         string
-	PrivateName    string
-	Name           string
-	Kind           string
-	Target         string
-	PrivateHost    string
-	Healthy        int64
-	Problem        string
-	ObservedAt     int64
-	Isolate        int64
-	DisplayName    string
-	TrustedOrigins string
+	HostID      string
+	PrivateName string
+	Name        string
+	Kind        string
+	Target      string
+	PrivateHost string
+	Healthy     int64
+	Problem     string
+	ObservedAt  int64
+	Isolate     int64
+	DisplayName string
 }
 
 func (q *Queries) UpsertCachedService(ctx context.Context, arg UpsertCachedServiceParams) error {
@@ -173,7 +168,6 @@ func (q *Queries) UpsertCachedService(ctx context.Context, arg UpsertCachedServi
 		arg.ObservedAt,
 		arg.Isolate,
 		arg.DisplayName,
-		arg.TrustedOrigins,
 	)
 	return err
 }

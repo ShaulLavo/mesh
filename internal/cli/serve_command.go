@@ -32,8 +32,7 @@ func (a *application) serveCommand() *cobra.Command {
 		displayName string
 		files       bool
 
-		privateHost  string
-		trustOrigins []string
+		privateHost string
 
 		isolate bool
 
@@ -74,7 +73,7 @@ func (a *application) serveCommand() *cobra.Command {
 				return err
 			}
 			return a.runServe(cmd, args[0], target, serveFlags{
-				route: route, displayName: displayName, files: files, privateHost: privateHost, privateHostSet: cmd.Flags().Changed("private-host"), trustOrigins: trustOrigins, trustOriginsSet: cmd.Flags().Changed("trust-origin"), isolate: isolate,
+				route: route, displayName: displayName, files: files, privateHost: privateHost, privateHostSet: cmd.Flags().Changed("private-host"), isolate: isolate,
 				run: run, cwd: cwd, env: env, listens: listens, idle: idle, readyTimeout: readyTimeout,
 				cwdSet: cmd.Flags().Changed("cwd"), idleSet: cmd.Flags().Changed("idle"),
 				readySet: cmd.Flags().Changed("ready-timeout"),
@@ -85,7 +84,6 @@ func (a *application) serveCommand() *cobra.Command {
 	command.Flags().StringVar(&route, "at", "", "route path, such as /blog")
 	command.Flags().BoolVar(&files, "files", false, "enable directory listings")
 	command.Flags().StringVar(&privateHost, "private-host", "", "private hostname at the root, using a label or a configured deployment hostname")
-	command.Flags().StringArrayVar(&trustOrigins, "trust-origin", nil, "exact browser origin allowed through a private service guard (repeatable)")
 
 	command.Flags().BoolVar(&isolate, "isolate", false, "send cross-origin isolation headers so the page can use SharedArrayBuffer")
 
@@ -101,14 +99,12 @@ func (a *application) serveCommand() *cobra.Command {
 }
 
 type serveFlags struct {
-	privateHostSet  bool
-	trustOriginsSet bool
-	route           string
-	displayName     string
-	files           bool
+	privateHostSet bool
+	route          string
+	displayName    string
+	files          bool
 
-	privateHost  string
-	trustOrigins []string
+	privateHost string
 
 	isolate bool
 
@@ -154,22 +150,9 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 	if err != nil {
 		return err
 	}
+
 	if flags.files && numericCLIServiceTarget(target) {
 		return errors.New("--files cannot be combined with a numeric proxy target")
-	}
-	trustedOrigins, err := meshserve.NormalizeTrustedOrigins(flags.trustOrigins)
-	if err != nil {
-		return fmt.Errorf("--trust-origin: %w", err)
-	}
-	if !flags.privateHostSet && flags.privateHost == "" {
-		inherited, err := a.existingPrivateHost(cmd.Context(), host, name)
-		if err != nil {
-			return err
-		}
-		flags.privateHost = inherited
-	}
-	if flags.trustOriginsSet && flags.privateHost == "" {
-		return errors.New("--trust-origin requires --private-host or an existing private host")
 	}
 	kind := ""
 	if flags.files {
@@ -180,7 +163,13 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 		Name:        name, Kind: kind, Target: target, PrivateHost: flags.privateHost,
 		Isolate: flags.isolate, Listens: demand.listens, Run: demand.run, LocalOnly: localOnly,
 	}
-	requested.TrustedOrigins = trustedOrigins
+	if !flags.privateHostSet && flags.privateHost == "" {
+		inherited, err := a.existingPrivateHost(cmd.Context(), host, name)
+		if err != nil {
+			return err
+		}
+		requested.PrivateHost = inherited
+	}
 	previewCtx, cancelPreview := context.WithTimeout(cmd.Context(), serviceMutationTimeout)
 	preview, privateName, err := previewRemoteService(previewCtx, host, a.dependencies.DialControl, requested)
 	cancelPreview()
@@ -203,16 +192,8 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 	}
 	persisted := publication.Service
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "serving %s on %s (%s -> %s)\n", a.privacy.Value("url", serviceURL(host, publication.PrivateName, persisted)), a.privacy.Value("host", HostLabel(host)), persisted.Kind, privateServiceTarget(a.privacy, persisted))
-	if err != nil {
+	if err != nil || persisted.Run == nil {
 		return err
-	}
-	if len(persisted.TrustedOrigins) > 0 {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "trusted origins: %s\n", strings.Join(persisted.TrustedOrigins, ", ")); err != nil {
-			return fmt.Errorf("write trusted origins: %w", err)
-		}
-	}
-	if persisted.Run == nil {
-		return nil
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "starts %q in %s on the first connection; stops after %s idle\n",
 		privateServiceCommand(a.privacy, persisted.Run.Command), safeTableCell(a.privacy.Value("path", persisted.Run.Cwd)), time.Duration(persisted.Run.IdleMillis)*time.Millisecond)

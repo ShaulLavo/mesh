@@ -23,7 +23,7 @@ func (q *Queries) DeleteService(ctx context.Context, name string) (int64, error)
 }
 
 const getService = `-- name: GetService :one
-SELECT name, kind, target, isolate, listens, demand, local_only, display_name, private_host, trusted_origins
+SELECT name, kind, target, isolate, listens, demand, local_only, display_name, private_host
 FROM services
 WHERE name = ?
 `
@@ -41,13 +41,12 @@ func (q *Queries) GetService(ctx context.Context, name string) (Service, error) 
 		&i.LocalOnly,
 		&i.DisplayName,
 		&i.PrivateHost,
-		&i.TrustedOrigins,
 	)
 	return i, err
 }
 
 const listServices = `-- name: ListServices :many
-SELECT name, kind, target, isolate, listens, demand, local_only, display_name, private_host, trusted_origins
+SELECT name, kind, target, isolate, listens, demand, local_only, display_name, private_host
 FROM services
 ORDER BY name
 `
@@ -71,7 +70,6 @@ func (q *Queries) ListServices(ctx context.Context) ([]Service, error) {
 			&i.LocalOnly,
 			&i.DisplayName,
 			&i.PrivateHost,
-			&i.TrustedOrigins,
 		); err != nil {
 			return nil, err
 		}
@@ -96,9 +94,8 @@ INSERT INTO services (
     listens,
     demand,
     local_only,
-    display_name,
-    trusted_origins
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    display_name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (name) DO UPDATE SET
     kind = excluded.kind,
     target = excluded.target,
@@ -107,22 +104,20 @@ ON CONFLICT (name) DO UPDATE SET
     listens = excluded.listens,
     demand = excluded.demand,
     display_name = excluded.display_name,
-    local_only = excluded.local_only,
-    trusted_origins = excluded.trusted_origins
-RETURNING name, kind, target, isolate, listens, demand, local_only, display_name, private_host, trusted_origins
+    local_only = excluded.local_only
+RETURNING name, kind, target, isolate, listens, demand, local_only, display_name, private_host
 `
 
 type UpsertServiceParams struct {
-	Name           string
-	Kind           string
-	Target         string
-	PrivateHost    string
-	Isolate        int64
-	Listens        string
-	Demand         string
-	LocalOnly      int64
-	DisplayName    string
-	TrustedOrigins string
+	Name        string
+	Kind        string
+	Target      string
+	PrivateHost string
+	Isolate     int64
+	Listens     string
+	Demand      string
+	LocalOnly   int64
+	DisplayName string
 }
 
 func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) (Service, error) {
@@ -136,7 +131,6 @@ func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) (S
 		arg.Demand,
 		arg.LocalOnly,
 		arg.DisplayName,
-		arg.TrustedOrigins,
 	)
 	var i Service
 	err := row.Scan(
@@ -149,7 +143,6 @@ func (q *Queries) UpsertService(ctx context.Context, arg UpsertServiceParams) (S
 		&i.LocalOnly,
 		&i.DisplayName,
 		&i.PrivateHost,
-		&i.TrustedOrigins,
 	)
 	return i, err
 }

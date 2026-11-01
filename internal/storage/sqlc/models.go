@@ -11,18 +11,17 @@ type AppName struct {
 }
 
 type CachedService struct {
-	HostID         string
-	PrivateName    string
-	Name           string
-	Kind           string
-	Target         string
-	Healthy        int64
-	Problem        string
-	ObservedAt     int64
-	Isolate        int64
-	DisplayName    string
-	PrivateHost    string
-	TrustedOrigins string
+	HostID      string
+	PrivateName string
+	Name        string
+	Kind        string
+	Target      string
+	Healthy     int64
+	Problem     string
+	ObservedAt  int64
+	Isolate     int64
+	DisplayName string
+	PrivateHost string
 }
 
 type Host struct {
@@ -38,16 +37,15 @@ type PrivateAppState struct {
 }
 
 type Service struct {
-	Name           string
-	Kind           string
-	Target         string
-	Isolate        int64
-	Listens        string
-	Demand         string
-	LocalOnly      int64
-	DisplayName    string
-	PrivateHost    string
-	TrustedOrigins string
+	Name        string
+	Kind        string
+	Target      string
+	Isolate     int64
+	Listens     string
+	Demand      string
+	LocalOnly   int64
+	DisplayName string
+	PrivateHost string
 }
 
 type Session struct {

@@ -8,9 +8,8 @@ INSERT INTO services (
     listens,
     demand,
     local_only,
-    display_name,
-    trusted_origins
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    display_name
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (name) DO UPDATE SET
     kind = excluded.kind,
     target = excluded.target,
@@ -19,17 +18,16 @@ ON CONFLICT (name) DO UPDATE SET
     listens = excluded.listens,
     demand = excluded.demand,
     display_name = excluded.display_name,
-    local_only = excluded.local_only,
-    trusted_origins = excluded.trusted_origins
-RETURNING name, kind, target, isolate, listens, demand, local_only, display_name, private_host, trusted_origins;
+    local_only = excluded.local_only
+RETURNING name, kind, target, isolate, listens, demand, local_only, display_name, private_host;
 
 -- name: GetService :one
-SELECT name, kind, target, isolate, listens, demand, local_only, display_name, private_host, trusted_origins
+SELECT name, kind, target, isolate, listens, demand, local_only, display_name, private_host
 FROM services
 WHERE name = ?;
 
 -- name: ListServices :many
-SELECT name, kind, target, isolate, listens, demand, local_only, display_name, private_host, trusted_origins
+SELECT name, kind, target, isolate, listens, demand, local_only, display_name, private_host
 FROM services
 ORDER BY name;
 
