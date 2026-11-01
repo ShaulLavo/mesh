@@ -3,6 +3,12 @@
 Read [CLAUDE.md](CLAUDE.md) before working here. Its working agreement, invariants,
 conventions and verification requirements remain binding.
 
+## Service access
+
+Mesh services are always tailnet-only. No public origin, public client, or public
+port may reach any Mesh service. Do not add public serving, CORS or public-origin
+bypasses, reverse tunnels, or any other public exposure.
+
 ## Copy
 
 - Say what a thing is and does. Use plain words. Avoid "rather than", "instead of"
