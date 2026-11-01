@@ -53,7 +53,8 @@ type demandManager struct {
 	// its start. Tests use it to let that start finish first; nil otherwise.
 	entered func()
 	// cleanupRetry is demandCleanupRetry, shortened by tests.
-	cleanupRetry time.Duration
+	cleanupRetry  time.Duration
+	adoptionRetry time.Duration
 
 	mu        sync.Mutex
 	routes    map[string]*demandRoute
@@ -77,7 +78,7 @@ func newDemandManager(ctx context.Context, sessions demandSessions, report func(
 	}
 	return &demandManager{
 		ctx: ctx, sessions: sessions, report: report, logger: log.Default(),
-		bind: bindLoopback, dial: dialUpstream, holder: portHolder, poll: demandPollInterval, cleanupRetry: demandCleanupRetry,
+		bind: bindLoopback, dial: dialUpstream, holder: portHolder, poll: demandPollInterval, cleanupRetry: demandCleanupRetry, adoptionRetry: demandSuperviseInterval,
 		routes: make(map[string]*demandRoute), listeners: make(map[uint16]*demandListener),
 		retiring: make(map[string]*demandRoute),
 	}
@@ -305,6 +306,7 @@ func (m *demandManager) supervise() {
 	for _, route := range routes {
 		route.checkSession()
 		route.retryCleanup()
+		route.retryAdoption()
 	}
 }
 
