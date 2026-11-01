@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -49,6 +50,9 @@ func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer,
 	}
 	if preview.Service.Name != service.Name || preview.Service.PrivateHost != service.PrivateHost || preview.Service.Isolate != service.Isolate || service.Kind != "" && preview.Service.Kind != service.Kind {
 		return protocol.ServicePreview{}, "", fmt.Errorf("host %s changed service semantics in its preview", HostLabel(host))
+	}
+	if !slices.Equal(preview.Service.TrustedOrigins, service.TrustedOrigins) {
+		return protocol.ServicePreview{}, "", fmt.Errorf("host %s changed trusted origins in its preview", HostLabel(host))
 	}
 	if err := validatePreviewInference(service, preview.Service); err != nil {
 		return protocol.ServicePreview{}, "", fmt.Errorf("host %s returned an invalid service preview: %w", HostLabel(host), err)

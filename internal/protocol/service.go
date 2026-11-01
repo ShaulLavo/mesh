@@ -15,7 +15,8 @@ func ServiceFromInfo(info ServiceInfo) meshserve.Service {
 		Kind:        meshserve.Kind(info.Kind),
 		Target:      info.Target,
 
-		PrivateHost: info.PrivateHost,
+		PrivateHost:    info.PrivateHost,
+		TrustedOrigins: append([]string(nil), info.TrustedOrigins...),
 
 		Isolate:   info.Isolate,
 		LocalOnly: info.LocalOnly,
@@ -46,7 +47,8 @@ func ServiceDefinitionInfo(service meshserve.Service) ServiceInfo {
 		Kind:        string(service.Kind),
 		Target:      service.Target,
 
-		PrivateHost: service.PrivateHost,
+		PrivateHost:    service.PrivateHost,
+		TrustedOrigins: append([]string(nil), service.TrustedOrigins...),
 
 		Isolate:   service.Isolate,
 		LocalOnly: service.LocalOnly,

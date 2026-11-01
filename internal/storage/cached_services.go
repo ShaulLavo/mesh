@@ -141,6 +141,10 @@ func cachedServiceParams(cached CachedService) (dbsqlc.UpsertCachedServiceParams
 	if cached.Healthy && cached.Problem != "" {
 		return dbsqlc.UpsertCachedServiceParams{}, fmt.Errorf("storage: healthy cached service %s has a problem", service.Name)
 	}
+	trustedOrigins, err := encodeTrustedOrigins(service.TrustedOrigins)
+	if err != nil {
+		return dbsqlc.UpsertCachedServiceParams{}, fmt.Errorf("storage: cached service %s trusted origins: %w", service.Name, err)
+	}
 	observedAt, err := timeMillis("cached service observation", cached.ObservedAt)
 	if err != nil {
 		return dbsqlc.UpsertCachedServiceParams{}, err
@@ -149,11 +153,16 @@ func cachedServiceParams(cached CachedService) (dbsqlc.UpsertCachedServiceParams
 		DisplayName: service.DisplayName,
 		HostID:      string(cached.HostID), PrivateName: cached.PrivateName, Name: service.Name, Kind: string(service.Kind), Target: service.Target,
 		PrivateHost: service.PrivateHost, Healthy: boolInt64(cached.Healthy),
-		Problem: cached.Problem, ObservedAt: observedAt, Isolate: boolInt64(service.Isolate),
+		Problem: cached.Problem, ObservedAt: observedAt, Isolate: boolInt64(service.Isolate), TrustedOrigins: trustedOrigins,
 	}, nil
 }
 
 func cachedServiceFromRow(row dbsqlc.CachedService) (CachedService, error) {
+	trustedOrigins, err := decodeTrustedOrigins(row.TrustedOrigins)
+	if err != nil {
+		return CachedService{}, err
+	}
+
 	isolate, err := sqliteBool("isolate", row.Isolate)
 	if err != nil {
 		return CachedService{}, err
@@ -167,7 +176,7 @@ func cachedServiceFromRow(row dbsqlc.CachedService) (CachedService, error) {
 		HostID: HostID(row.HostID), PrivateName: row.PrivateName,
 		Service: meshserve.Service{
 			DisplayName: row.DisplayName, Name: row.Name, Kind: meshserve.Kind(row.Kind), Target: row.Target,
-			PrivateHost: row.PrivateHost, Isolate: isolate,
+			PrivateHost: row.PrivateHost, TrustedOrigins: trustedOrigins, Isolate: isolate,
 		},
 		Healthy: healthy, Problem: row.Problem, ObservedAt: time.UnixMilli(row.ObservedAt).UTC(),
 	}

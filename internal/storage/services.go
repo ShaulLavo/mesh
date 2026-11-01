@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	meshserve "github.com/shaul/mesh/internal/serve"
@@ -21,6 +23,10 @@ func (s *Store) UpsertService(ctx context.Context, service meshserve.Service) (m
 	if err != nil {
 		return meshserve.Service{}, fmt.Errorf("storage: upsert service %s: %w", normalized.Name, err)
 	}
+	trustedOrigins, err := encodeTrustedOrigins(normalized.TrustedOrigins)
+	if err != nil {
+		return meshserve.Service{}, fmt.Errorf("storage: upsert service %s: %w", normalized.Name, err)
+	}
 	row, err := s.queries.UpsertService(ctx, dbsqlc.UpsertServiceParams{
 		Name:        normalized.Name,
 		DisplayName: normalized.DisplayName,
@@ -32,7 +38,7 @@ func (s *Store) UpsertService(ctx context.Context, service meshserve.Service) (m
 		Isolate:   boolInt64(normalized.Isolate),
 		Listens:   listens,
 		Demand:    demand,
-		LocalOnly: boolInt64(normalized.LocalOnly),
+		LocalOnly: boolInt64(normalized.LocalOnly), TrustedOrigins: trustedOrigins,
 	})
 	if err != nil {
 		return meshserve.Service{}, fmt.Errorf("storage: upsert service %s: %w", normalized.Name, err)
@@ -94,13 +100,17 @@ func serviceFromRow(row dbsqlc.Service) (meshserve.Service, error) {
 	if err != nil {
 		return meshserve.Service{}, fmt.Errorf("storage: decode service %s: %w", row.Name, err)
 	}
+	trustedOrigins, err := decodeTrustedOrigins(row.TrustedOrigins)
+	if err != nil {
+		return meshserve.Service{}, fmt.Errorf("storage: decode service %s trusted origins: %w", row.Name, err)
+	}
 	service := meshserve.Service{
 		Name:        row.Name,
 		DisplayName: row.DisplayName,
 		Kind:        meshserve.Kind(row.Kind),
 		Target:      row.Target,
 
-		PrivateHost: row.PrivateHost,
+		PrivateHost: row.PrivateHost, TrustedOrigins: trustedOrigins,
 
 		Isolate:   isolate,
 		LocalOnly: localOnly,
@@ -113,6 +123,42 @@ func serviceFromRow(row dbsqlc.Service) (meshserve.Service, error) {
 		return meshserve.Service{}, fmt.Errorf("storage: decode service %s: %w", row.Name, err)
 	}
 	return service, nil
+}
+
+func encodeTrustedOrigins(origins []string) (string, error) {
+	if len(origins) == 0 {
+		return "", nil
+	}
+	normalized, err := meshserve.NormalizeTrustedOrigins(origins)
+	if err != nil {
+		return "", fmt.Errorf("normalize trusted origins: %w", err)
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return "", fmt.Errorf("encode trusted origins: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func decodeTrustedOrigins(value string) ([]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	var origins []string
+	if err := json.Unmarshal([]byte(value), &origins); err != nil {
+		return nil, fmt.Errorf("trusted origins: %w", err)
+	}
+	if origins == nil {
+		return nil, errors.New("trusted origins must be an array")
+	}
+	normalized, err := meshserve.NormalizeTrustedOrigins(origins)
+	if err != nil {
+		return nil, fmt.Errorf("normalize trusted origins: %w", err)
+	}
+	if !slices.Equal(origins, normalized) {
+		return nil, errors.New("trusted origins are not canonical")
+	}
+	return slices.Clone(normalized), nil
 }
 
 func boolInt64(value bool) int64 {
