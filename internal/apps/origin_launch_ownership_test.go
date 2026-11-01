@@ -36,6 +36,7 @@ type ownershipWorkers struct {
 	afterStart       func(context.Context, string, string)
 	waitFor          func(context.Context) (int, error)
 	beforeForget     func(string)
+	beforeRelease    func(string, string)
 }
 
 func ownershipFixture(t *testing.T) (*appFixture, *ownershipWorkers) {
@@ -122,8 +123,11 @@ func (w *ownershipWorkers) Release(ctx context.Context, id, marker string) error
 	w.lock.Lock()
 	w.releases = append(w.releases, marker)
 	w.events = append(w.events, "release "+id)
-	err := w.releaseErr
+	err, hook := w.releaseErr, w.beforeRelease
 	w.lock.Unlock()
+	if hook != nil {
+		hook(id, marker)
+	}
 	if err != nil {
 		return err
 	}
@@ -476,10 +480,101 @@ func TestLaunchOwnershipRecordSaveFailure(t *testing.T) {
 	}
 }
 func TestLaunchOwnershipEndedSaveFaults(t *testing.T) {
+	t.Run("ended-same-process", ownershipEndedSaveRetry)
+	for _, before := range []bool{true, false} {
+		t.Run(fmt.Sprintf("removal-immediate-reopen-before-%t", before), func(t *testing.T) { ownershipRemovalReopen(t, before) })
+	}
 	for _, phase := range []string{"ended", "removal", "release"} {
 		t.Run(phase, func(t *testing.T) { ownershipFaultPhase(t, phase) })
 	}
 }
+func ownershipEndedSaveRetry(t *testing.T) {
+	f, w := ownershipFixture(t)
+	app := createStaticApp(t, f)
+	claim := startOwnership(t, f, app.ID, "app-setup "+app.ID)
+	f.origin.config.Store = &ownershipFaultStore{memoryAppStore: f.originStore, before: true, fail: func(s originState) bool {
+		claims := s.Launched[app.ID]
+		return len(claims) == 1 && claims[0].Ended
+	}}
+	if err := f.origin.stop(context.Background(), app.ID); err == nil {
+		t.Fatal("failed ended save was accepted")
+	}
+	memory, durable := f.origin.claims(app.ID, claim.Label), savedOwnership(t, f).Launched[app.ID]
+	if len(memory) != 1 || !memory[0].Ended || memory[0].Token != claim.Token {
+		t.Fatalf("in-memory completion lost: %+v", memory)
+	}
+	if len(durable) != 1 || durable[0] != claim {
+		t.Fatalf("failed ended write changed running durable claim: %+v", durable)
+	}
+	if marker, err := w.Owner(context.Background(), claim.ID); err != nil || marker != claim.marker() || len(w.releases) != 0 {
+		t.Fatalf("failed ended write released its pin: %q %v, releases %v", marker, err, w.releases)
+	}
+	w.beforeRelease = func(id, marker string) {
+		claims := savedOwnership(t, f).Launched[app.ID]
+		ended := claim
+		ended.Ended = true
+		if id != claim.ID || marker != claim.marker() || len(claims) != 1 || claims[0] != ended {
+			t.Errorf("release preceded acknowledged complete ended state: %q %q %+v", id, marker, claims)
+		}
+	}
+	stops := len(w.stops)
+	if err := f.origin.stop(context.Background(), app.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.stops) != stops || len(w.releases) != 1 {
+		t.Fatalf("same-process retry repeated Stop or missed Release: stops %v releases %v", w.stops, w.releases)
+	}
+	assertNoClaims(t, f, app.ID)
+}
+
+func ownershipRemovalReopen(t *testing.T, before bool) {
+	f, w := ownershipFixture(t)
+	app := createStaticApp(t, f)
+	claim := startOwnership(t, f, app.ID, "app-setup "+app.ID)
+	f.origin.config.Store = &ownershipFaultStore{memoryAppStore: f.originStore, before: before, fail: func(s originState) bool {
+		return len(s.Launched[app.ID]) == 0
+	}}
+	if err := f.origin.stop(context.Background(), app.ID); err == nil {
+		t.Fatal("failed removal save was accepted")
+	}
+	ended := claim
+	ended.Ended = true
+	if memory := f.origin.claims(app.ID, claim.Label); len(memory) != 1 || memory[0] != ended {
+		t.Fatalf("removal fault lost the in-memory exact ended claim: %+v", memory)
+	}
+	durable := savedOwnership(t, f).Launched[app.ID]
+	if before && (len(durable) != 1 || durable[0] != ended) {
+		t.Fatalf("failed removal write did not retain complete durable end: %+v", durable)
+	}
+	if !before && len(durable) != 0 {
+		t.Fatalf("lost removal acknowledgement did not commit removal: %+v", durable)
+	}
+	if _, err := w.Owner(context.Background(), claim.ID); !errors.Is(err, ErrNoOwner) || len(w.releases) != 1 {
+		t.Fatalf("removal fault did not follow actual pin release: %v, releases %v", err, w.releases)
+	}
+	replacement := claim.Label + "\nffffffffffffffffffffffffffffffff"
+	w.fakeWorkers.mu.Lock()
+	w.fakeWorkers.owners[claim.ID] = replacement
+	w.fakeWorkers.mu.Unlock()
+	stops := len(w.stops)
+	reopenOwnership(t, f, w)
+	if err := f.origin.stop(context.Background(), app.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.stops) != stops {
+		t.Fatalf("reopened completion stopped a replacement: %v", w.stops)
+	}
+	if marker, err := w.Owner(context.Background(), claim.ID); err != nil || marker != replacement {
+		t.Fatalf("reopened completion unpinned replacement: %q %v", marker, err)
+	}
+	for _, marker := range w.releases {
+		if marker != claim.marker() {
+			t.Fatalf("completion released a different marker: %q", marker)
+		}
+	}
+	assertNoClaims(t, f, app.ID)
+}
+
 func ownershipFaultPhase(t *testing.T, phase string) {
 	for _, before := range []bool{true, false} {
 		t.Run(fmt.Sprintf("before-%t", before), func(t *testing.T) { ownershipCompletionFault(t, phase, before) })
@@ -715,6 +810,36 @@ func ownershipResult(t *testing.T, done <-chan error) error {
 }
 func TestLaunchOwnershipFencedSafetyStop(t *testing.T) {
 	t.Run("revoked-during-gate", ownershipRevokedGate)
+	t.Run("early-exit", func(t *testing.T) { ownershipFencedSafetyStop(t, true) })
+	t.Run("ordered-success", func(t *testing.T) { ownershipFencedSafetyStop(t, false) })
+}
+
+func startOwnershipActor(actors *[]<-chan struct{}, run func() error) <-chan error {
+	result, joined := make(chan error, 1), make(chan struct{})
+	*actors = append(*actors, joined)
+	go func() {
+		defer close(joined)
+		result <- run()
+	}()
+	return result
+}
+
+func joinOwnershipActors(t *testing.T, actors []<-chan struct{}) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for _, actor := range actors {
+		select {
+		case <-actor:
+		case <-deadline.C:
+			t.Errorf("fence cleanup did not join all %d actors", len(actors))
+			return
+		}
+	}
+	t.Logf("fence cleanup joined all %d started actors", len(actors))
+}
+
+func ownershipFencedSafetyStop(t *testing.T, earlyExit bool) {
 	f, w := ownershipFixture(t)
 	app := createStaticApp(t, f)
 	f.origin.yieldBudget = 20 * time.Millisecond
@@ -723,10 +848,14 @@ func TestLaunchOwnershipFencedSafetyStop(t *testing.T) {
 	enteredJoin, releaseJoin := make(chan struct{}), make(chan struct{})
 	var waitOnce, stopCalls atomic.Int32
 	var closeWait, closeStop, closeJoin sync.Once
+	ctx, cancelActors := context.WithCancel(context.Background())
+	var actors []<-chan struct{}
 	t.Cleanup(func() {
+		cancelActors()
 		closeWait.Do(func() { close(releaseWait) })
 		closeStop.Do(func() { close(releaseStop) })
 		closeJoin.Do(func() { close(releaseJoin) })
+		joinOwnershipActors(t, actors)
 	})
 	w.waitFor = func(ctx context.Context) (int, error) {
 		if waitOnce.Add(1) != 1 {
@@ -747,11 +876,10 @@ func TestLaunchOwnershipFencedSafetyStop(t *testing.T) {
 		}
 	}
 	upload, digest := uploadSource(t, f, updatedSourceFixture(t))
-	updateA := make(chan error, 1)
-	go func() {
-		_, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: app.ID, Kind: "static", Setup: "setup", UploadID: upload, Digest: digest})
-		updateA <- err
-	}()
+	updateA := startOwnershipActor(&actors, func() error {
+		_, err := f.origin.Handle(ctx, Request{Action: "update", ID: app.ID, Kind: "static", Setup: "setup", UploadID: upload, Digest: digest})
+		return err
+	})
 	waitOwnershipSignal(t, enteredWait)
 	var offline atomic.Bool
 	offline.Store(true)
@@ -765,11 +893,9 @@ func TestLaunchOwnershipFencedSafetyStop(t *testing.T) {
 	if err := f.origin.modify(context.Background(), app.ID, func(a *localApp) { a.Record.LeaseUntil = f.now.Add(-time.Second) }); err != nil {
 		t.Fatal(err)
 	}
-	safety := make(chan error, 1)
-	go func() { safety <- f.origin.Sync(context.Background()) }()
+	safety := startOwnershipActor(&actors, func() error { return f.origin.Sync(ctx) })
 	waitOwnershipSignal(t, enteredStop)
-	join := make(chan error, 1)
-	go func() { join <- f.origin.guardLapsed(context.Background(), app.ID) }()
+	join := startOwnershipActor(&actors, func() error { return f.origin.guardLapsed(ctx, app.ID) })
 	waitOwnershipSignal(t, enteredJoin)
 	if err := f.origin.drainEnded(context.Background(), app.ID); err == nil {
 		t.Fatal("release crossed safety fence")
@@ -792,15 +918,17 @@ func TestLaunchOwnershipFencedSafetyStop(t *testing.T) {
 	uploadB, digestB := uploadSource(t, f, updatedSourceFixture(t))
 	before := w.starts
 	portB := freePort(t)
-	updateB := make(chan error, 1)
-	go func() {
-		_, err := f.origin.Handle(context.Background(), Request{Action: "update", ID: app.ID, Kind: "server", Command: "serve", Port: portB, UploadID: uploadB, Digest: digestB})
-		updateB <- err
-	}()
+	updateB := startOwnershipActor(&actors, func() error {
+		_, err := f.origin.Handle(ctx, Request{Action: "update", ID: app.ID, Kind: "server", Command: "serve", Port: portB, UploadID: uploadB, Digest: digestB})
+		return err
+	})
 	select {
 	case err := <-updateB:
 		t.Fatalf("fresh update overtook safety stop: %v", err)
 	case <-time.After(30 * time.Millisecond):
+	}
+	if earlyExit {
+		return
 	}
 	closeStop.Do(func() { close(releaseStop) })
 	if err := ownershipResult(t, safety); err == nil {
