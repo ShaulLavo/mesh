@@ -166,7 +166,7 @@ func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, 
 			HostID: storage.HostID(host.ID), PrivateName: privateName,
 			Service: meshserve.Service{
 				DisplayName: validated.DisplayName, Name: validated.Name, Kind: meshserve.Kind(validated.Kind), Target: validated.Target,
-				PrivateHost: validated.PrivateHost, TrustedOrigins: append([]string(nil), validated.TrustedOrigins...), Isolate: validated.Isolate,
+				PrivateHost: validated.PrivateHost, Isolate: validated.Isolate,
 			},
 			Healthy: validated.Healthy, Problem: validated.Problem, ObservedAt: now,
 		}

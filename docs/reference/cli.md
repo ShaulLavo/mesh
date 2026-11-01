@@ -990,7 +990,6 @@ FLAGS
   --listen                    Public=Upstream: proxy 127.0.0.1:PUBLIC on the host to 127.0.0.1:UPSTREAM (repeatable)
   --privacy                   Mask personal data for recording and screen sharing (MESH_PRIVACY)
   --private-host              Private hostname at the root, using a label or a configured deployment hostname
-  --trust-origin              Exact browser origin allowed through a private service guard (repeatable)
   --ready-timeout             How long a starting --run holds connections before failing them (1m0s)
   --run                       Command that serves the port; started on the first connection, stopped when idle
 ```

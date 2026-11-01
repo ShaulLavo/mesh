@@ -1,10 +1,6 @@
 package cli
 
-import (
-	"slices"
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestHostingCommandSurfaceIsPrivate(t *testing.T) {
 	root := NewCommand(Dependencies{})
@@ -49,32 +45,5 @@ func TestHostingCommandSurfaceIsPrivate(t *testing.T) {
 	}
 	if un.Flags().Lookup("local-edge") != nil {
 		t.Fatal("unserve still exposes tunnel release")
-	}
-}
-
-func TestServeTrustOriginCanonicalizesAndClearsOnReservice(t *testing.T) {
-	host := setupCommandTestHost(t)
-	stdout, _, err := executeCommand(t, Dependencies{DialControl: host.dial}, "serve", "pc", "3301", "--at", "/relay", "--private-host", "relay", "--trust-origin", "HTTPS://bun-demo.sprockt.dev:443", "--trust-origin", "https://other.example/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(stdout, "trusted origins: https://bun-demo.sprockt.dev, https://other.example") {
-		t.Fatalf("serve output = %q", stdout)
-	}
-	host.mu.Lock()
-	if len(host.services) != 1 || !strings.EqualFold(host.services[0].PrivateHost, "relay.mesh.test") || !slices.Equal(host.services[0].TrustedOrigins, []string{"https://bun-demo.sprockt.dev", "https://other.example"}) {
-		got := host.services
-		host.mu.Unlock()
-		t.Fatalf("published service = %#v", got)
-	}
-	host.mu.Unlock()
-
-	if _, _, err := executeCommand(t, Dependencies{DialControl: host.dial}, "serve", "pc", "3302", "--at", "/relay"); err != nil {
-		t.Fatal(err)
-	}
-	host.mu.Lock()
-	defer host.mu.Unlock()
-	if len(host.services) != 1 || len(host.services[0].TrustedOrigins) != 0 || host.services[0].PrivateHost != "relay.mesh.test" {
-		t.Fatalf("reservice did not preserve private host and clear origins: %#v", host.services)
 	}
 }

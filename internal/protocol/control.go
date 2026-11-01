@@ -164,8 +164,7 @@ type ServiceInfo struct {
 	Kind        string `json:"kind"`
 	Target      string `json:"target"`
 
-	PrivateHost    string   `json:"privateHost,omitempty"`
-	TrustedOrigins []string `json:"trustedOrigins,omitempty"`
+	PrivateHost string `json:"privateHost,omitempty"`
 
 	Isolate       bool   `json:"isolate,omitempty"`
 	Healthy       bool   `json:"healthy"`
