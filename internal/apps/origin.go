@@ -1566,17 +1566,20 @@ func (o *Origin) Sync(ctx context.Context) error {
 	// Safety work must run even when the caller's budget is spent, because that
 	// is exactly when a silent edge lets leases lapse.
 	safety := context.WithoutCancel(ctx)
+	maintenance, cancel := context.WithTimeout(safety, maintenanceBudget)
+	expired := o.expireUploads(maintenance)
+	cancel()
 	if records == nil {
 		// Without an authoritative answer only lapsed leases are known, and a
-		// partition is not permission to delete anything.
+		// partition is not permission to delete managed app source.
 		ids := o.appIDs(nil)
-		return errors.Join(err, o.eachApp(safety, ids, o.guardLapsed), o.eachApp(safety, ids, o.checkServing))
+		return errors.Join(err, expired, o.eachApp(safety, ids, o.guardLapsed), o.eachApp(safety, ids, o.checkServing))
 	}
 	ids := o.appIDs(records)
 	denied := o.eachApp(safety, ids, func(ctx context.Context, id string) error { return o.enforce(ctx, id, records) })
 	recovered := o.eachApp(ctx, ids, func(ctx context.Context, id string) error { return o.recover(ctx, id, records) })
 	checked := o.eachApp(safety, ids, o.checkServing)
-	return errors.Join(err, denied, recovered, checked, o.expireUploads(ctx))
+	return errors.Join(err, expired, denied, recovered, checked)
 }
 
 // checkServing repeats the readiness listener check for a ready server app, so
@@ -1886,20 +1889,28 @@ func (o *Origin) settleReady(ctx context.Context, a localApp) error {
 	return nil
 }
 func (o *Origin) expireUploads(ctx context.Context) error {
+	if err := o.storageMounted(o.config.DataRoot); err != nil {
+		return fmt.Errorf("app: expire uploads: workload storage: %w", err)
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	var errs []error
 	for id, u := range o.state.Uploads {
-		if o.ops["upload "+id] == nil && !o.config.Now().Before(u.ExpiresAt) {
-			_ = os.Remove(o.uploadPath(id))
-			delete(o.state.Uploads, id)
+		if o.ops["upload "+id] != nil || o.config.Now().Before(u.ExpiresAt) {
+			continue
 		}
+		if err := os.Remove(o.uploadPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("app: remove expired upload %s: %w", id, err))
+			continue
+		}
+		delete(o.state.Uploads, id)
 	}
 	for id, failure := range o.state.Failures {
 		if !o.config.Now().Before(failure.ExpiresAt) {
 			delete(o.state.Failures, id)
 		}
 	}
-	return o.persist(ctx)
+	return errors.Join(append(errs, o.persist(ctx))...)
 }
 
 // downloadArchive is a snapshot of one app source that CLI downloads read a
