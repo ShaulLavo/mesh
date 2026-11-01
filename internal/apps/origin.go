@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,8 @@ import (
 )
 
 type Workers interface {
+	Owner(context.Context, string) (string, error)
+	Release(context.Context, string, string) error
 	Start(context.Context, string, string, string, []string) (string, error)
 	Stop(context.Context, string) error
 	Find(context.Context, string) (string, bool, error)
@@ -36,8 +39,32 @@ type Workers interface {
 	Processes(context.Context, string) ([]int, error)
 }
 
-// ErrSessionEnded means a worker's command exited, so its session has no
-// processes left to list.
+// ErrNoOwner means the reserved session or its owner marker is absent.
+var ErrNoOwner = errors.New("app: worker has no owner marker")
+
+// ParseWorkerOwner validates the complete private reservation marker.
+func ParseWorkerOwner(marker string) (string, string, error) {
+	label, token, ok := strings.Cut(marker, "\n")
+	if !ok || (!strings.HasPrefix(label, "app ") && !strings.HasPrefix(label, "app-setup ")) || len(token) != 32 {
+		return "", "", errors.New("app: malformed worker owner marker")
+	}
+	if _, err := hex.DecodeString(token); err != nil {
+		return "", "", fmt.Errorf("app: malformed worker owner token: %w", err)
+	}
+	return label, token, nil
+}
+
+type launchedWorker struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Token string `json:"token,omitempty"`
+	Gen   uint64 `json:"gen"`
+	Ended bool   `json:"ended,omitempty"`
+}
+
+func (w launchedWorker) marker() string { return w.Label + "\n" + w.Token }
+
+// ErrSessionEnded means the command exited and has no processes left to list.
 var ErrSessionEnded = errors.New("app: worker session ended")
 
 type OriginConfig struct {
@@ -126,12 +153,14 @@ type createReceipt struct {
 	Digest string `json:"digest"`
 }
 type originState struct {
-	Receipts map[string]createReceipt `json:"receipts"`
-	Apps     map[string]localApp      `json:"apps"`
-	Uploads  map[string]upload        `json:"uploads"`
-	Sequence uint64                   `json:"sequence"`
-	Pending  *Signed                  `json:"pending,omitempty"`
-	Failures map[string]SetupFailure  `json:"failures,omitempty"`
+	Launched  map[string][]launchedWorker `json:"launched,omitempty"`
+	LaunchSeq uint64                      `json:"launchSeq,omitempty"`
+	Receipts  map[string]createReceipt    `json:"receipts"`
+	Apps      map[string]localApp         `json:"apps"`
+	Uploads   map[string]upload           `json:"uploads"`
+	Sequence  uint64                      `json:"sequence"`
+	Pending   *Signed                     `json:"pending,omitempty"`
+	Failures  map[string]SetupFailure     `json:"failures,omitempty"`
 }
 
 // Setup failures are kept for the owner, bounded so a looping client cannot grow
@@ -170,7 +199,15 @@ type serviceHold struct{ ports []int }
 // another app's share.
 const maintenanceBudget = 15 * time.Second
 
+type appFence struct {
+	done  chan struct{}
+	users int
+}
+
 type Origin struct {
+	fences      map[string]*appFence
+	drains      map[string]chan struct{}
+	yieldBudget time.Duration
 	// mu guards state, ops and holds. It is held only to read or commit state,
 	// never across an edge exchange, a worker wait or unpacking, so one slow app
 	// cannot stall lease renewal, service registration or other apps.
@@ -206,7 +243,7 @@ func NewOrigin(ctx context.Context, c OriginConfig) (*Origin, error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	o := &Origin{config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, serving: map[string]serving{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}, downloads: map[string][]*downloadArchive{}, storageMounted: workloadStorageMounted}
+	o := &Origin{fences: map[string]*appFence{}, drains: map[string]chan struct{}{}, yieldBudget: yieldBudget, config: c, identity: base64.RawURLEncoding.EncodeToString(c.Key.Public().(ed25519.PublicKey)), state: originState{Receipts: map[string]createReceipt{}, Apps: map[string]localApp{}, Uploads: map[string]upload{}}, ops: map[string]*appOp{}, serving: map[string]serving{}, exchange: make(chan struct{}, 1), holds: map[*serviceHold]struct{}{}, admissions: map[string]*admissionCache{}, downloads: map[string][]*downloadArchive{}, storageMounted: workloadStorageMounted}
 	if err := load(ctx, c.Store, "apps.origin", &o.state); err != nil {
 		return nil, err
 	}
@@ -425,11 +462,21 @@ func (o *Origin) claimLocked(ctx context.Context, key, name string) (context.Con
 		close(op.done)
 	}
 }
+func (o *Origin) pendingLocked(key string) (<-chan struct{}, string) {
+	if fence := o.fences[strings.TrimPrefix(key, "app ")]; fence != nil && strings.HasPrefix(key, "app ") {
+		return fence.done, "safety stop"
+	}
+	if op := o.ops[key]; op != nil {
+		return op.done, op.name
+	}
+	return nil, ""
+}
+
 func (o *Origin) beginOp(ctx context.Context, key, name string) (context.Context, func(), error) {
 	for {
 		o.mu.Lock()
-		current := o.ops[key]
-		if current == nil {
+		done, pending := o.pendingLocked(key)
+		if done == nil {
 			opCtx, release := o.claimLocked(ctx, key, name)
 			o.mu.Unlock()
 			return opCtx, release, nil
@@ -437,50 +484,75 @@ func (o *Origin) beginOp(ctx context.Context, key, name string) (context.Context
 		o.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			return nil, nil, fmt.Errorf("%s: wait for %s: %w", key, current.name, ctx.Err())
-		case <-current.done:
+			return nil, nil, fmt.Errorf("%s: wait for %s: %w", key, pending, ctx.Err())
+		case <-done:
 		}
 	}
 }
 func (o *Origin) tryOp(key, name string) (func(), bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.ops[key] != nil {
+	if done, _ := o.pendingLocked(key); done != nil {
 		return nil, false
 	}
 	_, release := o.claimLocked(context.Background(), key, name)
 	return release, true
 }
 
-// preempt claims an app for safety work, revoking any operation that owns it
-// except a delete, and waiting up to yieldBudget for it to unwind. It fails
-// only when the operation does not yield; the caller may then stop workers but
-// not change the app's state.
-func (o *Origin) preempt(ctx context.Context, id, reason string) (func(), error) {
-	wait, cancel := context.WithTimeout(ctx, yieldBudget)
+// preempt either owns the app or registers safety work before the old operation
+// can yield. Its release keeps later operations out until the actual I/O returns.
+func (o *Origin) preempt(ctx context.Context, id, reason string) (func(), bool, error) {
+	wait, cancel := context.WithTimeout(ctx, o.yieldBudget)
 	defer cancel()
 	for {
-		if release, ok := o.tryOp("app "+id, "sync"); ok {
-			return release, nil
-		}
 		o.mu.Lock()
+		done, name := o.pendingLocked("app " + id)
+		if done == nil {
+			_, release := o.claimLocked(ctx, "app "+id, "sync")
+			o.mu.Unlock()
+			return release, true, nil
+		}
 		op := o.ops["app "+id]
-		// A delete is already doing the safety work; revoking it would only fail
-		// the owner's request.
 		if op != nil && op.revoked == "" && op.name != "delete" {
 			op.revoked = reason
 			op.cancel()
 		}
-		o.mu.Unlock()
-		if op == nil {
-			continue
+		if wait.Err() != nil {
+			release, drain := o.fenceLocked(id)
+			o.mu.Unlock()
+			return awaitAppDrain(release, drain), false, fmt.Errorf("app %s: %s did not yield after the app was %s: %w", id, name, reason, wait.Err())
 		}
+		o.mu.Unlock()
 		select {
-		case <-op.done:
+		case <-done:
 		case <-wait.Done():
-			return nil, fmt.Errorf("app %s: %s did not yield after the app was %s: %w", id, op.name, reason, wait.Err())
 		}
 	}
+}
+
+func awaitAppDrain(release func(), drain <-chan struct{}) func() {
+	if drain != nil {
+		<-drain
+	}
+	return release
+}
+
+func (o *Origin) fenceLocked(id string) (func(), <-chan struct{}) {
+	fence := o.fences[id]
+	if fence == nil {
+		fence = &appFence{done: make(chan struct{})}
+		o.fences[id] = fence
+	}
+	fence.users++
+	return func() {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		fence.users--
+		if fence.users == 0 {
+			delete(o.fences, id)
+			close(fence.done)
+		}
+	}, o.drains[id]
 }
 
 // startRefusal names why an app may not run now: its operation was revoked, or
@@ -505,16 +577,192 @@ func (o *Origin) start(ctx context.Context, id, label, command, root string, env
 	if reason := o.startRefusal(id); reason != "" {
 		return "", fmt.Errorf("app %s: not starting %s: app was %s", id, label, reason)
 	}
-	session, err := o.config.Workers.Start(ctx, label, command, root, env)
-	if err != nil {
-		return "", fmt.Errorf("app %s: start %s: %w", id, label, err)
+	if err := errors.Join(o.stopLaunched(ctx, id, label), o.drainEnded(ctx, id)); err != nil {
+		return "", err
 	}
 	if reason := o.startRefusal(id); reason != "" {
-		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maintenanceBudget)
-		defer cancel()
-		return "", errors.Join(fmt.Errorf("app %s: %s started after the app was %s", id, label, reason), o.config.Workers.Stop(stopCtx, session))
+		return "", fmt.Errorf("app %s: not starting %s: app was %s", id, label, reason)
+	}
+	session, launchErr := o.config.Workers.Start(ctx, label, command, root, env)
+	if session == "" {
+		if launchErr != nil {
+			return "", fmt.Errorf("app %s: start %s: %w", id, label, launchErr)
+		}
+		return "", fmt.Errorf("app %s: start %s returned no worker identity", id, label)
+	}
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), maintenanceBudget)
+	defer cancel()
+	claim, ownerErr := o.recordLaunch(recordCtx, id, session, label)
+	err := errors.Join(launchErr, ownerErr, ctx.Err())
+	if reason := o.startRefusal(id); reason != "" {
+		err = errors.Join(err, fmt.Errorf("app %s: %s started after the app was %s", id, label, reason), o.stopClaim(recordCtx, id, claim))
+	}
+	if err != nil {
+		return session, fmt.Errorf("app %s: start %s worker %s: %w", id, label, session, err)
 	}
 	return session, nil
+}
+
+func (o *Origin) recordLaunch(ctx context.Context, id, session, label string) (launchedWorker, error) {
+	marker, ownerErr := o.config.Workers.Owner(ctx, session)
+	return o.rememberLaunch(ctx, id, session, label, marker, ownerErr)
+}
+
+func (o *Origin) rememberLaunch(ctx context.Context, id, session, label, marker string, ownerErr error) (launchedWorker, error) {
+	foundLabel, token, parseErr := ParseWorkerOwner(marker)
+	if ownerErr == nil && (parseErr != nil || foundLabel != label) {
+		ownerErr = errors.Join(parseErr, fmt.Errorf("worker %s: unexpected owner for %s", session, label))
+	}
+	if ownerErr != nil {
+		token = ""
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.state.Launched == nil {
+		o.state.Launched = map[string][]launchedWorker{}
+	}
+	for _, claim := range o.state.Launched[id] {
+		if claim.ID == session && claim.Label == label {
+			return claim, ownerErr
+		}
+	}
+	o.state.LaunchSeq++
+	claim := launchedWorker{ID: session, Label: label, Token: token, Gen: o.state.LaunchSeq}
+	o.state.Launched[id] = append(o.state.Launched[id], claim)
+	return claim, errors.Join(ownerErr, o.persist(ctx))
+}
+
+func (o *Origin) claims(id, label string) []launchedWorker {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return slices.DeleteFunc(slices.Clone(o.state.Launched[id]), func(w launchedWorker) bool { return label != "" && w.Label != label })
+}
+
+func (o *Origin) claimIndexLocked(id string, claim launchedWorker) int {
+	return slices.IndexFunc(o.state.Launched[id], func(w launchedWorker) bool { return w.ID == claim.ID && w.Gen == claim.Gen })
+}
+
+func (o *Origin) removeClaimLocked(id string, claim launchedWorker) {
+	index := o.claimIndexLocked(id, claim)
+	if index < 0 {
+		return
+	}
+	o.state.Launched[id] = slices.Delete(o.state.Launched[id], index, index+1)
+	if len(o.state.Launched[id]) == 0 {
+		delete(o.state.Launched, id)
+	}
+}
+
+// boundClaim records the first complete marker on this exact generation. Missing
+// identity is never exit proof; a different complete identity cannot be stopped.
+func (o *Origin) boundClaim(ctx context.Context, id string, claim launchedWorker) (launchedWorker, bool, error) {
+	marker, err := o.config.Workers.Owner(ctx, claim.ID)
+	if err != nil {
+		return claim, false, fmt.Errorf("app %s: worker %s identity cannot be proved: %w", id, claim.ID, err)
+	}
+	label, token, err := ParseWorkerOwner(marker)
+	if err != nil {
+		return claim, false, err
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	index := o.claimIndexLocked(id, claim)
+	if index < 0 {
+		return claim, false, errors.New("app: worker claim changed")
+	}
+	current := &o.state.Launched[id][index]
+	if label != current.Label || (current.Token != "" && token != current.Token) {
+		old := *current
+		o.removeClaimLocked(id, old)
+		if err := o.persist(ctx); err != nil {
+			o.state.Launched[id] = append(o.state.Launched[id], old)
+			return claim, false, err
+		}
+		return claim, false, nil
+	}
+	current.Token = token
+	return *current, true, nil
+}
+
+func (o *Origin) markEnded(id string, claim launchedWorker) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if index := o.claimIndexLocked(id, claim); index >= 0 {
+		o.state.Launched[id][index].Ended = true
+	}
+}
+
+func (o *Origin) stopClaim(ctx context.Context, id string, claim launchedWorker) error {
+	if claim.Ended {
+		return nil
+	}
+	bound, same, err := o.boundClaim(ctx, id, claim)
+	if err != nil || !same {
+		return err
+	}
+	if err := o.config.Workers.Stop(ctx, bound.ID); err != nil {
+		return fmt.Errorf("app %s: stop %s worker %s: %w", id, bound.Label, bound.ID, err)
+	}
+	o.markEnded(id, bound)
+	return nil
+}
+
+func (o *Origin) stopLaunched(ctx context.Context, id, label string) error {
+	var errs []error
+	for _, claim := range o.claims(id, label) {
+		errs = append(errs, o.stopClaim(ctx, id, claim))
+	}
+	return errors.Join(errs...)
+}
+
+// drainEnded is called only by the app-operation holder. The admission barrier
+// excludes safety registration through Release and both persistence acknowledgements.
+func (o *Origin) drainEnded(ctx context.Context, id string) error {
+	o.mu.Lock()
+	if o.fences[id] != nil {
+		o.mu.Unlock()
+		return fmt.Errorf("app %s: worker completion waits for safety stop", id)
+	}
+	done := make(chan struct{})
+	o.drains[id] = done
+	o.mu.Unlock()
+	defer func() {
+		o.mu.Lock()
+		delete(o.drains, id)
+		close(done)
+		o.mu.Unlock()
+	}()
+	var errs []error
+	for _, claim := range o.claims(id, "") {
+		if !claim.Ended {
+			continue
+		}
+		errs = append(errs, o.completeClaim(ctx, id, claim))
+	}
+	return errors.Join(errs...)
+}
+
+func (o *Origin) completeClaim(ctx context.Context, id string, claim launchedWorker) error {
+	if claim.Token == "" {
+		return fmt.Errorf("app %s: ended worker %s has no complete owner", id, claim.ID)
+	}
+	o.mu.Lock()
+	err := o.persist(ctx)
+	o.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("app %s: save ended worker %s: %w", id, claim.ID, err)
+	}
+	if err := o.config.Workers.Release(ctx, claim.ID, claim.marker()); err != nil {
+		return fmt.Errorf("app %s: release worker %s: %w", id, claim.ID, err)
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.removeClaimLocked(id, claim)
+	if err := o.persist(ctx); err != nil {
+		o.state.Launched[id] = append(o.state.Launched[id], claim)
+		return fmt.Errorf("app %s: save completed worker %s: %w", id, claim.ID, err)
+	}
+	return nil
 }
 
 func (o *Origin) lockExchange(ctx context.Context) error {
@@ -1156,8 +1404,11 @@ func (o *Origin) runSetup(ctx context.Context, q Request, a localApp, candidate 
 			return err
 		}
 	}
-	if err := o.waitSetup(ctx, session); err != nil {
+	if err := o.waitSetup(ctx, id, session); err != nil {
 		return o.recordSetupFailure(ctx, id, q.UploadID, session, err)
+	}
+	if err := o.drainEnded(ctx, id); err != nil {
+		return err
 	}
 	o.config.Workers.Forget(ctx, "app-setup "+id)
 	return nil
@@ -1217,11 +1468,17 @@ func (o *Origin) activate(ctx context.Context, a localApp) (Result, error) {
 	return result, o.finishActivation(ctx, a, *result.App)
 }
 func (o *Origin) ensureServer(ctx context.Context, a *localApp) error {
+	if err := o.drainEnded(ctx, a.Record.ID); err != nil {
+		return err
+	}
 	session, alive, err := o.config.Workers.Find(ctx, "app "+a.Record.ID)
 	if err != nil {
 		return err
 	}
 	if !alive {
+		if err := errors.Join(o.stopLaunched(ctx, a.Record.ID, "app "+a.Record.ID), o.drainEnded(ctx, a.Record.ID)); err != nil {
+			return err
+		}
 		if err := ProbePortAvailable(a.Port); err != nil {
 			return err
 		}
@@ -1244,14 +1501,8 @@ func (o *Origin) environment(a localApp) []string {
 	env := append([]string{}, a.Env...)
 	return append(env, "PORT="+fmt.Sprint(a.Port), "HOST=127.0.0.1", "XDG_CACHE_HOME="+filepath.Join(a.Root, ".cache"), "npm_config_cache="+filepath.Join(a.Root, ".cache", "npm"), "PIP_CACHE_DIR="+filepath.Join(a.Root, ".cache", "pip"), "UV_CACHE_DIR="+filepath.Join(a.Root, ".cache", "uv"))
 }
-func (o *Origin) waitSetup(ctx context.Context, id string) error {
-	waiter, ok := o.config.Workers.(interface {
-		Wait(context.Context, string) (int, error)
-	})
-	if !ok {
-		return errors.New("app: worker completion unavailable")
-	}
-	code, err := waiter.Wait(ctx, id)
+func (o *Origin) waitSetup(ctx context.Context, id, session string) error {
+	code, err := o.waitClaim(ctx, id, session)
 	if err != nil {
 		return err
 	}
@@ -1259,6 +1510,35 @@ func (o *Origin) waitSetup(ctx context.Context, id string) error {
 		return fmt.Errorf("app: setup exited %d", code)
 	}
 	return nil
+}
+
+func (o *Origin) waitClaim(ctx context.Context, id, session string) (int, error) {
+	claims := o.claims(id, "")
+	index := slices.IndexFunc(claims, func(w launchedWorker) bool { return w.ID == session && !w.Ended })
+	if index < 0 {
+		return -1, fmt.Errorf("app %s: worker %s has no running claim", id, session)
+	}
+	claim, same, err := o.boundClaim(ctx, id, claims[index])
+	if err != nil {
+		return -1, err
+	}
+	if !same {
+		return -1, fmt.Errorf("app %s: worker %s owner changed", id, session)
+	}
+	waiter, ok := o.config.Workers.(interface {
+		Wait(context.Context, string) (int, error)
+	})
+	if !ok {
+		return -1, errors.New("app: worker completion unavailable")
+	}
+	code, err := waiter.Wait(ctx, session)
+	if err == nil {
+		o.markEnded(id, claim)
+	}
+	if err != nil {
+		return code, fmt.Errorf("app %s: wait for worker %s: %w", id, session, err)
+	}
+	return code, nil
 }
 
 // awaitServer waits for the app's worker to listen on its port, then records
@@ -1277,7 +1557,7 @@ func (o *Origin) awaitServer(ctx context.Context, id, session string, port int) 
 			return nil
 		}
 		if errors.Is(err, ErrSessionEnded) {
-			return fmt.Errorf("app %s: %w", id, o.serverExit(ctx, session))
+			return fmt.Errorf("app %s: %w", id, o.serverExit(ctx, id, session))
 		}
 		if !errors.Is(err, errNoListener) {
 			return fmt.Errorf("app %s: %w", id, err)
@@ -1292,14 +1572,10 @@ func (o *Origin) awaitServer(ctx context.Context, id, session string, port int) 
 
 // serverExit explains a server that exited before it listened, with its exit
 // status and last output, so the owner sees why without reading worker logs.
-func (o *Origin) serverExit(ctx context.Context, session string) error {
+func (o *Origin) serverExit(ctx context.Context, id, session string) error {
 	err := errors.New("app: server exited during startup")
-	if waiter, ok := o.config.Workers.(interface {
-		Wait(context.Context, string) (int, error)
-	}); ok {
-		if code, waitErr := waiter.Wait(ctx, session); waitErr == nil {
-			err = fmt.Errorf("app: server exited %d during startup", code)
-		}
+	if code, waitErr := o.waitClaim(ctx, id, session); waitErr == nil {
+		err = fmt.Errorf("app: server exited %d during startup", code)
 	}
 	if output := o.workerOutput(ctx, session); output != "" {
 		err = fmt.Errorf("%w; last server output:\n%s", err, output)
@@ -1388,9 +1664,12 @@ func (o *Origin) resolveCandidate(ctx context.Context, id string) error {
 		labels = append(labels, "app "+id)
 	}
 	for _, label := range labels {
-		if err := o.stopLabel(ctx, label); err != nil {
+		if err := o.stopLabel(ctx, id, label); err != nil {
 			return fmt.Errorf("app %s: roll back update %s: %w", id, c.UploadID, err)
 		}
+	}
+	if err := o.drainEnded(ctx, id); err != nil {
+		return err
 	}
 	if err := o.removeWorkload(c.Root); err != nil {
 		return fmt.Errorf("app %s: remove update %s: %w", id, c.UploadID, err)
@@ -1461,6 +1740,10 @@ func (o *Origin) workerOutput(ctx context.Context, session string) string {
 // stop ends only the app's own labelled workers; ordinary sessions never carry
 // these labels.
 func (o *Origin) stop(ctx context.Context, id string) error {
+	return errors.Join(o.stopWorkers(ctx, id), o.drainEnded(ctx, id))
+}
+
+func (o *Origin) stopWorkers(ctx context.Context, id string) error {
 	// Whatever listens on the port once the worker is gone is not the app.
 	o.setServing(id, serving{})
 	// A worker can outlive its local record, so search by label regardless. The
@@ -1470,7 +1753,7 @@ func (o *Origin) stop(ctx context.Context, id string) error {
 	errs := make([]error, len(labels))
 	var wg sync.WaitGroup
 	for i, label := range labels {
-		wg.Go(func() { errs[i] = o.stopLabel(ctx, label) })
+		wg.Go(func() { errs[i] = o.stopLabel(ctx, id, label) })
 	}
 	wg.Wait()
 	if errs[0] == nil {
@@ -1483,18 +1766,31 @@ func (o *Origin) stop(ctx context.Context, id string) error {
 	}
 	return errors.Join(errs...)
 }
-func (o *Origin) stopLabel(ctx context.Context, label string) error {
+func (o *Origin) stopLabel(ctx context.Context, id, label string) error {
+	claims := o.claims(id, label)
+	stopErr := o.stopLaunched(ctx, id, label)
 	session, alive, err := o.config.Workers.Find(ctx, label)
 	if err != nil {
-		return fmt.Errorf("find %s worker: %w", label, err)
+		return errors.Join(stopErr, fmt.Errorf("find %s worker: %w", label, err))
 	}
-	if !alive {
-		return nil
+	handled := slices.ContainsFunc(claims, func(w launchedWorker) bool { return w.ID == session })
+	if !alive || handled {
+		return stopErr
 	}
-	if err := o.config.Workers.Stop(ctx, session); err != nil {
-		return fmt.Errorf("stop %s worker %s: %w", label, session, err)
+	marker, ownerErr := o.config.Workers.Owner(ctx, session)
+	if ownerErr == nil {
+		ownerLabel, _, parseErr := ParseWorkerOwner(marker)
+		if parseErr != nil {
+			ownerErr = parseErr
+		} else if ownerLabel != label {
+			return stopErr
+		}
 	}
-	return nil
+	claim, err := o.rememberLaunch(ctx, id, session, label, marker, ownerErr)
+	if err != nil {
+		return errors.Join(stopErr, err)
+	}
+	return errors.Join(stopErr, o.stopClaim(ctx, id, claim))
 }
 func (o *Origin) cleanup(ctx context.Context, id string) error {
 	if !storedID(id) {
@@ -1510,17 +1806,21 @@ func (o *Origin) cleanup(ctx context.Context, id string) error {
 	if err := o.removeAppFiles(id); err != nil {
 		return err
 	}
-	o.config.Workers.Forget(ctx, "app "+id)
-	o.config.Workers.Forget(ctx, "app-setup "+id)
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	delete(o.state.Apps, id)
 	for token, receipt := range o.state.Receipts {
 		if receipt.Record.ID == id {
 			delete(o.state.Receipts, token)
 		}
 	}
-	return o.persist(ctx)
+	err := o.persist(ctx)
+	o.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	o.config.Workers.Forget(ctx, "app "+id)
+	o.config.Workers.Forget(ctx, "app-setup "+id)
+	return nil
 }
 
 // removeAppFiles deletes the app's managed directory. A missing workload root
@@ -1593,6 +1893,9 @@ func (o *Origin) checkServing(ctx context.Context, id string) error {
 		return nil
 	}
 	defer release()
+	if err := o.drainEnded(ctx, id); err != nil {
+		return err
+	}
 	o.mu.Lock()
 	a, local := o.state.Apps[id]
 	o.mu.Unlock()
@@ -1728,11 +2031,11 @@ func (o *Origin) withdrawal(id string, records map[string]Record) string {
 // operation does not yield, the app's workers are stopped anyway and its state
 // is left for the next pass.
 func (o *Origin) overrule(ctx context.Context, id, reason string, work func(context.Context) error) error {
-	release, err := o.preempt(ctx, id, reason)
-	if err != nil {
-		return errors.Join(err, o.stop(ctx, id))
-	}
+	release, owned, err := o.preempt(ctx, id, reason)
 	defer release()
+	if !owned {
+		return errors.Join(err, o.stopWorkers(ctx, id))
+	}
 	return work(ctx)
 }
 func (o *Origin) guardLapsed(ctx context.Context, id string) error {
@@ -1836,6 +2139,9 @@ func (o *Origin) recover(ctx context.Context, id string, records map[string]Reco
 		return nil
 	}
 	defer release()
+	if err := o.drainEnded(ctx, id); err != nil {
+		return err
+	}
 	o.mu.Lock()
 	a, local := o.state.Apps[id]
 	o.mu.Unlock()

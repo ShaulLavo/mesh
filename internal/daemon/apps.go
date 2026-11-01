@@ -3,6 +3,8 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/apps"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/worker"
@@ -96,7 +99,86 @@ func (w appWorkers) Start(ctx context.Context, label, command, cwd string, env [
 	if shell == "" {
 		shell = "/bin/sh"
 	}
-	return w.lifecycle.startLabelled(ctx, label, []string{shell, "-lc", command}, cwd, env)
+	var token [16]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		return "", fmt.Errorf("app: create owner token: %w", err)
+	}
+	marker := label + "\n" + hex.EncodeToString(token[:])
+	if _, _, err := apps.ParseWorkerOwner(marker); err != nil {
+		return "", fmt.Errorf("app: validate owner: %w", err)
+	}
+	return w.lifecycle.startOwnedLabelled(ctx, label, []string{shell, "-lc", command}, cwd, env, marker)
+}
+
+func (w appWorkers) Owner(ctx context.Context, id string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("app: read worker %s owner: %w", id, err)
+	}
+	root, err := os.OpenRoot(w.lifecycle.sessionsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", apps.ErrNoOwner
+	}
+	if err != nil {
+		return "", fmt.Errorf("app: open sessions: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	data, err := root.ReadFile(paths.Owner(id))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", apps.ErrNoOwner
+	}
+	if err != nil {
+		return "", fmt.Errorf("app: read worker %s owner: %w", id, err)
+	}
+	marker := string(data)
+	if _, _, err := apps.ParseWorkerOwner(marker); err != nil {
+		return "", fmt.Errorf("app: validate worker %s owner: %w", id, err)
+	}
+	return marker, nil
+}
+
+func (w appWorkers) Release(ctx context.Context, id, marker string) error {
+	return w.releaseOwner(ctx, id, marker, func(root *os.Root, name string) error { return root.Remove(name) }, syncAppOwnerDir)
+}
+
+func (w appWorkers) releaseOwner(ctx context.Context, id, marker string, unlink func(*os.Root, string) error, syncDir func(*os.Root) error) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("app: release worker %s owner: %w", id, err)
+	}
+	root, err := os.OpenRoot(w.lifecycle.sessionsDir)
+	if err != nil {
+		return fmt.Errorf("app: open sessions for release: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	dir, err := root.OpenRoot(id)
+	if errors.Is(err, os.ErrNotExist) {
+		return syncDir(root)
+	}
+	if err != nil {
+		return fmt.Errorf("app: open worker %s for release: %w", id, err)
+	}
+	defer func() { _ = dir.Close() }()
+	data, err := dir.ReadFile(".owner")
+	if errors.Is(err, os.ErrNotExist) {
+		return syncDir(dir)
+	}
+	if err != nil {
+		return fmt.Errorf("app: read worker %s for release: %w", id, err)
+	}
+	if string(data) != marker {
+		return nil
+	}
+	if err := unlink(dir, ".owner"); err != nil {
+		return fmt.Errorf("app: unlink worker %s owner: %w", id, err)
+	}
+	return syncDir(dir)
+}
+
+func syncAppOwnerDir(root *os.Root) error {
+	dir, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("app: open owner sync directory: %w", err)
+	}
+	return errors.Join(dir.Sync(), dir.Close())
 }
 
 func (w appWorkers) Stop(ctx context.Context, id string) error {

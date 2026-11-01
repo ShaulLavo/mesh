@@ -304,6 +304,25 @@ was active. [PR #295](https://github.com/ShaulLavo/mesh/pull/295) moves that cal
 inside the existing handler. The complete benchmark harness integration passed
 with the repair, including cancellation cleanup. No new issue was opened.
 
+## App worker ownership follow-up, 2026-11-01
+
+Status: Approved bounded repair. The historical interrupted-setup cause above remains unconfirmed.
+[Audit 002's proof and ownership design](../audit/app-worker-ownership.md) records a separate conditional reproduction. A failed create returned a live worker ID plus a publication error, label discovery succeeded empty, and rollback deleted its workspace. The unchanged proof and a marked Stop-before-delete companion now exercise both fail-closed retention and successful cleanup. Once a setup claim is durably saved, recovery can stop that exact incarnation even when discovery misses it. The old integration kill can precede that save, so this repair does not establish the historical cause.
+
+App reservations now retain the complete app label and an immutable random token until verified completion is saved. Unknown exit or identity keeps the app's files and reports an error naming the unresolved returned worker ID. Operators may see owner-marked session directories, `.launching` reservations, or deferred physical deletion after offline `mesh rm` recorded `.forgotten`. Offline removal still succeeds. Online physical removal waits for app release. Catalog absence is not evidence that a command ended. A marker alone proves neither liveness nor safe removal.
+
+The accepted launch-before-save gap remains. A crash can leave pins for several affected attempts, with no small bound on retained log or recovery bytes. An invisible pre-save command can remain live or lose its workspace. Do not rerun a recipe while ownership is unresolved or delete its marker without exact end and quiescence proof. A stronger pre-launch recovery design is outside this repair.
+
+## Local gate diagnosis follow-up, 2026-11-01
+
+Status: Approved follow-up, separate from app ownership. Evidence against `c47b35ce8a6e6e309bec9b99064230873ed86e69`, Go 1.27.3 on the PC, is in `/work/reports/wave-20261101/mesh-audit/gate-diagnosis/DIAGNOSIS.md`.
+
+- Enrollment recurrence is attributed to the durable-publication queue. Concurrent focused harnesses failed 10 of 20 enrollments. Sixteen serialized publications exhausted the existing 1.5-second acquisition budget. Runtime profiles recorded 25.37 seconds in fsync during the 28.159-second package, against 40.562 ms aggregate scheduling delay. There is no demonstrated lock-order cycle. Own the repair in `internal/fleetshare/{files,store}.go` with a deterministic publication-queue regression. Preserve bounds, atomic publication, durability, and cross-process exclusion. The cause of elevated fsync latency is not identified.
+- Catalog SQLITE_BUSY reproduced in 2 of 20 concurrent focused cases. All four tested connections passed the 150 ms advisory and 5000 ms authoritative busy checks. Parent holder-release markers arrived 51.30 and 51.43 ms after writers started. The exact child lock holder remains unresolved. Trace existing helpers through rollback, Save, and Close before changing storage or advisory behavior. Preserve the 150 ms SQLite and 200 ms caller budgets. No retry or timeout widening is justified.
+- ACME passed 20 of 20 concurrent controls. The historical 1.325233605-second failure remains unresolved beside the October 10 evidence. Whole-Renew timing includes context-insensitive durable key and account setup before fake AuthorizeOrder. Passing traces measure fsync as dominant, not a provider stall. Capture the failing stage before changing production or the assertion.
+
+The serial controls passed. These observations do not share a proved cause. No unrelated fleetshare, CLI, DNS source, or baseline exception is part of audit 002. Public exact-head CI is a separate gate and does not erase these local findings.
+
 ## Done when
 
 - Gates run in pre-commit and CI; the baseline is empty or every remaining entry has a reason.

@@ -425,6 +425,9 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 		if current.State != storage.StateExited && current.State != storage.StateInterrupted {
 			continue
 		}
+		if ownerPinned(filepath.Join(c.sessionsDir, string(current.ID))) {
+			continue
+		}
 		if _, err := os.Lstat(paths.Forgotten(filepath.Join(c.sessionsDir, string(current.ID)))); err == nil {
 			retire[i] = struct{}{}
 			continue
@@ -483,7 +486,23 @@ func hasSavedRecovery(dir string) bool {
 	return meta.RecoveredFrom != ""
 }
 
+func ownerPinned(dir string) bool {
+	root, err := os.OpenRoot(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	defer func() { _ = root.Close() }()
+	_, err = root.Lstat(".owner")
+	return !errors.Is(err, os.ErrNotExist)
+}
+
 func removeUnclaimedRetiredSession(dir string) error {
+	if ownerPinned(dir) {
+		return errors.New("app worker owner still pins session directory")
+	}
 	if _, err := os.Lstat(paths.Forgotten(dir)); err == nil {
 		return removeRetiredSession(dir)
 	}
@@ -512,6 +531,9 @@ func removeUnclaimedRetiredSession(dir string) error {
 }
 
 func removeRetiredSession(dir string) error {
+	if ownerPinned(dir) {
+		return errors.New("app worker owner still pins session directory")
+	}
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -555,6 +577,9 @@ func (c *Catalog) Remove(ctx context.Context, id storage.SessionID) error {
 	case <-ctx.Done():
 		return fmt.Errorf("daemon: remove session %s: %w", id, ctx.Err())
 	}
+	if ownerPinned(filepath.Join(c.sessionsDir, string(id))) {
+		return fmt.Errorf("daemon: session %s remains reserved by its app", id)
+	}
 	removed, err := c.store.RetireSessions(ctx, c.host.ID, []storage.SessionID{id})
 	if err != nil {
 		return fmt.Errorf("daemon: retire session %s: %w", id, err)
@@ -564,7 +589,7 @@ func (c *Catalog) Remove(ctx context.Context, id storage.SessionID) error {
 	}
 	delete(c.previous, id)
 	c.publishDiff(SessionDiff{Removed: []storage.SessionID{id}})
-	if err := os.RemoveAll(filepath.Join(c.sessionsDir, string(id))); err != nil {
+	if err := removeRetiredSession(filepath.Join(c.sessionsDir, string(id))); err != nil {
 		return fmt.Errorf("daemon: remove session directory %s: %w", id, err)
 	}
 	return nil

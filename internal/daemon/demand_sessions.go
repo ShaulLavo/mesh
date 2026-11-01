@@ -39,10 +39,14 @@ func demandRequestID(action string) string {
 }
 
 func (l *lifecycle) startLabelled(ctx context.Context, label string, command []string, cwd string, env []string) (string, error) {
+	return l.startOwnedLabelled(ctx, label, command, cwd, env, "")
+}
+
+func (l *lifecycle) startOwnedLabelled(ctx context.Context, label string, command []string, cwd string, env []string, owner string) (string, error) {
 	requestID := demandRequestID("start")
 	id, err := l.createSession(ctx, protocol.TypeCreate, requestID, creationRequest{
 		command: command, cwd: cwd, cols: servedSessionCols, rows: servedSessionRows,
-		term: servedSessionTerm, label: label, env: env,
+		term: servedSessionTerm, label: label, env: env, owner: owner,
 	})
 	// The receipt can go even when publication failed: the route now holds
 	// the ID, and the catalog's next reconcile lists the session from disk.

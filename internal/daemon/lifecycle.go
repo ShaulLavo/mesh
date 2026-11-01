@@ -116,6 +116,7 @@ type creationRequest struct {
 	depth   int
 	// label and env are set only by the daemon itself, for sessions it
 	// starts on a route's behalf; a client request never carries them.
+	owner string
 	label string
 	env   []string
 }
@@ -144,6 +145,7 @@ func (r creationRequest) fingerprint() ([sha256.Size]byte, int64) {
 	writeString(r.term)
 	writeInt(r.depth)
 	writeString(r.label)
+	writeString(r.owner)
 	writeInt(len(r.env))
 	for _, variable := range r.env {
 		writeString(variable)
@@ -420,6 +422,7 @@ func (l *lifecycle) createSession(ctx context.Context, requestType, requestID st
 			Term:        wanted.term,
 			Depth:       wanted.depth,
 			Label:       wanted.label,
+			Owner:       wanted.owner,
 		})
 		ownerLaunchErr = launchErr
 		switch {
