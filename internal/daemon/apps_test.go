@@ -174,6 +174,8 @@ func (w *guardedAppWorkers) Start(context.Context, string, string, string, []str
 	w.starts++
 	return "", errors.New("unexpected app launch")
 }
+func (*guardedAppWorkers) Owner(context.Context, string) (string, error)      { return "", apps.ErrNoOwner }
+func (*guardedAppWorkers) Release(context.Context, string, string) error      { return nil }
 func (*guardedAppWorkers) Stop(context.Context, string) error                 { return nil }
 func (*guardedAppWorkers) Find(context.Context, string) (string, bool, error) { return "", false, nil }
 func (*guardedAppWorkers) Forget(context.Context, string)                     {}

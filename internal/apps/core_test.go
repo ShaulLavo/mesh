@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/shaul/mesh/internal/webauth"
 	"net/http"
 	"net/http/httptest"
@@ -89,6 +90,8 @@ func (s *memoryAppStore) SetAppNameInactive(_ context.Context, name, owner strin
 }
 
 type fakeWorkers struct {
+	owners    map[string]string
+	seq       uint64
 	mu        sync.Mutex
 	labels    map[string]string
 	stopped   []string
@@ -106,7 +109,47 @@ func (w *fakeWorkers) Start(_ context.Context, label, command, root string, env 
 	}
 	id := "worker-" + label
 	w.labels[label] = id
+	if w.owners == nil {
+		w.owners = map[string]string{}
+	}
+	w.seq++
+	w.owners[id] = fmt.Sprintf("%s\n%032x", label, w.seq)
 	return id, nil
+}
+func (w *fakeWorkers) Owner(_ context.Context, id string) (string, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	marker, ok := w.owners[id]
+	if ok {
+		return marker, nil
+	}
+	for label, session := range w.labels {
+		if session != id {
+			continue
+		}
+		if w.owners == nil {
+			w.owners = map[string]string{}
+		}
+		w.seq++
+		marker = fmt.Sprintf("%s\n%032x", label, w.seq)
+		w.owners[id] = marker
+		return marker, nil
+	}
+	return "", ErrNoOwner
+}
+func (w *fakeWorkers) Release(_ context.Context, id, marker string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.owners[id] != marker {
+		return nil
+	}
+	delete(w.owners, id)
+	for label, session := range w.labels {
+		if session == id {
+			delete(w.labels, label)
+		}
+	}
+	return nil
 }
 func (w *fakeWorkers) Stop(_ context.Context, id string) error {
 	w.mu.Lock()

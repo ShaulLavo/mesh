@@ -3,6 +3,7 @@ package worker
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -26,19 +27,21 @@ const (
 // LaunchConfig describes a detached worker process. SessionsDir is explicit so
 // daemon tests and recovery-mode clients can use the same launcher safely.
 type LaunchConfig struct {
-	ReservedID    string
-	RecoveredFrom string
-	SessionsDir   string
-	HostID        string
-	Executable    string
-	Command       []string
-	Cwd           string
-	Env           []string
-	Cols          int
-	Rows          int
-	Term          string
-	Depth         int
-	Label         string
+	ReservedID     string
+	RecoveredFrom  string
+	SessionsDir    string
+	HostID         string
+	Executable     string
+	Command        []string
+	Cwd            string
+	Env            []string
+	Cols           int
+	Rows           int
+	Term           string
+	Depth          int
+	ownerPublisher func(string, string) error
+	Owner          string
+	Label          string
 }
 
 // Launched is a worker that has published its metadata and is accepting local
@@ -110,9 +113,14 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 	cleanupReserved := cfg.ReservedID == ""
 	defer func() {
 		if cleanupReserved {
-			cleanupReservedSession(dir)
+			launchErr = errors.Join(launchErr, cleanupLaunchReservation(dir, cfg.Owner != ""))
 		}
 	}()
+	if cfg.Owner != "" {
+		if err := cfg.publishOwner(dir); err != nil {
+			return Launched{}, fmt.Errorf("launch worker %s: publish owner: %w", id, err)
+		}
+	}
 	logPath := paths.Log(dir)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // path is the fixed log file in a newly reserved private session directory
 	if err != nil {
@@ -248,10 +256,98 @@ func waitForWorker(dir string, timeout time.Duration, process *os.Process) error
 	}
 }
 
-func cleanupReservedSession(dir string) {
-	_ = os.Remove(paths.Launching(dir))
-	_ = os.Remove(paths.Log(dir))
-	_ = os.Remove(dir)
+func cleanupLaunchReservation(dir string, owned bool) error {
+	if !owned {
+		_ = os.Remove(paths.Launching(dir))
+		_ = os.Remove(paths.Log(dir))
+		if err := os.Remove(dir); err != nil {
+			return fmt.Errorf("remove reserved directory: %w", err)
+		}
+		return nil
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("open reservation: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	var errs []error
+	for _, name := range []string{".owner", ".launching", "worker.log"} {
+		if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("remove reservation files: %w", err)
+	}
+	if err := os.Remove(dir); err != nil {
+		return fmt.Errorf("remove reservation: %w", err)
+	}
+	return syncOwnerDir(filepath.Dir(dir))
+}
+
+type ownerMarkerFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+type ownerMarkerIO struct {
+	open    func(*os.Root) (ownerMarkerFile, error)
+	syncDir func(string) error
+}
+
+func (cfg LaunchConfig) publishOwner(dir string) error {
+	publish := cfg.ownerPublisher
+	if publish == nil {
+		publish = writeOwnerMarker
+	}
+	return publish(dir, cfg.Owner)
+}
+
+func writeOwnerMarker(dir, marker string) error {
+	return publishOwnerMarker(dir, marker, ownerMarkerIO{
+		open: func(root *os.Root) (ownerMarkerFile, error) {
+			return root.OpenFile(".owner", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		},
+		syncDir: syncOwnerDir,
+	})
+}
+
+func publishOwnerMarker(dir, marker string, ops ownerMarkerIO) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("open owner directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	file, err := ops.open(root)
+	if err != nil {
+		return fmt.Errorf("create owner marker: %w", err)
+	}
+	written, writeErr := file.Write([]byte(marker))
+	if written != len(marker) && writeErr == nil {
+		writeErr = io.ErrShortWrite
+	}
+	syncErr := file.Sync()
+	if err := errors.Join(writeErr, syncErr, file.Close()); err != nil {
+		return fmt.Errorf("write owner marker: %w", err)
+	}
+	if err := ops.syncDir(dir); err != nil {
+		return err
+	}
+	return ops.syncDir(filepath.Dir(dir))
+}
+
+func syncOwnerDir(dir string) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fmt.Errorf("open directory for owner sync: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	file, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("open owner sync: %w", err)
+	}
+	return errors.Join(file.Sync(), file.Close())
 }
 
 // withTerm sets TERM for the session. The daemon runs as a service and has no

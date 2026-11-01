@@ -82,6 +82,9 @@ func Log(sessionDir string) string { return filepath.Join(sessionDir, "worker.lo
 // Launching marks a reserved session directory that is not yet authoritative.
 func Launching(sessionDir string) string { return filepath.Join(sessionDir, ".launching") }
 
+// Owner pins the app worker incarnation until its origin durably records exit.
+func Owner(sessionDir string) string { return filepath.Join(sessionDir, ".owner") }
+
 // Forgotten defers catalog retirement while the daemon is unavailable.
 func Forgotten(sessionDir string) string { return filepath.Join(sessionDir, ".forgotten") }
 
