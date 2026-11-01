@@ -171,3 +171,27 @@ func testHostDeclaration(host HostRecord) *protocol.HostInfo {
 	}
 	return info
 }
+
+func TestRemoteServicePreviewBindsTrustedOrigins(t *testing.T) {
+	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
+	requested := protocol.ServiceInfo{Name: "api", Kind: "proxy", Target: "3000", PrivateHost: "api.mesh.test", TrustedOrigins: []string{"https://bun-demo.sprockt.dev"}}
+	for _, test := range []struct {
+		name   string
+		change func(*protocol.ServiceInfo)
+	}{
+		{name: "removed", change: func(info *protocol.ServiceInfo) { info.TrustedOrigins = nil }},
+		{name: "substituted", change: func(info *protocol.ServiceInfo) { info.TrustedOrigins = []string{"https://other.example"} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := previewRemoteService(context.Background(), host, serviceRemoteDial(host, func(request protocol.Control) protocol.Control {
+				preview := *request.Service
+				preview.Kind = "proxy"
+				test.change(&preview)
+				return protocol.Control{Type: protocol.TypeServicePreviewed, ServicePreview: &protocol.ServicePreview{Service: preview}}
+			}), requested)
+			if err == nil || !strings.Contains(err.Error(), "changed trusted origins") {
+				t.Fatalf("preview error = %v", err)
+			}
+		})
+	}
+}

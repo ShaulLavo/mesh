@@ -241,6 +241,22 @@ options apply to the root hostname too. Cross-origin requests use the same
 private-service checks as path mounts. A hostname belongs to one service. `mesh`, `apps`, and four-character temporary
 app identifiers are reserved.
 
+A private service denies browser cross-origin requests by default. To opt one
+route into browser CORS and WebSocket requests, repeat `--trust-origin` with
+the exact origins that may call it:
+
+```sh
+mesh serve desktop 8787 --private-host waffle-relay \
+  --trust-origin https://bun-demo.sprockt.dev
+```
+
+Origins are canonicalized before publication, sorted, deduplicated, and matched
+exactly. Wildcards are not supported. Preflight requests and WebSocket upgrades
+use the same allowlist, and Mesh forwards the `Origin` header unchanged; the
+upstream service remains responsible for CORS response headers. Supplying a
+trust origin requires a private host, including an inherited private host. A
+later `mesh serve` without `--trust-origin` clears the route's allowlist.
+
 For an existing route, configure `serviceNames` first. Reconcile its owned DNS
 record, install the private-service certificate, and check the hostname through
 the deployment gateway. Then publish the route with `--private-host`. Publishing

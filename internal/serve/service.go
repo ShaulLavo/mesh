@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,7 +54,8 @@ type Service struct {
 	Kind        Kind
 	Target      string
 
-	PrivateHost string
+	PrivateHost    string
+	TrustedOrigins []string
 
 	// Isolate sends the cross-origin isolation headers with every response,
 	// which is what browsers require before they enable SharedArrayBuffer.
@@ -89,12 +91,17 @@ type Registry struct {
 type registrySnapshot struct {
 	services     []Service
 	routes       []serviceRoute
-	privateHosts map[string]http.Handler
+	privateHosts map[string]privateServiceRoute
 }
 
 type serviceRoute struct {
 	prefix  string
 	handler http.Handler
+}
+
+type privateServiceRoute struct {
+	handler        http.Handler
+	trustedOrigins []string
 }
 
 // Normalize validates service and resolves directory targets to absolute paths.
@@ -146,7 +153,11 @@ func (r *Registry) Services() []Service {
 	if snapshot == nil {
 		return []Service{}
 	}
-	return append([]Service(nil), snapshot.services...)
+	services := make([]Service, len(snapshot.services))
+	for index, service := range snapshot.services {
+		services[index] = cloneService(service)
+	}
+	return services
 }
 
 // CheckServices probes every service concurrently and returns statuses in
@@ -224,8 +235,8 @@ func (r *Registry) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		http.NotFound(w, request)
 		return
 	}
-	if handler := snapshot.privateHosts[host]; handler != nil {
-		servePrivateHost(w, request, host, handler)
+	if private := snapshot.privateHosts[host]; private.handler != nil {
+		servePrivateHost(w, request, host, private)
 		return
 	}
 	requestPath := request.URL.EscapedPath()
@@ -254,7 +265,7 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 	snapshot := &registrySnapshot{
 		services:     make([]Service, 0, len(services)),
 		routes:       make([]serviceRoute, 0, len(services)),
-		privateHosts: make(map[string]http.Handler),
+		privateHosts: make(map[string]privateServiceRoute),
 	}
 	for _, service := range services {
 		normalized, err := normalizeService(service)
@@ -305,7 +316,9 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 			handler = r.gatedHandler(normalized.Name, handler)
 		}
 		if normalized.PrivateHost != "" {
-			snapshot.privateHosts[normalized.PrivateHost] = redirectLegacyMount(handler, prefix)
+			snapshot.privateHosts[normalized.PrivateHost] = privateServiceRoute{
+				handler: redirectLegacyMount(handler, prefix), trustedOrigins: slices.Clone(normalized.TrustedOrigins),
+			}
 			// Reserve the old path so a parent route cannot expose it again.
 			handler = http.NotFoundHandler()
 		}
@@ -323,7 +336,23 @@ func (r *Registry) buildSnapshot(services []Service) (*registrySnapshot, error) 
 	return snapshot, nil
 }
 
+func cloneService(service Service) Service {
+	service.TrustedOrigins = slices.Clone(service.TrustedOrigins)
+	service.Listens = slices.Clone(service.Listens)
+	if service.Demand != nil {
+		demand := *service.Demand
+		demand.Env = slices.Clone(demand.Env)
+		service.Demand = &demand
+	}
+	return service
+}
+
 func normalizeService(service Service) (Service, error) {
+	trustedOrigins, err := NormalizeTrustedOrigins(service.TrustedOrigins)
+	if err != nil {
+		return Service{}, fmt.Errorf("serve: service %q trusted origins: %w", service.Name, err)
+	}
+	service.TrustedOrigins = trustedOrigins
 	if err := ValidateDisplayName(service.DisplayName); err != nil {
 		return Service{}, err
 	}

@@ -85,5 +85,8 @@ serving host and survives later publications. Changing it keeps the route, ports
 and running process.
 
 Mesh services and apps are Tailnet-only. Connect the viewing device to Tailscale
-and use the private HTTPS URL. Public serving and VPS-edge reverse tunnels were
-removed on 2026-10-08; public hosting belongs to Brine on `shaulavo.dev`.
+and use the private HTTPS URL. A private service can opt an exact browser origin
+into its cross-site guard with `mesh serve --trust-origin`; Mesh forwards the
+request's `Origin` unchanged and the upstream must emit any CORS response
+headers. Public serving and VPS-edge reverse tunnels were removed on 2026-10-08;
+public hosting belongs to Brine on `shaulavo.dev`.

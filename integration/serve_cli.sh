@@ -229,6 +229,11 @@ grep -Fq "serving http://127.0.0.11:$CONTROL_PORT/api on pc (proxy -> $BACKEND_P
   fail "numeric target was not reported as a proxy: $(<"$TEST_ROOT/proxy.out")"
 curl --noproxy '*' --fail --silent --max-time 2 "http://127.0.0.11:$CONTROL_PORT/api/headers" |
   grep -Fq 'method=GET' || fail "numeric target did not proxy to the origin-local port"
+if "${CLI[@]}" serve pc "$BACKEND_PORT" --at /trusted --trust-origin https://bun-demo.sprockt.dev >"$TEST_ROOT/trusted-missing-host.out" 2>"$TEST_ROOT/trusted-missing-host.err"; then
+  fail "--trust-origin without a private host succeeded"
+fi
+grep -Fq -- '--trust-origin requires --private-host' "$TEST_ROOT/trusted-missing-host.err" ||
+  fail "missing private-host error did not explain --trust-origin"
 
 PRIVATE_POST_STATUS=$(curl --noproxy '*' --silent --max-time 2 --request POST \
   --header 'Origin: https://attacker.example' --header 'Sec-Fetch-Site: cross-site' \
