@@ -700,6 +700,9 @@ func (o *Origin) stopClaim(ctx context.Context, id string, claim launchedWorker)
 	if err != nil || !same {
 		return err
 	}
+	if bound.Ended {
+		return nil
+	}
 	if err := o.config.Workers.Stop(ctx, bound.ID); err != nil {
 		return fmt.Errorf("app %s: stop %s worker %s: %w", id, bound.Label, bound.ID, err)
 	}

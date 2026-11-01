@@ -32,6 +32,7 @@ type ownershipWorkers struct {
 	events           []string
 	roots            map[string]string
 	beforeStop       func(string)
+	afterOwner       func(string)
 	afterStart       func(context.Context, string, string)
 	waitFor          func(context.Context) (int, error)
 	beforeForget     func(string)
@@ -82,7 +83,11 @@ func (w *ownershipWorkers) Owner(ctx context.Context, id string) (string, error)
 		return "", errors.New("owner read failed")
 	}
 	w.lock.Unlock()
-	return w.fakeWorkers.Owner(ctx, id)
+	marker, err := w.fakeWorkers.Owner(ctx, id)
+	if err == nil && w.afterOwner != nil {
+		w.afterOwner(id)
+	}
+	return marker, err
 }
 func (w *ownershipWorkers) Find(ctx context.Context, label string) (string, bool, error) {
 	w.lock.Lock()
@@ -321,6 +326,7 @@ func TestLaunchOwnershipFailedUpdateAfterSwap(t *testing.T) {
 }
 
 func TestLaunchOwnershipStopOutcomes(t *testing.T) {
+	t.Run("concurrent-end-before-action", ownershipConcurrentEnd)
 	for _, name := range []string{"confirmed-exit", "missing-metadata-and-socket", "empty-find", "find-error"} {
 		t.Run(name, func(t *testing.T) { ownershipStopOutcome(t, name) })
 	}
@@ -1089,4 +1095,36 @@ func crashOwnershipUpdate(t *testing.T, f *appFixture, q Request) {
 	}()
 	_, _ = f.origin.Handle(context.Background(), q)
 	t.Fatal("setup did not interrupt")
+}
+
+func ownershipConcurrentEnd(t *testing.T) {
+	f, w := ownershipFixture(t)
+	claim := startOwnership(t, f, "test", "app-setup test")
+	entered, resume, joined := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	var once sync.Once
+	w.afterOwner = func(string) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-resume
+		}
+	}
+	done := make(chan error, 1)
+	t.Cleanup(func() { once.Do(func() { close(resume) }); waitOwnershipSignal(t, joined) })
+	go func() { defer close(joined); done <- f.origin.stopClaim(context.Background(), "test", claim) }()
+	waitOwnershipSignal(t, entered)
+	if err := f.origin.stopClaim(context.Background(), "test", claim); err != nil {
+		t.Fatal(err)
+	}
+	once.Do(func() { close(resume) })
+	if err := ownershipResult(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.stops) != 1 {
+		t.Fatalf("a stale snapshot stopped an already-ended claim again: %v", w.stops)
+	}
+	if err := f.origin.drainEnded(context.Background(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	assertNoClaims(t, f, "test")
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/shaul/mesh/internal/paths"
@@ -72,6 +73,13 @@ func launchOwnerFault(t *testing.T, phase string) {
 	}
 	cfg := LaunchConfig{SessionsDir: root, Owner: marker, Label: "app test", Executable: filepath.Join(root, "missing-mesh"), Command: []string{"sh"}}
 	cfg.ownerPublisher = publisher
+	startedPath := ""
+	if phase != "success" && phase != "cmd-start" {
+		cfg.Executable = "/bin/sh"
+		cfg.Cwd = ownerChildScript(t)
+		startedPath = filepath.Join(cfg.Cwd, "started")
+		cfg.Env = append(os.Environ(), "MESH_EXPECT_OWNER="+marker, "MESH_OWNER_STARTED="+startedPath)
+	}
 	_, err := LaunchDetached(cfg)
 	if err == nil {
 		t.Fatal("missing executable launched")
@@ -79,6 +87,9 @@ func launchOwnerFault(t *testing.T, phase string) {
 	var started *StartedError
 	if errors.As(err, &started) {
 		t.Fatal("pre-spawn failure reported a live child")
+	}
+	if startedPath != "" {
+		assertOwnerPublicationAborted(t, err, startedPath)
 	}
 	entries, readErr := os.ReadDir(root)
 	if readErr != nil || len(entries) != 0 {
@@ -114,7 +125,7 @@ func ownerChildScript(t *testing.T) string {
 	path := filepath.Join(root, "session-worker")
 	// A shell fixture receives the launcher's private --dir, then proves that the
 	// complete marker preceded exec. It exits without a real session worker.
-	script := "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n if [ \"$1\" = --dir ]; then dir=$2; break; fi\n shift\ndone\ntest \"$(cat \"$dir/.owner\")\" = \"$MESH_EXPECT_OWNER\" || exit 9\nprintf '%s' '{\"id\":\"'\"$(basename \"$dir\")\"'\",\"state\":\"exited\",\"createdAt\":\"2026-11-01T00:00:00Z\",\"exitCode\":0}' > \"$dir/meta.json\"\nrm \"$dir/.launching\"\n"
+	script := "#!/bin/sh\nif [ -n \"${MESH_OWNER_STARTED:-}\" ]; then : > \"$MESH_OWNER_STARTED\"; fi\nwhile [ \"$#\" -gt 0 ]; do\n if [ \"$1\" = --dir ]; then dir=$2; break; fi\n shift\ndone\ntest \"$(cat \"$dir/.owner\")\" = \"$MESH_EXPECT_OWNER\" || exit 9\nprintf '%s' '{\"id\":\"'\"$(basename \"$dir\")\"'\",\"state\":\"exited\",\"createdAt\":\"2026-11-01T00:00:00Z\",\"exitCode\":0}' > \"$dir/meta.json\"\nrm \"$dir/.launching\"\n"
 	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -148,4 +159,14 @@ func (ops *faultOwnerIO) syncDir(path string) error {
 		return errors.New("directory sync")
 	}
 	return syncOwnerDir(path)
+}
+
+func assertOwnerPublicationAborted(t *testing.T, err error, startedPath string) {
+	t.Helper()
+	if !strings.Contains(err.Error(), "publish owner") {
+		t.Fatalf("fault did not abort publication: %v", err)
+	}
+	if _, err := os.Stat(startedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("child started after marker publication failed: %v", err)
+	}
 }
