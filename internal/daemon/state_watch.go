@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/storage"
 )
@@ -126,7 +126,7 @@ func (b *stateBroker) servicesCommitted(rows []protocol.ServiceInfo, err error) 
 	b.updateObservationLocked(protocol.TopicServices, o)
 	next := make(map[string]protocol.ServiceInfo, len(rows))
 	for _, row := range rows {
-		row = cloneState(row)
+		row = cloneStateService(row)
 		next[row.Name] = row
 		if old, exists := b.services[row.Name]; !exists || !reflect.DeepEqual(old, row) {
 			b.publishLocked(protocol.TopicServices, "service/"+row.Name, protocol.StateEvent{Kind: "service.changed", Payload: protocol.StatePayload{Service: &row}})
@@ -165,7 +165,7 @@ func (b *stateBroker) serviceDemandChanged(next protocol.ServiceInfo, retiring b
 	if !exists && len(b.services) >= meshserve.MaximumServices || exists && reflect.DeepEqual(row, next) {
 		return
 	}
-	next = cloneState(next)
+	next = cloneStateService(next)
 	b.services[next.Name] = next
 	b.publishLocked(protocol.TopicServices, "service/"+next.Name, protocol.StateEvent{Kind: "service.changed", Payload: protocol.StatePayload{Service: &next}})
 }
@@ -249,7 +249,7 @@ func (b *stateBroker) take(sub *stateSubscriber) []protocol.Control {
 	}
 	result := make([]protocol.Control, 0, len(sub.order))
 	for _, key := range sub.order {
-		event := cloneState(sub.pending[key])
+		event := cloneStateEvent(sub.pending[key])
 		if event.Kind == protocol.TopicMetrics && event.Payload.Metrics != nil {
 			ageMetrics(event.Payload.Metrics, max(0, b.now().Sub(b.metricsAt).Milliseconds()))
 		}
@@ -276,23 +276,23 @@ func (b *stateBroker) snapshotLocked(sub *stateSubscriber) *protocol.StateSnapsh
 	sub.seq++
 	snapshot := &protocol.StateSnapshot{Seq: sub.seq, Current: b.currentLocked(sub).Sections}
 	if sub.topics[protocol.TopicHost] && b.host != nil {
-		host := cloneState(*b.host)
+		host := cloneStateHost(*b.host)
 		snapshot.Host = &host
 	}
 	if sub.topics[protocol.TopicSessions] {
-		snapshot.Memory = cloneState(b.memory)
+		snapshot.Memory = cloneStateMemory(b.memory)
 		for id, reading := range snapshot.Memory {
 			reading.AgeMillis += max(0, b.now().Sub(b.memoryAt).Milliseconds())
 			snapshot.Memory[id] = reading
 		}
 		for _, row := range b.sessions {
-			snapshot.Sessions = append(snapshot.Sessions, cloneState(row))
+			snapshot.Sessions = append(snapshot.Sessions, cloneStateSession(row))
 		}
 		slices.SortFunc(snapshot.Sessions, func(a, c protocol.SessionInfo) int { return strings.Compare(a.ID, c.ID) })
 	}
 	if sub.topics[protocol.TopicServices] {
 		for _, row := range b.services {
-			snapshot.Services = append(snapshot.Services, cloneState(row))
+			snapshot.Services = append(snapshot.Services, cloneStateService(row))
 		}
 		slices.SortFunc(snapshot.Services, func(a, c protocol.ServiceInfo) int { return strings.Compare(a.Name, c.Name) })
 	}
@@ -327,11 +327,177 @@ func (b *stateBroker) currentLocked(sub *stateSubscriber) *protocol.StateCurrent
 func ageMetrics(v *hostmetrics.Snapshot, age int64) {
 	*v = hostmetrics.AgeSnapshot(*v, age)
 }
-func cloneState[T any](value T) T {
-	data, _ := json.Marshal(value)
-	var cloned T
-	_ = json.Unmarshal(data, &cloned)
+func cloneStateEvent(value protocol.StateEvent) protocol.StateEvent {
+	value.Payload = cloneStatePayload(value.Payload)
+	return value
+}
+
+func cloneStatePayload(value protocol.StatePayload) protocol.StatePayload {
+	value.Host = cloneStateHostPointer(value.Host)
+	value.Memory = cloneStateMemory(value.Memory)
+	value.Session = cloneStateSessionPointer(value.Session)
+	value.Service = cloneStateServicePointer(value.Service)
+	value.Metrics = cloneStateMetricsPointer(value.Metrics)
+	return value
+}
+
+func cloneStateHost(value protocol.HostInfo) protocol.HostInfo {
+	if value.Build != nil {
+		build := *value.Build
+		value.Build = &build
+	}
+	if value.Wake != nil {
+		wake := *value.Wake
+		wake.Signature = cloneStateBytes(wake.Signature)
+		if value.Wake.NIC != nil {
+			nic := *value.Wake.NIC
+			wake.NIC = &nic
+		}
+		value.Wake = &wake
+	}
+	return value
+}
+
+func cloneStateHostPointer(value *protocol.HostInfo) *protocol.HostInfo {
+	if value == nil {
+		return nil
+	}
+	cloned := cloneStateHost(*value)
+	return &cloned
+}
+
+func cloneStateSession(value protocol.SessionInfo) protocol.SessionInfo {
+	value.Command = cloneStateStrings(value.Command)
+	value.LastAttachedAt = cloneStateTime(value.LastAttachedAt)
+	value.DetachedAt = cloneStateTime(value.DetachedAt)
+	value.ExitCode = cloneStateInt(value.ExitCode)
+	value.Recovery = cloneStateRecovery(value.Recovery)
+	if value.Hibernated != nil {
+		hibernated := *value.Hibernated
+		value.Hibernated = &hibernated
+	}
+	return value
+}
+
+func cloneStateSessionPointer(value *protocol.SessionInfo) *protocol.SessionInfo {
+	if value == nil {
+		return nil
+	}
+	cloned := cloneStateSession(*value)
+	return &cloned
+}
+
+func cloneStateService(value protocol.ServiceInfo) protocol.ServiceInfo {
+	value.Listens = cloneStateListens(value.Listens)
+	if value.Run != nil {
+		run := *value.Run
+		run.Env = cloneStateStrings(run.Env)
+		value.Run = &run
+	}
+	if value.Demand != nil {
+		demand := *value.Demand
+		demand.Unbound = cloneStateStrings(demand.Unbound)
+		value.Demand = &demand
+	}
+	return value
+}
+
+func cloneStateServicePointer(value *protocol.ServiceInfo) *protocol.ServiceInfo {
+	if value == nil {
+		return nil
+	}
+	cloned := cloneStateService(*value)
+	return &cloned
+}
+
+func cloneStateMetricsPointer(value *hostmetrics.Snapshot) *hostmetrics.Snapshot {
+	if value == nil {
+		return nil
+	}
+	cloned := hostmetrics.AgeSnapshot(*value, 0)
+	return &cloned
+}
+
+func cloneStateRecovery(value *recovery.Record) *recovery.Record {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.Lines = cloneStateStrings(value.Lines)
+	cloned.Command = cloneStateStrings(value.Command)
+	if value.Agent != nil {
+		agent := *value.Agent
+		agent.Options = cloneStateStrings(value.Agent.Options)
+		cloned.Agent = &agent
+	}
+	if value.AgentResume != nil {
+		agentResume := *value.AgentResume
+		cloned.AgentResume = &agentResume
+	}
+	if value.Restart != nil {
+		restart := *value.Restart
+		restart.Argv = cloneStateStrings(value.Restart.Argv)
+		cloned.Restart = &restart
+	}
+	if value.Remote != nil {
+		remote := *value.Remote
+		cloned.Remote = &remote
+	}
+	return &cloned
+}
+
+func cloneStateMemory(value map[string]protocol.SessionMemory) map[string]protocol.SessionMemory {
+	if value == nil {
+		return nil
+	}
+	cloned := make(map[string]protocol.SessionMemory, len(value))
+	for key, row := range value {
+		cloned[key] = row
+	}
 	return cloned
+}
+
+func cloneStateListens(value []protocol.ServiceListen) []protocol.ServiceListen {
+	if value == nil {
+		return nil
+	}
+	cloned := make([]protocol.ServiceListen, len(value))
+	copy(cloned, value)
+	return cloned
+}
+
+func cloneStateStrings(value []string) []string {
+	if value == nil {
+		return nil
+	}
+	cloned := make([]string, len(value))
+	copy(cloned, value)
+	return cloned
+}
+
+func cloneStateBytes(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	cloned := make([]byte, len(value))
+	copy(cloned, value)
+	return cloned
+}
+
+func cloneStateTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneStateInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func (b *stateBroker) hasTopic(topic string) bool {
