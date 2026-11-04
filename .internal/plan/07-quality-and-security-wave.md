@@ -323,6 +323,37 @@ Status: Approved follow-up, separate from app ownership. Evidence against `c47b3
 
 The serial controls passed. These observations do not share a proved cause. No unrelated fleetshare, CLI, DNS source, or baseline exception is part of audit 002. Public exact-head CI is a separate gate and does not erase these local findings.
 
+
+## CI performance gate follow-up, 2026-11-04
+
+Status: Race-overlap reduction dropped under its critical-path stop condition.
+Keep full Linux, native ARM and macOS, and long or symlinked socket coverage.
+The exact duplicate AMD64 naming run saves runner time if narrowed, but does
+not shorten CI's critical path. No race reduction was made.
+
+Read-only timing evidence from CI runs
+[41808710848](https://github.com/ShaulLavo/mesh/actions/runs/41808710848),
+[41308304304](https://github.com/ShaulLavo/mesh/actions/runs/41308304304), and
+[41314115511](https://github.com/ShaulLavo/mesh/actions/runs/41314115511)
+puts the serial race-and-integration job at 630 to 749 seconds, versus about
+350 seconds for the next largest job. The CLI package alone took 207 to 235
+seconds. The old 150-second package baseline therefore cannot identify a slow
+individual test. Preserve assertions and production deadlines; a future timing
+check must use a package budget that admits the complete measured workload.
+
+Approved follow-up, scheduled later: assess running integrations independently
+of the race step in `.github/workflows/ci.yml`. First prove which build and
+cache artifacts `scripts/verify.sh` needs and measure the candidate on our own
+machines. Preserve every blocking check and native-path assertion. The observed
+job times identify the bottleneck, not guaranteed savings from a new shape.
+
+The bounded local gate also exposed a test-only nested socket-root assumption.
+`internal/testenv/socket_test.go` now reserves its nested fixture root under
+canonical `/tmp`; runtime path selection and the 103-byte limit are unchanged.
+The before-fix 40-byte TMPDIR failed both assertions, and the repaired fixtures
+pass normal, middle-length, long and symlinked root cases with and without a
+short override.
+
 ## Done when
 
 - Gates run in pre-commit and CI; the baseline is empty or every remaining entry has a reason.
