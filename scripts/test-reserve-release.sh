@@ -122,4 +122,43 @@ grep -Fqx 'version=v0.1.42' <<<"$result"
 result=$(run_reserve "$draft_source")
 grep -Fqx 'version=v0.1.41' <<<"$result"
 
+# The reserve step pipes the script into tee to fill GITHUB_OUTPUT. Without
+# pipefail the step takes tee's status, so a reservation that fails after
+# pushing its tag leaves the job green with no outputs and every publication
+# job skips. Run the step's own command under the shell GitHub would use.
+workflow=$repo_root/.github/workflows/release.yml
+reserve_step=$(awk '/^      - id: reserve$/ {found=1; next} found && /^      - / {exit} found' "$workflow")
+reserve_run=$(sed -n 's/^        run: //p' <<<"$reserve_step")
+reserve_shell=$(sed -n 's/^        shell: //p' <<<"$reserve_step")
+[[ -n $reserve_run ]] || { echo 'FAIL: release.yml reserve step has no single-line run' >&2; exit 1; }
+# GitHub runs `shell: bash` as `bash --noprofile --norc -eo pipefail {0}` and
+# a step with no shell as `bash -e {0}`.
+case $reserve_shell in
+  bash) step_shell=(bash --noprofile --norc -eo pipefail) ;;
+  '') step_shell=(bash -e) ;;
+  *) printf 'FAIL: unexpected reserve step shell %q\n' "$reserve_shell" >&2; exit 1 ;;
+esac
+step_root=$test_root/step
+mkdir -p "$step_root/scripts"
+printf '%s\n' "$reserve_run" >"$step_root/run.sh"
+cat >"$step_root/scripts/reserve-release.sh" <<'RESERVE'
+#!/usr/bin/env bash
+printf 'action=publish\nsource=%s\n' "$1"
+exit "$FAKE_RESERVE_STATUS"
+RESERVE
+chmod 0755 "$step_root/scripts/reserve-release.sh"
+run_reserve_step() {
+  printf 'existing=kept\n' >"$step_root/github-output"
+  (cd "$step_root" && env FAKE_RESERVE_STATUS="$1" GITHUB_OUTPUT="$step_root/github-output" \
+    SOURCE_SHA=0123abc EXPLICIT_VERSION= "${step_shell[@]}" run.sh >/dev/null)
+}
+
+run_reserve_step 0
+[[ $(cat "$step_root/github-output") == $'existing=kept\naction=publish\nsource=0123abc' ]] ||
+  { echo 'FAIL: reserve step did not append its output to GITHUB_OUTPUT' >&2; exit 1; }
+if run_reserve_step 1; then
+  echo 'FAIL: reserve step succeeded although the reservation script failed' >&2
+  exit 1
+fi
+
 echo 'PASS: release reservation requires tested source, preserves retries, and advances past failed reservations'
