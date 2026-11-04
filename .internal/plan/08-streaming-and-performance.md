@@ -36,11 +36,13 @@ The dashboard worktree (`feat/dashboard`) is based on local `main` at `492ae74`,
 ### Measured drop: cached worker probes, 2026-11-04
 
 `Catalog.scan` (`internal/daemon/catalog.go`) dials one Unix probe per live
-session per pass. Caching successful probes for two seconds was measured and
-dropped: the inferred saving was about 0.17 ms of elapsed time per second at 64
-sessions, and the cache could hold a stale live state or adopt a dead worker
-after the catalog catches up. Reconcile keeps its probe per pass and the gates in
-§3 keep their wording. Reopen only with new measurements.
+session per pass. The proposed probe cache was dropped after source and
+measurement review on November 4, 2026. A same-process dial benchmark supports
+only an inferred saving of about 0.17 ms of elapsed time per second at 64
+sessions. It does not measure CPU, process wakeups or power. Widening admission
+of a dead worker can leave a route treating it as live even after the catalog
+catches up. Reconcile keeps its probe per pass and the gates in §3 keep their
+wording. Reopen only with new material measurements.
 
 ## Design
 
