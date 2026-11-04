@@ -33,6 +33,15 @@ Read-only inspection, 2026-10-01. Line references are at that revision.
 The dashboard worktree (`feat/dashboard`) is based on local `main` at `492ae74`,
 114 commits behind `origin/main`. Rebase it before resuming plan 07.
 
+### Measured drop: cached worker probes, 2026-11-04
+
+`Catalog.scan` (`internal/daemon/catalog.go`) dials one Unix probe per live
+session per pass. Caching successful probes for two seconds was measured and
+dropped: the inferred saving was about 0.17 ms of elapsed time per second at 64
+sessions, and the cache could hold a stale live state or adopt a dead worker
+after the catalog catches up. Reconcile keeps its probe per pass and the gates in
+§3 keep their wording. Reopen only with new measurements.
+
 ## Design
 
 ### 1. Change-driven reconcile

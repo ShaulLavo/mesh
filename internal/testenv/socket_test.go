@@ -8,8 +8,29 @@ import (
 	"testing"
 )
 
+// shortSocketRoot gives a fixture a canonical base with room for another s-N level.
+// A SocketTempDir result can't be that base: it already spends the reserved room, so a
+// TMPDIR that is valid on its own can make it too long.
+func shortSocketRoot(t *testing.T) string {
+	t.Helper()
+	tmp, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(tmp, "s-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil { //nolint:gosec // cleanup owns the fresh MkdirTemp directory under /tmp
+			t.Error(err)
+		}
+	})
+	return dir
+}
+
 func TestSocketScratchCanonicalizesCallerRoot(t *testing.T) {
-	root := SocketTempDir(t)
+	root := shortSocketRoot(t)
 	alias := filepath.Join(t.TempDir(), "alias")
 	if err := os.Symlink(root, alias); err != nil {
 		t.Fatal(err)
@@ -21,7 +42,7 @@ func TestSocketScratchCanonicalizesCallerRoot(t *testing.T) {
 }
 
 func TestSocketScratchRejectsLongOverrideAndUsesShortRoot(t *testing.T) {
-	short := SocketTempDir(t)
+	short := shortSocketRoot(t)
 	long := filepath.Join(t.TempDir(), strings.Repeat("l", 110))
 	if err := os.Mkdir(long, 0o700); err != nil {
 		t.Fatal(err)
