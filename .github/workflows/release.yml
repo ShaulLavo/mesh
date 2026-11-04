@@ -51,6 +51,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           EXPLICIT_VERSION: ${{ inputs.version }}
+        # Explicit bash adds pipefail, so a failed reservation fails the step
+        # instead of taking tee's status and skipping publication silently.
+        shell: bash
         run: scripts/reserve-release.sh "$SOURCE_SHA" "$EXPLICIT_VERSION" | tee -a "$GITHUB_OUTPUT"
 
   build:
