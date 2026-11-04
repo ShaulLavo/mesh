@@ -18,20 +18,12 @@ func BenchmarkCloneSessionInfo(b *testing.B) {
 	}
 }
 
-func BenchmarkAuditCloneSessionInfo(b *testing.B) {
-	BenchmarkCloneSessionInfo(b)
-}
-
 func BenchmarkStateViewClone(b *testing.B) {
 	view := StateView{Sessions: benchmarkSessionRows(64), Services: benchmarkServiceRows(16), Memory: map[string]protocol.SessionMemory{"session": {Bytes: 1}}, Sections: map[string]ObservedSection{"sessions": {Observation: protocol.Observation{AgeMillis: 1}}}, Metrics: benchmarkMetrics()}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = view.Clone()
 	}
-}
-
-func BenchmarkAuditStateViewClone(b *testing.B) {
-	BenchmarkStateViewClone(b)
 }
 
 func benchmarkSessionRows(count int) []protocol.SessionInfo {

@@ -12,14 +12,6 @@ import (
 )
 
 func BenchmarkStateBrokerSnapshot(b *testing.B) {
-	benchmarkStateBrokerSnapshot(b)
-}
-
-func BenchmarkAuditStateBrokerSnapshot(b *testing.B) {
-	benchmarkStateBrokerSnapshot(b)
-}
-
-func benchmarkStateBrokerSnapshot(b *testing.B) {
 	broker := newStateBroker(1, time.Now)
 	broker.sessions = make(map[string]protocol.SessionInfo, 64)
 	broker.services = make(map[string]protocol.ServiceInfo, 16)

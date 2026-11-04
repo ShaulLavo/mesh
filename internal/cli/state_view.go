@@ -192,7 +192,18 @@ func cloneWireServices(rows []protocol.ServiceInfo) []protocol.ServiceInfo {
 	}
 	cloned := make([]protocol.ServiceInfo, len(rows))
 	for i, row := range rows {
-		cloned[i] = cloneWireService(row)
+		row.Listens = slices.Clone(row.Listens)
+		if row.Run != nil {
+			run := *row.Run
+			run.Env = slices.Clone(run.Env)
+			row.Run = &run
+		}
+		if row.Demand != nil {
+			demand := *row.Demand
+			demand.Unbound = slices.Clone(demand.Unbound)
+			row.Demand = &demand
+		}
+		cloned[i] = row
 	}
 	return cloned
 }

@@ -3,17 +3,20 @@ package daemon
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/shaul/mesh/internal/agentresume"
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/wake"
 )
 
 const DefaultSubscriberLimit = 64
@@ -276,21 +279,22 @@ func (b *stateBroker) snapshotLocked(sub *stateSubscriber) *protocol.StateSnapsh
 	sub.seq++
 	snapshot := &protocol.StateSnapshot{Seq: sub.seq, Current: b.currentLocked(sub).Sections}
 	if sub.topics[protocol.TopicHost] && b.host != nil {
-		host := cloneStateHost(*b.host)
-		snapshot.Host = &host
+		snapshot.Host = cloneStatePointer(b.host, cloneStateHost)
 	}
 	if sub.topics[protocol.TopicSessions] {
-		snapshot.Memory = cloneStateMemory(b.memory)
+		snapshot.Memory = maps.Clone(b.memory)
 		for id, reading := range snapshot.Memory {
 			reading.AgeMillis += max(0, b.now().Sub(b.memoryAt).Milliseconds())
 			snapshot.Memory[id] = reading
 		}
+		snapshot.Sessions = slices.Grow(snapshot.Sessions, len(b.sessions))
 		for _, row := range b.sessions {
 			snapshot.Sessions = append(snapshot.Sessions, cloneStateSession(row))
 		}
 		slices.SortFunc(snapshot.Sessions, func(a, c protocol.SessionInfo) int { return strings.Compare(a.ID, c.ID) })
 	}
 	if sub.topics[protocol.TopicServices] {
+		snapshot.Services = slices.Grow(snapshot.Services, len(b.services))
 		for _, row := range b.services {
 			snapshot.Services = append(snapshot.Services, cloneStateService(row))
 		}
@@ -327,176 +331,87 @@ func (b *stateBroker) currentLocked(sub *stateSubscriber) *protocol.StateCurrent
 func ageMetrics(v *hostmetrics.Snapshot, age int64) {
 	*v = hostmetrics.AgeSnapshot(*v, age)
 }
+
+// cloneStateEvent gives each subscriber its own storage, so aging a queued
+// payload or encoding a sent event never touches broker state.
 func cloneStateEvent(value protocol.StateEvent) protocol.StateEvent {
 	value.Payload = cloneStatePayload(value.Payload)
 	return value
 }
 
 func cloneStatePayload(value protocol.StatePayload) protocol.StatePayload {
-	value.Host = cloneStateHostPointer(value.Host)
-	value.Memory = cloneStateMemory(value.Memory)
-	value.Session = cloneStateSessionPointer(value.Session)
-	value.Service = cloneStateServicePointer(value.Service)
-	value.Metrics = cloneStateMetricsPointer(value.Metrics)
+	value.Host = cloneStatePointer(value.Host, cloneStateHost)
+	value.Memory = maps.Clone(value.Memory)
+	value.Session = cloneStatePointer(value.Session, cloneStateSession)
+	value.Service = cloneStatePointer(value.Service, cloneStateService)
+	value.Metrics = cloneStatePointer(value.Metrics, cloneStateMetrics)
 	return value
+}
+
+// AgeSnapshot already copies every metric slice and reading.
+func cloneStateMetrics(value hostmetrics.Snapshot) hostmetrics.Snapshot {
+	return hostmetrics.AgeSnapshot(value, 0)
 }
 
 func cloneStateHost(value protocol.HostInfo) protocol.HostInfo {
-	if value.Build != nil {
-		build := *value.Build
-		value.Build = &build
-	}
-	if value.Wake != nil {
-		wake := *value.Wake
-		wake.Signature = cloneStateBytes(wake.Signature)
-		if value.Wake.NIC != nil {
-			nic := *value.Wake.NIC
-			wake.NIC = &nic
-		}
-		value.Wake = &wake
-	}
+	value.Build = cloneStatePointer(value.Build, nil)
+	value.Wake = cloneStatePointer(value.Wake, func(grant wake.Grant) wake.Grant {
+		grant.NIC = cloneStatePointer(grant.NIC, nil)
+		grant.Signature = slices.Clone(grant.Signature)
+		return grant
+	})
 	return value
-}
-
-func cloneStateHostPointer(value *protocol.HostInfo) *protocol.HostInfo {
-	if value == nil {
-		return nil
-	}
-	cloned := cloneStateHost(*value)
-	return &cloned
 }
 
 func cloneStateSession(value protocol.SessionInfo) protocol.SessionInfo {
-	value.Command = cloneStateStrings(value.Command)
-	value.LastAttachedAt = cloneStateTime(value.LastAttachedAt)
-	value.DetachedAt = cloneStateTime(value.DetachedAt)
-	value.ExitCode = cloneStateInt(value.ExitCode)
-	value.Recovery = cloneStateRecovery(value.Recovery)
-	if value.Hibernated != nil {
-		hibernated := *value.Hibernated
-		value.Hibernated = &hibernated
-	}
+	value.Command = slices.Clone(value.Command)
+	value.LastAttachedAt = cloneStatePointer(value.LastAttachedAt, nil)
+	value.DetachedAt = cloneStatePointer(value.DetachedAt, nil)
+	value.ExitCode = cloneStatePointer(value.ExitCode, nil)
+	value.Recovery = cloneStatePointer(value.Recovery, cloneStateRecovery)
+	value.Hibernated = cloneStatePointer(value.Hibernated, nil)
 	return value
 }
 
-func cloneStateSessionPointer(value *protocol.SessionInfo) *protocol.SessionInfo {
-	if value == nil {
-		return nil
-	}
-	cloned := cloneStateSession(*value)
-	return &cloned
+func cloneStateRecovery(value recovery.Record) recovery.Record {
+	value.Agent = cloneStatePointer(value.Agent, func(agent agentresume.Recipe) agentresume.Recipe {
+		agent.Options = slices.Clone(agent.Options)
+		return agent
+	})
+	value.AgentResume = cloneStatePointer(value.AgentResume, nil)
+	value.Lines = slices.Clone(value.Lines)
+	value.Command = slices.Clone(value.Command)
+	value.Restart = cloneStatePointer(value.Restart, func(restart recovery.Command) recovery.Command {
+		restart.Argv = slices.Clone(restart.Argv)
+		return restart
+	})
+	value.Remote = cloneStatePointer(value.Remote, nil)
+	return value
 }
 
 func cloneStateService(value protocol.ServiceInfo) protocol.ServiceInfo {
-	value.Listens = cloneStateListens(value.Listens)
-	if value.Run != nil {
-		run := *value.Run
-		run.Env = cloneStateStrings(run.Env)
-		value.Run = &run
-	}
-	if value.Demand != nil {
-		demand := *value.Demand
-		demand.Unbound = cloneStateStrings(demand.Unbound)
-		value.Demand = &demand
-	}
+	value.Listens = slices.Clone(value.Listens)
+	value.Run = cloneStatePointer(value.Run, func(run protocol.ServiceRun) protocol.ServiceRun {
+		run.Env = slices.Clone(run.Env)
+		return run
+	})
+	value.Demand = cloneStatePointer(value.Demand, func(demand protocol.ServiceDemand) protocol.ServiceDemand {
+		demand.Unbound = slices.Clone(demand.Unbound)
+		return demand
+	})
 	return value
 }
 
-func cloneStateServicePointer(value *protocol.ServiceInfo) *protocol.ServiceInfo {
-	if value == nil {
-		return nil
-	}
-	cloned := cloneStateService(*value)
-	return &cloned
-}
-
-func cloneStateMetricsPointer(value *hostmetrics.Snapshot) *hostmetrics.Snapshot {
-	if value == nil {
-		return nil
-	}
-	cloned := hostmetrics.AgeSnapshot(*value, 0)
-	return &cloned
-}
-
-func cloneStateRecovery(value *recovery.Record) *recovery.Record {
+// cloneStatePointer copies *value into fresh storage. A non-nil deep also
+// copies the slices and pointers a struct copy would still share.
+func cloneStatePointer[T any](value *T, deep func(T) T) *T {
 	if value == nil {
 		return nil
 	}
 	cloned := *value
-	cloned.Lines = cloneStateStrings(value.Lines)
-	cloned.Command = cloneStateStrings(value.Command)
-	if value.Agent != nil {
-		agent := *value.Agent
-		agent.Options = cloneStateStrings(value.Agent.Options)
-		cloned.Agent = &agent
+	if deep != nil {
+		cloned = deep(cloned)
 	}
-	if value.AgentResume != nil {
-		agentResume := *value.AgentResume
-		cloned.AgentResume = &agentResume
-	}
-	if value.Restart != nil {
-		restart := *value.Restart
-		restart.Argv = cloneStateStrings(value.Restart.Argv)
-		cloned.Restart = &restart
-	}
-	if value.Remote != nil {
-		remote := *value.Remote
-		cloned.Remote = &remote
-	}
-	return &cloned
-}
-
-func cloneStateMemory(value map[string]protocol.SessionMemory) map[string]protocol.SessionMemory {
-	if value == nil {
-		return nil
-	}
-	cloned := make(map[string]protocol.SessionMemory, len(value))
-	for key, row := range value {
-		cloned[key] = row
-	}
-	return cloned
-}
-
-func cloneStateListens(value []protocol.ServiceListen) []protocol.ServiceListen {
-	if value == nil {
-		return nil
-	}
-	cloned := make([]protocol.ServiceListen, len(value))
-	copy(cloned, value)
-	return cloned
-}
-
-func cloneStateStrings(value []string) []string {
-	if value == nil {
-		return nil
-	}
-	cloned := make([]string, len(value))
-	copy(cloned, value)
-	return cloned
-}
-
-func cloneStateBytes(value []byte) []byte {
-	if value == nil {
-		return nil
-	}
-	cloned := make([]byte, len(value))
-	copy(cloned, value)
-	return cloned
-}
-
-func cloneStateTime(value *time.Time) *time.Time {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
-}
-
-func cloneStateInt(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
 	return &cloned
 }
 

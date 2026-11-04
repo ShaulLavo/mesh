@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -146,7 +147,7 @@ func cloneSessionInfo(rows []protocol.SessionInfo) []protocol.SessionInfo {
 	}
 	cloned := make([]protocol.SessionInfo, len(rows))
 	for i, row := range rows {
-		row.Command = cloneStrings(row.Command)
+		row.Command = slices.Clone(row.Command)
 		row.LastAttachedAt = cloneTime(row.LastAttachedAt)
 		row.DetachedAt = cloneTime(row.DetachedAt)
 		row.ExitCode = cloneInt(row.ExitCode)
@@ -165,11 +166,11 @@ func cloneRecoveryRecord(record *recovery.Record) *recovery.Record {
 		return nil
 	}
 	cloned := *record
-	cloned.Lines = cloneStrings(record.Lines)
-	cloned.Command = cloneStrings(record.Command)
+	cloned.Lines = slices.Clone(record.Lines)
+	cloned.Command = slices.Clone(record.Command)
 	if record.Agent != nil {
 		agent := *record.Agent
-		agent.Options = cloneStrings(record.Agent.Options)
+		agent.Options = slices.Clone(agent.Options)
 		cloned.Agent = &agent
 	}
 	if record.AgentResume != nil {
@@ -178,7 +179,7 @@ func cloneRecoveryRecord(record *recovery.Record) *recovery.Record {
 	}
 	if record.Restart != nil {
 		restart := *record.Restart
-		restart.Argv = cloneStrings(record.Restart.Argv)
+		restart.Argv = slices.Clone(restart.Argv)
 		cloned.Restart = &restart
 	}
 	if record.Remote != nil {
@@ -186,39 +187,6 @@ func cloneRecoveryRecord(record *recovery.Record) *recovery.Record {
 		cloned.Remote = &remote
 	}
 	return &cloned
-}
-
-func cloneWireService(row protocol.ServiceInfo) protocol.ServiceInfo {
-	row.Listens = cloneServiceListens(row.Listens)
-	if row.Run != nil {
-		run := *row.Run
-		run.Env = cloneStrings(row.Run.Env)
-		row.Run = &run
-	}
-	if row.Demand != nil {
-		demand := *row.Demand
-		demand.Unbound = cloneStrings(row.Demand.Unbound)
-		row.Demand = &demand
-	}
-	return row
-}
-
-func cloneServiceListens(value []protocol.ServiceListen) []protocol.ServiceListen {
-	if value == nil {
-		return nil
-	}
-	cloned := make([]protocol.ServiceListen, len(value))
-	copy(cloned, value)
-	return cloned
-}
-
-func cloneStrings(value []string) []string {
-	if value == nil {
-		return nil
-	}
-	cloned := make([]string, len(value))
-	copy(cloned, value)
-	return cloned
 }
 
 func projectCatalogHostNames(catalog []HostSessions) {
