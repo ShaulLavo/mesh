@@ -2,9 +2,9 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -142,9 +142,12 @@ func CollectHostSessions(parent context.Context, hosts []HostRecord, budget Host
 }
 
 func cloneSessionInfo(rows []protocol.SessionInfo) []protocol.SessionInfo {
+	if rows == nil {
+		return nil
+	}
 	cloned := make([]protocol.SessionInfo, len(rows))
 	for i, row := range rows {
-		row.Command = append([]string(nil), row.Command...)
+		row.Command = slices.Clone(row.Command)
 		row.LastAttachedAt = cloneTime(row.LastAttachedAt)
 		row.DetachedAt = cloneTime(row.DetachedAt)
 		row.ExitCode = cloneInt(row.ExitCode)
@@ -162,9 +165,27 @@ func cloneRecoveryRecord(record *recovery.Record) *recovery.Record {
 	if record == nil {
 		return nil
 	}
-	data, _ := json.Marshal(record)
-	var cloned recovery.Record
-	_ = json.Unmarshal(data, &cloned)
+	cloned := *record
+	cloned.Lines = slices.Clone(record.Lines)
+	cloned.Command = slices.Clone(record.Command)
+	if record.Agent != nil {
+		agent := *record.Agent
+		agent.Options = slices.Clone(agent.Options)
+		cloned.Agent = &agent
+	}
+	if record.AgentResume != nil {
+		agentResume := *record.AgentResume
+		cloned.AgentResume = &agentResume
+	}
+	if record.Restart != nil {
+		restart := *record.Restart
+		restart.Argv = slices.Clone(restart.Argv)
+		cloned.Restart = &restart
+	}
+	if record.Remote != nil {
+		remote := *record.Remote
+		cloned.Remote = &remote
+	}
 	return &cloned
 }
 

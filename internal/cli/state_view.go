@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -188,9 +187,24 @@ func (v *StateView) applyEvent(event protocol.StateEvent, received time.Time, tr
 	return nil
 }
 func cloneWireServices(rows []protocol.ServiceInfo) []protocol.ServiceInfo {
-	data, _ := json.Marshal(rows)
-	var cloned []protocol.ServiceInfo
-	_ = json.Unmarshal(data, &cloned)
+	if rows == nil {
+		return nil
+	}
+	cloned := make([]protocol.ServiceInfo, len(rows))
+	for i, row := range rows {
+		row.Listens = slices.Clone(row.Listens)
+		if row.Run != nil {
+			run := *row.Run
+			run.Env = slices.Clone(run.Env)
+			row.Run = &run
+		}
+		if row.Demand != nil {
+			demand := *row.Demand
+			demand.Unbound = slices.Clone(demand.Unbound)
+			row.Demand = &demand
+		}
+		cloned[i] = row
+	}
 	return cloned
 }
 
