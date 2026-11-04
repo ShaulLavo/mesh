@@ -62,8 +62,6 @@ jobs:
           git diff --exit-code -- go.mod go.sum
       - name: Check private hosting boundary
         run: scripts/check-private-hosting-boundary.sh
-      - name: Vet
-        run: go vet ./...
       - name: Race tests
         run: go test -race ./...
       - name: Integration tests
@@ -214,20 +212,6 @@ jobs:
             ${{ runner.temp }}/machine-naming-daemon.log
           retention-days: 7
 
-  lint:
-    name: golangci-lint v2
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.14.0
-          args: --enable-only=bodyclose,errcheck,gosec,govet,ineffassign,staticcheck,unused
-
   gates:
     name: Quality gates
     runs-on: ubuntu-24.04
@@ -244,6 +228,9 @@ jobs:
         with:
           version: v2.14.0
           install-only: true
+      # install-only skips the action's schema check; golangci-lint run ignores unknown keys.
+      - name: Verify golangci-lint configuration schema
+        run: golangci-lint config verify
       - name: Verify CI download failure fixtures
         run: python3 scripts/test-ci-downloads.py
       - name: Install pinned ShellCheck, Ruff, and Lefthook
@@ -319,7 +306,7 @@ jobs:
   gate:
     name: Complete CI gate
     if: always()
-    needs: [app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, lint, gates, vulnerability, packaging]
+    needs: [app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every CI job
@@ -330,12 +317,11 @@ jobs:
           AUTH_CUTOVER: ${{ needs.auth-cutover.result }}
           MACHINE_NAMING: ${{ needs.machine-naming.result }}
           HELPER_RECOVERY: ${{ needs.helper-recovery.result }}
-          LINT: ${{ needs.lint.result }}
           GATES: ${{ needs.gates.result }}
           VULNERABILITY: ${{ needs.vulnerability.result }}
           PACKAGING: ${{ needs.packaging.result }}
         run: |
-          [[ $APP_PILL == success && $TEST == success && $SOCKET_PORTABILITY == success && $AUTH_CUTOVER == success && $MACHINE_NAMING == success && $HELPER_RECOVERY == success && $LINT == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
+          [[ $APP_PILL == success && $TEST == success && $SOCKET_PORTABILITY == success && $AUTH_CUTOVER == success && $MACHINE_NAMING == success && $HELPER_RECOVERY == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
 
   publish:
     name: Publish tested main commit
