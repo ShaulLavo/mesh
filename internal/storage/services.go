@@ -141,6 +141,7 @@ type storedDemand struct {
 	Env                []string `json:"env,omitempty"`
 	IdleMillis         int64    `json:"idleMs"`
 	ReadyTimeoutMillis int64    `json:"readyTimeoutMs"`
+	KeepRunning        bool     `json:"keepRunning,omitempty"`
 }
 
 type storedListen struct {
@@ -168,6 +169,7 @@ func encodeDemand(service meshserve.Service) (string, string, error) {
 			Command: service.Demand.Command, Cwd: service.Demand.Cwd, Env: service.Demand.Env,
 			IdleMillis:         service.Demand.Idle.Milliseconds(),
 			ReadyTimeoutMillis: service.Demand.ReadyTimeout.Milliseconds(),
+			KeepRunning:        service.Demand.KeepRunning,
 		})
 		if err != nil {
 			return "", "", fmt.Errorf("encode launch recipe: %w", err)
@@ -196,6 +198,7 @@ func decodeDemand(listens, demand string, service *meshserve.Service) error {
 			Command: stored.Command, Cwd: stored.Cwd, Env: stored.Env,
 			Idle:         time.Duration(stored.IdleMillis) * time.Millisecond,
 			ReadyTimeout: time.Duration(stored.ReadyTimeoutMillis) * time.Millisecond,
+			KeepRunning:  stored.KeepRunning,
 		}
 	}
 	return nil

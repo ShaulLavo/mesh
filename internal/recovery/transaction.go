@@ -511,26 +511,69 @@ func reserveReplacement(root string) (string, error) {
 }
 
 func lockSource(ctx context.Context, dir string) (func(), error) {
-	file, err := os.OpenFile(filepath.Join(dir, "recovery.lock"), os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // fixed lock name inside a canonical host-local session directory
-	if err != nil {
-		return nil, fmt.Errorf("recovery: open source lock: %w", err)
-	}
+	path := filepath.Join(dir, "recovery.lock")
 	for {
-		err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("recovery: acquire source lock: %w", err)
+		}
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // fixed lock name inside a canonical host-local session directory
+		if err != nil {
+			return nil, fmt.Errorf("recovery: open source lock: %w", err)
+		}
+		if err := waitSourceLock(ctx, file); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		current, err := sourceLockCurrent(file, path)
+		if err != nil {
+			releaseSourceLock(file)
+			return nil, err
+		}
+		if !current {
+			// Failed cleanup can unlink an inode while recovery waits on it.
+			// Rejoin the pathname before touching the source.
+			releaseSourceLock(file)
+			continue
+		}
+		return func() { releaseSourceLock(file) }, nil
+	}
+}
+
+func waitSourceLock(ctx context.Context, file *os.File) error {
+	for {
+		err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 		if err == nil {
-			return func() { _ = unix.Flock(int(file.Fd()), unix.LOCK_UN); _ = file.Close() }, nil
+			return nil
 		}
 		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
-			_ = file.Close()
-			return nil, fmt.Errorf("recovery: lock source: %w", err)
+			return fmt.Errorf("recovery: lock source: %w", err)
 		}
 		select {
 		case <-ctx.Done():
-			_ = file.Close()
-			return nil, fmt.Errorf("recovery: wait for source lock: %w", ctx.Err())
+			return fmt.Errorf("recovery: wait for source lock: %w", ctx.Err())
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
+}
+
+func sourceLockCurrent(file *os.File, path string) (bool, error) {
+	locked, err := file.Stat()
+	if err != nil {
+		return false, fmt.Errorf("recovery: inspect source lock descriptor: %w", err)
+	}
+	current, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("recovery: inspect source lock path: %w", err)
+	}
+	return os.SameFile(locked, current), nil
+}
+
+func releaseSourceLock(file *os.File) {
+	_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
+	_ = file.Close()
 }
 
 func readTransaction(path string, value any) error {

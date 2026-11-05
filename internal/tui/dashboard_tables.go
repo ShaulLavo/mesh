@@ -10,7 +10,12 @@ import (
 	"github.com/shaul/mesh/internal/cli"
 )
 
-const dashboardRunning = "running"
+const (
+	dashboardRunning = "running"
+	// dashboardHeld is the CLI projection of a kept route stopped by
+	// `mesh serve stop`.
+	dashboardHeld = "stopped (held)"
+)
 
 type dashboardSummaryRow struct {
 	text     string
@@ -126,13 +131,19 @@ func dashboardServiceRole(service cli.DashboardService) dashboardStyle {
 	switch {
 	case service.Failed:
 		return dashboardFailureStyle
-	case service.HealthUnknown || service.State == "idle":
+	case service.HealthUnknown || dashboardServiceWaiting(service):
 		return dashboardMutedStyle
 	case service.State == "starting" || service.State == "stopping":
 		return dashboardCachedStyle
 	default:
 		return dashboardGoodStyle
 	}
+}
+
+// dashboardServiceWaiting is a stopped route: idle until its next connection,
+// or a kept route held until `mesh serve start`.
+func dashboardServiceWaiting(service cli.DashboardService) bool {
+	return service.State == "idle" || service.State == dashboardHeld
 }
 
 func dashboardServiceColumns(host, name, state, age string, width int) string {
@@ -365,7 +376,7 @@ func dashboardServicePriority(service cli.DashboardService) int {
 	switch {
 	case service.Failed:
 		return 0
-	case service.State == "idle":
+	case dashboardServiceWaiting(service):
 		return 1
 	case service.State == "starting" || service.State == "stopping":
 		return 2

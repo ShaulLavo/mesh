@@ -42,6 +42,7 @@ func (a *application) serveCommand() *cobra.Command {
 		listens      []string
 		idle         time.Duration
 		readyTimeout time.Duration
+		keepRunning  bool
 	)
 	command := &cobra.Command{
 		Use:   "serve",
@@ -49,6 +50,7 @@ func (a *application) serveCommand() *cobra.Command {
 		Example: `  mesh serve HOST TARGET --at ROUTE
   mesh serve pc 5173 --at /dev --run 'bun run dev' --listen 5173=15173
   mesh serve pc --run 'bun run dev' --listen 5173=15173 --listen 3001=13001
+  mesh serve pc 9000 --at /models --run ./run --cwd /srv/models --keep-running
   mesh serve ls
   mesh serve list
   mesh serve start ROUTE
@@ -76,7 +78,8 @@ func (a *application) serveCommand() *cobra.Command {
 				route: route, displayName: displayName, files: files, privateHost: privateHost, privateHostSet: cmd.Flags().Changed("private-host"), isolate: isolate,
 				run: run, cwd: cwd, env: env, listens: listens, idle: idle, readyTimeout: readyTimeout,
 				cwdSet: cmd.Flags().Changed("cwd"), idleSet: cmd.Flags().Changed("idle"),
-				readySet: cmd.Flags().Changed("ready-timeout"),
+				readySet:    cmd.Flags().Changed("ready-timeout"),
+				keepRunning: keepRunning, keepSet: cmd.Flags().Changed("keep-running"),
 			})
 		},
 	}
@@ -87,12 +90,13 @@ func (a *application) serveCommand() *cobra.Command {
 
 	command.Flags().BoolVar(&isolate, "isolate", false, "send cross-origin isolation headers so the page can use SharedArrayBuffer")
 
-	command.Flags().StringVar(&run, "run", "", "command that serves the port; started on the first connection, stopped when idle")
+	command.Flags().StringVar(&run, "run", "", "command that serves the port; started on the first connection through Mesh and stopped when idle, or kept running with --keep-running")
 	command.Flags().StringVar(&cwd, "cwd", "", "directory --run starts in (default: this directory)")
 	command.Flags().StringArrayVar(&env, "env", nil, "KEY=VALUE added to the environment of --run (repeatable)")
 	command.Flags().StringArrayVar(&listens, "listen", nil, "PUBLIC=UPSTREAM: proxy 127.0.0.1:PUBLIC on the host to 127.0.0.1:UPSTREAM (repeatable)")
-	command.Flags().DurationVar(&idle, "idle", meshserve.DefaultIdle, "stop --run after no connection has been open this long")
+	command.Flags().DurationVar(&idle, "idle", meshserve.DefaultIdle, "stop --run after this long with no connection through a Mesh listener or tailnet route; only those connections count")
 	command.Flags().DurationVar(&readyTimeout, "ready-timeout", meshserve.DefaultReadyTimeout, "how long a starting --run holds connections before failing them")
+	command.Flags().BoolVar(&keepRunning, "keep-running", false, "start --run now, never stop it for idleness, and restart it after it exits; for clients that use the upstream port directly")
 	command.AddCommand(a.serveListCommand(), a.serveLabelCommand(), a.serveStartStopCommand(true), a.serveStartStopCommand(false))
 
 	return command
@@ -117,6 +121,8 @@ type serveFlags struct {
 	cwdSet       bool
 	idleSet      bool
 	readySet     bool
+	keepRunning  bool
+	keepSet      bool
 }
 
 func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags serveFlags) error {
@@ -163,12 +169,8 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 		Name:        name, Kind: kind, Target: target, PrivateHost: flags.privateHost,
 		Isolate: flags.isolate, Listens: demand.listens, Run: demand.run, LocalOnly: localOnly,
 	}
-	if !flags.privateHostSet && flags.privateHost == "" {
-		inherited, err := a.existingPrivateHost(cmd.Context(), host, name)
-		if err != nil {
-			return err
-		}
-		requested.PrivateHost = inherited
+	if err := a.inheritExisting(cmd.Context(), host, name, flags, &requested); err != nil {
+		return err
 	}
 	previewCtx, cancelPreview := context.WithTimeout(cmd.Context(), serviceMutationTimeout)
 	preview, privateName, err := previewRemoteService(previewCtx, host, a.dependencies.DialControl, requested)
@@ -195,9 +197,58 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 	if err != nil || persisted.Run == nil {
 		return err
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "starts %q in %s on the first connection; stops after %s idle\n",
-		privateServiceCommand(a.privacy, persisted.Run.Command), safeTableCell(a.privacy.Value("path", persisted.Run.Cwd)), time.Duration(persisted.Run.IdleMillis)*time.Millisecond)
-	return err
+	return writeServeLifetime(cmd.OutOrStdout(), a.privacy, persisted.Run)
+}
+
+// inheritExisting fills in what an edit of an existing route leaves out,
+// from the route as its host has it now: the private hostname and, for a
+// recipe, its lifetime and its ready timeout, each by its own flags. One live
+// read serves all of them; a new recipe keeps the defaults.
+func (a *application) inheritExisting(ctx context.Context, host HostRecord, name string, flags serveFlags, requested *protocol.ServiceInfo) error {
+	inheritHost := !flags.privateHostSet && flags.privateHost == ""
+	inheritRecipe := requested.Run != nil && (!flags.idleSet && !flags.keepSet || !flags.readySet)
+	if !inheritHost && !inheritRecipe {
+		return nil
+	}
+	existing, found, err := a.existingService(ctx, host, name)
+	if err != nil {
+		return err
+	}
+	if inheritHost {
+		requested.PrivateHost = existing.PrivateHost
+	}
+	if inheritRecipe && found && existing.Run != nil {
+		inheritRecipeFields(requested.Run, existing.Run, flags)
+	}
+	return nil
+}
+
+// inheritRecipeFields keeps an existing recipe's lifetime unless --idle or
+// --keep-running chose one, and its ready timeout unless --ready-timeout did.
+func inheritRecipeFields(run, existing *protocol.ServiceRun, flags serveFlags) {
+	if !flags.idleSet && !flags.keepSet {
+		run.KeepRunning, run.IdleMillis = existing.KeepRunning, existing.IdleMillis
+	}
+	if !flags.readySet {
+		run.ReadyTimeoutMillis = existing.ReadyTimeoutMillis
+	}
+}
+
+// writeServeLifetime confirms the persisted lifetime, including which clients
+// a finite route counts and what a kept route's direct clients should expect.
+func writeServeLifetime(output io.Writer, mask *privacy.Mask, run *protocol.ServiceRun) error {
+	command, cwd := privateServiceCommand(mask, run.Command), safeTableCell(mask.Value("path", run.Cwd))
+	text := fmt.Sprintf("starts %q in %s on the first connection through Mesh; stops after %s with no counted connection\n"+
+		"only connections through its Mesh listeners and tailnet route count; use --keep-running for clients that use the upstream port directly\n",
+		command, cwd, time.Duration(run.IdleMillis)*time.Millisecond)
+	if run.KeepRunning {
+		text = fmt.Sprintf("starts %q in %s now and keeps it running: no idle stop, and it restarts after it exits\n"+
+			"clients may use its upstream port directly; while it starts or restarts they see refused connections and should retry\n", command, cwd)
+	}
+	if _, err := io.WriteString(output, text); err != nil {
+		return fmt.Errorf("write serve confirmation: %w", err)
+	}
+	return nil
 }
 
 func (a *application) serveListCommand() *cobra.Command {

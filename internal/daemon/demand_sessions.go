@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"path/filepath"
 	"syscall"
@@ -179,8 +180,28 @@ func (l *lifecycle) findLabelled(ctx context.Context, label string) (string, boo
 	return string(newest.ID), found, nil
 }
 
-// forgetLabelled removes the ended sessions an earlier start of this route
-// left behind, keeping the one now running.
+// pruneLabelled bounds the ended sessions earlier starts of a route left
+// behind, with automatic retention's protections, and returns those removed.
+func (l *lifecycle) pruneLabelled(ctx context.Context, label, current string) []string {
+	// The catalog learns of a stop on its next pass; without this the
+	// session just stopped would still read as running and be kept.
+	if err := l.catalog.Reconcile(ctx); err != nil {
+		return nil
+	}
+	removed, err := l.catalog.PruneLabelled(ctx, label, storage.SessionID(current))
+	if err != nil {
+		log.Printf("daemon: prune %s history: %v", label, err)
+	}
+	ids := make([]string, len(removed))
+	for index, id := range removed {
+		ids[index] = string(id)
+	}
+	return ids
+}
+
+// forgetLabelled is a disposable app's explicit Forget: it removes every
+// ended session carrying label except keep, the way `mesh rm` does, and still
+// refuses live and owner-pinned ones. Route history uses pruneLabelled.
 func (l *lifecycle) forgetLabelled(ctx context.Context, label, keep string) {
 	// The catalog learns of a stop on its next pass; without this the
 	// session just stopped would still read as running and be kept.

@@ -134,3 +134,28 @@ func TestServiceOnDemandFieldsRoundTrip(t *testing.T) {
 		t.Fatalf("replacing with a plain route kept on-demand fields: %+v, %v", stored, err)
 	}
 }
+
+func TestServiceKeptRecipeRoundTrip(t *testing.T) {
+	store := openTestStore(t)
+	kept := meshserve.Service{Name: "ai", Kind: meshserve.Proxy, Target: "8317", Demand: &meshserve.Demand{
+		Command: "./run", Cwd: "/srv/proxy", ReadyTimeout: time.Minute, KeepRunning: true,
+	}}
+	if _, err := store.UpsertService(context.Background(), kept); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := store.ListServices(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || !listed[0].Equal(kept) || listed[0].Demand.Idle != 0 {
+		t.Fatalf("listed %+v, want the kept recipe with no idle window", listed)
+	}
+	finite := kept
+	finite.Demand = &meshserve.Demand{Command: "./run", Cwd: "/srv/proxy", Idle: 15 * time.Minute, ReadyTimeout: time.Minute}
+	if _, err := store.UpsertService(context.Background(), finite); err != nil {
+		t.Fatal(err)
+	}
+	if listed, err = store.ListServices(context.Background()); err != nil || len(listed) != 1 || listed[0].Demand.KeepRunning {
+		t.Fatalf("a finite edit listed as %+v, %v", listed, err)
+	}
+}

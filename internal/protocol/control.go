@@ -193,6 +193,9 @@ type ServiceRun struct {
 	Env                []string `json:"env,omitempty"`
 	IdleMillis         int64    `json:"idleMs,omitempty"`
 	ReadyTimeoutMillis int64    `json:"readyTimeoutMs,omitempty"`
+	// KeepRunning starts the command at once, never stops it for idleness and
+	// starts it again after it exits. IdleMillis is then zero.
+	KeepRunning bool `json:"keepRunning,omitempty"`
 }
 
 // On-demand route states.
@@ -209,6 +212,10 @@ type ServiceDemand struct {
 	State       string `json:"state"`
 	Connections int    `json:"connections,omitempty"`
 	SessionID   string `json:"sessionId,omitempty"`
+	// Held is a kept route that `mesh serve stop` stopped. It stays stopped
+	// until `mesh serve start`, a change of its definition, or a daemon
+	// restart. State still says whether that stop has finished.
+	Held bool `json:"held,omitempty"`
 	// Failure says why the last start failed, or why the session ended.
 	Failure string `json:"failure,omitempty"`
 	// Unbound lists listener ports the daemon could not bind, with why.

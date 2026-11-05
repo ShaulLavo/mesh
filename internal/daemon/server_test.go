@@ -578,3 +578,7 @@ var _ transport.Conn = (*serverTestConn)(nil)
 func (*serverTestCatalog) Remove(context.Context, storage.SessionID) error {
 	return nil
 }
+
+func (*serverTestCatalog) PruneLabelled(context.Context, string, storage.SessionID) ([]storage.SessionID, error) {
+	return nil, nil
+}

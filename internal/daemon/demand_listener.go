@@ -46,7 +46,7 @@ func (m *demandManager) listenLocked(owner, route string, port uint16, describe 
 	}
 	listener.listener = &countingListener{Listener: raw, open: map[*countedConn]struct{}{}, hold: func() func() {
 		if route := m.route(owner); route != nil {
-			release, _ := route.hold()
+			release, _ := route.hold(listenerCause(port))
 			return release
 		}
 		return func() {}
@@ -81,7 +81,7 @@ func (l *demandListener) serveHTTP(w http.ResponseWriter, request *http.Request)
 		http.Error(w, "route removed", http.StatusNotFound)
 		return
 	}
-	if err := route.ready(request.Context()); err != nil {
+	if err := route.ready(request.Context(), listenerCause(l.port)); err != nil {
 		meshserve.WriteDemandFailure(w, err, l.manager.logger)
 		return
 	}
