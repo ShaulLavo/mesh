@@ -187,3 +187,24 @@ repositories is not what this is.
 **SSH as the inter-host transport.** T05 exists, works, and resumes by sequence
 number. Replacing it with SSH channels would buy authentication we already have
 and cost the resume semantics that are the entire point.
+
+## Direct-mode disconnect follow-up, 2026-11-05
+
+Status: Approved follow-up, scheduled separately from the duplicate-hangup fix.
+The normal interactive-shell failure reproduced in `integration/ssh_direct.sh`
+was a duplicate SIGHUP to one process group. The focused repair preserves one
+hangup for each distinct foreground and leader group.
+
+A source-derived edge case remains to reproduce: a deliberately hangup-ignoring
+or disowned descendant can retain the PTY slave after the leader exits.
+`internal/sshd/run.go` waits for its output reader; a blocking PTY master read
+cannot be cancelled by closing that same file. Inspect `runProcess`,
+`hangupProcess`, and the descriptor access in resizing and foreground-group
+lookup before changing the reader's pollability. Do not assume that sending
+more hangups fixes this case, or kill unrelated process groups.
+
+Add a deterministic fixture with an owned descendant retaining the slave and
+ignoring SIGHUP. Require bounded direct-handler exit and joined reader cleanup,
+then verify direct SSH, resize, signals and exit status. Persistent workers must
+still survive client disconnect. This edge case was not the reproduced CI
+failure and is not claimed fixed by the duplicate-hangup regression.
