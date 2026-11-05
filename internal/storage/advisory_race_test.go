@@ -137,7 +137,7 @@ func TestAdvisoryReadonlyMigrationRemainsFatal(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = readonly.Close() })
 	for range 3 {
-		err := migrate(t.Context(), readonly, true)
+		err := migrate(t.Context(), readonly, migrations.Files, true)
 		var partial *goose.PartialError
 		var sqliteErr *sqlite.Error
 		if !errors.As(err, &partial) || !errors.As(err, &sqliteErr) || sqliteErr.Code()&0xff != sqlite3.SQLITE_READONLY || errors.Is(err, ErrAdvisoryMigrationUnavailable) {

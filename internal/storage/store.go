@@ -6,13 +6,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"path/filepath"
 	"sync"
 
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/shaul/mesh/db/migrations"
 	dbsqlc "github.com/shaul/mesh/internal/storage/sqlc"
@@ -66,7 +68,7 @@ func open(ctx context.Context, databasePath, busyTimeout, migrationBusyTimeout s
 		_ = db.Close()
 		return nil, fmt.Errorf("storage: connect to %s: %w", databasePath, err)
 	}
-	if err := migrate(ctx, db, advisory); err != nil {
+	if err := migrate(ctx, db, migrations.Files, advisory); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("storage: migrate %s: %w", databasePath, err)
 	}
@@ -300,16 +302,21 @@ func sessionsFromRows(rows []dbsqlc.Session, operation string) ([]Session, error
 	return sessions, nil
 }
 
-func migrate(ctx context.Context, db *sql.DB, advisory bool) error {
+func migrate(ctx context.Context, db *sql.DB, sources fs.FS, advisory bool) error {
 	if advisory {
 		// Goose retries missing version-table creation even with SQLite's writer wait disabled.
 		if err := ensureAdvisoryVersionTable(ctx, db); err != nil {
 			return fmt.Errorf("initialize advisory migration history: %w", err)
 		}
 	}
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations.Files, goose.WithTableName(goose.DefaultTablename))
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, sources, goose.WithTableName(goose.DefaultTablename))
 	if err != nil {
 		return fmt.Errorf("create Goose provider: %w", err)
+	}
+	if advisory {
+		if err := probeAdvisoryMigrationWriter(ctx, db, provider); err != nil {
+			return err
+		}
 	}
 	if _, err := provider.Up(ctx); err != nil {
 		if advisory && isAdvisoryMigrationRace(ctx, provider, err) {
@@ -329,6 +336,37 @@ func isAdvisoryMigrationRace(ctx context.Context, provider *goose.Provider, err 
 	// another opener won; missing history keeps permanent schema failures fatal.
 	version, readErr := provider.GetDBVersion(ctx)
 	return readErr == nil && version >= partial.Failed.Source.Version
+}
+
+// probeAdvisoryMigrationWriter fails fast when pending migrations cannot be written.
+// Goose parses every pending source in both directions before its first write,
+// and its parser draws a 4 MiB scan buffer per line, so behind a held writer
+// that work only delays SQLITE_BUSY past the caller's budget.
+func probeAdvisoryMigrationWriter(ctx context.Context, db *sql.DB, provider *goose.Provider) error {
+	pending, err := provider.HasPending(ctx)
+	if err != nil {
+		return fmt.Errorf("check pending migrations: %w", err)
+	}
+	if !pending {
+		return nil
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("reserve migration writer probe: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		var sqliteErr *sqlite.Error
+		if errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_BUSY {
+			return fmt.Errorf("claim migration writer: %w", err)
+		}
+		// Other failures, such as a read-only database, keep Goose's own error.
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx, "ROLLBACK"); err != nil {
+		return fmt.Errorf("release migration writer probe: %w", err)
+	}
+	return nil
 }
 
 func ensureAdvisoryVersionTable(ctx context.Context, db *sql.DB) error {
