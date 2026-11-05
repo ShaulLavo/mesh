@@ -548,6 +548,7 @@ func (r *demandRoute) stop(ctx context.Context) error {
 		return err
 	}
 	for {
+		r.manager.beforeStopLook()
 		r.mu.Lock()
 		route := r.service.Route()
 		if r.lastStart > control {
