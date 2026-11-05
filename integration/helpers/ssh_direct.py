@@ -17,6 +17,12 @@ def alive(pid):
     return result.returncode == 0 and not result.stdout.lstrip().startswith(b"Z")
 
 
+def recorded_pids(marker):
+    # The shell creates the marker before printf fills it.
+    text = marker.read_text() if marker.exists() else ""
+    return [int(value) for value in text.split()] if text.endswith("\n") else None
+
+
 def exercise(fixture):
     fixture.start_ssh()
     host = round_trip(str(fixture.local / "daemon.sock"), {"type": "host.info", "requestId": "direct"})["host"]
@@ -57,8 +63,7 @@ def exercise(fixture):
                 client.kill()
                 client.communicate(timeout=4)
         try:
-            eventually(marker.exists, "remote command did not record its children")
-            pids = [int(value) for value in marker.read_text().split()]
+            pids = eventually(lambda: recorded_pids(marker), "remote command did not record its children")
             require(all(alive(pid) for pid in pids), f"remote command was not live: {pids}")
             crash()
             eventually(lambda: not any(alive(pid) for pid in pids), f"disconnect left processes alive: {pids}")
@@ -94,8 +99,7 @@ def exercise(fixture):
     terminal.expect(PROMPT)
     marker = fixture.root / "interactive-pids"
     terminal.send(f"sleep 120 & printf '%s %s\\n' $$ $! > {marker}; wait\n")
-    eventually(marker.exists, "interactive job did not start")
-    pids = [int(value) for value in marker.read_text().split()]
+    pids = eventually(lambda: recorded_pids(marker), "interactive job did not start")
     try:
         terminal.crash()
         eventually(lambda: not any(alive(pid) for pid in pids), f"interactive disconnect left jobs: {pids}")

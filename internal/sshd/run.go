@@ -212,22 +212,31 @@ var processSignals = map[charmssh.Signal]syscall.Signal{
 var signalGroup = func(group int, signal syscall.Signal) { _ = syscall.Kill(-group, signal) }
 
 func signalProcess(pid int, master *os.File, signal syscall.Signal) {
-	group := pid
-	if master != nil {
-		if foreground, err := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPGRP); err == nil && foreground > 1 {
-			group = foreground
-		}
-	}
-	signalGroup(group, signal)
+	signalGroup(foregroundGroup(pid, master), signal)
 }
 
+func foregroundGroup(pid int, master *os.File) int {
+	if master == nil {
+		return pid
+	}
+	foreground, err := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPGRP)
+	if err != nil || foreground <= 1 {
+		return pid
+	}
+	return foreground
+}
+
+// A dropped connection hangs up the terminal: one SIGHUP per process group.
+// Bash exits without hanging up its background jobs when a second SIGHUP
+// arrives while it handles the first. Closing the master here would add the
+// kernel's own SIGHUP to the shell, so runProcess closes it after the exit.
 func hangupProcess(process *os.Process, master *os.File, completed <-chan struct{}) {
 	if process.Signal(syscall.Signal(0)) == nil {
-		signalProcess(process.Pid, master, syscall.SIGHUP)
-		signalGroup(process.Pid, syscall.SIGHUP)
-	}
-	if master != nil {
-		_ = master.Close()
+		group := foregroundGroup(process.Pid, master)
+		signalGroup(group, syscall.SIGHUP)
+		if group != process.Pid {
+			signalGroup(process.Pid, syscall.SIGHUP)
+		}
 	}
 	timer := time.NewTimer(500 * time.Millisecond)
 	defer timer.Stop()
