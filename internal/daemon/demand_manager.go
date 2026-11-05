@@ -58,6 +58,9 @@ type demandManager struct {
 	// accepting the Stop and after each transition it waited for. Tests use
 	// it to let a stop finish before the caller looks; nil otherwise.
 	stopLooks func()
+	// stopWaits runs after Stop captures a transition under the route lock.
+	// Tests release its start only after that observation; nil otherwise.
+	stopWaits func()
 	// cleanupRetry is demandCleanupRetry, shortened by tests.
 	cleanupRetry  time.Duration
 	adoptionRetry time.Duration
@@ -276,6 +279,12 @@ func (m *demandManager) Stop(ctx context.Context, name string) error {
 func (m *demandManager) beforeStopLook() {
 	if m.stopLooks != nil {
 		m.stopLooks()
+	}
+}
+
+func (m *demandManager) beforeStopWait() {
+	if m.stopWaits != nil {
+		m.stopWaits()
 	}
 }
 

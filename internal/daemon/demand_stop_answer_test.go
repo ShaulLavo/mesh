@@ -39,18 +39,15 @@ func TestKeptStopDuringStartAnswersWithTheStopTheStartBegan(t *testing.T) {
 	f.manager.Sync([]meshserve.Service{keptService()})
 	awaitDemandSignal(t, ready.entered, "kept start readiness")
 	f.sessions.failStops(errWorkerSilent)
-	looked := make(chan struct{})
 	var looks atomic.Int32
 	f.manager.stopLooks = func() {
 		if looks.Add(1) == 1 {
-			close(looked)
 			return
 		}
 		f.manager.goroutines.Wait()
 	}
+	f.manager.stopWaits = ready.unblock
 	stop := beginAdoptionCall(t, func(ctx context.Context) error { return f.manager.Stop(ctx, "dev") })
-	awaitDemandSignal(t, looked, "the Stop's first look")
-	ready.unblock()
 	if err := stop.wait(t); !errors.Is(err, errWorkerSilent) || !strings.Contains(err.Error(), "stop session S001") {
 		t.Fatalf("Stop = %v, want the failure of the stop the start began", err)
 	}
@@ -84,5 +81,112 @@ func TestDemandStopAfterAdoptionAnswersWithTheCleanupThatRan(t *testing.T) {
 	assertAdoptionCounts(t, sessions, 0, 1)
 	if sessions.liveCount() != 1 {
 		t.Fatal("a failed stop reported the adopted worker gone")
+	}
+}
+
+func TestKeptStopKeepsOwnFailureAcrossLaterStop(t *testing.T) {
+	f := newKeptFixture(t)
+	f.syncKept(t)
+	firstErr := errors.New("first accepted stop failed")
+	secondErr := errors.New("later accepted stop failed")
+	paused := newDemandBarrier(t)
+	var looks atomic.Int32
+	f.manager.stopLooks = func() {
+		if looks.Add(1) == 1 {
+			paused.wait()
+			return
+		}
+		f.manager.goroutines.Wait()
+	}
+	f.sessions.failStops(firstErr)
+	first := beginAdoptionCall(t, func(ctx context.Context) error { return f.manager.Stop(ctx, "dev") })
+	t.Cleanup(paused.unblock)
+	awaitDemandSignal(t, paused.entered, "first Stop accepted")
+	settleDemand(t, f.manager)
+	f.sessions.failStops(secondErr)
+	if err := f.manager.Stop(context.Background(), "dev"); !errors.Is(err, secondErr) {
+		t.Fatalf("later Stop = %v, want its own failure", err)
+	}
+	paused.unblock()
+	err := first.wait(t)
+	if !errors.Is(err, firstErr) || errors.Is(err, secondErr) {
+		t.Fatalf("first Stop = %v; first identity=%v, later identity=%v", err, errors.Is(err, firstErr), errors.Is(err, secondErr))
+	}
+}
+
+func TestKeptJoiningStopKeepsOwnFailureAcrossLaterStop(t *testing.T) {
+	f := newKeptFixture(t)
+	f.syncKept(t)
+	firstErr := errors.New("shared stop failed")
+	secondErr := errors.New("later stop failed")
+	stopping, paused := newDemandBarrier(t), newDemandBarrier(t)
+	f.sessions.mu.Lock()
+	f.sessions.stopGate = stopping
+	f.sessions.mu.Unlock()
+	f.sessions.failStops(firstErr)
+	accepted := make(chan struct{}, 2)
+	var looks atomic.Int32
+	f.manager.stopLooks = func() {
+		if looks.Add(1) <= 2 {
+			accepted <- struct{}{}
+			paused.wait()
+			return
+		}
+		f.manager.goroutines.Wait()
+	}
+	first := beginAdoptionCall(t, func(ctx context.Context) error { return f.manager.Stop(ctx, "dev") })
+	t.Cleanup(paused.unblock)
+	t.Cleanup(stopping.unblock)
+	awaitDemandSignal(t, accepted, "first Stop accepted")
+	awaitDemandSignal(t, stopping.entered, "first stop in flight")
+	joined := beginAdoptionCall(t, func(ctx context.Context) error { return f.manager.Stop(ctx, "dev") })
+	t.Cleanup(paused.unblock)
+	awaitDemandSignal(t, accepted, "joining Stop accepted")
+	stopping.unblock()
+	settleDemand(t, f.manager)
+	f.sessions.failStops(secondErr)
+	if err := f.manager.Stop(context.Background(), "dev"); !errors.Is(err, secondErr) {
+		t.Fatalf("later Stop = %v, want its own failure", err)
+	}
+	paused.unblock()
+	for _, caller := range []*adoptionCall{first, joined} {
+		err := caller.wait(t)
+		if !errors.Is(err, firstErr) || errors.Is(err, secondErr) {
+			t.Fatalf("shared Stop = %v, want only the shared attempt's failure", err)
+		}
+	}
+	if started, stopped := f.sessions.counts(); started != 1 || stopped != 2 {
+		t.Fatalf("started %d, stopped %d; want two explicit attempts and no launch", started, stopped)
+	}
+}
+
+func TestKeptNoopStopDoesNotJoinALaterStop(t *testing.T) {
+	f := newKeptFixture(t)
+	f.syncKept(t)
+	if err := f.manager.Stop(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	paused := newDemandBarrier(t)
+	var looks atomic.Int32
+	f.manager.stopLooks = func() {
+		if looks.Add(1) == 1 {
+			paused.wait()
+			return
+		}
+		f.manager.goroutines.Wait()
+	}
+	first := beginAdoptionCall(t, func(ctx context.Context) error { return f.manager.Stop(ctx, "dev") })
+	t.Cleanup(paused.unblock)
+	awaitDemandSignal(t, paused.entered, "no-op Stop accepted")
+	if err := f.manager.Start(context.Background(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	f.sessions.failStops(errWorkerSilent)
+	if err := f.manager.Stop(context.Background(), "dev"); !errors.Is(err, errWorkerSilent) {
+		t.Fatalf("later Stop = %v, want its own failure", err)
+	}
+	paused.unblock()
+	if err := first.wait(t); err != nil {
+		t.Fatalf("no-op Stop = %v, want no work owed", err)
 	}
 }
