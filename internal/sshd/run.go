@@ -208,6 +208,9 @@ var processSignals = map[charmssh.Signal]syscall.Signal{
 	"TERM": syscall.SIGTERM, "KILL": syscall.SIGKILL, "USR1": syscall.SIGUSR1, "USR2": syscall.SIGUSR2,
 }
 
+// signalGroup is a variable so tests can see which groups a hangup signals.
+var signalGroup = func(group int, signal syscall.Signal) { _ = syscall.Kill(-group, signal) }
+
 func signalProcess(pid int, master *os.File, signal syscall.Signal) {
 	group := pid
 	if master != nil {
@@ -215,13 +218,13 @@ func signalProcess(pid int, master *os.File, signal syscall.Signal) {
 			group = foreground
 		}
 	}
-	_ = syscall.Kill(-group, signal)
+	signalGroup(group, signal)
 }
 
 func hangupProcess(process *os.Process, master *os.File, completed <-chan struct{}) {
 	if process.Signal(syscall.Signal(0)) == nil {
 		signalProcess(process.Pid, master, syscall.SIGHUP)
-		_ = syscall.Kill(-process.Pid, syscall.SIGHUP)
+		signalGroup(process.Pid, syscall.SIGHUP)
 	}
 	if master != nil {
 		_ = master.Close()
@@ -233,7 +236,7 @@ func hangupProcess(process *os.Process, master *os.File, completed <-chan struct
 		return
 	case <-timer.C:
 		if process.Signal(syscall.Signal(0)) == nil {
-			_ = syscall.Kill(-process.Pid, syscall.SIGKILL)
+			signalGroup(process.Pid, syscall.SIGKILL)
 			_ = process.Kill()
 		}
 	}
