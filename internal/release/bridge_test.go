@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,15 +161,39 @@ func TestBridgeHistoryIsBoundedAndNeverInfersTags(t *testing.T) {
 	}
 }
 
+func unansweredBridgeHandler(_ http.ResponseWriter, r *http.Request) {
+	<-r.Context().Done()
+	// Returning here would publish an empty 200 response after cancellation.
+	panic(http.ErrAbortHandler)
+}
+
 func TestBridgeHonorsCancellation(t *testing.T) {
 	_, build, target := historicalBridgeFixture(t)
-	server := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	server := httptest.NewTLSServer(http.HandlerFunc(unansweredBridgeHandler))
 	defer server.Close()
 	client := Client{BaseURL: server.URL, HistoryAPI: server.URL + "/history", HTTPClient: server.Client()}
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	if _, err := client.Bridge(ctx, build, target); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("bridge exceeded caller budget: %v", err)
+	}
+}
+
+// The server cancels a request once the client's TLS close_notify arrives, which can precede the
+// client's socket close; a reply sent in that window reaches a transport that still prefers it.
+func TestBridgeCancellationFixtureAbortsCancelledRequest(t *testing.T) {
+	_, build, target := historicalBridgeFixture(t)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithCancel(r.Context())
+		cancel()
+		unansweredBridgeHandler(w, r.WithContext(ctx))
+	}))
+	defer server.Close()
+	client := Client{BaseURL: server.URL, HistoryAPI: server.URL + "/history", HTTPClient: server.Client()}
+	_, err := client.Bridge(t.Context(), build, target)
+	var transport *url.Error
+	if !errors.As(err, &transport) || !errors.Is(err, io.EOF) {
+		t.Fatalf("cancelled bridge handler must fail the exchange, not publish empty history: %v", err)
 	}
 }
 
