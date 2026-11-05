@@ -54,6 +54,13 @@ type demandManager struct {
 	// entered runs in Enter between counting the connection and waiting for
 	// its start. Tests use it to let that start finish first; nil otherwise.
 	entered func()
+	// stopLooks runs in Stop each time before it looks at the route: after
+	// accepting the Stop and after each transition it waited for. Tests use
+	// it to let a stop finish before the caller looks; nil otherwise.
+	stopLooks func()
+	// stopWaits runs after Stop captures a transition under the route lock.
+	// Tests release its start only after that observation; nil otherwise.
+	stopWaits func()
 	// cleanupRetry is demandCleanupRetry, shortened by tests.
 	cleanupRetry  time.Duration
 	adoptionRetry time.Duration
@@ -267,6 +274,18 @@ func (m *demandManager) Stop(ctx context.Context, name string) error {
 		return fmt.Errorf("daemon: route %s is not on-demand", name)
 	}
 	return route.stop(ctx)
+}
+
+func (m *demandManager) beforeStopLook() {
+	if m.stopLooks != nil {
+		m.stopLooks()
+	}
+}
+
+func (m *demandManager) beforeStopWait() {
+	if m.stopWaits != nil {
+		m.stopWaits()
+	}
 }
 
 // Status reports what a route with listeners or a recipe is doing now.

@@ -91,7 +91,20 @@ type demandRoute struct {
 	idleTimer   *time.Timer
 	idleToken   uint64
 	pending     *demandTransition
+	// stopAttempt binds accepted Stops to their shared attempt, including
+	// one still owed by a start or adoption. Later retries get a new slot;
+	// callers keep the slot they accepted even after the route moves on.
+	stopAttempt *demandStopAttempt
 	unbound     map[uint16]string
+}
+
+// demandStopAttempt is filled under the route lock when the owed stop
+// begins. Its transition is assigned once, so later stops cannot replace
+// the result an accepted caller owns.
+type demandStopAttempt struct {
+	transition *demandTransition
+	// noWork is terminal: startup or discovery proved no worker remains.
+	noWork bool
 }
 
 // demandTransition is one start or stop in progress. err is written before
@@ -541,19 +554,20 @@ func (r *demandRoute) unavailableLocked() error {
 }
 
 // stop is `mesh serve stop`. It records the stop as the route's own intent
-// first, so a caller that stops waiting cannot abandon it.
+// first, so a caller that stops waiting cannot abandon it. A stop that
+// carried that intent out answers it, even one that failed before the
+// caller looked again: the failed session is retried on the cleanup
+// schedule, never killed a second time at once.
 func (r *demandRoute) stop(ctx context.Context) error {
-	control, err := r.acceptStop() //nolint:contextcheck // accepted stop work outlives its waiter and is bounded by the daemon's lifetime
+	control, attempt, err := r.acceptStop() //nolint:contextcheck // accepted stop work outlives its waiter and is bounded by the daemon's lifetime
 	if err != nil {
 		return err
 	}
 	for {
+		r.manager.beforeStopLook()
 		r.mu.Lock()
 		route := r.service.Route()
-		if r.lastStart > control {
-			// A later Start replaced this Stop. The stop it already owed
-			// still finishes; nothing more is stopped on its behalf.
-			transition := r.pending
+		if transition, answered := r.owedStopLocked(control, attempt); answered {
 			r.unlock()
 			return awaitOwedStop(ctx, route, transition)
 		}
@@ -570,6 +584,7 @@ func (r *demandRoute) stop(ctx context.Context) error {
 		if transition == nil {
 			return err
 		}
+		r.manager.beforeStopWait()
 		if err := waitForTransition(ctx, route, transition); err != nil {
 			return fmt.Errorf("stopping route %s: %w", route, err)
 		}
@@ -579,14 +594,45 @@ func (r *demandRoute) stop(ctx context.Context) error {
 	}
 }
 
-// acceptStop records a Stop under the route lock and returns its number.
-func (r *demandRoute) acceptStop() (uint64, error) {
+// owedStopLocked keeps an admitted attempt's answer. A later Start can
+// replace future work, but cannot replace an attempt already bound here.
+func (r *demandRoute) owedStopLocked(control uint64, attempt *demandStopAttempt) (*demandTransition, bool) {
+	if attempt == nil || attempt.noWork {
+		return nil, true
+	}
+	if attempt.transition != nil {
+		return attempt.transition, true
+	}
+	if r.lastStart > control {
+		return r.pending, true
+	}
+	return nil, false
+}
+
+// acceptStop records a Stop and its result slot under the route lock.
+// Callers share a stop in progress or still owed, but a completed attempt
+// cannot answer a new request.
+func (r *demandRoute) acceptStop() (uint64, *demandStopAttempt, error) {
 	r.mu.Lock()
 	defer r.unlock()
 	if err := r.unavailableLocked(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return r.acceptStopLocked(), nil
+	control := r.acceptStopLocked()
+	if r.stopAttempt == nil && r.stopRequested {
+		r.stopAttempt = &demandStopAttempt{}
+	}
+	return control, r.stopAttempt, nil
+}
+
+// finishStopWithoutWorkerLocked completes the retained callers' answer
+// before the route drops its slot and accepts independent future work.
+func (r *demandRoute) finishStopWithoutWorkerLocked() {
+	r.stopRequested = false
+	if r.stopAttempt != nil {
+		r.stopAttempt.noWork = true
+		r.stopAttempt = nil
+	}
 }
 
 // stopAnswerLocked is a Stop's answer when nothing is left to wait for: done
@@ -729,7 +775,7 @@ func (r *demandRoute) finishAdoptionLocked(label, id string, found bool) bool {
 	r.failure = ""
 	if !found {
 		r.owned = ownsNothing
-		r.stopRequested = false
+		r.finishStopWithoutWorkerLocked()
 		r.adoptLabel = ""
 		r.adoptRetryAt = time.Time{}
 		r.state = protocol.DemandStopped
@@ -890,7 +936,7 @@ func (r *demandRoute) failStartLocked(id string, err error) {
 		r.stopCause = causeFailedStart
 	} else {
 		r.owned = ownsNothing
-		r.stopRequested = false
+		r.finishStopWithoutWorkerLocked()
 	}
 	var failure demandFailure
 	if errors.As(err, &failure) {
@@ -940,6 +986,10 @@ func (r *demandRoute) beginStopLocked(cause demandCause) {
 	id := r.sessionID
 	transition := &demandTransition{sessionID: id, done: make(chan struct{})}
 	r.pending = transition
+	if r.stopAttempt == nil || r.stopAttempt.transition != nil {
+		r.stopAttempt = &demandStopAttempt{}
+	}
+	r.stopAttempt.transition = transition
 	r.state = protocol.DemandStopping
 	r.stopCause = cause
 	route := r.service.Route()
@@ -966,6 +1016,7 @@ func (r *demandRoute) beginStopLocked(cause demandCause) {
 func (r *demandRoute) finishStopLocked(err error) {
 	r.pending = nil
 	r.stopRequested = false
+	r.stopAttempt = nil
 	r.state = protocol.DemandStopped
 	r.owned = ownsNothing
 	if err != nil {
