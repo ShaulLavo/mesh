@@ -70,22 +70,35 @@ func (m *demandManager) startFailure(ctx context.Context, service meshserve.Serv
 	tailCtx, cancelTail := context.WithTimeout(ctx, demandOutputTimeout)
 	tail := m.sessions.outputTail(tailCtx, id)
 	cancelTail()
+	// The cleanup runs on the daemon's lifetime. Shutdown admits no new kill:
+	// the session is then left for the next daemon, still owned, never
+	// assumed gone.
 	ended := true
-	if stop {
+	if stop && !m.admit() {
+		reason += "; not stopped because the daemon is shutting down"
+		ended = false
+	} else if stop {
 		stopCtx, cancel := context.WithTimeout(m.ctx, demandStopTimeout)
-		if err := m.sessions.stopSession(stopCtx, id); err != nil {
-			reason += fmt.Sprintf("; stopping it failed: %v", err)
-			ended = false
-		} else {
-			reason += "; stopped it"
-		}
+		err := m.sessions.stopSession(stopCtx, id)
 		cancel()
+		m.finishPhase()
+		m.logStop(service.Route(), id, causeReadiness, err)
+		reason, ended = readinessCleanupReason(reason, err)
 	}
 	message := fmt.Sprintf("route %s did not start: %s (session %s, command %q)", service.Route(), reason, id, service.Demand.Command)
 	if tail != "" {
 		message += "\n\nlast output:\n" + tail
 	}
 	return demandFailure{summary: fmt.Sprintf("%s (session %s)", reason, id), message: message, ended: ended}
+}
+
+// readinessCleanupReason adds how stopping a session that never became
+// ready went to the failure, and whether the session is known to be over.
+func readinessCleanupReason(reason string, err error) (string, bool) {
+	if err != nil {
+		return reason + fmt.Sprintf("; stopping it failed: %v", err), false
+	}
+	return reason + "; stopped it", true
 }
 
 // demandFailure keeps the one-line summary `mesh serve ls` shows apart from

@@ -36,6 +36,7 @@ type lifecycleCatalog interface {
 	List(context.Context) ([]storage.Session, error)
 	Get(context.Context, storage.SessionID) (storage.Session, error)
 	Remove(context.Context, storage.SessionID) error
+	PruneLabelled(context.Context, string, storage.SessionID) ([]storage.SessionID, error)
 }
 
 type launchWorker func(worker.LaunchConfig) (worker.Launched, error)

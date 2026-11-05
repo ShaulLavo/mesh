@@ -35,6 +35,11 @@ type Catalog struct {
 
 	metadata        map[storage.SessionID]directoryRevision
 	scannedMetadata map[storage.SessionID]directoryRevision
+	// scannedExitedAt is each exited session's validated exit time, from the
+	// metadata read that produced it in the latest scan. Retention ages
+	// sessions by it, so one that ran for weeks is not retired the moment it
+	// ends.
+	scannedExitedAt map[storage.SessionID]time.Time
 	previous        map[storage.SessionID]storage.Session
 	lastSeenAt      time.Time
 	persistedAt     time.Time
@@ -166,6 +171,7 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 	}
 
 	c.scannedMetadata = make(map[storage.SessionID]directoryRevision)
+	c.scannedExitedAt = make(map[storage.SessionID]time.Time)
 	currentBootID := c.bootID()
 	observed := make([]storage.Session, 0, len(entries))
 	for _, entry := range entries {
@@ -255,8 +261,11 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 				if stillRunning {
 					refreshedSession.State = storage.StateInterrupted
 				}
-				session = refreshedSession
+				session, meta = refreshedSession, refreshed
 			}
+		}
+		if session.State == storage.StateExited && meta.ExitedAt != nil {
+			c.scannedExitedAt[session.ID] = *meta.ExitedAt
 		}
 		observed = append(observed, session)
 	}
@@ -410,9 +419,10 @@ const (
 	maxRetainedTerminalSessions = 500
 )
 
-// retireFinishedSessions selects exited sessions past the retention limits.
-// Interrupted sessions and saved recovery attempts require explicit removal.
-// Directories remain until the database has durably retired their rows.
+// retireFinishedSessions selects exited sessions past the retention limits,
+// aged and ranked by when they exited. Interrupted sessions and saved recovery
+// attempts require explicit removal. Directories remain until the database has
+// durably retired their rows.
 func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.Session, []storage.SessionID) {
 	now := c.now()
 	type candidate struct {
@@ -435,7 +445,11 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 		if current.State != storage.StateExited || hasRecoveryHistory(filepath.Join(c.sessionsDir, string(current.ID))) {
 			continue
 		}
-		finished = append(finished, candidate{index: i, retireAt: current.CreatedAt})
+		retireAt := current.CreatedAt
+		if exitedAt, ok := c.scannedExitedAt[current.ID]; ok {
+			retireAt = exitedAt
+		}
+		finished = append(finished, candidate{index: i, retireAt: retireAt})
 	}
 	// Oldest first, so a count cap retires the least useful history.
 	sort.Slice(finished, func(i, j int) bool { return finished[i].retireAt.Before(finished[j].retireAt) })
@@ -507,27 +521,61 @@ func removeUnclaimedRetiredSession(dir string) error {
 		return removeRetiredSession(dir)
 	}
 	// Recovery may have started after pruning selected this legacy session.
-	// Claim the same lock exclusively; an existing lock belongs to that request.
-	file, err := os.OpenFile(filepath.Join(dir, "recovery.lock"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600) //nolint:gosec // fixed lock name in a catalog-observed session directory
-	if errors.Is(err, os.ErrExist) || errors.Is(err, os.ErrNotExist) {
+	claim, claimed, err := claimAutomaticRemoval(dir)
+	if err != nil || !claimed {
+		return err
+	}
+	if hasSavedRecovery(dir) {
+		claim.release(true)
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("claim automatic cleanup: %w", err)
+	err = removeRetiredSession(dir)
+	claim.release(err != nil)
+	return err
+}
+
+// automaticClaim is automatic cleanup's hold on a session's recovery lock,
+// the same lock recovery takes, so the two never act on one session at once.
+type automaticClaim struct {
+	file *os.File
+	path string
+}
+
+// claimAutomaticRemoval creates and locks a session's recovery lock. It
+// claims nothing when the lock already exists: that belongs to recovery, or
+// marks history that automatic cleanup must keep.
+func claimAutomaticRemoval(dir string) (*automaticClaim, bool, error) {
+	path := filepath.Join(dir, "recovery.lock")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600) //nolint:gosec // fixed lock name in a catalog-observed session directory
+	if errors.Is(err, os.ErrExist) || errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
 	}
-	defer func() { _ = file.Close() }()
+	if err != nil {
+		return nil, false, fmt.Errorf("claim automatic cleanup: %w", err)
+	}
 	err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 	if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-		return nil
+		// Recovery opened the new file and locked it first; it is recovery's.
+		_ = file.Close()
+		return nil, false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("lock automatic cleanup: %w", err)
+		_ = os.Remove(path)
+		_ = file.Close()
+		return nil, false, fmt.Errorf("lock automatic cleanup: %w", err)
 	}
-	defer func() { _ = unix.Flock(int(file.Fd()), unix.LOCK_UN) }()
-	if hasSavedRecovery(dir) {
-		return nil
+	return &automaticClaim{file: file, path: path}, true, nil
+}
+
+// release ends the claim. A claim that removed nothing unlinks the lock file
+// it created while still holding it, so a skipped or failed removal leaves no
+// recovery marker that would protect the session forever.
+func (c *automaticClaim) release(unlink bool) {
+	if unlink {
+		_ = os.Remove(c.path)
 	}
-	return removeRetiredSession(dir)
+	_ = unix.Flock(int(c.file.Fd()), unix.LOCK_UN)
+	_ = c.file.Close()
 }
 
 func removeRetiredSession(dir string) error {

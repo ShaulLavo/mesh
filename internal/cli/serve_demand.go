@@ -20,9 +20,15 @@ import (
 	meshserve "github.com/shaul/mesh/internal/serve"
 )
 
-// serviceStartMargin is added to a route's ready timeout when the CLI waits
-// for service.start, so the daemon's own timeout is the one that answers.
-const serviceStartMargin = 30 * time.Second
+const (
+	// serviceStartMargin is added to a route's ready timeout when the CLI
+	// waits for service.start, so the daemon's own timeout is the one that
+	// answers.
+	serviceStartMargin = 30 * time.Second
+	// heldServiceState is a kept route stopped by `mesh serve stop`. It waits
+	// for `mesh serve start`, not for a connection.
+	heldServiceState = "stopped (held)"
+)
 
 type serveDemand struct {
 	listens []protocol.ServiceListen
@@ -87,6 +93,8 @@ func serveDemandFromFlags(target string, flags serveFlags, localHost bool) (serv
 			return serveDemand{}, errors.New("--idle needs --run")
 		case flags.readySet:
 			return serveDemand{}, errors.New("--ready-timeout needs --run")
+		case flags.keepSet:
+			return serveDemand{}, errors.New("--keep-running needs --run")
 		}
 	}
 	if flags.run == "" && len(demand.listens) == 0 {
@@ -127,14 +135,39 @@ func serveDemandFromFlags(target string, flags serveFlags, localHost bool) (serv
 			return serveDemand{}, fmt.Errorf("--env: %w", err)
 		}
 	}
-	if flags.idle < time.Second || flags.readyTimeout < time.Second {
-		return serveDemand{}, errors.New("--idle and --ready-timeout must be at least 1s")
+	if err := validateServeLifetime(flags); err != nil {
+		return serveDemand{}, err
+	}
+	if flags.readyTimeout < time.Second {
+		return serveDemand{}, errors.New("--ready-timeout must be at least 1s")
 	}
 	demand.run = &protocol.ServiceRun{
 		Command: strings.TrimSpace(flags.run), Cwd: filepath.Clean(cwd), Env: slices.Clone(flags.env),
 		IdleMillis: flags.idle.Milliseconds(), ReadyTimeoutMillis: flags.readyTimeout.Milliseconds(),
 	}
+	if flags.keepRunning {
+		demand.run.KeepRunning, demand.run.IdleMillis = true, 0
+	}
 	return demand, nil
+}
+
+// validateServeLifetime accepts one lifetime: --keep-running, or a finite
+// --idle of at least a second. An explicit false or zero would read as
+// turning something off, so each names the flag that does what was meant.
+func validateServeLifetime(flags serveFlags) error {
+	switch {
+	case flags.keepSet && !flags.keepRunning:
+		return errors.New("--keep-running=false selects no lifetime; use --idle DURATION for a route that stops when idle")
+	case flags.keepSet && flags.idleSet:
+		return errors.New("--keep-running and --idle conflict: a kept route never stops for idleness")
+	case flags.keepRunning:
+		return nil
+	case flags.idleSet && flags.idle == 0:
+		return errors.New("--idle 0 cannot turn off the idle stop; use --keep-running to keep the command running")
+	case flags.idle < time.Second:
+		return errors.New("--idle must be at least 1s")
+	}
+	return nil
 }
 
 func parseListen(value string) (protocol.ServiceListen, error) {
@@ -203,11 +236,16 @@ func serviceTargetCell(service protocol.ServiceInfo) string {
 }
 
 // State is what an on-demand route's session is doing; "-" for anything else.
+// A kept route that `mesh serve stop` stopped reads "stopped (held)" once its
+// stop has finished; until then it reads stopping or failed like any other.
 func (r ServiceCatalogRow) State() string {
 	if !r.Live || r.Service.Run == nil || r.Service.Demand == nil || r.Service.Demand.State == "" {
 		return "-"
 	}
 	demand := r.Service.Demand
+	if demand.State == protocol.DemandStopped && demand.Held {
+		return heldServiceState
+	}
 	if demand.State != protocol.DemandRunning || demand.Connections == 0 {
 		return demand.State
 	}
@@ -224,7 +262,9 @@ func (r ServiceCatalogRow) demandHealth() (string, bool) {
 		return "", false
 	}
 	switch r.Service.Demand.State {
-	case protocol.DemandStopped, protocol.DemandStarting, protocol.DemandStopping, protocol.DemandFailed:
+	case protocol.DemandStopped:
+		return r.State(), true
+	case protocol.DemandStarting, protocol.DemandStopping, protocol.DemandFailed:
 		return r.Service.Demand.State, true
 	}
 	return "", false
@@ -255,13 +295,19 @@ func (a *application) serveStartStopCommand(start bool) *cobra.Command {
 		hostID  string
 		timeout time.Duration
 	)
-	use, short := "stop ROUTE", "Stop an on-demand route now; the next connection starts it again"
+	use, short := "stop ROUTE", "Stop an on-demand route now"
+	long := "Stop an on-demand route now. Its listeners stay bound. A route with an idle window starts again on its\n" +
+		"next connection through Mesh. A --keep-running route stays stopped until mesh serve start, a change\n" +
+		"of its definition, or a daemon restart."
 	if start {
 		use, short = "start ROUTE", "Start an on-demand route now and wait until it is ready"
+		long = "Start an on-demand route now and wait until it is ready. This ends the stop of a --keep-running\n" +
+			"route, and starts it without waiting for its restart delay."
 	}
 	command := &cobra.Command{
 		Use:   use,
 		Short: short,
+		Long:  long,
 		Args:  exactArgs(1, "the route", "mesh serve "+strings.Fields(use)[0]+" /dev"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if timeout <= 0 || timeout > maximumServiceListTimeout {
@@ -317,7 +363,7 @@ func (a *application) runServeStartStop(cmd *cobra.Command, route, hostID string
 	}
 	row := ServiceCatalogRow{Host: selected.Host, Service: status, Live: true}
 	state := row.State()
-	if status.Demand != nil && status.Demand.SessionID != "" && state != protocol.DemandStopped {
+	if status.Demand != nil && status.Demand.SessionID != "" && status.Demand.State != protocol.DemandStopped {
 		state += ", session " + safeTableCell(a.privacy.Value("session", status.Demand.SessionID))
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s on %s: %s\n", a.privacy.Value("route", route), a.privacy.Value("host", HostLabel(selected.Host)), state)

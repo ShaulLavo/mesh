@@ -98,6 +98,8 @@ func projectDashboardServices(rows []protocol.ServiceInfo, section ObservedSecti
 			result.Failed++
 		case row.HealthUnknown:
 			result.Unknown++
+		case row.Demand != nil && row.Demand.State == protocol.DemandStopped && row.Demand.Held:
+			result.Held++
 		case row.Demand != nil && row.Demand.State == protocol.DemandStopped:
 			result.Idle++
 		case row.Demand == nil || row.Demand.State == "" || row.Demand.State == protocol.DemandRunning:
@@ -142,7 +144,10 @@ func projectDashboardService(row protocol.ServiceInfo, healthSupported bool) Das
 		return service
 	}
 	service.State = dashboardText(row.Demand.State)
-	if row.Demand.State == protocol.DemandStopped {
+	switch {
+	case row.Demand.State == protocol.DemandStopped && row.Demand.Held:
+		service.State = heldServiceState
+	case row.Demand.State == protocol.DemandStopped:
 		service.State = "idle"
 	}
 	return service

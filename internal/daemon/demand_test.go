@@ -41,7 +41,38 @@ type fakeDemandSessions struct {
 	startErr error
 	adoptID  string
 	adoptFor string
+	// launchGate parks each start inside its launch, before the worker exists.
+	launchGate *demandBarrier
+	// stopGate parks each stop after its kill was sent.
+	stopGate *demandBarrier
+	// noWorkerErr makes a launch fail before any worker exists.
+	noWorkerErr error
+	// output replaces the output a failed start reads back.
+	output string
 }
+
+// demandBarrier parks a call until the test releases it. Create it after the
+// manager, so its cleanup releases the call before the manager's Close joins it.
+type demandBarrier struct {
+	entered chan struct{}
+	resume  chan struct{}
+	enter   sync.Once
+	release sync.Once
+}
+
+func newDemandBarrier(t *testing.T) *demandBarrier {
+	t.Helper()
+	barrier := &demandBarrier{entered: make(chan struct{}), resume: make(chan struct{})}
+	t.Cleanup(barrier.unblock)
+	return barrier
+}
+
+func (b *demandBarrier) wait() {
+	b.enter.Do(func() { close(b.entered) })
+	<-b.resume
+}
+
+func (b *demandBarrier) unblock() { b.release.Do(func() { close(b.resume) }) }
 
 func newFakeDemandSessions() *fakeDemandSessions {
 	return &fakeDemandSessions{live: map[string]string{}, exits: map[string]int{}}
@@ -49,7 +80,16 @@ func newFakeDemandSessions() *fakeDemandSessions {
 
 func (f *fakeDemandSessions) startLabelled(_ context.Context, label string, command []string, cwd string, env []string) (string, error) {
 	f.mu.Lock()
+	gate := f.launchGate
+	f.mu.Unlock()
+	if gate != nil {
+		gate.wait()
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.noWorkerErr != nil {
+		return "", fmt.Errorf("daemon: create: launch worker: %w", f.noWorkerErr)
+	}
 	f.next++
 	id := fmt.Sprintf("S%03d", f.next)
 	f.started = append(f.started, id)
@@ -68,6 +108,12 @@ func (f *fakeDemandSessions) startLabelled(_ context.Context, label string, comm
 }
 
 func (f *fakeDemandSessions) stopSession(_ context.Context, id string) error {
+	f.mu.Lock()
+	gate := f.stopGate
+	f.mu.Unlock()
+	if gate != nil {
+		gate.wait()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, id)
@@ -90,7 +136,14 @@ func (f *fakeDemandSessions) sessionExit(id string) (*int, bool) {
 	return nil, false
 }
 
-func (f *fakeDemandSessions) outputTail(context.Context, string) string { return "npm ERR! boom" }
+func (f *fakeDemandSessions) outputTail(context.Context, string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.output != "" {
+		return f.output
+	}
+	return "npm ERR! boom"
+}
 
 func (f *fakeDemandSessions) findLabelled(_ context.Context, label string) (string, bool, error) {
 	f.mu.Lock()
@@ -102,7 +155,7 @@ func (f *fakeDemandSessions) findLabelled(_ context.Context, label string) (stri
 	return "", false, nil
 }
 
-func (f *fakeDemandSessions) forgetLabelled(context.Context, string, string) {}
+func (f *fakeDemandSessions) pruneLabelled(context.Context, string, string) []string { return nil }
 
 func (f *fakeDemandSessions) crash(id string, code int) {
 	f.mu.Lock()
@@ -145,6 +198,7 @@ func testDemandManager(t *testing.T, sessions *fakeDemandSessions, upstreamReady
 	t.Cleanup(func() {
 		manager.Close()
 		cancel()
+		manager.goroutines.Wait()
 	})
 	return manager
 }

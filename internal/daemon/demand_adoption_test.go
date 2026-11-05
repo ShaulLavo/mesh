@@ -87,6 +87,7 @@ func newAdoptionManagerWithParent(parent context.Context, t *testing.T, sessions
 		manager.Close()
 		cancel()
 		joinAdoptionTransitions(t, manager)
+		manager.goroutines.Wait()
 	})
 	return manager
 }

@@ -964,6 +964,7 @@ EXAMPLES
   mesh serve HOST TARGET --at ROUTE
   mesh serve pc 5173 --at /dev --run 'bun run dev' --listen 5173=15173
   mesh serve pc --run 'bun run dev' --listen 5173=15173 --listen 3001=13001
+  mesh serve pc 9000 --at /models --run ./run --cwd /srv/models --keep-running
   mesh serve ls
   mesh serve list
   mesh serve start ROUTE
@@ -974,7 +975,7 @@ COMMANDS
   label ROUTE NAME [--flags]  Set the display name of an existing service
   ls [--flags]                List live and cached services
   start ROUTE [--flags]       Start an on-demand route now and wait until it is ready
-  stop ROUTE [--flags]        Stop an on-demand route now; the next connection starts it again
+  stop ROUTE [--flags]        Stop an on-demand route now
 
 FLAGS
 
@@ -983,15 +984,16 @@ FLAGS
   --env                       Key=Value added to the environment of --run (repeatable)
   --files                     Enable directory listings
   -h --help                   Help for serve
-  --idle                      Stop --run after no connection has been open this long (15m0s)
+  --idle                      Stop --run after this long with no connection through a Mesh listener or tailnet route; only those connections count (15m0s)
   --isolate                   Send cross-origin isolation headers so the page can use SharedArrayBuffer
+  --keep-running              Start --run now, never stop it for idleness, and restart it after it exits; for clients that use the upstream port directly
   --label                     Display name shown in service lists
   --leave-key                 Key that leaves all nested sessions, or none (ctrl+^)
   --listen                    Public=Upstream: proxy 127.0.0.1:PUBLIC on the host to 127.0.0.1:UPSTREAM (repeatable)
   --privacy                   Mask personal data for recording and screen sharing (MESH_PRIVACY)
   --private-host              Private hostname at the root, using a label or a configured deployment hostname
   --ready-timeout             How long a starting --run holds connections before failing them (1m0s)
-  --run                       Command that serves the port; started on the first connection, stopped when idle
+  --run                       Command that serves the port; started on the first connection through Mesh and stopped when idle, or kept running with --keep-running
 ```
 
 ## mesh serve label
@@ -1031,7 +1033,8 @@ FLAGS
 ## mesh serve start
 
 ```text
-Start an on-demand route now and wait until it is ready
+Start an on-demand route now and wait until it is ready. This ends the stop of a --keep-running
+route, and starts it without waiting for its restart delay.
 
 USAGE
 
@@ -1049,7 +1052,9 @@ FLAGS
 ## mesh serve stop
 
 ```text
-Stop an on-demand route now; the next connection starts it again
+Stop an on-demand route now. Its listeners stay bound. A route with an idle window starts again on its
+next connection through Mesh. A --keep-running route stays stopped until mesh serve start, a change
+of its definition, or a daemon restart.
 
 USAGE
 

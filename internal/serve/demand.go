@@ -41,9 +41,10 @@ type Listen struct {
 	Upstream uint16
 }
 
-// Demand is the launch recipe of an on-demand route. The route starts it as a
-// session on the first connection and stops it once no connection has been
-// open for Idle.
+// Demand is the launch recipe of an on-demand route. A finite route starts it
+// as a session on the first connection through Mesh and stops it once no such
+// connection has been open for Idle. A kept route starts it at once, never
+// stops it for idleness, and starts it again after it exits; its Idle is zero.
 type Demand struct {
 	// Command runs through the host user's login shell, so it finds the same
 	// tools a terminal on that host would.
@@ -52,7 +53,11 @@ type Demand struct {
 	Env          []string
 	Idle         time.Duration
 	ReadyTimeout time.Duration
+	KeepRunning  bool
 }
+
+// Kept reports whether the route keeps its session running.
+func (d *Demand) Kept() bool { return d != nil && d.KeepRunning }
 
 // DemandGate admits requests to on-demand routes. Enter counts one open
 // connection to the route until release runs, starting the route's session if
@@ -75,7 +80,7 @@ func (d *Demand) Equal(other *Demand) bool {
 		return d == other
 	}
 	return d.Command == other.Command && d.Cwd == other.Cwd && slices.Equal(d.Env, other.Env) &&
-		d.Idle == other.Idle && d.ReadyTimeout == other.ReadyTimeout
+		d.Idle == other.Idle && d.ReadyTimeout == other.ReadyTimeout && d.KeepRunning == other.KeepRunning
 }
 
 // Label names the session an on-demand route starts. The daemon finds a
@@ -208,14 +213,11 @@ func normalizeRecipe(name string, demand Demand) (Demand, error) {
 			return Demand{}, fmt.Errorf("serve: service %q: %w", name, err)
 		}
 	}
-	if demand.Idle == 0 {
-		demand.Idle = DefaultIdle
-	}
 	if demand.ReadyTimeout == 0 {
 		demand.ReadyTimeout = DefaultReadyTimeout
 	}
-	if demand.Idle < minimumDemandDuration || demand.Idle > maximumIdle {
-		return Demand{}, fmt.Errorf("serve: service %q idle window %s is outside %s to %s", name, demand.Idle, minimumDemandDuration, maximumIdle)
+	if err := normalizeLifetime(name, &demand); err != nil {
+		return Demand{}, err
 	}
 	if demand.ReadyTimeout < minimumDemandDuration || demand.ReadyTimeout > maximumReadyTimeout {
 		return Demand{}, fmt.Errorf("serve: service %q ready timeout %s is outside %s to %s", name, demand.ReadyTimeout, minimumDemandDuration, maximumReadyTimeout)
@@ -225,6 +227,25 @@ func normalizeRecipe(name string, demand Demand) (Demand, error) {
 	demand.Idle = demand.Idle.Truncate(time.Millisecond)
 	demand.ReadyTimeout = demand.ReadyTimeout.Truncate(time.Millisecond)
 	return demand, nil
+}
+
+// normalizeLifetime fills the default idle window of a finite recipe. A kept
+// recipe has no idle window: one that carries an idle value is ambiguous, so
+// it is refused instead of guessed.
+func normalizeLifetime(name string, demand *Demand) error {
+	if demand.KeepRunning {
+		if demand.Idle != 0 {
+			return fmt.Errorf("serve: service %q keeps running, so it cannot also stop after %s idle", name, demand.Idle)
+		}
+		return nil
+	}
+	if demand.Idle == 0 {
+		demand.Idle = DefaultIdle
+	}
+	if demand.Idle < minimumDemandDuration || demand.Idle > maximumIdle {
+		return fmt.Errorf("serve: service %q idle window %s is outside %s to %s", name, demand.Idle, minimumDemandDuration, maximumIdle)
+	}
+	return nil
 }
 
 // ValidateEnvEntry checks one KEY=VALUE entry of a launch recipe.

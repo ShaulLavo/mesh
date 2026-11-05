@@ -90,6 +90,9 @@ func (m dashboardModel) header() []string {
 	if totals.idle > 0 {
 		counts += " · " + m.paint(dashboardMutedStyle).Render(fmt.Sprintf("%d idle", totals.idle))
 	}
+	if totals.held > 0 {
+		counts += " · " + m.paint(dashboardMutedStyle).Render(fmt.Sprintf("%d held", totals.held))
+	}
 	if totals.unknown > 0 {
 		counts += " · unknown " + m.paint(dashboardMutedStyle).Render(fmt.Sprint(totals.unknown))
 	}
@@ -113,7 +116,9 @@ func (m dashboardModel) header() []string {
 	return []string{dashboardAlign(title, m.now.Format("15:04:05"), m.width), counts}
 }
 
-type dashboardTotals struct{ reachable, unreachable, connecting, refused, liveSessions, cachedSessions, services, ready, failed, idle, unknown, cachedServices int }
+type dashboardTotals struct {
+	reachable, unreachable, connecting, refused, liveSessions, cachedSessions, services, ready, failed, idle, held, unknown, cachedServices int
+}
 
 func (m dashboardModel) totals() dashboardTotals {
 	var totals dashboardTotals
@@ -143,6 +148,7 @@ func (m dashboardModel) totals() dashboardTotals {
 		totals.ready += host.Services.Ready
 		totals.failed += host.Services.Failed
 		totals.idle += host.Services.Idle
+		totals.held += host.Services.Held
 		totals.unknown += host.Services.Unknown
 	}
 	return totals

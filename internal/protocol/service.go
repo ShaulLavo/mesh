@@ -32,6 +32,7 @@ func ServiceFromInfo(info ServiceInfo) meshserve.Service {
 			Env:          append([]string(nil), info.Run.Env...),
 			Idle:         time.Duration(info.Run.IdleMillis) * time.Millisecond,
 			ReadyTimeout: time.Duration(info.Run.ReadyTimeoutMillis) * time.Millisecond,
+			KeepRunning:  info.Run.KeepRunning,
 		}
 	}
 	return service
@@ -61,6 +62,7 @@ func ServiceDefinitionInfo(service meshserve.Service) ServiceInfo {
 			Env:                append([]string(nil), service.Demand.Env...),
 			IdleMillis:         service.Demand.Idle.Milliseconds(),
 			ReadyTimeoutMillis: service.Demand.ReadyTimeout.Milliseconds(),
+			KeepRunning:        service.Demand.KeepRunning,
 		}
 	}
 	return info

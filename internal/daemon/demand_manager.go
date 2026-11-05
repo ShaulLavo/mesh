@@ -31,7 +31,9 @@ type demandSessions interface {
 	sessionExit(id string) (code *int, ended bool)
 	outputTail(ctx context.Context, id string) string
 	findLabelled(ctx context.Context, label string) (string, bool, error)
-	forgetLabelled(ctx context.Context, label, keep string)
+	// pruneLabelled bounds a route's ended sessions after a start and returns
+	// the ones it actually removed.
+	pruneLabelled(ctx context.Context, label, current string) []string
 }
 
 // demandManager runs on-demand routes and the loopback listeners of every
@@ -55,6 +57,13 @@ type demandManager struct {
 	// cleanupRetry is demandCleanupRetry, shortened by tests.
 	cleanupRetry  time.Duration
 	adoptionRetry time.Duration
+	// now schedules kept restarts and measures stable runs; tests fake it.
+	now func() time.Time
+
+	// admission fences launches and kills at shutdown.
+	admission demandAdmission
+	// goroutines runs every start, stop and adoption, so tests can join them.
+	goroutines sync.WaitGroup
 
 	mu        sync.Mutex
 	routes    map[string]*demandRoute
@@ -79,6 +88,7 @@ func newDemandManager(ctx context.Context, sessions demandSessions, report func(
 	return &demandManager{
 		ctx: ctx, sessions: sessions, report: report, logger: log.Default(),
 		bind: bindLoopback, dial: dialUpstream, holder: portHolder, poll: demandPollInterval, cleanupRetry: demandCleanupRetry, adoptionRetry: demandSuperviseInterval,
+		now:    time.Now,
 		routes: make(map[string]*demandRoute), listeners: make(map[uint16]*demandListener),
 		retiring: make(map[string]*demandRoute),
 	}
@@ -224,31 +234,33 @@ func (m *demandManager) Enter(ctx context.Context, name string) (func(), error) 
 	if route == nil {
 		return nil, fmt.Errorf("route /%s is not on-demand", name)
 	}
-	release, started := route.hold()
+	release, started := route.hold(causeTailnetRequest)
 	if m.entered != nil {
 		m.entered()
 	}
 	// The start this connection caused may already have failed by the time
 	// it waits; answering with that failure keeps one connection from
 	// starting the session twice.
-	if err := route.awaitStart(ctx, started); err != nil {
+	if err := route.awaitStart(ctx, started, causeTailnetRequest); err != nil {
 		release()
 		return nil, err
 	}
 	return release, nil
 }
 
-// Start starts an on-demand route now and waits until it is ready.
+// Start starts an on-demand route now and waits until it is ready. It ends a
+// kept route's hold and restart delay.
 func (m *demandManager) Start(ctx context.Context, name string) error {
 	route := m.route(name)
 	if route == nil || !route.onDemand() {
 		return fmt.Errorf("daemon: route %s is not on-demand", name)
 	}
-	return route.ready(ctx)
+	return route.start(ctx)
 }
 
-// Stop stops an on-demand route now. Its listeners stay bound, so the next
-// connection starts it again.
+// Stop stops an on-demand route now. Its listeners stay bound. A finite
+// route starts again on its next connection; a kept route stays stopped until
+// Start, a change of its definition, or the next daemon.
 func (m *demandManager) Stop(ctx context.Context, name string) error {
 	route := m.route(name)
 	if route == nil || !route.onDemand() {
@@ -266,8 +278,9 @@ func (m *demandManager) Status(name string) *protocol.ServiceDemand {
 	return route.status()
 }
 
-// Run watches running sessions for an exit nobody asked for and retries
-// listeners whose port was held, until ctx ends.
+// Run watches running sessions for an exit nobody asked for, restarts kept
+// routes when their delay passes, and retries listeners whose port was held,
+// until ctx ends.
 func (m *demandManager) Run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -307,6 +320,7 @@ func (m *demandManager) supervise() {
 		route.checkSession()
 		route.retryCleanup()
 		route.retryAdoption()
+		route.keepRunning()
 	}
 }
 
@@ -331,11 +345,16 @@ func (m *demandManager) Retiring() []protocol.ServiceInfo {
 }
 
 // Close releases every listener. Sessions keep running: the next daemon
-// adopts them by their label.
+// adopts them by their label. Close first refuses every new launch and kill,
+// then waits for those already admitted, holding no lock while it waits. A
+// launch admitted before shutdown finishes creating its worker, which the next
+// daemon adopts; a kill already sent may finish.
 func (m *demandManager) Close() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.admission.mu.Lock()
+	m.admission.closed = true
 	m.closed.Store(true)
+	m.admission.mu.Unlock()
+	m.mu.Lock()
 	for port, listener := range m.listeners {
 		listener.close()
 		delete(m.listeners, port)
@@ -345,4 +364,6 @@ func (m *demandManager) Close() {
 		route.cancelIdleLocked()
 		route.mu.Unlock()
 	}
+	m.mu.Unlock()
+	m.admission.phases.Wait()
 }

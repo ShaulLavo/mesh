@@ -787,6 +787,10 @@ func (c *lifecycleTestCatalog) Remove(_ context.Context, _ storage.SessionID) er
 	return nil
 }
 
+func (c *lifecycleTestCatalog) PruneLabelled(context.Context, string, storage.SessionID) ([]storage.SessionID, error) {
+	return nil, nil
+}
+
 func TestRemoveRefusesARunningSession(t *testing.T) {
 	t.Parallel()
 

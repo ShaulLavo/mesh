@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,33 @@ func TestServeDemandFlags(t *testing.T) {
 				t.Fatal("accepted")
 			}
 		})
+	}
+}
+
+// A shared service that clients reach on its upstream port directly needs a
+// lifetime that does not depend on counted connections.
+func TestServeKeepRunningReachesTheHost(t *testing.T) {
+	host := setupCommandTestHost(t)
+	stdout, _, err := executeCommand(t, Dependencies{DialControl: host.dial},
+		"serve", "pc", "5173", "--at", "/dev", "--run", "bun run dev", "--cwd", "/srv/app", "--keep-running")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.mu.Lock()
+	services := append([]protocol.ServiceInfo(nil), host.services...)
+	host.mu.Unlock()
+	if len(services) != 1 || services[0].Run == nil {
+		t.Fatalf("host services = %#v, want one recipe", services)
+	}
+	encoded, err := json.Marshal(services[0].Run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"keepRunning":true`) || strings.Contains(string(encoded), `"idleMs"`) {
+		t.Fatalf("persisted recipe = %s, want a kept recipe with no idle window", encoded)
+	}
+	if !strings.Contains(stdout, "now") || strings.Contains(stdout, "stops after") {
+		t.Fatalf("confirmation = %q, want a kept lifetime", stdout)
 	}
 }
 
