@@ -103,6 +103,8 @@ type demandRoute struct {
 // the result an accepted caller owns.
 type demandStopAttempt struct {
 	transition *demandTransition
+	// noWork is terminal: startup or discovery proved no worker remains.
+	noWork bool
 }
 
 // demandTransition is one start or stop in progress. err is written before
@@ -595,7 +597,7 @@ func (r *demandRoute) stop(ctx context.Context) error {
 // owedStopLocked keeps an admitted attempt's answer. A later Start can
 // replace future work, but cannot replace an attempt already bound here.
 func (r *demandRoute) owedStopLocked(control uint64, attempt *demandStopAttempt) (*demandTransition, bool) {
-	if attempt == nil {
+	if attempt == nil || attempt.noWork {
 		return nil, true
 	}
 	if attempt.transition != nil {
@@ -621,6 +623,16 @@ func (r *demandRoute) acceptStop() (uint64, *demandStopAttempt, error) {
 		r.stopAttempt = &demandStopAttempt{}
 	}
 	return control, r.stopAttempt, nil
+}
+
+// finishStopWithoutWorkerLocked completes the retained callers' answer
+// before the route drops its slot and accepts independent future work.
+func (r *demandRoute) finishStopWithoutWorkerLocked() {
+	r.stopRequested = false
+	if r.stopAttempt != nil {
+		r.stopAttempt.noWork = true
+		r.stopAttempt = nil
+	}
 }
 
 // stopAnswerLocked is a Stop's answer when nothing is left to wait for: done
@@ -763,8 +775,7 @@ func (r *demandRoute) finishAdoptionLocked(label, id string, found bool) bool {
 	r.failure = ""
 	if !found {
 		r.owned = ownsNothing
-		r.stopRequested = false
-		r.stopAttempt = nil
+		r.finishStopWithoutWorkerLocked()
 		r.adoptLabel = ""
 		r.adoptRetryAt = time.Time{}
 		r.state = protocol.DemandStopped
@@ -925,8 +936,7 @@ func (r *demandRoute) failStartLocked(id string, err error) {
 		r.stopCause = causeFailedStart
 	} else {
 		r.owned = ownsNothing
-		r.stopRequested = false
-		r.stopAttempt = nil
+		r.finishStopWithoutWorkerLocked()
 	}
 	var failure demandFailure
 	if errors.As(err, &failure) {

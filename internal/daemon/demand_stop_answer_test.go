@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -189,4 +190,76 @@ func TestKeptNoopStopDoesNotJoinALaterStop(t *testing.T) {
 	if err := first.wait(t); err != nil {
 		t.Fatalf("no-op Stop = %v, want no work owed", err)
 	}
+}
+
+func TestKeptCompletedNoWorkerStopDoesNotJoinLaterAttempt(t *testing.T) {
+	f := newKeptFixture(t)
+	launch, paused := newDemandBarrier(t), newDemandBarrier(t)
+	f.sessions.launchGate = launch
+	f.sessions.noWorkerErr = errors.New("first launch failed without a worker")
+	f.manager.Sync([]meshserve.Service{keptService()})
+	awaitDemandSignal(t, launch.entered, "initial launch")
+	var looks atomic.Int32
+	f.manager.stopLooks = func() {
+		if looks.Add(1) == 2 {
+			paused.wait()
+		}
+	}
+	f.manager.stopWaits = launch.unblock
+	first := beginAdoptionCall(t, func(ctx context.Context) error { return f.manager.Stop(ctx, "dev") })
+	t.Cleanup(paused.unblock)
+	awaitDemandSignal(t, paused.entered, "Stop after the no-worker start completed")
+	settleDemand(t, f.manager)
+	f.sessions.mu.Lock()
+	f.sessions.noWorkerErr = nil
+	f.sessions.mu.Unlock()
+	assertCompletedStopDoesNotJoinLaterAttempt(t, f.manager, f.sessions, paused, first)
+}
+
+func TestDemandCompletedMissingWorkerStopDoesNotJoinLaterAttempt(t *testing.T) {
+	sessions, manager := unresolvedAdoption(t, demandService(time.Minute))
+	sessions.setLookup(nil, "", false)
+	sessions.fakeDemandSessions.mu.Lock()
+	delete(sessions.live, "OLD1")
+	sessions.fakeDemandSessions.mu.Unlock()
+	lookup, paused := sessions.blockLookup(t), newDemandBarrier(t)
+	var looks atomic.Int32
+	manager.stopLooks = func() {
+		if looks.Add(1) == 2 {
+			paused.wait()
+		}
+	}
+	manager.stopWaits = lookup.unblock
+	first := beginAdoptionCall(t, func(ctx context.Context) error { return manager.Stop(ctx, "dev") })
+	t.Cleanup(paused.unblock)
+	awaitDemandSignal(t, paused.entered, "Stop after discovery found no worker")
+	settleDemand(t, manager)
+	assertCompletedStopDoesNotJoinLaterAttempt(t, manager, sessions.fakeDemandSessions, paused, first)
+}
+
+func assertCompletedStopDoesNotJoinLaterAttempt(t *testing.T, manager *demandManager, sessions *fakeDemandSessions, paused *demandBarrier, first *adoptionCall) {
+	t.Helper()
+	if err := manager.Start(t.Context(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	settleDemand(t, manager)
+	laterErr := errors.New("independent later stop failed")
+	stopping := newDemandBarrier(t)
+	sessions.mu.Lock()
+	sessions.stopGate, sessions.stopErr = stopping, laterErr
+	sessions.mu.Unlock()
+	if _, _, err := manager.route("dev").acceptStop(); err != nil {
+		t.Fatal(err)
+	}
+	awaitDemandSignal(t, stopping.entered, "independent later stop")
+	observed := make(chan struct{})
+	var once sync.Once
+	manager.onChange = func(_ protocol.ServiceInfo, _ bool) { once.Do(func() { close(observed) }) }
+	paused.unblock()
+	awaitDemandSignal(t, observed, "old Stop snapshot of the later attempt")
+	stopping.unblock()
+	if err := first.wait(t); err != nil {
+		t.Fatalf("completed no-worker Stop = %v; later identity=%v; want no work owed", err, errors.Is(err, laterErr))
+	}
+	settleDemand(t, manager)
 }
