@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1
+source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # A --keep-running route starts its command without traffic, serves clients
 # that use the upstream port directly, restarts the command after it exits,
 # stays stopped after mesh serve stop until mesh serve start, and is adopted
@@ -22,15 +23,24 @@ FINITE="$TEST_ROOT/finite"
 ORIGIN_PID=""
 
 cleanup() {
-  [ -z "$ORIGIN_PID" ] || kill -9 "$ORIGIN_PID" 2>/dev/null || true
-  # Served commands belong to detached workers, which outlive the daemon by
-  # design. The daemon is gone first, so nothing restarts them.
-  for dir in "$KEPT" "$FINITE"; do
-    [ -s "$dir/server.pid" ] && kill -9 "$(<"$dir/server.pid")" 2>/dev/null
-  done
-  rm -rf -- "$TEST_ROOT"
+  local status=$?
+  trap - EXIT
+  trap '' INT TERM
+  if [[ -n $ORIGIN_PID ]]; then
+    kill -9 "$ORIGIN_PID" 2>/dev/null || true
+    wait "$ORIGIN_PID" 2>/dev/null || true
+  fi
+  if ! python3 -B "$REPO_ROOT/integration/helpers/served_cleanup.py" "$TEST_ROOT" "$MESH_INTEGRATION"; then
+    printf 'FAIL: served fixture cleanup retained %s\n' "$TEST_ROOT" >&2
+    (( status != 0 )) || status=1
+    exit "$status"
+  fi
+  MESH=$MESH_INTEGRATION
+  finish_fixture_cleanup "$ORIGIN_STATE" "$TEST_ROOT" "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fail() {
   echo "FAIL: $*" >&2

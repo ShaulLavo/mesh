@@ -250,22 +250,7 @@ func TestKeptAdoptedSessionStabilityStartsAtAdoption(t *testing.T) {
 		{name: "stable", ran: 61 * time.Second, delay: time.Second},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			f := newKeptFixture(t)
-			f.sessions.adoptID, f.sessions.adoptFor = "OLD1", "serve /dev"
-			f.syncKept(t)
-			f.assertStatus(t, protocol.DemandRunning, "OLD1", false)
-			route := f.route()
-			route.mu.Lock()
-			route.restartFailures = 5
-			route.mu.Unlock()
-			f.clock.advance(test.ran)
-			f.crash(t, 1)
-			if got := f.restartIn(); got != test.delay {
-				t.Fatalf("restart in %s, want %s", got, test.delay)
-			}
-			if f.started() != 0 {
-				t.Fatal("adoption launched a second worker")
-			}
+			assertAdoptedStability(t, test.ran, test.delay)
 		})
 	}
 }
@@ -304,61 +289,82 @@ var keptBackoffCases = []keptBackoffCase{
 // No traffic path bypasses or moves a kept route's restart delay: tailnet
 // requests, a new listener connection, and a request on an open one all get
 // the same logged answer, and the deadline brings exactly one launch.
+func assertAdoptedStability(t *testing.T, ran, delay time.Duration) {
+	t.Helper()
+	f := newKeptFixture(t)
+	f.sessions.adoptID, f.sessions.adoptFor = "OLD1", "serve /dev"
+	f.syncKept(t)
+	f.assertStatus(t, protocol.DemandRunning, "OLD1", false)
+	route := f.route()
+	route.mu.Lock()
+	route.restartFailures = 5
+	route.mu.Unlock()
+	f.clock.advance(ran)
+	f.crash(t, 1)
+	if got := f.restartIn(); got != delay {
+		t.Fatalf("restart in %s, want %s", got, delay)
+	}
+	if f.started() != 0 {
+		t.Fatal("adoption launched a second worker")
+	}
+}
+
 func TestKeptTrafficCannotBypassTheRestartDelay(t *testing.T) {
 	for _, test := range keptBackoffCases {
 		t.Run(test.name, func(t *testing.T) {
-			f := newKeptFixture(t)
-			test.prepare(t, f)
-			delay, started := f.restartIn(), f.started()
-			if delay != time.Second {
-				t.Fatalf("restart in %s, want 1s", delay)
-			}
-			before := strings.Count(f.log.String(), "on-demand failure")
-			references := map[string]bool{}
-			answer := func(err error) {
-				t.Helper()
-				if err == nil {
-					t.Fatal("a request started a kept route during its restart delay")
-				}
-				response := httptest.NewRecorder()
-				meshserve.WriteDemandFailure(response, err, f.manager.logger)
-				references[response.Body.String()] = true
-			}
-			for range 3 {
-				_, err := f.manager.Enter(context.Background(), "dev")
-				answer(err)
-			}
-			release, began := f.route().hold(listenerCause(5173))
-			answer(f.route().awaitStart(context.Background(), began, listenerCause(5173)))
-			answer(f.route().ready(context.Background(), listenerCause(5173)))
-			release()
-			if f.started() != started || f.restartIn() != delay {
-				t.Fatalf("traffic started %d sessions and moved the restart to %s", f.started()-started, f.restartIn())
-			}
-			if got := strings.Count(f.log.String(), "on-demand failure") - before; got != 1 || len(references) != 1 {
-				t.Fatalf("logged %d diagnostics with %d references for one restart delay, want 1 and 1", got, len(references))
-			}
-			f.clock.advance(delay)
-			var arrivals sync.WaitGroup
-			for range 8 {
-				arrivals.Go(func() {
-					if release, err := f.manager.Enter(context.Background(), "dev"); err == nil {
-						release()
-					}
-				})
-			}
-			arrivals.Go(f.manager.supervise)
-			arrivals.Wait()
-			settleDemand(t, f.manager)
-			if f.started() != started+1 {
-				t.Fatalf("arrivals at the deadline started %d sessions, want 1", f.started()-started)
-			}
+			assertTrafficKeepsRestartDelay(t, test)
 		})
 	}
 }
 
 // A start that leaves a worker it could not confirm stopped blocks every
 // launch until cleanup proves it gone, however late the restart deadline is.
+func assertTrafficKeepsRestartDelay(t *testing.T, test keptBackoffCase) {
+	t.Helper()
+	f := newKeptFixture(t)
+	test.prepare(t, f)
+	delay, started := f.restartIn(), f.started()
+	if delay != time.Second {
+		t.Fatalf("restart in %s, want 1s", delay)
+	}
+	before := strings.Count(f.log.String(), "on-demand failure")
+	references := map[string]bool{}
+	answer := func(err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("a request started a kept route during its restart delay")
+		}
+		response := httptest.NewRecorder()
+		meshserve.WriteDemandFailure(response, err, f.manager.logger)
+		references[response.Body.String()] = true
+	}
+	for range 3 {
+		_, err := f.manager.Enter(context.Background(), "dev")
+		answer(err)
+	}
+	release, began := f.route().hold(listenerCause(5173))
+	answer(f.route().awaitStart(context.Background(), began, listenerCause(5173)))
+	answer(f.route().ready(context.Background(), listenerCause(5173)))
+	release()
+	if f.started() != started || f.restartIn() != delay {
+		t.Fatalf("traffic started %d sessions and moved the restart to %s", f.started()-started, f.restartIn())
+	}
+	if got := strings.Count(f.log.String(), "on-demand failure") - before; got != 1 || len(references) != 1 {
+		t.Fatalf("logged %d diagnostics with %d references for one restart delay, want 1 and 1", got, len(references))
+	}
+	f.clock.advance(delay)
+	var arrivals sync.WaitGroup
+	for range 8 {
+		arrivals.Go(func() { enterAndReleaseDemand(f.manager) })
+	}
+	arrivals.Go(f.manager.supervise)
+	arrivals.Wait()
+	settleDemand(t, f.manager)
+	if f.started() != started+1 {
+		t.Fatalf("arrivals at the deadline started %d sessions, want 1", f.started()-started)
+	}
+}
+
 func TestKeptRestartWaitsForUncertainCleanup(t *testing.T) {
 	f := newKeptFixture(t)
 	f.sessions.startErr = errors.New("readiness: worker did not answer")
@@ -797,42 +803,47 @@ func TestKeptShutdownKeepsTheWorkerForTheNextDaemon(t *testing.T) {
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			sessions := newFakeDemandSessions()
-			daemon, cancelDaemon := context.WithCancel(t.Context())
-			t.Cleanup(cancelDaemon)
-			manager := demandManagerWithParent(daemon, t, sessions)
-			f := keptFixture{sessions: sessions, manager: manager, clock: newDemandClock(manager), log: &demandLogSink{}}
-			manager.logger = log.New(f.log, "", 0)
-			ready := newDemandBarrier(t)
-			manager.dial = func(context.Context, string) error { ready.wait(); return nil }
-			manager.Sync([]meshserve.Service{keptService()})
-			awaitDemandSignal(t, ready.entered, "kept start readiness")
-			test.owe(t, f)
-			if test.closeIt {
-				manager.Close()
-			} else {
-				cancelDaemon()
-			}
-			ready.unblock()
-			joinAdoptionTransitions(t, manager)
-			manager.supervise()
-			if started, stopped := sessions.counts(); started != 1 || stopped != 0 || sessions.liveCount() != 1 {
-				t.Fatalf("started %d, stopped %d, live %d; want the worker kept", started, stopped, sessions.liveCount())
-			}
-			manager.Close()
-			manager.goroutines.Wait()
-
-			sessions.adoptID, sessions.adoptFor = "S001", "serve /dev"
-			next := testDemandManager(t, sessions, func() bool { return true })
-			next.Sync([]meshserve.Service{keptService()})
-			settleDemand(t, next)
-			if status := next.Status("dev"); status.SessionID != "S001" || status.State != protocol.DemandRunning {
-				t.Fatalf("next daemon status = %+v, want S001 adopted", status)
-			}
-			if started, _ := sessions.counts(); started != 1 {
-				t.Fatal("the next daemon launched beside the surviving worker")
-			}
+			assertKeptShutdownSurvival(t, test.owe, test.closeIt)
 		})
+	}
+}
+
+func assertKeptShutdownSurvival(t *testing.T, owe func(*testing.T, keptFixture), closeIt bool) {
+	t.Helper()
+	sessions := newFakeDemandSessions()
+	daemon, cancelDaemon := context.WithCancel(t.Context())
+	t.Cleanup(cancelDaemon)
+	manager := demandManagerWithParent(daemon, t, sessions)
+	f := keptFixture{sessions: sessions, manager: manager, clock: newDemandClock(manager), log: &demandLogSink{}}
+	manager.logger = log.New(f.log, "", 0)
+	ready := newDemandBarrier(t)
+	manager.dial = func(context.Context, string) error { ready.wait(); return nil }
+	manager.Sync([]meshserve.Service{keptService()})
+	awaitDemandSignal(t, ready.entered, "kept start readiness")
+	owe(t, f)
+	if closeIt {
+		manager.Close()
+	} else {
+		cancelDaemon()
+	}
+	ready.unblock()
+	joinAdoptionTransitions(t, manager)
+	manager.supervise()
+	if started, stopped := sessions.counts(); started != 1 || stopped != 0 || sessions.liveCount() != 1 {
+		t.Fatalf("started %d, stopped %d, live %d; want the worker kept", started, stopped, sessions.liveCount())
+	}
+	manager.Close()
+	manager.goroutines.Wait()
+
+	sessions.adoptID, sessions.adoptFor = "S001", "serve /dev"
+	next := testDemandManager(t, sessions, func() bool { return true })
+	next.Sync([]meshserve.Service{keptService()})
+	settleDemand(t, next)
+	if status := next.Status("dev"); status.SessionID != "S001" || status.State != protocol.DemandRunning {
+		t.Fatalf("next daemon status = %+v, want S001 adopted", status)
+	}
+	if started, _ := sessions.counts(); started != 1 {
+		t.Fatal("the next daemon launched beside the surviving worker")
 	}
 }
 
@@ -937,10 +948,15 @@ func TestDemandLifecycleLogIsExactAndSanitized(t *testing.T) {
 		if strings.Contains(line, "on-demand failure") {
 			continue
 		}
-		for _, sentinel := range []string{"SENTINEL", "127.0.0.1"} {
-			if strings.Contains(line, sentinel) {
-				t.Fatalf("lifecycle line carries %s: %q", sentinel, line)
-			}
+		assertLifecycleLineSanitized(t, line)
+	}
+}
+
+func assertLifecycleLineSanitized(t *testing.T, line string) {
+	t.Helper()
+	for _, sentinel := range []string{"SENTINEL", "127.0.0.1"} {
+		if strings.Contains(line, sentinel) {
+			t.Fatalf("lifecycle line carries %s: %q", sentinel, line)
 		}
 	}
 }
@@ -1028,4 +1044,10 @@ func TestDemandStatusShowsHeldOnlyForKeptRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.assertStatus(t, protocol.DemandStopped, "S002", true)
+}
+
+func enterAndReleaseDemand(manager *demandManager) {
+	if release, err := manager.Enter(context.Background(), "dev"); err == nil {
+		release()
+	}
 }

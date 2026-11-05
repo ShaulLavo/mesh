@@ -28,56 +28,67 @@ func persistedRecipe(t *testing.T, host *commandTestHost) *protocol.ServiceRun {
 	return host.services[0].Run
 }
 
+type recipeExpectation struct {
+	kept  bool
+	idle  int64
+	ready int64
+}
+
 // Each field of an edited recipe is inherited by its own flags: lifetime by
 // --idle and --keep-running, readiness by --ready-timeout. The payload the
 // host received is what is checked, and the confirmation is the host's.
 func TestServeRecipeInheritsEachFieldByItsOwnFlags(t *testing.T) {
-	type expectation struct {
-		kept  bool
-		idle  int64
-		ready int64
-	}
 	for _, existingKept := range []bool{false, true} {
-		for _, test := range []struct {
-			name  string
-			flags []string
-			want  func(existingKept bool) expectation
-		}{
-			{name: "omitted", want: func(kept bool) expectation {
-				if kept {
-					return expectation{kept: true, ready: 90_000}
-				}
-				return expectation{idle: 300_000, ready: 90_000}
-			}},
-			{name: "idle", flags: []string{"--idle", "10m"}, want: func(bool) expectation { return expectation{idle: 600_000, ready: 90_000} }},
-			{name: "keep", flags: []string{"--keep-running"}, want: func(bool) expectation { return expectation{kept: true, ready: 90_000} }},
-			{name: "omitted with ready", flags: []string{"--ready-timeout", "20s"}, want: func(kept bool) expectation {
-				if kept {
-					return expectation{kept: true, ready: 20_000}
-				}
-				return expectation{idle: 300_000, ready: 20_000}
-			}},
-			{name: "idle with ready", flags: []string{"--idle", "10m", "--ready-timeout", "20s"}, want: func(bool) expectation { return expectation{idle: 600_000, ready: 20_000} }},
-			{name: "keep with ready", flags: []string{"--keep-running", "--ready-timeout", "20s"}, want: func(bool) expectation { return expectation{kept: true, ready: 20_000} }},
-		} {
-			name := map[bool]string{false: "finite ", true: "kept "}[existingKept] + test.name
-			t.Run(name, func(t *testing.T) {
-				host := setupCommandTestHost(t)
-				host.services = []protocol.ServiceInfo{existingRecipe(existingKept)}
-				args := append([]string{"serve", "pc", "5173", "--at", "/dev", "--run", "bun run dev", "--cwd", "/srv/app"}, test.flags...)
-				stdout, _, err := executeCommand(t, Dependencies{DialControl: host.dial}, args...)
-				if err != nil {
-					t.Fatal(err)
-				}
-				run, want := persistedRecipe(t, host), test.want(existingKept)
-				if run.Command != "bun run dev" || run.KeepRunning != want.kept || run.IdleMillis != want.idle || run.ReadyTimeoutMillis != want.ready {
-					t.Fatalf("persisted recipe = %+v, want %+v", run, want)
-				}
-				if want.kept != strings.Contains(stdout, "now and keeps it running") || want.kept == strings.Contains(stdout, "no counted connection") {
-					t.Fatalf("confirmation = %q, want the persisted lifetime", stdout)
-				}
-			})
-		}
+		runRecipeInheritanceCases(t, existingKept)
+	}
+}
+
+func runRecipeInheritanceCases(t *testing.T, existingKept bool) {
+	t.Helper()
+	for _, test := range []struct {
+		name  string
+		flags []string
+		want  func(existingKept bool) recipeExpectation
+	}{
+		{name: "omitted", want: func(kept bool) recipeExpectation {
+			if kept {
+				return recipeExpectation{kept: true, ready: 90_000}
+			}
+			return recipeExpectation{idle: 300_000, ready: 90_000}
+		}},
+		{name: "idle", flags: []string{"--idle", "10m"}, want: func(bool) recipeExpectation { return recipeExpectation{idle: 600_000, ready: 90_000} }},
+		{name: "keep", flags: []string{"--keep-running"}, want: func(bool) recipeExpectation { return recipeExpectation{kept: true, ready: 90_000} }},
+		{name: "omitted with ready", flags: []string{"--ready-timeout", "20s"}, want: func(kept bool) recipeExpectation {
+			if kept {
+				return recipeExpectation{kept: true, ready: 20_000}
+			}
+			return recipeExpectation{idle: 300_000, ready: 20_000}
+		}},
+		{name: "idle with ready", flags: []string{"--idle", "10m", "--ready-timeout", "20s"}, want: func(bool) recipeExpectation { return recipeExpectation{idle: 600_000, ready: 20_000} }},
+		{name: "keep with ready", flags: []string{"--keep-running", "--ready-timeout", "20s"}, want: func(bool) recipeExpectation { return recipeExpectation{kept: true, ready: 20_000} }},
+	} {
+		name := map[bool]string{false: "finite ", true: "kept "}[existingKept] + test.name
+		t.Run(name, func(t *testing.T) {
+			assertInheritedRecipe(t, existingKept, test.flags, test.want(existingKept))
+		})
+	}
+}
+
+func assertInheritedRecipe(t *testing.T, existingKept bool, flags []string, want recipeExpectation) {
+	t.Helper()
+	host := setupCommandTestHost(t)
+	host.services = []protocol.ServiceInfo{existingRecipe(existingKept)}
+	args := append([]string{"serve", "pc", "5173", "--at", "/dev", "--run", "bun run dev", "--cwd", "/srv/app"}, flags...)
+	stdout, _, err := executeCommand(t, Dependencies{DialControl: host.dial}, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := persistedRecipe(t, host)
+	if run.Command != "bun run dev" || run.KeepRunning != want.kept || run.IdleMillis != want.idle || run.ReadyTimeoutMillis != want.ready {
+		t.Fatalf("persisted recipe = %+v, want %+v", run, want)
+	}
+	if want.kept != strings.Contains(stdout, "now and keeps it running") || want.kept == strings.Contains(stdout, "no counted connection") {
+		t.Fatalf("confirmation = %q, want the persisted lifetime", stdout)
 	}
 }
 
@@ -116,20 +127,25 @@ func TestServeRefusesAmbiguousLifetimes(t *testing.T) {
 		{name: "subsecond ready", flags: append(run, "--ready-timeout", "500ms"), want: "--ready-timeout must be at least 1s"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			host := setupCommandTestHost(t)
-			_, _, err := executeCommand(t, Dependencies{DialControl: host.dial}, append(append([]string(nil), base...), test.flags...)...)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %v, want %q", err, test.want)
-			}
-			if events := host.recorded(); len(events) != 0 {
-				t.Fatalf("a refused lifetime reached the host: %v", events)
-			}
+			assertRefusedLifetime(t, base, test.flags, test.want)
 		})
 	}
 }
 
 // Inheritance reads the live host. The local cache holds no recipe, so a
 // failed read fails the command instead of guessing.
+func assertRefusedLifetime(t *testing.T, base, flags []string, want string) {
+	t.Helper()
+	host := setupCommandTestHost(t)
+	_, _, err := executeCommand(t, Dependencies{DialControl: host.dial}, append(append([]string(nil), base...), flags...)...)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+	if events := host.recorded(); len(events) != 0 {
+		t.Fatalf("a refused lifetime reached the host: %v", events)
+	}
+}
+
 func TestServeInheritanceNeedsALiveRead(t *testing.T) {
 	host := setupCommandTestHost(t)
 	host.services = []protocol.ServiceInfo{existingRecipe(true)}

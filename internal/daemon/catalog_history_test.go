@@ -202,13 +202,17 @@ func recoveredFrom(t *testing.T, dir string) {
 // already retiring an earlier one, after both were selected.
 type claimingStore struct {
 	CatalogStore
-	once  sync.Once
-	claim func()
-	fail  storage.SessionID
+	once          sync.Once
+	claim         func()
+	fail          storage.SessionID
+	beforeFailure func()
 }
 
 func (s *claimingStore) RetireSessions(ctx context.Context, host storage.HostID, ids []storage.SessionID) (int64, error) {
 	if slices.Contains(ids, s.fail) {
+		if s.beforeFailure != nil {
+			s.beforeFailure()
+		}
 		return 0, errors.New("database is locked")
 	}
 	if s.claim != nil {
@@ -254,35 +258,40 @@ func TestPruneLabelledSkipsACandidateRecoveryClaimsAfterSelection(t *testing.T) 
 		{name: "owner pin", claim: func(t *testing.T, dir string) { writeHistoryFile(t, filepath.Join(dir, ".owner")) }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var store *claimingStore
-			h := newHistoryCatalog(t, func(inner CatalogStore) CatalogStore {
-				store = &claimingStore{CatalogStore: inner}
-				return store
-			})
-			historyShorts(t, h, 13)
-			h.reconcile(t)
-			store.claim = func() { test.claim(t, filepath.Join(h.root, "H012")) }
-			removed, err := h.prune(t, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if want := []string{"H011", "H013"}; !slices.Equal(removed, want) {
-				t.Fatalf("removed %v, want %v with H012 kept for recovery", removed, want)
-			}
-			h.assertKept(t, "H012")
-			if test.name == "recovery lock" {
-				if _, err := os.Lstat(filepath.Join(h.root, "H012", "recovery.lock")); err != nil {
-					t.Fatalf("prune removed recovery's own lock: %v", err)
-				}
-				return
-			}
-			h.assertNoClaimLeft(t, "H012")
+			assertPruningRespectsClaim(t, test.name, test.claim)
 		})
 	}
 }
 
 // A failed retirement leaves the session exactly as it was: row, directory,
 // and no recovery lock that would protect it forever.
+func assertPruningRespectsClaim(t *testing.T, name string, claim func(*testing.T, string)) {
+	t.Helper()
+	var store *claimingStore
+	h := newHistoryCatalog(t, func(inner CatalogStore) CatalogStore {
+		store = &claimingStore{CatalogStore: inner}
+		return store
+	})
+	historyShorts(t, h, 13)
+	h.reconcile(t)
+	store.claim = func() { claim(t, filepath.Join(h.root, "H012")) }
+	removed, err := h.prune(t, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"H011", "H013"}; !slices.Equal(removed, want) {
+		t.Fatalf("removed %v, want %v with H012 kept for recovery", removed, want)
+	}
+	h.assertKept(t, "H012")
+	if name == "recovery lock" {
+		if _, err := os.Lstat(filepath.Join(h.root, "H012", "recovery.lock")); err != nil {
+			t.Fatalf("prune removed recovery's own lock: %v", err)
+		}
+		return
+	}
+	h.assertNoClaimLeft(t, "H012")
+}
+
 func TestPruneLabelledFailedRetirementLeavesNoMarker(t *testing.T) {
 	h := newHistoryCatalog(t, func(inner CatalogStore) CatalogStore {
 		return &claimingStore{CatalogStore: inner, fail: "H011"}

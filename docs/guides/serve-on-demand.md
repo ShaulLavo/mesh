@@ -70,12 +70,13 @@ On-demand routes are private, like every Mesh service.
 - **Daemon restart.** The session keeps running. The new daemon binds the
   listeners again, adopts the session by its label, and starts a full idle
   window. After a reboot the next connection starts a fresh session.
-- **History.** Each start keeps the route's ten newest ended sessions and its
-  newest one that ran at least a minute, so `mesh ls --all` and `mesh logs` can
-  explain an outage. Older ones are removed. Sessions with recovery data,
-  interrupted ones and ones an app still pins are never removed this way. The
-  usual seven-day and 500-session limits also apply, measured from when a
-  session ended.
+- **History.** Each pruning pass keeps up to eleven eligible historical exits:
+  the ten newest attempts and the newest one that ran at least a minute. The
+  current attempt is additional. Interrupted, recovery-protected and app-pinned
+  records are additional and are never removed this way. Eligible exits also
+  have a seven-day age limit from exit and a host-wide 500-record cap. Pressure
+  or churn can remove history earlier; protected records can outlive both limits.
+  Use `mesh ls --all` and `mesh logs` to inspect retained attempts.
 
 A `--listen` port that something else already holds is refused, and the error
 names the process holding it. So is one another route already listens on. Mesh

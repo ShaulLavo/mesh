@@ -394,7 +394,7 @@ func (r *demandRoute) start(ctx context.Context) error {
 	r.lastStart = control
 	r.held = false
 	r.resetRestartLocked()
-	if r.pending != nil && (!r.pending.starting && !r.pending.adopting || r.stopRequested) {
+	if r.owned == ownsUncertain || r.stopRequested || r.pending != nil && !r.pending.starting && !r.pending.adopting {
 		r.startRequested = true
 	}
 	r.unlock()
@@ -543,7 +543,7 @@ func (r *demandRoute) unavailableLocked() error {
 // stop is `mesh serve stop`. It records the stop as the route's own intent
 // first, so a caller that stops waiting cannot abandon it.
 func (r *demandRoute) stop(ctx context.Context) error {
-	control, err := r.acceptStop()
+	control, err := r.acceptStop() //nolint:contextcheck // accepted stop work outlives its waiter and is bounded by the daemon's lifetime
 	if err != nil {
 		return err
 	}
@@ -625,10 +625,14 @@ func (r *demandRoute) acceptStopLocked() uint64 {
 	r.controls++
 	r.lastStop = r.controls
 	r.startRequested = false
-	if r.pending != nil && (r.pending.starting || r.pending.adopting) {
+	if r.owned != ownsNothing || r.pending != nil && (r.pending.starting || r.pending.adopting) {
 		r.stopRequested = true
 	}
 	r.holdKeptLocked()
+	if r.pending == nil && (r.owned == ownsLive || r.owned == ownsUncertain) {
+		r.cancelIdleLocked()
+		r.beginStopLocked(causeStopRequested)
+	}
 	return r.lastStop
 }
 
