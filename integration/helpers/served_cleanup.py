@@ -17,15 +17,16 @@ def is_worker(pid):
 
 
 def signal_command(pid, identity, sig):
+    descriptor = None
     try:
         descriptor = os.pidfd_open(pid)
-        try:
-            if same_process(pid, identity):
-                signal.pidfd_send_signal(descriptor, sig)
-        finally:
-            os.close(descriptor)
+        if same_process(pid, identity):
+            signal.pidfd_send_signal(descriptor, sig)
     except (FileNotFoundError, ProcessLookupError):
         pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def stop_commands(processes, sig, sent):

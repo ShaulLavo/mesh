@@ -86,11 +86,15 @@ func (reviewRecoveryRuntime) ConfigureCommand(context.Context, string, *recovery
 }
 
 func reviewLockOpenCount(path string) int {
+	wanted, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
 	entries, _ := os.ReadDir("/proc/self/fd")
 	count := 0
 	for _, entry := range entries {
-		target, _ := os.Readlink(filepath.Join("/proc/self/fd", entry.Name()))
-		if target == path {
+		opened, err := os.Stat(filepath.Join("/proc/self/fd", entry.Name()))
+		if err == nil && os.SameFile(wanted, opened) {
 			count++
 		}
 	}
@@ -186,4 +190,30 @@ func runReviewRecovery(ctx context.Context, cfg recovery.Config) error {
 		return fmt.Errorf("recover review fixture: %w", err)
 	}
 	return nil
+}
+
+func TestReviewRecoveryLockObserverUsesFileIdentity(t *testing.T) {
+	if _, err := os.Stat("/proc/self/fd"); err != nil {
+		t.Skip("the lock witness observes its own Linux file descriptors")
+	}
+	file, err := os.CreateTemp(t.TempDir(), "lock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	second, err := os.Open(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(file.Name(), alias); err != nil {
+		t.Fatal(err)
+	}
+	if got := reviewLockOpenCount(file.Name()); got != 2 {
+		t.Fatalf("physical lock observer = %d, want both owned descriptors", got)
+	}
+	if got := reviewLockOpenCount(alias); got != 2 {
+		t.Fatalf("aliased lock observer = %d, want both owned descriptors", got)
+	}
 }
