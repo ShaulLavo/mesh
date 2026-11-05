@@ -91,6 +91,10 @@ type demandRoute struct {
 	idleTimer   *time.Timer
 	idleToken   uint64
 	pending     *demandTransition
+	// stopAttempt is the latest stop begun, whoever asked for it. A Stop
+	// remembers the one it had seen when it was accepted, so a later one
+	// that already failed is its answer instead of a reason to stop again.
+	stopAttempt *demandTransition
 	unbound     map[uint16]string
 }
 
@@ -541,9 +545,12 @@ func (r *demandRoute) unavailableLocked() error {
 }
 
 // stop is `mesh serve stop`. It records the stop as the route's own intent
-// first, so a caller that stops waiting cannot abandon it.
+// first, so a caller that stops waiting cannot abandon it. A stop that
+// carried that intent out answers it, even one that failed before the
+// caller looked again: the failed session is retried on the cleanup
+// schedule, never killed a second time at once.
 func (r *demandRoute) stop(ctx context.Context) error {
-	control, err := r.acceptStop() //nolint:contextcheck // accepted stop work outlives its waiter and is bounded by the daemon's lifetime
+	control, seen, err := r.acceptStop() //nolint:contextcheck // accepted stop work outlives its waiter and is bounded by the daemon's lifetime
 	if err != nil {
 		return err
 	}
@@ -558,7 +565,7 @@ func (r *demandRoute) stop(ctx context.Context) error {
 			r.unlock()
 			return awaitOwedStop(ctx, route, transition)
 		}
-		if err := r.prepareAdoptionStopLocked(); err != nil { //nolint:contextcheck // adoption and cleanup must outlive a cancelled Stop waiter, within the daemon's lifetime
+		if err := r.stopRefusalLocked(seen); err != nil { //nolint:contextcheck // adoption and cleanup must outlive a cancelled Stop waiter, within the daemon's lifetime
 			r.unlock()
 			return err
 		}
@@ -580,14 +587,33 @@ func (r *demandRoute) stop(ctx context.Context) error {
 	}
 }
 
-// acceptStop records a Stop under the route lock and returns its number.
-func (r *demandRoute) acceptStop() (uint64, error) {
+// acceptStop records a Stop under the route lock. It returns the Stop's
+// number and the last stop attempt that cannot answer it: one that had
+// already finished. A stop still in progress carries this Stop out too.
+func (r *demandRoute) acceptStop() (uint64, *demandTransition, error) {
 	r.mu.Lock()
 	defer r.unlock()
 	if err := r.unavailableLocked(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return r.acceptStopLocked(), nil
+	seen := r.stopAttempt
+	if r.pending == seen {
+		seen = nil
+	}
+	return r.acceptStopLocked(), seen, nil
+}
+
+// stopRefusalLocked is what ends a Stop's look before it stops anything:
+// shutdown, discovery that cannot run yet, or a stop begun since the Stop
+// was accepted that failed and left its session uncertain.
+func (r *demandRoute) stopRefusalLocked(seen *demandTransition) error {
+	if err := r.prepareAdoptionStopLocked(); err != nil {
+		return err
+	}
+	if r.pending != nil || r.owned != ownsUncertain || r.stopAttempt == seen {
+		return nil
+	}
+	return r.stopAttempt.err
 }
 
 // stopAnswerLocked is a Stop's answer when nothing is left to wait for: done
@@ -941,6 +967,7 @@ func (r *demandRoute) beginStopLocked(cause demandCause) {
 	id := r.sessionID
 	transition := &demandTransition{sessionID: id, done: make(chan struct{})}
 	r.pending = transition
+	r.stopAttempt = transition
 	r.state = protocol.DemandStopping
 	r.stopCause = cause
 	route := r.service.Route()

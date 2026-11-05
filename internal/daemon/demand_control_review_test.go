@@ -19,7 +19,7 @@ import (
 func TestReviewKeptLiveStopAcceptanceOwesAStop(t *testing.T) {
 	f := newKeptFixture(t)
 	f.syncKept(t)
-	if _, err := f.route().acceptStop(); err != nil {
+	if _, _, err := f.route().acceptStop(); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.manager.Start(t.Context(), "dev"); err != nil {
