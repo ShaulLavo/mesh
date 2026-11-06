@@ -148,7 +148,7 @@ func TestAgentHostsTimeoutAndUnsupportedAreTyped(t *testing.T) {
 		return protocol.Control{Type: protocol.TypeError, ErrorCode: protocol.ErrorCodeUnknownControl, Message: "unknown context"}
 	})
 	stdout, _, err := executeCommand(t, Dependencies{DialPassive: unsupported}, "inspect", host.ID, "--json")
-	assertHostReadError(t, stdout, err, agentapi.ProtocolUnsupported, 1)
+	assertHostReadError(t, stdout, err, agentapi.ProtocolUnsupported, 3)
 	blocked := func(ctx context.Context, _ HostRecord) (transport.Conn, error) { <-ctx.Done(); return nil, ctx.Err() }
 	stdout, _, err = executeCommand(t, Dependencies{DialPassive: blocked}, "hosts", "--json", "--timeout=100ms")
 	assertHostReadError(t, stdout, err, agentapi.HostUnreachable, 3)
@@ -261,9 +261,9 @@ func TestAgentHostsRejectsInvalidObservation(t *testing.T) {
 	dial := func(context.Context, HostRecord) (transport.Conn, error) {
 		return newServiceRemoteTestConn(respond), nil
 	}
-	_, _, err = readAgentHostContext(t.Context(), host, true, dial)
-	if err == nil {
-		t.Fatal("unvalidated build observation accepted")
+	_, info, err := readAgentHostContext(t.Context(), host, true, dial)
+	if err == nil || info != nil {
+		t.Fatalf("unvalidated build observation accepted: info=%+v err=%v", info, err)
 	}
 }
 

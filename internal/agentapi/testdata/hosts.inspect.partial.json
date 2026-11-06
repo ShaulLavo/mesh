@@ -9,13 +9,13 @@
       "machineName": "pc",
       "local": false,
       "nameShadowed": false,
-      "reachability": "unreachable",
+      "reachability": "reachable",
       "observed": {
         "version": "",
         "platform": "",
         "daemon": "running",
         "observedAt": "2026-11-06T10:00:00Z",
-        "freshness": "cached"
+        "freshness": "live"
       },
       "declared": {
         "host": {

@@ -60,57 +60,64 @@ func (r agentHostReader) read(ctx context.Context, host HostRecord) agentHostRea
 		return r.finish(result)
 	}
 	reply, info, err := readAgentHostContext(ctx, host, r.full, r.dial)
+	at := r.now().UTC()
+	var observation hostprofile.ContextObservation
+	if info != nil {
+		observation = hostObservation(*info)
+		result.host.MachineName, result.host.NameShadowed = info.MachineName, machinename.ShadowedByCommand(info.MachineName)
+		result.host.Reachability, result.host.Observed = agentReachable, agentObservation(&observation, at, agentapi.FreshnessLive)
+		result.useful = true
+	}
 	if err != nil {
-		result.host.Reachability = "unreachable"
+		if info == nil {
+			result.host.Reachability = "unreachable"
+		}
 		result.errors = append(result.errors, r.diagnostic(err, host.ID, agentapi.HostUnreachable))
 		return r.finish(result)
 	}
-	at := r.now().UTC()
-	observation := hostObservation(info)
-	result.host.MachineName, result.host.NameShadowed = info.MachineName, machinename.ShadowedByCommand(info.MachineName)
-	result.host.Reachability, result.host.Observed = agentReachable, agentObservation(&observation, at, agentapi.FreshnessLive)
 	result.host.Declared = contextDeclared(reply, agentapi.FreshnessLive, at)
-	result.useful, result.liveAccess = true, true
+	result.liveAccess = true
 	result.errors = append(result.errors, r.contextProblems(reply, host.ID)...)
-	r.cacheLive(ctx, host, info, hostprofile.CachedContext{HostID: host.ID, MeshIdentity: host.MeshIdentity, ReceivedAt: at, Observed: &observation, Context: reply}, &result)
+	r.cacheLive(ctx, host, *info, hostprofile.CachedContext{HostID: host.ID, MeshIdentity: host.MeshIdentity, ReceivedAt: at, Observed: &observation, Context: reply}, &result)
 	return r.finish(result)
 }
 
-func readAgentHostContext(ctx context.Context, host HostRecord, full bool, dial HostDialer) (hostprofile.ContextReply, protocol.HostInfo, error) {
+// A non-nil info has passed identity, name and build validation even when context later fails.
+func readAgentHostContext(ctx context.Context, host HostRecord, full bool, dial HostDialer) (hostprofile.ContextReply, *protocol.HostInfo, error) {
 	conn, info, err := openAgentHostInfo(ctx, host, dial)
 	if err != nil {
-		return hostprofile.ContextReply{}, info, err
+		return hostprofile.ContextReply{}, nil, err
 	}
 	defer func() { _ = conn.Close() }()
 	if err := validateContextObservation(info); err != nil {
-		return hostprofile.ContextReply{}, info, err
+		return hostprofile.ContextReply{}, nil, err
 	}
 	data, err := json.Marshal(hostprofile.ContextRequest{Full: full})
 	if err != nil {
-		return hostprofile.ContextReply{}, info, fmt.Errorf("encode host context request: %w", err)
+		return hostprofile.ContextReply{}, &info, fmt.Errorf("encode host context request: %w", err)
 	}
 	id, err := newDaemonRequestID()
 	if err != nil {
-		return hostprofile.ContextReply{}, info, err
+		return hostprofile.ContextReply{}, &info, err
 	}
 	response, err := controlRequest(ctx, conn, protocol.Control{Type: protocol.TypeHostContext, RequestID: id, Context: data})
 	if err != nil {
-		return hostprofile.ContextReply{}, info, err
+		return hostprofile.ContextReply{}, &info, err
 	}
 	if response.Type == protocol.TypeError {
-		return hostprofile.ContextReply{}, info, daemonResponseError("host context", response.Message, response.ErrorCode)
+		return hostprofile.ContextReply{}, &info, daemonResponseError("host context", response.Message, response.ErrorCode)
 	}
 	if response.Type != protocol.TypeHostContextResult {
-		return hostprofile.ContextReply{}, info, errors.New("host did not return host context")
+		return hostprofile.ContextReply{}, &info, errors.New("host did not return host context")
 	}
 	reply, err := hostprofile.ParseContext(response.Context, host.ID)
 	if err != nil {
-		return hostprofile.ContextReply{}, info, fmt.Errorf("validate pinned host context: %w", err)
+		return hostprofile.ContextReply{}, &info, fmt.Errorf("validate pinned host context: %w", err)
 	}
 	if full && (reply.Host.Completeness != hostprofile.Full || reply.Fleet.Completeness != hostprofile.Full) {
-		return hostprofile.ContextReply{}, info, errors.New("host returned incomplete context for inspect")
+		return hostprofile.ContextReply{}, &info, errors.New("host returned incomplete context for inspect")
 	}
-	return reply, info, nil
+	return reply, &info, nil
 }
 
 func (r agentHostReader) cacheLive(ctx context.Context, host HostRecord, info protocol.HostInfo, entry hostprofile.CachedContext, result *agentHostRead) {
@@ -149,11 +156,21 @@ func (r agentHostReader) finish(result agentHostRead) agentHostRead {
 		result.host.Declared.Host = summarizeAgentProfile(result.host.Declared.Host, false)
 		result.host.Declared.Fleet.ProfileSection = summarizeAgentProfile(result.host.Declared.Fleet.ProfileSection, true)
 	}
+	target := ""
+	if result.host.HostID != nil {
+		target = *result.host.HostID
+	}
+	for _, section := range []agentapi.ProfileSection{result.host.Declared.Host, result.host.Declared.Fleet.ProfileSection} {
+		if section.State != agentUnavailable || section.ReceivedAt == nil {
+			continue
+		}
+		result.errors = appendHostDiagnostic(result.errors, r.diagnostic(errors.New(section.Problem), target, agentapi.StateUnavailable))
+	}
 	return result
 }
 
 func (r agentHostReader) completeCachedSection(section agentapi.ProfileSection, id *string, diagnostics *[]agentapi.Error) agentapi.ProfileSection {
-	if section.Completeness == agentapi.CompletenessFull || section.State == "absent" {
+	if section.Completeness == agentapi.CompletenessFull || section.State != agentapi.ProfileState(hostprofile.StateValid) && section.State != agentapi.ProfileState(hostprofile.StateUntrusted) {
 		return section
 	}
 	target := ""
