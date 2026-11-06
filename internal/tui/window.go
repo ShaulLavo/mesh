@@ -231,7 +231,7 @@ func (m windowModel) View() tea.View {
 	if m.selected {
 		_, current, ok := picker.currentSession()
 		if ok {
-			details := picker.detailsFor(current)
+			details := picker.detailsFor(current, 3)
 			if endedSession(current) {
 				lines = append(lines, picker.styles.muted.Render(recoveryActionLabel(current)+" in "+details.directory+". Press l for Restart command."))
 				lines = append(lines, picker.styles.muted.Render(details.screenStatus))

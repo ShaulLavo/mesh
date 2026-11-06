@@ -199,7 +199,7 @@ func TestPrivacyForegroundEscapesExecutableControls(t *testing.T) {
 			row.state = "interrupted"
 			row.recovery = &recovery.Record{ShellDirectory: privatePath, Restart: &recovery.Command{Argv: []string{executable, "secret-argument"}}, Lines: []string{privateScreen}}
 		}
-		details := current.detailsFor(row)
+		details := current.detailsFor(row, inspectionPreviewRows)
 		if strings.ContainsRune(details.foreground, '\x1b') || strings.ContainsRune(details.foreground, '\u202e') {
 			t.Fatalf("ended=%v: unsafe foreground %q", ended, details.foreground)
 		}
@@ -245,7 +245,7 @@ func TestPrivacyMetadataFragmentsRetainLabels(t *testing.T) {
 			t.Fatalf("ordinary label %q lost:\n%s", visible, ansi.Strip(frame))
 		}
 	}
-	if got := current.detailsFor(current.hosts[0].sessions[0]).directory; got != "~/customer-orchid" {
+	if got := current.detailsFor(current.hosts[0].sessions[0], inspectionPreviewRows).directory; got != "~/customer-orchid" {
 		t.Fatalf("home directory should retain useful suffix: %q", got)
 	}
 }

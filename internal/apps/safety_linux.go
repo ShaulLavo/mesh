@@ -120,38 +120,63 @@ func attributeListeners(listeners []sockdiag.Listener, port int, uid uint32, hel
 // that exited meanwhile holds nothing; one whose descriptors cannot be read
 // would leave the answer incomplete, so it is an error.
 func heldSockets(processes []int) (map[uint32]bool, error) {
+	return heldSocketsFrom(processes, readDirNames, os.Readlink)
+}
+
+func heldSocketsFrom(processes []int, names func(string) ([]string, error), readlink func(string) (string, error)) (map[uint32]bool, error) {
 	held := map[uint32]bool{}
 	for _, pid := range processes {
-		dir := fmt.Sprintf("/proc/%d/fd", pid)
-		names, err := readDirNames(dir)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("app: read open files of server process %d: %w", pid, err)
-		}
-		for _, name := range names {
-			if inode, ok := socketInode(dir + "/" + name); ok {
-				held[inode] = true
-			}
+		if err := holdProcessSockets(pid, held, names, readlink); err != nil {
+			return nil, err
 		}
 	}
 	return held, nil
 }
 
+func holdProcessSockets(pid int, held map[uint32]bool, names func(string) ([]string, error), readlink func(string) (string, error)) error {
+	dir := fmt.Sprintf("/proc/%d/fd", pid)
+	entries, err := names(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return descriptorInspectionError(fmt.Errorf("app: read open files of server process %d: %w", pid, err))
+	}
+	for _, name := range entries {
+		inode, ok, err := socketInode(dir+"/"+name, readlink)
+		if err != nil {
+			return err
+		}
+		if ok {
+			held[inode] = true
+		}
+	}
+	return nil
+}
+
+func descriptorInspectionError(err error) error {
+	if errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("%w: %w", errIncompleteListenerObservation, err)
+	}
+	return err
+}
+
 // socketInode reads one descriptor link. A descriptor closed since the
 // listing is simply not held.
-func socketInode(link string) (uint32, bool) {
-	target, err := os.Readlink(link)
+func socketInode(link string, readlink func(string) (string, error)) (uint32, bool, error) {
+	target, err := readlink(link)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
 	if err != nil {
-		return 0, false
+		return 0, false, descriptorInspectionError(fmt.Errorf("app: read server descriptor %s: %w", link, err))
 	}
 	inode, ok := strings.CutPrefix(target, "socket:[")
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	value, err := strconv.ParseUint(strings.TrimSuffix(inode, "]"), 10, 32)
-	return uint32(value), err == nil
+	return uint32(value), err == nil, nil
 }
 
 func readDirNames(dir string) ([]string, error) {
