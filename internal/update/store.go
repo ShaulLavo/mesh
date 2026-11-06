@@ -35,24 +35,25 @@ const (
 )
 
 type Target struct {
-	RetryPending           bool                   `json:"retryPending,omitempty"`
-	RetryToken             uint64                 `json:"retryToken,omitempty"`
-	BootstrapRetryToken    uint64                 `json:"bootstrapRetryToken,omitempty"`
-	BootstrapAttempt       uint64                 `json:"bootstrapAttempt,omitempty"`
-	BootstrapRetry         bool                   `json:"bootstrapRetry,omitempty"`
-	InstallationID         string                 `json:"installationId,omitempty"`
-	BootstrapStatusSession string                 `json:"bootstrapStatusSession,omitempty"`
-	BootstrapStatusAttempt uint64                 `json:"bootstrapStatusAttempt,omitempty"`
-	BootstrapSession       string                 `json:"bootstrapSession,omitempty"`
-	Host                   Host                   `json:"host"`
-	State                  State                  `json:"state"`
-	Generation             uint64                 `json:"generation,omitempty"`
-	Build                  *release.Build         `json:"build,omitempty"`
-	Workers                []updateinstall.Worker `json:"workers,omitempty"`
-	InterruptedWorkers     []updateinstall.Worker `json:"interruptedWorkers,omitempty"`
-	Problem                string                 `json:"problem,omitempty"`
-	Grant                  bool                   `json:"grant,omitempty"`
-	RetryAt                time.Time              `json:"retryAt,omitempty"`
+	Commands               []updateinstall.CommandCopy `json:"commands,omitempty"`
+	RetryPending           bool                        `json:"retryPending,omitempty"`
+	RetryToken             uint64                      `json:"retryToken,omitempty"`
+	BootstrapRetryToken    uint64                      `json:"bootstrapRetryToken,omitempty"`
+	BootstrapAttempt       uint64                      `json:"bootstrapAttempt,omitempty"`
+	BootstrapRetry         bool                        `json:"bootstrapRetry,omitempty"`
+	InstallationID         string                      `json:"installationId,omitempty"`
+	BootstrapStatusSession string                      `json:"bootstrapStatusSession,omitempty"`
+	BootstrapStatusAttempt uint64                      `json:"bootstrapStatusAttempt,omitempty"`
+	BootstrapSession       string                      `json:"bootstrapSession,omitempty"`
+	Host                   Host                        `json:"host"`
+	State                  State                       `json:"state"`
+	Generation             uint64                      `json:"generation,omitempty"`
+	Build                  *release.Build              `json:"build,omitempty"`
+	Workers                []updateinstall.Worker      `json:"workers,omitempty"`
+	InterruptedWorkers     []updateinstall.Worker      `json:"interruptedWorkers,omitempty"`
+	Problem                string                      `json:"problem,omitempty"`
+	Grant                  bool                        `json:"grant,omitempty"`
+	RetryAt                time.Time                   `json:"retryAt,omitempty"`
 }
 
 type Run struct {

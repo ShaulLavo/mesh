@@ -133,6 +133,7 @@ fi
 systemctl --user is-active --quiet mesh.service || fail service_install "mesh.service is not active"
 rm -f "$activation_pending" || fail service_install "cannot clear the service activation marker"
 
+"$binary_path" daemon installation-check >&2
 if [ "$changed" -eq 1 ]; then
 	printf 'MESH_INSTALL_RESULT=configured\n'
 else

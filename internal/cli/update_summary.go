@@ -21,6 +21,7 @@ func printUpdateSummary(output io.Writer, preview updatePreview, mask *privacy.M
 			subject = strings.Replace(subject, "this ", "This ", 1)
 		}
 		lines = append(lines, updateSubjectLines(subject, target, preview.Reviews[target.Host.ID])...)
+		lines = append(lines, installationCommandLines(target.Commands, mask)...)
 	}
 	switch {
 	case preview.ApprovalProblem != "":
@@ -74,6 +75,7 @@ func printUpdateRunSummary(output io.Writer, run update.Run, mask *privacy.Mask)
 			updated++
 		}
 		lines = append(lines, fmt.Sprintf("%s: %s", SafeTerminalText(mask.Value("host", updateTargetLocation(target))), updateRunTargetLabel(target.State)))
+		lines = append(lines, installationCommandLines(target.Commands, mask)...)
 	}
 	action := "to check again."
 	if run.Problem != "" {

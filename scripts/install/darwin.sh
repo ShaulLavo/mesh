@@ -184,6 +184,7 @@ fi
 launchctl print "$service" >/dev/null 2>&1 || fail service_install "$service is not loaded"
 rm -f "$activation_pending" || fail service_install "cannot clear the service activation marker"
 
+"$binary_path" daemon installation-check >&2
 if [ "$changed" -eq 1 ]; then
 	printf 'MESH_INSTALL_RESULT=configured\n'
 else

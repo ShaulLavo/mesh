@@ -193,7 +193,7 @@ func (a *application) runClientOnlyUpdate(ctx context.Context, environment updat
 		if comparison > 0 {
 			state = update.Newer
 		}
-		run := update.Run{Fleet: preview.Fleet, Release: preview.Release, Targets: []update.Target{{Host: environment.local, State: state, Build: &current}}}
+		run := update.Run{Fleet: preview.Fleet, Release: preview.Release, Targets: []update.Target{{Host: environment.local, State: state, Build: &current, Commands: localCommandCopies()}}}
 		return printDeclaredUpdateRun(ctx, output.out, run, options.json, options.details, output.privacy)
 	}
 	if err := preview.Release.Allows(current); err != nil {
@@ -306,6 +306,8 @@ func installationFinished(phase updateinstall.Phase) bool {
 
 func runFromInstallation(status updateinstall.Status) update.Run {
 	target := update.Target{Host: update.LocalHost(status.Settings.StateDir, status.Request.TargetID), Generation: status.Request.Generation, State: update.Pending, Build: &status.Original.Build, Workers: status.Original.Workers, Problem: status.Error}
+	home, _ := os.UserHomeDir()
+	target.Commands = updateinstall.OtherCommands(status.Settings.Executable, updateinstall.CommandSearchDirs(home, os.Getenv("PATH")))
 	switch status.Phase {
 	case updateinstall.Staged:
 		target.State = update.Staged

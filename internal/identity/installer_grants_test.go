@@ -135,7 +135,7 @@ func TestBootstrapMustSerializeWithDeviceRevocation(t *testing.T) {
 	if err := os.Rename(installed, realBinary); err != nil {
 		t.Fatal(err)
 	}
-	barrier := "#!/bin/sh\nprintf 'r' >\"$HOME/ready\"\nread -r resumed <\"$HOME/proceed\"\nexec \"$0.real\" \"$@\"\n"
+	barrier := "#!/bin/sh\nif [ \"$1 $2\" = 'device approve' ]; then\n  printf 'r' >\"$HOME/ready\"\n  read -r resumed <\"$HOME/proceed\"\nfi\nexec \"$0.real\" \"$@\"\n"
 	if err := os.WriteFile(installed, []byte(barrier), 0700); err != nil { //nolint:gosec // fixture-owned CLI launch barrier
 		t.Fatal(err)
 	}

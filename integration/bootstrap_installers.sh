@@ -91,12 +91,14 @@ assert_installer_grant() {
 }
 linux_service_b64=$(sed \
   -e 's|@MESH_BINARY@|%h/.local/bin/mesh|g' \
+  -e 's|@MESH_BINARY_DIR@|%h/.local/bin|g' \
   -e 's|@MESH_PORT@|7337|g' \
   -e 's|@MESH_SSH_PORT@|2222|g' \
   -e 's|@MESH_WEBSOCKET_PATH@|/mesh|g' \
   scripts/install/assets/mesh.service | base64 | tr -d '\n')
 darwin_service_b64=$(sed \
   -e 's|@MESH_BINARY@|${HOME}/.local/bin/mesh|g' \
+  -e "s|@MESH_BINARY_DIR@|\${HOME}/.local/bin|g" \
   -e 's|@MESH_PORT@|7337|g' \
   -e 's|@MESH_SSH_PORT@|2222|g' \
   -e 's|@MESH_WEBSOCKET_PATH@|/mesh|g' \

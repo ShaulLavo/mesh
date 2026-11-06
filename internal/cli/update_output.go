@@ -105,6 +105,9 @@ func printUpdateTargets(output io.Writer, targets []update.Target, manifest rele
 				return err
 			}
 		}
+		if err := printCommandCopies(writer, target.Commands, mask); err != nil {
+			return err
+		}
 	}
 	return writer.Flush()
 }
