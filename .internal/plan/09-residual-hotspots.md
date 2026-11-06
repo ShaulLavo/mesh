@@ -379,3 +379,26 @@ The discovered `test_run.py` includes identical-length corruption, fragmentation
 size and CPU controls. The corruption control failed before hashing was added.
 These observers establish no performance win. `scripts/verify.sh` already runs
 the full benchmark harness once; do not duplicate it as a second full gate.
+
+## Plan 011 execution, November 6, 2026
+
+PR 358 remains draft and acceptance is blocked. Its integrated candidate includes
+screen revisions, durable writer keys and the periodic preparation guard. Initial,
+final and explicit checkpoints stay forced. Covered ticks avoid screen preparation
+and full-record writer encoding, but still encode and hash metadata once and keep
+required process-directory observations. Prepared-text reuse across metadata-only
+changes, pending work and retries is deferred. Unit 5 is not complete.
+
+The final ten alternating 300 ms microbenchmark rounds retain useful unchanged
+allocation savings, but three changed-checkpoint cases exceed the approved 10%
+A/B limit. The ordinary known-directory medians are 199.91 ms for A and 347.69 ms
+for B on the shared PC. These sync-heavy timings do not establish a CPU regression,
+but the gate has not passed. The prior near-limit forced cost of about 413 to
+425 us versus 237 to 244 us, with extra allocations, remains a separate finding.
+
+Evidence and reproducible drivers are in
+`/work/reports/wave-20261106/audits2/mesh/execution/011/measure/REPORT.md`.
+The gate failure stopped the ordinary paired measurements and the one final
+race/integration campaign. One completed 300-second base window and one
+16 MiB head observer preflight are not paired acceptance. No known-directory
+real-worker timing, full durability pass or completed Unit 5 is claimed.
