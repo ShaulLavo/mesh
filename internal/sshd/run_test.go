@@ -9,8 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -108,11 +110,33 @@ func assertBlockedDirectRelays(t *testing.T, pty bool) {
 		defer close(inputDone)
 		_, _ = io.CopyN(input, zeroReader{}, 8<<20)
 	}()
+	awaitDirectBackpressure(t)
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}
 	waitForSessionEnd(t, finished)
 	waitForSessionEnd(t, inputDone)
+}
+
+func awaitDirectBackpressure(t *testing.T) {
+	t.Helper()
+	stack := make([]byte, 1<<20)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		goroutines := strings.Split(string(stack[:runtime.Stack(stack, true)]), "\n\n")
+		input := slices.ContainsFunc(goroutines, func(trace string) bool {
+			return strings.Contains(trace, "sshd.relayProcessInput") && strings.Contains(trace, "internal/poll.(*FD).Write")
+		})
+		output := slices.ContainsFunc(goroutines, func(trace string) bool {
+			server := strings.Contains(trace, "sshd.runProcess.func") || strings.Contains(trace, "os/exec.(*Cmd).writerDescriptor.func")
+			return server && strings.Contains(trace, "golang.org/x/crypto/ssh.(*window).reserve")
+		})
+		if input && output {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("direct SSH fixture did not block both input and output relays")
 }
 
 type zeroReader struct{}
