@@ -40,7 +40,7 @@ func TestCatalogCacheConcurrentWriters(t *testing.T) {
 	}
 
 	// A held third writer may outlive the 150 ms SQLite budget under load.
-	// TestCatalogSQLiteWriterContentionRespectsBudget covers that failure path.
+	// TestCatalogSQLiteWriterContentionWithoutCancellation covers that failure path.
 	if err := os.WriteFile(filepath.Join(stateDir, "writers-start"), nil, 0o600); err != nil { //nolint:gosec // marker path is inside the test TempDir.
 		t.Fatal(err)
 	}
