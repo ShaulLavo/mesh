@@ -20,8 +20,8 @@ type Operation struct {
 
 var Operations = []Operation{
 	{Name: "services.list", Command: "mesh serve ls", Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline for live host queries"}}, Network: true, Implemented: true, Summary: "List live and cached services without opening their URLs.", Example: "mesh serve ls --json"},
-	{Name: "hosts.list", Command: "mesh hosts"},
-	{Name: "hosts.inspect", Command: "mesh inspect", Args: "HOST"},
+	{Name: "hosts.list", Command: "mesh hosts", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline for host queries"}, {Name: "--cached", Summary: "do not dial hosts"}}, Summary: "Read machine context without waking machines.", Example: "mesh hosts --json"},
+	{Name: "hosts.inspect", Command: "mesh inspect", Args: "HOST", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline for host queries"}, {Name: "--cached", Summary: "do not dial hosts"}}, Summary: "Read full machine notes and current access.", Example: "mesh inspect HOST_ID --json"},
 	{Name: "sessions.list", Command: "mesh session list", Implemented: true, Network: true, Flags: sessionReadFlags(true), Summary: "Read a bounded page of sessions without attaching.", Example: "mesh session list --host HOST_ID --json"},
 	{Name: "sessions.inspect", Command: "mesh session inspect", Args: "SESSION_ID", Implemented: true, Network: true, Flags: sessionReadFlags(false), Summary: "Read live or saved session details without attaching.", Example: "mesh session inspect --host HOST_ID SESSION_ID --json"},
 	{Name: "profile.show", Command: "mesh profile show", Implemented: true, Flags: []Flag{{Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Read this machine’s owner-written notes.", Example: "mesh profile show --json"},

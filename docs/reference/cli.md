@@ -30,6 +30,8 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh cp`](#mesh-cp) | Copy files or directories through an authenticated Mesh connection |
 | [`mesh dashboard`](#mesh-dashboard) | Watch machine usage, sessions, and services |
 | [`mesh fleet`](#mesh-fleet) | Share connections with explicitly trusted devices |
+| [`mesh hosts`](#mesh-hosts) | Read machine context without waking machines |
+| [`mesh inspect`](#mesh-inspect) | Read full host and fleet notes and current access |
 | [`mesh profile`](#mesh-profile) | Read and edit this machine's owner-written notes |
 | [`mesh rename`](#mesh-rename) | Change the destination machine's name |
 | [`mesh ssh`](#mesh-ssh) | Open a shell or command that ends when the connection closes |
@@ -100,6 +102,8 @@ HOSTS
   cp SOURCE DESTINATION [--flags]                       Copy files or directories through an authenticated Mesh connection
   dashboard [--flags]                                   Watch machine usage, sessions, and services
   fleet [command]                                       Share connections with explicitly trusted devices
+  hosts [--flags]                                       Read machine context without waking machines
+  inspect HOST [--flags]                                Read full host and fleet notes and current access
   profile [command] [--flags]                           Read and edit this machine's owner-written notes
   rename host new-name                                  Change the destination machine's name
   ssh HOST [-- command...] [--flags]                    Open a shell or command that ends when the connection closes
@@ -684,6 +688,44 @@ FLAGS
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
   --yes        Approve this device's connection-sharing policy
+```
+
+## mesh hosts
+
+```text
+Read machine context without waking machines
+
+USAGE
+
+  mesh hosts [--flags]
+
+FLAGS
+
+  --cached     Read local files and cached observations without dialing
+  -h --help    Help for hosts
+  --json       Write one agent result
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Hard deadline for host queries (100ms to 30s) (2s)
+```
+
+## mesh inspect
+
+```text
+Read full host and fleet notes and current access
+
+USAGE
+
+  mesh inspect HOST [--flags]
+
+FLAGS
+
+  --cached     Read local files and cached observations without dialing
+  -h --help    Help for inspect
+  --json       Write one agent result
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Hard deadline for host queries (100ms to 60s) (5s)
 ```
 
 ## mesh profile
