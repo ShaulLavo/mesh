@@ -495,13 +495,21 @@ func (c *Catalog) retentionCandidate(current storage.Session, index int) (retent
 }
 
 func markExpiredHistory(finished []retentionCandidate, now time.Time, retire map[int]struct{}) {
-	sort.Slice(finished, func(i, j int) bool { return finished[i].orderAt.Before(finished[j].orderAt) })
-	excess := len(finished) - maxRetainedTerminalSessions
-	for rank, current := range finished {
-		agedOut := !current.exitedAt.IsZero() && now.Sub(current.exitedAt) > sessionRetention
-		if agedOut || rank < excess {
+	remaining := finished[:0]
+	for _, current := range finished {
+		if !current.exitedAt.IsZero() && now.Sub(current.exitedAt) > sessionRetention {
 			retire[current.index] = struct{}{}
+			continue
 		}
+		if _, selected := retire[current.index]; selected {
+			continue
+		}
+		remaining = append(remaining, current)
+	}
+	sort.Slice(remaining, func(i, j int) bool { return remaining[i].orderAt.Before(remaining[j].orderAt) })
+	excess := max(0, len(remaining)-maxRetainedTerminalSessions)
+	for _, current := range remaining[:excess] {
+		retire[current.index] = struct{}{}
 	}
 }
 

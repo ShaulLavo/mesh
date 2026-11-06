@@ -125,7 +125,7 @@ func TestReviewPrunePreservesARecoveryWaiterAfterFailedRetirement(t *testing.T) 
 		return store
 	})
 	historyShorts(t, h, 11)
-	h.reconcile(t)
+	h.seed(t)
 	dir := filepath.Join(h.root, "H011")
 	gate := newDemandBarrier(t)
 	cfg := recovery.Config{SessionsDir: h.root, HostID: string(h.catalog.host.ID), Runtime: reviewRecoveryRuntime{gate: gate}}
