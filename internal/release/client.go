@@ -2,6 +2,7 @@ package release
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -31,6 +32,10 @@ const (
 	maximumArchive     = 128 << 20
 	maximumBinary      = 128 << 20
 	maximumErrorDetail = 4 << 10
+
+	maximumArchiveTrailer = 1 << 20
+	// Include the member header, body alignment, both end blocks, and allowed zero padding.
+	maximumExpandedArchive = maximumBinary + 512 + 511 + 1024 + maximumArchiveTrailer
 )
 
 // Client reads immutable release metadata and artifacts from a release origin.
@@ -317,7 +322,8 @@ func extractBinary(archivePath, directory, wantDigest string) (string, error) {
 		return "", fmt.Errorf("release: open gzip archive: %w", err)
 	}
 	defer gzipReader.Close() //nolint:errcheck // reader has no pending writes
-	tarReader := tar.NewReader(gzipReader)
+	expanded := &io.LimitedReader{R: gzipReader, N: maximumExpandedArchive + 1}
+	tarReader := tar.NewReader(expanded)
 	header, err := tarReader.Next()
 	if err != nil {
 		return "", fmt.Errorf("release: read archive: %w", err)
@@ -339,7 +345,33 @@ func extractBinary(archivePath, directory, wantDigest string) (string, error) {
 		_ = os.Remove(path)
 		return "", errors.New("release: archive contains more than one member")
 	}
+	if err := validateArchiveTail(expanded); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
 	return path, nil
+}
+
+// Tar EOF can hide a terminal gzip error. Validate padding through the decoder's own EOF.
+func validateArchiveTail(source *io.LimitedReader) error {
+	remaining := int64(maximumArchiveTrailer)
+	var buffer [32 << 10]byte
+	for {
+		n, err := source.Read(buffer[:min(int64(len(buffer)), remaining+1)])
+		remaining -= int64(n)
+		if remaining < 0 || source.N == 0 {
+			return errors.New("release: archive exceeds expanded size or padding limit")
+		}
+		if bytes.Count(buffer[:n], []byte{0}) != n {
+			return errors.New("release: archive contains nonzero trailing data")
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("release: read archive trailer: %w", err)
+		}
+	}
 }
 
 func writeBinary(destination *os.File, source io.Reader, size int64, wantDigest string) error {

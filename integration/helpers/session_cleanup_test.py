@@ -9,12 +9,16 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 from failed_fixture import process_identity
 
 
 HELPERS = Path(__file__).resolve().parent
+# Each listing advances the shell's clock. The timeout function drops the listing bound,
+# which a shell function could not run under, so the listing runs in this shell.
+SIMULATED_CLOCK = "fixture_mesh() { SECONDS=$((SECONDS + 20)); }\ntimeout() { shift 2; \"$@\"; }"
 
 
 class SessionCleanupTest(unittest.TestCase):
@@ -117,7 +121,7 @@ class SessionCleanupTest(unittest.TestCase):
                 socket.parent.mkdir(parents=True)
                 socket.touch()
                 command = (f"source {shlex.quote(str(HELPERS / 'session_cleanup.sh'))}\n"
-                           "set -uo pipefail\nfixture_mesh() { SECONDS=$((SECONDS + 20)); }\n"
+                           f"set -uo pipefail\n{SIMULATED_CLOCK}\n"
                            f"{cleanup}\ntrap cleanup EXIT\nexit {test_status}")
                 environment = os.environ | {"T": str(tree), "MESH_STATE_DIR": str(state),
                                             "MESH": "fixture_mesh", "SID": "", "CLIENT": ""}
@@ -134,11 +138,30 @@ class SessionCleanupTest(unittest.TestCase):
             socket.parent.mkdir(parents=True)
             socket.touch()
             command = (f"source {shlex.quote(str(HELPERS / 'session_cleanup.sh'))}\n"
-                       "fixture_mesh() { SECONDS=$((SECONDS + 20)); }\nMESH=fixture_mesh\n"
+                       f"{SIMULATED_CLOCK}\nMESH=fixture_mesh\n"
                        f"wait_for_fixture_workers {shlex.quote(str(state))}")
             result = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=3)
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn(str(socket), result.stderr)
+            self.assertIn("did not finish writing session data", result.stderr)
+            self.assertTrue(socket.exists())
+
+    @unittest.skipUnless(sys.platform == "linux", "the fixture listing bound uses GNU timeout")
+    def test_blocked_listing_cannot_hold_cleanup_past_its_deadline(self):
+        with tempfile.TemporaryDirectory(prefix="m-cleanup-blocked-") as temporary:
+            state = Path(temporary) / "state"
+            socket = state / "s/7K3D/sock"
+            socket.parent.mkdir(parents=True)
+            socket.touch()
+            mesh = Path(temporary) / "mesh"
+            mesh.write_text("#!/bin/sh\nexec sleep 60\n")
+            mesh.chmod(0o700)
+            command = (f"source {shlex.quote(str(HELPERS / 'session_cleanup.sh'))}\n"
+                       f"MESH={shlex.quote(str(mesh))}\nwait_for_fixture_workers {shlex.quote(str(state))} 1")
+            started = time.monotonic()
+            result = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=10)
+            self.assertLess(time.monotonic() - started, 4, "a blocked listing held cleanup past its deadline")
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn("did not finish writing session data", result.stderr)
             self.assertTrue(socket.exists())
 

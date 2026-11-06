@@ -259,8 +259,14 @@ func (m model) selectedSessionID() string {
 
 func (m model) sessionView() tea.View {
 	header, subtitle, footer := m.chrome()
+	updateLines := m.updateNoticeLines()
+	bodyRows := max(0, m.height-4-len(updateLines))
+	var details inspectionDetails
 	if m.fullPreview {
-		subtitle = truncate(m.styles.muted.Render(m.previewSubtitle()), m.width)
+		if _, current, ok := m.currentSession(); ok {
+			details = m.detailsFor(current, max(0, bodyRows-2))
+		}
+		subtitle = truncate(m.styles.muted.Render(m.previewSubtitle(details)), m.width)
 	}
 
 	lines := make([]string, 0, m.height)
@@ -272,13 +278,11 @@ func (m model) sessionView() tea.View {
 	case 3:
 		lines = append(lines, header, subtitle, footer)
 	default:
-		updateLines := m.updateNoticeLines()
-		bodyRows := max(0, m.height-4-len(updateLines))
 		lines = append(lines, header, subtitle)
 		lines = append(lines, updateLines...)
 		lines = append(lines, "")
 		if m.fullPreview {
-			lines = append(lines, m.fullPreviewPanel(bodyRows)...)
+			lines = append(lines, m.fullPreviewPanel(details, bodyRows)...)
 		} else {
 			lines = append(lines, m.sessionBody(bodyRows)...)
 		}
@@ -354,7 +358,7 @@ type inspectionDetails struct {
 	previewStyled   bool
 }
 
-func (m model) detailsFor(current session) (result inspectionDetails) {
+func (m model) detailsFor(current session, previewRows int) (result inspectionDetails) {
 	defer func() {
 		if m.privacy != nil {
 			if result.directory != "unknown" {
@@ -443,7 +447,7 @@ func (m model) detailsFor(current session) (result inspectionDetails) {
 		if m.inspection.problem != "" {
 			details.screenStatus = "last live view · refresh failed: " + safeText(m.inspection.problem)
 		}
-		details.preview, details.previewStyled = m.renderInspectionPreview(value)
+		details.preview, details.previewStyled = m.renderInspectionPreview(value, previewRows)
 		blank := true
 		for _, line := range value.Preview {
 			if strings.TrimSpace(line) != "" {
@@ -470,7 +474,7 @@ func (m model) detailPanel(previewRows int) []string {
 	if !ok {
 		return nil
 	}
-	details := m.detailsFor(current)
+	details := m.detailsFor(current, previewRows)
 	directory := details.directory
 	if details.directorySource != "" {
 		directory += "  ·  " + details.directorySource
@@ -528,7 +532,7 @@ func (m model) previewRows(details inspectionDetails, rows int) []string {
 	return panel
 }
 
-func (m model) fullPreviewPanel(rows int) []string {
+func (m model) fullPreviewPanel(details inspectionDetails, rows int) []string {
 	if rows <= 0 {
 		return nil
 	}
@@ -536,7 +540,6 @@ func (m model) fullPreviewPanel(rows int) []string {
 	if !ok || rows < 2 {
 		return fitRows(nil, rows)
 	}
-	details := m.detailsFor(current)
 	screenTitle := "session screen"
 	if endedSession(current) {
 		screenTitle = details.screenStatus
@@ -563,12 +566,11 @@ func tailRows(lines []string, rows int) []string {
 	return lines[len(lines)-rows:]
 }
 
-func (m model) previewSubtitle() string {
+func (m model) previewSubtitle(details inspectionDetails) string {
 	_, current, ok := m.currentSession()
 	if !ok {
 		return "No session selected."
 	}
-	details := m.detailsFor(current)
 	parts := []string{
 		m.privacy.Value("session", m.sessionHeadline(current)),
 		safeText(m.privacy.Text(current.id)),
@@ -665,29 +667,45 @@ func cloneSessionInspection(source cli.SessionInspection) cli.SessionInspection 
 	return cloned
 }
 
-func (m model) renderInspectionPreview(inspection cli.SessionInspection) ([]string, bool) {
+func (m model) renderInspectionPreview(inspection cli.SessionInspection, rows int) ([]string, bool) {
 	if m.privacy != nil {
 		return []string{privacyPreviewPlaceholder}, false
 	}
-	lines := make([]string, len(inspection.Preview))
-	stylesMatch := len(inspection.StyledPreview) == len(inspection.Preview)
-	for row, plain := range inspection.Preview {
-		if !stylesMatch || previewLineText(inspection.StyledPreview[row]) != plain {
-			for fallbackRow, fallback := range inspection.Preview {
-				lines[fallbackRow] = safeText(fallback)
-			}
-			return lines, false
+	stylesMatch := previewStylesMatch(inspection)
+	preview := tailRows(inspection.Preview, rows)
+	lines := make([]string, len(preview))
+	firstRow := len(inspection.Preview) - len(preview)
+	for row, plain := range preview {
+		if !stylesMatch {
+			lines[row] = safeText(plain)
+			continue
 		}
-		var rendered strings.Builder
-		for _, run := range inspection.StyledPreview[row].Runs {
-			if run.Text == "" {
-				continue
-			}
-			rendered.WriteString(m.previewRunStyle(run.Style).Render(run.Text))
-		}
-		lines[row] = rendered.String()
+		lines[row] = m.renderPreviewLine(inspection.StyledPreview[firstRow+row])
 	}
 	return lines, stylesMatch
+}
+
+func previewStylesMatch(inspection cli.SessionInspection) bool {
+	if len(inspection.StyledPreview) != len(inspection.Preview) {
+		return false
+	}
+	for row, plain := range inspection.Preview {
+		if previewLineText(inspection.StyledPreview[row]) != plain {
+			return false
+		}
+	}
+	return true
+}
+
+func (m model) renderPreviewLine(line protocol.PreviewLine) string {
+	var rendered strings.Builder
+	for _, run := range line.Runs {
+		if run.Text == "" {
+			continue
+		}
+		rendered.WriteString(m.previewRunStyle(run.Style).Render(run.Text))
+	}
+	return rendered.String()
 }
 
 func previewLineText(line protocol.PreviewLine) string {

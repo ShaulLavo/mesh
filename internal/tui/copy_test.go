@@ -33,7 +33,7 @@ func TestCopyPickerInspectionRetainsDiagnostic(t *testing.T) {
 	if !ok {
 		t.Fatal("fixture has no selected session")
 	}
-	details := m.detailsFor(current)
+	details := m.detailsFor(current, inspectionPreviewRows)
 	if details.screenStatus != "Screen unavailable; retrying" || !strings.Contains(strings.Join(details.preview, "\n"), "Could not read the screen: fixture connection refused") {
 		t.Fatalf("screen failure lost its explanation or diagnostic: %+v", details)
 	}
@@ -42,7 +42,7 @@ func TestCopyPickerInspectionRetainsDiagnostic(t *testing.T) {
 		t.Fatalf("picker details lost diagnostic: %s", view)
 	}
 	m.inspection = inspectionState{kind: inspectionLoading}
-	if got := m.detailsFor(current).preview[0]; got != "Loading current screen…" {
+	if got := m.detailsFor(current, inspectionPreviewRows).preview[0]; got != "Loading current screen…" {
 		t.Errorf("loading copy = %q", got)
 	}
 }
