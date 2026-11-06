@@ -17,7 +17,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	charm.land/ssh v0.4.2
 	charm.land/wish/v2 v2.0.3
-	github.com/andybalholm/brotli v1.2.5
+	github.com/andybalholm/brotli v1.2.7
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/fang v1.0.0
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886
