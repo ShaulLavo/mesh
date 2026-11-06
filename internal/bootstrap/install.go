@@ -76,6 +76,7 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 		}
 		return false, diagnostic(DiagnosticServiceInstall, remoteCommandError("install remote Mesh service", err, stdout, stderr))
 	}
+	reportInstallerCommandNotices(request, stderr)
 	switch {
 	case containsLine(stdout, "MESH_INSTALL_RESULT=unchanged"):
 		return true, nil
@@ -83,6 +84,14 @@ func installRemote(ctx context.Context, remote remoteHost, request installReques
 		return false, nil
 	default:
 		return false, diagnostic(DiagnosticServiceInstall, fmt.Errorf("installer returned no result marker: %s", strings.TrimSpace(combined)))
+	}
+}
+
+func reportInstallerCommandNotices(request installRequest, stderr []byte) {
+	for _, line := range strings.Split(string(stderr), "\n") {
+		if strings.HasPrefix(line, "Separate Mesh command: ") || strings.HasPrefix(line, "Fix: ") {
+			request.progress(Event{Step: StepInstall, Detail: line})
+		}
 	}
 }
 

@@ -1740,7 +1740,7 @@ func (a *application) daemonCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return meshdaemon.Run(cmd.Context(), meshdaemon.Config{
+			return runManagedDaemon(cmd.Context(), meshdaemon.Config{
 				FleetShare:             sharing,
 				SSHSessionHandler:      a.dependencies.SSHSessionHandler,
 				WakePeerIdentity:       configuredWakeIdentity,

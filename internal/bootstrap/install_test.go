@@ -229,6 +229,30 @@ func TestInstallRemoteSkipsUploadWhenHostRunsThisBuild(t *testing.T) {
 	}
 }
 
+func TestInstallRemoteReportsSeparateCommandNotices(t *testing.T) {
+	contents := []byte("identical binary")
+	binaryPath := writeTestBinary(t, contents)
+	digest := sha256.Sum256(contents)
+	var events []Event
+	remote := &stubRemote{run: func(_ string, stdin io.Reader) ([]byte, []byte, error) {
+		if stdin == nil {
+			return []byte(hex.EncodeToString(digest[:]) + "\n"), nil, nil
+		}
+		return []byte("MESH_INSTALL_RESULT=unchanged\n"), []byte("unrelated stderr\nSeparate Mesh command: /opt/homebrew/bin/mesh\nFix: brew upgrade --cask shaullavo/mesh/mesh\n"), nil
+	}}
+	unchanged, err := installRemote(t.Context(), remote, installRequest{
+		Platform: Platform{OS: Darwin, Arch: ARM64}, BinaryPath: binaryPath,
+		DaemonPort: 7337, SSHPort: 2222, WebSocketPath: "/mesh",
+		Progress: func(event Event) { events = append(events, event) },
+	})
+	if err != nil || !unchanged {
+		t.Fatalf("installation = %v, %v", unchanged, err)
+	}
+	if len(events) != 3 || !strings.Contains(events[1].Detail, "/opt/homebrew/bin/mesh") || !strings.Contains(events[2].Detail, "brew upgrade --cask shaullavo/mesh/mesh") {
+		t.Fatalf("installation notices were discarded: %+v", events)
+	}
+}
+
 func TestInstallRemoteUploadsWhenTheDigestIsUnusable(t *testing.T) {
 	t.Parallel()
 

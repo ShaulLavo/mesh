@@ -15,19 +15,22 @@ func ValidateInstallationPath(path string) error {
 		return errors.New("installation executable path must be absolute")
 	}
 	clean := filepath.Clean(path)
+	resolved, resolveErr := filepath.EvalSymlinks(clean)
+	if resolveErr == nil && strings.Contains(resolved, "/Caskroom/mesh/") {
+		return fmt.Errorf("Homebrew package-owned Mesh executable %s: use brew upgrade --cask shaullavo/mesh/mesh; to update the managed installation, run ~/.local/bin/mesh update", clean)
+	}
 	if err := validateUnmanagedPrefix(clean); err != nil {
 		return err
 	}
-	resolved, err := filepath.EvalSymlinks(clean)
-	if err != nil {
-		return err
+	if resolveErr != nil {
+		return fmt.Errorf("resolve installation executable: %w", resolveErr)
 	}
-	if err = validateUnmanagedPrefix(resolved); err != nil {
+	if err := validateUnmanagedPrefix(resolved); err != nil {
 		return err
 	}
 	info, err := os.Lstat(clean)
 	if err != nil {
-		return err
+		return fmt.Errorf("inspect installation executable: %w", err)
 	}
 	if !info.Mode().IsRegular() {
 		return errors.New("updater requires a regular Mesh-managed executable; migrate package-owned links explicitly")

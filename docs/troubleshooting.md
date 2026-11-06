@@ -2,6 +2,21 @@
 
 Each entry starts with what you see. The error text is copied from Mesh 0.1.251 output or source.
 
+## Installation or update output reports a separate Mesh command
+
+`mesh update` maintains the daemon's installation. Another copy, such as a
+Homebrew command, can remain at a different version. Installation and update
+checks report these copies even when the managed installation is current.
+
+To keep the Homebrew cask, update it with
+`brew upgrade --cask shaullavo/mesh/mesh`. To use only the managed installation,
+remove the cask with `brew uninstall --cask shaullavo/mesh/mesh` and put
+`~/.local/bin` first in PATH for interactive and noninteractive shells.
+Run `command -v mesh` and `mesh --version` in both shells to check the result.
+
+Mesh daemons put their own installation directory first in the PATH inherited
+by commands they start. A shell's startup files can change that PATH again.
+
 ## `"pc" is neither a declared machine name, exact host ID nor a session ID`
 
 Mesh treats a bare word as a host or a session, and it knows no host or session called `pc`. Either you have not adopted that machine, or its name differs from the one you typed.

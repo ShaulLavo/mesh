@@ -209,7 +209,7 @@ sys.exit(result["status"])
             agents.mkdir(parents=True)
             path = agents / "dev.shaulavo.mesh.plist"
             template = (REPO / "scripts" / "install" / "assets" / path.name).read_text()
-            for token, value in {"@MESH_BINARY@": "${HOME}/.local/bin/mesh", "@MESH_PORT@": str(self.port), "@MESH_SSH_PORT@": "0", "@MESH_WEBSOCKET_PATH@": "/mesh", "@MESH_STDOUT@": str(self.root / "daemon.log"), "@MESH_STDERR@": str(self.root / "daemon.err.log")}.items():
+            for token, value in {"@MESH_BINARY@": "${HOME}/.local/bin/mesh", "@MESH_BINARY_DIR@": "${HOME}/.local/bin", "@MESH_PORT@": str(self.port), "@MESH_SSH_PORT@": "0", "@MESH_WEBSOCKET_PATH@": "/mesh", "@MESH_STDOUT@": str(self.root / "daemon.log"), "@MESH_STDERR@": str(self.root / "daemon.err.log")}.items():
                 template = template.replace(token, value)
             require("@MESH_" not in template, "unresolved daemon plist")
             path.write_text(template)

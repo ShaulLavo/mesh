@@ -106,6 +106,7 @@ render_service() {
 	if [ "$target_os" = linux ]; then
 		sed \
 			-e "s|@MESH_BINARY@|$binary_path|g" \
+			-e "s|@MESH_BINARY_DIR@|$binary_dir|g" \
 			-e 's|@MESH_PORT@|7337|g' \
 			-e 's|@MESH_SSH_PORT@|2222|g' \
 			-e 's|@MESH_WEBSOCKET_PATH@|/mesh|g' \
@@ -113,6 +114,7 @@ render_service() {
 	else
 		sed \
 			-e "s|@MESH_BINARY@|$binary_path|g" \
+			-e "s|@MESH_BINARY_DIR@|$binary_dir|g" \
 			-e 's|@MESH_PORT@|7337|g' \
 			-e 's|@MESH_SSH_PORT@|2222|g' \
 			-e 's|@MESH_WEBSOCKET_PATH@|/mesh|g' \
@@ -353,4 +355,5 @@ if [ "$binary_changed" -eq 1 ] || [ "$activation_required" -eq 1 ]; then
 else
 	result=unchanged
 fi
+"$binary_path" daemon installation-check >&2
 printf 'Mesh %s (%s/%s) %s at %s\n' "$version" "$target_os" "$target_arch" "$result" "$binary_path"

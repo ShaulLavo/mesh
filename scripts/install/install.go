@@ -79,6 +79,7 @@ func RenderService(goos string, opts ServiceOptions) (string, error) {
 	}
 	asset = strings.NewReplacer(
 		"@MESH_BINARY@", binaryPath,
+		"@MESH_BINARY_DIR@", strings.TrimSuffix(binaryPath, "/mesh"),
 		"@MESH_PORT@", strconv.Itoa(int(opts.DaemonPort)),
 		"@MESH_SSH_PORT@", strconv.Itoa(int(opts.SSHPort)),
 		"@MESH_WEBSOCKET_PATH@", opts.WebSocketPath,

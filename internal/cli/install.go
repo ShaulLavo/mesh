@@ -206,6 +206,7 @@ func homeOrTilde() string {
 func daemonWithInstall(app *application) *cobra.Command {
 	daemon := app.daemonCommand()
 	daemon.AddCommand(app.daemonInstallCommand())
+	daemon.AddCommand(installationCheckCommand())
 	return daemon
 }
 

@@ -56,6 +56,7 @@ func (a *application) reviewLocalUpdateBuild(environment updateEnvironment, prev
 			continue
 		}
 		if preview.ClientOnly {
+			target.Commands = localCommandCopies()
 			build := a.currentUpdateBuild()
 			target.Build, target.State = &build, update.Pending
 			// The absent daemon is expected for a client-only installation.
