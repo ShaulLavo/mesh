@@ -359,10 +359,15 @@ jobs:
 
   gate:
     name: Complete CI gate
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (always()) }}
+    if: always()
     needs: [changes, app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
+      - name: Require a ready PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft
+        run: |
+          echo '::error::Mark this PR ready for review to run the required checks.'
+          exit 1
       - name: Require every CI job
         env:
           CHANGES: ${{ needs.changes.result }}
