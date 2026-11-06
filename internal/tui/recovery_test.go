@@ -198,7 +198,7 @@ func TestRecoveryFallbackAndCorruptRecordStayVisible(t *testing.T) {
 	row.Recovery.DirectorySource = recovery.DirectoryObserved
 	row.Recovery.Lines = []string{"\x1b[31munsafe"}
 	current := recoveryPicker(row)
-	details := current.detailsFor(current.currentHost().sessions[0])
+	details := current.detailsFor(current.currentHost().sessions[0], inspectionPreviewRows)
 	if details.directorySource != "observed fallback" || strings.Contains(details.preview[0], "\x1b") {
 		t.Fatalf("unsafe saved display: %#v", details)
 	}
