@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,6 +57,10 @@ func main() {
 	}
 	if status, ok := cli.StatusCode(err); ok {
 		os.Exit(status)
+	}
+	var failure *agentapi.Failure
+	if errors.As(err, &failure) {
+		os.Exit(failure.Exit)
 	}
 	os.Exit(1)
 }

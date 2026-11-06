@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/shaul/mesh/internal/testenv"
@@ -19,6 +20,29 @@ func TestAgentEarlyJSONFailures(t *testing.T) {
 	}
 	for _, file := range []string{"domains.json", "hosts.json"} {
 		t.Run(file, func(t *testing.T) { checkEarlyJSONFailure(t, file) })
+	}
+}
+
+func TestAgentTerminalUsageExit(t *testing.T) {
+	if os.Getenv("MESH_TEST_TERMINAL_USAGE") == "1" {
+		os.Args = []string{"mesh", "--host", "pc", "tool"}
+		main()
+		return
+	}
+	root := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.CommandContext(t.Context(), executable, "-test.run=^TestAgentTerminalUsageExit$") //nolint:gosec // isolated current test executable
+	child.Env = append(testenv.ForProcess(root), "MESH_TEST_TERMINAL_USAGE=1", "MESH_CONFIG_DIR="+filepath.Join(root, "config"), "MESH_STATE_DIR="+filepath.Join(root, "state"))
+	output, err := child.Output()
+	var exited *exec.ExitError
+	if !errors.As(err, &exited) || exited.ExitCode() != 2 {
+		t.Fatalf("terminal usage should exit 2: %v", err)
+	}
+	if len(output) != 0 || !strings.Contains(string(exited.Stderr), "put the command after --") {
+		t.Fatalf("human error missing: %q %q", output, exited.Stderr)
 	}
 }
 
