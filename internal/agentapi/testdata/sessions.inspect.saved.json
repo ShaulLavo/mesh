@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "operation": "sessions.inspect",
+  "status": "ok",
+  "requestId": "01JA0000000000000000000000",
+  "data": {
+    "session": {
+      "id": "7K3D",
+      "hostId": "-kg0FH9uaQw2k-_2EzYEZAPNiuKhTzGzxAc1hWkjlWU",
+      "kind": "pty",
+      "state": "exited",
+      "hibernated": false,
+      "recoveryPending": false,
+      "createdAt": "2026-11-06T10:00:00Z",
+      "exitCode": 37,
+      "command": [
+        "sh"
+      ],
+      "cwd": "/work"
+    },
+    "freshness": "live",
+    "liveState": "saved",
+    "live": null,
+    "saved": {
+      "checkpointAt": null,
+      "directory": "/work",
+      "directorySource": "launch",
+      "command": [
+        "sh"
+      ],
+      "terminalTitle": "",
+      "lastOutputAt": null,
+      "preview": []
+    }
+  },
+  "errors": []
+}
