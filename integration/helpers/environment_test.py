@@ -140,7 +140,12 @@ class VerifierEnvironmentTest(unittest.TestCase):
         (self.root / "integration").mkdir()
         self.tools = self.root / "toolchain" / "bin"
         self.tools.mkdir(parents=True)
-        shutil.copyfile(Path(__file__).parents[2] / "scripts" / "verify.sh", self.root / "scripts" / "verify.sh")
+        repo = Path(__file__).resolve().parents[2]
+        (self.root / "integration" / "helpers").mkdir()
+        for name in ("scripts/verify.sh", "scripts/verify_runner.py", "integration/helpers/isolation.py",
+                     "integration/helpers/owned_command.py", "integration/helpers/process_tree.py",
+                     "integration/helpers/process_diagnostics.py"):
+            shutil.copyfile(repo / name, self.root / name)
         self.build_capture = self.root / "build.env"
         self.test_capture = self.root / "test.env"
         self.caller_home = self.root / "caller-home"
@@ -255,11 +260,16 @@ class VerifierEnvironmentTest(unittest.TestCase):
         self.assertEqual(test.get("PYTHONDONTWRITEBYTECODE"), "1")
 
     def test_user_bus_reaches_scripts(self):
-        selected = {"XDG_RUNTIME_DIR": "/fixture-runtime", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/fixture-runtime/bus"}
-        self.caller.update(selected)
-        _, test = self.captured_environments()
-        for name, value in selected.items():
-            self.assertEqual(test.get(name), value, name)
+        # Every entry runs isolated, so the caller's runtime directory is replaced; its bus is not.
+        runtime = {"XDG_RUNTIME_DIR": "/fixture-runtime"}
+        for selected in (runtime | {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/fixture-bus"}, runtime):
+            with self.subTest(selected=selected):
+                self.caller.update(selected)
+                _, test = self.captured_environments()
+                expected = selected.get("DBUS_SESSION_BUS_ADDRESS", "unix:path=/fixture-runtime/bus")
+                self.assertEqual(test.get("DBUS_SESSION_BUS_ADDRESS"), expected)
+                self.assertNotEqual(test.get("XDG_RUNTIME_DIR"), "/fixture-runtime")
+                self.caller.pop("DBUS_SESSION_BUS_ADDRESS", None)
 
     def test_supported_overrides_reach_scripts(self):
         selected = {"MESH_TEST_ZSH": "/fixture/zsh", "MESH_SHORT_TMP": str(self.root)}
@@ -276,15 +286,13 @@ class VerifierEnvironmentTest(unittest.TestCase):
         busctl = self.tools / "busctl"
         busctl.write_text(
             "#!/bin/sh\n"
-            '[ "$XDG_RUNTIME_DIR" = /fixture-runtime ] &&\n'
             '[ "$DBUS_SESSION_BUS_ADDRESS" = unix:path=/fixture-runtime/bus ]\n'
         )
         busctl.chmod(0o700)
         self.probe.write_text("busctl --user status || exit 9\n" + self.probe.read_text())
         self.probe.rename(self.root / "integration" / "session_scope.sh")
         _, test = self.captured_environments()
-        for name, value in selected.items():
-            self.assertEqual(test.get(name), value, name)
+        self.assertEqual(test.get("DBUS_SESSION_BUS_ADDRESS"), selected["DBUS_SESSION_BUS_ADDRESS"])
 
     def test_scope_cannot_skip_a_working_caller_user_bus(self):
         uname = self.tools / "uname"

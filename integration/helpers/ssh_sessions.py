@@ -4,15 +4,12 @@
 import json
 import os
 from pathlib import Path
-import signal
 import socket
 import subprocess
 import sys
-import tempfile
-import time
 
 sys.dont_write_bytecode = True
-from terminal_window import Fixture, Terminal, PROMPT, eventually, require
+from terminal_window import Fixture, Terminal, PROMPT, eventually, require, run_fixture, run_outside_containing_session
 
 
 class SSHFixture(Fixture):
@@ -132,22 +129,7 @@ def exercise(fixture):
 
 
 def main():
-    signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError("SSH fixture exceeded 25 seconds")))
-    signal.alarm(25)
-    with tempfile.TemporaryDirectory(prefix="mesh-ssh-session-") as directory:
-        fixture = SSHFixture(sys.argv[1], directory)
-        try:
-            exercise(fixture)
-        except Exception:
-            if fixture.daemon_log is not None:
-                fixture.daemon_log.flush()
-                print((fixture.root / "daemon.log").read_text(), file=sys.stderr)
-            for terminal in fixture.terminals:
-                print(f"terminal {terminal.pid}: {terminal.drain()[-3000:]!r}", file=sys.stderr)
-            raise
-        finally:
-            signal.alarm(0)
-            fixture.close()
+    run_fixture(SSHFixture, sys.argv[1], "mesh-ssh-session-", exercise, "SSH fixture exceeded 25 seconds")
     print("PASS: SSH picker, attach, resize, detach, steal, crash survival, new shell and exit status")
 
 
@@ -160,31 +142,7 @@ def run():
         return 1
 
 
-def run_outside_containing_session():
+if __name__ == "__main__":
     # A real ancestry walk finds the invoking Mesh worker even with its environment
     # cleared. Orphan the fixture so local attachments get ordinary detach keys.
-    reader, writer = os.pipe()
-    intermediate = os.fork()
-    if intermediate:
-        os.close(writer)
-        os.waitpid(intermediate, 0)
-        result = os.read(reader, 1)
-        os.close(reader)
-        return 0 if result == b"0" else 1
-    os.close(reader)
-    parent = os.getpid()
-    if os.fork():
-        os._exit(0)
-    while os.getppid() == parent:
-        time.sleep(0.001)
-    os.setsid()
-    code = run()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os.write(writer, str(code).encode())
-    os.close(writer)
-    os._exit(code)
-
-
-if __name__ == "__main__":
-    raise SystemExit(run_outside_containing_session())
+    raise SystemExit(run_outside_containing_session(run))
