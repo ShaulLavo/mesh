@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   native-recovery:
     name: Native helper recovery (${{ matrix.platform }})
