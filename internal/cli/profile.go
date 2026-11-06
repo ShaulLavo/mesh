@@ -128,9 +128,11 @@ func profileSection(snapshot hostprofile.Snapshot[hostprofile.HostProfile]) (age
 }
 
 func printProfile(output io.Writer, section agentapi.ProfileSection) error {
-	if section.Profile == nil {
+	if section.Profile == nil || section.State != "valid" {
 		_, err := fmt.Fprintf(output, "Profile: %s\n%s\n", section.State, section.Problem)
-		return wrapProfileOutput(err)
+		if err != nil || section.Profile == nil {
+			return wrapProfileOutput(err)
+		}
 	}
 	p := section.Profile
 	if _, err := fmt.Fprintf(output, "%s\nRevision: %d\n", p.Description, *section.Revision); err != nil {

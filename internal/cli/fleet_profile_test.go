@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaul/mesh/internal/agentapi"
+	"github.com/shaul/mesh/internal/hostprofile"
 	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/update"
 )
 
 func TestFleetProfileStoppedDaemonWriteAndRetry(t *testing.T) {
@@ -163,5 +166,66 @@ func TestFleetProfileUsesFleetLimits(t *testing.T) {
 	decodeProfileData(t, result.Data, &section)
 	if section.Profile.InstructionsBytes != 64<<10 {
 		t.Fatal(section.Profile.InstructionsBytes)
+	}
+}
+
+func TestFleetProfileHumanShowReportsRevokedAuthor(t *testing.T) {
+	state, config := t.TempDir(), t.TempDir()
+	t.Setenv("MESH_STATE_DIR", state)
+	t.Setenv("MESH_CONFIG_DIR", config)
+	host, _, err := identity.LoadOrCreate(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	author, key, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := update.Trust(state, author.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	const notes = "retained author notes"
+	document, err := hostprofile.SignFleet(hostprofile.Editable{SchemaVersion: 1, Instructions: notes}, "fixture", 1, time.Now(), author.ID, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := &update.Authority{StateDir: state, ID: host.ID}
+	scope := hostprofile.FleetScope{Trusted: authority.IsAdministrator}
+	if _, err := hostprofile.OpenFleetStore(state).Receive(t.Context(), document, author.ID, scope); err != nil {
+		t.Fatal(err)
+	}
+	result, raw, err := runProfile(t, noProfileInput{t}, "profile", "show", "--fleet", "--json")
+	if err != nil {
+		t.Fatal(raw, err)
+	}
+	var trusted agentapi.FleetSection
+	decodeProfileData(t, result.Data, &trusted)
+	if trusted.State != "valid" {
+		t.Fatalf("trusted author state: %#v", trusted)
+	}
+	policy := filepath.Join(state, "updates", "administrators.json")
+	if err := os.WriteFile(policy, []byte(`{"version":1,"keys":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, raw, err = runProfile(t, noProfileInput{t}, "profile", "show", "--fleet", "--json")
+	if err != nil {
+		t.Fatal(raw, err)
+	}
+	var untrusted agentapi.FleetSection
+	decodeProfileData(t, result.Data, &untrusted)
+	if untrusted.State != "untrusted" || untrusted.Problem == "" || untrusted.Profile == nil {
+		t.Fatalf("revoked author JSON state: %#v", untrusted)
+	}
+	text, stderr, err := executeCommand(t, Dependencies{}, "profile", "show", "--fleet")
+	if err != nil || stderr != "" {
+		t.Fatal(text, stderr, err)
+	}
+	prefix := "Profile: untrusted\n" + untrusted.Problem + "\n"
+	if !strings.HasPrefix(text, prefix) || !strings.Contains(text, notes) {
+		t.Fatalf("missing current trust warning before retained notes: %q", text)
+	}
+	text, stderr, err = executeCommand(t, Dependencies{}, "profile", "show", "--fleet", "--privacy")
+	if err != nil || stderr != "" || text != "Profile text hidden by privacy mode\n" {
+		t.Fatal(text, stderr, err)
 	}
 }
