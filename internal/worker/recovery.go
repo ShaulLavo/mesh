@@ -111,7 +111,7 @@ func (w *Worker) checkpoint() <-chan error {
 	}
 	w.mu.Unlock()
 	record.Lines = screen.Render()
-	return w.checkpointWriter.Submit(record)
+	return w.checkpointWriter.Submit(record, recovery.Key{})
 }
 
 func (w *Worker) recoveryDirectoryObservation() string {
