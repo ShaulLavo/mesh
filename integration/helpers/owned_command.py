@@ -256,6 +256,16 @@ def command_line(pid):
         return "?"
 
 
+def work_allowance(s):
+    """Seconds from launcher start until the launcher gives up on its owner without a trigger."""
+    return s["budget"] + max(s["settle"] + s["leak_grace"], s["grace"]) + s["kill_wait"] + s["allowance"]
+
+
+def cancel_allowance(s):
+    """Seconds from a trigger until the launcher gives up on its owner."""
+    return s["grace"] + s["kill_wait"] + s["allowance"]
+
+
 def exit_status(state):
     status = state.get("status")
     if state.get("state") == "joined" and isinstance(status, int):
@@ -438,7 +448,7 @@ class Launcher:
 
     def supervise(self, owner_pid, owner_fd, accept_w):
         s = self.settings
-        cutoff = self.start + s["budget"] + max(s["settle"] + s["leak_grace"], s["grace"]) + s["kill_wait"] + s["allowance"]
+        cutoff = self.start + work_allowance(s)
         forwarded = False
         while not readable(owner_fd):
             trigger = self.triggers.check()
@@ -446,7 +456,7 @@ class Launcher:
                 # The launcher never signals its owner; the owner reads this file.
                 request_cancel(self.record.directory / "cancel", trigger.sig)
                 forwarded = True
-                cutoff = min(cutoff, trigger.time + s["grace"] + s["kill_wait"] + s["allowance"])
+                cutoff = min(cutoff, trigger.time + cancel_allowance(s))
             if time.monotonic() >= cutoff:
                 return self.unproved(owner_pid)
             self.triggers.wait([owner_fd], s["tick"])
@@ -833,7 +843,13 @@ def refuse_signal(fd, sig):
 
 
 def default_prepare(owner):
-    environment = {**owner.admission.get("env", {}), "MESH_OWNED_ROOT": str(owner.root)}
+    if "isolation" in owner.admission:
+        # Imported only here, so callers of the isolation entry's pure helpers never load the owner.
+        from isolation import prepare_isolation
+        return prepare_isolation(owner)
+    # A controller that keeps secrets out of its records passes the environment to the launcher instead.
+    base = os.environ if owner.admission.get("inherit_env") else owner.admission.get("env", {})
+    environment = {**base, "MESH_OWNED_ROOT": str(owner.root)}
     for index, argv in enumerate(owner.admission.get("setup", ())):
         status = owner.run_setup(argv, environment, owner.root / f"setup-{index}.out")
         if status:
@@ -894,6 +910,129 @@ def observe(process, directory):
     return state
 
 
+class Job:
+    """One admission as its controller sees it."""
+
+    def __init__(self, name, directory, settings, admitted):
+        self.name = name
+        self.directory = Path(directory)
+        self.settings = settings
+        self.process = None
+        self.outcome = None
+        self.final_seen = False
+        # Startup gets the handshake allowance; observing the launcher's exit gets one more allowance.
+        self.deadline = admitted + settings["handshake"] + work_allowance(settings) + settings["allowance"]
+
+    def state(self):
+        return None if self.outcome is None else self.outcome["state"]
+
+    def proved(self):
+        return self.state() in ("joined", "declined")
+
+
+class Controller:
+    """Admit, launch and observe owned commands. It never signals them.
+
+    The first termination signal is only recorded: a handler that raised could
+    unwind Popen after the child exists. Cancellation reaches owners through
+    the shared cancel file, and through this process's pidfd if it dies.
+    Every wait has an absolute deadline; a job whose exits are not proved by
+    then is unknown, and its state must be retained.
+    """
+
+    def __init__(self, root, triggers, overrides=None, control=None, clock=time.monotonic):
+        self.root = Path(root)
+        self.triggers = triggers
+        self.overrides = dict(overrides or {})
+        self.control = Control(control)
+        self.clock = clock
+        self.runner = establish_runner()
+        self.cancel_file = self.root / "cancel"
+        self.cancelled = None
+        self.failures = []
+        self.jobs = []
+
+    def start(self, name, popen, **job):
+        """Admit, then launch. An admission that never launches is explicitly declined."""
+        directory = self.root / "jobs" / name
+        job = {**job, **self.overrides, "name": name, "cancel": [str(self.cancel_file)]}
+        admit(directory, self.runner, **job)
+        settings = {key: float(job.get(key, value)) for key, value in DEFAULTS.items()}
+        tracked = Job(name, directory, settings, self.clock())
+        self.jobs.append(tracked)
+        self.control.hold(f"before-launch-{name}")
+        if self.check() is not None:
+            return self.decline(tracked, "cancelled before launch", self.cancelled.status)
+        try:
+            tracked.process = launch(directory, self.runner, **popen)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            return self.decline(tracked, f"launch failed: {error}", 1)
+        self.control.hold(f"after-launch-{name}")
+        self.check()
+        return tracked
+
+    def decline(self, job, reason, status):
+        if Record(job.directory).advance("declined", self.clock() + job.settings["allowance"], reason=reason, status=status):
+            job.outcome = {**Record(job.directory).read(), "returncode": status}
+        else:
+            job.outcome = {"state": "unknown", "reasons": [f"could not record that the job never launched: {reason}"]}
+        return job
+
+    def check(self):
+        trigger = self.triggers.check()
+        if trigger is not None and self.cancelled is None:
+            self.cancel(trigger)
+        return self.cancelled
+
+    def cancel(self, trigger):
+        self.cancelled = trigger
+        try:
+            request_cancel(self.cancel_file, trigger.sig)
+        except OSError as error:
+            self.failures.append(f"publish cancellation: {error}")
+        for job in self.jobs:
+            # Cancellation only shortens a deadline that is already running.
+            job.deadline = min(job.deadline, trigger.time + cancel_allowance(job.settings) + job.settings["allowance"])
+
+    def poll(self, job):
+        """True once the job's outcome is known: proved, or unknown at its deadline."""
+        if job.outcome is not None:
+            return True
+        state = observe(job.process, job.directory)
+        if state is not None:
+            job.outcome = {**state, "returncode": job.process.returncode}
+            return True
+        now = self.clock()
+        if not job.final_seen and Record(job.directory).read().get("state") in FINAL:
+            # A final record comes just before the owner and launcher exit; a pause after it is bounded.
+            job.final_seen = True
+            job.deadline = min(job.deadline, now + 2 * job.settings["allowance"])
+        if now < job.deadline:
+            return False
+        try:
+            request_cancel(job.directory / "cancel", signal.SIGTERM)
+        except OSError as error:
+            self.failures.append(f"cancel {job.name}: {error}")
+        job.outcome = {"state": "unknown", "returncode": None,
+                       "reasons": ["launcher exit was not observed before the controller's deadline"]}
+        return True
+
+    def wait(self, jobs, until_cancelled=False, each_tick=None):
+        """Poll until every job's outcome is known, or the run is cancelled when until_cancelled."""
+        while True:
+            pending = [job for job in jobs if not self.poll(job)]
+            if each_tick is not None:
+                each_tick()
+            if not pending:
+                return True
+            if self.check() is not None and until_cancelled:
+                return False
+            self.triggers.wait([], min(job.settings["tick"] for job in pending))
+
+    def proved(self):
+        return not self.failures and all(job.proved() for job in self.jobs)
+
+
 def main(arguments=None, prepare=default_prepare):
     arguments = sys.argv[1:] if arguments is None else arguments
     if len(arguments) != 1:
@@ -908,4 +1047,6 @@ def main(arguments=None, prepare=default_prepare):
 
 
 if __name__ == "__main__":
+    # A prepare hook imports this module by name; it must get these classes, not a second copy.
+    sys.modules.setdefault("owned_command", sys.modules[__name__])
     sys.exit(main())

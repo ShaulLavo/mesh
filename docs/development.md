@@ -81,6 +81,18 @@ need. Standalone agent scripts also scrub inherited settings and pin Python
 through their shared fixture. Use the verifier to isolate the full shell-script
 environment.
 
+The verifier's controller, `scripts/verify_runner.py`, runs setup, both builds and
+every script as an owned command: on Linux, a child-subreaper owner joins every
+process the job starts before it deletes the job's scratch root. The controller
+never signals a job. INT, TERM or HUP cancels the run: the first signal decides the
+exit status, every owner gets one cooperative signal round and then kills, and the
+run root is deleted only after every owner and launcher has exited. A job whose
+exit is not proved within its deadline keeps the run root, and the verifier names
+it. Terminal and SSH fixtures enter their cleanup on the first termination signal
+and finish it, or keep their root, within one bounded allowance. Running one
+script directly gives the same ownership without a budget. Other platforms refuse
+before creating anything, because this ownership needs Linux child subreaping.
+
 ## Docs
 
 `docs/reference/cli.md` is generated. After you change a command, flag or help text, regenerate it:

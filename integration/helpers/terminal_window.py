@@ -3,6 +3,7 @@
 
 import base64
 from contextlib import ExitStack
+import contextvars
 import errno
 import hashlib
 import fcntl
@@ -13,6 +14,7 @@ import pty
 import re
 import select
 import shlex
+import shutil
 import signal
 import socket
 import struct
@@ -22,13 +24,62 @@ import tempfile
 import termios
 import time
 
-from isolation import refuse_live_paths
+from isolation import protected_cleanup, refuse_live_paths, termination_cleanup
+from owned_command import DEFAULTS
 
 sys.dont_write_bytecode = True
 from mesh_control import round_trip
 
 
 PROMPT = b"MESH_PROMPT> "
+# The job's owner kills every descendant GRACE seconds after cancellation, so a
+# fixture's whole cleanup must end well before then. Product waits are unchanged;
+# a cleanup that cannot finish in this interval reports it and keeps its root.
+CLEANUP_SECONDS = DEFAULTS["grace"] - 5
+
+
+class CleanupDeadline:
+    """One absolute allowance shared by every wait in a fixture cleanup."""
+
+    def __init__(self, seconds, clock=time.monotonic):
+        self.clock = clock
+        self.end = clock() + seconds
+
+    def remaining(self, limit, what):
+        left = min(limit, self.end - self.clock())
+        if left <= 0:
+            raise RuntimeError(f"fixture cleanup ran out of time before {what}")
+        return left
+
+    def within(self, seconds):
+        """A nested deadline that ends after seconds, or with this one if that is sooner."""
+        nested = CleanupDeadline(0, self.clock)
+        nested.end = min(self.end, self.clock() + seconds)
+        return nested
+
+
+ACTIVE_CLEANUP = contextvars.ContextVar("fixture_cleanup", default=None)
+
+
+def cleanup_wait(limit, what):
+    """A wait's timeout: its own limit, cut to what remains of an active fixture cleanup."""
+    deadline = ACTIVE_CLEANUP.get()
+    return limit if deadline is None else deadline.remaining(limit, what)
+
+
+def receive_by(connection, length, deadline, what):
+    """Read exactly length bytes before the deadline; fewer only when the peer closes first."""
+    data = b""
+    while len(data) < length:
+        connection.settimeout(deadline.remaining(float("inf"), what))
+        try:
+            chunk = connection.recv(length - len(data))
+        except TimeoutError as error:
+            raise RuntimeError(f"fixture cleanup ran out of time before {what}") from error
+        if not chunk:
+            return data
+        data += chunk
+    return data
 ANSI = re.compile(rb"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
 
 
@@ -120,16 +171,16 @@ class Terminal:
                 self.status = os.waitstatus_to_exitcode(status)
         return self.status
 
-    def expect_exit(self):
+    def expect_exit(self, timeout=4):
         def exited():
             self.drain()
             return self.poll() is not None
-        eventually(exited, "terminal client did not exit")
+        eventually(exited, "terminal client did not exit", timeout)
 
     def crash(self):
         if self.poll() is None:
             os.kill(self.pid, signal.SIGKILL)
-            self.expect_exit()
+            self.expect_exit(cleanup_wait(4, f"terminal {self.pid} exited"))
 
     def resize(self, cols, rows):
         fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
@@ -230,10 +281,11 @@ class Fixture:
             return
         self.daemon.terminate()
         try:
-            self.daemon.wait(timeout=2)
+            self.daemon.wait(timeout=cleanup_wait(2, "the daemon stopped"))
         except subprocess.TimeoutExpired:
             self.daemon.kill()
-            self.daemon.wait()
+            # Still running after KILL is a failure to report, not a reason to wait forever.
+            self.daemon.wait(timeout=cleanup_wait(5, "the daemon exited after KILL"))
         self.daemon = None
         self.daemon_log.close()
         self.daemon_log = None
@@ -395,49 +447,83 @@ class Fixture:
         require(self.attached(self.remote, inner_id), "remote shell is not attached")
         return terminal, outer_id, outer_pid, inner_id, inner_pid
 
-    def close(self):
-        from mesh_control import receive
+    def close(self, allowance=CLEANUP_SECONDS):
+        """Stop terminals, the daemon and every worker within one absolute allowance.
 
-        workers = []
+        Termination signals cannot interrupt or restart it. An exception means
+        something may still use the fixture root, so its caller must keep it.
+        """
+        deadline = ACTIVE_CLEANUP.get() or CleanupDeadline(allowance)
+        token = ACTIVE_CLEANUP.set(deadline)
+        try:
+            with protected_cleanup():
+                self.close_within(deadline)
+        finally:
+            ACTIVE_CLEANUP.reset(token)
+
+    def close_within(self, deadline):
         with ExitStack() as connections:
             with ExitStack() as processes:
-                processes.callback(self.stop_daemon)
-                for terminal in self.terminals:
-                    processes.callback(terminal.close)
-                for state in {self.local, self.remote}:
-                    for socket_path in (state / "s").glob("*/sock"):
-                        connection = connections.enter_context(socket.socket(socket.AF_UNIX))
-                        connection.settimeout(0.3)
-                        try:
-                            connection.connect(str(socket_path))
-                        except OSError as error:
-                            if error.errno in (errno.ENOENT, errno.ECONNREFUSED):
-                                continue
-                            raise
-                        workers.append((socket_path, connection))
-                        request = json.dumps({"type": "session.kill", "sessionId": socket_path.parent.name}).encode()
-                        try:
-                            connection.sendall(b"\x01" + struct.pack(">I", len(request)) + request)
-                        except (BrokenPipeError, ConnectionResetError):
-                            pass
+                self.stop_processes_later(processes)
+                workers = self.request_worker_kills(connections, deadline)
             for socket_path, connection in workers:
-                # Match the product's control exchange deadline, which includes kill
-                # escalation and the retained output of a never-attached command.
-                connection.settimeout(10)
-                try:
-                    kind = connection.recv(1)
-                    if kind:
-                        require(kind == b"\x01", f"worker {socket_path}: unexpected completion frame")
-                        length = struct.unpack(">I", receive(connection, 4))[0]
-                        require(length <= 4 << 20, f"worker {socket_path}: oversized completion")
-                        response = json.loads(receive(connection, length))
-                        require(response.get("type") == "ok", f"worker {socket_path}: kill failed: {response}")
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-                # A finishing worker can close or reset without accepting the kill.
-                # Neither peer closure nor acknowledgment covers its final disk writes.
-                eventually(lambda: not socket_path.exists(),
-                           f"fixture worker {socket_path} did not finish writing its session data")
+                self.await_worker(socket_path, connection, deadline)
+
+    def stop_processes_later(self, processes):
+        processes.callback(self.stop_daemon)
+        for terminal in self.terminals:
+            processes.callback(terminal.close)
+
+    def request_worker_kills(self, connections, deadline):
+        workers = []
+        sockets = [path for state in {self.local, self.remote} for path in (state / "s").glob("*/sock")]
+        for socket_path in sockets:
+            connection = self.request_worker_kill(connections, socket_path, deadline)
+            if connection is not None:
+                workers.append((socket_path, connection))
+        return workers
+
+    def request_worker_kill(self, connections, socket_path, deadline):
+        connection = connections.enter_context(socket.socket(socket.AF_UNIX))
+        connection.settimeout(deadline.remaining(0.3, f"worker {socket_path} accepted a kill"))
+        try:
+            connection.connect(str(socket_path))
+        except OSError as error:
+            if error.errno in (errno.ENOENT, errno.ECONNREFUSED):
+                return None
+            raise
+        request = json.dumps({"type": "session.kill", "sessionId": socket_path.parent.name}).encode()
+        try:
+            connection.sendall(b"\x01" + struct.pack(">I", len(request)) + request)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        return connection
+
+    def await_worker(self, socket_path, connection, deadline):
+        # Match the product's control exchange deadline, which includes kill
+        # escalation and the retained output of a never-attached command.
+        exchange = deadline.within(10)
+        what = f"worker {socket_path} answered its kill"
+        try:
+            kind = receive_by(connection, 1, exchange, what)
+            if kind:
+                require(kind == b"\x01", f"worker {socket_path}: unexpected completion frame")
+                length = struct.unpack(">I", self.complete(receive_by(connection, 4, exchange, what), 4))[0]
+                require(length <= 4 << 20, f"worker {socket_path}: oversized completion")
+                response = json.loads(self.complete(receive_by(connection, length, exchange, what), length))
+                require(response.get("type") == "ok", f"worker {socket_path}: kill failed: {response}")
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        # A finishing worker can close or reset without accepting the kill.
+        # Neither peer closure nor acknowledgment covers its final disk writes.
+        eventually(lambda: not socket_path.exists(),
+                   f"fixture worker {socket_path} did not finish writing its session data",
+                   deadline.remaining(4, f"worker {socket_path} removed its socket"))
+
+    @staticmethod
+    def complete(data, length):
+        require(len(data) == length, "daemon closed an incomplete response")
+        return data
 
 
 def nested_detach(fixture):
@@ -651,24 +737,51 @@ SCENARIOS = {
 }
 
 
-def main():
-    scenario, binary = sys.argv[1:]
-    signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError("terminal fixture exceeded 25 seconds")))
-    signal.alarm(25)
-    with tempfile.TemporaryDirectory(prefix="mesh-window-") as directory:
-        fixture = Fixture(binary, directory)
+def print_diagnostics(fixture):
+    if fixture.daemon_log is not None:
+        fixture.daemon_log.flush()
+        print((fixture.root / "daemon.log").read_text(), file=sys.stderr)
+    for terminal in fixture.terminals:
+        print(f"terminal {terminal.pid}: {terminal.drain()[-3000:]!r}", file=sys.stderr)
+
+
+def close_fixture(fixture, directory):
+    """Delete the fixture root only after its cleanup proved that nothing still uses it."""
+    try:
+        # Subclasses extend close; protect the whole of it, not only the base cleanup.
+        with protected_cleanup():
+            fixture.close()
+    except BaseException:
+        print(f"FAIL: fixture cleanup did not finish; kept {directory}", file=sys.stderr, flush=True)
+        raise
+    shutil.rmtree(directory)
+
+
+def run_fixture(fixture_type, binary, prefix, exercise, limit):
+    """Run one scenario. The first termination signal enters the fixture's cleanup exactly once."""
+    signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError(limit)))
+    with termination_cleanup():
+        signal.alarm(25)
+        directory = tempfile.mkdtemp(prefix=prefix)
         try:
-            SCENARIOS[scenario](fixture)
-        except Exception:
-            if fixture.daemon_log is not None:
-                fixture.daemon_log.flush()
-                print((fixture.root / "daemon.log").read_text(), file=sys.stderr)
-            for terminal in fixture.terminals:
-                print(f"terminal {terminal.pid}: {terminal.drain()[-3000:]!r}", file=sys.stderr)
+            fixture = fixture_type(binary, directory)
+        except BaseException:
+            signal.alarm(0)
+            shutil.rmtree(directory)
+            raise
+        try:
+            exercise(fixture)
+        except BaseException:
+            print_diagnostics(fixture)
             raise
         finally:
             signal.alarm(0)
-            fixture.close()
+            close_fixture(fixture, directory)
+
+
+def main():
+    scenario, binary = sys.argv[1:]
+    run_fixture(Fixture, binary, "mesh-window-", SCENARIOS[scenario], "terminal fixture exceeded 25 seconds")
     print(f"PASS: {scenario} through PTYs and persistent workers")
 
 
@@ -681,6 +794,46 @@ def run():
         return 1
 
 
+def containing_worker(pid=None, limit=64):
+    """The Mesh session worker above pid, found the way the product's own ancestry walk finds it."""
+    pid = os.getppid() if pid is None else pid
+    for _ in range(limit):
+        if pid <= 1:
+            return None
+        try:
+            arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+            parent = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return None
+        if len(arguments) > 3 and arguments[1] == b"session-worker" and b"--id" in arguments:
+            return pid
+        pid = parent
+    return None
+
+
+def run_escaped(runner):
+    # A subreaper between the containing worker and this process adopts the
+    # orphan below that worker. Refuse rather than run with the wrong ancestry.
+    worker = containing_worker()
+    if worker is not None:
+        print(f"FAIL: an intervening subreaper kept this fixture under Mesh session worker {worker}; "
+              "ancestry-sensitive fixtures refuse to run there", file=sys.stderr)
+        return 1
+    try:
+        return runner() or 0
+    except SystemExit as stopped:
+        return stopped.code if isinstance(stopped.code, int) else 1
+
+
+def await_escaped(intermediate, read_end):
+    """The escaped coordinator's result. This parent outlives its cleanup, so callers cannot start theirs early."""
+    with protected_cleanup():
+        os.waitpid(intermediate, 0)
+        result = os.read(read_end, 1)
+    os.close(read_end)
+    return 0 if result == b"0" else 1
+
+
 def run_outside_containing_session(runner=run):
     # The verification command can itself run inside Mesh. Reparent the test
     # coordinator so its fresh PTYs do not inherit that unrelated worker path.
@@ -688,10 +841,7 @@ def run_outside_containing_session(runner=run):
     intermediate = os.fork()
     if intermediate:
         os.close(write_end)
-        os.waitpid(intermediate, 0)
-        result = os.read(read_end, 1)
-        os.close(read_end)
-        return 0 if result == b"0" else 1
+        return await_escaped(intermediate, read_end)
     os.close(read_end)
     intermediate_pid = os.getpid()
     if os.fork():
@@ -699,7 +849,7 @@ def run_outside_containing_session(runner=run):
     while os.getppid() == intermediate_pid:
         time.sleep(0.001)
     os.setsid()
-    code = runner() or 0
+    code = run_escaped(runner)
     sys.stdout.flush()
     sys.stderr.flush()
     os.write(write_end, str(code).encode())

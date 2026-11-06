@@ -13,10 +13,17 @@ from types import SimpleNamespace
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock, call, patch
+from unittest.mock import patch
 
-from isolation import refuse_live_paths, run_process
+from isolation import refuse_live_paths
 from terminal_window import Fixture
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "scripts"))
+import verify_runner  # noqa: E402 - the runner lives beside verify.sh
+
+# The standalone entry is a controller of one owned job, so it needs the owner beside it.
+ENTRY_HELPERS = ("isolate.sh", "isolation.py", "process_diagnostics.py", "owned_command.py", "process_tree.py")
 
 
 class EntryPointContractTest(unittest.TestCase):
@@ -47,19 +54,16 @@ class EntryPointContractTest(unittest.TestCase):
                     self.assertIn("must source the prelude", result.stderr)
 
     def test_name_observation_uses_existing_slow_budget(self):
-        runner = Path(__file__).resolve().parents[2] / "scripts/verify.sh"
-        text = runner.read_text()
-        defaults = text[:text.index("run_root=")]
-        start = text.index("    this_timeout=$test_timeout")
-        selection = text[start:text.index("    # Provider routing", start)]
-        program = defaults + "\nfor name in ordinary.sh packaging_contract.sh name_observation.sh; do\n"
-        program += selection + '    printf "%s %s\\n" "$name" "$this_timeout"\ndone\n'
-        environment = {"PATH": os.defpath}
-        result = subprocess.run(["bash", "-c", program], env=environment,
-                                capture_output=True, text=True, timeout=10)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ["ordinary.sh 30s", "packaging_contract.sh 600s",
-                                                     "name_observation.sh 600s"])
+        budget = verify_runner.budgets({})
+        selected = {name: verify_runner.budget_for(name, budget)
+                    for name in ("ordinary.sh", "packaging_contract.sh", "name_observation.sh")}
+        self.assertEqual(selected, {"ordinary.sh": 30, "packaging_contract.sh": 600, "name_observation.sh": 600})
+
+    def test_verify_execs_the_owned_controller_before_creating_anything(self):
+        wrapper = (REPO / "scripts/verify.sh").read_text()
+        self.assertIn('exec python3 -B "$repo_root/scripts/verify_runner.py" "$repo_root" "$BASH"', wrapper)
+        for created in ("mktemp", "mkdir", "trap", "timeout", "kill"):
+            self.assertNotIn(created, wrapper)
 
 
 class IsolationBoundaryTest(unittest.TestCase):
@@ -158,7 +162,7 @@ class IsolationBoundaryTest(unittest.TestCase):
             with self.subTest(reentry=reentry), tempfile.TemporaryDirectory(prefix="m-bytecode-") as temporary:
                 root = Path(temporary)
                 (root / "helpers").mkdir()
-                for name in ("isolate.sh", "isolation.py", "process_diagnostics.py"):
+                for name in ENTRY_HELPERS:
                     shutil.copyfile(helpers / name, root / "helpers" / name)
                 (root / "bytecode_probe.py").write_text("VALUE = 1\n")
                 probe = root / "probe.sh"
@@ -303,19 +307,37 @@ class ReviewRegressionsTest(unittest.TestCase):
                 self.assertTrue(Path(fixture.environment["HOME"]).is_relative_to(fixture_root))
                 self.assertEqual(fixture.root, Path(fixture_root))
 
-    def test_cancellation_during_process_start_is_not_lost(self):
-        process = Mock(pid=123456)
-
-        def launch(*_, **__):
+    def test_termination_cleanup_is_not_interrupted_by_later_signals(self):
+        from isolation import protected_cleanup, termination_cleanup
+        stages = []
+        with self.assertRaises(SystemExit) as stopped, termination_cleanup():
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+                stages.append("unreachable")
+            finally:
+                os.kill(os.getpid(), signal.SIGINT)
+                stages.append("cleanup finished")
+        self.assertEqual(stopped.exception.code, 128 + signal.SIGTERM)
+        self.assertEqual(stages, ["cleanup finished"])
+        with termination_cleanup(), protected_cleanup():
             os.kill(os.getpid(), signal.SIGTERM)
-            return process
+            stages.append("protected cleanup finished")
+        self.assertEqual(stages[-1], "protected cleanup finished")
 
-        with patch("isolation.subprocess.Popen", side_effect=launch), patch("isolation.os.killpg") as kill_group:
-            with self.assertRaises(SystemExit) as result:
-                run_process(["unused"], {})
-        self.assertEqual(result.exception.code, 128 + signal.SIGTERM)
-        self.assertEqual(kill_group.call_args_list, [call(process.pid, signal.SIGTERM), call(process.pid, signal.SIGKILL)])
-        self.assertEqual(process.wait.call_count, 2)
+    def test_standalone_entry_refuses_before_creating_anything_without_ownership(self):
+        with tempfile.TemporaryDirectory(prefix="m-entry-refuse-") as temporary:
+            root = Path(temporary)
+            probe = root / "probe.sh"
+            probe.write_text(f'touch "{root}/ran"\n')
+            program = ("import os, runpy, sys; sys.platform = 'darwin'; sys.argv = sys.argv[1:]; "
+                       "sys.path.insert(0, os.path.dirname(sys.argv[0])); runpy.run_path(sys.argv[0], run_name='__main__')")
+            environment = {"PATH": os.defpath, "HOME": str(root / "home"), "TMPDIR": str(root),
+                           "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config")}
+            result = subprocess.run([sys.executable, "-B", "-c", program, str(Path(__file__).with_name("isolation.py")),
+                                     "/bin/bash", str(probe)], env=environment, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("process ownership needs Linux child subreaping", result.stderr)
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["probe.sh"])
 
     def test_cancellation_fixture_cleans_up_before_process_capture_is_read(self):
         with tempfile.TemporaryDirectory(prefix="m-cancel-cleanup-") as temporary:
@@ -370,7 +392,7 @@ class ReviewRegressionsTest(unittest.TestCase):
             with self.subTest(target=target), tempfile.TemporaryDirectory(prefix="m-cancel-") as temporary:
                 root = Path(temporary)
                 (root / "helpers").mkdir()
-                for name in ("isolate.sh", "isolation.py", "process_diagnostics.py"):
+                for name in ENTRY_HELPERS:
                     shutil.copyfile(helpers / name, root / "helpers" / name)
                 capture = root / "children"
                 probe = root / "probe.sh"

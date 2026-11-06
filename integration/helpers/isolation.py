@@ -10,10 +10,9 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 
 sys.dont_write_bytecode = True
-
-from process_diagnostics import process_snapshot, record_signal  # noqa: E402 - copied helpers stay bytecode-free
 
 
 def refuse_live_paths(paths, environment=None, *, parents=True):
@@ -52,9 +51,21 @@ def check_environment():
 TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 
 
+def defer_termination(signum, _):
+    """A Python handler, not SIG_IGN, so children started during cleanup keep default dispositions."""
+
+
 @contextmanager
 def termination_cleanup():
+    """Turn the first termination signal into SystemExit so finally blocks run their cleanup.
+
+    Later signals cannot interrupt that cleanup: the first one replaces the
+    handlers with one that ignores them. Cleanup that may already be running
+    when the first signal arrives uses protected_cleanup().
+    """
     def stop(signum, _):
+        for watched in TERMINATION_SIGNALS:
+            signal.signal(watched, defer_termination)
         raise SystemExit(128 + signum)
 
     previous = {signum: signal.getsignal(signum) for signum in TERMINATION_SIGNALS}
@@ -67,100 +78,156 @@ def termination_cleanup():
             signal.signal(signum, handler)
 
 
-def run_process(command, environment):
-    cancelled = None
-
-    def pending(signum, _):
-        nonlocal cancelled
-        cancelled = signum
-
-    def terminate(signum, _):
-        for watched in TERMINATION_SIGNALS:
-            signal.signal(watched, signal.SIG_IGN)
-        try:
-            record_signal(process.pid, signum, "integration-cancellation",
-                          {"kind": "popen_process_group", "group_id": process.pid}, incarnation)
-            os.killpg(process.pid, signum)
-        except ProcessLookupError:
-            pass
-        raise SystemExit(128 + signum)
-
-    process = None
-    incarnation = None
+@contextmanager
+def protected_cleanup():
+    """Run cleanup that termination signals must not interrupt or restart."""
+    if threading.current_thread() is not threading.main_thread():
+        # Python runs handlers only in the main thread, so they cannot interrupt this one.
+        yield
+        return
     previous = {signum: signal.getsignal(signum) for signum in TERMINATION_SIGNALS}
     try:
-        # Queue cancellation until Popen has returned the PID we must reap.
         for signum in previous:
-            signal.signal(signum, pending)
-        process = subprocess.Popen(command, env=environment, start_new_session=True)
-        incarnation = process_snapshot(process.pid)
-        for signum in previous:
-            signal.signal(signum, terminate)
-        if cancelled is not None:
-            terminate(cancelled, None)
-        status = process.wait()
-        return status if status >= 0 else 128 - status
-    except SystemExit:
-        # Wait outside the signal handler so Popen's wait lock has unwound.
-        if process is not None:
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                pass
-            try:
-                record_signal(process.pid, signal.SIGKILL, "integration-cancellation-cleanup",
-                              {"kind": "popen_process_group", "group_id": process.pid}, incarnation)
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-        raise
+            signal.signal(signum, defer_termination)
+        yield
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)
 
 
+def setup_failed(message):
+    from owned_command import SetupFailed
+    print(f"FAIL: {message}", file=sys.stderr, flush=True)
+    return SetupFailed(1)
+
+
+def run_setup(owner, argv, environment, output):
+    try:
+        return owner.run_setup(argv, environment, output)
+    except FileNotFoundError:
+        return 127
+
+
+def owned_go_environment(owner, environment, tools):
+    """The isolated Go paths, read by owned setup commands that cancellation can interrupt."""
+    values = {}
+    if not shutil.which("go", path=os.environ.get("PATH")):
+        return values
+    output = owner.root / "go-env.out"
+    for name in ("GOROOT", "GOCACHE", "GOMODCACHE"):
+        status = run_setup(owner, ["go", "env", name], environment, output)
+        if status:
+            raise setup_failed(f"go env {name} exited with status {status}")
+        values[name] = output.read_text().strip()
+    (tools / "go").symlink_to(Path(values.pop("GOROOT")) / "bin" / "go")
+    return values
+
+
+def prepare_isolation(owner):
+    """Owner-side setup for one integration entry: private HOME, XDG, config and tools.
+
+    It runs in the job's owner after the owner has accepted ownership, so the
+    entry, its setup commands and everything they start are joined before the
+    owner's scratch root, which holds HOME and the XDG directories, is deleted.
+    """
+    spec = owner.admission["isolation"]
+    caller = dict(os.environ)
+    try:
+        refuse_live_paths({name: caller.get(name) for name in ("MESH_STATE_DIR", "MESH_CONFIG_DIR")})
+        refuse_live_paths({name: caller.get(name) for name in ("TMPDIR", "TEMP", "TMP", "MESH_SHORT_TMP")}, parents=False)
+    except RuntimeError as error:
+        raise setup_failed(str(error)) from error
+    # Losing an available bus would turn the scope assertions into a false pass.
+    if spec.get("user_bus") and run_setup(owner, ["busctl", "--user", "status"], caller, owner.root / "bus.out"):
+        raise setup_failed(f"{owner.name} lost the caller's user bus")
+    root = owner.root
+    home = root / "home"
+    tools = root / "bin"
+    home.mkdir()
+    tools.mkdir()
+    for name, target in (("python3", str(Path(sys.executable).resolve())), ("bash", spec["bash"]), ("sh", "/bin/sh")):
+        (tools / name).symlink_to(target)
+    selected = ("PATH", "TMPDIR", "TERM", "LANG", "DBUS_SESSION_BUS_ADDRESS", "GOCACHE", "GOMODCACHE",
+                "MESH", "MESH_INTEGRATION_BINARY", "MESH_TEST_ZSH", "MESH_SHORT_TMP", "MESH_WATCH_SECONDS")
+    environment = {name: caller[name] for name in selected if name in caller}
+    environment.update(owned_go_environment(owner, caller, tools))
+    environment.update({
+        "PATH": str(tools) + os.pathsep + environment.get("PATH", os.defpath),
+        "HOME": str(home),
+        "MESH_STATE_DIR": os.path.abspath(caller.get("MESH_STATE_DIR") or str(root / "state")),
+        "MESH_CONFIG_DIR": os.path.abspath(caller.get("MESH_CONFIG_DIR") or str(root / "config")),
+        "MESH_INTEGRATION_ENTRY": os.path.abspath(spec["script"]),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    })
+    config = Path(environment["MESH_CONFIG_DIR"])
+    config.mkdir(parents=True, exist_ok=True, mode=0o700)
+    (config / "domains.json").write_text('{"primary":"mesh.test","aliases":["old.test"],"legacyCertificateDomain":"mesh.test"}')
+    for name, suffix in (("XDG_CONFIG_HOME", "config-home"), ("XDG_STATE_HOME", "state-home"),
+                         ("XDG_CACHE_HOME", "cache"), ("XDG_DATA_HOME", "data"), ("XDG_RUNTIME_DIR", "runtime")):
+        directory = root / suffix
+        directory.mkdir(mode=0o700)
+        environment[name] = str(directory)
+    # The bus is needed to prove scope ownership, but is never a Mesh path.
+    if "DBUS_SESSION_BUS_ADDRESS" not in environment and caller.get("XDG_RUNTIME_DIR"):
+        environment["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + os.path.join(caller["XDG_RUNTIME_DIR"], "bus")
+    return [spec["bash"], spec["script"], *spec.get("arguments", ())], environment
+
+
+class LogCopy:
+    """Forward the job's diagnostics log to this process's stderr as it grows."""
+
+    def __init__(self, path):
+        self.path = path
+        self.offset = 0
+
+    def __call__(self):
+        try:
+            with open(self.path, "rb") as source:
+                source.seek(self.offset)
+                data = source.read()
+        except OSError:
+            return
+        self.offset += len(data)
+        if data:
+            sys.stderr.buffer.write(data)
+            sys.stderr.flush()
+
+
 def run(bash, script, arguments):
+    """Standalone entry: this process is the controller of one owned job.
+
+    Its contract is narrower than verify's. The shell prelude resolves paths
+    before this process exists, there is no budget, and the job's stderr is
+    copied here from a private log. Ownership itself is the same: the job's
+    owner joins every descendant before deleting the isolated root, and this
+    process removes its record directory only after that owner and its
+    launcher have exited.
+    """
     refuse_live_paths({name: os.environ.get(name) for name in ("MESH_STATE_DIR", "MESH_CONFIG_DIR")})
     refuse_live_paths({name: os.environ.get(name) for name in ("TMPDIR", "TEMP", "TMP", "MESH_SHORT_TMP")}, parents=False)
-    with tempfile.TemporaryDirectory(prefix="m-isolate-", dir=os.environ.get("TMPDIR") or None) as temporary:
-        root = Path(temporary)
-        home = root / "home"
-        tools = root / "bin"
-        home.mkdir()
-        tools.mkdir()
-        for name, target in (("python3", str(Path(sys.executable).resolve())), ("bash", bash), ("sh", "/bin/sh")):
-            (tools / name).symlink_to(target)
-        selected = ("PATH", "TMPDIR", "TERM", "LANG", "DBUS_SESSION_BUS_ADDRESS", "GOCACHE", "GOMODCACHE",
-                    "MESH", "MESH_INTEGRATION_BINARY", "MESH_TEST_ZSH", "MESH_SHORT_TMP", "MESH_WATCH_SECONDS")
-        environment = {name: os.environ[name] for name in selected if name in os.environ}
-        if shutil.which("go"):
-            for name in ("GOROOT", "GOCACHE", "GOMODCACHE"):
-                value = subprocess.check_output(["go", "env", name], text=True).strip()
-                if name == "GOROOT":
-                    (tools / "go").symlink_to(Path(value) / "bin" / "go")
-                else:
-                    environment[name] = value
-        environment.update({
-            "PATH": str(tools) + os.pathsep + environment.get("PATH", os.defpath),
-            "HOME": str(home),
-            "MESH_STATE_DIR": os.path.abspath(os.environ.get("MESH_STATE_DIR") or str(root / "state")),
-            "MESH_CONFIG_DIR": os.path.abspath(os.environ.get("MESH_CONFIG_DIR") or str(root / "config")),
-            "MESH_INTEGRATION_ENTRY": os.path.abspath(script),
-            "PYTHONDONTWRITEBYTECODE": "1",
-        })
-        config = Path(environment["MESH_CONFIG_DIR"])
-        config.mkdir(parents=True, exist_ok=True, mode=0o700)
-        (config / "domains.json").write_text('{"primary":"mesh.test","aliases":["old.test"],"legacyCertificateDomain":"mesh.test"}')
-        for name, suffix in (("XDG_CONFIG_HOME", "config-home"), ("XDG_STATE_HOME", "state-home"),
-                             ("XDG_CACHE_HOME", "cache"), ("XDG_DATA_HOME", "data"), ("XDG_RUNTIME_DIR", "runtime")):
-            directory = root / suffix
-            directory.mkdir(mode=0o700)
-            environment[name] = str(directory)
-        # The bus is needed to prove scope ownership, but is never a Mesh path.
-        if "DBUS_SESSION_BUS_ADDRESS" not in environment and os.environ.get("XDG_RUNTIME_DIR"):
-            environment["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + os.path.join(os.environ["XDG_RUNTIME_DIR"], "bus")
-        return run_process([bash, script, *arguments], environment)
+    from owned_command import Controller, Triggers
+    from process_tree import Kernel
+    # Refuse before creating anything where children cannot be joined.
+    Kernel().require()
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    triggers = Triggers()
+    root = Path(tempfile.mkdtemp(prefix="m-entry-", dir=os.environ.get("TMPDIR") or None))
+    controller = Controller(root, triggers)
+    log = root / "entry.log"
+    with open(log, "w") as diagnostics:
+        job = controller.start(Path(script).name, budget=float("inf"), cwd=os.getcwd(), inherit_env=True,
+                               scratch_parent=os.environ.get("TMPDIR") or None,
+                               isolation={"bash": bash, "script": script, "arguments": arguments},
+                               popen={"stderr": diagnostics})
+    controller.wait([job], each_tick=LogCopy(log))
+    status = job.outcome.get("returncode")
+    if controller.cancelled is not None:
+        status = controller.cancelled.status
+    if not controller.proved():
+        print(f"FAIL: kept {root}: {job.name} is {job.state()}: {job.outcome.get('reasons', [])}", file=sys.stderr)
+        return status or 1
+    shutil.rmtree(root)
+    return 1 if status is None else status
 
 
 def main():
@@ -175,5 +242,4 @@ def main():
 
 
 if __name__ == "__main__":
-    with termination_cleanup():
-        sys.exit(main())
+    sys.exit(main())
