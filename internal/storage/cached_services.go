@@ -145,11 +145,15 @@ func cachedServiceParams(cached CachedService) (dbsqlc.UpsertCachedServiceParams
 	if err != nil {
 		return dbsqlc.UpsertCachedServiceParams{}, err
 	}
+	listens, err := encodeListens(service.Listens)
+	if err != nil {
+		return dbsqlc.UpsertCachedServiceParams{}, err
+	}
 	return dbsqlc.UpsertCachedServiceParams{
 		DisplayName: service.DisplayName,
 		HostID:      string(cached.HostID), PrivateName: cached.PrivateName, Name: service.Name, Kind: string(service.Kind), Target: service.Target,
 		PrivateHost: service.PrivateHost, Healthy: boolInt64(cached.Healthy),
-		Problem: cached.Problem, ObservedAt: observedAt, Isolate: boolInt64(service.Isolate),
+		Problem: cached.Problem, ObservedAt: observedAt, Isolate: boolInt64(service.Isolate), LocalOnly: boolInt64(service.LocalOnly), Listens: listens,
 	}, nil
 }
 
@@ -163,13 +167,20 @@ func cachedServiceFromRow(row dbsqlc.CachedService) (CachedService, error) {
 	if err != nil {
 		return CachedService{}, err
 	}
+	localOnly, err := sqliteBool("local_only", row.LocalOnly)
+	if err != nil {
+		return CachedService{}, err
+	}
 	cached := CachedService{
 		HostID: HostID(row.HostID), PrivateName: row.PrivateName,
 		Service: meshserve.Service{
 			DisplayName: row.DisplayName, Name: row.Name, Kind: meshserve.Kind(row.Kind), Target: row.Target,
-			PrivateHost: row.PrivateHost, Isolate: isolate,
+			PrivateHost: row.PrivateHost, Isolate: isolate, LocalOnly: localOnly,
 		},
 		Healthy: healthy, Problem: row.Problem, ObservedAt: time.UnixMilli(row.ObservedAt).UTC(),
+	}
+	if err := decodeDemand(row.Listens, "", &cached.Service); err != nil {
+		return CachedService{}, fmt.Errorf("decode cached listeners: %w", err)
 	}
 	if _, err := cachedServiceParams(cached); err != nil {
 		return CachedService{}, err

@@ -13,6 +13,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 	"github.com/shaul/mesh/db/migrations"
+	dbsqlc "github.com/shaul/mesh/internal/storage/sqlc"
 )
 
 func historicalDatabase(t *testing.T, path string, version int64) *sql.DB {
@@ -68,12 +69,10 @@ func TestPrivateHostingMigrationPreservesPrivateState(t *testing.T) {
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err := Open(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	database = historicalDatabase(t, path, 13)
+	store := &Store{db: database, queries: dbsqlc.New(database), path: path}
 	t.Cleanup(func() { _ = store.Close() })
-	assertCurrentMigrationVersion(t, store)
+	assertMigrationRows(t, store.db, "SELECT max(version_id) FROM goose_db_version WHERE is_applied = 1", [][]any{{int64(13)}})
 	assertPrivateHostingSchema(t, store.db)
 	for index, query := range queries {
 		assertMigrationRows(t, store.db, query, before[index])
