@@ -196,15 +196,20 @@ func TestFilesHandlerBuildsWorkingLinksAtRootAndNestedPrefixes(t *testing.T) {
 	}
 	for _, prefix := range []string{"/files", "/nested/files", "/"} {
 		t.Run(prefix, func(t *testing.T) {
-			handler, err := Handler(Service{Name: "files", Kind: Files, Target: root}, prefix)
-			if err != nil {
-				t.Fatal(err)
-			}
-			links := checkListingFiles(t, handler, prefixWithSlash(prefix), root, files)
-			for _, directory := range directories {
-				checkNestedListingFiles(t, handler, links[directory+"/"], filepath.Join(root, directory), files)
-			}
+			checkListingPrefix(t, root, prefix, directories, files)
 		})
+	}
+}
+
+func checkListingPrefix(t *testing.T, root, prefix string, directories []string, files map[string]string) {
+	t.Helper()
+	handler, err := Handler(Service{Name: "files", Kind: Files, Target: root}, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := checkListingFiles(t, handler, prefixWithSlash(prefix), root, files)
+	for _, directory := range directories {
+		checkNestedListingFiles(t, handler, links[directory+"/"], filepath.Join(root, directory), files)
 	}
 }
 
