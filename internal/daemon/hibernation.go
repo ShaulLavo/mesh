@@ -111,7 +111,7 @@ func (h *hibernator) hibernate(ctx context.Context, id storage.SessionID) bool {
 // worker re-checks every condition against its live state before stopping.
 func hibernationCandidate(dir, hostID string, idle time.Duration, now time.Time) bool {
 	meta, err := worker.ReadMeta(dir)
-	if err != nil || meta.State != worker.StateDetached || meta.DetachedAt == nil || now.Sub(*meta.DetachedAt) < idle {
+	if err != nil || meta.ID != filepath.Base(dir) || meta.Label != "" || meta.State != worker.StateDetached || meta.DetachedAt == nil || now.Sub(*meta.DetachedAt) < idle {
 		return false
 	}
 	record, err := recovery.Read(dir)
@@ -192,4 +192,20 @@ func addHibernationInfo(dir string, meta worker.Meta, metaErr error, info *proto
 	if !errors.Is(err, os.ErrNotExist) {
 		info.RecoveryError = fmt.Sprintf("hibernation record: %v", err)
 	}
+}
+
+// Labels are daemon-assigned ownership, so neither idle policy nor an explicit
+// agent hibernate request may suspend a service or app worker.
+func (l *lifecycle) validateHibernateOwnership(id string) error {
+	meta, err := worker.ReadMeta(filepath.Join(l.sessionsDir, id))
+	if err != nil {
+		return fmt.Errorf("daemon: hibernate session %s: read ownership metadata: %w", id, err)
+	}
+	if meta.ID != id {
+		return fmt.Errorf("daemon: hibernate session %s: ownership metadata names %q", id, meta.ID)
+	}
+	if meta.Label != "" {
+		return fmt.Errorf("daemon: hibernate session %s: managed worker %q must stay running", id, meta.Label)
+	}
+	return nil
 }

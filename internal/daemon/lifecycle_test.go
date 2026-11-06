@@ -623,36 +623,46 @@ func TestLifecycleForwardsOneShotHibernateAcknowledgement(t *testing.T) {
 		{name: "invalid acknowledgement", response: protocol.Control{Type: protocol.TypeOK, RequestID: "wrong-request", SessionID: "7K3D"}, wantErr: "invalid hibernation acknowledgement"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			conn := &lifecycleRecordingConn{readFrame: controlFrame(t, test.response)}
-			lifecycle := mustLifecycle(t, lifecycleConfig{
-				Catalog: &lifecycleTestCatalog{},
-				Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
-					return conn, nil
-				}),
-				Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key"},
-				SessionsDir: "/state/s",
-			})
-			idle := test.idle
-			if idle == 0 {
-				idle = 250
-			}
-			response, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
-				Type: protocol.TypeHibernate, RequestID: "hibernate-1", SessionID: "7K3D", HibernateIdleMillis: idle,
-			})
-			if !handled || (test.wantErr == "" && err != nil) || (test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr))) {
-				t.Fatalf("hibernate handled = %v, response = %+v, error = %v", handled, response, err)
-			}
-			if test.name == "refused" && err.Error() != test.wantErr {
-				t.Fatalf("worker refusal changed: %v", err)
-			}
-			if !conn.closed || !conn.read || len(conn.frames) != 1 {
-				t.Fatalf("closed = %v, read = %v, frames = %d", conn.closed, conn.read, len(conn.frames))
-			}
-			forwarded, err := protocol.DecodeControl(conn.frames[0].Payload)
-			if err != nil || forwarded.HibernateIdleMillis != idle {
-				t.Fatalf("forwarded hibernate = %+v, error = %v", forwarded, err)
-			}
+			assertHibernateAcknowledgement(t, test)
 		})
+	}
+}
+
+func assertHibernateAcknowledgement(t *testing.T, test struct {
+	name     string
+	response protocol.Control
+	wantErr  string
+	idle     int64
+}) {
+	t.Helper()
+	conn := &lifecycleRecordingConn{readFrame: controlFrame(t, test.response)}
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{},
+		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+			return conn, nil
+		}),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key"},
+		SessionsDir: unlabelledHibernateWorker(t),
+	})
+	idle := test.idle
+	if idle == 0 {
+		idle = 250
+	}
+	response, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeHibernate, RequestID: "hibernate-1", SessionID: "7K3D", HibernateIdleMillis: idle,
+	})
+	if !handled || (test.wantErr == "" && err != nil) || (test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr))) {
+		t.Fatalf("hibernate handled = %v, response = %+v, error = %v", handled, response, err)
+	}
+	if test.name == "refused" && err.Error() != test.wantErr {
+		t.Fatalf("worker refusal changed: %v", err)
+	}
+	if !conn.closed || !conn.read || len(conn.frames) != 1 {
+		t.Fatalf("closed = %v, read = %v, frames = %d", conn.closed, conn.read, len(conn.frames))
+	}
+	forwarded, err := protocol.DecodeControl(conn.frames[0].Payload)
+	if err != nil || forwarded.HibernateIdleMillis != idle {
+		t.Fatalf("forwarded hibernate = %+v, error = %v", forwarded, err)
 	}
 }
 

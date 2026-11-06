@@ -2,8 +2,11 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,23 +115,116 @@ func TestHibernateForwardsTheWorkersOwnAnswer(t *testing.T) {
 			Message: "expected " + protocol.TypeAttach}, "expected " + protocol.TypeAttach},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			workerConn := &lifecycleRecordingConn{readFrame: controlFrame(t, tc.reply)}
-			lifecycle := mustLifecycle(t, lifecycleConfig{
-				Catalog: &lifecycleTestCatalog{},
-				Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
-					return workerConn, nil
-				}),
-				Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
-				SessionsDir: "/state/s",
-			})
-			_, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
-				Type: protocol.TypeHibernate, RequestID: "control-1", SessionID: "7K3D", HibernateIdleMillis: 1000})
-			if !handled {
-				t.Fatal("hibernate was not handled")
-			}
-			if tc.want == "" && err != nil || tc.want != "" && (err == nil || err.Error() != tc.want) {
-				t.Fatalf("hibernate error = %v, want %q", err, tc.want)
-			}
+			assertHibernateWorkerAnswer(t, tc)
 		})
+	}
+}
+
+func assertHibernateWorkerAnswer(t *testing.T, tc struct {
+	name  string
+	reply protocol.Control
+	want  string
+}) {
+	t.Helper()
+	workerConn := &lifecycleRecordingConn{readFrame: controlFrame(t, tc.reply)}
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{},
+		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+			return workerConn, nil
+		}),
+		Host:        storage.Host{ID: "host-a", MeshIdentity: "mesh-key", LastSeenAt: time.Now()},
+		SessionsDir: unlabelledHibernateWorker(t),
+	})
+	_, handled, err := lifecycle.HandleControl(context.Background(), protocol.Control{
+		Type: protocol.TypeHibernate, RequestID: "control-1", SessionID: "7K3D", HibernateIdleMillis: 1000})
+	if !handled {
+		t.Fatal("hibernate was not handled")
+	}
+	if tc.want == "" && err != nil || tc.want != "" && (err == nil || err.Error() != tc.want) {
+		t.Fatalf("hibernate error = %v, want %q", err, tc.want)
+	}
+}
+
+func TestDaemonHibernationProtectsLabelledAndUnreadableWorkers(t *testing.T) {
+	for _, label := range []string{"serve /dev", "app preview", "service backend", ""} {
+		t.Run(label, func(t *testing.T) { assertDaemonHibernationOwnership(t, label, false) })
+	}
+	t.Run("unreadable", func(t *testing.T) { assertDaemonHibernationOwnership(t, "", true) })
+}
+
+func assertDaemonHibernationOwnership(t *testing.T, label string, unreadable bool) {
+	t.Helper()
+	now := historyBase
+	detached := now.Add(-7 * time.Hour)
+	dir := hibernationCandidateDir(t, worker.StateDetached, &detached, agentresume.Active, detached)
+	meta, err := worker.ReadMeta(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.Label = label
+	if err := worker.WriteMeta(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+	if unreadable {
+		if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	protected := label != "" || unreadable
+	if got := hibernationCandidate(dir, "host-one", 6*time.Hour, now); got == protected {
+		t.Errorf("automatic candidate = %v, protected = %v", got, protected)
+	}
+	conn := &lifecycleRecordingConn{readFrame: controlFrame(t, protocol.Control{Type: protocol.TypeOK, RequestID: "manual", SessionID: "7K3D"})}
+	connected := false
+	life := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{}, Host: catalogTestHost(now), SessionsDir: filepath.Dir(dir),
+		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) { connected = true; return conn, nil }),
+	})
+	_, handled, err := life.HandleControl(t.Context(), protocol.Control{Type: protocol.TypeHibernate, RequestID: "manual", SessionID: "7K3D"})
+	if !handled || (err != nil) != protected || connected == protected {
+		t.Fatalf("manual handled = %v, error = %v, connected = %v, protected = %v", handled, err, connected, protected)
+	}
+	if label != "" && !strings.Contains(err.Error(), label) {
+		t.Fatalf("refusal lost ownership label: %v", err)
+	}
+}
+
+func unlabelledHibernateWorker(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	writeCatalogMeta(t, root, "7K3D", catalogTestMeta("7K3D", worker.StateDetached, "boot-a"))
+	return root
+}
+
+func TestDaemonHibernateRefusesMissingAndMismatchedOwnership(t *testing.T) {
+	for _, missing := range []bool{true, false} {
+		t.Run(fmt.Sprint(missing), func(t *testing.T) { assertUncertainHibernateOwnership(t, missing) })
+	}
+}
+
+func assertUncertainHibernateOwnership(t *testing.T, missing bool) {
+	t.Helper()
+	root := unlabelledHibernateWorker(t)
+	dir := filepath.Join(root, "7K3D")
+	if missing {
+		if err := os.Remove(filepath.Join(dir, "meta.json")); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err := worker.WriteMeta(dir, catalogTestMeta("8XYZ", worker.StateDetached, "boot-a")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	connected := false
+	life := mustLifecycle(t, lifecycleConfig{
+		Catalog: &lifecycleTestCatalog{}, Host: catalogTestHost(historyBase), SessionsDir: root,
+		Connector: lifecycleConnectorFunc(func(context.Context, protocol.SessionID) (transport.Conn, error) {
+			connected = true
+			return nil, errors.New("unexpected connection")
+		}),
+	})
+	_, _, err := life.HandleControl(t.Context(), protocol.Control{Type: protocol.TypeHibernate, RequestID: "manual", SessionID: "7K3D"})
+	if err == nil || connected {
+		t.Fatalf("uncertain ownership: connected = %v, error = %v", connected, err)
 	}
 }
