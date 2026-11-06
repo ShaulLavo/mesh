@@ -25,7 +25,7 @@ const historyLabel = "serve /dev"
 var historyBase = time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 
 // historyCatalog is a real catalog over SQLite whose clock stays at
-// historyBase, so background retention never touches the fixtures.
+// historyBase. Post-start prune tests seed rows without periodic retention.
 type historyCatalog struct {
 	root    string
 	store   *storage.Store
@@ -140,7 +140,7 @@ func historyShorts(t *testing.T, h historyCatalog, count int) []string {
 }
 
 // A route keeps its ten newest attempts and its newest long run. The
-// current attempt, other labels, live and interrupted sessions, owner pins
+// current attempt, other labels, live and uncertain sessions, owner pins
 // and every kind of recovery history are not candidates at all.
 func TestPruneLabelledKeepsBoundedHistoryAndProtectedRecords(t *testing.T) {
 	h := newHistoryCatalog(t, nil)
@@ -162,16 +162,16 @@ func TestPruneLabelledKeepsBoundedHistoryAndProtectedRecords(t *testing.T) {
 	for id, protect := range protected {
 		protect(h.exited(t, id, historyLabel, historyBase.Add(-6*time.Hour), time.Second))
 	}
-	h.reconcile(t)
+	h.seed(t)
 	removed, err := h.prune(t, "C0RR")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"G002", "H011", "H012"}; !slices.Equal(removed, want) {
+	if want := []string{"G002", "H011", "H012", "N001"}; !slices.Equal(removed, want) {
 		t.Fatalf("removed %v, want %v", removed, want)
 	}
 	h.assertRemoved(t, removed...)
-	h.assertKept(t, append(shorts[:10], "C0RR", "G001", "B001", "V001", "N001", "P001", "R001", "R002", "R003", "R004", "R005")...)
+	h.assertKept(t, append(shorts[:10], "C0RR", "G001", "B001", "V001", "P001", "R001", "R002", "R003", "R004", "R005")...)
 	h.assertNoClaimLeft(t, append(shorts[:10], "C0RR", "G001")...)
 	removed, err = h.prune(t, "C0RR")
 	if err != nil || len(removed) != 0 {
@@ -273,7 +273,7 @@ func assertPruningRespectsClaim(t *testing.T, name string, claim func(*testing.T
 		return store
 	})
 	historyShorts(t, h, 13)
-	h.reconcile(t)
+	h.seed(t)
 	store.claim = func() { claim(t, filepath.Join(h.root, "H012")) }
 	removed, err := h.prune(t, "")
 	if err != nil {
@@ -297,7 +297,7 @@ func TestPruneLabelledFailedRetirementLeavesNoMarker(t *testing.T) {
 		return &claimingStore{CatalogStore: inner, fail: "H011"}
 	})
 	historyShorts(t, h, 11)
-	h.reconcile(t)
+	h.seed(t)
 	removed, err := h.prune(t, "")
 	if err == nil || len(removed) != 0 {
 		t.Fatalf("prune = %v, %v; want the retirement failure and nothing removed", removed, err)
@@ -409,4 +409,119 @@ func TestCatalogCountCapRanksByExitTime(t *testing.T) {
 	if !slices.Contains(retired, observed[0].ID) {
 		t.Fatalf("retired %v; a session with no exit time did not fall back to its creation time", retired)
 	}
+}
+
+// These names deliberately have no service definitions and never start again.
+func TestPeriodicLabelledHistoryBoundsDisabledAndDeletedNames(t *testing.T) {
+	for _, label := range []string{"serve /disabled", "service deleted"} {
+		t.Run(label, func(t *testing.T) { assertPeriodicLabelledHistory(t, label) })
+	}
+}
+
+func assertPeriodicLabelledHistory(t *testing.T, label string) {
+	t.Helper()
+	h := newHistoryCatalog(t, nil)
+	for index := range 12 {
+		h.running(t, fmt.Sprintf("B%03d", index), label, "previous-boot", historyBase.Add(-time.Duration(index+1)*time.Minute))
+	}
+	h.exited(t, "G001", label, historyBase.Add(-2*time.Hour), 10*time.Minute)
+	h.exited(t, "G002", label, historyBase.Add(-3*time.Hour), 10*time.Minute)
+	h.reconcile(t)
+	h.assertRemoved(t, "B010", "B011", "G002")
+	h.assertKept(t, "B000", "B009", "G001")
+	h.reconcile(t)
+	h.assertKept(t, "B009", "G001")
+}
+
+func TestPruneLabelledBoundsPositivelyOldBootHistory(t *testing.T) {
+	h := newHistoryCatalog(t, nil)
+	for index := range 12 {
+		h.running(t, fmt.Sprintf("B%03d", index), historyLabel, "previous-boot", historyBase.Add(-time.Duration(index+1)*time.Minute))
+	}
+	h.exited(t, "G001", historyLabel, historyBase.Add(-time.Hour), 10*time.Minute)
+	h.seed(t)
+	removed, err := h.prune(t, "")
+	if err != nil || !slices.Equal(removed, []string{"B010", "B011"}) {
+		t.Fatalf("prune = %v, %v", removed, err)
+	}
+	h.assertKept(t, "B009", "G001")
+}
+
+func (h historyCatalog) seed(t *testing.T) {
+	t.Helper()
+	observed, err := h.catalog.scan(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.ReconcileHost(t.Context(), h.catalog.host, observed); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPeriodicLabelledHistoryRequiresPositiveOwnershipEvidence(t *testing.T) {
+	for _, test := range []struct{ name, boot, protection string }{
+		{"current boot", "boot-a", ""}, {"unknown recorded boot", "", ""},
+		{"unknown host boot", "previous-boot", "host"}, {"torn metadata", "previous-boot", "torn"},
+		{"owner pin", "previous-boot", ".owner"}, {"recovery", "previous-boot", "recovery.json"},
+		{"recovery intent", "previous-boot", "recovery-intent.json"}, {"recovery command", "previous-boot", "recovery-command.json"},
+		{"recovery lock", "previous-boot", "recovery.lock"}, {"recovered from", "previous-boot", "source"},
+		{"unlabelled", "previous-boot", "label"},
+	} {
+		t.Run(test.name, func(t *testing.T) { assertPeriodicHistoryProtection(t, test.boot, test.protection) })
+	}
+}
+
+func assertPeriodicHistoryProtection(t *testing.T, boot, protection string) {
+	t.Helper()
+	h := newHistoryCatalog(t, nil)
+	h.catalog.probe = probeFunc(func(context.Context, string) error { return syscall.ENOENT })
+	historyShorts(t, h, 12)
+	label := historyLabel
+	if protection == "label" {
+		label = ""
+	}
+	h.running(t, "P001", label, boot, historyBase.Add(-30*24*time.Hour))
+	dir := filepath.Join(h.root, "P001")
+	switch protection {
+	case "host":
+		h.catalog.bootID = func() string { return "" }
+	case "torn":
+		if err := os.WriteFile(paths.Meta(dir), []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	case "source":
+		recoveredFrom(t, dir)
+	case "", "label":
+	default:
+		writeHistoryFile(t, filepath.Join(dir, protection))
+	}
+	h.reconcile(t)
+	h.assertKept(t, "P001")
+	_, err := h.prune(t, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.assertKept(t, "P001")
+}
+
+func TestPeriodicOldBootHistoryUsesCountWithoutInventingExitTime(t *testing.T) {
+	h := newHistoryCatalog(t, nil)
+	for index := range maxRetainedTerminalSessions + 2 {
+		h.running(t, fmt.Sprintf("B%03d", index), fmt.Sprintf("service removed-%d", index), "previous-boot", historyBase.Add(-time.Duration(index+1)*24*time.Hour))
+	}
+	h.reconcile(t)
+	h.assertRemoved(t, "B500", "B501")
+	h.assertKept(t, "B000", "B499")
+	h.catalog.now = func() time.Time { return historyBase.Add(90 * 24 * time.Hour) }
+	h.reconcile(t)
+	h.assertKept(t, "B499")
+}
+
+func TestPeriodicLabelledHistoryStillAgesKnownExits(t *testing.T) {
+	h := newHistoryCatalog(t, nil)
+	h.exited(t, "G001", historyLabel, historyBase.Add(-30*24*time.Hour), 10*time.Minute)
+	h.running(t, "B001", historyLabel, "previous-boot", historyBase.Add(-40*24*time.Hour))
+	h.reconcile(t)
+	h.assertRemoved(t, "G001")
+	h.assertKept(t, "B001")
 }

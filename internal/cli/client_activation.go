@@ -21,7 +21,7 @@ func activateClientConfig(command *cobra.Command) error {
 		top = top.Parent()
 	}
 	switch top.Name() {
-	case "profile", "dashboard", "session-worker", "agent", "agent-hook", "agent-resume", "update-helper", "update-notice-check", "update-bootstrap", "update-bootstrap-status", "completion", "help", "version":
+	case "hosts", agentInspectCommandName, "profile", "dashboard", "session-worker", "agent", "agent-hook", "agent-resume", "update-helper", "update-notice-check", "update-bootstrap", "update-bootstrap-status", "completion", "help", "version":
 		return nil
 	default:
 		return retireClientAliases(command.Context())
