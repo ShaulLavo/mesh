@@ -286,6 +286,7 @@ func inspectUpdateTarget(ctx context.Context, client update.Caller, host update.
 		return
 	}
 	target.Build, target.Workers = &info.Health.Build, info.Health.Workers
+	target.Commands = info.Commands
 	if info.Installation != nil && info.Installation.Phase == updateinstall.RollbackFailed {
 		target.State = update.Failed
 		review := updateTargetReview{Kind: updateReviewRecovery, Message: updateRecoveryProblem, Cause: string(info.Installation.Phase) + ": " + info.Installation.Error}

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/updateinstall"
 )
 
 type enrollmentRemote struct {
@@ -73,6 +74,26 @@ func TestStoppedUpdateObservesCurrentCoordinatorWithoutActivation(t *testing.T) 
 	}
 	if remote.stages != 0 || len(remote.grants) != 0 || !run.Stopped || run.Targets[1].State != Failed {
 		t.Fatalf("observing a stopped run authorized work or erased failure: %+v", run)
+	}
+}
+
+func TestCurrentUpdateRetainsSeparateCommandInstallations(t *testing.T) {
+	c, remote, run := testCoordinator(t, 1)
+	host := run.Targets[0].Host.ID
+	info := remote.info[host]
+	info.Health.Build.Version = run.Release.Version
+	info.Health.Build.Digest = run.Release.Artifacts[0].BinarySHA256
+	info.Commands = []updateinstall.CommandCopy{{Path: "/opt/homebrew/bin/mesh", Owner: "homebrew-cask"}}
+	remote.info[host] = info
+	if err := c.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := c.Store.Read(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Targets[0].State != Updated || len(observed.Targets[0].Commands) != 1 {
+		t.Fatalf("current installation hid separate commands: %+v", observed.Targets[0])
 	}
 }
 

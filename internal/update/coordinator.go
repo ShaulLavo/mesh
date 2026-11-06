@@ -22,9 +22,10 @@ type Operation struct {
 	RetryToken uint64 `json:"retryToken,omitempty"`
 }
 type Info struct {
-	AcceptsIdentityFleet bool                  `json:"acceptsIdentityFleet"`
-	Health               updateinstall.Health  `json:"health"`
-	Installation         *updateinstall.Status `json:"installation,omitempty"`
+	Commands             []updateinstall.CommandCopy `json:"commands,omitempty"`
+	AcceptsIdentityFleet bool                        `json:"acceptsIdentityFleet"`
+	Health               updateinstall.Health        `json:"health"`
+	Installation         *updateinstall.Status       `json:"installation,omitempty"`
 }
 
 type Caller interface {
@@ -195,12 +196,14 @@ func (c *Coordinator) reconcile(ctx context.Context, run Run, index int) error {
 		return c.recordError(run.ID, index, err)
 	}
 	if status.Request.ID != run.ID {
-		return c.joinInstallation(ctx, current, index, Info{Health: info.Health, Installation: &status})
+		info.Installation = &status
+		return c.joinInstallation(ctx, current, index, info)
 	}
 	if status.Phase == updateinstall.Committed {
 		return nil
 	}
-	return c.reconcileInstallation(ctx, current, index, Info{Health: info.Health, Installation: &status})
+	info.Installation = &status
+	return c.reconcileInstallation(ctx, current, index, info)
 }
 
 func (c *Coordinator) observeBuild(run Run, index int, info Info) (bool, error) {
@@ -217,6 +220,7 @@ func (c *Coordinator) observeBuild(run Run, index int, info Info) (bool, error) 
 			t.State = Updated
 			t.Build = &build
 			t.Workers = info.Health.Workers
+			t.Commands = info.Commands
 			t.Problem = ""
 			t.RetryPending = false
 			t.BootstrapRetry = false
@@ -231,6 +235,7 @@ func (c *Coordinator) observeBuild(run Run, index int, info Info) (bool, error) 
 			t.State = Newer
 			t.Build = &build
 			t.Workers = info.Health.Workers
+			t.Commands = info.Commands
 			t.Problem = ""
 			t.RetryPending = false
 			t.BootstrapRetry = false
@@ -255,6 +260,7 @@ func (c *Coordinator) prepare(run Run, index int, info Info) error {
 	return c.record(run.ID, index, func(t *Target) {
 		t.Build = &build
 		t.Workers = info.Health.Workers
+		t.Commands = info.Commands
 		t.Generation = generation
 		t.Problem = ""
 		t.RetryAt = time.Time{}
@@ -291,6 +297,7 @@ func (c *Coordinator) reconcileInstallation(ctx context.Context, run Run, index 
 			t.Problem = ""
 			t.Build = &info.Health.Build
 			t.Workers = info.Health.Workers
+			t.Commands = info.Commands
 			if status.Verified != nil {
 				t.InterruptedWorkers = status.Verified.InterruptedWorkers
 			}

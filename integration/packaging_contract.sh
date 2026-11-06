@@ -64,6 +64,12 @@ case "$*" in
 esac
 EOF
 chmod 0755 "$fake_bin/loginctl" "$fake_bin/systemctl"
+cat >"$fake_bin/mesh" <<'EOF'
+#!/bin/sh
+echo 'FAIL: installer executed another Mesh command' >&2
+exit 99
+EOF
+chmod 0755 "$fake_bin/mesh"
 
 install_home=$run_root/home
 install_bin=$install_home/custom-bin
@@ -81,13 +87,16 @@ install_env=(
   MESH_BIN_DIR="$install_bin"
 )
 
-first=$(env "${install_env[@]}" sh scripts/install.sh)
+first=$(env "${install_env[@]}" sh scripts/install.sh 2>"$run_root/install-diagnostics")
 grep -Fq 'installed at' <<<"$first"
+grep -Fq "Separate Mesh command: $fake_bin/mesh" "$run_root/install-diagnostics"
+grep -Fq 'Mesh updates do not maintain this copy' "$run_root/install-diagnostics"
 cmp -s "$MESH" "$install_bin/mesh"
 test "$(stat -c '%a' "$install_bin")" = 755
 unit=$install_home/.config/systemd/user/mesh.service
 grep -Fqx "ExecStart=$install_bin/mesh daemon --tailnet-port=7337 --ssh-port=2222 --websocket-path=/mesh" "$unit"
 grep -Fqx 'KillMode=process' "$unit"
+grep -Fqx "Environment=PATH=$install_bin:/usr/local/bin:/usr/bin:/bin" "$unit"
 
 : >"$systemctl_log"
 second=$(env "${install_env[@]}" sh scripts/install.sh)
@@ -239,6 +248,7 @@ if grep -Eq 'bootout|bootstrap' "$launch_log"; then
   exit 1
 fi
 plist=$hostile_home/Library/LaunchAgents/dev.shaulavo.mesh.plist
+grep -Fq "PATH=&quot;$darwin_bin:\$PATH&quot; exec" "$plist"
 grep -Fq '${HOME}/.local/state/mesh/daemon.log' "$plist"
 if grep -Fq 'darwin&home' "$plist"; then
   echo 'FAIL: hostile HOME was injected into the launchd plist' >&2

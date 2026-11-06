@@ -120,6 +120,8 @@ func (u *updateController) info(ctx context.Context) (update.Info, error) {
 		return update.Info{}, err
 	}
 	info := update.Info{Health: observed.Health, AcceptsIdentityFleet: true}
+	home, _ := os.UserHomeDir()
+	info.Commands = updateinstall.OtherCommands(observed.Executable, updateinstall.CommandSearchDirs(home, os.Getenv("PATH")))
 	status, err := updateinstall.Read(u.stateDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return info, err
