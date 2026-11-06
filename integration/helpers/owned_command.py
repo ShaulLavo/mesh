@@ -25,6 +25,7 @@ from pathlib import Path
 import select
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -256,6 +257,16 @@ def command_line(pid):
         return "?"
 
 
+def work_allowance(s):
+    """Seconds from launcher start until the launcher gives up on its owner without a trigger."""
+    return s["budget"] + max(s["settle"] + s["leak_grace"], s["grace"]) + s["kill_wait"] + s["allowance"]
+
+
+def cancel_allowance(s):
+    """Seconds from a trigger until the launcher gives up on its owner."""
+    return s["grace"] + s["kill_wait"] + s["allowance"]
+
+
 def exit_status(state):
     status = state.get("status")
     if state.get("state") == "joined" and isinstance(status, int):
@@ -276,6 +287,9 @@ class Launcher:
         self.control = Control(self.admission.get("control"))
         self.kernel = Kernel()
         self.triggers.cancel_files = (*self.admission.get("cancel", ()), self.record.directory / "cancel")
+        # Set once the intermediate exists: from then on a decline is complete only after the owner's exit is seen.
+        self.intermediate = None
+        self.owner_exited = False
 
     def run(self):
         signal.signal(signal.SIGCHLD, signal.SIG_DFL)
@@ -296,7 +310,13 @@ class Launcher:
 
     def decline(self, reason, status):
         print(f"FAIL: owned command declined: {reason}", file=sys.stderr, flush=True)
-        self.record.advance("declined", time.monotonic() + self.settings["allowance"], reason=reason, status=status)
+        forked = self.intermediate is not None
+        if forked and self.owner_exited:
+            self.record.write("owner-exit", {"intermediate": self.intermediate, "observed": "report pipe closed"})
+        elif forked:
+            print("FAIL: owned command: the declined owner's exit was not observed", file=sys.stderr, flush=True)
+        self.record.advance("declined", time.monotonic() + self.settings["allowance"], reason=reason, status=status,
+                            forked=forked, intermediate=self.intermediate)
         self.control.hold("launcher-declined")
         return status
 
@@ -332,6 +352,7 @@ class Launcher:
             raise Declined(f"fork owner: {error}", 1) from error
         if intermediate == 0:
             become_intermediate(self, report_r, report_w, accept_r, accept_w)
+        self.intermediate = intermediate
         os.close(report_w)
         os.close(accept_r)
         try:
@@ -351,10 +372,27 @@ class Launcher:
             # Closing acceptance is the owner's EOF: it exits without starting anything.
             os.close(accept_w)
             if fd is not None:
-                self.await_exit(fd, deadline + self.settings["allowance"])
                 os.close(fd)
+            # The acceptance fence proves no work started, not that the owner is gone.
+            self.owner_exited = self.await_report_closed(report_r, deadline + self.settings["allowance"])
             raise
         return pid, fd, accept_w
+
+    def await_report_closed(self, report_r, cutoff):
+        """True once the report pipe's write end is closed everywhere, by the existing handshake cutoff.
+
+        Before acceptance only the intermediate and the owner hold that end. Neither
+        closes it while alive, and the owner starts nothing that could inherit it, so
+        end of file proves both have exited, including an owner whose PID never arrived.
+        """
+        os.set_blocking(report_r, False)
+        while not report_closed(report_r):
+            remaining = cutoff - time.monotonic()
+            if remaining <= 0:
+                return False
+            self.triggers.check()
+            self.triggers.wait([report_r], min(remaining, self.settings["tick"]))
+        return True
 
     def offer(self, accept_w, deadline, **fields):
         if not self.record.advance("started", deadline + self.settings["allowance"], **fields):
@@ -432,13 +470,9 @@ class Launcher:
         if stat is None or stat.start != start or stat.ppid in (intermediate, os.getpid()) or self.kernel.exited(fd):
             raise Declined("owner identity or reparenting does not match its report", 1)
 
-    def await_exit(self, fd, deadline):
-        while not readable(fd) and time.monotonic() < deadline:
-            self.triggers.wait([fd], self.settings["tick"])
-
     def supervise(self, owner_pid, owner_fd, accept_w):
         s = self.settings
-        cutoff = self.start + s["budget"] + max(s["settle"] + s["leak_grace"], s["grace"]) + s["kill_wait"] + s["allowance"]
+        cutoff = self.start + work_allowance(s)
         forwarded = False
         while not readable(owner_fd):
             trigger = self.triggers.check()
@@ -446,7 +480,7 @@ class Launcher:
                 # The launcher never signals its owner; the owner reads this file.
                 request_cancel(self.record.directory / "cancel", trigger.sig)
                 forwarded = True
-                cutoff = min(cutoff, trigger.time + s["grace"] + s["kill_wait"] + s["allowance"])
+                cutoff = min(cutoff, trigger.time + cancel_allowance(s))
             if time.monotonic() >= cutoff:
                 return self.unproved(owner_pid)
             self.triggers.wait([owner_fd], s["tick"])
@@ -466,6 +500,17 @@ class Launcher:
         print(f"FAIL: owned command: {reason}", file=sys.stderr, flush=True)
         self.record.advance("retained", time.monotonic() + self.settings["allowance"], reasons=[reason])
         return 1
+
+
+def report_closed(fd):
+    """True at end of file. Unread report bytes are bounded, so a few chunks drain them."""
+    for _ in range(4):
+        data = read_available(fd)
+        if data == b"":
+            return True
+        if data is None:
+            return False
+    return False
 
 
 def parse_report(line):
@@ -685,6 +730,18 @@ class Owner:
         return self.wait_for(pid)
 
     def wait_for(self, pid):
+        # Only a wakeup on this child's exit: it is unreaped, so the handle is its own.
+        try:
+            handle = self.kernel.pidfd_open(pid)
+        except OwnershipFailure:
+            handle = None
+        try:
+            return self.await_status(pid, [] if handle is None else [handle])
+        finally:
+            if handle is not None:
+                self.kernel.close(handle)
+
+    def await_status(self, pid, wakeups):
         while True:
             drained = self.reaper.reap(self.clock() + self.settings["tick"])
             if pid in self.reaper.statuses:
@@ -693,7 +750,7 @@ class Owner:
                 raise OwnershipFailure(f"status of child {pid} was lost")
             self.interrupt_if_triggered()
             if drained != MORE:
-                self.triggers.wait([], self.settings["tick"])
+                self.triggers.wait(wakeups, self.settings["tick"])
 
     def interrupt_if_triggered(self):
         trigger = self.triggers.check()
@@ -833,7 +890,13 @@ def refuse_signal(fd, sig):
 
 
 def default_prepare(owner):
-    environment = {**owner.admission.get("env", {}), "MESH_OWNED_ROOT": str(owner.root)}
+    if "isolation" in owner.admission:
+        # Imported only here, so callers of the isolation entry's pure helpers never load the owner.
+        from isolation import prepare_isolation
+        return prepare_isolation(owner)
+    # A controller that keeps secrets out of its records passes the environment to the launcher instead.
+    base = os.environ if owner.admission.get("inherit_env") else owner.admission.get("env", {})
+    environment = {**base, "MESH_OWNED_ROOT": str(owner.root)}
     for index, argv in enumerate(owner.admission.get("setup", ())):
         status = owner.run_setup(argv, environment, owner.root / f"setup-{index}.out")
         if status:
@@ -882,16 +945,257 @@ def observe(process, directory):
     """The admission's outcome once its exits are proved; None while the launcher lives.
 
     A stopped launcher is live. Joined without the launcher's owner-exit
-    observation is unknown, never permission to delete.
+    observation is unknown, never permission to delete. So is a decline after
+    the owner was forked: no work started, but the owner may still be running.
     """
     if process.poll() is None:
         return None
     state = Record(directory).read()
-    if state.get("state") == "joined" and not (Path(directory) / "owner-exit").exists():
+    owner_exit = (Path(directory) / "owner-exit").exists()
+    if state.get("state") == "joined" and not owner_exit:
         return {**state, "state": "unknown", "reasons": ["owner exit was not observed"]}
+    if state.get("state") == "declined" and state.get("forked") and not owner_exit:
+        return {**state, "state": "unknown", "reasons": ["the declined owner's exit was not observed"]}
     if state.get("state") not in FINAL:
         return {**state, "state": "unknown"}
     return state
+
+
+def nonblocking_writer(fd):
+    """A write function for fd that never waits for a reader, or None when none can be made.
+
+    Pipes, FIFOs and terminals get a private open file description, so O_NONBLOCK
+    never reaches other processes sharing the caller's. Sockets send with
+    MSG_DONTWAIT. Regular files and other devices have no reader to wait for.
+    """
+    mode = os.fstat(fd).st_mode
+    if stat.S_ISREG(mode) or stat.S_ISCHR(mode) and not os.isatty(fd):
+        return lambda data: os.write(fd, data)
+    if stat.S_ISSOCK(mode):
+        sink = socket.socket(fileno=os.dup(fd))
+        return lambda data: sink.send(data, socket.MSG_DONTWAIT)
+    private = os.open(f"/proc/self/fd/{fd}", os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    return lambda data: os.write(private, data)
+
+
+class Delivery:
+    """Controller text for one inherited stream, sent in bounded nonblocking chunks.
+
+    A reader that stops reading fills its pipe; a blocking write would then stop
+    the controller from publishing cancellation. Text that cannot keep up is not
+    lost: the caller keeps the regular log it came from and reports that delivery
+    stopped. Once stopped, a stream gets nothing more, so it never shows a gap.
+    """
+
+    CHUNK = 65536
+    LIMIT = 8 << 20
+
+    def __init__(self, fd):
+        self.pending = bytearray()
+        try:
+            self.writer = nonblocking_writer(fd)
+        except OSError:
+            self.writer = None
+        self.stopped = self.writer is None
+
+    def queue(self, data):
+        if not self.stopped and len(self.pending) + len(data) > self.LIMIT:
+            self.stop()
+        if not self.stopped:
+            self.pending += data
+
+    def stop(self):
+        self.stopped = True
+        self.pending.clear()
+
+    def pump(self, deadline=float("inf"), clock=time.monotonic):
+        """Send at most one chunk and check the cutoff on both sides of the write."""
+        if clock() >= deadline or self.stopped:
+            return False
+        if not self.pending:
+            return True
+        try:
+            written = self.writer(self.pending[:self.CHUNK])
+        except BlockingIOError:
+            return False
+        except OSError:
+            self.stop()
+            return False
+        del self.pending[:written]
+        return not self.pending and clock() < deadline
+
+    def complete(self):
+        return not self.stopped and not self.pending
+
+    def notice(self, text):
+        """One nonblocking attempt to tell the reader something it may never read."""
+        if self.writer is None:
+            return
+        try:
+            self.writer(text.encode(errors="replace"))
+        except OSError:
+            pass
+
+
+def deliver(deliveries, deadline, wait, clock=time.monotonic):
+    """Pump bounded slices until every stream is delivered or the deadline passes."""
+    while clock() < deadline:
+        completed = [delivery.pump(deadline, clock) for delivery in deliveries]
+        if clock() >= deadline or any(delivery.stopped for delivery in deliveries):
+            return False
+        if all(completed):
+            return all(delivery.complete() for delivery in deliveries)
+        wait()
+    return False
+
+
+def keep_log(path, directory, prefix):
+    """Move a regular log out of a root that is about to be deleted, and return where it went."""
+    fd, kept = tempfile.mkstemp(prefix=prefix, suffix=".log", dir=directory)
+    os.close(fd)
+    os.replace(path, kept)
+    return kept
+
+
+class Job:
+    """One admission as its controller sees it."""
+
+    def __init__(self, name, directory, settings, admitted):
+        self.name = name
+        self.directory = Path(directory)
+        self.settings = settings
+        self.process = None
+        self.exit_handle = None
+        self.outcome = None
+        self.final_seen = False
+        # Startup gets the handshake allowance; observing the launcher's exit gets one more allowance.
+        self.deadline = admitted + settings["handshake"] + work_allowance(settings) + settings["allowance"]
+
+    def state(self):
+        return None if self.outcome is None else self.outcome["state"]
+
+    def proved(self):
+        return self.state() in ("joined", "declined")
+
+    def settle(self, outcome):
+        self.outcome = outcome
+        if self.exit_handle is not None:
+            os.close(self.exit_handle)
+            self.exit_handle = None
+
+
+class Controller:
+    """Admit, launch and observe owned commands. It never signals them.
+
+    The first termination signal is only recorded: a handler that raised could
+    unwind Popen after the child exists. Cancellation reaches owners through
+    the shared cancel file, and through this process's pidfd if it dies.
+    Every wait has an absolute deadline; a job whose exits are not proved by
+    then is unknown, and its state must be retained.
+    """
+
+    def __init__(self, root, triggers, overrides=None, control=None, clock=time.monotonic):
+        self.root = Path(root)
+        self.triggers = triggers
+        self.overrides = dict(overrides or {})
+        self.control = Control(control)
+        self.clock = clock
+        self.runner = establish_runner()
+        self.cancel_file = self.root / "cancel"
+        self.cancelled = None
+        self.failures = []
+        self.jobs = []
+
+    def start(self, name, popen, **job):
+        """Admit, then launch. An admission that never launches is explicitly declined."""
+        directory = self.root / "jobs" / name
+        job = {**job, **self.overrides, "name": name, "cancel": [str(self.cancel_file)]}
+        admit(directory, self.runner, **job)
+        settings = {key: float(job.get(key, value)) for key, value in DEFAULTS.items()}
+        tracked = Job(name, directory, settings, self.clock())
+        self.jobs.append(tracked)
+        self.control.hold(f"before-launch-{name}")
+        if self.check() is not None:
+            return self.decline(tracked, "cancelled before launch", self.cancelled.status)
+        try:
+            tracked.process = launch(directory, self.runner, **popen)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            return self.decline(tracked, f"launch failed: {error}", 1)
+        try:
+            # Only a wakeup: the launcher is this process's unreaped child, so the handle is its own.
+            tracked.exit_handle = os.pidfd_open(tracked.process.pid)
+        except OSError:
+            pass
+        self.control.hold(f"after-launch-{name}")
+        self.check()
+        return tracked
+
+    def decline(self, job, reason, status):
+        if Record(job.directory).advance("declined", self.clock() + job.settings["allowance"], reason=reason, status=status):
+            job.settle({**Record(job.directory).read(), "returncode": status})
+        else:
+            job.settle({"state": "unknown", "reasons": [f"could not record that the job never launched: {reason}"]})
+        return job
+
+    def check(self):
+        trigger = self.triggers.check()
+        if trigger is not None and self.cancelled is None:
+            self.cancel(trigger)
+        return self.cancelled
+
+    def cancel(self, trigger):
+        self.cancelled = trigger
+        try:
+            request_cancel(self.cancel_file, trigger.sig)
+        except OSError as error:
+            self.failures.append(f"publish cancellation: {error}")
+        for job in self.jobs:
+            # Cancellation only shortens a deadline that is already running.
+            job.deadline = min(job.deadline, trigger.time + cancel_allowance(job.settings) + job.settings["allowance"])
+
+    def poll(self, job):
+        """True once the job's outcome is known: proved, or unknown at its deadline."""
+        if job.outcome is not None:
+            return True
+        state = observe(job.process, job.directory)
+        if state is not None:
+            job.settle({**state, "returncode": job.process.returncode})
+            return True
+        now = self.clock()
+        if not job.final_seen and Record(job.directory).read().get("state") in FINAL:
+            # A final record comes just before the owner and launcher exit; a pause after it is bounded.
+            job.final_seen = True
+            job.deadline = min(job.deadline, now + 2 * job.settings["allowance"])
+        if now < job.deadline:
+            return False
+        try:
+            request_cancel(job.directory / "cancel", signal.SIGTERM)
+        except OSError as error:
+            self.failures.append(f"cancel {job.name}: {error}")
+        job.settle({"state": "unknown", "returncode": None,
+                    "reasons": ["launcher exit was not observed before the controller's deadline"]})
+        return True
+
+    def wait(self, jobs, until_cancelled=False, each_tick=None):
+        """Poll until every job's outcome is known, or the run is cancelled when until_cancelled.
+
+        A recorded signal is observed on every pass, including the last, so it is
+        never left unpublished because no job remained to wait for.
+        """
+        while True:
+            cancelled = self.check()
+            pending = [job for job in jobs if not self.poll(job)]
+            if each_tick is not None:
+                each_tick()
+            if not pending:
+                return True
+            if cancelled is not None and until_cancelled:
+                return False
+            handles = [job.exit_handle for job in pending if job.exit_handle is not None]
+            self.triggers.wait(handles, min(job.settings["tick"] for job in pending))
+
+    def proved(self):
+        return not self.failures and all(job.proved() for job in self.jobs)
 
 
 def main(arguments=None, prepare=default_prepare):
@@ -908,4 +1212,6 @@ def main(arguments=None, prepare=default_prepare):
 
 
 if __name__ == "__main__":
+    # A prepare hook imports this module by name; it must get these classes, not a second copy.
+    sys.modules.setdefault("owned_command", sys.modules[__name__])
     sys.exit(main())
