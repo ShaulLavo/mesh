@@ -101,14 +101,7 @@ func acceptConnections(listener net.Listener, f *fixture, host string, group *sy
 		if err != nil {
 			return
 		}
-		group.Go(func() {
-			defer stream.Close() //nolint:errcheck // the fixture controller joins every connection
-			_ = stream.SetDeadline(time.Now().Add(10 * time.Second))
-			conn, err := transport.NewStreamConn(stream)
-			if err == nil {
-				_ = f.serve(conn, host, false)
-			}
-		})
+		group.Go(func() { serveFixtureStream(stream, f, host) })
 	}
 }
 
@@ -227,13 +220,27 @@ func (f *fixture) startHosts(root, client string) (fixtureHosts, error) {
 			return hosts, fmt.Errorf("create fixture host: %w", err)
 		}
 		auth := &transport.Authentication{Key: key, Authorize: func(id string) bool { return id == client }}
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: auth}, func(ctx context.Context, conn transport.Conn) error {
-				return f.serve(conn, host.ID, name == wrongHost)
-			})
-		}))
+		server := httptest.NewServer(f.hostHandler(auth, host.ID, name == wrongHost))
 		hosts.servers = append(hosts.servers, server)
 		hosts.records = append(hosts.records, cli.HostRecord{ID: host.ID, MeshIdentity: host.ID, Endpoint: "ws" + server.URL[4:] + "/control/ws"})
 	}
 	return hosts, nil
+}
+
+func serveFixtureStream(stream net.Conn, f *fixture, host string) {
+	defer stream.Close() //nolint:errcheck // the fixture controller joins every connection
+	_ = stream.SetDeadline(time.Now().Add(10 * time.Second))
+	conn, err := transport.NewStreamConn(stream)
+	if err != nil {
+		return
+	}
+	_ = f.serve(conn, host, false)
+}
+
+func (f *fixture) hostHandler(auth *transport.Authentication, host string, wrong bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: auth}, func(ctx context.Context, conn transport.Conn) error {
+			return f.serve(conn, host, wrong)
+		})
+	})
 }
