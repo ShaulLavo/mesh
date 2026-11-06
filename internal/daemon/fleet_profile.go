@@ -237,28 +237,35 @@ func (c *fleetProfileController) pruneRetries(pending map[string]bool, digest st
 	}
 }
 func fleetDeliveryOutcome(doc hostprofile.FleetDocument, result hostprofile.PutResult, err error, trusted func(string) bool) hostprofile.Outcome {
-	if err == nil {
-		err = result.Validate(doc)
+	if err != nil {
+		return fleetTransportFailure(err)
 	}
-	if err == nil && result.Current != nil && (trusted == nil || !trusted(result.Current.Author)) {
-		err = errors.New("returned fleet document author is not a current administrator")
+	if err := result.Validate(doc); err != nil {
+		return fleetFailedOutcome(hostprofile.DeliveryRejected, err)
 	}
-	if err == nil {
-		return hostprofile.Outcome{Result: &result}
+	if result.Current != nil && (trusted == nil || !trusted(result.Current.Author)) {
+		return fleetFailedOutcome(hostprofile.DeliveryRejected, errors.New("returned fleet document author is not a current administrator"))
 	}
+	return hostprofile.Outcome{Result: &result}
+}
+func fleetTransportFailure(err error) hostprofile.Outcome {
 	code := hostprofile.DeliveryUnreachable
 	var remote *update.RemoteError
+	var syntax *json.SyntaxError
+	var shape *json.UnmarshalTypeError
+	var invalid *hostprofile.ValidationError
 	if errors.Is(err, transport.ErrAuthentication) {
 		code = hostprofile.DeliveryAuthenticationFailed
 	}
-	if errors.As(err, &remote) {
+	if errors.As(err, &remote) || errors.As(err, &syntax) || errors.As(err, &shape) || errors.As(err, &invalid) {
 		code = hostprofile.DeliveryRejected
 	}
-	if result.Outcome != "" && !errors.Is(err, transport.ErrAuthentication) {
-		code = hostprofile.DeliveryRejected
-	}
+	return fleetFailedOutcome(code, err)
+}
+func fleetFailedOutcome(code hostprofile.DeliveryCode, err error) hostprofile.Outcome {
 	return hostprofile.Outcome{Error: &hostprofile.DeliveryError{Code: code, Message: err.Error(), Retryable: true}}
 }
+
 func fleetMembershipPath(configDir string) string {
 	if configDir == "" {
 		return ""
