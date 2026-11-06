@@ -111,8 +111,12 @@ func listRemoteHost(ctx context.Context, host HostRecord, dial HostDialer, budge
 	return listRemoteDeclaredHost(ctx, &host, dial, budget)
 }
 
+// newHostSetupContext derives the authenticated setup budget. A test replaces
+// it to schedule the configured budget's expiry after real verification.
+var newHostSetupContext = context.WithTimeout
+
 func listRemoteDeclaredHost(ctx context.Context, host *HostRecord, dial HostDialer, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
-	setupCtx, cancelSetup := context.WithTimeout(ctx, budget.Setup)
+	setupCtx, cancelSetup := newHostSetupContext(ctx, budget.Setup)
 	conn, info, err := openVerifiedHostInfo(setupCtx, *host, dial)
 	setupErr := setupCtx.Err()
 	cancelSetup()
