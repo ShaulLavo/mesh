@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
+	"github.com/shaul/mesh/internal/agentapi"
 	meshdaemon "github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/privacy"
@@ -250,6 +251,7 @@ type Dependencies struct {
 	ReconcilePrivateNames  PrivateNamesFunc
 	DialHost               HostDialer
 	DialControl            HostDialer
+	DialPassive            HostDialer
 
 	Containment ContainmentFunc
 	OpenURL     func(context.Context, string) error
@@ -260,6 +262,7 @@ type Dependencies struct {
 }
 
 type application struct {
+	agent                 *agentInvocation
 	privacy               *privacy.Mask
 	dependencies          Dependencies
 	updateNoticeScheduled bool
@@ -302,15 +305,19 @@ func NewCommand(dependencies Dependencies) *Command {
 		dependencies.Stderr = os.Stderr
 	}
 
-	app := &application{dependencies: dependencies}
+	if dependencies.DialPassive == nil {
+		dependencies.DialPassive = dialAgentHost
+	}
+	app := &application{dependencies: dependencies, agent: &agentInvocation{}}
 	privacyEnabled := privacy.EnabledFromEnv()
 
 	var (
-		resume    bool
-		detachKey string
-		raw       bool
-		window    bool
-		take      bool
+		resume       bool
+		detachKey    string
+		raw          bool
+		window       bool
+		take         bool
+		explicitHost string
 	)
 	root := &cobra.Command{
 		Use:   "mesh [host|session] [-- command...]",
@@ -339,6 +346,9 @@ func NewCommand(dependencies Dependencies) *Command {
 		SilenceErrors: true,
 		Args:          cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("host") {
+				return app.runExplicitHost(cmd, explicitHost, args, resume, detachKey, raw, window || take)
+			}
 			if window {
 				if len(args) != 0 || resume {
 					return errors.New("--window cannot be combined with a host, session, command, or --resume")
@@ -355,12 +365,16 @@ func NewCommand(dependencies Dependencies) *Command {
 	root.SetOut(dependencies.Stdout)
 	root.SetErr(dependencies.Stderr)
 	root.Flags().BoolVarP(&resume, "resume", "r", false, "resume the newest active session on the host, or wake a hibernated one when none is live")
+	root.Flags().StringVar(&explicitHost, "host", "", "machine name or exact host ID; put its command after --")
 	root.Flags().StringVar(&detachKey, "detach-key", "", "key that detaches, such as ctrl+] or none")
 	root.Flags().BoolVar(&raw, "raw", false, "pass every input byte through without a detach key")
 	root.Flags().BoolVar(&window, "window", false, "open a terminal window with a local persistent session")
 	root.Flags().BoolVar(&take, "take", false, "resume the newest detached session without a prompt; requires --window")
 	root.PersistentFlags().BoolVar(&privacyEnabled, "privacy", privacyEnabled, "mask personal data for recording and screen sharing (MESH_PRIVACY)")
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		if app.agent.operation != "" && privacyEnabled {
+			return agentapi.Usage(app.agent.operation, "Privacy mode hides machine data. Run agent commands without it.")
+		}
 		if privacyEnabled {
 			app.privacy = privacy.New()
 		} else {
@@ -389,7 +403,35 @@ func NewCommand(dependencies Dependencies) *Command {
 	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), deviceCommand(), versionCommand())...)
 	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand())
 	protectPrivacyErrors(root, &privacyEnabled)
-	return identityArgumentCommand(root)
+	protectAgentFlagErrors(root, app.agent)
+	return identityArgumentCommand(root, app.agent)
+}
+
+func (a *application) runExplicitHost(cmd *cobra.Command, value string, args []string, resume bool, detachKey string, raw, window bool) error {
+	if window {
+		return agentapi.Usage("", "--host cannot be combined with --window or --take")
+	}
+	if value == "" {
+		return agentapi.Usage("", "--host needs a machine name or exact host ID")
+	}
+	if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
+		return agentapi.Usage("", "put the command after --")
+	}
+	if resume && len(args) > 0 {
+		return agentapi.Usage("", "--resume cannot be combined with a command")
+	}
+	hosts, err := LoadHosts()
+	if err != nil {
+		return err
+	}
+	target, err := resolveArgumentWithRefresh(cmd.Context(), value, hosts, a.dependencies.DialControl)
+	if err != nil {
+		return err
+	}
+	if target.Host == nil {
+		return agentapi.Usage("", "--host needs a machine name or exact host ID, not a session ID")
+	}
+	return a.runHost(cmd, *target.Host, resume, args, detachKey, raw)
 }
 
 type statusError struct{ code int }

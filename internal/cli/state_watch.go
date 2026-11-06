@@ -151,7 +151,7 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 		return w.poll(ctx, host, info, request, view, publish)
 	}
 	if response.Type == protocol.TypeError {
-		return daemonResponseError("state watch", response.Message)
+		return daemonResponseError("state watch", response.Message, response.ErrorCode)
 	}
 	if response.Type != protocol.TypeStateSnapshot {
 		return errors.New("state watch requires an initial snapshot")

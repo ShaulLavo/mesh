@@ -377,7 +377,7 @@ func forgetLocalSession(parent context.Context, current Session) error {
 		if response.Type == protocol.TypeOK && response.SessionID == current.ID {
 			return nil
 		}
-		return daemonResponseError("forget "+current.ID, response.Message)
+		return daemonResponseError("forget "+current.ID, response.Message, response.ErrorCode)
 	}
 	if !errors.Is(err, ErrDaemonUnavailable) {
 		return err

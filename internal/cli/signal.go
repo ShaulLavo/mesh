@@ -65,7 +65,7 @@ func controlAndWait(s Session, msg protocol.Control) (protocol.Control, error) {
 	case protocol.TypeOK, protocol.TypeLogged:
 		return response, nil
 	case protocol.TypeError:
-		return protocol.Control{}, daemonResponseError(msg.Type+" "+s.ID, response.Message)
+		return protocol.Control{}, daemonResponseError(msg.Type+" "+s.ID, response.Message, response.ErrorCode)
 	default:
 		return protocol.Control{}, fmt.Errorf("%s %s: unexpected completion", msg.Type, s.ID)
 	}

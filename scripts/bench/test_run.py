@@ -1,4 +1,6 @@
+import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -7,12 +9,32 @@ import struct
 import tempfile
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 spec = importlib.util.spec_from_file_location("bench", Path(__file__).with_name("run.py"))
 bench = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench)
+
+
+class FragmentedConnection:
+    def __init__(self, wire, fragments):
+        self.input = io.BytesIO(wire)
+        self.fragments = fragments
+        self.index = 0
+        self.closed = False
+
+    def recv(self, size):
+        limit = self.fragments[self.index % len(self.fragments)]
+        self.index += 1
+        return self.input.read(min(size, limit))
+
+    def sendall(self, _data):
+        pass
+
+    def close(self):
+        self.closed = True
 
 
 class HarnessTests(unittest.TestCase):
@@ -74,26 +96,83 @@ class HarnessTests(unittest.TestCase):
                 bench.timed_command(Path(os.sys.executable), ["-c", "raise SystemExit(2)"],
                                     dict(os.environ), root)
 
+    def throughput_result(self, size, frames, fragments=(1, 3, 5, 19)):
+        wire = b"".join(struct.pack(">BI", kind, len(payload)) + payload for kind, payload in frames)
+        connection = FragmentedConnection(wire, fragments)
+        samples = [{"ticks": 40, "start_ticks": 7}, {"ticks": 45, "start_ticks": 7}]
+        try:
+            with patch.object(bench, "measure_attach", return_value=(connection, {})), \
+                    patch.object(bench, "own_worker", return_value=123), \
+                    patch.object(bench, "proc_sample", side_effect=samples):
+                return bench.throughput(Path("unused"), "7K3D", size)
+        finally:
+            self.assertTrue(connection.closed)
+
+    def terminal_frame(self, sequence, data, sid=b"7K3D\0\0\0\0"):
+        return 2, sid + struct.pack(">Q", sequence) + data
+
+    def test_throughput_rejects_identical_length_corruption(self):
+        data = bytearray(bench.workload.block(32))
+        data[20] ^= 1
+        frames = [self.terminal_frame(32, data + b"\r\nBENCH_DONE\r\n")]
+        with self.assertRaisesRegex(RuntimeError, "content"):
+            self.throughput_result(32, frames)
+
+    def test_throughput_checks_fragmented_arbitrary_payloads(self):
+        for size in (1, 73, (32 << 10) - 1, 32 << 10, (32 << 10) + 1, 70003):
+            self.check_throughput_payload(size)
+
+    def check_throughput_payload(self, size):
+        blocks = [bench.workload.block(min(32 << 10, size - offset))
+                  for offset in range(0, size, 32 << 10)]
+        data = b"".join(blocks) + b"\r\nBENCH_DONE\r\n"
+        # Frame boundaries split both ANSI sequences and the completion marker.
+        frames = [self.terminal_frame(912 + offset, data[offset:offset + 11])
+                  for offset in range(0, len(data), 11)]
+        result = self.throughput_result(size, frames)
+        self.assertEqual(result["received_bytes"], len(data))
+        self.assertEqual(result["payload_sha256"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(result["worker_cpu"]["delta_ticks"], 5)
+        self.assertEqual(result["worker_cpu"]["seconds"], 5 / os.sysconf("SC_CLK_TCK"))
+
     def test_throughput_checks_sequence_and_exact_bytes(self):
-        from unittest.mock import patch
-        left, right = socket.socketpair()
-        with left, right:
-            def attached(_state, _sid):
-                data = b"x" * 32 + b"\r\nBENCH_DONE\r\n"
-                frame = b"7K3D\0\0\0\0" + struct.pack(">Q", 32) + data
-                bench.write_frame(right, 2, frame)
-                return left, {}
-            with patch.object(bench, "measure_attach", attached):
-                result = bench.throughput(Path("unused"), "7K3D", 32)
-                self.assertEqual(result["received_bytes"], 46)
-        left, right = socket.socketpair()
-        with left, right:
-            def dropped(_state, _sid):
-                for sequence, data in [(0, b"x"), (2, b"\r\nBENCH_DONE\r\n")]:
-                    bench.write_frame(right, 2, b"7K3D\0\0\0\0" + struct.pack(">Q", sequence) + data)
-                return left, {}
-            with patch.object(bench, "measure_attach", dropped), self.assertRaisesRegex(RuntimeError, "dropped"):
-                bench.throughput(Path("unused"), "7K3D", 1)
+        marker = b"\r\nBENCH_DONE\r\n"
+        cases = [
+            ("dropped", [self.terminal_frame(0, b"x"), self.terminal_frame(2, marker)]),
+            ("byte mismatch", [self.terminal_frame(0, b"xx" + marker)]),
+            ("before completion", [(1, b'{}')]),
+            ("invalid terminal frame", [(2, b"short")]),
+            ("invalid terminal frame", [self.terminal_frame(0, b"x" + marker, b"OTHER\0\0\0")]),
+            ("content", [self.terminal_frame(0, marker + b"x")]),
+        ]
+        for message, frames in cases:
+            self.check_throughput_failure(message, frames)
+
+    def check_throughput_failure(self, message, frames):
+        with self.assertRaisesRegex(RuntimeError, message):
+            self.throughput_result(1, frames)
+
+    def test_throughput_rejects_missing_marker(self):
+        with self.assertRaises(EOFError):
+            self.throughput_result(1, [self.terminal_frame(0, b"x")])
+
+    def test_cpu_delta_preserves_zero_and_rejects_identity_or_counter_changes(self):
+        before = {"ticks": 42, "start_ticks": 7}
+        self.assertEqual(bench.cpu_delta(before, before)["delta_ticks"], 0)
+        with self.assertRaisesRegex(RuntimeError, "identity"):
+            bench.cpu_delta(before, {"ticks": 45, "start_ticks": 8})
+        with self.assertRaisesRegex(RuntimeError, "backwards"):
+            bench.cpu_delta(before, {"ticks": 41, "start_ticks": 7})
+
+    def test_cpu_delta_observes_real_process_work(self):
+        before = bench.proc_sample(os.getpid())
+        # CPU, not a wall-clock delay. Large enough to cross a /proc tick.
+        value = 0
+        for number in range(1000000):
+            value ^= number * number
+        self.assertIsInstance(value, int)
+        observed = bench.cpu_delta(before, bench.proc_sample(os.getpid()))
+        self.assertGreater(observed["delta_ticks"], 0)
 
     def test_wal_counts_commits_frames_and_resets(self):
         with tempfile.TemporaryDirectory() as root:

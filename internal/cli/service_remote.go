@@ -105,6 +105,10 @@ func listRemoteServices(ctx context.Context, host HostRecord, dial HostDialer) (
 	if err != nil {
 		return remoteServiceSnapshot{}, err
 	}
+	return decodeRemoteServices(host, response, info)
+}
+
+func decodeRemoteServices(host HostRecord, response protocol.Control, info protocol.HostInfo) (remoteServiceSnapshot, error) {
 	if response.Type == protocol.TypeError {
 		return remoteServiceSnapshot{}, remoteServiceResponseError(host, "service list", response)
 	}
@@ -222,9 +226,9 @@ func remoteServiceResponseError(host HostRecord, operation string, response prot
 	base := fmt.Sprintf("host %s rejected %s", HostLabel(host), operation)
 
 	if detail == "" {
-		return errors.New(base)
+		return typedControlError(response.ErrorCode, operation, detail, base)
 	}
-	return fmt.Errorf("%s: %s", base, detail)
+	return typedControlError(response.ErrorCode, operation, detail, fmt.Sprintf("%s: %s", base, detail))
 }
 
 func safeRemoteText(value string) string {

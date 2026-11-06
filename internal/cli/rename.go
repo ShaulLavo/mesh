@@ -44,7 +44,7 @@ func (a *application) renameCommand() *cobra.Command {
 
 // RenameHost pins the owner and uses its current revision on the same authenticated connection.
 func RenameHost(ctx context.Context, host HostRecord, value string, dial HostDialer) (machinename.Claim, error) {
-	name, err := machinename.Normalize(value)
+	name, err := machinename.NormalizeNew(value)
 	if err != nil {
 		return machinename.Claim{}, fmt.Errorf("normalize machine name: %w", err)
 	}

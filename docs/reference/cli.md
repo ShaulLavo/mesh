@@ -120,6 +120,7 @@ FLAGS
 
   --detach-key                                          Key that detaches, such as ctrl+] or none
   -h --help                                             Help for mesh
+  --host                                                Machine name or exact host ID; put its command after --
   --leave-key                                           Key that leaves all nested sessions, or none (ctrl+^)
   --privacy                                             Mask personal data for recording and screen sharing (MESH_PRIVACY)
   --raw                                                 Pass every input byte through without a detach key
@@ -1025,6 +1026,7 @@ USAGE
 FLAGS
 
   -h --help    Help for ls
+  --json       Write one agent result with live and cached services
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
   --timeout    Hard deadline for live host queries (2s)

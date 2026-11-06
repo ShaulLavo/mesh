@@ -102,7 +102,7 @@ func copyRequest(ctx context.Context, conn transport.Conn, request transfer.Requ
 		return transfer.Result{}, err
 	}
 	if response.Type == protocol.TypeError {
-		return transfer.Result{}, daemonResponseError("copy", response.Message)
+		return transfer.Result{}, daemonResponseError("copy", response.Message, response.ErrorCode)
 	}
 	if response.Type != protocol.TypeCopyResult {
 		return transfer.Result{}, errors.New("host returned an unexpected copy response")
