@@ -332,8 +332,11 @@ type snapshotPublisher struct {
 	publishes int
 	fileSyncs int
 	dirSyncs  int
+	lockSyncs int
 	failFile  bool
 	failDir   bool
+	failReset bool
+	failLock  bool
 }
 
 func newSnapshotPublisher(t *testing.T) *snapshotPublisher {
@@ -351,9 +354,38 @@ func newSnapshotPublisher(t *testing.T) *snapshotPublisher {
 	return p
 }
 
-func (p *snapshotPublisher) publish(dir *os.File, contents []byte) error {
+func (p *snapshotPublisher) publish(dir, lock *os.File, contents []byte) error {
+	if err := invalidateAcknowledgement(snapshotPublicationLock{File: lock, publisher: p}); err != nil {
+		return err
+	}
 	p.publishes++
 	return publishBookWithSync(dir, contents, p.syncFile)
+}
+
+type snapshotPublicationLock struct {
+	*os.File
+	publisher *snapshotPublisher
+}
+
+func (lock snapshotPublicationLock) Truncate(size int64) error {
+	if lock.publisher.failReset {
+		return unix.EIO
+	}
+	if err := lock.File.Truncate(size); err != nil {
+		return fmt.Errorf("truncate fixture acknowledgement: %w", err)
+	}
+	return nil
+}
+
+func (lock snapshotPublicationLock) Sync() error {
+	lock.publisher.lockSyncs++
+	if lock.publisher.failLock {
+		return unix.EIO
+	}
+	if err := lock.File.Sync(); err != nil {
+		return fmt.Errorf("sync fixture acknowledgement: %w", err)
+	}
+	return nil
 }
 
 func (p *snapshotPublisher) syncFile(file *os.File) error {
@@ -382,8 +414,8 @@ func (p *snapshotPublisher) replace(ctx context.Context, hosts []protocol.FleetH
 
 func (p *snapshotPublisher) requireCounts(t *testing.T, publishes, fileSyncs, dirSyncs int) {
 	t.Helper()
-	if p.publishes != publishes || p.fileSyncs != fileSyncs || p.dirSyncs != dirSyncs {
-		t.Fatalf("publication/file sync/directory sync counts = %d/%d/%d, want %d/%d/%d", p.publishes, p.fileSyncs, p.dirSyncs, publishes, fileSyncs, dirSyncs)
+	if p.publishes != publishes || p.fileSyncs != fileSyncs || p.dirSyncs != dirSyncs || p.lockSyncs != publishes {
+		t.Fatalf("publication/file sync/directory sync/lock sync counts = %d/%d/%d/%d, want %d/%d/%d/%d", p.publishes, p.fileSyncs, p.dirSyncs, p.lockSyncs, publishes, fileSyncs, dirSyncs, publishes)
 	}
 }
 
@@ -405,7 +437,7 @@ func TestSnapshotPublicationCounts(t *testing.T) {
 	}
 	p.requireCounts(t, 21, 21, 21)
 	requireHosts(t, p.dir, hosts...)
-	t.Logf("20 repeated and 20 changed pulls: 21 publications, 21 file syncs, 21 directory syncs; wall time %s", time.Since(started))
+	t.Logf("20 repeated and 20 changed pulls: 21 publications, 21 file syncs, 21 directory syncs, 21 lock syncs; wall time %s", time.Since(started))
 }
 
 func TestSnapshotPublicationFailureRetries(t *testing.T) {
@@ -443,6 +475,51 @@ func TestSnapshotAcknowledgementCannotSurviveFailedStateCycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	durable.requireCounts(t, 1, 1, 1)
+}
+
+func TestSnapshotInvalidationErrorsAbortBeforePublication(t *testing.T) {
+	for _, syncFailure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sync-failure-%t", syncFailure), func(t *testing.T) {
+			testSnapshotInvalidationFailure(t, syncFailure)
+		})
+	}
+}
+
+func testSnapshotInvalidationFailure(t *testing.T, syncFailure bool) {
+	t.Helper()
+	p := newSnapshotPublisher(t)
+	a, b := []protocol.FleetHost{testHost(1)}, []protocol.FleetHost{testHost(2)}
+	if err := p.replace(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	before := fleetBookInfo(t, p.dir)
+	p.failReset, p.failLock = !syncFailure, syncFailure
+	for range 2 {
+		if err := p.replace(t.Context(), b); !errors.Is(err, unix.EIO) {
+			t.Fatalf("invalidation failure = %v, want EIO", err)
+		}
+	}
+	requireHosts(t, p.dir, a...)
+	if !os.SameFile(before, fleetBookInfo(t, p.dir)) {
+		t.Fatal("invalidation error allowed a rename")
+	}
+	wantLockSyncs := 1
+	if syncFailure {
+		wantLockSyncs = 3
+	}
+	if p.publishes != 1 || p.fileSyncs != 1 || p.dirSyncs != 1 || p.lockSyncs != wantLockSyncs {
+		t.Fatalf("invalidation error reached publication: %#v", p)
+	}
+	retry := &snapshotPublisher{dir: p.dir, source: p.source}
+	if err := retry.replace(t.Context(), b); err != nil {
+		t.Fatal(err)
+	}
+	retry.requireCounts(t, 1, 1, 1)
+	if err := retry.replace(t.Context(), b); err != nil {
+		t.Fatal(err)
+	}
+	retry.requireCounts(t, 1, 1, 1)
+	requireHosts(t, p.dir, b...)
 }
 
 func testSnapshotPublicationFailure(t *testing.T, afterRename bool) {
@@ -646,7 +723,7 @@ func testFailedAcknowledgementWrite(t *testing.T, failure error) {
 	if err := acquireLock(t.Context(), lock); err != nil {
 		t.Fatal(err)
 	}
-	if err := publishBook(dir, contents); err != nil {
+	if err := publishBook(dir, lock, contents); err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(contents)

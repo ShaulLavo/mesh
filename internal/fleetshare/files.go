@@ -39,7 +39,7 @@ func updateState(ctx context.Context, configDir string, operation func(*book) er
 	return updateStateWithPublisher(ctx, configDir, operation, publishBook)
 }
 
-func updateStateWithPublisher(ctx context.Context, configDir string, operation func(*book) error, publish func(*os.File, []byte) error) error {
+func updateStateWithPublisher(ctx context.Context, configDir string, operation func(*book) error, publish func(*os.File, *os.File, []byte) error) error {
 	dir, err := openDirectory(configDir, true)
 	if err != nil || dir == nil {
 		return err
@@ -57,7 +57,7 @@ func updateStateWithPublisher(ctx context.Context, configDir string, operation f
 	return updateLockedState(dir, lock, operation, publish)
 }
 
-func updateLockedState(dir, lock *os.File, operation func(*book) error, publish func(*os.File, []byte) error) error {
+func updateLockedState(dir, lock *os.File, operation func(*book) error, publish func(*os.File, *os.File, []byte) error) error {
 	state, err := readBook(dir)
 	if err != nil {
 		return err
@@ -79,7 +79,7 @@ func updateLockedState(dir, lock *os.File, operation func(*book) error, publish 
 	return persistBook(dir, lock, before, contents, publish)
 }
 
-func persistBook(dir, lock *os.File, before, contents []byte, publish func(*os.File, []byte) error) error {
+func persistBook(dir, lock *os.File, before, contents []byte, publish func(*os.File, *os.File, []byte) error) error {
 	digest := sha256.Sum256(contents)
 	if bytes.Equal(before, contents) {
 		acknowledged, err := bookAcknowledged(lock, digest[:])
@@ -87,7 +87,7 @@ func persistBook(dir, lock *os.File, before, contents []byte, publish func(*os.F
 			return err
 		}
 	}
-	if err := publish(dir, contents); err != nil {
+	if err := publish(dir, lock, contents); err != nil {
 		return err
 	}
 	return acknowledgeBook(lock, digest[:])
@@ -105,6 +105,19 @@ func bookAcknowledged(lock *os.File, digest []byte) (bool, error) {
 type acknowledgementWriter interface {
 	Truncate(int64) error
 	WriteAt([]byte, int64) (int, error)
+	Sync() error
+}
+
+func invalidateAcknowledgement(lock acknowledgementWriter) error {
+	// Invalidation must survive a crash before any rename can reuse a digest
+	// from an earlier publication, including failed A/B/A state cycles.
+	if err := lock.Truncate(0); err != nil {
+		return fmt.Errorf("fleet: invalidate publication acknowledgement: %w", err)
+	}
+	if err := lock.Sync(); err != nil {
+		return fmt.Errorf("fleet: sync publication invalidation: %w", err)
+	}
+	return nil
 }
 
 func acknowledgeBook(lock acknowledgementWriter, digest []byte) error {
@@ -297,7 +310,10 @@ func encodeBook(state book) ([]byte, error) {
 	return contents, nil
 }
 
-func publishBook(dir *os.File, contents []byte) error {
+func publishBook(dir, lock *os.File, contents []byte) error {
+	if err := invalidateAcknowledgement(lock); err != nil {
+		return err
+	}
 	return publishBookWithSync(dir, contents, (*os.File).Sync)
 }
 
