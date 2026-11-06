@@ -199,7 +199,7 @@ func (c *fleetProfileController) attempt(ctx context.Context, host update.Host, 
 	if ctx.Err() != nil {
 		return
 	}
-	outcome := fleetDeliveryOutcome(doc, result, err)
+	outcome := fleetDeliveryOutcome(doc, result, err, c.trusted)
 	settled, settleErr := c.store.Settle(ctx, doc.Digest(), host.ID, outcome, scope)
 	mu.Lock()
 	defer mu.Unlock()
@@ -236,23 +236,26 @@ func (c *fleetProfileController) pruneRetries(pending map[string]bool, digest st
 		}
 	}
 }
-func fleetDeliveryOutcome(doc hostprofile.FleetDocument, result hostprofile.PutResult, err error) hostprofile.Outcome {
+func fleetDeliveryOutcome(doc hostprofile.FleetDocument, result hostprofile.PutResult, err error, trusted func(string) bool) hostprofile.Outcome {
 	if err == nil {
 		err = result.Validate(doc)
+	}
+	if err == nil && result.Current != nil && (trusted == nil || !trusted(result.Current.Author)) {
+		err = errors.New("returned fleet document author is not a current administrator")
 	}
 	if err == nil {
 		return hostprofile.Outcome{Result: &result}
 	}
-	code := "host.unreachable"
+	code := hostprofile.DeliveryUnreachable
 	var remote *update.RemoteError
 	if errors.Is(err, transport.ErrAuthentication) {
-		code = "host.authentication_failed"
+		code = hostprofile.DeliveryAuthenticationFailed
 	}
 	if errors.As(err, &remote) {
-		code = "fleet.delivery_rejected"
+		code = hostprofile.DeliveryRejected
 	}
 	if result.Outcome != "" && !errors.Is(err, transport.ErrAuthentication) {
-		code = "fleet.delivery_rejected"
+		code = hostprofile.DeliveryRejected
 	}
 	return hostprofile.Outcome{Error: &hostprofile.DeliveryError{Code: code, Message: err.Error(), Retryable: true}}
 }

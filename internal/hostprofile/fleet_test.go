@@ -1,6 +1,7 @@
 package hostprofile
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -302,5 +303,194 @@ func TestFleetGiveUpOnlyAfterFailureAndExplicitRetry(t *testing.T) {
 	result, err = f.store.Settle(context.Background(), one.Digest(), f.id, failure, f.scope)
 	if err != nil || result.Outbox.Members[0].State != Pending {
 		t.Fatal(result, err)
+	}
+}
+
+func TestFleetIdenticalConcurrentCASPublishesOnce(t *testing.T) {
+	f := newFleetFixture(t)
+	doc := f.doc(t, 1, "same")
+	results := make(chan FleetWrite, 2)
+	errs := make(chan error, 2)
+	var joined sync.WaitGroup
+	for range 2 {
+		joined.Go(func() {
+			result, err := f.store.WriteLocal(t.Context(), 0, doc, f.scope)
+			results <- result
+			errs <- err
+		})
+	}
+	joined.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	changed := 0
+	for result := range results {
+		if result.Changed {
+			changed++
+		}
+	}
+	if changed != 1 {
+		t.Fatal(changed)
+	}
+}
+func TestFleetEveryMutationRepairsRetryBarriers(t *testing.T) {
+	for _, operation := range []string{"write", "receive", "reconcile", "requeue", "settle"} {
+		t.Run(operation, func(t *testing.T) { testFleetMutationRetryBarrier(t, operation) })
+	}
+}
+func testFleetMutationRetryBarrier(t *testing.T, operation string) {
+	f := newFleetFixture(t)
+	doc := f.doc(t, 1, "same")
+	mustFleetWrite(t, f, 0, doc)
+	barrier := f.store.syncDir
+	broken := true
+	f.store.syncDir = func(dir *os.File) error {
+		if broken && dir.Name() == "fleet" {
+			return syscall.EIO
+		}
+		return barrier(dir)
+	}
+	call := func() error {
+		switch operation {
+		case "write":
+			_, err := f.store.WriteLocal(t.Context(), 0, doc, f.scope)
+			return err
+		case "receive":
+			_, err := f.store.Receive(t.Context(), doc, "", f.scope)
+			return err
+		case "reconcile":
+			_, err := f.store.Reconcile(t.Context(), f.scope)
+			return err
+		case "requeue":
+			_, err := f.store.Requeue(t.Context(), f.scope)
+			return err
+		case "settle":
+			_, err := f.store.Settle(t.Context(), doc.Digest(), f.id, Outcome{Result: &PutResult{Outcome: Unchanged, Revision: 1, Digest: doc.Digest()}}, f.scope)
+			return err
+		default:
+			return errors.New("unknown test operation")
+		}
+	}
+	for range 2 {
+		if err := call(); !errors.Is(err, syscall.EIO) {
+			t.Fatalf("unchanged bypassed %s barrier: %v", operation, err)
+		}
+	}
+	broken = false
+	if err := call(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _, err := f.store.Read(f.scope.Trusted)
+	if err != nil || snapshot.Value.Revision != 1 {
+		t.Fatal(snapshot, err)
+	}
+}
+func TestFleetReceiveTableAndOutboxReconstruction(t *testing.T) {
+	f := newFleetFixture(t)
+	doc := f.doc(t, 2, "two")
+	result, err := f.store.Receive(t.Context(), doc, f.id, f.scope)
+	if err != nil || result.Outcome != Applied {
+		t.Fatal(result, err)
+	}
+	_, out, err := f.store.Read(f.scope.Trusted)
+	if err != nil || out.Members[0].State != Delivered {
+		t.Fatal(out, err)
+	}
+	for _, test := range []struct {
+		doc  FleetDocument
+		want Acceptance
+	}{
+		{doc, Unchanged}, {f.doc(t, 1, "old"), Older}, {f.doc(t, 2, "diverged"), Conflict},
+	} {
+		result, err := f.store.Receive(t.Context(), test.doc, "", f.scope)
+		if err != nil || result.Outcome != test.want {
+			t.Fatal(result, err)
+		}
+	}
+	originalAge := out.Members[0].QueuedAt
+	if err := os.Remove(filepath.Join(f.store.dir, "fleet", "outbox.json")); err != nil {
+		t.Fatal(err)
+	}
+	f.store.now = func() time.Time { return f.at.Add(time.Hour) }
+	repaired, err := f.store.Reconcile(t.Context(), f.scope)
+	if err != nil || repaired.Outbox.Members[0].State != Pending || !repaired.Outbox.Members[0].QueuedAt.After(originalAge) {
+		t.Fatal(repaired, err)
+	}
+	persistedAge := repaired.Outbox.Members[0].QueuedAt
+	f.store.now = func() time.Time { return f.at.Add(2 * time.Hour) }
+	repaired, err = f.store.Reconcile(t.Context(), f.scope)
+	if err != nil || !repaired.Outbox.Members[0].QueuedAt.Equal(persistedAge) {
+		t.Fatal(repaired, err)
+	}
+}
+func TestFleetFailureBeforeRenamePreservesAuthoritativeReplica(t *testing.T) {
+	f := newFleetFixture(t)
+	one := f.doc(t, 1, "one")
+	mustFleetWrite(t, f, 0, one)
+	f.store.rename = func(*os.File, string, string) error { return syscall.ENOSPC }
+	result, err := f.store.WriteLocal(t.Context(), 1, f.doc(t, 2, "two"), f.scope)
+	if !errors.Is(err, syscall.ENOSPC) || result.Publication != BeforeReplicaRename {
+		t.Fatal(result, err)
+	}
+	snapshot, err := f.store.ReadReplica(f.scope.Trusted)
+	if err != nil || snapshot.Value.Digest() != one.Digest() {
+		t.Fatal(snapshot, err)
+	}
+}
+func TestFleetCanceledStoreOperationDoesNotPublish(t *testing.T) {
+	f := newFleetFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := f.store.WriteLocal(ctx, 0, f.doc(t, 1, "one"), f.scope); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.store.dir, "fleet")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("canceled write created fleet", err)
+	}
+}
+
+func TestFleetRevokedCurrentStillSetsRevisionFloor(t *testing.T) {
+	f := newFleetFixture(t)
+	mustFleetWrite(t, f, 0, f.doc(t, 1, "revoked"))
+	replacement := newFleetFixture(t)
+	scope := f.scope
+	scope.Trusted = func(id string) bool { return id == replacement.id }
+	lower := replacement.doc(t, 1, "cannot replace revoked at same revision")
+	if _, err := f.store.Receive(t.Context(), lower, "", scope); err == nil {
+		t.Fatal("revoked author's revision floor was discarded")
+	}
+	higher := replacement.doc(t, 2, "trusted replacement")
+	result, err := f.store.Receive(t.Context(), higher, "", scope)
+	if err != nil || result.Outcome != Applied {
+		t.Fatal(result, err)
+	}
+}
+
+func TestFleetPutResultStrictCurrentDecoding(t *testing.T) {
+	f := newFleetFixture(t)
+	current := f.doc(t, 2, "two")
+	data, err := json.Marshal(PutResult{Outcome: Older, Revision: 2, Digest: current.Digest(), Current: &current})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result PutResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if err := result.Validate(f.doc(t, 1, "one")); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range [][]byte{
+		bytes.Replace(data, []byte(`"current":{`), []byte(`"current":{"unknown":true,`), 1),
+		bytes.Replace(data, []byte(`"current":{`), []byte(`"current":{"revision":8,`), 1),
+		bytes.Replace(data, []byte(`"outcome":"older"`), []byte(`"outcome":"older","Outcome":"applied"`), 1),
+	} {
+		if err := json.Unmarshal(bad, &result); err == nil {
+			t.Fatalf("accepted non-strict Current: %s", bad)
+		}
 	}
 }

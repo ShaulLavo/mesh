@@ -28,7 +28,7 @@ import (
 )
 
 func (a *application) profileCommand() *cobra.Command {
-	group := &cobra.Command{Use: "profile", Short: "Read and edit this machine's owner-written notes", RunE: func(_ *cobra.Command, _ []string) error {
+	group := &cobra.Command{Use: "profile", Short: "Read and edit owner-written host and fleet notes", RunE: func(_ *cobra.Command, _ []string) error {
 		return agentapi.Usage("profile.show", "Choose mesh profile show, set, edit or status.")
 	}}
 	group.Flags().Bool("json", false, "write one agent result")
@@ -48,7 +48,7 @@ func profileArgs(operation string) cobra.PositionalArgs {
 func (a *application) profileShowCommand() *cobra.Command {
 	var fleet bool
 	var asJSON bool
-	command := &cobra.Command{Use: "show", Short: "Read the local host profile without contacting the daemon", Args: profileArgs("profile.show"), RunE: func(cmd *cobra.Command, _ []string) error {
+	command := &cobra.Command{Use: "show", Short: "Read the local host or fleet profile without contacting peers", Args: profileArgs("profile.show"), RunE: func(cmd *cobra.Command, _ []string) error {
 		if fleet {
 			return a.showFleetProfile(cmd, asJSON)
 		}
@@ -167,7 +167,7 @@ func (a *application) profileSetCommand() *cobra.Command {
 	var file string
 	var expected uint64
 	var asJSON bool
-	command := &cobra.Command{Use: "set", Short: "Replace the local host profile at an expected revision", Args: profileArgs("profile.set"), RunE: func(cmd *cobra.Command, _ []string) error {
+	command := &cobra.Command{Use: "set", Short: "Replace host or fleet notes at an expected revision", Args: profileArgs("profile.set"), RunE: func(cmd *cobra.Command, _ []string) error {
 		if !asJSON || !cmd.Flags().Changed("file") || file == "" || !cmd.Flags().Changed("expected-revision") {
 			return agentapi.Usage("profile.set", "Use --file PATH|- --expected-revision N --json.")
 		}
@@ -468,7 +468,7 @@ func fleetDeliveries(members []hostprofile.Delivery) []agentapi.Delivery {
 	for _, member := range members {
 		delivery := agentapi.Delivery{HostID: member.HostID, State: string(member.State), QueuedAt: member.QueuedAt, SettledAt: member.SettledAt, MemberRevision: member.MemberRevision, MemberDigest: member.MemberDigest}
 		if member.LastError != nil {
-			delivery.LastError = &agentapi.DeliveryError{Code: agentapi.Code(member.LastError.Code), Message: agentapi.CleanMessage(member.LastError.Message), Retryable: member.LastError.Retryable}
+			delivery.LastError = &agentapi.DeliveryError{Code: fleetDeliveryCode(member.LastError.Code), Message: agentapi.CleanMessage(member.LastError.Message), Retryable: member.LastError.Retryable}
 		}
 		result = append(result, delivery)
 	}
@@ -544,4 +544,22 @@ func wrapProfileError(err error) error {
 		return fmt.Errorf("profile: %w", err)
 	}
 	return nil
+}
+
+func fleetDeliveryCode(code hostprofile.DeliveryCode) agentapi.Code {
+	switch code {
+	case hostprofile.DeliveryUnreachable:
+		return agentapi.HostUnreachable
+	case hostprofile.DeliveryAuthenticationFailed:
+		return agentapi.HostAuthenticationFailed
+	case hostprofile.DeliveryRejected:
+		return agentapi.FleetDeliveryRejected
+	case hostprofile.DeliverySignerUntrusted:
+		return agentapi.FleetSignerUntrusted
+	case hostprofile.DeliveryRevisionConflict:
+		return agentapi.FleetRevisionConflict
+	case hostprofile.DeliveryStale:
+		return agentapi.FleetStale
+	}
+	return agentapi.InternalError
 }

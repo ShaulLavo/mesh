@@ -72,10 +72,13 @@ func (s *FleetStore) Read(trusted func(string) bool) (Snapshot[FleetDocument], O
 	}
 	defer func() { _ = dir.Close() }()
 	out, err := readOutbox(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return snapshot, Outbox{Members: []Delivery{}}, nil
+	if err != nil {
+		return snapshot, Outbox{Members: []Delivery{}}, fmt.Errorf("read fleet delivery state: %w", err)
 	}
-	return snapshot, out, err
+	if snapshot.Value == nil || out.Digest != snapshot.Value.Digest() || out.Revision != snapshot.Value.Revision {
+		return snapshot, Outbox{Members: []Delivery{}}, errors.New("fleet outbox does not describe the visible replica; run mesh profile status --fleet --retry --json to reconcile")
+	}
+	return snapshot, out, nil
 }
 
 func (s *FleetStore) locked(ctx context.Context, run func(*os.File) (FleetWrite, error)) (FleetWrite, error) {
@@ -94,7 +97,7 @@ func (s *FleetStore) locked(ctx context.Context, run func(*os.File) (FleetWrite,
 		return result, err
 	}
 	defer func() { _ = dir.Close() }()
-	lock, err := acquireLock(ctx, dir)
+	lock, err := acquireFleetLock(ctx, dir)
 	if err != nil {
 		return result, err
 	}
@@ -390,4 +393,19 @@ func (s *FleetStore) requeue(dir *os.File, scope FleetScope) (FleetWrite, error)
 
 func (f *EditFile) ReadFleet() ([]byte, error) {
 	return readPrivate(f.dir, f.name, FleetLimits.Encoded)
+}
+
+func acquireFleetLock(ctx context.Context, dir *os.File) (*os.File, error) {
+	file, err := openPrivateFile(dir, ".lock", unix.O_RDWR|unix.O_CREAT|unix.O_EXCL)
+	if errors.Is(err, unix.EEXIST) {
+		file, err = openPrivateFile(dir, ".lock", unix.O_RDWR)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := waitLock(ctx, file); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
 }

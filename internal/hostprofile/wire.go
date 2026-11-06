@@ -11,6 +11,7 @@ import (
 )
 
 const ActionFleetPut = "fleet-profile.put"
+const fleetDigestField = "digest"
 
 type Acceptance string
 
@@ -105,4 +106,31 @@ func (r PutResult) validateCurrent(offered uint64) error {
 func validDigest(value string) bool {
 	data, err := hex.DecodeString(value)
 	return err == nil && len(data) == 32 && hex.EncodeToString(data) == value
+}
+
+// UnmarshalJSON keeps the complete signed Current document strict when
+// update.Client decodes a reply, before any fields can be discarded.
+func (r *PutResult) UnmarshalJSON(data []byte) error {
+	if err := strictObject(data, FleetLimits.Encoded+1024, []string{"outcome", fleetRevisionField, fleetDigestField, "current"}); err != nil {
+		return err
+	}
+	var value struct {
+		Outcome  Acceptance      `json:"outcome"`
+		Revision uint64          `json:"revision"`
+		Digest   string          `json:"digest"`
+		Current  json.RawMessage `json:"current"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("decode fleet put result: %w", err)
+	}
+	result := PutResult{Outcome: value.Outcome, Revision: value.Revision, Digest: value.Digest}
+	if len(value.Current) != 0 {
+		current, err := parseFleet(value.Current)
+		if err != nil {
+			return err
+		}
+		result.Current = &current
+	}
+	*r = result
+	return nil
 }

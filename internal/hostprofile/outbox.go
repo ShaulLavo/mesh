@@ -23,10 +23,21 @@ const (
 	Stale     DeliveryState = "stale"
 )
 
+type DeliveryCode string
+
+const (
+	DeliveryUnreachable          DeliveryCode = "host.unreachable"
+	DeliveryAuthenticationFailed DeliveryCode = "host.authentication_failed"
+	DeliveryRejected             DeliveryCode = "fleet.delivery_rejected"
+	DeliverySignerUntrusted      DeliveryCode = "fleet.signer_untrusted"
+	DeliveryRevisionConflict     DeliveryCode = "fleet.revision_conflict"
+	DeliveryStale                DeliveryCode = "fleet.stale"
+)
+
 type DeliveryError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
+	Code      DeliveryCode `json:"code"`
+	Message   string       `json:"message"`
+	Retryable bool         `json:"retryable"`
 }
 type Delivery struct {
 	HostID         string         `json:"hostId"`
@@ -77,7 +88,7 @@ func readOutbox(dir *os.File) (Outbox, error) {
 	if err != nil {
 		return Outbox{}, err
 	}
-	if err := strictObject(data, 256<<10, []string{"version", fleetRevisionField, "digest", "members"}); err != nil {
+	if err := strictObject(data, 256<<10, []string{"version", fleetRevisionField, fleetDigestField, "members"}); err != nil {
 		return Outbox{}, err
 	}
 	var out Outbox
@@ -108,7 +119,7 @@ func validateDelivery(d Delivery, previous string) error {
 	default:
 		return invalid("outbox", "unknown member state")
 	}
-	if d.LastError != nil && (d.LastError.Code == "" || len(d.LastError.Code) > 64 || validateText("delivery error", d.LastError.Message, 512, false) != nil) {
+	if d.LastError != nil && (!validDeliveryCode(d.LastError.Code) || validateText("delivery error", d.LastError.Message, 512, false) != nil) {
 		return invalid("outbox", "invalid delivery error")
 	}
 	return nil
@@ -222,9 +233,9 @@ func deliveryTransition(member Delivery, outcome Outcome, now time.Time) (Delive
 	case Conflict:
 		member.State, member.SettledAt = Diverged, &now
 		member.MemberRevision, member.MemberDigest = result.Revision, result.Digest
-		member.LastError = &DeliveryError{Code: "fleet.revision_conflict", Message: "The member holds a different fleet document at the same revision."}
+		member.LastError = &DeliveryError{Code: DeliveryRevisionConflict, Message: "The member holds a different fleet document at the same revision."}
 	case Untrusted:
-		member = failedDelivery(member, DeliveryError{Code: "fleet.signer_untrusted", Message: "The member does not trust the document author to publish fleet notes.", Retryable: true}, now)
+		member = failedDelivery(member, DeliveryError{Code: DeliverySignerUntrusted, Message: "The member does not trust the document author to publish fleet notes.", Retryable: true}, now)
 	case Older:
 		return member, errors.New("newer fleet Current must be adopted before member settlement")
 	default:
@@ -235,11 +246,19 @@ func deliveryTransition(member Delivery, outcome Outcome, now time.Time) (Delive
 func failedDelivery(member Delivery, problem DeliveryError, now time.Time) Delivery {
 	if !now.Before(member.QueuedAt.Add(FleetGiveUp)) {
 		member.State, member.SettledAt = Stale, &now
-		problem = DeliveryError{Code: "fleet.stale", Message: "Delivery failed after seven days. Run mesh profile status --fleet --retry --json to try again."}
+		problem = DeliveryError{Code: DeliveryStale, Message: "Delivery failed after seven days. Run mesh profile status --fleet --retry --json to try again."}
 	}
 	if member.LastError == nil || member.LastError.Code != problem.Code {
 		problem.Message = problemText(problem.Message)
 		member.LastError = &problem
 	}
 	return member
+}
+
+func validDeliveryCode(code DeliveryCode) bool {
+	switch code {
+	case DeliveryUnreachable, DeliveryAuthenticationFailed, DeliveryRejected, DeliverySignerUntrusted, DeliveryRevisionConflict, DeliveryStale:
+		return true
+	}
+	return false
 }
