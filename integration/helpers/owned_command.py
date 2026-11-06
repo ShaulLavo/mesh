@@ -695,6 +695,18 @@ class Owner:
         return self.wait_for(pid)
 
     def wait_for(self, pid):
+        # Only a wakeup on this child's exit: it is unreaped, so the handle is its own.
+        try:
+            handle = self.kernel.pidfd_open(pid)
+        except OwnershipFailure:
+            handle = None
+        try:
+            return self.await_status(pid, [] if handle is None else [handle])
+        finally:
+            if handle is not None:
+                self.kernel.close(handle)
+
+    def await_status(self, pid, wakeups):
         while True:
             drained = self.reaper.reap(self.clock() + self.settings["tick"])
             if pid in self.reaper.statuses:
@@ -703,7 +715,7 @@ class Owner:
                 raise OwnershipFailure(f"status of child {pid} was lost")
             self.interrupt_if_triggered()
             if drained != MORE:
-                self.triggers.wait([], self.settings["tick"])
+                self.triggers.wait(wakeups, self.settings["tick"])
 
     def interrupt_if_triggered(self):
         trigger = self.triggers.check()
@@ -918,6 +930,7 @@ class Job:
         self.directory = Path(directory)
         self.settings = settings
         self.process = None
+        self.exit_handle = None
         self.outcome = None
         self.final_seen = False
         # Startup gets the handshake allowance; observing the launcher's exit gets one more allowance.
@@ -928,6 +941,12 @@ class Job:
 
     def proved(self):
         return self.state() in ("joined", "declined")
+
+    def settle(self, outcome):
+        self.outcome = outcome
+        if self.exit_handle is not None:
+            os.close(self.exit_handle)
+            self.exit_handle = None
 
 
 class Controller:
@@ -967,15 +986,20 @@ class Controller:
             tracked.process = launch(directory, self.runner, **popen)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             return self.decline(tracked, f"launch failed: {error}", 1)
+        try:
+            # Only a wakeup: the launcher is this process's unreaped child, so the handle is its own.
+            tracked.exit_handle = os.pidfd_open(tracked.process.pid)
+        except OSError:
+            pass
         self.control.hold(f"after-launch-{name}")
         self.check()
         return tracked
 
     def decline(self, job, reason, status):
         if Record(job.directory).advance("declined", self.clock() + job.settings["allowance"], reason=reason, status=status):
-            job.outcome = {**Record(job.directory).read(), "returncode": status}
+            job.settle({**Record(job.directory).read(), "returncode": status})
         else:
-            job.outcome = {"state": "unknown", "reasons": [f"could not record that the job never launched: {reason}"]}
+            job.settle({"state": "unknown", "reasons": [f"could not record that the job never launched: {reason}"]})
         return job
 
     def check(self):
@@ -1000,7 +1024,7 @@ class Controller:
             return True
         state = observe(job.process, job.directory)
         if state is not None:
-            job.outcome = {**state, "returncode": job.process.returncode}
+            job.settle({**state, "returncode": job.process.returncode})
             return True
         now = self.clock()
         if not job.final_seen and Record(job.directory).read().get("state") in FINAL:
@@ -1013,8 +1037,8 @@ class Controller:
             request_cancel(job.directory / "cancel", signal.SIGTERM)
         except OSError as error:
             self.failures.append(f"cancel {job.name}: {error}")
-        job.outcome = {"state": "unknown", "returncode": None,
-                       "reasons": ["launcher exit was not observed before the controller's deadline"]}
+        job.settle({"state": "unknown", "returncode": None,
+                    "reasons": ["launcher exit was not observed before the controller's deadline"]})
         return True
 
     def wait(self, jobs, until_cancelled=False, each_tick=None):
@@ -1027,7 +1051,8 @@ class Controller:
                 return True
             if self.check() is not None and until_cancelled:
                 return False
-            self.triggers.wait([], min(job.settings["tick"] for job in pending))
+            handles = [job.exit_handle for job in pending if job.exit_handle is not None]
+            self.triggers.wait(handles, min(job.settings["tick"] for job in pending))
 
     def proved(self):
         return not self.failures and all(job.proved() for job in self.jobs)
