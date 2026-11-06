@@ -2,6 +2,8 @@ package worker
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -151,6 +153,7 @@ func checkpointObservationPump(t *testing.T, mode string) {
 	pty := newPipePTY()
 	w.pty, w.pumpDone = pty, make(chan struct{})
 	done := make(chan error, 1)
+	periodicStarted := false
 	t.Cleanup(func() {
 		block.Store(false)
 		close(release)
@@ -160,23 +163,24 @@ func checkpointObservationPump(t *testing.T, mode string) {
 			w.stopRecovery()
 			return
 		}
-		if err := <-done; err != nil {
-			t.Error(err)
-		}
+		joinCheckpointObservation(t, done, periodicStarted)
 		w.checkpointWriter.Close()
 	})
 	go w.pump()
 	if mode == "periodic" {
 		w.openRecovery()
+		abortCheckpointObservation(t, "before-initial")
 		checkpointOK(t, w.checkpoint())
 	}
 	block.Store(true)
 	if mode == "initial" {
 		w.startRecovery()
 	} else {
-		go func() { ack, _ := w.periodicCheckpoint(); done <- <-ack }()
+		periodicStarted = true
+		go collectPeriodicCheckpoint(w, done)
 	}
 	<-started
+	abortCheckpointObservation(t, "after-observation")
 	output := []byte("output during blocked checkpoint")
 	if _, err := pty.emit(output); err != nil {
 		t.Fatal(err)
@@ -230,7 +234,7 @@ func checkpointTestWorker(t *testing.T, observer func(int, int) processObservati
 	t.Helper()
 	screen := &countingScreen{Screen: terminalstate.NewScreen(120, 40)}
 	w := &Worker{
-		now:    func() time.Time { return time.Unix(1700000000, 0) },
+		now:    func() time.Time { return time.Unix(1700000000, 0).UTC() },
 		cfg:    Config{ID: "7K3D", HostID: "host-one", Dir: t.TempDir(), Cwd: "/launch", Command: []string{"/bin/bash"}},
 		cmd:    &exec.Cmd{Process: &os.Process{Pid: 4321}},
 		screen: screen, ring: session.NewRing(ringSize), observeProcess: observer,
@@ -352,13 +356,13 @@ func periodicRecipe() *agentresume.Recipe {
 		Version: agentresume.Version,
 		Launch: agentresume.Launch{Provider: agentresume.Codex, Executable: "/usr/bin/codex", ProviderVersion: "codex-cli 0.153.4",
 			Directory: "/project", DataRoot: "/agent-data", Options: []string{"--model", "test-model", "--sandbox", "read-only"}},
-		ConversationID: "conversation-one", InvocationToken: "invocation-one", RegisteredAt: time.Unix(1700000000, 0), Lifecycle: agentresume.Active,
+		ConversationID: "conversation-one", InvocationToken: "invocation-one", RegisteredAt: time.Unix(1700000000, 0).UTC(), Lifecycle: agentresume.Active,
 	}
 }
 
 func periodicReceipt() *agentresume.Receipt {
 	return &agentresume.Receipt{SourceSessionID: "8XYZ", Provider: agentresume.Codex, ConversationID: "conversation-one",
-		InvocationToken: "invocation-one", VerifiedAt: time.Unix(1700000000, 0)}
+		InvocationToken: "invocation-one", VerifiedAt: time.Unix(1700000000, 0).UTC()}
 }
 
 func TestPeriodicCheckpointPreparesEveryMetadataChange(t *testing.T) {
@@ -562,7 +566,7 @@ func TestExplicitCheckpointsAlwaysSubmitAndWait(t *testing.T) {
 
 func TestStopRecoveryFlushesLatestState(t *testing.T) {
 	screen := &countingScreen{Screen: terminalstate.NewScreen(120, 40), saved: make(chan struct{}, 1)}
-	w := &Worker{now: func() time.Time { return time.Unix(1700000000, 0) },
+	w := &Worker{now: func() time.Time { return time.Unix(1700000000, 0).UTC() },
 		cfg: Config{ID: "7K3D", HostID: "host-one", Dir: t.TempDir(), Cwd: "/launch", Command: []string{"/bin/sh"}}, screen: screen}
 	var stop sync.Once
 	w.startRecovery()
@@ -585,7 +589,7 @@ func TestStopRecoveryFlushesLatestState(t *testing.T) {
 
 func TestPeriodicCheckpointRacesWithOutputAndResize(t *testing.T) {
 	w, screen := periodicTestWorker(t, recovery.DirectoryShell, nil)
-	now := time.Unix(1700000000, 0)
+	now := time.Unix(1700000000, 0).UTC()
 	w.now = func() time.Time { return now }
 	start, done := make(chan struct{}), make(chan struct{})
 	t.Cleanup(func() { <-done })
@@ -720,7 +724,7 @@ func benchmarkForcedCheckpoint(b *testing.B, metadata, directory string) {
 
 func checkpointBenchmarkWorker(b *testing.B, metadata, directory string) (*Worker, *time.Time) {
 	b.Helper()
-	now := time.Unix(1700000000, 0)
+	now := time.Unix(1700000000, 0).UTC()
 	w := &Worker{
 		now:    func() time.Time { return now },
 		cfg:    Config{ID: "7K3D", HostID: "bench-host", Dir: b.TempDir(), Cwd: "/work", Command: []string{"/bin/sh"}},
@@ -754,4 +758,52 @@ func checkpointBenchmarkMetadata(record *recovery.Record, metadata string) {
 			record.Agent.Options = append(record.Agent.Options, "--model", strings.Repeat("c", 4089))
 		}
 	}
+}
+
+func abortCheckpointObservation(t *testing.T, phase string) {
+	t.Helper()
+	if os.Getenv("MESH_TEST_CHECKPOINT_ABORT") == phase {
+		t.Fatalf("injected checkpoint failure: %s", phase)
+	}
+}
+
+func TestCheckpointObservationCleanupOnFailure(t *testing.T) {
+	for _, phase := range []string{"before-initial", "after-observation"} {
+		t.Run(phase, func(t *testing.T) { checkpointObservationFailure(t, phase) })
+	}
+}
+
+func checkpointObservationFailure(t *testing.T, phase string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCheckpointObservationDoesNotBlockPTYPump$/^periodic$", "-test.timeout=5s") //nolint:gosec // re-exec this test binary with a fixed test selector and timeout
+	cmd.Env = append(os.Environ(), "MESH_TEST_CHECKPOINT_ABORT="+phase)
+	output, err := cmd.CombinedOutput()
+	var failed *exec.ExitError
+	if ctx.Err() != nil || !errors.As(err, &failed) || failed.ExitCode() != 1 {
+		t.Fatalf("expected ordinary failure with completed cleanup, got %v: %s", err, output)
+	}
+	if !bytes.Contains(output, []byte("injected checkpoint failure: "+phase)) || bytes.Contains(output, []byte("panic:")) {
+		t.Fatalf("failure control did not complete its intended assertion and cleanup: %s", output)
+	}
+}
+
+func joinCheckpointObservation(t *testing.T, done <-chan error, started bool) {
+	t.Helper()
+	if !started {
+		return
+	}
+	if err := <-done; err != nil {
+		t.Error(err)
+	}
+}
+
+func collectPeriodicCheckpoint(w *Worker, done chan<- error) {
+	ack, _ := w.periodicCheckpoint()
+	if ack == nil {
+		done <- nil
+		return
+	}
+	done <- <-ack
 }
