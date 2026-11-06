@@ -23,6 +23,7 @@ import (
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/tailnet"
+	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -47,6 +48,7 @@ type Config struct {
 	WakePeerIdentity            func(context.Context, string) (string, error)
 	StateDir                    string
 	ConfigDir                   string
+	FleetMembershipPath         string
 	TailnetPort                 uint16
 	SSHPort                     uint16
 	WebSocketPath               string
@@ -493,6 +495,16 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
+	membershipPath := cfg.FleetMembershipPath
+	if membershipPath == "" {
+		membershipPath = fleetMembershipPath(cfg.ConfigDir)
+	}
+	fleetProfile := newFleetProfileController(stateDir, membershipPath, meshHost.ID, update.Client{ID: meshHost.ID, Key: meshPrivateKey}, updates.authority.IsAdministrator, reporter.report)
+	updates.fleetProfile = fleetProfile
+	server.fleetProfile = fleetProfile
+	fleetProfileDone := make(chan struct{})
+	go func() { defer close(fleetProfileDone); fleetProfile.Run(daemonCtx) }()
+	defer func() { cancelDaemon(); <-fleetProfileDone }()
 	server.updates = updates
 	server.context = &agentContextController{configDir: cfg.ConfigDir, stateDir: stateDir, hostID: meshHost.ID, trusted: updates.authority.IsAdministrator}
 

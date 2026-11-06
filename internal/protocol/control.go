@@ -40,6 +40,7 @@ const (
 	TypeRemove             = "session.remove"
 	TypeLogged             = "session.logged"
 	TypeHostInfo           = "host.info"
+	TypeFleetProfileSync   = "fleet.profile.sync"
 	TypeHostContext        = "host.context"
 	TypeHostContextResult  = "host.context.result"
 	TypeHostRename         = "host.rename"

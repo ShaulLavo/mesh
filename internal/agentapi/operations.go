@@ -2,6 +2,7 @@ package agentapi
 
 import "strings"
 
+const fleetFlag = "--fleet"
 const jsonFlag = "--json"
 const timeoutFlag = "--timeout"
 const jsonFlagSummary = "write one agent result"
@@ -24,10 +25,10 @@ var Operations = []Operation{
 	{Name: "hosts.inspect", Command: "mesh inspect", Args: "HOST", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline for host queries"}, {Name: "--cached", Summary: "do not dial hosts"}}, Summary: "Read full machine notes and current access.", Example: "mesh inspect HOST_ID --json"},
 	{Name: "sessions.list", Command: "mesh session list"},
 	{Name: "sessions.inspect", Command: "mesh session inspect", Args: "SESSION_ID"},
-	{Name: "profile.show", Command: "mesh profile show", Implemented: true, Flags: []Flag{{Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Read this machine’s owner-written notes.", Example: "mesh profile show --json"},
-	{Name: "profile.set", Command: "mesh profile set", Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--file", Value: "PATH", Required: true, Summary: "editable JSON file, or - for stdin"}, {Name: "--expected-revision", Value: "N", Required: true, Summary: "revision before this write"}}, Summary: "Replace this machine’s notes at an expected revision.", Example: "mesh profile set --file PATH --expected-revision 0 --json"},
-	{Name: "profile.edit", Command: "mesh profile edit", Implemented: true, Mutates: true, Summary: "Edit this machine’s notes with VISUAL or EDITOR, for humans only.", Example: "mesh profile edit"},
-	{Name: "profile.status", Command: "mesh profile status"},
+	{Name: "profile.show", Command: "mesh profile show", Implemented: true, Flags: []Flag{{Name: fleetFlag, Summary: "read the local signed fleet replica"}, {Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Read this machine’s owner-written notes.", Example: "mesh profile show --json"},
+	{Name: "profile.set", Command: "mesh profile set", Implemented: true, Mutates: true, Flags: []Flag{{Name: fleetFlag, Summary: "publish signed notes to saved fleet members"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--file", Value: "PATH", Required: true, Summary: "editable JSON file, or - for stdin"}, {Name: "--expected-revision", Value: "N", Required: true, Summary: "revision before this write"}}, Summary: "Replace this machine’s notes at an expected revision.", Example: "mesh profile set --file PATH --expected-revision 0 --json"},
+	{Name: "profile.edit", Command: "mesh profile edit", Implemented: true, Mutates: true, Flags: []Flag{{Name: fleetFlag, Summary: "edit signed fleet notes"}}, Summary: "Edit this machine’s notes with VISUAL or EDITOR, for humans only.", Example: "mesh profile edit"},
+	{Name: "profile.status", Command: "mesh profile status", Implemented: true, Mutates: true, Flags: []Flag{{Name: fleetFlag, Required: true, Summary: "read fleet delivery state"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--retry", Summary: "reset pending and stale delivery age"}}, Summary: "Read local fleet delivery state without contacting members.", Example: "mesh profile status --fleet --json"},
 	{Name: "skill.show", Command: "mesh skill show"},
 	{Name: "skill.install", Command: "mesh skill install"},
 	{Name: "skill.update", Command: "mesh skill update"},
