@@ -108,7 +108,7 @@ func (w *Writer) save(pending *checkpointWrite, previous [sha256.Size]byte) [sha
 		waiter <- err
 	}
 	if err != nil {
-		return previous
+		return [sha256.Size]byte{}
 	}
 	return digest
 }
