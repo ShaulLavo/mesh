@@ -3,7 +3,6 @@ package serve
 import (
 	"errors"
 	"fmt"
-	"html/template"
 	"io/fs"
 	"net/http"
 	"net/http/httputil"
@@ -13,15 +12,6 @@ import (
 	"sort"
 	"strings"
 )
-
-var directoryTemplate = template.Must(template.New("directory").Parse(`<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>{{.Title}}</title></head>
-<body><h1>{{.Title}}</h1><ul>{{range .Entries}}
-<li><a href="{{.Href}}">{{.Name}}</a></li>{{end}}
-</ul></body>
-</html>
-`))
 
 type directoryPage struct {
 	Title   string
@@ -207,9 +197,7 @@ func serveFiles(w http.ResponseWriter, request *http.Request, root, prefix, rela
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	if err := directoryTemplate.Execute(w, page); err != nil {
-		return
-	}
+	renderDirectory(w, page)
 }
 
 func openForHTTP(w http.ResponseWriter, request *http.Request, root, relative string) (*os.File, fs.FileInfo, bool) {

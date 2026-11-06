@@ -183,10 +183,16 @@ func TestMissingDirectoryIsRegisteredAsUnhealthy(t *testing.T) {
 func TestFilesHandlerBuildsWorkingLinksAtRootAndNestedPrefixes(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
-		"hello world.txt":    "hello",
-		"report%20final.txt": "literal percent file",
-		"report final.txt":   "different space file",
-		"100%.txt":           "plain percent file",
+		"hello world.txt":         "hello",
+		"report%20final.txt":      "literal percent file",
+		"report final.txt":        "different space file",
+		"100%.txt":                "plain percent file",
+		"plus+value.txt":          "plus",
+		"question?.txt":           "question",
+		"hash#.txt":               "hash",
+		"quotes\"'&.txt":          "quotes and ampersand",
+		"<mesh-note>雪.txt":        "markup and Unicode",
+		"line\u2028separator.txt": "line separator",
 	}
 	directories := []string{"sub dir", "sub%20dir", "100%"}
 	writeListingFiles(t, root, files)
@@ -194,7 +200,7 @@ func TestFilesHandlerBuildsWorkingLinksAtRootAndNestedPrefixes(t *testing.T) {
 		writeListingFiles(t, filepath.Join(root, directory), files)
 		writeListingFiles(t, filepath.Join(root, directory, "deep%20dir"), files)
 	}
-	for _, prefix := range []string{"/files", "/nested/files", "/"} {
+	for _, prefix := range []string{"/files", "/nested/files", "/", "/odd&+;=:@!,$"} {
 		t.Run(prefix, func(t *testing.T) {
 			checkListingPrefix(t, root, prefix, directories, files)
 		})
