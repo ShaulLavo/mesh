@@ -173,24 +173,50 @@ def prepare_isolation(owner):
     return [spec["bash"], spec["script"], *spec.get("arguments", ())], environment
 
 
-class LogCopy:
-    """Forward the job's diagnostics log to this process's stderr as it grows."""
+class LogForward:
+    """Forward the job's regular log to this process's stderr without ever waiting for a reader.
+
+    Each tick reads at most one chunk, and only after the previous one went out,
+    so work and memory per tick stay bounded and cancellation is never stuck
+    behind a full pipe. The log remains the full record: when forwarding cannot
+    finish, the caller keeps it instead of deleting it.
+    """
 
     def __init__(self, path):
+        from owned_command import Delivery
         self.path = path
         self.offset = 0
+        self.delivery = Delivery(sys.stderr.fileno())
 
     def __call__(self):
+        if not self.delivery.pump() or self.delivery.stopped:
+            return
         try:
             with open(self.path, "rb") as source:
                 source.seek(self.offset)
-                data = source.read()
+                data = source.read(self.delivery.CHUNK)
         except OSError:
             return
         self.offset += len(data)
-        if data:
-            sys.stderr.buffer.write(data)
-            sys.stderr.flush()
+        self.delivery.queue(data)
+        self.delivery.pump()
+
+    def delivered(self):
+        try:
+            size = os.path.getsize(self.path)
+        except OSError:
+            return False
+        return self.delivery.complete() and self.offset >= size
+
+    def finish(self, deadline, wait, clock):
+        """Forward the rest by deadline. True when the whole log reached stderr."""
+        while True:
+            self()
+            if self.delivered():
+                return True
+            if self.delivery.stopped or clock() >= deadline:
+                return False
+            wait()
 
 
 def run(bash, script, arguments):
@@ -198,14 +224,15 @@ def run(bash, script, arguments):
 
     Its contract is narrower than verify's. The shell prelude resolves paths
     before this process exists, there is no budget, and the job's stderr is
-    copied here from a private log. Ownership itself is the same: the job's
-    owner joins every descendant before deleting the isolated root, and this
-    process removes its record directory only after that owner and its
-    launcher have exited.
+    forwarded here from a private log without blocking; a log that cannot be
+    forwarded in full is kept beside the record directory. Ownership itself is
+    the same: the job's owner joins every descendant before deleting the
+    isolated root, and this process removes its record directory only after
+    that owner and its launcher have exited.
     """
     refuse_live_paths({name: os.environ.get(name) for name in ("MESH_STATE_DIR", "MESH_CONFIG_DIR")})
     refuse_live_paths({name: os.environ.get(name) for name in ("TMPDIR", "TEMP", "TMP", "MESH_SHORT_TMP")}, parents=False)
-    from owned_command import Controller, Triggers
+    from owned_command import Controller, Triggers, keep_log
     from process_tree import Kernel
     # Refuse before creating anything where children cannot be joined.
     Kernel().require()
@@ -219,14 +246,25 @@ def run(bash, script, arguments):
                                scratch_parent=os.environ.get("TMPDIR") or None,
                                isolation={"bash": bash, "script": script, "arguments": arguments},
                                popen={"stderr": diagnostics})
-    controller.wait([job], each_tick=LogCopy(log))
+    forward = LogForward(log)
+    controller.wait([job], each_tick=forward)
+    settings = job.settings
+    if not forward.finish(controller.clock() + settings["allowance"],
+                          lambda: triggers.wait([], settings["tick"]), controller.clock):
+        kept = keep_log(log, root.parent, "m-entry-diagnostics-")
+        forward.delivery.notice(f"\nFAIL: diagnostics were not fully delivered; the full log is kept at {kept}\n")
     status = job.outcome.get("returncode")
-    if controller.cancelled is not None:
-        status = controller.cancelled.status
-    if not controller.proved():
-        print(f"FAIL: kept {root}: {job.name} is {job.state()}: {job.outcome.get('reasons', [])}", file=sys.stderr)
+    proved = controller.proved()
+    if proved:
+        shutil.rmtree(root)
+    else:
+        forward.delivery.notice(f"FAIL: kept {root}: {job.name} is {job.state()}: {job.outcome.get('reasons', [])}\n")
+    # The first signal decides the status, even one recorded after the job finished.
+    first = triggers.check()
+    if first is not None:
+        return first.status
+    if not proved:
         return status or 1
-    shutil.rmtree(root)
     return 1 if status is None else status
 
 

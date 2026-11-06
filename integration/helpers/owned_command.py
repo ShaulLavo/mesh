@@ -25,6 +25,7 @@ from pathlib import Path
 import select
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -286,6 +287,9 @@ class Launcher:
         self.control = Control(self.admission.get("control"))
         self.kernel = Kernel()
         self.triggers.cancel_files = (*self.admission.get("cancel", ()), self.record.directory / "cancel")
+        # Set once the intermediate exists: from then on a decline is complete only after the owner's exit is seen.
+        self.intermediate = None
+        self.owner_exited = False
 
     def run(self):
         signal.signal(signal.SIGCHLD, signal.SIG_DFL)
@@ -306,7 +310,13 @@ class Launcher:
 
     def decline(self, reason, status):
         print(f"FAIL: owned command declined: {reason}", file=sys.stderr, flush=True)
-        self.record.advance("declined", time.monotonic() + self.settings["allowance"], reason=reason, status=status)
+        forked = self.intermediate is not None
+        if forked and self.owner_exited:
+            self.record.write("owner-exit", {"intermediate": self.intermediate, "observed": "report pipe closed"})
+        elif forked:
+            print("FAIL: owned command: the declined owner's exit was not observed", file=sys.stderr, flush=True)
+        self.record.advance("declined", time.monotonic() + self.settings["allowance"], reason=reason, status=status,
+                            forked=forked, intermediate=self.intermediate)
         self.control.hold("launcher-declined")
         return status
 
@@ -342,6 +352,7 @@ class Launcher:
             raise Declined(f"fork owner: {error}", 1) from error
         if intermediate == 0:
             become_intermediate(self, report_r, report_w, accept_r, accept_w)
+        self.intermediate = intermediate
         os.close(report_w)
         os.close(accept_r)
         try:
@@ -361,10 +372,27 @@ class Launcher:
             # Closing acceptance is the owner's EOF: it exits without starting anything.
             os.close(accept_w)
             if fd is not None:
-                self.await_exit(fd, deadline + self.settings["allowance"])
                 os.close(fd)
+            # The acceptance fence proves no work started, not that the owner is gone.
+            self.owner_exited = self.await_report_closed(report_r, deadline + self.settings["allowance"])
             raise
         return pid, fd, accept_w
+
+    def await_report_closed(self, report_r, cutoff):
+        """True once the report pipe's write end is closed everywhere, by the existing handshake cutoff.
+
+        Before acceptance only the intermediate and the owner hold that end. Neither
+        closes it while alive, and the owner starts nothing that could inherit it, so
+        end of file proves both have exited, including an owner whose PID never arrived.
+        """
+        os.set_blocking(report_r, False)
+        while not report_closed(report_r):
+            remaining = cutoff - time.monotonic()
+            if remaining <= 0:
+                return False
+            self.triggers.check()
+            self.triggers.wait([report_r], min(remaining, self.settings["tick"]))
+        return True
 
     def offer(self, accept_w, deadline, **fields):
         if not self.record.advance("started", deadline + self.settings["allowance"], **fields):
@@ -442,10 +470,6 @@ class Launcher:
         if stat is None or stat.start != start or stat.ppid in (intermediate, os.getpid()) or self.kernel.exited(fd):
             raise Declined("owner identity or reparenting does not match its report", 1)
 
-    def await_exit(self, fd, deadline):
-        while not readable(fd) and time.monotonic() < deadline:
-            self.triggers.wait([fd], self.settings["tick"])
-
     def supervise(self, owner_pid, owner_fd, accept_w):
         s = self.settings
         cutoff = self.start + work_allowance(s)
@@ -476,6 +500,17 @@ class Launcher:
         print(f"FAIL: owned command: {reason}", file=sys.stderr, flush=True)
         self.record.advance("retained", time.monotonic() + self.settings["allowance"], reasons=[reason])
         return 1
+
+
+def report_closed(fd):
+    """True at end of file. Unread report bytes are bounded, so a few chunks drain them."""
+    for _ in range(4):
+        data = read_available(fd)
+        if data == b"":
+            return True
+        if data is None:
+            return False
+    return False
 
 
 def parse_report(line):
@@ -910,16 +945,110 @@ def observe(process, directory):
     """The admission's outcome once its exits are proved; None while the launcher lives.
 
     A stopped launcher is live. Joined without the launcher's owner-exit
-    observation is unknown, never permission to delete.
+    observation is unknown, never permission to delete. So is a decline after
+    the owner was forked: no work started, but the owner may still be running.
     """
     if process.poll() is None:
         return None
     state = Record(directory).read()
-    if state.get("state") == "joined" and not (Path(directory) / "owner-exit").exists():
+    owner_exit = (Path(directory) / "owner-exit").exists()
+    if state.get("state") == "joined" and not owner_exit:
         return {**state, "state": "unknown", "reasons": ["owner exit was not observed"]}
+    if state.get("state") == "declined" and state.get("forked") and not owner_exit:
+        return {**state, "state": "unknown", "reasons": ["the declined owner's exit was not observed"]}
     if state.get("state") not in FINAL:
         return {**state, "state": "unknown"}
     return state
+
+
+def nonblocking_writer(fd):
+    """A write function for fd that never waits for a reader, or None when none can be made.
+
+    Pipes, FIFOs and terminals get a private open file description, so O_NONBLOCK
+    never reaches other processes sharing the caller's. Sockets send with
+    MSG_DONTWAIT. Regular files and other devices have no reader to wait for.
+    """
+    mode = os.fstat(fd).st_mode
+    if stat.S_ISREG(mode) or stat.S_ISCHR(mode) and not os.isatty(fd):
+        return lambda data: os.write(fd, data)
+    if stat.S_ISSOCK(mode):
+        sink = socket.socket(fileno=os.dup(fd))
+        return lambda data: sink.send(data, socket.MSG_DONTWAIT)
+    private = os.open(f"/proc/self/fd/{fd}", os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    return lambda data: os.write(private, data)
+
+
+class Delivery:
+    """Controller text for one inherited stream, sent in bounded nonblocking chunks.
+
+    A reader that stops reading fills its pipe; a blocking write would then stop
+    the controller from publishing cancellation. Text that cannot keep up is not
+    lost: the caller keeps the regular log it came from and reports that delivery
+    stopped. Once stopped, a stream gets nothing more, so it never shows a gap.
+    """
+
+    CHUNK = 65536
+    LIMIT = 8 << 20
+
+    def __init__(self, fd):
+        self.pending = bytearray()
+        try:
+            self.writer = nonblocking_writer(fd)
+        except OSError:
+            self.writer = None
+        self.stopped = self.writer is None
+
+    def queue(self, data):
+        if not self.stopped and len(self.pending) + len(data) > self.LIMIT:
+            self.stop()
+        if not self.stopped:
+            self.pending += data
+
+    def stop(self):
+        self.stopped = True
+        self.pending.clear()
+
+    def pump(self):
+        """Write until the stream would block. True when nothing is left to send."""
+        while self.pending and not self.stopped:
+            try:
+                written = self.writer(self.pending[:self.CHUNK])
+            except BlockingIOError:
+                return False
+            except OSError:
+                self.stop()
+                return False
+            del self.pending[:written]
+        return not self.pending
+
+    def complete(self):
+        return not self.stopped and not self.pending
+
+    def notice(self, text):
+        """One nonblocking attempt to tell the reader something it may never read."""
+        if self.writer is None:
+            return
+        try:
+            self.writer(text.encode(errors="replace"))
+        except OSError:
+            pass
+
+
+def deliver(deliveries, deadline, wait, clock=time.monotonic):
+    """Pump until every stream is delivered or the deadline passes. True when all text went out."""
+    while not all([delivery.pump() for delivery in deliveries]):
+        if clock() >= deadline or any(delivery.stopped for delivery in deliveries):
+            return False
+        wait()
+    return all(delivery.complete() for delivery in deliveries)
+
+
+def keep_log(path, directory, prefix):
+    """Move a regular log out of a root that is about to be deleted, and return where it went."""
+    fd, kept = tempfile.mkstemp(prefix=prefix, suffix=".log", dir=directory)
+    os.close(fd)
+    os.replace(path, kept)
+    return kept
 
 
 class Job:
@@ -1042,14 +1171,19 @@ class Controller:
         return True
 
     def wait(self, jobs, until_cancelled=False, each_tick=None):
-        """Poll until every job's outcome is known, or the run is cancelled when until_cancelled."""
+        """Poll until every job's outcome is known, or the run is cancelled when until_cancelled.
+
+        A recorded signal is observed on every pass, including the last, so it is
+        never left unpublished because no job remained to wait for.
+        """
         while True:
+            cancelled = self.check()
             pending = [job for job in jobs if not self.poll(job)]
             if each_tick is not None:
                 each_tick()
             if not pending:
                 return True
-            if self.check() is not None and until_cancelled:
+            if cancelled is not None and until_cancelled:
                 return False
             handles = [job.exit_handle for job in pending if job.exit_handle is not None]
             self.triggers.wait(handles, min(job.settings["tick"] for job in pending))

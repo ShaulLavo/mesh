@@ -2,12 +2,15 @@
 """Standalone integration entry points must not read the caller's address book."""
 
 import ctypes
+import fcntl
 import json
 import os
 from pathlib import Path
 import shutil
 import signal
+import struct
 import subprocess
+import termios
 import time
 from types import SimpleNamespace
 import sys
@@ -24,6 +27,32 @@ import verify_runner  # noqa: E402 - the runner lives beside verify.sh
 
 # The standalone entry is a controller of one owned job, so it needs the owner beside it.
 ENTRY_HELPERS = ("isolate.sh", "isolation.py", "process_diagnostics.py", "owned_command.py", "process_tree.py")
+
+
+def copy_entry_helpers(root):
+    (root / "helpers").mkdir()
+    for name in ENTRY_HELPERS:
+        shutil.copyfile(Path(__file__).with_name(name), root / "helpers" / name)
+
+
+def signal_group(group, signum):
+    try:
+        os.killpg(group, signum)
+    except ProcessLookupError:
+        pass
+
+
+def stop_entry(entry, groups):
+    """Teardown for an entry and every process group it recorded, whatever the test observed."""
+    if entry.poll() is None:
+        signal_group(entry.pid, signal.SIGTERM)
+        try:
+            entry.wait(timeout=12)
+        except subprocess.TimeoutExpired:
+            pass
+    for group in groups:
+        signal_group(group, signal.SIGKILL)
+    entry.wait(timeout=3)
 
 
 class EntryPointContractTest(unittest.TestCase):
@@ -157,26 +186,25 @@ class IsolationBoundaryTest(unittest.TestCase):
                 self.assertTrue(Path(child[name]).is_relative_to(Path(child["HOME"]).parent))
 
     def test_prelude_python_does_not_write_bytecode(self):
-        helpers = Path(__file__).resolve().parent
         for reentry in (False, True):
             with self.subTest(reentry=reentry), tempfile.TemporaryDirectory(prefix="m-bytecode-") as temporary:
-                root = Path(temporary)
-                (root / "helpers").mkdir()
-                for name in ENTRY_HELPERS:
-                    shutil.copyfile(helpers / name, root / "helpers" / name)
-                (root / "bytecode_probe.py").write_text("VALUE = 1\n")
-                probe = root / "probe.sh"
-                probe.write_text('#!/bin/bash\nsource "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1\n'
-                                 "python3 -c 'import bytecode_probe'\n")
-                environment = {"PATH": os.defpath, "HOME": str(root / "home"), "TMPDIR": str(root),
-                               "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config"),
-                               "PYTHONDONTWRITEBYTECODE": "0"}
-                if reentry:
-                    environment["MESH_INTEGRATION_ENTRY"] = str(probe)
-                result = subprocess.run(["bash", str(probe)], cwd=root, env=environment,
-                                        capture_output=True, text=True, timeout=10)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertFalse(list(root.rglob("__pycache__")))
+                self.check_prelude_bytecode(Path(temporary), reentry)
+
+    def check_prelude_bytecode(self, root, reentry):
+        copy_entry_helpers(root)
+        (root / "bytecode_probe.py").write_text("VALUE = 1\n")
+        probe = root / "probe.sh"
+        probe.write_text('#!/bin/bash\nsource "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1\n'
+                         "python3 -c 'import bytecode_probe'\n")
+        environment = {"PATH": os.defpath, "HOME": str(root / "home"), "TMPDIR": str(root),
+                       "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config"),
+                       "PYTHONDONTWRITEBYTECODE": "0"}
+        if reentry:
+            environment["MESH_INTEGRATION_ENTRY"] = str(probe)
+        result = subprocess.run(["bash", str(probe)], cwd=root, env=environment,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(list(root.rglob("__pycache__")))
 
     def test_reentry_does_not_bypass_the_guard(self):
         repo = Path(__file__).resolve().parents[2]
@@ -385,61 +413,117 @@ class ReviewRegressionsTest(unittest.TestCase):
             self.assertFalse((root / "invoked").exists(), "cancellation fixture used fallback Go")
 
     def test_cancelling_entry_pid_or_group_stops_children_and_cleans_scratch(self):
-        helpers = Path(__file__).resolve().parent
-        source = (helpers.parent / "kill_waits.sh").read_text().splitlines()[1]
+        source = (Path(__file__).resolve().parents[1] / "kill_waits.sh").read_text().splitlines()[1]
         go_root = subprocess.check_output(["go", "env", "GOROOT"], text=True).strip()
         for target in ("pid", "group"):
             with self.subTest(target=target), tempfile.TemporaryDirectory(prefix="m-cancel-") as temporary:
-                root = Path(temporary)
-                (root / "helpers").mkdir()
-                for name in ENTRY_HELPERS:
-                    shutil.copyfile(helpers / name, root / "helpers" / name)
-                capture = root / "children"
-                probe = root / "probe.sh"
-                probe.write_text('#!/bin/bash\n' + source + '\nsleep 300 &\nchild=$!\n'
-                                 'printf "%s\\n" "$$" "$child" "$HOME" "$(ps -o pgid= -p $$)" > "$1"\nwait "$child"\n')
-                environment = {"PATH": str(Path(go_root) / "bin") + os.pathsep + os.defpath,
-                               "HOME": str(root / "caller-home"), "TMPDIR": str(root),
-                               "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config")}
-                stderr = root / "probe.stderr"
-                with stderr.open("w") as errors:
-                    entry = subprocess.Popen(["bash", str(probe), str(capture)], env=environment,
-                                             stdout=subprocess.DEVNULL, stderr=errors, start_new_session=True)
-                child_group = None
-                try:
-                    deadline = time.monotonic() + 5
-                    while not capture.exists() and time.monotonic() < deadline:
-                        time.sleep(0.01)
-                    self.assertTrue(capture.exists(), f"guarded probe did not start (exit={entry.poll()}):\n{stderr.read_text()}")
-                    inner, child, home, group = capture.read_text().splitlines()
-                    child_group = int(group)
-                    if target == "pid":
-                        entry.terminate()
-                    else:
-                        os.killpg(entry.pid, signal.SIGTERM)
-                    entry.wait(timeout=12)
-                    self.assertNotEqual(entry.returncode, 0)
-                    for pid in (int(inner), int(child)):
-                        status = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
-                        self.assertFalse(status.stdout.strip() and not status.stdout.strip().startswith("Z"),
-                                         f"entry cancellation left process {pid} running")
-                    self.assertFalse(Path(home).parent.exists(), "entry cancellation leaked wrapper scratch")
-                finally:
-                    if entry.poll() is None:
-                        try:
-                            os.killpg(entry.pid, signal.SIGTERM)
-                        except ProcessLookupError:
-                            pass
-                        try:
-                            entry.wait(timeout=12)
-                        except subprocess.TimeoutExpired:
-                            pass
-                    for group in {entry.pid, child_group} - {None}:
-                        try:
-                            os.killpg(group, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                    entry.wait(timeout=3)
+                self.cancel_entry(Path(temporary), target, source, go_root)
+
+    def cancel_entry(self, root, target, source, go_root):
+        copy_entry_helpers(root)
+        capture = root / "children"
+        probe = root / "probe.sh"
+        probe.write_text('#!/bin/bash\n' + source + '\nsleep 300 &\nchild=$!\n'
+                         'printf "%s\\n" "$$" "$child" "$HOME" "$(ps -o pgid= -p $$)" > "$1"\nwait "$child"\n')
+        environment = {"PATH": str(Path(go_root) / "bin") + os.pathsep + os.defpath,
+                       "HOME": str(root / "caller-home"), "TMPDIR": str(root),
+                       "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config")}
+        stderr = root / "probe.stderr"
+        with stderr.open("w") as errors:
+            entry = subprocess.Popen(["bash", str(probe), str(capture)], env=environment,
+                                     stdout=subprocess.DEVNULL, stderr=errors, start_new_session=True)
+        groups = {entry.pid}
+        try:
+            self.assert_entry_cancelled(entry, target, capture, stderr, groups)
+        finally:
+            stop_entry(entry, groups)
+
+    def assert_entry_cancelled(self, entry, target, capture, stderr, groups):
+        deadline = time.monotonic() + 5
+        while not capture.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(capture.exists(), f"guarded probe did not start (exit={entry.poll()}):\n{stderr.read_text()}")
+        inner, child, home, group = capture.read_text().splitlines()
+        groups.add(int(group))
+        if target == "pid":
+            entry.terminate()
+        else:
+            os.killpg(entry.pid, signal.SIGTERM)
+        entry.wait(timeout=12)
+        self.assertNotEqual(entry.returncode, 0)
+        for pid in (int(inner), int(child)):
+            status = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+            self.assertFalse(status.stdout.strip() and not status.stdout.strip().startswith("Z"),
+                             f"entry cancellation left process {pid} running")
+        self.assertFalse(Path(home).parent.exists(), "entry cancellation leaked wrapper scratch")
+
+
+def pipe_full(fd):
+    """True when the pipe behind fd has no free page left, so a writer would block."""
+    unread = struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+    return unread > fcntl.fcntl(fd, fcntl.F_GETPIPE_SZ) - 4096
+
+
+def alive(pid):
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
+def wait_until(predicate, description, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(0.01)
+    raise AssertionError("timed out waiting for " + description)
+
+
+@unittest.skipUnless(sys.platform == "linux", "the standalone entry owns processes only on Linux")
+class StandaloneOutputTest(unittest.TestCase):
+    """A caller that never reads stderr must not stop the standalone entry's cancellation."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="m-entry-output-"))
+        self.process = None
+        self.addCleanup(self.teardown)
+
+    def teardown(self):
+        (self.root / "release").touch()
+        if self.process is not None:
+            stop_entry(self.process, {self.process.pid})
+            self.process.communicate(timeout=5)
+        shutil.rmtree(self.root)
+
+    def test_blocked_stderr_cannot_hold_cancellation(self):
+        work = self.root / "fixture.py"
+        work.write_text("import os, sys, time\nfrom pathlib import Path\nout = Path(sys.argv[1])\n"
+                        "(out / 'workload').write_text(str(os.getpid()))\n"
+                        "sys.stderr.write('x' * (1024 * 1024)); sys.stderr.flush()\n"
+                        "while not (out / 'release').exists():\n    time.sleep(0.01)\n")
+        script = self.root / "entry.sh"
+        script.write_text(f"exec {sys.executable} -B {work} {self.root}\n")
+        environment = {"PATH": os.defpath, "TMPDIR": str(self.root), "HOME": str(self.root),
+                       "PYTHONDONTWRITEBYTECODE": "1"}
+        self.process = subprocess.Popen([sys.executable, "-B", str(Path(__file__).with_name("isolation.py")),
+                                         "/bin/bash", str(script)], env=environment, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.PIPE, start_new_session=True)
+        workload = int(wait_until(lambda: (self.root / "workload").exists() and (self.root / "workload").read_text(),
+                                  "the workload"))
+        wait_until(lambda: pipe_full(self.process.stderr.fileno()), "the entry's unread stderr to fill")
+        entry = next(self.root.glob("m-entry-*"))
+        self.process.send_signal(signal.SIGTERM)
+        wait_until(lambda: (entry / "cancel").exists(), "cancellation published while stderr is blocked", 3)
+        # Nobody reads stderr: the entry must still exit and keep the diagnostics it could not deliver.
+        wait_until(lambda: self.process.poll() is not None, "entry exit with no reader", 15)
+        self.assertEqual(self.process.returncode, 128 + signal.SIGTERM)
+        self.assertFalse(alive(workload), "the workload survived cancellation")
+        kept = list(self.root.glob("m-entry-diagnostics-*"))
+        self.assertEqual(len(kept), 1, "undelivered diagnostics were not kept")
+        self.assertGreaterEqual(kept[0].read_text().count("x"), 1024 * 1024)
+        self.assertEqual(list(self.root.glob("m-isolate-*")), [])
 
 
 class StandaloneIsolationTest(unittest.TestCase):

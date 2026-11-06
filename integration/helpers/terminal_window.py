@@ -745,15 +745,21 @@ def print_diagnostics(fixture):
         print(f"terminal {terminal.pid}: {terminal.drain()[-3000:]!r}", file=sys.stderr)
 
 
-def close_fixture(fixture, directory):
+def close_fixture(fixture, directory, allowance=CLEANUP_SECONDS):
     """Delete the fixture root only after its cleanup proved that nothing still uses it."""
+    # Subclasses extend close. One deadline and one protection span all of it, before,
+    # inside and after the base cleanup, and an earlier deadline is never replaced.
+    deadline = ACTIVE_CLEANUP.get() or CleanupDeadline(allowance)
+    token = ACTIVE_CLEANUP.set(deadline)
     try:
-        # Subclasses extend close; protect the whole of it, not only the base cleanup.
         with protected_cleanup():
             fixture.close()
+            deadline.remaining(float("inf"), "the fixture root could be deleted")
     except BaseException:
         print(f"FAIL: fixture cleanup did not finish; kept {directory}", file=sys.stderr, flush=True)
         raise
+    finally:
+        ACTIVE_CLEANUP.reset(token)
     shutil.rmtree(directory)
 
 

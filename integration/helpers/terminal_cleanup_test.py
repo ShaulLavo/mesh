@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from terminal_window import CleanupDeadline, Fixture, close_fixture
 
@@ -236,10 +237,33 @@ class BoundedCleanupTest(Scratch):
     def test_incomplete_cleanup_keeps_the_fixture_root(self):
         fixture = self.fixture()
         self.silent_workers(fixture, 1)
-        fixture.close = lambda: Fixture.close(fixture, allowance=0.3)
         with self.assertRaisesRegex(RuntimeError, "ran out of time"):
-            close_fixture(fixture, fixture.root)
+            close_fixture(fixture, fixture.root, allowance=0.3)
         self.assertTrue(fixture.root.is_dir(), "a fixture root was deleted after unproved cleanup")
+
+    def test_one_deadline_spans_subclass_work_around_the_base_cleanup(self):
+        now = [0.0]
+        seen = []
+
+        class Extended(Fixture):
+            def close(self):
+                now[0] += 10
+                super().close()
+                now[0] += 10
+
+            def close_within(self, deadline):
+                seen.append(deadline.remaining(25, "base cleanup"))
+                now[0] += 10
+
+        def clocked(seconds):
+            return CleanupDeadline(seconds, lambda: now[0])
+
+        fixture = Extended("/bin/true", self.root / "fixture")
+        with patch("terminal_window.CleanupDeadline", side_effect=clocked):
+            with self.assertRaisesRegex(RuntimeError, "ran out of time"):
+                close_fixture(fixture, fixture.root)
+        self.assertEqual(seen, [15.0], "the base cleanup got a fresh allowance after subclass work")
+        self.assertTrue(fixture.root.is_dir(), "a root was deleted after its cleanup allowance ran out")
 
     def test_clock_injected_deadline_never_extends(self):
         now = [0.0]

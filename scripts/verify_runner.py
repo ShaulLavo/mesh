@@ -26,7 +26,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integration" / "helpers"))
 
 from isolation import refuse_live_paths  # noqa: E402 - helpers are found through the path above
-from owned_command import DEFAULTS, Controller, Trigger, Triggers  # noqa: E402
+from owned_command import DEFAULTS, Controller, Delivery, Trigger, Triggers, deliver, keep_log  # noqa: E402
 from process_tree import Kernel, Unsupported  # noqa: E402
 
 # Packaging builds release archives; name observation crosses real freshness windows.
@@ -125,15 +125,45 @@ def report_setup(repo):
     return 0
 
 
-def copy_log(path, leaks_only=False):
+def log_lines(path, leaks_only=False):
     try:
-        text = Path(path).read_text(errors="replace")
+        lines = Path(path).read_text(errors="replace").splitlines()
     except OSError:
-        return
-    lines = [line for line in text.splitlines() if line.startswith("LEAK:")] if leaks_only else text.splitlines()
-    for line in lines:
-        print(line, file=sys.stderr)
-    sys.stderr.flush()
+        return []
+    return [line for line in lines if line.startswith("LEAK:")] if leaks_only else lines
+
+
+class Reporter:
+    """The run's output: a regular transcript, plus nonblocking delivery to the caller's streams.
+
+    A caller that stops reading must not stop cancellation, so nothing here
+    waits for a reader. Text the caller has not taken by the final allowance
+    stays in the full transcript, which then moves beside the run root.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.transcript = open(path, "a")
+        self.streams = {"out": Delivery(sys.stdout.fileno()), "err": Delivery(sys.stderr.fileno())}
+
+    def line(self, text, stream="out"):
+        self.transcript.write(text + "\n")
+        self.transcript.flush()
+        self.streams[stream].queue((text + "\n").encode(errors="replace"))
+        self.streams[stream].pump()
+
+    def pump(self):
+        for delivery in self.streams.values():
+            delivery.pump()
+
+    def finish(self, deadline, wait):
+        """Deliver the rest by deadline, or keep the full transcript beside the run root and say where."""
+        self.transcript.close()
+        if deliver(list(self.streams.values()), deadline, wait):
+            return None
+        kept = keep_log(self.path, self.path.parent.parent, "mesh-verify-output.")
+        self.streams["err"].notice(f"\nFAIL: output was not fully delivered; the full transcript is kept at {kept}\n")
+        return kept
 
 
 class Run:
@@ -155,6 +185,15 @@ class Run:
         self.setup = None
         self.test_env = None
         self.build_env = None
+        self.reporter = Reporter(self.root / "output.log")
+        settings = {**DEFAULTS, **controller.overrides}
+        self.allowance, self.tick = settings["allowance"], settings["tick"]
+
+    def wait(self, jobs, until_cancelled=True):
+        return self.controller.wait(jobs, until_cancelled=until_cancelled, each_tick=self.reporter.pump)
+
+    def error(self, text):
+        self.reporter.line(text, "err")
 
     def start(self, name, output, error, environment, **job):
         if self.control is not None:
@@ -170,10 +209,10 @@ class Run:
                                      ("integration-build", ["-tags", "mesh_integration"], "FAIL: integration build")):
             if not self.build(name, flags, failure):
                 return 1
-        print(f"Running integration tests with {self.jobs} concurrent jobs", flush=True)
+        self.reporter.line(f"Running integration tests with {self.jobs} concurrent jobs")
         tests = discover(self.repo)
         if not tests:
-            print("FAIL: no integration scripts found", file=sys.stderr, flush=True)
+            self.error("FAIL: no integration scripts found")
             return 1
         return self.run_tests(tests)
 
@@ -183,9 +222,10 @@ class Run:
         command = [sys.executable, "-B", str(Path(__file__).resolve()), "--setup", str(self.repo)]
         with open(result, "w") as output, open(log, "w") as error:
             job = self.start("setup", output, error, self.caller, command=command, budget=UNBOUNDED)
-        if not self.controller.wait([job], until_cancelled=True):
+        if not self.wait([job]):
             return False
-        copy_log(log)
+        for line in log_lines(log):
+            self.error(line)
         if not self.succeeded(job):
             self.report_state(job)
             return False
@@ -222,12 +262,13 @@ class Run:
         with open(log, "w") as output:
             job = self.start(name, output, subprocess.STDOUT, self.build_env, budget=UNBOUNDED,
                              command=["go", "build", *flags, "-o", str(target), "./cmd/mesh"])
-        if not self.controller.wait([job], until_cancelled=True):
+        if not self.wait([job]):
             return False
-        copy_log(log)
+        for line in log_lines(log):
+            self.error(line)
         if self.succeeded(job):
             return True
-        print(failure, file=sys.stderr, flush=True)
+        self.error(failure)
         self.report_state(job)
         return False
 
@@ -266,18 +307,18 @@ class Run:
                               isolation=isolation, budget=budget_for(name, self.budget), scratch_parent=self.tmpdir)
 
     def report_next(self, job):
-        if not self.controller.wait([job], until_cancelled=True):
+        if not self.wait([job]):
             return False
         log = self.root / f"{job.name}.log"
         if self.succeeded(job):
-            print(f"PASS: {job.name}", flush=True)
-            copy_log(log, leaks_only=True)
+            self.reporter.line(f"PASS: {job.name}")
+            for line in log_lines(log, leaks_only=True):
+                self.error(line)
             return True
         code = job.outcome.get("returncode")
-        print(f"FAIL: {job.name} (exit {'unknown' if code is None else code})", file=sys.stderr)
-        for line in log.read_text(errors="replace").splitlines():
-            print("  " + line, file=sys.stderr)
-        sys.stderr.flush()
+        self.error(f"FAIL: {job.name} (exit {'unknown' if code is None else code})")
+        for line in log_lines(log):
+            self.error("  " + line)
         self.report_state(job)
         return True
 
@@ -289,8 +330,7 @@ class Run:
         if job.proved() or job.name in self.reported:
             return
         self.reported.add(job.name)
-        print(f"FAIL: {job.name}: {job.state()}: {'; '.join(job.outcome.get('reasons', []))}",
-              file=sys.stderr, flush=True)
+        self.error(f"FAIL: {job.name}: {job.state()}: {'; '.join(job.outcome.get('reasons', []))}")
 
     def finish(self, status):
         """Wait, within each job's deadline, for every launched job; then delete or keep the run root."""
@@ -298,23 +338,31 @@ class Run:
         live = [job for job in controller.jobs if job.outcome is None]
         if live and controller.cancelled is None:
             controller.cancel(Trigger(signal.SIGTERM, 1, "controller stopped", controller.clock()))
-        controller.wait(live)
-        if controller.triggers.first is not None:
-            # The first signal decides the status; later ones change nothing.
-            status = controller.triggers.first.status
+        self.wait(live, until_cancelled=False)
         for job in controller.jobs:
             self.report_state(job)
         for failure in controller.failures:
-            print(f"FAIL: {failure}", file=sys.stderr, flush=True)
-        if not controller.proved():
-            print(f"FAIL: kept {self.root}", file=sys.stderr, flush=True)
-            return status or 1
+            self.error(f"FAIL: {failure}")
+        proved = controller.proved()
+        if not proved:
+            self.error(f"FAIL: kept {self.root}")
+        # Delivery is bounded by the existing allowance; the full transcript survives the root if it runs out.
+        self.reporter.finish(controller.clock() + self.allowance, lambda: controller.triggers.wait([], self.tick))
+        if proved and not self.remove_root():
+            status = status or 1
+        # The first signal decides the status, even one recorded during reporting or deletion.
+        first = controller.triggers.check()
+        if first is not None:
+            return first.status
+        return status if proved else status or 1
+
+    def remove_root(self):
         try:
             shutil.rmtree(self.root)
         except OSError as error:
-            print(f"FAIL: remove {self.root}: {error}", file=sys.stderr, flush=True)
-            return status or 1
-        return status
+            self.reporter.streams["err"].notice(f"FAIL: remove {self.root}: {error}\n")
+            return False
+        return True
 
 
 def main(arguments):
@@ -342,7 +390,8 @@ def main(arguments):
         status = run.execute()
     except Exception:
         # Keep going to finish: live jobs must still be cancelled and joined before deletion.
-        traceback.print_exc()
+        for line in traceback.format_exc().splitlines():
+            run.error(line)
         status = 1
     return run.finish(status)
 

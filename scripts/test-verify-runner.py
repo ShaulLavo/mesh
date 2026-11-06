@@ -9,16 +9,21 @@ child subreaper, so its teardown can kill and reap anything a failing runner
 leaves behind before it removes its own root.
 """
 import ctypes
+import fcntl
+import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 import unittest
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[1]
 LINUX = sys.platform == "linux"
@@ -110,6 +115,9 @@ if role == "orphan":
 signal.signal(signal.SIGTERM, stop)
 signal.signal(signal.SIGINT, stop)
 (root / (name + ".state")).write_text(f"{state}\n{isolated}")
+if mode == "noisy":
+    sys.stderr.write("x" * (1024 * 1024) + "\n")
+    sys.exit(7)
 if mode == "leak":
     subprocess.Popen([sys.executable, __file__, name, mode, "orphan"], start_new_session=True)
     sys.exit(0)
@@ -203,6 +211,12 @@ def remove_descendants(keep):
             return True
         time.sleep(0.01)
     return False
+
+
+def pipe_full(fd):
+    """True when the pipe behind fd has no free page left, so a writer would block."""
+    unread = struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+    return unread > fcntl.fcntl(fd, fcntl.F_GETPIPE_SZ) - 4096
 
 
 def complete_line(path):
@@ -421,6 +435,23 @@ class ResultTests(RunnerCase):
 
 
 class CancellationTests(RunnerCase):
+    def test_launcher_arriving_after_cancellation_declines(self):
+        self.scene.hold("one.sh", "launcher-parent")
+        self.scene.hold("one.sh", "launcher-declined")
+        self.scene.start([("one", "pass")])
+        self.scene.reached("one.sh", "launcher-parent")
+        self.scene.runner.send_signal(signal.SIGTERM)
+        time.sleep(0.1)
+        self.scene.release_hold("one.sh", "launcher-parent")
+        self.scene.reached("one.sh", "launcher-declined")
+        state = self.scene.records()["one.sh"]
+        self.assertEqual(state["state"], "declined")
+        self.assertIn("cancelled before start", state["reason"])
+        self.scene.release_hold("one.sh", "launcher-declined")
+        self.finish(143, timeout=CANCEL_BOUND + 2)
+        self.assertFalse(list(self.scene.root.glob("*.ready")))
+        self.assert_clean()
+
     def interrupt(self, signum, mode="pass", then=None):
         self.scene.start([("one", mode), ("two", "pass"), ("unstarted", "pass")])
         self.scene.ready(4)
@@ -490,6 +521,24 @@ class CancellationTests(RunnerCase):
     def test_hanging_build_services_cancellation(self):
         self.hang_then_cancel("build")
 
+    def test_blocked_output_cannot_hold_cancellation(self):
+        self.scene.start([("one", "noisy"), ("two", "pass")])
+        self.scene.ready(2)
+        wait_until(lambda: pipe_full(self.scene.runner.stderr.fileno()), "the runner's unread stderr to fill")
+        self.scene.runner.send_signal(signal.SIGTERM)
+        wait_until(lambda: any((root / "cancel").exists() for root in self.scene.run_roots()),
+                   "cancellation published while output is blocked", CANCEL_BOUND)
+        wait_until(lambda: len(list(self.scene.root.glob("*.signal"))) == 2, "the running job's cancellation")
+        (self.scene.root / "release").touch()
+        # Nobody reads the runner's output, so it must still finish within its bound and keep what it could not deliver.
+        wait_until(lambda: self.scene.runner.poll() is not None, "runner exit with no reader", CANCEL_BOUND)
+        kept = list(self.scene.tmp.glob("mesh-verify-output.*"))
+        self.assertEqual(len(kept), 1, "undelivered output was not kept")
+        self.assertIn("x" * 4096, kept[0].read_text())
+        self.finish(143)
+        kept[0].unlink()
+        self.assert_clean()
+
     def test_runner_death_during_entry_setup_cancels_promptly(self):
         (self.scene.root / "hang-entry-env").touch()
         self.scene.start([("one", "pass")], MESH_INTEGRATION_TIMEOUT="600s")
@@ -505,23 +554,6 @@ class CancellationTests(RunnerCase):
 
 
 class ExitProofTests(RunnerCase):
-    def test_launcher_arriving_after_cancellation_declines(self):
-        self.scene.hold("one.sh", "launcher-parent")
-        self.scene.hold("one.sh", "launcher-declined")
-        self.scene.start([("one", "pass")])
-        self.scene.reached("one.sh", "launcher-parent")
-        self.scene.runner.send_signal(signal.SIGTERM)
-        time.sleep(0.1)
-        self.scene.release_hold("one.sh", "launcher-parent")
-        self.scene.reached("one.sh", "launcher-declined")
-        state = self.scene.records()["one.sh"]
-        self.assertEqual(state["state"], "declined")
-        self.assertIn("cancelled before start", state["reason"])
-        self.scene.release_hold("one.sh", "launcher-declined")
-        self.finish(143, timeout=CANCEL_BOUND + 2)
-        self.assertFalse(list(self.scene.root.glob("*.ready")))
-        self.assert_clean()
-
     def test_joined_record_before_owner_exit_keeps_the_run_root(self):
         self.unproved_exit("owner-joined", cancel=False)
 
@@ -545,6 +577,20 @@ class ExitProofTests(RunnerCase):
         _, stderr = self.finish(143, timeout=CANCEL_BOUND + 2)
         self.assertIn("FAIL: one.sh: unknown", stderr)
         self.assertEqual(len(self.scene.run_roots()), 1)
+
+    def test_stopped_owner_after_a_post_fork_decline_keeps_the_run_root(self):
+        self.scene.hold("one.sh", "owner-report")
+        self.scene.start([("one", "pass")])
+        owner = self.scene.reached("one.sh", "owner-report")
+        os.kill(owner, signal.SIGSTOP)
+        wait_until(lambda: stat_fields(owner)[0] == "T", "the owner to stop")
+        self.scene.release_hold("one.sh", "owner-report")
+        _, stderr = self.finish(1, timeout=TIMINGS["handshake"] + CANCEL_BOUND)
+        self.assertIn("FAIL: one.sh: unknown", stderr)
+        self.assertIn("FAIL: kept", stderr)
+        self.assertEqual(stat_fields(owner)[0], "T", "the stopped owner must still be live")
+        self.assertEqual(len(self.scene.run_roots()), 1, "the run root was deleted while the owner lived")
+        self.assertFalse(list(self.scene.root.glob("*.ready")), "a declined owner started work")
 
     def test_launcher_lost_after_started_is_unknown_not_declined(self):
         self.scene.hold("one.sh", "launcher-accept")
@@ -582,6 +628,60 @@ class SourceContractTest(unittest.TestCase):
         self.assertIn("process ownership needs Linux child subreaping", result.stderr)
         self.assertEqual(list(scene.tmp.iterdir()), [], "refusal created state")
         self.assertFalse((scene.root / "builds").exists(), "refusal built Mesh")
+
+
+@unittest.skipUnless(LINUX, "the controller needs Linux process handles")
+class FinishBoundaryTest(unittest.TestCase):
+    """A signal recorded after the last job finished still decides the run's status."""
+
+    def setUp(self):
+        sys.path.insert(0, str(REPO / "integration/helpers"))
+        spec = importlib.util.spec_from_file_location("verify_runner_under_test", REPO / "scripts/verify_runner.py")
+        self.runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.runner)
+        handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+        wakeup = signal.set_wakeup_fd(-1)
+        self.addCleanup(self.restore_signals, handlers, wakeup)
+        self.root = Path(tempfile.mkdtemp(prefix="m-finish-test-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+
+    @staticmethod
+    def restore_signals(handlers, wakeup):
+        signal.set_wakeup_fd(wakeup)
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+
+    def finished_run(self):
+        from owned_command import Controller, Job, Triggers
+        triggers = Triggers()
+        self.addCleanup(triggers.release)
+        controller = Controller(self.root / "run", triggers)
+        self.addCleanup(os.close, controller.runner["fd"])
+        job = Job("finished", controller.root / "jobs/finished", dict(self.runner.DEFAULTS), controller.clock())
+        job.settle({"state": "joined", "returncode": 0})
+        controller.jobs.append(job)
+        controller.root.mkdir()
+        return triggers, self.runner.Run(REPO, "/bin/bash", {}, 1, {}, controller, None, str(self.root))
+
+    def test_signal_after_the_last_job_decides_the_status(self):
+        triggers, run = self.finished_run()
+        os.kill(os.getpid(), signal.SIGTERM)
+        self.assertEqual(triggers.received, signal.SIGTERM, "the controller's handler did not record the signal")
+        self.assertEqual(run.finish(0), 128 + signal.SIGTERM)
+
+    def test_signal_during_final_deletion_decides_the_status(self):
+        triggers, run = self.finished_run()
+        delete = shutil.rmtree
+
+        def delete_then_signal(path, *arguments, **options):
+            delete(path, *arguments, **options)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        with patch.object(self.runner.shutil, "rmtree", side_effect=delete_then_signal):
+            status = run.finish(0)
+        self.assertEqual(triggers.received, signal.SIGTERM)
+        self.assertEqual(status, 128 + signal.SIGTERM)
+        self.assertFalse((self.root / "run").exists())
 
 
 def setUpModule():
