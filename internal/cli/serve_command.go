@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/protocol"
@@ -253,19 +254,36 @@ func writeServeLifetime(output io.Writer, mask *privacy.Mask, run *protocol.Serv
 
 func (a *application) serveListCommand() *cobra.Command {
 	var timeout time.Duration
+	var jsonOutput bool
 	command := &cobra.Command{
 		Use:     "ls",
 		Aliases: []string{"list"},
 		Short:   "List live and cached services",
-		Args:    cobra.NoArgs,
+		Args: func(cmd *cobra.Command, args []string) error {
+			err := cobra.NoArgs(cmd, args)
+			if err != nil && a.agent.operation != "" {
+				return agentapi.Usage(a.agent.operation, err.Error())
+			}
+			if err != nil {
+				return fmt.Errorf("%w", err)
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if timeout <= 0 || timeout > maximumServiceListTimeout {
+				if jsonOutput {
+					return agentapi.Usage("services.list", fmt.Sprintf("--timeout must be between 1ns and %s", maximumServiceListTimeout))
+				}
 				return fmt.Errorf("--timeout must be between 1ns and %s", maximumServiceListTimeout)
+			}
+			if jsonOutput {
+				return a.runAgentServices(cmd, timeout)
 			}
 			return a.runServeList(cmd, timeout)
 		},
 	}
 	command.Flags().DurationVar(&timeout, "timeout", defaultServiceListTimeout, "hard deadline for live host queries")
+	command.Flags().BoolVar(&jsonOutput, "json", false, "write one agent result with live and cached services")
 	return command
 }
 

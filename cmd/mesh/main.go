@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/charmbracelet/fang"
+	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/paths"
@@ -19,11 +20,19 @@ import (
 
 func main() {
 	if err := initializeDeployment(os.Args[1:]); err != nil {
+		if agentapi.Requested(os.Args[1:]) && agentapi.Classify(os.Args[1:]) != "" {
+			finishEnvelopeCommand(cli.WriteAgentFailure(os.Stdout, os.Args[1:], err))
+			return
+		}
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
 	root := cli.NewCommand(commandDependencies())
+	if agentapi.Requested(os.Args[1:]) && agentapi.Classify(os.Args[1:]) != "" {
+		finishEnvelopeCommand(root.ExecuteContext(context.Background()))
+		return
+	}
 	if plainAgentCommand(os.Args[1:]) {
 		finishAgentCommand(os.Args[1], root.ExecuteContext(context.Background()))
 		return
@@ -48,6 +57,17 @@ func main() {
 	if status, ok := cli.StatusCode(err); ok {
 		os.Exit(status)
 	}
+	os.Exit(1)
+}
+
+func finishEnvelopeCommand(err error) {
+	if err == nil {
+		return
+	}
+	if status, ok := cli.StatusCode(err); ok {
+		os.Exit(status)
+	}
+	_, _ = fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
 }
 
@@ -123,6 +143,12 @@ func initializeDeployment(args []string) error {
 	}
 	path := filepath.Join(filepath.Dir(config), "domains.json")
 	var policyErr error
+	if agentapi.Classify(args) != "" {
+		if err := domainpolicy.InitializeReadOnlyDeployment(path, state); err != nil {
+			return fmt.Errorf("initialize read-only deployment policy: %w", err)
+		}
+		return nil
+	}
 	switch entryCommand(args) {
 	case "ls", "list":
 		policyErr = domainpolicy.InitializeReadOnlyDeployment(path, state)

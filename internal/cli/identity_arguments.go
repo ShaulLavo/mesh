@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -13,11 +14,12 @@ import (
 // Command preserves identity operands across Cobra's option parsing.
 type Command struct {
 	*cobra.Command
+	agent *agentInvocation
 }
 
-func identityArgumentCommand(root *cobra.Command) *Command {
+func identityArgumentCommand(root *cobra.Command, invocation *agentInvocation) *Command {
 	restoreIdentityArguments(root)
-	command := &Command{Command: root}
+	command := &Command{Command: root, agent: invocation}
 	command.SetArgs(os.Args[1:])
 	return command
 }
@@ -26,6 +28,10 @@ func identityArgumentCommand(root *cobra.Command) *Command {
 func (c *Command) SetArgs(args []string) {
 	if args == nil {
 		args = os.Args[1:]
+	}
+	*c.agent = agentInvocation{}
+	if agentapi.Requested(args) {
+		c.agent.operation = agentapi.Classify(args)
 	}
 	c.Command.SetArgs(protectIdentityArguments(c.Command, args))
 }
