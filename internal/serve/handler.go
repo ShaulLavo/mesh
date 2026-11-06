@@ -177,13 +177,13 @@ func serveFiles(w http.ResponseWriter, request *http.Request, root, prefix, rela
 		return
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	decoded, err := DecodeRequestPath(relative)
+	decoded, err := decodeHTTPPath(relative)
 	if err != nil {
 		http.Error(w, "bad path", http.StatusBadRequest)
 		return
 	}
 	page := directoryPage{Title: request.URL.Path, Entries: make([]directoryEntry, 0, len(entries)+1)}
-	logicalDirectory := strings.Trim(decoded, "/")
+	logicalDirectory := strings.Trim(string(decoded), "/")
 	if logicalDirectory != "" {
 		parent := path.Dir(logicalDirectory)
 		if parent == "." {
@@ -213,7 +213,12 @@ func serveFiles(w http.ResponseWriter, request *http.Request, root, prefix, rela
 }
 
 func openForHTTP(w http.ResponseWriter, request *http.Request, root, relative string) (*os.File, fs.FileInfo, bool) {
-	file, info, err := OpenRootEntry(root, relative)
+	literal, err := decodeHTTPPath(relative)
+	var file *os.File
+	var info fs.FileInfo
+	if err == nil {
+		file, info, err = literal.Open(root)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrRootUnavailable):
