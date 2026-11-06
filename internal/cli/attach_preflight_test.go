@@ -76,99 +76,150 @@ func TestInvalidAttachFlagsDoNotCreateSession(t *testing.T) {
 
 func TestProductionAttachmentHonorsCommandCancellation(t *testing.T) {
 	for _, stage := range []string{"before handshake", "initial write", "after acknowledgement"} {
-		t.Run(stage, func(t *testing.T) {
-			host := setupCommandTestHost(t)
-			var attachment *cancelCommandAttachConn
-			dial := func(ctx context.Context, record HostRecord) (transport.Conn, error) {
-				conn, err := host.dial(ctx, record)
-				if err != nil {
-					return nil, err
-				}
-				attachment = &cancelCommandAttachConn{
-					commandTestConn: conn.(*commandTestConn), stage: stage,
-					entered: make(chan struct{}), closed: make(chan struct{}),
-				}
-				return attachment, nil
-			}
-			input, writer, err := os.Pipe()
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = input.Close(); _ = writer.Close() })
-			output, err := os.CreateTemp(t.TempDir(), "output")
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = output.Close() })
-			command := NewCommand(Dependencies{
-				DialHost: dial, DialControl: dial, Stdin: input, Stdout: output, Stderr: output,
-				Containment: func(context.Context) []protocol.SessionIdentity { return nil },
-			})
-			command.SetArgs([]string{"pc", "-r", "--raw"})
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			baselineInput := goroutinesWithStack("internal/cli.relayInput")
-			baselineResize := goroutinesWithStack("internal/cli.relayTerminalResizes")
-			baselineLocalResize := goroutinesWithStack("internal/cli.relayResizes")
-			done := make(chan error, 1)
-			ready := make(chan *cancelCommandAttachConn, 1)
-			host.attachStart = func() { ready <- attachment }
-			go func() { done <- command.ExecuteContext(ctx) }()
-			select {
-			case attachment = <-ready:
-			case <-time.After(time.Second):
-				t.Fatal("production attach did not start")
-			}
-			<-attachment.entered
-			if stage == "after acknowledgement" {
-				deadline := time.Now().Add(time.Second)
-				for goroutinesWithStack("internal/cli.relayInput") <= baselineInput {
-					if time.Now().After(deadline) {
-						_ = attachment.Close()
-						<-done
-						t.Fatal("production input relay did not start")
-					}
-					time.Sleep(time.Millisecond)
-				}
-			}
-			cancel()
-			select {
-			case err := <-done:
-				if !errors.Is(err, context.Canceled) {
-					t.Fatalf("cancelled production attachment = %v, want context.Canceled", err)
-				}
-			case <-time.After(time.Second):
-				_ = attachment.Close()
-				<-done
-				t.Fatal("production attachment ignored command cancellation; forced connection closure")
-			}
-			select {
-			case <-attachment.closed:
-			default:
-				t.Fatal("command cancellation left the client connection open")
-			}
-			for _, relay := range []struct {
-				name string
-				want int
-			}{
-				{"internal/cli.relayInput", baselineInput},
-				{"internal/cli.relayTerminalResizes", baselineResize},
-				{"internal/cli.relayResizes", baselineLocalResize},
-			} {
-				if got := goroutinesWithStack(relay.name); got != relay.want {
-					t.Errorf("%s goroutines = %d, want %d", relay.name, got, relay.want)
-				}
-			}
-			if host.eventCount(protocol.TypeSignal)+host.eventCount(protocol.TypeKill) != 0 {
-				t.Fatal("command cancellation signalled the worker")
-			}
-		})
+		t.Run(stage, func(t *testing.T) { testProductionAttachmentCancellation(t, stage) })
+	}
+}
+
+func testProductionAttachmentCancellation(t *testing.T, stage string) {
+	t.Helper()
+	trace := newCancellationPhaseTrace(t)
+	host := setupCommandTestHost(t)
+	trace.phase("host/catalog ready")
+	t.Cleanup(func() { trace.phase("host/catalog cleanup") })
+	var attachment *cancelCommandAttachConn
+	dial := func(ctx context.Context, record HostRecord) (transport.Conn, error) {
+		trace.event("host dial started")
+		conn, err := host.dial(ctx, record)
+		if err != nil {
+			return nil, err
+		}
+		attachment = &cancelCommandAttachConn{
+			commandTestConn: conn.(*commandTestConn), stage: stage, trace: trace,
+			entered: make(chan struct{}), closed: make(chan struct{}),
+		}
+		trace.event("host dial returned")
+		return attachment, nil
+	}
+	trace.phase("input pipe setup")
+	input, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		trace.phase("close input")
+		_ = input.Close()
+		trace.phase("close input writer")
+		_ = writer.Close()
+		trace.phase("input closed")
+	})
+	trace.phase("output scratch setup")
+	output, err := os.CreateTemp(t.TempDir(), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		trace.phase("close output")
+		_ = output.Close()
+		trace.phase("output scratch cleanup")
+	})
+	trace.phase("command setup")
+	command := NewCommand(Dependencies{
+		DialHost: dial, DialControl: dial, Stdin: input, Stdout: output, Stderr: output,
+		Containment: func(context.Context) []protocol.SessionIdentity { return nil },
+	})
+	command.SetArgs([]string{"pc", "-r", "--raw"})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	trace.phase("count baseline input relays")
+	baselineInput := goroutinesWithStack("internal/cli.relayInput")
+	trace.phase("count baseline terminal resize relays")
+	baselineResize := goroutinesWithStack("internal/cli.relayTerminalResizes")
+	trace.phase("count baseline local resize relays")
+	baselineLocalResize := goroutinesWithStack("internal/cli.relayResizes")
+	done := make(chan error, 1)
+	ready := make(chan *cancelCommandAttachConn, 1)
+	host.attachStart = func() { ready <- attachment }
+	trace.phase("wait handshake")
+	go func() {
+		trace.event("ExecuteContext started")
+		err := command.ExecuteContext(ctx)
+		trace.event("ExecuteContext returned")
+		done <- err
+	}()
+	select {
+	case attachment = <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("production attach did not start")
+	}
+	trace.phase("wait attachment entered")
+	<-attachment.entered
+	trace.phase("attachment entered")
+	if stage == "after acknowledgement" {
+		trace.phase("wait input relay after acknowledgement")
+		waitForCancellationInputRelay(t, attachment, done, baselineInput)
+	}
+	trace.phase("cancel command")
+	cancel()
+	trace.event("cancel returned; context error: " + ctx.Err().Error())
+	trace.phase("wait ExecuteContext return")
+	select {
+	case err := <-done:
+		trace.phase("command joined")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled production attachment = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		trace.phase("forced connection closure after cancellation deadline")
+		_ = attachment.Close()
+		trace.phase("join command after forced connection closure")
+		<-done
+		t.Fatal("production attachment ignored command cancellation; forced connection closure")
+	}
+	trace.phase("check connection closed")
+	select {
+	case <-attachment.closed:
+	default:
+		t.Fatal("command cancellation left the client connection open")
+	}
+	for _, relay := range []struct {
+		name string
+		want int
+	}{
+		{"internal/cli.relayInput", baselineInput},
+		{"internal/cli.relayTerminalResizes", baselineResize},
+		{"internal/cli.relayResizes", baselineLocalResize},
+	} {
+		trace.phase("check joined relay " + relay.name)
+		if got := goroutinesWithStack(relay.name); got != relay.want {
+			t.Errorf("%s goroutines = %d, want %d", relay.name, got, relay.want)
+		}
+	}
+	trace.phase("check worker not signalled")
+	if host.eventCount(protocol.TypeSignal)+host.eventCount(protocol.TypeKill) != 0 {
+		t.Fatal("command cancellation signalled the worker")
+	}
+	trace.phase("test body complete")
+}
+
+func waitForCancellationInputRelay(t *testing.T, attachment *cancelCommandAttachConn, done <-chan error, baselineInput int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for goroutinesWithStack("internal/cli.relayInput") <= baselineInput {
+		if time.Now().After(deadline) {
+			attachment.trace.phase("forced connection closure after relay deadline")
+			_ = attachment.Close()
+			attachment.trace.phase("join command after relay deadline")
+			<-done
+			t.Fatal("production input relay did not start")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
 type cancelCommandAttachConn struct {
 	*commandTestConn
 	stage   string
+	trace   *cancellationPhaseTrace
 	entered chan struct{}
 	closed  chan struct{}
 	once    sync.Once
@@ -177,8 +228,10 @@ type cancelCommandAttachConn struct {
 func (c *cancelCommandAttachConn) ReadFrame() (protocol.Frame, error) {
 	select {
 	case <-c.closed:
+		c.trace.event("attachment read observed connection closed")
 		return protocol.Frame{}, net.ErrClosed
 	case frame := <-c.responses:
+		c.trace.event("attachment read received response")
 		return frame, nil
 	}
 }
@@ -194,21 +247,30 @@ func (c *cancelCommandAttachConn) WriteFrame(frame protocol.Frame) error {
 	if request.Type != protocol.TypeAttach {
 		return c.commandTestConn.WriteFrame(frame)
 	}
+	c.trace.event("attachment write entered")
 	c.host.record(request.Type)
 	c.host.attachStart()
 	close(c.entered)
 	if c.stage == "initial write" {
+		c.trace.event("initial write waiting for connection close")
 		<-c.closed
+		c.trace.event("initial write observed connection closed")
 		return net.ErrClosed
 	}
 	if c.stage == "after acknowledgement" {
+		c.trace.event("send acknowledgement")
 		c.responses <- mustCommandControlFrame(protocol.Control{Type: protocol.TypeAttached, SessionID: request.SessionID})
+		c.trace.event("acknowledgement sent")
 	}
 	return nil
 }
 
 func (c *cancelCommandAttachConn) Close() error {
-	c.once.Do(func() { close(c.closed) })
+	c.once.Do(func() {
+		c.trace.event("connection close started")
+		close(c.closed)
+		c.trace.event("connection closed")
+	})
 	return nil
 }
 
