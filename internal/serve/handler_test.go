@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -180,36 +182,95 @@ func TestMissingDirectoryIsRegisteredAsUnhealthy(t *testing.T) {
 
 func TestFilesHandlerBuildsWorkingLinksAtRootAndNestedPrefixes(t *testing.T) {
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "sub dir"), 0o700); err != nil {
-		t.Fatal(err)
+	files := map[string]string{
+		"hello world.txt":    "hello",
+		"report%20final.txt": "literal percent file",
+		"report final.txt":   "different space file",
+		"100%.txt":           "plain percent file",
 	}
-	if err := os.WriteFile(filepath.Join(root, "hello world.txt"), []byte("hello"), 0o600); err != nil {
-		t.Fatal(err)
+	directories := []string{"sub dir", "sub%20dir", "100%"}
+	writeListingFiles(t, root, files)
+	for _, directory := range directories {
+		writeListingFiles(t, filepath.Join(root, directory), files)
+		writeListingFiles(t, filepath.Join(root, directory, "deep%20dir"), files)
 	}
-
-	for _, prefix := range []string{"/files", "/"} {
+	for _, prefix := range []string{"/files", "/nested/files", "/"} {
 		t.Run(prefix, func(t *testing.T) {
 			handler, err := Handler(Service{Name: "files", Kind: Files, Target: root}, prefix)
 			if err != nil {
 				t.Fatal(err)
 			}
-			response := httptest.NewRecorder()
-			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, prefixWithSlash(prefix), nil))
-			if response.Code != http.StatusOK {
-				t.Fatalf("listing status = %d: %s", response.Code, response.Body.String())
-			}
-			wantLink := joinURLPrefix(prefix, "hello%20world.txt")
-			if !strings.Contains(response.Body.String(), `href="`+wantLink+`"`) {
-				t.Fatalf("listing does not contain working link %q: %s", wantLink, response.Body.String())
-			}
-
-			download := httptest.NewRecorder()
-			handler.ServeHTTP(download, httptest.NewRequest(http.MethodGet, wantLink, nil))
-			if download.Code != http.StatusOK || download.Body.String() != "hello" {
-				t.Fatalf("download = %d %q, want 200 hello", download.Code, download.Body.String())
+			links := checkListingFiles(t, handler, prefixWithSlash(prefix), root, files)
+			for _, directory := range directories {
+				checkNestedListingFiles(t, handler, links[directory+"/"], filepath.Join(root, directory), files)
 			}
 		})
 	}
+}
+
+func writeListingFiles(t *testing.T, directory string, files map[string]string) {
+	t.Helper()
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range files {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(directory+"/"+contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func checkNestedListingFiles(t *testing.T, handler http.Handler, target, directory string, files map[string]string) {
+	t.Helper()
+	links := checkListingFiles(t, handler, target, directory, files)
+	checkListingFiles(t, handler, links["deep%20dir/"], filepath.Join(directory, "deep%20dir"), files)
+	parent := listedLinks(t, handler, links["../"])
+	if parent[filepath.Base(directory)+"/"] != target {
+		t.Errorf("parent listing does not link back to %q: %v", target, parent)
+	}
+}
+
+func checkListingFiles(t *testing.T, handler http.Handler, target, directory string, files map[string]string) map[string]string {
+	t.Helper()
+	links := listedLinks(t, handler, target)
+	for name, contents := range files {
+		checkListedDownload(t, handler, links[name], directory, contents)
+	}
+	return links
+}
+
+func checkListedDownload(t *testing.T, handler http.Handler, target, directory, contents string) {
+	t.Helper()
+	if target == "" {
+		t.Fatal("listing did not contain the requested download link")
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, target, nil)
+	request.URL.Fragment = "ignored"
+	handler.ServeHTTP(response, request)
+	want := directory + "/" + contents
+	if response.Code != http.StatusOK || response.Body.String() != want {
+		t.Errorf("GET generated href %q = %d %q, want 200 %q", target, response.Code, response.Body.String(), want)
+	}
+}
+
+var listingLinkPattern = regexp.MustCompile(`<a href="([^"]+)">([^<]+)</a>`)
+
+func listedLinks(t *testing.T, handler http.Handler, target string) map[string]string {
+	t.Helper()
+	if target == "" {
+		t.Fatal("listing did not contain the requested link")
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET listing %q = %d %q, want 200", target, response.Code, response.Body.String())
+	}
+	links := make(map[string]string)
+	for _, match := range listingLinkPattern.FindAllStringSubmatch(response.Body.String(), -1) {
+		links[html.UnescapeString(match[2])] = html.UnescapeString(match[1])
+	}
+	return links
 }
 
 func TestProxyForwardsPathHeadersAndStreams(t *testing.T) {
