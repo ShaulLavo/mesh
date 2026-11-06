@@ -11,10 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
-	"unicode"
 
+	"github.com/shaul/mesh/internal/hostprofile"
 	"golang.org/x/sys/unix"
 )
 
@@ -139,62 +138,10 @@ func removeHostAliases(hosts []map[string]json.RawMessage) (bool, error) {
 }
 
 func checkConfigJSON(decoder *json.Decoder, depth int) error {
-	if depth > 64 {
-		return errors.New("configuration nesting exceeds 64 levels")
-	}
-	token, err := decoder.Token()
-	if err != nil {
-		return fmt.Errorf("read configuration token: %w", err)
-	}
-	delimiter, composite := token.(json.Delim)
-	if !composite {
-		return nil
-	}
-	keys := map[string]bool{}
-	for decoder.More() {
-		if delimiter == '{' {
-			if err := checkConfigKey(decoder, keys); err != nil {
-				return err
-			}
-		}
-		if err := checkConfigJSON(decoder, depth+1); err != nil {
-			return err
-		}
-	}
-	if _, err := decoder.Token(); err != nil {
-		return fmt.Errorf("close configuration object: %w", err)
+	if err := hostprofile.CheckJSON(decoder, depth, 64); err != nil {
+		return fmt.Errorf("%w", err)
 	}
 	return nil
-}
-
-func checkConfigKey(decoder *json.Decoder, keys map[string]bool) error {
-	key, err := decoder.Token()
-	if err != nil {
-		return fmt.Errorf("read configuration key: %w", err)
-	}
-	name, ok := key.(string)
-	if !ok {
-		return errors.New("configuration object key must be a string")
-	}
-	folded := foldConfigKey(name)
-	if keys[folded] {
-		return errors.New("configuration contains duplicate or case-ambiguous object keys")
-	}
-	keys[folded] = true
-	return nil
-}
-
-func foldConfigKey(name string) string {
-	// encoding/json matches struct fields by Unicode simple folding as well as case.
-	return strings.Map(func(r rune) rune {
-		folded := r
-		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
-			if next < folded {
-				folded = next
-			}
-		}
-		return folded
-	}, name)
 }
 
 func withClientConfigLock(ctx context.Context, create bool, operation func(*os.File, string) error) error {
