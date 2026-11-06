@@ -108,10 +108,17 @@ func (w *Worker) checkpoint() <-chan error {
 	return w.submitCheckpoint()
 }
 
+// periodicCheckpoint skips preparation only after matching durable success.
 func (w *Worker) periodicCheckpoint() (<-chan error, bool) {
 	w.checkpointMu.Lock()
 	defer w.checkpointMu.Unlock()
 	w.applyDirectoryObservation()
+	w.mu.Lock()
+	inputs, revision := w.recoveryInputsLocked(), w.screen.Revision()
+	w.mu.Unlock()
+	if w.checkpointWriter.Covers(recovery.CheckpointKey(inputs, revision)) {
+		return nil, false
+	}
 	return w.submitCheckpoint(), true
 }
 
