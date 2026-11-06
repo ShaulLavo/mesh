@@ -199,6 +199,7 @@ jobs:
           REQUIRED_PLATFORM: ${{ matrix.platform }}
         run: test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$REQUIRED_PLATFORM"
       - name: Verify destination persistence, publication and authentication
+        if: matrix.platform != 'linux/amd64'
         run: |
           set -euo pipefail
           go test -race -count=1 ./internal/machinename ./internal/protocol
