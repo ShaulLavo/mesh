@@ -108,6 +108,8 @@ def cache_cases(binary, root, child, host_id):
     assert remote["declared"]["host"]["profile"]["instructions"] is None, remote
     assert "profile" not in remote["declared"]["fleet"], remote
     before = control(child, "operations")
+    named = inspect(binary, root, "fixture", "--cached")["data"]
+    assert named["host"]["hostId"] == host_id, named
     cached = inspect(binary, root, host_id, "--cached")["data"]
     assert cached["host"]["declared"]["host"]["profile"]["instructions"] == "host notes", cached
     assert cached["access"]["grant"] == "unknown" and cached["access"]["observedAt"] is None, cached

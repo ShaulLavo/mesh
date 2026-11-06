@@ -72,7 +72,7 @@ func (r agentHostReader) read(ctx context.Context, host HostRecord) agentHostRea
 	result.host.Declared = contextDeclared(reply, agentapi.FreshnessLive, at)
 	result.useful, result.liveAccess = true, true
 	result.errors = append(result.errors, r.contextProblems(reply, host.ID)...)
-	r.cacheLive(ctx, host, hostprofile.CachedContext{HostID: host.ID, MeshIdentity: host.MeshIdentity, ReceivedAt: at, Observed: &observation, Context: reply}, &result)
+	r.cacheLive(ctx, host, info, hostprofile.CachedContext{HostID: host.ID, MeshIdentity: host.MeshIdentity, ReceivedAt: at, Observed: &observation, Context: reply}, &result)
 	return r.finish(result)
 }
 
@@ -113,10 +113,13 @@ func readAgentHostContext(ctx context.Context, host HostRecord, full bool, dial 
 	return reply, info, nil
 }
 
-func (r agentHostReader) cacheLive(ctx context.Context, host HostRecord, entry hostprofile.CachedContext, result *agentHostRead) {
+func (r agentHostReader) cacheLive(ctx context.Context, host HostRecord, info protocol.HostInfo, entry hostprofile.CachedContext, result *agentHostRead) {
 	if _, _, err := identity.LoadPrivate(r.state); err != nil {
 		result.errors = appendHostDiagnostic(result.errors, r.diagnostic(err, host.ID, agentapi.StateUnavailable))
 		return
+	}
+	if err := rememberAgentContextName(ctx, r.config, info); err != nil {
+		result.errors = appendHostDiagnostic(result.errors, r.diagnostic(err, host.ID, agentapi.StateUnavailable))
 	}
 	regressed, err := hostprofile.OpenContextCache(r.state).Save(ctx, entry)
 	if err != nil {
@@ -336,6 +339,26 @@ func validateContextObservation(info protocol.HostInfo) error {
 		if len(field.value) > field.limit || agentapi.CleanMessage(field.value) != field.value {
 			return errors.New("Host build observation contains invalid text or exceeds its byte limit.")
 		}
+	}
+	return nil
+}
+
+func rememberAgentContextName(ctx context.Context, config string, info protocol.HostInfo) error {
+	if info.MachineName == "" && info.NameRevision == 0 {
+		return nil
+	}
+	directory, err := os.Lstat(config)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect passive name cache directory: %w", err)
+	}
+	if !directory.IsDir() {
+		return errors.New("The passive name cache requires an existing real configuration directory.")
+	}
+	if _, err := machinename.RememberClaim(ctx, config, info.ID, declaredName(info)); err != nil {
+		return fmt.Errorf("cache passive destination name: %w", err)
 	}
 	return nil
 }

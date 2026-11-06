@@ -266,3 +266,27 @@ func TestAgentHostsRejectsInvalidObservation(t *testing.T) {
 		t.Fatal("unvalidated build observation accepted")
 	}
 }
+
+func TestAgentHostsCachesValidatedNamesForCachedResolution(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("MESH_STATE_DIR", state)
+	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+	if _, _, err := identity.LoadOrCreate(state); err != nil {
+		t.Fatal(err)
+	}
+	host := HostRecord{ID: argumentIdentities(t)[1], MeshIdentity: argumentIdentities(t)[1], Endpoint: "ws://127.0.0.1:1/control/ws", MachineName: "pc", NameRevision: 1}
+	if err := SaveHost(host); err != nil {
+		t.Fatal(err)
+	}
+	var reads atomic.Int32
+	dial := agentContextFixtureDial(t, host, t.TempDir(), t.TempDir(), &reads)
+	runHostDetail(t, Dependencies{DialPassive: dial}, 0, "inspect", host.ID, "--json")
+	offline := func(context.Context, HostRecord) (transport.Conn, error) {
+		t.Error("cached resolution dialed")
+		return nil, context.Canceled
+	}
+	detail := runHostDetail(t, Dependencies{DialPassive: offline}, 0, "inspect", "pc", "--json", "--cached")
+	if detail.Host.HostID == nil || *detail.Host.HostID != host.ID || detail.Host.MachineName != "pc" {
+		t.Fatal(detail)
+	}
+}
