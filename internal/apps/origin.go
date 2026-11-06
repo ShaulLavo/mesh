@@ -1375,7 +1375,8 @@ func (o *Origin) create(ctx context.Context, q Request) (Result, error) {
 		if err := o.modify(ctx, app.ID, func(a *localApp) { a.Session = session }); err != nil {
 			return Result{}, err
 		}
-		if err := o.awaitServer(ctx, app.ID, session, q.Port); err != nil {
+		inspect := func(ctx context.Context) (listenerSocket, error) { return o.checkServer(ctx, session, q.Port) }
+		if err := o.awaitServer(ctx, app.ID, session, inspect); err != nil {
 			return fail(err)
 		}
 		if _, alive, err := o.config.Workers.Find(ctx, "app "+app.ID); err != nil || !alive {
@@ -1494,7 +1495,8 @@ func (o *Origin) ensureServer(ctx context.Context, a *localApp) error {
 	if err := o.modify(ctx, a.Record.ID, func(stored *localApp) { stored.Session = session }); err != nil {
 		return err
 	}
-	if err := o.awaitServer(ctx, a.Record.ID, session, a.Port); err != nil {
+	inspect := func(ctx context.Context) (listenerSocket, error) { return o.checkServer(ctx, session, a.Port) }
+	if err := o.awaitServer(ctx, a.Record.ID, session, inspect); err != nil {
 		_ = o.stop(ctx, a.Record.ID)
 		return err
 	}
@@ -1547,30 +1549,56 @@ func (o *Origin) waitClaim(ctx context.Context, id, session string) (int, error)
 // awaitServer waits for the app's worker to listen on its port, then records
 // the one address the proxy may dial. A listener that fails the identity check
 // ends the wait at once: a process that took the port after the preflight is
-// not going to leave, and the app cannot bind it.
-func (o *Origin) awaitServer(ctx context.Context, id, session string, port int) error {
+// not going to leave, and the app cannot bind it. Incomplete descriptor
+// evidence needs a fresh whole check and never authorizes app traffic.
+func (o *Origin) awaitServer(ctx context.Context, id, session string, inspect func(context.Context) (listenerSocket, error)) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	var lastErr error
 	for {
-		verified, err := o.checkServer(ctx, session, port)
+		if err := ctx.Err(); err != nil {
+			return serverReadinessStopped(ctx, lastErr)
+		}
+		verified, err := inspect(ctx)
+		if err != nil {
+			lastErr = err
+		}
+		if cause := ctx.Err(); cause != nil {
+			return serverReadinessStopped(ctx, lastErr)
+		}
 		if err == nil {
 			o.setServing(id, serving{upstream: verified.Address, inode: verified.Inode})
 			return nil
 		}
-		if errors.Is(err, ErrSessionEnded) {
-			return fmt.Errorf("app %s: %w", id, o.serverExit(ctx, id, session))
-		}
-		if !errors.Is(err, errNoListener) {
-			return fmt.Errorf("app %s: %w", id, err)
+		if fault := o.serverReadinessFault(ctx, id, session, err); fault != nil {
+			return fault
 		}
 		select {
 		case <-ctx.Done():
-			return errors.New("app: server readiness timed out")
+			return serverReadinessStopped(ctx, lastErr)
 		case <-ticker.C:
 		}
 	}
+}
+
+func (o *Origin) serverReadinessFault(ctx context.Context, id, session string, err error) error {
+	if errors.Is(err, ErrSessionEnded) {
+		return fmt.Errorf("app %s: %w", id, o.serverExit(ctx, id, session))
+	}
+	if errors.Is(err, errNoListener) || errors.Is(err, errIncompleteListenerObservation) {
+		return nil
+	}
+	return fmt.Errorf("app %s: %w", id, err)
+}
+
+func serverReadinessStopped(ctx context.Context, lastErr error) error {
+	cause := context.Cause(ctx)
+	if !errors.Is(cause, ctx.Err()) {
+		cause = errors.Join(ctx.Err(), cause)
+	}
+	return fmt.Errorf("app: server readiness stopped: %w", errors.Join(cause, lastErr))
 }
 
 // serverExit explains a server that exited before it listened, with its exit
