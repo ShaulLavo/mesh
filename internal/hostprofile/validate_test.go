@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 func TestEditableValidation(t *testing.T) {
@@ -143,6 +145,33 @@ func TestStrictDepthAndAllControlRanges(t *testing.T) {
 		}
 		if _, err := ParseEditable(encoded, HostLimits); err == nil {
 			t.Errorf("accepted control U+%04X", r)
+		}
+	}
+}
+
+func TestValidationErrorRenderingIsBoundedAndControlFree(t *testing.T) {
+	cases := []ValidationError{
+		{Field: "\u202eFIELD\u202c", Problem: "unknown field\x01"},
+		{Field: strings.Repeat("界", 300), Problem: "unknown field"},
+		{Field: "field", Problem: "\xff" + strings.Repeat("é", 400)},
+	}
+	for _, failure := range cases {
+		assertValidationErrorText(t, failure.Error())
+	}
+	failure := ValidationError{Field: "description", Problem: "too long"}
+	if failure.Error() != "profile description: too long" {
+		t.Fatal(failure.Error())
+	}
+}
+
+func assertValidationErrorText(t *testing.T, text string) {
+	t.Helper()
+	if len(text) > 512 || !utf8.ValidString(text) {
+		t.Fatalf("unbounded or invalid diagnostic: %q", text)
+	}
+	for _, r := range text {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			t.Fatalf("diagnostic contains control U+%04X: %q", r, text)
 		}
 	}
 }

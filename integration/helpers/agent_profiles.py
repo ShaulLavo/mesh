@@ -118,12 +118,37 @@ def concurrent_cases(binary, root):
         assert stored["revision"] == 1, stored
 
 
+def editor_diagnostic_case(binary, root):
+    directory = root / "editor-diagnostic"
+    directory.mkdir(mode=0o700)
+    environment = dict(os.environ, MESH_CONFIG_DIR=str(directory / "config"),
+                       MESH_STATE_DIR=str(directory / "state"), MESH_PRIVACY="0", NO_COLOR="1")
+    subprocess.run([binary, "device", "identity", "--json"], env=environment,
+                   capture_output=True, timeout=10, check=True)
+    before = (directory / "state" / "identity.key").read_bytes()
+    document = json.dumps({"schemaVersion": 1, "\u202ePROFILE_FIELD_MARKER\u202c": "unexpected"})
+    editor = directory / "editor"
+    editor.write_text("#!/bin/sh\nprintf '%s' '" + document + "' > \"$1\"\n")
+    editor.chmod(0o700)
+    environment.update(VISUAL=str(editor), EDITOR="exit 89")
+    result = subprocess.run([binary, "profile", "edit"], env=environment,
+                            capture_output=True, text=True, timeout=10, check=False)
+    assert result.returncode == 1 and not result.stdout, (result.returncode, repr(result.stdout))
+    assert "PROFILE_FIELD_MARKER" in result.stderr and "editable copy kept at" in result.stderr, repr(result.stderr)
+    assert "\u202e" not in result.stderr and "\u202c" not in result.stderr, repr(result.stderr)
+    assert not (directory / "config").exists(), "invalid editor document created profile state"
+    retained = list((directory / "state").glob(".profile-*.json"))
+    assert len(retained) == 1 and retained[0].read_text() == document, retained
+    assert (directory / "state" / "identity.key").read_bytes() == before
+
+
 def main():
     binary, directory = sys.argv[1:]
     root = Path(directory).resolve()
     early_cases(binary, root)
     local_cases(binary, root)
     concurrent_cases(binary, root)
+    editor_diagnostic_case(binary, root)
     print("PASS: profile group/leaf errors, explicit stdin, stopped-daemon reads/writes and noncreation")
 
 

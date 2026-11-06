@@ -57,7 +57,9 @@ type Snapshot[T any] struct {
 
 type ValidationError struct{ Field, Problem string }
 
-func (e *ValidationError) Error() string { return fmt.Sprintf("profile %s: %s", e.Field, e.Problem) }
+func (e *ValidationError) Error() string {
+	return problemText(fmt.Sprintf("profile %s: %s", e.Field, e.Problem))
+}
 
 type ConflictError struct{ Expected, Current uint64 }
 
