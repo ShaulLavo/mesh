@@ -113,10 +113,16 @@ type Screen interface {
 	Snapshot() Capture
 	Preview(cols, rows int) Preview
 	SaveText(maxLines, maxBytes int) TextSnapshot
+	// Revision advances on accepted nonempty output and every Resize. Equal
+	// revisions on the same instance with the same capture bounds mean the
+	// same screen state. It lasts for this Screen's lifetime and never resets
+	// on RIS, resize, captures or checkpoints.
+	Revision() uint64
 }
 
 type emulatorScreen struct {
 	mu       sync.Mutex
+	revision uint64
 	emulator *vt.Emulator
 	parser   *ansi.Parser
 
@@ -184,6 +190,9 @@ func (s *emulatorScreen) Write(p []byte) (int, error) {
 	defer s.mu.Unlock()
 
 	n, err := s.emulator.Write(p)
+	if n > 0 {
+		s.revision++
+	}
 	for _, b := range p[:n] {
 		s.advanceParser(b)
 	}
@@ -194,6 +203,13 @@ func (s *emulatorScreen) Resize(cols, rows int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.emulator.Resize(cols, rows)
+	s.revision++
+}
+
+func (s *emulatorScreen) Revision() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revision
 }
 
 // Snapshot returns the escape sequence stream needed to recreate the active

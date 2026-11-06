@@ -13,6 +13,8 @@ import (
 type TextSnapshot struct {
 	Title     string
 	Directory string
+	// Revision is the screen revision these rows and metadata were copied at.
+	Revision uint64
 	// One string per row rather than per cell: checkpoints run every few
 	// seconds for the life of the session, and per-cell copies were most of
 	// an idle worker's garbage.
@@ -23,7 +25,7 @@ func (s *emulatorScreen) SaveText(maxLines, maxBytes int) TextSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	snapshot := TextSnapshot{Title: s.title, Directory: s.directory}
+	snapshot := TextSnapshot{Title: s.title, Directory: s.directory, Revision: s.revision}
 	if maxLines <= 0 || maxBytes <= 0 {
 		return snapshot
 	}
