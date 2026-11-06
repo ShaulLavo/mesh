@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,6 +36,10 @@ func readState(configDir string) (book, error) {
 }
 
 func updateState(ctx context.Context, configDir string, operation func(*book) error) error {
+	return updateStateWithPublisher(ctx, configDir, operation, publishBook)
+}
+
+func updateStateWithPublisher(ctx context.Context, configDir string, operation func(*book) error, publish func(*os.File, *os.File, []byte) error) error {
 	dir, err := openDirectory(configDir, true)
 	if err != nil || dir == nil {
 		return err
@@ -49,7 +54,15 @@ func updateState(ctx context.Context, configDir string, operation func(*book) er
 		return err
 	}
 	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
+	return updateLockedState(dir, lock, operation, publish)
+}
+
+func updateLockedState(dir, lock *os.File, operation func(*book) error, publish func(*os.File, *os.File, []byte) error) error {
 	state, err := readBook(dir)
+	if err != nil {
+		return err
+	}
+	before, err := encodeBook(state)
 	if err != nil {
 		return err
 	}
@@ -59,7 +72,68 @@ func updateState(ctx context.Context, configDir string, operation func(*book) er
 	if err := validateBook(&state); err != nil {
 		return err
 	}
-	return publishBook(dir, state)
+	contents, err := encodeBook(state)
+	if err != nil {
+		return err
+	}
+	return persistBook(dir, lock, before, contents, publish)
+}
+
+func persistBook(dir, lock *os.File, before, contents []byte, publish func(*os.File, *os.File, []byte) error) error {
+	digest := sha256.Sum256(contents)
+	if bytes.Equal(before, contents) {
+		acknowledged, err := bookAcknowledged(lock, digest[:])
+		if err != nil || acknowledged {
+			return err
+		}
+	}
+	if err := publish(dir, lock, contents); err != nil {
+		return err
+	}
+	return acknowledgeBook(lock, digest[:])
+}
+
+func bookAcknowledged(lock *os.File, digest []byte) (bool, error) {
+	var contents [sha256.Size + 1]byte
+	n, err := lock.ReadAt(contents[:], 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("fleet: read publication acknowledgement: %w", err)
+	}
+	return bytes.Equal(contents[:n], digest), nil
+}
+
+type acknowledgementWriter interface {
+	Truncate(int64) error
+	WriteAt([]byte, int64) (int, error)
+	Sync() error
+}
+
+func invalidateAcknowledgement(lock acknowledgementWriter) error {
+	// Invalidation must survive a crash before any rename can reuse a digest
+	// from an earlier publication, including failed A/B/A state cycles.
+	if err := lock.Truncate(0); err != nil {
+		return fmt.Errorf("fleet: invalidate publication acknowledgement: %w", err)
+	}
+	if err := lock.Sync(); err != nil {
+		return fmt.Errorf("fleet: sync publication invalidation: %w", err)
+	}
+	return nil
+}
+
+func acknowledgeBook(lock acknowledgementWriter, digest []byte) error {
+	// The book and its directory are durable before this write. Losing the
+	// acknowledgement only causes another publication, so it needs no sync.
+	if err := lock.Truncate(0); err != nil {
+		return fmt.Errorf("fleet: reset publication acknowledgement: %w", err)
+	}
+	n, err := lock.WriteAt(digest, 0)
+	if err != nil {
+		return fmt.Errorf("fleet: write publication acknowledgement: %w", err)
+	}
+	if n != len(digest) {
+		return fmt.Errorf("fleet: write publication acknowledgement: %w", io.ErrShortWrite)
+	}
+	return nil
 }
 
 func openDirectory(path string, create bool) (*os.File, error) {
@@ -225,14 +299,25 @@ func foldedRune(char rune) rune {
 	return folded
 }
 
-func publishBook(dir *os.File, state book) error {
+func encodeBook(state book) ([]byte, error) {
 	contents, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
-		return fmt.Errorf("fleet: encode configuration: %w", err)
+		return nil, fmt.Errorf("fleet: encode configuration: %w", err)
 	}
 	if len(contents) >= maximumBytes {
-		return errors.New("fleet: configuration exceeds 32 MiB")
+		return nil, errors.New("fleet: configuration exceeds 32 MiB")
 	}
+	return contents, nil
+}
+
+func publishBook(dir, lock *os.File, contents []byte) error {
+	if err := invalidateAcknowledgement(lock); err != nil {
+		return err
+	}
+	return publishBookWithSync(dir, contents, (*os.File).Sync)
+}
+
+func publishBookWithSync(dir *os.File, contents []byte, syncFile func(*os.File) error) error {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return fmt.Errorf("fleet: generate temporary filename: %w", err)
@@ -246,7 +331,7 @@ func publishBook(dir *os.File, state book) error {
 	if _, err := file.Write(append(contents, '\n')); err != nil {
 		return fmt.Errorf("fleet: write configuration: %w", err)
 	}
-	if err := file.Sync(); err != nil {
+	if err := syncFile(file); err != nil {
 		return fmt.Errorf("fleet: sync configuration: %w", err)
 	}
 	if err := file.Close(); err != nil {
@@ -255,7 +340,7 @@ func publishBook(dir *os.File, state book) error {
 	if err := unix.Renameat(int(dir.Fd()), name, int(dir.Fd()), bookName); err != nil {
 		return fmt.Errorf("fleet: publish configuration: %w", err)
 	}
-	if err := dir.Sync(); err != nil {
+	if err := syncFile(dir); err != nil {
 		return fmt.Errorf("fleet: sync configuration directory: %w", err)
 	}
 	return nil
