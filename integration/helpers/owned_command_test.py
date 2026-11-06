@@ -13,6 +13,7 @@ with the real terminal and SSH fixtures.
 """
 import contextlib
 import ctypes
+import errno
 import io
 import json
 import math
@@ -25,12 +26,14 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 
-from owned_command import Control, Owner, Record, Trigger, admit, establish_runner, launch, observe, request_cancel  # noqa: E402
+from owned_command import (Control, Declined, Launcher, Owner, Record, Trigger, admit, default_prepare,  # noqa: E402
+                           establish_runner, launch, observe, request_cancel)
 import process_tree  # noqa: E402
-from process_tree import OwnershipFailure, Stat, Tree  # noqa: E402
+from process_tree import Kernel, OwnershipFailure, Stat, Tree, Unsupported  # noqa: E402
 
 HELPERS = Path(__file__).resolve().parent
 LINUX = sys.platform == "linux"
@@ -216,13 +219,16 @@ def kill_exact(pid):
         os.close(fd)
 
 
+def reap_one():
+    try:
+        return os.waitpid(-1, os.WNOHANG)[0] != 0
+    except ChildProcessError:
+        return False
+
+
 def reap_ready():
-    while True:
-        try:
-            if os.waitpid(-1, os.WNOHANG)[0] == 0:
-                return
-        except ChildProcessError:
-            return
+    while reap_one():
+        pass
 
 
 def remove_descendants(keep):
@@ -268,6 +274,9 @@ class FakeKernel:
         self.statuses = []
         self.hidden = False
         self.clock = None
+        self.closed = []
+        self.later = []
+        self.flood = 0
 
     def add(self, pid, ppid, start=10):
         self.table[pid] = FakeProcess(pid, ppid, start)
@@ -329,15 +338,27 @@ class FakeKernel:
             self.exit(process.pid)
         return True
 
+    def now(self):
+        return self.clock.now() if self.clock else 0.0
+
     def waitpid(self):
         if self.statuses:
             return self.statuses.pop(0)
-        if self.hidden or any(self.owned(process) for process in self.table.values()):
+        if self.flood:
+            # An endless supply of ready statuses, each costing a little time.
+            self.flood -= 1
+            self.clock.value += 0.001
+            return 5000 + self.flood, 0
+        due = [entry for entry in self.later if entry[0] <= self.now()]
+        if due:
+            self.later.remove(due[0])
+            return due[0][1], due[0][2]
+        if self.later or self.hidden or any(self.owned(process) for process in self.table.values()):
             return 0, 0
         raise ChildProcessError
 
     def close(self, fd):
-        pass
+        self.closed.append(fd)
 
 
 class FakeClock:
@@ -379,7 +400,7 @@ class OwnershipEdgeTest(unittest.TestCase):
 
     def kill_all(self):
         self.tree.discover(math.inf, time.monotonic)
-        return self.tree.deliver(signal.SIGKILL, "test", lambda pid, start: True)
+        return self.tree.deliver(signal.SIGKILL, "test", lambda pid, start: True, math.inf, time.monotonic)
 
     def test_replaced_parent_does_not_authorize_its_old_child(self):
         self.kernel.add(200, 100)
@@ -414,7 +435,8 @@ class OwnershipEdgeTest(unittest.TestCase):
         self.tree.discover(math.inf, time.monotonic)
         self.kernel.exit(300)
         self.kernel.add(300, 1, start=30)
-        self.assertEqual(self.tree.deliver(signal.SIGKILL, "test", lambda pid, start: True), [])
+        self.assertEqual(self.tree.deliver(signal.SIGKILL, "test", lambda pid, start: True, math.inf, time.monotonic),
+                         [])
         self.assertEqual(self.kernel.sent, [])
 
     def test_omitted_child_is_found_by_a_later_round(self):
@@ -434,6 +456,124 @@ class OwnershipEdgeTest(unittest.TestCase):
         self.kernel.exit(200)
         self.tree.discover(math.inf, time.monotonic)
         self.assertEqual(self.tree.live(), [300])
+
+    def test_broad_parent_traversal_and_delivery_stop_at_their_deadlines_and_resume(self):
+        clock = FakeClock()
+        self.kernel.clock = clock
+        for pid in range(201, 211):
+            self.kernel.add(pid, 100)
+        reads = []
+        read = self.kernel.stat
+
+        def slow_read(pid):
+            clock.value += 0.1
+            reads.append(pid)
+            return read(pid)
+
+        self.kernel.stat = slow_read
+        self.tree.discover(0.15, clock.now)
+        self.assertLessEqual(clock.now(), 0.25 + 1e-9, "one parent's children ran past the cutoff")
+        rounds = 0
+        while not self.tree.discover(clock.now() + 0.15, clock.now) and rounds < 50:
+            rounds += 1
+        self.assertEqual(len(self.tree.proved), 10)
+        self.assertEqual(sorted(reads), list(range(201, 211)), "a cutoff lost traversal progress")
+        send = self.kernel.send
+
+        def slow_send(fd, sig):
+            clock.value += 0.1
+            return send(fd, sig)
+
+        self.kernel.send = slow_send
+        started = clock.now()
+        sent = self.tree.deliver(signal.SIGTERM, "test", lambda pid, start: True, started + 0.15, clock.now)
+        self.assertLessEqual(clock.now(), started + 0.25 + 1e-9)
+        self.assertLess(len(sent), 10)
+
+    def test_unreadable_target_metadata_closes_its_handle_each_round(self):
+        self.kernel.add(201, 100)
+
+        def unreadable(pid):
+            raise OwnershipFailure("read stat for pid 201: Permission denied")
+
+        self.kernel.stat = unreadable
+        for _ in range(3):
+            with self.assertRaises(OwnershipFailure):
+                self.tree.edge(201, 100)
+        self.assertEqual(len(self.kernel.handles), 3)
+        self.assertEqual(sorted(self.kernel.closed), sorted(self.kernel.handles))
+        self.assertEqual(self.tree.proved, {})
+
+    def test_missing_metadata_for_a_live_target_is_a_failure(self):
+        self.kernel.add(201, 100)
+        self.kernel.stat = lambda pid: None
+        with self.assertRaises(OwnershipFailure):
+            self.tree.edge(201, 100)
+        self.assertEqual(sorted(self.kernel.closed), sorted(self.kernel.handles))
+
+    def test_missing_metadata_for_an_exited_target_is_ordinary_exit(self):
+        self.kernel.add(201, 100)
+
+        def gone(pid):
+            self.kernel.exit(201)
+            return None
+
+        self.kernel.stat = gone
+        self.assertFalse(self.tree.edge(201, 100))
+        self.assertEqual(sorted(self.kernel.closed), sorted(self.kernel.handles))
+
+    def test_owner_validation_failure_closes_the_owner_handle(self):
+        launcher = object.__new__(Launcher)
+        launcher.kernel = self.kernel
+        launcher.control = Control(None)
+        self.kernel.add(300, 1, start=5)
+
+        def unreadable(pid):
+            raise OwnershipFailure("read stat for pid 300: Permission denied")
+
+        for stat in (unreadable, lambda pid: Stat("S", 1, 6), lambda pid: None):
+            self.kernel.stat = stat
+            with self.subTest(stat=stat):
+                self.assertRaises(Declined, launcher.open_owner, 300, 5, 299)
+        self.assertEqual(len(self.kernel.handles), 3)
+        self.assertEqual(sorted(self.kernel.closed), sorted(self.kernel.handles))
+
+
+def recording_refusal(code, calls):
+    def refuse(fd, sig):
+        calls.append(sig)
+        raise OSError(code, os.strerror(code))
+    return refuse
+
+
+def unreadable_metadata(pid):
+    raise OwnershipFailure(f"read pid {pid}: Permission denied")
+
+
+@unittest.skipUnless(LINUX, "owned commands need Linux child subreaping")
+class CapabilityTest(unittest.TestCase):
+    def assert_refused(self, kernel):
+        before = os.listdir("/proc/self/fd")
+        with self.assertRaises(Unsupported):
+            kernel.require()
+        self.assertEqual(len(os.listdir("/proc/self/fd")), len(before), "preflight leaked a descriptor")
+
+    def test_unusable_pidfd_signaling_is_refused_before_work(self):
+        for code in (errno.ENOSYS, errno.EPERM):
+            calls = []
+            kernel = Kernel()
+            kernel.pidfd_send_signal = recording_refusal(code, calls)
+            with self.subTest(errno=errno.errorcode[code]):
+                self.assert_refused(kernel)
+                self.assertEqual(calls, [0])
+
+    def test_unreadable_self_metadata_is_refused_before_work(self):
+        for name, replacement in (("stat", unreadable_metadata), ("stat", lambda pid: None),
+                                  ("children", unreadable_metadata)):
+            kernel = Kernel()
+            setattr(kernel, name, replacement)
+            with self.subTest(interface=name):
+                self.assert_refused(kernel)
 
 
 class OwnerStagesTest(unittest.TestCase):
@@ -455,6 +595,58 @@ class OwnerStagesTest(unittest.TestCase):
         owner.root = self.directory / "m-isolate-fake"
         owner.root.mkdir()
         return owner
+
+    def accepted_owner(self, **admission):
+        """An owner that has just been accepted and will run admission's setup and command."""
+        record = Record(self.directory / "record")
+        record.directory.mkdir()
+        record.write("state.json", {"state": "started"})
+        admission = {"name": "fake", "env": {}, "scratch_parent": str(self.directory), **admission}
+        return Owner(admission, dict(FAST), record, FakeTriggers(self.clock), self.kernel, Control(None),
+                     clock=self.clock.now, pid=100)
+
+    def test_reused_pid_status_cannot_finish_a_new_setup_or_leader(self):
+        owner = self.accepted_owner(setup=[["/fake/setup"]], command=["/fake/leader"])
+        # An earlier child with this PID was already reaped; the kernel may hand the PID out again.
+        owner.reaper.statuses[777] = 0
+        spawned = []
+
+        def spawn(path, argv, environment, **_):
+            spawned.append((path, self.clock.now()))
+            status = 0 if path == "/fake/setup" else 7
+            self.kernel.later.append((self.clock.now() + 0.05, 777, status << 8))
+            return 777
+
+        with patch("owned_command.os.posix_spawn", side_effect=spawn):
+            owner.run(default_prepare)
+        state = owner.record.read()
+        self.assertEqual([path for path, _ in spawned], ["/fake/setup", "/fake/leader"])
+        self.assertGreaterEqual(spawned[1][1], 0.05, "the leader started before setup's own status arrived")
+        self.assertEqual((state["state"], state["status"]), ("joined", 7))
+
+    def test_pending_cancellation_stops_the_next_setup_command(self):
+        owner = self.accepted_owner(setup=[["/fake/first"], ["/fake/second"]], command=["/fake/leader"])
+        spawned = []
+
+        def spawn(path, argv, environment, **_):
+            spawned.append(path)
+            # The command publishes cancellation, then exits successfully.
+            owner.triggers.at = self.clock.now()
+            self.kernel.later.append((self.clock.now(), 900 + len(spawned), 0))
+            return 900 + len(spawned)
+
+        with patch("owned_command.os.posix_spawn", side_effect=spawn):
+            owner.run(default_prepare)
+        state = owner.record.read()
+        self.assertEqual(spawned, ["/fake/first"])
+        self.assertEqual((state["state"], state["status"]), ("joined", 143))
+
+    def test_continuously_ready_reaper_stops_at_the_kill_deadline(self):
+        self.kernel.add(201, 100).killable = False
+        self.kernel.flood = 100000
+        state = self.cancel(self.owner(at=0))
+        self.assertEqual(state["state"], "retained")
+        self.assertLessEqual(self.clock.now(), FAST["grace"] + FAST["kill_wait"] + FAST["tick"] + 0.01)
 
     def cancel(self, owner):
         owner.begin(owner.triggers.check())
@@ -834,6 +1026,14 @@ class OwnedCommandTest(unittest.TestCase):
                 self.fault(fault)
                 process, record = self.start(self.work("exit", "0"), handshake=0.5)
                 self.assert_declined(self.outcome(process, record), reason)
+
+    def test_unusable_pidfd_signaling_declines_before_any_work(self):
+        for fault in ("owner-pidfd-enosys", "owner-pidfd-eperm"):
+            with self.subTest(fault=fault):
+                self.next_scene()
+                self.fault(fault)
+                process, record = self.start(self.work("exit", "0"))
+                self.assert_declined(self.outcome(process, record), "interfaces are unavailable")
 
     def test_joined_record_before_owner_exit_is_not_completion(self):
         self.hold("owner-joined")

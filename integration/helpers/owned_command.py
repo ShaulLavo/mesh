@@ -34,10 +34,11 @@ from typing import NamedTuple
 
 sys.dont_write_bytecode = True
 
-from process_tree import Kernel, OwnershipFailure, Reaper, Tree, Unsupported  # noqa: E402 - copied helpers stay bytecode-free
+from process_tree import ECHILD, IDLE, MORE, Kernel, OwnershipFailure, Reaper, Tree, Unsupported  # noqa: E402 - copied helpers stay bytecode-free
 
 TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 REPORT_LIMIT = 128
+LEAK_LINES = 32
 FINAL = frozenset({"joined", "retained", "declined"})
 NEXT = {"admitted": {"started", "declined"}, "started": {"running", "declined", "retained"},
         "running": {"joined", "retained"}}
@@ -89,15 +90,20 @@ def write_all(fd, data):
         view = view[os.write(fd, view):]
 
 
+def try_lock(lock):
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
 def lock_until(lock, deadline):
-    while True:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except BlockingIOError:
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(0.005)
+    while not try_lock(lock):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.005)
+    return True
 
 
 class Record:
@@ -234,10 +240,10 @@ class Control:
 
 
 def handle_pid(fd):
-    with open(f"/proc/self/fdinfo/{fd}") as source:
-        for line in source:
-            if line.startswith("Pid:"):
-                return int(line.split()[1])
+    lines = Path(f"/proc/self/fdinfo/{fd}").read_text().splitlines()
+    for line in lines:
+        if line.startswith("Pid:"):
+            return int(line.split()[1])
     raise OSError(errno.EBADF, f"descriptor {fd} is not a process handle")
 
 
@@ -405,15 +411,25 @@ class Launcher:
             raise Declined("open owner handle: injected failure", 1)
         try:
             fd = self.kernel.pidfd_open(pid)
-            stat = self.kernel.stat(pid) if fd is not None else None
         except OwnershipFailure as error:
             raise Declined(str(error), 1) from error
         if fd is None:
             raise Declined("owner exited before acceptance", 1)
-        if stat is None or stat.start != start or stat.ppid in (intermediate, os.getpid()) or readable(fd):
-            os.close(fd)
-            raise Declined("owner identity or reparenting does not match its report", 1)
+        try:
+            self.check_owner(fd, pid, start, intermediate)
+        except BaseException:
+            # The handle is the launcher's only after the owner passes every check.
+            self.kernel.close(fd)
+            raise
         return fd
+
+    def check_owner(self, fd, pid, start, intermediate):
+        try:
+            stat = self.kernel.stat(pid)
+        except OwnershipFailure as error:
+            raise Declined(str(error), 1) from error
+        if stat is None or stat.start != start or stat.ppid in (intermediate, os.getpid()) or self.kernel.exited(fd):
+            raise Declined("owner identity or reparenting does not match its report", 1)
 
     def await_exit(self, fd, deadline):
         while not readable(fd) and time.monotonic() < deadline:
@@ -475,12 +491,21 @@ def become_intermediate(launcher, report_r, report_w, accept_r, accept_w):
     except BaseException:
         traceback.print_exc()
     finally:
-        for stream in (sys.stdout, sys.stderr):
-            try:
-                stream.flush()
-            except (OSError, ValueError):
-                pass
+        flush_streams()
         os._exit(code)
+
+
+def flush_streams():
+    # os._exit skips Python's own flush.
+    for stream in (sys.stdout, sys.stderr):
+        flush_stream(stream)
+
+
+def flush_stream(stream):
+    try:
+        stream.flush()
+    except (OSError, ValueError):
+        pass
 
 
 def report_payload(control, text):
@@ -505,6 +530,7 @@ def become_owner(launcher, intermediate, report_w, accept_r):
             return 1
         time.sleep(0.001)
     kernel = launcher.kernel
+    inject_signal_faults(control, kernel)
     try:
         if control.fault("owner-prctl"):
             raise Unsupported("enable child subreaper: injected failure")
@@ -537,6 +563,19 @@ def become_owner(launcher, intermediate, report_w, accept_r):
     return owner.run(launcher.prepare)
 
 
+def inject_signal_faults(control, kernel):
+    """Fault hook: make pidfd signaling unavailable or denied for this owner's preflight."""
+    for fault, code in (("owner-pidfd-enosys", errno.ENOSYS), ("owner-pidfd-eperm", errno.EPERM)):
+        if control.fault(fault):
+            kernel.pidfd_send_signal = refuse_with(code)
+
+
+def refuse_with(code):
+    def refuse(fd, sig):
+        raise OSError(code, os.strerror(code))
+    return refuse
+
+
 def linger(record, deadline):
     """Fault hook: stay alive until the launcher has checked this owner, so EPIPE is what it sees next."""
     while record.read().get("state") == "admitted" and time.monotonic() < deadline:
@@ -547,8 +586,11 @@ def linger(record, deadline):
 def await_acceptance(triggers, accept_r, deadline, tick):
     """True after the acceptance byte. EOF or the deadline means start nothing.
 
-    Other triggers before acceptance are left for the accepted owner, which then
-    joins without spawning; exiting here could race a delivered acceptance.
+    Before acceptance this owner reacts only to acceptance EOF and its fixed
+    handshake-plus-allowance cutoff. Runner death, cancellation and the budget
+    are not watched here; the launcher declines on them and closes acceptance,
+    or, if acceptance wins, the accepted owner sees them before any setup.
+    Exiting here on those triggers could race a delivered acceptance.
     """
     os.set_blocking(accept_r, False)
     while time.monotonic() < deadline:
@@ -571,7 +613,7 @@ class Owner:
         self.control = control
         self.clock = clock
         self.tree = Tree(kernel, os.getpid() if pid is None else pid)
-        self.reaper = Reaper(kernel)
+        self.reaper = Reaper(kernel, clock)
         self.name = admission.get("name", "owned command")
         self.root = None
         self.leader = None
@@ -617,6 +659,12 @@ class Owner:
         self.interrupt_if_triggered()
 
     def spawn(self, argv, environment, stdout=None, session=False):
+        pid = self.start_process(argv, environment, stdout, session)
+        # The kernel reuses a PID only after its earlier holder was reaped, so any saved status is stale.
+        self.reaper.claim(pid)
+        return pid
+
+    def start_process(self, argv, environment, stdout, session):
         path = argv[0] if "/" in argv[0] else shutil.which(argv[0], path=environment.get("PATH", os.defpath))
         if path is None:
             raise FileNotFoundError(errno.ENOENT, f"command not found: {argv[0]}")
@@ -626,6 +674,8 @@ class Owner:
 
     def run_setup(self, argv, environment, output):
         """Run one setup command while cancellation, runner death and the budget stay live."""
+        # A trigger that arrived while the previous setup command ran must stop this one starting.
+        self.interrupt_if_triggered()
         fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o600)
         try:
             pid = self.spawn(argv, environment, stdout=fd)
@@ -635,11 +685,14 @@ class Owner:
 
     def wait_for(self, pid):
         while True:
-            self.reaper.reap()
+            drained = self.reaper.reap(self.clock() + self.settings["tick"])
             if pid in self.reaper.statuses:
                 return self.reaper.statuses[pid]
+            if drained == ECHILD:
+                raise OwnershipFailure(f"status of child {pid} was lost")
             self.interrupt_if_triggered()
-            self.triggers.wait([], self.settings["tick"])
+            if drained != MORE:
+                self.triggers.wait([], self.settings["tick"])
 
     def interrupt_if_triggered(self):
         trigger = self.triggers.check()
@@ -669,32 +722,47 @@ class Owner:
             self.coop_at = min(self.coop_at, trigger.time)
 
     def cleanup(self):
-        while not self.reap():
+        """Work in tick-sized slices so triggers and the absolute deadlines are checked between them."""
+        while True:
+            drained = self.reap(self.slice(self.kill_end))
+            if drained == ECHILD:
+                self.joined = True
+                return
             now = self.clock()
-            trigger = self.triggers.check()
-            if self.trigger is None and trigger is not None:
-                self.begin(trigger)
+            self.observe_trigger()
             if now >= self.kill_end:
                 self.fail(f"descendants remain after the kill deadline: {self.tree.live()}")
                 return
-            try:
-                self.step(now)
-            except OwnershipFailure as error:
-                self.fail(str(error))
-            self.triggers.wait([], self.settings["tick"])
-        self.joined = True
+            self.step(now)
+            if drained != MORE:
+                self.triggers.wait([], self.settings["tick"])
 
-    def reap(self):
+    def slice(self, end):
+        return min(self.clock() + self.settings["tick"], end)
+
+    def reap(self, deadline):
         try:
-            return self.reaper.reap()
+            return self.reaper.reap(deadline)
         except OwnershipFailure as error:
             self.fail(str(error))
-            return False
+            return IDLE
+
+    def observe_trigger(self):
+        trigger = self.triggers.check()
+        if self.trigger is None and trigger is not None:
+            self.begin(trigger)
 
     def step(self, now):
+        try:
+            self.advance_stage(now)
+        except OwnershipFailure as error:
+            self.fail(str(error))
+
+    def advance_stage(self, now):
         if now >= self.coop_end:
-            self.tree.discover(self.kill_end, self.clock)
-            self.tree.deliver(signal.SIGKILL, "owned-command-kill", lambda pid, start: True)
+            self.tree.discover(self.slice(self.kill_end), self.clock)
+            self.tree.deliver(signal.SIGKILL, "owned-command-kill", lambda pid, start: True,
+                              self.slice(self.kill_end), self.clock)
         elif now >= self.coop_at:
             self.cooperate()
 
@@ -702,15 +770,25 @@ class Owner:
         leaked = self.coop_signal is None
         if leaked:
             self.coop_signal, self.coop_ticks = signal.SIGTERM, self.kernel.now_ticks()
-        # Repeated each tick: one traversal can omit a pre-trigger descendant.
-        self.tree.discover(self.coop_end, self.clock)
+        # Each tick continues or restarts the traversal: one traversal can omit a pre-trigger descendant.
+        self.tree.discover(self.slice(self.coop_end), self.clock)
         if leaked:
-            for pid in self.tree.live():
-                print(f"LEAK: {self.name}: pid {pid} {command_line(pid)}", file=sys.stderr, flush=True)
+            self.report_leaks()
         # Processes started after the trigger are cleanup helpers; only the kill stage reaches them.
+        # Start ticks have 10 ms resolution, and a process in the trigger's own tick counts as later:
+        # it gets no cooperative signal even if it existed just before the trigger.
         self.signalled.update(self.tree.deliver(
             self.coop_signal, "owned-command-cooperative",
-            lambda pid, start: start < self.coop_ticks and (pid, start) not in self.signalled))
+            lambda pid, start: start < self.coop_ticks and (pid, start) not in self.signalled,
+            self.slice(self.coop_end), self.clock))
+
+    def report_leaks(self):
+        # Diagnostics only; a bounded count keeps them out of the cleanup deadline.
+        live = self.tree.live()
+        for pid in live[:LEAK_LINES]:
+            print(f"LEAK: {self.name}: pid {pid} {command_line(pid)}", file=sys.stderr, flush=True)
+        if len(live) > LEAK_LINES:
+            print(f"LEAK: {self.name}: {len(live) - LEAK_LINES} more processes", file=sys.stderr, flush=True)
 
     def fail(self, message):
         if message not in self.failures:
