@@ -732,7 +732,7 @@ class Owner:
             now = self.clock()
             self.observe_trigger()
             if now >= self.kill_end:
-                self.fail(f"descendants remain after the kill deadline: {self.tree.live()}")
+                self.fail("descendant join was not proved before the kill deadline")
                 return
             self.step(now)
             if drained != MORE:
@@ -784,12 +784,17 @@ class Owner:
             self.slice(self.coop_end), self.clock))
 
     def report_leaks(self):
-        # Diagnostics only; a bounded count keeps them out of the cleanup deadline.
-        live = self.tree.live()
-        for pid in live[:LEAK_LINES]:
-            print(f"LEAK: {self.name}: pid {pid} {command_line(pid)}", file=sys.stderr, flush=True)
-        if len(live) > LEAK_LINES:
-            print(f"LEAK: {self.name}: {len(live) - LEAK_LINES} more processes", file=sys.stderr, flush=True)
+        deadline = self.slice(self.coop_end)
+        for pid, known in self.tree.sample(LEAK_LINES):
+            if self.clock() >= deadline:
+                return
+            if self.kernel.exited(known.fd) or self.clock() >= deadline:
+                continue
+            command = command_line(pid)
+            if self.clock() >= deadline:
+                return
+            if not self.kernel.exited(known.fd) and self.clock() < deadline:
+                print(f"LEAK: {self.name}: pid {pid} {command}", file=sys.stderr, flush=True)
 
     def fail(self, message):
         if message not in self.failures:
@@ -799,22 +804,26 @@ class Owner:
     def finish(self):
         if self.leader is not None and self.leader not in self.reaper.statuses:
             self.fail("leader status is missing")
+        known = [] if self.joined else self.tree.sample(LEAK_LINES)
+        try:
+            if not self.tree.close(self.clock() + self.settings["allowance"], self.clock):
+                self.fail("handle cleanup did not finish before its deadline")
+        except (OSError, OwnershipFailure) as error:
+            self.fail(f"close owned handles: {error}")
         if self.joined and not self.failures and self.root is not None:
             self.control.hold("owner-delete")
             try:
                 shutil.rmtree(self.root)
             except OSError as error:
                 self.fail(f"remove {self.root}: {error}")
-        live = self.tree.live()
-        self.tree.close()
         status = 1 if self.status is None else self.status
         deadline = self.clock() + self.settings["allowance"]
         joined = self.joined and not self.failures
         if joined:
             joined = self.record.advance("joined", deadline, status=status)
         else:
-            self.record.advance("retained", deadline, status=status, pids=live, root=str(self.root),
-                                reasons=self.failures)
+            self.record.advance("retained", deadline, status=status, pids=[pid for pid, _ in known],
+                                pids_partial=True, root=str(self.root), reasons=self.failures)
         self.control.hold("owner-joined")
         return 0 if joined else 1
 

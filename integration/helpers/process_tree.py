@@ -5,13 +5,15 @@ chain to it or is reparented to it. Only waitpid reporting ECHILD, after the
 owner stops starting work, proves that the tree has ended. Discovery exists to
 deliver signals safely and never proves completion.
 
-Traversal, delivery and reaping each take an absolute deadline and stop at it
-with their progress kept, so a broad or churning tree cannot hold the owner
-past its cooperation, kill or join cutoffs.
+Traversal, delivery and reaping check absolute deadlines between bounded units
+and retain their progress across ticks. An operation already in progress can
+finish after a cutoff; these loops do not promise interruptible kernel calls.
 """
+from collections import deque
 import ctypes
 import glob
 import os
+from itertools import islice
 from pathlib import Path
 import select
 import signal
@@ -143,16 +145,27 @@ class Kernel:
             raise OwnershipFailure(f"parse stat for pid {pid}: {error}") from error
 
     def children(self, pid):
-        found = []
-        for path in glob.glob(f"/proc/{pid}/task/*/children"):
-            found += self.task_children(pid, path)
-        return found
+        return [child for child in self.child_steps(pid) if child is not None]
 
-    def task_children(self, pid, path):
+    def child_steps(self, pid):
+        """Yield between task reads and candidate tokens, keeping task and file descriptors owned."""
         try:
-            return [int(child) for child in Path(path).read_text().split()]
+            tasks = os.scandir(f"/proc/{pid}/task")
         except (FileNotFoundError, ProcessLookupError):
-            return []
+            return
+        except OSError as error:
+            raise OwnershipFailure(f"list tasks of pid {pid}: {error}") from error
+        with tasks as entries:
+            for task in entries:
+                yield None
+                yield from self.task_child_steps(pid, f"{task.path}/children")
+
+    def task_child_steps(self, pid, path):
+        try:
+            with open(path) as source:
+                yield from child_tokens(source)
+        except (FileNotFoundError, ProcessLookupError):
+            return
         except (OSError, ValueError) as error:
             raise OwnershipFailure(f"read children of pid {pid}: {error}") from error
 
@@ -172,6 +185,31 @@ class Kernel:
         os.close(fd)
 
 
+def child_chunk(source, tail):
+    chunk = source.read(4096)
+    if not chunk:
+        return [tail] if tail else [], "", True
+    text = tail + chunk
+    parts = text.split()
+    if text[-1].isspace():
+        return parts, "", False
+    tail = parts.pop() if parts else text
+    if len(tail) > 64:
+        raise ValueError("child PID token exceeds its metadata bound")
+    return parts, tail, False
+
+
+def child_tokens(source):
+    tail = ""
+    while True:
+        parts, tail, done = child_chunk(source, tail)
+        yield None
+        for token in parts:
+            yield int(token)
+        if done:
+            return
+
+
 class Tree:
     """Descendants proved through handle-validated parent edges from the owner.
 
@@ -184,9 +222,14 @@ class Tree:
         self.kernel = kernel
         self.owner = owner
         self.proved = {}
-        self.queue = []
+        self.queue = deque()
         self.visited = set()
-        self.candidates = []
+        self.candidates = None
+        self.delivery = deque()
+        self.pruning = deque()
+        self.seeds = deque()
+        self.seed_remaining = 0
+        self.prune_turn = True
 
     def parent_live(self, parent):
         if parent == self.owner:
@@ -222,68 +265,121 @@ class Tree:
             raise OwnershipFailure(f"pid {pid} is live but its stat is unreadable")
         if stat.ppid != parent or not self.parent_live(parent):
             return False
-        self.proved[pid] = Proved(fd, stat.start)
+        known = Proved(fd, stat.start)
+        self.proved[pid] = known
+        self.delivery.append((pid, known))
+        self.pruning.append((pid, known))
+        self.seeds.append((pid, known))
         return True
 
     def discover(self, deadline, clock):
-        """Advance the current traversal until deadline. True when a full round ended.
-
-        The queue and pending candidates survive a cutoff, so the next call
-        continues where this one stopped. Omissions are found by later rounds.
-        """
-        if not self.queue and not self.candidates:
-            self.queue = [self.owner, *self.proved]
+        """Resume one outward traversal, including each task read, until its cutoff."""
+        if not self.queue and self.candidates is None and not self.seed_remaining:
+            self.queue.append(self.owner)
+            self.seed_remaining = len(self.seeds)
             self.visited = set()
         while clock() < deadline:
+            if self.prune_turn:
+                self.prune_turn = False
+                self.prune_one()
+                continue
+            self.prune_turn = True
             if not self.advance():
                 return True
         return False
 
+    def prune_one(self):
+        if not self.pruning:
+            return
+        pid, known = self.pruning.popleft()
+        if self.proved.get(pid) is not known:
+            return
+        if self.kernel.exited(known.fd):
+            self.forget(pid)
+            return
+        self.pruning.append((pid, known))
+
     def advance(self):
-        """One unit of traversal work. False when the round has nothing left."""
-        if self.candidates:
-            pid, parent = self.candidates.pop()
-            if self.edge(pid, parent):
-                self.queue.append(pid)
-            return True
+        if self.candidates is not None:
+            return self.advance_candidate()
         if not self.queue:
-            return False
-        parent = self.queue.pop()
-        if parent in self.visited:
-            return True
-        if not self.parent_live(parent):
-            # Pruning an exited handle is one unit of the same bounded work.
-            if parent in self.proved:
-                self.forget(parent)
+            return self.advance_seed()
+        parent = self.queue.popleft()
+        if parent in self.visited or not self.parent_live(parent):
             return True
         self.visited.add(parent)
-        self.candidates = [(pid, parent) for pid in self.kernel.children(parent)]
+        self.candidates = parent, iter(self.kernel.child_steps(parent))
         return True
 
+    def advance_seed(self):
+        if not self.seed_remaining:
+            return False
+        self.seed_remaining -= 1
+        pid, known = self.seeds.popleft()
+        if self.proved.get(pid) is known:
+            self.seeds.append((pid, known))
+            self.queue.append(pid)
+        return True
+
+    def advance_candidate(self):
+        parent, children = self.candidates
+        if not self.parent_live(parent):
+            self.close_candidates()
+            return True
+        try:
+            pid = next(children)
+        except StopIteration:
+            self.candidates = None
+            return True
+        if pid is not None and self.edge(pid, parent):
+            self.queue.append(pid)
+        return True
+
+    def close_candidates(self):
+        if self.candidates is None:
+            return
+        _, children = self.candidates
+        self.candidates = None
+        children.close()
+
     def deliver(self, sig, reason, eligible, deadline, clock):
-        """Signal proved, live descendants that pass eligible(pid, start), until deadline."""
+        """Resume a fair handle sweep; a surviving prefix cannot monopolize later slices."""
         delivered = []
-        for pid, known in list(self.proved.items()):
-            if clock() >= deadline:
-                break
+        remaining = len(self.delivery)
+        while remaining and clock() < deadline:
+            remaining -= 1
+            pid, known = self.delivery.popleft()
+            if self.proved.get(pid) is not known:
+                continue
             if self.kernel.exited(known.fd):
                 self.forget(pid)
                 continue
-            if not eligible(pid, known.start):
-                continue
-            record_signal(pid, sig, reason, {"kind": "pidfd_owned_descendant", "owner_pid": self.owner},
-                          {"status": "observed", "start_ticks": known.start})
-            if self.kernel.send(known.fd, sig):
+            self.delivery.append((pid, known))
+            if self.send_if_eligible(pid, known, sig, reason, eligible):
                 delivered.append((pid, known.start))
         return delivered
 
+    def send_if_eligible(self, pid, known, sig, reason, eligible):
+        if not eligible(pid, known.start):
+            return False
+        record_signal(pid, sig, reason, {"kind": "pidfd_owned_descendant", "owner_pid": self.owner},
+                      {"status": "observed", "start_ticks": known.start})
+        return self.kernel.send(known.fd, sig)
+
+    def sample(self, limit):
+        """A bounded sample of proved identities, not a complete or live process census."""
+        return list(islice(self.proved.items(), limit))
+
     def live(self):
-        # Nonblocking polls over a finite set; no metadata reads.
+        # Test/inspection helper. The owner's deadline paths use bounded samples instead.
         return sorted(pid for pid, known in self.proved.items() if not self.kernel.exited(known.fd))
 
-    def close(self):
-        for pid in list(self.proved):
-            self.forget(pid)
+    def close(self, deadline=float("inf"), clock=time.monotonic):
+        self.close_candidates()
+        while self.proved and clock() < deadline:
+            _, known = self.proved.popitem()
+            self.kernel.close(known.fd)
+        return not self.proved
 
 
 class Reaper:

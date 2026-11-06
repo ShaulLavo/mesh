@@ -27,6 +27,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 sys.dont_write_bytecode = True
 
@@ -329,6 +330,9 @@ class FakeKernel:
             found = [child for child in found if child not in skipped]
         return found
 
+    def child_steps(self, pid):
+        yield from self.children(pid)
+
     def send(self, fd, sig):
         process = self.handles[fd]
         if not process.alive:
@@ -538,6 +542,115 @@ class OwnershipEdgeTest(unittest.TestCase):
         self.assertEqual(len(self.kernel.handles), 3)
         self.assertEqual(sorted(self.kernel.closed), sorted(self.kernel.handles))
 
+    def test_cooperative_slices_reach_past_the_already_signalled_prefix(self):
+        clock = FakeClock()
+        for pid in range(201, 205):
+            self.kernel.add(pid, 100)
+            self.tree.edge(pid, 100)
+        original = self.kernel.exited
+
+        def slow_poll(fd):
+            clock.value += 0.004
+            return original(fd)
+
+        self.kernel.exited = slow_poll
+        seen = set()
+        for _ in range(5):
+            seen.update(self.tree.deliver(signal.SIGTERM, "test", lambda pid, tick: (pid, tick) not in seen,
+                                         clock.now() + 0.01, clock.now))
+        self.assertEqual({pid for pid, _ in seen}, set(range(201, 205)))
+
+    def test_task_enumeration_resumes_between_individual_task_reads(self):
+        clock, kernel = FakeClock(), Kernel()
+        reads = []
+
+        def task_steps(pid, path):
+            clock.value += 0.01
+            reads.append(path)
+            yield None
+
+        kernel.task_child_steps = task_steps
+        tree = Tree(kernel, 100)
+        tasks = [SimpleNamespace(path=f"task-{i}") for i in range(20)]
+        with patch("process_tree.os.scandir", return_value=contextlib.nullcontext(iter(tasks))):
+            self.assertFalse(tree.discover(0.015, clock.now))
+            self.assertEqual(len(reads), 2)
+            self.assertLessEqual(clock.now(), 0.025)
+            self.resume_task_scan(tree, clock, reads)
+        self.assertEqual(reads, [f"task-{i}/children" for i in range(20)])
+        tree.close()
+
+    def resume_task_scan(self, tree, clock, reads):
+        for _ in range(20):
+            before, began = len(reads), clock.now()
+            done = tree.discover(began + 0.015, clock.now)
+            self.assertLessEqual(len(reads) - before, 2)
+            self.assertLessEqual(clock.now() - began, 0.025)
+            if done:
+                return
+        self.fail("task traversal did not resume to completion")
+
+    def test_known_parent_remains_a_discovery_seed_when_its_listing_is_omitted(self):
+        self.kernel.add(201, 100)
+        self.tree.edge(201, 100)
+        self.kernel.add(202, 201)
+        self.kernel.omit = [{201}]
+        self.tree.discover(1.0, lambda: 0.0)
+        self.assertEqual(set(self.tree.proved), {201, 202})
+        self.tree.close()
+
+    def test_handle_cleanup_stops_and_resumes_at_its_deadline(self):
+        clock = FakeClock()
+        for pid in range(201, 221):
+            self.kernel.add(pid, 100)
+            self.tree.edge(pid, 100)
+        original = self.kernel.close
+
+        def slow_close(fd):
+            clock.value += 0.01
+            original(fd)
+
+        self.kernel.close = slow_close
+        self.assertFalse(self.tree.close(0.015, clock.now))
+        self.assertEqual(len(self.kernel.closed), 2)
+        self.assertEqual(len(self.tree.proved), 18)
+        self.assertLessEqual(clock.now(), 0.025)
+        self.assertTrue(self.tree.close(1.0, clock.now))
+        self.assertEqual(sorted(self.kernel.closed), sorted(self.kernel.handles))
+
+    def test_child_tokens_preserve_chunk_boundaries_and_empty_lists(self):
+        payload = "1 " * 2047 + "23456 789"
+        self.assertEqual([pid for pid in process_tree.child_tokens(io.StringIO(payload)) if pid is not None],
+                         [1] * 2047 + [23456, 789])
+        self.assertEqual(list(process_tree.child_tokens(io.StringIO(""))), [None])
+        self.assertEqual(list(process_tree.child_tokens(io.StringIO(" "))), [None, None])
+        for payload in ("word", "1" * 65):
+            with self.subTest(payload=payload):
+                self.assertRaises(ValueError, list, process_tree.child_tokens(io.StringIO(payload)))
+
+    def test_closing_partial_discovery_releases_task_and_children_readers(self):
+        kernel = Kernel()
+        tree = Tree(kernel, 100)
+        closed, reader = [], io.StringIO("201 202")
+
+        @contextlib.contextmanager
+        def task_entries():
+            try:
+                yield iter([SimpleNamespace(path="task-0")])
+            finally:
+                closed.append("tasks")
+
+        with patch("process_tree.os.scandir", return_value=task_entries()), patch("builtins.open", return_value=reader):
+            tree.queue.append(100)
+            tree.advance()
+            tree.advance()
+            tree.advance()
+            self.assertFalse(reader.closed)
+            self.assertEqual(closed, [])
+            tree.close()
+        self.assertTrue(reader.closed)
+        self.assertEqual(closed, ["tasks"])
+
 
 def recording_refusal(code, calls):
     def refuse(fd, sig):
@@ -736,6 +849,45 @@ class OwnerStagesTest(unittest.TestCase):
                 kill = next(when for _, _, sent, when in self.kernel.sent if sent == signal.SIGKILL)
                 self.assertAlmostEqual(kill, deadlines[0], delta=0.02)
                 self.assertEqual(owner.record.read()["status"], 0)
+
+    def test_kill_slices_reach_a_later_killable_descendant(self):
+        owner = self.owner(at=0)
+        for pid in range(201, 205):
+            self.kernel.add(pid, 100).killable = pid == 204
+            owner.tree.edge(pid, 100)
+        original = self.kernel.send
+
+        def slow_send(fd, sig):
+            self.clock.value += 0.004
+            return original(fd, sig)
+
+        self.kernel.send = slow_send
+        state = self.cancel(owner)
+        self.assertEqual(state["state"], "retained")
+        self.assertIn(204, self.signals(signal.SIGKILL))
+        self.assertNotIn(204, self.kernel.table)
+        self.assertLessEqual(self.clock.now(), owner.kill_end + 0.03)
+
+    def test_leak_diagnostics_stop_before_consuming_the_kill_interval(self):
+        owner = self.owner()
+        for pid in range(201, 241):
+            self.kernel.add(pid, 100)
+            owner.tree.edge(pid, 100)
+        owner.status = 0
+        owner.schedule_settle(0)
+        self.clock.value = owner.coop_at
+        reads = []
+
+        def slow_command_line(pid):
+            reads.append(pid)
+            self.clock.value += 0.05
+            return "fake-command"
+
+        with patch("owned_command.command_line", side_effect=slow_command_line):
+            owner.cooperate()
+        self.assertLessEqual(self.clock.now(), owner.coop_end + 0.05)
+        self.assertLessEqual(len(reads), 4)
+        owner.tree.close()
 
 
 class RecordTest(unittest.TestCase):
