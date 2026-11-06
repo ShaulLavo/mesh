@@ -342,3 +342,40 @@ before the coordinator squash-merges it. No commits after approval without
 coordinator signoff. The coordinator owns CI, merge order, and any later rollout.
 The author hands back scope, measured gates, unresolved prerequisites, and skipped
 checks, then stops. A real-host install is a separate decision.
+
+## M0 current-pin coverage, November 6, 2026
+
+The corrected Plan 010 design permits coverage and measurements only. Row-header
+rotation and default history recycling remain withheld. This unit changes no
+terminal behavior, dependency pin, checkpoint contract or resource limit.
+
+`internal/terminal/corpus_test.go` records small current-pin Snapshot, Restorable,
+Preview and SaveText goldens. It covers margins, deletion counts, styled blanks,
+wide/combining text, resize, supported 1047/1049 alternate entry/exit and history
+eviction. Old captures must remain unchanged after later writes, eviction and
+resize. Continuation records source and replay separately because today's pin
+can lose isolated zero-width combining cells during repaint. Snapshot does not
+restore scrollback, scroll margins or directory metadata. These are existing
+limitations, not new fidelity promises. Reproduce with the styled-wide-combining
+case and inspect its continuation fields before changing either golden.
+
+`parser_corpus_test.go` exercises every split of short sequences and selected
+large boundaries. ANSI collected data and Mesh's introducer-inclusive tail have
+separate limits. Ground resets tail overflow; an overflowing OSC can leave the
+hyperlink unknown until a complete OSC 8 reset. Existing DCS/passive-reply tests
+remain intact. No future-candidate heap assertion enters current-pin tests.
+
+Permanent terminal benchmarks measure populated row deletion with untimed
+16-buffer restore batches, saturated borrowed history pushes, deterministic mixed
+scrolls, bounded control payloads, constructors and 20-object retained-heap
+batches. Heap deltas are post-GC observations normalized per live object with a
+final KeepAlive, not race-sensitive thresholds or unique RSS estimates. Use
+`go test ./internal/terminal -run '^$' -bench 'Benchmark(Populated|Saturated|Terminal)' -benchmem`.
+
+The existing `scripts/bench/run.py` reader verifies payload SHA-256 in addition
+to framing, marker, sequence and exact count, including arbitrary burst sizes.
+It records idle/active worker CPU tick deltas through existing resource helpers.
+The discovered `test_run.py` includes identical-length corruption, fragmentation,
+size and CPU controls. The corruption control failed before hashing was added.
+These observers establish no performance win. `scripts/verify.sh` already runs
+the full benchmark harness once; do not duplicate it as a second full gate.
