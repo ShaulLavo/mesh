@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,8 +18,47 @@ import (
 	charmssh "charm.land/ssh"
 	"charm.land/wish/v2/testsession"
 	"github.com/creack/pty"
+	"github.com/shaul/mesh/internal/terminal"
 	"golang.org/x/sys/unix"
 )
+
+func TestDirectTerminalControlsPreservePollability(t *testing.T) {
+	command := exec.Command("sleep", "30")
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	master, err := startProcessTerminal(command, &pty.Winsize{Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := make(chan struct{})
+	go func() { _ = command.Wait(); close(completed) }()
+	t.Cleanup(func() { cleanupTerminalProcess(command, master, completed) })
+	if got := foregroundGroup(command.Process.Pid, master); got != command.Process.Pid {
+		t.Fatalf("foreground group = %d, want %d", got, command.Process.Pid)
+	}
+	state := &windowState{}
+	size := terminal.Size{Cols: 101, Rows: 37}
+	state.latest.Store(&size)
+	resizeProcess(master, state)
+	raw, err := master.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flags int
+	var actual *unix.Winsize
+	var controlErr error
+	err = raw.Control(func(fd uintptr) {
+		flags, controlErr = unix.FcntlInt(fd, unix.F_GETFL, 0)
+		if controlErr == nil {
+			actual, controlErr = unix.IoctlGetWinsize(int(fd), unix.TIOCGWINSZ)
+		}
+	})
+	if err != nil || controlErr != nil {
+		t.Fatalf("terminal controls: %v, %v", err, controlErr)
+	}
+	if flags&unix.O_NONBLOCK == 0 || actual.Col != 101 || actual.Row != 37 {
+		t.Fatalf("terminal controls changed pollability or lost resize: flags=%x, size=%+v", flags, actual)
+	}
+}
 
 func TestDirectDisconnectWithRetainedSlave(t *testing.T) {
 	for _, before := range []bool{false, true} {
@@ -26,6 +66,60 @@ func TestDirectDisconnectWithRetainedSlave(t *testing.T) {
 			assertRetainedSlaveDisconnect(t, before)
 		})
 	}
+}
+
+func TestDirectDisconnectReleasesBlockedRelays(t *testing.T) {
+	for _, pty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pty=%t", pty), func(t *testing.T) {
+			assertBlockedDirectRelays(t, pty)
+		})
+	}
+}
+
+func assertBlockedDirectRelays(t *testing.T, pty bool) {
+	t.Helper()
+	server, config := sessionTestServer(t, func(context.Context, Session) (int, error) { return 0, nil })
+	handler := server.Handler
+	finished := make(chan struct{})
+	server.Handler = func(session charmssh.Session) { defer close(finished); handler(session) }
+	client := testsession.New(t, server, config)
+	input := keepInputOpen(t, client)
+	output, err := client.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pty {
+		if err := client.RequestPty("xterm", 24, 80, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request, err := json.Marshal(RunRequest{Args: []string{"sh", "-c", "while :; do printf '%4096s' x; done"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Start("run " + string(request)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(output, make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	inputDone := make(chan struct{})
+	go func() {
+		defer close(inputDone)
+		_, _ = io.CopyN(input, zeroReader{}, 8<<20)
+	}()
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSessionEnd(t, finished)
+	waitForSessionEnd(t, inputDone)
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(data []byte) (int, error) {
+	clear(data)
+	return len(data), nil
 }
 
 func assertRetainedSlaveDisconnect(t *testing.T, before bool) {
