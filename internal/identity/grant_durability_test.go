@@ -319,14 +319,26 @@ func checkGrantPublicationFailure(t *testing.T, phase string) {
 	if changed || err == nil {
 		t.Fatalf("changed=%v, error=%v", changed, err)
 	}
-	if (phase == "file-sync" || phase == "directory-sync") && !errors.Is(err, cause) {
-		t.Fatalf("lost cause: %v", err)
+	wantError := cause
+	switch phase {
+	case "stage", "rename":
+		wantError = os.ErrNotExist
+	case "write":
+		wantError = syscall.EBADF
+	case "close":
+		wantError = os.ErrClosed
+	case "directory-open":
+		wantError = os.ErrPermission
+	}
+	if !errors.Is(err, wantError) {
+		t.Fatalf("lost cause: %v, want %v", err, wantError)
 	}
 	if len(grantBytes(t, state, "device-grants.lock")) != 0 {
 		t.Fatal("failed publication acknowledged")
 	}
-	if phase != "directory-open" && phase != "directory-sync" && !bytes.Equal(old, grantBytes(t, state, "authorized_keys")) {
-		t.Fatal("before-rename failure changed policy")
+	afterRename := phase == "directory-open" || phase == "directory-sync"
+	if bytes.Equal(old, grantBytes(t, state, "authorized_keys")) == afterRename {
+		t.Fatal("publication failure did not preserve its real rename boundary")
 	}
 	leftovers, err := filepath.Glob(filepath.Join(state, ".device-grants-*"))
 	if err != nil || len(leftovers) != 0 {
