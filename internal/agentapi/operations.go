@@ -2,6 +2,9 @@ package agentapi
 
 import "strings"
 
+const jsonFlag = "--json"
+const jsonFlagSummary = "write one agent result"
+
 type Flag struct {
 	Name, Value string
 	Required    bool
@@ -15,14 +18,14 @@ type Operation struct {
 }
 
 var Operations = []Operation{
-	{Name: "services.list", Command: "mesh serve ls", Flags: []Flag{{Name: "--json", Required: true, Summary: "write one agent result"}, {Name: "--timeout", Value: "D", Summary: "hard deadline for live host queries"}}, Network: true, Implemented: true, Summary: "List live and cached services without opening their URLs.", Example: "mesh serve ls --json"},
+	{Name: "services.list", Command: "mesh serve ls", Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--timeout", Value: "D", Summary: "hard deadline for live host queries"}}, Network: true, Implemented: true, Summary: "List live and cached services without opening their URLs.", Example: "mesh serve ls --json"},
 	{Name: "hosts.list", Command: "mesh hosts"},
 	{Name: "hosts.inspect", Command: "mesh inspect", Args: "HOST"},
 	{Name: "sessions.list", Command: "mesh session list"},
 	{Name: "sessions.inspect", Command: "mesh session inspect", Args: "SESSION_ID"},
-	{Name: "profile.show", Command: "mesh profile show"},
-	{Name: "profile.set", Command: "mesh profile set"},
-	{Name: "profile.edit", Command: "mesh profile edit"},
+	{Name: "profile.show", Command: "mesh profile show", Implemented: true, Flags: []Flag{{Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Read this machine’s owner-written notes.", Example: "mesh profile show --json"},
+	{Name: "profile.set", Command: "mesh profile set", Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--file", Value: "PATH", Required: true, Summary: "editable JSON file, or - for stdin"}, {Name: "--expected-revision", Value: "N", Required: true, Summary: "revision before this write"}}, Summary: "Replace this machine’s notes at an expected revision.", Example: "mesh profile set --file PATH --expected-revision 0 --json"},
+	{Name: "profile.edit", Command: "mesh profile edit", Implemented: true, Mutates: true, Summary: "Edit this machine’s notes with VISUAL or EDITOR, for humans only.", Example: "mesh profile edit"},
 	{Name: "profile.status", Command: "mesh profile status"},
 	{Name: "skill.show", Command: "mesh skill show"},
 	{Name: "skill.install", Command: "mesh skill install"},
@@ -51,6 +54,10 @@ func Classify(args []string) string {
 		if operation.Implemented && matchesPath(words, path) {
 			return operation.Name
 		}
+	}
+	// The implemented profile group attributes usage failures to its read operation.
+	if len(words) > 0 && words[0] == "profile" {
+		return "profile.show"
 	}
 	return ""
 }
@@ -89,7 +96,7 @@ func invocationWords(args []string) []string {
 
 func valueFlag(arg string) bool {
 	switch arg {
-	case "--leave-key", "--detach-key", "--host", "--timeout":
+	case "--leave-key", "--detach-key", "--host", "--timeout", "--file", "--expected-revision":
 		return true
 	}
 	return false

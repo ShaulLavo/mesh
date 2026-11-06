@@ -29,6 +29,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh cp`](#mesh-cp) | Copy files or directories through an authenticated Mesh connection |
 | [`mesh dashboard`](#mesh-dashboard) | Watch machine usage, sessions, and services |
 | [`mesh fleet`](#mesh-fleet) | Share connections with explicitly trusted devices |
+| [`mesh profile`](#mesh-profile) | Read and edit this machine's owner-written notes |
 | [`mesh rename`](#mesh-rename) | Change the destination machine's name |
 | [`mesh ssh`](#mesh-ssh) | Open a shell or command that ends when the connection closes |
 | [`mesh wake`](#mesh-wake) | Wake a configured host |
@@ -97,6 +98,7 @@ HOSTS
   cp SOURCE DESTINATION [--flags]                       Copy files or directories through an authenticated Mesh connection
   dashboard [--flags]                                   Watch machine usage, sessions, and services
   fleet [command]                                       Share connections with explicitly trusted devices
+  profile [command] [--flags]                           Read and edit this machine's owner-written notes
   rename host new-name                                  Change the destination machine's name
   ssh HOST [-- command...] [--flags]                    Open a shell or command that ends when the connection closes
   wake host [command]                                   Wake a configured host
@@ -612,6 +614,82 @@ FLAGS
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
   --yes        Approve this device's connection-sharing policy
+```
+
+## mesh profile
+
+```text
+Read and edit this machine's owner-written notes
+
+USAGE
+
+  mesh profile [command] [--flags]
+
+COMMANDS
+
+  edit [--flags]  Edit the local profile with VISUAL or EDITOR, for humans only
+  set [--flags]   Replace the local host profile at an expected revision
+  show [--flags]  Read the local host profile without contacting the daemon
+
+FLAGS
+
+  -h --help       Help for profile
+  --json          Write one agent result
+  --leave-key     Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy       Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh profile edit
+
+```text
+Edit the local profile with VISUAL or EDITOR, for humans only
+
+USAGE
+
+  mesh profile edit [--flags]
+
+FLAGS
+
+  -h --help    Help for edit
+  --json       Unsupported; use profile set for JSON input
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh profile set
+
+```text
+Replace the local host profile at an expected revision
+
+USAGE
+
+  mesh profile set [--flags]
+
+FLAGS
+
+  --expected-revision  Revision read before this edit; 0 for an absent profile
+  --file               Editable JSON path, or - to explicitly read stdin
+  -h --help            Help for set
+  --json               Write one agent result
+  --leave-key          Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy            Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh profile show
+
+```text
+Read the local host profile without contacting the daemon
+
+USAGE
+
+  mesh profile show [--flags]
+
+FLAGS
+
+  -h --help    Help for show
+  --json       Write one agent result
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh rename
