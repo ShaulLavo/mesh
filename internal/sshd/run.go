@@ -71,7 +71,7 @@ func runProcess(channel charmssh.Session, state *windowState, request RunRequest
 	var master *os.File
 	if state != nil {
 		size := state.size()
-		master, err = pty.StartWithSize(command, &pty.Winsize{Cols: uint16(size.Cols), Rows: uint16(size.Rows)}) //nolint:gosec // dimensions were checked at the SSH boundary
+		master, err = startProcessTerminal(command, &pty.Winsize{Cols: uint16(size.Cols), Rows: uint16(size.Rows)}) //nolint:gosec // dimensions were checked at the SSH boundary
 	} else {
 		raw := channel.Context().Value(channelKey{}).(gossh.Channel)
 		command.Stdin, command.Stdout, command.Stderr = input, raw, raw.Stderr()
@@ -105,8 +105,46 @@ func runProcess(channel charmssh.Session, state *windowState, request RunRequest
 	close(completed)
 	<-finished
 	_ = writer.Close()
-	<-outputDone
+	select {
+	case <-outputDone:
+	case <-ctx.Done():
+		_ = channel.Close()
+		if master != nil {
+			_ = master.Close()
+		}
+		<-outputDone
+	}
 	return processResult(err)
+}
+
+func startProcessTerminal(command *exec.Cmd, size *pty.Winsize) (master *os.File, err error) {
+	original, slave, err := pty.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open SSH terminal: %w", err)
+	}
+	defer original.Close() //nolint:errcheck // the duplicate owns the master after setup
+	defer slave.Close()    //nolint:errcheck // command.Start duplicates the slave
+	if err := pty.Setsize(original, size); err != nil {
+		return nil, fmt.Errorf("size SSH terminal: %w", err)
+	}
+	fd, err := unix.FcntlInt(original.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("duplicate SSH terminal: %w", err)
+	}
+	if err := unix.SetNonblock(fd, true); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("set SSH terminal nonblocking: %w", err)
+	}
+	// NewFile registers the nonblocking descriptor with Go's poller so Close
+	// can release a read while a descendant still holds the slave open.
+	master = os.NewFile(uintptr(fd), original.Name())
+	command.Stdin, command.Stdout, command.Stderr = slave, slave, slave
+	command.SysProcAttr.Setctty = true
+	if err := command.Start(); err != nil {
+		_ = master.Close()
+		return nil, fmt.Errorf("start SSH terminal process: %w", err)
+	}
+	return master, nil
 }
 
 func processResult(err error) (int, error) {
@@ -193,7 +231,13 @@ func resizeProcess(master *os.File, state *windowState) {
 		return
 	}
 	size := state.size()
-	_ = pty.Setsize(master, &pty.Winsize{Cols: uint16(size.Cols), Rows: uint16(size.Rows)}) //nolint:gosec // dimensions were checked at the SSH boundary
+	raw, err := master.SyscallConn()
+	if err != nil {
+		return
+	}
+	_ = raw.Control(func(fd uintptr) {
+		_ = unix.IoctlSetWinsize(int(fd), unix.TIOCSWINSZ, &unix.Winsize{Col: uint16(size.Cols), Row: uint16(size.Rows)}) //nolint:gosec // dimensions were checked at the SSH boundary
+	})
 }
 
 func windowChanges(state *windowState) <-chan terminal.Size {
@@ -219,8 +263,14 @@ func foregroundGroup(pid int, master *os.File) int {
 	if master == nil {
 		return pid
 	}
-	foreground, err := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPGRP)
-	if err != nil || foreground <= 1 {
+	raw, err := master.SyscallConn()
+	if err != nil {
+		return pid
+	}
+	var foreground int
+	var ioctlErr error
+	err = raw.Control(func(fd uintptr) { foreground, ioctlErr = unix.IoctlGetInt(int(fd), unix.TIOCGPGRP) })
+	if err != nil || ioctlErr != nil || foreground <= 1 {
 		return pid
 	}
 	return foreground
