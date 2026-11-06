@@ -46,6 +46,7 @@ func TestClientValidatesGzipEndAndTarTail(t *testing.T) {
 		{name: "truncated_footer", archive: valid[:len(valid)-1], invalid: true, wantErr: io.ErrUnexpectedEOF},
 		{name: "missing_footer", archive: valid[:len(valid)-8], invalid: true, wantErr: io.ErrUnexpectedEOF},
 		{name: "decoded_junk", archive: testGzip(t, append(bytes.Clone(raw), []byte("JUNK")...)), invalid: true},
+		{name: "second_member", archive: testGzip(t, append(bytes.Clone(raw[:len(raw)-1024]), raw...)), invalid: true},
 		{name: "second_tar", archive: testGzip(t, append(bytes.Clone(raw), raw...)), invalid: true},
 		{name: "second_gzip_tar", archive: append(bytes.Clone(valid), valid...), invalid: true},
 		{name: "compressed_junk", archive: append(bytes.Clone(valid), []byte("JUNK")...), invalid: true},
@@ -138,4 +139,18 @@ func testGzip(t *testing.T, raw []byte) []byte {
 		t.Fatal(err)
 	}
 	return buffer.Bytes()
+}
+
+func TestValidateArchiveTailHonorsExpandedLimit(t *testing.T) {
+	for _, size := range []int{8, 9, 10} {
+		decoded := bytes.NewReader(make([]byte, size))
+		expanded := &io.LimitedReader{R: decoded, N: 9}
+		err := validateArchiveTail(expanded)
+		if (err == nil) != (size == 8) {
+			t.Fatalf("decoded size %d with limit 8: %v", size, err)
+		}
+		if consumed := int64(size) - int64(decoded.Len()); consumed > 9 {
+			t.Fatalf("read %d bytes beyond the expanded limit probe", consumed)
+		}
+	}
 }
