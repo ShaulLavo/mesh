@@ -104,7 +104,7 @@ func TestAgentSessionWrongIdentityNeverFallsBackToCache(t *testing.T) {
 func TestAgentSessionPagingAndBounds(t *testing.T) {
 	at := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
 	rows := []protocol.SessionInfo{{ID: "9K3D", HostID: "a", State: "running", CreatedAt: at}, {ID: "7K3D", HostID: "a", State: "running", CreatedAt: at}, {ID: "8K3D", HostID: "a", State: "running", CreatedAt: at}}
-	snapshot := agentSessionSnapshot{rows: rows, freshness: agentapi.FreshnessLive}
+	snapshot := agentSessionSnapshot{rows: liveAgentSessionRows(rows), freshness: agentapi.FreshnessLive}
 	first := agentSessionPage("a", snapshot, agentSessionOptions{limit: 1}, nil)
 	if first.Sessions[0].ID != "7K3D" || first.NextPage == nil {
 		t.Fatalf("%+v", first)
@@ -168,7 +168,7 @@ func TestAgentSessionCachedOfflineAndCacheFailure(t *testing.T) {
 	}
 	cache := &SQLiteCatalogCache{store: store, now: time.Now}
 	row := protocol.SessionInfo{ID: "7K3D", HostID: id, State: "running", Command: []string{"sh"}, Cwd: "/private", CreatedAt: time.Now()}
-	if err := cache.Save(t.Context(), host, []protocol.SessionInfo{row}); err != nil {
+	if err := cache.SaveObserved(t.Context(), host, []protocol.SessionInfo{row}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cache.Close(); err != nil {
@@ -222,7 +222,7 @@ func TestAgentSessionDecodedGoldens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := agentSessionPage(host.ID, agentSessionSnapshot{rows: rows, freshness: agentapi.FreshnessLive}, agentSessionOptions{limit: 100}, nil)
+	page := agentSessionPage(host.ID, agentSessionSnapshot{rows: liveAgentSessionRows(rows), freshness: agentapi.FreshnessLive}, agentSessionOptions{limit: 100}, nil)
 	checkAgentSessionGolden[agentapi.SessionPage](t, "sessions.list.ok", agentSessionsList, agentSessionEnvelope(page, nil))
 	a := &application{dependencies: Dependencies{DialPassive: serviceRemoteDial(host, func(protocol.Control) protocol.Control {
 		return protocol.Control{Type: protocol.TypeInspected, SessionID: row.ID, Inspection: &protocol.SessionInspection{ObservedAt: at, Attached: true, Preview: []string{"x"}}}
@@ -231,7 +231,7 @@ func TestAgentSessionDecodedGoldens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail := agentapi.SessionDetail{Session: agentSessionSummary(row, true), Freshness: agentapi.FreshnessLive}
+	detail := agentapi.SessionDetail{Session: agentSessionSummary(agentSessionRow{info: row, facts: observedSessionFacts(row)}, true), Freshness: agentapi.FreshnessLive}
 	applyAgentInspection(&detail, inspection, false)
 	checkAgentSessionGolden[agentapi.SessionDetail](t, "sessions.inspect.live", agentSessionsInspect, agentSessionEnvelope(detail, nil))
 	a.dependencies.DialPassive = serviceRemoteDial(host, func(protocol.Control) protocol.Control {

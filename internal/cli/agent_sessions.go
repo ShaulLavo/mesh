@@ -24,6 +24,7 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
 	"github.com/spf13/cobra"
@@ -50,8 +51,13 @@ type agentSessionCursor struct {
 	ID        string    `json:"id"`
 }
 
+type agentSessionRow struct {
+	info  protocol.SessionInfo
+	facts storage.SessionFacts
+}
+
 type agentSessionSnapshot struct {
-	rows      []protocol.SessionInfo
+	rows      []agentSessionRow
 	freshness agentapi.Freshness
 	errors    []agentapi.Error
 }
@@ -198,26 +204,26 @@ func agentSessionEnvelope(data any, diagnostics []agentapi.Error) agentapi.Envel
 }
 
 func agentSessionPage(hostID string, snapshot agentSessionSnapshot, options agentSessionOptions, cursor *agentSessionCursor) agentapi.SessionPage {
-	rows := make([]protocol.SessionInfo, 0, len(snapshot.rows))
+	rows := make([]agentSessionRow, 0, len(snapshot.rows))
 	for _, row := range snapshot.rows {
-		if !options.all && !liveState(row.State) {
+		if !options.all && !liveState(row.info.State) {
 			continue
 		}
-		if cursor != nil && !afterAgentSessionCursor(row, *cursor) {
+		if cursor != nil && !afterAgentSessionCursor(row.info, *cursor) {
 			continue
 		}
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].CreatedAt.Equal(rows[j].CreatedAt) {
-			return rows[i].ID < rows[j].ID
+		if rows[i].info.CreatedAt.Equal(rows[j].info.CreatedAt) {
+			return rows[i].info.ID < rows[j].info.ID
 		}
-		return rows[i].CreatedAt.After(rows[j].CreatedAt)
+		return rows[i].info.CreatedAt.After(rows[j].info.CreatedAt)
 	})
 	page := agentapi.SessionPage{HostID: hostID, Freshness: snapshot.freshness, Sessions: make([]agentapi.SessionSummary, 0, min(options.limit, len(rows)))}
 	if len(rows) > options.limit {
 		last := rows[options.limit-1]
-		encoded, _ := json.Marshal(agentSessionCursor{HostID: hostID, CreatedAt: last.CreatedAt.UTC(), ID: last.ID})
+		encoded, _ := json.Marshal(agentSessionCursor{HostID: hostID, CreatedAt: last.info.CreatedAt.UTC(), ID: last.info.ID})
 		token := base64.RawURLEncoding.EncodeToString(encoded)
 		page.NextPage = &token
 		rows = rows[:options.limit]
@@ -232,8 +238,9 @@ func afterAgentSessionCursor(row protocol.SessionInfo, cursor agentSessionCursor
 	return row.CreatedAt.Before(cursor.CreatedAt) || row.CreatedAt.Equal(cursor.CreatedAt) && row.ID > cursor.ID
 }
 
-func agentSessionSummary(row protocol.SessionInfo, detail bool) agentapi.SessionSummary {
-	value := agentapi.SessionSummary{ID: row.ID, HostID: row.HostID, Kind: "pty", State: row.State, Hibernated: Hibernation(row) != nil, RecoveryPending: row.RecoveryPending, Label: cleanAgentSessionText(row.Label), CreatedAt: row.CreatedAt.UTC(), LastAttachedAt: agentSessionTime(row.LastAttachedAt), DetachedAt: agentSessionTime(row.DetachedAt), ExitCode: cloneInt(row.ExitCode)}
+func agentSessionSummary(observed agentSessionRow, detail bool) agentapi.SessionSummary {
+	row, facts := observed.info, observed.facts
+	value := agentapi.SessionSummary{ID: row.ID, HostID: row.HostID, Kind: "pty", State: row.State, Hibernated: facts.Hibernated, RecoveryPending: facts.RecoveryPending, Label: cleanAgentSessionText(facts.Label), CreatedAt: row.CreatedAt.UTC(), LastAttachedAt: agentSessionTime(row.LastAttachedAt), DetachedAt: agentSessionTime(facts.DetachedAt), ExitCode: cloneInt(row.ExitCode)}
 	if detail {
 		value.Command = slices.Clone(row.Command)
 		value.Cwd = row.Cwd
@@ -267,7 +274,7 @@ func (a *application) loadAgentSessions(ctx context.Context, host HostRecord, op
 		if err := ctx.Err(); err != nil {
 			return agentSessionSnapshot{}, fmt.Errorf("read passive local sessions: %w", err)
 		}
-		return agentSessionSnapshot{rows: rows, freshness: agentapi.FreshnessLive}, nil
+		return agentSessionSnapshot{rows: liveAgentSessionRows(rows), freshness: agentapi.FreshnessLive}, nil
 	}
 	return a.loadAgentRemoteSessions(ctx, host, operation)
 }
@@ -278,9 +285,10 @@ func (a *application) loadAgentRemoteSessions(ctx context.Context, host HostReco
 		cache = &SQLiteCatalogCache{}
 	}
 	defer cache.Close() //nolint:errcheck // read errors are reported separately
-	cached, readErr := cache.Load(ctx, host)
+	stored, readErr := cache.LoadObserved(ctx, host)
+	cached, withheld := cachedAgentSessionRows(stored)
 	if readErr == nil {
-		readErr = validateAgentSessionRows(host.ID, cached)
+		readErr = validateCachedAgentSessions(host.ID, cached)
 	}
 	if readErr != nil {
 		cached = nil
@@ -291,14 +299,46 @@ func (a *application) loadAgentRemoteSessions(ctx context.Context, host HostReco
 		if failure.Code != agentapi.HostUnreachable || len(cached) == 0 {
 			return agentSessionSnapshot{}, &agentapi.Failure{Err: failure}
 		}
-		return agentSessionSnapshot{rows: cached, freshness: agentapi.FreshnessCached, errors: []agentapi.Error{failure}}, nil
+		snapshot := agentSessionSnapshot{rows: cached, freshness: agentapi.FreshnessCached, errors: []agentapi.Error{failure}}
+		if withheld > 0 {
+			snapshot.errors = append(snapshot.errors, agentapi.Error{Code: agentapi.StateUnavailable, Operation: operation, Target: host.ID, Retryable: true, Message: fmt.Sprintf("%d cached sessions on this machine were saved without their full details, so they are not shown. Reach the machine for a complete list.", withheld)})
+		}
+		return snapshot, nil
 	}
-	snapshot := agentSessionSnapshot{rows: rows, freshness: agentapi.FreshnessLive}
-	saveErr := cache.Save(ctx, host, rows)
+	snapshot := agentSessionSnapshot{rows: liveAgentSessionRows(rows), freshness: agentapi.FreshnessLive}
+	saveErr := cache.SaveObserved(ctx, host, rows)
 	if err := errors.Join(cacheErr, readErr, saveErr); err != nil {
 		snapshot.errors = append(snapshot.errors, agentError(err, operation, host.ID, agentapi.StateUnavailable))
 	}
 	return snapshot, nil
+}
+
+func liveAgentSessionRows(rows []protocol.SessionInfo) []agentSessionRow {
+	result := make([]agentSessionRow, len(rows))
+	for i, row := range rows {
+		result[i] = agentSessionRow{info: row, facts: observedSessionFacts(row)}
+	}
+	return result
+}
+
+func cachedAgentSessionRows(rows []CachedSession) ([]agentSessionRow, int) {
+	result := make([]agentSessionRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Facts == nil {
+			continue
+		}
+		result = append(result, agentSessionRow{info: row.Info, facts: *row.Facts})
+	}
+	return result, len(rows) - len(result)
+}
+
+func validateCachedAgentSessions(hostID string, rows []agentSessionRow) error {
+	for _, row := range rows {
+		if err := validateAgentSessionRow(hostID, row.info); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func listAgentSessions(ctx context.Context, host HostRecord, dial HostDialer) ([]protocol.SessionInfo, error) {
@@ -386,13 +426,13 @@ func (a *application) runAgentSessionInspect(cmd *cobra.Command, options agentSe
 	return a.agent.write(cmd.OutOrStdout(), agentSessionEnvelope(result, snapshot.errors))
 }
 
-func findAgentSession(rows []protocol.SessionInfo, id string) (protocol.SessionInfo, bool) {
+func findAgentSession(rows []agentSessionRow, id string) (agentSessionRow, bool) {
 	for _, row := range rows {
-		if row.ID == id {
+		if row.info.ID == id {
 			return row, true
 		}
 	}
-	return protocol.SessionInfo{}, false
+	return agentSessionRow{}, false
 }
 
 func (a *application) inspectAgentSession(ctx context.Context, host HostRecord, id string, cols, rows int) (SessionInspection, error) {
