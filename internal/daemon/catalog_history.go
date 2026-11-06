@@ -2,12 +2,15 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"sort"
 	"time"
 
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -16,13 +19,15 @@ import (
 type labelledExit struct {
 	id        storage.SessionID
 	createdAt time.Time
+	label     string
+	exitedAt  time.Time
 	ran       time.Duration
 }
 
 // PruneLabelled is a route's automatic history retention, run after each
-// start. Of the other exited sessions carrying label it keeps the newest
+// start. Of the other exited or positively old-boot sessions it keeps the newest
 // labelledHistoryLimit by creation, plus the newest one that ran at least
-// labelledLongRun, and retires the rest. Live, interrupted, owner-pinned and
+// labelledLongRun, and retires the rest. Live, uncertain, owner-pinned and
 // recovery-protected sessions are never candidates. It is automatic cleanup,
 // not `mesh rm`: every candidate is checked again under its recovery lock
 // before its row is retired, and recovery that claims it first keeps it. It
@@ -58,35 +63,59 @@ func (c *Catalog) PruneLabelled(ctx context.Context, label string, current stora
 func (c *Catalog) labelledHistory(stored []storage.Session, label string, current storage.SessionID) []labelledExit {
 	var history []labelledExit
 	for _, session := range stored {
-		if session.State != storage.StateExited || session.ID == current {
+		if (session.State != storage.StateExited && session.State != storage.StateInterrupted) || session.ID == current {
 			continue
 		}
 		if exit, eligible := c.eligibleLabelledExit(session.ID, label); eligible {
 			history = append(history, exit)
 		}
 	}
+	sortLabelledHistory(history)
+	return history
+}
+
+func sortLabelledHistory(history []labelledExit) {
 	sort.Slice(history, func(i, j int) bool {
 		if !history[i].createdAt.Equal(history[j].createdAt) {
 			return history[i].createdAt.After(history[j].createdAt)
 		}
 		return history[i].id > history[j].id
 	})
-	return history
 }
 
-// eligibleLabelledExit reads the worker's own record. Only an exited session
-// with this label and a valid exit, no owner pin and no recovery history may
-// be pruned automatically.
+// eligibleLabelledExit is shared by post-start pruning and periodic retention.
+// An empty label accepts any historical label, independent of current recipes.
 func (c *Catalog) eligibleLabelledExit(id storage.SessionID, label string) (labelledExit, bool) {
 	dir := filepath.Join(c.sessionsDir, string(id))
 	meta, err := worker.ReadMeta(dir)
-	if err != nil || meta.ID != string(id) || meta.Label != label || meta.State != worker.StateExited {
+	if err != nil || meta.Label == "" || (label != "" && meta.Label != label) {
 		return labelledExit{}, false
 	}
-	if meta.ExitedAt == nil || meta.ExitedAt.Before(meta.CreatedAt) || ownerPinned(dir) || hasRecoveryHistory(dir) {
+	if ownerPinned(dir) || hasRecoveryHistory(dir) {
 		return labelledExit{}, false
 	}
-	return labelledExit{id: id, createdAt: meta.CreatedAt, ran: meta.ExitedAt.Sub(meta.CreatedAt)}, true
+	if _, err := os.Lstat(paths.Launching(dir)); !errors.Is(err, os.ErrNotExist) {
+		return labelledExit{}, false
+	}
+	return c.labelledExitFromMeta(id, meta)
+}
+
+func (c *Catalog) labelledExitFromMeta(id storage.SessionID, meta worker.Meta) (labelledExit, bool) {
+	stored, live, err := sessionFromMeta(c.host.ID, string(id), meta)
+	if err != nil {
+		return labelledExit{}, false
+	}
+	exit := labelledExit{id: id, label: meta.Label, createdAt: meta.CreatedAt}
+	if stored.State == storage.StateExited {
+		exit.exitedAt, exit.ran = *meta.ExitedAt, meta.ExitedAt.Sub(meta.CreatedAt)
+		return exit, true
+	}
+	currentBoot := c.bootID()
+	if !live || currentBoot == "" || meta.BootID == "" || meta.BootID == currentBoot {
+		return labelledExit{}, false
+	}
+	// A reboot proves termination, not when it happened or how long it ran.
+	return exit, true
 }
 
 // prunedHistory selects what history, newest first, does not keep.

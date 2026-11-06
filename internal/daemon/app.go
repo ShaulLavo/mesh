@@ -46,6 +46,7 @@ type Config struct {
 	SSHSessionHandler           sshd.SessionHandlerFactory
 	WakePeerIdentity            func(context.Context, string) (string, error)
 	StateDir                    string
+	ConfigDir                   string
 	TailnetPort                 uint16
 	SSHPort                     uint16
 	WebSocketPath               string
@@ -493,6 +494,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		return err
 	}
 	server.updates = updates
+	server.context = &agentContextController{configDir: cfg.ConfigDir, stateDir: stateDir, hostID: meshHost.ID, trusted: updates.authority.IsAdministrator}
 
 	controlAddrs := tailnetAddrs
 	if cfg.TailnetPort == 0 {

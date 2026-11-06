@@ -688,21 +688,8 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	if err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
 	}
-	if request.Type == protocol.TypeSignal && !worker.SupportsSignal(request.Signal) {
-		return protocol.Control{}, fmt.Errorf("daemon: unsupported signal %q", request.Signal)
-	}
-	if request.Type == protocol.TypeLogs && (request.Tail <= 0 || request.Tail > protocol.MaxLogTail) {
-		return protocol.Control{}, fmt.Errorf("daemon: log tail must be between 1 and %d bytes", protocol.MaxLogTail)
-	}
-	if request.Type == protocol.TypeInspect {
-		if err := protocol.ValidateInspectDimensions(request.PreviewCols, request.PreviewRows); err != nil {
-			return protocol.Control{}, fmt.Errorf("daemon: inspect session %s: %w", request.SessionID, err)
-		}
-	}
-	if request.Type == protocol.TypeHibernate {
-		if _, err := worker.HibernateIdleDuration(request.HibernateIdleMillis); err != nil {
-			return protocol.Control{}, fmt.Errorf("daemon: hibernate session %s: %w", id, err)
-		}
+	if err := l.validateOneShot(id, request); err != nil {
+		return protocol.Control{}, err
 	}
 	sid, err := protocol.NewSessionID(id)
 	if err != nil {
@@ -722,40 +709,23 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		RequestID: request.RequestID,
 		SessionID: id,
 	}
-	if request.Type == protocol.TypeSignal {
+	switch request.Type {
+	case protocol.TypeSignal:
 		forwarded.Signal = request.Signal
-	} else if request.Type == protocol.TypeLogs {
+	case protocol.TypeLogs:
 		forwarded.Tail = request.Tail
-	} else if request.Type == protocol.TypeInspect {
-		forwarded.PreviewCols = request.PreviewCols
-		forwarded.PreviewRows = request.PreviewRows
-	} else if request.Type == protocol.TypeHibernate {
+	case protocol.TypeInspect:
+		forwarded.PreviewCols, forwarded.PreviewRows = request.PreviewCols, request.PreviewRows
+	case protocol.TypeHibernate:
 		forwarded.HibernateIdleMillis = request.HibernateIdleMillis
 	}
 	payload, err := forwarded.Encode()
 	if err == nil {
 		err = conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload})
 	}
-	response := protocol.Control{
-		Type:      protocol.TypeOK,
-		RequestID: request.RequestID,
-		SessionID: id,
-	}
-	if err == nil && (request.Type == protocol.TypeKill || request.Type == protocol.TypeLogs || request.Type == protocol.TypeInspect || request.Type == protocol.TypeHibernate) {
-		var frame protocol.Frame
-		frame, err = conn.ReadFrame()
-		if err == nil {
-			switch request.Type {
-			case protocol.TypeKill:
-				err = validateKillAcknowledgement(id, request.RequestID, frame)
-			case protocol.TypeHibernate:
-				err = validateHibernateAcknowledgement(id, request.RequestID, frame)
-			case protocol.TypeLogs:
-				response, err = validateLogsResponse(id, request.RequestID, request.Tail, frame)
-			case protocol.TypeInspect:
-				response, err = validateInspectionResponse(id, request.RequestID, request.PreviewCols, request.PreviewRows, frame)
-			}
-		}
+	response := protocol.Control{Type: protocol.TypeOK, RequestID: request.RequestID, SessionID: id}
+	if err == nil {
+		response, err = readOneShotResponse(conn, forwarded, response)
 	}
 	closeErr := conn.Close()
 	var refused workerRefusal
@@ -772,6 +742,50 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 		l.enrichLegacyInspection(ctx, id, request, &response)
 	}
 	return response, nil
+}
+
+func (l *lifecycle) validateOneShot(id string, request protocol.Control) error {
+	switch request.Type {
+	case protocol.TypeSignal:
+		if !worker.SupportsSignal(request.Signal) {
+			return fmt.Errorf("daemon: unsupported signal %q", request.Signal)
+		}
+	case protocol.TypeLogs:
+		if request.Tail <= 0 || request.Tail > protocol.MaxLogTail {
+			return fmt.Errorf("daemon: log tail must be between 1 and %d bytes", protocol.MaxLogTail)
+		}
+	case protocol.TypeInspect:
+		if err := protocol.ValidateInspectDimensions(request.PreviewCols, request.PreviewRows); err != nil {
+			return fmt.Errorf("daemon: inspect session %s: %w", id, err)
+		}
+	case protocol.TypeHibernate:
+		if _, err := worker.HibernateIdleDuration(request.HibernateIdleMillis); err != nil {
+			return fmt.Errorf("daemon: hibernate session %s: %w", id, err)
+		}
+		return l.validateHibernateOwnership(id)
+	}
+	return nil
+}
+
+func readOneShotResponse(conn transport.Conn, request, response protocol.Control) (protocol.Control, error) {
+	if request.Type == protocol.TypeSignal {
+		return response, nil
+	}
+	frame, err := conn.ReadFrame()
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("read worker control answer: %w", err)
+	}
+	switch request.Type {
+	case protocol.TypeKill:
+		err = validateKillAcknowledgement(request.SessionID, request.RequestID, frame)
+	case protocol.TypeHibernate:
+		err = validateHibernateAcknowledgement(request.SessionID, request.RequestID, frame)
+	case protocol.TypeLogs:
+		return validateLogsResponse(request.SessionID, request.RequestID, request.Tail, frame)
+	case protocol.TypeInspect:
+		return validateInspectionResponse(request.SessionID, request.RequestID, request.PreviewCols, request.PreviewRows, frame)
+	}
+	return response, err
 }
 
 // enrichLegacyInspection recovers presentation from the exact raw ANSI bytes

@@ -419,53 +419,104 @@ const (
 	maxRetainedTerminalSessions = 500
 )
 
-// retireFinishedSessions selects exited sessions past the retention limits,
-// aged and ranked by when they exited. Interrupted sessions and saved recovery
-// attempts require explicit removal. Directories remain until the database has
-// durably retired their rows.
+type retentionCandidate struct {
+	index    int
+	orderAt  time.Time
+	exitedAt time.Time
+	history  labelledExit
+}
+
+// retireFinishedSessions bounds ended history even when its service was
+// disabled or deleted and will never call the post-start prune again.
 func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.Session, []storage.SessionID) {
-	now := c.now()
-	type candidate struct {
-		index    int
-		retireAt time.Time
-	}
-	var finished []candidate
+	var finished []retentionCandidate
 	retire := make(map[int]struct{})
+	history := make(map[string][]labelledExit)
+	indices := make(map[storage.SessionID]int)
 	for i, current := range observed {
 		if current.State != storage.StateExited && current.State != storage.StateInterrupted {
 			continue
 		}
-		if ownerPinned(filepath.Join(c.sessionsDir, string(current.ID))) {
+		dir := filepath.Join(c.sessionsDir, string(current.ID))
+		if ownerPinned(dir) {
 			continue
 		}
-		if _, err := os.Lstat(paths.Forgotten(filepath.Join(c.sessionsDir, string(current.ID)))); err == nil {
+		if _, err := os.Lstat(paths.Forgotten(dir)); err == nil {
 			retire[i] = struct{}{}
 			continue
 		}
-		if current.State != storage.StateExited || hasRecoveryHistory(filepath.Join(c.sessionsDir, string(current.ID))) {
+		candidate, eligible := c.retentionCandidate(current, i)
+		if !eligible {
 			continue
 		}
-		retireAt := current.CreatedAt
-		if exitedAt, ok := c.scannedExitedAt[current.ID]; ok {
-			retireAt = exitedAt
+		finished = append(finished, candidate)
+		if candidate.history.label == "" {
+			continue
 		}
-		finished = append(finished, candidate{index: i, retireAt: retireAt})
+		label := candidate.history.label
+		history[label] = append(history[label], candidate.history)
+		indices[current.ID] = i
 	}
-	// Oldest first, so a count cap retires the least useful history.
-	sort.Slice(finished, func(i, j int) bool { return finished[i].retireAt.Before(finished[j].retireAt) })
+	for _, attempts := range history {
+		sortLabelledHistory(attempts)
+		for _, id := range prunedHistory(attempts) {
+			retire[indices[id]] = struct{}{}
+		}
+	}
+	markExpiredHistory(finished, c.now(), retire)
+	return retainedSessions(observed, retire)
+}
 
-	excess := len(finished) - maxRetainedTerminalSessions
-	for rank, current := range finished {
-		agedOut := !current.retireAt.IsZero() && now.Sub(current.retireAt) > sessionRetention
-		overCap := rank < excess
-		if agedOut || overCap {
-			retire[current.index] = struct{}{}
+func (c *Catalog) retentionCandidate(current storage.Session, index int) (retentionCandidate, bool) {
+	dir := filepath.Join(c.sessionsDir, string(current.ID))
+	candidate := retentionCandidate{index: index, orderAt: current.CreatedAt}
+	exit, labelled := c.eligibleLabelledExit(current.ID, "")
+	if labelled {
+		candidate.history, candidate.exitedAt = exit, exit.exitedAt
+		if !exit.exitedAt.IsZero() {
+			candidate.orderAt = exit.exitedAt
 		}
+		return candidate, true
 	}
+	if current.State != storage.StateExited || hasRecoveryHistory(dir) {
+		return candidate, false
+	}
+	// Labelled records rejected by the shared classifier remain protected.
+	meta, err := worker.ReadMeta(dir)
+	if err == nil && meta.Label != "" {
+		return candidate, false
+	}
+	candidate.exitedAt = c.scannedExitedAt[current.ID]
+	if candidate.exitedAt.IsZero() {
+		candidate.exitedAt = current.CreatedAt
+	}
+	candidate.orderAt = candidate.exitedAt
+	return candidate, true
+}
+
+func markExpiredHistory(finished []retentionCandidate, now time.Time, retire map[int]struct{}) {
+	remaining := finished[:0]
+	for _, current := range finished {
+		if !current.exitedAt.IsZero() && now.Sub(current.exitedAt) > sessionRetention {
+			retire[current.index] = struct{}{}
+			continue
+		}
+		if _, selected := retire[current.index]; selected {
+			continue
+		}
+		remaining = append(remaining, current)
+	}
+	sort.Slice(remaining, func(i, j int) bool { return remaining[i].orderAt.Before(remaining[j].orderAt) })
+	excess := max(0, len(remaining)-maxRetainedTerminalSessions)
+	for _, current := range remaining[:excess] {
+		retire[current.index] = struct{}{}
+	}
+}
+
+func retainedSessions(observed []storage.Session, retire map[int]struct{}) ([]storage.Session, []storage.SessionID) {
 	if len(retire) == 0 {
 		return observed, nil
 	}
-
 	kept := make([]storage.Session, 0, len(observed)-len(retire))
 	retired := make([]storage.SessionID, 0, len(retire))
 	for i, current := range observed {
