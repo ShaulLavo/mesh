@@ -16,8 +16,17 @@ import (
 const checkpointInterval = 2 * time.Second
 
 func (w *Worker) startRecovery() {
-	if w.cfg.HostID == "" {
+	if !w.openRecovery() {
 		return
+	}
+	w.checkpointStop = make(chan struct{})
+	w.checkpointDone = make(chan struct{})
+	go w.checkpointLoop()
+}
+
+func (w *Worker) openRecovery() bool {
+	if w.cfg.HostID == "" {
+		return false
 	}
 	w.recoveryState = recovery.Record{
 		Version: recovery.Version, HostID: w.cfg.HostID, SessionID: w.cfg.ID,
@@ -29,9 +38,7 @@ func (w *Worker) startRecovery() {
 	w.checkpointWriter = recovery.NewWriter(w.cfg.Dir, func(err error) {
 		log.Printf("worker: checkpoint session %s: %v", w.cfg.ID, err)
 	})
-	w.checkpointStop = make(chan struct{})
-	w.checkpointDone = make(chan struct{})
-	go w.checkpointLoop()
+	return true
 }
 
 func (w *Worker) inheritRecoveryLabel() {
@@ -76,7 +83,7 @@ func (w *Worker) checkpointLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			w.checkpoint()
+			w.periodicCheckpoint()
 		case <-w.checkpointStop:
 			w.checkpoint()
 			w.checkpointWriter.Close()
@@ -93,25 +100,61 @@ func (w *Worker) stopRecovery() {
 	<-w.checkpointDone
 }
 
+// checkpoint always prepares so explicit callers retain a durable acknowledgement.
 func (w *Worker) checkpoint() <-chan error {
 	w.checkpointMu.Lock()
 	defer w.checkpointMu.Unlock()
+	w.applyDirectoryObservation()
+	return w.submitCheckpoint()
+}
+
+// periodicCheckpoint skips preparation only after matching durable success.
+func (w *Worker) periodicCheckpoint() (<-chan error, bool) {
+	w.checkpointMu.Lock()
+	defer w.checkpointMu.Unlock()
+	w.applyDirectoryObservation()
+	w.mu.Lock()
+	inputs, revision := w.recoveryInputsLocked(), w.screen.Revision()
+	w.mu.Unlock()
+	if w.checkpointWriter.Covers(recovery.CheckpointKey(inputs, revision)) {
+		return nil, false
+	}
+	return w.submitCheckpoint(), true
+}
+
+func (w *Worker) applyDirectoryObservation() {
 	directory := w.recoveryDirectoryObservation()
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	if directory != "" && w.recoveryState.DirectorySource != recovery.DirectoryShell {
 		w.recoveryState.ShellDirectory = directory
 		w.recoveryState.DirectorySource = recovery.DirectoryObserved
 	}
+}
+
+// submitCheckpoint requires checkpointMu. Reachable metadata stays immutable
+// during unlocked hashing and asynchronous persistence, as Submit requires.
+func (w *Worker) submitCheckpoint() <-chan error {
+	w.mu.Lock()
 	screen := w.screen.SaveText(recovery.MaxLines, recovery.MaxTextBytes)
-	record := w.recoveryState
-	record.CheckpointAt = w.currentTime().Round(0)
-	record.LastOutputAt = w.lastOutputAt.Round(0)
+	inputs := w.recoveryInputsLocked()
+	checkpointAt := w.currentTime().Round(0)
+	w.mu.Unlock()
+	key := recovery.CheckpointKey(inputs, screen.Revision)
+	record := inputs
+	record.CheckpointAt = checkpointAt
 	if screen.Title != "" {
 		record.Title = screen.Title
 	}
-	w.mu.Unlock()
 	record.Lines = screen.Render()
-	return w.checkpointWriter.Submit(record)
+	return w.checkpointWriter.Submit(record, key)
+}
+
+// recoveryInputsLocked requires w.mu.
+func (w *Worker) recoveryInputsLocked() recovery.Record {
+	inputs := w.recoveryState
+	inputs.LastOutputAt = w.lastOutputAt.Round(0)
+	return inputs
 }
 
 func (w *Worker) recoveryDirectoryObservation() string {
