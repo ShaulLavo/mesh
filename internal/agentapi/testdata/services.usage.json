@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "operation": "services.list",
+  "status": "error",
+  "requestId": "01JA0000000000000000000000",
+  "data": null,
+  "errors": [
+    {
+      "code": "usage.invalid",
+      "message": "unknown flag: --bogus",
+      "operation": "services.list",
+      "retryable": false
+    }
+  ]
+}

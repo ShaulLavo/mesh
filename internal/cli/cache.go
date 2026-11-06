@@ -13,7 +13,6 @@ import (
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
-	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/storage"
 )
 
@@ -162,12 +161,11 @@ func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, 
 		if err != nil {
 			return fmt.Errorf("cache host %s service: %w", HostLabel(host), err)
 		}
+		definition := protocol.ServiceFromInfo(validated)
+		definition.Demand = nil
 		services[index] = storage.CachedService{
 			HostID: storage.HostID(host.ID), PrivateName: privateName,
-			Service: meshserve.Service{
-				DisplayName: validated.DisplayName, Name: validated.Name, Kind: meshserve.Kind(validated.Kind), Target: validated.Target,
-				PrivateHost: validated.PrivateHost, Isolate: validated.Isolate,
-			},
+			Service: definition,
 			Healthy: validated.Healthy, Problem: validated.Problem, ObservedAt: now,
 		}
 	}

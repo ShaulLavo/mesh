@@ -116,7 +116,7 @@ func registerNesting(ctx context.Context, location worker.SessionWorkerLocation,
 		return nil, errors.New("worker does not support nesting registration")
 	}
 	if response.Type == protocol.TypeError {
-		return nil, fmt.Errorf("%w: %w", errNestingRejected, daemonResponseError("nesting", response.Message))
+		return nil, fmt.Errorf("%w: %w", errNestingRejected, daemonResponseError("nesting", response.Message, response.ErrorCode))
 	}
 	if response.Type != protocol.TypeNesting || response.SessionID != location.SessionID {
 		return nil, fmt.Errorf("%w: unexpected worker response", errNestingRejected)

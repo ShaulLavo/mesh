@@ -232,14 +232,12 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 func cachedServiceCatalogRows(host HostRecord, cached []storage.CachedService) []ServiceCatalogRow {
 	rows := make([]ServiceCatalogRow, len(cached))
 	for index, row := range cached {
+		service := protocol.ServiceDefinitionInfo(row.Service)
+		service.Healthy, service.Problem = row.Healthy, row.Problem
 		rows[index] = ServiceCatalogRow{
 			Host: host, PrivateName: row.PrivateName,
-			Service: protocol.ServiceInfo{
-				DisplayName: row.Service.DisplayName, Name: row.Service.Name, Kind: string(row.Service.Kind), Target: row.Service.Target,
-				PrivateHost: row.Service.PrivateHost, Isolate: row.Service.Isolate, LocalOnly: row.Service.LocalOnly,
-				Healthy: row.Healthy, Problem: row.Problem,
-			},
-			Stale: true, ObservedAt: row.ObservedAt,
+			Service: service,
+			Stale:   true, ObservedAt: row.ObservedAt,
 		}
 	}
 	return rows

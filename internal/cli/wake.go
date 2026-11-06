@@ -176,7 +176,7 @@ func (a *application) configureWake(cmd *cobra.Command, allowed bool) error {
 		return err
 	}
 	if response.Type == protocol.TypeError {
-		return daemonResponseError("configure wake permission", response.Message)
+		return daemonResponseError("configure wake permission", response.Message, response.ErrorCode)
 	}
 	if response.Type != protocol.TypeWakeConfigured {
 		return errors.New("daemon returned an unexpected wake configuration response")

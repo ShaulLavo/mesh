@@ -112,7 +112,7 @@ func TestIdentityArgumentsPreserveOptionParsing(t *testing.T) {
 			root.Flags().BoolVarP(&resume, "resume", "r", false, "fixture resume")
 			var got []string
 			root.RunE = func(_ *cobra.Command, args []string) error { got = slices.Clone(args); return nil }
-			command := identityArgumentCommand(root)
+			command := identityArgumentCommand(root, &agentInvocation{})
 			command.SetArgs(test.args)
 			err := command.ExecuteContext(t.Context())
 			if test.wantError != "" {
@@ -134,7 +134,7 @@ func TestIdentityArgumentsLeaveProviderPayloadUntouched(t *testing.T) {
 	var got []string
 	root.AddCommand(&cobra.Command{Use: "agent", DisableFlagParsing: true, Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error { got = args; return nil }})
-	command := identityArgumentCommand(root)
+	command := identityArgumentCommand(root, &agentInvocation{})
 	command.SetArgs([]string{"agent", "fixture", "--", id, "-r"})
 	if err := command.ExecuteContext(t.Context()); err != nil || !slices.Equal(got, []string{"fixture", "--", id, "-r"}) {
 		t.Fatalf("provider args=%q error=%v", got, err)

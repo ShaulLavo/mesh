@@ -152,18 +152,11 @@ type storedListen struct {
 // encodeDemand stores an ordinary route as two empty strings, so every row
 // written before on-demand routes existed already reads as one.
 func encodeDemand(service meshserve.Service) (string, string, error) {
-	listens, demand := "", ""
-	if len(service.Listens) > 0 {
-		stored := make([]storedListen, len(service.Listens))
-		for index, listen := range service.Listens {
-			stored[index] = storedListen(listen)
-		}
-		encoded, err := json.Marshal(stored)
-		if err != nil {
-			return "", "", fmt.Errorf("encode listeners: %w", err)
-		}
-		listens = string(encoded)
+	listens, err := encodeListens(service.Listens)
+	if err != nil {
+		return "", "", err
 	}
+	demand := ""
 	if service.Demand != nil {
 		encoded, err := json.Marshal(storedDemand{
 			Command: service.Demand.Command, Cwd: service.Demand.Cwd, Env: service.Demand.Env,
@@ -177,6 +170,21 @@ func encodeDemand(service meshserve.Service) (string, string, error) {
 		demand = string(encoded)
 	}
 	return listens, demand, nil
+}
+
+func encodeListens(listens []meshserve.Listen) (string, error) {
+	if len(listens) == 0 {
+		return "", nil
+	}
+	stored := make([]storedListen, len(listens))
+	for index, listen := range listens {
+		stored[index] = storedListen(listen)
+	}
+	encoded, err := json.Marshal(stored)
+	if err != nil {
+		return "", fmt.Errorf("encode listeners: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func decodeDemand(listens, demand string, service *meshserve.Service) error {

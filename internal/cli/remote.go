@@ -54,7 +54,7 @@ func openVerifiedHostInfo(ctx context.Context, host HostRecord, dial HostDialer)
 	}
 	if response.Type == protocol.TypeError {
 		_ = conn.Close()
-		return nil, protocol.HostInfo{}, daemonResponseError("host identity", response.Message)
+		return nil, protocol.HostInfo{}, daemonResponseError("host identity", response.Message, response.ErrorCode)
 	}
 	if response.Type != protocol.TypeHostInfoResult || response.Host == nil {
 		_ = conn.Close()
@@ -154,7 +154,7 @@ func listRemoteDeclaredHost(ctx context.Context, host *HostRecord, dial HostDial
 		}
 		return cloneSessionInfo(response.Sessions), nil
 	case protocol.TypeError:
-		return nil, daemonResponseError("session list", response.Message)
+		return nil, daemonResponseError("session list", response.Message, response.ErrorCode)
 	default:
 		return nil, fmt.Errorf("host %s returned an unexpected session-list response", HostLabel(*host))
 	}
@@ -204,7 +204,7 @@ func controlRemoteSession(ctx context.Context, host HostRecord, dial HostDialer,
 		}
 		return nil
 	case protocol.TypeError:
-		return daemonResponseError(controlType+" "+sessionID, response.Message)
+		return daemonResponseError(controlType+" "+sessionID, response.Message, response.ErrorCode)
 	default:
 		return fmt.Errorf("host %s returned an unexpected %s response", HostLabel(host), controlType)
 	}
@@ -254,7 +254,7 @@ func logsRemoteSession(ctx context.Context, host HostRecord, dial HostDialer, se
 		}
 		return append([]byte(nil), response.Output...), nil
 	case protocol.TypeError:
-		return nil, daemonResponseError("logs "+sessionID, response.Message)
+		return nil, daemonResponseError("logs "+sessionID, response.Message, response.ErrorCode)
 	default:
 		return nil, fmt.Errorf("host %s returned an unexpected logs response", HostLabel(host))
 	}
@@ -307,7 +307,7 @@ func validateInspectionResponse(host HostRecord, sessionID string, previewCols, 
 		}
 		return validatedLiveInspection(host, sessionID, previewCols, previewRows, response.Inspection)
 	case protocol.TypeError:
-		return SessionInspection{}, daemonResponseError("inspect "+sessionID, response.Message)
+		return SessionInspection{}, daemonResponseError("inspect "+sessionID, response.Message, response.ErrorCode)
 	default:
 		return SessionInspection{}, fmt.Errorf("host %s returned an unexpected inspect response", HostLabel(host))
 	}

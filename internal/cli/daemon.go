@@ -85,7 +85,7 @@ func ListViaDaemon(ctx context.Context, socketPath string) ([]protocol.SessionIn
 		}
 		return response.Sessions, nil
 	case protocol.TypeError:
-		return nil, daemonResponseError("session list", response.Message)
+		return nil, daemonResponseError("session list", response.Message, response.ErrorCode)
 	default:
 		return nil, errors.New("cli: daemon returned an unexpected session-list response")
 	}
@@ -188,18 +188,18 @@ func validateDaemonCreateResponse(response protocol.Control) (string, error) {
 		}
 		return id, nil
 	case protocol.TypeError:
-		return "", daemonResponseError("session creation", response.Message)
+		return "", daemonResponseError("session creation", response.Message, response.ErrorCode)
 	default:
 		return "", errors.New("cli: daemon returned an unexpected session-create response")
 	}
 }
 
-func daemonResponseError(operation, message string) error {
+func daemonResponseError(operation, message, code string) error {
 	message = safeRemoteText(message)
 	if message == "" {
-		return fmt.Errorf("cli: daemon rejected %s", operation)
+		return typedControlError(code, operation, message, fmt.Sprintf("cli: daemon rejected %s", operation))
 	}
-	return fmt.Errorf("cli: daemon rejected %s: %s", operation, message)
+	return typedControlError(code, operation, message, fmt.Sprintf("cli: daemon rejected %s: %s", operation, message))
 }
 
 func validateDaemonSession(listed protocol.SessionInfo) error {
