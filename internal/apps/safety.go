@@ -106,6 +106,10 @@ type listenerSocket struct {
 // errNoListener means the app has not bound its port yet; readiness waits for it.
 var errNoListener = errors.New("app: no server listener found on the configured port")
 
+// errIncompleteListenerObservation permits only unpublished readiness to try a
+// fresh whole snapshot. It never authorizes an incomplete set of descriptors.
+var errIncompleteListenerObservation = errors.New("app: listener observation incomplete")
+
 // listenerFault is why an app's listeners must not be proxied to. Its text is
 // what the owner sees.
 type listenerFault string
