@@ -5,12 +5,42 @@ on:
     branches:
       - main
   pull_request:
-
+    types: [opened, synchronize, reopened, ready_for_review]
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ github.event_name != 'pull_request' || steps.paths.outputs.code == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: paths
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/**/*.md'
+              - '!README.md'
+              - '!AGENTS.md'
+              - '!LICENSE'
+
   app-pill:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Reusable floating pill
     runs-on: ubuntu-24.04
     steps:
@@ -46,6 +76,7 @@ jobs:
         run: node web/app-pill/tests/snap.mjs
 
   test:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Race tests and integrations
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -70,6 +101,8 @@ jobs:
         run: ./scripts/verify.sh
 
   socket-portability:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Native socket and daemon fixtures (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
@@ -100,6 +133,8 @@ jobs:
           retention-days: 7
 
   auth-cutover:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Device auth cutover (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
@@ -173,6 +208,8 @@ jobs:
           retention-days: 7
 
   machine-naming:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Destination naming (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
@@ -225,6 +262,7 @@ jobs:
           retention-days: 7
 
   gates:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Quality gates
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -276,6 +314,7 @@ jobs:
           retention-days: 7
 
   vulnerability:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Vulnerability scan
     runs-on: ubuntu-24.04
     steps:
@@ -288,6 +327,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
   packaging:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Packaging contract
     runs-on: ubuntu-24.04
     steps:
@@ -312,17 +352,21 @@ jobs:
         run: ./scripts/check-packaging.sh dist
 
   helper-recovery:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Required native helper recovery
     uses: ./.github/workflows/helper-recovery.yml
 
   gate:
     name: Complete CI gate
-    if: always()
-    needs: [app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, gates, vulnerability, packaging]
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (always()) }}
+    needs: [changes, app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every CI job
         env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
           APP_PILL: ${{ needs.app-pill.result }}
           TEST: ${{ needs.test.result }}
           SOCKET_PORTABILITY: ${{ needs.socket-portability.result }}
@@ -333,7 +377,14 @@ jobs:
           VULNERABILITY: ${{ needs.vulnerability.result }}
           PACKAGING: ${{ needs.packaging.result }}
         run: |
-          [[ $APP_PILL == success && $TEST == success && $SOCKET_PORTABILITY == success && $AUTH_CUTOVER == success && $MACHINE_NAMING == success && $HELPER_RECOVERY == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
+          [[ $CHANGES == success ]]
+          case "$CODE" in
+            true) expected=success ;;
+            false) expected=skipped ;;
+            *) exit 1 ;;
+          esac
+          [[ $APP_PILL == "$expected" && $SOCKET_PORTABILITY == "$expected" && $AUTH_CUTOVER == "$expected" && $MACHINE_NAMING == "$expected" && $HELPER_RECOVERY == "$expected" ]]
+          [[ $TEST == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
 
   publish:
     name: Publish tested main commit
