@@ -3,6 +3,7 @@
 import argparse
 import base64
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,8 @@ import tempfile
 import threading
 import time
 import uuid
+
+import workload
 
 from receipt import digest, inspect_binary, verify_receipt
 from process_diagnostics import ChildObservation, record_signal, signal_child
@@ -223,31 +226,64 @@ def detach(conn, sid):
     conn.close()
 
 
+def expected_payload_sha256(size):
+    expected = hashlib.sha256()
+    remaining = size
+    while remaining:
+        data = workload.block(min(32 << 10, remaining))
+        expected.update(data)
+        remaining -= len(data)
+    expected.update(b"\r\nBENCH_DONE\r\n")
+    return expected.hexdigest()
+
+
+def cpu_delta(before, after):
+    if before["start_ticks"] != after["start_ticks"]:
+        raise RuntimeError("CPU sample process identity changed")
+    ticks = after["ticks"] - before["ticks"]
+    if ticks < 0:
+        raise RuntimeError("CPU sample ticks moved backwards")
+    return {"start_ticks": before["start_ticks"], "before_ticks": before["ticks"],
+            "after_ticks": after["ticks"], "delta_ticks": ticks,
+            "seconds": ticks / os.sysconf("SC_CLK_TCK")}
+
+
 def throughput(state, sid, size):
+    expected_hash = expected_payload_sha256(size)
+    worker = own_worker(state, sid)
     conn, _ = measure_attach(state, sid)
     try:
+        before = proc_sample(worker)
         started = time.perf_counter()
         write_frame(conn, 3, sid.encode().ljust(8, b"\0") + f"burst {size}\n".encode())
         count = 0
         tail = b""
         expected_seq = None
+        received = hashlib.sha256()
         while True:
             kind, payload = read_frame(conn)
             if kind != 2:
                 raise RuntimeError("throughput ended before completion marker")
+            if len(payload) < 16 or payload[:8] != sid.encode().ljust(8, b"\0"):
+                raise RuntimeError("throughput invalid terminal frame")
             seq = struct.unpack_from(">Q", payload, 8)[0]
             if expected_seq is not None and seq != expected_seq:
                 raise RuntimeError("throughput dropped terminal bytes")
-            expected_seq = seq + len(payload) - 16
             data = payload[16:]
+            expected_seq = seq + len(data)
             count += len(data)
+            received.update(data)
             tail = (tail + data)[-64:]
             if b"\r\nBENCH_DONE\r\n" in tail:
                 break
+        elapsed = time.perf_counter() - started
+        worker_cpu = cpu_delta(before, proc_sample(worker))
         if count != size + len(b"\r\nBENCH_DONE\r\n"):
             raise RuntimeError(f"throughput byte mismatch: {count}")
-        elapsed = time.perf_counter() - started
+        if received.hexdigest() != expected_hash:
+            raise RuntimeError("throughput payload content SHA256 mismatch")
         return {"requested_bytes": size, "received_bytes": count,
+                "payload_sha256": received.hexdigest(), "worker_cpu": worker_cpu,
                 "wall_ms": elapsed * 1000, "bytes_per_second": size / elapsed}
     finally:
         detach(conn, sid)
@@ -429,6 +465,7 @@ def run_case(args, count, root):
             time.sleep(args.settle_seconds)
             wal = WALCounter(state / "mesh.db")
             before = proc_sample(daemon.pid)
+            worker_before = {pid: proc_sample(pid) for pid in workers}
             rss = []
             worker_rss = {pid: [] for pid in workers}
             start = time.monotonic()
@@ -441,6 +478,9 @@ def run_case(args, count, root):
             wal.poll()
             after = proc_sample(daemon.pid)
             duration = time.monotonic() - start
+            worker_cpu = [cpu_delta(worker_before[pid], proc_sample(pid)) for pid in workers]
+            for observation in worker_cpu:
+                observation["percent_one_core"] = observation["seconds"] / duration * 100
             listed = []
             for _ in range(args.repeats):
                 then = time.perf_counter()
@@ -454,6 +494,7 @@ def run_case(args, count, root):
                                "daemon_cpu_percent_one_core": (after["ticks"] - before["ticks"]) / os.sysconf("SC_CLK_TCK") / duration * 100,
                                "daemon_rss_median_bytes": statistics.median(rss),
                                "daemon_rss_peak_bytes": max(rss),
+                               "worker_cpu": worker_cpu,
                                "worker_rss_median_bytes": [statistics.median(worker_rss[pid]) for pid in workers]},
                       "sqlite": {"commits": wal.commits, "wal_frames": wal.frames,
                                  "wal_resets": wal.resets,
