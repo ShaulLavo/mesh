@@ -43,12 +43,20 @@ case "$1 $2" in
     [[ ! -f $PR_CREATED ]] || echo 17 ;;
   'pr create') touch "$PR_CREATED"; echo 'https://example.invalid/pr/17' ;;
   'pr view')
-    if [[ $* == *autoMergeRequest* ]]; then
+    if [[ $* == *headRefOid* ]]; then
+      head=$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/release/cask-v0.1.2)
+      printf '%s\tmain\trelease/cask-v0.1.2\t%s\tfalse\n' "${PR_REPOSITORY:-ShaulLavo/mesh}" "$head"
+    elif [[ $* == *autoMergeRequest* ]]; then
       [[ ! -f $PR_CREATED.auto ]] && echo false || echo true
     else
       echo 17
-    fi ;;
-  'pr merge') [[ ${FAIL_MERGE:-0} == 0 ]] || { echo 'merge API failed' >&2; exit 1; }; touch "$PR_CREATED.auto" ;;
+    fi
+    if [[ -n ${RACE_HEAD:-} ]]; then git --git-dir="$FIXTURE_REMOTE" update-ref refs/heads/release/cask-v0.1.2 "$RACE_HEAD"; fi ;;
+  'pr merge')
+    if [[ $* == *--match-head-commit* && ${*: -1} != $(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/release/cask-v0.1.2) ]]; then
+      echo 'PR head changed after validation' >&2; exit 1
+    fi
+    [[ ${FAIL_MERGE:-0} == 0 ]] || { echo 'merge API failed' >&2; exit 1; }; touch "$PR_CREATED.auto" ;;
   'workflow run') [[ ${FAIL_DISPATCH:-0} == 0 ]] || { echo 'dispatch API failed' >&2; exit 1; } ;;
   *) echo "unexpected gh: $*" >&2; exit 1 ;;
 esac
@@ -58,7 +66,7 @@ echo new >"$test_root/cask"
 run_finalize() {
   (cd "$checkout" && env PATH="$test_root/bin:$PATH" GIT_CONFIG_GLOBAL="$test_root/gitconfig" \
     GITHUB_REPOSITORY=ShaulLavo/mesh RUNNER_TEMP="$test_root" GH_LOG="$test_root/gh.log" \
-    PR_CREATED="$test_root/pr" "$repo_root/scripts/finalize-release.sh" v0.1.2 "$source_sha" v0.1.1 "$test_root/cask")
+    PR_CREATED="$test_root/pr" FIXTURE_REMOTE="$remote" "$repo_root/scripts/finalize-release.sh" v0.1.2 "$source_sha" v0.1.1 "$test_root/cask")
 }
 run_finalize
 branch=release/cask-v0.1.2
@@ -69,6 +77,49 @@ grep -Fq "workflow run ci.yml --repo ShaulLavo/mesh --ref $branch" "$test_root/g
 run_finalize
 [[ $(git --git-dir="$remote" rev-parse "refs/heads/$branch") == "$head" ]]
 [[ $(grep -c '^pr create ' "$test_root/gh.log") == 1 ]]
+check_foreign_pr() {
+  if PR_REPOSITORY=foreign/mesh run_finalize >"$test_root/error" 2>&1; then
+    echo 'foreign PR was accepted' >&2; exit 1
+  fi
+  grep -Fq 'PR identity or head does not match' "$test_root/error"
+}
+check_moved_head() {
+  git -C "$checkout" switch -qc racer
+  echo unrelated >"$checkout/unrelated"
+  git -C "$checkout" add unrelated
+  git -C "$checkout" commit -qm 'concurrent unrelated change'
+  git -C "$checkout" push -q origin HEAD:refs/heads/racer
+  race_head=$(git -C "$checkout" rev-parse HEAD)
+  git -C "$checkout" switch -q main
+  rm -f "$test_root/pr.auto"
+  if RACE_HEAD="$race_head" run_finalize >"$test_root/error" 2>&1; then
+    echo 'moved PR head was accepted' >&2; exit 1
+  fi
+  grep -Fq 'PR head changed after validation' "$test_root/error"
+  git --git-dir="$remote" update-ref "refs/heads/$branch" "$head"
+}
+check_conflicting_main() {
+  echo 'older pending Cask merged' >"$checkout/Casks/mesh.rb"
+  git -C "$checkout" commit -qam 'older Cask on main'
+  git -C "$checkout" push -q origin HEAD:refs/heads/older-cask
+  new_main=$(git -C "$checkout" rev-parse HEAD)
+  git --git-dir="$remote" update-ref refs/heads/main "$new_main"
+  run_finalize
+  new_head=$(git --git-dir="$remote" rev-parse "refs/heads/$branch")
+  if ! git --git-dir="$remote" merge-base --is-ancestor "$new_main" "$new_head"; then
+    echo 'conflicting Cask branch was not advanced' >&2; exit 1
+  fi
+  [[ $(git --git-dir="$remote" diff --name-only "$new_main" "$new_head") == Casks/mesh.rb ]]
+  git --git-dir="$remote" show "$new_head:Casks/mesh.rb" | cmp -s - "$test_root/cask"
+  grep -Fq -- "--match-head-commit $new_head" "$test_root/gh.log"
+}
+case ${1:-all} in
+  foreign) check_foreign_pr; exit ;;
+  moved) check_moved_head; exit ;;
+  conflict) check_conflicting_main; exit ;;
+  all) check_foreign_pr; check_moved_head; check_conflicting_main ;;
+  *) echo 'unknown control' >&2; exit 2 ;;
+esac
 if FAIL_LIST=1 run_finalize >"$test_root/error" 2>&1; then echo 'list failure was swallowed' >&2; exit 1; fi
 grep -Fq 'list API failed' "$test_root/error"
 if FAIL_DISPATCH=1 run_finalize >"$test_root/error" 2>&1; then echo 'dispatch failure was swallowed' >&2; exit 1; fi
