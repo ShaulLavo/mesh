@@ -2,10 +2,52 @@ package recovery
 
 import (
 	"errors"
+	"fmt"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestWriterRewritesRevertedContentAfterVisibleFailure(t *testing.T) {
+	dir := t.TempDir()
+	writes := 0
+	w := newWriter(func(record Record) error {
+		writes++
+		if err := Write(dir, record); err != nil {
+			return err
+		}
+		if record.Title == "B" {
+			return fmt.Errorf("injected post-publication error: %w", syscall.EIO)
+		}
+		return nil
+	}, nil)
+	defer w.Close()
+	record := checkpointFixture()
+	record.Title = "A"
+	if err := awaitCheckpoint(t, w.Submit(record)); err != nil {
+		t.Fatal(err)
+	}
+	record.Title = "B"
+	if err := awaitCheckpoint(t, w.Submit(record)); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("B acknowledgement = %v, want EIO", err)
+	}
+	saved, err := Read(dir)
+	if err != nil || saved.Title != "B" {
+		t.Fatalf("visible failed publication = %q, %v", saved.Title, err)
+	}
+	record.Title = "A"
+	if err := awaitCheckpoint(t, w.Submit(record)); err != nil {
+		t.Fatal(err)
+	}
+	saved, err = Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Title != "A" || writes != 3 {
+		t.Fatalf("saved %q after %d writes, want A after 3", saved.Title, writes)
+	}
+}
 
 func awaitCheckpoint(t *testing.T, ack <-chan error) error {
 	t.Helper()

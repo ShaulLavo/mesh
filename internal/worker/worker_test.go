@@ -1317,6 +1317,7 @@ type discardScreen struct{}
 
 func (discardScreen) Write(p []byte) (int, error) { return len(p), nil }
 func (discardScreen) Resize(int, int)             {}
+func (discardScreen) Revision() uint64            { return 0 }
 func (discardScreen) Snapshot() terminalstate.Capture {
 	return terminalstate.Capture{Restorable: true}
 }
@@ -1326,6 +1327,7 @@ func (discardScreen) SaveText(int, int) terminalstate.TextSnapshot {
 }
 
 type recordingScreen struct {
+	revision     uint64
 	output       []byte
 	cols, rows   int
 	unrestorable bool
@@ -1336,15 +1338,23 @@ type recordingScreen struct {
 	onPreview    func()
 }
 
-func (*recordingScreen) SaveText(int, int) terminalstate.TextSnapshot {
-	return terminalstate.TextSnapshot{}
+func (s *recordingScreen) SaveText(int, int) terminalstate.TextSnapshot {
+	return terminalstate.TextSnapshot{Revision: s.revision}
 }
 
+func (s *recordingScreen) Revision() uint64 { return s.revision }
+
 func (s *recordingScreen) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		s.revision++
+	}
 	s.output = append(s.output, p...)
 	return len(p), nil
 }
-func (s *recordingScreen) Resize(cols, rows int) { s.cols, s.rows = cols, rows }
+func (s *recordingScreen) Resize(cols, rows int) {
+	s.cols, s.rows = cols, rows
+	s.revision++
+}
 func (s *recordingScreen) Snapshot() terminalstate.Capture {
 	return terminalstate.Capture{Bytes: bytes.Clone(s.output), Restorable: !s.unrestorable}
 }
