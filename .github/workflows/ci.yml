@@ -389,14 +389,14 @@ jobs:
           VULNERABILITY: ${{ needs.vulnerability.result }}
           PACKAGING: ${{ needs.packaging.result }}
         run: |
-          [[ $CHANGES == success ]]
+          [[ $CHANGES == success ]] || exit 1
           case "$CODE" in
             true) expected=success ;;
             false) expected=skipped ;;
             *) exit 1 ;;
           esac
-          [[ $APP_PILL == "$expected" && $SOCKET_PORTABILITY == "$expected" && $AUTH_CUTOVER == "$expected" && $MACHINE_NAMING == "$expected" && $HELPER_RECOVERY == "$expected" ]]
-          [[ $TEST == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]]
+          [[ $APP_PILL == "$expected" && $SOCKET_PORTABILITY == "$expected" && $AUTH_CUTOVER == "$expected" && $MACHINE_NAMING == "$expected" && $HELPER_RECOVERY == "$expected" ]] || exit 1
+          [[ $TEST == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]] || exit 1
 
   publish:
     name: Publish tested main commit
