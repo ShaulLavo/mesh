@@ -133,41 +133,123 @@ func updateStateWithPublisher(ctx context.Context, configDir string, operation f
 		return err
 	}
 	defer leave()
+	return c.await(ctx, dir, lock, operation, publish)
+}
+
+func (c *committer) await(ctx context.Context, dir, lock *os.File, operation func(*book) error, publish publisher) error {
 	window, cancel := context.WithTimeout(ctx, lockLimit)
 	defer cancel()
 	m := c.submit(window, operation)
-	defer c.withdraw(m)
-	if err := pollLock(window, func() (bool, error) { return tryLock(lock) }); err != nil {
-		if c.withdraw(m) {
-			return err
-		}
-		return <-m.outcome
+	err := pollLock(window, func() (bool, error) { return c.tryCommit(dir, lock, m, publish) })
+	if err != nil && c.withdraw(m) {
+		return err
 	}
-	c.withdraw(m)
-	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
-	return updateLockedState(dir, lock, operation, publish)
+	return <-m.outcome
 }
 
-func updateLockedState(dir, lock *os.File, operation func(*book) error, publish func(*os.File, *os.File, []byte) error) error {
+func (c *committer) isAccepted(m *mutation) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return m.accepted
+}
+
+func (c *committer) accept(m *mutation) []*mutation {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if m.accepted || m.window.Err() != nil {
+		return nil
+	}
+	m.accepted = true
+	// The batch owns separate storage while pending submissions and withdrawals continue.
+	batch := make([]*mutation, 0, len(c.pending))
+	pending := c.pending[:0]
+	for _, candidate := range c.pending {
+		if candidate != m && candidate.window.Err() != nil {
+			pending = append(pending, candidate)
+			continue
+		}
+		candidate.accepted = true
+		batch = append(batch, candidate)
+	}
+	clear(c.pending[len(pending):])
+	c.pending = pending
+	if len(c.pending) == 0 {
+		c.pending = nil
+	}
+	return batch
+}
+
+func (c *committer) tryCommit(dir, lock *os.File, m *mutation, publish publisher) (bool, error) {
+	if c.isAccepted(m) {
+		return true, nil
+	}
+	locked, err := tryLock(lock)
+	if !locked {
+		return false, err
+	}
+	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
+	batch := c.accept(m)
+	if batch == nil {
+		return c.isAccepted(m), nil
+	}
+	for i, outcome := range commitBatch(dir, lock, batch, publish) {
+		batch[i].operation = nil
+		batch[i].outcome <- outcome
+		batch[i] = nil
+	}
+	return true, nil
+}
+
+func commitBatch(dir, lock *os.File, batch []*mutation, publish publisher) []error {
+	outcomes := make([]error, len(batch))
 	state, err := readBook(dir)
-	if err != nil {
-		return err
+	var before []byte
+	if err == nil {
+		before, err = encodeBook(state)
 	}
-	before, err := encodeBook(state)
-	if err != nil {
-		return err
+	var contents []byte
+	applied := false
+	if err == nil {
+		contents, applied, err = applyBatch(state, before, batch, outcomes)
 	}
+	if err == nil && applied {
+		err = persistBook(dir, lock, before, contents, publish)
+	}
+	for i := range outcomes {
+		if outcomes[i] == nil {
+			outcomes[i] = err
+		}
+	}
+	return outcomes
+}
+
+func applyBatch(state book, checkpoint []byte, batch []*mutation, outcomes []error) ([]byte, bool, error) {
+	applied := false
+	for i, m := range batch {
+		next, contents, err := applyMutation(state, m.operation)
+		if err == nil {
+			state, checkpoint = next, contents
+			applied = true
+			continue
+		}
+		outcomes[i] = err
+		state, err = decodeBook(checkpoint)
+		if err != nil {
+			return nil, false, fmt.Errorf("fleet: restore configuration after rejected change: %w", err)
+		}
+	}
+	return checkpoint, applied, nil
+}
+
+func applyMutation(state book, operation func(*book) error) (book, []byte, error) {
 	if err := operation(&state); err != nil {
-		return err
+		return book{}, nil, err
 	}
 	if err := validateBook(&state); err != nil {
-		return err
+		return book{}, nil, err
 	}
 	contents, err := encodeBook(state)
-	if err != nil {
-		return err
-	}
-	return persistBook(dir, lock, before, contents, publish)
+	return state, contents, err
 }
 
 func persistBook(dir, lock *os.File, before, contents []byte, publish func(*os.File, *os.File, []byte) error) error {

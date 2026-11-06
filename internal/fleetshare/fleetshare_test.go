@@ -1503,3 +1503,654 @@ func TestSeparateProcessWritersBothPersist(t *testing.T) {
 		t.Fatalf("cross-process merge: %d, %v", len(peers), err)
 	}
 }
+
+func TestPickupWithdrawalRaceExecutesAtMostOnce(t *testing.T) {
+	for _, publicationError := range []error{nil, unix.EIO} {
+		for range 32 {
+			testPickupWithdrawalRace(t, publicationError)
+		}
+	}
+}
+
+func testPickupWithdrawalRace(t *testing.T, publicationError error) {
+	t.Helper()
+	c := &committer{}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var executed atomic.Int32
+	m := c.submit(ctx, func(*book) error { executed.Add(1); return nil })
+	start := make(chan struct{})
+	accepted := make(chan []*mutation, 1)
+	withdrawn := make(chan bool, 1)
+	var workers sync.WaitGroup
+	workers.Go(func() { <-start; accepted <- c.accept(m) })
+	workers.Go(func() { <-start; cancel(); withdrawn <- c.withdraw(m) })
+	close(start)
+	workers.Wait()
+	batch, removed := <-accepted, <-withdrawn
+	if removed {
+		if len(batch) != 0 || executed.Load() != 0 {
+			t.Fatal("withdrawn operation accepted")
+		}
+		return
+	}
+	if len(batch) != 1 || batch[0] != m {
+		t.Fatal("accepted membership lost")
+	}
+	if err := m.operation(&book{}); err != nil {
+		t.Fatal(err)
+	}
+	m.outcome <- publicationError
+	if err := queuedResult(t, m.outcome); !errors.Is(err, publicationError) || executed.Load() != 1 {
+		t.Fatalf("accepted outcome = %v, executions %d", err, executed.Load())
+	}
+	if len(m.outcome) != 0 {
+		t.Fatal("duplicate result")
+	}
+}
+
+func TestAcceptedLeaderAndFollowerKeepPublicationError(t *testing.T) {
+	p := newQueuedPublisher(t, 1, 2)
+	p.failAt, p.afterRename = 2, true
+	holder := p.start(t.Context(), queueEnrollment(0))
+	waitSignal(t, p.gates[1].entered)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	b, c := p.start(ctx, queueEnrollment(1)), p.start(ctx, queueEnrollment(2))
+	waitPending(t, p.dir, 2)
+	p.gates[1].open()
+	waitSignal(t, p.gates[2].entered)
+	cancel()
+	waiting, withdraw := context.WithCancel(t.Context())
+	d := p.start(waiting, queueEnrollment(3))
+	waitPending(t, p.dir, 1)
+	withdraw()
+	if err := queuedResult(t, d); !errors.Is(err, context.Canceled) {
+		t.Fatalf("new pending cancellation = %v", err)
+	}
+	waitPending(t, p.dir, 0)
+	select {
+	case err := <-b:
+		t.Fatalf("accepted caller returned before publication: %v", err)
+	case err := <-c:
+		t.Fatalf("accepted caller returned before publication: %v", err)
+	default:
+	}
+	p.gates[2].open()
+	if err := queuedResult(t, holder); err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range []<-chan error{b, c} {
+		if err := queuedResult(t, result); !errors.Is(err, unix.EIO) {
+			t.Fatalf("accepted error = %v", err)
+		}
+	}
+	p.requireCounts(t, 2)
+}
+
+func joinTestCommitter(t *testing.T, path string) (*committer, func(), *os.File) {
+	t.Helper()
+	dir, err := openDirectory(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, leave, err := joinCommitter(dir)
+	if err != nil {
+		_ = dir.Close()
+		t.Fatal(err)
+	}
+	return c, leave, dir
+}
+
+func TestCommitterDirectoryIdentityAndLifecycle(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config")
+	c, leave, dir := joinTestCommitter(t, path)
+	defer func() { leave(); _ = dir.Close() }()
+	alias, leaveAlias, aliasDir := joinTestCommitter(t, path+"/.")
+	if c != alias {
+		t.Fatal("same directory alias got a distinct queue")
+	}
+	leaveAlias()
+	_ = aliasDir.Close()
+	moved := filepath.Join(root, "renamed")
+	if err := os.Rename(path, moved); err != nil {
+		t.Fatal(err)
+	}
+	renamed, leaveRenamed, renamedDir := joinTestCommitter(t, moved)
+	if c != renamed {
+		t.Fatal("rename changed directory identity")
+	}
+	leaveRenamed()
+	_ = renamedDir.Close()
+	replacement, leaveReplacement, replacementDir := joinTestCommitter(t, path)
+	if c == replacement {
+		t.Fatal("replacement directory shared the old queue")
+	}
+	leaveReplacement()
+	_ = replacementDir.Close()
+	other, leaveOther, otherDir := joinTestCommitter(t, filepath.Join(root, "distinct"))
+	if c == other || replacement == other {
+		t.Fatal("distinct directories conflated")
+	}
+	leaveOther()
+	_ = otherDir.Close()
+	committersMu.Lock()
+	defer committersMu.Unlock()
+	for _, entry := range committers {
+		if entry == replacement || entry == other {
+			t.Fatal("idle registry entry retained")
+		}
+	}
+}
+
+func TestCommitterLastLeaveRacesNewJoin(t *testing.T) {
+	path := t.TempDir()
+	for range 32 {
+		testCommitterLastLeave(t, path)
+	}
+	closed, err := openDirectory(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = closed.Close()
+	if _, _, err := joinCommitter(closed); err == nil {
+		t.Fatal("metadata failure used a fallback identity")
+	}
+}
+
+func testCommitterLastLeave(t *testing.T, path string) {
+	t.Helper()
+	_, leave, dir := joinTestCommitter(t, path)
+	defer func() { _ = dir.Close() }()
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Go(func() { <-start; leave() })
+	workers.Go(func() {
+		<-start
+		c, done, err := joinCommitter(dir)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		committersMu.Lock()
+		found := false
+		for _, current := range committers {
+			if current == c && current.users > 0 {
+				found = true
+			}
+		}
+		committersMu.Unlock()
+		if !found {
+			t.Error("new join orphaned by last leave")
+		}
+		done()
+	})
+	close(start)
+	workers.Wait()
+	committersMu.Lock()
+	defer committersMu.Unlock()
+	for _, c := range committers {
+		if c.users <= 0 {
+			t.Fatal("registry retained final leave")
+		}
+	}
+}
+
+func TestAcceptedStorageSurvivesPendingCompaction(t *testing.T) {
+	c := &committer{}
+	ctx, cancel := context.WithCancel(t.Context())
+	expired := c.submit(ctx, queueEnrollment(0))
+	cancel()
+	first := c.submit(t.Context(), queueEnrollment(1))
+	second := c.submit(t.Context(), queueEnrollment(2))
+	batch := c.accept(first)
+	if len(batch) != 2 || batch[0] != first || batch[1] != second {
+		t.Fatal("batch lost arrival order")
+	}
+	for range 32 {
+		m := c.submit(t.Context(), queueEnrollment(3))
+		c.mu.Lock()
+		backing := c.pending[:cap(c.pending)]
+		c.mu.Unlock()
+		if !c.withdraw(m) {
+			t.Fatal("pending mutation was accepted")
+		}
+		requireClearedQueueTail(t, c, backing)
+	}
+	if batch[0] != first || batch[1] != second {
+		t.Fatal("pending compaction overwrote detached batch")
+	}
+	if !c.withdraw(expired) {
+		t.Fatal("expired mutation accepted")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pending != nil {
+		t.Fatal("empty queue retained backing storage")
+	}
+}
+
+func requireClearedQueueTail(t *testing.T, c *committer, backing []*mutation) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, m := range backing[len(c.pending):] {
+		if m != nil {
+			t.Fatal("queue retained removed closure")
+		}
+	}
+}
+
+func TestBatchRestoresNestedAndPostSortRejectionsExactly(t *testing.T) {
+	state := book{Version: 1}
+	if err := queueEnrollment(0)(&state); err != nil {
+		t.Fatal(err)
+	}
+	state.Peers[0].Hosts = []protocol.FleetHost{testHost(1)}
+	checkpoint, err := encodeBook(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := errors.New("nested rejection")
+	operations := []func(*book) error{
+		queueEnrollment(2),
+		func(state *book) error {
+			for i := range state.Peers {
+				if len(state.Peers[i].Hosts) == 0 {
+					continue
+				}
+				state.Peers[i].Hosts[0].Addresses[0] = "100.64.9.9"
+				state.Peers[i].Hosts[0].TailscaleName = "corrupted"
+			}
+			return sentinel
+		},
+		func(state *book) error {
+			state.Peers[0], state.Peers[1] = state.Peers[1], state.Peers[0]
+			state.Peers[0].Hosts = make([]protocol.FleetHost, maximumEntries)
+			for i := range state.Peers[0].Hosts {
+				state.Peers[0].Hosts[i] = testHost(1000 + i)
+			}
+			state.Peers[1].Hosts = []protocol.FleetHost{testHost(2000)}
+			return nil
+		},
+		requireBatchCheckpoint,
+	}
+	batch := make([]*mutation, len(operations))
+	for i, op := range operations {
+		batch[i] = &mutation{operation: op}
+	}
+	outcomes := make([]error, len(batch))
+	contents, applied, err := applyBatch(state, checkpoint, batch, outcomes)
+	if err != nil || !applied {
+		t.Fatalf("batch = %v, %v", applied, err)
+	}
+	if !errors.Is(outcomes[1], sentinel) || outcomes[2] == nil || !strings.Contains(outcomes[2].Error(), "imported host count") || outcomes[3] != nil {
+		t.Fatalf("outcomes = %v", outcomes)
+	}
+	final, err := decodeBook(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requireBatchCheckpoint(&final); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func requireBatchCheckpoint(state *book) error {
+	want := book{Version: 1}
+	if err := queueEnrollment(0)(&want); err != nil {
+		return err
+	}
+	want.Peers[0].Hosts = []protocol.FleetHost{testHost(1)}
+	if err := queueEnrollment(2)(&want); err != nil {
+		return err
+	}
+	if err := validateBook(&want); err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(*state, want) {
+		return errors.New("following operation observed rejected nested fields, peer order or lost successful header")
+	}
+	return nil
+}
+
+func TestAllRejectedAndNoopBatches(t *testing.T) {
+	for _, mode := range []string{"rejected", "acknowledged", "unacknowledged"} {
+		t.Run(mode, func(t *testing.T) { testAllRejectedAndNoop(t, mode) })
+	}
+}
+
+func testAllRejectedAndNoop(t *testing.T, mode string) {
+	t.Helper()
+	p := newQueuedPublisher(t, 1)
+	if mode == "unacknowledged" {
+		p.failAt, p.afterRename = 1, true
+	}
+	holder := p.start(t.Context(), queueEnrollment(0))
+	waitSignal(t, p.gates[1].entered)
+	sentinel := errors.New("rejected batch")
+	op := func(*book) error { return nil }
+	if mode == "rejected" {
+		op = func(state *book) error { state.Version = 99; return sentinel }
+	}
+	b, c := p.start(t.Context(), op), p.start(t.Context(), op)
+	waitPending(t, p.dir, 2)
+	p.gates[1].open()
+	if err := queuedResult(t, holder); errors.Is(err, unix.EIO) != (mode == "unacknowledged") {
+		t.Fatalf("holder = %v", err)
+	}
+	for _, result := range []<-chan error{b, c} {
+		err := queuedResult(t, result)
+		if mode == "rejected" && !errors.Is(err, sentinel) {
+			t.Fatal(err)
+		}
+		if mode != "rejected" && err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := int32(1)
+	if mode == "unacknowledged" {
+		want = 2
+	}
+	if p.calls.Load() != want {
+		t.Fatalf("publications = %d, want %d", p.calls.Load(), want)
+	}
+	if mode == "unacknowledged" {
+		p.requireCounts(t, 2)
+	}
+}
+
+func TestLockErrorAndCanceledLeaderLeaveOtherPendingWork(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(fmt.Sprint(canceled), func(t *testing.T) { testFailedLeader(t, canceled) })
+	}
+}
+
+func testFailedLeader(t *testing.T, canceled bool) {
+	t.Helper()
+	c, leave, dir := joinTestCommitter(t, t.TempDir())
+	defer func() { leave(); _ = dir.Close() }()
+	lock := newMutationLock(t, dir)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	leader := c.submit(ctx, queueEnrollment(0))
+	follower := c.submit(t.Context(), queueEnrollment(1))
+	attemptLock := lock
+	if canceled {
+		cancel()
+	} else {
+		attemptLock = openSnapshotLock(t, dir.Name())
+		_ = attemptLock.Close()
+	}
+	done, err := c.tryCommit(dir, attemptLock, leader, publishBook)
+	if done || (!canceled && err == nil) {
+		t.Fatalf("ineligible leader = %v, %v", done, err)
+	}
+	if !c.withdraw(leader) || c.isAccepted(follower) {
+		t.Fatal("failed leader stole other pending work")
+	}
+	if done, err := c.tryCommit(dir, lock, follower, publishBook); !done || err != nil {
+		t.Fatalf("follower progress = %v, %v", done, err)
+	}
+	if err := queuedResult(t, follower.outcome); err != nil {
+		t.Fatal(err)
+	}
+	if len(leader.outcome) != 0 {
+		t.Fatal("withdrawn leader received a batch result")
+	}
+	peers, err := Peers(dir.Name())
+	if err != nil || len(peers) != 1 || peers[0].Identity != testHost(1).ID {
+		t.Fatalf("failed leader persisted: %#v, %v", peers, err)
+	}
+}
+
+func TestReadFailureSettlesBatchAndFreshSubmissionProgresses(t *testing.T) {
+	c, leave, dir := joinTestCommitter(t, t.TempDir())
+	defer func() { leave(); _ = dir.Close() }()
+	lock := newMutationLock(t, dir)
+	if err := os.WriteFile(filepath.Join(dir.Name(), bookName), []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, second := c.submit(t.Context(), queueEnrollment(0)), c.submit(t.Context(), queueEnrollment(1))
+	if done, err := c.tryCommit(dir, lock, first, publishBook); !done || err != nil {
+		t.Fatalf("commit = %v, %v", done, err)
+	}
+	for _, m := range []*mutation{first, second} {
+		if err := queuedResult(t, m.outcome); err == nil {
+			t.Fatal("bad book accepted")
+		}
+		if len(m.outcome) != 0 || m.operation != nil {
+			t.Fatal("completed batch retained operation or duplicate result")
+		}
+	}
+	if err := os.Remove(filepath.Join(dir.Name(), bookName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateState(t.Context(), dir.Name(), queueEnrollment(2)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReplaceSnapshotOwnsCopiedInputAfterWithdrawal(t *testing.T) {
+	p := newQueuedPublisher(t, 1)
+	if err := updateState(t.Context(), p.dir, queueEnrollment(1)); err != nil {
+		t.Fatal(err)
+	}
+	state, err := readState(p.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder := p.start(t.Context(), queueEnrollment(0))
+	waitSignal(t, p.gates[1].entered)
+	hosts := []protocol.FleetHost{testHost(2)}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan error, 1)
+	p.workers.Go(func() { result <- replaceSnapshot(ctx, p.dir, state.Peers[0], hosts) })
+	waitPending(t, p.dir, 1)
+	c, leave, dir := joinTestCommitter(t, p.dir)
+	defer func() { leave(); _ = dir.Close() }()
+	c.mu.Lock()
+	pending := c.pending[0]
+	c.mu.Unlock()
+	probe := state
+	if err := pending.operation(&probe); err != nil {
+		t.Fatal(err)
+	}
+	retained := probe.Peers[0].Hosts
+	if &retained[0] == &hosts[0] || &retained[0].Addresses[0] == &hosts[0].Addresses[0] {
+		t.Fatal("snapshot captured caller backing arrays")
+	}
+	cancel()
+	if err := queuedResult(t, result); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	hosts[0].TailscaleName = "changed after withdrawal"
+	hosts[0].Addresses[0] = "100.64.1.9"
+	if retained[0].TailscaleName != "" || retained[0].Addresses[0] != "100.64.0.2" {
+		t.Fatal("withdrawn snapshot retained caller storage")
+	}
+	waitPending(t, p.dir, 0)
+	p.gates[1].open()
+	if err := queuedResult(t, holder); err != nil {
+		t.Fatal(err)
+	}
+	requireHosts(t, p.dir)
+}
+
+func TestEightSourceChangedSyncAndIdenticalSync(t *testing.T) {
+	owner := newController(t)
+	var sources []*controllerFixture
+	for i := range 8 {
+		source := newController(t)
+		trust(t, owner, source)
+		trust(t, source, owner)
+		source.setLocal(testHost(100 + i))
+		sources = append(sources, source)
+	}
+	ready := make(chan struct{}, 8)
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	for _, source := range sources {
+		source.service.LocalHosts = func(ctx context.Context) ([]protocol.FleetHost, error) {
+			ready <- struct{}{}
+			select {
+			case <-release:
+				return source.localHosts(ctx)
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+	lock := openSnapshotLock(t, owner.dir)
+	if err := acquireLockFor(t.Context(), lock, lockLimit); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	var workers sync.WaitGroup
+	t.Cleanup(func() { unblock(); _ = lock.Close(); cancel(); workers.Wait() })
+	workers.Go(func() { result <- Sync(ctx, owner.dir, owner.state) })
+	for range 8 {
+		waitSignal(t, ready)
+	}
+	unblock()
+	waitPending(t, owner.dir, 8)
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := queuedResult(t, result); err != nil {
+		t.Fatal(err)
+	}
+	hosts, err := Hosts(owner.dir)
+	if err != nil || len(hosts) != 8 {
+		t.Fatalf("changed Sync hosts = %d, %v", len(hosts), err)
+	}
+	before, err := os.Stat(filepath.Join(owner.dir, bookName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Sync(t.Context(), owner.dir, owner.state); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(filepath.Join(owner.dir, bookName))
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("identical Sync replaced book: %v", err)
+	}
+}
+
+func newMutationLock(t *testing.T, dir *os.File) *os.File {
+	t.Helper()
+	lock, err := openFile(dir, ".connection-sharing.lock", unix.O_RDWR|unix.O_CREAT, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Close() })
+	return lock
+}
+
+func TestEncodingFailureRejectsCandidateAndSettlesAcceptedBatch(t *testing.T) {
+	oversized := book{Version: 1}
+	hosts := make([]protocol.FleetHost, maximumEntries)
+	for i := range hosts {
+		hosts[i] = testHost(i)
+		hosts[i].Endpoint = "ws://x/" + strings.Repeat("x", 300)
+	}
+	for i := range maximumEntries {
+		host := testHost(1000 + i)
+		oversized.Peers = append(oversized.Peers, enrollment{Peer: Peer{Identity: host.ID, Endpoint: host.Endpoint}, Generation: strings.Repeat("0", 32), Hosts: hosts})
+	}
+	compact, err := json.Marshal(oversized)
+	if err != nil || len(compact) >= maximumBytes {
+		t.Fatalf("compact fixture size = %d, %v", len(compact), err)
+	}
+	before := book{Version: 1}
+	checkpoint, err := encodeBook(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := []*mutation{
+		{operation: func(state *book) error { *state = oversized; return nil }},
+		{operation: func(state *book) error {
+			if !reflect.DeepEqual(*state, before) {
+				return errors.New("encoding rejection changed next operation")
+			}
+			return nil
+		}},
+	}
+	outcomes := make([]error, len(batch))
+	contents, applied, err := applyBatch(before, checkpoint, batch, outcomes)
+	if err != nil || !applied || string(contents) != string(checkpoint) || outcomes[0] == nil || outcomes[1] != nil {
+		t.Fatalf("encoding rollback: %v, %v, %v", applied, err, outcomes)
+	}
+	c, leave, dir := joinTestCommitter(t, t.TempDir())
+	defer func() { leave(); _ = dir.Close() }()
+	lock := newMutationLock(t, dir)
+	if err := os.WriteFile(filepath.Join(dir.Name(), bookName), compact, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var executed, published atomic.Int32
+	op := func(*book) error { executed.Add(1); return nil }
+	first, second := c.submit(t.Context(), op), c.submit(t.Context(), op)
+	publish := func(*os.File, *os.File, []byte) error { published.Add(1); return nil }
+	if done, err := c.tryCommit(dir, lock, first, publish); !done || err != nil {
+		t.Fatalf("initial encoding commit = %v, %v", done, err)
+	}
+	for _, m := range []*mutation{first, second} {
+		if err := queuedResult(t, m.outcome); err == nil || !strings.Contains(err.Error(), "configuration exceeds 32 MiB") {
+			t.Fatalf("initial encoding error = %v", err)
+		}
+	}
+	if executed.Load() != 0 || published.Load() != 0 {
+		t.Fatal("initial encoding failure executed or published a mutation")
+	}
+	if err := os.Remove(filepath.Join(dir.Name(), bookName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateState(t.Context(), dir.Name(), queueEnrollment(0)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestoreFailureKeepsOwnRejection(t *testing.T) {
+	sentinel := errors.New("own rejection before restore")
+	batch := []*mutation{{operation: func(*book) error { return sentinel }}, {operation: queueEnrollment(1)}}
+	outcomes := make([]error, len(batch))
+	_, applied, err := applyBatch(book{Version: 1}, []byte("invalid checkpoint"), batch, outcomes)
+	if applied || err == nil || !strings.Contains(err.Error(), "fleet: restore configuration after rejected change") || !errors.Is(outcomes[0], sentinel) {
+		t.Fatalf("restore error = %v, outcomes = %v", err, outcomes)
+	}
+}
+
+func TestRenamedDirectoryAndReplacementMutateIndependently(t *testing.T) {
+	p := newQueuedPublisher(t, 1)
+	holder := p.start(t.Context(), queueEnrollment(0))
+	waitSignal(t, p.gates[1].entered)
+	moved := filepath.Join(t.TempDir(), "moved")
+	if err := os.Rename(p.dir, moved); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	p.workers.Go(func() { result <- updateStateWithPublisher(t.Context(), moved, queueEnrollment(1), p.publish) })
+	waitPending(t, moved, 1)
+	if err := updateState(t.Context(), p.dir, queueEnrollment(2)); err != nil {
+		t.Fatal(err)
+	}
+	p.gates[1].open()
+	for _, ch := range []<-chan error{holder, result} {
+		if err := queuedResult(t, ch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original, err := Peers(moved)
+	if err != nil || len(original) != 2 {
+		t.Fatalf("renamed peers = %d, %v", len(original), err)
+	}
+	replacement, err := Peers(p.dir)
+	if err != nil || len(replacement) != 1 || replacement[0].Identity != testHost(2).ID {
+		t.Fatalf("replacement peers = %v, %v", replacement, err)
+	}
+	p.requireCounts(t, 2)
+}
