@@ -32,11 +32,7 @@ func versionCommand() *cobra.Command {
 	command := &cobra.Command{Use: "version", Short: "Show the executing Mesh build", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if licenses {
-				_, err := io.WriteString(cmd.OutOrStdout(), release.BrotliNotice())
-				if err != nil {
-					return fmt.Errorf("write bundled Brotli notice: %w", err)
-				}
-				return nil
+				return writeBundledBrotliNotice(cmd.OutOrStdout())
 			}
 			build := release.Metadata()
 			if structured {
@@ -54,6 +50,14 @@ func versionCommand() *cobra.Command {
 	command.Flags().BoolVar(&licenses, "licenses", false, "print the bundled Brotli notice")
 	command.MarkFlagsMutuallyExclusive("json", "licenses")
 	return command
+}
+
+func writeBundledBrotliNotice(output io.Writer) error {
+	_, err := io.WriteString(output, release.BrotliNotice())
+	if err != nil {
+		return fmt.Errorf("write bundled Brotli notice: %w", err)
+	}
+	return nil
 }
 
 func updateTrustCommand() *cobra.Command {

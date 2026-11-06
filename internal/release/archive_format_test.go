@@ -11,13 +11,7 @@ func TestManifestExactArchiveNames(t *testing.T) {
 		t.Fatal("reader stage changed publication format")
 	}
 	for _, platform := range supportedPlatforms {
-		for _, format := range []ArchiveFormat{ArchiveGzip, ArchiveBrotli} {
-			artifact := Artifact{Platform: platform, Archive: ArchiveName(platform, format)}
-			actual, err := artifact.Format()
-			if err != nil || actual != format {
-				t.Fatalf("%s %s: %s, %v", platform, format, actual, err)
-			}
-		}
+		checkPlatformArchiveFormats(t, platform)
 	}
 	for _, name := range []string{"mesh_linux_amd64.tar.xz", "mesh_linux_arm64.tar.br", "./mesh_linux_amd64.tar.br", "mesh_linux_amd64.tar.br.gz", "mesh_linux_amd64.tar.BR"} {
 		artifact := Artifact{Platform: Platform{OS: "linux", Arch: "amd64"}, Archive: name}
@@ -35,6 +29,17 @@ func TestManifestExactArchiveNames(t *testing.T) {
 	manifest.Artifacts = manifest.Artifacts[:2]
 	if err := manifest.Validate(); err == nil {
 		t.Fatal("accepted fewer than three platforms")
+	}
+}
+
+func checkPlatformArchiveFormats(t *testing.T, platform Platform) {
+	t.Helper()
+	for _, format := range []ArchiveFormat{ArchiveGzip, ArchiveBrotli} {
+		artifact := Artifact{Platform: platform, Archive: ArchiveName(platform, format)}
+		actual, err := artifact.Format()
+		if err != nil || actual != format {
+			t.Fatalf("%s %s: %s, %v", platform, format, actual, err)
+		}
 	}
 }
 
