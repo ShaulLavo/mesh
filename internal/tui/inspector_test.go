@@ -642,7 +642,7 @@ func TestContainingSessionSnapshotOutputAgeKeepsAdvancing(t *testing.T) {
 
 	current.now = pickerTestNow.Add(10 * time.Second)
 	_ = current.inspectSelected()
-	if got := current.detailsFor(current.currentHost().sessions[0]).output; got != "output 10s ago" {
+	if got := current.detailsFor(current.currentHost().sessions[0], inspectionPreviewRows).output; got != "output 10s ago" {
 		t.Fatalf("pre-picker output age after refresh = %q, want %q", got, "output 10s ago")
 	}
 }
@@ -673,7 +673,7 @@ func TestContainingSessionUsesLiveCatalogAttachmentState(t *testing.T) {
 		t.Fatal(err)
 	}
 	current.refreshSessionDelegate()
-	details := current.detailsFor(current.hosts[0].sessions[0])
+	details := current.detailsFor(current.hosts[0].sessions[0], inspectionPreviewRows)
 	if details.attachment != "detached" {
 		t.Fatalf("pre-picker attachment state = %q, want live catalog state detached", details.attachment)
 	}
@@ -708,7 +708,7 @@ func TestInspectorRendersStructuredTerminalStylesWithoutBleedingIntoTheBox(t *te
 		}}},
 	}
 
-	rendered, styled := current.renderInspectionPreview(inspection)
+	rendered, styled := current.renderInspectionPreview(inspection, inspectionPreviewRows)
 	if !styled || len(rendered) != 1 || ansi.Strip(rendered[0]) != "DBIR" {
 		t.Fatalf("rendered preview = %#v, styled %t", rendered, styled)
 	}
@@ -774,7 +774,7 @@ func TestInspectorPreservesValidatedStructuredPreviewTextExactly(t *testing.T) {
 		StyledPreview: []protocol.PreviewLine{{Runs: []protocol.PreviewRun{{Text: plain}}}},
 	}
 
-	rendered, styled := current.renderInspectionPreview(inspection)
+	rendered, styled := current.renderInspectionPreview(inspection, inspectionPreviewRows)
 	if !styled || len(rendered) != 1 || ansi.Strip(rendered[0]) != plain {
 		t.Fatalf("rendered structured preview = %#v, want exact text %q", rendered, plain)
 	}
@@ -783,7 +783,7 @@ func TestInspectorPreservesValidatedStructuredPreviewTextExactly(t *testing.T) {
 func TestInspectorPlainPreviewFallbackEscapesTerminalControls(t *testing.T) {
 	current := newModel(pickerFixture(), pickerTestNow)
 	unsafe := "safe\x1b[31munsafe\u202ereversed"
-	rendered, styled := current.renderInspectionPreview(cli.SessionInspection{Preview: []string{unsafe}})
+	rendered, styled := current.renderInspectionPreview(cli.SessionInspection{Preview: []string{unsafe}}, inspectionPreviewRows)
 	if styled || len(rendered) != 1 {
 		t.Fatalf("rendered plain fallback = %#v, styled %t", rendered, styled)
 	}
@@ -798,7 +798,7 @@ func TestInspectorPlainPreviewFallbackEscapesTerminalControls(t *testing.T) {
 func TestInspectorPlainPreviewFallbackPreservesEmojiJoiners(t *testing.T) {
 	const emoji = "🤸‍♂️✨"
 	current := newModel(pickerFixture(), pickerTestNow)
-	rendered, styled := current.renderInspectionPreview(cli.SessionInspection{Preview: []string{emoji}})
+	rendered, styled := current.renderInspectionPreview(cli.SessionInspection{Preview: []string{emoji}}, inspectionPreviewRows)
 	if styled || len(rendered) != 1 || ansi.Strip(rendered[0]) != emoji {
 		t.Fatalf("rendered plain fallback = %#v, styled %t, want %q", rendered, styled, emoji)
 	}

@@ -1178,6 +1178,22 @@ class OwnedCommandTest(unittest.TestCase):
                 self.fault(fault)
                 process, record = self.start(self.work("exit", "0"), handshake=0.5)
                 self.assert_declined(self.outcome(process, record), reason)
+                # Only a fork failure leaves no owner whose exit must be seen.
+                self.assertEqual((record / "owner-exit").exists(), fault != "launcher-fork", self.log())
+
+    def test_stopped_owner_after_a_post_fork_decline_is_unknown(self):
+        self.hold("owner-report")
+        process, record = self.start(self.work("exit", "0"), handshake=0.5)
+        owner = self.reached("owner-report")
+        os.kill(owner, signal.SIGSTOP)
+        wait_until(lambda: stat_fields(owner)[0] == "T", "the owner to stop")
+        self.release("owner-report")
+        state = self.outcome(process, record)
+        self.assertEqual(state["state"], "unknown", self.log())
+        self.assertEqual(Record(record).read()["state"], "declined")
+        self.assertEqual(stat_fields(owner)[0], "T", "the stopped owner must still be live")
+        self.assertFalse((record / "owner-exit").exists())
+        self.assert_nothing_started()
 
     def test_unusable_pidfd_signaling_declines_before_any_work(self):
         for fault in ("owner-pidfd-enosys", "owner-pidfd-eperm"):
