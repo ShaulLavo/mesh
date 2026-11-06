@@ -1008,18 +1008,21 @@ class Delivery:
         self.stopped = True
         self.pending.clear()
 
-    def pump(self):
-        """Write until the stream would block. True when nothing is left to send."""
-        while self.pending and not self.stopped:
-            try:
-                written = self.writer(self.pending[:self.CHUNK])
-            except BlockingIOError:
-                return False
-            except OSError:
-                self.stop()
-                return False
-            del self.pending[:written]
-        return not self.pending
+    def pump(self, deadline=float("inf"), clock=time.monotonic):
+        """Send at most one chunk and check the cutoff on both sides of the write."""
+        if clock() >= deadline or self.stopped:
+            return False
+        if not self.pending:
+            return True
+        try:
+            written = self.writer(self.pending[:self.CHUNK])
+        except BlockingIOError:
+            return False
+        except OSError:
+            self.stop()
+            return False
+        del self.pending[:written]
+        return not self.pending and clock() < deadline
 
     def complete(self):
         return not self.stopped and not self.pending
@@ -1035,12 +1038,15 @@ class Delivery:
 
 
 def deliver(deliveries, deadline, wait, clock=time.monotonic):
-    """Pump until every stream is delivered or the deadline passes. True when all text went out."""
-    while not all([delivery.pump() for delivery in deliveries]):
+    """Pump bounded slices until every stream is delivered or the deadline passes."""
+    while clock() < deadline:
+        completed = [delivery.pump(deadline, clock) for delivery in deliveries]
         if clock() >= deadline or any(delivery.stopped for delivery in deliveries):
             return False
+        if all(completed):
+            return all(delivery.complete() for delivery in deliveries)
         wait()
-    return all(delivery.complete() for delivery in deliveries)
+    return False
 
 
 def keep_log(path, directory, prefix):

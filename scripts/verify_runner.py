@@ -126,11 +126,21 @@ def report_setup(repo):
 
 
 def log_lines(path, leaks_only=False):
+    """Read bounded pieces, including when a diagnostic has no newline."""
     try:
-        lines = Path(path).read_text(errors="replace").splitlines()
+        with open(path, errors="replace") as source:
+            yield from selected_log_lines(source, leaks_only)
     except OSError:
-        return []
-    return [line for line in lines if line.startswith("LEAK:")] if leaks_only else lines
+        return
+
+
+def selected_log_lines(source, leaks_only):
+    continuing, selected = False, False
+    while text := source.readline(Delivery.CHUNK):
+        if not continuing:
+            selected = not leaks_only or text.startswith("LEAK:")
+        continuing = not text.endswith("\n")
+        yield text.rstrip("\r\n") if selected else None
 
 
 class Reporter:
@@ -224,8 +234,8 @@ class Run:
             job = self.start("setup", output, error, self.caller, command=command, budget=UNBOUNDED)
         if not self.wait([job]):
             return False
-        for line in log_lines(log):
-            self.error(line)
+        if not self.report_log(log):
+            return False
         if not self.succeeded(job):
             self.report_state(job)
             return False
@@ -264,8 +274,8 @@ class Run:
                              command=["go", "build", *flags, "-o", str(target), "./cmd/mesh"])
         if not self.wait([job]):
             return False
-        for line in log_lines(log):
-            self.error(line)
+        if not self.report_log(log):
+            return False
         if self.succeeded(job):
             return True
         self.error(failure)
@@ -312,15 +322,31 @@ class Run:
         log = self.root / f"{job.name}.log"
         if self.succeeded(job):
             self.reporter.line(f"PASS: {job.name}")
-            for line in log_lines(log, leaks_only=True):
-                self.error(line)
-            return True
+            return self.report_log(log, leaks_only=True)
         code = job.outcome.get("returncode")
         self.error(f"FAIL: {job.name} (exit {'unknown' if code is None else code})")
-        for line in log_lines(log):
-            self.error("  " + line)
+        if not self.report_log(log, prefix="  "):
+            return False
         self.report_state(job)
         return True
+
+    def report_log(self, log, prefix="", leaks_only=False):
+        for line in log_lines(log, leaks_only=leaks_only):
+            if not self.reporting_tick():
+                kept = keep_log(log, self.root.parent, "mesh-verify-output.")
+                self.error(f"FAIL: output interrupted; the full log is kept at {kept}")
+                return False
+            if line is not None:
+                self.error(prefix + line)
+        return self.reporting_tick()
+
+    def reporting_tick(self):
+        cancelled = self.controller.check()
+        for job in self.controller.jobs:
+            if job.outcome is None:
+                self.controller.poll(job)
+        self.reporter.pump()
+        return cancelled is None
 
     @staticmethod
     def succeeded(job):
@@ -340,14 +366,16 @@ class Run:
             controller.cancel(Trigger(signal.SIGTERM, 1, "controller stopped", controller.clock()))
         self.wait(live, until_cancelled=False)
         for job in controller.jobs:
+            controller.check()
             self.report_state(job)
         for failure in controller.failures:
+            controller.check()
             self.error(f"FAIL: {failure}")
         proved = controller.proved()
         if not proved:
             self.error(f"FAIL: kept {self.root}")
         # Delivery is bounded by the existing allowance; the full transcript survives the root if it runs out.
-        self.reporter.finish(controller.clock() + self.allowance, lambda: controller.triggers.wait([], self.tick))
+        self.reporter.finish(controller.clock() + self.allowance, self.wait_delivery)
         if proved and not self.remove_root():
             status = status or 1
         # The first signal decides the status, even one recorded during reporting or deletion.
@@ -355,6 +383,10 @@ class Run:
         if first is not None:
             return first.status
         return status if proved else status or 1
+
+    def wait_delivery(self):
+        self.controller.check()
+        self.controller.triggers.wait([], self.tick)
 
     def remove_root(self):
         try:

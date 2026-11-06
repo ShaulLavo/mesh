@@ -497,6 +497,18 @@ class StandaloneOutputTest(unittest.TestCase):
             self.process.communicate(timeout=5)
         shutil.rmtree(self.root)
 
+    def test_output_control_uses_the_selected_go_before_system_fallback(self):
+        fallback = self.root / "go"
+        fallback.write_text('#!/bin/sh\nprintf invoked > "${0%/*}/invoked"\nexit 97\n')
+        fallback.chmod(0o700)
+        case = type(self)("test_blocked_stderr_cannot_hold_cancellation")
+        result = unittest.TestResult()
+        with patch("os.defpath", str(self.root) + os.pathsep + os.defpath):
+            case.run(result)
+        self.assertFalse((self.root / "invoked").exists(), "output control used fallback Go")
+        self.assertFalse(result.failures, result.failures)
+        self.assertFalse(result.errors, result.errors)
+
     def test_blocked_stderr_cannot_hold_cancellation(self):
         work = self.root / "fixture.py"
         work.write_text("import os, sys, time\nfrom pathlib import Path\nout = Path(sys.argv[1])\n"
@@ -505,8 +517,9 @@ class StandaloneOutputTest(unittest.TestCase):
                         "while not (out / 'release').exists():\n    time.sleep(0.01)\n")
         script = self.root / "entry.sh"
         script.write_text(f"exec {sys.executable} -B {work} {self.root}\n")
-        environment = {"PATH": os.defpath, "TMPDIR": str(self.root), "HOME": str(self.root),
-                       "PYTHONDONTWRITEBYTECODE": "1"}
+        go_root = subprocess.check_output(["go", "env", "GOROOT"], text=True).strip()
+        environment = {"PATH": str(Path(go_root) / "bin") + os.pathsep + os.defpath,
+                       "TMPDIR": str(self.root), "HOME": str(self.root), "PYTHONDONTWRITEBYTECODE": "1"}
         self.process = subprocess.Popen([sys.executable, "-B", str(Path(__file__).with_name("isolation.py")),
                                          "/bin/bash", str(script)], env=environment, stdout=subprocess.DEVNULL,
                                         stderr=subprocess.PIPE, start_new_session=True)

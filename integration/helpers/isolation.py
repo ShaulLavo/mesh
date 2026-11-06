@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 sys.dont_write_bytecode = True
 
@@ -188,8 +189,8 @@ class LogForward:
         self.offset = 0
         self.delivery = Delivery(sys.stderr.fileno())
 
-    def __call__(self):
-        if not self.delivery.pump() or self.delivery.stopped:
+    def __call__(self, deadline=float("inf"), clock=time.monotonic):
+        if not self.delivery.pump(deadline, clock) or self.delivery.stopped:
             return
         try:
             with open(self.path, "rb") as source:
@@ -199,7 +200,7 @@ class LogForward:
             return
         self.offset += len(data)
         self.delivery.queue(data)
-        self.delivery.pump()
+        self.delivery.pump(deadline, clock)
 
     def delivered(self):
         try:
@@ -210,13 +211,16 @@ class LogForward:
 
     def finish(self, deadline, wait, clock):
         """Forward the rest by deadline. True when the whole log reached stderr."""
-        while True:
-            self()
+        while clock() < deadline:
+            self(deadline, clock)
+            if clock() >= deadline:
+                return False
             if self.delivered():
                 return True
             if self.delivery.stopped or clock() >= deadline:
                 return False
             wait()
+        return False
 
 
 def run(bash, script, arguments):

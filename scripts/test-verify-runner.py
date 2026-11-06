@@ -669,6 +669,77 @@ class FinishBoundaryTest(unittest.TestCase):
         self.assertEqual(triggers.received, signal.SIGTERM, "the controller's handler did not record the signal")
         self.assertEqual(run.finish(0), 128 + signal.SIGTERM)
 
+    def test_log_reporting_observes_a_recorded_signal_between_chunks(self):
+        triggers, run = self.finished_run()
+        self.addCleanup(run.reporter.transcript.close)
+        job = run.controller.jobs[0]
+        job.name = "failed.sh"
+        job.outcome["returncode"] = 7
+        log = run.root / "failed.sh.log"
+        contents = "diagnostic\n" * 100
+        log.write_text(contents)
+        original = run.error
+        seen = []
+
+        def report(text):
+            original(text)
+            seen.append(text)
+            if len(seen) == 1:
+                os.kill(os.getpid(), signal.SIGTERM)
+                self.assertEqual(triggers.received, signal.SIGTERM)
+
+        with patch.object(run, "error", side_effect=report):
+            completed = run.report_next(job)
+        self.assertFalse(completed, "reporting did not yield to cancellation")
+        self.assertTrue(run.controller.cancel_file.exists(), "the signal was not published")
+        self.assertLess(len(seen), 4, "reporting consumed the whole log after the signal")
+        kept = list(self.root.glob("mesh-verify-output.*"))
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].read_text(), contents, "the full interrupted log was lost")
+        self.assertEqual(run.finish(1), 143)
+
+    def test_log_reads_are_bounded_even_without_newlines(self):
+        log = self.root / "large.log"
+        log.write_text("x" * (3 * self.runner.Delivery.CHUNK))
+        pieces = list(self.runner.log_lines(log))
+        self.assertGreater(len(pieces), 1, "one diagnostic line caused an unbounded read")
+        self.assertLessEqual(max(map(len, pieces)), self.runner.Delivery.CHUNK)
+        self.assertEqual("".join(pieces), log.read_text())
+
+    def test_filtered_logs_still_yield_between_bounded_reads(self):
+        log = self.root / "filtered.log"
+        log.write_text("not a leak\n" * 100)
+        pieces = list(self.runner.log_lines(log, leaks_only=True))
+        self.assertEqual(pieces, [None] * 100, "filtering skipped every cancellation checkpoint")
+
+    def test_delivery_services_a_bounded_slice(self):
+        calls = []
+        with patch("owned_command.nonblocking_writer", return_value=lambda data: calls.append(len(data)) or len(data)):
+            delivery = self.runner.Delivery(1)
+        delivery.queue(b"x" * (3 * delivery.CHUNK))
+        self.assertFalse(delivery.pump(), "a single pump drained the entire backlog")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(delivery.pending), 2 * delivery.CHUNK)
+
+    def test_delivery_checks_cutoff_even_after_successful_writes(self):
+        now, calls = [0.0], []
+
+        def write(data):
+            calls.append(len(data))
+            now[0] += 0.01
+            return len(data)
+
+        with patch("owned_command.nonblocking_writer", return_value=write):
+            delivery = self.runner.Delivery(1)
+        delivery.queue(b"x" * (32 * delivery.CHUNK))
+        complete = self.runner.deliver([delivery], 0.015, lambda: None, clock=lambda: now[0])
+        self.assertFalse(complete, "delivery returned success after its absolute cutoff")
+        self.assertLessEqual(len(calls), 2)
+        self.assertTrue(delivery.pending)
+        sent = len(calls)
+        self.assertFalse(self.runner.deliver([delivery], 0.015, lambda: None, clock=lambda: now[0]))
+        self.assertEqual(len(calls), sent, "delivery wrote after an already-expired cutoff")
+
     def test_signal_during_final_deletion_decides_the_status(self):
         triggers, run = self.finished_run()
         delete = shutil.rmtree
