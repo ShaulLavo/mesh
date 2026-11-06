@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -53,7 +54,15 @@ func updateStateWithPublisher(ctx context.Context, configDir string, operation f
 		return err
 	}
 	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
+	return updateLockedState(dir, lock, operation, publish)
+}
+
+func updateLockedState(dir, lock *os.File, operation func(*book) error, publish func(*os.File, []byte) error) error {
 	state, err := readBook(dir)
+	if err != nil {
+		return err
+	}
+	before, err := encodeBook(state)
 	if err != nil {
 		return err
 	}
@@ -67,7 +76,51 @@ func updateStateWithPublisher(ctx context.Context, configDir string, operation f
 	if err != nil {
 		return err
 	}
-	return publish(dir, contents)
+	return persistBook(dir, lock, before, contents, publish)
+}
+
+func persistBook(dir, lock *os.File, before, contents []byte, publish func(*os.File, []byte) error) error {
+	digest := sha256.Sum256(contents)
+	if bytes.Equal(before, contents) {
+		acknowledged, err := bookAcknowledged(lock, digest[:])
+		if err != nil || acknowledged {
+			return err
+		}
+	}
+	if err := publish(dir, contents); err != nil {
+		return err
+	}
+	return acknowledgeBook(lock, digest[:])
+}
+
+func bookAcknowledged(lock *os.File, digest []byte) (bool, error) {
+	var contents [sha256.Size + 1]byte
+	n, err := lock.ReadAt(contents[:], 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("fleet: read publication acknowledgement: %w", err)
+	}
+	return bytes.Equal(contents[:n], digest), nil
+}
+
+type acknowledgementWriter interface {
+	Truncate(int64) error
+	WriteAt([]byte, int64) (int, error)
+}
+
+func acknowledgeBook(lock acknowledgementWriter, digest []byte) error {
+	// The book and its directory are durable before this write. Losing the
+	// acknowledgement only causes another publication, so it needs no sync.
+	if err := lock.Truncate(0); err != nil {
+		return fmt.Errorf("fleet: reset publication acknowledgement: %w", err)
+	}
+	n, err := lock.WriteAt(digest, 0)
+	if err != nil {
+		return fmt.Errorf("fleet: write publication acknowledgement: %w", err)
+	}
+	if n != len(digest) {
+		return fmt.Errorf("fleet: write publication acknowledgement: %w", io.ErrShortWrite)
+	}
+	return nil
 }
 
 func openDirectory(path string, create bool) (*os.File, error) {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -431,6 +432,9 @@ func testSnapshotPublicationFailure(t *testing.T, afterRename bool) {
 		visible = changed
 	}
 	requireHosts(t, p.dir, visible...)
+	if err := p.replace(t.Context(), changed); !errors.Is(err, unix.EIO) {
+		t.Fatalf("repeated publication failure = %v, want EIO", err)
+	}
 	retained, err := readState(p.dir)
 	if err != nil {
 		t.Fatal(err)
@@ -522,6 +526,160 @@ func TestEmptyAndStaleSnapshotsDoNotPublish(t *testing.T) {
 	}
 	p.requireCounts(t, 2, 2, 2)
 	requireHosts(t, p.dir)
+}
+
+func TestMissingOrMalformedAcknowledgementRetries(t *testing.T) {
+	for _, acknowledgement := range []string{"", "short", strings.Repeat("x", 32), strings.Repeat("x", 33)} {
+		t.Run(fmt.Sprintf("length-%d", len(acknowledgement)), func(t *testing.T) {
+			testMalformedAcknowledgement(t, acknowledgement)
+		})
+	}
+}
+
+func testMalformedAcknowledgement(t *testing.T, acknowledgement string) {
+	t.Helper()
+	p := newSnapshotPublisher(t)
+	hosts := []protocol.FleetHost{testHost(1)}
+	if err := p.replace(t.Context(), hosts); err != nil {
+		t.Fatal(err)
+	}
+	lock := openSnapshotLock(t, p.dir)
+	if err := lock.Truncate(0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lock.WriteAt([]byte(acknowledgement), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	retry := &snapshotPublisher{dir: p.dir, source: p.source}
+	if err := retry.replace(t.Context(), hosts); err != nil {
+		t.Fatal(err)
+	}
+	retry.requireCounts(t, 1, 1, 1)
+	if err := retry.replace(t.Context(), hosts); err != nil {
+		t.Fatal(err)
+	}
+	retry.requireCounts(t, 1, 1, 1)
+}
+
+func openSnapshotLock(t *testing.T, path string) *os.File {
+	t.Helper()
+	dir, err := openDirectory(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = dir.Close() })
+	lock, err := openFile(dir, ".connection-sharing.lock", unix.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Close() })
+	return lock
+}
+
+type failedAcknowledgementWriter struct {
+	*os.File
+	err error
+}
+
+func (w failedAcknowledgementWriter) WriteAt(contents []byte, offset int64) (int, error) {
+	n, err := w.File.WriteAt(contents[:len(contents)/2], offset)
+	if err != nil {
+		return n, fmt.Errorf("write partial fixture acknowledgement: %w", err)
+	}
+	return n, w.err
+}
+
+func TestFailedAcknowledgementWritesRetry(t *testing.T) {
+	for _, failure := range []error{nil, unix.EIO} {
+		t.Run(fmt.Sprint(failure), func(t *testing.T) { testFailedAcknowledgementWrite(t, failure) })
+	}
+}
+
+func testFailedAcknowledgementWrite(t *testing.T, failure error) {
+	t.Helper()
+	p := newSnapshotPublisher(t)
+	hosts := []protocol.FleetHost{testHost(2)}
+	state := book{Version: 1, Peers: []enrollment{p.source}}
+	state.Peers[0].Hosts = hosts
+	contents, err := encodeBook(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := openDirectory(p.dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = dir.Close() })
+	lock := openSnapshotLock(t, p.dir)
+	if err := acquireLock(t.Context(), lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishBook(dir, contents); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(contents)
+	want := failure
+	if want == nil {
+		want = io.ErrShortWrite
+	}
+	if err := acknowledgeBook(failedAcknowledgementWriter{File: lock, err: failure}, digest[:]); !errors.Is(err, want) {
+		t.Fatalf("acknowledgement error = %v, want %v", err, want)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	requireHosts(t, p.dir, hosts...)
+	retry := &snapshotPublisher{dir: p.dir, source: p.source}
+	if err := retry.replace(t.Context(), hosts); err != nil {
+		t.Fatal(err)
+	}
+	retry.requireCounts(t, 1, 1, 1)
+}
+
+func TestBookEqualityTracksGenerationAndInPlaceChanges(t *testing.T) {
+	p := newSnapshotPublisher(t)
+	if err := p.replace(t.Context(), []protocol.FleetHost{testHost(1)}); err != nil {
+		t.Fatal(err)
+	}
+	err := updateStateWithPublisher(t.Context(), p.dir, func(state *book) error {
+		state.Peers[0].Generation = strings.Repeat("f", 32)
+		state.Peers[0].Endpoint = "wss://controller.example/mesh"
+		state.Peers[0].Hosts[0].Addresses[0] = "100.64.0.99"
+		return nil
+	}, p.publish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.requireCounts(t, 2, 2, 2)
+	if err := p.replace(t.Context(), []protocol.FleetHost{testHost(2)}); err != nil {
+		t.Fatal(err)
+	}
+	p.requireCounts(t, 2, 2, 2)
+	state, err := readState(p.dir)
+	if err != nil || state.Peers[0].Generation != strings.Repeat("f", 32) || state.Peers[0].Endpoint != "wss://controller.example/mesh" || state.Peers[0].Hosts[0].Addresses[0] != "100.64.0.99" {
+		t.Fatalf("in-place changes were lost: %#v, %v", state, err)
+	}
+}
+
+func TestConcurrentIdenticalSnapshotsPublishOnce(t *testing.T) {
+	p := newSnapshotPublisher(t)
+	var workers sync.WaitGroup
+	results := make(chan error, 2)
+	for range 2 {
+		workers.Go(func() { results <- p.replace(t.Context(), []protocol.FleetHost{testHost(1)}) })
+	}
+	workers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.requireCounts(t, 1, 1, 1)
+	requireHosts(t, p.dir, testHost(1))
 }
 
 func TestValidationRejectsChangedPinsDuplicatesAndBounds(t *testing.T) {
