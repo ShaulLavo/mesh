@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -19,9 +20,86 @@ import (
 )
 
 const (
-	bookName     = "connection-sharing.json"
-	maximumBytes = 32 << 20
+	bookName         = "connection-sharing.json"
+	maximumBytes     = 32 << 20
+	lockLimit        = 1500 * time.Millisecond
+	lockPollInterval = 20 * time.Millisecond
 )
+
+type publisher func(dir, lock *os.File, contents []byte) error
+
+type directoryKey struct{ device, inode uint64 }
+
+type mutation struct {
+	operation func(*book) error
+	window    context.Context
+	accepted  bool
+	outcome   chan error
+}
+
+type committer struct {
+	mu      sync.Mutex
+	pending []*mutation
+	users   int
+}
+
+var (
+	committersMu sync.Mutex
+	committers   = make(map[directoryKey]*committer)
+)
+
+func joinCommitter(dir *os.File) (*committer, func(), error) {
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(dir.Fd()), &stat); err != nil {
+		return nil, nil, fmt.Errorf("fleet: inspect commit directory: %w", err)
+	}
+	key := directoryKey{device: uint64(stat.Dev), inode: uint64(stat.Ino)}
+	committersMu.Lock()
+	c := committers[key]
+	if c == nil {
+		c = &committer{}
+		committers[key] = c
+	}
+	c.users++
+	committersMu.Unlock()
+	return c, func() {
+		committersMu.Lock()
+		defer committersMu.Unlock()
+		c.users--
+		if c.users == 0 {
+			delete(committers, key)
+		}
+	}, nil
+}
+
+func (c *committer) submit(window context.Context, operation func(*book) error) *mutation {
+	m := &mutation{window: window, operation: operation, outcome: make(chan error, 1)}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pending = append(c.pending, m)
+	return m
+}
+
+func (c *committer) withdraw(m *mutation) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if m.accepted {
+		return false
+	}
+	for i, pending := range c.pending {
+		if pending != m {
+			continue
+		}
+		copy(c.pending[i:], c.pending[i+1:])
+		c.pending[len(c.pending)-1] = nil
+		c.pending = c.pending[:len(c.pending)-1]
+		break
+	}
+	if len(c.pending) == 0 {
+		c.pending = nil
+	}
+	return true
+}
 
 func readState(configDir string) (book, error) {
 	dir, err := openDirectory(configDir, false)
@@ -39,7 +117,7 @@ func updateState(ctx context.Context, configDir string, operation func(*book) er
 	return updateStateWithPublisher(ctx, configDir, operation, publishBook)
 }
 
-func updateStateWithPublisher(ctx context.Context, configDir string, operation func(*book) error, publish func(*os.File, *os.File, []byte) error) error {
+func updateStateWithPublisher(ctx context.Context, configDir string, operation func(*book) error, publish publisher) error {
 	dir, err := openDirectory(configDir, true)
 	if err != nil || dir == nil {
 		return err
@@ -50,33 +128,128 @@ func updateStateWithPublisher(ctx context.Context, configDir string, operation f
 		return err
 	}
 	defer func() { _ = lock.Close() }()
-	if err := acquireLock(ctx, lock); err != nil {
+	c, leave, err := joinCommitter(dir)
+	if err != nil {
 		return err
 	}
-	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
-	return updateLockedState(dir, lock, operation, publish)
+	defer leave()
+	return c.await(ctx, dir, lock, operation, publish)
 }
 
-func updateLockedState(dir, lock *os.File, operation func(*book) error, publish func(*os.File, *os.File, []byte) error) error {
+func (c *committer) await(ctx context.Context, dir, lock *os.File, operation func(*book) error, publish publisher) error {
+	window, cancel := context.WithTimeout(ctx, lockLimit)
+	defer cancel()
+	m := c.submit(window, operation)
+	err := pollLock(window, func() (bool, error) { return c.tryCommit(dir, lock, m, publish) })
+	if err != nil && c.withdraw(m) {
+		return err
+	}
+	return <-m.outcome
+}
+
+func (c *committer) isAccepted(m *mutation) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return m.accepted
+}
+
+func (c *committer) accept(m *mutation) []*mutation {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if m.accepted || m.window.Err() != nil {
+		return nil
+	}
+	m.accepted = true
+	// The batch owns separate storage while pending submissions and withdrawals continue.
+	batch := make([]*mutation, 0, len(c.pending))
+	pending := c.pending[:0]
+	for _, candidate := range c.pending {
+		if candidate != m && candidate.window.Err() != nil {
+			pending = append(pending, candidate)
+			continue
+		}
+		candidate.accepted = true
+		batch = append(batch, candidate)
+	}
+	clear(c.pending[len(pending):])
+	c.pending = pending
+	if len(c.pending) == 0 {
+		c.pending = nil
+	}
+	return batch
+}
+
+func (c *committer) tryCommit(dir, lock *os.File, m *mutation, publish publisher) (bool, error) {
+	if c.isAccepted(m) {
+		return true, nil
+	}
+	locked, err := tryLock(lock)
+	if !locked {
+		return false, err
+	}
+	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
+	batch := c.accept(m)
+	if batch == nil {
+		return c.isAccepted(m), nil
+	}
+	for i, outcome := range commitBatch(dir, lock, batch, publish) {
+		batch[i].operation = nil
+		batch[i].outcome <- outcome
+		batch[i] = nil
+	}
+	return true, nil
+}
+
+func commitBatch(dir, lock *os.File, batch []*mutation, publish publisher) []error {
+	outcomes := make([]error, len(batch))
 	state, err := readBook(dir)
-	if err != nil {
-		return err
+	var before []byte
+	if err == nil {
+		before, err = encodeBook(state)
 	}
-	before, err := encodeBook(state)
-	if err != nil {
-		return err
+	var contents []byte
+	applied := false
+	if err == nil {
+		contents, applied, err = applyBatch(state, before, batch, outcomes)
 	}
+	if err == nil && applied {
+		err = persistBook(dir, lock, before, contents, publish)
+	}
+	for i := range outcomes {
+		if outcomes[i] == nil {
+			outcomes[i] = err
+		}
+	}
+	return outcomes
+}
+
+func applyBatch(state book, checkpoint []byte, batch []*mutation, outcomes []error) ([]byte, bool, error) {
+	applied := false
+	for i, m := range batch {
+		next, contents, err := applyMutation(state, m.operation)
+		if err == nil {
+			state, checkpoint = next, contents
+			applied = true
+			continue
+		}
+		outcomes[i] = err
+		state, err = decodeBook(checkpoint)
+		if err != nil {
+			return nil, false, fmt.Errorf("fleet: restore configuration after rejected change: %w", err)
+		}
+	}
+	return checkpoint, applied, nil
+}
+
+func applyMutation(state book, operation func(*book) error) (book, []byte, error) {
 	if err := operation(&state); err != nil {
-		return err
+		return book{}, nil, err
 	}
 	if err := validateBook(&state); err != nil {
-		return err
+		return book{}, nil, err
 	}
 	contents, err := encodeBook(state)
-	if err != nil {
-		return err
-	}
-	return persistBook(dir, lock, before, contents, publish)
+	return state, contents, err
 }
 
 func persistBook(dir, lock *os.File, before, contents []byte, publish func(*os.File, *os.File, []byte) error) error {
@@ -183,31 +356,39 @@ func openFile(dir *os.File, name string, flags int, mode uint32) (*os.File, erro
 	return file, nil
 }
 
-func acquireLock(ctx context.Context, lock *os.File) error {
-	return acquireLockFor(ctx, lock, 1500*time.Millisecond)
+func acquireLockFor(ctx context.Context, lock *os.File, limit time.Duration) error {
+	window, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	return pollLock(window, func() (bool, error) { return tryLock(lock) })
 }
 
-func acquireLockFor(ctx context.Context, lock *os.File, limit time.Duration) error {
-	wait, cancel := context.WithTimeout(ctx, limit)
-	defer cancel()
-	ticker := time.NewTicker(20 * time.Millisecond)
+func pollLock(window context.Context, attempt func() (bool, error)) error {
+	ticker := time.NewTicker(lockPollInterval)
 	defer ticker.Stop()
 	for {
-		if err := wait.Err(); err != nil {
+		if err := window.Err(); err != nil {
 			return fmt.Errorf("fleet: acquire configuration lock: %w", err)
 		}
-		err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
-			return fmt.Errorf("fleet: lock configuration: %w", err)
+		done, err := attempt()
+		if done || err != nil {
+			return err
 		}
 		select {
-		case <-wait.Done():
+		case <-window.Done():
 		case <-ticker.C:
 		}
 	}
+}
+
+func tryLock(lock *os.File) (bool, error) {
+	err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+		return false, nil
+	}
+	return false, fmt.Errorf("fleet: lock configuration: %w", err)
 }
 
 func readBook(dir *os.File) (book, error) {
@@ -310,11 +491,23 @@ func encodeBook(state book) ([]byte, error) {
 	return contents, nil
 }
 
+// syncPublicationFile lets tests observe barriers on the production Sync path.
+var syncPublicationFile = (*os.File).Sync
+
+type publicationAcknowledgement struct{ *os.File }
+
+func (lock publicationAcknowledgement) Sync() error {
+	if err := syncPublicationFile(lock.File); err != nil {
+		return fmt.Errorf("sync publication acknowledgement: %w", err)
+	}
+	return nil
+}
+
 func publishBook(dir, lock *os.File, contents []byte) error {
-	if err := invalidateAcknowledgement(lock); err != nil {
+	if err := invalidateAcknowledgement(publicationAcknowledgement{lock}); err != nil {
 		return err
 	}
-	return publishBookWithSync(dir, contents, (*os.File).Sync)
+	return publishBookWithSync(dir, contents, syncPublicationFile)
 }
 
 func publishBookWithSync(dir *os.File, contents []byte, syncFile func(*os.File) error) error {

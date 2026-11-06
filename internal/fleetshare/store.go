@@ -168,10 +168,28 @@ func replaceSnapshot(ctx context.Context, configDir string, source enrollment, h
 	if err := validateHosts(hosts); err != nil {
 		return err
 	}
+	hosts = cloneHosts(hosts)
+	source = enrollment{Peer: Peer{Identity: source.Identity}, Generation: source.Generation}
 	return updateState(ctx, configDir, func(state *book) error {
 		replaceCurrentSnapshot(state, source, hosts)
 		return nil
 	})
+}
+
+func cloneHosts(hosts []protocol.FleetHost) []protocol.FleetHost {
+	if hosts == nil {
+		return nil
+	}
+	cloned := make([]protocol.FleetHost, len(hosts))
+	copy(cloned, hosts)
+	for i := range cloned {
+		if hosts[i].Addresses == nil {
+			continue
+		}
+		cloned[i].Addresses = make([]string, len(hosts[i].Addresses))
+		copy(cloned[i].Addresses, hosts[i].Addresses)
+	}
+	return cloned
 }
 
 func replaceCurrentSnapshot(state *book, source enrollment, hosts []protocol.FleetHost) {

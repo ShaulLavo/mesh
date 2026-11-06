@@ -18,6 +18,26 @@ var reservedNames = map[string]struct{}{
 	"update-bootstrap-status": {}, "dashboard": {}, "ssh": {}, "fleet": {}, "cp": {},
 }
 
+var laterCommandNames = map[string]struct{}{
+	"hosts": {}, "inspect": {}, "profile": {}, "session": {}, "skill": {},
+}
+
+func ShadowedByCommand(name string) bool {
+	_, exists := laterCommandNames[name]
+	return exists
+}
+
+func NormalizeNew(value string) (string, error) {
+	name, err := Normalize(value)
+	if err != nil {
+		return "", err
+	}
+	if ShadowedByCommand(name) {
+		return "", errors.New("machine name is a Mesh command; choose another name")
+	}
+	return name, nil
+}
+
 // Claim is one destination's durable declaration, indexed by its stable identity.
 type Claim struct {
 	ID          string `json:"id"`
@@ -52,7 +72,7 @@ func Normalize(value string) (string, error) {
 func Initial(id string, candidates ...string) string {
 	for _, candidate := range candidates {
 		short, _, _ := strings.Cut(candidate, ".")
-		if name, err := Normalize(short); err == nil {
+		if name, err := NormalizeNew(short); err == nil {
 			return name
 		}
 	}

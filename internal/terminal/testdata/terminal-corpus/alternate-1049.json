@@ -1,0 +1,184 @@
+{
+  "Snapshot": "\u001b[?1049h\u001b[0m\u001b]8;;\u0007\u001b]2;corpus\u0007\u001b[?25l\u001b[2J\u001b[H\u001b[35mé\u001b[m          \r\na           \r\nb           \r\nc           \r\nd           \u001b[0m\u001b[5;2H\u001b[1 q\u001b[?25h\u001b[m\u001b]8;;\u0007",
+  "Restorable": true,
+  "Preview": {
+    "Lines": [
+      "e",
+      "a",
+      "b",
+      "c",
+      "d"
+    ],
+    "StyledLines": [
+      {
+        "Runs": [
+          {
+            "Text": "e",
+            "Style": {
+              "Foreground": {
+                "Kind": 1,
+                "Value": 5
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      },
+      {
+        "Runs": [
+          {
+            "Text": "a",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      },
+      {
+        "Runs": [
+          {
+            "Text": "b",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      },
+      {
+        "Runs": [
+          {
+            "Text": "c",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      },
+      {
+        "Runs": [
+          {
+            "Text": "d",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      }
+    ],
+    "Title": "corpus",
+    "Directory": "/work/corpus"
+  },
+  "SavedRows": [
+    "e          ",
+    "a           ",
+    "b           ",
+    "c           ",
+    "d           "
+  ],
+  "SavedText": [
+    "e",
+    "a",
+    "b",
+    "c",
+    "d"
+  ],
+  "Continuation": {
+    "SourceSnapshot": "\u001b[?1049h\u001b[0m\u001b]8;;\u0007\u001b]2;corpus\u0007\u001b[?25l\u001b[2J\u001b[H\u001b[35me\u001b[mZ界        \r\na           \r\nb           \r\nc           \r\nd           \u001b[0m\u001b[1;5H\u001b[1 q\u001b[?25h\u001b[m\u001b]8;;\u0007",
+    "ReplaySnapshot": "\u001b[?1049h\u001b[0m\u001b]8;;\u0007\u001b]2;corpus\u0007\u001b[?25l\u001b[2J\u001b[H\u001b[35me\u001b[mZ界        \r\na           \r\nb           \r\nc           \r\nd           \u001b[0m\u001b[1;5H\u001b[1 q\u001b[?25h\u001b[m\u001b]8;;\u0007",
+    "SourceLines": [
+      "eZ界",
+      "a",
+      "b",
+      "c",
+      "d"
+    ],
+    "ReplayLines": [
+      "eZ界",
+      "a",
+      "b",
+      "c",
+      "d"
+    ]
+  }
+}

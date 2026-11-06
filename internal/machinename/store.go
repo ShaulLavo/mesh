@@ -23,6 +23,21 @@ var ErrTarget = errors.New("rename targets another machine; use the destination'
 const stateName = "machine-name.json"
 const maximumStateBytes = 4096
 
+// ReadClaim observes an existing destination declaration without initializing a store.
+func ReadClaim(directory, id string) (Claim, error) {
+	current, err := readRecord(filepath.Join(directory, stateName))
+	if errors.Is(err, os.ErrNotExist) {
+		return Claim{}, nil
+	}
+	if err != nil {
+		return Claim{}, err
+	}
+	if err := validateRecord(current, id); err != nil {
+		return Claim{}, err
+	}
+	return current.Claim, nil
+}
+
 type record struct {
 	Version int `json:"version"`
 	Claim
@@ -67,7 +82,7 @@ func openStore(ctx context.Context, directory, id, initial string, syncDir func(
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	name, err := Normalize(initial)
+	name, err := NormalizeNew(initial)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +105,7 @@ func (s *Store) Current() Claim {
 // Rename compares the observed revision before committing. Only the latest
 // committed change can be retried with its previous revision after a lost reply.
 func (s *Store) Rename(ctx context.Context, target, value string, expected uint64) (Claim, bool, error) {
-	name, err := Normalize(value)
+	name, err := NormalizeNew(value)
 	if err != nil {
 		return Claim{}, false, err
 	}

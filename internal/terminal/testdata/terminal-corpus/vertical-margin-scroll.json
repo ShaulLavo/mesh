@@ -1,0 +1,165 @@
+{
+  "Snapshot": "\u001b[?1049l\u001b[0m\u001b]8;;\u0007\u001b]2;corpus\u0007\u001b[?25l\u001b[2J\u001b[Hone \u001b[31mred\u001b[m     \r\n            \r\nN界         \r\n            \r\nfive λ      \u001b[0m\u001b[4;4H\u001b[1 q\u001b[?25h\u001b[m\u001b]8;;\u0007",
+  "Restorable": true,
+  "Preview": {
+    "Lines": [
+      "one red",
+      "",
+      "N界",
+      "",
+      "five λ"
+    ],
+    "StyledLines": [
+      {
+        "Runs": [
+          {
+            "Text": "one ",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          },
+          {
+            "Text": "red",
+            "Style": {
+              "Foreground": {
+                "Kind": 1,
+                "Value": 1
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      },
+      {
+        "Runs": null
+      },
+      {
+        "Runs": [
+          {
+            "Text": "N界",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      },
+      {
+        "Runs": null
+      },
+      {
+        "Runs": [
+          {
+            "Text": "five λ",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      }
+    ],
+    "Title": "corpus",
+    "Directory": "/work/corpus"
+  },
+  "SavedRows": [
+    "two 界e",
+    "tri   Z",
+    "four B",
+    "one red     ",
+    "            ",
+    "N界         ",
+    "            ",
+    "five λ      "
+  ],
+  "SavedText": [
+    "two 界e",
+    "tri   Z",
+    "four B",
+    "one red",
+    "",
+    "N界",
+    "",
+    "five λ"
+  ],
+  "Continuation": {
+    "SourceSnapshot": "\u001b[?1049l\u001b[0m\u001b]8;;\u0007\u001b]2;corpus\u0007\u001b[?25l\u001b[2J\u001b[HoZ界\u001b[31mred\u001b[m     \r\n            \r\nN界         \r\n            \r\nfive λ      \u001b[0m\u001b[1;5H\u001b[1 q\u001b[?25h\u001b[m\u001b]8;;\u0007",
+    "ReplaySnapshot": "\u001b[?1049l\u001b[0m\u001b]8;;\u0007\u001b]2;corpus\u0007\u001b[?25l\u001b[2J\u001b[HoZ界\u001b[31mred\u001b[m     \r\n            \r\nN界         \r\n            \r\nfive λ      \u001b[0m\u001b[1;5H\u001b[1 q\u001b[?25h\u001b[m\u001b]8;;\u0007",
+    "SourceLines": [
+      "oZ界red",
+      "",
+      "N界",
+      "",
+      "five λ"
+    ],
+    "ReplayLines": [
+      "oZ界red",
+      "",
+      "N界",
+      "",
+      "five λ"
+    ]
+  }
+}

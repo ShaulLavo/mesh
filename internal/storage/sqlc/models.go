@@ -22,6 +22,8 @@ type CachedService struct {
 	Isolate     int64
 	DisplayName string
 	PrivateHost string
+	LocalOnly   int64
+	Listens     string
 }
 
 type Host struct {

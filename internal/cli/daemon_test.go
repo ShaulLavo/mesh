@@ -304,7 +304,7 @@ func TestControlRequestDoesNotEchoOversizedMismatchedRequestID(t *testing.T) {
 }
 
 func TestDaemonResponseErrorIsBoundedAndCannotInjectTerminalControls(t *testing.T) {
-	err := daemonResponseError("session list", "ATTACKER\r\n\u202e"+strings.Repeat("x", 10_000))
+	err := daemonResponseError("session list", "ATTACKER\r\n\u202e"+strings.Repeat("x", 10_000), "")
 	if strings.ContainsAny(err.Error(), "\r\n\x1b") || strings.ContainsRune(err.Error(), '\u202e') || len(err.Error()) > maximumRemoteErrorBytes+100 {
 		t.Fatalf("unsafe daemon error = %q (%d bytes)", err, len(err.Error()))
 	}

@@ -1,0 +1,244 @@
+{
+  "Snapshot": "\u001b[?1049l\u001b[0m\u001b]8;;\u0007\u001b]2;corpus\u0007\u001b[?25l\u001b[2J\u001b[Hone \u001b[31mred\u001b[m     \r\ntri \u001b[44m  \u001b[mZ     \r\nfour \u001b[1mB\u001b[m      \r\nfive λ      \r\n            \u001b[0m\u001b[2;1H\u001b[1 q\u001b[?25h\u001b[m\u001b]8;;\u0007",
+  "Restorable": true,
+  "Preview": {
+    "Lines": [
+      "one red",
+      "tri   Z",
+      "four B",
+      "five λ"
+    ],
+    "StyledLines": [
+      {
+        "Runs": [
+          {
+            "Text": "one ",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          },
+          {
+            "Text": "red",
+            "Style": {
+              "Foreground": {
+                "Kind": 1,
+                "Value": 1
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      },
+      {
+        "Runs": [
+          {
+            "Text": "tri ",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          },
+          {
+            "Text": "  ",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 1,
+                "Value": 4
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          },
+          {
+            "Text": "Z",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      },
+      {
+        "Runs": [
+          {
+            "Text": "four ",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          },
+          {
+            "Text": "B",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": true,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      },
+      {
+        "Runs": [
+          {
+            "Text": "five λ",
+            "Style": {
+              "Foreground": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Background": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "UnderlineColor": {
+                "Kind": 0,
+                "Value": 0
+              },
+              "Bold": false,
+              "Faint": false,
+              "Italic": false,
+              "Reverse": false,
+              "Strikethrough": false,
+              "Underline": 0
+            }
+          }
+        ]
+      }
+    ],
+    "Title": "corpus",
+    "Directory": "/work/corpus"
+  },
+  "SavedRows": [
+    "one red     ",
+    "tri   Z     ",
+    "four B      ",
+    "five λ      "
+  ],
+  "SavedText": [
+    "one red",
+    "tri   Z",
+    "four B",
+    "five λ"
+  ],
+  "Continuation": {
+    "SourceSnapshot": "\u001b[?1049l\u001b[0m\u001b]8;;\u0007\u001b]2;corpus\u0007\u001b[?25l\u001b[2J\u001b[HoZ界\u001b[31mred\u001b[m     \r\ntri \u001b[44m  \u001b[mZ     \r\nfour \u001b[1mB\u001b[m      \r\nfive λ      \r\n            \u001b[0m\u001b[1;5H\u001b[1 q\u001b[?25h\u001b[m\u001b]8;;\u0007",
+    "ReplaySnapshot": "\u001b[?1049l\u001b[0m\u001b]8;;\u0007\u001b]2;corpus\u0007\u001b[?25l\u001b[2J\u001b[HoZ界\u001b[31mred\u001b[m     \r\ntri \u001b[44m  \u001b[mZ     \r\nfour \u001b[1mB\u001b[m      \r\nfive λ      \r\n            \u001b[0m\u001b[1;5H\u001b[1 q\u001b[?25h\u001b[m\u001b]8;;\u0007",
+    "SourceLines": [
+      "oZ界red",
+      "tri   Z",
+      "four B",
+      "five λ"
+    ],
+    "ReplayLines": [
+      "oZ界red",
+      "tri   Z",
+      "four B",
+      "five λ"
+    ]
+  }
+}

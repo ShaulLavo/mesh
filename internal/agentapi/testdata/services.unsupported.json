@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "operation": "services.list",
+  "status": "error",
+  "requestId": "01JA0000000000000000000000",
+  "data": null,
+  "errors": [
+    {
+      "code": "protocol.unsupported",
+      "message": "host pc rejected service list: unsupported control",
+      "operation": "services.list",
+      "target": "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+      "retryable": false
+    }
+  ]
+}

@@ -250,7 +250,7 @@ func (a sshApplication) control(ctx context.Context, id, operation string) error
 		return err
 	}
 	if response.Type == protocol.TypeError {
-		return daemonResponseError(operation+" "+id, response.Message)
+		return daemonResponseError(operation+" "+id, response.Message, response.ErrorCode)
 	}
 	if response.Type != protocol.TypeOK || response.SessionID != id {
 		return fmt.Errorf("daemon returned an unexpected %s response", operation)

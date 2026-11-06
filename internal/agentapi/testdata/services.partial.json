@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "operation": "services.list",
+  "status": "partial",
+  "requestId": "01JA0000000000000000000000",
+  "data": {
+    "services": [
+      {
+        "hostId": "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+        "machineName": "pc",
+        "name": "blog",
+        "displayName": "blog",
+        "kind": "proxy",
+        "scope": "tailnet",
+        "url": null,
+        "health": "offline/stale",
+        "problem": "",
+        "freshness": "cached",
+        "observedAt": "2026-11-06T09:59:00Z"
+      }
+    ],
+    "hostErrors": [
+      {
+        "code": "protocol.unsupported",
+        "message": "host pc rejected service list: unsupported control",
+        "operation": "services.list",
+        "target": "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+        "retryable": false
+      }
+    ]
+  },
+  "errors": [
+    {
+      "code": "protocol.unsupported",
+      "message": "host pc rejected service list: unsupported control",
+      "operation": "services.list",
+      "target": "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+      "retryable": false
+    }
+  ]
+}

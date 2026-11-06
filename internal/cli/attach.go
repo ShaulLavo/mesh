@@ -536,7 +536,7 @@ func (s *attachmentOutput) responseError(message protocol.Control) error {
 	if s.opts.IfDetached && legacyUnsupported {
 		return fmt.Errorf("session %s: %w", s.opts.SessionID, ErrAttachDetachedUnsupported)
 	}
-	return daemonResponseError("session "+s.opts.SessionID, message.Message)
+	return daemonResponseError("session "+s.opts.SessionID, message.Message, message.ErrorCode)
 }
 
 func relayInputBytes(keys *attachmentKeys, input []byte, sid protocol.SessionID, send func(protocol.Frame) error) bool {
