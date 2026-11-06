@@ -9,6 +9,7 @@ conversation in a fresh session, through the same native resume that
 Only an agent whose conversation Mesh has registered can hibernate. A plain
 shell, or an agent started without the Mesh launch helper, has nothing Mesh can
 reopen exactly, so Mesh leaves it running.
+Daemon-managed service and app workers never hibernate, even when they register an agent.
 
 ## First-time setup
 
