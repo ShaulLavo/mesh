@@ -40,14 +40,21 @@ class FixtureRoot:
         return self.start(args, environment, timeout=10).result(check, lambda: self.cancelled)
 
     def __exit__(self, *_):
+        try:
+            self._close_owned()
+        finally:
+            for number, handler in self.handlers.items():
+                signal.signal(number, handler)
+        if self.cancelled:
+            raise InterruptedError("native enrollment fixture cancelled during cleanup")
+
+    def _close_owned(self):
         failures = []
         for command in reversed(self.commands):
             try:
                 command.close()
             except Exception as error:
                 failures.append(str(error))
-        for number, handler in self.handlers.items():
-            signal.signal(number, handler)
         if failures or any(not command.joined for command in self.commands):
             raise RuntimeError(f"native enrollment retained {self.root}: {failures}")
         shutil.rmtree(self.root)

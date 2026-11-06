@@ -1,4 +1,5 @@
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -46,7 +47,26 @@ def nested_command(fixture, ready, shim):
                              os.environ, timeout=0.3)
 
 
+class CancelDuringCleanup:
+    joined = False
+
+    def close(self):
+        os.kill(os.getpid(), signal.SIGTERM)
+        self.joined = True
+
+
 class NativeEnrollmentTest(unittest.TestCase):
+    def test_cancellation_during_cleanup_fails_after_successful_join(self):
+        from native_enrollment import FixtureRoot
+
+        command = CancelDuringCleanup()
+        fixture = FixtureRoot()
+        with self.assertRaisesRegex(InterruptedError, "cancelled"), fixture:
+            fixture.commands.append(command)
+        self.assertTrue(fixture.cancelled)
+        self.assertTrue(command.joined)
+        self.assertFalse(fixture.root.exists())
+
     def test_native_workflow_does_not_depend_on_generic_guard(self):
         workflow = (REPO / ".github/workflows/ci.yml").read_text()
         auth = workflow.split("  auth-cutover:\n", 1)[1].split("  machine-naming:\n", 1)[0]
