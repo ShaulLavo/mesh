@@ -1668,23 +1668,7 @@ func testCommitterLastLeave(t *testing.T, path string) {
 	workers.Go(func() { <-start; leave() })
 	workers.Go(func() {
 		<-start
-		c, done, err := joinCommitter(dir)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		committersMu.Lock()
-		found := false
-		for _, current := range committers {
-			if current == c && current.users > 0 {
-				found = true
-			}
-		}
-		committersMu.Unlock()
-		if !found {
-			t.Error("new join orphaned by last leave")
-		}
-		done()
+		checkNewCommitterJoin(t, dir)
 	})
 	close(start)
 	workers.Wait()
@@ -1695,6 +1679,24 @@ func testCommitterLastLeave(t *testing.T, path string) {
 			t.Fatal("registry retained final leave")
 		}
 	}
+}
+
+func checkNewCommitterJoin(t *testing.T, dir *os.File) {
+	t.Helper()
+	c, done, err := joinCommitter(dir)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer done()
+	committersMu.Lock()
+	defer committersMu.Unlock()
+	for _, current := range committers {
+		if current == c && current.users > 0 {
+			return
+		}
+	}
+	t.Error("new join orphaned by last leave")
 }
 
 func TestAcceptedStorageSurvivesPendingCompaction(t *testing.T) {
@@ -1742,6 +1744,17 @@ func requireClearedQueueTail(t *testing.T, c *committer, backing []*mutation) {
 	}
 }
 
+func rejectNestedSnapshotChange(state *book, sentinel error) error {
+	for i := range state.Peers {
+		if len(state.Peers[i].Hosts) == 0 {
+			continue
+		}
+		state.Peers[i].Hosts[0].Addresses[0] = "100.64.9.9"
+		state.Peers[i].Hosts[0].TailscaleName = "corrupted"
+	}
+	return sentinel
+}
+
 func TestBatchRestoresNestedAndPostSortRejectionsExactly(t *testing.T) {
 	state := book{Version: 1}
 	if err := queueEnrollment(0)(&state); err != nil {
@@ -1755,16 +1768,7 @@ func TestBatchRestoresNestedAndPostSortRejectionsExactly(t *testing.T) {
 	sentinel := errors.New("nested rejection")
 	operations := []func(*book) error{
 		queueEnrollment(2),
-		func(state *book) error {
-			for i := range state.Peers {
-				if len(state.Peers[i].Hosts) == 0 {
-					continue
-				}
-				state.Peers[i].Hosts[0].Addresses[0] = "100.64.9.9"
-				state.Peers[i].Hosts[0].TailscaleName = "corrupted"
-			}
-			return sentinel
-		},
+		func(state *book) error { return rejectNestedSnapshotChange(state, sentinel) },
 		func(state *book) error {
 			state.Peers[0], state.Peers[1] = state.Peers[1], state.Peers[0]
 			state.Peers[0].Hosts = make([]protocol.FleetHost, maximumEntries)
@@ -1996,12 +2000,7 @@ func TestEightSourceChangedSyncAndIdenticalSync(t *testing.T) {
 	for _, source := range sources {
 		source.service.LocalHosts = func(ctx context.Context) ([]protocol.FleetHost, error) {
 			ready <- struct{}{}
-			select {
-			case <-release:
-				return source.localHosts(ctx)
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
+			return sourceSnapshotAfter(ctx, source, release)
 		}
 	}
 	lock := openSnapshotLock(t, owner.dir)
@@ -2038,6 +2037,114 @@ func TestEightSourceChangedSyncAndIdenticalSync(t *testing.T) {
 	after, err := os.Stat(filepath.Join(owner.dir, bookName))
 	if err != nil || !os.SameFile(before, after) {
 		t.Fatalf("identical Sync replaced book: %v", err)
+	}
+}
+
+func sourceSnapshotAfter(ctx context.Context, source *controllerFixture, release <-chan struct{}) ([]protocol.FleetHost, error) {
+	select {
+	case <-release:
+		return source.localHosts(ctx)
+	case <-ctx.Done():
+		return nil, fmt.Errorf("wait for fixture snapshot release: %w", ctx.Err())
+	}
+}
+
+func TestEightSourceSyncCommitsAcceptedBatchWithEveryBarrier(t *testing.T) {
+	owner := newController(t)
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	expected := make(map[string]protocol.FleetHost)
+	for i := range 8 {
+		source := newController(t)
+		trust(t, owner, source)
+		trust(t, source, owner)
+		host := testHost(100 + i)
+		source.setLocal(host)
+		expected[source.host.ID] = host
+		if i != 0 {
+			holdSourceSnapshots(source, release)
+		}
+	}
+	before, err := readState(owner.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := newQueuedPublisher(t, 1, 2)
+	observed.dir = owner.dir
+	previous := syncPublicationFile
+	syncPublicationFile = observed.observeProductionSync
+	t.Cleanup(func() { syncPublicationFile = previous })
+	ctx, cancel := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	var workers sync.WaitGroup
+	workers.Go(func() { result <- Sync(ctx, owner.dir, owner.state) })
+	t.Cleanup(func() { unblock(); openPublicationGates(observed); cancel(); workers.Wait() })
+	waitSignal(t, observed.gates[1].entered)
+	unblock()
+	waitPending(t, owner.dir, 7)
+	observed.gates[1].open()
+	waitSignal(t, observed.gates[2].entered)
+	cancel()
+	observed.gates[2].open()
+	if err := queuedResult(t, result); err != nil {
+		t.Fatalf("accepted Sync did not join with its actual result: %v", err)
+	}
+	observed.requireCounts(t, 2)
+	requireCurrentSourceSnapshots(t, owner.dir, before, expected)
+	if err := Sync(t.Context(), owner.dir, owner.state); err != nil {
+		t.Fatal(err)
+	}
+	observed.requireCounts(t, 2)
+}
+
+func openPublicationGates(p *queuedPublisher) {
+	for _, gate := range p.gates {
+		gate.open()
+	}
+}
+
+func (p *queuedPublisher) observeProductionSync(file *os.File) error {
+	switch file.Name() {
+	case ".connection-sharing.lock":
+		call := p.calls.Add(1)
+		if gate := p.gates[call]; gate != nil {
+			close(gate.entered)
+			<-gate.release
+		}
+		p.locks.Add(1)
+	case p.dir:
+		p.dirs.Add(1)
+	default:
+		p.files.Add(1)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync observed production publication: %w", err)
+	}
+	return nil
+}
+
+func requireCurrentSourceSnapshots(t *testing.T, dir string, before book, expected map[string]protocol.FleetHost) {
+	t.Helper()
+	after, err := readState(dir)
+	if err != nil || len(after.Peers) != len(before.Peers) {
+		t.Fatalf("current source state = %#v, %v", after, err)
+	}
+	for i, peer := range after.Peers {
+		if peer.Identity != before.Peers[i].Identity || peer.Generation != before.Peers[i].Generation || !reflect.DeepEqual(peer.Hosts, []protocol.FleetHost{expected[peer.Identity]}) {
+			t.Fatalf("source snapshot or generation changed: %#v", peer)
+		}
+	}
+	hosts, err := Hosts(dir)
+	if err != nil || len(hosts) != len(expected) {
+		t.Fatalf("fresh merged hosts = %#v, %v", hosts, err)
+	}
+}
+
+func holdSourceSnapshots(source *controllerFixture, release <-chan struct{}) {
+	source.service.LocalHosts = func(ctx context.Context) ([]protocol.FleetHost, error) {
+		return sourceSnapshotAfter(ctx, source, release)
 	}
 }
 

@@ -491,11 +491,23 @@ func encodeBook(state book) ([]byte, error) {
 	return contents, nil
 }
 
+// syncPublicationFile lets tests observe barriers on the production Sync path.
+var syncPublicationFile = (*os.File).Sync
+
+type publicationAcknowledgement struct{ *os.File }
+
+func (lock publicationAcknowledgement) Sync() error {
+	if err := syncPublicationFile(lock.File); err != nil {
+		return fmt.Errorf("sync publication acknowledgement: %w", err)
+	}
+	return nil
+}
+
 func publishBook(dir, lock *os.File, contents []byte) error {
-	if err := invalidateAcknowledgement(lock); err != nil {
+	if err := invalidateAcknowledgement(publicationAcknowledgement{lock}); err != nil {
 		return err
 	}
-	return publishBookWithSync(dir, contents, (*os.File).Sync)
+	return publishBookWithSync(dir, contents, syncPublicationFile)
 }
 
 func publishBookWithSync(dir *os.File, contents []byte, syncFile func(*os.File) error) error {
