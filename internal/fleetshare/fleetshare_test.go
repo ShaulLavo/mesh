@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -720,7 +721,7 @@ func testFailedAcknowledgementWrite(t *testing.T, failure error) {
 	}
 	t.Cleanup(func() { _ = dir.Close() })
 	lock := openSnapshotLock(t, p.dir)
-	if err := acquireLock(t.Context(), lock); err != nil {
+	if err := acquireLockFor(t.Context(), lock, lockLimit); err != nil {
 		t.Fatal(err)
 	}
 	if err := publishBook(dir, lock, contents); err != nil {
@@ -1003,5 +1004,502 @@ func TestWaitingSyncHonorsCallerDeadline(t *testing.T) {
 	defer cancel()
 	if err := Sync(ctx, a.dir, a.state); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("blocked sync returned %v, want caller deadline", err)
+	}
+}
+
+type publicationGate struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *publicationGate) open() { g.once.Do(func() { close(g.release) }) }
+
+type queuedPublisher struct {
+	dir         string
+	calls       atomic.Int32
+	locks       atomic.Int32
+	files       atomic.Int32
+	dirs        atomic.Int32
+	gates       map[int32]*publicationGate
+	failAt      int32
+	afterRename bool
+	workers     sync.WaitGroup
+}
+
+func newQueuedPublisher(t *testing.T, pauses ...int32) *queuedPublisher {
+	t.Helper()
+	p := &queuedPublisher{dir: t.TempDir(), gates: make(map[int32]*publicationGate)}
+	for _, call := range pauses {
+		p.gates[call] = &publicationGate{entered: make(chan struct{}), release: make(chan struct{})}
+	}
+	t.Cleanup(func() {
+		for _, gate := range p.gates {
+			gate.open()
+		}
+		p.workers.Wait()
+	})
+	return p
+}
+
+func (p *queuedPublisher) publish(dir, lock *os.File, contents []byte) error {
+	call := p.calls.Add(1)
+	if gate := p.gates[call]; gate != nil {
+		close(gate.entered)
+		<-gate.release
+	}
+	if err := invalidateAcknowledgement(queuedPublicationLock{File: lock, calls: &p.locks}); err != nil {
+		return err
+	}
+	return publishBookWithSync(dir, contents, func(file *os.File) error {
+		isDir := file == dir
+		if isDir {
+			p.dirs.Add(1)
+		} else {
+			p.files.Add(1)
+		}
+		if call == p.failAt && isDir == p.afterRename {
+			return unix.EIO
+		}
+		if err := file.Sync(); err != nil {
+			return fmt.Errorf("sync queued fixture: %w", err)
+		}
+		return nil
+	})
+}
+
+type queuedPublicationLock struct {
+	*os.File
+	calls *atomic.Int32
+}
+
+func (lock queuedPublicationLock) Sync() error {
+	lock.calls.Add(1)
+	if err := lock.File.Sync(); err != nil {
+		return fmt.Errorf("sync queued invalidation: %w", err)
+	}
+	return nil
+}
+
+func (p *queuedPublisher) start(ctx context.Context, operation func(*book) error) <-chan error {
+	result := make(chan error, 1)
+	p.workers.Go(func() { result <- updateStateWithPublisher(ctx, p.dir, operation, p.publish) })
+	return result
+}
+
+func queueEnrollment(index int) func(*book) error {
+	host := testHost(index)
+	return func(state *book) error {
+		return enroll(state, enrollment{Peer: Peer{Identity: host.ID, Endpoint: host.Endpoint}, Generation: strings.Repeat("0", 32)})
+	}
+}
+
+func waitSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fixture signal timed out")
+	}
+}
+
+func queuedResult(t *testing.T, result <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued result timed out")
+		return nil
+	}
+}
+
+func pendingMutations(t *testing.T, configDir string) int {
+	t.Helper()
+	dir, err := openDirectory(configDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	c, leave, err := joinCommitter(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer leave()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.pending)
+}
+
+func waitPending(t *testing.T, configDir string, want int) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for pendingMutations(t, configDir) != want {
+		select {
+		case <-deadline.C:
+			t.Fatalf("pending mutations = %d, want %d", pendingMutations(t, configDir), want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func (p *queuedPublisher) requireCounts(t *testing.T, want int32) {
+	t.Helper()
+	if p.calls.Load() != want || p.locks.Load() != want || p.files.Load() != want || p.dirs.Load() != want {
+		t.Fatalf("publication/lock/file/directory counts = %d/%d/%d/%d, want %d each", p.calls.Load(), p.locks.Load(), p.files.Load(), p.dirs.Load(), want)
+	}
+}
+
+func TestQueuedDistinctEnrollmentsShareOnePublication(t *testing.T) {
+	p := newQueuedPublisher(t, 1)
+	results := []<-chan error{p.start(t.Context(), queueEnrollment(0))}
+	waitSignal(t, p.gates[1].entered)
+	for i := 1; i < 16; i++ {
+		results = append(results, p.start(t.Context(), queueEnrollment(i)))
+	}
+	waitPending(t, p.dir, 15)
+	p.gates[1].open()
+	for _, result := range results {
+		if err := queuedResult(t, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	peers, err := Peers(p.dir)
+	if err != nil || len(peers) != 16 {
+		t.Fatalf("peers = %d, %v", len(peers), err)
+	}
+	p.requireCounts(t, 2)
+}
+
+func TestAcceptedMutationIgnoresLaterCancellation(t *testing.T) {
+	p := newQueuedPublisher(t, 1, 2)
+	holder := p.start(t.Context(), queueEnrollment(0))
+	waitSignal(t, p.gates[1].entered)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	b := p.start(ctx, queueEnrollment(1))
+	c := p.start(ctx, queueEnrollment(2))
+	waitPending(t, p.dir, 2)
+	p.gates[1].open()
+	waitSignal(t, p.gates[2].entered)
+	cancel()
+	p.gates[2].open()
+	for _, result := range []<-chan error{holder, b, c} {
+		if err := queuedResult(t, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.requireCounts(t, 2)
+}
+
+func TestBatchRejectsOnlyFailingMutations(t *testing.T) {
+	p := newQueuedPublisher(t, 1)
+	holder := p.start(t.Context(), queueEnrollment(0))
+	waitSignal(t, p.gates[1].entered)
+	sentinel := errors.New("rejected operation")
+	operations := []func(*book) error{
+		queueEnrollment(1),
+		func(state *book) error { state.Version = 7; return sentinel },
+		func(state *book) error { state.Peers = append(state.Peers, state.Peers[0]); return nil },
+		queueEnrollment(2),
+	}
+	var results []<-chan error
+	for i, operation := range operations {
+		results = append(results, p.start(t.Context(), operation))
+		waitPending(t, p.dir, i+1)
+	}
+	p.gates[1].open()
+	if err := queuedResult(t, holder); err != nil {
+		t.Fatal(err)
+	}
+	for i, result := range results {
+		err := queuedResult(t, result)
+		if i == 1 && !errors.Is(err, sentinel) {
+			t.Fatalf("own rejection = %v", err)
+		}
+		if i == 2 && (err == nil || !strings.Contains(err.Error(), "duplicate controller")) {
+			t.Fatalf("validation rejection = %v", err)
+		}
+		if (i == 0 || i == 3) && err != nil {
+			t.Fatal(err)
+		}
+	}
+	peers, err := Peers(p.dir)
+	if err != nil || len(peers) != 3 {
+		t.Fatalf("peers = %d, %v", len(peers), err)
+	}
+	p.requireCounts(t, 2)
+}
+
+func TestBatchKeepsRevocationOrder(t *testing.T) {
+	for _, order := range []string{"remove-snapshot", "snapshot-remove", "reenroll-snapshot"} {
+		t.Run(order, func(t *testing.T) { testBatchRevocation(t, order) })
+	}
+}
+
+func testBatchRevocation(t *testing.T, order string) {
+	t.Helper()
+	p := newQueuedPublisher(t, 1)
+	host := testHost(1)
+	if err := Enroll(p.dir, Peer{Identity: host.ID, Endpoint: host.Endpoint}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := readState(p.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := state.Peers[0]
+	holder := p.start(t.Context(), queueEnrollment(0))
+	waitSignal(t, p.gates[1].entered)
+	revoke := func(state *book) error { remove(state, source.Identity); return nil }
+	snapshot := func(state *book) error {
+		replaceCurrentSnapshot(state, source, []protocol.FleetHost{testHost(2)})
+		return nil
+	}
+	operations := []func(*book) error{revoke, snapshot}
+	if order == "snapshot-remove" {
+		operations = []func(*book) error{snapshot, revoke}
+	}
+	if order == "reenroll-snapshot" {
+		operations[0] = func(state *book) error {
+			next := source
+			next.Generation = strings.Repeat("f", 32)
+			next.Endpoint = "ws://100.64.0.3:7337/mesh"
+			return enroll(state, next)
+		}
+	}
+	results := []<-chan error{holder}
+	for i, op := range operations {
+		results = append(results, p.start(t.Context(), op))
+		waitPending(t, p.dir, i+1)
+	}
+	p.gates[1].open()
+	for _, result := range results {
+		if err := queuedResult(t, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requireHosts(t, p.dir)
+	p.requireCounts(t, 2)
+}
+
+func TestBatchStateCycleUsesAcknowledgement(t *testing.T) {
+	for _, unacknowledged := range []bool{false, true} {
+		t.Run(fmt.Sprint(unacknowledged), func(t *testing.T) { testBatchStateCycle(t, unacknowledged) })
+	}
+}
+
+func testBatchStateCycle(t *testing.T, unacknowledged bool) {
+	t.Helper()
+	p := newQueuedPublisher(t, 1)
+	if err := updateState(t.Context(), p.dir, queueEnrollment(1)); err != nil {
+		t.Fatal(err)
+	}
+	if unacknowledged {
+		p.failAt = 1
+		p.afterRename = true
+	}
+	holder := p.start(t.Context(), queueEnrollment(0))
+	waitSignal(t, p.gates[1].entered)
+	b := p.start(t.Context(), func(state *book) error { state.Peers[0].Hosts = []protocol.FleetHost{testHost(3)}; return nil })
+	waitPending(t, p.dir, 1)
+	a := p.start(t.Context(), func(state *book) error { state.Peers[0].Hosts = nil; return nil })
+	waitPending(t, p.dir, 2)
+	p.gates[1].open()
+	if err := queuedResult(t, holder); errors.Is(err, unix.EIO) != unacknowledged {
+		t.Fatalf("holder = %v", err)
+	}
+	for _, result := range []<-chan error{b, a} {
+		if err := queuedResult(t, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := int32(1)
+	if unacknowledged {
+		want = 2
+	}
+	if p.calls.Load() != want {
+		t.Fatalf("publications = %d, want %d", p.calls.Load(), want)
+	}
+	if !unacknowledged {
+		p.requireCounts(t, 1)
+	}
+	requireHosts(t, p.dir)
+}
+
+func TestBatchPublicationFailureReachesEveryApplied(t *testing.T) {
+	for _, afterRename := range []bool{false, true} {
+		t.Run(fmt.Sprint(afterRename), func(t *testing.T) { testBatchPublicationFailure(t, afterRename) })
+	}
+}
+
+func testBatchPublicationFailure(t *testing.T, afterRename bool) {
+	t.Helper()
+	p := newQueuedPublisher(t, 1)
+	p.failAt, p.afterRename = 2, afterRename
+	holder := p.start(t.Context(), queueEnrollment(0))
+	waitSignal(t, p.gates[1].entered)
+	noop := func(*book) error { return nil }
+	sentinel := errors.New("own rejection")
+	operations := []func(*book) error{noop, queueEnrollment(1), func(*book) error { return sentinel }, noop}
+	var results []<-chan error
+	for i, op := range operations {
+		results = append(results, p.start(t.Context(), op))
+		waitPending(t, p.dir, i+1)
+	}
+	p.gates[1].open()
+	if err := queuedResult(t, holder); err != nil {
+		t.Fatal(err)
+	}
+	for i, result := range results {
+		want := error(unix.EIO)
+		if i == 2 {
+			want = sentinel
+		}
+		if err := queuedResult(t, result); !errors.Is(err, want) {
+			t.Fatalf("outcome %d = %v, want %v", i, err, want)
+		}
+	}
+	state, err := readState(p.dir)
+	wantPeers := 1
+	if afterRename {
+		wantPeers = 2
+	}
+	if err != nil || len(state.Peers) != wantPeers {
+		t.Fatalf("visible peers = %d, %v", len(state.Peers), err)
+	}
+	p.requireFailedCounts(t, afterRename)
+	if err := queuedResult(t, p.start(t.Context(), queueEnrollment(1))); err != nil {
+		t.Fatal(err)
+	}
+	if p.calls.Load() != 3 || p.locks.Load() != 3 || p.files.Load() != 3 {
+		t.Fatal("retry skipped publication barriers")
+	}
+}
+
+func (p *queuedPublisher) requireFailedCounts(t *testing.T, afterRename bool) {
+	t.Helper()
+	wantDirs := int32(1)
+	if afterRename {
+		wantDirs = 2
+	}
+	if p.calls.Load() != 2 || p.locks.Load() != 2 || p.files.Load() != 2 || p.dirs.Load() != wantDirs {
+		t.Fatal("failed batch did not retain expected barriers")
+	}
+}
+
+func TestWaitingMutationHonorsCallerDeadline(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(fmt.Sprint(canceled), func(t *testing.T) { testWaitingMutation(t, canceled) })
+	}
+}
+
+func testWaitingMutation(t *testing.T, canceled bool) {
+	t.Helper()
+	p := newQueuedPublisher(t, 1)
+	holder := p.start(t.Context(), queueEnrollment(0))
+	waitSignal(t, p.gates[1].entered)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	var results []<-chan error
+	for i := 1; i < 16; i++ {
+		results = append(results, p.start(ctx, queueEnrollment(i)))
+	}
+	if canceled {
+		waitPending(t, p.dir, 15)
+		cancel()
+	}
+	want := context.DeadlineExceeded
+	if canceled {
+		want = context.Canceled
+	}
+	for _, result := range results {
+		if err := queuedResult(t, result); !errors.Is(err, want) || !strings.Contains(err.Error(), "fleet: acquire configuration lock") {
+			t.Fatalf("withdrawal = %v", err)
+		}
+	}
+	waitPending(t, p.dir, 0)
+	p.gates[1].open()
+	if err := queuedResult(t, holder); err != nil {
+		t.Fatal(err)
+	}
+	if err := queuedResult(t, p.start(t.Context(), queueEnrollment(99))); err != nil {
+		t.Fatal(err)
+	}
+	peers, err := Peers(p.dir)
+	if err != nil || len(peers) != 2 {
+		t.Fatalf("withdrawn changes persisted: %d, %v", len(peers), err)
+	}
+}
+
+func TestSeparateProcessWriterHelper(t *testing.T) {
+	if os.Getenv("MESH_GROUP_COMMIT_CHILD") == "" {
+		t.Skip("child process fixture")
+	}
+	dir := "."
+	lock := openSnapshotLock(t, dir)
+	locked, err := tryLock(lock)
+	if err != nil || locked {
+		t.Fatalf("child did not contend on actual flock: %v, %v", locked, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "contended"), []byte("flock"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateState(t.Context(), dir, queueEnrollment(1)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSeparateProcessWritersBothPersist(t *testing.T) {
+	p := newQueuedPublisher(t, 1)
+	holder := p.start(t.Context(), queueEnrollment(0))
+	waitSignal(t, p.gates[1].entered)
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), binary, "-test.run=^TestSeparateProcessWriterHelper$", "-test.v") //nolint:gosec // Re-executes this test binary, whose path comes from os.Executable.
+	cmd.Dir = p.dir
+	cmd.Env = append(os.Environ(), "MESH_GROUP_COMMIT_CHILD=1")
+	output := new(strings.Builder)
+	cmd.Stdout, cmd.Stderr = output, output
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	joined := false
+	t.Cleanup(func() {
+		p.gates[1].open()
+		if !joined {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		if _, err := os.Stat(filepath.Join(p.dir, "contended")); err == nil {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("child did not report actual flock contention")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	p.gates[1].open()
+	err = cmd.Wait()
+	joined = true
+	if err != nil {
+		t.Fatalf("child: %v: %s", err, output.String())
+	}
+	if err := queuedResult(t, holder); err != nil {
+		t.Fatal(err)
+	}
+	peers, err := Peers(p.dir)
+	if err != nil || len(peers) != 2 {
+		t.Fatalf("cross-process merge: %d, %v", len(peers), err)
 	}
 }
