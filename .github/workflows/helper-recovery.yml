@@ -9,7 +9,7 @@ permissions:
 jobs:
   native-recovery:
     name: Native helper recovery (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner == 'macos-15' && vars.MESH_MACOS_ARM64_RUNNER && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.MESH_MACOS_ARM64_RUNNER || matrix.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
