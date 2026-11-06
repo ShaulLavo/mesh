@@ -184,7 +184,7 @@ func (s *Store) Start(coordinator string, fleet Fleet, manifest release.Manifest
 			return Run{}, err
 		}
 		existing.UpdatedAt = time.Now().UTC()
-		return existing, writeOperation(s.path(existing.ID), existing)
+		return existing, s.write(existing)
 	}
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -196,7 +196,7 @@ func (s *Store) Start(coordinator string, fleet Fleet, manifest release.Manifest
 	for _, h := range ordered {
 		run.Targets = append(run.Targets, Target{Host: h, State: Pending})
 	}
-	return run, writeJSON(s.path(run.ID), run)
+	return run, s.write(run)
 }
 
 func ValidRunID(id string) bool {
@@ -219,7 +219,7 @@ func (s *Store) Read(id string) (Run, error) {
 	if err := validateRunMembership(run); err != nil {
 		return Run{}, err
 	}
-	return run, nil
+	return run, s.settlePublication()
 }
 
 func validateRunMembership(run Run) error {
@@ -287,7 +287,7 @@ func (s *Store) Change(id string, apply func(*Run) error) (Run, error) {
 		return Run{}, err
 	}
 	run.UpdatedAt = time.Now().UTC()
-	return run, writeOperation(s.path(id), run)
+	return run, s.write(run)
 }
 
 func (s *Store) Cancel(id string) (Run, error) {
@@ -320,6 +320,26 @@ func retryRun(run *Run) error {
 		}
 		if target.State == Failed || target.State == Bootstrap || target.State == Offline {
 			target.State, target.Problem, target.RetryAt = Pending, "", time.Time{}
+		}
+	}
+	return nil
+}
+
+func (s *Store) write(run Run) error {
+	if err := writeOperation(s.path(run.ID), run); err != nil {
+		return err
+	}
+	return s.settlePublication()
+}
+
+// A visible rename can outlive a failed barrier. Readers settle it before the
+// coordinator or an identical approval can use the run. Include the directories
+// that OpenStore may have created for the first operation.
+func (s *Store) settlePublication() error {
+	stateDir := filepath.Dir(filepath.Dir(s.directory))
+	for _, directory := range []string{s.directory, filepath.Dir(s.directory), stateDir, filepath.Dir(stateDir)} {
+		if err := syncOperationDirectory(directory); err != nil {
+			return fmt.Errorf("update: settle operation publication: %w", err)
 		}
 	}
 	return nil
@@ -397,10 +417,17 @@ func writeJSON(path string, value any) error {
 	if err := os.Rename(file.Name(), path); err != nil {
 		return err
 	}
-	dir, err := os.Open(filepath.Dir(path))
+	return syncOperationDirectory(filepath.Dir(path))
+}
+
+var syncOperationDirectory = func(path string) error {
+	dir, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("update: open publication directory: %w", err)
 	}
-	defer func() { _ = dir.Close() }()
-	return dir.Sync()
+	defer func() { _ = syscall.Close(dir) }()
+	if err := syscall.Fsync(dir); err != nil {
+		return fmt.Errorf("update: sync publication directory: %w", err)
+	}
+	return nil
 }
