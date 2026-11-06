@@ -253,7 +253,7 @@ func openRootedPath(root *os.Root, relative, display string) (*os.File, fs.FileI
 }
 
 // DecodeRequestPath percent-decodes a request path until it stops changing,
-// the decoding static lookups apply before opening a file.
+// for shared layered-path callers. HTTP file selection uses decodeHTTPPath.
 func DecodeRequestPath(value string) (string, error) {
 	decoded := value
 	for decodings := 0; ; decodings++ {
@@ -272,6 +272,53 @@ func DecodeRequestPath(value string) (string, error) {
 		}
 		decoded = next
 	}
+}
+
+// decodeHTTPPath selects a literal filename after one strict URL decode.
+// Further layers are checked only for unsafe paths, never used for lookup.
+// Bare percent bytes in the filename remain data; valid escapes cannot hide
+// traversal, NULs, or backslashes beside those bytes.
+func decodeHTTPPath(escaped string) (LiteralRootPath, error) {
+	literal, err := url.PathUnescape(escaped)
+	if err != nil {
+		return "", fmt.Errorf("%w: malformed URL escape: %w", ErrInvalidPath, err)
+	}
+	decoded := literal
+	for decodings := 1; ; decodings++ {
+		if _, err := confinedRelativePath(decoded); err != nil {
+			return "", err
+		}
+		next := unescapeLiteralPathLayer(decoded)
+		if next == decoded {
+			return LiteralRootPath(literal), nil
+		}
+		if decodings >= maxPathDecodings {
+			return "", fmt.Errorf("%w: path has too many URL-encoding layers", ErrInvalidPath)
+		}
+		decoded = next
+	}
+}
+
+func unescapeLiteralPathLayer(value string) string {
+	if !strings.Contains(value, "%") {
+		return value
+	}
+	var decoded strings.Builder
+	decoded.Grow(len(value))
+	for index := 0; index < len(value); index++ {
+		if value[index] != '%' || index+2 >= len(value) {
+			decoded.WriteByte(value[index])
+			continue
+		}
+		unescaped, err := url.PathUnescape(value[index : index+3])
+		if err != nil {
+			decoded.WriteByte(value[index])
+			continue
+		}
+		decoded.WriteString(unescaped)
+		index += 2
+	}
+	return decoded.String()
 }
 
 func confinedRelativePath(decoded string) (string, error) {

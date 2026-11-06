@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -485,4 +486,46 @@ func rootMetadataFixture(t *testing.T) string {
 		}
 	}
 	return root
+}
+
+func TestDecodeHTTPPathRejectsMalformedEscapedInput(t *testing.T) {
+	for _, value := range []string{"%", "%2", "%zz", "/100%25%zz"} {
+		if _, err := decodeHTTPPath(value); !errors.Is(err, ErrInvalidPath) {
+			t.Errorf("decodeHTTPPath(%q) error = %v, want ErrInvalidPath", value, err)
+		}
+	}
+}
+
+func TestDecodeHTTPPathBoundsValidationWithoutChangingSelection(t *testing.T) {
+	encoded := "/safe/file.txt"
+	for depth := 0; depth <= maxPathDecodings+1; depth++ {
+		got, err := decodeHTTPPath(encoded)
+		want, decodeErr := url.PathUnescape(encoded)
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		if depth <= maxPathDecodings && (err != nil || string(got) != want) {
+			t.Fatalf("depth %d selected %q, %v; want literal %q", depth, got, err, want)
+		}
+		if depth > maxPathDecodings && !errors.Is(err, ErrInvalidPath) {
+			t.Fatalf("depth %d error = %v, want ErrInvalidPath", depth, err)
+		}
+		if depth == 0 {
+			encoded = "/safe%2ffile.txt"
+			continue
+		}
+		encoded = strings.ReplaceAll(encoded, "%", "%25")
+	}
+}
+
+func TestDecodeRequestPathKeepsStrictLayeredContract(t *testing.T) {
+	got, err := DecodeRequestPath("/report%2520final.txt")
+	if err != nil || got != "/report final.txt" {
+		t.Fatalf("shared decoder returned %q, %v; want /report final.txt", got, err)
+	}
+	for _, value := range []string{"/100%25.txt", "/bad%252", "/bad%25zz"} {
+		if _, err := DecodeRequestPath(value); !errors.Is(err, ErrInvalidPath) {
+			t.Errorf("DecodeRequestPath(%q) error = %v, want ErrInvalidPath", value, err)
+		}
+	}
 }
