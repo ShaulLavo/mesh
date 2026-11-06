@@ -915,11 +915,35 @@ def clipboard_marker(fixture):
     boundary = len(fresh.drain())
     fresh.send(b"fresh\n")
     fresh.timeout = fixture.deadline.remaining(0.5 if fixture.fault == "absent-ready" else 4, "fresh readiness")
-    fresh.expect(CLIPBOARD_READY, since=boundary)
+    clipboard_expect_ready(fixture, fresh, boundary)
     require(CLIPBOARD_OSC not in fresh.drain(), "fresh capture replayed the completed OSC52")
     fixture.identity(fresh)
     fixture.detach(fresh)
     print(f"PASS: clipboard SID={fixture.sid} child={fixture.child_pid}; live OSC52=1; ready fresh capture OSC52=0", flush=True)
+
+
+class ClipboardReadinessTimeout(RuntimeError):
+    pass
+
+
+def clipboard_expect_ready(fixture, terminal, boundary):
+    deadline = time.monotonic() + terminal.timeout
+    while time.monotonic() < deadline:
+        status = terminal.poll()
+        require(status is None, f"clipboard readiness client exited with status {status}")
+        if CLIPBOARD_READY in terminal.drain()[boundary:]:
+            return
+        time.sleep(0.01)
+    # A missing marker is a valid control only after a new, acknowledged exchange
+    # proves the intended command, session and native attachment are still alive.
+    fixture.identity(terminal)
+    raise ClipboardReadinessTimeout("live clipboard command omitted __FRESH_READY__")
+
+
+def clipboard_expected_failure(fault, error):
+    if fault == "absent-ready":
+        return isinstance(error, ClipboardReadinessTimeout)
+    return fault in ("omit", "wrong") and str(error) == "live interval did not forward the exact OSC52 once"
 
 
 def clipboard_preview(fixture):
@@ -941,12 +965,11 @@ def clipboard_case(binary, root, deadline, fault):
     directory = root / fault
     directory.mkdir()
     fixture = ClipboardFixture(binary, directory, deadline, fault)
-    expected = {"omit": "exact OSC52 once", "wrong": "exact OSC52 once", "absent-ready": "__FRESH_READY__"}
     try:
         clipboard_marker(fixture)
         require(fault == "none", f"clipboard control {fault} unexpectedly passed")
     except RuntimeError as error:
-        if fault == "none" or expected[fault] not in str(error):
+        if not clipboard_expected_failure(fault, error):
             print_diagnostics(fixture)
             raise
         print(f"PASS: clipboard control {fault} failed behaviorally: {error}", flush=True)

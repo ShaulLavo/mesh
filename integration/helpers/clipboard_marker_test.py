@@ -47,6 +47,49 @@ class ClipboardEmissionTest(unittest.TestCase):
         self.assertEqual(identity["display"], {"DISPLAY": ":9"})
 
 
+class ClipboardReadinessTest(unittest.TestCase):
+    def run_failed_case(self, error):
+        with tempfile.TemporaryDirectory(prefix="m-clipboard-ready-") as directory, \
+                patch.object(window, "ClipboardFixture") as fixture, \
+                patch.object(window, "clipboard_marker", side_effect=error), \
+                patch.object(window, "print_diagnostics"), patch("builtins.print"):
+            self.checked_failed_case(fixture.return_value, Path(directory))
+
+    def checked_failed_case(self, fixture, directory):
+        try:
+            window.clipboard_case("/bin/true", directory, window.CleanupDeadline(25), "absent-ready")
+        finally:
+            fixture.close.assert_called_once()
+
+    def test_absent_ready_rejects_a_client_exit_even_when_the_error_names_the_marker(self):
+        error = RuntimeError("terminal client exited with status 17 before printing b'__FRESH_READY__'")
+        self.assertRaisesRegex(RuntimeError, "status 17", self.run_failed_case, error)
+
+    def test_absent_ready_rejects_unrelated_marker_diagnostics(self):
+        error = RuntimeError("unrelated failure mentioning __FRESH_READY__")
+        self.assertRaisesRegex(RuntimeError, "unrelated failure", self.run_failed_case, error)
+
+    def test_missing_ready_timeout_requires_a_fresh_identity_acknowledgement(self):
+        fixture, terminal = Mock(), Mock(timeout=0)
+        self.assertRaises(window.ClipboardReadinessTimeout, window.clipboard_expect_ready, fixture, terminal, 0)
+        fixture.identity.assert_called_once_with(terminal)
+
+    def test_failed_identity_acknowledgement_is_not_a_missing_ready_timeout(self):
+        fixture, terminal = Mock(), Mock(timeout=0)
+        fixture.identity.side_effect = RuntimeError("identity client died")
+        self.assertRaisesRegex(RuntimeError, "identity client died", window.clipboard_expect_ready, fixture, terminal, 0)
+
+    def test_nonzero_client_exit_is_not_a_readiness_timeout(self):
+        fixture, terminal = Mock(), Mock(timeout=1)
+        terminal.poll.return_value = 17
+        self.assertRaisesRegex(RuntimeError, "status 17", window.clipboard_expect_ready, fixture, terminal, 0)
+        fixture.identity.assert_not_called()
+
+    def test_absent_ready_accepts_only_the_typed_timeout(self):
+        self.assertTrue(window.clipboard_expected_failure("absent-ready", window.ClipboardReadinessTimeout("missing")))
+        self.assertFalse(window.clipboard_expected_failure("absent-ready", RuntimeError("__FRESH_READY__")))
+
+
 class ClipboardOwnershipTest(unittest.TestCase):
     def outcome(self, proved, status):
         with tempfile.TemporaryDirectory(prefix="m-clipboard-contract-") as directory:
