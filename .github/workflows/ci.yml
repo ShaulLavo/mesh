@@ -139,7 +139,19 @@ jobs:
           go test -race -count=1 -timeout=180s -v -run '^Test(CheckedApproval|ApproveFleet)' ./internal/cli | tee "$output"
           command grep -Fq -- '--- PASS: TestCheckedApprovalNativeBindingAndIdempotency ' "$output"
           command grep -Fq -- '--- PASS: TestApproveFleetSystemSSHRequiresExistingHostKeyTrust ' "$output"
-          bash integration/device_enrollment.sh
+          python3 integration/helpers/enrollment_snapshot_test.py
+          python3 integration/helpers/native_enrollment_test.py
+          root=$(mktemp -d "$RUNNER_TEMP/mesh-enrollment.XXXXXX")
+          trap 'status=$?; if (( status == 0 )); then rm -rf -- "$root"; else echo "retained enrollment paths: $root" >&2; fi' EXIT
+          MESH="$root/mesh"
+          go build -o "$MESH" ./cmd/mesh
+          mkdir -m 700 "$root/home" "$root/state" "$root/config" "$root/tmp"
+          export HOME="$root/home"
+          export MESH_STATE_DIR="$root/state"
+          export MESH_CONFIG_DIR="$root/config"
+          export TMPDIR="$root/tmp"
+          export TMP="$TMPDIR" TEMP="$TMPDIR" PYTHONDONTWRITEBYTECODE=1
+          python3 integration/helpers/native_enrollment.py "$MESH"
       - name: Verify Darwin retains its mapped executable
         if: matrix.platform == 'darwin/arm64'
         run: |
