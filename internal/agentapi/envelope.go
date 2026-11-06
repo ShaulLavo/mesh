@@ -126,7 +126,7 @@ func Requested(args []string) bool {
 }
 
 func requestedJSON(arg string, previous bool) (bool, bool) {
-	if arg == "--json" {
+	if arg == jsonFlag {
 		return true, false
 	}
 	value, ok := strings.CutPrefix(arg, "--json=")

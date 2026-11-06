@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "operation": "profile.show",
+  "status": "ok",
+  "requestId": "01JA0000000000000000000000",
+  "data": {
+    "state": "valid",
+    "revision": 1,
+    "digest": "DIGEST",
+    "freshness": "live",
+    "completeness": "full",
+    "profile": {
+      "description": "Host notes",
+      "labels": {},
+      "warnings": [],
+      "instructions": "one\ntwo",
+      "instructionsBytes": 7
+    }
+  },
+  "errors": []
+}
