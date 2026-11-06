@@ -1116,6 +1116,30 @@ class OwnedCommandTest(unittest.TestCase):
                 self.assertFalse((self.root / "ancestor-signalled").exists())
 
 
+
+class DiagnosticLogTest(unittest.TestCase):
+    def reject(self, **options):
+        with patch("owned_command.subprocess.Popen") as started, self.assertRaisesRegex(ValueError, "writable regular log"):
+            launch("unused-record", {"fd": 0}, **options)
+        started.assert_not_called()
+
+    def test_pipe_or_inherited_diagnostics_are_rejected_before_launch(self):
+        self.reject()
+        self.reject(stderr=subprocess.PIPE)
+        self.reject(stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    def test_read_only_diagnostics_are_rejected_before_launch(self):
+        with tempfile.NamedTemporaryFile() as temporary, open(temporary.name, "rb") as readonly:
+            self.reject(stderr=readonly)
+
+    def test_regular_log_preserves_the_requested_process_options(self):
+        with tempfile.TemporaryFile() as output, patch("owned_command.subprocess.Popen") as started:
+            launch("unused-record", {"fd": 0}, stdout=output, stderr=subprocess.STDOUT)
+            self.assertEqual(started.call_args.kwargs["stdout"], output)
+            self.assertEqual(started.call_args.kwargs["stderr"], subprocess.STDOUT)
+            self.assertEqual(started.call_args.kwargs["pass_fds"], (0,))
+
+
 def setUpModule():
     if LINUX and ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "enable the test's own subreaper")

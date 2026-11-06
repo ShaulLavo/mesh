@@ -25,6 +25,7 @@ from pathlib import Path
 import select
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -847,7 +848,23 @@ def admit(directory, runner, **job):
     return record
 
 
+def require_diagnostic_log(options):
+    """Keep the owner out of pipe backpressure; the controller owns a writable job log."""
+    output = options.get("stderr")
+    if output == subprocess.STDOUT:
+        output = options.get("stdout")
+    try:
+        fd = output if isinstance(output, int) else output.fileno()
+        mode = os.fstat(fd).st_mode
+        access = fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE
+    except (OSError, AttributeError, ValueError) as error:
+        raise ValueError("owned command diagnostics need a writable regular log") from error
+    if not stat.S_ISREG(mode) or access == os.O_RDONLY:
+        raise ValueError("owned command diagnostics need a writable regular log")
+
+
 def launch(directory, runner, **options):
+    require_diagnostic_log(options)
     return subprocess.Popen([sys.executable, "-B", str(Path(__file__).resolve()), str(directory)],
                             pass_fds=(runner["fd"],), **options)
 
