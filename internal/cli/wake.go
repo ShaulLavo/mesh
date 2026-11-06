@@ -112,7 +112,12 @@ func recoverHost(ctx context.Context, host HostRecord) error {
 	return client.Recover(ctx, wakeTarget(host))
 }
 
-func rememberWakeGrant(ctx context.Context, grant *wake.Grant) {
+// rememberWakeGrant is replaceable so a test can expire host setup at this
+// step after real verification, instead of racing dial and authentication
+// against a wall-clock setup budget.
+var rememberWakeGrant = cacheWakeGrant
+
+func cacheWakeGrant(ctx context.Context, grant *wake.Grant) {
 	if grant == nil {
 		return
 	}

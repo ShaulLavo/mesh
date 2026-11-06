@@ -41,75 +41,138 @@ func TestListCatalogRejectsSetupExpiredDuringWakeCacheSettlement(t *testing.T) {
 	}
 	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
 
-	for _, test := range []struct {
-		name    string
-		setup   time.Duration
-		expired bool
-	}{
-		{name: "healthy retained connection", setup: time.Second},
-		{name: "expired setup refuses catalog", setup: 50 * time.Millisecond, expired: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			cache, err := OpenCatalogCache(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = cache.Close() }()
-			cached := []protocol.SessionInfo{{ID: "OLD1", HostID: host.ID, Command: []string{"cached-fixture"}, State: "detached", CreatedAt: time.Now()}}
-			if err := cache.Save(t.Context(), host, cached); err != nil {
-				t.Fatal(err)
-			}
-			before, err := cache.Load(t.Context(), host)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var setupCtx context.Context
-			var observed *catalogSetupObservedConn
-			dial := func(ctx context.Context, host HostRecord) (transport.Conn, error) {
-				setupCtx = ctx
-				conn, err := dialControlHost(ctx, host)
-				if err != nil {
-					return nil, err
-				}
-				observed = &catalogSetupObservedConn{Conn: conn}
-				return observed, nil
-			}
-			budget := HostQueryBudget{Setup: test.setup, Reply: time.Second}
-			rows, err := CollectHostSessions(t.Context(), []HostRecord{host}, budget,
-				func(ctx context.Context, host *HostRecord, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
-					return listRemoteDeclaredHost(ctx, host, dial, budget)
-				}, cache)
-			if err != nil || len(rows) != 1 || observed == nil || !observed.hostInfo.Load() {
-				t.Fatal("native authenticated host.info control unavailable", err)
-			}
-			if !observed.closed.Load() {
-				t.Fatal("catalog setup retained an open connection after return")
-			}
-			if !test.expired {
-				if rows[0].Host.ID != host.ID || rows[0].Host.MachineName != "fixture" || rows[0].Host.NameRevision != 1 || !rows[0].Host.NameVerified || rows[0].Stale || rows[0].Err != nil || len(rows[0].Sessions) != 1 || rows[0].Sessions[0].ID != "7K3D" || observed.lists.Load() != 1 {
-					t.Fatal("healthy setup lost native catalog or retained connection", rows[0].Err)
-				}
-				t.Log("healthy retained transport returns native catalog despite best-effort wake cache contention")
-				return
-			}
-			if !errors.Is(setupCtx.Err(), context.DeadlineExceeded) {
-				t.Fatal("fixture did not observe setup expiry after real host.info")
-			}
-			if !rows[0].Stale || !errors.Is(rows[0].Err, context.DeadlineExceeded) || observed.lists.Load() != 0 {
-				t.Fatalf("expired setup admitted catalog: stale=%v deadline=%v list requests=%d", rows[0].Stale, errors.Is(rows[0].Err, context.DeadlineExceeded), observed.lists.Load())
-			}
-			if rows[0].Host.ID != host.ID || rows[0].Host.MachineName != host.MachineName || rows[0].Host.NameRevision != host.NameRevision || rows[0].Host.NameVerified != host.NameVerified {
-				t.Fatal("expired setup published a fresh destination declaration")
-			}
-			stored, err := cache.Load(t.Context(), host)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(before, stored) || !reflect.DeepEqual(before, rows[0].Sessions) {
-				t.Fatal("expired setup changed cached authority or stale fallback rows")
-			}
-			t.Log("expired setup closes transport, sends no session.list and preserves cached active state")
-		})
+	t.Run("healthy retained connection", func(t *testing.T) {
+		run := collectCatalogSetupBoundary(t, host, time.Second, false)
+		rows, observed := run.rows, run.observed
+		if rows[0].Host.ID != host.ID || rows[0].Host.MachineName != "fixture" || rows[0].Host.NameRevision != 1 || !rows[0].Host.NameVerified || rows[0].Stale || rows[0].Err != nil || len(rows[0].Sessions) != 1 || rows[0].Sessions[0].ID != "7K3D" || observed.lists.Load() != 1 {
+			t.Fatal("healthy setup lost native catalog or retained connection", rows[0].Err)
+		}
+		t.Log("healthy retained transport returns native catalog despite best-effort wake cache contention")
+	})
+	t.Run("expired setup refuses catalog", func(t *testing.T) {
+		// Setup expires when verification reaches wake-cache settlement, so
+		// this budget only bounds a hang and never races dial or host.info.
+		run := collectCatalogSetupBoundary(t, host, time.Minute, true)
+		rows, observed := run.rows, run.observed
+		if !run.settledGrant {
+			t.Fatal("verified setup did not reach wake-cache settlement with a native grant")
+		}
+		if !errors.Is(run.setupCtx.Err(), context.DeadlineExceeded) {
+			t.Fatal("fixture did not observe setup expiry after real host.info")
+		}
+		if !rows[0].Stale || !errors.Is(rows[0].Err, context.DeadlineExceeded) || observed.lists.Load() != 0 {
+			t.Fatalf("expired setup admitted catalog: stale=%v deadline=%v list requests=%d", rows[0].Stale, errors.Is(rows[0].Err, context.DeadlineExceeded), observed.lists.Load())
+		}
+		if rows[0].Host.ID != host.ID || rows[0].Host.MachineName != host.MachineName || rows[0].Host.NameRevision != host.NameRevision || rows[0].Host.NameVerified != host.NameVerified {
+			t.Fatal("expired setup published a fresh destination declaration")
+		}
+		stored, err := run.cache.Load(t.Context(), host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(run.before, stored) || !reflect.DeepEqual(run.before, rows[0].Sessions) {
+			t.Fatal("expired setup changed cached authority or stale fallback rows")
+		}
+		t.Log("expired setup closes transport, sends no session.list and preserves cached active state")
+	})
+}
+
+type catalogSetupBoundaryRun struct {
+	cache        *SQLiteCatalogCache
+	before       []protocol.SessionInfo
+	rows         []HostSessions
+	observed     *catalogSetupObservedConn
+	setupCtx     context.Context
+	settledGrant bool
+}
+
+// collectCatalogSetupBoundary lists host over a real authenticated native
+// connection. With expire, setup expires at the wake-cache settlement step.
+func collectCatalogSetupBoundary(t *testing.T, host HostRecord, setup time.Duration, expire bool) catalogSetupBoundaryRun {
+	t.Helper()
+	cache, err := OpenCatalogCache(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
+	run := catalogSetupBoundaryRun{cache: cache}
+	cached := []protocol.SessionInfo{{ID: "OLD1", HostID: host.ID, Command: []string{"cached-fixture"}, State: "detached", CreatedAt: time.Now()}}
+	if err := cache.Save(t.Context(), host, cached); err != nil {
+		t.Fatal(err)
+	}
+	if run.before, err = cache.Load(t.Context(), host); err != nil {
+		t.Fatal(err)
+	}
+	dial := func(ctx context.Context, host HostRecord) (transport.Conn, error) {
+		run.setupCtx = ctx
+		conn, err := dialControlHost(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		run.observed = &catalogSetupObservedConn{Conn: conn}
+		return run.observed, nil
+	}
+	deadline := make(chan struct{})
+	if expire {
+		rememberWakeGrant = func(ctx context.Context, grant *wake.Grant) {
+			run.settledGrant = grant != nil
+			close(deadline)
+			<-ctx.Done()
+			cacheWakeGrant(ctx, grant)
+		}
+		t.Cleanup(func() { rememberWakeGrant = cacheWakeGrant })
+	}
+	query := func(ctx context.Context, host *HostRecord, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
+		if expire {
+			ctx = withCatalogSetupExpiry(ctx, deadline)
+		}
+		return listRemoteDeclaredHost(ctx, host, dial, budget)
+	}
+	run.rows, err = CollectHostSessions(t.Context(), []HostRecord{host}, HostQueryBudget{Setup: setup, Reply: time.Second}, query, cache)
+	if failure := run.controlFailure(err); failure != nil {
+		t.Fatal("native authenticated host.info control unavailable: ", failure)
+	}
+	if !run.observed.closed.Load() {
+		t.Fatal("catalog setup retained an open connection after return")
+	}
+	return run
+}
+
+func (r catalogSetupBoundaryRun) controlFailure(err error) error {
+	if err != nil {
+		return fmt.Errorf("collect host sessions: %w", err)
+	}
+	if len(r.rows) != 1 {
+		return fmt.Errorf("collected %d host rows, want 1", len(r.rows))
+	}
+	if r.observed == nil {
+		return fmt.Errorf("dial failed: %w", r.rows[0].Err)
+	}
+	if !r.observed.hostInfo.Load() {
+		return fmt.Errorf("no host.info result: %w", r.rows[0].Err)
+	}
+	return nil
+}
+
+// catalogSetupExpiry is a setup parent whose deadline passes when the test
+// closes expired, so expiry lands at a chosen step after real verification.
+type catalogSetupExpiry struct {
+	context.Context
+	expired chan struct{}
+}
+
+func withCatalogSetupExpiry(parent context.Context, expired chan struct{}) context.Context {
+	return &catalogSetupExpiry{Context: parent, expired: expired}
+}
+
+func (c *catalogSetupExpiry) Done() <-chan struct{} { return c.expired }
+
+func (c *catalogSetupExpiry) Err() error {
+	select {
+	case <-c.expired:
+		return context.DeadlineExceeded
+	default:
+		return nil
 	}
 }
 
