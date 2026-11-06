@@ -113,13 +113,12 @@ func waitForHTTPBody(t *testing.T, url string, wantStatus int) string {
 }
 
 func TestRunServesLocalClientsWhenTailnetDiscoveryFails(t *testing.T) {
-	stateDir := compactSocketTempDir(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
+	fixture := newDaemonRunFixture(t)
+	stateDir := fixture.stateDir
 	reported := make(chan error, 1)
 	discoveryErr := errors.New("tailscale unavailable")
-	go func() {
-		done <- run(ctx, Config{
+	fixture.start(t, func(ctx context.Context) error {
+		return run(ctx, Config{
 			StateDir:    stateDir,
 			TailnetPort: 9443,
 			ReportError: func(err error) { reported <- err },
@@ -129,7 +128,7 @@ func TestRunServesLocalClientsWhenTailnetDiscoveryFails(t *testing.T) {
 			discoverSelf:      func(context.Context) (tailnet.Peer, error) { return tailnet.Peer{}, discoveryErr },
 			reconcileInterval: time.Hour,
 		})
-	}()
+	})
 
 	client := dialUnixRuntime(t, SocketPath(stateDir))
 	defer client.Close() //nolint:errcheck // test cleanup
@@ -163,10 +162,7 @@ func TestRunServesLocalClientsWhenTailnetDiscoveryFails(t *testing.T) {
 		t.Fatal("Tailnet discovery failure was not reported")
 	}
 
-	cancel()
-	if err := waitRuntime(t, done); err != nil {
-		t.Fatal(err)
-	}
+	fixture.stop(t)
 	if _, err := os.Stat(filepath.Join(stateDir, databaseName)); err != nil {
 		t.Fatalf("database was not created: %v", err)
 	}
@@ -265,14 +261,13 @@ func TestRunLosingDaemonCannotMutateCatalog(t *testing.T) {
 }
 
 func TestRunShutdownDoesNotWaitForBlockedErrorSink(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
 	reportStarted := make(chan struct{})
 	releaseReport := make(chan struct{})
 	defer close(releaseReport)
-	stateDir := compactSocketTempDir(t)
-	go func() {
-		done <- run(ctx, Config{
+	fixture := newDaemonRunFixture(t)
+	stateDir := fixture.stateDir
+	fixture.start(t, func(ctx context.Context) error {
+		return run(ctx, Config{
 			StateDir: stateDir, TailnetPort: 7337,
 			ReportError: func(error) {
 				close(reportStarted)
@@ -285,7 +280,7 @@ func TestRunShutdownDoesNotWaitForBlockedErrorSink(t *testing.T) {
 			},
 			reconcileInterval: time.Hour,
 		})
-	}()
+	})
 	client := dialUnixRuntime(t, SocketPath(stateDir))
 	_ = client.Close()
 	select {
@@ -293,8 +288,5 @@ func TestRunShutdownDoesNotWaitForBlockedErrorSink(t *testing.T) {
 	case <-time.After(runtimeTestTimeout):
 		t.Fatal("error callback did not start")
 	}
-	cancel()
-	if err := waitRuntime(t, done); err != nil {
-		t.Fatal(err)
-	}
+	fixture.stop(t)
 }
