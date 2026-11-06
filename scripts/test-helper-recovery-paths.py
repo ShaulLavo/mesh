@@ -1,14 +1,55 @@
-"""Native Unix socket controls for the historical helper proof's short root."""
+"""Portable daemon plist rendering and native Unix socket proof controls."""
+import ast
 import json
 import os
+import plistlib
 import shutil
 import socket
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from fixtures import helper_recovery_paths as paths
+
+
+class HelperRecoveryDaemonTemplateTest(unittest.TestCase):
+    def test_darwin_installation_renders_every_daemon_placeholder(self):
+        self.assert_darwin_template("prove-helper-recovery.py", "Installation")
+
+    def test_darwin_cutover_renders_every_daemon_placeholder(self):
+        self.assert_darwin_template("prove-device-auth-cutover.py", "Host")
+
+    def assert_darwin_template(self, script, class_name):
+        repo = Path(__file__).resolve().parents[1]
+        source = repo / "scripts" / script
+        tree = ast.parse(source.read_text(), filename=str(source))
+        installation = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
+        installation.body = [node for node in installation.body if isinstance(node, ast.FunctionDef) and node.name == "__init__"]
+        with tempfile.TemporaryDirectory(prefix="helper-plist-") as directory:
+            root = Path(directory)
+            original = root / "original-mesh"
+            original.write_bytes(b"fixture executable; never started")
+            scope = {
+                "ROOT": root, "REPO": repo, "HELPERS": repo / "integration" / "helpers",
+                "HOSTS": {}, "NATIVE": {"os": "darwin", "arch": "arm64"},
+                "OLD_BUILD": {"platform": {"os": "darwin", "arch": "arm64"}},
+                "Path": Path, "sys": sys, "socket": socket, "os": os, "json": json,
+                "tls": types.SimpleNamespace(certificate_environment=lambda _: {}),
+                "require": self.assertTrue,
+            }
+            # Loading the proof module would acquire releases and start services.
+            exec(compile(ast.Module(body=[installation], type_ignores=[]), str(source), "exec"), scope)
+            host = scope[class_name]("render", {"executable": original, "build": scope["OLD_BUILD"]}, 0, 0)
+            path = host.home / "Library" / "LaunchAgents" / "dev.shaulavo.mesh.plist"
+            rendered = path.read_bytes()
+            self.assertNotIn(b"@MESH_", rendered)
+            plist = plistlib.loads(rendered)
+            command = plist["ProgramArguments"][2]
+            self.assertIn('PATH="${HOME}/.local/bin:$PATH" exec ', command)
+            self.assertIn('"${HOME}/.local/bin/mesh" daemon ', command)
 
 
 class HelperRecoveryPathsTest(unittest.TestCase):

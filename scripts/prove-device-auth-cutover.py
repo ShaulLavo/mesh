@@ -218,6 +218,7 @@ sys.exit(data["status"])
             (self.home / ".local" / "state" / "mesh").mkdir(parents=True)
             template = (HELPERS.parents[1] / "scripts" / "install" / "assets" / self.plist.name).read_text()
             substitutions = {"@MESH_BINARY@": "${HOME}/.local/bin/mesh", "@MESH_PORT@": str(self.port),
+                "@MESH_BINARY_DIR@": "${HOME}/.local/bin",
                 "@MESH_SSH_PORT@": "0", "@MESH_WEBSOCKET_PATH@": "/mesh",
                 "@MESH_STDOUT@": "${HOME}/.local/state/mesh/daemon.log",
                 "@MESH_STDERR@": "${HOME}/.local/state/mesh/daemon.err.log"}
