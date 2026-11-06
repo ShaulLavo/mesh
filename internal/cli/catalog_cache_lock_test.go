@@ -31,12 +31,12 @@ func TestCatalogCacheConcurrentWriters(t *testing.T) {
 	const writers = 2
 	writerOpen := make([]string, writers)
 	writerStart := make([]*exec.Cmd, writers)
+	// Optional cache setup can lose a connection-open race. Establish healthy
+	// stores before releasing both writers at the shared Save barrier.
 	for index := range writers {
 		writerOpen[index] = filepath.Join(stateDir, fmt.Sprintf("writer-%d-open", index))
 		writerStart[index] = startCatalogCacheHelper(t, stateDir, writerOpen[index], filepath.Join(stateDir, "writers-start"))
-	}
-	for _, path := range writerOpen {
-		waitForCatalogCacheFile(t, path)
+		waitForCatalogCacheFile(t, writerOpen[index])
 	}
 
 	// A held third writer may outlive the 150 ms SQLite budget under load.
@@ -133,6 +133,9 @@ func runCatalogCacheHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = cache.Close() }()
+	if cache.store == nil {
+		t.Fatalf("cache writer setup: %v", cache.openErr)
+	}
 	if err := os.WriteFile(readyPath, nil, 0o600); err != nil { //nolint:gosec // helper marker is inside the test TempDir.
 		t.Fatal(err)
 	}
