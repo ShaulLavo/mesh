@@ -409,7 +409,7 @@ func writeJSON(path string, value any) error {
 	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
-		return err
+		return fmt.Errorf("update: sync state snapshot: %w", err)
 	}
 	if err := file.Close(); err != nil {
 		return err
