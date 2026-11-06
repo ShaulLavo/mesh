@@ -71,12 +71,12 @@ func invocationWords(args []string) []string {
 	words := make([]string, 0, 2)
 	value := false
 	for _, arg := range args {
-		if arg == "--" {
-			break
-		}
 		if value {
 			value = false
 			continue
+		}
+		if arg == "--" {
+			break
 		}
 		if strings.HasPrefix(arg, "-") {
 			value = valueFlag(arg)
@@ -89,7 +89,7 @@ func invocationWords(args []string) []string {
 
 func valueFlag(arg string) bool {
 	switch arg {
-	case "--leave-key", "--host", "--timeout":
+	case "--leave-key", "--detach-key", "--host", "--timeout":
 		return true
 	}
 	return false

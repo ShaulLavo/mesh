@@ -106,27 +106,35 @@ func (e Envelope) ExitCode() int {
 }
 
 func Requested(args []string) bool {
-	requested := false
+	requested, operand := false, false
 	for _, arg := range args {
+		if operand {
+			operand = false
+			continue
+		}
 		if arg == "--" {
 			break
 		}
-		if arg == "--json" {
-			requested = true
-		}
-		if value, ok := strings.CutPrefix(arg, "--json="); ok {
-			requested = requestedBoolean(value, requested)
+		operand = valueFlag(arg)
+		var invalid bool
+		requested, invalid = requestedJSON(arg, requested)
+		if invalid {
+			return true
 		}
 	}
 	return requested
 }
 
-func requestedBoolean(value string, previous bool) bool {
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return previous
+func requestedJSON(arg string, previous bool) (bool, bool) {
+	if arg == "--json" {
+		return true, false
 	}
-	return parsed
+	value, ok := strings.CutPrefix(arg, "--json=")
+	if !ok {
+		return previous, false
+	}
+	parsed, err := strconv.ParseBool(value)
+	return parsed, err != nil
 }
 
 // NewRequestID produces a 26-character Crockford ID, with a millisecond prefix.
