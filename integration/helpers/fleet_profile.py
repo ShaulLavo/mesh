@@ -142,34 +142,46 @@ def divergence_cases(a, b, c):
     require(status(c)["replica"]["digest"] == final["digest"], "C did not converge")
 
 
+def prepare_devices(binary, root, cleanup, cleanup_state, devices):
+    for name in ("alpha", "bravo", "charlie"):
+        path = root / name
+        path.mkdir(mode=0o700)
+        device = Device(binary, path, name)
+        devices.append(device)
+        cleanup.callback(close_device, device, cleanup_state)
+        freeze_notice(device)
+
+
+def exercise_devices(devices):
+    a, b, c = devices
+    local_cases(a)
+    offline_relay_cases(a, b, c)
+    divergence_cases(a, b, c)
+    for device in devices:
+        require(not any((device.local / "s").glob("*/meta.json")), "profile delivery created a session")
+        require(not any((device.local / "wake").rglob("*.cooldown")),
+                "profile delivery reserved a wake transmission")
+
+
+def dump_device_failure(device):
+    log = device.root / "daemon.log"
+    if log.exists():
+        print(f"{device.name} daemon log:\n{log.read_text()}", file=sys.stderr)
+    for name in ("profile.json", "outbox.json"):
+        path = device.local / "fleet" / name
+        if path.exists():
+            print(f"{device.name} {name}: {path.read_text()}", file=sys.stderr)
+
+
 def campaign(binary, root, cleanup_state):
     devices = []
     try:
         with ExitStack() as cleanup:
-            for name in ("alpha", "bravo", "charlie"):
-                path = root / name
-                path.mkdir(mode=0o700)
-                device = Device(binary, path, name)
-                devices.append(device)
-                cleanup.callback(close_device, device, cleanup_state)
-                freeze_notice(device)
-            a, b, c = devices
-            local_cases(a)
-            offline_relay_cases(a, b, c)
-            divergence_cases(a, b, c)
-            for device in devices:
-                require(not any((device.local / "s").glob("*/meta.json")), "profile delivery created a session")
-                require(not any((device.local / "wake").rglob("*.cooldown")),
-                        "profile delivery reserved a wake transmission")
+            prepare_devices(binary, root, cleanup, cleanup_state, devices)
+            exercise_devices(devices)
     except BaseException:
         for device in devices:
-            log = device.root / "daemon.log"
-            if log.exists():
-                print(f"{device.name} daemon log:\n{log.read_text()}", file=sys.stderr)
-            for name in ("profile.json", "outbox.json"):
-                path = device.local / "fleet" / name
-                if path.exists():
-                    print(f"{device.name} {name}: {path.read_text()}", file=sys.stderr)
+            dump_device_failure(device)
         raise
     print("PASS: signed fleet notes, local and saved-self distinction, offline restart catch-up, trusted relay rejection, explicit retry and distributed divergence without wake or sessions")
 
