@@ -28,11 +28,14 @@ concurrency:
 
 permissions:
   checks: read
-  contents: write
+  contents: read
 
 jobs:
   reserve:
     name: Reserve source and version
+    permissions:
+      checks: read
+      contents: write
     runs-on: ubuntu-24.04
     outputs:
       action: ${{ steps.reserve.outputs.action }}
@@ -58,6 +61,8 @@ jobs:
 
   build:
     name: Build final artifacts
+    permissions:
+      contents: write
     needs: reserve
     if: needs.reserve.outputs.action == 'publish'
     runs-on: ubuntu-24.04
@@ -93,6 +98,10 @@ jobs:
 
   reconcile-cask:
     name: Reconcile published Cask
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
     needs: reserve
     if: needs.reserve.outputs.action == 'reconcile'
     runs-on: ubuntu-24.04
@@ -113,6 +122,8 @@ jobs:
 
   prove-transition:
     name: Prove forward upgrade and restart (${{ matrix.platform }})
+    permissions:
+      contents: write
     needs: [reserve, build]
     if: needs.reserve.outputs.action == 'publish'
     strategy:
@@ -182,6 +193,10 @@ jobs:
 
   publish:
     name: Publish complete release
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
     needs: [reserve, build, prove-transition]
     if: needs.reserve.outputs.action == 'publish'
     runs-on: ubuntu-24.04
