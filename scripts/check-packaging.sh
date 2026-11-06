@@ -167,6 +167,7 @@ check_source_contract() {
 
   scripts/test-plan-release.sh
   scripts/test-reserve-release.sh
+  bash scripts/test-finalize-release.sh
   scripts/test-prepare-release-baselines.sh
 
   [[ -x integration/reboot_simulation.sh ]] || fail 'reboot_simulation.sh is not executable'
