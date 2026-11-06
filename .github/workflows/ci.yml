@@ -23,10 +23,10 @@ jobs:
     outputs:
       code: ${{ github.event_name != 'pull_request' || steps.paths.outputs.code == 'true' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         id: paths
         with:
           predicate-quantifier: every
