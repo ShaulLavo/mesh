@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -23,5 +24,37 @@ func TestConfirmationBrowserPages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEscapingBrowserPages(t *testing.T) {
+	directory := os.Getenv("MESH_CONFIRM_BROWSER_DIR")
+	if directory == "" {
+		return
+	}
+	fixtures := map[string]pageData{
+		"escaping-delete":  {Confirm: "delete", App: Record{ID: rendererSpecials}, CSRF: rendererSpecials, URL: "https://app.mesh.test/a b?one=1&two=2", Return: rendererSpecials, Error: rendererSpecials},
+		"escaping-renew":   {Confirm: rendererSpecials, App: Record{ID: rendererSpecials}, CSRF: rendererSpecials, URL: "notes:plain", Return: rendererSpecials},
+		"escaping-start":   {PairStart: true, Return: rendererSpecials},
+		"escaping-pending": {Code: rendererSpecials, Return: rendererSpecials, PairLifetimeMS: 543210},
+		"escaping-list":    {Domain: rendererSpecials, Apps: []Record{{ID: rendererSpecials, Status: "active"}}},
+	}
+	for name, data := range fixtures {
+		writeBrowserFixture(t, directory, name, renderPageBytes(data))
+	}
+	expected, err := json.Marshal(map[string]string{"value": rendererSpecials})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeBrowserFixture(t, directory, "escaping.json", expected)
+}
+
+func writeBrowserFixture(t *testing.T, directory, name string, body []byte) {
+	t.Helper()
+	if !strings.HasSuffix(name, ".json") {
+		name += ".html"
+	}
+	if err := os.WriteFile(filepath.Join(directory, name), body, 0600); err != nil { //nolint:gosec // The verifier selects its scratch directory; fixture names are fixed test cases.
+		t.Fatal(err)
 	}
 }

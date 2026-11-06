@@ -24,12 +24,12 @@ async function fixtureContext(browser, options = {}) {
         assert.equal(form.get('confirmation'), '7k3d');
       }
       submissions++;
-      await route.fulfill({ contentType: 'text/html', body: '<p>Confirmed</p>' });
+      await route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<p>Confirmed</p>' });
       return;
     }
     const action = new URL(request.url()).searchParams.get('action');
     const body = await readFile(join(directory, `${action}.html`), 'utf8');
-    await route.fulfill({ contentType: 'text/html', body,
+    await route.fulfill({ contentType: 'text/html; charset=utf-8', body,
       headers: { 'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'" },
     });
   });
@@ -137,6 +137,76 @@ async function verifyMobile(browser, device) {
   }
 }
 
+async function routeEscapingFixture(route) {
+  const target = new URL(route.request().url());
+  assert.equal(target.origin, manager);
+  if (target.pathname === '/pair/status') {
+    await route.fulfill({ status: 202, body: '' });
+    return;
+  }
+  const name = target.pathname.slice(1);
+  assert(/^escaping-[a-z]+$/.test(name));
+  await route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>Renderer fixture</title>' });
+}
+
+async function verifyEscaping(browser) {
+  const { value } = JSON.parse(await readFile(join(directory, 'escaping.json'), 'utf8'));
+  const context = await browser.newContext();
+  const errors = [];
+  try {
+    await context.route('**/*', routeEscapingFixture);
+    const page = await context.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    for (const name of ['delete', 'renew', 'start', 'pending', 'list']) {
+      await page.goto(`${manager}/escaping-${name}`);
+      // WebKit's intercepted response drops charset. Decode fixture bytes as the production UTF-8 header requires.
+      await page.setContent(await readFile(join(directory, `escaping-${name}.html`), 'utf8'));
+      await checkEscapedPage(page, name, value);
+    }
+    assert.deepEqual(errors, [], 'Escaped strings must remain valid JavaScript');
+  } finally {
+    await context.close();
+  }
+}
+
+async function checkEscapedPage(page, name, value) {
+  assert.equal(await page.locator('mesh-note').count(), 0, 'Text must not create elements');
+  if (name === 'list') {
+    const links = await page.locator('a').evaluateAll(nodes => nodes.slice(0, 4).map(node => node.getAttribute('href')));
+    for (const link of links) assert.equal(new URL(link, manager).searchParams.get('id'), value);
+    assert.equal(await page.locator('a').first().textContent(), `https://${value}.${value}`);
+    return;
+  }
+  if (name === 'pending') {
+    assert.equal(await page.locator('strong').textContent(), value);
+    assert.equal(await page.evaluate(() => expiresAt > performance.now()), true);
+    // Evaluate the actual rendered expression, without navigating outside the fixture router.
+    const destination = await page.evaluate(() => {
+      const source = document.querySelector('script').textContent;
+      return JSON.parse(source.match(/location.replace\(("(?:\\.|[^"\\])*")\)/)[1]);
+    });
+    assert.equal(destination, value);
+    return;
+  }
+  assert.equal(await page.locator('input[name="return"]').inputValue(), value);
+  if (name === 'start') return;
+  for (const field of ['id', 'csrf']) assert.equal(await page.locator(`input[name="${field}"]`).inputValue(), value);
+  assert.equal(await page.locator('h1').textContent(), `${name === 'renew' ? value : 'delete'} ${value}`);
+  const href = await page.locator('a').getAttribute('href');
+  assert.equal(href, name === 'renew' ? '#ZgotmplZ' : 'https://app.mesh.test/a%20b?one=1&two=2');
+  if (name === 'renew') return;
+  await page.locator('#confirm-id').fill(value);
+  await page.evaluate(() => {
+    document.hasFocus = () => true;
+    focusedAt = performance.now() - 751;
+    deliberate = true;
+    updateActivation();
+  });
+  assert(await page.locator('#confirm-action').isEnabled(), 'The script must compare the original ID, not HTML escapes');
+  await page.locator('#confirm-id').fill('different');
+  assert(await page.locator('#confirm-action').isDisabled());
+}
+
 for (const engine of (process.env.MESH_CONFIRM_ENGINES || 'chromium,webkit').split(',')) {
   const browser = await playwright[engine].launch({ headless: true,
     ...(engine === 'chromium' && process.env.MESH_CHROMIUM_EXECUTABLE
@@ -147,7 +217,8 @@ for (const engine of (process.env.MESH_CONFIRM_ENGINES || 'chromium,webkit').spl
     if (process.env.MESH_CONFIRM_CASE !== 'desktop') {
       await verifyMobile(browser, engine === 'webkit' ? 'iPhone 13' : 'Pixel 7');
     }
-    console.log(`PASS ${engine}: inert arrival, post-delay trusted input, focus/visibility resets, exact IDs, and single native mobile taps`);
+    await verifyEscaping(browser);
+    console.log(`PASS ${engine}: escaping contexts; inert arrival, post-delay trusted input, focus/visibility resets, exact IDs, and single native mobile taps`);
   } finally {
     await browser.close();
   }

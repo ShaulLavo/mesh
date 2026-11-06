@@ -1,0 +1,36 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh temporary apps</title><style>body{font:16px system-ui;background:#101214;color:#eef0f2;margin:0;padding:24px}main{max-width:680px;margin:auto}a{color:#9ddcff}button,a.button{border:0;border-radius:999px;background:#e9edf2;color:#101214;padding:10px 16px;cursor:pointer;display:inline-block;text-decoration:none}code{font-size:16px;overflow-wrap:anywhere}small{color:#bcc4cb}form{display:inline}.error{color:#ffbab4}</style></head><body><main><h1>renew 7k3d</h1><p>Owner controls for <a href="https://7k3d.mesh.test">https://7k3d.mesh.test</a>.</p><form id="confirm-form" method="post" action="/action"><input type="hidden" name="id" value="7k3d"><input type="hidden" name="action" value="renew"><input type="hidden" name="csrf" value="test-csrf"><input type="hidden" name="return" value="https://7k3d.mesh.test/notes?one=1&amp;two=2"><p><small>Read the change, then move the pointer or use the keyboard to enable confirmation.</small></p><button id="confirm-action" disabled>Confirm renew</button></form></main><script>
+const confirmButton = document.getElementById('confirm-action');
+const confirmForm = document.getElementById('confirm-form');
+const confirmID = document.getElementById('confirm-id');
+let focusedAt = null;
+let deliberate = false;
+function activePage() { return document.visibilityState === 'visible' && document.hasFocus(); }
+function updateActivation() {
+  confirmButton.disabled = !activePage() || focusedAt === null || performance.now() - focusedAt < 750 || !deliberate || (confirmID && confirmID.value !== "7k3d");
+}
+function resetActivation() {
+  deliberate = false;
+  focusedAt = activePage() ? performance.now() : null;
+  confirmButton.disabled = true;
+}
+function deliberateInput(event) {
+  if (event.isTrusted && activePage() && focusedAt !== null && performance.now() - focusedAt >= 750) {
+    deliberate = true;
+    updateActivation();
+  }
+}
+window.addEventListener('focus', resetActivation);
+window.addEventListener('blur', resetActivation);
+window.addEventListener('pageshow', resetActivation);
+document.addEventListener('visibilitychange', resetActivation);
+document.addEventListener('pointermove', deliberateInput);
+document.addEventListener('pointerdown', deliberateInput, true);
+document.addEventListener('touchstart', deliberateInput, {capture: true, passive: true});
+document.addEventListener('keydown', deliberateInput);
+if (confirmID) confirmID.addEventListener('input', updateActivation);
+confirmForm.addEventListener('submit', event => {
+  updateActivation();
+  if (confirmButton.disabled) event.preventDefault();
+});
+resetActivation();
+</script></body></html>
