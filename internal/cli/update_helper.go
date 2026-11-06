@@ -28,9 +28,16 @@ const (
 )
 
 func versionCommand() *cobra.Command {
-	var structured bool
+	var structured, licenses bool
 	command := &cobra.Command{Use: "version", Short: "Show the executing Mesh build", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if licenses {
+				_, err := io.WriteString(cmd.OutOrStdout(), release.BrotliNotice())
+				if err != nil {
+					return fmt.Errorf("write bundled Brotli notice: %w", err)
+				}
+				return nil
+			}
 			build := release.Metadata()
 			if structured {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(release.Current())
@@ -44,6 +51,8 @@ func versionCommand() *cobra.Command {
 		},
 	}
 	command.Flags().BoolVar(&structured, "json", false, "write build metadata as JSON")
+	command.Flags().BoolVar(&licenses, "licenses", false, "print the bundled Brotli notice")
+	command.MarkFlagsMutuallyExclusive("json", "licenses")
 	return command
 }
 
