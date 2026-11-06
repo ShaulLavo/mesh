@@ -382,7 +382,7 @@ the full benchmark harness once; do not duplicate it as a second full gate.
 
 ## Plan 011 execution, November 6, 2026
 
-PR 358 remains draft and acceptance is blocked. Its integrated candidate includes
+The initial PR 358 acceptance attempt stopped at timing gates. Its integrated candidate includes
 screen revisions, durable writer keys and the periodic preparation guard. Initial,
 final and explicit checkpoints stay forced. Covered ticks avoid screen preparation
 and full-record writer encoding, but still encode and hash metadata once and keep
@@ -402,3 +402,30 @@ The gate failure stopped the ordinary paired measurements and the one final
 race/integration campaign. One completed 300-second base window and one
 16 MiB head observer preflight are not paired acceptance. No known-directory
 real-worker timing, full durability pass or completed Unit 5 is claimed.
+
+
+### Accepted cost and continuation, November 6, 2026
+
+Managing now accepts the reported forced-path cost and small payoff as-is and
+requires no more timing campaigns. The prior failed shared-PC results and
+incomplete real-worker pairs remain historical evidence, not passing results.
+No Boat timing product command ran. Its canceled preparation is cleaned and
+the sanitized retained VM is confirmed stopped. No cross-host timing ratio exists.
+
+A report-only counter in a normal isolated bash session with the production
+shell-init hook observed 180.204 seconds of mixed work: 12 short commands every
+five seconds, one minute of foreground output every 250 ms, and six directory
+changes every ten seconds. It counted 19 explicit forced calls, all shell prompt
+updates, plus 90 periodic calls: 48 prepared and 42 skipped. Startup and shutdown
+each added one forced call separately. An acknowledged restart-command mutation
+proved the observer before counting. These are call counts, not ordinary-session
+allocation measurements. The near-limit forced allocation finding above applies
+only to that synthetic near-limit fixture. Acceptance does not rely on rarity.
+
+The optional encoded-buffer append allocation was inspected but left unchanged
+because the final correctness campaign had already started on current production
+bytes. Production, digest semantics, assertions, deadlines and baselines remain
+unchanged. No cache or process-observer redesign is added. Full correctness,
+current-head CI and the parent's review/disposition remain required. Unit 5 stays
+partial because prepared-text reuse is deferred. Continuation evidence is in
+`/work/reports/wave-20261106/audits2/mesh/execution/011/measure/boat-continuation/REPORT.md`.
