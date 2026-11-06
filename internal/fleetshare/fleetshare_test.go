@@ -416,6 +416,35 @@ func TestSnapshotPublicationFailureRetries(t *testing.T) {
 	}
 }
 
+func TestSnapshotAcknowledgementCannotSurviveFailedStateCycle(t *testing.T) {
+	p := newSnapshotPublisher(t)
+	a, b := []protocol.FleetHost{testHost(1)}, []protocol.FleetHost{testHost(2)}
+	if err := p.replace(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	p.failDir = true
+	for _, hosts := range [][]protocol.FleetHost{b, a} {
+		if err := p.replace(t.Context(), hosts); !errors.Is(err, unix.EIO) {
+			t.Fatalf("state-cycle publication failure = %v, want EIO", err)
+		}
+	}
+	requireHosts(t, p.dir, a...)
+	retry := &snapshotPublisher{dir: p.dir, source: p.source, failDir: true}
+	if err := retry.replace(t.Context(), a); !errors.Is(err, unix.EIO) {
+		t.Fatalf("identical A retry after failed B/A cycle = %v, want EIO", err)
+	}
+	retry.requireCounts(t, 1, 1, 1)
+	durable := &snapshotPublisher{dir: p.dir, source: p.source}
+	if err := durable.replace(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	durable.requireCounts(t, 1, 1, 1)
+	if err := durable.replace(t.Context(), a); err != nil {
+		t.Fatal(err)
+	}
+	durable.requireCounts(t, 1, 1, 1)
+}
+
 func testSnapshotPublicationFailure(t *testing.T, afterRename bool) {
 	t.Helper()
 	p := newSnapshotPublisher(t)
