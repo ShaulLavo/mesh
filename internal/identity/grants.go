@@ -138,6 +138,10 @@ func RevokeDevice(stateDir, id string) error {
 }
 
 func changeDevice(stateDir, id string, approve bool) (bool, error) {
+	return changeDeviceWithPublisher(stateDir, id, approve, publishGrants)
+}
+
+func changeDeviceWithPublisher(stateDir, id string, approve bool, publish func(string, string, []byte) error) (bool, error) {
 	public, err := IdentityKey(id)
 	if err != nil {
 		return false, err
@@ -146,34 +150,56 @@ func changeDevice(stateDir, id string, approve bool) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("identity: encode device key: %w", err)
 	}
-	lock, err := os.OpenFile(filepath.Join(stateDir, "device-grants.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600) //nolint:gosec // fixed policy lock; reject symlinks and special files before locking
+	lock, err := openGrantWriter(stateDir)
 	if err != nil {
-		return false, fmt.Errorf("identity: open grants lock: %w", err)
-	}
-	defer lock.Close() //nolint:errcheck // closing releases exclusive policy ownership
-	info, err := lock.Stat()
-	if err != nil {
-		return false, fmt.Errorf("identity: inspect grants lock: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
-		return false, errors.New("identity: grants lock must be a regular file with safe permissions")
-	}
-	if err := lockGrantWriter(lock); err != nil {
 		return false, err
 	}
+	defer lock.Close() //nolint:errcheck // closing releases exclusive policy ownership
 	path := filepath.Join(stateDir, "authorized_keys")
 	contents, err := ReadAuthorizedKeys(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
+	exists := err == nil
 	next, err := changedGrants(contents, key, approve)
 	if err != nil {
 		return false, err
 	}
-	if err := publishGrants(stateDir, path, next); err != nil {
+	changed := !bytes.Equal(contents, next)
+	digest := sha256.Sum256(next)
+	if exists && !changed {
+		acknowledged, err := grantsAcknowledged(lock, digest)
+		if err != nil || acknowledged {
+			return false, err
+		}
+	}
+	if err := persistGrants(lock, digest, func() error { return publish(stateDir, path, next) }); err != nil {
 		return false, err
 	}
-	return !bytes.Equal(contents, next), nil
+	return changed, nil
+}
+
+func openGrantWriter(stateDir string) (*os.File, error) {
+	lock, err := os.OpenFile(filepath.Join(stateDir, "device-grants.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600) //nolint:gosec // fixed policy lock; reject symlinks and special files before locking
+	if err != nil {
+		return nil, fmt.Errorf("identity: open grants lock: %w", err)
+	}
+	if err := validateGrantWriter(lock); err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return lock, nil
+}
+
+func validateGrantWriter(lock *os.File) error {
+	info, err := lock.Stat()
+	if err != nil {
+		return fmt.Errorf("identity: inspect grants lock: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
+		return errors.New("identity: grants lock must be a regular file with safe permissions")
+	}
+	return lockGrantWriter(lock)
 }
 
 // Only mutations contend. Published-snapshot readers never wait for this lock.
@@ -267,21 +293,17 @@ func appendGrant(contents []byte, key ssh.PublicKey) ([]byte, error) {
 }
 
 func publishGrants(stateDir, path string, next []byte) error {
+	return publishGrantsWithSync(stateDir, path, next, (*os.File).Sync)
+}
+
+func publishGrantsWithSync(stateDir, path string, next []byte, syncFile func(*os.File) error) error {
 	file, err := os.CreateTemp(stateDir, ".device-grants-*")
 	if err != nil {
 		return fmt.Errorf("identity: stage grants: %w", err)
 	}
 	defer os.Remove(file.Name()) //nolint:errcheck // cleanup after atomic publication
-	if _, err := file.Write(next); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("identity: write grants: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("identity: sync grants: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("identity: close grants: %w", err)
+	if err := writeGrantPolicy(file, next, syncFile); err != nil {
+		return err
 	}
 	if err := os.Rename(file.Name(), path); err != nil {
 		return fmt.Errorf("identity: publish grants: %w", err)
@@ -291,8 +313,23 @@ func publishGrants(stateDir, path string, next []byte) error {
 		return fmt.Errorf("identity: open grants directory: %w", err)
 	}
 	defer directory.Close() //nolint:errcheck // directory contains no buffered writes
-	if err := directory.Sync(); err != nil {
+	if err := syncFile(directory); err != nil {
 		return fmt.Errorf("identity: sync grants directory: %w", err)
+	}
+	return nil
+}
+
+func writeGrantPolicy(file *os.File, next []byte, syncFile func(*os.File) error) error {
+	if _, err := file.Write(next); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("identity: write grants: %w", err)
+	}
+	if err := syncFile(file); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("identity: sync grants: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("identity: close grants: %w", err)
 	}
 	return nil
 }
