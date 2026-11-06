@@ -4,6 +4,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_cleanup.sh" || exit 1
 # Each session runs in its own systemd scope, so systemd-oomd can kill one
 # runaway session without taking every other session and the daemon with it.
 set -uo pipefail
+scope_observer="$(dirname -- "${BASH_SOURCE[0]}")/helpers/session_scope.py"
 
 if [ "$(uname -s)" != Linux ] || ! busctl --user status >/dev/null 2>&1; then
   echo "PASS: no systemd user manager; sessions keep their launcher's cgroup"
@@ -49,12 +50,20 @@ SID=$(basename "$(dirname "$(echo "$MESH_STATE_DIR"/s/*/sock)")")
 
 grep -q "^0::.*/mesh-session-$SID\.scope\$" "$T/cgroup" || fail "command cgroup is $(cat "$T/cgroup"), want mesh-session-$SID.scope"
 
+unit="mesh-session-$SID.scope"
+state=$(python3 "$scope_observer" "$unit") || fail "could not observe scope before kill"
+[ "$state" = active ] || fail "scope was $state before kill, want active"
+echo "Observed $unit active before kill"
+
 "$MESH" kill "$SID" >/dev/null || fail "kill failed"
 for _ in $(seq 100); do
-  systemctl --user is-active --quiet "mesh-session-$SID.scope" || break
+  state=$(python3 "$scope_observer" "$unit") || fail "could not observe scope after kill"
+  [[ $state == inactive || $state == not-found ]] && break
   sleep 0.05
 done
-systemctl --user is-active --quiet "mesh-session-$SID.scope" && fail "scope outlived the session"
+state=$(python3 "$scope_observer" "$unit") || fail "could not confirm scope exit"
+[[ $state == inactive || $state == not-found ]] || fail "scope outlived the session: $state"
+echo "Observed $unit $state after kill"
 SID=""
 exec 3>&-
 wait "$CLIENT" 2>/dev/null || true
