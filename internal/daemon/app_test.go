@@ -173,7 +173,8 @@ func TestRunServesLocalClientsWhenTailnetDiscoveryFails(t *testing.T) {
 }
 
 func TestRunPublishesBootInterruptedSession(t *testing.T) {
-	stateDir := compactSocketTempDir(t)
+	fixture := newDaemonRunFixture(t)
+	stateDir := fixture.stateDir
 	sessionsDir := filepath.Join(stateDir, sessionsDirectoryName)
 	dir := filepath.Join(sessionsDir, "7K3D")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -191,18 +192,16 @@ func TestRunPublishesBootInterruptedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- run(ctx, Config{StateDir: stateDir}, runOptions{
+	fixture.start(t, func(ctx context.Context) error {
+		return run(ctx, Config{StateDir: stateDir}, runOptions{
 			now:               func() time.Time { return catalogTestTime.Add(time.Minute) },
 			bootID:            func() string { return "boot-after-restart" },
 			discoverSelf:      func(context.Context) (tailnet.Peer, error) { panic("unexpected Tailnet discovery") },
 			reconcileInterval: time.Hour,
 		})
-	}()
+	})
 
-	client := dialUnixRuntime(t, SocketPath(stateDir))
+	client := fixture.dial(t)
 	defer client.Close() //nolint:errcheck // test cleanup
 	if err := client.WriteFrame(controlFrame(t, protocol.Control{Type: protocol.TypeList, RequestID: "list-1"})); err != nil {
 		t.Fatal(err)
@@ -221,25 +220,21 @@ func TestRunPublishesBootInterruptedSession(t *testing.T) {
 	if got := response.Sessions[0]; got.ID != "7K3D" || got.State != string(storage.StateInterrupted) || !strings.Contains(strings.Join(got.Command, " "), "sleep") {
 		t.Fatalf("listed session = %#v", got)
 	}
-
-	cancel()
-	if err := waitRuntime(t, done); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestRunLosingDaemonCannotMutateCatalog(t *testing.T) {
-	stateDir := compactSocketTempDir(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
+	fixture := newDaemonRunFixture(t)
+	stateDir := fixture.stateDir
 	firstOptions := runOptions{
 		now:               func() time.Time { return catalogTestTime },
 		bootID:            func() string { return "boot-a" },
 		discoverSelf:      func(context.Context) (tailnet.Peer, error) { panic("unexpected Tailnet discovery") },
 		reconcileInterval: time.Hour,
 	}
-	go func() { done <- run(ctx, Config{StateDir: stateDir}, firstOptions) }()
-	client := dialUnixRuntime(t, SocketPath(stateDir))
+	fixture.start(t, func(ctx context.Context) error {
+		return run(ctx, Config{StateDir: stateDir}, firstOptions)
+	})
+	client := fixture.dial(t)
 	_ = client.Close()
 
 	loserOptions := firstOptions
@@ -266,11 +261,6 @@ func TestRunLosingDaemonCannotMutateCatalog(t *testing.T) {
 	}
 	if !host.LastSeenAt.Equal(catalogTestTime) {
 		t.Fatalf("last seen time = %v, losing daemon wrote %v", host.LastSeenAt, loserOptions.now())
-	}
-
-	cancel()
-	if err := waitRuntime(t, done); err != nil {
-		t.Fatal(err)
 	}
 }
 
