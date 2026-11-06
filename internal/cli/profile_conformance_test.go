@@ -184,3 +184,61 @@ func TestProfileHumanAndParsedBooleanSemantics(t *testing.T) {
 		t.Fatal(output, err)
 	}
 }
+
+func TestProfileCheckerExtractionPreservesClientSurrogateAcceptance(t *testing.T) {
+	// Existing config decoding replaces a lone surrogate. Only profiles add rejection.
+	source := `{"schemaVersion":1,"instructions":"\ud800"}`
+	decoder := json.NewDecoder(strings.NewReader(source))
+	if err := checkConfigJSON(decoder, 0); err != nil {
+		t.Fatalf("existing config checker changed: %v", err)
+	}
+	if _, err := hostprofile.ParseEditable([]byte(source), hostprofile.HostLimits); err == nil {
+		t.Fatal("profile decoder silently replaced a surrogate")
+	}
+}
+
+func TestProfileMalformedExistingIdentityIsNotReplaced(t *testing.T) {
+	state := t.TempDir()
+	config := filepath.Join(t.TempDir(), "missing")
+	t.Setenv("MESH_STATE_DIR", state)
+	t.Setenv("MESH_CONFIG_DIR", config)
+	key := filepath.Join(state, "identity.key")
+	if err := os.WriteFile(key, []byte("not a private key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, output, err := runProfile(t, noProfileInput{t}, "profile", "show", "--json")
+	if result.Status != agentapi.StatusError || result.Errors[0].Code != agentapi.StateUnavailable {
+		t.Fatal(output, err)
+	}
+	// #nosec G304 -- Task-owned malformed identity fixture.
+	data, err := os.ReadFile(key)
+	if err != nil || string(data) != "not a private key" {
+		t.Fatal(string(data), err)
+	}
+	if _, err := os.Lstat(config); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("malformed-key read created config", err)
+	}
+}
+
+func TestProfileStoredRevisionConversions(t *testing.T) {
+	state := t.TempDir()
+	config := t.TempDir()
+	t.Setenv("MESH_STATE_DIR", state)
+	t.Setenv("MESH_CONFIG_DIR", config)
+	if _, _, err := identity.LoadOrCreate(state); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(config, "profile.json")
+	for _, tc := range []struct{ document, revision string }{
+		{`{"schemaVersion":1,"hostId":"another","revision":7,"updatedAt":"2026-11-06T00:00:00Z"}`, `"revision":7`},
+		{`{"schemaVersion":1,"revision":"broken"}`, `"revision":null`},
+	} {
+		if err := os.WriteFile(path, []byte(tc.document), 0600); err != nil {
+			t.Fatal(err)
+		}
+		result, output, err := runProfile(t, noProfileInput{t}, "profile", "show", "--json")
+		if err != nil || result.Status != agentapi.StatusOK || !strings.Contains(output, tc.revision) || !strings.Contains(output, `"state":"invalid"`) {
+			t.Fatal(output, err)
+		}
+	}
+}

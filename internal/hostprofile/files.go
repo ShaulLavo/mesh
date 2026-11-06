@@ -125,6 +125,10 @@ func checkPrivateFile(file *os.File) error {
 	if err := unix.Fstat(int(file.Fd()), &stat); err != nil {
 		return fmt.Errorf("inspect profile file: %w", err)
 	}
+	return validatePrivateStat(stat)
+}
+
+func validatePrivateStat(stat unix.Stat_t) error {
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Uid != uint32(os.Geteuid()) || stat.Nlink != 1 || stat.Mode&07777 != 0600 { //nolint:gosec // Unix effective UIDs are unsigned 32-bit values.
 		return errors.New("profile files must be private 0600 regular files owned by this user with one link")
 	}

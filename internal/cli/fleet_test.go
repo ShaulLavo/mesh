@@ -92,7 +92,7 @@ func TestSharedConnectionsPreserveLocalPins(t *testing.T) {
 func TestRootCommandsCannotBecomeMachineNames(t *testing.T) {
 	root := NewCommand(Dependencies{})
 	for _, command := range root.Commands() {
-		if _, err := machinename.Normalize(command.Name()); err == nil {
+		if _, err := machinename.NormalizeNew(command.Name()); err == nil {
 			t.Errorf("root command %q is available as a machine name", command.Name())
 		}
 	}

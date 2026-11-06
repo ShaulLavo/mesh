@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "operation": "profile.edit",
+  "status": "error",
+  "requestId": "01JA0000000000000000000000",
+  "data": null,
+  "errors": [
+    {
+      "code": "usage.invalid",
+      "message": "The editor is human-only. Use mesh profile set --file PATH --expected-revision N --json.",
+      "operation": "profile.edit",
+      "retryable": false
+    }
+  ]
+}

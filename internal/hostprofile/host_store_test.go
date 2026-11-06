@@ -1,6 +1,7 @@
 package hostprofile
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -357,5 +358,90 @@ func TestRepeatedUnconfirmedRetryDoesNotIncrement(t *testing.T) {
 	final, changed, err := OpenHostStore(dir, "host").Set(t.Context(), 0, editable("next"))
 	if err != nil || changed || final.Revision != 1 {
 		t.Fatal(final, changed, err)
+	}
+}
+
+func TestPrivateFileOwnerAndReadSafety(t *testing.T) {
+	// Foreign ownership is checked from the same fstat shape without privileged chown.
+	stat := unix.Stat_t{Mode: unix.S_IFREG | 0600, Uid: uint32(os.Geteuid()), Nlink: 1} //nolint:gosec // Unix effective UID representation.
+	if err := validatePrivateStat(stat); err != nil {
+		t.Fatal(err)
+	}
+	stat.Uid ^= 1
+	if err := validatePrivateStat(stat); err == nil {
+		t.Fatal("foreign owner accepted")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(target, []byte(`{"schemaVersion":1}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "profile.json")); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := OpenHostStore(dir, "host").Read()
+	if err == nil || snapshot.State != StateUnavailable || snapshot.Revision != nil || snapshot.Value != nil {
+		t.Fatal(snapshot, err)
+	}
+}
+
+func TestInvalidProblemIsBoundedAndControlFree(t *testing.T) {
+	dir := t.TempDir()
+	data, err := json.Marshal(map[string]string{string(make([]byte, 1024)): "value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "profile.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := OpenHostStore(dir, "host").Read()
+	if err != nil || snapshot.State != StateInvalid || len(snapshot.Problem) > 512 || len(snapshot.Problem) == 0 {
+		t.Fatal(snapshot, err)
+	}
+	for _, r := range snapshot.Problem {
+		if r < 32 {
+			t.Fatal("untrusted field leaked a control character")
+		}
+	}
+}
+
+func TestDefaultLockBudgetExpiresBeforeCaller(t *testing.T) {
+	dir, err := openDirectory(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	held, err := acquireLock(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Close() }()
+	caller, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	waiting, err := acquireLock(caller, dir)
+	if waiting != nil || !errors.Is(err, context.DeadlineExceeded) || caller.Err() != nil {
+		t.Fatalf("internal lock budget did not end the wait: file=%v err=%v caller=%v", waiting, err, caller.Err())
+	}
+}
+
+func TestOversizedStoredFilePreservesBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profile.json")
+	data := bytes.Repeat([]byte(" "), HostLimits.Encoded+1)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := OpenHostStore(dir, "host")
+	snapshot, err := store.Read()
+	if err != nil || snapshot.State != StateInvalid || snapshot.Revision != nil {
+		t.Fatal(snapshot, err)
+	}
+	if _, _, err := store.Set(t.Context(), 0, editable("next")); err == nil {
+		t.Fatal("oversized state overwritten")
+	}
+	// #nosec G304 -- Task-owned oversized fixture.
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(after, data) {
+		t.Fatal("oversized state changed", err)
 	}
 }

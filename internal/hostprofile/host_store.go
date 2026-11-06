@@ -45,7 +45,7 @@ func absentSnapshot() Snapshot[HostProfile] {
 	return Snapshot[HostProfile]{State: StateAbsent, Revision: &revision}
 }
 func unavailableSnapshot(err error) Snapshot[HostProfile] {
-	return Snapshot[HostProfile]{State: StateUnavailable, Problem: err.Error()}
+	return Snapshot[HostProfile]{State: StateUnavailable, Problem: problemText(err.Error())}
 }
 
 func (s *HostStore) read(dir *os.File) (Snapshot[HostProfile], error) {
@@ -62,7 +62,7 @@ func (s *HostStore) read(dir *os.File) (Snapshot[HostProfile], error) {
 func (s *HostStore) snapshot(data []byte) Snapshot[HostProfile] {
 	p, err := parseHost(data)
 	if err != nil {
-		return Snapshot[HostProfile]{State: StateInvalid, Problem: err.Error()}
+		return Snapshot[HostProfile]{State: StateInvalid, Problem: problemText(err.Error())}
 	}
 	if p.HostID != s.hostID {
 		return Snapshot[HostProfile]{State: StateInvalid, Revision: &p.Revision, Problem: "profile.json belongs to another Mesh identity"}

@@ -6,7 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const SchemaVersion = 1
@@ -60,4 +63,21 @@ type ConflictError struct{ Expected, Current uint64 }
 
 func (e *ConflictError) Error() string {
 	return fmt.Sprintf("The profile changed since revision %d; it is now revision %d. Read it again, then retry with --expected-revision %d.", e.Expected, e.Current, e.Current)
+}
+
+func problemText(text string) string {
+	text = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(text, "?"))
+	if len(text) <= 512 {
+		return text
+	}
+	limit := 512
+	for !utf8.ValidString(text[:limit]) {
+		limit--
+	}
+	return text[:limit]
 }
