@@ -70,6 +70,11 @@ func corpusSeed() string {
 func terminalCorpus() []terminalCase {
 	cases := []terminalCase{
 		{name: "styled-wide-combining"},
+		// This combined mouse-mode stream is a stimulus, not simultaneous mode state.
+		{name: "input-modes", steps: []corpusStep{{output: "\x1b[?1h\x1b=\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h\x1b[?7l\x1b[?6h\x1b[4h\x1b[?2026h"}}},
+		{name: "clipboard-osc52", steps: []corpusStep{{output: "\x1b]52;c;bWVzaC1vc2M1Mi1jb3JwdXM=\x07\x1b]52;c;bWVzaC1vc2M1Mi1jb3JwdXM=\x1b\\"}}},
+		{name: "grapheme-clusters", steps: []corpusStep{{output: "\x1b[1;1H👨‍👩‍👧 👍🏽\x1b[2;1H🇮🇱 ❤️\x1b[3;1H\u1100\u1161"}}},
+		{name: "detached-queries", steps: []corpusStep{{output: "\x1b[6n\x1b[c\x1b[>c\x1b[?2004$p\x1b[>q\x1b]10;?\x07\x1b]11;?\x1b\\"}}},
 		{name: "vertical-margin-scroll", steps: []corpusStep{{output: "\x1b[2;4r\x1b[4;1H\r\nN界\x1b[2S\x1b[T"}}},
 		{name: "horizontal-margin-scroll", steps: []corpusStep{{output: "\x1b[?69h\x1b[2;11s\x1b[2;4r\x1b[3;2H\x1b[2M\x1b[?69l"}}},
 		{name: "outside-margin-delete", steps: []corpusStep{{output: "\x1b[2;4r\x1b[1;1H\x1b[99M"}}},
