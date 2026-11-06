@@ -50,10 +50,11 @@ func TestListCatalogRejectsSetupExpiredDuringWakeCacheSettlement(t *testing.T) {
 		t.Log("healthy retained transport returns native catalog despite best-effort wake cache contention")
 	})
 	t.Run("expired setup refuses catalog", func(t *testing.T) {
-		// Setup expires when verification reaches wake-cache settlement, so
-		// this budget only bounds a hang and never races dial or host.info.
-		run := collectCatalogSetupBoundary(t, host, time.Minute, true)
+		run := collectCatalogSetupBoundary(t, host, 50*time.Millisecond, true)
 		rows, observed := run.rows, run.observed
+		if run.configuredSetup != 50*time.Millisecond {
+			t.Fatalf("setup context received budget %s, want the configured 50ms", run.configuredSetup)
+		}
 		if !run.settledGrant {
 			t.Fatal("verified setup did not reach wake-cache settlement with a native grant")
 		}
@@ -78,18 +79,24 @@ func TestListCatalogRejectsSetupExpiredDuringWakeCacheSettlement(t *testing.T) {
 }
 
 type catalogSetupBoundaryRun struct {
-	cache        *SQLiteCatalogCache
-	before       []protocol.SessionInfo
-	rows         []HostSessions
-	observed     *catalogSetupObservedConn
-	setupCtx     context.Context
-	settledGrant bool
+	cache           *SQLiteCatalogCache
+	before          []protocol.SessionInfo
+	rows            []HostSessions
+	observed        *catalogSetupObservedConn
+	setupCtx        context.Context
+	configuredSetup time.Duration
+	settledGrant    bool
 }
 
 // collectCatalogSetupBoundary lists host over a real authenticated native
-// connection. With expire, setup expires at the wake-cache settlement step.
+// connection. With expire, the configured setup budget expires at the
+// wake-cache settlement step instead of on the wall clock, so a slow dial or
+// host.info cannot consume it first.
 func collectCatalogSetupBoundary(t *testing.T, host HostRecord, setup time.Duration, expire bool) catalogSetupBoundaryRun {
 	t.Helper()
+	if reflect.ValueOf(newHostSetupContext).Pointer() != reflect.ValueOf(context.WithTimeout).Pointer() {
+		t.Fatal("host setup budget no longer defaults to context.WithTimeout")
+	}
 	cache, err := OpenCatalogCache(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -112,20 +119,10 @@ func collectCatalogSetupBoundary(t *testing.T, host HostRecord, setup time.Durat
 		run.observed = &catalogSetupObservedConn{Conn: conn}
 		return run.observed, nil
 	}
-	deadline := make(chan struct{})
 	if expire {
-		rememberWakeGrant = func(ctx context.Context, grant *wake.Grant) {
-			run.settledGrant = grant != nil
-			close(deadline)
-			<-ctx.Done()
-			cacheWakeGrant(ctx, grant)
-		}
-		t.Cleanup(func() { rememberWakeGrant = cacheWakeGrant })
+		scheduleSetupExpiryAtWakeSettlement(t, &run)
 	}
 	query := func(ctx context.Context, host *HostRecord, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
-		if expire {
-			ctx = withCatalogSetupExpiry(ctx, deadline)
-		}
 		return listRemoteDeclaredHost(ctx, host, dial, budget)
 	}
 	run.rows, err = CollectHostSessions(t.Context(), []HostRecord{host}, HostQueryBudget{Setup: setup, Reply: time.Second}, query, cache)
@@ -154,26 +151,107 @@ func (r catalogSetupBoundaryRun) controlFailure(err error) error {
 	return nil
 }
 
-// catalogSetupExpiry is a setup parent whose deadline passes when the test
-// closes expired, so expiry lands at a chosen step after real verification.
-type catalogSetupExpiry struct {
+// scheduleSetupExpiryAtWakeSettlement derives setup through
+// withScheduledSetup and expires it when verified setup reaches wake-cache
+// settlement, before the real settlement code runs.
+func scheduleSetupExpiryAtWakeSettlement(t *testing.T, run *catalogSetupBoundaryRun) {
+	var expire func()
+	newHostSetupContext = func(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+		run.configuredSetup = timeout
+		setup, cancel, expireSetup := withScheduledSetup(parent)
+		expire = expireSetup
+		return setup, cancel
+	}
+	rememberWakeGrant = func(ctx context.Context, grant *wake.Grant) {
+		run.settledGrant = grant != nil
+		expire()
+		<-ctx.Done()
+		cacheWakeGrant(ctx, grant)
+	}
+	t.Cleanup(func() {
+		newHostSetupContext = context.WithTimeout
+		rememberWakeGrant = cacheWakeGrant
+	})
+}
+
+// errScheduledSetupExpiry is the cause of a scheduled setup expiry. It wraps
+// DeadlineExceeded, as the cause of a timer-driven expiry is DeadlineExceeded.
+var errScheduledSetupExpiry = fmt.Errorf("scheduled catalog setup expiry: %w", context.DeadlineExceeded)
+
+// scheduledSetupContext is derived from its parent like context.WithTimeout,
+// except its deadline passes when expire is called rather than on the wall
+// clock, so it reports only the parent's Deadline. Parent cancellation, cause
+// and values flow through a standard WithCancelCause child.
+type scheduledSetupContext struct {
 	context.Context
-	expired chan struct{}
+	cancel context.CancelCauseFunc
+	done   chan struct{}
+	err    error
 }
 
-func withCatalogSetupExpiry(parent context.Context, expired chan struct{}) context.Context {
-	return &catalogSetupExpiry{Context: parent, expired: expired}
+func withScheduledSetup(parent context.Context) (context.Context, context.CancelFunc, func()) {
+	inner, cancel := context.WithCancelCause(parent)
+	setup := &scheduledSetupContext{Context: inner, cancel: cancel, done: make(chan struct{})}
+	context.AfterFunc(inner, setup.settle)
+	return setup, func() { cancel(nil) }, setup.expire
 }
 
-func (c *catalogSetupExpiry) Done() <-chan struct{} { return c.expired }
+func (c *scheduledSetupContext) settle() {
+	c.err = c.Context.Err()
+	if errors.Is(context.Cause(c.Context), errScheduledSetupExpiry) {
+		c.err = context.DeadlineExceeded
+	}
+	close(c.done)
+}
 
-func (c *catalogSetupExpiry) Err() error {
+func (c *scheduledSetupContext) expire() { c.cancel(errScheduledSetupExpiry) }
+
+func (c *scheduledSetupContext) Done() <-chan struct{} { return c.done }
+
+func (c *scheduledSetupContext) Err() error {
 	select {
-	case <-c.expired:
-		return context.DeadlineExceeded
+	case <-c.done:
+		return c.err
 	default:
 		return nil
 	}
+}
+
+func TestScheduledSetupContextKeepsDerivedSemantics(t *testing.T) {
+	type key struct{}
+	deadline := time.Now().Add(time.Hour)
+	parent, cancelDeadline := context.WithDeadline(context.WithValue(t.Context(), key{}, "value"), deadline)
+	defer cancelDeadline()
+
+	t.Run("parent cancellation wins", func(t *testing.T) {
+		cause := errors.New("parent cause")
+		parent, cancelParent := context.WithCancelCause(parent)
+		setup, cancel, expire := withScheduledSetup(parent)
+		defer cancel()
+		child, cancelChild := context.WithTimeout(setup, time.Hour)
+		defer cancelChild()
+		cancelParent(cause)
+		<-setup.Done()
+		<-child.Done()
+		expire()
+		if !errors.Is(setup.Err(), context.Canceled) || !errors.Is(context.Cause(setup), cause) || !errors.Is(child.Err(), context.Canceled) || !errors.Is(context.Cause(child), cause) {
+			t.Fatalf("parent cancellation lost: err=%v cause=%v child=%v child cause=%v", setup.Err(), context.Cause(setup), child.Err(), context.Cause(child))
+		}
+	})
+	t.Run("scheduled expiry is a deadline", func(t *testing.T) {
+		setup, cancel, expire := withScheduledSetup(parent)
+		defer cancel()
+		child, cancelChild := context.WithTimeout(setup, time.Hour)
+		defer cancelChild()
+		if got, ok := setup.Deadline(); !ok || !got.Equal(deadline) || setup.Value(key{}) != "value" || setup.Err() != nil {
+			t.Fatal("scheduled setup did not inherit the parent's deadline and values")
+		}
+		expire()
+		<-child.Done()
+		if !errors.Is(setup.Err(), context.DeadlineExceeded) || !errors.Is(context.Cause(setup), context.DeadlineExceeded) || !errors.Is(child.Err(), context.DeadlineExceeded) || parent.Err() != nil {
+			t.Fatalf("scheduled expiry: err=%v cause=%v child=%v parent=%v", setup.Err(), context.Cause(setup), child.Err(), parent.Err())
+		}
+	})
 }
 
 type catalogSetupObservedConn struct {
