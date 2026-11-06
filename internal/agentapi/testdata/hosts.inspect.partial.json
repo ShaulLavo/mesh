@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "operation": "hosts.inspect",
+  "status": "partial",
+  "requestId": "01JA0000000000000000000000",
+  "data": {
+    "host": {
+      "hostId": "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+      "machineName": "pc",
+      "local": false,
+      "nameShadowed": false,
+      "reachability": "unreachable",
+      "observed": {
+        "version": "",
+        "platform": "",
+        "daemon": "running",
+        "observedAt": "2026-11-06T10:00:00Z",
+        "freshness": "cached"
+      },
+      "declared": {
+        "host": {
+          "state": "valid",
+          "revision": 2,
+          "digest": "375ec77119dbfa2adbaf93984ab2b701d674660736156a05c6f3d65d0626b586",
+          "updatedAt": "2026-11-06T10:00:00Z",
+          "freshness": "cached",
+          "completeness": "full",
+          "receivedAt": "2026-11-06T10:00:00Z",
+          "profile": {
+            "description": "A fixture host",
+            "labels": {},
+            "warnings": [],
+            "instructions": "Read these owner notes.\n",
+            "instructionsBytes": 24
+          }
+        },
+        "fleet": {
+          "state": "absent",
+          "revision": 0,
+          "freshness": "cached",
+          "completeness": "summary",
+          "receivedAt": "2026-11-06T10:00:00Z"
+        }
+      }
+    },
+    "access": {
+      "reason": "No current authenticated context observation is available.",
+      "state": "unavailable",
+      "observedAt": null,
+      "transport": "pinned-tls",
+      "caller": "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+      "grant": "unknown",
+      "enforcement": "device-grant",
+      "principal": null,
+      "scopedPermissions": null,
+      "summary": "Current access was not observed. Mesh has no per-operation agent scoping."
+    }
+  },
+  "errors": [
+    {
+      "code": "protocol.unsupported",
+      "message": "cli: daemon rejected host context: unknown context",
+      "operation": "hosts.inspect",
+      "target": "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+      "retryable": false
+    }
+  ]
+}

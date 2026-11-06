@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "operation": "hosts.list",
+  "status": "ok",
+  "requestId": "01JA0000000000000000000000",
+  "data": {
+    "receivedAt": "2026-11-06T10:00:00Z",
+    "fleet": {
+      "state": "absent",
+      "revision": 0,
+      "freshness": "live",
+      "completeness": "full",
+      "receivedAt": "2026-11-06T10:00:00Z"
+    },
+    "hosts": [
+      {
+        "hostId": "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+        "machineName": "pc",
+        "local": false,
+        "nameShadowed": false,
+        "reachability": "reachable",
+        "observed": {
+          "version": "",
+          "platform": "",
+          "daemon": "running",
+          "observedAt": "2026-11-06T10:00:00Z",
+          "freshness": "live"
+        },
+        "declared": {
+          "host": {
+            "state": "valid",
+            "revision": 2,
+            "digest": "375ec77119dbfa2adbaf93984ab2b701d674660736156a05c6f3d65d0626b586",
+            "updatedAt": "2026-11-06T10:00:00Z",
+            "freshness": "live",
+            "completeness": "summary",
+            "receivedAt": "2026-11-06T10:00:00Z",
+            "profile": {
+              "description": "A fixture host",
+              "labels": {},
+              "warnings": [],
+              "instructions": null,
+              "instructionsBytes": 24
+            }
+          },
+          "fleet": {
+            "state": "absent",
+            "revision": 0,
+            "freshness": "live",
+            "completeness": "summary",
+            "receivedAt": "2026-11-06T10:00:00Z"
+          }
+        }
+      }
+    ]
+  },
+  "errors": []
+}
