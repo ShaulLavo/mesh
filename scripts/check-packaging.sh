@@ -170,7 +170,8 @@ check_source_contract() {
   scripts/test-prepare-release-baselines.sh
 
   [[ -x integration/reboot_simulation.sh ]] || fail 'reboot_simulation.sh is not executable'
-  contains scripts/verify.sh 'integration/*.sh'
+  contains scripts/verify.sh 'scripts/verify_runner.py'
+  contains scripts/verify_runner.py 'glob.glob("*.sh", root_dir=repo / "integration")'
 
   # grep, not rg: rg is undeclared everywhere and exits 127 when missing, which
   # as an `if` condition is simply false, so this gate silently passed on any
