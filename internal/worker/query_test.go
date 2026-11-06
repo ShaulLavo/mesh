@@ -2,6 +2,8 @@ package worker
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -117,6 +119,11 @@ func (p *queryPTY) noInput() error {
 
 func newQueryWorker(t *testing.T) (*Worker, *queryPTY) {
 	t.Helper()
+	return newQueryWorkerScreen(t, terminalstate.NewScreen(80, 6))
+}
+
+func newQueryWorkerScreen(t *testing.T, screen terminalstate.Screen) (*Worker, *queryPTY) {
+	t.Helper()
 	sid, err := protocol.NewSessionID("QUERY")
 	if err != nil {
 		t.Fatal(err)
@@ -124,13 +131,15 @@ func newQueryWorker(t *testing.T) (*Worker, *queryPTY) {
 	pty := &queryPTY{pipePTY: newPipePTY()}
 	w := &Worker{
 		cfg: Config{ID: sid.String(), Dir: t.TempDir()}, sid: sid, pty: pty,
-		ring: session.NewRing(ringSize), screen: terminalstate.NewScreen(80, 6),
+		ring: session.NewRing(ringSize), screen: screen,
 		exited: make(chan struct{}), attached: make(chan struct{}), pumpDone: make(chan struct{}),
 	}
 	t.Cleanup(func() {
-		_ = pty.Close()
-		w.closeInput()
-		queryJoin(t, w.pumpDone, "pump")
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if _, err := queryStopWorker(ctx, w, pty); err != nil {
+			t.Error(err)
+		}
 	})
 	go w.pump()
 	return w, pty
@@ -160,23 +169,73 @@ func queryEmit(t *testing.T, pty *queryPTY, output []byte) {
 
 func queryCaptureAfter(t *testing.T, w *Worker, marker string, head uint64) (uint64, terminalstate.Capture) {
 	t.Helper()
-	var capture terminalstate.Capture
-	waitFor(t, func() bool {
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		if w.client != nil || w.ring.Head() != head {
-			return false
-		}
-		if !strings.Contains(strings.Join(w.screen.Preview(80, 6).Lines, "\n"), marker) {
-			return false
-		}
-		capture = w.screen.Snapshot()
-		return true
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	capture, err := queryWaitCapture(ctx, w, marker, head)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !capture.Restorable {
 		t.Fatal("completed queries did not leave an accepted Restorable capture")
 	}
 	return head, capture
+}
+
+func queryWaitCapture(ctx context.Context, w *Worker, marker string, head uint64) (terminalstate.Capture, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return terminalstate.Capture{}, fmt.Errorf("query capture: %w", err)
+		}
+		if capture, ready := queryTryCapture(w, marker, head); ready {
+			return capture, nil
+		}
+		select {
+		case <-ctx.Done():
+			return terminalstate.Capture{}, fmt.Errorf("query capture: %w", ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func queryTryCapture(w *Worker, marker string, head uint64) (terminalstate.Capture, bool) {
+	if !w.mu.TryLock() {
+		return terminalstate.Capture{}, false
+	}
+	defer w.mu.Unlock()
+	if w.client != nil || w.ring.Head() != head {
+		return terminalstate.Capture{}, false
+	}
+	if !strings.Contains(strings.Join(w.screen.Preview(80, 6).Lines, "\n"), marker) {
+		return terminalstate.Capture{}, false
+	}
+	return w.screen.Snapshot(), true
+}
+
+func queryStopWorker(ctx context.Context, w *Worker, pty *queryPTY) (<-chan struct{}, error) {
+	_ = pty.Close()
+	if err := queryAwait(ctx, w.pumpDone, "pump"); err != nil {
+		return nil, err
+	}
+	inputDone := make(chan struct{})
+	go func() {
+		w.closeInput()
+		close(inputDone)
+	}()
+	return inputDone, queryAwait(ctx, inputDone, "input relay")
+}
+
+func queryAwait(ctx context.Context, done <-chan struct{}, name string) error {
+	select {
+	case <-done:
+		return nil
+	default:
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("%s did not join: %w", name, ctx.Err())
+	}
 }
 
 func queryAttach(t *testing.T, w *Worker, seq *uint64) (net.Conn, *protocol.Reader, func()) {
@@ -312,4 +371,112 @@ func queryRequireRejected(t *testing.T, err error) {
 		t.Fatal("positive check accepted broken behavior")
 	}
 	t.Logf("positive check rejected broken behavior: %v", err)
+}
+
+// The held operations are released even when a timeout assertion fails, so
+// testing the failure paths does not leave a pump or relay behind.
+func TestQueryCaptureCancellationWhileRendererBlocked(t *testing.T) {
+	w, pty, release, started := queryBlockedWorker(t)
+	queryEmit(t, pty, []byte("blocked-renderer"))
+	queryJoin(t, started, "blocked renderer entry")
+	queryRequireCancelled(t, release, func(ctx context.Context) (<-chan struct{}, error) {
+		_, err := queryWaitCapture(ctx, w, "blocked-renderer", uint64(len("blocked-renderer")))
+		return nil, err
+	})
+}
+
+func TestQueryCleanupCancellationWhileRendererBlocked(t *testing.T) {
+	w, pty, release, started := queryBlockedWorker(t)
+	queryEmit(t, pty, []byte("blocked-renderer"))
+	queryJoin(t, started, "blocked renderer entry")
+	queryRequireCancelled(t, release, func(ctx context.Context) (<-chan struct{}, error) {
+		return queryStopWorker(ctx, w, pty)
+	})
+}
+
+func TestQueryCleanupCancellationWhileRelayBlocked(t *testing.T) {
+	w, pty := newQueryWorker(t)
+	relay := &inputRelay{done: make(chan struct{})}
+	relay.wg.Add(1)
+	w.mu.Lock()
+	w.input = relay
+	w.mu.Unlock()
+	var once sync.Once
+	release := func() { once.Do(relay.wg.Done) }
+	t.Cleanup(release)
+	_ = pty.Close()
+	queryJoin(t, w.pumpDone, "pump before relay control")
+	queryRequireCancelled(t, release, func(ctx context.Context) (<-chan struct{}, error) {
+		return queryStopWorker(ctx, w, pty)
+	})
+}
+
+type queryHeldScreen struct {
+	terminalstate.Screen
+	started chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (s *queryHeldScreen) Write(data []byte) (int, error) {
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+	n, err := s.Screen.Write(data)
+	if err != nil {
+		return n, fmt.Errorf("write released query screen: %w", err)
+	}
+	return n, nil
+}
+
+func queryBlockedWorker(t *testing.T) (*Worker, *queryPTY, func(), <-chan struct{}) {
+	t.Helper()
+	gate := make(chan struct{})
+	screen := &queryHeldScreen{Screen: terminalstate.NewScreen(80, 6), started: make(chan struct{}), release: gate}
+	w, pty := newQueryWorkerScreen(t, screen)
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	return w, pty, release, screen.started
+}
+
+type queryOperationResult struct {
+	joined <-chan struct{}
+	err    error
+}
+
+func queryRequireCancelled(t *testing.T, release func(), operation func(context.Context) (<-chan struct{}, error)) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := make(chan queryOperationResult, 1)
+	go func() {
+		joined, err := operation(ctx)
+		result <- queryOperationResult{joined: joined, err: err}
+	}()
+	outcome := queryCancelledResult(t, result, release)
+	release()
+	if outcome.joined != nil {
+		queryJoin(t, outcome.joined, "released input relay closer")
+	}
+	if !errors.Is(outcome.err, context.Canceled) {
+		t.Errorf("blocked operation returned %v, want cancellation", outcome.err)
+	}
+}
+
+func queryCancelledResult(t *testing.T, result <-chan queryOperationResult, release func()) queryOperationResult {
+	t.Helper()
+	select {
+	case outcome := <-result:
+		return outcome
+	case <-time.After(2 * time.Second):
+		t.Error("blocked operation bypassed its canceled context")
+	}
+	release()
+	select {
+	case outcome := <-result:
+		return outcome
+	case <-time.After(2 * time.Second):
+		t.Fatal("released control operation did not join")
+		return queryOperationResult{}
+	}
 }
