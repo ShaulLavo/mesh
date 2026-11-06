@@ -98,6 +98,8 @@ func profileSection(snapshot hostprofile.Snapshot[hostprofile.HostProfile]) (age
 		state = "invalid"
 	case hostprofile.StateUnavailable:
 		state = "unavailable"
+	case hostprofile.StateUntrusted:
+		state = "untrusted"
 	default:
 		return agentapi.ProfileSection{}, errors.New("unknown stored profile state")
 	}

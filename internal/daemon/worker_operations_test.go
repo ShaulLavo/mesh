@@ -20,48 +20,53 @@ const testWorkerOperationTimeout = 20 * time.Millisecond
 func TestLifecycleBoundsWorkerAcknowledgementWithoutCallerDeadline(t *testing.T) {
 	for _, requestType := range []string{protocol.TypeKill, protocol.TypeLogs, protocol.TypeInspect, protocol.TypeHibernate, protocol.TypeSignal} {
 		t.Run(requestType, func(t *testing.T) {
-			worker := newRelayTestConn()
-			t.Cleanup(func() { _ = worker.Close() })
-			lifecycle := mustLifecycle(t, lifecycleConfig{
-				Catalog:   &lifecycleTestCatalog{sessions: []storage.Session{{ID: "7K3D", State: storage.StateRunning}}},
-				Connector: newRelayTestConnector(connectResult{conn: worker}),
-				Host:      storage.Host{ID: "host-a", MeshIdentity: "mesh-key"}, SessionsDir: "/state/s",
-				OperationTimeout: testWorkerOperationTimeout,
-			})
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			request := protocol.Control{Type: requestType, RequestID: "bounded-control", SessionID: "7K3D"}
-			switch requestType {
-			case protocol.TypeLogs:
-				request.Tail = 1
-			case protocol.TypeInspect:
-				request.PreviewCols, request.PreviewRows = 1, 1
-			case protocol.TypeSignal:
-				request.Signal = "term"
-			}
-			if requestType == protocol.TypeSignal {
-				_, release := worker.blockWrites()
-				defer release()
-			}
-			result := make(chan error, 1)
-			go func() {
-				_, _, err := lifecycle.HandleControl(ctx, request)
-				result <- err
-			}()
-			if requestType != protocol.TypeSignal {
-				assertRelayFrame(t, worker.nextWrite(t), controlFrame(t, request))
-			}
-			err := waitRelayError(t, result, "bounded worker acknowledgement")
-			if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "7K3D") || !strings.Contains(err.Error(), requestType) {
-				t.Fatalf("worker operation error = %v, want session, operation, and deadline", err)
-			}
-			worker.waitClosed(t)
-			select {
-			case frame := <-worker.writes:
-				t.Fatalf("timeout sent an extra worker frame: %+v", frame)
-			default:
-			}
+			assertBoundedWorkerAcknowledgement(t, requestType)
 		})
+	}
+}
+
+func assertBoundedWorkerAcknowledgement(t *testing.T, requestType string) {
+	t.Helper()
+	workerConn := newRelayTestConn()
+	t.Cleanup(func() { _ = workerConn.Close() })
+	lifecycle := mustLifecycle(t, lifecycleConfig{
+		Catalog:   &lifecycleTestCatalog{sessions: []storage.Session{{ID: "7K3D", State: storage.StateRunning}}},
+		Connector: newRelayTestConnector(connectResult{conn: workerConn}),
+		Host:      storage.Host{ID: "host-a", MeshIdentity: "mesh-key"}, SessionsDir: unlabelledHibernateWorker(t),
+		OperationTimeout: testWorkerOperationTimeout,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request := protocol.Control{Type: requestType, RequestID: "bounded-control", SessionID: "7K3D"}
+	switch requestType {
+	case protocol.TypeLogs:
+		request.Tail = 1
+	case protocol.TypeInspect:
+		request.PreviewCols, request.PreviewRows = 1, 1
+	case protocol.TypeSignal:
+		request.Signal = "term"
+	}
+	if requestType == protocol.TypeSignal {
+		_, release := workerConn.blockWrites()
+		defer release()
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, _, err := lifecycle.HandleControl(ctx, request)
+		result <- err
+	}()
+	if requestType != protocol.TypeSignal {
+		assertRelayFrame(t, workerConn.nextWrite(t), controlFrame(t, request))
+	}
+	err := waitRelayError(t, result, "bounded worker acknowledgement")
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "7K3D") || !strings.Contains(err.Error(), requestType) {
+		t.Fatalf("worker operation error = %v, want session, operation, and deadline", err)
+	}
+	workerConn.waitClosed(t)
+	select {
+	case frame := <-workerConn.writes:
+		t.Fatalf("timeout sent an extra worker frame: %+v", frame)
+	default:
 	}
 }
 

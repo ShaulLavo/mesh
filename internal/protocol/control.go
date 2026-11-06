@@ -40,6 +40,8 @@ const (
 	TypeRemove             = "session.remove"
 	TypeLogged             = "session.logged"
 	TypeHostInfo           = "host.info"
+	TypeHostContext        = "host.context"
+	TypeHostContextResult  = "host.context.result"
 	TypeHostRename         = "host.rename"
 	TypeHostRenamed        = "host.renamed"
 	TypeServicePreview     = "service.preview"
@@ -244,6 +246,7 @@ type CertificateInstall struct {
 // Control is the envelope for every JSON control message. Unused fields are
 // omitted so messages stay readable on the wire during debugging.
 type Control struct {
+	Context              json.RawMessage       `json:"context,omitempty"`
 	App                  json.RawMessage       `json:"app,omitempty"`
 	Copy                 json.RawMessage       `json:"copy,omitempty"`
 	Update               json.RawMessage       `json:"update,omitempty"`

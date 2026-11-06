@@ -37,7 +37,9 @@ func TestRequestedAndClassification(t *testing.T) {
 		{[]string{"profile", "set", "--file", "--json", "--expected-revision", "0"}, false, "profile.set"},
 		{[]string{"profile", "set", "--json", "--file", "--json=false", "--expected-revision", "0"}, true, "profile.set"},
 		{[]string{"profile", "edit", "--json", "--", "--json=false"}, true, "profile.edit"},
-		{[]string{"hosts", "--json"}, true, ""},
+		{[]string{"hosts", "--json"}, true, "hosts.list"},
+		{[]string{"inspect", "HOST_ID", "--json"}, true, "hosts.inspect"},
+		{[]string{"inspect", "--timeout", "--json"}, false, "hosts.inspect"},
 		{[]string{"skill", "nope", "--json"}, true, ""},
 		{[]string{"version", "--json"}, true, ""},
 	} {
