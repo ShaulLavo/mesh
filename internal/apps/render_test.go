@@ -181,6 +181,9 @@ func checkManagementContexts(t *testing.T, value string) {
 	if scriptString(t, body, `confirmID.value !== ("(?:\\.|[^"\\])*")`) != value {
 		t.Fatal("script ID changed")
 	}
+	if value != "" && pageText(pageNodes(root, "p")[0]) != value {
+		t.Fatal("error text changed")
+	}
 	start := renderPageBytes(pageData{PairStart: true, Return: value})
 	checkHiddenValues(t, parsePage(t, start), map[string]string{"return": value})
 	pending := renderPageBytes(pageData{Code: "test-code", Return: value, PairLifetimeMS: 12345})
@@ -190,7 +193,11 @@ func checkManagementContexts(t *testing.T, value string) {
 	}
 	list := pageData{Domain: value, Apps: []Record{{ID: value, Status: "active"}, {ID: value, Status: value}}}
 	checkReferencePage(t, list, renderPageBytes(list))
-	links := pageNodes(parsePage(t, renderPageBytes(list)), "a")
+	listRoot := parsePage(t, renderPageBytes(list))
+	if len(pageNodes(listRoot, "mesh-note")) != 0 || len(pageNodes(listRoot, "script")) != 0 {
+		t.Fatal("list data became markup")
+	}
+	links := pageNodes(listRoot, "a")
 	for _, link := range links[:4] {
 		checkQueryID(t, link, value)
 	}
@@ -232,5 +239,80 @@ func checkManagementHref(t *testing.T, target string) {
 		if pageAttr(link, "href") != "#ZgotmplZ" {
 			t.Fatal("unsupported scheme was not filtered")
 		}
+	}
+}
+
+func TestManagementRendererAllByteContexts(t *testing.T) {
+	for value := 0; value < 256; value++ {
+		text := string([]byte{'a', byte(value), 'z'})
+		data := pageData{Confirm: text, URL: "/notes/" + text, Return: text, CSRF: text, Error: text, App: Record{ID: text}}
+		checkReferencePage(t, data, renderPageBytes(data))
+		list := pageData{Domain: text, Apps: []Record{{ID: text, Status: "active"}}}
+		checkReferencePage(t, list, renderPageBytes(list))
+		pending := pageData{Code: text, Return: text, PairLifetimeMS: 12345}
+		checkReferencePage(t, pending, renderPageBytes(pending))
+	}
+}
+
+func TestManagementListOwnershipAndStatusControls(t *testing.T) {
+	f := newAppFixture(t)
+	owner := pairedOwner(t, f)
+	own := identityFor(f.ownerKey)
+	f.edge.mu.Lock()
+	for _, app := range []Record{
+		{ID: "7k3d", Owner: own, Status: "active", ExpiresAt: f.now.Add(time.Hour)},
+		{ID: "8k3d", Owner: own, Status: "expired", ExpiresAt: f.now.Add(-time.Hour)},
+		{ID: "9k3d", Owner: own, Status: "deleted", Cleanup: "pending"},
+		{ID: "ak3d", Owner: own, Status: "deleted", Cleanup: "complete"},
+		{ID: "bk3d", Owner: "another-owner", Status: "active"},
+	} {
+		f.edge.state.Apps[app.ID] = app
+	}
+	f.edge.mu.Unlock()
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest("GET", ManagementOrigin()+"/", nil)
+	request.AddCookie(owner)
+	f.edge.ServeHost(response, request, ManagementHost())
+	if response.Code != 200 {
+		t.Fatalf("management status = %d", response.Code)
+	}
+	root := parsePage(t, response.Body.Bytes())
+	text := pageText(root)
+	if strings.Contains(text, "ak3d") || strings.Contains(text, "bk3d") {
+		t.Fatal("list exposed a complete or unowned record")
+	}
+	for _, id := range []string{"7k3d", "8k3d", "9k3d"} {
+		if !strings.Contains(text, id) {
+			t.Fatalf("list omitted %s", id)
+		}
+	}
+	for _, link := range pageNodes(root, "a") {
+		checkStatusLink(t, link)
+	}
+	want := map[string]string{
+		"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "same-origin", "X-Content-Type-Options": "nosniff",
+		"Content-Security-Policy": "default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+	}
+	for key, value := range want {
+		if response.Header().Get(key) != value {
+			t.Errorf("%s = %q", key, response.Header().Get(key))
+		}
+	}
+	if response.Header().Get("Set-Cookie") != "" {
+		t.Fatal("list changed browser cookies")
+	}
+}
+
+func checkStatusLink(t *testing.T, link *html.Node) {
+	t.Helper()
+	target, err := url.Parse(pageAttr(link, "href"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Path != "/download" && target.Path != "/confirm" {
+		return
+	}
+	if target.Query().Get("id") != "7k3d" {
+		t.Fatal("inactive record has owner controls")
 	}
 }

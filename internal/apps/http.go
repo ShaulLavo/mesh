@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"io"
 	"net"
 	"net/http"
@@ -411,83 +410,6 @@ func (s *activeStream) Close() error {
 	return err
 }
 
-var page = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh temporary apps</title><style>body{font:16px system-ui;background:#101214;color:#eef0f2;margin:0;padding:24px}main{max-width:680px;margin:auto}a{color:#9ddcff}button,a.button{border:0;border-radius:999px;background:#e9edf2;color:#101214;padding:10px 16px;cursor:pointer;display:inline-block;text-decoration:none}code{font-size:16px;overflow-wrap:anywhere}small{color:#bcc4cb}form{display:inline}.error{color:#ffbab4}</style></head><body><main>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Code}}<h1>Pair this browser</h1><p>Approve from the Mesh host that owns the app:</p><code>mesh app browser approve HOST {{.Code}}</code><p>Code: <strong>{{.Code}}</strong></p><p>Expires in 10 minutes.</p><p id="pair-status" role="status">Waiting for approval. This page will continue automatically.</p><button id="check-approval" type="button">Check now</button><p><a id="restart-pair" href="/pair" hidden>Get a new code</a></p>{{else if .PairStart}}<h1>Pair this browser</h1><p>Start pairing, then approve the code on the Mesh host that owns your app.</p><form method="post" action="/pair"><input type="hidden" name="return" value="{{.Return}}"><button>Start pairing</button></form>{{else if .Confirm}}<h1>{{.Confirm}} {{.App.ID}}</h1><p>Owner controls for <a href="{{.URL}}">{{.URL}}</a>.</p><form id="confirm-form" method="post" action="/action"><input type="hidden" name="id" value="{{.App.ID}}"><input type="hidden" name="action" value="{{.Confirm}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="return" value="{{.Return}}">{{if eq .Confirm "delete"}}<p><label>Type {{.App.ID}} to confirm <input id="confirm-id" name="confirmation" autocomplete="off" required></label></p>{{end}}<p><small>Read the change, then move the pointer or use the keyboard to enable confirmation.</small></p><button id="confirm-action" disabled>Confirm {{.Confirm}}</button></form>{{else}}<h1>Temporary apps</h1><p>Apps expire after 24 hours without app traffic. Expiry deletes their managed source, data and server.</p>{{range .Apps}}<p><a href="/view?id={{.ID}}">https://{{.ID}}.{{$.Domain}}</a> · {{.Status}}<br><small>Expires {{.ExpiresAt}}</small>{{if eq .Status "active"}}<br><a href="/download?id={{.ID}}">Download source</a> · <a href="/confirm?id={{.ID}}&action=renew">Renew</a> · <a href="/confirm?id={{.ID}}&action=delete">Delete</a>{{end}}</p>{{end}}<a href="/pair">Pair another owner</a>{{end}}</main>{{if .Code}}<script>
-const checkButton = document.getElementById('check-approval');
-const status = document.getElementById('pair-status');
-const expiresAt = performance.now() + {{.PairLifetimeMS}};
-let checking = false;
-let timer;
-let finished = false;
-function expired() {
-  finished = true;
-  status.textContent = 'This code expired. Get a new code to try again.';
-  checkButton.hidden = true;
-  document.getElementById('restart-pair').hidden = false;
-}
-async function checkApproval() {
-  if (checking || finished) return;
-  clearTimeout(timer);
-  if (performance.now() >= expiresAt) { expired(); return; }
-  checking = true;
-  checkButton.disabled = true;
-  const abort = new AbortController();
-  const timeout = setTimeout(() => abort.abort(), 10000);
-  try {
-    const response = await fetch('/pair/status', {credentials: 'same-origin', cache: 'no-store', signal: abort.signal});
-    if (response.status === 200) { finished = true; location.replace({{.Return}}); return; }
-    if (response.status === 410) { expired(); return; }
-    status.textContent = response.status === 202
-      ? 'Waiting for approval. This page will continue automatically.'
-      : 'Could not check approval. Retrying automatically.';
-  } catch {
-    status.textContent = 'Could not check approval. Retrying automatically.';
-  } finally {
-    clearTimeout(timeout);
-    checking = false;
-    checkButton.disabled = false;
-    if (!finished) timer = setTimeout(checkApproval, 1500);
-  }
-}
-checkButton.addEventListener('click', checkApproval);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) checkApproval(); });
-checkApproval();
-</script>{{end}}{{if .Confirm}}<script>
-const confirmButton = document.getElementById('confirm-action');
-const confirmForm = document.getElementById('confirm-form');
-const confirmID = document.getElementById('confirm-id');
-let focusedAt = null;
-let deliberate = false;
-function activePage() { return document.visibilityState === 'visible' && document.hasFocus(); }
-function updateActivation() {
-  confirmButton.disabled = !activePage() || focusedAt === null || performance.now() - focusedAt < 750 || !deliberate || (confirmID && confirmID.value !== {{.App.ID}});
-}
-function resetActivation() {
-  deliberate = false;
-  focusedAt = activePage() ? performance.now() : null;
-  confirmButton.disabled = true;
-}
-function deliberateInput(event) {
-  if (event.isTrusted && activePage() && focusedAt !== null && performance.now() - focusedAt >= 750) {
-    deliberate = true;
-    updateActivation();
-  }
-}
-window.addEventListener('focus', resetActivation);
-window.addEventListener('blur', resetActivation);
-window.addEventListener('pageshow', resetActivation);
-document.addEventListener('visibilitychange', resetActivation);
-document.addEventListener('pointermove', deliberateInput);
-document.addEventListener('pointerdown', deliberateInput, true);
-document.addEventListener('touchstart', deliberateInput, {capture: true, passive: true});
-document.addEventListener('keydown', deliberateInput);
-if (confirmID) confirmID.addEventListener('input', updateActivation);
-confirmForm.addEventListener('submit', event => {
-  updateActivation();
-  if (confirmButton.disabled) event.preventDefault();
-});
-resetActivation();
-</script>{{end}}</body></html>`))
-
 type pageData struct {
 	Domain                                  string
 	Error, Code, Return, URL, Confirm, CSRF string
@@ -500,7 +422,7 @@ type pageData struct {
 func render(w http.ResponseWriter, data pageData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = page.Execute(w, data)
+	_, _ = io.WriteString(w, managementPage(data))
 }
 func (e *Registry) management(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {

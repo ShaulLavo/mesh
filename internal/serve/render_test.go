@@ -71,9 +71,7 @@ func checkDirectoryReference(t *testing.T, href string) {
 	if err := referenceDirectory.Execute(&want, data); err != nil {
 		t.Fatal(err)
 	}
-	if err := directoryTemplate.Execute(&got, data); err != nil {
-		t.Fatal(err)
-	}
+	renderDirectory(&got, data)
 	if !bytes.Equal(want.Bytes(), got.Bytes()) {
 		t.Fatalf("listing differs from reference\ngot: %s\nwant: %s", got.Bytes(), want.Bytes())
 	}
