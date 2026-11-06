@@ -35,6 +35,10 @@ func readState(configDir string) (book, error) {
 }
 
 func updateState(ctx context.Context, configDir string, operation func(*book) error) error {
+	return updateStateWithPublisher(ctx, configDir, operation, publishBook)
+}
+
+func updateStateWithPublisher(ctx context.Context, configDir string, operation func(*book) error, publish func(*os.File, []byte) error) error {
 	dir, err := openDirectory(configDir, true)
 	if err != nil || dir == nil {
 		return err
@@ -59,7 +63,11 @@ func updateState(ctx context.Context, configDir string, operation func(*book) er
 	if err := validateBook(&state); err != nil {
 		return err
 	}
-	return publishBook(dir, state)
+	contents, err := encodeBook(state)
+	if err != nil {
+		return err
+	}
+	return publish(dir, contents)
 }
 
 func openDirectory(path string, create bool) (*os.File, error) {
@@ -225,14 +233,22 @@ func foldedRune(char rune) rune {
 	return folded
 }
 
-func publishBook(dir *os.File, state book) error {
+func encodeBook(state book) ([]byte, error) {
 	contents, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
-		return fmt.Errorf("fleet: encode configuration: %w", err)
+		return nil, fmt.Errorf("fleet: encode configuration: %w", err)
 	}
 	if len(contents) >= maximumBytes {
-		return errors.New("fleet: configuration exceeds 32 MiB")
+		return nil, errors.New("fleet: configuration exceeds 32 MiB")
 	}
+	return contents, nil
+}
+
+func publishBook(dir *os.File, contents []byte) error {
+	return publishBookWithSync(dir, contents, (*os.File).Sync)
+}
+
+func publishBookWithSync(dir *os.File, contents []byte, syncFile func(*os.File) error) error {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return fmt.Errorf("fleet: generate temporary filename: %w", err)
@@ -246,7 +262,7 @@ func publishBook(dir *os.File, state book) error {
 	if _, err := file.Write(append(contents, '\n')); err != nil {
 		return fmt.Errorf("fleet: write configuration: %w", err)
 	}
-	if err := file.Sync(); err != nil {
+	if err := syncFile(file); err != nil {
 		return fmt.Errorf("fleet: sync configuration: %w", err)
 	}
 	if err := file.Close(); err != nil {
@@ -255,7 +271,7 @@ func publishBook(dir *os.File, state book) error {
 	if err := unix.Renameat(int(dir.Fd()), name, int(dir.Fd()), bookName); err != nil {
 		return fmt.Errorf("fleet: publish configuration: %w", err)
 	}
-	if err := dir.Sync(); err != nil {
+	if err := syncFile(dir); err != nil {
 		return fmt.Errorf("fleet: sync configuration directory: %w", err)
 	}
 	return nil

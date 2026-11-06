@@ -286,6 +286,244 @@ func TestEnrollmentIsIdempotentAndRetainsSnapshot(t *testing.T) {
 	requireHosts(t, a.dir, testHost(1))
 }
 
+func TestUnchangedFleetOperationsKeepPublishedFile(t *testing.T) {
+	dir := t.TempDir()
+	host := testHost(1)
+	peer := Peer{Identity: host.ID, Endpoint: host.Endpoint}
+	if err := Enroll(dir, peer); err != nil {
+		t.Fatal(err)
+	}
+	state, err := readState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := state.Peers[0]
+	if err := replaceSnapshot(t.Context(), dir, source, []protocol.FleetHost{host}); err != nil {
+		t.Fatal(err)
+	}
+	before := fleetBookInfo(t, dir)
+	if err := Enroll(dir, peer); err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, fleetBookInfo(t, dir)) {
+		t.Error("identical enrollment replaced the published file")
+	}
+	if err := replaceSnapshot(t.Context(), dir, source, []protocol.FleetHost{host}); err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, fleetBookInfo(t, dir)) {
+		t.Error("identical snapshot replaced the published file")
+	}
+}
+
+func fleetBookInfo(t *testing.T, dir string) os.FileInfo {
+	t.Helper()
+	info, err := os.Stat(filepath.Join(dir, bookName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info
+}
+
+type snapshotPublisher struct {
+	dir       string
+	source    enrollment
+	publishes int
+	fileSyncs int
+	dirSyncs  int
+	failFile  bool
+	failDir   bool
+}
+
+func newSnapshotPublisher(t *testing.T) *snapshotPublisher {
+	t.Helper()
+	host := testHost(1)
+	p := &snapshotPublisher{dir: t.TempDir()}
+	if err := Enroll(p.dir, Peer{Identity: host.ID, Endpoint: host.Endpoint}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := readState(p.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.source = state.Peers[0]
+	return p
+}
+
+func (p *snapshotPublisher) publish(dir *os.File, contents []byte) error {
+	p.publishes++
+	return publishBookWithSync(dir, contents, p.syncFile)
+}
+
+func (p *snapshotPublisher) syncFile(file *os.File) error {
+	fail := p.failFile
+	if file.Name() == p.dir {
+		p.dirSyncs++
+		fail = p.failDir
+	} else {
+		p.fileSyncs++
+	}
+	if fail {
+		return unix.EIO
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync fixture publication: %w", err)
+	}
+	return nil
+}
+
+func (p *snapshotPublisher) replace(ctx context.Context, hosts []protocol.FleetHost) error {
+	return updateStateWithPublisher(ctx, p.dir, func(state *book) error {
+		replaceCurrentSnapshot(state, p.source, hosts)
+		return nil
+	}, p.publish)
+}
+
+func (p *snapshotPublisher) requireCounts(t *testing.T, publishes, fileSyncs, dirSyncs int) {
+	t.Helper()
+	if p.publishes != publishes || p.fileSyncs != fileSyncs || p.dirSyncs != dirSyncs {
+		t.Fatalf("publication/file sync/directory sync counts = %d/%d/%d, want %d/%d/%d", p.publishes, p.fileSyncs, p.dirSyncs, publishes, fileSyncs, dirSyncs)
+	}
+}
+
+func TestSnapshotPublicationCounts(t *testing.T) {
+	p := newSnapshotPublisher(t)
+	hosts := []protocol.FleetHost{testHost(1)}
+	started := time.Now()
+	for range 20 {
+		if err := p.replace(t.Context(), hosts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.requireCounts(t, 1, 1, 1)
+	for index := range 20 {
+		hosts[0].TailscaleName = fmt.Sprintf("host-%d", index)
+		if err := p.replace(t.Context(), hosts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.requireCounts(t, 21, 21, 21)
+	requireHosts(t, p.dir, hosts...)
+	t.Logf("20 repeated and 20 changed pulls: 21 publications, 21 file syncs, 21 directory syncs; wall time %s", time.Since(started))
+}
+
+func TestSnapshotPublicationFailureRetries(t *testing.T) {
+	for _, afterRename := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after-rename-%t", afterRename), func(t *testing.T) {
+			testSnapshotPublicationFailure(t, afterRename)
+		})
+	}
+}
+
+func testSnapshotPublicationFailure(t *testing.T, afterRename bool) {
+	t.Helper()
+	p := newSnapshotPublisher(t)
+	old, changed := []protocol.FleetHost{testHost(1)}, []protocol.FleetHost{testHost(2)}
+	if err := p.replace(t.Context(), old); err != nil {
+		t.Fatal(err)
+	}
+	p.failDir, p.failFile = afterRename, !afterRename
+	if err := p.replace(t.Context(), changed); !errors.Is(err, unix.EIO) {
+		t.Fatalf("publication failure = %v, want EIO", err)
+	}
+	visible := old
+	if afterRename {
+		visible = changed
+	}
+	requireHosts(t, p.dir, visible...)
+	retained, err := readState(p.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed[0].Addresses[0] = "100.64.0.99"
+	afterMutation, err := readState(p.dir)
+	if err != nil || !reflect.DeepEqual(retained, afterMutation) {
+		t.Fatalf("input mutation changed retained snapshot: %v", err)
+	}
+	changed[0].Addresses[0] = "100.64.0.2"
+	retry := &snapshotPublisher{dir: p.dir, source: p.source}
+	if err := retry.replace(t.Context(), changed); err != nil {
+		t.Fatal(err)
+	}
+	retry.requireCounts(t, 1, 1, 1)
+	requireHosts(t, p.dir, changed...)
+	if err := retry.replace(t.Context(), changed); err != nil {
+		t.Fatal(err)
+	}
+	retry.requireCounts(t, 1, 1, 1)
+}
+
+func TestSnapshotEqualityPreservesAllPersistedFields(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func([]protocol.FleetHost)
+	}{
+		{"identity", func(hosts []protocol.FleetHost) { hosts[0].ID = testHost(3).ID; hosts[0].MeshIdentity = testHost(3).ID }},
+		{"endpoint", func(hosts []protocol.FleetHost) { hosts[0].Endpoint = "wss://host.example/mesh" }},
+		{"name", func(hosts []protocol.FleetHost) { hosts[0].TailscaleName = "host.example" }},
+		{"address", func(hosts []protocol.FleetHost) { hosts[0].Addresses[0] = "100.64.0.99" }},
+		{"address-order", func(hosts []protocol.FleetHost) { hosts[0].Addresses = []string{"100.64.0.3", "100.64.0.2"} }},
+		{"host-order", func(hosts []protocol.FleetHost) { hosts[0], hosts[1] = hosts[1], hosts[0] }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) { testSnapshotFieldChange(t, test.change) })
+	}
+}
+
+func testSnapshotFieldChange(t *testing.T, change func([]protocol.FleetHost)) {
+	t.Helper()
+	p := newSnapshotPublisher(t)
+	hosts := []protocol.FleetHost{testHost(1), testHost(2)}
+	hosts[0].Addresses = []string{"100.64.0.2", "100.64.0.3"}
+	if err := p.replace(t.Context(), hosts); err != nil {
+		t.Fatal(err)
+	}
+	change(hosts)
+	if err := p.replace(t.Context(), hosts); err != nil {
+		t.Fatal(err)
+	}
+	p.requireCounts(t, 2, 2, 2)
+	if err := p.replace(t.Context(), hosts); err != nil {
+		t.Fatal(err)
+	}
+	p.requireCounts(t, 2, 2, 2)
+}
+
+func TestEmptyAndStaleSnapshotsDoNotPublish(t *testing.T) {
+	p := newSnapshotPublisher(t)
+	if err := p.replace(t.Context(), []protocol.FleetHost{}); err != nil {
+		t.Fatal(err)
+	}
+	host := testHost(1)
+	host.Addresses = nil
+	if err := p.replace(t.Context(), []protocol.FleetHost{host}); err != nil {
+		t.Fatal(err)
+	}
+	host.Addresses = []string{}
+	if err := p.replace(t.Context(), []protocol.FleetHost{host}); err != nil {
+		t.Fatal(err)
+	}
+	p.requireCounts(t, 1, 1, 1)
+	if err := p.replace(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.replace(t.Context(), []protocol.FleetHost{}); err != nil {
+		t.Fatal(err)
+	}
+	p.source.Generation = strings.Repeat("f", 32)
+	if err := p.replace(t.Context(), []protocol.FleetHost{testHost(2)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(p.dir, p.source.Identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.replace(t.Context(), []protocol.FleetHost{testHost(2)}); err != nil {
+		t.Fatal(err)
+	}
+	p.requireCounts(t, 2, 2, 2)
+	requireHosts(t, p.dir)
+}
+
 func TestValidationRejectsChangedPinsDuplicatesAndBounds(t *testing.T) {
 	valid := testHost(1)
 	changed := valid
