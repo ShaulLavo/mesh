@@ -10,6 +10,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -54,6 +55,11 @@ func validPath(value string) bool {
 	if value == "" || len(value) > 512 || !utf8.ValidString(value) || path.IsAbs(value) || path.Clean(value) != value || strings.ContainsAny(value, "\\\x00") {
 		return false
 	}
+	for _, char := range value {
+		if unicode.IsControl(char) {
+			return false
+		}
+	}
 	for _, part := range strings.Split(value, "/") {
 		if part == "" || part == "." || part == ".." || strings.EqualFold(part, manifestName) {
 			return false
@@ -67,7 +73,7 @@ func validateFiles(files []ManagedFile) error {
 	}
 	seen := map[string]bool{}
 	for _, file := range files {
-		key := strings.ToLower(file.Path)
+		key := foldPath(file.Path)
 		if !validPath(file.Path) || !validHash(file.SHA256) || seen[key] {
 			return fmt.Errorf("invalid or duplicate managed path %q", file.Path)
 		}
@@ -95,6 +101,9 @@ func parseManifest(data []byte) (Manifest, error) {
 	}
 	if manifest.Version != 1 || !validHash(manifest.Bundle) || len(manifest.MeshVersion) > 128 {
 		return manifest, errors.New("invalid skill manifest version or bundle")
+	}
+	if err := validateManifestPaths(manifest); err != nil {
+		return manifest, err
 	}
 	if err := validateFiles(manifest.Files); err != nil {
 		return manifest, err
@@ -149,10 +158,8 @@ func checkJSON(decoder *json.Decoder, depth int) error {
 	}
 	seen := map[string]bool{}
 	for decoder.More() {
-		if delimiter == '{' {
-			if err := checkKey(decoder, seen); err != nil {
-				return err
-			}
+		if err := checkObjectKey(decoder, delimiter, seen); err != nil {
+			return err
 		}
 		if err := checkJSON(decoder, depth+1); err != nil {
 			return err
@@ -203,4 +210,65 @@ func allManaged(manifest Manifest) []ManagedFile {
 		entries = append(entries, manifest.Pending.Files...)
 	}
 	return entries
+}
+
+func foldPath(value string) string {
+	return strings.Map(func(char rune) rune {
+		lowest := char
+		for next := unicode.SimpleFold(char); next != char; next = unicode.SimpleFold(next) {
+			if next < lowest {
+				lowest = next
+			}
+		}
+		return lowest
+	}, value)
+}
+
+func checkObjectKey(decoder *json.Decoder, delimiter json.Delim, seen map[string]bool) error {
+	if delimiter != '{' {
+		return nil
+	}
+	return checkKey(decoder, seen)
+}
+func validateManifestPaths(manifest Manifest) error {
+	names := map[string]string{}
+	groups := [][]ManagedFile{manifest.Files, manifest.Proposed}
+	if manifest.Pending != nil {
+		groups = append(groups, manifest.Pending.Files, manifest.Pending.Proposed)
+	}
+	for _, group := range groups {
+		if err := addManifestPaths(group, names); err != nil {
+			return err
+		}
+	}
+	for folded := range names {
+		if hasNamedAncestor(folded, names) {
+			return errors.New("skill manifest paths overlap across baselines")
+		}
+	}
+	return nil
+}
+func addManifestPaths(files []ManagedFile, names map[string]string) error {
+	for _, file := range files {
+		if !validPath(file.Path) {
+			return errors.New("invalid skill manifest path")
+		}
+		folded := foldPath(file.Path)
+		if existing, ok := names[folded]; ok && existing != file.Path {
+			return errors.New("skill manifest paths collide across baselines")
+		}
+		names[folded] = file.Path
+	}
+	if len(names) > maximumFiles {
+		return errors.New("skill manifest has too many distinct paths")
+	}
+	return nil
+}
+func hasNamedAncestor(name string, names map[string]string) bool {
+	for parent := path.Dir(name); parent != "."; parent = path.Dir(parent) {
+		if _, found := names[parent]; found {
+			return true
+		}
+	}
+	return false
 }

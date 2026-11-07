@@ -68,7 +68,14 @@ func TestManagedInstallRetryAndCanonicalRegistry(t *testing.T) {
 		t.Fatalf("install %#v", root)
 	}
 	before := read(t, filepath.Join(f.root, "mesh", manifestName))
+	beforeInfo, err := os.Stat(filepath.Join(f.root, "mesh", manifestName))
+	must(t, err)
 	root = apply(t, f, "install")
+	afterInfo, err := os.Stat(filepath.Join(f.root, "mesh", manifestName))
+	must(t, err)
+	if !os.SameFile(beforeInfo, afterInfo) {
+		t.Fatal("same-bundle install rewrote the manifest")
+	}
 	if !bytes.Equal(before, read(t, filepath.Join(f.root, "mesh", manifestName))) {
 		t.Fatal("identical install changed manifest")
 	}
@@ -346,7 +353,7 @@ func TestRegistryBoundsAndAllRoots(t *testing.T) {
 	registry, err := f.manager.registrySnapshot()
 	must(t, err)
 	for len(registry.Roots) < maximumRoots {
-		registry.Roots = append(registry.Roots, registeredRoot{Path: fmt.Sprintf("/fixture/%d", len(registry.Roots)), InstalledAt: registry.Roots[0].InstalledAt})
+		registry.Roots = append(registry.Roots, registeredRoot{Path: filepath.Join(f.manager.ConfigDir, "registered-fixtures", fmt.Sprint(len(registry.Roots))), InstalledAt: registry.Roots[0].InstalledAt})
 	}
 	encoded, err := json.Marshal(registry)
 	must(t, err)
@@ -444,4 +451,127 @@ func TestAbsentRegistrationRepairAndMissingRegisteredRoot(t *testing.T) {
 		t.Fatalf("missing registered root %#v", status)
 	}
 	apply(t, f, actionUninstall)
+}
+
+func TestInterruptedUninstallKeepsPendingAndCleansProposals(t *testing.T) {
+	f := setup(t)
+	apply(t, f, "install")
+	f.manager.syncDir = failOnce("references/safety.md")
+	roots, err := f.manager.Apply(t.Context(), actionUninstall, f.root)
+	must(t, err)
+	if len(roots[0].Problems) == 0 {
+		t.Fatal("nested removal barrier failure hidden")
+	}
+	manifest, err := parseManifest(read(t, filepath.Join(f.root, "mesh", manifestName)))
+	must(t, err)
+	if manifest.Pending == nil || !manifest.Pending.Remove {
+		t.Fatal("uninstall did not retain pending baselines")
+	}
+	f.manager.syncDir = nil
+	apply(t, f, actionUninstall)
+	if _, err := os.Stat(filepath.Join(f.root, "mesh")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("uninstall retry left managed tree")
+	}
+}
+func TestNewInstallBarrierFailureCleansUnpublishedStage(t *testing.T) {
+	f := setup(t)
+	f.manager.syncDir = failOnce("references/safety.md")
+	roots, err := f.manager.Apply(t.Context(), "install", f.root)
+	must(t, err)
+	if len(roots[0].Problems) == 0 {
+		t.Fatal("staging failure acknowledged")
+	}
+	entries, err := os.ReadDir(f.root)
+	must(t, err)
+	if len(entries) != 0 {
+		t.Fatalf("unpublished staging tree retained %#v", entries)
+	}
+	f.manager.syncDir = nil
+	apply(t, f, "install")
+}
+func TestBundleHashDoesNotMaskMissingOrForgedManagedHashes(t *testing.T) {
+	f := setup(t)
+	apply(t, f, "install")
+	path := filepath.Join(f.root, "mesh", manifestName)
+	manifest, err := parseManifest(read(t, path))
+	must(t, err)
+	manifest.Files = manifest.Files[:1]
+	encoded, err := json.Marshal(manifest)
+	must(t, err)
+	write(t, path, encoded)
+	roots, err := f.manager.Status(f.root)
+	must(t, err)
+	if roots[0].State == stateCurrent {
+		t.Fatal("bundle digest alone reported current")
+	}
+}
+
+func TestLargeCustomizationsAreRetainedAndReported(t *testing.T) {
+	f := setup(t)
+	apply(t, f, "install")
+	path := filepath.Join(f.root, "mesh", "SKILL.md")
+	edited := bytes.Repeat([]byte("customization"), maximumBundle/10)
+	write(t, path, edited)
+	roots, err := f.manager.Apply(t.Context(), "update", f.root)
+	must(t, err)
+	if roots[0].State != stateModified || len(roots[0].ProposedFiles) != 1 {
+		t.Fatalf("large edit not classified %#v", roots)
+	}
+	proposal := roots[0].ProposedFiles[0]
+	write(t, proposal, edited)
+	result := apply(t, f, actionUninstall)
+	if len(result.RetainedFiles) != 2 || !bytes.Equal(read(t, path), edited) || !bytes.Equal(read(t, proposal), edited) {
+		t.Fatal("large customization lost or not reported")
+	}
+}
+func TestPendingPathsCannotCollideAcrossBaselines(t *testing.T) {
+	hash := hashBytes(nil)
+	manifest := Manifest{Version: 1, Bundle: hash, Files: []ManagedFile{{"SKILL.md", hash}}, Pending: &Pending{Bundle: hash, Files: []ManagedFile{{"skill.md", hash}}}}
+	encoded, err := json.Marshal(manifest)
+	must(t, err)
+	if _, err := parseManifest(encoded); err == nil {
+		t.Fatal("case collision across committed and pending files accepted")
+	}
+}
+func TestInitialPublicationNeverClobbersNewDirectory(t *testing.T) {
+	f := setup(t)
+	injected := false
+	f.manager.syncDir = func(dir *os.File, label string) error {
+		if label == manifestName && !injected {
+			injected = true
+			must(t, os.Mkdir(filepath.Join(f.root, "mesh"), 0700))
+			write(t, filepath.Join(f.root, "mesh", "custom"), []byte("sentinel"))
+		}
+		return dir.Sync()
+	}
+	roots, err := f.manager.Apply(t.Context(), "install", f.root)
+	must(t, err)
+	if len(roots[0].Problems) == 0 || string(read(t, filepath.Join(f.root, "mesh", "custom"))) != "sentinel" {
+		t.Fatal("initial install clobbered a concurrent tree")
+	}
+	entries, err := os.ReadDir(f.root)
+	must(t, err)
+	if len(entries) != 1 {
+		t.Fatal("failed initial install left stage")
+	}
+}
+
+func TestUninstallPrunesOnlyEmptyProposalDirectories(t *testing.T) {
+	f := setup(t)
+	apply(t, f, "install")
+	customized := filepath.Join(f.root, "mesh", "SKILL.md")
+	write(t, customized, []byte("customized"))
+	roots, err := f.manager.Apply(t.Context(), "update", f.root)
+	must(t, err)
+	proposal := roots[0].ProposedFiles[0]
+	apply(t, f, actionUninstall)
+	if _, err := os.Stat(proposal); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("unchanged proposal survived uninstall")
+	}
+	if _, err := os.Stat(filepath.Join(f.manager.StateDir, "skills")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("empty owned proposal directories survived uninstall")
+	}
+	if string(read(t, customized)) != "customized" {
+		t.Fatal("customized managed file removed")
+	}
 }

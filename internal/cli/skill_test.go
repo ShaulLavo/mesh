@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/skills"
+	"github.com/spf13/cobra"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/shaul/mesh/internal/agentapi"
@@ -84,5 +88,19 @@ func assertSkillFailure(t *testing.T, stdout, stderr string, err error, code str
 	}
 	if status, ok := StatusCode(err); !ok || status != exit || stderr != "" {
 		t.Fatalf("exit=%v stderr=%s", err, stderr)
+	}
+}
+
+func TestSkillHumanOutputUsesExistingPathPrivacy(t *testing.T) {
+	var output bytes.Buffer
+	command := &cobra.Command{}
+	command.SetOut(&output)
+	app := application{privacy: privacy.New()}
+	data := agentapi.SkillResult{Roots: []agentapi.SkillRoot{{Path: "/home/private-owner/skills", State: "modified", RegistrationState: "registered", ProposedFiles: []string{"/home/private-owner/state/proposal"}, RetainedFiles: []string{"/home/private-owner/custom"}}}}
+	if err := app.printSkillResult(command, data, nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "private-owner") {
+		t.Fatalf("private home path leaked: %s", output.String())
 	}
 }

@@ -151,7 +151,7 @@ func classifyTree(tree *os.File, manifest Manifest, result *Root) error {
 			continue
 		}
 		seen[entry.Path] = true
-		data, err := readAt(tree, entry.Path, maximumBundle)
+		data, oversized, err := readManaged(tree, entry.Path)
 		if errors.Is(err, os.ErrNotExist) {
 			result.MissingFiles = append(result.MissingFiles, entry.Path)
 			continue
@@ -159,7 +159,7 @@ func classifyTree(tree *os.File, manifest Manifest, result *Root) error {
 		if err != nil {
 			return err
 		}
-		if !baselineMatches(entry.Path, data, allManaged(manifest)) {
+		if oversized || !baselineMatches(entry.Path, data, allManaged(manifest)) {
 			result.ModifiedFiles = append(result.ModifiedFiles, entry.Path)
 		}
 	}
@@ -337,7 +337,10 @@ func (m *Manager) discardStage(root, tree *os.File, stage string) {
 }
 func (m *Manager) update(tree *os.File, manifest Manifest, result *Root) error {
 	files := m.bundle()
-	digest := bundleDigest(files)
+	digest := m.digest()
+	if manifest.Pending == nil && manifest.Bundle == digest && manifestMatchesBundle(manifest, files) && len(result.ModifiedFiles) == 0 && len(result.MissingFiles) == 0 {
+		return m.settleCurrent(tree, manifest, result)
+	}
 	if err := classifyProposedPaths(tree, files, allManaged(manifest), result); err != nil {
 		return err
 	}
@@ -387,17 +390,17 @@ func (m *Manager) replaceFiles(tree *os.File, old []ManagedFile, manifest Manife
 	return m.removeDirectories(tree, old)
 }
 func (m *Manager) replaceFile(tree *os.File, file File, old []ManagedFile, manifest Manifest, result *Root) error {
-	data, err := readAt(tree, file.Path, maximumBundle)
+	data, oversized, err := readManaged(tree, file.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		return m.publish(tree, file.Path, file.Data, 0644)
 	}
 	if err != nil {
 		return err
 	}
-	if string(data) == string(file.Data) {
+	if !oversized && string(data) == string(file.Data) {
 		return m.settleFile(tree, file.Path)
 	}
-	if baselineMatches(file.Path, data, old) {
+	if !oversized && baselineMatches(file.Path, data, old) {
 		return m.publish(tree, file.Path, file.Data, 0644)
 	}
 	if !slices.Contains(result.ModifiedFiles, file.Path) {
@@ -503,6 +506,9 @@ func (m *Manager) uninstall(root, tree *os.File, manifest Manifest, result *Root
 	if err := m.removeProposals(manifest, result); err != nil {
 		return err
 	}
+	if err := m.pruneProposalDirectories(manifest, result.Path); err != nil {
+		return err
+	}
 	if err := m.removeDirectories(tree, entries); err != nil {
 		return err
 	}
@@ -542,9 +548,15 @@ func mergeProposals(old, next []ManagedFile) []ManagedFile {
 }
 func (m *Manager) proposalDirectory(root string, create bool) (*os.File, string, error) {
 	path := filepath.Join(m.StateDir, "skills", "proposed", hashBytes([]byte(root)))
-	dir, err := openDirectory(path, create)
+	state, err := openDirectory(m.StateDir, create)
+	if err != nil {
+		return nil, path, err
+	}
+	defer func() { _ = state.Close() }()
+	dir, _, err := fileParent(state, "skills/proposed/"+hashBytes([]byte(root))+"/anchor", create)
 	return dir, path, err
 }
+
 func (m *Manager) propose(file File, manifest Manifest, result *Root) error {
 	dir, path, err := m.proposalDirectory(result.Path, true)
 	if err != nil {
@@ -553,11 +565,11 @@ func (m *Manager) propose(file File, manifest Manifest, result *Root) error {
 	defer func() { _ = dir.Close() }()
 	proposed := filepath.Join(path, filepath.FromSlash(file.Path))
 	result.ProposedFiles = append(result.ProposedFiles, proposed)
-	data, err := readAt(dir, file.Path, maximumBundle)
+	data, oversized, err := readManaged(dir, file.Path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err == nil && !baselineMatches(file.Path, data, manifest.Proposed) && !baselineMatches(file.Path, data, manifest.Pending.Proposed) {
+	if oversized || err == nil && !baselineMatches(file.Path, data, manifest.Proposed) && !baselineMatches(file.Path, data, manifest.Pending.Proposed) {
 		result.RetainedFiles = append(result.RetainedFiles, proposed)
 		return conflict("a user-modified proposal was retained at " + proposed)
 	}
@@ -587,14 +599,14 @@ func (m *Manager) removeProposals(manifest Manifest, result *Root) error {
 	return m.removeDirectories(dir, entries)
 }
 func (m *Manager) removeProposal(dir *os.File, entries []ManagedFile, name string, result *Root) error {
-	data, err := readAt(dir, name, maximumBundle)
+	data, oversized, err := readManaged(dir, name)
 	if errors.Is(err, os.ErrNotExist) {
 		return m.removeAt(dir, name)
 	}
 	if err != nil {
 		return err
 	}
-	if !baselineMatches(name, data, entries) {
+	if oversized || !baselineMatches(name, data, entries) {
 		path := filepath.Join(m.StateDir, "skills", "proposed", hashBytes([]byte(result.Path)))
 		result.RetainedFiles = append(result.RetainedFiles, filepath.Join(path, name))
 		return nil
@@ -604,14 +616,14 @@ func (m *Manager) removeProposal(dir *os.File, entries []ManagedFile, name strin
 
 func classifyProposedPaths(tree *os.File, files []File, baseline []ManagedFile, result *Root) error {
 	for _, file := range files {
-		data, err := readAt(tree, file.Path, maximumBundle)
+		data, oversized, err := readManaged(tree, file.Path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return err
 		}
-		if string(data) == string(file.Data) || baselineMatches(file.Path, data, baseline) || slices.Contains(result.ModifiedFiles, file.Path) {
+		if slices.Contains(result.ModifiedFiles, file.Path) || !oversized && (string(data) == string(file.Data) || baselineMatches(file.Path, data, baseline)) {
 			continue
 		}
 		result.ModifiedFiles = append(result.ModifiedFiles, file.Path)
@@ -635,4 +647,39 @@ func retainedFiles(next, old []ManagedFile, modified []string) []ManagedFile {
 		result = append(result, entry)
 	}
 	return result
+}
+
+func (m *Manager) settleCurrent(tree *os.File, manifest Manifest, result *Root) error {
+	for _, entry := range manifest.Files {
+		if err := m.settleFile(tree, entry.Path); err != nil {
+			return err
+		}
+	}
+	if err := m.barrier(tree, manifestName); err != nil {
+		return err
+	}
+	result.State = stateCurrent
+	result.MeshVersion = &manifest.MeshVersion
+	result.Bundle = &manifest.Bundle
+	return nil
+}
+
+func (m *Manager) pruneProposalDirectories(manifest Manifest, root string) error {
+	if len(manifest.Proposed) == 0 && len(manifest.Pending.Proposed) == 0 {
+		return nil
+	}
+	state, err := openDirectory(m.StateDir, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = state.Close() }()
+	for _, name := range []string{"skills/proposed/" + hashBytes([]byte(root)), "skills/proposed", "skills"} {
+		if err := m.removeEmptyDirectory(state, name); err != nil {
+			return err
+		}
+	}
+	return nil
 }

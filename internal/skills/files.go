@@ -142,6 +142,9 @@ func pathError(action, name string, err error) error {
 	}
 	return wrapped
 }
+
+var errContentTooLarge = errors.New("skill file exceeds its size limit")
+
 func readAt(root *os.File, name string, limit int) ([]byte, error) {
 	dir, leaf, err := metadataParent(root, name, false)
 	if err != nil {
@@ -158,7 +161,7 @@ func readAt(root *os.File, name string, limit int) ([]byte, error) {
 		return nil, fmt.Errorf("read skill file: %w", err)
 	}
 	if len(data) > limit {
-		return nil, conflict(fmt.Sprintf("skill file %s exceeds its size limit", name))
+		return nil, fmt.Errorf("skill file %s: %w", name, errContentTooLarge)
 	}
 	return data, nil
 }
@@ -306,4 +309,12 @@ func waitLock(ctx context.Context, file *os.File) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func readManaged(root *os.File, name string) ([]byte, bool, error) {
+	data, err := readAt(root, name, maximumBundle)
+	if errors.Is(err, errContentTooLarge) {
+		return nil, true, nil
+	}
+	return data, false, err
 }

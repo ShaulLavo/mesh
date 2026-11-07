@@ -97,20 +97,18 @@ func skillResult(roots []skills.Root, operation string) (agentapi.SkillResult, [
 	}
 	return result, diagnostics
 }
-func printSkillResult(cmd *cobra.Command, result agentapi.SkillResult, diagnostics []agentapi.Error) error {
+func (a *application) printSkillResult(cmd *cobra.Command, result agentapi.SkillResult, diagnostics []agentapi.Error) error {
 	for _, root := range result.Roots {
-		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %s (%s)\n", root.Path, root.State, root.RegistrationState); err != nil {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %s (%s)\n", a.privacy.Value(skillPathKind, root.Path), root.State, root.RegistrationState); err != nil {
 			return fmt.Errorf("print skill status: %w", err)
 		}
 		for _, path := range root.ProposedFiles {
-			if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Proposed replacement:", path); err != nil {
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Proposed replacement:", a.privacy.Value(skillPathKind, path)); err != nil {
 				return fmt.Errorf("print proposed path: %w", err)
 			}
 		}
-		if len(root.RetainedFiles) > 0 {
-			if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Retained:", strings.Join(root.RetainedFiles, ", ")); err != nil {
-				return fmt.Errorf("print retained paths: %w", err)
-			}
+		if err := a.printRetainedSkillFiles(cmd, root.RetainedFiles); err != nil {
+			return err
 		}
 	}
 	if len(diagnostics) > 0 {
@@ -140,7 +138,7 @@ func (a *application) runSkillManaged(cmd *cobra.Command, action, root string, a
 		}
 		return a.agent.write(cmd.OutOrStdout(), agentapi.Envelope{Status: status, Data: data, Errors: diagnostics})
 	}
-	return printSkillResult(cmd, data, diagnostics)
+	return a.printSkillResult(cmd, data, diagnostics)
 }
 
 func loadSkillRoots(cmd *cobra.Command, action, root string) ([]skills.Root, error) {
@@ -173,4 +171,24 @@ func skillHasData(data agentapi.SkillResult) bool {
 		}
 	}
 	return false
+}
+
+func (a *application) printRetainedSkillFiles(cmd *cobra.Command, files []string) error {
+	if len(files) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Retained:", strings.Join(a.skillDisplayPaths(files), ", ")); err != nil {
+		return fmt.Errorf("print retained paths: %w", err)
+	}
+	return nil
+}
+
+const skillPathKind = "path"
+
+func (a *application) skillDisplayPaths(files []string) []string {
+	values := make([]string, len(files))
+	for index, file := range files {
+		values[index] = a.privacy.Value(skillPathKind, file)
+	}
+	return values
 }
