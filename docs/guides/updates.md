@@ -387,3 +387,12 @@ current run, executable continuation or unsettled issued work exists. Its receip
 retains the stop cause and approving actor. Background polling cannot recreate an
 acknowledged disabled stop. If a current run exists, use its run ID and complete
 the cancellation and settlement path first.
+
+## Deliver approved configuration separately
+
+`mesh update config` delivers an explicitly approved usage-feed URL through a
+separate target-local grant. It does not require automatic binary enrollment or
+restart processes. Preview binds the actual approver and exact selected values.
+Status distinguishes saved bytes from a running dashboard's acknowledged load
+and feed result. See [Deliver dashboard feed settings](fleet-configuration.md)
+for allowance, preview, approval, cancellation, revocation, and recovery.

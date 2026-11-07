@@ -29,7 +29,7 @@ func scopeCommandResult(t *testing.T, args ...string) agentapi.Envelope {
 	}
 	return result
 }
-func TestScopeLocalWorkflowAndNoOutputEnrollment(t *testing.T) {
+func TestScopeLocalWorkflowAndOutputReplacement(t *testing.T) {
 	root := t.TempDir()
 	state, config, keyDir := filepath.Join(root, "target"), filepath.Join(root, "config"), filepath.Join(root, "dedicated")
 	t.Setenv("MESH_STATE_DIR", state)
@@ -59,8 +59,17 @@ func TestScopeLocalWorkflowAndNoOutputEnrollment(t *testing.T) {
 		t.Fatal("unexpected scoped policy", policy)
 	}
 	stdout, stderr, err := executeCommand(t, Dependencies{}, "device", "scope", "grant", "--identity", subject.ID, "--permissions", "metadata,session-output", "--expected-revision", "1", "--json")
-	assertScopeFailure(t, stdout, stderr, err, "usage.invalid", 2)
-	scopeCommandResult(t, "device", "scope", "revoke", "--identity", subject.ID, "--expected-revision", "1", "--json")
+	if err != nil || stderr != "" {
+		t.Fatalf("output replacement: %v %s %s", err, stdout, stderr)
+	}
+	var replacement agentapi.Envelope
+	if err := json.Unmarshal([]byte(stdout), &replacement); err != nil {
+		t.Fatal(err)
+	}
+	if replacement.Status != agentapi.StatusOK {
+		t.Fatal(stdout)
+	}
+	scopeCommandResult(t, "device", "scope", "revoke", "--identity", subject.ID, "--expected-revision", "2", "--json")
 	if _, err := os.Stat(config); !os.IsNotExist(err) {
 		t.Fatal("local scope operation initialized client config", err)
 	}
@@ -154,5 +163,58 @@ func TestScopeMetadataDecodedDTOGolden(t *testing.T) {
 	}
 	if !bytes.Equal(want, data) {
 		t.Fatalf("scoped DTO golden differs:\n%s", data)
+	}
+}
+
+func TestScopeOutputUsageAndMissingCredentialHaveNoFallback(t *testing.T) {
+	root := t.TempDir()
+	state, config, key := filepath.Join(root, "state"), filepath.Join(root, "config"), filepath.Join(root, "key")
+	t.Setenv("MESH_STATE_DIR", state)
+	t.Setenv("MESH_CONFIG_DIR", config)
+	base := []string{"device", "scope", "output", "--host", "missing", "--key-dir", key, "--session", "7K3D", "--json"}
+	for _, flags := range [][]string{{}, {"--format", "preview", "--max-bytes=0"}, {"--format", "tail", "--cols=0"}, {"--format", "tail", "--rows=1"}, {"--format", "preview", "--cols=0"}, {"--format", "preview", "--rows=25"}, {"--format", "tail", "--max-bytes=1048577"}, {"--format", "tail", "--timeout=99ms"}, {"--format", "pipe"}} {
+		stdout, stderr, err := executeCommand(t, Dependencies{}, append(base, flags...)...)
+		assertScopeFailure(t, stdout, stderr, err, "usage.invalid", 2)
+	}
+	stdout, stderr, err := executeCommand(t, Dependencies{}, append(base, "--format", "tail")...)
+	assertScopeFailure(t, stdout, stderr, err, "state.unavailable", 1)
+	for _, path := range []string{state, config, key} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("output initialized fallback state", path, err)
+		}
+	}
+}
+func TestScopeOutputDecodedDTOGolden(t *testing.T) {
+	observed := time.Date(2026, 11, 7, 1, 2, 3, 0, time.UTC)
+	result := protocol.AccessOutputResult{Subject: protocol.AccessSubject{TargetID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", Principal: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE", Class: "scoped", Permissions: []string{"metadata", "session-output"}, ExpiresAt: observed.Add(time.Hour)}, SessionID: "7K3D", Format: "preview", Source: "live-preview", ObservedAt: &observed, Preview: []string{"界"}, StyledPreview: []protocol.PreviewLine{{Runs: []protocol.PreviewRun{{Text: "界", Style: protocol.PreviewStyle{Bold: true, Foreground: protocol.PreviewColor{Kind: protocol.PreviewColorRGB, Value: 0x112233}}}}}}}
+	request := protocol.AccessOutput{SessionID: "7K3D", Format: "preview", Cols: 2, Rows: 1}
+	raw, err := (protocol.AccessOutputReply{Type: protocol.TypeAccessOutputResult, RequestID: "golden", Result: &result}).Encode(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := validateScopeOutputReply(protocol.Frame{Kind: protocol.KindControl, Payload: raw}, "golden", result.Subject.Principal, result.Subject.TargetID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.MarshalIndent(scopeOutputResult(decoded), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot("../agentapi/testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	if os.Getenv("MESH_UPDATE_AGENT_GOLDENS") == "1" {
+		if err := root.WriteFile("scope.output.json", data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := root.ReadFile("scope.output.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(want, data) {
+		t.Fatalf("scope output golden differs:\n%s", data)
 	}
 }

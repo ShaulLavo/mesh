@@ -1,0 +1,39 @@
+{
+  "subject": {
+    "targetId": "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+    "principal": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "class": "scoped",
+    "permissions": [
+      "metadata",
+      "session-output"
+    ],
+    "expiresAt": "2026-11-07T02:02:03Z"
+  },
+  "sessionId": "7K3D",
+  "format": "preview",
+  "source": "live-preview",
+  "observedAt": "2026-11-07T01:02:03Z",
+  "checkpointAt": null,
+  "bytesBase64": null,
+  "preview": [
+    "界"
+  ],
+  "styledPreview": [
+    {
+      "runs": [
+        {
+          "text": "界",
+          "style": {
+            "foreground": {
+              "kind": 3,
+              "value": 1122867
+            },
+            "background": {},
+            "underlineColor": {},
+            "bold": true
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/shaul/mesh/internal/session"
 )
 
@@ -133,7 +135,7 @@ func readAccessField(decoder *json.Decoder, fields map[string]json.RawMessage, a
 	return nil
 }
 func DecodeAccessRead(data []byte) (AccessRequest, error) {
-	fields, err := rawAccessObject(data, MaximumAccessRequest, "type", "requestId", "accessRead")
+	fields, err := rawAccessObject(data, MaximumAccessRequest, "type", requestIDField, "accessRead")
 	if err != nil {
 		return AccessRequest{}, err
 	}
@@ -141,7 +143,7 @@ func DecodeAccessRead(data []byte) (AccessRequest, error) {
 	if len(fields) != 3 || json.Unmarshal(fields["type"], &request.Type) != nil || request.Type != TypeAccessRead {
 		return request, errors.New("protocol: access.read required")
 	}
-	if json.Unmarshal(fields["requestId"], &request.RequestID) != nil || !accessRequestID(request.RequestID) {
+	if json.Unmarshal(fields[requestIDField], &request.RequestID) != nil || !accessRequestID(request.RequestID) {
 		return AccessRequest{}, errors.New("protocol: bounded access request ID required")
 	}
 	payload, err := rawAccessObject(fields["accessRead"], MaximumAccessRequest, "section", "sessionId", "limit", "cursor")
@@ -349,7 +351,7 @@ func scanAccessReplyObject(decoder *json.Decoder, depth int) error {
 			return fmt.Errorf("protocol: scoped reply key: %w", err)
 		}
 		key, ok := token.(string)
-		if !ok || seen[key] {
+		if !ok || seen[key] || !accessReplyField(key) {
 			return errors.New("protocol: duplicate scoped reply field")
 		}
 		seen[key] = true
@@ -364,12 +366,17 @@ func scanAccessReplyObject(decoder *json.Decoder, depth int) error {
 	return nil
 }
 
-func validateAccessObservation(result AccessReadResult) error {
-	if !accessIdentity(result.Subject.TargetID) || !accessIdentity(result.Subject.Principal) || result.Subject.TargetID == result.Subject.Principal {
-		return errors.New("protocol: invalid scoped identity binding")
+func accessReplyField(key string) bool {
+	switch key {
+	case "type", requestIDField, "accessResult", "errorCode", "message", "subject", "targetId", "principal", "class", "permissions", "expiresAt", "section", "observedAt", "freshness", "snapshot", "host", "sessions", "services", "nextPage", "id", "machineName", "version", "hostId", "state", "createdAt", "lastAttachedAt", "detachedAt", "exitCode", "name", "kind", "scope", "configured", "accessOutputResult", "sessionId", "format", "source", "checkpointAt", "bytesBase64", "preview", "styledPreview", "runs", "text", "style", "foreground", "background", "underlineColor", "bold", "faint", "italic", "reverse", "strikethrough", "underline", "value":
+		return true
 	}
-	if result.Subject.Class != "scoped" || len(result.Subject.Permissions) != 1 || result.Subject.Permissions[0] != "metadata" || result.Subject.ExpiresAt.IsZero() || result.Subject.TargetID == "" || result.Subject.Principal == "" {
-		return errors.New("protocol: invalid scoped subject")
+	return false
+}
+
+func validateAccessObservation(result AccessReadResult) error {
+	if err := validateAccessSubject(result.Subject); err != nil {
+		return err
 	}
 	if result.ObservedAt.IsZero() || result.Freshness != "live" || result.Snapshot != "non-atomic" || result.Sessions == nil || result.Services == nil {
 		return errors.New("protocol: invalid scoped observation")
@@ -400,4 +407,266 @@ func (reply AccessReply) Encode() ([]byte, error) {
 func accessIdentity(value string) bool {
 	data, err := base64.RawURLEncoding.DecodeString(value)
 	return err == nil && len(data) == 32 && base64.RawURLEncoding.EncodeToString(data) == value
+}
+
+const (
+	AccessTail             = "tail"
+	AccessPreview          = "preview"
+	TypeAccessOutput       = "access.output"
+	TypeAccessOutputResult = "access.output.result"
+	// A maximal base64 tail plus the fixed subject and request envelope.
+	MaximumAccessOutputReply = (MaxLogTail+2)/3*4 + 4096
+)
+
+// ErrAccessOutputLimit marks a valid output projection that exceeds its response budget.
+var ErrAccessOutputLimit = errors.New("protocol: scoped output exceeds response limit")
+
+type AccessOutput struct {
+	SessionID string `json:"sessionId"`
+	Format    string `json:"format"`
+	MaxBytes  int    `json:"maxBytes,omitempty"`
+	Cols      int    `json:"cols,omitempty"`
+	Rows      int    `json:"rows,omitempty"`
+}
+type AccessOutputRequest struct {
+	Type      string       `json:"type"`
+	RequestID string       `json:"requestId"`
+	Output    AccessOutput `json:"accessOutput"`
+}
+type AccessOutputResult struct {
+	Subject       AccessSubject `json:"subject"`
+	SessionID     string        `json:"sessionId"`
+	Format        string        `json:"format"`
+	Source        string        `json:"source"`
+	ObservedAt    *time.Time    `json:"observedAt"`
+	CheckpointAt  *time.Time    `json:"checkpointAt"`
+	BytesBase64   *string       `json:"bytesBase64"`
+	Preview       []string      `json:"preview"`
+	StyledPreview []PreviewLine `json:"styledPreview"`
+}
+type AccessOutputReply struct {
+	Type      string              `json:"type"`
+	RequestID string              `json:"requestId"`
+	Result    *AccessOutputResult `json:"accessOutputResult,omitempty"`
+	ErrorCode string              `json:"errorCode,omitempty"`
+	Message   string              `json:"message,omitempty"`
+}
+
+func AccessRequestType(data []byte) (string, error) {
+	fields, err := rawAccessObject(data, MaximumAccessRequest, "type", requestIDField, "accessRead", "accessOutput")
+	if err != nil {
+		return "", err
+	}
+	var name string
+	if err := json.Unmarshal(fields["type"], &name); err != nil {
+		return "", fmt.Errorf("protocol: access type: %w", err)
+	}
+	switch name {
+	case TypeAccessRead:
+		_, err = DecodeAccessRead(data)
+	case TypeAccessOutput:
+		_, err = DecodeAccessOutput(data)
+	default:
+		return "", errors.New("protocol: unsupported access request")
+	}
+	return name, err
+}
+func DecodeAccessOutput(data []byte) (AccessOutputRequest, error) {
+	var request AccessOutputRequest
+	fields, err := rawAccessObject(data, MaximumAccessRequest, "type", requestIDField, "accessOutput")
+	if err != nil {
+		return request, err
+	}
+	if len(fields) != 3 || json.Unmarshal(fields["type"], &request.Type) != nil || request.Type != TypeAccessOutput {
+		return request, errors.New("protocol: access.output required")
+	}
+	if json.Unmarshal(fields[requestIDField], &request.RequestID) != nil || !accessRequestID(request.RequestID) {
+		return request, errors.New("protocol: bounded access request ID required")
+	}
+	payload, err := rawAccessObject(fields["accessOutput"], MaximumAccessRequest, "sessionId", "format", "maxBytes", "cols", "rows")
+	if err != nil {
+		return request, err
+	}
+	if err := json.Unmarshal(fields["accessOutput"], &request.Output); err != nil {
+		return request, fmt.Errorf("protocol: decode access output: %w", err)
+	}
+	if err := validateAccessOutput(request.Output, payload); err != nil {
+		return request, err
+	}
+	if request.Output.Format == AccessTail && request.Output.MaxBytes == 0 {
+		request.Output.MaxBytes = DefaultLogTail
+	}
+	if request.Output.Format == AccessPreview && request.Output.Cols == 0 {
+		request.Output.Cols = 80
+	}
+	if request.Output.Format == AccessPreview && request.Output.Rows == 0 {
+		request.Output.Rows = 24
+	}
+	return request, nil
+}
+func validateAccessOutput(output AccessOutput, fields map[string]json.RawMessage) error {
+	id, err := session.ParseID(output.SessionID)
+	if err != nil || id != output.SessionID {
+		return errors.New("protocol: exact output session ID required")
+	}
+	switch output.Format {
+	case AccessTail:
+		return validateAccessTailRequest(output, fields)
+	case AccessPreview:
+		return validateAccessPreviewRequest(output, fields)
+	default:
+		return errors.New("protocol: unknown output format")
+	}
+}
+func validateAccessTailRequest(output AccessOutput, fields map[string]json.RawMessage) error {
+	if fields["cols"] != nil || fields["rows"] != nil {
+		return errors.New("protocol: tail accepts no dimensions")
+	}
+	if fields["maxBytes"] != nil && (output.MaxBytes < 1 || output.MaxBytes > MaxLogTail) {
+		return errors.New("protocol: invalid output tail size")
+	}
+	return nil
+}
+func validateAccessPreviewRequest(output AccessOutput, fields map[string]json.RawMessage) error {
+	if fields["maxBytes"] != nil {
+		return errors.New("protocol: preview accepts no tail size")
+	}
+	if fields["cols"] != nil && (output.Cols < 1 || output.Cols > MaxInspectionPreviewCols) {
+		return errors.New("protocol: invalid output columns")
+	}
+	if fields["rows"] != nil && (output.Rows < 1 || output.Rows > MaxInspectionPreviewRows) {
+		return errors.New("protocol: invalid output rows")
+	}
+	return nil
+}
+
+func validateAccessSubject(subject AccessSubject) error {
+	if !accessIdentity(subject.TargetID) || !accessIdentity(subject.Principal) || subject.TargetID == subject.Principal || subject.Class != "scoped" || subject.ExpiresAt.IsZero() {
+		return errors.New("protocol: invalid scoped subject")
+	}
+	if len(subject.Permissions) == 1 && subject.Permissions[0] == "metadata" {
+		return nil
+	}
+	if len(subject.Permissions) == 2 && subject.Permissions[0] == "metadata" && subject.Permissions[1] == "session-output" {
+		return nil
+	}
+	return errors.New("protocol: invalid scoped permissions")
+}
+func ValidateAccessOutputResult(result AccessOutputResult, request AccessOutput) error {
+	if err := validateAccessSubject(result.Subject); err != nil {
+		return err
+	}
+	if len(result.Subject.Permissions) != 2 || result.SessionID != request.SessionID || result.Format != request.Format || result.Preview == nil || result.StyledPreview == nil {
+		return errors.New("protocol: invalid scoped output binding or arrays")
+	}
+	if result.Format == AccessTail {
+		return validateAccessTail(result, request.MaxBytes)
+	}
+	if result.BytesBase64 != nil || len(result.Preview) > request.Rows {
+		return errors.New("protocol: invalid scoped preview variant")
+	}
+	if result.Source == "live-preview" && result.ObservedAt != nil && !result.ObservedAt.IsZero() && result.CheckpointAt == nil {
+		return validateAccessPreview(result, request)
+	}
+	if result.Source == "saved-preview" && result.ObservedAt == nil && result.CheckpointAt != nil && !result.CheckpointAt.IsZero() && len(result.StyledPreview) == 0 {
+		return validateAccessPreview(result, request)
+	}
+	return errors.New("protocol: invalid preview source or time")
+}
+func validateAccessTail(result AccessOutputResult, maximum int) error {
+	if result.Source != "live-tail" && result.Source != "saved-tail" && result.Source != "tail" {
+		return errors.New("protocol: invalid tail source")
+	}
+	if result.BytesBase64 == nil || result.ObservedAt == nil || result.ObservedAt.IsZero() || result.CheckpointAt != nil || len(result.Preview) != 0 || len(result.StyledPreview) != 0 {
+		return errors.New("protocol: invalid tail variant")
+	}
+	if len(*result.BytesBase64) > base64.StdEncoding.EncodedLen(maximum) {
+		return errors.New("protocol: tail exceeds byte limit")
+	}
+	if strings.ContainsAny(*result.BytesBase64, "\r\n") {
+		return errors.New("protocol: invalid tail encoding")
+	}
+	count, err := io.Copy(io.Discard, base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(*result.BytesBase64)))
+	if err != nil || count > int64(maximum) {
+		return errors.New("protocol: invalid bounded tail encoding")
+	}
+	return nil
+}
+func validateAccessPreview(result AccessOutputResult, request AccessOutput) error {
+	textBytes := 0
+	for _, line := range result.Preview {
+		if !utf8.ValidString(line) || ansi.StringWidth(line) > request.Cols {
+			return errors.New("protocol: preview exceeds requested width or encoding")
+		}
+		textBytes += len(line)
+	}
+	for _, line := range result.StyledPreview {
+		for _, run := range line.Runs {
+			textBytes += len(run.Text)
+		}
+	}
+	if textBytes > MaxInspectionTextBytes {
+		return fmt.Errorf("%w: preview text", ErrAccessOutputLimit)
+	}
+	// The existing inspection validator owns control-free text and safe styles.
+	return ValidateSessionInspection(SessionInspection{ObservedAt: time.Unix(1, 0).UTC(), Preview: result.Preview, StyledPreview: result.StyledPreview})
+}
+func (reply AccessOutputReply) Encode(request AccessOutput) ([]byte, error) {
+	if reply.Type != TypeAccessOutputResult || reply.Result == nil || !accessRequestID(reply.RequestID) || reply.ErrorCode != "" || reply.Message != "" {
+		return nil, errors.New("protocol: invalid output reply")
+	}
+	if err := ValidateAccessOutputResult(*reply.Result, request); err != nil {
+		return nil, err
+	}
+	data, err := json.Marshal(reply)
+	if err != nil {
+		return nil, fmt.Errorf("protocol: encode output reply: %w", err)
+	}
+	if len(data) > accessOutputReplyLimit(request.Format) {
+		return nil, fmt.Errorf("%w: encoded reply", ErrAccessOutputLimit)
+	}
+	return data, nil
+}
+func accessOutputReplyLimit(format string) int {
+	if format == AccessTail {
+		return MaximumAccessOutputReply
+	}
+	return MaximumAccessReply
+}
+func DecodeAccessOutputReply(data []byte, request AccessOutput) (AccessOutputReply, error) {
+	var reply AccessOutputReply
+	if len(data) > accessOutputReplyLimit(request.Format) || !utf8.Valid(data) {
+		return reply, errors.New("protocol: invalid output reply size or encoding")
+	}
+	scanner := json.NewDecoder(bytes.NewReader(data))
+	if err := scanAccessReplyValue(scanner, 0); err != nil {
+		return reply, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&reply); err != nil {
+		return reply, fmt.Errorf("protocol: decode output reply: %w", err)
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return reply, errors.New("protocol: trailing output reply")
+	}
+	if reply.Type == TypeAccessDenied {
+		_, err := DecodeAccessReply(data)
+		return reply, err
+	}
+	if reply.Type != TypeAccessOutputResult || reply.Result == nil || !accessRequestID(reply.RequestID) || reply.ErrorCode != "" || reply.Message != "" {
+		return reply, errors.New("protocol: invalid output reply")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return reply, fmt.Errorf("protocol: decode output fields: %w", err)
+	}
+	var resultFields map[string]json.RawMessage
+	if err := json.Unmarshal(fields["accessOutputResult"], &resultFields); err != nil {
+		return reply, fmt.Errorf("protocol: decode output result fields: %w", err)
+	}
+	if len(resultFields) != 9 {
+		return reply, errors.New("protocol: incomplete output result")
+	}
+	return reply, ValidateAccessOutputResult(*reply.Result, request)
 }

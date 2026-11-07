@@ -143,7 +143,7 @@ func newScopedFixture(ctx context.Context, t *testing.T, loose bool) *scopedFixt
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.store.Grant(lifetime, 0, access.GrantInput{Subject: access.Subject(f.subject), ExpiresAt: time.Now().Add(time.Hour)}, observeOtherRoles(f.state)); err != nil {
+	if _, err := f.store.Grant(lifetime, 0, access.GrantInput{Permissions: []string{"metadata"}, Subject: access.Subject(f.subject), ExpiresAt: time.Now().Add(time.Hour)}, observeOtherRoles(f.state)); err != nil {
 		t.Fatal(err)
 	}
 	f.catalog = &scopedCatalog{rows: []storage.Session{{ID: "7K3D", HostID: storage.HostID(f.target), Command: []string{disclosureSentinel}, Cwd: disclosureSentinel, State: storage.StateDetached, CreatedAt: time.Now().UTC(), LastOutputSequence: 991}}}
@@ -258,13 +258,13 @@ func TestScopedRealTLSProjectsOnlyAllowedMetadata(t *testing.T) {
 var deniedScopedTypes = []string{
 	"execution.create", "execution.request", "execution.receipt", "execution.wait", "execution.logs", "execution.signal", "execution.kill", "execution.remove",
 	"host.metrics.result", "session.created", "session.listed", "host.info.result", "host.renamed", "session.recovered", "session.recovery-record", "copy.result", "app.result", "host.context.result", "service.previewed", "service.upserted", "service.listed", "service.deleted", "service.labeled", "certificate.installed", "wake.remembered", "wake.probed", "wake.sent", "wake.configured",
-	"host.info", "host.metrics", "host.context", "host.rename", "session.list", "session.inspect", "session.logs", "session.recovery", "session.create", "session.attach", "session.attach-detached", "terminal.resize", "session.detach", "session.signal", "session.kill", "session.hibernate", "session.recover", "session.recovery-command", "session.remove", "service.preview", "service.upsert", "service.label", "service.list", "service.delete", "service.start", "service.stop", "fleet.hosts", "certificate.install", "wake.configure", "wake.remember", "wake.probe", "wake.send", "state.watch", "catalog.continue", "session.agent-begin", "session.agent-event", "session.agent-finish", "session.shell-update", "session.containment", "session.nest", "session.attached", "session.nesting", "session.exit", "session.logged", "session.inspected", "state.snapshot", "state.event", "state.current", "state.resync", "error", "ok", "access.output", "future.control",
+	"host.info", "host.metrics", "host.context", "host.rename", "session.list", "session.inspect", "session.logs", "session.recovery", "session.create", "session.attach", "session.attach-detached", "terminal.resize", "session.detach", "session.signal", "session.kill", "session.hibernate", "session.recover", "session.recovery-command", "session.remove", "service.preview", "service.upsert", "service.label", "service.list", "service.delete", "service.start", "service.stop", "fleet.hosts", "certificate.install", "wake.configure", "wake.remember", "wake.probe", "wake.send", "state.watch", "catalog.continue", "session.agent-begin", "session.agent-event", "session.agent-finish", "session.shell-update", "session.containment", "session.nest", "session.attached", "session.nesting", "session.exit", "session.logged", "session.inspected", "state.snapshot", "state.event", "state.current", "state.resync", "error", "ok", "access.output.result", "future.control",
 }
 var deniedScopedActions = map[string][]string{
 	"copy.request":   {"upload.begin", "upload.chunk", "upload.commit", "download.begin", "download.chunk", "close", "release"},
 	"app.request":    {"upload.begin", "upload.chunk", "create", "update", "download", "list", "renew", "browser.inspect", "browser.list", "browser.approve", "browser.revoke", "inspect", "delete"},
 	"app.registry":   {"allocate", "list", "sync", "inspect", "activate", "suspend", "renew", "delete", "cleanup", "browser.inspect", "browser.list", "browser.approve", "browser.revoke"},
-	"update.control": {"challenge", "info", "runs", "status", "plan", "retry", "cancel", "stage", "grant", "install-status", "install-cancel", "install-retry", "fleet-profile.put", "automatic.status", "automatic.consent", "automatic.change", "unknown"},
+	"update.control": {"challenge", "info", "runs", "status", "plan", "retry", "cancel", "stage", "grant", "install-status", "install-cancel", "install-retry", "fleet-profile.put", "automatic.status", "automatic.consent", "automatic.change", "configuration.preview", "configuration.approve", "configuration.status", "configuration.retry", "configuration.cancel", "configuration.snapshot", "configuration.put", "configuration.observe", "unknown"},
 }
 
 func TestScopedFramedDenialMatrixStopsBeforeAllOwners(t *testing.T) {
@@ -389,7 +389,7 @@ func TestScopedIdleRevocationAndRegrantCannotHeal(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("idle revocation did not close socket")
 	}
-	if _, err := f.store.Grant(t.Context(), 2, access.GrantInput{Subject: access.Subject(f.subject), ExpiresAt: time.Now().Add(time.Hour)}, observeOtherRoles(f.state)); err != nil {
+	if _, err := f.store.Grant(t.Context(), 2, access.GrantInput{Permissions: []string{"metadata"}, Subject: access.Subject(f.subject), ExpiresAt: time.Now().Add(time.Hour)}, observeOtherRoles(f.state)); err != nil {
 		t.Fatal(err)
 	}
 	if f.read(t, protocol.AccessRead{Section: "host"}).Result == nil {

@@ -4,8 +4,10 @@ Status: Approved, 2026-10-09. Execution follow-up to
 [T26: fleet updates](../tasks/T26-mesh-updates.md). T26's requested operations,
 release reminders and installation helper are implemented. Automatic binary policy source is implemented in Approved audit Plan 017 unit 2,
 subject to independent review, current checks and merge.
-Configuration delivery, dashboard drift presentation and actual fleet enrollment
-remain separate later units and maintenance. Source acceptance does not enroll
+Feed-only configuration delivery is implemented in Approved audit Plan 017 unit 3,
+subject to independent source review, current checks and merge. Domain delivery,
+dashboard fleet drift presentation and actual fleet enrollment remain separate
+later units and maintenance. Source acceptance does not enroll
 the owner's fleet.
 
 ## Outcome
@@ -86,3 +88,18 @@ restarted the daemon and TV dashboard. All four hosts and three feed accounts
 then appeared on the TV. Source anchors are `internal/cli/update.go`,
 `update_bridge.go`, `update_helper.go`, `update_notice.go`, `remote.go` and
 `internal/tui/dashboard_usage.go`.
+
+
+## Feed-only source boundary
+
+Plan 017 unit 3 adds target-local usage-feed grants and signed exact preview,
+approval, status, retry and cancellation. Recipient intent and selected-value
+CAS use the existing CLI configuration writer. The running dashboard replaces
+its joined fetcher and acknowledges its generation through its real renderer.
+Observer renewal is independent of the feed fetch interval. No active dashboard
+is reported as saved without consumer observation. Cancellation stops new
+intentions, while target-local revocation separately fences acceptance.
+
+Domain-policy delivery, catalog generation and actual service verification are
+unit 4. Fleet drift presentation is unit 5. No real feed URL, fleet enrollment,
+owner configuration, provider account or installed service was changed by unit 3.

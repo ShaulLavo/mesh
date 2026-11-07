@@ -82,6 +82,7 @@ func validateExecutionRaw(payload []byte) error {
 }
 
 const executionTypeField = "type"
+const requestIDField = "requestId"
 
 type executionFields struct {
 	fields               map[string]json.RawMessage
@@ -139,7 +140,7 @@ func (s *executionFields) takeField(decoder *json.Decoder) error {
 }
 func validateExecutionField(kind, name string, raw json.RawMessage) error {
 	switch name {
-	case executionTypeField, "requestId":
+	case executionTypeField, requestIDField:
 		return executionString(raw)
 	case "requestKey":
 		if kind != TypeExecutionCreate && kind != TypeExecutionRequest {

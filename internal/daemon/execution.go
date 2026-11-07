@@ -186,13 +186,13 @@ func executionCode(err error) string {
 	case errors.Is(err, execution.ErrConflict):
 		return "request.key_conflict"
 	case errors.Is(err, execution.ErrLimit):
-		return "resource.limit"
+		return resourceLimitCode
 	case errors.Is(err, execution.ErrNotFound):
 		return "request.not_found"
 	case errors.Is(err, execution.ErrUnknown):
 		return "request.outcome_unknown"
 	default:
-		return "state.unavailable"
+		return stateUnavailableCode
 	}
 }
 

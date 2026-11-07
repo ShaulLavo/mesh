@@ -12,6 +12,9 @@ import (
 )
 
 func activateClientConfig(command *cobra.Command) error {
+	if command.Name() == skillShowVerb && command.Parent() != nil && command.Parent().Name() == "skill" {
+		return nil
+	}
 	switch command.Name() {
 	case "approve-checked", "approve-fleet":
 		return nil
