@@ -306,7 +306,7 @@ func (a *application) loadAgentRemoteSessions(ctx context.Context, host HostReco
 		return snapshot, nil
 	}
 	snapshot := agentSessionSnapshot{rows: liveAgentSessionRows(rows), freshness: agentapi.FreshnessLive}
-	saveErr := cache.SaveObserved(ctx, host, rows)
+	_, saveErr := cache.SaveObserved(ctx, host, rows)
 	if err := errors.Join(cacheErr, readErr, saveErr); err != nil {
 		snapshot.errors = append(snapshot.errors, agentError(err, operation, host.ID, agentapi.StateUnavailable))
 	}

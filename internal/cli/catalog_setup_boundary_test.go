@@ -104,7 +104,7 @@ func collectCatalogSetupBoundary(t *testing.T, host HostRecord, setup time.Durat
 	t.Cleanup(func() { _ = cache.Close() })
 	run := catalogSetupBoundaryRun{cache: cache}
 	cached := []protocol.SessionInfo{{ID: "OLD1", HostID: host.ID, Command: []string{"cached-fixture"}, State: "detached", CreatedAt: time.Now()}}
-	if err := cache.Save(t.Context(), host, cached); err != nil {
+	if _, err := cache.Save(t.Context(), host, cached); err != nil {
 		t.Fatal(err)
 	}
 	if run.before, err = cache.Load(t.Context(), host); err != nil {

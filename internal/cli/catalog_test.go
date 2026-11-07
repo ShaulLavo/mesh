@@ -19,9 +19,9 @@ func (c *memoryCatalogCache) Load(_ context.Context, host HostRecord) ([]protoco
 	return slices.Clone(c.rows[host.ID]), nil
 }
 
-func (c *memoryCatalogCache) Save(_ context.Context, host HostRecord, _ []protocol.SessionInfo) error {
+func (c *memoryCatalogCache) Save(_ context.Context, host HostRecord, _ []protocol.SessionInfo) (bool, error) {
 	c.saved = append(c.saved, host.ID)
-	return nil
+	return true, nil
 }
 
 func TestCollectHostSessionsUsesCacheWithoutWaitingPastDeadline(t *testing.T) {

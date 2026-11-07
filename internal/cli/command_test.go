@@ -368,7 +368,7 @@ func TestListCommandReturnsCachedRowsAsStale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cache.Save(context.Background(), host.host, []protocol.SessionInfo{{
+	if _, err := cache.Save(context.Background(), host.host, []protocol.SessionInfo{{
 		ID: "7K3D", HostID: host.host.ID, Command: []string{"bash"}, Cwd: "/work",
 		State: "running", CreatedAt: commandTestTime, LastOutputSequence: 64,
 	}}); err != nil {

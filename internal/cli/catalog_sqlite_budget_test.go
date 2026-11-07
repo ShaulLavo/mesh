@@ -68,7 +68,7 @@ func TestCatalogSQLiteWriterContentionRespectsBudget(t *testing.T) {
 				}
 			})
 			host := HostRecord{MachineName: "pc", ID: "host-pc", MeshIdentity: "identity-pc"}
-			if err := cache.Save(t.Context(), host, []protocol.SessionInfo{{
+			if _, err := cache.Save(t.Context(), host, []protocol.SessionInfo{{
 				ID: "OLD1", HostID: host.ID, Command: []string{"sh"}, State: "detached", CreatedAt: time.Now().UTC(),
 			}}); err != nil {
 				t.Fatal(err)

@@ -268,7 +268,7 @@ func saveWakeSessionCache(t *testing.T, host *commandTestHost) {
 		t.Fatal(err)
 	}
 	defer cache.Close() //nolint:errcheck // test resource cleanup
-	if err := cache.Save(context.Background(), host.host, []protocol.SessionInfo{{
+	if _, err := cache.Save(context.Background(), host.host, []protocol.SessionInfo{{
 		ID: "7K3D", HostID: host.host.ID, State: "running", Command: []string{"bash"}, CreatedAt: commandTestTime,
 	}}); err != nil {
 		t.Fatal(err)

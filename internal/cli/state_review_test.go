@@ -196,7 +196,7 @@ func TestWatchReviewID6DurableCatalogAndOfflineReopen(t *testing.T) {
 	host := HostRecord{ID: "host", MachineName: "host", MeshIdentity: "identity"}
 	old := reviewSession(host)
 	old.ID = "9ABC"
-	if err := cache.Save(ctx, host, []protocol.SessionInfo{old}); err != nil {
+	if _, err := cache.Save(ctx, host, []protocol.SessionInfo{old}); err != nil {
 		t.Fatal(err)
 	}
 	dial := reviewControlDial(t, func(h HostRecord, r protocol.Control) *protocol.Control {
@@ -206,13 +206,26 @@ func TestWatchReviewID6DurableCatalogAndOfflineReopen(t *testing.T) {
 		return nil
 	})
 	state := newPickerState(ctx, dial)
-	// Exercise the same cache ownership as command.runPicker without querying session.list.
-	state.cache = cache
+	defer state.close()
+	committed := make(chan struct{}, 1)
+	// Wait for the real asynchronous commit before stopping its watcher owner.
+	state.cache = catalogCacheFuncs{load: cache.Load, save: func(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) (bool, error) {
+		persisted, err := cache.Save(ctx, host, rows)
+		if persisted {
+			committed <- struct{}{}
+		}
+		return persisted, err
+	}}
 	rows, err := state.read(ctx, host)
-	state.close()
 	if err != nil {
 		t.Fatal(err)
 	}
+	select {
+	case <-committed:
+	case <-ctx.Done():
+		t.Fatalf("watch cache commit: %v", ctx.Err())
+	}
+	state.close()
 	saved, err := cache.Load(ctx, host)
 	if err != nil {
 		t.Fatal(err)
