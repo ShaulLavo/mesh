@@ -32,6 +32,13 @@ func (s *clientServer) scopedReply(ctx context.Context, binding access.Binding, 
 	if frame.Kind != protocol.KindControl {
 		return protocol.Frame{}, access.ErrDenied
 	}
+	name, err := protocol.AccessRequestType(frame.Payload)
+	if err != nil {
+		return protocol.Frame{}, fmt.Errorf("daemon: scoped admission: %w", err)
+	}
+	if name == protocol.TypeAccessOutput {
+		return s.scopedOutputReply(ctx, binding, frame)
+	}
 	request, err := protocol.DecodeAccessRead(frame.Payload)
 	if err != nil {
 		return protocol.Frame{}, fmt.Errorf("daemon: scoped admission: %w", err)
@@ -82,6 +89,47 @@ func scopedError(requestID string, err error) protocol.AccessReply {
 	case errors.Is(err, errAccessInvalid):
 		reply.ErrorCode = "usage.invalid"
 		reply.Message = "Metadata request is invalid."
+	}
+	return reply
+}
+
+func (s *clientServer) scopedOutputReply(ctx context.Context, binding access.Binding, frame protocol.Frame) (protocol.Frame, error) {
+	request, err := protocol.DecodeAccessOutput(frame.Payload)
+	if err != nil {
+		return protocol.Frame{}, fmt.Errorf("daemon: scoped output reply: %w", err)
+	}
+	if err := binding.RequireMetadata(); err != nil {
+		return protocol.Frame{}, fmt.Errorf("daemon: scoped output reply: %w", err)
+	}
+	result, readErr := s.access.Output(ctx, binding, request.Output)
+	var data []byte
+	if readErr != nil {
+		data, err = scopedOutputFailure(request.RequestID, readErr).Encode()
+	} else {
+		data, err = (protocol.AccessOutputReply{Type: protocol.TypeAccessOutputResult, RequestID: request.RequestID, Result: &result}).Encode(request.Output)
+	}
+	if err != nil {
+		data, err = scopedOutputFailure(request.RequestID, errAccessUnavailable).Encode()
+	}
+	if err != nil {
+		return protocol.Frame{}, fmt.Errorf("daemon: scoped output reply: %w", err)
+	}
+	if err := binding.RequireMetadata(); err != nil {
+		return protocol.Frame{}, fmt.Errorf("daemon: scoped output reply: %w", err)
+	}
+	return protocol.Frame{Kind: protocol.KindControl, Payload: data}, nil
+}
+func scopedOutputFailure(requestID string, err error) protocol.AccessReply {
+	reply := scopedError(requestID, err)
+	switch reply.ErrorCode {
+	case "access.denied":
+		reply.Message = "Session-output permission is required."
+	case "state.unavailable":
+		reply.Message = "Session output is unavailable."
+	case "resource.limit":
+		reply.Message = "Session output exceeds the response limit."
+	case "usage.invalid":
+		reply.Message = "Session output request is invalid."
 	}
 	return reply
 }

@@ -3,12 +3,15 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/storage"
@@ -148,5 +151,47 @@ func TestWorkerConnectorPreservesLookupAndContextErrors(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("canceled dial took %v", elapsed)
+	}
+}
+
+func TestWorkerReadAdmissionAfterQueuedCatalogBeforeDial(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var current atomic.Bool
+	current.Store(true)
+	connector, err := newWorkerConnector(t.TempDir(), lookupFunc(func(context.Context, storage.SessionID) (storage.Session, error) {
+		close(entered)
+		<-release
+		return storage.Session{ID: "7K3D", State: storage.StateDetached}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	admit := readAdmission(func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("fixture read cancelled: %w", err)
+		}
+		if !current.Load() {
+			return access.ErrDenied
+		}
+		return nil
+	})
+	ctx := context.WithValue(t.Context(), readAdmissionKey{}, admit)
+	id, err := protocol.NewSessionID("7K3D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		conn, err := connector.ConnectWorker(ctx, id)
+		if conn != nil {
+			_ = conn.Close()
+		}
+		done <- err
+	}()
+	<-entered
+	current.Store(false)
+	close(release)
+	if err := <-done; !errors.Is(err, access.ErrDenied) {
+		t.Fatalf("post-wait dial did not recheck: %v", err)
 	}
 }

@@ -1373,7 +1373,7 @@ COMMANDS
   approve-fleet HOST… [--flags]  Approve this device on explicitly selected pinned hosts using system SSH
   identity [--flags]             Show this device's Mesh key and daemon account
   revoke ID                      Remove a device's session, service and SSH grant
-  scope [command] [--flags]      Manage dedicated metadata-only TLS identities
+  scope [command] [--flags]      Manage dedicated scoped TLS identities
 
 FLAGS
 
@@ -1479,7 +1479,7 @@ FLAGS
 ## mesh device scope
 
 ```text
-Manage dedicated metadata-only TLS identities
+Manage dedicated scoped TLS identities
 
 USAGE
 
@@ -1487,9 +1487,10 @@ USAGE
 
 COMMANDS
 
-  grant [--flags]   Grant metadata access locally at an expected policy revision
+  grant [--flags]   Grant host-wide read permissions locally at an expected revision
   keygen [--flags]  Create or load a key in an explicit private directory
   list [--flags]    Read this target's scope policy without contacting a daemon
+  output [--flags]  Read a bounded tail or preview using an explicit scoped TLS key
   read [--flags]    Read one metadata page using only an explicit key and direct TLS
   revoke [--flags]  Remove a scoped identity locally at an expected revision
 
@@ -1504,7 +1505,7 @@ FLAGS
 ## mesh device scope grant
 
 ```text
-Grant metadata access locally at an expected policy revision
+Grant host-wide read permissions locally at an expected revision
 
 USAGE
 
@@ -1519,7 +1520,7 @@ FLAGS
   --identity           Dedicated public identity
   --json               Write one agent result
   --leave-key          Key that leaves all nested sessions, or none (ctrl+^)
-  --permissions        Metadata only; no terminal or output access
+  --permissions        Metadata or metadata,session-output; output covers every host session and diagnostic-mixed tails
   --privacy            Mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
@@ -1556,6 +1557,31 @@ FLAGS
   --json       Write one agent result
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh device scope output
+
+```text
+Read a bounded tail or preview using an explicit scoped TLS key
+
+USAGE
+
+  mesh device scope output [--flags]
+
+FLAGS
+
+  --cols       Preview display columns from 1 to 160; default 80
+  --format     Tail or preview; requires session-output permission
+  -h --help    Help for output
+  --host       Exact saved host ID with an existing destination pin
+  --json       Write one agent result
+  --key-dir    Explicit dedicated credential directory
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --max-bytes  Tail byte limit from 1 to 1048576; default 65536
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --rows       Preview rows from 1 to 24; default 24
+  --session    Exact session ID on the target
+  --timeout    Hard deadline from 100ms to 60s (5s)
 ```
 
 ## mesh device scope read

@@ -1,8 +1,8 @@
-# Grant metadata-only access
+# Grant scoped read access
 
 Use a dedicated Mesh key to let a remote program observe one host's identity,
 session status and configured service names. The target enforces this narrow
-representation. The key cannot read terminal output, attach, execute commands,
+representation. Metadata alone cannot read terminal output. Scoped keys cannot attach, execute commands,
 copy files, manage services, use Mesh SSH or administer updates.
 
 ## Create a dedicated credential
@@ -74,6 +74,48 @@ the ordinary key, Unix or worker sockets, SSH, bootstrap, wake, local saved outp
 or owner caches. No reachable configured listener means the read fails. Each
 command requires `--json` and writes one agent result, including failures.
 
+## Grant optional session output
+
+On the target, replace the grant at its current revision:
+
+```bash
+mesh device scope grant --identity PUBLIC_ID --permissions metadata,session-output \
+  --expected-revision 1 --expires-in 24h --json
+```
+
+`session-output` covers every session on this host, including other agents'
+output, saved screens and diagnostic-mixed log tails. This is not creator-only
+access. Replacing permissions retires old connections even when expanding access.
+Reconnect with the same dedicated credential after the replacement.
+
+On the caller:
+
+```bash
+mesh device scope output --host HOST_ID --key-dir KEY_DIRECTORY \
+  --session SESSION_ID --format tail --max-bytes 65536 --json
+mesh device scope output --host HOST_ID --key-dir KEY_DIRECTORY \
+  --session SESSION_ID --format preview --cols 80 --rows 24 --json
+```
+
+Tail defaults to 64 KiB and permits at most 1 MiB. `bytesBase64` preserves binary
+bytes. Source is `live-tail` for the worker ring or `saved-tail` for the durable
+log. These are bounded tails, without exact stdout/stderr, cursor or EOF promises.
+Encoded tail replies are at most 1,402,200 bytes.
+
+Preview defaults to 80 display columns by 24 rows. The maximum is 160 by 24.
+Saved previews obey the requested dimensions, including wide Unicode text.
+`live-preview` carries the worker's observation time and safe styled text when
+available. `saved-preview` carries the actual checkpoint time, null live time and
+plain text. Missing or corrupt screens return `state.unavailable`. Preview text
+is limited to 32 KiB in aggregate and its encoded reply to 256 KiB.
+
+Every output reply contains only the authenticated subject, session ID, format,
+source, times, base64 tail or preview lines. It contains no recovery record,
+recipe, path or agent resume data. Reads do not attach, resize a worker, send
+input or recover a session. Legacy list, inspect, logs, attach, recovery, copy,
+app controls, service changes and Mesh SSH stay denied for both permission sets.
+`--max-bytes` is tail-only. `--cols` and `--rows` are preview-only.
+
 ## Revoke or rotate a credential
 
 On the target:
@@ -82,7 +124,7 @@ On the target:
 mesh device scope revoke --identity PUBLIC_ID --expected-revision 1 --json
 ```
 
-Replacing expiry or revoking/regranting creates a new entry incarnation. Old
+Replacing permissions or expiry, or revoking/regranting creates a new entry incarnation. Old
 connections cannot adopt it. Unrelated grants and exact-content retries preserve
 existing bindings. An idle watcher closes connections after observing invalidation.
 Its polling interval is nominally 250 ms, not a real-time deadline. The target's

@@ -72,7 +72,7 @@ func bindScopedPeer(stateDir, id string, scopes *access.Store) transport.Authori
 		if frame.Kind != protocol.KindControl {
 			return false
 		}
-		_, err := protocol.DecodeAccessRead(frame.Payload)
+		_, err := protocol.AccessRequestType(frame.Payload)
 		return err == nil
 	}}
 }
