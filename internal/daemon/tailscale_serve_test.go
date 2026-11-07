@@ -195,7 +195,7 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 	}
 	deadline := time.Now().Add(runtimeTestTimeout)
 	for {
-		probeCtx, probeCancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		probeCtx, probeCancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 		privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(probeCtx, t, stateDir))
 		probeCancel()
 		if probeErr == nil && privateName == "pc.mesh.mesh.test" {
