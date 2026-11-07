@@ -201,6 +201,10 @@ func (c *fleetProfileController) attempt(ctx context.Context, host update.Host, 
 	}
 	outcome := fleetDeliveryOutcome(doc, result, err, c.trusted)
 	settled, settleErr := c.store.Settle(ctx, doc.Digest(), host.ID, outcome, scope)
+	// Adopting a newer Current queues a new document without passing through Put.
+	if settled.Changed {
+		c.signal()
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if settleErr != nil && c.report != nil {
