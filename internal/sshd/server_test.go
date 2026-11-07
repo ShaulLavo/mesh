@@ -27,7 +27,7 @@ func TestServerAuthenticatesOnlyAuthorizedPublicKeys(t *testing.T) {
 	authorized := generatePrivateKey(t)
 	unauthorized := generatePrivateKey(t)
 	authorizedKeys := writeAuthorizedKeys(t, authorized, 0o600)
-	server := mustServer(t, Config{
+	server := mustServer(t, Config{ScopeMembership: fixtureNoScopes,
 		HostKey: hostKey, AuthorizedKeys: authorizedKeys, Addr: "127.0.0.1:2222",
 	})
 	address := testsession.Listen(t, server)
@@ -78,7 +78,7 @@ func TestExtensionOptionsCannotReplaceSecurityBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	normalized, err := validateConfig(context.Background(), Config{
+	normalized, err := validateConfig(context.Background(), Config{ScopeMembership: fixtureNoScopes,
 		HostKey: hostKey, AuthorizedKeys: writeAuthorizedKeys(t, authorized, 0o600), Addr: "127.0.0.1:2222",
 	})
 	if err != nil {
@@ -165,7 +165,7 @@ func TestServerFailsClosedWhenAuthorizedKeysCannotBeTrusted(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := mustServer(t, Config{
+			server := mustServer(t, Config{ScopeMembership: fixtureNoScopes,
 				HostKey: hostKey, AuthorizedKeys: tt.path(t), Addr: "127.0.0.1:2222",
 			})
 			_, err := testsession.NewClientSession(t, testsession.Listen(t, server), clientConfig(t, clientKey, nil))
@@ -180,7 +180,7 @@ func TestServerReReadsAuthorizedKeysForRevocation(t *testing.T) {
 	hostKey := generatePrivateKey(t)
 	clientKey := generatePrivateKey(t)
 	authorizedKeys := writeAuthorizedKeys(t, clientKey, 0o600)
-	server := mustServer(t, Config{
+	server := mustServer(t, Config{ScopeMembership: fixtureNoScopes,
 		HostKey: hostKey, AuthorizedKeys: authorizedKeys, Addr: "127.0.0.1:2222",
 	})
 	address := testsession.Listen(t, server)
@@ -208,7 +208,7 @@ func TestServerHostKeyIsTheMeshIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientKey := generatePrivateKey(t)
-	server := mustServer(t, Config{
+	server := mustServer(t, Config{ScopeMembership: fixtureNoScopes,
 		HostKey: private, AuthorizedKeys: writeAuthorizedKeys(t, clientKey, 0o600), Addr: "127.0.0.1:2222",
 	})
 	expected, err := gossh.NewPublicKey(host.PublicKey)
@@ -237,7 +237,7 @@ func TestServerHostKeyIsTheMeshIdentity(t *testing.T) {
 
 func TestServerExecDoesNotRequirePTY(t *testing.T) {
 	clientKey := generatePrivateKey(t)
-	server := mustServer(t, Config{
+	server := mustServer(t, Config{ScopeMembership: fixtureNoScopes,
 		HostKey:        generatePrivateKey(t),
 		AuthorizedKeys: writeAuthorizedKeys(t, clientKey, 0o600),
 		Addr:           "127.0.0.1:2222",
@@ -274,7 +274,7 @@ func TestServeBindsOnlyConfiguredAddressAndStopsWithContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Serve(ctx, Config{
+		done <- Serve(ctx, Config{ScopeMembership: fixtureNoScopes,
 			HostKey:        hostKey,
 			AuthorizedKeys: authorizedKeys,
 			Addr:           endpoint,
@@ -424,7 +424,7 @@ func TestMarshalHostKeyUsesOpenSSHFormat(t *testing.T) {
 // authentication, so before this the authorized_keys file offered no protection
 // at all against a peer that simply connects and says nothing.
 func TestSilentConnectionsAreDroppedAfterTheLoginGrace(t *testing.T) {
-	server, err := newServer(normalizedConfig{
+	server, err := newServer(normalizedConfig{scopeMembership: fixtureNoScopes,
 		loginGrace:     100 * time.Millisecond,
 		hostKey:        generatePrivateKey(t),
 		authorizedKeys: writeAuthorizedKeys(t, generatePrivateKey(t), 0o600),
@@ -464,7 +464,7 @@ func TestSilentConnectionsAreDroppedAfterTheLoginGrace(t *testing.T) {
 // that channel's request loop forever and retains its goroutine. T17 will
 // supply the handler; until then the request must be refused.
 func TestPtyRequestsAreRefusedUntilASessionHandlerExists(t *testing.T) {
-	server, err := newServer(normalizedConfig{
+	server, err := newServer(normalizedConfig{scopeMembership: fixtureNoScopes,
 		hostKey:        generatePrivateKey(t),
 		authorizedKeys: writeAuthorizedKeys(t, generatePrivateKey(t), 0o600),
 		addr:           mustAddrPort(t, "127.0.0.1:2222"),
@@ -594,7 +594,7 @@ var _ charmssh.Context = (*fakeContext)(nil)
 
 func TestSSHRejectsReversePortForwarding(t *testing.T) {
 	authorized := generatePrivateKey(t)
-	server := mustServer(t, Config{HostKey: generatePrivateKey(t), AuthorizedKeys: writeAuthorizedKeys(t, authorized, 0600), Addr: "127.0.0.1:2222"})
+	server := mustServer(t, Config{ScopeMembership: fixtureNoScopes, HostKey: generatePrivateKey(t), AuthorizedKeys: writeAuthorizedKeys(t, authorized, 0600), Addr: "127.0.0.1:2222"})
 	address := testsession.Listen(t, server)
 	client, err := gossh.Dial("tcp", address, clientConfig(t, authorized, nil))
 	if err != nil {
@@ -610,3 +610,5 @@ func TestSSHRejectsReversePortForwarding(t *testing.T) {
 		t.Fatalf("reverse forwarding accepted=%t error=%v", accepted, err)
 	}
 }
+
+func fixtureNoScopes(string) (bool, error) { return false, nil }

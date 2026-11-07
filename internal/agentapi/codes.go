@@ -26,6 +26,7 @@ const (
 	RequestInProgress        Code = "request.in_progress"
 	RequestOutcomeUnknown    Code = "request.outcome_unknown"
 	RequestNotFound          Code = "request.not_found"
+	AccessDenied             Code = "access.denied"
 	ResourceLimit            Code = "resource.limit"
 	InternalError            Code = "internal.error"
 )
@@ -46,5 +47,5 @@ var Codes = map[Code]ErrorClass{
 	FleetRevisionConflict: {Exit: 1}, FleetStale: {Exit: 1}, SkillConflict: {Exit: 1}, SkillUnsafePath: {Exit: 2}, InternalError: {Exit: 1},
 	RequestKeyConflict: {Exit: 1}, RequestInProgress: {Exit: 1, Retryable: true}, RequestNotFound: {Exit: 1},
 	RequestOutcomeUnknown: {Exit: 1}, "logs.cursor_expired": {Exit: 1, Reserved: true},
-	"result.expired": {Exit: 1, Reserved: true}, "access.denied": {Exit: 1, Reserved: true}, ResourceLimit: {Exit: 1},
+	"result.expired": {Exit: 1, Reserved: true}, AccessDenied: {Exit: 1}, ResourceLimit: {Exit: 1},
 }

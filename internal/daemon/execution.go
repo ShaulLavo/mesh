@@ -17,6 +17,9 @@ import (
 	"github.com/shaul/mesh/internal/worker"
 )
 
+const executionLivePhase = "live"
+const executionUsageInvalidCode = "usage.invalid"
+
 type executionError struct {
 	receipt *protocol.ExecutionReceipt
 	err     error
@@ -91,7 +94,7 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	if launched.Meta.Reservation == nil || *launched.Meta.Reservation != ref {
 		return executionResponse(request, r, execution.ErrUnknown)
 	}
-	r.Phase = "live"
+	r.Phase = executionLivePhase
 	r.LaunchOutcome = "started"
 	publishCtx, cancel := context.WithTimeout(owned, l.publishTimeout)
 	defer cancel()
@@ -164,7 +167,7 @@ func executionWireReceipt(r execution.Receipt) *protocol.ExecutionReceipt {
 func executionCode(err error) string {
 	var invalid *protocol.ExecutionValidationError
 	if errors.As(err, &invalid) {
-		return "usage.invalid"
+		return executionUsageInvalidCode
 	}
 	switch {
 	case errors.Is(err, execution.ErrProgress):
@@ -225,7 +228,7 @@ func uncertainExecution(r execution.Receipt) (execution.Receipt, error) {
 	return r, execution.ErrUnknown
 }
 func (l *lifecycle) confirmExecutionPublication(ctx context.Context, journal *execution.Journal, key execution.Key, r execution.Receipt) (execution.Receipt, error) {
-	if r.Publication == "published" && r.Phase == "live" {
+	if r.Publication == "published" && r.Phase == executionLivePhase {
 		return r, nil
 	}
 	files, err := execution.OpenFiles(filepath.Dir(l.sessionsDir))

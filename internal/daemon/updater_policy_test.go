@@ -30,7 +30,7 @@ func updaterPolicyAuthentication(t *testing.T) (string, *transport.Authenticatio
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := update.Trust(state, actor.ID, true); err != nil {
+	if err := update.Trust(t.Context(), state, actor.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := controlAuthentication(state)
@@ -38,7 +38,7 @@ func updaterPolicyAuthentication(t *testing.T) (string, *transport.Authenticatio
 		t.Fatal(err)
 	}
 	return state, auth, transport.DialOptions{Auth: &transport.Authentication{
-		Key: key, ExpectedIdentity: host.ID, AllowUpdateOnly: true,
+		Key: key, ExpectedIdentity: host.ID, Admission: transport.SignedUpdateAdmission,
 	}}
 }
 

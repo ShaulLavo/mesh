@@ -55,7 +55,7 @@ func TestUpdateHealthAndAuthorizationUseRunningDaemon(t *testing.T) {
 	if err = untrusted.Call(ctx, target, "info", nil, &info); err == nil {
 		t.Fatal("unenrolled administrator got update access")
 	}
-	if err = update.Trust(stateDir, other.ID, true); err != nil {
+	if err = update.Trust(t.Context(), stateDir, other.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	if err = untrusted.Call(ctx, target, "info", nil, &info); err != nil {

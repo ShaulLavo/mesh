@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -54,18 +55,6 @@ while [ ! -e "$3" ]; do sleep 0.01; done
 		err  error
 	}
 	workerDone := make(chan workerResult, 1)
-	go func() {
-		code, err := worker.Run(worker.Config{
-			ID:      "7K3D",
-			Dir:     sessionDir,
-			Command: command,
-			Cwd:     root,
-			Env:     []string{"PATH=/usr/bin:/bin", "TERM=xterm-256color", "LANG=C"},
-			Cols:    91,
-			Rows:    33,
-		})
-		workerDone <- workerResult{code: code, err: err}
-	}()
 
 	var (
 		stopOnce     sync.Once
@@ -75,7 +64,7 @@ while [ ! -e "$3" ]; do sleep 0.01; done
 	)
 	stopWorker := func() {
 		stopOnce.Do(func() {
-			stopWriteErr = os.WriteFile(stopCommand, nil, 0o600)
+			stopWriteErr = errors.Join(os.WriteFile(probeTerminalSize, nil, 0600), os.WriteFile(stopCommand, nil, 0600))
 			if stopWriteErr != nil {
 				return
 			}
@@ -96,6 +85,18 @@ while [ ! -e "$3" ]; do sleep 0.01; done
 			t.Errorf("live worker result = code %d, error %v", stopResult.code, stopResult.err)
 		}
 	})
+	go func() {
+		code, err := worker.Run(worker.Config{
+			ID:      "7K3D",
+			Dir:     sessionDir,
+			Command: command,
+			Cwd:     root,
+			Env:     []string{"PATH=/usr/bin:/bin", "TERM=xterm-256color", "LANG=C"},
+			Cols:    91,
+			Rows:    33,
+		})
+		workerDone <- workerResult{code: code, err: err}
+	}()
 	waitForPath(t, paths.Socket(sessionDir))
 
 	catalog := &lifecycleTestCatalog{sessions: []storage.Session{{
@@ -121,12 +122,13 @@ while [ ! -e "$3" ]; do sleep 0.01; done
 		t.Fatal(err)
 	}
 
+	authentication, options := fullServerTestAuthentication(t.Context(), t)
 	webSocketServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/mesh" {
 			http.NotFound(response, request)
 			return
 		}
-		_ = transport.Serve(response, request, server.Handle)
+		_ = transport.ServeWithOptions(response, request, transport.ServeOptions{Auth: authentication}, server.Handle)
 	}))
 	defer webSocketServer.Close()
 
@@ -134,7 +136,7 @@ while [ ! -e "$3" ]; do sleep 0.01; done
 	client, err := transport.DialOnce(
 		dialContext,
 		"ws"+strings.TrimPrefix(webSocketServer.URL, "http")+"/mesh",
-		transport.DialOptions{},
+		options,
 	)
 	cancelDial()
 	if err != nil {

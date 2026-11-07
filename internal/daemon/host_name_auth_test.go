@@ -36,7 +36,7 @@ func TestHostRenameCannotHealRevokedConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := controlAuthentication(state)
@@ -57,10 +57,10 @@ func TestHostRenameCannotHealRevokedConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer prior.Close() //nolint:errcheck // fixture cleanup
-	if err := identity.RevokeDevice(state, actor.ID); err != nil {
+	if err := identity.RevokeDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	request := protocol.Control{Type: protocol.TypeHostRename, RequestID: "retired-rename", Rename: &protocol.HostRename{

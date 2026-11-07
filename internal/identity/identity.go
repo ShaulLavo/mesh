@@ -9,10 +9,13 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sys/unix"
 )
 
 const privateKeyName = "identity.key"
@@ -67,7 +70,86 @@ func LoadOrCreate(stateDir string) (Host, ed25519.PrivateKey, error) {
 	return publishPrivateKey(stateDir, keyPath, candidate)
 }
 
+// LoadCredential parses the bytes from one checked, bounded no-follow descriptor.
+// It never creates state or consults the machine's ordinary identity directory.
+func LoadCredential(directory string) (Host, ed25519.PrivateKey, error) {
+	directoryFD, err := unix.Open(directory, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return Host{}, nil, fmt.Errorf("identity: open credential directory: %w", err)
+	}
+	dir := os.NewFile(uintptr(directoryFD), directory)
+	defer func() { _ = dir.Close() }()
+	info, err := dir.Stat()
+	if err != nil {
+		return Host{}, nil, fmt.Errorf("identity: inspect credential directory: %w", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int64(stat.Uid) != int64(os.Geteuid()) || info.Mode().Perm() != 0700 {
+		return Host{}, nil, errors.New("identity: credential directory must be owned with permissions 0700")
+	}
+	fd, err := unix.Openat(int(dir.Fd()), privateKeyName, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return Host{}, nil, fmt.Errorf("identity: open credential: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), privateKeyName)
+	defer func() { _ = file.Close() }()
+	info, err = file.Stat()
+	if err != nil {
+		return Host{}, nil, fmt.Errorf("identity: inspect credential: %w", err)
+	}
+	stat, ok = info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || stat.Nlink != 1 || int64(stat.Uid) != int64(os.Geteuid()) {
+		return Host{}, nil, errors.New("identity: credential must be an owned 0600 regular file with one link")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, (16<<10)+1))
+	if err != nil {
+		return Host{}, nil, fmt.Errorf("identity: read credential: %w", err)
+	}
+	if len(data) > 16<<10 {
+		return Host{}, nil, errors.New("identity: credential exceeds size limit")
+	}
+	private, err := parsePrivateKey(data, privateKeyName)
+	if err != nil {
+		return Host{}, nil, err
+	}
+	return hostFor(private), private, nil
+}
+
+func CreateCredential(directory string) (Host, error) {
+	if directory == "" {
+		return Host{}, errors.New("identity: explicit credential directory required")
+	}
+	host, _, err := LoadCredential(directory)
+	if err == nil {
+		return host, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return Host{}, err
+	}
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return Host{}, fmt.Errorf("identity: create credential directory: %w", err)
+	}
+	// Validate the selected directory even when the key is absent.
+	_, _, err = LoadCredential(directory)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Host{}, err
+	}
+	_, candidate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return Host{}, fmt.Errorf("identity: generate credential: %w", err)
+	}
+	_, _, err = publishPrivateKeyWithLoader(directory, filepath.Join(directory, privateKeyName), candidate, func(string) (ed25519.PrivateKey, error) { _, key, err := LoadCredential(directory); return key, err })
+	if err != nil {
+		return Host{}, err
+	}
+	host, _, err = LoadCredential(directory)
+	return host, err
+}
+
 func publishPrivateKey(stateDir, keyPath string, candidate ed25519.PrivateKey) (Host, ed25519.PrivateKey, error) {
+	return publishPrivateKeyWithLoader(stateDir, keyPath, candidate, loadPrivateKey)
+}
+func publishPrivateKeyWithLoader(stateDir, keyPath string, candidate ed25519.PrivateKey, load func(string) (ed25519.PrivateKey, error)) (Host, ed25519.PrivateKey, error) {
 	// OpenSSH format, not PKCS#8: the T15 front door hands this exact file to a
 	// stock ssh client with -i, and OpenSSH before 10.0 cannot read a PKCS#8
 	// Ed25519 key.
@@ -100,7 +182,7 @@ func publishPrivateKey(stateDir, keyPath string, candidate ed25519.PrivateKey) (
 	// another process between the initial read and this point.
 	if err := os.Link(temporaryPath, keyPath); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			private, loadErr := loadPrivateKey(keyPath)
+			private, loadErr := load(keyPath)
 			if loadErr != nil {
 				return Host{}, nil, loadErr
 			}

@@ -23,7 +23,7 @@ import (
 func sessionTestServer(t *testing.T, handler SessionHandler) (*charmssh.Server, *gossh.ClientConfig) {
 	t.Helper()
 	key := generatePrivateKey(t)
-	server := mustServer(t, Config{
+	server := mustServer(t, Config{ScopeMembership: fixtureNoScopes,
 		HostKey: generatePrivateKey(t), AuthorizedKeys: writeAuthorizedKeys(t, key, 0o600),
 		Addr: "127.0.0.1:2222", Handler: handler,
 	})
