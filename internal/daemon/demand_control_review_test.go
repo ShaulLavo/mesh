@@ -12,6 +12,7 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
 	meshserve "github.com/shaul/mesh/internal/serve"
+	"github.com/shaul/mesh/internal/session"
 )
 
 // Stop is paused at the existing unlocked boundary just after acceptStop.
@@ -216,4 +217,11 @@ func TestReviewRecoveryLockObserverUsesFileIdentity(t *testing.T) {
 	if got := reviewLockOpenCount(alias); got != 2 {
 		t.Fatalf("aliased lock observer = %d, want both owned descriptors", got)
 	}
+}
+
+func (reviewRecoveryRuntime) Reserve(context.Context) (session.Reservation, error) {
+	return session.Reservation{}, errors.New("review fixture must not reserve")
+}
+func (reviewRecoveryRuntime) Renew(context.Context, session.Reservation) (session.Reservation, error) {
+	return session.Reservation{}, errors.New("review fixture must not renew")
 }

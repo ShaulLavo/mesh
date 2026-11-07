@@ -230,3 +230,34 @@ mesh skill uninstall --dir ROOT --json
 
 - `--dir ROOT`: existing skills root.
 - `--json`: write one agent result.
+
+## mesh session create
+
+Start one keyed detached PTY command on an online host.
+
+```sh
+mesh session create --host HOST_ID --kind pty --request-key job-17 --cwd /work --json -- /usr/bin/true
+```
+
+- `--host HOST`: online target.
+- `--request-key KEY`: saved logical request key.
+- `--json`: write one agent result.
+- `--timeout D`: finite request deadline.
+- `--kind pty`: explicit PTY kind.
+- `--cwd PATH`: absolute target directory.
+- `--term TERM`: terminal type.
+- `--cols N`: terminal width.
+- `--rows N`: terminal height.
+
+## mesh session request
+
+Read a durable request receipt without launching work.
+
+```sh
+mesh session request --host HOST_ID --request-key job-17 --json
+```
+
+- `--host HOST`: online target.
+- `--request-key KEY`: saved logical request key.
+- `--json`: write one agent result.
+- `--timeout D`: finite request deadline.
