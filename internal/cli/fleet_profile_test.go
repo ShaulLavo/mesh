@@ -181,7 +181,7 @@ func TestFleetProfileHumanShowReportsRevokedAuthor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := update.Trust(state, author.ID, false); err != nil {
+	if err := update.Trust(t.Context(), state, author.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	const notes = "retained author notes"

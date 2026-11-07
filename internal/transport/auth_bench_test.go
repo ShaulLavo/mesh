@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 )
@@ -26,7 +27,7 @@ func benchmarkAuthentication(b *testing.B, mode string, checks *atomic.Int64) (*
 	state := ""
 	if mode == "tls-grants" {
 		state = b.TempDir()
-		if err := identity.ApproveDevice(state, clientID); err != nil {
+		if err := identity.ApproveDevice(b.Context(), state, clientID); err != nil {
 			b.Fatal(err)
 		}
 		authorize = func(id string) bool { checks.Add(1); return identity.GrantedIdentity(state, id) }
@@ -35,7 +36,7 @@ func benchmarkAuthentication(b *testing.B, mode string, checks *atomic.Int64) (*
 	if mode == "tls-grants" {
 		serverAuth.Bind = func(id string) Authorization {
 			current, ok := identity.BindIdentity(state, id)
-			return Authorization{Full: ok, Current: func() bool { checks.Add(1); return ok && current() }}
+			return Authorization{Class: access.FullDevice, Current: func() bool { checks.Add(1); return ok && current() }}
 		}
 	}
 	return serverAuth, &Authentication{Key: clientKey, ExpectedIdentity: serverID}

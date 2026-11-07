@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
@@ -153,6 +154,15 @@ func testClientServerAppDispatch(t *testing.T, local bool) {
 	ctx := context.WithValue(context.Background(), localClientKey{}, local)
 	done := make(chan error, 1)
 	go func() { done <- server.Handle(ctx, client) }()
+	if !local {
+		if err := waitServerResult(t, done, "untrusted app connection"); !errors.Is(err, access.ErrDenied) {
+			t.Fatalf("untrusted context: %v", err)
+		}
+		if origin.calls != 0 {
+			t.Fatal("untrusted connection reached app owner")
+		}
+		return
+	}
 	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeAppRequest, RequestID: "owner-app", App: json.RawMessage(`{"action":"list"}`)}))
 	response := decodeServerControl(t, client.nextWrite(t))
 	wantType := protocol.TypeError

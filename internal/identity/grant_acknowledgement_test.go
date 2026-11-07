@@ -91,7 +91,7 @@ func TestGrantAcknowledgementFailureOrdering(t *testing.T) {
 func checkGrantAckFailure(t *testing.T, name string, cause error) {
 	t.Helper()
 	state, id := t.TempDir(), grantActor(t)
-	if err := ApproveDevice(state, id); err != nil {
+	if err := ApproveDevice(t.Context(), state, id); err != nil {
 		t.Fatal(err)
 	}
 	old := grantBytes(t, state, "authorized_keys")
@@ -137,7 +137,7 @@ func checkGrantAckFailure(t *testing.T, name string, cause error) {
 		return
 	}
 	probe := new(grantPublicationProbe)
-	changed, err := changeDeviceWithPublisher(state, id, true, probe.publish)
+	changed, err := changeDeviceWithPublisher(t.Context(), state, id, true, probe.publish)
 	if changed || err != nil {
 		t.Fatalf("independent call: changed=%v, error=%v", changed, err)
 	}

@@ -282,7 +282,7 @@ func TestCheckedApprovalRestrictedKeysAndConcurrentWriters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireApprovalMutation(t, identity.ApproveDevice(request.StateDir, other.ID))
+	requireApprovalMutation(t, identity.ApproveDevice(t.Context(), request.StateDir, other.ID))
 	current, ok := identity.BindIdentity(request.StateDir, other.ID)
 	if !ok {
 		t.Fatal("unrelated grant did not bind")
@@ -302,7 +302,7 @@ func TestCheckedApprovalRestrictedKeysAndConcurrentWriters(t *testing.T) {
 	}
 	restricted := append([]byte("command=\"fixture-only\" "), ssh.MarshalAuthorizedKey(public)...)
 	requireApprovalMutation(t, os.WriteFile(path, append(original, restricted...), 0600)) //nolint:gosec // controlled restricted-key fixture in the private destination state
-	requireApprovalMutation(t, update.Trust(request.StateDir, request.Source, false))
+	requireApprovalMutation(t, update.Trust(t.Context(), request.StateDir, request.Source, false))
 	updaterPath := filepath.Join(request.StateDir, "updates", "administrators.json")
 	updaterBefore, err := os.ReadFile(updaterPath) //nolint:gosec // fixed updater policy in this test's private destination state
 	if err != nil {

@@ -361,7 +361,7 @@ func TestFleetSignedCarrierTrustAndAuthenticatedSender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := update.Trust(f.state, relay.ID, false); err != nil {
+	if err := update.Trust(t.Context(), f.state, relay.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	writeDeliveryJSON(t, f.controller.membershipPath, update.Fleet{Version: 1, Name: "fixture", Revision: 2, Members: []update.Host{{ID: relay.ID, Endpoint: "unix:/not-running"}}})
@@ -394,7 +394,7 @@ func TestFleetSignedCarrierTrustAndAuthenticatedSender(t *testing.T) {
 	if result.Outcome != hostprofile.Untrusted {
 		t.Fatal(result)
 	}
-	if err := update.Trust(f.state, author.ID, false); err != nil {
+	if err := update.Trust(t.Context(), f.state, author.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.Call(t.Context(), target, hostprofile.ActionFleetPut, hostprofile.PutRequest{Document: doc}, &result); err != nil {
@@ -412,7 +412,7 @@ func TestFleetSignedCarrierTrustAndAuthenticatedSender(t *testing.T) {
 		t.Fatal("carrier admitted invalid document signature")
 	}
 	// Full-device authority still cannot use the local-only signal over a network connection.
-	if err := identity.ApproveDevice(f.state, relay.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), f.state, relay.ID); err != nil {
 		t.Fatal(err)
 	}
 	conn, err := transport.DialOnce(t.Context(), target.Endpoint, transport.DialOptions{Auth: &transport.Authentication{Key: relayKey, ExpectedIdentity: destination.ID}})

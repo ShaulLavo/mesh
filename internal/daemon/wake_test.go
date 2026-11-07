@@ -32,9 +32,12 @@ func TestWakeCrossesWebSocketAndHonorsTargetRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.wake = power
-	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _ = transport.Serve(w, r, server.Handle) }))
+	authentication, options := fullServerTestAuthentication(ctx, t)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: authentication}, server.Handle)
+	}))
 	defer httpServer.Close()
-	conn, err := transport.DialOnce(ctx, "ws"+strings.TrimPrefix(httpServer.URL, "http"), transport.DialOptions{})
+	conn, err := transport.DialOnce(ctx, "ws"+strings.TrimPrefix(httpServer.URL, "http"), options)
 	if err != nil {
 		t.Fatal(err)
 	}

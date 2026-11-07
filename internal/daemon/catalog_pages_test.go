@@ -106,7 +106,7 @@ func TestOversizedCatalogEntryReturnsStructuredError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(ctx, peer) }()
+	go func() { done <- server.Handle(localServerContext(ctx), peer) }()
 	t.Cleanup(func() { _ = client.Close(); _ = peer.Close(); <-done })
 	if err := client.WriteFrame(serverControlFrame(t, protocol.Control{Type: protocol.TypeList, RequestID: "huge", Lean: true})); err != nil {
 		t.Fatal(err)

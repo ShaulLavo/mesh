@@ -88,7 +88,7 @@ func TestBootstrapReapprovalMustNotHealBareGrant(t *testing.T) {
 	if !ok {
 		t.Fatal("fixture grant missing")
 	}
-	if err := RevokeDevice(state, actor.ID); err != nil {
+	if err := RevokeDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	cmd := installerGrantCommand(t, home, bin, script, pub)
@@ -111,7 +111,7 @@ func TestBootstrapMustSerializeWithDeviceRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{first.ID, second.ID} {
-		if err := ApproveDevice(state, id); err != nil {
+		if err := ApproveDevice(t.Context(), state, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -162,7 +162,7 @@ func TestBootstrapMustSerializeWithDeviceRevocation(t *testing.T) {
 	if err := snapshot.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := RevokeDevice(state, second.ID); err != nil {
+	if err := RevokeDevice(t.Context(), state, second.ID); err != nil {
 		t.Fatal(err)
 	}
 	resume, err := os.OpenFile(proceed, os.O_WRONLY, 0600) //nolint:gosec // owned fixture paths, executable payloads and checkout-derived build arguments

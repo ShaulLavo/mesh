@@ -30,7 +30,7 @@ func updateBootstrapCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		status, err := updatebootstrap.Run(cmd.Context(), request, updatebootstrap.Config{StateDir: stateDir, CacheDir: cache, RequiredMount: os.Getenv("MESH_UPDATE_REQUIRED_MOUNT"), Enroll: func(stateDir, id string) error { return update.Trust(stateDir, id, true) }})
+		status, err := updatebootstrap.Run(cmd.Context(), request, updatebootstrap.Config{StateDir: stateDir, CacheDir: cache, RequiredMount: os.Getenv("MESH_UPDATE_REQUIRED_MOUNT"), Enroll: func(stateDir, id string) error { return update.Trust(cmd.Context(), stateDir, id, true) }})
 		if err != nil {
 			return err
 		}

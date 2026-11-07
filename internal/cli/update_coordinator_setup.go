@@ -110,8 +110,8 @@ func installCoordinatorSetupHelper(ctx context.Context, stateDir string) error {
 	if err = validateCoordinatorSetupSource(run); err != nil {
 		return err
 	}
-	if err = update.Trust(stateDir, run.Coordinator, true); err != nil {
-		return err
+	if err = update.Trust(ctx, stateDir, run.Coordinator, true); err != nil {
+		return fmt.Errorf("trust coordinator key: %w", err)
 	}
 	spec, err := coordinatorSetupService()
 	if err != nil {
@@ -214,7 +214,7 @@ func advanceCoordinatorSetup(ctx context.Context, stateDir string, store *update
 		index := coordinatorTargetIndex(run, run.Coordinator)
 		target := run.Targets[index]
 		request := updatebootstrap.Request{ID: run.ID, TargetID: run.Coordinator, CoordinatorID: run.Coordinator, Generation: target.Generation, RetryToken: target.BootstrapRetryToken, Manifest: run.Release}
-		status, err := bootstrap(ctx, request, updatebootstrap.Config{StateDir: stateDir, CacheDir: run.SetupCacheDir, RequiredMount: run.SetupRequiredMount, Enroll: func(stateDir, id string) error { return update.Trust(stateDir, id, true) }})
+		status, err := bootstrap(ctx, request, updatebootstrap.Config{StateDir: stateDir, CacheDir: run.SetupCacheDir, RequiredMount: run.SetupRequiredMount, Enroll: func(stateDir, id string) error { return update.Trust(ctx, stateDir, id, true) }})
 		if err != nil {
 			return stopCoordinatorSetup(store, run.ID, err)
 		}

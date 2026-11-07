@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
 )
@@ -558,4 +559,23 @@ func (c *serviceController) label(ctx context.Context, request protocol.Control)
 	}
 	info := serviceDefinitionInfo(persisted)
 	return protocol.Control{Type: protocol.TypeServiceLabeled, RequestID: request.RequestID, Service: &info}, nil
+}
+
+func (c *serviceController) metadata(ctx context.Context, binding access.Binding) ([]protocol.AccessService, error) {
+	if err := binding.RequireMetadata(); err != nil {
+		return nil, fmt.Errorf("daemon: service metadata admission: %w", err)
+	}
+	definitions, err := c.store.ListServices(ctx)
+	if err != nil {
+		return nil, errAccessUnavailable
+	}
+	result := make([]protocol.AccessService, 0, len(definitions))
+	for _, definition := range definitions {
+		scope := "tailnet"
+		if definition.LocalOnly {
+			scope = "local"
+		}
+		result = append(result, protocol.AccessService{Name: definition.Name, Kind: string(definition.Kind), Scope: scope, Configured: true})
+	}
+	return result, nil
 }

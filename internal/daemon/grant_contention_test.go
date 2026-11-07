@@ -33,7 +33,7 @@ func TestPublishedGrantSurvivesOtherAndIdempotentWriterContention(t *testing.T) 
 		t.Fatal(err)
 	}
 	for _, id := range []string{actor.ID, other.ID} {
-		if err := identity.ApproveDevice(state, id); err != nil {
+		if err := identity.ApproveDevice(t.Context(), state, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -56,10 +56,10 @@ func TestPublishedGrantSurvivesOtherAndIdempotentWriterContention(t *testing.T) 
 		name   string
 		mutate func() error
 	}{
-		{"idempotent other approval", func() error { return identity.ApproveDevice(state, other.ID) }},
-		{"other revocation", func() error { return identity.RevokeDevice(state, other.ID) }},
-		{"new other approval", func() error { return identity.ApproveDevice(state, other.ID) }},
-		{"idempotent actor approval", func() error { return identity.ApproveDevice(state, actor.ID) }},
+		{"idempotent other approval", func() error { return identity.ApproveDevice(t.Context(), state, other.ID) }},
+		{"other revocation", func() error { return identity.RevokeDevice(t.Context(), state, other.ID) }},
+		{"new other approval", func() error { return identity.ApproveDevice(t.Context(), state, other.ID) }},
+		{"idempotent actor approval", func() error { return identity.ApproveDevice(t.Context(), state, actor.ID) }},
 	} {
 		lock, err := os.OpenFile(filepath.Join(state, "device-grants.lock"), os.O_RDWR, 0o600) //nolint:gosec // fixture-owned writer lock
 		if err != nil {
@@ -114,7 +114,7 @@ func TestGrantContentionReleasesRealControlSlotBeforeUnlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := controlAuthentication(state)
