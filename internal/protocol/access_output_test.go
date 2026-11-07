@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -95,5 +96,25 @@ func TestAccessOutputPreviewChecksTextStylesAndActualTimes(t *testing.T) {
 	data, err := json.Marshal(result)
 	if err != nil || strings.Contains(string(data), "recovery") {
 		t.Fatal("invalid DTO", err)
+	}
+}
+
+func TestAccessOutputTextBudgetHasTypedError(t *testing.T) {
+	observed := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	request := AccessOutput{SessionID: "7K3D", Format: AccessPreview, Cols: 160, Rows: 24}
+	line := strings.Repeat("x\u0301\u0301\u0301", 160)
+	result := AccessOutputResult{Subject: outputTestSubject(), SessionID: "7K3D", Format: AccessPreview, Source: "live-preview", ObservedAt: &observed, Preview: make([]string, 24), StyledPreview: make([]PreviewLine, 24)}
+	for row := range result.Preview {
+		result.Preview[row] = line
+		result.StyledPreview[row].Runs = []PreviewRun{{Text: line}}
+	}
+	reply := AccessOutputReply{Type: TypeAccessOutputResult, RequestID: "limit", Result: &result}
+	if _, err := reply.Encode(request); !errors.Is(err, ErrAccessOutputLimit) {
+		t.Fatalf("aggregate text error = %v, want output limit", err)
+	}
+	result.Preview = []string{"\x1b[2J"}
+	result.StyledPreview = []PreviewLine{}
+	if _, err := reply.Encode(request); err == nil || errors.Is(err, ErrAccessOutputLimit) {
+		t.Fatalf("invalid source error = %v, want ordinary validation error", err)
 	}
 }

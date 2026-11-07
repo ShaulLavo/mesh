@@ -418,6 +418,9 @@ const (
 	MaximumAccessOutputReply = (MaxLogTail+2)/3*4 + 4096
 )
 
+// ErrAccessOutputLimit marks a valid output projection that exceeds its response budget.
+var ErrAccessOutputLimit = errors.New("protocol: scoped output exceeds response limit")
+
 type AccessOutput struct {
 	SessionID string `json:"sessionId"`
 	Format    string `json:"format"`
@@ -603,7 +606,7 @@ func validateAccessPreview(result AccessOutputResult, request AccessOutput) erro
 		}
 	}
 	if textBytes > MaxInspectionTextBytes {
-		return errors.New("protocol: output preview exceeds text limit")
+		return fmt.Errorf("%w: preview text", ErrAccessOutputLimit)
 	}
 	// The existing inspection validator owns control-free text and safe styles.
 	return ValidateSessionInspection(SessionInspection{ObservedAt: time.Unix(1, 0).UTC(), Preview: result.Preview, StyledPreview: result.StyledPreview})
@@ -620,7 +623,7 @@ func (reply AccessOutputReply) Encode(request AccessOutput) ([]byte, error) {
 		return nil, fmt.Errorf("protocol: encode output reply: %w", err)
 	}
 	if len(data) > accessOutputReplyLimit(request.Format) {
-		return nil, errors.New("protocol: output reply exceeds encoded limit")
+		return nil, fmt.Errorf("%w: encoded reply", ErrAccessOutputLimit)
 	}
 	return data, nil
 }

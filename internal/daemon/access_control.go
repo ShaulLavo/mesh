@@ -109,7 +109,11 @@ func (s *clientServer) scopedOutputReply(ctx context.Context, binding access.Bin
 		data, err = (protocol.AccessOutputReply{Type: protocol.TypeAccessOutputResult, RequestID: request.RequestID, Result: &result}).Encode(request.Output)
 	}
 	if err != nil {
-		data, err = scopedOutputFailure(request.RequestID, errAccessUnavailable).Encode()
+		failure := errAccessUnavailable
+		if errors.Is(err, protocol.ErrAccessOutputLimit) {
+			failure = errAccessLimit
+		}
+		data, err = scopedOutputFailure(request.RequestID, failure).Encode()
 	}
 	if err != nil {
 		return protocol.Frame{}, fmt.Errorf("daemon: scoped output reply: %w", err)
