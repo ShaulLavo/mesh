@@ -24,6 +24,7 @@ type dashboardUpdateBinding struct {
 }
 type dashboardUpdateSelection struct {
 	Bindings    []dashboardUpdateBinding
+	Problems    []DashboardUpdateSource
 	Fingerprint [32]byte
 }
 type dashboardUpdateWatcher struct {
@@ -49,7 +50,7 @@ func (w *dashboardUpdateWatcher) Run(ctx context.Context, publish func(Dashboard
 		if err != nil {
 			view.Problem = "Saved update status unavailable; inspect mesh update status --details."
 		} else {
-			view.Sources = w.observe(ctx, next.Bindings)
+			view.Sources = w.observe(ctx, next)
 		}
 		current, currentErr := w.read(ctx)
 		if ctx.Err() != nil {
@@ -72,32 +73,32 @@ func (w *dashboardUpdateWatcher) Run(ctx context.Context, publish func(Dashboard
 	}
 	return nil
 }
-func (w *dashboardUpdateWatcher) observe(ctx context.Context, bindings []dashboardUpdateBinding) []DashboardUpdateSource {
-	result := make([]DashboardUpdateSource, 0, len(bindings))
-	for _, binding := range bindings {
+func (w *dashboardUpdateWatcher) observe(ctx context.Context, selection dashboardUpdateSelection) []DashboardUpdateSource {
+	result := make([]DashboardUpdateSource, 0, len(selection.Problems)+len(selection.Bindings))
+	result = append(result, selection.Problems...)
+	for _, binding := range selection.Bindings {
 		if ctx.Err() != nil {
 			break
 		}
 		source := DashboardUpdateSource{Coordinator: binding.Host}
 		if binding.Automatic {
-			var status update.AutomaticStatus
-			observation, err := dashboardStatusCall(ctx, w.caller, binding.Host, "automatic.status", nil, &status)
-			source.Automatic = &DashboardStatus[update.AutomaticStatus]{Observation: observation}
-			if err == nil {
-				source.Automatic.Value = &status
-			}
+			source.Automatic = readDashboardStatus[update.AutomaticStatus](ctx, w.caller, binding.Host, "automatic.status", nil)
 		}
 		if binding.Configuration && ctx.Err() == nil {
-			var status update.ConfigurationStatus
-			observation, err := dashboardStatusCall(ctx, w.caller, binding.Host, "configuration.status", update.Operation{}, &status)
-			source.Configuration = &DashboardStatus[update.ConfigurationStatus]{Observation: observation}
-			if err == nil {
-				source.Configuration.Value = &status
-			}
+			source.Configuration = readDashboardStatus[update.ConfigurationStatus](ctx, w.caller, binding.Host, "configuration.status", update.Operation{})
 		}
 		result = append(result, source)
 	}
 	return result
+}
+func readDashboardStatus[T any](ctx context.Context, caller update.Caller, host update.Host, action string, input any) *DashboardStatus[T] {
+	var value T
+	observation, err := dashboardStatusCall(ctx, caller, host, action, input, &value)
+	status := &DashboardStatus[T]{Observation: observation}
+	if err == nil {
+		status.Value = &value
+	}
+	return status
 }
 func dashboardStatusCall(ctx context.Context, caller update.Caller, host update.Host, action string, input, output any) (DashboardStatusObservation, error) {
 	observation := DashboardStatusObservation{State: DashboardStatusUnavailable}
@@ -134,29 +135,26 @@ func readDashboardUpdateSelection(ctx context.Context, stateDir, localID string)
 	if err != nil {
 		return selection, fmt.Errorf("open saved updates: %w", err)
 	}
+	local := update.LocalHost(stateDir, localID)
 	automatic, err := store.ReadAutomatic(ctx)
-	if err != nil {
-		return selection, fmt.Errorf("read saved automatic policy: %w", err)
+	if selection.unavailable(local, true, err) {
+		automatic = update.AutomaticStatus{}
 	}
 	consent, err := store.RecipientConsent(ctx)
-	if err != nil {
-		return selection, fmt.Errorf("read saved binary consent: %w", err)
+	if selection.unavailable(update.Host{}, true, err) {
+		consent = update.RecipientConsent{}
 	}
 	grant, err := store.ConfigurationGrant(ctx)
-	if err != nil {
-		return selection, fmt.Errorf("read saved configuration grant: %w", err)
+	if selection.unavailable(update.Host{}, false, err) {
+		grant = update.ConfigurationGrant{}
 	}
 	configuration, err := store.ConfigurationStatus(ctx, "")
-	if err != nil {
-		return selection, fmt.Errorf("read saved configuration change: %w", err)
+	if selection.unavailable(local, false, err) {
+		configuration = update.ConfigurationStatus{}
 	}
-	if err := selection.addLocal(update.LocalHost(stateDir, localID), automatic, configuration); err != nil {
-		return selection, err
-	}
+	selection.addLocal(local, automatic, configuration)
 	if consent.Enabled || grant.UsageFeed || grant.DomainPolicy {
-		if err := selection.addRecipientBindings(localID, consent, grant); err != nil {
-			return selection, err
-		}
+		selection.addRecipientBindings(localID, consent, grant)
 	}
 	data, err := json.Marshal(struct {
 		Policy                 *update.AutomaticPolicy
@@ -165,39 +163,58 @@ func readDashboardUpdateSelection(ctx context.Context, stateDir, localID string)
 		ChangeID, ChangeDigest string
 		ConfigurationRevision  uint64
 		Bindings               []dashboardUpdateBinding
-	}{dashboardAutomaticPolicy(automatic), consent, grant, dashboardConfigurationIdentity(configuration), dashboardConfigurationDigest(configuration), configuration.Revision, selection.Bindings})
+		Problems               []DashboardUpdateSource
+	}{dashboardAutomaticPolicy(automatic), consent, grant, dashboardConfigurationIdentity(configuration), dashboardConfigurationDigest(configuration), configuration.Revision, selection.Bindings, selection.Problems})
 	if err != nil {
 		return selection, fmt.Errorf("identify dashboard enrollment: %w", err)
 	}
 	selection.Fingerprint = sha256.Sum256(data)
 	return selection, nil
 }
-func (s *dashboardUpdateSelection) addRecipientBindings(localID string, consent update.RecipientConsent, grant update.ConfigurationGrant) error {
-	path, err := ConfigPath()
-	if err != nil {
-		return err
+func (s *dashboardUpdateSelection) unavailable(host update.Host, automatic bool, err error) bool {
+	if err == nil {
+		return false
 	}
-	fleet, err := update.ReadFleet(filepath.Join(filepath.Dir(path), "fleet.json"))
-	if err != nil {
-		return fmt.Errorf("read pinned coordinator fleet: %w", err)
+	source := DashboardUpdateSource{Coordinator: host}
+	observation := DashboardStatusObservation{State: DashboardStatusUnavailable, Problem: err.Error()}
+	if automatic {
+		source.Automatic = &DashboardStatus[update.AutomaticStatus]{Observation: observation}
+	} else {
+		source.Configuration = &DashboardStatus[update.ConfigurationStatus]{Observation: observation}
+	}
+	s.Problems = append(s.Problems, source)
+	return true
+}
+func (s *dashboardUpdateSelection) addRecipientBindings(localID string, consent update.RecipientConsent, grant update.ConfigurationGrant) {
+	path, err := ConfigPath()
+	var fleet update.Fleet
+	if err == nil {
+		fleet, err = update.ReadFleet(filepath.Join(filepath.Dir(path), "fleet.json"))
 	}
 	if consent.Enabled {
-		if consent.LocalHostID != localID || consent.Membership != fleet.Digest() {
-			return errors.New("saved binary enrollment differs from local identity or pinned fleet")
-		}
-		if err := s.addPinned(fleet, consent.CoordinatorID, true); err != nil {
-			return err
-		}
+		s.unavailable(update.Host{}, true, s.addBinaryRecipient(localID, consent, fleet, err))
 	}
 	if grant.UsageFeed || grant.DomainPolicy {
-		if grant.LocalHostID != localID {
-			return errors.New("configuration grant belongs to another local identity")
-		}
-		if err := s.addPinned(fleet, grant.CoordinatorID, false); err != nil {
-			return err
-		}
+		s.unavailable(update.Host{}, false, s.addConfigurationRecipient(localID, grant, fleet, err))
 	}
-	return nil
+}
+func (s *dashboardUpdateSelection) addBinaryRecipient(localID string, consent update.RecipientConsent, fleet update.Fleet, fleetErr error) error {
+	if fleetErr != nil {
+		return fmt.Errorf("read pinned binary coordinator fleet: %w", fleetErr)
+	}
+	if consent.LocalHostID != localID || consent.Membership != fleet.Digest() {
+		return errors.New("saved binary enrollment differs from local identity or pinned fleet")
+	}
+	return s.addPinned(fleet, consent.CoordinatorID, true)
+}
+func (s *dashboardUpdateSelection) addConfigurationRecipient(localID string, grant update.ConfigurationGrant, fleet update.Fleet, fleetErr error) error {
+	if fleetErr != nil {
+		return fmt.Errorf("read pinned configuration coordinator fleet: %w", fleetErr)
+	}
+	if grant.LocalHostID != localID {
+		return errors.New("configuration grant belongs to another local identity")
+	}
+	return s.addPinned(fleet, grant.CoordinatorID, false)
 }
 func (s *dashboardUpdateSelection) addPinned(fleet update.Fleet, id string, automatic bool) error {
 	index := slices.IndexFunc(fleet.Members, func(host update.Host) bool { return host.ID == id })
@@ -245,18 +262,18 @@ func dashboardConfigurationDigest(status update.ConfigurationStatus) string {
 	return status.Change.Proposal.Digest
 }
 
-func (s *dashboardUpdateSelection) addLocal(local update.Host, automatic update.AutomaticStatus, configuration update.ConfigurationStatus) error {
-	if automatic.Record != nil && automatic.Record.Policy.CoordinatorID != local.ID {
-		return errors.New("saved automatic policy belongs to another coordinator")
-	}
-	if configuration.Change != nil && configuration.Change.Proposal.CoordinatorID != local.ID {
-		return errors.New("saved configuration belongs to another coordinator")
-	}
+func (s *dashboardUpdateSelection) addLocal(local update.Host, automatic update.AutomaticStatus, configuration update.ConfigurationStatus) {
 	if automatic.Record != nil {
-		s.add(local, true, false)
+		s.unavailable(local, true, s.addLocalCoordinator(local, automatic.Record.Policy.CoordinatorID, true))
 	}
 	if configuration.Change != nil {
-		s.add(local, false, true)
+		s.unavailable(local, false, s.addLocalCoordinator(local, configuration.Change.Proposal.CoordinatorID, false))
 	}
+}
+func (s *dashboardUpdateSelection) addLocalCoordinator(local update.Host, coordinatorID string, automatic bool) error {
+	if coordinatorID != local.ID {
+		return errors.New("saved status belongs to another coordinator")
+	}
+	s.add(local, automatic, !automatic)
 	return nil
 }

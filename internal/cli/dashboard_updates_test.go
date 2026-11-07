@@ -145,13 +145,13 @@ func TestDashboardUpdatesRejectsChangedFleetOrLocalBinding(t *testing.T) {
 	if _, err := store.SetConfigurationGrant(t.Context(), 0, local.ID, coordinator.ID, true, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readDashboardUpdateSelection(t.Context(), state, coordinator.ID); err == nil {
-		t.Fatal("adopted someone else's local grant")
+	if selection, err := readDashboardUpdateSelection(t.Context(), state, coordinator.ID); err != nil || len(selection.Bindings) != 0 || len(selection.Problems) != 1 {
+		t.Fatalf("adopted someone else's local grant: %+v %v", selection, err)
 	}
 	path, _ := ConfigPath()
 	saveUpdateTestFleet(t, filepath.Join(filepath.Dir(path), "fleet.json"), update.Fleet{Version: 1, Name: "changed", Revision: 2, Members: []update.Host{local}})
-	if _, err := readDashboardUpdateSelection(t.Context(), state, local.ID); err == nil {
-		t.Fatal("searched address book for missing coordinator")
+	if selection, err := readDashboardUpdateSelection(t.Context(), state, local.ID); err != nil || len(selection.Bindings) != 0 || len(selection.Problems) != 1 {
+		t.Fatalf("searched address book for missing coordinator: %+v %v", selection, err)
 	}
 }
 func TestDashboardUpdatesWithdrawnSelectionAndCancellationJoin(t *testing.T) {
@@ -279,5 +279,151 @@ func TestDashboardActualCLIInstallsPassiveUpdateAdapter(t *testing.T) {
 	_, _, err := executeCommand(t, Dependencies{Dashboard: dashboard, UpdateCaller: caller}, "dashboard", "--wall")
 	if err != nil || !observed || calls.Load() != 0 {
 		t.Fatalf("actual CLI adapter: observed=%t calls=%d err=%v", observed, calls.Load(), err)
+	}
+}
+
+func TestDashboardUpdatesIndependentEnrollmentFailures(t *testing.T) {
+	for _, damaged := range []string{"binary-membership", "binary-consent", "automatic-policy", "configuration-binding", "configuration-grant", "configuration-change"} {
+		t.Run(damaged, func(t *testing.T) { testDashboardIndependentEnrollment(t, damaged) })
+	}
+}
+
+func testDashboardIndependentEnrollment(t *testing.T, damaged string) {
+	t.Helper()
+	state, local, coordinator, store := dashboardGrantFixture(t)
+	path, _ := ConfigPath()
+	fleet, err := update.ReadFleet(filepath.Join(filepath.Dir(path), "fleet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetRecipientConsent(t.Context(), 0, update.ConsentChange{LocalHostID: local.ID, CoordinatorID: coordinator.ID, Fleet: fleet, Epoch: 1, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetConfigurationGrant(t.Context(), 0, local.ID, coordinator.ID, true, false); err != nil {
+		t.Fatal(err)
+	}
+	before, err := readDashboardUpdateSelection(t.Context(), state, local.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted := damageDashboardEnrollment(t, damaged, state, coordinator, store, fleet)
+	calls := make(map[string]int)
+	watcher := newDashboardUpdateWatcher(state, local.ID, updateCallFunc(func(_ context.Context, host update.Host, action string, _, output any) error {
+		if !reflect.DeepEqual(host, coordinator) || !wanted[action] {
+			t.Errorf("invalid source polled or pin substituted: %s %+v", action, host)
+			return errors.New("invalid source")
+		}
+		calls[action]++
+		switch value := output.(type) {
+		case *update.AutomaticStatus:
+			*value = update.AutomaticStatus{State: "independent binary status"}
+		case *update.ConfigurationStatus:
+			*value = update.ConfigurationStatus{Revision: 3}
+		}
+		return nil
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var received DashboardUpdates
+	if err := watcher.Run(ctx, func(view DashboardUpdates) { received = view; cancel() }); err != nil {
+		t.Fatal(err)
+	}
+	if received.Problem != "" {
+		t.Fatalf("one enrollment failure suppressed other sources: %+v", received)
+	}
+	for action, expected := range wanted {
+		if (calls[action] == 1) != expected {
+			t.Errorf("%s calls=%d, expected enabled=%t", action, calls[action], expected)
+		}
+	}
+	if !dashboardHasEnrollmentProblem(received) {
+		t.Fatalf("invalid source disappeared rather than reporting unavailable: %+v", received)
+	}
+	after, err := readDashboardUpdateSelection(t.Context(), state, local.ID)
+	if err != nil || after.Fingerprint == before.Fingerprint {
+		t.Fatalf("source validity absent from fingerprint: %v", err)
+	}
+}
+
+func damageDashboardEnrollment(t *testing.T, damaged, state string, coordinator update.Host, store *update.Store, fleet update.Fleet) map[string]bool {
+	t.Helper()
+	wanted := map[string]bool{"automatic.status": true, "configuration.status": true}
+	file := ""
+	switch damaged {
+	case "binary-membership":
+		fleet.Revision++
+		path, _ := ConfigPath()
+		saveUpdateTestFleet(t, filepath.Join(filepath.Dir(path), "fleet.json"), fleet)
+		wanted["automatic.status"] = false
+	case "binary-consent":
+		file, wanted["automatic.status"] = "automatic-consent.json", false
+	case "automatic-policy":
+		file = "automatic.json"
+	case "configuration-binding":
+		if _, err := store.SetConfigurationGrant(t.Context(), 1, coordinator.ID, coordinator.ID, true, false); err != nil {
+			t.Fatal(err)
+		}
+		wanted["configuration.status"] = false
+	case "configuration-grant":
+		file, wanted["configuration.status"] = "config-grant.json", false
+	case "configuration-change":
+		file = "configuration.json"
+	}
+	if file != "" {
+		if err := os.WriteFile(filepath.Join(state, "updates", file), []byte("invalid"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return wanted
+}
+
+func dashboardHasEnrollmentProblem(view DashboardUpdates) bool {
+	for _, source := range view.Sources {
+		if source.Automatic != nil && source.Automatic.Observation.State == DashboardStatusUnavailable && source.Automatic.Observation.Problem != "" {
+			return true
+		}
+		if source.Configuration != nil && source.Configuration.Observation.State == DashboardStatusUnavailable && source.Configuration.Observation.Problem != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDashboardUpdatesIndependentEnrollmentFencesWithdrawnResponse(t *testing.T) {
+	state, local, coordinator, store := dashboardGrantFixture(t)
+	path, _ := ConfigPath()
+	fleet, err := update.ReadFleet(filepath.Join(filepath.Dir(path), "fleet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetRecipientConsent(t.Context(), 0, update.ConsentChange{LocalHostID: local.ID, CoordinatorID: coordinator.ID, Fleet: fleet, Epoch: 1, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetConfigurationGrant(t.Context(), 0, local.ID, coordinator.ID, true, false); err != nil {
+		t.Fatal(err)
+	}
+	fleet.Revision++
+	saveUpdateTestFleet(t, filepath.Join(filepath.Dir(path), "fleet.json"), fleet)
+	calls := 0
+	watcher := newDashboardUpdateWatcher(state, local.ID, updateCallFunc(func(call context.Context, host update.Host, action string, _, output any) error {
+		if action != "configuration.status" || !reflect.DeepEqual(host, coordinator) {
+			t.Fatalf("invalid binary enrollment queried: %s %+v", action, host)
+		}
+		calls++
+		if _, err := store.SetConfigurationGrant(call, 1, local.ID, "", false, false); err != nil {
+			t.Fatal(err)
+		}
+		*output.(*update.ConfigurationStatus) = update.ConfigurationStatus{Revision: 3}
+		return nil
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := watcher.Run(ctx, func(view DashboardUpdates) {
+		cancel()
+		if len(view.Sources) != 0 {
+			t.Errorf("withdrawn source published late status: %+v", view)
+		}
+	}); err != nil || calls != 1 {
+		t.Fatalf("independent configuration observation calls=%d: %v", calls, err)
 	}
 }

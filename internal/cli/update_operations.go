@@ -327,7 +327,7 @@ func readUpdatePresentation(ctx context.Context, environment updateEnvironment) 
 		return DashboardUpdates{Problem: "Saved update status unavailable; inspect mesh update automatic status or mesh update config status with --details."}
 	}
 	watcher := newDashboardUpdateWatcher(environment.stateDir, environment.local.ID, environment.client)
-	sources := watcher.observe(ctx, selection.Bindings)
+	sources := watcher.observe(ctx, selection)
 	current, err := readDashboardUpdateSelection(ctx, environment.stateDir, environment.local.ID)
 	if err != nil || current.Fingerprint != selection.Fingerprint {
 		return DashboardUpdates{Problem: "Saved update enrollment changed; read status again."}

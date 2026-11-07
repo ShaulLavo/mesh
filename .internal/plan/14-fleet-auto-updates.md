@@ -144,3 +144,15 @@ no row without status. Its CLI watcher has a five-second per-read deadline and
 enrollment changes. No release fetch, wake, enrollment, trust change or restart
 is part of presentation. Actual fleet enrollment, rollout and passive HTTPS
 acceptance remain separate unfinished work.
+
+A stale binary enrollment or malformed authority record reports its own source
+as unavailable without hiding a separately valid configuration grant. The
+reverse separation also holds. Selection fingerprints include source failures,
+so a response from a withdrawn grant cannot appear after a membership change.
+
+The first unit 5 local package run inherited the operator's default configuration
+paths and reported domain-generation refusals plus a legacy-topic timeout. The
+single later campaign used isolated HOME, XDG and Mesh paths and passed all
+package races. These are setup-distinct observations, not a same-source A/B
+proof or a diagnosed cause for the timeout. The retained unit 5 report records
+both commands and outcomes. Normal corrected-source CI remains required.

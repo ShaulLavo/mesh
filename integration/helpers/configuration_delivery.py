@@ -34,9 +34,9 @@ def wait_saved(coordinator, change):
         _, status = config(coordinator, "status", change)
         return status if status["change"]["targets"][0]["state"] == "saved" else None
     status = eventually(saved, "approved configuration was not saved", timeout=8)
-    human = coordinator.command("update", "config", "status")
-    require("Configuration publication" in human.stdout, human.stdout)
-    require(change not in human.stdout, "default configuration status exposed change ID")
+    human = coordinator.command("update", "config", "status").stdout.decode("utf-8")
+    require("Configuration publication" in human, human)
+    require(change not in human, "default configuration status exposed change ID")
     current = coordinator.command("update", "config", "status", "--json")
     require(json.loads(current.stdout)["change"]["proposal"]["id"] == change, current.stdout)
     return status
