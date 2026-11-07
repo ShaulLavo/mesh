@@ -16,7 +16,10 @@ import (
 )
 
 func TestSkillStatusRegisteredCommand(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("MESH_CONFIG_DIR", filepath.Join(root, "absent-config"))
 	t.Setenv("MESH_STATE_DIR", filepath.Join(root, "absent-state"))
 	stdout, stderr, err := executeCommand(t, Dependencies{}, "skill", "status", "--dir", root, "--json")
@@ -36,7 +39,10 @@ func TestSkillStatusRegisteredCommand(t *testing.T) {
 }
 
 func TestSkillShowSkipsOnlyOwnClientActivation(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	config := filepath.Join(root, "config")
 	state := filepath.Join(root, "state")
 	t.Setenv("MESH_CONFIG_DIR", config)
@@ -60,8 +66,29 @@ func TestSkillShowSkipsOnlyOwnClientActivation(t *testing.T) {
 	}
 	stdout, stderr, err = executeCommand(t, Dependencies{}, "skill", "status", "--dir", root, "--json")
 	assertSkillFailure(t, stdout, stderr, err, "state.unavailable", 1)
+	if !strings.Contains(stdout, "retire obsolete host config fields") {
+		t.Fatalf("status did not reject malformed host config: %s", stdout)
+	}
 	if _, err := os.Lstat(state); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("show or status initialized identity state")
+	}
+}
+
+func TestSkillStatusRejectsConfigAliasAncestry(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "config-alias")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MESH_CONFIG_DIR", filepath.Join(alias, "absent-config"))
+	t.Setenv("MESH_STATE_DIR", filepath.Join(root, "absent-state"))
+	stdout, stderr, err := executeCommand(t, Dependencies{}, "skill", "status", "--dir", root, "--json")
+	assertSkillFailure(t, stdout, stderr, err, "state.unavailable", 1)
+	if !strings.Contains(stdout, "open directory config-alias:") {
+		t.Fatalf("status did not reject config alias ancestry: %s", stdout)
 	}
 }
 
