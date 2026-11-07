@@ -15,6 +15,11 @@ import (
 )
 
 func TestScopedCurrentIsCheckedInsideActualWriteLock(t *testing.T) {
+	for _, name := range []string{"access.read.result", "access.output.result"} {
+		t.Run(name, func(t *testing.T) { checkScopedActualWriteLock(t, name) })
+	}
+}
+func checkScopedActualWriteLock(t *testing.T, name string) {
 	serverID, serverKey := authIdentity(t)
 	clientID, clientKey := authIdentity(t)
 	var current atomic.Bool
@@ -37,7 +42,7 @@ func TestScopedCurrentIsCheckedInsideActualWriteLock(t *testing.T) {
 		case <-ctx.Done():
 			return nil
 		}
-		err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: []byte(`{"type":"access.read.result","secret":"queued"}`)})
+		err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: []byte(fmt.Sprintf(`{"type":%q,"secret":"queued"}`, name))})
 		completed <- err
 		return nil
 	})
