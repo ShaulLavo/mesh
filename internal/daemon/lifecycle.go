@@ -23,6 +23,7 @@ import (
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/storage"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
 	"github.com/shaul/mesh/internal/terminfo"
@@ -62,6 +63,9 @@ type lifecycleConfig struct {
 }
 
 type lifecycle struct {
+	executionOnce    sync.Once
+	execution        *execution.Journal
+	executionErr     error
 	names            *machinename.Store
 	nameChanged      func(protocol.HostInfo)
 	renameMu         sync.Mutex
@@ -268,6 +272,9 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 		}
 	}
 	switch request.Type {
+	case protocol.TypeExecutionCreate, protocol.TypeExecutionRequest:
+		response, err := l.executionControl(ctx, request)
+		return response, true, err
 	case protocol.TypeRecover, protocol.TypeRecoveryRead, protocol.TypeRecoveryCommand:
 		response, err := l.recoveryControl(ctx, request)
 		return response, true, err

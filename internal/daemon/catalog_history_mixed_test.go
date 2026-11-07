@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -58,7 +59,11 @@ func addMixedHistoryRecord(t *testing.T, h historyCatalog, index int, labelled b
 
 func writeMixedHistoryRecord(t *testing.T, root, id, label string, created time.Time, running bool) {
 	t.Helper()
-	meta := worker.Meta{ID: id, PID: 4242, Command: []string{"sh", "-lc", "true"}, Label: label, State: worker.StateRunning, BootID: "previous-boot", CreatedAt: created}
+	meta := catalogTestMeta(id, worker.StateRunning, "previous-boot")
+	meta.PID, meta.Command, meta.Label, meta.CreatedAt = 4242, []string{"sh", "-lc", "true"}, label, created
+	if label != "" {
+		meta.Reservation.Purpose = session.Managed
+	}
 	if !running {
 		exited, code := created.Add(time.Second), 0
 		meta.State, meta.ExitedAt, meta.ExitCode = worker.StateExited, &exited, &code
@@ -68,10 +73,10 @@ func writeMixedHistoryRecord(t *testing.T, root, id, label string, created time.
 		t.Fatal(err)
 	}
 	dir := filepath.Join(root, id)
-	if err := os.Mkdir(dir, 0o700); err != nil {
+	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(paths.Meta(dir), data, 0o600); err != nil {
+	if err := os.WriteFile(paths.Meta(dir), data, 0600); err != nil {
 		t.Fatal(err)
 	}
 }

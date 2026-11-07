@@ -440,6 +440,10 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
+	if err := lifecycle.restoreExecution(daemonCtx); err != nil {
+		reporter.report(err)
+	}
+	defer lifecycle.closeExecution()
 	state.hostChanged(lifecycle.declaredHostInfo())
 	var appLocal *apps.Origin
 	if appClient != nil {
@@ -606,6 +610,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	go func() {
 		defer close(reconciled)
 		reconcilePeriodically(daemonCtx, catalog, opts.reconcileInterval, reporter, func() {
+			reporter.report(lifecycle.restoreExecution(daemonCtx))
 			state.hostChanged(lifecycle.declaredHostInfo())
 			if state.hasTopic("services") {
 				serviceControl.observeRegistry(daemonCtx, state.observeServices)

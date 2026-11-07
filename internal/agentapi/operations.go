@@ -2,6 +2,7 @@ package agentapi
 
 import "strings"
 
+const hostValue = "HOST"
 const keyDirFlag = "--key-dir"
 const identityFlag = "--identity"
 const expectedRevisionFlag = "--expected-revision"
@@ -45,8 +46,8 @@ var Operations = []Operation{
 	{Name: "skill.update", Command: "mesh skill update"},
 	{Name: "skill.status", Command: "mesh skill status"},
 	{Name: "skill.uninstall", Command: "mesh skill uninstall"},
-	{Name: "sessions.create", Command: "mesh session create"},
-	{Name: "sessions.request", Command: "mesh session request"},
+	{Name: "sessions.create", Command: "mesh session create", Args: "-- command [args...]", Implemented: true, Network: true, Mutates: true, Flags: executionFlags(true), Summary: "Start one keyed detached PTY command on an online host.", Example: "mesh session create --host HOST_ID --kind pty --request-key job-17 --cwd /work --json -- /usr/bin/true"},
+	{Name: "sessions.request", Command: "mesh session request", Implemented: true, Network: true, Flags: executionFlags(false), Summary: "Read a durable request receipt without launching work.", Example: "mesh session request --host HOST_ID --request-key job-17 --json"},
 	{Name: "sessions.wait", Command: "mesh session wait"},
 	{Name: "sessions.logs", Command: "mesh session logs"},
 	{Name: "sessions.signal", Command: "mesh session signal"},
@@ -115,16 +116,24 @@ func invocationWords(args []string) []string {
 
 func valueFlag(arg string) bool {
 	switch arg {
-	case "--leave-key", "--detach-key", hostFlag, "--timeout", "--file", expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", "--session", "--cursor", limitFlag, "--page":
+	case "--leave-key", "--detach-key", hostFlag, "--timeout", "--file", expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", "--session", "--cursor", limitFlag, "--page", "--request-key", "--kind", "--cwd", "--term", "--cols", "--rows":
 		return true
 	}
 	return false
 }
 
 func sessionReadFlags(list bool) []Flag {
-	flags := []Flag{{Name: hostFlag, Value: "HOST", Required: true, Summary: "machine name or exact host ID"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline from 100ms to 60s"}}
+	flags := []Flag{{Name: hostFlag, Value: hostValue, Required: true, Summary: "machine name or exact host ID"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline from 100ms to 60s"}}
 	if !list {
 		return append(flags, Flag{Name: "--preview", Summary: "include a preview at most 80 by 24"})
 	}
 	return append(flags, Flag{Name: "--all", Summary: "include ended sessions"}, Flag{Name: "--detail", Summary: "include launch command and directory"}, Flag{Name: limitFlag, Value: "N", Summary: "page size from 1 to 500"}, Flag{Name: "--page", Value: "TOKEN", Summary: "nextPage token from this host"})
+}
+
+func executionFlags(create bool) []Flag {
+	flags := []Flag{{Name: hostFlag, Value: hostValue, Required: true, Summary: "online target"}, {Name: "--request-key", Value: "KEY", Required: true, Summary: "saved logical request key"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "finite request deadline"}}
+	if create {
+		return append(flags, Flag{Name: "--kind", Value: "pty", Required: true, Summary: "explicit PTY kind"}, Flag{Name: "--cwd", Value: "PATH", Required: true, Summary: "absolute target directory"}, Flag{Name: "--term", Value: "TERM", Summary: "terminal type"}, Flag{Name: "--cols", Value: "N", Summary: "terminal width"}, Flag{Name: "--rows", Value: "N", Summary: "terminal height"})
+	}
+	return flags
 }

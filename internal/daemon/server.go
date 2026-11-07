@@ -228,13 +228,8 @@ func requestMetadata(frame protocol.Frame) protocol.Control {
 }
 
 func writeClientRequestError(relay *clientRelay, request protocol.Control, requestErr error) error {
-	frame, err := encodeClientControl(protocol.Control{
-		Type:      protocol.TypeError,
-		RequestID: request.RequestID,
-		SessionID: request.SessionID,
-		ErrorCode: clientErrorCode(requestErr),
-		Message:   requestErr.Error(),
-	})
+	response := clientRequestError(request, requestErr)
+	frame, err := encodeClientControl(response)
 	if err != nil {
 		return fmt.Errorf("daemon: encode client error response: %w", err)
 	}
@@ -244,9 +239,29 @@ func writeClientRequestError(relay *clientRelay, request protocol.Control, reque
 	return nil
 }
 
+func clientRequestError(request protocol.Control, requestErr error) protocol.Control {
+	response := protocol.Control{
+		Type:      protocol.TypeError,
+		RequestID: request.RequestID,
+		SessionID: request.SessionID,
+		ErrorCode: clientErrorCode(requestErr),
+		Message:   requestErr.Error(),
+	}
+	var accepted *executionError
+	if errors.As(requestErr, &accepted) {
+		response.ExecutionReceipt = accepted.receipt
+		response.ErrorCode = executionCode(requestErr)
+	}
+	return response
+}
+
 var errUnknownControl = errors.New("daemon: unknown control")
 
 func clientErrorCode(err error) string {
+	var invalid *protocol.ExecutionValidationError
+	if errors.As(err, &invalid) {
+		return executionUsageInvalidCode
+	}
 	if errors.Is(err, errUnknownControl) {
 		return protocol.ErrorCodeUnknownControl
 	}

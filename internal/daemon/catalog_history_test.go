@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -62,7 +63,8 @@ func (h historyCatalog) exited(t *testing.T, id, label string, created time.Time
 	t.Helper()
 	exitedAt, code := created.Add(ran), 1
 	meta := worker.Meta{
-		ID: id, PID: 4242, Command: []string{"sh", "-lc", "serve"}, Cwd: "/tmp", Label: label,
+		Reservation: &session.Reservation{ID: id, Instance: "0123456789abcdef0123456789abcdef", BootID: "boot-a", Purpose: session.Managed},
+		ID:          id, PID: 4242, Command: []string{"sh", "-lc", "serve"}, Cwd: "/tmp", Label: label,
 		State: worker.StateExited, CreatedAt: created, ExitedAt: &exitedAt, ExitCode: &code, BootID: "boot-a",
 	}
 	writeCatalogMeta(t, h.root, id, meta)
@@ -72,7 +74,8 @@ func (h historyCatalog) exited(t *testing.T, id, label string, created time.Time
 func (h historyCatalog) running(t *testing.T, id, label, boot string, created time.Time) {
 	t.Helper()
 	meta := worker.Meta{
-		ID: id, PID: 4242, Command: []string{"sh", "-lc", "serve"}, Cwd: "/tmp", Label: label,
+		Reservation: &session.Reservation{ID: id, Instance: "0123456789abcdef0123456789abcdef", BootID: boot, Purpose: session.Managed},
+		ID:          id, PID: 4242, Command: []string{"sh", "-lc", "serve"}, Cwd: "/tmp", Label: label,
 		State: worker.StateRunning, CreatedAt: created, BootID: boot,
 	}
 	writeCatalogMeta(t, h.root, id, meta)

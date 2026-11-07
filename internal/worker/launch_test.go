@@ -2,6 +2,8 @@ package worker
 
 import (
 	"errors"
+	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/session/execution"
 	"os"
 	"path/filepath"
 	"slices"
@@ -38,11 +40,11 @@ func TestLaunchDetachedRejectsInvalidConfigBeforeCreatingState(t *testing.T) {
 
 func TestReserveSessionDirCreatesDistinctPrivateDirectories(t *testing.T) {
 	root := t.TempDir()
-	firstID, firstDir, err := reserveSessionDir(root)
+	firstID, firstDir, err := testReservationDirectory(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondID, secondDir, err := reserveSessionDir(root)
+	secondID, secondDir, err := testReservationDirectory(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,11 +127,12 @@ func TestWithSessionIdentityReplacesTheParentSession(t *testing.T) {
 
 func TestRecoveryLaunchFailureRetainsItsReservation(t *testing.T) {
 	root := t.TempDir()
-	id, dir, err := reserveSessionDir(root)
+	ref, err := Reserve(root, session.Recovery)
+	id, dir := ref.ID, filepath.Join(root, ref.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = LaunchDetached(LaunchConfig{SessionsDir: root, ReservedID: id, RecoveredFrom: "7K3D", Executable: filepath.Join(root, "missing-mesh"), Command: []string{"sh"}})
+	_, err = LaunchDetached(LaunchConfig{SessionsDir: root, Reservation: testReservationReference(t, root, id), RecoveredFrom: "7K3D", Executable: filepath.Join(root, "missing-mesh"), Command: []string{"sh"}})
 	var failed *recovery.LaunchFailure
 	if !errors.As(err, &failed) {
 		t.Fatalf("pre-start error is not a proven launch failure: %v", err)
@@ -141,32 +144,32 @@ func TestRecoveryLaunchFailureRetainsItsReservation(t *testing.T) {
 
 func TestReservedMetadataFromCurrentBootCannotLaunchAgain(t *testing.T) {
 	root := t.TempDir()
-	id, dir, err := reserveSessionDir(root)
+	id, dir, err := testReservationDirectory(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := WriteMeta(dir, Meta{ID: id, BootID: BootID()}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := launchSessionDir(LaunchConfig{SessionsDir: root, ReservedID: id}); err == nil {
+	if _, _, err := launchSessionDir(LaunchConfig{SessionsDir: root, Reservation: testReservationReference(t, root, id)}); err == nil {
 		t.Fatal("current-boot metadata allowed another launch")
 	}
 }
 
-func TestUnpublishedReservationFromPreviousBootCanLaunch(t *testing.T) {
+func TestGenericReservationCannotAdoptOldMetadata(t *testing.T) {
 	if BootID() == "" {
 		t.Skip("platform has no boot identity")
 	}
 	root := t.TempDir()
-	id, dir, err := reserveSessionDir(root)
+	id, dir, err := testReservationDirectory(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := WriteMeta(dir, Meta{ID: id, BootID: "previous-boot"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := launchSessionDir(LaunchConfig{SessionsDir: root, ReservedID: id}); err != nil {
-		t.Fatal(err)
+	if _, _, err := launchSessionDir(LaunchConfig{SessionsDir: root, Reservation: testReservationReference(t, root, id)}); err == nil {
+		t.Fatal("generic reservation adopted old-boot metadata")
 	}
 	meta, err := ReadMeta(dir)
 	if err != nil || meta.BootID != "previous-boot" {
@@ -192,4 +195,24 @@ func TestWaitForWorkerAcceptsAWorkerThatAlreadyFinished(t *testing.T) {
 	if err := waitForWorker(dir, time.Second, nil); err != nil {
 		t.Fatalf("a worker that recorded its exit before the dial: %v", err)
 	}
+}
+
+func testReservationDirectory(t *testing.T, root string) (string, string, error) {
+	t.Helper()
+	ref, err := Reserve(root, session.Generic)
+	return ref.ID, filepath.Join(root, ref.ID), err
+}
+func testReservationReference(t *testing.T, root, id string) *session.Reservation {
+	t.Helper()
+	files, err := execution.OpenFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = files.Close() }()
+	var ref session.Reservation
+	err = files.Read(filepath.Join(id, ".reservation"), &ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &ref
 }

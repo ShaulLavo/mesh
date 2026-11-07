@@ -22,6 +22,10 @@ const (
 	FleetStale               Code = "fleet.stale"
 	SkillConflict            Code = "skill.conflict"
 	SkillUnsafePath          Code = "skill.unsafe_path"
+	RequestKeyConflict       Code = "request.key_conflict"
+	RequestInProgress        Code = "request.in_progress"
+	RequestOutcomeUnknown    Code = "request.outcome_unknown"
+	RequestNotFound          Code = "request.not_found"
 	AccessDenied             Code = "access.denied"
 	ResourceLimit            Code = "resource.limit"
 	InternalError            Code = "internal.error"
@@ -41,7 +45,7 @@ var Codes = map[Code]ErrorClass{
 	ProfileInvalid: {Exit: 2}, ProfileConflict: {Exit: 1}, ProfileRegressed: {Exit: 3},
 	FleetSignerUntrusted: {Exit: 1, Retryable: true}, FleetDeliveryRejected: {Exit: 1, Retryable: true},
 	FleetRevisionConflict: {Exit: 1}, FleetStale: {Exit: 1}, SkillConflict: {Exit: 1}, SkillUnsafePath: {Exit: 2}, InternalError: {Exit: 1},
-	"request.key_conflict": {Exit: 1, Reserved: true}, "request.in_progress": {Exit: 1, Reserved: true},
-	"request.outcome_unknown": {Exit: 1, Reserved: true}, "logs.cursor_expired": {Exit: 1, Reserved: true},
+	RequestKeyConflict: {Exit: 1}, RequestInProgress: {Exit: 1, Retryable: true}, RequestNotFound: {Exit: 1},
+	RequestOutcomeUnknown: {Exit: 1}, "logs.cursor_expired": {Exit: 1, Reserved: true},
 	"result.expired": {Exit: 1, Reserved: true}, AccessDenied: {Exit: 1}, ResourceLimit: {Exit: 1},
 }
