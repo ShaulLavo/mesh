@@ -158,7 +158,7 @@ func TestWatchReviewID9PipelinedWriterHandoff(t *testing.T) {
 	server.state = newStateBroker(1, time.Now)
 	server.metrics = hostmetrics.New()
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(ctx, gate) }()
+	go func() { done <- server.Handle(localServerContext(ctx), gate) }()
 	defer func() { _ = client.Close(); <-done }()
 	if err := client.WriteFrame(serverControlFrame(t, protocol.Control{Type: protocol.TypeHostInfo, RequestID: "info"})); err != nil {
 		t.Fatal(err)

@@ -124,16 +124,16 @@ func (c Client) exchange(conn transport.Conn, host Host, message Message) (Messa
 }
 
 func (c Client) dial(ctx context.Context, host Host) (transport.Conn, error) {
-	return c.dialAuthenticated(ctx, host, false)
+	return c.dialAuthenticated(ctx, host, transport.FullAdmission)
 }
 
-func (c Client) dialAuthenticated(ctx context.Context, host Host, allowUpdateOnly bool) (transport.Conn, error) {
+func (c Client) dialAuthenticated(ctx context.Context, host Host, admission transport.Admission) (transport.Conn, error) {
 	address, err := url.Parse(host.Endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("parse update endpoint: %w", err)
 	}
 	if address.Scheme != "unix" {
-		conn, err := transport.DialOnce(ctx, host.Endpoint, transport.DialOptions{Auth: &transport.Authentication{Key: c.Key, ExpectedIdentity: host.ID, AllowUpdateOnly: allowUpdateOnly}})
+		conn, err := transport.DialOnce(ctx, host.Endpoint, transport.DialOptions{Auth: &transport.Authentication{Key: c.Key, ExpectedIdentity: host.ID, Admission: admission}})
 		if err != nil {
 			return nil, fmt.Errorf("authenticate update endpoint: %w", err)
 		}
@@ -151,7 +151,7 @@ func (c Client) dialAuthenticated(ctx context.Context, host Host, allowUpdateOnl
 }
 
 func (c Client) dialUpdate(ctx context.Context, host Host) (transport.Conn, error) {
-	return c.dialAuthenticated(ctx, host, true)
+	return c.dialAuthenticated(ctx, host, transport.SignedUpdateAdmission)
 }
 
 func decodeAutomaticOutput(data []byte, output any) error {

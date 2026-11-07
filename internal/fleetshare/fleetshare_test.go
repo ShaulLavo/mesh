@@ -97,7 +97,7 @@ func (f *controllerFixture) peer() Peer {
 
 func trust(t *testing.T, owner, other *controllerFixture) {
 	t.Helper()
-	if err := identity.ApproveDevice(owner.state, other.host.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), owner.state, other.host.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := Enroll(owner.dir, other.peer()); err != nil {
@@ -185,7 +185,7 @@ func TestFleetRequiresBothControllerConsentAndFullDeviceApproval(t *testing.T) {
 	if _, handled, err := b.service.HandleControl(t.Context(), protocol.Control{Type: protocol.TypeFleetHosts}); !handled || err == nil {
 		t.Fatal("unauthenticated local request read the connection book")
 	}
-	if err := identity.ApproveDevice(b.state, a.host.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), b.state, a.host.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fetch(t.Context(), a.key, b.peer()); err == nil {
@@ -197,7 +197,7 @@ func TestFleetRequiresBothControllerConsentAndFullDeviceApproval(t *testing.T) {
 	if _, err := fetch(t.Context(), a.key, b.peer()); err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.RevokeDevice(b.state, a.host.ID); err != nil {
+	if err := identity.RevokeDevice(t.Context(), b.state, a.host.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fetch(t.Context(), a.key, b.peer()); err == nil {

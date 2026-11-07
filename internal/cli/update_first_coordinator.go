@@ -98,7 +98,7 @@ func (a *application) bootstrapApprovedCoordinator(ctx context.Context, environm
 	}
 	status, err := bootstrap(ctx, request, updatebootstrap.Config{
 		StateDir: environment.stateDir, CacheDir: cache, RequiredMount: os.Getenv("MESH_UPDATE_REQUIRED_MOUNT"), Client: a.dependencies.UpdateRelease,
-		Enroll: func(stateDir, coordinator string) error { return update.Trust(stateDir, coordinator, true) },
+		Enroll: func(stateDir, coordinator string) error { return update.Trust(ctx, stateDir, coordinator, true) },
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -254,8 +254,8 @@ func grantFirstCoordinator(ctx context.Context, engine *updateinstall.Engine, st
 	if !target.Grant || target.Generation != status.Request.Generation || target.BootstrapRetryToken != status.RetryToken || status.Request.TargetID != local.ID || status.Request.Manifest.Digest() != run.ReleaseDigest {
 		return status, updateinstall.ErrNoGrant
 	}
-	if err := update.Trust(status.Settings.StateDir, local.ID, true); err != nil {
-		return status, err
+	if err := update.Trust(ctx, status.Settings.StateDir, local.ID, true); err != nil {
+		return status, fmt.Errorf("trust coordinator key: %w", err)
 	}
 	return engine.Grant(ctx, status.Request.ID, status.Request.Generation)
 }
@@ -349,7 +349,7 @@ func resumeApprovedCoordinatorInstallation(ctx context.Context, stateDir string,
 	if err != nil {
 		return err
 	}
-	_, err = updatebootstrap.Run(ctx, request, updatebootstrap.Config{StateDir: stateDir, CacheDir: cache, RequiredMount: os.Getenv("MESH_UPDATE_REQUIRED_MOUNT"), Enroll: func(stateDir, coordinator string) error { return update.Trust(stateDir, coordinator, true) }})
+	_, err = updatebootstrap.Run(ctx, request, updatebootstrap.Config{StateDir: stateDir, CacheDir: cache, RequiredMount: os.Getenv("MESH_UPDATE_REQUIRED_MOUNT"), Enroll: func(stateDir, coordinator string) error { return update.Trust(ctx, stateDir, coordinator, true) }})
 	return err
 }
 

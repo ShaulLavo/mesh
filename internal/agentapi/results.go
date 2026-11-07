@@ -208,3 +208,65 @@ type SkillRoot struct {
 type SkillResult struct {
 	Roots []SkillRoot `json:"roots"`
 }
+
+// ScopeSubject identifies the authenticated key without legacy output-bearing records.
+type ScopeSubject struct {
+	TargetID    string    `json:"targetId"`
+	Principal   string    `json:"principal"`
+	Class       string    `json:"class"`
+	Permissions []string  `json:"permissions"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+}
+type ScopeHost struct {
+	ID          string `json:"id"`
+	MachineName string `json:"machineName"`
+	Version     string `json:"version"`
+}
+type ScopeSession struct {
+	ID             string     `json:"id"`
+	HostID         string     `json:"hostId"`
+	State          string     `json:"state"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	LastAttachedAt *time.Time `json:"lastAttachedAt"`
+	DetachedAt     *time.Time `json:"detachedAt"`
+	ExitCode       *int       `json:"exitCode"`
+}
+type ScopeService struct {
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Scope      string `json:"scope"`
+	Configured bool   `json:"configured"`
+}
+type ScopeMetadata struct {
+	Subject    ScopeSubject   `json:"subject"`
+	Section    string         `json:"section"`
+	ObservedAt time.Time      `json:"observedAt"`
+	Freshness  string         `json:"freshness"`
+	Snapshot   string         `json:"snapshot"`
+	Host       *ScopeHost     `json:"host"`
+	Sessions   []ScopeSession `json:"sessions"`
+	Services   []ScopeService `json:"services"`
+	NextPage   *string        `json:"nextPage"`
+}
+type ScopeEntry struct {
+	Subject     string    `json:"subject"`
+	Incarnation string    `json:"incarnation"`
+	Permissions []string  `json:"permissions"`
+	CreatedAt   time.Time `json:"createdAt"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+}
+type ScopePolicy struct {
+	Version  int          `json:"version"`
+	Target   string       `json:"target"`
+	Revision uint64       `json:"revision"`
+	Entries  []ScopeEntry `json:"entries"`
+}
+type ScopeChange struct {
+	Revision uint64      `json:"revision"`
+	Changed  bool        `json:"changed"`
+	Entry    *ScopeEntry `json:"entry"`
+}
+type ScopeCredential struct {
+	Identity     string `json:"identity"`
+	KeyDirectory string `json:"keyDirectory"`
+}

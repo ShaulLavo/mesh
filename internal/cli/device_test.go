@@ -68,7 +68,7 @@ func TestInstallerPublicKeyApprovalPreservesIdempotentGrant(t *testing.T) {
 	if !ok {
 		t.Fatal("installer did not approve the key identity")
 	}
-	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	if !current() {

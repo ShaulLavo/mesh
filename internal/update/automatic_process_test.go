@@ -372,10 +372,10 @@ func newAutomaticProcesses(t *testing.T) ([]*automaticProcess, release.Manifest)
 		if err := writeJSON(filepath.Join(state, "fleet.json"), fleet); err != nil {
 			t.Fatal(err)
 		}
-		if err := Trust(state, coordinator, false); err != nil {
+		if err := Trust(t.Context(), state, coordinator, false); err != nil {
 			t.Fatal(err)
 		}
-		if err := Trust(state, owner, false); err != nil {
+		if err := Trust(t.Context(), state, owner, false); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := store.SetRecipientConsent(context.Background(), 0, ConsentChange{LocalHostID: host.ID, CoordinatorID: coordinator, Fleet: fleet, Epoch: 1, Enabled: true}); err != nil {

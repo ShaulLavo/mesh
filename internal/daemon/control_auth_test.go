@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
@@ -59,13 +60,13 @@ func TestRemoteControlRejectsLegacyBeforeSessionDispatch(t *testing.T) {
 	}
 }
 
-func runtimeDialOptions(t *testing.T, stateDir string) transport.DialOptions {
+func runtimeDialOptions(ctx context.Context, t *testing.T, stateDir string) transport.DialOptions {
 	t.Helper()
 	host, key, err := identity.LoadOrCreate(stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(stateDir, host.ID); err != nil {
+	if err := identity.ApproveDevice(ctx, stateDir, host.ID); err != nil {
 		t.Fatal(err)
 	}
 	return transport.DialOptions{Auth: &transport.Authentication{Key: key, ExpectedIdentity: host.ID}}
@@ -77,7 +78,7 @@ func TestUpdateAdministratorHasNoImplicitSessionGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := update.Trust(state, actor.ID, true); err != nil {
+	if err := update.Trust(t.Context(), state, actor.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := controlAuthentication(state)
@@ -97,14 +98,14 @@ func TestUpdateAdministratorHasNoImplicitSessionGrant(t *testing.T) {
 	if auth.Bind(actor.ID).Allows(control(protocol.TypeCreate)) || auth.Bind(actor.ID).Allows(protocol.Frame{Kind: protocol.KindInput}) {
 		t.Fatal("update authority gained session or terminal access")
 	}
-	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	if !auth.Bind(actor.ID).Allows(control(protocol.TypeCreate)) {
 		t.Fatal("explicit device approval did not grant session access")
 	}
 	retainedDeviceGrant := auth.Bind(actor.ID).Current
-	if err := identity.RevokeDevice(state, actor.ID); err != nil {
+	if err := identity.RevokeDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	if retainedDeviceGrant() || !auth.Bind(actor.ID).Current() {
@@ -121,7 +122,7 @@ func TestDeniedAuthenticationReleasesControlSlot(t *testing.T) {
 	listener, port := newTCPListener(t, "127.0.0.1:0")
 	cfg := ListenerConfig{StateDir: compactSocketTempDir(t), TailnetAddrs: []string{"127.0.0.1"}, TailnetPort: port, WebSocketPath: "/mesh", TailnetConnectionLimit: 1}
 	done := runRuntime(t, ctx, cfg, echoControlFrames, listener)
-	approved := runtimeDialOptions(t, cfg.StateDir)
+	approved := runtimeDialOptions(ctx, t, cfg.StateDir)
 	_, unknown, err := identity.LoadOrCreate(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -168,13 +169,13 @@ func TestDaemonIdentityDoesNotImplicitlyGrantRemoteSessions(t *testing.T) {
 	if auth.Bind(host.ID).Allows(frame) {
 		t.Fatal("daemon key bypassed current device grants")
 	}
-	if err := identity.ApproveDevice(state, host.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, host.ID); err != nil {
 		t.Fatal(err)
 	}
 	if !auth.Bind(host.ID).Allows(frame) {
 		t.Fatal("explicit self-device grant rejected")
 	}
-	if err := identity.RevokeDevice(state, host.ID); err != nil {
+	if err := identity.RevokeDevice(t.Context(), state, host.ID); err != nil {
 		t.Fatal(err)
 	}
 	if auth.Bind(host.ID).Allows(frame) {
@@ -192,10 +193,10 @@ func TestRevokedDeviceCanReconnectOnlyThroughSignedUpdater(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := update.Trust(state, actor.ID, true); err != nil {
+	if err := update.Trust(t.Context(), state, actor.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := controlAuthentication(state)
@@ -247,7 +248,7 @@ func TestRevokedDeviceCanReconnectOnlyThroughSignedUpdater(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer full.Close() //nolint:errcheck // fixture cleanup
-	if err := identity.RevokeDevice(state, actor.ID); err != nil {
+	if err := identity.RevokeDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := full.ReadFrame(); err == nil {
@@ -273,10 +274,10 @@ func TestDeviceReapprovalCannotHealPriorGrantLifetime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := update.Trust(state, actor.ID, true); err != nil {
+	if err := update.Trust(t.Context(), state, actor.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := controlAuthentication(state)
@@ -284,21 +285,21 @@ func TestDeviceReapprovalCannotHealPriorGrantLifetime(t *testing.T) {
 		t.Fatal(err)
 	}
 	prior := auth.Bind(actor.ID)
-	if !prior.Full || !prior.Current() {
+	if prior.Class != access.FullDevice || !prior.Current() {
 		t.Fatal("fixture did not bind a current full-device grant")
 	}
 	// No watcher or admission samples the temporarily absent membership.
-	if err := identity.RevokeDevice(state, actor.ID); err != nil {
+	if err := identity.RevokeDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	if prior.Current() {
 		t.Fatal("immediate same-key reapproval healed the revoked grant lifetime")
 	}
 	fresh := auth.Bind(actor.ID)
-	if !fresh.Full || !fresh.Current() {
+	if fresh.Class != access.FullDevice || !fresh.Current() {
 		t.Fatal("new grant did not admit a fresh connection")
 	}
 }
@@ -313,10 +314,10 @@ func TestReapprovedDeviceRetiresActiveAndPassiveSockets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := update.Trust(state, actor.ID, true); err != nil {
+	if err := update.Trust(t.Context(), state, actor.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := controlAuthentication(state)
@@ -349,10 +350,10 @@ func TestReapprovedDeviceRetiresActiveAndPassiveSockets(t *testing.T) {
 		t.Cleanup(func() { _ = conn.Close() })
 		attached = append(attached, conn)
 	}
-	if err := identity.RevokeDevice(state, actor.ID); err != nil {
+	if err := identity.RevokeDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	payload, err := (protocol.Control{Type: protocol.TypeHostInfo}).Encode()

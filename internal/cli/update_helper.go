@@ -68,7 +68,7 @@ func updateTrustCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return update.Trust(stateDir, args[0], ifEmpty)
+			return update.Trust(cmd.Context(), stateDir, args[0], ifEmpty)
 		},
 	}
 	command.Flags().BoolVar(&ifEmpty, "if-empty", false, "enroll only when no administrator policy exists")

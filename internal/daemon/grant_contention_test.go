@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -33,7 +34,7 @@ func TestPublishedGrantSurvivesOtherAndIdempotentWriterContention(t *testing.T) 
 		t.Fatal(err)
 	}
 	for _, id := range []string{actor.ID, other.ID} {
-		if err := identity.ApproveDevice(state, id); err != nil {
+		if err := identity.ApproveDevice(t.Context(), state, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -56,10 +57,10 @@ func TestPublishedGrantSurvivesOtherAndIdempotentWriterContention(t *testing.T) 
 		name   string
 		mutate func() error
 	}{
-		{"idempotent other approval", func() error { return identity.ApproveDevice(state, other.ID) }},
-		{"other revocation", func() error { return identity.RevokeDevice(state, other.ID) }},
-		{"new other approval", func() error { return identity.ApproveDevice(state, other.ID) }},
-		{"idempotent actor approval", func() error { return identity.ApproveDevice(state, actor.ID) }},
+		{"idempotent other approval", func() error { return identity.ApproveDevice(t.Context(), state, other.ID) }},
+		{"other revocation", func() error { return identity.RevokeDevice(t.Context(), state, other.ID) }},
+		{"new other approval", func() error { return identity.ApproveDevice(t.Context(), state, other.ID) }},
+		{"idempotent actor approval", func() error { return identity.ApproveDevice(t.Context(), state, actor.ID) }},
 	} {
 		lock, err := os.OpenFile(filepath.Join(state, "device-grants.lock"), os.O_RDWR, 0o600) //nolint:gosec // fixture-owned writer lock
 		if err != nil {
@@ -114,7 +115,7 @@ func TestGrantContentionReleasesRealControlSlotBeforeUnlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(state, actor.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	auth, err := controlAuthentication(state)
@@ -122,18 +123,29 @@ func TestGrantContentionReleasesRealControlSlotBeforeUnlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	entered, returned := make(chan struct{}), make(chan struct{})
+	admission := make(chan struct{})
+	cancelRequest := make(chan context.CancelFunc, 1)
+	var admissionOnce sync.Once
+	release := func() { admissionOnce.Do(func() { close(admission) }) }
 	var authorizeOnce, returnedOnce sync.Once
 	authorize := auth.Authorize
 	auth.Authorize = func(id string) bool {
-		authorizeOnce.Do(func() { close(entered) })
+		authorizeOnce.Do(func() {
+			close(entered)
+			<-admission
+			// Cancel at grant admission so TLS setup cannot spend the cancellation budget.
+			cancel := <-cancelRequest
+			cancel()
+		})
 		return authorize(id)
 	}
 	connections := newConnectionGroup(echoControlFrames)
 	connections.limit = 1
 	boundary := newWebSocketServer(t.Context(), listenerConfig{webSocketPath: "/mesh", controlAuth: auth}, connections)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
+		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
+		cancelRequest <- cancel
 		boundary.Handler.ServeHTTP(w, r.WithContext(ctx))
 		returnedOnce.Do(func() { close(returned) })
 	}))
@@ -142,32 +154,44 @@ func TestGrantContentionReleasesRealControlSlotBeforeUnlock(t *testing.T) {
 		server.Close()
 		t.Fatal(err)
 	}
-	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); _ = lock.Close(); server.Close() }()
+	defer func() {
+		release()
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		_ = lock.Close()
+		server.Close()
+	}()
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	options := transport.DialOptions{Auth: &transport.Authentication{Key: key, ExpectedIdentity: host.ID}}
-	dialed := make(chan struct{})
+	dialed := make(chan error, 1)
 	go func() {
-		conn, _ := transport.DialOnce(ctx, server.URL+"/mesh", options)
+		conn, err := transport.DialOnce(ctx, server.URL+"/mesh", options)
 		if conn != nil {
 			_ = conn.Close()
 		}
-		close(dialed)
+		dialed <- err
 	}()
 	select {
 	case <-entered:
+	case err := <-dialed:
+		t.Fatalf("fixture failed before reaching the real grant authorizer: %v", err)
 	case <-ctx.Done():
 		t.Fatal("fixture did not enter the real grant authorizer")
 	}
+	completion, stop := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer stop()
+	release()
 	select {
 	case <-returned:
-	case <-ctx.Done():
+	case <-completion.Done():
 		t.Fatal("canceled authentication retained the real control reservation behind a writer lock")
 	}
-	<-dialed
+	if err := <-dialed; !errors.Is(err, transport.ErrAuthentication) {
+		t.Fatalf("canceled grant admission returned %v; want authentication failure", err)
+	}
 	conn, err := transport.DialOnce(ctx, server.URL+"/mesh", options)
 	if err != nil {
 		t.Fatalf("control slot was not reusable before policy unlock: %v", err)

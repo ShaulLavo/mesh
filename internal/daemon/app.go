@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/fleetshare"
@@ -545,8 +546,12 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		if cfg.SSHSessionHandler != nil {
 			sessionHandler = cfg.SSHSessionHandler(stateDir)
 		}
+		scopes, err := access.Open(stateDir, meshHost.ID, opts.now)
+		if err != nil {
+			return fmt.Errorf("daemon: configure SSH scoped registrations: %w", err)
+		}
 		for _, address := range sshAddrs {
-			listener.sshConfigs = append(listener.sshConfigs, sshd.Config{
+			listener.sshConfigs = append(listener.sshConfigs, sshd.Config{ScopeMembership: func(id string) (bool, error) { return scopes.Membership(access.Subject(id)) },
 				Handler:        sessionHandler,
 				Services:       serviceRegistry,
 				HostKey:        meshPrivateKey,

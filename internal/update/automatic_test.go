@@ -404,7 +404,7 @@ func TestAutomaticAuthorityPreservesLegacyRelaysAndBindsNewActions(t *testing.T)
 	actorID, actorKey := testIdentity(t)
 	relayID, relayKey := testIdentity(t)
 	state := t.TempDir()
-	if err := Trust(state, actorID, false); err != nil {
+	if err := Trust(t.Context(), state, actorID, false); err != nil {
 		t.Fatal(err)
 	}
 	authority := &Authority{StateDir: state, ID: serverID, Key: serverKey, Handle: func(_ context.Context, actor VerifiedActor, _ string, _ json.RawMessage) (any, error) {
@@ -701,7 +701,7 @@ func TestAutomaticAbsenceNeverConsumesChecksOrCreatesWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Trust(store.stateDir(), fleet.Members[0].ID, false); err != nil {
+	if err := Trust(t.Context(), store.stateDir(), fleet.Members[0].ID, false); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0

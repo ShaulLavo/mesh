@@ -362,7 +362,7 @@ func TestUpdateFlowMalformedAuthenticatedPeer(t *testing.T) {
 				if err := secure.HandshakeContext(r.Context()); err != nil {
 					return
 				}
-				_, _ = secure.Write([]byte{3})
+				_, _ = secure.Write([]byte{4})
 			}))
 			defer server.Close()
 			host := update.Host{ID: target.ID, MachineName: "fixture", Endpoint: strings.Replace(server.URL, "http://", "ws://", 1)}
