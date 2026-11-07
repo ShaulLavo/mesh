@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"reflect"
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
@@ -21,9 +22,17 @@ type Client struct {
 	Key ed25519.PrivateKey
 }
 
-type RemoteError struct{ Problem string }
+type RemoteError struct {
+	Problem string
+	Code    ProblemCode
+}
 
-func (e *RemoteError) Error() string { return e.Problem }
+func (e *RemoteError) Error() string {
+	if e.Problem != "" {
+		return e.Problem
+	}
+	return string(e.Code)
+}
 
 func (c Client) Call(ctx context.Context, host Host, action string, input, output any) error {
 	if err := host.Validate(); err != nil {
@@ -61,6 +70,9 @@ func (c Client) Call(ctx context.Context, host Host, action string, input, outpu
 	}
 	if output == nil {
 		return nil
+	}
+	if automaticAction(action) {
+		return decodeAutomaticOutput(response.Data, output)
 	}
 	return json.Unmarshal(response.Data, output)
 }
@@ -105,8 +117,8 @@ func (c Client) exchange(conn transport.Conn, host Host, message Message) (Messa
 	if err = response.Verify(host.ID); err != nil {
 		return Message{}, err
 	}
-	if response.Problem != "" {
-		return Message{}, &RemoteError{Problem: response.Problem}
+	if response.Problem != "" || response.ProblemCode != "" {
+		return Message{}, &RemoteError{Problem: response.Problem, Code: response.ProblemCode}
 	}
 	return response, nil
 }
@@ -140,4 +152,17 @@ func (c Client) dialAuthenticated(ctx context.Context, host Host, admission tran
 
 func (c Client) dialUpdate(ctx context.Context, host Host) (transport.Conn, error) {
 	return c.dialAuthenticated(ctx, host, transport.SignedUpdateAdmission)
+}
+
+func decodeAutomaticOutput(data []byte, output any) error {
+	destination := reflect.ValueOf(output)
+	if destination.Kind() != reflect.Pointer || destination.IsNil() {
+		return errors.New("automatic response requires a non-nil output pointer")
+	}
+	replacement := reflect.New(destination.Elem().Type())
+	if err := json.Unmarshal(data, replacement.Interface()); err != nil {
+		return fmt.Errorf("decode automatic response: %w", err)
+	}
+	destination.Elem().Set(replacement.Elem())
+	return nil
 }

@@ -18,7 +18,9 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/access"
+	"github.com/shaul/mesh/internal/hostprofile"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/transport"
 	"golang.org/x/sys/unix"
 )
 
@@ -26,13 +28,14 @@ const ControlType = "update.control"
 const maximumMessage = 2 << 20
 
 type Message struct {
-	Action    string          `json:"action"`
-	Actor     string          `json:"actor"`
-	Target    string          `json:"target"`
-	Nonce     string          `json:"nonce"`
-	Data      json.RawMessage `json:"data,omitempty"`
-	Problem   string          `json:"problem,omitempty"`
-	Signature string          `json:"signature"`
+	ProblemCode ProblemCode     `json:"problemCode,omitempty"`
+	Action      string          `json:"action"`
+	Actor       string          `json:"actor"`
+	Target      string          `json:"target"`
+	Nonce       string          `json:"nonce"`
+	Data        json.RawMessage `json:"data,omitempty"`
+	Problem     string          `json:"problem,omitempty"`
+	Signature   string          `json:"signature"`
 }
 
 func (m Message) signedBytes() []byte {
@@ -286,7 +289,7 @@ type Authority struct {
 	StateDir   string
 	ID         string
 	Key        ed25519.PrivateKey
-	Handle     func(context.Context, string, json.RawMessage) (any, error)
+	Handle     func(context.Context, VerifiedActor, string, json.RawMessage) (any, error)
 	mu         sync.Mutex
 	challenges map[string]challenge
 }
@@ -337,6 +340,9 @@ func decodeMessage(data []byte, destination any) error {
 	if len(data) == 0 || len(data) > maximumMessage {
 		return errors.New("invalid update message size")
 	}
+	if err := hostprofile.CheckJSON(json.NewDecoder(bytes.NewReader(data)), 0, 32); err != nil {
+		return fmt.Errorf("update message JSON: %w", err)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
@@ -370,11 +376,20 @@ func (a *Authority) HandleControl(ctx context.Context, request protocol.Control)
 	result, err := a.dispatch(ctx, message)
 	if err != nil {
 		response.Problem = err.Error()
+		response.ProblemCode = responseProblemCode(err)
+		if automaticAction(message.Action) || response.ProblemCode != "" {
+			response.Problem = boundedProblem(response.Problem)
+		}
 	} else {
 		response.Data, err = json.Marshal(result)
 	}
 	if err != nil && response.Problem == "" {
 		return protocol.Control{}, true, err
+	}
+	if len(response.Data) > maximumMessage-2048 {
+		response.Data = nil
+		response.Problem = "update result exceeds the signed carrier limit"
+		response.ProblemCode = "state.unavailable"
 	}
 	response.Sign(a.Key)
 	data, err := json.Marshal(response)
@@ -391,5 +406,16 @@ func (a *Authority) dispatch(ctx context.Context, message Message) (any, error) 
 	if a.Handle == nil {
 		return nil, fmt.Errorf("update handler unavailable")
 	}
-	return a.Handle(ctx, message.Action, message.Data)
+	actor := VerifiedActor{id: message.Actor}
+	_, remote := transport.Peer(ctx)
+	actor.local = !remote
+	if !a.IsAdministrator(actor.id) {
+		return nil, problem("automatic.conflict", "update administrator was withdrawn")
+	}
+	if automaticAction(message.Action) {
+		if err := RequireAutomaticActor(ctx, actor); err != nil {
+			return nil, err
+		}
+	}
+	return a.Handle(ctx, actor, message.Action, message.Data)
 }

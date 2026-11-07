@@ -2,6 +2,8 @@ package updateinstall
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -72,7 +74,7 @@ func (e *Engine) accept(ctx context.Context, request Request) (Status, error) {
 	prior, err := e.Read()
 	if err == nil {
 		if sameRequest(prior, request) {
-			return prior, e.settleGate(prior)
+			return prior, e.settleAccepted(ctx, request, prior)
 		}
 		if !finished(prior.Phase) {
 			return prior, ErrConflict
@@ -103,7 +105,7 @@ func (e *Engine) accept(ctx context.Context, request Request) (Status, error) {
 	status := Status{Schema: 1, Phase: Accepted, Request: request, Settings: e.settings(), Original: health,
 		Candidate: filepath.Join(dir, ".mesh-update-"+request.ID+".candidate"), Previous: filepath.Join(dir, ".mesh-update-"+request.ID+".previous")}
 	e.pruneImages(status, health)
-	return status, e.save(&status)
+	return status, e.authorize(ctx, request, AcceptanceStage, func() error { return e.save(&status) })
 }
 
 // pruneImages clears images from finished transactions. A leftover image only
@@ -116,6 +118,14 @@ func (e *Engine) pruneImages(current Status, health Health) {
 func validateRequest(request Request) error {
 	if !operationPattern.MatchString(request.ID) || request.TargetID == "" || request.Generation == 0 {
 		return errors.New("invalid update operation, target identity, or generation")
+	}
+	if err := validateAutomaticReference(request.Automatic); err != nil {
+		return err
+	}
+	if request.Automatic != nil {
+		if err := automaticStableRequest(request); err != nil {
+			return err
+		}
 	}
 	if err := request.Manifest.Validate(); err != nil {
 		return err
@@ -143,7 +153,7 @@ func validateRequest(request Request) error {
 
 func sameRequest(status Status, request Request) bool {
 	return status.Request.ID == request.ID && status.Request.TargetID == request.TargetID && status.Request.Generation == request.Generation &&
-		status.Request.Manifest.Digest() == request.Manifest.Digest()
+		status.Request.Manifest.Digest() == request.Manifest.Digest() && sameAutomaticReference(status.Request.Automatic, request.Automatic)
 }
 
 func finished(phase Phase) bool {
@@ -248,13 +258,13 @@ func (e *Engine) Grant(ctx context.Context, id string, generation uint64) (Statu
 		return status, errors.New("failed activation requires explicit retry before a new grant")
 	}
 	if status.Phase != Staged && status.Phase != Accepted {
-		return status, nil
+		return status, e.authorize(ctx, status.Request, AcceptanceGrant, func() error { return nil })
 	}
 	if status.Phase == Accepted {
 		return status, errors.New("release must finish staging before activation is authorized")
 	}
 	status.Phase = Granted
-	return status, e.save(&status)
+	return status, e.authorize(ctx, status.Request, AcceptanceGrant, func() error { return e.save(&status) })
 }
 
 func (e *Engine) identify(id string, generation uint64) (Status, error) {
@@ -321,7 +331,7 @@ func (e *Engine) RetryWithToken(ctx context.Context, id string, generation, toke
 		return status, err
 	}
 	if token != 0 && token <= status.RetryToken {
-		return status, nil
+		return status, e.authorize(ctx, status.Request, AcceptanceRetry, func() error { return nil })
 	}
 	if status.Phase != RolledBack && status.Phase != Failed {
 		return status, errors.New("only a verified rollback or pre-activation failure can be retried")
@@ -336,8 +346,68 @@ func (e *Engine) RetryWithToken(ctx context.Context, id string, generation, toke
 		token = status.RetryToken + 1
 	}
 	status.RetryToken = token
-	if err = e.save(&status); err != nil {
+	if err = e.authorize(ctx, status.Request, AcceptanceRetry, func() error { return e.save(&status) }); err != nil {
 		return status, err
 	}
 	return e.stage(ctx, status)
+}
+
+func (e *Engine) authorize(ctx context.Context, request Request, kind AcceptanceKind, commit func() error) error {
+	if request.Automatic == nil {
+		return commit()
+	}
+	if e.cfg.AuthorizeAcceptance == nil {
+		return errors.New("automatic installation requires recipient acceptance authority")
+	}
+	return e.cfg.AuthorizeAcceptance(ctx, request, kind, commit)
+}
+func sameAutomaticReference(a, b *AutomaticReference) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+func validateAutomaticReference(ref *AutomaticReference) error {
+	if ref == nil {
+		return nil
+	}
+	policy, err := hex.DecodeString(ref.PolicyID)
+	if err != nil || len(policy) != 16 || hex.EncodeToString(policy) != ref.PolicyID {
+		return errors.New("invalid automatic policy identity")
+	}
+	digest, err := hex.DecodeString(ref.Membership)
+	if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != ref.Membership {
+		return errors.New("invalid automatic membership digest")
+	}
+	key, err := base64.RawURLEncoding.DecodeString(ref.CoordinatorID)
+	if err != nil || len(key) != 32 || base64.RawURLEncoding.EncodeToString(key) != ref.CoordinatorID || ref.Epoch == 0 || ref.ConsentRevision == 0 {
+		return errors.New("invalid automatic coordinator or consent reference")
+	}
+	return nil
+}
+
+// RequireAutomaticHelper checks an existing installation, without enrolling a service.
+func (e *Engine) RequireAutomaticHelper(ctx context.Context) error {
+	var installed HelperInstallation
+	if err := readHelperInstallation(ctx, e.cfg.StateDir, &installed); err != nil {
+		return fmt.Errorf("automatic updates require the existing update helper: %w", err)
+	}
+	if installed.Executable == "" || installed.ServicePath == "" {
+		return errors.New("automatic update helper receipt is incomplete")
+	}
+	return verifyFile(installed.Executable, installed.Digest)
+}
+
+func (e *Engine) settleAccepted(ctx context.Context, request Request, status Status) error {
+	return e.authorize(ctx, request, AcceptanceStage, func() error { return e.settleGate(status) })
+}
+
+func automaticStableRequest(request Request) error {
+	if request.Current.Modified {
+		return errors.New("automatic updates cannot install from a modified build")
+	}
+	if _, err := release.CompareVersions(request.Current.Version, request.Current.Version); err != nil {
+		return fmt.Errorf("automatic updates require a stable source build: %w", err)
+	}
+	return nil
 }
