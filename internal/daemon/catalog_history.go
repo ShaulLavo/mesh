@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -87,6 +88,9 @@ func sortLabelledHistory(history []labelledExit) {
 // An empty label accepts any historical label, independent of current recipes.
 func (c *Catalog) eligibleLabelledExit(id storage.SessionID, label string) (labelledExit, bool) {
 	dir := filepath.Join(c.sessionsDir, string(id))
+	if execution.ProtectedSession(c.sessionsDir, string(id)) {
+		return labelledExit{}, false
+	}
 	meta, err := worker.ReadMeta(dir)
 	if err != nil || meta.Label == "" || (label != "" && meta.Label != label) {
 		return labelledExit{}, false

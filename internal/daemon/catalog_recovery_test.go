@@ -93,10 +93,7 @@ func testRecoveryRetentionCount(t *testing.T, protected, legacy, wantRetired int
 	var observed []storage.Session
 	for index := range protected + legacy {
 		id := fmt.Sprintf("%04d", index)
-		dir := filepath.Join(root, id)
-		if err := os.Mkdir(dir, 0o700); err != nil {
-			t.Fatal(err)
-		}
+		dir := writeGenericCatalogDir(t, root, id)
 		observed = append(observed, storage.Session{ID: storage.SessionID(id), State: storage.StateExited,
 			CreatedAt: catalogTestTime.Add(-time.Duration(protected+legacy-index) * time.Minute)})
 		if index >= protected {

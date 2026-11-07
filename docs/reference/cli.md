@@ -24,7 +24,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh recover`](#mesh-recover) | Recover a saved session and retain its previous output |
 | [`mesh recovery-command`](#mesh-recovery-command) | Save an explicit restart command |
 | [`mesh rm`](#mesh-rm) | Forget finished sessions and delete what they left behind |
-| [`mesh session`](#mesh-session) | Read sessions without attaching or starting work |
+| [`mesh session`](#mesh-session) | Read sessions and run keyed detached commands |
 | [`mesh sig`](#mesh-sig) | Send a signal to a session process group |
 | [`mesh add`](#mesh-add) | Install Mesh on an SSH-reachable host |
 | [`mesh cp`](#mesh-cp) | Copy files or directories through an authenticated Mesh connection |
@@ -43,6 +43,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh device`](#mesh-device) | Approve device keys for this daemon's OS account |
 | [`mesh private-names`](#mesh-private-names) | Manage private DNS and wildcard certificates |
 | [`mesh shell-init`](#mesh-shell-init) | Print opt-in directory and history recovery hooks |
+| [`mesh skill`](#mesh-skill) | Show and manage the embedded Mesh agent skill |
 | [`mesh update`](#mesh-update) | Review and update Mesh on this machine or your saved fleet |
 | [`mesh version`](#mesh-version) | Show the executing Mesh build |
 
@@ -55,6 +56,8 @@ running. Reattach from anywhere on your tailnet.
 
 A bare name is a host or a session, so the commands you use most are
 not subcommands at all.
+
+Agents: run mesh skill show.
 
 USAGE
 
@@ -93,7 +96,7 @@ SESSIONS
   recover SESSION [--flags]                             Recover a saved session and retain its previous output
   recovery-command SESSION -- PROGRAM ARG... [--flags]  Save an explicit restart command
   rm session...                                         Forget finished sessions and delete what they left behind
-  session [command] [--flags]                           Read sessions without attaching or starting work
+  session [command] [--flags]                           Read sessions and run keyed detached commands
   sig session signal                                    Send a signal to a session process group
 
 HOSTS
@@ -121,6 +124,7 @@ SETUP
   device [command]                                      Approve device keys for this daemon's OS account
   private-names [command]                               Manage private DNS and wildcard certificates
   shell-init bash|zsh [--flags]                         Print opt-in directory and history recovery hooks
+  skill [command] [--flags]                             Show and manage the embedded Mesh agent skill
   update [command] [--flags]                            Review and update Mesh on this machine or your saved fleet
   version [--flags]                                     Show the executing Mesh build
 
@@ -471,7 +475,7 @@ FLAGS
 ## mesh session
 
 ```text
-Read sessions without attaching or starting work
+Read sessions and run keyed detached commands
 
 USAGE
 
@@ -479,15 +483,42 @@ USAGE
 
 COMMANDS
 
-  inspect SESSION_ID [--flags]  Read live or saved session details without attaching
-  list [--flags]                List one host's sessions with bounded pages
+  create -- command [args...] [--flags]  Start a keyed detached PTY command on an online host
+  inspect SESSION_ID [--flags]           Read live or saved session details without attaching
+  list [--flags]                         List one host's sessions with bounded pages
+  request [--flags]                      Look up a retained creation receipt without launching work
 
 FLAGS
 
-  -h --help                     Help for session
-  --json                        Write one agent result
-  --leave-key                   Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy                     Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  -h --help                              Help for session
+  --json                                 Write one agent result
+  --leave-key                            Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy                              Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh session create
+
+```text
+Start a keyed detached PTY command on an online host
+
+USAGE
+
+  mesh session create -- command [args...] [--flags]
+
+FLAGS
+
+  --cols         Initial terminal width (80)
+  --cwd          Absolute clean working directory on the target
+  -h --help      Help for create
+  --host         Machine name or exact host ID, required
+  --json         Write one agent result, required
+  --kind         Explicit session kind, currently pty
+  --leave-key    Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy      Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --request-key  Saved logical request key, required
+  --rows         Initial terminal height (24)
+  --term         Target terminal type (dumb)
+  --timeout      Hard deadline from 100ms to 60s (40s)
 ```
 
 ## mesh session inspect
@@ -534,6 +565,26 @@ FLAGS
   --page       Opaque nextPage token from this host
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
   --timeout    Hard deadline for the read, from 100ms to 60s (5s)
+```
+
+## mesh session request
+
+```text
+Look up a retained creation receipt without launching work
+
+USAGE
+
+  mesh session request [--flags]
+
+FLAGS
+
+  -h --help      Help for request
+  --host         Machine name or exact host ID, required
+  --json         Write one agent result, required
+  --leave-key    Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy      Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --request-key  Saved logical request key, required
+  --timeout      Hard deadline from 100ms to 60s (5s)
 ```
 
 ## mesh sig
@@ -1373,7 +1424,7 @@ COMMANDS
   approve-fleet HOST… [--flags]  Approve this device on explicitly selected pinned hosts using system SSH
   identity [--flags]             Show this device's Mesh key and daemon account
   revoke ID                      Remove a device's session, service and SSH grant
-  scope [command] [--flags]      Manage dedicated metadata-only TLS identities
+  scope [command] [--flags]      Manage dedicated scoped TLS identities
 
 FLAGS
 
@@ -1479,7 +1530,7 @@ FLAGS
 ## mesh device scope
 
 ```text
-Manage dedicated metadata-only TLS identities
+Manage dedicated scoped TLS identities
 
 USAGE
 
@@ -1487,9 +1538,10 @@ USAGE
 
 COMMANDS
 
-  grant [--flags]   Grant metadata access locally at an expected policy revision
+  grant [--flags]   Grant host-wide read permissions locally at an expected revision
   keygen [--flags]  Create or load a key in an explicit private directory
   list [--flags]    Read this target's scope policy without contacting a daemon
+  output [--flags]  Read a bounded tail or preview using an explicit scoped TLS key
   read [--flags]    Read one metadata page using only an explicit key and direct TLS
   revoke [--flags]  Remove a scoped identity locally at an expected revision
 
@@ -1504,7 +1556,7 @@ FLAGS
 ## mesh device scope grant
 
 ```text
-Grant metadata access locally at an expected policy revision
+Grant host-wide read permissions locally at an expected revision
 
 USAGE
 
@@ -1519,7 +1571,7 @@ FLAGS
   --identity           Dedicated public identity
   --json               Write one agent result
   --leave-key          Key that leaves all nested sessions, or none (ctrl+^)
-  --permissions        Metadata only; no terminal or output access
+  --permissions        Metadata or metadata,session-output; output covers every host session and diagnostic-mixed tails
   --privacy            Mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
@@ -1556,6 +1608,31 @@ FLAGS
   --json       Write one agent result
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh device scope output
+
+```text
+Read a bounded tail or preview using an explicit scoped TLS key
+
+USAGE
+
+  mesh device scope output [--flags]
+
+FLAGS
+
+  --cols       Preview display columns from 1 to 160; default 80
+  --format     Tail or preview; requires session-output permission
+  -h --help    Help for output
+  --host       Exact saved host ID with an existing destination pin
+  --json       Write one agent result
+  --key-dir    Explicit dedicated credential directory
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --max-bytes  Tail byte limit from 1 to 1048576; default 65536
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --rows       Preview rows from 1 to 24; default 24
+  --session    Exact session ID on the target
+  --timeout    Hard deadline from 100ms to 60s (5s)
 ```
 
 ## mesh device scope read
@@ -1655,6 +1732,120 @@ FLAGS
 
   --agents     Also wrap native codex and claude commands for conversation recovery
   -h --help    Help for shell-init
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill
+
+```text
+Show and manage the embedded Mesh agent skill
+
+USAGE
+
+  mesh skill [command] [--flags]
+
+COMMANDS
+
+  install [--flags]    Install the skill into an explicitly selected skills root
+  show [--flags]       Print exact embedded skill bytes without reading local configuration
+  status [--flags]     Inspect bundle files and registration without changing them
+  uninstall [--flags]  Remove unchanged managed files and unregister one root
+  update [--flags]     Update managed roots and preserve user-modified files
+
+FLAGS
+
+  -h --help            Help for skill
+  --json               Write one agent result
+  --leave-key          Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy            Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill install
+
+```text
+Install the skill into an explicitly selected skills root
+
+USAGE
+
+  mesh skill install [--flags]
+
+FLAGS
+
+  --dir        Existing skills root; omit for all registered roots on status or update
+  -h --help    Help for install
+  --json       Write one agent result
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill show
+
+```text
+Print exact embedded skill bytes without reading local configuration
+
+Usage:
+  mesh skill show [flags]
+
+Flags:
+      --file string   embedded file, such as references/commands.md
+  -h, --help          help for show
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill status
+
+```text
+Inspect bundle files and registration without changing them
+
+USAGE
+
+  mesh skill status [--flags]
+
+FLAGS
+
+  --dir        Existing skills root; omit for all registered roots on status or update
+  -h --help    Help for status
+  --json       Write one agent result
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill uninstall
+
+```text
+Remove unchanged managed files and unregister one root
+
+USAGE
+
+  mesh skill uninstall [--flags]
+
+FLAGS
+
+  --dir        Existing skills root; omit for all registered roots on status or update
+  -h --help    Help for uninstall
+  --json       Write one agent result
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill update
+
+```text
+Update managed roots and preserve user-modified files
+
+USAGE
+
+  mesh skill update [--flags]
+
+FLAGS
+
+  --dir        Existing skills root; omit for all registered roots on status or update
+  -h --help    Help for update
+  --json       Write one agent result
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```

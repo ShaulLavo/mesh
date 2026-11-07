@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -50,6 +51,11 @@ func TestSSHScopeMembershipIsRequiredConfiguration(t *testing.T) {
 	}
 }
 func TestSSHScopedKeysCannotReachAnyApplicationEntry(t *testing.T) {
+	for _, output := range []bool{false, true} {
+		t.Run(fmt.Sprint(output), func(t *testing.T) { testScopedSSHEntries(t, output) })
+	}
+}
+func testScopedSSHEntries(t *testing.T, output bool) {
 	state := t.TempDir()
 	host, hostKey, err := identity.LoadOrCreate(state)
 	if err != nil {
@@ -63,6 +69,10 @@ func TestSSHScopedKeysCannotReachAnyApplicationEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	registeredScope(t, state, host.ID, actor.ID)
+	if output {
+		registerOutputPermission(t, state)
+	}
+
 	membership := func(subject string) (bool, error) { return access.Registered(state, access.Subject(subject)) }
 	cfg, err := validateConfig(t.Context(), Config{HostKey: hostKey, AuthorizedKeys: filepath.Join(state, "authorized_keys"), Addr: "127.0.0.1:2222", ScopeMembership: membership})
 	if err != nil {
@@ -223,5 +233,22 @@ func assertScopedSSHAuthenticationDenied(t *testing.T, key ed25519.PrivateKey, a
 	}
 	if err == nil {
 		t.Fatalf("scoped authentication reached %q pty=%v", command, pty)
+	}
+}
+
+func registerOutputPermission(t *testing.T, state string) {
+	t.Helper()
+	root, err := os.OpenRoot(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	data, err := root.ReadFile("access/scopes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte(`["metadata"]`), []byte(`["metadata","session-output"]`), 1)
+	if err := root.WriteFile("access/scopes.json", data, 0600); err != nil {
+		t.Fatal(err)
 	}
 }

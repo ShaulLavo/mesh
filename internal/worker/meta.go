@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/session/execution"
 )
 
 // Session states. The worker reports running while a client is attached,
@@ -32,15 +34,16 @@ const (
 // fate survives the daemon being down: the worker can record its own death
 // without anyone listening.
 type Meta struct {
-	Build          *release.Build `json:"build,omitempty"`
-	RecoveredFrom  string         `json:"recoveredFrom,omitempty"`
-	ID             string         `json:"id"`
-	PID            int            `json:"pid"`
-	Command        []string       `json:"command"`
-	Cwd            string         `json:"cwd"`
-	State          string         `json:"state"`
-	CreatedAt      time.Time      `json:"createdAt"`
-	LastAttachedAt *time.Time     `json:"lastAttachedAt,omitempty"`
+	Reservation    *session.Reservation `json:"reservation,omitempty"`
+	Build          *release.Build       `json:"build,omitempty"`
+	RecoveredFrom  string               `json:"recoveredFrom,omitempty"`
+	ID             string               `json:"id"`
+	PID            int                  `json:"pid"`
+	Command        []string             `json:"command"`
+	Cwd            string               `json:"cwd"`
+	State          string               `json:"state"`
+	CreatedAt      time.Time            `json:"createdAt"`
+	LastAttachedAt *time.Time           `json:"lastAttachedAt,omitempty"`
 	// DetachedAt is when the last client left. Idle policy measures from it;
 	// LastAttachedAt marks when an attachment began, which can be days before
 	// it ended.
@@ -58,6 +61,14 @@ type Meta struct {
 
 // WriteMeta atomically replaces the metadata file in dir.
 func WriteMeta(dir string, m Meta) error {
+	if m.Reservation != nil && m.Reservation.Purpose == session.Execution {
+		files, err := execution.OpenFiles(filepath.Dir(dir))
+		if err != nil {
+			return workerExecutionError("meta.go WriteMeta", err)
+		}
+		_, err = files.Publish(filepath.Join(filepath.Base(dir), "meta.json"), m, false)
+		return errors.Join(err, files.Close())
+	}
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("worker: encode meta: %w", err)

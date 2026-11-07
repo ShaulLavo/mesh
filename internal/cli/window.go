@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/shaul/mesh/internal/session/execution"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"sort"
 
@@ -381,6 +383,9 @@ func forgetLocalSession(parent context.Context, current Session) error {
 	}
 	if !errors.Is(err, ErrDaemonUnavailable) {
 		return err
+	}
+	if execution.ProtectedSession(filepath.Dir(current.Dir), current.ID) {
+		return fmt.Errorf("session %s requires its online daemon to preserve its execution receipt", current.ID)
 	}
 	switch probeLiveness(current.Dir, &current.Meta) {
 	case LivenessAlive:

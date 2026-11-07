@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/shaul/mesh/internal/access"
@@ -23,8 +24,8 @@ const deviceRevokeVerb = "revoke"
 const scopeListVerb = "list"
 
 func (a *application) deviceScopeCommand() *cobra.Command {
-	group := &cobra.Command{Use: "scope", Short: "Manage dedicated metadata-only TLS identities", RunE: func(*cobra.Command, []string) error {
-		return agentapi.Usage("scope.list", "Choose keygen, grant, revoke, list or read.")
+	group := &cobra.Command{Use: "scope", Short: "Manage dedicated scoped TLS identities", RunE: func(*cobra.Command, []string) error {
+		return agentapi.Usage("scope.list", "Choose keygen, grant, revoke, list, read or output.")
 	}}
 	group.Flags().Bool("json", false, "write one agent result")
 	group.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
@@ -38,7 +39,7 @@ func (a *application) deviceScopeCommand() *cobra.Command {
 		}
 		return nil
 	}
-	group.AddCommand(a.scopeKeygenCommand(), a.scopeGrantCommand(), a.scopeRevokeCommand(), a.scopeListCommand(), a.scopeReadCommand())
+	group.AddCommand(a.scopeKeygenCommand(), a.scopeGrantCommand(), a.scopeRevokeCommand(), a.scopeListCommand(), a.scopeReadCommand(), a.scopeOutputCommand())
 	return group
 }
 func (a *application) scopeKeygenCommand() *cobra.Command {
@@ -83,9 +84,9 @@ func (a *application) scopeGrantCommand() *cobra.Command {
 	var subject, permissions, absolute string
 	var duration time.Duration
 	var revision uint64
-	command := &cobra.Command{Use: "grant", Short: "Grant metadata access locally at an expected policy revision", Args: profileArgs("scope.grant"), RunE: func(cmd *cobra.Command, _ []string) error {
-		if subject == "" || permissions != "metadata" || !cmd.Flags().Changed("expected-revision") {
-			return agentapi.Usage("scope.grant", "Pass --identity, --permissions metadata and --expected-revision.")
+	command := &cobra.Command{Use: "grant", Short: "Grant host-wide read permissions locally at an expected revision", Args: profileArgs("scope.grant"), RunE: func(cmd *cobra.Command, _ []string) error {
+		if subject == "" || !access.ValidPermissions(strings.Split(permissions, ",")) || !cmd.Flags().Changed("expected-revision") {
+			return agentapi.Usage("scope.grant", "Pass --identity, --permissions metadata or metadata,session-output and --expected-revision.")
 		}
 		expiry, err := scopeExpiry(cmd, absolute, duration)
 		if err != nil {
@@ -95,11 +96,11 @@ func (a *application) scopeGrantCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		change, err := store.Grant(cmd.Context(), revision, access.GrantInput{Subject: access.Subject(subject), ExpiresAt: expiry}, scopeRoles(state))
+		change, err := store.Grant(cmd.Context(), revision, access.GrantInput{Permissions: strings.Split(permissions, ","), Subject: access.Subject(subject), ExpiresAt: expiry}, scopeRoles(state))
 		return a.writeScopeChange(cmd, change, err)
 	}}
 	command.Flags().StringVar(&subject, "identity", "", "dedicated public identity")
-	command.Flags().StringVar(&permissions, "permissions", "", "metadata only; no terminal or output access")
+	command.Flags().StringVar(&permissions, "permissions", "", "metadata or metadata,session-output; output covers every host session and diagnostic-mixed tails")
 	command.Flags().StringVar(&absolute, "expires-at", "", "absolute RFC3339 expiry on this target")
 	command.Flags().DurationVar(&duration, "expires-in", 24*time.Hour, "target-clock lifetime, at most seven days")
 	command.Flags().Uint64Var(&revision, "expected-revision", 0, "current local scope policy revision")
@@ -255,33 +256,41 @@ func validateScopeReadFlags(cmd *cobra.Command, read protocol.AccessRead) error 
 	return nil
 }
 func readScopeMetadata(ctx context.Context, target, directory, requestID string, payload []byte, section string) (protocol.AccessReadResult, error) {
-	subject, key, err := identity.LoadCredential(directory)
-	if err != nil {
-		return protocol.AccessReadResult{}, fmt.Errorf("load dedicated credential: %w", err)
-	}
-	host, err := scopeTarget(target)
+	frame, subject, err := exchangeScope(ctx, target, directory, payload)
 	if err != nil {
 		return protocol.AccessReadResult{}, err
 	}
+	return validateScopeReply(frame, requestID, subject, target, section)
+}
+func exchangeScope(ctx context.Context, target, directory string, payload []byte) (protocol.Frame, string, error) {
+	subject, key, err := identity.LoadCredential(directory)
+	if err != nil {
+		return protocol.Frame{}, "", fmt.Errorf("load dedicated credential: %w", err)
+	}
+	host, err := scopeTarget(target)
+	if err != nil {
+		return protocol.Frame{}, "", err
+	}
 	conn, err := transport.DialOnce(ctx, host.Endpoint, transport.DialOptions{Auth: &transport.Authentication{Key: key, ExpectedIdentity: target, Admission: transport.ScopedAdmission}})
 	if err != nil {
-		return protocol.AccessReadResult{}, fmt.Errorf("scoped TLS connection: %w", err)
+		return protocol.Frame{}, "", fmt.Errorf("scoped TLS connection: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	if err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload}); err != nil {
-		return protocol.AccessReadResult{}, fmt.Errorf("write scoped request: %w", err)
+		return protocol.Frame{}, "", fmt.Errorf("write scoped request: %w", err)
 	}
 	frame, err := conn.ReadFrame()
 	if err != nil {
-		return protocol.AccessReadResult{}, fmt.Errorf("read scoped response: %w", err)
+		return protocol.Frame{}, "", fmt.Errorf("read scoped response: %w", err)
 	}
 	if frame.Kind != protocol.KindControl {
-		return protocol.AccessReadResult{}, errors.New("scoped response is not a control frame")
+		return protocol.Frame{}, "", errors.New("scoped response is not a control frame")
 	}
-	return validateScopeReply(frame, requestID, subject.ID, target, section)
+	return frame, subject.ID, nil
 }
+
 func scopeTarget(target string) (HostRecord, error) {
 	config, err := loadHostConfig()
 	if err != nil {
@@ -329,4 +338,98 @@ func scopeMetadataResult(result protocol.AccessReadResult) agentapi.ScopeMetadat
 		data.Services = append(data.Services, agentapi.ScopeService{Name: row.Name, Kind: row.Kind, Scope: row.Scope, Configured: row.Configured})
 	}
 	return data
+}
+
+func (a *application) scopeOutputCommand() *cobra.Command {
+	var target, directory string
+	var timeout time.Duration
+	var output protocol.AccessOutput
+	command := &cobra.Command{Use: "output", Short: "Read a bounded tail or preview using an explicit scoped TLS key", Args: profileArgs("scope.output"), RunE: func(cmd *cobra.Command, _ []string) error {
+		if target == "" || directory == "" || timeout < 100*time.Millisecond || timeout > 60*time.Second {
+			return agentapi.Usage("scope.output", "Pass --host, --key-dir and a timeout from 100ms to 60s.")
+		}
+		if err := validateScopeOutputFlags(cmd, output); err != nil {
+			return err
+		}
+		requestID, err := agentapi.NewRequestID()
+		if err != nil {
+			return fmt.Errorf("identify output request: %w", err)
+		}
+		data, err := json.Marshal(protocol.AccessOutputRequest{Type: protocol.TypeAccessOutput, RequestID: requestID, Output: output})
+		if err != nil {
+			return fmt.Errorf("encode output request: %w", err)
+		}
+		request, err := protocol.DecodeAccessOutput(data)
+		if err != nil {
+			return agentapi.Usage("scope.output", err.Error())
+		}
+		ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+		defer cancel()
+		frame, subject, err := exchangeScope(ctx, target, directory, data)
+		if err != nil {
+			return err
+		}
+		result, err := validateScopeOutputReply(frame, requestID, subject, target, request.Output)
+		if err != nil {
+			return err
+		}
+		return a.agent.write(cmd.OutOrStdout(), agentapi.Envelope{Status: agentapi.StatusOK, Data: scopeOutputResult(result)})
+	}}
+	command.Flags().StringVar(&target, "host", "", "exact saved host ID with an existing destination pin")
+	command.Flags().StringVar(&directory, "key-dir", "", "explicit dedicated credential directory")
+	command.Flags().StringVar(&output.SessionID, "session", "", "exact session ID on the target")
+	command.Flags().StringVar(&output.Format, "format", "", "tail or preview; requires session-output permission")
+	command.Flags().IntVar(&output.MaxBytes, "max-bytes", 0, "tail byte limit from 1 to 1048576; default 65536")
+	command.Flags().IntVar(&output.Cols, "cols", 0, "preview display columns from 1 to 160; default 80")
+	command.Flags().IntVar(&output.Rows, "rows", 0, "preview rows from 1 to 24; default 24")
+	command.Flags().DurationVar(&timeout, "timeout", 5*time.Second, "hard deadline from 100ms to 60s")
+	command.Flags().Bool("json", false, "write one agent result")
+	return command
+}
+func validateScopeOutputFlags(cmd *cobra.Command, output protocol.AccessOutput) error {
+	if cmd.Flags().Changed("max-bytes") && (output.Format != "tail" || output.MaxBytes < 1) {
+		return agentapi.Usage("scope.output", "--max-bytes requires tail format and a positive byte limit.")
+	}
+	if cmd.Flags().Changed("cols") && (output.Format != "preview" || output.Cols < 1) {
+		return agentapi.Usage("scope.output", "--cols requires preview format and positive columns.")
+	}
+	if cmd.Flags().Changed("rows") && (output.Format != "preview" || output.Rows < 1) {
+		return agentapi.Usage("scope.output", "--rows requires preview format and positive rows.")
+	}
+	return nil
+}
+func validateScopeOutputReply(frame protocol.Frame, requestID, subject, target string, request protocol.AccessOutput) (protocol.AccessOutputResult, error) {
+	reply, err := protocol.DecodeAccessOutputReply(frame.Payload, request)
+	if err != nil {
+		return protocol.AccessOutputResult{}, fmt.Errorf("decode scoped output: %w", err)
+	}
+	if reply.RequestID != requestID {
+		return protocol.AccessOutputResult{}, errors.New("scoped output belongs to another request")
+	}
+	if reply.Type == protocol.TypeAccessDenied {
+		return protocol.AccessOutputResult{}, agentapi.Fail(agentapi.Code(reply.ErrorCode), "scope.output", target, reply.Message)
+	}
+	result := *reply.Result
+	if result.Subject.Principal != subject || result.Subject.TargetID != target {
+		return protocol.AccessOutputResult{}, errors.New("scoped output binding differs from the authenticated request")
+	}
+	return result, nil
+}
+func scopeOutputResult(result protocol.AccessOutputResult) agentapi.ScopeOutput {
+	subject := result.Subject
+	output := agentapi.ScopeOutput{Subject: agentapi.ScopeSubject{TargetID: subject.TargetID, Principal: subject.Principal, Class: subject.Class, Permissions: append([]string{}, subject.Permissions...), ExpiresAt: subject.ExpiresAt}, SessionID: result.SessionID, Format: result.Format, Source: result.Source, ObservedAt: result.ObservedAt, CheckpointAt: result.CheckpointAt, BytesBase64: result.BytesBase64, Preview: result.Preview, StyledPreview: make([]agentapi.ScopePreviewLine, 0, len(result.StyledPreview))}
+	for _, line := range result.StyledPreview {
+		runs := make([]agentapi.ScopePreviewRun, 0, len(line.Runs))
+		for _, run := range line.Runs {
+			runs = append(runs, agentapi.ScopePreviewRun{Text: run.Text, Style: scopePreviewStyle(run.Style)})
+		}
+		output.StyledPreview = append(output.StyledPreview, agentapi.ScopePreviewLine{Runs: runs})
+	}
+	return output
+}
+func scopePreviewStyle(style protocol.PreviewStyle) agentapi.ScopePreviewStyle {
+	return agentapi.ScopePreviewStyle{Foreground: scopePreviewColor(style.Foreground), Background: scopePreviewColor(style.Background), UnderlineColor: scopePreviewColor(style.UnderlineColor), Bold: style.Bold, Faint: style.Faint, Italic: style.Italic, Reverse: style.Reverse, Strikethrough: style.Strikethrough, Underline: uint8(style.Underline)}
+}
+func scopePreviewColor(color protocol.PreviewColor) agentapi.ScopePreviewColor {
+	return agentapi.ScopePreviewColor{Kind: uint8(color.Kind), Value: color.Value}
 }

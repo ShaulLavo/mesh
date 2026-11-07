@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Standalone integration entry points must not read the caller's address book."""
 
+from contextlib import ExitStack
 import ctypes
 import errno
 import fcntl
@@ -22,6 +23,7 @@ import unittest
 from unittest.mock import patch
 
 from isolation import refuse_live_paths
+from fleet_sharing import Device
 from terminal_window import Fixture
 
 REPO = Path(__file__).resolve().parents[2]
@@ -170,6 +172,29 @@ class ServedPortOwnershipTest(unittest.TestCase):
             return process.communicate(input=b"\n" if signum is None else None, timeout=15)
         finally:
             stop_entry(process, [])
+
+    def new_devices(self, root, cleanup):
+        devices = []
+        for name in ("pc", "mac", "server-a", "server-b"):
+            directory = root / name
+            directory.mkdir(mode=0o700)
+            device = Device.__new__(Device)
+            cleanup.callback(device.close)
+            device.__init__(os.environ["MESH"], directory, name)
+            devices.append(device)
+        return devices
+
+    def test_fleet_device_ports_stay_owned_before_start_and_across_restart(self):
+        with tempfile.TemporaryDirectory(prefix="m-fleet-ports-") as temporary, ExitStack() as cleanup:
+            devices = self.new_devices(Path(temporary), cleanup)
+            ports = [device.port for device in devices]
+            self.assertEqual(len(set(ports)), len(devices))
+            for port in ports:
+                self.assert_port_reserved(port)
+                self.assert_start_restart(port)
+        for port in ports:
+            with socket.socket() as competitor:
+                competitor.bind(("127.0.0.1", port))
 
     def test_kept_ports_stay_reserved_until_the_fixture_owner_exits(self):
         source = (REPO / "integration/serve_kept.sh").read_text()

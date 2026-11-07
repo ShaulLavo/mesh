@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -205,4 +206,65 @@ func accessPage(result protocol.AccessReadResult, read protocol.AccessRead, prin
 		page.NextPage = &token
 	}
 	return page, nil
+}
+
+func accessSubject(binding access.Binding) protocol.AccessSubject {
+	p := binding.Principal()
+	return protocol.AccessSubject{TargetID: p.Target(), Principal: string(p.Subject()), Class: "scoped", Permissions: p.Permissions(), ExpiresAt: p.ExpiresAt()}
+}
+func (r *accessReader) Output(ctx context.Context, binding access.Binding, output protocol.AccessOutput) (protocol.AccessOutputResult, error) {
+	admit := func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("daemon: output cancelled: %w", err)
+		}
+		return binding.RequireOutput()
+	}
+	if err := admit(ctx); err != nil {
+		return protocol.AccessOutputResult{}, err
+	}
+	select {
+	case r.slots <- struct{}{}:
+	case <-ctx.Done():
+		return protocol.AccessOutputResult{}, errAccessUnavailable
+	}
+	defer func() { <-r.slots }()
+	if err := admit(ctx); err != nil {
+		return protocol.AccessOutputResult{}, err
+	}
+	result := protocol.AccessOutputResult{Subject: accessSubject(binding), SessionID: output.SessionID, Format: output.Format, Preview: []string{}, StyledPreview: []protocol.PreviewLine{}}
+	request := protocol.Control{RequestID: "scoped-output", SessionID: output.SessionID}
+	switch output.Format {
+	case "tail":
+		request.Type, request.Tail = protocol.TypeLogs, output.MaxBytes
+		response, source, err := r.lifecycle.logs(ctx, request, admit)
+		if err != nil {
+			return protocol.AccessOutputResult{}, scopedOutputError(err)
+		}
+		encoded := base64.StdEncoding.EncodeToString(response.Output)
+		observed := time.Now().UTC()
+		result.Source, result.BytesBase64, result.ObservedAt = source, &encoded, &observed
+	case "preview":
+		request.Type, request.PreviewCols, request.PreviewRows = protocol.TypeInspect, output.Cols, output.Rows
+		preview, err := r.lifecycle.outputPreview(ctx, request, admit)
+		if err != nil {
+			return protocol.AccessOutputResult{}, scopedOutputError(err)
+		}
+		result.Source, result.ObservedAt, result.CheckpointAt = preview.Source, preview.ObservedAt, preview.CheckpointAt
+		result.Preview, result.StyledPreview = preview.Preview, preview.StyledPreview
+	default:
+		return protocol.AccessOutputResult{}, errAccessInvalid
+	}
+	if err := admit(ctx); err != nil {
+		return protocol.AccessOutputResult{}, err
+	}
+	return result, nil
+}
+func scopedOutputError(err error) error {
+	if errors.Is(err, access.ErrDenied) {
+		return access.ErrDenied
+	}
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, errAccessNotFound) {
+		return errAccessNotFound
+	}
+	return errAccessUnavailable
 }

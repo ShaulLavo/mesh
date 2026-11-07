@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -625,13 +627,14 @@ func catalogTestHost(lastSeenAt time.Time) storage.Host {
 
 func catalogTestMeta(id, state, bootID string) worker.Meta {
 	return worker.Meta{
-		ID:        id,
-		PID:       1234,
-		Command:   []string{"sh", "-c", "printf hello"},
-		Cwd:       "/tmp/project",
-		State:     state,
-		CreatedAt: catalogTestTime,
-		BootID:    bootID,
+		Reservation: &session.Reservation{ID: id, Instance: "0123456789abcdef0123456789abcdef", BootID: bootID, Purpose: session.Generic},
+		ID:          id,
+		PID:         1234,
+		Command:     []string{"sh", "-c", "printf hello"},
+		Cwd:         "/tmp/project",
+		State:       state,
+		CreatedAt:   catalogTestTime,
+		BootID:      bootID,
 	}
 }
 
@@ -641,9 +644,33 @@ func writeCatalogMeta(t *testing.T, root, directory string, meta worker.Meta) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if meta.Reservation != nil {
+		writeCatalogReservation(t, dir, *meta.Reservation)
+	}
 	if err := worker.WriteMeta(dir, meta); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeCatalogReservation(t *testing.T, dir string, ref session.Reservation) {
+	t.Helper()
+	data, err := json.Marshal(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".reservation"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeGenericCatalogDir(t *testing.T, root, id string) string {
+	t.Helper()
+	dir := filepath.Join(root, id)
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeCatalogReservation(t, dir, *catalogTestMeta(id, worker.StateExited, "boot-a").Reservation)
+	return dir
 }
 
 func equalInt(a, b *int) bool {
@@ -903,40 +930,43 @@ func TestCatalogRetentionCountExcludesInterruptedSessions(t *testing.T) {
 		{name: "exited still capped", interrupted: 2, exited: maxRetainedTerminalSessions + 2, retired: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			catalog := &Catalog{sessionsDir: root, now: func() time.Time { return catalogTestTime }}
-			observed := make([]storage.Session, 0, test.interrupted+test.exited)
-			for index := range test.interrupted + test.exited {
-				state := storage.StateInterrupted
-				createdAt := catalogTestTime.Add(-90 * 24 * time.Hour)
-				if index >= test.interrupted {
-					state = storage.StateExited
-					createdAt = catalogTestTime.Add(-time.Duration(test.interrupted+test.exited-index) * time.Minute)
-				}
-				id := fmt.Sprintf("%04d", index)
-				if err := os.Mkdir(filepath.Join(root, id), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				observed = append(observed, storage.Session{ID: storage.SessionID(id), State: state, CreatedAt: createdAt})
-			}
-			kept, retired := catalog.retireFinishedSessions(observed)
-			if len(retired) != test.retired || len(kept) != len(observed)-test.retired {
-				t.Fatalf("kept %d, retired %d, want %d retired", len(kept), len(retired), test.retired)
-			}
-			for _, current := range kept {
-				if _, err := os.Stat(filepath.Join(root, string(current.ID))); err != nil {
-					t.Fatalf("kept session %s directory missing: %v", current.ID, err)
-				}
-			}
-			for index, id := range retired {
-				if want := storage.SessionID(fmt.Sprintf("%04d", test.interrupted+index)); id != want {
-					t.Fatalf("retired %s, want oldest exited session %s", id, want)
-				}
-				if _, err := os.Stat(filepath.Join(root, string(id))); err != nil {
-					t.Fatalf("retirement removed session %s before writing its database row: %v", id, err)
-				}
-			}
+			checkInterruptedRetentionCount(t, test.interrupted, test.exited, test.retired)
 		})
+	}
+}
+
+func checkInterruptedRetentionCount(t *testing.T, interrupted, exited, wantRetired int) {
+	t.Helper()
+	root := t.TempDir()
+	catalog := &Catalog{sessionsDir: root, now: func() time.Time { return catalogTestTime }}
+	observed := make([]storage.Session, 0, interrupted+exited)
+	for index := range interrupted + exited {
+		state := storage.StateInterrupted
+		createdAt := catalogTestTime.Add(-90 * 24 * time.Hour)
+		if index >= interrupted {
+			state = storage.StateExited
+			createdAt = catalogTestTime.Add(-time.Duration(interrupted+exited-index) * time.Minute)
+		}
+		id := fmt.Sprintf("%04d", index)
+		writeGenericCatalogDir(t, root, id)
+		observed = append(observed, storage.Session{ID: storage.SessionID(id), State: state, CreatedAt: createdAt})
+	}
+	kept, retired := catalog.retireFinishedSessions(observed)
+	if len(retired) != wantRetired || len(kept) != len(observed)-wantRetired {
+		t.Fatalf("kept %d, retired %d, want %d retired", len(kept), len(retired), wantRetired)
+	}
+	for _, current := range kept {
+		if _, err := os.Stat(filepath.Join(root, string(current.ID))); err != nil {
+			t.Fatalf("kept session %s directory missing: %v", current.ID, err)
+		}
+	}
+	for index, id := range retired {
+		if want := storage.SessionID(fmt.Sprintf("%04d", interrupted+index)); id != want {
+			t.Fatalf("retired %s, want oldest exited session %s", id, want)
+		}
+		if _, err := os.Stat(filepath.Join(root, string(id))); err != nil {
+			t.Fatalf("retirement removed session %s before writing its database row: %v", id, err)
+		}
 	}
 }
 

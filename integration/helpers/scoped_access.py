@@ -1,4 +1,4 @@
-"""Dedicated-key metadata through a real daemon, with an attached owner worker."""
+"""Dedicated-key reads through a real daemon, preserving an attached owner worker."""
 
 import base64
 import json
@@ -58,8 +58,18 @@ def exercise(fixture):
     denied_frames(fixture, dedicated, session_id, shell_pid, owner, caller)
     owner.send("printf 'OWNER-STILL-ATTACHED\\n'\n")
     require(fixture.shell_identity(owner) == (session_id, shell_pid), "denied frames displaced the owner")
+    metadata_denied = invoke(fixture.binary, caller, "output", "--host", fixture.remote_id,
+                             "--key-dir", str(dedicated), "--session", session_id,
+                             "--format", "preview", "--cols", "1", "--rows", "1", code=1)
+    require(metadata_denied["errors"][0]["code"] == "access.denied", metadata_denied)
+    replacement = invoke(fixture.binary, target, "grant", "--identity", public,
+                         "--permissions", "metadata,session-output", "--expires-in", "1h",
+                         "--expected-revision", "1")
+    require(replacement["data"]["changed"], replacement)
+    permitted_output(fixture, caller, dedicated, session_id, shell_pid, owner, sentinel)
+    denied_frames(fixture, dedicated, session_id, shell_pid, owner, caller)
     revoked = invoke(fixture.binary, target, "revoke", "--identity", public,
-                     "--expected-revision", "1")
+                     "--expected-revision", "2")
     require(revoked["data"]["changed"], revoked)
     denied = invoke(fixture.binary, caller, "read", "--host", fixture.remote_id,
                     "--key-dir", str(dedicated), code=1)
@@ -68,7 +78,30 @@ def exercise(fixture):
     owner.send("printf 'WORKER-SURVIVED-REVOKE\\n'\n")
     require(fixture.shell_identity(owner) == (session_id, shell_pid), "revoke changed or killed the worker")
     require(not empty_state.exists(), "failed read used normal fallback state")
-    print("PASS: dedicated scoped TLS metadata; no output disclosure, owner attachment change, normal state or fallback; revocation preserves worker")
+    print("PASS: dedicated scoped TLS metadata and optional bounded output; both keys deny legacy controls; reads and revocation preserve owner attachment and geometry")
+
+
+def permitted_output(fixture, caller, dedicated, session_id, shell_pid, owner, sentinel):
+    base = ("output", "--host", fixture.remote_id, "--key-dir", str(dedicated),
+            "--session", session_id)
+    tail = invoke(fixture.binary, caller, *base, "--format", "tail")["data"]
+    require(tail["source"] == "live-tail" and tail["observedAt"] and
+            tail["checkpointAt"] is None, tail)
+    require(sentinel.encode() in base64.b64decode(tail["bytesBase64"]), tail)
+    require(tail["preview"] == [] and tail["styledPreview"] == [], tail)
+    for dimensions in (("--cols", "1", "--rows", "1"), (),
+                       ("--cols", "160", "--rows", "24")):
+        preview = invoke(fixture.binary, caller, *base, "--format", "preview", *dimensions)["data"]
+        require(preview["source"] == "live-preview" and preview["observedAt"] and
+                preview["checkpointAt"] is None and preview["bytesBase64"] is None, preview)
+        require(set(preview) == {"subject", "sessionId", "format", "source", "observedAt",
+                                 "checkpointAt", "bytesBase64", "preview", "styledPreview"}, preview)
+        require(len(preview["preview"]) <= (1 if dimensions and dimensions[1] == "1" else 24), preview)
+    owner.expect_size(80, 24)
+    os.kill(shell_pid, 0)
+    require(fixture.shell_identity(owner) == (session_id, shell_pid),
+            "permitted output reads displaced the owner or resized the PTY")
+    require(not Path(caller["MESH_STATE_DIR"]).exists(), "output read used normal key or cache")
 
 
 def denied_frames(fixture, dedicated, session_id, shell_pid, owner, environment):

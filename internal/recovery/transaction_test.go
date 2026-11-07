@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"errors"
+	"github.com/shaul/mesh/internal/session"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,6 +13,8 @@ import (
 type transactionRuntime struct {
 	mu                 sync.Mutex
 	sources            map[string]Source
+	root               string
+	boot               string
 	launches           []Launch
 	launchError        error
 	publishBeforeError bool
@@ -32,7 +35,7 @@ func (r *transactionRuntime) Launch(_ context.Context, launch Launch) error {
 	defer r.mu.Unlock()
 	r.launches = append(r.launches, launch)
 	if r.launchError == nil || r.publishBeforeError {
-		r.sources[launch.ID] = Source{ID: launch.ID, State: "detached", Cwd: launch.Cwd, Command: launch.Command, RecoveredFrom: launch.SourceID, Published: true}
+		r.sources[launch.ID] = Source{Reservation: &launch.Reservation, ID: launch.ID, State: "detached", Cwd: launch.Cwd, Command: launch.Command, RecoveredFrom: launch.SourceID, Published: true}
 	}
 	return r.launchError
 }
@@ -47,7 +50,7 @@ func transactionFixture(t *testing.T) (Config, *transactionRuntime) {
 	if err := os.Mkdir(filepath.Join(root, "7K3D"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runtime := &transactionRuntime{sources: map[string]Source{"7K3D": {ID: "7K3D", State: "interrupted", Cwd: root, Command: []string{"dangerous-program", "argument with spaces"}, Shell: "/bin/sh", Published: true}}}
+	runtime := &transactionRuntime{root: root, boot: "test-boot", sources: map[string]Source{"7K3D": {ID: "7K3D", State: "interrupted", Cwd: root, Command: []string{"dangerous-program", "argument with spaces"}, Shell: "/bin/sh", Published: true}}}
 	return Config{SessionsDir: root, HostID: "host", Runtime: runtime}, runtime
 }
 
@@ -214,6 +217,7 @@ func TestRecoveryUnknownCheckpointVersionAllowsExplicitShell(t *testing.T) {
 func TestRecoveryNewBootReconcilesUndispatchedWorkerReservation(t *testing.T) {
 	cfg, runtime := transactionFixture(t)
 	cfg.BootID = "first-boot"
+	runtime.boot = cfg.BootID
 	runtime.launchError = errors.New("crash between dispatch intent and exec.Start")
 	if _, err := Recover(context.Background(), cfg, Request{SessionID: "7K3D"}); !errors.Is(err, ErrUncertain) {
 		t.Fatalf("first boot result = %v", err)
@@ -221,6 +225,7 @@ func TestRecoveryNewBootReconcilesUndispatchedWorkerReservation(t *testing.T) {
 	reserved := runtime.launches[0].ID
 	runtime.launchError = nil
 	cfg.BootID = "second-boot"
+	runtime.boot = cfg.BootID
 	result, err := Recover(context.Background(), cfg, Request{SessionID: "7K3D"})
 	if err != nil {
 		t.Fatal(err)
@@ -228,4 +233,20 @@ func TestRecoveryNewBootReconcilesUndispatchedWorkerReservation(t *testing.T) {
 	if result.SessionID != reserved || len(runtime.launches) != 2 {
 		t.Fatalf("new boot did not reuse safe reservation: %+v launches=%+v", result, runtime.launches)
 	}
+}
+
+func (r *transactionRuntime) Reserve(context.Context) (session.Reservation, error) {
+	id, err := session.NewID()
+	if err != nil {
+		return session.Reservation{}, recoveryBoundaryError("transaction_test.go Reserve", err)
+	}
+	ref, err := session.NewReservation(id, r.boot, session.Recovery)
+	if err != nil {
+		return ref, recoveryBoundaryError("transaction_test.go Reserve", err)
+	}
+	return ref, recoveryBoundaryError("transaction_test.go Reserve", os.Mkdir(filepath.Join(r.root, id), 0700))
+}
+func (r *transactionRuntime) Renew(_ context.Context, ref session.Reservation) (session.Reservation, error) {
+	ref.BootID = r.boot
+	return ref, nil
 }

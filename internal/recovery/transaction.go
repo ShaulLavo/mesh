@@ -13,8 +13,8 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/shaul/mesh/internal/agentresume"
-	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/session/execution"
 )
 
 type Action string
@@ -31,6 +31,7 @@ var ErrUncertain = errors.New("recovery: replacement launch is uncertain; retry 
 // Source contains process facts supplied by the worker adapter, never inferred
 // from a PID that another process could have reused.
 type Source struct {
+	Reservation                                  *session.Reservation
 	AgentResume                                  *agentresume.Receipt
 	ID, State, Cwd, BootID, RecoveredFrom, Shell string
 	Command                                      []string
@@ -38,6 +39,8 @@ type Source struct {
 }
 
 type Runtime interface {
+	Reserve(context.Context) (session.Reservation, error)
+	Renew(context.Context, session.Reservation) (session.Reservation, error)
 	Inspect(context.Context, string) (Source, error)
 	Launch(context.Context, Launch) error
 	ConfigureCommand(context.Context, string, *Command) error
@@ -59,6 +62,7 @@ type Request struct {
 }
 
 type Launch struct {
+	Reservation  session.Reservation `json:"reservation"`
 	Agent        *agentresume.Recipe `json:"agent,omitempty"`
 	ID, SourceID string
 	Command      []string
@@ -117,7 +121,7 @@ func Recover(ctx context.Context, cfg Config, request Request) (Result, error) {
 	defer unlock()
 	source, err := cfg.Runtime.Inspect(ctx, request.SessionID)
 	if err != nil {
-		return Result{}, err
+		return Result{}, recoveryBoundaryError("transaction.go Recover", err)
 	}
 	if (source.State == "running" || source.State == "detached") && request.Action != ActionAgent {
 		return Result{SessionID: source.ID, Cwd: source.Cwd, Existing: true, State: source.State}, nil
@@ -150,11 +154,18 @@ func Recover(ctx context.Context, cfg Config, request Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	id, err := reserveReplacement(cfg.SessionsDir)
+	ref, err := cfg.Runtime.Reserve(ctx)
 	if err != nil {
-		return Result{}, err
+		return Result{}, recoveryBoundaryError("transaction.go Recover", err)
 	}
-	launch.ID = id
+	if err := ref.Validate(); err != nil {
+		return Result{}, recoveryBoundaryError("transaction.go Recover", err)
+	}
+	if ref.Purpose != session.Recovery {
+		return Result{}, ErrUncertain
+	}
+	launch.ID = ref.ID
+	launch.Reservation = ref
 	next := intent{Version: 1, HostID: cfg.HostID, SourceID: source.ID, Action: request.Action, Phase: "reserved", Launch: launch, OriginalCwd: originalCwd}
 	if err := writeAgentReference(cfg.SessionsDir, next); err != nil {
 		return Result{}, err
@@ -191,22 +202,24 @@ func recoveryRecord(cfg Config, dir string, source Source, action Action) (Recor
 func resumeIntent(ctx context.Context, cfg Config, dir string, saved intent) (Result, error) {
 	replacement, inspectErr := cfg.Runtime.Inspect(ctx, saved.Launch.ID)
 	if inspectErr == nil && replacement.Published {
-		if replacement.RecoveredFrom != saved.SourceID {
+		if !matchesReplacement(saved, replacement) {
 			return Result{}, fmt.Errorf("recovery: replacement %s belongs to a different source", saved.Launch.ID)
 		}
 		return reconcileReplacement(dir, saved, true, replacement)
 	}
 	if inspectErr != nil && !errors.Is(inspectErr, os.ErrNotExist) {
-		return Result{}, inspectErr
+		return Result{}, recoveryBoundaryError("transaction.go resumeIntent", inspectErr)
 	}
-	if saved.Phase == "dispatched" && saved.DispatchBootID != "" && cfg.BootID != "" && saved.DispatchBootID != cfg.BootID {
-		saved.Phase = "reserved"
+	var err error
+	saved, err = renewRecoveryIntent(ctx, cfg, dir, saved)
+	if err != nil {
+		return Result{}, err
 	}
 	if saved.Phase != "reserved" {
 		return Result{}, fmt.Errorf("session %s reserved replacement %s: %w", saved.SourceID, saved.Launch.ID, ErrUncertain)
 	}
 	if err := ctx.Err(); err != nil {
-		return Result{}, err
+		return Result{}, recoveryBoundaryError("transaction.go resumeIntent", err)
 	}
 	saved.Phase = "dispatched"
 	saved.DispatchBootID = cfg.BootID
@@ -216,8 +229,8 @@ func resumeIntent(ctx context.Context, cfg Config, dir string, saved intent) (Re
 	if err := cfg.Runtime.Launch(ctx, saved.Launch); err != nil {
 		return Result{}, retainLaunchFailure(dir, saved, err)
 	}
-	replacement, err := cfg.Runtime.Inspect(ctx, saved.Launch.ID)
-	if err != nil || !replacement.Published || replacement.RecoveredFrom != saved.SourceID {
+	replacement, err = cfg.Runtime.Inspect(ctx, saved.Launch.ID)
+	if err != nil || !replacement.Published || !matchesReplacement(saved, replacement) {
 		return Result{}, fmt.Errorf("session %s reserved replacement %s: %w", saved.SourceID, saved.Launch.ID, ErrUncertain)
 	}
 	return reconcileReplacement(dir, saved, false, replacement)
@@ -468,6 +481,12 @@ func readIntentNamed(dir, hostID, id, name string) (intent, error) {
 	if err != nil || canonical != saved.Launch.ID || canonical == id {
 		return intent{}, fmt.Errorf("recovery: invalid replacement ID %q", saved.Launch.ID)
 	}
+	if err := saved.Launch.Reservation.Validate(); err != nil {
+		return intent{}, recoveryBoundaryError("transaction.go readIntentNamed", err)
+	}
+	if saved.Launch.Reservation.ID != saved.Launch.ID || saved.Launch.Reservation.Purpose != session.Recovery {
+		return intent{}, ErrUncertain
+	}
 	if saved.Phase != "reserved" && saved.Phase != "dispatched" && saved.Phase != "complete" {
 		return intent{}, fmt.Errorf("recovery: invalid transaction phase %q", saved.Phase)
 	}
@@ -483,31 +502,6 @@ func readIntentNamed(dir, hostID, id, name string) (intent, error) {
 		return intent{}, fmt.Errorf("recovery: intent claim does not match the saved invocation")
 	}
 	return saved, nil
-}
-
-func reserveReplacement(root string) (string, error) {
-	for range 16 {
-		id, err := session.NewID()
-		if err != nil {
-			return "", err
-		}
-		dir := filepath.Join(root, id)
-		err = os.Mkdir(dir, 0o700)
-		if errors.Is(err, os.ErrExist) {
-			continue
-		}
-		if err != nil {
-			return "", fmt.Errorf("recovery: reserve replacement: %w", err)
-		}
-		if err := writeTransaction(dir, filepath.Base(paths.Launching(dir)), struct{}{}); err != nil {
-			return "", err
-		}
-		if err := syncTransactionDirectory(root); err != nil {
-			return "", err
-		}
-		return id, nil
-	}
-	return "", errors.New("recovery: exhausted replacement session IDs")
 }
 
 func lockSource(ctx context.Context, dir string) (func(), error) {
@@ -596,6 +590,9 @@ func readTransaction(path string, value any) error {
 }
 
 func writeTransaction(dir, name string, value any) error {
+	if saved, ok := value.(intent); ok {
+		return writeIntentTransaction(dir, name, saved)
+	}
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("recovery: encode transaction: %w", err)
@@ -605,15 +602,42 @@ func writeTransaction(dir, name string, value any) error {
 	}
 	return atomicWrite(dir, name, data)
 }
-
-func syncTransactionDirectory(dir string) error {
-	file, err := os.Open(dir) //nolint:gosec // sync the same trusted directory that owns the transaction
+func writeIntentTransaction(dir, name string, saved intent) error {
+	files, err := execution.OpenFiles(filepath.Dir(filepath.Dir(dir)))
 	if err != nil {
-		return fmt.Errorf("recovery: open directory: %w", err)
+		return recoveryBoundaryError("open recovery transaction root", err)
 	}
-	defer file.Close() //nolint:errcheck // successful Sync is the durability boundary
-	if err := file.Sync(); err != nil && !errors.Is(err, unix.EINVAL) {
-		return fmt.Errorf("recovery: sync directory: %w", err)
+	relative := filepath.Join(filepath.Base(filepath.Dir(dir)), filepath.Base(dir), name)
+	_, err = files.PublishBounded(relative, saved, false, 256<<10)
+	return errors.Join(err, files.Close())
+}
+
+func recoveryBoundaryError(operation string, err error) error {
+	if err == nil {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func matchesReplacement(saved intent, replacement Source) bool {
+	return replacement.RecoveredFrom == saved.SourceID && replacement.Reservation != nil && *replacement.Reservation == saved.Launch.Reservation
+}
+func renewRecoveryIntent(ctx context.Context, cfg Config, dir string, saved intent) (intent, error) {
+	ref := saved.Launch.Reservation
+	if saved.Phase != "dispatched" && saved.Phase != "reserved" || ref.BootID == "" || cfg.BootID == "" || ref.BootID == cfg.BootID {
+		return saved, nil
+	}
+	if ref.Purpose != session.Recovery {
+		return saved, ErrUncertain
+	}
+	ref, err := cfg.Runtime.Renew(ctx, ref)
+	if err != nil {
+		return saved, recoveryBoundaryError("renew recovery reservation", err)
+	}
+	if ref.Purpose != session.Recovery || ref.ID != saved.Launch.ID || ref.Instance != saved.Launch.Reservation.Instance || ref.BootID != cfg.BootID {
+		return saved, ErrUncertain
+	}
+	saved.Launch.Reservation = ref
+	saved.Phase = "reserved"
+	return saved, writeTransaction(dir, intentName(saved), saved)
 }
