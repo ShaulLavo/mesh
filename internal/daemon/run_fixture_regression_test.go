@@ -15,7 +15,7 @@ import (
 const daemonFixtureProbe = "MESH_DAEMON_FIXTURE_PROBE"
 
 func TestDaemonRunFixtureCleanup(t *testing.T) {
-	for _, scenario := range []string{"assertion", "readiness-timeout", "early-error", "early-nil", "join-timeout", "success"} {
+	for _, scenario := range []string{"assertion", "readiness-timeout", "early-error", "early-nil", "join-timeout", "restart-join-timeout", "success"} {
 		t.Run(scenario, func(t *testing.T) { checkDaemonFixtureProbe(t, scenario) })
 	}
 }
@@ -60,6 +60,12 @@ func TestDaemonRunFixtureProbe(t *testing.T) {
 	var runCtx context.Context
 	t.Cleanup(func() { checkFakeDaemonCleanup(runCtx, t, scenario, fixture, release) })
 	fixture = newDaemonRunFixture(t)
+	if scenario == "restart-join-timeout" {
+		fixture.start(t, func(ctx context.Context) error {
+			return runFiniteDaemonFake(ctx, fixture.root, "success", release)
+		})
+		fixture.stop(t)
+	}
 	fixture.start(t, func(ctx context.Context) error {
 		started <- ctx
 		return runFiniteDaemonFake(ctx, fixture.root, scenario, release)
@@ -85,7 +91,7 @@ func runFiniteDaemonFake(ctx context.Context, root, scenario string, release <-c
 	if scenario == "early-nil" {
 		return nil
 	}
-	if scenario == "join-timeout" {
+	if strings.HasSuffix(scenario, "join-timeout") {
 		<-release
 		return nil
 	}
@@ -102,7 +108,7 @@ func runFiniteDaemonFake(ctx context.Context, root, scenario string, release <-c
 func checkFakeDaemonCleanup(ctx context.Context, t *testing.T, scenario string, f *daemonRunFixture, release chan struct{}) {
 	t.Helper()
 	defer drainDaemonFake(t, f, release)
-	checkDaemonFixtureEnvironment(t, f, scenario == "join-timeout")
+	checkDaemonFixtureEnvironment(t, f, strings.HasSuffix(scenario, "join-timeout"))
 	if f.joined && scenario != "early-error" && f.err != nil {
 		t.Errorf("fake returned an unexpected cleanup error: %v", f.err)
 		return
@@ -112,7 +118,7 @@ func checkFakeDaemonCleanup(ctx context.Context, t *testing.T, scenario string, 
 		return
 	}
 	_, err := os.Stat(f.root)
-	if scenario == "join-timeout" {
+	if strings.HasSuffix(scenario, "join-timeout") {
 		if err != nil || f.joined {
 			t.Errorf("unknown join lost private state: stat=%v joined=%v", err, f.joined)
 			return

@@ -3,8 +3,7 @@
 package main
 
 import (
-	"archive/tar"
-	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -93,7 +92,7 @@ func readArtifacts(directory string) ([]release.Artifact, error) {
 }
 
 func readArtifact(directory string, platform release.Platform) (release.Artifact, error) {
-	name := "mesh_" + platform.OS + "_" + platform.Arch + ".tar.gz"
+	name := release.ArchiveName(platform, release.PublishedArchive)
 	path := filepath.Join(directory, name)
 	archiveDigest, err := hashFile(path)
 	if err != nil {
@@ -112,28 +111,11 @@ func hashArchiveBinary(path string) (string, error) {
 		return "", err
 	}
 	defer archive.Close() //nolint:errcheck // hash result is authoritative
-	gzipReader, err := gzip.NewReader(archive)
+	executable, err := release.ReadExecutable(context.Background(), archive, release.PublishedArchive, io.Discard)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("manifest: read executable: %w", err)
 	}
-	defer gzipReader.Close() //nolint:errcheck // reader has no pending writes
-	tarReader := tar.NewReader(gzipReader)
-	header, err := tarReader.Next()
-	if err != nil {
-		return "", err
-	}
-	if header.Name != "mesh" || header.Typeflag != tar.TypeReg || header.Size < 0 || header.Size > 128<<20 {
-		return "", errors.New("archive must contain one bounded regular file named mesh")
-	}
-	hash := sha256.New()
-	written, err := io.Copy(hash, io.LimitReader(tarReader, (128<<20)+1))
-	if err != nil || written != header.Size {
-		return "", errors.Join(err, fmt.Errorf("binary size is %d, want %d", written, header.Size))
-	}
-	if _, err := tarReader.Next(); !errors.Is(err, io.EOF) {
-		return "", errors.New("archive contains more than one member")
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return executable.SHA256, nil
 }
 
 func verifyProofs(directory string, compatibility release.Compatibility) error {
@@ -205,8 +187,12 @@ func hashFile(path string) (string, error) {
 	}
 	defer file.Close() //nolint:errcheck // hash result is authoritative
 	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
+	written, err := io.Copy(hash, io.LimitReader(file, (128<<20)+1))
+	if err != nil {
 		return "", err
+	}
+	if written > 128<<20 {
+		return "", errors.New("manifest: archive exceeds compressed size limit")
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }

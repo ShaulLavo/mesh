@@ -79,6 +79,57 @@ if (root / "hang-bus").exists():
         time.sleep(1)
 sys.exit(1)
 '''
+# Only the private copy is wrapped. Holds observe signals but never publish cancellation.
+REPORTING_SHIM = r'''#!/usr/bin/env python3
+import os
+from pathlib import Path
+import sys
+import time
+import verify_runner as runner
+
+root = Path(__file__).resolve().parents[1]
+boundary = sys.argv[1]
+original_lines = runner.log_lines
+original_report = runner.Run.report_log
+
+
+def hold(run, name):
+    control = root / "control/runner"
+    (control / f"at-{name}").write_text(f"{os.getpid()}\n")
+    while (control / f"hold-{name}").exists():
+        if run.controller.triggers.received is not None:
+            (control / "at-report-signal").write_text(f"{run.controller.triggers.received}\n")
+        time.sleep(0.005)
+
+
+def lines(run, path, **filters):
+    held = False
+    for line in original_lines(path, **filters):
+        yield line
+        if boundary == "interrupted" and not held and line is not None and len(line) >= 4096:
+            held = True
+            hold(run, "report-interrupted")
+
+
+def report(self, log, **options):
+    if log.name != "one.sh.log":
+        return original_report(self, log, **options)
+
+    runner.log_lines = lambda path, **filters: lines(self, path, **filters)
+    try:
+        completed = original_report(self, log, **options)
+    finally:
+        runner.log_lines = original_lines
+    if boundary == "completed":
+        if not completed:
+            raise AssertionError("reporting stopped before its completion barrier")
+        hold(self, "report-completed")
+    return completed
+
+
+runner.Run.report_log = report
+sys.exit(runner.main([str(root), "/bin/bash"]))
+'''
 IGNORE = '''import signal
 import time
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -244,6 +295,7 @@ class Scene:
         (self.root / "worker.py").write_text(WORKER)
         (self.control / "settings.json").write_text(json.dumps(TIMINGS))
         self.runner = None
+        self.command = ["bash", str(self.root / "scripts/verify.sh")]
 
     def entries(self, modes):
         for name, mode in modes:
@@ -255,9 +307,14 @@ class Scene:
                 "HOME": str(self.root / "home"), "TMPDIR": str(self.tmp), "LANG": "C", "TERM": "dumb",
                 "MESH_INTEGRATION_JOBS": "2", "MESH_INTEGRATION_CONTROL": str(self.control), **extra}
 
+    def arm_reporting(self, boundary):
+        (self.root / "scripts/reporting_control.py").write_text(REPORTING_SHIM)
+        self.command = [sys.executable, "-B", str(self.root / "scripts/reporting_control.py"), boundary]
+        self.hold("runner", f"report-{boundary}")
+
     def start(self, modes, **extra):
         self.entries(modes)
-        self.runner = subprocess.Popen(["bash", str(self.root / "scripts/verify.sh")], env=self.environment(**extra),
+        self.runner = subprocess.Popen(self.command, env=self.environment(**extra),
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                        start_new_session=True)
         return self.runner
@@ -337,9 +394,9 @@ class RunnerCase(unittest.TestCase):
 
     def teardown_scene(self):
         cleared = self.scene.close({self.sentinel.pid})
+        self.assertTrue(cleared, f"teardown could not join test processes; kept {self.scene.root}")
         shutil.rmtree(self.scene.root)
         self.assertFalse(self.scene.root.exists())
-        self.assertTrue(cleared, "teardown could not remove test processes")
 
     def finish(self, expected, timeout=20):
         stdout, stderr = self.scene.runner.communicate(timeout=timeout)
@@ -521,23 +578,92 @@ class CancellationTests(RunnerCase):
     def test_hanging_build_services_cancellation(self):
         self.hang_then_cancel("build")
 
-    def test_blocked_output_cannot_hold_cancellation(self):
-        self.scene.start([("one", "noisy"), ("two", "pass")])
+    @staticmethod
+    def noisy_payload():
+        return b"x" * (1024 * 1024) + b"\n"
+
+    @staticmethod
+    def report_header():
+        return b"Running integration tests with 2 concurrent jobs\nFAIL: one.sh (exit 7)\n"
+
+    def reported_payload(self, boundary):
+        payload = self.noisy_payload()
+        # Each bounded log read is indented and gets its own transcript newline.
+        chunks = [payload[index:index + 65536] for index in range(0, len(payload), 65536)]
+        if boundary == "interrupted":
+            chunks = chunks[:1]
+        return b"".join(b"  " + chunk.rstrip(b"\r\n") + b"\n" for chunk in chunks)
+
+    def assert_retained_output(self, boundary):
+        kept = sorted(self.scene.tmp.glob("mesh-verify-output.*"))
+        self.assertEqual(len(kept), 2 if boundary == "interrupted" else 1,
+                         "wrong retained artifact set for the armed reporting boundary")
+        expected = self.report_header() + self.reported_payload(boundary)
+        if boundary == "interrupted":
+            logs = [path for path in kept if path.read_bytes() == self.noisy_payload()]
+            self.assertEqual(len(logs), 1, "the full interrupted child log was lost or changed")
+            expected += f"FAIL: output interrupted; the full log is kept at {logs[0]}\n".encode()
+            transcripts = [path for path in kept if path != logs[0]]
+        else:
+            transcripts = kept
+        self.assertEqual(len(transcripts), 1, "the caller transcript was not retained exactly once")
+        self.assertEqual(transcripts[0].read_bytes(), expected, "the full caller transcript was lost or changed")
+        return kept
+
+    def assert_retention_rejects_damage(self, boundary, path, missing):
+        contents = path.read_bytes()
+        try:
+            if missing:
+                path.unlink()
+            else:
+                path.write_bytes(contents[:-1])
+            with self.assertRaises(AssertionError, msg=f"accepted {'missing' if missing else 'truncated'} {path.name}"):
+                self.assert_retained_output(boundary)
+        finally:
+            path.write_bytes(contents)
+
+    def blocked_output(self, boundary):
+        self.scene.arm_reporting(boundary)
+        self.scene.start([("one", "noisy"), ("two", "pass"), ("unstarted", "pass")])
         self.scene.ready(2)
+        self.scene.reached("runner", f"report-{boundary}")
         wait_until(lambda: pipe_full(self.scene.runner.stderr.fileno()), "the runner's unread stderr to fill")
+        root, = self.scene.run_roots()
+        self.assertEqual((root / "one.sh.log").read_bytes(), self.noisy_payload())
+        self.assertEqual((root / "output.log").read_bytes(), self.report_header() + self.reported_payload(boundary))
+        started = time.monotonic()
         self.scene.runner.send_signal(signal.SIGTERM)
-        wait_until(lambda: any((root / "cancel").exists() for root in self.scene.run_roots()),
+        observed = wait_until(lambda: complete_line(self.scene.control / "runner/at-report-signal"),
+                              "signal recorded at the reporting boundary", CANCEL_BOUND)
+        self.assertEqual(observed, str(signal.SIGTERM))
+        self.scene.release_hold("runner", f"report-{boundary}")
+        wait_until(lambda: (root / "cancel").exists(),
                    "cancellation published while output is blocked", CANCEL_BOUND)
+        self.assertEqual((root / "cancel").read_text(), f"{signal.SIGTERM}\n")
         wait_until(lambda: len(list(self.scene.root.glob("*.signal"))) == 2, "the running job's cancellation")
+        for path in self.scene.root.glob("*.signal"):
+            self.assertEqual(path.read_text(), f"True True {signal.SIGTERM}", "state removed before cancellation")
+        self.assertTrue(self.scene.isolated_roots(), "owner roots deleted before join")
+        self.assertFalse((root / "jobs/unstarted.sh").exists(), "admissions continued")
         (self.scene.root / "release").touch()
-        # Nobody reads the runner's output, so it must still finish within its bound and keep what it could not deliver.
+        # No reader is started until the runner exits, including its final delivery allowance.
         wait_until(lambda: self.scene.runner.poll() is not None, "runner exit with no reader", CANCEL_BOUND)
-        kept = list(self.scene.tmp.glob("mesh-verify-output.*"))
-        self.assertEqual(len(kept), 1, "undelivered output was not kept")
-        self.assertIn("x" * 4096, kept[0].read_text())
+        self.assertLess(time.monotonic() - started, CANCEL_BOUND)
+        kept = self.assert_retained_output(boundary)
         self.finish(143)
-        kept[0].unlink()
+        self.assertFalse((self.scene.root / "unstarted.fixture.ready").exists(), "admissions continued")
+        for path in kept:
+            self.assert_retention_rejects_damage(boundary, path, missing=True)
+            self.assert_retention_rejects_damage(boundary, path, missing=False)
+        for path in kept:
+            path.unlink()
         self.assert_clean()
+
+    def test_blocked_output_cannot_hold_cancellation(self):
+        self.blocked_output("interrupted")
+
+    def test_completed_reporting_with_no_reader_keeps_the_full_transcript(self):
+        self.blocked_output("completed")
 
     def test_runner_death_during_entry_setup_cancels_promptly(self):
         (self.scene.root / "hang-entry-env").touch()

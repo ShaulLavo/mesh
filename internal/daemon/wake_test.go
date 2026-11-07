@@ -118,14 +118,13 @@ func testWakeController(t *testing.T) (*wakeController, *wake.Authority, *atomic
 }
 
 func TestWakePermissionUsesRealLocalDaemonSocket(t *testing.T) {
-	stateDir := compactSocketTempDir(t)
+	fixture := newDaemonRunFixture(t)
+	stateDir := fixture.stateDir
 	for restart := range 2 {
-		ctx, cancel := context.WithCancel(context.Background())
-		done := make(chan error, 1)
-		go func() {
-			done <- run(ctx, Config{StateDir: stateDir}, runOptions{now: time.Now, bootID: func() string { return "wake-test-boot" },
+		fixture.start(t, func(ctx context.Context) error {
+			return run(ctx, Config{StateDir: stateDir}, runOptions{now: time.Now, bootID: func() string { return "wake-test-boot" },
 				discoverSelf: func(context.Context) (tailnet.Peer, error) { return tailnet.Peer{}, nil }, reconcileInterval: time.Hour})
-		}()
+		})
 		client := dialUnixRuntime(t, SocketPath(stateDir))
 		info := wakeRoundTrip(t, client, protocol.Control{Type: protocol.TypeHostInfo})
 		if info.Host == nil || info.Host.Wake == nil || info.Host.Wake.Enabled {
@@ -140,10 +139,7 @@ func TestWakePermissionUsesRealLocalDaemonSocket(t *testing.T) {
 			t.Fatalf("local configure = %+v", response)
 		}
 		_ = client.Close()
-		cancel()
-		if err := waitRuntime(t, done); err != nil {
-			t.Fatal(err)
-		}
+		fixture.stop(t)
 	}
 }
 

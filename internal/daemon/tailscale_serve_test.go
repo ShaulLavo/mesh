@@ -130,7 +130,8 @@ func TestRunExternalCommandBoundsCancellationWithInheritedPipes(t *testing.T) {
 }
 
 func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
-	stateDir := compactSocketTempDir(t)
+	fixture := newDaemonRunFixture(t)
+	stateDir := fixture.stateDir
 	httpsListener, httpsPort := newTCPListener(t, "127.0.0.1:0")
 	controlListener, controlPort := newTCPListener(t, "127.0.0.1:0")
 	signerID := installRunTestPrivateName(t, stateDir, httpsPort)
@@ -177,20 +178,18 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- run(ctx, Config{
+	fixture.start(t, func(ctx context.Context) error {
+		return run(ctx, Config{
 			StateDir: stateDir, TailnetPort: controlPort, HTTPSPort: httpsPort, CertificateRenewerID: signerID, TailscaleServe: true,
 		}, options)
-	}()
+	})
 	select {
 	case err := <-configured:
 		if err != nil {
 			t.Fatal(err)
 		}
-	case err := <-done:
-		t.Fatalf("run returned before Tailscale Serve was configured: %v", err)
+	case <-fixture.done:
+		t.Fatalf("run returned before Tailscale Serve was configured: %v", fixture.err)
 	case <-time.After(runtimeTestTimeout):
 		t.Fatal("Tailscale Serve was not configured")
 	}
@@ -207,10 +206,7 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	cancel()
-	if err := waitRuntime(t, done); err != nil {
-		t.Fatal(err)
-	}
+	fixture.stop(t)
 }
 
 func TestRunFailsWhenTailscaleServeVerificationFails(t *testing.T) {
@@ -460,6 +456,7 @@ func TestRunTailscaleServeRequiresEveryControlAddressToBind(t *testing.T) {
 }
 
 func TestRunAllowsEqualHTTPSAndControlPortsOnSeparateAddresses(t *testing.T) {
+	fixture := newDaemonRunFixture(t)
 	httpsListener, port := newTCPListener(t, "127.0.0.1:0")
 	controlListener, _ := newTCPListener(t, fmt.Sprintf("[::1]:%d", port))
 	signerID, _ := composedIdentity(t)
@@ -476,23 +473,18 @@ func TestRunAllowsEqualHTTPSAndControlPortsOnSeparateAddresses(t *testing.T) {
 		ready <- struct{}{}
 		return nil, nil
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- run(ctx, Config{
-			StateDir: compactSocketTempDir(t), TailnetPort: port, HTTPSPort: port,
+	fixture.start(t, func(ctx context.Context) error {
+		return run(ctx, Config{
+			StateDir: fixture.stateDir, TailnetPort: port, HTTPSPort: port,
 			CertificateRenewerID: signerID, TailscaleServe: true,
 		}, options)
-	}()
+	})
 	select {
 	case <-ready:
 	case <-time.After(runtimeTestTimeout):
 		t.Fatal("equal-port daemon did not become ready")
 	}
-	cancel()
-	if err := waitRuntime(t, done); err != nil {
-		t.Fatalf("equal HTTPS/control ports on separate addresses: %v", err)
-	}
+	fixture.stop(t)
 }
 
 func TestRunRestartsOnTailnetAddressChangeAndPreservesWorkerState(t *testing.T) {

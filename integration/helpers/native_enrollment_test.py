@@ -1,3 +1,6 @@
+import errno
+import itertools
+import json
 import os
 import signal
 from pathlib import Path
@@ -6,7 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 HELPERS = Path(__file__).resolve().parent
@@ -47,6 +50,38 @@ def nested_command(fixture, ready, shim):
                              os.environ, timeout=0.3)
 
 
+def wait_zombie(pid):
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        state = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
+                               capture_output=True, text=True, timeout=2).stdout
+        if "Z" in state:
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"owned child {pid} did not become a zombie")
+
+
+def owned_zombie_probe(parent_group):
+    from enrollment_command import group_exists
+
+    group = os.getpid()
+    child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read(1)"],
+                             stdin=subprocess.PIPE)
+    try:
+        os.setpgid(0, parent_group)
+        assert group_exists(group), "live group reported absent"
+        child.stdin.close()
+        wait_zombie(child.pid)
+        assert group_exists(group), "unreaped group reported absent"
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=2)
+        absent = not group_exists(group)
+        print(json.dumps({"child_reaped": child.pid, "group_absent": absent}), flush=True)
+        assert absent, "reaped group still pending"
+
+
 class CancelDuringCleanup:
     joined = False
 
@@ -84,6 +119,54 @@ class NativeEnrollmentTest(unittest.TestCase):
         self.assertEqual(shell.splitlines()[1],
                          'source "$(dirname -- "${BASH_SOURCE[0]}")/helpers/isolate.sh" || exit 1')
         self.assertIn('python3 "$helpers/native_enrollment.py" "$MESH"', shell)
+
+    def test_owned_zombie_group_is_pending_until_reaped(self):
+        result = subprocess.run([sys.executable, __file__, "--zombie-probe", str(os.getpgrp())],
+                                preexec_fn=os.setpgrp, capture_output=True, text=True, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(json.loads(result.stdout)["group_absent"])
+
+    def test_permission_denied_probe_never_proves_join(self):
+        from enrollment_command import stop_group
+
+        def probe_denied(_group, number):
+            if number == 0:
+                raise PermissionError(errno.EPERM, "injected probe denial")
+
+        clock = itertools.count()
+        with patch("enrollment_command.os.killpg", side_effect=probe_denied), \
+                patch("enrollment_command.time.monotonic", side_effect=lambda: next(clock)), \
+                patch("enrollment_command.time.sleep"):
+            joined, error = stop_group(Mock(poll=lambda: 0), 12345, 4)
+        self.assertFalse(joined)
+        self.assertIn("probe denied", error)
+
+    def test_permission_denied_group_never_proves_join(self):
+        from enrollment_command import stop_group
+
+        clock = itertools.count()
+        denied = PermissionError(errno.EPERM, "injected group permission denial")
+        with patch("enrollment_command.os.killpg", side_effect=denied) as send, \
+                patch("enrollment_command.time.monotonic", side_effect=lambda: next(clock)), \
+                patch("enrollment_command.time.sleep"):
+            joined, error = stop_group(Mock(poll=lambda: 0), 12345, 4)
+        self.assertFalse(joined)
+        self.assertIn("denied", error)
+        self.assertIn(unittest.mock.call(12345, signal.SIGKILL), send.call_args_list)
+
+    def test_permission_denied_group_can_join_only_after_absence(self):
+        from enrollment_command import stop_group
+
+        denied = PermissionError(errno.EPERM, "injected group permission denial")
+        absent = ProcessLookupError(errno.ESRCH, "injected empty group")
+        with patch("enrollment_command.os.killpg", side_effect=[None, denied, absent]) as send, \
+                patch("enrollment_command.time.sleep"):
+            joined, error = stop_group(Mock(poll=lambda: 0), 12345, 4)
+        self.assertTrue(joined)
+        self.assertIsNone(error)
+        self.assertEqual(send.call_args_list, [unittest.mock.call(12345, signal.SIGTERM),
+                                             unittest.mock.call(12345, 0),
+                                             unittest.mock.call(12345, 0)])
 
     def test_nested_cli_ssh_timeout_joins_with_inherited_output(self):
         from native_enrollment import FixtureRoot
@@ -144,4 +227,7 @@ class NativeEnrollmentTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--zombie-probe":
+        owned_zombie_probe(int(sys.argv[2]))
+    else:
+        unittest.main()
