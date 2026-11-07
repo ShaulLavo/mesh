@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
@@ -77,9 +78,7 @@ func (m *pickerServiceMonitor) watchHost(ctx context.Context, host HostRecord, u
 	}
 	defer stop()
 	_ = m.watcher.Watch(ctx, host, protocol.StateWatch{Topics: []string{protocol.TopicServices}}, func(state StateView) {
-		if !servicePolicyCurrent(ctx, state.Policy) {
-			state = invalidateServiceState(state)
-		}
+		state = fenceServiceState(ctx, state)
 		publication.observe(host, state)
 		publication.mu.Lock()
 		if !state.Sections[protocol.TopicServices].ReceivedAt.IsZero() {
@@ -127,10 +126,19 @@ func (m *pickerServiceMonitor) saveCatalog(ctx context.Context, host HostRecord,
 }
 
 func fencePickerPolicy(ctx context.Context, next PickerServicesUpdate) PickerServicesUpdate {
-	if servicePolicyCurrent(ctx, next.Policy) {
+	status, err := observeServicePolicy(ctx, next.Policy)
+	if status == servicePolicyKnownCurrent {
 		return next
 	}
-	next.Catalog.Rows, next.Catalog.Stale, next.Problem = nil, true, errCatalogPolicyChanged.Error()
+	next.Catalog.Stale, next.Problem = true, err.Error()
+	if status == servicePolicyChanged || next.Policy.Generation == 0 {
+		next.Catalog.Rows = nil
+		return next
+	}
+	next.Catalog.Rows = slices.Clone(next.Catalog.Rows)
+	for i := range next.Catalog.Rows {
+		next.Catalog.Rows[i].Live, next.Catalog.Rows[i].Stale = false, true
+	}
 	return next
 }
 

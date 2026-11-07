@@ -79,9 +79,7 @@ func (m *dashboardMonitor) startReaders(ctx context.Context, publish func(Dashbo
 func (m *dashboardMonitor) watchHost(ctx context.Context, record HostRecord, retained DashboardHostView, updates chan<- dashboardMonitorUpdate) error {
 	request := protocol.StateWatch{Topics: []string{protocol.TopicHost, protocol.TopicSessions, protocol.TopicServices, protocol.TopicMetrics}, MetricsEveryMillis: 2000}
 	return m.watcher.watch(ctx, record, request, func(state StateView) {
-		if !servicePolicyCurrent(ctx, state.Policy) {
-			state = invalidateServiceState(state)
-		}
+		state = fenceServiceState(ctx, state)
 		next := projectDashboardState(retained.Host, state)
 		if state.Sections[protocol.TopicSessions].ReceivedAt.IsZero() {
 			next.Sessions = retained.Sessions
@@ -132,12 +130,16 @@ func (m *dashboardMonitor) cachedView(ctx context.Context, record HostRecord) Da
 }
 
 func fenceDashboardPolicy(ctx context.Context, next dashboardMonitorUpdate) dashboardMonitorUpdate {
-	if servicePolicyCurrent(ctx, next.policy) {
+	status, err := observeServicePolicy(ctx, next.policy)
+	if status == servicePolicyKnownCurrent {
 		return next
 	}
-	next.view.Services = DashboardCatalog[DashboardService]{Failing: true}
+	if status == servicePolicyChanged || next.policy.Generation == 0 {
+		next.view.Services = DashboardCatalog[DashboardService]{}
+	}
+	next.view.Services.Failing = true
 	next.view.Host.NameVerified, next.view.NameFailing = false, true
-	next.view.Problem = errCatalogPolicyChanged.Error()
+	next.view.Problem = err.Error()
 	return next
 }
 

@@ -434,3 +434,44 @@ func initializeTestServicePolicy(t *testing.T) domainpolicy.CatalogToken {
 	}
 	return token
 }
+
+func TestConfigurationWholeObservationHealthBeforePolicyDiagnosis(t *testing.T) {
+	rows := []protocol.ServiceInfo{
+		{Name: "api", Kind: "proxy", Target: "3000", PrivateHost: "api.unloaded.example"},
+		{Name: "broken", Kind: "proxy", Target: "3001", Healthy: true, Problem: "contradictory"},
+	}
+	err := validatePolicyServices(rows)
+	var mismatch *configurationPolicyMismatch
+	if errors.As(err, &mismatch) {
+		t.Errorf("malformed complete observation was classified as policy drift: %v", err)
+	}
+	rows[0], rows[1] = rows[1], rows[0]
+	err = validatePolicyServices(rows)
+	t.Logf("reversing rows gives: %v", err)
+	if err == nil || errors.As(err, &mismatch) {
+		t.Error("invalid health must remain an ordinary malformed observation")
+	}
+}
+
+func TestConfigurationServiceListValidatesCompleteObservation(t *testing.T) {
+	response := protocol.Control{Type: protocol.TypeServiceListed, Services: []protocol.ServiceInfo{
+		{Name: "api", Kind: "proxy", Target: "3000", PrivateHost: "api.unloaded.example"},
+		{Name: "broken", Kind: "proxy", Target: "3001", Healthy: true, Problem: "contradictory"},
+	}}
+	_, err := decodeRemoteServices(HostRecord{ID: "host"}, response, protocol.HostInfo{})
+	var mismatch *configurationPolicyMismatch
+	if err == nil || errors.As(err, &mismatch) {
+		t.Fatalf("malformed list became a policy diagnosis: %v", err)
+	}
+}
+
+func TestConfigurationServiceListFramingPrecedesPolicyDiagnosis(t *testing.T) {
+	unknown := protocol.ServiceInfo{Name: "api", Kind: "proxy", Target: "3000", PrivateHost: "api.unloaded.example"}
+	for _, rows := range [][]protocol.ServiceInfo{{unknown, unknown}, {{Name: "other", Kind: "proxy", Target: "3000", PrivateHost: "other.unloaded.example"}, unknown}} {
+		_, err := decodeRemoteServices(HostRecord{ID: "host"}, protocol.Control{Type: protocol.TypeServiceListed, Services: rows}, protocol.HostInfo{})
+		var mismatch *configurationPolicyMismatch
+		if err == nil || errors.As(err, &mismatch) {
+			t.Fatalf("invalid service list framing became a policy diagnosis: %v", err)
+		}
+	}
+}

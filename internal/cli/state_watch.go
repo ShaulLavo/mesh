@@ -75,9 +75,7 @@ func (w *StateWatcher) watchAttempt(ctx context.Context, host HostRecord, reques
 			initialSeq = next.Seq
 		}
 		publications++
-		if !servicePolicyCurrent(ctx, next.Policy) {
-			next = invalidateServiceState(next)
-		}
+		next = fenceServiceState(ctx, next)
 		publish(next)
 	})
 }

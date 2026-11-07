@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 
 	"github.com/shaul/mesh/internal/domainpolicy"
@@ -18,14 +17,15 @@ var errCatalogPolicyChanged = errors.New("domain policy changed; reopen this com
 func (c *SQLiteCatalogCache) bindServicePolicy(ctx context.Context) error {
 	c.policyMu.Lock()
 	defer c.policyMu.Unlock()
-	if c.policyToken.Generation != 0 {
-		return nil
+	token, err := domainpolicy.ConsumerCatalogToken(c.store.CatalogDirectory())
+	if err != nil {
+		return fmt.Errorf("bind service catalog policy: %w", err)
 	}
-	err := domainpolicy.WithCatalogGate(ctx, c.store.CatalogDirectory(), func(gate *domainpolicy.CatalogGate) error {
-		if gate.Policy.Digest != domainpolicy.Current().Digest() {
+	c.policyToken = token
+	err = domainpolicy.WithCatalogGate(ctx, c.store.CatalogDirectory(), func(gate *domainpolicy.CatalogGate) error {
+		if token.Digest != domainpolicy.Current().Digest() || !gate.Current(token) {
 			return errCatalogPolicyChanged
 		}
-		c.policyToken = gate.Policy.CatalogToken
 		return nil
 	})
 	if err != nil {
@@ -36,14 +36,16 @@ func (c *SQLiteCatalogCache) bindServicePolicy(ctx context.Context) error {
 func (c *SQLiteCatalogCache) withServicePolicy(ctx context.Context, operation func(*domainpolicy.CatalogGate) error) error {
 	c.policyMu.Lock()
 	defer c.policyMu.Unlock()
-	err := domainpolicy.WithCatalogGate(ctx, c.store.CatalogDirectory(), func(gate *domainpolicy.CatalogGate) error {
+	token, err := domainpolicy.ConsumerCatalogToken(c.store.CatalogDirectory())
+	if err != nil {
+		return fmt.Errorf("bind service catalog policy: %w", err)
+	}
+	c.policyToken = token
+	err = domainpolicy.WithCatalogGate(ctx, c.store.CatalogDirectory(), func(gate *domainpolicy.CatalogGate) error {
 		if err := c.settleServiceGeneration(ctx, gate); err != nil {
 			return err
 		}
-		if c.policyToken.Generation == 0 && gate.Policy.Digest == domainpolicy.Current().Digest() {
-			c.policyToken = gate.Policy.CatalogToken
-		}
-		if !gate.Current(c.policyToken) {
+		if token.Digest != domainpolicy.Current().Digest() || !gate.Current(token) {
 			return errCatalogPolicyChanged
 		}
 		return operation(gate)
@@ -69,33 +71,77 @@ func loadedServicePolicy(ctx context.Context) (domainpolicy.CatalogToken, error)
 	if err != nil {
 		return domainpolicy.CatalogToken{}, fmt.Errorf("locate service policy: %w", err)
 	}
-	var token domainpolicy.CatalogToken
-	if _, err := os.Lstat(filepath.Join(state, "catalog-policy.json")); errors.Is(err, os.ErrNotExist) {
-		return initialServicePolicy()
-	} else if err != nil {
-		return token, fmt.Errorf("inspect existing catalog generation: %w", err)
-	}
-	err = domainpolicy.WithCatalogGate(ctx, state, func(gate *domainpolicy.CatalogGate) error {
-		if err := settleCatalogGeneration(ctx, gate, state); err != nil {
-			return err
-		}
-		if gate.Policy.Digest != domainpolicy.Current().Digest() || gate.Policy.Pending {
-			return errCatalogPolicyChanged
-		}
-		token = gate.Policy.CatalogToken
-		return nil
-	})
+	token, err := domainpolicy.ConsumerCatalogToken(state)
 	if err != nil {
-		return token, fmt.Errorf("read loaded service policy: %w", err)
+		return token, fmt.Errorf("load process service policy: %w", err)
 	}
-	return token, nil
+	_, err = observeServicePolicy(ctx, token)
+	return token, err
+}
+
+type servicePolicyObservation uint8
+
+const (
+	servicePolicyUnavailable servicePolicyObservation = iota
+	servicePolicyKnownCurrent
+	servicePolicyChanged
+)
+
+func observeServicePolicy(ctx context.Context, token domainpolicy.CatalogToken) (servicePolicyObservation, error) {
+	if token.Generation == 0 {
+		return servicePolicyUnavailable, errors.New("service policy generation is unknown")
+	}
+	if token.Digest != domainpolicy.Current().Digest() {
+		return servicePolicyChanged, errCatalogPolicyChanged
+	}
+	if err := ctx.Err(); err != nil {
+		return servicePolicyUnavailable, fmt.Errorf("observe service policy: %w", err)
+	}
+	state, err := paths.StateDirPath()
+	if err != nil {
+		return servicePolicyUnavailable, fmt.Errorf("locate service policy: %w", err)
+	}
+	pinned, err := domainpolicy.ConsumerCatalogToken(state)
+	if err != nil {
+		return servicePolicyUnavailable, fmt.Errorf("process service policy unavailable: %w", err)
+	}
+	if pinned != token {
+		return servicePolicyChanged, errCatalogPolicyChanged
+	}
+	policy, err := domainpolicy.ReadCatalogPolicy(state)
+	if err != nil {
+		return servicePolicyUnavailable, fmt.Errorf("service policy temporarily unavailable: %w", err)
+	}
+	if policy.Pending || policy.CatalogToken != token {
+		return servicePolicyChanged, errCatalogPolicyChanged
+	}
+	if _, err := initialServicePolicy(); err != nil {
+		if errors.Is(err, errCatalogPolicyChanged) {
+			return servicePolicyChanged, err
+		}
+		return servicePolicyUnavailable, err
+	}
+	return servicePolicyKnownCurrent, nil
 }
 func servicePolicyCurrent(ctx context.Context, token domainpolicy.CatalogToken) bool {
-	if token.Generation == 0 {
-		return false
+	status, _ := observeServicePolicy(ctx, token)
+	return status == servicePolicyKnownCurrent
+}
+func fenceServiceState(ctx context.Context, view StateView) StateView {
+	status, err := observeServicePolicy(ctx, view.Policy)
+	if status == servicePolicyKnownCurrent {
+		return view
 	}
-	current, err := loadedServicePolicy(ctx)
-	return err == nil && current == token
+	view = view.Clone()
+	if status == servicePolicyChanged || view.Policy.Generation == 0 {
+		view = invalidateServiceState(view)
+		view.Problem = err.Error()
+		return view
+	}
+	markSectionFailed(&view, "services")
+	markSectionFailed(&view, "host")
+	view.NameVerified, view.Problem = false, err.Error()
+	return view
 }
 func invalidateServiceState(view StateView) StateView {
 	view.Services, view.PrivateName, view.NameVerified = nil, "", false
@@ -103,24 +149,6 @@ func invalidateServiceState(view StateView) StateView {
 	markSectionFailed(&view, "host")
 	view.Problem = fmt.Sprint(errCatalogPolicyChanged)
 	return view
-}
-
-func invalidateCatalogPolicy(ctx context.Context, directory string, ids []string) error {
-	path := filepath.Join(directory, catalogDatabaseName)
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("inspect advisory catalog: %w", err)
-	}
-	store, err := storage.OpenAdvisory(ctx, path)
-	if err != nil {
-		return fmt.Errorf("open invalidated service cache: %w", err)
-	}
-	defer func() { _ = store.Close() }()
-	if err := store.InvalidateCachedServices(ctx, ids); err != nil {
-		return fmt.Errorf("invalidate service snapshots: %w", err)
-	}
-	return nil
 }
 
 func settleSavedCatalogPolicy(digest string) error {
@@ -146,18 +174,6 @@ func (c *SQLiteCatalogCache) settleServiceGeneration(ctx context.Context, gate *
 	})
 	if err != nil {
 		return fmt.Errorf("settle service generation: %w", err)
-	}
-	return nil
-}
-func settleCatalogGeneration(ctx context.Context, gate *domainpolicy.CatalogGate, directory string) error {
-	err := gate.Settle(func(ids []string) error {
-		if err := settleSavedCatalogPolicy(gate.Policy.Digest); err != nil {
-			return err
-		}
-		return invalidateCatalogPolicy(ctx, directory, ids)
-	})
-	if err != nil {
-		return fmt.Errorf("settle catalog generation: %w", err)
 	}
 	return nil
 }

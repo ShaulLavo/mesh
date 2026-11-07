@@ -173,10 +173,10 @@ func (s *Store) applyConfigurationComponents(ctx context.Context, writer Configu
 			return err
 		}
 		result = receipt
-		if receipt.State == configurationConflict {
+		if feedReceiptState(&receipt) == configurationConflict {
 			return nil
 		}
-		return s.saveConfiguration(file, &result, request.Recipient.Domain != nil)
+		return s.saveConfiguration(file, &result, request.Recipient)
 	})
 	return result, err
 }
@@ -214,7 +214,8 @@ func (s *Store) prepareConfiguration(prior *ConfigurationReceipt, value FeedValu
 		return receipt, problem("configuration.conflict", "an earlier component intent remains unresolved")
 	case receiptRevision(prior) != expected.Revision || value.Digest() != expected.Digest:
 		if request.Recipient.Domain != nil {
-			receipt.State, receipt.FeedState, receipt.Problem = configurationConflict, configurationConflict, "selected usage feed changed after domain publication"
+			receipt.FeedState, receipt.Problem = configurationConflict, "selected usage feed changed after domain publication"
+			receipt.State = selectedConfigurationState(receipt, request.Recipient)
 			return receipt, s.writeAuthority("config-receipt.json", receipt)
 		}
 		return receipt, problem("configuration.conflict", "selected usage feed changed after preview; request a fresh preview")
@@ -223,11 +224,12 @@ func (s *Store) prepareConfiguration(prior *ConfigurationReceipt, value FeedValu
 		return receipt, problem("configuration.conflict", "saved feed was edited locally")
 	}
 	if value != expected.Value && value != desired {
-		receipt.State, receipt.Problem = configurationConflict, "selected usage feed changed during delivery"
+		receipt.FeedState, receipt.Problem = configurationConflict, "selected usage feed changed during delivery"
+		receipt.State = selectedConfigurationState(receipt, request.Recipient)
 	}
 	return receipt, s.writeAuthority("config-receipt.json", receipt)
 }
-func (s *Store) saveConfiguration(file FeedFile, receipt *ConfigurationReceipt, selectedDomain bool) error {
+func (s *Store) saveConfiguration(file FeedFile, receipt *ConfigurationReceipt, selected RecipientConfiguration) error {
 	if file.Value() != receipt.Desired {
 		if err := file.Save(receipt.Desired); err != nil {
 			return fmt.Errorf("configuration: save usage feed: %w", err)
@@ -236,10 +238,8 @@ func (s *Store) saveConfiguration(file FeedFile, receipt *ConfigurationReceipt, 
 	if err := file.Settle(); err != nil {
 		return fmt.Errorf("configuration publication settlement: %w", err)
 	}
-	receipt.State, receipt.Problem, receipt.FeedState = configurationSaved, "", configurationSaved
-	if selectedDomain && receipt.Domain.State == configurationConflict {
-		receipt.State = configurationConflict
-	}
+	receipt.Problem, receipt.FeedState = "", configurationSaved
+	receipt.State = selectedConfigurationState(*receipt, selected)
 	return s.writeAuthority("config-receipt.json", receipt)
 }
 func requireConfigurationActor(ctx context.Context, actor VerifiedActor, local bool, hostID string) error {
@@ -340,8 +340,13 @@ func (s *Store) putDomainConfiguration(file DomainFile, prior *ConfigurationRece
 	}
 	value, desired, expected := file.Value(), domain.Desired, domain.Expected
 	result.Domain = &domain
+	if domain.State == configurationConflict {
+		result.State = selectedConfigurationState(*result, request.Recipient)
+		return s.writeAuthority("config-receipt.json", result)
+	}
 	if value.Digest() != expected.Digest && value.Digest() != desired.Digest() || domain.State == configurationSaved && value.Digest() != desired.Digest() {
-		domain.State, domain.Problem, result.State = configurationConflict, "selected domain policy changed during delivery", configurationConflict
+		domain.State, domain.Problem = configurationConflict, "selected domain policy changed during delivery"
+		result.State = selectedConfigurationState(*result, request.Recipient)
 		return s.writeAuthority("config-receipt.json", result)
 	}
 	result.State = configurationPrepared
@@ -365,10 +370,7 @@ func (s *Store) putDomainConfiguration(file DomainFile, prior *ConfigurationRece
 		return fmt.Errorf("settle domain publication: %w", err)
 	}
 	domain.State, domain.Problem = configurationSaved, ""
-	result.State = configurationSaved
-	if request.Recipient.Feed != nil && result.FeedState != configurationSaved {
-		result.State = configurationPrepared
-	}
+	result.State = selectedConfigurationState(*result, request.Recipient)
 	return s.writeAuthority("config-receipt.json", result)
 }
 
@@ -420,4 +422,21 @@ func replayDomainReceipt(prior *DomainReceipt, desired DomainReceipt) (DomainRec
 		return desired, problem("configuration.conflict", "domain intent differs from approved values")
 	}
 	return *prior, nil
+}
+
+func selectedConfigurationState(receipt ConfigurationReceipt, selected RecipientConfiguration) string {
+	feed, domain := "", ""
+	if selected.Feed != nil {
+		feed = feedReceiptState(&receipt)
+	}
+	if selected.Domain != nil {
+		domain = receipt.Domain.State
+	}
+	if feed == configurationPrepared || domain == configurationPrepared {
+		return configurationPrepared
+	}
+	if feed == configurationConflict || domain == configurationConflict {
+		return configurationConflict
+	}
+	return configurationSaved
 }

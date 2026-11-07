@@ -21,12 +21,20 @@ const legacyDeploymentDomain = "shaulavo.dev"
 // InitializeDeployment preserves pre-policy deployments before listeners or
 // service caches validate names. Native-only installations need no policy.
 func InitializeDeployment(path, stateDir string, deploymentRequested bool) error {
-	return initializeDeploymentPolicy(path, stateDir, deploymentRequested, true)
+	if err := initializeDeploymentPolicy(path, stateDir, deploymentRequested, true); err != nil {
+		return err
+	}
+	_, _ = ConsumerCatalogToken(stateDir)
+	return nil
 }
 
 // InitializeReadOnlyDeployment infers legacy names without changing any files.
 func InitializeReadOnlyDeployment(path, stateDir string) error {
-	return initializeDeploymentPolicy(path, stateDir, false, false)
+	if err := initializeDeploymentPolicy(path, stateDir, false, false); err != nil {
+		return err
+	}
+	_, _ = ConsumerCatalogToken(stateDir)
+	return nil
 }
 
 func initializeDeploymentPolicy(path, stateDir string, deploymentRequested, persist bool) error {

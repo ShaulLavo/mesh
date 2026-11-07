@@ -115,6 +115,14 @@ invalidates retained live service and private-name observations. Process policy
 stays immutable. Saved changes remain restart or reopen required until actual
 consumer observations match.
 
+Each process retains its first catalog generation across cache and watcher
+reconstruction. Returning to the same policy bytes does not admit an older
+process into a newer generation. Temporary observation failure keeps retained
+rows explicitly stale instead of reporting a policy change. A domain conflict
+does not strand an independently prepared feed, and a terminal conflict cannot
+resume through replay. Native and SSH one-shot commands infer naming policy
+without publishing deployment metadata.
+
 Service HTTPS verification is explicitly unknown pending a request-time passive
 admission contract. No service probe, automatic restart, enrollment, installed
 update or owner configuration change is part of this source unit. Direct

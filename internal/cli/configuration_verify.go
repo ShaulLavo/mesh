@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/protocol"
@@ -32,6 +33,9 @@ func structurallyValidServiceHost(host string) bool {
 	return found && strings.Contains(rest, ".") && !meshserve.ReservedLabel(label) && label != "apps" && !(len(label) == 4 && strings.Trim(label, "0123456789abcdefghjkmnpqrstvwxyz") == "")
 }
 func validateServiceStructure(info protocol.ServiceInfo) error {
+	if len(info.Problem) > meshserve.MaximumServiceProblemBytes || info.Healthy && info.Problem != "" || !utf8.ValidString(info.Problem) {
+		return errors.New("service health is invalid")
+	}
 	received := protocol.ServiceFromInfo(info)
 	if received.PrivateHost != "" && (received.LocalOnly || !structurallyValidServiceHost(received.PrivateHost)) {
 		return errors.New("service private hostname is invalid")

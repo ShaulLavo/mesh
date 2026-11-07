@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/shaul/mesh/internal/hostprofile"
@@ -50,6 +51,85 @@ type CatalogGate struct {
 	Policy CatalogPolicy
 }
 
+// Consumers belong to the process, not a cache or watcher. State directories are
+// separate installations, including the isolated installations used by tests.
+var catalogConsumers = struct {
+	sync.Mutex
+	byDirectory map[string]*catalogConsumer
+}{byDirectory: make(map[string]*catalogConsumer)}
+
+type catalogConsumer struct {
+	once  sync.Once
+	token CatalogToken
+	err   error
+}
+
+// ConsumerCatalogToken retains the first admitted generation even when every
+// cache and watcher has closed. A failed initial observation cannot admit a
+// later epoch just because its policy bytes happen to match.
+func ConsumerCatalogToken(stateDir string) (CatalogToken, error) {
+	key, err := filepath.Abs(stateDir)
+	if err != nil {
+		return CatalogToken{}, fmt.Errorf("locate catalog consumer: %w", err)
+	}
+	catalogConsumers.Lock()
+	consumer := catalogConsumers.byDirectory[key]
+	if consumer == nil {
+		consumer = &catalogConsumer{}
+		catalogConsumers.byDirectory[key] = consumer
+	}
+	catalogConsumers.Unlock()
+	consumer.once.Do(func() {
+		policy, err := ReadCatalogPolicy(stateDir)
+		consumer.token, consumer.err = policy.CatalogToken, err
+	})
+	return consumer.token, consumer.err
+}
+
+// ReadCatalogPolicy observes an atomic publication without joining advisory
+// SQLite writer admission. Missing state is the logical first generation and
+// does not create a directory, lock, sidecar or database.
+func ReadCatalogPolicy(stateDir string) (CatalogPolicy, error) {
+	dir, err := openPolicyDirectory(stateDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return initialCatalogPolicy(), nil
+	}
+	if err != nil {
+		return CatalogPolicy{}, err
+	}
+	defer func() { _ = dir.Close() }()
+	policy, err := readCatalogPolicy(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return initialCatalogPolicy(), nil
+	}
+	return policy, err
+}
+
+func initialCatalogPolicy() CatalogPolicy {
+	return CatalogPolicy{Schema: 1, CatalogToken: CatalogToken{Digest: Current().Digest(), Generation: InitialCatalogGeneration}, Snapshots: make(map[string]CatalogSnapshot)}
+}
+
+func readCatalogPolicy(dir *os.File) (CatalogPolicy, error) {
+	data, err := readPolicyFile(dir, catalogPolicyFile, 2<<20)
+	if err != nil {
+		return CatalogPolicy{}, err
+	}
+	var policy CatalogPolicy
+	if err := decodePolicyJSON(data, &policy); err != nil {
+		return CatalogPolicy{}, err
+	}
+	if policy.Schema != 1 || policy.Generation == 0 || len(policy.Digest) != 64 || len(policy.Snapshots) > 256 || len(policy.Affected) > 256 {
+		return CatalogPolicy{}, errors.New("catalog policy: invalid generation record")
+	}
+	if err := validateCatalogPolicy(policy); err != nil {
+		return CatalogPolicy{}, err
+	}
+	if policy.Snapshots == nil {
+		policy.Snapshots = make(map[string]CatalogSnapshot)
+	}
+	return policy, nil
+}
+
 func (p Policy) Digest() string {
 	data, _ := json.Marshal(p)
 	sum := sha256.Sum256(data)
@@ -65,11 +145,10 @@ func WithCatalogGate(ctx context.Context, stateDir string, operation func(*Catal
 	})
 }
 func loadCatalogGate(dir *os.File) (*CatalogGate, error) {
-	gate := &CatalogGate{dir: dir}
-	data, err := readPolicyFile(dir, catalogPolicyFile, 2<<20)
+	policy, err := readCatalogPolicy(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		gate.Policy = CatalogPolicy{Schema: 1, CatalogToken: CatalogToken{Digest: Current().Digest(), Generation: InitialCatalogGeneration}, Snapshots: make(map[string]CatalogSnapshot)}
-		if err = gate.Save(); err != nil {
+		gate := &CatalogGate{dir: dir, Policy: initialCatalogPolicy()}
+		if err := gate.Save(); err != nil {
 			return nil, err
 		}
 		return gate, nil
@@ -77,18 +156,7 @@ func loadCatalogGate(dir *os.File) (*CatalogGate, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = decodePolicyJSON(data, &gate.Policy); err != nil {
-		return nil, err
-	}
-	if gate.Policy.Schema != 1 || gate.Policy.Generation == 0 || len(gate.Policy.Digest) != 64 || len(gate.Policy.Snapshots) > 256 || len(gate.Policy.Affected) > 256 {
-		return nil, errors.New("catalog policy: invalid generation record")
-	}
-	if gate.Policy.Snapshots == nil {
-		gate.Policy.Snapshots = make(map[string]CatalogSnapshot)
-	}
-	if err := validateCatalogPolicy(gate.Policy); err != nil {
-		return nil, err
-	}
+	gate := &CatalogGate{dir: dir, Policy: policy}
 	if err := settlePolicyDirectory(dir); err != nil {
 		return nil, err
 	}
@@ -197,19 +265,11 @@ func withPolicyLock(ctx context.Context, directory, lockName string, operation f
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return fmt.Errorf("create policy directory: %w", err)
 	}
-	fd, err := unix.Open(directory, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	dir, err := openPolicyDirectory(directory)
 	if err != nil {
-		return fmt.Errorf("open policy directory: %w", err)
+		return err
 	}
-	dir := os.NewFile(uintptr(fd), directory)
 	defer func() { _ = dir.Close() }()
-	var stat unix.Stat_t
-	if err = unix.Fstat(fd, &stat); err != nil {
-		return fmt.Errorf("inspect policy directory: %w", err)
-	}
-	if int(stat.Uid) != os.Geteuid() || stat.Mode&0022 != 0 {
-		return errors.New("policy directory must be owned and writable only by this user")
-	}
 	lock, err := openPolicyFile(dir, lockName, unix.O_RDWR|unix.O_CREAT, 0600)
 	if err != nil {
 		return err
@@ -225,6 +285,23 @@ func withPolicyLock(ctx context.Context, directory, lockName string, operation f
 		return fmt.Errorf("policy operation cancelled: %w", err)
 	}
 	return operation(dir)
+}
+func openPolicyDirectory(directory string) (*os.File, error) {
+	fd, err := unix.Open(directory, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open policy directory: %w", err)
+	}
+	dir := os.NewFile(uintptr(fd), directory)
+	var stat unix.Stat_t
+	if err = unix.Fstat(fd, &stat); err != nil {
+		_ = dir.Close()
+		return nil, fmt.Errorf("inspect policy directory: %w", err)
+	}
+	if int(stat.Uid) != os.Geteuid() || stat.Mode&0022 != 0 {
+		_ = dir.Close()
+		return nil, errors.New("policy directory must be owned and writable only by this user")
+	}
+	return dir, nil
 }
 func acquirePolicyLock(ctx context.Context, file *os.File) error {
 	for {

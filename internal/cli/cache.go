@@ -244,23 +244,40 @@ func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, 
 		}
 	}
 	err := c.withServicePolicy(ctx, func(gate *domainpolicy.CatalogGate) error {
-		if len(gate.Policy.Snapshots) >= maximumConfiguredHosts && gate.Policy.Snapshots[host.ID].Identity == "" {
-			return errors.New("catalog policy: snapshot limit reached")
-		}
-		gate.Policy.Snapshots[host.ID] = domainpolicy.CatalogSnapshot{Identity: host.MeshIdentity}
-		if err := gate.Save(); err != nil {
-			return fmt.Errorf("prepare service snapshot: %w", err)
-		}
-		if err := c.store.ReplaceCachedServices(ctx, cachedHost(host, now), services); err != nil {
-			return fmt.Errorf("replace service snapshot: %w", err)
-		}
-		gate.Policy.Snapshots[host.ID] = domainpolicy.CatalogSnapshot{Identity: host.MeshIdentity, Complete: true}
-		if err := gate.Save(); err != nil {
-			return fmt.Errorf("complete service snapshot: %w", err)
-		}
-		return nil
+		return c.replaceServiceSnapshot(ctx, gate, cachedHost(host, now), services)
 	})
 	return catalogWriteOutcome(ctx, host, "services", err)
+}
+
+func (c *SQLiteCatalogCache) replaceServiceSnapshot(ctx context.Context, gate *domainpolicy.CatalogGate, host storage.Host, services []storage.CachedService) error {
+	key := string(host.ID)
+	previous, existed := gate.Policy.Snapshots[key]
+	if len(gate.Policy.Snapshots) >= maximumConfiguredHosts && !existed {
+		return errors.New("catalog policy: snapshot limit reached")
+	}
+	gate.Policy.Snapshots[key] = domainpolicy.CatalogSnapshot{Identity: host.MeshIdentity}
+	if err := gate.Save(); err != nil {
+		return fmt.Errorf("prepare service snapshot: %w", err)
+	}
+	err := c.store.ReplaceCachedServices(ctx, host, services)
+	if errors.Is(err, storage.ErrAdvisoryWriteBusy) {
+		if existed {
+			gate.Policy.Snapshots[key] = previous
+		} else {
+			delete(gate.Policy.Snapshots, key)
+		}
+		if restoreErr := gate.Save(); restoreErr != nil {
+			return fmt.Errorf("restore skipped service snapshot: %w", restoreErr)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("replace service snapshot: %w", err)
+	}
+	gate.Policy.Snapshots[key] = domainpolicy.CatalogSnapshot{Identity: host.MeshIdentity, Complete: true}
+	if err := gate.Save(); err != nil {
+		return fmt.Errorf("complete service snapshot: %w", err)
+	}
+	return nil
 }
 
 func cachedHost(host HostRecord, observedAt time.Time) storage.Host {
@@ -312,19 +329,25 @@ func (c *SQLiteCatalogCache) readServiceSnapshots(ctx context.Context, hosts []H
 		if err != nil {
 			return fmt.Errorf("read service snapshots: %w", err)
 		}
-		pins := make(map[string]string, len(hosts))
-		for _, host := range hosts {
-			pins[host.ID] = host.MeshIdentity
-		}
-		for _, row := range all {
-			snapshot := gate.Policy.Snapshots[string(row.HostID)]
-			if !snapshot.Complete || snapshot.Identity != pins[string(row.HostID)] {
-				continue
-			}
-			row.Policy = gate.Policy.CatalogToken
-			rows = append(rows, row)
-		}
+		rows = validatedServiceSnapshots(all, hosts, gate.Policy)
 		return nil
 	})
 	return rows, err
+}
+
+func validatedServiceSnapshots(all []storage.CachedService, hosts []HostRecord, policy domainpolicy.CatalogPolicy) []storage.CachedService {
+	pins := make(map[string]string, len(hosts))
+	for _, host := range hosts {
+		pins[host.ID] = host.MeshIdentity
+	}
+	var rows []storage.CachedService
+	for _, row := range all {
+		snapshot := policy.Snapshots[string(row.HostID)]
+		if !snapshot.Complete || snapshot.Identity != pins[string(row.HostID)] {
+			continue
+		}
+		row.Policy = policy.CatalogToken
+		rows = append(rows, row)
+	}
+	return rows
 }

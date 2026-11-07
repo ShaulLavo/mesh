@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -21,9 +22,11 @@ import (
 )
 
 func reviewControlDial(t *testing.T, respond func(HostRecord, protocol.Control) *protocol.Control) HostDialer {
-	t.Setenv("MESH_STATE_DIR", t.TempDir())
-	initializeTestServicePolicy(t)
 	t.Helper()
+	if os.Getenv("MESH_STATE_DIR") == "" {
+		t.Setenv("MESH_STATE_DIR", t.TempDir())
+	}
+	initializeTestServicePolicy(t)
 	return func(ctx context.Context, host HostRecord) (transport.Conn, error) {
 		a, b := net.Pipe()
 		conn, err := transport.NewStreamConn(a)

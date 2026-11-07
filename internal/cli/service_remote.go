@@ -127,8 +127,8 @@ func decodeRemoteServices(host HostRecord, response protocol.Control, info proto
 	seen := make(map[string]struct{}, len(response.Services))
 	previous := ""
 	for index, candidate := range response.Services {
-		service, err := validateRemoteService(candidate)
-		if err != nil {
+		service := candidate
+		if err := validateServiceStructure(service); err != nil {
 			return remoteServiceSnapshot{}, fmt.Errorf("host %s returned an invalid service list: %w", HostLabel(host), err)
 		}
 		if _, exists := seen[service.Name]; exists {
@@ -140,6 +140,9 @@ func decodeRemoteServices(host HostRecord, response protocol.Control, info proto
 		seen[service.Name] = struct{}{}
 		previous = service.Name
 		services[index] = service
+	}
+	if err := validatePolicyServices(services); err != nil {
+		return remoteServiceSnapshot{}, fmt.Errorf("host %s returned an invalid service list: %w", HostLabel(host), err)
 	}
 	host.NameVerified = info.MachineName != ""
 	if host.NameVerified {
@@ -190,9 +193,6 @@ func validateRemoteService(info protocol.ServiceInfo) (protocol.ServiceInfo, err
 	if err := validateServiceStructure(info); err != nil {
 		return protocol.ServiceInfo{}, err
 	}
-	if len(info.Problem) > meshserve.MaximumServiceProblemBytes || info.Healthy && info.Problem != "" || !utf8.ValidString(info.Problem) {
-		return protocol.ServiceInfo{}, errors.New("service health is invalid")
-	}
 	if err := loadedServiceHost(info.PrivateHost); err != nil {
 		return protocol.ServiceInfo{}, err
 	}
@@ -206,9 +206,6 @@ func validateRemoteService(info protocol.ServiceInfo) (protocol.ServiceInfo, err
 	}
 	if err := validateServiceDemand(info.Demand); err != nil {
 		return protocol.ServiceInfo{}, err
-	}
-	if len(info.Problem) > meshserve.MaximumServiceProblemBytes || info.Healthy && info.Problem != "" || !utf8.ValidString(info.Problem) {
-		return protocol.ServiceInfo{}, errors.New("service health is invalid")
 	}
 	return info, nil
 }
