@@ -64,7 +64,7 @@ dump_diagnostics() {
   for path in "$test_root/client.err" "$test_root/client.out" "$test_root/old-first.log" \
     "$test_root/candidate.err" "$test_root/candidate.out" "$test_root/candidate.log" \
     "$test_root/restart.err" "$test_root/restart.out" "$test_root/candidate-restart.log" \
-    "$state"/s/*/worker.log; do
+    "$test_root"/*.inventory.out "$test_root"/*.inventory.err "$state"/s/*/worker.log; do
     [[ -s $path ]] || continue
     printf '%s (last 4096 bytes):\n' "$path" >&2
     tail -c 4096 "$path" | sed 's/^/  /' >&2
@@ -306,8 +306,10 @@ candidate_daemon=$!
 wait_for_daemon "$candidate_binary" "$candidate_daemon" || fail "candidate daemon did not open retained state: $(cat "$test_root/candidate.log")"
 candidate_written_state=$(read_state_version)
 [[ $candidate_written_state == "$candidate_state_version" ]] || fail 'candidate database schema differs from its reported state version'
-mesh "$candidate_binary" ls --daemon | grep -Fq "$session" || fail 'candidate did not inventory retained session'
-mesh "$candidate_binary" ls --daemon --all | grep -Fq "$saved_session" || fail 'candidate did not inventory saved recovery session'
+mesh "$candidate_binary" ls --daemon >"$test_root/candidate-live.inventory.out" 2>"$test_root/candidate-live.inventory.err" || fail 'candidate live inventory command failed'
+grep -Fq "$session" "$test_root/candidate-live.inventory.out" || fail 'candidate did not inventory retained session'
+mesh "$candidate_binary" ls --daemon --all >"$test_root/candidate-all.inventory.out" 2>"$test_root/candidate-all.inventory.err" || fail 'candidate saved inventory command failed'
+grep -Fq "$saved_session" "$test_root/candidate-all.inventory.out" || fail 'candidate did not inventory saved recovery session'
 assert_session_processes
 mkfifo "$test_root/candidate-input"
 mesh "$candidate_binary" attach "$session" --daemon --detach-key=ctrl+] <"$test_root/candidate-input" >"$test_root/candidate.out" 2>"$test_root/candidate.err" &
@@ -329,8 +331,10 @@ env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$candidate_binary" daemon
 candidate_daemon=$!
 wait_for_daemon "$candidate_binary" "$candidate_daemon" || fail "candidate restart could not reopen candidate-written state: $(cat "$test_root/candidate-restart.log")"
 [[ $(read_state_version) == "$candidate_written_state" ]] || fail 'candidate restart changed candidate-written schema'
-mesh "$candidate_binary" ls --daemon | grep -Fq "$session" || fail 'candidate restart lost the live session after candidate writes'
-mesh "$candidate_binary" ls --daemon --all | grep -Fq "$saved_session" || fail 'candidate restart lost saved recovery session after candidate writes'
+mesh "$candidate_binary" ls --daemon >"$test_root/restart-live.inventory.out" 2>"$test_root/restart-live.inventory.err" || fail 'candidate restart live inventory command failed'
+grep -Fq "$session" "$test_root/restart-live.inventory.out" || fail 'candidate restart lost the live session after candidate writes'
+mesh "$candidate_binary" ls --daemon --all >"$test_root/restart-all.inventory.out" 2>"$test_root/restart-all.inventory.err" || fail 'candidate restart saved inventory command failed'
+grep -Fq "$saved_session" "$test_root/restart-all.inventory.out" || fail 'candidate restart lost saved recovery session after candidate writes'
 assert_session_processes
 mkfifo "$test_root/restart-input"
 mesh "$candidate_binary" attach "$session" --daemon --detach-key=ctrl+] <"$test_root/restart-input" >"$test_root/restart.out" 2>"$test_root/restart.err" &

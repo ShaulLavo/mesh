@@ -49,6 +49,21 @@ type Session struct {
 	LastOutputSequence uint64
 }
 
+// SessionFacts are scalar display facts saved by a complete client observation.
+// They never carry recovery instructions or authorize resuming a session.
+type SessionFacts struct {
+	Hibernated      bool
+	RecoveryPending bool
+	Label           string
+	DetachedAt      *time.Time
+}
+
+// ObservedSession keeps unknown facts distinct from explicitly observed false.
+type ObservedSession struct {
+	Session
+	Facts *SessionFacts
+}
+
 // CachedService is the last service status observed from one adopted host.
 // It is advisory state for offline CLI listing, never daemon routing state.
 type CachedService struct {
@@ -268,4 +283,29 @@ func cloneString(value *string) *string {
 	}
 	v := *value
 	return &v
+}
+
+func sessionFactsParams(row ObservedSession) (*dbsqlc.InsertSessionFactsParams, error) {
+	if row.Facts == nil {
+		return nil, nil
+	}
+	facts := row.Facts
+	if facts.Hibernated && row.State != StateExited {
+		return nil, fmt.Errorf("storage: session %s: hibernated facts require exited state", row.ID)
+	}
+	if len(facts.Label) > 4096 {
+		return nil, fmt.Errorf("storage: session %s: facts label exceeds 4096 bytes", row.ID)
+	}
+	detached, err := optionalTimeMillis("detach time", facts.DetachedAt)
+	if err != nil {
+		return nil, fmt.Errorf("storage: session %s facts: %w", row.ID, err)
+	}
+	return &dbsqlc.InsertSessionFactsParams{HostID: string(row.HostID), SessionID: string(row.ID), Hibernated: boolInteger(facts.Hibernated), RecoveryPending: boolInteger(facts.RecoveryPending), Label: facts.Label, DetachedAt: detached}, nil
+}
+
+func boolInteger(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }

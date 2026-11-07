@@ -189,7 +189,7 @@ func TestReconcileHostInterruptsMissingActiveSessions(t *testing.T) {
 	observedLive := live
 	observedLive.State = StateRunning
 	observedLive.LastOutputSequence = 25
-	observed := []Session{observedLive, exited}
+	observed := []ObservedSession{{Session: observedLive}, {Session: exited}}
 	if err := store.ReconcileHost(ctx, hostA, observed); err != nil {
 		t.Fatal(err)
 	}
@@ -232,34 +232,36 @@ func TestReconcileHostKeepsLatestAttachmentTime(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			store := openTestStore(t)
-			host := testHost("host-a")
-			if _, err := store.UpsertHost(ctx, host); err != nil {
-				t.Fatal(err)
-			}
-
-			persisted := testSession(host.ID, "LIVE", StateDetached, 20)
-			persisted.LastAttachedAt = tc.stored
-			if _, err := store.UpsertSession(ctx, persisted); err != nil {
-				t.Fatal(err)
-			}
-
-			observed := persisted
-			observed.State = StateRunning
-			observed.LastAttachedAt = tc.observed
-			if err := store.ReconcileHost(ctx, host, []Session{observed}); err != nil {
-				t.Fatal(err)
-			}
-
-			got, err := store.GetSession(ctx, host.ID, persisted.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.LastAttachedAt == nil || !got.LastAttachedAt.Equal(tc.want) {
-				t.Fatalf("last attachment time = %v, want %v", got.LastAttachedAt, tc.want)
-			}
+			checkReconcileAttachment(t, tc.stored, tc.observed, tc.want)
 		})
+	}
+}
+
+func checkReconcileAttachment(t *testing.T, storedAt, observedAt *time.Time, want time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	store := openTestStore(t)
+	host := testHost("host-a")
+	if _, err := store.UpsertHost(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	persisted := testSession(host.ID, "LIVE", StateDetached, 20)
+	persisted.LastAttachedAt = storedAt
+	if _, err := store.UpsertSession(ctx, persisted); err != nil {
+		t.Fatal(err)
+	}
+	observed := persisted
+	observed.State = StateRunning
+	observed.LastAttachedAt = observedAt
+	if err := store.ReconcileHost(ctx, host, []ObservedSession{{Session: observed}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetSession(ctx, host.ID, persisted.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastAttachedAt == nil || !got.LastAttachedAt.Equal(want) {
+		t.Fatalf("last attachment time = %v, want %v", got.LastAttachedAt, want)
 	}
 }
 
@@ -276,14 +278,14 @@ func TestReconcileHostRejectsNonAuthoritativeInputBeforeWriting(t *testing.T) {
 	}
 
 	duplicate := testSession(host.ID, "DUP", StateRunning, 2)
-	if err := store.ReconcileHost(ctx, host, []Session{duplicate, duplicate}); err == nil {
+	if err := store.ReconcileHost(ctx, host, []ObservedSession{{Session: duplicate}, {Session: duplicate}}); err == nil {
 		t.Fatal("duplicate reconciliation input succeeded")
 	}
 	assertSessionState(t, store, host.ID, existing.ID, StateRunning)
 
 	wrongHost := duplicate
 	wrongHost.HostID = "host-b"
-	if err := store.ReconcileHost(ctx, host, []Session{wrongHost}); err == nil {
+	if err := store.ReconcileHost(ctx, host, []ObservedSession{{Session: wrongHost}}); err == nil {
 		t.Fatal("cross-host reconciliation input succeeded")
 	}
 	assertSessionState(t, store, host.ID, existing.ID, StateRunning)

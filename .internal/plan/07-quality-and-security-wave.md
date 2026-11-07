@@ -362,3 +362,11 @@ short override.
 - Every critical and high finding is fixed with a test that fails without the fix; the rest are
   fixed or parked with a reason in the findings table.
 - Main CI green, released, all three hosts updated, and the handoff lists what was parked.
+
+
+### Catalog writer BUSY observation, November 7, 2026
+
+- [ ] Revisit only on genuine recurrence. [Hosted race job 128203547693](https://github.com/ShaulLavo/mesh/actions/runs/42308346876/job/128203547693) at source `7512634b4f416045d00b2929db1096cfff4d1757` failed `TestCatalogCacheConcurrentWriters` in writer-1's `ReconcileHost` / `UpsertHost` with `SQLITE_BUSY` after about 0.19 seconds. Preserve the advisory SQLite timeout of 150 ms and caller context of 200 ms when comparing a recurrence.
+- Two bounded local diagnosis rounds, including five focused race repetitions and owning suites, did not reproduce this exact hosted failure. All 24 checked pooled and reopened connections had the intended driver settings. A deliberate sustained-holder control proves the existing bounded BUSY path, not the historical cause. Earlier separately recorded contention evidence above remains unchanged.
+- The one authorized [hosted writer capture](https://github.com/ShaulLavo/mesh/actions/runs/42317710502/job/128234344868) passed the full Go race suite, with `internal/cli` passing in 303.499 seconds. Successful package output suppressed helper traces, so this run supplies no hosted lock-duration measurement and supports no timeout or critical-section change. Its unrelated `serve_kept.sh` failure reports a listener port collision and has a separate repair owner.
+- Managing accepted non-reproduction and unblocked ordinary source acceptance. The diagnostic-only delta was removed before fresh required CI. No more captures or broad retries are authorized for this observation. On recurrence, preserve both writer traces through Save, rollback and Close, distinguish observed lock-held lower bounds from return-time upper bounds, and decide whether a real disk transaction exceeds the product budget before changing the test or product. Evidence is retained under `execution/007/pr4/cache-facts/host-composition/catalog-writer-correction` and `catalog-writer-hosted-capture` in the November 6 Mesh audit report.
