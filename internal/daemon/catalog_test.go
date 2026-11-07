@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -625,13 +627,14 @@ func catalogTestHost(lastSeenAt time.Time) storage.Host {
 
 func catalogTestMeta(id, state, bootID string) worker.Meta {
 	return worker.Meta{
-		ID:        id,
-		PID:       1234,
-		Command:   []string{"sh", "-c", "printf hello"},
-		Cwd:       "/tmp/project",
-		State:     state,
-		CreatedAt: catalogTestTime,
-		BootID:    bootID,
+		Reservation: &session.Reservation{ID: id, Instance: "0123456789abcdef0123456789abcdef", BootID: bootID, Purpose: session.Generic},
+		ID:          id,
+		PID:         1234,
+		Command:     []string{"sh", "-c", "printf hello"},
+		Cwd:         "/tmp/project",
+		State:       state,
+		CreatedAt:   catalogTestTime,
+		BootID:      bootID,
 	}
 }
 
@@ -641,9 +644,33 @@ func writeCatalogMeta(t *testing.T, root, directory string, meta worker.Meta) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if meta.Reservation != nil {
+		writeCatalogReservation(t, dir, *meta.Reservation)
+	}
 	if err := worker.WriteMeta(dir, meta); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeCatalogReservation(t *testing.T, dir string, ref session.Reservation) {
+	t.Helper()
+	data, err := json.Marshal(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".reservation"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeGenericCatalogDir(t *testing.T, root, id string) string {
+	t.Helper()
+	dir := filepath.Join(root, id)
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeCatalogReservation(t, dir, *catalogTestMeta(id, worker.StateExited, "boot-a").Reservation)
+	return dir
 }
 
 func equalInt(a, b *int) bool {
@@ -914,9 +941,7 @@ func TestCatalogRetentionCountExcludesInterruptedSessions(t *testing.T) {
 					createdAt = catalogTestTime.Add(-time.Duration(test.interrupted+test.exited-index) * time.Minute)
 				}
 				id := fmt.Sprintf("%04d", index)
-				if err := os.Mkdir(filepath.Join(root, id), 0o700); err != nil {
-					t.Fatal(err)
-				}
+				writeGenericCatalogDir(t, root, id)
 				observed = append(observed, storage.Session{ID: storage.SessionID(id), State: state, CreatedAt: createdAt})
 			}
 			kept, retired := catalog.retireFinishedSessions(observed)

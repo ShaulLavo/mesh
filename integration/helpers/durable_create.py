@@ -58,7 +58,24 @@ def exercise(fixture):
     terminal = eventually(lambda: terminal_receipt(fixture, fast_lookup, fast["data"]), "fast exit never became terminal")
     assert terminal["result"]["termination"] == {"kind": "exit", "code": 7, "signal": None}, terminal
     assert terminal["result"]["capture"] == "not_recorded" and terminal["receiptRetainUntil"], terminal
+    symlink_cwd(fixture)
     print(json.dumps(dict(first=first, instance=original["instance"], sideEffects=counter.read_text(), terminal=terminal)), flush=True)
+
+
+def symlink_cwd(fixture):
+    real = fixture.root / "physical-cwd"
+    alias = fixture.root / "lexical-cwd"
+    real.mkdir()
+    alias.symlink_to(real, target_is_directory=True)
+    request = dict(type="execution.create", requestId="symlink-create", requestKey="symlink-cwd",
+                   kind="pty", cwd=str(alias), command=["/bin/sh", "-c", "printf accepted > effect"])
+    created = receipt(exchange(fixture, request))
+    lookup = dict(type="execution.request", requestId="symlink-lookup", requestKey="symlink-cwd")
+    terminal = eventually(lambda: terminal_receipt(fixture, lookup, created), "symlink cwd never became terminal")
+    assert terminal["result"]["termination"]["code"] == 0, terminal
+    assert (real / "effect").read_text() == "accepted"
+    meta = json.loads((fixture.local / "s" / created["sessionId"] / "meta.json").read_text())
+    assert meta["cwd"] == str(alias), meta
 
 
 def terminal_receipt(fixture, request, expected):

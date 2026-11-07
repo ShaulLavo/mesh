@@ -141,25 +141,7 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 	}
 	defer logFile.Close() //nolint:errcheck // the child owns a duplicate descriptor after Start
 
-	args := []string{
-		"session-worker",
-		"--id", id,
-		"--dir", dir,
-		"--cols", fmt.Sprint(cfg.Cols),
-		"--rows", fmt.Sprint(cfg.Rows),
-		"--instance", cfg.Reservation.Instance, "--boot", cfg.Reservation.BootID, "--purpose", string(cfg.Reservation.Purpose),
-	}
-	if cfg.Execution != nil {
-		args = append(args, "--request-hash", cfg.Execution.RequestHash, "--launch-digest", cfg.Execution.LaunchDigest)
-	}
-	if cfg.RecoveredFrom != "" {
-		args = append(args, "--recovered-from", cfg.RecoveredFrom)
-	}
-	if cfg.Label != "" {
-		args = append(args, "--label", cfg.Label)
-	}
-	args = append(args, "--")
-	args = append(args, cfg.Command...)
+	args := launchArguments(cfg, id, dir)
 	cmd := exec.Command(cfg.Executable, args...) //nolint:gosec // executable is the running Mesh binary or an explicit internal test override; no shell is used
 	cmd.Dir = cfg.Cwd
 	cmd.Env = append([]string(nil), cfg.Env...)
@@ -405,4 +387,27 @@ func withSessionIdentity(env []string, hostID, sessionID string) []string {
 		out = append(out, hostPrefix+hostID)
 	}
 	return append(out, sessionPrefix+sessionID)
+}
+
+func launchArguments(cfg LaunchConfig, id, dir string) []string {
+	args := []string{
+		"session-worker",
+		"--id", id,
+		"--dir", dir,
+		"--cols", fmt.Sprint(cfg.Cols),
+		"--rows", fmt.Sprint(cfg.Rows),
+		"--instance", cfg.Reservation.Instance, "--boot", cfg.Reservation.BootID, "--purpose", string(cfg.Reservation.Purpose),
+	}
+	if cfg.Execution != nil {
+		args = append(args, "--request-hash", cfg.Execution.RequestHash, "--launch-digest", cfg.Execution.LaunchDigest, "--request-cwd", cfg.Cwd)
+	}
+	if cfg.RecoveredFrom != "" {
+		args = append(args, "--recovered-from", cfg.RecoveredFrom)
+	}
+	if cfg.Label != "" {
+		args = append(args, "--label", cfg.Label)
+	}
+	args = append(args, "--")
+	args = append(args, cfg.Command...)
+	return args
 }

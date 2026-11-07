@@ -200,19 +200,39 @@ func (j *Journal) resumeRetirement(ctx context.Context, b Binding) error {
 		return err
 	}
 	defer func() { _ = fence.Close() }()
-	name := filepath.Join("s", b.Reservation.ID)
-	var current session.Reservation
-	err = j.files.Read(filepath.Join(name, ".reservation"), &current)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err == nil && current != b.Reservation {
-		return ErrProtected
-	}
-	if err := j.files.RemoveTree(name, "execution/.barrier"); err != nil {
+	if err := j.retirePayload(b); err != nil {
 		return err
 	}
 	return j.completeRetirement(ctx, b)
+}
+
+func (j *Journal) retirePayload(b Binding) error {
+	name := filepath.Join("s", b.Reservation.ID)
+	var current session.Reservation
+	err := j.files.Read(filepath.Join(name, ".reservation"), &current)
+	if errors.Is(err, os.ErrNotExist) {
+		return j.confirmAbsentPayload(name)
+	}
+	if err != nil {
+		return err
+	}
+	if current != b.Reservation {
+		return ErrProtected
+	}
+	return j.files.RemoveTree(name, "execution/.barrier")
+}
+
+func (j *Journal) confirmAbsentPayload(name string) error {
+	_, err := j.files.root.Lstat(name)
+	if err == nil {
+		return ErrProtected
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return executionBoundaryError("inspect retired payload", err)
+	}
+	// A new allocation may now use this name. Settle the previous deletion
+	// without removing anything at the reused path.
+	return errors.Join(j.files.syncDirs(name), j.files.Confirm("execution/.barrier"))
 }
 func (j *Journal) terminalView(r Receipt) (Receipt, error) {
 	now := j.clock()

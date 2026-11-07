@@ -1823,7 +1823,7 @@ func (a *application) daemonCommand() *cobra.Command {
 }
 
 func (a *application) workerCommand() *cobra.Command {
-	var recoveredFrom, label, instance, boot, purpose, requestHash, launchDigest string
+	var recoveredFrom, label, instance, boot, purpose, requestHash, launchDigest, requestCwd string
 	var (
 		id   string
 		dir  string
@@ -1850,7 +1850,10 @@ func (a *application) workerCommand() *cobra.Command {
 			// Before the emulator and ring allocate.
 			worker.TuneProcess()
 			worker.IsolateSession(id)
-			cwd, _ := os.Getwd()
+			cwd, err := workerLaunchDirectory(binding, requestCwd)
+			if err != nil {
+				return err
+			}
 			code, err := worker.Run(worker.Config{
 				ID: id, Dir: dir, Command: command, Cwd: cwd, Env: os.Environ(), Reservation: &ref, Execution: binding,
 				// A labelled session was started by the daemon for a purpose,
@@ -1873,6 +1876,7 @@ func (a *application) workerCommand() *cobra.Command {
 	command.Flags().StringVar(&purpose, "purpose", "", "reservation purpose")
 	command.Flags().StringVar(&requestHash, "request-hash", "", "durable request reference")
 	command.Flags().StringVar(&launchDigest, "launch-digest", "", "normalized launch digest")
+	command.Flags().StringVar(&requestCwd, "request-cwd", "", "accepted lexical execution directory")
 	command.Flags().StringVar(&recoveredFrom, "recovered-from", "", "previous recovery attempt")
 	command.Flags().StringVar(&label, "label", "", "why the daemon started this session")
 	command.Flags().StringVar(&id, "id", "", "session ID")

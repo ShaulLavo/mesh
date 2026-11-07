@@ -109,9 +109,12 @@ func ProtectedSession(sessions, id string) bool {
 	var r session.Reservation
 	err = f.Read(id+"/.reservation", &r)
 	if errors.Is(err, os.ErrNotExist) {
+		err = f.Read(id+"/.launching", &r)
+	}
+	if errors.Is(err, os.ErrNotExist) {
 		return metadataExecutionOrigin(f, id)
 	}
-	return err != nil || r.Validate() != nil || r.Purpose == session.Execution
+	return err != nil || r.Validate() != nil || r.ID != id || r.Purpose == session.Execution
 }
 
 func (a *Attempt) currentReservation() error {
@@ -135,15 +138,16 @@ func (a *Attempt) currentReservation() error {
 func metadataExecutionOrigin(f *Files, id string) bool {
 	var meta map[string]json.RawMessage
 	if err := f.Read(id+"/meta.json", &meta); err != nil {
-		return false
+		_, statErr := f.root.Lstat(id)
+		return !errors.Is(err, os.ErrNotExist) || !errors.Is(statErr, os.ErrNotExist)
 	}
 	raw, exists := meta["reservation"]
 	if !exists {
-		return false
+		return true
 	}
 	var ref session.Reservation
 	if err := json.Unmarshal(raw, &ref); err != nil {
 		return true
 	}
-	return ref.Validate() != nil || ref.Purpose == session.Execution
+	return ref.Validate() != nil || ref.ID != id || ref.Purpose == session.Execution
 }

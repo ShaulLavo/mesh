@@ -623,10 +623,14 @@ func matchesReplacement(saved intent, replacement Source) bool {
 	return replacement.RecoveredFrom == saved.SourceID && replacement.Reservation != nil && *replacement.Reservation == saved.Launch.Reservation
 }
 func renewRecoveryIntent(ctx context.Context, cfg Config, dir string, saved intent) (intent, error) {
-	if saved.Phase != "dispatched" || saved.DispatchBootID == "" || cfg.BootID == "" || saved.DispatchBootID == cfg.BootID {
+	ref := saved.Launch.Reservation
+	if saved.Phase != "dispatched" && saved.Phase != "reserved" || ref.BootID == "" || cfg.BootID == "" || ref.BootID == cfg.BootID {
 		return saved, nil
 	}
-	ref, err := cfg.Runtime.Renew(ctx, saved.Launch.Reservation)
+	if ref.Purpose != session.Recovery {
+		return saved, ErrUncertain
+	}
+	ref, err := cfg.Runtime.Renew(ctx, ref)
 	if err != nil {
 		return saved, recoveryBoundaryError("renew recovery reservation", err)
 	}

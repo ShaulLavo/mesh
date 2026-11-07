@@ -20,6 +20,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
 	"github.com/spf13/cobra"
@@ -1303,12 +1304,13 @@ func writeLocalSessionDir(t *testing.T, id string, state string) {
 		t.Fatal(err)
 	}
 	meta := worker.Meta{
-		ID:        id,
-		PID:       4321,
-		Command:   []string{"sh", "-c", "sleep 300"},
-		Cwd:       "/work",
-		State:     state,
-		CreatedAt: commandTestTime,
+		Reservation: &session.Reservation{ID: id, Instance: "0123456789abcdef0123456789abcdef", Purpose: session.Generic},
+		ID:          id,
+		PID:         4321,
+		Command:     []string{"sh", "-c", "sleep 300"},
+		Cwd:         "/work",
+		State:       state,
+		CreatedAt:   commandTestTime,
 	}
 	if state == worker.StateExited {
 		exited := commandTestTime.Add(time.Second)

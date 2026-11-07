@@ -12,6 +12,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -129,7 +130,7 @@ func TestOfflineForgetLeavesDurableMarkerAndHidesLocalRecord(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	meta := worker.Meta{ID: "7K3D", State: worker.StateRunning, Command: []string{"bash"}, Cwd: "/work", CreatedAt: commandTestTime}
+	meta := worker.Meta{Reservation: &session.Reservation{ID: "7K3D", Instance: "0123456789abcdef0123456789abcdef", Purpose: session.Generic}, ID: "7K3D", State: worker.StateRunning, Command: []string{"bash"}, Cwd: "/work", CreatedAt: commandTestTime}
 	if err := worker.WriteMeta(dir, meta); err != nil {
 		t.Fatal(err)
 	}
