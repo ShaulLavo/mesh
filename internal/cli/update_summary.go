@@ -162,12 +162,9 @@ func dashboardAutomaticRows(source DashboardUpdateSource, now time.Time) []Dashb
 	} else {
 		rows = append(rows, DashboardUpdateRow{HostID: source.Coordinator.ID, Text: "Last successful fleet release " + SafeTerminalText(record.LastCompleted.Version) + "; " + statusTime(record.LastCompleted.At) + "."})
 	}
+
 	if record.Stop != nil {
-		text := "Automatic update stopped; review the pinned run before explicit retry or cancel and acknowledge-stop."
-		if record.Stop.Kind == "direct_transition_blocked" {
-			text = "Direct transition blocked; review the manual bridge advice in mesh update status --details."
-		}
-		rows = append(rows, DashboardUpdateRow{HostID: record.Stop.HostID, Text: text, Attention: true})
+		rows = append(rows, automaticStopRow(*record.Stop))
 	}
 	if status.Problem != "" || status.TransportProblem != "" {
 		rows = append(rows, DashboardUpdateRow{HostID: source.Coordinator.ID, Text: "Automatic policy has a problem; inspect mesh update automatic status --details.", Attention: true})
@@ -176,7 +173,11 @@ func dashboardAutomaticRows(source DashboardUpdateSource, now time.Time) []Dashb
 		rows = append(rows, DashboardUpdateRow{HostID: source.Coordinator.ID, Text: "Pinned manual continuation: " + SafeTerminalText(record.Continuation.State) + "; binary policy remains separate."})
 	}
 	if record.Canary != nil {
-		rows = append(rows, DashboardUpdateRow{HostID: record.Canary.HostID, Text: "Canary " + SafeTerminalText(record.Canary.State) + "; later activation waits for this attempt's proof.", Attention: record.Canary.State != "verified"})
+		text := "Canary " + SafeTerminalText(record.Canary.State) + "; later activation waits for this attempt's proof."
+		if record.Canary.State == "verified" {
+			text = "Canary verified for this attempt; rollout follows the pinned policy."
+		}
+		rows = append(rows, DashboardUpdateRow{HostID: record.Canary.HostID, Text: text, Attention: record.Canary.State != "verified"})
 	}
 	if record.Current != nil {
 		rows = append(rows, automaticTargetRows(*record.Current)...)
@@ -349,4 +350,15 @@ func statusTime(at time.Time) string {
 		return agentUnknown
 	}
 	return at.UTC().Format(time.RFC3339)
+}
+
+func automaticStopRow(stop update.AutomaticStop) DashboardUpdateRow {
+	text := "Stopped; review manual bridge if a direct transition is blocked. Inspect details before retry or cancel and acknowledge-stop."
+	if stop.Kind == "recovering" {
+		text = "Pinned recovery approved; the prior stop remains recorded for this attempt."
+	}
+	if stop.Kind == "cancelled" {
+		text = "Automatic policy disabled and cancelled; settle issued work before acknowledge-stop."
+	}
+	return DashboardUpdateRow{HostID: stop.HostID, Text: text, Attention: true}
 }

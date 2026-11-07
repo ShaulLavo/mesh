@@ -92,7 +92,7 @@ func TestFleetDriftClockFrameBoundedWithdrawnAndIndependent(t *testing.T) {
 	if model.render() != plain {
 		t.Fatal("no enrollment reserved a blank update row")
 	}
-	source := cli.DashboardUpdateSource{Coordinator: update.Host{ID: model.hosts[0].Host.ID}, Automatic: &cli.DashboardStatus[update.AutomaticStatus]{Observation: cli.DashboardStatusObservation{State: cli.DashboardStatusObserved, At: now}, Value: &update.AutomaticStatus{State: "stopped", Record: &update.AutomaticRecord{Stop: &update.AutomaticStop{Kind: "direct_transition_blocked"}, Current: &update.Run{Release: release.Manifest{Version: "v0.2.0"}, Targets: []update.Target{{Host: update.Host{ID: model.hosts[0].Host.ID}, State: update.Offline}}}}}}}
+	source := cli.DashboardUpdateSource{Coordinator: update.Host{ID: model.hosts[0].Host.ID}, Automatic: &cli.DashboardStatus[update.AutomaticStatus]{Observation: cli.DashboardStatusObservation{State: cli.DashboardStatusObserved, At: now}, Value: &update.AutomaticStatus{State: "stopped", Record: &update.AutomaticRecord{Stop: &update.AutomaticStop{Kind: "failed"}, Current: &update.Run{Release: release.Manifest{Version: "v0.2.0"}, Targets: []update.Target{{Host: update.Host{ID: model.hosts[0].Host.ID}, State: update.Offline}}}}}}}
 	model.hosts[0].Connection = cli.StateRefused
 	oldUsage := model.usage
 	oldServices := model.hosts[0].Services

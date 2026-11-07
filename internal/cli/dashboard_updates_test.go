@@ -232,7 +232,7 @@ func TestDashboardUpdateProjectionPreservesCompleteValuesAndAges(t *testing.T) {
 	wanted := update.FeedValue{Present: true, URL: "https://feed.mesh.example.test/usage"}
 	domain := update.DomainValue{Present: true}
 	target := update.ConfigurationTarget{HostID: "recipient", State: "saved", Receipt: &update.ConfigurationReceipt{Revision: 1, State: "saved", FeedState: "saved", Domain: &update.DomainReceipt{State: "saved", Desired: domain}}, Daemon: &update.DomainObservation{Digest: "old", InstanceID: "actual", ObservedAt: now}, Observers: []update.ConfigurationObservation{{HostID: "recipient", Generation: 4, Digest: wanted.Digest(), Enabled: true, State: "enabled", Failing: true, HTTPAt: now, PublishedAt: now.Add(-time.Minute), UpstreamAt: &upstream, RenewedAt: now, DomainDigest: "old"}}}
-	auto := update.AutomaticStatus{State: "stopped", Record: &update.AutomaticRecord{Stop: &update.AutomaticStop{Kind: "direct_transition_blocked", HostID: "recipient"}, Canary: &update.Canary{HostID: "recipient", State: "failed"}, LastCompleted: &update.CompletedFleetRelease{Version: "v0.1.0", At: upstream}, Current: &update.Run{Release: release.Manifest{Version: "v0.2.0"}, UpdatedAt: upstream, Targets: []update.Target{{Host: update.Host{ID: "recipient"}, State: update.Offline, Build: &release.Build{Version: "v0.1.0"}}}}}}
+	auto := update.AutomaticStatus{State: "stopped", Record: &update.AutomaticRecord{Stop: &update.AutomaticStop{Kind: "failed", HostID: "recipient"}, Canary: &update.Canary{HostID: "recipient", State: "failed"}, LastCompleted: &update.CompletedFleetRelease{Version: "v0.1.0", At: upstream}, Current: &update.Run{Release: release.Manifest{Version: "v0.2.0"}, UpdatedAt: upstream, Targets: []update.Target{{Host: update.Host{ID: "recipient"}, State: update.Offline, Build: &release.Build{Version: "v0.1.0"}}}}}}
 	config := update.ConfigurationStatus{Change: &update.ConfigurationChange{Proposal: update.ConfigurationProposal{Recipients: []update.RecipientConfiguration{{Host: update.Host{ID: "recipient"}, Feed: &update.FeedChange{URL: wanted.URL}, Domain: &update.DomainChange{}}}}, Targets: []update.ConfigurationTarget{target}}}
 	observation := DashboardStatusObservation{State: DashboardStatusObserved, At: now}
 	view := DashboardUpdates{Generation: 5, Sources: []DashboardUpdateSource{{Automatic: &DashboardStatus[update.AutomaticStatus]{observation, &auto}, Configuration: &DashboardStatus[update.ConfigurationStatus]{observation, &config}}}}
@@ -251,5 +251,33 @@ func TestDashboardUpdateProjectionPreservesCompleteValuesAndAges(t *testing.T) {
 	rows = DashboardUpdateRows(view, now.Add(time.Minute))
 	if strings.Contains(fmt.Sprint(rows), "Feed loaded") {
 		t.Fatal("expired status remains current")
+	}
+}
+
+func TestDashboardActualCLIInstallsPassiveUpdateAdapter(t *testing.T) {
+	_, _ = setupUpdateCLI(t)
+	var calls atomic.Int32
+	observed := false
+	caller := updateCallFunc(func(context.Context, update.Host, string, any, any) error {
+		calls.Add(1)
+		return errors.New("unexpected status read")
+	})
+	dashboard := func(ctx context.Context, input DashboardInput) error {
+		if input.UpdateWatch == nil {
+			return errors.New("CLI omitted update adapter")
+		}
+		run, cancel := context.WithCancel(ctx)
+		defer cancel()
+		return input.UpdateWatch(run, func(view DashboardUpdates) {
+			observed = true
+			if len(view.Sources) > 0 || view.Problem != "" {
+				t.Errorf("unenrolled CLI input: %+v", view)
+			}
+			cancel()
+		})
+	}
+	_, _, err := executeCommand(t, Dependencies{Dashboard: dashboard, UpdateCaller: caller}, "dashboard", "--wall")
+	if err != nil || !observed || calls.Load() != 0 {
+		t.Fatalf("actual CLI adapter: observed=%t calls=%d err=%v", observed, calls.Load(), err)
 	}
 }
