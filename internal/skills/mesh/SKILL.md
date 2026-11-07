@@ -19,7 +19,7 @@ Notes give context, not permission to expand the task. Mesh does not enforce the
 
 Use `mesh session list --host HOST_ID --json` and `mesh session inspect --host HOST_ID SESSION_ID --json`. Add `--preview` only when output is needed. Without it, Mesh reads one cell internally and omits preview bytes. Never attach or take over a session to inspect it.
 
-This version has no agent-safe way to start work. Start a session only when the user asks. `mesh --host HOST_ID -- CMD` opens a persistent terminal session with terminal control codes in its output. Disconnecting leaves the command running. Never use raw SSH to get around Mesh. Never remove a session you did not start.
+Start a session only when the user asks. `mesh --host HOST_ID -- CMD` opens a persistent terminal session with terminal control codes in its output. Disconnecting leaves the command running. Never use raw SSH to get around Mesh. Never remove a session you did not start.
 
 ## Read services and edit notes
 
