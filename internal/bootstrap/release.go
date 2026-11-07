@@ -1,9 +1,7 @@
 package bootstrap
 
 import (
-	"archive/tar"
 	"bufio"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -75,7 +73,7 @@ func resolvePlatformBinary(ctx context.Context, selection binarySelection, platf
 		archivePath := filepath.Join(artifactDir, assetName)
 		manifestPath := filepath.Join(artifactDir, "checksums.txt")
 		if _, err := os.Stat(archivePath); err == nil {
-			binaryPath, cleanup, err := extractLocalReleaseBinary(archivePath, manifestPath, assetName)
+			binaryPath, cleanup, err := extractLocalReleaseBinary(ctx, archivePath, manifestPath, assetName)
 			if err != nil {
 				return resolvedBinary{}, diagnostic(DiagnosticWrongArch, err)
 			}
@@ -145,7 +143,7 @@ func fetchReleaseBinary(ctx context.Context, platform Platform, opts releaseOpti
 	return binaryPath, func() { _ = os.RemoveAll(cache) }, nil
 }
 
-func extractLocalReleaseBinary(archivePath, manifestPath, assetName string) (string, func(), error) {
+func extractLocalReleaseBinary(ctx context.Context, archivePath, manifestPath, assetName string) (string, func(), error) {
 	manifest, err := os.ReadFile(manifestPath) //nolint:gosec // path is the fixed checksum filename beside a caller-selected local release artifact
 	if err != nil {
 		return "", func() {}, fmt.Errorf("read release checksums %s: %w", manifestPath, err)
@@ -162,7 +160,7 @@ func extractLocalReleaseBinary(archivePath, manifestPath, assetName string) (str
 		return "", func() {}, fmt.Errorf("open release archive %s: %w", archivePath, err)
 	}
 	checksum := sha256.New()
-	written, copyErr := io.Copy(checksum, io.LimitReader(archive, maximumArchiveSize+1))
+	written, copyErr := io.Copy(checksum, io.LimitReader(localArchiveReader{ctx: ctx, source: archive}, maximumArchiveSize+1))
 	closeErr := archive.Close()
 	if copyErr != nil {
 		return "", func() {}, fmt.Errorf("hash release archive %s: %w", archivePath, copyErr)
@@ -170,17 +168,17 @@ func extractLocalReleaseBinary(archivePath, manifestPath, assetName string) (str
 	if closeErr != nil {
 		return "", func() {}, fmt.Errorf("close release archive %s: %w", archivePath, closeErr)
 	}
-	if written > maximumBinarySize {
-		return "", func() {}, fmt.Errorf("release archive %s exceeds %d bytes", archivePath, maximumBinarySize)
+	if written > maximumArchiveSize {
+		return "", func() {}, fmt.Errorf("release archive %s exceeds %d bytes", archivePath, maximumArchiveSize)
 	}
 	if got := checksum.Sum(nil); !equalChecksum(got, wantChecksum) {
 		return "", func() {}, fmt.Errorf("checksum for %s is %x, want %x", assetName, got, wantChecksum)
 	}
-	return extractReleaseArchive(archivePath)
+	return extractReleaseArchive(ctx, archivePath)
 }
 
 func releaseAssetName(platform Platform) string {
-	return fmt.Sprintf("mesh_%s_%s.tar.gz", platform.OS, platform.Arch)
+	return meshrelease.ArchiveName(meshrelease.Platform{OS: platform.OS.String(), Arch: platform.Arch.String()}, meshrelease.ArchiveGzip)
 }
 
 func checksumForAsset(manifest []byte, assetName string) ([]byte, error) {
@@ -209,65 +207,49 @@ func checksumForAsset(manifest []byte, assetName string) ([]byte, error) {
 	return checksum, nil
 }
 
-func extractReleaseArchive(archivePath string) (string, func(), error) {
-	archive, err := os.Open(archivePath) //nolint:gosec // path is a verified local or freshly downloaded release archive
+func extractReleaseArchive(ctx context.Context, archivePath string) (string, func(), error) {
+	archive, err := os.Open(archivePath) //nolint:gosec // caller verified the local archive checksum
 	if err != nil {
-		return "", func() {}, err
+		return "", func() {}, fmt.Errorf("extract local release archive: %w", err)
 	}
-	defer archive.Close() //nolint:errcheck // extraction result takes precedence over read-only cleanup
-	gzipReader, err := gzip.NewReader(archive)
+	defer archive.Close() //nolint:errcheck // read-only
+	binary, err := os.CreateTemp("", "mesh-bootstrap-binary-*")
 	if err != nil {
-		return "", func() {}, err
+		return "", func() {}, fmt.Errorf("extract local release archive: %w", err)
 	}
-	defer gzipReader.Close() //nolint:errcheck // the gzip reader has no pending writes to flush
-	tarReader := tar.NewReader(gzipReader)
+	path := binary.Name()
+	cleanup := func() { _ = os.Remove(path) }
+	_, readErr := meshrelease.ReadExecutable(ctx, archive, meshrelease.ArchiveGzip, binary)
+	chmodErr := binary.Chmod(0o700)
+	syncErr := binary.Sync()
+	closeErr := binary.Close()
+	if err := errors.Join(readErr, chmodErr, syncErr, closeErr, ctx.Err()); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("extract local release archive: %w", err)
+	}
+	return path, cleanup, nil
+}
 
-	var binaryPath string
-	cleanup := func() {
-		if binaryPath != "" {
-			_ = os.Remove(binaryPath)
-		}
+type localArchiveReader struct {
+	ctx    context.Context
+	source io.Reader
+}
+
+func (r localArchiveReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, fmt.Errorf("read local release archive: %w", err)
 	}
-	for {
-		header, err := tarReader.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			cleanup()
-			return "", func() {}, err
-		}
-		if header.Typeflag == tar.TypeDir {
-			continue
-		}
-		if header.Typeflag != tar.TypeReg {
-			cleanup()
-			return "", func() {}, fmt.Errorf("archive member %q is not a regular file", header.Name)
-		}
-		if filepath.Base(filepath.Clean(header.Name)) != "mesh" || binaryPath != "" {
-			cleanup()
-			return "", func() {}, fmt.Errorf("archive must contain one regular file named mesh, found %q", header.Name)
-		}
-		if header.Size < 0 || header.Size > maximumBinarySize {
-			return "", func() {}, fmt.Errorf("archive binary size %d exceeds %d bytes", header.Size, maximumBinarySize)
-		}
-		binary, err := os.CreateTemp("", "mesh-bootstrap-binary-*")
-		if err != nil {
-			return "", func() {}, err
-		}
-		binaryPath = binary.Name()
-		written, copyErr := io.Copy(binary, io.LimitReader(tarReader, maximumBinarySize+1))
-		chmodErr := binary.Chmod(0o700)
-		closeErr := binary.Close()
-		if copyErr != nil || chmodErr != nil || closeErr != nil || written != header.Size {
-			cleanup()
-			return "", func() {}, errors.Join(copyErr, chmodErr, closeErr, fmt.Errorf("archive binary size is %d, want %d", written, header.Size))
-		}
+	n, err := r.source.Read(p[:min(len(p), 32<<10)])
+	if ctxErr := r.ctx.Err(); ctxErr != nil {
+		return n, fmt.Errorf("read local release archive: %w", ctxErr)
 	}
-	if binaryPath == "" {
-		return "", func() {}, errors.New("archive contains no mesh binary")
+	if errors.Is(err, io.EOF) {
+		return n, io.EOF
 	}
-	return binaryPath, cleanup, nil
+	if err != nil {
+		return n, fmt.Errorf("read local release archive: %w", err)
+	}
+	return n, nil
 }
 
 func equalChecksum(a, b []byte) bool {

@@ -1,9 +1,6 @@
 package release
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -141,6 +138,13 @@ func (c Client) download(ctx context.Context, manifest Manifest, platform Platfo
 	if err != nil {
 		return "", err
 	}
+	format, err := artifact.Format()
+	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("release: publish executable: %w", err)
+	}
 	baseURL, client, err := c.normalized()
 	if err != nil {
 		return "", err
@@ -156,7 +160,7 @@ func (c Client) download(ctx context.Context, manifest Manifest, platform Platfo
 	if cachedExecutable(destination, artifact.BinarySHA256) {
 		return destination, nil
 	}
-	archive, err := os.CreateTemp(root, ".archive-*.tar.gz")
+	archive, err := os.CreateTemp(root, ".archive-*")
 	if err != nil {
 		return "", fmt.Errorf("release: create cached archive: %w", err)
 	}
@@ -170,11 +174,14 @@ func (c Client) download(ctx context.Context, manifest Manifest, platform Platfo
 	if err := archive.Close(); err != nil {
 		return "", fmt.Errorf("release: close archive: %w", err)
 	}
-	temporary, err := extractBinary(archivePath, root, artifact.BinarySHA256)
+	temporary, err := extractBinary(ctx, archivePath, format, root, artifact.BinarySHA256)
 	if err != nil {
 		return "", err
 	}
 	defer os.Remove(temporary) //nolint:errcheck // best-effort cleanup after atomic publication
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("release: publish executable: %w", err)
+	}
 	if err := os.Rename(temporary, destination); err != nil {
 		return "", fmt.Errorf("release: publish cached executable: %w", err)
 	}
@@ -309,85 +316,6 @@ func response(ctx context.Context, client *http.Client, address string) (*http.R
 	detail, _ := io.ReadAll(io.LimitReader(reply.Body, maximumErrorDetail))
 	_ = reply.Body.Close()
 	return nil, &downloadStatusError{code: reply.StatusCode, err: fmt.Errorf("release: GET %s: %s: %s", address, reply.Status, strings.TrimSpace(string(detail)))}
-}
-
-func extractBinary(archivePath, directory, wantDigest string) (string, error) {
-	archive, err := os.Open(archivePath) //nolint:gosec // path is a freshly downloaded, verified archive
-	if err != nil {
-		return "", err
-	}
-	defer archive.Close() //nolint:errcheck // extraction result is authoritative
-	gzipReader, err := gzip.NewReader(archive)
-	if err != nil {
-		return "", fmt.Errorf("release: open gzip archive: %w", err)
-	}
-	defer gzipReader.Close() //nolint:errcheck // reader has no pending writes
-	expanded := &io.LimitedReader{R: gzipReader, N: maximumExpandedArchive + 1}
-	tarReader := tar.NewReader(expanded)
-	header, err := tarReader.Next()
-	if err != nil {
-		return "", fmt.Errorf("release: read archive: %w", err)
-	}
-	if header.Name != "mesh" || header.Typeflag != tar.TypeReg || header.Size < 0 || header.Size > maximumBinary {
-		return "", fmt.Errorf("release: archive must contain one bounded regular file named mesh")
-	}
-	temporary, err := os.CreateTemp(directory, ".mesh-*")
-	if err != nil {
-		return "", fmt.Errorf("release: create cached executable: %w", err)
-	}
-	path := temporary.Name()
-	if err := writeBinary(temporary, tarReader, header.Size, wantDigest); err != nil {
-		_ = temporary.Close()
-		_ = os.Remove(path)
-		return "", err
-	}
-	if _, err := tarReader.Next(); !errors.Is(err, io.EOF) {
-		_ = os.Remove(path)
-		return "", errors.New("release: archive contains more than one member")
-	}
-	if err := validateArchiveTail(expanded); err != nil {
-		_ = os.Remove(path)
-		return "", err
-	}
-	return path, nil
-}
-
-// Tar EOF can hide a terminal gzip error. Validate padding through the decoder's own EOF.
-func validateArchiveTail(source *io.LimitedReader) error {
-	remaining := int64(maximumArchiveTrailer)
-	var buffer [32 << 10]byte
-	for {
-		n, err := source.Read(buffer[:min(int64(len(buffer)), remaining+1)])
-		remaining -= int64(n)
-		if remaining < 0 || source.N == 0 {
-			return errors.New("release: archive exceeds expanded size or padding limit")
-		}
-		if bytes.Count(buffer[:n], []byte{0}) != n {
-			return errors.New("release: archive contains nonzero trailing data")
-		}
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("release: read archive trailer: %w", err)
-		}
-	}
-}
-
-func writeBinary(destination *os.File, source io.Reader, size int64, wantDigest string) error {
-	hash := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(destination, hash), io.LimitReader(source, maximumBinary+1))
-	chmodErr := destination.Chmod(0o700)
-	syncErr := destination.Sync()
-	closeErr := destination.Close()
-	if copyErr != nil || chmodErr != nil || syncErr != nil || closeErr != nil || written != size {
-		return errors.Join(copyErr, chmodErr, syncErr, closeErr, fmt.Errorf("release: archive binary size is %d, want %d", written, size))
-	}
-	digest := hex.EncodeToString(hash.Sum(nil))
-	if digest != wantDigest {
-		return fmt.Errorf("release: binary SHA-256 is %s, want %s", digest, wantDigest)
-	}
-	return nil
 }
 
 func fileDigest(path string, maximum int64) (string, error) {
