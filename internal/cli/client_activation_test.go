@@ -43,6 +43,9 @@ func TestVersionMetadataPreservesRetainedConfiguration(t *testing.T) {
 			if _, _, err := executeCommand(t, Dependencies{}, "version", "--json"); err != nil {
 				t.Fatal(err)
 			}
+			if _, _, err := executeCommand(t, Dependencies{}, "version", "--licenses"); err != nil {
+				t.Fatal(err)
+			}
 			after, err := readClientConfigTestFile(path)
 			if err != nil {
 				t.Fatal(err)
