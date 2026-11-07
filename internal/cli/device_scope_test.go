@@ -97,6 +97,10 @@ func TestScopeMissingCredentialNeverFallsBackOrCreatesState(t *testing.T) {
 func TestScopeUsageErrorsAreSingleEnvelopes(t *testing.T) {
 	t.Setenv("MESH_STATE_DIR", filepath.Join(t.TempDir(), "absent"))
 	for _, args := range [][]string{
+		{"device", "scope", "read", "--host", "x", "--key-dir", "x", "--section=sessions", "--session=", "--json"},
+		{"device", "scope", "read", "--host", "x", "--key-dir", "x", "--section=services", "--cursor=", "--json"},
+		{"device", "scope", "grant", "--identity", "x", "--permissions", "metadata", "--expected-revision", "0", "--expires-at=", "--json"},
+		{"device", "scope", "grant", "--identity", "x", "--permissions", "metadata", "--expected-revision", "0", "--expires-at=", "--expires-in=1h", "--json"},
 		{"device", "scope", "--json"}, {"device", "scope", "unknown", "--json"},
 		{"device", "scope", "read", "--host", "x", "--key-dir", "x", "--limit=0", "--section=sessions", "--json"},
 		{"device", "scope", "read", "--host", "x", "--key-dir", "x", "--timeout=99ms", "--json"},

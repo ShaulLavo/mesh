@@ -220,7 +220,7 @@ func TestScopePublicationFailureRepairsWithoutNewIncarnation(t *testing.T) {
 	calls := 0
 	store.syncDir = func(file *os.File) error { calls++; return file.Sync() }
 	retry := testGrant(t, store, 0, subject, expiry)
-	if retry.Changed || retry.Entry.Incarnation != first || calls != 1 {
+	if retry.Changed || retry.Entry.Incarnation != first || calls != 2 {
 		t.Fatal("retry did not settle exact visible policy")
 	}
 	binding, err := store.Bind(subject)
@@ -331,5 +331,44 @@ func TestScopedMonotonicCapSurvivesBackwardWallStep(t *testing.T) {
 	monotonic = monotonic.Add(time.Hour)
 	if binding.Current() {
 		t.Fatal("backward wall step extended a bound socket beyond its monotonic cap")
+	}
+}
+
+func TestScopeParentBarrierFailureRemainsVisibleUnconfirmed(t *testing.T) {
+	store, subject, expiry := testStore(t)
+	calls := 0
+	cause := errors.New("parent barrier failed")
+	store.syncDir = func(file *os.File) error {
+		calls++
+		if calls == 2 {
+			return cause
+		}
+		return file.Sync()
+	}
+	_, err := store.Grant(t.Context(), 0, GrantInput{Subject: subject, ExpiresAt: expiry}, noRoles)
+	var visible *VisibleUnconfirmed
+	if !errors.As(err, &visible) || !errors.Is(err, cause) || visible.Revision != 1 {
+		t.Fatalf("parent barrier acknowledged: %v", err)
+	}
+	policy, err := store.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := policy.Entries[0].Incarnation
+	store.syncDir = (*os.File).Sync
+	result := testGrant(t, store, 0, subject, expiry)
+	if result.Changed || result.Entry.Incarnation != generation {
+		t.Fatal("parent repair allocated another incarnation")
+	}
+}
+func TestScopeCancellationAfterPublicationKeepsRequiredBarriers(t *testing.T) {
+	store, subject, expiry := testStore(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	store.syncDir = func(file *os.File) error { calls++; cancel(); return file.Sync() }
+	change, err := store.Grant(ctx, 0, GrantInput{Subject: subject, ExpiresAt: expiry}, noRoles)
+	if err != nil || !change.Changed || calls != 2 {
+		t.Fatalf("accepted publication lost barriers after cancellation: %+v %v calls=%d", change, err, calls)
 	}
 }

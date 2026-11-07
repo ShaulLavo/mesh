@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 	"io"
@@ -11,6 +13,11 @@ import (
 )
 
 func run() error {
+	if len(os.Args) == 5 && os.Args[3] == "scoped-denial" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return scopedDenial(ctx, os.Args[1], os.Args[2], os.Args[4])
+	}
 	if len(os.Args) != 4 {
 		return fmt.Errorf("usage: control-client ENDPOINT PIN JSON")
 	}
@@ -101,6 +108,71 @@ func freshGrantList(ctx context.Context, auth *transport.Authentication, payload
 	control, err := protocol.DecodeControl(frame.Payload)
 	if err != nil || control.Type != protocol.TypeListed {
 		return fmt.Errorf("fixture fresh list response type=%q", control.Type)
+	}
+	return nil
+}
+
+type scopedProbe struct {
+	Kind      protocol.Kind `json:"kind"`
+	SessionID string        `json:"sessionId"`
+	Payload   []byte        `json:"payload"`
+}
+
+func scopedDenial(ctx context.Context, endpoint, pin, directory string) error {
+	_, key, err := identity.LoadCredential(directory)
+	if err != nil {
+		return fmt.Errorf("fixture scoped credential: %w", err)
+	}
+	data, err := io.ReadAll(io.LimitReader(os.Stdin, (64<<10)+1))
+	if err != nil {
+		return fmt.Errorf("fixture scoped probes: %w", err)
+	}
+	if len(data) > 64<<10 {
+		return fmt.Errorf("fixture scoped probes exceed limit")
+	}
+	var probes []scopedProbe
+	if err := json.Unmarshal(data, &probes); err != nil {
+		return fmt.Errorf("fixture decode scoped probes: %w", err)
+	}
+	if len(probes) == 0 || len(probes) > 64 {
+		return fmt.Errorf("fixture scoped probe count is invalid")
+	}
+	auth := &transport.Authentication{Key: key, ExpectedIdentity: pin, Admission: transport.ScopedAdmission}
+	for _, probe := range probes {
+		if err := sendScopedProbe(ctx, endpoint, auth, probe); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(os.Stdout, "PASS: %d scoped frames denied before reply\n", len(probes))
+	if err != nil {
+		return fmt.Errorf("fixture scoped output: %w", err)
+	}
+	return nil
+}
+func sendScopedProbe(ctx context.Context, endpoint string, auth *transport.Authentication, probe scopedProbe) error {
+	conn, err := transport.DialOnce(ctx, endpoint, transport.DialOptions{Auth: auth})
+	if err != nil {
+		return fmt.Errorf("fixture scoped TLS admission: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	frame := protocol.Frame{Kind: probe.Kind, Payload: probe.Payload}
+	if probe.SessionID != "" {
+		id, err := protocol.NewSessionID(probe.SessionID)
+		if err != nil {
+			return fmt.Errorf("fixture scoped session: %w", err)
+		}
+		frame.Session = id
+	}
+	if err := conn.WriteFrame(frame); err != nil {
+		return fmt.Errorf("fixture scoped probe write: %w", err)
+	}
+	if reply, err := conn.ReadFrame(); err == nil {
+		return fmt.Errorf("scoped denial disclosed a frame of %d bytes", len(reply.Payload))
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("fixture scoped stream did not retire before deadline: %w", err)
 	}
 	return nil
 }

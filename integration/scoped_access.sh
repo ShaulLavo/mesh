@@ -7,4 +7,5 @@ if [[ -z ${MESH:-} ]]; then
   MESH="$root/mesh"
   go build -o "$MESH" ./cmd/mesh
 fi
-python3 "$(dirname -- "${BASH_SOURCE[0]}")/helpers/scoped_access.py" "$MESH" "$root"
+go build -o "$root/control-client" ./integration/helpers/control-client
+python3 "$(dirname -- "${BASH_SOURCE[0]}")/helpers/scoped_access.py" "$MESH" "$root" "$root/control-client"

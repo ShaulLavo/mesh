@@ -107,7 +107,7 @@ func (a *application) scopeGrantCommand() *cobra.Command {
 	return command
 }
 func scopeExpiry(cmd *cobra.Command, absolute string, duration time.Duration) (time.Time, error) {
-	if absolute != "" {
+	if cmd.Flags().Changed("expires-at") {
 		if cmd.Flags().Changed("expires-in") {
 			return time.Time{}, agentapi.Usage("scope.grant", "Use only one expiry flag.")
 		}
@@ -239,6 +239,13 @@ func (a *application) scopeReadCommand() *cobra.Command {
 	return command
 }
 func validateScopeReadFlags(cmd *cobra.Command, read protocol.AccessRead) error {
+	if cmd.Flags().Changed("session") && (read.Section != "sessions" || read.SessionID == "") {
+		return agentapi.Usage("scope.read", "--session requires a nonempty exact session ID in the sessions section.")
+	}
+	if cmd.Flags().Changed("cursor") && read.Cursor == "" {
+		return agentapi.Usage("scope.read", "--cursor requires a nonempty continuation.")
+	}
+
 	if cmd.Flags().Changed("limit") && (read.Limit < 1 || read.Section == "host") {
 		return agentapi.Usage("scope.read", "--limit requires a row section and a value from 1 to 500.")
 	}

@@ -281,6 +281,9 @@ func confirmAuthentication(secure *tls.Conn, auth *Authentication, server bool, 
 	if _, err := io.ReadFull(secure, accepted[:]); err != nil {
 		return fmt.Errorf("read Mesh peer acceptance: %w", err)
 	}
+	if accepted[0] < 1 || accepted[0] > 3 {
+		return errors.New("transport: invalid Mesh peer acceptance")
+	}
 	if accepted[0] == 2 && auth.Admission == FullAdmission {
 		return errors.New("transport: device has signed-update access; full device approval required")
 	}

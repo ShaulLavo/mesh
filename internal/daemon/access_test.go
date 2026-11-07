@@ -329,6 +329,9 @@ func assertScopedDenied(t *testing.T, f *scopedFixture, frame protocol.Frame) {
 	if err == nil {
 		t.Fatalf("denied request received bytes %q for %q", got.Payload, frame.Payload)
 	}
+	if err := ctx.Err(); err != nil {
+		t.Fatal("denied stream did not retire before deadline", err)
+	}
 }
 func TestScopedPagesBindEveryCursorField(t *testing.T) {
 	f := newScopedFixture(t.Context(), t, false)

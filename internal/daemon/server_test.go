@@ -586,3 +586,14 @@ func (*serverTestCatalog) PruneLabelled(context.Context, string, storage.Session
 func localServerContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, localClientKey{}, true)
 }
+
+func fullServerTestAuthentication(ctx context.Context, t *testing.T) (*transport.Authentication, transport.DialOptions) {
+	t.Helper()
+	state := t.TempDir()
+	options := runtimeDialOptions(ctx, t, state)
+	authentication, err := controlAuthentication(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return authentication, options
+}

@@ -350,7 +350,7 @@ func (s *Store) settle(dir *os.File, revision uint64) error {
 	}
 	syncErr := s.syncFile(file)
 	closeErr := file.Close()
-	if err := errors.Join(syncErr, closeErr, s.syncDir(dir)); err != nil {
+	if err := errors.Join(syncErr, closeErr, s.syncDir(dir), syncScopeParent(dir, s.syncDir)); err != nil {
 		return &VisibleUnconfirmed{Revision: revision, Cause: err}
 	}
 	return nil
@@ -390,6 +390,9 @@ func (s *Store) publish(dir *os.File, policy PolicyView) error {
 		return fmt.Errorf("access: publish policy: %w", err)
 	}
 	if err := s.syncDir(dir); err != nil {
+		return &VisibleUnconfirmed{Revision: policy.Revision, Cause: err}
+	}
+	if err := syncScopeParent(dir, s.syncDir); err != nil {
 		return &VisibleUnconfirmed{Revision: policy.Revision, Cause: err}
 	}
 	return nil

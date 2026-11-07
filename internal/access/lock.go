@@ -31,7 +31,11 @@ func WithClassWriter(ctx context.Context, stateDir string, budget time.Duration,
 	return change(wait)
 }
 func writerLock(ctx context.Context, dir *os.File, name string) (*os.File, error) {
-	file, _, err := privateFile(dir, name, unix.O_RDWR|unix.O_CREAT)
+	// Concurrent nonexclusive creation can fail with ENOENT on Darwin.
+	file, _, err := privateFile(dir, name, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL)
+	if errors.Is(err, os.ErrExist) {
+		file, _, err = privateFile(dir, name, unix.O_RDWR)
+	}
 	if err != nil {
 		return nil, err
 	}

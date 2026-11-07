@@ -41,12 +41,6 @@ func scopeDirectory(stateDir string, create bool) (*os.File, error) {
 		_ = dir.Close()
 		return nil, err
 	}
-	if create {
-		if err := root.Sync(); err != nil {
-			_ = dir.Close()
-			return nil, fmt.Errorf("access: sync policy parent: %w", err)
-		}
-	}
 	return dir, nil
 }
 func checkDirectory(file *os.File, private bool) error {
@@ -152,6 +146,19 @@ func scanObject(decoder *json.Decoder, depth int) error {
 	_, err := decoder.Token()
 	if err != nil {
 		return fmt.Errorf("access: close JSON object: %w", err)
+	}
+	return nil
+}
+
+func syncScopeParent(dir *os.File, syncDir func(*os.File) error) error {
+	fd, err := unix.Openat(int(dir.Fd()), "..", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("access: open policy parent barrier: %w", err)
+	}
+	parent := os.NewFile(uintptr(fd), "policy-parent")
+	syncErr := syncDir(parent)
+	if err := errors.Join(syncErr, parent.Close()); err != nil {
+		return fmt.Errorf("access: sync policy parent barrier: %w", err)
 	}
 	return nil
 }
