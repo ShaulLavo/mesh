@@ -2,12 +2,15 @@
 """Standalone integration entry points must not read the caller's address book."""
 
 import ctypes
+import errno
 import fcntl
 import json
 import os
 from pathlib import Path
 import shutil
+import select
 import signal
+import socket
 import struct
 import subprocess
 import termios
@@ -93,6 +96,45 @@ class EntryPointContractTest(unittest.TestCase):
         self.assertIn('exec python3 -B "$repo_root/scripts/verify_runner.py" "$repo_root" "$BASH"', wrapper)
         for created in ("mktemp", "mkdir", "trap", "timeout", "kill"):
             self.assertNotIn(created, wrapper)
+
+
+class ServedPortOwnershipTest(unittest.TestCase):
+    def assert_reserved(self, ports):
+        self.assertEqual(len(set(ports)), 5)
+        for port in ports:
+            with self.subTest(port=port), socket.socket() as competitor:
+                self.assert_bind_refused(competitor, port)
+
+    def assert_bind_refused(self, competitor, port):
+        with self.assertRaises(OSError, msg="fixture released its port before startup") as raised:
+            competitor.bind(("127.0.0.1", port))
+        self.assertEqual(raised.exception.errno, errno.EADDRINUSE)
+
+    def check_entry(self, entry):
+        process = subprocess.Popen(["bash", str(entry)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE)
+        try:
+            self.assertTrue(select.select([process.stdout], [], [], 10)[0], "fixture did not allocate ports")
+            ports = list(map(int, process.stdout.readline().split()))
+            self.assert_reserved(ports)
+        finally:
+            output, errors = process.communicate(input=b"\n", timeout=15)
+        self.assertEqual(process.returncode, 0, output.decode() + errors.decode())
+        for port in ports:
+            with socket.socket() as competitor:
+                competitor.bind(("127.0.0.1", port))
+
+    def test_kept_ports_stay_reserved_until_the_fixture_owner_exits(self):
+        source = (REPO / "integration/serve_kept.sh").read_text()
+        start = source.index('\n', source.index('|| fail "approve fixture client"')) + 1
+        allocation = source[start:source.index("CONTROL_PORT=", start)]
+        with tempfile.TemporaryDirectory(prefix="m-served-ports-") as temporary:
+            root = Path(temporary)
+            copy_entry_helpers(root)
+            entry = root / "serve_kept.sh"
+            entry.write_text('#!/bin/bash\nsource "$(dirname -- "$0")/helpers/isolate.sh" || exit 1\n'
+                             + allocation + '\nprintf "%s " "${PORTS[@]}"; printf "\\n"\nread -r _ || :\n')
+            self.check_entry(entry)
 
 
 class IsolationBoundaryTest(unittest.TestCase):
