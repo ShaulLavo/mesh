@@ -121,32 +121,7 @@ ORIGIN_ID=$(identity_id "$ORIGIN_STATE/identity.key") || fail "derive origin ide
 
 CLIENT_ID=$(env MESH_STATE_DIR="$CLIENT_STATE" "$MESH_INTEGRATION" device identity --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])') || fail "create fixture client"
 env MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_INTEGRATION" device approve --allow-root -- "$CLIENT_ID" >/dev/null || fail "approve fixture client"
-mapfile -t PORTS < <(python3 - "$$" 9 <<'PY'
-import socket, sys
-
-# Each concurrent script searches its own band; binding confirms the port is
-# free of anything else.
-wanted = int(sys.argv[2])
-base = 20000 + (int(sys.argv[1]) % 900) * 16
-found, held = [], []
-for offset in range(16 * 900):
-    port = 20000 + (base - 20000 + offset) % (16 * 900)
-    listener = socket.socket()
-    try:
-        listener.bind(("127.0.0.1", port))
-    except OSError:
-        listener.close()
-        continue
-    held.append(listener)
-    found.append(port)
-    if len(found) == wanted:
-        break
-for port in found:
-    print(port)
-for listener in held:
-    listener.close()
-PY
-)
+read -ra PORTS <<<"${MESH_INTEGRATION_PORTS:?fixture owner did not reserve ports}"
 [ "${#PORTS[@]}" -eq 9 ] || fail "allocate fixture ports"
 CONTROL_PORT=${PORTS[0]}
 WEB=${PORTS[1]} WEB_UP=${PORTS[2]} API=${PORTS[3]} API_UP=${PORTS[4]}
@@ -243,7 +218,8 @@ server_running || fail "the session stopped under an open WebSocket"
 route_in_state /dev 'running (1 conn)' || fail "the WebSocket is not counted: $(serve_row /dev)"
 kill "$websocket"
 wait_until 50 server_stopped || fail "the session did not stop after the WebSocket closed"
-tcp_accepts "$WEB" && tcp_accepts "$API" || fail "listeners closed when the route stopped"
+tcp_accepts "$WEB" || fail "listeners closed when the route stopped"
+tcp_accepts "$API" || fail "listeners closed when the route stopped"
 
 # --- A daemon restart keeps the session and restarts the idle clock. -------
 hold_connection "$TEST_ROOT/c.ready" http 127.0.0.1 "$WEB"
@@ -297,6 +273,7 @@ route_in_state ":$BROKEN" failed || fail "failed route is not failed: $(serve_ro
 python3 -c '
 import socket, sys, time
 listener = socket.socket()
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 listener.bind(("127.0.0.1", int(sys.argv[1])))
 listener.listen()
 time.sleep(60)

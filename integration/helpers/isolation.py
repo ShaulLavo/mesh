@@ -7,6 +7,7 @@ from pathlib import Path
 import pwd
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -47,6 +48,11 @@ def check_environment():
     refuse_live_paths({name: os.environ.get(name) for name in ("TMPDIR", "TEMP", "TMP", "MESH_SHORT_TMP")}, parents=False)
     if not all(paths.values()):
         raise RuntimeError("integration isolation requires explicit MESH_STATE_DIR and MESH_CONFIG_DIR")
+
+
+# These entries need fixed ports before delayed commands and daemon restarts bind them.
+SERVED_PORT_COUNTS = {"serve_kept.sh": 5, "serve_on_demand.sh": 9,
+                      "serve_cli.sh": 2, "serving_survives_restart.sh": 1, "private_tls_distribution.sh": 1}
 
 
 TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
@@ -171,6 +177,19 @@ def prepare_isolation(owner):
     # The bus is needed to prove scope ownership, but is never a Mesh path.
     if "DBUS_SESSION_BUS_ADDRESS" not in environment and caller.get("XDG_RUNTIME_DIR"):
         environment["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + os.path.join(caller["XDG_RUNTIME_DIR"], "bus")
+    owner.port_reservations = []
+    ports = []
+    for _ in range(SERVED_PORT_COUNTS.get(Path(spec["script"]).name, 0)):
+        reservation = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        owner.port_reservations.append(reservation)
+        # Keep automatic allocation off both families without accepting traffic.
+        # Explicit SO_REUSEADDR listeners can start and restart until this owner exits.
+        reservation.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        reservation.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        reservation.bind(("::", 0))
+        ports.append(str(reservation.getsockname()[1]))
+    if ports:
+        environment["MESH_INTEGRATION_PORTS"] = " ".join(ports)
     return [spec["bash"], spec["script"], *spec.get("arguments", ())], environment
 
 

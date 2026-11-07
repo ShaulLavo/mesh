@@ -354,6 +354,27 @@ The before-fix 40-byte TMPDIR failed both assertions, and the repaired fixtures
 pass normal, middle-length, long and symlinked root cases with and without a
 short override.
 
+## Hosted smoke cleanup expiry, November 7, 2026
+
+- [ ] Revisit on genuine recurrence. [PR 382's hosted integration job](https://github.com/ShaulLavo/mesh/actions/runs/42322921979/job/128251455988) tested merge `22f63a12ef2902d8c69bc7461d043cf9a1d8eae0`. The real 60-second integration-owner budget expired during cleanup of the final two-session smoke case in `integration/bench_harness.sh`, not during its 14 unit tests, which passed in 0.440 seconds. The smoke actor signaled its second daemon at 01:42:13.653501 UTC; the integration owner committed to timeout status 124 at 01:42:15.218746 UTC. The actor later reported both sessions measured and cleaned. The shell's following JSON assertions are not proven to have executed in that failed run.
+- Two bounded controls through the actual verifier passed on current main `c3f2a910` and the exact failed merge. Both retained the 60-second owner budget, original nested deadlines, full smoke assertions and teardown. The changed shared port owner creates no reservations for this entry. These warm-PC controls do not recreate hosted concurrency or identify the original wait. Evidence and the rerunnable `focused.py` are in `execution/001/bench-harness-timeout` under the November 6 Mesh audit report.
+- The independent source review has no findings. Managing accepted non-reproduction under the same rule as PRs 357 and 373. No timeout increase, workload reduction, speculative patch or further capture is commissioned. Require a normal green run on reviewed source before merge. If the expiry recurs, retain phase timings from build, workload and cleanup, owner event timestamps, concurrent jobs, and the actual blocked operation before choosing a repair.
+
+## Hosted-runner timing cluster
+
+- [ ] On genuine recurrence, compare the three timing-sensitive observations together before treating them as unrelated product failures: PR 373's passing 120.19-second cancellation subtest and 300-second package expiry, PR 357's `SQLITE_BUSY` around the 150 ms SQLite and 200 ms caller bounds, and PR 382's final smoke cleanup expiry under its 60-second owner budget. The first is recorded in [session boundaries](11-session-contract-and-boundaries.md); the catalog [failed job](https://github.com/ShaulLavo/mesh/actions/runs/42308346876/job/128203547693) and [non-reproducing hosted capture](https://github.com/ShaulLavo/mesh/actions/runs/42317710502/job/128234344868) preserve its evidence; the smoke record above links its failed job and both bounded controls.
+- Slow hosted filesystem barriers, disk contention and CPU starvation against tight internal budgets are hypotheses, not established causes. Compare actual hosted OS/toolchain, runner load, sibling jobs, build/cache state, time inside transaction/barrier/cleanup phases and scheduler waits. Distinguish a legitimate product operation exceeding its budget from a fixture or runner delay. Preserve the current bounds and assertions while collecting evidence; none of these non-reproducing cases justifies a broad retry campaign or a deadline change.
+
+The catalog member of this historical cluster has a confirmed product disposition.
+PR 398 merged at `a8bec4a9cd640fe176fcc9999a9d094f93b708be` with the approved
+advisory writer contract recorded below. Its normal required checks and actual
+main CI passed. PR 382's later Linux and macOS writer failures are genuine BUSY
+recurrences covered by that repair, not additional timing non-reproductions.
+The old 150 ms and 200 ms write bounds remain historical observations, not the
+current cache-write contract. The smoke cleanup non-reproduction above and
+PR 373's separate disposition remain unchanged. The original hosted lock holder,
+filesystem delay, and suggested shared runner causes remain unproved.
+
 ## Done when
 
 - Gates run in pre-commit and CI; the baseline is empty or every remaining entry has a reason.
