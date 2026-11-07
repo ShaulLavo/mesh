@@ -169,6 +169,7 @@ check_source_contract() {
   scripts/test-reserve-release.sh
   bash scripts/test-finalize-release.sh
   scripts/test-prepare-release-baselines.sh
+  python3 scripts/test-release-transition.py
 
   [[ -x integration/reboot_simulation.sh ]] || fail 'reboot_simulation.sh is not executable'
   contains scripts/verify.sh 'scripts/verify_runner.py'

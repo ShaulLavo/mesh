@@ -19,14 +19,18 @@ func TestTransitionFixtureCandidateRestartSavedRecovery(t *testing.T) {
 	}
 	const diagnostic = "candidate restart lost saved recovery session after candidate writes"
 	var assertion string
-	for line := range strings.SplitSeq(string(fixture), "\n") {
+	lines := strings.Split(string(fixture), "\n")
+	for index, line := range lines {
 		if !strings.Contains(line, diagnostic) {
 			continue
 		}
 		if assertion != "" {
 			t.Fatal("candidate restart saved-recovery assertion must be unique")
 		}
-		assertion = line
+		if index == 0 || !strings.HasPrefix(lines[index-1], `mesh "$candidate_binary" ls --daemon --all >`) {
+			t.Fatal("candidate restart saved-recovery producer must precede its assertion")
+		}
+		assertion = lines[index-1] + "\n" + line
 	}
 	if assertion == "" {
 		t.Fatal("candidate restart saved-recovery assertion is missing")
@@ -43,8 +47,8 @@ func TestTransitionFixtureCandidateRestartSavedRecovery(t *testing.T) {
 	}
 	for _, state := range []string{"present", "missing"} {
 		t.Run(state, func(t *testing.T) {
-			setup := "set -euo pipefail\nold_binary=$1\ncandidate_binary=$2\nsaved_session=0000\nmesh() { \"$@\"; }\nfail() { printf '%s\\n' \"$*\" >&2; exit 42; }\n"
-			command := exec.CommandContext(t.Context(), bash, "-c", setup+assertion, "fixture", old, candidate) //nolint:gosec // executes the checked-in assertion against private CLI fixtures
+			setup := "set -euo pipefail\nold_binary=$1\ncandidate_binary=$2\ntest_root=$3\nsaved_session=0000\nmesh() { \"$@\"; }\nfail() { printf '%s\\n' \"$*\" >&2; exit 42; }\n"
+			command := exec.CommandContext(t.Context(), bash, "-c", setup+assertion, "fixture", old, candidate, t.TempDir()) //nolint:gosec // executes the checked-in assertion against private CLI fixtures
 			command.Env = append(os.Environ(), "MESH_FIXTURE_SAVED="+state)
 			output, err := command.CombinedOutput()
 			if state == "present" && err != nil {
