@@ -402,7 +402,9 @@ func NewCommand(dependencies Dependencies) *Command {
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand(), app.appCommand())...)
 	device := deviceCommand()
 	device.AddCommand(app.deviceScopeCommand())
-	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), device, versionCommand())...)
+	updates := app.updateCommand()
+	updates.AddCommand(app.updateConfigurationCommand())
+	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), updates, device, versionCommand())...)
 	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand())
 	protectPrivacyErrors(root, &privacyEnabled)
 	protectAgentFlagErrors(root, app.agent)
@@ -1786,6 +1788,7 @@ func (a *application) daemonCommand() *cobra.Command {
 			}
 			return runManagedDaemon(cmd.Context(), meshdaemon.Config{
 				ConfigDir:              sharing.Directory,
+				ConfigurationWriter:    withFeedConfiguration,
 				FleetMembershipPath:    filepath.Join(sharing.Directory, "fleet.json"),
 				FleetShare:             sharing,
 				SSHSessionHandler:      a.dependencies.SSHSessionHandler,
