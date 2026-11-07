@@ -362,7 +362,7 @@ func (a *application) runUnserve(cmd *cobra.Command, route, hostID string, timeo
 			remaining = append(remaining, row.Service)
 		}
 	}
-	cacheCtx, cancelCache := context.WithTimeout(cmd.Context(), 200*time.Millisecond)
+	cacheCtx, cancelCache := context.WithTimeout(cmd.Context(), serviceCacheWriteTimeout)
 	cacheErr := cache.SaveServices(cacheCtx, selected.Host, selected.PrivateName, remaining)
 	cancelCache()
 	if cacheErr != nil {

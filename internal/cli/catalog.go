@@ -40,7 +40,7 @@ type CatalogCache interface {
 }
 
 const (
-	catalogCacheWriteTimeout = 200 * time.Millisecond
+	catalogCacheWriteTimeout = 6 * time.Second
 	catalogCacheReadTimeout  = 200 * time.Millisecond
 )
 

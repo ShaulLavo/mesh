@@ -40,7 +40,7 @@ func awaitCatalogCollection(t *testing.T, done <-chan catalogCollection) catalog
 }
 
 func TestCatalogDeadlineBoundsCacheSave(t *testing.T) {
-	for _, timeout := range []time.Duration{40 * time.Millisecond, 2 * time.Second} {
+	for _, timeout := range []time.Duration{40 * time.Millisecond, catalogCacheWriteTimeout + time.Second} {
 		t.Run(timeout.String(), func(t *testing.T) {
 			release := make(chan struct{})
 			finished := make(chan struct{})
@@ -62,7 +62,12 @@ func TestCatalogDeadlineBoundsCacheSave(t *testing.T) {
 					}, cache)
 				done <- catalogCollection{rows: rows, err: err}
 			}()
-			result := awaitCatalogCollection(t, done)
+			var result catalogCollection
+			select {
+			case result = <-done:
+			case <-time.After(min(timeout, catalogCacheWriteTimeout) + time.Second):
+				t.Fatal("catalog collection exceeded its query and cache write budgets")
+			}
 			if result.err != nil || len(result.rows) != 1 {
 				t.Fatalf("collection = %#v", result)
 			}

@@ -129,3 +129,41 @@ func TestCatalogWriteErrorsRemainVisible(t *testing.T) {
 	}
 	assertCatalogIntegrity(t, state)
 }
+
+func TestAgentSessionBusyCacheKeepsLiveObservation(t *testing.T) {
+	host := sessionCacheHost(t)
+	state := os.Getenv("MESH_STATE_DIR")
+	cache, err := OpenCatalogCache(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
+	old := sessionCacheRows(host, "old")
+	if err := cache.SaveObserved(t.Context(), host, old); err != nil {
+		t.Fatal(err)
+	}
+	before, err := cache.LoadObserved(t.Context(), host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readLog := captureCatalogCacheLog(t)
+	release := holdCatalogWriter(t, state)
+	next := sessionCacheRows(host, "live")
+	live, diagnostics := sessionCacheList(t, host, cacheLiveDial(host, next), 0, "--timeout=15s")
+	if len(diagnostics) != 0 || live.Freshness != "live" || len(live.Sessions) != len(next) {
+		t.Fatalf("busy cache affected agent live result: %#v, %v", live, diagnostics)
+	}
+	if output := readLog(); !strings.Contains(output, "catalog cache: skipped busy sessions write") {
+		t.Fatalf("missing agent skip log: %q", output)
+	}
+	after, err := cache.LoadObserved(t.Context(), host)
+	if err != nil || !reflect.DeepEqual(after, before) {
+		t.Fatalf("busy agent save changed offline rows: %#v, %v", after, err)
+	}
+	release()
+	sessionCacheList(t, host, cacheLiveDial(host, next), 0, "--timeout=15s")
+	offline, _ := sessionCacheList(t, host, cacheOffline, 3)
+	if !reflect.DeepEqual(offline.Sessions, live.Sessions) {
+		t.Fatalf("agent snapshot did not converge: %#v, want %#v", offline.Sessions, live.Sessions)
+	}
+}

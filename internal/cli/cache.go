@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"sync"
 	"time"
@@ -158,10 +159,7 @@ func (c *SQLiteCatalogCache) saveSessions(ctx context.Context, host HostRecord, 
 			observed[i].Facts = &facts
 		}
 	}
-	if err := c.store.ReconcileHost(ctx, cachedHost(host, c.now().UTC()), observed); err != nil {
-		return fmt.Errorf("save catalog sessions: %w", err)
-	}
-	return nil
+	return catalogWriteError(ctx, host, "sessions", c.store.ReconcileHost(ctx, cachedHost(host, c.now().UTC()), observed))
 }
 
 // LoadAllServices returns the bounded cached service snapshot keyed by host ID.
@@ -215,7 +213,7 @@ func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, 
 			Healthy: validated.Healthy, Problem: validated.Problem, ObservedAt: now,
 		}
 	}
-	return c.store.ReplaceCachedServices(ctx, cachedHost(host, now), services)
+	return catalogWriteError(ctx, host, "services", c.store.ReplaceCachedServices(ctx, cachedHost(host, now), services))
 }
 
 func cachedHost(host HostRecord, observedAt time.Time) storage.Host {
@@ -244,4 +242,18 @@ func cloneInt(value *int) *int {
 	}
 	copy := *value
 	return &copy
+}
+
+func catalogWriteError(ctx context.Context, host HostRecord, operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("save catalog %s: %w", operation, ctx.Err())
+	}
+	if errors.Is(err, storage.ErrAdvisoryWriteBusy) {
+		log.Printf("catalog cache: skipped busy %s write for host %q: %v", operation, host.ID, err)
+		return nil
+	}
+	return fmt.Errorf("save catalog %s: %w", operation, err)
 }

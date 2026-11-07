@@ -16,7 +16,7 @@ const (
 	maximumConcurrentServiceQueries = 16
 
 	maximumConcurrentCacheWrites = 4
-	serviceCacheWriteTimeout     = 200 * time.Millisecond
+	serviceCacheWriteTimeout     = catalogCacheWriteTimeout
 )
 
 type serviceQuery func(context.Context, HostRecord) (remoteServiceSnapshot, error)

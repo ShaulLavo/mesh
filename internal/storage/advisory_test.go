@@ -211,7 +211,53 @@ func TestAuthoritativeWriterContentionRemainsAnError(t *testing.T) {
 	t.Cleanup(func() { _, _ = holder.ExecContext(context.Background(), "ROLLBACK") })
 	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
 	defer cancel()
-	if err := store.ReconcileHost(ctx, testHost("host-authoritative"), nil); err == nil {
-		t.Fatal("authoritative writer contention returned success")
+	err = store.ReconcileHost(ctx, testHost("host-authoritative"), nil)
+	if err == nil || errors.Is(err, ErrAdvisoryWriteBusy) {
+		t.Fatalf("authoritative contention = %v, want a fatal storage error", err)
+	}
+}
+
+func TestAdvisoryCatalogWritesRestorePoolConnection(t *testing.T) {
+	store, err := OpenAdvisory(t.Context(), filepath.Join(t.TempDir(), "mesh.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	store.db.SetMaxOpenConns(2)
+	holder, err := store.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Close() })
+	if _, err := holder.ExecContext(t.Context(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = holder.ExecContext(context.Background(), "ROLLBACK") })
+	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+	defer cancel()
+	if err := store.ReconcileHost(ctx, testHost("host-advisory"), nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("canceled admission = %v", err)
+	}
+	assertCatalogPoolTimeout(t, store)
+	if _, err := holder.ExecContext(t.Context(), "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileHost(t.Context(), testHost("host-advisory"), nil); err != nil {
+		t.Fatal(err)
+	}
+	assertCatalogPoolTimeout(t, store)
+}
+
+func assertCatalogPoolTimeout(t *testing.T, store *Store) {
+	t.Helper()
+	if inUse := store.db.Stats().InUse; inUse != 1 {
+		t.Fatalf("connections in use = %d, want only the holder", inUse)
+	}
+	var timeout int
+	if err := store.db.QueryRowContext(t.Context(), "PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatal(err)
+	}
+	if timeout != 5000 {
+		t.Fatalf("reused connection busy timeout = %d, want 5000", timeout)
 	}
 }

@@ -9,7 +9,9 @@ import (
 	"io/fs"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
@@ -23,7 +25,7 @@ import (
 const (
 	sqliteDriver           = "sqlite"
 	sqliteBusyTimeout      = "5000"
-	sqliteCacheBusyTimeout = "150"
+	sqliteCacheBusyTimeout = 5 * time.Second
 	sqliteMaxOpenConns     = 4
 )
 
@@ -31,11 +33,16 @@ const (
 // Authoritative opens still return the original migration error.
 var ErrAdvisoryMigrationUnavailable = errors.New("advisory cache migration unavailable")
 
+// ErrAdvisoryWriteBusy identifies a cache transaction that could not acquire its
+// writer lock. No transaction began, so callers may skip this observation.
+var ErrAdvisoryWriteBusy = errors.New("advisory cache writer busy")
+
 // Store owns one SQLite connection pool. Close it when the daemon stops.
 type Store struct {
-	db      *sql.DB
-	queries *dbsqlc.Queries
-	path    string
+	db       *sql.DB
+	queries  *dbsqlc.Queries
+	path     string
+	advisory bool
 
 	closeOnce sync.Once
 	closeErr  error
@@ -48,9 +55,9 @@ func Open(ctx context.Context, databasePath string) (*Store, error) {
 }
 
 // OpenAdvisory skips migration lock contention without delaying authoritative work.
-// After migrations, every pooled connection gets a short bounded write timeout.
+// After migrations, every pooled connection gets a five-second writer budget.
 func OpenAdvisory(ctx context.Context, databasePath string) (*Store, error) {
-	return open(ctx, databasePath, sqliteCacheBusyTimeout, "0", true)
+	return open(ctx, databasePath, strconv.FormatInt(sqliteCacheBusyTimeout.Milliseconds(), 10), "0", true)
 }
 
 func open(ctx context.Context, databasePath, busyTimeout, migrationBusyTimeout string, advisory bool) (*Store, error) {
@@ -78,7 +85,7 @@ func open(ctx context.Context, databasePath, busyTimeout, migrationBusyTimeout s
 			return nil, err
 		}
 	}
-	return &Store{db: db, queries: dbsqlc.New(db), path: databasePath}, nil
+	return &Store{db: db, queries: dbsqlc.New(db), path: databasePath, advisory: advisory}, nil
 }
 
 func reopen(ctx context.Context, migrationDB *sql.DB, databasePath, busyTimeout string) (*sql.DB, error) {
@@ -89,6 +96,8 @@ func reopen(ctx context.Context, migrationDB *sql.DB, databasePath, busyTimeout 
 	if err != nil {
 		return nil, err
 	}
+	// Isolation levels do not select SQLite's BEGIN mode in modernc.
+	dsn += "&_txlock=immediate"
 	db, err := sql.Open(sqliteDriver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("storage: reopen %s: %w", databasePath, err)
@@ -279,10 +288,11 @@ func (s *Store) ReconcileHost(ctx context.Context, host Host, observed []Observe
 		}
 	}
 
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	tx, release, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return fmt.Errorf("storage: reconcile host %s: begin transaction: %w", hostID, err)
 	}
+	defer release()
 	defer tx.Rollback() //nolint:errcheck // commit decides the transaction outcome
 	queries := s.queries.WithTx(tx)
 	if _, err := queries.UpsertHost(ctx, hostValues); err != nil {
