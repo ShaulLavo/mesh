@@ -115,7 +115,7 @@ func TestAuthorityRejectsReplayWrongIdentityAndUnauthorizedActors(t *testing.T) 
 	if _, err := callAuthority(&authority, request); err == nil {
 		t.Fatal("unauthorized actor got challenge")
 	}
-	if err := Trust(authority.StateDir, actor, true); err != nil {
+	if err := Trust(t.Context(), authority.StateDir, actor, true); err != nil {
 		t.Fatal(err)
 	}
 	response, err := callAuthority(&authority, request)
@@ -143,7 +143,7 @@ func TestAuthorityRejectsReplayWrongIdentityAndUnauthorizedActors(t *testing.T) 
 	if _, err = callAuthority(&authority, request); err == nil {
 		t.Fatal("accepted another target's signature")
 	}
-	if err = Trust(authority.StateDir, id, true); err == nil {
+	if err = Trust(t.Context(), authority.StateDir, id, true); err == nil {
 		t.Fatal("bootstrap replaced existing administrator policy")
 	}
 }

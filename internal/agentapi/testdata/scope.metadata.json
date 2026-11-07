@@ -1,0 +1,29 @@
+{
+  "subject": {
+    "targetId": "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+    "principal": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "class": "scoped",
+    "permissions": [
+      "metadata"
+    ],
+    "expiresAt": "2026-11-08T00:00:00Z"
+  },
+  "section": "sessions",
+  "observedAt": "2026-11-07T00:00:00Z",
+  "freshness": "live",
+  "snapshot": "non-atomic",
+  "host": null,
+  "sessions": [
+    {
+      "id": "7K3D",
+      "hostId": "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE",
+      "state": "detached",
+      "createdAt": "2026-11-06T00:00:00Z",
+      "lastAttachedAt": null,
+      "detachedAt": null,
+      "exitCode": null
+    }
+  ],
+  "services": [],
+  "nextPage": null
+}

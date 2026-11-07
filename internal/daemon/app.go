@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/fleetshare"
@@ -533,7 +534,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 			sessionHandler = cfg.SSHSessionHandler(stateDir)
 		}
 		for _, address := range sshAddrs {
-			listener.sshConfigs = append(listener.sshConfigs, sshd.Config{
+			listener.sshConfigs = append(listener.sshConfigs, sshd.Config{ScopeMembership: func(id string) (bool, error) { return access.Registered(stateDir, access.Subject(id)) },
 				Handler:        sessionHandler,
 				Services:       serviceRegistry,
 				HostKey:        meshPrivateKey,

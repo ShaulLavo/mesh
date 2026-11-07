@@ -22,7 +22,9 @@ Approval and revocation run on the destination, through trusted system SSH or it
 
 ## What revocation does
 
-Grant changes publish the policy atomically under a writer lock. Frame admission reads the published policy without taking that lock, so a published revocation denies new work. Work admitted earlier can finish. Connections bind the incarnation of the approved key line, so revoking and immediately reapproving a key retires the old attachments and permits new ones. Idle SSH and control connections close when the next 250 ms grant check sees the revocation.
+Grant readers use published policy snapshots, connections stay bound to their grant incarnation, and an idle watcher retires connections after it observes revocation. Work admitted earlier can finish. Revoking and immediately reapproving a key retires old attachments and permits new connections. The nominal 250 ms polling interval is not a real-time deadline.
+
+A [dedicated scoped key](../guides/scoped-access.md) can read only the target's narrow host, session and service metadata. It has no terminal output, execution or SSH access. Full-device approval remains account-level control.
 
 Persistent sessions and their detached workers stay available to other approved devices. A `mesh ssh` command ends when its device grant is revoked, because that command is tied to its connection.
 

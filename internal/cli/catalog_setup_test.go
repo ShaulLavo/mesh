@@ -97,7 +97,7 @@ func nativeCatalogHostWithSessions(t *testing.T, setupDelay, replyDelay time.Dur
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(state, client.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, client.ID); err != nil {
 		t.Fatal(err)
 	}
 	if ended {

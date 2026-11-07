@@ -1280,6 +1280,7 @@ COMMANDS
   approve-fleet HOST… [--flags]  Approve this device on explicitly selected pinned hosts using system SSH
   identity [--flags]             Show this device's Mesh key and daemon account
   revoke ID                      Remove a device's session, service and SSH grant
+  scope [command] [--flags]      Manage dedicated metadata-only TLS identities
 
 FLAGS
 
@@ -1380,6 +1381,131 @@ FLAGS
   -h --help    Help for revoke
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh device scope
+
+```text
+Manage dedicated metadata-only TLS identities
+
+USAGE
+
+  mesh device scope [command] [--flags]
+
+COMMANDS
+
+  grant [--flags]   Grant metadata access locally at an expected policy revision
+  keygen [--flags]  Create or load a key in an explicit private directory
+  list [--flags]    Read this target's scope policy without contacting a daemon
+  read [--flags]    Read one metadata page using only an explicit key and direct TLS
+  revoke [--flags]  Remove a scoped identity locally at an expected revision
+
+FLAGS
+
+  -h --help         Help for scope
+  --json            Write one agent result
+  --leave-key       Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy         Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh device scope grant
+
+```text
+Grant metadata access locally at an expected policy revision
+
+USAGE
+
+  mesh device scope grant [--flags]
+
+FLAGS
+
+  --expected-revision  Current local scope policy revision
+  --expires-at         Absolute RFC3339 expiry on this target
+  --expires-in         Target-Clock lifetime, at most seven days (24h0m0s)
+  -h --help            Help for grant
+  --identity           Dedicated public identity
+  --json               Write one agent result
+  --leave-key          Key that leaves all nested sessions, or none (ctrl+^)
+  --permissions        Metadata only; no terminal or output access
+  --privacy            Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh device scope keygen
+
+```text
+Create or load a key in an explicit private directory
+
+USAGE
+
+  mesh device scope keygen [--flags]
+
+FLAGS
+
+  -h --help    Help for keygen
+  --json       Write one agent result
+  --key-dir    Dedicated credential directory; never the normal Mesh key
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh device scope list
+
+```text
+Read this target's scope policy without contacting a daemon
+
+USAGE
+
+  mesh device scope list [--flags]
+
+FLAGS
+
+  -h --help    Help for list
+  --json       Write one agent result
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh device scope read
+
+```text
+Read one metadata page using only an explicit key and direct TLS
+
+USAGE
+
+  mesh device scope read [--flags]
+
+FLAGS
+
+  --cursor     Continuation from this credential and section
+  -h --help    Help for read
+  --host       Exact saved host ID with an existing destination pin
+  --json       Write one agent result
+  --key-dir    Explicit dedicated credential directory
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --limit      Page size from 1 to 500; default 100
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --section    Host, sessions or services (host)
+  --session    Exact session ID for the sessions section
+  --timeout    Hard deadline from 100ms to 60s (5s)
+```
+
+## mesh device scope revoke
+
+```text
+Remove a scoped identity locally at an expected revision
+
+USAGE
+
+  mesh device scope revoke [--flags]
+
+FLAGS
+
+  --expected-revision  Current local scope policy revision
+  -h --help            Help for revoke
+  --identity           Scoped public identity to remove
+  --json               Write one agent result
+  --leave-key          Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy            Mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh private-names

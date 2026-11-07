@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/shaul/mesh/internal/access"
 	"io"
 	"math/big"
 	"net"
@@ -40,32 +41,59 @@ type Authentication struct {
 	ExpectedIdentity string
 	Authorize        func(string) bool
 	Bind             func(string) Authorization
-	AllowUpdateOnly  bool
+	Admission        Admission
+}
+
+// Admission is a closed client acceptance set. Its zero value is full-only.
+type Admission uint8
+
+const (
+	FullAdmission Admission = iota
+	SignedUpdateAdmission
+	ScopedAdmission
+)
+
+func (a Admission) accepts(class byte) bool {
+	switch a {
+	case FullAdmission:
+		return class == 1
+	case SignedUpdateAdmission:
+		return class == 1 || class == 2
+	case ScopedAdmission:
+		return class == 3
+	default:
+		return false
+	}
 }
 
 // Authorization binds a socket to its original grant and its permitted frames.
 // Separate updater authority cannot keep a revoked terminal attachment alive.
 type Authorization struct {
-	Full    bool
+	Class   access.Class
+	Scoped  access.Binding
 	Current func() bool
 	Admit   func(protocol.Frame) bool
 }
 
 func (a Authorization) Allows(frame protocol.Frame) bool {
-	return a.Current != nil && a.Current() && (a.Admit == nil || a.Admit(frame))
+	return a.Class != access.Unauthenticated && a.Current != nil && a.Current() && (a.Class != access.Scoped || a.Admit != nil) && (a.Admit == nil || a.Admit(frame))
 }
 
 func (a *Authentication) bind(id string) Authorization {
 	if a.Bind != nil {
 		return a.Bind(id)
 	}
-	return Authorization{Full: true, Current: func() bool { return a.Authorize(id) }}
+	return Authorization{Class: access.FullDevice, Current: func() bool { return a.Authorize(id) }}
 }
 
 type AuthenticatedPeer struct {
 	Identity string
 	grant    Authorization
 }
+
+func (p AuthenticatedPeer) Class() access.Class     { return p.grant.Class }
+func (p AuthenticatedPeer) Binding() access.Binding { return p.grant.Scoped }
+
 type peerKey struct{}
 
 func Peer(ctx context.Context) (AuthenticatedPeer, bool) {
@@ -231,9 +259,18 @@ func confirmAuthentication(secure *tls.Conn, auth *Authentication, server bool, 
 		if peer.grant.Current == nil || !peer.grant.Current() {
 			return errors.New("transport: device grant removed during authentication")
 		}
-		acceptance := byte(1)
-		if !peer.grant.Full {
+		var acceptance byte
+		switch peer.grant.Class {
+		case access.FullDevice:
+			acceptance = 1
+		case access.UpdateCarrier:
 			acceptance = 2
+		case access.Scoped:
+			acceptance = 3
+		case access.Unauthenticated, access.LocalAccount:
+			return errors.New("transport: missing connection class")
+		default:
+			return errors.New("transport: invalid connection class")
 		}
 		if _, err := secure.Write([]byte{acceptance}); err != nil {
 			return fmt.Errorf("confirm approved Mesh peer: %w", err)
@@ -244,12 +281,13 @@ func confirmAuthentication(secure *tls.Conn, auth *Authentication, server bool, 
 	if _, err := io.ReadFull(secure, accepted[:]); err != nil {
 		return fmt.Errorf("read Mesh peer acceptance: %w", err)
 	}
-	if accepted[0] == 2 && !auth.AllowUpdateOnly {
+	if accepted[0] == 2 && auth.Admission == FullAdmission {
 		return errors.New("transport: device has signed-update access; full device approval required")
 	}
-	if accepted[0] != 1 && accepted[0] != 2 {
-		return errors.New("transport: invalid Mesh peer acceptance")
+	if !auth.Admission.accepts(accepted[0]) {
+		return errors.New("transport: destination did not accept the requested access class")
 	}
+
 	return nil
 }
 

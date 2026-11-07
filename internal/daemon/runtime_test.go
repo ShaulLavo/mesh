@@ -341,7 +341,7 @@ func TestServeWebSocketUsesExactAddressAndPath(t *testing.T) {
 
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), runtimeTestTimeout)
 	defer dialCancel()
-	client, err := transport.Dial(dialCtx, fmt.Sprintf("ws://127.0.0.1:%d/mesh", port), runtimeDialOptions(t, stateDir))
+	client, err := transport.Dial(dialCtx, fmt.Sprintf("ws://127.0.0.1:%d/mesh", port), runtimeDialOptions(dialCtx, t, stateDir))
 	if err != nil {
 		t.Fatal(err)
 	}

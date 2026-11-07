@@ -2,6 +2,7 @@ package identity
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shaul/mesh/internal/access"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -82,6 +84,25 @@ func GrantedIdentity(stateDir, id string) bool {
 	return err == nil && Granted(filepath.Join(stateDir, "authorized_keys"), key)
 }
 
+func DeviceMembership(stateDir, id string) (bool, error) {
+	if _, err := IdentityKey(id); err != nil {
+		return false, err
+	}
+	grants, err := DeviceGrants(filepath.Join(stateDir, "authorized_keys"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, grant := range grants {
+		if grant.Identity == id {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func IdentityKey(id string) (ed25519.PublicKey, error) {
 	key, err := base64.RawURLEncoding.DecodeString(id)
 	if err != nil || len(key) != ed25519.PublicKeySize || base64.RawURLEncoding.EncodeToString(key) != id {
@@ -123,25 +144,38 @@ func parseDeviceGrants(contents []byte) ([]DeviceGrant, error) {
 	return grants, nil
 }
 
-func ApproveDevice(stateDir, id string) error {
-	_, err := changeDevice(stateDir, id, true)
+func ApproveDevice(ctx context.Context, stateDir, id string) error {
+	_, err := changeDevice(ctx, stateDir, id, true)
 	return err
 }
 
-func ApproveDeviceChanged(stateDir, id string) (bool, error) {
-	return changeDevice(stateDir, id, true)
+func ApproveDeviceChanged(ctx context.Context, stateDir, id string) (bool, error) {
+	return changeDevice(ctx, stateDir, id, true)
 }
 
-func RevokeDevice(stateDir, id string) error {
-	_, err := changeDevice(stateDir, id, false)
+func RevokeDevice(ctx context.Context, stateDir, id string) error {
+	_, err := changeDevice(ctx, stateDir, id, false)
 	return err
 }
 
-func changeDevice(stateDir, id string, approve bool) (bool, error) {
-	return changeDeviceWithPublisher(stateDir, id, approve, publishGrants)
+func changeDevice(ctx context.Context, stateDir, id string, approve bool) (bool, error) {
+	return changeDeviceWithPublisher(ctx, stateDir, id, approve, publishGrants)
 }
 
-func changeDeviceWithPublisher(stateDir, id string, approve bool, publish func(string, string, []byte) error) (bool, error) {
+func changeDeviceWithPublisher(ctx context.Context, stateDir, id string, approve bool, publish func(string, string, []byte) error) (bool, error) {
+	var changed bool
+	err := access.WithClassWriter(ctx, stateDir, 250*time.Millisecond, func(ctx context.Context) error {
+		var err error
+		changed, err = changeDeviceOwned(ctx, stateDir, id, approve, publish)
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("identity: change device grant: %w", err)
+	}
+	return changed, nil
+}
+
+func changeDeviceOwned(ctx context.Context, stateDir, id string, approve bool, publish func(string, string, []byte) error) (bool, error) {
 	public, err := IdentityKey(id)
 	if err != nil {
 		return false, err
@@ -150,11 +184,23 @@ func changeDeviceWithPublisher(stateDir, id string, approve bool, publish func(s
 	if err != nil {
 		return false, fmt.Errorf("identity: encode device key: %w", err)
 	}
-	lock, err := openGrantWriter(stateDir)
+	lock, err := openGrantWriterContext(ctx, stateDir)
 	if err != nil {
 		return false, err
 	}
-	defer lock.Close() //nolint:errcheck // closing releases exclusive policy ownership
+	defer func() { _ = lock.Close() }()
+	if approve {
+		registered, err := access.Registered(stateDir, access.Subject(id))
+		if err != nil {
+			return false, fmt.Errorf("identity: inspect scoped registration: %w", err)
+		}
+		if registered {
+			return false, errors.New("identity: registered scoped identity cannot receive a full grant")
+		}
+	}
+	return changeDevicePublished(stateDir, key, approve, lock, publish)
+}
+func changeDevicePublished(stateDir string, key ssh.PublicKey, approve bool, lock *os.File, publish func(string, string, []byte) error) (bool, error) {
 	path := filepath.Join(stateDir, "authorized_keys")
 	contents, err := ReadAuthorizedKeys(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -179,19 +225,19 @@ func changeDeviceWithPublisher(stateDir, id string, approve bool, publish func(s
 	return changed, nil
 }
 
-func openGrantWriter(stateDir string) (*os.File, error) {
+func openGrantWriterContext(ctx context.Context, stateDir string) (*os.File, error) {
 	lock, err := os.OpenFile(filepath.Join(stateDir, "device-grants.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600) //nolint:gosec // fixed policy lock; reject symlinks and special files before locking
 	if err != nil {
 		return nil, fmt.Errorf("identity: open grants lock: %w", err)
 	}
-	if err := validateGrantWriter(lock); err != nil {
+	if err := validateGrantWriter(ctx, lock); err != nil {
 		_ = lock.Close()
 		return nil, err
 	}
 	return lock, nil
 }
 
-func validateGrantWriter(lock *os.File) error {
+func validateGrantWriter(ctx context.Context, lock *os.File) error {
 	info, err := lock.Stat()
 	if err != nil {
 		return fmt.Errorf("identity: inspect grants lock: %w", err)
@@ -199,25 +245,10 @@ func validateGrantWriter(lock *os.File) error {
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
 		return errors.New("identity: grants lock must be a regular file with safe permissions")
 	}
-	return lockGrantWriter(lock)
-}
-
-// Only mutations contend. Published-snapshot readers never wait for this lock.
-func lockGrantWriter(file *os.File) error {
-	deadline := time.Now().Add(250 * time.Millisecond)
-	for {
-		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
-			return fmt.Errorf("identity: lock grants: %w", err)
-		}
-		if !time.Now().Before(deadline) {
-			return fmt.Errorf("identity: grants writer contention exceeded 250ms: %w", err)
-		}
-		time.Sleep(5 * time.Millisecond)
+	if err := access.WaitWriter(ctx, lock); err != nil {
+		return fmt.Errorf("identity: acquire grant writer: %w", err)
 	}
+	return nil
 }
 
 func existingGrant(contents []byte, key ssh.PublicKey) (bool, error) {
@@ -346,6 +377,10 @@ func ReadAuthorizedKeys(path string) ([]byte, error) {
 	}
 	if !opened.Mode().IsRegular() {
 		return nil, fmt.Errorf("identity: authorized_keys %s is not a regular file", path)
+	}
+	stat, ok := opened.Sys().(*syscall.Stat_t)
+	if !ok || int64(stat.Uid) != int64(os.Geteuid()) || stat.Nlink != 1 {
+		return nil, errors.New("identity: authorized_keys must be owned with one link")
 	}
 	permissions := opened.Mode().Perm()
 	if permissions&0o022 != 0 {

@@ -24,7 +24,7 @@ func TestGrantReceiptProcess(t *testing.T) {
 		publications++
 		return grantProcessPublication(state, path, next, mode)
 	}
-	changed, err := changeDeviceWithPublisher(state, id, mode != "revoke", publisher)
+	changed, err := changeDeviceWithPublisher(t.Context(), state, id, mode != "revoke", publisher)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func runGrantProcess(t *testing.T, state, id, mode string) string {
 
 func TestGrantAcknowledgementSurvivesFreshProcess(t *testing.T) {
 	state, id := t.TempDir(), grantActor(t)
-	if err := ApproveDevice(state, id); err != nil {
+	if err := ApproveDevice(t.Context(), state, id); err != nil {
 		t.Fatal(err)
 	}
 	pinGrantPolicy(t, state)
@@ -97,7 +97,7 @@ func TestGrantAcknowledgementSurvivesFreshProcess(t *testing.T) {
 	}
 	other := grantActor(t)
 	runGrantProcess(t, state, other, "approve")
-	if changed, err := ApproveDeviceChanged(state, id); changed || err != nil {
+	if changed, err := ApproveDeviceChanged(t.Context(), state, id); changed || err != nil {
 		t.Fatalf("after intervening writer: changed=%v, error=%v", changed, err)
 	}
 	if !GrantedIdentity(state, other) {
@@ -111,7 +111,7 @@ func TestGrantAcknowledgementSurvivesFreshProcess(t *testing.T) {
 	if bound() {
 		t.Fatal("intervening process revocation ignored")
 	}
-	if changed, err := ApproveDeviceChanged(state, id); !changed || err != nil {
+	if changed, err := ApproveDeviceChanged(t.Context(), state, id); !changed || err != nil {
 		t.Fatalf("reapproval: changed=%v, error=%v", changed, err)
 	}
 	if bound() || !GrantedIdentity(state, other) {
@@ -133,7 +133,7 @@ func TestGrantInterruptedPublicationNeedsIndependentPublication(t *testing.T) {
 func checkGrantInterruptedPublication(t *testing.T, phase string) {
 	t.Helper()
 	state, id := t.TempDir(), grantActor(t)
-	if err := ApproveDevice(state, id); err != nil {
+	if err := ApproveDevice(t.Context(), state, id); err != nil {
 		t.Fatal(err)
 	}
 	other := grantActor(t)

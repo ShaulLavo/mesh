@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -64,7 +65,7 @@ func deviceIdentityCommand() *cobra.Command {
 }
 
 func deviceGrantCommand(approve bool) *cobra.Command {
-	name, description := "revoke", "Remove a device's session, service and SSH grant"
+	name, description := deviceRevokeVerb, "Remove a device's session, service and SSH grant"
 	if approve {
 		name, description = "approve", "Grant a device this daemon account's control and SSH access"
 	}
@@ -82,7 +83,7 @@ func deviceGrantCommand(approve bool) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			changed, err := changeDeviceGrant(stateDir, id, approve)
+			changed, err := changeDeviceGrant(cmd.Context(), stateDir, id, approve)
 			if err != nil {
 				return fmt.Errorf("device command: %w", err)
 			}
@@ -99,15 +100,15 @@ func deviceGrantCommand(approve bool) *cobra.Command {
 	return command
 }
 
-func changeDeviceGrant(stateDir, id string, approve bool) (bool, error) {
+func changeDeviceGrant(ctx context.Context, stateDir, id string, approve bool) (bool, error) {
 	if approve {
-		changed, err := identity.ApproveDeviceChanged(stateDir, id)
+		changed, err := identity.ApproveDeviceChanged(ctx, stateDir, id)
 		if err != nil {
 			return false, fmt.Errorf("approve device grant: %w", err)
 		}
 		return changed, nil
 	}
-	if err := identity.RevokeDevice(stateDir, id); err != nil {
+	if err := identity.RevokeDevice(ctx, stateDir, id); err != nil {
 		return false, fmt.Errorf("revoke device grant: %w", err)
 	}
 	return false, nil

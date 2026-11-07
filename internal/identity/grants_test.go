@@ -22,7 +22,7 @@ func TestDeviceGrantMutationPreservesKeysAndComments(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{first.ID, second.ID, first.ID} {
-		if err := ApproveDevice(directory, id); err != nil {
+		if err := ApproveDevice(t.Context(), directory, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -33,7 +33,7 @@ func TestDeviceGrantMutationPreservesKeysAndComments(t *testing.T) {
 	if !GrantedIdentity(directory, first.ID) || !GrantedIdentity(directory, second.ID) {
 		t.Fatal("approved key denied")
 	}
-	if err := RevokeDevice(directory, first.ID); err != nil {
+	if err := RevokeDevice(t.Context(), directory, first.ID); err != nil {
 		t.Fatal(err)
 	}
 	if GrantedIdentity(directory, first.ID) || !GrantedIdentity(directory, second.ID) {
@@ -55,7 +55,7 @@ func TestDeviceGrantsFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
-	if err := ApproveDevice(directory, host.ID); err != nil {
+	if err := ApproveDevice(t.Context(), directory, host.ID); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(directory, "authorized_keys")
@@ -104,7 +104,7 @@ func TestGrantIncarnationSurvivesIdempotentApprovalAndOtherDeviceMutation(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ApproveDevice(state, first.ID); err != nil {
+	if err := ApproveDevice(t.Context(), state, first.ID); err != nil {
 		t.Fatal(err)
 	}
 	prior, ok := BindIdentity(state, first.ID)
@@ -112,20 +112,20 @@ func TestGrantIncarnationSurvivesIdempotentApprovalAndOtherDeviceMutation(t *tes
 		t.Fatal("approved grant did not bind")
 	}
 	for _, id := range []string{first.ID, second.ID} {
-		if err := ApproveDevice(state, id); err != nil {
+		if err := ApproveDevice(t.Context(), state, id); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := RevokeDevice(state, second.ID); err != nil {
+	if err := RevokeDevice(t.Context(), state, second.ID); err != nil {
 		t.Fatal(err)
 	}
 	if !prior() {
 		t.Fatal("idempotent approval or another device mutation retired original grant")
 	}
-	if err := RevokeDevice(state, first.ID); err != nil {
+	if err := RevokeDevice(t.Context(), state, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := ApproveDevice(state, first.ID); err != nil {
+	if err := ApproveDevice(t.Context(), state, first.ID); err != nil {
 		t.Fatal(err)
 	}
 	if prior() {

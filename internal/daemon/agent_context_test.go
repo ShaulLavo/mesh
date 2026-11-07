@@ -42,7 +42,7 @@ func TestAgentContextDispatchNeverTouchesWorkersOrServices(t *testing.T) {
 	server.context = &agentContextController{configDir: config, stateDir: state, hostID: "host-a", trusted: func(string) bool { return true }}
 	client := newServerTestConn()
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(t.Context(), client) }()
+	go func() { done <- server.Handle(localServerContext(t.Context()), client) }()
 	for _, full := range []bool{false, true} {
 		checkContextDispatch(t, client, full)
 	}
