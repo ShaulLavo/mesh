@@ -16,16 +16,17 @@ type DashboardFunc func(context.Context, DashboardInput) error
 type DashboardWatch func(context.Context, func(DashboardHostView)) error
 
 type DashboardInput struct {
-	ConfigError error
-	ConfigWatch func(context.Context, func(error)) error
-	Notice      string
-	Privacy     *privacy.Mask
-	Hosts       []DashboardHost
-	Wall        bool
-	Theme       string
-	Watch       DashboardWatch
-	UsageWatch  func(context.Context, func(usagefeed.Result)) error
-	Inspect     PickerInspectFunc
+	ConfigError      error
+	ConfigWatch      func(context.Context, func(error)) error
+	Notice           string
+	Privacy          *privacy.Mask
+	Hosts            []DashboardHost
+	Wall             bool
+	Theme            string
+	Watch            DashboardWatch
+	UsageWatch       func(context.Context, func(DashboardUsageUpdate)) error
+	UsageAcknowledge func(DashboardUsageAcknowledgement)
+	Inspect          PickerInspectFunc
 }
 
 type DashboardHost struct {
@@ -114,4 +115,27 @@ func (h DashboardHostView) NameLabel(now time.Time) string {
 
 func (h DashboardHost) Label() string {
 	return HostLabel(HostRecord{ID: h.ID, MachineName: h.MachineName, NameConflict: h.NameConflict, NamePriority: h.NamePriority, NameSuffix: h.NameSuffix})
+}
+
+// DashboardUsageUpdate carries one configuration generation through the renderer.
+type DashboardUsageUpdate struct {
+	Publication uint64
+	Generation  uint64
+	Enabled     bool
+	State       string
+	Digest      string
+	URL         string
+	Result      usagefeed.Result
+}
+type DashboardUsageAcknowledgement struct {
+	Publication  uint64
+	Generation   uint64
+	Enabled      bool
+	State        string
+	Digest       string
+	FeedRevision uint64
+}
+
+func (u DashboardUsageUpdate) Acknowledgement() DashboardUsageAcknowledgement {
+	return DashboardUsageAcknowledgement{u.Publication, u.Generation, u.Enabled, u.State, u.Digest, u.Result.Revision}
 }

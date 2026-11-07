@@ -19,11 +19,13 @@ import (
 )
 
 type updateController struct {
-	stateDir     string
-	id           string
-	coordinator  *update.Coordinator
-	authority    *update.Authority
-	fleetProfile *fleetProfileController
+	configurationWriter    update.ConfigurationWriter
+	configurationObservers configurationObservers
+	stateDir               string
+	id                     string
+	coordinator            *update.Coordinator
+	authority              *update.Authority
+	fleetProfile           *fleetProfileController
 }
 
 func executingBuild() *release.Build { build := release.Current(); return &build }
@@ -52,6 +54,8 @@ func (u *updateController) HandleControl(ctx context.Context, request protocol.C
 
 func (u *updateController) handle(ctx context.Context, actor update.VerifiedActor, action string, data json.RawMessage) (any, error) {
 	switch action {
+	case "configuration.preview", "configuration.approve", "configuration.status", "configuration.retry", "configuration.cancel", "configuration.snapshot", "configuration.put", "configuration.observe":
+		return u.configuration(ctx, actor, action, data)
 	case "automatic.status", "automatic.consent", "automatic.change":
 		return u.automatic(ctx, actor, action, data)
 	case hostprofile.ActionFleetPut:

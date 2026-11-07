@@ -24,9 +24,9 @@ func TestDashboardUsageWatcherStopsWithDashboard(t *testing.T) {
 			close(hostStopped)
 			return nil
 		},
-		UsageWatch: func(ctx context.Context, publish func(usagefeed.Result)) error {
+		UsageWatch: func(ctx context.Context, publish func(cli.DashboardUsageUpdate)) error {
 			close(usageStarted)
-			publish(usagefeed.Result{Failing: true})
+			publish(cli.DashboardUsageUpdate{Generation: 1, Enabled: true, State: "enabled", Result: usagefeed.Result{Failing: true}})
 			<-ctx.Done()
 			close(usageStopped)
 			return nil
@@ -52,7 +52,7 @@ func TestDashboardUsagePublicationsWaitForClockFrame(t *testing.T) {
 	model.frame = model.render()
 	previous := model.View().Content
 	for _, failing := range []bool{true, false} {
-		next, _ := model.Update(dashboardUsageMsg{Failing: failing})
+		next, _ := model.Update(dashboardUsageMsg{Generation: 1, Enabled: true, State: "enabled", Result: usagefeed.Result{Failing: failing}})
 		model = next.(dashboardModel)
 		if model.View().Content != previous {
 			t.Fatal("feed publication repainted between clock frames")
