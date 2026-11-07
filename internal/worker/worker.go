@@ -617,7 +617,8 @@ func Run(cfg Config) (int, error) {
 	_ = w.pty.Close()
 	w.closeInput()
 	if attempt != nil {
-		result := execution.Result{Binding: *cfg.Execution, Termination: executionTermination(state, code), EndedAt: &now, Capture: "not_recorded"}
+		ended := now.UTC()
+		result := execution.Result{Binding: *cfg.Execution, Termination: executionTermination(state, code), EndedAt: &ended, Capture: "not_recorded"}
 		if err := attempt.Finish(result); err != nil {
 			return code, fmt.Errorf("worker: publish durable result: %w", err)
 		}

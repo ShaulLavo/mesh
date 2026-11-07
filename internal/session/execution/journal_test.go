@@ -394,3 +394,98 @@ func TestDispatchBarrierFailureNeverElectsAnotherOwner(t *testing.T) {
 		t.Fatalf("uncertain dispatch admitted replacement: %+v %v %v", next, owner, err)
 	}
 }
+
+func removedClockFixture(t *testing.T) (*Journal, Key, *ClockAnchor, *time.Time) {
+	t.Helper()
+	j, k, i, env := journalFixture(t)
+	clock := clockEvidence("boot", 1)
+	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	j.clock = func() ClockAnchor { return clock }
+	j.now = func() time.Time { return now }
+	r, _, err := reserveTest(t, j, k, i, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.NotStarted(t.Context(), r.Binding, "no_child"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.RetireSession(t.Context(), filepath.Join(j.files.root.Name(), "s"), r.Binding.Reservation.ID, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	return j, k, &clock, &now
+}
+func TestBackwardClockAndSameBootReplacementRetainElapsedEvidence(t *testing.T) {
+	j, k, clock, now := removedClockFixture(t)
+	*clock = clockEvidence(clock.Boot, clock.Elapsed+int64(receiptFloor))
+	*now = now.Add(-365 * 24 * time.Hour)
+	if err := j.Maintain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	prior, err := j.Lookup(t.Context(), k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := Open(j.files.root.Name(), "boot", "replacement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = other.Close() }()
+	other.clock = j.clock
+	other.now = j.now
+	after, err := other.Lookup(t.Context(), k)
+	if err != nil || *after.Anchor != *prior.Anchor {
+		t.Fatalf("same-boot replacement lost elapsed evidence: %+v %v", after, err)
+	}
+	*now = *prior.RetainUntil
+	if err := other.Maintain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Lookup(t.Context(), k); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("eligible retired receipt did not expire: %v", err)
+	}
+}
+func TestMissingClockEvidenceCannotExpireRetiredReceipt(t *testing.T) {
+	j, k, _, now := removedClockFixture(t)
+	j.clock = func() ClockAnchor { return ClockAnchor{} }
+	r, err := j.Lookup(t.Context(), k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Anchor = &ClockAnchor{}
+	if _, err := j.save(r); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(365 * 24 * time.Hour)
+	if err := j.Maintain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	r, err = j.Lookup(t.Context(), k)
+	if err != nil || r.RetainUntil != nil || r.RetentionReason != "elapsed_unconfirmed" {
+		t.Fatalf("missing elapsed evidence expired: %+v %v", r, err)
+	}
+	r.Anchor = nil
+	if _, err := j.files.Publish(requestName(k.Hash()), r, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.Lookup(t.Context(), k); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("absent anchor became an expired/missing key: %v", err)
+	}
+}
+func TestPurgeResumesAfterItsLifetimeDirectoryWasDeleted(t *testing.T) {
+	j, k, clock, now := removedClockFixture(t)
+	r, err := j.Lookup(t.Context(), k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*clock = clockEvidence(clock.Boot, clock.Elapsed+int64(receiptFloor))
+	*now = now.Add(receiptFloor)
+	if err := j.files.RemoveTree(filepath.Dir(attempt(r.Binding, "reference.json")), "execution/.barrier"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Maintain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.Lookup(t.Context(), k); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("partially completed purge did not converge: %v", err)
+	}
+}

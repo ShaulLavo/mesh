@@ -153,10 +153,18 @@ func (j *Journal) maintainEntry(ctx context.Context, hash string) error {
 		return nil
 	}
 	fence, err := j.files.LockExisting(ctx, attempt(r.Binding, "lifetime.lock"))
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	defer func() { _ = fence.Close() }()
+	if fence != nil {
+		defer func() { _ = fence.Close() }()
+	}
+	// A durable removed tombstone already proves the previous lifetime fence.
+	// A purge interrupted after deleting that inode must still converge.
+	return j.purgeRemoved(ctx, r)
+}
+func (j *Journal) purgeRemoved(ctx context.Context, r Receipt) error {
+	hash := r.Binding.RequestHash
 	gate, err := j.lock(ctx)
 	if err != nil {
 		return err
@@ -166,7 +174,7 @@ func (j *Journal) maintainEntry(ctx context.Context, hash string) error {
 	if err != nil {
 		return err
 	}
-	if current.Binding != r.Binding || current.Removal != removalRemoved {
+	if current.Binding != r.Binding || current.Removal != removalRemoved || current.Anchor == nil || !elapsedFloor(*current.Anchor, j.clock()) {
 		return ErrProtected
 	}
 	if err := j.files.RemoveTree(filepath.Dir(attempt(r.Binding, "reference.json")), "execution/.barrier"); err != nil {

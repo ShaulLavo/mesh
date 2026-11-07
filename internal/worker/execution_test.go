@@ -53,6 +53,12 @@ func TestNativeKeyedWorkerPublishesTerminalAndReleasesLifetimeLast(t *testing.T)
 	if err != nil || terminal.Phase != "terminal" || terminal.Result.Termination.Code == nil || *terminal.Result.Termination.Code != 7 {
 		t.Fatalf("terminal=%+v error=%v", terminal, err)
 	}
+	if terminal.Result.EndedAt == nil {
+		t.Fatal("missing exit timestamp")
+	}
+	if _, offset := terminal.Result.EndedAt.Zone(); offset != 0 {
+		t.Fatal("execution exit timestamp is not UTC")
+	}
 	if terminal.RetentionReason != "recovery_pinned" {
 		t.Fatalf("saved recovery pin not reported: %+v", terminal)
 	}
