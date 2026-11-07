@@ -92,4 +92,10 @@ func TestExecutionProtectionPrecedesForgottenAndLabelHistory(t *testing.T) {
 	if err := removeRetiredSession(filepath.Join(root, meta.ID)); !errors.Is(err, execution.ErrProtected) {
 		t.Fatalf("cleanup ignored protected origin: %v", err)
 	}
+	if err := os.Remove(filepath.Join(root, meta.ID, ".reservation")); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeRetiredSession(filepath.Join(root, meta.ID)); !errors.Is(err, execution.ErrProtected) {
+		t.Fatalf("missing static reference bypassed known execution metadata: %v", err)
+	}
 }

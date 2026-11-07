@@ -46,6 +46,9 @@ func newTestBinding(t *testing.T, j *Journal, k Key, i Intent, env []string) (Bi
 	if err := j.files.Ensure(dir); err != nil {
 		return Binding{}, err
 	}
+	if _, err := j.files.Publish(filepath.Join(dir, ".launching"), ref, true); err != nil {
+		return Binding{}, err
+	}
 	if _, err := j.files.Publish(filepath.Join(dir, ".reservation"), ref, true); err != nil {
 		return Binding{}, err
 	}
@@ -53,23 +56,39 @@ func newTestBinding(t *testing.T, j *Journal, k Key, i Intent, env []string) (Bi
 }
 func TestConcurrentEqualKeyElectsOnlyOneLaunchOwner(t *testing.T) {
 	j, k, i, env := journalFixture(t)
-	var owners atomic.Int32
+	var owners, allocations atomic.Int32
 	var group sync.WaitGroup
+	receipts := make(chan Receipt, 8)
 	admit := func() {
-		_, owner, err := reserveTest(t, j, k, i, env)
-		if err != nil && !errors.Is(err, ErrProgress) {
-			t.Error(err)
-		}
+		r, owner, err := j.Reserve(t.Context(), k, i, func() (Binding, error) { allocations.Add(1); return newTestBinding(t, j, k, i, env) })
+		checkConcurrentAdmission(t, r, owner, err)
 		if owner {
 			owners.Add(1)
+		}
+		if r.Binding.Reservation.Instance != "" {
+			receipts <- r
 		}
 	}
 	for range 8 {
 		group.Go(admit)
 	}
 	group.Wait()
-	if owners.Load() != 1 {
-		t.Fatalf("owners=%d", owners.Load())
+	close(receipts)
+	if owners.Load() != 1 || allocations.Load() != 1 {
+		t.Fatalf("owners=%d allocations=%d", owners.Load(), allocations.Load())
+	}
+	original, err := j.Lookup(t.Context(), k)
+	if !errors.Is(err, ErrProgress) {
+		t.Fatal(err)
+	}
+	for r := range receipts {
+		if r.Binding != original.Binding {
+			t.Fatal("equal caller returned another attempt")
+		}
+	}
+	_, owner, err := reserveTest(t, j, k, i, env)
+	if owner || !errors.Is(err, ErrProgress) {
+		t.Fatalf("post-wave retry became owner: %v %v", owner, err)
 	}
 	changed := i
 	changed.Command = []string{"/bin/false"}
@@ -80,6 +99,18 @@ func TestConcurrentEqualKeyElectsOnlyOneLaunchOwner(t *testing.T) {
 		if _, owner, err := reserveTest(t, j, scope, i, env); err != nil || !owner {
 			t.Fatalf("namespace %s: %v %v", scope.Principal, owner, err)
 		}
+	}
+}
+func checkConcurrentAdmission(t *testing.T, r Receipt, owner bool, err error) {
+	t.Helper()
+	if errors.Is(err, context.DeadlineExceeded) {
+		if owner || r.Binding.Reservation.Instance != "" {
+			t.Error("timed-out lock acquisition allocated an attempt")
+		}
+		return
+	}
+	if err != nil && !errors.Is(err, ErrProgress) {
+		t.Error(err)
 	}
 }
 func TestRestartDoesNotRedispatchReservedOrDispatched(t *testing.T) {
@@ -218,7 +249,7 @@ func TestRawQuotaIncludesDamagedRecordsButEqualLookupWorks(t *testing.T) {
 }
 func TestRetentionDoesNotCreditWallClockJumpsOrRebootDowntime(t *testing.T) {
 	j, k, i, env := journalFixture(t)
-	anchor := ClockAnchor{Boot: "boot", Elapsed: 1}
+	anchor := clockEvidence("boot", 1)
 	j.clock = func() ClockAnchor { return anchor }
 	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
 	j.now = func() time.Time { return now }
@@ -240,18 +271,126 @@ func TestRetentionDoesNotCreditWallClockJumpsOrRebootDowntime(t *testing.T) {
 	if err := j.Maintain(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	anchor = ClockAnchor{Boot: "new-boot", Elapsed: 100}
+	anchor = clockEvidence("new-boot", 100)
 	if _, err := j.Lookup(t.Context(), k); err != nil {
 		t.Fatal(err)
 	}
 	if err := j.Maintain(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	anchor.Elapsed += int64(receiptFloor)
+	anchor = clockEvidence(anchor.Boot, anchor.Elapsed+int64(receiptFloor))
+	now = now.Add(receiptFloor)
 	if err := j.Maintain(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := j.Lookup(t.Context(), k); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("elapsed floor did not expire: %v", err)
+	}
+}
+
+func TestCorruptClockAnchorIsReanchoredWithoutCreditingTime(t *testing.T) {
+	j, k, i, env := journalFixture(t)
+	evidence := clockEvidence("boot", int64(80*24*time.Hour))
+	j.clock = func() ClockAnchor { return evidence }
+	r, _, err := reserveTest(t, j, k, i, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = j.NotStarted(t.Context(), r.Binding, "no_child")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Anchor.Elapsed = 0
+	if _, err := j.save(r); err != nil {
+		t.Fatal(err)
+	}
+	next, err := j.Lookup(t.Context(), k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Anchor.Elapsed != evidence.Elapsed || !next.Anchor.valid() || elapsedFloor(*next.Anchor, evidence) {
+		t.Fatal("corrupt anchor credited elapsed time")
+	}
+}
+
+func TestMissingLifetimeInodeDoesNotFenceAnExistingWorker(t *testing.T) {
+	j, k, i, env := journalFixture(t)
+	r, _, err := reserveTest(t, j, k, i, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Dispatch(t.Context(), r.Binding, i); err != nil {
+		t.Fatal(err)
+	}
+	a, err := StartAttempt(t.Context(), j.files.root.Name(), r.Binding, i, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = a.Close() }()
+	code := 0
+	if err := a.Finish(Result{Binding: r.Binding, Termination: Termination{Kind: "exit", Code: &code}, Capture: "not_recorded"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(j.files.root.Name(), attempt(r.Binding, "lifetime.lock"))); err != nil {
+		t.Fatal(err)
+	}
+	removed := false
+	err = j.RetireSession(t.Context(), filepath.Join(j.files.root.Name(), "s"), r.Binding.Reservation.ID, func() error { removed = true; return nil })
+	if err == nil || removed {
+		t.Fatal("missing lock inode was replaced to obtain retirement")
+	}
+}
+
+func TestVisibleUnconfirmedAcceptanceCannotDispatch(t *testing.T) {
+	j, k, i, env := journalFixture(t)
+	publications := 0
+	j.files.fault = func(operation string) error {
+		if operation == "publish" {
+			publications++
+		}
+		if publications == 4 && operation == "directory_sync" {
+			return errors.New("injected acceptance namespace barrier")
+		}
+		return nil
+	}
+	r, owner, err := reserveTest(t, j, k, i, env)
+	if err == nil || owner || r.Acceptance != string(Unconfirmed) {
+		t.Fatalf("unconfirmed reserve elected launch owner: %+v %v %v", r, owner, err)
+	}
+	if err := j.Dispatch(t.Context(), r.Binding, i); err == nil {
+		t.Fatal("unconfirmed reserve dispatched")
+	}
+	if err := j.files.check(attempt(r.Binding, "dispatch.json"), false); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("dispatch evidence created before acceptance")
+	}
+	j.files.fault = nil
+	next, owner, err := reserveTest(t, j, k, i, env)
+	if owner || !errors.Is(err, ErrProgress) || next.Binding != r.Binding || next.Acceptance != string(Durable) {
+		t.Fatalf("settlement replaced attempt: %+v %v %v", next, owner, err)
+	}
+}
+func TestDispatchBarrierFailureNeverElectsAnotherOwner(t *testing.T) {
+	j, k, i, env := journalFixture(t)
+	r, _, err := reserveTest(t, j, k, i, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := false
+	j.files.fault = func(operation string) error {
+		if operation == "publish" {
+			published = true
+		}
+		if published && operation == "directory_sync" {
+			return errors.New("injected dispatch namespace barrier")
+		}
+		return nil
+	}
+	if err := j.Dispatch(t.Context(), r.Binding, i); err == nil {
+		t.Fatal("dispatch barrier acknowledged")
+	}
+	j.files.fault = nil
+	next, owner, err := reserveTest(t, j, k, i, env)
+	if owner || !errors.Is(err, ErrUnknown) || next.Binding != r.Binding || next.Phase != phaseUncertain {
+		t.Fatalf("uncertain dispatch admitted replacement: %+v %v %v", next, owner, err)
 	}
 }

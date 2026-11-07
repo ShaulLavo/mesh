@@ -32,7 +32,7 @@ func (j *Journal) RetireSession(ctx context.Context, sessions, id string, retire
 	if binding.Reservation != ref {
 		return ErrProtected
 	}
-	fence, err := j.files.Lock(ctx, attempt(binding, "lifetime.lock"))
+	fence, err := j.files.LockExisting(ctx, attempt(binding, "lifetime.lock"))
 	if err != nil {
 		return err
 	}
@@ -149,7 +149,10 @@ func (j *Journal) maintainEntry(ctx context.Context, hash string) error {
 	if r.Removal != removalRemoved || !elapsedFloor(*r.Anchor, j.clock()) {
 		return nil
 	}
-	fence, err := j.files.Lock(ctx, attempt(r.Binding, "lifetime.lock"))
+	if r.RetainUntil != nil && j.now().Before(*r.RetainUntil) {
+		return nil
+	}
+	fence, err := j.files.LockExisting(ctx, attempt(r.Binding, "lifetime.lock"))
 	if err != nil {
 		return err
 	}
@@ -184,7 +187,7 @@ func (j *Journal) maintenanceRead(ctx context.Context, hash string) (Receipt, er
 	return j.refresh(r)
 }
 func (j *Journal) resumeRetirement(ctx context.Context, b Binding) error {
-	fence, err := j.files.Lock(ctx, attempt(b, "lifetime.lock"))
+	fence, err := j.files.LockExisting(ctx, attempt(b, "lifetime.lock"))
 	if err != nil {
 		return err
 	}
@@ -205,7 +208,7 @@ func (j *Journal) resumeRetirement(ctx context.Context, b Binding) error {
 }
 func (j *Journal) terminalView(r Receipt) (Receipt, error) {
 	now := j.clock()
-	if now.Boot != "" && now.Boot != r.Anchor.Boot {
+	if now.valid() && (!r.Anchor.valid() || now.Boot != r.Anchor.Boot) {
 		r.Anchor = &now
 		until := j.now().UTC().Add(receiptFloor)
 		r.RetainUntil = &until
@@ -215,12 +218,23 @@ func (j *Journal) terminalView(r Receipt) (Receipt, error) {
 		r.RetainUntil = nil
 		r.RetentionReason = "elapsed_unconfirmed"
 	}
-	if r.Anchor.Boot == "" {
+	if !r.Anchor.valid() {
 		r.RetainUntil = nil
 		r.RetentionReason = "elapsed_unconfirmed"
 	}
-	if err := j.files.check("s/"+r.Binding.Reservation.ID+"/recovery.json", false); err == nil {
+	if j.recoveryPinned(r) {
 		r.RetentionReason = "recovery_pinned"
 	}
 	return r, nil
+}
+
+func (j *Journal) recoveryPinned(r Receipt) bool {
+	if r.Removal != removalPresent {
+		return false
+	}
+	var current session.Reservation
+	if err := j.files.Read("s/"+r.Binding.Reservation.ID+"/.reservation", &current); err != nil || current != r.Binding.Reservation {
+		return false
+	}
+	return j.files.check("s/"+r.Binding.Reservation.ID+"/recovery.json", false) == nil
 }

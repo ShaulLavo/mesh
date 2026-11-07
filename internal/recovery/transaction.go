@@ -590,6 +590,9 @@ func readTransaction(path string, value any) error {
 }
 
 func writeTransaction(dir, name string, value any) error {
+	if saved, ok := value.(intent); ok {
+		return writeIntentTransaction(dir, name, saved)
+	}
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("recovery: encode transaction: %w", err)
@@ -597,12 +600,15 @@ func writeTransaction(dir, name string, value any) error {
 	if len(data) > 256<<10 {
 		return errors.New("recovery: transaction exceeds size limit")
 	}
+	return atomicWrite(dir, name, data)
+}
+func writeIntentTransaction(dir, name string, saved intent) error {
 	files, err := execution.OpenFiles(filepath.Dir(filepath.Dir(dir)))
 	if err != nil {
 		return recoveryBoundaryError("open recovery transaction root", err)
 	}
 	relative := filepath.Join(filepath.Base(filepath.Dir(dir)), filepath.Base(dir), name)
-	_, err = files.PublishBounded(relative, value, false, 256<<10)
+	_, err = files.PublishBounded(relative, saved, false, 256<<10)
 	return errors.Join(err, files.Close())
 }
 

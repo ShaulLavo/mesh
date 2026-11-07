@@ -38,12 +38,16 @@ func Open(state, boot, owner string) (*Journal, error) {
 		}
 	}
 	j := &Journal{files: f, boot: boot, owner: owner, now: time.Now, maxRecords: 10000, maxActive: 128}
+	if err := j.initializeLock(); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	j.clock = func() ClockAnchor { return clockAnchor(boot) }
 	return j, nil
 }
 func (j *Journal) Close() error { return j.files.Close() }
 func (j *Journal) lock(ctx context.Context) (*Fence, error) {
-	return j.files.Lock(ctx, "execution/journal.lock")
+	return j.files.LockExisting(ctx, "execution/journal.lock")
 }
 func (j *Journal) read(hash string) (Receipt, error) {
 	var r Receipt
@@ -134,6 +138,9 @@ func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func()
 	err = errors.Join(j.files.Confirm(attempt(binding, "lifetime.lock")), fence.Close())
 	if err != nil {
 		return r, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return r, false, executionBoundaryError("execution admission canceled", err)
 	}
 	r.Acceptance = string(Durable)
 	r, err = j.save(r)
@@ -316,7 +323,11 @@ func (j *Journal) terminal(r Receipt, result Result) (Receipt, error) {
 	} else {
 		r.LaunchOutcome = outcomeStarted
 	}
-	return j.save(r)
+	saved, err := j.save(r)
+	if err != nil {
+		return saved, err
+	}
+	return j.terminalView(saved)
 }
 
 func receiptDiagnostic(r Receipt) error {
@@ -328,4 +339,35 @@ func receiptDiagnostic(r Receipt) error {
 	default:
 		return nil
 	}
+}
+
+func (j *Journal) initializeLock() error {
+	if err := j.files.check("execution/journal.lock", false); err == nil {
+		return j.files.Confirm("execution/journal.lock")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, dir := range []string{"execution/requests", "execution/attempts"} {
+		entries, err := j.files.Names(dir)
+		if err != nil {
+			return err
+		}
+		if populatedJournalDirectory(entries) {
+			return fmt.Errorf("execution: missing journal lock in populated state")
+		}
+	}
+	_, err := j.files.Publish("execution/journal.lock", struct{}{}, true)
+	if errors.Is(err, os.ErrExist) {
+		return j.files.Confirm("execution/journal.lock")
+	}
+	return err
+}
+
+func populatedJournalDirectory(entries []os.DirEntry) bool {
+	for _, entry := range entries {
+		if entry.Name() != ".barrier" {
+			return true
+		}
+	}
+	return false
 }

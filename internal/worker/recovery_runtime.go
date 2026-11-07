@@ -125,6 +125,9 @@ func unavailableRecoveryWorker(err error) bool {
 }
 
 func (r RecoveryRuntime) Launch(_ context.Context, launch recovery.Launch) error {
+	if launch.Reservation.Purpose != session.Recovery || launch.Reservation.ID != launch.ID {
+		return &recovery.LaunchFailure{Err: fmt.Errorf("recovery: exact recovery-purpose reservation required")}
+	}
 	if launch.Agent != nil {
 		executable, err := r.agentResumeExecutable()
 		if err != nil {

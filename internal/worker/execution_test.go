@@ -46,9 +46,15 @@ func TestNativeKeyedWorkerPublishesTerminalAndReleasesLifetimeLast(t *testing.T)
 	if _, err := os.Stat(paths.Socket(filepath.Join(root, "s", ref.ID))); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("worker returned before socket cleanup: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(root, "s", ref.ID, "recovery.json")); err != nil {
+		t.Fatalf("short keyed PTY did not retain recovery: %v", err)
+	}
 	terminal, err := journal.Lookup(t.Context(), key)
 	if err != nil || terminal.Phase != "terminal" || terminal.Result.Termination.Code == nil || *terminal.Result.Termination.Code != 7 {
 		t.Fatalf("terminal=%+v error=%v", terminal, err)
+	}
+	if terminal.RetentionReason != "recovery_pinned" {
+		t.Fatalf("saved recovery pin not reported: %+v", terminal)
 	}
 	if err := journal.RetireSession(t.Context(), filepath.Join(root, "s"), ref.ID, func() error { return nil }); err != nil {
 		t.Fatal(err)

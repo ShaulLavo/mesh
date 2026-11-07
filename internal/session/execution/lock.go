@@ -13,9 +13,15 @@ type Fence struct{ file *os.File }
 
 func (g *Fence) Close() error { return executionBoundaryError("lock.go Close", g.file.Close()) }
 func (f *Files) Lock(ctx context.Context, name string) (*Fence, error) {
+	return f.lockFile(ctx, name, os.O_CREATE|os.O_RDWR)
+}
+func (f *Files) LockExisting(ctx context.Context, name string) (*Fence, error) {
+	return f.lockFile(ctx, name, os.O_RDWR)
+}
+func (f *Files) lockFile(ctx context.Context, name string, flags int) (*Fence, error) {
 	ctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
-	file, err := f.open(name, os.O_CREATE|os.O_RDWR)
+	file, err := f.open(name, flags)
 	if err != nil {
 		return nil, err
 	}

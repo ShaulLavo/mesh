@@ -47,6 +47,12 @@ type ExecutionReceipt struct {
 
 // validateExecutionRaw runs before Control decoding can discard request evidence.
 func validateExecutionRaw(payload []byte) error {
+	if !executionCandidate(payload) {
+		return nil
+	}
+	if len(payload) > 40<<10 || !utf8.Valid(payload) {
+		return fmt.Errorf("execution: invalid raw size or UTF-8")
+	}
 	scan := scanExecutionFields(payload)
 	if !scan.execution {
 		return nil
@@ -124,7 +130,7 @@ func (s *executionFields) takeField(decoder *json.Decoder) error {
 		s.duplicate = true
 	}
 	s.fields[name] = raw
-	if name != executionTypeField {
+	if !strings.EqualFold(name, executionTypeField) {
 		return nil
 	}
 	_ = json.Unmarshal(raw, &s.kind)
@@ -217,3 +223,23 @@ type ExecutionValidationError struct{ Err error }
 
 func (e *ExecutionValidationError) Error() string { return e.Err.Error() }
 func (e *ExecutionValidationError) Unwrap() error { return e.Err }
+
+// The discriminator keeps every type occurrence without copying unrelated catalog payloads.
+// Full validation still runs against the original bytes before Control decoding.
+type executionDiscriminator struct{ execution bool }
+
+func (d *executionDiscriminator) UnmarshalJSON(raw []byte) error {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("execution discriminator: %w", err)
+	}
+	d.execution = d.execution || value == TypeExecutionCreate || value == TypeExecutionRequest
+	return nil
+}
+func executionCandidate(payload []byte) bool {
+	var probe struct {
+		Type executionDiscriminator `json:"type"`
+	}
+	_ = json.Unmarshal(payload, &probe)
+	return probe.Type.execution
+}

@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/shaul/mesh/internal/session"
@@ -29,20 +30,22 @@ func StartAttempt(ctx context.Context, state string, b Binding, i Intent, env []
 	if err != nil {
 		return nil, err
 	}
-	fence, err := f.Lock(ctx, attempt(b, "lifetime.lock"))
+	fence, err := f.LockExisting(ctx, attempt(b, "lifetime.lock"))
 	if err != nil {
 		_ = f.Close()
 		return nil, err
 	}
 	a := &Attempt{files: f, binding: b, fence: fence}
 	if err := a.claim(i, env); err != nil {
-		_ = a.Close()
-		return nil, err
+		return nil, errors.Join(err, f.Close(), fence.Close())
 	}
 	return a, nil
 }
 func (a *Attempt) claim(i Intent, env []string) error {
 	b := a.binding
+	if err := a.currentReservation(); err != nil {
+		return err
+	}
 	var ref Binding
 	if err := a.files.Read(attempt(b, "reference.json"), &ref); err != nil {
 		return err
@@ -106,7 +109,41 @@ func ProtectedSession(sessions, id string) bool {
 	var r session.Reservation
 	err = f.Read(id+"/.reservation", &r)
 	if errors.Is(err, os.ErrNotExist) {
+		return metadataExecutionOrigin(f, id)
+	}
+	return err != nil || r.Validate() != nil || r.Purpose == session.Execution
+}
+
+func (a *Attempt) currentReservation() error {
+	b := a.binding
+	for _, name := range []string{".reservation", ".launching"} {
+		path := "s/" + b.Reservation.ID + "/" + name
+		var ref session.Reservation
+		if err := a.files.Read(path, &ref); err != nil {
+			return err
+		}
+		if ref != b.Reservation {
+			return fmt.Errorf("execution: session allocation changed")
+		}
+		if err := a.files.Confirm(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func metadataExecutionOrigin(f *Files, id string) bool {
+	var meta map[string]json.RawMessage
+	if err := f.Read(id+"/meta.json", &meta); err != nil {
 		return false
 	}
-	return err != nil || r.Purpose == "execution"
+	raw, exists := meta["reservation"]
+	if !exists {
+		return false
+	}
+	var ref session.Reservation
+	if err := json.Unmarshal(raw, &ref); err != nil {
+		return true
+	}
+	return ref.Validate() != nil || ref.Purpose == session.Execution
 }

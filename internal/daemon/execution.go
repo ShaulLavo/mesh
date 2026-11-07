@@ -64,19 +64,7 @@ func (l *lifecycle) executionCreateControl(ctx context.Context, request protocol
 	return l.createExecution(ctx, request, journal, key, intent)
 }
 func (l *lifecycle) createExecution(ctx context.Context, request protocol.Control, journal *execution.Journal, key execution.Key, intent execution.Intent) (protocol.Control, error) {
-	var env []string
-	r, owner, err := journal.Reserve(ctx, key, intent, func() (execution.Binding, error) {
-		ref, err := worker.Reserve(l.sessionsDir, session.Execution)
-		if err != nil {
-			return execution.Binding{}, executionBoundaryError("execution.go executionControl", err)
-		}
-		snapshot := l.env
-		if snapshot == nil {
-			snapshot = os.Environ()
-		}
-		env = worker.ExecutionEnvironment(snapshot, string(l.host.ID), ref, intent.Term)
-		return execution.NewBinding(key, intent, ref, env), nil
-	})
+	r, owner, env, err := l.reserveExecution(ctx, journal, key, intent)
 	if !owner && (err == nil || errors.Is(err, execution.ErrProgress) || errors.Is(err, execution.ErrUnknown)) {
 		r, err = l.lookupExecution(ctx, journal, key)
 	}
@@ -92,6 +80,9 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	}
 	r.Phase = "dispatched"
 	r.LaunchOutcome = "unknown"
+	if err := owned.Err(); err != nil {
+		return executionResponse(request, r, err)
+	}
 	ref := r.Binding.Reservation
 	launched, err := l.launch(worker.LaunchConfig{SessionsDir: l.sessionsDir, HostID: string(l.host.ID), Executable: l.executable, Reservation: &ref, Execution: &r.Binding, Command: intent.Command, Cwd: intent.Cwd, Env: env, Cols: intent.Cols, Rows: intent.Rows, Term: intent.Term, Label: "agent request " + ref.Instance})
 	if err != nil {
@@ -112,6 +103,22 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 		r, err = journal.Lookup(owned, key)
 	}
 	return executionResponse(request, r, err)
+}
+func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Journal, key execution.Key, intent execution.Intent) (execution.Receipt, bool, []string, error) {
+	var env []string
+	r, owner, err := journal.Reserve(ctx, key, intent, func() (execution.Binding, error) {
+		ref, err := worker.Reserve(l.sessionsDir, session.Execution)
+		if err != nil {
+			return execution.Binding{}, executionBoundaryError("execution.go executionControl", err)
+		}
+		snapshot := l.env
+		if snapshot == nil {
+			snapshot = os.Environ()
+		}
+		env = worker.ExecutionEnvironment(snapshot, string(l.host.ID), ref, intent.Term)
+		return execution.NewBinding(key, intent, ref, env), nil
+	})
+	return r, owner, env, executionBoundaryError("reserve detached execution", err)
 }
 func (l *lifecycle) executionKey(ctx context.Context, opaque string) (execution.Key, error) {
 	key := execution.Key{Host: string(l.host.ID), Opaque: opaque}
@@ -195,33 +202,48 @@ func (l *lifecycle) closeExecution() {
 
 func (l *lifecycle) lookupExecution(ctx context.Context, journal *execution.Journal, key execution.Key) (execution.Receipt, error) {
 	r, err := journal.Lookup(ctx, key)
-	if !errors.Is(err, execution.ErrUnknown) {
-		return r, executionBoundaryError("execution.go lookupExecution", err)
+	if err != nil && !errors.Is(err, execution.ErrUnknown) {
+		return r, executionBoundaryError("read execution receipt", err)
 	}
-	ref := r.Binding.Reservation
-	if ref.BootID != worker.BootID() {
-		return r, executionBoundaryError("execution.go lookupExecution", err)
+	if r.Phase == "terminal" {
+		return r, nil
 	}
-	meta, metaErr := worker.ReadMeta(filepath.Join(l.sessionsDir, ref.ID))
-	if metaErr != nil || meta.Reservation == nil || *meta.Reservation != ref {
-		return r, executionBoundaryError("execution.go lookupExecution", err)
+	if r.Binding.Reservation.BootID != worker.BootID() {
+		return uncertainExecution(r)
 	}
-	files, metaErr := execution.OpenFiles(filepath.Dir(l.sessionsDir))
-	if metaErr != nil {
-		return r, executionBoundaryError("execution.go lookupExecution", metaErr)
+	source, observeErr := (worker.RecoveryRuntime{SessionsDir: l.sessionsDir, HostID: string(l.host.ID)}).Inspect(ctx, r.Binding.Reservation.ID)
+	if observeErr != nil || !source.Published || source.Reservation == nil || *source.Reservation != r.Binding.Reservation {
+		return uncertainExecution(r)
 	}
-	metaErr = errors.Join(files.Confirm(filepath.Join(filepath.Base(l.sessionsDir), ref.ID, "meta.json")), files.Close())
-	if metaErr != nil {
-		return r, metaErr
+	if source.State != worker.StateRunning && source.State != worker.StateDetached {
+		return uncertainExecution(r)
+	}
+	return l.confirmExecutionPublication(ctx, journal, key, r)
+}
+func uncertainExecution(r execution.Receipt) (execution.Receipt, error) {
+	r.Phase = "uncertain"
+	return r, execution.ErrUnknown
+}
+func (l *lifecycle) confirmExecutionPublication(ctx context.Context, journal *execution.Journal, key execution.Key, r execution.Receipt) (execution.Receipt, error) {
+	if r.Publication == "published" && r.Phase == "live" {
+		return r, nil
+	}
+	files, err := execution.OpenFiles(filepath.Dir(l.sessionsDir))
+	if err != nil {
+		return r, executionBoundaryError("open execution observation root", err)
+	}
+	err = errors.Join(files.Confirm(filepath.Join(filepath.Base(l.sessionsDir), r.Binding.Reservation.ID, "meta.json")), files.Close())
+	if err != nil {
+		return r, err
 	}
 	if err := l.catalog.Reconcile(ctx); err != nil {
-		return r, executionBoundaryError("execution.go lookupExecution", err)
+		return r, executionBoundaryError("publish execution catalog observation", err)
 	}
 	if _, err := journal.Published(ctx, r.Binding); err != nil {
-		return r, executionBoundaryError("execution.go lookupExecution", err)
+		return r, executionBoundaryError("publish execution receipt observation", err)
 	}
-	executionValue13_0, executionValue13_1 := journal.Lookup(ctx, key)
-	return executionValue13_0, executionBoundaryError("execution.go lookupExecution", executionValue13_1)
+	result, err := journal.Lookup(ctx, key)
+	return result, executionBoundaryError("read published execution receipt", err)
 }
 
 func executionBoundaryError(operation string, err error) error {

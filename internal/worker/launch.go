@@ -200,6 +200,14 @@ func launchSessionDir(cfg LaunchConfig) (string, string, error) {
 	if (ref.Purpose == session.Execution) != (cfg.Execution != nil) {
 		return "", "", fmt.Errorf("launch worker: reservation purpose mismatch")
 	}
+	if cfg.RecoveredFrom != "" && ref.Purpose != session.Recovery {
+		return "", "", fmt.Errorf("launch worker: recovery purpose required")
+	}
+	if cfg.Execution != nil {
+		if err := validateExecutionLaunch(cfg, ref); err != nil {
+			return "", "", err
+		}
+	}
 	dir := filepath.Join(cfg.SessionsDir, ref.ID)
 	if meta, err := ReadMeta(dir); err == nil {
 		if ref.Purpose != session.Recovery || meta.BootID == "" || meta.BootID == ref.BootID {

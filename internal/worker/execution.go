@@ -25,29 +25,30 @@ func ExecutionEnvironment(env []string, host string, ref session.Reservation, te
 	return withSessionIdentity(withTerm(out, term), host, ref.ID)
 }
 func prepareExecution(cfg Config) (*execution.Attempt, error) {
-	if cfg.Reservation != nil {
-		if cfg.Reservation.ID != cfg.ID {
-			return nil, fmt.Errorf("worker: reservation ID mismatch")
-		}
-		if err := validateReservation(filepath.Dir(cfg.Dir), *cfg.Reservation); err != nil {
-			return nil, err
-		}
-	}
-	if cfg.Execution == nil {
-		if cfg.Reservation != nil && cfg.Reservation.Purpose == session.Execution {
-			return nil, fmt.Errorf("worker: missing execution binding")
+	if cfg.Reservation == nil {
+		if cfg.Execution != nil {
+			return nil, fmt.Errorf("worker: execution reservation required")
 		}
 		return nil, nil
 	}
-	if cfg.Reservation == nil || *cfg.Reservation != cfg.Execution.Reservation {
-		return nil, fmt.Errorf("worker: execution reference mismatch")
+	if cfg.Reservation.ID != cfg.ID {
+		return nil, fmt.Errorf("worker: reservation ID mismatch")
+	}
+	if cfg.Execution == nil {
+		if cfg.Reservation.Purpose == session.Execution {
+			return nil, fmt.Errorf("worker: missing execution binding")
+		}
+		return nil, validateReservation(filepath.Dir(cfg.Dir), *cfg.Reservation)
+	}
+	if cfg.Label != "agent request "+cfg.Execution.Reservation.Instance || cfg.HostID != cfg.Execution.Host || *cfg.Reservation != cfg.Execution.Reservation {
+		return nil, fmt.Errorf("worker: execution identity mismatch")
 	}
 	intent, err := execution.Normalize(execution.Intent{Kind: "pty", Command: cfg.Command, Cwd: cfg.Cwd, Cols: cfg.Cols, Rows: cfg.Rows, Term: executionTerminal(cfg.Env)})
 	if err != nil {
-		return nil, workerExecutionError("execution.go prepareExecution", err)
+		return nil, workerExecutionError("normalize worker execution", err)
 	}
-	executionValue1_0, executionValue1_1 := execution.StartAttempt(context.Background(), filepath.Dir(filepath.Dir(cfg.Dir)), *cfg.Execution, intent, cfg.Env)
-	return executionValue1_0, workerExecutionError("execution.go prepareExecution", executionValue1_1)
+	result, err := execution.StartAttempt(context.Background(), filepath.Dir(filepath.Dir(cfg.Dir)), *cfg.Execution, intent, cfg.Env)
+	return result, workerExecutionError("claim worker execution", err)
 }
 func executionTermination(state *os.ProcessState, code int) execution.Termination {
 	if state != nil {
@@ -118,4 +119,14 @@ func (c *executionClients) closeConnections() {
 	for _, conn := range connections {
 		_ = conn.Close()
 	}
+}
+
+func validateExecutionLaunch(cfg LaunchConfig, ref session.Reservation) error {
+	if err := cfg.Execution.Validate(); err != nil {
+		return workerExecutionError("validate execution launch", err)
+	}
+	if cfg.Execution.Reservation != ref || cfg.Execution.Host != cfg.HostID || cfg.Label != "agent request "+ref.Instance || cfg.Owner != "" || cfg.Depth != 0 {
+		return fmt.Errorf("launch worker: execution binding mismatch")
+	}
+	return nil
 }

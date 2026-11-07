@@ -60,14 +60,8 @@ type Intent struct {
 }
 
 func Normalize(i Intent) (Intent, error) {
-	if i.Kind != "pty" {
-		return Intent{}, fmt.Errorf("execution: only explicit kind pty is supported")
-	}
-	if len(i.Command) == 0 || len(i.Command) > 1024 || i.Command[0] == "" {
-		return Intent{}, fmt.Errorf("execution: require 1 to 1024 command arguments")
-	}
-	if len(i.Cwd) > 4096 || !filepath.IsAbs(i.Cwd) || filepath.Clean(i.Cwd) != i.Cwd {
-		return Intent{}, fmt.Errorf("execution: cwd must be an absolute clean target path")
+	if err := validateIntentInput(i); err != nil {
+		return Intent{}, err
 	}
 	if i.Cols == 0 {
 		i.Cols = 80
@@ -80,11 +74,6 @@ func Normalize(i Intent) (Intent, error) {
 	}
 	if i.Cols < 1 || i.Rows < 1 || i.Cols > 2048 || i.Rows > 2048 || i.Cols > (256<<10)/i.Rows {
 		return Intent{}, fmt.Errorf("execution: invalid terminal dimensions")
-	}
-	for _, value := range append(append([]string(nil), i.Command...), i.Cwd, i.Term) {
-		if !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
-			return Intent{}, fmt.Errorf("execution: invalid command text")
-		}
 	}
 	data, _ := json.Marshal(i)
 	if len(data) > 32<<10 {
@@ -239,3 +228,29 @@ const (
 	publicationPublished = "published"
 	pending              = "pending"
 )
+
+func validIntentText(value string) bool {
+	return utf8.ValidString(value) && !strings.ContainsRune(value, 0)
+}
+
+func validateIntentInput(i Intent) error {
+
+	if i.Kind != "pty" {
+		return fmt.Errorf("execution: only explicit kind pty is supported")
+	}
+	if len(i.Command) == 0 || len(i.Command) > 1024 || i.Command[0] == "" {
+		return fmt.Errorf("execution: require 1 to 1024 command arguments")
+	}
+	if len(i.Cwd) > 4096 || !filepath.IsAbs(i.Cwd) || filepath.Clean(i.Cwd) != i.Cwd {
+		return fmt.Errorf("execution: cwd must be an absolute clean target path")
+	}
+	if !validIntentText(i.Cwd) || !validIntentText(i.Term) {
+		return fmt.Errorf("execution: invalid command text")
+	}
+	for _, value := range i.Command {
+		if !validIntentText(value) {
+			return fmt.Errorf("execution: invalid command text")
+		}
+	}
+	return nil
+}

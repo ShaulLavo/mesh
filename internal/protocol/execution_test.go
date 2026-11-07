@@ -46,3 +46,12 @@ func TestExecutionRequestRejectsCreateFields(t *testing.T) {
 		}
 	}
 }
+
+func TestExecutionDiscriminatorAliasesCannotBypassRawBoundary(t *testing.T) {
+	for _, name := range []string{"Type", "TYPE", "tYpE"} {
+		raw := `{"` + name + `":"execution.create","requestId":"r","requestKey":"job","kind":"pty","command":["/bin/true"],"cwd":"/work","env":["injected"]}`
+		if _, err := DecodeControl([]byte(raw)); err == nil {
+			t.Fatalf("decoder accepted execution discriminator alias %q", name)
+		}
+	}
+}

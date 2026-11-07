@@ -593,9 +593,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	go func() {
 		defer close(reconciled)
 		reconcilePeriodically(daemonCtx, catalog, opts.reconcileInterval, reporter, func() {
-			if err := lifecycle.restoreExecution(daemonCtx); err != nil {
-				reporter.report(err)
-			}
+			reporter.report(lifecycle.restoreExecution(daemonCtx))
 			state.hostChanged(lifecycle.declaredHostInfo())
 			if state.hasTopic("services") {
 				serviceControl.observeRegistry(daemonCtx, state.observeServices)
