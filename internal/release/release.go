@@ -214,8 +214,8 @@ func validateArtifacts(artifacts []Artifact) error {
 		if _, exists := seen[artifact.Platform]; exists {
 			return fmt.Errorf("release: duplicate artifact platform %s", artifact.Platform)
 		}
-		if artifact.Archive != archiveName(artifact.Platform) {
-			return fmt.Errorf("release: artifact for %s is named %q, want %q", artifact.Platform, artifact.Archive, archiveName(artifact.Platform))
+		if _, err := artifact.Format(); err != nil {
+			return err
 		}
 		if !validDigest(artifact.SHA256) || !validDigest(artifact.BinarySHA256) {
 			return fmt.Errorf("release: artifact for %s has an invalid SHA-256", artifact.Platform)
@@ -292,10 +292,6 @@ func supportedPlatform(platform Platform) bool {
 		return supportedPlatforms[index].String() >= platform.String()
 	})
 	return index < len(supportedPlatforms) && supportedPlatforms[index] == platform
-}
-
-func archiveName(platform Platform) string {
-	return "mesh_" + platform.OS + "_" + platform.Arch + ".tar.gz"
 }
 
 func validCommit(value string) bool {

@@ -14,34 +14,38 @@ import time
 OUTPUT_LIMIT = 1 << 20
 
 
-def group_exists(group):
-    try:
-        os.killpg(group, 0)
-        return True
-    except ProcessLookupError:
-        return False
-
-
 def signal_group(group, number):
     try:
         os.killpg(group, number)
+        return "present"
     except ProcessLookupError:
-        pass
+        return "absent"
+    except PermissionError:
+        # Darwin excludes zombies from killpg, including signal 0. EPERM also
+        # covers live members we cannot signal; neither case proves absence.
+        return "denied"
+
+
+def group_exists(group):
+    return signal_group(group, 0) != "absent"
 
 
 def stop_group(child, group, grace):
     deadline = time.monotonic() + grace
-    signal_group(group, signal.SIGTERM)
+    last_signal = signal_group(group, signal.SIGTERM)
     killed = False
     while time.monotonic() < deadline:
         status = child.poll()
         if status is not None and not group_exists(group):
-            return True
+            return True, None
         if not killed and time.monotonic() >= deadline - 2:
-            signal_group(group, signal.SIGKILL)
+            last_signal = signal_group(group, signal.SIGKILL)
             killed = True
         time.sleep(0.01)
-    return child.poll() is not None and not group_exists(group)
+    probe = signal_group(group, 0) if child.poll() is not None else "child-running"
+    if probe == "absent":
+        return True, None
+    return False, f"group {group} join unproved; probe {probe}; last cleanup signal {last_signal}"
 
 
 def wait_command(child, timeout):
@@ -81,7 +85,8 @@ def run_anchor(parent_group, timeout, stdout, stderr, args):
     joined = child.poll() is not None and not group_exists(os.getpid())
     leaked = reason == "exit" and not joined
     if not joined:
-        joined = stop_group(child, os.getpid(), 8 if not timeout else 4)
+        joined, cleanup_error = stop_group(child, os.getpid(), 8 if not timeout else 4)
+        failure = failure or cleanup_error
     print(json.dumps({"joined": joined, "reason": reason, "status": child.returncode,
                       "leaked": leaked, "group": os.getpid(), "error": failure}), flush=True)
 

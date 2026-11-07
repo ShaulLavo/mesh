@@ -96,7 +96,7 @@ func testManifest() Manifest {
 	for index, platform := range supportedPlatforms {
 		artifacts[index] = Artifact{
 			Platform:     platform,
-			Archive:      archiveName(platform),
+			Archive:      ArchiveName(platform, ArchiveGzip),
 			SHA256:       strings.Repeat(string(rune('1'+index)), 64),
 			BinarySHA256: strings.Repeat(string(rune('4'+index)), 64),
 		}
