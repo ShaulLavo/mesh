@@ -80,7 +80,11 @@ func TestJournalFirstPublicationSyncsParents(t *testing.T) {
 func testJournalParentBarrier(t *testing.T, index int) {
 	f := newFixture(t)
 	state := f.engine.cfg.StateDir
-	directories := []string{transactionDir(state), state, filepath.Dir(state)}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directories := []string{transactionDir(state), filepath.Join(parent, filepath.Base(state)), parent}
 	syncReal := syncDirectory
 	t.Cleanup(func() { syncDirectory = syncReal })
 	fault := errors.New("injected first journal parent barrier failure")
@@ -180,6 +184,62 @@ func testJournalReplayBarrier(t *testing.T, action string) {
 	}
 	if f.manager.stops != 0 {
 		t.Fatal("replay activated daemon")
+	}
+	f.roundTrip()
+}
+
+func TestNestedJournalPublicationAncestry(t *testing.T) {
+	for _, alias := range []bool{false, true} {
+		t.Run(fmt.Sprint(alias), func(t *testing.T) { testNestedJournalPublication(t, alias) })
+	}
+}
+
+func testNestedJournalPublication(t *testing.T, alias bool) {
+	f := newFixture(t)
+	root := t.TempDir()
+	physical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := root
+	if alias {
+		base = filepath.Join(t.TempDir(), "alias")
+		if err := os.Symlink(root, base); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := filepath.Join(base, "new", "parent", "state")
+	f.engine.cfg.StateDir, f.manager.stateDir = state, state
+	faultPath := filepath.Join(physical, "new")
+	realSync := syncDirectory
+	t.Cleanup(func() { syncDirectory = realSync })
+	fault := errors.New("injected nested journal ancestor failure")
+	calls := 0
+	syncDirectory = func(path string) error {
+		if path == faultPath {
+			calls++
+			return fault
+		}
+		return realSync(path)
+	}
+	status, err := f.engine.Stage(context.Background(), f.request)
+	if !errors.Is(err, fault) || status.Phase != Accepted || calls == 0 {
+		t.Fatalf("nested journal acknowledged without ancestor barrier: phase=%s calls=%d error=%v", status.Phase, calls, err)
+	}
+	for range 2 {
+		reopened, openErr := New(f.engine.cfg)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		before := calls
+		if _, err := reopened.Stage(context.Background(), f.request); !errors.Is(err, fault) || calls == before {
+			t.Fatalf("nested journal replay lost ancestor barrier: calls=%d error=%v", calls-before, err)
+		}
+	}
+	syncDirectory = realSync
+	status, err = f.engine.Stage(context.Background(), f.request)
+	if err != nil || status.Phase != Staged || !sameRequest(status, f.request) || f.manager.stops != 0 {
+		t.Fatalf("nested staging settlement = %+v %v", status, err)
 	}
 	f.roundTrip()
 }

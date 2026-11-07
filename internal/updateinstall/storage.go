@@ -69,18 +69,54 @@ func (e *Engine) save(status *Status) error {
 	if err := atomicWrite(journalPath(e.cfg.StateDir), append(data, '\n'), 0600); err != nil {
 		return err
 	}
-	return settleJournalPublication(e.cfg.StateDir)
+	return settleJournalParents(transactionDir(e.cfg.StateDir))
 }
 
 // Journal readers also settle a prior rename whose directory barrier failed.
 // The helper and retransmissions must not act on unconfirmed visible state.
 func settleJournalPublication(stateDir string) error {
-	for _, directory := range []string{transactionDir(stateDir), stateDir, filepath.Dir(stateDir)} {
-		if err := syncDirectory(directory); err != nil {
-			return fmt.Errorf("settle installation publication: %w", err)
-		}
+	directory := transactionDir(stateDir)
+	if err := syncDirectory(directory); err != nil {
+		return fmt.Errorf("settle installation publication: %w", err)
 	}
-	return nil
+	return settleJournalParents(directory)
+}
+
+// A filesystem root predates this journal's MkdirAll. Walk resolved parents so
+// aliases and API reopens cannot lose the complete creation barrier chain.
+func settleJournalParents(directory string) error {
+	current, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return fmt.Errorf("resolve installation publication directory: %w", err)
+	}
+	for {
+		parent, err := journalPublicationParent(current)
+		if err != nil || parent == "" {
+			return err
+		}
+		if err := syncDirectory(parent); err != nil {
+			return fmt.Errorf("settle installation publication parent: %w", err)
+		}
+		current = parent
+	}
+}
+
+func journalPublicationParent(directory string) (string, error) {
+	parent := filepath.Dir(directory)
+	if parent == directory {
+		return "", nil
+	}
+	var current, ancestor unix.Stat_t
+	if err := unix.Stat(directory, &current); err != nil {
+		return "", fmt.Errorf("inspect installation publication directory: %w", err)
+	}
+	if err := unix.Stat(parent, &ancestor); err != nil {
+		return "", fmt.Errorf("inspect installation publication parent: %w", err)
+	}
+	if current.Dev != ancestor.Dev {
+		return "", nil
+	}
+	return parent, nil
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
