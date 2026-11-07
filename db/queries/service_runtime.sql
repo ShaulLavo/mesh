@@ -15,7 +15,7 @@ WHERE name = sqlc.arg(name) AND generation = sqlc.arg(generation) AND version = 
 -- name: DeleteServiceRuntime :execrows
 DELETE FROM service_runtime
 WHERE service_runtime.name = ? AND service_runtime.generation = ? AND service_runtime.version = ?
-AND NOT EXISTS (SELECT 1 FROM services WHERE services.name = service_runtime.name);
+AND NOT EXISTS (SELECT 1 FROM services WHERE services.name = service_runtime.name AND services.demand <> '');
 
 -- name: ConfirmServiceRuntime :exec
 UPDATE service_runtime_barrier SET revision = revision + 1 WHERE id = 1;

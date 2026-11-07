@@ -21,7 +21,7 @@ func (q *Queries) ConfirmServiceRuntime(ctx context.Context) error {
 const deleteServiceRuntime = `-- name: DeleteServiceRuntime :execrows
 DELETE FROM service_runtime
 WHERE service_runtime.name = ? AND service_runtime.generation = ? AND service_runtime.version = ?
-AND NOT EXISTS (SELECT 1 FROM services WHERE services.name = service_runtime.name)
+AND NOT EXISTS (SELECT 1 FROM services WHERE services.name = service_runtime.name AND services.demand <> '')
 `
 
 type DeleteServiceRuntimeParams struct {

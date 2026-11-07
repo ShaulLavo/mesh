@@ -96,3 +96,24 @@ func assertIncompleteRuntimePhase(t *testing.T, phase ServicePhase) {
 		t.Fatal("phase without ownership accepted")
 	}
 }
+
+func TestServiceRuntimeDeletesAfterRecipeRemoval(t *testing.T) {
+	store, err := Open(t.Context(), filepath.Join(t.TempDir(), "mesh.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	record := runtimeTestRecord(t)
+	service := record.Attempt.Launched
+	record.Phase, record.Attempt = ServiceNone, nil
+	if err := store.CompareServiceRuntime(t.Context(), nil, &record); err != nil {
+		t.Fatal(err)
+	}
+	service.Demand = nil
+	if _, err := store.UpsertService(t.Context(), service); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompareServiceRuntime(t.Context(), &record, nil); err != nil {
+		t.Fatalf("a definition without a worker recipe pinned retired ownership: %v", err)
+	}
+}
