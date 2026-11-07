@@ -66,6 +66,14 @@ def main(binary):
         require(stale.returncode != 0, "stale administrative decision succeeded")
         _, disabled = automatic(coordinator, "disable", "--expected-revision", "1")
         require(not disabled["record"]["policy"]["enabled"], str(disabled))
+        human = coordinator.command("update", "automatic", "status")
+        require("Automatic updates:" in human.stdout, human.stdout)
+        require(record["policy"]["id"] not in human.stdout and coordinator.id not in human.stdout,
+                "default automatic status exposed authority identifiers")
+        structured = coordinator.command("update", "status", "--json")
+        joined = json.loads(structured.stdout)
+        require(joined["updates"]["sources"][0]["automatic"]["value"]["record"]["policy"]
+                == disabled["record"]["policy"], str(joined))
         coordinator.stop_daemon()
         coordinator.start()
         _, reopened = automatic(coordinator, "status")

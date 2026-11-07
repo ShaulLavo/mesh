@@ -325,3 +325,62 @@ func printUpdateStarted(output updateOutput, run update.Run) {
 	}
 	_, _ = fmt.Fprintf(output.diagnostic, "Update %s saved. Closing this terminal does not cancel it.\n", output.privacy.Value("update", run.ID))
 }
+
+func printAutomaticStatusOutput(out io.Writer, status update.AutomaticStatus, structured, details bool, mask *privacy.Mask) error {
+	observation := DashboardStatusObservation{State: DashboardStatusObserved, At: time.Now()}
+	source := DashboardUpdateSource{Automatic: &DashboardStatus[update.AutomaticStatus]{Observation: observation, Value: &status}}
+	if status.Record != nil {
+		source.Coordinator.ID = status.Record.Policy.CoordinatorID
+	}
+	return printUpdateStatusPresentation(out, status, source, structured, details, mask)
+}
+func printConfigurationStatusOutput(out io.Writer, status update.ConfigurationStatus, structured, details bool, mask *privacy.Mask) error {
+	observation := DashboardStatusObservation{State: DashboardStatusObserved, At: time.Now()}
+	source := DashboardUpdateSource{Configuration: &DashboardStatus[update.ConfigurationStatus]{Observation: observation, Value: &status}}
+	if status.Change != nil {
+		source.Coordinator.ID = status.Change.Proposal.CoordinatorID
+	}
+	return printUpdateStatusPresentation(out, status, source, structured, details, mask)
+}
+func printDashboardUpdateRows(out io.Writer, view DashboardUpdates, mask *privacy.Mask) error {
+	labels := map[string]string{}
+	hosts, _ := LoadHosts()
+	for _, host := range hosts {
+		if host.MachineName != "" {
+			labels[host.ID] = host.MachineName
+		}
+	}
+	for _, row := range DashboardUpdateRows(view, time.Now()) {
+		label := ""
+		if row.HostID != "" {
+			label = "Selected machine: "
+		}
+		if name := labels[row.HostID]; name != "" {
+			label = SafeTerminalText(mask.Value("host", name)) + ": "
+		}
+		if _, err := fmt.Fprintln(out, label+row.Text); err != nil {
+			return fmt.Errorf("print fleet drift status: %w", err)
+		}
+	}
+	return nil
+}
+
+func printUpdateDetails(out io.Writer, value any, mask *privacy.Mask) error {
+	if mask == nil {
+		return writeAutomaticJSON(out, value)
+	}
+	if _, err := fmt.Fprintln(out, "Status details hidden in privacy mode. Use --privacy=false --details to inspect, or --json for the complete operational record."); err != nil {
+		return fmt.Errorf("print private status details: %w", err)
+	}
+	return nil
+}
+
+func printUpdateStatusPresentation(out io.Writer, value any, source DashboardUpdateSource, structured, details bool, mask *privacy.Mask) error {
+	if structured {
+		return writeAutomaticJSON(out, value)
+	}
+	if details {
+		return printUpdateDetails(out, value, mask)
+	}
+	return printDashboardUpdateRows(out, DashboardUpdates{Sources: []DashboardUpdateSource{source}}, mask)
+}

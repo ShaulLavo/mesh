@@ -128,3 +128,19 @@ admission contract. No service probe, automatic restart, enrollment, installed
 update or owner configuration change is part of this source unit. Direct
 historical release transitions remain blocked with explicit manual bridge-review
 advice; automatic reconciliation does not traverse historical releases.
+
+## Unit 5 source presentation
+
+The CLI and dashboard now join read-only binary and configuration status from
+exact saved pinned coordinators. Configuration-only grants remain independent
+of binary consent. Default copy names actions without exposing authority IDs;
+structured output retains full contracts and original observation times.
+Saved settings, running daemon policy, live renderer leases, feed failures,
+upstream age and unknown service HTTPS acceptance remain independent.
+
+The bounded dashboard area shares the existing frame/layout owner and reserves
+no row without status. Its CLI watcher has a five-second per-read deadline and
+30-second cadence, joins cancellation, and discards responses when saved source
+enrollment changes. No release fetch, wake, enrollment, trust change or restart
+is part of presentation. Actual fleet enrollment, rollout and passive HTTPS
+acceptance remain separate unfinished work.

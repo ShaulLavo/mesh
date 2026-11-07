@@ -13,6 +13,7 @@ import (
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/update"
 	"github.com/spf13/cobra"
 )
@@ -150,11 +151,11 @@ func (a *application) runAutomaticPolicy(cmd *cobra.Command, args []string, opti
 		environment.client = a.dependencies.UpdateCaller
 	}
 	var status update.AutomaticStatus
-	if err = environment.client.Call(cmd.Context(), environment.coordinator, "automatic.status", nil, &status); err != nil {
-		return automaticUnavailable(cmd, environment, err, options.json)
+	if _, err = dashboardStatusCall(cmd.Context(), environment.client, environment.coordinator, "automatic.status", nil, &status); err != nil {
+		return automaticUnavailable(cmd, environment, err, options.json, a.privacy)
 	}
 	if selected.action == automaticStatusAction {
-		return printAutomaticStatus(cmd, status, options.json)
+		return printAutomaticStatus(cmd, status, options.json, a.privacy)
 	}
 	request, err := a.approveAutomaticCommand(cmd, args, status, selected)
 	if err != nil {
@@ -163,7 +164,7 @@ func (a *application) runAutomaticPolicy(cmd *cobra.Command, args []string, opti
 	if err = environment.client.Call(cmd.Context(), environment.coordinator, "automatic.change", request, &status); err != nil {
 		return fmt.Errorf("change automatic policy: %w", err)
 	}
-	return printAutomaticStatus(cmd, status, options.json)
+	return printAutomaticStatus(cmd, status, options.json, a.privacy)
 }
 func (a *application) approveAutomaticCommand(cmd *cobra.Command, args []string, status update.AutomaticStatus, selected automaticPolicyOptions) (update.AutomaticCommand, error) {
 	if !cmd.Flags().Changed("expected-revision") {
@@ -222,15 +223,11 @@ func writeAutomaticJSON(out io.Writer, value any) error {
 	}
 	return nil
 }
-func printAutomaticStatus(cmd *cobra.Command, status update.AutomaticStatus, structured bool) error {
-	if !structured {
-		if _, err := fmt.Fprintln(cmd.OutOrStdout(), SafeTerminalText(status.State)); err != nil {
-			return fmt.Errorf("write automatic state: %w", err)
-		}
-	}
-	return writeAutomaticJSON(cmd.OutOrStdout(), status)
+func printAutomaticStatus(cmd *cobra.Command, status update.AutomaticStatus, structured bool, masks ...*privacy.Mask) error {
+	details, _ := cmd.Flags().GetBool("details")
+	return printAutomaticStatusOutput(cmd.OutOrStdout(), status, structured, details, presentationMask(masks))
 }
-func automaticUnavailable(cmd *cobra.Command, environment updateEnvironment, cause error, structured bool) error {
+func automaticUnavailable(cmd *cobra.Command, environment updateEnvironment, cause error, structured bool, masks ...*privacy.Mask) error {
 	if !update.IsLocal(environment.coordinator) {
 		return fmt.Errorf("automatic status transport: %w", cause)
 	}
@@ -248,7 +245,7 @@ func automaticUnavailable(cmd *cobra.Command, environment updateEnvironment, cau
 		status.Revision = nil
 	}
 	status.TransportProblem = cause.Error()
-	if err := printAutomaticStatus(cmd, status, structured); err != nil {
+	if err := printAutomaticStatus(cmd, status, structured, masks...); err != nil {
 		return err
 	}
 	return fmt.Errorf("coordinator unavailable; showing saved automatic state: %w", cause)

@@ -25,6 +25,8 @@ func (m dashboardModel) render() string {
 
 func (m dashboardModel) renderFrame() (string, dashboardLayout) {
 	m = m.privacyDisplay()
+	m.updateFrame = nil
+	m.updateFrame = m.updateLines()
 	if m.configError != "" {
 		message := "MESH · Configuration error\n\n" + m.configError + "\n\nCorrect the configuration file. Mesh retries every second."
 		lines := strings.Split(ansi.Wrap(message, max(1, m.width), ""), "\n")
@@ -49,6 +51,7 @@ func (m dashboardModel) renderFrame() (string, dashboardLayout) {
 		m.layout = dashboardLayout{}
 	}
 	lines := m.header()
+	lines = append(lines, m.updateLines()...)
 	body, visible := m.fleetBody()
 	lines = append(lines, body...)
 	lines = append(lines, m.paint(dashboardMutedStyle).Render(fmt.Sprintf("Hosts %d / %d visible · %d omitted", visible, len(m.hosts), len(m.hosts)-visible)))
@@ -67,16 +70,16 @@ func (m dashboardModel) fleetBody() ([]string, int) {
 	var lines []string
 	visible := len(m.hosts)
 	switch {
-	case m.width >= 140 && m.height >= 40 && m.cardsHeight()+m.layout.key.summaries <= m.height-5:
+	case m.width >= 140 && m.height >= 40 && m.cardsHeight()+m.layout.key.summaries <= m.height-5-len(m.updateLines()):
 		lines = append(lines, m.cards()...)
 	case len(m.hosts) > 6:
-		visible = min(len(m.hosts), m.height-11)
+		visible = min(len(m.hosts), m.height-11-len(m.updateLines()))
 		lines = append(lines, m.paint(dashboardMutedStyle).Render("HOST        DAEMON       CPU        RAM GiB       SESSIONS / SERVICES"))
 		for _, host := range m.hosts[:visible] {
 			lines = append(lines, m.fleetRow(host))
 		}
 	default:
-		visible = min(len(m.hosts), max(0, (m.height-11)/2))
+		visible = min(len(m.hosts), max(0, (m.height-11-len(m.updateLines()))/2))
 		for _, host := range m.hosts[:visible] {
 			lines = append(lines, m.compactHost(host)...)
 		}

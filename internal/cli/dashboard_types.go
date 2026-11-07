@@ -7,6 +7,7 @@ import (
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/usagefeed"
 )
 
@@ -24,6 +25,7 @@ type DashboardInput struct {
 	Wall             bool
 	Theme            string
 	Watch            DashboardWatch
+	UpdateWatch      func(context.Context, func(DashboardUpdates)) error
 	UsageWatch       func(context.Context, func(DashboardUsageUpdate)) error
 	UsageAcknowledge func(DashboardUsageAcknowledgement)
 	Inspect          PickerInspectFunc
@@ -138,4 +140,38 @@ type DashboardUsageAcknowledgement struct {
 
 func (u DashboardUsageUpdate) Acknowledgement() DashboardUsageAcknowledgement {
 	return DashboardUsageAcknowledgement{u.Publication, u.Generation, u.Enabled, u.State, u.Digest, u.Result.Revision}
+}
+
+// DashboardStatusState describes a read without asserting host reachability.
+type DashboardStatusState string
+
+const (
+	DashboardStatusObserved    DashboardStatusState = "observed"
+	DashboardStatusUnavailable DashboardStatusState = agentUnavailable
+	DashboardStatusRefused     DashboardStatusState = "refused"
+)
+
+type DashboardStatusObservation struct {
+	State   DashboardStatusState `json:"state"`
+	At      time.Time            `json:"at"`
+	Problem string               `json:"problem,omitempty"`
+}
+type DashboardStatus[T any] struct {
+	Observation DashboardStatusObservation `json:"observation"`
+	Value       *T                         `json:"value"`
+}
+type DashboardUpdateSource struct {
+	Coordinator   update.Host                                  `json:"coordinator"`
+	Automatic     *DashboardStatus[update.AutomaticStatus]     `json:"automatic,omitempty"`
+	Configuration *DashboardStatus[update.ConfigurationStatus] `json:"configuration,omitempty"`
+}
+type DashboardUpdates struct {
+	Generation uint64                  `json:"generation"`
+	Sources    []DashboardUpdateSource `json:"sources"`
+	Problem    string                  `json:"problem,omitempty"`
+}
+type DashboardUpdateRow struct {
+	HostID    string
+	Text      string
+	Attention bool
 }

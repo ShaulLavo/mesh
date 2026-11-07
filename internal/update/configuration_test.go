@@ -472,3 +472,41 @@ func TestConfigurationGrantReportsBothSelectedGroupsAfterRevoke(t *testing.T) {
 		t.Fatalf("revoked groups are not explicit: %s", data)
 	}
 }
+
+func TestConfigurationGrantReadOnlyAbsentRevokedMalformedAndContended(t *testing.T) {
+	c, _, _ := configurationFixture(t, 1)
+	grant, err := c.Store.ConfigurationGrant(t.Context())
+	if err != nil || grant.Revision != 0 {
+		t.Fatal(grant, err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(c.Store.directory), "config-grant.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("read created grant", err)
+	}
+	for _, groups := range [][2]bool{{true, false}, {false, true}, {false, false}} {
+		grant, err = c.Store.SetConfigurationGrant(t.Context(), grant.Revision, c.ID, c.ID, groups[0], groups[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		read, err := c.Store.ConfigurationGrant(t.Context())
+		if err != nil || read != grant {
+			t.Fatal(read, grant, err)
+		}
+	}
+	unlock, err := c.Store.lockContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = c.Store.ConfigurationGrant(ctx)
+	unlock()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled read ignored lock: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(c.Store.directory), "config-grant.json"), []byte(`{"schema":1,"revision":9,"usageFeed":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Store.ConfigurationGrant(t.Context()); err == nil {
+		t.Fatal("malformed grant became absence")
+	}
+}
