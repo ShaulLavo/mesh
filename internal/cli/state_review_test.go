@@ -21,6 +21,8 @@ import (
 )
 
 func reviewControlDial(t *testing.T, respond func(HostRecord, protocol.Control) *protocol.Control) HostDialer {
+	t.Setenv("MESH_STATE_DIR", t.TempDir())
+	initializeTestServicePolicy(t)
 	t.Helper()
 	return func(ctx context.Context, host HostRecord) (transport.Conn, error) {
 		a, b := net.Pipe()

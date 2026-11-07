@@ -602,7 +602,7 @@ func TestUnserveExplicitAbsentRetryPreservesAuthenticatedPrivateName(t *testing.
 		t.Fatal(err)
 	}
 	defer cache.Close() //nolint:errcheck // test cleanup
-	rows, err := cache.LoadAllServices(context.Background())
+	rows, err := cache.LoadAllServices(context.Background(), []HostRecord{host.host})
 	if err != nil {
 		t.Fatal(err)
 	}

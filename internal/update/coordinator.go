@@ -26,6 +26,7 @@ type Operation struct {
 	RetryToken             uint64  `json:"retryToken,omitempty"`
 }
 type Info struct {
+	Domain               *DomainObservation          `json:"domain,omitempty"`
 	Commands             []updateinstall.CommandCopy `json:"commands,omitempty"`
 	AcceptsIdentityFleet bool                        `json:"acceptsIdentityFleet"`
 	Health               updateinstall.Health        `json:"health"`

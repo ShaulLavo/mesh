@@ -396,3 +396,5 @@ restart processes. Preview binds the actual approver and exact selected values.
 Status distinguishes saved bytes from a running dashboard's acknowledged load
 and feed result. See [Deliver dashboard feed settings](fleet-configuration.md)
 for allowance, preview, approval, cancellation, revocation, and recovery.
+
+Domain and feed delivery have separate grants and component receipts. See [fleet configuration](fleet-configuration.md) for saved versus actual loaded policy and restart requirements.

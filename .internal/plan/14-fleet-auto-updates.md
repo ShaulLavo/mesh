@@ -103,3 +103,20 @@ intentions, while target-local revocation separately fences acceptance.
 Domain-policy delivery, catalog generation and actual service verification are
 unit 4. Fleet drift presentation is unit 5. No real feed URL, fleet enrollment,
 owner configuration, provider account or installed service was changed by unit 3.
+
+
+## Domain source boundary
+
+Plan 017 unit 4 adds explicit domain grants, component receipts and actual
+signed daemon policy observations. The primary and complete aliases retain all
+accepted private domains and the legacy certificate owner. Policy generation
+serializes domain publication with every advisory service-cache operation and
+invalidates retained live service and private-name observations. Process policy
+stays immutable. Saved changes remain restart or reopen required until actual
+consumer observations match.
+
+Service HTTPS verification is explicitly unknown pending a request-time passive
+admission contract. No service probe, automatic restart, enrollment, installed
+update or owner configuration change is part of this source unit. Direct
+historical release transitions remain blocked with explicit manual bridge-review
+advice; automatic reconciliation does not traverse historical releases.

@@ -8,7 +8,7 @@ import (
 
 func TestConfigurationUnchangedObservationDoesNotRepublish(t *testing.T) {
 	c, actor, file := configurationFixture(t, 1)
-	if _, err := c.Store.SetConfigurationGrant(t.Context(), 0, c.ID, c.ID, true); err != nil {
+	if _, err := c.Store.SetConfigurationGrant(t.Context(), 0, c.ID, c.ID, true, false); err != nil {
 		t.Fatal(err)
 	}
 	approval := configurationProposalFixture(t, c, actor)
@@ -57,7 +57,7 @@ func TestConfigurationMixedObserversKeepReloadPending(t *testing.T) {
 		{Digest: (FeedValue{Present: true, URL: desired.URL}).Digest(), State: "enabled", Failing: true},
 		{Digest: (FeedValue{}).Digest(), State: "enabled"},
 	}}
-	if got := configurationConsumerState(target, desired); got != "saved; dashboard reload pending" {
+	if got := configurationConsumerState(target, &desired); got != "saved; dashboard reload pending" {
 		t.Errorf("one live dashboard is on another digest but aggregate reports %q", got)
 	}
 }
@@ -128,4 +128,34 @@ func TestConfigurationObservationAdmissionDoesNotRepublish(t *testing.T) {
 		t.Fatalf("observation was not paced in memory: %+v %v", next, err)
 	}
 
+}
+
+func TestConfigurationSavedObservationUsesMemoryClockAfterRestart(t *testing.T) {
+	c, actor, file := configurationFixture(t, 1)
+	if _, err := c.Store.SetConfigurationGrant(t.Context(), 0, c.ID, c.ID, true, false); err != nil {
+		t.Fatal(err)
+	}
+	approval := configurationProposalFixture(t, c, actor)
+	if _, err := c.ApproveConfiguration(t.Context(), actor, approval); err != nil {
+		t.Fatal(err)
+	}
+	dispatched, err := c.reserveConfiguration(t.Context())
+	if err != nil || dispatched == nil {
+		t.Fatal(dispatched, err)
+	}
+	receipt, err := c.Store.PutConfiguration(t.Context(), actor, c.ID, c.Trusted, file.writer, dispatched.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.finishConfiguration(t.Context(), *dispatched, receipt, ConfigurationSnapshot{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	first, err := c.reserveConfiguration(t.Context())
+	if err != nil || first == nil || first.operation != "observe" {
+		t.Fatalf("saved consumer waited behind an obsolete dispatch retry clock: %+v %v", first, err)
+	}
+	second, err := c.reserveConfiguration(t.Context())
+	if err != nil || second != nil {
+		t.Fatal("saved observation was not paced in memory", second, err)
+	}
 }

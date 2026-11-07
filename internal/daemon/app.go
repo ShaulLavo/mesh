@@ -41,6 +41,7 @@ const (
 // TailnetPort and SSHPort values disable their corresponding listeners. Zero
 // connection caps select the defaults for Unix and Tailnet independently.
 type Config struct {
+	DomainWriter                update.DomainWriter
 	ConfigurationWriter         update.ConfigurationWriter
 	FleetShare                  *fleetshare.Service
 	SubscriberLimit             int
@@ -506,6 +507,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		membershipPath = fleetMembershipPath(cfg.ConfigDir)
 	}
 	updates.configurationWriter = cfg.ConfigurationWriter
+	updates.domainWriter = cfg.DomainWriter
 	updates.coordinator.SavedFleet = func() (update.Fleet, error) { return update.ReadFleet(membershipPath) }
 	fleetProfile := newFleetProfileController(stateDir, membershipPath, meshHost.ID, update.Client{ID: meshHost.ID, Key: meshPrivateKey}, updates.authority.IsAdministrator, reporter.report)
 	updates.fleetProfile = fleetProfile

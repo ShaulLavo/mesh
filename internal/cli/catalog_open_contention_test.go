@@ -74,7 +74,7 @@ func TestCatalogOpenContentionKeepsAnOptionalCache(t *testing.T) {
 			if _, err := result.cache.Save(t.Context(), host, nil); err != nil {
 				t.Fatalf("cache open warning repeated on save: %v", err)
 			}
-			services, err := result.cache.LoadAllServices(t.Context())
+			services, err := result.cache.LoadAllServices(t.Context(), []HostRecord{host})
 			if err != nil || len(services) != 0 {
 				t.Fatalf("optional service cache blocks live fan-out: %#v, %v", services, err)
 			}

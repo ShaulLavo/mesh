@@ -1,10 +1,10 @@
 package domainpolicy
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -61,7 +61,7 @@ func initializeDeploymentPolicy(path, stateDir string, deploymentRequested, pers
 	if !persist {
 		return installPolicy(policy)
 	}
-	if err := publishMigration(path, policy); err != nil {
+	if err := publishDeploymentPolicy(path, stateDir, policy); err != nil {
 		return err
 	}
 	return Initialize(path)
@@ -181,37 +181,6 @@ func readMigrationFile(path string, limit int64) ([]byte, error) {
 	return contents, nil
 }
 
-func publishMigration(path string, policy Policy) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("domain policy: create configuration directory: %w", err)
-	}
-	contents, err := json.MarshalIndent(policy, "", "  ")
-	if err != nil {
-		return fmt.Errorf("domain policy: encode migration: %w", err)
-	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".domains-*")
-	if err != nil {
-		return fmt.Errorf("domain policy: prepare migration: %w", err)
-	}
-	defer os.Remove(file.Name()) //nolint:errcheck // the temporary name is disposable after publication
-	defer file.Close()           //nolint:errcheck // explicit close before publication checks errors
-	if _, err := file.Write(append(contents, '\n')); err != nil {
-		return fmt.Errorf("domain policy: write migration: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		return fmt.Errorf("domain policy: sync migration: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("domain policy: close migration: %w", err)
-	}
-	// An atomic no-replace link preserves policy written by another startup or
-	// the operator while we were inspecting state. Load that winner below.
-	if err := os.Link(file.Name(), path); err != nil && !errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("domain policy: publish migration: %w", err)
-	}
-	return nil
-}
-
 func persistedPrivateDomain(stateDir string) (string, error) {
 	contents, err := readMigrationFile(filepath.Join(stateDir, "private-tls", "live", "private-name"), 254)
 	if errors.Is(err, os.ErrNotExist) {
@@ -277,4 +246,20 @@ func existingInstallation(path, stateDir string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func publishDeploymentPolicy(path, stateDir string, policy Policy) error {
+	ctx := context.Background()
+	return WithCatalogGate(ctx, stateDir, func(gate *CatalogGate) error { return publishInitialDomain(ctx, path, policy, gate) })
+}
+func publishInitialDomain(ctx context.Context, path string, policy Policy, gate *CatalogGate) error {
+	return WithDomainFile(ctx, path, func(file *DomainFile) error {
+		if file.Present {
+			return file.Settle()
+		}
+		if err := gate.Prepare(policy.Digest(), nil); err != nil {
+			return err
+		}
+		return file.Save(policy)
+	})
 }

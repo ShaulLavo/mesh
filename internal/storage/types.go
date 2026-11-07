@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	dbsqlc "github.com/shaul/mesh/internal/storage/sqlc"
 )
@@ -67,6 +68,7 @@ type ObservedSession struct {
 // CachedService is the last service status observed from one adopted host.
 // It is advisory state for offline CLI listing, never daemon routing state.
 type CachedService struct {
+	Policy      domainpolicy.CatalogToken `json:"-"`
 	HostID      HostID
 	PrivateName string
 	Service     meshserve.Service

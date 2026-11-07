@@ -24,7 +24,7 @@ func (p *pickerServicePublication) observe(host HostRecord, state StateView) {
 	if section.ReceivedAt.IsZero() {
 		return
 	}
-	rows := liveServiceCatalogRows(host, remoteServiceSnapshot{PrivateName: state.PrivateName, Services: state.Services, ServiceHealthSupported: state.ServiceHealthSupported})
+	rows := liveServiceCatalogRows(host, remoteServiceSnapshot{Policy: state.Policy, PrivateName: state.PrivateName, Services: state.Services, ServiceHealthSupported: state.ServiceHealthSupported})
 	for index := range rows {
 		rows[index].Stale = p.current.Catalog.Stale
 	}

@@ -22,7 +22,6 @@ func TestConfigurationCLIRequiresExistingIdentityAndExplicitLocalGrant(t *testin
 	setupUpdateCLI(t)
 	for _, arguments := range [][]string{
 		{"allow", strings.Repeat("a", 43), "--expected-revision", "0"},
-		{"allow", strings.Repeat("a", 43), "--domain-policy", "--expected-revision", "0"},
 		{"revoke", "--expected-revision", "0", "--coordinator", "remote"},
 	} {
 		_, _, err = executeCommand(t, Dependencies{}, append([]string{"update", "config"}, arguments...)...)

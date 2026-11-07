@@ -12,6 +12,7 @@ import (
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/storage"
@@ -21,8 +22,10 @@ const catalogDatabaseName = "mesh.db"
 
 // SQLiteCatalogCache keeps the last catalog observed from each adopted host.
 type SQLiteCatalogCache struct {
-	store *storage.Store
-	now   func() time.Time
+	policyMu    sync.Mutex
+	policyToken domainpolicy.CatalogToken
+	store       *storage.Store
+	now         func() time.Time
 
 	openErr     error
 	openErrOnce sync.Once
@@ -48,7 +51,11 @@ func OpenCatalogCache(ctx context.Context) (*SQLiteCatalogCache, error) {
 		// defer one diagnostic to the existing cache warning path.
 		return &SQLiteCatalogCache{now: time.Now, openErr: err}, nil
 	}
-	return &SQLiteCatalogCache{store: store, now: time.Now}, nil
+	cache := &SQLiteCatalogCache{store: store, now: time.Now}
+	if err := cache.bindServicePolicy(ctx); err != nil {
+		log.Printf("catalog policy: %v", err)
+	}
+	return cache, nil
 }
 
 // Close closes the cache database.
@@ -164,7 +171,7 @@ func (c *SQLiteCatalogCache) saveSessions(ctx context.Context, host HostRecord, 
 }
 
 // LoadAllServices returns the bounded cached service snapshot keyed by host ID.
-func (c *SQLiteCatalogCache) LoadAllServices(ctx context.Context) (map[string][]storage.CachedService, error) {
+func (c *SQLiteCatalogCache) LoadAllServices(ctx context.Context, hosts []HostRecord) (map[string][]storage.CachedService, error) {
 	if c.store == nil {
 		// A snapshot failure aborts service discovery before live fan-out.
 		// Leave the warning for a subsequent live result's cache save.
@@ -173,7 +180,10 @@ func (c *SQLiteCatalogCache) LoadAllServices(ctx context.Context) (map[string][]
 		}
 		return nil, nil
 	}
-	rows, err := c.store.ListAllCachedServices(ctx)
+	rows, err := c.readServiceSnapshots(ctx, hosts)
+	if advisoryServicePolicyError(ctx, err) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +201,26 @@ func (c *SQLiteCatalogCache) LoadServices(ctx context.Context, host HostRecord) 
 	if c.store == nil {
 		return nil, c.unavailable(ctx)
 	}
-	return c.store.ListCachedServices(ctx, storage.HostID(host.ID))
+	var rows []storage.CachedService
+	err := c.withServicePolicy(ctx, func(gate *domainpolicy.CatalogGate) error {
+		snapshot := gate.Policy.Snapshots[host.ID]
+		if !snapshot.Complete || snapshot.Identity != host.MeshIdentity {
+			return nil
+		}
+		var err error
+		rows, err = c.store.ListCachedServices(ctx, storage.HostID(host.ID))
+		if err != nil {
+			return fmt.Errorf("read validated service snapshot: %w", err)
+		}
+		for index := range rows {
+			rows[index].Policy = gate.Policy.CatalogToken
+		}
+		return nil
+	})
+	if advisoryServicePolicyError(ctx, err) {
+		return nil, nil
+	}
+	return rows, err
 }
 
 // SaveServices atomically replaces the cached list after a live service.list.
@@ -214,7 +243,24 @@ func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, 
 			Healthy: validated.Healthy, Problem: validated.Problem, ObservedAt: now,
 		}
 	}
-	return catalogWriteOutcome(ctx, host, "services", c.store.ReplaceCachedServices(ctx, cachedHost(host, now), services))
+	err := c.withServicePolicy(ctx, func(gate *domainpolicy.CatalogGate) error {
+		if len(gate.Policy.Snapshots) >= maximumConfiguredHosts && gate.Policy.Snapshots[host.ID].Identity == "" {
+			return errors.New("catalog policy: snapshot limit reached")
+		}
+		gate.Policy.Snapshots[host.ID] = domainpolicy.CatalogSnapshot{Identity: host.MeshIdentity}
+		if err := gate.Save(); err != nil {
+			return fmt.Errorf("prepare service snapshot: %w", err)
+		}
+		if err := c.store.ReplaceCachedServices(ctx, cachedHost(host, now), services); err != nil {
+			return fmt.Errorf("replace service snapshot: %w", err)
+		}
+		gate.Policy.Snapshots[host.ID] = domainpolicy.CatalogSnapshot{Identity: host.MeshIdentity, Complete: true}
+		if err := gate.Save(); err != nil {
+			return fmt.Errorf("complete service snapshot: %w", err)
+		}
+		return nil
+	})
+	return catalogWriteOutcome(ctx, host, "services", err)
 }
 
 func cachedHost(host HostRecord, observedAt time.Time) storage.Host {
@@ -252,9 +298,33 @@ func catalogWriteOutcome(ctx context.Context, host HostRecord, operation string,
 	if ctx.Err() != nil {
 		return false, fmt.Errorf("save catalog %s: %w", operation, ctx.Err())
 	}
-	if errors.Is(err, storage.ErrAdvisoryWriteBusy) {
+	if errors.Is(err, storage.ErrAdvisoryWriteBusy) || errors.Is(err, errCatalogPolicyChanged) || errors.Is(err, domainpolicy.ErrPolicyLockBusy) || errors.Is(err, domainpolicy.ErrPublicationPending) {
 		log.Printf("catalog cache: skipped busy %s write for host %q: %v", operation, host.ID, err)
 		return false, nil
 	}
 	return false, fmt.Errorf("save catalog %s: %w", operation, err)
+}
+
+func (c *SQLiteCatalogCache) readServiceSnapshots(ctx context.Context, hosts []HostRecord) ([]storage.CachedService, error) {
+	var rows []storage.CachedService
+	err := c.withServicePolicy(ctx, func(gate *domainpolicy.CatalogGate) error {
+		all, err := c.store.ListAllCachedServices(ctx)
+		if err != nil {
+			return fmt.Errorf("read service snapshots: %w", err)
+		}
+		pins := make(map[string]string, len(hosts))
+		for _, host := range hosts {
+			pins[host.ID] = host.MeshIdentity
+		}
+		for _, row := range all {
+			snapshot := gate.Policy.Snapshots[string(row.HostID)]
+			if !snapshot.Complete || snapshot.Identity != pins[string(row.HostID)] {
+				continue
+			}
+			row.Policy = gate.Policy.CatalogToken
+			rows = append(rows, row)
+		}
+		return nil
+	})
+	return rows, err
 }

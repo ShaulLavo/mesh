@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/storage"
 )
@@ -22,12 +23,13 @@ const (
 type serviceQuery func(context.Context, HostRecord) (remoteServiceSnapshot, error)
 
 type serviceCatalogCache interface {
-	LoadAllServices(context.Context) (map[string][]storage.CachedService, error)
+	LoadAllServices(context.Context, []HostRecord) (map[string][]storage.CachedService, error)
 	SaveServices(context.Context, HostRecord, string, []protocol.ServiceInfo) (bool, error)
 }
 
 // ServiceCatalogRow is one live or cached private service definition.
 type ServiceCatalogRow struct {
+	Policy      domainpolicy.CatalogToken
 	Host        HostRecord
 	PrivateName string
 	Service     protocol.ServiceInfo
@@ -102,7 +104,7 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 
 	operationCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cached, err := cache.LoadAllServices(operationCtx)
+	cached, err := cache.LoadAllServices(operationCtx, hosts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load cached services: %w", err)
 	}
@@ -226,6 +228,12 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 		}
 		return rows[i].Service.Name < rows[j].Service.Name
 	})
+	currentPolicy, policyErr := loadedServicePolicy(ctx)
+	for index := range rows {
+		if policyErr != nil || rows[index].Policy.Generation == 0 || rows[index].Policy != currentPolicy {
+			rows[index].Live, rows[index].Stale = false, true
+		}
+	}
 	return rows, diagnostics, nil
 }
 
@@ -235,7 +243,7 @@ func cachedServiceCatalogRows(host HostRecord, cached []storage.CachedService) [
 		service := protocol.ServiceDefinitionInfo(row.Service)
 		service.Healthy, service.Problem = row.Healthy, row.Problem
 		rows[index] = ServiceCatalogRow{
-			Host: host, PrivateName: row.PrivateName,
+			Policy: row.Policy, Host: host, PrivateName: row.PrivateName,
 			Service: service,
 			Stale:   true, ObservedAt: row.ObservedAt,
 		}
@@ -246,7 +254,7 @@ func cachedServiceCatalogRows(host HostRecord, cached []storage.CachedService) [
 func liveServiceCatalogRows(host HostRecord, snapshot remoteServiceSnapshot) []ServiceCatalogRow {
 	rows := make([]ServiceCatalogRow, len(snapshot.Services))
 	for index, service := range snapshot.Services {
-		rows[index] = ServiceCatalogRow{Host: host, PrivateName: snapshot.PrivateName, Service: service, Live: true, HealthUnsupported: !snapshot.ServiceHealthSupported}
+		rows[index] = ServiceCatalogRow{Host: host, PrivateName: snapshot.PrivateName, Service: service, Policy: snapshot.Policy, Live: snapshot.Policy.Generation != 0, Stale: snapshot.Policy.Generation == 0, HealthUnsupported: !snapshot.ServiceHealthSupported}
 	}
 	return rows
 }
