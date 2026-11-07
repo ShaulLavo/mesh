@@ -31,10 +31,13 @@ def saved_fleet(devices):
 def main(binary):
     check_environment()
     with termination_cleanup(), ExitStack() as cleanup:
-        root = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix="automatic-fleet-")))
-        devices = [Device(binary, root / name, name) for name in ("automatic-one", "automatic-two")]
-        for device in devices:
+        root = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix="au-")))
+        devices = []
+        for directory, name in (("a", "automatic-one"), ("b", "automatic-two")):
+            (root / directory).mkdir()
+            device = Device(binary, root / directory, name)
             cleanup.callback(device.close)
+            devices.append(device)
         coordinator, recipient = devices
         saved_fleet(devices)
         coordinator.save_connections(recipient)

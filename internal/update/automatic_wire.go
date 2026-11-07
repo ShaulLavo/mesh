@@ -59,7 +59,17 @@ func (c *Coordinator) refreshAutomatic(ctx context.Context) error {
 		}
 		return err
 	}
-	if !r.Policy.Enabled || r.Stop != nil || !c.lastAutomaticCheck.IsZero() && time.Since(c.lastAutomaticCheck) < 30*time.Second {
+	if !automaticAdmissionEligible(r) {
+		return nil
+	}
+	manual, err := c.Store.overlappingManual(r.Policy.Fleet)
+	if err != nil {
+		return err
+	}
+	if manual != "" {
+		return nil
+	}
+	if !c.lastAutomaticCheck.IsZero() && time.Since(c.lastAutomaticCheck) < 30*time.Second {
 		return nil
 	}
 	c.lastAutomaticCheck = time.Now()
@@ -71,6 +81,9 @@ func (c *Coordinator) refreshAutomatic(ctx context.Context) error {
 		return err
 	}
 
+	return c.acceptAutomaticObservation(ctx)
+}
+func (c *Coordinator) acceptAutomaticObservation(ctx context.Context) error {
 	if c.CheckedRelease == nil {
 		return nil
 	}
@@ -173,7 +186,7 @@ func prepareAutomaticDispatch(r *AutomaticRecord, index int, kind string) (bool,
 	case automaticRetry:
 		target.RetryAttempt = r.Attempt
 	case "grant":
-		if !canGrant(*r.Current, index) || !reserveCanary(r, index) {
+		if target.State != Staged || !canGrant(*r.Current, index) || !reserveCanary(r, index) {
 			return false, nil
 		}
 		target.Grant = true
@@ -186,4 +199,8 @@ func prepareAutomaticDispatch(r *AutomaticRecord, index int, kind string) (bool,
 
 func unavailableAutomaticState(err error) error {
 	return &automaticProblem{code: "state.unavailable", text: err.Error(), cause: err}
+}
+
+func automaticAdmissionEligible(r AutomaticRecord) bool {
+	return r.Policy.Enabled && r.Stop == nil && (r.Current == nil || automaticSuccessful(r))
 }

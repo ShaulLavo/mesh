@@ -27,7 +27,12 @@ type RemoteError struct {
 	Code    ProblemCode
 }
 
-func (e *RemoteError) Error() string { return e.Problem }
+func (e *RemoteError) Error() string {
+	if e.Problem != "" {
+		return e.Problem
+	}
+	return string(e.Code)
+}
 
 func (c Client) Call(ctx context.Context, host Host, action string, input, output any) error {
 	if err := host.Validate(); err != nil {
@@ -112,7 +117,7 @@ func (c Client) exchange(conn transport.Conn, host Host, message Message) (Messa
 	if err = response.Verify(host.ID); err != nil {
 		return Message{}, err
 	}
-	if response.Problem != "" {
+	if response.Problem != "" || response.ProblemCode != "" {
 		return Message{}, &RemoteError{Problem: response.Problem, Code: response.ProblemCode}
 	}
 	return response, nil

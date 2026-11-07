@@ -9,17 +9,23 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
 const (
-	automaticEnable    = "enable"
-	automaticRetry     = "retry"
-	continuationActive = "active"
-	stopRecovering     = "recovering"
-	canaryVerified     = "verified"
+	automaticEnable        = "enable"
+	automaticRetry         = "retry"
+	continuationActive     = "active"
+	continuationSuperseded = "superseded"
+	continuationCompleted  = "completed"
+	stopRecovering         = "recovering"
+	canaryVerified         = "verified"
 )
 
 type VerifiedActor struct {
@@ -91,17 +97,18 @@ type MutationReceipt struct {
 	Attempt          uint64         `json:"attempt"`
 }
 type AutomaticRecord struct {
-	LastAcknowledgement *MutationReceipt       `json:"lastAcknowledgement,omitempty"`
-	Schema              int                    `json:"schema"`
-	Policy              AutomaticPolicy        `json:"policy"`
-	Stop                *AutomaticStop         `json:"stop,omitempty"`
-	Current             *Run                   `json:"current,omitempty"`
-	Attempt             uint64                 `json:"attempt"`
-	Canary              *Canary                `json:"canary,omitempty"`
-	Enrollment          []MemberConsent        `json:"enrollment,omitempty"`
-	LastCompleted       *CompletedFleetRelease `json:"lastCompleted,omitempty"`
-	LastMutation        *MutationReceipt       `json:"lastMutation,omitempty"`
-	Continuation        *ManualContinuation    `json:"continuation,omitempty"`
+	EnrollmentResetRequired bool                   `json:"enrollmentResetRequired,omitempty"`
+	LastAcknowledgement     *MutationReceipt       `json:"lastAcknowledgement,omitempty"`
+	Schema                  int                    `json:"schema"`
+	Policy                  AutomaticPolicy        `json:"policy"`
+	Stop                    *AutomaticStop         `json:"stop,omitempty"`
+	Current                 *Run                   `json:"current,omitempty"`
+	Attempt                 uint64                 `json:"attempt"`
+	Canary                  *Canary                `json:"canary,omitempty"`
+	Enrollment              []MemberConsent        `json:"enrollment,omitempty"`
+	LastCompleted           *CompletedFleetRelease `json:"lastCompleted,omitempty"`
+	LastMutation            *MutationReceipt       `json:"lastMutation,omitempty"`
+	Continuation            *ManualContinuation    `json:"continuation,omitempty"`
 }
 type AutomaticStatus struct {
 	Record           *AutomaticRecord `json:"record"`
@@ -134,34 +141,22 @@ func automaticStatus(record *AutomaticRecord) AutomaticStatus {
 		return result
 	}
 	revision = record.Policy.Revision
-	result.State = "disabled"
-	if record.Policy.Enabled {
-		result.State = "enabled; waiting for a checked release"
-	}
-	if record.Policy.Enabled && !enrollmentReady(*record) {
-		result.State = "waiting for enrollment confirmation"
-	}
-	if record.Current != nil {
-		result.State = "running"
-	}
-	if !record.Policy.Enabled && record.Current != nil {
-		result.State = "disabled; issued work may still finish"
-	}
-	if activeContinuation(*record) {
-		result.State = "explicit pinned continuation"
-	}
+	result.State = automaticProgressState(*record)
 	if record.Stop != nil {
 		result.State = "stopped"
 		result.Problem = record.Stop.Problem
 	}
 	if record.Stop != nil && record.Stop.Kind == stopRecovering {
 		result.State = "recovering pinned run"
+		if !record.Policy.Enabled && !activeContinuation(*record) {
+			result.State = "stopped; recovery authority superseded"
+		}
 	}
 	return result
 }
 func activeContinuation(r AutomaticRecord) bool {
 	c := r.Continuation
-	return c != nil && c.State == continuationActive && r.Current != nil && c.PolicyID == r.Policy.ID && c.Epoch == r.Policy.Epoch && c.RunID == r.Current.ID && c.Attempt == r.Attempt && c.ActorID == r.Policy.OwnerID
+	return c != nil && c.State == continuationActive && r.Current != nil && c.PolicyID == r.Policy.ID && c.Epoch == r.Policy.Epoch && c.RunID == r.Current.ID && c.Attempt == r.Attempt && (c.ActorID == r.Policy.OwnerID || c.ActorID == r.Policy.CoordinatorID)
 }
 func enrollmentReady(r AutomaticRecord) bool {
 	if len(r.Enrollment) != len(r.Policy.Fleet.Members) {
@@ -305,6 +300,9 @@ func readAutomaticFleet(scope AdmissionScope) (Fleet, error) {
 	if err = fleet.Validate(); err != nil {
 		return Fleet{}, err
 	}
+	if err = validateAutomaticPlatforms(fleet); err != nil {
+		return Fleet{}, err
+	}
 	for _, host := range fleet.Members {
 		if host.ID == scope.CoordinatorID {
 			return fleet, nil
@@ -351,7 +349,7 @@ func enableAutomatic(r *AutomaticRecord, actor VerifiedActor, cmd AutomaticComma
 	if cmd.ExpectedMembership != "" && cmd.ExpectedMembership != fleet.Digest() {
 		return problem("automatic.conflict", "saved fleet changed after approval preview")
 	}
-	changed := fleet.Digest() != r.Policy.Membership || cmd.TakeOwnership
+	changed := fleet.Digest() != r.Policy.Membership || cmd.TakeOwnership || r.EnrollmentResetRequired
 	if changed && r.Current != nil {
 		return problem("automatic.conflict", "cancel and settle the current run before changing enrollment")
 	}
@@ -363,6 +361,7 @@ func enableAutomatic(r *AutomaticRecord, actor VerifiedActor, cmd AutomaticComma
 		r.Policy.Fleet = fleet
 		r.Policy.Membership = fleet.Digest()
 		r.Enrollment = nil
+		r.EnrollmentResetRequired = false
 	}
 	if cmd.TakeOwnership {
 		r.Policy.OwnerID = actor.id
@@ -372,7 +371,7 @@ func enableAutomatic(r *AutomaticRecord, actor VerifiedActor, cmd AutomaticComma
 }
 func supersedeContinuation(r *AutomaticRecord) {
 	if r.Continuation != nil && r.Continuation.State == continuationActive {
-		r.Continuation.State = "superseded"
+		r.Continuation.State = continuationSuperseded
 	}
 }
 func retryAutomatic(r *AutomaticRecord, actor VerifiedActor, cmd AutomaticCommand) error {
@@ -443,10 +442,21 @@ func stopAutomatic(r *AutomaticRecord, kind, host, text string) {
 	supersedeContinuation(r)
 }
 func boundedProblem(text string) string {
-	if len(text) > 512 {
-		return text[:512]
+	text = strings.Map(plainProblemRune, text)
+	if len(text) <= 512 {
+		return text
+	}
+	text = text[:512]
+	for !utf8.ValidString(text) {
+		text = text[:len(text)-1]
 	}
 	return text
+}
+func plainProblemRune(value rune) rune {
+	if unicode.IsControl(value) {
+		return ' '
+	}
+	return value
 }
 func automaticRequest(r Run, t Target) *updateinstall.AutomaticReference {
 	if r.Origin == nil {
@@ -475,7 +485,8 @@ func (c *Coordinator) AutomaticStatus(ctx context.Context) (AutomaticStatus, err
 	if err != nil {
 		return status, err
 	}
-	return automaticFleetObservation(status, c.automaticScope()), nil
+	status = automaticFleetObservation(status, c.automaticScope())
+	return c.automaticAdmissionObservation(ctx, status), nil
 }
 func automaticFleetObservation(status AutomaticStatus, scope AdmissionScope) AutomaticStatus {
 	fleet, err := readAutomaticFleet(scope)
@@ -514,4 +525,68 @@ func (s *Store) acknowledgePendingPolicy(r *AutomaticRecord, cmd AutomaticComman
 	r.Stop = nil
 	r.Policy.Enabled = false
 	return nil
+}
+
+func validateAutomaticPlatforms(fleet Fleet) error {
+	for _, host := range fleet.Members {
+		if !automaticPlatform(host.Platform) {
+			return errors.New("update: automatic fleet must pin each target's supported platform")
+		}
+	}
+	return nil
+}
+func automaticPlatform(platform release.Platform) bool {
+	return platform == (release.Platform{OS: "linux", Arch: "amd64"}) || platform == (release.Platform{OS: "linux", Arch: "arm64"}) || platform == (release.Platform{OS: "darwin", Arch: "arm64"})
+}
+
+func (c *Coordinator) automaticAdmissionObservation(ctx context.Context, status AutomaticStatus) AutomaticStatus {
+	r := status.Record
+	if r == nil || !r.Policy.Enabled || r.Stop != nil || r.Current != nil || !enrollmentReady(*r) {
+		return status
+	}
+	manual, err := c.Store.overlappingManual(r.Policy.Fleet)
+	if err != nil {
+		status.Problem = err.Error()
+		return status
+	}
+	if manual != "" {
+		status.State = "waiting for manual operation"
+		status.Problem = "Inspect overlapping manual operation " + manual + " with mesh update status."
+		return status
+	}
+	if c.CheckedRelease == nil {
+		return status
+	}
+	_, err = c.CheckedRelease(ctx)
+	if err != nil {
+		status.State = "waiting for a valid checked release"
+		status.Problem = boundedProblem(err.Error())
+	}
+	return status
+}
+
+func automaticProgressState(record AutomaticRecord) string {
+	state := "disabled"
+	if record.Policy.Enabled {
+		state = "enabled; waiting for a checked release"
+	}
+	if record.Policy.Enabled && !enrollmentReady(record) {
+		state = "waiting for enrollment confirmation"
+	}
+	if record.Current != nil {
+		state = "running"
+	}
+	if record.Current != nil && automaticSuccessful(record) {
+		state = "complete; waiting for a newer checked release"
+	}
+	if !record.Policy.Enabled && record.Current != nil {
+		state = "disabled; issued work may still finish"
+	}
+	if !record.Policy.Enabled && record.Current != nil && automaticSettled(*record.Current) {
+		state = "disabled; pinned run settled"
+	}
+	if activeContinuation(record) {
+		state = "explicit pinned continuation"
+	}
+	return state
 }

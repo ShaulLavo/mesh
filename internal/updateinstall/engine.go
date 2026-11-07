@@ -2,6 +2,8 @@ package updateinstall
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -119,6 +121,11 @@ func validateRequest(request Request) error {
 	}
 	if err := validateAutomaticReference(request.Automatic); err != nil {
 		return err
+	}
+	if request.Automatic != nil {
+		if err := automaticStableRequest(request); err != nil {
+			return err
+		}
 	}
 	if err := request.Manifest.Validate(); err != nil {
 		return err
@@ -364,8 +371,17 @@ func validateAutomaticReference(ref *AutomaticReference) error {
 	if ref == nil {
 		return nil
 	}
-	if !operationPattern.MatchString(ref.PolicyID) || len(ref.Membership) != 64 || ref.CoordinatorID == "" || ref.Epoch == 0 || ref.ConsentRevision == 0 {
-		return errors.New("invalid automatic installation reference")
+	policy, err := hex.DecodeString(ref.PolicyID)
+	if err != nil || len(policy) != 16 || hex.EncodeToString(policy) != ref.PolicyID {
+		return errors.New("invalid automatic policy identity")
+	}
+	digest, err := hex.DecodeString(ref.Membership)
+	if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != ref.Membership {
+		return errors.New("invalid automatic membership digest")
+	}
+	key, err := base64.RawURLEncoding.DecodeString(ref.CoordinatorID)
+	if err != nil || len(key) != 32 || base64.RawURLEncoding.EncodeToString(key) != ref.CoordinatorID || ref.Epoch == 0 || ref.ConsentRevision == 0 {
+		return errors.New("invalid automatic coordinator or consent reference")
 	}
 	return nil
 }
@@ -384,4 +400,14 @@ func (e *Engine) RequireAutomaticHelper(ctx context.Context) error {
 
 func (e *Engine) settleAccepted(ctx context.Context, request Request, status Status) error {
 	return e.authorize(ctx, request, AcceptanceStage, func() error { return e.settleGate(status) })
+}
+
+func automaticStableRequest(request Request) error {
+	if request.Current.Modified {
+		return errors.New("automatic updates cannot install from a modified build")
+	}
+	if _, err := release.CompareVersions(request.Current.Version, request.Current.Version); err != nil {
+		return fmt.Errorf("automatic updates require a stable source build: %w", err)
+	}
+	return nil
 }

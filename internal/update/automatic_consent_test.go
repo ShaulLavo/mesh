@@ -62,6 +62,13 @@ func TestAutomaticConsentLinearizesRevokeWithAcceptance(t *testing.T) {
 	}
 	request := updateinstall.Request{TargetID: host, Automatic: &updateinstall.AutomaticReference{PolicyID: mustAutomaticID(t), CoordinatorID: host, Membership: fleet.Digest(), Epoch: 1, ConsentRevision: 1}}
 	entered, release := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 	accepted := make(chan error, 1)
 	go func() {
 		accepted <- store.AuthorizeAcceptance(VerifiedActor{id: host}, func(string) bool { return true })(context.Background(), request, updateinstall.AcceptanceGrant, func() error { close(entered); <-release; return nil })

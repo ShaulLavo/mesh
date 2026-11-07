@@ -28,6 +28,7 @@ func (c *Coordinator) joinInstallation(ctx context.Context, run Run, index int, 
 		target := &r.Targets[index]
 		target.InstallationID = status.Request.ID
 		target.JoinedUnsettled = true
+		target.RetryPending = false
 		target.Generation = status.Request.Generation
 		target.Build, target.Workers = &info.Health.Build, info.Health.Workers
 		target.Commands = info.Commands

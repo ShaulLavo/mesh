@@ -3,12 +3,13 @@ package updateinstall
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
 func TestAutomaticJournalRequiresAuthorityEvenWhenOriginOmittedFromGrant(t *testing.T) {
 	f := newFixture(t)
-	f.request.Automatic = &AutomaticReference{PolicyID: "policy-1", CoordinatorID: "coordinator", Membership: f.request.Manifest.Digest(), Epoch: 1, ConsentRevision: 1}
+	f.request.Automatic = &AutomaticReference{PolicyID: strings.Repeat("a", 32), CoordinatorID: strings.Repeat("A", 43), Membership: f.request.Manifest.Digest(), Epoch: 1, ConsentRevision: 1}
 	if _, err := f.engine.Stage(context.Background(), f.request); err == nil {
 		t.Fatal("automatic stage accepted without authority")
 	}

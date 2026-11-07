@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -88,28 +89,26 @@ func (c *Coordinator) Run(ctx context.Context, report func(error)) {
 func (c *Coordinator) Step(ctx context.Context) error {
 	c.execution.Lock()
 	defer c.execution.Unlock()
-	if err := c.refreshAutomatic(ctx); err != nil {
-		return err
-	}
+	admissionErr := c.refreshAutomatic(ctx)
 	runs, err := c.Store.List()
 	if err != nil {
-		return err
+		return errors.Join(admissionErr, err)
 	}
 	for _, run := range runs {
 		if run.Done() && !(run.Origin != nil && !automaticSettled(run)) {
 			continue
 		}
 		if err := c.stepRun(ctx, run); err != nil {
-			return err
+			return errors.Join(admissionErr, err)
 		}
 	}
 	if time.Since(c.lastCachePrune) >= time.Minute {
 		if err := c.pruneCache(ctx); err != nil {
-			return err
+			return errors.Join(admissionErr, err)
 		}
 		c.lastCachePrune = time.Now()
 	}
-	return nil
+	return admissionErr
 }
 
 func (c *Coordinator) stepRun(ctx context.Context, run Run) error {
@@ -179,6 +178,12 @@ func (c *Coordinator) reconcile(ctx context.Context, run Run, index int) error {
 		}
 		return c.recordError(run.ID, index, err)
 	}
+	if run.Origin != nil && !automaticStableBuild(info.Health.Build) {
+		return c.fail(run.ID, index, errors.New("automatic updates require a stable executing build; review this host manually"))
+	}
+	if run.Origin != nil && info.Health.Build.Platform != target.Host.Platform {
+		return c.fail(run.ID, index, errors.New("automatic target platform differs from enrolled fleet"))
+	}
 	if info.Health.HostID != target.Host.ID {
 		return c.fail(run.ID, index, errors.New("target health identity mismatch"))
 	}
@@ -215,6 +220,9 @@ func (c *Coordinator) reconcile(ctx context.Context, run Run, index int) error {
 	if run.Origin != nil {
 		var issued bool
 		current, issued, err = c.reserveAutomatic(ctx, run.ID, index, "stage")
+		if stoppedAutomaticError(err) {
+			return nil
+		}
 		if err != nil || !issued {
 			return err
 		}
@@ -285,6 +293,9 @@ func (c *Coordinator) prepare(run Run, index int, info Info) error {
 	}
 	generation := uint64(1)
 	if info.Installation != nil {
+		if info.Installation.Request.Generation == math.MaxUint64 {
+			return errors.New("target installation generation exhausted")
+		}
 		generation = info.Installation.Request.Generation + 1
 	}
 	return c.record(run.ID, index, func(t *Target) {
@@ -328,10 +339,7 @@ func (c *Coordinator) reconcileInstallation(ctx context.Context, run Run, index 
 
 	case updateinstall.RolledBack, updateinstall.Failed, updateinstall.RollbackFailed:
 		if run.Cancel {
-			if run.Origin != nil && target.InstallationID != "" {
-				return c.settleCancelledJoin(run, index)
-			}
-			return c.cancelTarget(ctx, run, index)
+			return c.reconcileCancelledInstallation(ctx, run, index)
 		}
 		if err := c.record(run.ID, index, func(t *Target) { t.Grant = false }); err != nil {
 			return err
@@ -536,6 +544,9 @@ func sameInstallationOrigin(a, b *updateinstall.AutomaticReference) bool {
 }
 func (c *Coordinator) grantAutomatic(ctx context.Context, id string, index int) error {
 	run, issued, err := c.reserveAutomatic(ctx, id, index, "grant")
+	if stoppedAutomaticError(err) {
+		return nil
+	}
 	if err != nil || !issued {
 		return err
 	}
@@ -575,4 +586,19 @@ func (c *Coordinator) recordIssuedCancellation(id string, index int) error {
 		t.GrantAccepted = true
 		t.Problem = "Activation was already authorized and may still finish."
 	})
+}
+
+func (c *Coordinator) reconcileCancelledInstallation(ctx context.Context, run Run, index int) error {
+	if run.Origin != nil && run.Targets[index].InstallationID != "" {
+		return c.settleCancelledJoin(run, index)
+	}
+	return c.cancelTarget(ctx, run, index)
+}
+
+func automaticStableBuild(build release.Build) bool {
+	if build.Modified {
+		return false
+	}
+	_, err := release.CompareVersions(build.Version, build.Version)
+	return err == nil
 }

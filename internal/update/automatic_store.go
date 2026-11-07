@@ -49,6 +49,9 @@ func validateAutomatic(r AutomaticRecord) error {
 	if err := validateAutomaticPolicy(r); err != nil {
 		return err
 	}
+	if err := validateContinuation(r); err != nil {
+		return err
+	}
 	if r.Current == nil {
 		return nil
 	}
@@ -88,7 +91,7 @@ func validateAutomaticProgress(r AutomaticRecord) error {
 	if r.Canary != nil && (r.Canary.RunID != run.ID || r.Canary.Attempt != r.Attempt || !slices.Contains([]string{"selected", "issued", canaryVerified, "failed"}, r.Canary.State)) {
 		return errors.New("update: invalid automatic canary")
 	}
-	if r.Continuation != nil && !slices.Contains([]string{continuationActive, "superseded", "completed"}, r.Continuation.State) {
+	if r.Continuation != nil && !slices.Contains([]string{continuationActive, continuationSuperseded, continuationCompleted}, r.Continuation.State) {
 		return errors.New("update: invalid automatic continuation")
 	}
 	return nil
@@ -96,6 +99,16 @@ func validateAutomaticProgress(r AutomaticRecord) error {
 func (s *Store) writeAutomatic(record AutomaticRecord) error {
 	if err := validateAutomatic(record); err != nil {
 		return err
+	}
+	status := automaticStatus(&record)
+	status.SavedFleet = &record.Policy.Fleet
+	status.SavedMembership = record.Policy.Membership
+	data, err := json.Marshal(status)
+	if err != nil {
+		return fmt.Errorf("encode automatic status bound: %w", err)
+	}
+	if len(data) > maximumMessage-2048 {
+		return errors.New("update: automatic status exceeds signed carrier limit")
 	}
 	return s.writeAuthority("automatic.json", record)
 }
@@ -347,13 +360,15 @@ func (s *Store) fenceAutomatic(r *AutomaticRecord, scope AdmissionScope) error {
 	if kind == "" {
 		return nil
 	}
-	if r.Stop != nil && r.Stop.Kind != stopRecovering {
+	if r.Stop != nil && r.Stop.Kind != stopRecovering && r.EnrollmentResetRequired {
 		return problem("automatic.stopped", text)
 	}
+	r.EnrollmentResetRequired = true
 	stopAutomatic(r, kind, "", text)
 	if err = s.writeAutomatic(*r); err != nil {
 		return err
 	}
+
 	return problem("automatic.stopped", text)
 }
 func (s *Store) changeAutomaticRun(id string, apply func(*Run, *AutomaticRecord) error) (Run, error) {
@@ -371,6 +386,10 @@ func (s *Store) changeAutomaticRun(id string, apply func(*Run, *AutomaticRecord)
 	}
 	if approval != r.Current.approvalIdentity() || wasStopped && !r.Current.Stopped {
 		return Run{}, errors.New("update: progress cannot change automatic approval or clear its stop")
+	}
+	r.Current.Problem = boundedProblem(r.Current.Problem)
+	for i := range r.Current.Targets {
+		r.Current.Targets[i].Problem = boundedProblem(r.Current.Targets[i].Problem)
 	}
 	synchronizeAutomatic(r)
 	r.Current.UpdatedAt = time.Now().UTC()
@@ -392,13 +411,13 @@ func synchronizeAutomatic(r *AutomaticRecord) {
 	if run.Cancel || run.Stopped || !automaticSettled(*run) {
 		return
 	}
-	if r.Stop != nil && r.Stop.Kind != stopRecovering {
+	if r.Stop != nil && (r.Stop.Kind != stopRecovering || !r.Policy.Enabled && !activeContinuation(*r)) {
 		return
 	}
 	r.Stop = nil
 	r.LastCompleted = &CompletedFleetRelease{run.Release.Version, run.ReleaseDigest, time.Now().UTC()}
 	if r.Continuation != nil && r.Continuation.State == continuationActive {
-		r.Continuation.State = "completed"
+		r.Continuation.State = continuationCompleted
 	}
 }
 func synchronizeCanary(r *AutomaticRecord) {
@@ -434,16 +453,35 @@ func (s *Store) automaticAdmissionReady(r AutomaticRecord, checked updatenotice.
 			return false, nil
 		}
 	}
-	runs, err := s.List()
-	if err != nil {
-		return false, err
-	}
-	for _, run := range runs {
-		if run.Origin == nil && !automaticSettled(run) && fleetsOverlap(run.Fleet, r.Policy.Fleet) {
-			return false, nil
-		}
-	}
-	return true, nil
+	manual, err := s.overlappingManual(r.Policy.Fleet)
+	return manual == "", err
 }
 
 func releaseAuthority(file *os.File) func() { return func() { _ = file.Close() } }
+
+func validateContinuation(r AutomaticRecord) error {
+	continuation := r.Continuation
+	if continuation == nil {
+		return nil
+	}
+	if !slices.Contains([]string{continuationActive, continuationSuperseded, continuationCompleted}, continuation.State) || !ValidRunID(continuation.CommandID) || continuation.Attempt == 0 || continuation.PolicyRevision == 0 || continuation.PolicyRevision > r.Policy.Revision {
+		return errors.New("update: invalid automatic continuation receipt")
+	}
+	if continuation.State == continuationActive && !activeContinuation(r) {
+		return errors.New("update: automatic continuation differs from its pinned run")
+	}
+	return nil
+}
+
+func (s *Store) overlappingManual(fleet Fleet) (string, error) {
+	runs, err := s.List()
+	if err != nil {
+		return "", err
+	}
+	for _, run := range runs {
+		if run.Origin == nil && !automaticSettled(run) && fleetsOverlap(run.Fleet, fleet) {
+			return run.ID, nil
+		}
+	}
+	return "", nil
+}

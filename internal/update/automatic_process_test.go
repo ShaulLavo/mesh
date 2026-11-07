@@ -80,6 +80,10 @@ func TestAutomaticProcessesKeepFailedAndCancelledAuthority(t *testing.T) {
 	c.call(t, "automatic.change", disable, &status)
 	retry := AutomaticCommand{ID: mustAutomaticID(t), Action: automaticRetry, RunID: first.Current.ID, ExpectedRevision: status.Record.Policy.Revision}
 	c.call(t, "automatic.change", retry, &status)
+	c.call(t, "automatic.fixture-reserve-retry", nil, &status)
+	if status.Record.Current.Targets[0].RetryAttempt != 2 {
+		t.Fatal("retry reservation was not durable")
+	}
 	c.stop(t)
 	c.start(t)
 	c.call(t, "automatic.change", retry, &status)
@@ -254,6 +258,8 @@ func automaticChildControl(ctx context.Context, cfg automaticProcessConfig, auth
 		return c.ChangeAutomatic(ctx, actor, command)
 	case "automatic.consent":
 		return c.Store.RecipientConsent(ctx)
+	case "automatic.fixture-reserve-retry":
+		return automaticChildReserveRetry(ctx, c)
 	case "automatic.fixture-admit":
 		if err := c.refreshAutomatic(ctx); err != nil {
 			return nil, err
@@ -510,4 +516,22 @@ func serveAutomaticChild(stream net.Conn, authority *Authority) {
 			return
 		}
 	}
+}
+
+func automaticChildReserveRetry(ctx context.Context, c *Coordinator) (any, error) {
+	status, err := c.Store.ReadAutomatic(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if status.Record == nil || status.Record.Current == nil {
+		return nil, errors.New("missing fixture automatic run")
+	}
+	_, issued, err := c.reserveAutomatic(ctx, status.Record.Current.ID, 0, automaticRetry)
+	if err != nil {
+		return nil, fmt.Errorf("reserve fixture retry: %w", err)
+	}
+	if !issued {
+		return nil, errors.New("fixture retry was not issued")
+	}
+	return c.Store.ReadAutomatic(ctx)
 }

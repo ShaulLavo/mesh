@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -57,5 +58,16 @@ func TestAutomaticCLIStatusKeepsUnavailableRevisionUnknown(t *testing.T) {
 	_, _, err := executeCommand(t, Dependencies{UpdateCaller: caller}, "update", "automatic", "disable", "--expected-revision", "0")
 	if err == nil {
 		t.Fatal("offline coordinator accepted policy mutation")
+	}
+}
+
+func TestStoppedAutomaticManualApprovalNamesExplicitRetry(t *testing.T) {
+	var output bytes.Buffer
+	run := update.Run{ID: strings.Repeat("a", 32), Origin: &update.AutomaticOrigin{PolicyID: strings.Repeat("b", 32)}, Stopped: true}
+	if err := reportStoppedAutomaticApproval(run, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "mesh update retry "+run.ID+" --expected-policy-revision N") {
+		t.Fatalf("manual approval omitted explicit recovery: %s", output.String())
 	}
 }

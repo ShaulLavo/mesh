@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -582,5 +583,286 @@ func assertAutomaticRelaySigner(t *testing.T, response Message, err error, expec
 	var id string
 	if err != nil || json.Unmarshal(response.Data, &id) != nil || id != expected {
 		t.Fatalf("legacy signer lost: %s %v", id, err)
+	}
+}
+
+func TestAutomaticAcknowledgedRestoredMembershipRequiresFreshConsent(t *testing.T) {
+	fleet := testFleet(t, 1)
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{ID: fleet.Members[0].ID, Store: store, SavedFleet: func() (Fleet, error) { return fleet, nil }, Trusted: func(string) bool { return true }}
+	actor := VerifiedActor{id: c.ID, local: true}
+	if _, err := c.ChangeAutomatic(context.Background(), actor, AutomaticCommand{ID: mustAutomaticID(t), Action: automaticEnable}); err != nil {
+		t.Fatal(err)
+	}
+	fleet.Revision++
+	_ = c.checkAutomaticScope(context.Background())
+	fleet.Revision--
+	decideAutomatic(t, c, actor, "disable")
+	r := currentAutomatic(t, c)
+	if _, err := c.ChangeAutomatic(context.Background(), actor, AutomaticCommand{ID: mustAutomaticID(t), Action: "acknowledge-stop", RunID: r.Policy.ID, ExpectedRevision: r.Policy.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	decideAutomatic(t, c, actor, automaticEnable)
+	if currentAutomatic(t, c).Policy.Epoch != 2 {
+		t.Fatal("restored membership reused the withdrawn enrollment epoch")
+	}
+}
+
+func TestAutomaticPolicyAcknowledgementSerializesWithAdmissionAndReplay(t *testing.T) {
+	fleet := testFleet(t, 1)
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{ID: fleet.Members[0].ID, Store: store, SavedFleet: func() (Fleet, error) { return fleet, nil }, Trusted: func(string) bool { return true }}
+	actor := VerifiedActor{id: c.ID, local: true}
+	if _, err := c.ChangeAutomatic(context.Background(), actor, AutomaticCommand{ID: mustAutomaticID(t), Action: automaticEnable}); err != nil {
+		t.Fatal(err)
+	}
+	fleet.Revision++
+	_ = c.checkAutomaticScope(context.Background())
+	fleet.Revision--
+	decideAutomatic(t, c, actor, "disable")
+	r := currentAutomatic(t, c)
+	ack := AutomaticCommand{ID: mustAutomaticID(t), Action: "acknowledge-stop", RunID: r.Policy.ID, ExpectedRevision: r.Policy.Revision}
+	start := make(chan struct{})
+	results := make(chan error, 3)
+	go func() { <-start; _, err := c.ChangeAutomatic(context.Background(), actor, ack); results <- err }()
+	go func() { <-start; _, err := c.ChangeAutomatic(context.Background(), actor, ack); results <- err }()
+	go func() {
+		<-start
+		manifest := testManifest()
+		_, err := store.AcceptCheckedRelease(context.Background(), updatenotice.CheckedRelease{Manifest: manifest, Digest: manifest.Digest(), CheckedAt: time.Now()}, c.automaticScope())
+		results <- err
+	}()
+	close(start)
+	for range 3 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	final := currentAutomatic(t, c)
+	if final.Current != nil || final.Policy.Enabled || final.Stop != nil || final.Policy.Revision != r.Policy.Revision+1 {
+		t.Fatalf("admission or replay escaped acknowledgement CAS: %+v", final)
+	}
+	if final.LastAcknowledgement == nil || final.LastAcknowledgement.Stop.ID != r.Stop.ID || final.LastAcknowledgement.ActorID != actor.ID() || final.LastAcknowledgement.ResultRevision != final.Policy.Revision {
+		t.Fatal("acknowledgement lost its exact stop receipt")
+	}
+}
+
+type automaticCallFunc func(context.Context, Host, string, any, any) error
+
+func (f automaticCallFunc) Call(ctx context.Context, host Host, action string, input, output any) error {
+	return f(ctx, host, action, input, output)
+}
+func TestAutomaticWithdrawnOwnerObservesBeyondUnacceptedGrant(t *testing.T) {
+	c, remote, _ := automaticFixture(t, 4)
+	if err := c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	remote.complete(remote.grants[0])
+	run := currentAutomatic(t, c).Current
+	waiting := run.Targets[1].Host.ID
+	c.Remote = automaticCallFunc(func(ctx context.Context, host Host, action string, input, output any) error {
+		if host.ID == waiting && action == "grant" {
+			return errors.New("grant was not delivered")
+		}
+		return remote.Call(ctx, host, action, input, output)
+	})
+	if err := c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	completed := remote.grants[len(remote.grants)-1]
+	remote.complete(completed)
+	if _, err := c.Store.Change(run.ID, func(r *Run) error {
+		for i := range r.Targets {
+			r.Targets[i].RetryAt = time.Time{}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c.Trusted = func(string) bool { return false }
+	_ = c.Step(context.Background())
+	r := currentAutomatic(t, c)
+	for _, target := range r.Current.Targets {
+		if target.Host.ID == completed && target.State != Updated {
+			t.Fatal("unaccepted earlier grant blocked observation of accepted later work")
+		}
+	}
+}
+
+func TestAutomaticAbsenceNeverConsumesChecksOrCreatesWork(t *testing.T) {
+	fleet := testFleet(t, 1)
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Trust(store.stateDir(), fleet.Members[0].ID, false); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	c := &Coordinator{ID: fleet.Members[0].ID, Store: store, SavedFleet: func() (Fleet, error) { calls++; return fleet, nil }, CheckedRelease: func(context.Context) (*updatenotice.CheckedRelease, error) { calls++; return nil, nil }, Remote: automaticCallFunc(func(context.Context, Host, string, any, any) error {
+		calls++
+		return errors.New("unexpected remote call")
+	})}
+	for range 3 {
+		if err := c.Step(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs, err := store.List()
+	if err != nil || len(runs) != 0 || calls != 0 {
+		t.Fatalf("absence scheduled automatic work: runs=%d calls=%d error=%v", len(runs), calls, err)
+	}
+}
+
+type automaticDispatchBarrier struct {
+	remote  Caller
+	action  string
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *automaticDispatchBarrier) Call(ctx context.Context, host Host, action string, input, output any) error {
+	if action == b.action {
+		b.once.Do(func() { close(b.entered) })
+		select {
+		case <-b.release:
+		case <-ctx.Done():
+			return fmt.Errorf("dispatch barrier: %w", ctx.Err())
+		}
+	}
+	if err := b.remote.Call(ctx, host, action, input, output); err != nil {
+		return fmt.Errorf("dispatch fixture: %w", err)
+	}
+	return nil
+}
+func TestAutomaticDisableAndCancelFenceFutureIntentionsWithoutRetractingIssuedWork(t *testing.T) {
+	for _, action := range []string{"disable", "cancel"} {
+		t.Run(action, func(t *testing.T) { testAutomaticDispatchBoundary(t, action) })
+	}
+}
+func testAutomaticDispatchBoundary(t *testing.T, decision string) {
+	c, remote, actor := automaticFixture(t, 3)
+	barrier := &automaticDispatchBarrier{remote: c.Remote, action: "stage", entered: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() {
+		select {
+		case <-barrier.release:
+		default:
+			close(barrier.release)
+		}
+	})
+	c.Remote = barrier
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- c.Step(ctx) }()
+	select {
+	case <-barrier.entered:
+	case <-ctx.Done():
+		t.Fatal("stage did not reserve an intention")
+	}
+	decideAutomatic(t, c, actor, decision)
+	close(barrier.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	r := currentAutomatic(t, c)
+	if remote.stages != 1 || len(remote.grants) != 0 || r.Policy.Enabled {
+		t.Fatalf("decision changed dispatch boundary: stages=%d grants=%v policy=%+v", remote.stages, remote.grants, r.Policy)
+	}
+	if decision == "cancel" && (r.Stop == nil || r.Stop.Kind != "cancelled") {
+		t.Fatal("in-flight staging erased cancellation")
+	}
+}
+func TestAutomaticInitialOwnerCASHasOneWinner(t *testing.T) {
+	fleet := testFleet(t, 1)
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{ID: fleet.Members[0].ID, Store: store, SavedFleet: func() (Fleet, error) { return fleet, nil }, Trusted: func(string) bool { return true }}
+	first, _ := testIdentity(t)
+	second, _ := testIdentity(t)
+	results := make(chan error, 2)
+	start := make(chan struct{})
+	a, b := AutomaticCommand{ID: mustAutomaticID(t), Action: automaticEnable}, AutomaticCommand{ID: mustAutomaticID(t), Action: automaticEnable}
+	go func() {
+		<-start
+		_, err := c.ChangeAutomatic(context.Background(), VerifiedActor{id: first}, a)
+		results <- err
+	}()
+	go func() {
+		<-start
+		_, err := c.ChangeAutomatic(context.Background(), VerifiedActor{id: second}, b)
+		results <- err
+	}()
+	close(start)
+	successes := 0
+	for range 2 {
+		if err := <-results; err == nil {
+			successes++
+		}
+	}
+	if successes != 1 || currentAutomatic(t, c).Policy.Revision != 1 {
+		t.Fatal("concurrent initial owners did not serialize")
+	}
+}
+
+func TestAutomaticActiveRunDoesNotDecodeLaterCheckedRelease(t *testing.T) {
+	c, remote, _ := automaticFixture(t, 2)
+	c.lastAutomaticCheck = time.Time{}
+	c.CheckedRelease = func(context.Context) (*updatenotice.CheckedRelease, error) {
+		return nil, errors.New("later checked cache is damaged")
+	}
+	_ = c.Step(context.Background())
+	if len(remote.grants) != 1 {
+		t.Fatal("later cache damage prevented already pinned run execution")
+	}
+}
+
+func TestAutomaticManualApprovalFirstBlocksAdmissionWithoutReadingFeed(t *testing.T) {
+	c, remote, manual := testCoordinator(t, 2)
+	c.SavedFleet = func() (Fleet, error) { return manual.Fleet, nil }
+	c.Trusted = func(string) bool { return true }
+	actor := VerifiedActor{id: c.ID, local: true}
+	status, err := c.ChangeAutomatic(context.Background(), actor, AutomaticCommand{ID: mustAutomaticID(t), Action: automaticEnable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := &automaticRemote{retryRemote: &retryRemote{fakeRemote: remote}, consent: map[string]RecipientConsent{}}
+	for _, host := range manual.Fleet.Members {
+		caller.consent[host.ID] = RecipientConsent{1, 1, host.ID, c.ID, manual.Membership, status.Record.Policy.Epoch, true}
+	}
+	c.Remote = caller
+	c.CheckedRelease = func(context.Context) (*updatenotice.CheckedRelease, error) {
+		t.Fatal("manual overlap read the release feed cache")
+		return nil, nil
+	}
+	if err := c.refreshAutomatic(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if currentAutomatic(t, c).Current != nil {
+		t.Fatal("manual-first overlap created a second operation")
+	}
+}
+
+func TestAutomaticDevelopmentBuildRequiresManualReview(t *testing.T) {
+	c, remote, _ := automaticFixture(t, 1)
+	host := currentAutomatic(t, c).Current.Targets[0].Host.ID
+	info := remote.info[host]
+	info.Health.Build.Version = "dev"
+	info.Health.Build.Modified = true
+	remote.info[host] = info
+	if err := c.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(remote.grants) != 0 || currentAutomatic(t, c).Stop == nil {
+		t.Fatal("automatic development build entered the installer")
 	}
 }

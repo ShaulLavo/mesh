@@ -206,8 +206,11 @@ func (a *Authority) HandleControl(ctx context.Context, request protocol.Control)
 	response := Message{Action: message.Action, Actor: a.ID, Target: message.Actor, Nonce: message.Nonce}
 	result, err := a.dispatch(ctx, message)
 	if err != nil {
-		response.Problem = boundedProblem(err.Error())
+		response.Problem = err.Error()
 		response.ProblemCode = responseProblemCode(err)
+		if automaticAction(message.Action) || response.ProblemCode != "" {
+			response.Problem = boundedProblem(response.Problem)
+		}
 	} else {
 		response.Data, err = json.Marshal(result)
 	}

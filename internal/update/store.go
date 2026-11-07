@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -353,6 +354,9 @@ func retryRun(run *Run) error {
 	for i := range run.Targets {
 		target := &run.Targets[i]
 		if target.State == Failed && target.InstallationID == "" && target.BootstrapSession == "" && !target.RetryPending {
+			if target.RetryToken == math.MaxUint64 {
+				return errors.New("update: target retry token exhausted")
+			}
 			target.RetryPending = true
 			target.RetryToken++
 		}
