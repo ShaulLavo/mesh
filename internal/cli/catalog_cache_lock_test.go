@@ -63,8 +63,9 @@ func TestCatalogCacheConcurrentWriters(t *testing.T) {
 		}
 	}
 	final := make([]protocol.SessionInfo, writers)
+	observedAt := time.Now().UTC().Truncate(time.Millisecond)
 	for index := range writers {
-		final[index] = protocol.SessionInfo{ID: "SESSION-writer-" + strconv.Itoa(index) + "-open", HostID: host.ID, Command: []string{"sh"}, Cwd: "/tmp", State: "detached", CreatedAt: time.Now().UTC().Truncate(time.Millisecond)}
+		final[index] = protocol.SessionInfo{ID: "SESSION-writer-" + strconv.Itoa(index) + "-open", HostID: host.ID, Command: []string{"sh"}, Cwd: "/tmp", State: "detached", CreatedAt: observedAt}
 	}
 	if err := cache.SaveObserved(t.Context(), host, final); err != nil {
 		t.Fatalf("save after contention: %v", err)
