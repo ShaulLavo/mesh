@@ -83,6 +83,7 @@ func TestPickerFleetServicesWatchRetainsOfflineCacheAndReportsFailure(t *testing
 func TestPickerFleetServicesWatchCachesAuthoritativeEmpty(t *testing.T) {
 	host := HostRecord{ID: "alpha", MachineName: "alpha", MeshIdentity: "a"}
 	cache := &pickerServiceCacheStub{rows: []storage.CachedService{{HostID: storage.HostID(host.ID), Service: meshserve.Service{Name: "old", Kind: meshserve.Proxy, Target: "3000"}}}}
+	cache.savedNotify = make(chan struct{}, 1)
 	dial := reviewControlDial(t, func(host HostRecord, request protocol.Control) *protocol.Control {
 		if request.Type == protocol.TypeStateWatch {
 			return &protocol.Control{Type: protocol.TypeStateSnapshot, StateSnapshot: &protocol.StateSnapshot{Seq: 1, Current: map[string]protocol.Observation{protocol.TopicServices: {}}}}
@@ -96,11 +97,21 @@ func TestPickerFleetServicesWatchCachesAuthoritativeEmpty(t *testing.T) {
 	err := monitor.Run(ctx, func(update PickerServicesUpdate) {
 		if !update.Catalog.Stale {
 			authoritative = true
+			awaitServiceCacheSave(ctx, t, cache.savedNotify)
 			cancel()
 		}
 	})
 	if err != nil || !authoritative || cache.saveCalls != 1 || len(cache.saved) != 0 {
 		t.Fatalf("empty cache authoritative=%v saved=%d rows=%v err=%v", authoritative, cache.saveCalls, cache.saved, err)
+	}
+}
+
+func awaitServiceCacheSave(ctx context.Context, t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Error("authoritative empty observation was never persisted")
 	}
 }
 

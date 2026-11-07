@@ -168,7 +168,7 @@ func TestAgentSessionCachedOfflineAndCacheFailure(t *testing.T) {
 	}
 	cache := &SQLiteCatalogCache{store: store, now: time.Now}
 	row := protocol.SessionInfo{ID: "7K3D", HostID: id, State: "running", Command: []string{"sh"}, Cwd: "/private", CreatedAt: time.Now()}
-	if err := cache.SaveObserved(t.Context(), host, []protocol.SessionInfo{row}); err != nil {
+	if _, err := cache.SaveObserved(t.Context(), host, []protocol.SessionInfo{row}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cache.Close(); err != nil {
