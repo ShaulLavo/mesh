@@ -140,7 +140,7 @@ type legacyFixtureProcess struct {
 func legacyFixtureProcesses() (map[int]legacyFixtureProcess, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,stat=,command=").Output()
+	output, err := exec.CommandContext(ctx, "ps", "-axww", "-o", "pid=,ppid=,stat=,command=").Output()
 	if err != nil {
 		return nil, fmt.Errorf("list fixture processes: %w", err)
 	}
