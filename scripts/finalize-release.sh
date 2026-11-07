@@ -101,6 +101,16 @@ if [[ $identity != "$expected" ]]; then
   echo "release finalization: PR identity or head does not match validated $branch at $validated_head" >&2
   exit 1
 fi
+draft=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+case $draft in
+  false) ;;
+  true)
+    echo "release finalization: Cask PR $pr is a draft; mark it ready for review in GitHub in $GITHUB_REPOSITORY" >&2
+    exit 1 ;;
+  *)
+    echo "release finalization: unexpected draft state for PR $pr: $draft" >&2
+    exit 1 ;;
+esac
 auto_merge=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json autoMergeRequest --jq '.autoMergeRequest != null')
 if [[ $auto_merge == false ]]; then
   gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --squash --match-head-commit "$validated_head"
@@ -108,4 +118,5 @@ elif [[ $auto_merge != true ]]; then
   echo "release finalization: unexpected auto-merge state for PR $pr: $auto_merge" >&2
   exit 1
 fi
-gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+echo "release finalization: Cask PR $pr is handed off. Normal pull_request CI must pass before auto-merge."
+echo "release finalization: If GitHub requests approval, a maintainer must select \"Approve workflows to run\" on PR $pr in $GITHUB_REPOSITORY."

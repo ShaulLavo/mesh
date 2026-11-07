@@ -284,6 +284,11 @@ queued commit cannot replace a newer published release. A retry retains its
 reserved commit and version. If an earlier candidate failed publication, a new
 source commit receives the next unreserved version; it never moves the failed
 candidate's tag. Updating the Homebrew cask does not start another release.
+The Cask PR uses normal pull-request CI and protected auto-merge. If GitHub
+requests workflow approval, a maintainer with write access selects **Approve
+workflows to run** on that PR. The finalizer does not dispatch a second CI run.
+A draft Cask PR must be marked ready for review in GitHub before finalization
+can hand it off.
 
 For a custom installed build, a maintainer can attach its executable to the
 reserved draft before publication starts. Name it

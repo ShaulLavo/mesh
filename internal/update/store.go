@@ -184,7 +184,7 @@ func (s *Store) Start(coordinator string, fleet Fleet, manifest release.Manifest
 			return Run{}, err
 		}
 		existing.UpdatedAt = time.Now().UTC()
-		return existing, writeOperation(s.path(existing.ID), existing)
+		return existing, s.write(existing)
 	}
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -196,7 +196,7 @@ func (s *Store) Start(coordinator string, fleet Fleet, manifest release.Manifest
 	for _, h := range ordered {
 		run.Targets = append(run.Targets, Target{Host: h, State: Pending})
 	}
-	return run, writeJSON(s.path(run.ID), run)
+	return run, s.write(run)
 }
 
 func ValidRunID(id string) bool {
@@ -205,6 +205,14 @@ func ValidRunID(id string) bool {
 }
 
 func (s *Store) Read(id string) (Run, error) {
+	run, err := s.read(id)
+	if err != nil {
+		return Run{}, err
+	}
+	return run, s.settlePublication(s.directory)
+}
+
+func (s *Store) read(id string) (Run, error) {
 	if !ValidRunID(id) {
 		return Run{}, errors.New("update: invalid run ID")
 	}
@@ -256,11 +264,17 @@ func (s *Store) List() ([]Run, error) {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		run, err := s.Read(strings.TrimSuffix(entry.Name(), ".json"))
+		run, err := s.read(strings.TrimSuffix(entry.Name(), ".json"))
 		if err != nil {
 			return nil, err
 		}
 		runs = append(runs, run)
+	}
+	if len(runs) == 0 {
+		return runs, nil
+	}
+	if err := s.settlePublication(s.directory); err != nil {
+		return nil, err
 	}
 	sort.Slice(runs, func(i, j int) bool { return runs[i].CreatedAt.After(runs[j].CreatedAt) })
 	return runs, nil
@@ -287,7 +301,7 @@ func (s *Store) Change(id string, apply func(*Run) error) (Run, error) {
 		return Run{}, err
 	}
 	run.UpdatedAt = time.Now().UTC()
-	return run, writeOperation(s.path(id), run)
+	return run, s.write(run)
 }
 
 func (s *Store) Cancel(id string) (Run, error) {
@@ -323,6 +337,66 @@ func retryRun(run *Run) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) write(run Run) error {
+	if err := writeOperation(s.path(run.ID), run); err != nil {
+		return err
+	}
+	return s.settlePublication(filepath.Dir(s.directory))
+}
+
+// A visible rename can outlive a failed barrier. Readers settle it before the
+// coordinator or an identical approval can use the run. Include the directories
+// that OpenStore may have created for the first operation.
+func (s *Store) settlePublication(directory string) error {
+	stateDir := filepath.Dir(filepath.Dir(s.directory))
+	for {
+		if err := syncOperationDirectory(directory); err != nil {
+			return fmt.Errorf("update: settle operation publication: %w", err)
+		}
+		if directory == stateDir {
+			return settleOperationParents(stateDir)
+		}
+		directory = filepath.Dir(directory)
+	}
+}
+
+// The filesystem root is a pre-existing anchor even after a failed creation's
+// in-memory history is lost. Resolve aliases before walking its physical parents.
+func settleOperationParents(directory string) error {
+	current, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return fmt.Errorf("update: resolve publication directory: %w", err)
+	}
+	for {
+		parent, err := operationPublicationParent(current)
+		if err != nil || parent == "" {
+			return err
+		}
+		if err := syncOperationDirectory(parent); err != nil {
+			return fmt.Errorf("update: settle operation parent: %w", err)
+		}
+		current = parent
+	}
+}
+
+func operationPublicationParent(directory string) (string, error) {
+	parent := filepath.Dir(directory)
+	if parent == directory {
+		return "", nil
+	}
+	var current, ancestor syscall.Stat_t
+	if err := syscall.Stat(directory, &current); err != nil {
+		return "", fmt.Errorf("update: inspect publication directory: %w", err)
+	}
+	if err := syscall.Stat(parent, &ancestor); err != nil {
+		return "", fmt.Errorf("update: inspect publication parent: %w", err)
+	}
+	if current.Dev != ancestor.Dev {
+		return "", nil
+	}
+	return parent, nil
 }
 
 func (s *Store) path(id string) string { return filepath.Join(s.directory, id+".json") }
@@ -389,7 +463,7 @@ func writeJSON(path string, value any) error {
 	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
-		return err
+		return fmt.Errorf("update: sync state snapshot: %w", err)
 	}
 	if err := file.Close(); err != nil {
 		return err
@@ -397,10 +471,17 @@ func writeJSON(path string, value any) error {
 	if err := os.Rename(file.Name(), path); err != nil {
 		return err
 	}
-	dir, err := os.Open(filepath.Dir(path))
+	return syncOperationDirectory(filepath.Dir(path))
+}
+
+var syncOperationDirectory = func(path string) error {
+	dir, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("update: open publication directory: %w", err)
 	}
-	defer func() { _ = dir.Close() }()
-	return dir.Sync()
+	defer func() { _ = syscall.Close(dir) }()
+	if err := syscall.Fsync(dir); err != nil {
+		return fmt.Errorf("update: sync publication directory: %w", err)
+	}
+	return nil
 }
