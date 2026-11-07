@@ -1303,8 +1303,12 @@ func writeLocalSessionDir(t *testing.T, id string, state string) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	ref, err := session.NewReservation(id, "", session.Generic)
+	if err != nil {
+		t.Fatal(err)
+	}
 	meta := worker.Meta{
-		Reservation: &session.Reservation{ID: id, Instance: "0123456789abcdef0123456789abcdef", Purpose: session.Generic},
+		Reservation: &ref,
 		ID:          id,
 		PID:         4321,
 		Command:     []string{"sh", "-c", "sleep 300"},
@@ -1332,7 +1336,7 @@ func writeLocalSessionDir(t *testing.T, id string, state string) {
 // there was no other way to reach it.
 func TestLocalSessionsStayReachableAfterAdoptingAHost(t *testing.T) {
 	setupCommandTestHost(t)
-	writeLocalSessionDir(t, "L0CL", worker.StateExited)
+	writeLocalSessionDir(t, "70C7", worker.StateExited)
 
 	stdout, _, err := executeCommand(t, Dependencies{
 		DialHost: func(context.Context, HostRecord) (transport.Conn, error) {
@@ -1347,7 +1351,7 @@ func TestLocalSessionsStayReachableAfterAdoptingAHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ls returned an error: %v", err)
 	}
-	if !strings.Contains(stdout, "L0CL") {
+	if !strings.Contains(stdout, "70C7") {
 		t.Fatalf("ls output = %q, want the local session listed alongside adopted hosts", stdout)
 	}
 
@@ -1362,7 +1366,7 @@ func TestLocalSessionsStayReachableAfterAdoptingAHost(t *testing.T) {
 		DialControl: func(context.Context, HostRecord) (transport.Conn, error) {
 			return nil, errors.New("host is offline")
 		},
-	}, "logs", "L0CL"); err != nil {
+	}, "logs", "70C7"); err != nil {
 		t.Fatalf("logs on a local session after adoption: %v", err)
 	}
 }
