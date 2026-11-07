@@ -204,7 +204,7 @@ func TestRevokedDeviceCanReconnectOnlyThroughSignedUpdater(t *testing.T) {
 		t.Fatal(err)
 	}
 	var actions atomic.Int32
-	authority := &update.Authority{StateDir: state, ID: host.ID, Key: key, Handle: func(_ context.Context, action string, _ json.RawMessage) (any, error) {
+	authority := &update.Authority{StateDir: state, ID: host.ID, Key: key, Handle: func(_ context.Context, _ update.VerifiedActor, action string, _ json.RawMessage) (any, error) {
 		if action != "info" {
 			return nil, fmt.Errorf("unexpected fixture update action %q", action)
 		}

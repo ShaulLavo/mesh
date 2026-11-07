@@ -127,7 +127,9 @@ jobs:
           long=$(mktemp -d "$RUNNER_TEMP/mesh-socket-portability-long-scratch-root.XXXXXX")
           trap 'rm -rf -- "$short" "$long"' EXIT
           ln -s "$long" "$short/alias"
-          TMPDIR="$short/alias/" MESH_SHORT_TMP="$short" go test -race -count=1 -timeout=300s -json ./internal/daemon ./internal/cli ./internal/worker ./internal/updatebootstrap ./internal/paths ./internal/testenv | tee "$RUNNER_TEMP/native-socket-results.jsonl"
+          # The complete CLI race suite took 310s on Linux; 350s adds about 13% headroom.
+          # This package alarm does not change request deadlines or test assertions.
+          TMPDIR="$short/alias/" MESH_SHORT_TMP="$short" go test -race -count=1 -timeout=350s -json ./internal/daemon ./internal/cli ./internal/worker ./internal/updatebootstrap ./internal/paths ./internal/testenv | tee "$RUNNER_TEMP/native-socket-results.jsonl"
           MESH_SHORT_TMP="$short" python3 scripts/test-helper-recovery-paths.py
       - name: Refuse the integration supervisor before creating anything
         # Linux runs these controls inside the integration suite.

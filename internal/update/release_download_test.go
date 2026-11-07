@@ -59,7 +59,7 @@ func TestUpdatePlanRetriesAcknowledgeRPC(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(contents)), Request: request}, nil
 	})}}
 	coordinator := Coordinator{ID: id, Store: store, Release: client}
-	authority := Authority{StateDir: stateDir, ID: id, Key: key, Handle: func(ctx context.Context, action string, data json.RawMessage) (any, error) {
+	authority := Authority{StateDir: stateDir, ID: id, Key: key, Handle: func(ctx context.Context, _ VerifiedActor, action string, data json.RawMessage) (any, error) {
 		if action != "plan" {
 			return nil, fmt.Errorf("unexpected action %s", action)
 		}

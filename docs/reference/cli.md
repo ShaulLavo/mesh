@@ -1716,6 +1716,7 @@ Usage:
   mesh update [command]
 
 Available Commands:
+  automatic   Manage exact saved-fleet unattended update consent
   cancel      Stop pending updates; issued activation grants may still finish
   retry       Retry unfinished targets at the originally approved release
   status      Show persisted fleet update progress
@@ -1741,6 +1742,140 @@ Global Flags:
 Use "mesh update [command] --help" for more information about a command.
 ```
 
+## mesh update automatic
+
+```text
+Manage exact saved-fleet unattended update consent
+
+Usage:
+  mesh update automatic [command]
+
+Available Commands:
+  acknowledge-stop Acknowledge a settled run or disabled pre-run policy stop; stay disabled
+  authorize        Bind this account to an exact coordinator, fleet and epoch
+  disable          Stop new automatic dispatch; issued work may still finish
+  enable           Enable exact saved-fleet release tracking; wait for local recipient consent
+  revoke           Withdraw this account's unattended binary consent
+  status           Show policy, enrollment, stop, continuation and pinned run status
+
+Flags:
+  -h, --help   help for automatic
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+
+Use "mesh update automatic [command] --help" for more information about a command.
+```
+
+## mesh update automatic authorize
+
+```text
+Bind this account to an exact coordinator, fleet and epoch
+
+Usage:
+  mesh update automatic authorize COORDINATOR_ID [flags]
+
+Flags:
+      --epoch uint               exact pending coordinator enrollment epoch
+      --expected-revision uint   expected local recipient consent revision
+      --fleet string             exact saved fleet file
+  -h, --help                     help for authorize
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update automatic disable
+
+```text
+Stop new automatic dispatch; issued work may still finish
+
+Usage:
+  mesh update automatic disable [flags]
+
+Flags:
+      --command-id string        exact administrative command identity for response-loss replay
+      --expected-revision uint   expected coordinator policy revision
+  -h, --help                     help for disable
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update automatic enable
+
+```text
+Enable exact saved-fleet release tracking; wait for local recipient consent
+
+Usage:
+  mesh update automatic enable [flags]
+
+Flags:
+      --command-id string        exact administrative command identity for response-loss replay
+      --expected-revision uint   expected coordinator policy revision
+  -h, --help                     help for enable
+      --take-ownership           local coordinator recovery after disabled, settled stop acknowledgement
+      --yes                      approve unattended updates for the coordinator's exact saved fleet
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update automatic revoke
+
+```text
+Withdraw this account's unattended binary consent
+
+Usage:
+  mesh update automatic revoke [flags]
+
+Flags:
+      --expected-revision uint   expected local recipient consent revision
+  -h, --help                     help for revoke
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update automatic status
+
+```text
+Show policy, enrollment, stop, continuation and pinned run status
+
+Usage:
+  mesh update automatic status [flags]
+
+Flags:
+  -h, --help   help for status
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
 ## mesh update cancel
 
 ```text
@@ -1750,7 +1885,9 @@ Usage:
   mesh update cancel RUN [flags]
 
 Flags:
-  -h, --help   help for cancel
+      --command-id string               exact administrative command identity for response-loss replay
+      --expected-policy-revision uint   expected automatic policy revision; required for automatic runs
+  -h, --help                            help for cancel
 
 Global Flags:
       --coordinator string   adopted host holding the operation; defaults to this machine
@@ -1769,7 +1906,9 @@ Usage:
   mesh update retry RUN [flags]
 
 Flags:
-  -h, --help   help for retry
+      --command-id string               exact administrative command identity for response-loss replay
+      --expected-policy-revision uint   expected automatic policy revision; required for automatic runs
+  -h, --help                            help for retry
 
 Global Flags:
       --coordinator string   adopted host holding the operation; defaults to this machine

@@ -264,7 +264,7 @@ var deniedScopedActions = map[string][]string{
 	"copy.request":   {"upload.begin", "upload.chunk", "upload.commit", "download.begin", "download.chunk", "close", "release"},
 	"app.request":    {"upload.begin", "upload.chunk", "create", "update", "download", "list", "renew", "browser.inspect", "browser.list", "browser.approve", "browser.revoke", "inspect", "delete"},
 	"app.registry":   {"allocate", "list", "sync", "inspect", "activate", "suspend", "renew", "delete", "cleanup", "browser.inspect", "browser.list", "browser.approve", "browser.revoke"},
-	"update.control": {"challenge", "info", "runs", "status", "plan", "retry", "cancel", "stage", "grant", "install-status", "install-cancel", "install-retry", "fleet-profile.put", "unknown"},
+	"update.control": {"challenge", "info", "runs", "status", "plan", "retry", "cancel", "stage", "grant", "install-status", "install-cancel", "install-retry", "fleet-profile.put", "automatic.status", "automatic.consent", "automatic.change", "unknown"},
 }
 
 func TestScopedFramedDenialMatrixStopsBeforeAllOwners(t *testing.T) {
@@ -466,7 +466,7 @@ func TestScopedCarrierCannotUseIndependentValidSignatures(t *testing.T) {
 		t.Fatal(err)
 	}
 	var effects atomic.Int32
-	authority := &update.Authority{StateDir: f.state, ID: f.target, Key: f.auth.Key, Handle: func(context.Context, string, json.RawMessage) (any, error) {
+	authority := &update.Authority{StateDir: f.state, ID: f.target, Key: f.auth.Key, Handle: func(context.Context, update.VerifiedActor, string, json.RawMessage) (any, error) {
 		effects.Add(1)
 		return map[string]bool{"accepted": true}, nil
 	}}

@@ -49,28 +49,7 @@ cat >"$T/bin/tailscale" <<'TAILSCALE'
 printf '%s\n' '{"BackendState":"Running","Self":{"HostName":"test","TailscaleIPs":["127.0.0.1"]}}'
 TAILSCALE
 chmod +x "$T/bin/tailscale"
-PORT=$(python3 - "$$" <<'PY'
-import socket, sys
-
-# Own band per concurrent script; bind-then-close alone hands the port back
-# before the daemon claims it.
-base = 20000 + (int(sys.argv[1]) % 900) * 16
-for offset in range(16 * 900):
-    port = 20000 + (base - 20000 + offset) % (16 * 900)
-    listener = socket.socket()
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        listener.bind(("127.0.0.1", port))
-    except OSError:
-        listener.close()
-        continue
-    print(port)
-    listener.close()
-    break
-else:
-    raise SystemExit("no free port in this band")
-PY
-)
+PORT=${MESH_INTEGRATION_PORTS:?fixture owner did not reserve a port}
 
 # Create the service through the same daemon control request T14 will call.
 "$MESH" daemon >"$T/seed.log" 2>&1 &
