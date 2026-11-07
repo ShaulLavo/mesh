@@ -138,6 +138,9 @@ func scanObject(decoder *json.Decoder, depth int) error {
 		if !ok || seen[key] {
 			return errors.New("access: duplicate or invalid JSON key")
 		}
+		if !policyField(key) {
+			return errors.New("access: unknown JSON field")
+		}
 		seen[key] = true
 		if err := scanValue(decoder, depth); err != nil {
 			return err
@@ -148,6 +151,15 @@ func scanObject(decoder *json.Decoder, depth int) error {
 		return fmt.Errorf("access: close JSON object: %w", err)
 	}
 	return nil
+}
+
+func policyField(key string) bool {
+	switch key {
+	case "version", "target", "revision", "entries", "subject", "incarnation", "permissions", "createdAt", "expiresAt":
+		return true
+	default:
+		return false
+	}
 }
 
 func syncScopeParent(dir *os.File, syncDir func(*os.File) error) error {

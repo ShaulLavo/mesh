@@ -171,9 +171,10 @@ func newScopedFixture(ctx context.Context, t *testing.T, loose bool) *scopedFixt
 	}
 	if loose {
 		native := f.auth.Bind
+		admit := func(protocol.Frame) bool { return true }
 		f.auth.Bind = func(id string) transport.Authorization {
 			grant := native(id)
-			grant.Admit = func(protocol.Frame) bool { return true }
+			grant.Admit = admit
 			return grant
 		}
 	}
@@ -181,11 +182,7 @@ func newScopedFixture(ctx context.Context, t *testing.T, loose bool) *scopedFixt
 		f.joined.Add(1)
 		defer f.joined.Done()
 		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: f.auth}, func(ctx context.Context, conn transport.Conn) error {
-			current, cancel := context.WithCancel(ctx)
-			defer cancel()
-			stop := context.AfterFunc(lifetime, func() { cancel(); _ = conn.Close() })
-			defer stop()
-			return f.server.Handle(current, conn)
+			return f.handleScopedConnection(ctx, lifetime, conn)
 		})
 	}))
 	f.http.Start()
@@ -635,4 +632,12 @@ func observeOtherRoles(stateDir string) access.ObserveOtherRoles {
 		return publishedOtherRoles(stateDir, subject)
 
 	}
+}
+
+func (f *scopedFixture) handleScopedConnection(ctx, lifetime context.Context, conn transport.Conn) error {
+	current, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(lifetime, func() { cancel(); _ = conn.Close() })
+	defer stop()
+	return f.server.Handle(current, conn)
 }

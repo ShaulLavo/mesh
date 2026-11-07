@@ -29,19 +29,20 @@ func TestScopedCurrentIsCheckedInsideActualWriteLock(t *testing.T) {
 	auth := &Authentication{Key: serverKey, Authorize: func(id string) bool { return id == clientID }, Bind: func(string) Authorization {
 		return Authorization{Class: access.Scoped, Current: current.Load, Admit: func(protocol.Frame) bool { return true }}
 	}}
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = ServeWithOptions(w, r, ServeOptions{Auth: auth}, func(ctx context.Context, conn Conn) error {
-			raw := conn.(*authorizedConn).Conn.(*BatchingConn).dst.(*socketConn)
-			sockets <- raw
-			select {
-			case <-send:
-			case <-ctx.Done():
-				return nil
-			}
-			err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: []byte(`{"type":"access.read.result","secret":"queued"}`)})
-			completed <- err
+	handle := Handler(func(ctx context.Context, conn Conn) error {
+		raw := conn.(*authorizedConn).Conn.(*BatchingConn).dst.(*socketConn)
+		sockets <- raw
+		select {
+		case <-send:
+		case <-ctx.Done():
 			return nil
-		})
+		}
+		err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: []byte(`{"type":"access.read.result","secret":"queued"}`)})
+		completed <- err
+		return nil
+	})
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = ServeWithOptions(w, r, ServeOptions{Auth: auth}, handle)
 	}))
 	t.Cleanup(server.Close)
 	server.Start()
@@ -92,9 +93,14 @@ func TestAdmissionSetsPreserveOrdinarySignedUpdaterAndScoped(t *testing.T) {
 		{ScopedAdmission, 0, false}, {FullAdmission, 9, false},
 	} {
 		t.Run(fmt.Sprintf("%d/%d", test.set, test.class), func(t *testing.T) {
-			if test.set.accepts(test.class) != test.want {
-				t.Fatal("wrong accepted class set")
-			}
+			checkAdmissionCase(t, test.set, test.class, test.want)
 		})
+	}
+}
+
+func checkAdmissionCase(t *testing.T, set Admission, class byte, want bool) {
+	t.Helper()
+	if set.accepts(class) != want {
+		t.Fatal("wrong accepted class set")
 	}
 }

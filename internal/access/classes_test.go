@@ -206,22 +206,25 @@ func TestClassWriterProcess(t *testing.T) {
 }
 func TestDamagedOtherPolicyIsNotRoleAbsence(t *testing.T) {
 	for _, name := range []string{"authorized_keys", "updates/administrators.json"} {
-		t.Run(name, func(t *testing.T) {
-			state, _, subject, store := fixture(t)
-			path := filepath.Join(state, name)
-			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, []byte("damaged"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := store.Grant(context.Background(), 0, access.GrantInput{Subject: access.Subject(subject), ExpiresAt: time.Now().Add(time.Hour)}, roleObserver(state))
-			if err == nil {
-				t.Fatal("damaged native policy treated as absent")
-			}
-			if _, err := os.Stat(filepath.Join(state, "access", "scopes.json")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("denied scope published policy: %v", err)
-			}
-		})
+		t.Run(name, func(t *testing.T) { checkDamagedOtherPolicy(t, name) })
+	}
+}
+
+func checkDamagedOtherPolicy(t *testing.T, name string) {
+	t.Helper()
+	state, _, subject, store := fixture(t)
+	path := filepath.Join(state, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("damaged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.Grant(context.Background(), 0, access.GrantInput{Subject: access.Subject(subject), ExpiresAt: time.Now().Add(time.Hour)}, roleObserver(state))
+	if err == nil {
+		t.Fatal("damaged native policy treated as absent")
+	}
+	if _, err := os.Stat(filepath.Join(state, "access", "scopes.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("denied scope published policy: %v", err)
 	}
 }

@@ -533,8 +533,12 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		if cfg.SSHSessionHandler != nil {
 			sessionHandler = cfg.SSHSessionHandler(stateDir)
 		}
+		scopes, err := access.Open(stateDir, meshHost.ID, opts.now)
+		if err != nil {
+			return fmt.Errorf("daemon: configure SSH scoped registrations: %w", err)
+		}
 		for _, address := range sshAddrs {
-			listener.sshConfigs = append(listener.sshConfigs, sshd.Config{ScopeMembership: func(id string) (bool, error) { return access.Registered(stateDir, access.Subject(id)) },
+			listener.sshConfigs = append(listener.sshConfigs, sshd.Config{ScopeMembership: func(id string) (bool, error) { return scopes.Membership(access.Subject(id)) },
 				Handler:        sessionHandler,
 				Services:       serviceRegistry,
 				HostKey:        meshPrivateKey,

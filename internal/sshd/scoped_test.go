@@ -80,13 +80,7 @@ func TestSSHScopedKeysCannotReachAnyApplicationEntry(t *testing.T) {
 	commands := []string{"hello", "", "7K3D", "ls", "recover 7K3D --shell", "app list", `run {"argv":["sh"]}`, "scp -f /private", "sftp", "direct-tcpip", "tcpip-forward", "unknown"}
 	for _, command := range commands {
 		for _, pty := range []bool{false, true} {
-			client, err := gossh.Dial("tcp", address, clientConfig(t, actorKey, nil))
-			if client != nil {
-				_ = client.Close()
-			}
-			if err == nil {
-				t.Fatalf("scoped authentication reached %q pty=%v", command, pty)
-			}
+			assertScopedSSHAuthenticationDenied(t, actorKey, address, command, pty)
 		}
 	}
 	if effects.Load() != 0 {
@@ -218,5 +212,16 @@ func TestSSHOtherNativeKeyKeepsItsGrantAndFailsOnUnsafeScopeState(t *testing.T) 
 	}
 	if err == nil {
 		t.Fatal("non-Ed25519 SSH key bypassed unsafe scope snapshot")
+	}
+}
+
+func assertScopedSSHAuthenticationDenied(t *testing.T, key ed25519.PrivateKey, address, command string, pty bool) {
+	t.Helper()
+	client, err := gossh.Dial("tcp", address, clientConfig(t, key, nil))
+	if client != nil {
+		_ = client.Close()
+	}
+	if err == nil {
+		t.Fatalf("scoped authentication reached %q pty=%v", command, pty)
 	}
 }

@@ -44,24 +44,27 @@ func TestCredentialNeverCreatesOnReadOrOverwritesDamagedKey(t *testing.T) {
 }
 func TestCredentialRejectsSymlinksHardlinksAndOversize(t *testing.T) {
 	for _, kind := range []string{"symlink", "hardlink", "oversize"} {
-		t.Run(kind, func(t *testing.T) {
-			directory := filepath.Join(t.TempDir(), "credential")
-			if _, err := CreateCredential(directory); err != nil {
-				t.Fatal(err)
-			}
-			root, err := os.OpenRoot(directory)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = root.Close() }()
-			err = damageCredential(root, kind)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, _, err := LoadCredential(directory); err == nil {
-				t.Fatal("unsafe credential loaded")
-			}
-		})
+		t.Run(kind, func(t *testing.T) { checkUnsafeCredential(t, kind) })
+	}
+}
+
+func checkUnsafeCredential(t *testing.T, kind string) {
+	t.Helper()
+	directory := filepath.Join(t.TempDir(), "credential")
+	if _, err := CreateCredential(directory); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	err = damageCredential(root, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadCredential(directory); err == nil {
+		t.Fatal("unsafe credential loaded")
 	}
 }
 func TestConcurrentCredentialKeygenRetainsWinner(t *testing.T) {

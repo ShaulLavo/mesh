@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -119,7 +120,7 @@ func TestExpiredRegistrationAndInvalidationLatch(t *testing.T) {
 	}
 }
 func TestScopedPolicySafetyAndCacheInvalidation(t *testing.T) {
-	for _, kind := range []string{"corrupt", "unknown", "duplicate", "symlink", "hardlink", "fifo", "oversize", "permissions", "wrong-target"} {
+	for _, kind := range []string{"corrupt", "unknown", "duplicate", "field-alias", "symlink", "hardlink", "fifo", "oversize", "permissions", "wrong-target"} {
 		t.Run(kind, func(t *testing.T) { testUnsafeSnapshot(t, kind) })
 	}
 }
@@ -152,6 +153,8 @@ func testUnsafeSnapshot(t *testing.T, kind string) {
 		replacement = append([]byte(`{"unknown":1,`), data[1:]...)
 	case "duplicate":
 		replacement = append([]byte(`{"version":1,`), data[1:]...)
+	case "field-alias":
+		replacement = []byte(strings.Replace(string(data), `"permissions":["metadata"]`, `"permissions":["session-output"],"Permissions":["metadata"]`, 1))
 	case "oversize":
 		replacement = make([]byte, MaximumPolicy+1)
 	case "wrong-target":

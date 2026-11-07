@@ -20,27 +20,32 @@ func TestScopedDenialInventoryCoversActualControlOwners(t *testing.T) {
 		denied[name] = true
 	}
 	for _, path := range []string{"server.go", "relay.go", "lifecycle.go", "recovery.go", "copy.go", "apps.go", "agent_context.go", "services.go", "certificates.go", "wake.go", "state_requests.go", "update.go"} {
-		source, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ast.Inspect(source, func(node ast.Node) bool {
-			selector, ok := node.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			owner, ok := selector.X.(*ast.Ident)
-			if !ok || owner.Name != "protocol" || !strings.HasPrefix(selector.Sel.Name, "Type") {
-				return true
-			}
-			name := constants[selector.Sel.Name]
-			if name != "" && !denied[name] && name != "access.read" && name != "access.read.result" && name != "access.denied" {
-				t.Errorf("actual owner %s references %s with no framed denial case", path, name)
-			}
-			return true
-		})
+		checkScopedOwnerTypes(t, path, constants, denied)
 	}
 }
+func checkScopedOwnerTypes(t *testing.T, path string, constants map[string]string, denied map[string]bool) {
+	t.Helper()
+	source, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ast.Inspect(source, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		owner, ok := selector.X.(*ast.Ident)
+		if !ok || owner.Name != "protocol" || !strings.HasPrefix(selector.Sel.Name, "Type") {
+			return true
+		}
+		name := constants[selector.Sel.Name]
+		if name != "" && !denied[name] && name != "access.read" && name != "access.read.result" && name != "access.denied" {
+			t.Errorf("actual owner %s references %s with no framed denial case", path, name)
+		}
+		return true
+	})
+}
+
 func protocolTypeConstants(t *testing.T) map[string]string {
 	t.Helper()
 	paths, err := filepath.Glob("../protocol/*.go")
@@ -102,14 +107,7 @@ func checkCompoundActions(t *testing.T, path, function, parent string) {
 		if !ok || fn.Name.Name != function {
 			continue
 		}
-		ast.Inspect(fn.Body, func(node ast.Node) bool {
-			clause, ok := node.(*ast.CaseClause)
-			if !ok {
-				return true
-			}
-			checkCompoundClause(t, clause, expected, parent)
-			return true
-		})
+		checkCompoundBody(t, fn.Body, expected, parent)
 	}
 }
 func checkCompoundClause(t *testing.T, clause *ast.CaseClause, expected map[string]bool, parent string) {
@@ -127,4 +125,16 @@ func checkCompoundClause(t *testing.T, clause *ast.CaseClause, expected map[stri
 			t.Errorf("actual %s action %s has no framed denial case", parent, action)
 		}
 	}
+}
+
+func checkCompoundBody(t *testing.T, body *ast.BlockStmt, expected map[string]bool, parent string) {
+	t.Helper()
+	ast.Inspect(body, func(node ast.Node) bool {
+		clause, ok := node.(*ast.CaseClause)
+		if !ok {
+			return true
+		}
+		checkCompoundClause(t, clause, expected, parent)
+		return true
+	})
 }

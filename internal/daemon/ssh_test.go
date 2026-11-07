@@ -3,15 +3,20 @@ package daemon
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/access"
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/tailnet"
 )
@@ -217,5 +222,84 @@ func waitForSSHConfig(t *testing.T, started <-chan sshd.Config) sshd.Config {
 	case <-time.After(runtimeTestTimeout):
 		t.Fatal("SSH listener did not start")
 		return sshd.Config{}
+	}
+}
+
+func TestRunSSHReusesScopeMembershipSnapshot(t *testing.T) {
+	fixture := newDaemonRunFixture(t)
+	host, _, err := identity.LoadOrCreate(fixture.stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := writeSSHMembershipPolicy(t, fixture.stateDir, host.ID)
+	configs := make(chan sshd.Config, 1)
+	fixture.start(t, func(ctx context.Context) error {
+		return run(ctx, Config{StateDir: fixture.stateDir, SSHPort: 2222}, runOptions{
+			now:    func() time.Time { return catalogTestTime },
+			bootID: func() string { return "boot-membership" },
+			discoverSelf: func(context.Context) (tailnet.Peer, error) {
+				return tailnet.Peer{Name: "pc.fixture.test", Addrs: []string{"100.64.0.7"}}, nil
+			},
+			reconcileInterval: time.Hour,
+			serveSSH:          func(ctx context.Context, cfg sshd.Config) error { configs <- cfg; <-ctx.Done(); return nil },
+		})
+	})
+	cfg := waitForSSHConfig(t, configs)
+	assertSSHMembershipCached(t, cfg.ScopeMembership, fixture.stateDir, subject)
+	policy := filepath.Join(fixture.stateDir, "access", "scopes.json")
+	if err := os.WriteFile(policy, []byte("damaged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cfg.ScopeMembership(subject); err == nil {
+		t.Fatal("cached SSH membership accepted damaged policy")
+	}
+	if err := os.Remove(policy); err != nil {
+		t.Fatal(err)
+	}
+	if registered, err := cfg.ScopeMembership(subject); err != nil || registered {
+		t.Fatalf("removed policy retained registration: %v %v", registered, err)
+	}
+	fixture.stop(t)
+}
+
+func writeSSHMembershipPolicy(t *testing.T, state, target string) string {
+	t.Helper()
+	now := time.Now().UTC()
+	policy := access.PolicyView{Version: 1, Target: target, Revision: 1, Entries: make([]access.Entry, 16)}
+	for index := range policy.Entries {
+		key := sha256.Sum256([]byte(fmt.Sprintf("ssh-membership-fixture-%d", index)))
+		policy.Entries[index] = access.Entry{Subject: access.Subject(base64.RawURLEncoding.EncodeToString(key[:])), Incarnation: "00112233445566778899aabbccddeeff", Permissions: []string{"metadata"}, CreatedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(-time.Hour)}
+	}
+	data, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(state, "access"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "access", "scopes.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return string(policy.Entries[0].Subject)
+}
+
+func assertSSHMembershipCached(t *testing.T, membership func(string) (bool, error), state, subject string) {
+	t.Helper()
+	check := func() {
+		registered, err := membership(subject)
+		if err != nil || !registered {
+			t.Fatalf("expired scope registration was lost: %v %v", registered, err)
+		}
+	}
+	retained := testing.AllocsPerRun(5, check)
+	uncached := testing.AllocsPerRun(5, func() {
+		registered, err := access.Registered(state, access.Subject(subject))
+		if err != nil || !registered {
+			t.Fatalf("uncached registration: %v %v", registered, err)
+		}
+	})
+	t.Logf("SSH callback %.0f allocations; uncached parse %.0f allocations", retained, uncached)
+	if retained >= uncached/2 {
+		t.Fatal("SSH assembly reparses unchanged scoped policy")
 	}
 }
