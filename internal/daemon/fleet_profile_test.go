@@ -192,6 +192,70 @@ func TestFleetDeliveryBackoffRestartAndMembership(t *testing.T) {
 		t.Fatal("removed member retained")
 	}
 }
+func TestFleetDeliveryAdoptedCurrentSchedulesRelay(t *testing.T) {
+	f := newDeliveryFixture(t, 2)
+	host, key, err := identity.LoadPrivate(f.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now().UTC()
+	f.controller.now = func() time.Time { return clock }
+	next, err := hostprofile.SignFleet(hostprofile.Editable{SchemaVersion: 1, Instructions: "owner resolves divergence"}, "fixture", 2, clock, host.ID, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var relayed atomic.Uint64
+	f.controller.call = func(_ context.Context, member update.Host, _ string, input, output any) error {
+		doc := input.(hostprofile.PutRequest).Document
+		result := hostprofile.PutResult{Outcome: hostprofile.Applied, Revision: doc.Revision, Digest: doc.Digest()}
+		if member.ID == f.hosts[0].ID {
+			result = hostprofile.PutResult{Outcome: hostprofile.Older, Revision: next.Revision, Digest: next.Digest(), Current: &next}
+		}
+		if member.ID == f.hosts[1].ID {
+			relayed.Store(doc.Revision)
+		}
+		*output.(*hostprofile.PutResult) = result
+		return nil
+	}
+	if err := f.controller.cycle(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	out := deliveryResult(t, f)
+	if out.Digest != next.Digest() || relayed.Load() != f.doc.Revision {
+		t.Fatal("newer Current was not adopted during the old delivery batch", out, relayed.Load())
+	}
+	for _, member := range out.Members {
+		if member.HostID == f.hosts[1].ID && (member.State != hostprofile.Pending || member.LastError != nil) {
+			t.Fatal("new document relay was not freshly queued", member)
+		}
+	}
+	// The owner's later push is unchanged after Current adoption and cannot wake the loop.
+	data, err := json.Marshal(hostprofile.PutRequest{Document: next})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := f.controller.Put(t.Context(), data)
+	if err != nil || accepted.(hostprofile.PutResult).Outcome != hostprofile.Unchanged {
+		t.Fatal(accepted, err)
+	}
+	select {
+	case <-f.controller.poke:
+	default:
+		t.Fatal("adopted newer Current left the relay pending until the 30-second poll")
+	}
+	if err := f.controller.cycle(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if relayed.Load() != next.Revision {
+		t.Fatal("prior-digest retry blocked the new document", relayed.Load())
+	}
+	for _, member := range deliveryResult(t, f).Members {
+		if member.State != hostprofile.Delivered {
+			t.Fatal("new document did not settle", member)
+		}
+	}
+}
+
 func TestFleetDeliveryCancellationJoinsAllAttempts(t *testing.T) {
 	f := newDeliveryFixture(t, 12)
 	entered := make(chan struct{}, 12)
