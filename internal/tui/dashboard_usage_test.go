@@ -269,7 +269,7 @@ func TestDashboardUsageMixedWindowAgeAndPublicationAge(t *testing.T) {
 		t.Fatal(got)
 	}
 	result := usagefeed.Result{Snapshot: &usagefeed.Snapshot{SchemaVersion: 1, GeneratedAt: model.now.Add(time.Hour), Accounts: []usagefeed.Account{account.Account}}, Revision: 1}
-	next, _ := model.Update(dashboardUsageMsg(result))
+	next, _ := model.Update(dashboardUsageMsg{Generation: 1, Enabled: true, State: "enabled", Result: result})
 	model = next.(dashboardModel)
 	if age := usageAge(model.now, model.usage.accounts[0].Windows[1].LastSeenAt); age != "stale 18m" {
 		t.Fatal(age)

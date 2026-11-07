@@ -16,14 +16,13 @@ import (
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/updateinstall"
-	"github.com/shaul/mesh/internal/usagefeed"
 )
 
 func TestDashboardRestartNoticeStaysOnOneLine(t *testing.T) {
 	for _, usage := range []bool{false, true} {
 		input := cli.DashboardInput{Wall: true, Notice: "Dashboard restart failed: permission denied"}
 		if usage {
-			input.UsageWatch = func(_ context.Context, _ func(usagefeed.Result)) error { return nil }
+			input.UsageWatch = func(_ context.Context, _ func(cli.DashboardUsageUpdate)) error { return nil }
 		}
 		model := newDashboard(input, time.Now())
 		model.width, model.height = 140, 40

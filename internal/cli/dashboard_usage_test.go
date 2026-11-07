@@ -53,10 +53,14 @@ func TestDashboardUsageConstructionIsPassive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := DashboardInput{UsageWatch: feed.Run}
+	input := DashboardInput{UsageWatch: func(ctx context.Context, publish func(DashboardUsageUpdate)) error {
+		return feed.Run(ctx, func(result usagefeed.Result) {
+			publish(DashboardUsageUpdate{Generation: 1, Enabled: true, State: "enabled", Result: result})
+		})
+	}}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := input.UsageWatch(ctx, func(usagefeed.Result) { t.Fatal("cancelled feed published") }); !errors.Is(err, context.Canceled) {
+	if err := input.UsageWatch(ctx, func(DashboardUsageUpdate) { t.Fatal("cancelled feed published") }); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if calls.Load() != 0 {

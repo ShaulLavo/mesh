@@ -37,6 +37,7 @@ type Caller interface {
 }
 
 type Coordinator struct {
+	configurationCalls configurationCalls
 	SavedFleet         func() (Fleet, error)
 	Trusted            func(string) bool
 	CheckedRelease     func(context.Context) (*updatenotice.CheckedRelease, error)
@@ -72,6 +73,8 @@ func (c *Coordinator) Retry(_ context.Context, id string) (Run, error) {
 }
 
 func (c *Coordinator) Run(ctx context.Context, report func(error)) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() { cancel(); c.joinConfiguration() }()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -86,9 +89,12 @@ func (c *Coordinator) Run(ctx context.Context, report func(error)) {
 	}
 }
 
-func (c *Coordinator) Step(ctx context.Context) error {
+func (c *Coordinator) Step(ctx context.Context) (result error) {
 	c.execution.Lock()
-	defer c.execution.Unlock()
+	defer func() {
+		c.execution.Unlock()
+		result = errors.Join(result, c.stepConfiguration(ctx))
+	}()
 	admissionErr := c.refreshAutomatic(ctx)
 	runs, err := c.Store.List()
 	if err != nil {

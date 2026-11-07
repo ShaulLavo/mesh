@@ -1862,6 +1862,7 @@ Usage:
 Available Commands:
   automatic   Manage exact saved-fleet unattended update consent
   cancel      Stop pending updates; issued activation grants may still finish
+  config      Deliver explicitly approved usage-feed settings
   retry       Retry unfinished targets at the originally approved release
   status      Show persisted fleet update progress
   trust       Authorize an update administrator on this machine
@@ -2032,6 +2033,181 @@ Flags:
       --command-id string               exact administrative command identity for response-loss replay
       --expected-policy-revision uint   expected automatic policy revision; required for automatic runs
   -h, --help                            help for cancel
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update config
+
+```text
+Deliver explicitly approved usage-feed settings
+
+Usage:
+  mesh update config [command]
+
+Available Commands:
+  allow       Allow usage-feed delivery from an exact coordinator
+  apply       Approve the exact verified proposal for durable delivery
+  cancel      Stop new dispatch intentions; earlier issued work may still finish
+  preview     Capture exact targets, selected values and recipient grants without delivery
+  retry       Explicitly retry the same approver's unchanged configuration
+  revoke      Withdraw this account's configuration grant
+  status      Show saved, issued and actual dashboard observations separately
+
+Flags:
+  -h, --help   help for config
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+
+Use "mesh update config [command] --help" for more information about a command.
+```
+
+## mesh update config allow
+
+```text
+Allow usage-feed delivery from an exact coordinator
+
+Usage:
+  mesh update config allow COORDINATOR_ID [flags]
+
+Flags:
+      --expected-revision uint   expected target-local configuration grant revision
+  -h, --help                     help for allow
+      --usage-feed               allow only dashboard usage-feed URL delivery
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update config apply
+
+```text
+Approve the exact verified proposal for durable delivery
+
+Usage:
+  mesh update config apply [flags]
+
+Flags:
+      --command-id string   administrative identity to reuse after response loss
+      --file string         exact selection or previously returned proposal JSON file
+  -h, --help                help for apply
+      --yes                 approve the exact verified proposal
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update config cancel
+
+```text
+Stop new dispatch intentions; earlier issued work may still finish
+
+Usage:
+  mesh update config cancel CHANGE_ID [flags]
+
+Flags:
+      --command-id string        administrative identity to reuse after response loss
+      --expected-revision uint   expected configuration administrative revision
+  -h, --help                     help for cancel
+      --retire                   local coordinator only: cancel, settle and archive without taking ownership
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update config preview
+
+```text
+Capture exact targets, selected values and recipient grants without delivery
+
+Usage:
+  mesh update config preview [flags]
+
+Flags:
+      --file string   exact selection or previously returned proposal JSON file
+  -h, --help          help for preview
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update config retry
+
+```text
+Explicitly retry the same approver's unchanged configuration
+
+Usage:
+  mesh update config retry CHANGE_ID [flags]
+
+Flags:
+      --command-id string        administrative identity to reuse after response loss
+      --expected-revision uint   expected configuration administrative revision
+  -h, --help                     help for retry
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update config revoke
+
+```text
+Withdraw this account's configuration grant
+
+Usage:
+  mesh update config revoke [flags]
+
+Flags:
+      --expected-revision uint   expected target-local configuration grant revision
+  -h, --help                     help for revoke
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update config status
+
+```text
+Show saved, issued and actual dashboard observations separately
+
+Usage:
+  mesh update config status CHANGE_ID [flags]
+
+Flags:
+  -h, --help   help for status
 
 Global Flags:
       --coordinator string   adopted host holding the operation; defaults to this machine

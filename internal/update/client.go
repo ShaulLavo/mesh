@@ -71,7 +71,7 @@ func (c Client) Call(ctx context.Context, host Host, action string, input, outpu
 	if output == nil {
 		return nil
 	}
-	if automaticAction(action) {
+	if automaticAction(action) || configurationAction(action) {
 		return decodeAutomaticOutput(response.Data, output)
 	}
 	return json.Unmarshal(response.Data, output)
