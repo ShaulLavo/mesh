@@ -88,6 +88,13 @@ func configurationObservationFixture(t *testing.T, id string) update.Configurati
 }
 func configurationLocalObservation(t *testing.T, controller *updateController, id string, key ed25519.PrivateKey, observation update.ConfigurationObservation) {
 	t.Helper()
+	result := configurationLocalObservationResult(t, controller, id, key, observation)
+	if result.Problem != "" {
+		t.Fatalf("local observer refused: %s", result.Problem)
+	}
+}
+func configurationLocalObservationResult(t *testing.T, controller *updateController, id string, key ed25519.PrivateKey, observation update.ConfigurationObservation) update.Message {
+	t.Helper()
 	request := update.Message{Actor: id, Target: id, Action: "challenge", Nonce: observation.InstanceID}
 	request.Sign(key)
 	data, err := json.Marshal(request)
@@ -120,9 +127,10 @@ func configurationLocalObservation(t *testing.T, controller *updateController, i
 		t.Fatal(err)
 	}
 	var result update.Message
-	if err = json.Unmarshal(response.Update, &result); err != nil || result.Problem != "" {
-		t.Fatalf("local observer refused: %s %v", result.Problem, err)
+	if err = json.Unmarshal(response.Update, &result); err != nil {
+		t.Fatal(err)
 	}
+	return result
 }
 func TestConfigurationObserverLeaseAndDaemonRestartRequireActualRenewal(t *testing.T) {
 	state := t.TempDir()

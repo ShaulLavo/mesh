@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -272,7 +273,7 @@ func (c *Coordinator) ChangeConfiguration(ctx context.Context, actor VerifiedAct
 	if err != nil {
 		return ConfigurationStatus{}, err
 	}
-	if err = authorizeConfigurationCommand(r, actor, command); err != nil {
+	if err = c.authorizeConfigurationCommand(r, actor, action, command); err != nil {
 		return ConfigurationStatus{}, err
 	}
 	digest := configurationDigest(struct {
@@ -288,16 +289,16 @@ func (c *Coordinator) ChangeConfiguration(ctx context.Context, actor VerifiedAct
 	if r.LastMutation != nil && r.LastMutation.ID == command.ID {
 		return ConfigurationStatus{}, problem("configuration.conflict", "administrative command identity was already used")
 	}
-	if err = c.mutateConfiguration(actor, action, command, &r); err != nil {
+	if err = c.mutateConfiguration(action, command, &r); err != nil {
 		return ConfigurationStatus{}, err
 	}
 	r.Revision++
 	r.LastMutation = &MutationReceipt{ID: command.ID, ActorID: actor.id, Digest: digest, ExpectedRevision: command.ExpectedRevision, ResultRevision: r.Revision, Attempt: r.Current.Attempt}
 	return ConfigurationStatus{r.Revision, r.Current}, c.Store.writeConfiguration(r)
 }
-func (c *Coordinator) mutateConfiguration(actor VerifiedActor, action string, command ConfigurationCommand, r *ConfigurationRecord) error {
-	if action == "retry" {
-		if err := c.retryConfiguration(actor, r.Current); err != nil {
+func (c *Coordinator) mutateConfiguration(action string, command ConfigurationCommand, r *ConfigurationRecord) error {
+	if action == configurationRetry {
+		if err := retryConfiguration(r.Current); err != nil {
 			return err
 		}
 	} else {
@@ -309,12 +310,15 @@ func (c *Coordinator) mutateConfiguration(actor VerifiedActor, action string, co
 	r.Current.Retired = true
 	return c.Store.archiveConfiguration(r.Current)
 }
-func authorizeConfigurationCommand(r ConfigurationRecord, actor VerifiedActor, command ConfigurationCommand) error {
+func (c *Coordinator) authorizeConfigurationCommand(r ConfigurationRecord, actor VerifiedActor, action string, command ConfigurationCommand) error {
 	if r.Current == nil || r.Current.Proposal.ID != command.ChangeID {
 		return problem("configuration.conflict", "configuration change is no longer current")
 	}
 	if actor.id != r.Current.Proposal.OwnerID && !command.Retire {
 		return problem("configuration.denied", "only the recorded approver may retry or cancel this change")
+	}
+	if action == configurationRetry {
+		return c.validateConfigurationRetry(actor, r.Current)
 	}
 	return nil
 }
@@ -327,7 +331,7 @@ func cancelConfiguration(change *ConfigurationChange) {
 		}
 	}
 }
-func (c *Coordinator) retryConfiguration(actor VerifiedActor, change *ConfigurationChange) error {
+func (c *Coordinator) validateConfigurationRetry(actor VerifiedActor, change *ConfigurationChange) error {
 	fleet, err := c.configurationScope(actor)
 	if err != nil {
 		return err
@@ -335,6 +339,9 @@ func (c *Coordinator) retryConfiguration(actor VerifiedActor, change *Configurat
 	if fleet.Digest() != change.Proposal.Membership {
 		return problem("configuration.conflict", "saved membership changed; cancel and settle this change")
 	}
+	return nil
+}
+func retryConfiguration(change *ConfigurationChange) error {
 	if change.Cancelled || change.Retired || change.Attempt == math.MaxUint64 {
 		return problem("configuration.conflict", "cancelled configuration needs a fresh preview after settlement")
 	}
@@ -356,10 +363,12 @@ func (c *Coordinator) retryConfiguration(actor VerifiedActor, change *Configurat
 }
 
 type configurationCalls struct {
-	mu      sync.Mutex
-	active  map[string]context.CancelFunc
-	joined  sync.WaitGroup
-	problem error
+	mu            sync.Mutex
+	active        map[string]context.CancelFunc
+	joined        sync.WaitGroup
+	problem       error
+	observationID string
+	observeAfter  map[string]time.Time
 }
 type configurationDispatch struct {
 	changeID, digest, dispatchID string
@@ -406,33 +415,49 @@ func (c *Coordinator) reserveConfiguration(ctx context.Context) (*configurationD
 		return nil, err
 	}
 	change := r.Current
+	if c.configurationCalls.observationID != change.Proposal.ID {
+		c.configurationCalls.observationID = change.Proposal.ID
+		c.configurationCalls.observeAfter = make(map[string]time.Time)
+	}
 	priorBlock := change.Blocked
 	if err = c.fenceConfiguration(change); err != nil {
 		return nil, err
 	}
 	for index := range change.Targets {
-		target := &change.Targets[index]
-		key := change.Proposal.ID + "/" + target.HostID
-		if c.configurationCalls.active[key] != nil || time.Now().Before(target.RetryAt) || target.State == configurationCancelled || target.State == configurationConflict || target.State == configurationRejected {
-			continue
+		dispatch, err := c.reserveConfigurationTarget(r, index, priorBlock)
+		if err != nil || dispatch != nil {
+			return dispatch, err
 		}
-		dispatch, err := newConfigurationDispatch(change, index)
-		if err != nil {
-			return nil, err
-		}
-		target.RetryAt = time.Now().Add(30 * time.Second)
-		if dispatch == nil {
-			continue
-		}
-		if err = c.Store.writeConfiguration(r); err != nil {
-			return nil, err
-		}
-		return dispatch, nil
 	}
-	if change.Blocked != priorBlock {
-		return nil, c.Store.writeConfiguration(r)
+	return nil, c.writeConfigurationBlock(r, priorBlock)
+}
+func (c *Coordinator) reserveConfigurationTarget(r ConfigurationRecord, index int, priorBlock string) (*configurationDispatch, error) {
+	change := r.Current
+	target := &change.Targets[index]
+	key := change.Proposal.ID + "/" + target.HostID
+	if c.configurationCalls.active[key] != nil || time.Now().Before(c.configurationCalls.observeAfter[key]) || time.Now().Before(target.RetryAt) || target.State == configurationCancelled || target.State == configurationConflict || target.State == configurationRejected {
+		return nil, nil
 	}
-	return nil, nil
+	dispatch, err := newConfigurationDispatch(change, index)
+	if err != nil || dispatch == nil {
+		return nil, err
+	}
+	if dispatch.operation == "observe" {
+		c.configurationCalls.observeAfter[key] = time.Now().Add(30 * time.Second)
+		return dispatch, c.writeConfigurationBlock(r, priorBlock)
+	}
+	target.RetryAt = time.Now().Add(30 * time.Second)
+	if err = c.Store.writeConfiguration(r); err != nil {
+		return nil, err
+	}
+	return dispatch, nil
+}
+
+func (c *Coordinator) writeConfigurationBlock(r ConfigurationRecord, priorBlock string) error {
+	if r.Current.Blocked == priorBlock {
+		return nil
+	}
+	return c.Store.writeConfiguration(r)
 }
 func (c *Coordinator) fenceConfiguration(change *ConfigurationChange) error {
 	if change.Blocked != "" {
@@ -521,14 +546,19 @@ func (c *Coordinator) finishConfiguration(ctx context.Context, dispatch configur
 		return nil
 	}
 	change := r.Current
+	prior := *target
 	if callErr != nil {
-		return c.configurationCallError(r, target, callErr, dispatch.operation != configurationPutOperation)
+		configurationCallError(target, callErr, dispatch.operation != configurationPutOperation)
+		return c.writeConfigurationTarget(r, prior, *target)
 	}
 	if dispatch.operation != configurationPutOperation {
 		var completed bool
-		receipt, completed, err = c.observeConfigurationSnapshot(&r, target, dispatch, snapshot)
-		if err != nil || completed {
+		receipt, completed, err = observeConfigurationSnapshot(target, dispatch, snapshot)
+		if err != nil {
 			return err
+		}
+		if completed {
+			return c.writeConfigurationTarget(r, prior, *target)
 		}
 	}
 	if !matchesConfigurationReceipt(receipt, dispatch, c.ID, change.Proposal.Membership) {
@@ -538,9 +568,15 @@ func (c *Coordinator) finishConfiguration(ctx context.Context, dispatch configur
 	if receipt.State == configurationSaved || receipt.State == configurationConflict {
 		target.State, target.Issued, target.Problem = receipt.State, false, receipt.Problem
 	}
+	return c.writeConfigurationTarget(r, prior, *target)
+}
+func (c *Coordinator) writeConfigurationTarget(r ConfigurationRecord, before, after ConfigurationTarget) error {
+	if reflect.DeepEqual(before, after) {
+		return nil
+	}
 	return c.Store.writeConfiguration(r)
 }
-func (c *Coordinator) configurationCallError(r ConfigurationRecord, target *ConfigurationTarget, err error, observation bool) error {
+func configurationCallError(target *ConfigurationTarget, err error, observation bool) {
 	target.Problem = boundedProblem(err.Error())
 	var remote *RemoteError
 	if !observation && target.State != configurationUncertain && errors.As(err, &remote) && slices.Contains([]ProblemCode{"configuration.denied", "configuration.conflict", "configuration.invalid"}, remote.Code) {
@@ -551,7 +587,6 @@ func (c *Coordinator) configurationCallError(r ConfigurationRecord, target *Conf
 	} else if target.Issued {
 		target.State = configurationUncertain
 	}
-	return c.Store.writeConfiguration(r)
 }
 func (c *Coordinator) joinConfiguration() {
 	c.configurationCalls.mu.Lock()
@@ -589,13 +624,15 @@ func configurationConsumerState(target ConfigurationTarget, feed FeedChange) str
 		return "saved; no active dashboard observation"
 	}
 	digest := (FeedValue{Present: true, URL: feed.URL}).Digest()
+	failing := false
 	for _, observer := range target.Observers {
 		if observer.Digest != digest || observer.State == "invalid" {
 			return "saved; dashboard reload pending"
 		}
-		if observer.Failing {
-			return "loaded; feed read failed"
-		}
+		failing = failing || observer.Failing
+	}
+	if failing {
+		return "loaded; feed read failed"
 	}
 	return "loaded by active dashboard"
 }
@@ -628,7 +665,7 @@ func repairableConfigurationSnapshot(snapshot ConfigurationSnapshot, dispatch co
 }
 
 func validateConfigurationCommand(action string, command ConfigurationCommand) error {
-	if !ValidRunID(command.ID) || !ValidRunID(command.ChangeID) || action != "retry" && action != configurationCancel {
+	if !ValidRunID(command.ID) || !ValidRunID(command.ChangeID) || action != configurationRetry && action != configurationCancel {
 		return problem("configuration.invalid", "invalid configuration administrative command")
 	}
 	if command.Retire && action != configurationCancel {
@@ -650,7 +687,7 @@ func configurationResultTarget(r *ConfigurationRecord, dispatch configurationDis
 	}
 	return &change.Targets[index]
 }
-func (c *Coordinator) observeConfigurationSnapshot(r *ConfigurationRecord, target *ConfigurationTarget, dispatch configurationDispatch, snapshot ConfigurationSnapshot) (ConfigurationReceipt, bool, error) {
+func observeConfigurationSnapshot(target *ConfigurationTarget, dispatch configurationDispatch, snapshot ConfigurationSnapshot) (ConfigurationReceipt, bool, error) {
 	if snapshot.HostID != target.HostID {
 		return ConfigurationReceipt{}, true, errors.New("configuration: snapshot identity differs")
 	}
@@ -660,10 +697,10 @@ func (c *Coordinator) observeConfigurationSnapshot(r *ConfigurationRecord, targe
 		if snapshot.Receipt != nil && snapshot.Receipt.ChangeID == dispatch.changeID {
 			target.Receipt = snapshot.Receipt
 		}
-		return ConfigurationReceipt{}, true, c.Store.writeConfiguration(*r)
+		return ConfigurationReceipt{}, true, nil
 	}
 	if snapshot.Receipt == nil || snapshot.Receipt.ChangeID != dispatch.changeID {
-		return ConfigurationReceipt{}, true, c.Store.writeConfiguration(*r)
+		return ConfigurationReceipt{}, true, nil
 	}
 	return *snapshot.Receipt, false, nil
 }

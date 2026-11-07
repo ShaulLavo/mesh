@@ -58,6 +58,26 @@ def stop_entry(entry, groups):
     entry.wait(timeout=3)
 
 
+class DashboardMetricsControlTest(unittest.TestCase):
+    def test_configuration_observation_is_explicitly_unsupported(self):
+        from dashboard_metrics import Producer
+        producer = object.__new__(Producer)
+        request = {"type": "update.control", "requestId": "observer-challenge"}
+        connection = object()
+        with patch("dashboard_metrics.send") as send:
+            self.assertFalse(producer.reply(connection, request))
+        send.assert_called_once_with(connection, {
+            "type": "error", "requestId": "observer-challenge",
+            "message": 'daemon: unknown control "update.control"',
+        })
+
+    def test_unrelated_unexpected_control_still_fails(self):
+        from dashboard_metrics import Producer
+        producer = object.__new__(Producer)
+        with self.assertRaisesRegex(AssertionError, "unexpected fixture request unrelated.control"):
+            producer.reply(None, {"type": "unrelated.control"})
+
+
 class EntryPointContractTest(unittest.TestCase):
     def test_every_script_sources_the_prelude_first(self):
         scripts = Path(__file__).resolve().parents[1].glob("*.sh")

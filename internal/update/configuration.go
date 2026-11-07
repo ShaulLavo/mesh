@@ -26,6 +26,7 @@ const (
 	configurationCancelled    = "cancelled"
 	configurationPrepared     = "prepared"
 	configurationCancel       = "cancel"
+	configurationRetry        = "retry"
 	configurationPutOperation = "put"
 )
 

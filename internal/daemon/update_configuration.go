@@ -53,6 +53,9 @@ func (o *configurationObservers) accept(hostID string, observation update.Config
 	if exists && observation.Generation < prior.Generation {
 		return observation, errors.New("configuration: stale dashboard generation")
 	}
+	if exists && observation.Generation == prior.Generation && observation.Publication < prior.Publication {
+		return observation, errors.New("configuration: stale dashboard publication")
+	}
 	if !exists && len(o.latest) >= 16 {
 		return observation, errors.New("configuration: dashboard observation capacity reached")
 	}

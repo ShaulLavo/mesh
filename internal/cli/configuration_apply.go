@@ -25,6 +25,9 @@ func (f *feedConfigFile) Save(value update.FeedValue) error {
 	if err != nil {
 		return err
 	}
+	if len(next) > clientConfigLimit {
+		return errors.New("host config exceeds 2 MiB")
+	}
 	if _, err = validatedFeedConfig(next, f.path); err != nil {
 		return err
 	}
