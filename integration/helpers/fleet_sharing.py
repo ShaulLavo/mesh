@@ -21,9 +21,11 @@ class Device(Fixture):
     def __init__(self, binary, root, name):
         self.local, self.remote = Path(root) / "local", Path(root) / "remote"
         self.terminals, self.daemon, self.daemon_log = [], None, None
+        self.port_reservation = None
         super().__init__(binary, root)
         self.name = name
-        self.port = unused_port()
+        self.port_reservation = reserved_port()
+        self.port = self.port_reservation.getsockname()[1]
         tools = self.root / "bin"
         tools.mkdir()
         (tools / "tailscale").symlink_to(self.helpers / "fake_tailscale")
@@ -104,12 +106,22 @@ class Device(Fixture):
         super().close()
         require(process is None or process.poll() is not None, "fixture daemon survived cleanup")
         require(not (self.local / "daemon.sock").exists(), "fixture daemon socket survived cleanup")
+        if self.port_reservation is not None:
+            self.port_reservation.close()
+            self.port_reservation = None
 
 
-def unused_port():
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return listener.getsockname()[1]
+def reserved_port():
+    listener = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    try:
+        # Reserve both families without accepting traffic, including while the daemon restarts.
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        listener.bind(("::", 0))
+        return listener
+    except BaseException:
+        listener.close()
+        raise
 
 
 def execute_on(source, destination, marker, devices):
