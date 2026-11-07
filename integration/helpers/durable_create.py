@@ -55,14 +55,22 @@ def exercise(fixture):
     fast = json.loads(completed.stdout)
     assert fast["operation"] == "sessions.create" and fast["status"] == "ok", fast
     fast_lookup = dict(type="execution.request", requestId="fast-lookup", requestKey="fast-exit")
-    terminal = eventually(lambda: terminal_receipt(fixture, fast_lookup), "fast exit never became terminal")
+    terminal = eventually(lambda: terminal_receipt(fixture, fast_lookup, fast["data"]), "fast exit never became terminal")
     assert terminal["result"]["termination"] == {"kind": "exit", "code": 7, "signal": None}, terminal
     assert terminal["result"]["capture"] == "not_recorded" and terminal["receiptRetainUntil"], terminal
     print(json.dumps(dict(first=first, instance=original["instance"], sideEffects=counter.read_text(), terminal=terminal)), flush=True)
 
 
-def terminal_receipt(fixture, request):
-    value = receipt(exchange(fixture, request))
+def terminal_receipt(fixture, request, expected):
+    response = exchange(fixture, request)
+    if response.get("type") == "error":
+        assert response.get("errorCode") == "request.outcome_unknown", response
+        value = response["executionReceipt"]
+        assert value["phase"] == "uncertain" and value["result"] is None, response
+        assert value["acceptance"] == "durable", response
+    else:
+        value = receipt(response)
+    assert value["instance"] == expected["instance"] and value["sessionId"] == expected["sessionId"], value
     return value if value["phase"] == "terminal" else None
 
 
