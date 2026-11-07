@@ -1,8 +1,12 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,5 +112,50 @@ func TestReplaceCachedServicesRollsBackAtGlobalBound(t *testing.T) {
 	}
 	if _, err := store.GetHost(ctx, host.ID); err == nil {
 		t.Fatal("host insert escaped the rolled-back cache transaction")
+	}
+}
+
+func TestInvalidateCachedServicesPreservesAuthoritativeAndOtherHosts(t *testing.T) {
+	store, err := Open(t.Context(), filepath.Join(t.TempDir(), "mesh.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	service := meshserve.Service{Name: "api", Kind: meshserve.Proxy, Target: "3000"}
+	if _, err := store.UpsertService(t.Context(), service); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for _, id := range []HostID{"affected", "other"} {
+		if err := store.ReplaceCachedServices(t.Context(), Host{ID: id, MeshIdentity: string(id), LastSeenAt: now}, []CachedService{{HostID: id, Service: service, ObservedAt: now}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.InvalidateCachedServices(t.Context(), []string{"affected"}); err != nil {
+		t.Fatal(err)
+	}
+	affected, err := store.ListCachedServices(t.Context(), "affected")
+	if err != nil || len(affected) != 0 {
+		t.Fatal(affected, err)
+	}
+	other, err := store.ListCachedServices(t.Context(), "other")
+	if err != nil || len(other) != 1 {
+		t.Fatal(other, err)
+	}
+	if saved, err := store.GetService(t.Context(), service.Name); err != nil || !saved.Equal(service) {
+		t.Fatal(saved, err)
+	}
+}
+
+func TestCachedServicePolicyTokenDoesNotChangeSerialization(t *testing.T) {
+	row := CachedService{HostID: "host", Service: meshserve.Service{Name: "api", Kind: meshserve.Proxy, Target: "3000"}}
+	original, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row.Policy = domainpolicy.CatalogToken{Digest: strings.Repeat("a", 64), Generation: 9}
+	observed, err := json.Marshal(row)
+	if err != nil || !bytes.Equal(original, observed) {
+		t.Fatalf("transient policy token changed serialization: %s %s %v", original, observed, err)
 	}
 }

@@ -38,7 +38,8 @@ func (w *StateWatcher) watch(ctx context.Context, host HostRecord, request proto
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("watch host %s: %w", HostLabel(host), err)
 	}
-	view := StateView{Sections: map[string]ObservedSection{}, Name: machinename.Claim{ID: host.ID, MachineName: host.MachineName, Revision: host.NameRevision}}
+	token, _ := loadedServicePolicy(ctx)
+	view := StateView{Policy: token, Sections: map[string]ObservedSection{}, Name: machinename.Claim{ID: host.ID, MachineName: host.MachineName, Revision: host.NameRevision}}
 	attempt := 0
 	for ctx.Err() == nil {
 		err := w.watchAttempt(ctx, host, request, &view, publish, &attempt)
@@ -53,9 +54,7 @@ func (w *StateWatcher) watch(ctx context.Context, host HostRecord, request proto
 			attempt++
 			continue
 		}
-		for _, topic := range request.Topics {
-			markSectionFailed(&view, topic)
-		}
+		markFailedStateTopics(&view, request.Topics, err)
 		view.Problem = err.Error()
 		publish(view)
 		attempt++
@@ -76,6 +75,7 @@ func (w *StateWatcher) watchAttempt(ctx context.Context, host HostRecord, reques
 			initialSeq = next.Seq
 		}
 		publications++
+		next = fenceServiceState(ctx, next)
 		publish(next)
 	})
 }
@@ -158,7 +158,7 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 	}
 	received := time.Now()
 	transit := received.Sub(started)
-	if err := applyVerifiedState(ctx, host, view, response, received, transit); err != nil {
+	if err := applyPolicyVerifiedState(ctx, host, view, response, received, transit); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -172,12 +172,16 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 	publish(*view)
 	err = readStateStream(ctx, host, conn, view, transit, publish)
 	if err != nil {
-		view.Connection = StateUnreachable
+		view.Connection = stateConnectionError(err)
 	}
 	return err
 }
 
 func stateConnectionError(err error) StateConnection {
+	var policyErr *configurationPolicyMismatch
+	if errors.As(err, &policyErr) {
+		return StateReachable
+	}
 	var identityErr *hostIdentityError
 	if errors.As(err, &identityErr) || errors.Is(err, machinename.ErrReplay) || errors.Is(err, machinename.ErrEquivocation) {
 		return StateRefused
@@ -192,7 +196,7 @@ func readStateStream(ctx context.Context, host HostRecord, conn transport.Conn, 
 			return fmt.Errorf("read host state: %w", err)
 		}
 		received := time.Now()
-		if err := applyVerifiedState(ctx, host, view, response, received, transit); err != nil {
+		if err := applyPolicyVerifiedState(ctx, host, view, response, received, transit); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -484,6 +488,20 @@ func applyVerifiedPoll(ctx context.Context, host HostRecord, topic string, respo
 			return err
 		}
 	}
+	if err := validatePolicyServices(next.Services); err != nil {
+		return err
+	}
 	*view = next
 	return nil
+}
+
+func markFailedStateTopics(view *StateView, topics []string, err error) {
+	var mismatch *configurationPolicyMismatch
+	if errors.As(err, &mismatch) {
+		markSectionFailed(view, protocol.TopicServices)
+		return
+	}
+	for _, topic := range topics {
+		markSectionFailed(view, topic)
+	}
 }

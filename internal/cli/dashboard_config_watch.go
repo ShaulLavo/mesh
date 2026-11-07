@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/update"
@@ -26,6 +27,7 @@ type dashboardFeedResult struct {
 	httpAt     time.Time
 }
 type dashboardFeedWatcher struct {
+	domainToken         domainpolicy.CatalogToken
 	read                func() (update.FeedValue, error)
 	fetcher             func(string) (dashboardFeedRunner, error)
 	observe             func(context.Context, update.ConfigurationObservation) error
@@ -37,6 +39,7 @@ type dashboardFeedWatcher struct {
 func newDashboardFeedWatcher(localID, socket string) *dashboardFeedWatcher {
 	watcher := &dashboardFeedWatcher{read: readDashboardFeed, fetcher: func(url string) (dashboardFeedRunner, error) { return usagefeed.New(usagefeed.Config{URL: url}) }, hostID: localID, acknowledgements: make(chan DashboardUsageAcknowledgement, 1), interval: time.Second, heartbeat: dashboardObserverHeartbeat}
 	watcher.instanceID, _ = update.NewAutomaticCommandID()
+
 	watcher.observe = localDashboardObserver(localID, socket)
 	return watcher
 }
@@ -108,6 +111,7 @@ func (w *dashboardFeedWatcher) Run(ctx context.Context, publish func(DashboardUs
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("dashboard configuration watch: %w", err)
 	}
+	w.domainToken, _ = loadedServicePolicy(ctx)
 	ticker := time.NewTicker(w.interval)
 	heartbeat := time.NewTicker(w.heartbeat)
 	defer ticker.Stop()
@@ -216,7 +220,7 @@ func (w *dashboardFeedWatcher) renew(ctx context.Context, current DashboardUsage
 	if w.observe == nil || w.instanceID == "" {
 		return
 	}
-	observation := update.ConfigurationObservation{InstanceID: w.instanceID, HostID: w.hostID, Generation: current.Generation, Publication: current.Publication, Enabled: current.Enabled, State: current.State, Digest: current.Digest, FeedRevision: current.Result.Revision, Failing: current.Result.Failing, HTTPAt: httpAt}
+	observation := update.ConfigurationObservation{DomainDigest: domainpolicy.Current().Digest(), CatalogGeneration: w.domainToken.Generation, ServiceVerification: serviceHealthUnknown, InstanceID: w.instanceID, HostID: w.hostID, Generation: current.Generation, Publication: current.Publication, Enabled: current.Enabled, State: current.State, Digest: current.Digest, FeedRevision: current.Result.Revision, Failing: current.Result.Failing, HTTPAt: httpAt}
 	if current.Result.Err != nil {
 		observation.Problem = strings.ToValidUTF8(current.Result.Err.Error(), "?")
 		if len(observation.Problem) > 512 {

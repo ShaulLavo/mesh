@@ -161,11 +161,11 @@ func initializeDeployment(args []string) error {
 		}
 		return nil
 	}
-	switch entryCommand(args) {
-	case "ls", "list":
+	requested := deploymentRequested(args)
+	if entryCommand(args) == "daemon" || requested {
+		policyErr = domainpolicy.InitializeDeployment(path, state, requested)
+	} else {
 		policyErr = domainpolicy.InitializeReadOnlyDeployment(path, state)
-	default:
-		policyErr = domainpolicy.InitializeDeployment(path, state, deploymentRequested(args))
 	}
 	if policyErr != nil {
 		return fmt.Errorf("initialize deployment policy: %w", policyErr)

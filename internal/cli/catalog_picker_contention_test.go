@@ -72,7 +72,7 @@ func TestCatalogReviewPickerServiceConvergenceAfterSkippedWrite(t *testing.T) {
 	if _, err := cache.SaveServices(t.Context(), host, "", []protocol.ServiceInfo{old}); err != nil {
 		t.Fatal(err)
 	}
-	view := StateView{Services: []protocol.ServiceInfo{{Name: "new", Kind: "proxy", Target: "4000"}}}
+	view := StateView{Policy: initializeTestServicePolicy(t), Services: []protocol.ServiceInfo{{Name: "new", Kind: "proxy", Target: "4000"}}}
 	monitor := &pickerServiceMonitor{cache: cache}
 	var saved pickerSavedCatalog
 	release := holdCatalogWriter(t, state)

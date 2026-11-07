@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/update"
 )
 
@@ -221,3 +223,58 @@ func (e *configurationDocumentError) Error() string {
 	return "recipient hosts.json is invalid; inspect this file locally before configuration delivery"
 }
 func (e *configurationDocumentError) Unwrap() error { return e.cause }
+
+type domainConfigFile struct {
+	file  *domainpolicy.DomainFile
+	gate  *domainpolicy.CatalogGate
+	hosts []string
+}
+
+func (f *domainConfigFile) Value() update.DomainValue {
+	return update.DomainValue{Present: f.file.Present, Policy: f.file.Policy}
+}
+func (f *domainConfigFile) Prepare(digest string) (domainpolicy.CatalogToken, error) {
+	if err := f.gate.Prepare(digest, f.hosts); err != nil {
+		return domainpolicy.CatalogToken{}, fmt.Errorf("prepare domain generation: %w", err)
+	}
+	return f.gate.Policy.CatalogToken, nil
+}
+func (f *domainConfigFile) Save(value update.DomainValue) error {
+	if err := f.file.Save(value.Policy); err != nil {
+		return fmt.Errorf("save selected domain policy: %w", err)
+	}
+	return nil
+}
+func (f *domainConfigFile) Settle() error {
+	if err := f.file.Settle(); err != nil {
+		return fmt.Errorf("settle domain policy: %w", err)
+	}
+	return nil
+}
+func withDomainConfiguration(ctx context.Context, operation func(update.DomainFile) error) error {
+	state, err := paths.StateDirPath()
+	if err != nil {
+		return fmt.Errorf("locate domain generation state: %w", err)
+	}
+	path, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	hosts, err := LoadHosts()
+	if err != nil {
+		return err
+	}
+	ids := make([]string, len(hosts))
+	for i, host := range hosts {
+		ids[i] = host.ID
+	}
+	err = domainpolicy.WithCatalogGate(ctx, state, func(gate *domainpolicy.CatalogGate) error {
+		return domainpolicy.WithDomainFile(ctx, filepath.Join(filepath.Dir(path), "domains.json"), func(file *domainpolicy.DomainFile) error {
+			return operation(&domainConfigFile{file: file, gate: gate, hosts: ids})
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("domain configuration: %w", err)
+	}
+	return nil
+}

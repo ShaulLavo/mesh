@@ -22,7 +22,7 @@ type serviceCatalogTestCache struct {
 	save  func(context.Context) error
 }
 
-func (c *serviceCatalogTestCache) LoadAllServices(ctx context.Context) (map[string][]storage.CachedService, error) {
+func (c *serviceCatalogTestCache) LoadAllServices(ctx context.Context, _ []HostRecord) (map[string][]storage.CachedService, error) {
 	if c.load != nil {
 		if err := c.load(ctx); err != nil {
 			return nil, err
@@ -105,6 +105,8 @@ func TestCollectServiceCatalogSuccessfulEmptyListClearsCacheWithoutFalseTimeout(
 }
 
 func TestCollectServiceCatalogBoundsCacheLoadAndTreatsSaveFailureAsWarning(t *testing.T) {
+	t.Setenv("MESH_STATE_DIR", t.TempDir())
+	token := initializeTestServicePolicy(t)
 	host := HostRecord{MachineName: "pc", ID: "pc-id"}
 	blocking := &serviceCatalogTestCache{load: func(ctx context.Context) error {
 		<-ctx.Done()
@@ -122,7 +124,7 @@ func TestCollectServiceCatalogBoundsCacheLoadAndTreatsSaveFailureAsWarning(t *te
 	cache := &serviceCatalogTestCache{save: func(context.Context) error { return errors.New("disk busy") }}
 	rows, diagnostics, err := CollectServiceCatalog(context.Background(), []HostRecord{host}, time.Second,
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {
-			return remoteServiceSnapshot{Services: []protocol.ServiceInfo{{Name: "api", Kind: "proxy", Target: "3000", Healthy: true}}}, nil
+			return remoteServiceSnapshot{Policy: token, Services: []protocol.ServiceInfo{{Name: "api", Kind: "proxy", Target: "3000", Healthy: true}}}, nil
 		}, cache)
 	if err != nil || len(rows) != 1 || !rows[0].Live {
 		t.Fatalf("live rows = %#v, error %v", rows, err)

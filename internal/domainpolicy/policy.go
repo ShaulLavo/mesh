@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/shaul/mesh/internal/hostprofile"
 )
 
 type Policy struct {
@@ -31,6 +33,9 @@ func Parse(reader io.Reader) (Policy, error) {
 	}
 	if len(contents) > 65536 {
 		return Policy{}, errors.New("domain policy: configuration exceeds 64 KiB")
+	}
+	if err := hostprofile.CheckJSON(json.NewDecoder(bytes.NewReader(contents)), 0, 32); err != nil {
+		return Policy{}, fmt.Errorf("domain policy JSON: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()

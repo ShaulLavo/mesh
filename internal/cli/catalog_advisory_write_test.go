@@ -34,9 +34,10 @@ func TestCatalogServiceWriterContentionSkipsAtomicSnapshot(t *testing.T) {
 	readLog := captureCatalogCacheLog(t)
 	release := holdCatalogWriter(t, state)
 	next := protocol.ServiceInfo{Name: "new", Kind: "proxy", Target: "4000"}
+	token := initializeTestServicePolicy(t)
 	rows, diagnostics, err := CollectServiceCatalog(t.Context(), []HostRecord{host}, 15*time.Second,
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {
-			return remoteServiceSnapshot{Host: host, PrivateName: "", Services: []protocol.ServiceInfo{next}}, nil
+			return remoteServiceSnapshot{Policy: token, Host: host, PrivateName: "", Services: []protocol.ServiceInfo{next}}, nil
 		}, cache)
 	if err != nil || len(diagnostics) != 0 || len(rows) != 1 || !rows[0].Live || rows[0].Service.Name != "new" {
 		t.Fatalf("busy cache affected live service catalog: %#v, %v, %v", rows, diagnostics, err)

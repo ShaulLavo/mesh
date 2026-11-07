@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"golang.org/x/sys/unix"
 	"io"
 	"math"
@@ -101,7 +102,7 @@ func (c *Coordinator) PreviewConfiguration(ctx context.Context, actor VerifiedAc
 	if err != nil {
 		return ConfigurationProposal{}, err
 	}
-	if err = ValidateDeliveredFeed(selection.UsageFeed.URL); err != nil {
+	if err := validateConfigurationSelection(selection); err != nil {
 		return ConfigurationProposal{}, err
 	}
 	hosts, err := configurationSelection(fleet, selection.Targets)
@@ -118,7 +119,7 @@ func (c *Coordinator) PreviewConfiguration(ctx context.Context, actor VerifiedAc
 	}
 	proposal := ConfigurationProposal{ID: id, CoordinatorID: c.ID, OwnerID: actor.id, ExpectedRevision: status.Revision, Fleet: fleet, Membership: fleet.Digest()}
 	for _, host := range hosts {
-		recipient, err := c.previewConfigurationRecipient(ctx, host, selection.UsageFeed)
+		recipient, err := c.previewConfigurationRecipient(ctx, host, selection)
 		if err != nil {
 			return ConfigurationProposal{}, err
 		}
@@ -144,17 +145,27 @@ func configurationSelection(fleet Fleet, ids []string) ([]Host, error) {
 	}
 	return hosts, nil
 }
-func (c *Coordinator) previewConfigurationRecipient(ctx context.Context, host Host, feed FeedChange) (RecipientConfiguration, error) {
+func (c *Coordinator) previewConfigurationRecipient(ctx context.Context, host Host, selection ConfigurationSelection) (RecipientConfiguration, error) {
 	inspect, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	var snapshot ConfigurationSnapshot
 	if err := c.Remote.Call(inspect, host, "configuration.snapshot", nil, &snapshot); err != nil {
 		return RecipientConfiguration{}, fmt.Errorf("configuration: preview recipient %s: %w", host.ID, err)
 	}
-	if snapshot.HostID != host.ID || !snapshot.Grant.UsageFeed || snapshot.Grant.LocalHostID != host.ID || snapshot.Grant.CoordinatorID != c.ID {
-		return RecipientConfiguration{}, problem("configuration.denied", "recipient has not granted usage-feed delivery to this coordinator")
+	if snapshot.HostID != host.ID || snapshot.Grant.LocalHostID != host.ID || snapshot.Grant.CoordinatorID != c.ID || selection.UsageFeed != nil && !snapshot.Grant.UsageFeed || selection.Domain != nil && !snapshot.Grant.DomainPolicy {
+		return RecipientConfiguration{}, problem("configuration.denied", "recipient has not granted the selected configuration groups to this coordinator")
 	}
-	return RecipientConfiguration{host, snapshot.Grant.Revision, snapshot.Feed, feed}, nil
+	recipient := RecipientConfiguration{Host: host, GrantRevision: snapshot.Grant.Revision, Feed: selection.UsageFeed, Domain: selection.Domain}
+	if selection.UsageFeed != nil {
+		recipient.Expected = &snapshot.Feed
+	}
+	if selection.Domain != nil {
+		if snapshot.Domain == nil {
+			return RecipientConfiguration{}, errors.New("configuration: domain snapshot unavailable")
+		}
+		recipient.DomainExpected = snapshot.Domain
+	}
+	return recipient, nil
 }
 func (c *Coordinator) saveConfigurationPreview(ctx context.Context, actor VerifiedActor, proposal ConfigurationProposal) error {
 	unlock, err := c.Store.lockContext(ctx)
@@ -435,7 +446,7 @@ func (c *Coordinator) reserveConfigurationTarget(r ConfigurationRecord, index in
 	change := r.Current
 	target := &change.Targets[index]
 	key := change.Proposal.ID + "/" + target.HostID
-	if c.configurationCalls.active[key] != nil || time.Now().Before(c.configurationCalls.observeAfter[key]) || time.Now().Before(target.RetryAt) || target.State == configurationCancelled || target.State == configurationConflict || target.State == configurationRejected {
+	if c.configurationCalls.active[key] != nil || time.Now().Before(c.configurationCalls.observeAfter[key]) || time.Now().Before(target.RetryAt) && target.State != configurationSaved && !savedDomainTarget(*target, change.Proposal.Recipients[index]) || target.State == configurationCancelled || target.State == configurationConflict && !savedDomainTarget(*target, change.Proposal.Recipients[index]) || target.State == configurationRejected {
 		return nil, nil
 	}
 	dispatch, err := newConfigurationDispatch(change, index)
@@ -478,7 +489,7 @@ func (c *Coordinator) fenceConfiguration(change *ConfigurationChange) error {
 }
 func newConfigurationDispatch(change *ConfigurationChange, index int) (*configurationDispatch, error) {
 	target := &change.Targets[index]
-	observe := change.Cancelled || change.Blocked != "" || target.State == configurationSaved
+	observe := change.Cancelled || change.Blocked != "" || target.State == configurationSaved || savedDomainTarget(*target, change.Proposal.Recipients[index])
 	operation := configurationPutOperation
 	if target.State == configurationUncertain {
 		operation = "reconcile"
@@ -486,7 +497,7 @@ func newConfigurationDispatch(change *ConfigurationChange, index int) (*configur
 	if observe {
 		operation = "observe"
 	}
-	if observe && !target.Issued && target.State != configurationSaved {
+	if observe && !target.Issued && target.State != configurationSaved && !savedDomainTarget(*target, change.Proposal.Recipients[index]) {
 		return nil, nil
 	}
 	if !observe && !target.Issued {
@@ -523,6 +534,15 @@ func (c *Coordinator) callConfiguration(ctx context.Context, cancel context.Canc
 	if ctx.Err() != nil {
 		return
 	}
+	if err == nil && dispatch.recipient.Domain != nil {
+		snapshot.Daemon = nil
+		var info Info
+		observe, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		if observeErr := c.Remote.Call(observe, dispatch.recipient.Host, "info", nil, &info); observeErr == nil && info.Domain != nil {
+			snapshot.Daemon = info.Domain
+		}
+	}
 	settle, stop := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer stop()
 	if finishErr := c.finishConfiguration(settle, dispatch, receipt, snapshot, err); finishErr != nil {
@@ -547,6 +567,9 @@ func (c *Coordinator) finishConfiguration(ctx context.Context, dispatch configur
 	}
 	change := r.Current
 	prior := *target
+	if dispatch.recipient.Domain != nil {
+		target.Daemon = snapshot.Daemon
+	}
 	if callErr != nil {
 		configurationCallError(target, callErr, dispatch.operation != configurationPutOperation)
 		return c.writeConfigurationTarget(r, prior, *target)
@@ -598,7 +621,18 @@ func (c *Coordinator) joinConfiguration() {
 }
 
 func matchesConfigurationReceipt(receipt ConfigurationReceipt, dispatch configurationDispatch, coordinator, membership string) bool {
-	return receipt.Schema == 1 && receipt.ChangeID == dispatch.changeID && receipt.ProposalDigest == dispatch.digest && receipt.HostID == dispatch.recipient.Host.ID && receipt.GrantRevision == dispatch.recipient.GrantRevision && receipt.Expected == dispatch.recipient.Expected && receipt.Desired == (FeedValue{Present: true, URL: dispatch.recipient.Feed.URL}) && receipt.CoordinatorID == coordinator && receipt.Membership == membership && receipt.Revision == receipt.Expected.Revision+1
+	recipient := dispatch.recipient
+	if receipt.Schema != 1 || receipt.ChangeID != dispatch.changeID || receipt.ProposalDigest != dispatch.digest || receipt.HostID != recipient.Host.ID || receipt.GrantRevision != recipient.GrantRevision || receipt.CoordinatorID != coordinator || receipt.Membership != membership {
+		return false
+	}
+	if recipient.Feed != nil && (recipient.Expected == nil || receipt.Expected != *recipient.Expected || receipt.Desired != (FeedValue{Present: true, URL: recipient.Feed.URL}) || receipt.Revision != recipient.Expected.Revision+1) {
+		return false
+	}
+	if recipient.Domain == nil {
+		return true
+	}
+	domain := receipt.Domain
+	return domain != nil && configurationDigest(domain.Expected) == configurationDigest(recipient.DomainExpected) && configurationDigest(domain.Desired) == configurationDigest(domainDesired(*recipient.Domain, recipient.DomainExpected.Value)) && domain.Revision == recipient.DomainExpected.Revision+1
 }
 
 func configurationStatus(revision uint64, change *ConfigurationChange) ConfigurationStatus {
@@ -609,11 +643,16 @@ func configurationStatus(revision uint64, change *ConfigurationChange) Configura
 	for index := range change.Targets {
 		target := &change.Targets[index]
 		target.Observers = slices.DeleteFunc(target.Observers, func(o ConfigurationObservation) bool { return now.Sub(o.RenewedAt) >= ConfigurationObserverLease })
-		target.Consumer = configurationConsumerState(*target, change.Proposal.Recipients[index].Feed)
+		recipient := change.Proposal.Recipients[index]
+		target.Consumer = configurationConsumerState(*target, recipient.Feed)
+		target.DomainConsumer = configurationDomainConsumer(*target, recipient)
 	}
 	return ConfigurationStatus{revision, change}
 }
-func configurationConsumerState(target ConfigurationTarget, feed FeedChange) string {
+func configurationConsumerState(target ConfigurationTarget, feed *FeedChange) string {
+	if feed == nil {
+		return ""
+	}
 	if target.State != configurationSaved {
 		return "publication pending"
 	}
@@ -658,7 +697,7 @@ func validateConfigurationTarget(change ConfigurationChange, index int) error {
 
 func repairableConfigurationSnapshot(snapshot ConfigurationSnapshot, dispatch configurationDispatch) bool {
 	grant := snapshot.Grant
-	if snapshot.HostID != dispatch.recipient.Host.ID || !grant.UsageFeed || grant.Revision != dispatch.recipient.GrantRevision || grant.CoordinatorID != dispatch.request.CoordinatorID {
+	if snapshot.HostID != dispatch.recipient.Host.ID || (dispatch.recipient.Feed != nil && !grant.UsageFeed || dispatch.recipient.Domain != nil && !grant.DomainPolicy) || grant.Revision != dispatch.recipient.GrantRevision || grant.CoordinatorID != dispatch.request.CoordinatorID {
 		return false
 	}
 	return snapshot.Receipt == nil || snapshot.Receipt.ChangeID != dispatch.changeID || snapshot.Receipt.State == configurationPrepared
@@ -691,7 +730,7 @@ func observeConfigurationSnapshot(target *ConfigurationTarget, dispatch configur
 	if snapshot.HostID != target.HostID {
 		return ConfigurationReceipt{}, true, errors.New("configuration: snapshot identity differs")
 	}
-	target.Observers, target.ObservedFeed = snapshot.Observers, &snapshot.Feed
+	target.Observers, target.ObservedFeed, target.ObservedDomain, target.Daemon = snapshot.Observers, &snapshot.Feed, snapshot.Domain, snapshot.Daemon
 	if target.Issued && snapshot.Grant.Revision != dispatch.recipient.GrantRevision {
 		target.State, target.Issued, target.Problem = configurationRejected, false, "target-local grant changed; earlier selected bytes remain visible in the snapshot"
 		if snapshot.Receipt != nil && snapshot.Receipt.ChangeID == dispatch.changeID {
@@ -787,4 +826,50 @@ func (s *Store) readConfigurationHistory(id string, change *ConfigurationChange)
 		return fmt.Errorf("settle configuration history: %w", err)
 	}
 	return s.settlePublication(s.directory)
+}
+
+func configurationDomainConsumer(target ConfigurationTarget, recipient RecipientConfiguration) string {
+	if recipient.Domain == nil {
+		return ""
+	}
+	if target.Receipt == nil || target.Receipt.Domain == nil || target.Receipt.Domain.State != configurationSaved {
+		return "domain publication pending"
+	}
+	domain := target.Receipt.Domain
+	if target.ObservedDomain != nil && target.ObservedDomain.Digest != domain.Desired.Digest() {
+		return "saved; selected domain policy changed locally"
+	}
+	if target.Daemon == nil || target.Daemon.InstanceID == "" || time.Since(target.Daemon.ObservedAt) > 45*time.Second {
+		return "saved; daemon policy observation unavailable"
+	}
+	if target.Daemon.Digest != domain.Desired.Digest() {
+		return "saved; daemon restart required"
+	}
+	if len(target.Observers) == 0 {
+		return "daemon loaded; no active dashboard observation; service HTTPS verification unknown"
+	}
+	for _, observer := range target.Observers {
+		if observer.DomainDigest != domain.Desired.Digest() || observer.CatalogGeneration != domain.Generation.Generation {
+			return "daemon loaded; dashboard reopen required"
+		}
+	}
+	return "loaded by daemon and active dashboards; service HTTPS verification unknown"
+}
+
+func savedDomainTarget(target ConfigurationTarget, recipient RecipientConfiguration) bool {
+	return recipient.Domain != nil && target.Receipt != nil && target.Receipt.Domain != nil && target.Receipt.Domain.State == configurationSaved && target.Receipt.State != configurationPrepared
+}
+
+func validateConfigurationSelection(selection ConfigurationSelection) error {
+	if selection.UsageFeed == nil && selection.Domain == nil {
+		return problem("configuration.invalid", "explicit configuration component required")
+	}
+	if selection.UsageFeed == nil {
+		return nil
+	}
+	policy := domainpolicy.Current()
+	if selection.Domain != nil {
+		policy = domainpolicy.Policy{Primary: selection.Domain.Primary, Aliases: selection.Domain.Aliases}
+	}
+	return validateDeliveredFeedPolicy(selection.UsageFeed.URL, policy)
 }

@@ -98,7 +98,7 @@ func testConfigurationProcessRecovery(t *testing.T, fault string) {
 	processes := newConfigurationProcesses(t, fault)
 	coordinator, recipient := processes[1], processes[0]
 	var proposal ConfigurationProposal
-	selection := ConfigurationSelection{Targets: []string{recipient.config.Host.ID}}
+	selection := ConfigurationSelection{Targets: []string{recipient.config.Host.ID}, UsageFeed: &FeedChange{}}
 	if err := coordinator.call(t, "configuration.preview", selection, &proposal); err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func newConfigurationProcesses(t *testing.T, fault string) []*configurationProce
 		if err = Trust(t.Context(), state, fleet.Members[1].ID, false); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = store.SetConfigurationGrant(t.Context(), 0, host.ID, fleet.Members[1].ID, true); err != nil {
+		if _, err = store.SetConfigurationGrant(t.Context(), 0, host.ID, fleet.Members[1].ID, true, false); err != nil {
 			t.Fatal(err)
 		}
 		cfg := configurationProcessConfig{State: state, Host: host, Key: keys[index], Fleet: fleet}

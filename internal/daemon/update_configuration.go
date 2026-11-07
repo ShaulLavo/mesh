@@ -93,13 +93,13 @@ func (u *updateController) configuration(ctx context.Context, actor update.Verif
 		}
 		result, err = u.coordinator.Store.ConfigurationStatus(ctx, selector.ID)
 	case "configuration.snapshot":
-		result, err = u.coordinator.Store.ConfigurationSnapshot(ctx, u.id, u.configurationWriter, u.configurationObservers.snapshot(time.Now()))
+		result, err = u.coordinator.Store.ConfigurationSnapshot(ctx, u.id, u.configurationWriter, u.configurationObservers.snapshot(time.Now()), u.domainWriter)
 	case "configuration.put":
 		var request update.ConfigurationPut
 		if err := decodeConfigurationControl(data, &request); err != nil {
 			return nil, err
 		}
-		result, err = u.coordinator.Store.PutConfiguration(ctx, actor, u.id, u.authority.IsAdministrator, u.configurationWriter, request)
+		result, err = u.coordinator.Store.PutConfiguration(ctx, actor, u.id, u.authority.IsAdministrator, u.configurationWriter, request, u.domainWriter)
 	case "configuration.observe":
 		var observation update.ConfigurationObservation
 		if err := decodeConfigurationControl(data, &observation); err != nil {
