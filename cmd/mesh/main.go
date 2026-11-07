@@ -34,6 +34,10 @@ func main() {
 		finishEnvelopeCommand(root.ExecuteContext(context.Background()))
 		return
 	}
+	if agentapi.Classify(os.Args[1:]) == "skill.show" {
+		finishEmbeddedSkillCommand(root.ExecuteContext(context.Background()))
+		return
+	}
 	if plainAgentCommand(os.Args[1:]) {
 		finishAgentCommand(os.Args[1], root.ExecuteContext(context.Background()))
 		return
@@ -135,6 +139,9 @@ func deploymentRequested(args []string) bool {
 }
 
 func initializeDeployment(args []string) error {
+	if agentapi.Classify(args) == "skill.show" {
+		return nil
+	}
 	if !namingCommand(args) {
 		return nil
 	}
@@ -182,4 +189,13 @@ func deploymentFlag(name string) bool {
 	default:
 		return false
 	}
+}
+
+func finishEmbeddedSkillCommand(err error) {
+	var failure *agentapi.Failure
+	if errors.As(err, &failure) {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(failure.Exit)
+	}
+	finishAgentCommand("skill", err)
 }

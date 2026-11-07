@@ -12,6 +12,10 @@ const timeoutFlag = "--timeout"
 const jsonFlag = "--json"
 const hostFlag = "--host"
 const limitFlag = "--limit"
+const skillDirFlag = "--dir"
+const fileFlag = "--file"
+const rootOperand = "ROOT"
+const skillsRootSummary = "existing skills root"
 const jsonFlagSummary = "write one agent result"
 
 type Flag struct {
@@ -41,11 +45,11 @@ var Operations = []Operation{
 	{Name: "profile.set", Command: "mesh profile set", Implemented: true, Mutates: true, Flags: []Flag{{Name: fleetFlag, Summary: "publish signed notes to saved fleet members"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--file", Value: pathFlagValue, Required: true, Summary: "editable JSON file, or - for stdin"}, {Name: expectedRevisionFlag, Value: "N", Required: true, Summary: "revision before this write"}}, Summary: "Replace this machine’s notes at an expected revision.", Example: "mesh profile set --file PATH --expected-revision 0 --json"},
 	{Name: "profile.edit", Command: "mesh profile edit", Implemented: true, Mutates: true, Flags: []Flag{{Name: fleetFlag, Summary: "edit signed fleet notes"}}, Summary: "Edit this machine’s notes with VISUAL or EDITOR, for humans only.", Example: "mesh profile edit"},
 	{Name: "profile.status", Command: "mesh profile status", Implemented: true, Mutates: true, Flags: []Flag{{Name: fleetFlag, Required: true, Summary: "read fleet delivery state"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--retry", Summary: "reset pending and stale delivery age"}}, Summary: "Read local fleet delivery state without contacting members.", Example: "mesh profile status --fleet --json"},
-	{Name: "skill.show", Command: "mesh skill show"},
-	{Name: "skill.install", Command: "mesh skill install"},
-	{Name: "skill.update", Command: "mesh skill update"},
-	{Name: "skill.status", Command: "mesh skill status"},
-	{Name: "skill.uninstall", Command: "mesh skill uninstall"},
+	{Name: "skill.show", Command: "mesh skill show", Implemented: true, Flags: []Flag{{Name: fileFlag, Value: "PATH", Summary: "embedded file to print"}}, Summary: "Print exact embedded skill bytes without reading configuration.", Example: "mesh skill show"},
+	{Name: "skill.install", Command: "mesh skill install", Implemented: true, Mutates: true, Flags: []Flag{{Name: skillDirFlag, Value: rootOperand, Required: true, Summary: skillsRootSummary}, {Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Install the managed Mesh skill.", Example: "mesh skill install --dir ROOT --json"},
+	{Name: "skill.update", Command: "mesh skill update", Implemented: true, Mutates: true, Flags: []Flag{{Name: skillDirFlag, Value: rootOperand, Required: false, Summary: skillsRootSummary}, {Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Update the managed Mesh skill.", Example: "mesh skill update --dir ROOT --json"},
+	{Name: "skill.status", Command: "mesh skill status", Implemented: true, Mutates: false, Flags: []Flag{{Name: skillDirFlag, Value: rootOperand, Required: false, Summary: skillsRootSummary}, {Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Inspect the managed Mesh skill and its registration.", Example: "mesh skill status --dir ROOT --json"},
+	{Name: "skill.uninstall", Command: "mesh skill uninstall", Implemented: true, Mutates: true, Flags: []Flag{{Name: skillDirFlag, Value: rootOperand, Required: true, Summary: skillsRootSummary}, {Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Uninstall the managed Mesh skill.", Example: "mesh skill uninstall --dir ROOT --json"},
 	{Name: "sessions.create", Command: "mesh session create", Args: "-- command [args...]", Implemented: true, Network: true, Mutates: true, Flags: executionFlags(true), Summary: "Start one keyed detached PTY command on an online host.", Example: "mesh session create --host HOST_ID --kind pty --request-key job-17 --cwd /work --json -- /usr/bin/true"},
 	{Name: "sessions.request", Command: "mesh session request", Implemented: true, Network: true, Flags: executionFlags(false), Summary: "Read a durable request receipt without launching work.", Example: "mesh session request --host HOST_ID --request-key job-17 --json"},
 	{Name: "sessions.wait", Command: "mesh session wait"},
@@ -75,6 +79,9 @@ func Classify(args []string) string {
 	// The implemented profile group attributes usage failures to its read operation.
 	if len(words) > 0 && words[0] == "profile" {
 		return "profile.show"
+	}
+	if len(words) > 0 && words[0] == "skill" {
+		return "skill.status"
 	}
 	if len(words) > 0 && words[0] == "session" {
 		return "sessions.list"
@@ -116,7 +123,7 @@ func invocationWords(args []string) []string {
 
 func valueFlag(arg string) bool {
 	switch arg {
-	case "--leave-key", "--detach-key", hostFlag, "--timeout", "--file", expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", "--session", "--cursor", limitFlag, "--page", "--request-key", "--kind", "--cwd", "--term", "--cols", "--rows":
+	case skillDirFlag, "--leave-key", "--detach-key", hostFlag, "--timeout", "--file", expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", "--session", "--cursor", limitFlag, "--page", "--request-key", "--kind", "--cwd", "--term", "--cols", "--rows":
 		return true
 	}
 	return false

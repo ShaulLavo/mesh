@@ -43,6 +43,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh device`](#mesh-device) | Approve device keys for this daemon's OS account |
 | [`mesh private-names`](#mesh-private-names) | Manage private DNS and wildcard certificates |
 | [`mesh shell-init`](#mesh-shell-init) | Print opt-in directory and history recovery hooks |
+| [`mesh skill`](#mesh-skill) | Show and manage the embedded Mesh agent skill |
 | [`mesh update`](#mesh-update) | Review and update Mesh on this machine or your saved fleet |
 | [`mesh version`](#mesh-version) | Show the executing Mesh build |
 
@@ -55,6 +56,8 @@ running. Reattach from anywhere on your tailnet.
 
 A bare name is a host or a session, so the commands you use most are
 not subcommands at all.
+
+Agents: run mesh skill show.
 
 USAGE
 
@@ -121,6 +124,7 @@ SETUP
   device [command]                                      Approve device keys for this daemon's OS account
   private-names [command]                               Manage private DNS and wildcard certificates
   shell-init bash|zsh [--flags]                         Print opt-in directory and history recovery hooks
+  skill [command] [--flags]                             Show and manage the embedded Mesh agent skill
   update [command] [--flags]                            Review and update Mesh on this machine or your saved fleet
   version [--flags]                                     Show the executing Mesh build
 
@@ -1702,6 +1706,120 @@ FLAGS
 
   --agents     Also wrap native codex and claude commands for conversation recovery
   -h --help    Help for shell-init
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill
+
+```text
+Show and manage the embedded Mesh agent skill
+
+USAGE
+
+  mesh skill [command] [--flags]
+
+COMMANDS
+
+  install [--flags]    Install the skill into an explicitly selected skills root
+  show [--flags]       Print exact embedded skill bytes without reading local configuration
+  status [--flags]     Inspect bundle files and registration without changing them
+  uninstall [--flags]  Remove unchanged managed files and unregister one root
+  update [--flags]     Update managed roots and preserve user-modified files
+
+FLAGS
+
+  -h --help            Help for skill
+  --json               Write one agent result
+  --leave-key          Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy            Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill install
+
+```text
+Install the skill into an explicitly selected skills root
+
+USAGE
+
+  mesh skill install [--flags]
+
+FLAGS
+
+  --dir        Existing skills root; omit for all registered roots on status or update
+  -h --help    Help for install
+  --json       Write one agent result
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill show
+
+```text
+Print exact embedded skill bytes without reading local configuration
+
+Usage:
+  mesh skill show [flags]
+
+Flags:
+      --file string   embedded file, such as references/commands.md
+  -h, --help          help for show
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill status
+
+```text
+Inspect bundle files and registration without changing them
+
+USAGE
+
+  mesh skill status [--flags]
+
+FLAGS
+
+  --dir        Existing skills root; omit for all registered roots on status or update
+  -h --help    Help for status
+  --json       Write one agent result
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill uninstall
+
+```text
+Remove unchanged managed files and unregister one root
+
+USAGE
+
+  mesh skill uninstall [--flags]
+
+FLAGS
+
+  --dir        Existing skills root; omit for all registered roots on status or update
+  -h --help    Help for uninstall
+  --json       Write one agent result
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh skill update
+
+```text
+Update managed roots and preserve user-modified files
+
+USAGE
+
+  mesh skill update [--flags]
+
+FLAGS
+
+  --dir        Existing skills root; omit for all registered roots on status or update
+  -h --help    Help for update
+  --json       Write one agent result
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
