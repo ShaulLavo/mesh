@@ -930,38 +930,43 @@ func TestCatalogRetentionCountExcludesInterruptedSessions(t *testing.T) {
 		{name: "exited still capped", interrupted: 2, exited: maxRetainedTerminalSessions + 2, retired: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			catalog := &Catalog{sessionsDir: root, now: func() time.Time { return catalogTestTime }}
-			observed := make([]storage.Session, 0, test.interrupted+test.exited)
-			for index := range test.interrupted + test.exited {
-				state := storage.StateInterrupted
-				createdAt := catalogTestTime.Add(-90 * 24 * time.Hour)
-				if index >= test.interrupted {
-					state = storage.StateExited
-					createdAt = catalogTestTime.Add(-time.Duration(test.interrupted+test.exited-index) * time.Minute)
-				}
-				id := fmt.Sprintf("%04d", index)
-				writeGenericCatalogDir(t, root, id)
-				observed = append(observed, storage.Session{ID: storage.SessionID(id), State: state, CreatedAt: createdAt})
-			}
-			kept, retired := catalog.retireFinishedSessions(observed)
-			if len(retired) != test.retired || len(kept) != len(observed)-test.retired {
-				t.Fatalf("kept %d, retired %d, want %d retired", len(kept), len(retired), test.retired)
-			}
-			for _, current := range kept {
-				if _, err := os.Stat(filepath.Join(root, string(current.ID))); err != nil {
-					t.Fatalf("kept session %s directory missing: %v", current.ID, err)
-				}
-			}
-			for index, id := range retired {
-				if want := storage.SessionID(fmt.Sprintf("%04d", test.interrupted+index)); id != want {
-					t.Fatalf("retired %s, want oldest exited session %s", id, want)
-				}
-				if _, err := os.Stat(filepath.Join(root, string(id))); err != nil {
-					t.Fatalf("retirement removed session %s before writing its database row: %v", id, err)
-				}
-			}
+			checkInterruptedRetentionCount(t, test.interrupted, test.exited, test.retired)
 		})
+	}
+}
+
+func checkInterruptedRetentionCount(t *testing.T, interrupted, exited, wantRetired int) {
+	t.Helper()
+	root := t.TempDir()
+	catalog := &Catalog{sessionsDir: root, now: func() time.Time { return catalogTestTime }}
+	observed := make([]storage.Session, 0, interrupted+exited)
+	for index := range interrupted + exited {
+		state := storage.StateInterrupted
+		createdAt := catalogTestTime.Add(-90 * 24 * time.Hour)
+		if index >= interrupted {
+			state = storage.StateExited
+			createdAt = catalogTestTime.Add(-time.Duration(interrupted+exited-index) * time.Minute)
+		}
+		id := fmt.Sprintf("%04d", index)
+		writeGenericCatalogDir(t, root, id)
+		observed = append(observed, storage.Session{ID: storage.SessionID(id), State: state, CreatedAt: createdAt})
+	}
+	kept, retired := catalog.retireFinishedSessions(observed)
+	if len(retired) != wantRetired || len(kept) != len(observed)-wantRetired {
+		t.Fatalf("kept %d, retired %d, want %d retired", len(kept), len(retired), wantRetired)
+	}
+	for _, current := range kept {
+		if _, err := os.Stat(filepath.Join(root, string(current.ID))); err != nil {
+			t.Fatalf("kept session %s directory missing: %v", current.ID, err)
+		}
+	}
+	for index, id := range retired {
+		if want := storage.SessionID(fmt.Sprintf("%04d", interrupted+index)); id != want {
+			t.Fatalf("retired %s, want oldest exited session %s", id, want)
+		}
+		if _, err := os.Stat(filepath.Join(root, string(id))); err != nil {
+			t.Fatalf("retirement removed session %s before writing its database row: %v", id, err)
+		}
 	}
 }
 
