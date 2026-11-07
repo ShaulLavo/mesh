@@ -107,7 +107,7 @@ func (w appWorkers) Start(ctx context.Context, label, command, cwd string, env [
 	if _, _, err := apps.ParseWorkerOwner(marker); err != nil {
 		return "", fmt.Errorf("app: validate owner: %w", err)
 	}
-	return w.lifecycle.startOwnedLabelled(ctx, label, []string{shell, "-lc", command}, cwd, env, marker)
+	return w.lifecycle.startOwnedLabelled(ctx, label, labelledCommand(shell, command), cwd, env, marker)
 }
 
 func (w appWorkers) Owner(ctx context.Context, id string) (string, error) {
@@ -186,7 +186,8 @@ func (w appWorkers) Stop(ctx context.Context, id string) error {
 }
 
 func (w appWorkers) Find(ctx context.Context, label string) (string, bool, error) {
-	return w.lifecycle.findLabelled(ctx, label)
+	found, ok, err := w.lifecycle.findLabelled(ctx, label)
+	return found.ID, ok, err
 }
 
 func (w appWorkers) Forget(ctx context.Context, label string) {

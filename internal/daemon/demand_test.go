@@ -145,14 +145,14 @@ func (f *fakeDemandSessions) outputTail(context.Context, string) string {
 	return "npm ERR! boom"
 }
 
-func (f *fakeDemandSessions) findLabelled(_ context.Context, label string) (string, bool, error) {
+func (f *fakeDemandSessions) findLabelled(_ context.Context, label string) (labelledSession, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.adoptFor == label {
 		f.live[f.adoptID] = label
-		return f.adoptID, true, nil
+		return labelledSession{ID: f.adoptID}, true, nil
 	}
-	return "", false, nil
+	return labelledSession{}, false, nil
 }
 
 func (f *fakeDemandSessions) pruneLabelled(context.Context, string, string) []string { return nil }

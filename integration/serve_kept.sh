@@ -205,6 +205,46 @@ sleep 2
 wait_until 50 logged "from an earlier daemon" || fail "the adoption was not logged"
 direct_answers "$KEEP_UP" adopted || fail "the adopted command does not answer directly"
 
+runtime_backoff() {
+  python3 - "$ORIGIN_STATE/mesh.db" "$1" <<'PYRUNTIME'
+import json, sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    row = db.execute("SELECT record FROM service_runtime WHERE name = 'keep'").fetchone()
+record = json.loads(row[0]) if row else {}
+sys.exit(0 if record.get("Phase") == "none" and record.get("Failures", 0) >= int(sys.argv[2]) else 1)
+PYRUNTIME
+}
+
+for failure in 1 2; do
+  previous_pid=$(server_pid "$KEPT")
+  kill -9 "$previous_pid"
+  wait_until 100 server_replaced "$KEPT" "$previous_pid" || fail "crash $failure did not restart"
+  wait_until 50 route_in_state /keep running || fail "crash $failure did not reach readiness"
+done
+previous_pid=$(server_pid "$KEPT")
+kill -9 "$previous_pid"
+wait_until 50 runtime_backoff 3 || fail "the crash loop did not record its backoff"
+kill -9 "$ORIGIN_PID"
+wait "$ORIGIN_PID" 2>/dev/null
+ORIGIN_PID=""
+start_origin
+python3 - "$ORIGIN_STATE/mesh.db" "$KEPT/server.pid" "$previous_pid" <<'PYRUNTIME' || fail "daemon replacement lost backoff or started a duplicate"
+import datetime, json, sqlite3, sys, time
+with sqlite3.connect(sys.argv[1]) as db:
+    record = json.loads(db.execute("SELECT record FROM service_runtime WHERE name = 'keep'").fetchone()[0])
+assert record["Failures"] == 3, record
+until = datetime.datetime.fromisoformat(record["RestartAt"].replace("Z", "+00:00")).timestamp()
+assert time.time() < until, "fixture failed to observe the retained delay"
+while time.time() < until:
+    with open(sys.argv[2], encoding="utf-8") as source:
+        assert source.read().strip() == sys.argv[3], "a replacement started before its durable deadline"
+    time.sleep(0.02)
+PYRUNTIME
+wait_until 100 server_replaced "$KEPT" "$previous_pid" || fail "the persisted backoff never admitted a successor"
+wait_until 100 direct_answers "$KEEP_UP" after-backoff || fail "the backoff successor does not answer"
+kept_starts_settled() { [ "$(grep -c 'daemon: route /keep: started session' "$TEST_ROOT/origin.log")" -eq 6 ]; }
+wait_until 50 kept_starts_settled || fail "backoff daemon replacement did not finish exactly one successor"
+
 # --- Earlier ended sessions stay listed: they explain what happened. -------
 "${CLI[@]}" ls --all --timeout 2s >"$TEST_ROOT/history.out" 2>&1 || fail "mesh ls --all: $(<"$TEST_ROOT/history.out")"
 for id in "$first" "$second"; do

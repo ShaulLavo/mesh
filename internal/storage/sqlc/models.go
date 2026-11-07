@@ -59,6 +59,18 @@ type Service struct {
 	PrivateHost string
 }
 
+type ServiceRuntime struct {
+	Name       string
+	Generation string
+	Version    int64
+	Record     string
+}
+
+type ServiceRuntimeBarrier struct {
+	ID       int64
+	Revision int64
+}
+
 type Session struct {
 	ID                 string
 	HostID             string

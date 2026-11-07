@@ -10,6 +10,7 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
+	"github.com/shaul/mesh/internal/session"
 )
 
 const (
@@ -110,8 +111,9 @@ type demandStopAttempt struct {
 // demandTransition is one start or stop in progress. err is written before
 // done closes, so a waiter reads it after <-done without the route lock.
 type demandTransition struct {
-	starting bool
-	adopting bool
+	reference session.Reservation
+	starting  bool
+	adopting  bool
 	// sessionID is the session a stop ends.
 	sessionID string
 	// superseded is a start that an accepted Stop ended, after which a later
@@ -150,14 +152,15 @@ func (r *demandRoute) onDemand() bool {
 // adopt takes over a session a previous daemon started for this route. The
 // idle clock starts over at a full window: this daemon never saw the
 // connections the old one counted. A kept route that finds nothing starts.
-func (r *demandRoute) adopt() {
+func (r *demandRoute) adopt(parent context.Context) {
 	if r.service.Demand == nil {
 		return
 	}
 	label := r.service.Label()
-	ctx, cancel := context.WithTimeout(r.manager.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
-	id, found, err := r.manager.sessions.findLabelled(ctx, label)
+	candidate, found, err := r.manager.sessions.findLabelled(ctx, label)
+	id := candidate.ID
 	r.mu.Lock()
 	if err != nil {
 		r.markAdoptionUnknownLocked(label, err)
@@ -401,16 +404,22 @@ func (r *demandRoute) release() {
 // the restart delay. A stop already owed still finishes first; this start
 // follows it even when its caller stops waiting.
 func (r *demandRoute) start(ctx context.Context) error {
-	r.mu.Lock()
-	r.controls++
-	control := r.controls
-	r.lastStart = control
-	r.held = false
-	r.resetRestartLocked()
-	if r.owned == ownsUncertain || r.stopRequested || r.pending != nil && !r.pending.starting && !r.pending.adopting {
-		r.startRequested = true
+	var control uint64
+	err := r.runtimeControl(false, func() {
+		r.mu.Lock()
+		r.controls++
+		control = r.controls
+		r.lastStart = control
+		r.held = false
+		r.resetRestartLocked()
+		if r.owned == ownsUncertain || r.stopRequested || r.pending != nil && !r.pending.starting && !r.pending.adopting {
+			r.startRequested = true
+		}
+		r.unlock()
+	})
+	if err != nil {
+		return err
 	}
-	r.unlock()
 	return r.readyFor(ctx, causeExplicitStart, control)
 }
 
@@ -613,16 +622,24 @@ func (r *demandRoute) owedStopLocked(control uint64, attempt *demandStopAttempt)
 // Callers share a stop in progress or still owed, but a completed attempt
 // cannot answer a new request.
 func (r *demandRoute) acceptStop() (uint64, *demandStopAttempt, error) {
+	var control uint64
+	var attempt *demandStopAttempt
 	r.mu.Lock()
-	defer r.unlock()
-	if err := r.unavailableLocked(); err != nil {
+	err := r.unavailableLocked()
+	r.mu.Unlock()
+	if err != nil {
 		return 0, nil, err
 	}
-	control := r.acceptStopLocked()
-	if r.stopAttempt == nil && r.stopRequested {
-		r.stopAttempt = &demandStopAttempt{}
-	}
-	return control, r.stopAttempt, nil
+	err = r.runtimeControl(true, func() {
+		r.mu.Lock()
+		control = r.acceptStopLocked()
+		if r.stopAttempt == nil && r.stopRequested {
+			r.stopAttempt = &demandStopAttempt{}
+		}
+		attempt = r.stopAttempt
+		r.unlock()
+	})
+	return control, attempt, err
 }
 
 // finishStopWithoutWorkerLocked completes the retained callers' answer
@@ -724,14 +741,15 @@ func (r *demandRoute) beginAdoptLocked() {
 	r.state = protocol.DemandStarting
 	label := r.adoptLabel
 	r.manager.goroutines.Add(1)
-	go r.runAdopt(transition, label)
+	go r.runAdopt(r.manager.ctx, transition, label)
 }
 
-func (r *demandRoute) runAdopt(transition *demandTransition, label string) {
+func (r *demandRoute) runAdopt(parent context.Context, transition *demandTransition, label string) {
 	defer r.manager.goroutines.Done()
-	ctx, cancel := context.WithTimeout(r.manager.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
-	id, found, err := r.manager.sessions.findLabelled(ctx, label)
+	candidate, found, err := r.manager.sessions.findLabelled(ctx, label)
+	id := candidate.ID
 	r.mu.Lock()
 	if r.pending != transition {
 		transition.err = fmt.Errorf("route %s adoption was cancelled", r.service.Route())
@@ -854,9 +872,13 @@ func (r *demandRoute) beginStartLocked(cause demandCause) bool {
 }
 
 func (r *demandRoute) runStart(transition *demandTransition, service meshserve.Service, cause demandCause) {
+	if r.manager.persistence != nil {
+		r.runRuntimeStart(transition, service, cause)
+		return
+	}
 	manager := r.manager
 	defer manager.goroutines.Done()
-	command := []string{hostShell(), "-lc", service.Demand.Command}
+	command := labelledCommand(hostShell(), service.Demand.Command)
 	id, err := manager.sessions.startLabelled(manager.ctx, service.Label(), command, service.Demand.Cwd, service.Demand.Env)
 	// The launch phase ends once the worker's identity is known: Close waits
 	// for that, never for readiness.
@@ -886,6 +908,12 @@ func (r *demandRoute) runStart(transition *demandTransition, service meshserve.S
 
 func (r *demandRoute) finishStart(transition *demandTransition, id string, err error, cause demandCause) {
 	r.mu.Lock()
+	if r.pending != transition {
+		r.mu.Unlock()
+		transition.err = fmt.Errorf("daemon: stale start result")
+		close(transition.done)
+		return
+	}
 	r.pending = nil
 	if id != "" {
 		r.sessionID = id
@@ -942,7 +970,7 @@ func (r *demandRoute) failStartLocked(id string, err error) {
 	if errors.As(err, &failure) {
 		r.failure = failure.summary
 	}
-	if r.service.Demand.Kept() && !r.held && !r.manager.shuttingDown() {
+	if r.manager.persistence == nil && r.service.Demand.Kept() && !r.held && !r.manager.shuttingDown() {
 		r.scheduleRestartLocked(false)
 		r.failure += "; restarts at " + r.restartAt.Format(time.TimeOnly)
 	}
@@ -993,22 +1021,35 @@ func (r *demandRoute) beginStopLocked(cause demandCause) {
 	r.state = protocol.DemandStopping
 	r.stopCause = cause
 	route := r.service.Route()
-	r.manager.goroutines.Go(func() {
-		ctx, cancel := context.WithTimeout(r.manager.ctx, demandStopTimeout)
-		err := r.manager.sessions.stopSession(ctx, id)
-		cancel()
-		r.manager.finishPhase()
-		if err != nil {
-			err = fmt.Errorf("daemon: route %s: stop session %s: %w", route, id, err)
-			r.manager.report(err)
-		}
-		r.mu.Lock()
-		r.finishStopLocked(err)
-		transition.err = err
-		r.unlock()
-		r.manager.logStop(route, id, cause, err)
+	r.manager.goroutines.Go(func() { r.runStop(r.manager.ctx, transition, route, id, cause) })
+}
+
+func (r *demandRoute) runStop(parent context.Context, transition *demandTransition, route, id string, cause demandCause) {
+	ctx, cancel := context.WithTimeout(parent, demandStopTimeout)
+	var err error
+	if r.manager.persistence != nil {
+		err = r.stopRuntime(ctx, cause)
+	} else {
+		err = r.manager.sessions.stopSession(ctx, id)
+	}
+	cancel()
+	r.manager.finishPhase()
+	if err != nil {
+		err = fmt.Errorf("daemon: route %s: stop session %s: %w", route, id, err)
+		r.manager.report(err)
+	}
+	r.mu.Lock()
+	if r.pending != transition {
+		r.mu.Unlock()
+		transition.err = fmt.Errorf("daemon: stale stop result")
 		close(transition.done)
-	})
+		return
+	}
+	r.finishStopLocked(err)
+	transition.err = err
+	r.unlock()
+	r.manager.logStop(route, id, cause, err)
+	close(transition.done)
 }
 
 // finishStopLocked records how a stop ended. Only a confirmed stop proves
@@ -1083,6 +1124,10 @@ func (r *demandRoute) idleExpired(token uint64) {
 // someone running `mesh kill`. A finite route starts again on its next
 // connection; a kept route restarts after its backoff delay.
 func (r *demandRoute) checkSession() {
+	if r.manager.persistence != nil {
+		r.checkRuntimeSession()
+		return
+	}
 	r.mu.Lock()
 	id := r.sessionID
 	running := r.state == protocol.DemandRunning && r.pending == nil
