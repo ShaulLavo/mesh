@@ -200,7 +200,7 @@ func TestEnrollmentFailureRejectsMalformedActorsBeforeGuidance(t *testing.T) {
 	id, key := testIdentity(t)
 	canonical, _ := testIdentity(t)
 	called := 0
-	authority := Authority{StateDir: t.TempDir(), ID: id, Key: key, Handle: func(context.Context, string, json.RawMessage) (any, error) {
+	authority := Authority{StateDir: t.TempDir(), ID: id, Key: key, Handle: func(context.Context, VerifiedActor, string, json.RawMessage) (any, error) {
 		called++
 		return nil, nil
 	}}

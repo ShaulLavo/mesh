@@ -458,3 +458,10 @@ and service convergence, live session and service publication during contention,
 reader connection deadlines, writer connection admission, coalescing and joining,
 and asynchronous cache error visibility. The cache-write result is migrated through
 all real callers and fixtures, without preserving an error-only compatibility API.
+
+
+### Native CLI package alarm, November 7, 2026
+
+The native macOS job [128410191679](https://github.com/ShaulLavo/mesh/actions/runs/42374820906/job/128410191679) hit Go's 300-second package alarm after 659 successful top-level CLI tests. The running wake test had taken less than one second. No individual test failure was reported. The complete unchanged CLI race package at the same source passed on Linux in 310.092 seconds, with 679 tests passing and its child-process fixture skipped normally. The 100 cold migration rounds and intentional admission-budget controls remain required coverage.
+
+The supported harness candidate is a 350-second package alarm, 12.87 percent above that complete Linux observation. This is not a measurement or guarantee of native macOS completion. Independent review and a normal green native run must validate the candidate. All six packages, both native runners, long and symlinked scratch, helper checks, uploads and the 10-minute job ceiling remain unchanged. Product and caller deadlines, assertions, repetitions, filters and baselines are not relaxed. The prior failed run remains historical evidence.

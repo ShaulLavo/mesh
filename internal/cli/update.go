@@ -77,7 +77,7 @@ func (a *application) updateCommand() *cobra.Command {
 	for _, action := range []string{"status", "retry", "cancel"} {
 		command.AddCommand(a.updateOperationCommand(action, &options))
 	}
-	command.AddCommand(updateTrustCommand())
+	command.AddCommand(updateTrustCommand(), a.updateAutomaticCommand(&options))
 	return command
 }
 
@@ -189,6 +189,9 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	var run update.Run
 	if err := environment.client.Call(ctx, environment.coordinator, "plan", update.Plan{Fleet: fleet, Manifest: manifest}, &run); err != nil {
 		return fmt.Errorf("submit update to coordinator: %w; if this machine has no current daemon, run mesh daemon install or use --local", err)
+	}
+	if err := reportStoppedAutomaticApproval(run, output.diagnostic); err != nil {
+		return err
 	}
 	return observeUpdate(ctx, environment, run, options.json, output)
 }
@@ -488,6 +491,17 @@ func verifyUpdateNameIntents(ctx context.Context, hosts []HostRecord, dial HostD
 			return err
 		}
 		_ = conn.Close()
+	}
+	return nil
+}
+
+func reportStoppedAutomaticApproval(run update.Run, out io.Writer) error {
+	if run.Origin == nil || !run.Stopped {
+		return nil
+	}
+	_, err := fmt.Fprintf(out, "Automatic run %s is stopped. On its coordinator, inspect mesh update automatic status --json, then use mesh update retry %s --expected-policy-revision N with the current policy revision.\n", SafeTerminalText(run.ID), SafeTerminalText(run.ID))
+	if err != nil {
+		return fmt.Errorf("report stopped automatic approval: %w", err)
 	}
 	return nil
 }
