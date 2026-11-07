@@ -36,7 +36,8 @@ if mode == "missing-live":
 os.write(1, b"HOST ID STATE\\nfixture LIVE detached\\n")
 if "--all" in sys.argv and mode != "missing-saved":
     os.write(1, b"fixture 0000 exited\\n")
-os.write(1, b"trailing inventory data\\n" * 65536)
+if "--all" in sys.argv or mode != "saved-tail":
+    os.write(1, b"trailing inventory data\\n" * 65536)
 if mode == "failed":
     os.write(2, b"fixture inventory command failed\\n")
     sys.exit(42)
@@ -63,13 +64,16 @@ read_state_version() { echo 14; }
             return result, snapshots
 
     def test_complete_inventory_with_early_match(self):
-        for restart in (False, True):
-            with self.subTest(restart=restart):
-                result, snapshots = self.run_inventory("complete", restart)
+        cases = ((False, "complete"), (True, "complete"),
+                 (False, "saved-tail"), (True, "saved-tail"))
+        for restart, mode in cases:
+            with self.subTest(restart=restart, mode=mode):
+                result, snapshots = self.run_inventory(mode, restart)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 outputs = [text for name, text in snapshots.items() if name.endswith(".out")]
                 self.assertEqual(len(outputs), 2)
-                self.assertTrue(all(text.endswith("trailing inventory data\n") for text in outputs))
+                self.assertEqual(sum(text.endswith("trailing inventory data\n") for text in outputs),
+                                 1 if mode == "saved-tail" else 2)
                 self.assertTrue(any("fixture 0000 exited" in text for text in outputs))
 
     def test_missing_session_still_fails(self):
