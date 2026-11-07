@@ -256,15 +256,27 @@ func (s *Store) SetSessionState(ctx context.Context, hostID HostID, sessionID Se
 // ReconcileHost atomically records a host and replaces its active session
 // observations. Existing running or detached rows missing from observed become
 // interrupted. Exited and already interrupted history remains intact.
-func (s *Store) ReconcileHost(ctx context.Context, host Host, observed []Session) error {
+func (s *Store) ReconcileHost(ctx context.Context, host Host, observed []ObservedSession) error {
 	hostValues, err := hostParams(host)
 	if err != nil {
 		return err
 	}
 	hostID := host.ID
-	params, err := sessionChangeParams(hostID, observed)
+	sessions := make([]Session, len(observed))
+	for i, row := range observed {
+		sessions[i] = row.Session
+	}
+	params, err := sessionChangeParams(hostID, sessions)
 	if err != nil {
 		return err
+	}
+
+	facts := make([]*dbsqlc.InsertSessionFactsParams, len(observed))
+	for i, row := range observed {
+		facts[i], err = sessionFactsParams(row)
+		if err != nil {
+			return err
+		}
 	}
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
@@ -276,18 +288,97 @@ func (s *Store) ReconcileHost(ctx context.Context, host Host, observed []Session
 	if _, err := queries.UpsertHost(ctx, hostValues); err != nil {
 		return fmt.Errorf("storage: reconcile host %s: upsert host: %w", hostID, err)
 	}
+	if err := queries.DeleteHostSessionFacts(ctx, string(hostID)); err != nil {
+		return fmt.Errorf("storage: reconcile host %s: clear facts: %w", hostID, err)
+	}
+
 	if err := queries.InterruptActiveSessionsForHost(ctx, string(hostID)); err != nil {
 		return fmt.Errorf("storage: reconcile host %s: interrupt missing sessions: %w", hostID, err)
 	}
-	for _, p := range params {
-		if _, err := queries.UpsertSession(ctx, p); err != nil {
-			return fmt.Errorf("storage: reconcile host %s: upsert session %s: %w", hostID, p.ID, err)
-		}
+	if err := reconcileObservedSessions(ctx, queries, params, facts); err != nil {
+		return err
 	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("storage: reconcile host %s: commit: %w", hostID, err)
 	}
 	return nil
+}
+
+// No shared-row update may follow facts insertion. Upsert can retain a newer
+// attachment, in which case the incoming facts do not describe the stored row.
+func reconcileObservedSessions(ctx context.Context, queries *dbsqlc.Queries, params []dbsqlc.UpsertSessionParams, facts []*dbsqlc.InsertSessionFactsParams) error {
+	for i, p := range params {
+		row, err := queries.UpsertSession(ctx, p)
+		if err != nil {
+			return fmt.Errorf("storage: reconcile host %s: upsert session %s: %w", p.HostID, p.ID, err)
+		}
+		if !equalOptionalMillis(row.LastAttachedAt, p.LastAttachedAt) {
+			facts[i] = nil
+		}
+	}
+	for _, fact := range facts {
+		if fact == nil {
+			continue
+		}
+		if err := queries.InsertSessionFacts(ctx, *fact); err != nil {
+			return fmt.Errorf("storage: reconcile host %s: insert facts for %s: %w", fact.HostID, fact.SessionID, err)
+		}
+	}
+	return nil
+}
+
+func equalOptionalMillis(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// ListObservedHostSessions joins base rows and facts in one SQLite snapshot.
+func (s *Store) ListObservedHostSessions(ctx context.Context, hostID HostID) ([]ObservedSession, error) {
+	if err := validateHostID(hostID); err != nil {
+		return nil, err
+	}
+	rows, err := s.queries.ListObservedHostSessions(ctx, string(hostID))
+	if err != nil {
+		return nil, fmt.Errorf("storage: list host %s observed sessions: %w", hostID, err)
+	}
+	result := make([]ObservedSession, len(rows))
+	for i, row := range rows {
+		result[i], err = observedSessionFromRow(row)
+		if err != nil {
+			return nil, fmt.Errorf("storage: decode host %s observed session %s: %w", hostID, row.ID, err)
+		}
+	}
+	return result, nil
+}
+
+func validFactBoolean(value *int64) bool {
+	return value != nil && (*value == 0 || *value == 1)
+}
+
+func observedSessionFromRow(row dbsqlc.ListObservedHostSessionsRow) (ObservedSession, error) {
+	base, err := sessionFromRow(dbsqlc.Session{
+		ID: row.ID, HostID: row.HostID, Command: row.Command, Cwd: row.Cwd,
+		State: row.State, CreatedAt: row.CreatedAt, LastAttachedAt: row.LastAttachedAt,
+		ExitCode: row.ExitCode, LastOutputSequence: row.LastOutputSequence,
+	})
+	if err != nil {
+		return ObservedSession{}, err
+	}
+	observed := ObservedSession{Session: base}
+	if row.SessionID == nil {
+		return observed, nil
+	}
+	if row.Label == nil || !validFactBoolean(row.Hibernated) || !validFactBoolean(row.RecoveryPending) {
+		return ObservedSession{}, errors.New("invalid cached session facts")
+	}
+	observed.Facts = &SessionFacts{Hibernated: *row.Hibernated == 1, RecoveryPending: *row.RecoveryPending == 1, Label: *row.Label, DetachedAt: timeFromMillis(row.DetachedAt)}
+	if _, err := sessionFactsParams(observed); err != nil {
+		return ObservedSession{}, err
+	}
+	return observed, nil
 }
 
 func sessionsFromRows(rows []dbsqlc.Session, operation string) ([]Session, error) {

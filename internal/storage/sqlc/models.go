@@ -26,6 +26,15 @@ type CachedService struct {
 	Listens     string
 }
 
+type CachedSessionFact struct {
+	HostID          string
+	SessionID       string
+	Hibernated      int64
+	RecoveryPending int64
+	Label           string
+	DetachedAt      *int64
+}
+
 type Host struct {
 	ID            string
 	MeshIdentity  string
