@@ -53,30 +53,23 @@ func (m *pickerServiceMonitor) watchHost(ctx context.Context, host HostRecord, u
 			current.Problem = err.Error()
 		}
 	}
-	send := func() {
-		select {
-		case updates <- current:
-		case <-ctx.Done():
-		}
-	}
-	send()
+	publication := &pickerServicePublication{current: current}
+	publication.send(ctx, updates)
 	var saved pickerSavedCatalog
+	queue := func(StateView) {}
+	stop := func() {}
+	if m.cache != nil {
+		queue, stop = startPickerCacheWriter(ctx, func(writeCtx context.Context, state StateView) {
+			stale := state.Sections[protocol.TopicServices].Stale(time.Now(), state.LastReply)
+			err := m.saveCatalog(writeCtx, host, state, stale, &saved)
+			publication.cacheResult(writeCtx, updates, err)
+		})
+	}
+	defer stop()
 	_ = m.watcher.Watch(ctx, host, protocol.StateWatch{Topics: []string{protocol.TopicServices}}, func(state StateView) {
-		section := state.Sections[protocol.TopicServices]
-		current.Problem = state.Problem
-		current.Catalog.Stale = section.Stale(time.Now(), state.LastReply)
-		if section.ReceivedAt.IsZero() {
-			send()
-			return
-		}
-		current.Catalog.Rows = liveServiceCatalogRows(host, remoteServiceSnapshot{PrivateName: state.PrivateName, Services: state.Services, ServiceHealthSupported: state.ServiceHealthSupported})
-		for index := range current.Catalog.Rows {
-			current.Catalog.Rows[index].Stale = current.Catalog.Stale
-		}
-		if err := m.saveCatalog(ctx, host, state, current.Catalog.Stale, &saved); err != nil {
-			current.Problem = fmt.Sprintf("cache services: %v", err)
-		}
-		send()
+		publication.observe(host, state)
+		publication.send(ctx, updates)
+		queue(state)
 	})
 }
 
@@ -103,8 +96,12 @@ func (m *pickerServiceMonitor) saveCatalog(ctx context.Context, host HostRecord,
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, serviceCacheWriteTimeout)
 	defer cancel()
-	if err := m.cache.SaveServices(writeCtx, host, state.PrivateName, state.Services); err != nil {
+	persisted, err := m.cache.SaveServices(writeCtx, host, state.PrivateName, state.Services)
+	if err != nil {
 		return fmt.Errorf("save catalog: %w", err)
+	}
+	if !persisted {
+		return nil
 	}
 	saved.services = cloneWireServices(state.Services)
 	saved.privateName, saved.received = state.PrivateName, true

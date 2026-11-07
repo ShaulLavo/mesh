@@ -370,3 +370,70 @@ short override.
 - Two bounded local diagnosis rounds, including five focused race repetitions and owning suites, did not reproduce this exact hosted failure. All 24 checked pooled and reopened connections had the intended driver settings. A deliberate sustained-holder control proves the existing bounded BUSY path, not the historical cause. Earlier separately recorded contention evidence above remains unchanged.
 - The one authorized [hosted writer capture](https://github.com/ShaulLavo/mesh/actions/runs/42317710502/job/128234344868) passed the full Go race suite, with `internal/cli` passing in 303.499 seconds. Successful package output suppressed helper traces, so this run supplies no hosted lock-duration measurement and supports no timeout or critical-section change. Its unrelated `serve_kept.sh` failure reports a listener port collision and has a separate repair owner.
 - Managing accepted non-reproduction and unblocked ordinary source acceptance. The diagnostic-only delta was removed before fresh required CI. No more captures or broad retries are authorized for this observation. On recurrence, preserve both writer traces through Save, rollback and Close, distinguish observed lock-held lower bounds from return-time upper bounds, and decide whether a real disk transaction exceeds the product budget before changing the test or product. Evidence is retained under `execution/007/pr4/cache-facts/host-composition/catalog-writer-correction` and `catalog-writer-hosted-capture` in the November 6 Mesh audit report.
+
+#### Approved advisory writer contract, November 7, 2026
+
+The owner now authorizes a product repair. This decision supersedes the old
+150 ms SQLite and 200 ms cache-write promises above, but preserves their failed
+runs and diagnosis. Recurrence is confirmed in Linux and macOS PR 382 jobs
+[128274750586](https://github.com/ShaulLavo/mesh/actions/runs/42330204565/job/128274750586)
+and [128274786619](https://github.com/ShaulLavo/mesh/actions/runs/42330204565/job/128274786619),
+Cask dispatch job
+[128270836794](https://github.com/ShaulLavo/mesh/actions/runs/42328974031/job/128270836794),
+and main's Linux job
+[128298590879](https://github.com/ShaulLavo/mesh/actions/runs/42337793749/job/128298590879).
+Each fails the concurrent catalog writer at Save, ReconcileHost, UpsertHost.
+The exact historical lock holder and filesystem delay remain unproved.
+
+The catalog is advisory. A busy cache writer must not fail a live observation.
+Advisory runtime connections retain WAL and select `BEGIN IMMEDIATE` through
+modernc's `_txlock` option. Validation, serialization and parameter preparation
+stay outside the write transaction. Host, sessions and facts, or host and services,
+still commit or roll back together. Authoritative storage keeps its existing
+5000 ms handler and fatal error behavior. Migration opens keep their fail-fast
+contract and are not given a longer budget.
+
+The advisory writer admission budget is 5 seconds. SQLite's native busy handler
+can outlast context cancellation, so admission uses native waits of at most
+100 ms, clipped to the remaining budget and caller deadline. Waiting for a pool slot, new connection
+setup and `BEGIN` share that one admission budget. Pool exhaustion also skips
+only before a transaction begins and while the enclosing caller remains live. Only admission is retried, never
+a statement or transaction body. Connections start with a 150 ms native reader
+wait, which is restored after commit, rollback or failed admission. A failed reset
+discards that connection. This keeps new reader initialization within its short
+budget instead of inheriting the writer's five seconds. `SQLITE_BUSY` at exhausted
+admission is marked only for advisory stores. `SQLiteCatalogCache` logs the skipped
+host and operation and returns `persisted=false` with no caller error while its
+context remains live. A confirmed commit returns `persisted=true`. Cancellation, invalid
+data, corruption, other SQLite errors and failures after admission remain errors.
+
+Human and picker session and service cache-write caps are 6 seconds. Existing
+outer query, command and picker deadlines still take precedence. Agent session
+saves use the command's remaining timeout. Cache reads retain their 200 ms cap.
+`CollectHostSessions`, `pickerState.saveCache`, `loadAgentRemoteSessions`,
+`CollectServiceCatalog` and its agent adapter, both picker service writers, and
+the post-delete service-cache update use this same advisory boundary. No daemon
+write is converted into advisory success. Memoizing callers update their saved
+snapshot only after a confirmed commit, so an identical later observation can repair
+a skipped write. Live picker publication never waits for persistence. Each active
+watch owns one joined cache writer and at most one pending immutable snapshot;
+a newer snapshot replaces the pending one. Watch cancellation cancels and joins
+that writer before the watch ends. There is no detached persistence queue or work
+that outlives its watch. Cache errors remain visible without hiding live rows.
+
+Permanent controls replace the old concurrent success timing promise with no
+caller-visible BUSY, valid rows, integrity checks and convergence after contention.
+A held real writer exhausts the full budget through the human and service catalog
+collectors and the agent session command. They preserve live authority and the
+previous complete cached rows and facts. Additional controls retain short-deadline
+and parent cancellation, immediate admission, pool settings, rollback on a real
+constraint error, invalid-input rejection, corruption errors and authoritative
+failure. Red and green evidence and the complete caller inventory are in
+`/work/reports/wave-20261106/audits2/mesh/execution/007/pr4/cache-facts/host-composition/advisory-write-contract/REPORT.md`.
+No further hosted capture or repetition campaign is part of this repair.
+
+Parent review corrections retain deterministic controls for skipped-write session
+and service convergence, live session and service publication during contention,
+reader connection deadlines, writer connection admission, coalescing and joining,
+and asynchronous cache error visibility. The cache-write result is migrated through
+all real callers and fixtures, without preserving an error-only compatibility API.

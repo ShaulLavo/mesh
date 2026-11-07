@@ -46,7 +46,7 @@ func TestListCatalogBudgetStartsAfterAuthenticatedSetup(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = cache.Close() }()
-			if err := cache.Save(t.Context(), host, []protocol.SessionInfo{{ID: "OLD1", HostID: host.ID, Command: []string{"cached-fixture"}, State: "detached", CreatedAt: time.Now()}}); err != nil {
+			if _, err := cache.Save(t.Context(), host, []protocol.SessionInfo{{ID: "OLD1", HostID: host.ID, Command: []string{"cached-fixture"}, State: "detached", CreatedAt: time.Now()}}); err != nil {
 				t.Fatal(err)
 			}
 			stdout, stderr, err := executeCommand(t, Dependencies{}, "ls", "--all")
@@ -254,7 +254,7 @@ func TestListCatalogReplyDeadlineStillReportsStale(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = cache.Close() }()
-			if err := cache.Save(t.Context(), host, []protocol.SessionInfo{{ID: "OLD1", HostID: host.ID, Command: []string{"cached-fixture"}, State: "detached", CreatedAt: time.Now()}}); err != nil {
+			if _, err := cache.Save(t.Context(), host, []protocol.SessionInfo{{ID: "OLD1", HostID: host.ID, Command: []string{"cached-fixture"}, State: "detached", CreatedAt: time.Now()}}); err != nil {
 				t.Fatal(err)
 			}
 			stdout, stderr, err := executeCommand(t, Dependencies{}, append([]string{"ls"}, test.flags...)...)

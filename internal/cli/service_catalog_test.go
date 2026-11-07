@@ -37,10 +37,10 @@ func (c *serviceCatalogTestCache) LoadAllServices(ctx context.Context) (map[stri
 	return result, nil
 }
 
-func (c *serviceCatalogTestCache) SaveServices(ctx context.Context, host HostRecord, _ string, rows []protocol.ServiceInfo) error {
+func (c *serviceCatalogTestCache) SaveServices(ctx context.Context, host HostRecord, _ string, rows []protocol.ServiceInfo) (bool, error) {
 	if c.save != nil {
 		if err := c.save(ctx); err != nil {
-			return err
+			return false, err
 		}
 	}
 	c.mu.Lock()
@@ -49,7 +49,7 @@ func (c *serviceCatalogTestCache) SaveServices(ctx context.Context, host HostRec
 		c.saves = make(map[string][]protocol.ServiceInfo)
 	}
 	c.saves[host.ID] = append([]protocol.ServiceInfo(nil), rows...)
-	return nil
+	return true, nil
 }
 
 func TestCollectServiceCatalogUsesCachedRowsAndMarksTimedOutHost(t *testing.T) {

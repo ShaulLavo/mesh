@@ -86,23 +86,34 @@ func (p *pickerState) loadCache(host HostRecord) ([]protocol.SessionInfo, error)
 }
 func (p *pickerState) run(ctx context.Context, host HostRecord, ready, done chan struct{}, cached []protocol.SessionInfo, cacheErr error, first *sync.Once) {
 	defer close(done)
+	queue := func(StateView) {}
+	stop := func() {}
+	if p.cache != nil {
+		queue, stop = startPickerCacheWriter(ctx, func(writeCtx context.Context, view StateView) {
+			cached, cacheErr = p.saveCache(writeCtx, host, view, cached, cacheErr)
+			p.mu.Lock()
+			p.cacheErr = cacheErr
+			p.mu.Unlock()
+		})
+	}
+	defer stop()
+	closeReady := func() { close(ready) }
 	_ = p.watcher.Watch(ctx, host, protocol.StateWatch{Topics: []string{protocol.TopicHost, protocol.TopicSessions}}, func(view StateView) {
 		if ctx.Err() != nil {
 			return
 		}
-		if !view.initialized && view.Sections[protocol.TopicSessions].ReceivedAt.IsZero() {
-			view.Sessions = cloneSessionInfo(cached)
-		}
-		cached, cacheErr = p.saveCache(ctx, host, view, cached, cacheErr)
 		p.mu.Lock()
-		p.cacheErr = cacheErr
+		if !view.initialized && view.Sections[protocol.TopicSessions].ReceivedAt.IsZero() {
+			view.Sessions = cloneSessionInfo(p.view.Sessions)
+		}
 		p.view = view
 		p.mu.Unlock()
 		// Host observations can arrive before the first session catalog.
 		section := view.Sections[protocol.TopicSessions]
 		if !section.ReceivedAt.IsZero() || section.Observation.Failing {
-			first.Do(func() { close(ready) })
+			first.Do(closeReady)
 		}
+		queue(view)
 	})
 }
 func (p *pickerState) saveCache(ctx context.Context, host HostRecord, view StateView, cached []protocol.SessionInfo, previousErr error) ([]protocol.SessionInfo, error) {
@@ -115,8 +126,12 @@ func (p *pickerState) saveCache(ctx context.Context, host HostRecord, view State
 	}
 	cacheCtx, cancel := context.WithTimeout(ctx, catalogCacheWriteTimeout)
 	defer cancel()
-	if err := p.cache.Save(cacheCtx, host, view.Sessions); err != nil {
+	persisted, err := p.cache.Save(cacheCtx, host, view.Sessions)
+	if err != nil {
 		return cached, fmt.Errorf("picker cache: %w", err)
+	}
+	if !persisted {
+		return cached, nil
 	}
 	return cloneSessionInfo(view.Sessions), nil
 }
