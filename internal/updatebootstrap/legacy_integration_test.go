@@ -3,7 +3,6 @@ package updatebootstrap
 import (
 	"bytes"
 	"context"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,19 +24,24 @@ func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = os.RemoveAll(state) }()
-	createLegacyDatabase(t, state)
-	dir := filepath.Join(state, "s", "7K3D")
-	if err = os.MkdirAll(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	command := exec.Command(binary, "session-worker", "--id", "7K3D", "--dir", dir, "--cols", "80", "--rows", "24", "--", "/bin/cat") //nolint:gosec // operator-selected retained legacy executable runs only in isolated test state
-	command.Env = append(os.Environ(), "MESH_STATE_DIR="+state)
+	t.Cleanup(func() { _ = os.RemoveAll(state) })
+	command := exec.Command(binary, "daemon", "--tailnet-port=0", "--ssh-port=0") //nolint:gosec // operator-selected retained executable runs only in isolated test state
+	command.Env = append(os.Environ(), "MESH_STATE_DIR="+state, "MESH_CONFIG_DIR="+filepath.Join(state, "config"))
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
 	if err = command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = command.Process.Kill(); _ = command.Wait() }()
-	awaitWorkerSocket(t, filepath.Join(dir, "sock"))
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		if t.Failed() {
+			t.Logf("retained daemon: %s", output.String())
+		}
+	})
+	awaitLegacyDaemonSocket(t, filepath.Join(state, "daemon.sock"))
+	// The retained daemon owns its worker's private launch arguments and reservation.
+	dir, workerPID := createLegacySession(t, state)
 	metaBefore, err := os.ReadFile(filepath.Join(dir, "meta.json")) //nolint:gosec // fixed metadata name under the isolated test worker directory
 	if err != nil {
 		t.Fatal(err)
@@ -47,21 +51,6 @@ func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = syscall.Kill(meta.PID, syscall.SIGKILL) }()
-	listener, err := net.Listen("unix", filepath.Join(state, "daemon.sock"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = listener.Close() }()
-	build := release.Current()
-	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
-		_, _ = protocol.NewReader(conn).ReadFrame()
-		_ = protocol.NewWriter(conn).WriteControlMsg(protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: "fixture-host", Build: &build}})
-	}()
 	observed, err := Inspect(context.Background(), state)
 	if err != nil {
 		t.Fatal(err)
@@ -74,13 +63,13 @@ func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if observedWorker.PID != command.Process.Pid || observedWorker.ShellPID != meta.PID || observedWorker.Protocol != 1 || observedWorker.Build == nil || observedWorker.Build.Digest != wantDigest {
+	if observedWorker.ID != filepath.Base(dir) || observedWorker.PID != workerPID || observedWorker.ShellPID != meta.PID || observedWorker.Protocol != 1 || observedWorker.Build == nil || observedWorker.Build.Digest != wantDigest {
 		t.Fatalf("legacy worker = %+v", observedWorker)
 	}
 	if _, err = release.CompareVersions(observedWorker.Build.Version, "v0.0.0"); err != nil {
 		t.Fatalf("legacy worker version = %q: %v", observedWorker.Build.Version, err)
 	}
-	if err = syscall.Kill(command.Process.Pid, 0); err != nil {
+	if err = syscall.Kill(observedWorker.PID, 0); err != nil {
 		t.Fatalf("legacy worker did not survive read-only probe: %v", err)
 	}
 	if err = syscall.Kill(meta.PID, 0); err != nil {
@@ -93,7 +82,34 @@ func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
 	t.Logf("verified actual legacy worker PID=%d shellPID=%d version=%s digest=%s protocol=%d", observedWorker.PID, observedWorker.ShellPID, observedWorker.Build.Version, observedWorker.Build.Digest, observedWorker.Protocol)
 }
 
-func awaitWorkerSocket(t *testing.T, path string) {
+func createLegacySession(t *testing.T, state string) (string, int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	conn, err := dial(ctx, filepath.Join(state, "daemon.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	response, err := exchange(conn, protocol.Control{Type: protocol.TypeCreate, RequestID: "legacy-probe-create", Command: []string{"/bin/cat"}, Cols: 80, Rows: 24})
+	if err != nil || response.Type != protocol.TypeCreated || response.SessionID == "" {
+		t.Fatalf("create retained session: %+v %v", response, err)
+	}
+	dir := filepath.Join(state, "s", response.SessionID)
+	worker, err := dial(ctx, filepath.Join(dir, "sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = worker.Close() }()
+	image, err := peerImage(ctx, worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(image.PID, syscall.SIGKILL) })
+	return dir, image.PID
+}
+
+func awaitLegacyDaemonSocket(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -102,7 +118,7 @@ func awaitWorkerSocket(t *testing.T, path string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("legacy worker did not open its socket")
+	t.Fatal("retained daemon did not open its socket")
 }
 
 func TestInstalledDaemonProbeReadOnly(t *testing.T) {
