@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -45,13 +44,8 @@ func TestCatalogCacheConcurrentWriters(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "writers-start"), nil, 0o600); err != nil { //nolint:gosec // marker path is inside the test TempDir.
 		t.Fatal(err)
 	}
-	// Reap both helpers before failing so each can flush its buffered evidence.
-	var writerErr error
 	for _, writer := range writerStart {
-		writerErr = errors.Join(writerErr, writer.Wait())
-	}
-	if writerErr != nil {
-		t.Fatalf("cache helper failed: %v", writerErr)
+		waitForCatalogCacheProcess(t, writer)
 	}
 	cache, err := OpenCatalogCache(t.Context())
 	if err != nil {
@@ -124,40 +118,34 @@ func waitForCatalogCacheFile(t *testing.T, path string) {
 	t.Fatalf("timed out waiting for cache helper marker %s", path)
 }
 
+func waitForCatalogCacheProcess(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("cache helper failed: %v", err)
+	}
+}
+
 func runCatalogCacheHelper(t *testing.T) {
 	readyPath := os.Getenv("MESH_CATALOG_CACHE_READY")
 	startPath := os.Getenv("MESH_CATALOG_CACHE_START")
-	observer := newCatalogWriterObserver(readyPath)
-	defer observer.flush()
-	observer.record(catalogWriterEvent{kind: "open-entry"})
 	cache, err := OpenCatalogCache(context.Background())
-	observer.result("open-return", err)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer observer.close(cache)
+	defer func() { _ = cache.Close() }()
 	if cache.store == nil {
 		t.Fatalf("cache writer setup: %v", cache.openErr)
 	}
 	if err := os.WriteFile(readyPath, nil, 0o600); err != nil { //nolint:gosec // helper marker is inside the test TempDir.
 		t.Fatal(err)
 	}
-	observer.record(catalogWriterEvent{kind: "ready-before-barrier"})
 	waitForCatalogCacheFile(t, startPath)
-	observer.record(catalogWriterEvent{kind: "barrier-return"})
 	index := filepath.Base(readyPath)
 	host := HostRecord{ID: "host-cache-lock", MachineName: "pc", MeshIdentity: "identity-cache-lock"}
 	row := protocol.SessionInfo{ID: "SESSION-" + index, HostID: host.ID, Command: []string{"sh"}, Cwd: "/tmp", State: "detached", CreatedAt: time.Now().UTC()}
 	ctx, cancel := context.WithTimeout(context.Background(), catalogCacheWriteTimeout)
-	defer func() {
-		cancel()
-		observer.result("context-after-cancel", ctx.Err())
-	}()
-	observer.beginSave(ctx)
-	err = cache.Save(ctx, host, []protocol.SessionInfo{row})
-	observer.result("save-return", err)
-	observer.result("context-after-save", ctx.Err())
-	if err != nil {
+	defer cancel()
+	if err := cache.Save(ctx, host, []protocol.SessionInfo{row}); err != nil {
 		t.Fatalf("cache writer %s: %v", index, err)
 	}
 }
