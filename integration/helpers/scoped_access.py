@@ -72,6 +72,7 @@ def exercise(fixture):
 
 
 def denied_frames(fixture, dedicated, session_id, shell_pid, owner, environment):
+    owner.expect_size(80, 24)
     marker = fixture.root / "denied-command-marker"
     copied = fixture.root / "denied-copy"
     secret = fixture.root / "disclosure-sentinel"
@@ -118,8 +119,10 @@ def denied_frames(fixture, dedicated, session_id, shell_pid, owner, environment)
                           {"type": "service.list", "requestId": "owner-after-service-denials"})
     require(not any(row["name"] == "scoped-denied" for row in services.get("services", [])),
             "denied service control published a route")
-    recovery = fixture.remote / "s" / session_id / "recovery.json"
-    require(not recovery.exists() or str(marker) not in recovery.read_text(), "denied recovery control wrote a recipe")
+    for name in ("recovery.json", "recovery-intent.json", "recovery-command.json"):
+        recovery = fixture.remote / "s" / session_id / name
+        require(not recovery.exists() or str(marker) not in recovery.read_text(), "denied recovery control wrote a recipe")
+    owner.expect_size(80, 24)
     os.kill(shell_pid, 0)
     require(fixture.shell_identity(owner) == (session_id, shell_pid),
             "denied attach/input/resize/kill changed the owner's session")
