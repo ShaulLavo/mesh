@@ -21,11 +21,15 @@ const executionLivePhase = "live"
 const executionUsageInvalidCode = "usage.invalid"
 
 type executionError struct {
-	receipt *protocol.ExecutionReceipt
-	page    *protocol.ExecutionPage
-	err     error
+	receipt  *protocol.ExecutionReceipt
+	page     *protocol.ExecutionPage
+	delivery string
+	err      error
 }
 
+func executionFailure(response protocol.Control, err error) error {
+	return &executionError{receipt: response.ExecutionReceipt, page: response.ExecutionPage, delivery: response.ExecutionDelivery, err: err}
+}
 func (e *executionError) Error() string { return e.err.Error() }
 func (e *executionError) Unwrap() error { return e.err }
 func (l *lifecycle) executionJournal() (*execution.Journal, error) {
@@ -156,7 +160,7 @@ func executionResponse(request protocol.Control, r execution.Receipt, err error)
 		response.ExecutionReceipt = executionWireReceipt(r)
 	}
 	if err != nil {
-		return response, &executionError{receipt: response.ExecutionReceipt, err: err}
+		return response, executionFailure(response, err)
 	}
 	return response, nil
 }

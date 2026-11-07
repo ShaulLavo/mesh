@@ -18,6 +18,24 @@ func (j *Journal) RetireSession(ctx context.Context, sessions, id string, retire
 	return j.retireSession(ctx, sessions, id, nil, retire)
 }
 func (j *Journal) RetireExact(ctx context.Context, sessions string, b Binding, retire func() error) error {
+	if err := b.Validate(); err != nil {
+		return err
+	}
+	r, err := j.snapshot(ctx, b.RequestHash)
+	if err != nil {
+		return err
+	}
+	if r.Binding != b {
+		return ErrInstance
+	}
+	if r.Removal == removalRemoved {
+		return nil
+	}
+	if r.Removal == pending {
+		if _, err := j.retirementBinding(sessions, b.Reservation.ID, &b); errors.Is(err, os.ErrNotExist) {
+			return j.resumeRetirement(ctx, b)
+		}
+	}
 	return j.retireSession(ctx, sessions, b.Reservation.ID, &b, retire)
 }
 func (j *Journal) retireSession(ctx context.Context, sessions, id string, expected *Binding, retire func() error) error {
@@ -57,6 +75,9 @@ func (j *Journal) retireSession(ctx context.Context, sessions, id string, expect
 	return j.completeRetirement(ctx, binding)
 }
 func (j *Journal) prepareRetirement(ctx context.Context, b Binding) error {
+	if _, err := j.Exact(ctx, b); err != nil {
+		return err
+	}
 	gate, err := j.lock(ctx)
 	if err != nil {
 		return err
@@ -68,16 +89,6 @@ func (j *Journal) prepareRetirement(ctx context.Context, b Binding) error {
 	}
 	if r.Binding != b {
 		return ErrProtected
-	}
-	if r.Phase != phaseTerminal {
-		var result Result
-		if err := j.files.Read(attempt(b, "result.json"), &result); err != nil {
-			return ErrProtected
-		}
-	}
-	r, err = j.refresh(r)
-	if err != nil {
-		return err
 	}
 	if r.Phase != phaseTerminal {
 		return ErrProtected
@@ -189,16 +200,7 @@ func (j *Journal) purgeRemoved(ctx context.Context, r Receipt) error {
 	return j.files.Remove(requestName(hash), "execution/.barrier")
 }
 func (j *Journal) maintenanceRead(ctx context.Context, hash string) (Receipt, error) {
-	gate, err := j.lock(ctx)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer func() { _ = gate.Close() }()
-	r, err := j.read(hash)
-	if err != nil {
-		return r, err
-	}
-	return j.refresh(r)
+	return j.observe(ctx, hash)
 }
 func (j *Journal) resumeRetirement(ctx context.Context, b Binding) error {
 	fence, err := j.files.LockExisting(ctx, attempt(b, "lifetime.lock"))
@@ -279,7 +281,7 @@ func (j *Journal) recoveryPinned(r Receipt) bool {
 func (j *Journal) confirmRetiringResult(ctx context.Context, b Binding) error {
 	output := &Output{files: j.files, streams: make(map[Binding]*streamStore)}
 	_, err := output.Result(ctx, b)
-	if errors.Is(err, os.ErrNotExist) {
+	if IsResultPending(err) {
 		return nil
 	}
 	return err

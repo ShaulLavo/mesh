@@ -58,6 +58,43 @@ def stop_entry(entry, groups):
     entry.wait(timeout=3)
 
 
+class DurablePublicationPollTest(unittest.TestCase):
+    def response(self):
+        binding = dict(hostId="host", sessionId="7K3D", instance="a" * 32,
+                       requestKey="key", keyScope="local-account", kind="pty")
+        receipt = dict(binding, phase="live", acceptance="durable", launchOutcome="started",
+                       publication="published", removal="present", result=None)
+        return dict(type="error", errorCode="state.unavailable", executionReceipt=receipt,
+                    message="read execution receipt: execution: linked private record"), binding
+
+    def test_exact_publication_race_remains_pending(self):
+        from durable_create import terminal_receipt
+        response, expected = self.response()
+        with patch("durable_create.exchange", return_value=response):
+            self.assertIsNone(terminal_receipt(None, {}, expected))
+
+    def test_other_failures_or_shortened_binding_are_rejected(self):
+        from durable_create import terminal_receipt
+        variants = [("errorCode", "state.other"), ("message", "disk failed"),
+                    ("instance", "b" * 32), ("hostId", "other"), ("result", {}),
+                    ("phase", "terminal"), ("acceptance", "visible_unconfirmed"),
+                    ("publication", "pending"), ("launchOutcome", "unknown"),
+                    ("removal", "pending")]
+        for field, value in variants:
+            response, expected = self.response()
+            target = response if field in ("errorCode", "message") else response["executionReceipt"]
+            target[field] = value
+            self.assert_rejected(terminal_receipt, response, expected)
+        response, expected = self.response()
+        del response["executionReceipt"]["instance"]
+        self.assert_rejected(terminal_receipt, response, expected)
+
+    def assert_rejected(self, poll, response, expected):
+        with patch("durable_create.exchange", return_value=response):
+            with self.assertRaises((AssertionError, KeyError)):
+                poll(None, {}, expected)
+
+
 class EntryPointContractTest(unittest.TestCase):
     def test_every_script_sources_the_prelude_first(self):
         scripts = Path(__file__).resolve().parents[1].glob("*.sh")

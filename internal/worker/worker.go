@@ -489,6 +489,12 @@ func Run(cfg Config) (int, error) {
 		defer func() { executionBoundary(cfg.Dir, "before_lifetime_release"); _ = attempt.Close() }()
 	}
 	var capture *execution.Capture
+	childStarted := false
+	defer func() {
+		if attempt != nil && !childStarted {
+			_ = finishUnstartedCapture(attempt, capture, *cfg.Execution)
+		}
+	}()
 	if attempt != nil {
 		if err := childExitSupported(); err != nil {
 			return 0, err
@@ -501,12 +507,6 @@ func Run(cfg Config) (int, error) {
 	if capture != nil {
 		defer func() { _, _ = capture.Finish(context.Background(), "interrupted") }()
 	}
-	childStarted := false
-	defer func() {
-		if attempt != nil && !childStarted {
-			_ = finishUnstartedCapture(attempt, capture, *cfg.Execution)
-		}
-	}()
 	pty, err := xpty.NewPty(cfg.Cols, cfg.Rows)
 	if err != nil {
 		return 0, fmt.Errorf("worker: open pty: %w", err)

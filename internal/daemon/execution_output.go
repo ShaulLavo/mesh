@@ -40,7 +40,7 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 	}
 	response, err := l.boundExecution(ctx, req, journal, r)
 	if err != nil {
-		return response, &executionError{receipt: response.ExecutionReceipt, page: response.ExecutionPage, err: err}
+		return response, executionFailure(response, err)
 	}
 	return response, nil
 }

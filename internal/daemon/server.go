@@ -251,6 +251,7 @@ func clientRequestError(request protocol.Control, requestErr error) protocol.Con
 	if errors.As(requestErr, &accepted) {
 		response.ExecutionReceipt = accepted.receipt
 		response.ExecutionPage = accepted.page
+		response.ExecutionDelivery = accepted.delivery
 		response.ErrorCode = executionCode(requestErr)
 	}
 	return response
@@ -259,6 +260,9 @@ func clientRequestError(request protocol.Control, requestErr error) protocol.Con
 var errUnknownControl = errors.New("daemon: unknown control")
 
 func clientErrorCode(err error) string {
+	if code := executionOutputCode(err); code != "" {
+		return code
+	}
 	var invalid *protocol.ExecutionValidationError
 	if errors.As(err, &invalid) {
 		return executionUsageInvalidCode

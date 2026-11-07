@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -51,8 +52,10 @@ func (o *Output) Page(ctx context.Context, b Binding, stream, value string, size
 	if err != nil {
 		return Page{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.enter(ctx); err != nil {
+		return Page{}, err
+	}
+	defer s.leave()
 	return s.readPage(ctx, value, size)
 }
 func (s *streamStore) readPage(ctx context.Context, value string, size int) (Page, error) {
@@ -106,7 +109,16 @@ func (s *streamStore) pageData(m manifest, value string, size int) (Page, error)
 }
 func (o *Output) Result(ctx context.Context, b Binding) (Result, error) {
 	var r Result
+	if err := b.Validate(); err != nil {
+		return r, err
+	}
 	if err := o.files.Read(attempt(b, "result.json"), &r); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if parentErr := o.files.check(filepath.Dir(attempt(b, "result.json")), false); parentErr != nil {
+				return r, parentErr
+			}
+			return r, errResultPending
+		}
 		return r, err
 	}
 	if err := r.validate(b); err != nil {
@@ -127,8 +139,10 @@ func (o *Output) confirmFinal(ctx context.Context, b Binding, expected StreamRes
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.enter(ctx); err != nil {
+		return err
+	}
+	defer s.leave()
 	gate, err := s.files.LockExisting(ctx, streamPath(b, "stream.lock"))
 	if err != nil {
 		return err
@@ -173,7 +187,19 @@ func (o *Output) binding(id, instance, host string) (Binding, error) {
 func (o *Output) Binding(id, instance, host string) (Binding, error) {
 	return o.binding(id, instance, host)
 }
-func IsResultPending(err error) bool { return errors.Is(err, os.ErrNotExist) }
+
+var errResultPending = errors.New("execution: result pending")
+
+func IsResultPending(err error) bool { return errors.Is(err, errResultPending) }
+func (s *streamStore) enter(ctx context.Context) error {
+	select {
+	case s.gate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return executionBoundaryError("read capture", ctx.Err())
+	}
+}
+func (s *streamStore) leave() { <-s.gate }
 
 func ExpiredPage(b Binding, s StreamResult) (Page, error) {
 	earliest, err := parseOffset(s.Earliest)

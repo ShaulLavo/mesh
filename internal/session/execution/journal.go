@@ -87,6 +87,17 @@ func (j *Journal) Reserve(ctx context.Context, k Key, i Intent, reserve func() (
 	if err := j.prepareOutputAdmission(ctx, k); err != nil {
 		return Receipt{}, false, err
 	}
+	r, owner, err := j.reserve(ctx, k, normalized, reserve)
+	if err != nil || owner {
+		return r, owner, err
+	}
+	r, err = j.refresh(ctx, r)
+	if err == nil {
+		err = receiptDiagnostic(r)
+	}
+	return r, false, err
+}
+func (j *Journal) reserve(ctx context.Context, k Key, normalized Intent, reserve func() (Binding, error)) (Receipt, bool, error) {
 	gate, err := j.lock(ctx)
 	if err != nil {
 		return Receipt{}, false, err
@@ -97,11 +108,7 @@ func (j *Journal) Reserve(ctx context.Context, k Key, i Intent, reserve func() (
 		if r.Key != k || r.IntentDigest != digest(normalized) {
 			return Receipt{}, false, ErrConflict
 		}
-		r, err = j.refresh(r)
-		if err == nil {
-			err = receiptDiagnostic(r)
-		}
-		return r, false, err
+		return r, false, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return r, false, err
@@ -175,8 +182,7 @@ func (j *Journal) activeEntry(name string) int {
 	if err != nil {
 		return 1
 	}
-	r, err = j.refresh(r)
-	if err != nil || r.Phase != phaseTerminal {
+	if r.Phase != phaseTerminal {
 		return 1
 	}
 	if len(r.Result.Streams) > 0 && !r.OutputExpired {
@@ -188,13 +194,8 @@ func (j *Journal) Lookup(ctx context.Context, k Key) (Receipt, error) {
 	if err := k.Validate(); err != nil {
 		return Receipt{}, err
 	}
-	gate, err := j.lock(ctx)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer func() { _ = gate.Close() }()
-	r, err := j.read(k.Hash())
-	if errors.Is(err, os.ErrNotExist) {
+	r, err := j.snapshot(ctx, k.Hash())
+	if errors.Is(err, os.ErrNotExist) && r.Binding.RequestHash == "" {
 		return Receipt{}, ErrNotFound
 	}
 	if err != nil {
@@ -203,7 +204,7 @@ func (j *Journal) Lookup(ctx context.Context, k Key) (Receipt, error) {
 	if r.Key != k {
 		return Receipt{}, ErrConflict
 	}
-	r, err = j.refresh(r)
+	r, err = j.refresh(ctx, r)
 	if err == nil {
 		err = receiptDiagnostic(r)
 	}
@@ -267,27 +268,51 @@ func (j *Journal) NotStarted(ctx context.Context, b Binding, reason string) (Rec
 	// The launcher can use this only when exec.Start proved no worker was created.
 	return j.terminal(r, Result{Binding: b, Termination: Termination{Kind: notStarted, Reason: reason}, Capture: captureNotRecorded})
 }
-func (j *Journal) refresh(r Receipt) (Receipt, error) {
+func (j *Journal) snapshot(ctx context.Context, hash string) (Receipt, error) {
+	gate, err := j.lock(ctx)
+	if err != nil {
+		return Receipt{}, err
+	}
+	defer func() { _ = gate.Close() }()
+	return j.read(hash)
+}
+func (j *Journal) observe(ctx context.Context, hash string) (Receipt, error) {
+	r, err := j.snapshot(ctx, hash)
+	if err != nil {
+		return r, err
+	}
+	return j.refresh(ctx, r)
+}
+func (j *Journal) refresh(ctx context.Context, snapshot Receipt) (Receipt, error) {
+	var result Result
+	resultErr := errResultPending
+	if snapshot.Phase != phaseTerminal {
+		output := &Output{files: j.files, streams: make(map[Binding]*streamStore)}
+		result, resultErr = output.Result(ctx, snapshot.Binding)
+		if resultErr != nil && !IsResultPending(resultErr) {
+			return snapshot, resultErr
+		}
+	}
+	gate, err := j.lock(ctx)
+	if err != nil {
+		return snapshot, err
+	}
+	defer func() { _ = gate.Close() }()
+	r, err := j.read(snapshot.Binding.RequestHash)
+	if err != nil {
+		return r, err
+	}
+	if r.Binding != snapshot.Binding {
+		return Receipt{}, ErrInstance
+	}
 	if r.Phase == phaseTerminal {
 		return j.terminalView(r)
 	}
-	var result Result
-	err := j.files.Read(attempt(r.Binding, "result.json"), &result)
-	if err == nil {
-		if err := result.validate(r.Binding); err != nil {
-			return r, err
-		}
-		if err := j.files.Confirm(attempt(r.Binding, "result.json")); err != nil {
-			return r, err
-		}
+	if resultErr == nil {
 		return j.terminal(r, result)
 	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return r, err
-	}
 	if r.Binding.Reservation.BootID != j.boot {
-		r.Phase = phaseUncertain
-		r.LaunchOutcome = outcomeUnknown
+		r.Phase, r.LaunchOutcome = phaseUncertain, outcomeUnknown
 		return j.save(r)
 	}
 	if r.Phase == phaseReserved {
@@ -387,19 +412,14 @@ func populatedJournalDirectory(entries []os.DirEntry) bool {
 }
 
 func (j *Journal) Exact(ctx context.Context, b Binding) (Receipt, error) {
-	gate, err := j.lock(ctx)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer func() { _ = gate.Close() }()
-	r, err := j.read(b.RequestHash)
+	r, err := j.snapshot(ctx, b.RequestHash)
 	if err != nil {
 		return r, err
 	}
 	if r.Binding != b {
 		return Receipt{}, ErrInstance
 	}
-	return j.refresh(r)
+	return j.refresh(ctx, r)
 }
 func (j *Journal) MarkKill(ctx context.Context, b Binding) error {
 	gate, err := j.lock(ctx)

@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
 const captureQueue = 1 << 20
@@ -107,12 +106,12 @@ func (i fileIdentity) matches(info os.FileInfo) bool {
 type streamStore struct {
 	files     *Files
 	binding   Binding
-	mu        sync.Mutex
+	gate      chan struct{}
 	confirmed map[string]fileIdentity
 }
 
 func newStreamStore(f *Files, b Binding) *streamStore {
-	return &streamStore{files: f, binding: b, confirmed: make(map[string]fileIdentity)}
+	return &streamStore{files: f, binding: b, gate: make(chan struct{}, 1), confirmed: make(map[string]fileIdentity)}
 }
 func (s *streamStore) load() (manifest, error) {
 	var m manifest

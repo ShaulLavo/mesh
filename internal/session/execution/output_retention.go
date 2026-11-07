@@ -12,7 +12,6 @@ func (j *Journal) prepareOutputAdmission(ctx context.Context, k Key) error {
 	if err != nil {
 		return err
 	}
-	var candidate Receipt
 	recordErr := j.files.check(requestName(k.Hash()), false)
 	if recordErr == nil {
 		return gate.Close()
@@ -21,20 +20,17 @@ func (j *Journal) prepareOutputAdmission(ctx context.Context, k Key) error {
 		return errors.Join(recordErr, gate.Close())
 	}
 	entries, err := j.files.Names("execution/requests")
-	slots := 0
-	if err == nil {
-		candidate, slots = j.outputCandidate(entries)
-	}
 	err = errors.Join(err, gate.Close())
 	if err != nil {
 		return err
 	}
+	candidate, slots := j.outputCandidate(ctx, entries)
 	if slots < j.maxActive || candidate.Binding.Reservation.Instance == "" {
 		return nil
 	}
 	return j.expireOutput(ctx, candidate.Binding)
 }
-func (j *Journal) outputCandidate(entries []os.DirEntry) (Receipt, int) {
+func (j *Journal) outputCandidate(ctx context.Context, entries []os.DirEntry) (Receipt, int) {
 	var oldest Receipt
 	slots := 0
 	for _, entry := range entries {
@@ -42,13 +38,12 @@ func (j *Journal) outputCandidate(entries []os.DirEntry) (Receipt, int) {
 		if len(name) != 69 {
 			continue
 		}
-		r, err := j.read(name[:64])
+		r, err := j.observe(ctx, name[:64])
 		if err != nil {
 			slots++
 			continue
 		}
-		r, err = j.refresh(r)
-		if err != nil || r.Phase != phaseTerminal {
+		if r.Phase != phaseTerminal {
 			slots++
 			continue
 		}
