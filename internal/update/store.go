@@ -38,6 +38,8 @@ type Target struct {
 	ConsentRevision        uint64                      `json:"consentRevision,omitempty"`
 	StageAttempt           uint64                      `json:"stageAttempt,omitempty"`
 	RetryAttempt           uint64                      `json:"retryAttempt,omitempty"`
+	StageUnsettled         bool                        `json:"stageUnsettled,omitempty"`
+	RetryUnsettled         bool                        `json:"retryUnsettled,omitempty"`
 	GrantAccepted          bool                        `json:"grantAccepted,omitempty"`
 	JoinedUnsettled        bool                        `json:"joinedUnsettled,omitempty"`
 	Commands               []updateinstall.CommandCopy `json:"commands,omitempty"`
@@ -64,6 +66,7 @@ type Target struct {
 type Run struct {
 	Origin               *AutomaticOrigin `json:"origin,omitempty"`
 	archive              *operationArchive
+	statusOnly           bool
 	CoordinatorSetup     bool             `json:"coordinatorSetup,omitempty"`
 	SetupExecutable      string           `json:"setupExecutable,omitempty"`
 	SetupBuild           *release.Build   `json:"setupBuild,omitempty"`
@@ -101,7 +104,7 @@ func (r Run) Done() bool {
 func Unfinished(runs []Run) []Run {
 	var pending []Run
 	for _, run := range runs {
-		if run.Done() {
+		if run.statusOnly || run.Done() {
 			continue
 		}
 		for _, target := range run.Targets {
@@ -237,6 +240,7 @@ func (s *Store) read(id string) (Run, error) {
 	if err := validateRunMembership(run); err != nil {
 		return Run{}, err
 	}
+	run.statusOnly = run.Origin != nil
 	return run, nil
 }
 

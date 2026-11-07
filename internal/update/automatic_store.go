@@ -78,7 +78,7 @@ func validateAutomaticPolicy(r AutomaticRecord) error {
 }
 func validateAutomaticOrigin(r AutomaticRecord) error {
 	p, run := r.Policy, r.Current
-	if !ValidRunID(run.ID) || run.Origin == nil || run.Origin.PolicyID != p.ID || run.Origin.Epoch != p.Epoch || run.Origin.Membership != p.Membership || run.Membership != p.Membership || run.Coordinator != p.CoordinatorID || run.Release.Digest() != run.ReleaseDigest || r.Attempt == 0 {
+	if !ValidRunID(run.ID) || run.Origin == nil || run.Origin.PolicyID != p.ID || run.Origin.Epoch != p.Epoch || run.Origin.Membership != p.Membership || run.Membership != p.Membership || run.Fleet.Digest() != p.Membership || run.Coordinator != p.CoordinatorID || run.Release.Digest() != run.ReleaseDigest || r.Attempt == 0 {
 		return errors.New("update: automatic run differs from its authority")
 	}
 	return nil
@@ -371,13 +371,16 @@ func (s *Store) fenceAutomatic(r *AutomaticRecord, scope AdmissionScope) error {
 
 	return problem("automatic.stopped", text)
 }
+
+var errAutomaticHistory = errors.New("update: automatic run is not current; history is status-only")
+
 func (s *Store) changeAutomaticRun(id string, apply func(*Run, *AutomaticRecord) error) (Run, error) {
 	r, err := s.readAutomatic()
 	if err != nil {
 		return Run{}, err
 	}
 	if r == nil || r.Current == nil || r.Current.ID != id {
-		return Run{}, errors.New("update: automatic run is not current; history is status-only")
+		return Run{}, errAutomaticHistory
 	}
 	approval := r.Current.approvalIdentity()
 	wasStopped := r.Current.Stopped

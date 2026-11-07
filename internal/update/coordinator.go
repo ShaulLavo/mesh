@@ -95,6 +95,9 @@ func (c *Coordinator) Step(ctx context.Context) error {
 		return errors.Join(admissionErr, err)
 	}
 	for _, run := range runs {
+		if run.statusOnly {
+			continue
+		}
 		if run.Done() && !(run.Origin != nil && !automaticSettled(run)) {
 			continue
 		}
@@ -111,7 +114,19 @@ func (c *Coordinator) Step(ctx context.Context) error {
 	return admissionErr
 }
 
-func (c *Coordinator) stepRun(ctx context.Context, run Run) error {
+func (c *Coordinator) stepRun(ctx context.Context, snapshot Run) (err error) {
+	defer func() {
+		if errors.Is(err, errAutomaticHistory) {
+			err = nil
+		}
+	}()
+	run, err := c.Store.Read(snapshot.ID)
+	if err != nil {
+		return err
+	}
+	if run.statusOnly {
+		return nil
+	}
 	if run.CoordinatorSetup {
 		return nil
 	}
@@ -130,11 +145,14 @@ func (c *Coordinator) stepRun(ctx context.Context, run Run) error {
 		if err != nil {
 			return err
 		}
+		if current.statusOnly {
+			return nil
+		}
 		target := current.Targets[index]
-		if settled(target.State) && !target.JoinedUnsettled || time.Now().Before(target.RetryAt) {
+		if settled(target.State) && !target.JoinedUnsettled && !target.StageUnsettled && !target.RetryUnsettled || time.Now().Before(target.RetryAt) {
 			continue
 		}
-		if current.Stopped && !target.Grant && !current.Cancel && target.State == Failed {
+		if current.Stopped && !target.Grant && !current.Cancel && target.State == Failed && !target.StageUnsettled && !target.RetryUnsettled {
 			continue
 		}
 		if err := c.reconcile(ctx, current, index); err != nil {
@@ -187,7 +205,7 @@ func (c *Coordinator) reconcile(ctx context.Context, run Run, index int) error {
 	if info.Health.HostID != target.Host.ID {
 		return c.fail(run.ID, index, errors.New("target health identity mismatch"))
 	}
-	if run.Stopped && !target.Grant && !run.Cancel {
+	if run.Stopped && !target.Grant && !run.Cancel && !target.StageUnsettled && !target.RetryUnsettled {
 		if _, err := c.observeBuild(run, index, info); err != nil {
 			return c.fail(run.ID, index, err)
 		}
@@ -203,6 +221,9 @@ func (c *Coordinator) reconcile(ctx context.Context, run Run, index int) error {
 		return c.fail(run.ID, index, errors.New("authorized installation journal is missing or belongs to another operation"))
 	}
 	if run.Cancel {
+		if target.StageUnsettled || target.RetryUnsettled {
+			return c.recordError(run.ID, index, errors.New("issued installation work is not yet visible; cancellation awaits settlement"))
+		}
 		return c.record(run.ID, index, func(t *Target) { t.State = Cancelled; t.Problem = "" })
 	}
 	if err := c.prepare(run, index, info); err != nil {
@@ -320,6 +341,15 @@ func (c *Coordinator) reconcileInstallation(ctx context.Context, run Run, index 
 	}
 	if status.Request.ID != installationID || status.Request.TargetID != target.Host.ID || status.Request.Manifest.Digest() != run.ReleaseDigest || status.Request.Generation != target.Generation {
 		return c.fail(run.ID, index, errors.New("installation does not match approved operation"))
+	}
+	var err error
+	run, err = c.observeAutomaticDispatch(run, index, status)
+	if err != nil {
+		return err
+	}
+	target = run.Targets[index]
+	if run.Cancel && target.RetryUnsettled {
+		return c.recordError(run.ID, index, errors.New("issued installation retry is not yet visible; cancellation awaits its token"))
 	}
 	if target.RetryPending {
 		return c.reconcileRetry(ctx, run, index, info)

@@ -110,7 +110,7 @@ func (c *Coordinator) reserveAutomatic(ctx context.Context, id string, index int
 		return Run{}, false, err
 	}
 	if r == nil || r.Current == nil || r.Current.ID != id {
-		return Run{}, false, problem("automatic.conflict", "automatic run is no longer current")
+		return Run{}, false, &automaticProblem{cause: errAutomaticHistory, code: "automatic.conflict", text: "automatic run is no longer current"}
 	}
 	if err = c.Store.fenceAutomatic(r, c.automaticScope()); err != nil {
 		return *r.Current, false, err
@@ -183,8 +183,10 @@ func prepareAutomaticDispatch(r *AutomaticRecord, index int, kind string) (bool,
 	switch kind {
 	case "stage":
 		target.StageAttempt = r.Attempt
+		target.StageUnsettled = true
 	case automaticRetry:
 		target.RetryAttempt = r.Attempt
+		target.RetryUnsettled = true
 	case "grant":
 		if target.State != Staged || !canGrant(*r.Current, index) || !reserveCanary(r, index) {
 			return false, nil

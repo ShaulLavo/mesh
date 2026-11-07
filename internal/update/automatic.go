@@ -416,7 +416,7 @@ func (s *Store) acknowledgeAutomatic(r *AutomaticRecord, cmd AutomaticCommand) e
 }
 func automaticSettled(r Run) bool {
 	for _, target := range r.Targets {
-		if target.Grant || target.JoinedUnsettled {
+		if target.Grant || target.JoinedUnsettled || target.StageUnsettled || target.RetryUnsettled {
 			return false
 		}
 		if !settled(target.State) && !(r.Cancel && target.State == Failed) {
