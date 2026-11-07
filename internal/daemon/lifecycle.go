@@ -303,7 +303,7 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 		if ctx == nil {
 			return protocol.Control{}, true, fmt.Errorf("daemon: %s request has nil context", request.Type)
 		}
-		response, err := l.logs(ctx, request)
+		response, _, err := l.logs(ctx, request, trustedReadAdmission)
 		return response, true, err
 	case protocol.TypeRemove:
 		if ctx == nil {
@@ -328,41 +328,47 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 	}
 }
 
-func (l *lifecycle) logs(ctx context.Context, request protocol.Control) (protocol.Control, error) {
+func (l *lifecycle) logs(ctx context.Context, request protocol.Control, admit readAdmission) (protocol.Control, string, error) {
 	if err := validateRequestID(request); err != nil {
-		return protocol.Control{}, err
+		return protocol.Control{}, "", err
 	}
 	if request.Tail <= 0 || request.Tail > protocol.MaxLogTail {
-		return protocol.Control{}, fmt.Errorf("daemon: log tail must be between 1 and %d bytes", protocol.MaxLogTail)
+		return protocol.Control{}, "", fmt.Errorf("daemon: log tail must be between 1 and %d bytes", protocol.MaxLogTail)
 	}
 	id, err := session.ParseID(request.SessionID)
 	if err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+		return protocol.Control{}, "", fmt.Errorf("daemon: %s: %w", request.Type, err)
+	}
+	if err := admit(ctx); err != nil {
+		return protocol.Control{}, "", err
 	}
 	stored, err := l.catalog.Get(ctx, storage.SessionID(id))
 	if err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+		return protocol.Control{}, "", fmt.Errorf("daemon: %s: %w", request.Type, err)
 	}
 	if stored.State == storage.StateRunning || stored.State == storage.StateDetached {
-		response, err := l.forwardOneShot(ctx, request, l.connector.ConnectWorker)
+		response, err := l.forwardRead(ctx, request, admit)
 		if err == nil {
-			return response, nil
+			return response, "live-tail", nil
 		}
 		// The catalog is a hint. A session that exited moments ago still reads
 		// as running until reconciliation notices, and its socket is already
 		// gone, so fall through to the durable tail rather than reporting a
 		// dial failure for output that is sitting on disk.
 		if !errors.Is(err, syscall.ENOENT) && !errors.Is(err, syscall.ECONNREFUSED) {
-			return protocol.Control{}, err
+			return protocol.Control{}, "", err
 		}
+	}
+	if err := admit(ctx); err != nil {
+		return protocol.Control{}, "", err
 	}
 	output, err := worker.ReadLogTail(filepath.Join(l.sessionsDir, id), request.Tail)
 	if err != nil {
-		return protocol.Control{}, fmt.Errorf("daemon: logs for session %s: %w", id, err)
+		return protocol.Control{}, "", fmt.Errorf("daemon: logs for session %s: %w", id, err)
 	}
 	return protocol.Control{
 		Type: protocol.TypeLogged, RequestID: request.RequestID, SessionID: id, Output: output,
-	}, nil
+	}, "saved-tail", nil
 }
 
 func (l *lifecycle) create(ctx context.Context, request protocol.Control) (protocol.Control, error) {
@@ -688,6 +694,14 @@ func (l *lifecycle) renameHost(ctx context.Context, request protocol.Control) (p
 // connect: the catalog-checked connector for clients, or connectOwned for a
 // session the daemon launched itself.
 func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control, connect func(context.Context, protocol.SessionID) (transport.Conn, error)) (protocol.Control, error) {
+	return l.forwardAdmittedOneShot(ctx, request, connect, trustedReadAdmission, true)
+}
+func (l *lifecycle) forwardAdmittedOneShot(ctx context.Context, request protocol.Control, connect func(context.Context, protocol.SessionID) (transport.Conn, error), admit readAdmission, legacyStyles bool) (protocol.Control, error) {
+	if admit == nil {
+		return protocol.Control{}, errors.New("daemon: output read admission required")
+	}
+	ctx = context.WithValue(ctx, readAdmissionKey{}, admit)
+
 	if err := validateRequestID(request); err != nil {
 		return protocol.Control{}, err
 	}
@@ -704,6 +718,9 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	}
 	ctx, cancel := workerOperationContext(ctx, l.context, l.operationTimeout)
 	defer cancel()
+	if err := admit(ctx); err != nil {
+		return protocol.Control{}, err
+	}
 	conn, err := connect(ctx, sid)
 	if err != nil {
 		return protocol.Control{}, workerOperationError(ctx, sid, "connect worker for "+request.Type, err)
@@ -726,14 +743,7 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	case protocol.TypeHibernate:
 		forwarded.HibernateIdleMillis = request.HibernateIdleMillis
 	}
-	payload, err := forwarded.Encode()
-	if err == nil {
-		err = conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload})
-	}
-	response := protocol.Control{Type: protocol.TypeOK, RequestID: request.RequestID, SessionID: id}
-	if err == nil {
-		response, err = readOneShotResponse(conn, forwarded, response)
-	}
+	response, err := exchangeOneShot(ctx, conn, forwarded)
 	closeErr := conn.Close()
 	var refused workerRefusal
 	if errors.As(err, &refused) {
@@ -745,10 +755,24 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	if closeErr != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: close session %s control connection: %w", id, closeErr)
 	}
-	if request.Type == protocol.TypeInspect {
+	if request.Type == protocol.TypeInspect && legacyStyles {
 		l.enrichLegacyInspection(ctx, id, request, &response)
 	}
 	return response, nil
+}
+
+func exchangeOneShot(ctx context.Context, conn transport.Conn, request protocol.Control) (protocol.Control, error) {
+	if err := workerReadAdmission(ctx); err != nil {
+		return protocol.Control{}, err
+	}
+	payload, err := request.Encode()
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: encode worker request: %w", err)
+	}
+	if err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload}); err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: write worker request: %w", err)
+	}
+	return readOneShotResponse(conn, request, protocol.Control{Type: protocol.TypeOK, RequestID: request.RequestID, SessionID: request.SessionID})
 }
 
 func (l *lifecycle) validateOneShot(id string, request protocol.Control) error {
@@ -1043,4 +1067,35 @@ func (l *lifecycle) remove(ctx context.Context, request protocol.Control) (proto
 	// helper, and a result type of its own would make that helper special-case
 	// one control.
 	return protocol.Control{Type: protocol.TypeOK, RequestID: request.RequestID, SessionID: id}, nil
+}
+
+type readAdmission func(context.Context) error
+type readAdmissionKey struct{}
+
+func trustedReadAdmission(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("daemon: read cancelled: %w", err)
+	}
+	return nil
+}
+
+func workerReadAdmission(ctx context.Context) error {
+	value := ctx.Value(readAdmissionKey{})
+	admit, ok := value.(readAdmission)
+	if !ok || admit == nil {
+		return errors.New("daemon: missing output read admission")
+	}
+	return admit(ctx)
+}
+func (l *lifecycle) forwardRead(ctx context.Context, request protocol.Control, admit readAdmission) (protocol.Control, error) {
+	if request.Type != protocol.TypeLogs && request.Type != protocol.TypeInspect {
+		return protocol.Control{}, errors.New("daemon: output read requires logs or inspection")
+	}
+	if admit == nil {
+		return protocol.Control{}, errors.New("daemon: output read admission required")
+	}
+	if err := admit(ctx); err != nil {
+		return protocol.Control{}, err
+	}
+	return l.forwardAdmittedOneShot(ctx, request, l.connector.ConnectWorker, admit, false)
 }

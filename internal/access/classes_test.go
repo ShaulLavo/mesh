@@ -71,7 +71,7 @@ func approve(ctx context.Context, state, subject, role string) error {
 func testClassOrders(t *testing.T, role string) {
 	t.Helper()
 	state, _, subject, store := fixture(t)
-	input := access.GrantInput{Subject: access.Subject(subject), ExpiresAt: time.Now().Add(time.Hour).UTC()}
+	input := access.GrantInput{Permissions: []string{"metadata"}, Subject: access.Subject(subject), ExpiresAt: time.Now().Add(time.Hour).UTC()}
 	change, err := store.Grant(context.Background(), 0, input, roleObserver(state))
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ func TestClassWriterProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Grant(context.Background(), 0, access.GrantInput{Subject: access.Subject(subject), ExpiresAt: time.Now().Add(time.Hour)}, roleObserver(state))
+	_, err = store.Grant(context.Background(), 0, access.GrantInput{Permissions: []string{"metadata"}, Subject: access.Subject(subject), ExpiresAt: time.Now().Add(time.Hour)}, roleObserver(state))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func checkDamagedOtherPolicy(t *testing.T, name string) {
 	if err := os.WriteFile(path, []byte("damaged"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := store.Grant(context.Background(), 0, access.GrantInput{Subject: access.Subject(subject), ExpiresAt: time.Now().Add(time.Hour)}, roleObserver(state))
+	_, err := store.Grant(context.Background(), 0, access.GrantInput{Permissions: []string{"metadata"}, Subject: access.Subject(subject), ExpiresAt: time.Now().Add(time.Hour)}, roleObserver(state))
 	if err == nil {
 		t.Fatal("damaged native policy treated as absent")
 	}

@@ -15,7 +15,7 @@ mesh device scope keygen --key-dir KEY_DIRECTORY --json
 
 ## mesh device scope grant
 
-Grant metadata access on the target's local policy.
+Grant host-wide metadata or metadata plus session-output locally.
 
 ```sh
 mesh device scope grant --identity PUBLIC_ID --permissions metadata --expected-revision 0 --json
@@ -23,7 +23,7 @@ mesh device scope grant --identity PUBLIC_ID --permissions metadata --expected-r
 
 - `--json`: write one agent result.
 - `--identity ID`: .
-- `--permissions metadata`: .
+- `--permissions PERMISSIONS`: .
 - `--expected-revision N`: .
 - `--expires-at TIME`: .
 - `--expires-in D`: .
@@ -65,6 +65,24 @@ mesh device scope read --host HOST_ID --key-dir KEY_DIRECTORY --json
 - `--session ID`: .
 - `--cursor TOKEN`: .
 - `--limit N`: .
+- `--timeout D`: .
+
+## mesh device scope output
+
+Read bounded session output over explicit-key TLS without attaching.
+
+```sh
+mesh device scope output --host HOST_ID --key-dir KEY_DIRECTORY --session SESSION_ID --format preview --json
+```
+
+- `--json`: write one agent result.
+- `--host ID`: .
+- `--key-dir PATH`: .
+- `--session ID`: .
+- `--format FORMAT`: .
+- `--max-bytes N`: .
+- `--cols N`: .
+- `--rows N`: .
 - `--timeout D`: .
 
 ## mesh serve ls

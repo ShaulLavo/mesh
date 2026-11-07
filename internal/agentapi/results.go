@@ -298,3 +298,37 @@ type ScopeCredential struct {
 	Identity     string `json:"identity"`
 	KeyDirectory string `json:"keyDirectory"`
 }
+
+type ScopeOutput struct {
+	Subject       ScopeSubject       `json:"subject"`
+	SessionID     string             `json:"sessionId"`
+	Format        string             `json:"format"`
+	Source        string             `json:"source"`
+	ObservedAt    *time.Time         `json:"observedAt"`
+	CheckpointAt  *time.Time         `json:"checkpointAt"`
+	BytesBase64   *string            `json:"bytesBase64"`
+	Preview       []string           `json:"preview"`
+	StyledPreview []ScopePreviewLine `json:"styledPreview"`
+}
+type ScopePreviewLine struct {
+	Runs []ScopePreviewRun `json:"runs,omitempty"`
+}
+type ScopePreviewRun struct {
+	Text  string            `json:"text"`
+	Style ScopePreviewStyle `json:"style,omitempty"`
+}
+type ScopePreviewColor struct {
+	Kind  uint8  `json:"kind,omitempty"`
+	Value uint32 `json:"value,omitempty"`
+}
+type ScopePreviewStyle struct {
+	Foreground     ScopePreviewColor `json:"foreground,omitempty"`
+	Background     ScopePreviewColor `json:"background,omitempty"`
+	UnderlineColor ScopePreviewColor `json:"underlineColor,omitempty"`
+	Bold           bool              `json:"bold,omitempty"`
+	Faint          bool              `json:"faint,omitempty"`
+	Italic         bool              `json:"italic,omitempty"`
+	Reverse        bool              `json:"reverse,omitempty"`
+	Strikethrough  bool              `json:"strikethrough,omitempty"`
+	Underline      uint8             `json:"underline,omitempty"`
+}
