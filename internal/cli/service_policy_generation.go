@@ -42,6 +42,9 @@ func (c *SQLiteCatalogCache) withServicePolicy(ctx context.Context, operation fu
 	}
 	c.policyToken = token
 	err = domainpolicy.WithCatalogGate(ctx, c.store.CatalogDirectory(), func(gate *domainpolicy.CatalogGate) error {
+		if token.Digest != domainpolicy.Current().Digest() || gate.Policy.CatalogToken != token {
+			return errCatalogPolicyChanged
+		}
 		if err := c.settleServiceGeneration(ctx, gate); err != nil {
 			return err
 		}

@@ -25,6 +25,7 @@ import (
 )
 
 func TestCatalogPolicyOldConsumerCannotReportSaved(t *testing.T) {
+	t.Setenv("MESH_CONFIG_DIR", filepath.Join(t.TempDir(), "absent-config"))
 	directory := t.TempDir()
 	store, err := storage.OpenAdvisory(t.Context(), filepath.Join(directory, "mesh.db"))
 	if err != nil {
@@ -51,6 +52,14 @@ func TestCatalogPolicyOldConsumerCannotReportSaved(t *testing.T) {
 	cached, err := cache.LoadServices(t.Context(), host)
 	if err != nil || len(cached) != 0 {
 		t.Fatalf("old policy regained rows: %+v %v", cached, err)
+	}
+	policy, err := domainpolicy.ReadCatalogPolicy(directory)
+	if err != nil || !policy.Pending {
+		t.Fatalf("stale consumer changed pending publication: %+v %v", policy, err)
+	}
+	raw, err := store.ListCachedServices(t.Context(), storage.HostID(host.ID))
+	if err != nil || len(raw) != 1 {
+		t.Fatalf("stale consumer settled newer invalidation: %+v %v", raw, err)
 	}
 }
 
