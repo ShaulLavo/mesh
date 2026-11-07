@@ -3,9 +3,15 @@ package updatebootstrap
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -20,28 +26,11 @@ func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
 	if binary == "" {
 		t.Skip("set MESH_LEGACY_BINARY to the retained pre-updater Mesh executable")
 	}
-	state, err := os.MkdirTemp("/tmp", "mesh-legacy-probe-")
+	state, _ := startLegacyFixture(t, binary)
+	dir, workerPID, err := createLegacySession(t.Context(), state, peerImage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(state) })
-	command := exec.Command(binary, "daemon", "--tailnet-port=0", "--ssh-port=0") //nolint:gosec // operator-selected retained executable runs only in isolated test state
-	command.Env = append(os.Environ(), "MESH_STATE_DIR="+state, "MESH_CONFIG_DIR="+filepath.Join(state, "config"))
-	var output bytes.Buffer
-	command.Stdout, command.Stderr = &output, &output
-	if err = command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		if t.Failed() {
-			t.Logf("retained daemon: %s", output.String())
-		}
-	})
-	awaitLegacyDaemonSocket(t, filepath.Join(state, "daemon.sock"))
-	// The retained daemon owns its worker's private launch arguments and reservation.
-	dir, workerPID := createLegacySession(t, state)
 	metaBefore, err := os.ReadFile(filepath.Join(dir, "meta.json")) //nolint:gosec // fixed metadata name under the isolated test worker directory
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +39,6 @@ func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = syscall.Kill(meta.PID, syscall.SIGKILL) }()
 	observed, err := Inspect(context.Background(), state)
 	if err != nil {
 		t.Fatal(err)
@@ -82,31 +70,191 @@ func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
 	t.Logf("verified actual legacy worker PID=%d shellPID=%d version=%s digest=%s protocol=%d", observedWorker.PID, observedWorker.ShellPID, observedWorker.Build.Version, observedWorker.Build.Digest, observedWorker.Protocol)
 }
 
-func createLegacySession(t *testing.T, state string) (string, int) {
+func startLegacyFixture(t *testing.T, binary string) (string, func()) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	state, err := os.MkdirTemp("", "mesh-legacy-probe-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(binary, "daemon", "--tailnet-port=0", "--ssh-port=0") //nolint:gosec // operator-selected retained executable runs only in isolated test state
+	command.Env = append(os.Environ(), "MESH_STATE_DIR="+state, "MESH_CONFIG_DIR="+filepath.Join(state, "config"))
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	var once sync.Once
+	cleanup := func() { once.Do(func() { stopLegacyFixture(t, state, command, &output) }) }
+	t.Cleanup(cleanup)
+	if err = command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	awaitLegacyDaemonSocket(t, filepath.Join(state, "daemon.sock"))
+	return state, cleanup
+}
+
+func stopLegacyFixture(t *testing.T, state string, command *exec.Cmd, output *bytes.Buffer) {
+	t.Helper()
+	if command.Process != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+	}
+	if err := cleanupLegacyWorkers(state); err != nil {
+		t.Errorf("retained fixture cleanup: %v; state kept at %s", err, state)
+		return
+	}
+	if err := os.RemoveAll(state); err != nil {
+		t.Error(err)
+	}
+	if t.Failed() {
+		t.Logf("retained daemon: %s", output.String())
+	}
+}
+
+func createLegacySession(parent context.Context, state string, inspect func(context.Context, net.Conn) (executableImage, error)) (string, int, error) {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
 	conn, err := dial(ctx, filepath.Join(state, "daemon.sock"))
 	if err != nil {
-		t.Fatal(err)
+		return "", 0, err
 	}
 	defer func() { _ = conn.Close() }()
 	response, err := exchange(conn, protocol.Control{Type: protocol.TypeCreate, RequestID: "legacy-probe-create", Command: []string{"/bin/cat"}, Cols: 80, Rows: 24})
 	if err != nil || response.Type != protocol.TypeCreated || response.SessionID == "" {
-		t.Fatalf("create retained session: %+v %v", response, err)
+		return "", 0, fmt.Errorf("create retained session: %+v: %w", response, errors.Join(err, errors.New("invalid create response")))
 	}
 	dir := filepath.Join(state, "s", response.SessionID)
 	worker, err := dial(ctx, filepath.Join(dir, "sock"))
 	if err != nil {
-		t.Fatal(err)
+		return dir, 0, err
 	}
 	defer func() { _ = worker.Close() }()
-	image, err := peerImage(ctx, worker)
+	image, err := inspect(ctx, worker)
+	return dir, image.PID, err
+}
+
+type legacyFixtureProcess struct {
+	parent int
+	state  string
+	args   []string
+}
+
+func legacyFixtureProcesses() (map[int]legacyFixtureProcess, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,stat=,command=").Output()
+	if err != nil {
+		return nil, fmt.Errorf("list fixture processes: %w", err)
+	}
+	result := make(map[int]legacyFixtureProcess)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			return nil, fmt.Errorf("incomplete fixture process listing")
+		}
+		pid, pidErr := strconv.Atoi(fields[0])
+		parent, parentErr := strconv.Atoi(fields[1])
+		if err := errors.Join(pidErr, parentErr); err != nil {
+			return nil, err
+		}
+		result[pid] = legacyFixtureProcess{parent, fields[2], fields[3:]}
+	}
+	return result, nil
+}
+func legacyWorkerInState(process legacyFixtureProcess, state string) bool {
+	args := process.args
+	for index, arg := range args {
+		if arg == "--dir" && index > 0 && index+1 < len(args) && strings.HasPrefix(args[index+1], filepath.Join(state, "s")+string(filepath.Separator)) && args[1] == "session-worker" {
+			return true
+		}
+	}
+	return false
+}
+func legacyOwnedProcesses(all map[int]legacyFixtureProcess, state string) map[int]bool {
+	children := make(map[int][]int)
+	owned := make(map[int]bool)
+	var queue []int
+	for pid, process := range all {
+		children[process.parent] = append(children[process.parent], pid)
+		if legacyWorkerInState(process, state) {
+			owned[pid] = true
+			queue = append(queue, pid)
+		}
+	}
+	for len(queue) > 0 {
+		pid := queue[0]
+		queue = queue[1:]
+		for _, child := range children[pid] {
+			owned[child] = true
+			queue = append(queue, child)
+		}
+	}
+	return owned
+}
+func cleanupLegacyWorkers(state string) error {
+	all, err := legacyFixtureProcesses()
+	if err != nil {
+		return err
+	}
+	owned := legacyOwnedProcesses(all, state)
+	for pid := range owned {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		all, err = legacyFixtureProcesses()
+		if err != nil {
+			return err
+		}
+		if !legacyProcessesLive(all, owned) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("fixture processes did not exit: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+func legacyProcessesLive(all map[int]legacyFixtureProcess, owned map[int]bool) bool {
+	for pid := range owned {
+		if process, exists := all[pid]; exists && !strings.HasPrefix(process.state, "Z") {
+			return true
+		}
+	}
+	return false
+}
+func TestLegacyWorkerFixtureCleansFailedImageProbe(t *testing.T) {
+	binary := os.Getenv("MESH_LEGACY_BINARY")
+	if binary == "" {
+		t.Skip("set MESH_LEGACY_BINARY to exercise retained fixture failure cleanup")
+	}
+	state, cleanup := startLegacyFixture(t, binary)
+	dir, pid, err := createLegacySession(t.Context(), state, func(ctx context.Context, conn net.Conn) (executableImage, error) {
+		image, err := peerImage(ctx, conn)
+		if err != nil {
+			return image, err
+		}
+		return image, os.ErrPermission
+	})
+	if !errors.Is(err, os.ErrPermission) || pid <= 0 {
+		t.Fatalf("image failure control did not arm: %v", err)
+	}
+	meta, err := workerstate.ReadMeta(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = syscall.Kill(image.PID, syscall.SIGKILL) })
-	return dir, image.PID
+	cleanup()
+	all, err := legacyFixtureProcesses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyProcessesLive(all, map[int]bool{pid: true, meta.PID: true}) {
+		t.Fatal("failed probe left worker or shell alive")
+	}
+	if _, err = os.Stat(state); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("cleaned fixture state remains", err)
+	}
 }
 
 func awaitLegacyDaemonSocket(t *testing.T, path string) {
