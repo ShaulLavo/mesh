@@ -2,8 +2,11 @@
 
 Status: Approved, 2026-10-09. Execution follow-up to
 [T26: fleet updates](../tasks/T26-mesh-updates.md). T26's requested operations,
-release reminders and installation helper are implemented. Unattended tracking
-of new releases and deployment configuration delivery remain to be implemented.
+release reminders and installation helper are implemented. Automatic binary policy source is implemented in Approved audit Plan 017 unit 2,
+subject to independent review, current checks and merge.
+Configuration delivery, dashboard drift presentation and actual fleet enrollment
+remain separate later units and maintenance. Source acceptance does not enroll
+the owner's fleet.
 
 ## Outcome
 
@@ -30,11 +33,9 @@ setting unchanged and continued to report the PC as unreachable.
    the operation starts. Repeated checks and coordinator restarts resume it.
    Keep one operation active at a time; inspect the newest release after it
    finishes. Disabling the policy stops new operations and retains issued work.
-3. Make catch-up execute a verified sequence of releases when a direct upgrade
-   is unavailable. Reuse published transition receipts, state compatibility,
-   artifact checks and retained-worker checks. Bound manifest discovery by
-   pages, response size and a total deadline. Persist the selected steps before
-   activation. Continue from the actual committed build after a restart.
+3. Block automatic work when an official direct transition is unavailable. Keep
+   the pinned release and explicit manual bridge-review guidance. Approved audit
+   Plan 017 excludes unattended intermediate release chains and bootstrap paths.
 4. Make deployment changes deliver their approved domain and consumer settings
    to every enrolled affected host. Keep this configuration delivery explicit
    and separate from release installation. Preserve unrelated settings and
@@ -58,8 +59,8 @@ setting unchanged and continued to report the PC as unreachable.
   or activation preserve the chosen release and resume unfinished work.
 - An offline member catches up when it returns. A newer release published while
   it is offline cannot replace the release pinned to the active operation.
-- An old installation follows a proven multi-step path without a person choosing
-  each intermediate tag. An absent path reports the exact blocked step.
+- An unsupported direct transition stops automatic issuance and names manual
+  bridge review. No historical chain or unattended bootstrap is attempted.
 - A failed canary stops further grants and remains visible. A subsequent check
   cannot start another operation around that failure.
 - Domain delivery preserves unrelated configuration. After the change, all

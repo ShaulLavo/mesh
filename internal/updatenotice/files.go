@@ -1,10 +1,12 @@
 package updatenotice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shaul/mesh/internal/hostprofile"
 	"io"
 	"os"
 	"path/filepath"
@@ -80,7 +82,7 @@ func readJSON(path string, target any) error {
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() || info.Size() > maximumCacheBytes {
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > maximumCacheBytes {
 		return fmt.Errorf("invalid update notice cache %s", path)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maximumCacheBytes+1))
@@ -90,7 +92,18 @@ func readJSON(path string, target any) error {
 	if len(data) > maximumCacheBytes {
 		return errors.New("update notice cache exceeds size limit")
 	}
-	return json.Unmarshal(data, target)
+	if err := hostprofile.CheckJSON(json.NewDecoder(bytes.NewReader(data)), 0, 32); err != nil {
+		return fmt.Errorf("check update cache JSON: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("decode update cache: %w", err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return errors.New("trailing update notice data")
+	}
+	return nil
 }
 
 func writeJSON(path string, value any) error {
@@ -120,10 +133,23 @@ func writeJSON(path string, value any) error {
 	if err := os.Rename(file.Name(), path); err != nil { //nolint:gosec // configured local directory and a fixed or URL-hashed filename
 		return err
 	}
-	directory, err := os.Open(filepath.Dir(path)) //nolint:gosec // sync the configured local cache directory
-	if err != nil {
-		return err
+	return settleCache(filepath.Dir(path))
+}
+func settleCache(directory string) error {
+	for {
+		fd, err := unix.Open(directory, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if err != nil {
+			return fmt.Errorf("open cache publication directory: %w", err)
+		}
+		err = unix.Fsync(fd)
+		_ = unix.Close(fd)
+		if err != nil {
+			return fmt.Errorf("settle cache publication: %w", err)
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return nil
+		}
+		directory = parent
 	}
-	defer directory.Close() //nolint:errcheck // Sync reports persistence failures
-	return directory.Sync()
 }

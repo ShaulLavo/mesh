@@ -2,7 +2,6 @@ package update
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,6 +34,11 @@ const (
 )
 
 type Target struct {
+	ConsentRevision        uint64                      `json:"consentRevision,omitempty"`
+	StageAttempt           uint64                      `json:"stageAttempt,omitempty"`
+	RetryAttempt           uint64                      `json:"retryAttempt,omitempty"`
+	GrantAccepted          bool                        `json:"grantAccepted,omitempty"`
+	JoinedUnsettled        bool                        `json:"joinedUnsettled,omitempty"`
 	Commands               []updateinstall.CommandCopy `json:"commands,omitempty"`
 	RetryPending           bool                        `json:"retryPending,omitempty"`
 	RetryToken             uint64                      `json:"retryToken,omitempty"`
@@ -57,6 +61,7 @@ type Target struct {
 }
 
 type Run struct {
+	Origin               *AutomaticOrigin `json:"origin,omitempty"`
 	archive              *operationArchive
 	CoordinatorSetup     bool             `json:"coordinatorSetup,omitempty"`
 	SetupExecutable      string           `json:"setupExecutable,omitempty"`
@@ -160,10 +165,6 @@ func (s *Store) Start(coordinator string, fleet Fleet, manifest release.Manifest
 	if err := manifest.Validate(); err != nil {
 		return Run{}, err
 	}
-	ordered, err := fleet.Order(coordinator)
-	if err != nil {
-		return Run{}, err
-	}
 	unlock, err := s.lock()
 	if err != nil {
 		return Run{}, err
@@ -173,30 +174,31 @@ func (s *Store) Start(coordinator string, fleet Fleet, manifest release.Manifest
 	if err != nil {
 		return Run{}, err
 	}
-	for _, existing := range runs {
-		if existing.Done() || existing.Cancel || existing.Membership != fleet.Digest() || existing.ReleaseDigest != manifest.Digest() {
-			continue
-		}
-		if !existing.Stopped {
-			return existing, nil
-		}
-		if err := retryRun(&existing); err != nil {
-			return Run{}, err
-		}
-		existing.UpdatedAt = time.Now().UTC()
-		return existing, s.write(existing)
+	if existing, found, err := s.existingApproval(runs, fleet, manifest); found || err != nil {
+		return existing, err
 	}
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
+
+	run, err := newRun(coordinator, fleet, manifest)
+	if err != nil {
+		return Run{}, err
+	}
+	return run, s.write(run)
+}
+func newRun(coordinator string, fleet Fleet, manifest release.Manifest) (Run, error) {
+	ordered, err := fleet.Order(coordinator)
+	if err != nil {
+		return Run{}, err
+	}
+	id, err := newAutomaticID()
+	if err != nil {
 		return Run{}, err
 	}
 	now := time.Now().UTC()
-	run := Run{ID: hex.EncodeToString(raw[:]), Coordinator: coordinator, Fleet: fleet, Membership: fleet.Digest(),
-		Release: manifest, ReleaseDigest: manifest.Digest(), CreatedAt: now, UpdatedAt: now}
-	for _, h := range ordered {
-		run.Targets = append(run.Targets, Target{Host: h, State: Pending})
+	run := Run{ID: id, Coordinator: coordinator, Fleet: fleet, Membership: fleet.Digest(), Release: manifest, ReleaseDigest: manifest.Digest(), CreatedAt: now, UpdatedAt: now}
+	for _, host := range ordered {
+		run.Targets = append(run.Targets, Target{Host: host, State: Pending})
 	}
-	return run, s.write(run)
+	return run, nil
 }
 
 func ValidRunID(id string) bool {
@@ -205,6 +207,13 @@ func ValidRunID(id string) bool {
 }
 
 func (s *Store) Read(id string) (Run, error) {
+	automatic, err := s.readAutomatic()
+	if err != nil {
+		return Run{}, err
+	}
+	if automatic != nil && automatic.Current != nil && automatic.Current.ID == id {
+		return *automatic.Current, nil
+	}
 	run, err := s.read(id)
 	if err != nil {
 		return Run{}, err
@@ -260,6 +269,13 @@ func (s *Store) List() ([]Run, error) {
 		return nil, err
 	}
 	var runs []Run
+	automatic, err := s.readAutomatic()
+	if err != nil {
+		return nil, err
+	}
+	if automatic != nil && automatic.Current != nil {
+		runs = append(runs, *automatic.Current)
+	}
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -267,6 +283,9 @@ func (s *Store) List() ([]Run, error) {
 		run, err := s.read(strings.TrimSuffix(entry.Name(), ".json"))
 		if err != nil {
 			return nil, err
+		}
+		if automatic != nil && automatic.Current != nil && run.ID == automatic.Current.ID {
+			continue
 		}
 		runs = append(runs, run)
 	}
@@ -289,6 +308,9 @@ func (s *Store) Change(id string, apply func(*Run) error) (Run, error) {
 	run, err := s.Read(id)
 	if err != nil {
 		return Run{}, err
+	}
+	if run.Origin != nil {
+		return s.changeAutomaticRun(id, func(r *Run, _ *AutomaticRecord) error { return apply(r) })
 	}
 	approval := run.approvalIdentity()
 	if err := apply(&run); err != nil {
@@ -315,7 +337,12 @@ func (s *Store) Cancel(id string) (Run, error) {
 }
 
 func (s *Store) Retry(id string) (Run, error) {
-	return s.Change(id, retryRun)
+	return s.Change(id, func(r *Run) error {
+		if r.Origin != nil {
+			return problem("automatic.stopped", "automatic retry requires policy-owner approval and --expected-policy-revision")
+		}
+		return retryRun(r)
+	})
 }
 
 func retryRun(run *Run) error {
@@ -402,15 +429,22 @@ func operationPublicationParent(directory string) (string, error) {
 func (s *Store) path(id string) string { return filepath.Join(s.directory, id+".json") }
 
 func (s *Store) lock() (func(), error) {
-	file, err := os.OpenFile(filepath.Join(s.directory, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := s.openAuthorityLock()
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
-		_ = file.Close()
-		return nil, err
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for {
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return releaseAuthority(file), nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) || time.Now().After(deadline) {
+			_ = file.Close()
+			return nil, fmt.Errorf("update: acquire writer lock: %w", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); _ = file.Close() }, nil
 }
 
 func readJSON(path string, target any) error {
@@ -484,4 +518,41 @@ var syncOperationDirectory = func(path string) error {
 		return fmt.Errorf("update: sync publication directory: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) existingApproval(runs []Run, fleet Fleet, manifest release.Manifest) (Run, bool, error) {
+	for _, existing := range runs {
+		found, err := automaticApproval(existing, fleet, manifest)
+		if found || err != nil {
+			return existing, found, err
+		}
+		if existing.Origin != nil || existing.Done() || existing.Cancel || existing.Membership != fleet.Digest() || existing.ReleaseDigest != manifest.Digest() {
+			continue
+		}
+		if !existing.Stopped {
+			return existing, true, nil
+		}
+		if err := retryRun(&existing); err != nil {
+			return Run{}, false, err
+		}
+		existing.UpdatedAt = time.Now().UTC()
+		return existing, true, s.write(existing)
+	}
+	return Run{}, false, nil
+}
+func automaticApproval(existing Run, fleet Fleet, manifest release.Manifest) (bool, error) {
+	if existing.Origin == nil {
+		return false, nil
+	}
+	matching := existing.Membership == fleet.Digest() && existing.ReleaseDigest == manifest.Digest()
+	if existing.Stopped && matching {
+		return true, nil
+	}
+	if automaticSettled(existing) || !fleetsOverlap(existing.Fleet, fleet) {
+		return false, nil
+	}
+	if matching {
+		return true, nil
+	}
+	return false, problem("automatic.conflict", "overlapping automatic run "+existing.ID+"; explicitly retry or cancel it")
 }

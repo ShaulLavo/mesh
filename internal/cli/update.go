@@ -77,7 +77,7 @@ func (a *application) updateCommand() *cobra.Command {
 	for _, action := range []string{"status", "retry", "cancel"} {
 		command.AddCommand(a.updateOperationCommand(action, &options))
 	}
-	command.AddCommand(updateTrustCommand())
+	command.AddCommand(updateTrustCommand(), a.updateAutomaticCommand(&options))
 	return command
 }
 

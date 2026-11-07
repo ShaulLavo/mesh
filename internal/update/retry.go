@@ -11,8 +11,15 @@ func (c *Coordinator) reconcileRetry(ctx context.Context, run Run, index int, in
 	target := run.Targets[index]
 	status := *info.Installation
 	if !run.Cancel && status.RetryToken < target.RetryToken && (status.Phase == updateinstall.RolledBack || status.Phase == updateinstall.Failed) {
+		current, issued, err := c.reserveRetry(ctx, run, index)
+		if err != nil || !issued {
+			return err
+		}
+		run = current
+		target = run.Targets[index]
+
 		var receipt updateinstall.Status
-		err := c.Remote.Call(ctx, target.Host, "install-retry", Operation{ID: run.ID, Generation: target.Generation, RetryToken: target.RetryToken}, &receipt)
+		err = c.Remote.Call(ctx, target.Host, "install-retry", Operation{ID: run.ID, Generation: target.Generation, RetryToken: target.RetryToken}, &receipt)
 		if err != nil {
 			return c.recordError(run.ID, index, err)
 		}
@@ -29,4 +36,11 @@ func (c *Coordinator) reconcileRetry(ctx context.Context, run Run, index int, in
 		return err
 	}
 	return c.reconcileInstallation(ctx, current, index, info)
+}
+
+func (c *Coordinator) reserveRetry(ctx context.Context, run Run, index int) (Run, bool, error) {
+	if run.Origin == nil {
+		return run, true, nil
+	}
+	return c.reserveAutomatic(ctx, run.ID, index, automaticRetry)
 }

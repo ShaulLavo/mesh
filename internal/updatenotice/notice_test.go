@@ -2,6 +2,7 @@ package updatenotice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -211,5 +212,28 @@ func TestInvalidManifestNeverBecomesNotice(t *testing.T) {
 	store.fetch = func(context.Context) (release.Manifest, error) { return release.Manifest{Version: "v9.0.0"}, nil }
 	if got, err := store.Refresh(context.Background(), false); err == nil || got.Version != "" {
 		t.Fatalf("incomplete release advertised: %+v, %v", got, err)
+	}
+}
+
+func TestSuccessfulCheckPersistsCompleteManifest(t *testing.T) {
+	store, _ := testStore(t)
+	if _, err := store.Refresh(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(store.directory, "notice.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Checked *struct {
+			Manifest release.Manifest `json:"manifest"`
+			Digest   string           `json:"digest"`
+		} `json:"checked"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Checked == nil || state.Checked.Digest != testManifest("v0.2.0").Digest() || state.Checked.Manifest.Digest() != state.Checked.Digest {
+		t.Fatal("successful cache lost the complete checked manifest")
 	}
 }

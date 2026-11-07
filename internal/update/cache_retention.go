@@ -28,7 +28,7 @@ func PruneCache(ctx context.Context, stateDir, cacheDir string) error {
 	}
 	keep := map[string]bool{}
 	for _, run := range runs {
-		if !run.Done() {
+		if !run.Done() || run.Origin != nil {
 			keep[run.ReleaseDigest] = true
 		}
 	}

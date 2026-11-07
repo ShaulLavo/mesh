@@ -112,12 +112,13 @@ func (r Run) approvedMembership() string {
 }
 
 type operationApproval struct {
-	id, coordinator, membership, releaseDigest, fleet, release, createdAt string
+	id, coordinator, membership, releaseDigest, fleet, release, createdAt, origin string
 }
 
 func (r Run) approvalIdentity() operationApproval {
+	origin, _ := json.Marshal(r.Origin)
 	return operationApproval{r.ID, r.Coordinator, r.Membership, r.ReleaseDigest,
-		r.Fleet.Digest(), r.Release.Digest(), r.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")}
+		r.Fleet.Digest(), r.Release.Digest(), r.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"), string(origin)}
 }
 
 func writeOperation(path string, run Run) error {
