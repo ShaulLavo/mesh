@@ -15,28 +15,25 @@ const receiptFloor = 30 * 24 * time.Hour
 
 // RetireSession keeps the exact finalizer fence across the existing catalog retirement.
 func (j *Journal) RetireSession(ctx context.Context, sessions, id string, retire func() error) error {
-	var ref session.Reservation
-	if err := j.files.Read(filepath.Join(filepath.Base(sessions), id, ".reservation"), &ref); err != nil {
+	return j.retireSession(ctx, sessions, id, nil, retire)
+}
+func (j *Journal) RetireExact(ctx context.Context, sessions string, b Binding, retire func() error) error {
+	return j.retireSession(ctx, sessions, b.Reservation.ID, &b, retire)
+}
+func (j *Journal) retireSession(ctx context.Context, sessions, id string, expected *Binding, retire func() error) error {
+	binding, err := j.retirementBinding(sessions, id, expected)
+	if err != nil {
 		return err
 	}
-	if err := ref.Validate(); err != nil {
-		return executionBoundaryError("retention.go RetireSession", err)
-	}
-	if ref.ID != id || ref.Purpose != session.Execution {
-		return ErrProtected
-	}
-	var binding Binding
-	if err := j.files.Read(filepath.Join("execution", "attempts", ref.Instance, "reference.json"), &binding); err != nil {
-		return err
-	}
-	if binding.Reservation != ref {
-		return ErrProtected
-	}
+	ref := binding.Reservation
 	fence, err := j.files.LockExisting(ctx, attempt(binding, "lifetime.lock"))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = fence.Close() }()
+	if err := j.confirmRetiringResult(ctx, binding); err != nil {
+		return err
+	}
 	if err := j.prepareRetirement(ctx, binding); err != nil {
 		return err
 	}
@@ -52,6 +49,9 @@ func (j *Journal) RetireSession(ctx context.Context, sessions, id string, retire
 		return err
 	}
 	if err := j.files.RemoveTree(filepath.Join(filepath.Base(sessions), id), "execution/.barrier"); err != nil {
+		return err
+	}
+	if err := j.retireOutputPayload(ctx, binding); err != nil {
 		return err
 	}
 	return j.completeRetirement(ctx, binding)
@@ -83,6 +83,7 @@ func (j *Journal) prepareRetirement(ctx context.Context, b Binding) error {
 		return ErrProtected
 	}
 	r.Removal = pending
+	r.OutputExpired = true
 	_, err = j.save(r)
 	return err
 }
@@ -143,6 +144,11 @@ func (j *Journal) maintainEntry(ctx context.Context, hash string) error {
 	if r.Phase != phaseTerminal {
 		return nil
 	}
+	if outputDue(r, j.now()) && r.Removal == removalPresent {
+		if err := j.expireOutput(ctx, r.Binding); err != nil {
+			return err
+		}
+	}
 	if r.Removal == pending {
 		return j.resumeRetirement(ctx, r.Binding)
 	}
@@ -201,6 +207,9 @@ func (j *Journal) resumeRetirement(ctx context.Context, b Binding) error {
 	}
 	defer func() { _ = fence.Close() }()
 	if err := j.retirePayload(b); err != nil {
+		return err
+	}
+	if err := j.retireOutputPayload(ctx, b); err != nil {
 		return err
 	}
 	return j.completeRetirement(ctx, b)
@@ -265,4 +274,34 @@ func (j *Journal) recoveryPinned(r Receipt) bool {
 		return false
 	}
 	return j.files.check("s/"+r.Binding.Reservation.ID+"/recovery.json", false) == nil
+}
+
+func (j *Journal) confirmRetiringResult(ctx context.Context, b Binding) error {
+	output := &Output{files: j.files, streams: make(map[Binding]*streamStore)}
+	_, err := output.Result(ctx, b)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+func (j *Journal) retirementBinding(sessions, id string, expected *Binding) (Binding, error) {
+	var ref session.Reservation
+	if err := j.files.Read(filepath.Join(filepath.Base(sessions), id, ".reservation"), &ref); err != nil {
+		return Binding{}, err
+	}
+	if err := ref.Validate(); err != nil {
+		return Binding{}, executionBoundaryError("retention.go RetireSession", err)
+	}
+	if ref.ID != id || ref.Purpose != session.Execution {
+		return Binding{}, ErrProtected
+	}
+	var binding Binding
+	if err := j.files.Read(filepath.Join("execution", "attempts", ref.Instance, "reference.json"), &binding); err != nil {
+		return Binding{}, err
+	}
+	if binding.Reservation != ref || (expected != nil && binding != *expected) {
+		return Binding{}, ErrProtected
+	}
+	return binding, nil
 }

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -102,6 +103,9 @@ type Config struct {
 
 // Worker owns one PTY and serves clients over a Unix socket.
 type Worker struct {
+	operationMu      sync.Mutex
+	capture          *execution.Capture
+	captureReason    string
 	executionClients *executionClients
 	cfg              Config
 	sid              protocol.SessionID
@@ -482,12 +486,25 @@ func Run(cfg Config) (int, error) {
 		return 0, err
 	}
 	if attempt != nil {
-		defer func() { _ = attempt.Close() }()
+		defer func() { executionBoundary(cfg.Dir, "before_lifetime_release"); _ = attempt.Close() }()
+	}
+	var capture *execution.Capture
+	if attempt != nil {
+		if err := childExitSupported(); err != nil {
+			return 0, err
+		}
+		capture, err = execution.OpenCapture(filepath.Dir(filepath.Dir(cfg.Dir)), *cfg.Execution)
+		if err != nil {
+			return 0, fmt.Errorf("worker: initialize capture: %w", err)
+		}
+	}
+	if capture != nil {
+		defer func() { _, _ = capture.Finish(context.Background(), "interrupted") }()
 	}
 	childStarted := false
 	defer func() {
 		if attempt != nil && !childStarted {
-			_ = attempt.Finish(execution.Result{Binding: *cfg.Execution, Termination: execution.Termination{Kind: "not_started", Reason: "child_start_failed"}, Capture: "not_recorded"})
+			_ = finishUnstartedCapture(attempt, capture, *cfg.Execution)
 		}
 	}()
 	pty, err := xpty.NewPty(cfg.Cols, cfg.Rows)
@@ -520,6 +537,7 @@ func Run(cfg Config) (int, error) {
 
 	w := &Worker{
 		cfg:            cfg,
+		capture:        capture,
 		sid:            sid,
 		pty:            pty,
 		cmd:            cmd,
@@ -577,12 +595,7 @@ func Run(cfg Config) (int, error) {
 		go w.acceptLoop(ln)
 	}
 
-	state, waitErr := cmd.Process.Wait()
-	// Retire the PID before anything else can act on it. kill's grace timer can
-	// fire after the child is already reaped, and the PID is reusable from here.
-	w.mu.Lock()
-	w.reaped = true
-	w.mu.Unlock()
+	state, waitErr := w.waitChild()
 	code := 0
 	if state != nil {
 		code = state.ExitCode()
@@ -617,11 +630,21 @@ func Run(cfg Config) (int, error) {
 	_ = w.pty.Close()
 	w.closeInput()
 	if attempt != nil {
+		if waitErr != nil {
+			return code, fmt.Errorf("worker: durable termination unavailable: %w", waitErr)
+		}
 		ended := now.UTC()
-		result := execution.Result{Binding: *cfg.Execution, Termination: executionTermination(state, code), EndedAt: &ended, Capture: "not_recorded"}
+		executionBoundary(cfg.Dir, "before_capture_finish")
+		summary, captureErr := capture.Finish(context.Background(), w.finalCaptureReason())
+		if captureErr != nil {
+			return code, fmt.Errorf("worker: finalize capture: %w", captureErr)
+		}
+		result := execution.Result{Binding: *cfg.Execution, Termination: executionTermination(state, code), EndedAt: &ended, Capture: captureStatus(summary), Streams: []execution.StreamResult{summary}}
+		executionBoundary(cfg.Dir, "before_result")
 		if err := attempt.Finish(result); err != nil {
 			return code, fmt.Errorf("worker: publish durable result: %w", err)
 		}
+		executionBoundary(cfg.Dir, "after_result")
 	}
 	return code, nil
 }
@@ -647,8 +670,10 @@ func (w *Worker) drainPTY() {
 		// discards it. No data can enter the queue behind session.exit.
 		w.mu.Lock()
 		w.pumpStopped = true
+		w.captureReason = "drain_timeout"
 		w.mu.Unlock()
 		_ = w.pty.Close()
+		<-w.pumpDone
 	}
 }
 
@@ -658,27 +683,11 @@ func (w *Worker) pump() {
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := w.pty.Read(buf)
-		if n > 0 {
-			w.mu.Lock()
-			if w.pumpStopped {
-				w.mu.Unlock()
-				return
-			}
-			seq := w.ring.Head()
-			// Ring first: replay and the attached client must not depend on the
-			// terminal emulator having digested the chunk. The emulator is a
-			// snapshot aid; the ring is the session's record of what happened.
-			_, _ = w.ring.Write(buf[:n])
-			_, _ = w.screen.Write(buf[:n])
-			w.lastOutputAt = w.currentTime()
-			if c := w.client; c != nil {
-				if !c.enqueueData(seq, buf[:n]) {
-					w.dropLocked(c, "")
-				}
-			}
-			w.mu.Unlock()
+		if n > 0 && !w.commitPTYChunk(buf[:n]) {
+			return
 		}
 		if err != nil {
+			w.recordCaptureClosure(err)
 			return
 		}
 	}
@@ -891,4 +900,28 @@ func (w *Worker) recordExit(meta Meta) error {
 		meta.LastAttachedAt = &lastAttachedAt
 	}
 	return WriteMeta(w.cfg.Dir, meta)
+}
+
+func (w *Worker) commitPTYChunk(data []byte) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.pumpStopped {
+		return false
+	}
+	if w.capture != nil {
+		w.capture.Offer(data)
+	}
+	seq := w.ring.Head()
+	// Ring first: replay and the attached client must not depend on the
+	// terminal emulator having digested the chunk. The emulator is a
+	// snapshot aid; the ring is the session's record of what happened.
+	_, _ = w.ring.Write(data)
+	_, _ = w.screen.Write(data)
+	w.lastOutputAt = w.currentTime()
+	if c := w.client; c != nil {
+		if !c.enqueueData(seq, data) {
+			w.dropLocked(c, "")
+		}
+	}
+	return true
 }

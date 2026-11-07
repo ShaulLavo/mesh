@@ -121,22 +121,31 @@ type Termination struct {
 	Reason string `json:"reason,omitempty"`
 }
 type Result struct {
-	Binding     Binding     `json:"binding"`
-	Termination Termination `json:"termination"`
-	EndedAt     *time.Time  `json:"endedAt"`
-	Capture     string      `json:"capture"`
+	Binding     Binding        `json:"binding"`
+	Termination Termination    `json:"termination"`
+	EndedAt     *time.Time     `json:"endedAt"`
+	Capture     string         `json:"capture"`
+	Streams     []StreamResult `json:"streams,omitempty"`
 }
 
 func (r Result) validate(b Binding) error {
-	if r.Binding != b || r.Capture != captureNotRecorded {
+	if r.Binding != b {
 		return fmt.Errorf("execution: mismatched result")
 	}
-	t := r.Termination
+	if err := r.validateCapture(); err != nil {
+		return err
+	}
+	return validateTermination(r.Termination)
+}
+
+func validateTermination(t Termination) error {
 	switch t.Kind {
 	case "exit":
 		if t.Code == nil || t.Signal != nil || *t.Code < 0 {
 			return fmt.Errorf("execution: invalid exit")
 		}
+	case "killed":
+		return validateKilledTermination(t)
 	case "signal":
 		if t.Signal == nil || *t.Signal <= 0 || t.Code != nil {
 			return fmt.Errorf("execution: invalid signal")
@@ -152,21 +161,24 @@ func (r Result) validate(b Binding) error {
 }
 
 type Receipt struct {
-	RetentionReason string       `json:"-"`
-	Binding         Binding      `json:"binding"`
-	Key             Key          `json:"key"`
-	IntentDigest    string       `json:"intentDigest"`
-	Owner           string       `json:"owner"`
-	Phase           string       `json:"phase"`
-	Acceptance      string       `json:"acceptance"`
-	Publication     string       `json:"publication"`
-	LaunchOutcome   string       `json:"launchOutcome"`
-	AcceptedAt      time.Time    `json:"acceptedAt"`
-	RetainUntil     *time.Time   `json:"retainUntil"`
-	TerminalAt      *time.Time   `json:"terminalAt"`
-	Anchor          *ClockAnchor `json:"anchor"`
-	Result          *Result      `json:"result"`
-	Removal         string       `json:"removal"`
+	RetentionReason   string       `json:"-"`
+	OutputRetainUntil *time.Time   `json:"outputRetainUntil"`
+	OutputExpired     bool         `json:"outputExpired"`
+	KillRequested     bool         `json:"killRequested"`
+	Binding           Binding      `json:"binding"`
+	Key               Key          `json:"key"`
+	IntentDigest      string       `json:"intentDigest"`
+	Owner             string       `json:"owner"`
+	Phase             string       `json:"phase"`
+	Acceptance        string       `json:"acceptance"`
+	Publication       string       `json:"publication"`
+	LaunchOutcome     string       `json:"launchOutcome"`
+	AcceptedAt        time.Time    `json:"acceptedAt"`
+	RetainUntil       *time.Time   `json:"retainUntil"`
+	TerminalAt        *time.Time   `json:"terminalAt"`
+	Anchor            *ClockAnchor `json:"anchor"`
+	Result            *Result      `json:"result"`
+	Removal           string       `json:"removal"`
 }
 
 func (r Receipt) validate() error {
@@ -235,7 +247,7 @@ func validIntentText(value string) bool {
 
 func validateIntentInput(i Intent) error {
 
-	if i.Kind != "pty" {
+	if i.Kind != ptyStream {
 		return fmt.Errorf("execution: only explicit kind pty is supported")
 	}
 	if len(i.Command) == 0 || len(i.Command) > 1024 || i.Command[0] == "" {
@@ -251,6 +263,45 @@ func validateIntentInput(i Intent) error {
 		if !validIntentText(value) {
 			return fmt.Errorf("execution: invalid command text")
 		}
+	}
+	return nil
+}
+
+func (r Result) validateCapture() error {
+	if r.Capture == captureNotRecorded && len(r.Streams) == 0 {
+		return nil
+	}
+	if r.Capture != "complete" && r.Capture != "incomplete" {
+		return fmt.Errorf("execution: invalid capture result")
+	}
+	if len(r.Streams) != 1 {
+		return fmt.Errorf("execution: missing PTY stream result")
+	}
+	s := r.Streams[0]
+	earliest, e1 := parseOffset(s.Earliest)
+	end, e2 := parseOffset(s.End)
+	observed, e3 := parseOffset(s.ObservedEnd)
+	if e1 != nil || e2 != nil || e3 != nil || earliest > end || end > observed || !validToken(s.Generation) || s.Stream != ptyStream {
+		return fmt.Errorf("execution: invalid final capture range")
+	}
+	if err := validStreamClosure(true, s.EOF, s.CloseReason, s.Loss); err != nil {
+		return err
+	}
+	if r.Capture == "complete" && (!s.EOF || (s.Loss != "" && s.Loss != captureRetention)) {
+		return fmt.Errorf("execution: contradictory complete capture")
+	}
+	return nil
+}
+
+func validateKilledTermination(t Termination) error {
+	if (t.Signal == nil) == (t.Code == nil) {
+		return fmt.Errorf("execution: invalid killed result")
+	}
+	if t.Signal != nil && *t.Signal <= 0 {
+		return fmt.Errorf("execution: invalid kill signal")
+	}
+	if t.Code != nil && *t.Code < 0 {
+		return fmt.Errorf("execution: invalid kill exit")
 	}
 	return nil
 }

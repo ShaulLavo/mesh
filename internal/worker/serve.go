@@ -33,6 +33,10 @@ func (w *Worker) serve(conn net.Conn) {
 		return
 	}
 	msg, err := protocol.DecodeControl(first.Payload)
+	if err == nil && (msg.Type == protocol.TypeExecutionSignal || msg.Type == protocol.TypeExecutionKill) {
+		w.executionControl(conn, msg)
+		return
+	}
 	if err == nil && msg.Type == protocol.TypeAgentBegin {
 		w.serveAgent(conn, msg)
 		return
@@ -317,24 +321,7 @@ func (w *Worker) writeAttachError(conn net.Conn, message string) {
 // signal delivers sig to the session's process group. Signals travel out of
 // band precisely so that keys like ctrl+\ stay free for Mesh itself.
 func (w *Worker) signal(name string) {
-	sig, ok := signals[name]
-	if !ok || w.cmd.Process == nil {
-		return
-	}
-	// Once the child has been reaped its PID belongs to the kernel again, and
-	// the negated form would target whatever process group later claims it.
-	w.mu.Lock()
-	reaped := w.reaped
-	w.mu.Unlock()
-	if reaped {
-		return
-	}
-	// The child was started with Setsid and Setctty, so it leads its own
-	// process group and negating the PID targets the whole job, matching what
-	// the terminal driver does.
-	if err := syscall.Kill(-w.cmd.Process.Pid, sig); err != nil {
-		_ = w.cmd.Process.Signal(sig)
-	}
+	_, _ = w.deliverSignal("", name)
 }
 
 // killGrace is how long a session gets to shut down after its terminal is

@@ -84,6 +84,9 @@ func (j *Journal) Reserve(ctx context.Context, k Key, i Intent, reserve func() (
 	if err != nil {
 		return Receipt{}, false, err
 	}
+	if err := j.prepareOutputAdmission(ctx, k); err != nil {
+		return Receipt{}, false, err
+	}
 	gate, err := j.lock(ctx)
 	if err != nil {
 		return Receipt{}, false, err
@@ -174,6 +177,9 @@ func (j *Journal) activeEntry(name string) int {
 	}
 	r, err = j.refresh(r)
 	if err != nil || r.Phase != phaseTerminal {
+		return 1
+	}
+	if len(r.Result.Streams) > 0 && !r.OutputExpired {
 		return 1
 	}
 	return 0
@@ -316,6 +322,14 @@ func (j *Journal) terminal(r Receipt, result Result) (Receipt, error) {
 	r.Phase = phaseTerminal
 	r.Result = &result
 	r.TerminalAt = &now
+	if len(result.Streams) > 0 {
+		outputUntil := now.Add(7 * 24 * time.Hour)
+		r.OutputRetainUntil = &outputUntil
+	}
+	if r.KillRequested && (result.Termination.Kind == "signal" || result.Termination.Kind == "exit") {
+		result.Termination.Kind = "killed"
+		r.Result = &result
+	}
 	r.RetainUntil = &until
 	r.Anchor = &anchor
 	if result.Termination.Kind == notStarted {
@@ -370,4 +384,37 @@ func populatedJournalDirectory(entries []os.DirEntry) bool {
 		}
 	}
 	return false
+}
+
+func (j *Journal) Exact(ctx context.Context, b Binding) (Receipt, error) {
+	gate, err := j.lock(ctx)
+	if err != nil {
+		return Receipt{}, err
+	}
+	defer func() { _ = gate.Close() }()
+	r, err := j.read(b.RequestHash)
+	if err != nil {
+		return r, err
+	}
+	if r.Binding != b {
+		return Receipt{}, ErrInstance
+	}
+	return j.refresh(r)
+}
+func (j *Journal) MarkKill(ctx context.Context, b Binding) error {
+	gate, err := j.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = gate.Close() }()
+	r, err := j.read(b.RequestHash)
+	if err != nil {
+		return err
+	}
+	if r.Binding != b || r.Removal != removalPresent {
+		return ErrInstance
+	}
+	r.KillRequested = true
+	_, err = j.save(r)
+	return err
 }

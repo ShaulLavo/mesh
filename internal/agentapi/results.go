@@ -219,6 +219,7 @@ type ExecutionResult struct {
 	Termination ExecutionTermination `json:"termination"`
 	EndedAt     *time.Time           `json:"endedAt"`
 	Capture     string               `json:"capture"`
+	Streams     []ExecutionStream    `json:"streams,omitempty"`
 }
 type ExecutionReceipt struct {
 	HostID             string           `json:"hostId"`
@@ -234,6 +235,9 @@ type ExecutionReceipt struct {
 	Removal            string           `json:"removal"`
 	ReceiptRetainUntil *time.Time       `json:"receiptRetainUntil"`
 	RetentionReason    string           `json:"retentionReason,omitempty"`
+	OutputRetainUntil  *time.Time       `json:"outputRetainUntil"`
+	OutputExpired      bool             `json:"outputExpired"`
+	KillRequested      bool             `json:"killRequested"`
 	Result             *ExecutionResult `json:"result"`
 }
 
@@ -297,4 +301,42 @@ type ScopeChange struct {
 type ScopeCredential struct {
 	Identity     string `json:"identity"`
 	KeyDirectory string `json:"keyDirectory"`
+}
+
+type ExecutionStream struct {
+	Stream      string `json:"stream"`
+	Generation  string `json:"generation"`
+	Earliest    string `json:"earliest"`
+	End         string `json:"end"`
+	ObservedEnd string `json:"observedEnd"`
+	EOF         bool   `json:"eof"`
+	CloseReason string `json:"closeReason"`
+	Loss        string `json:"loss"`
+}
+
+type ExecutionPage struct {
+	HostID         string `json:"hostId"`
+	SessionID      string `json:"sessionId"`
+	Instance       string `json:"instance"`
+	Stream         string `json:"stream"`
+	Generation     string `json:"generation"`
+	Bytes          []byte `json:"bytesBase64"`
+	StartCursor    string `json:"startCursor"`
+	NextCursor     string `json:"nextCursor"`
+	EarliestCursor string `json:"earliestCursor"`
+	EndCursor      string `json:"endCursor"`
+	ObservedEnd    string `json:"observedEnd"`
+	StreamClosed   bool   `json:"streamClosed"`
+	EOF            bool   `json:"eof"`
+	CloseReason    string `json:"closeReason"`
+	Loss           string `json:"loss"`
+	Available      bool   `json:"available"`
+	Gap            bool   `json:"gap"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+type ExecutionObservation struct {
+	Receipt  *ExecutionReceipt `json:"receipt"`
+	Wait     string            `json:"wait,omitempty"`
+	Delivery string            `json:"delivery,omitempty"`
 }

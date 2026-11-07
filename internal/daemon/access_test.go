@@ -256,7 +256,7 @@ func TestScopedRealTLSProjectsOnlyAllowedMetadata(t *testing.T) {
 }
 
 var deniedScopedTypes = []string{
-	"execution.create", "execution.request", "execution.receipt",
+	"execution.create", "execution.request", "execution.receipt", "execution.wait", "execution.logs", "execution.signal", "execution.kill", "execution.remove",
 	"host.metrics.result", "session.created", "session.listed", "host.info.result", "host.renamed", "session.recovered", "session.recovery-record", "copy.result", "app.result", "host.context.result", "service.previewed", "service.upserted", "service.listed", "service.deleted", "service.labeled", "certificate.installed", "wake.remembered", "wake.probed", "wake.sent", "wake.configured",
 	"host.info", "host.metrics", "host.context", "host.rename", "session.list", "session.inspect", "session.logs", "session.recovery", "session.create", "session.attach", "session.attach-detached", "terminal.resize", "session.detach", "session.signal", "session.kill", "session.hibernate", "session.recover", "session.recovery-command", "session.remove", "service.preview", "service.upsert", "service.label", "service.list", "service.delete", "service.start", "service.stop", "fleet.hosts", "certificate.install", "wake.configure", "wake.remember", "wake.probe", "wake.send", "state.watch", "catalog.continue", "session.agent-begin", "session.agent-event", "session.agent-finish", "session.shell-update", "session.containment", "session.nest", "session.attached", "session.nesting", "session.exit", "session.logged", "session.inspected", "state.snapshot", "state.event", "state.current", "state.resync", "error", "ok", "access.output", "future.control",
 }
@@ -655,6 +655,9 @@ func denyScopedExecutionRequests(t *testing.T, loose bool) {
 	requests := []protocol.Control{
 		{Type: protocol.TypeExecutionCreate, RequestID: "create-denied", RequestKey: "scoped-job", ExecutionKind: "pty", Command: []string{"/bin/true"}, Cwd: "/work"},
 		{Type: protocol.TypeExecutionRequest, RequestID: "lookup-denied", RequestKey: "scoped-job"},
+	}
+	for _, kind := range []string{protocol.TypeExecutionWait, protocol.TypeExecutionLogs, protocol.TypeExecutionSignal, protocol.TypeExecutionKill, protocol.TypeExecutionRemove} {
+		requests = append(requests, protocol.Control{Type: kind, RequestID: "bound-denied", SessionID: "7K3D", Instance: "0123456789abcdef0123456789abcdef"})
 	}
 	for _, request := range requests {
 		data, err := request.Encode()

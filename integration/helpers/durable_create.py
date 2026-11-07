@@ -57,7 +57,7 @@ def exercise(fixture):
     fast_lookup = dict(type="execution.request", requestId="fast-lookup", requestKey="fast-exit")
     terminal = eventually(lambda: terminal_receipt(fixture, fast_lookup, fast["data"]), "fast exit never became terminal")
     assert terminal["result"]["termination"] == {"kind": "exit", "code": 7, "signal": None}, terminal
-    assert terminal["result"]["capture"] == "not_recorded" and terminal["receiptRetainUntil"], terminal
+    assert terminal["result"]["capture"] == "complete" and terminal["receiptRetainUntil"], terminal
     symlink_cwd(fixture)
     print(json.dumps(dict(first=first, instance=original["instance"], sideEffects=counter.read_text(), terminal=terminal)), flush=True)
 

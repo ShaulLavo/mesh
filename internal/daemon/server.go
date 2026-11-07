@@ -250,6 +250,7 @@ func clientRequestError(request protocol.Control, requestErr error) protocol.Con
 	var accepted *executionError
 	if errors.As(requestErr, &accepted) {
 		response.ExecutionReceipt = accepted.receipt
+		response.ExecutionPage = accepted.page
 		response.ErrorCode = executionCode(requestErr)
 	}
 	return response

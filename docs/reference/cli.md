@@ -481,8 +481,13 @@ COMMANDS
 
   create -- command [args...] [--flags]  Start a keyed detached PTY command on an online host
   inspect SESSION_ID [--flags]           Read live or saved session details without attaching
+  kill SESSION_ID [--flags]              Stop the exact keyed command instance
   list [--flags]                         List one host's sessions with bounded pages
+  logs SESSION_ID [--flags]              Read exact bounded PTY bytes with an independent cursor
   request [--flags]                      Look up a retained creation receipt without launching work
+  rm SESSION_ID [--flags]                Remove a finished keyed command payload while retaining its receipt
+  signal SESSION_ID [--flags]            Signal the exact keyed command instance
+  wait SESSION_ID [--flags]              Wait for a durable result without stopping the command
 
 FLAGS
 
@@ -540,6 +545,26 @@ FLAGS
   --timeout    Hard deadline for the read, from 100ms to 60s (5s)
 ```
 
+## mesh session kill
+
+```text
+Stop the exact keyed command instance
+
+USAGE
+
+  mesh session kill SESSION_ID [--flags]
+
+FLAGS
+
+  -h --help    Help for kill
+  --host       Online machine name or exact host ID, required
+  --instance   Exact instance from the creation receipt, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Finite deadline from 100ms to 60s (5s)
+```
+
 ## mesh session list
 
 ```text
@@ -563,6 +588,29 @@ FLAGS
   --timeout    Hard deadline for the read, from 100ms to 60s (5s)
 ```
 
+## mesh session logs
+
+```text
+Read exact bounded PTY bytes with an independent cursor
+
+USAGE
+
+  mesh session logs SESSION_ID [--flags]
+
+FLAGS
+
+  --cursor     Saved independent output cursor
+  -h --help    Help for logs
+  --host       Online machine name or exact host ID, required
+  --instance   Exact instance from the creation receipt, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --max-bytes  Decoded page size from 1 to 1048576 bytes (65536)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --stream     Exact stream, currently pty (pty)
+  --timeout    Finite deadline from 100ms to 60s (5s)
+```
+
 ## mesh session request
 
 ```text
@@ -581,6 +629,67 @@ FLAGS
   --privacy      Mask personal data for recording and screen sharing (MESH_PRIVACY)
   --request-key  Saved logical request key, required
   --timeout      Hard deadline from 100ms to 60s (5s)
+```
+
+## mesh session rm
+
+```text
+Remove a finished keyed command payload while retaining its receipt
+
+USAGE
+
+  mesh session rm SESSION_ID [--flags]
+
+FLAGS
+
+  -h --help    Help for rm
+  --host       Online machine name or exact host ID, required
+  --instance   Exact instance from the creation receipt, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Finite deadline from 100ms to 60s (5s)
+```
+
+## mesh session signal
+
+```text
+Signal the exact keyed command instance
+
+USAGE
+
+  mesh session signal SESSION_ID [--flags]
+
+FLAGS
+
+  -h --help    Help for signal
+  --host       Online machine name or exact host ID, required
+  --instance   Exact instance from the creation receipt, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --signal     Process group signal, required
+  --timeout    Finite deadline from 100ms to 60s (5s)
+```
+
+## mesh session wait
+
+```text
+Wait for a durable result without stopping the command
+
+USAGE
+
+  mesh session wait SESSION_ID [--flags]
+
+FLAGS
+
+  -h --help    Help for wait
+  --host       Online machine name or exact host ID, required
+  --instance   Exact instance from the creation receipt, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Finite deadline from 100ms to 60s (5s)
 ```
 
 ## mesh sig

@@ -92,16 +92,17 @@ func (a *application) runAgentExecution(cmd *cobra.Command, o agentExecutionOpti
 			return err
 		}
 	}
+	if request.Type == protocol.TypeExecutionWait {
+		deadline, _ := ctx.Deadline()
+		request.TimeoutMillis = max(1, int(time.Until(deadline)/time.Millisecond)-20)
+	}
 	response, err := controlRequest(ctx, conn, request)
 	if err != nil {
 		return err
 	}
-	var data *agentapi.ExecutionReceipt
-	if response.ExecutionReceipt != nil {
-		data, err = agentExecutionReceipt(response.ExecutionReceipt, host.ID, o.key)
-		if err != nil {
-			return err
-		}
+	data, err := executionAgentData(response, request, host.ID, o.key)
+	if err != nil {
+		return err
 	}
 	if response.Type == protocol.TypeError {
 		failure := agentapi.Fail(controlAgentCode(response.ErrorCode), a.agent.operation, host.ID, response.Message).Err
@@ -124,13 +125,13 @@ func agentExecutionReceipt(r *protocol.ExecutionReceipt, host, key string) (*age
 		return nil, err
 	}
 	raw, err := hex.DecodeString(r.Instance)
-	if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != r.Instance || r.HostID != host || r.RequestKey != key || r.Kind != "pty" {
+	if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != r.Instance || r.HostID != host || (key != "" && r.RequestKey != key) || r.Kind != executionPTYKind {
 		return nil, fmt.Errorf("host returned an invalid execution receipt")
 	}
-	out := &agentapi.ExecutionReceipt{HostID: r.HostID, SessionID: r.SessionID, Instance: r.Instance, RequestKey: r.RequestKey, KeyScope: r.KeyScope, Kind: r.Kind, Phase: r.Phase, Acceptance: r.Acceptance, LaunchOutcome: r.LaunchOutcome, Publication: r.Publication, Removal: r.Removal, ReceiptRetainUntil: r.ReceiptRetainUntil, RetentionReason: r.RetentionReason}
+	out := &agentapi.ExecutionReceipt{HostID: r.HostID, SessionID: r.SessionID, Instance: r.Instance, RequestKey: r.RequestKey, KeyScope: r.KeyScope, Kind: r.Kind, Phase: r.Phase, Acceptance: r.Acceptance, LaunchOutcome: r.LaunchOutcome, Publication: r.Publication, Removal: r.Removal, ReceiptRetainUntil: r.ReceiptRetainUntil, RetentionReason: r.RetentionReason, OutputRetainUntil: r.OutputRetainUntil, OutputExpired: r.OutputExpired, KillRequested: r.KillRequested}
 	if r.Result != nil {
 		t := r.Result.Termination
-		out.Result = &agentapi.ExecutionResult{Termination: agentapi.ExecutionTermination{Kind: t.Kind, Code: t.Code, Signal: t.Signal, Reason: t.Reason}, EndedAt: r.Result.EndedAt, Capture: r.Result.Capture}
+		out.Result = &agentapi.ExecutionResult{Termination: agentapi.ExecutionTermination{Kind: t.Kind, Code: t.Code, Signal: t.Signal, Reason: t.Reason}, EndedAt: r.Result.EndedAt, Capture: r.Result.Capture, Streams: agentExecutionStreams(r.Result.Streams)}
 	}
 	return out, nil
 }
@@ -170,7 +171,7 @@ func validateAgentExecutionResult(result *protocol.ExecutionResult) error {
 	if result == nil {
 		return nil
 	}
-	if result.Capture != "not_recorded" {
+	if result.Capture != "not_recorded" && result.Capture != "complete" && result.Capture != "incomplete" {
 		return fmt.Errorf("host returned unsupported capture")
 	}
 	t := result.Termination
@@ -178,6 +179,10 @@ func validateAgentExecutionResult(result *protocol.ExecutionResult) error {
 	case "exit":
 		if t.Code == nil || *t.Code < 0 || t.Signal != nil {
 			return fmt.Errorf("host returned an invalid exit")
+		}
+	case "killed":
+		if (t.Signal == nil) == (t.Code == nil) {
+			return fmt.Errorf("host returned an invalid killed result")
 		}
 	case "signal":
 		if t.Signal == nil || *t.Signal <= 0 || t.Code != nil {

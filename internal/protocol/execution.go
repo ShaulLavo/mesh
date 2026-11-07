@@ -15,6 +15,11 @@ const (
 	TypeExecutionCreate  = "execution.create"
 	TypeExecutionRequest = "execution.request"
 	TypeExecutionReceipt = "execution.receipt"
+	TypeExecutionLogs    = "execution.logs"
+	TypeExecutionWait    = "execution.wait"
+	TypeExecutionSignal  = "execution.signal"
+	TypeExecutionKill    = "execution.kill"
+	TypeExecutionRemove  = "execution.remove"
 )
 
 type ExecutionTermination struct {
@@ -27,6 +32,7 @@ type ExecutionResult struct {
 	Termination ExecutionTermination `json:"termination"`
 	EndedAt     *time.Time           `json:"endedAt"`
 	Capture     string               `json:"capture"`
+	Streams     []ExecutionStream    `json:"streams,omitempty"`
 }
 type ExecutionReceipt struct {
 	HostID             string           `json:"hostId"`
@@ -42,6 +48,9 @@ type ExecutionReceipt struct {
 	Removal            string           `json:"removal"`
 	ReceiptRetainUntil *time.Time       `json:"receiptRetainUntil"`
 	RetentionReason    string           `json:"retentionReason,omitempty"`
+	OutputRetainUntil  *time.Time       `json:"outputRetainUntil"`
+	OutputExpired      bool             `json:"outputExpired"`
+	KillRequested      bool             `json:"killRequested"`
 	Result             *ExecutionResult `json:"result"`
 }
 
@@ -69,16 +78,7 @@ func validateExecutionRaw(payload []byte) error {
 			return err
 		}
 	}
-	required := []string{executionTypeField, "requestId", "requestKey"}
-	if kind == TypeExecutionCreate {
-		required = append(required, "kind", "command", "cwd")
-	}
-	for _, name := range required {
-		if scan.fields[name] == nil {
-			return fmt.Errorf("execution: missing %s", name)
-		}
-	}
-	return nil
+	return validateExecutionRequired(kind, scan.fields)
 }
 
 const executionTypeField = "type"
@@ -134,16 +134,21 @@ func (s *executionFields) takeField(decoder *json.Decoder) error {
 		return nil
 	}
 	_ = json.Unmarshal(raw, &s.kind)
-	s.execution = s.execution || s.kind == TypeExecutionCreate || s.kind == TypeExecutionRequest
+	s.execution = s.execution || isExecutionRequest(s.kind)
 	return nil
 }
 func validateExecutionField(kind, name string, raw json.RawMessage) error {
 	switch name {
-	case executionTypeField, "requestId", "requestKey":
+	case executionTypeField, "requestId":
+		return executionString(raw)
+	case "requestKey":
+		if kind != TypeExecutionCreate && kind != TypeExecutionRequest {
+			return fmt.Errorf("execution: unexpected request key")
+		}
 		return executionString(raw)
 	}
 	if kind != TypeExecutionCreate {
-		return fmt.Errorf("execution: unexpected field %s", name)
+		return validateExecutionBoundField(kind, name, raw)
 	}
 	switch name {
 	case "kind", "cwd", "term":
@@ -233,7 +238,7 @@ func (d *executionDiscriminator) UnmarshalJSON(raw []byte) error {
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return fmt.Errorf("execution discriminator: %w", err)
 	}
-	d.execution = d.execution || value == TypeExecutionCreate || value == TypeExecutionRequest
+	d.execution = d.execution || isExecutionRequest(value)
 	return nil
 }
 func executionCandidate(payload []byte) bool {
@@ -242,4 +247,89 @@ func executionCandidate(payload []byte) bool {
 	}
 	_ = json.Unmarshal(payload, &probe)
 	return probe.Type.execution
+}
+
+type ExecutionStream struct {
+	Stream      string `json:"stream"`
+	Generation  string `json:"generation"`
+	Earliest    string `json:"earliest"`
+	End         string `json:"end"`
+	ObservedEnd string `json:"observedEnd"`
+	EOF         bool   `json:"eof"`
+	CloseReason string `json:"closeReason"`
+	Loss        string `json:"loss"`
+}
+
+type ExecutionPage struct {
+	HostID         string `json:"hostId"`
+	SessionID      string `json:"sessionId"`
+	Instance       string `json:"instance"`
+	Stream         string `json:"stream"`
+	Generation     string `json:"generation"`
+	Bytes          []byte `json:"bytesBase64"`
+	StartCursor    string `json:"startCursor"`
+	NextCursor     string `json:"nextCursor"`
+	EarliestCursor string `json:"earliestCursor"`
+	EndCursor      string `json:"endCursor"`
+	ObservedEnd    string `json:"observedEnd"`
+	StreamClosed   bool   `json:"streamClosed"`
+	EOF            bool   `json:"eof"`
+	CloseReason    string `json:"closeReason"`
+	Loss           string `json:"loss"`
+	Available      bool   `json:"available"`
+	Gap            bool   `json:"gap"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+func isExecutionRequest(kind string) bool {
+	switch kind {
+	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove:
+		return true
+	default:
+		return false
+	}
+}
+func validateExecutionBoundField(kind, name string, raw json.RawMessage) error {
+	if kind == TypeExecutionRequest {
+		return fmt.Errorf("execution: unexpected field %s", name)
+	}
+	switch name {
+	case "sessionId", "instance":
+		return executionString(raw)
+	case "stream", "cursor":
+		if kind == TypeExecutionLogs {
+			return executionString(raw)
+		}
+	case "maxBytes":
+		if kind == TypeExecutionLogs {
+			return executionInteger(name, raw)
+		}
+	case "timeoutMillis":
+		if kind == TypeExecutionWait {
+			return executionInteger(name, raw)
+		}
+	case "signal":
+		if kind == TypeExecutionSignal {
+			return executionString(raw)
+		}
+	}
+	return fmt.Errorf("execution: unexpected field %s", name)
+}
+
+func validateExecutionRequired(kind string, fields map[string]json.RawMessage) error {
+	required := []string{executionTypeField, "requestId"}
+	if kind == TypeExecutionCreate || kind == TypeExecutionRequest {
+		required = append(required, "requestKey")
+	} else {
+		required = append(required, "sessionId", "instance")
+	}
+	if kind == TypeExecutionCreate {
+		required = append(required, "kind", "command", "cwd")
+	}
+	for _, name := range required {
+		if fields[name] == nil {
+			return fmt.Errorf("execution: missing %s", name)
+		}
+	}
+	return nil
 }
