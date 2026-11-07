@@ -298,7 +298,11 @@ func (l *lifecycle) ownedFate(ref session.Reservation) ownedObservation {
 	if ref.Validate() != nil || ref.Purpose != session.Managed {
 		return ownedObservation{}
 	}
-	if knownOtherBoot(ref.BootID) {
+	currentBoot := worker.BootID()
+	if currentBoot == "" {
+		return ownedObservation{}
+	}
+	if ref.BootID != currentBoot {
 		return ownedObservation{fate: sessionEnded, interrupted: true}
 	}
 	meta, err := worker.ReadMeta(filepath.Join(l.sessionsDir, ref.ID))

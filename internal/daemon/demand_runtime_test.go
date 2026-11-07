@@ -71,7 +71,10 @@ func (s *runtimeSessions) ownedFate(ref session.Reservation) ownedObservation {
 	if gate != nil {
 		gate.wait()
 	}
-	if ref.BootID != "" && boot != "" && ref.BootID != boot {
+	if boot == "" {
+		return ownedObservation{}
+	}
+	if ref.BootID != "" && ref.BootID != boot {
 		return ownedObservation{fate: sessionEnded, interrupted: true}
 	}
 	if !exists || current != ref || unknown {
@@ -841,4 +844,22 @@ func TestRuntimeRestoreRequiresDurableBarrierAfterRead(t *testing.T) {
 		t.Fatal("unconfirmed restore became authoritative")
 	}
 	manager.Close()
+}
+
+func TestRuntimeUnknownCurrentBootCannotAdoptOrSignal(t *testing.T) {
+	f := newRuntimeFixture(t)
+	f.sync(t)
+	f.manager.Close()
+	f.sessions.refsMu.Lock()
+	f.sessions.boot = ""
+	f.sessions.refsMu.Unlock()
+	f.reopen(t)
+	f.manager.supervise()
+	settleDemand(t, f.manager)
+	if starts, stops := f.sessions.counts(); starts != 1 || stops != 0 {
+		t.Fatalf("unknown boot starts %d stops %d", starts, stops)
+	}
+	if f.manager.Status("dev").State == protocol.DemandRunning {
+		t.Fatal("unknown boot certified a saved attempt as current")
+	}
 }
