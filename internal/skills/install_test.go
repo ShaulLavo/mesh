@@ -250,7 +250,7 @@ func checkUnsafeManifest(t *testing.T, name string) {
 	t.Helper()
 	f := setup(t)
 	apply(t, f, "install")
-	manifest := Manifest{Version: 1, Bundle: hashBytes(nil), Files: []ManagedFile{{name, hashBytes([]byte("old skill\n"))}}}
+	manifest := Manifest{Version: 1, Binding: f.manager.bindingID(), Bundle: hashBytes(nil), Files: []ManagedFile{{name, hashBytes([]byte("old skill\n"))}}}
 	data, err := json.Marshal(manifest)
 	must(t, err)
 	write(t, filepath.Join(f.root, "mesh", manifestName), data)
@@ -526,7 +526,7 @@ func TestLargeCustomizationsAreRetainedAndReported(t *testing.T) {
 }
 func TestPendingPathsCannotCollideAcrossBaselines(t *testing.T) {
 	hash := hashBytes(nil)
-	manifest := Manifest{Version: 1, Bundle: hash, Files: []ManagedFile{{"SKILL.md", hash}}, Pending: &Pending{Bundle: hash, Files: []ManagedFile{{"skill.md", hash}}}}
+	manifest := Manifest{Version: 1, Binding: hash, Bundle: hash, Files: []ManagedFile{{"SKILL.md", hash}}, Pending: &Pending{Bundle: hash, Files: []ManagedFile{{"skill.md", hash}}}}
 	encoded, err := json.Marshal(manifest)
 	must(t, err)
 	if _, err := parseManifest(encoded); err == nil {

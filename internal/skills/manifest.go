@@ -39,6 +39,7 @@ type Pending struct {
 }
 type Manifest struct {
 	Version     int           `json:"version"`
+	Binding     string        `json:"binding"`
 	MeshVersion string        `json:"meshVersion"`
 	Bundle      string        `json:"bundle"`
 	Files       []ManagedFile `json:"files"`
@@ -99,8 +100,8 @@ func parseManifest(data []byte) (Manifest, error) {
 	if err := decodeMetadata(data, &manifest); err != nil {
 		return manifest, err
 	}
-	if manifest.Version != 1 || !validHash(manifest.Bundle) || len(manifest.MeshVersion) > 128 {
-		return manifest, errors.New("invalid skill manifest version or bundle")
+	if manifest.Version != 1 || !validHash(manifest.Binding) || !validHash(manifest.Bundle) || len(manifest.MeshVersion) > 128 {
+		return manifest, errors.New("invalid skill manifest version, registry binding or bundle")
 	}
 	if err := validateManifestPaths(manifest); err != nil {
 		return manifest, err
@@ -181,7 +182,7 @@ func checkKey(decoder *json.Decoder, seen map[string]bool) error {
 	}
 	// Match the exact schema spelling; encoding/json otherwise accepts case variants.
 	switch key {
-	case "version", "meshVersion", "bundle", "files", "proposed", "pending", "remove", "path", "sha256", "roots", "installedAt":
+	case "version", "binding", "meshVersion", "bundle", "files", "proposed", "pending", "remove", "path", "sha256", "roots", "installedAt":
 	default:
 		return fmt.Errorf("unknown skill metadata key %q", key)
 	}

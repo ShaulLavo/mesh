@@ -11,7 +11,7 @@ mesh skill install --dir ROOT --json
 mesh skill status --dir ROOT --json
 ```
 
-A root that links to a shared skills directory is supported. Mesh resolves that root once. Links inside its managed `mesh/` directory are refused.
+A root that links to a shared skills directory is supported. Mesh resolves that root once. Links inside its managed `mesh/` directory are refused. The manifest binds an install to its Mesh configuration and state directories. Another configuration cannot update or uninstall it; use the original paths so proposal ownership and registry serialization remain consistent.
 
 To refresh all registered roots, run:
 

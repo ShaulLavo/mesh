@@ -259,11 +259,18 @@ func (m *Manager) mutateTree(action string, result *Root) error {
 	if manifest == nil {
 		return conflict("mesh/ exists and was not installed by Mesh")
 	}
-	if err := classifyTree(tree, *manifest, result); err != nil {
+	return m.mutateManaged(root, tree, *manifest, action, result)
+}
+
+func (m *Manager) mutateManaged(root, tree *os.File, manifest Manifest, action string, result *Root) error {
+	if manifest.Binding != m.bindingID() {
+		return conflict("skill root belongs to another Mesh configuration or state directory; use its original paths")
+	}
+	if err := classifyTree(tree, manifest, result); err != nil {
 		return err
 	}
 	if action == actionUninstall {
-		return m.uninstall(root, tree, *manifest, result)
+		return m.uninstall(root, tree, manifest, result)
 	}
 	if manifest.Pending != nil && manifest.Pending.Remove {
 		return conflict("skill uninstall is interrupted; repeat mesh skill uninstall for this root first")
@@ -271,8 +278,9 @@ func (m *Manager) mutateTree(action string, result *Root) error {
 	if err := m.barrier(root, "mesh"); err != nil {
 		return err
 	}
-	return m.update(tree, *manifest, result)
+	return m.update(tree, manifest, result)
 }
+
 func (m *Manager) writeManifest(tree *os.File, manifest Manifest) error {
 	data, err := json.Marshal(manifest)
 	if err != nil {
@@ -309,7 +317,8 @@ func (m *Manager) install(root *os.File, result *Root) error {
 			return err
 		}
 	}
-	manifest := Manifest{Version: 1, MeshVersion: m.MeshVersion, Bundle: m.digest(), Files: managedBundle(m.bundle())}
+	manifest := Manifest{Version: 1, Binding: m.bindingID(), MeshVersion: m.MeshVersion, Bundle: m.digest(), Files: managedBundle(m.bundle())}
+	manifest.Pending = &Pending{Bundle: manifest.Bundle, Files: manifest.Files}
 	if err := m.writeManifest(tree, manifest); err != nil {
 		return err
 	}
@@ -320,6 +329,11 @@ func (m *Manager) install(root *os.File, result *Root) error {
 	result.State = stateInterrupted
 	if err := m.barrier(root, "mesh"); err != nil {
 		return err
+	}
+	recovery := manifest
+	manifest.Pending = nil
+	if err := m.writeManifest(tree, manifest); err != nil {
+		return errors.Join(err, m.writeManifest(tree, recovery))
 	}
 	result.State = stateCurrent
 	result.Bundle = &manifest.Bundle
@@ -340,6 +354,9 @@ func (m *Manager) update(tree *os.File, manifest Manifest, result *Root) error {
 	digest := m.digest()
 	if manifest.Pending == nil && manifest.Bundle == digest && manifestMatchesBundle(manifest, files) && len(result.ModifiedFiles) == 0 && len(result.MissingFiles) == 0 {
 		return m.settleCurrent(tree, manifest, result)
+	}
+	if err := m.preservePendingOwnership(tree, &manifest, result.Path); err != nil {
+		return err
 	}
 	if err := classifyProposedPaths(tree, files, allManaged(manifest), result); err != nil {
 		return err
@@ -682,4 +699,63 @@ func (m *Manager) pruneProposalDirectories(manifest Manifest, root string) error
 		}
 	}
 	return nil
+}
+
+func (m *Manager) bindingID() string {
+	paths := filepath.Clean(m.ConfigDir) + "\x00" + filepath.Clean(m.StateDir)
+	return hashBytes([]byte("mesh-skill-registry\x00" + paths))
+}
+
+func (m *Manager) preservePendingOwnership(tree *os.File, manifest *Manifest, root string) error {
+	if manifest.Pending == nil {
+		return nil
+	}
+	managed, err := recoveryBaselines(tree, allManaged(*manifest))
+	if err != nil {
+		return err
+	}
+	proposals := append(append([]ManagedFile(nil), manifest.Proposed...), manifest.Pending.Proposed...)
+	proposed, err := m.recoverProposalBaselines(root, proposals)
+	if err != nil {
+		return err
+	}
+	manifest.Files = managed
+	manifest.Proposed = proposed
+	return nil
+}
+
+func (m *Manager) recoverProposalBaselines(root string, entries []ManagedFile) ([]ManagedFile, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	dir, _, err := m.proposalDirectory(root, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return uniqueFiles(entries), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = dir.Close() }()
+	return recoveryBaselines(dir, entries)
+}
+
+func recoveryBaselines(root *os.File, entries []ManagedFile) ([]ManagedFile, error) {
+	result := uniqueFiles(entries)
+	for index, entry := range result {
+		data, oversized, err := readManaged(root, entry.Path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if oversized {
+			continue
+		}
+		hash := hashBytes(data)
+		if slices.Contains(entries, ManagedFile{entry.Path, hash}) {
+			result[index].SHA256 = hash
+		}
+	}
+	return result, nil
 }
