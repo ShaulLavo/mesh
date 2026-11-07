@@ -71,7 +71,7 @@ func TestCatalogOpenContentionKeepsAnOptionalCache(t *testing.T) {
 			if len(rows) != 0 || !errors.As(err, &busy) || busy.Code()&0xff != 5 {
 				t.Fatalf("missing-cache warning = %#v, %v, want SQLITE_BUSY", rows, err)
 			}
-			if err := result.cache.Save(t.Context(), host, nil); err != nil {
+			if _, err := result.cache.Save(t.Context(), host, nil); err != nil {
 				t.Fatalf("cache open warning repeated on save: %v", err)
 			}
 			services, err := result.cache.LoadAllServices(t.Context())
@@ -82,7 +82,7 @@ func TestCatalogOpenContentionKeepsAnOptionalCache(t *testing.T) {
 			if err != nil || len(servicesForHost) != 0 {
 				t.Fatalf("cache open warning repeated on service read: %#v, %v", servicesForHost, err)
 			}
-			if err := result.cache.SaveServices(t.Context(), host, "", nil); err != nil {
+			if _, err := result.cache.SaveServices(t.Context(), host, "", nil); err != nil {
 				t.Fatalf("cache open warning repeated on service save: %v", err)
 			}
 		})

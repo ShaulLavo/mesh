@@ -67,7 +67,7 @@ func TestCatalogCacheConcurrentWriters(t *testing.T) {
 	for index := range writers {
 		final[index] = protocol.SessionInfo{ID: "SESSION-writer-" + strconv.Itoa(index) + "-open", HostID: host.ID, Command: []string{"sh"}, Cwd: "/tmp", State: "detached", CreatedAt: observedAt}
 	}
-	if err := cache.SaveObserved(t.Context(), host, final); err != nil {
+	if _, err := cache.SaveObserved(t.Context(), host, final); err != nil {
 		t.Fatalf("save after contention: %v", err)
 	}
 	observed, err := cache.LoadObserved(t.Context(), host)
@@ -90,7 +90,7 @@ func seedCatalogCache(t *testing.T) {
 	}
 	defer func() { _ = cache.Close() }()
 	host := HostRecord{ID: "host-cache-lock", MachineName: "pc", MeshIdentity: "identity-cache-lock"}
-	if err := cache.Save(t.Context(), host, nil); err != nil {
+	if _, err := cache.Save(t.Context(), host, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -158,7 +158,7 @@ func runCatalogCacheHelper(t *testing.T) {
 	row := protocol.SessionInfo{ID: "SESSION-" + index, HostID: host.ID, Command: []string{"sh"}, Cwd: "/tmp", State: "detached", CreatedAt: time.Now().UTC()}
 	ctx, cancel := context.WithTimeout(context.Background(), catalogCacheWriteTimeout)
 	defer cancel()
-	if err := cache.Save(ctx, host, []protocol.SessionInfo{row}); err != nil {
+	if _, err := cache.Save(ctx, host, []protocol.SessionInfo{row}); err != nil {
 		t.Fatalf("cache writer %s: %v", index, err)
 	}
 }

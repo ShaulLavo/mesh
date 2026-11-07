@@ -196,7 +196,7 @@ func TestWatchReviewID6DurableCatalogAndOfflineReopen(t *testing.T) {
 	host := HostRecord{ID: "host", MachineName: "host", MeshIdentity: "identity"}
 	old := reviewSession(host)
 	old.ID = "9ABC"
-	if err := cache.Save(ctx, host, []protocol.SessionInfo{old}); err != nil {
+	if _, err := cache.Save(ctx, host, []protocol.SessionInfo{old}); err != nil {
 		t.Fatal(err)
 	}
 	dial := reviewControlDial(t, func(h HostRecord, r protocol.Control) *protocol.Control {

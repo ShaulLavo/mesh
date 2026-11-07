@@ -12,12 +12,13 @@ import (
 )
 
 type pickerServiceCacheStub struct {
-	rows       []storage.CachedService
-	loadErr    error
-	saveErr    error
-	loadedHost HostRecord
-	saved      []protocol.ServiceInfo
-	saveCalls  int
+	rows        []storage.CachedService
+	loadErr     error
+	saveErr     error
+	loadedHost  HostRecord
+	saved       []protocol.ServiceInfo
+	saveCalls   int
+	savedNotify chan struct{}
 }
 
 func (c *pickerServiceCacheStub) LoadServices(_ context.Context, host HostRecord) ([]storage.CachedService, error) {
@@ -25,10 +26,16 @@ func (c *pickerServiceCacheStub) LoadServices(_ context.Context, host HostRecord
 	return append([]storage.CachedService(nil), c.rows...), c.loadErr
 }
 
-func (c *pickerServiceCacheStub) SaveServices(_ context.Context, _ HostRecord, _ string, rows []protocol.ServiceInfo) error {
+func (c *pickerServiceCacheStub) SaveServices(_ context.Context, _ HostRecord, _ string, rows []protocol.ServiceInfo) (bool, error) {
 	c.saveCalls++
 	c.saved = append([]protocol.ServiceInfo(nil), rows...)
-	return c.saveErr
+	if c.savedNotify != nil {
+		select {
+		case c.savedNotify <- struct{}{}:
+		default:
+		}
+	}
+	return c.saveErr == nil, c.saveErr
 }
 
 func TestPickerServiceRefreshUsesOnlyTheSelectedHostsCache(t *testing.T) {

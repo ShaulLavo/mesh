@@ -24,7 +24,7 @@ func TestCatalogServiceWriterContentionSkipsAtomicSnapshot(t *testing.T) {
 	t.Cleanup(func() { _ = cache.Close() })
 	host := HostRecord{ID: "host-pc", MachineName: "pc", MeshIdentity: "original"}
 	old := protocol.ServiceInfo{Name: "old", Kind: "proxy", Target: "3000"}
-	if err := cache.SaveServices(t.Context(), host, "", []protocol.ServiceInfo{old}); err != nil {
+	if _, err := cache.SaveServices(t.Context(), host, "", []protocol.ServiceInfo{old}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := cache.LoadServices(t.Context(), host)
@@ -49,7 +49,7 @@ func TestCatalogServiceWriterContentionSkipsAtomicSnapshot(t *testing.T) {
 		t.Fatalf("skipped service snapshot changed: %#v, %v", after, err)
 	}
 	release()
-	if err := cache.SaveServices(t.Context(), host, "", []protocol.ServiceInfo{next}); err != nil {
+	if _, err := cache.SaveServices(t.Context(), host, "", []protocol.ServiceInfo{next}); err != nil {
 		t.Fatal(err)
 	}
 	after, err = cache.LoadServices(t.Context(), host)
@@ -69,7 +69,7 @@ func TestCatalogWriteErrorsRemainVisible(t *testing.T) {
 	t.Cleanup(func() { _ = cache.Close() })
 	host := HostRecord{ID: "host-pc", MachineName: "pc", MeshIdentity: "original"}
 	old := protocol.SessionInfo{ID: "OLD1", HostID: host.ID, Command: []string{"sh"}, State: "detached", CreatedAt: time.Now().UTC()}
-	if err := cache.SaveObserved(t.Context(), host, []protocol.SessionInfo{old}); err != nil {
+	if _, err := cache.SaveObserved(t.Context(), host, []protocol.SessionInfo{old}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := cache.LoadObserved(t.Context(), host)
@@ -78,18 +78,18 @@ func TestCatalogWriteErrorsRemainVisible(t *testing.T) {
 	}
 	readLog := captureCatalogCacheLog(t)
 	release := holdCatalogWriter(t, state)
-	if err := cache.Save(t.Context(), host, []protocol.SessionInfo{{HostID: "another-host"}}); err == nil {
+	if _, err := cache.Save(t.Context(), host, []protocol.SessionInfo{{HostID: "another-host"}}); err == nil {
 		t.Fatal("invalid host was skipped")
 	}
-	if err := cache.SaveObserved(t.Context(), host, []protocol.SessionInfo{old, old}); err == nil {
+	if _, err := cache.SaveObserved(t.Context(), host, []protocol.SessionInfo{old, old}); err == nil {
 		t.Fatal("duplicate session was skipped")
 	}
-	if err := cache.SaveServices(t.Context(), host, "", []protocol.ServiceInfo{{Name: "invalid name"}}); err == nil {
+	if _, err := cache.SaveServices(t.Context(), host, "", []protocol.ServiceInfo{{Name: "invalid name"}}); err == nil {
 		t.Fatal("invalid service was skipped")
 	}
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := cache.SaveObserved(canceled, host, nil); !errors.Is(err, context.Canceled) {
+	if _, err := cache.SaveObserved(canceled, host, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled write = %v", err)
 	}
 	release()
@@ -104,7 +104,7 @@ func TestCatalogWriteErrorsRemainVisible(t *testing.T) {
 	next := old
 	next.ID = "NEW1"
 	host.MeshIdentity = "replacement"
-	if err := cache.SaveObserved(t.Context(), host, []protocol.SessionInfo{next}); err == nil || !strings.Contains(err.Error(), "database is locked") {
+	if _, err := cache.SaveObserved(t.Context(), host, []protocol.SessionInfo{next}); err == nil || !strings.Contains(err.Error(), "database is locked") {
 		t.Fatalf("non-BUSY transaction failure = %v", err)
 	}
 	after, err := cache.LoadObserved(t.Context(), host)
@@ -139,7 +139,7 @@ func TestAgentSessionBusyCacheKeepsLiveObservation(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cache.Close() })
 	old := sessionCacheRows(host, "old")
-	if err := cache.SaveObserved(t.Context(), host, old); err != nil {
+	if _, err := cache.SaveObserved(t.Context(), host, old); err != nil {
 		t.Fatal(err)
 	}
 	before, err := cache.LoadObserved(t.Context(), host)

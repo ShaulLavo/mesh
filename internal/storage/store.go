@@ -23,10 +23,11 @@ import (
 )
 
 const (
-	sqliteDriver           = "sqlite"
-	sqliteBusyTimeout      = "5000"
-	sqliteCacheBusyTimeout = 5 * time.Second
-	sqliteMaxOpenConns     = 4
+	sqliteDriver               = "sqlite"
+	sqliteBusyTimeout          = "5000"
+	sqliteCacheBusyTimeout     = 5 * time.Second
+	sqliteCacheReadBusyTimeout = 150 * time.Millisecond
+	sqliteMaxOpenConns         = 4
 )
 
 // ErrAdvisoryMigrationUnavailable marks a migration committed by another opener.
@@ -55,9 +56,9 @@ func Open(ctx context.Context, databasePath string) (*Store, error) {
 }
 
 // OpenAdvisory skips migration lock contention without delaying authoritative work.
-// After migrations, every pooled connection gets a five-second writer budget.
+// Pooled connections retain short reader waits; write admission owns its longer budget.
 func OpenAdvisory(ctx context.Context, databasePath string) (*Store, error) {
-	return open(ctx, databasePath, strconv.FormatInt(sqliteCacheBusyTimeout.Milliseconds(), 10), "0", true)
+	return open(ctx, databasePath, strconv.FormatInt(sqliteCacheReadBusyTimeout.Milliseconds(), 10), "0", true)
 }
 
 func open(ctx context.Context, databasePath, busyTimeout, migrationBusyTimeout string, advisory bool) (*Store, error) {

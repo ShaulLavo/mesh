@@ -12,14 +12,14 @@ import (
 
 type catalogCacheFuncs struct {
 	load func(context.Context, HostRecord) ([]protocol.SessionInfo, error)
-	save func(context.Context, HostRecord, []protocol.SessionInfo) error
+	save func(context.Context, HostRecord, []protocol.SessionInfo) (bool, error)
 }
 
 func (c catalogCacheFuncs) Load(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
 	return c.load(ctx, host)
 }
 
-func (c catalogCacheFuncs) Save(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) error {
+func (c catalogCacheFuncs) Save(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) (bool, error) {
 	return c.save(ctx, host, rows)
 }
 
@@ -46,12 +46,12 @@ func TestCatalogDeadlineBoundsCacheSave(t *testing.T) {
 			finished := make(chan struct{})
 			done := make(chan catalogCollection, 1)
 			t.Cleanup(func() { close(release); <-finished })
-			cache := catalogCacheFuncs{save: func(ctx context.Context, _ HostRecord, _ []protocol.SessionInfo) error {
+			cache := catalogCacheFuncs{save: func(ctx context.Context, _ HostRecord, _ []protocol.SessionInfo) (bool, error) {
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					return false, ctx.Err()
 				case <-release:
-					return errors.New("test released blocked save")
+					return false, errors.New("test released blocked save")
 				}
 			}}
 			go func() {
@@ -138,7 +138,9 @@ func TestCatalogParentCancellationJoinsCacheWork(t *testing.T) {
 			}
 			cache := catalogCacheFuncs{
 				load: func(ctx context.Context, _ HostRecord) ([]protocol.SessionInfo, error) { return nil, blocked(ctx) },
-				save: func(ctx context.Context, _ HostRecord, _ []protocol.SessionInfo) error { return blocked(ctx) },
+				save: func(ctx context.Context, _ HostRecord, _ []protocol.SessionInfo) (bool, error) {
+					return false, blocked(ctx)
+				},
 			}
 			done := make(chan catalogCollection, 1)
 			go func() {
@@ -178,12 +180,12 @@ func TestCatalogSuccessfulEmptyQueryDoesNotLoadStaleRows(t *testing.T) {
 			t.Error("successful empty catalog must not load stale rows")
 			return []protocol.SessionInfo{{ID: "OLD1"}}, nil
 		},
-		save: func(ctx context.Context, _ HostRecord, rows []protocol.SessionInfo) error {
+		save: func(ctx context.Context, _ HostRecord, rows []protocol.SessionInfo) (bool, error) {
 			saveCtx = ctx
 			if len(rows) != 0 {
 				t.Errorf("cached rows = %#v, want empty authoritative catalog", rows)
 			}
-			return cacheErr
+			return false, cacheErr
 		},
 	}
 	rows, err := CollectHostSessions(context.Background(), []HostRecord{{MachineName: "pc", ID: "pc"}}, HostQueryBudget{Reply: time.Second},

@@ -34,9 +34,10 @@ type HostQuery func(context.Context, *HostRecord, HostQueryBudget) ([]protocol.S
 
 // CatalogCache stores the last authoritative catalog for offline display.
 // Implementations must honor context cancellation and permit concurrent calls.
+// Save returns true only after persistence; false with nil error means skipped.
 type CatalogCache interface {
 	Load(context.Context, HostRecord) ([]protocol.SessionInfo, error)
-	Save(context.Context, HostRecord, []protocol.SessionInfo) error
+	Save(context.Context, HostRecord, []protocol.SessionInfo) (bool, error)
 }
 
 const (
@@ -117,7 +118,7 @@ func CollectHostSessions(parent context.Context, hosts []HostRecord, budget Host
 					defer cacheWG.Done()
 					cacheCtx, cacheCancel := context.WithTimeout(ctx, catalogCacheWriteTimeout)
 					defer cacheCancel()
-					if err := cache.Save(cacheCtx, hosts[index], rows); err != nil {
+					if _, err := cache.Save(cacheCtx, hosts[index], rows); err != nil {
 						out[index].CacheErr = fmt.Errorf("cache host %s: %w", HostLabel(hosts[index]), err)
 					}
 				}(result.index, cloneSessionInfo(result.sessions))

@@ -395,12 +395,16 @@ contract and are not given a longer budget.
 
 The advisory writer admission budget is 5 seconds. SQLite's native busy handler
 can outlast context cancellation, so admission uses native waits of at most
-100 ms, clipped to the remaining budget and caller deadline. Only `BEGIN` is
-retried. No statement or transaction body is replayed. The reserved connection's
-5000 ms handler is restored after commit, rollback or failed admission. A failed
-reset discards that connection. `SQLITE_BUSY` at exhausted admission is marked
-only for advisory stores. `SQLiteCatalogCache` logs the skipped host and operation
-and returns success while the caller's context remains live. Cancellation, invalid
+100 ms, clipped to the remaining budget and caller deadline. Waiting for a pool slot, new connection
+setup and `BEGIN` share that one admission budget. Pool exhaustion also skips
+only before a transaction begins and while the enclosing caller remains live. Only admission is retried, never
+a statement or transaction body. Connections start with a 150 ms native reader
+wait, which is restored after commit, rollback or failed admission. A failed reset
+discards that connection. This keeps new reader initialization within its short
+budget instead of inheriting the writer's five seconds. `SQLITE_BUSY` at exhausted
+admission is marked only for advisory stores. `SQLiteCatalogCache` logs the skipped
+host and operation and returns `persisted=false` with no caller error while its
+context remains live. A confirmed commit returns `persisted=true`. Cancellation, invalid
 data, corruption, other SQLite errors and failures after admission remain errors.
 
 Human and picker session and service cache-write caps are 6 seconds. Existing
@@ -409,8 +413,13 @@ saves use the command's remaining timeout. Cache reads retain their 200 ms cap.
 `CollectHostSessions`, `pickerState.saveCache`, `loadAgentRemoteSessions`,
 `CollectServiceCatalog` and its agent adapter, both picker service writers, and
 the post-delete service-cache update use this same advisory boundary. No daemon
-write is converted into advisory success. Skipped observations become visible in
-the cache on a later successful observation, not through a background writer.
+write is converted into advisory success. Memoizing callers update their saved
+snapshot only after a confirmed commit, so an identical later observation can repair
+a skipped write. Live picker publication never waits for persistence. Each active
+watch owns one joined cache writer and at most one pending immutable snapshot;
+a newer snapshot replaces the pending one. Watch cancellation cancels and joins
+that writer before the watch ends. There is no detached persistence queue or work
+that outlives its watch. Cache errors remain visible without hiding live rows.
 
 Permanent controls replace the old concurrent success timing promise with no
 caller-visible BUSY, valid rows, integrity checks and convergence after contention.
@@ -422,3 +431,9 @@ constraint error, invalid-input rejection, corruption errors and authoritative
 failure. Red and green evidence and the complete caller inventory are in
 `/work/reports/wave-20261106/audits2/mesh/execution/007/pr4/cache-facts/host-composition/advisory-write-contract/REPORT.md`.
 No further hosted capture or repetition campaign is part of this repair.
+
+Parent review corrections retain deterministic controls for skipped-write session
+and service convergence, live session and service publication during contention,
+reader connection deadlines, writer connection admission, coalescing and joining,
+and asynchronous cache error visibility. The cache-write result is migrated through
+all real callers and fixtures, without preserving an error-only compatibility API.

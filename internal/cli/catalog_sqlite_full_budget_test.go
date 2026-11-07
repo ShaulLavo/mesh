@@ -31,7 +31,7 @@ func TestCatalogSQLiteWriterContentionWithoutCancellation(t *testing.T) {
 	})
 	host := HostRecord{MachineName: "pc", ID: "host-pc", MeshIdentity: "identity-pc"}
 	old := protocol.SessionInfo{ID: "OLD1", HostID: host.ID, Command: []string{"sh"}, State: "detached", CreatedAt: time.Now().UTC()}
-	if err := cache.SaveObserved(t.Context(), host, []protocol.SessionInfo{old}); err != nil {
+	if _, err := cache.SaveObserved(t.Context(), host, []protocol.SessionInfo{old}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := cache.LoadObserved(t.Context(), host)
@@ -45,10 +45,10 @@ func TestCatalogSQLiteWriterContentionWithoutCancellation(t *testing.T) {
 	readLog := captureCatalogCacheLog(t)
 	release := holdCatalogWriter(t, stateDir)
 	outcome := make(chan catalogSaveOutcome, 1)
-	observed := catalogCacheFuncs{load: cache.Load, save: func(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) error {
-		err := cache.Save(ctx, host, rows)
+	observed := catalogCacheFuncs{load: cache.Load, save: func(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) (bool, error) {
+		_, err := cache.Save(ctx, host, rows)
 		outcome <- catalogSaveOutcome{err: err, contextErr: ctx.Err()}
-		return err
+		return false, err
 	}}
 	parent, cancel := context.WithCancel(t.Context())
 	finished := make(chan struct{})
@@ -99,7 +99,7 @@ func TestCatalogSQLiteWriterContentionWithoutCancellation(t *testing.T) {
 	next.ID = "NEW1"
 	ctx, stop := context.WithTimeout(t.Context(), catalogCacheWriteTimeout)
 	defer stop()
-	if err := cache.Save(ctx, host, []protocol.SessionInfo{next}); err != nil {
+	if _, err := cache.Save(ctx, host, []protocol.SessionInfo{next}); err != nil {
 		t.Fatalf("Save after rollback: %v", err)
 	}
 	cached, err = cache.Load(t.Context(), host)

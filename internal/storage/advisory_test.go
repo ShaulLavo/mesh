@@ -127,7 +127,7 @@ func TestOpenBusyTimeoutAppliesToEveryPoolConnection(t *testing.T) {
 		want int
 	}{
 		{name: "authoritative", open: Open, want: 5000},
-		{name: "advisory", open: OpenAdvisory, want: 5000},
+		{name: "advisory", open: OpenAdvisory, want: int(sqliteCacheReadBusyTimeout.Milliseconds())},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, err := test.open(t.Context(), filepath.Join(t.TempDir(), "mesh.db"))
@@ -257,7 +257,7 @@ func assertCatalogPoolTimeout(t *testing.T, store *Store) {
 	if err := store.db.QueryRowContext(t.Context(), "PRAGMA busy_timeout").Scan(&timeout); err != nil {
 		t.Fatal(err)
 	}
-	if timeout != 5000 {
-		t.Fatalf("reused connection busy timeout = %d, want 5000", timeout)
+	if timeout != int(sqliteCacheReadBusyTimeout.Milliseconds()) {
+		t.Fatalf("reused connection busy timeout = %d, want short reader wait", timeout)
 	}
 }

@@ -187,7 +187,7 @@ func TestDashboardOfflineCacheRetainedAndIdentityScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cache.Close() //nolint:errcheck // fixture teardown
-	if err := cache.Save(t.Context(), fixture.host, []protocol.SessionInfo{reviewSession(fixture.host)}); err != nil {
+	if _, err := cache.Save(t.Context(), fixture.host, []protocol.SessionInfo{reviewSession(fixture.host)}); err != nil {
 		t.Fatal(err)
 	}
 	monitor := dashboardMonitor{cache: cache}

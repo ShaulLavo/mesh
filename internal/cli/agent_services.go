@@ -47,9 +47,9 @@ func (c *agentServiceCache) LoadAllServices(ctx context.Context) (map[string][]s
 	return rows, nil
 }
 
-func (c *agentServiceCache) SaveServices(ctx context.Context, host HostRecord, name string, rows []protocol.ServiceInfo) error {
+func (c *agentServiceCache) SaveServices(ctx context.Context, host HostRecord, name string, rows []protocol.ServiceInfo) (bool, error) {
 	if c.err != nil {
-		return c.err
+		return false, c.err
 	}
 	return c.cache.SaveServices(ctx, host, name, rows)
 }
