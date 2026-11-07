@@ -16,9 +16,9 @@ func Render() string {
 		}
 		fmt.Fprintf(&text, "## %s\n\n%s\n\n```sh\n%s\n```\n\n", operation.Command, operation.Summary, operation.Example)
 		for _, flag := range operation.Flags {
-			fmt.Fprintf(&text, "- `%s %s`: %s.\n", flag.Name, flag.Value, flag.Summary)
+			fmt.Fprintf(&text, "- `%s`: %s.\n", strings.TrimSpace(flag.Name+" "+flag.Value), flag.Summary)
 		}
 		text.WriteString("\n")
 	}
-	return text.String()
+	return strings.TrimRight(text.String(), "\n") + "\n"
 }
