@@ -30,6 +30,15 @@ func (s *Store) configurationGrant() (ConfigurationGrant, error) {
 	_, err = PublicKey(grant.CoordinatorID)
 	return grant, err
 }
+func (s *Store) ConfigurationGrant(ctx context.Context) (ConfigurationGrant, error) {
+	unlock, err := s.lockContext(ctx)
+	if err != nil {
+		return ConfigurationGrant{}, err
+	}
+	defer unlock()
+	return s.configurationGrant()
+}
+
 func (s *Store) SetConfigurationGrant(ctx context.Context, expected uint64, hostID, coordinatorID string, allow bool, domain bool) (ConfigurationGrant, error) {
 	unlock, err := s.lockContext(ctx)
 	if err != nil {

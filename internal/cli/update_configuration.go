@@ -86,6 +86,10 @@ func (a *application) configurationActionCommand(action string) *cobra.Command {
 	} else {
 		command.Use += " CHANGE_ID"
 		command.Args = cobra.ExactArgs(1)
+		if action == configurationStatus {
+			command.Use = action + " [CHANGE_ID]"
+			command.Args = cobra.MaximumNArgs(1)
+		}
 	}
 	if action == configurationApply {
 		command.Flags().BoolVar(&options.yes, "yes", false, "approve the exact verified proposal")
@@ -126,6 +130,9 @@ func (a *application) runConfigurationAction(cmd *cobra.Command, action string, 
 	}
 	if action == configurationApply {
 		return a.approveConfiguration(cmd, environment, options)
+	}
+	if action == configurationStatus {
+		return a.readConfigurationStatusCommand(cmd, environment, args)
 	}
 	input := any(struct {
 		ID string `json:"id"`
@@ -218,4 +225,21 @@ func configurationDescription(action string) string {
 	default:
 		return "Show saved, issued and actual dashboard observations separately"
 	}
+}
+
+func (a *application) readConfigurationStatusCommand(cmd *cobra.Command, environment updateEnvironment, args []string) error {
+	id := ""
+	if len(args) > 0 {
+		id = args[0]
+	}
+	var status update.ConfigurationStatus
+	_, err := dashboardStatusCall(cmd.Context(), environment.client, environment.coordinator, "configuration.status", struct {
+		ID string `json:"id"`
+	}{id}, &status)
+	if err != nil {
+		return err
+	}
+	structured, _ := cmd.Flags().GetBool("json")
+	details, _ := cmd.Flags().GetBool("details")
+	return printConfigurationStatusOutput(cmd.OutOrStdout(), status, structured, details, a.privacy)
 }

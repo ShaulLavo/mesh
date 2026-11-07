@@ -115,6 +115,11 @@ func (a *application) runConfiguredDashboard(ctx context.Context, wall bool, ove
 	input := DashboardInput{Privacy: a.privacy, Wall: wall, Theme: theme, Watch: monitor.Run}
 	feed := newDashboardFeedWatcher(localID, socket)
 	input.UsageWatch, input.UsageAcknowledge = feed.Run, feed.acknowledge
+	caller := a.dependencies.UpdateCaller
+	if caller == nil {
+		caller = existingDashboardUpdateCaller(filepath.Dir(socket), localID)
+	}
+	input.UpdateWatch = newDashboardUpdateWatcher(filepath.Dir(socket), localID, caller).Run
 	for _, record := range records {
 		input.Hosts = append(input.Hosts, dashboardHost(record, localID))
 	}

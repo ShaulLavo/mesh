@@ -2205,7 +2205,7 @@ Global Flags:
 Show saved, issued and actual dashboard observations separately
 
 Usage:
-  mesh update config status CHANGE_ID [flags]
+  mesh update config status [CHANGE_ID] [flags]
 
 Flags:
   -h, --help   help for status

@@ -398,3 +398,33 @@ and feed result. See [Deliver dashboard feed settings](fleet-configuration.md)
 for allowance, preview, approval, cancellation, revocation, and recovery.
 
 Domain and feed delivery have separate grants and component receipts. See [fleet configuration](fleet-configuration.md) for saved versus actual loaded policy and restart requirements.
+
+## Inspect fleet drift
+
+`mesh update status` includes independently enrolled automatic and configuration
+status alongside saved operations. `mesh update automatic status` shows the
+binary policy alone. Default output names the affected machine and next action.
+Use `--details` for identifiers and stored diagnostics, or `--json` for the
+complete operational values without a human preamble. Privacy mode hides human
+details; structured output keeps the original identifiers.
+
+When saved enrollment is present, the no-run JSON status is an object with
+`runs` and `updates`. Without enrollment it retains the ordinary run array.
+A named run keeps its existing JSON shape. Each update source carries its pinned
+coordinator, independent status availability, observation time, and complete
+binary or configuration value.
+
+The dashboard and TV show a bounded update attention area. Binary status keeps
+the pinned target release, last observed daemon version, last successful fleet
+release, offline members, canary, and sticky stop separate. An offline member
+still belongs to its original pinned release. An unavailable or refused status
+read does not mark the machine unreachable. A direct-transition block retains
+manual bridge-review advice; Mesh does not step through historical releases.
+
+The CLI owns the dashboard's joined read-only watcher. It uses existing local
+policy, recipient consent, or configuration grants and the exact saved fleet
+endpoint. Binary and configuration coordinators may differ. No relevant saved
+enrollment means no automatic polling. Each status request has a five-second
+deadline and the watcher polls every 30 seconds. It does not fetch release feeds,
+wake machines, enroll recipients, create identities, or change trust. Closing
+the dashboard cancels and joins its requests.

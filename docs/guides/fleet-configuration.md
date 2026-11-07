@@ -180,3 +180,21 @@ requests because the current HTTP admission contract can start an on-demand
 service after a previously running or non-demand snapshot. Catalog health and
 feed reads remain separate observations. Neither proves an application-specific
 HTTPS check.
+
+## Read drift in the CLI and TV
+
+`mesh update config status` selects the coordinator's current change. Supply a
+change identity to inspect history. Default output is a human summary; `--json`
+returns the complete status without a preamble. Retry and cancel still require
+an exact change identity and administrative revision.
+
+The dashboard's configuration status is independent of binary opt-in. A saved
+file and a healthy daemon running an old domain policy produce a restart-needed
+message. An old dashboard needs reopening even if the daemon loaded the policy.
+Use that host's native service manager for approved daemon maintenance.
+
+A matching renderer observation can report feed transport or parse failure.
+Successful parsing does not refresh upstream timestamps or turn unknown quota
+into a value. HTTP, publication, upstream observation, and observer lease times
+remain separate. Expired or absent observers are unknown. Service HTTPS
+verification remains unknown; status presentation sends no service requests.
