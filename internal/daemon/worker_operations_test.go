@@ -226,7 +226,7 @@ func TestClientServerBoundsSilentWorkerOnUnixConnection(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				done := make(chan error, 1)
-				go func() { done <- server.Handle(ctx, serverConn) }()
+				go func() { done <- server.Handle(localServerContext(ctx), serverConn) }()
 				if err := client.SetDeadline(time.Now().Add(time.Second)); err != nil {
 					t.Fatal(err)
 				}

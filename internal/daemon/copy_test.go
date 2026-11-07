@@ -25,7 +25,7 @@ func TestClientServerCopyDoesNotCreateSessionAndCleansDisconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(t.Context(), client) }()
+	go func() { done <- server.Handle(localServerContext(t.Context()), client) }()
 	client.pushRead(copyServerFrame(t, "begin-copy", transfer.Request{Action: "upload.begin", Path: dest, Info: transfer.Info{Name: "source"}}))
 	begin := decodeServerControl(t, client.nextWrite(t))
 	if begin.Type != protocol.TypeCopyResult || begin.RequestID != "begin-copy" || begin.SessionID != "" {
@@ -57,7 +57,7 @@ func TestClientServerMalformedCopyIsCorrelatedAndKeepsServing(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(t.Context(), client) }()
+	go func() { done <- server.Handle(localServerContext(t.Context()), client) }()
 	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeCopyRequest, RequestID: "malformed", Copy: json.RawMessage(`[]`)}))
 	assertServerError(t, client.nextWrite(t), "malformed", "", "decode copy request")
 	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeHostInfo, RequestID: "after-copy"}))

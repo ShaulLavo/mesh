@@ -43,10 +43,11 @@ func (s *Store) ReplaceCachedServices(ctx context.Context, host Host, services [
 		rows[index] = row
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, release, err := s.beginCatalogWrite(ctx)
 	if err != nil {
 		return fmt.Errorf("storage: begin cached-service replacement: %w", err)
 	}
+	defer release()
 	defer tx.Rollback() //nolint:errcheck // commit is authoritative
 	queries := s.queries.WithTx(tx)
 	if _, err := queries.UpsertHost(ctx, hostValues); err != nil {

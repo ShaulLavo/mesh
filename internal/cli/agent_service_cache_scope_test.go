@@ -43,7 +43,7 @@ func checkAgentServiceCacheScope(t *testing.T, service protocol.ServiceInfo, sco
 	if got := agentServiceRow(live[0], observed).Scope; got != scope {
 		t.Fatalf("live scope %q, want %q", got, scope)
 	}
-	if err := cache.SaveServices(t.Context(), host, "", []protocol.ServiceInfo{service}); err != nil {
+	if _, err := cache.SaveServices(t.Context(), host, "", []protocol.ServiceInfo{service}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cache.Close(); err != nil {

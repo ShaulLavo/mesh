@@ -60,7 +60,7 @@ func TestGrantAcknowledgedDuplicatesPublishOnce(t *testing.T) {
 	probe := new(grantPublicationProbe)
 	var first os.FileInfo
 	for turn := range 4 {
-		changed, err := changeDeviceWithPublisher(state, id, true, probe.publish)
+		changed, err := changeDeviceWithPublisher(t.Context(), state, id, true, probe.publish)
 		if err != nil || changed != (turn == 0) {
 			t.Fatalf("turn %d: changed=%v, error=%v", turn, changed, err)
 		}
@@ -83,7 +83,7 @@ func TestGrantAcknowledgedDuplicatesPublishOnce(t *testing.T) {
 
 func TestGrantFailedDirectoryNeverAcknowledgesVisiblePolicy(t *testing.T) {
 	state, id := t.TempDir(), grantActor(t)
-	if err := ApproveDevice(state, id); err != nil {
+	if err := ApproveDevice(t.Context(), state, id); err != nil {
 		t.Fatal(err)
 	}
 	old := grantBytes(t, state, "authorized_keys")
@@ -95,7 +95,7 @@ func TestGrantFailedDirectoryNeverAcknowledgesVisiblePolicy(t *testing.T) {
 	probe := &grantPublicationProbe{directoryError: cause}
 	other := grantActor(t)
 	for turn := range 2 {
-		changed, err := changeDeviceWithPublisher(state, other, true, probe.publish)
+		changed, err := changeDeviceWithPublisher(t.Context(), state, other, true, probe.publish)
 		if changed || !errors.Is(err, cause) {
 			t.Fatalf("turn %d: changed=%v, error=%v", turn, changed, err)
 		}
@@ -109,14 +109,14 @@ func TestGrantFailedDirectoryNeverAcknowledgesVisiblePolicy(t *testing.T) {
 	if probe.files != 2 || probe.directories != 2 {
 		t.Fatal("equal independent call skipped failed directory barrier")
 	}
-	if changed, err := ApproveDeviceChanged(state, other); changed || err != nil {
+	if changed, err := ApproveDeviceChanged(t.Context(), state, other); changed || err != nil {
 		t.Fatalf("settlement changed=%v, error=%v", changed, err)
 	}
 }
 
 func TestGrantFailedABACannotReuseOldAcknowledgement(t *testing.T) {
 	state, id := t.TempDir(), grantActor(t)
-	if err := ApproveDevice(state, id); err != nil {
+	if err := ApproveDevice(t.Context(), state, id); err != nil {
 		t.Fatal(err)
 	}
 	original := grantBytes(t, state, "authorized_keys")
@@ -135,7 +135,7 @@ func TestGrantFailedABACannotReuseOldAcknowledgement(t *testing.T) {
 		id      string
 		approve bool
 	}{{other, true}, {other, false}, {id, true}} {
-		changed, err := changeDeviceWithPublisher(state, operation.id, operation.approve, probe.publish)
+		changed, err := changeDeviceWithPublisher(t.Context(), state, operation.id, operation.approve, probe.publish)
 		if changed || !errors.Is(err, cause) {
 			t.Fatalf("changed=%v, error=%v", changed, err)
 		}
@@ -149,7 +149,7 @@ func TestGrantFailedABACannotReuseOldAcknowledgement(t *testing.T) {
 	if probe.directories != 3 || !bound() {
 		t.Fatal("A-B-A skipped publication or retired surviving grant")
 	}
-	if changed, err := ApproveDeviceChanged(state, id); changed || err != nil {
+	if changed, err := ApproveDeviceChanged(t.Context(), state, id); changed || err != nil {
 		t.Fatalf("settlement changed=%v, error=%v", changed, err)
 	}
 }
@@ -172,7 +172,7 @@ func TestGrantReceiptMissRepublishesUnchangedPolicy(t *testing.T) {
 func checkGrantReceiptMiss(t *testing.T, kind string) {
 	t.Helper()
 	state, id := t.TempDir(), grantActor(t)
-	if err := ApproveDevice(state, id); err != nil {
+	if err := ApproveDevice(t.Context(), state, id); err != nil {
 		t.Fatal(err)
 	}
 	original := grantBytes(t, state, "authorized_keys")
@@ -182,7 +182,7 @@ func checkGrantReceiptMiss(t *testing.T, kind string) {
 		t.Fatal(err)
 	}
 	probe := new(grantPublicationProbe)
-	changed, err := changeDeviceWithPublisher(state, id, true, probe.publish)
+	changed, err := changeDeviceWithPublisher(t.Context(), state, id, true, probe.publish)
 	if changed || err != nil {
 		t.Fatalf("changed=%v, error=%v", changed, err)
 	}
@@ -197,7 +197,7 @@ func checkGrantReceiptMiss(t *testing.T, kind string) {
 		t.Fatal(err)
 	}
 	pinGrantPolicy(t, state)
-	changed, err = changeDeviceWithPublisher(state, id, true, probe.publish)
+	changed, err = changeDeviceWithPublisher(t.Context(), state, id, true, probe.publish)
 	after, statErr := os.Stat(filepath.Join(state, "authorized_keys"))
 	if changed || err != nil || statErr != nil || !os.SameFile(current, after) || probe.files != 1 {
 		t.Fatalf("acknowledged no-op: changed=%v, error=%v, stat=%v, files=%d", changed, err, statErr, probe.files)
@@ -211,7 +211,7 @@ func TestGrantMissingPolicyCannotUseEmptyReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	probe := new(grantPublicationProbe)
-	changed, err := changeDeviceWithPublisher(state, id, false, probe.publish)
+	changed, err := changeDeviceWithPublisher(t.Context(), state, id, false, probe.publish)
 	if changed || err != nil {
 		t.Fatalf("changed=%v, error=%v", changed, err)
 	}
@@ -229,7 +229,7 @@ func TestGrantMatchingReceiptStillValidatesPolicy(t *testing.T) {
 func checkGrantInvalidReceiptPolicy(t *testing.T, kind string) {
 	t.Helper()
 	state, id := t.TempDir(), grantActor(t)
-	if err := ApproveDevice(state, id); err != nil {
+	if err := ApproveDevice(t.Context(), state, id); err != nil {
 		t.Fatal(err)
 	}
 	policy := grantBytes(t, state, "authorized_keys")
@@ -265,7 +265,7 @@ func checkGrantInvalidReceiptPolicy(t *testing.T, kind string) {
 		}
 	}
 	probe := new(grantPublicationProbe)
-	if changed, err := changeDeviceWithPublisher(state, id, true, probe.publish); changed || err == nil {
+	if changed, err := changeDeviceWithPublisher(t.Context(), state, id, true, probe.publish); changed || err == nil {
 		t.Fatalf("changed=%v, error=%v", changed, err)
 	}
 	if probe.files != 0 {
@@ -275,16 +275,16 @@ func checkGrantInvalidReceiptPolicy(t *testing.T, kind string) {
 
 func TestGrantMatchingReceiptStillTakesWriterLock(t *testing.T) {
 	state, id := t.TempDir(), grantActor(t)
-	if err := ApproveDevice(state, id); err != nil {
+	if err := ApproveDevice(t.Context(), state, id); err != nil {
 		t.Fatal(err)
 	}
-	lock, err := openGrantWriter(state)
+	lock, err := openGrantWriterContext(t.Context(), state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = lock.Close() }()
 	probe := new(grantPublicationProbe)
-	changed, err := changeDeviceWithPublisher(state, id, true, probe.publish)
+	changed, err := changeDeviceWithPublisher(t.Context(), state, id, true, probe.publish)
 	if changed || !errors.Is(err, syscall.EWOULDBLOCK) {
 		t.Fatalf("changed=%v, error=%v", changed, err)
 	}
@@ -302,7 +302,7 @@ func TestGrantPublicationFailuresPreserveUnacknowledgedState(t *testing.T) {
 func checkGrantPublicationFailure(t *testing.T, phase string) {
 	t.Helper()
 	state, id := t.TempDir(), grantActor(t)
-	if err := ApproveDevice(state, id); err != nil {
+	if err := ApproveDevice(t.Context(), state, id); err != nil {
 		t.Fatal(err)
 	}
 	old := grantBytes(t, state, "authorized_keys")
@@ -312,7 +312,7 @@ func checkGrantPublicationFailure(t *testing.T, phase string) {
 	}
 	root := grantFixtureRoot(t, state)
 	t.Cleanup(func() { _ = root.Chmod(".", 0700) })
-	changed, err := changeDeviceWithPublisher(state, grantActor(t), true, publisher)
+	changed, err := changeDeviceWithPublisher(t.Context(), state, grantActor(t), true, publisher)
 	if phase == "directory-open" {
 		_ = root.Chmod(".", 0700)
 	}
@@ -412,7 +412,7 @@ func checkGrantLateCancellation(t *testing.T, fail bool) {
 	if fail {
 		probe.directoryError = cause
 	}
-	changed, err := changeDeviceWithPublisher(state, id, true, func(state, path string, next []byte) error {
+	changed, err := changeDeviceWithPublisher(t.Context(), state, id, true, func(state, path string, next []byte) error {
 		cancel()
 		return probe.publish(state, path, next)
 	})

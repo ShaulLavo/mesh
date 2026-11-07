@@ -79,4 +79,37 @@ assert managed("status") == []
 assert not (other / "mesh").exists()
 assert not (state / "identity.key").exists()
 assert not (state / "daemon.sock").exists()
-print("skill installation: PASS (isolated roots, exact bytes, two registrations, retained edits)")
+registry = config / "skills.json"
+empty_registry = registry.read_bytes()
+registry.write_text("{", encoding="utf-8")
+refused = json.loads(invoke("skill", "install", "--dir", str(other), "--json", code=1))
+assert refused["errors"][0]["code"] == "state.unavailable", refused
+assert not (other / "mesh").exists()
+registry.write_text(json.dumps({"version": 1, "roots": [
+    {"path": str(scratch / ("registered-" + str(index))),
+     "installedAt": "2026-11-07T00:00:00Z"} for index in range(32)
+]}), encoding="utf-8")
+rows = managed("install", other, code=3)
+assert rows[0]["state"] == "current" and not rows[0]["registered"], rows
+assert rows[0]["problems"][0]["code"] == "state.unavailable", rows
+installed = (other / "mesh/SKILL.md").read_bytes()
+registry.write_bytes(empty_registry)
+assert managed("install", other)[0]["registered"]
+assert (other / "mesh/SKILL.md").read_bytes() == installed
+
+manifest_path = other / "mesh/.mesh-skill.json"
+valid_manifest = manifest_path.read_bytes()
+broken_manifest = json.loads(valid_manifest)
+broken_manifest["files"][0]["path"] = "../outside"
+manifest_path.write_text(json.dumps(broken_manifest), encoding="utf-8")
+outside = other / "outside"
+outside.write_text("preserve outside bytes\n", encoding="utf-8")
+for action in ("update", "uninstall"):
+    refused = json.loads(invoke("skill", action, "--dir", str(other), "--json", code=2))
+    assert refused["errors"][0]["code"] == "skill.unsafe_path", refused
+    assert outside.read_text() == "preserve outside bytes\n"
+    assert (other / "mesh/SKILL.md").read_bytes() == installed
+manifest_path.write_bytes(valid_manifest)
+managed("uninstall", other)
+assert managed("status") == []
+print("skill installation: PASS (exact bytes, retained edits, registry retry, unsafe manifest refusal)")

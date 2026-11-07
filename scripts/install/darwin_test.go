@@ -161,7 +161,7 @@ func approveDarwinFixture(t *testing.T, state, id string, keyChanged bool) {
 		}
 		id = other.ID
 	}
-	if err := identity.ApproveDevice(state, id); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, id); err != nil {
 		t.Fatal(err)
 	}
 }

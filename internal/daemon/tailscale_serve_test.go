@@ -144,7 +144,7 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 	}
 	options.validateServeAddresses = func([]string) error { return nil }
 	options.verifyServeForward = func(context.Context, uint16) error { return nil }
-	options.runCommand = func(_ context.Context, name string, arguments ...string) ([]byte, error) {
+	options.runCommand = func(ctx context.Context, name string, arguments ...string) ([]byte, error) {
 		if name != "tailscale" || !reflect.DeepEqual(arguments, []string{"serve", "--bg", "--yes", "--tcp=443", fmt.Sprintf("tcp://127.0.0.1:%d", httpsPort)}) {
 			return nil, fmt.Errorf("unexpected command %s %#v", name, arguments)
 		}
@@ -165,8 +165,8 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 			}
 		}
 		if err == nil {
-			probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-			privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(t, stateDir))
+			probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+			privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(probeCtx, t, stateDir))
 			cancel()
 			if probeErr != nil {
 				err = probeErr
@@ -195,8 +195,8 @@ func TestRunConfiguresTailscaleServeAfterLocalListenersAreReady(t *testing.T) {
 	}
 	deadline := time.Now().Add(runtimeTestTimeout)
 	for {
-		probeCtx, probeCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-		privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(t, stateDir))
+		probeCtx, probeCancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+		privateName, probeErr := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(probeCtx, t, stateDir))
 		probeCancel()
 		if probeErr == nil && privateName == "pc.mesh.mesh.test" {
 			break
@@ -223,9 +223,9 @@ func TestRunFailsWhenTailscaleServeVerificationFails(t *testing.T) {
 	}
 	options.validateServeAddresses = func([]string) error { return nil }
 	options.runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
-	options.verifyServeForward = func(context.Context, uint16) error {
-		probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		privateName, err := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(t, stateDir))
+	options.verifyServeForward = func(ctx context.Context, _ uint16) error {
+		probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+		privateName, err := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(probeCtx, t, stateDir))
 		cancel()
 		if err != nil {
 			return err
@@ -259,9 +259,9 @@ func TestRunFailsWhenTailscaleServeConfigurationFails(t *testing.T) {
 		return tailnet.Peer{Name: "origin.example.ts.net", Addrs: []string{"127.0.0.1"}}, nil
 	}
 	options.validateServeAddresses = func([]string) error { return nil }
-	options.runCommand = func(context.Context, string, ...string) ([]byte, error) {
-		probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		privateName, err := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(t, stateDir))
+	options.runCommand = func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+		probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+		privateName, err := probeWebSocketPrivateName(probeCtx, controlPort, runtimeDialOptions(probeCtx, t, stateDir))
 		cancel()
 		if err != nil {
 			return nil, err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"sync"
 	"time"
@@ -123,24 +124,25 @@ func observedSessionFacts(row protocol.SessionInfo) storage.SessionFacts {
 	return storage.SessionFacts{Hibernated: Hibernation(row) != nil, RecoveryPending: row.RecoveryPending, Label: row.Label, DetachedAt: cloneTime(row.DetachedAt)}
 }
 
-// Save writes shared rows without certifying pending human/picker details.
-func (c *SQLiteCatalogCache) Save(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) error {
+// Save reports whether shared rows committed, without certifying picker facts.
+// A skipped advisory write returns false without a caller-visible error.
+func (c *SQLiteCatalogCache) Save(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) (bool, error) {
 	return c.saveSessions(ctx, host, rows, false)
 }
 
 // SaveObserved records a complete successful agent session.list observation.
-func (c *SQLiteCatalogCache) SaveObserved(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) error {
+func (c *SQLiteCatalogCache) SaveObserved(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) (bool, error) {
 	return c.saveSessions(ctx, host, rows, true)
 }
 
-func (c *SQLiteCatalogCache) saveSessions(ctx context.Context, host HostRecord, rows []protocol.SessionInfo, complete bool) error {
+func (c *SQLiteCatalogCache) saveSessions(ctx context.Context, host HostRecord, rows []protocol.SessionInfo, complete bool) (bool, error) {
 	if c.store == nil {
-		return c.unavailable(ctx)
+		return false, c.unavailable(ctx)
 	}
 	observed := make([]storage.ObservedSession, len(rows))
 	for i, row := range rows {
 		if row.HostID != host.ID {
-			return fmt.Errorf("host %s listed a session for a different host", HostLabel(host))
+			return false, fmt.Errorf("host %s listed a session for a different host", HostLabel(host))
 		}
 		observed[i].Session = storage.Session{
 			ID:                 storage.SessionID(row.ID),
@@ -158,10 +160,7 @@ func (c *SQLiteCatalogCache) saveSessions(ctx context.Context, host HostRecord, 
 			observed[i].Facts = &facts
 		}
 	}
-	if err := c.store.ReconcileHost(ctx, cachedHost(host, c.now().UTC()), observed); err != nil {
-		return fmt.Errorf("save catalog sessions: %w", err)
-	}
-	return nil
+	return catalogWriteOutcome(ctx, host, "sessions", c.store.ReconcileHost(ctx, cachedHost(host, c.now().UTC()), observed))
 }
 
 // LoadAllServices returns the bounded cached service snapshot keyed by host ID.
@@ -196,16 +195,16 @@ func (c *SQLiteCatalogCache) LoadServices(ctx context.Context, host HostRecord) 
 }
 
 // SaveServices atomically replaces the cached list after a live service.list.
-func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, privateName string, rows []protocol.ServiceInfo) error {
+func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, privateName string, rows []protocol.ServiceInfo) (bool, error) {
 	if c.store == nil {
-		return c.unavailable(ctx)
+		return false, c.unavailable(ctx)
 	}
 	now := c.now().UTC()
 	services := make([]storage.CachedService, len(rows))
 	for index, row := range rows {
 		validated, err := validateRemoteService(row)
 		if err != nil {
-			return fmt.Errorf("cache host %s service: %w", HostLabel(host), err)
+			return false, fmt.Errorf("cache host %s service: %w", HostLabel(host), err)
 		}
 		definition := protocol.ServiceFromInfo(validated)
 		definition.Demand = nil
@@ -215,7 +214,7 @@ func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, 
 			Healthy: validated.Healthy, Problem: validated.Problem, ObservedAt: now,
 		}
 	}
-	return c.store.ReplaceCachedServices(ctx, cachedHost(host, now), services)
+	return catalogWriteOutcome(ctx, host, "services", c.store.ReplaceCachedServices(ctx, cachedHost(host, now), services))
 }
 
 func cachedHost(host HostRecord, observedAt time.Time) storage.Host {
@@ -244,4 +243,18 @@ func cloneInt(value *int) *int {
 	}
 	copy := *value
 	return &copy
+}
+
+func catalogWriteOutcome(ctx context.Context, host HostRecord, operation string, err error) (bool, error) {
+	if err == nil {
+		return true, nil
+	}
+	if ctx.Err() != nil {
+		return false, fmt.Errorf("save catalog %s: %w", operation, ctx.Err())
+	}
+	if errors.Is(err, storage.ErrAdvisoryWriteBusy) {
+		log.Printf("catalog cache: skipped busy %s write for host %q: %v", operation, host.ID, err)
+		return false, nil
+	}
+	return false, fmt.Errorf("save catalog %s: %w", operation, err)
 }

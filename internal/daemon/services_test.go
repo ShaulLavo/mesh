@@ -190,7 +190,7 @@ func TestClientServerHandlesServiceRequestAndResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(context.Background(), client) }()
+	go func() { done <- server.Handle(localServerContext(context.Background()), client) }()
 
 	service := protocol.ServiceInfo{Name: "site", Kind: "files", Target: root}
 	client.pushRead(serverControlFrame(t, protocol.Control{

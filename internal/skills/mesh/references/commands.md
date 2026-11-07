@@ -2,6 +2,71 @@
 
 Generated from the implemented operation registry. Regenerate with `go generate ./internal/skills`.
 
+## mesh device scope keygen
+
+Create a separate metadata credential without enrolling it.
+
+```sh
+mesh device scope keygen --key-dir KEY_DIRECTORY --json
+```
+
+- `--json`: write one agent result.
+- `--key-dir PATH`: explicit dedicated credential directory.
+
+## mesh device scope grant
+
+Grant metadata access on the target's local policy.
+
+```sh
+mesh device scope grant --identity PUBLIC_ID --permissions metadata --expected-revision 0 --json
+```
+
+- `--json`: write one agent result.
+- `--identity ID`: .
+- `--permissions metadata`: .
+- `--expected-revision N`: .
+- `--expires-at TIME`: .
+- `--expires-in D`: .
+
+## mesh device scope revoke
+
+Remove a scoped key from local target policy.
+
+```sh
+mesh device scope revoke --identity PUBLIC_ID --expected-revision 1 --json
+```
+
+- `--json`: write one agent result.
+- `--identity ID`: .
+- `--expected-revision N`: .
+
+## mesh device scope list
+
+Read the local target's scope policy.
+
+```sh
+mesh device scope list --json
+```
+
+- `--json`: write one agent result.
+
+## mesh device scope read
+
+Read a narrow metadata page over explicit-key TLS without fallbacks.
+
+```sh
+mesh device scope read --host HOST_ID --key-dir KEY_DIRECTORY --json
+```
+
+- `--json`: write one agent result.
+- `--host ID`: .
+- `--key-dir PATH`: .
+- `--section SECTION`: .
+- `--session ID`: .
+- `--cursor TOKEN`: .
+- `--limit N`: .
+- `--timeout D`: .
+
 ## mesh serve ls
 
 List live and cached services without opening their URLs.

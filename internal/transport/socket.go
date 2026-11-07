@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/protocol"
 )
 
@@ -28,11 +29,12 @@ type inboundFrame struct {
 }
 
 type socketConn struct {
-	ws      *websocket.Conn
-	stream  io.ReadWriteCloser
-	writeMu sync.Mutex
-	ctx     context.Context
-	cancel  context.CancelFunc
+	ws           *websocket.Conn
+	stream       io.ReadWriteCloser
+	writeMu      sync.Mutex
+	writeCurrent func() bool
+	ctx          context.Context
+	cancel       context.CancelFunc
 	// The close handshake still needs the reader, so writes have their own
 	// cancellation path.
 	writeCtx    context.Context
@@ -90,6 +92,11 @@ func (c *socketConn) WriteFrame(frame protocol.Frame) error {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if c.writeCurrent != nil && !c.writeCurrent() {
+		err := errors.New("transport: scoped grant no longer current")
+		c.fail(err)
+		return err
+	}
 	var writeErr error
 	if c.stream != nil {
 		_, writeErr = c.stream.Write(payload)
@@ -389,5 +396,9 @@ func acceptSocket(w http.ResponseWriter, r *http.Request, opts ServeOptions, kee
 	if err != nil {
 		return nil, AuthenticatedPeer{}, err
 	}
-	return newSecureSocketConn(ws, secure, keepAlive), peer, nil //nolint:contextcheck // sockets own their lifetime after the HTTP upgrade
+	conn := newSecureSocketConn(ws, secure, keepAlive) //nolint:contextcheck // sockets own their lifetime after the HTTP upgrade
+	if peer.grant.Class == access.Scoped {
+		conn.writeCurrent = peer.grant.Current
+	}
+	return conn, peer, nil
 }

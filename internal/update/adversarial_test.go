@@ -17,7 +17,7 @@ func TestTrustIfEmptyNeverOverridesAnExplicitPolicy(t *testing.T) {
 		if err := writeJSON(path, policy); err != nil {
 			t.Fatal(err)
 		}
-		if err := Trust(directory, id, true); err == nil {
+		if err := Trust(t.Context(), directory, id, true); err == nil {
 			t.Fatalf("bootstrap replaced explicit policy %+v", policy)
 		}
 		var after Policy

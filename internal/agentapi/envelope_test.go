@@ -41,6 +41,16 @@ func TestRequestedAndClassification(t *testing.T) {
 		{[]string{"inspect", "HOST_ID", "--json"}, true, "hosts.inspect"},
 		{[]string{"inspect", "--timeout", "--json"}, false, "hosts.inspect"},
 		{[]string{"skill", "nope", "--json"}, true, "skill.status"},
+		{[]string{"skill", "show", "--file", "--json"}, false, "skill.show"},
+		{[]string{"skill", "status", "--dir", "--json"}, false, "skill.status"},
+		{[]string{"skill", "status", "--dir", "--json=false", "--json"}, true, "skill.status"},
+		{[]string{"--dir", "device", "skill", "show"}, false, "skill.show"},
+		{[]string{"device", "scope", "keygen", "--key-dir", "--json"}, false, "scope.keygen"},
+		{[]string{"device", "scope", "grant", "--identity", "--json", "--json"}, true, "scope.grant"},
+		{[]string{"device", "scope", "revoke", "--expected-revision", "--json"}, false, "scope.revoke"},
+		{[]string{"device", "scope", "list", "--json"}, true, "scope.list"},
+		{[]string{"device", "scope", "read", "--section", "--json"}, false, "scope.read"},
+		{[]string{"device", "scope", "read", "--json", "--", "--json=false"}, true, "scope.read"},
 		{[]string{"version", "--json"}, true, ""},
 	} {
 		if got := Requested(test.args); got != test.requested {
