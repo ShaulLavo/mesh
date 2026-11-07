@@ -80,6 +80,23 @@ class DashboardMetricsControlTest(unittest.TestCase):
             producer.reply(None, {"type": "unrelated.control"})
 
 
+class IsolationPolicyPermissionsTest(unittest.TestCase):
+    def test_policy_is_private_under_the_hosted_umask(self):
+        from isolation import prepare_isolation
+        previous = os.umask(0o022)
+        self.addCleanup(os.umask, previous)
+        with tempfile.TemporaryDirectory(prefix="m-policy-mode-") as temporary:
+            root = Path(temporary)
+            owner = SimpleNamespace(root=root, name="policy-mode",
+                                    admission={"isolation": {"script": str(root / "probe.sh"), "bash": "/bin/bash"}})
+            with patch.dict(os.environ, {"HOME": str(root / "caller-home")}, clear=True), patch("isolation.owned_go_environment", return_value={}):
+                _, environment = prepare_isolation(owner)
+            policy = Path(environment["MESH_CONFIG_DIR"]) / "domains.json"
+            self.assertEqual(policy.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(policy.stat().st_nlink, 1)
+            self.assertEqual(json.loads(policy.read_text())["primary"], "mesh.test")
+
+
 class EntryPointContractTest(unittest.TestCase):
     def test_every_script_sources_the_prelude_first(self):
         scripts = Path(__file__).resolve().parents[1].glob("*.sh")
