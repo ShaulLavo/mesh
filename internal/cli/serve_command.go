@@ -362,8 +362,8 @@ func (a *application) runUnserve(cmd *cobra.Command, route, hostID string, timeo
 			remaining = append(remaining, row.Service)
 		}
 	}
-	cacheCtx, cancelCache := context.WithTimeout(cmd.Context(), 200*time.Millisecond)
-	cacheErr := cache.SaveServices(cacheCtx, selected.Host, selected.PrivateName, remaining)
+	cacheCtx, cancelCache := context.WithTimeout(cmd.Context(), serviceCacheWriteTimeout)
+	_, cacheErr := cache.SaveServices(cacheCtx, selected.Host, selected.PrivateName, remaining)
 	cancelCache()
 	if cacheErr != nil {
 		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: service was deleted but the local cache was not updated (%s)\n", serviceDiagnostic(a.privacy, cacheErr.Error())); err != nil {

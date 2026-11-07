@@ -94,7 +94,9 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
       - name: Check private hosting boundary
-        run: scripts/check-private-hosting-boundary.sh
+        run: |
+          python3 scripts/test-private-boundary.py
+          scripts/check-private-hosting-boundary.sh
       - name: Race tests
         run: go test -race ./...
       - name: Integration tests

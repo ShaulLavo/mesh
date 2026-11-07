@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -40,6 +41,7 @@ const (
 	TypeRemove             = "session.remove"
 	TypeLogged             = "session.logged"
 	TypeHostInfo           = "host.info"
+	TypeFleetProfileSync   = "fleet.profile.sync"
 	TypeHostContext        = "host.context"
 	TypeHostContextResult  = "host.context.result"
 	TypeHostRename         = "host.rename"
@@ -371,6 +373,11 @@ func DecodeControl(payload []byte) (Control, error) {
 	if err := json.Unmarshal(payload, &c); err != nil {
 		return c, fmt.Errorf("protocol: decode control: %w", err)
 	}
+	if c.Type == TypeFleetProfileSync {
+		if err := validateFleetSyncPayload(payload); err != nil {
+			return c, err
+		}
+	}
 	if c.Type == "" {
 		return c, fmt.Errorf("protocol: control message without type")
 	}
@@ -384,4 +391,17 @@ func (fw *Writer) WriteControlMsg(c Control) error {
 		return err
 	}
 	return fw.WriteControl(b)
+}
+
+func validateFleetSyncPayload(payload []byte) error {
+	var signal struct {
+		Type      string `json:"type"`
+		RequestID string `json:"requestId,omitempty"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&signal); err != nil {
+		return fmt.Errorf("protocol: fleet profile sync accepts no payload: %w", err)
+	}
+	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/shaul/mesh/internal/hostprofile"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
@@ -16,10 +17,11 @@ import (
 )
 
 type updateController struct {
-	stateDir    string
-	id          string
-	coordinator *update.Coordinator
-	authority   *update.Authority
+	stateDir     string
+	id           string
+	coordinator  *update.Coordinator
+	authority    *update.Authority
+	fleetProfile *fleetProfileController
 }
 
 func executingBuild() *release.Build { build := release.Current(); return &build }
@@ -45,6 +47,11 @@ func (u *updateController) HandleControl(ctx context.Context, request protocol.C
 
 func (u *updateController) handle(ctx context.Context, action string, data json.RawMessage) (any, error) {
 	switch action {
+	case hostprofile.ActionFleetPut:
+		if u.fleetProfile == nil {
+			return nil, errors.New("fleet profile controller unavailable")
+		}
+		return u.fleetProfile.Put(ctx, data)
 	case "info":
 		return u.info(ctx)
 	case "runs":

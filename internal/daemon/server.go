@@ -32,6 +32,7 @@ type clientServer struct {
 	apps         controlHandler
 	fleet        controlHandler
 	context      controlHandler
+	fleetProfile controlHandler
 }
 
 type controlHandler interface {
@@ -132,6 +133,9 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		}
 		if !lifecycleHandled && s.fleet != nil {
 			response, lifecycleHandled, requestErr = s.fleet.HandleControl(ctx, request)
+		}
+		if !lifecycleHandled && s.fleetProfile != nil {
+			response, lifecycleHandled, requestErr = s.fleetProfile.HandleControl(ctx, request)
 		}
 		if !lifecycleHandled && s.context != nil {
 			response, lifecycleHandled, requestErr = s.context.HandleControl(ctx, request)

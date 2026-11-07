@@ -1785,6 +1785,7 @@ func (a *application) daemonCommand() *cobra.Command {
 			}
 			return runManagedDaemon(cmd.Context(), meshdaemon.Config{
 				ConfigDir:              sharing.Directory,
+				FleetMembershipPath:    filepath.Join(sharing.Directory, "fleet.json"),
 				FleetShare:             sharing,
 				SSHSessionHandler:      a.dependencies.SSHSessionHandler,
 				WakePeerIdentity:       configuredWakeIdentity,

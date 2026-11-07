@@ -247,11 +247,11 @@ func TestAgentSessionCacheHumanAndPendingPickerWrites(t *testing.T) {
 	bad := rows[2]
 	negative := time.UnixMilli(-1)
 	bad.Label, bad.DetachedAt = strings.Repeat("x", 4097), &negative
-	if err := cache.Save(t.Context(), host, []protocol.SessionInfo{bad}); err != nil {
+	if _, err := cache.Save(t.Context(), host, []protocol.SessionInfo{bad}); err != nil {
 		t.Fatal("human Save acquired advisory validation", err)
 	}
 	assertCacheUnavailable(t, host)
-	if err := cache.SaveObserved(t.Context(), host, rows); err != nil {
+	if _, err := cache.SaveObserved(t.Context(), host, rows); err != nil {
 		t.Fatal(err)
 	}
 	pending := rows[0]

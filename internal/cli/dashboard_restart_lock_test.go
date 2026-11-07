@@ -34,7 +34,7 @@ func TestDashboardRestartRecoversAfterInstallationLockSettlement(t *testing.T) {
 				t.Fatal("handoff before terminal cleanup")
 			}
 			// The healthy receipt is visible while the real updater lock remains held.
-			handoff, cancel := context.WithTimeout(ctx, 40*time.Millisecond)
+			handoff, cancel := dashboardInstallationHandoffContext(ctx, "settled", attempts, 40*time.Millisecond)
 			defer cancel()
 			err := updateinstall.WithCommittedExecutable(handoff, root, "local", selected, func(installed string) error {
 				executions++
@@ -279,12 +279,23 @@ func TestDashboardInstallationLockRetryBoundsAndRevalidation(t *testing.T) {
 	}
 }
 
-// Callback errors use the existing handoff bound after lock acquisition settles.
+// Settled lock acquisitions use the existing handoff bound for verification and exec.
 func dashboardInstallationHandoffContext(ctx context.Context, scenario string, attempts int, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if attempts != 2 || (scenario != "exec-failure" && scenario != "exec-deadline") {
+	if attempts != 2 || (scenario != "settled" && scenario != "exec-failure" && scenario != "exec-deadline") {
 		return context.WithTimeout(ctx, timeout)
 	}
 	return ctx, func() {}
+}
+
+func TestDashboardInstallationSettledHandoffKeepsDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), dashboardSettlementTimeout)
+	defer cancel()
+	want, _ := ctx.Deadline()
+	handoff, stop := dashboardInstallationHandoffContext(ctx, "settled", 2, 40*time.Millisecond)
+	defer stop()
+	if got, ok := handoff.Deadline(); !ok || !got.Equal(want) {
+		t.Fatalf("settled fixture replaced inherited deadline: got %v, want %v", got, want)
+	}
 }
 
 func TestDashboardRestartHandoffHasOneBoundedSettlementRetry(t *testing.T) {

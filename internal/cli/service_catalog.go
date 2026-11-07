@@ -16,14 +16,14 @@ const (
 	maximumConcurrentServiceQueries = 16
 
 	maximumConcurrentCacheWrites = 4
-	serviceCacheWriteTimeout     = 200 * time.Millisecond
+	serviceCacheWriteTimeout     = catalogCacheWriteTimeout
 )
 
 type serviceQuery func(context.Context, HostRecord) (remoteServiceSnapshot, error)
 
 type serviceCatalogCache interface {
 	LoadAllServices(context.Context) (map[string][]storage.CachedService, error)
-	SaveServices(context.Context, HostRecord, string, []protocol.ServiceInfo) error
+	SaveServices(context.Context, HostRecord, string, []protocol.ServiceInfo) (bool, error)
 }
 
 // ServiceCatalogRow is one live or cached private service definition.
@@ -170,7 +170,7 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 					return
 				}
 				cacheCtx, cacheCancel := context.WithTimeout(operationCtx, serviceCacheWriteTimeout)
-				cacheErr := cache.SaveServices(cacheCtx, host, privateName, services)
+				_, cacheErr := cache.SaveServices(cacheCtx, host, privateName, services)
 				cacheCancel()
 				<-cacheSemaphore
 				select {

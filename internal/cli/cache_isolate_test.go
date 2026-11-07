@@ -21,7 +21,7 @@ func checkCachedServiceIsolation(t *testing.T, host HostRecord, isolated bool) {
 		t.Fatal(err)
 	}
 	rows := []protocol.ServiceInfo{{Name: "app", Kind: "proxy", Target: "3000", PrivateHost: "fregat.mesh.test", Isolate: isolated, Healthy: true}}
-	if err := cache.SaveServices(t.Context(), host, "", rows); err != nil {
+	if _, err := cache.SaveServices(t.Context(), host, "", rows); err != nil {
 		_ = cache.Close()
 		t.Fatal(err)
 	}
