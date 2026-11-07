@@ -63,7 +63,7 @@ type agentSessionSnapshot struct {
 }
 
 func (a *application) sessionCommand() *cobra.Command {
-	group := &cobra.Command{Use: "session", Short: "Read sessions without attaching or starting work", RunE: func(_ *cobra.Command, _ []string) error {
+	group := &cobra.Command{Use: "session", Short: "Read sessions and run keyed detached commands", RunE: func(_ *cobra.Command, _ []string) error {
 		return agentapi.Usage(agentSessionsList, "Choose mesh session list or inspect.")
 	}, PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 		private, err := cmd.Flags().GetBool("privacy")
@@ -76,7 +76,7 @@ func (a *application) sessionCommand() *cobra.Command {
 		return nil
 	}}
 	group.Flags().Bool("json", false, "write one agent result")
-	group.AddCommand(a.sessionListCommand(), a.sessionInspectCommand())
+	group.AddCommand(a.sessionListCommand(), a.sessionInspectCommand(), a.sessionCreateCommand(), a.sessionRequestCommand())
 	return group
 }
 

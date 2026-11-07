@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "operation": "sessions.request",
+  "status": "partial",
+  "requestId": "01JA0000000000000000000000",
+  "data": {
+    "hostId": "host",
+    "sessionId": "7K3D",
+    "instance": "0123456789abcdef0123456789abcdef",
+    "requestKey": "job",
+    "keyScope": "local-account",
+    "kind": "pty",
+    "phase": "uncertain",
+    "acceptance": "durable",
+    "launchOutcome": "unknown",
+    "publication": "pending",
+    "removal": "present",
+    "receiptRetainUntil": null,
+    "result": null
+  },
+  "errors": [
+    {
+      "code": "request.outcome_unknown",
+      "message": "Launch outcome is unknown.",
+      "operation": "sessions.request",
+      "target": "host",
+      "retryable": false
+    }
+  ]
+}

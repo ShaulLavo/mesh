@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "operation": "sessions.create",
+  "status": "ok",
+  "requestId": "01JA0000000000000000000000",
+  "data": {
+    "hostId": "host",
+    "sessionId": "7K3D",
+    "instance": "0123456789abcdef0123456789abcdef",
+    "requestKey": "job",
+    "keyScope": "local-account",
+    "kind": "pty",
+    "phase": "terminal",
+    "acceptance": "durable",
+    "launchOutcome": "started",
+    "publication": "published",
+    "removal": "present",
+    "receiptRetainUntil": "2026-12-07T10:00:00Z",
+    "result": {
+      "termination": {
+        "kind": "exit",
+        "code": 7,
+        "signal": null
+      },
+      "endedAt": "2026-11-07T10:00:00Z",
+      "capture": "not_recorded"
+    }
+  },
+  "errors": []
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/updategate"
 )
 
@@ -27,7 +28,8 @@ const (
 // LaunchConfig describes a detached worker process. SessionsDir is explicit so
 // daemon tests and recovery-mode clients can use the same launcher safely.
 type LaunchConfig struct {
-	ReservedID     string
+	Reservation    *session.Reservation
+	Execution      *execution.Binding
 	RecoveredFrom  string
 	SessionsDir    string
 	HostID         string
@@ -66,11 +68,11 @@ func (e *StartedError) Unwrap() error { return e.Err }
 // readiness. The worker is deliberately not supervised by the caller.
 func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 	if err := updategate.Check(filepath.Dir(cfg.SessionsDir)); err != nil {
-		return Launched{}, err
+		return Launched{}, workerExecutionError("launch.go LaunchDetached", err)
 	}
 	started := false
 	defer func() {
-		if cfg.ReservedID != "" && !started && launchErr != nil {
+		if cfg.Reservation != nil && !started && launchErr != nil {
 			launchErr = &recovery.LaunchFailure{Err: launchErr}
 		}
 	}()
@@ -105,12 +107,23 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 		return Launched{}, fmt.Errorf("launch worker: create sessions directory: %w", err)
 	}
 
+	if cfg.Reservation == nil {
+		purpose := session.Generic
+		if cfg.Label != "" || cfg.Owner != "" {
+			purpose = session.Managed
+		}
+		ref, err := Reserve(cfg.SessionsDir, purpose)
+		if err != nil {
+			return Launched{}, err
+		}
+		cfg.Reservation = &ref
+	}
 	id, dir, err := launchSessionDir(cfg)
 	if err != nil {
 		return Launched{}, err
 	}
 	cfg.Env = withSessionIdentity(cfg.Env, cfg.HostID, id)
-	cleanupReserved := cfg.ReservedID == ""
+	cleanupReserved := cfg.Reservation.Purpose != session.Recovery && cfg.Reservation.Purpose != session.Execution
 	defer func() {
 		if cleanupReserved {
 			launchErr = errors.Join(launchErr, cleanupLaunchReservation(dir, cfg.Owner != ""))
@@ -134,6 +147,10 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 		"--dir", dir,
 		"--cols", fmt.Sprint(cfg.Cols),
 		"--rows", fmt.Sprint(cfg.Rows),
+		"--instance", cfg.Reservation.Instance, "--boot", cfg.Reservation.BootID, "--purpose", string(cfg.Reservation.Purpose),
+	}
+	if cfg.Execution != nil {
+		args = append(args, "--request-hash", cfg.Execution.RequestHash, "--launch-digest", cfg.Execution.LaunchDigest)
 	}
 	if cfg.RecoveredFrom != "" {
 		args = append(args, "--recovered-from", cfg.RecoveredFrom)
@@ -173,56 +190,25 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 }
 
 func launchSessionDir(cfg LaunchConfig) (string, string, error) {
-	if cfg.ReservedID == "" {
-		return reserveSessionDir(cfg.SessionsDir)
+	if cfg.Reservation == nil {
+		return "", "", fmt.Errorf("launch worker: exact reservation required")
 	}
-	id, err := session.ParseID(cfg.ReservedID)
-	if err != nil || id != cfg.ReservedID {
-		return "", "", fmt.Errorf("launch worker: invalid reserved session ID %q", cfg.ReservedID)
-	}
-	dir := filepath.Join(cfg.SessionsDir, id)
-	if _, err := os.Lstat(paths.Launching(dir)); err != nil {
-		return "", "", fmt.Errorf("launch worker %s: read reservation: %w", id, err)
-	}
-	if err := validateReservedMetadata(dir, id); err != nil {
+	ref := *cfg.Reservation
+	if err := validateReservation(cfg.SessionsDir, ref); err != nil {
 		return "", "", err
 	}
-	return id, dir, nil
-}
-
-func validateReservedMetadata(dir, id string) error {
-	meta, err := ReadMeta(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+	if (ref.Purpose == session.Execution) != (cfg.Execution != nil) {
+		return "", "", fmt.Errorf("launch worker: reservation purpose mismatch")
 	}
-	if err != nil {
-		return fmt.Errorf("launch worker %s: read reserved metadata: %w", id, err)
-	}
-	boot := BootID()
-	if meta.ID == id && meta.BootID != "" && boot != "" && meta.BootID != boot {
-		return nil
-	}
-	return fmt.Errorf("launch worker %s: reserved directory already contains current metadata", id)
-}
-
-func reserveSessionDir(root string) (string, string, error) {
-	for range sessionIDAttempts {
-		id, err := session.NewID()
-		if err != nil {
-			return "", "", err
+	dir := filepath.Join(cfg.SessionsDir, ref.ID)
+	if meta, err := ReadMeta(dir); err == nil {
+		if ref.Purpose != session.Recovery || meta.BootID == "" || meta.BootID == ref.BootID {
+			return "", "", fmt.Errorf("launch worker: reservation already published")
 		}
-		dir := filepath.Join(root, id)
-		if err := os.Mkdir(dir, 0o700); err == nil {
-			if err := os.WriteFile(paths.Launching(dir), nil, 0o600); err != nil {
-				_ = os.Remove(dir)
-				return "", "", fmt.Errorf("launch worker %s: mark reserved session directory: %w", id, err)
-			}
-			return id, dir, nil
-		} else if !os.IsExist(err) {
-			return "", "", fmt.Errorf("launch worker %s: create session directory: %w", id, err)
-		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", "", err
 	}
-	return "", "", fmt.Errorf("launch worker: could not reserve a session ID after %d attempts", sessionIDAttempts)
+	return ref.ID, dir, nil
 }
 
 func waitForWorker(dir string, timeout time.Duration, process *os.Process) error {
@@ -260,6 +246,8 @@ func cleanupLaunchReservation(dir string, owned bool) error {
 	if !owned {
 		_ = os.Remove(paths.Launching(dir))
 		_ = os.Remove(paths.Log(dir))
+		_ = os.Remove(filepath.Join(dir, ".reservation"))
+		_ = os.Remove(filepath.Join(dir, ".barrier"))
 		if err := os.Remove(dir); err != nil {
 			return fmt.Errorf("remove reserved directory: %w", err)
 		}
@@ -271,7 +259,7 @@ func cleanupLaunchReservation(dir string, owned bool) error {
 	}
 	defer func() { _ = root.Close() }()
 	var errs []error
-	for _, name := range []string{".owner", ".launching", "worker.log"} {
+	for _, name := range []string{".owner", ".launching", ".reservation", ".barrier", "worker.log"} {
 		if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 		}

@@ -42,7 +42,7 @@ func (r RecoveryRuntime) Inspect(ctx context.Context, id string) (recovery.Sourc
 	if meta.ID != id {
 		return recovery.Source{}, fmt.Errorf("session %s: metadata belongs to %s", id, meta.ID)
 	}
-	source := recovery.Source{ID: id, State: meta.State, Cwd: meta.Cwd, BootID: meta.BootID, RecoveredFrom: meta.RecoveredFrom, Command: meta.Command, Shell: r.shell(), Published: true}
+	source := recovery.Source{Reservation: meta.Reservation, ID: id, State: meta.State, Cwd: meta.Cwd, BootID: meta.BootID, RecoveredFrom: meta.RecoveredFrom, Command: meta.Command, Shell: r.shell(), Published: true}
 	if saved, err := recovery.Read(dir); err == nil && saved.HostID == r.HostID && saved.SessionID == id {
 		source.AgentResume = saved.AgentResume
 	}
@@ -132,7 +132,7 @@ func (r RecoveryRuntime) Launch(_ context.Context, launch recovery.Launch) error
 		}
 		launch.Command = []string{executable, "agent-resume"}
 	}
-	_, err := LaunchDetached(LaunchConfig{SessionsDir: r.SessionsDir, HostID: r.HostID, Executable: r.Executable, Env: r.Env, ReservedID: launch.ID, RecoveredFrom: launch.SourceID, Command: launch.Command, Cwd: launch.Cwd, Cols: launch.Cols, Rows: launch.Rows, Term: launch.Term, Depth: launch.Depth})
+	_, err := LaunchDetached(LaunchConfig{SessionsDir: r.SessionsDir, HostID: r.HostID, Executable: r.Executable, Env: r.Env, Reservation: &launch.Reservation, RecoveredFrom: launch.SourceID, Command: launch.Command, Cwd: launch.Cwd, Cols: launch.Cols, Rows: launch.Rows, Term: launch.Term, Depth: launch.Depth})
 	return err
 }
 
@@ -185,4 +185,17 @@ func (r RecoveryRuntime) shell() string {
 		return shell
 	}
 	return "/bin/sh"
+}
+
+func (r RecoveryRuntime) Reserve(ctx context.Context) (session.Reservation, error) {
+	if err := ctx.Err(); err != nil {
+		return session.Reservation{}, workerExecutionError("recovery_runtime.go Reserve", err)
+	}
+	return Reserve(r.SessionsDir, session.Recovery)
+}
+func (r RecoveryRuntime) Renew(ctx context.Context, ref session.Reservation) (session.Reservation, error) {
+	if err := ctx.Err(); err != nil {
+		return ref, workerExecutionError("recovery_runtime.go Renew", err)
+	}
+	return RenewRecovery(r.SessionsDir, ref)
 }

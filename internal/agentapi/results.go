@@ -208,3 +208,31 @@ type SkillRoot struct {
 type SkillResult struct {
 	Roots []SkillRoot `json:"roots"`
 }
+
+type ExecutionTermination struct {
+	Kind   string `json:"kind"`
+	Code   *int   `json:"code"`
+	Signal *int   `json:"signal"`
+	Reason string `json:"reason,omitempty"`
+}
+type ExecutionResult struct {
+	Termination ExecutionTermination `json:"termination"`
+	EndedAt     *time.Time           `json:"endedAt"`
+	Capture     string               `json:"capture"`
+}
+type ExecutionReceipt struct {
+	HostID             string           `json:"hostId"`
+	SessionID          string           `json:"sessionId"`
+	Instance           string           `json:"instance"`
+	RequestKey         string           `json:"requestKey"`
+	KeyScope           string           `json:"keyScope"`
+	Kind               string           `json:"kind"`
+	Phase              string           `json:"phase"`
+	Acceptance         string           `json:"acceptance"`
+	LaunchOutcome      string           `json:"launchOutcome"`
+	Publication        string           `json:"publication"`
+	Removal            string           `json:"removal"`
+	ReceiptRetainUntil *time.Time       `json:"receiptRetainUntil"`
+	RetentionReason    string           `json:"retentionReason,omitempty"`
+	Result             *ExecutionResult `json:"result"`
+}

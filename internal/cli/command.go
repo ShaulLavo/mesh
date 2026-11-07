@@ -29,6 +29,7 @@ import (
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/update"
@@ -1822,7 +1823,7 @@ func (a *application) daemonCommand() *cobra.Command {
 }
 
 func (a *application) workerCommand() *cobra.Command {
-	var recoveredFrom, label string
+	var recoveredFrom, label, instance, boot, purpose, requestHash, launchDigest string
 	var (
 		id   string
 		dir  string
@@ -1837,13 +1838,21 @@ func (a *application) workerCommand() *cobra.Command {
 			if id == "" || dir == "" {
 				return errors.New("session-worker requires --id and --dir")
 			}
+			ref := session.Reservation{ID: id, Instance: instance, BootID: boot, Purpose: session.Purpose(purpose)}
+			if err := ref.Validate(); err != nil {
+				return executionBoundaryError("command.go workerCommand", err)
+			}
+			var binding *execution.Binding
+			if requestHash != "" || launchDigest != "" {
+				binding = &execution.Binding{Host: os.Getenv(worker.MeshHostIDVariable), Reservation: ref, RequestHash: requestHash, LaunchDigest: launchDigest}
+			}
 			worker.HoldTerminationSignals()
 			// Before the emulator and ring allocate.
 			worker.TuneProcess()
 			worker.IsolateSession(id)
 			cwd, _ := os.Getwd()
 			code, err := worker.Run(worker.Config{
-				ID: id, Dir: dir, Command: command, Cwd: cwd, Env: os.Environ(),
+				ID: id, Dir: dir, Command: command, Cwd: cwd, Env: os.Environ(), Reservation: &ref, Execution: binding,
 				// A labelled session was started by the daemon for a purpose,
 				// not for someone about to attach, so nobody is coming to see
 				// its exit and holding it would only delay the report.
@@ -1851,7 +1860,7 @@ func (a *application) workerCommand() *cobra.Command {
 				Label: label,
 			})
 			if err != nil {
-				return err
+				return executionBoundaryError("command.go workerCommand", err)
 			}
 			if code != 0 {
 				return statusError{code: code}
@@ -1859,6 +1868,11 @@ func (a *application) workerCommand() *cobra.Command {
 			return nil
 		},
 	}
+	command.Flags().StringVar(&instance, "instance", "", "exact launch instance")
+	command.Flags().StringVar(&boot, "boot", "", "reservation boot")
+	command.Flags().StringVar(&purpose, "purpose", "", "reservation purpose")
+	command.Flags().StringVar(&requestHash, "request-hash", "", "durable request reference")
+	command.Flags().StringVar(&launchDigest, "launch-digest", "", "normalized launch digest")
 	command.Flags().StringVar(&recoveredFrom, "recovered-from", "", "previous recovery attempt")
 	command.Flags().StringVar(&label, "label", "", "why the daemon started this session")
 	command.Flags().StringVar(&id, "id", "", "session ID")

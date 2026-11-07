@@ -349,6 +349,11 @@ type Control struct {
 	CertificateProfile     string              `json:"certificateProfile,omitempty"`
 	CertificatePrivateName string              `json:"certificatePrivateName,omitempty"`
 
+	// Keyed detached PTY admission is distinct from legacy correlation IDs.
+	ExecutionKind    string            `json:"kind,omitempty"`
+	RequestKey       string            `json:"requestKey,omitempty"`
+	ExecutionReceipt *ExecutionReceipt `json:"executionReceipt,omitempty"`
+
 	// Error
 	ErrorCode string `json:"errorCode,omitempty"`
 	Message   string `json:"message,omitempty"`
@@ -360,6 +365,9 @@ func (c Control) Encode() ([]byte, error) { return json.Marshal(c) }
 // DecodeControl parses a control frame payload.
 func DecodeControl(payload []byte) (Control, error) {
 	var c Control
+	if err := validateExecutionRaw(payload); err != nil {
+		return c, &ExecutionValidationError{Err: err}
+	}
 	if err := json.Unmarshal(payload, &c); err != nil {
 		return c, fmt.Errorf("protocol: decode control: %w", err)
 	}
