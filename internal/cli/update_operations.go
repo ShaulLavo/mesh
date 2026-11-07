@@ -23,7 +23,9 @@ func (a *application) updateOperationCommand(action string, options *updateOptio
 	if action == "status" {
 		args, usage = cobra.MaximumNArgs(1), "status [RUN]"
 	}
-	return &cobra.Command{Use: usage, Short: updateActionDescription(action), Args: args,
+	var expected uint64
+	var commandID string
+	command := &cobra.Command{Use: usage, Short: updateActionDescription(action), Args: args,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := ""
 			if len(args) > 0 {
@@ -44,9 +46,19 @@ func (a *application) updateOperationCommand(action string, options *updateOptio
 				environment.client = a.dependencies.UpdateCaller
 			}
 			output := updateOutput{cmd.OutOrStdout(), cmd.ErrOrStderr(), a.privacy, options.details}
-			return a.runUpdateOperation(cmd.Context(), environment, action, id, options.json, output)
+			request, err := automaticOperationRequest(cmd, action, id, expected, commandID)
+			if err != nil {
+				return err
+			}
+
+			return a.runUpdateOperation(cmd.Context(), environment, action, request, options.json, output)
 		},
 	}
+	if action != "status" {
+		command.Flags().Uint64Var(&expected, "expected-policy-revision", 0, "expected automatic policy revision; required for automatic runs")
+		command.Flags().StringVar(&commandID, "command-id", "", "exact administrative command identity for response-loss replay")
+	}
+	return command
 }
 
 func updateActionDescription(action string) string {
@@ -60,7 +72,8 @@ func updateActionDescription(action string) string {
 	}
 }
 
-func (a *application) runUpdateOperation(ctx context.Context, environment updateEnvironment, action, id string, structured bool, output updateOutput) error {
+func (a *application) runUpdateOperation(ctx context.Context, environment updateEnvironment, action string, operation update.Operation, structured bool, output updateOutput) error {
+	id := operation.ID
 	if action == "status" && !structured && update.IsLocal(environment.coordinator) {
 		if err := reportFinishedInstallationGate(environment.stateDir, id, output.diagnostic, output.privacy); err != nil {
 			return err
@@ -76,7 +89,7 @@ func (a *application) runUpdateOperation(ctx context.Context, environment update
 	}
 	var run update.Run
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	err := environment.client.Call(requestCtx, environment.coordinator, action, update.Operation{ID: id}, &run)
+	err := environment.client.Call(requestCtx, environment.coordinator, action, operation, &run)
 	cancel()
 	if err != nil && update.IsLocal(environment.coordinator) {
 		return a.localUpdateOperation(ctx, environment, action, id, structured, output, err)
@@ -261,4 +274,20 @@ func removeClientOnlyApproval(status updateinstall.Status) error {
 		return nil
 	}
 	return err
+}
+
+func automaticOperationRequest(cmd *cobra.Command, action, id string, expected uint64, commandID string) (update.Operation, error) {
+	request := update.Operation{ID: id, CommandID: commandID}
+	if cmd.Flags().Changed("expected-policy-revision") {
+		request.ExpectedPolicyRevision = &expected
+	}
+	if commandID != "" || action == "status" {
+		return request, nil
+	}
+	generated, err := update.NewAutomaticCommandID()
+	if err != nil {
+		return request, fmt.Errorf("allocate automatic operation command: %w", err)
+	}
+	request.CommandID = generated
+	return request, nil
 }

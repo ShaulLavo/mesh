@@ -2,6 +2,7 @@ package updatenotice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -211,5 +212,72 @@ func TestInvalidManifestNeverBecomesNotice(t *testing.T) {
 	store.fetch = func(context.Context) (release.Manifest, error) { return release.Manifest{Version: "v9.0.0"}, nil }
 	if got, err := store.Refresh(context.Background(), false); err == nil || got.Version != "" {
 		t.Fatalf("incomplete release advertised: %+v, %v", got, err)
+	}
+}
+
+func TestSuccessfulCheckPersistsCompleteManifest(t *testing.T) {
+	store, _ := testStore(t)
+	if _, err := store.Refresh(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(store.directory, "notice.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Checked *struct {
+			Manifest release.Manifest `json:"manifest"`
+			Digest   string           `json:"digest"`
+		} `json:"checked"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Checked == nil || state.Checked.Digest != testManifest("v0.2.0").Digest() || state.Checked.Manifest.Digest() != state.Checked.Digest {
+		t.Fatal("successful cache lost the complete checked manifest")
+	}
+}
+
+func TestCheckedReleasePublicationSettlesPhysicalParents(t *testing.T) {
+	root := t.TempDir()
+	realDirectory := filepath.Join(root, "real")
+	if err := os.Mkdir(realDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(realDirectory, alias); err != nil {
+		t.Fatal(err)
+	}
+	store := New(Config{Directory: filepath.Join(alias, "notice")})
+	if err := store.Record(context.Background(), testManifest("v0.2.0")); err != nil {
+		t.Fatalf("physical parent publication failed through an existing alias: %v", err)
+	}
+	checked, err := store.CheckedRelease(context.Background())
+	if err != nil || checked == nil {
+		t.Fatalf("settled full observation unavailable: %+v %v", checked, err)
+	}
+}
+
+func TestCheckedReleaseCannotUseUnsettledPublication(t *testing.T) {
+	store, _ := testStore(t)
+	original := syncNoticeDirectory
+	t.Cleanup(func() { syncNoticeDirectory = original })
+	injected := errors.New("notice directory barrier")
+	syncNoticeDirectory = func(directory string) error {
+		if directory == store.directory {
+			return injected
+		}
+		return original(directory)
+	}
+	if err := store.Record(context.Background(), testManifest("v0.2.0")); !errors.Is(err, injected) {
+		t.Fatalf("record did not inject barrier: %v", err)
+	}
+	if checked, err := store.CheckedRelease(context.Background()); !errors.Is(err, injected) || checked != nil {
+		t.Fatalf("unconfirmed cache offered admission: %+v %v", checked, err)
+	}
+	syncNoticeDirectory = original
+	checked, err := store.CheckedRelease(context.Background())
+	if err != nil || checked == nil || checked.Digest != testManifest("v0.2.0").Digest() {
+		t.Fatalf("cache settlement lost observation: %+v %v", checked, err)
 	}
 }

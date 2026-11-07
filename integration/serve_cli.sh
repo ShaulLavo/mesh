@@ -150,35 +150,7 @@ ORIGIN_ID=$(identity_id "$ORIGIN_STATE/identity.key") || fail "derive origin ide
 
 CLIENT_ID=$(env MESH_STATE_DIR="$CLIENT_STATE" "$MESH_INTEGRATION" device identity --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])') || fail "create fixture client"
 env MESH_STATE_DIR="$ORIGIN_STATE" "$MESH_INTEGRATION" device approve --allow-root -- "$CLIENT_ID" >/dev/null || fail "approve fixture origin client"
-mapfile -t PORTS < <(python3 - "$$" "2" <<'PY'
-import os, socket, sys
-
-# Each concurrent script searches its own band, so sibling tests cannot pick the
-# same port. Binding still confirms the port is free of anything else.
-wanted = int(sys.argv[2])
-base = 20000 + (int(sys.argv[1]) % 900) * 16
-found, held = [], []
-for offset in range(16 * 900):
-    port = 20000 + (base - 20000 + offset) % (16 * 900)
-    listener = socket.socket()
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        listener.bind(("127.0.0.1", port))
-    except OSError:
-        listener.close()
-        continue
-    held.append(listener)
-    found.append(port)
-    if len(found) == wanted:
-        break
-if len(found) != wanted:
-    raise SystemExit("no free ports in this band")
-for port in found:
-    print(port)
-for listener in held:
-    listener.close()
-PY
-)
+read -ra PORTS <<<"${MESH_INTEGRATION_PORTS:?fixture owner did not reserve ports}"
 [ "${#PORTS[@]}" -eq 2 ] || fail "allocate fixture ports"
 CONTROL_PORT=${PORTS[0]}
 
