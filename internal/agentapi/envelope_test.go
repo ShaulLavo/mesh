@@ -40,7 +40,7 @@ func TestRequestedAndClassification(t *testing.T) {
 		{[]string{"hosts", "--json"}, true, "hosts.list"},
 		{[]string{"inspect", "HOST_ID", "--json"}, true, "hosts.inspect"},
 		{[]string{"inspect", "--timeout", "--json"}, false, "hosts.inspect"},
-		{[]string{"skill", "nope", "--json"}, true, ""},
+		{[]string{"skill", "nope", "--json"}, true, "skill.status"},
 		{[]string{"version", "--json"}, true, ""},
 	} {
 		if got := Requested(test.args); got != test.requested {

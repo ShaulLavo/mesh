@@ -326,7 +326,7 @@ func NewCommand(dependencies Dependencies) *Command {
 			"Close your laptop, lose wifi, or quit mesh, and the command keeps\n" +
 			"running. Reattach from anywhere on your tailnet.\n\n" +
 			"A bare name is a host or a session, so the commands you use most are\n" +
-			"not subcommands at all.",
+			"not subcommands at all.\n\nAgents: run mesh skill show.",
 		// The everyday forms are the root command itself, so nothing below
 		// lists them. Without this a reader never learns `mesh pc` exists.
 		// Fang parses each line as a command and annotates with "# " comments,
@@ -400,7 +400,7 @@ func NewCommand(dependencies Dependencies) *Command {
 	)
 	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.sshCommand(), app.copyCommand(), app.renameCommand(), app.wakeCommand(), app.dashboardCommand(), app.fleetCommand(), app.profileCommand(), app.hostsCommand(), app.inspectHostCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand(), app.appCommand())...)
-	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), deviceCommand(), versionCommand())...)
+	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), app.updateCommand(), app.skillCommand(), deviceCommand(), versionCommand())...)
 	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand())
 	protectPrivacyErrors(root, &privacyEnabled)
 	protectAgentFlagErrors(root, app.agent)
