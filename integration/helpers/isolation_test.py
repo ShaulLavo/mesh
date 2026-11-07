@@ -102,27 +102,54 @@ class ServedPortOwnershipTest(unittest.TestCase):
     def assert_reserved(self, ports):
         self.assertEqual(len(set(ports)), 5)
         for port in ports:
-            with self.subTest(port=port), socket.socket() as competitor:
-                self.assert_bind_refused(competitor, port)
+            with self.subTest(port=port):
+                self.assert_port_reserved(port)
 
-    def assert_bind_refused(self, competitor, port):
+    def assert_port_reserved(self, port):
+        addresses = ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::1"))
+        for family, address in addresses:
+            with socket.socket(family) as competitor:
+                self.assert_bind_refused(competitor, address, port)
+
+    def assert_bind_refused(self, competitor, address, port):
         with self.assertRaises(OSError, msg="fixture released its port before startup") as raised:
-            competitor.bind(("127.0.0.1", port))
+            competitor.bind((address, port))
         self.assertEqual(raised.exception.errno, errno.EADDRINUSE)
 
-    def check_entry(self, entry):
+    def assert_start_restart(self, port):
+        with socket.socket() as client:
+            client.settimeout(0.2)
+            self.assertEqual(client.connect_ex(("127.0.0.1", port)), errno.ECONNREFUSED)
+        for _ in range(2):
+            with socket.socket() as listener:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(("127.0.0.1", port))
+                listener.listen()
+            self.assert_port_reserved(port)
+
+    def check_entry(self, entry, signum):
         process = subprocess.Popen(["bash", str(entry)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE)
+                                   stderr=subprocess.PIPE, start_new_session=True)
         try:
             self.assertTrue(select.select([process.stdout], [], [], 10)[0], "fixture did not allocate ports")
             ports = list(map(int, process.stdout.readline().split()))
             self.assert_reserved(ports)
+            self.assert_start_restart(ports[-1])
+            if signum is not None:
+                os.kill(process.pid, signum)
         finally:
-            output, errors = process.communicate(input=b"\n", timeout=15)
-        self.assertEqual(process.returncode, 0, output.decode() + errors.decode())
+            output, errors = self.finish_entry(process, signum)
+        expected = 0 if signum is None else 128 + signum
+        self.assertEqual(process.returncode, expected, output.decode() + errors.decode())
         for port in ports:
             with socket.socket() as competitor:
                 competitor.bind(("127.0.0.1", port))
+
+    def finish_entry(self, process, signum):
+        try:
+            return process.communicate(input=b"\n" if signum is None else None, timeout=15)
+        finally:
+            stop_entry(process, [])
 
     def test_kept_ports_stay_reserved_until_the_fixture_owner_exits(self):
         source = (REPO / "integration/serve_kept.sh").read_text()
@@ -134,7 +161,8 @@ class ServedPortOwnershipTest(unittest.TestCase):
             entry = root / "serve_kept.sh"
             entry.write_text('#!/bin/bash\nsource "$(dirname -- "$0")/helpers/isolate.sh" || exit 1\n'
                              + allocation + '\nprintf "%s " "${PORTS[@]}"; printf "\\n"\nread -r _ || :\n')
-            self.check_entry(entry)
+            for signum in (None, signal.SIGTERM):
+                self.check_entry(entry, signum)
 
 
 class IsolationBoundaryTest(unittest.TestCase):
