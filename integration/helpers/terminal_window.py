@@ -727,6 +727,298 @@ def tab_bindings(fixture):
     returned.expect_exit()
 
 
+
+# A completed, harmless sequence. Nothing in this fixture opens a clipboard.
+CLIPBOARD_OSC = b"\x1b]52;c;" + base64.b64encode(b"mesh-fixture-only") + b"\x07"
+CLIPBOARD_DONE = b"__OSC52_COMPLETE__"
+CLIPBOARD_BOOT = b"__CLIPBOARD_BOOT__"
+CLIPBOARD_READY = b"__FRESH_READY__"
+CLIPBOARD_SSH = ("SSH_CLIENT", "SSH_CONNECTION", "SSH_TTY", "MESH_175_SSH_LOG")
+
+
+def clipboard_command(fault):
+    """A session-leading PTY command: input is instructions, never echoed payload."""
+    settings = termios.tcgetattr(0)
+    settings[3] &= ~termios.ECHO
+    termios.tcsetattr(0, termios.TCSANOW, settings)
+    os.write(1, b"__RAW_ONLY_BEFORE_CAPTURE__\r\n\x1b[2J\x1b[H" + CLIPBOARD_BOOT + b"\n")
+    for line in sys.stdin:
+        clipboard_instruction(line.strip(), fault)
+    return 0
+
+
+def clipboard_instruction(instruction, fault):
+    if instruction == "identity":
+        observation = {"sid": os.environ.get("MESH_SESSION_ID"), "pid": os.getpid(),
+                       "ssh": {name: os.environ[name] for name in CLIPBOARD_SSH if name in os.environ},
+                       "display": {name: os.environ[name] for name in ("DISPLAY", "WAYLAND_DISPLAY") if name in os.environ}}
+        os.write(1, b"__IDENTITY__" + json.dumps(observation).encode() + b"__END__\n")
+        return
+    if instruction == "emit":
+        emitted = {"omit": b"", "wrong": b"\x1b]52;c;d3Jvbmc=\x07"}.get(fault, CLIPBOARD_OSC)
+        os.write(1, emitted + CLIPBOARD_DONE + b"\n")
+        return
+    if instruction == "fresh" and fault != "absent-ready":
+        os.write(1, CLIPBOARD_READY + b"\n")
+
+
+class ClipboardFixture(Fixture):
+    """U4's resources live under the reviewed owner's root until its descendant join.
+
+    Fixture.close cooperates with workers; it is not join proof. This subclass
+    never removes its state or binary. Only Owner.finish does that after ECHILD.
+    """
+
+    def __init__(self, binary, root, deadline, fault):
+        self.deadline, self.fault = deadline, fault
+        self.resources = {"root": str(root), "binary": binary, "sessions": [], "clients": [], "daemon": None}
+        self.root = Path(root)
+        self.record_resources()
+        super().__init__(binary, root)
+
+    def record_resources(self):
+        (self.root / "resources.json").write_text(json.dumps(self.resources, sort_keys=True))
+
+    def command(self, arguments, environment):
+        return subprocess.run(arguments, env=environment, stdin=subprocess.DEVNULL, capture_output=True,
+                              check=True, timeout=self.deadline.remaining(5, "fixture command"))
+
+    def wait(self, check, message, limit=4):
+        return eventually(check, message, self.deadline.remaining(limit, message))
+
+    def control(self, path, request):
+        data = json.dumps(request).encode()
+        with socket.socket(socket.AF_UNIX) as connection:
+            connection.settimeout(self.deadline.remaining(4, "control connect"))
+            connection.connect(str(path))
+            connection.sendall(b"\x01" + struct.pack(">I", len(data)) + data)
+            header = self.complete(receive_by(connection, 5, self.deadline, "control header"), 5)
+            require(header[0] == 1, "clipboard control returned a non-control frame")
+            length = struct.unpack(">I", header[1:])[0]
+            require(length <= 4 << 20, "clipboard control response exceeded its bound")
+            return json.loads(self.complete(receive_by(connection, length, self.deadline, "control body"), length))
+
+    def start_destination(self):
+        # Private loopback only, with the same fake discovery and device approval
+        # as the reviewed terminal adapter. No installed daemon or host config.
+        bindir = self.root / "bin"
+        bindir.mkdir()
+        (bindir / "tailscale").symlink_to(self.helpers / "fake_tailscale")
+        status = self.root / "tailscale.json"
+        status.write_text(json.dumps({"BackendState": "Running", "Self": {
+            "DNSName": "pc.fixture.test.", "HostName": "pc", "TailscaleIPs": ["127.0.0.1"], "Online": True}, "Peer": {}}))
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            port = reservation.getsockname()[1]
+        environment = self.environment | {"MESH_STATE_DIR": str(self.remote),
+            "MESH_CONFIG_DIR": str(self.root / "remote-config"), "MESH_FAKE_TAILSCALE_STATUS": str(status),
+            "PATH": str(bindir) + os.pathsep + self.environment["PATH"]}
+        arguments = [self.binary, "daemon", "--tailnet-port", str(port), "--ssh-port", "0"]
+        self.resources["daemon"] = {"command": arguments, "state": str(self.remote)}
+        self.record_resources()
+        self.daemon_log = open(self.root / "daemon.log", "wb")
+        self.daemon = subprocess.Popen(arguments, env=environment, stdin=subprocess.DEVNULL,
+                                       stdout=self.daemon_log, stderr=subprocess.STDOUT)
+        self.wait(self.destination_started, "clipboard destination did not start")
+        response = self.control(self.remote / "daemon.sock", {"type": "host.info", "requestId": "clipboard-host"})
+        require(response.get("type") == "host.info.result", f"clipboard host lookup failed: {response}")
+        source = self.command([self.binary, "device", "identity", "--json"], self.environment)
+        self.command([self.binary, "device", "approve", "--allow-root", "--", json.loads(source.stdout)["id"]], environment)
+        (self.config / "hosts.json").write_text(json.dumps({"version": 1, "hosts": [{
+            "id": response["host"]["id"], "meshIdentity": response["host"]["meshIdentity"],
+            "tailscaleName": "pc.fixture.test", "addresses": ["127.0.0.1"],
+            "endpoint": f"ws://127.0.0.1:{port}/mesh"}]}))
+        (self.config / "hosts.json").chmod(0o600)
+        self.command([self.binary, "serve", "ls"], self.environment)
+
+    def destination_started(self):
+        require(self.daemon.poll() is None,
+                f"clipboard daemon exited with {self.daemon.returncode}; root={self.root}; files={list(self.remote.glob('*'))}")
+        return (self.remote / "daemon.sock").exists()
+
+    def create_destination_session(self):
+        arguments = [str(Path(sys.executable).resolve()), "-B", str(Path(__file__).resolve()), "--clipboard-command", self.fault]
+        self.resources["sessions"].append({"command": arguments, "state": str(self.remote), "cwd": str(self.root)})
+        self.record_resources()
+        response = self.control(self.remote / "daemon.sock", {"type": "session.create", "requestId": "clipboard-create",
+            "command": arguments, "cwd": str(self.root), "cols": 80, "rows": 24, "term": "xterm-256color"})
+        require(response.get("type") == "session.created", f"clipboard create failed: {response}")
+        self.sid = response["sessionId"]
+        self.resources["sessions"][0]["sid"] = self.sid
+        self.record_resources()
+        self.wait(lambda: (self.remote / "s" / self.sid / "meta.json").exists(), "clipboard metadata absent")
+        self.child_pid = json.loads((self.remote / "s" / self.sid / "meta.json").read_text())["pid"]
+
+    def attach_destination(self):
+        arguments = [self.binary, self.sid]
+        self.resources["clients"].append({"command": arguments, "lastSeq": None})
+        self.record_resources()
+        terminal = Terminal(arguments, self.environment, self.root,
+                            timeout=self.deadline.remaining(4, "native attachment"))
+        self.terminals.append(terminal)
+        self.resources["clients"][-1]["pid"] = terminal.pid
+        self.record_resources()
+        terminal.expect(CLIPBOARD_BOOT)
+        self.identity(terminal)
+        return terminal
+
+    def observation(self):
+        response = self.control(self.remote / "s" / self.sid / "sock", {
+            "type": "session.inspect", "sessionId": self.sid, "previewCols": 80, "previewRows": 24})
+        require(response.get("type") == "session.inspected", f"clipboard inspection failed: {response}")
+        return response["inspection"]
+
+    def identity(self, terminal):
+        start = len(terminal.drain())
+        terminal.send(b"identity\n")
+        terminal.timeout = self.deadline.remaining(4, "native identity")
+        terminal.expect(b"__END__", since=start)
+        payload = terminal.drain()[start:].split(b"__IDENTITY__", 1)[1].split(b"__END__", 1)[0]
+        identity = json.loads(payload)
+        require(identity == {"sid": self.sid, "pid": self.child_pid, "ssh": {}, "display": {}},
+                f"controlled command has wrong identity/environment: {identity}")
+        require(self.observation()["attached"], "native client did not attach the destination session")
+        require(len(self.sessions(self.remote)) == 1, "native attach created another destination session")
+        require(not self.sessions(self.local), "native attach created a local session")
+        return identity
+
+    def detach(self, terminal):
+        terminal.send(b"\x1d")
+        terminal.expect_exit(self.deadline.remaining(4, "native detach"))
+        require(terminal.status == 0, f"native detach failed: {terminal.status}")
+        self.wait(lambda: not self.observation()["attached"], "native detach stayed attached")
+
+
+def clipboard_marker(fixture):
+    fixture.start_destination()
+    fixture.create_destination_session()
+    live = fixture.attach_destination()
+    start = len(live.drain())
+    require(CLIPBOARD_OSC not in live.output, "OSC was emitted before the live test interval")
+    live.send(b"emit\n")
+    live.timeout = fixture.deadline.remaining(4, "live completion")
+    live.expect(CLIPBOARD_DONE, since=start)
+    interval = live.drain()[start:]
+    require(interval.count(CLIPBOARD_OSC) == 1, "live interval did not forward the exact OSC52 once")
+    require(interval.index(CLIPBOARD_OSC) < interval.index(CLIPBOARD_DONE), "visible completion preceded OSC52")
+    preview = fixture.wait(lambda: clipboard_preview(fixture), "inspection did not reach visible completion")
+    text = "\n".join(preview["preview"]).encode()
+    require(CLIPBOARD_OSC not in text and base64.b64encode(b"mesh-fixture-only") not in text,
+            "inspection leaked the completed clipboard sequence")
+    fixture.detach(live)
+    fresh = fixture.attach_destination()
+    fresh.expect(CLIPBOARD_DONE)
+    require(b"\x1b[2J\x1b[H" in fresh.drain(), "fresh capture did not repaint the screen")
+    require(b"__RAW_ONLY_BEFORE_CAPTURE__" not in fresh.output, "fresh attach replayed raw history")
+    # A new native CLI invocation has no LastSeq. The old visible marker proves
+    # a nonempty capture; a new response proves input and live output are ready.
+    boundary = len(fresh.drain())
+    fresh.send(b"fresh\n")
+    fresh.timeout = fixture.deadline.remaining(0.5 if fixture.fault == "absent-ready" else 4, "fresh readiness")
+    clipboard_expect_ready(fixture, fresh, boundary)
+    require(CLIPBOARD_OSC not in fresh.drain(), "fresh capture replayed the completed OSC52")
+    fixture.identity(fresh)
+    fixture.detach(fresh)
+    print(f"PASS: clipboard SID={fixture.sid} child={fixture.child_pid}; live OSC52=1; ready fresh capture OSC52=0", flush=True)
+
+
+class ClipboardReadinessTimeout(RuntimeError):
+    pass
+
+
+def clipboard_expect_ready(fixture, terminal, boundary):
+    deadline = time.monotonic() + terminal.timeout
+    while time.monotonic() < deadline:
+        status = terminal.poll()
+        require(status is None, f"clipboard readiness client exited with status {status}")
+        if CLIPBOARD_READY in terminal.drain()[boundary:]:
+            return
+        time.sleep(0.01)
+    # A missing marker is a valid control only after a new, acknowledged exchange
+    # proves the intended command, session and native attachment are still alive.
+    fixture.identity(terminal)
+    raise ClipboardReadinessTimeout("live clipboard command omitted __FRESH_READY__")
+
+
+def clipboard_expected_failure(fault, error):
+    if fault == "absent-ready":
+        return isinstance(error, ClipboardReadinessTimeout)
+    return fault in ("omit", "wrong") and str(error) == "live interval did not forward the exact OSC52 once"
+
+
+def clipboard_preview(fixture):
+    observation = fixture.observation()
+    return observation if CLIPBOARD_DONE.decode() in "\n".join(observation.get("preview", [])) else None
+
+
+def clipboard_campaign(binary, root):
+    deadline = CleanupDeadline(25)
+    token = ACTIVE_CLEANUP.set(deadline)
+    try:
+        for fault in ("none", "omit", "wrong", "absent-ready"):
+            clipboard_case(binary, root, deadline, fault)
+    finally:
+        ACTIVE_CLEANUP.reset(token)
+
+
+def clipboard_case(binary, root, deadline, fault):
+    directory = root / fault
+    directory.mkdir()
+    fixture = ClipboardFixture(binary, directory, deadline, fault)
+    try:
+        clipboard_marker(fixture)
+        require(fault == "none", f"clipboard control {fault} unexpectedly passed")
+    except RuntimeError as error:
+        if not clipboard_expected_failure(fault, error):
+            print_diagnostics(fixture)
+            raise
+        print(f"PASS: clipboard control {fault} failed behaviorally: {error}", flush=True)
+    finally:
+        fixture.close()
+    # The accepted owner, not socket disappearance, authorizes later deletion.
+    require(directory.is_dir(), "clipboard state disappeared before descendant join")
+
+
+def clipboard_owned(binary):
+    root = Path(os.environ["MESH_OWNED_ROOT"])
+    # Register both roots before creating the copy or any fixture process.
+    (root / "clipboard-resources.json").write_text(json.dumps({"state": str(root), "binary": str(root / "mesh")}))
+    shutil.copy2(binary, root / "mesh")
+    signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError("clipboard budget exhausted")))
+    with termination_cleanup():
+        signal.alarm(25)
+        try:
+            clipboard_campaign(str(root / "mesh"), root)
+        finally:
+            signal.alarm(0)
+    return 0
+
+
+def run_owned_clipboard(binary):
+    # Reuse C's controller/owner unchanged. Its admission captures the binary,
+    # command and root before setup, and it observes owner AND launcher exit.
+    from owned_command import Controller, Triggers
+    from process_tree import Kernel
+    Kernel().require()
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    triggers = Triggers()
+    root = Path(tempfile.mkdtemp(prefix="m-clipboard-"))
+    controller = Controller(root, triggers)
+    with open(root / "output.log", "w") as output:
+        job = controller.start("clipboard", {"stdout": output, "stderr": subprocess.STDOUT},
+            command=[sys.executable, "-B", str(Path(__file__).resolve()), "--clipboard-owned", str(Path(binary).resolve())],
+            inherit_env=True, budget=25, scratch_parent=str(root))
+    controller.wait([job])
+    print((root / "output.log").read_text(), end="", flush=True)
+    if not controller.proved():
+        print(f"FAIL: clipboard owner/launcher join unknown; kept {root}: {job.outcome}", file=sys.stderr)
+        return 1
+    status = job.outcome.get("returncode", 1)
+    shutil.rmtree(root)
+    trigger = controller.check()
+    return trigger.status if trigger is not None else status
+
+
 SCENARIOS = {
     "nested-detach": nested_detach,
     "nested-resize": nested_resize,
@@ -734,6 +1026,7 @@ SCENARIOS = {
     "window-entry": window_entry,
     "window-relaunch": window_relaunch,
     "tab-bindings": tab_bindings,
+    "clipboard-marker": clipboard_marker,
 }
 
 
@@ -787,6 +1080,9 @@ def run_fixture(fixture_type, binary, prefix, exercise, limit):
 
 def main():
     scenario, binary = sys.argv[1:]
+    if scenario == "clipboard-marker":
+        require(run_owned_clipboard(binary) == 0, "owned clipboard campaign failed")
+        return
     run_fixture(Fixture, binary, "mesh-window-", SCENARIOS[scenario], "terminal fixture exceeded 25 seconds")
     print(f"PASS: {scenario} through PTYs and persistent workers")
 
@@ -864,4 +1160,8 @@ def run_outside_containing_session(runner=run):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--clipboard-command"]:
+        raise SystemExit(clipboard_command(sys.argv[2]))
+    if sys.argv[1:2] == ["--clipboard-owned"]:
+        raise SystemExit(clipboard_owned(sys.argv[2]))
     raise SystemExit(run_outside_containing_session())

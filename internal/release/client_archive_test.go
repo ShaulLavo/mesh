@@ -130,6 +130,11 @@ func testClientArchiveValidation(t *testing.T, binary, archive []byte, invalid b
 
 func testGzip(t *testing.T, raw []byte) []byte {
 	t.Helper()
+	return testGzipBytes(t, raw)
+}
+
+func testGzipBytes(t testing.TB, raw []byte) []byte {
+	t.Helper()
 	var buffer bytes.Buffer
 	writer := gzip.NewWriter(&buffer)
 	if _, err := writer.Write(raw); err != nil {
@@ -144,7 +149,7 @@ func testGzip(t *testing.T, raw []byte) []byte {
 func TestValidateArchiveTailHonorsExpandedLimit(t *testing.T) {
 	for _, size := range []int{8, 9, 10} {
 		decoded := bytes.NewReader(make([]byte, size))
-		expanded := &io.LimitedReader{R: decoded, N: 9}
+		expanded := &archiveLimitReader{source: decoded, remaining: 8}
 		err := validateArchiveTail(expanded)
 		if (err == nil) != (size == 8) {
 			t.Fatalf("decoded size %d with limit 8: %v", size, err)
