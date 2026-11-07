@@ -496,3 +496,35 @@ The shared fleet Device selected a port and immediately closed its socket before
   CI on reviewed source remains required. Preserve the hosted failure and the
   bounded controls in
   `/work/reports/wave-20261106/audits2/mesh/execution/008/u2/main410-integration/window-entry-failure/REPORT.md`.
+
+
+### Current main delivery failures, November 7, 2026
+
+Main run 42398014971 at `bcadc17d039fc09b3499c02fa3d0c87a57520a02`
+failed only `control_authentication.sh` in integration job 128479476957.
+`Fixture.start_remote` reached `device approve --allow-root -- ID`, which exited
+1 at `terminal_window.py:408`. Its captured stderr was not printed, and the job
+uploaded no integration-state artifact. The complete job log provides no more
+specific error. This remains unexplained, not a proven lock or readiness bug.
+
+Two focused controls at merged main `79e655a7566bb8249e34d20c5cfffce5bb679f45`
+passed under the unchanged integration owner and its original 60-second CI
+budget. Review of the fixture environment, approval arguments, grant publisher,
+and bounded writer locks found no proven correction. No product or fixture
+changes, deadline widening, extra capture, or third attempt were made for this
+failure. Keep the historical failure and require a normal green run on reviewed
+source before merge. The same main commit already passed the normal integration
+job 128479855811 in run 42398138089, but its release proof failed separately.
+
+All three native release-proof jobs in run 42398138089 failed on the retained
+v0.1.296 worker probe after the older retained releases passed. The old fixture
+invoked the hidden worker command without a reservation. The checksum-verified
+published Linux amd64 binary reproduces the three-second socket failure and
+rejects that exact command with `invalid reservation instance`. The fixture now
+asks the retained daemon to create its own worker through `session.create`,
+without private launch flags or version branches. The original digest, version,
+protocol, process liveness, and unchanged-metadata checks remain. Socket and
+request stages stay bounded at three seconds. Focused race controls pass with
+published v0.1.295 and v0.1.296. Independent review and ordinary native CI remain
+required. Evidence is under
+`/work/reports/wave-20261106/audits2/mesh/execution/delivery/resume-20261107/main-current-failures/`.
