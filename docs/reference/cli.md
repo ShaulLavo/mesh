@@ -1561,8 +1561,9 @@ Usage:
   mesh version [flags]
 
 Flags:
-  -h, --help   help for version
-      --json   write build metadata as JSON
+  -h, --help       help for version
+      --json       write build metadata as JSON
+      --licenses   print the bundled Brotli notice
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
