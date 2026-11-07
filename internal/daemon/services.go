@@ -340,6 +340,9 @@ func (c *serviceController) catalog(ctx context.Context, request protocol.Contro
 	}
 	defer c.release()
 	if c.catalogUnknown {
+		if err := c.beginRuntimeDefinition(ctx); err != nil {
+			return nil, err
+		}
 		reconcileErr := c.reconcileDurable("service list")
 		if c.catalogUnknown {
 			return nil, fmt.Errorf("daemon: service catalog is unavailable: %w", reconcileErr)
@@ -445,13 +448,19 @@ func (c *serviceController) acquireMutation(ctx context.Context) error {
 	if err := c.acquire(ctx); err != nil {
 		return err
 	}
+	if err := c.beginRuntimeDefinition(ctx); err != nil {
+		<-c.gate
+		return err
+	}
+	return nil
+}
+func (c *serviceController) beginRuntimeDefinition(ctx context.Context) error {
 	manager, ok := c.demand.(*demandManager)
 	if !ok {
 		return nil
 	}
 	release, err := manager.BeginDefinition(ctx)
 	if err != nil {
-		<-c.gate
 		return err
 	}
 	c.runtimeRelease = release

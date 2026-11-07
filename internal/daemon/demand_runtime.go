@@ -447,7 +447,7 @@ func (r *demandRoute) awaitRuntimeReady(service meshserve.Service, ref session.R
 			return r.terminalRuntimeFailure(service, ref, observation)
 		}
 		if !r.manager.now().Before(deadline) || !time.Now().Before(wallDeadline) {
-			return r.runtimeReadinessFailure(ref, service)
+			return r.runtimeReadinessFailure(ctx, ref, service)
 		}
 		if observation.fate == sessionLive && r.manager.allAccept(ctx, service.UpstreamPorts()) {
 			return nil
@@ -467,7 +467,7 @@ func (r *demandRoute) terminalRuntimeFailure(service meshserve.Service, ref sess
 	return r.manager.startFailure(r.manager.ctx, service, ref.ID, exitDescription(observation.code), false)
 }
 
-func (r *demandRoute) runtimeReadinessFailure(ref session.Reservation, service meshserve.Service) error {
+func (r *demandRoute) runtimeReadinessFailure(ctx context.Context, ref session.Reservation, service meshserve.Service) error {
 	err := r.changeRuntime(func(record *storage.ServiceRuntime) error {
 		if record.Attempt == nil || record.Attempt.Reference != ref {
 			return fmt.Errorf("daemon: stale readiness result")
@@ -478,9 +478,13 @@ func (r *demandRoute) runtimeReadinessFailure(ref session.Reservation, service m
 	if err != nil {
 		return err
 	}
+	stopCtx, cancel := context.WithTimeout(ctx, demandStopTimeout)
+	stopErr := r.stopRuntime(stopCtx, causeReadiness)
+	cancel()
 	reason := fmt.Sprintf("%s did not accept before its original readiness deadline", portList(service.UpstreamPorts()))
-	diagnostic := r.manager.startFailure(r.manager.ctx, service, ref.ID, reason, false)
-	return demandFailure{summary: "readiness deadline expired; cleanup owed", message: diagnostic.Error()}
+	reason, ended := readinessCleanupReason(reason, stopErr)
+	diagnostic := r.manager.startFailure(ctx, service, ref.ID, reason, false)
+	return demandFailure{summary: reason, message: diagnostic.Error(), ended: ended}
 }
 
 func (r *demandRoute) consumeRuntime(ref session.Reservation, observation ownedObservation, failure bool) error {
