@@ -134,6 +134,9 @@ check_source_contract() {
   contains .github/workflows/ci.yml 'goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3'
   contains .github/workflows/ci.yml 'version: v2.18.0'
   contains .github/workflows/ci.yml 'Complete CI gate'
+  contains .github/workflows/ci.yml '  pull_request:'
+  contains .github/workflows/ci.yml 'types: [opened, synchronize, reopened, ready_for_review]'
+  does_not_contain scripts/finalize-release.sh 'gh workflow run'
   contains .github/workflows/ci.yml 'uses: ./.github/workflows/release.yml'
   contains .github/workflows/ci.yml "python3 scripts/check-default-branch.py '\${{ github.repository }}'"
   contains .github/workflows/ci.yml 'python3 scripts/test-check-default-branch.py'
