@@ -99,6 +99,9 @@ func (l *lifecycle) savedOutputPreview(ctx context.Context, request protocol.Con
 		return protocol.AccessOutputResult{}, errAccessUnavailable
 	}
 	record = protocol.RecoveryPreview(record)
+	if len(record.Lines) == 0 {
+		return protocol.AccessOutputResult{}, errAccessUnavailable
+	}
 	lines := record.Lines
 	if len(lines) > request.PreviewRows {
 		lines = lines[len(lines)-request.PreviewRows:]

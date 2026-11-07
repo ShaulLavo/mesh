@@ -54,7 +54,11 @@ func (c *workerConnector) ConnectWorker(ctx context.Context, id protocol.Session
 		return nil, fmt.Errorf("daemon: session %s is %s", text, stored.State)
 	}
 
-	if err := workerReadAdmission(ctx); err != nil {
+	admit := readAdmission(trustedReadAdmission)
+	if ctx.Value(readAdmissionKey{}) != nil {
+		admit = workerReadAdmission
+	}
+	if err := admit(ctx); err != nil {
 		return nil, err
 	}
 	socketPath := paths.Socket(filepath.Join(c.sessionsDir, text))

@@ -164,6 +164,7 @@ func assertSavedOutputPreview(t *testing.T, f *scopedFixture, dims [2]int) {
 }
 
 type scopedReadWorker struct {
+	ctx      context.Context
 	listener net.Listener
 	requests atomic.Int32
 	finished chan struct{}
@@ -172,7 +173,7 @@ type scopedReadWorker struct {
 
 func startScopedReadWorker(t *testing.T, f *scopedFixture, respond func(protocol.Control) protocol.Control) *scopedReadWorker {
 	t.Helper()
-	w := &scopedReadWorker{respond: respond, finished: make(chan struct{})}
+	w := &scopedReadWorker{ctx: f.ctx, respond: respond, finished: make(chan struct{})}
 	t.Cleanup(func() {
 		if w.listener != nil {
 			_ = w.listener.Close()
@@ -203,6 +204,8 @@ func (w *scopedReadWorker) serve() {
 	}
 }
 func (w *scopedReadWorker) answer(stream net.Conn) {
+	stop := context.AfterFunc(w.ctx, func() { _ = stream.Close() })
+	defer stop()
 	defer func() { _ = stream.Close() }()
 	_ = stream.SetDeadline(time.Now().Add(3 * time.Second))
 	conn, err := transport.NewStreamConn(stream)
@@ -396,7 +399,7 @@ func TestScopedOutputCompletedAfterRevokeNeverReplies(t *testing.T) {
 	prepareOutputFiles(t, f, storage.StateDetached, []string{"saved"}, []byte("saved"))
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	defer once.Do(func() { close(release) })
 	startScopedReadWorker(t, f, func(request protocol.Control) protocol.Control {
 		close(entered)
 		<-release
@@ -482,5 +485,60 @@ func TestScopedOutputCancellationClosesOnlyOneShotSocket(t *testing.T) {
 	}
 	if f.catalog.mutations.Load() != 0 || f.launches.Load() != 0 || !binding.Current() {
 		t.Fatal("cancellation changed authority or session owner")
+	}
+}
+
+func TestScopedMalformedOutputNeverReachesPayloadOwners(t *testing.T) {
+	for _, loose := range []bool{false, true} {
+		assertMalformedScopedOutput(t, loose)
+	}
+}
+func assertMalformedScopedOutput(t *testing.T, loose bool) {
+	t.Helper()
+	f := newScopedFixture(t.Context(), t, loose)
+	enableScopedOutput(t, f)
+	valid := `{"type":"access.output","requestId":"strict","accessOutput":{"sessionId":"7K3D","format":"preview"}}`
+	for _, raw := range []string{
+		strings.Replace(valid, `"format":"preview"`, `"format":"preview","maxBytes":0`, 1),
+		strings.Replace(valid, `"format":"preview"`, `"format":"preview","cols":1,"cols":2`, 1),
+		strings.Replace(valid, `"format":"preview"`, `"format":"tail","rows":0`, 1),
+		strings.Replace(valid, `"format":"preview"`, `"format":"preview","recovery":{"lines":["secret"]}`, 1),
+		strings.Replace(valid, `"accessOutput":`, `"principal":"local-account","accessOutput":`, 1),
+		strings.Replace(valid, `"requestId":"strict"`, `"requestId":"strict","requestId":"other"`, 1),
+		strings.Replace(valid, `"type":"access.output"`, `"type":"access.output","type":"access.read"`, 1),
+		"{\xff}", strings.Repeat(" ", protocol.MaximumAccessRequest) + valid,
+	} {
+		assertScopedDenied(t, f, protocol.Frame{Kind: protocol.KindControl, Payload: []byte(raw)})
+	}
+	if f.catalog.reads.Load() != 0 || f.workers.calls.Load() != 0 || f.launches.Load() != 0 {
+		t.Fatal("malformed output reached payload owner")
+	}
+}
+func TestScopedSavedPreviewWithoutScreenRemainsUnavailable(t *testing.T) {
+	f := newScopedFixture(t.Context(), t, false)
+	enableScopedOutput(t, f)
+	prepareOutputFiles(t, f, storage.StateExited, nil, nil)
+	output := protocol.AccessOutput{SessionID: "7K3D", Format: "preview"}
+	reply := scopedOutput(t, f, output)
+	if reply.Result != nil || reply.ErrorCode != "state.unavailable" {
+		t.Fatal("missing screen certified saved", reply)
+	}
+	tail := scopedOutput(t, f, protocol.AccessOutput{SessionID: "7K3D", Format: "tail"})
+	if tail.Result == nil || tail.Result.BytesBase64 == nil || *tail.Result.BytesBase64 != "" {
+		t.Fatal("empty tail was not represented explicitly", tail)
+	}
+}
+func TestWorkerReadAdmissionDoesNotInventAuthority(t *testing.T) {
+	if err := workerReadAdmission(t.Context()); err == nil {
+		t.Fatal("missing read admission accepted")
+	}
+	ctx := context.WithValue(t.Context(), readAdmissionKey{}, readAdmission(nil))
+	if err := workerReadAdmission(ctx); err == nil {
+		t.Fatal("nil read admission accepted")
+	}
+	f := newScopedFixture(t.Context(), t, false)
+	_, err := f.server.lifecycle.forwardRead(t.Context(), protocol.Control{Type: protocol.TypeKill}, trustedReadAdmission)
+	if err == nil || f.workers.calls.Load() != 0 {
+		t.Fatal("read helper accepted mutation", err)
 	}
 }

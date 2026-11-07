@@ -687,6 +687,14 @@ func (l *lifecycle) renameHost(ctx context.Context, request protocol.Control) (p
 // connect: the catalog-checked connector for clients, or connectOwned for a
 // session the daemon launched itself.
 func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control, connect func(context.Context, protocol.SessionID) (transport.Conn, error)) (protocol.Control, error) {
+	return l.forwardAdmittedOneShot(ctx, request, connect, trustedReadAdmission, true)
+}
+func (l *lifecycle) forwardAdmittedOneShot(ctx context.Context, request protocol.Control, connect func(context.Context, protocol.SessionID) (transport.Conn, error), admit readAdmission, legacyStyles bool) (protocol.Control, error) {
+	if admit == nil {
+		return protocol.Control{}, errors.New("daemon: output read admission required")
+	}
+	ctx = context.WithValue(ctx, readAdmissionKey{}, admit)
+
 	if err := validateRequestID(request); err != nil {
 		return protocol.Control{}, err
 	}
@@ -703,6 +711,9 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	}
 	ctx, cancel := workerOperationContext(ctx, l.context, l.operationTimeout)
 	defer cancel()
+	if err := admit(ctx); err != nil {
+		return protocol.Control{}, err
+	}
 	conn, err := connect(ctx, sid)
 	if err != nil {
 		return protocol.Control{}, workerOperationError(ctx, sid, "connect worker for "+request.Type, err)
@@ -725,17 +736,7 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	case protocol.TypeHibernate:
 		forwarded.HibernateIdleMillis = request.HibernateIdleMillis
 	}
-	if err := workerReadAdmission(ctx); err != nil {
-		return protocol.Control{}, err
-	}
-	payload, err := forwarded.Encode()
-	if err == nil {
-		err = conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload})
-	}
-	response := protocol.Control{Type: protocol.TypeOK, RequestID: request.RequestID, SessionID: id}
-	if err == nil {
-		response, err = readOneShotResponse(conn, forwarded, response)
-	}
+	response, err := exchangeOneShot(ctx, conn, forwarded)
 	closeErr := conn.Close()
 	var refused workerRefusal
 	if errors.As(err, &refused) {
@@ -747,10 +748,24 @@ func (l *lifecycle) forwardOneShot(ctx context.Context, request protocol.Control
 	if closeErr != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: close session %s control connection: %w", id, closeErr)
 	}
-	if request.Type == protocol.TypeInspect && ctx.Value(readAdmissionKey{}) == nil {
+	if request.Type == protocol.TypeInspect && legacyStyles {
 		l.enrichLegacyInspection(ctx, id, request, &response)
 	}
 	return response, nil
+}
+
+func exchangeOneShot(ctx context.Context, conn transport.Conn, request protocol.Control) (protocol.Control, error) {
+	if err := workerReadAdmission(ctx); err != nil {
+		return protocol.Control{}, err
+	}
+	payload, err := request.Encode()
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: encode worker request: %w", err)
+	}
+	if err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload}); err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: write worker request: %w", err)
+	}
+	return readOneShotResponse(conn, request, protocol.Control{Type: protocol.TypeOK, RequestID: request.RequestID, SessionID: request.SessionID})
 }
 
 func (l *lifecycle) validateOneShot(id string, request protocol.Control) error {
@@ -1059,9 +1074,6 @@ func trustedReadAdmission(ctx context.Context) error {
 
 func workerReadAdmission(ctx context.Context) error {
 	value := ctx.Value(readAdmissionKey{})
-	if value == nil {
-		return trustedReadAdmission(ctx)
-	}
 	admit, ok := value.(readAdmission)
 	if !ok || admit == nil {
 		return errors.New("daemon: missing output read admission")
@@ -1078,6 +1090,5 @@ func (l *lifecycle) forwardRead(ctx context.Context, request protocol.Control, a
 	if err := admit(ctx); err != nil {
 		return protocol.Control{}, err
 	}
-	ctx = context.WithValue(ctx, readAdmissionKey{}, admit)
-	return l.forwardOneShot(ctx, request, l.connector.ConnectWorker)
+	return l.forwardAdmittedOneShot(ctx, request, l.connector.ConnectWorker, admit, false)
 }

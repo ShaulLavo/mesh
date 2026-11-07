@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestPolicyAcceptsClosedSessionOutputPermission(t *testing.T) {
@@ -62,5 +63,26 @@ func TestGrantRejectsEveryOtherPermissionSet(t *testing.T) {
 		if err == nil {
 			t.Fatalf("invalid permissions accepted: %v", permissions)
 		}
+	}
+}
+
+func TestOutputBindingExpiryNeverHeals(t *testing.T) {
+	store, subject, expiry := testStore(t)
+	_, err := store.Grant(t.Context(), 0, GrantInput{Subject: subject, ExpiresAt: expiry, Permissions: []string{"metadata", "session-output"}}, noRoles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := store.Bind(subject)
+	if err != nil || bound.RequireOutput() != nil {
+		t.Fatal("output grant unavailable", err)
+	}
+	now := expiry.Add(time.Second)
+	store.now = func() time.Time { return now }
+	if err := bound.RequireOutput(); !errors.Is(err, ErrDenied) {
+		t.Fatal("expired output remained admitted", err)
+	}
+	now = expiry.Add(-time.Hour)
+	if bound.Current() {
+		t.Fatal("clock rollback healed expired output")
 	}
 }
