@@ -34,6 +34,10 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 	if err != nil {
 		return executionResponse(req, r, err)
 	}
+	r, err = l.observeBoundExecution(ctx, journal, r)
+	if err != nil {
+		return executionResponse(req, r, err)
+	}
 	response, err := l.boundExecution(ctx, req, journal, r)
 	if err != nil {
 		return response, &executionError{receipt: response.ExecutionReceipt, page: response.ExecutionPage, err: err}
@@ -48,7 +52,7 @@ func (l *lifecycle) boundExecution(ctx context.Context, req protocol.Control, j 
 	case protocol.TypeExecutionWait:
 		return l.executionWait(ctx, req, j, r)
 	case protocol.TypeExecutionSignal, protocol.TypeExecutionKill:
-		if r.Phase == "terminal" {
+		if r.Phase == executionTerminalPhase {
 			response.ExecutionDelivery = executionAlreadyRetired
 			return response, nil
 		}
@@ -217,3 +221,16 @@ func markExecutionKill(ctx context.Context, kind string, j *execution.Journal, b
 	}
 	return executionBoundaryError("record explicit kill intent", j.MarkKill(ctx, b))
 }
+
+func (l *lifecycle) observeBoundExecution(ctx context.Context, j *execution.Journal, r execution.Receipt) (execution.Receipt, error) {
+	if r.Phase == executionTerminalPhase {
+		return r, nil
+	}
+	observed, err := l.lookupExecution(ctx, j, r.Key)
+	if errors.Is(err, execution.ErrUnknown) || errors.Is(err, execution.ErrProgress) {
+		return observed, nil
+	}
+	return observed, err
+}
+
+const executionTerminalPhase = "terminal"

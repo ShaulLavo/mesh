@@ -171,6 +171,7 @@ func (c *Capture) flush() bool {
 			return false
 		}
 		summary, err := c.commit(b)
+		c.err = err
 		if err == nil {
 			c.publishedObserved = b.observed
 			c.publishedLoss = b.loss

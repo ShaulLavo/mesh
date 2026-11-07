@@ -84,7 +84,7 @@ def crashed_worker(fixture):
         page = logs(fixture, r)
         assert base64.b64decode(page["bytesBase64"]) == b"durable-prefix" and not page["eof"]
         result = exchange(fixture, bound("wait", r, timeoutMillis=100))
-        assert result.get("executionWait") == "timed_out" and result["executionReceipt"]["result"] is None, result
+        assert result.get("executionWait") == "timed_out" and result["executionReceipt"]["result"] is None and result["executionReceipt"]["phase"] == "uncertain", result
     finally:
         if fixture.alive(child):
             fixture.kernel.send(fixture.tree.proved[child].fd, signal.SIGKILL)

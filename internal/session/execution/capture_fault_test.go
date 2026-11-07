@@ -331,3 +331,39 @@ func TestCaptureDecimalOffsetsBeyondJavaScriptInteger(t *testing.T) {
 		t.Fatalf("offset rounded: %+v %d %v", decoded, n, err)
 	}
 }
+
+func TestCaptureRecoveredStorageFailureRemainsIncomplete(t *testing.T) {
+	root, b := captureTestBinding(t)
+	capture, err := OpenCapture(root, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := make(chan struct{})
+	capture.store.files.fault = oneCaptureFailure(failed)
+	capture.Offer(bytes.Repeat([]byte{'x'}, captureSegment))
+	select {
+	case <-failed:
+	case <-time.After(time.Second):
+		t.Fatal("storage control did not arm")
+	}
+	// A later offer drives the recovered writer past its lost absolute range.
+	capture.Offer([]byte("suffix"))
+	final, err := capture.Finish(t.Context(), "eof")
+	if err != nil {
+		t.Fatalf("recovered final manifest unavailable: %v", err)
+	}
+	if final.Loss != "storage_failure" || final.Earliest != offsetText(captureSegment) || final.End != offsetText(captureSegment+6) {
+		t.Fatalf("storage hole disappeared: %+v", final)
+	}
+}
+func oneCaptureFailure(failed chan struct{}) func(string) error {
+	armed := true
+	return func(step string) error {
+		if step != "publish" || !armed {
+			return nil
+		}
+		armed = false
+		close(failed)
+		return errors.New("one capture publication failed")
+	}
+}

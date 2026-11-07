@@ -218,7 +218,7 @@ func (l *lifecycle) lookupExecution(ctx context.Context, journal *execution.Jour
 	if err != nil && !errors.Is(err, execution.ErrUnknown) {
 		return r, executionBoundaryError("read execution receipt", err)
 	}
-	if r.Phase == "terminal" {
+	if r.Phase == executionTerminalPhase {
 		return r, nil
 	}
 	if r.Binding.Reservation.BootID != worker.BootID() {

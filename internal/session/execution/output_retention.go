@@ -13,8 +13,12 @@ func (j *Journal) prepareOutputAdmission(ctx context.Context, k Key) error {
 		return err
 	}
 	var candidate Receipt
-	if err := j.files.check(requestName(k.Hash()), false); err == nil {
+	recordErr := j.files.check(requestName(k.Hash()), false)
+	if recordErr == nil {
 		return gate.Close()
+	}
+	if !errors.Is(recordErr, os.ErrNotExist) {
+		return errors.Join(recordErr, gate.Close())
 	}
 	entries, err := j.files.Names("execution/requests")
 	slots := 0
