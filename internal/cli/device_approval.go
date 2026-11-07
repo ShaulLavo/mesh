@@ -93,7 +93,7 @@ func approveChecked(ctx context.Context, request checkedApproval) (approvalRecei
 	if err := ctx.Err(); err != nil {
 		return result, fmt.Errorf("approval canceled: %w", err)
 	}
-	if err := identity.ApproveDevice(request.StateDir, request.Source); err != nil {
+	if err := identity.ApproveDevice(ctx, request.StateDir, request.Source); err != nil {
 		return result, fmt.Errorf("approve source device: %w", err)
 	}
 	grants, err = identity.DeviceGrants(filepath.Join(request.StateDir, "authorized_keys"))

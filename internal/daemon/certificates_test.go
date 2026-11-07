@@ -82,7 +82,7 @@ func TestClientServerDispatchesCertificateInstall(t *testing.T) {
 	}
 	client := newServerTestConn()
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(context.Background(), client) }()
+	go func() { done <- server.Handle(localServerContext(context.Background()), client) }()
 	client.pushRead(serverControlFrame(t, protocol.Control{
 		Type: protocol.TypeCertificateInstall, RequestID: "certificate-through-server",
 		Certificate: &protocol.CertificateInstall{Profile: "private-origin", Environment: "live", TargetID: "origin", SignerID: "renewer", Signature: []byte("signed")},

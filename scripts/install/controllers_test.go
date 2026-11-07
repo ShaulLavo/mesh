@@ -40,7 +40,7 @@ func checkInstallerControllerGrants(t *testing.T, platform, binary, source, sour
 	writeDarwinFixture(t, filepath.Join(bin, "systemctl"), "#!/bin/sh\nexit 0\n", 0755)
 	writeDarwinFixture(t, filepath.Join(bin, "loginctl"), "#!/bin/sh\necho Linger=yes\n", 0755)
 	writeDarwinFixture(t, filepath.Join(bin, "launchctl"), selectedControllerLaunchctl, 0755)
-	if err := identity.ApproveDevice(state, preexisting); err != nil {
+	if err := identity.ApproveDevice(t.Context(), state, preexisting); err != nil {
 		t.Fatal(err)
 	}
 	prior, ok := identity.BindIdentity(state, preexisting)

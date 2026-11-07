@@ -200,7 +200,7 @@ func TestWatchSubscriberCapIndependentAcrossActualTransports(t *testing.T) {
 				if network == "Unix" {
 					return dialUnixRuntime(t, filepath.Join(cfg.StateDir, daemonSocketName))
 				}
-				conn, err := transport.DialOnce(ctx, fmt.Sprintf("ws://%s/mesh", listener.Addr()), runtimeDialOptions(t, cfg.StateDir))
+				conn, err := transport.DialOnce(ctx, fmt.Sprintf("ws://%s/mesh", listener.Addr()), runtimeDialOptions(ctx, t, cfg.StateDir))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -322,7 +322,7 @@ func TestWatchRejectsTerminalUsedConnectionAndPreservesAttachment(t *testing.T) 
 	server.state = newStateBroker(1, time.Now)
 	server.metrics = hostmetrics.New()
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(t.Context(), client) }()
+	go func() { done <- server.Handle(localServerContext(t.Context()), client) }()
 	defer func() { _ = client.Close(); <-done }()
 	attached := serverControlFrame(t, protocol.Control{Type: protocol.TypeAttached, SessionID: "7K3D"})
 	worker.pushRead(attached)
@@ -361,7 +361,7 @@ func TestWatchRejectsTerminalModeChangeAndKeepsStream(t *testing.T) {
 	server.state = newStateBroker(1, time.Now)
 	server.metrics = hostmetrics.New()
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(t.Context(), client) }()
+	go func() { done <- server.Handle(localServerContext(t.Context()), client) }()
 	defer func() { _ = client.Close(); <-done }()
 	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeStateWatch, RequestID: "watch-first", Watch: &protocol.StateWatch{Topics: []string{protocol.TopicSessions, protocol.TopicMetrics}}}))
 	initial := decodeServerControl(t, client.nextWrite(t))

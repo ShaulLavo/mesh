@@ -89,7 +89,7 @@ func TestUnsignedApprovedQueryKeepsLoginGrace(t *testing.T) {
 
 func shortGraceServer(t *testing.T, private ed25519.PrivateKey) *charmssh.Server {
 	t.Helper()
-	server, err := newServer(normalizedConfig{
+	server, err := newServer(normalizedConfig{scopeMembership: fixtureNoScopes,
 		loginGrace:     time.Second,
 		hostKey:        generatePrivateKey(t),
 		authorizedKeys: writeAuthorizedKeys(t, private, 0o600),

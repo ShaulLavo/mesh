@@ -10,6 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
@@ -21,6 +22,7 @@ import (
 // clientServer dispatches frames for each disposable client connection. Its
 // lifecycle and worker dependencies are safe to share across clients.
 type clientServer struct {
+	access       *accessReader
 	state        *stateBroker
 	metrics      *hostmetrics.Sampler
 	lifecycle    *lifecycle
@@ -52,7 +54,8 @@ func newClientServer(lifecycle *lifecycle, workers WorkerConnector, services, ce
 	if certificates == nil {
 		return nil, fmt.Errorf("daemon: nil certificate controller")
 	}
-	return &clientServer{lifecycle: lifecycle, workers: workers, services: services, certificates: certificates}, nil
+	scopedServices, _ := services.(accessServices)
+	return &clientServer{access: &accessReader{lifecycle: lifecycle, services: scopedServices, slots: make(chan struct{}, 16)}, lifecycle: lifecycle, workers: workers, services: services, certificates: certificates}, nil
 }
 
 // Handle serves one client until it disconnects or ctx is cancelled. This is
@@ -65,6 +68,12 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		return fmt.Errorf("daemon: nil client connection")
 	}
 
+	if peer, ok := transport.Peer(ctx); ok && peer.Class() == access.Scoped {
+		return s.serveScoped(ctx, conn, peer.Binding())
+	}
+	if _, ok := transport.Peer(ctx); !ok && ctx.Value(localClientKey{}) != true {
+		return access.ErrDenied
+	}
 	client := conn
 	relay := newClientRelay(client, s.workers, s.lifecycle.operationTimeout)
 	copySession := newCopyController()

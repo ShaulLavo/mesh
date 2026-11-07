@@ -14,7 +14,7 @@ func TestManagedGrantWriterBoundsLockContention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ApproveDevice(state, actor.ID); err != nil {
+	if err := ApproveDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	current, ok := BindIdentity(state, actor.ID)
@@ -30,7 +30,7 @@ func TestManagedGrantWriterBoundsLockContention(t *testing.T) {
 		t.Fatal(err)
 	}
 	finished := make(chan error, 1)
-	go func() { finished <- RevokeDevice(state, actor.ID) }()
+	go func() { finished <- RevokeDevice(t.Context(), state, actor.ID) }()
 	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
 	select {
 	case err := <-finished:
@@ -48,7 +48,7 @@ func TestManagedGrantWriterBoundsLockContention(t *testing.T) {
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
 		t.Fatal(err)
 	}
-	if err := RevokeDevice(state, actor.ID); err != nil {
+	if err := RevokeDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	if current() {
@@ -83,7 +83,7 @@ func TestGrantPolicyRejectsSpecialFilesWithoutBlocking(t *testing.T) {
 						t.Fatal("reader accepted a special policy file")
 					}
 				}
-				if err := ApproveDevice(state, actor.ID); err == nil {
+				if err := ApproveDevice(t.Context(), state, actor.ID); err == nil {
 					t.Fatal("writer accepted a special policy file")
 				}
 			})

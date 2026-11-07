@@ -318,7 +318,7 @@ func appSSHFixture(t *testing.T, handler sshd.SessionHandler) *ssh.Client {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	if err := identity.ApproveDevice(root, base64.RawURLEncoding.EncodeToString(devicePublic)); err != nil {
+	if err := identity.ApproveDevice(t.Context(), root, base64.RawURLEncoding.EncodeToString(devicePublic)); err != nil {
 		t.Fatal(err)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -332,7 +332,7 @@ func appSSHFixture(t *testing.T, handler sshd.SessionHandler) *ssh.Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- sshd.Serve(ctx, sshd.Config{Addr: address, HostKey: hostKey, AuthorizedKeys: filepath.Join(root, "authorized_keys"), Handler: handler})
+		done <- sshd.Serve(ctx, sshd.Config{ScopeMembership: func(string) (bool, error) { return false, nil }, Addr: address, HostKey: hostKey, AuthorizedKeys: filepath.Join(root, "authorized_keys"), Handler: handler})
 	}()
 	t.Cleanup(func() {
 		cancel()

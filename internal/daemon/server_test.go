@@ -39,7 +39,7 @@ func TestClientServerDispatchesRelayAndLifecycleFrames(t *testing.T) {
 	})
 	worker.pushRead(attached)
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(context.Background(), client) }()
+	go func() { done <- server.Handle(localServerContext(context.Background()), client) }()
 
 	attach := serverControlFrame(t, protocol.Control{
 		Type:      protocol.TypeAttach,
@@ -103,7 +103,7 @@ func TestClientServerReturnsCorrelatedRequestErrorsAndContinues(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(context.Background(), client) }()
+	go func() { done <- server.Handle(localServerContext(context.Background()), client) }()
 
 	client.pushRead(protocol.Frame{
 		Kind:    protocol.KindControl,
@@ -159,7 +159,7 @@ func TestClientServerSerializesLifecycleAndRelayWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(context.Background(), client) }()
+	go func() { done <- server.Handle(localServerContext(context.Background()), client) }()
 
 	id := mustServerSessionID(t, "SYNC")
 	attach := serverControlFrame(t, protocol.Control{Type: protocol.TypeAttach, SessionID: id.String()})
@@ -209,7 +209,7 @@ func TestClientServerKeepsAttachRejectionBeforePipelinedResizeError(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(ctx, client) }()
+	go func() { done <- server.Handle(localServerContext(ctx), client) }()
 
 	incumbent.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeAttached, SessionID: "DATA"}))
 	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeAttach, SessionID: "DATA"}))
@@ -263,7 +263,7 @@ func TestClientServerTreatsClientTerminationAsNormal(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := newServerTestConn()
 			client.pushReadError(fmt.Errorf("read: %w", test.err))
-			if err := server.Handle(context.Background(), client); err != nil {
+			if err := server.Handle(localServerContext(context.Background()), client); err != nil {
 				t.Fatalf("Handle error = %v", err)
 			}
 			client.waitClosed(t)
@@ -273,7 +273,7 @@ func TestClientServerTreatsClientTerminationAsNormal(t *testing.T) {
 	wantErr := errors.New("broken transport")
 	client := newServerTestConn()
 	client.pushReadError(wantErr)
-	if err := server.Handle(context.Background(), client); !errors.Is(err, wantErr) {
+	if err := server.Handle(localServerContext(context.Background()), client); !errors.Is(err, wantErr) {
 		t.Fatalf("Handle error = %v, want %v", err, wantErr)
 	}
 }
@@ -287,7 +287,7 @@ func TestClientServerContextCancellationClosesBlockedClient(t *testing.T) {
 	client := newServerTestConn()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- server.Handle(ctx, client) }()
+	go func() { done <- server.Handle(localServerContext(ctx), client) }()
 	cancel()
 	if err := waitServerResult(t, done, "context cancellation"); err != nil {
 		t.Fatal(err)
@@ -317,7 +317,7 @@ func TestNewClientServerRejectsNilDependencies(t *testing.T) {
 	if err := server.Handle(nil, newServerTestConn()); err == nil { //nolint:staticcheck // boundary test intentionally passes a nil context
 		t.Fatal("nil client context accepted")
 	}
-	if err := server.Handle(context.Background(), nil); err == nil {
+	if err := server.Handle(localServerContext(context.Background()), nil); err == nil {
 		t.Fatal("nil client connection accepted")
 	}
 }
@@ -581,4 +581,19 @@ func (*serverTestCatalog) Remove(context.Context, storage.SessionID) error {
 
 func (*serverTestCatalog) PruneLabelled(context.Context, string, storage.SessionID) ([]storage.SessionID, error) {
 	return nil, nil
+}
+
+func localServerContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, localClientKey{}, true)
+}
+
+func fullServerTestAuthentication(ctx context.Context, t *testing.T) (*transport.Authentication, transport.DialOptions) {
+	t.Helper()
+	state := t.TempDir()
+	options := runtimeDialOptions(ctx, t, state)
+	authentication, err := controlAuthentication(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return authentication, options
 }

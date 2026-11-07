@@ -22,6 +22,8 @@ const (
 	FleetStale               Code = "fleet.stale"
 	SkillConflict            Code = "skill.conflict"
 	SkillUnsafePath          Code = "skill.unsafe_path"
+	AccessDenied             Code = "access.denied"
+	ResourceLimit            Code = "resource.limit"
 	InternalError            Code = "internal.error"
 )
 
@@ -41,5 +43,5 @@ var Codes = map[Code]ErrorClass{
 	FleetRevisionConflict: {Exit: 1}, FleetStale: {Exit: 1}, SkillConflict: {Exit: 1}, SkillUnsafePath: {Exit: 2}, InternalError: {Exit: 1},
 	"request.key_conflict": {Exit: 1, Reserved: true}, "request.in_progress": {Exit: 1, Reserved: true},
 	"request.outcome_unknown": {Exit: 1, Reserved: true}, "logs.cursor_expired": {Exit: 1, Reserved: true},
-	"result.expired": {Exit: 1, Reserved: true}, "access.denied": {Exit: 1, Reserved: true}, "resource.limit": {Exit: 1, Reserved: true},
+	"result.expired": {Exit: 1, Reserved: true}, AccessDenied: {Exit: 1}, ResourceLimit: {Exit: 1},
 }

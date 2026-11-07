@@ -30,7 +30,7 @@ func TestQueriedKeyMustNotOwnAuthenticatedSSHGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{queried.ID, actor.ID} {
-		if err := identity.ApproveDevice(state, id); err != nil {
+		if err := identity.ApproveDevice(t.Context(), state, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -42,7 +42,7 @@ func TestQueriedKeyMustNotOwnAuthenticatedSSHGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := mustServer(t, Config{HostKey: generatePrivateKey(t), AuthorizedKeys: filepath.Join(state, "authorized_keys"), Addr: "127.0.0.1:2222"})
+	server := mustServer(t, Config{ScopeMembership: fixtureNoScopes, HostKey: generatePrivateKey(t), AuthorizedKeys: filepath.Join(state, "authorized_keys"), Addr: "127.0.0.1:2222"})
 	address := testsession.Listen(t, server)
 	attempts := 0
 	//nolint:gosec // loopback fixture inspects client authentication, not destination identity
@@ -74,7 +74,7 @@ func TestQueriedKeyMustNotOwnAuthenticatedSSHGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = good.Close()
-	if err := identity.RevokeDevice(state, queried.ID); err != nil {
+	if err := identity.RevokeDevice(t.Context(), state, queried.ID); err != nil {
 		t.Fatal(err)
 	}
 	retained, err := client.NewSession()
@@ -85,7 +85,7 @@ func TestQueriedKeyMustNotOwnAuthenticatedSSHGrant(t *testing.T) {
 		t.Fatalf("signed device lost its independent grant: %v", err)
 	}
 	_ = retained.Close()
-	if err := identity.RevokeDevice(state, actor.ID); err != nil {
+	if err := identity.RevokeDevice(t.Context(), state, actor.ID); err != nil {
 		t.Fatal(err)
 	}
 	// No temporary absence sample or watcher delay; a post-revocation request must fail.

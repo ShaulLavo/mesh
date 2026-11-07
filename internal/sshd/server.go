@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	charmssh "charm.land/ssh"
@@ -135,20 +137,22 @@ func (c *boundedConn) Close() error {
 // Config identifies one concrete SSH listener and its authentication state.
 // Addr must include both the discovered Tailnet address and the SSH port.
 type Config struct {
-	HostKey        ed25519.PrivateKey
-	AuthorizedKeys string
-	Addr           string
-	Handler        SessionHandler
-	Services       *serve.Registry
+	HostKey         ed25519.PrivateKey
+	AuthorizedKeys  string
+	ScopeMembership func(string) (bool, error)
+	Addr            string
+	Handler         SessionHandler
+	Services        *serve.Registry
 }
 
 type normalizedConfig struct {
-	loginGrace     time.Duration
-	hostKey        ed25519.PrivateKey
-	authorizedKeys string
-	addr           netip.AddrPort
-	handler        SessionHandler
-	services       *serve.Registry
+	loginGrace      time.Duration
+	hostKey         ed25519.PrivateKey
+	authorizedKeys  string
+	scopeMembership func(string) (bool, error)
+	addr            netip.AddrPort
+	handler         SessionHandler
+	services        *serve.Registry
 }
 
 // Serve runs one locked SSH listener until ctx is done. Options may register
@@ -207,6 +211,9 @@ func validateConfig(ctx context.Context, cfg Config) (normalizedConfig, error) {
 	if derived := ed25519.NewKeyFromSeed(hostKey.Seed()); !bytes.Equal(derived, hostKey) {
 		return normalizedConfig{}, errors.New("sshd: host key is not a valid Ed25519 private key")
 	}
+	if cfg.ScopeMembership == nil {
+		return normalizedConfig{}, errors.New("sshd: scope membership reader required")
+	}
 	if cfg.AuthorizedKeys == "" {
 		return normalizedConfig{}, errors.New("sshd: authorized_keys path is empty")
 	}
@@ -222,10 +229,13 @@ func validateConfig(ctx context.Context, cfg Config) (normalizedConfig, error) {
 	if addr.Port() == 0 || addr.Addr().IsUnspecified() || addr.Addr().IsMulticast() {
 		return normalizedConfig{}, fmt.Errorf("sshd: listen address %q is not a concrete IP endpoint", cfg.Addr)
 	}
-	return normalizedConfig{hostKey: hostKey, authorizedKeys: authorizedKeys, addr: addr, handler: cfg.Handler, services: cfg.Services}, nil
+	return normalizedConfig{hostKey: hostKey, authorizedKeys: authorizedKeys, scopeMembership: cfg.ScopeMembership, addr: addr, handler: cfg.Handler, services: cfg.Services}, nil
 }
 
 func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server, error) {
+	if cfg.scopeMembership == nil {
+		return nil, errors.New("sshd: scope membership reader required")
+	}
 	_, signer, err := marshalHostKey(cfg.hostKey)
 	if err != nil {
 		return nil, err
@@ -257,7 +267,7 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 		return graced
 	}
 	server.PublicKeyHandler = func(_ charmssh.Context, key charmssh.PublicKey) bool {
-		return identity.Granted(cfg.authorizedKeys, key)
+		return cfg.unscoped(key) && identity.Granted(cfg.authorizedKeys, key)
 	}
 	server.ServerConfigCallback = cfg.signedConfig
 	handler := server.Handler
@@ -274,9 +284,20 @@ func newServer(cfg normalizedConfig, opts ...charmssh.Option) (*charmssh.Server,
 
 func (cfg normalizedConfig) signedConfig(ctx charmssh.Context) *gossh.ServerConfig {
 	return &gossh.ServerConfig{VerifiedPublicKeyCallback: func(_ gossh.ConnMetadata, key gossh.PublicKey, permissions *gossh.Permissions, _ string) (*gossh.Permissions, error) {
-		current, ok := identity.BindGrant(cfg.authorizedKeys, key)
-		if !ok {
+		native, ok := identity.BindGrant(cfg.authorizedKeys, key)
+		if !ok || !cfg.unscoped(key) {
 			return nil, errors.New("sshd: signed device key is not approved")
+		}
+		var invalid atomic.Bool
+		current := func() bool {
+			if invalid.Load() {
+				return false
+			}
+			if !native() || !cfg.unscoped(key) {
+				invalid.Store(true)
+				return false
+			}
+			return !invalid.Load()
 		}
 		// Unsigned public-key queries confer neither a lifetime nor an unlimited login.
 		if graced, ok := ctx.Value(gracedConnKey{}).(*gracedConn); ok {
@@ -285,6 +306,20 @@ func (cfg normalizedConfig) signedConfig(ctx charmssh.Context) *gossh.ServerConf
 		}
 		return permissions, nil
 	}}
+}
+
+func (cfg normalizedConfig) unscoped(key gossh.PublicKey) bool {
+	subject := ""
+	if cryptoKey, ok := key.(gossh.CryptoPublicKey); ok {
+		if public, ok := cryptoKey.CryptoPublicKey().(ed25519.PublicKey); ok {
+			subject = base64.RawURLEncoding.EncodeToString(public)
+		}
+	}
+	// Only Ed25519 identities can be scoped. Other native SSH grant keys still
+	// require a healthy scope snapshot, followed by their original native grant.
+
+	registered, err := cfg.scopeMembership(subject)
+	return err == nil && !registered
 }
 
 func marshalHostKey(private ed25519.PrivateKey) ([]byte, gossh.Signer, error) {

@@ -21,11 +21,11 @@ func TestDeviceReapprovalRetiresIdleSSHAndPreservesOtherDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{first.ID, second.ID} {
-		if err := identity.ApproveDevice(directory, id); err != nil {
+		if err := identity.ApproveDevice(t.Context(), directory, id); err != nil {
 			t.Fatal(err)
 		}
 	}
-	server := mustServer(t, Config{HostKey: generatePrivateKey(t), AuthorizedKeys: filepath.Join(directory, "authorized_keys"), Addr: "127.0.0.1:2222"})
+	server := mustServer(t, Config{ScopeMembership: fixtureNoScopes, HostKey: generatePrivateKey(t), AuthorizedKeys: filepath.Join(directory, "authorized_keys"), Addr: "127.0.0.1:2222"})
 	address := testsession.Listen(t, server)
 	client, err := gossh.Dial("tcp", address, clientConfig(t, firstKey, nil))
 	if err != nil {
@@ -34,10 +34,10 @@ func TestDeviceReapprovalRetiresIdleSSHAndPreservesOtherDevice(t *testing.T) {
 	defer client.Close() //nolint:errcheck // fixture cleanup
 	closed := make(chan error, 1)
 	go func() { closed <- client.Wait() }()
-	if err := identity.RevokeDevice(directory, first.ID); err != nil {
+	if err := identity.RevokeDevice(t.Context(), directory, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := identity.ApproveDevice(directory, first.ID); err != nil {
+	if err := identity.ApproveDevice(t.Context(), directory, first.ID); err != nil {
 		t.Fatal(err)
 	}
 	select {
