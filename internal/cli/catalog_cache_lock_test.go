@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -39,8 +41,6 @@ func TestCatalogCacheConcurrentWriters(t *testing.T) {
 		waitForCatalogCacheFile(t, writerOpen[index])
 	}
 
-	// A held third writer may outlive the 150 ms SQLite budget under load.
-	// TestCatalogSQLiteWriterContentionWithoutCancellation covers that failure path.
 	if err := os.WriteFile(filepath.Join(stateDir, "writers-start"), nil, 0o600); err != nil { //nolint:gosec // marker path is inside the test TempDir.
 		t.Fatal(err)
 	}
@@ -57,16 +57,28 @@ func TestCatalogCacheConcurrentWriters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seen := make(map[string]bool, len(rows))
 	for _, row := range rows {
-		seen[row.ID] = true
-	}
-	for index := range writers {
-		want := "SESSION-writer-" + strconv.Itoa(index) + "-open"
-		if !seen[want] {
-			t.Fatalf("cache lost concurrent writer %s: rows=%v", want, rows)
+		if row.HostID != host.ID || len(row.Command) != 1 || row.Command[0] != "sh" {
+			t.Fatalf("invalid concurrent snapshot: %#v", row)
 		}
 	}
+	final := make([]protocol.SessionInfo, writers)
+	for index := range writers {
+		final[index] = protocol.SessionInfo{ID: "SESSION-writer-" + strconv.Itoa(index) + "-open", HostID: host.ID, Command: []string{"sh"}, Cwd: "/tmp", State: "detached", CreatedAt: time.Now().UTC().Truncate(time.Millisecond)}
+	}
+	if err := cache.SaveObserved(t.Context(), host, final); err != nil {
+		t.Fatalf("save after contention: %v", err)
+	}
+	observed, err := cache.LoadObserved(t.Context(), host)
+	if err != nil || len(observed) != writers {
+		t.Fatalf("eventual snapshot: %#v, %v", observed, err)
+	}
+	for index, row := range observed {
+		if !reflect.DeepEqual(row.Info, final[index]) || row.Facts == nil {
+			t.Fatalf("eventual snapshot lost observation or facts: %#v, want %#v", row, final[index])
+		}
+	}
+	assertCatalogIntegrity(t, stateDir)
 }
 
 func seedCatalogCache(t *testing.T) {
@@ -147,5 +159,29 @@ func runCatalogCacheHelper(t *testing.T) {
 	defer cancel()
 	if err := cache.Save(ctx, host, []protocol.SessionInfo{row}); err != nil {
 		t.Fatalf("cache writer %s: %v", index, err)
+	}
+}
+
+func assertCatalogIntegrity(t *testing.T, stateDir string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(stateDir, catalogDatabaseName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var integrity string
+	if err := db.QueryRowContext(t.Context(), "PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
+		t.Fatalf("catalog integrity = %q, %v", integrity, err)
+	}
+	rows, err := db.QueryContext(t.Context(), "PRAGMA foreign_key_check")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		t.Fatal("catalog has invalid foreign keys")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 }

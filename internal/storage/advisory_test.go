@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -126,7 +127,7 @@ func TestOpenBusyTimeoutAppliesToEveryPoolConnection(t *testing.T) {
 		want int
 	}{
 		{name: "authoritative", open: Open, want: 5000},
-		{name: "advisory", open: OpenAdvisory, want: 150},
+		{name: "advisory", open: OpenAdvisory, want: 5000},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, err := test.open(t.Context(), filepath.Join(t.TempDir(), "mesh.db"))
@@ -163,5 +164,54 @@ func TestOpenBusyTimeoutAppliesToEveryPoolConnection(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAdvisoryTransactionsAcquireWriterAtBegin(t *testing.T) {
+	store, err := OpenAdvisory(t.Context(), filepath.Join(t.TempDir(), "mesh.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	peer, err := store.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	if _, err := peer.ExecContext(t.Context(), "PRAGMA busy_timeout=0"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = peer.ExecContext(context.Background(), "ROLLBACK") })
+	tx, err := store.db.BeginTx(t.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	_, err = peer.ExecContext(t.Context(), "BEGIN IMMEDIATE")
+	var busy *sqlite.Error
+	if !errors.As(err, &busy) || busy.Code()&0xff != sqlite3.SQLITE_BUSY {
+		t.Fatalf("peer writer after advisory BeginTx = %v, want SQLITE_BUSY before any transactional SQL", err)
+	}
+	var count int
+	if err := peer.QueryRowContext(t.Context(), "SELECT count(*) FROM hosts").Scan(&count); err != nil {
+		t.Fatalf("WAL reader beside writer: %v", err)
+	}
+}
+
+func TestAuthoritativeWriterContentionRemainsAnError(t *testing.T) {
+	store := openTestStore(t)
+	holder, err := store.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Close() })
+	if _, err := holder.ExecContext(t.Context(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = holder.ExecContext(context.Background(), "ROLLBACK") })
+	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+	defer cancel()
+	if err := store.ReconcileHost(ctx, testHost("host-authoritative"), nil); err == nil {
+		t.Fatal("authoritative writer contention returned success")
 	}
 }
