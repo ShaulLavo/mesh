@@ -92,8 +92,8 @@ func launchOwnerFault(t *testing.T, phase string) {
 		assertOwnerPublicationAborted(t, err, startedPath)
 	}
 	entries, readErr := os.ReadDir(root)
-	if readErr != nil || len(entries) != 0 {
-		t.Fatalf("reservation cleanup: %v %v", entries, readErr)
+	if readErr != nil || len(entries) != 1 || entries[0].Name() != ".barrier" || entries[0].IsDir() {
+		t.Fatalf("reservation cleanup: %v %v; want only the strict shared barrier", entries, readErr)
 	}
 	if phase == "success" || phase == "cmd-start" {
 		if !slices.Equal(events, []string{"open", "write", "file-sync", "close", "session-sync", "parent-sync"}) {

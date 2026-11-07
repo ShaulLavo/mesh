@@ -19,14 +19,15 @@ import (
 
 type runtimeSessions struct {
 	*fakeDemandSessions
-	refsMu      sync.Mutex
-	refs        map[string]session.Reservation
-	times       map[string]time.Time
-	unknown     map[string]bool
-	now         func() time.Time
-	boot        string
-	reserveErr  error
-	beforeStart func(session.Reservation, meshserve.Service)
+	refsMu          sync.Mutex
+	refs            map[string]session.Reservation
+	times           map[string]time.Time
+	unknown         map[string]bool
+	now             func() time.Time
+	boot            string
+	reserveErr      error
+	beforeStart     func(session.Reservation, meshserve.Service)
+	observationGate *demandBarrier
 }
 
 func newRuntimeSessions() *runtimeSessions {
@@ -65,7 +66,11 @@ func (s *runtimeSessions) ownedFate(ref session.Reservation) ownedObservation {
 	s.refsMu.Lock()
 	current, exists := s.refs[ref.ID]
 	unknown, at, boot := s.unknown[ref.ID], s.times[ref.ID], s.boot
+	gate := s.observationGate
 	s.refsMu.Unlock()
+	if gate != nil {
+		gate.wait()
+	}
 	if ref.BootID != "" && boot != "" && ref.BootID != boot {
 		return ownedObservation{fate: sessionEnded, interrupted: true}
 	}
@@ -301,6 +306,7 @@ type runtimeFaultStore struct {
 	failWrite      bool
 	failRead       bool
 	committedError bool
+	clearCommitted bool
 	calls          int
 	gate           *demandBarrier
 }
@@ -309,6 +315,9 @@ func (s *runtimeFaultStore) CompareServiceRuntime(ctx context.Context, before, n
 	s.mu.Lock()
 	s.calls++
 	fail, committed, gate := s.failWrite, s.committedError, s.gate
+	if s.clearCommitted {
+		s.committedError = false
+	}
 	s.mu.Unlock()
 	if gate != nil {
 		gate.wait()
@@ -687,4 +696,149 @@ func TestRuntimePersistsFullRecipeBeforeLauncher(t *testing.T) {
 	}
 	f.sync(t)
 	awaitDemandSignal(t, observed, "durable exact recipe before launcher")
+}
+
+func TestRuntimeStopDuringRestoreSurvivesCancelledWaiter(t *testing.T) {
+	f := newRuntimeFixture(t)
+	f.sync(t)
+	f.manager.Close()
+	gate := newDemandBarrier(t)
+	f.sessions.refsMu.Lock()
+	f.sessions.observationGate = gate
+	f.sessions.refsMu.Unlock()
+	f.manager = f.open(t, f.store)
+	f.manager.Sync([]meshserve.Service{f.service})
+	awaitDemandSignal(t, gate.entered, "restored exact worker observation")
+	ctx, cancel := context.WithCancel(t.Context())
+	answer := make(chan error, 1)
+	go func() { answer <- f.manager.Stop(ctx, "dev") }()
+	awaitRoute(t, f.manager.route("dev"), "accepted stop during restore", stopAccepted)
+	cancel()
+	if err := <-answer; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled restore stop = %v", err)
+	}
+	gate.unblock()
+	settleDemand(t, f.manager)
+	if starts, stops := f.sessions.counts(); starts != 1 || stops != 1 {
+		t.Fatalf("restored stop starts %d stops %d", starts, stops)
+	}
+	if record := f.record(t); record.Attempt != nil {
+		t.Fatalf("restored cleanup remains: %+v", record)
+	}
+}
+
+func TestRuntimeHealthObservationDoesNotOwnMutationAcceptance(t *testing.T) {
+	f := newRuntimeFixture(t)
+	registry, err := meshserve.NewRegistryWithReservedPrefix(nil, "/mesh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := newServiceController(t.Context(), t.TempDir(), f.store, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.demand = f.manager
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	err = controller.observeHealth(ctx)
+	// A failed control must still leave the fixture's own acceptance joinable.
+	f.manager.persistence.mu.Lock()
+	leaked := f.manager.persistence.pending
+	f.manager.persistence.mu.Unlock()
+	if leaked != nil && leaked.definition && !leaked.finished {
+		f.manager.endAcceptance(leaked, false)
+	}
+	if err != nil {
+		t.Fatalf("health read retained mutation acceptance: %v", err)
+	}
+	if leaked != nil {
+		t.Fatal("health read leaked a runtime mutation intent")
+	}
+	if err := controller.observeHealth(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.sync(t)
+}
+
+func TestRuntimeCommittedErrorNeedsFreshDurableConfirmation(t *testing.T) {
+	f := newRuntimeFixture(t)
+	f.sync(t)
+	fault := &runtimeFaultStore{serviceRuntimeStore: f.store, committedError: true, clearCommitted: true}
+	f.manager.persistence.store = fault
+	if err := f.manager.Stop(t.Context(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	fault.mu.Lock()
+	calls := fault.calls
+	fault.mu.Unlock()
+	if calls < 3 {
+		t.Fatalf("only %d write attempts; readback replaced the confirmation barrier", calls)
+	}
+	if record := f.record(t); record.Attempt != nil {
+		t.Fatalf("confirmed stop is not durable: %+v", record)
+	}
+}
+
+type runtimeDeleteFaultStore struct{ *runtimeFaultStore }
+
+func (s runtimeDeleteFaultStore) CompareServiceRuntime(ctx context.Context, before, next *storage.ServiceRuntime) error {
+	if next == nil {
+		return s.runtimeFaultStore.CompareServiceRuntime(ctx, before, next)
+	}
+	if err := s.serviceRuntimeStore.CompareServiceRuntime(ctx, before, next); err != nil {
+		return fmt.Errorf("fixture non-delete write: %w", err)
+	}
+	return nil
+}
+
+func TestRuntimeUnknownDeleteFencesReaddForAbsentAndOldRows(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(fmt.Sprint(committed), func(t *testing.T) { testRuntimeUnknownDelete(t, committed) })
+	}
+}
+func testRuntimeUnknownDelete(t *testing.T, committed bool) {
+	f := newRuntimeFixture(t)
+	f.sync(t)
+	generation := f.record(t).Generation
+	if err := f.manager.Stop(t.Context(), "dev"); err != nil {
+		t.Fatal(err)
+	}
+	fault := &runtimeFaultStore{serviceRuntimeStore: f.store, failWrite: !committed, committedError: committed, failRead: committed}
+	f.manager.persistence.store = runtimeDeleteFaultStore{fault}
+	f.manager.Sync(nil)
+	settleDemand(t, f.manager)
+	if release, err := f.manager.BeginDefinition(t.Context()); err == nil {
+		release()
+		t.Fatal("uncertain deletion accepted a same-name definition")
+	}
+	rows, err := f.store.ListServiceRuntime(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed && len(rows) != 0 || !committed && len(rows) != 1 {
+		t.Fatalf("delete outcome committed %t rows %+v", committed, rows)
+	}
+	fault.mu.Lock()
+	fault.failWrite, fault.committedError, fault.failRead = false, false, false
+	fault.mu.Unlock()
+	f.manager.supervise()
+	settleDemand(t, f.manager)
+	f.sync(t)
+	if record := f.record(t); record.Generation == generation || record.Attempt == nil || record.Attempt.Reference.ID != "S002" {
+		t.Fatalf("readded generation = %+v", record)
+	}
+}
+
+func TestRuntimeRestoreRequiresDurableBarrierAfterRead(t *testing.T) {
+	f := newRuntimeFixture(t)
+	f.sync(t)
+	fault := &runtimeFaultStore{serviceRuntimeStore: f.store, failWrite: true}
+	manager := newDemandManager(t.Context(), f.sessions, func(error) {})
+	if err := manager.restoreRuntime(fault); err == nil {
+		t.Fatal("visible restored row skipped durable confirmation")
+	}
+	if manager.persistence != nil {
+		t.Fatal("unconfirmed restore became authoritative")
+	}
+	manager.Close()
 }

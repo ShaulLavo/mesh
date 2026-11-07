@@ -84,12 +84,15 @@ func TestServiceRuntimeRoundTripAndCAS(t *testing.T) {
 
 func TestServiceRuntimeRejectsIncompleteOwnership(t *testing.T) {
 	for _, phase := range []ServicePhase{ServiceStarting, ServiceReadiness, ServiceReady, ServiceCleanup} {
-		t.Run(string(phase), func(t *testing.T) {
-			record := runtimeTestRecord(t)
-			record.Phase, record.Attempt = phase, nil
-			if err := validateServiceRuntime(record); err == nil {
-				t.Fatal("phase without ownership accepted")
-			}
-		})
+		t.Run(string(phase), func(t *testing.T) { assertIncompleteRuntimePhase(t, phase) })
+	}
+}
+
+func assertIncompleteRuntimePhase(t *testing.T, phase ServicePhase) {
+	t.Helper()
+	record := runtimeTestRecord(t)
+	record.Phase, record.Attempt = phase, nil
+	if err := validateServiceRuntime(record); err == nil {
+		t.Fatal("phase without ownership accepted")
 	}
 }

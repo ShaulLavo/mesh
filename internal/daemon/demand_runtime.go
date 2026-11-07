@@ -33,7 +33,6 @@ type managedDemandSessions interface {
 
 type runtimeIntent struct {
 	before, next *storage.ServiceRuntime
-	route        *demandRoute
 	done         chan struct{}
 	uncertain    bool
 	definition   bool
@@ -62,11 +61,25 @@ func (m *demandManager) restoreRuntime(store serviceRuntimeStore) error {
 	if err != nil {
 		return fmt.Errorf("daemon: restore service runtime: %w", err)
 	}
+	if err := confirmRestoredRuntime(m.ctx, store, records); err != nil {
+		return err
+	}
 	p := &demandPersistence{store: store, records: make(map[string]storage.ServiceRuntime), sessions: sessions}
 	for _, record := range records {
 		p.records[record.Name] = record
 	}
 	m.persistence = p
+	return nil
+}
+
+func confirmRestoredRuntime(parent context.Context, store serviceRuntimeStore, records []storage.ServiceRuntime) error {
+	ctx, cancel := context.WithTimeout(parent, serviceReconcileTimeout)
+	defer cancel()
+	for _, record := range records {
+		if err := store.CompareServiceRuntime(ctx, &record, &record); err != nil {
+			return fmt.Errorf("daemon: confirm restored service runtime %s: %w", record.Name, err)
+		}
+	}
 	return nil
 }
 
@@ -214,7 +227,7 @@ func (r *demandRoute) changeRuntime(change func(*storage.ServiceRuntime) error, 
 		return nil
 	}
 	next.Version++
-	intent.next, intent.route, intent.apply = &next, r, apply
+	intent.next, intent.apply = &next, apply
 	return m.persistIntent(m.ctx, intent)
 }
 
@@ -284,7 +297,7 @@ func (m *demandManager) reconcileRuntime() {
 	}
 	p.mu.Lock()
 	intent := p.pending
-	if intent == nil || !intent.uncertain {
+	if m.closed.Load() || intent == nil || !intent.uncertain {
 		p.mu.Unlock()
 		return
 	}
@@ -300,7 +313,11 @@ func (r *demandRoute) runtimeControl(stop bool, apply func()) error {
 	return r.changeRuntime(func(record *storage.ServiceRuntime) error {
 		r.mu.Lock()
 		unknown := r.owned == ownsUnknown
+		unavailable := r.unavailableLocked()
 		r.mu.Unlock()
+		if unavailable != nil {
+			return unavailable
+		}
 		if record.Version == 0 && unknown {
 			return fmt.Errorf("daemon: prior service launch is unresolved")
 		}
@@ -389,7 +406,6 @@ func (r *demandRoute) runRuntimeStart(transition *demandTransition, service mesh
 		r.finishStart(transition, "", err, cause)
 		return
 	}
-	transition.reference = ref
 	err = m.persistence.sessions.startReserved(m.ctx, ref, service)
 	m.finishPhase()
 	if errors.As(err, new(publicationError)) {
@@ -428,7 +444,7 @@ func (r *demandRoute) awaitRuntimeReady(service meshserve.Service, ref session.R
 	for {
 		observation := r.manager.persistence.sessions.ownedFate(ref)
 		if observation.fate == sessionEnded {
-			return r.terminalRuntimeFailure(ref, observation)
+			return r.terminalRuntimeFailure(service, ref, observation)
 		}
 		if !r.manager.now().Before(deadline) || !time.Now().Before(wallDeadline) {
 			return r.runtimeReadinessFailure(ref, service)
@@ -444,11 +460,11 @@ func (r *demandRoute) awaitRuntimeReady(service meshserve.Service, ref session.R
 	}
 }
 
-func (r *demandRoute) terminalRuntimeFailure(ref session.Reservation, observation ownedObservation) error {
+func (r *demandRoute) terminalRuntimeFailure(service meshserve.Service, ref session.Reservation, observation ownedObservation) error {
 	if err := r.consumeRuntime(ref, observation, true); err != nil {
 		return err
 	}
-	return demandFailure{summary: exitDescription(observation.code), message: exitDescription(observation.code), ended: true}
+	return r.manager.startFailure(r.manager.ctx, service, ref.ID, exitDescription(observation.code), false)
 }
 
 func (r *demandRoute) runtimeReadinessFailure(ref session.Reservation, service meshserve.Service) error {
@@ -462,7 +478,9 @@ func (r *demandRoute) runtimeReadinessFailure(ref session.Reservation, service m
 	if err != nil {
 		return err
 	}
-	return demandFailure{summary: "readiness deadline expired; cleanup owed", message: fmt.Sprintf("route %s did not accept before its original readiness deadline", service.Route())}
+	reason := fmt.Sprintf("%s did not accept before its original readiness deadline", portList(service.UpstreamPorts()))
+	diagnostic := r.manager.startFailure(r.manager.ctx, service, ref.ID, reason, false)
+	return demandFailure{summary: "readiness deadline expired; cleanup owed", message: diagnostic.Error()}
 }
 
 func (r *demandRoute) consumeRuntime(ref session.Reservation, observation ownedObservation, failure bool) error {
@@ -474,20 +492,24 @@ func (r *demandRoute) consumeRuntime(ref session.Reservation, observation ownedO
 			return fmt.Errorf("daemon: stale terminal attempt")
 		}
 		if failure && record.Attempt.Launched.Demand.Kept() {
-			stable := record.Phase == storage.ServiceReady && !observation.exitedAt.IsZero() && !record.Attempt.ReadyAt.IsZero() && observation.exitedAt.Sub(record.Attempt.ReadyAt) >= keptStableRun
-			if stable {
-				record.Failures = 0
-			}
-			record.Failures = min(record.Failures+1, keptRestartSteps)
-			origin := observation.exitedAt
-			if origin.IsZero() || observation.interrupted {
-				origin = r.manager.now()
-			}
-			record.RestartAt = origin.Add(keptRestartDelay(record.Failures))
+			scheduleRuntimeFailure(record, observation, r.manager.now())
 		}
 		record.Phase, record.Attempt = storage.ServiceNone, nil
 		return nil
 	}, func() { r.mirrorRuntimeSchedule() })
+}
+
+func scheduleRuntimeFailure(record *storage.ServiceRuntime, observation ownedObservation, now time.Time) {
+	stable := record.Phase == storage.ServiceReady && !observation.exitedAt.IsZero() && !record.Attempt.ReadyAt.IsZero() && observation.exitedAt.Sub(record.Attempt.ReadyAt) >= keptStableRun
+	if stable {
+		record.Failures = 0
+	}
+	record.Failures = min(record.Failures+1, keptRestartSteps)
+	origin := observation.exitedAt
+	if origin.IsZero() || observation.interrupted {
+		origin = now
+	}
+	record.RestartAt = origin.Add(keptRestartDelay(record.Failures))
 }
 
 func (r *demandRoute) mirrorRuntimeSchedule() {
@@ -619,18 +641,32 @@ func (r *demandRoute) runtimeAdoptionUnknown(err error) {
 	r.unlock()
 }
 
-func (r *demandRoute) restoreLiveRuntime(record storage.ServiceRuntime) {
+func (r *demandRoute) restoreLiveRuntime(observed storage.ServiceRuntime) {
+	var current storage.ServiceRuntime
+	err := r.changeRuntime(func(record *storage.ServiceRuntime) error {
+		if record.Attempt == nil || record.Attempt.Reference != observed.Attempt.Reference {
+			return fmt.Errorf("daemon: stale adoption result")
+		}
+		current = cloneRuntime(*record)
+		return nil
+	}, func() { r.applyLiveRuntime(current) })
+	if err != nil {
+		r.runtimeAdoptionUnknown(err)
+	}
+}
+
+func (r *demandRoute) applyLiveRuntime(record storage.ServiceRuntime) {
 	a := record.Attempt
 	r.mu.Lock()
 	r.pending = nil
 	r.sessionID = a.Reference.ID
 	r.restartFailures, r.restartAt = record.Failures, record.RestartAt
 	changed := !sameLaunch(r.service.Demand, a.Launched.Demand) || r.service.Label() != a.Launched.Label()
-	if r.removed || changed || record.Phase == storage.ServiceCleanup {
+	if r.removed || changed || r.restart || r.stopRequested || record.Phase == storage.ServiceCleanup {
 		r.owned, r.state = ownsUncertain, protocol.DemandStopping
 		r.stopCause, r.retryAt = demandCause(a.StopCause), time.Time{}
 		if r.stopCause == "" {
-			r.stopCause = adoptedStopCause(r.removed, false)
+			r.stopCause = adoptedStopCause(r.removed, r.stopRequested)
 		}
 		r.beginStopLocked(r.stopCause)
 		r.unlock()
@@ -645,7 +681,7 @@ func (r *demandRoute) restoreLiveRuntime(record storage.ServiceRuntime) {
 		r.manager.logEvent("route %s: adopted session %s from an earlier daemon", route, a.Reference.ID)
 		return
 	}
-	transition := &demandTransition{starting: true, done: make(chan struct{}), reference: a.Reference}
+	transition := &demandTransition{starting: true, done: make(chan struct{})}
 	r.pending, r.state = transition, protocol.DemandStarting
 	r.manager.goroutines.Go(func() {
 		err := r.awaitRuntimeReady(a.Launched, a.Reference)
@@ -776,7 +812,6 @@ func (m *demandManager) deleteRuntime(r *demandRoute) {
 		return
 	}
 	intent.before = &record
-	intent.route = r
 	intent.apply = func() {
 		m.mu.Lock()
 		if m.retiring[r.runtimeName()] == r {

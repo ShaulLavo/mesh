@@ -10,7 +10,6 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
-	"github.com/shaul/mesh/internal/session"
 )
 
 const (
@@ -111,9 +110,8 @@ type demandStopAttempt struct {
 // demandTransition is one start or stop in progress. err is written before
 // done closes, so a waiter reads it after <-done without the route lock.
 type demandTransition struct {
-	reference session.Reservation
-	starting  bool
-	adopting  bool
+	starting bool
+	adopting bool
 	// sessionID is the session a stop ends.
 	sessionID string
 	// superseded is a start that an accepted Stop ended, after which a later
