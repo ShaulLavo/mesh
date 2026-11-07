@@ -63,25 +63,45 @@ type ServiceSpec struct {
 	ConfigPath string `json:"configPath,omitempty"`
 }
 
+type AcceptanceKind string
+
+const (
+	AcceptanceStage AcceptanceKind = "stage"
+	AcceptanceGrant AcceptanceKind = "grant"
+	AcceptanceRetry AcceptanceKind = "retry"
+)
+
+type Acceptance func(context.Context, Request, AcceptanceKind, func() error) error
+
+type AutomaticReference struct {
+	PolicyID        string `json:"policyId"`
+	CoordinatorID   string `json:"coordinatorId"`
+	Membership      string `json:"membership"`
+	Epoch           uint64 `json:"epoch"`
+	ConsentRevision uint64 `json:"consentRevision"`
+}
+
 type Config struct {
-	StateDir      string
-	Executable    string
-	CacheDir      string
-	RequiredMount string
-	ClientOnly    bool
-	HealthTimeout time.Duration
-	ServiceSpec   ServiceSpec
-	Client        release.Client
-	Service       Service
-	Probe         Probe
+	AuthorizeAcceptance Acceptance
+	StateDir            string
+	Executable          string
+	CacheDir            string
+	RequiredMount       string
+	ClientOnly          bool
+	HealthTimeout       time.Duration
+	ServiceSpec         ServiceSpec
+	Client              release.Client
+	Service             Service
+	Probe               Probe
 }
 
 type Request struct {
-	ID         string           `json:"id"`
-	TargetID   string           `json:"targetId"`
-	Generation uint64           `json:"generation"`
-	Manifest   release.Manifest `json:"manifest"`
-	Current    release.Build    `json:"current"`
+	Automatic  *AutomaticReference `json:"automatic,omitempty"`
+	ID         string              `json:"id"`
+	TargetID   string              `json:"targetId"`
+	Generation uint64              `json:"generation"`
+	Manifest   release.Manifest    `json:"manifest"`
+	Current    release.Build       `json:"current"`
 }
 
 type Settings struct {
@@ -114,3 +134,10 @@ type Status struct {
 }
 
 type Engine struct{ cfg Config }
+
+// WithAcceptance returns an engine bound to this authenticated request boundary.
+func (e *Engine) WithAcceptance(acceptance Acceptance) *Engine {
+	bound := *e
+	bound.cfg.AuthorizeAcceptance = acceptance
+	return &bound
+}

@@ -304,3 +304,86 @@ a newer schema. A published manifest is not extended afterward.
 Publishing makes an update available for review. Fleet activation follows the
 approval recorded by `mesh update`; an available release does not silently
 restart every machine.
+
+## Enable automatic updates for a saved fleet
+
+Automatic updates use the coordinator's own `fleet.json`. Device access, update
+administrator trust and fleet notes do not enable them. The coordinator must be a
+member and already have update-administrator admission on every recipient.
+The existing update helper must already be installed on every recipient.
+
+Inspect the coordinator before enabling it:
+
+```bash
+mesh update automatic status --coordinator COORDINATOR --json
+mesh update automatic enable --coordinator COORDINATOR --expected-revision 0 --yes
+```
+
+The approval prints the saved fleet, membership digest and pending enrollment
+epoch. On each recipient, including the coordinator, authorize that exact fleet
+and epoch locally. Use its current consent revision, zero for a new binding:
+
+```bash
+mesh update automatic authorize COORDINATOR_ID --fleet FILE --epoch E --expected-revision 0
+```
+
+This command does not install a helper, create an identity, grant device access or
+start a daemon. It cannot use `--coordinator`. Replace a local binding only after
+revoking it and settling its outstanding installation. The policy waits for all
+initial recipient confirmations. Each subsequent automatic stage, retry and grant
+checks the recipient's current consent revision again.
+
+The existing release checker saves the complete checked manifest. The coordinator
+consumes that observation without another feed request, pins one release and
+fleet, and uses the existing installation engine. It chooses one actual
+installation as canary. An already-current machine or a joined manual
+installation does not unlock later activation grants. A failed direct transition
+requires manual bridge review. Automatic updates do not discover an intermediate
+release chain.
+
+## Stop and recover automatic work
+
+Inspect status for the current administrative revision before each change:
+
+```bash
+mesh update automatic disable --coordinator COORDINATOR --expected-revision N
+mesh update automatic revoke --expected-revision N
+mesh update retry RUN --coordinator COORDINATOR --expected-policy-revision N
+mesh update cancel RUN --coordinator COORDINATOR --expected-policy-revision N
+mesh update automatic acknowledge-stop RUN_OR_POLICY_ID --coordinator COORDINATOR --expected-revision N
+```
+
+Disable stops new dispatch intentions and supersedes an explicit continuation.
+Previously issued activation work may still finish. Target-local revoke fences
+new recipient acceptance, including delayed requests and identical replays.
+Neither operation retracts a grant the target already accepted.
+
+Failure and cancellation are durable stops. Repeated checks, a newer release,
+restart, ordinary enable and plain manual approval cannot clear them. Explicit
+retry approves only the same pinned run and one new attempt. If the policy is
+disabled, status shows its durable continuation authority. A later disable or
+cancel supersedes that authority. Retry response loss does not allocate another
+attempt. Supply the same `--command-id` and original expected revision to replay
+the same administrative decision.
+
+Cancellation disables the policy. After all issued and externally owned joined
+work settles, `acknowledge-stop` archives the run as status-only history and leaves
+the policy disabled. A separate enable is required for future releases. A local
+coordinator may use `enable --take-ownership` only after this disabled, settled and
+acknowledged state. That decision advances the epoch and needs fresh recipient
+consent.
+
+Automatic status includes policy ownership and revision, exact membership,
+enrollment observations, pinned target progress, canary, sticky stop, explicit
+continuation and last completed fleet release. A corrupt or unsafe authority file
+has an unknown revision, not revision zero. A local fallback names coordinator
+transport failure separately from saved state. Saved intent is not proof that the
+coordinator is running. Configuration delivery and dashboard drift presentation
+are separate work and are not enabled by binary enrollment.
+
+A stop before the first run has no run to cancel. Explicitly disable the policy,
+then pass its exact policy ID to `acknowledge-stop`. This is allowed only when no
+current run, executable continuation or unsettled issued work exists. Its receipt
+retains the stop cause and approving actor. Background polling cannot recreate an
+acknowledged disabled stop. If a current run exists, use its run ID and complete
+the cancellation and settlement path first.

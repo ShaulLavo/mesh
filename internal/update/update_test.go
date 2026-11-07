@@ -109,7 +109,7 @@ func TestAuthorityRejectsReplayWrongIdentityAndUnauthorizedActors(t *testing.T) 
 	id, key := testIdentity(t)
 	actor, actorKey := testIdentity(t)
 	called := 0
-	authority := Authority{StateDir: t.TempDir(), ID: id, Key: key, Handle: func(context.Context, string, json.RawMessage) (any, error) { called++; return "ok", nil }}
+	authority := Authority{StateDir: t.TempDir(), ID: id, Key: key, Handle: func(context.Context, VerifiedActor, string, json.RawMessage) (any, error) { called++; return "ok", nil }}
 	request := Message{Action: "challenge", Actor: actor, Target: id, Nonce: "request-nonce"}
 	request.Sign(actorKey)
 	if _, err := callAuthority(&authority, request); err == nil {
