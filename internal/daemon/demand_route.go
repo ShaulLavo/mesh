@@ -42,7 +42,15 @@ const (
 // demandRoute is one route's live state. Its mutex orders every state change;
 // starting and stopping run outside it and report back through a transition.
 type demandRoute struct {
-	manager *demandManager
+	*demandRouteState
+	generation uint64
+}
+
+// Definition handles are immutable. Rebinding shares the lifecycle owner so an
+// admitted stop still settles its exact attempt, but old handles admit no controls.
+type demandRouteState struct {
+	manager          *demandManager
+	activeGeneration uint64
 
 	mu           sync.Mutex
 	service      meshserve.Service
@@ -372,8 +380,14 @@ func (r *demandRoute) keepRunning() {
 // connection to a stopped or failed route starts it: this is the wake signal.
 // It also returns the start it began, if any.
 func (r *demandRoute) hold(cause demandCause) (func(), *demandTransition) {
+	var once sync.Once
+	release := func() { once.Do(r.release) }
 	r.mu.Lock()
 	r.connections++
+	if r.generation != r.activeGeneration {
+		r.unlock()
+		return release, nil
+	}
 	r.cancelIdleLocked()
 	var started *demandTransition
 	switch {
@@ -384,8 +398,7 @@ func (r *demandRoute) hold(cause demandCause) (func(), *demandTransition) {
 		started = r.pending
 	}
 	r.unlock()
-	var once sync.Once
-	return func() { once.Do(r.release) }, started
+	return release, started
 }
 
 func (r *demandRoute) release() {
@@ -404,7 +417,6 @@ func (r *demandRoute) release() {
 func (r *demandRoute) start(ctx context.Context) error {
 	var control uint64
 	err := r.runtimeControl(false, func() {
-		r.mu.Lock()
 		r.controls++
 		control = r.controls
 		r.lastStart = control
@@ -413,7 +425,6 @@ func (r *demandRoute) start(ctx context.Context) error {
 		if r.owned == ownsUncertain || r.stopRequested || r.pending != nil && !r.pending.starting && !r.pending.adopting {
 			r.startRequested = true
 		}
-		r.unlock()
 	})
 	if err != nil {
 		return err
@@ -551,6 +562,9 @@ func (r *demandRoute) adoptionBlockedLocked() error {
 }
 
 func (r *demandRoute) unavailableLocked() error {
+	if r.generation != r.activeGeneration {
+		return fmt.Errorf("route %s definition was replaced", r.service.Route())
+	}
 	if r.removed {
 		return fmt.Errorf("route %s was removed", r.service.Route())
 	}
@@ -629,13 +643,11 @@ func (r *demandRoute) acceptStop() (uint64, *demandStopAttempt, error) {
 		return 0, nil, err
 	}
 	err = r.runtimeControl(true, func() {
-		r.mu.Lock()
 		control = r.acceptStopLocked()
 		if r.stopAttempt == nil && r.stopRequested {
 			r.stopAttempt = &demandStopAttempt{}
 		}
 		attempt = r.stopAttempt
-		r.unlock()
 	})
 	return control, attempt, err
 }
@@ -744,6 +756,10 @@ func (r *demandRoute) beginAdoptLocked() {
 
 func (r *demandRoute) runAdopt(parent context.Context, transition *demandTransition, label string) {
 	defer r.manager.goroutines.Done()
+	if r.manager.persistence != nil {
+		r.adoptRuntime(parent, transition)
+		return
+	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	candidate, found, err := r.manager.sessions.findLabelled(ctx, label)

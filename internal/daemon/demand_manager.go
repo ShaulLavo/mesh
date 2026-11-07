@@ -211,18 +211,39 @@ func (m *demandManager) syncRoutesLocked(wanted map[string]meshserve.Service) []
 	var definitions []demandDefinition
 	for name, service := range wanted {
 		route := m.routes[name]
-		if route == nil {
+		readded := route == nil
+		if readded {
 			route = m.retiring[name]
 			delete(m.retiring, name)
 		}
 		fresh := route == nil
 		if fresh {
-			route = &demandRoute{manager: m, service: service, state: protocol.DemandStopped, unbound: map[uint16]string{}}
+			route = newDemandRoute(m, service, false)
+		}
+		if !fresh {
+			route = route.bindDefinition(service, readded)
 		}
 		m.routes[name] = route
 		definitions = append(definitions, demandDefinition{route, service, fresh})
 	}
 	return definitions
+}
+
+func newDemandRoute(manager *demandManager, service meshserve.Service, removed bool) *demandRoute {
+	return &demandRoute{demandRouteState: &demandRouteState{
+		manager: manager, service: service, removed: removed,
+		state: protocol.DemandStopped, unbound: map[uint16]string{},
+	}}
+}
+
+func (r *demandRoute) bindDefinition(service meshserve.Service, readded bool) *demandRoute {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !readded && r.service.Equal(service) {
+		return r
+	}
+	r.activeGeneration++
+	return &demandRoute{demandRouteState: r.demandRouteState, generation: r.activeGeneration}
 }
 
 func (m *demandManager) syncRoute(route *demandRoute, service meshserve.Service, fresh bool) {

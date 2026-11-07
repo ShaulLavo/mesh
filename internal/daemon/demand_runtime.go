@@ -152,11 +152,17 @@ func (m *demandManager) BeginDefinition(ctx context.Context) (func(), error) {
 	}, nil
 }
 
+// Exact asynchronous results belong to the lifecycle owner shared by successive
+// definition handles. Controls additionally validate their immutable generation.
 func (m *demandManager) currentRuntimeRoute(r *demandRoute) bool {
 	name := r.runtimeName()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.routes[name] == r || m.retiring[name] == r
+	current := m.routes[name]
+	if current == nil {
+		current = m.retiring[name]
+	}
+	return current != nil && current.demandRouteState == r.demandRouteState
 }
 
 func (r *demandRoute) runtimeName() string {
@@ -310,6 +316,15 @@ func (m *demandManager) reconcileRuntime() {
 }
 
 func (r *demandRoute) runtimeControl(stop bool, apply func()) error {
+	if r.manager.persistence == nil {
+		r.mu.Lock()
+		defer r.unlock()
+		if err := r.unavailableLocked(); err != nil {
+			return err
+		}
+		apply()
+		return nil
+	}
 	return r.changeRuntime(func(record *storage.ServiceRuntime) error {
 		r.mu.Lock()
 		unknown := r.owned == ownsUnknown
@@ -330,7 +345,11 @@ func (r *demandRoute) runtimeControl(stop bool, apply func()) error {
 			record.Restarts = 0
 		}
 		return nil
-	}, apply)
+	}, func() {
+		r.mu.Lock()
+		apply()
+		r.unlock()
+	})
 }
 
 func oweRuntimeStop(record *storage.ServiceRuntime, cause demandCause) {
@@ -495,12 +514,16 @@ func (r *demandRoute) consumeRuntime(ref session.Reservation, observation ownedO
 		if record.Attempt.Reference != ref {
 			return fmt.Errorf("daemon: stale terminal attempt")
 		}
-		if failure && record.Attempt.Launched.Demand.Kept() {
-			scheduleRuntimeFailure(record, observation, r.manager.now())
-		}
-		record.Phase, record.Attempt = storage.ServiceNone, nil
+		consumeRuntimeObservation(record, observation, failure, r.manager.now())
 		return nil
 	}, func() { r.mirrorRuntimeSchedule() })
+}
+
+func consumeRuntimeObservation(record *storage.ServiceRuntime, observation ownedObservation, failure bool, now time.Time) {
+	if failure && record.Attempt.Launched.Demand.Kept() {
+		scheduleRuntimeFailure(record, observation, now)
+	}
+	record.Phase, record.Attempt = storage.ServiceNone, nil
 }
 
 func scheduleRuntimeFailure(record *storage.ServiceRuntime, observation ownedObservation, now time.Time) {
@@ -578,36 +601,18 @@ func (r *demandRoute) runtimeFailedAdmission() {
 	}, r.mirrorRuntimeSchedule)
 }
 
-func (r *demandRoute) adoptRuntime(ctx context.Context) {
+func (r *demandRoute) adoptRuntime(ctx context.Context, transition *demandTransition) {
+	defer close(transition.done)
 	record, exists := r.runtimeRecord()
 	if !exists {
-		r.discoverRuntime(ctx)
+		r.discoverRuntime(ctx, transition)
 		return
 	}
-	if record.Attempt == nil {
-		r.runtimeAbsent()
-		return
+	observation := ownedObservation{}
+	if record.Attempt != nil {
+		observation = r.manager.persistence.sessions.ownedFate(record.Attempt.Reference)
 	}
-	ref := record.Attempt.Reference
-	observation := r.manager.persistence.sessions.ownedFate(ref)
-	if observation.fate == sessionEnded {
-		if err := r.consumeRuntime(ref, observation, record.Phase != storage.ServiceCleanup); err != nil {
-			r.runtimeAdoptionUnknown(err)
-			return
-		}
-		r.mu.Lock()
-		r.pending = nil
-		r.owned, r.state = ownsNothing, protocol.DemandStopped
-		r.finishStopWithoutWorkerLocked()
-		r.continueLocked()
-		r.unlock()
-		return
-	}
-	if observation.fate == sessionUnknown {
-		r.runtimeAdoptionUnknown(fmt.Errorf("session %s exact instance is unresolved", ref.ID))
-		return
-	}
-	r.restoreLiveRuntime(record)
+	r.restoreObservedRuntime(transition, record, observation)
 }
 
 func (r *demandRoute) runtimeAbsent() {
@@ -619,44 +624,92 @@ func (r *demandRoute) runtimeAbsent() {
 	r.unlock()
 }
 
-func (r *demandRoute) discoverRuntime(parent context.Context) {
+func (r *demandRoute) discoverRuntime(parent context.Context, transition *demandTransition) {
+	label := r.definition().Label()
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
-	candidate, found, err := r.manager.sessions.findLabelled(ctx, r.service.Label())
+	candidate, found, err := r.manager.sessions.findLabelled(ctx, label)
 	if err == nil && found {
 		err = fmt.Errorf("session %s may run this route; its complete launched environment is unknown", candidate.ID)
 	}
-	if err != nil {
-		r.runtimeAdoptionUnknown(err)
+	intent, acceptErr := r.manager.beginAcceptance(parent, false)
+	if acceptErr != nil {
+		r.runtimeAdoptionUnknown(transition, acceptErr)
 		return
 	}
-	r.mu.Lock()
-	r.pending = nil
-	r.owned, r.state = ownsNothing, protocol.DemandStopped
-	r.finishStopWithoutWorkerLocked()
-	r.continueLocked()
-	r.unlock()
+	defer r.manager.endAcceptance(intent, false)
+	if !r.currentRuntimeAdoption(transition) {
+		transition.err = fmt.Errorf("daemon: stale discovery result")
+		return
+	}
+	if _, exists := r.runtimeRecord(); exists || r.definition().Label() != label {
+		err = fmt.Errorf("daemon: service ownership changed during discovery")
+	}
+	if err != nil {
+		r.runtimeAdoptionUnknown(transition, err)
+		return
+	}
+	r.runtimeAbsent()
 }
 
-func (r *demandRoute) runtimeAdoptionUnknown(err error) {
+func (r *demandRoute) currentRuntimeAdoption(transition *demandTransition) bool {
+	if !r.manager.currentRuntimeRoute(r) {
+		return false
+	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pending == transition
+}
+
+func (r *demandRoute) runtimeAdoptionUnknown(transition *demandTransition, err error) {
+	transition.err = err
+	r.mu.Lock()
+	defer r.unlock()
+	if r.pending != transition {
+		return
+	}
 	r.pending = nil
 	r.markAdoptionUnknownLocked(r.service.Label(), err)
-	r.unlock()
 }
 
-func (r *demandRoute) restoreLiveRuntime(observed storage.ServiceRuntime) {
+func (r *demandRoute) restoreObservedRuntime(transition *demandTransition, observed storage.ServiceRuntime, observation ownedObservation) {
 	var current storage.ServiceRuntime
 	err := r.changeRuntime(func(record *storage.ServiceRuntime) error {
-		if record.Attempt == nil || record.Attempt.Reference != observed.Attempt.Reference {
+		if !r.currentRuntimeAdoption(transition) || !sameRuntimeAttempt(record.Attempt, observed.Attempt) {
 			return fmt.Errorf("daemon: stale adoption result")
+		}
+		if record.Attempt != nil && observation.fate == sessionEnded {
+			consumeRuntimeObservation(record, observation, record.Phase != storage.ServiceCleanup, r.manager.now())
 		}
 		current = cloneRuntime(*record)
 		return nil
-	}, func() { r.applyLiveRuntime(current) })
+	}, func() { r.applyRuntimeObservation(transition, current, observation) })
 	if err != nil {
-		r.runtimeAdoptionUnknown(err)
+		r.runtimeAdoptionUnknown(transition, err)
 	}
+}
+
+func sameRuntimeAttempt(a, b *storage.ServiceAttempt) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Reference == b.Reference
+}
+
+func (r *demandRoute) applyRuntimeObservation(transition *demandTransition, record storage.ServiceRuntime, observation ownedObservation) {
+	if !r.currentRuntimeAdoption(transition) {
+		return
+	}
+	if record.Attempt == nil {
+		r.mirrorRuntimeSchedule()
+		r.runtimeAbsent()
+		return
+	}
+	if observation.fate == sessionUnknown {
+		r.runtimeAdoptionUnknown(transition, fmt.Errorf("session %s exact instance is unresolved", record.Attempt.Reference.ID))
+		return
+	}
+	r.applyLiveRuntime(record)
 }
 
 func (r *demandRoute) applyLiveRuntime(record storage.ServiceRuntime) {
@@ -772,7 +825,7 @@ func (m *demandManager) restoreRetiringRuntime() {
 		if record.Attempt != nil {
 			service = record.Attempt.Launched
 		}
-		m.retiring[name] = &demandRoute{manager: m, service: service, removed: true, state: protocol.DemandStopped, unbound: map[uint16]string{}}
+		m.retiring[name] = newDemandRoute(m, service, true)
 	}
 }
 
@@ -792,7 +845,7 @@ func (r *demandRoute) initRuntime() {
 	transition := &demandTransition{adopting: true, done: make(chan struct{})}
 	r.pending, r.owned = transition, ownsUnknown
 	r.unlock()
-	r.manager.goroutines.Go(func() { r.adoptRuntime(r.manager.ctx); close(transition.done) })
+	r.manager.goroutines.Go(func() { r.adoptRuntime(r.manager.ctx, transition) })
 }
 
 func (m *demandManager) deleteRuntimeRoute(r *demandRoute) {
