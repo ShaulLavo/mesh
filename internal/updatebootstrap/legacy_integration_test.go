@@ -68,6 +68,7 @@ func TestLegacyWorkerProcessProtocolAndVersion(t *testing.T) {
 		t.Fatalf("read-only probe changed worker metadata: %v", err)
 	}
 	t.Logf("verified actual legacy worker PID=%d shellPID=%d version=%s digest=%s protocol=%d", observedWorker.PID, observedWorker.ShellPID, observedWorker.Build.Version, observedWorker.Build.Digest, observedWorker.Protocol)
+	t.Run("failed image probe cleanup", func(t *testing.T) { testLegacyWorkerFixtureCleansFailedImageProbe(t, binary) })
 }
 
 func startLegacyFixture(t *testing.T, binary string) (string, func()) {
@@ -224,11 +225,8 @@ func legacyProcessesLive(all map[int]legacyFixtureProcess, owned map[int]bool) b
 	}
 	return false
 }
-func TestLegacyWorkerFixtureCleansFailedImageProbe(t *testing.T) {
-	binary := os.Getenv("MESH_LEGACY_BINARY")
-	if binary == "" {
-		t.Skip("set MESH_LEGACY_BINARY to exercise retained fixture failure cleanup")
-	}
+func testLegacyWorkerFixtureCleansFailedImageProbe(t *testing.T, binary string) {
+	t.Helper()
 	state, cleanup := startLegacyFixture(t, binary)
 	dir, pid, err := createLegacySession(t.Context(), state, func(ctx context.Context, conn net.Conn) (executableImage, error) {
 		image, err := peerImage(ctx, conn)
